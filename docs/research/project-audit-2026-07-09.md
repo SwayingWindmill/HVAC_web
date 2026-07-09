@@ -21,22 +21,33 @@
 
 > 注：`.chrome_tmp/`、`.ctmp*` 等 Chrome 临时目录仍留在磁盘（safe-delete 机制拦截了 `rm -rf`，因其回收站操作在本环境不可用）。它们已被 gitignore，不会进版本库，可随时手动删除。
 
-## 🟠 代码层问题（需决策，未改）
+## ✅ 本回合已修复（代码层清理，2026-07-09 晚）
+
+| # | 问题 | 处理 | 验证 |
+|---|------|------|------|
+| 1 | BigScreen 缺 ErrorBoundary → 无 WebGL 白屏 | `src/components/ErrorBoundary.tsx` 新增通用 render-phase 边界；`BigScreen` 用其包裹 `<System3D>`，fallback「当前环境不支持 3D 渲染（驾驶舱其余数据正常显示）」 | build 0 error |
+| 2 | `src/mock/data.ts` ~15 个死导出 | 重写为仅保留被引用的导出（`mockAlarms/mockTree/mockSuggestions/mockFdd/mockWorkOrders` + 类型），删 15+ 死导出 | build 0 error |
+| 3 | `System/index.tsx` `walk` 返回 `any[]` 喂 Tree | 改 `: DataNode[]`（从 `antd/es/tree` 导入类型），递归节点也用 `DataNode` | build 0 error |
+| 4 | `Placeholder` 死分支 | `App.tsx` 删三元死分支；删除 `src/pages/Placeholder.tsx` | build 0 error |
+| 5 | `useTelemetryLive` 恒订阅 | `BigScreen` 改 `useTelemetryLive(realData ? MOCK_DEVICES : [], ...)`，关开关即不订阅 | build 0 error |
+| 6 | BigScreen `key={i}` 索引 key | KPI→`key={k.label}`、DIAGNOSTICS→`key={a.title}`、SUGGESTIONS→`key={t}` | grep 确认无残留 |
+| 7 | 死依赖 `ai` / `@ai-sdk/react` | `npm uninstall ai @ai-sdk/react`（package.json 已无引用，node_modules 已清）| `src/` 零 `from 'ai'` 引用 |
+
+> 构建结果：`npm run build` 通过，0 error（仅 chunk 体积警告，非阻塞）。
+
+## 🟠 仍未处置（需后续决策）
 
 ### MED
-- **BigScreen 缺 ErrorBoundary**：`<Suspense>` 不捕获渲染期错误；无 WebGL 时 `Canvas` 同步抛错 → 整个 `/bigscreen` 白屏。建议包一层 ErrorBoundary（fallback「当前环境不支持 3D」）。
-- **BigScreen「实时数据」开关仅覆盖局部**：仅设备 `power/cop/load` 接 `useTelemetryLive`，KPI 卡 / 健康仪表 / 构成 donut / 诊断 / 告警进度等仍硬编码参考图数字（如 COP 6.28、告警 34 条）。开开关有误导。建议统一收口到一个 bigscreen mock/api 模块。
-- **`src/mock/data.ts` 一批死导出无引用**：`mockKpi` / `mockEnergy` / `mockSetpoint` / `chartAccent` / `mockZoneEnergy` / `mockComposition` 等约 15 个，是早期版本遗留。维护噪声，建议删除或归并。
-- **`src/pages/System/index.tsx:213`** `walk` 返回 `any[]` 喂 AntD `Tree`，绕过 `DataNode` 类型校验。建议改 `: DataNode[]`。
+- **BigScreen「实时数据」开关仅覆盖局部**：仅设备 `power/cop/load` 接 `useTelemetryLive`，KPI 卡 / 健康仪表 / 诊断 / 告警进度等仍是硬编码参考图数字（COP 6.28、告警 34 条等）。开开关有误导。**需统一收口到一个 bigscreen mock/api 模块**（较大重构，本清理轮未做，留待后续）。
 
 ### LOW
-- **`Placeholder` 组件不可达分支**：`App.tsx` 三元 `Real ? <Real/> : <Placeholder/>` 中 `Real` 恒真，`:` 分支死代码（注释也已过时）。可删。
-- **BigScreen `useTelemetryLive` 在 `realData=false` 也始终订阅**，无谓启动 mock 推送定时器。
-- **`key={i}` 索引 key**：BigScreen/System3D 静态数组用索引 key，无重排风险，低。
-- **`Range` 类型重复定义**：`mock/data.ts` 与 `api/types.ts` 各一份。
+- **`Range` 类型重复定义**：`mock/data.ts` 与 `api/types.ts` 各一份。建议归并到 `api/types.ts` 单一来源（本清理轮未做）。
 
-## 🟡 依赖问题
-- **死依赖**：`ai@^4.3.19` 与 `@ai-sdk/react@^4.0.19` 在 `package.json` 但 `src/` 完全未用（AI SDK 当时因版本陷阱被弃用，改自包含 mock hook，仅注释提及）。不删不报错，但误导 + 占 node_modules。建议 `npm uninstall ai @ai-sdk/react`。
+
+
+## 🟠 代码层问题处置状态
+
+本部分原始清单已分流到上方两个段落：**「✅ 本回合已修复（代码层清理）」**（7 项已解决）+ **「🟠 仍未处置（需后续决策）」**（2 项留待后续）。下面「🟡 依赖问题」中的死依赖也已在本轮卸载。
 
 ## 🟢 已确认健康项
 - 路由/页面一致性 OK：10 模块全部接真实页，无一指向 Placeholder。

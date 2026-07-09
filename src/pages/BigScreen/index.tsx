@@ -14,6 +14,7 @@ import {
 import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
 import { useTelemetryLive, MOCK_DEVICES } from '@/api';
+import ErrorBoundary from '@/components/ErrorBoundary';
 
 /* ──────────── lazy-load 3D so three/drei ships only on bigscreen route ──────────── */
 const System3D = lazy(() => import('./System3D'));
@@ -377,7 +378,9 @@ export default function BigScreen() {
 
   /* ───── 实时数据开关：默认关，保留精确参考图数字；开启后接 TelemetryClient ───── */
   const [realData, setRealData] = useState(false);
-  const { get } = useTelemetryLive(MOCK_DEVICES, ['power', 'cop', 'load']);
+  // Only subscribe to the live telemetry stream when the real-data switch is on;
+  // otherwise we keep the precise reference-image numbers and avoid a needless mock timer.
+  const { get } = useTelemetryLive(realData ? MOCK_DEVICES : [], ['power', 'cop', 'load']);
   const live = (i: number) => ({
     power: get(MOCK_DEVICES[i], 'power') ?? 0,
     cop: get(MOCK_DEVICES[i], 'cop') ?? 0,
@@ -432,7 +435,7 @@ export default function BigScreen() {
 
         {/* ───── KPI ROW (6 cards) ───── */}
         <div style={{ display: 'flex', gap: 10, padding: '0 20px 10px', flexShrink: 0 }}>
-          {KPI_DATA.map((k, i) => <KpiCard key={i} item={k} />)}
+          {KPI_DATA.map((k) => <KpiCard key={k.label} item={k} />)}
         </div>
 
         {/* ───── MAIN GRID: left | CENTER 3D | right ───── */}
@@ -495,13 +498,21 @@ export default function BigScreen() {
               {/* 3D Scene area */}
               <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
                 <Suspense fallback={<Spinner />}>
-                  <System3D
-                    cop={liveCop} chillerRun={2} chillerTotal={2}
-                    towerRun={2} towerTotal={2}
-                    pumpRun={3} pumpTotal={3}
-                    load={liveLoad}
-                    style={{ position: 'absolute', inset: 0 }}
-                  />
+                  <ErrorBoundary
+                    fallback={
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: DIM, fontSize: 13, textAlign: 'center', padding: 20 }}>
+                        当前环境不支持 3D 渲染<br />（驾驶舱其余数据正常显示）
+                      </div>
+                    }
+                  >
+                    <System3D
+                      cop={liveCop} chillerRun={2} chillerTotal={2}
+                      towerRun={2} towerTotal={2}
+                      pumpRun={3} pumpTotal={3}
+                      load={liveLoad}
+                      style={{ position: 'absolute', inset: 0 }}
+                    />
+                  </ErrorBoundary>
                 </Suspense>
 
                 {/* Device stat cards overlaid on 3D — positioned per reference layout (percent-based for responsiveness) */}
@@ -564,7 +575,7 @@ export default function BigScreen() {
 
             {/* 异常诊断 */}
             <Panel title="异常诊断" style={{ flex: '0 0 auto' }}>
-              {DIAGNOSTICS.map((a, i) => <AlarmRow key={i} a={a} />)}
+              {DIAGNOSTICS.map((a) => <AlarmRow key={a.title} a={a} />)}
             </Panel>
 
             {/* 告警闭环进度 */}
@@ -593,8 +604,8 @@ export default function BigScreen() {
             {/* 建议优化动作 */}
             <Panel title="建议优化动作" style={{ flex: 1, minHeight: 0 }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {SUGGESTIONS.map((t, i) => (
-                  <div key={i} style={{
+                {SUGGESTIONS.map((t) => (
+                  <div key={t} style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     padding: '6px 9px', borderRadius: 8, background: hexA(ACCENT, 0.07),
                     border: `1px solid ${hexA(ACCENT, 0.15)}`,

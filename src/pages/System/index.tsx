@@ -3,6 +3,7 @@ import {
   Card, Tabs, Table, Tree, Modal, Form, Input, Select, Tag, Space, Button,
   Popconfirm, Typography, Descriptions, Tooltip, message, Row, Col,
 } from 'antd';
+import type { DataNode } from 'antd/es/tree';
 import type { ColumnsType } from 'antd/es/table';
 import {
   PlusOutlined, EditOutlined, StopOutlined, ApartmentOutlined,
@@ -210,7 +211,7 @@ export default function System() {
       type === 'building' ? <ApartmentOutlined style={{ color: BRAND.teal }} /> :
       type === 'zone' ? <ClusterOutlined style={{ color: STATUS.info }} /> :
       <BlockOutlined style={{ color: STATUS.warn }} />;
-    const walk = (ns: AssetNode[]): any[] => ns.map((n) => ({
+    const walk = (ns: AssetNode[]): DataNode[] => ns.map((n) => ({
       key: n.key,
       title: n.title,
       icon: icon(n.type),
