@@ -26,3 +26,16 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# scratch: headless-chrome temp profiles from screenshot scripts
+.ctmp*
+.chrome_tmp/
+sys_*.png
+bigscreen_*.png
+prototype/
+
+# build artifacts emitted by tsc -b (composite project)
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+vite.config.*.timestamp-*.mjs
