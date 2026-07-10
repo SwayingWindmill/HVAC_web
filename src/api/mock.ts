@@ -98,7 +98,15 @@ export function onMockPush(h: PushFn): () => void {
 // so they live here as a stable baseline the Dashboard reads through the same layer.
 export const MOCK_KPI = {
   energyToday: 4820,
+  energyYesterday: 5210,
   savingToday: 412,
+  savingRate: 15.8,
+  savingTarget: 15,
+  costSavingToday: 2860,
+  costSavingMonth: 84210,
+  wetBulb: 24.4,
+  dataLatency: 2,
+  controlMode: '自动群控',
   trends: { energy: -3.2, power: 1.1, cop: 2.4, load: -1.8, saving: 6.5 },
 };
 

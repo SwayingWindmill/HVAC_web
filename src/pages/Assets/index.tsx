@@ -1,218 +1,358 @@
-import { useMemo, useState } from 'react';
-import { Tree, Table, Tag, Input, Segmented, Card, Row, Col, Statistic, Typography, Button, Space } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { SearchOutlined } from '@ant-design/icons';
-import PageScaffold from '@/components/PageScaffold';
-import DeviceDrawer from './DeviceDrawer';
-import { useTelemetryLive, MOCK_DEVICES } from '@/api';
-import { BRAND } from '@/theme/tokens';
+import { useEffect, useMemo, useState, type Key } from 'react';
 import {
-  DEVICE_META,
-  STATUS_MAP,
-  STATUS_INFO,
-  TYPE_LABEL,
+  Badge,
+  Button,
+  Card,
+  Col,
+  Empty,
+  Grid,
+  Input,
+  Row,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Tooltip,
+  Tree,
+  Typography,
+  message,
+} from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import {
+  ApartmentOutlined,
+  ApiOutlined,
+  ClusterOutlined,
+  DatabaseOutlined,
+  EyeOutlined,
+  NodeIndexOutlined,
+  ToolOutlined,
+  WifiOutlined,
+} from '@ant-design/icons';
+import { useSearchParams } from 'react-router-dom';
+import PageScaffold from '@/components/PageScaffold';
+import { OperationsMetrics, OperationsPanelHeading, useOperationsDetailFocus } from '@/components/OperationsUI';
+import { can } from '@/auth/permissions';
+import { useUi } from '@/store/ui';
+import {
   ASSET_TREE,
-  ZONE_NAMES,
+  DEVICE_META,
+  STATUS_INFO,
+  STATUS_MAP,
+  TYPE_LABEL,
   type DevStatus,
+  type DeviceAsset,
+  type DeviceType,
 } from './meta';
+import DeviceDrawer from './DeviceDrawer';
 
-const TABLE_KEYS = ['power', 'cop', 'load'];
+type DeviceRow = DeviceAsset & { id: string; status: DevStatus; pointOnlineRate: number };
+type TypeFilter = DeviceType | 'all';
+type StatusFilter = DevStatus | 'all';
 
-interface DeviceRow {
-  id: string;
-  name: string;
-  type: keyof typeof TYPE_LABEL;
-  status: DevStatus;
-}
+const TYPE_OPTIONS: { label: string; value: TypeFilter }[] = [
+  { label: '全部类型', value: 'all' },
+  { label: TYPE_LABEL.chiller, value: 'chiller' },
+  { label: TYPE_LABEL.pump, value: 'pump' },
+  { label: TYPE_LABEL.ahu, value: 'ahu' },
+];
 
-type ScopeKey = 'all' | 'running' | 'alarm' | 'maintenance';
+const STATUS_OPTIONS: { label: string; value: StatusFilter }[] = [
+  { label: '全部状态', value: 'all' },
+  { label: STATUS_INFO.running.label, value: 'running' },
+  { label: STATUS_INFO.alarm.label, value: 'alarm' },
+  { label: STATUS_INFO.maintenance.label, value: 'maintenance' },
+];
 
-function matchScope(id: string, sel: string | null): boolean {
-  if (!sel || sel === 'b1') return true;
-  if (DEVICE_META[id].zone === sel) return true;
-  if (id === sel) return true;
-  return false;
-}
+const buildRows = (): DeviceRow[] =>
+  Object.entries(DEVICE_META).map(([id, meta]) => {
+    const status = STATUS_MAP[id];
+    return {
+      id,
+      status,
+      pointOnlineRate: Math.round((meta.onlinePoints / meta.pointCount) * 100),
+      ...meta,
+    };
+  });
+
+const toKeyString = (key: Key | null) => (typeof key === 'string' ? key : null);
+const isDeviceKey = (key: Key | null) => {
+  const k = toKeyString(key);
+  return Boolean(k && k in DEVICE_META);
+};
+const isZoneKey = (key: Key | null) => {
+  const k = toKeyString(key);
+  return Boolean(k && k.startsWith('z'));
+};
 
 export default function Assets() {
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<ScopeKey>('all');
-  const [selected, setSelected] = useState<string | null>(null);
-  const [drawerId, setDrawerId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const screens = Grid.useBreakpoint();
+  const compactTable = !screens.xl;
+  const { buildingId, role } = useUi();
+  const canManageAssets = can(role, 'manage', 'asset');
+  const [selectedTreeKey, setSelectedTreeKey] = useState<Key>('b1');
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const detailFocus = useOperationsDetailFocus();
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [keyword, setKeyword] = useState('');
+  const deviceParam = searchParams.get('device');
 
-  const { get } = useTelemetryLive(MOCK_DEVICES, TABLE_KEYS);
+  useEffect(() => {
+    if (!deviceParam) return;
+    if (!(deviceParam in DEVICE_META)) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('device');
+      setSearchParams(next, { replace: true });
+      message.warning(`未找到设备 ${deviceParam}`);
+      return;
+    }
+    if (selectedDeviceId !== deviceParam) {
+      setSelectedTreeKey(deviceParam);
+      setTypeFilter('all');
+      setStatusFilter('all');
+      setKeyword('');
+      setSelectedDeviceId(deviceParam);
+    }
+  }, [deviceParam, searchParams, selectedDeviceId, setSearchParams]);
 
-  const rows = useMemo<DeviceRow[]>(() => {
-    return MOCK_DEVICES.filter((id) => {
-      const m = DEVICE_META[id];
-      if (search && !m.name.includes(search) && !id.includes(search)) return false;
-      if (statusFilter !== 'all' && STATUS_MAP[id] !== statusFilter) return false;
-      if (!matchScope(id, selected)) return false;
-      return true;
-    }).map((id) => ({ id, name: DEVICE_META[id].name, type: DEVICE_META[id].type, status: STATUS_MAP[id] }));
-  }, [search, statusFilter, selected]);
+  const openDevice = (id: string, trigger?: HTMLElement) => {
+    if (trigger) detailFocus.captureTrigger(trigger, id);
+    const next = new URLSearchParams(searchParams);
+    next.set('device', id);
+    setSearchParams(next, { replace: true });
+    setSelectedDeviceId(id);
+  };
 
-  const totalPower = useMemo(
-    () => Math.round(MOCK_DEVICES.reduce((s, id) => s + (get(id, 'power') ?? 0), 0)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [get],
-  );
-  const runningCount = MOCK_DEVICES.filter((id) => STATUS_MAP[id] === 'running').length;
-  const alarmCount = MOCK_DEVICES.filter((id) => STATUS_MAP[id] === 'alarm').length;
+  const closeDevice = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('device');
+    setSearchParams(next, { replace: true });
+    setSelectedDeviceId(null);
+    detailFocus.restoreFocus();
+  };
+
+  const allRows = useMemo(buildRows, []);
+
+  const summary = useMemo(() => {
+    const running = allRows.filter((d) => d.status === 'running').length;
+    const alarm = allRows.filter((d) => d.status === 'alarm').length;
+    const maintenance = allRows.filter((d) => d.status === 'maintenance').length;
+    const totalPoints = allRows.reduce((sum, d) => sum + d.pointCount, 0);
+    const onlinePoints = allRows.reduce((sum, d) => sum + d.onlinePoints, 0);
+    return { total: allRows.length, running, alarm, maintenance, totalPoints, onlinePoints };
+  }, [allRows]);
+
+  const rows = useMemo(() => {
+    const q = keyword.trim().toLowerCase();
+    return allRows.filter((d) => {
+      if (isDeviceKey(selectedTreeKey) && d.id !== selectedTreeKey) return false;
+      if (isZoneKey(selectedTreeKey) && d.zone !== selectedTreeKey) return false;
+      if (typeFilter !== 'all' && d.type !== typeFilter) return false;
+      if (statusFilter !== 'all' && d.status !== statusFilter) return false;
+      if (!q) return true;
+      return [d.id, d.name, d.zoneName, d.floor, d.manufacturer, d.model, d.gateway, d.maintainer]
+        .some((value) => value.toLowerCase().includes(q));
+    });
+  }, [allRows, keyword, selectedTreeKey, statusFilter, typeFilter]);
+
+  const selectedKeyString = toKeyString(selectedTreeKey);
+  const selectedDevice = selectedKeyString && isDeviceKey(selectedTreeKey) ? DEVICE_META[selectedKeyString] : null;
+  const selectedScopeLabel = selectedDevice
+    ? selectedDevice.name
+    : selectedTreeKey === 'b1'
+      ? '总部大楼全量设备'
+      : rows[0]?.zoneName ?? '当前范围';
 
   const columns: ColumnsType<DeviceRow> = [
     {
       title: '设备',
       dataIndex: 'name',
-      render: (name: string, r) => (
+      key: 'name',
+      fixed: 'left',
+      width: 220,
+      render: (name: string, row) => (
         <Space direction="vertical" size={0}>
-          <Typography.Text strong>{name}</Typography.Text>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {TYPE_LABEL[r.type]} · {r.id}
+          <Space size={6}>
+            <Typography.Text strong>{name}</Typography.Text>
+            <Tag>{TYPE_LABEL[row.type]}</Tag>
+          </Space>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }} copyable={{ text: row.id }}>{row.id}</Typography.Text>
+        </Space>
+      ),
+    },
+    {
+      title: '位置',
+      key: 'location',
+      width: 180,
+      render: (_, row) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text>{row.buildingName} / {row.floor}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{row.zoneName}</Typography.Text>
+        </Space>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: (status: DevStatus) => {
+        const info = STATUS_INFO[status];
+        return <Badge color={info.color} text={info.label} />;
+      },
+    },
+    {
+      title: '通讯',
+      key: 'comm',
+      width: 180,
+      render: (_, row) => (
+        <Space direction="vertical" size={0}>
+          <Tag icon={<ApiOutlined />} color="processing">{row.protocol}</Tag>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{row.gateway}</Typography.Text>
+        </Space>
+      ),
+    },
+    {
+      title: '点位在线',
+      key: 'points',
+      width: 130,
+      sorter: (a, b) => a.pointOnlineRate - b.pointOnlineRate,
+      render: (_, row) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text>{row.onlinePoints} / {row.pointCount}</Typography.Text>
+          <Typography.Text type={row.pointOnlineRate < 95 ? 'warning' : 'secondary'} style={{ fontSize: 12 }}>
+            {row.pointOnlineRate}% 在线
           </Typography.Text>
         </Space>
       ),
     },
     {
-      title: '类型',
-      dataIndex: 'type',
-      render: (t: keyof typeof TYPE_LABEL) => <Tag>{TYPE_LABEL[t]}</Tag>,
-      responsive: ['md' as const],
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      render: (s: DevStatus) => <Tag color={STATUS_INFO[s].color}>{STATUS_INFO[s].label}</Tag>,
-    },
-    {
-      title: '实时功率',
-      key: 'power',
-      align: 'right',
-      render: (_: unknown, r) => (
-        <Typography.Text style={{ fontVariantNumeric: 'tabular-nums', color: BRAND.tealStrong }}>
-          {Math.round(get(r.id, 'power') ?? 0)} kW
-        </Typography.Text>
+      title: '铭牌',
+      key: 'rating',
+      width: 160,
+      render: (_, row) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text>{row.ratedPower} kW</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{row.ratedCooling ? `${row.ratedCooling} kW 制冷量` : row.model}</Typography.Text>
+        </Space>
       ),
     },
     {
-      title: 'COP',
-      key: 'cop',
-      align: 'right',
-      responsive: ['md' as const],
-      render: (_: unknown, r) => (
-        <Typography.Text style={{ fontVariantNumeric: 'tabular-nums' }}>
-          {(get(r.id, 'cop') ?? 0).toFixed(2)}
-        </Typography.Text>
-      ),
-    },
-    {
-      title: '负荷率',
-      key: 'load',
-      align: 'right',
-      responsive: ['lg' as const],
-      render: (_: unknown, r) => (
-        <Typography.Text style={{ fontVariantNumeric: 'tabular-nums' }}>
-          {Math.round(get(r.id, 'load') ?? 0)}%
-        </Typography.Text>
+      title: '维护',
+      key: 'maintainer',
+      width: 150,
+      render: (_, row) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text>{row.maintainer}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>最后通讯：{row.lastSeen}</Typography.Text>
+        </Space>
       ),
     },
     {
       title: '操作',
       key: 'action',
-      align: 'right',
-      render: (_: unknown, r) => (
-        <Button type="link" onClick={() => setDrawerId(r.id)}>
-          查看 ›
+      width: 110,
+      fixed: 'right',
+      render: (_, row) => (
+        <Button
+          size="small"
+          type="primary"
+          ghost
+          icon={<EyeOutlined />}
+          data-ops-detail-trigger={row.id}
+          onClick={(event) => openDevice(row.id, event.currentTarget)}
+        >
+          详情
         </Button>
       ),
     },
   ];
 
+  const tableColumns = compactTable
+    ? columns.filter((column) => ['name', 'location', 'status', 'points', 'action'].includes(String(column.key)))
+    : columns;
+
   return (
     <PageScaffold
       title="设备与建筑"
-      subtitle="建筑 → 分区 → 机组设备树，右侧列表与详情抽屉接入实时遥测层"
+      subtitle="维护建筑、分区、设备、通讯网关与点位资产，为告警、FDD、优化策略提供统一对象模型。"
+      eyebrow="资产与对象"
       extra={
-        <Space wrap>
-          <Input
-            allowClear
-            prefix={<SearchOutlined />}
-            placeholder="搜索设备 / ID"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ width: 180 }}
-          />
-          <Segmented
-            value={statusFilter}
-            onChange={(v) => setStatusFilter(v as ScopeKey)}
-            options={[
-              { label: '全部', value: 'all' },
-              { label: '运行', value: 'running' },
-              { label: '告警', value: 'alarm' },
-              { label: '维护', value: 'maintenance' },
-            ]}
-          />
+        <Space size={8} wrap>
+          <Tag color="processing">当前建筑：{buildingId}</Tag>
+          <Tag>{canManageAssets ? '可维护资产' : '资产台账只读'}</Tag>
         </Space>
       }
     >
-      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
-        <Col xs={12} md={6}>
-          <Card variant="borderless" styles={{ body: { padding: 16 } }}>
-            <Statistic title="设备总数" value={MOCK_DEVICES.length} suffix="台" />
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card variant="borderless" styles={{ body: { padding: 16 } }}>
-            <Statistic title="运行中" value={runningCount} suffix={`/ ${MOCK_DEVICES.length}`} valueStyle={{ color: BRAND.teal }} />
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card variant="borderless" styles={{ body: { padding: 16 } }}>
-            <Statistic title="告警" value={alarmCount} valueStyle={{ color: alarmCount ? '#DC2626' : undefined }} />
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card variant="borderless" styles={{ body: { padding: 16 } }}>
-            <Statistic title="实时总功率" value={totalPower} suffix="kW" valueStyle={{ color: BRAND.tealStrong }} />
-          </Card>
-        </Col>
-      </Row>
+      <OperationsMetrics
+        items={[
+          { label: '设备总数', value: summary.total, detail: `${summary.running} 台处于运行状态`, icon: <ApartmentOutlined /> },
+          { label: '运行中', value: summary.running, detail: `${summary.total - summary.running} 台需要关注`, icon: <WifiOutlined />, tone: 'positive' },
+          { label: '告警 / 维护', value: summary.alarm + summary.maintenance, detail: `${summary.alarm} 台告警 · ${summary.maintenance} 台维护`, icon: <ToolOutlined />, tone: summary.alarm ? 'critical' : 'warning' },
+          { label: '在线点位', value: summary.onlinePoints, suffix: `/ ${summary.totalPoints}`, detail: `${Math.round((summary.onlinePoints / Math.max(summary.totalPoints, 1)) * 100)}% 在线`, icon: <DatabaseOutlined />, tone: 'accent' },
+        ]}
+      />
 
       <Row gutter={[16, 16]}>
-        <Col xs={24} lg={7}>
+        <Col xs={24} lg={7} xl={6}>
           <Card
             variant="borderless"
-            title="资产树"
-            styles={{ body: { padding: '8px 8px' } }}
-            style={{ height: '100%' }}
+            title={<OperationsPanelHeading icon={<ClusterOutlined />} title="建筑设备树" />}
+            styles={{ body: { padding: 12 } }}
           >
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
+              当前选中：{selectedScopeLabel}
+            </Typography.Paragraph>
             <Tree
+              defaultExpandAll
               treeData={ASSET_TREE}
-              defaultExpandedKeys={['b1', 'z1', 'z2', 'z3']}
-              onSelect={(keys) => {
-                const key = (keys[0] as string) ?? null;
-                setSelected(key);
-                if (key && DEVICE_META[key]) setDrawerId(key);
-              }}
-              blockNode
+              selectedKeys={[selectedTreeKey]}
+              onSelect={(keys) => setSelectedTreeKey(keys[0] ?? 'b1')}
             />
           </Card>
         </Col>
-        <Col xs={24} lg={17}>
-          <Card variant="borderless" title={`设备列表${selected && ZONE_NAMES[selected] ? ` · ${ZONE_NAMES[selected]}` : ''}`}>
-            <Table
-              rowKey="id"
-              size="middle"
-              columns={columns}
-              dataSource={rows}
-              pagination={false}
-              onRow={(r) => ({ onClick: () => setDrawerId(r.id), style: { cursor: 'pointer' } })}
-            />
+
+        <Col xs={24} lg={17} xl={18}>
+          <Card variant="borderless" styles={{ body: { padding: 16 } }}>
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <div className="ops-toolbar">
+                <OperationsPanelHeading icon={<NodeIndexOutlined />} title="设备台账" meta={`${rows.length} 台`} />
+                <Space wrap>
+                  <Input.Search
+                    allowClear
+                    placeholder="搜索设备、型号、网关、负责人"
+                    value={keyword}
+                    onChange={(e) => setKeyword(e.target.value)}
+                    style={{ width: 260 }}
+                  />
+                  <Select value={typeFilter} onChange={setTypeFilter} options={TYPE_OPTIONS} style={{ width: 130 }} />
+                  <Select value={statusFilter} onChange={setStatusFilter} options={STATUS_OPTIONS} style={{ width: 130 }} />
+                  <Tooltip title="后续接入真实资产接口后，这些筛选会转为服务端查询参数。">
+                    <ApiOutlined style={{ opacity: 0.55 }} />
+                  </Tooltip>
+                </Space>
+              </div>
+
+              <Table<DeviceRow>
+                rowKey="id"
+                size="middle"
+                columns={tableColumns}
+                dataSource={rows}
+                pagination={{ pageSize: 8, showSizeChanger: false }}
+                scroll={{ x: compactTable ? 740 : 1180 }}
+                locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合条件的设备" /> }}
+              />
+            </Space>
           </Card>
         </Col>
       </Row>
 
-      <DeviceDrawer deviceId={drawerId} onClose={() => setDrawerId(null)} />
+      <DeviceDrawer
+        deviceId={selectedDeviceId}
+        onClose={closeDevice}
+        onAfterClose={detailFocus.restoreFocus}
+      />
     </PageScaffold>
   );
 }

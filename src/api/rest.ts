@@ -61,6 +61,8 @@ export function useBuildingTimeseries(range: Range = 'day', deviceIds: string[] 
     })),
   });
   const isLoading = queries.some((q) => q.isLoading);
+  const isError = queries.some((q) => q.isError);
+  const refetch = () => Promise.all(queries.map((q) => q.refetch()));
   const data: TelemetryPoint[] = [];
   if (!isLoading) {
     const n = Math.max(0, ...queries.map((q) => q.data?.[key]?.length ?? 0));
@@ -79,7 +81,7 @@ export function useBuildingTimeseries(range: Range = 'day', deviceIds: string[] 
       if (has) data.push({ ts, value: Math.round(sum) });
     }
   }
-  return { data, isLoading };
+  return { data, isLoading, isError, refetch };
 }
 
 /**
