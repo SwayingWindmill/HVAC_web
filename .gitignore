@@ -1,5 +1,6 @@
-# WorkBuddy local project data (memory, project skills) — keep out of the repo
+# Local project coordination data — keep out of the repo
 .workbuddy/
+.ai-bridge/
 
 # dependencies
 node_modules/
