@@ -20,7 +20,7 @@ export const MODULES: ModuleDef[] = [
   { key: 'optimize', path: '/optimize', label: '节能优化', icon: 'ThunderboltOutlined', roles: ['rd'] },
   { key: 'fdd', path: '/fdd', label: '故障检测', icon: 'BugOutlined', roles: ['ops', 'rd'] },
   { key: 'alarms', path: '/alarms', label: '报警工单', icon: 'AlertOutlined', roles: ['ops', 'rd'] },
-  { key: 'ai', path: '/ai', label: 'AI 中心', icon: 'RobotOutlined', roles: ['rd'] },
+  { key: 'ai', path: '/ai', label: 'AI 运维助手', icon: 'RobotOutlined', roles: ['rd'] },
   { key: 'cost', path: '/cost', label: '成本与绩效', icon: 'DollarOutlined', roles: ['rd'] },
   { key: 'bigscreen', path: '/bigscreen', label: '演示大屏', icon: 'DesktopOutlined', roles: ['demo', 'ops', 'rd'] },
   { key: 'system', path: '/system', label: '系统管理', icon: 'SettingOutlined', roles: ['rd'] },
@@ -42,6 +42,7 @@ interface UiState {
   setThemeMode: (m: ThemeMode) => void;
   toggleDemoMode: () => void;
   toggleSidebar: () => void;
+  setSidebarCollapsed: (collapsed: boolean) => void;
   setBuilding: (id: string) => void;
 }
 
@@ -55,6 +56,7 @@ export const useUi = create<UiState>((set) => ({
   setThemeMode: (themeMode) => set({ themeMode }),
   toggleDemoMode: () => set((s) => ({ demoMode: !s.demoMode })),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+  setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
   setBuilding: (buildingId) => set({ buildingId }),
 }));
 

@@ -1,47 +1,42 @@
 import type { ReactNode } from 'react';
 import { Typography } from 'antd';
+import './OperationsUI.css';
 
 interface PageScaffoldProps {
   title: ReactNode;
   subtitle?: ReactNode;
-  /** right-side slot — filter bar / action buttons */
+  /** Right-side slot for context, filters, and primary actions. */
   extra?: ReactNode;
+  /** Short operational context shown above the title. */
+  eyebrow?: ReactNode;
   children: ReactNode;
 }
 
-/**
- * Reusable v1 page skeleton (established by the /assets ticket #14, reused by
- * /energy /cost /ai /system). Consistent header (title + subtitle) with a right
- * slot for filters/actions, then a content area. Visual language follows the
- * teal-single-accent + semantic-status tokens in src/theme/tokens.ts.
- */
-export default function PageScaffold({ title, subtitle, extra, children }: PageScaffoldProps) {
+/** Shared application page shell for all operational workspaces outside BigScreen. */
+export default function PageScaffold({
+  title,
+  subtitle,
+  extra,
+  eyebrow = '运营工作台',
+  children,
+}: PageScaffoldProps) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          justifyContent: 'space-between',
-          gap: 16,
-          flexWrap: 'wrap',
-        }}
-      >
-        <div>
-          <Typography.Title level={4} style={{ margin: 0 }}>
+    <div className="ops-page">
+      <header className="ops-page-header">
+        <div className="ops-page-heading">
+          <div className="ops-page-eyebrow">{eyebrow}</div>
+          <Typography.Title level={2} className="ops-page-title">
             {title}
           </Typography.Title>
-          {subtitle && (
-            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+          {subtitle ? (
+            <Typography.Text className="ops-page-subtitle">
               {subtitle}
             </Typography.Text>
-          )}
+          ) : null}
         </div>
-        {extra && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>{extra}</div>
-        )}
-      </div>
-      {children}
+        {extra ? <div className="ops-page-actions">{extra}</div> : null}
+      </header>
+      <main className="ops-page-content">{children}</main>
     </div>
   );
 }

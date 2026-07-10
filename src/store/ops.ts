@@ -15,42 +15,73 @@ interface OpsState {
   reject: (id: string) => void; // pending -> rejected
   dispatch: (id: string) => void; // approved -> dispatched (real, 二次确认)
   simulateDispatch: (id: string) => void; // approved -> dispatched (demo 一键模拟)
-  generateWorkOrder: (fdd: FddEntry) => void; // FDD -> /alarms work order
+  generateWorkOrder: (fdd: FddEntry) => string; // FDD -> /alarms work order
   setTicketStatus: (id: string, status: TicketStatus) => void;
 }
 
 const toStatus = (list: Suggestion[], id: string, status: Suggestion['status']) =>
-  list.map((s) => (s.id === id ? { ...s, status } : s));
+  list.map((suggestion) => (suggestion.id === id ? { ...suggestion, status } : suggestion));
 
-export const useOps = create<OpsState>((set) => ({
-  suggestions: mockSuggestions.map((s) => ({ ...s })),
-  workOrders: mockWorkOrders.map((w) => ({ ...w })),
+const nextWorkOrderId = (orders: WorkOrder[]) => {
+  const maxId = orders.reduce((max, order) => {
+    const value = Number(order.id.replace(/^WO-/, ''));
+    return Number.isFinite(value) ? Math.max(max, value) : max;
+  }, 500);
+  return `WO-${maxId + 1}`;
+};
+
+export const useOps = create<OpsState>((set, get) => ({
+  suggestions: mockSuggestions.map((suggestion) => ({ ...suggestion })),
+  workOrders: mockWorkOrders.map((order) => ({ ...order })),
   generatedFddIds: [],
-  submitApproval: (id) => set((st) => ({ suggestions: toStatus(st.suggestions, id, 'pending') })),
-  approve: (id) => set((st) => ({ suggestions: toStatus(st.suggestions, id, 'approved') })),
-  reject: (id) => set((st) => ({ suggestions: toStatus(st.suggestions, id, 'rejected') })),
-  dispatch: (id) => set((st) => ({ suggestions: toStatus(st.suggestions, id, 'dispatched') })),
-  simulateDispatch: (id) => set((st) => ({ suggestions: toStatus(st.suggestions, id, 'dispatched') })),
-  generateWorkOrder: (fdd) =>
-    set((st) => {
-      if (st.generatedFddIds.includes(fdd.id)) return st;
-      const wo: WorkOrder = {
-        id: `WO-${Math.floor(Math.random() * 9000 + 1000)}`,
-        source: 'fdd',
-        device: fdd.device,
-        severity: fdd.severity,
-        title: fdd.phenomenon,
-        description: `FDD ${fdd.id} 生成：${fdd.recommended}`,
-        status: 'open',
-        createdAt: '刚刚',
-      };
-      return {
-        workOrders: [wo, ...st.workOrders],
-        generatedFddIds: [...st.generatedFddIds, fdd.id],
-      };
-    }),
+  submitApproval: (id) => set((state) => ({ suggestions: toStatus(state.suggestions, id, 'pending') })),
+  approve: (id) => set((state) => ({ suggestions: toStatus(state.suggestions, id, 'approved') })),
+  reject: (id) => set((state) => ({ suggestions: toStatus(state.suggestions, id, 'rejected') })),
+  dispatch: (id) => set((state) => ({ suggestions: toStatus(state.suggestions, id, 'dispatched') })),
+  simulateDispatch: (id) => set((state) => ({ suggestions: toStatus(state.suggestions, id, 'dispatched') })),
+  generateWorkOrder: (fdd) => {
+    const existing = get().workOrders.find((order) => order.sourceFddId === fdd.id);
+    if (existing) return existing.id;
+
+    const id = nextWorkOrderId(get().workOrders);
+    const workOrder: WorkOrder = {
+      id,
+      source: 'fdd',
+      sourceFddId: fdd.id,
+      linkedAssetId: fdd.linkedAssetId,
+      linkedSuggestionId: fdd.linkedSuggestionId,
+      device: fdd.device,
+      severity: fdd.severity,
+      title: fdd.phenomenon,
+      description: `FDD ${fdd.id} 生成：${fdd.recommended}`,
+      impact: fdd.impact,
+      recommendation: fdd.recommended,
+      location: fdd.scope,
+      rule: `来源诊断 ${fdd.id}`,
+      status: 'open',
+      createdAt: '刚刚',
+    };
+
+    set((state) => ({
+      workOrders: [workOrder, ...state.workOrders],
+      generatedFddIds: state.generatedFddIds.includes(fdd.id)
+        ? state.generatedFddIds
+        : [...state.generatedFddIds, fdd.id],
+    }));
+    return id;
+  },
   setTicketStatus: (id, status) =>
-    set((st) => ({ workOrders: st.workOrders.map((w) => (w.id === id ? { ...w, status } : w)) })),
+    set((state) => ({
+      workOrders: state.workOrders.map((order) => (
+        order.id === id
+          ? {
+            ...order,
+            status,
+            assignee: status === 'assigned' && !order.assignee ? '运维值班组' : order.assignee,
+          }
+          : order
+      )),
+    })),
 }));
 
 // FDD list is static; expose it for the page (no mutation needed).

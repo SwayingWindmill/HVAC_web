@@ -45,6 +45,11 @@ function buildTheme(mode: 'light' | 'dark'): ThemeConfig {
 export function ThemeGate({ children }: { children: ReactNode }) {
   const mode = useResolvedMode();
   const cfg = useMemo(() => buildTheme(mode), [mode]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = mode;
+  }, [mode]);
+
   return (
     <QueryClientProvider client={queryClient}>
       <ConfigProvider theme={cfg}>

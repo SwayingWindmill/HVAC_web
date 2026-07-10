@@ -1,0 +1,146 @@
+.ai-workspace-grid > .ant-col {
+  display: flex;
+}
+
+.ai-conversation-shell,
+.ai-context-rail {
+  width: 100%;
+}
+
+.ai-conversation-shell > .ant-card-body {
+  display: flex;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 0 0 var(--ops-radius-card) var(--ops-radius-card);
+}
+
+.ai-context-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ai-temperature-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ops-border-soft);
+  font-size: 12px;
+}
+
+.ai-temperature-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ai-source-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-source-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--ops-border-soft);
+}
+
+.ai-source-row:first-child {
+  padding-top: 0;
+}
+
+.ai-source-row:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.ai-source-row > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ai-source-row .ant-typography-secondary {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ai-source-row > .ant-typography {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ai-action-grid .ant-btn {
+  height: auto;
+  min-height: 38px;
+  padding: 8px 10px;
+  white-space: normal;
+}
+
+.ai-governance-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ops-border-soft);
+  color: var(--ops-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.ai-governance-note > svg {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  color: #16a34a;
+}
+
+@media (max-width: 1199px) {
+  .ai-context-rail {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ai-context-rail > .ant-card:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 767px) {
+  .ai-conversation-shell > .ant-card-head .ant-card-head-wrapper {
+    align-items: flex-start;
+  }
+
+  .ai-conversation-shell > .ant-card-head .ant-card-extra {
+    padding-top: 14px;
+  }
+
+  .ai-context-rail {
+    display: flex;
+  }
+
+  .ai-action-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-temperature-heading,
+  .ai-source-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Badge, Layout, Select, Segmented, Switch, Popover, List, Button, Tooltip, Avatar, Space } from 'antd';
+import { Badge, Button, Divider, Grid, Layout, List, Popover, Select, Segmented, Space, Switch, Tooltip, Avatar } from 'antd';
 import {
   BellOutlined, SunOutlined, MoonOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
   ExperimentOutlined, UserOutlined, DesktopOutlined, ApiOutlined,
@@ -9,8 +9,10 @@ import { ROLE_LABEL, useUi, type Role } from '@/store/ui';
 import { mockAlarms, SEVERITY_LABEL } from '@/mock/data';
 import { SEVERITY_COLOR } from '@/theme/tokens';
 import { telemetry, type RealtimeStatus } from '@/api';
+import { canViewPath } from '@/auth/permissions';
 
 const { Header } = Layout;
+const { useBreakpoint } = Grid;
 
 // 全局实时连接状态徽标：消费 TelemetryClient 的连接状态（#11 / #8 实时层可见性）。
 const STATUS_MAP: Record<RealtimeStatus, { color: string; text: string }> = {
@@ -42,48 +44,15 @@ const BUILDINGS = [
 
 export default function TopHeader() {
   const navigate = useNavigate();
+  const screens = useBreakpoint();
   const { role, themeMode, demoMode, buildingId, sidebarCollapsed,
     setRole, setThemeMode, toggleDemoMode, toggleSidebar, setBuilding } = useUi();
+  const compact = !screens.xl;
+  const narrow = !screens.xl;
+  const canOpenAlarms = canViewPath(role, '/alarms');
 
-  const bell = (
-    <Popover
-      trigger="click"
-      placement="bottomRight"
-      content={
-        <div style={{ width: 300 }}>
-          <List
-            size="small"
-            dataSource={mockAlarms.slice(0, 4)}
-            renderItem={(a) => (
-              <List.Item style={{ cursor: 'pointer' }} onClick={() => navigate('/alarms')}>
-                <List.Item.Meta
-                  avatar={<Badge color={SEVERITY_COLOR[a.severity]} />}
-                  title={<span style={{ fontSize: 13 }}>{a.text}</span>}
-                  description={<span style={{ fontSize: 12 }}>
-                    {a.device} · {SEVERITY_LABEL[a.severity]} · {a.ts}
-                  </span>}
-                />
-              </List.Item>
-            )}
-          />
-          <Button type="link" size="small" block onClick={() => navigate('/alarms')}>查看全部工单 ›</Button>
-        </div>
-      }
-    >
-      <Badge count={mockAlarms.filter((a) => a.severity === 'critical' || a.severity === 'major').length} size="small">
-        <BellOutlined style={{ fontSize: 18 }} />
-      </Badge>
-    </Popover>
-  );
-
-  return (
-    <Header
-      style={{
-        display: 'flex', alignItems: 'center', gap: 16, padding: '0 16px',
-        borderBottom: '1px solid rgba(128,128,128,0.15)', height: 56,
-      }}
-    >
-      <Button type="text" icon={sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} onClick={toggleSidebar} />
+  const viewControls = (
+    <Space direction={narrow ? 'vertical' : 'horizontal'} size={10} align="start">
       <Select
         value={buildingId}
         options={BUILDINGS}
@@ -99,12 +68,68 @@ export default function TopHeader() {
       <Space size={6}>
         <ExperimentOutlined style={{ color: demoMode ? '#0FB5AE' : undefined }} />
         <Switch size="small" checked={demoMode} onChange={toggleDemoMode} />
-        <span style={{ fontSize: 12, opacity: 0.7 }}>演示数据</span>
+        {!compact && <span style={{ fontSize: 12, opacity: 0.7 }}>演示数据</span>}
       </Space>
+    </Space>
+  );
 
-      <div style={{ flex: 1 }} />
+  const bell = (
+    <Popover
+      trigger="click"
+      placement="bottomRight"
+      content={
+        <div style={{ width: 300 }}>
+          <List
+            size="small"
+            dataSource={mockAlarms.slice(0, 4)}
+            renderItem={(a) => (
+              <List.Item
+                style={{ cursor: canOpenAlarms ? 'pointer' : 'not-allowed', opacity: canOpenAlarms ? 1 : 0.55 }}
+                onClick={() => canOpenAlarms && navigate('/alarms')}
+              >
+                <List.Item.Meta
+                  avatar={<Badge color={SEVERITY_COLOR[a.severity]} />}
+                  title={<span style={{ fontSize: 13 }}>{a.text}</span>}
+                  description={<span style={{ fontSize: 12 }}>
+                    {a.device} · {SEVERITY_LABEL[a.severity]} · {a.ts}
+                  </span>}
+                />
+              </List.Item>
+            )}
+          />
+          <Tooltip title={canOpenAlarms ? undefined : '当前角色无权查看工单'}>
+            <Button type="link" size="small" block disabled={!canOpenAlarms} onClick={() => navigate('/alarms')}>查看全部工单 ›</Button>
+          </Tooltip>
+        </div>
+      }
+    >
+      <Badge count={mockAlarms.filter((a) => a.severity === 'critical' || a.severity === 'major').length} size="small">
+        <BellOutlined style={{ fontSize: 18 }} />
+      </Badge>
+    </Popover>
+  );
 
-      <RealtimeBadge />
+  return (
+    <Header
+      style={{
+        display: 'flex', alignItems: 'center', gap: compact ? 8 : 16, padding: '0 16px',
+        borderBottom: '1px solid rgba(128,128,128,0.15)', height: 56, minWidth: 0,
+      }}
+    >
+      <Button type="text" icon={sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} onClick={toggleSidebar} />
+      {narrow ? (
+        <Popover
+          trigger="click"
+          placement="bottomLeft"
+          content={<div style={{ width: 260 }}>{viewControls}<Divider style={{ margin: '10px 0' }} /><span style={{ fontSize: 12, opacity: 0.65 }}>视图配置仅影响前端演示上下文。</span></div>}
+        >
+          <Button size="small" icon={<ExperimentOutlined />}>视图配置</Button>
+        </Popover>
+      ) : viewControls}
+
+      <div style={{ flex: 1, minWidth: 8 }} />
+
+      {!compact && <RealtimeBadge />}
       <Tooltip title="进入演示大屏（全屏）">
         <Button type="text" icon={<DesktopOutlined />} onClick={() => navigate('/bigscreen')} />
       </Tooltip>
@@ -116,7 +141,7 @@ export default function TopHeader() {
           onClick={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
         />
       </Tooltip>
-      <Avatar style={{ background: '#0FB5AE' }} icon={<UserOutlined />} />
+      {!narrow && <Avatar style={{ background: '#0FB5AE' }} icon={<UserOutlined />} />}
     </Header>
   );
 }

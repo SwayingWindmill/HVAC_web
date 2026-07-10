@@ -1,209 +1,203 @@
-import { useEffect, useRef } from 'react';
+import { useMemo } from 'react';
+import { Button, Card, Col, Progress, Row, Space, Tag, Typography } from 'antd';
 import {
-  Card,
-  Input,
-  Button,
-  Tag,
-  Typography,
-  Space,
-  Empty,
-  Tooltip,
-  Avatar,
-  theme,
-} from 'antd';
-import {
-  RobotOutlined,
-  UserOutlined,
-  SendOutlined,
-  StopOutlined,
-  ClearOutlined,
+  AlertOutlined,
+  ApiOutlined,
+  CheckCircleOutlined,
+  DatabaseOutlined,
+  DollarOutlined,
+  FileTextOutlined,
   LockOutlined,
-  BulbOutlined,
+  RobotOutlined,
+  SafetyCertificateOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import PageScaffold from '@/components/PageScaffold';
-import { BRAND, STATUS } from '@/theme/tokens';
-import { useAiChat, AI_MOCK_MODE } from '@/api/ai';
+import {
+  OperationsInsightBand,
+  OperationsMetrics,
+  OperationsPanelHeading,
+} from '@/components/OperationsUI';
+import AssistantConversation from '@/ai/AssistantConversation';
+import CopilotContextBridge from '@/ai/CopilotContextBridge';
+import { AI_ASSISTANT_NAME, COPILOTKIT_ENABLED } from '@/ai/config';
+import { useAiApplicationContext } from '@/ai/context';
+import {
+  useCopilotAssistantSession,
+  useMockAssistantSession,
+  type AssistantSession,
+} from '@/ai/session';
+import { SUGGESTED_QUESTIONS } from '@/api/ai';
 import { useTelemetryLive } from '@/api';
 import { MOCK_DEVICES } from '@/api/mock';
+import { ROLE_LABEL, useUi } from '@/store/ui';
+import './Ai.css';
 
 const { Text } = Typography;
 
-export default function Ai() {
-  const { token } = theme.useToken();
-  const { messages, input, setInput, send, isStreaming, stop, clear, suggested } = useAiChat();
+type AiWorkspaceProps = {
+  session: AssistantSession;
+};
 
-  // 实时上下文摘要（仅用于左侧展示，证明只读查询接入了实时层）
+function AiWorkspace({ session }: AiWorkspaceProps) {
+  const navigate = useNavigate();
+  const context = useAiApplicationContext();
+  const { role, buildingId, demoMode } = useUi();
   const live = useTelemetryLive(MOCK_DEVICES, ['power', 'cop', 'load', 'supplyTemp', 'returnTemp']);
-  const getv = (d: string, k: string) => live.get(d, k) ?? 0;
-  const sumPower = Math.round(MOCK_DEVICES.reduce((s, d) => s + getv(d, 'power'), 0));
-  const avgCop =
-    Math.round((MOCK_DEVICES.reduce((s, d) => s + getv(d, 'cop'), 0) / MOCK_DEVICES.length) * 100) / 100;
+  const value = (deviceId: string, key: string) => live.get(deviceId, key) ?? 0;
+  const totalPower = Math.round(MOCK_DEVICES.reduce((sum, deviceId) => sum + value(deviceId, 'power'), 0));
+  const averageCop = Math.round((MOCK_DEVICES.reduce((sum, deviceId) => sum + value(deviceId, 'cop'), 0) / MOCK_DEVICES.length) * 100) / 100;
+  const averageLoad = Math.round(MOCK_DEVICES.reduce((sum, deviceId) => sum + value(deviceId, 'load'), 0) / MOCK_DEVICES.length);
+  const supply = Math.round((MOCK_DEVICES.reduce((sum, deviceId) => sum + value(deviceId, 'supplyTemp'), 0) / MOCK_DEVICES.length) * 10) / 10;
+  const returnTemperature = Math.round((MOCK_DEVICES.reduce((sum, deviceId) => sum + value(deviceId, 'returnTemp'), 0) / MOCK_DEVICES.length) * 10) / 10;
+  const temperatureDelta = Math.round((returnTemperature - supply) * 10) / 10;
 
-  const scrollRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+  const prompts = useMemo(
+    () => Array.from(new Set([...context.suggestedPrompts, ...SUGGESTED_QUESTIONS])).slice(0, 4),
+    [context.suggestedPrompts],
+  );
 
-  const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      send();
-    }
-  };
+  const sources = [
+    { label: '实时遥测', value: `${MOCK_DEVICES.length} 台设备`, detail: `${totalPower} kW · COP ${averageCop}` },
+    { label: 'FDD 诊断', value: `${context.metrics.activeDiagnoses} 条`, detail: `${context.metrics.highRiskDiagnoses} 条高风险` },
+    { label: '报警工单', value: `${context.metrics.activeWorkOrders} 条活跃`, detail: `${context.metrics.slaRiskWorkOrders} 条 SLA 风险` },
+    { label: '优化建议', value: `${context.metrics.pendingOptimizations} 条待决策`, detail: '审批与下发保持人在回路' },
+  ];
 
   return (
     <PageScaffold
-      title="AI 中心"
-      subtitle="HVAC 智能问答助手 · 基于实时遥测的自然语言查询"
+      title={AI_ASSISTANT_NAME}
+      subtitle="全局抽屉与完整工作台共用同一段会话。助手自动读取当前建筑、实时遥测、FDD、工单和优化上下文，不需要先选择场景。"
+      eyebrow="智能分析与协作"
       extra={
-        <Tag color="default" icon={<LockOutlined />} style={{ fontSize: 13, padding: '2px 10px' }}>
-          只读模式 · 不控制设备
-        </Tag>
+        <Space size={8} wrap>
+          <Tag icon={<LockOutlined />}>只读分析</Tag>
+          <Tag color={COPILOTKIT_ENABLED ? 'green' : 'gold'} icon={<ApiOutlined />}>
+            {session.modeLabel}
+          </Tag>
+          <Tag>{ROLE_LABEL[role]}</Tag>
+        </Space>
       }
     >
-      <div style={{ display: 'flex', gap: 16, alignItems: 'stretch', flexWrap: 'wrap' }}>
-        {/* 左侧：上下文 + 建议问题 */}
-        <div style={{ flex: '1 1 260px', maxWidth: 320, minWidth: 240, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Card size="small" styles={{ body: { padding: 14 } }}>
-            <Space direction="vertical" size={6} style={{ width: '100%' }}>
-              <Text strong style={{ color: BRAND.tealStrong }}>
-                <RobotOutlined /> 实时数据上下文
-              </Text>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                只读注入当前遥测快照，用于回答你的问题：
-              </Text>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
-                <Tag color="blue">总功率 {sumPower} kW</Tag>
-                <Tag color="cyan">综合 COP {avgCop}</Tag>
-                <Tag>{MOCK_DEVICES.length} 台设备在线</Tag>
-              </div>
-              {AI_MOCK_MODE && (
-                <Text type="secondary" style={{ fontSize: 11, marginTop: 2 }}>
-                  演示模式：应答为本地模拟，数据来自实时遥测
-                </Text>
-              )}
-            </Space>
-          </Card>
+      <OperationsInsightBand
+        title="助手边界"
+        icon={<SafetyCertificateOutlined />}
+        items={[
+          { text: '解释数据、汇总证据、生成建议；不直接控制设备。', tone: 'positive' },
+          { text: '策略修改必须进入节能优化审批，并保留回滚条件。', tone: 'warning' },
+          { text: '故障处置和责任流转必须进入报警工单闭环。', tone: 'info' },
+        ]}
+      />
 
-          <Card size="small" title="建议问题" styles={{ body: { padding: 12 } }}>
-            <Space direction="vertical" size={8} style={{ width: '100%' }}>
-              {suggested.map((q) => (
-                <Button
-                  key={q}
-                  type="dashed"
-                  block
-                  onClick={() => send(q)}
-                  disabled={isStreaming}
-                  style={{ textAlign: 'left', color: token.colorText }}
-                >
-                  <BulbOutlined style={{ color: BRAND.teal }} /> {q}
-                </Button>
-              ))}
-            </Space>
-          </Card>
-
-          <Card size="small" styles={{ body: { padding: 12, fontSize: 12, color: token.colorTextSecondary } }}>
-            <LockOutlined style={{ color: STATUS.ok }} /> 本助手仅查询 HVAC 运行数据，
-            <Text strong>不提供任何设备下发或写操作入口</Text>，守住「人在回路」红线。
-          </Card>
-        </div>
-
-        {/* 右侧：对话面板 */}
-        <Card
-          size="small"
-          style={{ flex: '3 1 480px', minWidth: 320, display: 'flex', flexDirection: 'column' }}
-          styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', padding: 0, minHeight: 0 } }}
-        >
-          <div
-            ref={scrollRef}
-            style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}
-          >
-            {messages.length === 0 ? (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={
-                  <span style={{ color: token.colorTextSecondary }}>
-                    你好，我是 HVAC 智能助手。问我园区能耗、COP、节能建议或供水温度吧。
-                  </span>
-                }
-                style={{ margin: 'auto' }}
+      <Row gutter={[16, 16]} align="stretch" className="ai-workspace-grid">
+        <Col xs={24} xl={16}>
+          <Card
+            variant="borderless"
+            className="ai-conversation-shell"
+            title={
+              <OperationsPanelHeading
+                title="连续对话"
+                icon={<RobotOutlined />}
+                meta={session.messages.length ? `${session.messages.length} 条消息` : '等待提问'}
               />
-            ) : (
-              messages.map((m) => {
-                const isUser = m.role === 'user';
-                return (
-                  <div
-                    key={m.id}
-                    style={{ display: 'flex', gap: 10, flexDirection: isUser ? 'row-reverse' : 'row' }}
-                  >
-                    <Avatar
-                      style={{
-                        background: isUser ? BRAND.teal : token.colorFillSecondary,
-                        color: isUser ? '#fff' : BRAND.tealStrong,
-                        flexShrink: 0,
-                      }}
-                      icon={isUser ? <UserOutlined /> : <RobotOutlined />}
-                    />
-                    <div
-                      style={{
-                        maxWidth: '78%',
-                        background: isUser ? BRAND.teal : token.colorBgContainer,
-                        color: isUser ? '#fff' : token.colorText,
-                        border: isUser ? 'none' : `1px solid ${token.colorBorderSecondary}`,
-                        borderRadius: 12,
-                        padding: '10px 14px',
-                        whiteSpace: 'pre-wrap',
-                        lineHeight: 1.6,
-                        fontSize: 14,
-                        boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
-                      }}
-                    >
-                      {m.content ||
-                        (isStreaming && m.role === 'assistant' ? (
-                          <Text type="secondary">正在输入…</Text>
-                        ) : null)}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-
-          {/* 输入区 */}
-          <div
-            style={{
-              borderTop: `1px solid ${token.colorBorderSecondary}`,
-              padding: 12,
-              display: 'flex',
-              gap: 8,
-              alignItems: 'flex-end',
-            }}
+            }
+            extra={<span className="ops-chart-status is-positive">与全局助手共用会话</span>}
           >
-            <Input.TextArea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={onKey}
-              placeholder="输入你的问题，Enter 发送 / Shift+Enter 换行"
-              autoSize={{ minRows: 1, maxRows: 4 }}
-              disabled={isStreaming}
-              style={{ flex: 1 }}
+            <AssistantConversation
+              session={session}
+              prompts={prompts}
+              variant="workspace"
+              emptyDescription="直接提问即可。助手会自动结合当前建筑的遥测、诊断、工单和优化数据进行只读分析。"
             />
-            {isStreaming ? (
-              <Tooltip title="停止生成">
-                <Button icon={<StopOutlined />} onClick={stop} danger />
-              </Tooltip>
-            ) : (
-              <Button type="primary" icon={<SendOutlined />} onClick={() => send()} disabled={!input.trim()}>
-                发送
-              </Button>
-            )}
-            <Tooltip title="清空对话">
-              <Button icon={<ClearOutlined />} onClick={clear} disabled={isStreaming} />
-            </Tooltip>
+          </Card>
+        </Col>
+
+        <Col xs={24} xl={8}>
+          <div className="ai-context-rail">
+            <Card
+              variant="borderless"
+              title={<OperationsPanelHeading title="实时运营上下文" meta={`建筑 ${buildingId}`} />}
+            >
+              <OperationsMetrics
+                className="is-compact"
+                ariaLabel="AI 实时运营上下文"
+                items={[
+                  { label: '总功率', value: totalPower, suffix: 'kW', tone: 'accent' },
+                  { label: '综合 COP', value: averageCop, tone: averageCop < 4.5 ? 'warning' : 'positive' },
+                  { label: '平均负荷', value: averageLoad, suffix: '%' },
+                  { label: '高风险诊断', value: context.metrics.highRiskDiagnoses, tone: context.metrics.highRiskDiagnoses ? 'critical' : 'positive' },
+                ]}
+              />
+              <div className="ai-temperature-summary">
+                <div className="ai-temperature-heading">
+                  <Text strong>冷冻水温差</Text>
+                  <Text type="secondary">供 {supply}℃ / 回 {returnTemperature}℃</Text>
+                </div>
+                <Progress
+                  percent={Math.min(100, Math.max(0, Math.round(temperatureDelta * 18)))}
+                  size="small"
+                  status={temperatureDelta < 3.5 ? 'exception' : 'active'}
+                  showInfo={false}
+                />
+                <Text type="secondary">当前温差 {temperatureDelta}℃，助手会把该工况作为分析证据之一。</Text>
+              </div>
+            </Card>
+
+            <Card
+              variant="borderless"
+              title={<OperationsPanelHeading title="已接入数据" icon={<DatabaseOutlined />} meta="自动上下文" />}
+            >
+              <div className="ai-source-list">
+                {sources.map((source) => (
+                  <div className="ai-source-row" key={source.label}>
+                    <div>
+                      <Text strong>{source.label}</Text>
+                      <Text type="secondary">{source.detail}</Text>
+                    </div>
+                    <Text strong>{source.value}</Text>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <Card
+              variant="borderless"
+              title={<OperationsPanelHeading title="进入业务闭环" meta="AI 不替代确认" />}
+            >
+              <div className="ai-action-grid">
+                <Button icon={<AlertOutlined />} onClick={() => navigate('/fdd')}>查看 FDD 证据</Button>
+                <Button icon={<FileTextOutlined />} onClick={() => navigate('/alarms')}>处理报警工单</Button>
+                <Button icon={<ThunderboltOutlined />} onClick={() => navigate('/optimize')}>评审优化建议</Button>
+                <Button icon={<DollarOutlined />} onClick={() => navigate('/cost')}>核对收益绩效</Button>
+              </div>
+              <div className="ai-governance-note">
+                <CheckCircleOutlined />
+                <span>{demoMode ? '当前使用演示数据。' : '当前使用接入数据。'} 所有写操作仍由对应业务页面、权限和二次确认控制。</span>
+              </div>
+            </Card>
           </div>
-        </Card>
-      </div>
+        </Col>
+      </Row>
     </PageScaffold>
   );
+}
+
+function CopilotAiWorkspace() {
+  const session = useCopilotAssistantSession();
+  return (
+    <>
+      <CopilotContextBridge />
+      <AiWorkspace session={session} />
+    </>
+  );
+}
+
+function MockAiWorkspace() {
+  const session = useMockAssistantSession();
+  return <AiWorkspace session={session} />;
+}
+
+export default function Ai() {
+  return COPILOTKIT_ENABLED ? <CopilotAiWorkspace /> : <MockAiWorkspace />;
 }

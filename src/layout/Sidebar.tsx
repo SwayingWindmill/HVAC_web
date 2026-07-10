@@ -1,84 +1,211 @@
-import { useMemo, useState, type ComponentType } from 'react';
-import { Layout, Menu, Tree, Typography, Divider } from 'antd';
+import { useEffect, useMemo, type ComponentType, type ReactNode } from 'react';
+import { Drawer, Grid, Layout, Menu } from 'antd';
+import type { MenuProps } from 'antd';
 import {
-  DashboardOutlined, ApartmentOutlined, FundOutlined, ThunderboltOutlined,
-  BugOutlined, AlertOutlined, RobotOutlined, DollarOutlined, DesktopOutlined, SettingOutlined,
-  ApartmentOutlined as TreeIcon,
+  DashboardOutlined,
+  ApartmentOutlined,
+  FundOutlined,
+  ThunderboltOutlined,
+  BugOutlined,
+  AlertOutlined,
+  RobotOutlined,
+  DollarOutlined,
+  DesktopOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { MODULES, visibleModules, useUi } from '@/store/ui';
-import { mockTree } from '@/mock/data';
+import { visibleModules, useUi } from '@/store/ui';
+import './Sidebar.css';
 
 const { Sider } = Layout;
-const ICONS: Record<string, ComponentType> = {
-  DashboardOutlined, ApartmentOutlined, FundOutlined, ThunderboltOutlined,
-  BugOutlined, AlertOutlined, RobotOutlined, DollarOutlined, DesktopOutlined, SettingOutlined,
+const { useBreakpoint } = Grid;
+
+type MenuItem = Required<MenuProps>['items'][number];
+
+type NavGroup = {
+  key: string;
+  label: string;
+  paths: string[];
 };
+
+const ICONS: Record<string, ComponentType> = {
+  DashboardOutlined,
+  ApartmentOutlined,
+  FundOutlined,
+  ThunderboltOutlined,
+  BugOutlined,
+  AlertOutlined,
+  RobotOutlined,
+  DollarOutlined,
+  DesktopOutlined,
+  SettingOutlined,
+};
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    key: 'operations',
+    label: '运营管理',
+    paths: ['/assets', '/fdd', '/alarms', '/optimize'],
+  },
+  {
+    key: 'analytics',
+    label: '分析中心',
+    paths: ['/energy', '/cost', '/ai'],
+  },
+  {
+    key: 'presentation',
+    label: '展示',
+    paths: ['/bigscreen'],
+  },
+];
+
+function BrandMark() {
+  return (
+    <svg width="34" height="34" viewBox="0 0 34 34" fill="none" aria-hidden="true">
+      <defs>
+        <linearGradient id="brand-gradient" x1="5" y1="4" x2="29" y2="30" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#12C9C0" />
+          <stop offset="1" stopColor="#087E79" />
+        </linearGradient>
+      </defs>
+      <rect x="1" y="1" width="32" height="32" rx="10" fill="url(#brand-gradient)" />
+      <path d="M10 10.5V23.5M24 10.5V23.5M10 17H24" stroke="white" strokeWidth="2.2" strokeLinecap="round" />
+      <path d="M7.5 12.5C10.3 8.8 14.2 7 18 7" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.72" />
+      <path d="M26.5 21.5C23.7 25.2 19.8 27 16 27" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.72" />
+      <circle cx="25.5" cy="11.5" r="1.5" fill="#CFFFFC" />
+      <circle cx="8.5" cy="22.5" r="1.5" fill="#CFFFFC" />
+    </svg>
+  );
+}
+
+function buildItem(path: string, modules: ReturnType<typeof visibleModules>): MenuItem | null {
+  const module = modules.find((item) => item.path === path);
+  if (!module) return null;
+  const Icon = ICONS[module.icon];
+  return {
+    key: module.path,
+    icon: Icon ? <Icon /> : undefined,
+    label: module.label,
+  };
+}
+
+function compactItems(items: Array<MenuItem | null>): MenuItem[] {
+  return items.filter(Boolean) as MenuItem[];
+}
+
+function groupItem(key: string, label: ReactNode, children: MenuItem[]): MenuItem {
+  return { type: 'group', key, label, children } as MenuItem;
+}
 
 export default function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
-  const role = useUi((s) => s.role);
-  const collapsed = useUi((s) => s.sidebarCollapsed);
-  const buildingId = useUi((s) => s.buildingId);
-  const setBuilding = useUi((s) => s.setBuilding);
-  const [treeSel, setTreeSel] = useState<string[]>([buildingId]);
+  const screens = useBreakpoint();
+  const role = useUi((state) => state.role);
+  const collapsed = useUi((state) => state.sidebarCollapsed);
+  const setSidebarCollapsed = useUi((state) => state.setSidebarCollapsed);
+  const mobile = screens.md === false;
+  const menuCollapsed = mobile ? false : collapsed;
 
-  const items = useMemo(
-    () =>
-      visibleModules(role).map((m) => {
-        const Icon = ICONS[m.icon];
-        return { key: m.path, icon: <Icon />, label: m.label };
-      }),
-    [role],
+  useEffect(() => {
+    if (mobile) setSidebarCollapsed(true);
+  }, [mobile, setSidebarCollapsed]);
+
+  const modules = useMemo(() => visibleModules(role), [role]);
+
+  const primaryItems = useMemo<MenuItem[]>(() => {
+    const dashboard = buildItem('/dashboard', modules);
+    const groupChildren = NAV_GROUPS.map((group) => ({
+      ...group,
+      children: compactItems(group.paths.map((path) => buildItem(path, modules))),
+    })).filter((group) => group.children.length > 0);
+
+    if (menuCollapsed) {
+      return compactItems([
+        dashboard,
+        ...groupChildren.flatMap((group) => group.children),
+      ]);
+    }
+
+    return compactItems([
+      dashboard,
+      ...groupChildren.map((group) => groupItem(group.key, group.label, group.children)),
+    ]);
+  }, [menuCollapsed, modules]);
+
+  const systemItems = useMemo<MenuItem[]>(() => compactItems([
+    buildItem('/system', modules),
+  ]), [modules]);
+
+  const selectedKey = `/${location.pathname.split('/')[1] || 'dashboard'}`;
+  const handleNavigate = (key: string) => {
+    navigate(key);
+    if (mobile) setSidebarCollapsed(true);
+  };
+
+  const content = (
+    <>
+      <div className={`sidebar-brand ${menuCollapsed ? 'sidebar-brand-collapsed' : ''}`}>
+        <BrandMark />
+        {!menuCollapsed && (
+          <div className="sidebar-brand-copy">
+            <div className="sidebar-brand-title">HVAC 智慧能源</div>
+            <div className="sidebar-brand-subtitle">SMART ENERGY</div>
+          </div>
+        )}
+      </div>
+
+      <div className="sidebar-navigation">
+        <Menu
+          mode="inline"
+          inlineCollapsed={menuCollapsed}
+          selectedKeys={[selectedKey]}
+          items={primaryItems}
+          onClick={({ key }) => handleNavigate(key)}
+        />
+      </div>
+
+      {systemItems.length > 0 && (
+        <div className="sidebar-system">
+          {!menuCollapsed && <div className="sidebar-system-divider" />}
+          <Menu
+            mode="inline"
+            inlineCollapsed={menuCollapsed}
+            selectedKeys={[selectedKey]}
+            items={systemItems}
+            onClick={({ key }) => handleNavigate(key)}
+          />
+        </div>
+      )}
+    </>
   );
 
-  const selectedKey = '/' + (location.pathname.split('/')[1] || 'dashboard');
-  const openKey = MODULES.find((m) => m.path === selectedKey)?.path;
+  if (mobile) {
+    return (
+      <Drawer
+        placement="left"
+        open={!collapsed}
+        onClose={() => setSidebarCollapsed(true)}
+        width={224}
+        closable={false}
+        rootClassName="app-sidebar-drawer"
+        styles={{ body: { padding: 0 } }}
+      >
+        <div className="app-sidebar app-sidebar-mobile">{content}</div>
+      </Drawer>
+    );
+  }
 
   return (
     <Sider
+      className="app-sidebar"
       collapsible
       collapsed={collapsed}
       trigger={null}
-      width={236}
+      width={224}
       collapsedWidth={64}
-      style={{ borderInlineEnd: '1px solid rgba(128,128,128,0.15)' }}
     >
-      <div style={{ height: 56, display: 'flex', alignItems: 'center', gap: 10, padding: '0 18px', fontWeight: 700 }}>
-        <span style={{ color: '#0FB5AE', fontSize: 20 }}>❄</span>
-        {!collapsed && <span>HVAC 节能平台</span>}
-      </div>
-
-      {!collapsed && (
-        <div style={{ padding: '4px 12px 0' }}>
-          <Typography.Text type="secondary" style={{ fontSize: 12, paddingLeft: 6 }}>
-            全局设备树
-          </Typography.Text>
-          <Tree
-            showIcon
-            defaultExpandedKeys={['b1', 'b1-z1']}
-            selectedKeys={treeSel}
-            treeData={mockTree}
-            icon={<TreeIcon style={{ color: '#0FB5AE' }} />}
-            onSelect={(keys) => {
-              const k = String(keys[0] ?? '');
-              setTreeSel([k]);
-              setBuilding(k.split('-')[0]);
-            }}
-            style={{ background: 'transparent', fontSize: 13 }}
-          />
-          <Divider style={{ margin: '8px 0' }} />
-        </div>
-      )}
-
-      <Menu
-        mode="inline"
-        selectedKeys={[openKey ?? '/dashboard']}
-        items={items}
-        onClick={({ key }) => navigate(key)}
-        style={{ background: 'transparent', borderInlineEnd: 'none' }}
-      />
+      {content}
     </Sider>
   );
 }
