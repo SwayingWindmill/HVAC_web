@@ -22,15 +22,24 @@ All CopilotKit components and hooks must import from the `@copilotkit/react-core
 The current Popup customizes only official extension points:
 
 - `toggleButton`: official `CopilotChatToggleButton` with a compact solid HVAC status treatment, live presence indicator, assistant label, and attention count;
-- `header`: official `CopilotModalHeader` with its injected functional close button, plus scope, read-only state, new-session, and `/ai` workspace actions;
-- `welcomeScreen`: route-aware operational brief, flat scope line, attention list, and static suggestions; no decorative AI hero icon, uppercase eyebrow, nested cards, or equal-weight metric strip;
-- `/ai` workspace: a single CopilotChat pane plus one continuous context rail for runtime readings, evidence coverage, and business handoff, rather than a grid of unrelated cards;
+- `header`: official `CopilotModalHeader` with its injected functional close button, plus scope, read-only state, in-panel history, new-session, and `/ai` workspace actions;
+- `welcomeScreen`: route-aware scope, three page actions, recent sessions, and composer; no decorative AI hero, duplicated global metrics, nested cards, or equal-weight metric strip;
+- Popup history: an application-owned overlay inside the official Popup supports search and thread restoration without opening a second Modal or Drawer; the launcher is hidden while the Popup is open;
+- `/ai` workspace: a fixed-viewport three-column operations hub with thread navigator, official CopilotChat, and evidence rail;
 - `labels`: Chinese title, dynamic input placeholder, toolbar labels, and safety copy;
 - `input.disclaimer`: explicit read-only and human-approval boundary;
 - Generative UI cards: single evidence panels with typography, dividers, and semantic state color; no card-within-card or decorative shadow stack;
 - CSS tokens/classes: solid HVAC light/dark surfaces, restrained motion, and a strict no-horizontal-scroll contract.
 
 The Popup must not be wrapped in an application Drawer or Modal, and the application must not duplicate its open/close state.
+
+### Thread history and workspace scrolling
+
+`src/ai/history.ts` provides the frontend thread contract for the current demo phase. Zustand persist stores thread metadata and serializable Agent messages under `hvac-ai-thread-history-v1`. Popup and `/ai` can search and restore the same records. The workspace supports new session, rename, pin, archive, delete, filters, and pagination. A transient empty CopilotKit message array must never erase a stored non-empty thread; only an explicit new-session action may create an empty active thread.
+
+The `/ai` route is a fixed viewport. The browser document, AppShell Content, AI hub, thread navigator, and evidence rail must not scroll vertically. The only vertical scrolling surface is the CopilotKit message viewport in the center column; the composer remains visible. At tablet/mobile widths, thread and evidence rails move into Ant Design Drawers while the page remains fixed.
+
+This local persistence layer is a frontend implementation boundary, not the final source of truth. Remote Runtime mode must eventually replace it with authenticated server-side thread, task, report, and audit persistence while preserving the same UI contract.
 
 ## Agent execution modes
 

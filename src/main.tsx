@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeGate } from '@/theme/AppTheme';
 import App from './App';
 import AiProvider from '@/ai/AiProvider';
+import './global.css';
 
 // One client for the whole app. History caching defaults per #8 spec (30-60s stale).
 const queryClient = new QueryClient({

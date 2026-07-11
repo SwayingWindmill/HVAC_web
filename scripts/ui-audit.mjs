@@ -435,10 +435,11 @@ try {
         hasBrandedWelcome: Boolean(popup?.querySelector('.hvac-copilot-welcome')),
         hasPresenceState: Boolean(popup?.querySelector('.hvac-copilot-presence-line')),
         hasScopeLine: Boolean(popup?.querySelector('.hvac-copilot-scope-line')),
-        attentionRowCount: popup?.querySelectorAll('.hvac-copilot-attention-list > div').length ?? 0,
-        hasTemplateMetricStrip: Boolean(popup?.querySelector('.hvac-copilot-metric-strip')),
+        recentThreadCount: popup?.querySelectorAll('.hvac-copilot-recent-list > button').length ?? 0,
+        hasHistoryAction: Boolean(popup?.querySelector('button[aria-label="对话历史"]')),
         suggestionCount: popup?.querySelectorAll('.hvac-copilot-suggestion').length ?? 0,
         hasBrandedToggle: Boolean(document.querySelector('.hvac-copilot-toggle')),
+        togglePointerEvents: getComputedStyle(document.querySelector('.hvac-copilot-toggle')).pointerEvents,
       };
     })()`);
     assert(
@@ -457,13 +458,59 @@ try {
         && aiPopupState.hasBrandedWelcome
         && aiPopupState.hasPresenceState
         && aiPopupState.hasScopeLine
-        && aiPopupState.attentionRowCount === 3
-        && !aiPopupState.hasTemplateMetricStrip
+        && aiPopupState.recentThreadCount >= 3
+        && aiPopupState.hasHistoryAction
         && aiPopupState.suggestionCount === 3
-        && aiPopupState.hasBrandedToggle,
+        && aiPopupState.hasBrandedToggle
+        && aiPopupState.togglePointerEvents === 'none',
       `CopilotPopup HVAC product UI is incomplete: ${JSON.stringify(aiPopupState)}`,
     );
     interactionChecks.push('ai-copilot-popup');
+
+    context = 'interaction:ai-popup-history';
+    const popupHistoryOpened = await evaluate(client, `(() => {
+      const button = document.querySelector('.copilotKitPopup button[aria-label="对话历史"]');
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`);
+    assert(popupHistoryOpened, 'CopilotPopup history action was not available');
+    await waitFor(client, `(() => {
+      const panel = document.querySelector('.hvac-copilot-history-panel');
+      return Boolean(panel?.querySelector('input[aria-label="搜索 AI 会话"]'))
+        && panel.querySelectorAll('.hvac-copilot-history-list > button').length >= 3;
+    })()`, 'CopilotPopup history panel');
+    const popupHistoryOverflow = await evaluate(client, `(() => {
+      const panel = document.querySelector('.hvac-copilot-history-panel');
+      return [...(panel?.querySelectorAll('*') ?? [])].some((element) => {
+        if (element.offsetParent === null) return false;
+        const overflowX = getComputedStyle(element).overflowX;
+        return element.scrollWidth > element.clientWidth + 1 && overflowX !== 'hidden' && overflowX !== 'clip';
+      });
+    })()`);
+    assert(!popupHistoryOverflow, 'CopilotPopup history panel has horizontal overflow');
+    const historicalThreadOpened = await evaluate(client, `(() => {
+      const item = [...document.querySelectorAll('.hvac-copilot-history-list > button')]
+        .find((element) => element.textContent.includes('峰时段费用异常分析'));
+      if (!item) return false;
+      item.click();
+      return true;
+    })()`);
+    assert(historicalThreadOpened, 'CopilotPopup historical thread was not available');
+    await waitFor(client, `(() => {
+      const popup = document.querySelector('.copilotKitPopup');
+      return !document.querySelector('.hvac-copilot-history-panel')
+        && popup?.textContent.includes('峰时费用占比约 42%');
+    })()`, 'CopilotPopup historical thread restore');
+    const popupHistoryNewSession = await evaluate(client, `(() => {
+      const button = document.querySelector('.copilotKitPopup button[aria-label="新建会话"]');
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`);
+    assert(popupHistoryNewSession, 'CopilotPopup new session after history restore was not available');
+    await waitFor(client, `Boolean(document.querySelector('.hvac-copilot-welcome'))`, 'CopilotPopup welcome after history restore');
+    interactionChecks.push('ai-popup-history');
 
     context = 'interaction:ai-context-routing';
     const energyNavClicked = await evaluate(client, `(() => {
@@ -755,22 +802,92 @@ try {
     const aiWorkspaceInitialState = await evaluate(client, `(() => {
       const workspace = document.querySelector('.ai-copilot-chat-shell');
       const textarea = workspace?.querySelector('textarea');
+      const content = document.querySelector('.app-content-ai');
+      const hub = document.querySelector('.ai-hub');
+      const conversation = document.querySelector('.ai-conversation-pane');
+      const chatScrollContainers = [...document.querySelectorAll('.ai-copilot-chat *')]
+        .filter((element) => ['auto', 'scroll'].includes(getComputedStyle(element).overflowY));
+      const outsideScrollers = [...(hub?.querySelectorAll('*') ?? [])].filter((element) => {
+        if (conversation?.contains(element)) return false;
+        const style = getComputedStyle(element);
+        return ['auto', 'scroll'].includes(style.overflowY) && element.scrollHeight > element.clientHeight + 1;
+      });
       return {
         workspace: Boolean(workspace),
         textarea: Boolean(textarea),
         popupLauncher: Boolean(document.querySelector('.hvac-copilot-toggle')),
         popup: Boolean(document.querySelector('.copilotKitPopup')),
+        threadRows: document.querySelectorAll('.ai-thread-list .ai-thread-row').length,
+        hasThreadSearch: Boolean(document.querySelector('.ai-thread-search input')),
+        hasEvidenceRail: Boolean(document.querySelector('.ai-evidence-sidebar')),
+        pageScroll: document.scrollingElement.scrollHeight - window.innerHeight,
+        contentScroll: content ? content.scrollHeight - content.clientHeight : 999,
+        hubScroll: hub ? hub.scrollHeight - hub.clientHeight : 999,
+        contentOverflowY: content ? getComputedStyle(content).overflowY : '',
+        hubOverflowY: hub ? getComputedStyle(hub).overflowY : '',
+        chatScrollContainerCount: chatScrollContainers.length,
+        outsideScrollerCount: outsideScrollers.length,
       };
     })()`);
     assert(
       aiWorkspaceInitialState.workspace
         && aiWorkspaceInitialState.textarea
         && !aiWorkspaceInitialState.popupLauncher
-        && !aiWorkspaceInitialState.popup,
+        && !aiWorkspaceInitialState.popup
+        && aiWorkspaceInitialState.threadRows >= 3
+        && aiWorkspaceInitialState.hasThreadSearch
+        && aiWorkspaceInitialState.hasEvidenceRail
+        && aiWorkspaceInitialState.pageScroll <= 2
+        && aiWorkspaceInitialState.contentScroll <= 2
+        && aiWorkspaceInitialState.hubScroll <= 2
+        && ['hidden', 'clip'].includes(aiWorkspaceInitialState.contentOverflowY)
+        && ['hidden', 'clip'].includes(aiWorkspaceInitialState.hubOverflowY)
+        && aiWorkspaceInitialState.chatScrollContainerCount >= 1
+        && aiWorkspaceInitialState.outsideScrollerCount === 0,
       `CopilotChat workspace shell is invalid: ${JSON.stringify(aiWorkspaceInitialState)}`,
     );
+
+    const aiHistorySearchFocused = await evaluate(client, `(() => {
+      const input = document.querySelector('.ai-thread-search input');
+      if (!input) return false;
+      input.focus();
+      return document.activeElement === input;
+    })()`);
+    assert(aiHistorySearchFocused, 'AI workspace history search was unavailable');
+    await client.send('Input.insertText', { text: 'CH-02' });
+    await pause(400);
+    const aiHistorySearchState = await evaluate(client, `(() => {
+      const input = document.querySelector('.ai-thread-search input');
+      const rows = [...document.querySelectorAll('.ai-thread-list .ai-thread-row')];
+      return {
+        value: input?.value ?? '',
+        rows: rows.map((element) => element.textContent?.trim() ?? ''),
+      };
+    })()`);
+    assert(
+      aiHistorySearchState.value === 'CH-02'
+        && aiHistorySearchState.rows.length >= 1
+        && aiHistorySearchState.rows.every((text) => text.includes('CH-02'))
+        && aiHistorySearchState.rows.some((text) => text.includes('CH-02 COP 下降调查')),
+      `AI workspace history search is invalid: ${JSON.stringify(aiHistorySearchState)}`,
+    );
+    const aiHistoryThreadOpened = await evaluate(client, `(() => {
+      const row = [...document.querySelectorAll('.ai-thread-list .ai-thread-row')]
+        .find((element) => element.textContent.includes('CH-02 COP 下降调查'));
+      if (!row) return false;
+      row.click();
+      return true;
+    })()`);
+    assert(aiHistoryThreadOpened, 'AI workspace historical investigation was unavailable');
+    await waitFor(client, `(() => {
+      const workspace = document.querySelector('.ai-copilot-chat');
+      return workspace?.textContent.includes('冷凝温差持续偏高')
+        && document.querySelector('.ai-conversation-header h2')?.textContent.includes('CH-02 COP 下降调查');
+    })()`, 'AI workspace historical investigation restore');
+    interactionChecks.push('ai-workspace-history');
+
     const aiWorkspaceNewThread = await evaluate(client, `(() => {
-      const button = [...document.querySelectorAll('.ai-chat-pane-actions button')].find((element) => element.textContent.includes('新建会话'));
+      const button = [...document.querySelectorAll('.ai-conversation-actions button')].find((element) => element.textContent.includes('新建会话'));
       if (!button) return false;
       button.click();
       return true;
@@ -804,6 +921,29 @@ try {
         && card?.textContent.includes('能耗异常调查')
         && card?.textContent.includes('额外能耗');
     })()`, 'CopilotChat workspace Agent answer');
+    await waitFor(client, `(() => {
+      const raw = localStorage.getItem('hvac-ai-thread-history-v1');
+      return Boolean(raw?.includes('为什么当前能耗升高？') && raw.includes('总功率约'));
+    })()`, 'AI workspace history persistence');
+    await client.send('Page.reload', { ignoreCache: true });
+    await pause(1800);
+    const aiPersistedRestoreState = await evaluate(client, `(() => {
+      const workspace = document.querySelector('.ai-copilot-chat');
+      const raw = localStorage.getItem('hvac-ai-thread-history-v1');
+      return {
+        text: workspace?.textContent?.slice(0, 600) ?? '',
+        header: document.querySelector('.ai-conversation-header h2')?.textContent ?? '',
+        threadRows: [...document.querySelectorAll('.ai-thread-row')].map((element) => element.textContent?.slice(0, 80) ?? ''),
+        storage: raw?.slice(0, 1200) ?? '',
+        pageFixed: document.querySelector('.app-content-ai')?.scrollHeight <= document.querySelector('.app-content-ai')?.clientHeight + 2,
+      };
+    })()`);
+    assert(
+      aiPersistedRestoreState.text.includes('为什么当前能耗升高？')
+        && aiPersistedRestoreState.text.includes('总功率约')
+        && aiPersistedRestoreState.pageFixed,
+      `AI workspace persisted thread restore is invalid: ${JSON.stringify(aiPersistedRestoreState)}`,
+    );
     const aiWorkspaceOverflow = await evaluate(client, `(() => {
       const workspace = document.querySelector('.ai-copilot-chat-shell');
       const offenders = [...(workspace?.querySelectorAll('*') ?? [])].filter((element) => {

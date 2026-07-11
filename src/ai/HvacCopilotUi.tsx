@@ -1,39 +1,26 @@
-import type { ComponentProps, HTMLAttributes, ReactElement } from 'react';
+import { useMemo, useState, type ComponentProps, type HTMLAttributes, type ReactElement } from 'react';
 import {
   CopilotChatView,
   useCopilotChatConfiguration,
 } from '@copilotkit/react-core/v2';
 import {
   ExpandOutlined,
+  HistoryOutlined,
   PlusOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { AI_ASSISTANT_NAME } from './config';
 import { useAiApplicationContext } from './context';
+import {
+  formatThreadTime,
+  threadKindLabel,
+  useAiHistory,
+  useAiThreadController,
+} from './history';
 
 type WelcomeScreenProps = ComponentProps<typeof CopilotChatView.WelcomeScreen>;
 type WelcomeVariant = 'popup' | 'workspace';
-
-function useAttentionItems() {
-  const context = useAiApplicationContext();
-  return [
-    {
-      label: '高风险诊断',
-      value: context.metrics.highRiskDiagnoses,
-      tone: 'critical',
-    },
-    {
-      label: 'SLA 风险工单',
-      value: context.metrics.slaRiskWorkOrders,
-      tone: 'warning',
-    },
-    {
-      label: '待决策优化',
-      value: context.metrics.pendingOptimizations,
-      tone: 'neutral',
-    },
-  ] as const;
-}
 
 export function HvacCopilotToggleIcon() {
   const context = useAiApplicationContext();
@@ -52,14 +39,103 @@ export function HvacCopilotToggleIcon() {
   );
 }
 
+function HvacCopilotHistoryPanel() {
+  const navigate = useNavigate();
+  const [query, setQuery] = useState('');
+  const popupHistoryOpen = useAiHistory((state) => state.popupHistoryOpen);
+  const setPopupHistoryOpen = useAiHistory((state) => state.setPopupHistoryOpen);
+  const { threads, activeThreadId, openThread, startNewThread } = useAiThreadController();
+
+  const visibleThreads = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    return threads
+      .filter((thread) => !thread.archived && thread.messageCount > 0)
+      .filter((thread) => !normalized || `${thread.title} ${thread.summary} ${thread.scopeLabel}`.toLowerCase().includes(normalized))
+      .slice(0, 7);
+  }, [query, threads]);
+
+  if (!popupHistoryOpen) return null;
+
+  return (
+    <section className="hvac-copilot-history-panel" aria-label="AI 对话历史">
+      <header className="hvac-copilot-history-heading">
+        <div>
+          <span>会话记录</span>
+          <strong>{threads.filter((thread) => !thread.archived && thread.messageCount > 0).length} 条</strong>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            startNewThread();
+            setPopupHistoryOpen(false);
+          }}
+        >
+          <PlusOutlined />
+          新建
+        </button>
+      </header>
+
+      <label className="hvac-copilot-history-search">
+        <SearchOutlined aria-hidden="true" />
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="搜索会话、设备或结论"
+          aria-label="搜索 AI 会话"
+        />
+      </label>
+
+      <div className="hvac-copilot-history-list">
+        {visibleThreads.length ? visibleThreads.map((thread) => (
+          <button
+            type="button"
+            key={thread.id}
+            className={thread.id === activeThreadId ? 'is-active' : undefined}
+            onClick={() => openThread(thread.id)}
+          >
+            <span className="hvac-copilot-history-type" data-kind={thread.kind}>
+              {threadKindLabel[thread.kind]}
+            </span>
+            <span className="hvac-copilot-history-copy">
+              <strong>{thread.title}</strong>
+              <small>{thread.summary}</small>
+            </span>
+            <time>{formatThreadTime(thread.updatedAt)}</time>
+          </button>
+        )) : (
+          <div className="hvac-copilot-history-empty">没有匹配的会话记录</div>
+        )}
+      </div>
+
+      <footer className="hvac-copilot-history-footer">
+        <span>历史保存在当前浏览器</span>
+        <button
+          type="button"
+          onClick={() => {
+            setPopupHistoryOpen(false);
+            navigate('/ai');
+          }}
+        >
+          打开运维中心
+          <ExpandOutlined />
+        </button>
+      </footer>
+    </section>
+  );
+}
+
 export function HvacCopilotHeaderContent({ closeButton }: { closeButton: ReactElement }) {
   const navigate = useNavigate();
   const context = useAiApplicationContext();
   const configuration = useCopilotChatConfiguration();
+  const popupHistoryOpen = useAiHistory((state) => state.popupHistoryOpen);
+  const setPopupHistoryOpen = useAiHistory((state) => state.setPopupHistoryOpen);
+  const { activeThreadId, activeThread, startNewThread } = useAiThreadController();
 
   const openWorkspace = () => {
+    setPopupHistoryOpen(false);
     configuration?.setModalOpen(false);
-    navigate('/ai');
+    navigate(`/ai?thread=${activeThreadId}`);
   };
 
   return (
@@ -72,18 +148,27 @@ export function HvacCopilotHeaderContent({ closeButton }: { closeButton: ReactEl
               <strong>{AI_ASSISTANT_NAME}</strong>
               <span className="hvac-copilot-readonly-badge">只读</span>
             </div>
-            <span className="hvac-copilot-header-scope" title={context.scopeLabel}>
-              {context.scopeLabel}
+            <span className="hvac-copilot-header-scope" title={activeThread?.title || context.scopeLabel}>
+              {activeThread?.messageCount ? activeThread.title : context.scopeLabel}
             </span>
           </div>
         </div>
         <div className="hvac-copilot-header-actions">
           <button
             type="button"
+            className={popupHistoryOpen ? 'hvac-copilot-icon-button is-active' : 'hvac-copilot-icon-button'}
+            aria-label="对话历史"
+            title="对话历史"
+            onClick={() => setPopupHistoryOpen(!popupHistoryOpen)}
+          >
+            <HistoryOutlined />
+          </button>
+          <button
+            type="button"
             className="hvac-copilot-icon-button"
             aria-label="新建会话"
             title="新建会话"
-            onClick={() => configuration?.startNewThread()}
+            onClick={startNewThread}
           >
             <PlusOutlined />
           </button>
@@ -99,7 +184,34 @@ export function HvacCopilotHeaderContent({ closeButton }: { closeButton: ReactEl
           {closeButton}
         </div>
       </div>
+      <HvacCopilotHistoryPanel />
     </div>
+  );
+}
+
+function RecentThreadList({ limit = 3 }: { limit?: number }) {
+  const { threads, activeThreadId, openThread } = useAiThreadController();
+  const recentThreads = threads
+    .filter((thread) => !thread.archived && thread.messageCount > 0 && thread.id !== activeThreadId)
+    .slice(0, limit);
+
+  if (!recentThreads.length) return null;
+
+  return (
+    <section className="hvac-copilot-recent" aria-label="最近会话">
+      <div className="hvac-copilot-section-heading">最近会话</div>
+      <div className="hvac-copilot-recent-list">
+        {recentThreads.map((thread) => (
+          <button type="button" key={thread.id} onClick={() => openThread(thread.id)}>
+            <span>
+              <strong>{thread.title}</strong>
+              <small>{threadKindLabel[thread.kind]} · {thread.scopeLabel}</small>
+            </span>
+            <time>{formatThreadTime(thread.updatedAt)}</time>
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -108,7 +220,6 @@ function HvacCopilotWelcomeBase({
   ...props
 }: WelcomeScreenProps & { variant: WelcomeVariant }) {
   const context = useAiApplicationContext();
-  const attentionItems = useAttentionItems();
   const {
     input,
     suggestionView,
@@ -127,38 +238,27 @@ function HvacCopilotWelcomeBase({
       <section className="hvac-copilot-brief">
         <div className="hvac-copilot-presence-line">
           <span aria-hidden="true" />
-          <strong>实时上下文已接入</strong>
+          <strong>已读取当前页面</strong>
           <small>{context.pageTitle}</small>
         </div>
-        <h2>{context.welcomeTitle}</h2>
-        <p>{context.pageDescription}</p>
+        <h2>{variant === 'workspace' ? '从会话或当前页面开始调查' : context.welcomeTitle}</h2>
+        <p>{variant === 'workspace'
+          ? '选择左侧历史记录继续处理，或基于当前范围发起新的只读分析。'
+          : context.pageDescription}</p>
       </section>
 
       <div className="hvac-copilot-scope-line" aria-label="当前 AI 上下文">
-        <span>分析范围</span>
+        <span>当前范围</span>
         <strong title={context.scopeLabel}>{context.scopeLabel}</strong>
         <small>{context.roleLabel}</small>
       </div>
 
-      <section className="hvac-copilot-attention" aria-label="当前运维关注">
-        <header>
-          <span>当前关注</span>
-          <strong>{context.attentionCount > 0 ? `${context.attentionCount} 项` : '暂无高风险事项'}</strong>
-        </header>
-        <div className="hvac-copilot-attention-list">
-          {attentionItems.map((item) => (
-            <div key={item.label} data-tone={item.tone}>
-              <span>{item.label}</span>
-              <strong>{item.value}</strong>
-            </div>
-          ))}
-        </div>
-      </section>
-
       <section className="hvac-copilot-suggestion-section">
-        <div className="hvac-copilot-section-heading">建议提问</div>
+        <div className="hvac-copilot-section-heading">基于当前页面</div>
         {suggestionView}
       </section>
+
+      {variant === 'popup' ? <RecentThreadList /> : null}
 
       <div className="hvac-copilot-welcome-input">{input}</div>
     </div>

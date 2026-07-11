@@ -6,6 +6,7 @@ import {
   COPILOTKIT_RUNTIME_URL,
 } from './config';
 import { HvacMockAgent } from './HvacMockAgent';
+import { AiThreadHistoryBridge } from './history';
 
 export default function AiProvider({ children }: { children: ReactNode }) {
   const localAgents = useMemo(() => ({ default: new HvacMockAgent() }), []);
@@ -18,6 +19,7 @@ export default function AiProvider({ children }: { children: ReactNode }) {
         enableInspector={false}
         showDevConsole={false}
       >
+        <AiThreadHistoryBridge />
         {children}
       </CopilotKit>
     );
@@ -30,6 +32,7 @@ export default function AiProvider({ children }: { children: ReactNode }) {
       enableInspector={false}
       showDevConsole={false}
     >
+      <AiThreadHistoryBridge />
       {children}
     </CopilotKit>
   );
