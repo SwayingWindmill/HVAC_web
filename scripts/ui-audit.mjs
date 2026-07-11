@@ -433,7 +433,10 @@ try {
         hasInput: Boolean(popup?.querySelector('textarea')),
         hasBrandedHeader: Boolean(popup?.querySelector('.hvac-copilot-header-layout')),
         hasBrandedWelcome: Boolean(popup?.querySelector('.hvac-copilot-welcome')),
-        hasContextCard: Boolean(popup?.querySelector('.hvac-copilot-context-card')),
+        hasPresenceState: Boolean(popup?.querySelector('.hvac-copilot-presence-line')),
+        hasScopeLine: Boolean(popup?.querySelector('.hvac-copilot-scope-line')),
+        attentionRowCount: popup?.querySelectorAll('.hvac-copilot-attention-list > div').length ?? 0,
+        hasTemplateMetricStrip: Boolean(popup?.querySelector('.hvac-copilot-metric-strip')),
         suggestionCount: popup?.querySelectorAll('.hvac-copilot-suggestion').length ?? 0,
         hasBrandedToggle: Boolean(document.querySelector('.hvac-copilot-toggle')),
       };
@@ -452,7 +455,10 @@ try {
       aiPopupState.hasInput
         && aiPopupState.hasBrandedHeader
         && aiPopupState.hasBrandedWelcome
-        && aiPopupState.hasContextCard
+        && aiPopupState.hasPresenceState
+        && aiPopupState.hasScopeLine
+        && aiPopupState.attentionRowCount === 3
+        && !aiPopupState.hasTemplateMetricStrip
         && aiPopupState.suggestionCount === 3
         && aiPopupState.hasBrandedToggle,
       `CopilotPopup HVAC product UI is incomplete: ${JSON.stringify(aiPopupState)}`,
@@ -764,7 +770,7 @@ try {
       `CopilotChat workspace shell is invalid: ${JSON.stringify(aiWorkspaceInitialState)}`,
     );
     const aiWorkspaceNewThread = await evaluate(client, `(() => {
-      const button = [...document.querySelectorAll('.ai-chat-toolbar button')].find((element) => element.textContent.includes('新建会话'));
+      const button = [...document.querySelectorAll('.ai-chat-pane-actions button')].find((element) => element.textContent.includes('新建会话'));
       if (!button) return false;
       button.click();
       return true;

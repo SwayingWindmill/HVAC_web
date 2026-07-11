@@ -244,9 +244,9 @@ Dashboard 统一的是设计纪律，不是所有卡片的内部模板。运营�
 
 - CopilotKit 官方 `CopilotPopup` 继续负责窗口开合、焦点、Escape、消息列表、输入、流式状态、Markdown 和移动端全屏行为；不得在外部再包裹 Drawer、Modal 或第二套窗口状态。
 - 产品化定制必须使用官方 slot/props：启动按钮保留官方 `CopilotChatToggleButton`，Header 保留官方 `CopilotModalHeader` 和其注入的关闭回调，应用只替换图标内容、Header 内容、欢迎页、输入提示、建议问题和 CSS token。
-- 桌面启动入口使用 `AI 运维助手 + 待关注数量` 胶囊；Header 必须展示助手名称、只读状态、建筑/页面/对象范围、新建会话、完整工作台入口和官方关闭按钮。
-- 欢迎页按当前路由和对象动态展示业务标题、分析范围、角色、运维摘要和 3 条建议问题；能耗周期、设备、FDD、工单和优化对象必须优先显示为当前上下文。
-- 对话中的结构化结果通过 CopilotKit `useComponent` 注册，不得硬编码成 Markdown。首批标准组件为 `AssetStatusCard`、`EnergyAnomalyCard` 和 `FddEvidenceCard`，只提供查看与业务深链，不执行写操作。
+- 桌面启动入口使用实色、紧凑的 `AI 运维助手 + 待关注数量` 状态按钮，不使用渐变、发光、漂浮动画或客服机器人图标；Header 必须展示助手名称、只读状态、建筑/页面/对象范围、新建会话、完整工作台入口和官方关闭按钮。
+- 欢迎区按当前路由和对象动态展示业务标题、分析范围、角色、运维关注和 3 条建议问题；采用“运维简报 + 扁平状态行”表达，不使用大号 AI 图标、全大写眉题、均分指标卡或卡片套卡片。
+- 对话中的结构化结果通过 CopilotKit `useComponent` 注册，不得硬编码成 Markdown。首批标准组件为 `AssetStatusCard`、`EnergyAnomalyCard` 和 `FddEvidenceCard`；结果使用单一证据面板、分隔线和状态色表达层级，不叠加阴影卡与内部指标小卡，只提供查看与业务深链，不执行写操作。
 - 手机端使用 CopilotKit 官方全屏 Popup 行为，不增加自定义 Sheet 或 Drawer。
 - Popup、消息区、输入区、建议问题、结构化结果、Markdown、代码块和表格在任何状态、主题和视口下都不得出现横向滚动条；长内容必须换行或在容器内收敛。
 - 本地 self-managed Agent 只允许读取 Mock 遥测、流式输出和触发只读展示组件，不得暴露设备控制、工单写入或优化下发能力。
@@ -256,21 +256,24 @@ Dashboard 统一的是设计纪律，不是所有卡片的内部模板。运营�
 
 ```text
 PageScaffold
-├── OperationsInsightBand   安全边界与人在回路说明
-└── 16 / 8 工作区
-    ├── CopilotChat Workspace
-    │   ├── 当前范围 / 新建会话工具栏
+├── Command Meta          当前范围、数据状态、待关注数量
+└── Workbench
+    ├── CopilotChat Pane
+    │   ├── 会话标题 / 新建会话
+    │   ├── 当前上下文条
     │   ├── 官方消息与 Generative UI 区
     │   └── 官方输入区与免责声明
-    └── Context Rail
-        ├── 实时运营上下文
-        ├── 已接入数据与证据范围
-        └── 进入业务闭环的页面入口
+    └── Context Rail      单一连续容器
+        ├── 运行态与关键读数
+        ├── 数据与证据覆盖
+        ├── 业务交接入口
+        └── 人在回路边界
 ```
 
 - `/ai` 主对话区必须直接嵌入 CopilotKit 官方 `CopilotChat`，不得使用 `AssistantConversation` 或其他平行消息状态转译层。
 - Popup 与工作台 Chat 必须共享同一个 `default` Agent、活动线程、`CopilotContextBridge`、工具注册和 Generative UI 组件。
-- 对话是页面主任务，桌面端至少获得三分之二宽度；上下文栏不得与对话争夺主视觉。
+- 工作台采用主对话 + 单一连续 Context Rail；不得把右侧每个信息组再包装成独立 Card，也不得在工作台顶部叠加一整条彩色“AI 安全说明”卡。
+- 对话是页面主任务，桌面端获得剩余主宽度，Context Rail 固定为紧凑辅助列；上下文栏不得与对话争夺主视觉。
 - 普通对话区域保持平面、安静，不使用大面积渐变、发光边框或独立“AI 输出卡片”。
 - 用户与助手消息只通过方向、头像和单一品牌色区分；助手消息保持容器色，避免每条消息使用彩色背景。
 - 推荐问题位于欢迎页或消息区中，最多展示 3–4 条；桌面端自适应排列，移动端单列换行，禁止横向滚动。

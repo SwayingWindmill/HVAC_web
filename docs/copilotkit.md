@@ -21,12 +21,14 @@ All CopilotKit components and hooks must import from the `@copilotkit/react-core
 
 The current Popup customizes only official extension points:
 
-- `toggleButton`: official `CopilotChatToggleButton` with a branded `AI 运维助手` icon payload and live attention count;
-- `header`: official `CopilotModalHeader` with its injected functional close button, plus new-session and `/ai` workspace actions;
-- `welcomeScreen`: route-aware welcome title, building/page/object scope, role, operational summary, and static suggestions;
+- `toggleButton`: official `CopilotChatToggleButton` with a compact solid HVAC status treatment, live presence indicator, assistant label, and attention count;
+- `header`: official `CopilotModalHeader` with its injected functional close button, plus scope, read-only state, new-session, and `/ai` workspace actions;
+- `welcomeScreen`: route-aware operational brief, flat scope line, attention list, and static suggestions; no decorative AI hero icon, uppercase eyebrow, nested cards, or equal-weight metric strip;
+- `/ai` workspace: a single CopilotChat pane plus one continuous context rail for runtime readings, evidence coverage, and business handoff, rather than a grid of unrelated cards;
 - `labels`: Chinese title, dynamic input placeholder, toolbar labels, and safety copy;
 - `input.disclaimer`: explicit read-only and human-approval boundary;
-- CSS tokens/classes: solid HVAC light/dark surfaces and a strict no-horizontal-scroll contract.
+- Generative UI cards: single evidence panels with typography, dividers, and semantic state color; no card-within-card or decorative shadow stack;
+- CSS tokens/classes: solid HVAC light/dark surfaces, restrained motion, and a strict no-horizontal-scroll contract.
 
 The Popup must not be wrapped in an application Drawer or Modal, and the application must not duplicate its open/close state.
 
