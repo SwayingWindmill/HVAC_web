@@ -31,7 +31,14 @@
 }
 
 .global-ai-floating-root {
+  --global-ai-panel-bg: #ffffff;
+  --global-ai-panel-subtle: #f6f8fa;
   pointer-events: none;
+}
+
+[data-theme='dark'] .global-ai-floating-root {
+  --global-ai-panel-bg: #171d24;
+  --global-ai-panel-subtle: #202832;
 }
 
 .global-ai-floating-root .ant-drawer-content-wrapper {
@@ -42,13 +49,15 @@
   max-height: calc(100vh - 90px);
   pointer-events: auto;
   box-shadow: none;
+  opacity: 1 !important;
 }
 
 .global-ai-floating-root .ant-drawer-content {
+  isolation: isolate;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--ant-color-border) 78%, transparent);
   border-radius: 18px;
-  background: var(--ant-color-bg-container);
+  background: var(--global-ai-panel-bg) !important;
   box-shadow:
     0 24px 70px rgba(15, 23, 42, 0.18),
     0 5px 18px rgba(15, 23, 42, 0.08);
@@ -58,9 +67,7 @@
   min-height: 66px;
   padding: 12px 14px 12px 16px;
   border-bottom: 1px solid var(--ant-color-border-secondary);
-  background:
-    linear-gradient(135deg, color-mix(in srgb, #0f9f99 6%, transparent), transparent 58%),
-    var(--ant-color-bg-container);
+  background: var(--global-ai-panel-bg) !important;
 }
 
 .global-ai-floating-root .ant-drawer-header-title {
@@ -77,7 +84,11 @@
 
 .global-ai-floating-root .ant-drawer-body,
 .global-ai-floating-root .assistant-conversation {
+  width: 100%;
+  max-width: 100%;
   min-height: 0;
+  overflow-x: hidden;
+  background: var(--global-ai-panel-bg) !important;
 }
 
 .global-ai-panel-title {
@@ -89,7 +100,7 @@
 
 .global-ai-panel-mark {
   flex-shrink: 0;
-  background: color-mix(in srgb, #0f9f99 14%, var(--ant-color-bg-container));
+  background: color-mix(in srgb, #0f9f99 14%, var(--global-ai-panel-bg));
   color: #0f9f99;
 }
 
@@ -128,7 +139,7 @@
   gap: 14px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--ant-color-border-secondary);
-  background: color-mix(in srgb, var(--ant-color-fill-quaternary) 72%, transparent);
+  background: var(--global-ai-panel-subtle);
 }
 
 .global-ai-scope-copy {
@@ -195,7 +206,7 @@
   border-radius: 16px;
   background:
     radial-gradient(circle at 92% 12%, color-mix(in srgb, #0f9f99 16%, transparent), transparent 34%),
-    color-mix(in srgb, #0f9f99 4%, var(--ant-color-bg-container));
+    color-mix(in srgb, #0f9f99 4%, var(--global-ai-panel-bg));
 }
 
 .global-ai-focus-card::after {
@@ -271,7 +282,7 @@
   padding: 12px 13px;
   border: 1px solid var(--ant-color-border-secondary);
   border-radius: 13px;
-  background: var(--ant-color-bg-container);
+  background: var(--global-ai-panel-bg);
   color: inherit;
   font: inherit;
   text-align: left;
@@ -377,7 +388,7 @@
   margin-top: auto;
   padding: 12px 13px;
   border-radius: 12px;
-  background: var(--ant-color-fill-quaternary);
+  background: var(--global-ai-panel-subtle);
   color: var(--ant-color-text-secondary);
   font-size: 11px;
   line-height: 1.55;
@@ -391,7 +402,7 @@
 .global-ai-analysis-progress {
   padding: 13px 16px 12px;
   border-bottom: 1px solid var(--ant-color-border-secondary);
-  background: color-mix(in srgb, #0f9f99 4%, var(--ant-color-bg-container));
+  background: var(--global-ai-panel-bg);
 }
 
 .global-ai-analysis-progress-head {
@@ -420,12 +431,13 @@
 
 .global-ai-analysis-steps {
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   margin-top: 7px;
-  overflow-x: auto;
+  overflow-x: hidden;
   color: var(--ant-color-text-secondary);
   font-size: 10px;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .global-ai-analysis-steps > span {
@@ -457,7 +469,7 @@
   gap: 8px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--ant-color-border-secondary);
-  background: color-mix(in srgb, #16a34a 5%, var(--ant-color-bg-container));
+  background: var(--global-ai-panel-bg);
   color: var(--ant-color-text-secondary);
   font-size: 11px;
 }
@@ -479,7 +491,11 @@
 }
 
 .global-ai-floating-root .assistant-conversation-messages {
+  width: 100%;
+  max-width: 100%;
   min-height: 0;
+  overflow-x: hidden;
+  background: var(--global-ai-panel-bg);
 }
 
 .global-ai-floating-root .assistant-conversation-messages:has(.global-ai-home) {
@@ -491,7 +507,17 @@
 }
 
 .global-ai-floating-root .assistant-prompt-strip {
-  background: color-mix(in srgb, var(--ant-color-fill-quaternary) 72%, transparent);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  overflow-x: hidden;
+  background: var(--global-ai-panel-subtle);
+}
+
+.global-ai-floating-root .assistant-prompt-strip .ant-btn {
+  width: 100%;
+  min-width: 0;
+  white-space: normal;
 }
 
 @media (max-width: 1023px) {
@@ -566,7 +592,8 @@
     font-size: 16px;
   }
 
-  .global-ai-action-grid {
+  .global-ai-action-grid,
+  .global-ai-floating-root .assistant-prompt-strip {
     grid-template-columns: 1fr;
   }
 

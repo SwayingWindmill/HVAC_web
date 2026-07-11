@@ -56,18 +56,20 @@ export default function AssistantConversation({
         ))}
       </div>
 
-      <div className="assistant-prompt-strip" aria-label="推荐问题">
-        {prompts.map((prompt) => (
-          <Button
-            key={prompt}
-            size={variant === 'drawer' ? 'small' : 'middle'}
-            onClick={() => void session.submit(prompt)}
-            disabled={session.loading}
-          >
-            {prompt}
-          </Button>
-        ))}
-      </div>
+      {prompts.length > 0 ? (
+        <div className="assistant-prompt-strip" aria-label="推荐问题">
+          {prompts.map((prompt) => (
+            <Button
+              key={prompt}
+              size={variant === 'drawer' ? 'small' : 'middle'}
+              onClick={() => void session.submit(prompt)}
+              disabled={session.loading}
+            >
+              {prompt}
+            </Button>
+          ))}
+        </div>
+      ) : null}
 
       <div className="assistant-composer">
         <Input.TextArea

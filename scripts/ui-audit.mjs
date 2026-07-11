@@ -408,10 +408,26 @@ try {
     const aiPanelState = await evaluate(client, `(() => {
       const root = document.querySelector('.global-ai-floating-root.ant-drawer-open');
       const wrapper = root?.querySelector('.ant-drawer-content-wrapper');
+      const content = root?.querySelector('.ant-drawer-content');
+      const body = root?.querySelector('.ant-drawer-body');
       const rect = wrapper?.getBoundingClientRect();
+      const isOpaque = (element) => {
+        if (!element) return false;
+        const color = getComputedStyle(element).backgroundColor;
+        const match = color.match(/^rgba?\\(([^)]+)\\)$/);
+        if (!match) return color !== 'transparent';
+        const parts = match[1].split(',').map((part) => part.trim());
+        return parts.length < 4 || Number(parts[3]) >= 0.999;
+      };
       return {
         hasMask: Boolean(root?.querySelector('.ant-drawer-mask')),
         pointerEvents: root ? getComputedStyle(root).pointerEvents : null,
+        contentOpaque: isOpaque(content),
+        bodyOpaque: isOpaque(body),
+        contentBackground: content ? getComputedStyle(content).backgroundColor : null,
+        bodyBackground: body ? getComputedStyle(body).backgroundColor : null,
+        panelOverflow: Boolean(content && content.scrollWidth > content.clientWidth + 1),
+        duplicatePromptStrip: root?.querySelectorAll('.assistant-prompt-strip').length ?? 0,
         width: rect?.width ?? 0,
         top: rect?.top ?? -1,
         rightGap: rect ? window.innerWidth - rect.right : -1,
@@ -420,8 +436,25 @@ try {
     })()`);
     assert(!aiPanelState.hasMask, 'AI floating panel unexpectedly renders a mask');
     assert(aiPanelState.pointerEvents === 'none', 'AI floating panel root blocks underlying page interaction');
+    assert(aiPanelState.contentOpaque && aiPanelState.bodyOpaque, `AI floating panel surface is transparent: ${JSON.stringify(aiPanelState)}`);
+    assert(!aiPanelState.panelOverflow, 'AI floating panel has horizontal overflow');
+    assert(aiPanelState.duplicatePromptStrip === 0, 'AI idle home renders a duplicate prompt strip');
     assert(aiPanelState.width >= 560 && aiPanelState.width <= 640, 'AI standard panel width is invalid');
     await waitFor(client, `(() => { const rect = document.querySelector('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')?.getBoundingClientRect(); return Boolean(rect && rect.top >= 60 && window.innerWidth - rect.right >= 12 && window.innerHeight - rect.bottom >= 12); })()`, 'AI panel floating margins');
+    await setTheme(client, 'dark');
+    const aiDarkSurface = await evaluate(client, `(() => {
+      const root = document.querySelector('.global-ai-floating-root.ant-drawer-open');
+      const content = root?.querySelector('.ant-drawer-content');
+      const body = root?.querySelector('.ant-drawer-body');
+      return {
+        content: content ? getComputedStyle(content).backgroundColor : '',
+        body: body ? getComputedStyle(body).backgroundColor : '',
+        overflow: Boolean(content && content.scrollWidth > content.clientWidth + 1),
+      };
+    })()`);
+    assert(aiDarkSurface.content !== 'rgba(0, 0, 0, 0)' && aiDarkSurface.body !== 'rgba(0, 0, 0, 0)', 'AI dark-theme panel surface is transparent');
+    assert(!aiDarkSurface.overflow, 'AI dark-theme panel has horizontal overflow');
+    await setTheme(client, 'light');
     interactionChecks.push('ai-floating-panel');
 
     context = 'interaction:ai-context-routing';

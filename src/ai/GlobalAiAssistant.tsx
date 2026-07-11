@@ -337,7 +337,7 @@ function AssistantDrawer({ session }: AssistantDrawerProps) {
 
         <AssistantConversation
           session={session}
-          prompts={context.suggestedPrompts}
+          prompts={session.messages.length ? context.suggestedPrompts : []}
           variant="drawer"
           emptyDescription={`我已读取「${context.pageTitle}」上下文，可以直接提问。`}
           emptyContent={

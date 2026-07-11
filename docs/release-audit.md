@@ -25,7 +25,7 @@ Coverage:
 - deep-link refresh, browser back/forward, Drawer and Modal Escape handling, Popconfirm, mobile Popover, BigScreen Escape, and 404 return navigation;
 - energy MTD boundaries, future-period handling, category/device drilldown, current-view export, year-to-month navigation, and week-to-day navigation;
 - energy visual-density limits for the first analytical chart: 650px on desktop, 820px on tablet, and 1000px on mobile;
-- AI floating-panel behavior: no mask, underlying-page interaction, route-context updates, standard/focus widths, minimize/resume, and mobile full-screen layout.
+- AI floating-panel behavior: no mask, opaque panel surfaces, no horizontal overflow or duplicate prompt strip, underlying-page interaction, route-context updates, standard/focus widths, minimize/resume, and mobile full-screen layout.
 
 The current matrix contains 42 access checks, 84 theme/viewport checks, and 19 interaction checks: 145 checks in total.
 
