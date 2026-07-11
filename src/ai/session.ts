@@ -14,6 +14,7 @@ export type AssistantSession = {
   messages: AssistantDisplayMessage[];
   input: string;
   setInput: (value: string) => void;
+  replaceMessages: (messages: AssistantDisplayMessage[]) => void;
   submit: (text?: string) => void | Promise<void>;
   loading: boolean;
   stop: () => void;
@@ -76,6 +77,11 @@ export function useCopilotAssistantSession(): AssistantSession {
     messages,
     input,
     setInput,
+    replaceMessages: (nextMessages) => agent.setMessages(nextMessages.map((message) => ({
+      id: message.id,
+      role: message.user ? 'user' : 'assistant',
+      content: message.content,
+    })) as Parameters<typeof agent.setMessages>[0]),
     submit,
     loading: agent.isRunning,
     stop: () => agent.abortRun(),
@@ -86,7 +92,16 @@ export function useCopilotAssistantSession(): AssistantSession {
 
 export function useMockAssistantSession(): AssistantSession {
   const context = useAiApplicationContext();
-  const { messages: rawMessages, input, setInput, send, isStreaming, stop, clear } = useAiChat();
+  const {
+    messages: rawMessages,
+    input,
+    setInput,
+    replaceMessages,
+    send,
+    isStreaming,
+    stop,
+    clear,
+  } = useAiChat();
   const messages = useMemo<AssistantDisplayMessage[]>(() => rawMessages.map((message) => ({
     id: message.id,
     user: message.role === 'user',
@@ -103,6 +118,11 @@ export function useMockAssistantSession(): AssistantSession {
     messages,
     input,
     setInput,
+    replaceMessages: (nextMessages) => replaceMessages(nextMessages.map((message) => ({
+      id: message.id,
+      role: message.user ? 'user' : 'assistant',
+      content: message.content,
+    }))),
     submit,
     loading: isStreaming,
     stop,

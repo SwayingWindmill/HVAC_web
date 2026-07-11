@@ -22,6 +22,7 @@ export interface AiChatHelpers {
   messages: ChatMessage[];
   input: string;
   setInput: (value: string) => void;
+  replaceMessages: (messages: ChatMessage[]) => void;
   send: (text?: string) => Promise<void>;
   isStreaming: boolean;
   stop: () => void;
@@ -119,6 +120,10 @@ const useAiChatStore = create<AiChatState>((set, get) => ({
   input: '',
   isStreaming: false,
   setInput: (input) => set({ input }),
+  replaceMessages: (messages) => {
+    streamToken += 1;
+    set({ messages, input: '', isStreaming: false });
+  },
   send: async (raw) => {
     const text = (raw ?? get().input).trim();
     if (!text || get().isStreaming) return;

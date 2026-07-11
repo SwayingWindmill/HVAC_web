@@ -428,6 +428,21 @@ try {
         bodyBackground: body ? getComputedStyle(body).backgroundColor : null,
         panelOverflow: Boolean(content && content.scrollWidth > content.clientWidth + 1),
         duplicatePromptStrip: root?.querySelectorAll('.assistant-prompt-strip').length ?? 0,
+        homeVisible: Boolean(root?.querySelector('.global-ai-welcome')),
+        skillCount: root?.querySelectorAll('.global-ai-skill-card').length ?? 0,
+        containerOverflow: [
+          '.ant-drawer-content',
+          '.ant-drawer-body',
+          '.global-ai-main-view',
+          '.assistant-conversation',
+          '.assistant-conversation-messages',
+          '.global-ai-home',
+          '.global-ai-skill-list',
+          '.assistant-composer',
+        ].some((selector) => {
+          const element = root?.querySelector(selector);
+          return Boolean(element && element.scrollWidth > element.clientWidth + 1);
+        }),
         width: rect?.width ?? 0,
         top: rect?.top ?? -1,
         rightGap: rect ? window.innerWidth - rect.right : -1,
@@ -437,8 +452,9 @@ try {
     assert(!aiPanelState.hasMask, 'AI floating panel unexpectedly renders a mask');
     assert(aiPanelState.pointerEvents === 'none', 'AI floating panel root blocks underlying page interaction');
     assert(aiPanelState.contentOpaque && aiPanelState.bodyOpaque, `AI floating panel surface is transparent: ${JSON.stringify(aiPanelState)}`);
-    assert(!aiPanelState.panelOverflow, 'AI floating panel has horizontal overflow');
+    assert(!aiPanelState.panelOverflow && !aiPanelState.containerOverflow, 'AI floating panel has horizontal overflow');
     assert(aiPanelState.duplicatePromptStrip === 0, 'AI idle home renders a duplicate prompt strip');
+    assert(aiPanelState.homeVisible && aiPanelState.skillCount === 5, 'AI skill home is incomplete');
     assert(aiPanelState.width >= 560 && aiPanelState.width <= 640, 'AI standard panel width is invalid');
     await waitFor(client, `(() => { const rect = document.querySelector('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')?.getBoundingClientRect(); return Boolean(rect && rect.top >= 60 && window.innerWidth - rect.right >= 12 && window.innerHeight - rect.bottom >= 12); })()`, 'AI panel floating margins');
     await setTheme(client, 'dark');
@@ -468,16 +484,69 @@ try {
     await waitFor(client, `location.pathname.startsWith('/energy') && document.querySelector('.global-ai-floating-root.ant-drawer-open')?.textContent.includes('能耗分析')`, 'AI panel route context update');
     interactionChecks.push('ai-context-routing');
 
+    context = 'interaction:ai-agent-workflow';
+    const aiSkillStarted = await evaluate(client, `(() => {
+      const skill = [...document.querySelectorAll('.global-ai-skill-card')].find((element) => element.offsetParent !== null);
+      if (!skill) return false;
+      skill.click();
+      return true;
+    })()`);
+    assert(aiSkillStarted, 'AI skill card was not available');
+    await waitFor(client, `Boolean(document.querySelector('.global-ai-floating-root.ant-drawer-open .assistant-message.is-user'))`, 'AI skill user message');
+    await waitFor(client, `Boolean(document.querySelector('.global-ai-floating-root.ant-drawer-open .global-ai-processing')) || Boolean([...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .assistant-message:not(.is-user) .assistant-message-bubble')].find((element) => element.textContent.trim().length > 0))`, 'AI processing or result');
+    const aiChatOverflow = await evaluate(client, `(() => {
+      const root = document.querySelector('.global-ai-floating-root.ant-drawer-open');
+      return [
+        '.ant-drawer-content',
+        '.ant-drawer-body',
+        '.global-ai-main-view',
+        '.assistant-conversation',
+        '.assistant-conversation-messages',
+        '.global-ai-processing',
+        '.assistant-composer',
+      ].some((selector) => {
+        const element = root?.querySelector(selector);
+        return Boolean(element && element.scrollWidth > element.clientWidth + 1);
+      });
+    })()`);
+    assert(!aiChatOverflow, 'AI chat or processing state has horizontal overflow');
+
+    await evaluate(client, `document.querySelector('[aria-label="新建 AI 会话"]')?.click()`);
+    await waitFor(client, `Boolean(document.querySelector('.global-ai-floating-root.ant-drawer-open .global-ai-welcome'))`, 'AI new conversation home');
+    await evaluate(client, `document.querySelector('[aria-label="打开 AI 对话历史"]')?.click()`);
+    await waitFor(client, `Boolean(document.querySelector('.global-ai-floating-root.ant-drawer-open .global-ai-history'))`, 'AI history view');
+    const aiHistoryState = await evaluate(client, `(() => {
+      const root = document.querySelector('.global-ai-floating-root.ant-drawer-open');
+      const history = root?.querySelector('.global-ai-history');
+      const list = root?.querySelector('.global-ai-history-list');
+      return {
+        itemCount: root?.querySelectorAll('.global-ai-history-item').length ?? 0,
+        overflow: Boolean(
+          (history && history.scrollWidth > history.clientWidth + 1)
+          || (list && list.scrollWidth > list.clientWidth + 1)
+        ),
+      };
+    })()`);
+    assert(aiHistoryState.itemCount >= 1, 'AI conversation was not archived into history');
+    assert(!aiHistoryState.overflow, 'AI history view has horizontal overflow');
+    await evaluate(client, `([...document.querySelectorAll('.global-ai-history-item')].find((element) => element.offsetParent !== null))?.click()`);
+    await waitFor(client, `Boolean(document.querySelector('.global-ai-floating-root.ant-drawer-open .assistant-message.is-user'))`, 'AI history restore');
+    interactionChecks.push('ai-agent-workflow');
+
     context = 'interaction:ai-panel-modes';
     await waitFor(client, `[...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-expand')].some((icon) => icon.offsetParent !== null)`, 'AI focus trigger');
     await evaluate(client, `([...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-expand')].find((icon) => icon.offsetParent !== null))?.closest('button')?.click()`);
     await waitFor(client, `[...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')].some((wrapper) => wrapper.offsetParent !== null && wrapper.getBoundingClientRect().width >= 820)`, 'AI focus mode');
-    const aiFocusWidth = await evaluate(client, `Math.max(0, ...[...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')].filter((wrapper) => wrapper.offsetParent !== null).map((wrapper) => wrapper.getBoundingClientRect().width))`);
-    assert(aiFocusWidth >= 820 && aiFocusWidth <= 900, 'AI focus panel width is invalid');
-    await evaluate(client, `([...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-minus')].find((icon) => icon.offsetParent !== null))?.closest('button')?.click()`);
-    await waitFor(client, `!document.querySelector('.global-ai-floating-root.ant-drawer-open') && Boolean(document.querySelector('[aria-label="继续 AI 分析"]'))`, 'AI panel minimized');
-    await evaluate(client, `document.querySelector('[aria-label="继续 AI 分析"]')?.click()`);
-    await waitFor(client, `[...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')].some((wrapper) => wrapper.offsetParent !== null && wrapper.getBoundingClientRect().width >= 820)`, 'AI panel resumed');
+    const aiFocusState = await evaluate(client, `(() => {
+      const wrapper = [...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')].find((element) => element.offsetParent !== null);
+      const content = wrapper?.querySelector('.ant-drawer-content');
+      return {
+        width: wrapper?.getBoundingClientRect().width ?? 0,
+        overflow: Boolean(content && content.scrollWidth > content.clientWidth + 1),
+      };
+    })()`);
+    assert(aiFocusState.width >= 820 && aiFocusState.width <= 900, 'AI focus panel width is invalid');
+    assert(!aiFocusState.overflow, 'AI focus panel has horizontal overflow');
     await evaluate(client, `([...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-compress')].find((icon) => icon.offsetParent !== null))?.closest('button')?.click()`);
     await waitFor(client, `[...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')].some((wrapper) => wrapper.offsetParent !== null && wrapper.getBoundingClientRect().width <= 640)`, 'AI panel standard mode restored');
     await evaluate(client, `([...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-close')].find((icon) => icon.offsetParent !== null))?.closest('button')?.click()`);

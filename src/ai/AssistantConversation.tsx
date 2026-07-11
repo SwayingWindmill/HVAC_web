@@ -17,6 +17,10 @@ type AssistantConversationProps = {
   variant?: 'drawer' | 'workspace';
   emptyDescription: string;
   emptyContent?: ReactNode;
+  statusContent?: ReactNode;
+  placeholder?: string;
+  showClear?: boolean;
+  onSubmitStart?: () => void;
   ariaLabel?: string;
 };
 
@@ -26,6 +30,10 @@ export default function AssistantConversation({
   variant = 'workspace',
   emptyDescription,
   emptyContent,
+  statusContent,
+  placeholder = '询问设备、能耗、故障、工单或优化问题…',
+  showClear = true,
+  onSubmitStart,
   ariaLabel = 'HVAC AI 运维助手对话',
 }: AssistantConversationProps) {
   const listRef = useRef<HTMLDivElement>(null);
@@ -33,6 +41,11 @@ export default function AssistantConversation({
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [session.messages]);
+
+  const submit = (text?: string) => {
+    onSubmitStart?.();
+    return session.submit(text);
+  };
 
   return (
     <section className={`assistant-conversation is-${variant}`} aria-label={ariaLabel}>
@@ -56,13 +69,15 @@ export default function AssistantConversation({
         ))}
       </div>
 
+      {statusContent}
+
       {prompts.length > 0 ? (
         <div className="assistant-prompt-strip" aria-label="推荐问题">
           {prompts.map((prompt) => (
             <Button
               key={prompt}
               size={variant === 'drawer' ? 'small' : 'middle'}
-              onClick={() => void session.submit(prompt)}
+              onClick={() => void submit(prompt)}
               disabled={session.loading}
             >
               {prompt}
@@ -78,11 +93,11 @@ export default function AssistantConversation({
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
-              void session.submit();
+              void submit();
             }
           }}
-          placeholder="询问设备、能耗、故障、工单或优化问题…"
-          autoSize={{ minRows: variant === 'drawer' ? 1 : 2, maxRows: 6 }}
+          placeholder={placeholder}
+          autoSize={{ minRows: variant === 'drawer' ? 2 : 2, maxRows: 6 }}
           disabled={session.loading}
           aria-label="向 HVAC AI 运维助手提问"
         />
@@ -94,20 +109,22 @@ export default function AssistantConversation({
           <Button
             type="primary"
             icon={<SendOutlined />}
-            onClick={() => void session.submit()}
+            onClick={() => void submit()}
             disabled={!session.input.trim()}
           >
             {variant === 'workspace' ? '发送' : null}
           </Button>
         )}
-        <Tooltip title="清空对话">
-          <Button
-            icon={<ClearOutlined />}
-            onClick={session.clear}
-            disabled={session.loading || session.messages.length === 0}
-            aria-label="清空对话"
-          />
-        </Tooltip>
+        {showClear ? (
+          <Tooltip title="清空对话">
+            <Button
+              icon={<ClearOutlined />}
+              onClick={session.clear}
+              disabled={session.loading || session.messages.length === 0}
+              aria-label="清空对话"
+            />
+          </Tooltip>
+        ) : null}
       </div>
     </section>
   );
