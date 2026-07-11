@@ -21,7 +21,10 @@ if (!edgePath) throw new Error('Microsoft Edge executable not found');
 const ROUTES = [
   { path: '/dashboard', title: '智慧能源运营总览', roles: ['demo', 'ops', 'rd'] },
   { path: '/assets', title: '设备与建筑', roles: ['ops', 'rd'] },
-  { path: '/energy', title: '能耗分析', roles: ['rd'] },
+  { path: '/energy/year', title: '年度能耗分析', roles: ['rd'] },
+  { path: '/energy/month', title: '月度能耗分析', roles: ['rd'] },
+  { path: '/energy/week', title: '周度能耗分析', roles: ['rd'] },
+  { path: '/energy/day', title: '日度能耗分析', roles: ['rd'] },
   { path: '/cost', title: '成本与绩效', roles: ['rd'] },
   { path: '/fdd', title: '故障检测与诊断 FDD', roles: ['ops', 'rd'] },
   { path: '/alarms', title: '报警工单', roles: ['ops', 'rd'] },
@@ -406,8 +409,8 @@ try {
     interactionChecks.push('history-back-forward');
 
     context = 'interaction:energy-mtd';
-    await spaNavigate(client, '/energy');
-    await waitForRoute(client, ROUTES.find((route) => route.path === '/energy'), true);
+    await spaNavigate(client, '/energy/month');
+    await waitForRoute(client, ROUTES.find((route) => route.path === '/energy/month'), true);
     await waitFor(client, `new URLSearchParams(location.search).has('year') && new URLSearchParams(location.search).has('month') && new URLSearchParams(location.search).has('day')`, 'energy canonical URL');
     const energyMtdState = await evaluate(client, `(() => {
       const now = new Date();
@@ -508,11 +511,31 @@ try {
       };
       return true;
     })()`);
-    await clickText(client, '导出 CSV');
+    await clickText(client, '导出当前视图');
     const energyDownload = await evaluate(client, `window.__energyAuditDownload`);
     assert(Boolean(energyDownload?.download?.endsWith('.csv')), 'Energy export did not produce a CSV filename');
     assert(Boolean(energyDownload?.href?.startsWith('blob:')), 'Energy export did not create a Blob URL');
     interactionChecks.push('energy-export');
+
+    context = 'interaction:energy-year-to-month';
+    await clickText(client, '年度', '.energy-granularity-nav');
+    await waitFor(client, `location.pathname === '/energy/year' && document.body.innerText.includes('年度能耗分析')`, 'energy year workspace');
+    await clickText(client, '进入月度异常定位');
+    await waitFor(client, `location.pathname === '/energy/month' && document.body.innerText.includes('月度能耗分析')`, 'energy year to month');
+    interactionChecks.push('energy-year-to-month');
+
+    context = 'interaction:energy-week-to-day';
+    await clickText(client, '周度', '.energy-granularity-nav');
+    await waitFor(client, `location.pathname === '/energy/week' && document.body.innerText.includes('周度能耗分析')`, 'energy week workspace');
+    const weekDayOpened = await evaluate(client, `(() => {
+      const trigger = [...document.querySelectorAll('.energy-table-card .energy-device-link')].find((element) => element.offsetParent !== null);
+      if (!trigger) return false;
+      trigger.click();
+      return true;
+    })()`);
+    assert(weekDayOpened, 'Energy week day drilldown trigger was not found');
+    await waitFor(client, `location.pathname === '/energy/day' && document.body.innerText.includes('日度能耗分析')`, 'energy week to day');
+    interactionChecks.push('energy-week-to-day');
 
     context = 'interaction:modal';
     await spaNavigate(client, '/system?tab=users');

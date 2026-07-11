@@ -17,12 +17,15 @@ Runs the full-site UI audit. When no server is available at `http://127.0.0.1:51
 Coverage:
 
 - role-to-route access matrix for `demo`, `ops`, and `rd`;
-- all product routes plus 403 and 404 states;
+- all product routes plus 403 and 404 states, including `/energy/year`, `/energy/month`, `/energy/week`, and `/energy/day`;
 - light and dark themes;
 - 1440×900, 1024×768, and 390×844 viewports;
 - page-level horizontal overflow, blank states, visible loading states, and escaped content;
 - console errors, uncaught exceptions, failed application resources, and HTTP 4xx/5xx responses;
-- deep-link refresh, browser back/forward, Drawer and Modal Escape handling, Popconfirm, mobile Popover, BigScreen Escape, and 404 return navigation.
+- deep-link refresh, browser back/forward, Drawer and Modal Escape handling, Popconfirm, mobile Popover, BigScreen Escape, and 404 return navigation;
+- energy MTD boundaries, future-period handling, category/device drilldown, current-view export, year-to-month navigation, and week-to-day navigation.
+
+The current matrix contains 42 access checks, 84 theme/viewport checks, and 15 interaction checks: 141 checks in total.
 
 ### `npm run audit:ops-loop`
 
