@@ -393,6 +393,89 @@ try {
     // Interaction smoke tests.
     await setViewport(client, VIEWPORTS[0]);
     await setTheme(client, 'light');
+
+    context = 'interaction:ai-floating-panel';
+    await spaNavigate(client, '/dashboard');
+    await waitForRoute(client, ROUTES[0], true);
+    const aiLauncherOpened = await evaluate(client, `(() => {
+      const trigger = document.querySelector('[aria-label="打开 AI 运维助手"]');
+      if (!trigger) return false;
+      trigger.click();
+      return true;
+    })()`);
+    assert(aiLauncherOpened, 'AI floating panel launcher was not found');
+    await waitFor(client, `Boolean(document.querySelector('.global-ai-floating-root.ant-drawer-open .ant-drawer-content'))`, 'AI floating panel open');
+    const aiPanelState = await evaluate(client, `(() => {
+      const root = document.querySelector('.global-ai-floating-root.ant-drawer-open');
+      const wrapper = root?.querySelector('.ant-drawer-content-wrapper');
+      const rect = wrapper?.getBoundingClientRect();
+      return {
+        hasMask: Boolean(root?.querySelector('.ant-drawer-mask')),
+        pointerEvents: root ? getComputedStyle(root).pointerEvents : null,
+        width: rect?.width ?? 0,
+        top: rect?.top ?? -1,
+        rightGap: rect ? window.innerWidth - rect.right : -1,
+        bottomGap: rect ? window.innerHeight - rect.bottom : -1,
+      };
+    })()`);
+    assert(!aiPanelState.hasMask, 'AI floating panel unexpectedly renders a mask');
+    assert(aiPanelState.pointerEvents === 'none', 'AI floating panel root blocks underlying page interaction');
+    assert(aiPanelState.width >= 560 && aiPanelState.width <= 640, 'AI standard panel width is invalid');
+    await waitFor(client, `(() => { const rect = document.querySelector('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')?.getBoundingClientRect(); return Boolean(rect && rect.top >= 60 && window.innerWidth - rect.right >= 12 && window.innerHeight - rect.bottom >= 12); })()`, 'AI panel floating margins');
+    interactionChecks.push('ai-floating-panel');
+
+    context = 'interaction:ai-context-routing';
+    const energyNavClicked = await evaluate(client, `(() => {
+      const item = [...document.querySelectorAll('.ant-menu-item')].find((element) => element.offsetParent !== null && element.textContent.includes('能耗分析'));
+      if (!item) return false;
+      item.click();
+      return true;
+    })()`);
+    assert(energyNavClicked, 'Energy navigation item was not found while AI panel was open');
+    await waitFor(client, `location.pathname.startsWith('/energy') && document.querySelector('.global-ai-floating-root.ant-drawer-open')?.textContent.includes('能耗分析')`, 'AI panel route context update');
+    interactionChecks.push('ai-context-routing');
+
+    context = 'interaction:ai-panel-modes';
+    await waitFor(client, `[...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-expand')].some((icon) => icon.offsetParent !== null)`, 'AI focus trigger');
+    await evaluate(client, `([...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-expand')].find((icon) => icon.offsetParent !== null))?.closest('button')?.click()`);
+    await waitFor(client, `[...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')].some((wrapper) => wrapper.offsetParent !== null && wrapper.getBoundingClientRect().width >= 820)`, 'AI focus mode');
+    const aiFocusWidth = await evaluate(client, `Math.max(0, ...[...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')].filter((wrapper) => wrapper.offsetParent !== null).map((wrapper) => wrapper.getBoundingClientRect().width))`);
+    assert(aiFocusWidth >= 820 && aiFocusWidth <= 900, 'AI focus panel width is invalid');
+    await evaluate(client, `([...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-minus')].find((icon) => icon.offsetParent !== null))?.closest('button')?.click()`);
+    await waitFor(client, `!document.querySelector('.global-ai-floating-root.ant-drawer-open') && Boolean(document.querySelector('[aria-label="继续 AI 分析"]'))`, 'AI panel minimized');
+    await evaluate(client, `document.querySelector('[aria-label="继续 AI 分析"]')?.click()`);
+    await waitFor(client, `[...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')].some((wrapper) => wrapper.offsetParent !== null && wrapper.getBoundingClientRect().width >= 820)`, 'AI panel resumed');
+    await evaluate(client, `([...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-compress')].find((icon) => icon.offsetParent !== null))?.closest('button')?.click()`);
+    await waitFor(client, `[...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')].some((wrapper) => wrapper.offsetParent !== null && wrapper.getBoundingClientRect().width <= 640)`, 'AI panel standard mode restored');
+    await evaluate(client, `([...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-close')].find((icon) => icon.offsetParent !== null))?.closest('button')?.click()`);
+    await waitFor(client, `!document.querySelector('.global-ai-floating-root.ant-drawer-open') && Boolean(document.querySelector('[aria-label="打开 AI 运维助手"]'))`, 'AI panel closed');
+    interactionChecks.push('ai-panel-modes');
+
+    context = 'interaction:ai-mobile-panel';
+    await setViewport(client, VIEWPORTS[2]);
+    await evaluate(client, `document.querySelector('[aria-label="打开 AI 运维助手"]')?.click()`);
+    await waitFor(client, `Boolean(document.querySelector('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper'))`, 'AI mobile panel open');
+    await waitFor(client, `(() => { const rect = document.querySelector('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')?.getBoundingClientRect(); return Boolean(rect && Math.abs(rect.left) < 1 && Math.abs(rect.top) < 1 && Math.abs(rect.width - window.innerWidth) < 1 && Math.abs(rect.height - window.innerHeight) < 1); })()`, 'AI mobile panel full screen');
+    const aiMobileState = await evaluate(client, `(() => {
+      const rect = document.querySelector('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')?.getBoundingClientRect();
+      return {
+        left: rect?.left ?? -1,
+        top: rect?.top ?? -1,
+        width: rect?.width ?? 0,
+        height: rect?.height ?? 0,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        bodyOverflow: document.body.scrollWidth > window.innerWidth + 2,
+      };
+    })()`);
+    assert(Math.abs(aiMobileState.left) < 1 && Math.abs(aiMobileState.top) < 1, 'AI mobile panel is not full screen');
+    assert(Math.abs(aiMobileState.width - aiMobileState.viewportWidth) < 1 && Math.abs(aiMobileState.height - aiMobileState.viewportHeight) < 1, 'AI mobile panel size mismatch');
+    assert(!aiMobileState.bodyOverflow, 'AI mobile panel causes horizontal overflow');
+    await evaluate(client, `([...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-close')].find((icon) => icon.offsetParent !== null))?.closest('button')?.click()`);
+    await waitFor(client, `!document.querySelector('.global-ai-floating-root.ant-drawer-open')`, 'AI mobile panel close');
+    await setViewport(client, VIEWPORTS[0]);
+    interactionChecks.push('ai-mobile-panel');
+
     context = 'interaction:deep-link-refresh';
     await hardNavigate(client, '/assets?device=b1-z1-u1');
     await waitFor(client, `document.querySelector('.ops-detail-drawer.ant-drawer-open')?.textContent.includes('b1-z1-u1')`, 'asset deep link drawer');

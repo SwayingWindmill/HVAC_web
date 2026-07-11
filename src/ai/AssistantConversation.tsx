@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Avatar, Button, Empty, Input, Tooltip } from 'antd';
 import {
   ClearOutlined,
@@ -16,6 +16,7 @@ type AssistantConversationProps = {
   prompts: string[];
   variant?: 'drawer' | 'workspace';
   emptyDescription: string;
+  emptyContent?: ReactNode;
   ariaLabel?: string;
 };
 
@@ -24,6 +25,7 @@ export default function AssistantConversation({
   prompts,
   variant = 'workspace',
   emptyDescription,
+  emptyContent,
   ariaLabel = 'HVAC AI 运维助手对话',
 }: AssistantConversationProps) {
   const listRef = useRef<HTMLDivElement>(null);
@@ -36,7 +38,7 @@ export default function AssistantConversation({
     <section className={`assistant-conversation is-${variant}`} aria-label={ariaLabel}>
       <div ref={listRef} className="assistant-conversation-messages" aria-live="polite">
         {session.messages.length === 0 ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyDescription} />
+          emptyContent ?? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyDescription} />
         ) : session.messages.map((message) => (
           <div key={message.id} className={`assistant-message ${message.user ? 'is-user' : ''}`}>
             <Avatar
