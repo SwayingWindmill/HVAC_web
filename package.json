@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
-    "audit:ops-loop": "node scripts/ops-loop-audit.mjs"
+    "audit:ui": "node scripts/run-browser-audit.mjs scripts/ui-audit.mjs",
+    "audit:ops-loop": "node scripts/run-browser-audit.mjs scripts/ops-loop-audit.mjs",
+    "audit:all": "node scripts/audit-all.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.1",

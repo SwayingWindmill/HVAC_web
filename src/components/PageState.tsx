@@ -64,7 +64,10 @@ interface LoadingStateProps {
 export function LoadingState({ tip = '加载中', minHeight = 280 }: LoadingStateProps) {
   return (
     <div style={{ minHeight, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <Spin tip={tip} />
+      <Space direction="vertical" size={8} align="center">
+        <Spin />
+        <Typography.Text type="secondary">{tip}</Typography.Text>
+      </Space>
     </div>
   );
 }

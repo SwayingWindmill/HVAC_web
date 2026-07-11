@@ -139,7 +139,7 @@ export default function DeviceDrawer({ deviceId, onClose, onAfterClose }: Device
             <Descriptions column={{ xs: 1, sm: 2 }} size="small" colon={false}>
               <Descriptions.Item label="协议">{meta.protocol}</Descriptions.Item>
               <Descriptions.Item label="网关">{meta.gateway}</Descriptions.Item>
-              <Descriptions.Item label="最后通讯" span={2}>{meta.lastSeen}</Descriptions.Item>
+              <Descriptions.Item label="最后通讯">{meta.lastSeen}</Descriptions.Item>
             </Descriptions>
             <div style={{ marginTop: 12 }}>
               <Progress percent={pointRate} size="small" status={pointRate < 95 ? 'exception' : 'active'} />

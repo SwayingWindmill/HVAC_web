@@ -807,7 +807,7 @@ export default function System() {
             <Button type="primary" onClick={submitUser}>审阅并确认</Button>
           </OperationsActionFooter>
         }
-        destroyOnClose
+        destroyOnHidden
       >
         <div className="system-modal-note">
           <SafetyCertificateOutlined />
@@ -854,7 +854,7 @@ export default function System() {
             <Button type="primary" onClick={submitAsset}>审阅并确认</Button>
           </OperationsActionFooter>
         }
-        destroyOnClose
+        destroyOnHidden
       >
         <div className="system-modal-note">
           <ClusterOutlined />
