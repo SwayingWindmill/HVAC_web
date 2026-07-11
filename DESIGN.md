@@ -234,21 +234,19 @@ Dashboard 统一的是设计纪律，不是所有卡片的内部模板。运营�
 
 ### 单一助手模型
 
-- 产品内只有一个 `HVAC AI 运维助手`。全局悬浮入口、浮动 Agent 面板与 `/ai` 完整工作台是同一助手的不同展示尺寸，不得维护独立消息列表、独立输入草稿或独立生成状态。
-- 从浮动 Agent 面板打开完整工作台时必须延续当前会话；从完整工作台返回其他页面后，浮动面板继续承接同一段会话。
+- 产品内只有一个 `HVAC AI 运维助手`。全局 `CopilotPopup` 与 `/ai` 完整工作台共享同一个 `default` Agent、消息状态、上下文和工具注册，不得维护第二套助手身份。
+- 全局入口直接使用 CopilotKit 官方 `CopilotPopup`、官方 `CopilotKit` Provider 和官方 `styles.css`；不得再包裹自定义 Drawer、Popup 外壳、Skills 首页、历史页或标准/聚焦窗口状态。
 - `/ai` 不提供“场景选择器”。助手应根据当前路由、建筑、角色、遥测、FDD、工单和优化上下文自动理解问题；推荐问题只能作为启动提示，不能改变助手身份。
-- Mock 与真实 Runtime 必须消费同一 `AssistantSession` 组件契约：`messages / input / replaceMessages / submit / loading / stop / clear / modeLabel`。
+- 当前页面上下文和前端工具统一通过 `CopilotContextBridge` 注册，并且所有 CopilotKit hooks 必须从 `@copilotkit/react-core/v2` 主入口导入，避免产生重复 Provider context。
+- 配置 `VITE_COPILOTKIT_RUNTIME_URL` 时连接真实 Runtime；未配置时注册只读 self-managed `HvacMockAgent`。两种执行源必须保持同一官方 Popup UI 和同一 `default` Agent 名称。
 
-### 浮动 Agent 面板
+### 官方 CopilotPopup
 
-- 桌面端使用无遮罩、非模态的右侧浮动工作面板；页面必须保持可见、可滚动、可点击，AI 不得以整屏遮罩阻断当前业务操作。面板自身必须使用不透明实色表面，不能让底层页面内容透入。
-- 标准宽度为 600px，聚焦宽度为 860px；面板与顶部、右侧、底部保留可见间距，使用独立圆角、边框与阴影建立窗口层级，而不是贴边满高 Drawer。
-- 面板顶部固定提供新建会话、对话历史、标准/聚焦切换和关闭。新建会话前必须把当前对话保存到本地会话历史，历史项必须可以恢复。
-- 手机端使用全屏 Agent Sheet，不保留桌面浮动间距。
-- 空闲首页采用“欢迎区 → 当前上下文 → Skills 技能列表 → 大输入框”的结构；技能必须对应能耗调查、设备诊断、告警归因、工单协同和节能优化等真实业务能力。
-- 生成中使用可折叠步骤卡，只展示真实发生的上下文读取、业务摘要和回答生成状态；未接入工具 Runtime 前不得伪造多工具调查步骤。
-- 面板任何状态、主题和视口都禁止横向滚动条。根容器、内容区、消息区、技能列表、历史列表、步骤区、推荐问题和输入区必须满足 `scrollWidth <= clientWidth + 1px`；长文本应换行或省略，不得依赖裁切掩盖结构溢出。
-- 启动入口使用带状态数量的 `AI 运维助手` 胶囊，不使用客服式机器人圆球作为唯一入口。
+- 桌面端保留 CopilotKit 官方浮动按钮、窗口、欢迎消息、消息列表、输入框、流式状态和关闭行为；不覆盖官方尺寸、圆角、颜色、阴影或按钮结构。
+- 手机端使用 CopilotKit 官方全屏 Popup 行为，不增加自定义 Sheet 或 Drawer。
+- 唯一允许的视觉覆盖是横向溢出安全层：Popup、消息区、输入区、Markdown、代码块和表格在任何状态、主题和视口下都不得出现横向滚动条；长内容必须换行或在容器内收敛。
+- 本地 self-managed Agent 只允许读取 Mock 遥测并输出文本，不得暴露设备控制、工单写入或优化下发能力。
+- CopilotKit 1.62.3 在 React 开发模式下会从官方 `DropdownMenuTrigger` 产生 ref 警告。审计必须单独记录该上游已知告警，但不得因此忽略其他应用错误、HTTP 错误或网络失败。
 
 ### 工作台结构
 

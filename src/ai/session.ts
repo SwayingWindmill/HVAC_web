@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { create } from 'zustand';
-import { useAgent } from '@copilotkit/react-core/v2/headless';
+import { useAgent } from '@copilotkit/react-core/v2';
 import { useAiChat } from '@/api/ai';
 import { useAiApplicationContext } from './context';
 

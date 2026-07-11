@@ -21,11 +21,10 @@ import {
 } from '@/components/OperationsUI';
 import AssistantConversation from '@/ai/AssistantConversation';
 import CopilotContextBridge from '@/ai/CopilotContextBridge';
-import { AI_ASSISTANT_NAME, COPILOTKIT_ENABLED } from '@/ai/config';
+import { AI_ASSISTANT_NAME, COPILOTKIT_RUNTIME_CONFIGURED } from '@/ai/config';
 import { useAiApplicationContext } from '@/ai/context';
 import {
   useCopilotAssistantSession,
-  useMockAssistantSession,
   type AssistantSession,
 } from '@/ai/session';
 import { SUGGESTED_QUESTIONS } from '@/api/ai';
@@ -73,8 +72,8 @@ function AiWorkspace({ session }: AiWorkspaceProps) {
       extra={
         <Space size={8} wrap>
           <Tag icon={<LockOutlined />}>只读分析</Tag>
-          <Tag color={COPILOTKIT_ENABLED ? 'green' : 'gold'} icon={<ApiOutlined />}>
-            {session.modeLabel}
+          <Tag color={COPILOTKIT_RUNTIME_CONFIGURED ? 'green' : 'gold'} icon={<ApiOutlined />}>
+            {COPILOTKIT_RUNTIME_CONFIGURED ? session.modeLabel : 'Runtime 待配置'}
           </Tag>
           <Tag>{ROLE_LABEL[role]}</Tag>
         </Space>
@@ -193,11 +192,6 @@ function CopilotAiWorkspace() {
   );
 }
 
-function MockAiWorkspace() {
-  const session = useMockAssistantSession();
-  return <AiWorkspace session={session} />;
-}
-
 export default function Ai() {
-  return COPILOTKIT_ENABLED ? <CopilotAiWorkspace /> : <MockAiWorkspace />;
+  return <CopilotAiWorkspace />;
 }

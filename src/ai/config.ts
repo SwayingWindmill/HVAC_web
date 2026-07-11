@@ -1,4 +1,5 @@
-export const COPILOTKIT_RUNTIME_URL = import.meta.env.VITE_COPILOTKIT_RUNTIME_URL?.trim() ?? '';
-export const COPILOTKIT_ENABLED = COPILOTKIT_RUNTIME_URL.length > 0;
+const configuredRuntimeUrl = import.meta.env.VITE_COPILOTKIT_RUNTIME_URL?.trim() ?? '';
 
+export const COPILOTKIT_RUNTIME_CONFIGURED = configuredRuntimeUrl.length > 0;
+export const COPILOTKIT_RUNTIME_URL = configuredRuntimeUrl || '/api/v1/copilotkit';
 export const AI_ASSISTANT_NAME = 'HVAC AI 运维助手';

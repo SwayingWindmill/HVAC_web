@@ -394,84 +394,58 @@ try {
     await setViewport(client, VIEWPORTS[0]);
     await setTheme(client, 'light');
 
-    context = 'interaction:ai-floating-panel';
+    context = 'interaction:ai-copilot-popup';
     await spaNavigate(client, '/dashboard');
     await waitForRoute(client, ROUTES[0], true);
-    const aiLauncherOpened = await evaluate(client, `(() => {
-      const trigger = document.querySelector('[aria-label="打开 AI 运维助手"]');
+    await waitFor(client, `Boolean(document.querySelector('.copilotKitPopup') || document.querySelector('.copilotKitButton'))`, 'CopilotPopup mount');
+    await waitFor(client, `(() => {
+      const popup = document.querySelector('.copilotKitPopup');
+      if (popup) {
+        const rect = popup.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0 && Number(getComputedStyle(popup).opacity || 1) > 0.9) return true;
+        if (rect.width > 0 && rect.height > 0) return false;
+      }
+      const trigger = document.querySelector('.copilotKitButton');
       if (!trigger) return false;
+      const rect = trigger.getBoundingClientRect();
+      const style = getComputedStyle(trigger);
+      if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none') return false;
       trigger.click();
-      return true;
-    })()`);
-    assert(aiLauncherOpened, 'AI floating panel launcher was not found');
-    await waitFor(client, `Boolean(document.querySelector('.global-ai-floating-root.ant-drawer-open .ant-drawer-content'))`, 'AI floating panel open');
-    const aiPanelState = await evaluate(client, `(() => {
-      const root = document.querySelector('.global-ai-floating-root.ant-drawer-open');
-      const wrapper = root?.querySelector('.ant-drawer-content-wrapper');
-      const content = root?.querySelector('.ant-drawer-content');
-      const body = root?.querySelector('.ant-drawer-body');
-      const rect = wrapper?.getBoundingClientRect();
-      const isOpaque = (element) => {
-        if (!element) return false;
-        const color = getComputedStyle(element).backgroundColor;
-        const match = color.match(/^rgba?\\(([^)]+)\\)$/);
-        if (!match) return color !== 'transparent';
-        const parts = match[1].split(',').map((part) => part.trim());
-        return parts.length < 4 || Number(parts[3]) >= 0.999;
-      };
+      return false;
+    })()`, 'CopilotPopup open');
+    const aiPopupState = await evaluate(client, `(() => {
+      const popup = document.querySelector('.copilotKitPopup');
+      const rect = popup?.getBoundingClientRect();
+      const background = popup ? getComputedStyle(popup).backgroundColor : '';
+      const offenders = [...(popup?.querySelectorAll('*') ?? [])].filter((element) => {
+        if (element.offsetParent === null) return false;
+        const overflowX = getComputedStyle(element).overflowX;
+        return element.scrollWidth > element.clientWidth + 1 && overflowX !== 'hidden' && overflowX !== 'clip';
+      });
       return {
-        hasMask: Boolean(root?.querySelector('.ant-drawer-mask')),
-        pointerEvents: root ? getComputedStyle(root).pointerEvents : null,
-        contentOpaque: isOpaque(content),
-        bodyOpaque: isOpaque(body),
-        contentBackground: content ? getComputedStyle(content).backgroundColor : null,
-        bodyBackground: body ? getComputedStyle(body).backgroundColor : null,
-        panelOverflow: Boolean(content && content.scrollWidth > content.clientWidth + 1),
-        duplicatePromptStrip: root?.querySelectorAll('.assistant-prompt-strip').length ?? 0,
-        homeVisible: Boolean(root?.querySelector('.global-ai-welcome')),
-        skillCount: root?.querySelectorAll('.global-ai-skill-card').length ?? 0,
-        containerOverflow: [
-          '.ant-drawer-content',
-          '.ant-drawer-body',
-          '.global-ai-main-view',
-          '.assistant-conversation',
-          '.assistant-conversation-messages',
-          '.global-ai-home',
-          '.global-ai-skill-list',
-          '.assistant-composer',
-        ].some((selector) => {
-          const element = root?.querySelector(selector);
-          return Boolean(element && element.scrollWidth > element.clientWidth + 1);
-        }),
+        title: popup?.getAttribute('aria-label') ?? '',
+        headerText: popup?.querySelector('.copilotKitHeader')?.textContent?.trim() ?? '',
+        popupText: popup?.textContent?.trim() ?? '',
         width: rect?.width ?? 0,
-        top: rect?.top ?? -1,
-        rightGap: rect ? window.innerWidth - rect.right : -1,
-        bottomGap: rect ? window.innerHeight - rect.bottom : -1,
+        height: rect?.height ?? 0,
+        background,
+        offenderCount: offenders.length,
+        hasInput: Boolean(popup?.querySelector('textarea')),
+        hasOfficialHeader: Boolean(popup?.querySelector('.copilotKitHeader')),
       };
     })()`);
-    assert(!aiPanelState.hasMask, 'AI floating panel unexpectedly renders a mask');
-    assert(aiPanelState.pointerEvents === 'none', 'AI floating panel root blocks underlying page interaction');
-    assert(aiPanelState.contentOpaque && aiPanelState.bodyOpaque, `AI floating panel surface is transparent: ${JSON.stringify(aiPanelState)}`);
-    assert(!aiPanelState.panelOverflow && !aiPanelState.containerOverflow, 'AI floating panel has horizontal overflow');
-    assert(aiPanelState.duplicatePromptStrip === 0, 'AI idle home renders a duplicate prompt strip');
-    assert(aiPanelState.homeVisible && aiPanelState.skillCount === 5, 'AI skill home is incomplete');
-    assert(aiPanelState.width >= 560 && aiPanelState.width <= 640, 'AI standard panel width is invalid');
-    await waitFor(client, `(() => { const rect = document.querySelector('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')?.getBoundingClientRect(); return Boolean(rect && rect.top >= 60 && window.innerWidth - rect.right >= 12 && window.innerHeight - rect.bottom >= 12); })()`, 'AI panel floating margins');
-    await setTheme(client, 'dark');
-    const aiDarkSurface = await evaluate(client, `(() => {
-      const root = document.querySelector('.global-ai-floating-root.ant-drawer-open');
-      const content = root?.querySelector('.ant-drawer-content');
-      const body = root?.querySelector('.ant-drawer-body');
-      return {
-        content: content ? getComputedStyle(content).backgroundColor : '',
-        body: body ? getComputedStyle(body).backgroundColor : '',
-        overflow: Boolean(content && content.scrollWidth > content.clientWidth + 1),
-      };
-    })()`);
-    assert(aiDarkSurface.content !== 'rgba(0, 0, 0, 0)' && aiDarkSurface.body !== 'rgba(0, 0, 0, 0)', 'AI dark-theme panel surface is transparent');
-    assert(!aiDarkSurface.overflow, 'AI dark-theme panel has horizontal overflow');
-    await setTheme(client, 'light');
-    interactionChecks.push('ai-floating-panel');
+    assert(
+      aiPopupState.title === 'HVAC AI 运维助手'
+        || aiPopupState.headerText.includes('HVAC AI 运维助手')
+        || aiPopupState.popupText.includes('HVAC AI 运维助手'),
+      `CopilotPopup title is invalid: ${JSON.stringify(aiPopupState)}`,
+    );
+    assert(aiPopupState.width >= 420 && aiPopupState.width <= 800, 'CopilotPopup desktop width is invalid');
+    assert(aiPopupState.height >= 360, 'CopilotPopup desktop height is invalid');
+    assert(aiPopupState.background !== 'rgba(0, 0, 0, 0)' && aiPopupState.background !== 'transparent', 'CopilotPopup surface is transparent');
+    assert(aiPopupState.offenderCount === 0, 'CopilotPopup has horizontal overflow');
+    assert(aiPopupState.hasInput && aiPopupState.hasOfficialHeader, 'CopilotPopup official UI is incomplete');
+    interactionChecks.push('ai-copilot-popup');
 
     context = 'interaction:ai-context-routing';
     const energyNavClicked = await evaluate(client, `(() => {
@@ -480,86 +454,67 @@ try {
       item.click();
       return true;
     })()`);
-    assert(energyNavClicked, 'Energy navigation item was not found while AI panel was open');
-    await waitFor(client, `location.pathname.startsWith('/energy') && document.querySelector('.global-ai-floating-root.ant-drawer-open')?.textContent.includes('能耗分析')`, 'AI panel route context update');
+    assert(energyNavClicked, 'Energy navigation item was not found while CopilotPopup was open');
+    await waitFor(client, `location.pathname.startsWith('/energy') && document.querySelector('.copilotKitPopup')?.textContent.includes('能耗分析')`, 'CopilotPopup route context update');
     interactionChecks.push('ai-context-routing');
 
     context = 'interaction:ai-agent-workflow';
-    const aiSkillStarted = await evaluate(client, `(() => {
-      const skill = [...document.querySelectorAll('.global-ai-skill-card')].find((element) => element.offsetParent !== null);
-      if (!skill) return false;
-      skill.click();
+    const aiQuestionEntered = await evaluate(client, `(() => {
+      const textarea = document.querySelector('.copilotKitPopup textarea');
+      if (!textarea) return false;
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+      setter?.call(textarea, '当前园区总功率和综合 COP 是多少？');
+      textarea.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: '当前园区总功率和综合 COP 是多少？' }));
+      textarea.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     })()`);
-    assert(aiSkillStarted, 'AI skill card was not available');
-    await waitFor(client, `Boolean(document.querySelector('.global-ai-floating-root.ant-drawer-open .assistant-message.is-user'))`, 'AI skill user message');
-    await waitFor(client, `Boolean(document.querySelector('.global-ai-floating-root.ant-drawer-open .global-ai-processing')) || Boolean([...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .assistant-message:not(.is-user) .assistant-message-bubble')].find((element) => element.textContent.trim().length > 0))`, 'AI processing or result');
-    const aiChatOverflow = await evaluate(client, `(() => {
-      const root = document.querySelector('.global-ai-floating-root.ant-drawer-open');
-      return [
-        '.ant-drawer-content',
-        '.ant-drawer-body',
-        '.global-ai-main-view',
-        '.assistant-conversation',
-        '.assistant-conversation-messages',
-        '.global-ai-processing',
-        '.assistant-composer',
-      ].some((selector) => {
-        const element = root?.querySelector(selector);
-        return Boolean(element && element.scrollWidth > element.clientWidth + 1);
+    assert(aiQuestionEntered, 'CopilotPopup input was not available');
+    await pause(100);
+    const aiSendClicked = await evaluate(client, `(() => {
+      const input = document.querySelector('.copilotKitInput');
+      const buttons = [...(input?.querySelectorAll('button') ?? [])].filter((element) => element.offsetParent !== null && !element.disabled);
+      const send = buttons.at(-1);
+      if (!send) return false;
+      send.click();
+      return true;
+    })()`);
+    assert(aiSendClicked, 'CopilotPopup send button was not available');
+    await waitFor(client, `document.querySelector('.copilotKitPopup')?.textContent.includes('总功率约')`, 'CopilotPopup local Agent answer');
+    const aiAnswerOverflow = await evaluate(client, `(() => {
+      const popup = document.querySelector('.copilotKitPopup');
+      return [...(popup?.querySelectorAll('*') ?? [])].some((element) => {
+        if (element.offsetParent === null) return false;
+        const overflowX = getComputedStyle(element).overflowX;
+        return element.scrollWidth > element.clientWidth + 1 && overflowX !== 'hidden' && overflowX !== 'clip';
       });
     })()`);
-    assert(!aiChatOverflow, 'AI chat or processing state has horizontal overflow');
-
-    await evaluate(client, `document.querySelector('[aria-label="新建 AI 会话"]')?.click()`);
-    await waitFor(client, `Boolean(document.querySelector('.global-ai-floating-root.ant-drawer-open .global-ai-welcome'))`, 'AI new conversation home');
-    await evaluate(client, `document.querySelector('[aria-label="打开 AI 对话历史"]')?.click()`);
-    await waitFor(client, `Boolean(document.querySelector('.global-ai-floating-root.ant-drawer-open .global-ai-history'))`, 'AI history view');
-    const aiHistoryState = await evaluate(client, `(() => {
-      const root = document.querySelector('.global-ai-floating-root.ant-drawer-open');
-      const history = root?.querySelector('.global-ai-history');
-      const list = root?.querySelector('.global-ai-history-list');
-      return {
-        itemCount: root?.querySelectorAll('.global-ai-history-item').length ?? 0,
-        overflow: Boolean(
-          (history && history.scrollWidth > history.clientWidth + 1)
-          || (list && list.scrollWidth > list.clientWidth + 1)
-        ),
-      };
-    })()`);
-    assert(aiHistoryState.itemCount >= 1, 'AI conversation was not archived into history');
-    assert(!aiHistoryState.overflow, 'AI history view has horizontal overflow');
-    await evaluate(client, `([...document.querySelectorAll('.global-ai-history-item')].find((element) => element.offsetParent !== null))?.click()`);
-    await waitFor(client, `Boolean(document.querySelector('.global-ai-floating-root.ant-drawer-open .assistant-message.is-user'))`, 'AI history restore');
+    assert(!aiAnswerOverflow, 'CopilotPopup answer state has horizontal overflow');
     interactionChecks.push('ai-agent-workflow');
 
-    context = 'interaction:ai-panel-modes';
-    await waitFor(client, `[...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-expand')].some((icon) => icon.offsetParent !== null)`, 'AI focus trigger');
-    await evaluate(client, `([...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-expand')].find((icon) => icon.offsetParent !== null))?.closest('button')?.click()`);
-    await waitFor(client, `[...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')].some((wrapper) => wrapper.offsetParent !== null && wrapper.getBoundingClientRect().width >= 820)`, 'AI focus mode');
-    const aiFocusState = await evaluate(client, `(() => {
-      const wrapper = [...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')].find((element) => element.offsetParent !== null);
-      const content = wrapper?.querySelector('.ant-drawer-content');
-      return {
-        width: wrapper?.getBoundingClientRect().width ?? 0,
-        overflow: Boolean(content && content.scrollWidth > content.clientWidth + 1),
-      };
+    context = 'interaction:ai-popup-toggle';
+    const aiClosed = await evaluate(client, `(() => {
+      const close = [...document.querySelectorAll('.copilotKitPopup button')].find((element) => element.offsetParent !== null && element.getAttribute('aria-label') === 'Close');
+      if (!close) return false;
+      close.click();
+      return true;
     })()`);
-    assert(aiFocusState.width >= 820 && aiFocusState.width <= 900, 'AI focus panel width is invalid');
-    assert(!aiFocusState.overflow, 'AI focus panel has horizontal overflow');
-    await evaluate(client, `([...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-compress')].find((icon) => icon.offsetParent !== null))?.closest('button')?.click()`);
-    await waitFor(client, `[...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')].some((wrapper) => wrapper.offsetParent !== null && wrapper.getBoundingClientRect().width <= 640)`, 'AI panel standard mode restored');
-    await evaluate(client, `([...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-close')].find((icon) => icon.offsetParent !== null))?.closest('button')?.click()`);
-    await waitFor(client, `!document.querySelector('.global-ai-floating-root.ant-drawer-open') && Boolean(document.querySelector('[aria-label="打开 AI 运维助手"]'))`, 'AI panel closed');
-    interactionChecks.push('ai-panel-modes');
+    assert(aiClosed, 'CopilotPopup close action was not available');
+    await waitFor(client, `(() => { if (document.querySelector('.copilotKitPopup')) return false; const button = document.querySelector('.copilotKitButton'); if (!button) return false; const rect = button.getBoundingClientRect(); const style = getComputedStyle(button); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && style.pointerEvents !== 'none'; })()`, 'CopilotPopup closed');
+    await evaluate(client, `document.querySelector('.copilotKitButton')?.click()`);
+    await waitFor(client, `document.querySelector('.copilotKitPopup')?.offsetParent !== null`, 'CopilotPopup reopened');
+    interactionChecks.push('ai-popup-toggle');
 
-    context = 'interaction:ai-mobile-panel';
+    context = 'interaction:ai-mobile-popup';
     await setViewport(client, VIEWPORTS[2]);
-    await evaluate(client, `document.querySelector('[aria-label="打开 AI 运维助手"]')?.click()`);
-    await waitFor(client, `Boolean(document.querySelector('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper'))`, 'AI mobile panel open');
-    await waitFor(client, `(() => { const rect = document.querySelector('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')?.getBoundingClientRect(); return Boolean(rect && Math.abs(rect.left) < 1 && Math.abs(rect.top) < 1 && Math.abs(rect.width - window.innerWidth) < 1 && Math.abs(rect.height - window.innerHeight) < 1); })()`, 'AI mobile panel full screen');
+    await waitFor(client, `document.querySelector('.copilotKitPopup')?.offsetParent !== null`, 'CopilotPopup mobile open');
     const aiMobileState = await evaluate(client, `(() => {
-      const rect = document.querySelector('.global-ai-floating-root.ant-drawer-open .ant-drawer-content-wrapper')?.getBoundingClientRect();
+      const popup = document.querySelector('.copilotKitPopup');
+      const rect = popup?.getBoundingClientRect();
+      const offenders = [...(popup?.querySelectorAll('*') ?? [])].filter((element) => {
+        if (element.offsetParent === null) return false;
+        const overflowX = getComputedStyle(element).overflowX;
+        return element.scrollWidth > element.clientWidth + 1 && overflowX !== 'hidden' && overflowX !== 'clip';
+      });
       return {
         left: rect?.left ?? -1,
         top: rect?.top ?? -1,
@@ -568,15 +523,16 @@ try {
         viewportWidth: window.innerWidth,
         viewportHeight: window.innerHeight,
         bodyOverflow: document.body.scrollWidth > window.innerWidth + 2,
+        offenderCount: offenders.length,
       };
     })()`);
-    assert(Math.abs(aiMobileState.left) < 1 && Math.abs(aiMobileState.top) < 1, 'AI mobile panel is not full screen');
-    assert(Math.abs(aiMobileState.width - aiMobileState.viewportWidth) < 1 && Math.abs(aiMobileState.height - aiMobileState.viewportHeight) < 1, 'AI mobile panel size mismatch');
-    assert(!aiMobileState.bodyOverflow, 'AI mobile panel causes horizontal overflow');
-    await evaluate(client, `([...document.querySelectorAll('.global-ai-floating-root.ant-drawer-open .anticon-close')].find((icon) => icon.offsetParent !== null))?.closest('button')?.click()`);
-    await waitFor(client, `!document.querySelector('.global-ai-floating-root.ant-drawer-open')`, 'AI mobile panel close');
+    assert(Math.abs(aiMobileState.left) < 1 && Math.abs(aiMobileState.top) < 1, 'CopilotPopup mobile view is not full screen');
+    assert(Math.abs(aiMobileState.width - aiMobileState.viewportWidth) < 1 && Math.abs(aiMobileState.height - aiMobileState.viewportHeight) < 1, 'CopilotPopup mobile size mismatch');
+    assert(!aiMobileState.bodyOverflow && aiMobileState.offenderCount === 0, 'CopilotPopup mobile view has horizontal overflow');
+    await evaluate(client, `([...document.querySelectorAll('.copilotKitPopup button')].find((element) => element.offsetParent !== null && element.getAttribute('aria-label') === 'Close'))?.click()`);
+    await waitFor(client, `(() => { if (document.querySelector('.copilotKitPopup')) return false; const button = document.querySelector('.copilotKitButton'); if (!button) return false; const rect = button.getBoundingClientRect(); const style = getComputedStyle(button); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && style.pointerEvents !== 'none'; })()`, 'CopilotPopup mobile close');
     await setViewport(client, VIEWPORTS[0]);
-    interactionChecks.push('ai-mobile-panel');
+    interactionChecks.push('ai-mobile-popup');
 
     context = 'interaction:deep-link-refresh';
     await hardNavigate(client, '/assets?device=b1-z1-u1');
@@ -586,6 +542,14 @@ try {
     interactionChecks.push('deep-link-refresh');
 
     context = 'interaction:drawer-escape';
+    await evaluate(client, `(() => {
+      const popup = document.querySelector('.copilotKitPopup');
+      if (!popup) return false;
+      const close = [...popup.querySelectorAll('button')].find((element) => element.getAttribute('aria-label') === 'Close');
+      close?.click();
+      return Boolean(close);
+    })()`);
+    await waitFor(client, `!document.querySelector('.copilotKitPopup')`, 'CopilotPopup cleared before drawer Escape');
     await pressEscape(client);
     await waitFor(client, `!document.querySelector('.ops-detail-drawer.ant-drawer-open') && !new URLSearchParams(location.search).has('device')`, 'drawer escape close');
     interactionChecks.push('drawer-escape');
@@ -777,9 +741,17 @@ try {
     interactionChecks.push('404-return');
 
     await pause(300);
+    const isKnownCopilotKitDevWarning = (detail) => (
+      detail.includes('Function components cannot be given refs')
+      && detail.includes('DropdownMenuTrigger2')
+      && detail.includes('@copilotkit_react-core_v2')
+    );
+    const knownThirdPartyWarnings = browserProblems.filter((problem) => isKnownCopilotKitDevWarning(String(problem.detail)));
     const actionableProblems = browserProblems.filter((problem) => {
       const detail = String(problem.detail);
-      return !detail.includes('ResizeObserver loop') && !detail.includes('favicon.ico');
+      return !detail.includes('ResizeObserver loop')
+        && !detail.includes('favicon.ico')
+        && !isKnownCopilotKitDevWarning(detail);
     });
     assert(actionableProblems.length === 0, `Browser problems detected: ${JSON.stringify(actionableProblems, null, 2)}`);
 
@@ -788,6 +760,7 @@ try {
       accessChecks: accessChecks.length,
       visualChecks: visualChecks.length,
       interactionChecks,
+      knownThirdPartyWarnings: knownThirdPartyWarnings.length,
       browserProblems: actionableProblems,
     }, null, 2));
   } finally {
@@ -795,6 +768,11 @@ try {
   }
 } finally {
   edge.kill();
-  await pause(700);
-  await rm(profileDir, { recursive: true, force: true });
+  await pause(1200);
+  await rm(profileDir, {
+    recursive: true,
+    force: true,
+    maxRetries: 8,
+    retryDelay: 250,
+  });
 }

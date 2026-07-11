@@ -1,4 +1,4 @@
-import { useAgentContext, useFrontendTool } from '@copilotkit/react-core/v2/headless';
+import { useAgentContext, useFrontendTool } from '@copilotkit/react-core/v2';
 import { useNavigate } from 'react-router-dom';
 import { z } from 'zod';
 import { canViewPath } from '@/auth/permissions';

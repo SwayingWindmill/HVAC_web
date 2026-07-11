@@ -108,6 +108,10 @@ function buildAnswer(text: string, snapshot: Snapshot): string {
   return `我已读取当前实时遥测：园区总功率约 ${snapshot.power} kW，综合 COP 约 ${snapshot.cop}，综合负荷率 ${snapshot.load}%，冷冻水供/回水 ${snapshot.supply}/${snapshot.ret}℃。能效最弱的是 ${snapshot.weakest.name}（COP ${snapshot.weakest.cop}）。你可以继续追问原因、证据、风险或建议动作。注意：我是只读助手，不能控制任何设备。`;
 }
 
+export async function buildAiMockAnswer(text: string): Promise<string> {
+  return buildAnswer(text, await readSnapshot());
+}
+
 const sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 let sequence = 0;
 let streamToken = 0;
