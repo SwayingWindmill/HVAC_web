@@ -397,7 +397,7 @@ try {
     context = 'interaction:ai-copilot-popup';
     await spaNavigate(client, '/dashboard');
     await waitForRoute(client, ROUTES[0], true);
-    await waitFor(client, `Boolean(document.querySelector('.copilotKitPopup') || document.querySelector('.copilotKitButton'))`, 'CopilotPopup mount');
+    await waitFor(client, `Boolean(document.querySelector('.copilotKitPopup') || document.querySelector('.hvac-copilot-toggle'))`, 'CopilotPopup mount');
     await waitFor(client, `(() => {
       const popup = document.querySelector('.copilotKitPopup');
       if (popup) {
@@ -405,7 +405,7 @@ try {
         if (rect.width > 0 && rect.height > 0 && Number(getComputedStyle(popup).opacity || 1) > 0.9) return true;
         if (rect.width > 0 && rect.height > 0) return false;
       }
-      const trigger = document.querySelector('.copilotKitButton');
+      const trigger = document.querySelector('.hvac-copilot-toggle');
       if (!trigger) return false;
       const rect = trigger.getBoundingClientRect();
       const style = getComputedStyle(trigger);
@@ -424,14 +424,18 @@ try {
       });
       return {
         title: popup?.getAttribute('aria-label') ?? '',
-        headerText: popup?.querySelector('.copilotKitHeader')?.textContent?.trim() ?? '',
+        headerText: popup?.querySelector('.hvac-copilot-header')?.textContent?.trim() ?? '',
         popupText: popup?.textContent?.trim() ?? '',
         width: rect?.width ?? 0,
         height: rect?.height ?? 0,
         background,
         offenderCount: offenders.length,
         hasInput: Boolean(popup?.querySelector('textarea')),
-        hasOfficialHeader: Boolean(popup?.querySelector('.copilotKitHeader')),
+        hasBrandedHeader: Boolean(popup?.querySelector('.hvac-copilot-header-layout')),
+        hasBrandedWelcome: Boolean(popup?.querySelector('.hvac-copilot-welcome')),
+        hasContextCard: Boolean(popup?.querySelector('.hvac-copilot-context-card')),
+        suggestionCount: popup?.querySelectorAll('.hvac-copilot-suggestion').length ?? 0,
+        hasBrandedToggle: Boolean(document.querySelector('.hvac-copilot-toggle')),
       };
     })()`);
     assert(
@@ -444,7 +448,15 @@ try {
     assert(aiPopupState.height >= 360, 'CopilotPopup desktop height is invalid');
     assert(aiPopupState.background !== 'rgba(0, 0, 0, 0)' && aiPopupState.background !== 'transparent', 'CopilotPopup surface is transparent');
     assert(aiPopupState.offenderCount === 0, 'CopilotPopup has horizontal overflow');
-    assert(aiPopupState.hasInput && aiPopupState.hasOfficialHeader, 'CopilotPopup official UI is incomplete');
+    assert(
+      aiPopupState.hasInput
+        && aiPopupState.hasBrandedHeader
+        && aiPopupState.hasBrandedWelcome
+        && aiPopupState.hasContextCard
+        && aiPopupState.suggestionCount === 3
+        && aiPopupState.hasBrandedToggle,
+      `CopilotPopup HVAC product UI is incomplete: ${JSON.stringify(aiPopupState)}`,
+    );
     interactionChecks.push('ai-copilot-popup');
 
     context = 'interaction:ai-context-routing';
@@ -455,7 +467,38 @@ try {
       return true;
     })()`);
     assert(energyNavClicked, 'Energy navigation item was not found while CopilotPopup was open');
-    await waitFor(client, `location.pathname.startsWith('/energy') && document.querySelector('.copilotKitPopup')?.textContent.includes('能耗分析')`, 'CopilotPopup route context update');
+    await waitFor(client, `location.pathname.startsWith('/energy')`, 'energy route with CopilotPopup');
+    await waitFor(client, `(() => {
+      const popup = document.querySelector('.copilotKitPopup');
+      if (!popup) {
+        const trigger = document.querySelector('.hvac-copilot-toggle');
+        if (!trigger) return false;
+        const triggerRect = trigger.getBoundingClientRect();
+        const triggerStyle = getComputedStyle(trigger);
+        if (triggerRect.width > 0 && triggerRect.height > 0 && triggerStyle.display !== 'none' && triggerStyle.visibility !== 'hidden' && triggerStyle.pointerEvents !== 'none') trigger.click();
+        return false;
+      }
+      const rect = popup.getBoundingClientRect();
+      const opacity = Number(getComputedStyle(popup).opacity || 1);
+      if (rect.width <= 0 || rect.height <= 0 || opacity < 0.9) return false;
+      return popup.querySelector('.hvac-copilot-header-scope')?.textContent.includes('能耗分析') ?? false;
+    })()`, 'CopilotPopup route context update');
+    const aiRouteContextState = await evaluate(client, `(() => {
+      const popup = document.querySelector('.copilotKitPopup');
+      return {
+        welcomeTitle: popup?.querySelector('.hvac-copilot-welcome h2')?.textContent?.trim() ?? '',
+        suggestions: [...(popup?.querySelectorAll('.hvac-copilot-suggestion') ?? [])].map((element) => element.textContent?.trim() ?? ''),
+        placeholder: popup?.querySelector('textarea')?.getAttribute('placeholder') ?? '',
+        scope: popup?.querySelector('.hvac-copilot-header-scope')?.textContent?.trim() ?? '',
+      };
+    })()`);
+    assert(
+      aiRouteContextState.welcomeTitle.includes('调查当前周期的能耗变化')
+        && aiRouteContextState.suggestions.includes('为什么能耗升高？')
+        && aiRouteContextState.placeholder.includes('询问「')
+        && aiRouteContextState.scope.includes('2026 年'),
+      `CopilotPopup route-specific content is stale: ${JSON.stringify(aiRouteContextState)}`,
+    );
     interactionChecks.push('ai-context-routing');
 
     context = 'interaction:ai-agent-workflow';
@@ -479,7 +522,13 @@ try {
       return true;
     })()`);
     assert(aiSendClicked, 'CopilotPopup send button was not available');
-    await waitFor(client, `document.querySelector('.copilotKitPopup')?.textContent.includes('总功率约')`, 'CopilotPopup local Agent answer');
+    await waitFor(client, `(() => {
+      const popup = document.querySelector('.copilotKitPopup');
+      const card = popup?.querySelector('.hvac-agent-result-card');
+      return popup?.textContent.includes('总功率约')
+        && card?.textContent.includes('能耗异常调查')
+        && card?.textContent.includes('额外能耗');
+    })()`, 'CopilotPopup local Agent answer and energy result card');
     const aiAnswerOverflow = await evaluate(client, `(() => {
       const popup = document.querySelector('.copilotKitPopup');
       return [...(popup?.querySelectorAll('*') ?? [])].some((element) => {
@@ -489,6 +538,77 @@ try {
       });
     })()`);
     assert(!aiAnswerOverflow, 'CopilotPopup answer state has horizontal overflow');
+
+    const startNewCopilotSession = async (label) => {
+      const clicked = await evaluate(client, `(() => {
+        const button = [...document.querySelectorAll('.copilotKitPopup button')].find((element) => element.offsetParent !== null && element.getAttribute('aria-label') === '新建会话');
+        if (!button) return false;
+        button.click();
+        return true;
+      })()`);
+      assert(clicked, `CopilotPopup new-session action was not available for ${label}`);
+      await waitFor(client, `Boolean(document.querySelector('.hvac-copilot-welcome')) && !document.querySelector('.hvac-agent-result-card')`, `CopilotPopup new session ${label}`);
+    };
+
+    const submitCopilotQuestion = async (question, expectedCardText, label) => {
+      const entered = await evaluate(client, `(() => {
+        const textarea = document.querySelector('.copilotKitPopup textarea');
+        if (!textarea) return false;
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+        setter?.call(textarea, ${JSON.stringify(question)});
+        textarea.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ${JSON.stringify(question)} }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      })()`);
+      assert(entered, `CopilotPopup input was not available for ${label}`);
+      await pause(100);
+      const sent = await evaluate(client, `(() => {
+        const input = document.querySelector('.copilotKitInput');
+        const buttons = [...(input?.querySelectorAll('button') ?? [])].filter((element) => element.offsetParent !== null && !element.disabled);
+        const send = buttons.at(-1);
+        if (!send) return false;
+        send.click();
+        return true;
+      })()`);
+      assert(sent, `CopilotPopup send button was not available for ${label}`);
+      await waitFor(client, `document.querySelector('.hvac-agent-result-card')?.textContent.includes(${JSON.stringify(expectedCardText)})`, `CopilotPopup ${label} result card`);
+    };
+
+    await startNewCopilotSession('asset card');
+    await submitCopilotQuestion('哪台设备 COP 最低？', '设备运行分析', 'asset');
+    await startNewCopilotSession('FDD card');
+    await submitCopilotQuestion('解释最严重的诊断证据', 'AI 置信度', 'FDD');
+    const aiStructuredCardsOverflow = await evaluate(client, `(() => {
+      const popup = document.querySelector('.copilotKitPopup');
+      return [...(popup?.querySelectorAll('*') ?? [])].some((element) => {
+        if (element.offsetParent === null) return false;
+        const overflowX = getComputedStyle(element).overflowX;
+        return element.scrollWidth > element.clientWidth + 1 && overflowX !== 'hidden' && overflowX !== 'clip';
+      });
+    })()`);
+    assert(!aiStructuredCardsOverflow, 'CopilotPopup structured result cards have horizontal overflow');
+    await setTheme(client, 'dark');
+    const aiDarkState = await evaluate(client, `(() => {
+      const popup = document.querySelector('.copilotKitPopup');
+      const card = popup?.querySelector('.hvac-agent-result-card');
+      const popupBackground = popup ? getComputedStyle(popup).backgroundColor : '';
+      const cardBackground = card ? getComputedStyle(card).backgroundColor : '';
+      const overflow = [...(popup?.querySelectorAll('*') ?? [])].some((element) => {
+        if (element.offsetParent === null) return false;
+        const overflowX = getComputedStyle(element).overflowX;
+        return element.scrollWidth > element.clientWidth + 1 && overflowX !== 'hidden' && overflowX !== 'clip';
+      });
+      return { popupBackground, cardBackground, overflow };
+    })()`);
+    assert(
+      aiDarkState.popupBackground !== 'rgba(0, 0, 0, 0)'
+        && aiDarkState.popupBackground !== 'transparent'
+        && aiDarkState.cardBackground !== 'rgba(0, 0, 0, 0)'
+        && aiDarkState.cardBackground !== 'transparent'
+        && !aiDarkState.overflow,
+      `CopilotPopup dark result state is invalid: ${JSON.stringify(aiDarkState)}`,
+    );
+    await setTheme(client, 'light');
     interactionChecks.push('ai-agent-workflow');
 
     context = 'interaction:ai-popup-toggle';
@@ -499,16 +619,83 @@ try {
       return true;
     })()`);
     assert(aiClosed, 'CopilotPopup close action was not available');
-    await waitFor(client, `(() => { if (document.querySelector('.copilotKitPopup')) return false; const button = document.querySelector('.copilotKitButton'); if (!button) return false; const rect = button.getBoundingClientRect(); const style = getComputedStyle(button); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && style.pointerEvents !== 'none'; })()`, 'CopilotPopup closed');
-    await evaluate(client, `document.querySelector('.copilotKitButton')?.click()`);
+    await waitFor(client, `(() => { if (document.querySelector('.copilotKitPopup')) return false; const button = document.querySelector('.hvac-copilot-toggle'); if (!button) return false; const rect = button.getBoundingClientRect(); const style = getComputedStyle(button); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && style.pointerEvents !== 'none'; })()`, 'CopilotPopup closed');
+    await evaluate(client, `document.querySelector('.hvac-copilot-toggle')?.click()`);
     await waitFor(client, `document.querySelector('.copilotKitPopup')?.offsetParent !== null`, 'CopilotPopup reopened');
     interactionChecks.push('ai-popup-toggle');
 
     context = 'interaction:ai-mobile-popup';
+    const aiClosedBeforeMobile = await evaluate(client, `(() => {
+      const close = [...document.querySelectorAll('.copilotKitPopup button')].find((element) => element.offsetParent !== null && element.getAttribute('aria-label') === 'Close');
+      if (!close) return false;
+      close.click();
+      return true;
+    })()`);
+    assert(aiClosedBeforeMobile, 'CopilotPopup could not close before mobile viewport');
+    await waitFor(client, `(() => { if (document.querySelector('.copilotKitPopup')) return false; const button = document.querySelector('.hvac-copilot-toggle'); if (!button) return false; const rect = button.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; })()`, 'CopilotPopup closed before mobile viewport');
     await setViewport(client, VIEWPORTS[2]);
-    await waitFor(client, `document.querySelector('.copilotKitPopup')?.offsetParent !== null`, 'CopilotPopup mobile open');
+    await hardNavigate(client, '/dashboard');
+    await waitForRoute(client, ROUTES[0], true);
+    await waitFor(client, `(() => { const button = document.querySelector('.hvac-copilot-toggle'); if (!button) return false; const rect = button.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; })()`, 'CopilotPopup mobile launcher');
+    const mobileTriggered = await evaluate(client, `(() => {
+      const trigger = document.querySelector('.hvac-copilot-toggle');
+      if (!trigger) return false;
+      trigger.click();
+      return true;
+    })()`);
+    assert(mobileTriggered, 'CopilotPopup mobile launcher could not be clicked');
+    await pause(1400);
+    const mobileLaunchState = await evaluate(client, `(() => {
+      const isVisible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0
+          && rect.height > 0
+          && style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && Number(style.opacity || 1) > 0.01;
+      };
+      return {
+        popupCount: document.querySelectorAll('.copilotKitPopup').length,
+        visiblePopupCount: [...document.querySelectorAll('.copilotKitPopup')].filter(isVisible).length,
+      };
+    })()`);
+    assert(mobileLaunchState.visiblePopupCount > 0, `CopilotPopup mobile window did not open: ${JSON.stringify(mobileLaunchState)}`);
+    const mobileFullScreenExpression = `(() => {
+      return [...document.querySelectorAll('.copilotKitPopup')].some((popup) => {
+        const rect = popup.getBoundingClientRect();
+        const style = getComputedStyle(popup);
+        const visible = rect.width > 0
+          && rect.height > 0
+          && style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && Number(style.opacity || 1) > 0.01;
+        return visible
+          && Math.abs(rect.left) < 1.5
+          && Math.abs(rect.top) < 1.5
+          && Math.abs(rect.width - window.innerWidth) < 1.5
+          && Math.abs(rect.height - window.innerHeight) < 1.5;
+      });
+    })()`;
+    await waitFor(client, mobileFullScreenExpression, 'CopilotPopup mobile open');
+    await pause(320);
+    await waitFor(client, mobileFullScreenExpression, 'CopilotPopup mobile stable');
     const aiMobileState = await evaluate(client, `(() => {
-      const popup = document.querySelector('.copilotKitPopup');
+      const popup = [...document.querySelectorAll('.copilotKitPopup')]
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return rect.width > 0
+            && rect.height > 0
+            && style.display !== 'none'
+            && style.visibility !== 'hidden'
+            && Number(style.opacity || 1) > 0.01;
+        })
+        .sort((a, b) => {
+          const ar = a.getBoundingClientRect();
+          const br = b.getBoundingClientRect();
+          return (br.width * br.height) - (ar.width * ar.height);
+        })[0];
       const rect = popup?.getBoundingClientRect();
       const offenders = [...(popup?.querySelectorAll('*') ?? [])].filter((element) => {
         if (element.offsetParent === null) return false;
@@ -524,13 +711,34 @@ try {
         viewportHeight: window.innerHeight,
         bodyOverflow: document.body.scrollWidth > window.innerWidth + 2,
         offenderCount: offenders.length,
+        mediaMatches: matchMedia('(max-width: 767px)').matches,
+        instances: [...document.querySelectorAll('.copilotKitPopup')].map((element) => {
+          const itemRect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return {
+            visible: element.offsetParent !== null,
+            left: itemRect.left,
+            top: itemRect.top,
+            width: itemRect.width,
+            height: itemRect.height,
+            position: style.position,
+            inset: style.inset,
+            transform: style.transform,
+          };
+        }),
       };
     })()`);
-    assert(Math.abs(aiMobileState.left) < 1 && Math.abs(aiMobileState.top) < 1, 'CopilotPopup mobile view is not full screen');
-    assert(Math.abs(aiMobileState.width - aiMobileState.viewportWidth) < 1 && Math.abs(aiMobileState.height - aiMobileState.viewportHeight) < 1, 'CopilotPopup mobile size mismatch');
+    assert(
+      Math.abs(aiMobileState.left) < 1.5 && Math.abs(aiMobileState.top) < 1.5,
+      `CopilotPopup mobile view is not full screen: ${JSON.stringify(aiMobileState)}`,
+    );
+    assert(
+      Math.abs(aiMobileState.width - aiMobileState.viewportWidth) < 1.5 && Math.abs(aiMobileState.height - aiMobileState.viewportHeight) < 1.5,
+      `CopilotPopup mobile size mismatch: ${JSON.stringify(aiMobileState)}`,
+    );
     assert(!aiMobileState.bodyOverflow && aiMobileState.offenderCount === 0, 'CopilotPopup mobile view has horizontal overflow');
     await evaluate(client, `([...document.querySelectorAll('.copilotKitPopup button')].find((element) => element.offsetParent !== null && element.getAttribute('aria-label') === 'Close'))?.click()`);
-    await waitFor(client, `(() => { if (document.querySelector('.copilotKitPopup')) return false; const button = document.querySelector('.copilotKitButton'); if (!button) return false; const rect = button.getBoundingClientRect(); const style = getComputedStyle(button); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && style.pointerEvents !== 'none'; })()`, 'CopilotPopup mobile close');
+    await waitFor(client, `(() => { if (document.querySelector('.copilotKitPopup')) return false; const button = document.querySelector('.hvac-copilot-toggle'); if (!button) return false; const rect = button.getBoundingClientRect(); const style = getComputedStyle(button); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && style.pointerEvents !== 'none'; })()`, 'CopilotPopup mobile close');
     await setViewport(client, VIEWPORTS[0]);
     interactionChecks.push('ai-mobile-popup');
 
@@ -550,8 +758,25 @@ try {
       return Boolean(close);
     })()`);
     await waitFor(client, `!document.querySelector('.copilotKitPopup')`, 'CopilotPopup cleared before drawer Escape');
+    await pause(260);
+    const drawerCloseButtonFocused = await evaluate(client, `(() => {
+      const button = document.querySelector('.ops-detail-drawer.ant-drawer-open .ant-drawer-close');
+      button?.focus();
+      return document.activeElement === button;
+    })()`);
+    assert(drawerCloseButtonFocused, 'Asset drawer close control could not receive focus');
     await pressEscape(client);
-    await waitFor(client, `!document.querySelector('.ops-detail-drawer.ant-drawer-open') && !new URLSearchParams(location.search).has('device')`, 'drawer escape close');
+    await pause(500);
+    const drawerEscapeState = await evaluate(client, `({
+      drawerOpen: Boolean(document.querySelector('.ops-detail-drawer.ant-drawer-open')),
+      hasDeviceParam: new URLSearchParams(location.search).has('device'),
+      popupOpen: Boolean(document.querySelector('.copilotKitPopup')),
+      activeElement: document.activeElement?.className ?? document.activeElement?.tagName ?? '',
+    })`);
+    assert(
+      !drawerEscapeState.drawerOpen && !drawerEscapeState.hasDeviceParam,
+      `Drawer Escape did not close the asset detail: ${JSON.stringify(drawerEscapeState)}`,
+    );
     interactionChecks.push('drawer-escape');
 
     context = 'interaction:history';

@@ -11,9 +11,22 @@ import { CopilotKit, CopilotPopup } from '@copilotkit/react-core/v2';
 import '@copilotkit/react-core/v2/styles.css';
 ```
 
-`CopilotPopup` owns the floating launcher, popup window, welcome state, message list, composer, streaming state, and mobile full-screen behavior. The application only provides Chinese labels, page context, frontend tools, and a minimal CSS safety layer that prevents horizontal scrolling in messages, Markdown, code blocks, tables, and the composer.
+`CopilotPopup` owns the floating launcher, popup window, open/close state, focus, Escape handling, message list, composer, streaming state, and mobile full-screen behavior. HVAC product identity is applied through official slot/props rather than an external window shell: the official toggle button receives a branded content icon, the official modal header supplies the functional close button to an HVAC header layout, and the welcome screen, labels, suggestions, disclaimer, and CSS tokens are application-owned.
 
 All CopilotKit components and hooks must import from the `@copilotkit/react-core/v2` entry point. Mixing `/v2` and `/v2/headless` can create separate React context module instances under Vite.
+
+### HVAC product slots
+
+The current Popup customizes only official extension points:
+
+- `toggleButton`: official `CopilotChatToggleButton` with a branded `AI 运维助手` icon payload and live attention count;
+- `header`: official `CopilotModalHeader` with its injected functional close button, plus new-session and `/ai` workspace actions;
+- `welcomeScreen`: route-aware welcome title, building/page/object scope, role, operational summary, and static suggestions;
+- `labels`: Chinese title, dynamic input placeholder, toolbar labels, and safety copy;
+- `input.disclaimer`: explicit read-only and human-approval boundary;
+- CSS tokens/classes: solid HVAC light/dark surfaces and a strict no-horizontal-scroll contract.
+
+The Popup must not be wrapped in an application Drawer or Modal, and the application must not duplicate its open/close state.
 
 ## Agent execution modes
 
@@ -45,14 +58,21 @@ The backend Runtime is responsible for model credentials, authentication, RBAC, 
 
 `CopilotContextBridge` exposes:
 
-- current route and page description;
-- selected building and role;
-- work-order, FDD, and optimization summary counts;
+- current route, page title, page description, and route-specific welcome copy;
+- selected building, role, object/period label, and human-readable scope;
+- work-order, FDD, optimization summary counts, and aggregate attention count;
+- route-specific static suggestions and input placeholder;
 - permitted application routes;
 - a permission-aware `navigate_to_page` frontend tool;
 - an `open_ai_workspace` frontend tool.
 
-No device-control tool is exposed.
+The bridge also registers three read-only Generative UI components through `useComponent`:
+
+- `render_asset_status_card` → `AssetStatusCard`;
+- `render_energy_anomaly_card` → `EnergyAnomalyCard`;
+- `render_fdd_evidence_card` → `FddEvidenceCard`.
+
+Their Zod schemas are shared by the local Agent and future Runtime tools. The cards only display evidence, metrics, and business deep links. No device-control tool is exposed.
 
 ## Bundle impact
 

@@ -242,10 +242,14 @@ Dashboard 统一的是设计纪律，不是所有卡片的内部模板。运营�
 
 ### 官方 CopilotPopup
 
-- 桌面端保留 CopilotKit 官方浮动按钮、窗口、欢迎消息、消息列表、输入框、流式状态和关闭行为；不覆盖官方尺寸、圆角、颜色、阴影或按钮结构。
+- CopilotKit 官方 `CopilotPopup` 继续负责窗口开合、焦点、Escape、消息列表、输入、流式状态、Markdown 和移动端全屏行为；不得在外部再包裹 Drawer、Modal 或第二套窗口状态。
+- 产品化定制必须使用官方 slot/props：启动按钮保留官方 `CopilotChatToggleButton`，Header 保留官方 `CopilotModalHeader` 和其注入的关闭回调，应用只替换图标内容、Header 内容、欢迎页、输入提示、建议问题和 CSS token。
+- 桌面启动入口使用 `AI 运维助手 + 待关注数量` 胶囊；Header 必须展示助手名称、只读状态、建筑/页面/对象范围、新建会话、完整工作台入口和官方关闭按钮。
+- 欢迎页按当前路由和对象动态展示业务标题、分析范围、角色、运维摘要和 3 条建议问题；能耗周期、设备、FDD、工单和优化对象必须优先显示为当前上下文。
+- 对话中的结构化结果通过 CopilotKit `useComponent` 注册，不得硬编码成 Markdown。首批标准组件为 `AssetStatusCard`、`EnergyAnomalyCard` 和 `FddEvidenceCard`，只提供查看与业务深链，不执行写操作。
 - 手机端使用 CopilotKit 官方全屏 Popup 行为，不增加自定义 Sheet 或 Drawer。
-- 唯一允许的视觉覆盖是横向溢出安全层：Popup、消息区、输入区、Markdown、代码块和表格在任何状态、主题和视口下都不得出现横向滚动条；长内容必须换行或在容器内收敛。
-- 本地 self-managed Agent 只允许读取 Mock 遥测并输出文本，不得暴露设备控制、工单写入或优化下发能力。
+- Popup、消息区、输入区、建议问题、结构化结果、Markdown、代码块和表格在任何状态、主题和视口下都不得出现横向滚动条；长内容必须换行或在容器内收敛。
+- 本地 self-managed Agent 只允许读取 Mock 遥测、流式输出和触发只读展示组件，不得暴露设备控制、工单写入或优化下发能力。
 - CopilotKit 1.62.3 在 React 开发模式下会从官方 `DropdownMenuTrigger` 产生 ref 警告。审计必须单独记录该上游已知告警，但不得因此忽略其他应用错误、HTTP 错误或网络失败。
 
 ### 工作台结构

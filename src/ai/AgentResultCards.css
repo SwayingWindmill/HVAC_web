@@ -1,0 +1,310 @@
+.hvac-agent-result-card {
+  --agent-card-accent: #0f9f99;
+  --agent-card-accent-soft: rgba(15, 159, 153, 0.1);
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+  color: #111827;
+}
+
+.hvac-agent-result-card[data-tone='warning'] {
+  --agent-card-accent: #d97706;
+  --agent-card-accent-soft: rgba(217, 119, 6, 0.1);
+}
+
+.hvac-agent-result-card[data-tone='danger'] {
+  --agent-card-accent: #dc2626;
+  --agent-card-accent-soft: rgba(220, 38, 38, 0.09);
+}
+
+.hvac-agent-result-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 16px 13px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.07);
+}
+
+.hvac-agent-result-header > div {
+  min-width: 0;
+}
+
+.hvac-agent-result-eyebrow {
+  display: block;
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.hvac-agent-result-header h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #111827;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.hvac-agent-result-badge {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--agent-card-accent-soft);
+  color: var(--agent-card-accent);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.hvac-agent-result-metrics,
+.hvac-agent-evidence-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 14px 16px;
+  overflow: hidden;
+  border: 1px solid rgba(15, 23, 42, 0.07);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.07);
+}
+
+.hvac-agent-evidence-stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hvac-agent-result-metrics > div,
+.hvac-agent-evidence-stats > div {
+  min-width: 0;
+  padding: 10px 9px;
+  background: #fff;
+}
+
+.hvac-agent-result-metrics span,
+.hvac-agent-evidence-stats span,
+.hvac-agent-result-summary > span {
+  display: block;
+  margin-bottom: 3px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.hvac-agent-result-metrics strong,
+.hvac-agent-evidence-stats strong {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #111827;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hvac-agent-result-finding {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 16px 15px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  background: var(--agent-card-accent-soft);
+  color: var(--agent-card-accent);
+}
+
+.hvac-agent-result-finding > div {
+  min-width: 0;
+}
+
+.hvac-agent-result-finding span {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11px;
+}
+
+.hvac-agent-result-finding strong {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.hvac-agent-result-summary {
+  padding: 15px 16px 8px;
+}
+
+.hvac-agent-result-summary strong {
+  display: block;
+  color: #111827;
+  font-size: 23px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hvac-agent-result-summary p {
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.hvac-agent-contributors,
+.hvac-agent-evidence-list {
+  display: grid;
+  gap: 10px;
+  padding: 8px 16px 16px;
+}
+
+.hvac-agent-contributor-row > div:first-child {
+  display: flex;
+  min-width: 0;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 5px;
+  color: #475569;
+  font-size: 12px;
+}
+
+.hvac-agent-contributor-row strong {
+  color: #111827;
+  font-variant-numeric: tabular-nums;
+}
+
+.hvac-agent-contributor-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #edf2f7;
+}
+
+.hvac-agent-contributor-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--agent-card-accent);
+}
+
+.hvac-agent-evidence-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 0.8fr) minmax(0, 1.2fr);
+  align-items: start;
+  gap: 8px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.hvac-agent-evidence-row svg {
+  margin-top: 2px;
+  color: #0f9f99;
+}
+
+.hvac-agent-evidence-row svg[data-verified='false'] {
+  color: #94a3b8;
+}
+
+.hvac-agent-evidence-row span,
+.hvac-agent-evidence-row strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.hvac-agent-evidence-row strong {
+  color: #334155;
+  font-weight: 600;
+  text-align: right;
+}
+
+.hvac-agent-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 16px 15px;
+  border-top: 1px solid rgba(15, 23, 42, 0.07);
+}
+
+.hvac-agent-result-actions button {
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid rgba(15, 23, 42, 0.11);
+  border-radius: 9px;
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.hvac-agent-result-actions button:first-child {
+  border-color: var(--agent-card-accent);
+  background: var(--agent-card-accent);
+  color: #fff;
+}
+
+.hvac-agent-result-actions button:hover {
+  transform: translateY(-1px);
+}
+
+[data-theme='dark'] .hvac-agent-result-card {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: #111827;
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.28);
+  color: #e5e7eb;
+}
+
+[data-theme='dark'] .hvac-agent-result-header,
+[data-theme='dark'] .hvac-agent-result-actions {
+  border-color: rgba(148, 163, 184, 0.15);
+}
+
+[data-theme='dark'] .hvac-agent-result-header h3,
+[data-theme='dark'] .hvac-agent-result-metrics strong,
+[data-theme='dark'] .hvac-agent-evidence-stats strong,
+[data-theme='dark'] .hvac-agent-result-summary strong,
+[data-theme='dark'] .hvac-agent-contributor-row strong {
+  color: #f8fafc;
+}
+
+[data-theme='dark'] .hvac-agent-result-metrics,
+[data-theme='dark'] .hvac-agent-evidence-stats {
+  border-color: rgba(148, 163, 184, 0.14);
+  background: rgba(148, 163, 184, 0.14);
+}
+
+[data-theme='dark'] .hvac-agent-result-metrics > div,
+[data-theme='dark'] .hvac-agent-evidence-stats > div,
+[data-theme='dark'] .hvac-agent-result-actions button {
+  background: #111827;
+}
+
+[data-theme='dark'] .hvac-agent-result-finding strong,
+[data-theme='dark'] .hvac-agent-result-summary p,
+[data-theme='dark'] .hvac-agent-evidence-row strong,
+[data-theme='dark'] .hvac-agent-result-actions button {
+  color: #cbd5e1;
+}
+
+[data-theme='dark'] .hvac-agent-contributor-track {
+  background: #263244;
+}
+
+@media (max-width: 520px) {
+  .hvac-agent-result-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .hvac-agent-evidence-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .hvac-agent-evidence-row strong {
+    grid-column: 2;
+    text-align: left;
+  }
+}

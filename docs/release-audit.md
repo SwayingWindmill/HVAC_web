@@ -25,7 +25,7 @@ Coverage:
 - deep-link refresh, browser back/forward, Drawer and Modal Escape handling, Popconfirm, mobile Popover, BigScreen Escape, and 404 return navigation;
 - energy MTD boundaries, future-period handling, category/device drilldown, current-view export, year-to-month navigation, and week-to-day navigation;
 - energy visual-density limits for the first analytical chart: 650px on desktop, 820px on tablet, and 1000px on mobile;
-- official CopilotKit `CopilotPopup`: native mount/open/close behavior, route-context updates, local self-managed Agent streaming, desktop/mobile geometry, opaque surfaces, and zero horizontal overflow across the popup, messages, composer, Markdown, code, and tables;
+- productized official CopilotKit `CopilotPopup`: branded official toggle and modal header, live attention count, route/object/period-aware welcome copy, suggestions and placeholder, new-session behavior, local self-managed Agent streaming, all three Generative UI result cards, desktop/mobile geometry, opaque light/dark surfaces, and zero horizontal overflow across the popup, messages, cards, composer, Markdown, code, and tables;
 - known third-party development warnings are counted separately and narrowly matched; all other console, network, HTTP, and runtime problems remain release-blocking.
 
 The current matrix contains 42 access checks, 84 theme/viewport checks, and 20 interaction checks: 146 checks in total.

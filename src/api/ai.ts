@@ -46,17 +46,17 @@ export const SUGGESTED_QUESTIONS = [
   '供水温度和回水温度正常吗？',
 ];
 
-interface Snapshot {
+export interface AiTelemetrySnapshot {
   power: number;
   cop: number;
   load: number;
   supply: number;
   ret: number;
-  weakest: { name: string; cop: number };
+  weakest: { id: string; name: string; cop: number };
   count: number;
 }
 
-async function readSnapshot(): Promise<Snapshot> {
+export async function readAiSnapshot(): Promise<AiTelemetrySnapshot> {
   const rows = await Promise.all(MOCK_DEVICES.map((deviceId) => mockGetLatest(deviceId, MOCK_KEYS)));
   const sum = (key: string) => rows.reduce((total, row) => total + (row[key]?.value ?? 0), 0);
   const average = (key: string) => sum(key) / rows.length;
@@ -78,6 +78,7 @@ async function readSnapshot(): Promise<Snapshot> {
     supply: Math.round(average('supplyTemp') * 10) / 10,
     ret: Math.round(average('returnTemp') * 10) / 10,
     weakest: {
+      id: weakestDeviceId,
       name: DEVICE_LABEL[weakestDeviceId] ?? weakestDeviceId,
       cop: Math.round(weakestCop * 100) / 100,
     },
@@ -85,7 +86,7 @@ async function readSnapshot(): Promise<Snapshot> {
   };
 }
 
-function buildAnswer(text: string, snapshot: Snapshot): string {
+function buildAnswer(text: string, snapshot: AiTelemetrySnapshot): string {
   const normalized = text.toLowerCase();
   const asks = (...keywords: string[]) => keywords.some((keyword) => normalized.includes(keyword));
 
@@ -108,8 +109,12 @@ function buildAnswer(text: string, snapshot: Snapshot): string {
   return `我已读取当前实时遥测：园区总功率约 ${snapshot.power} kW，综合 COP 约 ${snapshot.cop}，综合负荷率 ${snapshot.load}%，冷冻水供/回水 ${snapshot.supply}/${snapshot.ret}℃。能效最弱的是 ${snapshot.weakest.name}（COP ${snapshot.weakest.cop}）。你可以继续追问原因、证据、风险或建议动作。注意：我是只读助手，不能控制任何设备。`;
 }
 
+export function buildAiMockAnswerFromSnapshot(text: string, snapshot: AiTelemetrySnapshot): string {
+  return buildAnswer(text, snapshot);
+}
+
 export async function buildAiMockAnswer(text: string): Promise<string> {
-  return buildAnswer(text, await readSnapshot());
+  return buildAnswer(text, await readAiSnapshot());
 }
 
 const sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -142,7 +147,7 @@ const useAiChatStore = create<AiChatState>((set, get) => ({
     }));
 
     try {
-      const answer = buildAnswer(text, await readSnapshot());
+      const answer = buildAnswer(text, await readAiSnapshot());
       const tokens = answer.match(/[\s\S]{1,3}/g) ?? [answer];
       for (const token of tokens) {
         if (currentToken !== streamToken) break;
