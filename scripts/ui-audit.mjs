@@ -405,6 +405,44 @@ try {
     await waitFor(client, `location.pathname === '/assets' && new URLSearchParams(location.search).get('device') === 'b1-z1-u1'`, 'history forward');
     interactionChecks.push('history-back-forward');
 
+    context = 'interaction:energy-period';
+    await spaNavigate(client, '/energy');
+    await waitForRoute(client, ROUTES.find((route) => route.path === '/energy'), true);
+    const targetMonth = await evaluate(client, `(() => {
+      const current = new Date().getMonth() + 1;
+      return current === 1 ? 12 : current - 1;
+    })()`);
+    const targetMonthLabel = `${targetMonth}月`;
+    const energyMonthClicked = await evaluate(client, `(() => {
+      const row = [...document.querySelectorAll('.energy-month-row')].find((element) => (
+        element.querySelector('td')?.textContent.trim() === ${JSON.stringify(targetMonthLabel)}
+      ));
+      if (!row) return false;
+      row.click();
+      return true;
+    })()`);
+    assert(energyMonthClicked, `Energy month row not found: ${targetMonth}`);
+    await waitFor(
+      client,
+      `[...document.querySelectorAll('.energy-month-row.is-selected')].some((row) => row.querySelector('td')?.textContent.trim() === ${JSON.stringify(targetMonthLabel)})`,
+      'energy month selection',
+    );
+    interactionChecks.push('energy-period-selection');
+
+    context = 'interaction:energy-export';
+    await evaluate(client, `(() => {
+      window.__energyAuditDownload = null;
+      HTMLAnchorElement.prototype.click = function energyAuditClick() {
+        window.__energyAuditDownload = { download: this.download, href: this.href };
+      };
+      return true;
+    })()`);
+    await clickText(client, '导出 CSV');
+    const energyDownload = await evaluate(client, `window.__energyAuditDownload`);
+    assert(Boolean(energyDownload?.download?.endsWith('.csv')), 'Energy export did not produce a CSV filename');
+    assert(Boolean(energyDownload?.href?.startsWith('blob:')), 'Energy export did not create a Blob URL');
+    interactionChecks.push('energy-export');
+
     context = 'interaction:modal';
     await spaNavigate(client, '/system?tab=users');
     await waitFor(client, `document.body.innerText.includes('用户权限')`, 'system users tab');
