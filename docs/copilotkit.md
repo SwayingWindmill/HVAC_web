@@ -1,5 +1,7 @@
 # CopilotKit integration
 
+> This document describes the current frontend integration baseline. The target Agent product, runtime, context, tool, approval, audit, and rollout architecture is defined in `docs/ai-agent-product-technical-design.md`.
+
 The frontend supports two AI modes:
 
 1. **Local fallback mode** — used when `VITE_COPILOTKIT_RUNTIME_URL` is empty. The global Ant Design drawer uses the existing mock streaming assistant and remains available on every AppShell page.
