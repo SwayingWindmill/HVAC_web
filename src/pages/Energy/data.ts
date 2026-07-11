@@ -13,12 +13,16 @@ export interface DailyEnergyPoint {
   cop: number;
 }
 
+export type EnergyPeriodStatus = 'actual' | 'mtd' | 'future';
+
 export interface MonthlyEnergyPoint {
   month: number;
   label: string;
   energy: number;
   cost: number;
   cop: number;
+  measuredDays: number;
+  status: EnergyPeriodStatus;
 }
 
 export interface DeviceEnergyRow {
@@ -45,8 +49,18 @@ const round = (value: number, digits = 0) => {
   return Math.round(value * scale) / scale;
 };
 
-function daysInMonth(year: number, month: number) {
+export function getDaysInMonth(year: number, month: number) {
   return new Date(year, month, 0).getDate();
+}
+
+export function getAvailableDayCount(year: number, month: number, referenceDate = new Date()) {
+  const selectedStart = new Date(year, month - 1, 1).getTime();
+  const currentStart = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), 1).getTime();
+  if (selectedStart > currentStart) return 0;
+  if (selectedStart === currentStart) {
+    return Math.min(referenceDate.getDate(), getDaysInMonth(year, month));
+  }
+  return getDaysInMonth(year, month);
 }
 
 function yearEfficiencyFactor(year: number) {
@@ -57,8 +71,9 @@ function dailyBase(year: number, month: number) {
   return 12_200 * MONTH_SEASON[month - 1] * yearEfficiencyFactor(year);
 }
 
-export function createDailyEnergy(year: number, month: number): DailyEnergyPoint[] {
-  const count = daysInMonth(year, month);
+export function createDailyEnergy(year: number, month: number, throughDay = getDaysInMonth(year, month)): DailyEnergyPoint[] {
+  const count = Math.max(0, Math.min(throughDay, getDaysInMonth(year, month)));
+  const monthDays = getDaysInMonth(year, month);
   const base = dailyBase(year, month);
 
   return Array.from({ length: count }, (_, index) => {
@@ -73,7 +88,7 @@ export function createDailyEnergy(year: number, month: number): DailyEnergyPoint
     const chiller = round(total * chillerShare);
     const pump = round(total * pumpShare);
     const ahu = Math.max(0, total - chiller - pump);
-    const cop = round(5.08 + (year - 2024) * 0.045 + Math.sin((month + day / count) * 0.8) * 0.16, 2);
+    const cop = round(5.08 + (year - 2024) * 0.045 + Math.sin((month + day / monthDays) * 0.8) * 0.16, 2);
 
     return {
       day,
@@ -88,12 +103,14 @@ export function createDailyEnergy(year: number, month: number): DailyEnergyPoint
   });
 }
 
-export function createAnnualEnergy(year: number): MonthlyEnergyPoint[] {
+export function createAnnualEnergy(year: number, referenceDate = new Date()): MonthlyEnergyPoint[] {
   return Array.from({ length: 12 }, (_, index) => {
     const month = index + 1;
-    const daily = createDailyEnergy(year, month);
+    const measuredDays = getAvailableDayCount(year, month, referenceDate);
+    const daily = createDailyEnergy(year, month, measuredDays);
     const energy = daily.reduce((sum, item) => sum + item.total, 0);
-    const cop = daily.reduce((sum, item) => sum + item.cop, 0) / Math.max(daily.length, 1);
+    const cop = daily.length ? daily.reduce((sum, item) => sum + item.cop, 0) / daily.length : 0;
+    const isCurrentMonth = year === referenceDate.getFullYear() && month === referenceDate.getMonth() + 1;
 
     return {
       month,
@@ -101,15 +118,24 @@ export function createAnnualEnergy(year: number): MonthlyEnergyPoint[] {
       energy,
       cost: round(energy * ENERGY_TARIFF),
       cop: round(cop, 2),
+      measuredDays,
+      status: measuredDays === 0 ? 'future' : isCurrentMonth ? 'mtd' : 'actual',
     };
   });
 }
 
-export function createDeviceEnergy(monthTotal: number, year: number, month: number): DeviceEnergyRow[] {
-  const entries = Object.entries(DEVICE_META);
+export function createDeviceEnergy(
+  periodTotal: number,
+  year: number,
+  month: number,
+  periodDays = 1,
+  typeFilter: DeviceType | null = null,
+  seedDay = 1,
+): DeviceEnergyRow[] {
+  const entries = Object.entries(DEVICE_META).filter(([, meta]) => !typeFilter || meta.type === typeFilter);
   const weighted = entries.map(([id, meta], index) => {
     const utilization = meta.type === 'chiller' ? 1 : meta.type === 'pump' ? 0.76 : 0.58;
-    const deviceWave = 0.94 + ((index * 17 + month * 7 + year) % 13) / 100;
+    const deviceWave = 0.92 + ((index * 17 + month * 7 + year + seedDay * 5) % 17) / 100;
     return {
       id,
       meta,
@@ -122,10 +148,10 @@ export function createDeviceEnergy(monthTotal: number, year: number, month: numb
   return weighted
     .map(({ id, meta, weight, index }) => {
       const share = totalWeight ? weight / totalWeight : 0;
-      const energy = round(monthTotal * share);
+      const energy = round(periodTotal * share);
       const dailyHours = meta.type === 'chiller' ? 17.2 : meta.type === 'pump' ? 14.8 : 11.6;
-      const runHours = round(daysInMonth(year, month) * dailyHours * (0.91 + (index % 4) * 0.025));
-      const periodChange = round((((index * 11 + month * 3) % 15) - 7) / 2, 1);
+      const runHours = round(periodDays * dailyHours * (0.88 + ((index + seedDay) % 5) * 0.028));
+      const periodChange = round((((index * 11 + month * 3 + seedDay * 7) % 19) - 9) / 2, 1);
 
       return {
         id,
@@ -142,20 +168,12 @@ export function createDeviceEnergy(monthTotal: number, year: number, month: numb
     .sort((a, b) => b.energy - a.energy);
 }
 
-export function getMonthTotal(year: number, month: number) {
-  return createDailyEnergy(year, month).reduce((sum, item) => sum + item.total, 0);
+export function getMonthTotal(year: number, month: number, throughDay?: number) {
+  return createDailyEnergy(year, month, throughDay ?? getDaysInMonth(year, month)).reduce((sum, item) => sum + item.total, 0);
 }
 
 export function getPreviousMonth(year: number, month: number) {
   return month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
-}
-
-export function getSelectedDayIndex(year: number, month: number) {
-  const now = new Date();
-  if (now.getFullYear() === year && now.getMonth() + 1 === month) {
-    return Math.max(0, Math.min(now.getDate() - 1, daysInMonth(year, month) - 1));
-  }
-  return daysInMonth(year, month) - 1;
 }
 
 export function createEnergyCsv(
@@ -164,9 +182,13 @@ export function createEnergyCsv(
   daily: DailyEnergyPoint[],
   devices: DeviceEnergyRow[],
   annual: MonthlyEnergyPoint[],
+  selectedDay?: number,
+  selectedType?: DeviceType | null,
 ) {
   const lines = [
     ['能耗分析导出', `${year}年${month}月`],
+    ['计量截止', daily.length ? `${daily.length}日` : '无已计量日期'],
+    ['钻取范围', selectedDay ? `${month}月${selectedDay}日` : '未选择日期', selectedType ? TYPE_LABEL[selectedType] : '全部设备类别'],
     [],
     ['每日能耗'],
     ['日期', TYPE_LABEL.chiller, TYPE_LABEL.pump, TYPE_LABEL.ahu, '总能耗(kWh)', '电费(元)', 'COP'],
@@ -180,8 +202,8 @@ export function createEnergyCsv(
       item.cop,
     ]),
     [],
-    ['设备累计能耗'],
-    ['设备ID', '设备', '类别', '区域', '运行时间(h)', '累计能耗(kWh)', '单位运行时能耗(kWh/h)', '占比(%)', '环比(%)'],
+    ['选中日设备能耗'],
+    ['设备ID', '设备', '类别', '区域', '运行时间(h)', '累计能耗(kWh)', '单位运行时能耗(kWh/h)', '范围占比(%)', '较前日(%)'],
     ...devices.map((item) => [
       item.id,
       item.name,
@@ -195,8 +217,8 @@ export function createEnergyCsv(
     ]),
     [],
     ['年度月度汇总'],
-    ['月份', '能耗(kWh)', '电费(元)', 'COP'],
-    ...annual.map((item) => [item.label, item.energy, item.cost, item.cop]),
+    ['月份', '统计状态', '计量天数', '能耗(kWh)', '电费(元)', 'COP'],
+    ...annual.map((item) => [item.label, item.status, item.measuredDays, item.energy || '', item.cost || '', item.cop || '']),
   ];
 
   return `\uFEFF${lines.map((row) => row.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n')}`;

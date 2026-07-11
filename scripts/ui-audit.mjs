@@ -405,9 +405,32 @@ try {
     await waitFor(client, `location.pathname === '/assets' && new URLSearchParams(location.search).get('device') === 'b1-z1-u1'`, 'history forward');
     interactionChecks.push('history-back-forward');
 
-    context = 'interaction:energy-period';
+    context = 'interaction:energy-mtd';
     await spaNavigate(client, '/energy');
     await waitForRoute(client, ROUTES.find((route) => route.path === '/energy'), true);
+    await waitFor(client, `new URLSearchParams(location.search).has('year') && new URLSearchParams(location.search).has('month') && new URLSearchParams(location.search).has('day')`, 'energy canonical URL');
+    const energyMtdState = await evaluate(client, `(() => {
+      const now = new Date();
+      const params = new URLSearchParams(location.search);
+      return {
+        year: Number(params.get('year')),
+        month: Number(params.get('month')),
+        day: Number(params.get('day')),
+        currentYear: now.getFullYear(),
+        currentMonth: now.getMonth() + 1,
+        currentDay: now.getDate(),
+        measuredLabel: document.body.innerText.includes(now.getDate() + ' 个计量日'),
+        futureRows: document.querySelectorAll('.energy-month-row.is-future').length,
+      };
+    })()`);
+    assert(energyMtdState.year === energyMtdState.currentYear, 'Energy default year is not current year');
+    assert(energyMtdState.month === energyMtdState.currentMonth, 'Energy default month is not current month');
+    assert(energyMtdState.day === energyMtdState.currentDay, 'Energy current month did not stop at today');
+    assert(energyMtdState.measuredLabel, 'Energy current month measured-day label is incorrect');
+    assert(energyMtdState.futureRows === 12 - energyMtdState.currentMonth, 'Energy future month rows are not disabled');
+    interactionChecks.push('energy-mtd-boundary');
+
+    context = 'interaction:energy-period';
     const targetMonth = await evaluate(client, `(() => {
       const current = new Date().getMonth() + 1;
       return current === 1 ? 12 : current - 1;
@@ -427,7 +450,55 @@ try {
       `[...document.querySelectorAll('.energy-month-row.is-selected')].some((row) => row.querySelector('td')?.textContent.trim() === ${JSON.stringify(targetMonthLabel)})`,
       'energy month selection',
     );
+    const energyPeriodState = await evaluate(client, `(() => {
+      const params = new URLSearchParams(location.search);
+      const year = Number(params.get('year'));
+      const month = Number(params.get('month'));
+      return {
+        month,
+        day: Number(params.get('day')),
+        expectedDay: new Date(year, month, 0).getDate(),
+      };
+    })()`);
+    assert(energyPeriodState.month === targetMonth, 'Energy selected month was not written to URL');
+    assert(energyPeriodState.day === energyPeriodState.expectedDay, 'Energy historical month did not select its last measured day');
     interactionChecks.push('energy-period-selection');
+
+    context = 'interaction:energy-category-drilldown';
+    const energyTypeClicked = await evaluate(client, `(() => {
+      const root = document.querySelector('.energy-table-card');
+      const item = root ? [...root.querySelectorAll('.ant-segmented-item')].find((element) => (
+        element.offsetParent !== null && element.textContent.replace(/\\s+/g, '') === '冷水机组'
+      )) : null;
+      if (!item) return false;
+      item.click();
+      return true;
+    })()`);
+    assert(energyTypeClicked, 'Energy category drilldown control was not found');
+    await waitFor(client, `new URLSearchParams(location.search).get('type') === 'chiller'`, 'energy category URL');
+    const energyFilteredDevices = await evaluate(client, `[...document.querySelectorAll('.energy-device-link')].map((element) => element.dataset.opsDetailTrigger)`);
+    assert(energyFilteredDevices.length === 2, `Energy chiller drilldown expected 2 devices, got ${energyFilteredDevices.length}`);
+    assert(energyFilteredDevices.every((id) => ['b1-z1-u1', 'b1-z1-u2'].includes(id)), 'Energy category drilldown returned non-chiller devices');
+    interactionChecks.push('energy-category-drilldown');
+
+    context = 'interaction:energy-device-detail';
+    const energyDeviceId = energyFilteredDevices[0];
+    const energyDeviceOpened = await evaluate(client, `(() => {
+      const trigger = [...document.querySelectorAll('.energy-device-link')].find((element) => (
+        element.offsetParent !== null && element.dataset.opsDetailTrigger === ${JSON.stringify(energyDeviceId)}
+      ));
+      if (!trigger) return false;
+      trigger.click();
+      return true;
+    })()`);
+    assert(energyDeviceOpened, 'Energy device detail trigger was not found');
+    await waitFor(client, `new URLSearchParams(location.search).get('device') === ${JSON.stringify(energyDeviceId)}`, 'energy device URL');
+    await waitFor(client, `Boolean(document.querySelector('.ops-detail-drawer.ant-drawer-open'))`, 'energy device drawer');
+    const openedEnergyDeviceId = await evaluate(client, `new URLSearchParams(location.search).get('device')`);
+    await pressEscape(client);
+    await waitFor(client, `!new URLSearchParams(location.search).has('device') && !document.querySelector('.ops-detail-drawer.ant-drawer-open')`, 'energy device drawer close');
+    await waitFor(client, `document.activeElement?.dataset?.opsDetailTrigger === ${JSON.stringify(openedEnergyDeviceId)}`, 'energy device focus restore');
+    interactionChecks.push('energy-device-detail');
 
     context = 'interaction:energy-export';
     await evaluate(client, `(() => {

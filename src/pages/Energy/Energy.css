@@ -81,6 +81,15 @@
   gap: 2px;
 }
 
+.energy-device-link.ant-btn-link {
+  align-self: flex-start;
+  height: auto;
+  padding: 0;
+  font-weight: 650;
+  line-height: 1.45;
+  text-align: left;
+}
+
 .energy-device-meta {
   color: var(--ops-text-secondary);
   font-size: 12px;
@@ -113,6 +122,15 @@
 
 .energy-month-row.is-selected > td {
   background: color-mix(in srgb, var(--ops-accent) 8%, transparent) !important;
+}
+
+.energy-month-row.is-future {
+  cursor: not-allowed;
+  opacity: 0.46;
+}
+
+.energy-table-card .ant-card-extra {
+  max-width: 54%;
 }
 
 .energy-table-note {
@@ -157,14 +175,36 @@
   .energy-context-actions {
     width: 100%;
     margin-left: 0;
+    flex-wrap: wrap;
   }
 
   .energy-context-actions .ant-select {
-    flex: 1;
+    flex: 1 1 calc(33.333% - 6px);
+    min-width: 88px;
   }
 
   .energy-context-actions .ant-btn {
-    flex-shrink: 0;
+    flex: 1 1 100%;
+  }
+
+  .energy-table-card .ant-card-head {
+    align-items: flex-start;
+  }
+
+  .energy-table-card .ant-card-head-wrapper {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .energy-table-card .ant-card-extra {
+    width: 100%;
+    max-width: none;
+    margin-inline-start: 0;
+  }
+
+  .energy-table-card .ant-card-extra .ant-select {
+    width: 100%;
   }
 
   .energy-table-note {
