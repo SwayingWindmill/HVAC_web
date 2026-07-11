@@ -332,6 +332,34 @@ export default function EnergyDay() {
         ]}
       />
 
+      <Row gutter={[16, 16]} className="ops-chart-row">
+        <Col xs={24} xl={15}>
+          <OperationsChartCard
+            title="24 小时功率与累计能耗"
+            description="功率使用左轴 kW，累计电量使用右轴 kWh；背景标识峰谷电价时段"
+            meta={`${analytics.measuredHour + 1} 小时已计量`}
+            extra={<span className="ops-chart-status">峰值 {numberZh(analytics.peakPower)} kW</span>}
+            height={330}
+            ariaLabel="日度24小时总功率与累计能耗双轴趋势"
+            footer={<><span>左轴：瞬时功率</span><span>右轴：累计电量</span></>}
+          >
+            <ReactECharts option={loadOption} style={{ height: '100%' }} notMerge />
+          </OperationsChartCard>
+        </Col>
+        <Col xs={24} xl={9}>
+          <OperationsChartCard
+            title="设备类别小时功率"
+            description="冷水机组、冷冻泵和空调机组的功率堆叠，定位尖峰来源"
+            meta="设备类别"
+            height={330}
+            ariaLabel="设备类别逐小时功率堆叠图"
+            footer={<span>单位：kW</span>}
+          >
+            <ReactECharts option={systemOption} style={{ height: '100%' }} notMerge />
+          </OperationsChartCard>
+        </Col>
+      </Row>
+
       <OperationsInsightBand
         title="日度运行结论"
         icon={<AlertOutlined />}
@@ -362,34 +390,6 @@ export default function EnergyDay() {
           },
         ]}
       />
-
-      <Row gutter={[16, 16]} className="ops-chart-row">
-        <Col xs={24} xl={15}>
-          <OperationsChartCard
-            title="24 小时功率与累计能耗"
-            description="功率使用左轴 kW，累计电量使用右轴 kWh；背景标识峰谷电价时段"
-            meta={`${analytics.measuredHour + 1} 小时已计量`}
-            extra={<span className="ops-chart-status">峰值 {numberZh(analytics.peakPower)} kW</span>}
-            height={330}
-            ariaLabel="日度24小时总功率与累计能耗双轴趋势"
-            footer={<><span>左轴：瞬时功率</span><span>右轴：累计电量</span></>}
-          >
-            <ReactECharts option={loadOption} style={{ height: '100%' }} notMerge />
-          </OperationsChartCard>
-        </Col>
-        <Col xs={24} xl={9}>
-          <OperationsChartCard
-            title="设备类别小时功率"
-            description="冷水机组、冷冻泵和空调机组的功率堆叠，定位尖峰来源"
-            meta="设备类别"
-            height={330}
-            ariaLabel="设备类别逐小时功率堆叠图"
-            footer={<span>单位：kW</span>}
-          >
-            <ReactECharts option={systemOption} style={{ height: '100%' }} notMerge />
-          </OperationsChartCard>
-        </Col>
-      </Row>
 
       <Row gutter={[16, 16]} className="ops-chart-row">
         <Col xs={24} lg={10}>

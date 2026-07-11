@@ -578,35 +578,6 @@ export default function EnergyMonth() {
         ]}
       />
 
-      <OperationsInsightBand
-        title="能耗诊断"
-        icon={<AlertOutlined />}
-        items={[
-          {
-            key: 'peak-day',
-            text: `本月峰值出现在 ${peakEnergyDay?.dateLabel ?? '-'}，当日能耗 ${numberZh(peakEnergyDay?.total ?? 0)} kWh。`,
-            tone: 'warning',
-          },
-          {
-            key: 'dominant-system',
-            text: `${TYPE_LABEL[dominantType]}贡献本月最多能耗，占比 ${monthTotal ? Math.round((typeTotals[dominantType] / monthTotal) * 100) : 0}%。`,
-            tone: 'info',
-          },
-          {
-            key: 'top-device',
-            text: topDevice
-              ? `${drilldownLabel}${selectedType ? ` · ${TYPE_LABEL[selectedType]}` : ''}中，${topDevice.name}能耗最高，占当前范围 ${topDevice.share}%，较前日 ${percentText(topDevice.periodChange, { signed: true, digits: 1 })}。`
-              : '当前钻取范围暂无设备能耗数据。',
-            tone: topDevice && topDevice.periodChange > 3 ? 'warning' : 'positive',
-          },
-          {
-            key: 'live-load',
-            text: `当前实时总功率 ${numberZh(Math.round(totalPower))} kW，24 小时峰值 ${numberZh(peakLoad.value)} kW。`,
-            tone: totalPower > averageLoad * 1.15 ? 'warning' : 'positive',
-          },
-        ]}
-      />
-
       <Row gutter={[16, 16]} className="ops-chart-row">
         <Col xs={24} lg={15}>
           <OperationsChartCard
@@ -638,6 +609,35 @@ export default function EnergyMonth() {
           </OperationsChartCard>
         </Col>
       </Row>
+
+      <OperationsInsightBand
+        title="能耗诊断"
+        icon={<AlertOutlined />}
+        items={[
+          {
+            key: 'peak-day',
+            text: `本月峰值出现在 ${peakEnergyDay?.dateLabel ?? '-'}，当日能耗 ${numberZh(peakEnergyDay?.total ?? 0)} kWh。`,
+            tone: 'warning',
+          },
+          {
+            key: 'dominant-system',
+            text: `${TYPE_LABEL[dominantType]}贡献本月最多能耗，占比 ${monthTotal ? Math.round((typeTotals[dominantType] / monthTotal) * 100) : 0}%。`,
+            tone: 'info',
+          },
+          {
+            key: 'top-device',
+            text: topDevice
+              ? `${drilldownLabel}${selectedType ? ` · ${TYPE_LABEL[selectedType]}` : ''}中，${topDevice.name}能耗最高，占当前范围 ${topDevice.share}%，较前日 ${percentText(topDevice.periodChange, { signed: true, digits: 1 })}。`
+              : '当前钻取范围暂无设备能耗数据。',
+            tone: topDevice && topDevice.periodChange > 3 ? 'warning' : 'positive',
+          },
+          {
+            key: 'live-load',
+            text: `当前实时总功率 ${numberZh(Math.round(totalPower))} kW，24 小时峰值 ${numberZh(peakLoad.value)} kW。`,
+            tone: totalPower > averageLoad * 1.15 ? 'warning' : 'positive',
+          },
+        ]}
+      />
 
       <Row gutter={[16, 16]} className="ops-chart-row">
         <Col xs={24} lg={12}>

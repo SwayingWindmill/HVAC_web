@@ -282,32 +282,6 @@ export default function EnergyWeek() {
         ]}
       />
 
-      <OperationsInsightBand
-        title="周度运行结论"
-        icon={<AlertOutlined />}
-        items={[
-          {
-            key: 'off-hours',
-            text: riskDay
-              ? `${riskDay.weekday}非营业时段能耗最高，为 ${numberZh(riskDay.offHoursEnergy)} kWh，建议核查夜间基荷和提前启动策略。`
-              : '当前周暂无已计量日期。',
-            tone: analytics.offHoursRate > 15 ? 'warning' : 'positive',
-          },
-          {
-            key: 'schedule',
-            text: lateDay
-              ? `${lateDay.weekday}停机时间最晚（${formatClock(lateDay.stopHour)}），日程符合度 ${lateDay.compliance}%。`
-              : '当前周暂无日程数据。',
-            tone: lateDay && lateDay.compliance < 85 ? 'warning' : 'info',
-          },
-          {
-            key: 'comparison',
-            text: `本周累计较上周同期 ${percentText(analytics.change, { signed: true, digits: 1 })}，点击每日能耗柱可进入对应日度处置页。`,
-            tone: analytics.change <= 0 ? 'positive' : 'warning',
-          },
-        ]}
-      />
-
       <Row gutter={[16, 16]} className="ops-chart-row">
         <Col xs={24} lg={11}>
           <OperationsChartCard
@@ -335,6 +309,32 @@ export default function EnergyWeek() {
           </OperationsChartCard>
         </Col>
       </Row>
+
+      <OperationsInsightBand
+        title="周度运行结论"
+        icon={<AlertOutlined />}
+        items={[
+          {
+            key: 'off-hours',
+            text: riskDay
+              ? `${riskDay.weekday}非营业时段能耗最高，为 ${numberZh(riskDay.offHoursEnergy)} kWh，建议核查夜间基荷和提前启动策略。`
+              : '当前周暂无已计量日期。',
+            tone: analytics.offHoursRate > 15 ? 'warning' : 'positive',
+          },
+          {
+            key: 'schedule',
+            text: lateDay
+              ? `${lateDay.weekday}停机时间最晚（${formatClock(lateDay.stopHour)}），日程符合度 ${lateDay.compliance}%。`
+              : '当前周暂无日程数据。',
+            tone: lateDay && lateDay.compliance < 85 ? 'warning' : 'info',
+          },
+          {
+            key: 'comparison',
+            text: `本周累计较上周同期 ${percentText(analytics.change, { signed: true, digits: 1 })}，点击每日能耗柱可进入对应日度处置页。`,
+            tone: analytics.change <= 0 ? 'positive' : 'warning',
+          },
+        ]}
+      />
 
       <Row gutter={[16, 16]} className="ops-chart-row">
         <Col xs={24} lg={10}>

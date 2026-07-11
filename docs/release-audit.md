@@ -23,7 +23,8 @@ Coverage:
 - page-level horizontal overflow, blank states, visible loading states, and escaped content;
 - console errors, uncaught exceptions, failed application resources, and HTTP 4xx/5xx responses;
 - deep-link refresh, browser back/forward, Drawer and Modal Escape handling, Popconfirm, mobile Popover, BigScreen Escape, and 404 return navigation;
-- energy MTD boundaries, future-period handling, category/device drilldown, current-view export, year-to-month navigation, and week-to-day navigation.
+- energy MTD boundaries, future-period handling, category/device drilldown, current-view export, year-to-month navigation, and week-to-day navigation;
+- energy visual-density limits for the first analytical chart: 650px on desktop, 820px on tablet, and 1000px on mobile.
 
 The current matrix contains 42 access checks, 84 theme/viewport checks, and 15 interaction checks: 141 checks in total.
 

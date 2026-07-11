@@ -276,6 +276,7 @@ async function inspectPage(client, route, viewport, theme) {
       escaped,
       contentWidth: contentRect.width,
       viewportWidth: window.innerWidth,
+      firstChartTop: document.querySelector('.ops-chart-card')?.getBoundingClientRect().top ?? null,
       datasetTheme: root.dataset.theme,
     };
   })()`);
@@ -287,6 +288,13 @@ async function inspectPage(client, route, viewport, theme) {
   assert(result.contentWidth > 0, `${route.path} has zero-width content at ${viewport.name}/${theme}`);
   assert(!result.rootOverflow, `${route.path} root overflow at ${viewport.name}/${theme}`);
   assert(result.escaped.length === 0, `${route.path} escaped viewport at ${viewport.name}/${theme}: ${JSON.stringify(result.escaped)}`);
+  if (route.path.startsWith('/energy/')) {
+    const maximumFirstChartTop = viewport.name === 'mobile' ? 1000 : viewport.name === 'tablet' ? 820 : 650;
+    assert(
+      typeof result.firstChartTop === 'number' && result.firstChartTop <= maximumFirstChartTop,
+      `${route.path} pushes primary evidence below the visual-density limit at ${viewport.name}/${theme}: ${result.firstChartTop}px > ${maximumFirstChartTop}px`,
+    );
+  }
   assert(result.datasetTheme === theme, `${route.path} theme mismatch: expected ${theme}, got ${result.datasetTheme}`);
   return result;
 }

@@ -240,30 +240,6 @@ export default function EnergyYear() {
         ]}
       />
 
-      <OperationsInsightBand
-        title="年度经营结论"
-        icon={<AlertOutlined />}
-        items={[
-          {
-            key: 'target',
-            text: overTarget > 0
-              ? `当前累计能耗高于同期目标 ${numberZh(overTarget)} kWh，目标完成率 ${analytics.targetRate.toFixed(1)}%。`
-              : `当前累计能耗低于同期目标 ${numberZh(Math.abs(overTarget))} kWh，年度目标保持可控。`,
-            tone: overTarget > 0 ? 'warning' : 'positive',
-          },
-          {
-            key: 'system',
-            text: `${bestSystem.label}同比变化 ${percentText(bestSystem.change, { signed: true, digits: 1 })}，是当前改善最明显的设备类别。`,
-            tone: bestSystem.change <= 0 ? 'positive' : 'warning',
-          },
-          {
-            key: 'building',
-            text: `${riskBuilding.name}同比变化 ${percentText(riskBuilding.change, { signed: true, digits: 1 })}，建议进入月度页定位异常月份。`,
-            tone: riskBuilding.change > 0 ? 'warning' : 'info',
-          },
-        ]}
-      />
-
       <Row gutter={[16, 16]} className="ops-chart-row">
         <Col xs={24} xl={16}>
           <OperationsChartCard
@@ -304,6 +280,30 @@ export default function EnergyYear() {
           </Card>
         </Col>
       </Row>
+
+      <OperationsInsightBand
+        title="年度经营结论"
+        icon={<AlertOutlined />}
+        items={[
+          {
+            key: 'target',
+            text: overTarget > 0
+              ? `当前累计能耗高于同期目标 ${numberZh(overTarget)} kWh，目标完成率 ${analytics.targetRate.toFixed(1)}%。`
+              : `当前累计能耗低于同期目标 ${numberZh(Math.abs(overTarget))} kWh，年度目标保持可控。`,
+            tone: overTarget > 0 ? 'warning' : 'positive',
+          },
+          {
+            key: 'system',
+            text: `${bestSystem.label}同比变化 ${percentText(bestSystem.change, { signed: true, digits: 1 })}，是当前改善最明显的设备类别。`,
+            tone: bestSystem.change <= 0 ? 'positive' : 'warning',
+          },
+          {
+            key: 'building',
+            text: `${riskBuilding.name}同比变化 ${percentText(riskBuilding.change, { signed: true, digits: 1 })}，建议进入月度页定位异常月份。`,
+            tone: riskBuilding.change > 0 ? 'warning' : 'info',
+          },
+        ]}
+      />
 
       <Row gutter={[16, 16]} className="ops-chart-row">
         <Col xs={24} lg={10}>

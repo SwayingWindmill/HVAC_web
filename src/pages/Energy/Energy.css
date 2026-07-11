@@ -504,3 +504,261 @@
     max-height: none;
   }
 }
+
+/* Energy analytics uses a denser hierarchy than operational workspaces so evidence enters the first viewport. */
+.energy-system-root {
+  gap: 12px;
+}
+
+.energy-system-header {
+  padding: 16px 18px;
+  border-radius: 16px;
+}
+
+.energy-system-eyebrow {
+  margin-bottom: 5px;
+}
+
+.energy-system-title-row {
+  align-items: center;
+  gap: 18px;
+}
+
+.energy-system-title-row h2.ant-typography {
+  margin-bottom: 4px;
+  font-size: clamp(24px, 2.4vw, 30px);
+}
+
+.energy-system-title-row p.ant-typography {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.energy-system-toolbar .ant-card-body {
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.energy-system-context {
+  gap: 12px;
+}
+
+.energy-system-context-item {
+  gap: 8px;
+  min-width: 132px;
+}
+
+.energy-system-context-icon {
+  width: 28px;
+  height: 28px;
+}
+
+.energy-system-context-item strong {
+  font-size: 12px;
+}
+
+.energy-system-controls .ant-select {
+  min-width: 98px;
+}
+
+.energy-system-root .ops-page {
+  gap: 14px;
+}
+
+.energy-system-root .ops-page-header {
+  min-height: 62px;
+  gap: 16px;
+  padding: 0 2px;
+}
+
+.energy-system-root .ops-page-eyebrow {
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.energy-system-root .ops-page-title.ant-typography {
+  font-size: clamp(22px, 1.8vw, 27px);
+}
+
+.energy-system-root .ops-page-subtitle.ant-typography {
+  margin-top: 5px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.energy-system-root .ops-page-content {
+  gap: 14px;
+}
+
+.energy-system-root .ops-metric {
+  min-height: 98px;
+  padding: 15px 18px 14px;
+}
+
+.energy-system-root .ops-metric-value {
+  margin-top: 7px;
+}
+
+.energy-system-root .ops-metric-value strong {
+  font-size: clamp(22px, 1.8vw, 27px);
+}
+
+.energy-system-root .ops-metric-detail {
+  margin-top: 6px;
+}
+
+@media (max-width: 767px) {
+  .energy-system-root {
+    gap: 10px;
+  }
+
+  .energy-system-header {
+    padding: 12px 14px;
+    border-radius: 14px;
+  }
+
+  .energy-system-eyebrow {
+    margin-bottom: 3px;
+    font-size: 11px;
+  }
+
+  .energy-system-title-row {
+    gap: 9px;
+  }
+
+  .energy-system-title-row h2.ant-typography {
+    font-size: 23px;
+  }
+
+  .energy-system-title-row p.ant-typography {
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: 12px;
+    line-height: 1.4;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .energy-system-toolbar .ant-card-body {
+    gap: 9px;
+    padding: 10px 12px;
+  }
+
+  .energy-system-context {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 10px;
+  }
+
+  .energy-system-context-item:nth-child(3) {
+    display: none;
+  }
+
+  .energy-system-context-icon {
+    display: none;
+  }
+
+  .energy-system-controls {
+    gap: 6px;
+  }
+
+  .energy-system-root .ops-page {
+    gap: 10px;
+  }
+
+  .energy-system-root .ops-page-header {
+    min-height: 0;
+    gap: 10px;
+  }
+
+  .energy-system-root .ops-page-title.ant-typography {
+    font-size: 22px;
+  }
+
+  .energy-system-root .ops-page-subtitle.ant-typography {
+    display: -webkit-box;
+    overflow: hidden;
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.4;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .energy-system-root .ops-page-actions {
+    max-width: 42%;
+  }
+
+  .energy-system-root .ops-page-content {
+    gap: 10px;
+  }
+
+  .energy-system-root .ops-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .energy-system-root .ops-metric,
+  .energy-system-root .ops-metric:nth-child(2n) {
+    min-height: 92px;
+    padding: 12px 13px 11px;
+    border-right: 1px solid var(--ops-border);
+  }
+
+  .energy-system-root .ops-metric:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .energy-system-root .ops-metric:nth-child(-n + 2) {
+    border-top: 0;
+  }
+
+  .energy-system-root .ops-metric:nth-child(n + 3) {
+    border-top: 1px solid var(--ops-border);
+  }
+
+  .energy-system-root .ops-metric-value {
+    margin-top: 6px;
+  }
+
+  .energy-system-root .ops-metric-value strong {
+    font-size: 21px;
+  }
+
+  .energy-system-root .ops-metric-value > span,
+  .energy-system-root .ops-metric-label {
+    font-size: 11px;
+  }
+
+  .energy-system-root .ops-metric-detail {
+    display: -webkit-box;
+    overflow: hidden;
+    margin-top: 5px;
+    font-size: 10px;
+    line-height: 1.35;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .energy-system-root .ops-metric-icon {
+    font-size: 14px;
+  }
+
+  .energy-month-drilldown-bar {
+    gap: 9px;
+    padding: 10px 12px;
+  }
+
+  .energy-month-drilldown-bar .energy-context-fields {
+    gap: 8px;
+  }
+
+  .energy-month-drilldown-bar .energy-context-field:first-child,
+  .energy-month-drilldown-bar .energy-context-field:last-child {
+    display: none;
+  }
+
+  .energy-month-drilldown-bar .energy-context-actions .ant-select,
+  .energy-month-drilldown-bar .energy-context-actions .ant-btn {
+    flex: 1 1 calc(50% - 4px);
+  }
+}

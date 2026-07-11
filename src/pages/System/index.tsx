@@ -808,6 +808,7 @@ export default function System() {
           </OperationsActionFooter>
         }
         destroyOnHidden
+        forceRender
       >
         <div className="system-modal-note">
           <SafetyCertificateOutlined />
@@ -855,6 +856,7 @@ export default function System() {
           </OperationsActionFooter>
         }
         destroyOnHidden
+        forceRender
       >
         <div className="system-modal-note">
           <ClusterOutlined />
