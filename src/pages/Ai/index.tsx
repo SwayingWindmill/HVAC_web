@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
 import { Button, Card, Col, Progress, Row, Space, Tag, Typography } from 'antd';
+import { CopilotChat, useAgent, useCopilotChatConfiguration } from '@copilotkit/react-core/v2';
 import {
   AlertOutlined,
   ApiOutlined,
@@ -19,15 +19,13 @@ import {
   OperationsMetrics,
   OperationsPanelHeading,
 } from '@/components/OperationsUI';
-import AssistantConversation from '@/ai/AssistantConversation';
 import CopilotContextBridge from '@/ai/CopilotContextBridge';
+import {
+  HvacCopilotDisclaimer,
+  HvacCopilotWelcomeScreen,
+} from '@/ai/HvacCopilotUi';
 import { AI_ASSISTANT_NAME, COPILOTKIT_RUNTIME_CONFIGURED } from '@/ai/config';
 import { useAiApplicationContext } from '@/ai/context';
-import {
-  useCopilotAssistantSession,
-  type AssistantSession,
-} from '@/ai/session';
-import { SUGGESTED_QUESTIONS } from '@/api/ai';
 import { useTelemetryLive } from '@/api';
 import { MOCK_DEVICES } from '@/api/mock';
 import { ROLE_LABEL, useUi } from '@/store/ui';
@@ -35,14 +33,12 @@ import './Ai.css';
 
 const { Text } = Typography;
 
-type AiWorkspaceProps = {
-  session: AssistantSession;
-};
-
-function AiWorkspace({ session }: AiWorkspaceProps) {
+function AiWorkspace() {
   const navigate = useNavigate();
   const context = useAiApplicationContext();
   const { role, buildingId, demoMode } = useUi();
+  const { agent } = useAgent({ throttleMs: 40 });
+  const configuration = useCopilotChatConfiguration();
   const live = useTelemetryLive(MOCK_DEVICES, ['power', 'cop', 'load', 'supplyTemp', 'returnTemp']);
   const value = (deviceId: string, key: string) => live.get(deviceId, key) ?? 0;
   const totalPower = Math.round(MOCK_DEVICES.reduce((sum, deviceId) => sum + value(deviceId, 'power'), 0));
@@ -51,11 +47,6 @@ function AiWorkspace({ session }: AiWorkspaceProps) {
   const supply = Math.round((MOCK_DEVICES.reduce((sum, deviceId) => sum + value(deviceId, 'supplyTemp'), 0) / MOCK_DEVICES.length) * 10) / 10;
   const returnTemperature = Math.round((MOCK_DEVICES.reduce((sum, deviceId) => sum + value(deviceId, 'returnTemp'), 0) / MOCK_DEVICES.length) * 10) / 10;
   const temperatureDelta = Math.round((returnTemperature - supply) * 10) / 10;
-
-  const prompts = useMemo(
-    () => Array.from(new Set([...context.suggestedPrompts, ...SUGGESTED_QUESTIONS])).slice(0, 4),
-    [context.suggestedPrompts],
-  );
 
   const sources = [
     { label: '实时遥测', value: `${MOCK_DEVICES.length} 台设备`, detail: `${totalPower} kW · COP ${averageCop}` },
@@ -67,13 +58,13 @@ function AiWorkspace({ session }: AiWorkspaceProps) {
   return (
     <PageScaffold
       title={AI_ASSISTANT_NAME}
-      subtitle="全局抽屉与完整工作台共用同一段会话。助手自动读取当前建筑、实时遥测、FDD、工单和优化上下文，不需要先选择场景。"
+      subtitle="主工作区使用 CopilotKit 官方 CopilotChat，与全局 Popup 共用同一个 Agent、线程、业务上下文和结构化结果组件。"
       eyebrow="智能分析与协作"
       extra={
         <Space size={8} wrap>
           <Tag icon={<LockOutlined />}>只读分析</Tag>
           <Tag color={COPILOTKIT_RUNTIME_CONFIGURED ? 'green' : 'gold'} icon={<ApiOutlined />}>
-            {COPILOTKIT_RUNTIME_CONFIGURED ? session.modeLabel : 'Runtime 待配置'}
+            {COPILOTKIT_RUNTIME_CONFIGURED ? 'CopilotKit Runtime' : '本地 Agent'}
           </Tag>
           <Tag>{ROLE_LABEL[role]}</Tag>
         </Space>
@@ -96,19 +87,48 @@ function AiWorkspace({ session }: AiWorkspaceProps) {
             className="ai-conversation-shell"
             title={
               <OperationsPanelHeading
-                title="连续对话"
+                title="AI 运维工作台"
                 icon={<RobotOutlined />}
-                meta={session.messages.length ? `${session.messages.length} 条消息` : '等待提问'}
+                meta={agent.messages.length ? `${agent.messages.length} 条消息` : '等待提问'}
               />
             }
             extra={<span className="ops-chart-status is-positive">与全局助手共用会话</span>}
           >
-            <AssistantConversation
-              session={session}
-              prompts={prompts}
-              variant="workspace"
-              emptyDescription="直接提问即可。助手会自动结合当前建筑的遥测、诊断、工单和优化数据进行只读分析。"
-            />
+            <div className="ai-chat-toolbar">
+              <span title={context.scopeLabel}>当前范围：{context.scopeLabel}</span>
+              <Button size="small" onClick={() => configuration?.startNewThread()}>
+                新建会话
+              </Button>
+            </div>
+            <div className="ai-copilot-chat-shell">
+              <CopilotChat
+                className="ai-copilot-chat"
+                welcomeScreen={HvacCopilotWelcomeScreen}
+                input={{
+                  disclaimer: HvacCopilotDisclaimer,
+                  showDisclaimer: true,
+                }}
+                labels={{
+                  welcomeMessageText: context.welcomeTitle,
+                  chatInputPlaceholder: context.inputPlaceholder,
+                  chatDisclaimerText: 'AI 结论基于当前页面与已接入数据；设备控制和业务写入必须人工确认。',
+                  chatInputToolbarStartTranscribeButtonLabel: '开始语音输入',
+                  chatInputToolbarCancelTranscribeButtonLabel: '取消语音输入',
+                  chatInputToolbarFinishTranscribeButtonLabel: '完成语音输入',
+                  chatInputToolbarAddButtonLabel: '添加内容',
+                  chatInputToolbarToolsButtonLabel: '可用工具',
+                  assistantMessageToolbarCopyCodeLabel: '复制代码',
+                  assistantMessageToolbarCopyCodeCopiedLabel: '已复制',
+                  assistantMessageToolbarCopyMessageLabel: '复制回答',
+                  assistantMessageToolbarThumbsUpLabel: '有帮助',
+                  assistantMessageToolbarThumbsDownLabel: '需要改进',
+                  assistantMessageToolbarReadAloudLabel: '朗读回答',
+                  assistantMessageToolbarRegenerateLabel: '重新生成',
+                  userMessageToolbarCopyMessageLabel: '复制问题',
+                  userMessageToolbarEditMessageLabel: '编辑问题',
+                }}
+              />
+            </div>
           </Card>
         </Col>
 
@@ -183,11 +203,10 @@ function AiWorkspace({ session }: AiWorkspaceProps) {
 }
 
 function CopilotAiWorkspace() {
-  const session = useCopilotAssistantSession();
   return (
     <>
       <CopilotContextBridge />
-      <AiWorkspace session={session} />
+      <AiWorkspace />
     </>
   );
 }

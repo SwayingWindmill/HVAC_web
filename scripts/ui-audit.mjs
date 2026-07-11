@@ -742,6 +742,111 @@ try {
     await setViewport(client, VIEWPORTS[0]);
     interactionChecks.push('ai-mobile-popup');
 
+    context = 'interaction:ai-copilot-chat-workspace';
+    await hardNavigate(client, '/ai');
+    await waitForRoute(client, ROUTES.find((route) => route.path === '/ai'), true);
+    await waitFor(client, `Boolean(document.querySelector('.ai-copilot-chat .copilotKitChat, .ai-copilot-chat.copilotKitChat'))`, 'CopilotChat workspace mount');
+    const aiWorkspaceInitialState = await evaluate(client, `(() => {
+      const workspace = document.querySelector('.ai-copilot-chat-shell');
+      const textarea = workspace?.querySelector('textarea');
+      return {
+        workspace: Boolean(workspace),
+        textarea: Boolean(textarea),
+        popupLauncher: Boolean(document.querySelector('.hvac-copilot-toggle')),
+        popup: Boolean(document.querySelector('.copilotKitPopup')),
+      };
+    })()`);
+    assert(
+      aiWorkspaceInitialState.workspace
+        && aiWorkspaceInitialState.textarea
+        && !aiWorkspaceInitialState.popupLauncher
+        && !aiWorkspaceInitialState.popup,
+      `CopilotChat workspace shell is invalid: ${JSON.stringify(aiWorkspaceInitialState)}`,
+    );
+    const aiWorkspaceNewThread = await evaluate(client, `(() => {
+      const button = [...document.querySelectorAll('.ai-chat-toolbar button')].find((element) => element.textContent.includes('新建会话'));
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`);
+    assert(aiWorkspaceNewThread, 'CopilotChat workspace new-thread action was unavailable');
+    await waitFor(client, `Boolean(document.querySelector('.ai-copilot-chat .hvac-copilot-welcome')) && !document.querySelector('.ai-copilot-chat .hvac-agent-result-card')`, 'CopilotChat workspace welcome state');
+    const aiWorkspaceQuestionEntered = await evaluate(client, `(() => {
+      const textarea = document.querySelector('.ai-copilot-chat textarea');
+      if (!textarea) return false;
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+      setter?.call(textarea, '为什么当前能耗升高？');
+      textarea.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: '为什么当前能耗升高？' }));
+      textarea.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    })()`);
+    assert(aiWorkspaceQuestionEntered, 'CopilotChat workspace input was unavailable');
+    await pause(100);
+    const aiWorkspaceSendClicked = await evaluate(client, `(() => {
+      const input = document.querySelector('.ai-copilot-chat .copilotKitInput');
+      const buttons = [...(input?.querySelectorAll('button') ?? [])].filter((element) => element.offsetParent !== null && !element.disabled);
+      const send = buttons.at(-1);
+      if (!send) return false;
+      send.click();
+      return true;
+    })()`);
+    assert(aiWorkspaceSendClicked, 'CopilotChat workspace send button was unavailable');
+    await waitFor(client, `(() => {
+      const workspace = document.querySelector('.ai-copilot-chat');
+      const card = workspace?.querySelector('.hvac-agent-result-card');
+      return workspace?.textContent.includes('总功率约')
+        && card?.textContent.includes('能耗异常调查')
+        && card?.textContent.includes('额外能耗');
+    })()`, 'CopilotChat workspace Agent answer');
+    const aiWorkspaceOverflow = await evaluate(client, `(() => {
+      const workspace = document.querySelector('.ai-copilot-chat-shell');
+      const offenders = [...(workspace?.querySelectorAll('*') ?? [])].filter((element) => {
+        if (element.offsetParent === null) return false;
+        const overflowX = getComputedStyle(element).overflowX;
+        return element.scrollWidth > element.clientWidth + 1 && overflowX !== 'hidden' && overflowX !== 'clip';
+      });
+      return {
+        body: document.body.scrollWidth > window.innerWidth + 2,
+        shell: workspace ? workspace.scrollWidth > workspace.clientWidth + 1 : true,
+        offenders: offenders.length,
+      };
+    })()`);
+    assert(
+      !aiWorkspaceOverflow.body && !aiWorkspaceOverflow.shell && aiWorkspaceOverflow.offenders === 0,
+      `CopilotChat workspace has horizontal overflow: ${JSON.stringify(aiWorkspaceOverflow)}`,
+    );
+    await setViewport(client, VIEWPORTS[2]);
+    await hardNavigate(client, '/ai');
+    await waitForRoute(client, ROUTES.find((route) => route.path === '/ai'), true);
+    await waitFor(client, `Boolean(document.querySelector('.ai-copilot-chat-shell textarea'))`, 'CopilotChat mobile workspace');
+    const aiWorkspaceMobileState = await evaluate(client, `(() => {
+      const shell = document.querySelector('.ai-copilot-chat-shell');
+      const rect = shell?.getBoundingClientRect();
+      const offenders = [...(shell?.querySelectorAll('*') ?? [])].filter((element) => {
+        if (element.offsetParent === null) return false;
+        const overflowX = getComputedStyle(element).overflowX;
+        return element.scrollWidth > element.clientWidth + 1 && overflowX !== 'hidden' && overflowX !== 'clip';
+      });
+      return {
+        left: rect?.left ?? -1,
+        right: rect?.right ?? -1,
+        viewport: window.innerWidth,
+        body: document.body.scrollWidth > window.innerWidth + 2,
+        shell: shell ? shell.scrollWidth > shell.clientWidth + 1 : true,
+        offenders: offenders.length,
+      };
+    })()`);
+    assert(
+      aiWorkspaceMobileState.left >= -1
+        && aiWorkspaceMobileState.right <= aiWorkspaceMobileState.viewport + 1
+        && !aiWorkspaceMobileState.body
+        && !aiWorkspaceMobileState.shell
+        && aiWorkspaceMobileState.offenders === 0,
+      `CopilotChat mobile workspace is invalid: ${JSON.stringify(aiWorkspaceMobileState)}`,
+    );
+    await setViewport(client, VIEWPORTS[0]);
+    interactionChecks.push('ai-copilot-chat-workspace');
+
     context = 'interaction:deep-link-refresh';
     await hardNavigate(client, '/assets?device=b1-z1-u1');
     await waitFor(client, `document.querySelector('.ops-detail-drawer.ant-drawer-open')?.textContent.includes('b1-z1-u1')`, 'asset deep link drawer');

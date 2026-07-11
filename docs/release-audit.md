@@ -26,9 +26,10 @@ Coverage:
 - energy MTD boundaries, future-period handling, category/device drilldown, current-view export, year-to-month navigation, and week-to-day navigation;
 - energy visual-density limits for the first analytical chart: 650px on desktop, 820px on tablet, and 1000px on mobile;
 - productized official CopilotKit `CopilotPopup`: branded official toggle and modal header, live attention count, route/object/period-aware welcome copy, suggestions and placeholder, new-session behavior, local self-managed Agent streaming, all three Generative UI result cards, desktop/mobile geometry, opaque light/dark surfaces, and zero horizontal overflow across the popup, messages, cards, composer, Markdown, code, and tables;
+- official `/ai` `CopilotChat` workspace: shared Agent/thread/context with the Popup, embedded welcome screen and composer, new-thread action, Generative UI result rendering, desktop/mobile responsive geometry, and zero horizontal overflow;
 - known third-party development warnings are counted separately and narrowly matched; all other console, network, HTTP, and runtime problems remain release-blocking.
 
-The current matrix contains 42 access checks, 84 theme/viewport checks, and 20 interaction checks: 146 checks in total.
+The current matrix contains 42 access checks, 84 theme/viewport checks, and 21 interaction checks: 147 checks in total.
 
 ### `npm run audit:ops-loop`
 

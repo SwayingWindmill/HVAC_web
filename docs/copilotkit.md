@@ -4,14 +4,16 @@
 
 ## Current UI baseline
 
-The global assistant uses CopilotKit's official v2 UI without a custom window shell:
+The AI surfaces use CopilotKit's official v2 UI rather than an application-owned chat renderer:
 
 ```tsx
-import { CopilotKit, CopilotPopup } from '@copilotkit/react-core/v2';
+import { CopilotKit, CopilotChat, CopilotPopup } from '@copilotkit/react-core/v2';
 import '@copilotkit/react-core/v2/styles.css';
 ```
 
-`CopilotPopup` owns the floating launcher, popup window, open/close state, focus, Escape handling, message list, composer, streaming state, and mobile full-screen behavior. HVAC product identity is applied through official slot/props rather than an external window shell: the official toggle button receives a branded content icon, the official modal header supplies the functional close button to an HVAC header layout, and the welcome screen, labels, suggestions, disclaimer, and CSS tokens are application-owned.
+`CopilotPopup` owns the global floating launcher, popup window, open/close state, focus, Escape handling, message list, composer, streaming state, and mobile full-screen behavior. The `/ai` route embeds the official `CopilotChat` as the main operations workspace. Both surfaces use the same `default` Agent, active thread, context bridge, frontend tools, suggestions, and Generative UI components.
+
+HVAC product identity is applied through official slot/props rather than an external window shell or a second message renderer: the official toggle button receives a branded content icon, the official modal header supplies the functional close button to an HVAC header layout, and the welcome screen, labels, suggestions, disclaimer, context toolbar, and CSS tokens are application-owned.
 
 All CopilotKit components and hooks must import from the `@copilotkit/react-core/v2` entry point. Mixing `/v2` and `/v2/headless` can create separate React context module instances under Vite.
 
@@ -40,7 +42,7 @@ The local Agent:
 
 - implements the official AG-UI event stream;
 - reads the existing HVAC mock telemetry snapshot;
-- streams responses into the official `CopilotPopup`;
+- streams responses into the official `CopilotPopup` and `/ai` `CopilotChat`;
 - remains strictly read-only;
 - exposes no device-control, work-order mutation, or optimization-dispatch capability.
 
@@ -81,6 +83,8 @@ The complete v2 prebuilt UI includes Markdown rendering, KaTeX, Mermaid, and syn
 ## Release constraints
 
 - The official Popup must not be wrapped in a custom Drawer or Modal.
-- No visible Popup descendant may create a horizontal scrollbar.
-- Desktop uses the official floating-window geometry; mobile uses the official full-screen geometry.
+- The `/ai` route must use the official `CopilotChat` message/composer pipeline; it must not introduce a parallel application-owned chat renderer.
+- Popup and workspace Chat must resolve to the same `default` Agent and active thread.
+- No visible Popup or workspace Chat descendant may create a horizontal scrollbar.
+- Desktop Popup uses the official floating-window geometry; mobile Popup uses the official full-screen geometry. Embedded `CopilotChat` remains inside the responsive `/ai` page layout.
 - CopilotKit 1.62.3 currently emits a React development-only ref warning from its internal `DropdownMenuTrigger`. The browser audit reports this separately as a known upstream warning; all other console, network, HTTP, and runtime problems remain release-blocking.

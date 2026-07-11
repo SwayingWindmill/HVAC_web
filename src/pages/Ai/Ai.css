@@ -10,9 +10,117 @@
 .ai-conversation-shell > .ant-card-body {
   display: flex;
   min-height: 0;
+  flex-direction: column;
   padding: 0;
   overflow: hidden;
   border-radius: 0 0 var(--ops-radius-card) var(--ops-radius-card);
+}
+
+.ai-chat-toolbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--ops-border-soft);
+  background: var(--hvac-ai-surface-subtle);
+  color: var(--ops-text-secondary);
+  font-size: 12px;
+}
+
+.ai-chat-toolbar > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-chat-toolbar .ant-btn {
+  flex: 0 0 auto;
+}
+
+.ai-copilot-chat-shell {
+  width: 100%;
+  height: min(720px, calc(100vh - 300px));
+  min-height: 560px;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--hvac-ai-surface);
+}
+
+.ai-copilot-chat,
+.ai-copilot-chat .copilotKitChat {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  overflow-x: hidden !important;
+  background: var(--hvac-ai-surface) !important;
+  color: var(--hvac-ai-text);
+}
+
+.ai-copilot-chat *,
+.ai-copilot-chat *::before,
+.ai-copilot-chat *::after {
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.ai-copilot-chat .copilotKitMessages,
+.ai-copilot-chat .copilotKitMessage,
+.ai-copilot-chat .copilotKitInput,
+.ai-copilot-chat [class*='max-w-3xl'],
+.ai-copilot-chat .copilotKitChat > div,
+.ai-copilot-chat .copilotKitChat > div > div {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden !important;
+}
+
+.ai-copilot-chat .copilotKitMessages {
+  background: var(--hvac-ai-surface) !important;
+}
+
+.ai-copilot-chat .copilotKitInput,
+.ai-copilot-chat [class*='inputContainer'] {
+  border-color: var(--hvac-ai-border-strong) !important;
+  background: var(--hvac-ai-surface) !important;
+  box-shadow: none !important;
+}
+
+.ai-copilot-chat textarea,
+.ai-copilot-chat input {
+  max-width: 100%;
+  overflow-x: hidden !important;
+  background: transparent !important;
+  color: var(--hvac-ai-text) !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ai-copilot-chat pre,
+.ai-copilot-chat code,
+.ai-copilot-chat table,
+.ai-copilot-chat [class*='overflow-x-auto'],
+.ai-copilot-chat [class*='overflow-x-scroll'] {
+  max-width: 100%;
+  overflow-x: hidden !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap !important;
+}
+
+.ai-copilot-chat table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.ai-copilot-chat img,
+.ai-copilot-chat svg,
+.ai-copilot-chat canvas {
+  max-width: 100%;
 }
 
 .ai-context-rail {

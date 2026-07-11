@@ -238,7 +238,7 @@ Dashboard 统一的是设计纪律，不是所有卡片的内部模板。运营�
 - 全局入口直接使用 CopilotKit 官方 `CopilotPopup`、官方 `CopilotKit` Provider 和官方 `styles.css`；不得再包裹自定义 Drawer、Popup 外壳、Skills 首页、历史页或标准/聚焦窗口状态。
 - `/ai` 不提供“场景选择器”。助手应根据当前路由、建筑、角色、遥测、FDD、工单和优化上下文自动理解问题；推荐问题只能作为启动提示，不能改变助手身份。
 - 当前页面上下文和前端工具统一通过 `CopilotContextBridge` 注册，并且所有 CopilotKit hooks 必须从 `@copilotkit/react-core/v2` 主入口导入，避免产生重复 Provider context。
-- 配置 `VITE_COPILOTKIT_RUNTIME_URL` 时连接真实 Runtime；未配置时注册只读 self-managed `HvacMockAgent`。两种执行源必须保持同一官方 Popup UI 和同一 `default` Agent 名称。
+- 配置 `VITE_COPILOTKIT_RUNTIME_URL` 时连接真实 Runtime；未配置时注册只读 self-managed `HvacMockAgent`。两种执行源必须保持同一官方 Popup/Chat UI、同一活动线程和同一 `default` Agent 名称。
 
 ### 官方 CopilotPopup
 
@@ -256,19 +256,24 @@ Dashboard 统一的是设计纪律，不是所有卡片的内部模板。运营�
 
 ```text
 PageScaffold
-├── OperationsInsightBand     安全边界与人在回路说明
+├── OperationsInsightBand   安全边界与人在回路说明
 └── 16 / 8 工作区
-    ├── AssistantConversation 连续对话、推荐问题、输入区
+    ├── CopilotChat Workspace
+    │   ├── 当前范围 / 新建会话工具栏
+    │   ├── 官方消息与 Generative UI 区
+    │   └── 官方输入区与免责声明
     └── Context Rail
         ├── 实时运营上下文
         ├── 已接入数据与证据范围
         └── 进入业务闭环的页面入口
 ```
 
+- `/ai` 主对话区必须直接嵌入 CopilotKit 官方 `CopilotChat`，不得使用 `AssistantConversation` 或其他平行消息状态转译层。
+- Popup 与工作台 Chat 必须共享同一个 `default` Agent、活动线程、`CopilotContextBridge`、工具注册和 Generative UI 组件。
 - 对话是页面主任务，桌面端至少获得三分之二宽度；上下文栏不得与对话争夺主视觉。
 - 普通对话区域保持平面、安静，不使用大面积渐变、发光边框或独立“AI 输出卡片”。
 - 用户与助手消息只通过方向、头像和单一品牌色区分；助手消息保持容器色，避免每条消息使用彩色背景。
-- 推荐问题位于消息区和输入区之间，最多展示 3–4 条；桌面端使用两列自适应网格，移动端单列换行，禁止横向滚动。
+- 推荐问题位于欢迎页或消息区中，最多展示 3–4 条；桌面端自适应排列，移动端单列换行，禁止横向滚动。
 - 数据来源必须表达“当前接入了什么”和“覆盖到什么范围”，不能写成未来接入说明或技术路线占位文案。
 - 闭环入口只负责跳转到 FDD、工单、优化、成本等业务页；AI 页面不复制审批、派工或设备控制表单。
 
