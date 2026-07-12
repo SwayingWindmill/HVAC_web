@@ -574,40 +574,64 @@
 }
 
 .hvac-copilot-welcome .copilotKitSuggestions,
+.hvac-copilot-welcome [data-testid='copilot-suggestions'],
 .hvac-copilot-welcome [class*='suggestion'] {
   max-width: 100%;
 }
 
-.hvac-copilot-welcome .copilotKitSuggestions {
+.hvac-copilot-welcome .copilotKitSuggestions,
+.hvac-copilot-welcome [data-testid='copilot-suggestions'] {
   display: flex !important;
+  width: 100% !important;
   min-width: 0;
-  flex-direction: column !important;
-  gap: 0 !important;
+  align-items: flex-start !important;
+  flex-flow: column nowrap !important;
+  gap: 8px !important;
+  margin: 0 !important;
+  padding: 0 !important;
   overflow-x: hidden !important;
 }
 
 .hvac-copilot-suggestion {
-  width: 100% !important;
+  display: inline-flex !important;
+  width: fit-content !important;
+  max-width: 100% !important;
   min-width: 0 !important;
-  min-height: 42px !important;
-  justify-content: flex-start !important;
-  padding: 9px 3px !important;
-  border: 0 !important;
-  border-top: 1px solid var(--hvac-ai-border) !important;
-  border-radius: 0 !important;
-  background: transparent !important;
+  min-height: 40px !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  padding: 9px 12px 9px 14px !important;
+  overflow: hidden !important;
+  border: 1px solid transparent !important;
+  border-radius: 12px !important;
+  background: var(--hvac-ai-surface-subtle) !important;
   color: var(--hvac-ai-text) !important;
   font-size: 13px !important;
   line-height: 1.45 !important;
   text-align: left !important;
-  white-space: normal !important;
-  overflow-wrap: anywhere !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.hvac-copilot-suggestion::after {
+  flex: 0 0 auto;
+  color: var(--hvac-ai-text-secondary);
+  content: '→';
+  font-size: 15px;
+  line-height: 1;
 }
 
 .hvac-copilot-suggestion:hover,
 .hvac-copilot-suggestion:focus-visible {
+  border-color: rgba(15, 181, 174, 0.14) !important;
   background: var(--hvac-ai-accent-soft) !important;
   color: var(--hvac-ai-accent-strong) !important;
+}
+
+.hvac-copilot-suggestion:hover::after,
+.hvac-copilot-suggestion:focus-visible::after {
+  color: var(--hvac-ai-accent-strong);
 }
 
 .hvac-copilot-recent-list {
@@ -679,7 +703,7 @@
 
 .hvac-copilot-workspace-intro {
   width: 100%;
-  max-width: 700px;
+  max-width: 760px;
   min-height: 0;
   margin-inline: auto;
   padding-bottom: 12px;
@@ -700,7 +724,7 @@
 
 .hvac-copilot-welcome[data-variant='workspace'] .hvac-copilot-welcome-input {
   width: 100%;
-  max-width: 792px;
+  max-width: 760px;
   margin-top: auto;
   margin-inline: auto;
   padding: 18px 0 22px;

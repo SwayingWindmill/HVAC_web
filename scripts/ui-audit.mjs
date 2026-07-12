@@ -1095,12 +1095,29 @@ try {
     await waitFor(client, `Boolean(document.querySelector('.ai-copilot-chat .hvac-copilot-welcome')) && !document.querySelector('.ai-copilot-chat .hvac-agent-result-card')`, 'CopilotChat workspace welcome state');
     const aiWorkspaceWelcomeState = await evaluate(client, `(() => {
       const conversation = document.querySelector('.ai-conversation-pane');
+      const intro = document.querySelector('.ai-copilot-chat .hvac-copilot-workspace-intro');
       const composerDock = document.querySelector('.ai-copilot-chat .hvac-copilot-welcome-input');
       const composer = composerDock?.querySelector('.copilotKitInput');
       const suggestions = document.querySelector('.ai-copilot-chat .hvac-copilot-suggestion-section');
+      const suggestionItems = [...document.querySelectorAll('.ai-copilot-chat .hvac-copilot-suggestion')];
       const conversationRect = conversation?.getBoundingClientRect();
+      const introRect = intro?.getBoundingClientRect();
       const dockRect = composerDock?.getBoundingClientRect();
       const suggestionRect = suggestions?.getBoundingClientRect();
+      const suggestionItemStates = suggestionItems.map((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return {
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+          radius: Number.parseFloat(style.borderRadius || '0'),
+          background: style.backgroundColor,
+          whiteSpace: style.whiteSpace,
+          arrow: getComputedStyle(element, '::after').content,
+        };
+      });
       const evidence = document.querySelector('.ai-evidence-rail-content');
       return {
         headerTitle: document.querySelector('.ai-conversation-header h2')?.textContent?.trim() ?? '',
@@ -1108,6 +1125,16 @@ try {
         composerBelowSuggestions: Boolean(dockRect && suggestionRect && dockRect.top > suggestionRect.bottom),
         composerBottomInset: dockRect && conversationRect ? conversationRect.bottom - dockRect.bottom : 999,
         composerHeight: composer?.getBoundingClientRect().height ?? 0,
+        contentAxisAligned: Boolean(introRect && dockRect
+          && Math.abs(introRect.left - dockRect.left) <= 2
+          && Math.abs(introRect.right - dockRect.right) <= 2),
+        suggestionCount: suggestionItemStates.length,
+        suggestionsVerticallyStacked: suggestionItemStates.every((item, index) => index === 0 || item.top > suggestionItemStates[index - 1].top + 4),
+        suggestionsLeftAligned: suggestionItemStates.every((item) => Math.abs(item.left - (introRect?.left ?? item.left)) <= 2),
+        suggestionsUseContentWidth: suggestionItemStates.every((item) => !suggestionRect || item.width < suggestionRect.width - 24),
+        suggestionGeometryValid: suggestionItemStates.every((item) => item.height >= 38 && item.height <= 44 && item.radius >= 10),
+        suggestionSurfaceValid: suggestionItemStates.every((item) => item.background !== 'rgba(0, 0, 0, 0)' && item.background !== 'transparent'),
+        suggestionTextValid: suggestionItemStates.every((item) => item.whiteSpace === 'nowrap' && item.arrow.includes('→')),
         introScrollable: ['auto', 'scroll'].includes(getComputedStyle(document.querySelector('.hvac-copilot-workspace-intro')).overflowY),
         compactEvidence: evidence?.classList.contains('is-empty') ?? false,
         hasContext: Boolean(evidence?.querySelector('.ai-context-summary')),
@@ -1124,6 +1151,14 @@ try {
         && aiWorkspaceWelcomeState.composerBottomInset >= 0
         && aiWorkspaceWelcomeState.composerBottomInset <= 24
         && aiWorkspaceWelcomeState.composerHeight >= 74
+        && aiWorkspaceWelcomeState.contentAxisAligned
+        && aiWorkspaceWelcomeState.suggestionCount >= 3
+        && aiWorkspaceWelcomeState.suggestionsVerticallyStacked
+        && aiWorkspaceWelcomeState.suggestionsLeftAligned
+        && aiWorkspaceWelcomeState.suggestionsUseContentWidth
+        && aiWorkspaceWelcomeState.suggestionGeometryValid
+        && aiWorkspaceWelcomeState.suggestionSurfaceValid
+        && aiWorkspaceWelcomeState.suggestionTextValid
         && aiWorkspaceWelcomeState.introScrollable
         && aiWorkspaceWelcomeState.compactEvidence
         && aiWorkspaceWelcomeState.hasContext
@@ -1163,11 +1198,16 @@ try {
     const aiWorkspaceStartedState = await evaluate(client, `(() => {
       const conversation = document.querySelector('.ai-conversation-pane');
       const composer = document.querySelector('.ai-copilot-chat .copilotKitInput');
+      const messageAxis = document.querySelector('.ai-copilot-chat [class*="max-w-3xl"]:has(.copilotKitMessages)');
       const conversationRect = conversation?.getBoundingClientRect();
       const composerRect = composer?.getBoundingClientRect();
+      const messageAxisRect = messageAxis?.getBoundingClientRect();
       const evidence = document.querySelector('.ai-evidence-rail-content');
       return {
         composerNearBottom: Boolean(conversationRect && composerRect && composerRect.top > conversationRect.top + conversationRect.height * 0.7),
+        messageAxisAligned: Boolean(messageAxisRect && composerRect
+          && Math.abs((messageAxisRect.left + messageAxisRect.width / 2) - (composerRect.left + composerRect.width / 2)) <= 2
+          && messageAxisRect.width <= 760),
         evidenceExpanded: Boolean(evidence && !evidence.classList.contains('is-empty')),
         hasRuntimeSnapshot: Boolean(evidence?.querySelector('.ai-runtime-readings')),
         hasHandoffs: Boolean(evidence?.querySelector('.ai-handoff-section')),
@@ -1176,6 +1216,7 @@ try {
     })()`);
     assert(
       aiWorkspaceStartedState.composerNearBottom
+        && aiWorkspaceStartedState.messageAxisAligned
         && aiWorkspaceStartedState.evidenceExpanded
         && aiWorkspaceStartedState.hasRuntimeSnapshot
         && aiWorkspaceStartedState.hasHandoffs
