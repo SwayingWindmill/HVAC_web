@@ -227,28 +227,33 @@ function HvacCopilotWelcomeBase({
       data-variant={variant}
       className={['hvac-copilot-welcome', className].filter(Boolean).join(' ')}
     >
-      <section className="hvac-copilot-brief">
-        <div className="hvac-copilot-presence-line">
-          <span aria-hidden="true" />
-          <strong>{context.pageTitle}</strong>
-          <small>已接入当前页面</small>
-        </div>
-        <h2>从会话或当前页面开始调查</h2>
-        <p>选择左侧历史记录继续处理，或基于当前范围发起新的只读分析。</p>
-      </section>
+      <div className="hvac-copilot-workspace-intro">
+        <section className="hvac-copilot-brief">
+          <div className="hvac-copilot-presence-line">
+            <span aria-hidden="true" />
+            <strong>{context.pageTitle}</strong>
+            <small>已接入当前页面</small>
+          </div>
+          <h2>从当前运行数据开始调查</h2>
+          <p>描述设备、能耗或运维异常，AI 将关联实时监测、FDD 诊断和工单证据。</p>
+        </section>
 
-      <div className="hvac-copilot-scope-line" aria-label="当前 AI 上下文">
-        <span>当前范围</span>
-        <strong title={context.scopeLabel}>{context.scopeLabel}</strong>
-        <small>{context.roleLabel}</small>
+        <div className="hvac-copilot-scope-line" aria-label="当前 AI 上下文">
+          <span>分析范围</span>
+          <strong title={context.scopeLabel}>{context.scopeLabel}</strong>
+          <small>{context.roleLabel}</small>
+        </div>
+
+        <section className="hvac-copilot-suggestion-section">
+          <div className="hvac-copilot-section-heading">可以这样开始</div>
+          {suggestionView}
+        </section>
       </div>
 
-      <section className="hvac-copilot-suggestion-section">
-        <div className="hvac-copilot-section-heading">基于当前页面</div>
-        {suggestionView}
-      </section>
-
-      <div className="hvac-copilot-welcome-input">{input}</div>
+      <div className="hvac-copilot-welcome-input">
+        <div className="hvac-copilot-composer-label">开始调查</div>
+        {input}
+      </div>
     </div>
   );
 }

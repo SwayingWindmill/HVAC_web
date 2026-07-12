@@ -420,7 +420,13 @@ try {
       const popupStyle = popup ? getComputedStyle(popup) : null;
       const toggle = document.querySelector('.hvac-copilot-toggle');
       const toggleRect = toggle?.getBoundingClientRect();
-      const composer = popup?.querySelector('.copilotKitInput, [class*="inputContainer"]');
+      const composer = popup?.querySelector('.copilotKitInput');
+      const composerRect = composer?.getBoundingClientRect();
+      const composerStyle = composer ? getComputedStyle(composer) : null;
+      const sendButton = composer?.querySelector('[data-testid="copilot-send-button"]');
+      const sendRect = sendButton?.getBoundingClientRect();
+      const addButton = composer?.querySelector('[data-testid="copilot-add-menu-button"]');
+      const addRect = addButton?.getBoundingClientRect();
       const customText = [...(popup?.querySelectorAll([
         '.hvac-copilot-popup-context',
         '.hvac-copilot-section-heading',
@@ -442,7 +448,14 @@ try {
         height: rect?.height ?? 0,
         background,
         popupRadius: Number.parseFloat(popupStyle?.borderRadius || '0'),
-        composerRadius: composer ? Number.parseFloat(getComputedStyle(composer).borderRadius || '0') : 0,
+        composerRadius: Number.parseFloat(composerStyle?.borderRadius || '0'),
+        composerHeight: composerRect?.height ?? 0,
+        composerBorderWidth: Number.parseFloat(composerStyle?.borderTopWidth || '0'),
+        composerBorderColor: composerStyle?.borderTopColor ?? '',
+        composerShadow: composerStyle?.boxShadow ?? '',
+        sendWidth: sendRect?.width ?? 0,
+        sendHeight: sendRect?.height ?? 0,
+        disabledAddHidden: !addButton || !addButton.disabled || (addRect?.width ?? 0) === 0,
         toggleWidth: toggleRect?.width ?? 0,
         headerActionCount: popup?.querySelectorAll('.hvac-copilot-header-actions > button').length ?? 0,
         hasReadonlyBadge: Boolean(popup?.querySelector('.hvac-copilot-readonly-badge')),
@@ -470,7 +483,11 @@ try {
     assert(aiPopupState.width >= 500 && aiPopupState.width <= 560, 'CopilotPopup desktop width is invalid');
     assert(aiPopupState.height >= 600, 'CopilotPopup desktop height is invalid');
     assert(aiPopupState.popupRadius >= 19, 'CopilotPopup does not use the refined floating-window radius');
-    assert(aiPopupState.composerRadius >= 20, 'CopilotPopup composer is not a floating rounded surface');
+    assert(aiPopupState.composerRadius >= 16 && aiPopupState.composerRadius <= 20, 'CopilotPopup composer radius is outside the product contract');
+    assert(aiPopupState.composerHeight >= 72 && aiPopupState.composerHeight <= 82, 'CopilotPopup composer height is outside the product contract');
+    assert(aiPopupState.composerBorderWidth >= 1 && aiPopupState.composerShadow !== 'none', 'CopilotPopup composer lacks a clear surface boundary');
+    assert(aiPopupState.sendWidth >= 39 && aiPopupState.sendHeight >= 39, 'CopilotPopup send action is too small');
+    assert(aiPopupState.disabledAddHidden, 'CopilotPopup exposes an unavailable add action');
     assert(aiPopupState.toggleWidth > 0 && aiPopupState.toggleWidth <= 130, 'CopilotPopup launcher has excessive visual weight');
     assert(aiPopupState.headerActionCount === 3 && !aiPopupState.hasReadonlyBadge && !aiPopupState.hasExpandAction, 'CopilotPopup header hierarchy is invalid');
     assert(aiPopupState.minCustomFontSize >= 11, 'CopilotPopup custom business text is too small');
@@ -488,6 +505,21 @@ try {
         && aiPopupState.hasBrandedToggle
         && aiPopupState.togglePointerEvents === 'none',
       `CopilotPopup HVAC product UI is incomplete: ${JSON.stringify(aiPopupState)}`,
+    );
+    await evaluate(client, `document.querySelector('.copilotKitPopup .copilotKitInput textarea')?.focus()`);
+    await pause(180);
+    const aiPopupFocusState = await evaluate(client, `(() => {
+      const composer = document.querySelector('.copilotKitPopup .copilotKitInput');
+      const style = composer ? getComputedStyle(composer) : null;
+      return {
+        borderColor: style?.borderTopColor ?? '',
+        shadow: style?.boxShadow ?? '',
+      };
+    })()`);
+    assert(
+      aiPopupFocusState.borderColor !== aiPopupState.composerBorderColor
+        && aiPopupFocusState.shadow !== aiPopupState.composerShadow,
+      `CopilotPopup composer focus feedback is missing: ${JSON.stringify(aiPopupFocusState)}`,
     );
     interactionChecks.push('ai-copilot-popup');
 
@@ -858,8 +890,20 @@ try {
       const threadSidebar = document.querySelector('.ai-thread-sidebar');
       const conversation = document.querySelector('.ai-conversation-pane');
       const evidenceSidebar = document.querySelector('.ai-evidence-sidebar');
+      const composer = workspace?.querySelector('.copilotKitInput');
+      const composerRect = composer?.getBoundingClientRect();
+      const composerStyle = composer ? getComputedStyle(composer) : null;
+      const sendButton = composer?.querySelector('[data-testid="copilot-send-button"]');
+      const sendRect = sendButton?.getBoundingClientRect();
+      const addButton = composer?.querySelector('[data-testid="copilot-add-menu-button"]');
+      const addRect = addButton?.getBoundingClientRect();
+      const welcomeInput = workspace?.querySelector('.hvac-copilot-welcome-input');
+      const welcomeIntro = workspace?.querySelector('.hvac-copilot-workspace-intro');
+      const suggestionSection = workspace?.querySelector('.hvac-copilot-suggestion-section');
       const contentRect = content?.getBoundingClientRect();
       const pageRect = page?.getBoundingClientRect();
+      const conversationRect = conversation?.getBoundingClientRect();
+      const composerDockRect = welcomeInput?.getBoundingClientRect() ?? composerRect;
       const customText = [...(hub?.querySelectorAll([
         '.ai-thread-copy p',
         '.ai-thread-meta',
@@ -900,6 +944,27 @@ try {
         threadRadius: threadSidebar ? Number.parseFloat(getComputedStyle(threadSidebar).borderRadius) : -1,
         conversationRadius: conversation ? Number.parseFloat(getComputedStyle(conversation).borderRadius) : -1,
         evidenceRadius: evidenceSidebar ? Number.parseFloat(getComputedStyle(evidenceSidebar).borderRadius) : -1,
+        composerHeight: composerRect?.height ?? 0,
+        composerWidth: composerRect?.width ?? 0,
+        composerRadius: Number.parseFloat(composerStyle?.borderRadius || '0'),
+        composerBorderWidth: Number.parseFloat(composerStyle?.borderTopWidth || '0'),
+        composerBorderColor: composerStyle?.borderTopColor ?? '',
+        composerShadow: composerStyle?.boxShadow ?? '',
+        composerCenterOffset: composerRect && conversationRect
+          ? Math.abs((composerRect.left + composerRect.width / 2) - (conversationRect.left + conversationRect.width / 2))
+          : 999,
+        composerSideInset: composerRect && conversationRect
+          ? Math.min(composerRect.left - conversationRect.left, conversationRect.right - composerRect.right)
+          : -1,
+        composerBottomInset: composerDockRect && conversationRect
+          ? conversationRect.bottom - composerDockRect.bottom
+          : 999,
+        sendWidth: sendRect?.width ?? 0,
+        sendHeight: sendRect?.height ?? 0,
+        disabledAddHidden: !addButton || !addButton.disabled || (addRect?.width ?? 0) === 0,
+        welcomeOrderValid: !welcomeInput || !suggestionSection
+          || welcomeInput.getBoundingClientRect().top > suggestionSection.getBoundingClientRect().bottom,
+        welcomeIntroScrollable: !welcomeIntro || ['auto', 'scroll'].includes(getComputedStyle(welcomeIntro).overflowY),
         threadWidth: threadSidebar?.getBoundingClientRect().width ?? 0,
         conversationWidth: conversation?.getBoundingClientRect().width ?? 0,
         evidenceWidth: evidenceSidebar?.getBoundingClientRect().width ?? 0,
@@ -932,6 +997,22 @@ try {
         && aiWorkspaceInitialState.threadRadius === 0
         && aiWorkspaceInitialState.conversationRadius === 0
         && aiWorkspaceInitialState.evidenceRadius === 0
+        && aiWorkspaceInitialState.composerHeight >= 74
+        && aiWorkspaceInitialState.composerHeight <= 82
+        && aiWorkspaceInitialState.composerWidth <= 760
+        && aiWorkspaceInitialState.composerRadius >= 16
+        && aiWorkspaceInitialState.composerRadius <= 20
+        && aiWorkspaceInitialState.composerBorderWidth >= 1
+        && aiWorkspaceInitialState.composerShadow !== 'none'
+        && aiWorkspaceInitialState.composerCenterOffset <= 2
+        && aiWorkspaceInitialState.composerSideInset >= 16
+        && aiWorkspaceInitialState.composerBottomInset >= 0
+        && aiWorkspaceInitialState.composerBottomInset <= 36
+        && aiWorkspaceInitialState.sendWidth >= 41
+        && aiWorkspaceInitialState.sendHeight >= 41
+        && aiWorkspaceInitialState.disabledAddHidden
+        && aiWorkspaceInitialState.welcomeOrderValid
+        && aiWorkspaceInitialState.welcomeIntroScrollable
         && aiWorkspaceInitialState.conversationWidth > aiWorkspaceInitialState.threadWidth * 1.5
         && aiWorkspaceInitialState.conversationWidth > aiWorkspaceInitialState.evidenceWidth * 1.5
         && aiWorkspaceInitialState.minCustomFontSize >= 11
@@ -943,6 +1024,22 @@ try {
         && aiWorkspaceInitialState.chatScrollContainerCount >= 1
         && aiWorkspaceInitialState.outsideScrollerCount === 0,
       `CopilotChat workspace shell is invalid: ${JSON.stringify(aiWorkspaceInitialState)}`,
+    );
+
+    await evaluate(client, `document.querySelector('.ai-copilot-chat .copilotKitInput textarea')?.focus()`);
+    await pause(180);
+    const aiWorkspaceFocusState = await evaluate(client, `(() => {
+      const composer = document.querySelector('.ai-copilot-chat .copilotKitInput');
+      const style = composer ? getComputedStyle(composer) : null;
+      return {
+        borderColor: style?.borderTopColor ?? '',
+        shadow: style?.boxShadow ?? '',
+      };
+    })()`);
+    assert(
+      aiWorkspaceFocusState.borderColor !== aiWorkspaceInitialState.composerBorderColor
+        && aiWorkspaceFocusState.shadow !== aiWorkspaceInitialState.composerShadow,
+      `CopilotChat workspace composer focus feedback is missing: ${JSON.stringify(aiWorkspaceFocusState)}`,
     );
 
     const aiHistorySearchFocused = await evaluate(client, `(() => {
@@ -992,6 +1089,46 @@ try {
     })()`);
     assert(aiWorkspaceNewThread, 'CopilotChat workspace new-thread action was unavailable');
     await waitFor(client, `Boolean(document.querySelector('.ai-copilot-chat .hvac-copilot-welcome')) && !document.querySelector('.ai-copilot-chat .hvac-agent-result-card')`, 'CopilotChat workspace welcome state');
+    const aiWorkspaceWelcomeState = await evaluate(client, `(() => {
+      const conversation = document.querySelector('.ai-conversation-pane');
+      const composerDock = document.querySelector('.ai-copilot-chat .hvac-copilot-welcome-input');
+      const composer = composerDock?.querySelector('.copilotKitInput');
+      const suggestions = document.querySelector('.ai-copilot-chat .hvac-copilot-suggestion-section');
+      const conversationRect = conversation?.getBoundingClientRect();
+      const dockRect = composerDock?.getBoundingClientRect();
+      const suggestionRect = suggestions?.getBoundingClientRect();
+      const evidence = document.querySelector('.ai-evidence-rail-content');
+      return {
+        headerTitle: document.querySelector('.ai-conversation-header h2')?.textContent?.trim() ?? '',
+        hasComposerLabel: Boolean(document.querySelector('.hvac-copilot-composer-label')?.textContent?.includes('开始调查')),
+        composerBelowSuggestions: Boolean(dockRect && suggestionRect && dockRect.top > suggestionRect.bottom),
+        composerBottomInset: dockRect && conversationRect ? conversationRect.bottom - dockRect.bottom : 999,
+        composerHeight: composer?.getBoundingClientRect().height ?? 0,
+        introScrollable: ['auto', 'scroll'].includes(getComputedStyle(document.querySelector('.hvac-copilot-workspace-intro')).overflowY),
+        compactEvidence: evidence?.classList.contains('is-empty') ?? false,
+        hasContext: Boolean(evidence?.querySelector('.ai-context-summary')),
+        hasAvailableData: Boolean(evidence?.querySelector('.ai-available-data-section')),
+        hasRuntimeSnapshot: Boolean(evidence?.querySelector('.ai-runtime-readings')),
+        hasHandoffs: Boolean(evidence?.querySelector('.ai-handoff-section')),
+        hasDesktopNewAction: [...document.querySelectorAll('.ai-conversation-actions button')].some((element) => element.textContent.includes('新建调查')),
+      };
+    })()`);
+    assert(
+      aiWorkspaceWelcomeState.headerTitle === 'AI 运维调查'
+        && aiWorkspaceWelcomeState.hasComposerLabel
+        && aiWorkspaceWelcomeState.composerBelowSuggestions
+        && aiWorkspaceWelcomeState.composerBottomInset >= 0
+        && aiWorkspaceWelcomeState.composerBottomInset <= 24
+        && aiWorkspaceWelcomeState.composerHeight >= 74
+        && aiWorkspaceWelcomeState.introScrollable
+        && aiWorkspaceWelcomeState.compactEvidence
+        && aiWorkspaceWelcomeState.hasContext
+        && aiWorkspaceWelcomeState.hasAvailableData
+        && !aiWorkspaceWelcomeState.hasRuntimeSnapshot
+        && !aiWorkspaceWelcomeState.hasHandoffs
+        && !aiWorkspaceWelcomeState.hasDesktopNewAction,
+      `CopilotChat workspace empty-state hierarchy is invalid: ${JSON.stringify(aiWorkspaceWelcomeState)}`,
+    );
     const aiWorkspaceQuestionEntered = await evaluate(client, `(() => {
       const textarea = document.querySelector('.ai-copilot-chat textarea');
       if (!textarea) return false;
@@ -1019,6 +1156,28 @@ try {
         && card?.textContent.includes('能耗异常调查')
         && card?.textContent.includes('额外能耗');
     })()`, 'CopilotChat workspace Agent answer');
+    const aiWorkspaceStartedState = await evaluate(client, `(() => {
+      const conversation = document.querySelector('.ai-conversation-pane');
+      const composer = document.querySelector('.ai-copilot-chat .copilotKitInput');
+      const conversationRect = conversation?.getBoundingClientRect();
+      const composerRect = composer?.getBoundingClientRect();
+      const evidence = document.querySelector('.ai-evidence-rail-content');
+      return {
+        composerNearBottom: Boolean(conversationRect && composerRect && composerRect.top > conversationRect.top + conversationRect.height * 0.7),
+        evidenceExpanded: Boolean(evidence && !evidence.classList.contains('is-empty')),
+        hasRuntimeSnapshot: Boolean(evidence?.querySelector('.ai-runtime-readings')),
+        hasHandoffs: Boolean(evidence?.querySelector('.ai-handoff-section')),
+        hasNewAction: [...document.querySelectorAll('.ai-conversation-actions button')].some((element) => element.textContent.includes('新建调查')),
+      };
+    })()`);
+    assert(
+      aiWorkspaceStartedState.composerNearBottom
+        && aiWorkspaceStartedState.evidenceExpanded
+        && aiWorkspaceStartedState.hasRuntimeSnapshot
+        && aiWorkspaceStartedState.hasHandoffs
+        && aiWorkspaceStartedState.hasNewAction,
+      `CopilotChat workspace started-state hierarchy is invalid: ${JSON.stringify(aiWorkspaceStartedState)}`,
+    );
     await waitFor(client, `(() => {
       const raw = localStorage.getItem('hvac-ai-thread-history-v1');
       return Boolean(raw?.includes('为什么当前能耗升高？') && raw.includes('总功率约'));

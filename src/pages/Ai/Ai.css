@@ -202,7 +202,13 @@
 }
 
 .ai-thread-row.is-active {
+  grid-template-columns: minmax(0, 1fr) 28px;
+  padding-left: 12px;
   background: rgba(15, 181, 174, 0.08);
+}
+
+.ai-thread-row.is-active .ai-thread-status {
+  display: none;
 }
 
 .ai-thread-row.is-active::before {
@@ -434,23 +440,27 @@
   line-height: 1.65;
 }
 
-.ai-copilot-chat .copilotKitInput,
-.ai-copilot-chat [class*='inputContainer'] {
+.ai-copilot-chat .copilotKitInput {
   flex: 0 0 auto;
-  margin: 0 20px 14px;
-  border-color: var(--ops-border) !important;
-  border-radius: var(--ops-radius-control) !important;
-  background: var(--ops-surface) !important;
-  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06) !important;
+  width: calc(100% - 40px);
+  max-width: 760px;
+  min-height: 78px;
+  margin: 0 auto 18px;
+  padding: 5px 7px 5px 11px !important;
+  border: 1px solid rgba(15, 23, 42, 0.16) !important;
+  border-radius: 18px !important;
+  background: #fff !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 8px 22px rgba(15, 23, 42, 0.09) !important;
 }
 
-[data-theme='dark'] .ai-copilot-chat .copilotKitInput,
-[data-theme='dark'] .ai-copilot-chat [class*='inputContainer'] {
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2) !important;
+[data-theme='dark'] .ai-copilot-chat .copilotKitInput {
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  background: #1d242d !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22), 0 12px 30px rgba(0, 0, 0, 0.3) !important;
 }
 
-.ai-copilot-chat textarea,
-.ai-copilot-chat input,
+.ai-copilot-chat .copilotKitInput textarea,
+.ai-copilot-chat .copilotKitInput input,
 .ai-copilot-chat pre,
 .ai-copilot-chat code,
 .ai-copilot-chat table,
@@ -462,9 +472,19 @@
   word-break: break-word;
 }
 
-.ai-copilot-chat textarea,
-.ai-copilot-chat input {
-  font-size: 14px;
+.ai-copilot-chat .copilotKitInput textarea,
+.ai-copilot-chat .copilotKitInput input {
+  min-height: 50px;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.ai-copilot-chat .copilotKitInput [data-testid='copilot-send-button'],
+.ai-copilot-chat .copilotKitInput > [data-layout='compact'] > div:last-child button {
+  width: 42px !important;
+  min-width: 42px !important;
+  height: 42px !important;
+  border-radius: 999px !important;
 }
 
 .ai-copilot-chat pre,
@@ -492,10 +512,22 @@
   overflow: hidden;
 }
 
+.ai-evidence-rail-content.is-empty .ai-available-data-section {
+  flex: 1 1 auto;
+}
+
+.ai-evidence-rail-content.is-empty .ai-governance-bar {
+  margin-top: auto;
+}
+
 .ai-evidence-section {
   flex: 0 0 auto;
   padding: 18px;
   border-bottom: 1px solid var(--ops-border-soft);
+}
+
+.ai-context-summary {
+  padding-top: 22px;
 }
 
 .ai-evidence-section > header {
@@ -634,6 +666,13 @@
 
 .ai-evidence-list > div:first-child {
   border-top: 0;
+}
+
+.ai-evidence-list.is-compact > div {
+  min-height: 52px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  padding: 10px 0;
 }
 
 .ai-evidence-list > div > i {
@@ -786,9 +825,9 @@
     padding-inline: 12px;
   }
 
-  .ai-copilot-chat .copilotKitInput,
-  .ai-copilot-chat [class*='inputContainer'] {
-    margin-inline: 12px;
+  .ai-copilot-chat .copilotKitInput {
+    width: calc(100% - 24px);
+    margin-inline: auto;
   }
 }
 
@@ -815,9 +854,12 @@
     display: none;
   }
 
-  .ai-copilot-chat .copilotKitInput,
-  .ai-copilot-chat [class*='inputContainer'] {
-    margin: 0 8px 8px;
+  .ai-copilot-chat .copilotKitInput {
+    width: calc(100% - 16px);
+    min-height: 78px;
+    margin: 0 auto 8px;
+    padding: 5px 6px 5px 8px !important;
+    border-radius: 16px !important;
   }
 }
 

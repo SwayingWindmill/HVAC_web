@@ -262,10 +262,12 @@ function EvidenceRail({
   totalPower,
   averageCop,
   averageLoad,
+  hasStarted,
 }: {
   totalPower: number;
   averageCop: number;
   averageLoad: number;
+  hasStarted: boolean;
 }) {
   const navigate = useNavigate();
   const context = useAiApplicationContext();
@@ -283,6 +285,37 @@ function EvidenceRail({
     { label: '评审优化建议', path: '/optimize', icon: <ThunderboltOutlined /> },
     { label: '查看成本绩效', path: '/cost', icon: <DollarOutlined /> },
   ];
+
+  if (!hasStarted) {
+    return (
+      <div className="ai-evidence-rail-content is-empty">
+        <section className="ai-evidence-section ai-context-summary">
+          <header><span>调查上下文</span></header>
+          <h2>{context.pageTitle}</h2>
+          <p>从当前页面与站点范围发起只读运维分析。</p>
+          <div className="ai-thread-scope" title={context.scopeLabel}>
+            <span>分析范围</span>
+            <strong>{context.scopeLabel}</strong>
+          </div>
+        </section>
+
+        <section className="ai-evidence-section ai-available-data-section">
+          <header><span>可用数据</span></header>
+          <div className="ai-evidence-list is-compact">
+            {sources.map((source) => (
+              <div key={source.label}>
+                <span><strong>{source.label}</strong><small>{source.detail}</small></span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div className="ai-governance-bar">
+          <span>仅提供分析与建议；审批、派工和设备控制仍在原业务流程中完成。</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="ai-evidence-rail-content">
@@ -366,6 +399,7 @@ function AiWorkspace() {
   const totalPower = Math.round(MOCK_DEVICES.reduce((sum, deviceId) => sum + value(deviceId, 'power'), 0));
   const averageCop = Math.round((MOCK_DEVICES.reduce((sum, deviceId) => sum + value(deviceId, 'cop'), 0) / MOCK_DEVICES.length) * 100) / 100;
   const averageLoad = Math.round(MOCK_DEVICES.reduce((sum, deviceId) => sum + value(deviceId, 'load'), 0) / MOCK_DEVICES.length);
+  const hasStarted = agent.messages.length > 0 || (activeThread?.messageCount ?? 0) > 0;
 
   useEffect(() => {
     const threadId = searchParams.get('thread');
@@ -391,6 +425,7 @@ function AiWorkspace() {
       totalPower={totalPower}
       averageCop={averageCop}
       averageLoad={averageLoad}
+      hasStarted={hasStarted}
     />
   );
 
@@ -406,9 +441,9 @@ function AiWorkspace() {
             <header className="ai-conversation-header">
               <div>
                 <span>
-                  {activeThread ? threadKindLabel[activeThread.kind] : '会话'} · {demoMode ? '演示数据' : '接入数据'} · {agent.messages.length ? `${agent.messages.length} 条消息` : '尚未开始'}
+                  {hasStarted ? (activeThread ? threadKindLabel[activeThread.kind] : '调查') : 'AI 运维调查'} · {demoMode ? '演示数据' : '接入数据'} · {hasStarted ? `${agent.messages.length || activeThread?.messageCount || 0} 条消息` : '等待问题'}
                 </span>
-                <h2>{activeThread?.title || '新会话'}</h2>
+                <h2>{hasStarted ? (activeThread?.title || '运维调查') : 'AI 运维调查'}</h2>
                 <p title={activeThread?.scopeLabel || context.scopeLabel}>{activeThread?.scopeLabel || context.scopeLabel}</p>
               </div>
               <div className="ai-conversation-actions">
@@ -418,7 +453,7 @@ function AiWorkspace() {
                 <Button className="ai-mobile-evidence-button" icon={<DatabaseOutlined />} onClick={() => setEvidenceDrawerOpen(true)}>
                   证据
                 </Button>
-                <Button type="primary" icon={<PlusOutlined />} onClick={startNewThread}>新建调查</Button>
+                {hasStarted ? <Button type="primary" icon={<PlusOutlined />} onClick={startNewThread}>新建调查</Button> : null}
               </div>
             </header>
 

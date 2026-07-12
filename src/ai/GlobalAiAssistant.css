@@ -670,69 +670,204 @@
 
 .hvac-copilot-welcome[data-variant='workspace'] {
   justify-content: flex-start;
-  max-width: 700px;
+  width: 100%;
+  max-width: none;
   margin: 0 auto;
-  padding: 36px 40px 24px;
+  padding: 30px 24px 0;
+  overflow: hidden;
+}
+
+.hvac-copilot-workspace-intro {
+  width: 100%;
+  max-width: 700px;
+  min-height: 0;
+  margin-inline: auto;
+  padding-bottom: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .hvac-copilot-welcome[data-variant='workspace'] .hvac-copilot-brief h2 {
   max-width: none;
-  font-size: 24px;
+  font-size: 25px;
+}
+
+.hvac-copilot-welcome[data-variant='workspace'] .hvac-copilot-suggestion-section {
+  padding-top: 16px;
 }
 
 .hvac-copilot-welcome[data-variant='workspace'] .hvac-copilot-welcome-input {
-  margin-top: 16px;
+  width: 100%;
+  max-width: 792px;
+  margin-top: auto;
+  margin-inline: auto;
+  padding: 18px 0;
+}
+
+.hvac-copilot-welcome[data-variant='workspace'] .hvac-copilot-welcome-input .copilotKitInput {
+  width: 100%;
+  max-width: none;
+  margin-inline: 0;
+}
+
+.hvac-copilot-composer-label {
+  margin: 0 0 7px 8px;
+  color: var(--hvac-ai-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 .copilotKitPopup .copilotKitInput,
-.copilotKitPopup [class*='inputContainer'],
-.ai-copilot-chat .copilotKitInput,
-.ai-copilot-chat [class*='inputContainer'] {
-  border-color: var(--hvac-ai-border) !important;
-  border-radius: 8px !important;
+.ai-copilot-chat .copilotKitInput {
+  border: 1px solid rgba(15, 23, 42, 0.16) !important;
   background: var(--hvac-ai-surface) !important;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
 }
 
-.copilotKitPopup .copilotKitInput,
-.copilotKitPopup [class*='inputContainer'] {
-  border-radius: 24px !important;
-  box-shadow: 0 6px 22px rgba(15, 23, 42, 0.08) !important;
+.copilotKitPopup .copilotKitInput {
+  min-height: 76px;
+  padding: 4px 6px !important;
+  border-radius: 18px !important;
+  background: #fff !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 8px 22px rgba(15, 23, 42, 0.09) !important;
 }
 
-[data-theme='dark'] .copilotKitPopup .copilotKitInput,
-[data-theme='dark'] .copilotKitPopup [class*='inputContainer'] {
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22) !important;
+.copilotKitPopup .copilotKitInput > [data-layout='compact'],
+.ai-copilot-chat .copilotKitInput > [data-layout='compact'] {
+  gap: 10px !important;
+  padding: 6px 8px !important;
 }
 
-.copilotKitPopup textarea,
-.copilotKitPopup input,
-.ai-copilot-chat textarea,
-.ai-copilot-chat input {
+.copilotKitPopup .copilotKitInput:focus-within,
+.ai-copilot-chat .copilotKitInput:focus-within {
+  border-color: var(--hvac-ai-accent) !important;
+  box-shadow: 0 0 0 3px rgba(15, 181, 174, 0.11), 0 10px 28px rgba(15, 23, 42, 0.11) !important;
+}
+
+[data-theme='dark'] .copilotKitPopup .copilotKitInput {
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  background: #1d242d !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22), 0 10px 26px rgba(0, 0, 0, 0.28) !important;
+}
+
+[data-theme='dark'] .copilotKitPopup .copilotKitInput:focus-within,
+[data-theme='dark'] .ai-copilot-chat .copilotKitInput:focus-within {
+  border-color: var(--hvac-ai-accent) !important;
+  box-shadow: 0 0 0 3px rgba(57, 197, 190, 0.13), 0 12px 30px rgba(0, 0, 0, 0.3) !important;
+}
+
+.copilotKitPopup .copilotKitInput textarea,
+.copilotKitPopup .copilotKitInput input,
+.ai-copilot-chat .copilotKitInput textarea,
+.ai-copilot-chat .copilotKitInput input {
   max-width: 100%;
   overflow-x: hidden !important;
   background: transparent !important;
   color: var(--hvac-ai-text) !important;
-  font-size: 14px;
+  font-size: 15px;
+  line-height: 1.55;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
-.copilotKitPopup textarea::placeholder,
-.copilotKitPopup input::placeholder,
-.ai-copilot-chat textarea::placeholder,
-.ai-copilot-chat input::placeholder {
-  color: var(--hvac-ai-text-secondary) !important;
+.copilotKitPopup .copilotKitInput textarea {
+  min-height: 46px !important;
+  padding-block: 10px !important;
+}
+
+.copilotKitPopup .copilotKitInput textarea::placeholder,
+.copilotKitPopup .copilotKitInput input::placeholder,
+.ai-copilot-chat .copilotKitInput textarea::placeholder,
+.ai-copilot-chat .copilotKitInput input::placeholder {
+  color: #738196 !important;
+  font-weight: 450;
   opacity: 1;
 }
 
-.copilotKitPopup .copilotKitInput button[type='submit'],
-.copilotKitPopup button[aria-label*='Send'],
-.copilotKitPopup button[aria-label*='发送'],
-.ai-copilot-chat .copilotKitInput button[type='submit'],
-.ai-copilot-chat button[aria-label*='Send'],
-.ai-copilot-chat button[aria-label*='发送'] {
+[data-theme='dark'] .copilotKitPopup .copilotKitInput textarea::placeholder,
+[data-theme='dark'] .copilotKitPopup .copilotKitInput input::placeholder,
+[data-theme='dark'] .ai-copilot-chat .copilotKitInput textarea::placeholder,
+[data-theme='dark'] .ai-copilot-chat .copilotKitInput input::placeholder {
+  color: #9aa8bb !important;
+}
+
+.copilotKitPopup .copilotKitInput > [data-layout='compact'] > div:last-child > div,
+.ai-copilot-chat .copilotKitInput > [data-layout='compact'] > div:last-child > div {
+  margin-right: 0 !important;
+}
+
+.copilotKitPopup .copilotKitInput [data-testid='copilot-send-button'],
+.copilotKitPopup .copilotKitInput > [data-layout='compact'] > div:last-child button,
+.ai-copilot-chat .copilotKitInput [data-testid='copilot-send-button'],
+.ai-copilot-chat .copilotKitInput > [data-layout='compact'] > div:last-child button {
+  width: 40px !important;
+  min-width: 40px !important;
+  height: 40px !important;
+  border-radius: 999px !important;
   background: var(--hvac-ai-accent) !important;
+  box-shadow: none !important;
   color: #fff !important;
+  cursor: pointer;
+  opacity: 1 !important;
+  transition: transform 150ms ease, background-color 150ms ease, color 150ms ease;
+}
+
+.copilotKitPopup .copilotKitInput > [data-layout='compact'] > div:last-child button:not(:disabled):hover,
+.ai-copilot-chat .copilotKitInput > [data-layout='compact'] > div:last-child button:not(:disabled):hover {
+  transform: translateY(-1px);
+  background: var(--hvac-ai-accent-strong) !important;
+}
+
+.copilotKitPopup .copilotKitInput > [data-layout='compact'] > div:last-child button:disabled,
+.ai-copilot-chat .copilotKitInput > [data-layout='compact'] > div:last-child button:disabled {
+  border: 1px solid rgba(15, 181, 174, 0.18) !important;
+  background: rgba(15, 181, 174, 0.1) !important;
+  box-shadow: none !important;
+  color: var(--hvac-ai-accent-strong) !important;
+  cursor: default;
+  opacity: 1 !important;
+}
+
+.copilotKitPopup .copilotKitInput [data-testid='copilot-add-menu-button'],
+.ai-copilot-chat .copilotKitInput [data-testid='copilot-add-menu-button'] {
+  width: 36px !important;
+  min-width: 36px !important;
+  height: 36px !important;
+  margin-left: 0 !important;
+  border: 1px solid rgba(15, 23, 42, 0.08) !important;
+  border-radius: 11px !important;
+  background: rgba(15, 23, 42, 0.035) !important;
+  color: var(--hvac-ai-text-secondary) !important;
+  opacity: 1 !important;
+}
+
+[data-theme='dark'] .copilotKitPopup .copilotKitInput [data-testid='copilot-add-menu-button'],
+[data-theme='dark'] .ai-copilot-chat .copilotKitInput [data-testid='copilot-add-menu-button'] {
+  border-color: rgba(255, 255, 255, 0.09) !important;
+  background: rgba(255, 255, 255, 0.055) !important;
+}
+
+.copilotKitPopup .copilotKitInput > [data-layout='compact']:has([data-testid='copilot-add-menu-button']:disabled),
+.ai-copilot-chat .copilotKitInput > [data-layout='compact']:has([data-testid='copilot-add-menu-button']:disabled) {
+  grid-template-columns: minmax(0, 1fr) auto !important;
+}
+
+.copilotKitPopup .copilotKitInput > [data-layout='compact'] > div:first-child:has(> [data-testid='copilot-add-menu-button']:disabled),
+.ai-copilot-chat .copilotKitInput > [data-layout='compact'] > div:first-child:has(> [data-testid='copilot-add-menu-button']:disabled) {
+  display: none !important;
+}
+
+.copilotKitPopup .copilotKitInput > [data-layout='compact']:has([data-testid='copilot-add-menu-button']:disabled) > div:nth-child(2),
+.ai-copilot-chat .copilotKitInput > [data-layout='compact']:has([data-testid='copilot-add-menu-button']:disabled) > div:nth-child(2) {
+  grid-column: 1 !important;
+}
+
+.copilotKitPopup .copilotKitInput > [data-layout='compact']:has([data-testid='copilot-add-menu-button']:disabled) > div:last-child,
+.ai-copilot-chat .copilotKitInput > [data-layout='compact']:has([data-testid='copilot-add-menu-button']:disabled) > div:last-child {
+  grid-column: 2 !important;
 }
 
 .hvac-copilot-disclaimer {
