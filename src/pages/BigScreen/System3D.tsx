@@ -1,16 +1,8 @@
 import { useMemo, useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Grid, ContactShadows } from '@react-three/drei';
+import { ContactShadows, Edges, Grid, OrbitControls, RoundedBox } from '@react-three/drei';
 import * as THREE from 'three';
-import { STATUS, COP_GOOD } from '@/theme/tokens';
-
-// ---- commercial central-AC plant room, stylized as a 3D system diagram ----
-// Layout (top-down view):
-//   [Building Load] (back center)
-//          |
-//   [Chiller] [Chiller]  ----condenser pipes---->  [Tower] [Tower]
-//       |                                                |
-//   [ChillPump]                                    [CondPump]
+import { COP_GOOD, STATUS } from '@/theme/tokens';
 
 export interface System3DProps {
   cop: number;
@@ -20,249 +12,537 @@ export interface System3DProps {
   towerTotal: number;
   pumpRun: number;
   pumpTotal: number;
-  load: number; // 0..100, drives flow speed
+  load: number;
 }
 
 type V3 = [number, number, number];
 
-/* Pipe colors — must match index.tsx ACCENT palette exactly */
-const CHILLED  = '#3b82f6';   /* primary blue: chilled water supply/return */
-const CONDENSER = '#22c55e'; /* green: cooling water (per reference image) */
+const CHILLED = '#3b82f6';
+const CONDENSER = '#2fc98f';
+const STEEL = '#344357';
+const STEEL_LIGHT = '#6f829a';
+const PANEL = '#d8e1ea';
+const PANEL_DARK = '#8ea0b4';
+const FLOOR = '#101a28';
 
-// ---- orthogonal pipe routing ----
-function LPipe({ points, color, radius = 0.055 }: { points: V3[]; color: string; radius?: number }) {
-  const geometries = useMemo(() => {
-    const geoms: { pos: THREE.Vector3; quat: THREE.Quaternion; len: number }[] = [];
-    for (let i = 0; i < points.length - 1; i++) {
-      const a = new THREE.Vector3(...points[i]);
-      const b = new THREE.Vector3(...points[i + 1]);
-      const m = a.clone().add(b).multiplyScalar(0.5);
-      const dir = b.clone().sub(a);
-      const l = dir.length();
-      if (l < 0.001) continue;
-      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
-      geoms.push({ pos: m, quat: q, len: l });
-    }
-    return geoms;
-  }, [points]);
-
-  return (
-    <>
-      {geometries.map((g, i) => (
-        <mesh key={i} position={[g.pos.x, g.pos.y, g.pos.z]} quaternion={[g.quat.x, g.quat.y, g.quat.z, g.quat.w]}>
-          <cylinderGeometry args={[radius, radius, g.len, 12]} />
-          <meshStandardMaterial color={color} metalness={0.25} roughness={0.7} />
-        </mesh>
-      ))}
-    </>
-  );
+function activeAt(index: number, displayCount: number, running: number, total: number) {
+  if (displayCount <= 0 || total <= 0 || running <= 0) return false;
+  return index < Math.max(1, Math.round((running / total) * displayCount));
 }
 
-// Flow particles traveling along path
-function FlowAlongPath({ points, color, speed = 0.28, count = 8, size = 0.07 }: {
-  points: V3[]; color: string; speed?: number; count?: number; size?: number;
-}) {
-  const ref = useRef<THREE.Group>(null);
-  const curve = useMemo(() => new THREE.CatmullRomCurve3(points.map((p) => new THREE.Vector3(...p))), [points]);
-  useFrame((state) => {
-    const g = ref.current;
-    if (!g) return;
-    const t0 = (state.clock.elapsedTime * speed) % 1;
-    for (let i = 0; i < g.children.length; i++) {
-      const t = (t0 + i / count) % 1;
-      const p = curve.getPointAt(t);
-      g.children[i].position.copy(p);
-    }
-  });
-  return (
-    <group ref={ref}>
-      {Array.from({ length: count }).map((_, i) => (
-        <mesh key={i}>
-          <sphereGeometry args={[size, 10, 10]} />
-          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.6} toneMapped={false} />
-        </mesh>
-      ))}
-    </group>
-  );
-}
-
-function PipePair({ pointsA, pointsB, color, speed }: { pointsA: V3[]; pointsB: V3[]; color: string; speed: number }) {
-  return (
-    <>
-      <LPipe points={pointsA} color={color} />
-      <LPipe points={pointsB} color={color} />
-      <FlowAlongPath points={pointsA} color={color} speed={speed} />
-      <FlowAlongPath points={pointsB} color={color} speed={speed} />
-    </>
-  );
-}
-
-function Chiller({ position, color, lit }: { position: V3; color: string; lit: boolean }) {
+function StatusBeacon({ active, color, position }: { active: boolean; color: string; position: V3 }) {
   return (
     <group position={position}>
       <mesh castShadow>
-        <boxGeometry args={[1.6, 1.35, 1.45]} />
+        <cylinderGeometry args={[0.08, 0.1, 0.08, 20]} />
+        <meshStandardMaterial color="#172130" metalness={0.7} roughness={0.35} />
+      </mesh>
+      <mesh position={[0, 0.055, 0]}>
+        <sphereGeometry args={[0.055, 16, 12]} />
         <meshStandardMaterial
-          color={lit ? '#182430' : '#262e38'}
-          metalness={0.4} roughness={0.5}
-          emissive={lit ? color : '#000000'} emissiveIntensity={lit ? 0.3 : 0}
+          color={active ? color : '#5f6b7a'}
+          emissive={active ? color : '#000000'}
+          emissiveIntensity={active ? 2.3 : 0}
+          toneMapped={false}
         />
       </mesh>
-      {/* base plinth */}
-      <mesh position={[0, -0.78, 0]}>
-        <boxGeometry args={[1.75, 0.16, 1.58]} />
-        <meshStandardMaterial color="#10161e" />
+      {active ? <pointLight position={[0, 0.13, 0]} color={color} intensity={0.32} distance={1.8} /> : null}
+    </group>
+  );
+}
+
+function PipeRun({ points, color, radius = 0.065 }: { points: V3[]; color: string; radius?: number }) {
+  const segments = useMemo(() => points.slice(0, -1).map((point, index) => {
+    const start = new THREE.Vector3(...point);
+    const end = new THREE.Vector3(...points[index + 1]);
+    const direction = end.clone().sub(start);
+    const length = direction.length();
+    const center = start.clone().add(end).multiplyScalar(0.5);
+    const quaternion = new THREE.Quaternion().setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      direction.clone().normalize(),
+    );
+    return { start, end, center, quaternion, length };
+  }).filter((segment) => segment.length > 0.001), [points]);
+
+  return (
+    <group>
+      {segments.map((segment, index) => (
+        <group key={index}>
+          <mesh
+            castShadow
+            position={[segment.center.x, segment.center.y, segment.center.z]}
+            quaternion={[segment.quaternion.x, segment.quaternion.y, segment.quaternion.z, segment.quaternion.w]}
+          >
+            <cylinderGeometry args={[radius, radius, segment.length, 20]} />
+            <meshPhysicalMaterial
+              color={color}
+              metalness={0.42}
+              roughness={0.32}
+              clearcoat={0.55}
+              clearcoatRoughness={0.28}
+            />
+          </mesh>
+          {[segment.start, segment.end].map((point, flangeIndex) => (
+            <mesh
+              key={flangeIndex}
+              castShadow
+              position={[point.x, point.y, point.z]}
+              quaternion={[segment.quaternion.x, segment.quaternion.y, segment.quaternion.z, segment.quaternion.w]}
+            >
+              <cylinderGeometry args={[radius * 1.42, radius * 1.42, 0.045, 20]} />
+              <meshStandardMaterial color={STEEL_LIGHT} metalness={0.72} roughness={0.28} />
+            </mesh>
+          ))}
+        </group>
+      ))}
+      {points.slice(1, -1).map((point, index) => (
+        <mesh key={index} castShadow position={point}>
+          <sphereGeometry args={[radius * 1.06, 18, 14]} />
+          <meshPhysicalMaterial color={color} metalness={0.42} roughness={0.32} clearcoat={0.5} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function FlowAlongPath({ points, color, speed, count = 7 }: {
+  points: V3[];
+  color: string;
+  speed: number;
+  count?: number;
+}) {
+  const ref = useRef<THREE.Group>(null);
+  const curve = useMemo(() => {
+    const path = new THREE.CurvePath<THREE.Vector3>();
+    points.slice(0, -1).forEach((point, index) => {
+      path.add(new THREE.LineCurve3(new THREE.Vector3(...point), new THREE.Vector3(...points[index + 1])));
+    });
+    return path;
+  }, [points]);
+
+  useFrame((state) => {
+    if (!ref.current) return;
+    const offset = (state.clock.elapsedTime * speed) % 1;
+    ref.current.children.forEach((child, index) => {
+      child.position.copy(curve.getPointAt((offset + index / count) % 1));
+    });
+  });
+
+  return (
+    <group ref={ref}>
+      {Array.from({ length: count }).map((_, index) => (
+        <mesh key={index}>
+          <sphereGeometry args={[0.055, 12, 10]} />
+          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2.2} toneMapped={false} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function PipeCircuit({ supply, returnPath, color, speed }: {
+  supply: V3[];
+  returnPath: V3[];
+  color: string;
+  speed: number;
+}) {
+  return (
+    <>
+      <PipeRun points={supply} color={color} />
+      <PipeRun points={returnPath} color={color} />
+      <FlowAlongPath points={supply} color={color} speed={speed} />
+      <FlowAlongPath points={returnPath} color={color} speed={speed * 0.88} />
+    </>
+  );
+}
+
+function Valve({ position, rotation = [0, 0, 0], color }: {
+  position: V3;
+  rotation?: V3;
+  color: string;
+}) {
+  return (
+    <group position={position} rotation={rotation}>
+      <mesh castShadow>
+        <cylinderGeometry args={[0.13, 0.13, 0.18, 20]} />
+        <meshStandardMaterial color={STEEL_LIGHT} metalness={0.78} roughness={0.24} />
       </mesh>
-      {/* front LED strip */}
-      <mesh position={[0, 0.15, 0.74]}>
-        <boxGeometry args={[1.3, 0.1, 0.03]} />
-        <meshStandardMaterial color={lit ? color : '#3a4654'} emissive={lit ? color : '#000'} emissiveIntensity={lit ? 0.9 : 0} toneMapped={false} />
+      <mesh position={[0, 0.16, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.12, 0.02, 10, 24]} />
+        <meshStandardMaterial color={color} metalness={0.45} roughness={0.32} />
+      </mesh>
+      <mesh position={[0, 0.1, 0]}>
+        <cylinderGeometry args={[0.025, 0.025, 0.14, 10]} />
+        <meshStandardMaterial color={STEEL_LIGHT} metalness={0.7} roughness={0.3} />
       </mesh>
     </group>
   );
 }
 
-function Fan({ color }: { color: string }) {
-  const ref = useRef<THREE.Group>(null);
-  useFrame((_, delta) => {
-    if (ref.current) ref.current.rotation.y += delta * 1.8;
-  });
+function BaseSkid({ size, position = [0, 0, 0] }: { size: V3; position?: V3 }) {
   return (
-    <group ref={ref} position={[0, 1.02, 0]}>
-      {[0, 1, 2, 3].map((i) => (
-        <group key={i} rotation={[0, (i * Math.PI) / 2, 0]}>
-          <mesh position={[0.44, 0, 0]}>
-            <boxGeometry args={[0.86, 0.04, 0.16]} />
-            <meshStandardMaterial color={color} metalness={0.4} roughness={0.5} />
+    <RoundedBox args={size} radius={0.055} smoothness={4} position={position} castShadow receiveShadow>
+      <meshStandardMaterial color="#111a27" metalness={0.68} roughness={0.42} />
+      <Edges color="#34465c" threshold={18} />
+    </RoundedBox>
+  );
+}
+
+function ChillerUnit({ position, active, color }: { position: V3; active: boolean; color: string }) {
+  const shellColor = active ? '#26384a' : '#25303d';
+  return (
+    <group position={position}>
+      <BaseSkid size={[2.45, 0.16, 1.2]} position={[0, 0.08, 0]} />
+
+      {[0.43, 0.88].map((y, index) => (
+        <group key={y} position={[0, y, 0]}>
+          <mesh castShadow rotation={[0, 0, Math.PI / 2]}>
+            <cylinderGeometry args={[index === 0 ? 0.34 : 0.3, index === 0 ? 0.34 : 0.3, 1.92, 36]} />
+            <meshPhysicalMaterial
+              color={shellColor}
+              metalness={0.56}
+              roughness={0.27}
+              clearcoat={0.62}
+              clearcoatRoughness={0.24}
+              emissive={active ? color : '#000000'}
+              emissiveIntensity={active ? 0.055 : 0}
+            />
+          </mesh>
+          {[-0.99, 0.99].map((x) => (
+            <group key={x} position={[x, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
+              <mesh castShadow>
+                <cylinderGeometry args={[index === 0 ? 0.39 : 0.35, index === 0 ? 0.39 : 0.35, 0.07, 36]} />
+                <meshStandardMaterial color={STEEL_LIGHT} metalness={0.72} roughness={0.25} />
+              </mesh>
+              <mesh position={[0, x > 0 ? 0.042 : -0.042, 0]} rotation={[Math.PI / 2, 0, 0]}>
+                <circleGeometry args={[index === 0 ? 0.29 : 0.25, 36]} />
+                <meshStandardMaterial color="#1a2533" metalness={0.45} roughness={0.42} side={THREE.DoubleSide} />
+              </mesh>
+            </group>
+          ))}
+        </group>
+      ))}
+
+      <RoundedBox args={[1.18, 0.52, 0.7]} radius={0.1} smoothness={5} position={[0.15, 1.28, -0.03]} castShadow>
+        <meshPhysicalMaterial color="#1e2d3d" metalness={0.54} roughness={0.28} clearcoat={0.7} clearcoatRoughness={0.2} />
+        <Edges color="#496078" threshold={20} />
+      </RoundedBox>
+
+      <RoundedBox args={[0.42, 0.52, 0.08]} radius={0.025} smoothness={4} position={[-0.74, 1.18, 0.37]} castShadow>
+        <meshStandardMaterial color={PANEL} metalness={0.28} roughness={0.38} />
+      </RoundedBox>
+      {[0.14, 0, -0.14].map((y, index) => (
+        <mesh key={y} position={[-0.74, 1.18 + y, 0.416]}>
+          <boxGeometry args={[0.28, 0.025, 0.014]} />
+          <meshStandardMaterial color={index === 0 && active ? color : '#66778a'} emissive={index === 0 && active ? color : '#000000'} emissiveIntensity={1.4} toneMapped={false} />
+        </mesh>
+      ))}
+
+      {[-0.82, 0.82].map((x) => (
+        <group key={x} position={[x, 0.22, 0]}>
+          <mesh castShadow>
+            <boxGeometry args={[0.16, 0.3, 0.82]} />
+            <meshStandardMaterial color="#1b2634" metalness={0.62} roughness={0.36} />
           </mesh>
         </group>
       ))}
-      <mesh><cylinderGeometry args={[0.1, 0.1, 0.12, 12]} /><meshStandardMaterial color={color} /></mesh>
+
+      <StatusBeacon active={active} color={color} position={[0.82, 1.62, 0.02]} />
     </group>
   );
 }
 
-function CoolingTower({ position, color, lit }: { position: V3; color: string; lit: boolean }) {
+function PumpUnit({ position, active, color, rotation = [0, 0, 0] }: {
+  position: V3;
+  active: boolean;
+  color: string;
+  rotation?: V3;
+}) {
   return (
-    <group position={position}>
-      <mesh castShadow>
-        <cylinderGeometry args={[0.75, 0.88, 2.0, 24]} />
-        <meshStandardMaterial
-          color={lit ? '#22303a' : '#2c2a28'}
-          metalness={0.2} roughness={0.7}
-          emissive={lit ? color : '#000'} emissiveIntensity={lit ? 0.16 : 0}
+    <group position={position} rotation={rotation}>
+      <BaseSkid size={[1.55, 0.12, 0.72]} position={[0, 0.06, 0]} />
+
+      <mesh castShadow position={[0.36, 0.42, 0]} rotation={[0, 0, Math.PI / 2]}>
+        <cylinderGeometry args={[0.28, 0.28, 0.78, 28]} />
+        <meshPhysicalMaterial color="#39495d" metalness={0.62} roughness={0.3} clearcoat={0.48} />
+      </mesh>
+      <mesh castShadow position={[0.78, 0.42, 0]} rotation={[0, 0, Math.PI / 2]}>
+        <cylinderGeometry args={[0.18, 0.22, 0.08, 28]} />
+        <meshStandardMaterial color={PANEL_DARK} metalness={0.62} roughness={0.3} />
+      </mesh>
+      {[-0.1, 0.08, 0.26, 0.44, 0.62].map((x) => (
+        <mesh key={x} position={[x, 0.42, 0]} rotation={[0, Math.PI / 2, 0]}>
+          <torusGeometry args={[0.285, 0.018, 8, 28]} />
+          <meshStandardMaterial color="#65778b" metalness={0.68} roughness={0.26} />
+        </mesh>
+      ))}
+
+      <mesh castShadow position={[-0.38, 0.42, 0]} rotation={[0, Math.PI / 2, 0]}>
+        <torusGeometry args={[0.27, 0.13, 18, 40]} />
+        <meshPhysicalMaterial
+          color={active ? color : STEEL}
+          metalness={0.48}
+          roughness={0.32}
+          clearcoat={0.5}
+          emissive={active ? color : '#000000'}
+          emissiveIntensity={active ? 0.08 : 0}
         />
       </mesh>
-      <mesh position={[0, 1.01, 0]}>
-        <torusGeometry args={[0.69, 0.05, 12, 24]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35} toneMapped={false} />
+      <mesh castShadow position={[-0.38, 0.42, 0]} rotation={[0, Math.PI / 2, 0]}>
+        <cylinderGeometry args={[0.14, 0.14, 0.3, 24]} />
+        <meshStandardMaterial color="#243244" metalness={0.6} roughness={0.34} />
       </mesh>
-      <Fan color={color} />
+      <mesh castShadow position={[-0.38, 0.74, 0]}>
+        <cylinderGeometry args={[0.12, 0.12, 0.42, 20]} />
+        <meshPhysicalMaterial color={color} metalness={0.5} roughness={0.3} clearcoat={0.5} />
+      </mesh>
+      <StatusBeacon active={active} color={color} position={[0.66, 0.79, 0]} />
     </group>
   );
 }
 
-function Pump({ position, color, lit }: { position: V3; color: string; lit: boolean }) {
+function TowerFan({ active, color }: { active: boolean; color: string }) {
+  const ref = useRef<THREE.Group>(null);
+  useFrame((_, delta) => {
+    if (ref.current && active) ref.current.rotation.y += delta * 1.3;
+  });
+
+  return (
+    <group position={[0, 1.4, 0]}>
+      <mesh rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.48, 0.055, 16, 40]} />
+        <meshStandardMaterial color={STEEL_LIGHT} metalness={0.7} roughness={0.28} />
+      </mesh>
+      <group ref={ref}>
+        {[0, 1, 2, 3, 4].map((index) => (
+          <group key={index} rotation={[0, (index * Math.PI * 2) / 5, 0]}>
+            <mesh position={[0.25, 0, 0]}>
+              <boxGeometry args={[0.48, 0.035, 0.13]} />
+              <meshStandardMaterial color={active ? color : '#596779'} metalness={0.42} roughness={0.38} />
+            </mesh>
+          </group>
+        ))}
+        <mesh>
+          <cylinderGeometry args={[0.11, 0.11, 0.12, 20]} />
+          <meshStandardMaterial color="#26374a" metalness={0.62} roughness={0.32} />
+        </mesh>
+      </group>
+    </group>
+  );
+}
+
+function CoolingTowerUnit({ position, active, color }: { position: V3; active: boolean; color: string }) {
   return (
     <group position={position}>
-      <mesh castShadow>
-        <cylinderGeometry args={[0.32, 0.32, 0.58, 20]} />
-        <meshStandardMaterial
-          color={lit ? '#1a2632' : '#292f38'}
-          metalness={0.35} roughness={0.55}
-          emissive={lit ? color : '#000'} emissiveIntensity={lit ? 0.28 : 0}
+      <BaseSkid size={[1.45, 0.14, 1.45]} position={[0, 0.07, 0]} />
+      <mesh castShadow position={[0, 0.77, 0]} rotation={[0, Math.PI / 4, 0]}>
+        <cylinderGeometry args={[0.73, 0.9, 1.36, 4]} />
+        <meshPhysicalMaterial
+          color={active ? '#314456' : '#303a46'}
+          metalness={0.4}
+          roughness={0.34}
+          clearcoat={0.42}
+          emissive={active ? color : '#000000'}
+          emissiveIntensity={active ? 0.04 : 0}
         />
+        <Edges color="#60738a" threshold={12} />
       </mesh>
-      <mesh position={[0.34, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
-        <cylinderGeometry args={[0.17, 0.17, 0.36, 16]} />
-        <meshStandardMaterial color="#3a4856" />
+
+      {[-0.5, -0.25, 0, 0.25, 0.5].map((y) => (
+        <group key={y}>
+          <mesh position={[0, 0.72 + y, 0.665]}>
+            <boxGeometry args={[1.05, 0.055, 0.04]} />
+            <meshStandardMaterial color="#7f91a4" metalness={0.55} roughness={0.3} />
+          </mesh>
+          <mesh position={[0.665, 0.72 + y, 0]} rotation={[0, Math.PI / 2, 0]}>
+            <boxGeometry args={[1.05, 0.055, 0.04]} />
+            <meshStandardMaterial color="#7f91a4" metalness={0.55} roughness={0.3} />
+          </mesh>
+        </group>
+      ))}
+
+      <RoundedBox args={[1.22, 0.16, 1.22]} radius={0.05} smoothness={4} position={[0, 1.35, 0]} castShadow>
+        <meshStandardMaterial color="#243447" metalness={0.55} roughness={0.31} />
+        <Edges color="#52677f" threshold={16} />
+      </RoundedBox>
+      <TowerFan active={active} color={color} />
+      <StatusBeacon active={active} color={color} position={[0.52, 1.52, 0.52]} />
+    </group>
+  );
+}
+
+function LoadModule({ load }: { load: number }) {
+  const active = load > 0;
+  return (
+    <group position={[0, 0, -3.25]}>
+      <BaseSkid size={[3.15, 0.14, 0.92]} position={[0, 0.07, 0]} />
+      <RoundedBox args={[2.92, 1.16, 0.72]} radius={0.08} smoothness={5} position={[0, 0.72, 0]} castShadow>
+        <meshPhysicalMaterial color="#1c2d40" metalness={0.48} roughness={0.34} clearcoat={0.46} />
+        <Edges color="#425a72" threshold={18} />
+      </RoundedBox>
+      {[-1.05, -0.52, 0, 0.52, 1.05].map((x) => (
+        <mesh key={x} position={[x, 0.72, 0.37]}>
+          <boxGeometry args={[0.32, 0.82, 0.035]} />
+          <meshStandardMaterial color="#53677d" metalness={0.58} roughness={0.3} />
+        </mesh>
+      ))}
+      <mesh position={[0, 1.15, 0.39]}>
+        <boxGeometry args={[2.45 * Math.max(0.12, load / 100), 0.055, 0.025]} />
+        <meshStandardMaterial color={CHILLED} emissive={active ? CHILLED : '#000000'} emissiveIntensity={active ? 1.1 : 0} toneMapped={false} />
       </mesh>
     </group>
   );
 }
 
-function Plant({ cop, chillerRun, towerRun, pumpRun, pumpTotal, load }: System3DProps) {
+function RaisedZone({ position, size, accent }: { position: V3; size: [number, number]; accent: string }) {
+  return (
+    <group position={position}>
+      <RoundedBox args={[size[0], 0.055, size[1]]} radius={0.08} smoothness={4} receiveShadow>
+        <meshStandardMaterial color={FLOOR} metalness={0.22} roughness={0.72} />
+        <Edges color="#273a50" threshold={16} />
+      </RoundedBox>
+      <mesh position={[0, 0.031, -size[1] / 2 + 0.05]}>
+        <boxGeometry args={[size[0] - 0.18, 0.012, 0.035]} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.45} toneMapped={false} />
+      </mesh>
+    </group>
+  );
+}
+
+function Plant({ cop, chillerRun, chillerTotal, towerRun, towerTotal, pumpRun, pumpTotal, load }: System3DProps) {
   const chillerColor = cop >= COP_GOOD ? CHILLED : STATUS.warn;
-  const flowSpeed = 0.22 + (load / 100) * 0.38;
+  const flowSpeed = 0.16 + (load / 100) * 0.3;
 
-  // --- device positions ---
-  const c1: V3 = [-3.2, 0.75, -0.95];  // chiller 1
-  const c2: V3 = [-3.2, 0.75, 0.95];   // chiller 2
-  const t1: V3 = [3.2, 1.0, -0.95];     // tower 1
-  const t2: V3 = [3.2, 1.0, 0.95];      // tower 2
-  const cp1: V3 = [-1.3, 0.29, -0.95];  // chilled pump
-  const cp2: V3 = [-1.3, 0.29, 0.95];   // condenser pump
-  const bldgPos: V3 = [0, 2.55, -3.0];   // building slab
+  const chillerPositions: V3[] = [
+    [-3.2, 0.03, -1.65],
+    [-3.2, 0.03, 0],
+    [-3.2, 0.03, 1.65],
+  ];
+  const towerPositions: V3[] = [
+    [3.4, 0.03, -1.65],
+    [3.4, 0.03, 0],
+    [3.4, 0.03, 1.65],
+  ];
+  const pumpPositions: Array<{ position: V3; color: string; rotation?: V3 }> = [
+    { position: [-1.15, 0.03, -1.45], color: CHILLED },
+    { position: [-1.15, 0.03, 0.1], color: CHILLED },
+    { position: [1.18, 0.03, 0.1], color: CONDENSER, rotation: [0, Math.PI, 0] },
+    { position: [1.18, 0.03, 1.65], color: CONDENSER, rotation: [0, Math.PI, 0] },
+  ];
 
-  // --- pipe routing elevations ---
-  const CH_Y = 1.52;   // condenser header (chiller top)
-  const CW_Y = 0.65;   // chilled header (mid-chiller)
-  const BL_Y = 2.1;    // building connection
+  const chilledSupply: V3[] = [
+    [-2.05, 0.54, -1.65],
+    [-1.55, 0.54, -1.65],
+    [-0.75, 0.54, -1.65],
+    [-0.75, 0.54, -2.45],
+    [0, 0.54, -2.45],
+    [0, 0.54, -2.86],
+  ];
+  const chilledReturn: V3[] = [
+    [0.36, 0.76, -2.86],
+    [0.36, 0.76, -2.2],
+    [-0.34, 0.76, -2.2],
+    [-0.34, 0.76, 1.65],
+    [-2.05, 0.76, 1.65],
+  ];
 
-  // Condenser loops: chiller tops ↔ tower sides
-  const condSupplyFwd: V3[] = [[-2.4, CH_Y, -0.95], [0, CH_Y, -0.95], [2.4, CH_Y, -0.95], [2.4, CH_Y - 0.3, -0.95]];
-  const condReturnFwd: V3[] = [[-2.4, CH_Y + 0.18, -0.95], [0, CH_Y + 0.18, -0.95], [2.4, CH_Y + 0.18, -0.95], [2.4, CH_Y + 0.18 - 0.3, -0.95]];
-  const condSupplyBack: V3[] = [[-2.4, CH_Y, 0.95], [0, CH_Y, 0.95], [2.4, CH_Y, 0.95], [2.4, CH_Y - 0.3, 0.95]];
-  const condReturnBack: V3[] = [[-2.4, CH_Y + 0.18, 0.95], [0, CH_Y + 0.18, 0.95], [2.4, CH_Y + 0.18, 0.95], [2.4, CH_Y + 0.18 - 0.3, 0.95]];
-
-  // Chilled loop: chiller → pump → building
-  const chillSupFwd: V3[] = [[-2.4, CW_Y, -0.95], [-1.65, CW_Y, -0.95], [-1.3, 0.62, -0.95]];
-  const chillRetFwd: V3[] = [[-2.4, CW_Y + 0.2, -0.95], [-1.65, CW_Y + 0.2, -0.95], [-1.3, 0.82, -0.95]];
-  const chillToBldg: V3[] = [[-1.1, 0.72, -0.95], [0, 0.72, -0.95], [0, 0.72, -2.3], [0, BL_Y, -2.3], [0, BL_Y, -2.9]];
-  const chillFromBldg: V3[] = [[0.38, BL_Y + 0.2, -2.9], [0.38, BL_Y + 0.2, -2.3], [0.38, 0.92, -2.3], [0.38, 0.92, 0.95], [-1.65, 0.92, 0.95], [-2.4, CW_Y + 0.2, 0.95]];
-
-  const litC = (i: number) => i < chillerRun;
-  const litT = (i: number) => i < towerRun;
-  const litP = (i: number) => i < Math.min(pumpTotal, Math.ceil((pumpRun / pumpTotal) * 2));
+  const condenserSupply: V3[] = [
+    [-2.05, 1.14, -1.65],
+    [-0.1, 1.14, -1.65],
+    [2.45, 1.14, -1.65],
+    [2.45, 0.78, -1.65],
+  ];
+  const condenserReturn: V3[] = [
+    [2.45, 1.02, 1.65],
+    [2.45, 1.34, 1.65],
+    [0.1, 1.34, 1.65],
+    [-2.05, 1.34, 1.65],
+  ];
 
   return (
     <>
-      <ambientLight intensity={0.55} />
-      <directionalLight position={[6, 10, 5]} intensity={1.3} castShadow shadow-mapSize={[1024, 1024]} />
-      <pointLight position={[0, 4.5, 0]} color={'#3b82f6'} intensity={0.45} distance={24} />
+      <hemisphereLight intensity={0.62} color="#dbeafe" groundColor="#07101b" />
+      <directionalLight
+        position={[5.5, 9, 6.5]}
+        intensity={1.7}
+        castShadow
+        shadow-mapSize={[2048, 2048]}
+        shadow-camera-left={-8}
+        shadow-camera-right={8}
+        shadow-camera-top={8}
+        shadow-camera-bottom={-8}
+      />
+      <spotLight position={[-5, 6, 4]} angle={0.5} penumbra={0.7} intensity={0.75} color="#8ec5ff" distance={18} />
+      <spotLight position={[5, 5, -3]} angle={0.55} penumbra={0.8} intensity={0.62} color="#63e6c1" distance={18} />
 
       <Grid
-        args={[26, 26]}
-        cellSize={0.6} cellThickness={0.6} cellColor="#1b2a3a"
-        sectionSize={3} sectionThickness={1} sectionColor="#23445a"
-        fadeDistance={26} fadeStrength={1.4} infiniteGrid position={[0, 0.005, 0]}
+        args={[24, 24]}
+        cellSize={0.6}
+        cellThickness={0.45}
+        cellColor="#17283b"
+        sectionSize={3}
+        sectionThickness={0.78}
+        sectionColor="#244159"
+        fadeDistance={20}
+        fadeStrength={1.75}
+        infiniteGrid
+        position={[0, 0.002, 0]}
       />
-      <ContactShadows position={[0, 0.02, 0]} opacity={0.48} scale={24} blur={2.2} far={5} color="#000000" />
+      <ContactShadows position={[0, 0.012, 0]} opacity={0.58} scale={19} blur={2.8} far={5.5} color="#000000" />
 
-      {/* building / cooled-load slab */}
-      <mesh position={bldgPos}>
-        <boxGeometry args={[5, 1.2, 0.35]} />
-        <meshStandardMaterial
-          color={'#3b82f6'} transparent opacity={0.08}
-          emissive={'#3b82f6'} emissiveIntensity={0.12}
+      <RaisedZone position={[-3.2, 0.015, 0]} size={[2.85, 5.45]} accent={CHILLED} />
+      <RaisedZone position={[0, 0.015, 0.12]} size={[3.65, 5.25]} accent="#64748b" />
+      <RaisedZone position={[3.4, 0.015, 0]} size={[2.7, 5.45]} accent={CONDENSER} />
+
+      <LoadModule load={load} />
+
+      {chillerPositions.map((position, index) => (
+        <ChillerUnit
+          key={index}
+          position={position}
+          active={activeAt(index, chillerPositions.length, chillerRun, chillerTotal)}
+          color={chillerColor}
         />
-      </mesh>
+      ))}
+      {towerPositions.map((position, index) => (
+        <CoolingTowerUnit
+          key={index}
+          position={position}
+          active={activeAt(index, towerPositions.length, towerRun, towerTotal)}
+          color={CONDENSER}
+        />
+      ))}
+      {pumpPositions.map((pump, index) => (
+        <PumpUnit
+          key={index}
+          position={pump.position}
+          rotation={pump.rotation}
+          active={activeAt(index, pumpPositions.length, pumpRun, pumpTotal)}
+          color={pump.color}
+        />
+      ))}
 
-      {/* devices */}
-      <Chiller position={c1} color={chillerColor} lit={litC(0)} />
-      <Chiller position={c2} color={chillerColor} lit={litC(1)} />
-      <CoolingTower position={t1} color={CONDENSER} lit={litT(0)} />
-      <CoolingTower position={t2} color={CONDENSER} lit={litT(1)} />
-      <Pump position={cp1} color={CHILLED} lit={litP(0)} />
-      <Pump position={cp2} color={CONDENSER} lit={litP(1)} />
+      <PipeCircuit supply={chilledSupply} returnPath={chilledReturn} color={CHILLED} speed={flowSpeed} />
+      <PipeCircuit supply={condenserSupply} returnPath={condenserReturn} color={CONDENSER} speed={flowSpeed * 0.92} />
 
-      {/* condenser water loops */}
-      <PipePair pointsA={condSupplyFwd} pointsB={condReturnFwd} color={CONDENSER} speed={flowSpeed} />
-      <PipePair pointsA={condSupplyBack} pointsB={condReturnBack} color={CONDENSER} speed={flowSpeed} />
+      {[-1.65, 0, 1.65].map((z) => (
+        <group key={`chiller-branch-${z}`}>
+          <PipeRun points={[[-2.05, 0.54, z], [-1.82, 0.54, z]]} color={CHILLED} radius={0.052} />
+          <PipeRun points={[[-2.05, 1.14, z], [-1.72, 1.14, z]]} color={CONDENSER} radius={0.052} />
+        </group>
+      ))}
+      {[-1.65, 0, 1.65].map((z) => (
+        <group key={`tower-branch-${z}`}>
+          <PipeRun points={[[2.45, 0.78, z], [2.72, 0.78, z]]} color={CONDENSER} radius={0.052} />
+          <PipeRun points={[[2.45, 1.02, z], [2.72, 1.02, z]]} color={CONDENSER} radius={0.052} />
+        </group>
+      ))}
 
-      {/* chilled water: chiller → pump → building */}
-      <LPipe points={chillSupFwd} color={CHILLED} />
-      <LPipe points={chillRetFwd} color={CHILLED} />
-      <FlowAlongPath points={chillSupFwd} color={CHILLED} speed={flowSpeed} />
-      <FlowAlongPath points={chillRetFwd} color={CHILLED} speed={flowSpeed * 0.9} />
-      <LPipe points={chillToBldg} color={CHILLED} />
-      <LPipe points={chillFromBldg} color={CHILLED} />
-      <FlowAlongPath points={chillToBldg} color={CHILLED} speed={flowSpeed} />
-      <FlowAlongPath points={chillFromBldg} color={CHILLED} speed={flowSpeed * 0.9} />
-
-      {/* Labels removed — device identification handled by DevCard overlays in parent index.tsx.
-          Keeping 3D Html labels conflicts with autoRotating camera + absolute-positioned DevCards,
-          causing persistent overlap that cannot be resolved by CSS positioning alone. */}
+      <Valve position={[-0.75, 0.69, -2.45]} color={CHILLED} />
+      <Valve position={[-0.34, 0.91, -0.72]} color={CHILLED} />
+      <Valve position={[0.2, 1.29, -1.65]} color={CONDENSER} />
+      <Valve position={[0.2, 1.49, 1.65]} color={CONDENSER} />
     </>
   );
 }
@@ -271,22 +551,22 @@ export default function System3D(props: System3DProps & { style?: React.CSSPrope
   return (
     <Canvas
       shadows
-      dpr={[1, 2]}
-      camera={{ position: [7, 6.5, 11], fov: 42 }}
-      gl={{ antialias: true, alpha: true }}
+      dpr={[1, 1.8]}
+      camera={{ position: [8.8, 7.2, 11.6], fov: 38 }}
+      gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
       style={{ width: '100%', height: '100%', background: 'transparent', ...props.style }}
     >
       <Plant {...props} />
       <OrbitControls
-        target={[0, 0.9, -0.3]}
+        target={[0, 0.72, -0.15]}
         enableDamping
-        dampingFactor={0.08}
+        dampingFactor={0.075}
         enableZoom={false}
         enablePan={false}
-        minAzimuthAngle={-0.72}
-        maxAzimuthAngle={0.72}
-        minPolarAngle={0.45}
-        maxPolarAngle={1.18}
+        minAzimuthAngle={-0.48}
+        maxAzimuthAngle={0.48}
+        minPolarAngle={0.54}
+        maxPolarAngle={1.02}
       />
     </Canvas>
   );
