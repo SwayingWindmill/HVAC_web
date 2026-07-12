@@ -5,6 +5,7 @@ import { useLocation } from 'react-router-dom';
 import CopilotContextBridge from './CopilotContextBridge';
 import {
   HvacCopilotHeaderContent,
+  HvacCopilotToggleCloseIcon,
   HvacCopilotToggleIcon,
   HvacCopilotWelcomeScreen,
 } from './HvacCopilotUi';
@@ -33,7 +34,7 @@ function CopilotPopupAssistant() {
         toggleButton={{
           className: 'hvac-copilot-toggle',
           openIcon: HvacCopilotToggleIcon,
-          closeIcon: HvacCopilotToggleIcon,
+          closeIcon: HvacCopilotToggleCloseIcon,
         }}
         welcomeScreen={HvacCopilotWelcomeScreen}
         labels={{

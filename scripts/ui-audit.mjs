@@ -420,6 +420,9 @@ try {
       const popupStyle = popup ? getComputedStyle(popup) : null;
       const toggle = document.querySelector('.hvac-copilot-toggle');
       const toggleRect = toggle?.getBoundingClientRect();
+      const toggleStyle = toggle ? getComputedStyle(toggle) : null;
+      const overlapWidth = rect && toggleRect ? Math.max(0, Math.min(rect.right, toggleRect.right) - Math.max(rect.left, toggleRect.left)) : 0;
+      const overlapHeight = rect && toggleRect ? Math.max(0, Math.min(rect.bottom, toggleRect.bottom) - Math.max(rect.top, toggleRect.top)) : 0;
       const composer = popup?.querySelector('.copilotKitInput');
       const composerRect = composer?.getBoundingClientRect();
       const composerStyle = composer ? getComputedStyle(composer) : null;
@@ -457,6 +460,11 @@ try {
         sendHeight: sendRect?.height ?? 0,
         disabledAddHidden: !addButton || !addButton.disabled || (addRect?.width ?? 0) === 0,
         toggleWidth: toggleRect?.width ?? 0,
+        toggleHeight: toggleRect?.height ?? 0,
+        toggleRadius: Number.parseFloat(toggleStyle?.borderRadius || '0'),
+        toggleBackgroundImage: toggleStyle?.backgroundImage ?? '',
+        toggleOpacity: Number.parseFloat(toggleStyle?.opacity || '0'),
+        toggleOverlapArea: overlapWidth * overlapHeight,
         headerActionCount: popup?.querySelectorAll('.hvac-copilot-header-actions > button').length ?? 0,
         hasReadonlyBadge: Boolean(popup?.querySelector('.hvac-copilot-readonly-badge')),
         hasExpandAction: Boolean(popup?.querySelector('button[aria-label="打开完整 AI 工作台"]')),
@@ -489,7 +497,20 @@ try {
     assert(aiPopupState.composerBorderWidth >= 1 && aiPopupState.composerShadow !== 'none', 'CopilotPopup composer lacks a clear surface boundary');
     assert(aiPopupState.sendWidth >= 39 && aiPopupState.sendHeight >= 39, 'CopilotPopup send action is too small');
     assert(aiPopupState.disabledAddHidden, 'CopilotPopup exposes an unavailable add action');
-    assert(aiPopupState.toggleWidth > 0 && aiPopupState.toggleWidth <= 130, 'CopilotPopup launcher has excessive visual weight');
+    assert(
+      aiPopupState.toggleWidth >= 54
+        && aiPopupState.toggleWidth <= 64
+        && aiPopupState.toggleHeight >= 54
+        && aiPopupState.toggleHeight <= 64
+        && aiPopupState.toggleRadius >= 27,
+      `CopilotPopup launcher is not a prominent circular control: ${JSON.stringify(aiPopupState)}`,
+    );
+    assert(
+      aiPopupState.toggleBackgroundImage !== 'none'
+        && aiPopupState.toggleOpacity >= 0.95
+        && aiPopupState.toggleOverlapArea === 0,
+      `CopilotPopup launcher visibility or placement is invalid: ${JSON.stringify(aiPopupState)}`,
+    );
     assert(aiPopupState.headerActionCount === 3 && !aiPopupState.hasReadonlyBadge && !aiPopupState.hasExpandAction, 'CopilotPopup header hierarchy is invalid');
     assert(aiPopupState.minCustomFontSize >= 11, 'CopilotPopup custom business text is too small');
     assert(aiPopupState.background !== 'rgba(0, 0, 0, 0)' && aiPopupState.background !== 'transparent', 'CopilotPopup surface is transparent');
@@ -505,7 +526,7 @@ try {
         && aiPopupState.hasHistoryAction
         && aiPopupState.suggestionCount === 0
         && aiPopupState.hasBrandedToggle
-        && aiPopupState.togglePointerEvents === 'none',
+        && aiPopupState.togglePointerEvents !== 'none',
       `CopilotPopup HVAC product UI is incomplete: ${JSON.stringify(aiPopupState)}`,
     );
     await evaluate(client, `document.querySelector('.copilotKitPopup .copilotKitInput textarea')?.focus()`);
@@ -1030,8 +1051,16 @@ try {
       `CopilotChat workspace shell is invalid: ${JSON.stringify(aiWorkspaceInitialState)}`,
     );
 
-    await evaluate(client, `document.querySelector('.ai-copilot-chat .copilotKitInput textarea')?.focus()`);
-    await pause(180);
+    await waitFor(client, `(() => {
+      const textarea = document.querySelector('.ai-copilot-chat .copilotKitInput textarea');
+      const composer = document.querySelector('.ai-copilot-chat .copilotKitInput');
+      if (!textarea || !composer) return false;
+      textarea.focus();
+      const style = getComputedStyle(composer);
+      return document.activeElement === textarea
+        && style.borderTopColor !== ${JSON.stringify(aiWorkspaceInitialState.composerBorderColor)}
+        && style.boxShadow !== ${JSON.stringify(aiWorkspaceInitialState.composerShadow)};
+    })()`, 'AI workspace composer focus feedback');
     const aiWorkspaceFocusState = await evaluate(client, `(() => {
       const composer = document.querySelector('.ai-copilot-chat .copilotKitInput');
       const style = composer ? getComputedStyle(composer) : null;
@@ -1342,6 +1371,29 @@ try {
     await evaluate(client, `history.forward()`);
     await waitFor(client, `location.pathname === '/assets' && new URLSearchParams(location.search).get('device') === 'b1-z1-u1'`, 'history forward');
     interactionChecks.push('history-back-forward');
+
+    context = 'interaction:energy-first-entry';
+    await spaNavigate(client, '/energy');
+    await waitFor(client, `location.pathname === '/energy/month'`, 'energy index redirect');
+    await waitFor(
+      client,
+      `document.body.innerText.includes('月度能耗分析') && document.querySelectorAll('.ops-chart-card').length >= 4 && document.querySelectorAll('.ops-metric').length >= 4`,
+      'energy first-entry content',
+    );
+    const energyFirstEntryState = await evaluate(client, `({
+      pathname: location.pathname,
+      chartCount: document.querySelectorAll('.ops-chart-card').length,
+      metricCount: document.querySelectorAll('.ops-metric').length,
+      contentHeight: document.querySelector('.energy-system-root')?.scrollHeight ?? 0,
+    })`);
+    assert(
+      energyFirstEntryState.pathname === '/energy/month'
+        && energyFirstEntryState.chartCount >= 4
+        && energyFirstEntryState.metricCount >= 4
+        && energyFirstEntryState.contentHeight > 900,
+      `Energy first entry rendered an incomplete workspace: ${JSON.stringify(energyFirstEntryState)}`,
+    );
+    interactionChecks.push('energy-first-entry');
 
     context = 'interaction:energy-mtd';
     await spaNavigate(client, '/energy/month');

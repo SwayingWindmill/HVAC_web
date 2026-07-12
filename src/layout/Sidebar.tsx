@@ -139,7 +139,7 @@ export default function Sidebar() {
 
   const selectedKey = `/${location.pathname.split('/')[1] || 'dashboard'}`;
   const handleNavigate = (key: string) => {
-    navigate(key);
+    navigate(key === '/energy' ? '/energy/month' : key);
     if (mobile) setSidebarCollapsed(true);
   };
 

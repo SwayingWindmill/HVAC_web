@@ -1,9 +1,11 @@
 import { useMemo, useState, type ComponentProps, type ReactElement } from 'react';
 import { CopilotChatView } from '@copilotkit/react-core/v2';
 import {
+  CloseOutlined,
   ExpandOutlined,
   HistoryOutlined,
   PlusOutlined,
+  RobotOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
@@ -18,19 +20,33 @@ import {
 type WelcomeScreenProps = ComponentProps<typeof CopilotChatView.WelcomeScreen>;
 type WelcomeVariant = 'popup' | 'workspace';
 
-export function HvacCopilotToggleIcon() {
+function HvacCopilotAttentionBadge() {
   const context = useAiApplicationContext();
   const countLabel = context.attentionCount > 9 ? '9+' : String(context.attentionCount);
 
+  if (context.attentionCount <= 0) return null;
+
+  return (
+    <span className="hvac-copilot-toggle-count" aria-label={`${context.attentionCount} 项待关注`}>
+      {countLabel}
+    </span>
+  );
+}
+
+export function HvacCopilotToggleIcon() {
   return (
     <span className="hvac-copilot-toggle-content">
-      <span className="hvac-copilot-toggle-presence" aria-hidden="true" />
-      <span className="hvac-copilot-toggle-label">AI 助手</span>
-      {context.attentionCount > 0 && (
-        <span className="hvac-copilot-toggle-count" aria-label={`${context.attentionCount} 项待关注`}>
-          {countLabel}
-        </span>
-      )}
+      <RobotOutlined className="hvac-copilot-toggle-glyph" aria-hidden="true" />
+      <HvacCopilotAttentionBadge />
+    </span>
+  );
+}
+
+export function HvacCopilotToggleCloseIcon() {
+  return (
+    <span className="hvac-copilot-toggle-content">
+      <CloseOutlined className="hvac-copilot-toggle-glyph" aria-hidden="true" />
+      <HvacCopilotAttentionBadge />
     </span>
   );
 }
