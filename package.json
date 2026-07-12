@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "lint": "tsc --noEmit",
     "audit:ui": "node scripts/run-browser-audit.mjs scripts/ui-audit.mjs",
+    "audit:bigscreen": "node scripts/run-browser-audit.mjs scripts/bigscreen-layout-audit.mjs",
     "audit:ops-loop": "node scripts/run-browser-audit.mjs scripts/ops-loop-audit.mjs",
     "audit:all": "node scripts/audit-all.mjs"
   },

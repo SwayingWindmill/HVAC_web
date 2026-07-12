@@ -279,12 +279,14 @@ export default function System3D(props: System3DProps & { style?: React.CSSPrope
       <Plant {...props} />
       <OrbitControls
         target={[0, 0.9, -0.3]}
-        autoRotate
-        autoRotateSpeed={0.4}
+        enableDamping
+        dampingFactor={0.08}
         enableZoom={false}
         enablePan={false}
+        minAzimuthAngle={-0.72}
+        maxAzimuthAngle={0.72}
         minPolarAngle={0.45}
-        maxPolarAngle={1.45}
+        maxPolarAngle={1.18}
       />
     </Canvas>
   );

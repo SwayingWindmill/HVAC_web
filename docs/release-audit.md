@@ -1,9 +1,10 @@
 # Release audit
 
-The project provides three browser-audit commands.
+The project provides four browser-audit commands.
 
 ```bash
 npm run audit:ui
+npm run audit:bigscreen
 npm run audit:ops-loop
 npm run audit:all
 ```
@@ -31,6 +32,19 @@ Coverage:
 
 The current matrix contains 42 access checks, 84 theme/viewport checks, and 23 interaction checks: 149 checks in total.
 
+### `npm run audit:bigscreen`
+
+Runs the dedicated presentation-layout audit against the BigScreen route. When no server is available at `http://127.0.0.1:5173`, the command starts a temporary Vite development server and shuts it down after the audit.
+
+Coverage:
+
+- 1920×1080, 1440×900, 1366×768, and 1024×768 presentation viewports;
+- every visible ECharts canvas remains inside its explicit chart frame and does not intersect another chart;
+- minimum chart heights remain readable, with low-height desktop layouts dropping secondary panels instead of compressing charts;
+- the Three.js canvas fills the central system viewport;
+- the device status rail remains collision-free and fixed-position device overlays do not return;
+- page-level overflow, operational footer content, and fixed-view status.
+
 ### `npm run audit:ops-loop`
 
 Runs the HVAC business-loop audit in one SPA session so Zustand state remains continuous.
@@ -53,8 +67,9 @@ Runs the release gate in this order:
 2. production build;
 3. temporary Vite production preview;
 4. full-site UI audit;
-5. HVAC operations-loop audit;
-6. Impeccable design audit.
+5. BigScreen layout audit;
+6. HVAC operations-loop audit;
+7. Impeccable design audit.
 
 The command stops the temporary preview server whether the audit passes or fails.
 
@@ -67,8 +82,9 @@ node scripts/audit-all.mjs --skip-build
 ## Environment variables
 
 - `HVAC_AUDIT_BASE_URL`: use an existing server instead of starting the default local audit server.
-- `HVAC_AUDIT_DEV_PORT`: standalone `audit:ui` and `audit:ops-loop` server port; default `5173`.
+- `HVAC_AUDIT_DEV_PORT`: standalone `audit:ui`, `audit:bigscreen`, and `audit:ops-loop` server port; default `5173`.
 - `HVAC_AUDIT_PORT`: production preview port used by `audit:all`; default `4173`.
 - `HVAC_UI_AUDIT_DEBUG_PORT`: Edge DevTools port for the UI audit; default `9342`.
+- `HVAC_BIGSCREEN_AUDIT_DEBUG_PORT`: Edge DevTools port for the BigScreen layout audit; default `9335`.
 
 Microsoft Edge must be installed in one of the standard Windows installation locations.

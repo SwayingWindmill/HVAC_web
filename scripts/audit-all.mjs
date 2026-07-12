@@ -56,16 +56,16 @@ async function stopServer(server) {
 let preview;
 try {
   if (!skipBuild) {
-    console.log('\n[1/6] TypeScript validation');
+    console.log('\n[1/7] TypeScript validation');
     await run(npmCommand, ['run', 'lint']);
 
-    console.log('\n[2/6] Production build');
+    console.log('\n[2/7] Production build');
     await run(npmCommand, ['run', 'build']);
   } else {
-    console.log('\n[1-2/6] Reusing existing dist (--skip-build)');
+    console.log('\n[1-2/7] Reusing existing dist (--skip-build)');
   }
 
-  console.log(`\n[3/6] Starting production preview at ${baseUrl}`);
+  console.log(`\n[3/7] Starting production preview at ${baseUrl}`);
   preview = spawn(process.execPath, [
     resolve(root, 'node_modules/vite/bin/vite.js'),
     'preview',
@@ -83,17 +83,22 @@ try {
   });
   await waitForServer();
 
-  console.log('\n[4/6] Full-site UI audit');
+  console.log('\n[4/7] Full-site UI audit');
   await run(process.execPath, ['scripts/ui-audit.mjs'], {
     env: { HVAC_AUDIT_BASE_URL: baseUrl },
   });
 
-  console.log('\n[5/6] HVAC operations loop audit');
+  console.log('\n[5/7] BigScreen layout audit');
+  await run(process.execPath, ['scripts/bigscreen-layout-audit.mjs'], {
+    env: { HVAC_AUDIT_BASE_URL: baseUrl },
+  });
+
+  console.log('\n[6/7] HVAC operations loop audit');
   await run(process.execPath, ['scripts/ops-loop-audit.mjs'], {
     env: { HVAC_AUDIT_BASE_URL: baseUrl },
   });
 
-  console.log('\n[6/6] Impeccable design audit');
+  console.log('\n[7/7] Impeccable design audit');
   await run(npxCommand, ['-y', 'impeccable', 'detect', 'src', '--no-config']);
 
   console.log('\nRelease audit passed.');
