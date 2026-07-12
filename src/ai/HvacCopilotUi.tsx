@@ -1,4 +1,4 @@
-import { useMemo, useState, type ComponentProps, type HTMLAttributes, type ReactElement } from 'react';
+import { useMemo, useState, type ComponentProps, type ReactElement } from 'react';
 import { CopilotChatView } from '@copilotkit/react-core/v2';
 import {
   ExpandOutlined,
@@ -266,11 +266,3 @@ export function HvacCopilotWorkspaceWelcomeScreen(props: WelcomeScreenProps) {
   return <HvacCopilotWelcomeBase {...props} variant="workspace" />;
 }
 
-export function HvacCopilotDisclaimer(props: HTMLAttributes<HTMLDivElement>) {
-  const { className, ...rest } = props;
-  return (
-    <div {...rest} className={['hvac-copilot-disclaimer', className].filter(Boolean).join(' ')}>
-      仅用于分析与建议；设备控制及业务写入需人工确认。
-    </div>
-  );
-}

@@ -703,7 +703,7 @@
   max-width: 792px;
   margin-top: auto;
   margin-inline: auto;
-  padding: 18px 0;
+  padding: 18px 0 22px;
 }
 
 .hvac-copilot-welcome[data-variant='workspace'] .hvac-copilot-welcome-input .copilotKitInput {
@@ -732,7 +732,7 @@
   padding: 4px 6px !important;
   border-radius: 18px !important;
   background: #fff !important;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 8px 22px rgba(15, 23, 42, 0.09) !important;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.09) !important;
 }
 
 .copilotKitPopup .copilotKitInput > [data-layout='compact'],
@@ -744,19 +744,19 @@
 .copilotKitPopup .copilotKitInput:focus-within,
 .ai-copilot-chat .copilotKitInput:focus-within {
   border-color: var(--hvac-ai-accent) !important;
-  box-shadow: 0 0 0 3px rgba(15, 181, 174, 0.11), 0 10px 28px rgba(15, 23, 42, 0.11) !important;
+  box-shadow: 0 0 0 3px rgba(15, 181, 174, 0.1), 0 5px 16px rgba(15, 23, 42, 0.1) !important;
 }
 
 [data-theme='dark'] .copilotKitPopup .copilotKitInput {
   border-color: rgba(255, 255, 255, 0.18) !important;
   background: #1d242d !important;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22), 0 10px 26px rgba(0, 0, 0, 0.28) !important;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.3) !important;
 }
 
 [data-theme='dark'] .copilotKitPopup .copilotKitInput:focus-within,
 [data-theme='dark'] .ai-copilot-chat .copilotKitInput:focus-within {
   border-color: var(--hvac-ai-accent) !important;
-  box-shadow: 0 0 0 3px rgba(57, 197, 190, 0.13), 0 12px 30px rgba(0, 0, 0, 0.3) !important;
+  box-shadow: 0 0 0 3px rgba(57, 197, 190, 0.12), 0 6px 18px rgba(0, 0, 0, 0.32) !important;
 }
 
 .copilotKitPopup .copilotKitInput textarea,
@@ -868,16 +868,6 @@
 .copilotKitPopup .copilotKitInput > [data-layout='compact']:has([data-testid='copilot-add-menu-button']:disabled) > div:last-child,
 .ai-copilot-chat .copilotKitInput > [data-layout='compact']:has([data-testid='copilot-add-menu-button']:disabled) > div:last-child {
   grid-column: 2 !important;
-}
-
-.hvac-copilot-disclaimer {
-  max-width: 100%;
-  padding: 0 4px;
-  overflow-wrap: anywhere;
-  color: var(--hvac-ai-text-secondary);
-  font-size: 11px;
-  line-height: 1.5;
-  text-align: center;
 }
 
 .copilotKitPopup .copilotKitMessages,

@@ -4,7 +4,6 @@ import '@copilotkit/react-core/v2/styles.css';
 import { useLocation } from 'react-router-dom';
 import CopilotContextBridge from './CopilotContextBridge';
 import {
-  HvacCopilotDisclaimer,
   HvacCopilotHeaderContent,
   HvacCopilotToggleIcon,
   HvacCopilotWelcomeScreen,
@@ -37,17 +36,12 @@ function CopilotPopupAssistant() {
           closeIcon: HvacCopilotToggleIcon,
         }}
         welcomeScreen={HvacCopilotWelcomeScreen}
-        input={{
-          disclaimer: HvacCopilotDisclaimer,
-          showDisclaimer: true,
-        }}
         labels={{
           modalHeaderTitle: AI_ASSISTANT_NAME,
           welcomeMessageText: context.welcomeTitle,
           chatInputPlaceholder: context.inputPlaceholder,
           chatToggleOpenLabel: '打开 HVAC AI 运维助手',
           chatToggleCloseLabel: '关闭 HVAC AI 运维助手',
-          chatDisclaimerText: 'AI 结论基于当前页面与已接入数据；设备控制和业务写入必须人工确认。',
           chatInputToolbarStartTranscribeButtonLabel: '开始语音输入',
           chatInputToolbarCancelTranscribeButtonLabel: '取消语音输入',
           chatInputToolbarFinishTranscribeButtonLabel: '完成语音输入',

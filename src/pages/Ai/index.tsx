@@ -33,7 +33,6 @@ import {
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import CopilotContextBridge from '@/ai/CopilotContextBridge';
 import {
-  HvacCopilotDisclaimer,
   HvacCopilotWorkspaceWelcomeScreen,
 } from '@/ai/HvacCopilotUi';
 import { useAiApplicationContext } from '@/ai/context';
@@ -461,14 +460,9 @@ function AiWorkspace() {
               <CopilotChat
                 className="ai-copilot-chat"
                 welcomeScreen={HvacCopilotWorkspaceWelcomeScreen}
-                input={{
-                  disclaimer: HvacCopilotDisclaimer,
-                  showDisclaimer: true,
-                }}
                 labels={{
                   welcomeMessageText: context.welcomeTitle,
                   chatInputPlaceholder: context.inputPlaceholder,
-                  chatDisclaimerText: '仅用于分析与建议；设备控制及业务写入需人工确认。',
                   chatInputToolbarStartTranscribeButtonLabel: '开始语音输入',
                   chatInputToolbarCancelTranscribeButtonLabel: '取消语音输入',
                   chatInputToolbarFinishTranscribeButtonLabel: '完成语音输入',

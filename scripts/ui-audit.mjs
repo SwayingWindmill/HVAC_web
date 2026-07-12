@@ -463,6 +463,7 @@ try {
         minCustomFontSize: customText.length ? Math.min(...customText) : 0,
         offenderCount: offenders.length,
         hasInput: Boolean(popup?.querySelector('textarea')),
+        hasPersistentDisclaimer: popup?.textContent?.includes('设备控制和业务写入必须人工确认') ?? false,
         hasBrandedHeader: Boolean(popup?.querySelector('.hvac-copilot-header-layout')),
         hasBrandedWelcome: Boolean(popup?.querySelector('.hvac-copilot-welcome')),
         hasPopupContext: Boolean(popup?.querySelector('.hvac-copilot-popup-context')),
@@ -495,6 +496,7 @@ try {
     assert(aiPopupState.offenderCount === 0, 'CopilotPopup has horizontal overflow');
     assert(
       aiPopupState.hasInput
+        && !aiPopupState.hasPersistentDisclaimer
         && aiPopupState.hasBrandedHeader
         && aiPopupState.hasBrandedWelcome
         && aiPopupState.hasPopupContext
@@ -928,6 +930,7 @@ try {
       return {
         workspace: Boolean(workspace),
         textarea: Boolean(textarea),
+        hasPersistentDisclaimer: workspace?.textContent?.includes('仅用于分析与建议；设备控制及业务写入需人工确认。') ?? false,
         popupLauncher: Boolean(document.querySelector('.hvac-copilot-toggle')),
         popup: Boolean(document.querySelector('.copilotKitPopup')),
         threadRows: document.querySelectorAll('.ai-thread-list .ai-thread-row').length,
@@ -981,6 +984,7 @@ try {
     assert(
       aiWorkspaceInitialState.workspace
         && aiWorkspaceInitialState.textarea
+        && !aiWorkspaceInitialState.hasPersistentDisclaimer
         && !aiWorkspaceInitialState.popupLauncher
         && !aiWorkspaceInitialState.popup
         && aiWorkspaceInitialState.threadRows >= 3
