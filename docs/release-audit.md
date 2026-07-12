@@ -43,7 +43,7 @@ Coverage:
 - minimum chart heights remain readable, with low-height desktop layouts dropping secondary panels instead of compressing charts;
 - the Three.js canvas fills the central system viewport;
 - the device status rail remains collision-free and fixed-position device overlays do not return;
-- page-level overflow, operational footer content, and fixed-view status.
+- page-level overflow, operational footer content, the loaded 禾苗 brand mark/title, controlled-zoom guidance, and the declared 10.5–18.5 camera-distance range.
 
 ### `npm run audit:ops-loop`
 

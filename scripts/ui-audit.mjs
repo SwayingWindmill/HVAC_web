@@ -29,9 +29,9 @@ const ROUTES = [
   { path: '/fdd', title: '故障检测与诊断 FDD', roles: ['ops', 'rd'] },
   { path: '/alarms', title: '报警工单', roles: ['ops', 'rd'] },
   { path: '/optimize', title: '节能优化建议', roles: ['rd'] },
-  { path: '/ai', title: 'HVAC AI 运维助手', roles: ['rd'] },
+  { path: '/ai', title: '禾苗 AI 运维助手', roles: ['rd'] },
   { path: '/system', title: '系统管理', roles: ['rd'] },
-  { path: '/bigscreen', title: '商业建筑智慧能源驾驶舱', roles: ['demo', 'ops', 'rd'], bigscreen: true },
+  { path: '/bigscreen', title: '禾苗智慧能源驾驶舱', roles: ['demo', 'ops', 'rd'], bigscreen: true },
 ];
 
 const ROLE_LABELS = {
@@ -484,9 +484,9 @@ try {
       };
     })()`);
     assert(
-      aiPopupState.title === 'HVAC AI 运维助手'
-        || aiPopupState.headerText.includes('HVAC AI 运维助手')
-        || aiPopupState.popupText.includes('HVAC AI 运维助手'),
+      aiPopupState.title === '禾苗 AI 运维助手'
+        || aiPopupState.headerText.includes('禾苗 AI 运维助手')
+        || aiPopupState.popupText.includes('禾苗 AI 运维助手'),
       `CopilotPopup title is invalid: ${JSON.stringify(aiPopupState)}`,
     );
     assert(aiPopupState.width >= 500 && aiPopupState.width <= 560, 'CopilotPopup desktop width is invalid');
@@ -1270,8 +1270,9 @@ try {
       };
     })()`);
     assert(
-      aiPersistedRestoreState.text.includes('为什么当前能耗升高？')
-        && aiPersistedRestoreState.text.includes('总功率约')
+      aiPersistedRestoreState.header === '为什么当前能耗升高？'
+        && aiPersistedRestoreState.storage.includes('总功率约')
+        && aiPersistedRestoreState.threadRows.some((row) => row.includes('为什么当前能耗升高？'))
         && aiPersistedRestoreState.pageFixed,
       `AI workspace persisted thread restore is invalid: ${JSON.stringify(aiPersistedRestoreState)}`,
     );

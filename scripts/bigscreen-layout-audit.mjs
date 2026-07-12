@@ -191,7 +191,12 @@ try {
         pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
           || document.documentElement.scrollHeight > document.documentElement.clientHeight + 1,
         hasOperationalFooter: document.querySelector('.bigscreen-footer')?.textContent?.includes('数据更新时间') ?? false,
-        hasFixedViewLabel: document.querySelector('.bigscreen-canvas-mode')?.textContent?.includes('固定等轴视图') ?? false,
+        hasBrand: document.querySelector('.bigscreen-brand h1')?.textContent?.includes('禾苗智慧能源驾驶舱')
+          && document.querySelector('.bigscreen-brand-mark')?.complete
+          && document.querySelector('.bigscreen-brand-mark')?.naturalWidth > 0,
+        hasControlledViewLabel: document.querySelector('.bigscreen-canvas-mode')?.textContent?.includes('滚轮缩放') ?? false,
+        zoomMin: Number(systemFrame?.dataset.zoomMin ?? 0),
+        zoomMax: Number(systemFrame?.dataset.zoomMax ?? 0),
       };
     })()`);
 
@@ -205,7 +210,9 @@ try {
     assert(state.absoluteDeviceCards === 0, `${viewport.name}: fixed-position device cards returned to the 3D canvas`);
     assert(!state.pageOverflow, `${viewport.name}: page-level overflow detected`);
     assert(state.hasOperationalFooter, `${viewport.name}: operational footer is missing`);
-    assert(state.hasFixedViewLabel, `${viewport.name}: fixed-view status is missing`);
+    assert(state.hasBrand, `${viewport.name}: 禾苗 brand identity is missing or failed to load`);
+    assert(state.hasControlledViewLabel, `${viewport.name}: controlled zoom guidance is missing`);
+    assert(state.zoomMin === 10.5 && state.zoomMax === 18.5, `${viewport.name}: zoom range is invalid: ${state.zoomMin}–${state.zoomMax}`);
     checks.push(`${viewport.name} layout remains collision-free`);
   }
 

@@ -41,7 +41,9 @@
   padding: 0;
 }
 
-.sidebar-brand svg {
+.sidebar-brand-mark {
+  width: 34px;
+  height: 34px;
   flex: 0 0 auto;
   filter: drop-shadow(0 5px 12px rgba(15, 181, 174, 0.2));
 }

@@ -141,9 +141,12 @@ export default function BigScreen() {
         <main className="bigscreen-stage">
           <header className="bigscreen-header">
             <div className="bigscreen-brand">
-              <span className="bigscreen-eyebrow">HVAC OPERATIONS COMMAND</span>
-              <h1>商业建筑智慧能源驾驶舱</h1>
-              <p>{activeScene.subtitle}</p>
+              <img className="bigscreen-brand-mark" src="/hemiao-mark.svg" alt="" />
+              <div className="bigscreen-brand-copy">
+                <span className="bigscreen-eyebrow">HEMIAO ENERGY COMMAND</span>
+                <h1>禾苗智慧能源驾驶舱</h1>
+                <p>{activeScene.subtitle}</p>
+              </div>
             </div>
 
             <nav className="bigscreen-scenes" aria-label="驾驶舱场景">
@@ -207,23 +210,28 @@ export default function BigScreen() {
                   <span>当前负载 <strong>{liveLoad}%</strong></span>
                 </div>
 
-                <div className="bigscreen-system-canvas" data-testid="bigscreen-system-canvas">
+                <div
+                  className="bigscreen-system-canvas"
+                  data-testid="bigscreen-system-canvas"
+                  data-zoom-min="10.5"
+                  data-zoom-max="18.5"
+                >
                   <Suspense fallback={<Spinner />}>
                     <ErrorBoundary fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: '#718199', fontSize: 11, textAlign: 'center', padding: 20 }}>当前环境不支持 3D 渲染<br />驾驶舱其余数据正常显示</div>}>
                       <System3D
                         cop={liveCop}
                         chillerRun={2}
-                        chillerTotal={2}
+                        chillerTotal={3}
                         towerRun={2}
-                        towerTotal={2}
+                        towerTotal={3}
                         pumpRun={3}
-                        pumpTotal={3}
+                        pumpTotal={4}
                         load={liveLoad}
                         style={{ position: 'absolute', inset: 0 }}
                       />
                     </ErrorBoundary>
                   </Suspense>
-                  <span className="bigscreen-canvas-mode"><SafetyCertificateOutlined />固定等轴视图 · 可拖拽检查</span>
+                  <span className="bigscreen-canvas-mode"><SafetyCertificateOutlined />等轴视图 · 拖拽旋转 · 滚轮缩放</span>
                 </div>
 
                 <DeviceStatusRail items={deviceStats} />

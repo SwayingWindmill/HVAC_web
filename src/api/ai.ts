@@ -3,7 +3,7 @@ import { USE_MOCK } from './config';
 import { mockGetLatest, MOCK_DEVICES, MOCK_KEYS } from './mock';
 
 /**
- * HVAC AI 运维助手聊天层。
+ * 禾苗 AI 运维助手聊天层。
  *
  * Mock 模式使用模块级 Zustand store，使全局抽屉和 /ai 完整工作台共享同一段会话、
  * 输入草稿和流式状态。真实后端接入后，页面层仍消费统一的 AssistantSession 形状。

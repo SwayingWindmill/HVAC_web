@@ -60,22 +60,7 @@ const NAV_GROUPS: NavGroup[] = [
 ];
 
 function BrandMark() {
-  return (
-    <svg width="34" height="34" viewBox="0 0 34 34" fill="none" aria-hidden="true">
-      <defs>
-        <linearGradient id="brand-gradient" x1="5" y1="4" x2="29" y2="30" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#12C9C0" />
-          <stop offset="1" stopColor="#087E79" />
-        </linearGradient>
-      </defs>
-      <rect x="1" y="1" width="32" height="32" rx="10" fill="url(#brand-gradient)" />
-      <path d="M10 10.5V23.5M24 10.5V23.5M10 17H24" stroke="white" strokeWidth="2.2" strokeLinecap="round" />
-      <path d="M7.5 12.5C10.3 8.8 14.2 7 18 7" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.72" />
-      <path d="M26.5 21.5C23.7 25.2 19.8 27 16 27" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.72" />
-      <circle cx="25.5" cy="11.5" r="1.5" fill="#CFFFFC" />
-      <circle cx="8.5" cy="22.5" r="1.5" fill="#CFFFFC" />
-    </svg>
-  );
+  return <img className="sidebar-brand-mark" src="/hemiao-mark.svg" alt="" />;
 }
 
 function buildItem(path: string, modules: ReturnType<typeof visibleModules>): MenuItem | null {
@@ -149,8 +134,8 @@ export default function Sidebar() {
         <BrandMark />
         {!menuCollapsed && (
           <div className="sidebar-brand-copy">
-            <div className="sidebar-brand-title">HVAC 智慧能源</div>
-            <div className="sidebar-brand-subtitle">SMART ENERGY</div>
+            <div className="sidebar-brand-title">禾苗智慧能源</div>
+            <div className="sidebar-brand-subtitle">HEMIAO SMART ENERGY</div>
           </div>
         )}
       </div>

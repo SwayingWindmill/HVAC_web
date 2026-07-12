@@ -125,7 +125,7 @@ export class HvacMockAgent extends AbstractAgent {
   constructor() {
     super({
       agentId: 'default',
-      description: 'HVAC 智慧能源只读本地演示 Agent。',
+      description: '禾苗智慧能源只读本地演示 Agent。',
       initialState: {},
     });
   }

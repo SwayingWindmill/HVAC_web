@@ -19,11 +19,11 @@ type V3 = [number, number, number];
 
 const CHILLED = '#3b82f6';
 const CONDENSER = '#2fc98f';
-const STEEL = '#344357';
-const STEEL_LIGHT = '#6f829a';
+const STEEL = '#465b73';
+const STEEL_LIGHT = '#8ea2b9';
 const PANEL = '#d8e1ea';
-const PANEL_DARK = '#8ea0b4';
-const FLOOR = '#101a28';
+const PANEL_DARK = '#a9b7c7';
+const FLOOR = '#152236';
 
 function activeAt(index: number, displayCount: number, running: number, total: number) {
   if (displayCount <= 0 || total <= 0 || running <= 0) return false;
@@ -190,7 +190,7 @@ function BaseSkid({ size, position = [0, 0, 0] }: { size: V3; position?: V3 }) {
 }
 
 function ChillerUnit({ position, active, color }: { position: V3; active: boolean; color: string }) {
-  const shellColor = active ? '#26384a' : '#25303d';
+  const shellColor = active ? '#3b5871' : '#33485d';
   return (
     <group position={position}>
       <BaseSkid size={[2.45, 0.16, 1.2]} position={[0, 0.08, 0]} />
@@ -225,7 +225,7 @@ function ChillerUnit({ position, active, color }: { position: V3; active: boolea
       ))}
 
       <RoundedBox args={[1.18, 0.52, 0.7]} radius={0.1} smoothness={5} position={[0.15, 1.28, -0.03]} castShadow>
-        <meshPhysicalMaterial color="#1e2d3d" metalness={0.54} roughness={0.28} clearcoat={0.7} clearcoatRoughness={0.2} />
+        <meshPhysicalMaterial color="#30485f" metalness={0.54} roughness={0.28} clearcoat={0.7} clearcoatRoughness={0.2} />
         <Edges color="#496078" threshold={20} />
       </RoundedBox>
 
@@ -265,7 +265,7 @@ function PumpUnit({ position, active, color, rotation = [0, 0, 0] }: {
 
       <mesh castShadow position={[0.36, 0.42, 0]} rotation={[0, 0, Math.PI / 2]}>
         <cylinderGeometry args={[0.28, 0.28, 0.78, 28]} />
-        <meshPhysicalMaterial color="#39495d" metalness={0.62} roughness={0.3} clearcoat={0.48} />
+        <meshPhysicalMaterial color="#526a84" metalness={0.62} roughness={0.3} clearcoat={0.48} />
       </mesh>
       <mesh castShadow position={[0.78, 0.42, 0]} rotation={[0, 0, Math.PI / 2]}>
         <cylinderGeometry args={[0.18, 0.22, 0.08, 28]} />
@@ -339,7 +339,7 @@ function CoolingTowerUnit({ position, active, color }: { position: V3; active: b
       <mesh castShadow position={[0, 0.77, 0]} rotation={[0, Math.PI / 4, 0]}>
         <cylinderGeometry args={[0.73, 0.9, 1.36, 4]} />
         <meshPhysicalMaterial
-          color={active ? '#314456' : '#303a46'}
+          color={active ? '#49657b' : '#405365'}
           metalness={0.4}
           roughness={0.34}
           clearcoat={0.42}
@@ -363,7 +363,7 @@ function CoolingTowerUnit({ position, active, color }: { position: V3; active: b
       ))}
 
       <RoundedBox args={[1.22, 0.16, 1.22]} radius={0.05} smoothness={4} position={[0, 1.35, 0]} castShadow>
-        <meshStandardMaterial color="#243447" metalness={0.55} roughness={0.31} />
+        <meshStandardMaterial color="#36506a" metalness={0.55} roughness={0.31} />
         <Edges color="#52677f" threshold={16} />
       </RoundedBox>
       <TowerFan active={active} color={color} />
@@ -378,7 +378,7 @@ function LoadModule({ load }: { load: number }) {
     <group position={[0, 0, -3.25]}>
       <BaseSkid size={[3.15, 0.14, 0.92]} position={[0, 0.07, 0]} />
       <RoundedBox args={[2.92, 1.16, 0.72]} radius={0.08} smoothness={5} position={[0, 0.72, 0]} castShadow>
-        <meshPhysicalMaterial color="#1c2d40" metalness={0.48} roughness={0.34} clearcoat={0.46} />
+        <meshPhysicalMaterial color="#304a63" metalness={0.48} roughness={0.34} clearcoat={0.46} />
         <Edges color="#425a72" threshold={18} />
       </RoundedBox>
       {[-1.05, -0.52, 0, 0.52, 1.05].map((x) => (
@@ -399,13 +399,15 @@ function RaisedZone({ position, size, accent }: { position: V3; size: [number, n
   return (
     <group position={position}>
       <RoundedBox args={[size[0], 0.055, size[1]]} radius={0.08} smoothness={4} receiveShadow>
-        <meshStandardMaterial color={FLOOR} metalness={0.22} roughness={0.72} />
+        <meshStandardMaterial
+          color={FLOOR}
+          emissive={accent}
+          emissiveIntensity={0.018}
+          metalness={0.22}
+          roughness={0.72}
+        />
         <Edges color="#273a50" threshold={16} />
       </RoundedBox>
-      <mesh position={[0, 0.031, -size[1] / 2 + 0.05]}>
-        <boxGeometry args={[size[0] - 0.18, 0.012, 0.035]} />
-        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.45} toneMapped={false} />
-      </mesh>
     </group>
   );
 }
@@ -462,10 +464,11 @@ function Plant({ cop, chillerRun, chillerTotal, towerRun, towerTotal, pumpRun, p
 
   return (
     <>
-      <hemisphereLight intensity={0.62} color="#dbeafe" groundColor="#07101b" />
+      <ambientLight intensity={0.34} />
+      <hemisphereLight intensity={0.88} color="#eff8ff" groundColor="#0c1724" />
       <directionalLight
         position={[5.5, 9, 6.5]}
-        intensity={1.7}
+        intensity={2.15}
         castShadow
         shadow-mapSize={[2048, 2048]}
         shadow-camera-left={-8}
@@ -473,8 +476,8 @@ function Plant({ cop, chillerRun, chillerTotal, towerRun, towerTotal, pumpRun, p
         shadow-camera-top={8}
         shadow-camera-bottom={-8}
       />
-      <spotLight position={[-5, 6, 4]} angle={0.5} penumbra={0.7} intensity={0.75} color="#8ec5ff" distance={18} />
-      <spotLight position={[5, 5, -3]} angle={0.55} penumbra={0.8} intensity={0.62} color="#63e6c1" distance={18} />
+      <spotLight position={[-5, 6, 4]} angle={0.5} penumbra={0.7} intensity={1.05} color="#a7d7ff" distance={18} />
+      <spotLight position={[5, 5, -3]} angle={0.55} penumbra={0.8} intensity={0.9} color="#8df4d3" distance={18} />
 
       <Grid
         args={[24, 24]}
@@ -489,7 +492,7 @@ function Plant({ cop, chillerRun, chillerTotal, towerRun, towerTotal, pumpRun, p
         infiniteGrid
         position={[0, 0.002, 0]}
       />
-      <ContactShadows position={[0, 0.012, 0]} opacity={0.58} scale={19} blur={2.8} far={5.5} color="#000000" />
+      <ContactShadows position={[0, 0.012, 0]} opacity={0.42} scale={19} blur={3.1} far={5.5} color="#000000" />
 
       <RaisedZone position={[-3.2, 0.015, 0]} size={[2.85, 5.45]} accent={CHILLED} />
       <RaisedZone position={[0, 0.015, 0.12]} size={[3.65, 5.25]} accent="#64748b" />
@@ -554,6 +557,10 @@ export default function System3D(props: System3DProps & { style?: React.CSSPrope
       dpr={[1, 1.8]}
       camera={{ position: [8.8, 7.2, 11.6], fov: 38 }}
       gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
+      onCreated={({ gl }) => {
+        gl.toneMapping = THREE.ACESFilmicToneMapping;
+        gl.toneMappingExposure = 1.22;
+      }}
       style={{ width: '100%', height: '100%', background: 'transparent', ...props.style }}
     >
       <Plant {...props} />
@@ -561,7 +568,10 @@ export default function System3D(props: System3DProps & { style?: React.CSSPrope
         target={[0, 0.72, -0.15]}
         enableDamping
         dampingFactor={0.075}
-        enableZoom={false}
+        enableZoom
+        zoomSpeed={0.72}
+        minDistance={10.5}
+        maxDistance={18.5}
         enablePan={false}
         minAzimuthAngle={-0.48}
         maxAzimuthAngle={0.48}
