@@ -853,13 +853,14 @@ try {
       const workspace = document.querySelector('.ai-copilot-chat-shell');
       const textarea = workspace?.querySelector('textarea');
       const content = document.querySelector('.app-content-ai');
-      const page = document.querySelector('.ai-ops-page');
+      const page = document.querySelector('.ai-ops-workspace');
       const hub = document.querySelector('.ai-hub');
       const surface = document.querySelector('.ai-hub-body');
       const threadSidebar = document.querySelector('.ai-thread-sidebar');
       const conversation = document.querySelector('.ai-conversation-pane');
       const evidenceSidebar = document.querySelector('.ai-evidence-sidebar');
-      const pageTitle = document.querySelector('.ai-ops-page .ops-page-title');
+      const contentRect = content?.getBoundingClientRect();
+      const pageRect = page?.getBoundingClientRect();
       const customText = [...(hub?.querySelectorAll([
         '.ai-thread-copy p',
         '.ai-thread-meta',
@@ -889,11 +890,14 @@ try {
         threadRows: document.querySelectorAll('.ai-thread-list .ai-thread-row').length,
         hasThreadSearch: Boolean(document.querySelector('.ai-thread-search input')),
         hasEvidenceRail: Boolean(document.querySelector('.ai-evidence-sidebar')),
-        usesPageScaffold: Boolean(page?.classList.contains('ops-page')),
-        titleFontSize: pageTitle ? Number.parseFloat(getComputedStyle(pageTitle).fontSize) : 0,
-        surfaceRadius: surface ? Number.parseFloat(getComputedStyle(surface).borderRadius) : 0,
+        hasDecorativePageHeader: Boolean(document.querySelector('.ai-ops-workspace .ops-page-header, .ai-page-status')),
+        fillsContentWidth: Boolean(contentRect && pageRect && Math.abs(contentRect.width - pageRect.width) <= 1),
+        fillsContentHeight: Boolean(contentRect && pageRect && Math.abs(contentRect.height - pageRect.height) <= 1),
+        alignsContentLeft: Boolean(contentRect && pageRect && Math.abs(contentRect.left - pageRect.left) <= 1),
+        alignsContentTop: Boolean(contentRect && pageRect && Math.abs(contentRect.top - pageRect.top) <= 1),
+        surfaceRadius: surface ? Number.parseFloat(getComputedStyle(surface).borderRadius) : -1,
         surfaceGap: surface ? getComputedStyle(surface).columnGap : '',
-        surfaceBorderWidth: surface ? Number.parseFloat(getComputedStyle(surface).borderTopWidth) : 0,
+        surfaceBorderWidth: surface ? Number.parseFloat(getComputedStyle(surface).borderTopWidth) : -1,
         threadRadius: threadSidebar ? Number.parseFloat(getComputedStyle(threadSidebar).borderRadius) : -1,
         conversationRadius: conversation ? Number.parseFloat(getComputedStyle(conversation).borderRadius) : -1,
         evidenceRadius: evidenceSidebar ? Number.parseFloat(getComputedStyle(evidenceSidebar).borderRadius) : -1,
@@ -918,11 +922,14 @@ try {
         && aiWorkspaceInitialState.threadRows >= 3
         && aiWorkspaceInitialState.hasThreadSearch
         && aiWorkspaceInitialState.hasEvidenceRail
-        && aiWorkspaceInitialState.usesPageScaffold
-        && aiWorkspaceInitialState.titleFontSize >= 25
-        && aiWorkspaceInitialState.surfaceRadius >= 15
+        && !aiWorkspaceInitialState.hasDecorativePageHeader
+        && aiWorkspaceInitialState.fillsContentWidth
+        && aiWorkspaceInitialState.fillsContentHeight
+        && aiWorkspaceInitialState.alignsContentLeft
+        && aiWorkspaceInitialState.alignsContentTop
+        && aiWorkspaceInitialState.surfaceRadius === 0
         && aiWorkspaceInitialState.surfaceGap === '0px'
-        && aiWorkspaceInitialState.surfaceBorderWidth >= 1
+        && aiWorkspaceInitialState.surfaceBorderWidth === 0
         && aiWorkspaceInitialState.threadRadius === 0
         && aiWorkspaceInitialState.conversationRadius === 0
         && aiWorkspaceInitialState.evidenceRadius === 0

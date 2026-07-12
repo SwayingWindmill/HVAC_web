@@ -1,47 +1,29 @@
-.ai-ops-page {
+.ai-ops-workspace {
+  --ops-border: rgba(15, 23, 42, 0.08);
+  --ops-border-soft: rgba(15, 23, 42, 0.055);
+  --ops-surface: var(--ant-color-bg-container, #ffffff);
+  --ops-surface-subtle: rgba(15, 23, 42, 0.025);
+  --ops-text: var(--ant-color-text, #111827);
+  --ops-text-secondary: #64748b;
+  --ops-accent: #0f9f99;
+  --ops-radius-control: 8px;
+  width: 100%;
   height: 100%;
+  min-width: 0;
   min-height: 0;
-  gap: 20px;
   overflow: hidden;
-}
-
-.ai-ops-page > .ops-page-header {
-  min-height: 82px;
-  flex: 0 0 auto;
-}
-
-.ai-ops-page > .ops-page-content {
-  min-height: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-}
-
-.ai-page-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.ai-page-status {
-  display: inline-flex;
-  min-height: 34px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  border: 1px solid var(--ops-border);
-  border-radius: var(--ops-radius-control);
   background: var(--ops-surface);
-  color: var(--ops-text-secondary);
-  font-size: 13px;
-  white-space: nowrap;
+  color: var(--ops-text);
 }
 
-.ai-page-status i {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: #f59e0b;
+[data-theme='dark'] .ai-ops-workspace {
+  --ops-border: rgba(255, 255, 255, 0.09);
+  --ops-border-soft: rgba(255, 255, 255, 0.065);
+  --ops-surface: var(--ant-color-bg-container, #171d24);
+  --ops-surface-subtle: rgba(255, 255, 255, 0.025);
+  --ops-text: #f1f5f9;
+  --ops-text-secondary: #94a3b8;
+  --ops-accent: #39c5be;
 }
 
 .ai-mobile-history-button,
@@ -72,8 +54,8 @@
   grid-template-columns: 252px minmax(480px, 1fr) 304px;
   gap: 0;
   overflow: hidden;
-  border: 1px solid var(--ops-border);
-  border-radius: var(--ops-radius-card);
+  border: 0;
+  border-radius: 0;
   background: var(--ops-surface);
 }
 
@@ -778,26 +760,6 @@
 }
 
 @media (max-width: 860px) {
-  .app-content-ai {
-    padding: 14px !important;
-  }
-
-  .ai-ops-page {
-    gap: 14px;
-  }
-
-  .ai-ops-page > .ops-page-header {
-    min-height: 68px;
-  }
-
-  .ai-ops-page .ops-page-subtitle {
-    display: none;
-  }
-
-  .ai-page-status {
-    display: none;
-  }
-
   .ai-hub-body {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -831,35 +793,6 @@
 }
 
 @media (max-width: 520px) {
-  .app-content-ai {
-    padding: 10px !important;
-  }
-
-  .ai-ops-page {
-    gap: 10px;
-  }
-
-  .ai-ops-page > .ops-page-header {
-    min-height: 58px;
-  }
-
-  .ai-ops-page .ops-page-title.ant-typography {
-    font-size: 22px;
-  }
-
-  .ai-page-actions {
-    gap: 4px;
-  }
-
-  .ai-page-actions .ant-btn {
-    min-width: 40px;
-    padding-inline: 8px;
-  }
-
-  .ai-page-actions .ant-btn > span:not(.ant-btn-icon) {
-    display: none;
-  }
-
   .ai-conversation-header {
     min-height: 62px;
   }

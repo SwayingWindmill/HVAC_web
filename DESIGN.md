@@ -257,14 +257,15 @@ Dashboard 统一的是设计纪律，不是所有卡片的内部模板。运营�
 ### 工作台结构
 
 ```text
-PageScaffold（固定视口）
-└── Raised Surface（16px，唯一外边界）
+AppShell Content（固定视口、零内边距）
+└── Full-bleed AI Workspace（无页面 Hero、无外层 Card）
     ├── Thread Navigator   Inset 背景 + 右分隔线
     ├── CopilotChat Pane   主视觉与唯一纵向滚动区域
     └── Evidence Inspector 左分隔线 + 按需证据和业务动作
 ```
 
-- `/ai` 必须复用系统统一 `PageScaffold`、`OperationsUI.css` 与 `--ops-*` token；不得创建 `--ai-*` 第二套页面设计系统。页面标题、说明、20px 页面间距、16px Card 圆角和 8px Control 圆角必须与 Energy、Cost、FDD 等页面一致。
+- `/ai` 是全屏工作台，不使用普通业务页的 `PageScaffold`、eyebrow、页面标题、说明或顶部状态胶囊；左侧主导航已经表达页面位置，当前线程标题和范围由中间会话 Header 承担。
+- `/ai` 仍必须复用 `OperationsUI.css` 的颜色、字号、8px Control 圆角与信息层级，不得创建独立品牌语言；但工作台根节点必须与 AppShell Content 四边对齐，外层不留 20px 页面内边距、不使用 16px Card 圆角或独立外边框。
 - `/ai` 主对话区必须直接嵌入 CopilotKit 官方 `CopilotChat`，不得使用 `AssistantConversation` 或其他平行消息状态转译层。
 - Popup 与工作台 Chat 必须共享同一个 `default` Agent、活动线程、`CopilotContextBridge`、工具注册和 Generative UI 组件。
 - `/ai` 必须占满 AppShell 剩余视口；浏览器文档、Content、工作台根容器、左侧线程栏和右侧证据栏均不得产生纵向滚动。只有中间 CopilotKit 消息视口允许纵向滚动，输入区必须始终可见。

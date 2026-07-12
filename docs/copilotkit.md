@@ -25,7 +25,7 @@ The current Popup customizes only official extension points:
 - `header`: official `CopilotModalHeader` with its injected functional close button, current scope, in-panel history, and new-session action; full-workspace navigation remains in the history footer rather than competing in the compact header;
 - `welcomeScreen`: route-aware scope, three page actions, two recent sessions, and composer; no decorative AI hero, duplicated global metrics, nested cards, or equal-weight metric strip;
 - Popup history: an application-owned overlay inside the official 520×680, 16px-radius Popup supports search and thread restoration without opening a second Modal or Drawer; the launcher is hidden while the Popup is open;
-- `/ai` workspace: the shared `PageScaffold` and `--ops-*` design tokens wrap one 16px Raised Surface containing a low-weight thread navigator, primary official CopilotChat pane, and evidence inspector separated only by 1px dividers;
+- `/ai` workspace: a full-bleed AppShell workspace with no page Hero or outer Card; it keeps the shared operations colors and typography while thread navigator, primary official CopilotChat pane, and evidence inspector are separated only by 1px dividers;
 - `labels`: Chinese title, dynamic input placeholder, toolbar labels, and safety copy;
 - `input.disclaimer`: explicit read-only and human-approval boundary;
 - Generative UI cards: single evidence panels with typography, dividers, and semantic state color; no card-within-card or decorative shadow stack;
@@ -33,11 +33,17 @@ The current Popup customizes only official extension points:
 
 The Popup must not be wrapped in an application Drawer or Modal, and the application must not duplicate its open/close state.
 
+### CopilotKit UI boundary
+
+The product keeps the official `CopilotChat` for the main message surface because it is designed to be embedded and sized inside any application layout. Product styling should prefer the component slot system for message, composer, and nested controls, while the HVAC application owns the surrounding thread navigation and evidence inspector. Fully Headless UI is reserved for a future non-chat interaction model or a layout that the official slots cannot express; it must not be introduced merely to restyle the current workspace.
+
+The current local Zustand thread repository mirrors the product interactions needed for the frontend phase. A later authenticated backend may adopt CopilotKit `useThreads` for persistent, resumable conversations, rename/archive/delete operations, and realtime cross-device synchronization when the Enterprise Intelligence Platform is part of the deployment architecture.
+
 ### Thread history and workspace scrolling
 
 `src/ai/history.ts` provides the frontend thread contract for the current demo phase. Zustand persist stores thread metadata and serializable Agent messages under `hvac-ai-thread-history-v1`. Popup and `/ai` can search and restore the same records. The workspace supports new session, rename, pin, archive, delete, filters, and pagination. A transient empty CopilotKit message array must never erase a stored non-empty thread; only an explicit new-session action may create an empty active thread.
 
-The `/ai` route is a fixed viewport and visually remains part of the shared operations product. It uses the same PageScaffold title rhythm, 20px page spacing, `--ops-*` colors, 16px outer Surface, 8px controls, and 12–14px business copy as Energy, Cost, and FDD. The browser document, AppShell Content, AI hub, thread navigator, and evidence inspector must not scroll vertically. The only vertical scrolling surface is the CopilotKit message viewport in the center column; the composer remains visible. At tablet/mobile widths, thread and evidence rails move into Ant Design Drawers while the page remains fixed.
+The `/ai` route is a fixed, full-bleed workspace. It deliberately omits the standard page Hero, 20px content padding, and outer Card because the left application navigation already identifies the module and the active thread header supplies the working context. It retains the shared operations colors, 8px controls, and 12–14px business copy. The browser document, AppShell Content, AI hub, thread navigator, and evidence inspector must not scroll vertically. The only vertical scrolling surface is the CopilotKit message viewport in the center column; the composer remains visible. At tablet/mobile widths, thread and evidence rails move into Ant Design Drawers while the page remains fixed.
 
 This local persistence layer is a frontend implementation boundary, not the final source of truth. Remote Runtime mode must eventually replace it with authenticated server-side thread, task, report, and audit persistence while preserving the same UI contract.
 

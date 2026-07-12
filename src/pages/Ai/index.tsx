@@ -48,7 +48,6 @@ import {
 } from '@/ai/history';
 import { useTelemetryLive } from '@/api';
 import { MOCK_DEVICES } from '@/api/mock';
-import PageScaffold from '@/components/PageScaffold';
 import { useUi } from '@/store/ui';
 import './Ai.css';
 
@@ -396,26 +395,7 @@ function AiWorkspace() {
   );
 
   return (
-    <PageScaffold
-      className="ai-ops-page"
-      eyebrow="智能运营"
-      title="AI 运维中心"
-      subtitle="在同一工作台延续调查、核对证据并进入设备、诊断和工单闭环。"
-      extra={
-        <div className="ai-page-actions">
-          <span className="ai-page-status">
-            <i aria-hidden="true" />
-            {context.attentionCount ? `${context.attentionCount} 项待关注` : '当前无高风险待办'}
-          </span>
-          <Button className="ai-mobile-history-button" icon={<MenuOutlined />} onClick={() => setHistoryDrawerOpen(true)}>
-            会话
-          </Button>
-          <Button className="ai-mobile-evidence-button" icon={<DatabaseOutlined />} onClick={() => setEvidenceDrawerOpen(true)}>
-            证据
-          </Button>
-        </div>
-      }
-    >
+    <div className="ai-ops-workspace">
       <div className="ai-hub" aria-label="AI 运维中心">
         <div className="ai-hub-body">
           <aside className="ai-thread-sidebar" aria-label="AI 会话历史">
@@ -432,6 +412,12 @@ function AiWorkspace() {
                 <p title={activeThread?.scopeLabel || context.scopeLabel}>{activeThread?.scopeLabel || context.scopeLabel}</p>
               </div>
               <div className="ai-conversation-actions">
+                <Button className="ai-mobile-history-button" icon={<MenuOutlined />} onClick={() => setHistoryDrawerOpen(true)}>
+                  会话
+                </Button>
+                <Button className="ai-mobile-evidence-button" icon={<DatabaseOutlined />} onClick={() => setEvidenceDrawerOpen(true)}>
+                  证据
+                </Button>
                 <Button type="primary" icon={<PlusOutlined />} onClick={startNewThread}>新建调查</Button>
               </div>
             </header>
@@ -515,7 +501,7 @@ function AiWorkspace() {
           placeholder="输入会话名称"
         />
       </Modal>
-    </PageScaffold>
+    </div>
   );
 }
 
