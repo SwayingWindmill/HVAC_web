@@ -245,8 +245,8 @@ Dashboard 统一的是设计纪律，不是所有卡片的内部模板。运营�
 - CopilotKit 官方 `CopilotPopup` 继续负责窗口开合、焦点、Escape、消息列表、输入、流式状态、Markdown 和移动端全屏行为；不得在外部再包裹 Drawer、Modal 或第二套窗口状态。
 - 产品化定制必须使用官方 slot/props：启动按钮保留官方 `CopilotChatToggleButton`，Header 保留官方 `CopilotModalHeader` 和其注入的关闭回调，应用只替换图标内容、Header 内容、欢迎页、输入提示、建议问题和 CSS token。
 - 桌面启动入口使用低权重的 `AI 助手 + 待关注数量` 状态按钮：120×40px、8px 圆角、系统 Raised Surface 与 Level 2 阴影；不得使用高饱和整块品牌色、渐变、发光、漂浮动画或客服机器人图标。
-- 桌面 Popup 使用 520px 宽、最高约 680px、16px 圆角；Header 只保留助手名称、当前范围、历史、新建和关闭，不得重复放置“只读”、Runtime、角色或第二个展开入口。
-- 空状态按当前路由和对象展示分析范围、3 条页面操作和最近 2 条会话；不得把 Popup 做成缩小版 AI 首页，也不得重复展示页面已经可见的全局指标。
+- 桌面 Popup 使用 520px 宽、最高约 660px、20px 圆角和柔和浮层阴影；Header 高度约 56px，只保留当前会话标题、历史、新建和关闭，不展示范围副标题、状态装饰条、“只读”、Runtime、角色或第二个展开入口。
+- 空状态采用轻聊天窗口结构：顶部只有一行当前页面上下文，中部保留大面积安静留白，底部展示最近 3 条会话和 24px 圆角 Composer；不得展示欢迎 Hero、页面说明、范围卡、建议问题列表或页面已有全局指标。
 - Header 中的历史入口必须在当前 Popup 内切换到会话列表，支持搜索和恢复；完整工作台入口放在历史页底部；打开 Popup 后隐藏右下角启动按钮，避免出现两个 AI 入口。
 - 对话中的结构化结果通过 CopilotKit `useComponent` 注册，不得硬编码成 Markdown。首批标准组件为 `AssetStatusCard`、`EnergyAnomalyCard` 和 `FddEvidenceCard`；结果使用单一证据面板、分隔线和状态色表达层级，不叠加阴影卡与内部指标小卡，只提供查看与业务深链，不执行写操作。
 - 手机端使用 CopilotKit 官方全屏 Popup 行为，不增加自定义 Sheet 或 Drawer。

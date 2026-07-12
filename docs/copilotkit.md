@@ -22,9 +22,9 @@ All CopilotKit components and hooks must import from the `@copilotkit/react-core
 The current Popup customizes only official extension points:
 
 - `toggleButton`: official `CopilotChatToggleButton` with a low-weight 120×40 HVAC Raised Surface, presence indicator, short assistant label, and attention count;
-- `header`: official `CopilotModalHeader` with its injected functional close button, current scope, in-panel history, and new-session action; full-workspace navigation remains in the history footer rather than competing in the compact header;
-- `welcomeScreen`: route-aware scope, three page actions, two recent sessions, and composer; no decorative AI hero, duplicated global metrics, nested cards, or equal-weight metric strip;
-- Popup history: an application-owned overlay inside the official 520×680, 16px-radius Popup supports search and thread restoration without opening a second Modal or Drawer; the launcher is hidden while the Popup is open;
+- `header`: official `CopilotModalHeader` with its injected functional close button, current conversation title, in-panel history, and new-session action; scope, runtime state, and workspace navigation do not compete in the compact header;
+- `welcomeScreen`: ChatGPT-inspired quiet empty state with one route-aware context line, large flexible whitespace, three recent sessions, and a 24px-radius composer; it intentionally omits the welcome hero, page description, scope card, suggestion list, duplicated metrics, and nested cards;
+- Popup history: an application-owned overlay inside the official 520×660, 20px-radius Popup supports search and thread restoration without opening a second Modal or Drawer; its rows use conversation title and time rather than type badges and multi-line summaries, and the launcher is hidden while the Popup is open;
 - `/ai` workspace: a full-bleed AppShell workspace with no page Hero or outer Card; it keeps the shared operations colors and typography while thread navigator, primary official CopilotChat pane, and evidence inspector are separated only by 1px dividers;
 - `labels`: Chinese title, dynamic input placeholder, toolbar labels, and safety copy;
 - `input.disclaimer`: explicit read-only and human-approval boundary;

@@ -132,14 +132,14 @@
   position: relative;
   overflow: hidden !important;
   border: 1px solid var(--hvac-ai-border) !important;
-  border-radius: 16px !important;
+  border-radius: 20px !important;
   background: var(--hvac-ai-surface) !important;
-  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.16) !important;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.14) !important;
   color: var(--hvac-ai-text);
 }
 
 [data-theme='dark'] .copilotKitPopup {
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34) !important;
+  box-shadow: 0 26px 64px rgba(0, 0, 0, 0.38) !important;
 }
 
 .copilotKitPopup *,
@@ -153,9 +153,9 @@
 }
 
 .hvac-copilot-header {
-  min-height: 64px;
+  min-height: 56px;
   padding: 0 !important;
-  border-bottom: 1px solid var(--hvac-ai-border) !important;
+  border-bottom: 1px solid var(--hvac-ai-border-soft) !important;
   background: var(--hvac-ai-surface) !important;
 }
 
@@ -163,59 +163,24 @@
   display: flex;
   width: 100%;
   min-width: 0;
-  min-height: 64px;
+  min-height: 56px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 8px 10px 16px;
+  padding: 8px 8px 8px 16px;
 }
 
 .hvac-copilot-header-identity {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  padding-left: 11px;
-}
-
-.hvac-copilot-header-identity::before {
-  position: absolute;
-  top: 4px;
-  bottom: 4px;
-  left: 0;
-  width: 2px;
-  border-radius: 999px;
-  background: var(--hvac-ai-accent);
-  content: '';
-}
-
-.hvac-copilot-header-copy {
-  min-width: 0;
-}
-
-.hvac-copilot-header-title-row {
   display: flex;
   min-width: 0;
   align-items: center;
 }
 
-.hvac-copilot-header-title-row strong {
+.hvac-copilot-header-identity > strong {
   overflow: hidden;
   color: var(--hvac-ai-text);
   font-size: 14px;
-  font-weight: 620;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.hvac-copilot-header-scope {
-  display: block;
-  max-width: 300px;
-  margin-top: 3px;
-  overflow: hidden;
-  color: var(--hvac-ai-text-secondary);
-  font-size: 12px;
+  font-weight: 600;
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -231,8 +196,8 @@
 .hvac-copilot-icon-button,
 .hvac-copilot-header-actions > button {
   display: grid;
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   place-items: center;
   padding: 0;
   border: 0;
@@ -259,12 +224,12 @@
 .hvac-copilot-history-panel {
   position: absolute;
   z-index: 20;
-  inset: 64px 0 0;
+  inset: 56px 0 0;
   display: flex;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  padding: 18px;
+  padding: 16px 18px 12px;
   overflow: hidden;
   background: var(--hvac-ai-surface);
 }
@@ -353,16 +318,17 @@
   flex-direction: column;
   gap: 2px;
   margin-top: 12px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .hvac-copilot-history-list > button {
   display: grid;
-  min-height: 64px;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 10px;
-  padding: 10px 8px;
+  min-height: 48px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -387,23 +353,7 @@
 }
 
 .hvac-copilot-history-type {
-  margin-top: 1px;
-  padding: 3px 6px;
-  border-radius: 999px;
-  background: var(--hvac-ai-surface-subtle);
-  color: var(--hvac-ai-text-secondary);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.hvac-copilot-history-type[data-kind='investigation'] {
-  background: rgba(245, 158, 11, 0.1);
-  color: #b45309;
-}
-
-.hvac-copilot-history-type[data-kind='report'] {
-  background: rgba(59, 130, 246, 0.09);
-  color: #2563eb;
+  display: none;
 }
 
 .hvac-copilot-history-copy {
@@ -425,14 +375,7 @@
 }
 
 .hvac-copilot-history-copy small {
-  display: -webkit-box;
-  margin-top: 3px;
-  overflow: hidden;
-  color: var(--hvac-ai-text-secondary);
-  font-size: 12px;
-  line-height: 1.45;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  display: none;
 }
 
 .hvac-copilot-history-list time {
@@ -471,6 +414,58 @@
   overflow-x: hidden;
   overflow-y: auto;
   background: var(--hvac-ai-surface);
+}
+
+.hvac-copilot-welcome[data-variant='popup'] {
+  padding: 14px 18px 14px;
+  overflow-y: hidden;
+}
+
+.hvac-copilot-popup-context {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--hvac-ai-text-secondary);
+  font-size: 12px;
+}
+
+.hvac-copilot-popup-context > span {
+  flex: 0 0 auto;
+}
+
+.hvac-copilot-popup-context > span::before {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: 999px;
+  background: var(--hvac-ai-accent);
+  content: '';
+  vertical-align: 1px;
+}
+
+.hvac-copilot-popup-context strong,
+.hvac-copilot-popup-context small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hvac-copilot-popup-context strong {
+  color: var(--hvac-ai-text);
+  font-weight: 560;
+}
+
+.hvac-copilot-popup-context small {
+  margin-left: auto;
+  color: var(--hvac-ai-text-secondary);
+}
+
+.hvac-copilot-popup-spacer {
+  min-height: 120px;
+  flex: 1 1 auto;
 }
 
 .hvac-copilot-brief {
@@ -561,14 +556,14 @@
   white-space: nowrap;
 }
 
-.hvac-copilot-suggestion-section,
-.hvac-copilot-recent {
+.hvac-copilot-suggestion-section {
   min-width: 0;
   padding: 14px 0 10px;
 }
 
 .hvac-copilot-recent {
-  border-top: 1px solid var(--hvac-ai-border);
+  min-width: 0;
+  padding: 0 0 12px;
 }
 
 .hvac-copilot-section-heading {
@@ -622,13 +617,13 @@
 
 .hvac-copilot-recent-list > button {
   display: flex;
-  min-height: 50px;
+  min-height: 42px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 3px;
+  padding: 8px 6px;
   border: 0;
-  border-top: 1px solid var(--hvac-ai-border);
+  border-radius: 8px;
   background: transparent;
   color: var(--hvac-ai-text);
   cursor: pointer;
@@ -656,12 +651,8 @@
   white-space: nowrap;
 }
 
-.hvac-copilot-recent-list small {
-  margin-top: 2px;
-  color: var(--hvac-ai-text-secondary);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.hvac-copilot-welcome[data-variant='popup'] .hvac-copilot-recent-list small {
+  display: none;
 }
 
 .hvac-copilot-recent-list time {
@@ -704,7 +695,8 @@
 
 .copilotKitPopup .copilotKitInput,
 .copilotKitPopup [class*='inputContainer'] {
-  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06) !important;
+  border-radius: 24px !important;
+  box-shadow: 0 6px 22px rgba(15, 23, 42, 0.08) !important;
 }
 
 [data-theme='dark'] .copilotKitPopup .copilotKitInput,
@@ -771,6 +763,38 @@
   background: var(--hvac-ai-surface) !important;
 }
 
+.copilotKitPopup .copilotKitMessages,
+.hvac-copilot-history-list {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.copilotKitPopup .copilotKitMessages:hover,
+.hvac-copilot-history-list:hover {
+  scrollbar-color: rgba(100, 116, 139, 0.3) transparent;
+}
+
+.copilotKitPopup .copilotKitMessages::-webkit-scrollbar,
+.hvac-copilot-history-list::-webkit-scrollbar {
+  width: 5px;
+}
+
+.copilotKitPopup .copilotKitMessages::-webkit-scrollbar-track,
+.hvac-copilot-history-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.copilotKitPopup .copilotKitMessages::-webkit-scrollbar-thumb,
+.hvac-copilot-history-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: transparent;
+}
+
+.copilotKitPopup .copilotKitMessages:hover::-webkit-scrollbar-thumb,
+.hvac-copilot-history-list:hover::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.3);
+}
+
 .copilotKitPopup .copilotKitMessage,
 .ai-copilot-chat .copilotKitMessage {
   color: var(--hvac-ai-text);
@@ -832,7 +856,7 @@
   }
 
   .hvac-copilot-header-layout {
-    min-height: 60px;
+    min-height: 56px;
     padding-inline: 12px 7px;
   }
 
@@ -840,10 +864,6 @@
   .hvac-copilot-icon-button {
     width: 42px;
     height: 42px;
-  }
-
-  .hvac-copilot-header-scope {
-    max-width: 170px;
   }
 
   .hvac-copilot-welcome,
@@ -859,10 +879,6 @@
 @media (max-width: 420px) {
   .hvac-copilot-toggle-label {
     max-width: 82px;
-  }
-
-  .hvac-copilot-header-scope {
-    max-width: 128px;
   }
 
   .hvac-copilot-scope-line {

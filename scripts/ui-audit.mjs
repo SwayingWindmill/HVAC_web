@@ -420,14 +420,12 @@ try {
       const popupStyle = popup ? getComputedStyle(popup) : null;
       const toggle = document.querySelector('.hvac-copilot-toggle');
       const toggleRect = toggle?.getBoundingClientRect();
+      const composer = popup?.querySelector('.copilotKitInput, [class*="inputContainer"]');
       const customText = [...(popup?.querySelectorAll([
-        '.hvac-copilot-presence-line',
-        '.hvac-copilot-brief p',
-        '.hvac-copilot-scope-line',
+        '.hvac-copilot-popup-context',
         '.hvac-copilot-section-heading',
-        '.hvac-copilot-suggestion',
         '.hvac-copilot-recent-list strong',
-        '.hvac-copilot-recent-list small',
+        '.hvac-copilot-recent-list time',
       ].join(',')) ?? [])]
         .filter((element) => element.textContent?.trim() && getComputedStyle(element).display !== 'none')
         .map((element) => Number.parseFloat(getComputedStyle(element).fontSize));
@@ -444,6 +442,7 @@ try {
         height: rect?.height ?? 0,
         background,
         popupRadius: Number.parseFloat(popupStyle?.borderRadius || '0'),
+        composerRadius: composer ? Number.parseFloat(getComputedStyle(composer).borderRadius || '0') : 0,
         toggleWidth: toggleRect?.width ?? 0,
         headerActionCount: popup?.querySelectorAll('.hvac-copilot-header-actions > button').length ?? 0,
         hasReadonlyBadge: Boolean(popup?.querySelector('.hvac-copilot-readonly-badge')),
@@ -453,8 +452,8 @@ try {
         hasInput: Boolean(popup?.querySelector('textarea')),
         hasBrandedHeader: Boolean(popup?.querySelector('.hvac-copilot-header-layout')),
         hasBrandedWelcome: Boolean(popup?.querySelector('.hvac-copilot-welcome')),
-        hasPresenceState: Boolean(popup?.querySelector('.hvac-copilot-presence-line')),
-        hasScopeLine: Boolean(popup?.querySelector('.hvac-copilot-scope-line')),
+        hasPopupContext: Boolean(popup?.querySelector('.hvac-copilot-popup-context')),
+        hasDecorativeBrief: Boolean(popup?.querySelector('.hvac-copilot-brief, .hvac-copilot-scope-line')),
         recentThreadCount: popup?.querySelectorAll('.hvac-copilot-recent-list > button').length ?? 0,
         hasHistoryAction: Boolean(popup?.querySelector('button[aria-label="对话历史"]')),
         suggestionCount: popup?.querySelectorAll('.hvac-copilot-suggestion').length ?? 0,
@@ -470,7 +469,8 @@ try {
     );
     assert(aiPopupState.width >= 500 && aiPopupState.width <= 560, 'CopilotPopup desktop width is invalid');
     assert(aiPopupState.height >= 600, 'CopilotPopup desktop height is invalid');
-    assert(aiPopupState.popupRadius >= 15, 'CopilotPopup does not use the shared 16px surface radius');
+    assert(aiPopupState.popupRadius >= 19, 'CopilotPopup does not use the refined floating-window radius');
+    assert(aiPopupState.composerRadius >= 20, 'CopilotPopup composer is not a floating rounded surface');
     assert(aiPopupState.toggleWidth > 0 && aiPopupState.toggleWidth <= 130, 'CopilotPopup launcher has excessive visual weight');
     assert(aiPopupState.headerActionCount === 3 && !aiPopupState.hasReadonlyBadge && !aiPopupState.hasExpandAction, 'CopilotPopup header hierarchy is invalid');
     assert(aiPopupState.minCustomFontSize >= 11, 'CopilotPopup custom business text is too small');
@@ -480,11 +480,11 @@ try {
       aiPopupState.hasInput
         && aiPopupState.hasBrandedHeader
         && aiPopupState.hasBrandedWelcome
-        && aiPopupState.hasPresenceState
-        && aiPopupState.hasScopeLine
-        && aiPopupState.recentThreadCount >= 2
+        && aiPopupState.hasPopupContext
+        && !aiPopupState.hasDecorativeBrief
+        && aiPopupState.recentThreadCount >= 3
         && aiPopupState.hasHistoryAction
-        && aiPopupState.suggestionCount === 3
+        && aiPopupState.suggestionCount === 0
         && aiPopupState.hasBrandedToggle
         && aiPopupState.togglePointerEvents === 'none',
       `CopilotPopup HVAC product UI is incomplete: ${JSON.stringify(aiPopupState)}`,
@@ -558,22 +558,21 @@ try {
       const rect = popup.getBoundingClientRect();
       const opacity = Number(getComputedStyle(popup).opacity || 1);
       if (rect.width <= 0 || rect.height <= 0 || opacity < 0.9) return false;
-      return popup.querySelector('.hvac-copilot-header-scope')?.textContent.includes('能耗分析') ?? false;
+      return popup.querySelector('.hvac-copilot-popup-context')?.textContent.includes('能耗分析') ?? false;
     })()`, 'CopilotPopup route context update');
     const aiRouteContextState = await evaluate(client, `(() => {
       const popup = document.querySelector('.copilotKitPopup');
       return {
-        welcomeTitle: popup?.querySelector('.hvac-copilot-welcome h2')?.textContent?.trim() ?? '',
-        suggestions: [...(popup?.querySelectorAll('.hvac-copilot-suggestion') ?? [])].map((element) => element.textContent?.trim() ?? ''),
+        contextText: popup?.querySelector('.hvac-copilot-popup-context')?.textContent?.trim() ?? '',
         placeholder: popup?.querySelector('textarea')?.getAttribute('placeholder') ?? '',
-        scope: popup?.querySelector('.hvac-copilot-header-scope')?.textContent?.trim() ?? '',
+        headerTitle: popup?.querySelector('.hvac-copilot-header-identity > strong')?.textContent?.trim() ?? '',
       };
     })()`);
     assert(
-      aiRouteContextState.welcomeTitle.includes('调查当前周期的能耗变化')
-        && aiRouteContextState.suggestions.includes('为什么能耗升高？')
+      aiRouteContextState.contextText.includes('能耗分析')
+        && aiRouteContextState.contextText.includes('2026 年')
         && aiRouteContextState.placeholder.includes('询问「')
-        && aiRouteContextState.scope.includes('2026 年'),
+        && aiRouteContextState.headerTitle.length > 0,
       `CopilotPopup route-specific content is stale: ${JSON.stringify(aiRouteContextState)}`,
     );
     interactionChecks.push('ai-context-routing');

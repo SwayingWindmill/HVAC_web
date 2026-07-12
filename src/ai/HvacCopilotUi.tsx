@@ -7,7 +7,6 @@ import {
   SearchOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { AI_ASSISTANT_NAME } from './config';
 import { useAiApplicationContext } from './context';
 import {
   formatThreadTime,
@@ -122,23 +121,16 @@ function HvacCopilotHistoryPanel() {
 }
 
 export function HvacCopilotHeaderContent({ closeButton }: { closeButton: ReactElement }) {
-  const context = useAiApplicationContext();
   const popupHistoryOpen = useAiHistory((state) => state.popupHistoryOpen);
   const setPopupHistoryOpen = useAiHistory((state) => state.setPopupHistoryOpen);
   const { activeThread, startNewThread } = useAiThreadController();
+  const title = activeThread?.messageCount ? activeThread.title : '新对话';
 
   return (
     <div className="hvac-copilot-header">
       <div className="hvac-copilot-header-layout">
         <div className="hvac-copilot-header-identity">
-          <div className="hvac-copilot-header-copy">
-            <div className="hvac-copilot-header-title-row">
-              <strong>{AI_ASSISTANT_NAME}</strong>
-            </div>
-            <span className="hvac-copilot-header-scope" title={activeThread?.title || context.scopeLabel}>
-              {activeThread?.messageCount ? activeThread.title : context.scopeLabel}
-            </span>
-          </div>
+          <strong title={title}>{title}</strong>
         </div>
         <div className="hvac-copilot-header-actions">
           <button
@@ -167,7 +159,7 @@ export function HvacCopilotHeaderContent({ closeButton }: { closeButton: ReactEl
   );
 }
 
-function RecentThreadList({ limit = 2 }: { limit?: number }) {
+function RecentThreadList({ limit = 3 }: { limit?: number }) {
   const { threads, activeThreadId, openThread } = useAiThreadController();
   const recentThreads = threads
     .filter((thread) => !thread.archived && thread.messageCount > 0 && thread.id !== activeThreadId)
@@ -207,6 +199,28 @@ function HvacCopilotWelcomeBase({
     ...rest
   } = props;
 
+  if (variant === 'popup') {
+    return (
+      <div
+        {...rest}
+        data-variant={variant}
+        className={['hvac-copilot-welcome', className].filter(Boolean).join(' ')}
+      >
+        <div className="hvac-copilot-popup-context" aria-label="当前 AI 上下文">
+          <span>已接入</span>
+          <strong>{context.pageTitle}</strong>
+          <small title={context.scopeLabel}>{context.scopeLabel}</small>
+        </div>
+
+        <div className="hvac-copilot-popup-spacer" aria-hidden="true" />
+
+        <RecentThreadList />
+
+        <div className="hvac-copilot-welcome-input">{input}</div>
+      </div>
+    );
+  }
+
   return (
     <div
       {...rest}
@@ -219,10 +233,8 @@ function HvacCopilotWelcomeBase({
           <strong>{context.pageTitle}</strong>
           <small>已接入当前页面</small>
         </div>
-        <h2>{variant === 'workspace' ? '从会话或当前页面开始调查' : context.welcomeTitle}</h2>
-        <p>{variant === 'workspace'
-          ? '选择左侧历史记录继续处理，或基于当前范围发起新的只读分析。'
-          : context.pageDescription}</p>
+        <h2>从会话或当前页面开始调查</h2>
+        <p>选择左侧历史记录继续处理，或基于当前范围发起新的只读分析。</p>
       </section>
 
       <div className="hvac-copilot-scope-line" aria-label="当前 AI 上下文">
@@ -235,8 +247,6 @@ function HvacCopilotWelcomeBase({
         <div className="hvac-copilot-section-heading">基于当前页面</div>
         {suggestionView}
       </section>
-
-      {variant === 'popup' ? <RecentThreadList /> : null}
 
       <div className="hvac-copilot-welcome-input">{input}</div>
     </div>
