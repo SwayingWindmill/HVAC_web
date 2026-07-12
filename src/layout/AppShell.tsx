@@ -23,7 +23,7 @@ export default function AppShell() {
             height: 'auto',
             flex: '1 1 auto',
             boxSizing: 'border-box',
-            padding: isAiWorkspace ? '14px 16px 16px' : '20px 20px 88px',
+            padding: isAiWorkspace ? '20px' : '20px 20px 88px',
             overflow: isAiWorkspace ? 'hidden' : 'auto',
           }}
         >

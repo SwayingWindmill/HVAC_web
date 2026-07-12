@@ -1,8 +1,5 @@
 import { useMemo, useState, type ComponentProps, type HTMLAttributes, type ReactElement } from 'react';
-import {
-  CopilotChatView,
-  useCopilotChatConfiguration,
-} from '@copilotkit/react-core/v2';
+import { CopilotChatView } from '@copilotkit/react-core/v2';
 import {
   ExpandOutlined,
   HistoryOutlined,
@@ -29,7 +26,7 @@ export function HvacCopilotToggleIcon() {
   return (
     <span className="hvac-copilot-toggle-content">
       <span className="hvac-copilot-toggle-presence" aria-hidden="true" />
-      <span className="hvac-copilot-toggle-label">AI 运维助手</span>
+      <span className="hvac-copilot-toggle-label">AI 助手</span>
       {context.attentionCount > 0 && (
         <span className="hvac-copilot-toggle-count" aria-label={`${context.attentionCount} 项待关注`}>
           {countLabel}
@@ -125,28 +122,18 @@ function HvacCopilotHistoryPanel() {
 }
 
 export function HvacCopilotHeaderContent({ closeButton }: { closeButton: ReactElement }) {
-  const navigate = useNavigate();
   const context = useAiApplicationContext();
-  const configuration = useCopilotChatConfiguration();
   const popupHistoryOpen = useAiHistory((state) => state.popupHistoryOpen);
   const setPopupHistoryOpen = useAiHistory((state) => state.setPopupHistoryOpen);
-  const { activeThreadId, activeThread, startNewThread } = useAiThreadController();
-
-  const openWorkspace = () => {
-    setPopupHistoryOpen(false);
-    configuration?.setModalOpen(false);
-    navigate(`/ai?thread=${activeThreadId}`);
-  };
+  const { activeThread, startNewThread } = useAiThreadController();
 
   return (
     <div className="hvac-copilot-header">
       <div className="hvac-copilot-header-layout">
         <div className="hvac-copilot-header-identity">
-          <span className="hvac-copilot-header-presence" aria-hidden="true" />
           <div className="hvac-copilot-header-copy">
             <div className="hvac-copilot-header-title-row">
               <strong>{AI_ASSISTANT_NAME}</strong>
-              <span className="hvac-copilot-readonly-badge">只读</span>
             </div>
             <span className="hvac-copilot-header-scope" title={activeThread?.title || context.scopeLabel}>
               {activeThread?.messageCount ? activeThread.title : context.scopeLabel}
@@ -172,15 +159,6 @@ export function HvacCopilotHeaderContent({ closeButton }: { closeButton: ReactEl
           >
             <PlusOutlined />
           </button>
-          <button
-            type="button"
-            className="hvac-copilot-icon-button"
-            aria-label="打开完整 AI 工作台"
-            title="打开完整 AI 工作台"
-            onClick={openWorkspace}
-          >
-            <ExpandOutlined />
-          </button>
           {closeButton}
         </div>
       </div>
@@ -189,7 +167,7 @@ export function HvacCopilotHeaderContent({ closeButton }: { closeButton: ReactEl
   );
 }
 
-function RecentThreadList({ limit = 3 }: { limit?: number }) {
+function RecentThreadList({ limit = 2 }: { limit?: number }) {
   const { threads, activeThreadId, openThread } = useAiThreadController();
   const recentThreads = threads
     .filter((thread) => !thread.archived && thread.messageCount > 0 && thread.id !== activeThreadId)
@@ -238,8 +216,8 @@ function HvacCopilotWelcomeBase({
       <section className="hvac-copilot-brief">
         <div className="hvac-copilot-presence-line">
           <span aria-hidden="true" />
-          <strong>已读取当前页面</strong>
-          <small>{context.pageTitle}</small>
+          <strong>{context.pageTitle}</strong>
+          <small>已接入当前页面</small>
         </div>
         <h2>{variant === 'workspace' ? '从会话或当前页面开始调查' : context.welcomeTitle}</h2>
         <p>{variant === 'workspace'

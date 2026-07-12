@@ -9,6 +9,8 @@ interface PageScaffoldProps {
   extra?: ReactNode;
   /** Short operational context shown above the title. */
   eyebrow?: ReactNode;
+  /** Optional root class for fixed or specialized operational workspaces. */
+  className?: string;
   children: ReactNode;
 }
 
@@ -18,10 +20,11 @@ export default function PageScaffold({
   subtitle,
   extra,
   eyebrow = '运营工作台',
+  className,
   children,
 }: PageScaffoldProps) {
   return (
-    <div className="ops-page">
+    <div className={['ops-page', className].filter(Boolean).join(' ')}>
       <header className="ops-page-header">
         <div className="ops-page-heading">
           <div className="ops-page-eyebrow">{eyebrow}</div>

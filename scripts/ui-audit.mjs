@@ -417,6 +417,20 @@ try {
       const popup = document.querySelector('.copilotKitPopup');
       const rect = popup?.getBoundingClientRect();
       const background = popup ? getComputedStyle(popup).backgroundColor : '';
+      const popupStyle = popup ? getComputedStyle(popup) : null;
+      const toggle = document.querySelector('.hvac-copilot-toggle');
+      const toggleRect = toggle?.getBoundingClientRect();
+      const customText = [...(popup?.querySelectorAll([
+        '.hvac-copilot-presence-line',
+        '.hvac-copilot-brief p',
+        '.hvac-copilot-scope-line',
+        '.hvac-copilot-section-heading',
+        '.hvac-copilot-suggestion',
+        '.hvac-copilot-recent-list strong',
+        '.hvac-copilot-recent-list small',
+      ].join(',')) ?? [])]
+        .filter((element) => element.textContent?.trim() && getComputedStyle(element).display !== 'none')
+        .map((element) => Number.parseFloat(getComputedStyle(element).fontSize));
       const offenders = [...(popup?.querySelectorAll('*') ?? [])].filter((element) => {
         if (element.offsetParent === null) return false;
         const overflowX = getComputedStyle(element).overflowX;
@@ -429,6 +443,12 @@ try {
         width: rect?.width ?? 0,
         height: rect?.height ?? 0,
         background,
+        popupRadius: Number.parseFloat(popupStyle?.borderRadius || '0'),
+        toggleWidth: toggleRect?.width ?? 0,
+        headerActionCount: popup?.querySelectorAll('.hvac-copilot-header-actions > button').length ?? 0,
+        hasReadonlyBadge: Boolean(popup?.querySelector('.hvac-copilot-readonly-badge')),
+        hasExpandAction: Boolean(popup?.querySelector('button[aria-label="打开完整 AI 工作台"]')),
+        minCustomFontSize: customText.length ? Math.min(...customText) : 0,
         offenderCount: offenders.length,
         hasInput: Boolean(popup?.querySelector('textarea')),
         hasBrandedHeader: Boolean(popup?.querySelector('.hvac-copilot-header-layout')),
@@ -448,8 +468,12 @@ try {
         || aiPopupState.popupText.includes('HVAC AI 运维助手'),
       `CopilotPopup title is invalid: ${JSON.stringify(aiPopupState)}`,
     );
-    assert(aiPopupState.width >= 420 && aiPopupState.width <= 800, 'CopilotPopup desktop width is invalid');
-    assert(aiPopupState.height >= 360, 'CopilotPopup desktop height is invalid');
+    assert(aiPopupState.width >= 500 && aiPopupState.width <= 560, 'CopilotPopup desktop width is invalid');
+    assert(aiPopupState.height >= 600, 'CopilotPopup desktop height is invalid');
+    assert(aiPopupState.popupRadius >= 15, 'CopilotPopup does not use the shared 16px surface radius');
+    assert(aiPopupState.toggleWidth > 0 && aiPopupState.toggleWidth <= 130, 'CopilotPopup launcher has excessive visual weight');
+    assert(aiPopupState.headerActionCount === 3 && !aiPopupState.hasReadonlyBadge && !aiPopupState.hasExpandAction, 'CopilotPopup header hierarchy is invalid');
+    assert(aiPopupState.minCustomFontSize >= 11, 'CopilotPopup custom business text is too small');
     assert(aiPopupState.background !== 'rgba(0, 0, 0, 0)' && aiPopupState.background !== 'transparent', 'CopilotPopup surface is transparent');
     assert(aiPopupState.offenderCount === 0, 'CopilotPopup has horizontal overflow');
     assert(
@@ -458,7 +482,7 @@ try {
         && aiPopupState.hasBrandedWelcome
         && aiPopupState.hasPresenceState
         && aiPopupState.hasScopeLine
-        && aiPopupState.recentThreadCount >= 3
+        && aiPopupState.recentThreadCount >= 2
         && aiPopupState.hasHistoryAction
         && aiPopupState.suggestionCount === 3
         && aiPopupState.hasBrandedToggle
@@ -689,7 +713,33 @@ try {
     await setViewport(client, VIEWPORTS[2]);
     await hardNavigate(client, '/dashboard');
     await waitForRoute(client, ROUTES[0], true);
-    await waitFor(client, `(() => { const button = document.querySelector('.hvac-copilot-toggle'); if (!button) return false; const rect = button.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; })()`, 'CopilotPopup mobile launcher');
+    await waitFor(client, `(() => {
+      const popup = [...document.querySelectorAll('.copilotKitPopup')].find((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      });
+      const button = document.querySelector('.hvac-copilot-toggle');
+      const rect = button?.getBoundingClientRect();
+      return Boolean(popup) || Boolean(button && rect.width > 0 && rect.height > 0);
+    })()`, 'CopilotPopup mobile state');
+    await evaluate(client, `(() => {
+      const close = [...document.querySelectorAll('.copilotKitPopup button')]
+        .find((element) => element.getAttribute('aria-label') === 'Close');
+      close?.click();
+    })()`);
+    await waitFor(client, `(() => {
+      if (document.querySelector('.copilotKitPopup')) return false;
+      const button = document.querySelector('.hvac-copilot-toggle');
+      if (!button) return false;
+      const rect = button.getBoundingClientRect();
+      const style = getComputedStyle(button);
+      return rect.width > 0 && rect.height > 0
+        && style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && style.pointerEvents !== 'none'
+        && Number(style.opacity || 1) > 0.01;
+    })()`, 'CopilotPopup mobile launcher');
     const mobileTriggered = await evaluate(client, `(() => {
       const trigger = document.querySelector('.hvac-copilot-toggle');
       if (!trigger) return false;
@@ -803,8 +853,27 @@ try {
       const workspace = document.querySelector('.ai-copilot-chat-shell');
       const textarea = workspace?.querySelector('textarea');
       const content = document.querySelector('.app-content-ai');
+      const page = document.querySelector('.ai-ops-page');
       const hub = document.querySelector('.ai-hub');
+      const surface = document.querySelector('.ai-hub-body');
+      const threadSidebar = document.querySelector('.ai-thread-sidebar');
       const conversation = document.querySelector('.ai-conversation-pane');
+      const evidenceSidebar = document.querySelector('.ai-evidence-sidebar');
+      const pageTitle = document.querySelector('.ai-ops-page .ops-page-title');
+      const customText = [...(hub?.querySelectorAll([
+        '.ai-thread-copy p',
+        '.ai-thread-meta',
+        '.ai-thread-footer',
+        '.ai-conversation-header span',
+        '.ai-conversation-header p',
+        '.ai-evidence-section > header',
+        '.ai-evidence-section > p',
+        '.ai-runtime-readings span',
+        '.ai-evidence-list small',
+        '.ai-governance-bar',
+      ].join(',')) ?? [])]
+        .filter((element) => element.textContent?.trim() && getComputedStyle(element).display !== 'none')
+        .map((element) => Number.parseFloat(getComputedStyle(element).fontSize));
       const chatScrollContainers = [...document.querySelectorAll('.ai-copilot-chat *')]
         .filter((element) => ['auto', 'scroll'].includes(getComputedStyle(element).overflowY));
       const outsideScrollers = [...(hub?.querySelectorAll('*') ?? [])].filter((element) => {
@@ -820,6 +889,18 @@ try {
         threadRows: document.querySelectorAll('.ai-thread-list .ai-thread-row').length,
         hasThreadSearch: Boolean(document.querySelector('.ai-thread-search input')),
         hasEvidenceRail: Boolean(document.querySelector('.ai-evidence-sidebar')),
+        usesPageScaffold: Boolean(page?.classList.contains('ops-page')),
+        titleFontSize: pageTitle ? Number.parseFloat(getComputedStyle(pageTitle).fontSize) : 0,
+        surfaceRadius: surface ? Number.parseFloat(getComputedStyle(surface).borderRadius) : 0,
+        surfaceGap: surface ? getComputedStyle(surface).columnGap : '',
+        surfaceBorderWidth: surface ? Number.parseFloat(getComputedStyle(surface).borderTopWidth) : 0,
+        threadRadius: threadSidebar ? Number.parseFloat(getComputedStyle(threadSidebar).borderRadius) : -1,
+        conversationRadius: conversation ? Number.parseFloat(getComputedStyle(conversation).borderRadius) : -1,
+        evidenceRadius: evidenceSidebar ? Number.parseFloat(getComputedStyle(evidenceSidebar).borderRadius) : -1,
+        threadWidth: threadSidebar?.getBoundingClientRect().width ?? 0,
+        conversationWidth: conversation?.getBoundingClientRect().width ?? 0,
+        evidenceWidth: evidenceSidebar?.getBoundingClientRect().width ?? 0,
+        minCustomFontSize: customText.length ? Math.min(...customText) : 0,
         pageScroll: document.scrollingElement.scrollHeight - window.innerHeight,
         contentScroll: content ? content.scrollHeight - content.clientHeight : 999,
         hubScroll: hub ? hub.scrollHeight - hub.clientHeight : 999,
@@ -837,6 +918,17 @@ try {
         && aiWorkspaceInitialState.threadRows >= 3
         && aiWorkspaceInitialState.hasThreadSearch
         && aiWorkspaceInitialState.hasEvidenceRail
+        && aiWorkspaceInitialState.usesPageScaffold
+        && aiWorkspaceInitialState.titleFontSize >= 25
+        && aiWorkspaceInitialState.surfaceRadius >= 15
+        && aiWorkspaceInitialState.surfaceGap === '0px'
+        && aiWorkspaceInitialState.surfaceBorderWidth >= 1
+        && aiWorkspaceInitialState.threadRadius === 0
+        && aiWorkspaceInitialState.conversationRadius === 0
+        && aiWorkspaceInitialState.evidenceRadius === 0
+        && aiWorkspaceInitialState.conversationWidth > aiWorkspaceInitialState.threadWidth * 1.5
+        && aiWorkspaceInitialState.conversationWidth > aiWorkspaceInitialState.evidenceWidth * 1.5
+        && aiWorkspaceInitialState.minCustomFontSize >= 11
         && aiWorkspaceInitialState.pageScroll <= 2
         && aiWorkspaceInitialState.contentScroll <= 2
         && aiWorkspaceInitialState.hubScroll <= 2
@@ -887,7 +979,7 @@ try {
     interactionChecks.push('ai-workspace-history');
 
     const aiWorkspaceNewThread = await evaluate(client, `(() => {
-      const button = [...document.querySelectorAll('.ai-conversation-actions button')].find((element) => element.textContent.includes('新建会话'));
+      const button = [...document.querySelectorAll('.ai-conversation-actions button')].find((element) => element.textContent.includes('新建调查'));
       if (!button) return false;
       button.click();
       return true;

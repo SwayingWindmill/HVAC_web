@@ -24,8 +24,8 @@ function CopilotPopupAssistant() {
       <CopilotContextBridge />
       <CopilotPopup
         defaultOpen={false}
-        width={460}
-        height="min(650px, calc(100vh - 72px))"
+        width={520}
+        height="min(680px, calc(100vh - 72px))"
         clickOutsideToClose={false}
         header={{
           className: 'hvac-copilot-header',
