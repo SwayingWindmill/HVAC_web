@@ -3,6 +3,9 @@
   --ops-border-soft: rgba(15, 23, 42, 0.055);
   --ops-surface: var(--ant-color-bg-container, #ffffff);
   --ops-surface-subtle: rgba(15, 23, 42, 0.025);
+  --ops-table-head-bg: #f7f9fb;
+  --ops-table-cell-bg: #ffffff;
+  --ops-table-hover-bg: #f5fbfa;
   --ops-text: var(--ant-color-text, #111827);
   --ops-text-secondary: #64748b;
   --ops-accent: #0f9f99;
@@ -324,12 +327,17 @@
   border-radius: 0;
 }
 
+.ops-page .ant-table-wrapper .ant-table-sticky-holder {
+  background: var(--ops-table-head-bg) !important;
+}
+
 .ops-page .ant-table-wrapper .ant-table-thead > tr > th {
   padding-top: 13px;
   padding-bottom: 13px;
   border-bottom: 1px solid var(--ops-border);
   color: #475569;
-  background: rgba(15, 23, 42, 0.025);
+  background: var(--ops-table-head-bg) !important;
+  background-clip: padding-box;
   font-size: 13px;
   font-weight: 620;
 }
@@ -340,8 +348,25 @@
   border-bottom-color: var(--ops-border-soft);
 }
 
+.ops-page .ant-table-wrapper .ant-table-thead > tr > th.ant-table-cell-fix-left,
+.ops-page .ant-table-wrapper .ant-table-thead > tr > th.ant-table-cell-fix-right {
+  z-index: 4;
+  background: var(--ops-table-head-bg) !important;
+}
+
+.ops-page .ant-table-wrapper .ant-table-tbody > tr > td.ant-table-cell-fix-left,
+.ops-page .ant-table-wrapper .ant-table-tbody > tr > td.ant-table-cell-fix-right {
+  z-index: 2;
+  background: var(--ops-table-cell-bg) !important;
+  background-clip: padding-box;
+}
+
 .ops-page .ant-table-wrapper .ant-table-tbody > tr:hover > td {
-  background: rgba(15, 159, 153, 0.035) !important;
+  background: var(--ops-table-hover-bg) !important;
+}
+
+.ops-page .ant-table-wrapper .ant-table-tbody > tr.ant-table-row-selected > td {
+  background: #eef8f7 !important;
 }
 
 .ops-page .ant-table-wrapper .ant-pagination {
@@ -1093,17 +1118,24 @@
   --ops-border-soft: rgba(255, 255, 255, 0.065);
   --ops-surface: var(--ant-color-bg-container, #171d24);
   --ops-surface-subtle: rgba(255, 255, 255, 0.025);
+  --ops-table-head-bg: #1d242c;
+  --ops-table-cell-bg: #171d24;
+  --ops-table-hover-bg: #192a2b;
   --ops-text: #f1f5f9;
   --ops-text-secondary: #94a3b8;
 }
 
 [data-theme='dark'] .ops-page .ant-table-wrapper .ant-table-thead > tr > th {
   color: #cbd5e1;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--ops-table-head-bg) !important;
 }
 
 [data-theme='dark'] .ops-page .ant-table-wrapper .ant-table-tbody > tr:hover > td {
-  background: rgba(15, 159, 153, 0.055) !important;
+  background: var(--ops-table-hover-bg) !important;
+}
+
+[data-theme='dark'] .ops-page .ant-table-wrapper .ant-table-tbody > tr.ant-table-row-selected > td {
+  background: #173033 !important;
 }
 
 @media (max-width: 1199px) {

@@ -267,6 +267,25 @@ async function inspectPage(client, route, viewport, theme) {
         text: element.textContent.trim().slice(0, 80),
         rect: element.getBoundingClientRect().toJSON(),
       }));
+    const tableSurfaceIssues = [...document.querySelectorAll([
+      '.ops-page .ant-table-thead > tr > th',
+      '.ops-page .ant-table-cell-fix-left',
+      '.ops-page .ant-table-cell-fix-right',
+      '.ops-page .ant-table-sticky-holder',
+    ].join(','))]
+      .filter((element) => element.offsetParent !== null)
+      .filter((element) => {
+        const background = getComputedStyle(element).backgroundColor;
+        if (background === 'transparent' || background === 'rgba(0, 0, 0, 0)') return true;
+        const rgba = background.match(/^rgba\\([^,]+,[^,]+,[^,]+,\\s*([\\d.]+)\\)$/);
+        return rgba ? Number(rgba[1]) < 0.98 : false;
+      })
+      .slice(0, 8)
+      .map((element) => ({
+        className: String(element.className).slice(0, 140),
+        background: getComputedStyle(element).backgroundColor,
+        text: element.textContent?.trim().slice(0, 40) ?? '',
+      }));
     return {
       pathname: location.pathname,
       titleFound: visibleText.includes(${JSON.stringify(route.title)}),
@@ -280,6 +299,7 @@ async function inspectPage(client, route, viewport, theme) {
       pageHeaderHeight: document.querySelector('.ops-page-header')?.getBoundingClientRect().height ?? null,
       hasAssetsRedundantCopy: ['维护建筑、分区、设备、通讯网关与点位资产', '当前选中：', '后续接入真实资产接口后']
         .some((text) => visibleText.includes(text)),
+      tableSurfaceIssues,
       datasetTheme: root.dataset.theme,
     };
   })()`);
@@ -291,6 +311,10 @@ async function inspectPage(client, route, viewport, theme) {
   assert(result.contentWidth > 0, `${route.path} has zero-width content at ${viewport.name}/${theme}`);
   assert(!result.rootOverflow, `${route.path} root overflow at ${viewport.name}/${theme}`);
   assert(result.escaped.length === 0, `${route.path} escaped viewport at ${viewport.name}/${theme}: ${JSON.stringify(result.escaped)}`);
+  assert(
+    result.tableSurfaceIssues.length === 0,
+    `${route.path} has transparent table header/fixed surfaces at ${viewport.name}/${theme}: ${JSON.stringify(result.tableSurfaceIssues)}`,
+  );
   if (route.path.startsWith('/energy/')) {
     const maximumFirstChartTop = viewport.name === 'mobile' ? 1000 : viewport.name === 'tablet' ? 820 : 650;
     assert(
@@ -496,6 +520,7 @@ try {
         hasHistoryAction: Boolean(popup?.querySelector('button[aria-label="对话历史"]')),
         suggestionCount: popup?.querySelectorAll('.hvac-copilot-suggestion').length ?? 0,
         hasBrandedToggle: Boolean(document.querySelector('.hvac-copilot-toggle')),
+        hasAttentionBadge: Boolean(document.querySelector('.hvac-copilot-toggle-count')),
         togglePointerEvents: getComputedStyle(document.querySelector('.hvac-copilot-toggle')).pointerEvents,
       };
     })()`);
@@ -545,6 +570,7 @@ try {
         && aiPopupState.hasHistoryAction
         && aiPopupState.suggestionCount === 0
         && aiPopupState.hasBrandedToggle
+        && !aiPopupState.hasAttentionBadge
         && aiPopupState.togglePointerEvents !== 'none',
       `CopilotPopup HVAC product UI is incomplete: ${JSON.stringify(aiPopupState)}`,
     );

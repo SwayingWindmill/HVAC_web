@@ -20,24 +20,10 @@ import {
 type WelcomeScreenProps = ComponentProps<typeof CopilotChatView.WelcomeScreen>;
 type WelcomeVariant = 'popup' | 'workspace';
 
-function HvacCopilotAttentionBadge() {
-  const context = useAiApplicationContext();
-  const countLabel = context.attentionCount > 9 ? '9+' : String(context.attentionCount);
-
-  if (context.attentionCount <= 0) return null;
-
-  return (
-    <span className="hvac-copilot-toggle-count" aria-label={`${context.attentionCount} 项待关注`}>
-      {countLabel}
-    </span>
-  );
-}
-
 export function HvacCopilotToggleIcon() {
   return (
     <span className="hvac-copilot-toggle-content">
       <RobotOutlined className="hvac-copilot-toggle-glyph" aria-hidden="true" />
-      <HvacCopilotAttentionBadge />
     </span>
   );
 }
@@ -46,7 +32,6 @@ export function HvacCopilotToggleCloseIcon() {
   return (
     <span className="hvac-copilot-toggle-content">
       <CloseOutlined className="hvac-copilot-toggle-glyph" aria-hidden="true" />
-      <HvacCopilotAttentionBadge />
     </span>
   );
 }
