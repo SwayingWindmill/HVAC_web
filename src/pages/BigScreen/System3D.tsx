@@ -406,7 +406,6 @@ function RaisedZone({ position, size, accent }: { position: V3; size: [number, n
           metalness={0.22}
           roughness={0.72}
         />
-        <Edges color="#273a50" threshold={16} />
       </RoundedBox>
     </group>
   );
