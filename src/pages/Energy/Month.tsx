@@ -503,8 +503,6 @@ export default function EnergyMonth() {
   return (
     <PageScaffold
       title="月度能耗分析"
-      subtitle="面向月度绩效复盘，定位异常日期、设备类别和具体设备，并与同期口径保持一致。"
-      eyebrow="月度绩效与异常定位"
     >
       <div className="energy-context-bar energy-month-drilldown-bar" aria-label="月度能耗钻取上下文">
         <div className="energy-context-fields">

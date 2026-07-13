@@ -168,18 +168,12 @@
 
 .system-audit-toolbar {
   display: grid;
-  grid-template-columns: 160px 130px minmax(220px, 1fr) auto;
+  grid-template-columns: 160px 130px minmax(220px, 1fr);
   align-items: center;
   gap: 10px;
   margin-bottom: 16px;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--ops-border-soft);
-}
-
-.system-audit-toolbar > .ant-typography {
-  justify-self: end;
-  margin: 0;
-  font-size: 12px;
 }
 
 .system-audit-detail {
@@ -225,11 +219,6 @@
 @media (max-width: 1199px) {
   .system-audit-toolbar {
     grid-template-columns: 150px 120px minmax(200px, 1fr);
-  }
-
-  .system-audit-toolbar > .ant-typography {
-    grid-column: 1 / -1;
-    justify-self: start;
   }
 }
 
@@ -283,10 +272,6 @@
   .system-audit-toolbar .ant-select,
   .system-audit-toolbar .ant-input-search {
     width: 100%;
-  }
-
-  .system-audit-toolbar > .ant-typography {
-    grid-column: auto;
   }
 
   .system-audit-detail {

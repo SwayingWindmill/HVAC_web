@@ -329,8 +329,6 @@ export default function Optimize() {
   return (
     <PageScaffold
       title="节能优化建议"
-      subtitle="把算法建议转成可审核、可回滚、可追踪的运行策略；所有下发动作必须人在回路。"
-      eyebrow="策略与决策"
       extra={<Tag color={readonly ? 'default' : 'processing'}>{ROLE_LABEL[role]} · {readonly ? '只读' : '可审批'}</Tag>}
     >
       <Alert

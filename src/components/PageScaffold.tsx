@@ -4,11 +4,8 @@ import './OperationsUI.css';
 
 interface PageScaffoldProps {
   title: ReactNode;
-  subtitle?: ReactNode;
   /** Right-side slot for context, filters, and primary actions. */
   extra?: ReactNode;
-  /** Short operational context shown above the title. */
-  eyebrow?: ReactNode;
   /** Optional root class for fixed or specialized operational workspaces. */
   className?: string;
   children: ReactNode;
@@ -17,27 +14,17 @@ interface PageScaffoldProps {
 /** Shared application page shell for all operational workspaces outside BigScreen. */
 export default function PageScaffold({
   title,
-  subtitle,
   extra,
-  eyebrow = '运营工作台',
   className,
   children,
 }: PageScaffoldProps) {
-  const compactHeader = !eyebrow && !subtitle;
-
   return (
-    <div className={['ops-page', compactHeader ? 'ops-page-compact-header' : '', className].filter(Boolean).join(' ')}>
+    <div className={['ops-page', className].filter(Boolean).join(' ')}>
       <header className="ops-page-header">
         <div className="ops-page-heading">
-          {eyebrow ? <div className="ops-page-eyebrow">{eyebrow}</div> : null}
           <Typography.Title level={2} className="ops-page-title">
             {title}
           </Typography.Title>
-          {subtitle ? (
-            <Typography.Text className="ops-page-subtitle">
-              {subtitle}
-            </Typography.Text>
-          ) : null}
         </div>
         {extra ? <div className="ops-page-actions">{extra}</div> : null}
       </header>

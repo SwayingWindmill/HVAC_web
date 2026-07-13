@@ -267,7 +267,6 @@ export default function Assets() {
   return (
     <PageScaffold
       title="设备与建筑"
-      eyebrow={null}
       extra={<Tag>{canManageAssets ? '可维护' : '只读'}</Tag>}
     >
       <OperationsMetrics

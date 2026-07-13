@@ -179,10 +179,6 @@ export default function Dashboard() {
           <section className="dashboard-hero">
             <div className="dashboard-hero-header">
               <div className="dashboard-hero-copy">
-                <div className="dashboard-eyebrow">
-                  <span className="dashboard-live-dot" />
-                  实时运营概览
-                </div>
                 <Typography.Title level={2} className="dashboard-hero-title">
                   {BUILDING_LABELS[buildingId] ?? buildingId}智慧能源运营总览
                 </Typography.Title>

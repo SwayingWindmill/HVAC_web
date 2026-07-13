@@ -286,6 +286,18 @@ async function inspectPage(client, route, viewport, theme) {
         background: getComputedStyle(element).backgroundColor,
         text: element.textContent?.trim().slice(0, 40) ?? '',
       }));
+    const redundantSecondaryHierarchy = [...document.querySelectorAll([
+      '.ops-page > .ops-page-header .ops-page-eyebrow',
+      '.ops-page > .ops-page-header .ops-page-subtitle',
+      '.ops-page .ops-section-intro-description',
+      '.dashboard-page .dashboard-eyebrow',
+      '.dashboard-page .dashboard-hero-subtitle',
+    ].join(','))]
+      .filter((element) => element.offsetParent !== null)
+      .map((element) => ({
+        className: String(element.className).slice(0, 120),
+        text: element.textContent?.trim().slice(0, 80) ?? '',
+      }));
     return {
       pathname: location.pathname,
       titleFound: visibleText.includes(${JSON.stringify(route.title)}),
@@ -300,6 +312,7 @@ async function inspectPage(client, route, viewport, theme) {
       hasAssetsRedundantCopy: ['维护建筑、分区、设备、通讯网关与点位资产', '当前选中：', '后续接入真实资产接口后']
         .some((text) => visibleText.includes(text)),
       tableSurfaceIssues,
+      redundantSecondaryHierarchy,
       datasetTheme: root.dataset.theme,
     };
   })()`);
@@ -311,6 +324,10 @@ async function inspectPage(client, route, viewport, theme) {
   assert(result.contentWidth > 0, `${route.path} has zero-width content at ${viewport.name}/${theme}`);
   assert(!result.rootOverflow, `${route.path} root overflow at ${viewport.name}/${theme}`);
   assert(result.escaped.length === 0, `${route.path} escaped viewport at ${viewport.name}/${theme}: ${JSON.stringify(result.escaped)}`);
+  assert(
+    result.redundantSecondaryHierarchy.length === 0,
+    `${route.path} restored redundant secondary hierarchy at ${viewport.name}/${theme}: ${JSON.stringify(result.redundantSecondaryHierarchy)}`,
+  );
   assert(
     result.tableSurfaceIssues.length === 0,
     `${route.path} has transparent table header/fixed surfaces at ${viewport.name}/${theme}: ${JSON.stringify(result.tableSurfaceIssues)}`,

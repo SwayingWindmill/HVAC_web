@@ -202,8 +202,6 @@ export default function EnergyYear() {
   return (
     <PageScaffold
       title="年度能耗分析"
-      subtitle="面向经营复盘与年度决策，评估累计能耗、费用、能效、目标完成和建筑绩效。"
-      eyebrow="长期绩效与经营目标"
       extra={<Tag color={actualMonths.at(-1)?.status === 'mtd' ? 'processing' : 'success'}>{actualMonths.at(-1)?.status === 'mtd' ? 'YTD / MTD' : '完整年度'}</Tag>}
     >
       <OperationsMetrics

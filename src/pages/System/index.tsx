@@ -430,7 +430,6 @@ export default function System() {
       <OperationsSectionIntro
         title="治理概览"
         icon={<SafetyCertificateOutlined />}
-        description="集中查看身份权限、资产拓扑、数据接入和规则链路的当前治理状态。"
         meta="只读概览"
       />
 
@@ -503,7 +502,6 @@ export default function System() {
       <OperationsSectionIntro
         title="身份与访问控制"
         icon={<UserOutlined />}
-        description="管理用户生命周期、后端角色与 scope 范围。禁用和提权属于高风险变更，必须保留确认与审计。"
         meta={`${activeUsers} 个启用账户`}
         actions={<Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建用户</Button>}
       />
@@ -555,7 +553,6 @@ export default function System() {
       <OperationsSectionIntro
         title="站点与资产拓扑"
         icon={<ApartmentOutlined />}
-        description="维护建筑、分区和设备节点的层级关系。结构变更会影响遥测归属、FDD 对象和权限范围。"
         meta={`${flatAssetNodes.length} 个节点`}
         actions={
           <>
@@ -615,7 +612,6 @@ export default function System() {
       <OperationsSectionIntro
         title="接口与数据源"
         icon={<ApiOutlined />}
-        description="查看 REST、实时遥测、资产连接器与 AI 网关的健康度、同步状态和延迟。"
         meta={`${DATA_SOURCES.length - degradedSources} / ${DATA_SOURCES.length} 在线`}
       />
 
@@ -660,7 +656,6 @@ export default function System() {
       <OperationsSectionIntro
         title="告警与诊断规则"
         icon={<SettingOutlined />}
-        description="治理阈值、持续时间、严重级别与通知对象。规则变更会直接影响 FDD、报警和工单链路。"
         meta={`${activeRules} 条启用`}
         actions={
           <Tooltip title="等待规则写入 API 与灰度发布能力">
@@ -709,7 +704,6 @@ export default function System() {
       <OperationsSectionIntro
         title="操作审计"
         icon={<AuditOutlined />}
-        description="追踪身份、资产、规则和配置变更。展开记录可查看 traceId、客户端与结构化详情。"
         meta={`${filteredAudit.length} 条匹配记录`}
       />
 
@@ -736,7 +730,6 @@ export default function System() {
             aria-label="搜索审计记录"
             onChange={(event) => setKw(event.target.value)}
           />
-          <Text type="secondary">点击行首展开按钮查看完整上下文。</Text>
         </div>
 
         <Table<AuditLog>
@@ -765,8 +758,6 @@ export default function System() {
   return (
     <PageScaffold
       title="系统管理"
-      subtitle="治理身份权限、站点资产、数据接入、告警规则和审计证据，所有高风险变更保持人在回路。"
-      eyebrow="治理与配置"
       extra={
         <Space size={8} wrap>
           <Tag icon={<SafetyCertificateOutlined />}>当前角色：{ROLE_LABEL[ROLE_MAP[role]]}</Tag>

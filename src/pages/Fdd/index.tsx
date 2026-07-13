@@ -280,8 +280,6 @@ export default function Fdd() {
   return (
     <PageScaffold
       title="故障检测与诊断 FDD"
-      subtitle="将异常现象、根因假设和证据指标沉淀为诊断结论，人工确认后生成工单进入处置闭环。"
-      eyebrow="诊断与证据"
       extra={<Tag color={canGenerate ? 'processing' : 'default'}>{ROLE_LABEL[role]} · {canGenerate ? '可生成工单' : '只读'}</Tag>}
     >
       <Alert

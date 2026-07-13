@@ -317,8 +317,6 @@ export default function Alarms() {
   return (
     <PageScaffold
       title="报警工单"
-      subtitle="告警与 FDD 诊断统一进入工单闭环：接手、派工、处理、完成，确保人始终在回路中。"
-      eyebrow="事件与闭环"
       extra={<Tag color={canOperate ? 'processing' : 'default'}>{ROLE_LABEL[role]} · {canOperate ? '可处置' : '只读'}</Tag>}
     >
       <OperationsMetrics

@@ -367,8 +367,6 @@ export default function Cost() {
   return (
     <PageScaffold
       title="成本与绩效"
-      subtitle="电费结构、峰平谷成本、节能收益、碳减排与 ROI 经营分析。"
-      eyebrow="收益与绩效"
       extra={
         <Segmented<Range>
           value={range}

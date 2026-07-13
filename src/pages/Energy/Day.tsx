@@ -293,8 +293,6 @@ export default function EnergyDay() {
   return (
     <PageScaffold
       title="日度能耗分析"
-      subtitle="面向当日运行与问题处置，分析小时负荷、累计电量、峰平谷、设备启停和业务事件。"
-      eyebrow="实时运行与异常处置"
       extra={<Tag color={analytics.isToday ? 'processing' : 'default'}>{analytics.isToday ? `今日 · 已计量至 ${analytics.measuredHour}:00` : date}</Tag>}
     >
       <OperationsMetrics

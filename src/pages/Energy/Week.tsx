@@ -241,8 +241,6 @@ export default function EnergyWeek() {
   return (
     <PageScaffold
       title="周度能耗分析"
-      subtitle="面向运行策略与日程匹配，识别工作日、周末、非营业时段和启停计划中的浪费。"
-      eyebrow="运行日程与周内模式"
       extra={<Tag color="processing">{formatDate(analytics.start)} 起 · {measuredDays.length}/7 天已计量</Tag>}
     >
       <OperationsMetrics

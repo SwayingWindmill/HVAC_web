@@ -64,7 +64,6 @@ export function OperationsPanelHeading({ title, icon, meta }: OperationsPanelHea
 
 type OperationsSectionIntroProps = {
   title: ReactNode;
-  description: ReactNode;
   icon?: ReactNode;
   meta?: ReactNode;
   actions?: ReactNode;
@@ -73,7 +72,6 @@ type OperationsSectionIntroProps = {
 
 export function OperationsSectionIntro({
   title,
-  description,
   icon,
   meta,
   actions,
@@ -83,7 +81,6 @@ export function OperationsSectionIntro({
     <section className="ops-section-intro" aria-label={ariaLabel ?? String(title)}>
       <div className="ops-section-intro-copy">
         <OperationsPanelHeading title={title} icon={icon} meta={meta} />
-        <div className="ops-section-intro-description">{description}</div>
       </div>
       {actions ? <div className="ops-section-intro-actions">{actions}</div> : null}
     </section>
