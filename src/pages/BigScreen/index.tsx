@@ -141,10 +141,10 @@ export default function BigScreen() {
         <main className="bigscreen-stage">
           <header className="bigscreen-header">
             <div className="bigscreen-brand">
-              <img className="bigscreen-brand-mark" src="/hemiao-mark.svg" alt="" />
+              <img className="bigscreen-brand-mark" src="/quanlaihe-mark.svg" alt="" />
               <div className="bigscreen-brand-copy">
-                <span className="bigscreen-eyebrow">HEMIAO ENERGY COMMAND</span>
-                <h1>禾苗智慧能源驾驶舱</h1>
+                <span className="bigscreen-eyebrow">QUANLAIHE ENERGY COMMAND</span>
+                <h1>泉来禾智慧能源驾驶舱</h1>
                 <p>{activeScene.subtitle}</p>
               </div>
             </div>

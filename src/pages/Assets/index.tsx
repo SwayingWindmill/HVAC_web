@@ -12,7 +12,6 @@ import {
   Space,
   Table,
   Tag,
-  Tooltip,
   Tree,
   Typography,
   message,
@@ -88,7 +87,7 @@ export default function Assets() {
   const [searchParams, setSearchParams] = useSearchParams();
   const screens = Grid.useBreakpoint();
   const compactTable = !screens.xl;
-  const { buildingId, role } = useUi();
+  const { role } = useUi();
   const canManageAssets = can(role, 'manage', 'asset');
   const [selectedTreeKey, setSelectedTreeKey] = useState<Key>('b1');
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
@@ -155,14 +154,6 @@ export default function Assets() {
         .some((value) => value.toLowerCase().includes(q));
     });
   }, [allRows, keyword, selectedTreeKey, statusFilter, typeFilter]);
-
-  const selectedKeyString = toKeyString(selectedTreeKey);
-  const selectedDevice = selectedKeyString && isDeviceKey(selectedTreeKey) ? DEVICE_META[selectedKeyString] : null;
-  const selectedScopeLabel = selectedDevice
-    ? selectedDevice.name
-    : selectedTreeKey === 'b1'
-      ? '总部大楼全量设备'
-      : rows[0]?.zoneName ?? '当前范围';
 
   const columns: ColumnsType<DeviceRow> = [
     {
@@ -276,21 +267,15 @@ export default function Assets() {
   return (
     <PageScaffold
       title="设备与建筑"
-      subtitle="维护建筑、分区、设备、通讯网关与点位资产，为告警、FDD、优化策略提供统一对象模型。"
-      eyebrow="资产与对象"
-      extra={
-        <Space size={8} wrap>
-          <Tag color="processing">当前建筑：{buildingId}</Tag>
-          <Tag>{canManageAssets ? '可维护资产' : '资产台账只读'}</Tag>
-        </Space>
-      }
+      eyebrow={null}
+      extra={<Tag>{canManageAssets ? '可维护' : '只读'}</Tag>}
     >
       <OperationsMetrics
         items={[
-          { label: '设备总数', value: summary.total, detail: `${summary.running} 台处于运行状态`, icon: <ApartmentOutlined /> },
-          { label: '运行中', value: summary.running, detail: `${summary.total - summary.running} 台需要关注`, icon: <WifiOutlined />, tone: 'positive' },
-          { label: '告警 / 维护', value: summary.alarm + summary.maintenance, detail: `${summary.alarm} 台告警 · ${summary.maintenance} 台维护`, icon: <ToolOutlined />, tone: summary.alarm ? 'critical' : 'warning' },
-          { label: '在线点位', value: summary.onlinePoints, suffix: `/ ${summary.totalPoints}`, detail: `${Math.round((summary.onlinePoints / Math.max(summary.totalPoints, 1)) * 100)}% 在线`, icon: <DatabaseOutlined />, tone: 'accent' },
+          { label: '设备总数', value: summary.total, icon: <ApartmentOutlined /> },
+          { label: '运行中', value: summary.running, detail: `${summary.total - summary.running} 需关注`, icon: <WifiOutlined />, tone: 'positive' },
+          { label: '告警 / 维护', value: summary.alarm + summary.maintenance, detail: `${summary.alarm} 告警 · ${summary.maintenance} 维护`, icon: <ToolOutlined />, tone: summary.alarm ? 'critical' : 'warning' },
+          { label: '在线点位', value: summary.onlinePoints, suffix: `/ ${summary.totalPoints}`, detail: `${Math.round((summary.onlinePoints / Math.max(summary.totalPoints, 1)) * 100)}%`, icon: <DatabaseOutlined />, tone: 'accent' },
         ]}
       />
 
@@ -301,9 +286,6 @@ export default function Assets() {
             title={<OperationsPanelHeading icon={<ClusterOutlined />} title="建筑设备树" />}
             styles={{ body: { padding: 12 } }}
           >
-            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
-              当前选中：{selectedScopeLabel}
-            </Typography.Paragraph>
             <Tree
               defaultExpandAll
               treeData={ASSET_TREE}
@@ -321,16 +303,13 @@ export default function Assets() {
                 <Space wrap>
                   <Input.Search
                     allowClear
-                    placeholder="搜索设备、型号、网关、负责人"
+                    placeholder="搜索设备、网关或负责人"
                     value={keyword}
                     onChange={(e) => setKeyword(e.target.value)}
                     style={{ width: 260 }}
                   />
                   <Select value={typeFilter} onChange={setTypeFilter} options={TYPE_OPTIONS} style={{ width: 130 }} />
                   <Select value={statusFilter} onChange={setStatusFilter} options={STATUS_OPTIONS} style={{ width: 130 }} />
-                  <Tooltip title="后续接入真实资产接口后，这些筛选会转为服务端查询参数。">
-                    <ApiOutlined style={{ opacity: 0.55 }} />
-                  </Tooltip>
                 </Space>
               </div>
 

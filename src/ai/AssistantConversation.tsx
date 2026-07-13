@@ -34,7 +34,7 @@ export default function AssistantConversation({
   placeholder = '询问设备、能耗、故障、工单或优化问题…',
   showClear = true,
   onSubmitStart,
-  ariaLabel = '禾苗 AI 运维助手对话',
+  ariaLabel = '泉来禾 AI 运维助手对话',
 }: AssistantConversationProps) {
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -99,7 +99,7 @@ export default function AssistantConversation({
           placeholder={placeholder}
           autoSize={{ minRows: variant === 'drawer' ? 2 : 2, maxRows: 6 }}
           disabled={session.loading}
-          aria-label="向 禾苗 AI 运维助手提问"
+          aria-label="向 泉来禾 AI 运维助手提问"
         />
         {session.loading ? (
           <Tooltip title="停止生成">

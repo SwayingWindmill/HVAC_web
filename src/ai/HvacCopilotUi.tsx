@@ -247,29 +247,19 @@ function HvacCopilotWelcomeBase({
         <section className="hvac-copilot-brief">
           <div className="hvac-copilot-presence-line">
             <span aria-hidden="true" />
-            <strong>{context.pageTitle}</strong>
-            <small>已接入当前页面</small>
+            <strong title={context.scopeLabel}>{context.scopeLabel}</strong>
+            <small>已接入</small>
           </div>
-          <h2>从当前运行数据开始调查</h2>
-          <p>描述设备、能耗或运维异常，AI 将关联实时监测、FDD 诊断和工单证据。</p>
+          <h2>开始调查</h2>
+          <p>描述问题，系统将关联遥测、FDD 与工单。</p>
         </section>
 
-        <div className="hvac-copilot-scope-line" aria-label="当前 AI 上下文">
-          <span>分析范围</span>
-          <strong title={context.scopeLabel}>{context.scopeLabel}</strong>
-          <small>{context.roleLabel}</small>
-        </div>
-
         <section className="hvac-copilot-suggestion-section">
-          <div className="hvac-copilot-section-heading">可以这样开始</div>
           {suggestionView}
         </section>
       </div>
 
-      <div className="hvac-copilot-welcome-input">
-        <div className="hvac-copilot-composer-label">开始调查</div>
-        {input}
-      </div>
+      <div className="hvac-copilot-welcome-input">{input}</div>
     </div>
   );
 }

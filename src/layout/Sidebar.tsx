@@ -60,7 +60,7 @@ const NAV_GROUPS: NavGroup[] = [
 ];
 
 function BrandMark() {
-  return <img className="sidebar-brand-mark" src="/hemiao-mark.svg" alt="" />;
+  return <img className="sidebar-brand-mark" src="/quanlaihe-mark.svg" alt="" />;
 }
 
 function buildItem(path: string, modules: ReturnType<typeof visibleModules>): MenuItem | null {
@@ -134,8 +134,8 @@ export default function Sidebar() {
         <BrandMark />
         {!menuCollapsed && (
           <div className="sidebar-brand-copy">
-            <div className="sidebar-brand-title">禾苗智慧能源</div>
-            <div className="sidebar-brand-subtitle">HEMIAO SMART ENERGY</div>
+            <div className="sidebar-brand-title">泉来禾智慧能源</div>
+            <div className="sidebar-brand-subtitle">QUANLAIHE ENERGY</div>
           </div>
         )}
       </div>

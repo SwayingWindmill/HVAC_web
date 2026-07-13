@@ -38,7 +38,6 @@ import {
 import { useAiApplicationContext } from '@/ai/context';
 import {
   formatThreadTime,
-  threadKindLabel,
   threadStatusLabel,
   type AiThreadKind,
   type AiThreadRecord,
@@ -215,7 +214,6 @@ function ThreadNavigator({
               </div>
               <p>{thread.summary}</p>
               <div className="ai-thread-meta">
-                <span>{threadKindLabel[thread.kind]}</span>
                 <span>{threadStatusLabel[thread.status]}</span>
                 <time>{formatThreadTime(thread.updatedAt)}</time>
               </div>
@@ -241,7 +239,6 @@ function ThreadNavigator({
       </div>
 
       <footer className="ai-thread-footer">
-        <span>本地历史 · 刷新后保留</span>
         {filteredThreads.length > THREAD_PAGE_SIZE ? (
           <Pagination
             simple
@@ -289,13 +286,8 @@ function EvidenceRail({
     return (
       <div className="ai-evidence-rail-content is-empty">
         <section className="ai-evidence-section ai-context-summary">
-          <header><span>调查上下文</span></header>
-          <h2>{context.pageTitle}</h2>
-          <p>从当前页面与站点范围发起只读运维分析。</p>
-          <div className="ai-thread-scope" title={context.scopeLabel}>
-            <span>分析范围</span>
-            <strong>{context.scopeLabel}</strong>
-          </div>
+          <header><span>当前范围</span></header>
+          <h2 title={context.scopeLabel}>{context.scopeLabel}</h2>
         </section>
 
         <section className="ai-evidence-section ai-available-data-section">
@@ -310,7 +302,7 @@ function EvidenceRail({
         </section>
 
         <div className="ai-governance-bar">
-          <span>仅提供分析与建议；审批、派工和设备控制仍在原业务流程中完成。</span>
+          <span>只读分析</span>
         </div>
       </div>
     );
@@ -439,11 +431,13 @@ function AiWorkspace() {
           <section className="ai-conversation-pane" aria-label="AI 运维对话工作台">
             <header className="ai-conversation-header">
               <div>
-                <span>
-                  {hasStarted ? (activeThread ? threadKindLabel[activeThread.kind] : '调查') : 'AI 运维调查'} · {demoMode ? '演示数据' : '接入数据'} · {hasStarted ? `${agent.messages.length || activeThread?.messageCount || 0} 条消息` : '等待问题'}
-                </span>
-                <h2>{hasStarted ? (activeThread?.title || '运维调查') : 'AI 运维调查'}</h2>
-                <p title={activeThread?.scopeLabel || context.scopeLabel}>{activeThread?.scopeLabel || context.scopeLabel}</p>
+                {hasStarted ? (
+                  <span>{demoMode ? '演示数据' : '接入数据'} · {agent.messages.length || activeThread?.messageCount || 0} 条消息</span>
+                ) : null}
+                <h2>{hasStarted ? (activeThread?.title || '运维调查') : 'AI 运维助手'}</h2>
+                {hasStarted ? (
+                  <p title={activeThread?.scopeLabel || context.scopeLabel}>{activeThread?.scopeLabel || context.scopeLabel}</p>
+                ) : null}
               </div>
               <div className="ai-conversation-actions">
                 <Button className="ai-mobile-history-button" icon={<MenuOutlined />} onClick={() => setHistoryDrawerOpen(true)}>

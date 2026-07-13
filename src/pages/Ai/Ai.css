@@ -337,7 +337,7 @@
   min-height: 36px;
   flex: 0 0 auto;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--ops-border-soft);
@@ -352,12 +352,12 @@
 
 .ai-conversation-header {
   display: flex;
-  min-height: 76px;
+  min-height: 64px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 12px 20px;
+  padding: 10px 20px;
   border-bottom: 1px solid var(--ops-border-soft);
 }
 
@@ -527,7 +527,7 @@
 }
 
 .ai-context-summary {
-  padding-top: 22px;
+  padding-top: 18px;
 }
 
 .ai-evidence-section > header {
@@ -551,7 +551,7 @@
   margin: 0;
   overflow: hidden;
   color: var(--ops-text);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 620;
   line-height: 1.45;
   text-overflow: ellipsis;
@@ -669,7 +669,7 @@
 }
 
 .ai-evidence-list.is-compact > div {
-  min-height: 52px;
+  min-height: 46px;
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
   padding: 10px 0;
@@ -762,10 +762,10 @@
   min-height: 0;
   flex: 1 1 auto;
   align-items: flex-end;
-  padding: 12px 18px 16px;
+  padding: 10px 18px 14px;
   color: var(--ops-text-secondary);
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.4;
 }
 
 .ai-mobile-drawer .ant-drawer-body {

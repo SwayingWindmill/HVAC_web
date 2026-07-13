@@ -29,9 +29,9 @@ const ROUTES = [
   { path: '/fdd', title: '故障检测与诊断 FDD', roles: ['ops', 'rd'] },
   { path: '/alarms', title: '报警工单', roles: ['ops', 'rd'] },
   { path: '/optimize', title: '节能优化建议', roles: ['rd'] },
-  { path: '/ai', title: '禾苗 AI 运维助手', roles: ['rd'] },
+  { path: '/ai', title: '泉来禾 AI 运维助手', roles: ['rd'] },
   { path: '/system', title: '系统管理', roles: ['rd'] },
-  { path: '/bigscreen', title: '禾苗智慧能源驾驶舱', roles: ['demo', 'ops', 'rd'], bigscreen: true },
+  { path: '/bigscreen', title: '泉来禾智慧能源驾驶舱', roles: ['demo', 'ops', 'rd'], bigscreen: true },
 ];
 
 const ROLE_LABELS = {
@@ -277,6 +277,9 @@ async function inspectPage(client, route, viewport, theme) {
       contentWidth: contentRect.width,
       viewportWidth: window.innerWidth,
       firstChartTop: document.querySelector('.ops-chart-card')?.getBoundingClientRect().top ?? null,
+      pageHeaderHeight: document.querySelector('.ops-page-header')?.getBoundingClientRect().height ?? null,
+      hasAssetsRedundantCopy: ['维护建筑、分区、设备、通讯网关与点位资产', '当前选中：', '后续接入真实资产接口后']
+        .some((text) => visibleText.includes(text)),
       datasetTheme: root.dataset.theme,
     };
   })()`);
@@ -293,6 +296,14 @@ async function inspectPage(client, route, viewport, theme) {
     assert(
       typeof result.firstChartTop === 'number' && result.firstChartTop <= maximumFirstChartTop,
       `${route.path} pushes primary evidence below the visual-density limit at ${viewport.name}/${theme}: ${result.firstChartTop}px > ${maximumFirstChartTop}px`,
+    );
+  }
+  if (route.path === '/assets') {
+    const maximumHeaderHeight = viewport.name === 'mobile' ? 92 : 70;
+    assert(!result.hasAssetsRedundantCopy, `/assets redundant explanatory copy returned at ${viewport.name}/${theme}`);
+    assert(
+      typeof result.pageHeaderHeight === 'number' && result.pageHeaderHeight <= maximumHeaderHeight,
+      `/assets compact header is too tall at ${viewport.name}/${theme}: ${result.pageHeaderHeight}px > ${maximumHeaderHeight}px`,
     );
   }
   assert(result.datasetTheme === theme, `${route.path} theme mismatch: expected ${theme}, got ${result.datasetTheme}`);
@@ -471,7 +482,12 @@ try {
         minCustomFontSize: customText.length ? Math.min(...customText) : 0,
         offenderCount: offenders.length,
         hasInput: Boolean(popup?.querySelector('textarea')),
-        hasPersistentDisclaimer: popup?.textContent?.includes('设备控制和业务写入必须人工确认') ?? false,
+        hasPersistentDisclaimer: [...(popup?.querySelectorAll('*') ?? [])].some((element) => (
+          element.childElementCount === 0
+          && (element.textContent?.includes('AI can make mistakes') || element.textContent?.includes('设备控制和业务写入必须人工确认'))
+          && element.offsetParent !== null
+          && getComputedStyle(element).display !== 'none'
+        )),
         hasBrandedHeader: Boolean(popup?.querySelector('.hvac-copilot-header-layout')),
         hasBrandedWelcome: Boolean(popup?.querySelector('.hvac-copilot-welcome')),
         hasPopupContext: Boolean(popup?.querySelector('.hvac-copilot-popup-context')),
@@ -484,16 +500,19 @@ try {
       };
     })()`);
     assert(
-      aiPopupState.title === '禾苗 AI 运维助手'
-        || aiPopupState.headerText.includes('禾苗 AI 运维助手')
-        || aiPopupState.popupText.includes('禾苗 AI 运维助手'),
+      aiPopupState.title === '泉来禾 AI 运维助手'
+        || aiPopupState.headerText.includes('泉来禾 AI 运维助手')
+        || aiPopupState.popupText.includes('泉来禾 AI 运维助手'),
       `CopilotPopup title is invalid: ${JSON.stringify(aiPopupState)}`,
     );
     assert(aiPopupState.width >= 500 && aiPopupState.width <= 560, 'CopilotPopup desktop width is invalid');
     assert(aiPopupState.height >= 600, 'CopilotPopup desktop height is invalid');
     assert(aiPopupState.popupRadius >= 19, 'CopilotPopup does not use the refined floating-window radius');
     assert(aiPopupState.composerRadius >= 16 && aiPopupState.composerRadius <= 20, 'CopilotPopup composer radius is outside the product contract');
-    assert(aiPopupState.composerHeight >= 72 && aiPopupState.composerHeight <= 82, 'CopilotPopup composer height is outside the product contract');
+    assert(
+      aiPopupState.composerHeight >= 72 && aiPopupState.composerHeight <= 82,
+      `CopilotPopup composer height is outside the product contract: ${JSON.stringify(aiPopupState)}`,
+    );
     assert(aiPopupState.composerBorderWidth >= 1 && aiPopupState.composerShadow !== 'none', 'CopilotPopup composer lacks a clear surface boundary');
     assert(aiPopupState.sendWidth >= 39 && aiPopupState.sendHeight >= 39, 'CopilotPopup send action is too small');
     assert(aiPopupState.disabledAddHidden, 'CopilotPopup exposes an unavailable add action');
@@ -1151,6 +1170,14 @@ try {
       return {
         headerTitle: document.querySelector('.ai-conversation-header h2')?.textContent?.trim() ?? '',
         hasComposerLabel: Boolean(document.querySelector('.hvac-copilot-composer-label')?.textContent?.includes('开始调查')),
+        hasRedundantWelcomeCopy: ['从当前运行数据开始调查', '可以这样开始', '分析范围']
+          .some((text) => document.querySelector('.ai-conversation-pane')?.textContent?.includes(text)),
+        hasPersistentDisclaimer: [...document.querySelectorAll('.ai-copilot-chat *')].some((element) => (
+          element.childElementCount === 0
+          && element.textContent?.includes('AI can make mistakes')
+          && element.offsetParent !== null
+          && getComputedStyle(element).display !== 'none'
+        )),
         composerBelowSuggestions: Boolean(dockRect && suggestionRect && dockRect.top > suggestionRect.bottom),
         composerBottomInset: dockRect && conversationRect ? conversationRect.bottom - dockRect.bottom : 999,
         composerHeight: composer?.getBoundingClientRect().height ?? 0,
@@ -1174,8 +1201,10 @@ try {
       };
     })()`);
     assert(
-      aiWorkspaceWelcomeState.headerTitle === 'AI 运维调查'
-        && aiWorkspaceWelcomeState.hasComposerLabel
+      aiWorkspaceWelcomeState.headerTitle === 'AI 运维助手'
+        && !aiWorkspaceWelcomeState.hasComposerLabel
+        && !aiWorkspaceWelcomeState.hasRedundantWelcomeCopy
+        && !aiWorkspaceWelcomeState.hasPersistentDisclaimer
         && aiWorkspaceWelcomeState.composerBelowSuggestions
         && aiWorkspaceWelcomeState.composerBottomInset >= 0
         && aiWorkspaceWelcomeState.composerBottomInset <= 24
@@ -1374,7 +1403,11 @@ try {
     interactionChecks.push('history-back-forward');
 
     context = 'interaction:energy-first-entry';
-    await spaNavigate(client, '/energy');
+    await evaluate(client, `(() => {
+      history.pushState({}, '', '/energy');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      return true;
+    })()`);
     await waitFor(client, `location.pathname === '/energy/month'`, 'energy index redirect');
     await waitFor(
       client,

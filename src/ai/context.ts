@@ -94,7 +94,7 @@ const PAGE_META: Record<string, PageMeta> = {
     prompts: ['总结当前节能收益', '峰时段费用是否过高？', '生成管理层汇报摘要'],
   },
   '/ai': {
-    title: '禾苗 AI 运维助手',
+    title: '泉来禾 AI 运维助手',
     description: '全局浮动助手与完整工作台共用 Agent 上下文。',
     welcomeTitle: '跨模块调查智慧能源系统问题',
     inputPlaceholder: '描述需要调查的设备、能耗或运维问题',

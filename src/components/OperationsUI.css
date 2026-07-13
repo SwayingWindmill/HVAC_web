@@ -28,6 +28,11 @@
   max-width: 860px;
 }
 
+.ops-page-compact-header .ops-page-header {
+  min-height: 56px;
+  align-items: center;
+}
+
 .ops-page-eyebrow {
   display: inline-flex;
   align-items: center;

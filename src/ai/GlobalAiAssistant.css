@@ -465,7 +465,7 @@
 
 .hvac-copilot-brief {
   min-width: 0;
-  padding-bottom: 14px;
+  padding-bottom: 6px;
 }
 
 .hvac-copilot-presence-line {
@@ -710,11 +710,11 @@
 
 .hvac-copilot-welcome[data-variant='workspace'] .hvac-copilot-brief h2 {
   max-width: none;
-  font-size: 25px;
+  font-size: 24px;
 }
 
 .hvac-copilot-welcome[data-variant='workspace'] .hvac-copilot-suggestion-section {
-  padding-top: 16px;
+  padding-top: 10px;
 }
 
 .hvac-copilot-welcome[data-variant='workspace'] .hvac-copilot-welcome-input {
@@ -722,7 +722,7 @@
   max-width: 760px;
   margin-top: auto;
   margin-inline: auto;
-  padding: 18px 0 22px;
+  padding: 14px 0 22px;
 }
 
 .hvac-copilot-welcome[data-variant='workspace'] .hvac-copilot-welcome-input .copilotKitInput {
@@ -811,6 +811,11 @@
 [data-theme='dark'] .ai-copilot-chat .copilotKitInput textarea::placeholder,
 [data-theme='dark'] .ai-copilot-chat .copilotKitInput input::placeholder {
   color: #9aa8bb !important;
+}
+
+.copilotKitPopup [class~='cpk:pointer-events-none'] > [class~='cpk:text-center'][class~='cpk:text-xs'][class~='cpk:text-muted-foreground'],
+.ai-copilot-chat [class~='cpk:pointer-events-none'] > [class~='cpk:text-center'][class~='cpk:text-xs'][class~='cpk:text-muted-foreground'] {
+  display: none !important;
 }
 
 .copilotKitPopup .copilotKitInput > [data-layout='compact'] > div:last-child > div,

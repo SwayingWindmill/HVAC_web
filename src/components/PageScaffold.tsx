@@ -23,11 +23,13 @@ export default function PageScaffold({
   className,
   children,
 }: PageScaffoldProps) {
+  const compactHeader = !eyebrow && !subtitle;
+
   return (
-    <div className={['ops-page', className].filter(Boolean).join(' ')}>
+    <div className={['ops-page', compactHeader ? 'ops-page-compact-header' : '', className].filter(Boolean).join(' ')}>
       <header className="ops-page-header">
         <div className="ops-page-heading">
-          <div className="ops-page-eyebrow">{eyebrow}</div>
+          {eyebrow ? <div className="ops-page-eyebrow">{eyebrow}</div> : null}
           <Typography.Title level={2} className="ops-page-title">
             {title}
           </Typography.Title>
