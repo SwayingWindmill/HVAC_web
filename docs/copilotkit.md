@@ -41,7 +41,7 @@ The current local Zustand thread repository mirrors the product interactions nee
 
 ### Thread history and workspace scrolling
 
-`src/ai/history.ts` provides the frontend thread contract for the current demo phase. Zustand persist stores thread metadata and serializable Agent messages under `hvac-ai-thread-history-v1`. Popup and `/ai` can search and restore the same records. The workspace supports new session, rename, pin, archive, delete, filters, and pagination. A transient empty CopilotKit message array must never erase a stored non-empty thread; only an explicit new-session action may create an empty active thread.
+`apps/hvac-web/src/ai/history.ts` provides the frontend thread contract for the current demo phase. Zustand persist stores thread metadata and serializable Agent messages under `hvac-ai-thread-history-v1`. Popup and `/ai` can search and restore the same records. The workspace supports new session, rename, pin, archive, delete, filters, and pagination. A transient empty CopilotKit message array must never erase a stored non-empty thread; only an explicit new-session action may create an empty active thread.
 
 The `/ai` route is a fixed, full-bleed workspace. It deliberately omits the standard page Hero, 20px content padding, and outer Card because the left application navigation already identifies the module and the active thread header supplies the working context. It retains the shared operations colors, 8px controls, and 12–14px business copy. The browser document, AppShell Content, AI hub, thread navigator, and evidence inspector must not scroll vertically. The only vertical scrolling surface is the CopilotKit message viewport in the center column; the composer remains visible. At tablet/mobile widths, thread and evidence rails move into Ant Design Drawers while the page remains fixed.
 
@@ -72,6 +72,8 @@ VITE_COPILOTKIT_RUNTIME_URL=/api/v1/copilotkit
 ```
 
 The backend Runtime is responsible for model credentials, authentication, RBAC, tool authorization, audit logging, persistence, and human approval for write operations. Model credentials must never be exposed through Vite environment variables.
+
+The repository includes an EnergyAgent adapter Runtime and local three-service launcher. See [`energyagent-integration.md`](energyagent-integration.md) for topology, configuration, commands, health checks, and the current read-only boundary.
 
 ## Registered application context
 

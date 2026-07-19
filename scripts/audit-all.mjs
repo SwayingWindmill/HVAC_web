@@ -69,6 +69,8 @@ try {
   preview = spawn(process.execPath, [
     resolve(root, 'node_modules/vite/bin/vite.js'),
     'preview',
+    'apps/hvac-web',
+    '--config', 'apps/hvac-web/vite.config.ts',
     '--host', '127.0.0.1',
     '--port', String(port),
     '--strictPort',
@@ -99,7 +101,7 @@ try {
   });
 
   console.log('\n[7/7] Impeccable design audit');
-  await run(npxCommand, ['-y', 'impeccable', 'detect', 'src', '--no-config']);
+  await run(npxCommand, ['-y', 'impeccable', 'detect', 'apps/hvac-web/src', '--no-config']);
 
   console.log('\nRelease audit passed.');
 } finally {

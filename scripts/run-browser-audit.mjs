@@ -70,6 +70,8 @@ try {
     console.log(`Starting Vite audit server at ${defaultBaseUrl}`);
     server = spawn(process.execPath, [
       resolve(root, 'node_modules/vite/bin/vite.js'),
+      'apps/hvac-web',
+      '--config', 'apps/hvac-web/vite.config.ts',
       '--host', '127.0.0.1',
       '--port', String(port),
       '--strictPort',

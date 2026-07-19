@@ -1,0 +1,12 @@
+{
+  "python_version": "3.13",
+  "dockerfile_lines": [],
+  "dependencies": ["."],
+  "package_manager": "uv",
+  "graphs": {
+    "sample_agent": "./main.py:graph"
+  },
+  "http": {
+    "app": "./src/http.py:app"
+  }
+}

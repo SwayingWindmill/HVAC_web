@@ -1587,7 +1587,7 @@ src/agent/
     └── AgentWorkspace.tsx
 ```
 
-当前 `src/ai` 可以逐步迁移或重命名为 `src/agent`，但不应一次性重写已经稳定的共享会话和 UI。
+当前 `apps/hvac-web/src/ai` 可以逐步迁移或重命名为 `apps/hvac-web/src/agent`，但不应一次性重写已经稳定的共享会话和 UI。
 
 ### 25.2 后端建议模块
 

@@ -2,6 +2,8 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath, URL } from 'node:url';
 
+const aiRuntimeTarget = process.env.AI_RUNTIME_PROXY_TARGET || 'http://127.0.0.1:3001';
+
 function manualChunks(id: string) {
   if (!id.includes('node_modules')) return undefined;
 
@@ -33,6 +35,12 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      '/api/v1/copilotkit': {
+        target: aiRuntimeTarget,
+        changeOrigin: true,
+        timeout: 0,
+        proxyTimeout: 0,
+      },
       '/api/v1': { target: 'http://localhost:3000', changeOrigin: true },
       '/ws': { target: 'ws://localhost:3000', ws: true, changeOrigin: true },
     },

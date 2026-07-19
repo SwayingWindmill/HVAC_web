@@ -40,3 +40,7 @@ prototype/
 vite.config.js
 vite.config.d.ts
 vite.config.*.timestamp-*.mjs
+
+# Independent nested repositories checked out locally
+hvac-backend/
+references/energy-agent-next/
