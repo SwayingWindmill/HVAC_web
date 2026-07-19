@@ -9,6 +9,8 @@ node_modules/
 dist/
 build/
 out/
+/platform-gateway
+/platform-gateway.exe
 
 # env / secrets
 .env

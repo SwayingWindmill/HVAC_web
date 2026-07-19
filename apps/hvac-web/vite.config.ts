@@ -3,6 +3,26 @@ import react from '@vitejs/plugin-react';
 import { fileURLToPath, URL } from 'node:url';
 
 const aiRuntimeTarget = process.env.AI_RUNTIME_PROXY_TARGET || 'http://127.0.0.1:3001';
+const platformGatewayTarget = process.env.PLATFORM_GATEWAY_PROXY_TARGET || 'http://127.0.0.1:8080';
+const legacyApiTarget = process.env.LEGACY_API_PROXY_TARGET || 'http://localhost:3000';
+const s0GatewayOnly = process.env.S0_GATEWAY_ONLY === 'true';
+
+const gatewayOnlyProxy = {
+  '/api/v1': { target: platformGatewayTarget, changeOrigin: true },
+};
+
+const standardDevelopmentProxy = {
+  '/api/v1/health': { target: platformGatewayTarget, changeOrigin: true },
+  '/api/v1/version': { target: platformGatewayTarget, changeOrigin: true },
+  '/api/v1/copilotkit': {
+    target: aiRuntimeTarget,
+    changeOrigin: true,
+    timeout: 0,
+    proxyTimeout: 0,
+  },
+  '/api/v1': { target: legacyApiTarget, changeOrigin: true },
+  '/ws': { target: 'ws://localhost:3000', ws: true, changeOrigin: true },
+};
 
 function manualChunks(id: string) {
   if (!id.includes('node_modules')) return undefined;
@@ -22,8 +42,8 @@ function manualChunks(id: string) {
   return undefined;
 }
 
-// hvac-backend runs on :3000 with global prefix /api/v1 and Socket.IO at /ws/telemetry.
-// Proxy is wired now so swapping mock -> real API later is a one-line change in src/api.
+// S0 platform contracts are served only by platform-gateway. The dedicated
+// S0 mode registers no Legacy, Copilot, or WebSocket proxy routes.
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -34,16 +54,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    proxy: {
-      '/api/v1/copilotkit': {
-        target: aiRuntimeTarget,
-        changeOrigin: true,
-        timeout: 0,
-        proxyTimeout: 0,
-      },
-      '/api/v1': { target: 'http://localhost:3000', changeOrigin: true },
-      '/ws': { target: 'ws://localhost:3000', ws: true, changeOrigin: true },
-    },
+    proxy: s0GatewayOnly ? gatewayOnlyProxy : standardDevelopmentProxy,
   },
   build: {
     chunkSizeWarningLimit: 1200,

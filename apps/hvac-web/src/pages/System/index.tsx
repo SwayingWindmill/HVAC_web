@@ -43,6 +43,7 @@ import {
   WifiOutlined,
 } from '@ant-design/icons';
 import PageScaffold from '@/components/PageScaffold';
+import PlatformGatewayStatus from '@/components/PlatformGatewayStatus';
 import {
   OperationsActionFooter,
   OperationsDetailHeader,
@@ -470,10 +471,11 @@ export default function System() {
         </Col>
         <Col xs={24} lg={12}>
           <Card
-            title={<OperationsPanelHeading title="服务健康" icon={<WifiOutlined />} meta={`${DATA_SOURCES.length} 个数据源`} />}
+            title={<OperationsPanelHeading title="服务健康" icon={<WifiOutlined />} meta={`1 个平台入口 · ${DATA_SOURCES.length} 个数据源`} />}
             variant="borderless"
           >
             <div className="system-health-list">
+              <PlatformGatewayStatus />
               {DATA_SOURCES.map((item) => (
                 <div className="system-health-row" key={item.key}>
                   <Badge color={statusMeta[item.status].color} />

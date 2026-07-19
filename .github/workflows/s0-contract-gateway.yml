@@ -1,0 +1,47 @@
+name: S0 Contract Gateway
+
+on:
+  pull_request:
+    paths:
+      - "apps/hvac-web/**"
+      - "contracts/http/**"
+      - "services/platform-gateway/**"
+      - "scripts/generate-platform-contracts.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - "go.work"
+      - ".github/workflows/s0-contract-gateway.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/hvac-web/**"
+      - "contracts/http/**"
+      - "services/platform-gateway/**"
+      - "scripts/generate-platform-contracts.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - "go.work"
+      - ".github/workflows/s0-contract-gateway.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.5"
+          cache-dependency-path: services/platform-gateway/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - run: npm run contracts:check
+      - run: npm run test:gateway
+      - run: npm run build:gateway
+      - run: npm run lint
+      - run: npm run build
