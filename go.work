@@ -1,3 +1,11 @@
-go 1.22.0
+go 1.22.5
 
-use ./services/platform-gateway
+use (
+	./libs/identitycontext
+	./libs/oidctest
+	./libs/testpki
+	./services/platform-gateway
+	./services/iam-service
+	./services/oidc-test-provider
+	./tools/s0-auth-fixture
+)

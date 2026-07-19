@@ -10,6 +10,13 @@ apps/
 
 services/
   platform-gateway/          S0 公共 HTTP 入口（Go）
+  iam-service/               S0 私有身份服务（Go，mTLS）
+  oidc-test-provider/        S0 确定性 OIDC 测试提供者（Go）
+
+libs/
+  identitycontext/           受约束委托与 actor chain 类型
+  oidctest/                  OIDC 测试 fixture
+  testpki/                   临时测试 CA 与 Workload 证书
 
 contracts/
   http/                      OpenAPI 权威契约与生成工具锁
@@ -44,11 +51,15 @@ agents/energy-agent
 ```bash
 npm run dev                 # 仅启动 HVAC Web
 npm run dev:s0-gateway      # 启动 HVAC Web + Go Platform Gateway
+npm run dev:s0-auth         # 启动 HTTPS Web、OIDC、Gateway 与 mTLS IAM
 npm run dev:energyagent     # 启动 Web、Copilot Runtime 和 EnergyAgent
 npm run contracts:check     # 校验 OpenAPI 生成产物无漂移
 npm run test:gateway        # Gateway Go 黑盒测试
+npm run test:identity       # OIDC、委托、IAM、撤销与 Gateway 身份测试
 npm run build:gateway       # 独立构建 Gateway 二进制
+npm run build:iam           # 独立构建 IAM 二进制
 npm run audit:platform-gateway
+npm run audit:auth-principal
 npm run lint
 npm run build
 npm run verify:ai-runtime
@@ -60,8 +71,11 @@ EnergyAgent 模型配置放在 `agents/energy-agent/.env.local`，或通过进�
 ## 依赖所有权
 
 - 根目录 `package.json`：HVAC Web、Copilot Runtime、契约生成与仓库编排所需 Node 依赖。
-- `services/platform-gateway/go.mod`：Gateway 独立 Go module；根目录 `go.work` 只负责工作区编排。
-- `contracts/http/tooling.lock.json`：契约生成器、Go、Node 与运行时校验版本锁。
+- `services/platform-gateway/go.mod`：Gateway 独立 Go module。
+- `services/iam-service/go.mod`：私有 IAM 独立 Go module。
+- `services/oidc-test-provider/go.mod`：本地/测试 OIDC fixture 独立 Go module。
+- `libs/*/go.mod`：委托、OIDC fixture 与测试 PKI 的窄接口模块；根目录 `go.work` 只负责编排。
+- `contracts/http/tooling.lock.json`：契约生成器、模板、Go、Node 与运行时校验版本锁。
 - `agents/energy-agent/pyproject.toml`：Python Agent 依赖，使用 `uv.lock` 锁定。
 - `references/energy-agent-next/package.json`：参考 Next.js adapter 依赖，使用 `pnpm-lock.yaml` 锁定。
 

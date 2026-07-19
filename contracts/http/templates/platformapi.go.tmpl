@@ -15,8 +15,13 @@ import (
 )
 
 const (
-	GetHealthPath  = "__HEALTH_PATH__"
-	GetVersionPath = "__VERSION_PATH__"
+	GetHealthPath             = "__HEALTH_PATH__"
+	GetVersionPath            = "__VERSION_PATH__"
+	BeginLoginPath            = "__LOGIN_PATH__"
+	CompleteLoginPath         = "__CALLBACK_PATH__"
+	GetCurrentPrincipalPath   = "__PRINCIPAL_PATH__"
+	LogoutPath                = "__LOGOUT_PATH__"
+	RevokeSessionPathTemplate = "__REVOKE_PATH__"
 )
 
 type BuildInfo struct {
@@ -31,6 +36,47 @@ type HealthResponse struct {
 	Service   string     `json:"service"`
 	CheckedAt string     `json:"checkedAt"`
 	Build     *BuildInfo `json:"build,omitempty"`
+}
+
+type UserPrincipal struct {
+	Subject     string   `json:"subject"`
+	Issuer      string   `json:"issuer"`
+	DisplayName string   `json:"displayName"`
+	Email       string   `json:"email"`
+	Roles       []string `json:"roles"`
+}
+
+type ServicePrincipal struct {
+	Service  string `json:"service"`
+	SPIFFEID string `json:"spiffeId"`
+}
+
+type PrincipalContext struct {
+	InitiatingPrincipal       UserPrincipal     `json:"initiatingPrincipal"`
+	ExecutingServicePrincipal ServicePrincipal `json:"executingServicePrincipal"`
+	ActingOrganizationID      string           `json:"actingOrganizationId"`
+	Audience                  string           `json:"audience"`
+	PolicyRevision            string           `json:"policyRevision"`
+	DelegationExpiresAt       string           `json:"delegationExpiresAt"`
+}
+
+type SessionView struct {
+	ID                    string `json:"id"`
+	ExpiresAt             string `json:"expiresAt"`
+	CSRFToken             string `json:"csrfToken"`
+	RevocationObjectiveMS int    `json:"revocationObjectiveMs"`
+}
+
+type CurrentPrincipalResponse struct {
+	Principal UserPrincipal    `json:"principal"`
+	Context   PrincipalContext `json:"context"`
+	Session   SessionView      `json:"session"`
+}
+
+type SessionRevocationResponse struct {
+	SessionID  string `json:"sessionId"`
+	RevokedAt  string `json:"revokedAt"`
+	ObjectiveMS int   `json:"objectiveMs"`
 }
 
 type FieldError struct {
@@ -50,32 +96,29 @@ type ProblemDetails struct {
 	FieldErrors []FieldError `json:"fieldErrors,omitempty"`
 }
 
-type GetHealthParams struct {
-	IncludeBuild *bool
-}
+type GetHealthParams struct { IncludeBuild *bool }
+type BeginLoginParams struct { ReturnTo string; LoginHint string }
+type CompleteLoginParams struct { Code string; State string }
+type LogoutParams struct { CSRFToken string }
+type RevokeSessionParams struct { SessionID string; CSRFToken string }
 
-// ServerInterface is the generated HTTP seam implemented by the edge service.
 type ServerInterface interface {
 	GetHealth(http.ResponseWriter, *http.Request, GetHealthParams)
 	GetVersion(http.ResponseWriter, *http.Request)
+	BeginLogin(http.ResponseWriter, *http.Request, BeginLoginParams)
+	CompleteLogin(http.ResponseWriter, *http.Request, CompleteLoginParams)
+	GetCurrentPrincipal(http.ResponseWriter, *http.Request)
+	Logout(http.ResponseWriter, *http.Request, LogoutParams)
+	RevokeSession(http.ResponseWriter, *http.Request, RevokeSessionParams)
 }
 
-type HTTPClient interface {
-	Do(*http.Request) (*http.Response, error)
-}
+type HTTPClient interface { Do(*http.Request) (*http.Response, error) }
 
-type Client struct {
-	baseURL    string
-	httpClient HTTPClient
-}
+type Client struct { baseURL string; httpClient HTTPClient }
 
 func NewClient(baseURL string, httpClient HTTPClient) (*Client, error) {
-	if _, err := url.ParseRequestURI(baseURL); err != nil {
-		return nil, fmt.Errorf("parse platform Gateway base URL: %w", err)
-	}
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
+	if _, err := url.ParseRequestURI(baseURL); err != nil { return nil, fmt.Errorf("parse platform Gateway base URL: %w", err) }
+	if httpClient == nil { httpClient = http.DefaultClient }
 	return &Client{baseURL: strings.TrimRight(baseURL, "/"), httpClient: httpClient}, nil
 }
 
@@ -89,57 +132,38 @@ type Response[T any] struct {
 }
 
 func (c *Client) GetHealth(ctx context.Context, params *GetHealthParams) (*Response[HealthResponse], error) {
-	endpoint, err := url.Parse(c.baseURL + GetHealthPath)
-	if err != nil {
-		return nil, fmt.Errorf("build getHealth URL: %w", err)
-	}
-	if params != nil && params.IncludeBuild != nil {
-		query := endpoint.Query()
-		query.Set("includeBuild", fmt.Sprintf("%t", *params.IncludeBuild))
-		endpoint.RawQuery = query.Encode()
-	}
-	return doJSON[HealthResponse](ctx, c.httpClient, http.MethodGet, endpoint.String())
+	endpoint, err := url.Parse(c.baseURL + GetHealthPath); if err != nil { return nil, err }
+	if params != nil && params.IncludeBuild != nil { query := endpoint.Query(); query.Set("includeBuild", fmt.Sprintf("%t", *params.IncludeBuild)); endpoint.RawQuery = query.Encode() }
+	return doJSON[HealthResponse](ctx, c.httpClient, http.MethodGet, endpoint.String(), "", nil)
 }
 
 func (c *Client) GetVersion(ctx context.Context) (*Response[BuildInfo], error) {
-	return doJSON[BuildInfo](ctx, c.httpClient, http.MethodGet, c.baseURL+GetVersionPath)
+	return doJSON[BuildInfo](ctx, c.httpClient, http.MethodGet, c.baseURL+GetVersionPath, "", nil)
 }
 
-func doJSON[T any](ctx context.Context, client HTTPClient, method, endpoint string) (*Response[T], error) {
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(nil))
-	if err != nil {
-		return nil, fmt.Errorf("create platform Gateway request: %w", err)
-	}
+func (c *Client) GetCurrentPrincipal(ctx context.Context) (*Response[CurrentPrincipalResponse], error) {
+	return doJSON[CurrentPrincipalResponse](ctx, c.httpClient, http.MethodGet, c.baseURL+GetCurrentPrincipalPath, "", nil)
+}
+
+func (c *Client) Logout(ctx context.Context, csrfToken string) (*Response[struct{}], error) {
+	return doJSON[struct{}](ctx, c.httpClient, http.MethodPost, c.baseURL+LogoutPath, csrfToken, nil)
+}
+
+func (c *Client) RevokeSession(ctx context.Context, sessionID, csrfToken string) (*Response[SessionRevocationResponse], error) {
+	path := strings.Replace(RevokeSessionPathTemplate, "{sessionId}", url.PathEscape(sessionID), 1)
+	return doJSON[SessionRevocationResponse](ctx, c.httpClient, http.MethodPost, c.baseURL+path, csrfToken, nil)
+}
+
+func doJSON[T any](ctx context.Context, client HTTPClient, method, endpoint, csrfToken string, body []byte) (*Response[T], error) {
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body)); if err != nil { return nil, err }
 	req.Header.Set("Accept", "application/json, application/problem+json")
-	httpResponse, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("call platform Gateway: %w", err)
-	}
-	body, err := io.ReadAll(io.LimitReader(httpResponse.Body, 1<<20))
-	if closeErr := httpResponse.Body.Close(); err == nil && closeErr != nil {
-		err = closeErr
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read platform Gateway response: %w", err)
-	}
-	response := &Response[T]{
-		StatusCode:   httpResponse.StatusCode,
-		RequestID:    httpResponse.Header.Get("X-Request-ID"),
-		Traceparent:  httpResponse.Header.Get("traceparent"),
-		HTTPResponse: httpResponse,
-	}
+	if csrfToken != "" { req.Header.Set("X-CSRF-Token", csrfToken) }
+	httpResponse, err := client.Do(req); if err != nil { return nil, fmt.Errorf("call platform Gateway: %w", err) }
+	payload, err := io.ReadAll(io.LimitReader(httpResponse.Body, 1<<20)); _ = httpResponse.Body.Close(); if err != nil { return nil, err }
+	response := &Response[T]{StatusCode: httpResponse.StatusCode, RequestID: httpResponse.Header.Get("X-Request-ID"), Traceparent: httpResponse.Header.Get("traceparent"), HTTPResponse: httpResponse}
 	if httpResponse.StatusCode >= 200 && httpResponse.StatusCode < 300 {
-		var data T
-		if err := json.Unmarshal(body, &data); err != nil {
-			return nil, fmt.Errorf("decode platform Gateway success response: %w", err)
-		}
-		response.Data = &data
-		return response, nil
+		if httpResponse.StatusCode == http.StatusNoContent { var zero T; response.Data = &zero; return response, nil }
+		var data T; if err := json.Unmarshal(payload, &data); err != nil { return nil, fmt.Errorf("decode platform Gateway success response: %w", err) }; response.Data = &data; return response, nil
 	}
-	var problem ProblemDetails
-	if err := json.Unmarshal(body, &problem); err != nil {
-		return nil, fmt.Errorf("decode platform Gateway problem response: %w", err)
-	}
-	response.Problem = &problem
-	return response, nil
+	var problem ProblemDetails; if err := json.Unmarshal(payload, &problem); err != nil { return nil, fmt.Errorf("decode platform Gateway problem response: %w", err) }; response.Problem = &problem; return response, nil
 }

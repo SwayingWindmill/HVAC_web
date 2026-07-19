@@ -34,18 +34,20 @@ type contextKey string
 
 const traceIDContextKey contextKey = "trace-id"
 
-// Config contains edge-only dependencies. It intentionally has no business,
-// persistence, identity, or integration dependencies.
+// Config contains edge-only dependencies. It intentionally has no business
+// domain or persistence dependencies.
 type Config struct {
-	Build  platformapi.BuildInfo
-	Logger *slog.Logger
-	Now    func() time.Time
+	Build    platformapi.BuildInfo
+	Logger   *slog.Logger
+	Now      func() time.Time
+	Identity *IdentityConfig
 }
 
 type handler struct {
-	build  platformapi.BuildInfo
-	logger *slog.Logger
-	now    func() time.Time
+	build    platformapi.BuildInfo
+	logger   *slog.Logger
+	now      func() time.Time
+	identity *identityController
 }
 
 var _ platformapi.ServerInterface = (*handler)(nil)
@@ -62,7 +64,7 @@ func NewHandler(config Config) http.Handler {
 	}
 	build := config.Build
 	build.Service = serviceName
-	return &handler{build: build, logger: logger, now: now}
+	return &handler{build: build, logger: logger, now: now, identity: newIdentityController(config.Identity, now)}
 }
 
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -98,10 +100,17 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
+	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant"} {
+		if request.Header.Get(header) != "" {
+			writeProblem(writer, request, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Caller-supplied identity headers are not accepted at the public edge.", false, nil)
+			return
+		}
+	}
+
 	switch request.URL.Path {
 	case platformapi.GetHealthPath:
 		if request.Method != http.MethodGet {
-			writeMethodNotAllowed(writer, request)
+			writeMethodNotAllowedFor(writer, request, http.MethodGet)
 			return
 		}
 		params, ok := parseGetHealthParams(writer, request)
@@ -111,11 +120,56 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		h.GetHealth(writer, request, params)
 	case platformapi.GetVersionPath:
 		if request.Method != http.MethodGet {
-			writeMethodNotAllowed(writer, request)
+			writeMethodNotAllowedFor(writer, request, http.MethodGet)
 			return
 		}
 		h.GetVersion(writer, request)
+	case platformapi.BeginLoginPath:
+		if request.Method != http.MethodGet {
+			writeMethodNotAllowedFor(writer, request, http.MethodGet)
+			return
+		}
+		params, ok := parseBeginLoginParams(writer, request)
+		if !ok {
+			return
+		}
+		h.BeginLogin(writer, request, params)
+	case platformapi.CompleteLoginPath:
+		if request.Method != http.MethodGet {
+			writeMethodNotAllowedFor(writer, request, http.MethodGet)
+			return
+		}
+		params, ok := parseCompleteLoginParams(writer, request)
+		if !ok {
+			return
+		}
+		h.CompleteLogin(writer, request, params)
+	case platformapi.GetCurrentPrincipalPath:
+		if request.Method != http.MethodGet {
+			writeMethodNotAllowedFor(writer, request, http.MethodGet)
+			return
+		}
+		h.GetCurrentPrincipal(writer, request)
+	case platformapi.LogoutPath:
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
+			return
+		}
+		h.Logout(writer, request, platformapi.LogoutParams{CSRFToken: request.Header.Get("X-CSRF-Token")})
 	default:
+		if sessionID, matches := matchRevokeSessionPath(request.URL.Path); matches {
+			if request.Method != http.MethodPost {
+				writeMethodNotAllowedFor(writer, request, http.MethodPost)
+				return
+			}
+			decodedSessionID, err := url.PathUnescape(sessionID)
+			if err != nil || decodedSessionID == "" {
+				writeProblem(writer, request, http.StatusBadRequest, "INVALID_SESSION_ID", "Invalid session ID", "The session identifier is invalid.", false, nil)
+				return
+			}
+			h.RevokeSession(writer, request, platformapi.RevokeSessionParams{SessionID: decodedSessionID, CSRFToken: request.Header.Get("X-CSRF-Token")})
+			return
+		}
 		writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested public API route does not exist.", false, nil)
 	}
 }
@@ -183,9 +237,48 @@ func parseGetHealthParams(writer http.ResponseWriter, request *http.Request) (pl
 	return platformapi.GetHealthParams{IncludeBuild: &includeBuild}, true
 }
 
-func writeMethodNotAllowed(writer http.ResponseWriter, request *http.Request) {
-	writer.Header().Set("Allow", http.MethodGet)
-	writeProblem(writer, request, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "This route only supports GET.", false, nil)
+func parseBeginLoginParams(writer http.ResponseWriter, request *http.Request) (platformapi.BeginLoginParams, bool) {
+	query, err := url.ParseQuery(request.URL.RawQuery)
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "MALFORMED_QUERY", "Malformed query", "The query string is not valid URL-encoded data.", false, nil)
+		return platformapi.BeginLoginParams{}, false
+	}
+	for key := range query {
+		if key != "returnTo" && key != "login_hint" {
+			writeProblem(writer, request, http.StatusBadRequest, "INVALID_QUERY_PARAMETER", "Invalid query parameter", "One or more query parameters are not supported.", false, []platformapi.FieldError{{Field: key, Message: "unsupported query parameter"}})
+			return platformapi.BeginLoginParams{}, false
+		}
+	}
+	returnTo := query.Get("returnTo")
+	if returnTo == "" {
+		returnTo = "/system"
+	}
+	return platformapi.BeginLoginParams{ReturnTo: returnTo, LoginHint: query.Get("login_hint")}, true
+}
+
+func parseCompleteLoginParams(writer http.ResponseWriter, request *http.Request) (platformapi.CompleteLoginParams, bool) {
+	query, err := url.ParseQuery(request.URL.RawQuery)
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "MALFORMED_QUERY", "Malformed query", "The query string is not valid URL-encoded data.", false, nil)
+		return platformapi.CompleteLoginParams{}, false
+	}
+	for key := range query {
+		if key != "code" && key != "state" {
+			writeProblem(writer, request, http.StatusBadRequest, "INVALID_QUERY_PARAMETER", "Invalid query parameter", "One or more query parameters are not supported.", false, []platformapi.FieldError{{Field: key, Message: "unsupported query parameter"}})
+			return platformapi.CompleteLoginParams{}, false
+		}
+	}
+	code, state := query.Get("code"), query.Get("state")
+	if code == "" || state == "" {
+		writeProblem(writer, request, http.StatusBadRequest, "OIDC_CALLBACK_INVALID", "OIDC callback invalid", "The callback code and state are required.", false, nil)
+		return platformapi.CompleteLoginParams{}, false
+	}
+	return platformapi.CompleteLoginParams{Code: code, State: state}, true
+}
+
+func writeMethodNotAllowedFor(writer http.ResponseWriter, request *http.Request, allowed string) {
+	writer.Header().Set("Allow", allowed)
+	writeProblem(writer, request, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "This route does not support the requested method.", false, nil)
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {
@@ -222,11 +315,26 @@ func writeProblem(
 
 func safeLogPath(path string) string {
 	switch path {
-	case platformapi.GetHealthPath, platformapi.GetVersionPath:
+	case platformapi.GetHealthPath, platformapi.GetVersionPath, platformapi.BeginLoginPath, platformapi.CompleteLoginPath, platformapi.GetCurrentPrincipalPath, platformapi.LogoutPath:
 		return path
 	default:
+		if _, matches := matchRevokeSessionPath(path); matches {
+			return platformapi.RevokeSessionPathTemplate
+		}
 		return "unmatched"
 	}
+}
+
+func matchRevokeSessionPath(path string) (string, bool) {
+	parts := strings.Split(platformapi.RevokeSessionPathTemplate, "{sessionId}")
+	if len(parts) != 2 || !strings.HasPrefix(path, parts[0]) || !strings.HasSuffix(path, parts[1]) {
+		return "", false
+	}
+	sessionID := strings.TrimSuffix(strings.TrimPrefix(path, parts[0]), parts[1])
+	if sessionID == "" || strings.Contains(sessionID, "/") {
+		return "", false
+	}
+	return sessionID, true
 }
 
 func selectRequestID(candidate string, now time.Time) string {

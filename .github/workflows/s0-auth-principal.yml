@@ -1,0 +1,93 @@
+name: S0 Authenticated Principal
+
+on:
+  pull_request:
+    paths:
+      - "apps/hvac-web/**"
+      - "contracts/http/**"
+      - "docs/security/s0-authenticated-principal.md"
+      - "libs/identitycontext/**"
+      - "libs/oidctest/**"
+      - "libs/testpki/**"
+      - "services/platform-gateway/**"
+      - "services/iam-service/**"
+      - "services/oidc-test-provider/**"
+      - "tools/s0-auth-fixture/**"
+      - "scripts/s0-auth-topology.mjs"
+      - "scripts/dev-s0-auth.mjs"
+      - "scripts/run-auth-principal-browser-audit.mjs"
+      - "scripts/run-go.mjs"
+      - "scripts/generate-platform-contracts.mjs"
+      - "go.work"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/s0-auth-principal.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/hvac-web/**"
+      - "contracts/http/**"
+      - "docs/security/s0-authenticated-principal.md"
+      - "libs/identitycontext/**"
+      - "libs/oidctest/**"
+      - "libs/testpki/**"
+      - "services/platform-gateway/**"
+      - "services/iam-service/**"
+      - "services/oidc-test-provider/**"
+      - "tools/s0-auth-fixture/**"
+      - "scripts/s0-auth-topology.mjs"
+      - "scripts/dev-s0-auth.mjs"
+      - "scripts/run-auth-principal-browser-audit.mjs"
+      - "scripts/run-go.mjs"
+      - "scripts/generate-platform-contracts.mjs"
+      - "go.work"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/s0-auth-principal.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.5"
+          cache-dependency-path: |
+            libs/identitycontext/go.mod
+            libs/oidctest/go.mod
+            libs/testpki/go.mod
+            services/platform-gateway/go.mod
+            services/iam-service/go.mod
+            services/oidc-test-provider/go.mod
+            tools/s0-auth-fixture/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - run: npm run contracts:check
+      - run: go test ./libs/identitycontext/... ./libs/oidctest/... ./libs/testpki/... ./services/iam-service/... ./services/oidc-test-provider/... ./services/platform-gateway/... ./tools/s0-auth-fixture/...
+      - run: go vet ./libs/identitycontext/... ./libs/oidctest/... ./libs/testpki/... ./services/iam-service/... ./services/oidc-test-provider/... ./services/platform-gateway/... ./tools/s0-auth-fixture/...
+      - run: npm run build:gateway
+      - run: npm run build:iam
+      - run: npm run build:oidc-fixture
+      - run: npm run lint
+      - run: npm run build
+
+  browser:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.5"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - run: npm run audit:auth-principal
