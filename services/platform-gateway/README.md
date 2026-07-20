@@ -83,10 +83,10 @@ npm run test:gateway
 npm run test:identity
 npm run test:durable-unit
 npm run test:ownership
-npm run test:legacy-boundary
+npm run test:legacy-compatibility
 npm run test:durable-postgres
 npm run build:gateway
-npm run build:legacy-private
+npm run build:legacy-compatibility
 npm run build:iam
 npm run build:audit-ledger
 npm run build:outbox-relay

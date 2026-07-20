@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: legacy-private
+  annotations: { s0.hvac/image-policy: digest-required, s0.hvac/template: render-before-apply }
+spec:
+  replicas: 2
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  selector: { matchLabels: { app: legacy-private } }
+  template:
+    metadata: { labels: { app: legacy-private } }
+    spec:
+      serviceAccountName: legacy-private
+      terminationGracePeriodSeconds: 20
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: legacy-private
+          image: "[SIGNED_IMAGE_LEGACY_PRIVATE]"
+          envFrom: "[RUNTIME_BINDINGS_LEGACY_PRIVATE]"
+          env:
+            - { name: LEGACY_FIXTURE_ADDR, value: "0.0.0.0:8445" }
+            - { name: LEGACY_TLS_CERT, value: "[WORKLOAD_CERT_PATH]" }
+            - { name: LEGACY_TLS_KEY, value: "[WORKLOAD_KEY_PATH]" }
+            - { name: LEGACY_CLIENT_CA, value: "[TRUST_BUNDLE_PATH]" }
+          ports: [{ name: https, containerPort: 8445 }]
+          startupProbe: { tcpSocket: { port: https }, failureThreshold: 30, periodSeconds: 2 }
+          livenessProbe: { tcpSocket: { port: https }, periodSeconds: 10, timeoutSeconds: 2 }
+          readinessProbe: { tcpSocket: { port: https }, periodSeconds: 3, timeoutSeconds: 2 }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities: { drop: ["ALL"] }
+          resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 1000m, memory: 512Mi } }
+          volumeMounts: "[RUNTIME_IDENTITY_MOUNTS]"
+      volumes: "[RUNTIME_IDENTITY_VOLUMES]"

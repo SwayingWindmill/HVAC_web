@@ -1,0 +1,42 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: s0-schema-migration
+  annotations:
+    s0.hvac/image-policy: digest-required
+    s0.hvac/template: render-before-apply
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: { app: s0-schema-migration }
+    spec:
+      restartPolicy: Never
+      serviceAccountName: s0-migrator
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: migrator
+          image: "[SIGNED_IMAGE_S0_MIGRATOR]"
+          env:
+            - { name: PGHOST, value: "[POSTGRES_HOST]" }
+            - { name: PGPORT, value: "5432" }
+            - { name: PGDATABASE, value: hvac_s0 }
+            - { name: PGUSER, value: s0_migrator }
+            - { name: PGPASSWORD, value: "[MIGRATOR_DATABASE_PASSWORD]" }
+            - { name: PGSSLMODE, value: verify-full }
+            - { name: PGSSLROOTCERT, value: "[TRUST_BUNDLE_PATH]" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 999
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          volumeMounts: "[RUNTIME_TRUST_MOUNTS]"
+      volumes: "[RUNTIME_TRUST_VOLUMES]"

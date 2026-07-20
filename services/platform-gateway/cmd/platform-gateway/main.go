@@ -88,6 +88,7 @@ func main() {
 	signal.Notify(shutdownSignal, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-shutdownSignal
+		telemetry.MarkNotReady()
 		cancelRun()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -98,6 +99,7 @@ func main() {
 		_ = telemetry.Shutdown(ctx)
 	}()
 
+	telemetry.MarkReady()
 	logger.Info("gateway_started", "service", "platform-gateway", "address", address, "version", version, "commit", commit, "identity_enabled", identity != nil)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("gateway_stopped_unexpectedly", "error_code", "GATEWAY_SERVE_FAILED")

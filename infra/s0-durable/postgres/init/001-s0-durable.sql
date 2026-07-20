@@ -1,26 +1,5 @@
 BEGIN;
-
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gateway_runtime') THEN
-    CREATE ROLE gateway_runtime LOGIN PASSWORD 'gateway-runtime-local-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gateway_relay_runtime') THEN
-    CREATE ROLE gateway_relay_runtime LOGIN PASSWORD 'gateway-relay-local-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'audit_consumer_runtime') THEN
-    CREATE ROLE audit_consumer_runtime LOGIN PASSWORD 'audit-consumer-local-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'audit_query_runtime') THEN
-    CREATE ROLE audit_query_runtime LOGIN PASSWORD 'audit-query-local-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
-  END IF;
-END
-$$;
-
-CREATE SCHEMA IF NOT EXISTS gateway AUTHORIZATION postgres;
-CREATE SCHEMA IF NOT EXISTS audit_ledger AUTHORIZATION postgres;
-REVOKE ALL ON SCHEMA gateway FROM PUBLIC;
-REVOKE ALL ON SCHEMA audit_ledger FROM PUBLIC;
+SET LOCAL ROLE s0_migrator;
 
 CREATE TABLE IF NOT EXISTS gateway.sessions (
   session_id text PRIMARY KEY,
@@ -60,7 +39,7 @@ CREATE TABLE IF NOT EXISTS gateway.audit_intents (
   correlation_id text NOT NULL,
   causation_id text NOT NULL DEFAULT '',
   trace_id text NOT NULL,
-  traceparent text NOT NULL,
+  traceparent text NOT NULL DEFAULT '',
   payload_sha256 text NOT NULL CHECK (payload_sha256 ~ '^[a-f0-9]{64}$'),
   occurred_at timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -79,7 +58,7 @@ CREATE TABLE IF NOT EXISTS gateway.outbox (
   correlation_id text NOT NULL,
   causation_id text NOT NULL DEFAULT '',
   trace_id text NOT NULL,
-  traceparent text NOT NULL,
+  traceparent text NOT NULL DEFAULT '',
   payload bytea NOT NULL,
   envelope_sha256 text NOT NULL CHECK (envelope_sha256 ~ '^[a-f0-9]{64}$'),
   created_at timestamptz NOT NULL,
@@ -173,7 +152,7 @@ CREATE TABLE IF NOT EXISTS audit_ledger.records (
   correlation_id text NOT NULL,
   causation_id text NOT NULL DEFAULT '',
   trace_id text NOT NULL,
-  traceparent text NOT NULL,
+  traceparent text NOT NULL DEFAULT '',
   payload_sha256 text NOT NULL CHECK (payload_sha256 ~ '^[a-f0-9]{64}$'),
   previous_record_hash text NOT NULL CHECK (previous_record_hash ~ '^[a-f0-9]{64}$'),
   record_hash text NOT NULL UNIQUE CHECK (record_hash ~ '^[a-f0-9]{64}$'),
@@ -229,7 +208,6 @@ CREATE POLICY records_query_scope ON audit_ledger.records
   FOR SELECT TO audit_query_runtime
   USING (organization_id = current_setting('app.organization_id', true));
 
-GRANT CONNECT ON DATABASE hvac_s0 TO gateway_runtime, gateway_relay_runtime, audit_consumer_runtime, audit_query_runtime;
 GRANT USAGE ON SCHEMA gateway TO gateway_runtime, gateway_relay_runtime;
 GRANT SELECT, INSERT, UPDATE ON gateway.sessions TO gateway_runtime;
 GRANT SELECT, INSERT ON gateway.audit_intents TO gateway_runtime;

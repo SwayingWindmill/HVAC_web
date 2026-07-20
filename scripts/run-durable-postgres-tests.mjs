@@ -1,7 +1,8 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
+import { createServer as createTCPServer } from 'node:net';
 import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -19,6 +20,19 @@ const composeInvocation = (() => {
   return { command: 'docker-compose', prefix: [] };
 })();
 
+async function findAvailablePort(requestedPort = 0) {
+  const server = createTCPServer();
+  server.listen({ host: '127.0.0.1', port: Number(requestedPort) || 0, exclusive: true });
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('PostgreSQL test port allocator did not expose a TCP address');
+  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
+  return address.port;
+}
+
+const postgresHostPort = await findAvailablePort(process.env.S0_POSTGRES_HOST_PORT ?? 0);
+const composeEnvironment = { ...process.env, S0_POSTGRES_HOST_PORT: String(postgresHostPort) };
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
   if (result.error || result.status !== 0) {
@@ -28,18 +42,40 @@ function run(command, args, options = {}) {
 }
 
 function compose(args) {
-  return run(composeInvocation.command, [...composeInvocation.prefix, '-p', projectName, '-f', composePath, ...args]);
+  return run(composeInvocation.command, [...composeInvocation.prefix, '-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
 async function waitForPostgres() {
+  let stablePostmasterStart = '';
+  let stableChecks = 0;
   for (let attempt = 0; attempt < 300; attempt += 1) {
     try {
-      run('docker', ['exec', containerName, 'pg_isready', '-U', 'postgres', '-d', 'hvac_s0']);
-      return;
-    } catch {}
-    await pause(200);
+      const state = run('docker', [
+        'exec', containerName, 'psql', '-U', 'postgres', '-d', 'hvac_s0', '-Atqc',
+        "SELECT pg_postmaster_start_time()::text || '|' || (to_regclass('gateway.sessions') IS NOT NULL)::text || '|' || EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's0_migrator')::text",
+      ]);
+      const [postmasterStart, schemaReady, migratorReady] = state.split('|');
+      if (schemaReady === 'true' && migratorReady === 'true') {
+        if (postmasterStart === stablePostmasterStart) stableChecks += 1;
+        else {
+          stablePostmasterStart = postmasterStart;
+          stableChecks = 1;
+        }
+        if (stableChecks >= 5) return;
+      } else {
+        stableChecks = 0;
+      }
+    } catch {
+      stableChecks = 0;
+    }
+    await pause(250);
   }
-  throw new Error('PostgreSQL integration fixture did not become ready');
+  throw new Error('PostgreSQL integration fixture did not reach a stable initialized postmaster');
+}
+
+async function runCompatibilityCheck() {
+  const sql = await readFile(resolve(root, 'infra/s0-durable/postgres/compatibility/previous-writer.sql'), 'utf8');
+  run('docker', ['exec', '-i', containerName, 'psql', '-U', 'postgres', '-d', 'hvac_s0', '-v', 'ON_ERROR_STOP=1'], { input: sql });
 }
 
 async function runGoTests() {
@@ -56,11 +92,11 @@ async function runGoTests() {
     env: {
       ...process.env,
       GOCACHE: goCacheDir,
-      S0_ADMIN_DATABASE_URL: 'postgres://postgres:postgres-local-only@127.0.0.1:55432/hvac_s0?sslmode=disable',
-      S0_GATEWAY_DATABASE_URL: 'postgres://gateway_runtime:gateway-runtime-local-only@127.0.0.1:55432/hvac_s0?sslmode=disable',
-      S0_RELAY_DATABASE_URL: 'postgres://gateway_relay_runtime:gateway-relay-local-only@127.0.0.1:55432/hvac_s0?sslmode=disable',
-      S0_AUDIT_CONSUMER_DATABASE_URL: 'postgres://audit_consumer_runtime:audit-consumer-local-only@127.0.0.1:55432/hvac_s0?sslmode=disable',
-      S0_AUDIT_QUERY_DATABASE_URL: 'postgres://audit_query_runtime:audit-query-local-only@127.0.0.1:55432/hvac_s0?sslmode=disable',
+      S0_ADMIN_DATABASE_URL: `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
+      S0_GATEWAY_DATABASE_URL: `postgres://gateway_runtime:gateway-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
+      S0_RELAY_DATABASE_URL: `postgres://gateway_relay_runtime:gateway-relay-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
+      S0_AUDIT_CONSUMER_DATABASE_URL: `postgres://audit_consumer_runtime:audit-consumer-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
+      S0_AUDIT_QUERY_DATABASE_URL: `postgres://audit_query_runtime:audit-query-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
     },
   });
   const [code, signal] = await once(child, 'exit');
@@ -71,8 +107,9 @@ try {
   try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
   compose(['up', '-d', 'postgres']);
   await waitForPostgres();
+  await runCompatibilityCheck();
   await runGoTests();
-  console.log('S0 durable PostgreSQL transaction tests passed.');
+  console.log('S0 durable PostgreSQL transaction and rollback-window compatibility tests passed.');
 } finally {
   try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
 }

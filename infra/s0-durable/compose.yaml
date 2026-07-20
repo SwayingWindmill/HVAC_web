@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres-local-only
     ports:
-      - "55432:5432"
+      - "${S0_POSTGRES_HOST_PORT:-55432}:5432"
     volumes:
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
@@ -34,9 +34,9 @@ services:
       - --kafka-addr
       - internal://0.0.0.0:9092,external://0.0.0.0:19092
       - --advertise-kafka-addr
-      - internal://redpanda:9092,external://127.0.0.1:19092
+      - internal://redpanda:9092,external://127.0.0.1:${S0_REDPANDA_HOST_PORT:-19092}
     ports:
-      - "19092:19092"
+      - "${S0_REDPANDA_HOST_PORT:-19092}:19092"
     healthcheck:
       test: ["CMD-SHELL", "rpk cluster health -X brokers=127.0.0.1:9092 | grep -q 'Healthy:.*true'"]
       interval: 2s
@@ -50,10 +50,10 @@ services:
     volumes:
       - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
     ports:
-      - "4317:4317"
-      - "4318:4318"
-      - "9464:9464"
-      - "13133:13133"
+      - "${S0_OTEL_GRPC_HOST_PORT:-4317}:4317"
+      - "${S0_OTEL_HTTP_HOST_PORT:-4318}:4318"
+      - "${S0_OTEL_METRICS_HOST_PORT:-9464}:9464"
+      - "${S0_OTEL_HEALTH_HOST_PORT:-13133}:13133"
     healthcheck:
       test: ["CMD", "/otelcol-contrib", "components"]
       interval: 10s
@@ -70,7 +70,7 @@ services:
       - ./prometheus.yaml:/etc/prometheus/prometheus.yml:ro
       - ./observability/alerts:/etc/prometheus/alerts:ro
     ports:
-      - "19090:9090"
+      - "${S0_PROMETHEUS_HOST_PORT:-19090}:9090"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

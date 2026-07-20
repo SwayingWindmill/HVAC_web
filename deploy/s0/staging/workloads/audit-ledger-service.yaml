@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-ledger-service
+  annotations: { s0.hvac/image-policy: digest-required, s0.hvac/template: render-before-apply }
+spec:
+  replicas: 2
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  selector: { matchLabels: { app: audit-ledger-service } }
+  template:
+    metadata: { labels: { app: audit-ledger-service } }
+    spec:
+      serviceAccountName: audit-ledger-service
+      terminationGracePeriodSeconds: 30
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: audit-ledger-service
+          image: "[SIGNED_IMAGE_AUDIT_LEDGER_SERVICE]"
+          envFrom: "[RUNTIME_BINDINGS_AUDIT_LEDGER_SERVICE]"
+          env:
+            - { name: AUDIT_SERVICE_ADDR, value: ":8446" }
+            - { name: AUDIT_DIAGNOSTICS_ADDR, value: ":19082" }
+            - { name: AUDIT_CONSUMER_DATABASE_URL, value: "[AUDIT_CONSUMER_DATABASE_URL]" }
+            - { name: AUDIT_QUERY_DATABASE_URL, value: "[AUDIT_QUERY_DATABASE_URL]" }
+            - { name: AUDIT_TLS_CERT, value: "[WORKLOAD_CERT_PATH]" }
+            - { name: AUDIT_TLS_KEY, value: "[WORKLOAD_KEY_PATH]" }
+            - { name: AUDIT_CLIENT_CA, value: "[TRUST_BUNDLE_PATH]" }
+          ports: [{ name: https, containerPort: 8446 }, { name: diagnostics, containerPort: 19082 }]
+          startupProbe: { httpGet: { path: /health/startup, port: diagnostics }, failureThreshold: 45, periodSeconds: 2 }
+          livenessProbe: { httpGet: { path: /health/live, port: diagnostics }, periodSeconds: 10, timeoutSeconds: 2 }
+          readinessProbe: { httpGet: { path: /health/ready, port: diagnostics }, periodSeconds: 3, timeoutSeconds: 2 }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities: { drop: ["ALL"] }
+          resources: { requests: { cpu: 200m, memory: 256Mi }, limits: { cpu: 1500m, memory: 768Mi } }
+          volumeMounts: "[RUNTIME_IDENTITY_MOUNTS]"
+      volumes: "[RUNTIME_IDENTITY_VOLUMES]"

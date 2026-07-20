@@ -70,6 +70,7 @@ func main() {
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-shutdown
+		telemetry.MarkNotReady()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
@@ -77,6 +78,7 @@ func main() {
 		_ = telemetry.Shutdown(ctx)
 	}()
 
+	telemetry.MarkReady()
 	logger.Info("iam_started", "service", "iam-service", "address", address)
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("iam_stopped_unexpectedly", "error", err)

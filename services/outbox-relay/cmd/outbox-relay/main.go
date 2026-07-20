@@ -45,11 +45,13 @@ func main() {
 		}
 	}()
 	defer func() {
+		telemetry.MarkNotReady()
 		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
 		_ = diagnostics.Shutdown(shutdownContext)
 		_ = telemetry.Shutdown(shutdownContext)
 	}()
+	telemetry.MarkReady()
 	logger.Info("outbox_relay_started", "service", "outbox-relay")
 	if err := worker.Run(ctx); err != nil {
 		logger.Error("outbox_relay_stopped", "error_code", "OUTBOX_RELAY_FAILED")

@@ -1,0 +1,34 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: s0-runtime-config
+data:
+  S0_ENV: staging
+  S0_CONFIG_REVISION: "1"
+  S0_TRUST_DOMAIN: hvac.staging.local
+  ALLOW_PRODUCTION_EGRESS: "false"
+  THINGSBOARD_BASE_URL: ""
+  WEBHOOK_BASE_URL: ""
+  OIDC_ISSUER: https://oidc-test-provider:8443
+  OIDC_CLIENT_ID: hvac-web-s0-staging
+  OIDC_REDIRECT_URI: https://s0-staging.local/api/v1/auth/callback
+  PLATFORM_PUBLIC_ORIGIN: https://s0-staging.local
+  IAM_URL: https://iam-service:8444
+  IAM_AUDIENCE: iam-service
+  IAM_SERVER_NAME: iam-service
+  AUDIT_URL: https://audit-ledger-service:8446
+  AUDIT_AUDIENCE: audit-ledger-service
+  AUDIT_SERVER_NAME: audit-ledger-service
+  LEGACY_URL: https://legacy-private:8445
+  LEGACY_AUDIENCE: legacy-hvac-backend
+  LEGACY_SERVER_NAME: legacy-private
+  CONTROL_BACKBONE_BROKERS: redpanda:9092
+  AUDIT_TOPIC: control.security.session.v1
+  AUDIT_CONSUMER_GROUP: audit-ledger-session-v1
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  ROUTE_OWNERSHIP_REGISTRY: /etc/s0/ownership/route-ownership.v1.json
+  GATEWAY_WORKLOAD_SPIFFE: spiffe://hvac.staging.local/platform-gateway
+  IAM_ALLOWED_WORKLOAD_SPIFFE: spiffe://hvac.staging.local/platform-gateway
+  AUDIT_ALLOWED_WORKLOAD_SPIFFE: spiffe://hvac.staging.local/platform-gateway
+  LEGACY_ALLOWED_WORKLOAD_SPIFFE: spiffe://hvac.staging.local/platform-gateway
+  IDENTITY_POLICY_REVISION: policy-v1

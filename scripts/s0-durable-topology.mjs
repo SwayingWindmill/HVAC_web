@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { createServer as createTCPServer } from 'node:net';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -10,7 +11,7 @@ import tls from 'node:tls';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/s0-durable/compose.yaml');
-const projectName = 'hvac-s0-durable';
+const projectName = process.env.S0_DURABLE_COMPOSE_PROJECT ?? `hvac-s0-durable-${process.pid}-${randomBytes(3).toString('hex')}`;
 const postgresContainer = `${projectName}-postgres-1`;
 const redpandaContainer = `${projectName}-redpanda-1`;
 const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
@@ -52,6 +53,16 @@ function docker(args, options = {}) {
 
 function processExited(child) {
   return child && (child.exitCode !== null || child.signalCode !== null);
+}
+
+async function findAvailablePort(requestedPort = 0) {
+  const server = createTCPServer();
+  server.listen({ host: '127.0.0.1', port: Number(requestedPort) || 0, exclusive: true });
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('test port allocator did not expose a TCP address');
+  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
+  return address.port;
 }
 
 function spawnService(label, command, args, env) {
@@ -180,6 +191,24 @@ export async function startS0DurableTopology(options = {}) {
   const gatewayPort = Number(options.gatewayPort ?? process.env.S0_DURABLE_GATEWAY_PORT ?? 18082);
   const webPort = Number(options.webPort ?? process.env.S0_DURABLE_WEB_PORT ?? 5181);
   const otlpPort = Number(options.otlpPort ?? process.env.S0_DURABLE_OTLP_PORT ?? 0);
+  const postgresHostPort = await findAvailablePort(options.postgresHostPort ?? process.env.S0_POSTGRES_HOST_PORT ?? 0);
+  const redpandaHostPort = await findAvailablePort(options.redpandaHostPort ?? process.env.S0_REDPANDA_HOST_PORT ?? 0);
+  const otelGrpcHostPort = await findAvailablePort(options.otelGrpcHostPort ?? process.env.S0_OTEL_GRPC_HOST_PORT ?? 0);
+  const otelHTTPHostPort = await findAvailablePort(options.otelHTTPHostPort ?? process.env.S0_OTEL_HTTP_HOST_PORT ?? 0);
+  const otelMetricsHostPort = await findAvailablePort(options.otelMetricsHostPort ?? process.env.S0_OTEL_METRICS_HOST_PORT ?? 0);
+  const otelHealthHostPort = await findAvailablePort(options.otelHealthHostPort ?? process.env.S0_OTEL_HEALTH_HOST_PORT ?? 0);
+  const prometheusHostPort = await findAvailablePort(options.prometheusHostPort ?? process.env.S0_PROMETHEUS_HOST_PORT ?? 0);
+  const composeEnvironment = {
+    ...process.env,
+    S0_POSTGRES_HOST_PORT: String(postgresHostPort),
+    S0_REDPANDA_HOST_PORT: String(redpandaHostPort),
+    S0_OTEL_GRPC_HOST_PORT: String(otelGrpcHostPort),
+    S0_OTEL_HTTP_HOST_PORT: String(otelHTTPHostPort),
+    S0_OTEL_METRICS_HOST_PORT: String(otelMetricsHostPort),
+    S0_OTEL_HEALTH_HOST_PORT: String(otelHealthHostPort),
+    S0_PROMETHEUS_HOST_PORT: String(prometheusHostPort),
+  };
+  const composeOptions = { env: composeEnvironment };
   const telemetryRecorder = options.captureTelemetry === false ? null : await startOTLPRecorder(otlpPort);
   const telemetryEnvironment = telemetryRecorder ? { OTEL_EXPORTER_OTLP_ENDPOINT: telemetryRecorder.endpoint } : {};
   const instanceRoot = join(tmpdir(), `hvac-s0-durable-${process.pid}-${randomBytes(5).toString('hex')}`);
@@ -195,13 +224,13 @@ export async function startS0DurableTopology(options = {}) {
   const gatewayURL = `http://127.0.0.1:${gatewayPort}`;
   const webURL = `https://127.0.0.1:${webPort}`;
   const redirectURI = `${webURL}/api/v1/auth/callback`;
-  const brokers = '127.0.0.1:19092';
+  const brokers = `127.0.0.1:${redpandaHostPort}`;
   const database = {
-    admin: 'postgres://postgres:postgres-local-only@127.0.0.1:55432/hvac_s0?sslmode=disable',
-    gateway: 'postgres://gateway_runtime:gateway-runtime-local-only@127.0.0.1:55432/hvac_s0?sslmode=disable',
-    relay: 'postgres://gateway_relay_runtime:gateway-relay-local-only@127.0.0.1:55432/hvac_s0?sslmode=disable',
-    auditConsumer: 'postgres://audit_consumer_runtime:audit-consumer-local-only@127.0.0.1:55432/hvac_s0?sslmode=disable',
-    auditQuery: 'postgres://audit_query_runtime:audit-query-local-only@127.0.0.1:55432/hvac_s0?sslmode=disable',
+    admin: `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
+    gateway: `postgres://gateway_runtime:gateway-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
+    relay: `postgres://gateway_relay_runtime:gateway-relay-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
+    auditConsumer: `postgres://audit_consumer_runtime:audit-consumer-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
+    auditQuery: `postgres://audit_query_runtime:audit-query-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
   };
   const services = { oidc: null, iam: null, audit: null, relay: null, legacy: null, gateway: null, web: null };
 
@@ -264,8 +293,8 @@ export async function startS0DurableTopology(options = {}) {
   };
 
   try {
-    try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
-    compose(['up', '-d']);
+    try { compose(['down', '--volumes', '--remove-orphans'], composeOptions); } catch {}
+    compose(['up', '-d'], composeOptions);
     await waitForContainer(() => docker(['exec', postgresContainer, 'pg_isready', '-U', 'postgres', '-d', 'hvac_s0']), 'PostgreSQL');
     await waitForContainer(() => docker(['exec', redpandaContainer, 'rpk', 'cluster', 'health', '-X', 'brokers=127.0.0.1:9092']), 'Redpanda');
     try { docker(['exec', redpandaContainer, 'rpk', 'topic', 'delete', 'control.security.session.v1', '-X', 'brokers=127.0.0.1:9092']); } catch {}
@@ -409,14 +438,14 @@ export async function startS0DurableTopology(options = {}) {
       },
       async stop() {
         for (const child of [services.web, services.gateway, services.legacy, services.relay, services.audit, services.iam, services.oidc]) await stopProcess(child);
-        try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
+        try { compose(['down', '--volumes', '--remove-orphans'], composeOptions); } catch {}
         if (telemetryRecorder) await telemetryRecorder.close();
         await rm(instanceRoot, { recursive: true, force: true });
       },
     };
   } catch (error) {
     for (const child of [services.web, services.gateway, services.legacy, services.relay, services.audit, services.iam, services.oidc]) await stopProcess(child);
-    try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
+    try { compose(['down', '--volumes', '--remove-orphans'], composeOptions); } catch {}
     if (telemetryRecorder) await telemetryRecorder.close();
     await rm(instanceRoot, { recursive: true, force: true });
     throw error;

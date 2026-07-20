@@ -1,18 +1,18 @@
-go 1.23.12
+go 1.25.12
 
 use (
 	./libs/identitycontext
-	./libs/oidctest
 	./libs/observability
+	./libs/oidctest
 	./libs/ownershipregistry
 	./libs/sessionevent
 	./libs/sessionstore
 	./libs/testpki
-	./services/platform-gateway
-	./services/iam-service
 	./services/audit-ledger-service
-	./services/outbox-relay
+	./services/iam-service
 	./services/oidc-test-provider
+	./services/outbox-relay
+	./services/platform-gateway
 	./tools/legacy-private-fixture
 	./tools/s0-auth-fixture
 )

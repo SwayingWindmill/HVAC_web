@@ -120,10 +120,10 @@ Relay and query identities receive only narrow non-writer access. PostgreSQL int
 npm run ownership:check
 npm run contracts:check
 npm run test:ownership
-npm run test:legacy-boundary
+npm run test:legacy-compatibility
 npm run test:durable-postgres
 npm run build:gateway
-npm run build:legacy-private
+npm run build:legacy-compatibility
 npm run lint
 npm run build
 npm run audit:platform-gateway

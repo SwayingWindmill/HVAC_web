@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -76,6 +77,37 @@ func TestLoggerRedactsCredentialFields(t *testing.T) {
 	output := buffer.String()
 	if strings.Contains(output, "seeded-secret") || !strings.Contains(output, "[REDACTED]") {
 		t.Fatalf("logger output was not redacted: %s", output)
+	}
+}
+
+func TestDiagnosticsSeparateStartupLivenessAndReadiness(t *testing.T) {
+	runtime := NewRuntime(RuntimeConfig{Service: "gateway", QueueSize: 1})
+	handler := runtime.DiagnosticsHandler()
+
+	for _, path := range []string{"/health/startup", "/health/live"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d", path, response.Code)
+		}
+	}
+
+	notReady := httptest.NewRecorder()
+	handler.ServeHTTP(notReady, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	if notReady.Code != http.StatusServiceUnavailable {
+		t.Fatalf("not-ready status = %d", notReady.Code)
+	}
+
+	runtime.MarkReady()
+	ready := httptest.NewRecorder()
+	handler.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	if ready.Code != http.StatusOK {
+		t.Fatalf("ready status = %d", ready.Code)
+	}
+
+	runtime.MarkNotReady()
+	if runtime.Ready() {
+		t.Fatal("runtime remained ready during drain")
 	}
 }
 
