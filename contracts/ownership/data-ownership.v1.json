@@ -1,0 +1,20 @@
+{
+  "registryVersion": 1,
+  "registryRevision": 1,
+  "resources": [
+    { "kind": "schema", "name": "gateway", "writer": "platform-gateway", "revision": 1 },
+    { "kind": "schema", "name": "audit_ledger", "writer": "audit-ledger-service", "revision": 1 },
+    { "kind": "schema", "name": "legacy", "writer": "legacy-hvac-backend", "revision": 1 },
+    { "kind": "event-family", "name": "hvac.security.session.v1", "writer": "platform-gateway", "revision": 1 },
+    { "kind": "event-family", "name": "hvac.routing.decision.v1", "writer": "platform-gateway", "revision": 1 },
+    { "kind": "projection", "name": "audit-session-record", "writer": "audit-ledger-service", "revision": 1 },
+    { "kind": "projection", "name": "gateway-route-audit", "writer": "platform-gateway", "revision": 1 }
+  ],
+  "databaseAccess": [
+    { "service": "platform-gateway", "schema": "gateway", "mode": "write" },
+    { "service": "outbox-relay", "schema": "gateway", "mode": "relay" },
+    { "service": "audit-ledger-service", "schema": "audit_ledger", "mode": "write" },
+    { "service": "audit-ledger-query", "schema": "audit_ledger", "mode": "read" },
+    { "service": "legacy-hvac-backend", "schema": "legacy", "mode": "write" }
+  ]
+}

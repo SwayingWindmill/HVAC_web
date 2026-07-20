@@ -1,0 +1,128 @@
+name: S0 Durable Audit Ownership and Observability
+
+on:
+  pull_request:
+    paths:
+      - "apps/hvac-web/**"
+      - "contracts/events/**"
+      - "contracts/http/**"
+      - "contracts/ownership/**"
+      - "docs/security/s0-durable-session-audit.md"
+      - "docs/security/s0-route-data-ownership.md"
+      - "docs/operations/s0-observability.md"
+      - "infra/s0-durable/**"
+      - "libs/observability/**"
+      - "libs/ownershipregistry/**"
+      - "libs/sessionevent/**"
+      - "libs/sessionstore/**"
+      - "libs/testpki/**"
+      - "services/platform-gateway/**"
+      - "services/iam-service/**"
+      - "services/audit-ledger-service/**"
+      - "services/outbox-relay/**"
+      - "tools/legacy-private-fixture/**"
+      - "scripts/check-session-event-contract.mjs"
+      - "scripts/check-ownership-registries.mjs"
+      - "scripts/dev-s0-durable.mjs"
+      - "scripts/run-durable-postgres-tests.mjs"
+      - "scripts/run-durable-session-browser-audit.mjs"
+      - "scripts/s0-durable-topology.mjs"
+      - "go.work"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/s0-durable-session-audit.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/hvac-web/**"
+      - "contracts/events/**"
+      - "contracts/http/**"
+      - "contracts/ownership/**"
+      - "docs/security/s0-durable-session-audit.md"
+      - "docs/security/s0-route-data-ownership.md"
+      - "docs/operations/s0-observability.md"
+      - "infra/s0-durable/**"
+      - "libs/observability/**"
+      - "libs/ownershipregistry/**"
+      - "libs/sessionevent/**"
+      - "libs/sessionstore/**"
+      - "libs/testpki/**"
+      - "services/platform-gateway/**"
+      - "services/iam-service/**"
+      - "services/audit-ledger-service/**"
+      - "services/outbox-relay/**"
+      - "tools/legacy-private-fixture/**"
+      - "scripts/check-session-event-contract.mjs"
+      - "scripts/check-ownership-registries.mjs"
+      - "scripts/dev-s0-durable.mjs"
+      - "scripts/run-durable-postgres-tests.mjs"
+      - "scripts/run-durable-session-browser-audit.mjs"
+      - "scripts/s0-durable-topology.mjs"
+      - "go.work"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/s0-durable-session-audit.yml"
+
+permissions:
+  contents: read
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.12"
+          cache-dependency-path: |
+            libs/identitycontext/go.mod
+            libs/observability/go.mod
+            libs/ownershipregistry/go.mod
+            libs/sessionevent/go.mod
+            libs/sessionstore/go.mod
+            libs/testpki/go.mod
+            services/platform-gateway/go.mod
+            services/iam-service/go.mod
+            services/audit-ledger-service/go.mod
+            services/outbox-relay/go.mod
+            tools/legacy-private-fixture/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run events:check
+      - run: npm run ownership:check
+      - run: npm run contracts:check
+      - run: npm run test:ownership
+      - run: npm run test:durable-unit
+      - run: npm run test:observability
+      - run: npm run test:durable-postgres
+      - run: node scripts/run-go.mjs test ./tools/legacy-private-fixture/...
+      - run: node scripts/run-go.mjs vet ./libs/observability/... ./libs/ownershipregistry/... ./libs/sessionevent/... ./libs/sessionstore/... ./services/iam-service/... ./services/audit-ledger-service/... ./services/outbox-relay/... ./services/platform-gateway/... ./tools/legacy-private-fixture/...
+      - run: npm run build:gateway
+      - run: npm run build:iam
+      - run: npm run build:audit-ledger
+      - run: npm run build:outbox-relay
+      - run: node scripts/run-go.mjs build -o out/legacy-private-fixture ./tools/legacy-private-fixture/cmd/legacy-private-fixture
+      - run: npm run lint
+      - run: npm run build
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run audit:observability

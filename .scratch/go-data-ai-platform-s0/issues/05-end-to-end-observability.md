@@ -4,18 +4,18 @@
 
 **Blocked by:** 03 — Durable Session event to Audit Ledger; 04 — Versioned route and data ownership with controlled Legacy proxy.
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] W3C Trace Context propagates across public HTTP, internal RPC, Outbox, Kafka and Inbox.
-- [ ] Correlation and causation IDs connect durable async work even when trace retention expires.
-- [ ] A single trace demonstrates login/current-principal through resulting Audit ingestion.
-- [ ] Route owner and route policy revision appear as safe trace attributes.
-- [ ] Metrics cover traffic, errors, latency, saturation, Outbox age, consumer lag and audit ingestion.
-- [ ] Metrics do not use session, principal, request, trace or resource IDs as labels.
-- [ ] Logs use stable error/action codes and redact credentials, cookies, grants and sensitive bodies.
-- [ ] Health and diagnostics expose no internal addresses, connection strings or tenant data.
-- [ ] OpenTelemetry Collector outage or backpressure does not block the user request or committed event.
-- [ ] Dashboards distinguish public API failures, internal identity failures, Legacy proxy failures and async audit lag.
-- [ ] Alerts have severity, Primary/Secondary Owner and a tested runbook.
-- [ ] One runbook covers stuck Outbox, one covers audit consumer lag and one covers Legacy proxy timeout.
-- [ ] Black-box observability tests assert trace continuity and secret absence.
+- [x] W3C Trace Context propagates across public HTTP, internal RPC, Outbox, Kafka and Inbox.
+- [x] Correlation and causation IDs connect durable async work even when trace retention expires.
+- [x] A single trace demonstrates login/current-principal through resulting Audit ingestion.
+- [x] Route owner and route policy revision appear as safe trace attributes.
+- [x] Metrics cover traffic, errors, latency, saturation, Outbox age, consumer lag and audit ingestion.
+- [x] Metrics do not use session, principal, request, trace or resource IDs as labels.
+- [x] Logs use stable error/action codes and redact credentials, cookies, grants and sensitive bodies.
+- [x] Health and diagnostics expose no internal addresses, connection strings or tenant data.
+- [x] OpenTelemetry Collector outage or backpressure does not block the user request or committed event.
+- [x] Dashboards distinguish public API failures, internal identity failures, Legacy proxy failures and async audit lag.
+- [x] Alerts have severity, Primary/Secondary Owner and a tested runbook.
+- [x] One runbook covers stuck Outbox, one covers audit consumer lag and one covers Legacy proxy timeout.
+- [x] Black-box observability tests assert trace continuity and secret absence.

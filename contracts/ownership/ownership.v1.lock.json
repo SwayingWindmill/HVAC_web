@@ -1,0 +1,24 @@
+{
+  "routeRegistryRevision": 1,
+  "routes": {
+    "GET /api/v1/health": { "revision": 1, "owner": "platform-gateway" },
+    "GET /api/v1/version": { "revision": 1, "owner": "platform-gateway" },
+    "GET /api/v1/auth/login": { "revision": 1, "owner": "platform-gateway" },
+    "GET /api/v1/auth/callback": { "revision": 1, "owner": "platform-gateway" },
+    "GET /api/v1/principal": { "revision": 1, "owner": "platform-gateway" },
+    "POST /api/v1/auth/logout": { "revision": 1, "owner": "platform-gateway" },
+    "POST /api/v1/auth/sessions/{sessionId}/revoke": { "revision": 1, "owner": "platform-gateway" },
+    "GET /api/v1/audit/session-events/{messageId}": { "revision": 1, "owner": "platform-gateway" },
+    "GET /api/v1/platform/status": { "revision": 1, "owner": "legacy-hvac-backend" }
+  },
+  "dataRegistryRevision": 1,
+  "resources": {
+    "schema:gateway": { "revision": 1, "writer": "platform-gateway" },
+    "schema:audit_ledger": { "revision": 1, "writer": "audit-ledger-service" },
+    "schema:legacy": { "revision": 1, "writer": "legacy-hvac-backend" },
+    "event-family:hvac.security.session.v1": { "revision": 1, "writer": "platform-gateway" },
+    "event-family:hvac.routing.decision.v1": { "revision": 1, "writer": "platform-gateway" },
+    "projection:audit-session-record": { "revision": 1, "writer": "audit-ledger-service" },
+    "projection:gateway-route-audit": { "revision": 1, "writer": "platform-gateway" }
+  }
+}
