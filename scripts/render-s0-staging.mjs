@@ -4,8 +4,9 @@ import { dirname, relative, resolve } from 'node:path';
 const argument = (name) => process.argv.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3);
 const bindingsPath = argument('bindings');
 const outputArgument = argument('output');
+const allowRedactedEvidence = process.argv.includes('--allow-redacted-evidence');
 if (!bindingsPath || !outputArgument) {
-  throw new Error('Usage: node scripts/render-s0-staging.mjs --bindings=<private-json> --output=<directory>');
+  throw new Error('Usage: node scripts/render-s0-staging.mjs --bindings=<private-json> --output=<directory> [--allow-redacted-evidence]');
 }
 
 const root = resolve(process.cwd());
@@ -84,7 +85,8 @@ for (const source of templateFiles) {
   const destination = resolve(outputRoot, relative(sourceRoot, source));
   let rendered = await readFile(source, 'utf8');
   rendered = rendered.replace(/"\[([A-Z0-9_]+)\]"/g, (_match, name) => JSON.stringify(bindings[name]));
-  if (/\[[A-Z0-9_]+\]/.test(rendered)) throw new Error(`Unresolved placeholder in ${relative(root, source)}`);
+  const unresolvedCheck = allowRedactedEvidence ? rendered.replaceAll('[REDACTED_SECRET]', '') : rendered;
+  if (/\[[A-Z0-9_]+\]/.test(unresolvedCheck)) throw new Error(`Unresolved placeholder in ${relative(root, source)}`);
   await mkdir(dirname(destination), { recursive: true });
   await writeFile(destination, rendered);
 }
@@ -92,6 +94,7 @@ for (const source of templateFiles) {
 const receipt = {
   renderedAt: new Date().toISOString(),
   source: relative(root, sourceRoot),
+  redactedEvidenceMode: allowRedactedEvidence,
   files: templateFiles.map((path) => relative(sourceRoot, path)).sort(),
   bindings: [...required].sort().map((name) => ({ name, sensitive: /URL|KEY|PASSWORD|CERT|BUNDLE|MOUNTS|VOLUMES|BINDINGS/.test(name) })),
 };

@@ -67,7 +67,41 @@ try {
   if (!Array.isArray(receipt.bindings) || receipt.bindings.length !== placeholders.size) {
     throw new Error('render receipt does not account for every binding');
   }
-  console.log(`S0 staging renderer test passed with ${placeholders.size} private bindings.`);
+  if (receipt.redactedEvidenceMode !== false) throw new Error('normal staging render unexpectedly enabled redacted evidence mode');
+
+  const redactedMarker = ['[', 'REDACTED_', 'SECRET', ']'].join('');
+  const redactedBindings = { ...bindings };
+  for (const name of ['SESSION_TOKEN_KEY', 'MIGRATOR_DATABASE_PASSWORD']) redactedBindings[name] = redactedMarker;
+  const redactedBindingsPath = resolve(temporaryRoot, 'redacted-bindings.json');
+  const strictOutputPath = resolve(temporaryRoot, 'strict-redacted-render');
+  const evidenceOutputPath = resolve(temporaryRoot, 'evidence-redacted-render');
+  await writeFile(redactedBindingsPath, JSON.stringify(redactedBindings));
+
+  const strictResult = spawnSync(process.execPath, [
+    resolve(root, 'scripts/render-s0-staging.mjs'),
+    `--bindings=${redactedBindingsPath}`,
+    `--output=${strictOutputPath}`,
+  ], { cwd: root, encoding: 'utf8', windowsHide: true });
+  if (!strictResult.error && strictResult.status === 0) throw new Error('normal staging renderer accepted a redacted evidence marker');
+
+  const evidenceResult = spawnSync(process.execPath, [
+    resolve(root, 'scripts/render-s0-staging.mjs'),
+    `--bindings=${redactedBindingsPath}`,
+    `--output=${evidenceOutputPath}`,
+    '--allow-redacted-evidence',
+  ], { cwd: root, encoding: 'utf8', windowsHide: true });
+  if (evidenceResult.error || evidenceResult.status !== 0) {
+    throw new Error(`redacted evidence renderer failed: ${evidenceResult.error?.message ?? evidenceResult.stderr ?? evidenceResult.status}`);
+  }
+  for (const path of await filesUnder(evidenceOutputPath)) {
+    const text = await readFile(path, 'utf8');
+    const unresolved = text.replaceAll(redactedMarker, '');
+    if (/\[[A-Z0-9_]+\]/.test(unresolved)) throw new Error(`unexpected placeholder remains in evidence render ${path}`);
+  }
+  const evidenceReceipt = JSON.parse(await readFile(resolve(evidenceOutputPath, 'render-receipt.json'), 'utf8'));
+  if (evidenceReceipt.redactedEvidenceMode !== true) throw new Error('evidence render receipt did not record redacted evidence mode');
+
+  console.log(`S0 staging renderer test passed with ${placeholders.size} private bindings and strict evidence redaction.`);
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true });
 }

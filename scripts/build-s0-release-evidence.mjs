@@ -8,8 +8,13 @@ const root = resolve(process.cwd());
 const argument = (name) => process.argv.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3);
 const outputRoot = resolve(root, argument('output') ?? 'out/s0-release-evidence');
 const imagesRoot = resolve(root, argument('images') ?? 'out/s0-release-input/images');
-const repository = process.env.GITHUB_REPOSITORY ?? 'SwayingWindmill/HVAC_web';
-const runId = process.env.GITHUB_RUN_ID ?? null;
+const repository = argument('source-repository') ?? process.env.GITHUB_REPOSITORY ?? 'SwayingWindmill/HVAC_web';
+const runId = argument('source-run-id') ?? process.env.GITHUB_RUN_ID ?? null;
+const sourceCommit = argument('source-sha') ?? process.env.GITHUB_SHA ?? null;
+const sourceRef = argument('source-ref') ?? process.env.GITHUB_REF ?? null;
+const sourceWorkflow = argument('source-workflow') ?? process.env.GITHUB_WORKFLOW ?? null;
+const serverURL = argument('source-server-url') ?? process.env.GITHUB_SERVER_URL ?? 'https://github.com';
+const workflowReportArgument = argument('workflow-report');
 const startedAt = new Date();
 
 function assert(condition, message) {
@@ -71,6 +76,12 @@ async function commandVersion(command, args) {
 
 async function collectWorkflow() {
   const path = resolve(outputRoot, 'workflow-jobs.json');
+  if (workflowReportArgument) {
+    const report = await readJSON(resolve(root, workflowReportArgument), workflowReportArgument);
+    assert(report.status === 'passed', `provided workflow report did not pass: ${report.status}`);
+    await writeFile(path, `${JSON.stringify(report, null, 2)}\n`);
+    return report;
+  }
   if (!runId) {
     if (existsSync(path)) return readJSON(path);
     const local = {
@@ -263,11 +274,13 @@ async function renderStaging(images) {
     resolve(root, 'scripts/render-s0-staging.mjs'),
     `--bindings=${portable(bindingsPath)}`,
     `--output=${portable(renderedRoot)}`,
+    '--allow-redacted-evidence',
   ]);
   const renderedFiles = (await filesUnder(renderedRoot)).sort();
   const hashes = [];
   for (const path of renderedFiles) hashes.push({ path: relative(renderedRoot, path).replaceAll('\\', '/'), sha256: await sha256File(path) });
   const receipt = await readJSON(resolve(renderedRoot, 'render-receipt.json'));
+  assert(receipt.redactedEvidenceMode === true, 'staging evidence render did not record redacted evidence mode');
   const report = {
     schemaVersion: 1,
     ticket: '08-s0-release-evidence',
@@ -452,9 +465,9 @@ const statement = {
     generatedAt: new Date().toISOString(),
     source: {
       repository,
-      commit: process.env.GITHUB_SHA ?? (await run('git', ['rev-parse', 'HEAD'])).stdout.trim(),
-      ref: process.env.GITHUB_REF ?? null,
-      workflow: process.env.GITHUB_WORKFLOW ?? null,
+      commit: sourceCommit ?? (await run('git', ['rev-parse', 'HEAD'])).stdout.trim(),
+      ref: sourceRef,
+      workflow: sourceWorkflow,
       runId,
       runURL: runId ? `https://github.com/${repository}/actions/runs/${runId}` : null,
     },
@@ -482,7 +495,7 @@ const statement = {
       eligible: true,
       automatedDecision: 'all-blocking-evidence-passed',
       humanApprovalFabricated: false,
-      reviewSurface: process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}` : null,
+      reviewSurface: serverURL + '/' + repository,
       finalDeclaration: 'S0 is complete. S1 is ready to enter implementation specification. This does not authorize S1 implementation without its own accepted specification.',
     },
   },
