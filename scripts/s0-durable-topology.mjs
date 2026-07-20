@@ -18,6 +18,7 @@ const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
 const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 let serviceStdio = 'inherit';
+const serviceProcessGroups = new WeakSet();
 
 const composeInvocation = (() => {
   const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
@@ -55,6 +56,28 @@ function processExited(child) {
   return child && (child.exitCode !== null || child.signalCode !== null);
 }
 
+function signalProcessTree(child, signal) {
+  if (process.platform !== 'win32' && serviceProcessGroups.has(child)) {
+    try {
+      process.kill(-child.pid, signal);
+    } catch (error) {
+      if (error?.code !== 'ESRCH') throw error;
+    }
+    return;
+  }
+  child.kill(signal);
+}
+
+async function signalAndWait(child, signal, timeoutMilliseconds = 1500) {
+  if (processExited(child)) return true;
+  const exited = once(child, 'exit').then(() => true);
+  signalProcessTree(child, signal);
+  return Promise.race([
+    exited,
+    pause(timeoutMilliseconds).then(() => false),
+  ]);
+}
+
 async function findAvailablePort(requestedPort = 0) {
   const server = createTCPServer();
   server.listen({ host: '127.0.0.1', port: Number(requestedPort) || 0, exclusive: true });
@@ -70,8 +93,10 @@ function spawnService(label, command, args, env) {
     cwd: root,
     stdio: serviceStdio,
     shell: false,
+    detached: process.platform !== 'win32',
     env: { ...process.env, ...env },
   });
+  if (process.platform !== 'win32') serviceProcessGroups.add(child);
   child.once('error', (error) => console.error(`${label} process error:`, error));
   return child;
 }
@@ -170,12 +195,8 @@ export async function stopProcess(child) {
     spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     return;
   }
-  child.kill('SIGTERM');
-  const stopped = await Promise.race([
-    once(child, 'exit').then(() => true),
-    pause(1500).then(() => false),
-  ]);
-  if (!stopped) child.kill('SIGKILL');
+  const stopped = await signalAndWait(child, 'SIGTERM');
+  if (!stopped) await signalAndWait(child, 'SIGKILL');
 }
 
 export async function killProcess(child) {
@@ -184,8 +205,8 @@ export async function killProcess(child) {
     spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     return;
   }
-  child.kill('SIGKILL');
-  await once(child, 'exit');
+  const stopped = await signalAndWait(child, 'SIGKILL');
+  if (!stopped) throw new Error(`process group ${child.pid} did not stop after SIGKILL`);
 }
 
 function assertSafeIdentifier(value, label) {

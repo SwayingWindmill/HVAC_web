@@ -42,7 +42,7 @@ includesAll(agents, ['Reuse-first implementation', 'search GitHub', 'pin the sel
 const compose = await read('infra/s0-durable/compose.yaml');
 includesAll(compose, ['ghcr.io/shopify/toxiproxy:2.12.0@sha256:9378ed52a28bc50edc1350f936f518f31fa95f0d15917d6eb40b8e376d1a214e', 'S0_TOXIPROXY_POSTGRES_HOST_PORT', 'S0_TOXIPROXY_LEGACY_HOST_PORT'], 'Toxiproxy topology');
 const topology = await read('scripts/s0-durable-topology.mjs');
-includesAll(topology, ['setPostgresAvailable', 'setLegacyLatency', 'killProcess', 's0_postgres', 's0_legacy'], 'failure-injection topology');
+includesAll(topology, ['setPostgresAvailable', 'setLegacyLatency', 'killProcess', 'serviceProcessGroups', "process.kill(-child.pid, signal)", "detached: process.platform !== 'win32'", 's0_postgres', 's0_legacy'], 'failure-injection topology');
 const browserAudit = await read('scripts/run-durable-session-browser-audit.mjs');
 includesAll(browserAudit, ['ROUTE_AUDIT_FAILED', 'LEGACY_TIMEOUT', 'LEGACY_CIRCUIT_OPEN', 'stopAudit(true)', 'stopRelay(true)', 'Outbox backlog', 'AUDIT_RECORD_NOT_FOUND'], 'production-shaped failure matrix');
 const networkGate = await read('scripts/check-s0-network-policies.mjs');
