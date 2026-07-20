@@ -18,9 +18,7 @@ spec:
           image: "[SIGNED_IMAGE_LEGACY_PRIVATE]"
           envFrom: "[RUNTIME_BINDINGS_LEGACY_PRIVATE]"
           env:
-            - { name: PORT, value: "8445" }
-            - { name: LEGACY_PRIVATE_MODE, value: "true" }
-            - { name: LEGACY_BIND_ADDRESS, value: "0.0.0.0" }
+            - { name: LEGACY_FIXTURE_ADDR, value: "0.0.0.0:8445" }
             - { name: LEGACY_TLS_CERT, value: "[WORKLOAD_CERT_PATH]" }
             - { name: LEGACY_TLS_KEY, value: "[WORKLOAD_KEY_PATH]" }
             - { name: LEGACY_CLIENT_CA, value: "[TRUST_BUNDLE_PATH]" }
@@ -32,7 +30,7 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             runAsNonRoot: true
-            runAsUser: 10001
+            runAsUser: 65532
             capabilities: { drop: ["ALL"] }
           resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 1000m, memory: 512Mi } }
           volumeMounts: "[RUNTIME_IDENTITY_MOUNTS]"

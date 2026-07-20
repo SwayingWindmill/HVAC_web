@@ -14,6 +14,9 @@ const packageJSON = JSON.parse(await read('package.json'));
 for (const script of ['delivery:local', 'delivery:validate', 'delivery:check', 'delivery:render', 'security:dependency-audit', 'security:go-vuln', 'security:licenses', 'audit:s0-rollout', 'audit:delivery']) {
   assert(packageJSON.scripts?.[script], `package.json is missing ${script}`);
 }
+for (const script of ['test:legacy-compatibility', 'build:legacy-compatibility']) {
+  assert(packageJSON.scripts?.[script], `package.json is missing ${script}`);
+}
 
 const localConfig = await read('deploy/s0/local.env.example');
 const stagingConfig = await read('deploy/s0/staging.env.example');
@@ -42,12 +45,10 @@ for (const path of serviceMains) {
 
 const goImage = await read('deploy/s0/images/go-service.Dockerfile');
 includesAll(goImage, ['golang:1.25.0-bookworm', 'CGO_ENABLED=0', '-trimpath', 'distroless/static-debian12:nonroot', 'USER 65532:65532'], 'Go image');
-const legacyImage = await read('deploy/s0/images/legacy-private.Dockerfile');
-includesAll(legacyImage, ['node:20.19.4-bookworm-slim', 'npm ci --omit=dev', 'USER 10001:10001'], 'Legacy image');
 const migratorImage = await read('deploy/s0/images/migrator.Dockerfile');
 includesAll(migratorImage, ['001-s0-durable.sql', 'USER postgres', 'ON_ERROR_STOP=1'], 'migration image');
 const dockerIgnore = await read('.dockerignore');
-includesAll(dockerIgnore, ['.git', '**/node_modules', '**/.venv', '**/.env', 'agents', 'dist', 'out'], 'Docker build context exclusions');
+includesAll(dockerIgnore, ['.git', '**/node_modules', '**/.venv', '**/.env', 'agents', 'hvac-backend', 'dist', 'out'], 'Docker build context exclusions');
 
 const bootstrapSQL = await read('infra/s0-durable/postgres/init/000-bootstrap-identities.sql');
 includesAll(bootstrapSQL, ['CREATE ROLE s0_migrator', 'gateway_runtime', 'gateway_relay_runtime', 'audit_consumer_runtime', 'audit_query_runtime', 'AUTHORIZATION s0_migrator'], 'database identity bootstrap');
@@ -73,6 +74,8 @@ for (const file of workloadFiles) {
     assert(text.includes('maxUnavailable: 0'), `${file} rolling update must preserve availability`);
   }
 }
+const legacyWorkload = await read('deploy/s0/staging/workloads/legacy-private.yaml');
+includesAll(legacyWorkload, ['LEGACY_FIXTURE_ADDR', '0.0.0.0:8445', 'runAsUser: 65532'], 'Legacy compatibility fixture workload');
 
 const namespace = await read('deploy/s0/staging/namespace.yaml');
 includesAll(namespace, ['pod-security.kubernetes.io/enforce: restricted', 'pod-security.kubernetes.io/audit: restricted'], 'staging namespace');
@@ -86,7 +89,10 @@ const renderer = await read('scripts/render-s0-staging.mjs');
 includesAll(renderer, ['@sha256:', 'Missing staging binding', 'Unresolved placeholder', 'without logging binding values'], 'staging renderer');
 
 const workflow = await read('.github/workflows/s0-supply-chain.yml');
-includesAll(workflow, ['gitleaks/gitleaks-action', 'github/codeql-action/init', 'security:go-vuln', 'npm audit', 'security:dependency-audit', 'security:licenses', 'sbom: true', 'provenance: mode=max', 'cosign sign', 'cosign verify', 'attest-build-provenance', 'id-token: write'], 'supply-chain workflow');
+includesAll(workflow, ['gitleaks/gitleaks-action', 'github/codeql-action/init', 'security:go-vuln', 'npm audit', 'security:dependency-audit', 'security:licenses', 'SERVICE_PACKAGE=./tools/legacy-private-fixture/cmd/legacy-private-fixture', 'sbom: true', 'provenance: mode=max', 'cosign sign', 'cosign verify', 'attest-build-provenance', 'id-token: write'], 'supply-chain workflow');
+assert(!workflow.includes('hvac-backend'), 'supply-chain workflow must not depend on the local migration reference');
+const licenseGate = await read('scripts/check-production-licenses.mjs');
+assert(!licenseGate.includes('hvac-backend'), 'license gate must not scan the local migration reference');
 const dependencyBaseline = JSON.parse(await read('deploy/s0/security/dependency-audit-baseline.json'));
 assert(dependencyBaseline.primaryOwner === 'security-platform', 'dependency audit baseline requires a Security Platform owner');
 assert(dependencyBaseline.remediationIssue === '07-security-and-failure-gates', 'dependency audit baseline must be assigned to ticket 07');

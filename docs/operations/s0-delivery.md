@@ -8,13 +8,13 @@ The release engineer owns the deployment receipt, signed image digests, private 
 
 ## Local delivery
 
-From the repository root, install the root and Legacy dependencies, ensure Docker is running, and execute:
+From the repository root, install the root dependencies, ensure Docker is running, and execute:
 
 ```bash
 npm run delivery:local
 ```
 
-This one command validates `deploy/s0/local.env.example`, starts PostgreSQL, Redpanda, OpenTelemetry Collector and Prometheus, generates local-only PKI, then starts the OIDC test provider, IAM, Audit Ledger, Outbox Relay, private Legacy backend, Platform Gateway and HVAC Web. SIGINT or SIGTERM drains the child services and removes the isolated Docker volumes.
+This one command validates `deploy/s0/local.env.example`, starts PostgreSQL, Redpanda, OpenTelemetry Collector and Prometheus, generates local-only PKI, then starts the OIDC test provider, IAM, Audit Ledger, Outbox Relay, the repository-owned Go Legacy compatibility fixture, Platform Gateway and HVAC Web. SIGINT or SIGTERM drains the child services and removes the isolated Docker volumes. The local `hvac-backend` directory is migration reference material only; it is excluded from Git, Docker build contexts, CI and release artifacts.
 
 Local and test profiles generate their own Session key and workload certificates. They require no production credential. `ALLOW_PRODUCTION_EGRESS=false`, an empty ThingsBoard URL and an empty webhook URL are mandatory, so the profile cannot intentionally contact production ThingsBoard or production webhooks.
 
@@ -47,7 +47,7 @@ Every Go runtime exposes loopback or pod-internal diagnostics:
 
 Gateway, IAM, Audit Ledger, Outbox Relay and OIDC fixture call `MarkReady` only after configuration and required local resources are initialized. SIGTERM calls `MarkNotReady` before HTTP shutdown or worker cancellation. HTTP servers receive a bounded drain deadline. Relay and Audit consumers stop claiming new work through context cancellation; committed Outbox and Inbox records remain the source of truth, so termination does not acknowledge uncommitted work.
 
-Legacy uses the same Kubernetes startup, liveness and readiness lifecycle through its private TLS socket and retains the existing bounded NestJS shutdown behavior.
+The Go Legacy compatibility fixture uses the same Kubernetes startup, liveness and readiness lifecycle through its private TLS socket and performs bounded signal-driven shutdown. It proves the Gateway-to-Legacy mTLS, delegation and route ownership boundary without packaging the locally retained NestJS migration reference.
 
 ## Staging security boundary
 
@@ -67,7 +67,7 @@ Run the migration Job before a rollout. Do not grant the migration identity to G
 
 `.github/workflows/s0-supply-chain.yml` runs contract checks, Go tests, the PostgreSQL compatibility suite, frontend type/build, Gitleaks, CodeQL, Go vulnerability analysis, npm dependency audit and production-license checks. Full dependency reports remain visible as CI evidence. The blocking production gate rejects every critical vulnerability and any increase above `deploy/s0/security/dependency-audit-baseline.json`; that reviewed exception expires on 2026-08-15 and is assigned to ticket 07 for remediation rather than becoming a permanent waiver.
 
-Release tags and explicit release dispatches build the same Dockerfiles used for staging. Go binaries are reproducible-oriented static builds with `CGO_ENABLED=0`, `-trimpath` and disabled VCS embedding, then copied into a distroless non-root image. Legacy uses pinned Node build/runtime images and production-only dependencies. The workflow pushes images to GHCR, emits BuildKit SBOM and maximum provenance attestations, signs each immutable digest with keyless Cosign, verifies the certificate identity and OIDC issuer, and publishes GitHub build provenance.
+Release tags and explicit release dispatches build the same Dockerfiles used for staging. Go binaries, including the Legacy compatibility fixture, are reproducible-oriented static builds with `CGO_ENABLED=0`, `-trimpath` and disabled VCS embedding, then copied into a distroless non-root image. The workflow pushes images to GHCR, emits BuildKit SBOM and maximum provenance attestations, signs each immutable digest with keyless Cosign, verifies the certificate identity and OIDC issuer, and publishes GitHub build provenance.
 
 A staging binding may reference only an image digest that passed `cosign verify`. A mutable tag is never an acceptable deployment input.
 

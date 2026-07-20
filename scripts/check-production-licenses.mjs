@@ -5,7 +5,6 @@ const root = resolve(process.cwd());
 const npmCLI = process.env.npm_execpath || resolve(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js');
 const projects = [
   { name: 'root', start: root },
-  { name: 'legacy-private', start: resolve(root, 'hvac-backend') },
 ];
 
 function runLicenseChecker(project) {

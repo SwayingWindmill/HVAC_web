@@ -77,10 +77,10 @@ npm run test:identity       # OIDC、委托、IAM、撤销与 Gateway 身份测�
 npm run test:durable-unit   # Session 事件、存储、Relay、Inbox 与 Audit 单元测试
 npm run test:observability  # Trace、OTLP、指标标签、日志脱敏与跨服务集成测试
 npm run test:ownership      # Route Registry、稳定 cohort、Legacy 代理与公共故障测试
-npm run test:legacy-boundary # NestJS 私有 mTLS/委托边界测试
+npm run test:legacy-compatibility # Go Legacy 兼容夹具 mTLS/委托边界测试
 npm run test:durable-postgres # 真实 PostgreSQL 事务、RLS、所有权审计和重启测试
 npm run build:gateway       # 独立构建 Gateway 二进制
-npm run build:legacy-private # 构建冻结 Legacy 私有只读 adapter
+npm run build:legacy-compatibility # 构建 Go Legacy 兼容夹具
 npm run build:iam           # 独立构建 IAM 二进制
 npm run build:audit-ledger
 npm run build:outbox-relay

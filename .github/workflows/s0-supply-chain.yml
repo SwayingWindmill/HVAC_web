@@ -8,10 +8,10 @@ on:
       - "infra/s0-durable/**"
       - "libs/**"
       - "services/**"
+      - "tools/**"
       - "scripts/**"
       - "contracts/**"
       - "apps/hvac-web/**"
-      - "hvac-backend/**"
       - "package.json"
       - "package-lock.json"
       - "go.work"
@@ -24,6 +24,9 @@ on:
 permissions:
   contents: read
 
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -35,22 +38,20 @@ jobs:
           cache-dependency-path: |
             libs/*/go.mod
             services/*/go.mod
+            tools/*/go.mod
       - uses: actions/setup-node@v4
         with:
           node-version: "20.19.4"
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            hvac-backend/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm ci --prefix hvac-backend
       - run: npm run delivery:validate
       - run: npm run delivery:check
       - run: npm run events:check
       - run: npm run ownership:check
       - run: npm run contracts:check
       - run: npm run test:observability
-      - run: npm run test:legacy-boundary
+      - run: npm run test:legacy-compatibility
       - run: npm run test:durable-postgres
       - run: npm run lint
       - run: npm run build
@@ -73,13 +74,13 @@ jobs:
         with:
           node-version: "20.19.4"
       - run: npm ci
-      - run: npm ci --prefix hvac-backend
       - run: npm run build
       - run: npm run build:gateway
       - run: npm run build:iam
       - run: npm run build:audit-ledger
       - run: npm run build:outbox-relay
       - run: npm run build:oidc-fixture
+      - run: npm run build:legacy-compatibility
       - uses: github/codeql-action/analyze@v3
 
   dependency-and-license:
@@ -97,13 +98,9 @@ jobs:
           node-version: "20.19.4"
           cache: npm
       - run: npm ci
-      - run: npm ci --prefix hvac-backend
       - name: Root full dependency audit evidence
         continue-on-error: true
         run: npm audit
-      - name: Legacy full dependency audit evidence
-        continue-on-error: true
-        run: npm audit --prefix hvac-backend
       - run: npm run security:dependency-audit
       - run: npm run security:go-vuln
       - run: npm run security:licenses
@@ -137,8 +134,8 @@ jobs:
             dockerfile: deploy/s0/images/go-service.Dockerfile
             build_args: SERVICE_PACKAGE=./services/oidc-test-provider/cmd/oidc-test-provider
           - name: legacy-private
-            dockerfile: deploy/s0/images/legacy-private.Dockerfile
-            build_args: ""
+            dockerfile: deploy/s0/images/go-service.Dockerfile
+            build_args: SERVICE_PACKAGE=./tools/legacy-private-fixture/cmd/legacy-private-fixture
           - name: s0-migrator
             dockerfile: deploy/s0/images/migrator.Dockerfile
             build_args: ""
