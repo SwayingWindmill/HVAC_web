@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import WebSocket from 'ws';
 import { startS0AuthTopology, stopProcess } from './s0-auth-topology.mjs';
 
 const debugPort = Number(process.env.S0_AUTH_DEBUG_PORT ?? 9355);
@@ -168,5 +169,5 @@ try {
   cdpClient?.close();
   await stopProcess(edgeProcess);
   await topology?.stop();
-  await rm(profileDir, { recursive: true, force: true });
+  await rm(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
 }

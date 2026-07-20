@@ -250,11 +250,9 @@ export async function startS0DurableTopology(options = {}) {
   };
 
   const startLegacy = async () => {
-    services.legacy = spawnService('Legacy HVAC backend', process.execPath, [resolve(root, 'hvac-backend/dist/main.js')], {
-      NODE_ENV: 'test',
-      PORT: String(legacyPort),
-      LEGACY_PRIVATE_MODE: 'true',
-      LEGACY_BIND_ADDRESS: '127.0.0.1',
+    services.legacy = spawnService('Legacy compatibility fixture', goBinary, ['run', './tools/legacy-private-fixture/cmd/legacy-private-fixture'], {
+      GOCACHE: goCacheDir,
+      LEGACY_FIXTURE_ADDR: `127.0.0.1:${legacyPort}`,
       LEGACY_TLS_CERT: paths.legacyCert,
       LEGACY_TLS_KEY: paths.legacyKey,
       LEGACY_CLIENT_CA: paths.ca,
@@ -262,7 +260,7 @@ export async function startS0DurableTopology(options = {}) {
       LEGACY_AUDIENCE: 'legacy-hvac-backend',
     });
     const [clientCert, clientKey, ca] = await Promise.all([readFile(paths.gatewayCert), readFile(paths.gatewayKey), readFile(paths.ca)]);
-    await waitForTLS(legacyPort, 'Legacy HVAC backend', services.legacy, { cert: clientCert, key: clientKey, ca, servername: 'localhost', rejectUnauthorized: true });
+    await waitForTLS(legacyPort, 'Legacy compatibility fixture', services.legacy, { cert: clientCert, key: clientKey, ca, servername: 'localhost', rejectUnauthorized: true });
   };
 
   try {
@@ -287,7 +285,6 @@ export async function startS0DurableTopology(options = {}) {
       env: { ...process.env, GOCACHE: goCacheDir },
     });
     if (generated.error || generated.status !== 0) throw new Error(`S0 PKI generation failed: ${generated.error?.message ?? generated.stderr ?? generated.status}`);
-    run(process.execPath, [resolve(root, 'hvac-backend/node_modules/@nestjs/cli/bin/nest.js'), 'build'], { cwd: resolve(root, 'hvac-backend') });
     await writeFile(paths.routeRegistry, await readFile(resolve(root, 'contracts/ownership/route-ownership.v1.json')));
 
     services.oidc = spawnService('OIDC fixture', goBinary, ['run', './services/oidc-test-provider/cmd/oidc-test-provider'], {

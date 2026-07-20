@@ -13,5 +13,6 @@ use (
 	./services/oidc-test-provider
 	./services/outbox-relay
 	./services/platform-gateway
+	./tools/legacy-private-fixture
 	./tools/s0-auth-fixture
 )

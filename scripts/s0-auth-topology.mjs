@@ -64,6 +64,13 @@ export async function stopProcess(child) {
   if (!child || processExited(child)) return;
   if (process.platform === 'win32') {
     spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    if (!processExited(child)) {
+      await Promise.race([
+        once(child, 'exit'),
+        pause(2000),
+      ]);
+    }
+    await pause(250);
     return;
   }
   child.kill('SIGTERM');

@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import WebSocket from 'ws';
 
 const root = resolve(process.cwd());
 const gatewayPort = Number(process.env.PLATFORM_GATEWAY_AUDIT_PORT ?? 18080);
