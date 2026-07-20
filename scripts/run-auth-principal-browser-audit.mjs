@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import WebSocket from 'ws';
 import { startS0AuthTopology, stopProcess } from './s0-auth-topology.mjs';
 
 const debugPort = Number(process.env.S0_AUTH_DEBUG_PORT ?? 9355);

@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import WebSocket from 'ws';
 
 const baseUrl = process.env.HVAC_AUDIT_BASE_URL ?? 'http://localhost:5173';
 const debugPort = 9341;
