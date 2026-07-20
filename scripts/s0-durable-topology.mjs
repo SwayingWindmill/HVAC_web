@@ -322,7 +322,7 @@ export async function startS0DurableTopology(options = {}) {
   const startLegacy = async () => {
     services.legacy = spawnService('Legacy compatibility fixture', goBinary, ['run', './tools/legacy-private-fixture/cmd/legacy-private-fixture'], {
       GOCACHE: goCacheDir,
-      LEGACY_FIXTURE_ADDR: `127.0.0.1:${legacyPort}`,
+      LEGACY_FIXTURE_ADDR: `0.0.0.0:${legacyPort}`,
       LEGACY_TLS_CERT: paths.legacyCert,
       LEGACY_TLS_KEY: paths.legacyKey,
       LEGACY_CLIENT_CA: paths.ca,
