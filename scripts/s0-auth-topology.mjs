@@ -161,6 +161,11 @@ export async function startS0AuthTopology(options = {}) {
       GATEWAY_WORKLOAD_SPIFFE: 'spiffe://hvac.local/platform-gateway',
       IDENTITY_POLICY_REVISION: 'policy-v1',
       SESSION_TOKEN_KEY: randomBytes(32).toString('base64url'),
+      ROUTE_OWNERSHIP_REGISTRY: resolve(root, 'contracts/ownership/route-ownership.v1.json'),
+      S0_ALLOW_MEMORY_ROUTE_AUDIT: 'true',
+      S0_ALLOW_NO_LEGACY: 'true',
+      S0_ALLOW_MEMORY_SESSION_STORE: 'true',
+      S0_ALLOW_NO_AUDIT_LEDGER: 'true',
     });
     processes.push(gateway);
     await waitForHTTP(`${gatewayURL}/api/v1/health?includeBuild=true`, 'Platform Gateway', gateway);

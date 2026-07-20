@@ -1,0 +1,36 @@
+{
+  "syntax": "proto3",
+  "package": "hvac.security.session.v1",
+  "goPackage": "github.com/quanlaihe/hvac-web/libs/sessionevent;sessionevent",
+  "messages": {
+    "ActorChainV1": {
+      "initiating_subject": { "type": "string", "number": 1 },
+      "initiating_issuer": { "type": "string", "number": 2 },
+      "executing_service": { "type": "string", "number": 3 },
+      "executing_spiffe_id": { "type": "string", "number": 4 },
+      "acting_organization_id": { "type": "string", "number": 5 }
+    },
+    "SessionAuditEventV1": {
+      "message_id": { "type": "string", "number": 1 },
+      "schema_version": { "type": "uint32", "number": 2 },
+      "message_type": { "type": "string", "number": 3 },
+      "producer": { "type": "string", "number": 4 },
+      "organization_id": { "type": "string", "number": 5 },
+      "partition_key": { "type": "string", "number": 6 },
+      "aggregate_type": { "type": "string", "number": 7 },
+      "aggregate_id": { "type": "string", "number": 8 },
+      "aggregate_version": { "type": "uint64", "number": 9 },
+      "occurred_at_unix_ms": { "type": "int64", "number": 10 },
+      "published_at_unix_ms": { "type": "int64", "number": 11 },
+      "correlation_id": { "type": "string", "number": 12 },
+      "causation_id": { "type": "string", "number": 13 },
+      "trace_id": { "type": "string", "number": 14 },
+      "actor": { "type": "ActorChainV1", "number": 15 },
+      "action": { "type": "string", "number": 16 },
+      "result": { "type": "string", "number": 17 },
+      "policy_revision": { "type": "string", "number": 18 },
+      "payload_sha256": { "type": "string", "number": 19 },
+      "session_state": { "type": "string", "number": 20 }
+    }
+  }
+}

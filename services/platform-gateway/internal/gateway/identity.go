@@ -11,6 +11,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"math/big"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
 )
 
@@ -32,12 +34,16 @@ type IdentityConfig struct {
 	PublicOrigin            string
 	IAMURL                  string
 	IAMAudience             string
+	AuditURL                string
+	AuditAudience           string
 	ExecutingWorkloadSPIFFE string
 	PolicyRevision          string
 	OIDCHTTPClient          *http.Client
 	IAMHTTPClient           *http.Client
+	AuditHTTPClient         *http.Client
 	DelegationSigner        crypto.Signer
 	TokenEncryptionKey      []byte
+	SessionStore            sessionstore.Store
 	SessionTTL              time.Duration
 	StateTTL                time.Duration
 	DelegationTTL           time.Duration
@@ -45,12 +51,12 @@ type IdentityConfig struct {
 }
 
 type identityController struct {
-	config   IdentityConfig
-	now      func() time.Time
-	vault    cipher.AEAD
-	mu       sync.RWMutex
-	states   map[string]loginState
-	sessions map[string]bffSession
+	config IdentityConfig
+	now    func() time.Time
+	vault  cipher.AEAD
+	mu     sync.RWMutex
+	states map[string]loginState
+	store  sessionstore.Store
 }
 
 type loginState struct {
@@ -61,13 +67,8 @@ type loginState struct {
 }
 
 type bffSession struct {
-	ID                   string
-	CSRFToken            string
-	Principal            identitycontext.UserPrincipal
-	ActingOrganizationID string
-	EncryptedTokens      []byte
-	ExpiresAt            time.Time
-	RevokedAt            *time.Time
+	sessionstore.Session
+	CSRFToken string
 }
 
 type oidcDiscovery struct {
@@ -138,8 +139,17 @@ func newIdentityController(config *IdentityConfig, now func() time.Time) *identi
 	if resolved.IAMAudience == "" {
 		resolved.IAMAudience = "iam-service"
 	}
+	if resolved.AuditAudience == "" {
+		resolved.AuditAudience = "audit-ledger-service"
+	}
+	if resolved.AuditURL != "" && resolved.AuditHTTPClient == nil {
+		resolved.AuditHTTPClient = &http.Client{Timeout: 5 * time.Second}
+	}
 	if resolved.PolicyRevision == "" {
 		resolved.PolicyRevision = "policy-v1"
+	}
+	if resolved.SessionStore == nil {
+		resolved.SessionStore = sessionstore.NewMemoryStore()
 	}
 	if len(resolved.TokenEncryptionKey) != 32 {
 		panic("identity token encryption key must be 32 bytes")
@@ -155,7 +165,7 @@ func newIdentityController(config *IdentityConfig, now func() time.Time) *identi
 	if resolved.OIDCIssuer == "" || resolved.OIDCClientID == "" || resolved.OIDCRedirectURI == "" || resolved.PublicOrigin == "" || resolved.IAMURL == "" || resolved.ExecutingWorkloadSPIFFE == "" || resolved.DelegationSigner == nil {
 		panic("identity configuration is incomplete")
 	}
-	return &identityController{config: resolved, now: now, vault: vault, states: map[string]loginState{}, sessions: map[string]bffSession{}}
+	return &identityController{config: resolved, now: now, vault: vault, states: map[string]loginState{}, store: resolved.SessionStore}
 }
 
 func (h *handler) BeginLogin(writer http.ResponseWriter, request *http.Request, params platformapi.BeginLoginParams) {
@@ -227,18 +237,32 @@ func (h *handler) CompleteLogin(writer http.ResponseWriter, request *http.Reques
 		writeIdentityFailure(writer, request, identityFailure{401, "OIDC_TOKEN_TYPE_INVALID", "OIDC token type invalid", "The identity provider returned an unsupported token type.", false})
 		return
 	}
-	encrypted, err := h.identity.encryptTokens(tokens)
+	encryptedTokens, err := h.identity.encryptTokens(tokens)
 	if err != nil {
 		writeIdentityFailure(writer, request, identityFailure{503, "SESSION_TOKEN_STORE_FAILED", "Session unavailable", "The server could not protect the identity tokens.", true})
 		return
 	}
+	csrfToken := randomURLToken(24)
+	encryptedCSRF, err := h.identity.encryptBytes([]byte(csrfToken))
+	if err != nil {
+		writeIdentityFailure(writer, request, identityFailure{503, "SESSION_TOKEN_STORE_FAILED", "Session unavailable", "The server could not protect the session secret.", true})
+		return
+	}
 	now := h.identity.now()
-	session := bffSession{ID: randomURLToken(32), CSRFToken: randomURLToken(24), Principal: identitycontext.UserPrincipal{Subject: claims.Subject, Issuer: claims.Issuer, DisplayName: claims.Name, Email: claims.Email, Roles: append([]string(nil), claims.Roles...)}, ActingOrganizationID: claims.ActingOrganizationID, EncryptedTokens: encrypted, ExpiresAt: now.Add(h.identity.config.SessionTTL)}
-	h.identity.mu.Lock()
-	h.identity.sessions[session.ID] = session
-	h.identity.cleanupLocked()
-	h.identity.mu.Unlock()
-	http.SetCookie(writer, &http.Cookie{Name: sessionCookieName, Value: session.ID, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: int(h.identity.config.SessionTTL.Seconds()), Expires: session.ExpiresAt})
+	stored, err := h.identity.store.CreateSession(request.Context(), sessionstore.Session{
+		ID:                       randomURLToken(32),
+		Principal:                identitycontext.UserPrincipal{Subject: claims.Subject, Issuer: claims.Issuer, DisplayName: claims.Name, Email: claims.Email, Roles: append([]string(nil), claims.Roles...)},
+		ActingOrganizationID:     claims.ActingOrganizationID,
+		CSRFTokenCiphertext:      encryptedCSRF,
+		ProviderTokensCiphertext: encryptedTokens,
+		ExpiresAt:                now.Add(h.identity.config.SessionTTL),
+	}, h.identity.mutationContext(request, "SESSION_CREATED"))
+	if err != nil {
+		writeIdentityFailure(writer, request, identityFailure{503, "SESSION_PERSISTENCE_FAILED", "Session unavailable", "The authenticated session could not be committed with its audit intent.", true})
+		return
+	}
+	writer.Header().Set("X-Audit-Message-ID", stored.LastAuditMessageID)
+	http.SetCookie(writer, &http.Cookie{Name: sessionCookieName, Value: stored.ID, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: int(h.identity.config.SessionTTL.Seconds()), Expires: stored.ExpiresAt})
 	http.Redirect(writer, request, state.ReturnTo, http.StatusFound)
 }
 
@@ -253,7 +277,7 @@ func (h *handler) GetCurrentPrincipal(writer http.ResponseWriter, request *http.
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
-	writeJSON(writer, http.StatusOK, platformapi.CurrentPrincipalResponse{Principal: toPublicUser(principal.Principal), Context: toPublicContext(principal.Context), Session: platformapi.SessionView{ID: session.ID, ExpiresAt: session.ExpiresAt.UTC().Format(time.RFC3339), CSRFToken: session.CSRFToken, RevocationObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds())}})
+	writeJSON(writer, http.StatusOK, platformapi.CurrentPrincipalResponse{Principal: toPublicUser(principal.Principal), Context: toPublicContext(principal.Context), Session: platformapi.SessionView{ID: session.ID, ExpiresAt: session.ExpiresAt.UTC().Format(time.RFC3339), CSRFToken: session.CSRFToken, RevocationObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds()), LastAuditMessageID: session.LastAuditMessageID}})
 }
 
 func (h *handler) Logout(writer http.ResponseWriter, request *http.Request, params platformapi.LogoutParams) {
@@ -266,13 +290,12 @@ func (h *handler) Logout(writer http.ResponseWriter, request *http.Request, para
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
-	now := h.identity.now()
-	h.identity.mu.Lock()
-	if current, exists := h.identity.sessions[session.ID]; exists {
-		current.RevokedAt = &now
-		h.identity.sessions[session.ID] = current
+	revoked, err := h.identity.store.RevokeSession(request.Context(), session.ID, h.identity.mutationContext(request, "SESSION_LOGGED_OUT"))
+	if err != nil {
+		h.identity.writeSessionMutationError(writer, request, err)
+		return
 	}
-	h.identity.mu.Unlock()
+	writer.Header().Set("X-Audit-Message-ID", revoked.LastAuditMessageID)
 	http.SetCookie(writer, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0)})
 	writer.WriteHeader(http.StatusNoContent)
 }
@@ -296,19 +319,17 @@ func (h *handler) RevokeSession(writer http.ResponseWriter, request *http.Reques
 		writeIdentityFailure(writer, request, identityFailure{403, "SESSION_REVOCATION_FORBIDDEN", "Session revocation forbidden", "The authenticated principal is not allowed to revoke sessions.", false})
 		return
 	}
-	revokedAt := h.identity.now()
-	h.identity.mu.Lock()
-	target, exists := h.identity.sessions[params.SessionID]
-	if exists {
-		target.RevokedAt = &revokedAt
-		h.identity.sessions[params.SessionID] = target
-	}
-	h.identity.mu.Unlock()
-	if !exists {
+	target, err := h.identity.store.RevokeSession(request.Context(), params.SessionID, h.identity.mutationContext(request, "SESSION_REVOKED"))
+	if errors.Is(err, sessionstore.ErrSessionNotFound) {
 		writeIdentityFailure(writer, request, identityFailure{404, "SESSION_NOT_FOUND", "Session not found", "The requested session does not exist.", false})
 		return
 	}
-	writeJSON(writer, http.StatusOK, platformapi.SessionRevocationResponse{SessionID: target.ID, RevokedAt: revokedAt.UTC().Format(time.RFC3339), ObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds())})
+	if err != nil {
+		h.identity.writeSessionMutationError(writer, request, err)
+		return
+	}
+	writer.Header().Set("X-Audit-Message-ID", target.LastAuditMessageID)
+	writeJSON(writer, http.StatusOK, platformapi.SessionRevocationResponse{SessionID: target.ID, RevokedAt: target.RevokedAt.UTC().Format(time.RFC3339), ObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds()), AuditMessageID: target.LastAuditMessageID})
 }
 
 func (h *handler) identitySession(request *http.Request) (bffSession, *identityFailure) {
@@ -321,16 +342,25 @@ func (h *handler) identitySession(request *http.Request) (bffSession, *identityF
 		failure := identityFailure{401, "AUTHENTICATION_REQUIRED", "Authentication required", "A valid BFF Session is required.", false}
 		return bffSession{}, &failure
 	}
-	h.identity.mu.RLock()
-	session, exists := h.identity.sessions[cookie.Value]
-	h.identity.mu.RUnlock()
-	if !exists || session.RevokedAt != nil || !h.identity.now().Before(session.ExpiresAt) {
+	stored, err := h.identity.store.GetSession(request.Context(), cookie.Value)
+	if errors.Is(err, sessionstore.ErrSessionNotFound) || errors.Is(err, sessionstore.ErrSessionRevoked) {
 		failure := identityFailure{401, "SESSION_INVALID", "Session invalid", "The BFF Session is expired, revoked, or unknown.", false}
 		return bffSession{}, &failure
 	}
-	session.Principal.Roles = append([]string(nil), session.Principal.Roles...)
-	session.EncryptedTokens = append([]byte(nil), session.EncryptedTokens...)
-	return session, nil
+	if err != nil {
+		failure := identityFailure{503, "SESSION_STORE_UNAVAILABLE", "Session unavailable", "The durable Session store could not be read.", true}
+		return bffSession{}, &failure
+	}
+	if stored.RevokedAt != nil || !h.identity.now().Before(stored.ExpiresAt) {
+		failure := identityFailure{401, "SESSION_INVALID", "Session invalid", "The BFF Session is expired, revoked, or unknown.", false}
+		return bffSession{}, &failure
+	}
+	csrfToken, err := h.identity.decryptBytes(stored.CSRFTokenCiphertext)
+	if err != nil {
+		failure := identityFailure{503, "SESSION_SECRET_INVALID", "Session unavailable", "The durable Session secret could not be opened.", true}
+		return bffSession{}, &failure
+	}
+	return bffSession{Session: stored, CSRFToken: string(csrfToken)}, nil
 }
 
 func (controller *identityController) validateStateChange(request *http.Request, session bffSession, csrfToken string) *identityFailure {
@@ -520,11 +550,23 @@ func (controller *identityController) encryptTokens(tokens oidcTokenResponse) ([
 	if err != nil {
 		return nil, err
 	}
+	return controller.encryptBytes(plaintext)
+}
+
+func (controller *identityController) encryptBytes(plaintext []byte) ([]byte, error) {
 	nonce := make([]byte, controller.vault.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
 	return controller.vault.Seal(nonce, nonce, plaintext, nil), nil
+}
+
+func (controller *identityController) decryptBytes(ciphertext []byte) ([]byte, error) {
+	if len(ciphertext) < controller.vault.NonceSize() {
+		return nil, errors.New("ciphertext is too short")
+	}
+	nonce := ciphertext[:controller.vault.NonceSize()]
+	return controller.vault.Open(nil, nonce, ciphertext[controller.vault.NonceSize():], nil)
 }
 
 func (controller *identityController) fetchPrincipal(ctx context.Context, session bffSession) (identitycontext.InternalPrincipalResponse, *identityFailure) {
@@ -560,16 +602,32 @@ func (controller *identityController) fetchPrincipal(ctx context.Context, sessio
 	return principal, nil
 }
 
+func (controller *identityController) mutationContext(request *http.Request, action string) sessionstore.MutationContext {
+	return sessionstore.MutationContext{
+		Action:            action,
+		Result:            "SUCCEEDED",
+		PolicyRevision:    controller.config.PolicyRevision,
+		CorrelationID:     requestIDFromContext(request.Context()),
+		TraceID:           traceIDFromContext(request.Context()),
+		ExecutingService:  "platform-gateway",
+		ExecutingSPIFFEID: controller.config.ExecutingWorkloadSPIFFE,
+		OccurredAt:        controller.now().UTC(),
+	}
+}
+
+func (controller *identityController) writeSessionMutationError(writer http.ResponseWriter, request *http.Request, err error) {
+	if errors.Is(err, sessionstore.ErrSessionNotFound) || errors.Is(err, sessionstore.ErrSessionRevoked) {
+		writeIdentityFailure(writer, request, identityFailure{401, "SESSION_INVALID", "Session invalid", "The durable BFF Session is revoked or unknown.", false})
+		return
+	}
+	writeIdentityFailure(writer, request, identityFailure{503, "SESSION_PERSISTENCE_FAILED", "Session unavailable", "The Session state and audit intent could not be committed atomically.", true})
+}
+
 func (controller *identityController) cleanupLocked() {
 	now := controller.now()
 	for state, value := range controller.states {
 		if now.Sub(value.CreatedAt) > controller.config.StateTTL {
 			delete(controller.states, state)
-		}
-	}
-	for id, session := range controller.sessions {
-		if now.After(session.ExpiresAt.Add(controller.config.RevocationObjective)) {
-			delete(controller.sessions, id)
 		}
 	}
 }

@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package hvac.security.session.v1;
+
+option go_package = "github.com/quanlaihe/hvac-web/libs/sessionevent;sessionevent";
+
+message ActorChainV1 {
+  string initiating_subject = 1;
+  string initiating_issuer = 2;
+  string executing_service = 3;
+  string executing_spiffe_id = 4;
+  string acting_organization_id = 5;
+}
+
+message SessionAuditEventV1 {
+  string message_id = 1;
+  uint32 schema_version = 2;
+  string message_type = 3;
+  string producer = 4;
+  string organization_id = 5;
+  string partition_key = 6;
+  string aggregate_type = 7;
+  string aggregate_id = 8;
+  uint64 aggregate_version = 9;
+  int64 occurred_at_unix_ms = 10;
+  int64 published_at_unix_ms = 11;
+  string correlation_id = 12;
+  string causation_id = 13;
+  string trace_id = 14;
+  ActorChainV1 actor = 15;
+  string action = 16;
+  string result = 17;
+  string policy_revision = 18;
+  string payload_sha256 = 19;
+  string session_state = 20;
+}

@@ -3,9 +3,14 @@ go 1.22.5
 use (
 	./libs/identitycontext
 	./libs/oidctest
+	./libs/ownershipregistry
+	./libs/sessionevent
+	./libs/sessionstore
 	./libs/testpki
 	./services/platform-gateway
 	./services/iam-service
+	./services/audit-ledger-service
+	./services/outbox-relay
 	./services/oidc-test-provider
 	./tools/s0-auth-fixture
 )

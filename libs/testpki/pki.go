@@ -18,16 +18,26 @@ import (
 )
 
 type Bundle struct {
-	CAPEM          []byte
-	ServerCertPEM  []byte
-	ServerKeyPEM   []byte
-	ClientCertPEM  []byte
-	ClientKeyPEM   []byte
-	ServerSPIFFEID string
-	ClientSPIFFEID string
+	CAPEM                []byte
+	ServerCertPEM        []byte
+	ServerKeyPEM         []byte
+	AuditServerCertPEM   []byte
+	AuditServerKeyPEM    []byte
+	LegacyServerCertPEM  []byte
+	LegacyServerKeyPEM   []byte
+	ClientCertPEM        []byte
+	ClientKeyPEM         []byte
+	ServerSPIFFEID       string
+	AuditServerSPIFFEID  string
+	LegacyServerSPIFFEID string
+	ClientSPIFFEID       string
 }
 
 func Generate(serverSPIFFEID, clientSPIFFEID string, now time.Time) (Bundle, error) {
+	return GenerateWithAudit(serverSPIFFEID, "spiffe://hvac.local/audit-ledger-service", clientSPIFFEID, now)
+}
+
+func GenerateWithAudit(serverSPIFFEID, auditServerSPIFFEID, clientSPIFFEID string, now time.Time) (Bundle, error) {
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return Bundle{}, err
@@ -57,14 +67,29 @@ func Generate(serverSPIFFEID, clientSPIFFEID string, now time.Time) (Bundle, err
 	if err != nil {
 		return Bundle{}, err
 	}
+	auditCert, auditKey, err := issue(caCert, caKey, 4, "audit-ledger-service", auditServerSPIFFEID, true, now)
+	if err != nil {
+		return Bundle{}, err
+	}
+	legacySPIFFEID := "spiffe://hvac.local/legacy-hvac-backend"
+	legacyCert, legacyKey, err := issue(caCert, caKey, 5, "legacy-hvac-backend", legacySPIFFEID, true, now)
+	if err != nil {
+		return Bundle{}, err
+	}
 	return Bundle{
-		CAPEM:          pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
-		ServerCertPEM:  serverCert,
-		ServerKeyPEM:   serverKey,
-		ClientCertPEM:  clientCert,
-		ClientKeyPEM:   clientKey,
-		ServerSPIFFEID: serverSPIFFEID,
-		ClientSPIFFEID: clientSPIFFEID,
+		CAPEM:                pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
+		ServerCertPEM:        serverCert,
+		ServerKeyPEM:         serverKey,
+		AuditServerCertPEM:   auditCert,
+		AuditServerKeyPEM:    auditKey,
+		LegacyServerCertPEM:  legacyCert,
+		LegacyServerKeyPEM:   legacyKey,
+		ClientCertPEM:        clientCert,
+		ClientKeyPEM:         clientKey,
+		ServerSPIFFEID:       serverSPIFFEID,
+		AuditServerSPIFFEID:  auditServerSPIFFEID,
+		LegacyServerSPIFFEID: legacySPIFFEID,
+		ClientSPIFFEID:       clientSPIFFEID,
 	}, nil
 }
 
@@ -122,6 +147,40 @@ func (bundle Bundle) ServerTLSConfig() (*tls.Config, error) {
 	}, nil
 }
 
+func (bundle Bundle) AuditServerTLSConfig() (*tls.Config, error) {
+	certificate, err := tls.X509KeyPair(bundle.AuditServerCertPEM, bundle.AuditServerKeyPEM)
+	if err != nil {
+		return nil, err
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(bundle.CAPEM) {
+		return nil, errors.New("append test CA")
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{certificate},
+		ClientCAs:    pool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+	}, nil
+}
+
+func (bundle Bundle) LegacyServerTLSConfig() (*tls.Config, error) {
+	certificate, err := tls.X509KeyPair(bundle.LegacyServerCertPEM, bundle.LegacyServerKeyPEM)
+	if err != nil {
+		return nil, err
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(bundle.CAPEM) {
+		return nil, errors.New("append test CA")
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{certificate},
+		ClientCAs:    pool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+	}, nil
+}
+
 func (bundle Bundle) ClientTLSConfig(serverName string) (*tls.Config, error) {
 	certificate, err := tls.X509KeyPair(bundle.ClientCertPEM, bundle.ClientKeyPEM)
 	if err != nil {
@@ -147,12 +206,16 @@ func (bundle Bundle) WriteFiles(directory string) error {
 		"ca.pem":           bundle.CAPEM,
 		"iam-cert.pem":     bundle.ServerCertPEM,
 		"iam-key.pem":      bundle.ServerKeyPEM,
+		"audit-cert.pem":   bundle.AuditServerCertPEM,
+		"audit-key.pem":    bundle.AuditServerKeyPEM,
+		"legacy-cert.pem":  bundle.LegacyServerCertPEM,
+		"legacy-key.pem":   bundle.LegacyServerKeyPEM,
 		"gateway-cert.pem": bundle.ClientCertPEM,
 		"gateway-key.pem":  bundle.ClientKeyPEM,
 	}
 	for name, content := range files {
 		mode := os.FileMode(0o600)
-		if name == "ca.pem" || name == "iam-cert.pem" || name == "gateway-cert.pem" {
+		if name == "ca.pem" || name == "iam-cert.pem" || name == "audit-cert.pem" || name == "legacy-cert.pem" || name == "gateway-cert.pem" {
 			mode = 0o644
 		}
 		if err := os.WriteFile(filepath.Join(directory, name), content, mode); err != nil {

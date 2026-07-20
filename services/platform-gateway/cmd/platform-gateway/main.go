@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/internal/gateway"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
 )
@@ -29,15 +30,29 @@ var (
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	address := envOr("PLATFORM_GATEWAY_ADDR", ":8080")
-	identity, err := loadIdentityConfig()
+	runContext, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	identity, closeIdentity, err := loadIdentityConfig(runContext)
 	if err != nil {
-		logger.Error("gateway_identity_config_invalid", "error", err)
+		logger.Error("gateway_identity_config_invalid", "error_code", "IDENTITY_CONFIG_INVALID")
 		os.Exit(1)
 	}
+	defer closeIdentity()
+
+	routing, err := loadRoutingRuntime(runContext, logger, identity != nil)
+	if err != nil {
+		logger.Error("gateway_route_config_invalid", "error_code", "ROUTE_CONFIG_INVALID")
+		os.Exit(1)
+	}
+	defer routing.close()
+	go routing.watch(runContext)
 
 	handler := gateway.NewHandler(gateway.Config{
-		Logger:   logger,
-		Identity: identity,
+		Logger:       logger,
+		Identity:     identity,
+		RouteManager: routing.manager,
+		RouteAudit:   routing.audit,
+		Legacy:       routing.legacy,
 		Build: platformapi.BuildInfo{
 			Service: "platform-gateway",
 			Version: version,
@@ -45,7 +60,6 @@ func main() {
 			BuiltAt: builtAt,
 		},
 	})
-
 	server := &http.Server{
 		Addr:              address,
 		Handler:           handler,
@@ -59,69 +73,93 @@ func main() {
 	signal.Notify(shutdownSignal, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-shutdownSignal
+		cancelRun()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {
-			logger.Error("gateway_shutdown_failed", "error", err)
+			logger.Error("gateway_shutdown_failed", "error_code", "GATEWAY_SHUTDOWN_FAILED")
 		}
 	}()
 
 	logger.Info("gateway_started", "service", "platform-gateway", "address", address, "version", version, "commit", commit, "identity_enabled", identity != nil)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Error("gateway_stopped_unexpectedly", "error", err)
+		logger.Error("gateway_stopped_unexpectedly", "error_code", "GATEWAY_SERVE_FAILED")
 		os.Exit(1)
 	}
 	logger.Info("gateway_stopped", "service", "platform-gateway")
 }
 
-func loadIdentityConfig() (*gateway.IdentityConfig, error) {
+func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, func(), error) {
 	issuer := os.Getenv("OIDC_ISSUER")
 	if issuer == "" {
-		return nil, nil
+		return nil, func() {}, nil
 	}
 	required := map[string]string{}
 	for _, name := range []string{"OIDC_CLIENT_ID", "OIDC_REDIRECT_URI", "PLATFORM_PUBLIC_ORIGIN", "IAM_URL", "IAM_CLIENT_CERT", "IAM_CLIENT_KEY", "IAM_SERVER_CA"} {
 		value := os.Getenv(name)
 		if value == "" {
-			return nil, fmt.Errorf("%s is required when OIDC_ISSUER is configured", name)
+			return nil, func() {}, fmt.Errorf("%s is required when OIDC_ISSUER is configured", name)
 		}
 		required[name] = value
 	}
 	certificate, err := tls.LoadX509KeyPair(required["IAM_CLIENT_CERT"], required["IAM_CLIENT_KEY"])
 	if err != nil {
-		return nil, err
+		return nil, func() {}, err
 	}
 	signer, ok := certificate.PrivateKey.(crypto.Signer)
 	if !ok {
-		return nil, errors.New("IAM client private key cannot sign delegation grants")
+		return nil, func() {}, errors.New("Gateway workload private key cannot sign delegation grants")
 	}
-	caPEM, err := os.ReadFile(required["IAM_SERVER_CA"])
+	iamRoots, err := loadCertPool(required["IAM_SERVER_CA"], "IAM server CA")
 	if err != nil {
-		return nil, err
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(caPEM) {
-		return nil, errors.New("IAM server CA is invalid")
+		return nil, func() {}, err
 	}
 	oidcClient := &http.Client{Timeout: 5 * time.Second}
 	if oidcCAPath := os.Getenv("OIDC_SERVER_CA"); oidcCAPath != "" {
-		oidcCAPEM, err := os.ReadFile(oidcCAPath)
+		oidcRoots, err := loadCertPool(oidcCAPath, "OIDC server CA")
 		if err != nil {
-			return nil, err
+			return nil, func() {}, err
 		}
-		oidcRoots := x509.NewCertPool()
-		if !oidcRoots.AppendCertsFromPEM(oidcCAPEM) {
-			return nil, errors.New("OIDC server CA is invalid")
-		}
-		oidcClient.Transport = &http.Transport{TLSClientConfig: &tls.Config{
-			MinVersion: tls.VersionTLS13,
-			RootCAs:    oidcRoots,
-			ServerName: envOr("OIDC_SERVER_NAME", "localhost"),
-		}}
+		oidcClient.Transport = workloadTransport(oidcRoots, nil, envOr("OIDC_SERVER_NAME", "localhost"))
 	}
+
+	var auditClient *http.Client
+	auditURL := os.Getenv("AUDIT_URL")
+	if auditURL == "" {
+		if os.Getenv("S0_ALLOW_NO_AUDIT_LEDGER") != "true" {
+			return nil, func() {}, errors.New("AUDIT_URL is required unless S0_ALLOW_NO_AUDIT_LEDGER=true")
+		}
+	} else {
+		auditCAPath := os.Getenv("AUDIT_SERVER_CA")
+		if auditCAPath == "" {
+			return nil, func() {}, errors.New("AUDIT_SERVER_CA is required when AUDIT_URL is configured")
+		}
+		auditRoots, err := loadCertPool(auditCAPath, "Audit server CA")
+		if err != nil {
+			return nil, func() {}, err
+		}
+		auditClient = &http.Client{Timeout: 5 * time.Second, Transport: workloadTransport(auditRoots, &certificate, envOr("AUDIT_SERVER_NAME", "localhost"))}
+	}
+
+	var store sessionstore.Store
+	closeStore := func() {}
+	if dsn := os.Getenv("GATEWAY_DATABASE_URL"); dsn != "" {
+		postgresStore, err := sessionstore.OpenPostgres(ctx, dsn, sessionstore.PostgresConfig{})
+		if err != nil {
+			return nil, func() {}, errors.New("durable Session store is unavailable")
+		}
+		store = postgresStore
+		closeStore = postgresStore.Close
+	} else if os.Getenv("S0_ALLOW_MEMORY_SESSION_STORE") == "true" {
+		store = sessionstore.NewMemoryStore()
+	} else {
+		return nil, func() {}, errors.New("GATEWAY_DATABASE_URL is required unless S0_ALLOW_MEMORY_SESSION_STORE=true")
+	}
+
 	key, err := sessionEncryptionKey()
 	if err != nil {
-		return nil, err
+		closeStore()
+		return nil, func() {}, err
 	}
 	return &gateway.IdentityConfig{
 		OIDCIssuer:              issuer,
@@ -130,25 +168,44 @@ func loadIdentityConfig() (*gateway.IdentityConfig, error) {
 		PublicOrigin:            required["PLATFORM_PUBLIC_ORIGIN"],
 		IAMURL:                  required["IAM_URL"],
 		IAMAudience:             envOr("IAM_AUDIENCE", "iam-service"),
+		AuditURL:                auditURL,
+		AuditAudience:           envOr("AUDIT_AUDIENCE", "audit-ledger-service"),
 		ExecutingWorkloadSPIFFE: envOr("GATEWAY_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 		PolicyRevision:          envOr("IDENTITY_POLICY_REVISION", "policy-v1"),
 		DelegationSigner:        signer,
 		TokenEncryptionKey:      key,
+		SessionStore:            store,
 		SessionTTL:              30 * time.Minute,
 		StateTTL:                2 * time.Minute,
 		DelegationTTL:           30 * time.Second,
 		RevocationObjective:     time.Second,
 		IAMHTTPClient: &http.Client{
-			Timeout: 5 * time.Second,
-			Transport: &http.Transport{TLSClientConfig: &tls.Config{
-				MinVersion:   tls.VersionTLS13,
-				RootCAs:      roots,
-				Certificates: []tls.Certificate{certificate},
-				ServerName:   envOr("IAM_SERVER_NAME", "localhost"),
-			}},
+			Timeout:   5 * time.Second,
+			Transport: workloadTransport(iamRoots, &certificate, envOr("IAM_SERVER_NAME", "localhost")),
 		},
-		OIDCHTTPClient: oidcClient,
-	}, nil
+		AuditHTTPClient: auditClient,
+		OIDCHTTPClient:  oidcClient,
+	}, closeStore, nil
+}
+
+func workloadTransport(roots *x509.CertPool, certificate *tls.Certificate, serverName string) *http.Transport {
+	config := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, ServerName: serverName}
+	if certificate != nil {
+		config.Certificates = []tls.Certificate{*certificate}
+	}
+	return &http.Transport{TLSClientConfig: config}
+}
+
+func loadCertPool(path, label string) (*x509.CertPool, error) {
+	pemBytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("%s is invalid", label)
+	}
+	return pool, nil
 }
 
 func sessionEncryptionKey() ([]byte, error) {

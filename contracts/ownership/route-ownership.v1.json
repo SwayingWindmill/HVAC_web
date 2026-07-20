@@ -1,0 +1,92 @@
+{
+  "registryVersion": 1,
+  "registryRevision": 1,
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/v1/health",
+      "owner": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/version",
+      "owner": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/login",
+      "owner": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/callback",
+      "owner": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/principal",
+      "owner": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["organization", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/logout",
+      "owner": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["organization", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/sessions/{sessionId}/revoke",
+      "owner": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["organization", "principal"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/audit/session-events/{messageId}",
+      "owner": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["organization", "principal"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/platform/status",
+      "owner": "legacy-hvac-backend",
+      "revision": 1,
+      "rollout": {
+        "mode": "percentage",
+        "percentage": 100,
+        "fallbackOwner": "platform-gateway",
+        "cohortSalt": "platform-status-v1"
+      },
+      "compatibilityMode": "legacy-read",
+      "allowedScopeDimensions": ["organization", "principal"]
+    }
+  ]
+}

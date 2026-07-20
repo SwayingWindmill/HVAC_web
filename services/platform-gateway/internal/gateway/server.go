@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
 )
 
@@ -32,22 +34,34 @@ var (
 
 type contextKey string
 
-const traceIDContextKey contextKey = "trace-id"
+const (
+	traceIDContextKey       contextKey = "trace-id"
+	requestIDContextKey     contextKey = "request-id"
+	traceparentContextKey   contextKey = "traceparent"
+	routeDecisionContextKey contextKey = "route-decision"
+	routeSessionContextKey  contextKey = "route-session"
+)
 
 // Config contains edge-only dependencies. It intentionally has no business
 // domain or persistence dependencies.
 type Config struct {
-	Build    platformapi.BuildInfo
-	Logger   *slog.Logger
-	Now      func() time.Time
-	Identity *IdentityConfig
+	Build        platformapi.BuildInfo
+	Logger       *slog.Logger
+	Now          func() time.Time
+	Identity     *IdentityConfig
+	RouteManager *ownershipregistry.Manager
+	RouteAudit   ownershipregistry.AuditSink
+	Legacy       *LegacyConfig
 }
 
 type handler struct {
-	build    platformapi.BuildInfo
-	logger   *slog.Logger
-	now      func() time.Time
-	identity *identityController
+	build        platformapi.BuildInfo
+	logger       *slog.Logger
+	now          func() time.Time
+	identity     *identityController
+	routeManager *ownershipregistry.Manager
+	routeAudit   ownershipregistry.AuditSink
+	legacy       *legacyController
 }
 
 var _ platformapi.ServerInterface = (*handler)(nil)
@@ -64,7 +78,19 @@ func NewHandler(config Config) http.Handler {
 	}
 	build := config.Build
 	build.Service = serviceName
-	return &handler{build: build, logger: logger, now: now, identity: newIdentityController(config.Identity, now)}
+	routeAudit := config.RouteAudit
+	if routeAudit == nil {
+		routeAudit = ownershipregistry.NewMemoryAuditSink()
+	}
+	return &handler{
+		build:        build,
+		logger:       logger,
+		now:          now,
+		identity:     newIdentityController(config.Identity, now),
+		routeManager: config.RouteManager,
+		routeAudit:   routeAudit,
+		legacy:       newLegacyController(config.Legacy),
+	}
 }
 
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -76,6 +102,8 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("traceparent", traceparent)
 
 	ctx := context.WithValue(request.Context(), traceIDContextKey, traceID)
+	ctx = context.WithValue(ctx, requestIDContextKey, requestID)
+	ctx = context.WithValue(ctx, traceparentContextKey, traceparent)
 	request = request.WithContext(ctx)
 
 	recorder := &statusRecorder{ResponseWriter: writer, status: http.StatusOK}
@@ -107,6 +135,23 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if h.routeManager != nil {
+		resolved, ok := h.applyRouteOwnership(writer, request)
+		if !ok {
+			return
+		}
+		request = resolved
+		decision := routeDecisionFromContext(request.Context())
+		if decision.SelectedOwner == ownershipregistry.OwnerLegacy {
+			if request.URL.Path != platformapi.GetPlatformStatusPath || request.Method != http.MethodGet {
+				writeProblem(writer, request, http.StatusServiceUnavailable, "ROUTE_OWNER_UNSUPPORTED", "Route owner unsupported", "The selected route owner cannot serve this public resource.", true, nil)
+				return
+			}
+			h.GetPlatformStatus(writer, request)
+			return
+		}
+	}
+
 	switch request.URL.Path {
 	case platformapi.GetHealthPath:
 		if request.Method != http.MethodGet {
@@ -124,6 +169,12 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		h.GetVersion(writer, request)
+	case platformapi.GetPlatformStatusPath:
+		if request.Method != http.MethodGet {
+			writeMethodNotAllowedFor(writer, request, http.MethodGet)
+			return
+		}
+		h.GetPlatformStatus(writer, request)
 	case platformapi.BeginLoginPath:
 		if request.Method != http.MethodGet {
 			writeMethodNotAllowedFor(writer, request, http.MethodGet)
@@ -157,6 +208,19 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		}
 		h.Logout(writer, request, platformapi.LogoutParams{CSRFToken: request.Header.Get("X-CSRF-Token")})
 	default:
+		if messageID, matches := matchSessionAuditPath(request.URL.Path); matches {
+			if request.Method != http.MethodGet {
+				writeMethodNotAllowedFor(writer, request, http.MethodGet)
+				return
+			}
+			decodedMessageID, err := url.PathUnescape(messageID)
+			if err != nil || decodedMessageID == "" {
+				writeProblem(writer, request, http.StatusBadRequest, "INVALID_AUDIT_MESSAGE_ID", "Invalid audit message ID", "The audit message identifier is invalid.", false, nil)
+				return
+			}
+			h.GetSessionAuditEvent(writer, request, platformapi.GetSessionAuditEventParams{MessageID: decodedMessageID})
+			return
+		}
 		if sessionID, matches := matchRevokeSessionPath(request.URL.Path); matches {
 			if request.Method != http.MethodPost {
 				writeMethodNotAllowedFor(writer, request, http.MethodPost)
@@ -172,6 +236,81 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		}
 		writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested public API route does not exist.", false, nil)
 	}
+}
+
+func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.Request) (*http.Request, bool) {
+	snapshot := h.routeManager.Current()
+	decision, err := snapshot.Resolve(request.Method, request.URL.Path, "")
+	var session bffSession
+	if errors.Is(err, ownershipregistry.ErrCohortKey) {
+		resolved, failure := h.identitySession(request)
+		if failure != nil {
+			writeIdentityFailure(writer, request, *failure)
+			return request, false
+		}
+		session = resolved
+		businessKey := session.ActingOrganizationID + "\x00" + session.Principal.Subject
+		decision, err = snapshot.Resolve(request.Method, request.URL.Path, businessKey)
+	}
+	if errors.Is(err, ownershipregistry.ErrRouteMissing) {
+		methods := snapshot.AllowedMethods(request.URL.Path)
+		if len(methods) > 0 {
+			writer.Header().Set("Allow", strings.Join(methods, ", "))
+			writeProblem(writer, request, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "This route does not support the requested method.", false, nil)
+			return request, false
+		}
+		writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested public API route has no applied owner.", false, nil)
+		return request, false
+	}
+	if err != nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "ROUTE_OWNERSHIP_INVALID", "Route ownership invalid", "The applied route ownership policy could not select one owner.", true, nil)
+		return request, false
+	}
+
+	writer.Header().Set("X-Route-Policy-Revision", formatRevision(decision.RegistryRevision))
+	auditRecord := ownershipregistry.AuditRecord{
+		EventType:         "ROUTE_DECIDED",
+		RouteKey:          decision.RouteKey,
+		Method:            request.Method,
+		PathTemplate:      decision.PathTemplate,
+		SelectedOwner:     decision.SelectedOwner,
+		RegistryRevision:  decision.RegistryRevision,
+		RouteRevision:     decision.RouteRevision,
+		CompatibilityMode: decision.CompatibilityMode,
+		CohortBucket:      decision.CohortBucket,
+		ExecutingService:  serviceName,
+		CorrelationID:     requestIDFromContext(request.Context()),
+		TraceID:           traceIDFromContext(request.Context()),
+		OccurredAt:        h.now().UTC(),
+	}
+	if h.identity != nil {
+		auditRecord.ExecutingSPIFFEID = h.identity.config.ExecutingWorkloadSPIFFE
+		auditRecord.PolicyRevision = h.identity.config.PolicyRevision
+	}
+	if session.ID != "" {
+		auditRecord.OrganizationID = session.ActingOrganizationID
+		auditRecord.InitiatingSubject = session.Principal.Subject
+		auditRecord.InitiatingIssuer = session.Principal.Issuer
+	}
+	if err := h.routeAudit.Record(request.Context(), auditRecord); err != nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "ROUTE_AUDIT_FAILED", "Route audit unavailable", "The route decision could not be recorded before execution.", true, nil)
+		return request, false
+	}
+	ctx := context.WithValue(request.Context(), routeDecisionContextKey, decision)
+	if session.ID != "" {
+		ctx = context.WithValue(ctx, routeSessionContextKey, session)
+	}
+	return request.WithContext(ctx), true
+}
+
+func routeDecisionFromContext(ctx context.Context) ownershipregistry.Decision {
+	decision, _ := ctx.Value(routeDecisionContextKey).(ownershipregistry.Decision)
+	return decision
+}
+
+func routeSessionFromContext(ctx context.Context) (bffSession, bool) {
+	session, ok := ctx.Value(routeSessionContextKey).(bffSession)
+	return session, ok
 }
 
 // GetHealth implements the generated OpenAPI server interface.
@@ -191,6 +330,51 @@ func (h *handler) GetHealth(writer http.ResponseWriter, _ *http.Request, params 
 // GetVersion implements the generated OpenAPI server interface.
 func (h *handler) GetVersion(writer http.ResponseWriter, _ *http.Request) {
 	writeJSON(writer, http.StatusOK, h.build)
+}
+
+// GetPlatformStatus returns the normalized representation selected by the applied route policy.
+func (h *handler) GetPlatformStatus(writer http.ResponseWriter, request *http.Request) {
+	decision := routeDecisionFromContext(request.Context())
+	if decision.RegistryRevision == 0 {
+		decision = ownershipregistry.Decision{
+			RouteKey:          http.MethodGet + " " + platformapi.GetPlatformStatusPath,
+			PathTemplate:      platformapi.GetPlatformStatusPath,
+			DeclaredOwner:     ownershipregistry.OwnerGateway,
+			SelectedOwner:     ownershipregistry.OwnerGateway,
+			RegistryRevision:  1,
+			RouteRevision:     1,
+			CompatibilityMode: "native",
+		}
+	}
+	session, ok := routeSessionFromContext(request.Context())
+	if !ok {
+		resolved, failure := h.identitySession(request)
+		if failure != nil {
+			writeIdentityFailure(writer, request, *failure)
+			return
+		}
+		session = resolved
+	}
+	writer.Header().Set("X-Route-Policy-Revision", formatRevision(decision.RegistryRevision))
+	if decision.SelectedOwner == ownershipregistry.OwnerLegacy {
+		response, failure := h.legacy.callPlatformStatus(request.Context(), h.identity, session, decision, requestIDFromContext(request.Context()), traceparentFromContext(request.Context()))
+		if failure != nil {
+			writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+			return
+		}
+		writeJSON(writer, http.StatusOK, response)
+		return
+	}
+	writeJSON(writer, http.StatusOK, platformapi.PlatformStatusResponse{
+		Status:              "ok",
+		Service:             "platform-status",
+		Implementation:      "go",
+		Version:             h.build.Version,
+		CheckedAt:           h.now().UTC().Format(time.RFC3339Nano),
+		RoutePolicyRevision: decision.RegistryRevision,
+		RouteRevision:       decision.RouteRevision,
+		CompatibilityMode:   "native",
+	})
 }
 
 func parseGetHealthParams(writer http.ResponseWriter, request *http.Request) (platformapi.GetHealthParams, bool) {
@@ -315,9 +499,12 @@ func writeProblem(
 
 func safeLogPath(path string) string {
 	switch path {
-	case platformapi.GetHealthPath, platformapi.GetVersionPath, platformapi.BeginLoginPath, platformapi.CompleteLoginPath, platformapi.GetCurrentPrincipalPath, platformapi.LogoutPath:
+	case platformapi.GetHealthPath, platformapi.GetVersionPath, platformapi.GetPlatformStatusPath, platformapi.BeginLoginPath, platformapi.CompleteLoginPath, platformapi.GetCurrentPrincipalPath, platformapi.LogoutPath:
 		return path
 	default:
+		if _, matches := matchSessionAuditPath(path); matches {
+			return platformapi.GetSessionAuditEventPathTemplate
+		}
 		if _, matches := matchRevokeSessionPath(path); matches {
 			return platformapi.RevokeSessionPathTemplate
 		}
@@ -325,8 +512,16 @@ func safeLogPath(path string) string {
 	}
 }
 
+func matchSessionAuditPath(path string) (string, bool) {
+	return matchSinglePathParameter(path, platformapi.GetSessionAuditEventPathTemplate, "{messageId}")
+}
+
 func matchRevokeSessionPath(path string) (string, bool) {
-	parts := strings.Split(platformapi.RevokeSessionPathTemplate, "{sessionId}")
+	return matchSinglePathParameter(path, platformapi.RevokeSessionPathTemplate, "{sessionId}")
+}
+
+func matchSinglePathParameter(path, template, placeholder string) (string, bool) {
+	parts := strings.Split(template, placeholder)
 	if len(parts) != 2 || !strings.HasPrefix(path, parts[0]) || !strings.HasSuffix(path, parts[1]) {
 		return "", false
 	}
@@ -370,6 +565,16 @@ func randomHex(byteCount int, now time.Time) string {
 func traceIDFromContext(ctx context.Context) string {
 	traceID, _ := ctx.Value(traceIDContextKey).(string)
 	return traceID
+}
+
+func requestIDFromContext(ctx context.Context) string {
+	requestID, _ := ctx.Value(requestIDContextKey).(string)
+	return requestID
+}
+
+func traceparentFromContext(ctx context.Context) string {
+	traceparent, _ := ctx.Value(traceparentContextKey).(string)
+	return traceparent
 }
 
 type statusRecorder struct {

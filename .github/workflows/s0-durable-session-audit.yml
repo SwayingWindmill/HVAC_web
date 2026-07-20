@@ -1,0 +1,130 @@
+name: S0 Durable Session Audit and Ownership
+
+on:
+  pull_request:
+    paths:
+      - "apps/hvac-web/**"
+      - "contracts/events/**"
+      - "contracts/http/**"
+      - "contracts/ownership/**"
+      - "docs/security/s0-durable-session-audit.md"
+      - "docs/security/s0-route-data-ownership.md"
+      - "hvac-backend/src/common/middleware/gateway-private-boundary.middleware.ts"
+      - "hvac-backend/src/common/middleware/gateway-private-boundary.middleware.spec.ts"
+      - "hvac-backend/src/legacy-private.module.ts"
+      - "hvac-backend/src/main.ts"
+      - "hvac-backend/package-lock.json"
+      - "hvac-backend/package.json"
+      - "infra/s0-durable/**"
+      - "libs/ownershipregistry/**"
+      - "libs/sessionevent/**"
+      - "libs/sessionstore/**"
+      - "libs/testpki/**"
+      - "services/platform-gateway/**"
+      - "services/audit-ledger-service/**"
+      - "services/outbox-relay/**"
+      - "scripts/check-session-event-contract.mjs"
+      - "scripts/check-ownership-registries.mjs"
+      - "scripts/dev-s0-durable.mjs"
+      - "scripts/run-durable-postgres-tests.mjs"
+      - "scripts/run-durable-session-browser-audit.mjs"
+      - "scripts/s0-durable-topology.mjs"
+      - "go.work"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/s0-durable-session-audit.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/hvac-web/**"
+      - "contracts/events/**"
+      - "contracts/http/**"
+      - "contracts/ownership/**"
+      - "docs/security/s0-durable-session-audit.md"
+      - "docs/security/s0-route-data-ownership.md"
+      - "hvac-backend/src/common/middleware/gateway-private-boundary.middleware.ts"
+      - "hvac-backend/src/common/middleware/gateway-private-boundary.middleware.spec.ts"
+      - "hvac-backend/src/legacy-private.module.ts"
+      - "hvac-backend/src/main.ts"
+      - "hvac-backend/package-lock.json"
+      - "hvac-backend/package.json"
+      - "infra/s0-durable/**"
+      - "libs/ownershipregistry/**"
+      - "libs/sessionevent/**"
+      - "libs/sessionstore/**"
+      - "libs/testpki/**"
+      - "services/platform-gateway/**"
+      - "services/audit-ledger-service/**"
+      - "services/outbox-relay/**"
+      - "scripts/check-session-event-contract.mjs"
+      - "scripts/check-ownership-registries.mjs"
+      - "scripts/dev-s0-durable.mjs"
+      - "scripts/run-durable-postgres-tests.mjs"
+      - "scripts/run-durable-session-browser-audit.mjs"
+      - "scripts/s0-durable-topology.mjs"
+      - "go.work"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/s0-durable-session-audit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.5"
+          cache-dependency-path: |
+            libs/identitycontext/go.mod
+            libs/ownershipregistry/go.mod
+            libs/sessionevent/go.mod
+            libs/sessionstore/go.mod
+            libs/testpki/go.mod
+            services/platform-gateway/go.mod
+            services/audit-ledger-service/go.mod
+            services/outbox-relay/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            hvac-backend/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix hvac-backend
+      - run: npm run events:check
+      - run: npm run ownership:check
+      - run: npm run contracts:check
+      - run: npm run test:ownership
+      - run: npm run test:legacy-boundary
+      - run: npm run test:durable-unit
+      - run: npm run test:durable-postgres
+      - run: node scripts/run-go.mjs vet ./libs/ownershipregistry/... ./libs/sessionevent/... ./libs/sessionstore/... ./services/audit-ledger-service/... ./services/outbox-relay/... ./services/platform-gateway/...
+      - run: npm run build:gateway
+      - run: npm run build:legacy-private
+      - run: npm run build:audit-ledger
+      - run: npm run build:outbox-relay
+      - run: npm run lint
+      - run: npm run build
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.5"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            hvac-backend/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix hvac-backend
+      - run: npm run audit:route-ownership

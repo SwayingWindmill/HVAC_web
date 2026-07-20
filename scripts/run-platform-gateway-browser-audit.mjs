@@ -120,6 +120,8 @@ try {
       ...process.env,
       GOCACHE: goCacheDir,
       PLATFORM_GATEWAY_ADDR: `127.0.0.1:${gatewayPort}`,
+      ROUTE_OWNERSHIP_REGISTRY: resolve(root, 'contracts/ownership/route-ownership.v1.json'),
+      S0_ALLOW_MEMORY_ROUTE_AUDIT: 'true',
     },
   });
   gatewayProcess.once('error', (error) => console.error('Gateway process error:', error));

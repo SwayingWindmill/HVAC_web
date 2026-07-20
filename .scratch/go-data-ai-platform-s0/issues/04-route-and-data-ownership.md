@@ -4,19 +4,19 @@
 
 **Blocked by:** 03 — Durable Session event to Audit Ledger.
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Route entries declare method/path, owner, revision, rollout/cohort policy, compatibility mode and allowed scope dimensions.
-- [ ] Gateway route resolution is deterministic and records the applied policy revision.
-- [ ] Missing, conflicting or regressed route ownership fails closed.
-- [ ] Stable cohort routing uses a server-derived business key, not an untrusted cookie.
-- [ ] One safe Legacy read path is proxied only through Gateway to a private NestJS service.
-- [ ] Gateway sends only a restricted internal principal/delegation context to Legacy.
-- [ ] Legacy cannot receive browser cookies, refresh tokens or forged identity headers.
-- [ ] Anti-corruption conversion contains legacy IDs and response shapes at the Gateway boundary.
-- [ ] A Legacy timeout or circuit-open condition returns stable Problem Details and does not bypass to direct access.
-- [ ] Route decision and policy change events are auditable.
-- [ ] Data Ownership Registry declares one writer for every S0 schema, event family and projection.
-- [ ] CI rejects duplicate writers, forbidden cross-service database access and owner revision rollback.
-- [ ] Route rollback changes only future requests and is covered by a black-box test.
-- [ ] NestJS remains Legacy Frozen; this ticket adds no new Legacy business feature.
+- [x] Route entries declare method/path, owner, revision, rollout/cohort policy, compatibility mode and allowed scope dimensions.
+- [x] Gateway route resolution is deterministic and records the applied policy revision.
+- [x] Missing, conflicting or regressed route ownership fails closed.
+- [x] Stable cohort routing uses a server-derived business key, not an untrusted cookie.
+- [x] One safe Legacy read path is proxied only through Gateway to a private NestJS service.
+- [x] Gateway sends only a restricted internal principal/delegation context to Legacy.
+- [x] Legacy cannot receive browser cookies, refresh tokens or forged identity headers.
+- [x] Anti-corruption conversion contains legacy IDs and response shapes at the Gateway boundary.
+- [x] A Legacy timeout or circuit-open condition returns stable Problem Details and does not bypass to direct access.
+- [x] Route decision and policy change events are auditable.
+- [x] Data Ownership Registry declares one writer for every S0 schema, event family and projection.
+- [x] CI rejects duplicate writers, forbidden cross-service database access and owner revision rollback.
+- [x] Route rollback changes only future requests and is covered by a black-box test.
+- [x] NestJS remains Legacy Frozen; this ticket adds no new Legacy business feature.

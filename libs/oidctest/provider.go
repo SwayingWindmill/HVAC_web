@@ -211,7 +211,7 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 	notBefore := now.Add(-time.Second)
 	tokenType := "Bearer"
 	tokenUse := "id"
-	roles := []string{"operator"}
+	roles := []string{"operator", "audit-reader"}
 	subject := "fixture-user"
 	name := "Fixture User"
 	email := "fixture.user@example.test"
@@ -223,6 +223,11 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 		name = "Fixture Admin"
 		email = "fixture.admin@example.test"
 		roles = []string{"platform-admin"}
+	case "other-organization":
+		subject = "fixture-other-user"
+		name = "Fixture Other User"
+		email = "fixture.other@example.test"
+		organizationID = "org-fixture-02"
 	case "invalid-issuer":
 		issuer = issuer + "/wrong"
 	case "invalid-audience":

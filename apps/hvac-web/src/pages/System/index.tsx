@@ -45,6 +45,8 @@ import {
 import PageScaffold from '@/components/PageScaffold';
 import PlatformGatewayStatus from '@/components/PlatformGatewayStatus';
 import AuthenticatedPrincipalStatus from '@/components/AuthenticatedPrincipalStatus';
+import SessionAuditStatus from '@/components/SessionAuditStatus';
+import PlatformRouteStatus from '@/components/PlatformRouteStatus';
 import {
   OperationsActionFooter,
   OperationsDetailHeader,
@@ -478,6 +480,8 @@ export default function System() {
             <div className="system-health-list">
               <PlatformGatewayStatus />
               <AuthenticatedPrincipalStatus />
+              <SessionAuditStatus />
+              <PlatformRouteStatus />
               {DATA_SOURCES.map((item) => (
                 <div className="system-health-row" key={item.key}>
                   <Badge color={statusMeta[item.status].color} />

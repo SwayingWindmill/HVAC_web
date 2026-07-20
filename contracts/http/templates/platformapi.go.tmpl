@@ -17,11 +17,13 @@ import (
 const (
 	GetHealthPath             = "__HEALTH_PATH__"
 	GetVersionPath            = "__VERSION_PATH__"
+	GetPlatformStatusPath     = "__PLATFORM_STATUS_PATH__"
 	BeginLoginPath            = "__LOGIN_PATH__"
 	CompleteLoginPath         = "__CALLBACK_PATH__"
 	GetCurrentPrincipalPath   = "__PRINCIPAL_PATH__"
-	LogoutPath                = "__LOGOUT_PATH__"
-	RevokeSessionPathTemplate = "__REVOKE_PATH__"
+	LogoutPath                       = "__LOGOUT_PATH__"
+	RevokeSessionPathTemplate        = "__REVOKE_PATH__"
+	GetSessionAuditEventPathTemplate = "__AUDIT_PATH__"
 )
 
 type BuildInfo struct {
@@ -36,6 +38,17 @@ type HealthResponse struct {
 	Service   string     `json:"service"`
 	CheckedAt string     `json:"checkedAt"`
 	Build     *BuildInfo `json:"build,omitempty"`
+}
+
+type PlatformStatusResponse struct {
+	Status              string `json:"status"`
+	Service             string `json:"service"`
+	Implementation      string `json:"implementation"`
+	Version             string `json:"version"`
+	CheckedAt           string `json:"checkedAt"`
+	RoutePolicyRevision int64  `json:"routePolicyRevision"`
+	RouteRevision       int64  `json:"routeRevision"`
+	CompatibilityMode   string `json:"compatibilityMode"`
 }
 
 type UserPrincipal struct {
@@ -65,6 +78,7 @@ type SessionView struct {
 	ExpiresAt             string `json:"expiresAt"`
 	CSRFToken             string `json:"csrfToken"`
 	RevocationObjectiveMS int    `json:"revocationObjectiveMs"`
+	LastAuditMessageID    string `json:"lastAuditMessageId"`
 }
 
 type CurrentPrincipalResponse struct {
@@ -74,9 +88,36 @@ type CurrentPrincipalResponse struct {
 }
 
 type SessionRevocationResponse struct {
-	SessionID  string `json:"sessionId"`
-	RevokedAt  string `json:"revokedAt"`
-	ObjectiveMS int   `json:"objectiveMs"`
+	SessionID      string `json:"sessionId"`
+	RevokedAt      string `json:"revokedAt"`
+	ObjectiveMS    int    `json:"objectiveMs"`
+	AuditMessageID string `json:"auditMessageId"`
+}
+
+type AuditRecord struct {
+	LedgerSequence       int64  `json:"ledgerSequence"`
+	MessageID            string `json:"messageId"`
+	SchemaVersion        uint32 `json:"schemaVersion"`
+	OrganizationID       string `json:"organizationId"`
+	AggregateType        string `json:"aggregateType"`
+	AggregateID          string `json:"aggregateId"`
+	AggregateVersion     uint64 `json:"aggregateVersion"`
+	OccurredAt           string `json:"occurredAt"`
+	InitiatingSubject    string `json:"initiatingSubject"`
+	InitiatingIssuer     string `json:"initiatingIssuer"`
+	ExecutingService     string `json:"executingService"`
+	ExecutingSPIFFEID    string `json:"executingSpiffeId"`
+	ActingOrganizationID string `json:"actingOrganizationId"`
+	Action                string `json:"action"`
+	Result                string `json:"result"`
+	PolicyRevision        string `json:"policyRevision"`
+	CorrelationID         string `json:"correlationId"`
+	CausationID           string `json:"causationId"`
+	TraceID               string `json:"traceId"`
+	PayloadSHA256         string `json:"payloadSha256"`
+	PreviousRecordHash    string `json:"previousRecordHash"`
+	RecordHash            string `json:"recordHash"`
+	RecordedAt            string `json:"recordedAt"`
 }
 
 type FieldError struct {
@@ -101,15 +142,18 @@ type BeginLoginParams struct { ReturnTo string; LoginHint string }
 type CompleteLoginParams struct { Code string; State string }
 type LogoutParams struct { CSRFToken string }
 type RevokeSessionParams struct { SessionID string; CSRFToken string }
+type GetSessionAuditEventParams struct { MessageID string }
 
 type ServerInterface interface {
 	GetHealth(http.ResponseWriter, *http.Request, GetHealthParams)
 	GetVersion(http.ResponseWriter, *http.Request)
+	GetPlatformStatus(http.ResponseWriter, *http.Request)
 	BeginLogin(http.ResponseWriter, *http.Request, BeginLoginParams)
 	CompleteLogin(http.ResponseWriter, *http.Request, CompleteLoginParams)
 	GetCurrentPrincipal(http.ResponseWriter, *http.Request)
 	Logout(http.ResponseWriter, *http.Request, LogoutParams)
 	RevokeSession(http.ResponseWriter, *http.Request, RevokeSessionParams)
+	GetSessionAuditEvent(http.ResponseWriter, *http.Request, GetSessionAuditEventParams)
 }
 
 type HTTPClient interface { Do(*http.Request) (*http.Response, error) }
@@ -126,9 +170,11 @@ type Response[T any] struct {
 	Data         *T
 	Problem      *ProblemDetails
 	StatusCode   int
-	RequestID    string
-	Traceparent  string
-	HTTPResponse *http.Response
+	RequestID           string
+	Traceparent         string
+	AuditMessageID      string
+	RoutePolicyRevision string
+	HTTPResponse        *http.Response
 }
 
 func (c *Client) GetHealth(ctx context.Context, params *GetHealthParams) (*Response[HealthResponse], error) {
@@ -139,6 +185,10 @@ func (c *Client) GetHealth(ctx context.Context, params *GetHealthParams) (*Respo
 
 func (c *Client) GetVersion(ctx context.Context) (*Response[BuildInfo], error) {
 	return doJSON[BuildInfo](ctx, c.httpClient, http.MethodGet, c.baseURL+GetVersionPath, "", nil)
+}
+
+func (c *Client) GetPlatformStatus(ctx context.Context) (*Response[PlatformStatusResponse], error) {
+	return doJSON[PlatformStatusResponse](ctx, c.httpClient, http.MethodGet, c.baseURL+GetPlatformStatusPath, "", nil)
 }
 
 func (c *Client) GetCurrentPrincipal(ctx context.Context) (*Response[CurrentPrincipalResponse], error) {
@@ -154,13 +204,18 @@ func (c *Client) RevokeSession(ctx context.Context, sessionID, csrfToken string)
 	return doJSON[SessionRevocationResponse](ctx, c.httpClient, http.MethodPost, c.baseURL+path, csrfToken, nil)
 }
 
+func (c *Client) GetSessionAuditEvent(ctx context.Context, messageID string) (*Response[AuditRecord], error) {
+	path := strings.Replace(GetSessionAuditEventPathTemplate, "{messageId}", url.PathEscape(messageID), 1)
+	return doJSON[AuditRecord](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
+}
+
 func doJSON[T any](ctx context.Context, client HTTPClient, method, endpoint, csrfToken string, body []byte) (*Response[T], error) {
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body)); if err != nil { return nil, err }
 	req.Header.Set("Accept", "application/json, application/problem+json")
 	if csrfToken != "" { req.Header.Set("X-CSRF-Token", csrfToken) }
 	httpResponse, err := client.Do(req); if err != nil { return nil, fmt.Errorf("call platform Gateway: %w", err) }
 	payload, err := io.ReadAll(io.LimitReader(httpResponse.Body, 1<<20)); _ = httpResponse.Body.Close(); if err != nil { return nil, err }
-	response := &Response[T]{StatusCode: httpResponse.StatusCode, RequestID: httpResponse.Header.Get("X-Request-ID"), Traceparent: httpResponse.Header.Get("traceparent"), HTTPResponse: httpResponse}
+	response := &Response[T]{StatusCode: httpResponse.StatusCode, RequestID: httpResponse.Header.Get("X-Request-ID"), Traceparent: httpResponse.Header.Get("traceparent"), AuditMessageID: httpResponse.Header.Get("X-Audit-Message-ID"), RoutePolicyRevision: httpResponse.Header.Get("X-Route-Policy-Revision"), HTTPResponse: httpResponse}
 	if httpResponse.StatusCode >= 200 && httpResponse.StatusCode < 300 {
 		if httpResponse.StatusCode == http.StatusNoContent { var zero T; response.Data = &zero; return response, nil }
 		var data T; if err := json.Unmarshal(payload, &data); err != nil { return nil, fmt.Errorf("decode platform Gateway success response: %w", err) }; response.Data = &data; return response, nil

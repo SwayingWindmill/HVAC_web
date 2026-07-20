@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "HVAC Platform Gateway API",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "description": "The public HTTP contract owned by platform-gateway. Gateway is the only browser-facing platform service."
   },
   "servers": [{ "url": "/" }],
@@ -32,6 +32,21 @@
         "responses": {
           "200": { "description": "Build identity for the running gateway.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BuildInfo" } } } },
           "405": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/platform/status": {
+      "get": {
+        "operationId": "getPlatformStatus",
+        "summary": "Read normalized platform status through the applied route owner",
+        "parameters": [{ "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "responses": {
+          "200": { "description": "Normalized status from the selected Go or Legacy implementation.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PlatformStatusResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "504": { "$ref": "#/components/responses/Problem" },
           "default": { "$ref": "#/components/responses/Problem" }
         }
       }
@@ -111,10 +126,30 @@
           { "$ref": "#/components/parameters/Traceparent" }
         ],
         "responses": {
-          "200": { "description": "Session revoked.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SessionRevocationResponse" } } } },
+          "200": { "description": "Session revoked and durable audit intent committed.", "headers": { "X-Audit-Message-ID": { "$ref": "#/components/headers/AuditMessageId" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SessionRevocationResponse" } } } },
           "401": { "$ref": "#/components/responses/Problem" },
           "403": { "$ref": "#/components/responses/Problem" },
           "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/audit/session-events/{messageId}": {
+      "get": {
+        "operationId": "getSessionAuditEvent",
+        "summary": "Read one Organization-scoped durable Session audit record",
+        "parameters": [
+          { "name": "messageId", "in": "path", "required": true, "schema": { "type": "string", "minLength": 16, "maxLength": 128 } },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "responses": {
+          "200": { "description": "Append-only audit record visible to the authenticated Organization.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuditRecord" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
           "default": { "$ref": "#/components/responses/Problem" }
         }
       }
@@ -128,7 +163,9 @@
     },
     "headers": {
       "RequestId": { "description": "Request correlation identifier selected by Gateway.", "schema": { "type": "string" } },
-      "Traceparent": { "description": "W3C trace context for the Gateway span.", "schema": { "type": "string" } }
+      "Traceparent": { "description": "W3C trace context for the Gateway span.", "schema": { "type": "string" } },
+      "RoutePolicyRevision": { "description": "Applied Route Ownership Registry revision.", "schema": { "type": "integer", "minimum": 1 } },
+      "AuditMessageId": { "description": "Stable message ID committed with Session state, Audit Intent and Outbox.", "schema": { "type": "string" } }
     },
     "responses": {
       "Problem": { "description": "Stable public error representation.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" } }, "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/ProblemDetails" } } } }
@@ -136,12 +173,14 @@
     "schemas": {
       "BuildInfo": { "type": "object", "additionalProperties": false, "required": ["service", "version", "commit", "builtAt"], "properties": { "service": { "type": "string", "const": "platform-gateway" }, "version": { "type": "string" }, "commit": { "type": "string" }, "builtAt": { "type": "string" } } },
       "HealthResponse": { "type": "object", "additionalProperties": false, "required": ["status", "service", "checkedAt"], "properties": { "status": { "type": "string", "const": "ok" }, "service": { "type": "string", "const": "platform-gateway" }, "checkedAt": { "type": "string", "format": "date-time" }, "build": { "$ref": "#/components/schemas/BuildInfo" } } },
+      "PlatformStatusResponse": { "type": "object", "additionalProperties": false, "required": ["status", "service", "implementation", "version", "checkedAt", "routePolicyRevision", "routeRevision", "compatibilityMode"], "properties": { "status": { "type": "string", "enum": ["ok", "degraded"] }, "service": { "type": "string", "const": "platform-status" }, "implementation": { "type": "string", "enum": ["go", "legacy"] }, "version": { "type": "string" }, "checkedAt": { "type": "string", "format": "date-time" }, "routePolicyRevision": { "type": "integer", "minimum": 1 }, "routeRevision": { "type": "integer", "minimum": 1 }, "compatibilityMode": { "type": "string", "enum": ["native", "legacy-read"] } } },
       "UserPrincipal": { "type": "object", "additionalProperties": false, "required": ["subject", "issuer", "displayName", "email", "roles"], "properties": { "subject": { "type": "string" }, "issuer": { "type": "string", "format": "uri" }, "displayName": { "type": "string" }, "email": { "type": "string" }, "roles": { "type": "array", "items": { "type": "string" } } } },
       "ServicePrincipal": { "type": "object", "additionalProperties": false, "required": ["service", "spiffeId"], "properties": { "service": { "type": "string", "const": "platform-gateway" }, "spiffeId": { "type": "string", "pattern": "^spiffe://" } } },
       "PrincipalContext": { "type": "object", "additionalProperties": false, "required": ["initiatingPrincipal", "executingServicePrincipal", "actingOrganizationId", "audience", "policyRevision", "delegationExpiresAt"], "properties": { "initiatingPrincipal": { "$ref": "#/components/schemas/UserPrincipal" }, "executingServicePrincipal": { "$ref": "#/components/schemas/ServicePrincipal" }, "actingOrganizationId": { "type": "string" }, "audience": { "type": "string", "const": "iam-service" }, "policyRevision": { "type": "string" }, "delegationExpiresAt": { "type": "string", "format": "date-time" } } },
-      "SessionView": { "type": "object", "additionalProperties": false, "required": ["id", "expiresAt", "csrfToken", "revocationObjectiveMs"], "properties": { "id": { "type": "string" }, "expiresAt": { "type": "string", "format": "date-time" }, "csrfToken": { "type": "string" }, "revocationObjectiveMs": { "type": "integer", "minimum": 0 } } },
+      "SessionView": { "type": "object", "additionalProperties": false, "required": ["id", "expiresAt", "csrfToken", "revocationObjectiveMs", "lastAuditMessageId"], "properties": { "id": { "type": "string" }, "expiresAt": { "type": "string", "format": "date-time" }, "csrfToken": { "type": "string" }, "revocationObjectiveMs": { "type": "integer", "minimum": 0 }, "lastAuditMessageId": { "type": "string" } } },
       "CurrentPrincipalResponse": { "type": "object", "additionalProperties": false, "required": ["principal", "context", "session"], "properties": { "principal": { "$ref": "#/components/schemas/UserPrincipal" }, "context": { "$ref": "#/components/schemas/PrincipalContext" }, "session": { "$ref": "#/components/schemas/SessionView" } } },
-      "SessionRevocationResponse": { "type": "object", "additionalProperties": false, "required": ["sessionId", "revokedAt", "objectiveMs"], "properties": { "sessionId": { "type": "string" }, "revokedAt": { "type": "string", "format": "date-time" }, "objectiveMs": { "type": "integer", "minimum": 0 } } },
+      "SessionRevocationResponse": { "type": "object", "additionalProperties": false, "required": ["sessionId", "revokedAt", "objectiveMs", "auditMessageId"], "properties": { "sessionId": { "type": "string" }, "revokedAt": { "type": "string", "format": "date-time" }, "objectiveMs": { "type": "integer", "minimum": 0 }, "auditMessageId": { "type": "string" } } },
+      "AuditRecord": { "type": "object", "additionalProperties": false, "required": ["ledgerSequence", "messageId", "schemaVersion", "organizationId", "aggregateType", "aggregateId", "aggregateVersion", "occurredAt", "initiatingSubject", "initiatingIssuer", "executingService", "executingSpiffeId", "actingOrganizationId", "action", "result", "policyRevision", "correlationId", "causationId", "traceId", "payloadSha256", "previousRecordHash", "recordHash", "recordedAt"], "properties": { "ledgerSequence": { "type": "integer", "minimum": 1 }, "messageId": { "type": "string" }, "schemaVersion": { "type": "integer", "const": 1 }, "organizationId": { "type": "string" }, "aggregateType": { "type": "string", "const": "bff-session" }, "aggregateId": { "type": "string" }, "aggregateVersion": { "type": "integer", "minimum": 1 }, "occurredAt": { "type": "string", "format": "date-time" }, "initiatingSubject": { "type": "string" }, "initiatingIssuer": { "type": "string", "format": "uri" }, "executingService": { "type": "string", "const": "platform-gateway" }, "executingSpiffeId": { "type": "string", "pattern": "^spiffe://" }, "actingOrganizationId": { "type": "string" }, "action": { "type": "string" }, "result": { "type": "string" }, "policyRevision": { "type": "string" }, "correlationId": { "type": "string" }, "causationId": { "type": "string" }, "traceId": { "type": "string", "pattern": "^[a-f0-9]{32}$" }, "payloadSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "previousRecordHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "recordHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "recordedAt": { "type": "string", "format": "date-time" } } },
       "FieldError": { "type": "object", "additionalProperties": false, "required": ["field", "message"], "properties": { "field": { "type": "string" }, "message": { "type": "string" } } },
       "ProblemDetails": { "type": "object", "additionalProperties": false, "required": ["type", "title", "status", "detail", "instance", "code", "traceId", "retryable"], "properties": { "type": { "type": "string", "format": "uri-reference" }, "title": { "type": "string" }, "status": { "type": "integer", "minimum": 400, "maximum": 599 }, "detail": { "type": "string" }, "instance": { "type": "string" }, "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]+$" }, "traceId": { "type": "string", "pattern": "^[a-f0-9]{32}$" }, "retryable": { "type": "boolean" }, "fieldErrors": { "type": "array", "items": { "$ref": "#/components/schemas/FieldError" } } } }
     }
