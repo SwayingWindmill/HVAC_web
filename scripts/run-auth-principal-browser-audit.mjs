@@ -169,5 +169,5 @@ try {
   cdpClient?.close();
   await stopProcess(edgeProcess);
   await topology?.stop();
-  await rm(profileDir, { recursive: true, force: true });
+  await rm(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
 }
