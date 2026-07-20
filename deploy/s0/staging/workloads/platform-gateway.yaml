@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-gateway
+  annotations:
+    s0.hvac/image-policy: digest-required
+    s0.hvac/template: render-before-apply
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: platform-gateway }
+  template:
+    metadata:
+      labels: { app: platform-gateway }
+    spec:
+      serviceAccountName: platform-gateway
+      terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: platform-gateway
+          image: "[SIGNED_IMAGE_PLATFORM_GATEWAY]"
+          envFrom:
+            - configMapRef: { name: s0-runtime-config }
+          env:
+            - { name: PLATFORM_GATEWAY_ADDR, value: ":8080" }
+            - { name: PLATFORM_GATEWAY_DIAGNOSTICS_ADDR, value: ":19080" }
+            - { name: GATEWAY_DATABASE_URL, value: "[GATEWAY_DATABASE_URL]" }
+            - { name: SESSION_TOKEN_KEY, value: "[SESSION_TOKEN_KEY]" }
+            - { name: IAM_CLIENT_CERT, value: "[WORKLOAD_CERT_PATH]" }
+            - { name: IAM_CLIENT_KEY, value: "[WORKLOAD_KEY_PATH]" }
+            - { name: IAM_SERVER_CA, value: "[TRUST_BUNDLE_PATH]" }
+            - { name: AUDIT_SERVER_CA, value: "[TRUST_BUNDLE_PATH]" }
+            - { name: LEGACY_SERVER_CA, value: "[TRUST_BUNDLE_PATH]" }
+            - { name: OIDC_SERVER_CA, value: "[TRUST_BUNDLE_PATH]" }
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: diagnostics, containerPort: 19080 }
+          startupProbe: { httpGet: { path: /health/startup, port: diagnostics }, failureThreshold: 30, periodSeconds: 2 }
+          livenessProbe: { httpGet: { path: /health/live, port: diagnostics }, periodSeconds: 10, timeoutSeconds: 2 }
+          readinessProbe: { httpGet: { path: /health/ready, port: diagnostics }, periodSeconds: 3, timeoutSeconds: 2 }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 1000m, memory: 512Mi }
+          volumeMounts: "[RUNTIME_IDENTITY_AND_ROUTE_MOUNTS]"
+      volumes: "[RUNTIME_IDENTITY_AND_ROUTE_VOLUMES]"

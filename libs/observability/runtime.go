@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,6 +24,8 @@ type Runtime struct {
 	Tracer  *Tracer
 	Metrics *Registry
 	async   *AsyncExporter
+	ready   atomic.Bool
+	started time.Time
 }
 
 func NewRuntime(config RuntimeConfig) *Runtime {
@@ -34,7 +37,29 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		delegate = NopExporter{}
 	}
 	async := NewAsyncExporter(delegate, config.QueueSize)
-	return &Runtime{Service: config.Service, Tracer: NewTracer(config.Service, async), Metrics: NewRegistry(), async: async}
+	return &Runtime{
+		Service: config.Service,
+		Tracer:  NewTracer(config.Service, async),
+		Metrics: NewRegistry(),
+		async:   async,
+		started: time.Now().UTC(),
+	}
+}
+
+func (runtime *Runtime) MarkReady() {
+	if runtime != nil {
+		runtime.ready.Store(true)
+	}
+}
+
+func (runtime *Runtime) MarkNotReady() {
+	if runtime != nil {
+		runtime.ready.Store(false)
+	}
+}
+
+func (runtime *Runtime) Ready() bool {
+	return runtime != nil && runtime.ready.Load()
 }
 
 func (runtime *Runtime) Shutdown(ctx context.Context) error {
@@ -66,16 +91,32 @@ func (runtime *Runtime) DiagnosticsHandler() http.Handler {
 		_ = runtime.Metrics.SetGauge("s0_telemetry_failed_exports", "Spans rejected by the telemetry exporter.", map[string]string{"service": runtime.Service}, float64(runtime.FailedExports()))
 		metricsHandler.ServeHTTP(writer, request)
 	})
-	health := func(writer http.ResponseWriter, _ *http.Request) {
+	health := func(writer http.ResponseWriter, status string, code int) {
 		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(map[string]string{"status": "ok", "service": runtime.Service})
+		writer.WriteHeader(code)
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"status":    status,
+			"service":   runtime.Service,
+			"startedAt": runtime.started.Format(time.RFC3339Nano),
+		})
 	}
-	mux.HandleFunc("/health/live", health)
-	mux.HandleFunc("/health/ready", health)
+	mux.HandleFunc("/health/startup", func(writer http.ResponseWriter, _ *http.Request) {
+		health(writer, "started", http.StatusOK)
+	})
+	mux.HandleFunc("/health/live", func(writer http.ResponseWriter, _ *http.Request) {
+		health(writer, "live", http.StatusOK)
+	})
+	mux.HandleFunc("/health/ready", func(writer http.ResponseWriter, _ *http.Request) {
+		if runtime.Ready() {
+			health(writer, "ready", http.StatusOK)
+			return
+		}
+		health(writer, "not-ready", http.StatusServiceUnavailable)
+	})
 	mux.HandleFunc("/diagnostics", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"status": "ok", "service": runtime.Service,
+			"status": "ok", "service": runtime.Service, "ready": runtime.Ready(),
 			"telemetry": map[string]any{"droppedSpans": runtime.DroppedSpans(), "failedExports": runtime.FailedExports()},
 		})
 	})

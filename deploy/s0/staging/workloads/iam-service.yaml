@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iam-service
+  annotations: { s0.hvac/image-policy: digest-required, s0.hvac/template: render-before-apply }
+spec:
+  replicas: 2
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  selector: { matchLabels: { app: iam-service } }
+  template:
+    metadata: { labels: { app: iam-service } }
+    spec:
+      serviceAccountName: iam-service
+      terminationGracePeriodSeconds: 20
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: iam-service
+          image: "[SIGNED_IMAGE_IAM_SERVICE]"
+          envFrom: "[RUNTIME_BINDINGS_IAM_SERVICE]"
+          env:
+            - { name: IAM_SERVICE_ADDR, value: ":8444" }
+            - { name: IAM_DIAGNOSTICS_ADDR, value: ":19083" }
+            - { name: IAM_TLS_CERT, value: "[WORKLOAD_CERT_PATH]" }
+            - { name: IAM_TLS_KEY, value: "[WORKLOAD_KEY_PATH]" }
+            - { name: IAM_CLIENT_CA, value: "[TRUST_BUNDLE_PATH]" }
+          ports: [{ name: https, containerPort: 8444 }, { name: diagnostics, containerPort: 19083 }]
+          startupProbe: { httpGet: { path: /health/startup, port: diagnostics }, failureThreshold: 30, periodSeconds: 2 }
+          livenessProbe: { httpGet: { path: /health/live, port: diagnostics }, periodSeconds: 10, timeoutSeconds: 2 }
+          readinessProbe: { httpGet: { path: /health/ready, port: diagnostics }, periodSeconds: 3, timeoutSeconds: 2 }
+          securityContext: &restricted
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities: { drop: ["ALL"] }
+          resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 1000m, memory: 512Mi } }
+          volumeMounts: "[RUNTIME_IDENTITY_MOUNTS]"
+      volumes: "[RUNTIME_IDENTITY_VOLUMES]"

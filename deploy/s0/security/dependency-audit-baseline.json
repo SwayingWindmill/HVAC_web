@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "recordedOn": "2026-07-20",
+  "expiresOn": "2026-08-15",
+  "primaryOwner": "security-platform",
+  "secondaryOwner": "application-platform",
+  "remediationIssue": "07-security-and-failure-gates",
+  "policy": "Production critical vulnerabilities are forbidden. Existing production vulnerability counts may not increase and the exception expires automatically.",
+  "projects": {
+    "root": {
+      "path": ".",
+      "allowed": { "low": 5, "moderate": 3, "high": 0, "critical": 0 }
+    },
+    "legacy-private": {
+      "path": "hvac-backend",
+      "allowed": { "low": 3, "moderate": 16, "high": 11, "critical": 0 },
+      "justification": "Legacy Frozen dependency remediation requires an explicitly reviewed compatibility upgrade and is assigned to ticket 07."
+    }
+  }
+}

@@ -93,6 +93,7 @@ func main() {
 		serverErrors <- nil
 	}()
 
+	telemetry.MarkReady()
 	select {
 	case <-ctx.Done():
 	case err := <-consumerErrors:
@@ -106,6 +107,7 @@ func main() {
 		}
 		cancel()
 	}
+	telemetry.MarkNotReady()
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	_ = server.Shutdown(shutdownContext)

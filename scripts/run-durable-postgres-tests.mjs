@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -32,14 +32,36 @@ function compose(args) {
 }
 
 async function waitForPostgres() {
+  let stablePostmasterStart = '';
+  let stableChecks = 0;
   for (let attempt = 0; attempt < 300; attempt += 1) {
     try {
-      run('docker', ['exec', containerName, 'pg_isready', '-U', 'postgres', '-d', 'hvac_s0']);
-      return;
-    } catch {}
-    await pause(200);
+      const state = run('docker', [
+        'exec', containerName, 'psql', '-U', 'postgres', '-d', 'hvac_s0', '-Atqc',
+        "SELECT pg_postmaster_start_time()::text || '|' || (to_regclass('gateway.sessions') IS NOT NULL)::text || '|' || EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's0_migrator')::text",
+      ]);
+      const [postmasterStart, schemaReady, migratorReady] = state.split('|');
+      if (schemaReady === 'true' && migratorReady === 'true') {
+        if (postmasterStart === stablePostmasterStart) stableChecks += 1;
+        else {
+          stablePostmasterStart = postmasterStart;
+          stableChecks = 1;
+        }
+        if (stableChecks >= 5) return;
+      } else {
+        stableChecks = 0;
+      }
+    } catch {
+      stableChecks = 0;
+    }
+    await pause(250);
   }
-  throw new Error('PostgreSQL integration fixture did not become ready');
+  throw new Error('PostgreSQL integration fixture did not reach a stable initialized postmaster');
+}
+
+async function runCompatibilityCheck() {
+  const sql = await readFile(resolve(root, 'infra/s0-durable/postgres/compatibility/previous-writer.sql'), 'utf8');
+  run('docker', ['exec', '-i', containerName, 'psql', '-U', 'postgres', '-d', 'hvac_s0', '-v', 'ON_ERROR_STOP=1'], { input: sql });
 }
 
 async function runGoTests() {
@@ -71,8 +93,9 @@ try {
   try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
   compose(['up', '-d', 'postgres']);
   await waitForPostgres();
+  await runCompatibilityCheck();
   await runGoTests();
-  console.log('S0 durable PostgreSQL transaction tests passed.');
+  console.log('S0 durable PostgreSQL transaction and rollback-window compatibility tests passed.');
 } finally {
   try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
 }

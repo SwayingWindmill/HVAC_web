@@ -2,7 +2,7 @@
   "generator": "scripts/generate-platform-contracts.mjs",
   "generatorVersion": "4.0.0",
   "node": "20.19.4",
-  "go": "1.22.5",
+  "go": "1.25.0",
   "runtimeValidation": "zod@3.25.76",
   "templates": [
     "contracts/http/templates/platformapi.go.tmpl",

@@ -1,6 +1,6 @@
 module github.com/quanlaihe/hvac-web/services/iam-service
 
-go 1.22.5
+go 1.25.0
 
 require (
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0

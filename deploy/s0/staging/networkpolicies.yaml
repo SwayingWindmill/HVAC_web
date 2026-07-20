@@ -1,0 +1,112 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny-all }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-dns }
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: gateway-private-dependencies }
+spec:
+  podSelector: { matchLabels: { app: platform-gateway } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { s0.hvac/public-ingress: "true" }
+      ports: [{ protocol: TCP, port: 8080 }]
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app: iam-service } }
+      ports: [{ protocol: TCP, port: 8444 }]
+    - to:
+        - podSelector: { matchLabels: { app: audit-ledger-service } }
+      ports: [{ protocol: TCP, port: 8446 }]
+    - to:
+        - podSelector: { matchLabels: { app: legacy-private } }
+      ports: [{ protocol: TCP, port: 8445 }]
+    - to:
+        - podSelector: { matchLabels: { app: oidc-test-provider } }
+      ports: [{ protocol: TCP, port: 8443 }]
+    - to:
+        - podSelector: { matchLabels: { app: postgres } }
+      ports: [{ protocol: TCP, port: 5432 }]
+    - to:
+        - podSelector: { matchLabels: { app: otel-collector } }
+      ports: [{ protocol: TCP, port: 4318 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: gateway-only-private-services }
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app, operator: In, values: [iam-service, audit-ledger-service, legacy-private] }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: platform-gateway } }
+      ports:
+        - { protocol: TCP, port: 8444 }
+        - { protocol: TCP, port: 8445 }
+        - { protocol: TCP, port: 8446 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: gateway-only-oidc-fixture }
+spec:
+  podSelector: { matchLabels: { app: oidc-test-provider } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: platform-gateway } }
+      ports: [{ protocol: TCP, port: 8443 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: audit-and-relay-data-plane }
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app, operator: In, values: [audit-ledger-service, outbox-relay] }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app: postgres } }
+      ports: [{ protocol: TCP, port: 5432 }]
+    - to:
+        - podSelector: { matchLabels: { app: redpanda } }
+      ports: [{ protocol: TCP, port: 9092 }]
+    - to:
+        - podSelector: { matchLabels: { app: otel-collector } }
+      ports: [{ protocol: TCP, port: 4318 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: internal-service-telemetry }
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app, operator: In, values: [iam-service, oidc-test-provider, legacy-private] }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app: otel-collector } }
+      ports: [{ protocol: TCP, port: 4318 }]

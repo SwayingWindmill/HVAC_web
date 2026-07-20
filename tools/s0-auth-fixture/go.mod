@@ -1,6 +1,6 @@
 module github.com/quanlaihe/hvac-web/tools/s0-auth-fixture
 
-go 1.22.5
+go 1.25.0
 
 require github.com/quanlaihe/hvac-web/libs/testpki v0.0.0
 

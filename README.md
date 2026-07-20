@@ -63,7 +63,11 @@ agents/energy-agent
 npm run dev                 # 仅启动 HVAC Web
 npm run dev:s0-gateway      # 启动 HVAC Web + Go Platform Gateway
 npm run dev:s0-auth         # 启动 HTTPS Web、OIDC、Gateway 与 mTLS IAM
-npm run dev:s0-durable      # 启动 PostgreSQL、Redpanda、Relay 与 Audit Ledger 完整环路
+npm run dev:s0-durable      # 启动 PostgreSQL、Redpanda、Collector、OIDC、IAM、Relay、Audit、Legacy、Gateway 与 Web
+npm run delivery:local      # 校验本地交付契约后启动同一完整 S0 拓扑
+npm run delivery:validate   # 校验 local/staging 显式配置与生产出口隔离
+npm run delivery:check      # 校验镜像、探针、身份、NetworkPolicy、迁移与供应链资产
+npm run delivery:render -- --bindings=<private.json> --output=out/s0-staging
 npm run dev:energyagent     # 启动 Web、Copilot Runtime 和 EnergyAgent
 npm run contracts:check     # 校验 OpenAPI 生成产物无漂移
 npm run events:check        # 校验 Protobuf 字段号和类型兼容锁
@@ -85,6 +89,8 @@ npm run audit:auth-principal
 npm run audit:durable-session
 npm run audit:route-ownership
 npm run audit:observability # Trace 连续性、Collector 故障隔离与秘密缺失黑盒审计
+npm run audit:s0-rollout    # 验证 readiness 门控滚动升级与兼容版本回滚模型
+npm run audit:delivery      # 汇总交付配置、静态资产、回滚模型与 PostgreSQL 兼容门禁
 npm run lint
 npm run build
 npm run verify:ai-runtime
@@ -93,7 +99,7 @@ npm run verify:energyagent-stack
 
 EnergyAgent 模型配置放在 `agents/energy-agent/.env.local`，或通过进程环境变量提供。不得提交密钥。
 
-S0 服务默认通过独立 loopback 诊断端口暴露 `/health/live`、`/health/ready`、`/metrics` 和 `/diagnostics`。Gateway、Relay、Audit Ledger 与 IAM 的默认端口依次为 `19080`、`19081`、`19082`、`19083`；运维与告警说明见 `docs/operations/s0-observability.md`。
+S0 服务默认通过独立 loopback 诊断端口暴露 `/health/startup`、`/health/live`、`/health/ready`、`/metrics` 和 `/diagnostics`。Gateway、Relay、Audit Ledger、IAM 与 OIDC fixture 的默认端口依次为 `19080`、`19081`、`19082`、`19083`、`19084`。Observability 说明见 `docs/operations/s0-observability.md`，可复现交付、签名镜像、staging 渲染和回滚说明见 `docs/operations/s0-delivery.md`。
 
 ## 依赖所有权
 
