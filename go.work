@@ -1,4 +1,4 @@
-go 1.22.5
+go 1.23.12
 
 use (
 	./libs/identitycontext
@@ -13,5 +13,6 @@ use (
 	./services/audit-ledger-service
 	./services/outbox-relay
 	./services/oidc-test-provider
+	./tools/legacy-private-fixture
 	./tools/s0-auth-fixture
 )

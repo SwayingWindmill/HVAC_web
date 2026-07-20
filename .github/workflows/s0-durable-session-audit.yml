@@ -10,12 +10,6 @@ on:
       - "docs/security/s0-durable-session-audit.md"
       - "docs/security/s0-route-data-ownership.md"
       - "docs/operations/s0-observability.md"
-      - "hvac-backend/src/common/middleware/gateway-private-boundary.middleware.ts"
-      - "hvac-backend/src/common/middleware/gateway-private-boundary.middleware.spec.ts"
-      - "hvac-backend/src/legacy-private.module.ts"
-      - "hvac-backend/src/main.ts"
-      - "hvac-backend/package-lock.json"
-      - "hvac-backend/package.json"
       - "infra/s0-durable/**"
       - "libs/observability/**"
       - "libs/ownershipregistry/**"
@@ -26,6 +20,7 @@ on:
       - "services/iam-service/**"
       - "services/audit-ledger-service/**"
       - "services/outbox-relay/**"
+      - "tools/legacy-private-fixture/**"
       - "scripts/check-session-event-contract.mjs"
       - "scripts/check-ownership-registries.mjs"
       - "scripts/dev-s0-durable.mjs"
@@ -46,12 +41,6 @@ on:
       - "docs/security/s0-durable-session-audit.md"
       - "docs/security/s0-route-data-ownership.md"
       - "docs/operations/s0-observability.md"
-      - "hvac-backend/src/common/middleware/gateway-private-boundary.middleware.ts"
-      - "hvac-backend/src/common/middleware/gateway-private-boundary.middleware.spec.ts"
-      - "hvac-backend/src/legacy-private.module.ts"
-      - "hvac-backend/src/main.ts"
-      - "hvac-backend/package-lock.json"
-      - "hvac-backend/package.json"
       - "infra/s0-durable/**"
       - "libs/observability/**"
       - "libs/ownershipregistry/**"
@@ -62,6 +51,7 @@ on:
       - "services/iam-service/**"
       - "services/audit-ledger-service/**"
       - "services/outbox-relay/**"
+      - "tools/legacy-private-fixture/**"
       - "scripts/check-session-event-contract.mjs"
       - "scripts/check-ownership-registries.mjs"
       - "scripts/dev-s0-durable.mjs"
@@ -95,29 +85,27 @@ jobs:
             services/iam-service/go.mod
             services/audit-ledger-service/go.mod
             services/outbox-relay/go.mod
+            tools/legacy-private-fixture/go.mod
       - uses: actions/setup-node@v4
         with:
           node-version: "20.19.4"
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            hvac-backend/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm ci --prefix hvac-backend
       - run: npm run events:check
       - run: npm run ownership:check
       - run: npm run contracts:check
       - run: npm run test:ownership
-      - run: npm run test:legacy-boundary
       - run: npm run test:durable-unit
       - run: npm run test:observability
       - run: npm run test:durable-postgres
-      - run: node scripts/run-go.mjs vet ./libs/observability/... ./libs/ownershipregistry/... ./libs/sessionevent/... ./libs/sessionstore/... ./services/iam-service/... ./services/audit-ledger-service/... ./services/outbox-relay/... ./services/platform-gateway/...
+      - run: node scripts/run-go.mjs test ./tools/legacy-private-fixture/...
+      - run: node scripts/run-go.mjs vet ./libs/observability/... ./libs/ownershipregistry/... ./libs/sessionevent/... ./libs/sessionstore/... ./services/iam-service/... ./services/audit-ledger-service/... ./services/outbox-relay/... ./services/platform-gateway/... ./tools/legacy-private-fixture/...
       - run: npm run build:gateway
       - run: npm run build:iam
-      - run: npm run build:legacy-private
       - run: npm run build:audit-ledger
       - run: npm run build:outbox-relay
+      - run: node scripts/run-go.mjs build -o out/legacy-private-fixture ./tools/legacy-private-fixture/cmd/legacy-private-fixture
       - run: npm run lint
       - run: npm run build
 
@@ -132,9 +120,6 @@ jobs:
         with:
           node-version: "20.19.4"
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            hvac-backend/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm ci --prefix hvac-backend
       - run: npm run audit:observability
