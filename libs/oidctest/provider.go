@@ -223,6 +223,12 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 		name = "Fixture Admin"
 		email = "fixture.admin@example.test"
 		roles = []string{"platform-admin"}
+	case "admin-other-organization":
+		subject = "fixture-other-admin"
+		name = "Fixture Other Admin"
+		email = "fixture.other.admin@example.test"
+		roles = []string{"platform-admin"}
+		organizationID = "org-fixture-02"
 	case "other-organization":
 		subject = "fixture-other-user"
 		name = "Fixture Other User"

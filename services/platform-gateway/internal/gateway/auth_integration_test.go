@@ -157,6 +157,34 @@ func TestAdministrativeSessionRevocation(t *testing.T) {
 	assertProblemCode(t, afterRevocation, http.StatusUnauthorized, "SESSION_INVALID")
 }
 
+func TestCrossOrganizationAdminCannotRevokeSession(t *testing.T) {
+	harness := newAuthHarness(t)
+	userClient := harness.browserClient(t)
+	userPrincipal, _ := loginAndReadPrincipal(t, userClient, harness.gatewayURL, "")
+	otherAdminClient := harness.browserClient(t)
+	otherAdminPrincipal, _ := loginAndReadPrincipal(t, otherAdminClient, harness.gatewayURL, "admin-other-organization")
+
+	revokePath := strings.Replace(platformapi.RevokeSessionPathTemplate, "{sessionId}", url.PathEscape(userPrincipal.Session.ID), 1)
+	revoke, _ := http.NewRequest(http.MethodPost, harness.gatewayURL+revokePath, nil)
+	revoke.Header.Set("Origin", harness.gatewayURL)
+	revoke.Header.Set("X-CSRF-Token", otherAdminPrincipal.Session.CSRFToken)
+	response, err := otherAdminClient.Do(revoke)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	assertProblemCode(t, response, http.StatusNotFound, "SESSION_NOT_FOUND")
+
+	stillActive, err := userClient.Get(harness.gatewayURL + platformapi.GetCurrentPrincipalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stillActive.Body.Close()
+	if stillActive.StatusCode != http.StatusOK {
+		t.Fatalf("cross-Organization revocation changed target Session status to %d", stillActive.StatusCode)
+	}
+}
+
 func TestDirectIAMAccessWithoutWorkloadIdentityFails(t *testing.T) {
 	harness := newAuthHarness(t)
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
