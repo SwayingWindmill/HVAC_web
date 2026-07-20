@@ -29,6 +29,15 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function assertSafePublicProblem(response, expectedStatus, expectedCode, forbiddenValues = []) {
+  assert(response.status === expectedStatus, `public problem status was ${response.status}, expected ${expectedStatus}: ${JSON.stringify(response.body)}`);
+  assert(response.body?.code === expectedCode, `public problem code was ${String(response.body?.code)}, expected ${expectedCode}`);
+  const serialized = JSON.stringify(response.body);
+  for (const forbidden of ['stack', 'stackTrace', '127.0.0.1', 'localhost', 'postgres://', 'redpanda', ...forbiddenValues]) {
+    assert(!serialized.includes(forbidden), `public problem exposed forbidden detail ${forbidden}: ${serialized}`);
+  }
+}
+
 async function waitForDebugger(child) {
   for (let attempt = 0; attempt < 600; attempt += 1) {
     if (child.exitCode !== null || child.signalCode !== null) throw new Error('Edge exited before debugger became ready');
@@ -111,6 +120,16 @@ async function waitForNumber(readValue, expected, label) {
     await pause(200);
   }
   throw new Error(`${label} was ${actual}, expected ${expected}`);
+}
+
+async function waitForAtLeast(readValue, minimum, label) {
+  let actual;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    actual = readValue();
+    if (actual >= minimum) return;
+    await pause(200);
+  }
+  throw new Error(`${label} was ${actual}, expected at least ${minimum}`);
 }
 
 async function waitForPlatformOwner(client, implementation, revision) {
@@ -240,8 +259,17 @@ try {
   assert(legacyGatewaySpan?.attributes['route.owner'] === 'legacy-hvac-backend', 'Legacy trace did not record the selected owner');
   assert(Number(legacyGatewaySpan?.attributes['route.policy.revision']) === 1 && Number(legacyGatewaySpan?.attributes['route.revision']) === 1, 'Legacy trace did not record route revisions');
   assertParent(legacyTrace, 'http.legacy.platform_status', 'http.gateway.request');
-  const directLegacy = await evaluate(cdpClient, `fetch(${JSON.stringify(`${topology.legacyURL}/api/v1/health`)}).then(() => ({ resolved: true })).catch(() => ({ resolved: false }))`);
+  const directLegacy = await evaluate(cdpClient, `fetch(${JSON.stringify(`${topology.legacyDirectURL}/api/v1/health`)}).then(() => ({ resolved: true })).catch(() => ({ resolved: false }))`);
   assert(directLegacy.resolved === false, 'Browser reached private Legacy service without a workload certificate');
+
+  await topology.setLegacyLatency(1200);
+  const firstLegacyTimeout = await fetchJSON(cdpClient, '/api/v1/platform/status');
+  const secondLegacyTimeout = await fetchJSON(cdpClient, '/api/v1/platform/status');
+  const openLegacyCircuit = await fetchJSON(cdpClient, '/api/v1/platform/status');
+  assertSafePublicProblem(firstLegacyTimeout, 504, 'LEGACY_TIMEOUT');
+  assertSafePublicProblem(secondLegacyTimeout, 504, 'LEGACY_TIMEOUT');
+  assertSafePublicProblem(openLegacyCircuit, 503, 'LEGACY_CIRCUIT_OPEN');
+  await topology.clearLegacyLatency();
 
   await topology.setPlatformStatusOwner('platform-gateway', 2, 2);
   const goStatus = await waitForPlatformOwner(cdpClient, 'go', 2);
@@ -279,6 +307,18 @@ try {
   assertParent(loginTrace, 'kafka.audit.consume', 'outbox.kafka.publish');
   assertParent(loginTrace, 'postgres.audit.consume', 'kafka.audit.consume');
 
+  await topology.setPostgresAvailable(false);
+  const postgresFailure = await fetchJSON(cdpClient, '/api/v1/principal');
+  assertSafePublicProblem(postgresFailure, 503, 'ROUTE_AUDIT_FAILED', ['org-fixture-01', principal.body.session.id]);
+  await topology.setPostgresAvailable(true);
+  let recoveredFromPostgres = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    recoveredFromPostgres = await fetchJSON(cdpClient, '/api/v1/principal');
+    if (recoveredFromPostgres.status === 200) break;
+    await pause(100);
+  }
+  assert(recoveredFromPostgres?.status === 200, `Principal did not recover after PostgreSQL proxy restoration: ${JSON.stringify(recoveredFromPostgres)}`);
+
   const browserState = await evaluate(cdpClient, `({ url: window.location.href, cookie: document.cookie, local: Object.fromEntries(Object.entries(localStorage)), session: Object.fromEntries(Object.entries(sessionStorage)) })`);
   assert(!/[?&](code|state)=/i.test(browserState.url), `OIDC callback material remained in URL: ${browserState.url}`);
   assert(!browserState.cookie.includes('hvac_session'), 'HttpOnly Session cookie was visible to document.cookie');
@@ -300,29 +340,42 @@ try {
   const otherPrincipal = await fetchJSON(cdpClient, '/api/v1/principal');
   assert(otherPrincipal.status === 200 && otherPrincipal.body.context.actingOrganizationId === 'org-fixture-02', 'Other Organization login failed');
   const hiddenCrossOrg = await fetchJSON(cdpClient, `/api/v1/audit/session-events/${encodeURIComponent(creationMessageID)}`);
-  assert(hiddenCrossOrg.status === 404 && hiddenCrossOrg.body.code === 'AUDIT_RECORD_NOT_FOUND', 'Cross-Organization Audit query disclosed record existence');
+  assertSafePublicProblem(hiddenCrossOrg, 404, 'AUDIT_RECORD_NOT_FOUND', ['org-fixture-01']);
 
   await topology.stopBroker();
+  await topology.stopAudit(true);
   const logoutOrgTwo = await logout(cdpClient, otherPrincipal);
   assert(logoutOrgTwo.status === 204 && logoutOrgTwo.auditMessageId, 'Broker outage incorrectly blocked the Session transaction');
   const outageMessageID = logoutOrgTwo.auditMessageId;
   await waitForNumber(() => topology.pendingOutboxCount(outageMessageID), 1, 'broker-outage pending Outbox count');
   assert(topology.auditRecordCount(outageMessageID) === 0, 'Audit record appeared while the broker was unavailable');
 
-  await topology.startBroker();
-  await topology.restartAudit();
-  await topology.restartRelay();
-  await waitForNumber(() => topology.pendingOutboxCount(outageMessageID), 0, 'recovered Outbox pending count');
-  await waitForNumber(() => topology.auditRecordCount(outageMessageID), 1, 'recovered Audit record count');
-
   await login(cdpClient, 'other-organization');
   const recoveredPrincipal = await fetchJSON(cdpClient, '/api/v1/principal');
-  assert(recoveredPrincipal.status === 200, 'Recovered Principal request failed');
+  assert(recoveredPrincipal.status === 200, 'Session creation failed while the broker and Audit consumer were unavailable');
+  const backlogCreationMessageID = recoveredPrincipal.body.session.lastAuditMessageId;
+  assert(backlogCreationMessageID, 'Backlog Session creation did not commit an Audit message ID');
+  await waitForNumber(() => topology.pendingOutboxCount(backlogCreationMessageID), 1, 'backlog Session creation pending Outbox count');
+  await waitForAtLeast(() => topology.pendingOutboxCount(), 2, 'Outbox backlog');
+  assert(topology.auditRecordCount(backlogCreationMessageID) === 0, 'Audit record appeared while the Audit consumer was stopped');
+
+  await topology.stopRelay(true);
+  await topology.startBroker();
+  await topology.startRelay();
+  await waitForNumber(() => topology.pendingOutboxCount(outageMessageID), 0, 'recovered logout Outbox pending count');
+  await waitForNumber(() => topology.pendingOutboxCount(backlogCreationMessageID), 0, 'recovered creation Outbox pending count');
+  assert(topology.auditRecordCount(outageMessageID) === 0 && topology.auditRecordCount(backlogCreationMessageID) === 0, 'Audit records appeared while the consumer remained stopped');
+
+  await topology.startAudit();
+  await waitForNumber(() => topology.auditRecordCount(outageMessageID), 1, 'recovered logout Audit record count');
+  await waitForNumber(() => topology.auditRecordCount(backlogCreationMessageID), 1, 'recovered creation Audit record count');
   const recoveredAudit = await waitForAudit(cdpClient, outageMessageID);
-  assert(recoveredAudit.body.organizationId === 'org-fixture-02', 'Recovered Audit record crossed Organization boundary');
+  const recoveredCreationAudit = await waitForAudit(cdpClient, backlogCreationMessageID);
+  assert(recoveredAudit.body.organizationId === 'org-fixture-02' && recoveredCreationAudit.body.organizationId === 'org-fixture-02', 'Recovered Audit record crossed Organization boundary');
   assert(recoveredAudit.body.action === 'SESSION_LOGGED_OUT' && recoveredAudit.body.aggregateVersion === 2, 'Recovered logout Audit semantics were incorrect');
   assert(recoveredAudit.body.causationId === otherPrincipal.body.session.lastAuditMessageId, 'Logout causation did not reference Session creation');
-  assert(topology.auditRecordCount(outageMessageID) === 1, 'Broker recovery created duplicate Audit records');
+  assert(recoveredCreationAudit.body.action === 'SESSION_CREATED' && recoveredCreationAudit.body.aggregateVersion === 1, 'Recovered backlog creation Audit semantics were incorrect');
+  assert(topology.auditRecordCount(outageMessageID) === 1 && topology.auditRecordCount(backlogCreationMessageID) === 1, 'Broker or consumer recovery created duplicate Audit records');
 
   topology.setTelemetryAvailable(false);
   const collectorOutageStarted = Date.now();

@@ -18,6 +18,7 @@ const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
 const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 let serviceStdio = 'inherit';
+const serviceProcessGroups = new WeakSet();
 
 const composeInvocation = (() => {
   const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
@@ -55,6 +56,28 @@ function processExited(child) {
   return child && (child.exitCode !== null || child.signalCode !== null);
 }
 
+function signalProcessTree(child, signal) {
+  if (process.platform !== 'win32' && serviceProcessGroups.has(child)) {
+    try {
+      process.kill(-child.pid, signal);
+    } catch (error) {
+      if (error?.code !== 'ESRCH') throw error;
+    }
+    return;
+  }
+  child.kill(signal);
+}
+
+async function signalAndWait(child, signal, timeoutMilliseconds = 1500) {
+  if (processExited(child)) return true;
+  const exited = once(child, 'exit').then(() => true);
+  signalProcessTree(child, signal);
+  return Promise.race([
+    exited,
+    pause(timeoutMilliseconds).then(() => false),
+  ]);
+}
+
 async function findAvailablePort(requestedPort = 0) {
   const server = createTCPServer();
   server.listen({ host: '127.0.0.1', port: Number(requestedPort) || 0, exclusive: true });
@@ -70,8 +93,10 @@ function spawnService(label, command, args, env) {
     cwd: root,
     stdio: serviceStdio,
     shell: false,
+    detached: process.platform !== 'win32',
     env: { ...process.env, ...env },
   });
+  if (process.platform !== 'win32') serviceProcessGroups.add(child);
   child.once('error', (error) => console.error(`${label} process error:`, error));
   return child;
 }
@@ -170,12 +195,18 @@ export async function stopProcess(child) {
     spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     return;
   }
-  child.kill('SIGTERM');
-  const stopped = await Promise.race([
-    once(child, 'exit').then(() => true),
-    pause(1500).then(() => false),
-  ]);
-  if (!stopped) child.kill('SIGKILL');
+  const stopped = await signalAndWait(child, 'SIGTERM');
+  if (!stopped) await signalAndWait(child, 'SIGKILL');
+}
+
+export async function killProcess(child) {
+  if (!child || processExited(child)) return;
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    return;
+  }
+  const stopped = await signalAndWait(child, 'SIGKILL');
+  if (!stopped) throw new Error(`process group ${child.pid} did not stop after SIGKILL`);
 }
 
 function assertSafeIdentifier(value, label) {
@@ -198,6 +229,9 @@ export async function startS0DurableTopology(options = {}) {
   const otelMetricsHostPort = await findAvailablePort(options.otelMetricsHostPort ?? process.env.S0_OTEL_METRICS_HOST_PORT ?? 0);
   const otelHealthHostPort = await findAvailablePort(options.otelHealthHostPort ?? process.env.S0_OTEL_HEALTH_HOST_PORT ?? 0);
   const prometheusHostPort = await findAvailablePort(options.prometheusHostPort ?? process.env.S0_PROMETHEUS_HOST_PORT ?? 0);
+  const toxiproxyAPIHostPort = await findAvailablePort(options.toxiproxyAPIHostPort ?? process.env.S0_TOXIPROXY_API_HOST_PORT ?? 0);
+  const toxiproxyPostgresHostPort = await findAvailablePort(options.toxiproxyPostgresHostPort ?? process.env.S0_TOXIPROXY_POSTGRES_HOST_PORT ?? 0);
+  const toxiproxyLegacyHostPort = await findAvailablePort(options.toxiproxyLegacyHostPort ?? process.env.S0_TOXIPROXY_LEGACY_HOST_PORT ?? 0);
   const composeEnvironment = {
     ...process.env,
     S0_POSTGRES_HOST_PORT: String(postgresHostPort),
@@ -207,6 +241,9 @@ export async function startS0DurableTopology(options = {}) {
     S0_OTEL_METRICS_HOST_PORT: String(otelMetricsHostPort),
     S0_OTEL_HEALTH_HOST_PORT: String(otelHealthHostPort),
     S0_PROMETHEUS_HOST_PORT: String(prometheusHostPort),
+    S0_TOXIPROXY_API_HOST_PORT: String(toxiproxyAPIHostPort),
+    S0_TOXIPROXY_POSTGRES_HOST_PORT: String(toxiproxyPostgresHostPort),
+    S0_TOXIPROXY_LEGACY_HOST_PORT: String(toxiproxyLegacyHostPort),
   };
   const composeOptions = { env: composeEnvironment };
   const telemetryRecorder = options.captureTelemetry === false ? null : await startOTLPRecorder(otlpPort);
@@ -220,17 +257,19 @@ export async function startS0DurableTopology(options = {}) {
   const oidcURL = `https://127.0.0.1:${oidcPort}`;
   const iamURL = `https://127.0.0.1:${iamPort}`;
   const auditURL = `https://127.0.0.1:${auditPort}`;
-  const legacyURL = `https://127.0.0.1:${legacyPort}`;
+  const legacyDirectURL = `https://127.0.0.1:${legacyPort}`;
+  const legacyURL = `https://127.0.0.1:${toxiproxyLegacyHostPort}`;
+  const toxiproxyURL = `http://127.0.0.1:${toxiproxyAPIHostPort}`;
   const gatewayURL = `http://127.0.0.1:${gatewayPort}`;
   const webURL = `https://127.0.0.1:${webPort}`;
   const redirectURI = `${webURL}/api/v1/auth/callback`;
   const brokers = `127.0.0.1:${redpandaHostPort}`;
   const database = {
-    admin: `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
-    gateway: `postgres://gateway_runtime:gateway-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
-    relay: `postgres://gateway_relay_runtime:gateway-relay-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
-    auditConsumer: `postgres://audit_consumer_runtime:audit-consumer-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
-    auditQuery: `postgres://audit_query_runtime:audit-query-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
+    admin: `postgres://postgres:postgres-local-only@127.0.0.1:${toxiproxyPostgresHostPort}/hvac_s0?sslmode=disable&connect_timeout=1`,
+    gateway: `postgres://gateway_runtime:gateway-runtime-local-only@127.0.0.1:${toxiproxyPostgresHostPort}/hvac_s0?sslmode=disable&connect_timeout=1`,
+    relay: `postgres://gateway_relay_runtime:gateway-relay-local-only@127.0.0.1:${toxiproxyPostgresHostPort}/hvac_s0?sslmode=disable&connect_timeout=1`,
+    auditConsumer: `postgres://audit_consumer_runtime:audit-consumer-local-only@127.0.0.1:${toxiproxyPostgresHostPort}/hvac_s0?sslmode=disable&connect_timeout=1`,
+    auditQuery: `postgres://audit_query_runtime:audit-query-local-only@127.0.0.1:${toxiproxyPostgresHostPort}/hvac_s0?sslmode=disable&connect_timeout=1`,
   };
   const services = { oidc: null, iam: null, audit: null, relay: null, legacy: null, gateway: null, web: null };
 
@@ -245,6 +284,29 @@ export async function startS0DurableTopology(options = {}) {
     gatewayCert: join(pkiDir, 'gateway-cert.pem'),
     gatewayKey: join(pkiDir, 'gateway-key.pem'),
     routeRegistry: join(instanceRoot, 'route-ownership.v1.json'),
+  };
+
+  const toxiproxyRequest = async (path, init = {}) => {
+    const response = await fetch(`${toxiproxyURL}${path}`, {
+      ...init,
+      headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`Toxiproxy ${path} failed with ${response.status}: ${text}`);
+    return text ? JSON.parse(text) : null;
+  };
+
+  const setProxyEnabled = async (name, enabled) => {
+    const proxy = await toxiproxyRequest(`/proxies/${encodeURIComponent(name)}`);
+    return toxiproxyRequest(`/proxies/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      body: JSON.stringify({ name: proxy.name, listen: proxy.listen, upstream: proxy.upstream, enabled: Boolean(enabled) }),
+    });
+  };
+
+  const removeToxic = async (proxy, toxic) => {
+    const response = await fetch(`${toxiproxyURL}/proxies/${encodeURIComponent(proxy)}/toxics/${encodeURIComponent(toxic)}`, { method: 'DELETE' });
+    if (!response.ok && response.status !== 404) throw new Error(`Toxiproxy toxic removal failed with ${response.status}: ${await response.text()}`);
   };
 
   const startAudit = async () => {
@@ -281,7 +343,7 @@ export async function startS0DurableTopology(options = {}) {
   const startLegacy = async () => {
     services.legacy = spawnService('Legacy compatibility fixture', goBinary, ['run', './tools/legacy-private-fixture/cmd/legacy-private-fixture'], {
       GOCACHE: goCacheDir,
-      LEGACY_FIXTURE_ADDR: `127.0.0.1:${legacyPort}`,
+      LEGACY_FIXTURE_ADDR: `0.0.0.0:${legacyPort}`,
       LEGACY_TLS_CERT: paths.legacyCert,
       LEGACY_TLS_KEY: paths.legacyKey,
       LEGACY_CLIENT_CA: paths.ca,
@@ -295,6 +357,14 @@ export async function startS0DurableTopology(options = {}) {
   try {
     try { compose(['down', '--volumes', '--remove-orphans'], composeOptions); } catch {}
     compose(['up', '-d'], composeOptions);
+    await waitForHTTP(`${toxiproxyURL}/version`, 'Toxiproxy', null);
+    await toxiproxyRequest('/populate', {
+      method: 'POST',
+      body: JSON.stringify([
+        { name: 's0_postgres', listen: '0.0.0.0:15432', upstream: 'postgres:5432', enabled: true },
+        { name: 's0_legacy', listen: '0.0.0.0:18445', upstream: `host.docker.internal:${legacyPort}`, enabled: true },
+      ]),
+    });
     await waitForContainer(() => docker(['exec', postgresContainer, 'pg_isready', '-U', 'postgres', '-d', 'hvac_s0']), 'PostgreSQL');
     await waitForContainer(() => docker(['exec', redpandaContainer, 'rpk', 'cluster', 'health', '-X', 'brokers=127.0.0.1:9092']), 'Redpanda');
     try { docker(['exec', redpandaContainer, 'rpk', 'topic', 'delete', 'control.security.session.v1', '-X', 'brokers=127.0.0.1:9092']); } catch {}
@@ -389,16 +459,37 @@ export async function startS0DurableTopology(options = {}) {
     await waitForTLS(webPort, 'HVAC Web', services.web);
 
     return {
-      oidcURL, iamURL, auditURL, legacyURL, gatewayURL, webURL, redirectURI, brokers, database, pkiDir, routeRegistryPath: paths.routeRegistry, services,
+      oidcURL, iamURL, auditURL, legacyURL, legacyDirectURL, toxiproxyURL, gatewayURL, webURL, redirectURI, brokers, database, pkiDir, routeRegistryPath: paths.routeRegistry, services,
       telemetryPayloads() { return telemetryRecorder ? JSON.parse(JSON.stringify(telemetryRecorder.payloads)) : []; },
       setTelemetryAvailable(value) { telemetryRecorder?.setAvailable(value); },
+      async setPostgresAvailable(value) { await setProxyEnabled('s0_postgres', value); },
+      async setLegacyAvailable(value) { await setProxyEnabled('s0_legacy', value); },
+      async setLegacyLatency(milliseconds) {
+        await removeToxic('s0_legacy', 's0_legacy_latency');
+        await toxiproxyRequest('/proxies/s0_legacy/toxics', {
+          method: 'POST',
+          body: JSON.stringify({ name: 's0_legacy_latency', type: 'latency', stream: 'downstream', toxicity: 1, attributes: { latency: Number(milliseconds), jitter: 0 } }),
+        });
+      },
+      async clearLegacyLatency() { await removeToxic('s0_legacy', 's0_legacy_latency'); },
+      async resetFaults() { await toxiproxyRequest('/reset', { method: 'POST', body: '{}' }); },
       async stopBroker() { docker(['stop', redpandaContainer]); },
       async startBroker() {
         docker(['start', redpandaContainer]);
         await waitForContainer(() => docker(['exec', redpandaContainer, 'rpk', 'cluster', 'health', '-X', 'brokers=127.0.0.1:9092']), 'Redpanda');
       },
-      async restartAudit() { await stopProcess(services.audit); await startAudit(); },
-      async restartRelay() { await stopProcess(services.relay); await startRelay(); },
+      async stopAudit(force = false) {
+        await (force ? killProcess : stopProcess)(services.audit);
+        services.audit = null;
+      },
+      async startAudit() { if (!services.audit || processExited(services.audit)) await startAudit(); },
+      async stopRelay(force = false) {
+        await (force ? killProcess : stopProcess)(services.relay);
+        services.relay = null;
+      },
+      async startRelay() { if (!services.relay || processExited(services.relay)) await startRelay(); },
+      async restartAudit(force = false) { await (force ? killProcess : stopProcess)(services.audit); await startAudit(); },
+      async restartRelay(force = false) { await (force ? killProcess : stopProcess)(services.relay); await startRelay(); },
       async setPlatformStatusOwner(owner, registryRevision, routeRevision, percentage = 100) {
         const registry = JSON.parse(await readFile(paths.routeRegistry, 'utf8'));
         const route = registry.routes.find((entry) => entry.method === 'GET' && entry.path === '/api/v1/platform/status');

@@ -330,6 +330,15 @@ func (h *handler) RevokeSession(writer http.ResponseWriter, request *http.Reques
 		writeIdentityFailure(writer, request, identityFailure{403, "SESSION_REVOCATION_FORBIDDEN", "Session revocation forbidden", "The authenticated principal is not allowed to revoke sessions.", false})
 		return
 	}
+	targetSession, err := h.identity.store.GetSession(request.Context(), params.SessionID)
+	if errors.Is(err, sessionstore.ErrSessionNotFound) || (err == nil && targetSession.ActingOrganizationID != adminSession.ActingOrganizationID) {
+		writeIdentityFailure(writer, request, identityFailure{404, "SESSION_NOT_FOUND", "Session not found", "The requested session does not exist.", false})
+		return
+	}
+	if err != nil {
+		writeIdentityFailure(writer, request, identityFailure{503, "SESSION_STORE_UNAVAILABLE", "Session unavailable", "The durable Session store could not be read.", true})
+		return
+	}
 	target, err := h.identity.store.RevokeSession(request.Context(), params.SessionID, h.identity.mutationContext(request, "SESSION_REVOKED"))
 	if errors.Is(err, sessionstore.ErrSessionNotFound) {
 		writeIdentityFailure(writer, request, identityFailure{404, "SESSION_NOT_FOUND", "Session not found", "The requested session does not exist.", false})

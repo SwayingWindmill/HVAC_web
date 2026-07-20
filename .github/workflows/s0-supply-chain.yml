@@ -133,9 +133,38 @@ jobs:
       - run: npm run security:go-vuln
       - run: npm run security:licenses
 
+  security-failure-gates:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
+          cache-dependency-path: |
+            libs/*/go.mod
+            services/*/go.mod
+            tools/*/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run security:gates
+      - name: Upload S0 security gate results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: s0-security-gate-results
+          path: out/s0-security
+          if-no-files-found: error
+          retention-days: 14
+
   signed-images:
     if: startsWith(github.ref, 'refs/tags/s0-v') || github.event_name == 'workflow_dispatch'
-    needs: [verify, codeql, dependency-and-license]
+    needs: [verify, codeql, dependency-and-license, security-failure-gates]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -190,6 +219,25 @@ jobs:
           build-args: ${{ matrix.build_args }}
           sbom: true
           provenance: mode=max
+      - name: Scan image for embedded secrets
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+          scanners: secret
+          format: json
+          output: trivy-secrets-${{ matrix.name }}.json
+          exit-code: "1"
+          hide-progress: "true"
+          timeout: 10m
+      - name: Upload image secret scan evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-secrets-${{ matrix.name }}
+          path: trivy-secrets-${{ matrix.name }}.json
+          if-no-files-found: error
+          retention-days: 14
       - uses: sigstore/cosign-installer@v3.8.2
       - env:
           IMAGE: ${{ steps.image.outputs.name }}

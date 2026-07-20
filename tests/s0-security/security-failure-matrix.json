@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "ticket": "07-security-and-failure-gates",
+  "fixtures": {
+    "organizations": [
+      { "id": "org-fixture-01", "users": ["fixture-user", "fixture-admin"] },
+      { "id": "org-fixture-02", "users": ["fixture-other-user", "fixture-other-admin"] }
+    ],
+    "serviceIdentities": [
+      "spiffe://hvac.local/platform-gateway",
+      "spiffe://hvac.local/iam-service",
+      "spiffe://hvac.local/audit-ledger-service",
+      "spiffe://hvac.local/legacy-private"
+    ]
+  },
+  "upstream": [
+    {
+      "project": "Shopify/toxiproxy",
+      "version": "v2.12.0",
+      "digest": "sha256:9378ed52a28bc50edc1350f936f518f31fa95f0d15917d6eb40b8e376d1a214e",
+      "license": "MIT",
+      "purpose": "Deterministic PostgreSQL and Legacy TCP failure injection"
+    },
+    {
+      "project": "np-guard/netpol-analyzer",
+      "version": "v1.4.4",
+      "license": "Apache-2.0",
+      "purpose": "Static Kubernetes NetworkPolicy connectivity and private-target analysis"
+    },
+    {
+      "project": "aquasecurity/trivy-action",
+      "version": "v0.36.0",
+      "commit": "ed142fd0673e97e23eac54620cfb913e5ce36c25",
+      "license": "Apache-2.0",
+      "purpose": "Published image embedded-secret scanning"
+    }
+  ],
+  "cases": [
+    {
+      "id": "tenant-fixtures",
+      "requirement": "Two Organizations, authorized and unauthorized users, and distinct service identities",
+      "evidence": ["libs/oidctest/provider.go", "tests/s0-security/security-failure-matrix.json"]
+    },
+    {
+      "id": "cross-organization-zero-success",
+      "requirement": "Cross-Organization session revocation and audit access reveal no existence and never succeed; route diagnostics are not exposed by the public contract",
+      "evidence": ["services/platform-gateway/internal/gateway/auth_integration_test.go", "scripts/run-durable-session-browser-audit.mjs", "contracts/http/platform-gateway.openapi.yaml"]
+    },
+    {
+      "id": "identity-negative-paths",
+      "requirement": "Forged headers, invalid mTLS identities, invalid delegation and invalid OIDC paths fail closed",
+      "evidence": ["services/platform-gateway/internal/gateway/auth_integration_test.go", "services/iam-service/internal/iam/server_test.go", "services/audit-ledger-service/internal/audit/server_test.go"]
+    },
+    {
+      "id": "csrf-origin-revocation",
+      "requirement": "CSRF, Origin and revoked Session cases are rejected through Gateway",
+      "evidence": ["services/platform-gateway/internal/gateway/auth_integration_test.go"]
+    },
+    {
+      "id": "private-network-boundary",
+      "requirement": "Browser cannot reach IAM, Audit, PostgreSQL, broker or Legacy directly",
+      "evidence": ["scripts/check-s0-network-policies.mjs", "scripts/run-durable-session-browser-audit.mjs"]
+    },
+    {
+      "id": "ssrf-private-targets",
+      "requirement": "Default-deny egress rejects metadata and private DNS-rebinding targets",
+      "evidence": ["scripts/check-s0-network-policies.mjs", "deploy/s0/staging/networkpolicies.yaml"]
+    },
+    {
+      "id": "dependency-failures",
+      "requirement": "PostgreSQL, broker, Outbox backlog, audit consumer crash and Legacy timeout expose safe explicit states",
+      "evidence": ["scripts/run-durable-session-browser-audit.mjs", "scripts/s0-durable-topology.mjs"]
+    },
+    {
+      "id": "delivery-idempotency",
+      "requirement": "Restart and duplicate delivery converge to one audit effect without losing committed Session events",
+      "evidence": ["scripts/run-durable-session-browser-audit.mjs", "services/audit-ledger-service/internal/audit/postgres_integration_test.go"]
+    },
+    {
+      "id": "forced-process-restart",
+      "requirement": "Graceful and forced Audit and Relay restarts preserve Inbox and Outbox state",
+      "evidence": ["scripts/run-durable-session-browser-audit.mjs", "scripts/s0-durable-topology.mjs"]
+    },
+    {
+      "id": "observability-outage",
+      "requirement": "Observability export outage does not block core behavior",
+      "evidence": ["scripts/run-durable-session-browser-audit.mjs"]
+    },
+    {
+      "id": "secret-absence",
+      "requirement": "Seeded secrets are absent from repository, images, logs, traces, metrics, events and diagnostic database fields",
+      "evidence": [".github/workflows/s0-supply-chain.yml", "scripts/run-durable-session-browser-audit.mjs", "services/platform-gateway/internal/gateway/server_test.go"]
+    },
+    {
+      "id": "safe-public-errors",
+      "requirement": "Public errors contain no stack trace, internal address or cross-tenant detail",
+      "evidence": ["scripts/run-durable-session-browser-audit.mjs", "services/platform-gateway/internal/gateway/server_test.go"]
+    },
+    {
+      "id": "route-policy-fail-closed",
+      "requirement": "Route conflict and owner revision rollback fail closed and produce evidence",
+      "evidence": ["scripts/run-durable-session-browser-audit.mjs", "libs/ownershipregistry"]
+    },
+    {
+      "id": "machine-readable-release-gate",
+      "requirement": "CI runs the release gate and uploads machine-readable results",
+      "evidence": ["scripts/run-s0-security-failure-gates.mjs", ".github/workflows/s0-supply-chain.yml"]
+    }
+  ]
+}
