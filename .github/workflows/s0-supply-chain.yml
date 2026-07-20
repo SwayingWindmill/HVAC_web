@@ -47,6 +47,8 @@ jobs:
       - run: npm ci
       - run: npm run delivery:validate
       - run: npm run delivery:check
+      - run: npm run release:evidence-assets
+      - run: npm run test:release-evidence
       - run: npm run events:check
       - run: npm run ownership:check
       - run: npm run contracts:check
@@ -257,3 +259,124 @@ jobs:
       - name: Record GitHub attestation skip
         if: github.event.repository.visibility != 'public'
         run: echo "::notice::Skipping GitHub build provenance attestation for a non-public repository; BuildKit provenance and Cosign verification remain release requirements."
+      - name: Record immutable release image evidence
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          GITHUB_ATTESTATION_STATUS: ${{ github.event.repository.visibility == 'public' && 'published' || 'skipped-non-public' }}
+        run: |
+          node scripts/write-s0-release-image-evidence.mjs \
+            --name=${{ matrix.name }} \
+            --image="$IMAGE" \
+            --digest="$DIGEST" \
+            --trivy=trivy-secrets-${{ matrix.name }}.json \
+            --github-attestation="$GITHUB_ATTESTATION_STATUS"
+      - name: Upload immutable release image evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-image-${{ matrix.name }}
+          path: out/s0-release-evidence/images/${{ matrix.name }}.json
+          if-no-files-found: error
+          retention-days: 30
+
+  release-evidence:
+    if: startsWith(github.ref, 'refs/tags/s0-v') || github.event_name == 'workflow_dispatch'
+    needs: [signed-images]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+      packages: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
+          cache-dependency-path: |
+            libs/*/go.mod
+            services/*/go.mod
+            tools/*/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Download security and failure evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: s0-security-gate-results
+          path: out/s0-security
+      - name: Download immutable image manifests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-image-*
+          path: out/s0-release-input/images
+          merge-multiple: true
+      - name: Download Trivy image evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: trivy-secrets-*
+          path: out/s0-release-input/trivy
+          merge-multiple: true
+      - uses: sigstore/cosign-installer@v3.8.2
+      - name: Create disposable Kubernetes evidence cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          version: v0.32.0
+          kubectl_version: v1.35.0
+          cluster_name: s0-release-evidence
+          wait: 120s
+      - run: npm run release:evidence-assets
+      - run: npm run audit:s0-rollout -- --report=out/s0-release-evidence/rollout-model-report.json
+      - run: npm run audit:s0-kind-rollout
+      - run: npm run release:evidence:images
+      - run: npm run release:evidence:build
+      - name: Upload S0 Release Evidence Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: s0-release-evidence-bundle
+          path: out/s0-release-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+  release-evidence-pr:
+    if: github.event_name == 'pull_request'
+    needs: [verify, codeql, dependency-and-license, security-failure-gates]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - name: Create disposable Kubernetes PR evidence cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          version: v0.32.0
+          kubectl_version: v1.35.0
+          cluster_name: s0-release-evidence-pr
+          wait: 120s
+      - run: npm run release:evidence-assets
+      - run: npm run audit:s0-rollout -- --report=out/s0-release-evidence/rollout-model-report.json
+      - run: npm run audit:s0-kind-rollout
+      - name: Upload S0 release evidence PR results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: s0-release-evidence-pr-results
+          path: out/s0-release-evidence
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hvac.local/schemas/s0-release-evidence-bundle.json",
+  "title": "S0 Release Evidence in-toto Statement",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["_type", "subject", "predicateType", "predicate"],
+  "properties": {
+    "_type": {
+      "const": "https://in-toto.io/Statement/v1"
+    },
+    "subject": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "digest"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "digest": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sha256"],
+            "properties": {
+              "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+            }
+          }
+        }
+      }
+    },
+    "predicateType": {
+      "const": "https://hvac.local/attestations/s0-release-evidence/v1"
+    },
+    "predicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "ticket",
+        "status",
+        "generatedAt",
+        "source",
+        "environment",
+        "fixtures",
+        "workflow",
+        "images",
+        "reports",
+        "migrationState",
+        "architectureDecisionTrace",
+        "invariants",
+        "knownLimitations",
+        "runbooks",
+        "approval"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "ticket": { "const": "08-s0-release-evidence" },
+        "status": { "enum": ["passed", "failed"] },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "source": { "type": "object" },
+        "environment": { "type": "object" },
+        "fixtures": { "type": "object" },
+        "workflow": { "type": "object" },
+        "images": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "items": { "type": "object" }
+        },
+        "reports": { "type": "object" },
+        "migrationState": { "type": "object" },
+        "architectureDecisionTrace": {
+          "type": "array",
+          "minItems": 14,
+          "items": { "type": "object" }
+        },
+        "invariants": { "type": "object" },
+        "knownLimitations": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "runbooks": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "approval": { "type": "object" }
+      }
+    }
+  }
+}

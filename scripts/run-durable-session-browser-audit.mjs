@@ -1,11 +1,23 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import WebSocket from 'ws';
 import { startS0DurableTopology, stopProcess } from './s0-durable-topology.mjs';
 
+const root = resolve(process.cwd());
+const reportArgument = process.argv.find((value) => value.startsWith('--report='))?.slice('--report='.length);
+const reportPath = resolve(root, reportArgument ?? 'out/s0-security/browser-journey-report.json');
+const startedAt = new Date();
+const releaseEvidence = {
+  userJourney: null,
+  legacyBoundary: null,
+  routeRollback: null,
+  traces: null,
+  failureRecovery: null,
+  invariants: null,
+};
 const debugPort = Number(process.env.S0_DURABLE_DEBUG_PORT ?? 9366);
 const profileDir = join(tmpdir(), `s0-durable-browser-${process.pid}`);
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
@@ -27,6 +39,21 @@ const csrfFieldName = 'csrf' + String.fromCharCode(84, 111, 107, 101, 110);
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+async function writeReleaseEvidence(status, error = null) {
+  await mkdir(dirname(reportPath), { recursive: true });
+  await writeFile(reportPath, `${JSON.stringify({
+    schemaVersion: 1,
+    ticket: '08-s0-release-evidence',
+    type: 'browser-user-operator-journey',
+    status,
+    startedAt: startedAt.toISOString(),
+    finishedAt: new Date().toISOString(),
+    browser: browserPath,
+    ...releaseEvidence,
+    error,
+  }, null, 2)}\n`);
 }
 
 function assertSafePublicProblem(response, expectedStatus, expectedCode, forbiddenValues = []) {
@@ -413,7 +440,49 @@ try {
   const directAudit = await evaluate(cdpClient, `fetch(${JSON.stringify(`${topology.auditURL}/internal/v1/audit/session-events/${creationMessageID}`)}).then(() => ({ resolved: true })).catch(() => ({ resolved: false }))`);
   assert(directAudit.resolved === false, 'Browser reached private Audit Ledger without a workload certificate');
 
+  releaseEvidence.userJourney = {
+    platformStatusThroughGateway: true,
+    authenticatedPrincipal: true,
+    logoutCommitted: true,
+    authorizedAuditHistory: true,
+    organizationsExercised: 2,
+  };
+  releaseEvidence.legacyBoundary = {
+    normalizedReadThroughGateway: true,
+    directBrowserAccessBlocked: true,
+    timeoutWasExplicit: true,
+    circuitOpenedSafely: true,
+  };
+  releaseEvidence.routeRollback = {
+    initialOwner: 'legacy-hvac-backend',
+    initialRegistryRevision: 1,
+    restoredOwner: 'platform-gateway',
+    restoredRegistryRevision: 2,
+    staleRevisionRejected: true,
+  };
+  releaseEvidence.traces = {
+    legacyRouteSpans: legacyTrace.map((span) => ({ service: span.service, name: span.name })),
+    loginToAuditSpans: loginTrace.map((span) => ({ service: span.service, name: span.name })),
+    requiredServices: [...loginServices].sort(),
+    collectorOutageNonBlocking: true,
+  };
+  releaseEvidence.failureRecovery = {
+    postgresRecovered: recoveredFromPostgres.status === 200,
+    replayConvergedToOneAuditRecord: topology.auditRecordCount(creationMessageID) === 1,
+    brokerBacklogRecovered: topology.pendingOutboxCount(outageMessageID) === 0 && topology.pendingOutboxCount(backlogCreationMessageID) === 0,
+    auditConsumerRestartRecovered: topology.auditRecordCount(outageMessageID) === 1 && topology.auditRecordCount(backlogCreationMessageID) === 1,
+  };
+  releaseEvidence.invariants = {
+    crossTenantSuccesses: 0,
+    credentialLeakFindings: 0,
+    duplicateAuditEffects: 0,
+    lostCommittedSessionEvents: 0,
+  };
+  await writeReleaseEvidence('passed');
   console.log('S0 durable Session and Audit browser audit passed.');
+} catch (error) {
+  await writeReleaseEvidence('failed', error instanceof Error ? error.message : String(error));
+  throw error;
 } finally {
   cdpClient?.close();
   await stopProcess(edgeProcess);
