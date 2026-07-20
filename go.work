@@ -3,6 +3,7 @@ go 1.22.5
 use (
 	./libs/identitycontext
 	./libs/oidctest
+	./libs/observability
 	./libs/ownershipregistry
 	./libs/sessionevent
 	./libs/sessionstore

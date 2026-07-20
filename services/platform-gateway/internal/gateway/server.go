@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
 )
@@ -45,23 +46,25 @@ const (
 // Config contains edge-only dependencies. It intentionally has no business
 // domain or persistence dependencies.
 type Config struct {
-	Build        platformapi.BuildInfo
-	Logger       *slog.Logger
-	Now          func() time.Time
-	Identity     *IdentityConfig
-	RouteManager *ownershipregistry.Manager
-	RouteAudit   ownershipregistry.AuditSink
-	Legacy       *LegacyConfig
+	Build         platformapi.BuildInfo
+	Logger        *slog.Logger
+	Now           func() time.Time
+	Identity      *IdentityConfig
+	RouteManager  *ownershipregistry.Manager
+	RouteAudit    ownershipregistry.AuditSink
+	Legacy        *LegacyConfig
+	Observability *observability.Runtime
 }
 
 type handler struct {
-	build        platformapi.BuildInfo
-	logger       *slog.Logger
-	now          func() time.Time
-	identity     *identityController
-	routeManager *ownershipregistry.Manager
-	routeAudit   ownershipregistry.AuditSink
-	legacy       *legacyController
+	build         platformapi.BuildInfo
+	logger        *slog.Logger
+	now           func() time.Time
+	identity      *identityController
+	routeManager  *ownershipregistry.Manager
+	routeAudit    ownershipregistry.AuditSink
+	legacy        *legacyController
+	observability *observability.Runtime
 }
 
 var _ platformapi.ServerInterface = (*handler)(nil)
@@ -82,26 +85,36 @@ func NewHandler(config Config) http.Handler {
 	if routeAudit == nil {
 		routeAudit = ownershipregistry.NewMemoryAuditSink()
 	}
+	telemetry := config.Observability
+	if telemetry == nil {
+		telemetry = observability.NewRuntime(observability.RuntimeConfig{Service: serviceName})
+	}
 	return &handler{
-		build:        build,
-		logger:       logger,
-		now:          now,
-		identity:     newIdentityController(config.Identity, now),
-		routeManager: config.RouteManager,
-		routeAudit:   routeAudit,
-		legacy:       newLegacyController(config.Legacy),
+		build:         build,
+		logger:        logger,
+		now:           now,
+		identity:      newIdentityController(config.Identity, now),
+		routeManager:  config.RouteManager,
+		routeAudit:    routeAudit,
+		legacy:        newLegacyController(config.Legacy),
+		observability: telemetry,
 	}
 }
 
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	startedAt := h.now()
 	requestID := selectRequestID(request.Header.Get("X-Request-ID"), startedAt)
-	traceID, traceparent := selectTraceparent(request.Header.Get("traceparent"), startedAt)
+	ctx := h.observability.Tracer.ExtractHTTP(request.Context(), request.Header)
+	ctx, span := h.observability.Tracer.Start(ctx, "http.gateway.request", observability.SpanKindServer, map[string]any{
+		"http.request.method": request.Method, "http.route": safeLogPath(request.URL.Path),
+	})
+	traceID := observability.TraceID(ctx)
+	traceparent := observability.Traceparent(ctx)
 
 	writer.Header().Set("X-Request-ID", requestID)
 	writer.Header().Set("traceparent", traceparent)
 
-	ctx := context.WithValue(request.Context(), traceIDContextKey, traceID)
+	ctx = context.WithValue(ctx, traceIDContextKey, traceID)
 	ctx = context.WithValue(ctx, requestIDContextKey, requestID)
 	ctx = context.WithValue(ctx, traceparentContextKey, traceparent)
 	request = request.WithContext(ctx)
@@ -111,6 +124,17 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		if recovered := recover(); recovered != nil {
 			writeProblem(recorder, request, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", "The request could not be completed.", true, nil)
 		}
+		result := "ok"
+		if recorder.status >= http.StatusBadRequest {
+			result = "error"
+			span.SetStatus("error", http.StatusText(recorder.status))
+		} else {
+			span.SetStatus("ok", "")
+		}
+		span.SetAttributes(map[string]any{"http.response.status_code": recorder.status})
+		span.End()
+		_ = h.observability.Metrics.AddCounter("s0_http_requests_total", "Gateway HTTP requests.", map[string]string{"service": serviceName, "route": safeLogPath(request.URL.Path), "method": request.Method, "result": result}, 1)
+		_ = h.observability.Metrics.ObserveHistogram("s0_http_request_duration_seconds", "Gateway HTTP request latency.", map[string]string{"service": serviceName, "route": safeLogPath(request.URL.Path), "method": request.Method}, h.now().Sub(startedAt).Seconds(), nil)
 		h.logger.InfoContext(
 			request.Context(),
 			"http_request",
@@ -268,6 +292,12 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 	}
 
 	writer.Header().Set("X-Route-Policy-Revision", formatRevision(decision.RegistryRevision))
+	if span := observability.SpanFromContext(request.Context()); span != nil {
+		span.SetAttributes(map[string]any{
+			"route.owner": decision.SelectedOwner, "route.policy.revision": decision.RegistryRevision,
+			"route.revision": decision.RouteRevision, "route.compatibility_mode": decision.CompatibilityMode,
+		})
+	}
 	auditRecord := ownershipregistry.AuditRecord{
 		EventType:         "ROUTE_DECIDED",
 		RouteKey:          decision.RouteKey,

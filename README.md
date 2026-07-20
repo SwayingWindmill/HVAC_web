@@ -17,6 +17,7 @@ services/
 
 libs/
   identitycontext/           受约束委托与 actor chain 类型
+  observability/             W3C Trace、非阻塞 OTLP、低基数指标与日志脱敏
   ownershipregistry/         版本化路由所有权、稳定 cohort 与决策审计
   sessionevent/              版本化 Session Audit Protobuf
   sessionstore/              Session、Audit Intent 与 Outbox 事务层
@@ -29,7 +30,7 @@ contracts/
   ownership/                 Route/Data Ownership Registry 与 revision 锁
 
 infra/
-  s0-durable/                PostgreSQL 与 Redpanda 本地/CI fixture
+  s0-durable/                PostgreSQL、Redpanda、OTel Collector 与 Prometheus fixture
 
 runtimes/
   copilot-runtime/           CopilotKit Runtime module（Node.js）
@@ -70,6 +71,7 @@ npm run ownership:check     # 校验 Route/Data Ownership Registry 与 revision 
 npm run test:gateway        # Gateway Go 黑盒测试
 npm run test:identity       # OIDC、委托、IAM、撤销与 Gateway 身份测试
 npm run test:durable-unit   # Session 事件、存储、Relay、Inbox 与 Audit 单元测试
+npm run test:observability  # Trace、OTLP、指标标签、日志脱敏与跨服务集成测试
 npm run test:ownership      # Route Registry、稳定 cohort、Legacy 代理与公共故障测试
 npm run test:legacy-boundary # NestJS 私有 mTLS/委托边界测试
 npm run test:durable-postgres # 真实 PostgreSQL 事务、RLS、所有权审计和重启测试
@@ -82,6 +84,7 @@ npm run audit:platform-gateway
 npm run audit:auth-principal
 npm run audit:durable-session
 npm run audit:route-ownership
+npm run audit:observability # Trace 连续性、Collector 故障隔离与秘密缺失黑盒审计
 npm run lint
 npm run build
 npm run verify:ai-runtime
@@ -89,6 +92,8 @@ npm run verify:energyagent-stack
 ```
 
 EnergyAgent 模型配置放在 `agents/energy-agent/.env.local`，或通过进程环境变量提供。不得提交密钥。
+
+S0 服务默认通过独立 loopback 诊断端口暴露 `/health/live`、`/health/ready`、`/metrics` 和 `/diagnostics`。Gateway、Relay、Audit Ledger 与 IAM 的默认端口依次为 `19080`、`19081`、`19082`、`19083`；运维与告警说明见 `docs/operations/s0-observability.md`。
 
 ## 依赖所有权
 
@@ -98,7 +103,7 @@ EnergyAgent 模型配置放在 `agents/energy-agent/.env.local`，或通过进�
 - `services/audit-ledger-service/go.mod`：Audit Consumer、Transactional Inbox 与查询服务依赖。
 - `services/outbox-relay/go.mod`：独立 Outbox Relay 与 Kafka API 客户端依赖。
 - `services/oidc-test-provider/go.mod`：本地/测试 OIDC fixture 独立 Go module。
-- `libs/*/go.mod`：委托、Route Ownership、Session 事件、事务存储、OIDC fixture 与测试 PKI 的窄接口模块；根目录 `go.work` 只负责编排。
+- `libs/*/go.mod`：委托、Observability、Route Ownership、Session 事件、事务存储、OIDC fixture 与测试 PKI 的窄接口模块；根目录 `go.work` 只负责编排。
 - `contracts/http/tooling.lock.json`：OpenAPI 生成器、模板、Go、Node 与运行时校验版本锁。
 - `contracts/events/session-audit.v1.lock.json`：Protobuf v1 字段名、字段号和字段类型兼容锁。
 - `contracts/ownership/ownership.v1.lock.json`：公共路由 owner、数据 writer 与单调 revision 兼容锁。

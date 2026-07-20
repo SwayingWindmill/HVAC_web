@@ -33,4 +33,5 @@ message SessionAuditEventV1 {
   string policy_revision = 18;
   string payload_sha256 = 19;
   string session_state = 20;
+  string traceparent = 21;
 }

@@ -1,4 +1,4 @@
-name: S0 Durable Session Audit and Ownership
+name: S0 Durable Audit Ownership and Observability
 
 on:
   pull_request:
@@ -9,6 +9,7 @@ on:
       - "contracts/ownership/**"
       - "docs/security/s0-durable-session-audit.md"
       - "docs/security/s0-route-data-ownership.md"
+      - "docs/operations/s0-observability.md"
       - "hvac-backend/src/common/middleware/gateway-private-boundary.middleware.ts"
       - "hvac-backend/src/common/middleware/gateway-private-boundary.middleware.spec.ts"
       - "hvac-backend/src/legacy-private.module.ts"
@@ -16,11 +17,13 @@ on:
       - "hvac-backend/package-lock.json"
       - "hvac-backend/package.json"
       - "infra/s0-durable/**"
+      - "libs/observability/**"
       - "libs/ownershipregistry/**"
       - "libs/sessionevent/**"
       - "libs/sessionstore/**"
       - "libs/testpki/**"
       - "services/platform-gateway/**"
+      - "services/iam-service/**"
       - "services/audit-ledger-service/**"
       - "services/outbox-relay/**"
       - "scripts/check-session-event-contract.mjs"
@@ -42,6 +45,7 @@ on:
       - "contracts/ownership/**"
       - "docs/security/s0-durable-session-audit.md"
       - "docs/security/s0-route-data-ownership.md"
+      - "docs/operations/s0-observability.md"
       - "hvac-backend/src/common/middleware/gateway-private-boundary.middleware.ts"
       - "hvac-backend/src/common/middleware/gateway-private-boundary.middleware.spec.ts"
       - "hvac-backend/src/legacy-private.module.ts"
@@ -49,11 +53,13 @@ on:
       - "hvac-backend/package-lock.json"
       - "hvac-backend/package.json"
       - "infra/s0-durable/**"
+      - "libs/observability/**"
       - "libs/ownershipregistry/**"
       - "libs/sessionevent/**"
       - "libs/sessionstore/**"
       - "libs/testpki/**"
       - "services/platform-gateway/**"
+      - "services/iam-service/**"
       - "services/audit-ledger-service/**"
       - "services/outbox-relay/**"
       - "scripts/check-session-event-contract.mjs"
@@ -80,11 +86,13 @@ jobs:
           go-version: "1.22.5"
           cache-dependency-path: |
             libs/identitycontext/go.mod
+            libs/observability/go.mod
             libs/ownershipregistry/go.mod
             libs/sessionevent/go.mod
             libs/sessionstore/go.mod
             libs/testpki/go.mod
             services/platform-gateway/go.mod
+            services/iam-service/go.mod
             services/audit-ledger-service/go.mod
             services/outbox-relay/go.mod
       - uses: actions/setup-node@v4
@@ -102,9 +110,11 @@ jobs:
       - run: npm run test:ownership
       - run: npm run test:legacy-boundary
       - run: npm run test:durable-unit
+      - run: npm run test:observability
       - run: npm run test:durable-postgres
-      - run: node scripts/run-go.mjs vet ./libs/ownershipregistry/... ./libs/sessionevent/... ./libs/sessionstore/... ./services/audit-ledger-service/... ./services/outbox-relay/... ./services/platform-gateway/...
+      - run: node scripts/run-go.mjs vet ./libs/observability/... ./libs/ownershipregistry/... ./libs/sessionevent/... ./libs/sessionstore/... ./services/iam-service/... ./services/audit-ledger-service/... ./services/outbox-relay/... ./services/platform-gateway/...
       - run: npm run build:gateway
+      - run: npm run build:iam
       - run: npm run build:legacy-private
       - run: npm run build:audit-ledger
       - run: npm run build:outbox-relay
@@ -127,4 +137,4 @@ jobs:
             hvac-backend/package-lock.json
       - run: npm ci
       - run: npm ci --prefix hvac-backend
-      - run: npm run audit:route-ownership
+      - run: npm run audit:observability

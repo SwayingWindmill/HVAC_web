@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
 )
@@ -249,14 +250,24 @@ func (h *handler) CompleteLogin(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	now := h.identity.now()
-	stored, err := h.identity.store.CreateSession(request.Context(), sessionstore.Session{
+	pending := bffSession{Session: sessionstore.Session{
 		ID:                       randomURLToken(32),
 		Principal:                identitycontext.UserPrincipal{Subject: claims.Subject, Issuer: claims.Issuer, DisplayName: claims.Name, Email: claims.Email, Roles: append([]string(nil), claims.Roles...)},
 		ActingOrganizationID:     claims.ActingOrganizationID,
 		CSRFTokenCiphertext:      encryptedCSRF,
 		ProviderTokensCiphertext: encryptedTokens,
 		ExpiresAt:                now.Add(h.identity.config.SessionTTL),
-	}, h.identity.mutationContext(request, "SESSION_CREATED"))
+	}, CSRFToken: csrfToken}
+	validated, validationFailure := h.identity.fetchPrincipal(request.Context(), pending)
+	if validationFailure != nil {
+		writeIdentityFailure(writer, request, *validationFailure)
+		return
+	}
+	if validated.Principal.Subject != pending.Principal.Subject || validated.Principal.Issuer != pending.Principal.Issuer || validated.Context.ActingOrganizationID != pending.ActingOrganizationID {
+		writeIdentityFailure(writer, request, identityFailure{503, "IAM_IDENTITY_MISMATCH", "Identity validation failed", "IAM returned a principal outside the authenticated Session boundary.", false})
+		return
+	}
+	stored, err := h.identity.store.CreateSession(request.Context(), pending.Session, h.identity.mutationContext(request, "SESSION_CREATED"))
 	if err != nil {
 		writeIdentityFailure(writer, request, identityFailure{503, "SESSION_PERSISTENCE_FAILED", "Session unavailable", "The authenticated session could not be committed with its audit intent.", true})
 		return
@@ -570,6 +581,10 @@ func (controller *identityController) decryptBytes(ciphertext []byte) ([]byte, e
 }
 
 func (controller *identityController) fetchPrincipal(ctx context.Context, session bffSession) (identitycontext.InternalPrincipalResponse, *identityFailure) {
+	ctx, span := observability.Start(ctx, "http.iam.current_principal", observability.SpanKindClient, map[string]any{
+		"http.request.method": http.MethodPost, "server.service": "iam-service", "rpc.operation": "principal.current",
+	})
+	defer span.End()
 	now := controller.now()
 	expiry := now.Add(controller.config.DelegationTTL)
 	if expiry.After(session.ExpiresAt) {
@@ -584,6 +599,7 @@ func (controller *identityController) fetchPrincipal(ctx context.Context, sessio
 	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(controller.config.IAMURL, "/")+"/internal/v1/principal/current", nil)
 	request.Header.Set("X-Delegation-Grant", grant)
 	request.Header.Set("Accept", "application/json, application/problem+json")
+	observability.InjectHTTP(ctx, request.Header)
 	response, err := controller.config.IAMHTTPClient.Do(request)
 	if err != nil {
 		failure := identityFailure{503, "IAM_UNAVAILABLE", "IAM unavailable", "The private IAM service could not be reached.", true}
@@ -609,6 +625,7 @@ func (controller *identityController) mutationContext(request *http.Request, act
 		PolicyRevision:    controller.config.PolicyRevision,
 		CorrelationID:     requestIDFromContext(request.Context()),
 		TraceID:           traceIDFromContext(request.Context()),
+		Traceparent:       observability.Traceparent(request.Context()),
 		ExecutingService:  "platform-gateway",
 		ExecutingSPIFFEID: controller.config.ExecutingWorkloadSPIFFE,
 		OccurredAt:        controller.now().UTC(),

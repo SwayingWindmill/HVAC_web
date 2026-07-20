@@ -88,6 +88,7 @@ func fixtureEvent(now time.Time) sessionevent.SessionAuditEventV1 {
 		PublishedAtUnixMS: now.UnixMilli(),
 		CorrelationID:     "request-01",
 		TraceID:           "0123456789abcdef0123456789abcdef",
+		Traceparent:       "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
 		Actor: sessionevent.ActorChainV1{
 			InitiatingSubject:    "fixture-user",
 			InitiatingIssuer:     "https://issuer.example.test",

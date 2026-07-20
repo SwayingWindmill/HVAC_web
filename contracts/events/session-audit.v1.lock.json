@@ -30,7 +30,8 @@
       "result": { "type": "string", "number": 17 },
       "policy_revision": { "type": "string", "number": 18 },
       "payload_sha256": { "type": "string", "number": 19 },
-      "session_state": { "type": "string", "number": 20 }
+      "session_state": { "type": "string", "number": 20 },
+      "traceparent": { "type": "string", "number": 21 }
     }
   }
 }

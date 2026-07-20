@@ -158,8 +158,9 @@ func fixtureAuditEvent(now time.Time, messageID, sessionID, organizationID strin
 		OrganizationID: organizationID, PartitionKey: sessionevent.AggregateType + ":" + auditAggregateID, AggregateType: sessionevent.AggregateType,
 		AggregateID: auditAggregateID, AggregateVersion: version, OccurredAtUnixMS: now.UnixMilli(), PublishedAtUnixMS: now.UnixMilli(),
 		CorrelationID: "request-01", TraceID: "0123456789abcdef0123456789abcdef",
-		Actor:  sessionevent.ActorChainV1{InitiatingSubject: "fixture-user", InitiatingIssuer: "https://issuer.example.test", ExecutingService: "platform-gateway", ExecutingSPIFFEID: "spiffe://hvac.local/platform-gateway", ActingOrganizationID: organizationID},
-		Action: action, Result: "SUCCEEDED", PolicyRevision: "policy-v1", PayloadSHA256: sessionevent.SafePayloadHash(sessionID, strings.TrimPrefix(action, "SESSION_"), now.UnixMilli()), SessionState: strings.TrimPrefix(action, "SESSION_"),
+		Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+		Actor:       sessionevent.ActorChainV1{InitiatingSubject: "fixture-user", InitiatingIssuer: "https://issuer.example.test", ExecutingService: "platform-gateway", ExecutingSPIFFEID: "spiffe://hvac.local/platform-gateway", ActingOrganizationID: organizationID},
+		Action:      action, Result: "SUCCEEDED", PolicyRevision: "policy-v1", PayloadSHA256: sessionevent.SafePayloadHash(sessionID, strings.TrimPrefix(action, "SESSION_"), now.UnixMilli()), SessionState: strings.TrimPrefix(action, "SESSION_"),
 	}
 }
 

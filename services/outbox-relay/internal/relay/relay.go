@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 )
 
@@ -20,12 +21,13 @@ type Publisher interface {
 }
 
 type Config struct {
-	Owner      string
-	Lease      time.Duration
-	IdleDelay  time.Duration
-	RetryDelay time.Duration
-	Logger     *slog.Logger
-	Now        func() time.Time
+	Owner         string
+	Lease         time.Duration
+	IdleDelay     time.Duration
+	RetryDelay    time.Duration
+	Logger        *slog.Logger
+	Observability *observability.Runtime
+	Now           func() time.Time
 }
 
 type Relay struct {
@@ -52,6 +54,9 @@ func New(repository Repository, publisher Publisher, config Config) *Relay {
 	}
 	if config.Logger == nil {
 		config.Logger = slog.Default()
+	}
+	if config.Observability == nil {
+		config.Observability = observability.NewRuntime(observability.RuntimeConfig{Service: "outbox-relay"})
 	}
 	if config.Now == nil {
 		config.Now = time.Now
@@ -88,7 +93,17 @@ func (relay *Relay) RunOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	ctx = observability.ContextWithRemoteParent(ctx, relay.config.Observability.Tracer, record.Traceparent, "")
+	ctx, span := observability.Start(ctx, "outbox.kafka.publish", observability.SpanKindProducer, map[string]any{
+		"messaging.system": "kafka", "messaging.destination.name": record.Topic,
+		"messaging.operation": "publish", "event.correlation_id": record.CorrelationID,
+		"event.causation_id": record.CausationID,
+	})
+	defer span.End()
+	_ = relay.config.Observability.Metrics.SetGauge("s0_outbox_oldest_age_seconds", "Age of the oldest claimed Outbox record.", map[string]string{"service": "outbox-relay"}, relay.config.Now().UTC().Sub(record.CreatedAt.UTC()).Seconds())
 	if err := relay.publisher.Publish(ctx, record); err != nil {
+		span.SetStatus("error", "BROKER_PUBLISH_FAILED")
+		_ = relay.config.Observability.Metrics.AddCounter("s0_outbox_publish_total", "Outbox publish attempts.", map[string]string{"service": "outbox-relay", "result": "error"}, 1)
 		relay.config.Logger.Warn("outbox_publish_failed",
 			"message_id", record.MessageID,
 			"aggregate_version", record.AggregateVersion,
@@ -105,6 +120,8 @@ func (relay *Relay) RunOnce(ctx context.Context) (bool, error) {
 		// makes the downstream effect converge.
 		return false, err
 	}
+	span.SetStatus("ok", "")
+	_ = relay.config.Observability.Metrics.AddCounter("s0_outbox_publish_total", "Outbox publish attempts.", map[string]string{"service": "outbox-relay", "result": "ok"}, 1)
 	relay.config.Logger.Info("outbox_published",
 		"message_id", record.MessageID,
 		"aggregate_version", record.AggregateVersion,

@@ -3,25 +3,29 @@ package audit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/segmentio/kafka-go"
 )
 
 type ConsumerConfig struct {
-	Brokers []string
-	Topic   string
-	GroupID string
-	Logger  *slog.Logger
-	Now     func() time.Time
+	Brokers       []string
+	Topic         string
+	GroupID       string
+	Logger        *slog.Logger
+	Observability *observability.Runtime
+	Now           func() time.Time
 }
 
 type Consumer struct {
-	reader *kafka.Reader
-	store  *Store
-	logger *slog.Logger
-	now    func() time.Time
+	reader        *kafka.Reader
+	store         *Store
+	logger        *slog.Logger
+	observability *observability.Runtime
+	now           func() time.Time
 }
 
 func NewConsumer(store *Store, config ConsumerConfig) *Consumer {
@@ -33,6 +37,9 @@ func NewConsumer(store *Store, config ConsumerConfig) *Consumer {
 	if now == nil {
 		now = time.Now
 	}
+	if config.Observability == nil {
+		config.Observability = observability.NewRuntime(observability.RuntimeConfig{Service: "audit-ledger-service"})
+	}
 	return &Consumer{
 		reader: kafka.NewReader(kafka.ReaderConfig{
 			Brokers:     append([]string(nil), config.Brokers...),
@@ -43,9 +50,10 @@ func NewConsumer(store *Store, config ConsumerConfig) *Consumer {
 			MaxWait:     time.Second,
 			StartOffset: kafka.FirstOffset,
 		}),
-		store:  store,
-		logger: logger,
-		now:    now,
+		store:         store,
+		logger:        logger,
+		observability: config.Observability,
+		now:           now,
 	}
 }
 
@@ -68,7 +76,14 @@ func (consumer *Consumer) Run(ctx context.Context) error {
 				continue
 			}
 		}
-		inserted, err := consumer.store.Consume(ctx, message.Value, MessageMetadata{
+		messageContext := observability.ContextWithRemoteParent(ctx, consumer.observability.Tracer, kafkaHeader(message.Headers, "traceparent"), "")
+		messageContext, span := observability.Start(messageContext, "kafka.audit.consume", observability.SpanKindConsumer, map[string]any{
+			"messaging.system": "kafka", "messaging.destination.name": message.Topic,
+			"messaging.operation": "process", "messaging.kafka.partition": message.Partition,
+			"event.correlation_id": kafkaHeader(message.Headers, "correlation-id"),
+			"event.causation_id":   kafkaHeader(message.Headers, "causation-id"),
+		})
+		inserted, err := consumer.store.Consume(messageContext, message.Value, MessageMetadata{
 			Topic:      message.Topic,
 			Partition:  message.Partition,
 			Offset:     message.Offset,
@@ -76,15 +91,34 @@ func (consumer *Consumer) Run(ctx context.Context) error {
 		})
 		messageID := auditMessageID(message.Headers)
 		if err != nil {
+			span.SetStatus("error", "AUDIT_TRANSACTION_FAILED")
+			span.End()
+			_ = consumer.observability.Metrics.AddCounter("s0_audit_ingestion_total", "Audit ingestion attempts.", map[string]string{"service": "audit-ledger-service", "result": "error"}, 1)
 			consumer.logger.Error("audit_consumer_transaction_failed", "error_code", "AUDIT_TRANSACTION_FAILED", "message_id", messageID)
 			return err
 		}
 		if err := consumer.reader.CommitMessages(ctx, message); err != nil {
+			span.SetStatus("error", "OFFSET_COMMIT_FAILED")
+			span.End()
 			consumer.logger.Warn("audit_consumer_commit_failed", "error_code", "OFFSET_COMMIT_FAILED", "message_id", messageID)
 			return err
 		}
+		span.SetStatus("ok", "")
+		span.End()
+		_ = consumer.observability.Metrics.AddCounter("s0_audit_ingestion_total", "Audit ingestion attempts.", map[string]string{"service": "audit-ledger-service", "result": "ok"}, 1)
+		_ = consumer.observability.Metrics.ObserveHistogram("s0_audit_ingestion_latency_seconds", "End-to-end Audit ingestion latency.", map[string]string{"service": "audit-ledger-service"}, consumer.now().UTC().Sub(message.Time.UTC()).Seconds(), nil)
+		_ = consumer.observability.Metrics.SetGauge("s0_audit_consumer_offset", "Latest committed Audit consumer offset.", map[string]string{"service": "audit-ledger-service", "topic": message.Topic, "partition": fmt.Sprintf("%d", message.Partition)}, float64(message.Offset))
 		consumer.logger.Info("audit_event_consumed", "message_id", messageID, "inserted", inserted, "partition", message.Partition, "offset", message.Offset)
 	}
+}
+
+func kafkaHeader(headers []kafka.Header, key string) string {
+	for _, header := range headers {
+		if header.Key == key {
+			return string(header.Value)
+		}
+	}
+	return ""
 }
 
 func auditMessageID(headers []kafka.Header) string {

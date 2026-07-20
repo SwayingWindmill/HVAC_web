@@ -80,6 +80,7 @@ func TestPublicLegacyTimeoutAndCircuitProblems(t *testing.T) {
 	}, sessionstore.MutationContext{
 		Action: "SESSION_CREATED", Result: "SUCCEEDED", PolicyRevision: "policy-v1",
 		CorrelationID: "request-create", TraceID: strings.Repeat("a", 32),
+		Traceparent:      "00-" + strings.Repeat("a", 32) + "-" + strings.Repeat("b", 16) + "-01",
 		ExecutingService: "platform-gateway", ExecutingSPIFFEID: "spiffe://hvac.local/platform-gateway", OccurredAt: now,
 	})
 	if err != nil {

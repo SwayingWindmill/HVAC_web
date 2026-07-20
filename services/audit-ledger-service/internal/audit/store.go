@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionevent"
 )
 
@@ -47,6 +48,7 @@ type Record struct {
 	CorrelationID        string    `json:"correlationId"`
 	CausationID          string    `json:"causationId"`
 	TraceID              string    `json:"traceId"`
+	Traceparent          string    `json:"-"`
 	PayloadSHA256        string    `json:"payloadSha256"`
 	PreviousRecordHash   string    `json:"previousRecordHash"`
 	RecordHash           string    `json:"recordHash"`
@@ -83,6 +85,8 @@ func (store *Store) Close() {
 }
 
 func (store *Store) Consume(ctx context.Context, payload []byte, metadata MessageMetadata) (bool, error) {
+	ctx, span := observability.Start(ctx, "postgres.audit.consume", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "audit.consume"})
+	defer span.End()
 	event, err := sessionevent.UnmarshalBinary(payload)
 	if err != nil {
 		return false, fmt.Errorf("decode session audit protobuf: %w", err)
@@ -145,15 +149,15 @@ func (store *Store) Consume(ctx context.Context, payload []byte, metadata Messag
 			message_id, schema_version, organization_id, aggregate_type, aggregate_id,
 			aggregate_version, occurred_at, initiating_subject, initiating_issuer,
 			executing_service, executing_spiffe_id, acting_organization_id, action, result,
-			policy_revision, correlation_id, causation_id, trace_id, payload_sha256,
-			previous_record_hash, record_hash, recorded_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+			policy_revision, correlation_id, causation_id, trace_id, traceparent,
+			payload_sha256, previous_record_hash, record_hash, recorded_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
 	`, event.MessageID, event.SchemaVersion, event.OrganizationID, event.AggregateType,
 		event.AggregateID, event.AggregateVersion, time.UnixMilli(event.OccurredAtUnixMS).UTC(),
 		event.Actor.InitiatingSubject, event.Actor.InitiatingIssuer, event.Actor.ExecutingService,
 		event.Actor.ExecutingSPIFFEID, event.Actor.ActingOrganizationID, event.Action,
 		event.Result, event.PolicyRevision, event.CorrelationID, event.CausationID,
-		event.TraceID, event.PayloadSHA256, previousHash, recordHash, recordedAt)
+		event.TraceID, event.Traceparent, event.PayloadSHA256, previousHash, recordHash, recordedAt)
 	if err != nil {
 		return false, err
 	}
@@ -213,8 +217,8 @@ const recordSelect = `
 	       aggregate_id, aggregate_version, occurred_at, initiating_subject,
 	       initiating_issuer, executing_service, executing_spiffe_id,
 	       acting_organization_id, action, result, policy_revision, correlation_id,
-	       causation_id, trace_id, payload_sha256, previous_record_hash, record_hash,
-	       recorded_at
+	       causation_id, trace_id, traceparent, payload_sha256, previous_record_hash,
+	       record_hash, recorded_at
 	FROM audit_ledger.records`
 
 type rowScanner interface {
@@ -230,7 +234,7 @@ func scanRecord(row rowScanner) (Record, error) {
 		&record.InitiatingIssuer, &record.ExecutingService, &record.ExecutingSPIFFEID,
 		&record.ActingOrganizationID, &record.Action, &record.Result,
 		&record.PolicyRevision, &record.CorrelationID, &record.CausationID,
-		&record.TraceID, &record.PayloadSHA256, &record.PreviousRecordHash,
+		&record.TraceID, &record.Traceparent, &record.PayloadSHA256, &record.PreviousRecordHash,
 		&record.RecordHash, &record.RecordedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

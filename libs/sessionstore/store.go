@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionevent"
 )
 
@@ -51,6 +52,7 @@ type MutationContext struct {
 	CorrelationID     string
 	CausationID       string
 	TraceID           string
+	Traceparent       string
 	ExecutingService  string
 	ExecutingSPIFFEID string
 	OccurredAt        time.Time
@@ -77,7 +79,9 @@ func NewMemoryStore() *MemoryStore {
 	}
 }
 
-func (store *MemoryStore) CreateSession(_ context.Context, session Session, mutation MutationContext) (Session, error) {
+func (store *MemoryStore) CreateSession(ctx context.Context, session Session, mutation MutationContext) (Session, error) {
+	_, span := observability.Start(ctx, "sessionstore.memory.create", observability.SpanKindInternal, map[string]any{"db.system": "memory", "db.operation": "session.create"})
+	defer span.End()
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if _, exists := store.sessions[session.ID]; exists {
@@ -97,7 +101,9 @@ func (store *MemoryStore) CreateSession(_ context.Context, session Session, muta
 	return cloneSession(session), nil
 }
 
-func (store *MemoryStore) GetSession(_ context.Context, sessionID string) (Session, error) {
+func (store *MemoryStore) GetSession(ctx context.Context, sessionID string) (Session, error) {
+	_, span := observability.Start(ctx, "sessionstore.memory.get", observability.SpanKindInternal, map[string]any{"db.system": "memory", "db.operation": "session.get"})
+	defer span.End()
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 	session, exists := store.sessions[sessionID]
@@ -107,7 +113,9 @@ func (store *MemoryStore) GetSession(_ context.Context, sessionID string) (Sessi
 	return cloneSession(session), nil
 }
 
-func (store *MemoryStore) RevokeSession(_ context.Context, sessionID string, mutation MutationContext) (Session, error) {
+func (store *MemoryStore) RevokeSession(ctx context.Context, sessionID string, mutation MutationContext) (Session, error) {
+	_, span := observability.Start(ctx, "sessionstore.memory.revoke", observability.SpanKindInternal, map[string]any{"db.system": "memory", "db.operation": "session.revoke"})
+	defer span.End()
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	session, exists := store.sessions[sessionID]
@@ -162,6 +170,7 @@ func buildEvent(session Session, mutation MutationContext, messageID, state stri
 		CorrelationID:     mutation.CorrelationID,
 		CausationID:       mutation.CausationID,
 		TraceID:           mutation.TraceID,
+		Traceparent:       mutation.Traceparent,
 		Actor: sessionevent.ActorChainV1{
 			InitiatingSubject:    session.Principal.Subject,
 			InitiatingIssuer:     session.Principal.Issuer,

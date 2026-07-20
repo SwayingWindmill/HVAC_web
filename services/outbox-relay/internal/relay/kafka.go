@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/segmentio/kafka-go"
 )
@@ -38,6 +39,9 @@ func (publisher *KafkaPublisher) Publish(ctx context.Context, record sessionstor
 		Value: append([]byte(nil), record.Payload...),
 		Time:  record.CreatedAt.UTC(),
 		Headers: []kafka.Header{
+			{Key: "traceparent", Value: []byte(observability.Traceparent(ctx))},
+			{Key: "correlation-id", Value: []byte(record.CorrelationID)},
+			{Key: "causation-id", Value: []byte(record.CausationID)},
 			{Key: "message-id", Value: []byte(record.MessageID)},
 			{Key: "schema-version", Value: []byte(strconv.FormatUint(uint64(record.SchemaVersion), 10))},
 			{Key: "aggregate-version", Value: []byte(strconv.FormatUint(record.AggregateVersion, 10))},

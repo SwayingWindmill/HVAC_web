@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/internal/gateway"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
@@ -28,7 +29,11 @@ var (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	telemetry := observability.NewRuntime(observability.RuntimeConfig{
+		Service: "platform-gateway", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
+	})
+	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	address := envOr("PLATFORM_GATEWAY_ADDR", ":8080")
 	runContext, cancelRun := context.WithCancel(context.Background())
 	defer cancelRun()
@@ -48,11 +53,12 @@ func main() {
 	go routing.watch(runContext)
 
 	handler := gateway.NewHandler(gateway.Config{
-		Logger:       logger,
-		Identity:     identity,
-		RouteManager: routing.manager,
-		RouteAudit:   routing.audit,
-		Legacy:       routing.legacy,
+		Logger:        logger,
+		Identity:      identity,
+		RouteManager:  routing.manager,
+		RouteAudit:    routing.audit,
+		Legacy:        routing.legacy,
+		Observability: telemetry,
 		Build: platformapi.BuildInfo{
 			Service: "platform-gateway",
 			Version: version,
@@ -68,6 +74,15 @@ func main() {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	diagnostics := &http.Server{
+		Addr: envOr("PLATFORM_GATEWAY_DIAGNOSTICS_ADDR", "127.0.0.1:19080"), Handler: telemetry.DiagnosticsHandler(),
+		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+	}
+	go func() {
+		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("gateway_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
+		}
+	}()
 
 	shutdownSignal := make(chan os.Signal, 1)
 	signal.Notify(shutdownSignal, syscall.SIGINT, syscall.SIGTERM)
@@ -79,6 +94,8 @@ func main() {
 		if err := server.Shutdown(ctx); err != nil {
 			logger.Error("gateway_shutdown_failed", "error_code", "GATEWAY_SHUTDOWN_FAILED")
 		}
+		_ = diagnostics.Shutdown(ctx)
+		_ = telemetry.Shutdown(ctx)
 	}()
 
 	logger.Info("gateway_started", "service", "platform-gateway", "address", address, "version", version, "commit", commit, "identity_enabled", identity != nil)

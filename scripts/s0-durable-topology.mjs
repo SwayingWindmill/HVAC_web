@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -110,6 +111,48 @@ async function waitForChildAlive(child, label) {
   }
 }
 
+async function startOTLPRecorder(port) {
+  const payloads = [];
+  let available = true;
+  const server = createServer((request, response) => {
+    if (request.method !== 'POST' || request.url !== '/v1/traces') {
+      response.writeHead(404).end();
+      return;
+    }
+    if (!available) {
+      response.writeHead(503, { 'content-type': 'application/json' }).end('{"code":"COLLECTOR_UNAVAILABLE"}');
+      return;
+    }
+    const chunks = [];
+    let bytes = 0;
+    request.on('data', (chunk) => {
+      bytes += chunk.length;
+      if (bytes > 4 * 1024 * 1024) request.destroy();
+      else chunks.push(chunk);
+    });
+    request.on('end', () => {
+      try {
+        payloads.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+        response.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+      } catch {
+        response.writeHead(400).end();
+      }
+    });
+  });
+  server.listen(port, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('OTLP recorder did not expose a TCP address');
+  return {
+    endpoint: `http://127.0.0.1:${address.port}`,
+    payloads,
+    setAvailable(value) { available = Boolean(value); },
+    async close() {
+      await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
+    },
+  };
+}
+
 export async function stopProcess(child) {
   if (!child || processExited(child)) return;
   if (process.platform === 'win32') {
@@ -136,6 +179,9 @@ export async function startS0DurableTopology(options = {}) {
   const legacyPort = Number(options.legacyPort ?? process.env.S0_DURABLE_LEGACY_PORT ?? 13001);
   const gatewayPort = Number(options.gatewayPort ?? process.env.S0_DURABLE_GATEWAY_PORT ?? 18082);
   const webPort = Number(options.webPort ?? process.env.S0_DURABLE_WEB_PORT ?? 5181);
+  const otlpPort = Number(options.otlpPort ?? process.env.S0_DURABLE_OTLP_PORT ?? 0);
+  const telemetryRecorder = options.captureTelemetry === false ? null : await startOTLPRecorder(otlpPort);
+  const telemetryEnvironment = telemetryRecorder ? { OTEL_EXPORTER_OTLP_ENDPOINT: telemetryRecorder.endpoint } : {};
   const instanceRoot = join(tmpdir(), `hvac-s0-durable-${process.pid}-${randomBytes(5).toString('hex')}`);
   const pkiDir = join(instanceRoot, 'pki');
   const goCacheDir = process.env.GOCACHE || join(tmpdir(), 'hvac-go-build-cache');
@@ -174,6 +220,7 @@ export async function startS0DurableTopology(options = {}) {
 
   const startAudit = async () => {
     services.audit = spawnService('Audit Ledger', goBinary, ['run', './services/audit-ledger-service/cmd/audit-ledger-service'], {
+      ...telemetryEnvironment,
       GOCACHE: goCacheDir,
       AUDIT_SERVICE_ADDR: `127.0.0.1:${auditPort}`,
       AUDIT_TLS_CERT: paths.auditCert,
@@ -193,6 +240,7 @@ export async function startS0DurableTopology(options = {}) {
 
   const startRelay = async () => {
     services.relay = spawnService('Outbox Relay', goBinary, ['run', './services/outbox-relay/cmd/outbox-relay'], {
+      ...telemetryEnvironment,
       GOCACHE: goCacheDir,
       OUTBOX_DATABASE_URL: database.relay,
       CONTROL_BACKBONE_BROKERS: brokers,
@@ -223,7 +271,14 @@ export async function startS0DurableTopology(options = {}) {
     await waitForContainer(() => docker(['exec', postgresContainer, 'pg_isready', '-U', 'postgres', '-d', 'hvac_s0']), 'PostgreSQL');
     await waitForContainer(() => docker(['exec', redpandaContainer, 'rpk', 'cluster', 'health', '-X', 'brokers=127.0.0.1:9092']), 'Redpanda');
     try { docker(['exec', redpandaContainer, 'rpk', 'topic', 'delete', 'control.security.session.v1', '-X', 'brokers=127.0.0.1:9092']); } catch {}
-    docker(['exec', redpandaContainer, 'rpk', 'topic', 'create', 'control.security.session.v1', '-p', '3', '-r', '1', '-X', 'brokers=127.0.0.1:9092']);
+    await waitForContainer(() => {
+      try {
+        docker(['exec', redpandaContainer, 'rpk', 'topic', 'create', 'control.security.session.v1', '-p', '3', '-r', '1', '-X', 'brokers=127.0.0.1:9092']);
+      } catch (error) {
+        const topics = docker(['exec', redpandaContainer, 'rpk', 'topic', 'list', '-X', 'brokers=127.0.0.1:9092']);
+        if (!topics.split(/\r?\n/).some((line) => line.trim().startsWith('control.security.session.v1'))) throw error;
+      }
+    }, 'Control Backbone topic');
 
     const generated = spawnSync(goBinary, ['run', './tools/s0-auth-fixture/cmd/generate-pki', pkiDir], {
       cwd: root,
@@ -247,6 +302,7 @@ export async function startS0DurableTopology(options = {}) {
     await waitForTLS(oidcPort, 'OIDC fixture', services.oidc);
 
     services.iam = spawnService('IAM service', goBinary, ['run', './services/iam-service/cmd/iam-service'], {
+      ...telemetryEnvironment,
       GOCACHE: goCacheDir,
       IAM_SERVICE_ADDR: `127.0.0.1:${iamPort}`,
       IAM_TLS_CERT: paths.iamCert,
@@ -263,6 +319,7 @@ export async function startS0DurableTopology(options = {}) {
     await startLegacy();
 
     services.gateway = spawnService('Platform Gateway', goBinary, ['run', './services/platform-gateway/cmd/platform-gateway'], {
+      ...telemetryEnvironment,
       GOCACHE: goCacheDir,
       PLATFORM_GATEWAY_ADDR: `127.0.0.1:${gatewayPort}`,
       OIDC_ISSUER: oidcURL,
@@ -307,6 +364,8 @@ export async function startS0DurableTopology(options = {}) {
 
     return {
       oidcURL, iamURL, auditURL, legacyURL, gatewayURL, webURL, redirectURI, brokers, database, pkiDir, routeRegistryPath: paths.routeRegistry, services,
+      telemetryPayloads() { return telemetryRecorder ? JSON.parse(JSON.stringify(telemetryRecorder.payloads)) : []; },
+      setTelemetryAvailable(value) { telemetryRecorder?.setAvailable(value); },
       async stopBroker() { docker(['stop', redpandaContainer]); },
       async startBroker() {
         docker(['start', redpandaContainer]);
@@ -354,12 +413,14 @@ export async function startS0DurableTopology(options = {}) {
       async stop() {
         for (const child of [services.web, services.gateway, services.legacy, services.relay, services.audit, services.iam, services.oidc]) await stopProcess(child);
         try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
+        if (telemetryRecorder) await telemetryRecorder.close();
         await rm(instanceRoot, { recursive: true, force: true });
       },
     };
   } catch (error) {
     for (const child of [services.web, services.gateway, services.legacy, services.relay, services.audit, services.iam, services.oidc]) await stopProcess(child);
     try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
+    if (telemetryRecorder) await telemetryRecorder.close();
     await rm(instanceRoot, { recursive: true, force: true });
     throw error;
   }

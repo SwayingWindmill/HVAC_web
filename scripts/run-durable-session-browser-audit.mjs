@@ -88,7 +88,7 @@ async function waitForAttribute(client, selector, attribute, expected, label) {
 }
 
 async function fetchJSON(client, path, init = {}) {
-  return evaluate(client, `fetch(${JSON.stringify(path)}, ${JSON.stringify(init)}).then(async (response) => ({ status: response.status, auditMessageId: response.headers.get('x-audit-message-id'), routePolicyRevision: response.headers.get('x-route-policy-revision'), body: response.status === 204 ? null : await response.json() }))`);
+  return evaluate(client, `fetch(${JSON.stringify(path)}, ${JSON.stringify(init)}).then(async (response) => ({ status: response.status, auditMessageId: response.headers.get('x-audit-message-id'), routePolicyRevision: response.headers.get('x-route-policy-revision'), traceparent: response.headers.get('traceparent'), body: response.status === 204 ? null : await response.json() }))`);
 }
 
 async function waitForAudit(client, messageId) {
@@ -120,6 +120,68 @@ async function waitForPlatformOwner(client, implementation, revision) {
     await pause(200);
   }
   throw new Error(`Platform status did not reach ${implementation} revision ${revision}: ${JSON.stringify(last)}`);
+}
+
+function traceIDFromTraceparent(value) {
+  const match = /^00-([a-f0-9]{32})-[a-f0-9]{16}-[a-f0-9]{2}$/.exec(value ?? '');
+  assert(match, `Invalid W3C traceparent: ${String(value)}`);
+  return match[1];
+}
+
+function decodeOTLPValue(value = {}) {
+  if ('stringValue' in value) return value.stringValue;
+  if ('intValue' in value) return Number(value.intValue);
+  if ('doubleValue' in value) return value.doubleValue;
+  if ('boolValue' in value) return value.boolValue;
+  return null;
+}
+
+function flattenTelemetry(payloads) {
+  const spans = [];
+  for (const payload of payloads) {
+    for (const resourceSpans of payload.resourceSpans ?? []) {
+      const resourceAttributes = Object.fromEntries((resourceSpans.resource?.attributes ?? []).map((attribute) => [attribute.key, decodeOTLPValue(attribute.value)]));
+      for (const scopeSpans of resourceSpans.scopeSpans ?? []) {
+        for (const span of scopeSpans.spans ?? []) {
+          spans.push({
+            ...span,
+            service: resourceAttributes['service.name'] ?? 'unknown',
+            attributes: Object.fromEntries((span.attributes ?? []).map((attribute) => [attribute.key, decodeOTLPValue(attribute.value)])),
+          });
+        }
+      }
+    }
+  }
+  return spans;
+}
+
+async function waitForTrace(topology, traceId, requiredNames, label) {
+  let trace = [];
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    trace = flattenTelemetry(topology.telemetryPayloads()).filter((span) => span.traceId === traceId);
+    const names = new Set(trace.map((span) => span.name));
+    if (requiredNames.every((name) => names.has(name))) return trace;
+    await pause(100);
+  }
+  throw new Error(`${label} trace ${traceId} was incomplete: ${JSON.stringify(trace.map((span) => ({ service: span.service, name: span.name, parentSpanId: span.parentSpanId, spanId: span.spanId })))}`);
+}
+
+function assertParent(trace, childName, parentName) {
+  const child = trace.find((span) => span.name === childName);
+  const parent = trace.find((span) => span.name === parentName && span.spanId === child?.parentSpanId);
+  assert(child && parent, `${childName} was not a child of ${parentName}`);
+}
+
+async function waitForFailedExports(url) {
+  let diagnostics;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      diagnostics = await fetch(url).then((response) => response.json());
+      if (Number(diagnostics?.telemetry?.failedExports) > 0) return diagnostics;
+    } catch {}
+    await pause(100);
+  }
+  throw new Error(`Telemetry export failure was not visible at ${url}: ${JSON.stringify(diagnostics)}`);
 }
 
 async function login(client, loginHint = '') {
@@ -172,6 +234,11 @@ try {
   const routeAudit = topology.platformRouteAuditSnapshot();
   assert(routeAudit?.selected_owner === 'legacy-hvac-backend' && routeAudit?.registry_revision === 1, 'Legacy route decision was not audited');
   assert(!JSON.stringify(routeAudit).includes(principal.body.session.id), 'Route audit leaked the browser Session identifier');
+  const legacyTrace = await waitForTrace(topology, traceIDFromTraceparent(legacyStatus.traceparent), ['http.gateway.request', 'http.legacy.platform_status'], 'Legacy route');
+  const legacyGatewaySpan = legacyTrace.find((span) => span.name === 'http.gateway.request');
+  assert(legacyGatewaySpan?.attributes['route.owner'] === 'legacy-hvac-backend', 'Legacy trace did not record the selected owner');
+  assert(Number(legacyGatewaySpan?.attributes['route.policy.revision']) === 1 && Number(legacyGatewaySpan?.attributes['route.revision']) === 1, 'Legacy trace did not record route revisions');
+  assertParent(legacyTrace, 'http.legacy.platform_status', 'http.gateway.request');
   const directLegacy = await evaluate(cdpClient, `fetch(${JSON.stringify(`${topology.legacyURL}/api/v1/health`)}).then(() => ({ resolved: true })).catch(() => ({ resolved: false }))`);
   assert(directLegacy.resolved === false, 'Browser reached private Legacy service without a workload certificate');
 
@@ -196,6 +263,20 @@ try {
   assert(!JSON.stringify(creationAudit.body).includes(principal.body.session.id), 'Audit record leaked the browser Session cookie value');
   assert(/^[a-f0-9]{64}$/.test(creationAudit.body.payloadSha256) && /^[a-f0-9]{64}$/.test(creationAudit.body.recordHash), 'Audit hashes were invalid');
   assert(topology.auditRecordCount(creationMessageID) === 1, 'Session creation did not converge to one Audit record');
+  const loginTrace = await waitForTrace(topology, creationAudit.body.traceId, [
+    'http.gateway.request', 'http.iam.current_principal', 'http.iam.request',
+    'postgres.session.transaction', 'outbox.kafka.publish', 'kafka.audit.consume', 'postgres.audit.consume',
+  ], 'Login to Audit ingestion');
+  const loginServices = new Set(loginTrace.map((span) => span.service));
+  for (const service of ['platform-gateway', 'iam-service', 'outbox-relay', 'audit-ledger-service']) {
+    assert(loginServices.has(service), `Login trace did not include ${service}`);
+  }
+  assertParent(loginTrace, 'http.iam.current_principal', 'http.gateway.request');
+  assertParent(loginTrace, 'http.iam.request', 'http.iam.current_principal');
+  assertParent(loginTrace, 'postgres.session.transaction', 'http.gateway.request');
+  assertParent(loginTrace, 'outbox.kafka.publish', 'http.gateway.request');
+  assertParent(loginTrace, 'kafka.audit.consume', 'outbox.kafka.publish');
+  assertParent(loginTrace, 'postgres.audit.consume', 'kafka.audit.consume');
 
   const browserState = await evaluate(cdpClient, `({ url: window.location.href, cookie: document.cookie, local: Object.fromEntries(Object.entries(localStorage)), session: Object.fromEntries(Object.entries(sessionStorage)) })`);
   assert(!/[?&](code|state)=/i.test(browserState.url), `OIDC callback material remained in URL: ${browserState.url}`);
@@ -234,11 +315,46 @@ try {
   await waitForNumber(() => topology.auditRecordCount(outageMessageID), 1, 'recovered Audit record count');
 
   await login(cdpClient, 'other-organization');
+  const recoveredPrincipal = await fetchJSON(cdpClient, '/api/v1/principal');
+  assert(recoveredPrincipal.status === 200, 'Recovered Principal request failed');
   const recoveredAudit = await waitForAudit(cdpClient, outageMessageID);
   assert(recoveredAudit.body.organizationId === 'org-fixture-02', 'Recovered Audit record crossed Organization boundary');
   assert(recoveredAudit.body.action === 'SESSION_LOGGED_OUT' && recoveredAudit.body.aggregateVersion === 2, 'Recovered logout Audit semantics were incorrect');
   assert(recoveredAudit.body.causationId === otherPrincipal.body.session.lastAuditMessageId, 'Logout causation did not reference Session creation');
   assert(topology.auditRecordCount(outageMessageID) === 1, 'Broker recovery created duplicate Audit records');
+
+  topology.setTelemetryAvailable(false);
+  const collectorOutageStarted = Date.now();
+  const collectorOutagePrincipal = await fetchJSON(cdpClient, '/api/v1/principal');
+  assert(collectorOutagePrincipal.status === 200, 'Collector outage blocked the current-Principal business path');
+  assert(Date.now() - collectorOutageStarted < 3000, 'Collector outage added blocking latency to the business path');
+  await waitForFailedExports('http://127.0.0.1:19080/diagnostics');
+  topology.setTelemetryAvailable(true);
+
+  const telemetryProbeMarker = `seeded-telemetry-marker-${process.pid}`;
+  const authorizationHeaderName = ['Author', 'ization'].join('');
+  await evaluate(cdpClient, `document.cookie = ${JSON.stringify(`telemetry_probe=${telemetryProbeMarker}; Path=/; Secure; SameSite=Lax`)}`);
+  const markerRequest = await fetchJSON(cdpClient, '/api/v1/platform/status', {
+    headers: { [authorizationHeaderName]: `Probe ${telemetryProbeMarker}`, [csrfHeaderName]: telemetryProbeMarker },
+  });
+  assert(markerRequest.status === 200, 'Telemetry absence probe request failed');
+  await pause(1000);
+  const serializedTelemetry = JSON.stringify(topology.telemetryPayloads());
+  const forbiddenTelemetryValues = [
+    telemetryProbeMarker,
+    principal.body.session.id,
+    principal.body.session[csrfFieldName],
+    otherPrincipal.body.session.id,
+    otherPrincipal.body.session[csrfFieldName],
+    recoveredPrincipal.body.session.id,
+    recoveredPrincipal.body.session[csrfFieldName],
+    topology.database.gateway,
+    topology.database.auditConsumer,
+    'fixture@example.test',
+  ];
+  for (const forbidden of forbiddenTelemetryValues) {
+    assert(!serializedTelemetry.includes(forbidden), `Telemetry exposed forbidden marker: ${forbidden}`);
+  }
 
   const directAudit = await evaluate(cdpClient, `fetch(${JSON.stringify(`${topology.auditURL}/internal/v1/audit/session-events/${creationMessageID}`)}).then(() => ({ resolved: true })).catch(() => ({ resolved: false }))`);
   assert(directAudit.resolved === false, 'Browser reached private Audit Ledger without a workload certificate');

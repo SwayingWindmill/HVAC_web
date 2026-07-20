@@ -26,6 +26,7 @@ func TestAuditQueryRequiresWorkloadAndOrganizationScopedDelegation(t *testing.T)
 		ExecutingService: "platform-gateway", ExecutingSPIFFEID: harness.spiffeID,
 		Action: "SESSION_CREATED", Result: "SUCCEEDED", PolicyRevision: "policy-v1",
 		CorrelationID: "request-01", TraceID: "0123456789abcdef0123456789abcdef",
+		Traceparent:   "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
 		PayloadSHA256: stringOf('a', 64), PreviousRecordHash: stringOf('0', 64), RecordHash: stringOf('b', 64), RecordedAt: harness.now,
 	}
 	store := &fakeRecordStore{records: map[string]audit.Record{"org-01/message-01": record}}

@@ -45,6 +45,7 @@ type SessionAuditEventV1 struct {
 	CorrelationID     string
 	CausationID       string
 	TraceID           string
+	Traceparent       string
 	Actor             ActorChainV1
 	Action            string
 	Result            string
@@ -81,12 +82,15 @@ func (event SessionAuditEventV1) Validate() error {
 	if event.Action == "" || event.Result == "" || event.PolicyRevision == "" || event.PayloadSHA256 == "" || event.SessionState == "" {
 		return errors.New("event audit fields are incomplete")
 	}
+	if !validTraceparent(event.Traceparent, event.TraceID) {
+		return errors.New("event traceparent is invalid")
+	}
 	if _, err := hex.DecodeString(event.PayloadSHA256); err != nil || len(event.PayloadSHA256) != sha256.Size*2 {
 		return errors.New("payload hash must be lowercase sha256 hex")
 	}
 	for _, value := range []string{
 		event.MessageID, event.OrganizationID, event.PartitionKey, event.AggregateID,
-		event.CorrelationID, event.CausationID, event.TraceID, event.Action,
+		event.CorrelationID, event.CausationID, event.TraceID, event.Traceparent, event.Action,
 		event.Result, event.PolicyRevision, event.SessionState,
 		event.Actor.InitiatingSubject, event.Actor.InitiatingIssuer,
 		event.Actor.ExecutingService, event.Actor.ExecutingSPIFFEID,
@@ -125,6 +129,7 @@ func (event SessionAuditEventV1) MarshalBinary() ([]byte, error) {
 	output = appendString(output, 18, event.PolicyRevision)
 	output = appendString(output, 19, event.PayloadSHA256)
 	output = appendString(output, 20, event.SessionState)
+	output = appendString(output, 21, event.Traceparent)
 	return output, nil
 }
 
@@ -137,7 +142,7 @@ func UnmarshalBinary(input []byte) (SessionAuditEventV1, error) {
 		}
 		input = input[consumed:]
 		switch number {
-		case 1, 3, 4, 5, 6, 7, 8, 12, 13, 14, 16, 17, 18, 19, 20:
+		case 1, 3, 4, 5, 6, 7, 8, 12, 13, 14, 16, 17, 18, 19, 20, 21:
 			if wireType != protowire.BytesType {
 				return SessionAuditEventV1{}, fmt.Errorf("field %d has wrong wire type", number)
 			}
@@ -293,7 +298,25 @@ func assignString(event *SessionAuditEventV1, number protowire.Number, value str
 		event.PayloadSHA256 = value
 	case 20:
 		event.SessionState = value
+	case 21:
+		event.Traceparent = value
 	}
+}
+
+func validTraceparent(value, traceID string) bool {
+	parts := strings.Split(value, "-")
+	if len(parts) != 4 || parts[0] != "00" || parts[1] != traceID || len(parts[1]) != 32 || len(parts[2]) != 16 || len(parts[3]) != 2 {
+		return false
+	}
+	if parts[1] == strings.Repeat("0", 32) || parts[2] == strings.Repeat("0", 16) {
+		return false
+	}
+	for _, part := range parts[1:] {
+		if _, err := hex.DecodeString(part); err != nil || strings.ToLower(part) != part {
+			return false
+		}
+	}
+	return true
 }
 
 func containsSensitiveMarker(value string) bool {

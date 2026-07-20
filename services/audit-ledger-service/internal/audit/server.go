@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const SessionAuditPathPrefix = "/internal/v1/audit/session-events/"
@@ -23,6 +24,7 @@ type ServerConfig struct {
 	AllowedWorkloadSPIFFE string
 	Audience              string
 	Logger                *slog.Logger
+	Observability         *observability.Runtime
 	Now                   func() time.Time
 }
 
@@ -31,6 +33,7 @@ type server struct {
 	allowedWorkloadSPIFFE string
 	audience              string
 	logger                *slog.Logger
+	observability         *observability.Runtime
 	now                   func() time.Time
 }
 
@@ -50,19 +53,41 @@ func NewHandler(config ServerConfig) http.Handler {
 	if config.Store == nil || config.AllowedWorkloadSPIFFE == "" {
 		panic("audit server configuration is incomplete")
 	}
+	telemetry := config.Observability
+	if telemetry == nil {
+		telemetry = observability.NewRuntime(observability.RuntimeConfig{Service: "audit-ledger-service"})
+	}
 	return &server{
 		store:                 config.Store,
 		allowedWorkloadSPIFFE: config.AllowedWorkloadSPIFFE,
 		audience:              audience,
 		logger:                logger,
+		observability:         telemetry,
 		now:                   now,
 	}
 }
 
 func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	startedAt := server.now()
+	ctx := server.observability.Tracer.ExtractHTTP(request.Context(), request.Header)
+	ctx, span := server.observability.Tracer.Start(ctx, "http.audit.query", observability.SpanKindServer, map[string]any{
+		"http.request.method": request.Method, "http.route": safeAuditPath(request.URL.Path),
+	})
+	request = request.WithContext(ctx)
+	writer.Header().Set("traceparent", observability.Traceparent(ctx))
 	status := http.StatusOK
 	defer func() {
+		result := "ok"
+		if status >= http.StatusBadRequest {
+			result = "error"
+			span.SetStatus("error", http.StatusText(status))
+		} else {
+			span.SetStatus("ok", "")
+		}
+		span.SetAttributes(map[string]any{"http.response.status_code": status})
+		span.End()
+		_ = server.observability.Metrics.AddCounter("s0_http_requests_total", "Audit query HTTP requests.", map[string]string{"service": "audit-ledger-service", "route": safeAuditPath(request.URL.Path), "method": request.Method, "result": result}, 1)
+		_ = server.observability.Metrics.ObserveHistogram("s0_http_request_duration_seconds", "Audit query HTTP latency.", map[string]string{"service": "audit-ledger-service", "route": safeAuditPath(request.URL.Path), "method": request.Method}, server.now().Sub(startedAt).Seconds(), nil)
 		server.logger.InfoContext(request.Context(), "audit_query_request",
 			"method", request.Method,
 			"path", safeAuditPath(request.URL.Path),

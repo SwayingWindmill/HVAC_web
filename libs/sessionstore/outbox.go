@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 var ErrNoPendingOutbox = errors.New("no pending outbox message")
@@ -22,6 +23,10 @@ type OutboxRecord struct {
 	AggregateID      string
 	AggregateVersion uint64
 	OrganizationID   string
+	CorrelationID    string
+	CausationID      string
+	TraceID          string
+	Traceparent      string
 	Payload          []byte
 	EnvelopeSHA256   string
 	CreatedAt        time.Time
@@ -55,6 +60,8 @@ func (store *OutboxStore) Close() {
 }
 
 func (store *OutboxStore) ClaimPending(ctx context.Context, owner string, now time.Time, lease time.Duration) (OutboxRecord, error) {
+	ctx, span := observability.Start(ctx, "postgres.outbox.claim", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "outbox.claim"})
+	defer span.End()
 	row := store.pool.QueryRow(ctx, `
 		WITH candidate AS (
 			SELECT message_id
@@ -75,7 +82,8 @@ func (store *OutboxStore) ClaimPending(ctx context.Context, owner string, now ti
 		WHERE outbox.message_id = candidate.message_id
 		RETURNING outbox.message_id, outbox.topic, outbox.partition_key,
 		          outbox.schema_version, outbox.aggregate_type, outbox.aggregate_id,
-		          outbox.aggregate_version, outbox.organization_id, outbox.payload,
+		          outbox.aggregate_version, outbox.organization_id, outbox.correlation_id,
+		          outbox.causation_id, outbox.trace_id, outbox.traceparent, outbox.payload,
 		          outbox.envelope_sha256, outbox.created_at, outbox.publish_attempts
 	`, owner, now.UTC(), now.UTC().Add(lease))
 	record, err := scanOutbox(row)
@@ -92,6 +100,8 @@ func (store *OutboxStore) ClaimPending(ctx context.Context, owner string, now ti
 }
 
 func (store *OutboxStore) MarkPublished(ctx context.Context, messageID, owner string, publishedAt time.Time) error {
+	ctx, span := observability.Start(ctx, "postgres.outbox.publish", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "outbox.mark_published"})
+	defer span.End()
 	command, err := store.pool.Exec(ctx, `
 		UPDATE gateway.outbox
 		SET published_at = $3, claim_owner = '', claim_expires_at = NULL, last_error_code = ''
@@ -107,6 +117,8 @@ func (store *OutboxStore) MarkPublished(ctx context.Context, messageID, owner st
 }
 
 func (store *OutboxStore) MarkFailed(ctx context.Context, messageID, owner, errorCode string, availableAt time.Time) error {
+	ctx, span := observability.Start(ctx, "postgres.outbox.retry", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "outbox.mark_failed", "error.code": errorCode})
+	defer span.End()
 	command, err := store.pool.Exec(ctx, `
 		UPDATE gateway.outbox
 		SET available_at = $4, claim_owner = '', claim_expires_at = NULL, last_error_code = $3
@@ -122,16 +134,32 @@ func (store *OutboxStore) MarkFailed(ctx context.Context, messageID, owner, erro
 }
 
 func (store *OutboxStore) PendingCount(ctx context.Context) (int, error) {
+	ctx, span := observability.Start(ctx, "postgres.outbox.pending_count", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "outbox.pending_count"})
+	defer span.End()
 	var count int
 	err := store.pool.QueryRow(ctx, `SELECT count(*) FROM gateway.outbox WHERE published_at IS NULL`).Scan(&count)
 	return count, err
 }
 
+func (store *OutboxStore) OldestPendingAge(ctx context.Context, now time.Time) (time.Duration, error) {
+	ctx, span := observability.Start(ctx, "postgres.outbox.oldest_age", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "outbox.oldest_age"})
+	defer span.End()
+	var createdAt *time.Time
+	if err := store.pool.QueryRow(ctx, `SELECT min(created_at) FROM gateway.outbox WHERE published_at IS NULL`).Scan(&createdAt); err != nil {
+		return 0, err
+	}
+	if createdAt == nil {
+		return 0, nil
+	}
+	return now.UTC().Sub(createdAt.UTC()), nil
+}
+
 func (store *OutboxStore) Get(ctx context.Context, messageID string) (OutboxRecord, error) {
 	record, err := scanOutbox(store.pool.QueryRow(ctx, `
 		SELECT message_id, topic, partition_key, schema_version, aggregate_type,
-		       aggregate_id, aggregate_version, organization_id, payload,
-		       envelope_sha256, created_at, publish_attempts
+		       aggregate_id, aggregate_version, organization_id, correlation_id,
+		       causation_id, trace_id, traceparent, payload, envelope_sha256,
+		       created_at, publish_attempts
 		FROM gateway.outbox WHERE message_id = $1
 	`, messageID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -150,7 +178,8 @@ func scanOutbox(row rowScanner) (OutboxRecord, error) {
 	err := row.Scan(
 		&record.MessageID, &record.Topic, &record.PartitionKey, &record.SchemaVersion,
 		&record.AggregateType, &record.AggregateID, &record.AggregateVersion,
-		&record.OrganizationID, &record.Payload, &record.EnvelopeSHA256,
+		&record.OrganizationID, &record.CorrelationID, &record.CausationID,
+		&record.TraceID, &record.Traceparent, &record.Payload, &record.EnvelopeSHA256,
 		&record.CreatedAt, &record.PublishAttempts,
 	)
 	return record, err

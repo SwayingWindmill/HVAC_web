@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/sessionevent"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
@@ -114,6 +115,10 @@ func (controller *legacyController) callPlatformStatus(ctx context.Context, iden
 		return platformapi.PlatformStatusResponse{}, &failure
 	}
 
+	ctx, span := observability.Start(ctx, "http.legacy.platform_status", observability.SpanKindClient, map[string]any{
+		"http.request.method": http.MethodGet, "server.service": "legacy-hvac-backend", "route.owner": decision.SelectedOwner,
+	})
+	defer span.End()
 	requestContext, cancel := context.WithTimeout(ctx, controller.config.Timeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, controller.config.BaseURL+"/api/v1/health", nil)
@@ -128,6 +133,7 @@ func (controller *legacyController) callPlatformStatus(ctx context.Context, iden
 	if traceparent != "" {
 		request.Header.Set("traceparent", traceparent)
 	}
+	observability.InjectHTTP(requestContext, request.Header)
 
 	response, err := controller.config.HTTPClient.Do(request)
 	if err != nil {

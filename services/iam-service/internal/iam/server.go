@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const CurrentPrincipalPath = "/internal/v1/principal/current"
@@ -17,6 +18,7 @@ type Config struct {
 	AllowedWorkloadSPIFFE string
 	Audience              string
 	Logger                *slog.Logger
+	Observability         *observability.Runtime
 	Now                   func() time.Time
 }
 
@@ -24,6 +26,7 @@ type handler struct {
 	allowedWorkloadSPIFFE string
 	audience              string
 	logger                *slog.Logger
+	observability         *observability.Runtime
 	now                   func() time.Time
 }
 
@@ -36,18 +39,40 @@ func NewHandler(config Config) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
+	telemetry := config.Observability
+	if telemetry == nil {
+		telemetry = observability.NewRuntime(observability.RuntimeConfig{Service: "iam-service"})
+	}
 	return &handler{
 		allowedWorkloadSPIFFE: config.AllowedWorkloadSPIFFE,
 		audience:              config.Audience,
 		logger:                logger,
+		observability:         telemetry,
 		now:                   now,
 	}
 }
 
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	started := h.now()
+	ctx := h.observability.Tracer.ExtractHTTP(request.Context(), request.Header)
+	ctx, span := h.observability.Tracer.Start(ctx, "http.iam.request", observability.SpanKindServer, map[string]any{
+		"http.request.method": request.Method, "http.route": safePath(request.URL.Path),
+	})
+	request = request.WithContext(ctx)
+	writer.Header().Set("traceparent", observability.Traceparent(ctx))
 	status := http.StatusOK
 	defer func() {
+		result := "ok"
+		if status >= http.StatusBadRequest {
+			result = "error"
+			span.SetStatus("error", http.StatusText(status))
+		} else {
+			span.SetStatus("ok", "")
+		}
+		span.SetAttributes(map[string]any{"http.response.status_code": status})
+		span.End()
+		_ = h.observability.Metrics.AddCounter("s0_http_requests_total", "IAM HTTP requests.", map[string]string{"service": "iam-service", "route": safePath(request.URL.Path), "method": request.Method, "result": result}, 1)
+		_ = h.observability.Metrics.ObserveHistogram("s0_http_request_duration_seconds", "IAM HTTP request latency.", map[string]string{"service": "iam-service", "route": safePath(request.URL.Path), "method": request.Method}, h.now().Sub(started).Seconds(), nil)
 		h.logger.InfoContext(request.Context(), "iam_request",
 			"method", request.Method,
 			"path", safePath(request.URL.Path),

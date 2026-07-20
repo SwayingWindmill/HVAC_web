@@ -12,11 +12,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/services/iam-service/internal/iam"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	telemetry := observability.NewRuntime(observability.RuntimeConfig{
+		Service: "iam-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
+	})
+	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	address := envOr("IAM_SERVICE_ADDR", "127.0.0.1:18444")
 	certificate, err := tls.LoadX509KeyPair(requiredEnv("IAM_TLS_CERT"), requiredEnv("IAM_TLS_KEY"))
 	if err != nil {
@@ -39,6 +43,7 @@ func main() {
 			AllowedWorkloadSPIFFE: envOr("IAM_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 			Audience:              envOr("IAM_AUDIENCE", "iam-service"),
 			Logger:                logger,
+			Observability:         telemetry,
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,
@@ -51,6 +56,15 @@ func main() {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	diagnostics := &http.Server{
+		Addr: envOr("IAM_DIAGNOSTICS_ADDR", "127.0.0.1:19083"), Handler: telemetry.DiagnosticsHandler(),
+		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+	}
+	go func() {
+		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("iam_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
+		}
+	}()
 
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
@@ -59,6 +73,8 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
+		_ = diagnostics.Shutdown(ctx)
+		_ = telemetry.Shutdown(ctx)
 	}()
 
 	logger.Info("iam_started", "service", "iam-service", "address", address)

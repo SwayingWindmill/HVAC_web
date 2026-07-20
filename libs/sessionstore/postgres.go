@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionevent"
 )
 
@@ -59,6 +60,8 @@ func (store *PostgresStore) Close() {
 }
 
 func (store *PostgresStore) CreateSession(ctx context.Context, session Session, mutation MutationContext) (Session, error) {
+	ctx, span := observability.Start(ctx, "postgres.session.transaction", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.create"})
+	defer span.End()
 	messageID := store.ids()
 	session.AggregateVersion = 1
 	session.LastAuditMessageID = messageID
@@ -114,10 +117,14 @@ func (store *PostgresStore) CreateSession(ctx context.Context, session Session, 
 }
 
 func (store *PostgresStore) GetSession(ctx context.Context, sessionID string) (Session, error) {
+	ctx, span := observability.Start(ctx, "postgres.session.query", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.get"})
+	defer span.End()
 	return scanSession(store.pool.QueryRow(ctx, sessionSelect+` WHERE session_id = $1`, sessionID))
 }
 
 func (store *PostgresStore) RevokeSession(ctx context.Context, sessionID string, mutation MutationContext) (Session, error) {
+	ctx, span := observability.Start(ctx, "postgres.session.transaction", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.revoke"})
+	defer span.End()
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Session{}, err
@@ -190,13 +197,13 @@ func insertAuditIntent(ctx context.Context, tx pgx.Tx, session Session, mutation
 			message_id, session_aggregate_id, organization_id, aggregate_version,
 			initiating_subject, initiating_issuer, executing_service, executing_spiffe_id,
 			action, result, policy_revision, correlation_id, causation_id, trace_id,
-			payload_sha256, occurred_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+			traceparent, payload_sha256, occurred_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 	`, event.MessageID, event.AggregateID, session.ActingOrganizationID, session.AggregateVersion,
 		session.Principal.Subject, session.Principal.Issuer, mutation.ExecutingService,
 		mutation.ExecutingSPIFFEID, mutation.Action, event.Result, mutation.PolicyRevision,
-		mutation.CorrelationID, event.CausationID, mutation.TraceID, event.PayloadSHA256,
-		mutation.OccurredAt.UTC())
+		mutation.CorrelationID, event.CausationID, mutation.TraceID, event.Traceparent,
+		event.PayloadSHA256, mutation.OccurredAt.UTC())
 	return err
 }
 
@@ -205,10 +212,12 @@ func insertOutbox(ctx context.Context, tx pgx.Tx, event sessionevent.SessionAudi
 	_, err := tx.Exec(ctx, `
 		INSERT INTO gateway.outbox (
 			message_id, topic, partition_key, schema_version, aggregate_type, aggregate_id,
-			aggregate_version, organization_id, payload, envelope_sha256, created_at, available_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)
+			aggregate_version, organization_id, correlation_id, causation_id, trace_id,
+			traceparent, payload, envelope_sha256, created_at, available_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)
 	`, event.MessageID, sessionevent.ControlTopic, event.PartitionKey, event.SchemaVersion,
 		event.AggregateType, event.AggregateID, event.AggregateVersion, event.OrganizationID,
+		event.CorrelationID, event.CausationID, event.TraceID, event.Traceparent,
 		payload, hex.EncodeToString(digest[:]), time.UnixMilli(event.OccurredAtUnixMS).UTC())
 	return err
 }

@@ -221,6 +221,7 @@ func fixtureMutation(now time.Time, action string) sessionstore.MutationContext 
 	return sessionstore.MutationContext{
 		Action: action, Result: "SUCCEEDED", PolicyRevision: "policy-v1",
 		CorrelationID: "request-01", TraceID: "0123456789abcdef0123456789abcdef",
+		Traceparent:      "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
 		ExecutingService: "platform-gateway", ExecutingSPIFFEID: "spiffe://hvac.local/platform-gateway", OccurredAt: now,
 	}
 }

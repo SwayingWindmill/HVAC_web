@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
 )
 
@@ -59,9 +60,14 @@ func (h *handler) GetSessionAuditEvent(writer http.ResponseWriter, request *http
 		return
 	}
 	endpoint := strings.TrimRight(h.identity.config.AuditURL, "/") + "/internal/v1/audit/session-events/" + url.PathEscape(params.MessageID)
-	internalRequest, _ := http.NewRequestWithContext(request.Context(), http.MethodGet, endpoint, nil)
+	internalContext, span := observability.Start(request.Context(), "http.audit.query", observability.SpanKindClient, map[string]any{
+		"http.request.method": http.MethodGet, "server.service": "audit-ledger-service", "rpc.operation": "audit.session_event.get",
+	})
+	defer span.End()
+	internalRequest, _ := http.NewRequestWithContext(internalContext, http.MethodGet, endpoint, nil)
 	internalRequest.Header.Set("Accept", "application/json, application/problem+json")
 	internalRequest.Header.Set("X-Delegation-Grant", grant)
+	observability.InjectHTTP(internalContext, internalRequest.Header)
 	response, err := h.identity.config.AuditHTTPClient.Do(internalRequest)
 	if err != nil {
 		writeIdentityFailure(writer, request, identityFailure{503, "AUDIT_LEDGER_UNAVAILABLE", "Audit Ledger unavailable", "The private Audit Ledger service could not be reached.", true})

@@ -13,12 +13,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionevent"
 	"github.com/quanlaihe/hvac-web/services/audit-ledger-service/internal/audit"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	telemetry := observability.NewRuntime(observability.RuntimeConfig{
+		Service: "audit-ledger-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
+	})
+	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -30,10 +34,11 @@ func main() {
 	defer store.Close()
 
 	consumer := audit.NewConsumer(store, audit.ConsumerConfig{
-		Brokers: splitCSV(required("CONTROL_BACKBONE_BROKERS")),
-		Topic:   envOr("AUDIT_TOPIC", sessionevent.ControlTopic),
-		GroupID: envOr("AUDIT_CONSUMER_GROUP", "audit-ledger-session-v1"),
-		Logger:  logger,
+		Brokers:       splitCSV(required("CONTROL_BACKBONE_BROKERS")),
+		Topic:         envOr("AUDIT_TOPIC", sessionevent.ControlTopic),
+		GroupID:       envOr("AUDIT_CONSUMER_GROUP", "audit-ledger-session-v1"),
+		Logger:        logger,
+		Observability: telemetry,
 	})
 	defer consumer.Close()
 	consumerErrors := make(chan error, 1)
@@ -56,6 +61,7 @@ func main() {
 			AllowedWorkloadSPIFFE: envOr("AUDIT_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 			Audience:              envOr("AUDIT_AUDIENCE", "audit-ledger-service"),
 			Logger:                logger,
+			Observability:         telemetry,
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS13,
@@ -67,6 +73,15 @@ func main() {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	diagnostics := &http.Server{
+		Addr: envOr("AUDIT_DIAGNOSTICS_ADDR", "127.0.0.1:19082"), Handler: telemetry.DiagnosticsHandler(),
+		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+	}
+	go func() {
+		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("audit_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
+		}
+	}()
 	serverErrors := make(chan error, 1)
 	go func() {
 		logger.Info("audit_ledger_started", "service", "audit-ledger-service", "address", server.Addr)
@@ -94,6 +109,8 @@ func main() {
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	_ = server.Shutdown(shutdownContext)
+	_ = diagnostics.Shutdown(shutdownContext)
+	_ = telemetry.Shutdown(shutdownContext)
 	logger.Info("audit_ledger_stopped", "service", "audit-ledger-service")
 }
 

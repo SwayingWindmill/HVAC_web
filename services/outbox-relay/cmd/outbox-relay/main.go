@@ -2,18 +2,25 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/services/outbox-relay/internal/relay"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	telemetry := observability.NewRuntime(observability.RuntimeConfig{
+		Service: "outbox-relay", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
+	})
+	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -26,9 +33,23 @@ func main() {
 	publisher := relay.NewKafkaPublisher(splitCSV(required("CONTROL_BACKBONE_BROKERS")))
 	defer publisher.Close()
 	worker := relay.New(store, publisher, relay.Config{
-		Owner:  envOr("OUTBOX_RELAY_OWNER", "outbox-relay-01"),
-		Logger: logger,
+		Owner: envOr("OUTBOX_RELAY_OWNER", "outbox-relay-01"), Logger: logger, Observability: telemetry,
 	})
+	diagnostics := &http.Server{
+		Addr: envOr("OUTBOX_RELAY_DIAGNOSTICS_ADDR", "127.0.0.1:19081"), Handler: telemetry.DiagnosticsHandler(),
+		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+	}
+	go func() {
+		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("outbox_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
+		}
+	}()
+	defer func() {
+		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		_ = diagnostics.Shutdown(shutdownContext)
+		_ = telemetry.Shutdown(shutdownContext)
+	}()
 	logger.Info("outbox_relay_started", "service", "outbox-relay")
 	if err := worker.Run(ctx); err != nil {
 		logger.Error("outbox_relay_stopped", "error_code", "OUTBOX_RELAY_FAILED")
