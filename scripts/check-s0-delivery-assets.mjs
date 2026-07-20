@@ -94,7 +94,7 @@ const renderer = await read('scripts/render-s0-staging.mjs');
 includesAll(renderer, ['@sha256:', 'Missing staging binding', 'Unresolved placeholder', 'without logging binding values'], 'staging renderer');
 
 const workflow = await read('.github/workflows/s0-supply-chain.yml');
-includesAll(workflow, ['go-version: "1.25.12"', 'gitleaks/gitleaks-action', 'github/codeql-action/init', 'build_mode: manual', 'build_mode: none', 'upload: never', 'security:go-vuln', 'npm audit', 'security:dependency-audit', 'security:licenses', 'SERVICE_PACKAGE=./tools/legacy-private-fixture/cmd/legacy-private-fixture', 'sbom: true', 'provenance: mode=max', 'cosign sign', 'cosign verify', 'attest-build-provenance', 'id-token: write'], 'supply-chain workflow');
+includesAll(workflow, ['go-version: "1.25.12"', 'gitleaks/gitleaks-action', 'github/codeql-action/init', 'build_mode: manual', 'build_mode: none', 'upload: never', 'security:go-vuln', 'npm audit', 'security:dependency-audit', 'security:licenses', 'SERVICE_PACKAGE=./tools/legacy-private-fixture/cmd/legacy-private-fixture', 'sbom: true', 'provenance: mode=max', 'cosign sign', 'cosign verify', 'attest-build-provenance', "if: github.event.repository.visibility == 'public'", 'Record GitHub attestation skip', 'id-token: write'], 'supply-chain workflow');
 assert(!workflow.includes('hvac-backend'), 'supply-chain workflow must not depend on the local migration reference');
 const licenseGate = await read('scripts/check-production-licenses.mjs');
 assert(!licenseGate.includes('hvac-backend'), 'license gate must not scan the local migration reference');

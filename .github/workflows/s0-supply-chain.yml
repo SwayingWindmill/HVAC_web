@@ -199,8 +199,13 @@ jobs:
           IMAGE: ${{ steps.image.outputs.name }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign verify "$IMAGE@$DIGEST" --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/s0-supply-chain.yml@refs/(heads|tags)/.+$"
-      - uses: actions/attest-build-provenance@v2
+      - name: Publish GitHub build provenance
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ steps.image.outputs.name }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+      - name: Record GitHub attestation skip
+        if: github.event.repository.visibility != 'public'
+        run: echo "::notice::Skipping GitHub build provenance attestation for a non-public repository; BuildKit provenance and Cosign verification remain release requirements."
