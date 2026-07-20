@@ -28,6 +28,11 @@ for (const [label, config] of [['local', localConfig], ['staging', stagingConfig
 const devTopology = await read('scripts/dev-s0-durable.mjs');
 includesAll(devTopology, ['validate-s0-delivery-config.mjs', 'startS0DurableTopology', 'captureTelemetry: false', "process.once('SIGTERM'", 'OpenTelemetry Collector'], 'local delivery command');
 
+const durableCompose = await read('infra/s0-durable/compose.yaml');
+includesAll(durableCompose, ['S0_POSTGRES_HOST_PORT', 'S0_REDPANDA_HOST_PORT', 'S0_OTEL_GRPC_HOST_PORT', 'S0_PROMETHEUS_HOST_PORT'], 'durable Compose dynamic ports');
+const durableTopology = await read('scripts/s0-durable-topology.mjs');
+includesAll(durableTopology, ['findAvailablePort', 'composeOptions', 'postgresHostPort', 'redpandaHostPort'], 'durable topology port isolation');
+
 const runtime = await read('libs/observability/runtime.go');
 includesAll(runtime, ['/health/startup', '/health/live', '/health/ready', 'StatusServiceUnavailable', 'MarkReady', 'MarkNotReady'], 'observability probes');
 const serviceMains = [
@@ -44,7 +49,7 @@ for (const path of serviceMains) {
 }
 
 const goImage = await read('deploy/s0/images/go-service.Dockerfile');
-includesAll(goImage, ['golang:1.25.0-bookworm', 'CGO_ENABLED=0', '-trimpath', 'distroless/static-debian12:nonroot', 'USER 65532:65532'], 'Go image');
+includesAll(goImage, ['golang:1.25.12-bookworm', 'CGO_ENABLED=0', '-trimpath', 'distroless/static-debian12:nonroot', 'USER 65532:65532'], 'Go image');
 const migratorImage = await read('deploy/s0/images/migrator.Dockerfile');
 includesAll(migratorImage, ['001-s0-durable.sql', 'USER postgres', 'ON_ERROR_STOP=1'], 'migration image');
 const dockerIgnore = await read('.dockerignore');
@@ -89,7 +94,7 @@ const renderer = await read('scripts/render-s0-staging.mjs');
 includesAll(renderer, ['@sha256:', 'Missing staging binding', 'Unresolved placeholder', 'without logging binding values'], 'staging renderer');
 
 const workflow = await read('.github/workflows/s0-supply-chain.yml');
-includesAll(workflow, ['gitleaks/gitleaks-action', 'github/codeql-action/init', 'security:go-vuln', 'npm audit', 'security:dependency-audit', 'security:licenses', 'SERVICE_PACKAGE=./tools/legacy-private-fixture/cmd/legacy-private-fixture', 'sbom: true', 'provenance: mode=max', 'cosign sign', 'cosign verify', 'attest-build-provenance', 'id-token: write'], 'supply-chain workflow');
+includesAll(workflow, ['go-version: "1.25.12"', 'gitleaks/gitleaks-action', 'github/codeql-action/init', 'build_mode: manual', 'build_mode: none', 'upload: never', 'security:go-vuln', 'npm audit', 'security:dependency-audit', 'security:licenses', 'SERVICE_PACKAGE=./tools/legacy-private-fixture/cmd/legacy-private-fixture', 'sbom: true', 'provenance: mode=max', 'cosign sign', 'cosign verify', 'attest-build-provenance', 'id-token: write'], 'supply-chain workflow');
 assert(!workflow.includes('hvac-backend'), 'supply-chain workflow must not depend on the local migration reference');
 const licenseGate = await read('scripts/check-production-licenses.mjs');
 assert(!licenseGate.includes('hvac-backend'), 'license gate must not scan the local migration reference');

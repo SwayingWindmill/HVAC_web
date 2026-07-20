@@ -1,6 +1,6 @@
 module github.com/quanlaihe/hvac-web/services/oidc-test-provider
 
-go 1.25.0
+go 1.25.12
 
 require (
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0

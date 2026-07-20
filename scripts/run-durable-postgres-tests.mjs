@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
+import { createServer as createTCPServer } from 'node:net';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -19,6 +20,19 @@ const composeInvocation = (() => {
   return { command: 'docker-compose', prefix: [] };
 })();
 
+async function findAvailablePort(requestedPort = 0) {
+  const server = createTCPServer();
+  server.listen({ host: '127.0.0.1', port: Number(requestedPort) || 0, exclusive: true });
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('PostgreSQL test port allocator did not expose a TCP address');
+  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
+  return address.port;
+}
+
+const postgresHostPort = await findAvailablePort(process.env.S0_POSTGRES_HOST_PORT ?? 0);
+const composeEnvironment = { ...process.env, S0_POSTGRES_HOST_PORT: String(postgresHostPort) };
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
   if (result.error || result.status !== 0) {
@@ -28,7 +42,7 @@ function run(command, args, options = {}) {
 }
 
 function compose(args) {
-  return run(composeInvocation.command, [...composeInvocation.prefix, '-p', projectName, '-f', composePath, ...args]);
+  return run(composeInvocation.command, [...composeInvocation.prefix, '-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
 async function waitForPostgres() {
@@ -78,11 +92,11 @@ async function runGoTests() {
     env: {
       ...process.env,
       GOCACHE: goCacheDir,
-      S0_ADMIN_DATABASE_URL: 'postgres://postgres:postgres-local-only@127.0.0.1:55432/hvac_s0?sslmode=disable',
-      S0_GATEWAY_DATABASE_URL: 'postgres://gateway_runtime:gateway-runtime-local-only@127.0.0.1:55432/hvac_s0?sslmode=disable',
-      S0_RELAY_DATABASE_URL: 'postgres://gateway_relay_runtime:gateway-relay-local-only@127.0.0.1:55432/hvac_s0?sslmode=disable',
-      S0_AUDIT_CONSUMER_DATABASE_URL: 'postgres://audit_consumer_runtime:audit-consumer-local-only@127.0.0.1:55432/hvac_s0?sslmode=disable',
-      S0_AUDIT_QUERY_DATABASE_URL: 'postgres://audit_query_runtime:audit-query-local-only@127.0.0.1:55432/hvac_s0?sslmode=disable',
+      S0_ADMIN_DATABASE_URL: `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
+      S0_GATEWAY_DATABASE_URL: `postgres://gateway_runtime:gateway-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
+      S0_RELAY_DATABASE_URL: `postgres://gateway_relay_runtime:gateway-relay-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
+      S0_AUDIT_CONSUMER_DATABASE_URL: `postgres://audit_consumer_runtime:audit-consumer-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
+      S0_AUDIT_QUERY_DATABASE_URL: `postgres://audit_query_runtime:audit-query-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
     },
   });
   const [code, signal] = await once(child, 'exit');
