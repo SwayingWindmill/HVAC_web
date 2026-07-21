@@ -24,6 +24,12 @@ Formal spec: `spec.md`
 
 Ticket 01 is the only initial frontier item and can start immediately. All other tickets remain `ready-for-agent` but must respect their declared blockers.
 
+That sentence records the initial dependency frontier. The current frontier is empty: Tickets 01–08 are complete, and the final Release Evidence Bundle was produced by workflow run `29763231123` at main commit `4d4da9cfcc1abebe4a0d706292175856094b4ece`.
+
+## Completion
+
+S0 is complete. S1 is ready to enter implementation specification. S1 implementation still requires its own accepted specification; S0 completion does not authorize business-domain work or deletion of the private Legacy system.
+
 ## Rules
 
 - Work one frontier ticket at a time in a fresh implementation context.
