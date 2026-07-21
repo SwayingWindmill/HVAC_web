@@ -1,20 +1,34 @@
 {
   "registryVersion": 1,
-  "registryRevision": 1,
+  "registryRevision": 2,
   "resources": [
     { "kind": "schema", "name": "gateway", "writer": "platform-gateway", "revision": 1 },
     { "kind": "schema", "name": "audit_ledger", "writer": "audit-ledger-service", "revision": 1 },
     { "kind": "schema", "name": "legacy", "writer": "legacy-hvac-backend", "revision": 1 },
+    { "kind": "schema", "name": "iam", "writer": "iam-service", "revision": 1 },
+    { "kind": "schema", "name": "core_registry", "writer": "platform-core-service", "revision": 1 },
     { "kind": "event-family", "name": "hvac.security.session.v1", "writer": "platform-gateway", "revision": 1 },
     { "kind": "event-family", "name": "hvac.routing.decision.v1", "writer": "platform-gateway", "revision": 1 },
     { "kind": "projection", "name": "audit-session-record", "writer": "audit-ledger-service", "revision": 1 },
-    { "kind": "projection", "name": "gateway-route-audit", "writer": "platform-gateway", "revision": 1 }
+    { "kind": "projection", "name": "gateway-route-audit", "writer": "platform-gateway", "revision": 1 },
+    { "kind": "projection", "name": "iam-registry-read-decision", "writer": "iam-service", "revision": 1 },
+    { "kind": "migration-dataset", "name": "s1-legacy-resource-map", "writer": "platform-core-service", "revision": 1 },
+    { "kind": "migration-dataset", "name": "s1-migration-provenance", "writer": "platform-core-service", "revision": 1 },
+    { "kind": "migration-dataset", "name": "s1-migration-quarantine", "writer": "platform-core-service", "revision": 1 }
   ],
   "databaseAccess": [
     { "service": "platform-gateway", "schema": "gateway", "mode": "write" },
     { "service": "outbox-relay", "schema": "gateway", "mode": "relay" },
     { "service": "audit-ledger-service", "schema": "audit_ledger", "mode": "write" },
     { "service": "audit-ledger-query", "schema": "audit_ledger", "mode": "read" },
-    { "service": "legacy-hvac-backend", "schema": "legacy", "mode": "write" }
+    { "service": "legacy-hvac-backend", "schema": "legacy", "mode": "write" },
+    { "service": "iam-service", "schema": "iam", "mode": "write" },
+    { "service": "platform-core-service", "schema": "core_registry", "mode": "write" },
+    { "service": "s1-migration-operator", "schema": "core_registry", "mode": "migration" }
+  ],
+  "databaseIdentities": [
+    { "schema": "iam", "migrationRole": "s1_iam_migrator", "runtimeRole": "s1_iam_runtime", "runtimeBypassRls": false },
+    { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_core_runtime", "runtimeBypassRls": false },
+    { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_migration_operator", "runtimeBypassRls": false, "restrictedTo": ["legacy_resource_maps", "migration_provenance", "migration_quarantine"] }
   ]
 }

@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "contractRevision": 1,
+  "instant": {
+    "format": "RFC3339 UTC milliseconds",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+  },
+  "publicId": {
+    "type": "uuidv7",
+    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    "immutable": true,
+    "ownerGenerated": true
+  },
+  "resources": {
+    "Organization": {
+      "owner": "platform-core-service",
+      "scope": "organization",
+      "requiredFields": ["id", "code", "displayName", "status", "revision", "createdAt", "updatedAt"],
+      "statuses": ["ACTIVE", "SUSPENDED", "RETIRED"]
+    },
+    "Site": {
+      "owner": "platform-core-service",
+      "scope": "site",
+      "requiredFields": ["id", "owningOrganizationId", "code", "displayName", "timezone", "status", "revision", "createdAt", "updatedAt"],
+      "statuses": ["ACTIVE", "INACTIVE", "RETIRED"],
+      "timezoneAuthority": "IANA"
+    },
+    "Equipment": {
+      "owner": "platform-core-service",
+      "scope": "site",
+      "requiredFields": ["id", "owningOrganizationId", "siteId", "code", "displayName", "equipmentType", "status", "revision", "createdAt", "updatedAt"],
+      "statuses": ["ACTIVE", "INACTIVE", "RETIRED"],
+      "identityRule": "Equipment is a maintainable business asset and is not interchangeable with Device."
+    },
+    "Device": {
+      "owner": "platform-core-service",
+      "scope": "site",
+      "requiredFields": ["id", "owningOrganizationId", "siteId", "code", "displayName", "deviceType", "status", "revision", "createdAt", "updatedAt"],
+      "statuses": ["ACTIVE", "INACTIVE", "RETIRED"],
+      "identityRule": "Device is an IoT endpoint and is not interchangeable with Equipment."
+    },
+    "DeviceBinding": {
+      "owner": "platform-core-service",
+      "scope": "site",
+      "requiredFields": ["id", "owningOrganizationId", "siteId", "deviceId", "equipmentId", "bindingRole", "status", "validFrom", "revision", "createdAt", "updatedAt"],
+      "statuses": ["ACTIVE", "INACTIVE", "RETIRED"],
+      "optionalFields": ["validTo"]
+    },
+    "ExternalBinding": {
+      "owner": "platform-core-service",
+      "scope": "site",
+      "requiredFields": ["id", "owningOrganizationId", "siteId", "integrationInstanceId", "provider", "externalEntityType", "externalId", "bindingStatus", "validFrom", "revision", "createdAt", "updatedAt"],
+      "statuses": ["ACTIVE", "INACTIVE", "RETIRED"],
+      "optionalFields": ["validTo"],
+      "activeUniqueness": ["integrationInstanceId", "externalEntityType", "externalId"]
+    }
+  },
+  "http": {
+    "basePath": "/api/v1",
+    "routes": [
+      { "operationId": "listOrganizations", "method": "GET", "path": "/api/v1/organizations", "response": "OrganizationCollection", "scope": ["organization", "principal"] },
+      { "operationId": "getOrganization", "method": "GET", "path": "/api/v1/organizations/{organizationId}", "response": "Organization", "scope": ["organization", "principal"] },
+      { "operationId": "listOrganizationSites", "method": "GET", "path": "/api/v1/organizations/{organizationId}/sites", "response": "SiteCollection", "scope": ["organization", "site", "principal"] },
+      { "operationId": "getSite", "method": "GET", "path": "/api/v1/sites/{siteId}", "response": "Site", "scope": ["organization", "site", "principal"] },
+      { "operationId": "listSiteEquipment", "method": "GET", "path": "/api/v1/sites/{siteId}/equipment", "response": "EquipmentCollection", "scope": ["organization", "site", "principal"] },
+      { "operationId": "getEquipment", "method": "GET", "path": "/api/v1/equipment/{equipmentId}", "response": "Equipment", "scope": ["organization", "site", "principal"] },
+      { "operationId": "listSiteDevices", "method": "GET", "path": "/api/v1/sites/{siteId}/devices", "response": "DeviceCollection", "scope": ["organization", "site", "principal"] },
+      { "operationId": "getDevice", "method": "GET", "path": "/api/v1/devices/{deviceId}", "response": "Device", "scope": ["organization", "site", "principal"] }
+    ],
+    "collections": {
+      "requiredFields": ["items", "nextCursor", "hasMore"],
+      "defaultLimit": 50,
+      "maximumLimit": 200,
+      "exactCount": false,
+      "ordering": ["displayName", "id"]
+    },
+    "resourceInvisibility": {
+      "status": 404,
+      "code": "RESOURCE_NOT_FOUND",
+      "sameForMissingAndUnauthorized": true
+    }
+  },
+  "cursor": {
+    "version": 1,
+    "encoding": "base64url(payload).base64url(hmac-sha256(payload))",
+    "confidential": false,
+    "integrityProtected": true,
+    "requiredClaims": ["v", "route", "scopeHash", "filterHash", "order", "last", "queryRevision"],
+    "authorizationRecheckedPerPage": true,
+    "maximumBytes": 4096,
+    "stableOrdering": ["displayName", "id"]
+  },
+  "problemCodes": {
+    "RESOURCE_NOT_FOUND": { "status": 404, "retryable": false },
+    "CURSOR_INVALID": { "status": 400, "retryable": false },
+    "REGISTRY_UNAVAILABLE": { "status": 503, "retryable": true },
+    "REGISTRY_TIMEOUT": { "status": 504, "retryable": true },
+    "MAPPING_INVALID": { "status": 409, "retryable": false },
+    "MAPPING_QUARANTINED": { "status": 409, "retryable": false }
+  },
+  "migration": {
+    "mappingStates": ["DISCOVERED", "MAPPED", "VERIFIED", "QUARANTINED", "RETIRED"],
+    "provenanceFields": ["sourceSystem", "sourceTable", "sourceKey", "targetResourceType", "targetResourceId", "owningOrganizationId", "transformationVersion", "batchId", "sourceWatermark", "sourceRowHash", "createdAt", "updatedAt"],
+    "ambiguousPromotionForbidden": true,
+    "readTriggeredSynchronizationForbidden": true,
+    "businessDoubleWriteForbidden": true
+  },
+  "fixtures": {
+    "organizations": {
+      "ownerA": "018f1e00-0000-7000-8000-000000000001",
+      "ownerB": "018f1e00-0000-7000-8000-000000000002",
+      "acting": "018f1e00-0000-7000-8000-000000000003"
+    },
+    "sites": {
+      "ownerASite1": "018f1e00-1000-7000-8000-000000000001",
+      "ownerASite2": "018f1e00-1000-7000-8000-000000000002",
+      "ownerBSite1": "018f1e00-1000-7000-8000-000000000003"
+    },
+    "principals": {
+      "ownerA": "018f1e00-2000-7000-8000-000000000001",
+      "delegated": "018f1e00-2000-7000-8000-000000000002",
+      "denied": "018f1e00-2000-7000-8000-000000000003",
+      "noAccess": "018f1e00-2000-7000-8000-000000000004"
+    }
+  }
+}

@@ -11,7 +11,23 @@ const dataRegistry = await readJSON('contracts/ownership/data-ownership.v1.json'
 const lock = await readJSON('contracts/ownership/ownership.v1.lock.json');
 
 const errors = [];
-const allowedOwners = new Set(['platform-gateway', 'legacy-hvac-backend']);
+const allowedOwners = new Set(['platform-gateway', 'legacy-hvac-backend', 'platform-core-service']);
+const s1RegistryPaths = new Set([
+  '/api/v1/organizations',
+  '/api/v1/organizations/{organizationId}',
+  '/api/v1/organizations/{organizationId}/sites',
+  '/api/v1/sites/{siteId}',
+  '/api/v1/sites/{siteId}/equipment',
+  '/api/v1/equipment/{equipmentId}',
+  '/api/v1/sites/{siteId}/devices',
+  '/api/v1/devices/{deviceId}',
+]);
+const expectedMigrationPhases = [
+  'LEGACY_PRIMARY_GO_SHADOW',
+  'GO_CANARY_LEGACY_SHADOW',
+  'GO_PRIMARY_LEGACY_READ_FALLBACK',
+  'GO_PRIMARY',
+];
 const allowedScopes = new Set(['organization', 'principal', 'site']);
 const allowedCompatibility = new Set(['native', 'legacy-read']);
 const allowedMethods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -48,6 +64,21 @@ for (const route of routeRegistry.routes ?? []) {
     }
   } else {
     errors.push(`${key}: rollout mode must be all or percentage`);
+  }
+  if (s1RegistryPaths.has(route.path)) {
+    if (route.method !== 'GET') errors.push(`${key}: S1 Registry route must be read-only`);
+    if (route.owner !== 'legacy-hvac-backend' || rollout.fallbackOwner !== 'platform-core-service') {
+      errors.push(`${key}: initial S1 route must be Legacy primary with Core as the candidate owner`);
+    }
+    if (!Array.isArray(route.migrationPhases) || route.migrationPhases.join('|') !== expectedMigrationPhases.join('|')) {
+      errors.push(`${key}: S1 migration phases are incomplete or reordered`);
+    }
+    if (route.shadowSideEffectPolicy !== 'NONE') errors.push(`${key}: S1 shadow must be side-effect free`);
+    if (route.readOnlyFallback !== true) errors.push(`${key}: S1 fallback must be explicitly read-only`);
+    const forbiddenResults = route.fallbackForbiddenResults ?? [];
+    if (!forbiddenResults.includes('AUTHORIZATION_DENIED') || !forbiddenResults.includes('RESOURCE_NOT_FOUND')) {
+      errors.push(`${key}: S1 fallback must be forbidden after denial or resource invisibility`);
+    }
   }
   const locked = lock.routes?.[key];
   if (!locked) {
@@ -94,10 +125,27 @@ for (const access of dataRegistry.databaseAccess ?? []) {
     errors.push(`${access.service}:${access.schema}: forbidden cross-service writer`);
   } else if (access.mode === 'relay') {
     if (access.service !== 'outbox-relay' || access.schema !== 'gateway') errors.push(`${access.service}:${access.schema}: invalid relay access`);
-  } else if (access.mode !== 'write' && access.mode !== 'read' && access.mode !== 'relay') {
+  } else if (access.mode === 'migration') {
+    if (access.service !== 's1-migration-operator' || access.schema !== 'core_registry') errors.push(`${access.service}:${access.schema}: invalid migration access`);
+  } else if (access.mode !== 'write' && access.mode !== 'read' && access.mode !== 'relay' && access.mode !== 'migration') {
     errors.push(`${access.service}:${access.schema}: invalid access mode`);
   }
 }
+
+const requiredIdentities = new Map([
+  ['iam:s1_iam_runtime', 's1_iam_migrator'],
+  ['core_registry:s1_core_runtime', 's1_core_migrator'],
+  ['core_registry:s1_migration_operator', 's1_core_migrator'],
+]);
+for (const identity of dataRegistry.databaseIdentities ?? []) {
+  const key = `${identity.schema}:${identity.runtimeRole}`;
+  const expectedMigrator = requiredIdentities.get(key);
+  if (!expectedMigrator) errors.push(`${key}: unexpected database identity`);
+  if (identity.migrationRole !== expectedMigrator) errors.push(`${key}: migration role mismatch`);
+  if (identity.runtimeBypassRls !== false) errors.push(`${key}: runtime identity must not bypass RLS`);
+  requiredIdentities.delete(key);
+}
+for (const key of requiredIdentities.keys()) errors.push(`${key}: required database identity is missing`);
 
 if (errors.length > 0) {
   console.error(errors.map((error) => `- ${error}`).join('\n'));

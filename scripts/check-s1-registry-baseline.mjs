@@ -1,0 +1,114 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
+const root = resolve(process.cwd());
+const readJSON = async (path) => JSON.parse(await readFile(resolve(root, path), 'utf8'));
+const [model, openapi, routeRegistry, dataRegistry, ownershipLock, ddl, fixtures, sqlcQueries, sqlcGenerated] = await Promise.all([
+  readJSON('contracts/registry/s1-registry-model.v1.json'),
+  readJSON('contracts/http/platform-gateway.openapi.yaml'),
+  readJSON('contracts/ownership/route-ownership.v1.json'),
+  readJSON('contracts/ownership/data-ownership.v1.json'),
+  readJSON('contracts/ownership/ownership.v1.lock.json'),
+  readFile(resolve(root, 'infra/s1-registry/postgres/init/001-s1-registry-baseline.sql'), 'utf8'),
+  readFile(resolve(root, 'infra/s1-registry/postgres/init/002-s1-registry-fixtures.sql'), 'utf8'),
+  readFile(resolve(root, 'pocs/s1-sqlc/queries.sql'), 'utf8'),
+  readFile(resolve(root, 'pocs/s1-sqlc/generated/queries.sql.go'), 'utf8'),
+]);
+
+function assert(condition, message) {
+  if (!condition) throw new Error(`S1 Registry baseline check failed: ${message}`);
+}
+
+const expectedRoutes = [
+  ['GET', '/api/v1/organizations', 'listOrganizations'],
+  ['GET', '/api/v1/organizations/{organizationId}', 'getOrganization'],
+  ['GET', '/api/v1/organizations/{organizationId}/sites', 'listOrganizationSites'],
+  ['GET', '/api/v1/sites/{siteId}', 'getSite'],
+  ['GET', '/api/v1/sites/{siteId}/equipment', 'listSiteEquipment'],
+  ['GET', '/api/v1/equipment/{equipmentId}', 'getEquipment'],
+  ['GET', '/api/v1/sites/{siteId}/devices', 'listSiteDevices'],
+  ['GET', '/api/v1/devices/{deviceId}', 'getDevice'],
+];
+assert(model.schemaVersion === 1 && model.contractRevision === 1, 'model revision is not fixed');
+assert(model.publicId.type === 'uuidv7' && model.publicId.immutable === true, 'public IDs are not immutable UUIDv7');
+assert(Object.keys(model.resources).join('|') === 'Organization|Site|Equipment|Device|DeviceBinding|ExternalBinding', 'resource set drifted');
+assert(model.resources.Equipment.identityRule.includes('not interchangeable with Device'), 'Equipment and Device are not separated');
+assert(model.resources.Device.identityRule.includes('not interchangeable with Equipment'), 'Device and Equipment are not separated');
+assert(model.resources.ExternalBinding.activeUniqueness.join('|') === 'integrationInstanceId|externalEntityType|externalId', 'ExternalBinding active key drifted');
+
+for (const [method, path, operationId] of expectedRoutes) {
+  const operation = openapi.paths?.[path]?.[method.toLowerCase()];
+  assert(operation?.operationId === operationId, `${method} ${path} is missing from OpenAPI`);
+  const modelRoute = model.http.routes.find((route) => route.method === method && route.path === path);
+  assert(modelRoute?.operationId === operationId, `${method} ${path} is missing from the model lock`);
+  const owner = routeRegistry.routes.find((route) => route.method === method && route.path === path);
+  assert(owner?.owner === 'legacy-hvac-backend', `${method} ${path} initial owner must remain Legacy`);
+  assert(owner?.rollout?.fallbackOwner === 'platform-core-service', `${method} ${path} Core candidate owner is missing`);
+  assert(owner?.readOnlyFallback === true && owner?.shadowSideEffectPolicy === 'NONE', `${method} ${path} migration safety is incomplete`);
+  assert(owner?.fallbackForbiddenResults?.includes('AUTHORIZATION_DENIED'), `${method} ${path} could fallback after denial`);
+  assert(owner?.fallbackForbiddenResults?.includes('RESOURCE_NOT_FOUND'), `${method} ${path} could leak resource existence`);
+  assert(ownershipLock.routes?.[`${method} ${path}`]?.owner === 'legacy-hvac-backend', `${method} ${path} lock drifted`);
+}
+
+const stableCodes = openapi.components.schemas.ProblemDetails.properties.code['x-stable-codes'];
+assert(stableCodes.join('|') === Object.keys(model.problemCodes).join('|'), 'Problem Details stable codes drifted');
+assert(openapi.components.schemas.UUIDv7.pattern === model.publicId.pattern, 'UUIDv7 regex drifted');
+assert(openapi.components.schemas.Instant.pattern === model.instant.pattern, 'Instant format drifted from RFC3339 UTC milliseconds');
+assert(model.http.collections.exactCount === false, 'default exact counts are forbidden');
+assert(model.cursor.authorizationRecheckedPerPage === true, 'cursor incorrectly replaces authorization');
+assert(model.cursor.requiredClaims.join('|') === 'v|route|scopeHash|filterHash|order|last|queryRevision', 'cursor claims drifted');
+
+const secret = Buffer.from('s1-ticket-01-cursor-integrity-key');
+const payload = Buffer.from(JSON.stringify({
+  v: 1,
+  route: '/api/v1/sites/{siteId}/devices',
+  scopeHash: 'scope-a',
+  filterHash: 'filter-a',
+  order: ['displayName', 'id'],
+  last: ['Controller 1', '018f1e00-4000-7000-8000-000000000001'],
+  queryRevision: 1,
+})).toString('base64url');
+const signature = createHmac('sha256', secret).update(payload).digest('base64url');
+const cursor = `${payload}.${signature}`;
+const verify = (candidate, expectedScope) => {
+  const parts = candidate.split('.');
+  if (parts.length !== 2) return false;
+  const expected = createHmac('sha256', secret).update(parts[0]).digest();
+  const actual = Buffer.from(parts[1], 'base64url');
+  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return false;
+  const decoded = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+  return decoded.scopeHash === expectedScope;
+};
+assert(verify(cursor, 'scope-a'), 'valid cursor was rejected');
+assert(!verify(`${payload}.${signature.slice(0, -1)}A`, 'scope-a'), 'tampered cursor was accepted');
+assert(!verify(cursor, 'scope-b'), 'cursor was reusable across authorization Scope');
+
+for (const role of ['s1_iam_migrator', 's1_iam_runtime', 's1_core_migrator', 's1_core_runtime', 's1_migration_operator']) {
+  const bootstrap = await readFile(resolve(root, 'infra/s1-registry/postgres/init/000-bootstrap-identities.sql'), 'utf8');
+  assert(bootstrap.includes(`CREATE ROLE ${role} NOLOGIN`) && bootstrap.includes('NOBYPASSRLS'), `${role} is not locked down`);
+}
+for (const table of ['organizations', 'sites', 'equipment', 'devices', 'device_bindings', 'external_bindings', 'legacy_resource_maps', 'migration_provenance', 'migration_quarantine']) {
+  assert(ddl.includes(`CREATE TABLE IF NOT EXISTS core_registry.${table}`), `${table} DDL is missing`);
+  assert(ddl.includes(`ALTER TABLE core_registry.${table} ENABLE ROW LEVEL SECURITY`), `${table} RLS is missing`);
+  assert(ddl.includes(`ALTER TABLE core_registry.${table} FORCE ROW LEVEL SECURITY`), `${table} forced RLS is missing`);
+}
+assert(ddl.includes('FOREIGN KEY (organization_id) REFERENCES core_registry.organizations(id)'), 'Site owning Organization foreign key is missing');
+assert(ddl.includes('external_bindings_active_external_key_uidx'), 'ExternalBinding active uniqueness is missing');
+assert(ddl.includes('equipment_registry_page_idx') && ddl.includes('devices_registry_page_idx'), 'tenant-leading keyset indexes are missing');
+assert(ddl.includes('pg_timezone_names'), 'IANA timezone enforcement is missing');
+for (const state of model.migration.mappingStates) assert(ddl.includes(`'${state}'`), `mapping state ${state} is missing`);
+assert(fixtures.includes("'QUARANTINED'") && fixtures.includes("'ambiguous-asset-1'"), 'ambiguous Legacy fixture is missing');
+assert(fixtures.includes("'018f1e00-2000-7000-8000-000000000004'"), 'no-access Principal fixture is missing');
+
+const schemaWriters = Object.fromEntries(dataRegistry.resources.filter((resource) => resource.kind === 'schema').map((resource) => [resource.name, resource.writer]));
+assert(schemaWriters.iam === 'iam-service' && schemaWriters.core_registry === 'platform-core-service', 'IAM/Core schema writers drifted');
+assert(dataRegistry.databaseIdentities.every((identity) => identity.runtimeBypassRls === false), 'a runtime database identity can bypass RLS');
+
+for (const queryName of ['ListOrganizations', 'GetOrganization', 'ListSites', 'GetSite', 'ListEquipment', 'GetEquipment', 'ListDevices', 'GetDevice']) {
+  assert(sqlcQueries.includes(`-- name: ${queryName}`), `sqlc POC query ${queryName} is missing`);
+  assert(sqlcGenerated.includes(`const ${queryName.charAt(0).toLowerCase()}${queryName.slice(1)}`) || sqlcGenerated.includes(`func (q *Queries) ${queryName}`), `sqlc output for ${queryName} is missing`);
+}
+assert(sqlcQueries.includes('authorized_organization_ids') && sqlcQueries.includes('authorized_site_ids'), 'sqlc POC omits application Scope predicates');
+
+console.log(`S1 Registry baseline passed: ${expectedRoutes.length} routes, ${Object.keys(model.resources).length} resources, cursor integrity and ownership/RLS assets verified.`);

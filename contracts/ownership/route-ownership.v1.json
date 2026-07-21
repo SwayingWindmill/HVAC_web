@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 1,
+  "registryRevision": 2,
   "routes": [
     {
       "method": "GET",
@@ -87,6 +87,110 @@
       },
       "compatibilityMode": "legacy-read",
       "allowedScopeDimensions": ["organization", "principal"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/organizations",
+      "owner": "legacy-hvac-backend",
+      "revision": 1,
+      "rollout": { "mode": "percentage", "percentage": 100, "fallbackOwner": "platform-core-service", "cohortSalt": "s1-organizations-v1" },
+      "compatibilityMode": "legacy-read",
+      "allowedScopeDimensions": ["organization", "principal"],
+      "migrationPhases": ["LEGACY_PRIMARY_GO_SHADOW", "GO_CANARY_LEGACY_SHADOW", "GO_PRIMARY_LEGACY_READ_FALLBACK", "GO_PRIMARY"],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": true,
+      "fallbackForbiddenResults": ["AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/organizations/{organizationId}",
+      "owner": "legacy-hvac-backend",
+      "revision": 1,
+      "rollout": { "mode": "percentage", "percentage": 100, "fallbackOwner": "platform-core-service", "cohortSalt": "s1-organization-v1" },
+      "compatibilityMode": "legacy-read",
+      "allowedScopeDimensions": ["organization", "principal"],
+      "migrationPhases": ["LEGACY_PRIMARY_GO_SHADOW", "GO_CANARY_LEGACY_SHADOW", "GO_PRIMARY_LEGACY_READ_FALLBACK", "GO_PRIMARY"],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": true,
+      "fallbackForbiddenResults": ["AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/organizations/{organizationId}/sites",
+      "owner": "legacy-hvac-backend",
+      "revision": 1,
+      "rollout": { "mode": "percentage", "percentage": 100, "fallbackOwner": "platform-core-service", "cohortSalt": "s1-organization-sites-v1" },
+      "compatibilityMode": "legacy-read",
+      "allowedScopeDimensions": ["organization", "site", "principal"],
+      "migrationPhases": ["LEGACY_PRIMARY_GO_SHADOW", "GO_CANARY_LEGACY_SHADOW", "GO_PRIMARY_LEGACY_READ_FALLBACK", "GO_PRIMARY"],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": true,
+      "fallbackForbiddenResults": ["AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}",
+      "owner": "legacy-hvac-backend",
+      "revision": 1,
+      "rollout": { "mode": "percentage", "percentage": 100, "fallbackOwner": "platform-core-service", "cohortSalt": "s1-site-v1" },
+      "compatibilityMode": "legacy-read",
+      "allowedScopeDimensions": ["organization", "site", "principal"],
+      "migrationPhases": ["LEGACY_PRIMARY_GO_SHADOW", "GO_CANARY_LEGACY_SHADOW", "GO_PRIMARY_LEGACY_READ_FALLBACK", "GO_PRIMARY"],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": true,
+      "fallbackForbiddenResults": ["AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/equipment",
+      "owner": "legacy-hvac-backend",
+      "revision": 1,
+      "rollout": { "mode": "percentage", "percentage": 100, "fallbackOwner": "platform-core-service", "cohortSalt": "s1-site-equipment-v1" },
+      "compatibilityMode": "legacy-read",
+      "allowedScopeDimensions": ["organization", "site", "principal"],
+      "migrationPhases": ["LEGACY_PRIMARY_GO_SHADOW", "GO_CANARY_LEGACY_SHADOW", "GO_PRIMARY_LEGACY_READ_FALLBACK", "GO_PRIMARY"],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": true,
+      "fallbackForbiddenResults": ["AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/equipment/{equipmentId}",
+      "owner": "legacy-hvac-backend",
+      "revision": 1,
+      "rollout": { "mode": "percentage", "percentage": 100, "fallbackOwner": "platform-core-service", "cohortSalt": "s1-equipment-v1" },
+      "compatibilityMode": "legacy-read",
+      "allowedScopeDimensions": ["organization", "site", "principal"],
+      "migrationPhases": ["LEGACY_PRIMARY_GO_SHADOW", "GO_CANARY_LEGACY_SHADOW", "GO_PRIMARY_LEGACY_READ_FALLBACK", "GO_PRIMARY"],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": true,
+      "fallbackForbiddenResults": ["AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/devices",
+      "owner": "legacy-hvac-backend",
+      "revision": 1,
+      "rollout": { "mode": "percentage", "percentage": 100, "fallbackOwner": "platform-core-service", "cohortSalt": "s1-site-devices-v1" },
+      "compatibilityMode": "legacy-read",
+      "allowedScopeDimensions": ["organization", "site", "principal"],
+      "migrationPhases": ["LEGACY_PRIMARY_GO_SHADOW", "GO_CANARY_LEGACY_SHADOW", "GO_PRIMARY_LEGACY_READ_FALLBACK", "GO_PRIMARY"],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": true,
+      "fallbackForbiddenResults": ["AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/devices/{deviceId}",
+      "owner": "legacy-hvac-backend",
+      "revision": 1,
+      "rollout": { "mode": "percentage", "percentage": 100, "fallbackOwner": "platform-core-service", "cohortSalt": "s1-device-v1" },
+      "compatibilityMode": "legacy-read",
+      "allowedScopeDimensions": ["organization", "site", "principal"],
+      "migrationPhases": ["LEGACY_PRIMARY_GO_SHADOW", "GO_CANARY_LEGACY_SHADOW", "GO_PRIMARY_LEGACY_READ_FALLBACK", "GO_PRIMARY"],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": true,
+      "fallbackForbiddenResults": ["AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"]
     }
   ]
 }

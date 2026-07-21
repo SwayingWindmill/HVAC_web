@@ -1,5 +1,5 @@
 {
-  "routeRegistryRevision": 1,
+  "routeRegistryRevision": 2,
   "routes": {
     "GET /api/v1/health": { "revision": 1, "owner": "platform-gateway" },
     "GET /api/v1/version": { "revision": 1, "owner": "platform-gateway" },
@@ -9,16 +9,30 @@
     "POST /api/v1/auth/logout": { "revision": 1, "owner": "platform-gateway" },
     "POST /api/v1/auth/sessions/{sessionId}/revoke": { "revision": 1, "owner": "platform-gateway" },
     "GET /api/v1/audit/session-events/{messageId}": { "revision": 1, "owner": "platform-gateway" },
-    "GET /api/v1/platform/status": { "revision": 1, "owner": "legacy-hvac-backend" }
+    "GET /api/v1/platform/status": { "revision": 1, "owner": "legacy-hvac-backend" },
+    "GET /api/v1/organizations": { "revision": 1, "owner": "legacy-hvac-backend" },
+    "GET /api/v1/organizations/{organizationId}": { "revision": 1, "owner": "legacy-hvac-backend" },
+    "GET /api/v1/organizations/{organizationId}/sites": { "revision": 1, "owner": "legacy-hvac-backend" },
+    "GET /api/v1/sites/{siteId}": { "revision": 1, "owner": "legacy-hvac-backend" },
+    "GET /api/v1/sites/{siteId}/equipment": { "revision": 1, "owner": "legacy-hvac-backend" },
+    "GET /api/v1/equipment/{equipmentId}": { "revision": 1, "owner": "legacy-hvac-backend" },
+    "GET /api/v1/sites/{siteId}/devices": { "revision": 1, "owner": "legacy-hvac-backend" },
+    "GET /api/v1/devices/{deviceId}": { "revision": 1, "owner": "legacy-hvac-backend" }
   },
-  "dataRegistryRevision": 1,
+  "dataRegistryRevision": 2,
   "resources": {
     "schema:gateway": { "revision": 1, "writer": "platform-gateway" },
     "schema:audit_ledger": { "revision": 1, "writer": "audit-ledger-service" },
     "schema:legacy": { "revision": 1, "writer": "legacy-hvac-backend" },
+    "schema:iam": { "revision": 1, "writer": "iam-service" },
+    "schema:core_registry": { "revision": 1, "writer": "platform-core-service" },
     "event-family:hvac.security.session.v1": { "revision": 1, "writer": "platform-gateway" },
     "event-family:hvac.routing.decision.v1": { "revision": 1, "writer": "platform-gateway" },
     "projection:audit-session-record": { "revision": 1, "writer": "audit-ledger-service" },
-    "projection:gateway-route-audit": { "revision": 1, "writer": "platform-gateway" }
+    "projection:gateway-route-audit": { "revision": 1, "writer": "platform-gateway" },
+    "projection:iam-registry-read-decision": { "revision": 1, "writer": "iam-service" },
+    "migration-dataset:s1-legacy-resource-map": { "revision": 1, "writer": "platform-core-service" },
+    "migration-dataset:s1-migration-provenance": { "revision": 1, "writer": "platform-core-service" },
+    "migration-dataset:s1-migration-quarantine": { "revision": 1, "writer": "platform-core-service" }
   }
 }

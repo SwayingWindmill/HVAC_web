@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "HVAC Platform Gateway API",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "The public HTTP contract owned by platform-gateway. Gateway is the only browser-facing platform service."
   },
   "servers": [{ "url": "/" }],
@@ -153,13 +153,107 @@
           "default": { "$ref": "#/components/responses/Problem" }
         }
       }
+    },
+    "/api/v1/organizations": {
+      "get": {
+        "operationId": "listOrganizations",
+        "summary": "List Organizations visible to the current Principal",
+        "parameters": [{ "$ref": "#/components/parameters/PageLimit" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "responses": {
+          "200": { "description": "Authorized Organization page.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrganizationCollection" } } } },
+          "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationId}": {
+      "get": {
+        "operationId": "getOrganization",
+        "summary": "Read one visible Organization",
+        "parameters": [{ "$ref": "#/components/parameters/OrganizationId" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "responses": {
+          "200": { "description": "Visible Organization.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Organization" } } } },
+          "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/organizations/{organizationId}/sites": {
+      "get": {
+        "operationId": "listOrganizationSites",
+        "summary": "List visible Sites under an Organization target",
+        "parameters": [{ "$ref": "#/components/parameters/OrganizationId" }, { "$ref": "#/components/parameters/PageLimit" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "responses": {
+          "200": { "description": "Authorized Site page.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteCollection" } } } },
+          "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}": {
+      "get": {
+        "operationId": "getSite",
+        "summary": "Read one visible Site",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "responses": {
+          "200": { "description": "Visible Site.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Site" } } } },
+          "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/equipment": {
+      "get": {
+        "operationId": "listSiteEquipment",
+        "summary": "List visible Equipment at a Site",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/PageLimit" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "responses": {
+          "200": { "description": "Authorized Equipment page.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EquipmentCollection" } } } },
+          "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/equipment/{equipmentId}": {
+      "get": {
+        "operationId": "getEquipment",
+        "summary": "Read one visible Equipment resource",
+        "parameters": [{ "$ref": "#/components/parameters/EquipmentId" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "responses": {
+          "200": { "description": "Visible Equipment.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Equipment" } } } },
+          "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/devices": {
+      "get": {
+        "operationId": "listSiteDevices",
+        "summary": "List visible Devices at a Site",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/PageLimit" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "responses": {
+          "200": { "description": "Authorized Device page.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceCollection" } } } },
+          "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/devices/{deviceId}": {
+      "get": {
+        "operationId": "getDevice",
+        "summary": "Read one visible Device resource",
+        "parameters": [{ "$ref": "#/components/parameters/DeviceId" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "responses": {
+          "200": { "description": "Visible Device.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Device" } } } },
+          "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
     }
   },
   "components": {
     "parameters": {
       "RequestId": { "name": "X-Request-ID", "in": "header", "required": false, "description": "Caller-provided correlation identifier. Invalid values are replaced at the edge.", "schema": { "type": "string", "minLength": 1, "maxLength": 128 } },
       "Traceparent": { "name": "traceparent", "in": "header", "required": false, "description": "W3C Trace Context. Invalid values start a new trace.", "schema": { "type": "string" } },
-      "CsrfToken": { "name": "X-CSRF-Token", "in": "header", "required": true, "description": "Session-bound CSRF token returned by the current-principal resource.", "schema": { "type": "string", "minLength": 16, "maxLength": 128 } }
+      "CsrfToken": { "name": "X-CSRF-Token", "in": "header", "required": true, "description": "Session-bound CSRF token returned by the current-principal resource.", "schema": { "type": "string", "minLength": 16, "maxLength": 128 } },
+      "OrganizationId": { "name": "organizationId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+      "SiteId": { "name": "siteId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+      "EquipmentId": { "name": "equipmentId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+      "DeviceId": { "name": "deviceId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+      "PageLimit": { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } },
+      "Cursor": { "name": "cursor", "in": "query", "required": false, "description": "Opaque integrity-protected keyset cursor. Authorization is re-evaluated for every page.", "schema": { "$ref": "#/components/schemas/OpaqueCursor" } }
     },
     "headers": {
       "RequestId": { "description": "Request correlation identifier selected by Gateway.", "schema": { "type": "string" } },
@@ -181,8 +275,22 @@
       "CurrentPrincipalResponse": { "type": "object", "additionalProperties": false, "required": ["principal", "context", "session"], "properties": { "principal": { "$ref": "#/components/schemas/UserPrincipal" }, "context": { "$ref": "#/components/schemas/PrincipalContext" }, "session": { "$ref": "#/components/schemas/SessionView" } } },
       "SessionRevocationResponse": { "type": "object", "additionalProperties": false, "required": ["sessionId", "revokedAt", "objectiveMs", "auditMessageId"], "properties": { "sessionId": { "type": "string" }, "revokedAt": { "type": "string", "format": "date-time" }, "objectiveMs": { "type": "integer", "minimum": 0 }, "auditMessageId": { "type": "string" } } },
       "AuditRecord": { "type": "object", "additionalProperties": false, "required": ["ledgerSequence", "messageId", "schemaVersion", "organizationId", "aggregateType", "aggregateId", "aggregateVersion", "occurredAt", "initiatingSubject", "initiatingIssuer", "executingService", "executingSpiffeId", "actingOrganizationId", "action", "result", "policyRevision", "correlationId", "causationId", "traceId", "payloadSha256", "previousRecordHash", "recordHash", "recordedAt"], "properties": { "ledgerSequence": { "type": "integer", "minimum": 1 }, "messageId": { "type": "string" }, "schemaVersion": { "type": "integer", "const": 1 }, "organizationId": { "type": "string" }, "aggregateType": { "type": "string", "const": "bff-session" }, "aggregateId": { "type": "string" }, "aggregateVersion": { "type": "integer", "minimum": 1 }, "occurredAt": { "type": "string", "format": "date-time" }, "initiatingSubject": { "type": "string" }, "initiatingIssuer": { "type": "string", "format": "uri" }, "executingService": { "type": "string", "const": "platform-gateway" }, "executingSpiffeId": { "type": "string", "pattern": "^spiffe://" }, "actingOrganizationId": { "type": "string" }, "action": { "type": "string" }, "result": { "type": "string" }, "policyRevision": { "type": "string" }, "correlationId": { "type": "string" }, "causationId": { "type": "string" }, "traceId": { "type": "string", "pattern": "^[a-f0-9]{32}$" }, "payloadSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "previousRecordHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "recordHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "recordedAt": { "type": "string", "format": "date-time" } } },
+      "UUIDv7": { "type": "string", "format": "uuid", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+      "Revision": { "type": "integer", "format": "int64", "minimum": 1 },
+      "Instant": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$" },
+      "OpaqueCursor": { "type": "string", "minLength": 16, "maxLength": 4096, "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$" },
+      "Organization": { "type": "object", "additionalProperties": false, "required": ["id", "code", "displayName", "status", "revision", "createdAt", "updatedAt"], "properties": { "id": { "$ref": "#/components/schemas/UUIDv7" }, "code": { "type": "string", "minLength": 1, "maxLength": 128 }, "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }, "status": { "type": "string", "enum": ["ACTIVE", "SUSPENDED", "RETIRED"] }, "revision": { "$ref": "#/components/schemas/Revision" }, "createdAt": { "$ref": "#/components/schemas/Instant" }, "updatedAt": { "$ref": "#/components/schemas/Instant" } } },
+      "Site": { "type": "object", "additionalProperties": false, "required": ["id", "owningOrganizationId", "code", "displayName", "timezone", "status", "revision", "createdAt", "updatedAt"], "properties": { "id": { "$ref": "#/components/schemas/UUIDv7" }, "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" }, "code": { "type": "string", "minLength": 1, "maxLength": 128 }, "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }, "timezone": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^(?:UTC|[A-Za-z_+-]+(?:/[A-Za-z0-9_+.-]+)+)$" }, "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] }, "revision": { "$ref": "#/components/schemas/Revision" }, "createdAt": { "$ref": "#/components/schemas/Instant" }, "updatedAt": { "$ref": "#/components/schemas/Instant" } } },
+      "Equipment": { "type": "object", "additionalProperties": false, "required": ["id", "owningOrganizationId", "siteId", "code", "displayName", "equipmentType", "status", "revision", "createdAt", "updatedAt"], "properties": { "id": { "$ref": "#/components/schemas/UUIDv7" }, "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" }, "siteId": { "$ref": "#/components/schemas/UUIDv7" }, "code": { "type": "string", "minLength": 1, "maxLength": 128 }, "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }, "equipmentType": { "type": "string", "minLength": 1, "maxLength": 128 }, "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] }, "revision": { "$ref": "#/components/schemas/Revision" }, "createdAt": { "$ref": "#/components/schemas/Instant" }, "updatedAt": { "$ref": "#/components/schemas/Instant" } } },
+      "Device": { "type": "object", "additionalProperties": false, "required": ["id", "owningOrganizationId", "siteId", "code", "displayName", "deviceType", "status", "revision", "createdAt", "updatedAt"], "properties": { "id": { "$ref": "#/components/schemas/UUIDv7" }, "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" }, "siteId": { "$ref": "#/components/schemas/UUIDv7" }, "code": { "type": "string", "minLength": 1, "maxLength": 128 }, "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }, "deviceType": { "type": "string", "minLength": 1, "maxLength": 128 }, "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] }, "revision": { "$ref": "#/components/schemas/Revision" }, "createdAt": { "$ref": "#/components/schemas/Instant" }, "updatedAt": { "$ref": "#/components/schemas/Instant" } } },
+      "DeviceBinding": { "type": "object", "additionalProperties": false, "required": ["id", "owningOrganizationId", "siteId", "deviceId", "equipmentId", "bindingRole", "status", "validFrom", "revision", "createdAt", "updatedAt"], "properties": { "id": { "$ref": "#/components/schemas/UUIDv7" }, "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" }, "siteId": { "$ref": "#/components/schemas/UUIDv7" }, "deviceId": { "$ref": "#/components/schemas/UUIDv7" }, "equipmentId": { "$ref": "#/components/schemas/UUIDv7" }, "bindingRole": { "type": "string", "minLength": 1, "maxLength": 128 }, "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] }, "validFrom": { "$ref": "#/components/schemas/Instant" }, "validTo": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] }, "revision": { "$ref": "#/components/schemas/Revision" }, "createdAt": { "$ref": "#/components/schemas/Instant" }, "updatedAt": { "$ref": "#/components/schemas/Instant" } } },
+      "ExternalBinding": { "type": "object", "additionalProperties": false, "required": ["id", "owningOrganizationId", "siteId", "integrationInstanceId", "provider", "externalEntityType", "externalId", "bindingStatus", "validFrom", "revision", "createdAt", "updatedAt"], "properties": { "id": { "$ref": "#/components/schemas/UUIDv7" }, "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" }, "siteId": { "$ref": "#/components/schemas/UUIDv7" }, "integrationInstanceId": { "$ref": "#/components/schemas/UUIDv7" }, "provider": { "type": "string", "minLength": 1, "maxLength": 128 }, "externalEntityType": { "type": "string", "minLength": 1, "maxLength": 128 }, "externalId": { "type": "string", "minLength": 1, "maxLength": 512 }, "bindingStatus": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] }, "validFrom": { "$ref": "#/components/schemas/Instant" }, "validTo": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] }, "revision": { "$ref": "#/components/schemas/Revision" }, "createdAt": { "$ref": "#/components/schemas/Instant" }, "updatedAt": { "$ref": "#/components/schemas/Instant" } } },
+      "OrganizationCollection": { "type": "object", "additionalProperties": false, "required": ["items", "nextCursor", "hasMore"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Organization" } }, "nextCursor": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueCursor" }, { "type": "null" }] }, "hasMore": { "type": "boolean" } } },
+      "SiteCollection": { "type": "object", "additionalProperties": false, "required": ["items", "nextCursor", "hasMore"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Site" } }, "nextCursor": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueCursor" }, { "type": "null" }] }, "hasMore": { "type": "boolean" } } },
+      "EquipmentCollection": { "type": "object", "additionalProperties": false, "required": ["items", "nextCursor", "hasMore"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Equipment" } }, "nextCursor": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueCursor" }, { "type": "null" }] }, "hasMore": { "type": "boolean" } } },
+      "DeviceCollection": { "type": "object", "additionalProperties": false, "required": ["items", "nextCursor", "hasMore"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Device" } }, "nextCursor": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueCursor" }, { "type": "null" }] }, "hasMore": { "type": "boolean" } } },
       "FieldError": { "type": "object", "additionalProperties": false, "required": ["field", "message"], "properties": { "field": { "type": "string" }, "message": { "type": "string" } } },
-      "ProblemDetails": { "type": "object", "additionalProperties": false, "required": ["type", "title", "status", "detail", "instance", "code", "traceId", "retryable"], "properties": { "type": { "type": "string", "format": "uri-reference" }, "title": { "type": "string" }, "status": { "type": "integer", "minimum": 400, "maximum": 599 }, "detail": { "type": "string" }, "instance": { "type": "string" }, "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]+$" }, "traceId": { "type": "string", "pattern": "^[a-f0-9]{32}$" }, "retryable": { "type": "boolean" }, "fieldErrors": { "type": "array", "items": { "$ref": "#/components/schemas/FieldError" } } } }
+      "ProblemDetails": { "type": "object", "additionalProperties": false, "required": ["type", "title", "status", "detail", "instance", "code", "traceId", "retryable"], "properties": { "type": { "type": "string", "format": "uri-reference" }, "title": { "type": "string" }, "status": { "type": "integer", "minimum": 400, "maximum": 599 }, "detail": { "type": "string" }, "instance": { "type": "string" }, "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]+$", "x-stable-codes": ["RESOURCE_NOT_FOUND", "CURSOR_INVALID", "REGISTRY_UNAVAILABLE", "REGISTRY_TIMEOUT", "MAPPING_INVALID", "MAPPING_QUARANTINED"] }, "traceId": { "type": "string", "pattern": "^[a-f0-9]{32}$" }, "retryable": { "type": "boolean" }, "fieldErrors": { "type": "array", "items": { "$ref": "#/components/schemas/FieldError" } } } }
     }
   }
 }
