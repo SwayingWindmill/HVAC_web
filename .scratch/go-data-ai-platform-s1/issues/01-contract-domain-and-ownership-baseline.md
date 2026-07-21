@@ -32,4 +32,4 @@
 - PostgreSQL: `infra/s1-registry/postgres/init/` with separate IAM/Core owners, mandatory RLS, deterministic two-Organization fixtures and migration Quarantine.
 - Reuse decision: reproducible `sqlc v1.31.1` POC retained as evidence; direct `pgx` remains the initial implementation choice.
 - Architecture Decision Trace: `docs/adr/0001-s1-registry-contract-domain-ownership.md`.
-- Local gates: `npm run s1:ticket-01`, `npm run lint`, `npm run build`, `npm run test:ownership`, `npm run security:licenses` and `npm run security:dependency-audit` passed on 2026-07-21.
+- Local gates: `npm run s1:ticket-01`, `npm run lint`, `npm run build`, `npm run test:ownership`, `npm run audit:auth-principal`, `npm run audit:observability`, `npm run security:gates`, `npm run security:licenses`, `npm run security:dependency-audit`, `npm run release:evidence-assets` and `npm run delivery:check` passed on 2026-07-21.

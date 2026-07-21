@@ -15,6 +15,7 @@ import (
 const (
 	OwnerGateway = "platform-gateway"
 	OwnerLegacy  = "legacy-hvac-backend"
+	OwnerCore    = "platform-core-service"
 )
 
 var (
@@ -131,7 +132,7 @@ func validateEntry(entry RouteEntry) error {
 	if entry.Method == "" || !strings.HasPrefix(entry.Path, "/api/v1/") || entry.Revision < 1 {
 		return errors.New("method, public path and positive revision are required")
 	}
-	if entry.Owner != OwnerGateway && entry.Owner != OwnerLegacy {
+	if !isActiveOwner(entry.Owner) {
 		return errors.New("owner is unsupported")
 	}
 	if entry.CompatibilityMode != "native" && entry.CompatibilityMode != "legacy-read" {
@@ -157,7 +158,7 @@ func validateEntry(entry RouteEntry) error {
 		if entry.Rollout.Percentage < 0 || entry.Rollout.Percentage > 100 {
 			return errors.New("rollout percentage is outside 0..100")
 		}
-		if entry.Rollout.FallbackOwner == "" || entry.Rollout.FallbackOwner == entry.Owner || (entry.Rollout.FallbackOwner != OwnerGateway && entry.Rollout.FallbackOwner != OwnerLegacy) {
+		if entry.Rollout.FallbackOwner == "" || entry.Rollout.FallbackOwner == entry.Owner || !isCandidateOwner(entry.Rollout.FallbackOwner) {
 			return errors.New("fallback owner is invalid")
 		}
 		if len(entry.Rollout.CohortSalt) < 8 || !seenScopes["organization"] || !seenScopes["principal"] {
@@ -167,6 +168,14 @@ func validateEntry(entry RouteEntry) error {
 		return errors.New("rollout mode is unsupported")
 	}
 	return nil
+}
+
+func isActiveOwner(owner string) bool {
+	return owner == OwnerGateway || owner == OwnerLegacy
+}
+
+func isCandidateOwner(owner string) bool {
+	return isActiveOwner(owner) || owner == OwnerCore
 }
 
 func NewManager(snapshot *Snapshot, audit AuditSink, now func() time.Time) *Manager {

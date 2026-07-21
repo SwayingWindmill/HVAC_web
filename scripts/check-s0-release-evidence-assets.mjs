@@ -95,30 +95,34 @@ assert(schema.properties?._type?.const === 'https://in-toto.io/Statement/v1', 'b
 assert(schema.properties?.predicateType?.const === 'https://hvac.local/attestations/s0-release-evidence/v1', 'bundle predicate type is invalid');
 assert(schema.properties?.predicate?.properties?.images?.minItems === 7, 'bundle schema must require seven images');
 
-const forbiddenPublicPaths = [
-  '/api/v1/organizations',
-  '/api/v1/sites',
-  '/api/v1/devices',
-  '/api/v1/equipment',
+// S0 evidence remains valid when later phase contracts are added. Only paths
+// that are still outside the accepted S1 boundary remain forbidden here.
+const forbiddenPostS1PublicPaths = [
   '/api/v1/telemetry',
   '/api/v1/commands',
   '/api/v1/schedules',
   '/api/v1/ai',
   '/api/v1/recommendations',
 ];
-const leakedPaths = forbiddenPublicPaths.filter((path) => openapiText.includes(`"${path}`));
-assert(leakedPaths.length === 0, `S0 public contract contains deferred business paths: ${leakedPaths.join(', ')}`);
+const leakedPaths = forbiddenPostS1PublicPaths.filter((path) => openapiText.includes(`"${path}`));
+assert(leakedPaths.length === 0, `public contract contains post-S1 deferred paths: ${leakedPaths.join(', ')}`);
 const allowedOwnershipNames = new Set([
   'gateway',
   'audit_ledger',
   'legacy',
+  'iam',
+  'core_registry',
   'hvac.security.session.v1',
   'hvac.routing.decision.v1',
   'audit-session-record',
   'gateway-route-audit',
+  'iam-registry-read-decision',
+  's1-legacy-resource-map',
+  's1-migration-provenance',
+  's1-migration-quarantine',
 ]);
 const leakedOwnership = ownership.resources.filter((resource) => !allowedOwnershipNames.has(resource.name));
-assert(leakedOwnership.length === 0, `S0 ownership registry contains deferred business resources: ${JSON.stringify(leakedOwnership)}`);
+assert(leakedOwnership.length === 0, `ownership registry contains post-S1 deferred resources: ${JSON.stringify(leakedOwnership)}`);
 
 await mkdir(outputRoot, { recursive: true });
 const scopeAudit = {
@@ -126,7 +130,7 @@ const scopeAudit = {
   ticket: '08-s0-release-evidence',
   status: 'passed',
   checkedAt: new Date().toISOString(),
-  forbiddenPublicPaths,
+  forbiddenPublicPaths: forbiddenPostS1PublicPaths,
   leakedPublicPaths: [],
   allowedOwnershipResources: [...allowedOwnershipNames].sort(),
   leakedOwnershipResources: [],

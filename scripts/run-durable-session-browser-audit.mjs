@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { createServer as createTCPServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import WebSocket from 'ws';
@@ -18,9 +20,20 @@ const releaseEvidence = {
   failureRecovery: null,
   invariants: null,
 };
-const debugPort = Number(process.env.S0_DURABLE_DEBUG_PORT ?? 9366);
 const profileDir = join(tmpdir(), `s0-durable-browser-${process.pid}`);
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
+
+async function findAvailablePort(requestedPort = 0) {
+  const server = createTCPServer();
+  server.listen({ host: '127.0.0.1', port: Number(requestedPort) || 0, exclusive: true });
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('browser audit port allocator did not expose a TCP address');
+  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
+  return address.port;
+}
+
+const debugPort = await findAvailablePort(process.env.S0_DURABLE_DEBUG_PORT ?? 0);
 const browserCandidates = [
   process.env.BROWSER_BINARY,
   process.env['PROGRAMFILES(X86)'] ? join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
@@ -249,7 +262,15 @@ let edgeProcess;
 let cdpClient;
 try {
   await mkdir(profileDir, { recursive: true });
-  topology = await startS0DurableTopology({ oidcPort: 19094, iamPort: 18444, auditPort: 18446, gatewayPort: 18082, webPort: 5181, quiet: true });
+  const [oidcPort, iamPort, auditPort, legacyPort, gatewayPort, webPort] = await Promise.all([
+    findAvailablePort(),
+    findAvailablePort(),
+    findAvailablePort(),
+    findAvailablePort(),
+    findAvailablePort(),
+    findAvailablePort(),
+  ]);
+  topology = await startS0DurableTopology({ oidcPort, iamPort, auditPort, legacyPort, gatewayPort, webPort, quiet: true });
   edgeProcess = spawn(browserPath, [
     '--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run', '--no-default-browser-check', '--hide-scrollbars',
     '--ignore-certificate-errors', '--allow-insecure-localhost', `--remote-debugging-port=${debugPort}`,
@@ -270,21 +291,21 @@ try {
   assert(principal.status === 200 && principal.body.context.actingOrganizationId === 'org-fixture-01', 'Default Organization Principal was invalid');
 
   await waitForAttribute(cdpClient, '[data-testid="platform-route-status"]', 'data-route-implementation', 'legacy', 'Route Ownership UI');
-  const legacyStatus = await waitForPlatformOwner(cdpClient, 'legacy', 1);
+  const legacyStatus = await waitForPlatformOwner(cdpClient, 'legacy', 2);
   assert(legacyStatus.body.service === 'platform-status' && legacyStatus.body.compatibilityMode === 'legacy-read', 'Legacy route was not normalized by the Gateway');
   for (const forbidden of ['code', 'message', 'memory', 'traceId', 'uptime']) {
     assert(!(forbidden in legacyStatus.body), `Legacy anti-corruption response exposed ${forbidden}`);
   }
   await evaluate(cdpClient, `document.cookie = 'route_cohort=forged-client-choice; Path=/; Secure; SameSite=Lax'`);
-  const forgedCohortStatus = await waitForPlatformOwner(cdpClient, 'legacy', 1);
+  const forgedCohortStatus = await waitForPlatformOwner(cdpClient, 'legacy', 2);
   assert(forgedCohortStatus.body.implementation === legacyStatus.body.implementation && forgedCohortStatus.body.routePolicyRevision === legacyStatus.body.routePolicyRevision && forgedCohortStatus.body.routeRevision === legacyStatus.body.routeRevision && forgedCohortStatus.body.compatibilityMode === legacyStatus.body.compatibilityMode, 'Client-controlled cohort cookie changed route ownership');
   const routeAudit = topology.platformRouteAuditSnapshot();
-  assert(routeAudit?.selected_owner === 'legacy-hvac-backend' && routeAudit?.registry_revision === 1, 'Legacy route decision was not audited');
+  assert(routeAudit?.selected_owner === 'legacy-hvac-backend' && routeAudit?.registry_revision === 2, 'Legacy route decision was not audited');
   assert(!JSON.stringify(routeAudit).includes(principal.body.session.id), 'Route audit leaked the browser Session identifier');
   const legacyTrace = await waitForTrace(topology, traceIDFromTraceparent(legacyStatus.traceparent), ['http.gateway.request', 'http.legacy.platform_status'], 'Legacy route');
   const legacyGatewaySpan = legacyTrace.find((span) => span.name === 'http.gateway.request');
   assert(legacyGatewaySpan?.attributes['route.owner'] === 'legacy-hvac-backend', 'Legacy trace did not record the selected owner');
-  assert(Number(legacyGatewaySpan?.attributes['route.policy.revision']) === 1 && Number(legacyGatewaySpan?.attributes['route.revision']) === 1, 'Legacy trace did not record route revisions');
+  assert(Number(legacyGatewaySpan?.attributes['route.policy.revision']) === 2 && Number(legacyGatewaySpan?.attributes['route.revision']) === 1, 'Legacy trace did not record route revisions');
   assertParent(legacyTrace, 'http.legacy.platform_status', 'http.gateway.request');
   const directLegacy = await evaluate(cdpClient, `fetch(${JSON.stringify(`${topology.legacyDirectURL}/api/v1/health`)}).then(() => ({ resolved: true })).catch(() => ({ resolved: false }))`);
   assert(directLegacy.resolved === false, 'Browser reached private Legacy service without a workload certificate');
@@ -298,12 +319,12 @@ try {
   assertSafePublicProblem(openLegacyCircuit, 503, 'LEGACY_CIRCUIT_OPEN');
   await topology.clearLegacyLatency();
 
-  await topology.setPlatformStatusOwner('platform-gateway', 2, 2);
-  const goStatus = await waitForPlatformOwner(cdpClient, 'go', 2);
+  await topology.setPlatformStatusOwner('platform-gateway', 3, 2);
+  const goStatus = await waitForPlatformOwner(cdpClient, 'go', 3);
   assert(goStatus.body.compatibilityMode === 'native' && goStatus.body.routeRevision === 2, 'Route policy rollback did not move future requests to Go');
-  await topology.setPlatformStatusOwner('legacy-hvac-backend', 1, 1);
+  await topology.setPlatformStatusOwner('legacy-hvac-backend', 2, 1);
   await pause(750);
-  const rejectedRevision = await waitForPlatformOwner(cdpClient, 'go', 2);
+  const rejectedRevision = await waitForPlatformOwner(cdpClient, 'go', 3);
   assert(rejectedRevision.body.implementation === 'go', 'Registry revision rollback changed the active owner');
   assert(topology.routeAuditCount('ROUTE_POLICY_CHANGED') === 1, 'Successful route policy change was not audited exactly once');
 
@@ -455,9 +476,9 @@ try {
   };
   releaseEvidence.routeRollback = {
     initialOwner: 'legacy-hvac-backend',
-    initialRegistryRevision: 1,
+    initialRegistryRevision: 2,
     restoredOwner: 'platform-gateway',
-    restoredRegistryRevision: 2,
+    restoredRegistryRevision: 3,
     staleRevisionRejected: true,
   };
   releaseEvidence.traces = {
@@ -487,5 +508,5 @@ try {
   cdpClient?.close();
   await stopProcess(edgeProcess);
   await topology?.stop();
-  await rm(profileDir, { recursive: true, force: true });
+  await rm(profileDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 }
