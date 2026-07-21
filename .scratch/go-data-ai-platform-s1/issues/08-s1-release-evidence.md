@@ -16,6 +16,7 @@
 - [ ] Capacity evidence records the declared dataset, staging profile, throughput, latency percentiles, RLS/query-plan cost and headroom.
 - [ ] Backup/restore evidence reconstructs IAM/Core Registry data, mappings, provenance and Quarantine and reruns tenant checks.
 - [ ] The Bundle includes source and image versions, environment, fixtures, OpenAPI/generated clients, DDL/migrations, tests, traces, dashboards, Audit, Shadow/Quarantine, capacity, restore, rollout and rollback results.
+- [ ] The Bundle records the pinned Logto version/configuration class, issuer/subject mapping tests, external identity lifecycle evidence and proof that Logto Organization/role claims are not direct business authorization.
 - [ ] Every release image includes SBOM, vulnerability/secret scans, BuildKit provenance, Cosign verification and GitHub build attestation.
 - [ ] Architecture Decision Trace maps every S1 acceptance criterion to source architecture, specification, implementation, tests, CI run and evidence file.
 - [ ] Known limitations are explicit and do not defer tenant isolation, resource invisibility, mapping correctness, rollback or credential safety.

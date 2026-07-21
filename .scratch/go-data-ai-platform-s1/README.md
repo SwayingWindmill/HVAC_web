@@ -39,6 +39,7 @@ The S1 specification is ready for review but is not yet accepted. No implementat
 
 - The highest test seam is the public Gateway contract or a real browser journey.
 - IAM remains the unique owner of Principal, OrganizationMembership, RoleBinding, SiteBinding and Policy.
+- Logto is the selected external identity provider for login, credentials, MFA/passkeys, enterprise federation and external user lifecycle. Logto Organization or role claims are not HVAC data-authorization truth.
 - `platform-core-service` remains the unique owner of Organization, Site, Equipment, Device, DeviceBinding, ExternalBinding and S1 migration mappings.
 - Client headers, active UI selections and token business claims are never authorization truth.
 - New public IDs are immutable platform UUIDv7 values; Legacy and ThingsBoard IDs stay behind controlled mappings.

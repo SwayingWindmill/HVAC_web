@@ -2,7 +2,7 @@
 
 Date: 2026-07-21
 
-Scope: authorization modeling, PostgreSQL access/migrations, OpenAPI client generation, pagination and Legacy migration support for the S1 Organization–Site–Device read slice.
+Scope: external identity, authorization modeling, PostgreSQL access/migrations, OpenAPI client generation, pagination and Legacy migration support for the S1 Organization–Site–Device read slice.
 
 ## Evaluation criteria
 
@@ -11,6 +11,17 @@ Candidates were evaluated by technical fit, active maintenance, documentation, l
 Star count was treated only as a weak ecosystem signal, not as a selection criterion.
 
 ## Candidates
+
+### External identity providers
+
+| Candidate | License | Strengths | Integration and maintenance cost | S1 decision |
+|---|---|---|---|---|
+| Logto (`logto-io/logto`) | MPL-2.0 | OIDC/OAuth, B2B Organizations, MFA/passkeys, enterprise SSO, Management API and an existing `logto_subject` migration seam in this repository. | Requires a clear mapping between Logto identity Organizations and platform business Organizations; its claims cannot express SiteBinding or resource ownership. | **Selected** for external authentication and user lifecycle. Keep platform IAM as business authorization authority. |
+| ZITADEL (`zitadel/zitadel`) | AGPL-3.0 with component exceptions | Strong B2B Organization, project grant, API-first and Go-based operational model. | Stricter license review, a second Organization/Project model and higher migration/operational cost. | Retain as the primary fallback if Logto fails the POC or future delegation requirements exceed it. |
+| Keycloak (`keycloak/keycloak`) | Apache-2.0 | Mature OIDC/SAML, LDAP/AD federation, enterprise adoption and extensive operational knowledge. | Heavier Java/Quarkus runtime and a complex Realm/Organization/Role configuration model. | Use only when LDAP/SAML enterprise federation becomes the dominant requirement. |
+| Ory Kratos + Hydra | Apache-2.0 core projects | Headless, modular, Go-based identity and OAuth components. | Multiple services, databases and custom UI; B2B organization capabilities increase integration and licensing complexity. | Do not integrate in S1. |
+
+### Business authorization and delivery components
 
 | Candidate | License | Strengths | Integration and maintenance cost | S1 decision |
 |---|---|---|---|---|
@@ -27,6 +38,7 @@ Star count was treated only as a weak ecosystem signal, not as a selection crite
 
 S1 will reuse the platform components already proven by S0:
 
+- Logto as the external OIDC identity, credential, MFA/passkey, enterprise federation and user-lifecycle provider;
 - existing OIDC/BFF Session, Principal Context, Workload Identity and delegation libraries;
 - IAM-owned typed authorization facts and decisions;
 - `pgx/v5` plus explicit SQL and PostgreSQL RLS;
@@ -35,7 +47,17 @@ S1 will reuse the platform components already proven by S0:
 - owner-specific migration images and expand-contract release practice;
 - native PostgreSQL keyset queries and opaque signed/versioned cursors implemented as project-specific contract behavior.
 
-No new authorization service, policy store, ORM, migration framework, generic repository abstraction or pagination framework is introduced by the S1 specification.
+No new relationship-authorization service, second business policy store, ORM, migration framework, generic repository abstraction or pagination framework is introduced by the S1 specification.
+
+## Logto boundary
+
+- Trusted identity key: configured Logto issuer plus immutable subject.
+- Platform Principal mapping: server-side, auditable and independent of mutable email/display-name fields.
+- Logto responsibilities: authentication, credentials, MFA/passkeys, external identity federation, account lifecycle and external session protocols.
+- Platform IAM responsibilities: Principal business mapping, OrganizationMembership, RoleBinding, SiteBinding, explicit deny, Policy revision, delegation and business authorization decisions.
+- Domain-owner responsibilities: re-evaluate the delegated Scope against authoritative resource ownership.
+- Logto Organization/role claims: onboarding or reconciliation inputs only; never direct Registry authorization.
+- Management API: server-side only, least privilege, secret-managed, rate-limited and audited.
 
 ## Conditional POC
 

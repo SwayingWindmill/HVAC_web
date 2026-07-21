@@ -11,6 +11,8 @@
 - [ ] Cross-Organization and unauthorized sibling-Site successful reads are zero across every list/detail endpoint.
 - [ ] Existence disclosure through status, Problem Details, cursor reuse, count, pagination metadata or defined timing buckets is zero.
 - [ ] Forged Organization/Site/role/admin/scope headers and wrong-audience/stale/revoked grants are rejected and audited.
+- [ ] Logto Organization/role/custom claims cannot directly grant HVAC Registry access; claim/platform-policy mismatches follow platform IAM and produce safe reconciliation evidence.
+- [ ] Logto login, JWKS rotation, disabled user, logout, Management API outage and identity-reconciliation conflict paths fail explicitly without widening Scope.
 - [ ] Tests intentionally remove an application predicate and independently prove RLS still blocks the unauthorized row.
 - [ ] Tests intentionally alter RLS in an isolated fixture and independently prove application predicates still block unauthorized rows.
 - [ ] Cursor tests cover tampering, Scope/filter/route mismatch, unsupported query revision, limit abuse and authorization changes between pages.

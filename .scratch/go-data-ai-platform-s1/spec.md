@@ -17,7 +17,7 @@ S1 必须交付第一个真实业务读取切片，使用户通过现有 BFF Ses
 交付一个只读、端到端、可迁移和可回滚的 Registry 切片：
 
 1. 扩展公共 OpenAPI，定义 Organization、Site、Equipment、Device、DeviceBinding、集合分页和 Registry 页面所需的类型化 DTO。
-2. 在 IAM 中实现 `registry.read` 授权投影，由当前 OrganizationMembership、RoleBinding、SiteBinding、显式拒绝和 Policy revision 生成短期、Audience 受限的读取委托。
+2. 采用 Logto 作为外部身份提供方，复用其 OIDC、凭据、MFA/Passkey、企业身份联邦和外部用户生命周期；在平台 IAM 中实现 `registry.read` 授权投影，由当前 OrganizationMembership、RoleBinding、SiteBinding、显式拒绝和 Policy revision 生成短期、Audience 受限的读取委托。
 3. 建立独立的 `platform-core-service`，以 PostgreSQL 独立 Schema 和运行身份拥有 Organization、Site、Equipment、Device、DeviceBinding、ExternalBinding 与 S1 迁移映射。
 4. 对所有租户表实施应用层 Scope 过滤和 PostgreSQL RLS 双重隔离；跨组织访问只能通过有效 SiteBinding 获得明确 Site Scope。
 5. 从一个内部测试 Organization/Site 建立可重复的 Legacy 快照映射、Migration Provenance、Quarantine 和异步 Shadow Compare，不在读请求中触发 ThingsBoard 同步。
@@ -53,6 +53,7 @@ S1 必须交付第一个真实业务读取切片，使用户通过现有 BFF Ses
 ### Slice scope and service boundaries
 
 - S1 introduces one new production-shaped binary: `platform-core-service`. It remains a modular Core service rather than separate Organization, Site, Equipment and Device microservices.
+- Logto is the selected external identity provider. It owns authentication ceremonies, password/passkey/MFA factors, external IdP federation, external sessions and the external subject lifecycle.
 - IAM remains the only owner of Principal, OrganizationMembership, RoleBinding, SiteBinding and Policy. Core must not persist a second editable authorization policy store.
 - Core owns `Organization`, `Site`, `Equipment`, `Device`, `DeviceBinding`, `ExternalBinding`, `LegacyResourceMap`, `MigrationProvenance` and S1 `MigrationQuarantine` records.
 - Gateway remains edge/protocol focused. It validates the BFF Session, obtains the current scoped delegation, selects a Route Owner, calls Core or the approved Legacy anti-corruption path, and normalizes the public contract.
@@ -71,6 +72,10 @@ S1 必须交付第一个真实业务读取切片，使用户通过现有 BFF Ses
 
 ### Authorization
 
+- Logto OIDC `iss` and `sub` identify the authenticated external subject. The platform stores a stable Principal mapping keyed by provider and subject; email, display name and similar profile fields are synchronized attributes rather than immutable authorization keys.
+- Logto Organization membership, organization-role or custom claims may seed onboarding and reconciliation workflows, but they never directly authorize HVAC Organization, Site, Equipment or Device access. Platform IAM remains the business authorization authority.
+- Provisioning from Logto into platform IAM is explicit, idempotent, versioned and audited. Claim or Management API changes do not silently grant access until a platform-owned OrganizationMembership/RoleBinding/SiteBinding transition is committed.
+- Logto Management API credentials remain server-side, narrowly scoped and isolated from browser sessions, delegation grants and Core service credentials.
 - The public action introduced by S1 is `registry.read`; implementation may use narrower internal actions such as `organization.list`, `site.read`, `equipment.read` and `device.read`, but public authorization semantics remain explicit and versioned.
 - Membership only proves association with an Organization. Effective access is the intersection of current Membership, RoleBinding, SiteBinding, explicit deny, resource Scope, action and limited ABAC.
 - IAM produces a short-lived delegation for `platform-core-service` containing initiating principal, executing audience, acting Organization, allowed Organization/Site Scope, actions, policy revision, expiry and `jti`.
@@ -78,6 +83,7 @@ S1 必须交付第一个真实业务读取切片，使用户通过现有 BFF Ses
 - A cross-organization SiteBinding grants only the bound Site and permitted actions. It does not grant Organization-wide listing of the Site owner or access to sibling Sites.
 - Client `X-Organization-*`, `X-Site-*`, role, admin and scope headers are rejected or ignored and produce security evidence. Active Organization/Site values are UI preferences only.
 - Invalid, expired, revoked, wrong-audience or policy-stale grants fail closed. The maximum accepted policy staleness and revocation propagation target remain bounded by the S0 identity baseline.
+- Logto outage handling follows the BFF Session boundary: existing platform sessions may operate only within the accepted token/session freshness and revocation limits; new login, refresh or identity reconciliation fails explicitly and never widens authorization.
 
 ### PostgreSQL ownership and RLS
 
@@ -139,6 +145,7 @@ Contract rules:
 - Structured logs and Problem Details contain stable IDs, revisions, decision/result codes and trace IDs, but no cookies, grants, tokens, raw external credentials or full sensitive Legacy payloads.
 - Metrics cover Registry request rate/error/latency, authorization allow/deny, RLS denial, cursor invalidation, mapping state, Quarantine age, shadow difference, route owner/revision and fallback usage. Principal, resource and Site IDs are not metric labels.
 - User-facing Registry collection/detail reads and authorization denials produce Audit events with initiating/executing principals, acting/owning Organization, Site/resource Scope, action, policy revision, route/data owner revision, result and trace correlation.
+- Logto login, callback, logout, subject-linking, provisioning/reconciliation and external identity conflicts are correlated to the platform Principal without recording tokens, credentials or full Management API payloads.
 - Audit backend failure must not widen access or change a denial into an allow. Ordinary read availability follows the documented degraded mode; security denial evidence is retained through bounded local/Outbox mechanisms where applicable.
 
 ### Capacity, availability and recovery
@@ -154,6 +161,7 @@ Contract rules:
 
 - Contract tests validate OpenAPI, generated artifacts, Problem Details, UUIDv7 fields, timezones, cursor behavior and current/previous compatible clients.
 - Authorization tests use at least two owning Organizations, multiple Sites, an acting Organization, direct memberships, cross-organization SiteBinding, explicit deny, no-access principals and service identities.
+- External identity tests use Logto-compatible fixtures for login, logout, JWKS rotation, subject mapping, duplicate email with distinct subjects, disabled external user, stale organization claim and Management API/provisioning failure.
 - Every list/detail endpoint has positive, sibling-Site denial, cross-Organization denial, forged-header, stale-grant, wrong-audience and resource-enumeration tests.
 - PostgreSQL integration tests prove application predicates and RLS independently block unauthorized rows; runtime roles are tested for inability to bypass RLS or access the other service Schema.
 - Pagination tests cover first/next/final pages, stable tie-breakers, limit bounds, cursor tampering, filter/scope mismatch, query revision change and authorization changes between pages.
@@ -185,6 +193,8 @@ S1 release evidence must report all of the following as zero:
 - TelemetryPoint mapping, ThingsBoard ingestion, online state, latest/history telemetry, Realtime Snapshot/Delta or alarms.
 - Device Capability, Command, approval, RPC, ACK, Scheduler, Automation, reports, AI Investigation or Recommendation.
 - Replacing IAM with OpenFGA, SpiceDB or Casbin in S1.
+- Building passwords, MFA, passkeys, account recovery, enterprise SSO or an external user directory inside the Go `iam-service`.
+- Treating Logto Organization, role or custom claims as direct HVAC resource authorization.
 - Generic offset pagination, exact total counts, unrestricted search, export or arbitrary cross-Site aggregation.
 - Deleting NestJS, restoring public Legacy ports or granting Legacy new write ownership.
 - Production cutover for more than the approved internal S1 cohort before the S1 Release Gate passes.
