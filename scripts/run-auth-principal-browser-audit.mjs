@@ -10,13 +10,18 @@ const debugPort = Number(process.env.S0_AUTH_DEBUG_PORT ?? 9355);
 const profileDir = join(tmpdir(), `s0-auth-browser-${process.pid}`);
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 const edgeCandidates = [
+  process.env.BROWSER_BINARY,
   process.env['PROGRAMFILES(X86)'] ? join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
   process.env.PROGRAMFILES ? join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
   join('C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
   join('C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+  '/usr/bin/google-chrome',
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/chromium-browser',
+  '/usr/bin/chromium',
 ].filter(Boolean);
 const edgePath = edgeCandidates.find((candidate) => existsSync(candidate));
-if (!edgePath) throw new Error('Microsoft Edge executable not found');
+if (!edgePath) throw new Error('A CDP-compatible Edge, Chrome, or Chromium executable was not found');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -24,14 +29,14 @@ function assert(condition, message) {
 
 async function waitForDebugger(child) {
   for (let attempt = 0; attempt < 600; attempt += 1) {
-    if (child.exitCode !== null || child.signalCode !== null) throw new Error('Edge exited before debugger became ready');
+    if (child.exitCode !== null || child.signalCode !== null) throw new Error('Browser exited before debugger became ready');
     try {
       const response = await fetch(`http://127.0.0.1:${debugPort}/json/version`);
       if (response.ok) return;
     } catch {}
     await pause(100);
   }
-  throw new Error('Edge debugger did not become ready');
+  throw new Error('Browser debugger did not become ready');
 }
 
 function createCdpClient(webSocketUrl) {
