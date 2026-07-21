@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-const generatorVersion = '4.0.0';
+const generatorVersion = '5.0.0';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const specPath = resolve(root, 'contracts/http/platform-gateway.openapi.yaml');
 const toolingLockPath = resolve(root, 'contracts/http/tooling.lock.json');
@@ -19,7 +19,10 @@ const windowsGofmtPath = 'C:\\Program Files\\Go\\bin\\gofmt.exe';
 const gofmtBinary = process.env.GOFMT_BINARY ?? (process.platform === 'win32' && existsSync(windowsGofmtPath) ? windowsGofmtPath : 'gofmt');
 
 const [specText, toolingLockText, goTemplate, tsTemplate] = await Promise.all([
-  readFile(specPath, 'utf8'), readFile(toolingLockPath, 'utf8'), readFile(goTemplatePath, 'utf8'), readFile(tsTemplatePath, 'utf8'),
+  readFile(specPath, 'utf8'),
+  readFile(toolingLockPath, 'utf8'),
+  readFile(goTemplatePath, 'utf8'),
+  readFile(tsTemplatePath, 'utf8'),
 ]);
 const spec = JSON.parse(specText);
 const toolingLock = JSON.parse(toolingLockText);
@@ -28,12 +31,15 @@ const digest = createHash('sha256').update(specText).digest('hex');
 function invariant(condition, message) {
   if (!condition) throw new Error(`Invalid platform Gateway OpenAPI contract: ${message}`);
 }
+
 function exactMembers(actual, expected) {
   return Array.isArray(actual) && actual.length === expected.length && expected.every((member) => actual.includes(member));
 }
+
 function exactKeys(value, expected) {
   return value !== null && typeof value === 'object' && exactMembers(Object.keys(value), expected);
 }
+
 function operation(operationId) {
   for (const [path, pathItem] of Object.entries(spec.paths ?? {})) {
     for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
@@ -42,6 +48,7 @@ function operation(operationId) {
   }
   return null;
 }
+
 function schemaRef(operationValue, status, contentType = 'application/json') {
   return operationValue?.responses?.[status]?.content?.[contentType]?.schema?.$ref;
 }
@@ -49,10 +56,12 @@ function schemaRef(operationValue, status, contentType = 'application/json') {
 invariant(toolingLock.generatorVersion === generatorVersion, 'tooling lock generator version does not match this generator');
 invariant(toolingLock.generator === 'scripts/generate-platform-contracts.mjs', 'tooling lock generator path is invalid');
 invariant(exactMembers(toolingLock.templates, [
-  'contracts/http/templates/platformapi.go.tmpl', 'contracts/http/templates/platformGateway.ts.tmpl',
+  'contracts/http/templates/platformapi.go.tmpl',
+  'contracts/http/templates/platformGateway.ts.tmpl',
 ]), 'tooling lock templates are invalid');
 invariant(exactMembers(toolingLock.outputs, [
-  'services/platform-gateway/pkg/platformapi/api.gen.go', 'apps/hvac-web/src/api/generated/platformGateway.gen.ts',
+  'services/platform-gateway/pkg/platformapi/api.gen.go',
+  'apps/hvac-web/src/api/generated/platformGateway.gen.ts',
 ]), 'tooling lock outputs are invalid');
 invariant(spec.openapi === '3.1.0', 'OpenAPI version must be 3.1.0');
 
@@ -66,19 +75,41 @@ const expectedOperations = {
   logout: ['post', '/api/v1/auth/logout'],
   revokeSession: ['post', '/api/v1/auth/sessions/{sessionId}/revoke'],
   getSessionAuditEvent: ['get', '/api/v1/audit/session-events/{messageId}'],
+  listOrganizations: ['get', '/api/v1/organizations'],
+  getOrganization: ['get', '/api/v1/organizations/{organizationId}'],
+  listOrganizationSites: ['get', '/api/v1/organizations/{organizationId}/sites'],
+  getSite: ['get', '/api/v1/sites/{siteId}'],
+  listSiteEquipment: ['get', '/api/v1/sites/{siteId}/equipment'],
+  getEquipment: ['get', '/api/v1/equipment/{equipmentId}'],
+  listSiteDevices: ['get', '/api/v1/sites/{siteId}/devices'],
+  getDevice: ['get', '/api/v1/devices/{deviceId}'],
 };
 const operations = {};
 for (const [operationId, [method, path]] of Object.entries(expectedOperations)) {
   const value = operation(operationId);
-  invariant(value?.method === method && value?.path === path, `${operationId} method/path is unsupported by generator version 4`);
+  invariant(value?.method === method && value?.path === path, `${operationId} method/path is unsupported by generator version 5`);
   operations[operationId] = value;
 }
-invariant(schemaRef(operations.getHealth.operation, '200') === '#/components/schemas/HealthResponse', 'getHealth success schema is unsupported');
-invariant(schemaRef(operations.getVersion.operation, '200') === '#/components/schemas/BuildInfo', 'getVersion success schema is unsupported');
-invariant(schemaRef(operations.getPlatformStatus.operation, '200') === '#/components/schemas/PlatformStatusResponse', 'platform status success schema is unsupported');
-invariant(schemaRef(operations.getCurrentPrincipal.operation, '200') === '#/components/schemas/CurrentPrincipalResponse', 'current principal success schema is unsupported');
-invariant(schemaRef(operations.revokeSession.operation, '200') === '#/components/schemas/SessionRevocationResponse', 'session revocation schema is unsupported');
-invariant(schemaRef(operations.getSessionAuditEvent.operation, '200') === '#/components/schemas/AuditRecord', 'session audit schema is unsupported');
+
+const expectedSuccessSchemas = {
+  getHealth: 'HealthResponse',
+  getVersion: 'BuildInfo',
+  getPlatformStatus: 'PlatformStatusResponse',
+  getCurrentPrincipal: 'CurrentPrincipalResponse',
+  revokeSession: 'SessionRevocationResponse',
+  getSessionAuditEvent: 'AuditRecord',
+  listOrganizations: 'OrganizationCollection',
+  getOrganization: 'Organization',
+  listOrganizationSites: 'SiteCollection',
+  getSite: 'Site',
+  listSiteEquipment: 'EquipmentCollection',
+  getEquipment: 'Equipment',
+  listSiteDevices: 'DeviceCollection',
+  getDevice: 'Device',
+};
+for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
+  invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
+}
 invariant(operations.logout.operation.responses?.['204'], 'logout must return 204');
 
 const schemas = spec.components?.schemas ?? {};
@@ -103,6 +134,16 @@ const schemaRequirements = {
     'action', 'result', 'policyRevision', 'correlationId', 'causationId', 'traceId', 'payloadSha256', 'previousRecordHash',
     'recordHash', 'recordedAt',
   ]],
+  Organization: [['id', 'code', 'displayName', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'code', 'displayName', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Site: [['id', 'owningOrganizationId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'owningOrganizationId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Equipment: [['id', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'equipmentType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'equipmentType', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Device: [['id', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt']],
+  DeviceBinding: [['id', 'owningOrganizationId', 'siteId', 'deviceId', 'equipmentId', 'bindingRole', 'status', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'owningOrganizationId', 'siteId', 'deviceId', 'equipmentId', 'bindingRole', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
+  ExternalBinding: [['id', 'owningOrganizationId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'owningOrganizationId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
+  OrganizationCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
+  SiteCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
+  EquipmentCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
+  DeviceCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   FieldError: [['field', 'message'], ['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'fieldErrors']],
 };
@@ -112,6 +153,7 @@ for (const [name, [required, properties]] of Object.entries(schemaRequirements))
   invariant(exactMembers(schema.required, required), `${name} required fields are unsupported`);
   invariant(exactKeys(schema.properties, properties), `${name} properties are unsupported`);
 }
+
 invariant(schemas.BuildInfo.properties.service.const === 'platform-gateway', 'BuildInfo.service must be platform-gateway');
 invariant(schemas.HealthResponse.properties.status.const === 'ok', 'HealthResponse.status must be ok');
 invariant(schemas.PlatformStatusResponse.properties.service.const === 'platform-status', 'PlatformStatusResponse.service must be platform-status');
@@ -121,6 +163,18 @@ invariant(schemas.PrincipalContext.properties.audience.const === 'iam-service', 
 invariant(schemas.AuditRecord.properties.schemaVersion.const === 1, 'AuditRecord.schemaVersion must be 1');
 invariant(schemas.AuditRecord.properties.aggregateType.const === 'bff-session', 'AuditRecord.aggregateType must be bff-session');
 invariant(schemas.AuditRecord.properties.executingService.const === 'platform-gateway', 'AuditRecord.executingService must be platform-gateway');
+invariant(schemas.UUIDv7?.pattern === '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', 'UUIDv7 pattern is unsupported');
+invariant(schemas.Revision?.minimum === 1, 'Revision minimum is unsupported');
+invariant(schemas.Instant?.pattern === '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$', 'Instant format must be RFC3339 UTC milliseconds');
+invariant(schemas.OpaqueCursor?.pattern === '^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$', 'OpaqueCursor format is unsupported');
+invariant(exactMembers(schemas.ProblemDetails.properties.code['x-stable-codes'], [
+  'RESOURCE_NOT_FOUND',
+  'CURSOR_INVALID',
+  'REGISTRY_UNAVAILABLE',
+  'REGISTRY_TIMEOUT',
+  'MAPPING_INVALID',
+  'MAPPING_QUARANTINED',
+]), 'Registry Problem Details codes are unsupported');
 invariant(schemas.ProblemDetails.properties.code.pattern === '^[A-Z][A-Z0-9_]+$', 'ProblemDetails.code pattern is unsupported');
 invariant(schemas.ProblemDetails.properties.traceId.pattern === '^[a-f0-9]{32}$', 'ProblemDetails.traceId pattern is unsupported');
 invariant(spec.components?.responses?.Problem?.content?.['application/problem+json']?.schema?.$ref === '#/components/schemas/ProblemDetails', 'public Problem response must use application/problem+json');
@@ -137,7 +191,16 @@ const replacements = {
   __LOGOUT_PATH__: operations.logout.path,
   __REVOKE_PATH__: operations.revokeSession.path,
   __AUDIT_PATH__: operations.getSessionAuditEvent.path,
+  __ORGANIZATIONS_PATH__: operations.listOrganizations.path,
+  __ORGANIZATION_PATH__: operations.getOrganization.path,
+  __ORGANIZATION_SITES_PATH__: operations.listOrganizationSites.path,
+  __SITE_PATH__: operations.getSite.path,
+  __SITE_EQUIPMENT_PATH__: operations.listSiteEquipment.path,
+  __EQUIPMENT_PATH__: operations.getEquipment.path,
+  __SITE_DEVICES_PATH__: operations.listSiteDevices.path,
+  __DEVICE_PATH__: operations.getDevice.path,
 };
+
 function render(template) {
   let output = template;
   for (const [placeholder, value] of Object.entries(replacements)) {
@@ -146,6 +209,7 @@ function render(template) {
   invariant(!/__[A-Z_]+__/.test(output), 'template contains an unresolved placeholder');
   return output;
 }
+
 function formatGo(source) {
   const result = spawnSync(gofmtBinary, [], { input: source, encoding: 'utf8', windowsHide: true });
   invariant(!result.error, `gofmt could not start: ${result.error?.message ?? 'unknown error'}`);
@@ -153,15 +217,27 @@ function formatGo(source) {
   invariant(typeof result.stdout === 'string' && result.stdout.length > 0, 'gofmt returned empty output');
   return result.stdout;
 }
+
 async function emit(path, content) {
   let existing = null;
-  try { existing = await readFile(path, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  try {
+    existing = await readFile(path, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
   if (checkOnly) {
-    if (existing !== content) { process.stderr.write(`Generated contract drift: ${path}\n`); process.exitCode = 1; }
+    if (existing !== content) {
+      process.stderr.write(`Generated contract drift: ${path}\n`);
+      process.exitCode = 1;
+    }
     return;
   }
   await mkdir(dirname(path), { recursive: true });
   if (existing !== content) await writeFile(path, content, 'utf8');
 }
-await Promise.all([emit(goOutputPath, formatGo(render(goTemplate))), emit(tsOutputPath, render(tsTemplate))]);
+
+await Promise.all([
+  emit(goOutputPath, formatGo(render(goTemplate))),
+  emit(tsOutputPath, render(tsTemplate)),
+]);
 if (!checkOnly) process.stdout.write(`Generated platform contracts (${digest.slice(0, 12)}).\n`);

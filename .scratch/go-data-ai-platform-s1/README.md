@@ -6,7 +6,7 @@ Reuse-first assessment: `research/reuse-first.md`
 
 ## Approval gate
 
-The S1 specification was explicitly accepted on 2026-07-21. Ticket 01 is the only current implementation frontier.
+The S1 specification was explicitly accepted on 2026-07-21. Ticket 01 is complete; Ticket 02 is the only current implementation frontier.
 
 ## Dependency graph
 
@@ -31,8 +31,9 @@ The S1 specification was explicitly accepted on 2026-07-21. Ticket 01 is the onl
 
 ## Current frontier
 
-- Ticket 01 — Contract, domain model and ownership baseline.
-- Tickets 02–08 remain blocked by the dependency graph.
+- Ticket 01 — completed: contract, domain model and ownership baseline.
+- Ticket 02 — current frontier: IAM Registry-read authorization projection.
+- Tickets 03–04 are dependency-ready but intentionally queued; Tickets 05–08 remain blocked by the dependency graph.
 - Complete one frontier ticket at a time; do not bypass declared blockers.
 
 ## Rules

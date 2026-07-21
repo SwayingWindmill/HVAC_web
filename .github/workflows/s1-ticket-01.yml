@@ -1,0 +1,89 @@
+name: S1 Ticket 01 Contract and Ownership
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/s1-ticket-01.yml'
+      - 'apps/hvac-web/src/api/generated/platformGateway.gen.ts'
+      - 'contracts/http/**'
+      - 'contracts/ownership/**'
+      - 'contracts/registry/**'
+      - 'docs/adr/0001-s1-registry-contract-domain-ownership.md'
+      - 'infra/s1-registry/**'
+      - 'pocs/s1-sqlc/**'
+      - 'services/platform-gateway/pkg/platformapi/api.gen.go'
+      - 'scripts/check-s1-registry-baseline.mjs'
+      - 'scripts/run-s1-registry-postgres-tests.mjs'
+      - 'scripts/run-s1-sqlc-poc.mjs'
+      - 'scripts/generate-platform-contracts.mjs'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/s1-ticket-01.yml'
+      - 'apps/hvac-web/src/api/generated/platformGateway.gen.ts'
+      - 'contracts/http/**'
+      - 'contracts/ownership/**'
+      - 'contracts/registry/**'
+      - 'docs/adr/0001-s1-registry-contract-domain-ownership.md'
+      - 'infra/s1-registry/**'
+      - 'pocs/s1-sqlc/**'
+      - 'services/platform-gateway/pkg/platformapi/api.gen.go'
+      - 'scripts/check-s1-registry-baseline.mjs'
+      - 'scripts/run-s1-registry-postgres-tests.mjs'
+      - 'scripts/run-s1-sqlc-poc.mjs'
+      - 'scripts/generate-platform-contracts.mjs'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s1-ticket-01-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+          cache: npm
+      - run: npm ci
+      - run: npm run contracts:check
+      - run: npm run ownership:check
+      - run: npm run s1:registry:check
+      - run: npm run s1:sqlc:poc
+      - run: npm run lint
+      - run: npm run build
+
+  postgres:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+          cache: npm
+      - run: npm ci
+      - run: docker compose -f infra/s1-registry/compose.yaml config
+      - run: npm run s1:registry:postgres
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: s1-ticket-01-postgres-evidence
+          path: out/s1-ticket-01/postgres-baseline.json
+          if-no-files-found: error
+          retention-days: 14

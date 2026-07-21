@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — Contract, domain model and ownership baseline.
 
-**Status:** ready-after-spec-approval
+**Status:** ready-for-agent
 
 - [ ] IAM persists or deterministically fixtures OrganizationMembership, RoleBinding, SiteBinding, explicit deny and Policy revision in its owned Schema.
 - [ ] Logto is configured as the external OIDC provider for login, credentials, MFA/passkeys and external user lifecycle; Go IAM does not implement passwords or authentication factors.

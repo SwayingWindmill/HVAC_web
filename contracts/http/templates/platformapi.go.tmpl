@@ -15,15 +15,23 @@ import (
 )
 
 const (
-	GetHealthPath             = "__HEALTH_PATH__"
-	GetVersionPath            = "__VERSION_PATH__"
-	GetPlatformStatusPath     = "__PLATFORM_STATUS_PATH__"
-	BeginLoginPath            = "__LOGIN_PATH__"
-	CompleteLoginPath         = "__CALLBACK_PATH__"
-	GetCurrentPrincipalPath   = "__PRINCIPAL_PATH__"
-	LogoutPath                       = "__LOGOUT_PATH__"
-	RevokeSessionPathTemplate        = "__REVOKE_PATH__"
-	GetSessionAuditEventPathTemplate = "__AUDIT_PATH__"
+	GetHealthPath                         = "__HEALTH_PATH__"
+	GetVersionPath                        = "__VERSION_PATH__"
+	GetPlatformStatusPath                 = "__PLATFORM_STATUS_PATH__"
+	BeginLoginPath                        = "__LOGIN_PATH__"
+	CompleteLoginPath                     = "__CALLBACK_PATH__"
+	GetCurrentPrincipalPath               = "__PRINCIPAL_PATH__"
+	LogoutPath                            = "__LOGOUT_PATH__"
+	RevokeSessionPathTemplate             = "__REVOKE_PATH__"
+	GetSessionAuditEventPathTemplate      = "__AUDIT_PATH__"
+	ListOrganizationsPath                 = "__ORGANIZATIONS_PATH__"
+	GetOrganizationPathTemplate           = "__ORGANIZATION_PATH__"
+	ListOrganizationSitesPathTemplate     = "__ORGANIZATION_SITES_PATH__"
+	GetSitePathTemplate                   = "__SITE_PATH__"
+	ListSiteEquipmentPathTemplate         = "__SITE_EQUIPMENT_PATH__"
+	GetEquipmentPathTemplate              = "__EQUIPMENT_PATH__"
+	ListSiteDevicesPathTemplate           = "__SITE_DEVICES_PATH__"
+	GetDevicePathTemplate                 = "__DEVICE_PATH__"
 )
 
 type BuildInfo struct {
@@ -120,6 +128,109 @@ type AuditRecord struct {
 	RecordedAt            string `json:"recordedAt"`
 }
 
+type Organization struct {
+	ID          string `json:"id"`
+	Code        string `json:"code"`
+	DisplayName string `json:"displayName"`
+	Status      string `json:"status"`
+	Revision    int64  `json:"revision"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+}
+
+type Site struct {
+	ID                   string `json:"id"`
+	OwningOrganizationID string `json:"owningOrganizationId"`
+	Code                 string `json:"code"`
+	DisplayName          string `json:"displayName"`
+	Timezone             string `json:"timezone"`
+	Status               string `json:"status"`
+	Revision             int64  `json:"revision"`
+	CreatedAt            string `json:"createdAt"`
+	UpdatedAt            string `json:"updatedAt"`
+}
+
+type Equipment struct {
+	ID                   string `json:"id"`
+	OwningOrganizationID string `json:"owningOrganizationId"`
+	SiteID               string `json:"siteId"`
+	Code                 string `json:"code"`
+	DisplayName          string `json:"displayName"`
+	EquipmentType        string `json:"equipmentType"`
+	Status               string `json:"status"`
+	Revision             int64  `json:"revision"`
+	CreatedAt            string `json:"createdAt"`
+	UpdatedAt            string `json:"updatedAt"`
+}
+
+type Device struct {
+	ID                   string `json:"id"`
+	OwningOrganizationID string `json:"owningOrganizationId"`
+	SiteID               string `json:"siteId"`
+	Code                 string `json:"code"`
+	DisplayName          string `json:"displayName"`
+	DeviceType           string `json:"deviceType"`
+	Status               string `json:"status"`
+	Revision             int64  `json:"revision"`
+	CreatedAt            string `json:"createdAt"`
+	UpdatedAt            string `json:"updatedAt"`
+}
+
+type DeviceBinding struct {
+	ID                   string  `json:"id"`
+	OwningOrganizationID string  `json:"owningOrganizationId"`
+	SiteID               string  `json:"siteId"`
+	DeviceID             string  `json:"deviceId"`
+	EquipmentID          string  `json:"equipmentId"`
+	BindingRole          string  `json:"bindingRole"`
+	Status               string  `json:"status"`
+	ValidFrom            string  `json:"validFrom"`
+	ValidTo              *string `json:"validTo,omitempty"`
+	Revision             int64   `json:"revision"`
+	CreatedAt            string  `json:"createdAt"`
+	UpdatedAt            string  `json:"updatedAt"`
+}
+
+type ExternalBinding struct {
+	ID                    string  `json:"id"`
+	OwningOrganizationID  string  `json:"owningOrganizationId"`
+	SiteID                string  `json:"siteId"`
+	IntegrationInstanceID string  `json:"integrationInstanceId"`
+	Provider              string  `json:"provider"`
+	ExternalEntityType    string  `json:"externalEntityType"`
+	ExternalID            string  `json:"externalId"`
+	BindingStatus         string  `json:"bindingStatus"`
+	ValidFrom             string  `json:"validFrom"`
+	ValidTo               *string `json:"validTo,omitempty"`
+	Revision              int64   `json:"revision"`
+	CreatedAt             string  `json:"createdAt"`
+	UpdatedAt             string  `json:"updatedAt"`
+}
+
+type OrganizationCollection struct {
+	Items      []Organization `json:"items"`
+	NextCursor *string        `json:"nextCursor"`
+	HasMore    bool           `json:"hasMore"`
+}
+
+type SiteCollection struct {
+	Items      []Site  `json:"items"`
+	NextCursor *string `json:"nextCursor"`
+	HasMore    bool    `json:"hasMore"`
+}
+
+type EquipmentCollection struct {
+	Items      []Equipment `json:"items"`
+	NextCursor *string     `json:"nextCursor"`
+	HasMore    bool        `json:"hasMore"`
+}
+
+type DeviceCollection struct {
+	Items      []Device `json:"items"`
+	NextCursor *string  `json:"nextCursor"`
+	HasMore    bool     `json:"hasMore"`
+}
+
 type FieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
@@ -137,13 +248,18 @@ type ProblemDetails struct {
 	FieldErrors []FieldError `json:"fieldErrors,omitempty"`
 }
 
-type GetHealthParams struct { IncludeBuild *bool }
-type BeginLoginParams struct { ReturnTo string; LoginHint string }
-type CompleteLoginParams struct { Code string; State string }
-type LogoutParams struct { CSRFToken string }
-type RevokeSessionParams struct { SessionID string; CSRFToken string }
-type GetSessionAuditEventParams struct { MessageID string }
+type GetHealthParams struct{ IncludeBuild *bool }
+type BeginLoginParams struct{ ReturnTo, LoginHint string }
+type CompleteLoginParams struct{ Code, State string }
+type LogoutParams struct{ CSRFToken string }
+type RevokeSessionParams struct{ SessionID, CSRFToken string }
+type GetSessionAuditEventParams struct{ MessageID string }
+type ListRegistryParams struct {
+	Limit  *int
+	Cursor string
+}
 
+// ServerInterface is the S0 interface already implemented by platform-gateway.
 type ServerInterface interface {
 	GetHealth(http.ResponseWriter, *http.Request, GetHealthParams)
 	GetVersion(http.ResponseWriter, *http.Request)
@@ -156,20 +272,39 @@ type ServerInterface interface {
 	GetSessionAuditEvent(http.ResponseWriter, *http.Request, GetSessionAuditEventParams)
 }
 
-type HTTPClient interface { Do(*http.Request) (*http.Response, error) }
+// RegistryServerInterface freezes the S1 contract without requiring Ticket 05 runtime handlers yet.
+type RegistryServerInterface interface {
+	ListOrganizations(http.ResponseWriter, *http.Request, ListRegistryParams)
+	GetOrganization(http.ResponseWriter, *http.Request, string)
+	ListOrganizationSites(http.ResponseWriter, *http.Request, string, ListRegistryParams)
+	GetSite(http.ResponseWriter, *http.Request, string)
+	ListSiteEquipment(http.ResponseWriter, *http.Request, string, ListRegistryParams)
+	GetEquipment(http.ResponseWriter, *http.Request, string)
+	ListSiteDevices(http.ResponseWriter, *http.Request, string, ListRegistryParams)
+	GetDevice(http.ResponseWriter, *http.Request, string)
+}
 
-type Client struct { baseURL string; httpClient HTTPClient }
+type HTTPClient interface{ Do(*http.Request) (*http.Response, error) }
+
+type Client struct {
+	baseURL    string
+	httpClient HTTPClient
+}
 
 func NewClient(baseURL string, httpClient HTTPClient) (*Client, error) {
-	if _, err := url.ParseRequestURI(baseURL); err != nil { return nil, fmt.Errorf("parse platform Gateway base URL: %w", err) }
-	if httpClient == nil { httpClient = http.DefaultClient }
+	if _, err := url.ParseRequestURI(baseURL); err != nil {
+		return nil, fmt.Errorf("parse platform Gateway base URL: %w", err)
+	}
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
 	return &Client{baseURL: strings.TrimRight(baseURL, "/"), httpClient: httpClient}, nil
 }
 
 type Response[T any] struct {
-	Data         *T
-	Problem      *ProblemDetails
-	StatusCode   int
+	Data                *T
+	Problem             *ProblemDetails
+	StatusCode          int
 	RequestID           string
 	Traceparent         string
 	AuditMessageID      string
@@ -178,8 +313,15 @@ type Response[T any] struct {
 }
 
 func (c *Client) GetHealth(ctx context.Context, params *GetHealthParams) (*Response[HealthResponse], error) {
-	endpoint, err := url.Parse(c.baseURL + GetHealthPath); if err != nil { return nil, err }
-	if params != nil && params.IncludeBuild != nil { query := endpoint.Query(); query.Set("includeBuild", fmt.Sprintf("%t", *params.IncludeBuild)); endpoint.RawQuery = query.Encode() }
+	endpoint, err := url.Parse(c.baseURL + GetHealthPath)
+	if err != nil {
+		return nil, err
+	}
+	if params != nil && params.IncludeBuild != nil {
+		query := endpoint.Query()
+		query.Set("includeBuild", fmt.Sprintf("%t", *params.IncludeBuild))
+		endpoint.RawQuery = query.Encode()
+	}
 	return doJSON[HealthResponse](ctx, c.httpClient, http.MethodGet, endpoint.String(), "", nil)
 }
 
@@ -209,16 +351,123 @@ func (c *Client) GetSessionAuditEvent(ctx context.Context, messageID string) (*R
 	return doJSON[AuditRecord](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
 }
 
-func doJSON[T any](ctx context.Context, client HTTPClient, method, endpoint, csrfToken string, body []byte) (*Response[T], error) {
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body)); if err != nil { return nil, err }
-	req.Header.Set("Accept", "application/json, application/problem+json")
-	if csrfToken != "" { req.Header.Set("X-CSRF-Token", csrfToken) }
-	httpResponse, err := client.Do(req); if err != nil { return nil, fmt.Errorf("call platform Gateway: %w", err) }
-	payload, err := io.ReadAll(io.LimitReader(httpResponse.Body, 1<<20)); _ = httpResponse.Body.Close(); if err != nil { return nil, err }
-	response := &Response[T]{StatusCode: httpResponse.StatusCode, RequestID: httpResponse.Header.Get("X-Request-ID"), Traceparent: httpResponse.Header.Get("traceparent"), AuditMessageID: httpResponse.Header.Get("X-Audit-Message-ID"), RoutePolicyRevision: httpResponse.Header.Get("X-Route-Policy-Revision"), HTTPResponse: httpResponse}
-	if httpResponse.StatusCode >= 200 && httpResponse.StatusCode < 300 {
-		if httpResponse.StatusCode == http.StatusNoContent { var zero T; response.Data = &zero; return response, nil }
-		var data T; if err := json.Unmarshal(payload, &data); err != nil { return nil, fmt.Errorf("decode platform Gateway success response: %w", err) }; response.Data = &data; return response, nil
+func (c *Client) ListOrganizations(ctx context.Context, params *ListRegistryParams) (*Response[OrganizationCollection], error) {
+	endpoint, err := withListQuery(c.baseURL+ListOrganizationsPath, params)
+	if err != nil {
+		return nil, err
 	}
-	var problem ProblemDetails; if err := json.Unmarshal(payload, &problem); err != nil { return nil, fmt.Errorf("decode platform Gateway problem response: %w", err) }; response.Problem = &problem; return response, nil
+	return doJSON[OrganizationCollection](ctx, c.httpClient, http.MethodGet, endpoint, "", nil)
+}
+
+func (c *Client) GetOrganization(ctx context.Context, organizationID string) (*Response[Organization], error) {
+	path := strings.Replace(GetOrganizationPathTemplate, "{organizationId}", url.PathEscape(organizationID), 1)
+	return doJSON[Organization](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
+}
+
+func (c *Client) ListOrganizationSites(ctx context.Context, organizationID string, params *ListRegistryParams) (*Response[SiteCollection], error) {
+	path := strings.Replace(ListOrganizationSitesPathTemplate, "{organizationId}", url.PathEscape(organizationID), 1)
+	endpoint, err := withListQuery(c.baseURL+path, params)
+	if err != nil {
+		return nil, err
+	}
+	return doJSON[SiteCollection](ctx, c.httpClient, http.MethodGet, endpoint, "", nil)
+}
+
+func (c *Client) GetSite(ctx context.Context, siteID string) (*Response[Site], error) {
+	path := strings.Replace(GetSitePathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	return doJSON[Site](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
+}
+
+func (c *Client) ListSiteEquipment(ctx context.Context, siteID string, params *ListRegistryParams) (*Response[EquipmentCollection], error) {
+	path := strings.Replace(ListSiteEquipmentPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	endpoint, err := withListQuery(c.baseURL+path, params)
+	if err != nil {
+		return nil, err
+	}
+	return doJSON[EquipmentCollection](ctx, c.httpClient, http.MethodGet, endpoint, "", nil)
+}
+
+func (c *Client) GetEquipment(ctx context.Context, equipmentID string) (*Response[Equipment], error) {
+	path := strings.Replace(GetEquipmentPathTemplate, "{equipmentId}", url.PathEscape(equipmentID), 1)
+	return doJSON[Equipment](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
+}
+
+func (c *Client) ListSiteDevices(ctx context.Context, siteID string, params *ListRegistryParams) (*Response[DeviceCollection], error) {
+	path := strings.Replace(ListSiteDevicesPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	endpoint, err := withListQuery(c.baseURL+path, params)
+	if err != nil {
+		return nil, err
+	}
+	return doJSON[DeviceCollection](ctx, c.httpClient, http.MethodGet, endpoint, "", nil)
+}
+
+func (c *Client) GetDevice(ctx context.Context, deviceID string) (*Response[Device], error) {
+	path := strings.Replace(GetDevicePathTemplate, "{deviceId}", url.PathEscape(deviceID), 1)
+	return doJSON[Device](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
+}
+
+func withListQuery(endpoint string, params *ListRegistryParams) (string, error) {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return "", err
+	}
+	if params == nil {
+		return parsed.String(), nil
+	}
+	query := parsed.Query()
+	if params.Limit != nil {
+		query.Set("limit", fmt.Sprintf("%d", *params.Limit))
+	}
+	if params.Cursor != "" {
+		query.Set("cursor", params.Cursor)
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
+}
+
+func doJSON[T any](ctx context.Context, client HTTPClient, method, endpoint, csrfToken string, body []byte) (*Response[T], error) {
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json, application/problem+json")
+	if csrfToken != "" {
+		req.Header.Set("X-CSRF-Token", csrfToken)
+	}
+	httpResponse, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("call platform Gateway: %w", err)
+	}
+	payload, err := io.ReadAll(io.LimitReader(httpResponse.Body, 1<<20))
+	_ = httpResponse.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	response := &Response[T]{
+		StatusCode:          httpResponse.StatusCode,
+		RequestID:           httpResponse.Header.Get("X-Request-ID"),
+		Traceparent:         httpResponse.Header.Get("traceparent"),
+		AuditMessageID:      httpResponse.Header.Get("X-Audit-Message-ID"),
+		RoutePolicyRevision: httpResponse.Header.Get("X-Route-Policy-Revision"),
+		HTTPResponse:        httpResponse,
+	}
+	if httpResponse.StatusCode >= 200 && httpResponse.StatusCode < 300 {
+		if httpResponse.StatusCode == http.StatusNoContent {
+			var zero T
+			response.Data = &zero
+			return response, nil
+		}
+		var data T
+		if err := json.Unmarshal(payload, &data); err != nil {
+			return nil, fmt.Errorf("decode platform Gateway success response: %w", err)
+		}
+		response.Data = &data
+		return response, nil
+	}
+	var problem ProblemDetails
+	if err := json.Unmarshal(payload, &problem); err != nil {
+		return nil, fmt.Errorf("decode platform Gateway problem response: %w", err)
+	}
+	response.Problem = &problem
+	return response, nil
 }

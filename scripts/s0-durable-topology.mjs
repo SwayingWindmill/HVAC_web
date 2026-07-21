@@ -222,6 +222,13 @@ export async function startS0DurableTopology(options = {}) {
   const gatewayPort = Number(options.gatewayPort ?? process.env.S0_DURABLE_GATEWAY_PORT ?? 18082);
   const webPort = Number(options.webPort ?? process.env.S0_DURABLE_WEB_PORT ?? 5181);
   const otlpPort = Number(options.otlpPort ?? process.env.S0_DURABLE_OTLP_PORT ?? 0);
+  const [oidcDiagnosticsPort, iamDiagnosticsPort, auditDiagnosticsPort, relayDiagnosticsPort, gatewayDiagnosticsPort] = await Promise.all([
+    findAvailablePort(options.oidcDiagnosticsPort ?? process.env.S0_DURABLE_OIDC_DIAGNOSTICS_PORT ?? 0),
+    findAvailablePort(options.iamDiagnosticsPort ?? process.env.S0_DURABLE_IAM_DIAGNOSTICS_PORT ?? 0),
+    findAvailablePort(options.auditDiagnosticsPort ?? process.env.S0_DURABLE_AUDIT_DIAGNOSTICS_PORT ?? 0),
+    findAvailablePort(options.relayDiagnosticsPort ?? process.env.S0_DURABLE_RELAY_DIAGNOSTICS_PORT ?? 0),
+    findAvailablePort(options.gatewayDiagnosticsPort ?? process.env.S0_DURABLE_GATEWAY_DIAGNOSTICS_PORT ?? 0),
+  ]);
   const postgresHostPort = await findAvailablePort(options.postgresHostPort ?? process.env.S0_POSTGRES_HOST_PORT ?? 0);
   const redpandaHostPort = await findAvailablePort(options.redpandaHostPort ?? process.env.S0_REDPANDA_HOST_PORT ?? 0);
   const otelGrpcHostPort = await findAvailablePort(options.otelGrpcHostPort ?? process.env.S0_OTEL_GRPC_HOST_PORT ?? 0);
@@ -314,6 +321,7 @@ export async function startS0DurableTopology(options = {}) {
       ...telemetryEnvironment,
       GOCACHE: goCacheDir,
       AUDIT_SERVICE_ADDR: `127.0.0.1:${auditPort}`,
+      AUDIT_DIAGNOSTICS_ADDR: `127.0.0.1:${auditDiagnosticsPort}`,
       AUDIT_TLS_CERT: paths.auditCert,
       AUDIT_TLS_KEY: paths.auditKey,
       AUDIT_CLIENT_CA: paths.ca,
@@ -333,6 +341,7 @@ export async function startS0DurableTopology(options = {}) {
     services.relay = spawnService('Outbox Relay', goBinary, ['run', './services/outbox-relay/cmd/outbox-relay'], {
       ...telemetryEnvironment,
       GOCACHE: goCacheDir,
+      OUTBOX_RELAY_DIAGNOSTICS_ADDR: `127.0.0.1:${relayDiagnosticsPort}`,
       OUTBOX_DATABASE_URL: database.relay,
       CONTROL_BACKBONE_BROKERS: brokers,
       OUTBOX_RELAY_OWNER: `relay-${process.pid}`,
@@ -389,6 +398,7 @@ export async function startS0DurableTopology(options = {}) {
     services.oidc = spawnService('OIDC fixture', goBinary, ['run', './services/oidc-test-provider/cmd/oidc-test-provider'], {
       GOCACHE: goCacheDir,
       OIDC_FIXTURE_ADDR: `127.0.0.1:${oidcPort}`,
+      OIDC_FIXTURE_DIAGNOSTICS_ADDR: `127.0.0.1:${oidcDiagnosticsPort}`,
       OIDC_FIXTURE_ISSUER: oidcURL,
       OIDC_FIXTURE_CLIENT_ID: 'hvac-web-s0',
       OIDC_FIXTURE_REDIRECT_URI: redirectURI,
@@ -401,6 +411,7 @@ export async function startS0DurableTopology(options = {}) {
       ...telemetryEnvironment,
       GOCACHE: goCacheDir,
       IAM_SERVICE_ADDR: `127.0.0.1:${iamPort}`,
+      IAM_DIAGNOSTICS_ADDR: `127.0.0.1:${iamDiagnosticsPort}`,
       IAM_TLS_CERT: paths.iamCert,
       IAM_TLS_KEY: paths.iamKey,
       IAM_CLIENT_CA: paths.ca,
@@ -418,6 +429,7 @@ export async function startS0DurableTopology(options = {}) {
       ...telemetryEnvironment,
       GOCACHE: goCacheDir,
       PLATFORM_GATEWAY_ADDR: `127.0.0.1:${gatewayPort}`,
+      PLATFORM_GATEWAY_DIAGNOSTICS_ADDR: `127.0.0.1:${gatewayDiagnosticsPort}`,
       OIDC_ISSUER: oidcURL,
       OIDC_CLIENT_ID: 'hvac-web-s0',
       OIDC_REDIRECT_URI: redirectURI,
@@ -459,7 +471,9 @@ export async function startS0DurableTopology(options = {}) {
     await waitForTLS(webPort, 'HVAC Web', services.web);
 
     return {
-      oidcURL, iamURL, auditURL, legacyURL, legacyDirectURL, toxiproxyURL, gatewayURL, webURL, redirectURI, brokers, database, pkiDir, routeRegistryPath: paths.routeRegistry, services,
+      oidcURL, iamURL, auditURL, legacyURL, legacyDirectURL, toxiproxyURL, gatewayURL,
+      gatewayDiagnosticsURL: `http://127.0.0.1:${gatewayDiagnosticsPort}/diagnostics`,
+      webURL, redirectURI, brokers, database, pkiDir, routeRegistryPath: paths.routeRegistry, services,
       telemetryPayloads() { return telemetryRecorder ? JSON.parse(JSON.stringify(telemetryRecorder.payloads)) : []; },
       setTelemetryAvailable(value) { telemetryRecorder?.setAvailable(value); },
       async setPostgresAvailable(value) { await setProxyEnabled('s0_postgres', value); },

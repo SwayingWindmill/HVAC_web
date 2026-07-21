@@ -46,7 +46,101 @@ export const auditRecordSchema = z.object({
   traceId: z.string().regex(/^[a-f0-9]{32}$/), payloadSha256: z.string().regex(/^[a-f0-9]{64}$/),
   previousRecordHash: z.string().regex(/^[a-f0-9]{64}$/), recordHash: z.string().regex(/^[a-f0-9]{64}$/), recordedAt: z.string().datetime({ offset: true }),
 }).strict();
+
+export const uuidV7Schema = z.string().uuid().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+export const revisionSchema = z.number().int().positive();
+export const opaqueCursorSchema = z.string().min(16).max(4096).regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+const instantSchema = z.string().datetime({ offset: false, precision: 3 });
+const registryStatusSchema = z.enum(['ACTIVE', 'INACTIVE', 'RETIRED']);
+
+export const organizationSchema = z.object({
+  id: uuidV7Schema,
+  code: z.string().min(1).max(128),
+  displayName: z.string().min(1).max(256),
+  status: z.enum(['ACTIVE', 'SUSPENDED', 'RETIRED']),
+  revision: revisionSchema,
+  createdAt: instantSchema,
+  updatedAt: instantSchema,
+}).strict();
+export const siteSchema = z.object({
+  id: uuidV7Schema,
+  owningOrganizationId: uuidV7Schema,
+  code: z.string().min(1).max(128),
+  displayName: z.string().min(1).max(256),
+  timezone: z.string().min(3).max(128).regex(/^(?:UTC|[A-Za-z_+-]+(?:\/[A-Za-z0-9_+.-]+)+)$/),
+  status: registryStatusSchema,
+  revision: revisionSchema,
+  createdAt: instantSchema,
+  updatedAt: instantSchema,
+}).strict();
+export const equipmentSchema = z.object({
+  id: uuidV7Schema,
+  owningOrganizationId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  code: z.string().min(1).max(128),
+  displayName: z.string().min(1).max(256),
+  equipmentType: z.string().min(1).max(128),
+  status: registryStatusSchema,
+  revision: revisionSchema,
+  createdAt: instantSchema,
+  updatedAt: instantSchema,
+}).strict();
+export const deviceSchema = z.object({
+  id: uuidV7Schema,
+  owningOrganizationId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  code: z.string().min(1).max(128),
+  displayName: z.string().min(1).max(256),
+  deviceType: z.string().min(1).max(128),
+  status: registryStatusSchema,
+  revision: revisionSchema,
+  createdAt: instantSchema,
+  updatedAt: instantSchema,
+}).strict();
+export const deviceBindingSchema = z.object({
+  id: uuidV7Schema,
+  owningOrganizationId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  deviceId: uuidV7Schema,
+  equipmentId: uuidV7Schema,
+  bindingRole: z.string().min(1).max(128),
+  status: registryStatusSchema,
+  validFrom: instantSchema,
+  validTo: instantSchema.nullable().optional(),
+  revision: revisionSchema,
+  createdAt: instantSchema,
+  updatedAt: instantSchema,
+}).strict();
+export const externalBindingSchema = z.object({
+  id: uuidV7Schema,
+  owningOrganizationId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  integrationInstanceId: uuidV7Schema,
+  provider: z.string().min(1).max(128),
+  externalEntityType: z.string().min(1).max(128),
+  externalId: z.string().min(1).max(512),
+  bindingStatus: registryStatusSchema,
+  validFrom: instantSchema,
+  validTo: instantSchema.nullable().optional(),
+  revision: revisionSchema,
+  createdAt: instantSchema,
+  updatedAt: instantSchema,
+}).strict();
+
+const collectionSchema = <T extends z.ZodTypeAny>(item: T) => z.object({
+  items: z.array(item),
+  nextCursor: opaqueCursorSchema.nullable(),
+  hasMore: z.boolean(),
+}).strict();
+export const organizationCollectionSchema = collectionSchema(organizationSchema);
+export const siteCollectionSchema = collectionSchema(siteSchema);
+export const equipmentCollectionSchema = collectionSchema(equipmentSchema);
+export const deviceCollectionSchema = collectionSchema(deviceSchema);
+
 export const fieldErrorSchema = z.object({ field: z.string(), message: z.string() }).strict();
+export const registryProblemCodes = [
+  'RESOURCE_NOT_FOUND', 'CURSOR_INVALID', 'REGISTRY_UNAVAILABLE', 'REGISTRY_TIMEOUT', 'MAPPING_INVALID', 'MAPPING_QUARANTINED',
+] as const;
 export const problemDetailsSchema = z.object({
   type: z.string(), title: z.string(), status: z.number().int().min(400).max(599), detail: z.string(), instance: z.string(),
   code: z.string().regex(/^[A-Z][A-Z0-9_]+$/), traceId: z.string().regex(/^[a-f0-9]{32}$/), retryable: z.boolean(),
@@ -60,7 +154,18 @@ export type UserPrincipal = z.infer<typeof userPrincipalSchema>;
 export type CurrentPrincipalResponse = z.infer<typeof currentPrincipalResponseSchema>;
 export type SessionRevocationResponse = z.infer<typeof sessionRevocationResponseSchema>;
 export type AuditRecord = z.infer<typeof auditRecordSchema>;
+export type Organization = z.infer<typeof organizationSchema>;
+export type Site = z.infer<typeof siteSchema>;
+export type Equipment = z.infer<typeof equipmentSchema>;
+export type Device = z.infer<typeof deviceSchema>;
+export type DeviceBinding = z.infer<typeof deviceBindingSchema>;
+export type ExternalBinding = z.infer<typeof externalBindingSchema>;
+export type OrganizationCollection = z.infer<typeof organizationCollectionSchema>;
+export type SiteCollection = z.infer<typeof siteCollectionSchema>;
+export type EquipmentCollection = z.infer<typeof equipmentCollectionSchema>;
+export type DeviceCollection = z.infer<typeof deviceCollectionSchema>;
 export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
+export type RegistryListParams = { limit?: number; cursor?: string };
 
 export type PlatformResponse<T> = { data: T; requestId: string | null; traceparent: string | null; auditMessageId: string | null; routePolicyRevision: string | null };
 
@@ -80,6 +185,13 @@ export function createPlatformGatewayClient(baseUrl = '') {
     const payload: unknown = await response.json();
     if (!response.ok) throw new PlatformApiError(problemDetailsSchema.parse(payload));
     return { data: schema.parse(payload), requestId: response.headers.get('x-request-id'), traceparent: response.headers.get('traceparent'), auditMessageId: response.headers.get('x-audit-message-id'), routePolicyRevision: response.headers.get('x-route-policy-revision') };
+  };
+
+  const listPath = (path: string, params: RegistryListParams = {}) => {
+    const query = new URLSearchParams();
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    return `${path}${query.size ? `?${query.toString()}` : ''}`;
   };
 
   return {
@@ -110,6 +222,30 @@ export function createPlatformGatewayClient(baseUrl = '') {
       '__AUDIT_PATH__'.replace('{messageId}', encodeURIComponent(messageId)),
       auditRecordSchema,
       { ...init, method: 'GET' },
+    ),
+    listOrganizations: (params: RegistryListParams = {}, init?: RequestInit) => request(
+      listPath('__ORGANIZATIONS_PATH__', params), organizationCollectionSchema, { ...init, method: 'GET' },
+    ),
+    getOrganization: (organizationId: string, init?: RequestInit) => request(
+      '__ORGANIZATION_PATH__'.replace('{organizationId}', encodeURIComponent(organizationId)), organizationSchema, { ...init, method: 'GET' },
+    ),
+    listOrganizationSites: (organizationId: string, params: RegistryListParams = {}, init?: RequestInit) => request(
+      listPath('__ORGANIZATION_SITES_PATH__'.replace('{organizationId}', encodeURIComponent(organizationId)), params), siteCollectionSchema, { ...init, method: 'GET' },
+    ),
+    getSite: (siteId: string, init?: RequestInit) => request(
+      '__SITE_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), siteSchema, { ...init, method: 'GET' },
+    ),
+    listSiteEquipment: (siteId: string, params: RegistryListParams = {}, init?: RequestInit) => request(
+      listPath('__SITE_EQUIPMENT_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), params), equipmentCollectionSchema, { ...init, method: 'GET' },
+    ),
+    getEquipment: (equipmentId: string, init?: RequestInit) => request(
+      '__EQUIPMENT_PATH__'.replace('{equipmentId}', encodeURIComponent(equipmentId)), equipmentSchema, { ...init, method: 'GET' },
+    ),
+    listSiteDevices: (siteId: string, params: RegistryListParams = {}, init?: RequestInit) => request(
+      listPath('__SITE_DEVICES_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), params), deviceCollectionSchema, { ...init, method: 'GET' },
+    ),
+    getDevice: (deviceId: string, init?: RequestInit) => request(
+      '__DEVICE_PATH__'.replace('{deviceId}', encodeURIComponent(deviceId)), deviceSchema, { ...init, method: 'GET' },
     ),
   };
 }

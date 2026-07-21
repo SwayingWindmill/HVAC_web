@@ -31,6 +31,25 @@ func TestResolveUsesStableServerDerivedCohort(t *testing.T) {
 	}
 }
 
+func TestRegistryAcceptsCoreAsInactiveFallback(t *testing.T) {
+	registry := `{"registryVersion":1,"registryRevision":2,"routes":[{"method":"GET","path":"/api/v1/organizations","owner":"legacy-hvac-backend","revision":1,"rollout":{"mode":"percentage","percentage":100,"fallbackOwner":"platform-core-service","cohortSalt":"s1-organizations-v1"},"compatibilityMode":"legacy-read","allowedScopeDimensions":["organization","principal"]}]}`
+	snapshot := mustParse(t, registry)
+	decision, err := snapshot.Resolve("GET", "/api/v1/organizations", "org-01\x00fixture-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.DeclaredOwner != ownershipregistry.OwnerLegacy || decision.SelectedOwner != ownershipregistry.OwnerLegacy {
+		t.Fatalf("inactive Core fallback changed initial routing: %#v", decision)
+	}
+	if !snapshot.ContainsOwner(ownershipregistry.OwnerCore) {
+		t.Fatal("Core candidate owner was not retained in the parsed registry")
+	}
+	corePrimary := `{"registryVersion":1,"registryRevision":2,"routes":[{"method":"GET","path":"/api/v1/organizations","owner":"platform-core-service","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["organization","principal"]}]}`
+	if _, err := ownershipregistry.Parse([]byte(corePrimary)); err == nil {
+		t.Fatal("Core primary owner was accepted before a Core runtime handler exists")
+	}
+}
+
 func TestRegistryRejectsMissingConflictingAndRegressedOwnership(t *testing.T) {
 	snapshot := mustParse(t, registryJSON(1, 1, ownershipregistry.OwnerLegacy, 100))
 	if _, err := snapshot.Resolve("GET", "/api/v1/unknown", "org\x00user"); !errors.Is(err, ownershipregistry.ErrRouteMissing) {
