@@ -1,0 +1,99 @@
+name: Platform Component POCs
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/platform-component-pocs.yml"
+      - "pocs/platform-components/**"
+      - "scripts/check-platform-component-poc-assets.mjs"
+      - "scripts/run-platform-component-docker-pocs.mjs"
+      - "scripts/run-platform-component-envoy-poc.mjs"
+      - "scripts/run-isolated-go.mjs"
+      - "package.json"
+      - "package-lock.json"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/platform-component-pocs.yml"
+      - "pocs/platform-components/**"
+      - "scripts/check-platform-component-poc-assets.mjs"
+      - "scripts/run-platform-component-docker-pocs.mjs"
+      - "scripts/run-platform-component-envoy-poc.mjs"
+      - "scripts/run-isolated-go.mjs"
+      - "package.json"
+      - "package-lock.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  assets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
+          cache-dependency-path: pocs/platform-components/river/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run pocs:components:check
+
+  docker-components:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
+          cache-dependency-path: pocs/platform-components/river/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run pocs:components:docker
+      - name: Upload Docker component evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-component-pocs-docker
+          path: out/platform-component-pocs
+          if-no-files-found: error
+          retention-days: 14
+
+  envoy-gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - name: Install locked Kind
+        shell: bash
+        run: |
+          curl -fsSLO https://github.com/kubernetes-sigs/kind/releases/download/v0.32.0/kind-linux-amd64
+          echo "50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54  kind-linux-amd64" | sha256sum --check
+          sudo install -m 0755 kind-linux-amd64 /usr/local/bin/kind
+          kind version
+          kubectl version --client
+      - run: npm run pocs:components:envoy
+      - name: Upload Envoy Gateway evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-component-pocs-envoy
+          path: out/platform-component-pocs
+          if-no-files-found: error
+          retention-days: 14

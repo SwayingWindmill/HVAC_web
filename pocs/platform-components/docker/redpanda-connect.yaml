@@ -1,0 +1,31 @@
+input:
+  kafka_franz:
+    seed_brokers:
+      - redpanda:9092
+    topics:
+      - legacy.public.legacy_registry
+    consumer_group: hvac-platform-component-poc
+    start_offset: earliest
+
+pipeline:
+  processors:
+    - mapping: |
+        root = this
+        root.poc_component = "redpanda-connect"
+        root.source_topic = meta("kafka_topic")
+        root.source_partition = meta("kafka_partition").number().or(-1)
+        root.source_offset = meta("kafka_offset").number().or(-1)
+        root.transformed_at = now()
+
+output:
+  http_client:
+    url: http://evidence-sink:18080/events
+    verb: POST
+    headers:
+      Content-Type: application/json
+    retries: 5
+    timeout: 5s
+
+http:
+  enabled: true
+  address: 0.0.0.0:4195

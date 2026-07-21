@@ -1,0 +1,28 @@
+{
+  "log": {
+    "level": "info"
+  },
+  "client": {
+    "allowed_origins": [
+      "http://localhost:5173"
+    ]
+  },
+  "health": {
+    "enabled": true
+  },
+  "prometheus": {
+    "enabled": true,
+    "native_histograms": true
+  },
+  "channel": {
+    "namespaces": [
+      {
+        "name": "poc",
+        "allow_subscribe_for_client": true,
+        "history_size": 10,
+        "history_ttl": "60s",
+        "force_recovery": true
+      }
+    ]
+  }
+}

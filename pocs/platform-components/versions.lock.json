@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "evaluatedAt": "2026-07-21",
+  "components": {
+    "envoyGateway": {
+      "repository": "envoyproxy/gateway",
+      "version": "v1.8.0",
+      "license": "Apache-2.0",
+      "installer": "https://github.com/envoyproxy/gateway/releases/download/v1.8.0/install.yaml",
+      "installerSha256": "9ca6b723eea2771cd806e5ae4372ba941b158e0205335501736aa4c886af7248",
+      "purpose": "Kubernetes Gateway API, TLS and traffic-policy layer only",
+      "decision": "poc"
+    },
+    "debezium": {
+      "repository": "debezium/debezium",
+      "version": "3.6.0.Final",
+      "license": "Apache-2.0",
+      "image": "quay.io/debezium/connect:3.6.0.Final@sha256:dbb329c4c5184b849c5f4dfb0d170658db9e775c02afe8d6117451c5d994eeed",
+      "platform": "linux/amd64",
+      "purpose": "Legacy PostgreSQL single-direction CDC",
+      "decision": "poc"
+    },
+    "redpandaConnect": {
+      "repository": "redpanda-data/connect",
+      "version": "v4.94.0",
+      "license": "Redpanda Community License with component-specific availability",
+      "image": "docker.redpanda.com/redpandadata/connect:4.94.0@sha256:21cb685b4245d4e37b60dcb6eafa77aa05c3daefbbe656ed9da19500687f808d",
+      "platform": "linux/amd64",
+      "purpose": "Non-authoritative CDC event filtering and transformation",
+      "decision": "poc-license-review-required"
+    },
+    "centrifugo": {
+      "repository": "centrifugal/centrifugo",
+      "version": "v6.8.1",
+      "license": "Apache-2.0",
+      "image": "centrifugo/centrifugo:v6.8.1@sha256:b20c036ed17c7151c6acc176b34870ac37f4eb84618de7cc6459094744dd42aa",
+      "platform": "linux/amd64",
+      "purpose": "Realtime connection and publication transport only",
+      "decision": "poc"
+    },
+    "river": {
+      "repository": "riverqueue/river",
+      "version": "v0.35.1",
+      "license": "MPL-2.0",
+      "purpose": "Owner-local PostgreSQL transactional jobs",
+      "decision": "poc"
+    },
+    "redpandaBrokerCompatibility": {
+      "repository": "redpanda-data/redpanda",
+      "version": "v24.2.18",
+      "image": "redpandadata/redpanda:v24.2.18@sha256:59a5a91630e1e71abb4c96f363436ce4b76631c079bd50967249509941d78177",
+      "platform": "linux/amd64",
+      "purpose": "Compatibility with the broker version already used by S0",
+      "decision": "test-fixture"
+    }
+  }
+}
