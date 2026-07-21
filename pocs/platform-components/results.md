@@ -8,11 +8,19 @@ These results are integration evidence, not production adoption approvals. The e
 
 | Component | Executed evidence | Result | Provisional decision |
 |---|---|---|---|
-| Envoy Gateway `v1.8.0` | Locked installer, restricted Kind manifests, exact public route, unregistered Legacy rejection, route canary and rollback | Pending GitHub Ubuntu/Kind execution | Adopt only as a Kubernetes traffic layer when the real-cluster gate passes; never replace the Go BFF/Gateway business boundary. |
+| Envoy Gateway `v1.8.0` | Locked installer, restricted Kind cluster, explicit ClusterIP data plane, exact public route, unregistered Legacy rejection, route canary and rollback | Passed on GitHub Ubuntu/Kind | Adopt candidate as the Kubernetes traffic layer only; never replace the Go BFF/Gateway business boundary. |
 | Debezium `3.6.0.Final` | PostgreSQL initial snapshot, insert/update/delete capture, table allowlist, connector restart and offset resume through the S0-compatible Redpanda broker | Passed locally | Adopt candidate for one-way Legacy CDC and migration evidence. It must not become a reverse synchronization or business dual-write path. |
 | Redpanda Connect `v4.94.0` | Consumed the Debezium topic with `kafka_franz`, applied bounded Bloblang metadata mapping and delivered five uniquely offset events to an HTTP evidence sink | Passed locally with conditions | Do not approve production adoption yet. Keep only as a non-authoritative integration candidate pending license review and replacement of the deprecated `kafka_franz` input before the next major release. |
 | Centrifugo `v6.8.1` | Authenticated WebSocket connection, subscription, live publication, one offline publication recovery, retained history and Prometheus metrics | Passed locally with conditions | S2 candidate for connection/publication transport only. A separate S2 experiment must prove platform-owned authorization, Snapshot/Cursor/Revision and scale behavior before adoption. |
 | River `v0.35.1` | Domain row and job committed in one PostgreSQL transaction, rollback removed both, duplicate unique insertion yielded one job, restarted worker produced one business effect | Passed locally | Adopt candidate for owner-local background jobs. Do not use for Command retries, device side effects or shared cross-service workflow authority. |
+
+## CI evidence
+
+- Workflow run: `https://github.com/SwayingWindmill/HVAC_web/actions/runs/29802480177`
+- Envoy/Kind artifact: `platform-component-pocs-envoy` (`8484251479`)
+- Docker component artifact: `platform-component-pocs-docker` (`8484265241`)
+- Assets, Envoy/Kind and Docker component jobs all completed successfully.
+- The Envoy gate proved exact `/api/v1/status` routing to the Go-edge fixture, `404` for the unregistered Legacy path, deterministic canary routing to the private Legacy fixture and rollback to the Go owner without synthesizing business identity headers.
 
 ## Machine-readable local evidence
 

@@ -2,6 +2,8 @@
 
 These experiments evaluate reusable platform components without changing an accepted slice specification or production route. They are disposable integration spikes, not production dependencies.
 
+Executed evidence and provisional decisions: `results.md`.
+
 ## Scope
 
 | Component | Evaluated boundary | Explicitly not delegated |
