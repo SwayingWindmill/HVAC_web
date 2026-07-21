@@ -70,3 +70,15 @@ Ticket 01 may compare `sqlc` with direct `pgx` for the exact S1 list/detail quer
 - the added tool and maintenance surface are smaller than the handwritten query layer it replaces.
 
 Failure to satisfy any condition means S1 continues with direct `pgx`.
+
+## Ticket 02 Logto Go SDK adoption evidence
+
+Ticket 02 compared the existing Gateway OIDC/BFF implementation with the official `logto-io/go/v2 v2.2.0` high-level client under the same black-box security and operability requirements. Feature overlap was not treated as a rejection criterion.
+
+The SDK passed Authorization Code with S256 PKCE, state validation, one-time callback state, JWKS replacement and discovery-outage fail-closed behavior. It did not meet the accepted platform requirements for nonce generation/validation, token-type and not-before enforcement, observable durable storage failure, cross-instance refresh single-flight, observable remote revocation failure or verified Organization-context claim extraction. The existing Gateway baseline passes the corresponding identity, BFF Session, revocation and credential-leak gates, but still needs official Logto refresh and end-session integration.
+
+The POC also found that `logto-io/go/v2 v2.2.0` and the current upstream `v2` branch require `github.com/go-jose/go-jose/v4 v4.0.5`, which is affected by reachable `GO-2026-4945`. The isolated POC overrides to `v4.1.4`; compatibility tests and `govulncheck` then pass.
+
+Decision: **partially adopt the official SDK**. Use `logto-io/go/v2/core` and fixed JOSE/JWKS dependencies for maintained Logto protocol primitives, while retaining platform-owned state/nonce validation, encrypted PostgreSQL BFF Session, transactional Audit/Outbox, refresh coordination, logout reconciliation and HVAC business authorization. The high-level Logto client does not become the authoritative Session or authorization state machine.
+
+Evidence lives in `pocs/logto-sdk-adoption/` and is reproduced with `npm run s1:logto:poc`.

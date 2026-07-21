@@ -4,7 +4,24 @@
 
 **Blocked by:** 01 — Contract, domain model and ownership baseline.
 
-**Status:** ready-for-agent
+**Status:** in-progress
+
+## Logto SDK adoption gate
+
+Ticket 02 must not prefer the current hand-written OIDC/BFF implementation merely because it already exists. Before production integration, compare these two implementations under the same black-box security and operability suite:
+
+1. Existing Gateway OIDC/BFF Session implementation with Logto as the standards-compliant external provider.
+2. Logto official Go SDK `logto-io/go/v2` taking over every login, callback, token refresh, organization-token and sign-out responsibility it can safely own, while platform IAM retains HVAC business authorization.
+
+The comparison must cover login/callback correctness, PKCE/state/nonce, server-side token storage, refresh and revocation, global and local logout, JWKS rotation, Logto outage behavior, disabled users, duplicate email with distinct subjects, Organization claims/tokens, secret exposure, dependency vulnerabilities, upgrade surface, migration/rollback and compatibility with the existing BFF Session contract. Record measured evidence and select full SDK adoption, partial SDK adoption or the existing implementation only after the comparison. Feature overlap is not a rejection criterion.
+
+### Adoption-gate result
+
+The reproducible POC in `pocs/logto-sdk-adoption/` selects **partial SDK adoption**. Official `logto-io/go/v2/core` protocol helpers and fixed JOSE/JWKS dependencies will replace suitable hand-written protocol plumbing. Platform code retains nonce and strict claim validation, encrypted PostgreSQL BFF Session, Audit/Outbox, cross-instance refresh coordination, logout reconciliation and all HVAC authorization facts. The high-level SDK client is not used as the authoritative durable Session state machine.
+
+The POC initially found reachable `GO-2026-4945` through the SDK requirement `go-jose/v4 v4.0.5`; the isolated module pins `v4.1.4`, remains compatible and passes `govulncheck`. This fixed dependency is a production adoption requirement.
+
+This closes only the SDK selection gate. Ticket 02 remains in progress until the IAM authorization projection and production identity adapter satisfy every acceptance item below.
 
 - [ ] IAM persists or deterministically fixtures OrganizationMembership, RoleBinding, SiteBinding, explicit deny and Policy revision in its owned Schema.
 - [ ] Logto is configured as the external OIDC provider for login, credentials, MFA/passkeys and external user lifecycle; Go IAM does not implement passwords or authentication factors.

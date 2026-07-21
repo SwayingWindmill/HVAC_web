@@ -61,6 +61,7 @@
     "s1:registry:check": "node scripts/check-s1-registry-baseline.mjs",
     "s1:registry:postgres": "node scripts/run-s1-registry-postgres-tests.mjs",
     "s1:sqlc:poc": "node scripts/run-s1-sqlc-poc.mjs",
+    "s1:logto:poc": "node scripts/run-s1-logto-sdk-adoption-poc.mjs",
     "s1:ticket-01": "npm run contracts:check && npm run ownership:check && npm run s1:registry:check && npm run s1:sqlc:poc && npm run s1:registry:postgres",
     "audit:delivery": "npm run delivery:validate && npm run delivery:check && npm run audit:s0-rollout && npm run test:durable-postgres",
     "build": "tsc -b apps/hvac-web/tsconfig.json && vite build apps/hvac-web --config apps/hvac-web/vite.config.ts",
