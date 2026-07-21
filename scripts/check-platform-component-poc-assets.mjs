@@ -75,6 +75,8 @@ for (const forbidden of ['organization_id', 'site_id', 'equipment_id', 'device_i
   assert(!connect.includes(forbidden), `Redpanda Connect mapping must not invent ${forbidden}`);
 }
 
+assert(envoy.includes('kind: EnvoyProxy'), 'Envoy POC must use an explicit EnvoyProxy configuration');
+assert(envoy.includes('type: ClusterIP'), 'Envoy POC must not depend on an unavailable Kind LoadBalancer implementation');
 assert(envoy.includes('value: /api/v1/status'), 'Envoy POC must expose only the exact platform status path');
 assert(envoy.includes('type: Exact'), 'Envoy POC route must use exact matching');
 assert(!envoy.includes('RequestHeaderModifier'), 'Envoy POC must not synthesize identity headers');

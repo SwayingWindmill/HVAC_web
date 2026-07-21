@@ -79,6 +79,27 @@ async function writeReport(body) {
   await writeFile(reportPath, `${JSON.stringify(body, null, 2)}\n`);
 }
 
+async function diagnostic(command, args) {
+  try {
+    return (await run(command, args)).stdout.trim();
+  } catch (error) {
+    return `diagnostic failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function collectDiagnostics() {
+  return {
+    gatewayClasses: await diagnostic('kubectl', ['get', 'gatewayclass', '-o', 'yaml']),
+    gateways: await diagnostic('kubectl', ['get', 'gateway', '-A', '-o', 'yaml']),
+    routes: await diagnostic('kubectl', ['get', 'httproute', '-A', '-o', 'yaml']),
+    envoyProxies: await diagnostic('kubectl', ['get', 'envoyproxy', '-A', '-o', 'yaml']),
+    services: await diagnostic('kubectl', ['get', 'service', '-A', '-o', 'wide']),
+    deployments: await diagnostic('kubectl', ['get', 'deployment', '-A', '-o', 'wide']),
+    pods: await diagnostic('kubectl', ['get', 'pod', '-A', '-o', 'wide']),
+    controllerLogs: await diagnostic('kubectl', ['-n', 'envoy-gateway-system', 'logs', 'deployment/envoy-gateway', '--tail=300']),
+  };
+}
+
 try {
   const lock = JSON.parse(await readFile(resolve(root, 'pocs/platform-components/versions.lock.json'), 'utf8'));
   const component = lock.components.envoyGateway;
@@ -101,17 +122,14 @@ try {
   await run('kubectl', ['-n', namespace, 'wait', '--for=condition=Programmed', 'gateway/platform', '--timeout=180s']);
 
   const service = await waitFor(async () => {
-    const services = JSON.parse((await run('kubectl', ['get', 'service', '-A', '-o', 'json'])).stdout);
-    return services.items.find((item) => {
-      const labels = item.metadata?.labels ?? {};
-      const annotations = item.metadata?.annotations ?? {};
-      const ownsGateway = labels['gateway.envoyproxy.io/owning-gateway-name'] === 'platform'
-        || annotations['gateway.envoyproxy.io/owning-gateway-name'] === 'platform';
-      const hasHTTPPort = item.spec?.ports?.some((port) => port.port === 80);
-      const generatedNameMatches = String(item.metadata?.name).includes('platform')
-        && String(item.metadata?.name) !== 'envoy-gateway';
-      return hasHTTPPort && (ownsGateway || generatedNameMatches);
-    }) ?? false;
+    const selector = [
+      'gateway.envoyproxy.io/owning-gateway-namespace=platform-component-poc',
+      'gateway.envoyproxy.io/owning-gateway-name=platform',
+    ].join(',');
+    const services = JSON.parse((await run('kubectl', [
+      '-n', 'envoy-gateway-system', 'get', 'service', '-l', selector, '-o', 'json',
+    ])).stdout);
+    return services.items.find((item) => item.spec?.ports?.some((port) => port.port === 80)) ?? false;
   }, 'Envoy data-plane Service was not created');
 
   portForward = spawn('kubectl', ['-n', service.metadata.namespace, 'port-forward', `service/${service.metadata.name}`, '18081:80'], {
@@ -168,6 +186,7 @@ try {
   });
   console.log(`Envoy Gateway POC passed: ${reportPath}`);
 } catch (error) {
+  const diagnostics = clusterCreated ? await collectDiagnostics() : {};
   await writeReport({
     schemaVersion: 1,
     component: 'envoy-gateway',
@@ -176,6 +195,7 @@ try {
     finishedAt: new Date().toISOString(),
     clusterName,
     error: error instanceof Error ? error.message : String(error),
+    diagnostics,
   });
   throw error;
 } finally {
