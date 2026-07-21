@@ -2,9 +2,9 @@
 
 **What to build:** freeze the first S1 public contract, Core Registry domain model, PostgreSQL ownership plan, two-Organization fixtures and migration states before service implementation begins. Extend the existing OpenAPI and ownership registries with Organization, Site, Equipment, Device, DeviceBinding, ExternalBinding, opaque Cursor and stable Registry Problem Details. Produce reviewed DDL and query plans, but keep the implementation narrow and read-only.
 
-**Blocked by:** Explicit acceptance of `../spec.md`.
+**Blocked by:** None. `../spec.md` was explicitly accepted on 2026-07-21.
 
-**Status:** ready-after-spec-approval
+**Status:** ready-for-agent
 
 - [ ] The public OpenAPI defines all eight S1 list/detail endpoints and typed collection DTOs without a global success envelope.
 - [ ] Organization, Site, Equipment, Device, DeviceBinding and ExternalBinding schemas use platform UUIDv7 identifiers and explicit revisions.

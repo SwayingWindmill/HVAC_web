@@ -6,7 +6,7 @@ Reuse-first assessment: `research/reuse-first.md`
 
 ## Approval gate
 
-The S1 specification is ready for review but is not yet accepted. No implementation ticket may start until the user explicitly accepts `spec.md`. After acceptance, Ticket 01 is the only initial frontier item.
+The S1 specification was explicitly accepted on 2026-07-21. Ticket 01 is the only current implementation frontier.
 
 ## Dependency graph
 
@@ -29,10 +29,10 @@ The S1 specification is ready for review but is not yet accepted. No implementat
 08 S1 Release Evidence Bundle
 ```
 
-## Planned frontier
+## Current frontier
 
-- Before specification acceptance: no implementation frontier.
-- After specification acceptance: Ticket 01 only.
+- Ticket 01 — Contract, domain model and ownership baseline.
+- Tickets 02–08 remain blocked by the dependency graph.
 - Complete one frontier ticket at a time; do not bypass declared blockers.
 
 ## Rules

@@ -1,6 +1,8 @@
 # S1 — Organization–Site–Device Read Slice
 
-Status: ready-for-review
+Status: accepted
+
+Accepted: 2026-07-21
 
 Source architecture: `../go-data-ai-platform/map.md`
 
@@ -201,4 +203,4 @@ S1 release evidence must report all of the following as zero:
 
 ## Approval Gate
 
-This specification is ready for review. Acceptance must be explicit. Until accepted, all S1 implementation tickets remain blocked and no service, database, contract or frontend implementation may begin.
+This specification was explicitly accepted on 2026-07-21. Ticket 01 is the only initial implementation frontier. Later tickets remain blocked by the dependency graph and may not be started early.
