@@ -1,0 +1,173 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform-component-poc
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: platform-component-poc
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-edge
+  namespace: platform-component-poc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: go-edge
+  template:
+    metadata:
+      labels:
+        app: go-edge
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: echo
+          image: node:20.19.4-bookworm-slim@sha256:a25e59a5562406b0a4f34ce94ccad6c3902dcf3269b40e1fe12d881090c6f9be
+          command:
+            - node
+            - -e
+            - >-
+              require('node:http').createServer((req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({owner:'go-edge',path:req.url})+'\n')}).listen(8080,'0.0.0.0')
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: go-edge
+  namespace: platform-component-poc
+spec:
+  selector:
+    app: go-edge
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: legacy-private
+  namespace: platform-component-poc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: legacy-private
+  template:
+    metadata:
+      labels:
+        app: legacy-private
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: echo
+          image: node:20.19.4-bookworm-slim@sha256:a25e59a5562406b0a4f34ce94ccad6c3902dcf3269b40e1fe12d881090c6f9be
+          command:
+            - node
+            - -e
+            - >-
+              require('node:http').createServer((req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({owner:'legacy-private',path:req.url})+'\n')}).listen(8080,'0.0.0.0')
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: legacy-private
+  namespace: platform-component-poc
+spec:
+  selector:
+    app: legacy-private
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: platform
+  namespace: platform-component-poc
+spec:
+  gatewayClassName: platform-component-poc
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: platform-status
+  namespace: platform-component-poc
+  annotations:
+    poc.hvac/route-revision: go-primary-v1
+spec:
+  parentRefs:
+    - name: platform
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /api/v1/status
+      backendRefs:
+        - name: go-edge
+          port: 8080
