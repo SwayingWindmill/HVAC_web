@@ -471,7 +471,9 @@ export async function startS0DurableTopology(options = {}) {
     await waitForTLS(webPort, 'HVAC Web', services.web);
 
     return {
-      oidcURL, iamURL, auditURL, legacyURL, legacyDirectURL, toxiproxyURL, gatewayURL, webURL, redirectURI, brokers, database, pkiDir, routeRegistryPath: paths.routeRegistry, services,
+      oidcURL, iamURL, auditURL, legacyURL, legacyDirectURL, toxiproxyURL, gatewayURL,
+      gatewayDiagnosticsURL: `http://127.0.0.1:${gatewayDiagnosticsPort}/diagnostics`,
+      webURL, redirectURI, brokers, database, pkiDir, routeRegistryPath: paths.routeRegistry, services,
       telemetryPayloads() { return telemetryRecorder ? JSON.parse(JSON.stringify(telemetryRecorder.payloads)) : []; },
       setTelemetryAvailable(value) { telemetryRecorder?.setAvailable(value); },
       async setPostgresAvailable(value) { await setProxyEnabled('s0_postgres', value); },

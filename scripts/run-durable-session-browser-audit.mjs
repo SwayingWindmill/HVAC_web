@@ -430,7 +430,7 @@ try {
   const collectorOutagePrincipal = await fetchJSON(cdpClient, '/api/v1/principal');
   assert(collectorOutagePrincipal.status === 200, 'Collector outage blocked the current-Principal business path');
   assert(Date.now() - collectorOutageStarted < 3000, 'Collector outage added blocking latency to the business path');
-  await waitForFailedExports('http://127.0.0.1:19080/diagnostics');
+  await waitForFailedExports(topology.gatewayDiagnosticsURL);
   topology.setTelemetryAvailable(true);
 
   const telemetryProbeMarker = `seeded-telemetry-marker-${process.pid}`;
