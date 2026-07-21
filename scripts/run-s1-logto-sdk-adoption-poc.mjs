@@ -28,11 +28,29 @@ function run(label, args) {
   };
 }
 
+function runInherited(label, args) {
+  const result = spawnSync(process.execPath, args, {
+    cwd: root,
+    env: process.env,
+    stdio: 'inherit',
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error(`${label} failed: ${result.error?.message ?? result.status}`);
+  }
+  return {
+    label,
+    command: [process.execPath, ...args].join(' '),
+    status: 'passed',
+    output: 'inherited by the parent process to avoid retaining browser child-process pipes',
+  };
+}
+
 const baselineTests = run('existing-gateway-identity-tests', [
   resolve(root, 'scripts/run-go.mjs'),
   'test', '-count=1', './services/platform-gateway/...',
 ]);
-const baselineBrowser = run('existing-gateway-browser-audit', [
+const baselineBrowser = runInherited('existing-gateway-browser-audit', [
   resolve(root, 'scripts/run-auth-principal-browser-audit.mjs'),
 ]);
 const moduleVerify = run('logto-sdk-module-verify', [
