@@ -37,9 +37,11 @@
 
 ## Implementation handoff
 
-- [S0 — Platform Contract & Delivery Foundation](../go-data-ai-platform-s0/spec.md) 已形成正式实施规格。
-- [S0 implementation tracker](../go-data-ai-platform-s0/README.md) 已拆分8张`ready-for-agent`纵向票据；初始frontier为票据01“Contract-first Gateway bootstrap”。
-- S0完成前不进入S1正式开发；每张票据必须遵守其阻塞边、外部黑盒验收和NestJS Legacy Frozen边界。
+- [S0 — Platform Contract & Delivery Foundation](../go-data-ai-platform-s0/spec.md) 已完成，正式 Release Evidence run 为 `29763231123`。
+- [S0 implementation tracker](../go-data-ai-platform-s0/README.md) 的8张纵向票据均已关闭。
+- [S1 — Organization–Site–Device Read Slice](../go-data-ai-platform-s1/spec.md) 已形成待审核实施规格。
+- [S1 implementation tracker](../go-data-ai-platform-s1/README.md) 已拆分8张纵向票据；规格显式接受后，初始 frontier 为票据01“Contract, domain model and ownership baseline”。
+- S1规格接受前不得进入业务实现；实施必须遵守外部黑盒验收、跨租户零成功、单一数据Owner、只读Shadow/回滚和NestJS Legacy Frozen边界。
 
 ## Not yet specified
 
