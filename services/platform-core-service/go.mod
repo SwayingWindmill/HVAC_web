@@ -1,13 +1,11 @@
-module github.com/quanlaihe/hvac-web/services/iam-service
+module github.com/quanlaihe/hvac-web/services/platform-core-service
 
 go 1.25.12
 
 require (
 	github.com/jackc/pgx/v5 v5.9.2
-	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/registryauth v0.0.0
-	github.com/quanlaihe/hvac-web/libs/testpki v0.0.0
 )
 
 require (
@@ -18,10 +16,6 @@ require (
 	golang.org/x/text v0.39.0 // indirect
 )
 
-replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identitycontext
-
 replace github.com/quanlaihe/hvac-web/libs/observability => ../../libs/observability
 
 replace github.com/quanlaihe/hvac-web/libs/registryauth => ../../libs/registryauth
-
-replace github.com/quanlaihe/hvac-web/libs/testpki => ../../libs/testpki

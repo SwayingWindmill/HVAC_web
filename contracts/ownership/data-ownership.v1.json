@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 3,
+  "registryRevision": 4,
   "resources": [
     { "kind": "schema", "name": "gateway", "writer": "platform-gateway", "revision": 1 },
     { "kind": "schema", "name": "audit_ledger", "writer": "audit-ledger-service", "revision": 1 },
@@ -12,6 +12,7 @@
     { "kind": "projection", "name": "audit-session-record", "writer": "audit-ledger-service", "revision": 1 },
     { "kind": "projection", "name": "gateway-route-audit", "writer": "platform-gateway", "revision": 1 },
     { "kind": "projection", "name": "iam-registry-read-decision", "writer": "iam-service", "revision": 1 },
+    { "kind": "projection", "name": "iam-registry-grant-revocation", "writer": "iam-service", "revision": 1 },
     { "kind": "projection", "name": "iam-onboarding-reconciliation", "writer": "iam-service", "revision": 1 },
     { "kind": "projection", "name": "iam-reconciliation-quarantine", "writer": "iam-service", "revision": 1 },
     { "kind": "migration-dataset", "name": "s1-legacy-resource-map", "writer": "platform-core-service", "revision": 1 },
@@ -33,6 +34,7 @@
     { "schema": "iam", "migrationRole": "s1_iam_migrator", "runtimeRole": "s1_iam_runtime", "runtimeBypassRls": false },
     { "schema": "iam", "migrationRole": "s1_iam_migrator", "runtimeRole": "s1_iam_reconciler", "runtimeBypassRls": false, "restrictedTo": ["principals", "organization_memberships", "role_bindings", "site_bindings", "explicit_denies", "reconciliation_state", "reconciliation_events", "reconciliation_quarantine"] },
     { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_core_runtime", "runtimeBypassRls": false },
+    { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_core_service", "runtimeBypassRls": false, "activationRole": "s1_core_runtime" },
     { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_migration_operator", "runtimeBypassRls": false, "restrictedTo": ["legacy_resource_maps", "migration_provenance", "migration_quarantine"] }
   ]
 }

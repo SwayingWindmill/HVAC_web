@@ -300,4 +300,42 @@ func postgresRegistryActions(values []string) ([]registryauth.Action, error) {
 	return actions, nil
 }
 
+func (store *PostgresAuthorizationStore) LookupRegistryGrantStatus(ctx context.Context, actingOrganizationID, tokenID string) (RegistryGrantStatus, error) {
+	if store == nil || store.pool == nil {
+		return RegistryGrantStatus{}, errors.New("IAM authorization store is closed")
+	}
+	statusRequest := registryauth.GrantStatusRequest{ActingOrganizationID: actingOrganizationID, TokenID: tokenID}
+	if err := statusRequest.Validate(); err != nil {
+		return RegistryGrantStatus{}, fmt.Errorf("validate IAM Registry grant status lookup: %w", err)
+	}
+	transaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return RegistryGrantStatus{}, fmt.Errorf("begin IAM Registry grant status lookup: %w", err)
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
+	if err := setIAMAuthorizationContext(ctx, transaction, "", actingOrganizationID); err != nil {
+		return RegistryGrantStatus{}, err
+	}
+	policyRevision, err := loadPolicyRevision(ctx, transaction)
+	if err != nil {
+		return RegistryGrantStatus{}, err
+	}
+	var revoked bool
+	if err := transaction.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM iam.registry_grant_revocations
+  WHERE token_id = $1
+    AND expires_at > now()
+)
+`, tokenID).Scan(&revoked); err != nil {
+		return RegistryGrantStatus{}, fmt.Errorf("read IAM Registry grant revocation: %w", err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return RegistryGrantStatus{}, fmt.Errorf("commit IAM Registry grant status lookup: %w", err)
+	}
+	return RegistryGrantStatus{CurrentPolicyRevision: policyRevision, Revoked: revoked}, nil
+}
+
 var _ AuthorizationStore = (*PostgresAuthorizationStore)(nil)
+var _ RegistryGrantStatusStore = (*PostgresAuthorizationStore)(nil)

@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const readJSON = async (path) => JSON.parse(await readFile(resolve(root, path), 'utf8'));
-const [model, openapi, routeRegistry, dataRegistry, ownershipLock, ddl, fixtures, iamRuntimeResolver, iamReconciliation, sqlcQueries, sqlcGenerated] = await Promise.all([
+const [model, openapi, routeRegistry, dataRegistry, ownershipLock, ddl, fixtures, iamRuntimeResolver, iamReconciliation, coreReadService, sqlcQueries, sqlcGenerated] = await Promise.all([
   readJSON('contracts/registry/s1-registry-model.v1.json'),
   readJSON('contracts/http/platform-gateway.openapi.yaml'),
   readJSON('contracts/ownership/route-ownership.v1.json'),
@@ -14,6 +14,7 @@ const [model, openapi, routeRegistry, dataRegistry, ownershipLock, ddl, fixtures
   readFile(resolve(root, 'infra/s1-registry/postgres/init/002-s1-registry-fixtures.sql'), 'utf8'),
   readFile(resolve(root, 'infra/s1-registry/postgres/init/003-iam-runtime-identity-resolution.sql'), 'utf8'),
   readFile(resolve(root, 'infra/s1-registry/postgres/init/004-iam-reconciliation.sql'), 'utf8'),
+  readFile(resolve(root, 'infra/s1-registry/postgres/init/005-core-read-service.sql'), 'utf8'),
   readFile(resolve(root, 'pocs/s1-sqlc/queries.sql'), 'utf8'),
   readFile(resolve(root, 'pocs/s1-sqlc/generated/queries.sql.go'), 'utf8'),
 ]);
@@ -92,6 +93,11 @@ for (const role of ['s1_iam_migrator', 's1_iam_runtime', 's1_iam_reconciler']) {
 }
 for (const role of ['s1_core_migrator', 's1_core_runtime', 's1_migration_operator']) {
   assert(bootstrap.includes(`CREATE ROLE ${role} NOLOGIN`) && bootstrap.includes('NOBYPASSRLS'), `${role} is not locked down`);
+}
+assert(coreReadService.includes('CREATE ROLE s1_core_service LOGIN') && coreReadService.includes('NOBYPASSRLS'), 'Core service login identity is not RLS-bound');
+assert(coreReadService.includes('GRANT s1_core_runtime TO s1_core_service'), 'Core service cannot activate the restricted runtime role');
+for (const marker of ['CREATE TABLE IF NOT EXISTS iam.registry_grant_revocations', 'ALTER TABLE iam.registry_grant_revocations ENABLE ROW LEVEL SECURITY', 'ALTER TABLE iam.registry_grant_revocations FORCE ROW LEVEL SECURITY', 'FOR ALL TO s1_iam_migrator', 'TO s1_iam_runtime']) {
+  assert(coreReadService.includes(marker), `Core read service security asset is missing: ${marker}`);
 }
 assert(iamRuntimeResolver.includes('SECURITY DEFINER'), 'IAM identity resolver is not security definer');
 assert(iamRuntimeResolver.includes('SET search_path = pg_catalog, iam'), 'IAM identity resolver search_path is unsafe');

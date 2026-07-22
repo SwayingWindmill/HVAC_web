@@ -19,7 +19,29 @@ const (
 	GrantVersion            = 1
 	MaximumGrantLifetime    = 30 * time.Second
 	MaximumEncodedGrantSize = 64 << 10
+	GrantStatusPath         = "/internal/v1/registry-read/grant-status"
+	MaximumGrantTokenIDSize = 256
 )
+
+type GrantStatusRequest struct {
+	ActingOrganizationID string `json:"actingOrganizationId"`
+	TokenID              string `json:"tokenId"`
+}
+
+func (request GrantStatusRequest) Validate() error {
+	if !validUUIDv7(request.ActingOrganizationID) {
+		return errors.New("acting organization must be a UUIDv7")
+	}
+	if len(request.TokenID) == 0 || len(request.TokenID) > MaximumGrantTokenIDSize {
+		return errors.New("grant token identifier is invalid")
+	}
+	return nil
+}
+
+type GrantStatus struct {
+	CurrentPolicyRevision string `json:"currentPolicyRevision"`
+	Revoked               bool   `json:"revoked"`
+}
 
 type Action string
 
@@ -253,6 +275,9 @@ func ValidateGrant(claims GrantClaims, validation GrantValidation) error {
 	}
 	if claims.PrincipalID == "" || claims.SubjectIssuer == "" || claims.Subject == "" || claims.ActingOrganizationID == "" || claims.SessionID == "" || claims.ParentTokenID == "" || claims.TokenID == "" {
 		return errors.New("registry grant identity fields are incomplete")
+	}
+	if len(claims.TokenID) > MaximumGrantTokenIDSize {
+		return errors.New("registry grant token identifier is too large")
 	}
 	if validation.CurrentPolicyRevision == "" || claims.PolicyRevision != validation.CurrentPolicyRevision {
 		return errors.New("registry grant policy revision is stale")

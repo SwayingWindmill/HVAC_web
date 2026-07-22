@@ -57,6 +57,7 @@ func main() {
 
 	policyRevision := envOr("IAM_POLICY_REVISION", "policy-unconfigured")
 	authorizationStore := iam.NewDenyAllAuthorizationStore(policyRevision)
+	var grantStatusStore iam.RegistryGrantStatusStore = iam.StaticRegistryGrantStatusStore{PolicyRevision: policyRevision}
 	databaseURL := strings.TrimSpace(os.Getenv("IAM_DATABASE_URL"))
 	fixtureEnabled := envEnabled("IAM_S1_AUTHORIZATION_FIXTURE")
 	if databaseURL != "" && fixtureEnabled {
@@ -73,12 +74,14 @@ func main() {
 		}
 		defer postgresStore.Close()
 		authorizationStore = postgresStore
+		grantStatusStore = postgresStore
 		policyRevision = "database-managed"
 		logger.Info("iam_postgres_authorization_store_enabled")
 	} else if fixtureEnabled {
 		subjectIssuer := requiredEnv("IAM_EXTERNAL_SUBJECT_ISSUER")
 		authorizationStore = iam.NewS1FixtureAuthorizationStore(subjectIssuer)
 		policyRevision = iam.S1FixturePolicyRevision
+		grantStatusStore = iam.StaticRegistryGrantStatusStore{PolicyRevision: policyRevision}
 		logger.Warn("iam_s1_authorization_fixture_enabled", "policy_revision", policyRevision)
 	}
 
@@ -86,6 +89,7 @@ func main() {
 		Addr: address,
 		Handler: iam.NewHandler(iam.Config{
 			AllowedWorkloadSPIFFE: envOr("IAM_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
+			CoreWorkloadSPIFFE:    envOr("IAM_CORE_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-core-service"),
 			Audience:              envOr("IAM_AUDIENCE", "iam-service"),
 			Logger:                logger,
 			Observability:         telemetry,
@@ -93,6 +97,7 @@ func main() {
 			RegistryGrantSigner:   registryGrantSigner,
 			RegistryGrantIssuer:   iamSPIFFEID,
 			RegistryGrantAudience: envOr("IAM_REGISTRY_GRANT_AUDIENCE", "platform-core-service"),
+			RegistryGrantStatus:   grantStatusStore,
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,
