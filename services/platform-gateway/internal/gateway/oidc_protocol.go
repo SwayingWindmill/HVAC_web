@@ -93,13 +93,11 @@ func (logtoOIDCProtocol) AuthorizationURL(discovery oidcDiscovery, request oidcA
 func (logtoOIDCProtocol) ExchangeCode(ctx context.Context, client *http.Client, discovery oidcDiscovery, request oidcCodeExchangeRequest) (oidcTokenResponse, error) {
 	capture := &oidcResponseCapture{}
 	options := core.FetchTokenByAuthorizationCodeOptions{
-		discovery.TokenEndpoint,
-		request.Code,
-		request.CodeVerifier,
-		request.ClientID,
-		"",
-		request.RedirectURI,
-		"",
+		TokenEndpoint: discovery.TokenEndpoint,
+		Code:          request.Code,
+		CodeVerifier:  request.CodeVerifier,
+		ClientId:      request.ClientID,
+		RedirectUri:   request.RedirectURI,
 	}
 	response, err := core.FetchTokenByAuthorizationCode(oidcCallClient(ctx, client, capture), &options)
 	if err != nil {
