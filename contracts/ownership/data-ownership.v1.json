@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 4,
+  "registryRevision": 5,
   "resources": [
     { "kind": "schema", "name": "gateway", "writer": "platform-gateway", "revision": 1 },
     { "kind": "schema", "name": "audit_ledger", "writer": "audit-ledger-service", "revision": 1 },
@@ -28,13 +28,14 @@
     { "service": "iam-service", "schema": "iam", "mode": "write" },
     { "service": "iam-reconciler", "schema": "iam", "mode": "reconciliation" },
     { "service": "platform-core-service", "schema": "core_registry", "mode": "write" },
-    { "service": "s1-migration-operator", "schema": "core_registry", "mode": "migration" }
+    { "service": "legacy-migration-service", "schema": "core_registry", "mode": "migration" }
   ],
   "databaseIdentities": [
     { "schema": "iam", "migrationRole": "s1_iam_migrator", "runtimeRole": "s1_iam_runtime", "runtimeBypassRls": false },
     { "schema": "iam", "migrationRole": "s1_iam_migrator", "runtimeRole": "s1_iam_reconciler", "runtimeBypassRls": false, "restrictedTo": ["principals", "organization_memberships", "role_bindings", "site_bindings", "explicit_denies", "reconciliation_state", "reconciliation_events", "reconciliation_quarantine"] },
     { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_core_runtime", "runtimeBypassRls": false },
     { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_core_service", "runtimeBypassRls": false, "activationRole": "s1_core_runtime" },
-    { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_migration_operator", "runtimeBypassRls": false, "restrictedTo": ["legacy_resource_maps", "migration_provenance", "migration_quarantine"] }
+    { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_migration_operator", "runtimeBypassRls": false, "restrictedTo": ["organizations", "sites", "equipment", "devices", "legacy_resource_maps", "migration_provenance", "migration_quarantine"] },
+    { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_legacy_migration_service", "runtimeBypassRls": false, "activationRole": "s1_migration_operator", "restrictedTo": ["organizations", "sites", "equipment", "devices", "legacy_resource_maps", "migration_provenance", "migration_quarantine"] }
   ]
 }

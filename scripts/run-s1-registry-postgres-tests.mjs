@@ -137,6 +137,24 @@ async function runCoreGoTests() {
   if (signal || code !== 0) throw new Error(`S1 Core PostgreSQL tests failed: ${signal ?? code}`);
 }
 
+async function runLegacyMigrationGoTests() {
+  await mkdir(goCacheDir, { recursive: true });
+  const child = spawn(goBinary, ['test', '-count=1', '-v', './services/legacy-migration-service/internal/migration'], {
+    cwd: root,
+    stdio: 'inherit',
+    shell: false,
+    env: {
+      ...process.env,
+      GOCACHE: goCacheDir,
+      S1_ADMIN_DATABASE_URL: `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+      S1_CORE_DATABASE_URL: `postgres://s1_core_service:s1-core-service-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+      S1_LEGACY_MIGRATION_DSN: `postgres://s1_legacy_migration_service:s1-legacy-migration-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+    },
+  });
+  const [code, signal] = await once(child, 'exit');
+  if (signal || code !== 0) throw new Error(`S1 Legacy migration PostgreSQL tests failed: ${signal ?? code}`);
+}
+
 const report = {
   schemaVersion: 1,
   status: 'failed',
@@ -152,18 +170,21 @@ try {
   const roleState = psql(`
     SELECT string_agg(rolname || ':' || rolcanlogin::text || ':' || rolbypassrls::text, ',' ORDER BY rolname)
     FROM pg_roles
-    WHERE rolname IN ('s1_iam_runtime','s1_iam_reconciler','s1_core_runtime','s1_core_service','s1_iam_migrator','s1_core_migrator','s1_migration_operator')
+    WHERE rolname IN ('s1_iam_runtime','s1_iam_reconciler','s1_core_runtime','s1_core_service','s1_iam_migrator','s1_core_migrator','s1_migration_operator','s1_legacy_migration_service')
   `);
-  for (const role of ['s1_iam_runtime', 's1_iam_reconciler', 's1_iam_migrator', 's1_core_service']) {
+  for (const role of ['s1_iam_runtime', 's1_iam_reconciler', 's1_iam_migrator', 's1_core_service', 's1_legacy_migration_service']) {
     if (!roleState.includes(`${role}:true:false`)) throw new Error(`${role} must be LOGIN and NOBYPASSRLS`);
   }
   for (const role of ['s1_core_runtime', 's1_core_migrator', 's1_migration_operator']) {
     if (!roleState.includes(`${role}:false:false`)) throw new Error(`${role} must remain NOLOGIN and NOBYPASSRLS`);
   }
   const coreServiceMembership = psql(`SELECT pg_has_role('s1_core_service', 's1_core_runtime', 'MEMBER')`);
+  const migrationServiceMembership = psql(`SELECT pg_has_role('s1_legacy_migration_service', 's1_migration_operator', 'MEMBER')`);
   expectEqual(coreServiceMembership, 't', 'Core service runtime membership');
+  expectEqual(migrationServiceMembership, 't', 'Legacy migration operator membership');
   report.assertions.runtimeRoles = roleState;
   report.assertions.coreServiceMembership = coreServiceMembership;
+  report.assertions.migrationServiceMembership = migrationServiceMembership;
 
   const ownerA = scopedCounts('{018f1e00-0000-7000-8000-000000000001}', '{}');
   const delegated = scopedCounts('{}', '{018f1e00-1000-7000-8000-000000000001}');
@@ -200,6 +221,8 @@ try {
   report.assertions.iamAuthorizationStore = 'passed';
   await runCoreGoTests();
   report.assertions.coreRegistryStore = 'passed';
+  await runLegacyMigrationGoTests();
+  report.assertions.legacyMigrationExecution = 'passed';
 
   const invalidTimezone = psql(`
     INSERT INTO core_registry.sites (id, organization_id, code, display_name, timezone, status, revision, created_at, updated_at)

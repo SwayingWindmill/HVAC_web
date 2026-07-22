@@ -19,7 +19,7 @@
     "GET /api/v1/sites/{siteId}/devices": { "revision": 1, "owner": "legacy-hvac-backend" },
     "GET /api/v1/devices/{deviceId}": { "revision": 1, "owner": "legacy-hvac-backend" }
   },
-  "dataRegistryRevision": 4,
+  "dataRegistryRevision": 5,
   "resources": {
     "schema:gateway": { "revision": 1, "writer": "platform-gateway" },
     "schema:audit_ledger": { "revision": 1, "writer": "audit-ledger-service" },

@@ -11,6 +11,7 @@ use (
 	./libs/testpki
 	./services/audit-ledger-service
 	./services/iam-service
+	./services/legacy-migration-service
 	./services/oidc-test-provider
 	./services/outbox-relay
 	./services/platform-core-service
