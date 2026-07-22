@@ -135,16 +135,18 @@ for (const access of dataRegistry.databaseAccess ?? []) {
 }
 
 const requiredIdentities = new Map([
-  ['iam:s1_iam_runtime', 's1_iam_migrator'],
-  ['iam:s1_iam_reconciler', 's1_iam_migrator'],
-  ['core_registry:s1_core_runtime', 's1_core_migrator'],
-  ['core_registry:s1_migration_operator', 's1_core_migrator'],
+  ['iam:s1_iam_runtime', { migrationRole: 's1_iam_migrator' }],
+  ['iam:s1_iam_reconciler', { migrationRole: 's1_iam_migrator' }],
+  ['core_registry:s1_core_runtime', { migrationRole: 's1_core_migrator' }],
+  ['core_registry:s1_core_service', { migrationRole: 's1_core_migrator', activationRole: 's1_core_runtime' }],
+  ['core_registry:s1_migration_operator', { migrationRole: 's1_core_migrator' }],
 ]);
 for (const identity of dataRegistry.databaseIdentities ?? []) {
   const key = `${identity.schema}:${identity.runtimeRole}`;
-  const expectedMigrator = requiredIdentities.get(key);
-  if (!expectedMigrator) errors.push(`${key}: unexpected database identity`);
-  if (identity.migrationRole !== expectedMigrator) errors.push(`${key}: migration role mismatch`);
+  const expected = requiredIdentities.get(key);
+  if (!expected) errors.push(`${key}: unexpected database identity`);
+  if (identity.migrationRole !== expected?.migrationRole) errors.push(`${key}: migration role mismatch`);
+  if ((identity.activationRole ?? null) !== (expected?.activationRole ?? null)) errors.push(`${key}: activation role mismatch`);
   if (identity.runtimeBypassRls !== false) errors.push(`${key}: runtime identity must not bypass RLS`);
   requiredIdentities.delete(key);
 }

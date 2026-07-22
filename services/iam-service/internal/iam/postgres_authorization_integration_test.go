@@ -78,6 +78,52 @@ func TestPostgresAuthorizationStoreLoadsImmutableIdentityAndScopedFacts(t *testi
 	}
 }
 
+func TestPostgresRegistryGrantStatusIsPolicyCurrentAndOrganizationScoped(t *testing.T) {
+	runtimeURL := requiredIAMPostgresEnv(t, "S1_IAM_DATABASE_URL")
+	adminURL := requiredIAMPostgresEnv(t, "S1_ADMIN_DATABASE_URL")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	identifier := "integration-id-1"
+	if _, err := admin.Exec(ctx, `
+INSERT INTO iam.registry_grant_revocations (token_id, acting_organization_id, revoked_at, expires_at, reason_code)
+VALUES ($1, $2::uuid, now(), now() + interval '5 minutes', 'TEST_REVOCATION')
+ON CONFLICT (token_id) DO UPDATE
+SET acting_organization_id = EXCLUDED.acting_organization_id,
+    revoked_at = EXCLUDED.revoked_at,
+    expires_at = EXCLUDED.expires_at,
+    reason_code = EXCLUDED.reason_code
+`, identifier, postgresActingOrganizationID); err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Exec(context.Background(), `DELETE FROM iam.registry_grant_revocations WHERE token_id = $1`, identifier)
+
+	store, err := iam.OpenPostgresAuthorizationStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	status, err := store.LookupRegistryGrantStatus(ctx, postgresActingOrganizationID, identifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.CurrentPolicyRevision != "registry-read:1" || !status.Revoked {
+		t.Fatalf("status = %#v", status)
+	}
+	other, err := store.LookupRegistryGrantStatus(ctx, postgresOwnerAOrganizationID, identifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.CurrentPolicyRevision != "registry-read:1" || other.Revoked {
+		t.Fatalf("cross-Organization status = %#v", other)
+	}
+}
+
 func TestPostgresAuthorizationRuntimeIsRLSBoundAndRoleChecked(t *testing.T) {
 	runtimeURL := requiredIAMPostgresEnv(t, "S1_IAM_DATABASE_URL")
 	adminURL := requiredIAMPostgresEnv(t, "S1_ADMIN_DATABASE_URL")

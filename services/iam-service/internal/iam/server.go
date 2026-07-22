@@ -21,10 +21,12 @@ const (
 	RegistryReadDecisionPath   = "/internal/v1/registry-read/decision"
 	registryAuthorizeAction    = "registry:authorize"
 	maximumDecisionRequestSize = 64 << 10
+	maximumGrantStatusSize     = 16 << 10
 )
 
 type Config struct {
 	AllowedWorkloadSPIFFE string
+	CoreWorkloadSPIFFE    string
 	Audience              string
 	Logger                *slog.Logger
 	Observability         *observability.Runtime
@@ -36,10 +38,12 @@ type Config struct {
 	RegistryGrantLifetime time.Duration
 	NewRegistryGrantID    func() string
 	RegistryAuditSink     RegistryDecisionAuditSink
+	RegistryGrantStatus   RegistryGrantStatusStore
 }
 
 type handler struct {
 	allowedWorkloadSPIFFE string
+	coreWorkloadSPIFFE    string
 	audience              string
 	logger                *slog.Logger
 	observability         *observability.Runtime
@@ -51,6 +55,7 @@ type handler struct {
 	registryGrantLifetime time.Duration
 	newRegistryGrantID    func() string
 	registryAuditSink     RegistryDecisionAuditSink
+	registryGrantStatus   RegistryGrantStatusStore
 }
 
 func NewHandler(config Config) http.Handler {
@@ -92,6 +97,7 @@ func NewHandler(config Config) http.Handler {
 	}
 	return &handler{
 		allowedWorkloadSPIFFE: config.AllowedWorkloadSPIFFE,
+		coreWorkloadSPIFFE:    config.CoreWorkloadSPIFFE,
 		audience:              config.Audience,
 		logger:                logger,
 		observability:         telemetry,
@@ -103,6 +109,7 @@ func NewHandler(config Config) http.Handler {
 		registryGrantLifetime: grantLifetime,
 		newRegistryGrantID:    newGrantID,
 		registryAuditSink:     auditSink,
+		registryGrantStatus:   config.RegistryGrantStatus,
 	}
 }
 
@@ -134,6 +141,11 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			"duration_ms", h.now().Sub(started).Milliseconds(),
 		)
 	}()
+
+	if request.URL.Path == RegistryGrantStatusPath {
+		status = h.handleRegistryGrantStatusRoute(writer, request)
+		return
+	}
 
 	expectedAction, knownRoute := expectedInboundAction(request.URL.Path)
 	if !knownRoute {
@@ -179,6 +191,42 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case RegistryReadDecisionPath:
 		status = h.handleRegistryReadDecision(writer, request, claims, spiffeID)
 	}
+}
+
+func (h *handler) handleRegistryGrantStatusRoute(writer http.ResponseWriter, request *http.Request) int {
+	if request.Method != http.MethodPost {
+		writer.Header().Set("Allow", http.MethodPost)
+		writeProblem(writer, http.StatusMethodNotAllowed, "IAM_METHOD_NOT_ALLOWED", "This IAM route only supports POST.")
+		return http.StatusMethodNotAllowed
+	}
+	if hasForgedIdentityHeader(request.Header) {
+		writeProblem(writer, http.StatusBadRequest, "IAM_FORGED_IDENTITY_HEADER", "Caller-supplied identity or business-scope headers are not accepted.")
+		return http.StatusBadRequest
+	}
+	_, spiffeID, ok := peerIdentity(request)
+	if !ok || h.coreWorkloadSPIFFE == "" || spiffeID != h.coreWorkloadSPIFFE {
+		writeProblem(writer, http.StatusUnauthorized, "IAM_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.")
+		return http.StatusUnauthorized
+	}
+	if h.registryGrantStatus == nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "IAM_GRANT_STATUS_UNAVAILABLE", "Registry grant status is unavailable.")
+		return http.StatusServiceUnavailable
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumGrantStatusSize)
+	var input registryauth.GrantStatusRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil || input.Validate() != nil {
+		writeProblem(writer, http.StatusBadRequest, "IAM_GRANT_STATUS_REQUEST_INVALID", "The Registry grant status request is invalid.")
+		return http.StatusBadRequest
+	}
+	status, err := h.registryGrantStatus.LookupRegistryGrantStatus(request.Context(), input.ActingOrganizationID, input.TokenID)
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "IAM_GRANT_STATUS_UNAVAILABLE", "Registry grant status is unavailable.")
+		return http.StatusServiceUnavailable
+	}
+	writeJSON(writer, http.StatusOK, status)
+	return http.StatusOK
 }
 
 func (h *handler) handleCurrentPrincipal(writer http.ResponseWriter, claims identitycontext.DelegationClaims, spiffeID string) int {
@@ -358,7 +406,7 @@ type x509CertificateView struct {
 
 func safePath(path string) string {
 	switch path {
-	case CurrentPrincipalPath, RegistryReadDecisionPath:
+	case CurrentPrincipalPath, RegistryReadDecisionPath, RegistryGrantStatusPath:
 		return path
 	default:
 		return "unmatched"

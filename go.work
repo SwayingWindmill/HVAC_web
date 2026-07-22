@@ -13,6 +13,7 @@ use (
 	./services/iam-service
 	./services/oidc-test-provider
 	./services/outbox-relay
+	./services/platform-core-service
 	./services/platform-gateway
 	./tools/legacy-private-fixture
 	./tools/s0-auth-fixture

@@ -62,6 +62,9 @@ func TestRegistryGrantFailsClosedForBoundaryAndFreshnessChanges(t *testing.T) {
 		{name: "transitive", mutate: func(claims *registryauth.GrantClaims) { claims.Transitive = true }},
 		{name: "expired", mutate: func(claims *registryauth.GrantClaims) { claims.ExpiresAt = now.Add(-time.Second).Unix() }},
 		{name: "too long lived", mutate: func(claims *registryauth.GrantClaims) { claims.ExpiresAt = claims.IssuedAt + 31 }},
+		{name: "oversized token id", mutate: func(claims *registryauth.GrantClaims) {
+			claims.TokenID = strings.Repeat("x", registryauth.MaximumGrantTokenIDSize+1)
+		}},
 		{name: "deny reason", mutate: func(claims *registryauth.GrantClaims) { claims.DecisionReason = registryauth.ReasonDenyExplicit }},
 		{name: "wrong action", validation: func(validation *registryauth.GrantValidation) { validation.Action = registryauth.ActionDeviceRead }},
 		{name: "stale policy", validation: func(validation *registryauth.GrantValidation) { validation.CurrentPolicyRevision = "s1-policy-v2" }},
@@ -94,6 +97,25 @@ func TestRegistryGrantRejectsOversizedEncoding(t *testing.T) {
 	oversized := strings.Repeat("a", registryauth.MaximumEncodedGrantSize+1)
 	if _, err := registryauth.VerifyGrant(nil, oversized); err == nil {
 		t.Fatal("oversized registry grant was accepted")
+	}
+}
+
+func TestGrantStatusRequestRequiresUUIDv7AndBoundedTokenIdentifier(t *testing.T) {
+	valid := registryauth.GrantStatusRequest{ActingOrganizationID: ownerA, TokenID: fixtureIdentifier}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid status request was rejected: %v", err)
+	}
+	for name, request := range map[string]registryauth.GrantStatusRequest{
+		"missing organization": {TokenID: fixtureIdentifier},
+		"invalid organization": {ActingOrganizationID: "not-an-organization", TokenID: fixtureIdentifier},
+		"missing identifier":   {ActingOrganizationID: ownerA},
+		"oversized identifier": {ActingOrganizationID: ownerA, TokenID: strings.Repeat("x", registryauth.MaximumGrantTokenIDSize+1)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := request.Validate(); err == nil {
+				t.Fatal("invalid status request was accepted")
+			}
+		})
 	}
 }
 

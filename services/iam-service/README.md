@@ -9,9 +9,10 @@ IAM serves TLS 1.3 with mandatory client-certificate verification. The Gateway w
 ```text
 POST /internal/v1/principal/current
 POST /internal/v1/registry-read/decision
+POST /internal/v1/registry-read/grant-status
 ```
 
-Knowing the address is insufficient. A caller must present a trusted client certificate whose SPIFFE identity exactly matches `IAM_ALLOWED_WORKLOAD_SPIFFE`, and every request must carry a bounded delegation signed by that workload certificate.
+Knowing the address is insufficient. Gateway routes require a trusted client certificate whose SPIFFE identity exactly matches `IAM_ALLOWED_WORKLOAD_SPIFFE`, plus a bounded delegation signed by that workload certificate. The grant-status route is a separate Core-only workload endpoint and accepts only the exact `IAM_CORE_WORKLOAD_SPIFFE` identity.
 
 ## Current Principal
 
@@ -51,6 +52,10 @@ For allow decisions IAM signs a maximum-30-second delegation for `platform-core-
 - non-transitive semantics.
 
 `libs/registryauth` is the Core-side verification contract. Verification requires a current policy revision and an online revocation check and fails closed for malformed, oversized, wrong-audience, wrong-presenter, expired, revoked, stale-policy or contradictory-scope grants.
+
+## Registry grant status
+
+`POST /internal/v1/registry-read/grant-status` accepts only the configured Core workload over verified mTLS. The bounded request contains the acting Organization ID and grant `jti`; it never contains the raw grant. IAM returns the current active Registry policy revision and whether the identifier has an unexpired revocation record. The status lookup uses the same read-only IAM runtime connection and acting-Organization RLS context, and any database or policy failure makes Core authorization unavailable.
 
 ## Production authorization store
 
@@ -113,6 +118,7 @@ Decision telemetry contains safe identifiers, action, reason, policy revision, s
 - `IAM_TLS_KEY`
 - `IAM_CLIENT_CA`
 - `IAM_ALLOWED_WORKLOAD_SPIFFE`
+- `IAM_CORE_WORKLOAD_SPIFFE`
 - `IAM_AUDIENCE`
 - `IAM_REGISTRY_GRANT_AUDIENCE`
 - `IAM_POLICY_REVISION`

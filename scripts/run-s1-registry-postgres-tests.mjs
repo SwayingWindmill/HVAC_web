@@ -4,13 +4,13 @@ import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer as createTCPServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/s1-registry/compose.yaml');
 const projectName = `hvac-s1-registry-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
-const reportPath = resolve(root, 'out/s1-ticket-01/postgres-baseline.json');
+const reportPath = resolve(root, process.env.S1_REGISTRY_REPORT_PATH ?? 'out/s1-ticket-01/postgres-baseline.json');
 const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
 const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
 const goCacheDir = process.env.GOCACHE || join(tmpdir(), 'hvac-go-build-cache');
@@ -121,6 +121,22 @@ async function runIAMGoTests() {
   if (signal || code !== 0) throw new Error(`S1 IAM PostgreSQL tests failed: ${signal ?? code}`);
 }
 
+async function runCoreGoTests() {
+  await mkdir(goCacheDir, { recursive: true });
+  const child = spawn(goBinary, ['test', '-count=1', '-v', './services/platform-core-service/internal/core'], {
+    cwd: root,
+    stdio: 'inherit',
+    shell: false,
+    env: {
+      ...process.env,
+      GOCACHE: goCacheDir,
+      S1_CORE_DATABASE_URL: `postgres://s1_core_service:s1-core-service-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+    },
+  });
+  const [code, signal] = await once(child, 'exit');
+  if (signal || code !== 0) throw new Error(`S1 Core PostgreSQL tests failed: ${signal ?? code}`);
+}
+
 const report = {
   schemaVersion: 1,
   status: 'failed',
@@ -136,15 +152,18 @@ try {
   const roleState = psql(`
     SELECT string_agg(rolname || ':' || rolcanlogin::text || ':' || rolbypassrls::text, ',' ORDER BY rolname)
     FROM pg_roles
-    WHERE rolname IN ('s1_iam_runtime','s1_iam_reconciler','s1_core_runtime','s1_iam_migrator','s1_core_migrator','s1_migration_operator')
+    WHERE rolname IN ('s1_iam_runtime','s1_iam_reconciler','s1_core_runtime','s1_core_service','s1_iam_migrator','s1_core_migrator','s1_migration_operator')
   `);
-  for (const role of ['s1_iam_runtime', 's1_iam_reconciler', 's1_iam_migrator']) {
+  for (const role of ['s1_iam_runtime', 's1_iam_reconciler', 's1_iam_migrator', 's1_core_service']) {
     if (!roleState.includes(`${role}:true:false`)) throw new Error(`${role} must be LOGIN and NOBYPASSRLS`);
   }
   for (const role of ['s1_core_runtime', 's1_core_migrator', 's1_migration_operator']) {
     if (!roleState.includes(`${role}:false:false`)) throw new Error(`${role} must remain NOLOGIN and NOBYPASSRLS`);
   }
+  const coreServiceMembership = psql(`SELECT pg_has_role('s1_core_service', 's1_core_runtime', 'MEMBER')`);
+  expectEqual(coreServiceMembership, 't', 'Core service runtime membership');
   report.assertions.runtimeRoles = roleState;
+  report.assertions.coreServiceMembership = coreServiceMembership;
 
   const ownerA = scopedCounts('{018f1e00-0000-7000-8000-000000000001}', '{}');
   const delegated = scopedCounts('{}', '{018f1e00-1000-7000-8000-000000000001}');
@@ -179,6 +198,8 @@ try {
 
   await runIAMGoTests();
   report.assertions.iamAuthorizationStore = 'passed';
+  await runCoreGoTests();
+  report.assertions.coreRegistryStore = 'passed';
 
   const invalidTimezone = psql(`
     INSERT INTO core_registry.sites (id, organization_id, code, display_name, timezone, status, revision, created_at, updated_at)
@@ -227,13 +248,13 @@ try {
 
   report.status = 'passed';
   report.finishedAt = new Date().toISOString();
-  await mkdir(resolve(root, 'out/s1-ticket-01'), { recursive: true });
+  await mkdir(dirname(reportPath), { recursive: true });
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   console.log(`S1 Registry PostgreSQL baseline passed: ${reportPath}`);
 } catch (error) {
   report.error = error instanceof Error ? error.message : String(error);
   report.finishedAt = new Date().toISOString();
-  await mkdir(resolve(root, 'out/s1-ticket-01'), { recursive: true });
+  await mkdir(dirname(reportPath), { recursive: true });
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   throw error;
 } finally {
