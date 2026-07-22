@@ -117,6 +117,8 @@ const allowedOwnershipNames = new Set([
   'audit-session-record',
   'gateway-route-audit',
   'iam-registry-read-decision',
+  'iam-onboarding-reconciliation',
+  'iam-reconciliation-quarantine',
   's1-legacy-resource-map',
   's1-migration-provenance',
   's1-migration-quarantine',

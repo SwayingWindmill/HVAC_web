@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const readJSON = async (path) => JSON.parse(await readFile(resolve(root, path), 'utf8'));
-const [model, openapi, routeRegistry, dataRegistry, ownershipLock, ddl, fixtures, sqlcQueries, sqlcGenerated] = await Promise.all([
+const [model, openapi, routeRegistry, dataRegistry, ownershipLock, ddl, fixtures, iamRuntimeResolver, iamReconciliation, sqlcQueries, sqlcGenerated] = await Promise.all([
   readJSON('contracts/registry/s1-registry-model.v1.json'),
   readJSON('contracts/http/platform-gateway.openapi.yaml'),
   readJSON('contracts/ownership/route-ownership.v1.json'),
@@ -12,6 +12,8 @@ const [model, openapi, routeRegistry, dataRegistry, ownershipLock, ddl, fixtures
   readJSON('contracts/ownership/ownership.v1.lock.json'),
   readFile(resolve(root, 'infra/s1-registry/postgres/init/001-s1-registry-baseline.sql'), 'utf8'),
   readFile(resolve(root, 'infra/s1-registry/postgres/init/002-s1-registry-fixtures.sql'), 'utf8'),
+  readFile(resolve(root, 'infra/s1-registry/postgres/init/003-iam-runtime-identity-resolution.sql'), 'utf8'),
+  readFile(resolve(root, 'infra/s1-registry/postgres/init/004-iam-reconciliation.sql'), 'utf8'),
   readFile(resolve(root, 'pocs/s1-sqlc/queries.sql'), 'utf8'),
   readFile(resolve(root, 'pocs/s1-sqlc/generated/queries.sql.go'), 'utf8'),
 ]);
@@ -84,10 +86,28 @@ assert(verify(cursor, 'scope-a'), 'valid cursor was rejected');
 assert(!verify(`${payload}.${signature.slice(0, -1)}A`, 'scope-a'), 'tampered cursor was accepted');
 assert(!verify(cursor, 'scope-b'), 'cursor was reusable across authorization Scope');
 
-for (const role of ['s1_iam_migrator', 's1_iam_runtime', 's1_core_migrator', 's1_core_runtime', 's1_migration_operator']) {
-  const bootstrap = await readFile(resolve(root, 'infra/s1-registry/postgres/init/000-bootstrap-identities.sql'), 'utf8');
+const bootstrap = await readFile(resolve(root, 'infra/s1-registry/postgres/init/000-bootstrap-identities.sql'), 'utf8');
+for (const role of ['s1_iam_migrator', 's1_iam_runtime', 's1_iam_reconciler']) {
+  assert(bootstrap.includes(`CREATE ROLE ${role} LOGIN`) && bootstrap.includes('NOBYPASSRLS'), `${role} is not a login-capable, RLS-bound IAM identity`);
+}
+for (const role of ['s1_core_migrator', 's1_core_runtime', 's1_migration_operator']) {
   assert(bootstrap.includes(`CREATE ROLE ${role} NOLOGIN`) && bootstrap.includes('NOBYPASSRLS'), `${role} is not locked down`);
 }
+assert(iamRuntimeResolver.includes('SECURITY DEFINER'), 'IAM identity resolver is not security definer');
+assert(iamRuntimeResolver.includes('SET search_path = pg_catalog, iam'), 'IAM identity resolver search_path is unsafe');
+assert(iamRuntimeResolver.includes('REVOKE ALL ON FUNCTION iam.resolve_principal_identity(text, text) FROM PUBLIC'), 'IAM identity resolver remains executable by PUBLIC');
+assert(iamRuntimeResolver.includes('GRANT EXECUTE ON FUNCTION iam.resolve_principal_identity(text, text) TO s1_iam_runtime'), 'IAM runtime cannot execute the exact identity resolver');
+assert(iamRuntimeResolver.includes('policies_one_active_key_uidx'), 'active IAM policy uniqueness is not enforced');
+for (const table of ['reconciliation_state', 'reconciliation_events', 'reconciliation_quarantine']) {
+  assert(iamReconciliation.includes(`CREATE TABLE IF NOT EXISTS iam.${table}`), `${table} DDL is missing`);
+  assert(iamReconciliation.includes(`ALTER TABLE iam.${table} ENABLE ROW LEVEL SECURITY`), `${table} RLS is missing`);
+  assert(iamReconciliation.includes(`ALTER TABLE iam.${table} FORCE ROW LEVEL SECURITY`), `${table} forced RLS is missing`);
+}
+assert(iamReconciliation.includes('TO s1_iam_reconciler'), 'IAM reconciliation grants are missing');
+assert(iamReconciliation.includes('current_source_system text') && iamReconciliation.includes('current_source_key text'), 'IAM reconciliation quarantine does not retain the conflicting source');
+assert(iamReconciliation.includes('GRANT UPDATE (display_name, email, status, revision, updated_at)'), 'IAM reconciler mutable Principal update grant is missing');
+assert(!iamReconciliation.includes('GRANT SELECT, INSERT, UPDATE ON iam.principals'), 'IAM reconciler can update immutable Principal identity columns');
+assert(iamReconciliation.includes("'STALE_SOURCE_VERSION'") && iamReconciliation.includes("'SOURCE_VERSION_CONFLICT'") && iamReconciliation.includes("'IMMUTABLE_IDENTITY_CONFLICT'"), 'IAM reconciliation quarantine reasons are incomplete');
 for (const table of ['organizations', 'sites', 'equipment', 'devices', 'device_bindings', 'external_bindings', 'legacy_resource_maps', 'migration_provenance', 'migration_quarantine']) {
   assert(ddl.includes(`CREATE TABLE IF NOT EXISTS core_registry.${table}`), `${table} DDL is missing`);
   assert(ddl.includes(`ALTER TABLE core_registry.${table} ENABLE ROW LEVEL SECURITY`), `${table} RLS is missing`);

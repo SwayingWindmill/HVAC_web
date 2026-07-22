@@ -19,7 +19,7 @@
     "GET /api/v1/sites/{siteId}/devices": { "revision": 1, "owner": "legacy-hvac-backend" },
     "GET /api/v1/devices/{deviceId}": { "revision": 1, "owner": "legacy-hvac-backend" }
   },
-  "dataRegistryRevision": 2,
+  "dataRegistryRevision": 3,
   "resources": {
     "schema:gateway": { "revision": 1, "writer": "platform-gateway" },
     "schema:audit_ledger": { "revision": 1, "writer": "audit-ledger-service" },
@@ -31,6 +31,8 @@
     "projection:audit-session-record": { "revision": 1, "writer": "audit-ledger-service" },
     "projection:gateway-route-audit": { "revision": 1, "writer": "platform-gateway" },
     "projection:iam-registry-read-decision": { "revision": 1, "writer": "iam-service" },
+    "projection:iam-onboarding-reconciliation": { "revision": 1, "writer": "iam-service" },
+    "projection:iam-reconciliation-quarantine": { "revision": 1, "writer": "iam-service" },
     "migration-dataset:s1-legacy-resource-map": { "revision": 1, "writer": "platform-core-service" },
     "migration-dataset:s1-migration-provenance": { "revision": 1, "writer": "platform-core-service" },
     "migration-dataset:s1-migration-quarantine": { "revision": 1, "writer": "platform-core-service" }

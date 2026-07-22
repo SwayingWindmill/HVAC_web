@@ -98,10 +98,12 @@ func TestOIDCRejectedIdentityPaths(t *testing.T) {
 		{"invalid-audience", "OIDC_AUDIENCE_INVALID"},
 		{"invalid-token-type", "OIDC_TOKEN_TYPE_INVALID"},
 		{"invalid-signature", "OIDC_SIGNATURE_INVALID"},
+		{"unknown-signing-key", "OIDC_SIGNATURE_KEY_UNKNOWN"},
 		{"nonce-mismatch", "OIDC_NONCE_INVALID"},
 		{"expired", "OIDC_TOKEN_EXPIRED"},
 		{"not-before", "OIDC_TOKEN_NOT_ACTIVE"},
 		{"pkce-mismatch", "OIDC_PKCE_VALIDATION_FAILED"},
+		{"disabled-user", "OIDC_CODE_EXCHANGE_FAILED"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.hint, func(t *testing.T) {
@@ -112,6 +114,10 @@ func TestOIDCRejectedIdentityPaths(t *testing.T) {
 			}
 			defer response.Body.Close()
 			assertProblemCode(t, response, http.StatusUnauthorized, testCase.code)
+			gatewayURL, _ := url.Parse(harness.gatewayURL)
+			if cookies := client.Jar.Cookies(gatewayURL); len(cookies) != 0 {
+				t.Fatalf("rejected identity created browser Session cookies: %#v", cookies)
+			}
 		})
 	}
 
@@ -120,6 +126,34 @@ func TestOIDCRejectedIdentityPaths(t *testing.T) {
 	if principal.Principal.Subject != "fixture-user" {
 		t.Fatalf("JWKS rotation login failed: %#v", principal)
 	}
+}
+
+func TestOIDCOutagePreservesCommittedSessionAndBlocksNewLogin(t *testing.T) {
+	harness := newAuthHarness(t)
+	committedClient := harness.browserClient(t)
+	principal, _ := loginAndReadPrincipal(t, committedClient, harness.gatewayURL, "")
+	if principal.Session.ID == "" {
+		t.Fatal("login did not commit a BFF Session before the outage")
+	}
+
+	harness.oidcServer.Close()
+
+	current, err := committedClient.Get(harness.gatewayURL + platformapi.GetCurrentPrincipalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer current.Body.Close()
+	if current.StatusCode != http.StatusOK {
+		t.Fatalf("committed Session depended on Logto availability: status=%d", current.StatusCode)
+	}
+
+	newClient := harness.browserClient(t)
+	login, err := newClient.Get(harness.gatewayURL + platformapi.BeginLoginPath + "?returnTo=%2Fapi%2Fv1%2Fprincipal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer login.Body.Close()
+	assertProblemCode(t, login, http.StatusServiceUnavailable, "OIDC_PROVIDER_UNAVAILABLE")
 }
 
 func TestAdministrativeSessionRevocation(t *testing.T) {

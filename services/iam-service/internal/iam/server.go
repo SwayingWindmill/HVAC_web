@@ -1,6 +1,9 @@
 package iam
 
 import (
+	"crypto"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -10,9 +13,15 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
-const CurrentPrincipalPath = "/internal/v1/principal/current"
+const (
+	CurrentPrincipalPath       = "/internal/v1/principal/current"
+	RegistryReadDecisionPath   = "/internal/v1/registry-read/decision"
+	registryAuthorizeAction    = "registry:authorize"
+	maximumDecisionRequestSize = 64 << 10
+)
 
 type Config struct {
 	AllowedWorkloadSPIFFE string
@@ -20,6 +29,13 @@ type Config struct {
 	Logger                *slog.Logger
 	Observability         *observability.Runtime
 	Now                   func() time.Time
+	AuthorizationStore    AuthorizationStore
+	RegistryGrantSigner   crypto.Signer
+	RegistryGrantIssuer   string
+	RegistryGrantAudience string
+	RegistryGrantLifetime time.Duration
+	NewRegistryGrantID    func() string
+	RegistryAuditSink     RegistryDecisionAuditSink
 }
 
 type handler struct {
@@ -28,6 +44,13 @@ type handler struct {
 	logger                *slog.Logger
 	observability         *observability.Runtime
 	now                   func() time.Time
+	authorizationStore    AuthorizationStore
+	registryGrantSigner   crypto.Signer
+	registryGrantIssuer   string
+	registryGrantAudience string
+	registryGrantLifetime time.Duration
+	newRegistryGrantID    func() string
+	registryAuditSink     RegistryDecisionAuditSink
 }
 
 func NewHandler(config Config) http.Handler {
@@ -43,12 +66,43 @@ func NewHandler(config Config) http.Handler {
 	if telemetry == nil {
 		telemetry = observability.NewRuntime(observability.RuntimeConfig{Service: "iam-service"})
 	}
+	store := config.AuthorizationStore
+	if store == nil {
+		store = NewDenyAllAuthorizationStore("policy-unconfigured")
+	}
+	grantIssuer := config.RegistryGrantIssuer
+	if grantIssuer == "" {
+		grantIssuer = "spiffe://hvac.local/iam-service"
+	}
+	grantAudience := config.RegistryGrantAudience
+	if grantAudience == "" {
+		grantAudience = "platform-core-service"
+	}
+	grantLifetime := config.RegistryGrantLifetime
+	if grantLifetime <= 0 || grantLifetime > registryauth.MaximumGrantLifetime {
+		grantLifetime = registryauth.MaximumGrantLifetime
+	}
+	newGrantID := config.NewRegistryGrantID
+	if newGrantID == nil {
+		newGrantID = randomIdentifier
+	}
+	auditSink := config.RegistryAuditSink
+	if auditSink == nil {
+		auditSink = newLoggerRegistryDecisionAuditSink(logger)
+	}
 	return &handler{
 		allowedWorkloadSPIFFE: config.AllowedWorkloadSPIFFE,
 		audience:              config.Audience,
 		logger:                logger,
 		observability:         telemetry,
 		now:                   now,
+		authorizationStore:    store,
+		registryGrantSigner:   config.RegistryGrantSigner,
+		registryGrantIssuer:   grantIssuer,
+		registryGrantAudience: grantAudience,
+		registryGrantLifetime: grantLifetime,
+		newRegistryGrantID:    newGrantID,
+		registryAuditSink:     auditSink,
 	}
 }
 
@@ -81,7 +135,8 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		)
 	}()
 
-	if request.URL.Path != CurrentPrincipalPath {
+	expectedAction, knownRoute := expectedInboundAction(request.URL.Path)
+	if !knownRoute {
 		status = http.StatusNotFound
 		writeProblem(writer, status, "IAM_ROUTE_NOT_FOUND", "The requested IAM route does not exist.")
 		return
@@ -92,12 +147,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		writeProblem(writer, status, "IAM_METHOD_NOT_ALLOWED", "This IAM route only supports POST.")
 		return
 	}
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin"} {
-		if request.Header.Get(header) != "" {
-			status = http.StatusBadRequest
-			writeProblem(writer, status, "IAM_FORGED_IDENTITY_HEADER", "Caller-supplied identity headers are not accepted.")
-			return
-		}
+	if hasForgedIdentityHeader(request.Header) {
+		status = http.StatusBadRequest
+		writeProblem(writer, status, "IAM_FORGED_IDENTITY_HEADER", "Caller-supplied identity or business-scope headers are not accepted.")
+		return
 	}
 
 	peerCertificate, spiffeID, ok := peerIdentity(request)
@@ -114,12 +167,21 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	scope := "session:" + claims.SessionID
-	if err := identitycontext.ValidateDelegation(claims, h.now(), spiffeID, h.audience, "principal:read", scope); err != nil {
+	if err := identitycontext.ValidateDelegation(claims, h.now(), spiffeID, h.audience, expectedAction, scope); err != nil {
 		status = http.StatusForbidden
 		writeProblem(writer, status, "IAM_DELEGATION_REJECTED", "The delegated identity context is not authorized for this operation.")
 		return
 	}
 
+	switch request.URL.Path {
+	case CurrentPrincipalPath:
+		status = h.handleCurrentPrincipal(writer, claims, spiffeID)
+	case RegistryReadDecisionPath:
+		status = h.handleRegistryReadDecision(writer, request, claims, spiffeID)
+	}
+}
+
+func (h *handler) handleCurrentPrincipal(writer http.ResponseWriter, claims identitycontext.DelegationClaims, spiffeID string) int {
 	response := identitycontext.InternalPrincipalResponse{
 		Principal: identitycontext.UserPrincipal{
 			Subject:     claims.Subject,
@@ -146,9 +208,137 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			DelegationExpiresAt:  time.Unix(claims.ExpiresAt, 0).UTC().Format(time.RFC3339),
 		},
 	}
-	writer.Header().Set("Content-Type", "application/json")
-	writer.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(writer).Encode(response)
+	writeJSON(writer, http.StatusOK, response)
+	return http.StatusOK
+}
+
+func (h *handler) handleRegistryReadDecision(writer http.ResponseWriter, request *http.Request, inbound identitycontext.DelegationClaims, presenter string) int {
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
+	var decisionRequest registryauth.DecisionRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decisionRequest); err != nil {
+		writeProblem(writer, http.StatusBadRequest, "IAM_REGISTRY_DECISION_REQUEST_INVALID", "The Registry authorization request is invalid.")
+		return http.StatusBadRequest
+	}
+	if err := decisionRequest.Validate(); err != nil {
+		writeProblem(writer, http.StatusBadRequest, "IAM_REGISTRY_DECISION_REQUEST_INVALID", "The Registry authorization request is invalid.")
+		return http.StatusBadRequest
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		writeProblem(writer, http.StatusBadRequest, "IAM_REGISTRY_DECISION_REQUEST_INVALID", "The Registry authorization request must contain one JSON object.")
+		return http.StatusBadRequest
+	}
+
+	now := h.now()
+	decision, err := evaluateRegistryAuthorization(request.Context(), h.authorizationStore, now, inbound.SubjectIssuer, inbound.Subject, decisionRequest)
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "IAM_AUTHORIZATION_UNAVAILABLE", "The IAM authorization facts are unavailable.")
+		return http.StatusServiceUnavailable
+	}
+	response := registryauth.DecisionResponse{Decision: decision}
+	deliveryCode := "DECISION_DENIED"
+	if decision.Allowed {
+		if h.registryGrantSigner == nil {
+			deliveryCode = "GRANT_SIGNER_UNAVAILABLE"
+			if !h.recordRegistryDecision(request, decision, false, deliveryCode) {
+				writeProblem(writer, http.StatusServiceUnavailable, "IAM_AUTHORIZATION_AUDIT_UNAVAILABLE", "The Registry authorization evidence could not be recorded.")
+				return http.StatusServiceUnavailable
+			}
+			writeProblem(writer, http.StatusServiceUnavailable, "IAM_REGISTRY_GRANT_SIGNER_UNAVAILABLE", "The Registry delegation signer is unavailable.")
+			return http.StatusServiceUnavailable
+		}
+		grantID := h.newRegistryGrantID()
+		if grantID == "" {
+			deliveryCode = "GRANT_ID_UNAVAILABLE"
+			if !h.recordRegistryDecision(request, decision, false, deliveryCode) {
+				writeProblem(writer, http.StatusServiceUnavailable, "IAM_AUTHORIZATION_AUDIT_UNAVAILABLE", "The Registry authorization evidence could not be recorded.")
+				return http.StatusServiceUnavailable
+			}
+			writeProblem(writer, http.StatusServiceUnavailable, "IAM_REGISTRY_GRANT_ID_UNAVAILABLE", "The Registry delegation identifier is unavailable.")
+			return http.StatusServiceUnavailable
+		}
+		grant, err := registryauth.SignGrant(h.registryGrantSigner, registryauth.GrantClaims{
+			Issuer:                 h.registryGrantIssuer,
+			Presenter:              presenter,
+			Audience:               h.registryGrantAudience,
+			PrincipalID:            decision.PrincipalID,
+			SubjectIssuer:          decision.SubjectIssuer,
+			Subject:                decision.Subject,
+			ActingOrganizationID:   decision.ActingOrganizationID,
+			AllowedOrganizationIDs: append([]string(nil), decision.AllowedOrganizationIDs...),
+			AllowedSiteIDs:         append([]string(nil), decision.AllowedSiteIDs...),
+			DeniedOrganizationIDs:  append([]string(nil), decision.DeniedOrganizationIDs...),
+			DeniedSiteIDs:          append([]string(nil), decision.DeniedSiteIDs...),
+			Actions:                append([]registryauth.Action(nil), decision.Actions...),
+			PolicyRevision:         decision.PolicyRevision,
+			DecisionReason:         decision.ReasonCode,
+			SessionID:              inbound.SessionID,
+			ParentTokenID:          inbound.TokenID,
+			IssuedAt:               now.Unix(),
+			ExpiresAt:              now.Add(h.registryGrantLifetime).Unix(),
+			TokenID:                grantID,
+			Transitive:             false,
+		})
+		if err != nil {
+			deliveryCode = "GRANT_SIGNING_FAILED"
+			if !h.recordRegistryDecision(request, decision, false, deliveryCode) {
+				writeProblem(writer, http.StatusServiceUnavailable, "IAM_AUTHORIZATION_AUDIT_UNAVAILABLE", "The Registry authorization evidence could not be recorded.")
+				return http.StatusServiceUnavailable
+			}
+			writeProblem(writer, http.StatusServiceUnavailable, "IAM_REGISTRY_GRANT_SIGNING_FAILED", "The Registry delegation could not be signed.")
+			return http.StatusServiceUnavailable
+		}
+		response.DelegationGrant = grant
+		deliveryCode = "GRANT_SIGNED"
+	}
+	if !h.recordRegistryDecision(request, decision, response.DelegationGrant != "", deliveryCode) {
+		writeProblem(writer, http.StatusServiceUnavailable, "IAM_AUTHORIZATION_AUDIT_UNAVAILABLE", "The Registry authorization evidence could not be recorded.")
+		return http.StatusServiceUnavailable
+	}
+	_ = h.observability.Metrics.AddCounter(
+		"s1_iam_registry_authorization_decisions_total",
+		"IAM Registry-read authorization decisions.",
+		map[string]string{"result": decisionResult(decision.Allowed), "action": string(decisionRequest.Action), "reason": string(decision.ReasonCode), "delivery": deliveryCode},
+		1,
+	)
+	writeJSON(writer, http.StatusOK, response)
+	return http.StatusOK
+}
+
+func (h *handler) recordRegistryDecision(request *http.Request, decision registryauth.Decision, grantSigned bool, deliveryCode string) bool {
+	action := registryauth.Action("")
+	if len(decision.Actions) == 1 {
+		action = decision.Actions[0]
+	}
+	err := h.registryAuditSink.RecordRegistryDecision(request.Context(), RegistryDecisionAudit{
+		PrincipalID:            decision.PrincipalID,
+		ActingOrganizationID:   decision.ActingOrganizationID,
+		Action:                 action,
+		Allowed:                decision.Allowed,
+		AllowedOrganizationIDs: append([]string(nil), decision.AllowedOrganizationIDs...),
+		AllowedSiteIDs:         append([]string(nil), decision.AllowedSiteIDs...),
+		DeniedOrganizationIDs:  append([]string(nil), decision.DeniedOrganizationIDs...),
+		DeniedSiteIDs:          append([]string(nil), decision.DeniedSiteIDs...),
+		PolicyRevision:         decision.PolicyRevision,
+		ReasonCode:             decision.ReasonCode,
+		GrantSigned:            grantSigned,
+		DeliveryCode:           deliveryCode,
+		TraceID:                observability.TraceID(request.Context()),
+		OccurredAt:             formatInstant(h.now()),
+	})
+	return err == nil
+}
+
+func expectedInboundAction(path string) (string, bool) {
+	switch path {
+	case CurrentPrincipalPath:
+		return "principal:read", true
+	case RegistryReadDecisionPath:
+		return registryAuthorizeAction, true
+	default:
+		return "", false
+	}
 }
 
 func peerIdentity(request *http.Request) (*x509CertificateView, string, bool) {
@@ -167,10 +357,53 @@ type x509CertificateView struct {
 }
 
 func safePath(path string) string {
-	if path == CurrentPrincipalPath {
+	switch path {
+	case CurrentPrincipalPath, RegistryReadDecisionPath:
 		return path
+	default:
+		return "unmatched"
 	}
-	return "unmatched"
+}
+
+func hasForgedIdentityHeader(header http.Header) bool {
+	for name, values := range header {
+		nonEmpty := false
+		for _, value := range values {
+			if value != "" {
+				nonEmpty = true
+				break
+			}
+		}
+		if !nonEmpty {
+			continue
+		}
+		lowerName := strings.ToLower(name)
+		switch lowerName {
+		case "x-principal", "x-roles", "x-role", "x-admin", "x-scope", "x-organization-id", "x-site-id":
+			return true
+		}
+		if strings.HasPrefix(lowerName, "x-principal-") || strings.HasPrefix(lowerName, "x-organization-") || strings.HasPrefix(lowerName, "x-site-") {
+			return true
+		}
+	}
+	return false
+}
+
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return io.ErrUnexpectedEOF
+		}
+		return err
+	}
+	return nil
+}
+
+func writeJSON(writer http.ResponseWriter, status int, value any) {
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(status)
+	_ = json.NewEncoder(writer).Encode(value)
 }
 
 func writeProblem(writer http.ResponseWriter, status int, code, detail string) {
@@ -184,4 +417,19 @@ func writeProblem(writer http.ResponseWriter, status int, code, detail string) {
 		"code":      code,
 		"retryable": false,
 	})
+}
+
+func decisionResult(allowed bool) string {
+	if allowed {
+		return "allow"
+	}
+	return "deny"
+}
+
+func randomIdentifier() string {
+	buffer := make([]byte, 16)
+	if _, err := rand.Read(buffer); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(buffer)
 }

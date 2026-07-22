@@ -202,6 +202,10 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 		writeOAuthError(writer, http.StatusBadRequest, "invalid_grant", "PKCE verification failed")
 		return
 	}
+	if code.LoginHint == "disabled-user" {
+		writeOAuthError(writer, http.StatusBadRequest, "invalid_grant", "user is disabled")
+		return
+	}
 
 	now := provider.now()
 	issuer := provider.issuer
@@ -262,7 +266,7 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 		ActingOrganizationID: organizationID,
 		TokenUse:             tokenUse,
 	}
-	idToken, err := provider.signJWT(claims, code.LoginHint == "invalid-signature")
+	idToken, err := provider.signJWT(claims, code.LoginHint == "invalid-signature", code.LoginHint == "unknown-signing-key")
 	if err != nil {
 		writeOAuthError(writer, http.StatusInternalServerError, "server_error", "fixture signing failed")
 		return
@@ -276,12 +280,15 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 	})
 }
 
-func (provider *Provider) signJWT(claims tokenClaims, rogue bool) (string, error) {
+func (provider *Provider) signJWT(claims tokenClaims, rogue, unknownKeyID bool) (string, error) {
 	provider.mu.Lock()
 	key := provider.activeKey
 	kid := provider.activeKid
 	if rogue {
 		key = provider.rogueKey
+	}
+	if unknownKeyID {
+		kid = "fixture-unknown-key"
 	}
 	provider.mu.Unlock()
 	header, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": kid, "typ": "JWT"})

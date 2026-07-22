@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,6 +29,21 @@ func main() {
 		logger.Error("iam_tls_identity_load_failed", "error", err)
 		os.Exit(1)
 	}
+	iamCertificate, err := x509.ParseCertificate(certificate.Certificate[0])
+	if err != nil {
+		logger.Error("iam_tls_certificate_parse_failed", "error_code", "IAM_TLS_CERTIFICATE_PARSE_FAILED")
+		os.Exit(1)
+	}
+	iamSPIFFEID, err := certificateSPIFFEID(iamCertificate)
+	if err != nil {
+		logger.Error("iam_tls_spiffe_identity_invalid", "error_code", "IAM_TLS_SPIFFE_IDENTITY_INVALID")
+		os.Exit(1)
+	}
+	registryGrantSigner, ok := certificate.PrivateKey.(crypto.Signer)
+	if !ok {
+		logger.Error("iam_registry_grant_signer_invalid", "error_code", "IAM_REGISTRY_GRANT_SIGNER_INVALID")
+		os.Exit(1)
+	}
 	caPEM, err := os.ReadFile(requiredEnv("IAM_CLIENT_CA"))
 	if err != nil {
 		logger.Error("iam_client_ca_load_failed", "error", err)
@@ -37,6 +54,34 @@ func main() {
 		logger.Error("iam_client_ca_invalid")
 		os.Exit(1)
 	}
+
+	policyRevision := envOr("IAM_POLICY_REVISION", "policy-unconfigured")
+	authorizationStore := iam.NewDenyAllAuthorizationStore(policyRevision)
+	databaseURL := strings.TrimSpace(os.Getenv("IAM_DATABASE_URL"))
+	fixtureEnabled := envEnabled("IAM_S1_AUTHORIZATION_FIXTURE")
+	if databaseURL != "" && fixtureEnabled {
+		logger.Error("iam_authorization_store_configuration_conflict", "error_code", "IAM_AUTHORIZATION_STORE_CONFIGURATION_CONFLICT")
+		os.Exit(1)
+	}
+	if databaseURL != "" {
+		openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
+		postgresStore, err := iam.OpenPostgresAuthorizationStore(openContext, databaseURL)
+		cancelOpen()
+		if err != nil {
+			logger.Error("iam_authorization_store_open_failed", "error_code", "IAM_AUTHORIZATION_STORE_OPEN_FAILED")
+			os.Exit(1)
+		}
+		defer postgresStore.Close()
+		authorizationStore = postgresStore
+		policyRevision = "database-managed"
+		logger.Info("iam_postgres_authorization_store_enabled")
+	} else if fixtureEnabled {
+		subjectIssuer := requiredEnv("IAM_EXTERNAL_SUBJECT_ISSUER")
+		authorizationStore = iam.NewS1FixtureAuthorizationStore(subjectIssuer)
+		policyRevision = iam.S1FixturePolicyRevision
+		logger.Warn("iam_s1_authorization_fixture_enabled", "policy_revision", policyRevision)
+	}
+
 	server := &http.Server{
 		Addr: address,
 		Handler: iam.NewHandler(iam.Config{
@@ -44,6 +89,10 @@ func main() {
 			Audience:              envOr("IAM_AUDIENCE", "iam-service"),
 			Logger:                logger,
 			Observability:         telemetry,
+			AuthorizationStore:    authorizationStore,
+			RegistryGrantSigner:   registryGrantSigner,
+			RegistryGrantIssuer:   iamSPIFFEID,
+			RegistryGrantAudience: envOr("IAM_REGISTRY_GRANT_AUDIENCE", "platform-core-service"),
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,
@@ -79,12 +128,32 @@ func main() {
 	}()
 
 	telemetry.MarkReady()
-	logger.Info("iam_started", "service", "iam-service", "address", address)
+	logger.Info("iam_started", "service", "iam-service", "address", address, "policy_revision", policyRevision)
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("iam_stopped_unexpectedly", "error", err)
 		os.Exit(1)
 	}
 	logger.Info("iam_stopped", "service", "iam-service")
+}
+
+func certificateSPIFFEID(certificate *x509.Certificate) (string, error) {
+	if certificate == nil || len(certificate.URIs) != 1 || certificate.URIs[0] == nil {
+		return "", errors.New("IAM certificate must contain exactly one URI identity")
+	}
+	identity := certificate.URIs[0].String()
+	if !strings.HasPrefix(identity, "spiffe://") {
+		return "", errors.New("IAM certificate URI is not a SPIFFE identity")
+	}
+	return identity, nil
+}
+
+func envEnabled(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func envOr(name, fallback string) string {

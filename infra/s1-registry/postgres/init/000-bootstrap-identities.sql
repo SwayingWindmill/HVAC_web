@@ -3,10 +3,13 @@ BEGIN;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_iam_migrator') THEN
-    CREATE ROLE s1_iam_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+    CREATE ROLE s1_iam_migrator LOGIN PASSWORD 's1-iam-migrator-local-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_iam_runtime') THEN
-    CREATE ROLE s1_iam_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+    CREATE ROLE s1_iam_runtime LOGIN PASSWORD 's1-iam-runtime-local-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_iam_reconciler') THEN
+    CREATE ROLE s1_iam_reconciler LOGIN PASSWORD 's1-iam-reconciler-local-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_core_migrator') THEN
     CREATE ROLE s1_core_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
@@ -27,7 +30,9 @@ ALTER SCHEMA core_registry OWNER TO s1_core_migrator;
 REVOKE ALL ON SCHEMA iam FROM PUBLIC;
 REVOKE ALL ON SCHEMA core_registry FROM PUBLIC;
 
-GRANT USAGE ON SCHEMA iam TO s1_iam_runtime;
+GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_reconciler,
+  s1_core_migrator, s1_core_runtime, s1_migration_operator;
+GRANT USAGE ON SCHEMA iam TO s1_iam_runtime, s1_iam_reconciler;
 GRANT USAGE ON SCHEMA core_registry TO s1_core_runtime, s1_migration_operator;
 
 COMMIT;
