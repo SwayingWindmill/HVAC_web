@@ -53,6 +53,7 @@ type Config struct {
 	RouteManager  *ownershipregistry.Manager
 	RouteAudit    ownershipregistry.AuditSink
 	Legacy        *LegacyConfig
+	Registry      *RegistryConfig
 	Observability *observability.Runtime
 }
 
@@ -64,10 +65,12 @@ type handler struct {
 	routeManager  *ownershipregistry.Manager
 	routeAudit    ownershipregistry.AuditSink
 	legacy        *legacyController
+	registry      *registryController
 	observability *observability.Runtime
 }
 
 var _ platformapi.ServerInterface = (*handler)(nil)
+var _ platformapi.RegistryServerInterface = (*handler)(nil)
 
 // NewHandler creates the public HTTP seam owned by platform-gateway.
 func NewHandler(config Config) http.Handler {
@@ -97,6 +100,7 @@ func NewHandler(config Config) http.Handler {
 		routeManager:  config.RouteManager,
 		routeAudit:    routeAudit,
 		legacy:        newLegacyController(config.Legacy),
+		registry:      newRegistryController(config.Registry),
 		observability: telemetry,
 	}
 }
@@ -165,6 +169,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		request = resolved
+		if registryRoute, id, matches := matchPublicRegistryRoute(request.URL.Path); matches {
+			dispatchRegistryRoute(h, writer, request, registryRoute, id)
+			return
+		}
 		decision := routeDecisionFromContext(request.Context())
 		if decision.SelectedOwner == ownershipregistry.OwnerLegacy {
 			if request.URL.Path != platformapi.GetPlatformStatusPath || request.Method != http.MethodGet {
@@ -289,6 +297,16 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 	if err != nil {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "ROUTE_OWNERSHIP_INVALID", "Route ownership invalid", "The applied route ownership policy could not select one owner.", true, nil)
 		return request, false
+	}
+	if session.ID == "" {
+		if _, _, registryRoute := matchPublicRegistryRoute(request.URL.Path); registryRoute {
+			resolved, failure := h.identitySession(request)
+			if failure != nil {
+				writeIdentityFailure(writer, request, *failure)
+				return request, false
+			}
+			session = resolved
+		}
 	}
 
 	writer.Header().Set("X-Route-Policy-Revision", formatRevision(decision.RegistryRevision))
@@ -532,6 +550,9 @@ func safeLogPath(path string) string {
 	case platformapi.GetHealthPath, platformapi.GetVersionPath, platformapi.GetPlatformStatusPath, platformapi.BeginLoginPath, platformapi.CompleteLoginPath, platformapi.GetCurrentPrincipalPath, platformapi.LogoutPath:
 		return path
 	default:
+		if registryRoute, _, matches := matchPublicRegistryRoute(path); matches {
+			return registryRoute.template
+		}
 		if _, matches := matchSessionAuditPath(path); matches {
 			return platformapi.GetSessionAuditEventPathTemplate
 		}

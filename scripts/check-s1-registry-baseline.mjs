@@ -4,10 +4,14 @@ import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const readJSON = async (path) => JSON.parse(await readFile(resolve(root, path), 'utf8'));
-const [model, openapi, routeRegistry, dataRegistry, ownershipLock, ddl, fixtures, iamRuntimeResolver, iamReconciliation, coreReadService, legacyMigrationExecution, legacyMigrationSource, legacyMigrationTypes, sqlcQueries, sqlcGenerated] = await Promise.all([
+const [model, openapi, routeRegistry, phaseOne, phaseTwo, phaseThree, phaseFour, dataRegistry, ownershipLock, ddl, fixtures, iamRuntimeResolver, iamReconciliation, coreReadService, legacyMigrationExecution, legacyMigrationSource, legacyMigrationTypes, gatewayRegistrySource, gatewayServerSource, routeAuditDDL, sqlcQueries, sqlcGenerated] = await Promise.all([
   readJSON('contracts/registry/s1-registry-model.v1.json'),
   readJSON('contracts/http/platform-gateway.openapi.yaml'),
   readJSON('contracts/ownership/route-ownership.v1.json'),
+  readJSON('contracts/ownership/s1-registry-phases/01-legacy-primary-go-shadow.json'),
+  readJSON('contracts/ownership/s1-registry-phases/02-go-canary-legacy-shadow.json'),
+  readJSON('contracts/ownership/s1-registry-phases/03-go-primary-legacy-read-fallback.json'),
+  readJSON('contracts/ownership/s1-registry-phases/04-go-primary.json'),
   readJSON('contracts/ownership/data-ownership.v1.json'),
   readJSON('contracts/ownership/ownership.v1.lock.json'),
   readFile(resolve(root, 'infra/s1-registry/postgres/init/001-s1-registry-baseline.sql'), 'utf8'),
@@ -18,6 +22,9 @@ const [model, openapi, routeRegistry, dataRegistry, ownershipLock, ddl, fixtures
   readFile(resolve(root, 'infra/s1-registry/postgres/init/006-legacy-migration-execution.sql'), 'utf8'),
   readFile(resolve(root, 'services/legacy-migration-service/internal/migration/postgres.go'), 'utf8'),
   readFile(resolve(root, 'services/legacy-migration-service/internal/migration/types.go'), 'utf8'),
+  readFile(resolve(root, 'services/platform-gateway/internal/gateway/registry.go'), 'utf8'),
+  readFile(resolve(root, 'services/platform-gateway/internal/gateway/server.go'), 'utf8'),
+  readFile(resolve(root, 'infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql'), 'utf8'),
   readFile(resolve(root, 'pocs/s1-sqlc/queries.sql'), 'utf8'),
   readFile(resolve(root, 'pocs/s1-sqlc/generated/queries.sql.go'), 'utf8'),
 ]);
@@ -49,12 +56,31 @@ for (const [method, path, operationId] of expectedRoutes) {
   const modelRoute = model.http.routes.find((route) => route.method === method && route.path === path);
   assert(modelRoute?.operationId === operationId, `${method} ${path} is missing from the model lock`);
   const owner = routeRegistry.routes.find((route) => route.method === method && route.path === path);
-  assert(owner?.owner === 'legacy-hvac-backend', `${method} ${path} initial owner must remain Legacy`);
-  assert(owner?.rollout?.fallbackOwner === 'platform-core-service', `${method} ${path} Core candidate owner is missing`);
+  assert(owner?.owner === 'platform-core-service' && owner?.rollout?.mode === 'all', `${method} ${path} final owner must be Core`);
+  assert(owner?.migrationPhase === 'GO_PRIMARY' && owner?.readFallbackOwner === undefined, `${method} ${path} did not finish Core-only cutover`);
   assert(owner?.readOnlyFallback === true && owner?.shadowSideEffectPolicy === 'NONE', `${method} ${path} migration safety is incomplete`);
   assert(owner?.fallbackForbiddenResults?.includes('AUTHORIZATION_DENIED'), `${method} ${path} could fallback after denial`);
   assert(owner?.fallbackForbiddenResults?.includes('RESOURCE_NOT_FOUND'), `${method} ${path} could leak resource existence`);
-  assert(ownershipLock.routes?.[`${method} ${path}`]?.owner === 'legacy-hvac-backend', `${method} ${path} lock drifted`);
+  assert(ownershipLock.routes?.[`${method} ${path}`]?.owner === 'platform-core-service' && ownershipLock.routes?.[`${method} ${path}`]?.revision === 5, `${method} ${path} final ownership lock drifted`);
+}
+
+const phaseSequence = [phaseOne, phaseTwo, phaseThree, phaseFour];
+const phaseNames = ['LEGACY_PRIMARY_GO_SHADOW', 'GO_CANARY_LEGACY_SHADOW', 'GO_PRIMARY_LEGACY_READ_FALLBACK', 'GO_PRIMARY'];
+for (let index = 0; index < phaseSequence.length; index += 1) {
+  const phaseRegistry = phaseSequence[index];
+  for (const [, path] of expectedRoutes) {
+    const route = phaseRegistry.routes.find((candidate) => candidate.path === path);
+    assert(route?.migrationPhase === phaseNames[index], `${path} phase asset ${phaseNames[index]} drifted`);
+    assert(route?.revision === index + 2, `${path} phase route revision is not monotonic`);
+  }
+}
+assert(JSON.stringify(routeRegistry) === JSON.stringify(phaseFour), 'active route registry is not the final GO_PRIMARY phase');
+assert(gatewayServerSource.includes('platformapi.RegistryServerInterface'), 'Gateway does not implement the generated Registry server interface');
+for (const marker of ['authorizeRegistry', 'legacyRegistryScopes', 'context.WithoutCancel', 'ROUTE_SHADOW_COMPARED', 'ROUTE_FALLBACK_EXECUTED', 'registryFallbackAllowed', 'registryFallbackResultUsable', 'validRegistryInstant', 'MaxShadowConcurrent', 'isLowerUUIDv7', 'DisallowUnknownFields', 'X-Delegation-Grant']) {
+  assert(gatewayRegistrySource.includes(marker), `Gateway Registry routing marker is missing: ${marker}`);
+}
+for (const marker of ['ROUTE_SHADOW_COMPARED', 'ROUTE_FALLBACK_EXECUTED', 'primary_body_sha256', 'secondary_body_sha256', 'semantic_equal']) {
+  assert(routeAuditDDL.includes(marker), `Registry routing audit DDL marker is missing: ${marker}`);
 }
 
 const stableCodes = openapi.components.schemas.ProblemDetails.properties.code['x-stable-codes'];

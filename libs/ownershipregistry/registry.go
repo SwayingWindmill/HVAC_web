@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -16,6 +17,11 @@ const (
 	OwnerGateway = "platform-gateway"
 	OwnerLegacy  = "legacy-hvac-backend"
 	OwnerCore    = "platform-core-service"
+
+	PhaseLegacyPrimaryGoShadow       = "LEGACY_PRIMARY_GO_SHADOW"
+	PhaseGoCanaryLegacyShadow        = "GO_CANARY_LEGACY_SHADOW"
+	PhaseGoPrimaryLegacyReadFallback = "GO_PRIMARY_LEGACY_READ_FALLBACK"
+	PhaseGoPrimary                   = "GO_PRIMARY"
 )
 
 var (
@@ -31,13 +37,18 @@ type Registry struct {
 }
 
 type RouteEntry struct {
-	Method                 string        `json:"method"`
-	Path                   string        `json:"path"`
-	Owner                  string        `json:"owner"`
-	Revision               int64         `json:"revision"`
-	Rollout                RolloutPolicy `json:"rollout"`
-	CompatibilityMode      string        `json:"compatibilityMode"`
-	AllowedScopeDimensions []string      `json:"allowedScopeDimensions"`
+	Method                   string        `json:"method"`
+	Path                     string        `json:"path"`
+	Owner                    string        `json:"owner"`
+	Revision                 int64         `json:"revision"`
+	Rollout                  RolloutPolicy `json:"rollout"`
+	CompatibilityMode        string        `json:"compatibilityMode"`
+	AllowedScopeDimensions   []string      `json:"allowedScopeDimensions"`
+	MigrationPhase           string        `json:"migrationPhase,omitempty"`
+	ShadowSideEffectPolicy   string        `json:"shadowSideEffectPolicy,omitempty"`
+	ReadOnlyFallback         bool          `json:"readOnlyFallback,omitempty"`
+	ReadFallbackOwner        string        `json:"readFallbackOwner,omitempty"`
+	FallbackForbiddenResults []string      `json:"fallbackForbiddenResults,omitempty"`
 }
 
 type RolloutPolicy struct {
@@ -48,15 +59,19 @@ type RolloutPolicy struct {
 }
 
 type Decision struct {
-	RouteKey               string
-	PathTemplate           string
-	DeclaredOwner          string
-	SelectedOwner          string
-	RegistryRevision       int64
-	RouteRevision          int64
-	CompatibilityMode      string
-	AllowedScopeDimensions []string
-	CohortBucket           *int
+	RouteKey                 string
+	PathTemplate             string
+	DeclaredOwner            string
+	SelectedOwner            string
+	RegistryRevision         int64
+	RouteRevision            int64
+	CompatibilityMode        string
+	AllowedScopeDimensions   []string
+	CohortBucket             *int
+	MigrationPhase           string
+	ShadowOwner              string
+	ReadFallbackOwner        string
+	FallbackForbiddenResults []string
 }
 
 type Snapshot struct {
@@ -132,7 +147,7 @@ func validateEntry(entry RouteEntry) error {
 	if entry.Method == "" || !strings.HasPrefix(entry.Path, "/api/v1/") || entry.Revision < 1 {
 		return errors.New("method, public path and positive revision are required")
 	}
-	if !isActiveOwner(entry.Owner) {
+	if !isCandidateOwner(entry.Owner) {
 		return errors.New("owner is unsupported")
 	}
 	if entry.CompatibilityMode != "native" && entry.CompatibilityMode != "legacy-read" {
@@ -166,6 +181,43 @@ func validateEntry(entry RouteEntry) error {
 		}
 	default:
 		return errors.New("rollout mode is unsupported")
+	}
+	if entry.MigrationPhase != "" {
+		if err := validateMigrationPhase(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateMigrationPhase(entry RouteEntry) error {
+	if entry.Method != http.MethodGet || entry.ShadowSideEffectPolicy != "NONE" || !entry.ReadOnlyFallback {
+		return errors.New("migration routes must be read-only GET routes with side-effect-free shadowing")
+	}
+	for _, required := range []string{"AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"} {
+		if !containsString(entry.FallbackForbiddenResults, required) {
+			return errors.New("migration fallback forbidden results are incomplete")
+		}
+	}
+	switch entry.MigrationPhase {
+	case PhaseLegacyPrimaryGoShadow:
+		if entry.Owner != OwnerLegacy || entry.CompatibilityMode != "legacy-read" || entry.Rollout.Mode != "percentage" || entry.Rollout.Percentage != 100 || entry.Rollout.FallbackOwner != OwnerCore || entry.ReadFallbackOwner != "" {
+			return errors.New("legacy-primary shadow phase policy is invalid")
+		}
+	case PhaseGoCanaryLegacyShadow:
+		if entry.Owner != OwnerCore || entry.CompatibilityMode != "native" || entry.Rollout.Mode != "percentage" || entry.Rollout.Percentage <= 0 || entry.Rollout.Percentage >= 100 || entry.Rollout.FallbackOwner != OwnerLegacy || entry.ReadFallbackOwner != "" {
+			return errors.New("Go canary shadow phase policy is invalid")
+		}
+	case PhaseGoPrimaryLegacyReadFallback:
+		if entry.Owner != OwnerCore || entry.CompatibilityMode != "native" || entry.Rollout.Mode != "all" || entry.ReadFallbackOwner != OwnerLegacy {
+			return errors.New("Go-primary Legacy fallback phase policy is invalid")
+		}
+	case PhaseGoPrimary:
+		if entry.Owner != OwnerCore || entry.CompatibilityMode != "native" || entry.Rollout.Mode != "all" || entry.ReadFallbackOwner != "" {
+			return errors.New("Go-primary phase policy is invalid")
+		}
+	default:
+		return errors.New("migration phase is unsupported")
 	}
 	return nil
 }
@@ -246,11 +298,58 @@ func validateRevisionTransition(current, candidate *Snapshot) error {
 		if route.Revision < old.Revision {
 			return fmt.Errorf("route owner revision regressed for %s", key)
 		}
-		if (route.Owner != old.Owner || route.CompatibilityMode != old.CompatibilityMode || route.Rollout != old.Rollout) && route.Revision <= old.Revision {
+		if routePolicyChanged(old, route) && route.Revision <= old.Revision {
 			return fmt.Errorf("route policy changed without revision advance for %s", key)
 		}
+		if err := validatePhaseTransition(old.MigrationPhase, route.MigrationPhase); err != nil {
+			return fmt.Errorf("route phase transition invalid for %s: %w", key, err)
+		}
+		delete(previous, key)
+	}
+	if len(previous) != 0 {
+		return errors.New("route policy removed an existing public route")
 	}
 	return nil
+}
+
+func routePolicyChanged(old, next RouteEntry) bool {
+	return old.Owner != next.Owner || old.CompatibilityMode != next.CompatibilityMode || old.Rollout != next.Rollout ||
+		old.MigrationPhase != next.MigrationPhase || old.ShadowSideEffectPolicy != next.ShadowSideEffectPolicy ||
+		old.ReadOnlyFallback != next.ReadOnlyFallback || old.ReadFallbackOwner != next.ReadFallbackOwner ||
+		strings.Join(old.FallbackForbiddenResults, "\x00") != strings.Join(next.FallbackForbiddenResults, "\x00")
+}
+
+func validatePhaseTransition(old, next string) error {
+	if old == next {
+		return nil
+	}
+	if old == "" && next == PhaseLegacyPrimaryGoShadow {
+		return nil
+	}
+	if old == "" || next == "" {
+		return errors.New("migration phase cannot be removed or entered outside phase one")
+	}
+	oldRank, oldOK := migrationPhaseRank(old)
+	nextRank, nextOK := migrationPhaseRank(next)
+	if !oldOK || !nextOK || nextRank-oldRank > 1 || oldRank-nextRank > 1 {
+		return errors.New("migration phase skipped a required adjacent state")
+	}
+	return nil
+}
+
+func migrationPhaseRank(phase string) (int, bool) {
+	switch phase {
+	case PhaseLegacyPrimaryGoShadow:
+		return 1, true
+	case PhaseGoCanaryLegacyShadow:
+		return 2, true
+	case PhaseGoPrimaryLegacyReadFallback:
+		return 3, true
+	case PhaseGoPrimary:
+		return 4, true
+	default:
+		return 0, false
+	}
 }
 
 func (snapshot *Snapshot) Resolve(method, requestPath, businessKey string) (Decision, error) {
@@ -272,14 +371,17 @@ func (snapshot *Snapshot) Resolve(method, requestPath, businessKey string) (Deci
 	}
 	entry := matched.entry
 	decision := Decision{
-		RouteKey:               entry.Method + " " + entry.Path,
-		PathTemplate:           entry.Path,
-		DeclaredOwner:          entry.Owner,
-		SelectedOwner:          entry.Owner,
-		RegistryRevision:       snapshot.registry.RegistryRevision,
-		RouteRevision:          entry.Revision,
-		CompatibilityMode:      entry.CompatibilityMode,
-		AllowedScopeDimensions: append([]string(nil), entry.AllowedScopeDimensions...),
+		RouteKey:                 entry.Method + " " + entry.Path,
+		PathTemplate:             entry.Path,
+		DeclaredOwner:            entry.Owner,
+		SelectedOwner:            entry.Owner,
+		RegistryRevision:         snapshot.registry.RegistryRevision,
+		RouteRevision:            entry.Revision,
+		CompatibilityMode:        entry.CompatibilityMode,
+		AllowedScopeDimensions:   append([]string(nil), entry.AllowedScopeDimensions...),
+		MigrationPhase:           entry.MigrationPhase,
+		ReadFallbackOwner:        entry.ReadFallbackOwner,
+		FallbackForbiddenResults: append([]string(nil), entry.FallbackForbiddenResults...),
 	}
 	if entry.Rollout.Mode == "percentage" {
 		if businessKey == "" {
@@ -290,6 +392,16 @@ func (snapshot *Snapshot) Resolve(method, requestPath, businessKey string) (Deci
 		decision.CohortBucket = &bucket
 		if bucket >= entry.Rollout.Percentage {
 			decision.SelectedOwner = entry.Rollout.FallbackOwner
+		}
+	}
+	switch entry.MigrationPhase {
+	case PhaseLegacyPrimaryGoShadow:
+		decision.ShadowOwner = OwnerCore
+	case PhaseGoCanaryLegacyShadow:
+		if decision.SelectedOwner == OwnerCore {
+			decision.ShadowOwner = OwnerLegacy
+		} else {
+			decision.ShadowOwner = OwnerCore
 		}
 	}
 	return decision, nil
@@ -315,7 +427,7 @@ func (snapshot *Snapshot) AllowedMethods(requestPath string) []string {
 
 func (snapshot *Snapshot) ContainsOwner(owner string) bool {
 	for _, route := range snapshot.registry.Routes {
-		if route.Owner == owner || route.Rollout.FallbackOwner == owner {
+		if route.Owner == owner || route.Rollout.FallbackOwner == owner || route.ReadFallbackOwner == owner {
 			return true
 		}
 	}
@@ -387,6 +499,15 @@ func templatesOverlap(left, right []string) bool {
 
 func isPlaceholder(segment string) bool {
 	return len(segment) > 2 && strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}")
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultString(value, fallback string) string {

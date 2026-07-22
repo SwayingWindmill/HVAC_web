@@ -9,6 +9,12 @@ const readJSON = async (relativePath) => JSON.parse(await readFile(path.join(roo
 const routeRegistry = await readJSON('contracts/ownership/route-ownership.v1.json');
 const dataRegistry = await readJSON('contracts/ownership/data-ownership.v1.json');
 const lock = await readJSON('contracts/ownership/ownership.v1.lock.json');
+const phaseRegistries = await Promise.all([
+  'contracts/ownership/s1-registry-phases/01-legacy-primary-go-shadow.json',
+  'contracts/ownership/s1-registry-phases/02-go-canary-legacy-shadow.json',
+  'contracts/ownership/s1-registry-phases/03-go-primary-legacy-read-fallback.json',
+  'contracts/ownership/s1-registry-phases/04-go-primary.json',
+].map(readJSON));
 
 const errors = [];
 const allowedOwners = new Set(['platform-gateway', 'legacy-hvac-backend', 'platform-core-service']);
@@ -67,8 +73,11 @@ for (const route of routeRegistry.routes ?? []) {
   }
   if (s1RegistryPaths.has(route.path)) {
     if (route.method !== 'GET') errors.push(`${key}: S1 Registry route must be read-only`);
-    if (route.owner !== 'legacy-hvac-backend' || rollout.fallbackOwner !== 'platform-core-service') {
-      errors.push(`${key}: initial S1 route must be Legacy primary with Core as the candidate owner`);
+    if (route.owner !== 'platform-core-service' || rollout.mode !== 'all' || route.compatibilityMode !== 'native') {
+      errors.push(`${key}: final S1 route must be Core primary without cohort routing`);
+    }
+    if (route.migrationPhase !== 'GO_PRIMARY' || route.readFallbackOwner !== undefined) {
+      errors.push(`${key}: active S1 route must finish in GO_PRIMARY without Legacy fallback`);
     }
     if (!Array.isArray(route.migrationPhases) || route.migrationPhases.join('|') !== expectedMigrationPhases.join('|')) {
       errors.push(`${key}: S1 migration phases are incomplete or reordered`);
@@ -91,6 +100,28 @@ for (const route of routeRegistry.routes ?? []) {
 for (const key of Object.keys(lock.routes ?? {})) {
   if (!routeKeys.has(key)) errors.push(`${key}: locked route was removed`);
 }
+
+const phaseExpectations = [
+  { revision: 3, routeRevision: 2, phase: 'LEGACY_PRIMARY_GO_SHADOW', owner: 'legacy-hvac-backend', compatibility: 'legacy-read', rolloutMode: 'percentage', percentage: 100, fallbackOwner: 'platform-core-service' },
+  { revision: 4, routeRevision: 3, phase: 'GO_CANARY_LEGACY_SHADOW', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'percentage', percentage: 10, fallbackOwner: 'legacy-hvac-backend' },
+  { revision: 5, routeRevision: 4, phase: 'GO_PRIMARY_LEGACY_READ_FALLBACK', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'all', readFallbackOwner: 'legacy-hvac-backend' },
+  { revision: 6, routeRevision: 5, phase: 'GO_PRIMARY', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'all' },
+];
+for (let index = 0; index < phaseRegistries.length; index += 1) {
+  const registry = phaseRegistries[index];
+  const expected = phaseExpectations[index];
+  if (registry.registryRevision !== expected.revision) errors.push(`S1 phase ${expected.phase}: registry revision mismatch`);
+  const phaseRoutes = (registry.routes ?? []).filter((route) => s1RegistryPaths.has(route.path));
+  if (phaseRoutes.length !== s1RegistryPaths.size) errors.push(`S1 phase ${expected.phase}: route set is incomplete`);
+  for (const route of phaseRoutes) {
+    const key = `${route.method} ${route.path}`;
+    if (route.revision !== expected.routeRevision || route.migrationPhase !== expected.phase || route.owner !== expected.owner || route.compatibilityMode !== expected.compatibility) errors.push(`${key}: phase ${expected.phase} ownership drifted`);
+    if (route.rollout?.mode !== expected.rolloutMode || route.rollout?.percentage !== expected.percentage || route.rollout?.fallbackOwner !== expected.fallbackOwner) errors.push(`${key}: phase ${expected.phase} rollout drifted`);
+    if ((route.readFallbackOwner ?? undefined) !== expected.readFallbackOwner) errors.push(`${key}: phase ${expected.phase} read fallback drifted`);
+    if (route.shadowSideEffectPolicy !== 'NONE' || route.readOnlyFallback !== true) errors.push(`${key}: phase ${expected.phase} safety policy drifted`);
+  }
+}
+if (JSON.stringify(routeRegistry) !== JSON.stringify(phaseRegistries.at(-1))) errors.push('active Route Ownership Registry is not the final GO_PRIMARY phase asset');
 
 if (dataRegistry.registryVersion !== 1) errors.push('data registry version must be 1');
 if (!Number.isInteger(dataRegistry.registryRevision) || dataRegistry.registryRevision < lock.dataRegistryRevision) {

@@ -12,27 +12,33 @@ import (
 )
 
 type AuditRecord struct {
-	MessageID         string
-	EventType         string
-	RouteKey          string
-	Method            string
-	PathTemplate      string
-	SelectedOwner     string
-	PreviousOwner     string
-	RegistryRevision  int64
-	PreviousRevision  int64
-	RouteRevision     int64
-	CompatibilityMode string
-	CohortBucket      *int
-	OrganizationID    string
-	InitiatingSubject string
-	InitiatingIssuer  string
-	ExecutingService  string
-	ExecutingSPIFFEID string
-	PolicyRevision    string
-	CorrelationID     string
-	TraceID           string
-	OccurredAt        time.Time
+	MessageID           string
+	EventType           string
+	RouteKey            string
+	Method              string
+	PathTemplate        string
+	SelectedOwner       string
+	PreviousOwner       string
+	RegistryRevision    int64
+	PreviousRevision    int64
+	RouteRevision       int64
+	CompatibilityMode   string
+	CohortBucket        *int
+	OrganizationID      string
+	InitiatingSubject   string
+	InitiatingIssuer    string
+	ExecutingService    string
+	ExecutingSPIFFEID   string
+	PolicyRevision      string
+	CorrelationID       string
+	TraceID             string
+	OutcomeCode         string
+	PrimaryStatus       int
+	SecondaryStatus     int
+	PrimaryBodySHA256   string
+	SecondaryBodySHA256 string
+	SemanticEqual       *bool
+	OccurredAt          time.Time
 }
 
 type AuditSink interface {
@@ -121,19 +127,32 @@ func (sink *PostgresAuditSink) Record(ctx context.Context, record AuditRecord) e
 			previous_owner, registry_revision, previous_revision, route_revision,
 			compatibility_mode, cohort_bucket, organization_id, initiating_subject,
 			initiating_issuer, executing_service, executing_spiffe_id, policy_revision,
-			correlation_id, trace_id, occurred_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+			correlation_id, trace_id, outcome_code, primary_status, secondary_status,
+			primary_body_sha256, secondary_body_sha256, semantic_equal, occurred_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
 	`, record.MessageID, record.EventType, record.RouteKey, record.Method, record.PathTemplate,
 		record.SelectedOwner, record.PreviousOwner, record.RegistryRevision,
 		record.PreviousRevision, record.RouteRevision, record.CompatibilityMode,
 		record.CohortBucket, record.OrganizationID, record.InitiatingSubject,
 		record.InitiatingIssuer, record.ExecutingService, record.ExecutingSPIFFEID,
-		record.PolicyRevision, record.CorrelationID, record.TraceID, record.OccurredAt.UTC())
+		record.PolicyRevision, record.CorrelationID, record.TraceID, record.OutcomeCode,
+		nullableStatus(record.PrimaryStatus), nullableStatus(record.SecondaryStatus),
+		nullableString(record.PrimaryBodySHA256), nullableString(record.SecondaryBodySHA256),
+		record.SemanticEqual, record.OccurredAt.UTC())
 	return err
 }
 
 func validateAuditRecord(record AuditRecord) error {
-	if record.EventType != "ROUTE_DECIDED" && record.EventType != "ROUTE_POLICY_CHANGED" {
+	switch record.EventType {
+	case "ROUTE_DECIDED", "ROUTE_POLICY_CHANGED":
+	case "ROUTE_SHADOW_COMPARED", "ROUTE_FALLBACK_EXECUTED":
+		if record.PreviousOwner == "" || record.OutcomeCode == "" || record.PrimaryStatus < 100 || record.SecondaryStatus < 100 || len(record.PrimaryBodySHA256) != 64 || len(record.SecondaryBodySHA256) != 64 {
+			return errors.New("route comparison audit evidence is incomplete")
+		}
+		if record.EventType == "ROUTE_SHADOW_COMPARED" && record.SemanticEqual == nil {
+			return errors.New("route shadow comparison result is missing")
+		}
+	default:
 		return errors.New("route audit event type is invalid")
 	}
 	if record.RouteKey == "" || record.Method == "" || record.PathTemplate == "" || record.SelectedOwner == "" || record.RegistryRevision < 1 || record.RouteRevision < 1 {
@@ -150,7 +169,25 @@ func cloneAuditRecord(record AuditRecord) AuditRecord {
 		bucket := *record.CohortBucket
 		record.CohortBucket = &bucket
 	}
+	if record.SemanticEqual != nil {
+		semanticEqual := *record.SemanticEqual
+		record.SemanticEqual = &semanticEqual
+	}
 	return record
+}
+
+func nullableStatus(value int) any {
+	if value == 0 {
+		return nil
+	}
+	return value
+}
+
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func randomAuditID() string {

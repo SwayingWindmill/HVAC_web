@@ -68,6 +68,25 @@ func TestDelegationGrantCannotExpandOrForward(t *testing.T) {
 	}
 }
 
+func TestDelegationAnyScopePreservesExactResourceProjection(t *testing.T) {
+	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	claims := validClaims(now)
+	claims.Scopes = []string{"organization:org-01", "site:site-01"}
+	if err := identitycontext.ValidateDelegationAnyScope(claims, now, "spiffe://hvac.local/platform-gateway", "iam-service", "principal:read", []string{"organization:org-01", "site:site-01"}); err != nil {
+		t.Fatalf("multi-scope delegation rejected: %v", err)
+	}
+	if err := identitycontext.ValidateDelegationAnyScope(claims, now, "spiffe://hvac.local/platform-gateway", "iam-service", "principal:read", []string{"site:site-01"}); err == nil {
+		t.Fatal("delegation with an extra unapproved scope was accepted")
+	}
+	if err := identitycontext.ValidateDelegation(claims, now, "spiffe://hvac.local/platform-gateway", "iam-service", "principal:read", "site:site-01"); err == nil {
+		t.Fatal("single-scope validator accepted a multi-scope delegation")
+	}
+	claims.Scopes = []string{"site:site-01", "site:site-01"}
+	if err := identitycontext.ValidateDelegationAnyScope(claims, now, "spiffe://hvac.local/platform-gateway", "iam-service", "principal:read", []string{"site:site-01"}); err == nil {
+		t.Fatal("duplicate delegation scope was accepted")
+	}
+}
+
 func validClaims(now time.Time) identitycontext.DelegationClaims {
 	return identitycontext.DelegationClaims{
 		Issuer: "spiffe://hvac.local/platform-gateway", Subject: "fixture-user", SubjectIssuer: "https://issuer.example.test",
