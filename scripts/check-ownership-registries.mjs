@@ -126,7 +126,7 @@ for (const access of dataRegistry.databaseAccess ?? []) {
   } else if (access.mode === 'relay') {
     if (access.service !== 'outbox-relay' || access.schema !== 'gateway') errors.push(`${access.service}:${access.schema}: invalid relay access`);
   } else if (access.mode === 'migration') {
-    if (access.service !== 's1-migration-operator' || access.schema !== 'core_registry') errors.push(`${access.service}:${access.schema}: invalid migration access`);
+    if (access.service !== 'legacy-migration-service' || access.schema !== 'core_registry') errors.push(`${access.service}:${access.schema}: invalid migration access`);
   } else if (access.mode === 'reconciliation') {
     if (access.service !== 'iam-reconciler' || access.schema !== 'iam') errors.push(`${access.service}:${access.schema}: invalid reconciliation access`);
   } else if (access.mode !== 'write' && access.mode !== 'read' && access.mode !== 'relay' && access.mode !== 'migration' && access.mode !== 'reconciliation') {
@@ -140,6 +140,7 @@ const requiredIdentities = new Map([
   ['core_registry:s1_core_runtime', { migrationRole: 's1_core_migrator' }],
   ['core_registry:s1_core_service', { migrationRole: 's1_core_migrator', activationRole: 's1_core_runtime' }],
   ['core_registry:s1_migration_operator', { migrationRole: 's1_core_migrator' }],
+  ['core_registry:s1_legacy_migration_service', { migrationRole: 's1_core_migrator', activationRole: 's1_migration_operator' }],
 ]);
 for (const identity of dataRegistry.databaseIdentities ?? []) {
   const key = `${identity.schema}:${identity.runtimeRole}`;

@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const readJSON = async (path) => JSON.parse(await readFile(resolve(root, path), 'utf8'));
-const [model, openapi, routeRegistry, dataRegistry, ownershipLock, ddl, fixtures, iamRuntimeResolver, iamReconciliation, coreReadService, sqlcQueries, sqlcGenerated] = await Promise.all([
+const [model, openapi, routeRegistry, dataRegistry, ownershipLock, ddl, fixtures, iamRuntimeResolver, iamReconciliation, coreReadService, legacyMigrationExecution, legacyMigrationSource, legacyMigrationTypes, sqlcQueries, sqlcGenerated] = await Promise.all([
   readJSON('contracts/registry/s1-registry-model.v1.json'),
   readJSON('contracts/http/platform-gateway.openapi.yaml'),
   readJSON('contracts/ownership/route-ownership.v1.json'),
@@ -15,6 +15,9 @@ const [model, openapi, routeRegistry, dataRegistry, ownershipLock, ddl, fixtures
   readFile(resolve(root, 'infra/s1-registry/postgres/init/003-iam-runtime-identity-resolution.sql'), 'utf8'),
   readFile(resolve(root, 'infra/s1-registry/postgres/init/004-iam-reconciliation.sql'), 'utf8'),
   readFile(resolve(root, 'infra/s1-registry/postgres/init/005-core-read-service.sql'), 'utf8'),
+  readFile(resolve(root, 'infra/s1-registry/postgres/init/006-legacy-migration-execution.sql'), 'utf8'),
+  readFile(resolve(root, 'services/legacy-migration-service/internal/migration/postgres.go'), 'utf8'),
+  readFile(resolve(root, 'services/legacy-migration-service/internal/migration/types.go'), 'utf8'),
   readFile(resolve(root, 'pocs/s1-sqlc/queries.sql'), 'utf8'),
   readFile(resolve(root, 'pocs/s1-sqlc/generated/queries.sql.go'), 'utf8'),
 ]);
@@ -96,6 +99,19 @@ for (const role of ['s1_core_migrator', 's1_core_runtime', 's1_migration_operato
 }
 assert(coreReadService.includes('CREATE ROLE s1_core_service LOGIN') && coreReadService.includes('NOBYPASSRLS'), 'Core service login identity is not RLS-bound');
 assert(coreReadService.includes('GRANT s1_core_runtime TO s1_core_service'), 'Core service cannot activate the restricted runtime role');
+assert(legacyMigrationExecution.includes('CREATE ROLE s1_legacy_migration_service LOGIN') && legacyMigrationExecution.includes('NOBYPASSRLS'), 'Legacy migration login identity is not RLS-bound');
+assert(legacyMigrationExecution.includes('GRANT s1_migration_operator TO s1_legacy_migration_service'), 'Legacy migration service cannot activate the operator role');
+for (const table of ['organizations', 'sites', 'equipment', 'devices']) {
+  assert(legacyMigrationExecution.includes(`CREATE POLICY ${table}_migration_scope`), `${table} migration policy is missing`);
+}
+assert(legacyMigrationExecution.includes('migration_quarantine_open_source_uidx'), 'open quarantine source uniqueness is missing');
+assert(legacyMigrationExecution.includes('GRANT UPDATE (status, revision, updated_at)'), 'Legacy migration retire grant is too broad or missing');
+for (const marker of ['SET LOCAL ROLE s1_migration_operator', 'pg_advisory_xact_lock', "mapping_state='VERIFIED'", "mapping_state='QUARANTINED'", 'finalState = "RETIRED"', 'SOURCE_HASH_CONFLICT']) {
+  assert(legacyMigrationSource.includes(marker), `Legacy migration execution marker is missing: ${marker}`);
+}
+for (const marker of ['AMBIGUOUS_ASSET_EQUIPMENT_RELATION', 'DisallowUnknownFields', 'maxRecordBytes', 'relationEvidence key']) {
+  assert(legacyMigrationTypes.includes(marker), `Legacy migration input marker is missing: ${marker}`);
+}
 for (const marker of ['CREATE TABLE IF NOT EXISTS iam.registry_grant_revocations', 'ALTER TABLE iam.registry_grant_revocations ENABLE ROW LEVEL SECURITY', 'ALTER TABLE iam.registry_grant_revocations FORCE ROW LEVEL SECURITY', 'FOR ALL TO s1_iam_migrator', 'TO s1_iam_runtime']) {
   assert(coreReadService.includes(marker), `Core read service security asset is missing: ${marker}`);
 }
@@ -129,6 +145,8 @@ assert(fixtures.includes("'018f1e00-2000-7000-8000-000000000004'"), 'no-access P
 
 const schemaWriters = Object.fromEntries(dataRegistry.resources.filter((resource) => resource.kind === 'schema').map((resource) => [resource.name, resource.writer]));
 assert(schemaWriters.iam === 'iam-service' && schemaWriters.core_registry === 'platform-core-service', 'IAM/Core schema writers drifted');
+assert(dataRegistry.databaseAccess.some((access) => access.service === 'legacy-migration-service' && access.schema === 'core_registry' && access.mode === 'migration'), 'Legacy migration service access is missing');
+assert(dataRegistry.databaseIdentities.some((identity) => identity.runtimeRole === 's1_legacy_migration_service' && identity.activationRole === 's1_migration_operator'), 'Legacy migration database identity is missing');
 assert(dataRegistry.databaseIdentities.every((identity) => identity.runtimeBypassRls === false), 'a runtime database identity can bypass RLS');
 
 for (const queryName of ['ListOrganizations', 'GetOrganization', 'ListSites', 'GetSite', 'ListEquipment', 'GetEquipment', 'ListDevices', 'GetDevice']) {
