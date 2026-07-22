@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer as createTCPServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/s1-registry/compose.yaml');
@@ -248,13 +248,13 @@ try {
 
   report.status = 'passed';
   report.finishedAt = new Date().toISOString();
-  await mkdir(resolve(root, 'out/s1-ticket-01'), { recursive: true });
+  await mkdir(dirname(reportPath), { recursive: true });
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   console.log(`S1 Registry PostgreSQL baseline passed: ${reportPath}`);
 } catch (error) {
   report.error = error instanceof Error ? error.message : String(error);
   report.finishedAt = new Date().toISOString();
-  await mkdir(resolve(root, 'out/s1-ticket-01'), { recursive: true });
+  await mkdir(dirname(reportPath), { recursive: true });
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   throw error;
 } finally {
