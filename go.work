@@ -5,6 +5,7 @@ use (
 	./libs/observability
 	./libs/oidctest
 	./libs/ownershipregistry
+	./libs/registryauth
 	./libs/sessionevent
 	./libs/sessionstore
 	./libs/testpki

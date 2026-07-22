@@ -26,6 +26,10 @@ Gateway accepts a valid `X-Request-ID`, continues a valid W3C `traceparent`, and
 
 OIDC tokens are exchanged and encrypted on the server. The browser receives only the opaque `__Host-hvac_session` cookie with `Secure`, `HttpOnly`, `Path=/` and `SameSite=Lax`.
 
+Gateway uses the pinned official `github.com/logto-io/go/v2/core` protocol helpers for Logto discovery, Authorization Code plus S256 PKCE request generation, code exchange, JWKS retrieval and maintained JOSE verification. `github.com/go-jose/go-jose/v4` is pinned to `v4.1.4` rather than the older transitive SDK requirement.
+
+The high-level Logto client is deliberately not the BFF Session authority. Gateway retains one-time state with TTL and local `returnTo` binding, nonce generation and constant-time validation, strict JWT header and token-type checks, `nbf` enforcement, bounded provider responses, encrypted durable Session storage, audit/outbox transactions and platform-owned Organization authorization. Logto Organization, role and custom claims are not Registry authorization truth.
+
 Gateway calls private IAM through TLS 1.3 mutual authentication. It signs a short-lived delegation bound to the Gateway SPIFFE identity, IAM audience, one action, one session scope, acting Organization, policy revision and expiry. Public caller-supplied identity or delegation headers are rejected.
 
 Detailed identity and threat-boundary documentation is in `docs/security/s0-authenticated-principal.md`.

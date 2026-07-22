@@ -6,16 +6,12 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
-	"math/big"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -52,12 +48,13 @@ type IdentityConfig struct {
 }
 
 type identityController struct {
-	config IdentityConfig
-	now    func() time.Time
-	vault  cipher.AEAD
-	mu     sync.RWMutex
-	states map[string]loginState
-	store  sessionstore.Store
+	config   IdentityConfig
+	now      func() time.Time
+	vault    cipher.AEAD
+	protocol oidcProtocol
+	mu       sync.RWMutex
+	states   map[string]loginState
+	store    sessionstore.Store
 }
 
 type loginState struct {
@@ -166,7 +163,7 @@ func newIdentityController(config *IdentityConfig, now func() time.Time) *identi
 	if resolved.OIDCIssuer == "" || resolved.OIDCClientID == "" || resolved.OIDCRedirectURI == "" || resolved.PublicOrigin == "" || resolved.IAMURL == "" || resolved.ExecutingWorkloadSPIFFE == "" || resolved.DelegationSigner == nil {
 		panic("identity configuration is incomplete")
 	}
-	return &identityController{config: resolved, now: now, vault: vault, states: map[string]loginState{}, store: resolved.SessionStore}
+	return &identityController{config: resolved, now: now, vault: vault, protocol: newLogtoOIDCProtocol(), states: map[string]loginState{}, store: resolved.SessionStore}
 }
 
 func (h *handler) BeginLogin(writer http.ResponseWriter, request *http.Request, params platformapi.BeginLoginParams) {
@@ -186,27 +183,23 @@ func (h *handler) BeginLogin(writer http.ResponseWriter, request *http.Request, 
 	state := randomURLToken(24)
 	nonce := randomURLToken(24)
 	verifier := randomURLToken(48)
-	challengeDigest := sha256.Sum256([]byte(verifier))
-	challenge := base64.RawURLEncoding.EncodeToString(challengeDigest[:])
+	authorizationURL, err := h.identity.protocol.AuthorizationURL(discovery, oidcAuthorizationRequest{
+		ClientID:     h.identity.config.OIDCClientID,
+		RedirectURI:  h.identity.config.OIDCRedirectURI,
+		CodeVerifier: verifier,
+		State:        state,
+		Nonce:        nonce,
+		LoginHint:    params.LoginHint,
+	})
+	if err != nil {
+		writeIdentityFailure(writer, request, identityFailure{503, "OIDC_AUTHORIZATION_REQUEST_INVALID", "OIDC login unavailable", "The Gateway could not construct the provider authorization request.", true})
+		return
+	}
 	h.identity.mu.Lock()
 	h.identity.states[state] = loginState{Verifier: verifier, Nonce: nonce, ReturnTo: params.ReturnTo, CreatedAt: h.identity.now()}
 	h.identity.cleanupLocked()
 	h.identity.mu.Unlock()
-	endpoint, _ := url.Parse(discovery.AuthorizationEndpoint)
-	query := endpoint.Query()
-	query.Set("client_id", h.identity.config.OIDCClientID)
-	query.Set("redirect_uri", h.identity.config.OIDCRedirectURI)
-	query.Set("response_type", "code")
-	query.Set("scope", "openid profile email")
-	query.Set("state", state)
-	query.Set("nonce", nonce)
-	query.Set("code_challenge", challenge)
-	query.Set("code_challenge_method", "S256")
-	if params.LoginHint != "" {
-		query.Set("login_hint", params.LoginHint)
-	}
-	endpoint.RawQuery = query.Encode()
-	http.Redirect(writer, request, endpoint.String(), http.StatusFound)
+	http.Redirect(writer, request, authorizationURL, http.StatusFound)
 }
 
 func (h *handler) CompleteLogin(writer http.ResponseWriter, request *http.Request, params platformapi.CompleteLoginParams) {
@@ -396,19 +389,17 @@ func (controller *identityController) validateStateChange(request *http.Request,
 }
 
 func (controller *identityController) discover(ctx context.Context) (oidcDiscovery, *identityFailure) {
-	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(controller.config.OIDCIssuer, "/")+"/.well-known/openid-configuration", nil)
-	response, err := controller.config.OIDCHTTPClient.Do(request)
+	discovery, err := controller.protocol.Discover(ctx, controller.config.OIDCHTTPClient, controller.config.OIDCIssuer)
 	if err != nil {
-		failure := identityFailure{503, "OIDC_PROVIDER_UNAVAILABLE", "OIDC provider unavailable", "The identity provider could not be reached.", true}
+		status, _ := oidcProtocolErrorDetails(err)
+		if status == 0 || status != http.StatusOK {
+			failure := identityFailure{503, "OIDC_PROVIDER_UNAVAILABLE", "OIDC provider unavailable", "The identity provider discovery document was unavailable.", true}
+			return oidcDiscovery{}, &failure
+		}
+		failure := identityFailure{503, "OIDC_DISCOVERY_INVALID", "OIDC discovery invalid", "The identity provider discovery document is invalid.", true}
 		return oidcDiscovery{}, &failure
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		failure := identityFailure{503, "OIDC_PROVIDER_UNAVAILABLE", "OIDC provider unavailable", "The identity provider discovery document was unavailable.", true}
-		return oidcDiscovery{}, &failure
-	}
-	var discovery oidcDiscovery
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&discovery); err != nil || discovery.Issuer != strings.TrimRight(controller.config.OIDCIssuer, "/") || discovery.AuthorizationEndpoint == "" || discovery.TokenEndpoint == "" || discovery.JWKSURI == "" {
+	if discovery.Issuer != strings.TrimRight(controller.config.OIDCIssuer, "/") || discovery.AuthorizationEndpoint == "" || discovery.TokenEndpoint == "" || discovery.JWKSURI == "" {
 		failure := identityFailure{503, "OIDC_DISCOVERY_INVALID", "OIDC discovery invalid", "The identity provider discovery document is invalid.", true}
 		return oidcDiscovery{}, &failure
 	}
@@ -420,23 +411,24 @@ func (controller *identityController) exchangeCode(ctx context.Context, code, ve
 	if failure != nil {
 		return oidcTokenResponse{}, failure
 	}
-	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {controller.config.OIDCClientID}, "redirect_uri": {controller.config.OIDCRedirectURI}, "code": {code}, "code_verifier": {verifier}}
-	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, discovery.TokenEndpoint, strings.NewReader(form.Encode()))
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response, err := controller.config.OIDCHTTPClient.Do(request)
+	tokens, err := controller.protocol.ExchangeCode(ctx, controller.config.OIDCHTTPClient, discovery, oidcCodeExchangeRequest{
+		ClientID:     controller.config.OIDCClientID,
+		RedirectURI:  controller.config.OIDCRedirectURI,
+		Code:         code,
+		CodeVerifier: verifier,
+	})
 	if err != nil {
-		failure := identityFailure{503, "OIDC_CODE_EXCHANGE_UNAVAILABLE", "OIDC exchange unavailable", "The authorization code could not be exchanged.", true}
-		return oidcTokenResponse{}, &failure
-	}
-	defer response.Body.Close()
-	var tokens oidcTokenResponse
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&tokens); err != nil {
-		failure := identityFailure{503, "OIDC_CODE_EXCHANGE_INVALID", "OIDC exchange invalid", "The identity provider returned an invalid token response.", true}
-		return oidcTokenResponse{}, &failure
-	}
-	if response.StatusCode != http.StatusOK || tokens.Error != "" {
+		status, description := oidcProtocolErrorDetails(err)
+		if status == 0 {
+			failure := identityFailure{503, "OIDC_CODE_EXCHANGE_UNAVAILABLE", "OIDC exchange unavailable", "The authorization code could not be exchanged.", true}
+			return oidcTokenResponse{}, &failure
+		}
+		if status == http.StatusOK {
+			failure := identityFailure{503, "OIDC_CODE_EXCHANGE_INVALID", "OIDC exchange invalid", "The identity provider returned an invalid token response.", true}
+			return oidcTokenResponse{}, &failure
+		}
 		codeValue := "OIDC_CODE_EXCHANGE_FAILED"
-		if strings.Contains(strings.ToLower(tokens.Description), "pkce") {
+		if strings.Contains(strings.ToLower(description), "pkce") {
 			codeValue = "OIDC_PKCE_VALIDATION_FAILED"
 		}
 		failure := identityFailure{401, codeValue, "OIDC login rejected", "The identity provider rejected the authorization code exchange.", false}
@@ -469,24 +461,6 @@ func (controller *identityController) validateIDToken(ctx context.Context, token
 		failure := identityFailure{401, "OIDC_TOKEN_TYPE_INVALID", "OIDC token type invalid", "The ID token header is unsupported.", false}
 		return oidcClaims{}, &failure
 	}
-	discovery, failure := controller.discover(ctx)
-	if failure != nil {
-		return oidcClaims{}, failure
-	}
-	key, failure := controller.fetchRSAKey(ctx, discovery.JWKSURI, header.KeyID)
-	if failure != nil {
-		return oidcClaims{}, failure
-	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		failure := identityFailure{401, "OIDC_SIGNATURE_INVALID", "OIDC signature invalid", "The ID token signature is invalid.", false}
-		return oidcClaims{}, &failure
-	}
-	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
-	if rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], signature) != nil {
-		failure := identityFailure{401, "OIDC_SIGNATURE_INVALID", "OIDC signature invalid", "The ID token signature could not be verified.", false}
-		return oidcClaims{}, &failure
-	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		failure := identityFailure{401, "OIDC_TOKEN_FORMAT_INVALID", "OIDC token invalid", "The ID token payload is invalid.", false}
@@ -495,6 +469,43 @@ func (controller *identityController) validateIDToken(ctx context.Context, token
 	var claims oidcClaims
 	if json.Unmarshal(payload, &claims) != nil {
 		failure := identityFailure{401, "OIDC_TOKEN_FORMAT_INVALID", "OIDC token invalid", "The ID token claims are invalid.", false}
+		return oidcClaims{}, &failure
+	}
+	discovery, failure := controller.discover(ctx)
+	if failure != nil {
+		return oidcClaims{}, failure
+	}
+	if err := controller.protocol.VerifyIDToken(ctx, controller.config.OIDCHTTPClient, discovery, controller.config.OIDCClientID, header.KeyID, token); err != nil {
+		switch {
+		case errors.Is(err, errOIDCTokenIssuerInvalid):
+			failure := identityFailure{401, "OIDC_ISSUER_INVALID", "OIDC issuer invalid", "The ID token issuer is not trusted.", false}
+			return oidcClaims{}, &failure
+		case errors.Is(err, errOIDCTokenAudienceInvalid):
+			failure := identityFailure{401, "OIDC_AUDIENCE_INVALID", "OIDC audience invalid", "The ID token audience is invalid.", false}
+			return oidcClaims{}, &failure
+		case errors.Is(err, errOIDCTokenExpired), errors.Is(err, errOIDCTokenIssuedPast):
+			failure := identityFailure{401, "OIDC_TOKEN_EXPIRED", "OIDC token expired", "The ID token has expired or is no longer fresh.", false}
+			return oidcClaims{}, &failure
+		case errors.Is(err, errOIDCTokenIssuedFuture):
+			failure := identityFailure{401, "OIDC_TOKEN_NOT_ACTIVE", "OIDC token not active", "The ID token is not active yet.", false}
+			return oidcClaims{}, &failure
+		case errors.Is(err, errOIDCSignatureKeyUnknown):
+			failure := identityFailure{401, "OIDC_SIGNATURE_KEY_UNKNOWN", "OIDC signing key unknown", "The ID token signing key is not trusted.", false}
+			return oidcClaims{}, &failure
+		case errors.Is(err, errOIDCJWKSInvalid):
+			failure := identityFailure{503, "OIDC_JWKS_INVALID", "OIDC keys invalid", "The identity provider signing keys are invalid.", true}
+			return oidcClaims{}, &failure
+		}
+		var protocolFailure *oidcProtocolError
+		if errors.As(err, &protocolFailure) {
+			if protocolFailure.StatusCode == http.StatusOK {
+				failure := identityFailure{503, "OIDC_JWKS_INVALID", "OIDC keys invalid", "The identity provider signing keys are invalid.", true}
+				return oidcClaims{}, &failure
+			}
+			failure := identityFailure{503, "OIDC_JWKS_UNAVAILABLE", "OIDC keys unavailable", "The identity provider signing keys could not be reached.", true}
+			return oidcClaims{}, &failure
+		}
+		failure := identityFailure{401, "OIDC_SIGNATURE_INVALID", "OIDC signature invalid", "The ID token signature could not be verified.", false}
 		return oidcClaims{}, &failure
 	}
 	now := controller.now().Unix()
@@ -524,45 +535,6 @@ func (controller *identityController) validateIDToken(ctx context.Context, token
 		return oidcClaims{}, &failure
 	}
 	return claims, nil
-}
-
-func (controller *identityController) fetchRSAKey(ctx context.Context, jwksURI, keyID string) (*rsa.PublicKey, *identityFailure) {
-	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, jwksURI, nil)
-	response, err := controller.config.OIDCHTTPClient.Do(request)
-	if err != nil {
-		failure := identityFailure{503, "OIDC_JWKS_UNAVAILABLE", "OIDC keys unavailable", "The identity provider signing keys could not be reached.", true}
-		return nil, &failure
-	}
-	defer response.Body.Close()
-	var document struct {
-		Keys []struct {
-			KeyID     string `json:"kid"`
-			KeyType   string `json:"kty"`
-			Algorithm string `json:"alg"`
-			Modulus   string `json:"n"`
-			Exponent  string `json:"e"`
-		} `json:"keys"`
-	}
-	if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&document) != nil {
-		failure := identityFailure{503, "OIDC_JWKS_INVALID", "OIDC keys invalid", "The identity provider signing keys are invalid.", true}
-		return nil, &failure
-	}
-	for _, item := range document.Keys {
-		if item.KeyID == keyID && item.KeyType == "RSA" && item.Algorithm == "RS256" {
-			n, errN := base64.RawURLEncoding.DecodeString(item.Modulus)
-			e, errE := base64.RawURLEncoding.DecodeString(item.Exponent)
-			if errN != nil || errE != nil {
-				break
-			}
-			exponent := new(big.Int).SetBytes(e)
-			if !exponent.IsInt64() {
-				break
-			}
-			return &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(exponent.Int64())}, nil
-		}
-	}
-	failure := identityFailure{401, "OIDC_SIGNATURE_KEY_UNKNOWN", "OIDC signing key unknown", "The ID token signing key is not trusted.", false}
-	return nil, &failure
 }
 
 func (controller *identityController) encryptTokens(tokens oidcTokenResponse) ([]byte, error) {

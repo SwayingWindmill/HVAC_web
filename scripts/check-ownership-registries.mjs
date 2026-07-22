@@ -127,13 +127,16 @@ for (const access of dataRegistry.databaseAccess ?? []) {
     if (access.service !== 'outbox-relay' || access.schema !== 'gateway') errors.push(`${access.service}:${access.schema}: invalid relay access`);
   } else if (access.mode === 'migration') {
     if (access.service !== 's1-migration-operator' || access.schema !== 'core_registry') errors.push(`${access.service}:${access.schema}: invalid migration access`);
-  } else if (access.mode !== 'write' && access.mode !== 'read' && access.mode !== 'relay' && access.mode !== 'migration') {
+  } else if (access.mode === 'reconciliation') {
+    if (access.service !== 'iam-reconciler' || access.schema !== 'iam') errors.push(`${access.service}:${access.schema}: invalid reconciliation access`);
+  } else if (access.mode !== 'write' && access.mode !== 'read' && access.mode !== 'relay' && access.mode !== 'migration' && access.mode !== 'reconciliation') {
     errors.push(`${access.service}:${access.schema}: invalid access mode`);
   }
 }
 
 const requiredIdentities = new Map([
   ['iam:s1_iam_runtime', 's1_iam_migrator'],
+  ['iam:s1_iam_reconciler', 's1_iam_migrator'],
   ['core_registry:s1_core_runtime', 's1_core_migrator'],
   ['core_registry:s1_migration_operator', 's1_core_migrator'],
 ]);

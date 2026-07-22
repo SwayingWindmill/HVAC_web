@@ -7,6 +7,8 @@ services:
       POSTGRES_PASSWORD: postgres-local-only
     volumes:
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d hvac_s1"]
       interval: 1s

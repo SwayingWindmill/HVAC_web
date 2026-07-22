@@ -57,6 +57,12 @@ Select **partial SDK adoption**.
 - unsafe Organization claim decoding as authorization evidence;
 - Logto Organization or role values as direct HVAC Organization, Site, Equipment or Device permission.
 
+## Management-plane extension
+
+For explicit onboarding reconciliation, use a narrow server-side adapter over the standard HTTP client rather than adding a generic Management API framework. The adapter is limited to M2M token acquisition plus `GET /api/users/{userId}` and `GET /api/users/{userId}/organizations`, bounds all responses, disables redirects, requires HTTPS and returns status-only provider errors. This keeps the integration replaceable and avoids exposing mutation endpoints or provider credentials to Gateway, Core or browsers.
+
+Provider user profile, Organization and role data remain reconciliation candidates. An explicit platform mapping produces IAM Membership/Binding facts; the Management API response never authorizes Registry access directly.
+
 ## Rollback
 
 The production adapter must sit behind the existing Gateway identity interface. Rollback switches the protocol implementation to the existing tested path without changing the browser cookie, PostgreSQL Session schema, public Principal contract or platform IAM facts.

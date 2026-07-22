@@ -1,18 +1,38 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { createServer as createTCPServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/s1-registry/compose.yaml');
 const projectName = `hvac-s1-registry-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
 const reportPath = resolve(root, 'out/s1-ticket-01/postgres-baseline.json');
+const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
+const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
+const goCacheDir = process.env.GOCACHE || join(tmpdir(), 'hvac-go-build-cache');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 const composeInvocation = (() => {
   const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
   if (!plugin.error && plugin.status === 0) return { command: 'docker', prefix: ['compose'] };
   return { command: 'docker-compose', prefix: [] };
 })();
+
+async function findAvailablePort(requestedPort = 0) {
+  const server = createTCPServer();
+  server.listen({ host: '127.0.0.1', port: Number(requestedPort) || 0, exclusive: true });
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('S1 PostgreSQL port allocator did not expose a TCP address');
+  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
+  return address.port;
+}
+
+const postgresHostPort = await findAvailablePort(process.env.S1_POSTGRES_HOST_PORT ?? 0);
+const composeEnvironment = { ...process.env, S1_POSTGRES_HOST_PORT: String(postgresHostPort) };
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
@@ -23,7 +43,7 @@ function run(command, args, options = {}) {
 }
 
 function compose(args) {
-  return run(composeInvocation.command, [...composeInvocation.prefix, '-p', projectName, '-f', composePath, ...args]);
+  return run(composeInvocation.command, [...composeInvocation.prefix, '-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
 function psql(sql, { expectFailure = false } = {}) {
@@ -83,6 +103,24 @@ function scopedCounts(organizationIDs, siteIDs) {
   `).split('|').map(Number);
 }
 
+async function runIAMGoTests() {
+  await mkdir(goCacheDir, { recursive: true });
+  const child = spawn(goBinary, ['test', '-count=1', '-v', './services/iam-service/internal/iam'], {
+    cwd: root,
+    stdio: 'inherit',
+    shell: false,
+    env: {
+      ...process.env,
+      GOCACHE: goCacheDir,
+      S1_ADMIN_DATABASE_URL: `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+      S1_IAM_DATABASE_URL: `postgres://s1_iam_runtime:s1-iam-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+      S1_IAM_RECONCILER_DATABASE_URL: `postgres://s1_iam_reconciler:s1-iam-reconciler-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+    },
+  });
+  const [code, signal] = await once(child, 'exit');
+  if (signal || code !== 0) throw new Error(`S1 IAM PostgreSQL tests failed: ${signal ?? code}`);
+}
+
 const report = {
   schemaVersion: 1,
   status: 'failed',
@@ -98,10 +136,13 @@ try {
   const roleState = psql(`
     SELECT string_agg(rolname || ':' || rolcanlogin::text || ':' || rolbypassrls::text, ',' ORDER BY rolname)
     FROM pg_roles
-    WHERE rolname IN ('s1_iam_runtime','s1_core_runtime','s1_iam_migrator','s1_core_migrator','s1_migration_operator')
+    WHERE rolname IN ('s1_iam_runtime','s1_iam_reconciler','s1_core_runtime','s1_iam_migrator','s1_core_migrator','s1_migration_operator')
   `);
-  for (const role of ['s1_iam_runtime', 's1_core_runtime', 's1_iam_migrator', 's1_core_migrator', 's1_migration_operator']) {
-    if (!roleState.includes(`${role}:false:false`)) throw new Error(`${role} must be NOLOGIN and NOBYPASSRLS`);
+  for (const role of ['s1_iam_runtime', 's1_iam_reconciler', 's1_iam_migrator']) {
+    if (!roleState.includes(`${role}:true:false`)) throw new Error(`${role} must be LOGIN and NOBYPASSRLS`);
+  }
+  for (const role of ['s1_core_runtime', 's1_core_migrator', 's1_migration_operator']) {
+    if (!roleState.includes(`${role}:false:false`)) throw new Error(`${role} must remain NOLOGIN and NOBYPASSRLS`);
   }
   report.assertions.runtimeRoles = roleState;
 
@@ -135,6 +176,9 @@ try {
   expectEqual(iamDelegated, '1|1|1|0', 'delegated IAM fixture');
   expectEqual(iamDenied, '1', 'explicit deny fixture');
   report.assertions.iamFixtures = { delegated: iamDelegated, denied: iamDenied };
+
+  await runIAMGoTests();
+  report.assertions.iamAuthorizationStore = 'passed';
 
   const invalidTimezone = psql(`
     INSERT INTO core_registry.sites (id, organization_id, code, display_name, timezone, status, revision, created_at, updated_at)
