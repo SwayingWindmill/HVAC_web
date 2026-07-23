@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "activationStatus": "planned",
+  "activationStatus": "expand-baseline",
   "issue": 52,
   "name": "s2-telemetry-release-gates-v1",
   "authority": {

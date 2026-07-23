@@ -3,6 +3,7 @@
   "$id": "https://contracts.quanlaihe.example/events/s2-device-observation-publication.v1.schema.json",
   "title": "S2 Device Observation Publication v1",
   "description": "A subscription-scoped delta for one contiguous Device Business Revision transition.",
+  "x-activation-status": "expand-baseline",
   "type": "object",
   "additionalProperties": false,
   "required": [

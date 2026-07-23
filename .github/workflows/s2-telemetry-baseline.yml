@@ -1,0 +1,88 @@
+name: S2 Telemetry Contract and PostgreSQL Baseline
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/s2-telemetry-baseline.yml'
+      - 'apps/hvac-web/src/api/generated/s2Telemetry.gen.ts'
+      - 'contracts/events/s2-device-observation-publication.v1.schema.json'
+      - 'contracts/http/s2-telemetry-public.openapi.json'
+      - 'contracts/http/s2-tooling.lock.json'
+      - 'contracts/ownership/**'
+      - 'contracts/telemetry/**'
+      - 'deploy/s2/**'
+      - 'go.work'
+      - 'infra/s2-telemetry/**'
+      - 'libs/ownershipregistry/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'scripts/check-s0-release-evidence-assets.mjs'
+      - 'scripts/check-s1-registry-baseline.mjs'
+      - 'scripts/check-s2-implementation-plan.mjs'
+      - 'scripts/check-s2-telemetry-baseline.mjs'
+      - 'scripts/check-s2-telemetry-ownership.mjs'
+      - 'scripts/check-s2-telemetry-public-contract.mjs'
+      - 'scripts/check-s2-telemetry-rollout-gates.mjs'
+      - 'scripts/generate-s2-telemetry-contracts.mjs'
+      - 'scripts/run-s2-telemetry-postgres-tests.mjs'
+      - 'services/telemetry-runtime-service/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/s2-telemetry-baseline.yml'
+      - 'apps/hvac-web/src/api/generated/s2Telemetry.gen.ts'
+      - 'contracts/events/s2-device-observation-publication.v1.schema.json'
+      - 'contracts/http/s2-telemetry-public.openapi.json'
+      - 'contracts/http/s2-tooling.lock.json'
+      - 'contracts/ownership/**'
+      - 'contracts/telemetry/**'
+      - 'deploy/s2/**'
+      - 'go.work'
+      - 'infra/s2-telemetry/**'
+      - 'libs/ownershipregistry/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'scripts/check-s0-release-evidence-assets.mjs'
+      - 'scripts/check-s1-registry-baseline.mjs'
+      - 'scripts/check-s2-implementation-plan.mjs'
+      - 'scripts/check-s2-telemetry-baseline.mjs'
+      - 'scripts/check-s2-telemetry-ownership.mjs'
+      - 'scripts/check-s2-telemetry-public-contract.mjs'
+      - 'scripts/check-s2-telemetry-rollout-gates.mjs'
+      - 'scripts/generate-s2-telemetry-contracts.mjs'
+      - 'scripts/run-s2-telemetry-postgres-tests.mjs'
+      - 'services/telemetry-runtime-service/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s2-telemetry-baseline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+          cache: npm
+      - run: npm ci
+      - run: docker compose -f infra/s2-telemetry/compose.yaml config
+      - run: npm run s2:ticket-01
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: s2-ticket-01-baseline-evidence
+          path: out/s2-ticket-01/postgres-baseline.json
+          if-no-files-found: error
+          retention-days: 14

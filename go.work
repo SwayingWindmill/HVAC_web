@@ -16,6 +16,7 @@ use (
 	./services/outbox-relay
 	./services/platform-core-service
 	./services/platform-gateway
+	./services/telemetry-runtime-service
 	./tools/legacy-private-fixture
 	./tools/s0-auth-fixture
 )

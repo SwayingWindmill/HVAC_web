@@ -52,12 +52,13 @@ const [spec, publication, ownership, activeSpecText, adr, context, packageJSON] 
   readJSON('package.json'),
 ]);
 
-assert(spec.openapi === '3.1.0', 'planned telemetry contract must use OpenAPI 3.1.0');
-assert(spec.info?.version === '1.0.0-planned', 'planned telemetry contract version drifted');
-assert(spec['x-activation-status'] === 'planned', 'planned telemetry routes must not be marked active');
+assert(spec.openapi === '3.1.0', 'telemetry contract must use OpenAPI 3.1.0');
+assert(spec.info?.version === '1.0.0', 'expand-baseline telemetry contract version drifted');
+assert(spec['x-activation-status'] === 'expand-baseline', 'telemetry contract must be activated only as an expand baseline');
 assert(spec['x-public-owner'] === 'platform-gateway', 'Gateway must remain the public owner');
 assert(spec['x-upstream-owner'] === 'telemetry-runtime-service', 'Telemetry Runtime must remain the upstream business owner');
-assert(ownership.activationStatus === 'planned', 'S2 ownership contract must remain planned');
+assert(publication['x-activation-status'] === 'expand-baseline', 'publication contract must be activated only as an expand baseline');
+assert(ownership.activationStatus === 'expand-baseline', 'S2 ownership contract must be an expand baseline');
 assert(ownership.ownerService === spec['x-upstream-owner'], 'public contract owner must match the ownership decision');
 
 assert(JSON.stringify(spec.security) === JSON.stringify([{ BffSession: [] }, { WorkloadMTLS: [] }]), 'security alternatives must be BffSession and WorkloadMTLS');

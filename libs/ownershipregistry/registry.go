@@ -14,14 +14,16 @@ import (
 )
 
 const (
-	OwnerGateway = "platform-gateway"
-	OwnerLegacy  = "legacy-hvac-backend"
-	OwnerCore    = "platform-core-service"
+	OwnerGateway          = "platform-gateway"
+	OwnerLegacy           = "legacy-hvac-backend"
+	OwnerCore             = "platform-core-service"
+	OwnerTelemetryRuntime = "telemetry-runtime-service"
 
 	PhaseLegacyPrimaryGoShadow       = "LEGACY_PRIMARY_GO_SHADOW"
 	PhaseGoCanaryLegacyShadow        = "GO_CANARY_LEGACY_SHADOW"
 	PhaseGoPrimaryLegacyReadFallback = "GO_PRIMARY_LEGACY_READ_FALLBACK"
 	PhaseGoPrimary                   = "GO_PRIMARY"
+	PhaseS2ContractOnly              = "R0-contract-only"
 )
 
 var (
@@ -40,6 +42,8 @@ type RouteEntry struct {
 	Method                   string        `json:"method"`
 	Path                     string        `json:"path"`
 	Owner                    string        `json:"owner"`
+	PublicIngress            string        `json:"publicIngress,omitempty"`
+	ActivationStatus         string        `json:"activationStatus,omitempty"`
 	Revision                 int64         `json:"revision"`
 	Rollout                  RolloutPolicy `json:"rollout"`
 	CompatibilityMode        string        `json:"compatibilityMode"`
@@ -156,7 +160,7 @@ func validateEntry(entry RouteEntry) error {
 	if entry.Owner == OwnerLegacy && entry.CompatibilityMode != "legacy-read" {
 		return errors.New("Legacy ownership requires legacy-read compatibility")
 	}
-	allowed := map[string]bool{"organization": true, "principal": true, "site": true}
+	allowed := map[string]bool{"organization": true, "principal": true, "site": true, "device": true, "key": true}
 	seenScopes := map[string]bool{}
 	for _, scope := range entry.AllowedScopeDimensions {
 		if !allowed[scope] || seenScopes[scope] {
@@ -179,12 +183,45 @@ func validateEntry(entry RouteEntry) error {
 		if len(entry.Rollout.CohortSalt) < 8 || !seenScopes["organization"] || !seenScopes["principal"] {
 			return errors.New("percentage rollout requires salt, organization and principal")
 		}
+	case "disabled":
+		if entry.Rollout.Percentage != 0 || entry.Rollout.FallbackOwner != "" || entry.Rollout.CohortSalt != "" {
+			return errors.New("disabled rollout contains cohort fields")
+		}
 	default:
 		return errors.New("rollout mode is unsupported")
 	}
 	if entry.MigrationPhase != "" {
-		if err := validateMigrationPhase(entry); err != nil {
+		var err error
+		if entry.MigrationPhase == PhaseS2ContractOnly {
+			err = validateS2ContractOnly(entry, seenScopes)
+		} else {
+			err = validateMigrationPhase(entry)
+		}
+		if err != nil {
 			return err
+		}
+	}
+	if entry.Owner == OwnerTelemetryRuntime && entry.MigrationPhase != PhaseS2ContractOnly {
+		return errors.New("Telemetry Runtime ownership requires the S2 contract-only phase")
+	}
+	return nil
+}
+
+func validateS2ContractOnly(entry RouteEntry, seenScopes map[string]bool) error {
+	if entry.Owner != OwnerTelemetryRuntime || entry.PublicIngress != OwnerGateway || entry.ActivationStatus != "expand-baseline" {
+		return errors.New("S2 contract-only ownership or activation is invalid")
+	}
+	if entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" || entry.ShadowSideEffectPolicy != "NONE" || entry.ReadOnlyFallback || entry.ReadFallbackOwner != "" {
+		return errors.New("S2 contract-only route must remain native, disabled and fallback-free")
+	}
+	for _, required := range []string{"organization", "site", "device", "principal", "key"} {
+		if !seenScopes[required] {
+			return errors.New("S2 contract-only scope dimensions are incomplete")
+		}
+	}
+	for _, required := range []string{"AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND", "REVISION_GAP", "RECOVERY_FAILED"} {
+		if !containsString(entry.FallbackForbiddenResults, required) {
+			return errors.New("S2 contract-only forbidden results are incomplete")
 		}
 	}
 	return nil
@@ -227,7 +264,7 @@ func isActiveOwner(owner string) bool {
 }
 
 func isCandidateOwner(owner string) bool {
-	return isActiveOwner(owner) || owner == OwnerCore
+	return isActiveOwner(owner) || owner == OwnerCore || owner == OwnerTelemetryRuntime
 }
 
 func NewManager(snapshot *Snapshot, audit AuditSink, now func() time.Time) *Manager {
@@ -313,9 +350,11 @@ func validateRevisionTransition(current, candidate *Snapshot) error {
 }
 
 func routePolicyChanged(old, next RouteEntry) bool {
-	return old.Owner != next.Owner || old.CompatibilityMode != next.CompatibilityMode || old.Rollout != next.Rollout ||
+	return old.Owner != next.Owner || old.PublicIngress != next.PublicIngress || old.ActivationStatus != next.ActivationStatus ||
+		old.CompatibilityMode != next.CompatibilityMode || old.Rollout != next.Rollout ||
 		old.MigrationPhase != next.MigrationPhase || old.ShadowSideEffectPolicy != next.ShadowSideEffectPolicy ||
 		old.ReadOnlyFallback != next.ReadOnlyFallback || old.ReadFallbackOwner != next.ReadFallbackOwner ||
+		strings.Join(old.AllowedScopeDimensions, "\x00") != strings.Join(next.AllowedScopeDimensions, "\x00") ||
 		strings.Join(old.FallbackForbiddenResults, "\x00") != strings.Join(next.FallbackForbiddenResults, "\x00")
 }
 
@@ -370,6 +409,9 @@ func (snapshot *Snapshot) Resolve(method, requestPath, businessKey string) (Deci
 		return Decision{}, ErrRouteMissing
 	}
 	entry := matched.entry
+	if entry.Rollout.Mode == "disabled" {
+		return Decision{}, ErrRouteMissing
+	}
 	decision := Decision{
 		RouteKey:                 entry.Method + " " + entry.Path,
 		PathTemplate:             entry.Path,
@@ -413,6 +455,9 @@ func (snapshot *Snapshot) AllowedMethods(requestPath string) []string {
 	var methods []string
 	for index := range snapshot.routes {
 		candidate := &snapshot.routes[index]
+		if candidate.entry.Rollout.Mode == "disabled" {
+			continue
+		}
 		if !matches(candidate.segments, pathSegments) {
 			continue
 		}

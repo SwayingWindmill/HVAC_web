@@ -1,0 +1,280 @@
+{
+  "schemaVersion": 1,
+  "predecessorContractVersion": "1.0.0-planned",
+  "currentContractVersion": "1.0.0",
+  "activationStatus": "expand-baseline",
+  "operations": [
+    {
+      "operationId": "getDeviceObservationSnapshot",
+      "method": "GET",
+      "path": "/api/v1/devices/{deviceId}/observation-snapshot",
+      "responseSchema": "DeviceObservationSnapshot"
+    },
+    {
+      "operationId": "batchGetDeviceObservationSnapshots",
+      "method": "POST",
+      "path": "/api/v1/telemetry/observation-snapshots:batchGet",
+      "requestSchema": "BatchGetObservationSnapshotsRequest",
+      "responseSchema": "BatchGetObservationSnapshotsResponse"
+    },
+    {
+      "operationId": "bootstrapTelemetrySubscriptions",
+      "method": "POST",
+      "path": "/api/v1/telemetry/subscriptions:bootstrap",
+      "requestSchema": "SubscriptionBootstrapRequest",
+      "responseSchema": "SubscriptionBootstrapResponse"
+    },
+    {
+      "operationId": "checkpointTelemetryRecoveryCursors",
+      "method": "POST",
+      "path": "/api/v1/telemetry/recovery-cursors:checkpoint",
+      "requestSchema": "RecoveryCursorCheckpointRequest",
+      "responseSchema": "RecoveryCursorCheckpointResponse"
+    }
+  ],
+  "requiredSchemaProperties": {
+    "DeviceObservationSnapshot": [
+      "schemaVersion",
+      "deviceId",
+      "owningOrganizationId",
+      "siteId",
+      "businessRevision",
+      "evaluatedAt",
+      "evaluationAvailability",
+      "availabilityReasons",
+      "presence",
+      "telemetryReadiness",
+      "displayState",
+      "values"
+    ],
+    "ProblemDetails": [
+      "type",
+      "title",
+      "status",
+      "detail",
+      "instance",
+      "code",
+      "traceId",
+      "retryable"
+    ],
+    "RecoveryCursorCheckpoint": [
+      "subscriptionId",
+      "businessRevision",
+      "transportPosition"
+    ],
+    "SubscriptionDescriptor": [
+      "clientSubscriptionId",
+      "subscriptionId",
+      "deviceId",
+      "keys",
+      "channel",
+      "recoveryMode",
+      "transportPosition",
+      "recoveryCursor"
+    ]
+  },
+  "publication": {
+    "title": "S2 Device Observation Publication v1",
+    "kind": "DEVICE_OBSERVATION_DELTA",
+    "requiredProperties": [
+      "schemaVersion",
+      "kind",
+      "eventId",
+      "subscriptionId",
+      "deviceId",
+      "previousRevision",
+      "revision",
+      "evaluatedAt",
+      "publishedAt",
+      "evaluationAvailability",
+      "availabilityReasons",
+      "presence",
+      "telemetryReadiness",
+      "displayState",
+      "telemetryChanges"
+    ],
+    "forbiddenProperties": [
+      "recoveryCursor",
+      "transportPosition",
+      "epoch",
+      "offset"
+    ]
+  },
+  "postgres": {
+    "schema": "telemetry_runtime",
+    "tables": {
+      "registry_device_bindings": [
+        "device_id",
+        "owning_organization_id",
+        "site_id",
+        "integration_instance_id",
+        "external_entity_type",
+        "external_id",
+        "binding_status",
+        "binding_revision",
+        "source_registry_revision",
+        "valid_from",
+        "valid_to",
+        "updated_at"
+      ],
+      "iam_scope_projections": [
+        "projection_id",
+        "principal_id",
+        "acting_organization_id",
+        "owning_organization_id",
+        "site_id",
+        "device_id",
+        "telemetry_key",
+        "action",
+        "decision",
+        "policy_revision",
+        "source_event_id",
+        "valid_until",
+        "revoked_at",
+        "updated_at"
+      ],
+      "presence_policies": [
+        "device_id",
+        "policy_revision",
+        "online_within_seconds",
+        "offline_after_seconds",
+        "coverage_required",
+        "updated_at"
+      ],
+      "freshness_policies": [
+        "device_id",
+        "telemetry_key",
+        "policy_revision",
+        "fresh_within_seconds",
+        "configured",
+        "updated_at"
+      ],
+      "source_positions": [
+        "integration_instance_id",
+        "source_partition",
+        "source_offset",
+        "source_event_id",
+        "observed_at",
+        "updated_at"
+      ],
+      "source_observations": [
+        "observation_id",
+        "integration_instance_id",
+        "source_event_id",
+        "source_partition",
+        "source_offset",
+        "device_id",
+        "telemetry_key",
+        "value",
+        "value_type",
+        "unit",
+        "sampled_at",
+        "received_at",
+        "acceptance_status",
+        "quality_reasons",
+        "payload_sha256",
+        "created_at"
+      ],
+      "ingest_quarantine": [
+        "quarantine_id",
+        "integration_instance_id",
+        "external_entity_type",
+        "external_id",
+        "device_id",
+        "telemetry_key",
+        "reason_code",
+        "evidence",
+        "detected_at",
+        "resolved_at",
+        "resolution"
+      ],
+      "latest_accepted_telemetry": [
+        "device_id",
+        "telemetry_key",
+        "business_revision",
+        "value",
+        "value_type",
+        "unit",
+        "sampled_at",
+        "received_at",
+        "freshness",
+        "quality",
+        "quality_reasons",
+        "policy_revision",
+        "updated_at"
+      ],
+      "device_presence": [
+        "device_id",
+        "business_revision",
+        "applicability",
+        "current_state",
+        "last_seen_at",
+        "evaluated_at",
+        "policy_revision",
+        "last_known",
+        "updated_at"
+      ],
+      "device_observation_snapshots": [
+        "device_id",
+        "business_revision",
+        "evaluated_at",
+        "evaluation_availability",
+        "availability_reasons",
+        "telemetry_readiness",
+        "display_state",
+        "snapshot",
+        "snapshot_sha256",
+        "updated_at"
+      ],
+      "telemetry_subscriptions": [
+        "subscription_id",
+        "client_subscription_id",
+        "principal_id",
+        "acting_organization_id",
+        "device_id",
+        "keys",
+        "scope_sha256",
+        "policy_revision",
+        "status",
+        "expires_at",
+        "revoked_at",
+        "created_at",
+        "updated_at"
+      ],
+      "recovery_cursors": [
+        "cursor_id",
+        "subscription_id",
+        "business_revision",
+        "transport_epoch",
+        "transport_offset",
+        "scope_sha256",
+        "cursor_sha256",
+        "expires_at",
+        "revoked_at",
+        "created_at"
+      ],
+      "telemetry_publication_outbox": [
+        "event_id",
+        "device_id",
+        "business_revision",
+        "subscription_id",
+        "event_family",
+        "payload",
+        "payload_sha256",
+        "delivery_state",
+        "available_at",
+        "attempts",
+        "last_error_code",
+        "published_at",
+        "created_at"
+      ]
+    },
+    "expandOnly": true,
+    "forbiddenTokens": [
+      "DROP TABLE",
+      "DROP SCHEMA",
+      "DROP COLUMN",
+      "TRUNCATE TABLE"
+    ]
+  }
+}

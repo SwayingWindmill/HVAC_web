@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "generatorVersion": "1.0.0",
+  "generator": "scripts/generate-s2-telemetry-contracts.mjs",
+  "inputs": [
+    "contracts/http/s2-telemetry-public.openapi.json",
+    "contracts/events/s2-device-observation-publication.v1.schema.json",
+    "contracts/telemetry/s2-baseline-compatibility.v1.json"
+  ],
+  "outputs": [
+    "services/telemetry-runtime-service/pkg/telemetryapi/api.gen.go",
+    "apps/hvac-web/src/api/generated/s2Telemetry.gen.ts"
+  ]
+}

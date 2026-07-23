@@ -2,15 +2,15 @@
   "openapi": "3.1.0",
   "info": {
     "title": "HVAC S2 Telemetry Public Contract",
-    "version": "1.0.0-planned",
-    "description": "Planned browser and service-caller contract for authoritative Device Observation Snapshots and realtime recovery."
+    "version": "1.0.0",
+    "description": "Expand-baseline browser and service-caller contract for authoritative Device Observation Snapshots and realtime recovery. Production routing remains disabled until the rollout tickets."
   },
   "servers": [{ "url": "/" }],
   "security": [
     { "BffSession": [] },
     { "WorkloadMTLS": [] }
   ],
-  "x-activation-status": "planned",
+  "x-activation-status": "expand-baseline",
   "x-public-owner": "platform-gateway",
   "x-upstream-owner": "telemetry-runtime-service",
   "x-contract-invariants": [

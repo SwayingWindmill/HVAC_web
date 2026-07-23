@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 6,
+  "registryRevision": 7,
   "routes": [
     {
       "method": "GET",
@@ -340,6 +340,162 @@
         "RESOURCE_NOT_FOUND"
       ],
       "migrationPhase": "GO_PRIMARY"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/devices/{deviceId}/observation-snapshot",
+      "owner": "telemetry-runtime-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "expand-baseline",
+      "rollout": {
+        "mode": "disabled"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "device",
+        "principal",
+        "key"
+      ],
+      "migrationPhases": [
+        "R0-contract-only",
+        "R1-dark-ingest",
+        "R2-shadow-compare",
+        "R3-internal-canary",
+        "R4-external-canary-5",
+        "R5-ramp-25",
+        "R6-ramp-50",
+        "R7-primary-100",
+        "R8-legacy-current-state-retired"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false,
+      "fallbackForbiddenResults": [
+        "AUTHORIZATION_DENIED",
+        "RESOURCE_NOT_FOUND",
+        "REVISION_GAP",
+        "RECOVERY_FAILED"
+      ],
+      "migrationPhase": "R0-contract-only"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/telemetry/observation-snapshots:batchGet",
+      "owner": "telemetry-runtime-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "expand-baseline",
+      "rollout": {
+        "mode": "disabled"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "device",
+        "principal",
+        "key"
+      ],
+      "migrationPhases": [
+        "R0-contract-only",
+        "R1-dark-ingest",
+        "R2-shadow-compare",
+        "R3-internal-canary",
+        "R4-external-canary-5",
+        "R5-ramp-25",
+        "R6-ramp-50",
+        "R7-primary-100",
+        "R8-legacy-current-state-retired"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false,
+      "fallbackForbiddenResults": [
+        "AUTHORIZATION_DENIED",
+        "RESOURCE_NOT_FOUND",
+        "REVISION_GAP",
+        "RECOVERY_FAILED"
+      ],
+      "migrationPhase": "R0-contract-only"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/telemetry/subscriptions:bootstrap",
+      "owner": "telemetry-runtime-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "expand-baseline",
+      "rollout": {
+        "mode": "disabled"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "device",
+        "principal",
+        "key"
+      ],
+      "migrationPhases": [
+        "R0-contract-only",
+        "R1-dark-ingest",
+        "R2-shadow-compare",
+        "R3-internal-canary",
+        "R4-external-canary-5",
+        "R5-ramp-25",
+        "R6-ramp-50",
+        "R7-primary-100",
+        "R8-legacy-current-state-retired"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false,
+      "fallbackForbiddenResults": [
+        "AUTHORIZATION_DENIED",
+        "RESOURCE_NOT_FOUND",
+        "REVISION_GAP",
+        "RECOVERY_FAILED"
+      ],
+      "migrationPhase": "R0-contract-only"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/telemetry/recovery-cursors:checkpoint",
+      "owner": "telemetry-runtime-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "expand-baseline",
+      "rollout": {
+        "mode": "disabled"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "device",
+        "principal",
+        "key"
+      ],
+      "migrationPhases": [
+        "R0-contract-only",
+        "R1-dark-ingest",
+        "R2-shadow-compare",
+        "R3-internal-canary",
+        "R4-external-canary-5",
+        "R5-ramp-25",
+        "R6-ramp-50",
+        "R7-primary-100",
+        "R8-legacy-current-state-retired"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false,
+      "fallbackForbiddenResults": [
+        "AUTHORIZATION_DENIED",
+        "RESOURCE_NOT_FOUND",
+        "REVISION_GAP",
+        "RECOVERY_FAILED"
+      ],
+      "migrationPhase": "R0-contract-only"
     }
   ]
 }

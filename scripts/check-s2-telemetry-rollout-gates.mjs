@@ -36,7 +36,7 @@ const [gate, ownership, publicContract, operations, research, context, packageJS
 ]);
 
 assert(gate.schemaVersion === 1, 'schemaVersion must be 1');
-assert(gate.activationStatus === 'planned', 'gate must remain planned until implementation');
+assert(gate.activationStatus === 'expand-baseline', 'release gates must be activated only as an expand baseline');
 assert(gate.issue === 52, 'issue trace must remain #52');
 assert(gate.name === 's2-telemetry-release-gates-v1', 'gate name drifted');
 
@@ -50,8 +50,8 @@ assert(authority.transport === 'centrifugo-v6.8.1-oss', 'locked transport versio
 assert(authority.transportBroker === 'dedicated-redis', 'transport broker must remain dedicated Redis');
 assert(authority.businessStore === 'postgresql:telemetry_runtime', 'PostgreSQL business authority drifted');
 assert(authority.legacyFallback === false && authority.mockFallback === false, 'Legacy and Mock fallback must remain forbidden');
-assert(publicContract['x-activation-status'] === 'planned', 'public S2 contract must remain planned');
-assert(ownership.activationStatus === 'planned', 'ownership contract must remain planned');
+assert(publicContract['x-activation-status'] === 'expand-baseline', 'public S2 contract must remain an expand baseline');
+assert(ownership.activationStatus === 'expand-baseline', 'ownership contract must remain an expand baseline');
 
 const envelope = gate.releaseEnvelope ?? {};
 const expectedEnvelope = {

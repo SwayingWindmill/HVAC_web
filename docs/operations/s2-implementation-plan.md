@@ -1,6 +1,6 @@
 # S2 implementation ticket index and delivery order
 
-Status: accepted planning handoff
+Status: active implementation — Ticket #60 expand baseline
 
 Date: 2026-07-23
 
@@ -142,7 +142,7 @@ The specification map may close when all of the following are true:
 - #60 is the only initial frontier;
 - `npm run s2:implementation-plan:check` passes;
 - the map has no remaining Not yet specified fog;
-- planned contracts, ownership and release gates remain unactivated until #60 begins implementation.
+- #60 activates contracts, ownership and release gates only as an expand baseline with zero production traffic.
 
 Closing the map means the route is clear and implementation can start. It does not mean S2 is production-ready.
 

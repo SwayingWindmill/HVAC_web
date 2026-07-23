@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "decisionRevision": 1,
-  "activationStatus": "planned",
+  "decisionRevision": 2,
+  "activationStatus": "expand-baseline",
   "ownerService": "telemetry-runtime-service",
   "boundedContext": "telemetry-runtime",
   "authoritativeStore": {
@@ -9,7 +9,13 @@
     "schema": "telemetry_runtime",
     "writer": "telemetry-runtime-service",
     "migrationRole": "s2_telemetry_migrator",
+    "migrationServiceRole": "s2_telemetry_migrator_service",
     "runtimeRole": "s2_telemetry_runtime",
+    "serviceRole": "s2_telemetry_service",
+    "relayRole": "s2_telemetry_relay",
+    "relayServiceRole": "s2_telemetry_relay_service",
+    "gatewayRole": "s2_telemetry_gateway",
+    "iamRole": "s2_telemetry_iam",
     "runtimeBypassRls": false
   },
   "ownedResources": [
