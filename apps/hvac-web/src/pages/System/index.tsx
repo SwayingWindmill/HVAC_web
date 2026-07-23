@@ -18,20 +18,15 @@ import {
   Tabs,
   Tag,
   Tooltip,
-  Tree,
   Typography,
   message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import type { DataNode } from 'antd/es/tree';
 import {
   ApiOutlined,
   ApartmentOutlined,
   AuditOutlined,
-  BlockOutlined,
   CheckCircleOutlined,
-  ClusterOutlined,
-  DatabaseOutlined,
   EditOutlined,
   ExclamationCircleOutlined,
   LockOutlined,
@@ -56,12 +51,11 @@ import {
   OperationsSectionIntro,
 } from '@/components/OperationsUI';
 import { can, type PermissionAction, type PermissionSubject } from '@/auth/permissions';
+import { API_MODE } from '@/api/config';
 import { BRAND, STATUS } from '@/theme/tokens';
 import { useUi, type Role } from '@/store/ui';
 import {
   mockUsers,
-  mockSites,
-  mockAssetTree,
   mockAuditLogs,
   SCOPE_CATALOG,
   ROLE_LABEL,
@@ -70,23 +64,13 @@ import {
   AUDIT_EVENT_TYPES,
   type SystemUser,
   type BackendRole,
-  type AssetNode,
   type AuditLog,
   type AuditResult,
 } from '@/mock/system';
+import RegistrySitePanel from './RegistrySitePanel';
 import './System.css';
 
 const { Text } = Typography;
-
-/* ---------- tree mutation helper (immutable) ---------- */
-function insertNode(nodes: AssetNode[], parentKey: string | null, node: AssetNode): AssetNode[] {
-  if (parentKey === null) return [...nodes, node];
-  return nodes.map((item) => {
-    if (item.key === parentKey) return { ...item, children: [...(item.children ?? []), node] };
-    if (item.children) return { ...item, children: insertNode(item.children, parentKey, node) };
-    return item;
-  });
-}
 
 let nodeSeq = 100;
 
@@ -173,37 +157,23 @@ const ruleStatusMeta: Record<RuleStatus, { label: string; color: string }> = {
   draft: { label: '草稿', color: 'gold' },
 };
 
-const flattenAssets = (nodes: AssetNode[]): AssetNode[] => nodes.flatMap((node) => [node, ...(node.children ? flattenAssets(node.children) : [])]);
-
 export default function System() {
   const screens = Grid.useBreakpoint();
   const compactTable = !screens.xl;
   const { role } = useUi();
   const [activeTab, setActiveTab] = useState(INIT_TAB);
   const [users, setUsers] = useState<SystemUser[]>(mockUsers);
-  const [tree, setTree] = useState<AssetNode[]>(mockAssetTree);
-  const [siteId, setSiteId] = useState<string>(mockSites[0].id);
 
   const [userModal, setUserModal] = useState<null | { mode: 'create' } | { mode: 'edit'; user: SystemUser }>(null);
   const [userForm] = Form.useForm();
 
-  const [assetModal, setAssetModal] = useState(false);
-  const [assetForm] = Form.useForm();
-
   useEffect(() => {
-    if (!userModal && !assetModal) return undefined;
-
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (userModal) setUserModal(null);
-      if (assetModal) setAssetModal(false);
+    const closeUserModalOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setUserModal(null);
     };
-
-    document.addEventListener('keydown', closeOnEscape, true);
-    return () => document.removeEventListener('keydown', closeOnEscape, true);
-  }, [assetModal, userModal]);
+    window.addEventListener('keydown', closeUserModalOnEscape, true);
+    return () => window.removeEventListener('keydown', closeUserModalOnEscape, true);
+  }, []);
 
   const [evFilter, setEvFilter] = useState<string>('all');
   const [resFilter, setResFilter] = useState<AuditResult | 'all'>('all');
@@ -211,7 +181,6 @@ export default function System() {
 
   const activeUsers = users.filter((user) => user.status === 'active').length;
   const adminUsers = users.filter((user) => user.role === 'ADMIN').length;
-  const flatAssetNodes = useMemo(() => flattenAssets(tree), [tree]);
   const degradedSources = DATA_SOURCES.filter((source) => source.status !== 'online').length;
   const activeRules = ALARM_RULES.filter((rule) => rule.status === 'enabled').length;
 
@@ -264,31 +233,6 @@ export default function System() {
   const toggleStatus = (user: SystemUser) => {
     setUsers((list) => list.map((item) => (item.id === user.id ? { ...item, status: item.status === 'active' ? 'disabled' : 'active' } : item)));
     message.success(user.status === 'active' ? '已禁用（mock）' : '已启用（mock）');
-  };
-
-  const openAddAsset = () => {
-    assetForm.resetFields();
-    assetForm.setFieldsValue({ parent: 'root', type: 'building' });
-    setAssetModal(true);
-  };
-
-  const submitAsset = () => {
-    assetForm.validateFields().then((values) => {
-      Modal.confirm({
-        title: '二次确认（人在回路）',
-        icon: <SafetyCertificateOutlined style={{ color: BRAND.teal }} />,
-        content: `确认在「${values.parent === 'root' ? '根' : values.parent}」下新增${values.type === 'building' ? '建筑' : values.type === 'zone' ? '分区' : '机组'}「${values.name}」？`,
-        okText: '确认提交',
-        cancelText: '取消',
-        onOk: () => {
-          const parentKey = values.parent === 'root' ? null : values.parent;
-          const node: AssetNode = { key: `n${++nodeSeq}`, title: values.name, type: values.type };
-          setTree((current) => insertNode(current, parentKey, node));
-          message.success('节点已新增（mock）');
-          setAssetModal(false);
-        },
-      });
-    });
   };
 
   const userColumns: ColumnsType<SystemUser> = [
@@ -373,30 +317,6 @@ export default function System() {
     { title: '更新时间', dataIndex: 'updatedAt', width: 110, render: (value) => <Text type="secondary">{value}</Text> },
   ];
 
-  const treeData = useMemo(() => {
-    const icon = (type: AssetNode['type']) =>
-      type === 'building' ? <ApartmentOutlined style={{ color: BRAND.teal }} />
-        : type === 'zone' ? <ClusterOutlined style={{ color: STATUS.info }} />
-          : <BlockOutlined style={{ color: STATUS.warn }} />;
-    const walk = (nodes: AssetNode[]): DataNode[] => nodes.map((node) => ({
-      key: node.key,
-      title: node.title,
-      icon: icon(node.type),
-      children: node.children ? walk(node.children) : undefined,
-    }));
-    return walk(tree);
-  }, [tree]);
-
-  const flatNodes = useMemo(() => {
-    const out: { key: string; title: string }[] = [];
-    const walk = (nodes: AssetNode[], depth: number) => nodes.forEach((node) => {
-      out.push({ key: node.key, title: '　'.repeat(depth) + node.title });
-      if (node.children) walk(node.children, depth + 1);
-    });
-    walk(tree, 0);
-    return out;
-  }, [tree]);
-
   const filteredAudit = useMemo(() => {
     return mockAuditLogs.filter((item) => {
       if (evFilter !== 'all' && item.eventType !== evFilter) return false;
@@ -441,7 +361,7 @@ export default function System() {
         items={[
           { label: '启用用户', value: activeUsers, suffix: `/ ${users.length}`, detail: '当前可登录用户', icon: <UserOutlined />, tone: 'accent' },
           { label: '管理员', value: adminUsers, detail: '拥有系统治理权限', icon: <SafetyCertificateOutlined /> },
-          { label: '资产节点', value: flatAssetNodes.length, detail: '建筑、分区与设备节点', icon: <ApartmentOutlined /> },
+          { label: 'Registry', value: 'S1', detail: 'Organization / Site / Equipment / Device', icon: <ApartmentOutlined /> },
           { label: '降级数据源', value: degradedSources, detail: degradedSources ? '需要检查集成状态' : '全部数据源在线', icon: <ApiOutlined />, tone: degradedSources ? 'warning' : 'positive' },
         ]}
       />
@@ -556,64 +476,7 @@ export default function System() {
     </div>
   );
 
-  const siteTab = (
-    <div className="system-tab-stack">
-      <OperationsSectionIntro
-        title="站点与资产拓扑"
-        icon={<ApartmentOutlined />}
-        meta={`${flatAssetNodes.length} 个节点`}
-        actions={
-          <>
-            <Select
-              value={siteId}
-              aria-label="选择站点"
-              onChange={setSiteId}
-              options={mockSites.map((site) => ({ value: site.id, label: site.name }))}
-            />
-            <Button type="primary" icon={<PlusOutlined />} onClick={openAddAsset}>新增节点</Button>
-          </>
-        }
-      />
-
-      <OperationsInsightBand
-        title="结构变更"
-        icon={<ClusterOutlined />}
-        items={[
-          { text: '新增节点当前仅写入本地 mock 树。', tone: 'warning' },
-          { text: '生产写入必须校验父子类型、唯一名称与资源权限。', tone: 'info' },
-          { text: '成功变更后应触发资产同步并生成审计记录。', tone: 'positive' },
-        ]}
-      />
-
-      <Row gutter={[16, 16]} className="system-equal-row">
-        <Col xs={24} lg={15}>
-          <Card
-            variant="borderless"
-            title={<OperationsPanelHeading title="资产结构" meta={mockSites.find((site) => site.id === siteId)?.name} />}
-          >
-            <div className="system-tree-shell">
-              <Tree showIcon defaultExpandAll treeData={treeData} />
-            </div>
-          </Card>
-        </Col>
-        <Col xs={24} lg={9}>
-          <Card
-            variant="borderless"
-            title={<OperationsPanelHeading title="站点配置摘要" icon={<DatabaseOutlined />} />}
-          >
-            <Descriptions column={1} size="small" className="system-descriptions">
-              <Descriptions.Item label="当前站点">{mockSites.find((site) => site.id === siteId)?.name}</Descriptions.Item>
-              <Descriptions.Item label="站点 ID"><Text code>{siteId}</Text></Descriptions.Item>
-              <Descriptions.Item label="资产节点">{flatAssetNodes.length}</Descriptions.Item>
-              <Descriptions.Item label="同步模式">Mock Tree</Descriptions.Item>
-              <Descriptions.Item label="目标接口"><Text code>GET /assets/tree</Text></Descriptions.Item>
-              <Descriptions.Item label="写入策略">二次确认 + 审计日志</Descriptions.Item>
-            </Descriptions>
-          </Card>
-        </Col>
-      </Row>
-    </div>
-  );
+  const siteTab = <RegistrySitePanel />;
 
   const integrationsTab = (
     <div className="system-tab-stack">
@@ -769,7 +632,9 @@ export default function System() {
       extra={
         <Space size={8} wrap>
           <Tag icon={<SafetyCertificateOutlined />}>当前角色：{ROLE_LABEL[ROLE_MAP[role]]}</Tag>
-          <Tag color="gold">Mock 写入 · 二次确认</Tag>
+          <Tag color={API_MODE === 'real' ? 'blue' : 'gold'}>
+            {API_MODE === 'real' ? 'Registry 只读 · real' : 'Mock 写入 · 二次确认'}
+          </Tag>
         </Space>
       }
     >
@@ -832,44 +697,6 @@ export default function System() {
           </Form.Item>
           <Form.Item name="scopes" label="权限范围">
             <Select mode="multiple" placeholder="选择 scope" options={SCOPE_CATALOG.map((scope) => ({ value: scope.key, label: `${scope.label}（${scope.key}）` }))} />
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      <Modal
-        open={assetModal}
-        title={
-          <OperationsDetailHeader
-            eyebrow="站点与资产拓扑"
-            title="新增资产节点"
-            subtitle="选择父节点、资源类型和名称，提交后进入结构变更确认。"
-          />
-        }
-        width={620}
-        className="ops-detail-modal system-governance-modal"
-        onCancel={() => setAssetModal(false)}
-        footer={
-          <OperationsActionFooter note="结构变更当前仅写入 mock 资产树，生产环境必须同步审计日志。">
-            <Button onClick={() => setAssetModal(false)}>取消</Button>
-            <Button type="primary" onClick={submitAsset}>审阅并确认</Button>
-          </OperationsActionFooter>
-        }
-        destroyOnHidden
-        forceRender
-      >
-        <div className="system-modal-note">
-          <ClusterOutlined />
-          <span>资产节点会影响遥测归属、诊断对象和权限范围。提交后还会进行二次确认。</span>
-        </div>
-        <Form form={assetForm} layout="vertical">
-          <Form.Item name="parent" label="父节点" rules={[{ required: true }]}>
-            <Select options={[{ value: 'root', label: '根（顶级建筑）' }, ...flatNodes.map((node) => ({ value: node.key, label: node.title }))]} />
-          </Form.Item>
-          <Form.Item name="type" label="节点类型" rules={[{ required: true }]}>
-            <Select options={[{ value: 'building', label: '建筑' }, { value: 'zone', label: '分区' }, { value: 'unit', label: '机组/设备' }]} />
-          </Form.Item>
-          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
-            <Input placeholder="如 冷水机组 #3" />
           </Form.Item>
         </Form>
       </Modal>

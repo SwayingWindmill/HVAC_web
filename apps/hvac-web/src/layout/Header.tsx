@@ -6,6 +6,8 @@ import {
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { ROLE_LABEL, useUi, type Role } from '@/store/ui';
+import { API_MODE } from '@/api/config';
+import { useAuthorizedRegistrySites } from '@/api/registry';
 import { mockAlarms, SEVERITY_LABEL } from '@/mock/data';
 import { SEVERITY_COLOR } from '@/theme/tokens';
 import { telemetry, type RealtimeStatus } from '@/api';
@@ -50,16 +52,43 @@ export default function TopHeader() {
   const compact = !screens.xl;
   const narrow = !screens.xl;
   const canOpenAlarms = canViewPath(role, '/alarms');
+  const registrySitesQuery = useAuthorizedRegistrySites(API_MODE === 'real');
+  const siteOptions = API_MODE === 'real'
+    ? (registrySitesQuery.data ?? []).map(({ organization, site }) => ({
+        value: site.id,
+        label: `${organization.displayName} / ${site.displayName}`,
+      }))
+    : BUILDINGS;
+  const selectedSiteValue = siteOptions.some((option) => option.value === buildingId) ? buildingId : undefined;
+  const siteSelectorHint = API_MODE === 'real' && registrySitesQuery.isError
+    ? '无法读取授权 Site；真实模式不会显示本地演示站点。'
+    : API_MODE === 'real' && !registrySitesQuery.isPending && siteOptions.length === 0
+      ? '当前账号没有可见的 Site。'
+      : undefined;
+
+  useEffect(() => {
+    if (API_MODE !== 'real' || registrySitesQuery.isPending || registrySitesQuery.isError) return;
+    const firstSiteId = registrySitesQuery.data?.[0]?.site.id;
+    if (firstSiteId && !registrySitesQuery.data?.some(({ site }) => site.id === buildingId)) setBuilding(firstSiteId);
+  }, [buildingId, registrySitesQuery.data, registrySitesQuery.isError, registrySitesQuery.isPending, setBuilding]);
 
   const viewControls = (
     <Space direction={narrow ? 'vertical' : 'horizontal'} size={10} align="start">
-      <Select
-        value={buildingId}
-        options={BUILDINGS}
-        onChange={setBuilding}
-        style={{ width: 150 }}
-        variant="filled"
-      />
+      <Tooltip title={siteSelectorHint}>
+        <Select
+          aria-label={API_MODE === 'real' ? '选择授权 Site' : '选择演示建筑'}
+          value={selectedSiteValue}
+          options={siteOptions}
+          onChange={setBuilding}
+          loading={API_MODE === 'real' && registrySitesQuery.isPending}
+          disabled={API_MODE === 'real' && (registrySitesQuery.isError || siteOptions.length === 0)}
+          placeholder={API_MODE === 'real' ? '选择授权 Site' : '选择演示建筑'}
+          notFoundContent={siteSelectorHint ?? '暂无 Site'}
+          status={API_MODE === 'real' && registrySitesQuery.isError ? 'error' : undefined}
+          style={{ width: 210 }}
+          variant="filled"
+        />
+      </Tooltip>
       <Segmented<Role>
         value={role}
         onChange={setRole}
