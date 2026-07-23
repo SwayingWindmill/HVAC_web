@@ -31,10 +31,8 @@
   padding: 16px 18px 10px;
   overflow: hidden;
   background:
-    linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(13, 23, 37, 0.96) 0%, rgba(7, 11, 20, 0.99) 100%),
     #070b14;
-  background-size: 48px 48px;
   color: #f2f6fc;
   font-family: "Bahnschrift", "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   box-shadow: 0 0 72px rgba(0, 0, 0, 0.58);

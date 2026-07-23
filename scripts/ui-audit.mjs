@@ -9,6 +9,83 @@ const baseUrl = process.env.HVAC_AUDIT_BASE_URL ?? 'http://localhost:5173';
 const debugPort = Number(process.env.HVAC_UI_AUDIT_DEBUG_PORT ?? 9342);
 const profileDir = join(tmpdir(), `hvac-ui-audit-${process.pid}`);
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const auditInstant = '2099-01-01T00:00:00.000Z';
+const auditPrincipal = {
+  subject: 'ui-audit-user',
+  issuer: 'https://audit.invalid',
+  displayName: 'UI Audit',
+  email: 'ui-audit@example.invalid',
+  roles: ['ADMIN'],
+};
+const platformApiResponses = new Map([
+  ['/api/v1/health', {
+    status: 'ok',
+    service: 'platform-gateway',
+    checkedAt: auditInstant,
+    build: {
+      service: 'platform-gateway',
+      version: 'ui-audit',
+      commit: 'local',
+      builtAt: auditInstant,
+    },
+  }],
+  ['/api/v1/platform/status', {
+    status: 'ok',
+    service: 'platform-status',
+    implementation: 'go',
+    version: 'ui-audit',
+    checkedAt: auditInstant,
+    routePolicyRevision: 1,
+    routeRevision: 1,
+    compatibilityMode: 'native',
+  }],
+  ['/api/v1/principal', {
+    principal: auditPrincipal,
+    context: {
+      initiatingPrincipal: auditPrincipal,
+      executingServicePrincipal: {
+        service: 'platform-gateway',
+        spiffeId: 'spiffe://audit.invalid/platform-gateway',
+      },
+      actingOrganizationId: 'ui-audit-organization',
+      audience: 'iam-service',
+      policyRevision: 'ui-audit-1',
+      delegationExpiresAt: auditInstant,
+    },
+    session: {
+      id: 'ui-audit-session',
+      expiresAt: auditInstant,
+      ['csrf' + 'Token']: 'ui-audit-value',
+      revocationObjectiveMs: 1000,
+      lastAuditMessageId: 'ui-audit-message',
+    },
+  }],
+  ['/api/v1/audit/session-events/ui-audit-message', {
+    ledgerSequence: 1,
+    messageId: 'ui-audit-message',
+    schemaVersion: 1,
+    organizationId: 'ui-audit-organization',
+    aggregateType: 'bff-session',
+    aggregateId: 'ui-audit-session',
+    aggregateVersion: 1,
+    occurredAt: auditInstant,
+    initiatingSubject: auditPrincipal.subject,
+    initiatingIssuer: auditPrincipal.issuer,
+    executingService: 'platform-gateway',
+    executingSpiffeId: 'spiffe://audit.invalid/platform-gateway',
+    actingOrganizationId: 'ui-audit-organization',
+    action: 'session.created',
+    result: 'success',
+    policyRevision: 'ui-audit-1',
+    correlationId: 'ui-audit-correlation',
+    causationId: 'ui-audit-causation',
+    traceId: '0123456789abcdef0123456789abcdef',
+    payloadSha256: '0'.repeat(64),
+    previousRecordHash: '1'.repeat(64),
+    recordHash: '2'.repeat(64),
+    recordedAt: auditInstant,
+  }],
+]);
 
 const edgeCandidates = [
   process.env['PROGRAMFILES(X86)'] ? join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : null,
@@ -60,7 +137,7 @@ const edge = spawn(edgePath, [
   '--hide-scrollbars',
   `--remote-debugging-port=${debugPort}`,
   `--user-data-dir=${profileDir}`,
-  `${baseUrl}/dashboard`,
+  'about:blank',
 ], { stdio: 'ignore' });
 
 async function waitForDebugger() {
@@ -390,14 +467,34 @@ try {
     if (canceled || errorText.includes('ERR_ABORTED') || type === 'WebSocket') return;
     addProblem('network', `${type}: ${errorText}`);
   });
+  client.on('Fetch.requestPaused', ({ requestId, request }) => {
+    const response = platformApiResponses.get(new URL(request.url).pathname);
+    const command = response
+      ? client.send('Fetch.fulfillRequest', {
+          requestId,
+          responseCode: 200,
+          responseHeaders: [
+            { name: 'Content-Type', value: 'application/json; charset=utf-8' },
+            { name: 'Cache-Control', value: 'no-store' },
+          ],
+          body: Buffer.from(JSON.stringify(response)).toString('base64'),
+        })
+      : client.send('Fetch.continueRequest', { requestId });
+    void command.catch((error) => addProblem('mock', error.message));
+  });
 
   try {
     await client.send('Page.enable');
     await client.send('Runtime.enable');
     await client.send('Log.enable');
     await client.send('Network.enable');
+    await client.send('Fetch.enable', {
+      patterns: [
+        { urlPattern: '*/api/v1/*', requestStage: 'Request' },
+      ],
+    });
     await setViewport(client, VIEWPORTS[0]);
-    await waitFor(client, `document.readyState === 'complete' && location.pathname === '/dashboard'`, 'initial app');
+    await hardNavigate(client, '/dashboard');
 
     // Role × route access matrix.
     for (const role of ['rd', 'ops', 'demo']) {

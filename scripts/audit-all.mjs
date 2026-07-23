@@ -1,9 +1,34 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
+import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
-const port = Number(process.env.HVAC_AUDIT_PORT ?? 4173);
+
+function findAvailablePort() {
+  return new Promise((resolvePort, rejectPort) => {
+    const probe = createServer();
+    probe.unref();
+    probe.once('error', rejectPort);
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address();
+      if (!address || typeof address === 'string') {
+        probe.close(() => rejectPort(new Error('Unable to allocate an audit preview port')));
+        return;
+      }
+      probe.close((error) => {
+        if (error) rejectPort(error);
+        else resolvePort(address.port);
+      });
+    });
+  });
+}
+
+const configuredPort = process.env.HVAC_AUDIT_PORT;
+const port = configuredPort === undefined ? await findAvailablePort() : Number(configuredPort);
+if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  throw new Error(`Invalid HVAC_AUDIT_PORT: ${configuredPort}`);
+}
 const baseUrl = `http://127.0.0.1:${port}`;
 const skipBuild = process.argv.includes('--skip-build');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
