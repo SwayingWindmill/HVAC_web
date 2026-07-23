@@ -1,0 +1,571 @@
+{
+  "schemaVersion": 1,
+  "activationStatus": "planned",
+  "issue": 52,
+  "name": "s2-telemetry-release-gates-v1",
+  "authority": {
+    "businessOwner": "telemetry-runtime-service",
+    "publicSeam": "platform-gateway",
+    "authorizationOwner": "iam-service",
+    "registryOwner": "platform-core-service",
+    "transport": "centrifugo-v6.8.1-oss",
+    "transportBroker": "dedicated-redis",
+    "businessStore": "postgresql:telemetry_runtime",
+    "legacyFallback": false,
+    "mockFallback": false
+  },
+  "releaseEnvelope": {
+    "name": "initial-production-v1",
+    "sustainedActiveConnections": 5000,
+    "reconnectBurstConnections": 10000,
+    "reconnectBurstPerSecond": 1000,
+    "activeSubscriptions": 50000,
+    "activeHistoryChannels": 10000,
+    "averageSubscriptionsPerConnection": 10,
+    "p95SubscriptionsPerConnection": 25,
+    "hardSubscriptionsPerConnection": 100,
+    "peakDeviceBusinessRevisionsPerSecond": 2000,
+    "averageSubscribersPerPublication": 3,
+    "peakPublicationDeliveriesPerSecond": 6000,
+    "averageEncodedPublicationBytes": 900,
+    "p99EncodedPublicationBytes": 4096,
+    "maximumEncodedPublicationBytes": 65536,
+    "steadyStateDurationMinutes": 60,
+    "shortPeakMultiplier": 2,
+    "shortPeakDurationMinutes": 15,
+    "nPlusOneLoadFraction": 0.7,
+    "minimumCapacityHeadroomFraction": 0.3
+  },
+  "transportBounds": {
+    "clientQueueMaxBytes": 262144,
+    "historySizePublications": 256,
+    "historyTtlSeconds": 180,
+    "historyMetaTtlSeconds": 86400,
+    "recoveryMaxPublicationLimit": 256,
+    "maximumRecoveryCursorLifetimeSeconds": 120,
+    "checkpointIntervalSeconds": 30,
+    "connectionTokenLifetimeSeconds": 300,
+    "subscriptionTokenLifetimeSeconds": 300,
+    "guaranteedRecoveryWindowSeconds": 120,
+    "maximumSustainedDeviceRevisionsPerSecondForGuaranteedWindow": 2,
+    "historyIsAuthoritative": false,
+    "snapshotFallbackRequired": true
+  },
+  "slo": {
+    "windowDays": 30,
+    "snapshotHttp": {
+      "availabilityPercent": 99.9,
+      "singleP95Milliseconds": 250,
+      "singleP99Milliseconds": 750,
+      "batchP95Milliseconds": 1000,
+      "batchP99Milliseconds": 2000,
+      "maximumCurrentSnapshotAgeSeconds": 30
+    },
+    "ingest": {
+      "acceptanceP95Milliseconds": 2000,
+      "acceptanceP99Milliseconds": 5000,
+      "presenceSignalToEvaluationP95Milliseconds": 3000,
+      "presenceSignalToEvaluationP99Milliseconds": 10000,
+      "offlineDeadlineLatenessP95Seconds": 15,
+      "offlineDeadlineLatenessP99Seconds": 60
+    },
+    "publication": {
+      "committedToTransportP95Milliseconds": 1000,
+      "committedToTransportP99Milliseconds": 3000,
+      "acceptedToBrowserP95Milliseconds": 2000,
+      "acceptedToBrowserP99Milliseconds": 5000,
+      "withinFiveSecondsPercent": 99.95,
+      "undetectedRevisionGaps": 0
+    },
+    "recovery": {
+      "eligibleTransportRecoverySuccessPercent": 99,
+      "recoveryOrSnapshotSuccessPercent": 99.9,
+      "recoveryToLiveP95Milliseconds": 3000,
+      "recoveryToLiveP99Milliseconds": 10000,
+      "snapshotFallbackP95Milliseconds": 5000,
+      "snapshotFallbackP99Milliseconds": 15000
+    },
+    "authorization": {
+      "subscribeDecisionP95Milliseconds": 100,
+      "subscribeDecisionP99Milliseconds": 300,
+      "revocationPropagationP95Milliseconds": 2000,
+      "revocationPropagationP99Milliseconds": 5000,
+      "revocationPropagationMaximumMilliseconds": 10000
+    },
+    "slowConsumer": {
+      "warningDisconnectFractionPerFiveMinutes": 0.001,
+      "rollbackDisconnectFractionPerFiveMinutes": 0.005
+    }
+  },
+  "securityZeroInvariants": [
+    "cross_organization_successes",
+    "cross_site_successes",
+    "hidden_device_disclosures",
+    "forged_scope_successes",
+    "unauthorized_key_disclosures",
+    "post_revocation_publications",
+    "cursor_scope_expansions",
+    "cursor_replay_authorization_bypasses",
+    "raw_token_log_findings",
+    "raw_cursor_log_findings",
+    "raw_channel_log_findings",
+    "telemetry_value_log_findings",
+    "legacy_or_mock_fallbacks",
+    "non_owner_s2_business_writes",
+    "undetected_revision_gaps"
+  ],
+  "negativeTests": [
+    {
+      "id": "cross-organization-single-read",
+      "surface": "single-snapshot",
+      "expectedStatus": 404,
+      "expectedCode": "RESOURCE_NOT_FOUND",
+      "invariant": "no-resource-disclosure"
+    },
+    {
+      "id": "cross-site-batch-read",
+      "surface": "batch-snapshot",
+      "expectedStatus": 200,
+      "expectedItemCode": "RESOURCE_NOT_FOUND",
+      "invariant": "ordered-item-nondiscoverability"
+    },
+    {
+      "id": "forged-browser-identity-headers",
+      "surface": "all-http",
+      "expectedStatus": 400,
+      "expectedCode": "TELEMETRY_REQUEST_INVALID",
+      "invariant": "no-scope-expansion"
+    },
+    {
+      "id": "hidden-device-subscription",
+      "surface": "subscription-bootstrap",
+      "expectedStatus": 404,
+      "expectedCode": "RESOURCE_NOT_FOUND",
+      "invariant": "no-partial-capability"
+    },
+    {
+      "id": "forged-channel-subscription",
+      "surface": "subscribe-proxy",
+      "expectedDecision": "deny",
+      "invariant": "channel-is-not-authority"
+    },
+    {
+      "id": "revocation-stops-delivery",
+      "surface": "live-subscription",
+      "expectedMaximumMilliseconds": 10000,
+      "invariant": "zero-post-revocation-publications"
+    },
+    {
+      "id": "cursor-cross-principal-replay",
+      "surface": "subscription-bootstrap",
+      "expectedStatus": 400,
+      "expectedCode": "RECOVERY_CURSOR_INVALID",
+      "invariant": "cursor-has-no-authority"
+    },
+    {
+      "id": "cursor-cross-device-or-key-replay",
+      "surface": "subscription-bootstrap",
+      "expectedStatus": 400,
+      "expectedCode": "RECOVERY_CURSOR_INVALID",
+      "invariant": "cursor-scope-bound"
+    },
+    {
+      "id": "key-enumeration-visible-device",
+      "surface": "single-and-batch-snapshot",
+      "expectedStatus": 400,
+      "expectedCode": "TELEMETRY_KEY_INVALID",
+      "invariant": "unknown-and-unauthorized-keys-indistinguishable"
+    },
+    {
+      "id": "key-enumeration-hidden-device",
+      "surface": "single-and-batch-snapshot",
+      "expectedStatus": 404,
+      "expectedCode": "RESOURCE_NOT_FOUND",
+      "invariant": "device-invisibility-precedes-key-validation"
+    }
+  ],
+  "observability": {
+    "requiredMetricFamilies": [
+      "s2_telemetry_ingest_acceptance_duration_seconds",
+      "s2_telemetry_source_lag_seconds",
+      "s2_telemetry_presence_evaluation_duration_seconds",
+      "s2_telemetry_offline_deadline_lateness_seconds",
+      "s2_telemetry_snapshot_request_duration_seconds",
+      "s2_telemetry_snapshot_age_seconds",
+      "s2_telemetry_publication_lag_seconds",
+      "s2_telemetry_publication_revision_gap_total",
+      "s2_telemetry_recovery_attempts_total",
+      "s2_telemetry_snapshot_fallback_total",
+      "s2_telemetry_subscribe_decision_duration_seconds",
+      "s2_telemetry_revocation_propagation_seconds",
+      "s2_telemetry_outbox_oldest_unpublished_timestamp_seconds",
+      "s2_telemetry_quarantine_candidates_total",
+      "s2_telemetry_upstream_errors_total",
+      "s2_telemetry_active_subscriptions",
+      "s2_telemetry_publication_bytes_total"
+    ],
+    "allowedMetricLabels": [
+      "service",
+      "operation",
+      "outcome",
+      "reason_family",
+      "source_type",
+      "transport",
+      "phase",
+      "cohort",
+      "schema_version"
+    ],
+    "forbiddenMetricLabels": [
+      "principal_id",
+      "organization_id",
+      "site_id",
+      "device_id",
+      "subscription_id",
+      "channel",
+      "cursor",
+      "recovery_cursor",
+      "business_revision",
+      "telemetry_key",
+      "telemetry_value",
+      "token"
+    ],
+    "traceFields": [
+      "trace_id",
+      "span_id",
+      "request_id",
+      "operation",
+      "outcome",
+      "organization_ref",
+      "site_ref",
+      "device_ref",
+      "subscription_ref",
+      "channel_hash",
+      "cursor_fingerprint",
+      "business_revision",
+      "previous_business_revision",
+      "recovery_outcome",
+      "rollout_phase",
+      "cohort"
+    ],
+    "auditFields": [
+      "request_id",
+      "trace_id",
+      "initiating_principal",
+      "acting_organization_id",
+      "site_id",
+      "device_id",
+      "subscription_id",
+      "action",
+      "result",
+      "policy_revision",
+      "business_revision",
+      "revocation_reason",
+      "recorded_at"
+    ],
+    "forbiddenLogsAndTraces": [
+      "connection_token",
+      "subscription_token",
+      "raw_recovery_cursor",
+      "raw_channel",
+      "raw_telemetry_value",
+      "authorization_header",
+      "cookie",
+      "csrf_token",
+      "source_credential"
+    ],
+    "baggageAllowed": ["none"],
+    "identifierReferenceMethod": "hmac-sha256-environment-key-truncated-16-bytes"
+  },
+  "capacityScenarios": [
+    {
+      "id": "steady-state-envelope",
+      "durationMinutes": 60,
+      "connections": 5000,
+      "subscriptions": 50000,
+      "deviceRevisionsPerSecond": 2000,
+      "pass": "all-slo-and-headroom"
+    },
+    {
+      "id": "two-x-short-peak",
+      "durationMinutes": 15,
+      "multiplier": 2,
+      "pass": "no-crash-no-data-corruption-and-security-zero"
+    },
+    {
+      "id": "reconnect-storm",
+      "connections": 10000,
+      "connectionsPerSecond": 1000,
+      "eligibleRecoveryFraction": 0.8,
+      "snapshotFallbackFraction": 0.2,
+      "pass": "recovery-slo-and-no-thundering-herd-collapse"
+    },
+    {
+      "id": "slow-consumer-one-percent",
+      "slowConsumerFraction": 0.01,
+      "pass": "bounded-queue-disconnect-and-healthy-client-slo"
+    },
+    {
+      "id": "history-overflow",
+      "expiredCursorFraction": 0.05,
+      "pass": "no-partial-replay-and-snapshot-fallback"
+    },
+    {
+      "id": "centrifugo-node-loss",
+      "loadFraction": 0.7,
+      "pass": "n-plus-one-no-security-or-business-state-loss"
+    },
+    {
+      "id": "redis-failover",
+      "loadFraction": 0.7,
+      "pass": "explicit-recovery-failure-and-snapshot-authority"
+    },
+    {
+      "id": "postgres-failover",
+      "loadFraction": 0.7,
+      "pass": "no-cache-authority-no-dual-write-and-explicit-unavailable"
+    },
+    {
+      "id": "authorization-revocation-storm",
+      "revocationsPerSecond": 100,
+      "durationSeconds": 60,
+      "pass": "revocation-slo-and-zero-post-revocation-delivery"
+    },
+    {
+      "id": "upstream-observation-outage",
+      "durationMinutes": 15,
+      "pass": "unavailable-not-false-offline-and-http-snapshot-remains-bounded"
+    }
+  ],
+  "resourcePassCriteria": {
+    "steadyStateCpuMaximumFraction": 0.6,
+    "steadyStateMemoryMaximumFraction": 0.7,
+    "redisMemoryMaximumFraction": 0.65,
+    "networkMaximumFraction": 0.6,
+    "postgresConnectionPoolMaximumFraction": 0.7,
+    "noUnboundedQueueGrowth": true,
+    "noProcessRestart": true,
+    "noOomKill": true
+  },
+  "rolloutPhases": [
+    {
+      "id": "R0-contract-only",
+      "trafficPercent": 0,
+      "minimumHoldMinutes": 0,
+      "writer": "none-unimplemented",
+      "reader": "legacy",
+      "shadow": false,
+      "fallback": "not-applicable",
+      "promotion": "contract-ownership-and-static-gates-pass"
+    },
+    {
+      "id": "R1-dark-ingest",
+      "trafficPercent": 0,
+      "minimumHoldMinutes": 1440,
+      "writer": "telemetry-runtime-service-for-s2-schema-only",
+      "reader": "legacy",
+      "shadow": false,
+      "fallback": "route-level-legacy-remains-primary",
+      "promotion": "ingest-quality-capacity-and-zero-security-invariants"
+    },
+    {
+      "id": "R2-shadow-compare",
+      "trafficPercent": 0,
+      "minimumHoldMinutes": 1440,
+      "writer": "telemetry-runtime-service-for-s2-schema-only",
+      "reader": "legacy",
+      "shadow": true,
+      "fallback": "none-within-request",
+      "promotion": "mapping-zero-diff-and-classified-value-parity"
+    },
+    {
+      "id": "R3-internal-canary",
+      "trafficPercent": 1,
+      "minimumHoldMinutes": 120,
+      "minimumSnapshotRequests": 10000,
+      "minimumSubscriptions": 1000,
+      "writer": "telemetry-runtime-service",
+      "reader": "cohort-route-owner",
+      "shadow": true,
+      "fallback": "route-revision-rollback-only",
+      "promotion": "all-slo-zero-security-and-browser-evidence"
+    },
+    {
+      "id": "R4-external-canary-5",
+      "trafficPercent": 5,
+      "minimumHoldMinutes": 240,
+      "minimumSnapshotRequests": 50000,
+      "minimumSubscriptions": 5000,
+      "minimumRecoveryAttempts": 100,
+      "writer": "telemetry-runtime-service",
+      "reader": "cohort-route-owner",
+      "shadow": true,
+      "fallback": "route-revision-rollback-only",
+      "promotion": "all-slo-and-less-than-one-x-error-budget-burn"
+    },
+    {
+      "id": "R5-ramp-25",
+      "trafficPercent": 25,
+      "minimumHoldMinutes": 480,
+      "writer": "telemetry-runtime-service",
+      "reader": "cohort-route-owner",
+      "shadow": true,
+      "fallback": "route-revision-rollback-only",
+      "promotion": "all-slo-n-plus-one-and-capacity-headroom"
+    },
+    {
+      "id": "R6-ramp-50",
+      "trafficPercent": 50,
+      "minimumHoldMinutes": 720,
+      "writer": "telemetry-runtime-service",
+      "reader": "cohort-route-owner",
+      "shadow": true,
+      "fallback": "route-revision-rollback-only",
+      "promotion": "all-slo-no-unclassified-diff-and-capacity-headroom"
+    },
+    {
+      "id": "R7-primary-100",
+      "trafficPercent": 100,
+      "minimumHoldMinutes": 1440,
+      "writer": "telemetry-runtime-service",
+      "reader": "s2",
+      "shadow": true,
+      "fallback": "route-revision-rollback-only",
+      "promotion": "legacy-current-state-freeze-approved"
+    },
+    {
+      "id": "R8-legacy-current-state-retired",
+      "trafficPercent": 100,
+      "minimumHoldMinutes": 10080,
+      "writer": "telemetry-runtime-service",
+      "reader": "s2",
+      "shadow": false,
+      "fallback": "none",
+      "promotion": "legacy-latest-batch-and-websocket-zero-traffic-and-removal-approved"
+    }
+  ],
+  "shadowComparison": {
+    "sideEffectFree": true,
+    "writesAllowed": false,
+    "publishesAllowed": false,
+    "authorizationEffectsAllowed": false,
+    "mappingMismatchMaximum": 0,
+    "missingOrExtraDeviceMaximum": 0,
+    "overlappingAcceptedValueAgreementPercent": 99.9,
+    "sampleTimestampWithinOneExpectedIntervalPercent": 99.5,
+    "semanticDifferencesMustBeClassified": true
+  },
+  "promotionGates": {
+    "allSecurityZeroInvariants": true,
+    "allRequiredEvidencePresent": true,
+    "sloBurnRateMaximum": 1,
+    "unclassifiedShadowDifferences": 0,
+    "contractDrift": 0,
+    "ownershipDrift": 0,
+    "capacityHeadroomMinimumFraction": 0.3,
+    "manualApprovalRequired": true
+  },
+  "rollbackTriggers": {
+    "immediate": [
+      "any-security-zero-invariant-nonzero",
+      "business-revision-corruption",
+      "non-owner-s2-write",
+      "wrong-device-or-key-publication",
+      "token-cursor-channel-or-value-leak",
+      "snapshot-authority-bypass",
+      "unclassified-cross-tenant-difference"
+    ],
+    "sustained": [
+      "snapshot-5xx-error-rate-over-one-percent-for-five-minutes",
+      "single-snapshot-p99-over-1500ms-for-ten-minutes",
+      "publication-p99-over-5000ms-for-ten-minutes",
+      "recovery-or-snapshot-failure-over-half-percent-for-five-minutes",
+      "slow-consumer-disconnect-fraction-over-half-percent-for-five-minutes",
+      "redis-memory-over-eighty-percent-for-ten-minutes",
+      "service-cpu-over-eighty-percent-for-ten-minutes",
+      "capacity-headroom-under-twenty-percent-for-ten-minutes"
+    ],
+    "maximumRollbackDecisionMinutes": 5,
+    "maximumRouteRollbackMinutes": 15,
+    "forceFreshSnapshotAfterRollback": true,
+    "disconnectOrExpireLiveSessions": true,
+    "databaseMigrationRollback": "expand-contract-no-down-migration-during-compatibility-window"
+  },
+  "requiredExistingCommands": [
+    "npm run s2:rollout-gates:check",
+    "npm run s2:ownership:check",
+    "npm run s2:public-contract:check",
+    "npm run s2:centrifugo:check",
+    "npm run contracts:check",
+    "npm run lint",
+    "npm run build"
+  ],
+  "requiredFutureCommands": [
+    "npm run build:telemetry-runtime",
+    "npm run build:telemetry-runtime-migrator",
+    "npm run s2:security-negative",
+    "npm run s2:postgres-integration",
+    "npm run s2:transport-integration",
+    "npm run s2:capacity",
+    "npm run audit:s2-browser",
+    "npm run audit:s2-kind-rollout",
+    "npm run s2:release-evidence"
+  ],
+  "requiredCI": {
+    "workflow": ".github/workflows/s2-telemetry-release.yml",
+    "cleanRunnerRequired": true,
+    "artifactName": "s2-telemetry-release-evidence",
+    "jobs": [
+      "contracts-and-static",
+      "security-negative",
+      "postgres-integration",
+      "transport-integration",
+      "capacity-and-failure",
+      "browser-real-mode",
+      "production-images",
+      "kind-rollout-rollback",
+      "release-evidence"
+    ]
+  },
+  "requiredEvidence": [
+    "out/s2-release-evidence/workflow-jobs.json",
+    "out/s2-release-evidence/security-negative-report.json",
+    "out/s2-release-evidence/postgres-integration-report.json",
+    "out/s2-release-evidence/transport-integration-report.json",
+    "out/s2-release-evidence/capacity-report.json",
+    "out/s2-release-evidence/reconnect-storm-report.json",
+    "out/s2-release-evidence/slow-consumer-report.json",
+    "out/s2-release-evidence/revocation-report.json",
+    "out/s2-release-evidence/browser-report.json",
+    "out/s2-release-evidence/kind-rollout-report.json",
+    "out/s2-release-evidence/rollback-report.json",
+    "out/s2-release-evidence/metric-cardinality-report.json",
+    "out/s2-release-evidence/log-redaction-report.json",
+    "out/s2-release-evidence/trace-correlation-report.json",
+    "out/s2-release-evidence/shadow-comparison-report.json",
+    "out/s2-release-evidence/alert-rule-validation-report.json",
+    "out/s2-release-evidence/production-image-report.json",
+    "out/s2-release-evidence/sbom-provenance-report.json",
+    "out/s2-release-evidence/release-evidence.intoto.json",
+    "out/s2-release-evidence/SHA256SUMS"
+  ],
+  "releaseChecklist": [
+    "immutable-images-and-component-versions-pinned",
+    "ownership-and-public-contract-gates-pass",
+    "postgres-migrations-expand-only-and-previous-version-compatible",
+    "dedicated-redis-and-centrifugo-n-plus-one-proven",
+    "all-negative-security-tests-pass",
+    "all-zero-invariants-equal-zero",
+    "steady-state-two-x-and-failure-capacity-scenarios-pass",
+    "slo-recording-and-alert-rules-validated",
+    "metrics-cardinality-within-budget",
+    "logs-traces-and-evidence-bundle-redacted",
+    "browser-real-mode-has-no-mock-or-legacy-fallback",
+    "shadow-comparison-is-side-effect-free",
+    "canary-hold-time-and-minimum-samples-satisfied",
+    "rollback-drill-completes-within-fifteen-minutes",
+    "fresh-snapshot-required-after-rollback-or-transport-reset",
+    "runbooks-and-primary-secondary-owners-recorded",
+    "release-evidence-bundle-hashed-and-reviewed",
+    "manual-promotion-approval-recorded"
+  ]
+}
