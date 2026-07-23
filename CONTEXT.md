@@ -127,3 +127,15 @@ A short-lived setup result that lets a caller establish an exact authorized live
 ## Observation Delta
 
 A subscription-scoped transition from one Device Business Revision to the next. It carries the current canonical Device state and only selected key changes; it may contain no key changes while still advancing the Device revision.
+
+## Release Envelope
+
+A versioned, measured upper bound for the workload a release is certified to serve while meeting its security, correctness, latency and resource-headroom gates. A Release Envelope is not a permanent platform limit and cannot be increased without new evidence.
+
+## Shadow Comparison
+
+A side-effect-free comparison of Legacy and S2 read results used only to produce migration evidence. Shadow Comparison cannot write, publish, authorize, repair mappings or influence current state.
+
+## Rollout Cohort
+
+A deterministic set of authorized callers or resources assigned to one route-owner revision during a phased release. A Cohort changes owner only through an explicit promotion or rollback decision; it never chooses a per-request fallback.
