@@ -1,0 +1,291 @@
+{
+  "schemaVersion": 1,
+  "activationStatus": "planned",
+  "name": "s2-telemetry-implementation-plan-v1",
+  "mapIssue": 46,
+  "planningIssue": 53,
+  "decisionIssues": [47, 48, 49, 50, 51, 52],
+  "ticketCount": 12,
+  "dependencyEdgeCount": 25,
+  "initialFrontier": [60],
+  "deliveryPrinciples": [
+    "one-ticket-one-short-lived-branch-one-merge",
+    "every-ticket-leaves-runnable-machine-readable-evidence",
+    "no-long-lived-integration-branch",
+    "no-cross-service-big-bang-merge",
+    "expand-contract-before-cutover",
+    "telemetry-runtime-is-the-only-s2-business-writer",
+    "no-request-level-legacy-thingsboard-or-mock-fallback",
+    "snapshot-authority-survives-transport-reset-and-rollback",
+    "new-adr-required-before-changing-accepted-semantics-or-release-envelope"
+  ],
+  "parallelGroups": [
+    {
+      "id": "owner-output-parallelism",
+      "after": [62],
+      "tickets": [63, 64],
+      "reason": "Trusted ingest and public Snapshot routing can proceed independently once the owner Snapshot and IAM delegation seam exist."
+    },
+    {
+      "id": "live-client-and-migration-parallelism",
+      "after": [65],
+      "tickets": [66, 67],
+      "reason": "The browser live adapter and side-effect-free migration control plane depend on the realtime backend but do not depend on each other."
+    }
+  ],
+  "tickets": [
+    {
+      "sequence": 1,
+      "key": "T01",
+      "issue": 60,
+      "title": "S2 Ticket 01: 激活 Telemetry contract、ownership 与 PostgreSQL baseline",
+      "owner": "Platform architecture / contracts / data foundations",
+      "stage": "expand-baseline",
+      "blockedBy": [],
+      "verticalEvidence": [
+        "generated-contract-compilation",
+        "postgres-migration-and-role-isolation",
+        "ownership-drift",
+        "clean-ci-baseline"
+      ],
+      "decisionLocks": ["ADR-0002", "ADR-0003", "ADR-0004", "release-gates-v1"],
+      "productionTrafficAllowed": false
+    },
+    {
+      "sequence": 2,
+      "key": "T02",
+      "issue": 61,
+      "title": "S2 Ticket 02: IAM 精确 Device/key 授权与撤权",
+      "owner": "IAM service",
+      "stage": "authorization",
+      "blockedBy": [60],
+      "verticalEvidence": [
+        "iam-postgres-integration",
+        "delegation-conformance",
+        "negative-authorization",
+        "revocation-event",
+        "redaction"
+      ],
+      "decisionLocks": ["exact-device-key-scope", "current-policy-reauthorization", "fail-closed"],
+      "productionTrafficAllowed": false
+    },
+    {
+      "sequence": 3,
+      "key": "T03",
+      "issue": 62,
+      "title": "S2 Ticket 03: Telemetry Runtime 权威 Snapshot 纵向切片",
+      "owner": "Telemetry Runtime service",
+      "stage": "authoritative-owner",
+      "blockedBy": [60, 61],
+      "verticalEvidence": [
+        "internal-snapshot-api-conformance",
+        "postgres-transaction-and-business-revision",
+        "presence-freshness-quality-semantics",
+        "two-organization-isolation"
+      ],
+      "decisionLocks": ["postgresql-authority", "single-writer", "coherent-snapshot"],
+      "productionTrafficAllowed": false
+    },
+    {
+      "sequence": 4,
+      "key": "T04",
+      "issue": 63,
+      "title": "S2 Ticket 04: ThingsBoard ingest、reconciliation、quarantine 与 outbox",
+      "owner": "Telemetry integrations + Telemetry Runtime",
+      "stage": "trusted-ingest",
+      "blockedBy": [62],
+      "verticalEvidence": [
+        "source-acceptance-and-quarantine",
+        "dedupe-replay-and-ordering",
+        "thingsboard-outage-and-reconciliation",
+        "postgres-failure-and-outbox"
+      ],
+      "decisionLocks": ["one-ingest-path", "source-position-is-evidence", "no-read-through-authority"],
+      "productionTrafficAllowed": false
+    },
+    {
+      "sequence": 5,
+      "key": "T05",
+      "issue": 64,
+      "title": "S2 Ticket 05: Gateway Snapshot 与 batch 公共路由",
+      "owner": "Platform Gateway + contract generation",
+      "stage": "public-snapshot",
+      "blockedBy": [61, 62],
+      "verticalEvidence": [
+        "generated-public-contract",
+        "gateway-iam-owner-integration",
+        "browser-session-and-csrf",
+        "nondiscoverability",
+        "no-fallback"
+      ],
+      "decisionLocks": ["four-operation-contract", "typed-snapshot-states", "gateway-only-browser-ingress"],
+      "productionTrafficAllowed": false
+    },
+    {
+      "sequence": 6,
+      "key": "T06",
+      "issue": 65,
+      "title": "S2 Ticket 06: Centrifugo 实时发布、订阅与恢复后端",
+      "owner": "Telemetry Runtime + realtime platform",
+      "stage": "realtime-backend",
+      "blockedBy": [61, 63, 64],
+      "verticalEvidence": [
+        "transport-integration",
+        "recovery-overflow-and-reset",
+        "slow-consumer",
+        "subscribe-authorization",
+        "revocation",
+        "no-secret"
+      ],
+      "decisionLocks": ["centrifugo-v6.8.1-oss", "dedicated-redis", "transport-only-responsibility", "snapshot-fallback"],
+      "productionTrafficAllowed": false
+    },
+    {
+      "sequence": 7,
+      "key": "T07",
+      "issue": 66,
+      "title": "S2 Ticket 07: TelemetryLiveClient 与浏览器恢复适配器",
+      "owner": "HVAC Web platform client",
+      "stage": "browser-live-adapter",
+      "blockedBy": [64, 65],
+      "verticalEvidence": [
+        "typescript-contract-drift",
+        "deep-module-dependency-boundary",
+        "browser-recovery-state-machine",
+        "revocation-cache-purge"
+      ],
+      "decisionLocks": ["snapshot-then-live", "contiguous-business-revision", "opaque-cursor", "no-feature-sdk-import"],
+      "productionTrafficAllowed": false
+    },
+    {
+      "sequence": 8,
+      "key": "T08",
+      "issue": 67,
+      "title": "S2 Ticket 08: Legacy shadow comparison 与 cohort routing",
+      "owner": "Platform Gateway + migration/compatibility",
+      "stage": "migration-control-plane",
+      "blockedBy": [63, 64, 65],
+      "verticalEvidence": [
+        "dark-ingest-ownership",
+        "shadow-difference",
+        "side-effect-denial",
+        "cohort-determinism",
+        "route-rollback"
+      ],
+      "decisionLocks": ["side-effect-free-shadow", "deterministic-cohort", "route-revision-rollback", "no-request-fallback"],
+      "productionTrafficAllowed": false
+    },
+    {
+      "sequence": 9,
+      "key": "T09",
+      "issue": 68,
+      "title": "S2 Ticket 09: HVAC Web real Presence 与 latest telemetry",
+      "owner": "HVAC Web feature team",
+      "stage": "real-product-experience",
+      "blockedBy": [64, 66, 67],
+      "verticalEvidence": [
+        "production-build",
+        "browser-journey-and-accessibility",
+        "real-mode-network-audit",
+        "state-rendering",
+        "revocation-cache-purge"
+      ],
+      "decisionLocks": ["no-mock-or-legacy-fallback", "exact-key-selection", "last-known-is-not-current"],
+      "productionTrafficAllowed": false
+    },
+    {
+      "sequence": 10,
+      "key": "T10",
+      "issue": 69,
+      "title": "S2 Ticket 10: 安全负向、可观测性与脱敏门禁",
+      "owner": "Platform security + observability",
+      "stage": "cross-chain-guardrails",
+      "blockedBy": [63, 64, 65, 66, 67, 68],
+      "verticalEvidence": [
+        "security-negative",
+        "zero-invariant",
+        "metric-cardinality",
+        "trace-correlation",
+        "log-redaction",
+        "alert-rule",
+        "observability-outage"
+      ],
+      "decisionLocks": ["zero-tolerance-security", "bounded-cardinality", "w3c-trace-context", "no-sensitive-baggage"],
+      "productionTrafficAllowed": false
+    },
+    {
+      "sequence": 11,
+      "key": "T11",
+      "issue": 70,
+      "title": "S2 Ticket 11: 容量、故障注入与 release evidence",
+      "owner": "Release engineering + SRE",
+      "stage": "release-certification",
+      "blockedBy": [69],
+      "verticalEvidence": [
+        "clean-runner-workflow",
+        "production-image-sbom-and-provenance",
+        "steady-state-and-two-x-capacity",
+        "reconnect-slow-consumer-and-failover",
+        "kind-rollout-and-rollback",
+        "hashed-release-attestation"
+      ],
+      "decisionLocks": ["initial-production-envelope-v1", "thirty-percent-headroom", "fifteen-minute-rollback"],
+      "productionTrafficAllowed": false
+    },
+    {
+      "sequence": 12,
+      "key": "T12",
+      "issue": 71,
+      "title": "S2 Ticket 12: Canary、100% cutover 与 Legacy current-state retirement",
+      "owner": "S2 release owner + Gateway/HVAC Web/Legacy owners",
+      "stage": "production-cutover",
+      "blockedBy": [70],
+      "verticalEvidence": [
+        "r1-through-r8-phase-reports",
+        "promotion-approvals",
+        "rollback-drill",
+        "seven-day-zero-legacy-current-state-traffic",
+        "final-route-and-ownership-state",
+        "s2-completion-attestation"
+      ],
+      "decisionLocks": ["single-s2-writer", "manual-promotion", "historical-boundary-retained", "risk-zero-before-completion"],
+      "productionTrafficAllowed": true
+    }
+  ],
+  "mapCloseConditions": [
+    "decision-issues-47-through-53-are-closed",
+    "implementation-issues-60-through-71-are-published-as-sub-issues-of-53",
+    "all-native-blocking-edges-match-this-plan",
+    "issue-60-is-the-only-initial-frontier",
+    "implementation-plan-static-gate-passes",
+    "map-not-yet-specified-is-empty",
+    "planned-contracts-ownership-and-release-gates-remain-unactivated-until-ticket-60"
+  ],
+  "nextSliceEntryConditions": [
+    "issues-60-through-71-are-closed-with-accepted-evidence",
+    "ticket-71-completion-attestation-is-passed",
+    "active-contract-and-ownership-state-match-the-accepted-s2-decisions",
+    "all-s2-security-zero-invariants-equal-zero",
+    "release-envelope-v1-is-certified-or-a-new-reviewed-version-replaces-it",
+    "legacy-current-state-latest-batch-and-websocket-have-zero-production-traffic-and-are-retired",
+    "historical-timeseries-remains-an-explicit-separate-compatibility-boundary",
+    "no-known-limitation-defers-tenant-security-business-correctness-audit-or-rollback"
+  ],
+  "risksToZeroBeforeNextSlice": [
+    "ambiguous-snapshot-or-business-revision-owner",
+    "non-owner-s2-business-write",
+    "unauthenticated-source-ingest-affecting-s2",
+    "registry-lifecycle-used-as-presence",
+    "thingsboard-legacy-cache-or-redis-used-as-current-authority",
+    "transport-position-or-cursor-used-as-business-authority",
+    "subscription-or-cursor-use-without-current-authorization",
+    "post-revocation-publication",
+    "cross-organization-site-device-or-key-disclosure",
+    "request-level-legacy-thingsboard-or-mock-fallback",
+    "undetected-business-revision-gap",
+    "raw-token-cursor-channel-or-telemetry-value-leak",
+    "unclassified-shadow-difference",
+    "capacity-or-rollback-evidence-missing",
+    "legacy-current-state-production-traffic-remaining"
+  ]
+}
