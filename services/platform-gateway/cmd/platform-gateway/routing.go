@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -16,11 +17,12 @@ import (
 )
 
 type routingRuntime struct {
-	manager *ownershipregistry.Manager
-	audit   ownershipregistry.AuditSink
-	legacy  *gateway.LegacyConfig
-	close   func()
-	watch   func(context.Context)
+	manager  *ownershipregistry.Manager
+	audit    ownershipregistry.AuditSink
+	legacy   *gateway.LegacyConfig
+	registry *gateway.RegistryConfig
+	close    func()
+	watch    func(context.Context)
 }
 
 func loadRoutingRuntime(ctx context.Context, logger *slog.Logger, identityEnabled bool) (routingRuntime, error) {
@@ -55,6 +57,11 @@ func loadRoutingRuntime(ctx context.Context, logger *slog.Logger, identityEnable
 		closeAudit()
 		return routingRuntime{}, err
 	}
+	registry, err := loadRegistryConfig(snapshot, identityEnabled)
+	if err != nil {
+		closeAudit()
+		return routingRuntime{}, err
+	}
 
 	watch := func(watchContext context.Context) {
 		last := append([]byte(nil), initialBytes...)
@@ -82,22 +89,26 @@ func loadRoutingRuntime(ctx context.Context, logger *slog.Logger, identityEnable
 			}
 		}
 	}
-	return routingRuntime{manager: manager, audit: audit, legacy: legacy, close: closeAudit, watch: watch}, nil
+	return routingRuntime{manager: manager, audit: audit, legacy: legacy, registry: registry, close: closeAudit, watch: watch}, nil
 }
 
 func loadLegacyConfig(snapshot *ownershipregistry.Snapshot, identityEnabled bool) (*gateway.LegacyConfig, error) {
-	if !snapshot.ContainsOwner(ownershipregistry.OwnerLegacy) || !identityEnabled {
+	if !identityEnabled {
 		return nil, nil
 	}
 	legacyURL := os.Getenv("LEGACY_URL")
 	legacyCAPath := os.Getenv("LEGACY_SERVER_CA")
 	clientCertPath := os.Getenv("IAM_CLIENT_CERT")
 	clientKeyPath := os.Getenv("IAM_CLIENT_KEY")
-	if legacyURL == "" || legacyCAPath == "" || clientCertPath == "" || clientKeyPath == "" {
-		if os.Getenv("S0_ALLOW_NO_LEGACY") == "true" {
+	configured := legacyURL != "" && legacyCAPath != "" && clientCertPath != "" && clientKeyPath != ""
+	if !configured {
+		if !snapshot.ContainsOwner(ownershipregistry.OwnerLegacy) || os.Getenv("S0_ALLOW_NO_LEGACY") == "true" {
 			return nil, nil
 		}
 		return nil, errors.New("LEGACY_URL, LEGACY_SERVER_CA and Gateway workload certificate are required for Legacy-owned routes")
+	}
+	if err := validatePrivateServiceURL(legacyURL, "LEGACY_URL"); err != nil {
+		return nil, err
 	}
 	certificate, err := tls.LoadX509KeyPair(clientCertPath, clientKeyPath)
 	if err != nil {
@@ -110,11 +121,64 @@ func loadLegacyConfig(snapshot *ownershipregistry.Snapshot, identityEnabled bool
 	return &gateway.LegacyConfig{
 		BaseURL:          legacyURL,
 		Audience:         envOr("LEGACY_AUDIENCE", "legacy-hvac-backend"),
-		HTTPClient:       &http.Client{Transport: workloadTransport(roots, &certificate, envOr("LEGACY_SERVER_NAME", "localhost"))},
+		HTTPClient:       nonRedirectingClient(workloadTransport(roots, &certificate, envOr("LEGACY_SERVER_NAME", "localhost"))),
 		Timeout:          durationEnv("LEGACY_TIMEOUT", 750*time.Millisecond),
 		FailureThreshold: intEnv("LEGACY_CIRCUIT_FAILURES", 2),
 		OpenDuration:     durationEnv("LEGACY_CIRCUIT_OPEN", 5*time.Second),
 	}, nil
+}
+
+func loadRegistryConfig(snapshot *ownershipregistry.Snapshot, identityEnabled bool) (*gateway.RegistryConfig, error) {
+	if !identityEnabled {
+		return nil, nil
+	}
+	coreURL := os.Getenv("CORE_URL")
+	coreCAPath := os.Getenv("CORE_SERVER_CA")
+	clientCertPath := os.Getenv("IAM_CLIENT_CERT")
+	clientKeyPath := os.Getenv("IAM_CLIENT_KEY")
+	configured := coreURL != "" && coreCAPath != "" && clientCertPath != "" && clientKeyPath != ""
+	if !configured {
+		if !snapshot.ContainsOwner(ownershipregistry.OwnerCore) || os.Getenv("S1_ALLOW_NO_CORE") == "true" {
+			return nil, nil
+		}
+		return nil, errors.New("CORE_URL, CORE_SERVER_CA and Gateway workload certificate are required for Core Registry routes")
+	}
+	if err := validatePrivateServiceURL(coreURL, "CORE_URL"); err != nil {
+		return nil, err
+	}
+	certificate, err := tls.LoadX509KeyPair(clientCertPath, clientKeyPath)
+	if err != nil {
+		return nil, err
+	}
+	roots, err := loadCertPool(coreCAPath, "Core server CA")
+	if err != nil {
+		return nil, err
+	}
+	return &gateway.RegistryConfig{
+		CoreBaseURL:         coreURL,
+		CoreHTTPClient:      nonRedirectingClient(workloadTransport(roots, &certificate, envOr("CORE_SERVER_NAME", "localhost"))),
+		CoreTimeout:         durationEnv("CORE_REGISTRY_TIMEOUT", 750*time.Millisecond),
+		ShadowTimeout:       durationEnv("REGISTRY_SHADOW_TIMEOUT", 500*time.Millisecond),
+		MaxResponseBytes:    int64(intEnv("REGISTRY_MAX_RESPONSE_BYTES", 2<<20)),
+		MaxShadowConcurrent: intEnv("REGISTRY_MAX_SHADOW_CONCURRENT", 32),
+	}, nil
+}
+
+func nonRedirectingClient(transport http.RoundTripper) *http.Client {
+	return &http.Client{
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+func validatePrivateServiceURL(value, name string) error {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return fmt.Errorf("%s must be an absolute HTTPS origin without credentials, path, query or fragment", name)
+	}
+	return nil
 }
 
 func durationEnv(name string, fallback time.Duration) time.Duration {

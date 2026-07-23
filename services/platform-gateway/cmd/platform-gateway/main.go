@@ -58,6 +58,7 @@ func main() {
 		RouteManager:  routing.manager,
 		RouteAudit:    routing.audit,
 		Legacy:        routing.legacy,
+		Registry:      routing.registry,
 		Observability: telemetry,
 		Build: platformapi.BuildInfo{
 			Service: "platform-gateway",
@@ -201,6 +202,9 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, func(), e
 		IAMHTTPClient: &http.Client{
 			Timeout:   5 * time.Second,
 			Transport: workloadTransport(iamRoots, &certificate, envOr("IAM_SERVER_NAME", "localhost")),
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
 		AuditHTTPClient: auditClient,
 		OIDCHTTPClient:  oidcClient,

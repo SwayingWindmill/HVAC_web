@@ -171,6 +171,7 @@ export async function startS0AuthTopology(options = {}) {
       ROUTE_OWNERSHIP_REGISTRY: resolve(root, 'contracts/ownership/route-ownership.v1.json'),
       S0_ALLOW_MEMORY_ROUTE_AUDIT: 'true',
       S0_ALLOW_NO_LEGACY: 'true',
+      S1_ALLOW_NO_CORE: 'true',
       S0_ALLOW_MEMORY_SESSION_STORE: 'true',
       S0_ALLOW_NO_AUDIT_LEDGER: 'true',
     });

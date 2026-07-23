@@ -31,22 +31,64 @@ func TestResolveUsesStableServerDerivedCohort(t *testing.T) {
 	}
 }
 
-func TestRegistryAcceptsCoreAsInactiveFallback(t *testing.T) {
-	registry := `{"registryVersion":1,"registryRevision":2,"routes":[{"method":"GET","path":"/api/v1/organizations","owner":"legacy-hvac-backend","revision":1,"rollout":{"mode":"percentage","percentage":100,"fallbackOwner":"platform-core-service","cohortSalt":"s1-organizations-v1"},"compatibilityMode":"legacy-read","allowedScopeDimensions":["organization","principal"]}]}`
-	snapshot := mustParse(t, registry)
-	decision, err := snapshot.Resolve("GET", "/api/v1/organizations", "org-01\x00fixture-user")
+func TestRegistryReloadRequiresAdjacentMigrationPhaseAndPreservesRoutes(t *testing.T) {
+	initial := mustParse(t, phaseRegistryJSON(3, 2, ownershipregistry.PhaseLegacyPrimaryGoShadow, 100))
+	audit := ownershipregistry.NewMemoryAuditSink()
+	manager := ownershipregistry.NewManager(initial, audit, time.Now)
+	changeContext := ownershipregistry.PolicyChangeContext{ExecutingService: "platform-gateway", ExecutingSPIFFEID: "spiffe://hvac.local/platform-gateway"}
+	if err := manager.Reload(context.Background(), []byte(phaseRegistryJSON(5, 4, ownershipregistry.PhaseGoPrimaryLegacyReadFallback, 0)), changeContext); err == nil {
+		t.Fatal("phase skip was accepted")
+	}
+	if manager.Current().RegistryRevision() != 3 {
+		t.Fatal("rejected phase changed the active snapshot")
+	}
+	if err := manager.Reload(context.Background(), []byte(phaseRegistryJSON(4, 3, ownershipregistry.PhaseGoCanaryLegacyShadow, 50)), changeContext); err != nil {
+		t.Fatalf("adjacent phase was rejected: %v", err)
+	}
+	if err := manager.Reload(context.Background(), []byte(phaseRegistryJSON(5, 4, ownershipregistry.PhaseLegacyPrimaryGoShadow, 100)), changeContext); err != nil {
+		t.Fatalf("adjacent rollback with monotonic revisions was rejected: %v", err)
+	}
+	removed := `{"registryVersion":1,"registryRevision":6,"routes":[{"method":"GET","path":"/api/v1/health","owner":"platform-gateway","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":[]}]}`
+	if err := manager.Reload(context.Background(), []byte(removed), changeContext); err == nil {
+		t.Fatal("route removal was accepted")
+	}
+}
+
+func TestRegistryResolvesS1MigrationPhases(t *testing.T) {
+	phaseOne := mustParse(t, phaseRegistryJSON(1, 1, ownershipregistry.PhaseLegacyPrimaryGoShadow, 100))
+	decision, err := phaseOne.Resolve("GET", "/api/v1/organizations", "org-01\x00fixture-user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.DeclaredOwner != ownershipregistry.OwnerLegacy || decision.SelectedOwner != ownershipregistry.OwnerLegacy {
-		t.Fatalf("inactive Core fallback changed initial routing: %#v", decision)
+	if decision.SelectedOwner != ownershipregistry.OwnerLegacy || decision.ShadowOwner != ownershipregistry.OwnerCore || decision.ReadFallbackOwner != "" {
+		t.Fatalf("phase one decision = %#v", decision)
 	}
-	if !snapshot.ContainsOwner(ownershipregistry.OwnerCore) {
-		t.Fatal("Core candidate owner was not retained in the parsed registry")
+
+	phaseTwo := mustParse(t, phaseRegistryJSON(2, 2, ownershipregistry.PhaseGoCanaryLegacyShadow, 50))
+	decision, err = phaseTwo.Resolve("GET", "/api/v1/organizations", "org-01\x00fixture-user")
+	if err != nil {
+		t.Fatal(err)
 	}
-	corePrimary := `{"registryVersion":1,"registryRevision":2,"routes":[{"method":"GET","path":"/api/v1/organizations","owner":"platform-core-service","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["organization","principal"]}]}`
-	if _, err := ownershipregistry.Parse([]byte(corePrimary)); err == nil {
-		t.Fatal("Core primary owner was accepted before a Core runtime handler exists")
+	if decision.SelectedOwner == decision.ShadowOwner || decision.ShadowOwner == "" {
+		t.Fatalf("phase two did not choose opposite primary/shadow owners: %#v", decision)
+	}
+
+	phaseThree := mustParse(t, phaseRegistryJSON(3, 3, ownershipregistry.PhaseGoPrimaryLegacyReadFallback, 0))
+	decision, err = phaseThree.Resolve("GET", "/api/v1/organizations", "org-01\x00fixture-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.SelectedOwner != ownershipregistry.OwnerCore || decision.ReadFallbackOwner != ownershipregistry.OwnerLegacy || decision.ShadowOwner != "" {
+		t.Fatalf("phase three decision = %#v", decision)
+	}
+
+	phaseFour := mustParse(t, phaseRegistryJSON(4, 4, ownershipregistry.PhaseGoPrimary, 0))
+	decision, err = phaseFour.Resolve("GET", "/api/v1/organizations", "org-01\x00fixture-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.SelectedOwner != ownershipregistry.OwnerCore || decision.ReadFallbackOwner != "" || decision.ShadowOwner != "" {
+		t.Fatalf("phase four decision = %#v", decision)
 	}
 }
 
@@ -115,6 +157,24 @@ func TestPolicyAuditFailureFailsClosed(t *testing.T) {
 
 func registryJSON(registryRevision, routeRevision int64, owner string, percentage int) string {
 	return fmt.Sprintf(`{"registryVersion":1,"registryRevision":%d,"routes":[%s]}`, registryRevision, routeJSON(routeRevision, owner, percentage))
+}
+
+func phaseRegistryJSON(registryRevision, routeRevision int64, phase string, percentage int) string {
+	owner := ownershipregistry.OwnerCore
+	compatibility := "native"
+	rollout := `{"mode":"all"}`
+	readFallback := ""
+	switch phase {
+	case ownershipregistry.PhaseLegacyPrimaryGoShadow:
+		owner = ownershipregistry.OwnerLegacy
+		compatibility = "legacy-read"
+		rollout = `{"mode":"percentage","percentage":100,"fallbackOwner":"platform-core-service","cohortSalt":"s1-organizations-v1"}`
+	case ownershipregistry.PhaseGoCanaryLegacyShadow:
+		rollout = fmt.Sprintf(`{"mode":"percentage","percentage":%d,"fallbackOwner":"legacy-hvac-backend","cohortSalt":"s1-organizations-v1"}`, percentage)
+	case ownershipregistry.PhaseGoPrimaryLegacyReadFallback:
+		readFallback = `,"readFallbackOwner":"legacy-hvac-backend"`
+	}
+	return fmt.Sprintf(`{"registryVersion":1,"registryRevision":%d,"routes":[{"method":"GET","path":"/api/v1/organizations","owner":%q,"revision":%d,"rollout":%s,"compatibilityMode":%q,"allowedScopeDimensions":["organization","principal"],"migrationPhase":%q,"shadowSideEffectPolicy":"NONE","readOnlyFallback":true%s,"fallbackForbiddenResults":["AUTHORIZATION_DENIED","RESOURCE_NOT_FOUND"]}]}`, registryRevision, owner, routeRevision, rollout, compatibility, phase, readFallback)
 }
 
 func routeJSON(routeRevision int64, owner string, percentage int) string {

@@ -454,6 +454,7 @@ export async function startS0DurableTopology(options = {}) {
       GATEWAY_DATABASE_URL: database.gateway,
       GATEWAY_WORKLOAD_SPIFFE: 'spiffe://hvac.local/platform-gateway',
       IDENTITY_POLICY_REVISION: 'policy-v1',
+      S1_ALLOW_NO_CORE: 'true',
       SESSION_TOKEN_KEY: randomBytes(32).toString('base64url'),
     });
     await waitForHTTP(`${gatewayURL}/api/v1/health?includeBuild=true`, 'Platform Gateway', services.gateway);

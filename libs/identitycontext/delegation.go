@@ -118,6 +118,13 @@ func VerifyDelegation(publicKey crypto.PublicKey, token string) (DelegationClaim
 }
 
 func ValidateDelegation(claims DelegationClaims, now time.Time, executingService, audience, action, scope string) error {
+	if len(claims.Scopes) != 1 {
+		return errors.New("delegation scope is invalid")
+	}
+	return ValidateDelegationAnyScope(claims, now, executingService, audience, action, []string{scope})
+}
+
+func ValidateDelegationAnyScope(claims DelegationClaims, now time.Time, executingService, audience, action string, acceptableScopes []string) error {
 	if claims.ExecutingService != executingService || claims.Issuer != executingService {
 		return errors.New("delegation executing service is invalid")
 	}
@@ -136,8 +143,18 @@ func ValidateDelegation(claims DelegationClaims, now time.Time, executingService
 	if !containsExact(claims.Actions, action) || len(claims.Actions) != 1 {
 		return errors.New("delegation action is invalid")
 	}
-	if !containsExact(claims.Scopes, scope) || len(claims.Scopes) != 1 {
+	if len(claims.Scopes) == 0 || len(claims.Scopes) > 256 || len(acceptableScopes) == 0 {
 		return errors.New("delegation scope is invalid")
+	}
+	seen := make(map[string]struct{}, len(claims.Scopes))
+	for _, scope := range claims.Scopes {
+		if scope == "" || !containsExact(acceptableScopes, scope) {
+			return errors.New("delegation scope is invalid")
+		}
+		if _, duplicate := seen[scope]; duplicate {
+			return errors.New("delegation scope is invalid")
+		}
+		seen[scope] = struct{}{}
 	}
 	return nil
 }

@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 6,
+  "registryRevision": 4,
   "routes": [
     {
       "method": "GET",
@@ -123,9 +123,12 @@
       "method": "GET",
       "path": "/api/v1/organizations",
       "owner": "platform-core-service",
-      "revision": 5,
+      "revision": 3,
       "rollout": {
-        "mode": "all"
+        "mode": "percentage",
+        "percentage": 10,
+        "fallbackOwner": "legacy-hvac-backend",
+        "cohortSalt": "s1-registry-cutover-v1"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -144,15 +147,18 @@
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
       ],
-      "migrationPhase": "GO_PRIMARY"
+      "migrationPhase": "GO_CANARY_LEGACY_SHADOW"
     },
     {
       "method": "GET",
       "path": "/api/v1/organizations/{organizationId}",
       "owner": "platform-core-service",
-      "revision": 5,
+      "revision": 3,
       "rollout": {
-        "mode": "all"
+        "mode": "percentage",
+        "percentage": 10,
+        "fallbackOwner": "legacy-hvac-backend",
+        "cohortSalt": "s1-registry-cutover-v1"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -171,15 +177,18 @@
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
       ],
-      "migrationPhase": "GO_PRIMARY"
+      "migrationPhase": "GO_CANARY_LEGACY_SHADOW"
     },
     {
       "method": "GET",
       "path": "/api/v1/organizations/{organizationId}/sites",
       "owner": "platform-core-service",
-      "revision": 5,
+      "revision": 3,
       "rollout": {
-        "mode": "all"
+        "mode": "percentage",
+        "percentage": 10,
+        "fallbackOwner": "legacy-hvac-backend",
+        "cohortSalt": "s1-registry-cutover-v1"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -199,15 +208,18 @@
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
       ],
-      "migrationPhase": "GO_PRIMARY"
+      "migrationPhase": "GO_CANARY_LEGACY_SHADOW"
     },
     {
       "method": "GET",
       "path": "/api/v1/sites/{siteId}",
       "owner": "platform-core-service",
-      "revision": 5,
+      "revision": 3,
       "rollout": {
-        "mode": "all"
+        "mode": "percentage",
+        "percentage": 10,
+        "fallbackOwner": "legacy-hvac-backend",
+        "cohortSalt": "s1-registry-cutover-v1"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -227,15 +239,18 @@
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
       ],
-      "migrationPhase": "GO_PRIMARY"
+      "migrationPhase": "GO_CANARY_LEGACY_SHADOW"
     },
     {
       "method": "GET",
       "path": "/api/v1/sites/{siteId}/equipment",
       "owner": "platform-core-service",
-      "revision": 5,
+      "revision": 3,
       "rollout": {
-        "mode": "all"
+        "mode": "percentage",
+        "percentage": 10,
+        "fallbackOwner": "legacy-hvac-backend",
+        "cohortSalt": "s1-registry-cutover-v1"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -255,15 +270,18 @@
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
       ],
-      "migrationPhase": "GO_PRIMARY"
+      "migrationPhase": "GO_CANARY_LEGACY_SHADOW"
     },
     {
       "method": "GET",
       "path": "/api/v1/equipment/{equipmentId}",
       "owner": "platform-core-service",
-      "revision": 5,
+      "revision": 3,
       "rollout": {
-        "mode": "all"
+        "mode": "percentage",
+        "percentage": 10,
+        "fallbackOwner": "legacy-hvac-backend",
+        "cohortSalt": "s1-registry-cutover-v1"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -283,15 +301,18 @@
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
       ],
-      "migrationPhase": "GO_PRIMARY"
+      "migrationPhase": "GO_CANARY_LEGACY_SHADOW"
     },
     {
       "method": "GET",
       "path": "/api/v1/sites/{siteId}/devices",
       "owner": "platform-core-service",
-      "revision": 5,
+      "revision": 3,
       "rollout": {
-        "mode": "all"
+        "mode": "percentage",
+        "percentage": 10,
+        "fallbackOwner": "legacy-hvac-backend",
+        "cohortSalt": "s1-registry-cutover-v1"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -311,15 +332,18 @@
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
       ],
-      "migrationPhase": "GO_PRIMARY"
+      "migrationPhase": "GO_CANARY_LEGACY_SHADOW"
     },
     {
       "method": "GET",
       "path": "/api/v1/devices/{deviceId}",
       "owner": "platform-core-service",
-      "revision": 5,
+      "revision": 3,
       "rollout": {
-        "mode": "all"
+        "mode": "percentage",
+        "percentage": 10,
+        "fallbackOwner": "legacy-hvac-backend",
+        "cohortSalt": "s1-registry-cutover-v1"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -339,7 +363,7 @@
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
       ],
-      "migrationPhase": "GO_PRIMARY"
+      "migrationPhase": "GO_CANARY_LEGACY_SHADOW"
     }
   ]
 }

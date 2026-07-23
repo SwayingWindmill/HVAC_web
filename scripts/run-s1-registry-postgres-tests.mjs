@@ -155,6 +155,18 @@ async function runLegacyMigrationGoTests() {
   if (signal || code !== 0) throw new Error(`S1 Legacy migration PostgreSQL tests failed: ${signal ?? code}`);
 }
 
+async function runGatewayRoutingGoTests() {
+  await mkdir(goCacheDir, { recursive: true });
+  const child = spawn(goBinary, ['test', '-count=1', '-v', './services/platform-gateway/internal/gateway', '-run', 'TestGatewayRegistry'], {
+    cwd: root,
+    stdio: 'inherit',
+    shell: false,
+    env: { ...process.env, GOCACHE: goCacheDir },
+  });
+  const [code, signal] = await once(child, 'exit');
+  if (signal || code !== 0) throw new Error(`S1 Gateway Registry routing tests failed: ${signal ?? code}`);
+}
+
 const report = {
   schemaVersion: 1,
   status: 'failed',
@@ -223,6 +235,8 @@ try {
   report.assertions.coreRegistryStore = 'passed';
   await runLegacyMigrationGoTests();
   report.assertions.legacyMigrationExecution = 'passed';
+  await runGatewayRoutingGoTests();
+  report.assertions.gatewayRegistryRouting = 'passed';
 
   const invalidTimezone = psql(`
     INSERT INTO core_registry.sites (id, organization_id, code, display_name, timezone, status, revision, created_at, updated_at)
