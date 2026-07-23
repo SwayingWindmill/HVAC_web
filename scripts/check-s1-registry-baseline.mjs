@@ -43,6 +43,7 @@ const expectedRoutes = [
   ['GET', '/api/v1/sites/{siteId}/devices', 'listSiteDevices'],
   ['GET', '/api/v1/devices/{deviceId}', 'getDevice'],
 ];
+const s1RegistryPaths = new Set(expectedRoutes.map(([, path]) => path));
 assert(model.schemaVersion === 1 && model.contractRevision === 1, 'model revision is not fixed');
 assert(model.publicId.type === 'uuidv7' && model.publicId.immutable === true, 'public IDs are not immutable UUIDv7');
 assert(Object.keys(model.resources).join('|') === 'Organization|Site|Equipment|Device|DeviceBinding|ExternalBinding', 'resource set drifted');
@@ -74,7 +75,9 @@ for (let index = 0; index < phaseSequence.length; index += 1) {
     assert(route?.revision === index + 2, `${path} phase route revision is not monotonic`);
   }
 }
-assert(JSON.stringify(routeRegistry) === JSON.stringify(phaseFour), 'active route registry is not the final GO_PRIMARY phase');
+const activeS1Routes = (routeRegistry.routes ?? []).filter((route) => s1RegistryPaths.has(route.path));
+const finalS1Routes = (phaseFour.routes ?? []).filter((route) => s1RegistryPaths.has(route.path));
+assert(JSON.stringify(activeS1Routes) === JSON.stringify(finalS1Routes), 'active S1 route subset is not the final GO_PRIMARY phase');
 assert(gatewayServerSource.includes('platformapi.RegistryServerInterface'), 'Gateway does not implement the generated Registry server interface');
 for (const marker of ['authorizeRegistry', 'legacyRegistryScopes', 'context.WithoutCancel', 'ROUTE_SHADOW_COMPARED', 'ROUTE_FALLBACK_EXECUTED', 'registryFallbackAllowed', 'registryFallbackResultUsable', 'validRegistryInstant', 'MaxShadowConcurrent', 'isLowerUUIDv7', 'DisallowUnknownFields', 'X-Delegation-Grant']) {
   assert(gatewayRegistrySource.includes(marker), `Gateway Registry routing marker is missing: ${marker}`);

@@ -12,13 +12,14 @@ async function text(path) {
 }
 
 const contract = JSON.parse(await text('contracts/ownership/s2-telemetry-ownership.v1.json'));
+const activeDataOwnership = JSON.parse(await text('contracts/ownership/data-ownership.v1.json'));
 const adr = await text('docs/adr/0003-s2-telemetry-runtime-ownership.md');
 const context = await text('CONTEXT.md');
 const packageJSON = JSON.parse(await text('package.json'));
 
 assert(contract.schemaVersion === 1, 'S2 telemetry ownership schemaVersion must be 1');
-assert(contract.decisionRevision === 1, 'S2 telemetry ownership decisionRevision must be 1');
-assert(contract.activationStatus === 'planned', 'S2 telemetry ownership must remain a planned contract until implementation exists');
+assert(contract.decisionRevision === 2, 'S2 telemetry ownership decisionRevision must be 2 for the expand baseline');
+assert(contract.activationStatus === 'expand-baseline', 'S2 telemetry ownership must be activated only as an expand baseline');
 assert(contract.ownerService === 'telemetry-runtime-service', 'Telemetry Runtime must have one explicit owner');
 assert(contract.boundedContext === 'telemetry-runtime', 'Telemetry Runtime bounded context name drifted');
 
@@ -27,7 +28,11 @@ assert(store.engine === 'postgresql', 'authoritative store must be PostgreSQL');
 assert(store.schema === 'telemetry_runtime', 'authoritative schema must be telemetry_runtime');
 assert(store.writer === contract.ownerService, 'authoritative schema writer must be the owner service');
 assert(store.migrationRole === 's2_telemetry_migrator', 'migration role drifted');
+assert(store.migrationServiceRole === 's2_telemetry_migrator_service', 'migration service role drifted');
 assert(store.runtimeRole === 's2_telemetry_runtime', 'runtime role drifted');
+assert(store.serviceRole === 's2_telemetry_service', 'runtime service role drifted');
+assert(store.relayRole === 's2_telemetry_relay' && store.relayServiceRole === 's2_telemetry_relay_service', 'relay roles drifted');
+assert(store.gatewayRole === 's2_telemetry_gateway' && store.iamRole === 's2_telemetry_iam', 'connect-only Gateway/IAM roles drifted');
 assert(store.runtimeBypassRls === false, 'runtime role must not bypass RLS');
 
 const resourceKeys = new Set();
@@ -53,6 +58,14 @@ for (const key of [
 }
 const outbox = contract.ownedResources.find((resource) => resource.kind === 'outbox');
 assert(outbox?.relay === 'outbox-relay', 'publication outbox must use the restricted outbox relay');
+const activeResources = new Map((activeDataOwnership.resources ?? []).map((resource) => [`${resource.kind}:${resource.name}`, resource]));
+for (const key of resourceKeys) {
+  assert(activeResources.get(key)?.writer === contract.ownerService, `active Data Ownership Registry is missing ${key}`);
+}
+assert(activeResources.get('schema:telemetry_runtime')?.writer === contract.ownerService, 'active telemetry_runtime schema owner drifted');
+assert(activeResources.get('transport-store:s2-telemetry-transport-redis')?.authority === false, 'dedicated transport Redis must remain non-authoritative');
+assert(activeResources.get('transport-store:s2-telemetry-transport-redis')?.sharedWithLegacy === false, 'transport Redis must remain isolated from Legacy');
+assert(activeResources.get('compatibility-boundary:legacy-telemetry-timeseries')?.currentStateAuthority === false, 'Legacy historical compatibility cannot become current authority');
 
 const inputEvents = new Map((contract.inputEvents ?? []).map((event) => [event.name, event]));
 assert(inputEvents.get('hvac.registry.external-binding.v1')?.writer === 'platform-core-service', 'Core must own binding change events');

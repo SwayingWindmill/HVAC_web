@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "activationStatus": "planned",
+  "activationStatus": "active",
   "name": "s2-telemetry-implementation-plan-v1",
   "mapIssue": 46,
   "planningIssue": 53,
@@ -259,7 +259,7 @@
     "issue-60-is-the-only-initial-frontier",
     "implementation-plan-static-gate-passes",
     "map-not-yet-specified-is-empty",
-    "planned-contracts-ownership-and-release-gates-remain-unactivated-until-ticket-60"
+    "ticket-60-activates-expand-baseline-with-zero-production-traffic"
   ],
   "nextSliceEntryConditions": [
     "issues-60-through-71-are-closed-with-accepted-evidence",

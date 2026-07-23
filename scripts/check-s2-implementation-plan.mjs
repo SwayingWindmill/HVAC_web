@@ -31,7 +31,7 @@ const [plan, releaseGates, ownership, publicContract, docs, packageJSON] = await
 ]);
 
 assert(plan.schemaVersion === 1, 'schemaVersion must remain 1');
-assert(plan.activationStatus === 'planned', 'implementation plan must remain planned');
+assert(plan.activationStatus === 'active', 'implementation plan must be active once Ticket 60 begins');
 assert(plan.name === 's2-telemetry-implementation-plan-v1', 'plan name drifted');
 assert(plan.mapIssue === 46, 'source map must remain #46');
 assert(plan.planningIssue === 53, 'planning issue must remain #53');
@@ -39,9 +39,9 @@ assert(exact(plan.decisionIssues, [47, 48, 49, 50, 51, 52]), 'decision issue tra
 assert(plan.ticketCount === 12, 'ticket count must remain 12');
 assert(plan.dependencyEdgeCount === 25, 'dependency edge count must remain 25');
 assert(exact(plan.initialFrontier, [60]), 'initial frontier must contain only #60');
-assert(releaseGates.activationStatus === 'planned', 'release gates must remain planned');
-assert(ownership.activationStatus === 'planned', 'ownership contract must remain planned');
-assert(publicContract['x-activation-status'] === 'planned', 'public telemetry contract must remain planned');
+assert(releaseGates.activationStatus === 'expand-baseline', 'release gates must remain an expand baseline');
+assert(ownership.activationStatus === 'expand-baseline', 'ownership contract must remain an expand baseline');
+assert(publicContract['x-activation-status'] === 'expand-baseline', 'public telemetry contract must remain an expand baseline');
 assert(ownership.ownerService === 'telemetry-runtime-service', 'Telemetry Runtime owner drifted');
 assert(releaseGates.authority?.businessOwner === ownership.ownerService, 'implementation owner differs from release/ownership authority');
 assert(releaseGates.authority?.legacyFallback === false && releaseGates.authority?.mockFallback === false, 'fallback authority drifted');
@@ -207,7 +207,7 @@ const mapCloseConditions = [
   'issue-60-is-the-only-initial-frontier',
   'implementation-plan-static-gate-passes',
   'map-not-yet-specified-is-empty',
-  'planned-contracts-ownership-and-release-gates-remain-unactivated-until-ticket-60',
+  'ticket-60-activates-expand-baseline-with-zero-production-traffic',
 ];
 assert(exact(plan.mapCloseConditions, mapCloseConditions), 'map close conditions drifted');
 

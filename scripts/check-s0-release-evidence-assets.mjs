@@ -31,6 +31,9 @@ const packageJSON = JSON.parse(await readFile(resolve(root, 'package.json'), 'ut
 const workflow = await readFile(resolve(root, '.github/workflows/s0-supply-chain.yml'), 'utf8');
 const openapiText = await readFile(resolve(root, 'contracts/http/platform-gateway.openapi.yaml'), 'utf8');
 const ownership = JSON.parse(await readFile(resolve(root, 'contracts/ownership/data-ownership.v1.json'), 'utf8'));
+const routeOwnership = JSON.parse(await readFile(resolve(root, 'contracts/ownership/route-ownership.v1.json'), 'utf8'));
+const s2Ownership = JSON.parse(await readFile(resolve(root, 'contracts/ownership/s2-telemetry-ownership.v1.json'), 'utf8'));
+const s2ReleaseGates = JSON.parse(await readFile(resolve(root, 'deploy/s2/release-gates.v1.json'), 'utf8'));
 
 assert(matrix.schemaVersion === 1, 'acceptance matrix schemaVersion must be 1');
 assert(matrix.ticket === '08-s0-release-evidence', 'acceptance matrix ticket identifier is invalid');
@@ -95,8 +98,9 @@ assert(schema.properties?._type?.const === 'https://in-toto.io/Statement/v1', 'b
 assert(schema.properties?.predicateType?.const === 'https://hvac.local/attestations/s0-release-evidence/v1', 'bundle predicate type is invalid');
 assert(schema.properties?.predicate?.properties?.images?.minItems === 7, 'bundle schema must require seven images');
 
-// S0 evidence remains valid when later phase contracts are added. Only paths
-// that are still outside the accepted S1 boundary remain forbidden here.
+// S0 evidence remains valid when later phase contracts are added. S2 resources
+// are accepted only while they match the reviewed expand baseline and carry no
+// production traffic.
 const forbiddenPostS1PublicPaths = [
   '/api/v1/telemetry',
   '/api/v1/commands',
@@ -106,6 +110,22 @@ const forbiddenPostS1PublicPaths = [
 ];
 const leakedPaths = forbiddenPostS1PublicPaths.filter((path) => openapiText.includes(`"${path}`));
 assert(leakedPaths.length === 0, `public contract contains post-S1 deferred paths: ${leakedPaths.join(', ')}`);
+assert(s2Ownership.activationStatus === 'expand-baseline', 'S2 ownership must remain an expand baseline');
+assert(s2ReleaseGates.activationStatus === 'expand-baseline', 'S2 release gates must remain an expand baseline');
+const s2Routes = routeOwnership.routes.filter((route) => route.owner === s2Ownership.ownerService);
+assert(s2Routes.length === 4, `S2 expand baseline must register exactly four routes; found ${s2Routes.length}`);
+for (const route of s2Routes) {
+  assert(route.publicIngress === 'platform-gateway', `${route.method} ${route.path} bypasses Gateway ingress`);
+  assert(route.activationStatus === 'expand-baseline', `${route.method} ${route.path} activation drifted`);
+  assert(route.rollout?.mode === 'disabled' && route.migrationPhase === 'R0-contract-only', `${route.method} ${route.path} carries production traffic`);
+  assert(route.readOnlyFallback === false && route.readFallbackOwner === undefined, `${route.method} ${route.path} gained request fallback`);
+}
+const acceptedS2OwnershipNames = new Set([
+  s2Ownership.authoritativeStore.schema,
+  ...(s2Ownership.ownedResources ?? []).map((resource) => resource.name),
+  's2-telemetry-transport-redis',
+  'legacy-telemetry-timeseries',
+]);
 const allowedOwnershipNames = new Set([
   'gateway',
   'audit_ledger',
@@ -123,9 +143,10 @@ const allowedOwnershipNames = new Set([
   's1-legacy-resource-map',
   's1-migration-provenance',
   's1-migration-quarantine',
+  ...acceptedS2OwnershipNames,
 ]);
 const leakedOwnership = ownership.resources.filter((resource) => !allowedOwnershipNames.has(resource.name));
-assert(leakedOwnership.length === 0, `ownership registry contains post-S1 deferred resources: ${JSON.stringify(leakedOwnership)}`);
+assert(leakedOwnership.length === 0, `ownership registry contains resources outside the accepted S1/S2 baselines: ${JSON.stringify(leakedOwnership)}`);
 
 await mkdir(outputRoot, { recursive: true });
 const scopeAudit = {
@@ -136,6 +157,7 @@ const scopeAudit = {
   forbiddenPublicPaths: forbiddenPostS1PublicPaths,
   leakedPublicPaths: [],
   allowedOwnershipResources: [...allowedOwnershipNames].sort(),
+  acceptedS2ExpandBaselineResources: [...acceptedS2OwnershipNames].sort(),
   leakedOwnershipResources: [],
 };
 await writeFile(resolve(outputRoot, 'scope-audit-report.json'), `${JSON.stringify(scopeAudit, null, 2)}\n`);
