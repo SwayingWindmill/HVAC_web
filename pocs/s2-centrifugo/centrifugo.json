@@ -1,0 +1,40 @@
+{
+  "log": {
+    "level": "info"
+  },
+  "client": {
+    "allowed_origins": [
+      "http://localhost:5173"
+    ],
+    "queue_max_size": 16384,
+    "channel_limit": 16
+  },
+  "health": {
+    "enabled": true
+  },
+  "prometheus": {
+    "enabled": true,
+    "native_histograms": true,
+    "recovered_publications_histogram": true
+  },
+  "proxies": [
+    {
+      "name": "s2-subscribe",
+      "endpoint": "http://owner:18081/centrifugo/subscribe",
+      "timeout": "2s"
+    }
+  ],
+  "channel": {
+    "namespaces": [
+      {
+        "name": "s2",
+        "subscribe_proxy_enabled": true,
+        "subscribe_proxy_name": "s2-subscribe",
+        "history_size": 4,
+        "history_ttl": "5s",
+        "force_recovery": true,
+        "force_positioning": true
+      }
+    ]
+  }
+}
