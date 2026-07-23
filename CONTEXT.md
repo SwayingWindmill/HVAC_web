@@ -87,3 +87,31 @@ The most recent accepted value retained for historical context. A Last Known Val
 ## Site Observation Summary
 
 A count-and-coverage summary of authorized Devices by Device Display State. A Site does not have a single inherited online/offline boolean.
+
+## Telemetry Runtime
+
+The platform domain that accepts source observations and owns current Device runtime truth, including Presence, latest accepted telemetry, policy evaluation and publication intent. Telemetry Runtime is distinct from Registry identity, authorization and transport.
+
+## Device Observation Snapshot
+
+A coherent current evaluation of one Device at one Business Revision. It combines the canonical Presence, Availability and telemetry dimensions without exposing source-system identifiers.
+
+## Business Revision
+
+A monotonic owner-authored revision for one Device Observation Snapshot. It advances only when committed current runtime state changes; source replay, cache refresh and transport retry do not advance it.
+
+## Source Position
+
+The upstream event identity or offset used to detect duplicate, replayed and out-of-order source delivery. Source Position is evidence about ingest order, not a public recovery cursor or Business Revision.
+
+## Transport Position
+
+The delivery position used by a realtime transport for bounded reconnect recovery. A Transport Position does not establish business ordering or Snapshot authority.
+
+## Recovery Cursor
+
+An opaque, scope-bound request to attempt incremental recovery from a previously applied Business Revision and Transport Position. A Recovery Cursor has no authority of its own and must be reauthorized; failure returns the consumer to an authoritative Device Observation Snapshot.
+
+## Ingest Quarantine
+
+The evidence state for a source candidate that cannot become current runtime truth because its source, mapping or validation is not acceptable. Quarantined candidates never create Devices or replace accepted values.
