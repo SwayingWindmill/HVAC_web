@@ -63,6 +63,7 @@
     "s2:centrifugo:check": "node scripts/check-s2-centrifugo-poc-assets.mjs",
     "s2:centrifugo:poc": "node scripts/run-s2-centrifugo-poc.mjs",
     "s2:ownership:check": "node scripts/check-s2-telemetry-ownership.mjs",
+    "s2:public-contract:check": "node scripts/check-s2-telemetry-public-contract.mjs",
     "pocs:components:docker": "node scripts/run-platform-component-docker-pocs.mjs",
     "pocs:components:envoy": "node scripts/run-platform-component-envoy-poc.mjs",
     "pocs:components": "npm run pocs:components:check && npm run pocs:components:docker && npm run pocs:components:envoy",

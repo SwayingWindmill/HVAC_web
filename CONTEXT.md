@@ -115,3 +115,15 @@ An opaque, scope-bound request to attempt incremental recovery from a previously
 ## Ingest Quarantine
 
 The evidence state for a source candidate that cannot become current runtime truth because its source, mapping or validation is not acceptable. Quarantined candidates never create Devices or replace accepted values.
+
+## Telemetry Key Selection
+
+The exact ordered set of Device keys requested and authorized for one Snapshot or live subscription. The owner never adds unselected keys, and an empty selection means Presence-only observation.
+
+## Subscription Bootstrap
+
+A short-lived setup result that lets a caller establish an exact authorized live subscription. Bootstrap capabilities do not become authorization facts and do not enlarge the caller's Scope.
+
+## Observation Delta
+
+A subscription-scoped transition from one Device Business Revision to the next. It carries the current canonical Device state and only selected key changes; it may contain no key changes while still advancing the Device revision.

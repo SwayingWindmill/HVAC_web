@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.quanlaihe.example/events/s2-device-observation-publication.v1.schema.json",
+  "title": "S2 Device Observation Publication v1",
+  "description": "A subscription-scoped delta for one contiguous Device Business Revision transition.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "eventId",
+    "subscriptionId",
+    "deviceId",
+    "previousRevision",
+    "revision",
+    "evaluatedAt",
+    "publishedAt",
+    "evaluationAvailability",
+    "availabilityReasons",
+    "presence",
+    "telemetryReadiness",
+    "displayState",
+    "telemetryChanges"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "kind": { "type": "string", "const": "DEVICE_OBSERVATION_DELTA" },
+    "eventId": { "$ref": "#/$defs/UUIDv7" },
+    "subscriptionId": { "$ref": "#/$defs/OpaqueSubscriptionId" },
+    "deviceId": { "$ref": "#/$defs/UUIDv7" },
+    "previousRevision": { "$ref": "#/$defs/BusinessRevision" },
+    "revision": { "$ref": "#/$defs/BusinessRevision" },
+    "evaluatedAt": { "$ref": "#/$defs/Instant" },
+    "publishedAt": { "$ref": "#/$defs/Instant" },
+    "evaluationAvailability": { "$ref": "#/$defs/EvaluationAvailability" },
+    "availabilityReasons": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/AvailabilityReasonCode" }
+    },
+    "presence": { "$ref": "#/$defs/PresenceSnapshot" },
+    "telemetryReadiness": { "$ref": "#/$defs/TelemetryReadiness" },
+    "displayState": { "$ref": "#/$defs/DeviceDisplayState" },
+    "telemetryChanges": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/TelemetryKeyState" },
+      "description": "Only selected keys that changed in this Device revision. The array may be empty when an unselected key changed; the publication still advances the contiguous Device revision."
+    }
+  },
+  "x-invariants": [
+    "revision-equals-previousRevision-plus-one",
+    "one-publication-per-active-subscription-per-device-revision",
+    "telemetryChanges-contains-only-authorized-selected-keys",
+    "empty-telemetryChanges-still-advances-revision",
+    "publication-retry-reuses-eventId-and-revision",
+    "transport-position-and-recovery-cursor-are-not-business-publication-fields"
+  ],
+  "$defs": {
+    "UUIDv7": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "Instant": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "BusinessRevision": { "type": "integer", "format": "int64", "minimum": 1 },
+    "PolicyRevision": { "type": "integer", "format": "int64", "minimum": 1 },
+    "OpaqueSubscriptionId": { "type": "string", "minLength": 16, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+$" },
+    "TelemetryKey": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$" },
+    "EvaluationAvailability": { "type": "string", "enum": ["AVAILABLE", "UNAVAILABLE"] },
+    "PresenceApplicability": { "type": "string", "enum": ["APPLICABLE", "NOT_APPLICABLE"] },
+    "DevicePresenceState": { "type": "string", "enum": ["ONLINE", "OFFLINE", "UNKNOWN"] },
+    "TelemetryQuality": { "type": "string", "enum": ["GOOD", "SUSPECT"] },
+    "TelemetryReadiness": { "type": "string", "enum": ["CURRENT", "DEGRADED", "INCOMPLETE", "NOT_APPLICABLE"] },
+    "DeviceDisplayState": { "type": ["string", "null"], "enum": ["ONLINE", "OFFLINE", "STALE", "UNKNOWN", "UNAVAILABLE", null] },
+    "QualityReasonCode": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]+$",
+      "x-known-codes": ["SOURCE_UNTRUSTED", "TYPE_MISMATCH", "UNIT_MISMATCH", "OUT_OF_RANGE", "CLOCK_AHEAD", "CLOCK_BEHIND", "SOURCE_LAG_EXCEEDED", "DUPLICATE", "OUT_OF_ORDER", "REPLAYED"]
+    },
+    "AvailabilityReasonCode": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]+$",
+      "x-known-codes": ["SOURCE_UNAVAILABLE", "OBSERVATION_COVERAGE_GAP", "POLICY_UNAVAILABLE", "OWNER_DEPENDENCY_UNAVAILABLE"]
+    },
+    "TelemetryValue": {
+      "oneOf": [
+        { "type": "number" },
+        { "type": "string", "maxLength": 4096 },
+        { "type": "boolean" },
+        { "type": "object", "maxProperties": 64, "additionalProperties": true },
+        { "type": "array", "maxItems": 256, "items": { "oneOf": [{ "type": "number" }, { "type": "string", "maxLength": 4096 }, { "type": "boolean" }] } }
+      ]
+    },
+    "LastKnownPresence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "lastSeenAt", "evaluatedAt", "policyRevision"],
+      "properties": {
+        "state": { "$ref": "#/$defs/DevicePresenceState" },
+        "lastSeenAt": { "oneOf": [{ "$ref": "#/$defs/Instant" }, { "type": "null" }] },
+        "evaluatedAt": { "$ref": "#/$defs/Instant" },
+        "policyRevision": { "$ref": "#/$defs/PolicyRevision" }
+      }
+    },
+    "PresenceSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["applicability", "currentState", "lastSeenAt", "policyRevision", "lastKnown"],
+      "properties": {
+        "applicability": { "$ref": "#/$defs/PresenceApplicability" },
+        "currentState": { "oneOf": [{ "$ref": "#/$defs/DevicePresenceState" }, { "type": "null" }] },
+        "lastSeenAt": { "oneOf": [{ "$ref": "#/$defs/Instant" }, { "type": "null" }] },
+        "policyRevision": { "oneOf": [{ "$ref": "#/$defs/PolicyRevision" }, { "type": "null" }] },
+        "lastKnown": { "oneOf": [{ "$ref": "#/$defs/LastKnownPresence" }, { "type": "null" }] }
+      }
+    },
+    "TelemetryPresentState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "state", "value", "valueType", "unit", "sampledAt", "receivedAt", "freshness", "quality", "qualityReasons", "policyRevision"],
+      "properties": {
+        "key": { "$ref": "#/$defs/TelemetryKey" },
+        "state": { "type": "string", "const": "PRESENT" },
+        "value": { "$ref": "#/$defs/TelemetryValue" },
+        "valueType": { "type": "string", "enum": ["NUMBER", "STRING", "BOOLEAN", "JSON"] },
+        "unit": { "type": ["string", "null"], "maxLength": 64 },
+        "sampledAt": { "$ref": "#/$defs/Instant" },
+        "receivedAt": { "$ref": "#/$defs/Instant" },
+        "freshness": { "type": "string", "enum": ["FRESH", "STALE"] },
+        "quality": { "$ref": "#/$defs/TelemetryQuality" },
+        "qualityReasons": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/QualityReasonCode" } },
+        "policyRevision": { "$ref": "#/$defs/PolicyRevision" }
+      }
+    },
+    "TelemetryMissingState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "state", "freshness", "missingReason", "policyRevision"],
+      "properties": {
+        "key": { "$ref": "#/$defs/TelemetryKey" },
+        "state": { "type": "string", "const": "MISSING" },
+        "freshness": { "type": "string", "const": "MISSING" },
+        "missingReason": { "type": "string", "enum": ["NEVER_OBSERVED", "ONLY_REJECTED_CANDIDATES", "POLICY_NOT_CONFIGURED"] },
+        "policyRevision": { "oneOf": [{ "$ref": "#/$defs/PolicyRevision" }, { "type": "null" }] }
+      }
+    },
+    "TelemetryKeyState": { "oneOf": [{ "$ref": "#/$defs/TelemetryPresentState" }, { "$ref": "#/$defs/TelemetryMissingState" }] }
+  }
+}

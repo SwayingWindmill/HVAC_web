@@ -1,0 +1,550 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "HVAC S2 Telemetry Public Contract",
+    "version": "1.0.0-planned",
+    "description": "Planned browser and service-caller contract for authoritative Device Observation Snapshots and realtime recovery."
+  },
+  "servers": [{ "url": "/" }],
+  "security": [
+    { "BffSession": [] },
+    { "WorkloadMTLS": [] }
+  ],
+  "x-activation-status": "planned",
+  "x-public-owner": "platform-gateway",
+  "x-upstream-owner": "telemetry-runtime-service",
+  "x-contract-invariants": [
+    "single-device-snapshot-is-coherent-at-one-business-revision",
+    "snapshot-values-preserve-requested-key-order",
+    "batch-items-preserve-request-order",
+    "batch-partial-results-use-item-problems",
+    "subscription-bootstrap-is-all-or-nothing",
+    "authorization-is-re-evaluated-for-every-read-subscribe-and-cursor-use",
+    "stale-missing-and-upstream-unavailable-are-explicit-data-states",
+    "publication-revisions-are-contiguous-per-device",
+    "recovery-failure-loads-an-authoritative-snapshot",
+    "real-mode-never-falls-back-to-mock-or-thingsboard-read-through"
+  ],
+  "x-client-forbidden-fields": [
+    "organizationId",
+    "siteId",
+    "principal",
+    "roles",
+    "scopes",
+    "policyRevision",
+    "channel",
+    "connectionToken",
+    "externalId",
+    "thingsBoardDeviceId"
+  ],
+  "x-limits": {
+    "maxKeysPerDevice": 64,
+    "maxBatchDevices": 100,
+    "maxBatchKeySelections": 2048,
+    "maxSubscriptions": 100,
+    "maxSubscriptionKeySelections": 2048,
+    "maxCursorCheckpoints": 100
+  },
+  "x-legacy-retirement": {
+    "retire": [
+      "GET /api/v1/telemetry/devices/{deviceId}/latest",
+      "POST /api/v1/telemetry/latest/batch",
+      "Socket.IO /ws/telemetry"
+    ],
+    "retainSeparately": [
+      "GET /api/v1/telemetry/devices/{deviceId}/timeseries",
+      "GET /api/v1/devices/{deviceId}/telemetry"
+    ]
+  },
+  "paths": {
+    "/api/v1/devices/{deviceId}/observation-snapshot": {
+      "get": {
+        "operationId": "getDeviceObservationSnapshot",
+        "summary": "Read one authorized coherent Device Observation Snapshot",
+        "parameters": [
+          { "$ref": "#/components/parameters/DeviceId" },
+          { "$ref": "#/components/parameters/TelemetryKeys" },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/DeviceObservationSnapshot" },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "504": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/telemetry/observation-snapshots:batchGet": {
+      "post": {
+        "operationId": "batchGetDeviceObservationSnapshots",
+        "summary": "Read a bounded ordered collection of per-Device Snapshot results",
+        "parameters": [
+          { "$ref": "#/components/parameters/ConditionalCsrfToken" },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/BatchGetObservationSnapshotsRequest" } }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/BatchObservationSnapshots" },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "413": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "504": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/telemetry/subscriptions:bootstrap": {
+      "post": {
+        "operationId": "bootstrapTelemetrySubscriptions",
+        "summary": "Authorize an exact subscription set and mint short-lived transport descriptors",
+        "parameters": [
+          { "$ref": "#/components/parameters/ConditionalCsrfToken" },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/SubscriptionBootstrapRequest" } }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/SubscriptionBootstrap" },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "413": { "$ref": "#/components/responses/Problem" },
+          "429": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "504": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/telemetry/recovery-cursors:checkpoint": {
+      "post": {
+        "operationId": "checkpointTelemetryRecoveryCursors",
+        "summary": "Mint scope-bound Recovery Cursors from applied Business Revisions and transport positions",
+        "parameters": [
+          { "$ref": "#/components/parameters/ConditionalCsrfToken" },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/RecoveryCursorCheckpointRequest" } }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/RecoveryCursorCheckpoints" },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "413": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "504": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BffSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-hvac_session",
+        "description": "Opaque HttpOnly SameSite BFF Session. Browser JavaScript never reads or forwards a bearer token."
+      },
+      "WorkloadMTLS": {
+        "type": "mutualTLS",
+        "description": "Verified workload identity. Gateway obtains an IAM delegation for the exact action and resource scope."
+      }
+    },
+    "parameters": {
+      "RequestId": { "name": "X-Request-ID", "in": "header", "required": false, "schema": { "type": "string", "minLength": 1, "maxLength": 128 } },
+      "Traceparent": { "name": "traceparent", "in": "header", "required": false, "schema": { "type": "string" } },
+      "ConditionalCsrfToken": { "name": "X-CSRF-Token", "in": "header", "required": false, "description": "Required for BffSession POST calls and omitted for verified WorkloadMTLS calls.", "schema": { "type": "string", "minLength": 16, "maxLength": 128 } },
+      "DeviceId": { "name": "deviceId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+      "TelemetryKeys": {
+        "name": "keys",
+        "in": "query",
+        "required": false,
+        "description": "Exact key selection. Omission or an empty selection requests a Presence-only Snapshot.",
+        "style": "form",
+        "explode": false,
+        "schema": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/components/schemas/TelemetryKey" } }
+      }
+    },
+    "headers": {
+      "RequestId": { "schema": { "type": "string" } },
+      "Traceparent": { "schema": { "type": "string" } },
+      "NoStore": { "schema": { "type": "string", "const": "private, no-store" } }
+    },
+    "responses": {
+      "DeviceObservationSnapshot": {
+        "description": "Authorized current or explicitly unavailable Device Observation Snapshot.",
+        "headers": {
+          "X-Request-ID": { "$ref": "#/components/headers/RequestId" },
+          "traceparent": { "$ref": "#/components/headers/Traceparent" },
+          "Cache-Control": { "$ref": "#/components/headers/NoStore" }
+        },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceObservationSnapshot" } } }
+      },
+      "BatchObservationSnapshots": {
+        "description": "Ordered per-request results. A syntactically valid batch may contain item problems.",
+        "headers": {
+          "X-Request-ID": { "$ref": "#/components/headers/RequestId" },
+          "traceparent": { "$ref": "#/components/headers/Traceparent" },
+          "Cache-Control": { "$ref": "#/components/headers/NoStore" }
+        },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BatchGetObservationSnapshotsResponse" } } }
+      },
+      "SubscriptionBootstrap": {
+        "description": "Short-lived transport bootstrap. The returned descriptors are not authorization facts.",
+        "headers": {
+          "X-Request-ID": { "$ref": "#/components/headers/RequestId" },
+          "traceparent": { "$ref": "#/components/headers/Traceparent" },
+          "Cache-Control": { "$ref": "#/components/headers/NoStore" }
+        },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SubscriptionBootstrapResponse" } } }
+      },
+      "RecoveryCursorCheckpoints": {
+        "description": "Owner-signed cursors for later re-bootstrap and bounded recovery attempts.",
+        "headers": {
+          "X-Request-ID": { "$ref": "#/components/headers/RequestId" },
+          "traceparent": { "$ref": "#/components/headers/Traceparent" },
+          "Cache-Control": { "$ref": "#/components/headers/NoStore" }
+        },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RecoveryCursorCheckpointResponse" } } }
+      },
+      "Problem": {
+        "description": "Stable public typed problem.",
+        "headers": {
+          "X-Request-ID": { "$ref": "#/components/headers/RequestId" },
+          "traceparent": { "$ref": "#/components/headers/Traceparent" },
+          "Cache-Control": { "$ref": "#/components/headers/NoStore" }
+        },
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/ProblemDetails" } } }
+      }
+    },
+    "schemas": {
+      "UUIDv7": { "type": "string", "format": "uuid", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+      "Instant": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$" },
+      "BusinessRevision": { "type": "integer", "format": "int64", "minimum": 1 },
+      "PolicyRevision": { "type": "integer", "format": "int64", "minimum": 1 },
+      "TelemetryKey": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$" },
+      "ClientSubscriptionId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.:-]+$" },
+      "OpaqueSubscriptionId": { "type": "string", "minLength": 16, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+$" },
+      "OpaqueChannel": { "type": "string", "minLength": 16, "maxLength": 512 },
+      "OpaqueRecoveryCursor": { "type": "string", "minLength": 16, "maxLength": 4096, "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$" },
+      "EvaluationAvailability": { "type": "string", "enum": ["AVAILABLE", "UNAVAILABLE"] },
+      "PresenceApplicability": { "type": "string", "enum": ["APPLICABLE", "NOT_APPLICABLE"] },
+      "DevicePresenceState": { "type": "string", "enum": ["ONLINE", "OFFLINE", "UNKNOWN"] },
+      "TelemetryFreshness": { "type": "string", "enum": ["FRESH", "STALE", "MISSING"] },
+      "TelemetryQuality": { "type": "string", "enum": ["GOOD", "SUSPECT"] },
+      "TelemetryReadiness": { "type": "string", "enum": ["CURRENT", "DEGRADED", "INCOMPLETE", "NOT_APPLICABLE"] },
+      "DeviceDisplayState": { "type": ["string", "null"], "enum": ["ONLINE", "OFFLINE", "STALE", "UNKNOWN", "UNAVAILABLE", null] },
+      "QualityReasonCode": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]+$",
+        "x-known-codes": ["SOURCE_UNTRUSTED", "TYPE_MISMATCH", "UNIT_MISMATCH", "OUT_OF_RANGE", "CLOCK_AHEAD", "CLOCK_BEHIND", "SOURCE_LAG_EXCEEDED", "DUPLICATE", "OUT_OF_ORDER", "REPLAYED"]
+      },
+      "AvailabilityReasonCode": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]+$",
+        "x-known-codes": ["SOURCE_UNAVAILABLE", "OBSERVATION_COVERAGE_GAP", "POLICY_UNAVAILABLE", "OWNER_DEPENDENCY_UNAVAILABLE"]
+      },
+      "TelemetryValue": {
+        "oneOf": [
+          { "type": "number" },
+          { "type": "string", "maxLength": 4096 },
+          { "type": "boolean" },
+          { "type": "object", "maxProperties": 64, "additionalProperties": true },
+          { "type": "array", "maxItems": 256, "items": { "oneOf": [{ "type": "number" }, { "type": "string", "maxLength": 4096 }, { "type": "boolean" }] } }
+        ]
+      },
+      "LastKnownPresence": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["state", "lastSeenAt", "evaluatedAt", "policyRevision"],
+        "properties": {
+          "state": { "$ref": "#/components/schemas/DevicePresenceState" },
+          "lastSeenAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "evaluatedAt": { "$ref": "#/components/schemas/Instant" },
+          "policyRevision": { "$ref": "#/components/schemas/PolicyRevision" }
+        }
+      },
+      "PresenceSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["applicability", "currentState", "lastSeenAt", "policyRevision", "lastKnown"],
+        "properties": {
+          "applicability": { "$ref": "#/components/schemas/PresenceApplicability" },
+          "currentState": { "oneOf": [{ "$ref": "#/components/schemas/DevicePresenceState" }, { "type": "null" }] },
+          "lastSeenAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "policyRevision": { "oneOf": [{ "$ref": "#/components/schemas/PolicyRevision" }, { "type": "null" }] },
+          "lastKnown": { "oneOf": [{ "$ref": "#/components/schemas/LastKnownPresence" }, { "type": "null" }] }
+        }
+      },
+      "TelemetryPresentState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "state", "value", "valueType", "unit", "sampledAt", "receivedAt", "freshness", "quality", "qualityReasons", "policyRevision"],
+        "properties": {
+          "key": { "$ref": "#/components/schemas/TelemetryKey" },
+          "state": { "type": "string", "const": "PRESENT" },
+          "value": { "$ref": "#/components/schemas/TelemetryValue" },
+          "valueType": { "type": "string", "enum": ["NUMBER", "STRING", "BOOLEAN", "JSON"] },
+          "unit": { "type": ["string", "null"], "maxLength": 64 },
+          "sampledAt": { "$ref": "#/components/schemas/Instant" },
+          "receivedAt": { "$ref": "#/components/schemas/Instant" },
+          "freshness": { "type": "string", "enum": ["FRESH", "STALE"] },
+          "quality": { "$ref": "#/components/schemas/TelemetryQuality" },
+          "qualityReasons": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/components/schemas/QualityReasonCode" } },
+          "policyRevision": { "$ref": "#/components/schemas/PolicyRevision" }
+        }
+      },
+      "TelemetryMissingState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "state", "freshness", "missingReason", "policyRevision"],
+        "properties": {
+          "key": { "$ref": "#/components/schemas/TelemetryKey" },
+          "state": { "type": "string", "const": "MISSING" },
+          "freshness": { "type": "string", "const": "MISSING" },
+          "missingReason": { "type": "string", "enum": ["NEVER_OBSERVED", "ONLY_REJECTED_CANDIDATES", "POLICY_NOT_CONFIGURED"] },
+          "policyRevision": { "oneOf": [{ "$ref": "#/components/schemas/PolicyRevision" }, { "type": "null" }] }
+        }
+      },
+      "TelemetryKeyState": { "oneOf": [{ "$ref": "#/components/schemas/TelemetryPresentState" }, { "$ref": "#/components/schemas/TelemetryMissingState" }] },
+      "DeviceObservationSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "deviceId", "owningOrganizationId", "siteId", "businessRevision", "evaluatedAt", "evaluationAvailability", "availabilityReasons", "presence", "telemetryReadiness", "displayState", "values"],
+        "properties": {
+          "schemaVersion": { "type": "integer", "const": 1 },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "businessRevision": { "$ref": "#/components/schemas/BusinessRevision" },
+          "evaluatedAt": { "$ref": "#/components/schemas/Instant" },
+          "evaluationAvailability": { "$ref": "#/components/schemas/EvaluationAvailability" },
+          "availabilityReasons": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/components/schemas/AvailabilityReasonCode" } },
+          "presence": { "$ref": "#/components/schemas/PresenceSnapshot" },
+          "telemetryReadiness": { "$ref": "#/components/schemas/TelemetryReadiness" },
+          "displayState": { "$ref": "#/components/schemas/DeviceDisplayState" },
+          "values": { "type": "array", "maxItems": 64, "items": { "$ref": "#/components/schemas/TelemetryKeyState" } }
+        }
+      },
+      "ObservationSnapshotTarget": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requestId", "deviceId", "keys"],
+        "properties": {
+          "requestId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "keys": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/components/schemas/TelemetryKey" } }
+        }
+      },
+      "BatchGetObservationSnapshotsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requests"],
+        "properties": {
+          "requests": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/components/schemas/ObservationSnapshotTarget" } }
+        }
+      },
+      "BatchObservationSuccess": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requestId", "deviceId", "status", "snapshot"],
+        "properties": {
+          "requestId": { "type": "string" },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "status": { "type": "string", "const": "OK" },
+          "snapshot": { "$ref": "#/components/schemas/DeviceObservationSnapshot" }
+        }
+      },
+      "BatchObservationFailure": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requestId", "deviceId", "status", "problem"],
+        "properties": {
+          "requestId": { "type": "string" },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "status": { "type": "string", "const": "ERROR" },
+          "problem": { "$ref": "#/components/schemas/ProblemDetails" }
+        }
+      },
+      "BatchObservationResult": { "oneOf": [{ "$ref": "#/components/schemas/BatchObservationSuccess" }, { "$ref": "#/components/schemas/BatchObservationFailure" }] },
+      "BatchGetObservationSnapshotsResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "items"],
+        "properties": {
+          "schemaVersion": { "type": "integer", "const": 1 },
+          "items": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/components/schemas/BatchObservationResult" } }
+        }
+      },
+      "SubscriptionTargetRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["clientSubscriptionId", "deviceId", "keys"],
+        "properties": {
+          "clientSubscriptionId": { "$ref": "#/components/schemas/ClientSubscriptionId" },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "keys": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/components/schemas/TelemetryKey" } },
+          "recoveryCursor": { "$ref": "#/components/schemas/OpaqueRecoveryCursor" }
+        }
+      },
+      "SubscriptionBootstrapRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["subscriptions"],
+        "properties": {
+          "subscriptions": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/components/schemas/SubscriptionTargetRequest" } }
+        }
+      },
+      "TransportPosition": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["epoch", "offset"],
+        "properties": {
+          "epoch": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "offset": { "type": "integer", "format": "int64", "minimum": 0 }
+        }
+      },
+      "SubscriptionDescriptor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["clientSubscriptionId", "subscriptionId", "deviceId", "keys", "channel", "recoveryMode", "transportPosition", "recoveryCursor"],
+        "properties": {
+          "clientSubscriptionId": { "$ref": "#/components/schemas/ClientSubscriptionId" },
+          "subscriptionId": { "$ref": "#/components/schemas/OpaqueSubscriptionId" },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "keys": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/components/schemas/TelemetryKey" } },
+          "channel": { "$ref": "#/components/schemas/OpaqueChannel" },
+          "recoveryMode": { "type": "string", "enum": ["SNAPSHOT_THEN_LIVE", "ATTEMPT_RECOVERY"] },
+          "transportPosition": { "oneOf": [{ "$ref": "#/components/schemas/TransportPosition" }, { "type": "null" }] },
+          "recoveryCursor": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueRecoveryCursor" }, { "type": "null" }] }
+        }
+      },
+      "SubscriptionLimits": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["maxSubscriptions", "maxKeysPerSubscription", "maxTotalKeySelections"],
+        "properties": {
+          "maxSubscriptions": { "type": "integer", "const": 100 },
+          "maxKeysPerSubscription": { "type": "integer", "const": 64 },
+          "maxTotalKeySelections": { "type": "integer", "const": 2048 }
+        }
+      },
+      "SubscriptionBootstrapResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "transportProtocol", "endpoint", "connectionToken", "expiresAt", "subscriptions", "limits"],
+        "properties": {
+          "schemaVersion": { "type": "integer", "const": 1 },
+          "transportProtocol": { "type": "string", "const": "CENTRIFUGO_JSON_V1" },
+          "endpoint": { "type": "string", "format": "uri", "pattern": "^wss://" },
+          "connectionToken": { "type": "string", "minLength": 16, "maxLength": 8192 },
+          "expiresAt": { "$ref": "#/components/schemas/Instant" },
+          "subscriptions": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/components/schemas/SubscriptionDescriptor" } },
+          "limits": { "$ref": "#/components/schemas/SubscriptionLimits" }
+        }
+      },
+      "RecoveryCursorCheckpoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["subscriptionId", "businessRevision", "transportPosition"],
+        "properties": {
+          "subscriptionId": { "$ref": "#/components/schemas/OpaqueSubscriptionId" },
+          "businessRevision": { "$ref": "#/components/schemas/BusinessRevision" },
+          "transportPosition": { "$ref": "#/components/schemas/TransportPosition" }
+        }
+      },
+      "RecoveryCursorCheckpointRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["checkpoints"],
+        "properties": {
+          "checkpoints": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/components/schemas/RecoveryCursorCheckpoint" } }
+        }
+      },
+      "RecoveryCursorCheckpointResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["subscriptionId", "businessRevision", "recoveryCursor", "expiresAt"],
+        "properties": {
+          "subscriptionId": { "$ref": "#/components/schemas/OpaqueSubscriptionId" },
+          "businessRevision": { "$ref": "#/components/schemas/BusinessRevision" },
+          "recoveryCursor": { "$ref": "#/components/schemas/OpaqueRecoveryCursor" },
+          "expiresAt": { "$ref": "#/components/schemas/Instant" }
+        }
+      },
+      "RecoveryCursorCheckpointResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "items"],
+        "properties": {
+          "schemaVersion": { "type": "integer", "const": 1 },
+          "items": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/components/schemas/RecoveryCursorCheckpointResult" } }
+        }
+      },
+      "FieldError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["field", "message"],
+        "properties": { "field": { "type": "string" }, "message": { "type": "string" } }
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "title", "status", "detail", "instance", "code", "traceId", "retryable"],
+        "properties": {
+          "type": { "type": "string", "format": "uri-reference" },
+          "title": { "type": "string" },
+          "status": { "type": "integer", "minimum": 400, "maximum": 599 },
+          "detail": { "type": "string" },
+          "instance": { "type": "string" },
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]+$",
+            "x-stable-codes": [
+              "RESOURCE_NOT_FOUND",
+              "TELEMETRY_REQUEST_INVALID",
+              "TELEMETRY_KEY_INVALID",
+              "RECOVERY_CURSOR_INVALID",
+              "TELEMETRY_BATCH_LIMIT_EXCEEDED",
+              "SUBSCRIPTION_LIMIT_EXCEEDED",
+              "TELEMETRY_UNAVAILABLE",
+              "TELEMETRY_TIMEOUT",
+              "SUBSCRIPTION_UNAVAILABLE",
+              "TELEMETRY_AUTHORIZATION_UNAVAILABLE"
+            ]
+          },
+          "traceId": { "type": "string", "pattern": "^[a-f0-9]{32}$" },
+          "retryable": { "type": "boolean" },
+          "retryAfterMs": { "type": "integer", "minimum": 0 },
+          "fieldErrors": { "type": "array", "maxItems": 128, "items": { "$ref": "#/components/schemas/FieldError" } }
+        }
+      }
+    }
+  }
+}
