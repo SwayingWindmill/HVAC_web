@@ -60,7 +60,7 @@ Use `node scripts/run-s2-centrifugo-poc.mjs --cleanup=false --project=<name>` on
 
 ## Limits
 
-- The POC uses Centrifugo's in-memory engine so restart recovery is deliberately unavailable.
+- The POC uses a dedicated digest-pinned Redis engine so bounded history survives Centrifugo restarts; Redis remains non-authoritative and any overflow, epoch reset, gap, or uncertain recovery falls back to the platform Snapshot owner.
 - The 32-client fan-out proves only that the protocol boundary works locally; production scale is not certified.
 - The locked `v6.8.1` metrics do not expose a dedicated server-unsubscribe counter. Revocation evidence therefore remains owner-audited and is correlated with the unsubscribe push, denied resubscribe and absence of subsequent delivery.
 - The experiment does not choose the production broker engine, retention period, connection target, publication rate or rollout SLO. Those belong to service ownership and release-gate decisions.

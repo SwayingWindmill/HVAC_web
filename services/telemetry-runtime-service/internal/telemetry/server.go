@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,14 +12,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/services/telemetry-runtime-service/pkg/telemetryapi"
 )
 
 const (
-	InternalDeviceSnapshotPrefix = "/internal/v1/devices/"
-	InternalBatchSnapshotPath    = "/internal/v1/telemetry/observation-snapshots:batchGet"
-	maximumSnapshotRequestSize   = 256 << 10
+	InternalDeviceSnapshotPrefix          = "/internal/v1/devices/"
+	InternalBatchSnapshotPath             = "/internal/v1/telemetry/observation-snapshots:batchGet"
+	InternalRecoveryCheckpointResolvePath = "/internal/v1/telemetry/recovery-cursors:resolve"
+	telemetryContextGrantHeader           = "X-Telemetry-Context-Grant"
+	telemetryCheckpointResolveAction      = "telemetry:checkpoint:resolve"
+	maximumSnapshotRequestSize            = 256 << 10
 )
 
 var (
@@ -27,23 +32,33 @@ var (
 )
 
 type ServerConfig struct {
-	Store                SnapshotStore
-	Authorizer           GrantAuthorizer
-	AllowedGatewaySPIFFE string
-	ObservationAcceptor  ObservationAcceptor
-	CoverageReporter     CoverageReporter
-	SourceAuthenticator  SourceAuthenticator
-	Now                  func() time.Time
+	Store                   SnapshotStore
+	Authorizer              GrantAuthorizer
+	AllowedGatewaySPIFFE    string
+	RuntimeAudience         string
+	ObservationAcceptor     ObservationAcceptor
+	CoverageReporter        CoverageReporter
+	SourceAuthenticator     SourceAuthenticator
+	Realtime                *RealtimeService
+	AllowedCentrifugoSPIFFE string
+	CentrifugoProxySecret   string
+	AllowedIAMSPIFFE        string
+	Now                     func() time.Time
 }
 
 type handler struct {
-	store                SnapshotStore
-	authorizer           GrantAuthorizer
-	allowedGatewaySPIFFE string
-	observationAcceptor  ObservationAcceptor
-	coverageReporter     CoverageReporter
-	sourceAuthenticator  SourceAuthenticator
-	now                  func() time.Time
+	store                   SnapshotStore
+	authorizer              GrantAuthorizer
+	allowedGatewaySPIFFE    string
+	runtimeAudience         string
+	observationAcceptor     ObservationAcceptor
+	coverageReporter        CoverageReporter
+	sourceAuthenticator     SourceAuthenticator
+	realtime                *RealtimeService
+	allowedCentrifugoSPIFFE string
+	centrifugoProxySecret   string
+	allowedIAMSPIFFE        string
+	now                     func() time.Time
 }
 
 func NewHandler(config ServerConfig) http.Handler {
@@ -54,8 +69,14 @@ func NewHandler(config ServerConfig) http.Handler {
 	return &handler{
 		store: config.Store, authorizer: config.Authorizer,
 		allowedGatewaySPIFFE: strings.TrimSpace(config.AllowedGatewaySPIFFE),
+		runtimeAudience:      strings.TrimSpace(config.RuntimeAudience),
 		observationAcceptor:  config.ObservationAcceptor, coverageReporter: config.CoverageReporter,
-		sourceAuthenticator: config.SourceAuthenticator, now: now,
+		sourceAuthenticator:     config.SourceAuthenticator,
+		realtime:                config.Realtime,
+		allowedCentrifugoSPIFFE: strings.TrimSpace(config.AllowedCentrifugoSPIFFE),
+		centrifugoProxySecret:   strings.TrimSpace(config.CentrifugoProxySecret),
+		allowedIAMSPIFFE:        strings.TrimSpace(config.AllowedIAMSPIFFE),
+		now:                     now,
 	}
 }
 
@@ -66,6 +87,26 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if request.URL.Path == InternalThingsBoardCoveragePath {
 		h.handleThingsBoardCoverage(writer, request)
+		return
+	}
+	if request.URL.Path == InternalSubscriptionBootstrapPath {
+		h.handleSubscriptionBootstrap(writer, request)
+		return
+	}
+	if request.URL.Path == InternalRecoveryCheckpointResolvePath {
+		h.handleRecoveryCheckpointResolve(writer, request)
+		return
+	}
+	if request.URL.Path == InternalRecoveryCheckpointPath {
+		h.handleRecoveryCheckpoint(writer, request)
+		return
+	}
+	if request.URL.Path == InternalCentrifugoSubscribePath {
+		h.handleCentrifugoSubscribe(writer, request)
+		return
+	}
+	if request.URL.Path == InternalSubscriptionRevokePath {
+		h.handleSubscriptionRevoke(writer, request)
 		return
 	}
 	if request.URL.Path == InternalBatchSnapshotPath {
@@ -106,7 +147,7 @@ func (h *handler) handleSingle(writer http.ResponseWriter, request *http.Request
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "The telemetry selection is invalid.", false)
 		return
 	}
-	if !h.authorize(writer, request, peer, grant, telemetryauth.ActionSnapshotRead, []telemetryauth.Target{target}) {
+	if _, ok := h.authorize(writer, request, peer, grant, telemetryauth.ActionSnapshotRead, []telemetryauth.Target{target}); !ok {
 		return
 	}
 	commit, err := h.store.EvaluateAndRead(request.Context(), target, h.now().UTC())
@@ -161,7 +202,7 @@ func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request)
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "The telemetry batch request is invalid.", false)
 		return
 	}
-	if !h.authorize(writer, request, peer, grant, telemetryauth.ActionBatchRead, targets) {
+	if _, ok := h.authorize(writer, request, peer, grant, telemetryauth.ActionBatchRead, targets); !ok {
 		return
 	}
 	evaluatedAt := h.now().UTC()
@@ -186,6 +227,279 @@ func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request)
 	writeJSON(writer, http.StatusOK, response)
 }
 
+func (h *handler) handleSubscriptionBootstrap(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.Header().Set("Allow", http.MethodPost)
+		writeProblem(writer, request, http.StatusMethodNotAllowed, "TELEMETRY_METHOD_NOT_ALLOWED", "This telemetry route only supports POST.", false)
+		return
+	}
+	peer, grant, ok := h.authenticate(writer, request)
+	if !ok {
+		return
+	}
+	if h.realtime == nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_REALTIME_UNAVAILABLE", "Telemetry realtime is temporarily unavailable.", true)
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumSnapshotRequestSize)
+	var input telemetryapi.SubscriptionBootstrapRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SUBSCRIPTION_INVALID", "The telemetry subscription request is invalid.", false)
+		return
+	}
+	targets, err := aggregateSubscriptionTargets(input.Subscriptions)
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SUBSCRIPTION_INVALID", "The telemetry subscription request is invalid.", false)
+		return
+	}
+	action := telemetryauth.ActionSubscribe
+	for _, subscription := range input.Subscriptions {
+		if subscription.RecoveryCursor != nil {
+			action = telemetryauth.ActionRecoveryUse
+			break
+		}
+	}
+	access, ok := h.authorize(writer, request, peer, grant, action, targets)
+	if !ok {
+		return
+	}
+	response, err := h.realtime.Bootstrap(request.Context(), access, input)
+	switch {
+	case errors.Is(err, ErrSubscriptionConflict):
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SUBSCRIPTION_INVALID", "The telemetry subscription request is invalid.", false)
+	case errors.Is(err, ErrRecoveryCursorRejected), errors.Is(err, ErrSubscriptionNotFound):
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested telemetry resource was not found.", false)
+	case err != nil:
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_REALTIME_UNAVAILABLE", "Telemetry realtime is temporarily unavailable.", true)
+	default:
+		writeJSON(writer, http.StatusOK, response)
+	}
+}
+
+type checkpointScopeResponse struct {
+	Targets []telemetryauth.Target `json:"targets"`
+}
+
+func (h *handler) handleRecoveryCheckpointResolve(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.Header().Set("Allow", http.MethodPost)
+		writeProblem(writer, request, http.StatusMethodNotAllowed, "TELEMETRY_METHOD_NOT_ALLOWED", "This telemetry route only supports POST.", false)
+		return
+	}
+	identity, ok := h.checkpointIdentity(writer, request)
+	if !ok {
+		return
+	}
+	if h.realtime == nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_REALTIME_UNAVAILABLE", "Telemetry realtime is temporarily unavailable.", true)
+		return
+	}
+	input, ok := decodeRecoveryCheckpointRequest(writer, request)
+	if !ok {
+		return
+	}
+	targets, err := h.realtime.CheckpointTargetsForIdentity(request.Context(), identity, input)
+	if errors.Is(err, ErrRecoveryCursorRejected) || errors.Is(err, ErrSubscriptionNotFound) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested telemetry resource was not found.", false)
+		return
+	}
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_CHECKPOINT_INVALID", "The telemetry recovery checkpoint is invalid.", false)
+		return
+	}
+	writeJSON(writer, http.StatusOK, checkpointScopeResponse{Targets: targets})
+}
+
+func (h *handler) handleRecoveryCheckpoint(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.Header().Set("Allow", http.MethodPost)
+		writeProblem(writer, request, http.StatusMethodNotAllowed, "TELEMETRY_METHOD_NOT_ALLOWED", "This telemetry route only supports POST.", false)
+		return
+	}
+	identity, ok := h.checkpointIdentity(writer, request)
+	if !ok {
+		return
+	}
+	peer, grant, ok := h.authenticate(writer, request)
+	if !ok {
+		return
+	}
+	if h.realtime == nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_REALTIME_UNAVAILABLE", "Telemetry realtime is temporarily unavailable.", true)
+		return
+	}
+	input, ok := decodeRecoveryCheckpointRequest(writer, request)
+	if !ok {
+		return
+	}
+	targets, err := h.realtime.CheckpointTargetsForIdentity(request.Context(), identity, input)
+	if errors.Is(err, ErrRecoveryCursorRejected) || errors.Is(err, ErrSubscriptionNotFound) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested telemetry resource was not found.", false)
+		return
+	}
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_CHECKPOINT_INVALID", "The telemetry recovery checkpoint is invalid.", false)
+		return
+	}
+	access, ok := h.authorize(writer, request, peer, grant, telemetryauth.ActionRecoveryCheckpoint, targets)
+	if !ok {
+		return
+	}
+	if access.Subject != identity.Subject || access.SubjectIssuer != identity.SubjectIssuer || access.SessionID != identity.SessionID || access.ActingOrganizationID != identity.ActingOrganizationID {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested telemetry resource was not found.", false)
+		return
+	}
+	response, err := h.realtime.Checkpoint(request.Context(), access, input)
+	switch {
+	case errors.Is(err, ErrSubscriptionConflict):
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_CHECKPOINT_INVALID", "The telemetry recovery checkpoint is invalid.", false)
+	case errors.Is(err, ErrRecoveryCursorRejected), errors.Is(err, ErrSubscriptionNotFound):
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested telemetry resource was not found.", false)
+	case err != nil:
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_REALTIME_UNAVAILABLE", "Telemetry realtime is temporarily unavailable.", true)
+	default:
+		writeJSON(writer, http.StatusOK, response)
+	}
+}
+
+func decodeRecoveryCheckpointRequest(writer http.ResponseWriter, request *http.Request) (telemetryapi.RecoveryCursorCheckpointRequest, bool) {
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumSnapshotRequestSize)
+	var input telemetryapi.RecoveryCursorCheckpointRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_CHECKPOINT_INVALID", "The telemetry recovery checkpoint is invalid.", false)
+		return telemetryapi.RecoveryCursorCheckpointRequest{}, false
+	}
+	return input, true
+}
+
+func (h *handler) checkpointIdentity(writer http.ResponseWriter, request *http.Request) (CheckpointIdentity, bool) {
+	if hasForgedIdentityHeader(request.Header) {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_FORGED_IDENTITY_HEADER", "Caller-supplied identity headers are not accepted.", false)
+		return CheckpointIdentity{}, false
+	}
+	peer, ok := verifiedPeerSPIFFE(request)
+	if !ok || h.allowedGatewaySPIFFE == "" || peer != h.allowedGatewaySPIFFE || h.runtimeAudience == "" || request.TLS == nil || len(request.TLS.PeerCertificates) == 0 {
+		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.", false)
+		return CheckpointIdentity{}, false
+	}
+	values := request.Header.Values(telemetryContextGrantHeader)
+	if len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_CONTEXT_GRANT_REQUIRED", "A bounded Telemetry context grant is required.", false)
+		return CheckpointIdentity{}, false
+	}
+	claims, err := identitycontext.VerifyDelegation(request.TLS.PeerCertificates[0].PublicKey, strings.TrimSpace(values[0]))
+	if err != nil || !uuidV7Pattern.MatchString(claims.ActingOrganizationID) {
+		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_CONTEXT_GRANT_INVALID", "The Telemetry context grant is invalid.", false)
+		return CheckpointIdentity{}, false
+	}
+	expectedScope := "session:" + claims.SessionID
+	if strings.HasPrefix(claims.Subject, "spiffe://") {
+		expectedScope = "workload:" + claims.Subject
+	}
+	if err := identitycontext.ValidateDelegation(claims, h.now().UTC(), peer, h.runtimeAudience, telemetryCheckpointResolveAction, expectedScope); err != nil {
+		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_CONTEXT_GRANT_INVALID", "The Telemetry context grant is invalid.", false)
+		return CheckpointIdentity{}, false
+	}
+	return CheckpointIdentity{
+		Subject: claims.Subject, SubjectIssuer: claims.SubjectIssuer,
+		SessionID: claims.SessionID, ActingOrganizationID: claims.ActingOrganizationID,
+	}, true
+}
+
+type centrifugoSubscribeRequest struct {
+	Client    string          `json:"client"`
+	Transport string          `json:"transport"`
+	Protocol  string          `json:"protocol"`
+	Encoding  string          `json:"encoding"`
+	User      string          `json:"user"`
+	Channel   string          `json:"channel"`
+	Token     string          `json:"token"`
+	Data      json.RawMessage `json:"data"`
+	Meta      json.RawMessage `json:"meta"`
+}
+
+func (h *handler) handleCentrifugoSubscribe(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.Header().Set("Allow", http.MethodPost)
+		writeJSON(writer, http.StatusOK, map[string]any{"error": map[string]any{"code": 405, "message": "method not allowed"}})
+		return
+	}
+	peer, verified := verifiedPeerSPIFFE(request)
+	providedSecret := request.Header.Get("X-Centrifugo-Proxy-Secret")
+	if !verified || h.allowedCentrifugoSPIFFE == "" || peer != h.allowedCentrifugoSPIFFE || h.centrifugoProxySecret == "" ||
+		len(providedSecret) != len(h.centrifugoProxySecret) || subtle.ConstantTimeCompare([]byte(providedSecret), []byte(h.centrifugoProxySecret)) != 1 || h.realtime == nil {
+		writeJSON(writer, http.StatusOK, map[string]any{"error": map[string]any{"code": 403, "message": "scope denied"}})
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumSnapshotRequestSize)
+	var input centrifugoSubscribeRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil || strings.TrimSpace(input.Token) != "" {
+		writeJSON(writer, http.StatusOK, map[string]any{"error": map[string]any{"code": 403, "message": "scope denied"}})
+		return
+	}
+	subscription, err := h.realtime.AuthorizeSubscribe(request.Context(), input.User, input.Channel)
+	if err != nil {
+		writeJSON(writer, http.StatusOK, map[string]any{"error": map[string]any{"code": 403, "message": "scope denied"}})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"result": map[string]any{"data": map[string]any{
+		"authorizationSource": "telemetry-runtime-owner",
+		"subscriptionId":      subscription.SubscriptionID,
+		"policyRevision":      subscription.PolicyRevision,
+	}}})
+}
+
+type subscriptionRevokeRequest struct {
+	PrincipalID string `json:"principalId"`
+	DeviceID    string `json:"deviceId"`
+	Reason      string `json:"reason"`
+	OccurredAt  string `json:"occurredAt"`
+}
+
+func (h *handler) handleSubscriptionRevoke(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.Header().Set("Allow", http.MethodPost)
+		writeProblem(writer, request, http.StatusMethodNotAllowed, "TELEMETRY_METHOD_NOT_ALLOWED", "This telemetry route only supports POST.", false)
+		return
+	}
+	if hasForgedIdentityHeader(request.Header) {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_FORGED_IDENTITY_HEADER", "Caller-supplied identity headers are not accepted.", false)
+		return
+	}
+	peer, verified := verifiedPeerSPIFFE(request)
+	if !verified || h.allowedIAMSPIFFE == "" || peer != h.allowedIAMSPIFFE || h.realtime == nil {
+		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.", false)
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumSnapshotRequestSize)
+	var input subscriptionRevokeRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil ||
+		(input.PrincipalID == "" && input.DeviceID == "") || (input.PrincipalID != "" && !uuidV7Pattern.MatchString(input.PrincipalID)) ||
+		(input.DeviceID != "" && !uuidV7Pattern.MatchString(input.DeviceID)) || strings.TrimSpace(input.Reason) == "" || len(input.Reason) > 128 {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_REVOCATION_INVALID", "The telemetry revocation request is invalid.", false)
+		return
+	}
+	occurredAt, err := time.Parse(time.RFC3339Nano, input.OccurredAt)
+	if err != nil || occurredAt.After(h.now().UTC().Add(5*time.Second)) || occurredAt.Before(h.now().UTC().Add(-24*time.Hour)) {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_REVOCATION_INVALID", "The telemetry revocation request is invalid.", false)
+		return
+	}
+	revoked, err := h.realtime.Revoke(request.Context(), input.PrincipalID, input.DeviceID)
+	if err != nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_REVOCATION_UNAVAILABLE", "Telemetry revocation is temporarily unavailable.", true)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"schemaVersion": 1, "revokedSubscriptions": revoked, "occurredAt": occurredAt.UTC().Format(time.RFC3339Nano)})
+}
+
 func (h *handler) authenticate(writer http.ResponseWriter, request *http.Request) (string, string, bool) {
 	if hasForgedIdentityHeader(request.Header) {
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_FORGED_IDENTITY_HEADER", "Caller-supplied identity headers are not accepted.", false)
@@ -201,24 +515,24 @@ func (h *handler) authenticate(writer http.ResponseWriter, request *http.Request
 		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_GRANT_REQUIRED", "A Telemetry delegation grant is required.", false)
 		return "", "", false
 	}
-	if h.authorizer == nil || h.store == nil {
+	if h.authorizer == nil || (h.store == nil && h.realtime == nil) {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
 		return "", "", false
 	}
 	return peer, grant, true
 }
 
-func (h *handler) authorize(writer http.ResponseWriter, request *http.Request, peer, grant string, action telemetryauth.Action, targets []telemetryauth.Target) bool {
-	_, err := h.authorizer.Authorize(request.Context(), peer, grant, action, targets)
+func (h *handler) authorize(writer http.ResponseWriter, request *http.Request, peer, grant string, action telemetryauth.Action, targets []telemetryauth.Target) (AccessContext, bool) {
+	access, err := h.authorizer.Authorize(request.Context(), peer, grant, action, targets)
 	if errors.Is(err, ErrGrantRejected) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested telemetry resource was not found.", false)
-		return false
+		return AccessContext{}, false
 	}
 	if err != nil {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_AUTHORIZATION_UNAVAILABLE", "Telemetry authorization is temporarily unavailable.", true)
-		return false
+		return AccessContext{}, false
 	}
-	return true
+	return access, true
 }
 
 func parseSinglePath(path string) (string, bool) {

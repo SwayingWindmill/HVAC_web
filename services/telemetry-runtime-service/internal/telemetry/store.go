@@ -46,6 +46,10 @@ func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore,
 	config.MaxConns = 16
 	config.MinConns = 1
 	config.MaxConnLifetime = 30 * time.Minute
+	config.AfterConnect = func(ctx context.Context, connection *pgx.Conn) error {
+		_, err := connection.Exec(ctx, `SET ROLE s2_telemetry_runtime`)
+		return err
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("open telemetry runtime database: %w", err)
@@ -101,7 +105,7 @@ func (store *PostgresStore) EvaluateAndRead(ctx context.Context, target telemetr
 }
 
 func (store *PostgresStore) evaluateAndPersistDevice(ctx context.Context, tx pgx.Tx, deviceID string, requestedKeys []string, evaluatedAt time.Time) (SnapshotCommit, error) {
-	previousRevision, previousDigest, err := lockCurrentSnapshot(ctx, tx, deviceID)
+	previousRevision, previousDigest, previousSnapshot, err := lockCurrentSnapshot(ctx, tx, deviceID)
 	if err != nil {
 		return SnapshotCommit{}, err
 	}
@@ -129,7 +133,11 @@ func (store *PostgresStore) evaluateAndPersistDevice(ctx context.Context, tx pgx
 		return SnapshotCommit{}, err
 	}
 	if stateChanged {
-		if err := store.insertOutboxIntent(ctx, tx, evaluation.Snapshot, previousRevision, evaluatedAt); err != nil {
+		changedKeys, err := changedTelemetryKeys(previousSnapshot, evaluation.Snapshot)
+		if err != nil {
+			return SnapshotCommit{}, err
+		}
+		if err := store.insertOutboxIntent(ctx, tx, evaluation.Snapshot, previousRevision, changedKeys, evaluatedAt); err != nil {
 			return SnapshotCommit{}, err
 		}
 	}
@@ -138,22 +146,27 @@ func (store *PostgresStore) evaluateAndPersistDevice(ctx context.Context, tx pgx
 	}, nil
 }
 
-func lockCurrentSnapshot(ctx context.Context, tx pgx.Tx, deviceID string) (int64, string, error) {
+func lockCurrentSnapshot(ctx context.Context, tx pgx.Tx, deviceID string) (int64, string, *telemetryapi.DeviceObservationSnapshot, error) {
 	var revision int64
 	var digest string
+	var snapshotJSON []byte
 	err := tx.QueryRow(ctx, `
-SELECT business_revision, state_sha256
+SELECT business_revision, state_sha256, snapshot
 FROM telemetry_runtime.device_observation_snapshots
 WHERE device_id = $1::uuid
 FOR UPDATE
-`, deviceID).Scan(&revision, &digest)
+`, deviceID).Scan(&revision, &digest, &snapshotJSON)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, "", nil
+		return 0, "", nil, nil
 	}
 	if err != nil {
-		return 0, "", fmt.Errorf("lock current telemetry snapshot: %w", err)
+		return 0, "", nil, fmt.Errorf("lock current telemetry snapshot: %w", err)
 	}
-	return revision, digest, nil
+	var snapshot telemetryapi.DeviceObservationSnapshot
+	if err := json.Unmarshal(snapshotJSON, &snapshot); err != nil {
+		return 0, "", nil, fmt.Errorf("decode current telemetry snapshot: %w", err)
+	}
+	return revision, digest, &snapshot, nil
 }
 
 func loadDeviceFacts(ctx context.Context, tx pgx.Tx, deviceID string) (DeviceFacts, error) {
@@ -390,7 +403,7 @@ ON CONFLICT (device_id) DO UPDATE SET
 	return nil
 }
 
-func (store *PostgresStore) insertOutboxIntent(ctx context.Context, tx pgx.Tx, snapshot telemetryapi.DeviceObservationSnapshot, previousRevision int64, createdAt time.Time) error {
+func (store *PostgresStore) insertOutboxIntent(ctx context.Context, tx pgx.Tx, snapshot telemetryapi.DeviceObservationSnapshot, previousRevision int64, changedKeys []string, createdAt time.Time) error {
 	eventID, err := store.newEventID(createdAt)
 	if err != nil {
 		return fmt.Errorf("generate telemetry outbox event ID: %w", err)
@@ -403,6 +416,7 @@ func (store *PostgresStore) insertOutboxIntent(ctx context.Context, tx pgx.Tx, s
 		"previousRevision": previousRevision,
 		"revision":         snapshot.BusinessRevision,
 		"evaluatedAt":      snapshot.EvaluatedAt,
+		"changedKeys":      append([]string(nil), changedKeys...),
 		"snapshot":         snapshot,
 	}
 	encoded, err := json.Marshal(payload)
@@ -421,6 +435,54 @@ INSERT INTO telemetry_runtime.telemetry_publication_outbox (
 		return fmt.Errorf("persist telemetry outbox intent: %w", err)
 	}
 	return nil
+}
+
+func changedTelemetryKeys(previous *telemetryapi.DeviceObservationSnapshot, current telemetryapi.DeviceObservationSnapshot) ([]string, error) {
+	currentStates := make(map[string][]byte, len(current.Values))
+	for _, value := range current.Values {
+		key := telemetryStateKey(value)
+		if key == "" {
+			return nil, errors.New("current telemetry snapshot contains an invalid key state")
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("encode current telemetry key state: %w", err)
+		}
+		currentStates[key] = encoded
+	}
+	if previous == nil {
+		keys := make([]string, 0, len(currentStates))
+		for _, value := range current.Values {
+			keys = append(keys, telemetryStateKey(value))
+		}
+		return keys, nil
+	}
+	previousStates := make(map[string][]byte, len(previous.Values))
+	for _, value := range previous.Values {
+		key := telemetryStateKey(value)
+		if key == "" {
+			return nil, errors.New("previous telemetry snapshot contains an invalid key state")
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("encode previous telemetry key state: %w", err)
+		}
+		previousStates[key] = encoded
+	}
+	changed := make([]string, 0)
+	for _, value := range current.Values {
+		key := telemetryStateKey(value)
+		if string(previousStates[key]) != string(currentStates[key]) {
+			changed = append(changed, key)
+		}
+	}
+	for _, value := range previous.Values {
+		key := telemetryStateKey(value)
+		if _, exists := currentStates[key]; !exists {
+			changed = append(changed, key)
+		}
+	}
+	return changed, nil
 }
 
 func nullableJSON(value any) ([]byte, error) {

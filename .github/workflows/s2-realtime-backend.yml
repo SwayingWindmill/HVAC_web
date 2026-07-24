@@ -1,0 +1,69 @@
+name: S2 Realtime Publication and Recovery Backend
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/s2-realtime-backend.yml"
+      - "contracts/http/s2-telemetry-public.openapi.json"
+      - "contracts/http/s2-tooling.lock.json"
+      - "contracts/events/s2-device-observation-publication.v1.schema.json"
+      - "deploy/s2/release-gates.v1.json"
+      - "apps/hvac-web/src/api/generated/s2Telemetry.gen.ts"
+      - "services/platform-gateway/**"
+      - "services/iam-service/**"
+      - "services/telemetry-runtime-service/**"
+      - "libs/identitycontext/**"
+      - "libs/telemetryauth/**"
+      - "infra/s2-telemetry/**"
+      - "pocs/s2-centrifugo/**"
+      - "pocs/platform-components/versions.lock.json"
+      - "scripts/generate-s2-telemetry-contracts.mjs"
+      - "scripts/check-s2-realtime-backend.mjs"
+      - "scripts/check-s2-centrifugo-poc-assets.mjs"
+      - "scripts/run-s2-realtime-centrifugo-config-check.mjs"
+      - "scripts/run-s2-centrifugo-poc.mjs"
+      - "docs/operations/s2-realtime-backend.md"
+      - "package.json"
+      - "package-lock.json"
+      - "go.work"
+      - "go.work.sum"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+  GOMAXPROCS: 2
+  GOFLAGS: -p=1
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
+          cache-dependency-path: |
+            libs/*/go.mod
+            services/*/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run s2:ticket-06
+      - name: Upload Ticket 06 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: s2-realtime-backend-evidence
+          path: |
+            out/s2-ticket-06
+            out/s2-centrifugo-poc
+          if-no-files-found: error
+          retention-days: 14

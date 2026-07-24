@@ -1,4 +1,15 @@
 services:
+  redis:
+    image: redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+    platform: linux/amd64
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+    networks: [poc]
+
   owner:
     image: node:20.19.4-bookworm-slim@sha256:a25e59a5562406b0a4f34ce94ccad6c3902dcf3269b40e1fe12d881090c6f9be
     platform: linux/amd64
@@ -29,6 +40,8 @@ services:
       - "${POC_S2_CENTRIFUGO_PORT:-18000}:8000"
     depends_on:
       owner:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "centrifugo", "checkconfig", "-c", "/centrifugo/config.json"]
