@@ -13,7 +13,10 @@ require (
 	github.com/quanlaihe/hvac-web/services/iam-service v0.0.0
 )
 
-require github.com/quanlaihe/hvac-web/libs/registryauth v0.0.0
+require (
+	github.com/quanlaihe/hvac-web/libs/registryauth v0.0.0
+	github.com/quanlaihe/hvac-web/libs/telemetryauth v0.0.0
+)
 
 require (
 	github.com/go-jose/go-jose/v4 v4.1.4
@@ -44,3 +47,5 @@ replace github.com/quanlaihe/hvac-web/libs/testpki => ../../libs/testpki
 replace github.com/quanlaihe/hvac-web/services/iam-service => ../iam-service
 
 replace github.com/quanlaihe/hvac-web/libs/registryauth => ../../libs/registryauth
+
+replace github.com/quanlaihe/hvac-web/libs/telemetryauth => ../../libs/telemetryauth
