@@ -212,7 +212,7 @@ for (const marker of [
 }
 
 assert(routeRegistry.registryRevision === 7 && ownershipLock.routeRegistryRevision === 7, 'route ownership revision drifted');
-assert(dataRegistry.registryRevision === 6 && ownershipLock.dataRegistryRevision === 6, 'data ownership revision drifted');
+assert(dataRegistry.registryRevision === 7 && ownershipLock.dataRegistryRevision === 7, 'data ownership revision drifted');
 const activeRoutes = new Map((routeRegistry.routes ?? []).map((route) => [routeKey(route), route]));
 for (const expected of compatibility.operations) {
   const route = activeRoutes.get(`${expected.method} ${expected.path}`);

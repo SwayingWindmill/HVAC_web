@@ -23,7 +23,7 @@
     "POST /api/v1/telemetry/subscriptions:bootstrap": { "revision": 1, "owner": "telemetry-runtime-service" },
     "POST /api/v1/telemetry/recovery-cursors:checkpoint": { "revision": 1, "owner": "telemetry-runtime-service" }
   },
-  "dataRegistryRevision": 6,
+  "dataRegistryRevision": 7,
   "resources": {
     "schema:gateway": { "revision": 1, "writer": "platform-gateway" },
     "schema:audit_ledger": { "revision": 1, "writer": "audit-ledger-service" },
@@ -38,6 +38,9 @@
     "projection:gateway-route-audit": { "revision": 1, "writer": "platform-gateway" },
     "projection:iam-registry-read-decision": { "revision": 1, "writer": "iam-service" },
     "projection:iam-registry-grant-revocation": { "revision": 1, "writer": "iam-service" },
+    "projection:iam-telemetry-authorization-decision": { "revision": 1, "writer": "iam-service" },
+    "projection:iam-telemetry-grant-use": { "revision": 1, "writer": "iam-service" },
+    "projection:iam-telemetry-revocation-fact": { "revision": 1, "writer": "iam-service" },
     "projection:iam-onboarding-reconciliation": { "revision": 1, "writer": "iam-service" },
     "projection:iam-reconciliation-quarantine": { "revision": 1, "writer": "iam-service" },
     "projection:device-runtime-binding": { "revision": 1, "writer": "telemetry-runtime-service" },

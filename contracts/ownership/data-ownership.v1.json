@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 6,
+  "registryRevision": 7,
   "resources": [
     { "kind": "schema", "name": "gateway", "writer": "platform-gateway", "revision": 1 },
     { "kind": "schema", "name": "audit_ledger", "writer": "audit-ledger-service", "revision": 1 },
@@ -15,6 +15,9 @@
     { "kind": "projection", "name": "gateway-route-audit", "writer": "platform-gateway", "revision": 1 },
     { "kind": "projection", "name": "iam-registry-read-decision", "writer": "iam-service", "revision": 1 },
     { "kind": "projection", "name": "iam-registry-grant-revocation", "writer": "iam-service", "revision": 1 },
+    { "kind": "projection", "name": "iam-telemetry-authorization-decision", "writer": "iam-service", "revision": 1 },
+    { "kind": "projection", "name": "iam-telemetry-grant-use", "writer": "iam-service", "revision": 1 },
+    { "kind": "projection", "name": "iam-telemetry-revocation-fact", "writer": "iam-service", "revision": 1 },
     { "kind": "projection", "name": "iam-onboarding-reconciliation", "writer": "iam-service", "revision": 1 },
     { "kind": "projection", "name": "iam-reconciliation-quarantine", "writer": "iam-service", "revision": 1 },
     { "kind": "projection", "name": "device-runtime-binding", "writer": "telemetry-runtime-service", "revision": 1, "sourceOwner": "platform-core-service" },
@@ -48,6 +51,7 @@
   "databaseIdentities": [
     { "schema": "iam", "migrationRole": "s1_iam_migrator", "runtimeRole": "s1_iam_runtime", "runtimeBypassRls": false },
     { "schema": "iam", "migrationRole": "s1_iam_migrator", "runtimeRole": "s1_iam_reconciler", "runtimeBypassRls": false, "restrictedTo": ["principals", "organization_memberships", "role_bindings", "site_bindings", "explicit_denies", "reconciliation_state", "reconciliation_events", "reconciliation_quarantine"] },
+    { "schema": "iam", "migrationRole": "s1_iam_migrator", "runtimeRole": "s2_iam_grant_runtime", "runtimeBypassRls": false, "accessMode": "grant-state", "restrictedTo": ["telemetry_grant_revocations", "telemetry_grant_uses", "telemetry_revocation_facts"] },
     { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_core_runtime", "runtimeBypassRls": false },
     { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_core_service", "runtimeBypassRls": false, "activationRole": "s1_core_runtime" },
     { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_migration_operator", "runtimeBypassRls": false, "restrictedTo": ["organizations", "sites", "equipment", "devices", "legacy_resource_maps", "migration_provenance", "migration_quarantine"] },

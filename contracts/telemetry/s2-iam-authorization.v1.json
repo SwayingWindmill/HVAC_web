@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "ticket": "S2-02",
+  "activationStatus": "expand-baseline",
+  "publicTrafficEnabled": false,
+  "ownerService": "iam-service",
+  "consumerService": "telemetry-runtime-service",
+  "publicIngress": "platform-gateway",
+  "actions": [
+    "telemetry.snapshot.read",
+    "telemetry.batch.read",
+    "telemetry.subscribe",
+    "telemetry.resubscribe",
+    "telemetry.recovery.use",
+    "telemetry.recovery.checkpoint"
+  ],
+  "decision": {
+    "internalPath": "/internal/v1/telemetry/decision",
+    "callerSpiffeId": "spiffe://hvac.local/platform-gateway",
+    "inboundDelegationAction": "telemetry:authorize",
+    "evaluationOrder": [
+      "immutable-principal",
+      "acting-organization-membership",
+      "role-action",
+      "exact-cross-organization-site-binding",
+      "exact-device-permission",
+      "exact-key-permission"
+    ],
+    "membershipGrantsAllSites": false,
+    "denyPrecedence": true,
+    "allOrNothing": true,
+    "maximumTargets": 100,
+    "maximumKeysPerTarget": 64,
+    "maximumTotalKeys": 2048,
+    "stableDenials": {
+      "missingOrUnauthorizedDevice": "RESOURCE_NOT_FOUND",
+      "visibleUnknownUnauthorizedOrDeniedKey": "TELEMETRY_KEY_INVALID"
+    }
+  },
+  "delegationGrant": {
+    "issuer": "spiffe://hvac.local/iam-service",
+    "audience": "telemetry-runtime-service",
+    "presenter": "spiffe://hvac.local/platform-gateway",
+    "maximumLifetimeSeconds": 30,
+    "singleUse": true,
+    "transitive": false,
+    "scope": "sha256(canonical action + actingOrganizationId + sorted exact Device/key targets)",
+    "requiredBindings": [
+      "initiatingPrincipal",
+      "subjectIssuer",
+      "subject",
+      "actingOrganizationId",
+      "actorChain",
+      "action",
+      "scopeDigest",
+      "targetCount",
+      "keyCount",
+      "policyRevision",
+      "sessionId",
+      "parentTokenId",
+      "requestId",
+      "traceId",
+      "publicRoute",
+      "issuedAt",
+      "expiresAt",
+      "tokenId"
+    ],
+    "failClosedConditions": [
+      "malformed",
+      "wrong-signature",
+      "wrong-issuer",
+      "wrong-presenter",
+      "wrong-audience",
+      "wrong-principal",
+      "wrong-session",
+      "wrong-action",
+      "wrong-acting-organization",
+      "scope-mismatch",
+      "count-mismatch",
+      "expired",
+      "lifetime-exceeded",
+      "stale-policy-revision",
+      "revoked",
+      "replayed",
+      "status-dependency-unavailable"
+    ]
+  },
+  "runtimeInterfaces": {
+    "consume": {
+      "path": "/internal/v1/telemetry/grants:consume",
+      "callerSpiffeId": "spiffe://hvac.local/telemetry-runtime-service",
+      "atomic": true
+    },
+    "revocations": {
+      "path": "/internal/v1/telemetry/revocations:poll",
+      "callerSpiffeId": "spiffe://hvac.local/telemetry-runtime-service",
+      "organizationScoped": true,
+      "orderedCursor": "sequence",
+      "maximumBatchSize": 500,
+      "deliveryBudgetSeconds": 10
+    }
+  },
+  "revocationSources": [
+    "MEMBERSHIP",
+    "ROLE_BINDING",
+    "SITE_BINDING",
+    "DEVICE_PERMISSION",
+    "KEY_PERMISSION",
+    "GRANT"
+  ],
+  "postgres": {
+    "schema": "iam",
+    "runtimeRoles": {
+      "decision": "s1_iam_runtime",
+      "grantState": "s2_iam_grant_runtime"
+    },
+    "forceRlsTables": [
+      "telemetry_scope_bindings",
+      "telemetry_key_bindings",
+      "telemetry_grant_revocations",
+      "telemetry_grant_uses",
+      "telemetry_revocation_facts"
+    ],
+    "registryReadBoundary": {
+      "schema": "core_registry",
+      "table": "devices",
+      "columns": ["id", "organization_id", "site_id", "status", "revision"],
+      "rows": "exact app.requested_device_ids only"
+    }
+  },
+  "redaction": {
+    "forbiddenInLogsTracesMetricsAndEvidence": [
+      "raw-delegation-grant",
+      "cookie",
+      "recovery-cursor",
+      "telemetry-value",
+      "raw-key-list"
+    ],
+    "allowedEvidence": [
+      "principalId",
+      "actingOrganizationId",
+      "action",
+      "targetCount",
+      "keyCount",
+      "scopeDigest",
+      "policyRevision",
+      "reasonCode",
+      "requestId",
+      "traceId"
+    ]
+  },
+  "evidence": [
+    "libs/telemetryauth/telemetry_test.go",
+    "services/iam-service/internal/iam/telemetry_authorization_test.go",
+    "services/iam-service/internal/iam/telemetry_server_test.go",
+    "services/iam-service/internal/iam/telemetry_grant_store_integration_test.go",
+    "services/iam-service/internal/iam/postgres_authorization_integration_test.go",
+    "out/s2-ticket-02/iam-authorization-evidence.json"
+  ]
+}

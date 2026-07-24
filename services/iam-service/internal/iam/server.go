@@ -14,48 +14,69 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 )
 
 const (
 	CurrentPrincipalPath       = "/internal/v1/principal/current"
 	RegistryReadDecisionPath   = "/internal/v1/registry-read/decision"
+	TelemetryDecisionPath      = "/internal/v1/telemetry/decision"
 	registryAuthorizeAction    = "registry:authorize"
+	telemetryAuthorizeAction   = "telemetry:authorize"
 	maximumDecisionRequestSize = 64 << 10
 	maximumGrantStatusSize     = 16 << 10
 )
 
 type Config struct {
-	AllowedWorkloadSPIFFE string
-	CoreWorkloadSPIFFE    string
-	Audience              string
-	Logger                *slog.Logger
-	Observability         *observability.Runtime
-	Now                   func() time.Time
-	AuthorizationStore    AuthorizationStore
-	RegistryGrantSigner   crypto.Signer
-	RegistryGrantIssuer   string
-	RegistryGrantAudience string
-	RegistryGrantLifetime time.Duration
-	NewRegistryGrantID    func() string
-	RegistryAuditSink     RegistryDecisionAuditSink
-	RegistryGrantStatus   RegistryGrantStatusStore
+	AllowedWorkloadSPIFFE       string
+	CoreWorkloadSPIFFE          string
+	Audience                    string
+	Logger                      *slog.Logger
+	Observability               *observability.Runtime
+	Now                         func() time.Time
+	AuthorizationStore          AuthorizationStore
+	RegistryGrantSigner         crypto.Signer
+	RegistryGrantIssuer         string
+	RegistryGrantAudience       string
+	RegistryGrantLifetime       time.Duration
+	NewRegistryGrantID          func() string
+	RegistryAuditSink           RegistryDecisionAuditSink
+	RegistryGrantStatus         RegistryGrantStatusStore
+	TelemetryAuthorizationStore TelemetryAuthorizationStore
+	TelemetryGrantSigner        crypto.Signer
+	TelemetryGrantIssuer        string
+	TelemetryGrantAudience      string
+	TelemetryGrantLifetime      time.Duration
+	NewTelemetryGrantID         func() string
+	TelemetryAuditSink          TelemetryDecisionAuditSink
+	TelemetryRuntimeSPIFFE      string
+	TelemetryGrantStore         TelemetryGrantStore
 }
 
 type handler struct {
-	allowedWorkloadSPIFFE string
-	coreWorkloadSPIFFE    string
-	audience              string
-	logger                *slog.Logger
-	observability         *observability.Runtime
-	now                   func() time.Time
-	authorizationStore    AuthorizationStore
-	registryGrantSigner   crypto.Signer
-	registryGrantIssuer   string
-	registryGrantAudience string
-	registryGrantLifetime time.Duration
-	newRegistryGrantID    func() string
-	registryAuditSink     RegistryDecisionAuditSink
-	registryGrantStatus   RegistryGrantStatusStore
+	allowedWorkloadSPIFFE       string
+	coreWorkloadSPIFFE          string
+	audience                    string
+	logger                      *slog.Logger
+	observability               *observability.Runtime
+	now                         func() time.Time
+	authorizationStore          AuthorizationStore
+	registryGrantSigner         crypto.Signer
+	registryGrantIssuer         string
+	registryGrantAudience       string
+	registryGrantLifetime       time.Duration
+	newRegistryGrantID          func() string
+	registryAuditSink           RegistryDecisionAuditSink
+	registryGrantStatus         RegistryGrantStatusStore
+	telemetryAuthorizationStore TelemetryAuthorizationStore
+	telemetryGrantSigner        crypto.Signer
+	telemetryGrantIssuer        string
+	telemetryGrantAudience      string
+	telemetryGrantLifetime      time.Duration
+	newTelemetryGrantID         func() string
+	telemetryAuditSink          TelemetryDecisionAuditSink
+	telemetryRuntimeSPIFFE      string
+	telemetryGrantStore         TelemetryGrantStore
 }
 
 func NewHandler(config Config) http.Handler {
@@ -95,21 +116,58 @@ func NewHandler(config Config) http.Handler {
 	if auditSink == nil {
 		auditSink = newLoggerRegistryDecisionAuditSink(logger)
 	}
+	telemetryStore := config.TelemetryAuthorizationStore
+	if telemetryStore == nil {
+		telemetryStore = newDenyAllTelemetryAuthorizationStore("telemetry-policy-unconfigured")
+	}
+	telemetrySigner := config.TelemetryGrantSigner
+	if telemetrySigner == nil {
+		telemetrySigner = config.RegistryGrantSigner
+	}
+	telemetryIssuer := config.TelemetryGrantIssuer
+	if telemetryIssuer == "" {
+		telemetryIssuer = grantIssuer
+	}
+	telemetryAudience := config.TelemetryGrantAudience
+	if telemetryAudience == "" {
+		telemetryAudience = "telemetry-runtime-service"
+	}
+	telemetryLifetime := config.TelemetryGrantLifetime
+	if telemetryLifetime <= 0 || telemetryLifetime > telemetryauth.MaximumGrantLifetime {
+		telemetryLifetime = telemetryauth.MaximumGrantLifetime
+	}
+	newTelemetryGrantID := config.NewTelemetryGrantID
+	if newTelemetryGrantID == nil {
+		newTelemetryGrantID = randomIdentifier
+	}
+	telemetryAuditSink := config.TelemetryAuditSink
+	if telemetryAuditSink == nil {
+		telemetryAuditSink = newLoggerTelemetryDecisionAuditSink(logger)
+	}
 	return &handler{
-		allowedWorkloadSPIFFE: config.AllowedWorkloadSPIFFE,
-		coreWorkloadSPIFFE:    config.CoreWorkloadSPIFFE,
-		audience:              config.Audience,
-		logger:                logger,
-		observability:         telemetry,
-		now:                   now,
-		authorizationStore:    store,
-		registryGrantSigner:   config.RegistryGrantSigner,
-		registryGrantIssuer:   grantIssuer,
-		registryGrantAudience: grantAudience,
-		registryGrantLifetime: grantLifetime,
-		newRegistryGrantID:    newGrantID,
-		registryAuditSink:     auditSink,
-		registryGrantStatus:   config.RegistryGrantStatus,
+		allowedWorkloadSPIFFE:       config.AllowedWorkloadSPIFFE,
+		coreWorkloadSPIFFE:          config.CoreWorkloadSPIFFE,
+		audience:                    config.Audience,
+		logger:                      logger,
+		observability:               telemetry,
+		now:                         now,
+		authorizationStore:          store,
+		registryGrantSigner:         config.RegistryGrantSigner,
+		registryGrantIssuer:         grantIssuer,
+		registryGrantAudience:       grantAudience,
+		registryGrantLifetime:       grantLifetime,
+		newRegistryGrantID:          newGrantID,
+		registryAuditSink:           auditSink,
+		registryGrantStatus:         config.RegistryGrantStatus,
+		telemetryAuthorizationStore: telemetryStore,
+		telemetryGrantSigner:        telemetrySigner,
+		telemetryGrantIssuer:        telemetryIssuer,
+		telemetryGrantAudience:      telemetryAudience,
+		telemetryGrantLifetime:      telemetryLifetime,
+		newTelemetryGrantID:         newTelemetryGrantID,
+		telemetryAuditSink:          telemetryAuditSink,
+		telemetryRuntimeSPIFFE:      config.TelemetryRuntimeSPIFFE,
+		telemetryGrantStore:         config.TelemetryGrantStore,
 	}
 }
 
@@ -144,6 +202,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 	if request.URL.Path == RegistryGrantStatusPath {
 		status = h.handleRegistryGrantStatusRoute(writer, request)
+		return
+	}
+	if request.URL.Path == TelemetryGrantConsumePath || request.URL.Path == TelemetryRevocationPollPath {
+		status = h.handleTelemetryRuntimeRoute(writer, request)
 		return
 	}
 
@@ -190,6 +252,8 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		status = h.handleCurrentPrincipal(writer, claims, spiffeID)
 	case RegistryReadDecisionPath:
 		status = h.handleRegistryReadDecision(writer, request, claims, spiffeID)
+	case TelemetryDecisionPath:
+		status = h.handleTelemetryDecision(writer, request, claims, spiffeID)
 	}
 }
 
@@ -384,6 +448,8 @@ func expectedInboundAction(path string) (string, bool) {
 		return "principal:read", true
 	case RegistryReadDecisionPath:
 		return registryAuthorizeAction, true
+	case TelemetryDecisionPath:
+		return telemetryAuthorizeAction, true
 	default:
 		return "", false
 	}
@@ -406,7 +472,7 @@ type x509CertificateView struct {
 
 func safePath(path string) string {
 	switch path {
-	case CurrentPrincipalPath, RegistryReadDecisionPath, RegistryGrantStatusPath:
+	case CurrentPrincipalPath, RegistryReadDecisionPath, TelemetryDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath:
 		return path
 	default:
 		return "unmatched"

@@ -115,6 +115,7 @@ async function runIAMGoTests() {
       S1_ADMIN_DATABASE_URL: `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
       S1_IAM_DATABASE_URL: `postgres://s1_iam_runtime:s1-iam-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
       S1_IAM_RECONCILER_DATABASE_URL: `postgres://s1_iam_reconciler:s1-iam-reconciler-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+      S2_IAM_GRANT_DATABASE_URL: `postgres://s2_iam_grant_runtime:s2-iam-grant-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
     },
   });
   const [code, signal] = await once(child, 'exit');
@@ -225,8 +226,8 @@ try {
     SELECT count(*) FROM iam.explicit_denies;
     ROLLBACK;
   `);
-  expectEqual(iamDelegated, '1|1|1|0', 'delegated IAM fixture');
-  expectEqual(iamDenied, '1', 'explicit deny fixture');
+  expectEqual(iamDelegated, '1|2|1|0', 'delegated IAM fixture');
+  expectEqual(iamDenied, '2', 'explicit deny fixture');
   report.assertions.iamFixtures = { delegated: iamDelegated, denied: iamDenied };
 
   await runIAMGoTests();
