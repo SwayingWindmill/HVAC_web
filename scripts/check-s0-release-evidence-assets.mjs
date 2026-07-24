@@ -143,6 +143,8 @@ const allowedOwnershipNames = new Set([
   'iam-telemetry-revocation-fact',
   'iam-onboarding-reconciliation',
   'iam-reconciliation-quarantine',
+  'presence-signal',
+  'observation-coverage',
   's1-legacy-resource-map',
   's1-migration-provenance',
   's1-migration-quarantine',

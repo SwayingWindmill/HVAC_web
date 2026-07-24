@@ -23,7 +23,7 @@
     "POST /api/v1/telemetry/subscriptions:bootstrap": { "revision": 1, "owner": "telemetry-runtime-service" },
     "POST /api/v1/telemetry/recovery-cursors:checkpoint": { "revision": 1, "owner": "telemetry-runtime-service" }
   },
-  "dataRegistryRevision": 7,
+  "dataRegistryRevision": 8,
   "resources": {
     "schema:gateway": { "revision": 1, "writer": "platform-gateway" },
     "schema:audit_ledger": { "revision": 1, "writer": "audit-ledger-service" },
@@ -45,6 +45,8 @@
     "projection:iam-reconciliation-quarantine": { "revision": 1, "writer": "iam-service" },
     "projection:device-runtime-binding": { "revision": 1, "writer": "telemetry-runtime-service" },
     "projection:presence-policy": { "revision": 1, "writer": "telemetry-runtime-service" },
+    "projection:presence-signal": { "revision": 1, "writer": "telemetry-runtime-service" },
+    "projection:observation-coverage": { "revision": 1, "writer": "telemetry-runtime-service" },
     "projection:freshness-policy": { "revision": 1, "writer": "telemetry-runtime-service" },
     "projection:latest-accepted-telemetry": { "revision": 1, "writer": "telemetry-runtime-service" },
     "projection:device-presence": { "revision": 1, "writer": "telemetry-runtime-service" },

@@ -146,7 +146,7 @@ try {
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'telemetry_runtime' AND c.relkind = 'r'
   `);
-  expectEqual(tableState, '13|13|13', 'table/RLS baseline');
+  expectEqual(tableState, '15|15|15', 'table/RLS baseline');
   report.assertions.tableRlsState = tableState;
 
   const fixtureTenancy = psql(`

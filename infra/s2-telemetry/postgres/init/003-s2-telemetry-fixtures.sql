@@ -23,11 +23,11 @@ INSERT INTO telemetry_runtime.iam_scope_projections (
 
 INSERT INTO telemetry_runtime.presence_policies (
   device_id, policy_revision, online_within_seconds, offline_after_seconds,
-  coverage_required, updated_at
+  coverage_required, accepted_signal_types, updated_at
 ) VALUES
-  ('018f2e00-3000-7000-8000-000000000001', 2, 60, 180, true, '2026-07-23T00:00:00Z'),
-  ('018f2e00-3000-7000-8000-000000000002', 2, 60, 180, true, '2026-07-23T00:00:00Z'),
-  ('018f2e00-3000-7000-8000-000000000003', 2, 60, 180, true, '2026-07-23T00:00:00Z');
+  ('018f2e00-3000-7000-8000-000000000001', 2, 60, 180, true, ARRAY['SOURCE_ACTIVITY', 'EXPLICIT_CONNECT', 'EXPLICIT_DISCONNECT']::text[], '2026-07-23T00:00:00Z'),
+  ('018f2e00-3000-7000-8000-000000000002', 2, 60, 180, true, ARRAY['SOURCE_ACTIVITY', 'EXPLICIT_CONNECT']::text[], '2026-07-23T00:00:00Z'),
+  ('018f2e00-3000-7000-8000-000000000003', 2, 60, 180, true, ARRAY['SOURCE_ACTIVITY']::text[], '2026-07-23T00:00:00Z');
 
 INSERT INTO telemetry_runtime.freshness_policies (
   device_id, telemetry_key, policy_revision, fresh_within_seconds, configured, updated_at
@@ -57,6 +57,20 @@ INSERT INTO telemetry_runtime.ingest_quarantine (
 ) VALUES
   ('018f2e00-8200-7000-8000-000000000001', '018f2e00-6000-7000-8000-000000000001', 'ASSET', 'tb-conflicted-asset', NULL, 'zone.temperature', 'MAPPING_CONFLICT', '{"candidateDeviceIds":["018f2e00-3000-7000-8000-000000000001","018f2e00-3000-7000-8000-000000000002"],"source":"fixture"}'::jsonb, '2026-07-23T00:00:04Z', NULL, NULL);
 
+INSERT INTO telemetry_runtime.presence_signals (
+  signal_id, device_id, signal_type, observed_at, received_at, accepted,
+  policy_revision, source_event_id, created_at
+) VALUES
+  ('018f2e00-8500-7000-8000-000000000001', '018f2e00-3000-7000-8000-000000000001', 'SOURCE_ACTIVITY', '2026-07-23T00:00:00Z', '2026-07-23T00:00:02Z', true, 2, '018f2e00-8600-7000-8000-000000000001', '2026-07-23T00:00:02Z'),
+  ('018f2e00-8500-7000-8000-000000000002', '018f2e00-3000-7000-8000-000000000003', 'SOURCE_ACTIVITY', '2026-07-22T23:59:00Z', '2026-07-22T23:59:02Z', false, 2, '018f2e00-8600-7000-8000-000000000002', '2026-07-22T23:59:02Z');
+
+INSERT INTO telemetry_runtime.observation_coverage (
+  device_id, available, continuous_since, reason_code, source_revision, updated_at
+) VALUES
+  ('018f2e00-3000-7000-8000-000000000001', true, '2026-07-22T23:00:00Z', NULL, 1, '2026-07-23T00:00:05Z'),
+  ('018f2e00-3000-7000-8000-000000000002', true, '2026-07-22T23:00:00Z', NULL, 1, '2026-07-23T00:00:05Z'),
+  ('018f2e00-3000-7000-8000-000000000003', false, NULL, 'OBSERVATION_COVERAGE_GAP', 1, '2026-07-23T00:00:05Z');
+
 INSERT INTO telemetry_runtime.latest_accepted_telemetry (
   device_id, telemetry_key, business_revision, value, value_type, unit, sampled_at,
   received_at, freshness, quality, quality_reasons, policy_revision, updated_at
@@ -74,7 +88,7 @@ INSERT INTO telemetry_runtime.device_presence (
 INSERT INTO telemetry_runtime.device_observation_snapshots (
   device_id, business_revision, evaluated_at, evaluation_availability,
   availability_reasons, telemetry_readiness, display_state, snapshot,
-  snapshot_sha256, updated_at
+  snapshot_sha256, state_sha256, updated_at
 ) VALUES
   (
     '018f2e00-3000-7000-8000-000000000001', 1, '2026-07-23T00:00:05Z', 'AVAILABLE', '{}', 'INCOMPLETE', 'ONLINE',
@@ -97,6 +111,7 @@ INSERT INTO telemetry_runtime.device_observation_snapshots (
       ]
     }'::jsonb,
     'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+    'abababababababababababababababababababababababababababababababab',
     '2026-07-23T00:00:05Z'
   );
 

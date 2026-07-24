@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 7,
+  "registryRevision": 8,
   "resources": [
     { "kind": "schema", "name": "gateway", "writer": "platform-gateway", "revision": 1 },
     { "kind": "schema", "name": "audit_ledger", "writer": "audit-ledger-service", "revision": 1 },
@@ -22,6 +22,8 @@
     { "kind": "projection", "name": "iam-reconciliation-quarantine", "writer": "iam-service", "revision": 1 },
     { "kind": "projection", "name": "device-runtime-binding", "writer": "telemetry-runtime-service", "revision": 1, "sourceOwner": "platform-core-service" },
     { "kind": "projection", "name": "presence-policy", "writer": "telemetry-runtime-service", "revision": 1 },
+    { "kind": "projection", "name": "presence-signal", "writer": "telemetry-runtime-service", "revision": 1 },
+    { "kind": "projection", "name": "observation-coverage", "writer": "telemetry-runtime-service", "revision": 1 },
     { "kind": "projection", "name": "freshness-policy", "writer": "telemetry-runtime-service", "revision": 1 },
     { "kind": "projection", "name": "latest-accepted-telemetry", "writer": "telemetry-runtime-service", "revision": 1 },
     { "kind": "projection", "name": "device-presence", "writer": "telemetry-runtime-service", "revision": 1 },
