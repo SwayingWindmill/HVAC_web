@@ -269,7 +269,9 @@ func (h *handler) handleSubscriptionBootstrap(writer http.ResponseWriter, reques
 	switch {
 	case errors.Is(err, ErrSubscriptionConflict):
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SUBSCRIPTION_INVALID", "The telemetry subscription request is invalid.", false)
-	case errors.Is(err, ErrRecoveryCursorRejected), errors.Is(err, ErrSubscriptionNotFound):
+	case errors.Is(err, ErrRecoveryCursorRejected):
+		writeProblem(writer, request, http.StatusBadRequest, "RECOVERY_CURSOR_INVALID", "The supplied recovery cursor is malformed, expired, or outside the current scope.", false)
+	case errors.Is(err, ErrSubscriptionNotFound):
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested telemetry resource was not found.", false)
 	case err != nil:
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_REALTIME_UNAVAILABLE", "Telemetry realtime is temporarily unavailable.", true)

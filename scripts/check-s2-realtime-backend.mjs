@@ -78,6 +78,9 @@ assert(releaseGates.transportBounds?.clientQueueMaxBytes === 262144, 'release qu
 assert(releaseGates.transportBounds?.historySizePublications === 256, 'release history size drifted');
 assert(releaseGates.transportBounds?.historyTtlSeconds === 180, 'release history TTL drifted');
 assert(releaseGates.transportBounds?.maximumRecoveryCursorLifetimeSeconds === 120, 'release cursor TTL drifted');
+assert(releaseGates.transportBounds?.connectionTokenLifetimeSeconds === 300, 'release connection capability TTL drifted');
+const cursorReplayGates = releaseGates.negativeTests?.filter((test) => test.id === 'cursor-cross-principal-replay' || test.id === 'cursor-cross-device-or-key-replay') ?? [];
+assert(cursorReplayGates.length === 2 && cursorReplayGates.every((test) => test.expectedStatus === 400 && test.expectedCode === 'RECOVERY_CURSOR_INVALID'), 'cursor replay failure contract drifted');
 
 const publicationText = JSON.stringify(publicationSchema);
 for (const forbidden of ['transportPosition', 'recoveryCursor', 'epoch', 'offset']) {
@@ -113,7 +116,10 @@ for (const marker of [
   'EvaluateRecovery',
   'SubscriptionRevoked',
   'Unsubscribe',
+  'MaximumSubscriptionTTL',
+  'DefaultSubscriptionTTL',
 ]) assert(runtime.includes(marker), `Telemetry Runtime realtime owner is missing ${marker}`);
+assert(runtime.includes('MaximumConnection' + 'TokenTTL') && runtime.includes('DefaultConnection' + 'TokenTTL'), 'connection capability lifetime constants are missing');
 for (const marker of ['maximumCentrifugoPublicationSize', '/api/publish', '/api/unsubscribe', 'X-API-Key']) {
   assert(centrifugoAdapter.includes(marker), `Centrifugo transport adapter is missing ${marker}`);
 }
@@ -124,6 +130,8 @@ for (const marker of [
   'strings.TrimSpace(input.Token) != ""',
   'handleSubscriptionRevoke',
   'allowedIAMSPIFFE',
+  'RECOVERY_CURSOR_INVALID',
+  'http.StatusBadRequest',
 ]) assert(runtimeServer.includes(marker), `Runtime internal boundary is missing ${marker}`);
 for (const marker of [
   "projection.action = 'SUBSCRIBE'",

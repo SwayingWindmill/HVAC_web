@@ -27,8 +27,10 @@ const (
 
 	MaximumRealtimeSubscriptions = 100
 	MaximumRecoveryCheckpoints   = 100
-	DefaultSubscriptionTTL       = 60 * time.Second
-	DefaultConnectionTokenTTL    = 45 * time.Second
+	MaximumSubscriptionTTL       = 5 * time.Minute
+	MaximumConnectionTokenTTL    = 5 * time.Minute
+	DefaultSubscriptionTTL       = MaximumSubscriptionTTL
+	DefaultConnectionTokenTTL    = MaximumConnectionTokenTTL
 	DefaultRecoveryCursorTTL     = 120 * time.Second
 )
 
