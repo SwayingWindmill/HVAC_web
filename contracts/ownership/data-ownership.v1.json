@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 8,
+  "registryRevision": 9,
   "resources": [
     { "kind": "schema", "name": "gateway", "writer": "platform-gateway", "revision": 1 },
     { "kind": "schema", "name": "audit_ledger", "writer": "audit-ledger-service", "revision": 1 },
@@ -28,8 +28,9 @@
     { "kind": "projection", "name": "latest-accepted-telemetry", "writer": "telemetry-runtime-service", "revision": 1 },
     { "kind": "projection", "name": "device-presence", "writer": "telemetry-runtime-service", "revision": 1 },
     { "kind": "projection", "name": "device-observation-snapshot", "writer": "telemetry-runtime-service", "revision": 1 },
-    { "kind": "projection", "name": "ingest-deduplication", "writer": "telemetry-runtime-service", "revision": 1 },
-    { "kind": "projection", "name": "ingest-quarantine", "writer": "telemetry-runtime-service", "revision": 1 },
+    { "kind": "projection", "name": "source-observation-evidence", "writer": "telemetry-runtime-service", "revision": 1 },
+    { "kind": "projection", "name": "ingest-deduplication", "writer": "telemetry-runtime-service", "revision": 2 },
+    { "kind": "projection", "name": "ingest-quarantine", "writer": "telemetry-runtime-service", "revision": 2 },
     { "kind": "outbox", "name": "telemetry-publication-outbox", "writer": "telemetry-runtime-service", "relay": "outbox-relay", "revision": 1 },
     { "kind": "transport-store", "name": "s2-telemetry-transport-redis", "writer": "centrifugo", "revision": 1, "authority": false, "sharedWithLegacy": false },
     { "kind": "compatibility-boundary", "name": "legacy-telemetry-timeseries", "writer": "legacy-hvac-backend", "revision": 1, "currentStateAuthority": false },

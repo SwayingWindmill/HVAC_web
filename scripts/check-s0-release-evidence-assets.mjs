@@ -145,6 +145,7 @@ const allowedOwnershipNames = new Set([
   'iam-reconciliation-quarantine',
   'presence-signal',
   'observation-coverage',
+  'source-observation-evidence',
   's1-legacy-resource-map',
   's1-migration-provenance',
   's1-migration-quarantine',

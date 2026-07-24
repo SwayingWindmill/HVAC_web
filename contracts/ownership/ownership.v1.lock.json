@@ -23,7 +23,7 @@
     "POST /api/v1/telemetry/subscriptions:bootstrap": { "revision": 1, "owner": "telemetry-runtime-service" },
     "POST /api/v1/telemetry/recovery-cursors:checkpoint": { "revision": 1, "owner": "telemetry-runtime-service" }
   },
-  "dataRegistryRevision": 8,
+  "dataRegistryRevision": 9,
   "resources": {
     "schema:gateway": { "revision": 1, "writer": "platform-gateway" },
     "schema:audit_ledger": { "revision": 1, "writer": "audit-ledger-service" },
@@ -51,8 +51,9 @@
     "projection:latest-accepted-telemetry": { "revision": 1, "writer": "telemetry-runtime-service" },
     "projection:device-presence": { "revision": 1, "writer": "telemetry-runtime-service" },
     "projection:device-observation-snapshot": { "revision": 1, "writer": "telemetry-runtime-service" },
-    "projection:ingest-deduplication": { "revision": 1, "writer": "telemetry-runtime-service" },
-    "projection:ingest-quarantine": { "revision": 1, "writer": "telemetry-runtime-service" },
+    "projection:source-observation-evidence": { "revision": 1, "writer": "telemetry-runtime-service" },
+    "projection:ingest-deduplication": { "revision": 2, "writer": "telemetry-runtime-service" },
+    "projection:ingest-quarantine": { "revision": 2, "writer": "telemetry-runtime-service" },
     "outbox:telemetry-publication-outbox": { "revision": 1, "writer": "telemetry-runtime-service" },
     "transport-store:s2-telemetry-transport-redis": { "revision": 1, "writer": "centrifugo" },
     "compatibility-boundary:legacy-telemetry-timeseries": { "revision": 1, "writer": "legacy-hvac-backend" },

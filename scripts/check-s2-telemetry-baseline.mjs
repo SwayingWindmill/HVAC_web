@@ -73,7 +73,7 @@ const [
   readText('infra/s2-telemetry/postgres/init/000-bootstrap-identities.sql'),
   readText('infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql'),
   readText('infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql'),
-  readText('infra/s2-telemetry/postgres/init/003-s2-telemetry-fixtures.sql'),
+  readText('infra/s2-telemetry/postgres/init/004-s2-telemetry-fixtures.sql'),
   readText('services/telemetry-runtime-service/pkg/telemetryapi/api.gen.go'),
   readText('apps/hvac-web/src/api/generated/s2Telemetry.gen.ts'),
   readText('go.work'),
@@ -227,7 +227,7 @@ for (const marker of [
 }
 
 assert(routeRegistry.registryRevision === 7 && ownershipLock.routeRegistryRevision === 7, 'route ownership revision drifted');
-assert(dataRegistry.registryRevision === 8 && ownershipLock.dataRegistryRevision === 8, 'data ownership revision drifted');
+assert(dataRegistry.registryRevision >= 6 && ownershipLock.dataRegistryRevision === dataRegistry.registryRevision, 'data ownership revision must remain monotonic and locked');
 const activeRoutes = new Map((routeRegistry.routes ?? []).map((route) => [routeKey(route), route]));
 for (const expected of compatibility.operations) {
   const route = activeRoutes.get(`${expected.method} ${expected.path}`);

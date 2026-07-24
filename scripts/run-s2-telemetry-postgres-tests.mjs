@@ -146,8 +146,26 @@ try {
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'telemetry_runtime' AND c.relkind = 'r'
   `);
-  expectEqual(tableState, '15|15|15', 'table/RLS baseline');
+  expectEqual(tableState, '16|16|16', 'table/RLS baseline');
   report.assertions.tableRlsState = tableState;
+
+  const deliveryEvidenceRls = psql(`
+    SELECT c.relrowsecurity::text || '|'
+      || c.relforcerowsecurity::text || '|'
+      || string_agg(p.polname, ',' ORDER BY p.polname)
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_policy p ON p.polrelid = c.oid
+    WHERE n.nspname = 'telemetry_runtime'
+      AND c.relname = 'source_delivery_evidence'
+    GROUP BY c.relrowsecurity, c.relforcerowsecurity
+  `);
+  expectEqual(
+    deliveryEvidenceRls,
+    'true|true|source_delivery_evidence_migrator_all,source_delivery_evidence_runtime_all',
+    'delivery evidence RLS baseline',
+  );
+  report.assertions.deliveryEvidenceRls = deliveryEvidenceRls;
 
   const fixtureTenancy = psql(`
     SELECT count(DISTINCT owning_organization_id)::text || '|'

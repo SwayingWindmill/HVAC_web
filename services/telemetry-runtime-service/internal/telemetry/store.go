@@ -90,11 +90,22 @@ func (store *PostgresStore) EvaluateAndRead(ctx context.Context, target telemetr
 		return SnapshotCommit{}, fmt.Errorf("activate telemetry runtime database identity: %w", err)
 	}
 
-	previousRevision, previousDigest, err := lockCurrentSnapshot(ctx, tx, target.DeviceID)
+	commit, err := store.evaluateAndPersistDevice(ctx, tx, target.DeviceID, target.Keys, evaluatedAt)
 	if err != nil {
 		return SnapshotCommit{}, err
 	}
-	facts, err := loadDeviceFacts(ctx, tx, target.DeviceID)
+	if err := tx.Commit(ctx); err != nil {
+		return SnapshotCommit{}, fmt.Errorf("commit telemetry snapshot transaction: %w", err)
+	}
+	return commit, nil
+}
+
+func (store *PostgresStore) evaluateAndPersistDevice(ctx context.Context, tx pgx.Tx, deviceID string, requestedKeys []string, evaluatedAt time.Time) (SnapshotCommit, error) {
+	previousRevision, previousDigest, err := lockCurrentSnapshot(ctx, tx, deviceID)
+	if err != nil {
+		return SnapshotCommit{}, err
+	}
+	facts, err := loadDeviceFacts(ctx, tx, deviceID)
 	if err != nil {
 		return SnapshotCommit{}, err
 	}
@@ -114,7 +125,6 @@ func (store *PostgresStore) EvaluateAndRead(ctx context.Context, target telemetr
 			return SnapshotCommit{}, fmt.Errorf("re-evaluate telemetry snapshot revision: %w", err)
 		}
 	}
-
 	if err := persistCurrentState(ctx, tx, evaluation, evaluatedAt); err != nil {
 		return SnapshotCommit{}, err
 	}
@@ -123,11 +133,8 @@ func (store *PostgresStore) EvaluateAndRead(ctx context.Context, target telemetr
 			return SnapshotCommit{}, err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return SnapshotCommit{}, fmt.Errorf("commit telemetry snapshot transaction: %w", err)
-	}
 	return SnapshotCommit{
-		Snapshot: ProjectSnapshot(evaluation.Snapshot, target.Keys), StateChanged: stateChanged, PreviousRevision: previousRevision,
+		Snapshot: ProjectSnapshot(evaluation.Snapshot, requestedKeys), StateChanged: stateChanged, PreviousRevision: previousRevision,
 	}, nil
 }
 
