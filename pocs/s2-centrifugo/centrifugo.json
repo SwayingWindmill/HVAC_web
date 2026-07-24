@@ -6,8 +6,16 @@
     "allowed_origins": [
       "http://localhost:5173"
     ],
-    "queue_max_size": 16384,
-    "channel_limit": 16
+    "queue_max_size": 262144,
+    "channel_limit": 100,
+    "history_max_publication_limit": 256,
+    "recovery_max_publication_limit": 256
+  },
+  "engine": {
+    "type": "redis",
+    "redis": {
+      "address": "redis://redis:6379/0"
+    }
   },
   "health": {
     "enabled": true
@@ -30,8 +38,8 @@
         "name": "s2",
         "subscribe_proxy_enabled": true,
         "subscribe_proxy_name": "s2-subscribe",
-        "history_size": 4,
-        "history_ttl": "5s",
+        "history_size": 256,
+        "history_ttl": "180s",
         "force_recovery": true,
         "force_positioning": true
       }

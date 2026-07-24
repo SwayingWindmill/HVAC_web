@@ -403,8 +403,9 @@ async function runPOC() {
     offset: retentionSubscribed.subscribe.offset,
   };
   retentionBase.close();
-  for (let revision = 6; revision <= 11; revision += 1) {
-    await commitAndPublish(revision, { supplyTemp: 17.8 - revision / 100 });
+  const retentionEndRevision = 262;
+  for (let revision = 6; revision <= retentionEndRevision; revision += 1) {
+    await commitAndPublish(revision, { supplyTemp: 17.8 - revision / 10_000 });
   }
   const expired = await connected('retention-exceeded');
   const expiredReply = await expired.subscribe(primaryChannel, retentionCursor);
@@ -412,7 +413,7 @@ async function runPOC() {
   assert(expiredReply.subscribe?.recovered !== true, `retention-exceeded cursor unexpectedly recovered: ${JSON.stringify(expiredReply)}`);
   assert((expiredReply.subscribe.publications ?? []).length === 0, 'failed recovery returned a partial publication set');
   const retentionSnapshot = await ownerGET(`/snapshot?channel=${encodeURIComponent(primaryChannel)}`);
-  assert(retentionSnapshot.snapshot.revision === 11, 'snapshot fallback did not return current revision after retention loss');
+  assert(retentionSnapshot.snapshot.revision === retentionEndRevision, 'snapshot fallback did not return current revision after retention loss');
   expired.close();
 
   const restartBase = await connected('restart-base');
@@ -428,10 +429,10 @@ async function runPOC() {
   const afterRestart = await connected('restart-recovery');
   const restartReply = await afterRestart.subscribe(primaryChannel, restartCursor);
   assert(restartReply.subscribe?.was_recovering === true, 'restart subscribe did not attempt recovery');
-  assert(restartReply.subscribe?.recovered !== true, 'memory-engine restart unexpectedly preserved stream recovery');
-  assert((restartReply.subscribe.publications ?? []).length === 0, 'restart recovery returned a partial publication set');
+  assert(restartReply.subscribe?.recovered === true, 'Redis-backed restart did not preserve bounded stream recovery');
+  assert((restartReply.subscribe.publications ?? []).length === 0, 'restart recovery unexpectedly replayed publications after the checkpoint');
   const restartSnapshot = await ownerGET(`/snapshot?channel=${encodeURIComponent(primaryChannel)}`);
-  assert(restartSnapshot.snapshot.revision === 11, 'snapshot fallback failed after service restart');
+  assert(restartSnapshot.snapshot.revision === retentionEndRevision, 'authoritative snapshot drifted after service restart');
   afterRestart.close();
 
   const fanoutClients = 32;
@@ -441,12 +442,13 @@ async function runPOC() {
     assert(subscribed.subscribe && !subscribed.error, `fanout client ${index} failed to subscribe`);
     return connection;
   }));
+  const fanoutRevision = retentionEndRevision + 1;
   const fanoutStarted = Date.now();
   const fanoutWaits = fanout.map((connection) => connection.wait(
-    (message) => message.push?.channel === primaryChannel && message.push?.pub?.data?.revision === 12,
-    'fanout revision 12',
+    (message) => message.push?.channel === primaryChannel && message.push?.pub?.data?.revision === fanoutRevision,
+    `fanout revision ${fanoutRevision}`,
   ));
-  await commitAndPublish(12, { supplyTemp: 17.6 });
+  await commitAndPublish(fanoutRevision, { supplyTemp: 17.6 });
   await Promise.all(fanoutWaits);
   const fanoutDeliveryMs = Date.now() - fanoutStarted;
   for (const connection of fanout) connection.close();
@@ -457,8 +459,8 @@ async function runPOC() {
   const slowSubscribed = await slow.subscribe(loadChannel);
   assert(slowSubscribed.subscribe && !slowSubscribed.error, 'slow consumer failed to subscribe');
   slow.pauseRead();
-  const payload = 'x'.repeat(32 * 1024);
-  await mapLimit(Array.from({ length: 96 }, (_, sequence) => sequence), 12, async (sequence) => {
+  const payload = 'x'.repeat(60 * 1024);
+  await mapLimit(Array.from({ length: 512 }, (_, sequence) => sequence), 24, async (sequence) => {
     await centrifugoAPI('publish', {
       channel: loadChannel,
       data: { kind: 'load', sequence, payload },

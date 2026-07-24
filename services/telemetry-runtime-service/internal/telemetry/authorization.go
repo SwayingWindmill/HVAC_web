@@ -24,6 +24,8 @@ var (
 type AccessContext struct {
 	TokenID              string
 	PrincipalID          string
+	Subject              string
+	SubjectIssuer        string
 	SessionID            string
 	ActingOrganizationID string
 	PolicyRevision       string
@@ -123,7 +125,8 @@ func (authorizer *HTTPGrantAuthorizer) Authorize(ctx context.Context, peerSPIFFE
 		return AccessContext{}, ErrAuthorizationUnavailable
 	}
 	return AccessContext{
-		TokenID: accepted.TokenID, PrincipalID: accepted.PrincipalID, SessionID: accepted.SessionID,
+		TokenID: accepted.TokenID, PrincipalID: accepted.PrincipalID,
+		Subject: claims.Subject, SubjectIssuer: claims.SubjectIssuer, SessionID: accepted.SessionID,
 		ActingOrganizationID: accepted.ActingOrganizationID, PolicyRevision: accepted.PolicyRevision,
 	}, nil
 }

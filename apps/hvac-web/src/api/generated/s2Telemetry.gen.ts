@@ -261,6 +261,8 @@ export class S2TelemetryClientError extends Error {
 export interface S2TelemetryClient {
   getDeviceObservationSnapshot(deviceId: string, keys?: Array<string>, options?: S2TelemetryRequestOptions): Promise<DeviceObservationSnapshot>;
   batchGetDeviceObservationSnapshots(request: BatchGetObservationSnapshotsRequest, options?: S2TelemetryRequestOptions): Promise<BatchGetObservationSnapshotsResponse>;
+  bootstrapTelemetrySubscriptions(request: SubscriptionBootstrapRequest, options?: S2TelemetryRequestOptions): Promise<SubscriptionBootstrapResponse>;
+  checkpointTelemetryRecoveryCursors(request: RecoveryCursorCheckpointRequest, options?: S2TelemetryRequestOptions): Promise<RecoveryCursorCheckpointResponse>;
 }
 
 export function createS2TelemetryClient(baseURL = "", fetchImplementation: typeof fetch = fetch): S2TelemetryClient {
@@ -284,6 +286,14 @@ export function createS2TelemetryClient(baseURL = "", fetchImplementation: typeo
     },
     batchGetDeviceObservationSnapshots: (request, options) => requestJSON<BatchGetObservationSnapshotsResponse>(
       "/api/v1/telemetry/observation-snapshots:batchGet",
+      { method: "POST", headers: headers(options, true), body: JSON.stringify(request), signal: options?.signal },
+    ),
+    bootstrapTelemetrySubscriptions: (request, options) => requestJSON<SubscriptionBootstrapResponse>(
+      "/api/v1/telemetry/subscriptions:bootstrap",
+      { method: "POST", headers: headers(options, true), body: JSON.stringify(request), signal: options?.signal },
+    ),
+    checkpointTelemetryRecoveryCursors: (request, options) => requestJSON<RecoveryCursorCheckpointResponse>(
+      "/api/v1/telemetry/recovery-cursors:checkpoint",
       { method: "POST", headers: headers(options, true), body: JSON.stringify(request), signal: options?.signal },
     ),
   };

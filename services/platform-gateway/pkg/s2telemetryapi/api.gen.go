@@ -30,6 +30,8 @@ var Operations = [...]OperationDescriptor{
 const (
 	GetDeviceObservationSnapshotPathTemplate = "/api/v1/devices/{deviceId}/observation-snapshot"
 	BatchGetDeviceObservationSnapshotsPath   = "/api/v1/telemetry/observation-snapshots:batchGet"
+	BootstrapTelemetrySubscriptionsPath      = "/api/v1/telemetry/subscriptions:bootstrap"
+	CheckpointTelemetryRecoveryCursorsPath   = "/api/v1/telemetry/recovery-cursors:checkpoint"
 )
 
 type GetDeviceObservationSnapshotParams struct {
@@ -39,6 +41,8 @@ type GetDeviceObservationSnapshotParams struct {
 type ServerInterface interface {
 	GetDeviceObservationSnapshot(http.ResponseWriter, *http.Request, string, GetDeviceObservationSnapshotParams)
 	BatchGetDeviceObservationSnapshots(http.ResponseWriter, *http.Request, BatchGetObservationSnapshotsRequest)
+	BootstrapTelemetrySubscriptions(http.ResponseWriter, *http.Request, SubscriptionBootstrapRequest)
+	CheckpointTelemetryRecoveryCursors(http.ResponseWriter, *http.Request, RecoveryCursorCheckpointRequest)
 }
 
 type GetDeviceObservationSnapshotResponse = DeviceObservationSnapshot

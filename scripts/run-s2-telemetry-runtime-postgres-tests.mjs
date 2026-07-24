@@ -9,6 +9,9 @@ const composePath = resolve(root, 'infra/s2-telemetry/compose.yaml');
 const projectName = `hvac-s2-runtime-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
 const reportPath = resolve(root, process.env.S2_RUNTIME_REPORT_PATH ?? 'out/s2-ticket-03/telemetry-runtime-postgres.json');
+const testPattern = process.env.S2_RUNTIME_TEST_PATTERN ?? 'TestPostgresSnapshot';
+const ticketNumber = Number(process.env.S2_RUNTIME_TICKET_NUMBER ?? '62');
+const realtimeMode = testPattern.includes('Realtime');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 const composeInvocation = (() => {
   const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
@@ -34,7 +37,8 @@ const adminURL = `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHo
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
   if (result.error || result.status !== 0) {
-    throw new Error(`${command} ${args.join(' ')} failed: ${result.error?.message ?? result.stderr?.trim() ?? result.stdout?.trim() ?? result.status}`);
+    const detail = result.error?.message || result.stderr?.trim() || result.stdout?.trim() || String(result.status);
+    throw new Error(`${command} ${args.join(' ')} failed: ${detail}`);
   }
   return String(result.stdout ?? '').trim();
 }
@@ -74,7 +78,7 @@ async function waitForPostgres() {
 
 const report = {
   schemaVersion: 1,
-  ticket: 62,
+  ticket: ticketNumber,
   status: 'failed',
   startedAt: new Date().toISOString(),
   postgresImage: 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412',
@@ -89,7 +93,7 @@ try {
   const testOutput = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=services/telemetry-runtime-service',
-    'test', '-count=1', '-run', 'TestPostgresSnapshot', '-v', './internal/telemetry/...',
+    'test', '-count=1', '-run', testPattern, '-v', './internal/telemetry/...',
   ], {
     env: {
       ...process.env,
@@ -98,25 +102,47 @@ try {
     },
   });
   report.assertions.goIntegration = testOutput;
-  report.assertions.currentTransaction = psql(`
-    SELECT s.business_revision::text || '|' || p.business_revision::text || '|'
-      || s.evaluation_availability || '|'
-      || (SELECT count(*) FROM telemetry_runtime.telemetry_publication_outbox o WHERE o.device_id = s.device_id AND o.subscription_id IS NULL)::text
-    FROM telemetry_runtime.device_observation_snapshots s
-    JOIN telemetry_runtime.device_presence p USING (device_id)
-    WHERE s.device_id = '018f2e00-3000-7000-8000-000000000001'
-  `);
-  if (report.assertions.currentTransaction !== '4|4|AVAILABLE|4') {
-    throw new Error(`unexpected committed transaction state ${report.assertions.currentTransaction}`);
-  }
-  report.assertions.twoOrganizationIsolation = psql(`
-    SELECT (snapshot ->> 'owningOrganizationId') || '|' || evaluation_availability || '|'
-      || (snapshot #>> '{values,0,missingReason}')
-    FROM telemetry_runtime.device_observation_snapshots
-    WHERE device_id = '018f2e00-3000-7000-8000-000000000003'
-  `);
-  if (report.assertions.twoOrganizationIsolation !== '018f2e00-0000-7000-8000-000000000002|UNAVAILABLE|NEVER_OBSERVED') {
-    throw new Error(`unexpected Organization B state ${report.assertions.twoOrganizationIsolation}`);
+  if (realtimeMode) {
+    report.assertions.realtimeOwnerState = psql(`
+      SELECT s.status || '|' || (s.revoked_at IS NOT NULL)::text || '|'
+        || (SELECT count(*) FROM telemetry_runtime.telemetry_publication_outbox o
+            WHERE o.device_id = s.device_id AND o.delivery_state = 'PUBLISHED')::text
+      FROM telemetry_runtime.telemetry_subscriptions s
+      WHERE s.client_subscription_id = 'postgres-zone'
+    `);
+    if (report.assertions.realtimeOwnerState !== 'REVOKED|true|1') {
+      throw new Error(`unexpected realtime owner state ${report.assertions.realtimeOwnerState}`);
+    }
+    report.assertions.currentScopeRecheck = psql(`
+      SELECT count(*)::text FROM telemetry_runtime.iam_scope_projections
+      WHERE principal_id = '018f2e00-2000-7000-8000-000000000001'
+        AND device_id = '018f2e00-3000-7000-8000-000000000001'
+        AND action = 'SUBSCRIBE' AND revoked_at IS NOT NULL
+    `);
+    if (report.assertions.currentScopeRecheck !== '1') {
+      throw new Error(`realtime IAM revocation evidence drifted: ${report.assertions.currentScopeRecheck}`);
+    }
+  } else {
+    report.assertions.currentTransaction = psql(`
+      SELECT s.business_revision::text || '|' || p.business_revision::text || '|'
+        || s.evaluation_availability || '|'
+        || (SELECT count(*) FROM telemetry_runtime.telemetry_publication_outbox o WHERE o.device_id = s.device_id AND o.subscription_id IS NULL)::text
+      FROM telemetry_runtime.device_observation_snapshots s
+      JOIN telemetry_runtime.device_presence p USING (device_id)
+      WHERE s.device_id = '018f2e00-3000-7000-8000-000000000001'
+    `);
+    if (report.assertions.currentTransaction !== '4|4|AVAILABLE|4') {
+      throw new Error(`unexpected committed transaction state ${report.assertions.currentTransaction}`);
+    }
+    report.assertions.twoOrganizationIsolation = psql(`
+      SELECT (snapshot ->> 'owningOrganizationId') || '|' || evaluation_availability || '|'
+        || (snapshot #>> '{values,0,missingReason}')
+      FROM telemetry_runtime.device_observation_snapshots
+      WHERE device_id = '018f2e00-3000-7000-8000-000000000003'
+    `);
+    if (report.assertions.twoOrganizationIsolation !== '018f2e00-0000-7000-8000-000000000002|UNAVAILABLE|NEVER_OBSERVED') {
+      throw new Error(`unexpected Organization B state ${report.assertions.twoOrganizationIsolation}`);
+    }
   }
   report.assertions.runtimeIdentity = psql(`
     SELECT rolname || '|' || rolcanlogin::text || '|' || rolinherit::text || '|' || rolbypassrls::text

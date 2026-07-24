@@ -21,6 +21,7 @@ const evaluation = await text('docs/research/s2-realtime-transport-evaluation.md
 const packageJSON = JSON.parse(await text('package.json'));
 
 const locked = lock.components?.centrifugo;
+const lockedRedis = lock.components?.s2RealtimeRedis;
 assert(locked?.version === 'v6.8.1', 'S2 Centrifugo POC must use locked v6.8.1');
 assert(locked?.license === 'Apache-2.0', 'S2 Centrifugo license conclusion must remain Apache-2.0');
 assert(
@@ -32,6 +33,9 @@ for (const image of [...compose.matchAll(/^\s+image:\s+(.+)$/gm)].map((match) =>
   assert(/@sha256:[a-f0-9]{64}$/.test(image), `POC image is not digest pinned: ${image}`);
 }
 assert(compose.includes(locked.image), 'Compose does not use the locked Centrifugo image');
+assert(lockedRedis?.image === 'redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952', 'S2 realtime Redis image must match the locked digest');
+assert(compose.includes(lockedRedis.image), 'Compose does not use the dedicated locked Redis image');
+assert(config.includes('"type": "redis"') && config.includes('redis://redis:6379/0'), 'Centrifugo must use the dedicated Redis engine');
 for (const variable of ['POC_CENTRIFUGO_HMAC_SECRET', 'POC_CENTRIFUGO_API_KEY']) {
   assert(compose.includes(`\${${variable}:?`), `Compose must require runtime variable ${variable}`);
 }
@@ -39,9 +43,11 @@ for (const variable of ['POC_CENTRIFUGO_HMAC_SECRET', 'POC_CENTRIFUGO_API_KEY'])
 assert(config.includes('"subscribe_proxy_enabled": true'), 'subscribe proxy must authorize every client subscription');
 assert(config.includes('"subscribe_proxy_name": "s2-subscribe"'), 'subscribe proxy name is missing');
 assert(!config.includes('allow_subscribe_for_client'), 'client-controlled subscription permission must not be enabled');
-assert(config.includes('"history_size": 4'), 'bounded history size must remain explicit');
-assert(config.includes('"history_ttl": "5s"'), 'bounded history TTL must remain explicit');
-assert(config.includes('"queue_max_size": 16384'), 'slow-consumer queue limit must remain explicit');
+assert(config.includes('"history_size": 256'), 'bounded history size must remain 256');
+assert(config.includes('"history_ttl": "180s"'), 'bounded history TTL must remain 180 seconds');
+assert(config.includes('"queue_max_size": 262144'), 'slow-consumer queue limit must match the S2 release envelope');
+assert(config.includes('"history_max_publication_limit": 256'), 'history response limit must remain 256');
+assert(config.includes('"recovery_max_publication_limit": 256'), 'recovery response limit must remain 256');
 assert(config.includes('"force_recovery": true'), 'transport recovery must remain enabled');
 assert(config.includes('"force_positioning": true'), 'transport positioning must remain enabled');
 assert(config.includes('"prometheus"'), 'Prometheus metrics must remain enabled');
@@ -64,8 +70,8 @@ for (const scenario of [
   'short recovery omitted revision 4',
   'revoked client received a later publication',
   'failed recovery returned a partial publication set',
-  'memory-engine restart unexpectedly preserved stream recovery',
-  'fanout revision 12',
+  'Redis-backed restart did not preserve bounded stream recovery',
+  'fanout revision ${fanoutRevision}',
   'slow-consumer disconnect metric did not increase',
 ]) {
   assert(runner.includes(scenario), `runner is missing required scenario: ${scenario}`);

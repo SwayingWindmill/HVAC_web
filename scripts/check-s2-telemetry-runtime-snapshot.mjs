@@ -215,8 +215,13 @@ for (const forbidden of ['thingsboard', 'centrifugo', 'legacy-hvac-backend', 'mo
   assert(!ticket03CoreSources.includes(forbidden), `Ticket 03 core crossed an out-of-scope boundary: ${forbidden}`);
 }
 const laterRuntimeSources = `${storeGo}\n${serverGo}\n${mainGo}`.toLowerCase();
-for (const forbidden of ['centrifugo', 'legacy-hvac-backend', 'mock fallback', 'redis']) {
-  assert(!laterRuntimeSources.includes(forbidden), `Telemetry Runtime crossed an inactive later-ticket boundary: ${forbidden}`);
+for (const forbidden of ['legacy-hvac-backend', 'mock fallback']) {
+  assert(!laterRuntimeSources.includes(forbidden), `Telemetry Runtime introduced a request-level fallback boundary: ${forbidden}`);
+}
+const realtimeTicketActive = packageJSON.scripts?.['s2:realtime:check'] === 'node scripts/check-s2-realtime-backend.mjs';
+if (laterRuntimeSources.includes('centrifugo') || laterRuntimeSources.includes('redis')) {
+  assert(realtimeTicketActive, 'Telemetry transport code is present without the Ticket 06 realtime boundary gate');
+  assert(packageJSON.scripts?.['s2:ticket-06']?.includes('npm run s2:realtime:check'), 'Ticket 06 command omits its realtime boundary gate');
 }
 
 console.log('S2 Ticket 03 Telemetry Runtime Snapshot passed: authoritative semantics, atomic revision/outbox, exact internal reads and zero public traffic.');

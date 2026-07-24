@@ -36,7 +36,16 @@
       "image": "centrifugo/centrifugo:v6.8.1@sha256:b20c036ed17c7151c6acc176b34870ac37f4eb84618de7cc6459094744dd42aa",
       "platform": "linux/amd64",
       "purpose": "Realtime connection and publication transport only",
-      "decision": "poc"
+      "decision": "adopt-s2-transport"
+    },
+    "s2RealtimeRedis": {
+      "repository": "redis/docker-library-redis",
+      "version": "7.4.2-alpine",
+      "license": "RSALv2 or SSPLv1",
+      "image": "redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952",
+      "platform": "linux/amd64",
+      "purpose": "Dedicated non-authoritative Centrifugo PUB/SUB and short-window history",
+      "decision": "adopt-s2-transport-only"
     },
     "river": {
       "repository": "riverqueue/river",

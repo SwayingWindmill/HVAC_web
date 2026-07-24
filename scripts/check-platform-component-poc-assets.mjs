@@ -36,8 +36,15 @@ for (const [name, [version, license]] of Object.entries(expected)) {
   assert(component, `missing component lock: ${name}`);
   assert(component.version === version, `${name} must remain pinned to ${version}`);
   assert(component.license === license, `${name} license assessment drifted`);
-  assert(['poc', 'poc-license-review-required'].includes(component.decision), `${name} must remain a POC decision`);
+  const allowedDecisions = name === 'centrifugo'
+    ? ['adopt-s2-transport']
+    : ['poc', 'poc-license-review-required'];
+  assert(allowedDecisions.includes(component.decision), `${name} decision is not valid for its current lifecycle stage`);
 }
+const realtimeRedis = lock.components?.s2RealtimeRedis;
+assert(realtimeRedis?.version === '7.4.2-alpine', 'S2 realtime Redis version drifted');
+assert(realtimeRedis?.decision === 'adopt-s2-transport-only', 'S2 realtime Redis must remain transport-only');
+assert(/@sha256:[a-f0-9]{64}$/.test(realtimeRedis?.image ?? ''), 'S2 realtime Redis image must be digest pinned');
 assert(/^[a-f0-9]{64}$/.test(lock.components.envoyGateway.installerSha256), 'Envoy installer SHA-256 is invalid');
 for (const name of ['debezium', 'redpandaConnect', 'centrifugo', 'redpandaBrokerCompatibility']) {
   assert(/@sha256:[a-f0-9]{64}$/.test(lock.components[name].image), `${name} image must be digest pinned`);

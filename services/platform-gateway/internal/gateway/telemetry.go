@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -22,13 +23,25 @@ import (
 )
 
 const (
-	defaultTelemetryTimeout       = 2 * time.Second
-	defaultTelemetryResponseLimit = int64(2 << 20)
-	maximumTelemetryRequestSize   = int64(256 << 10)
-	telemetryDecisionBodyLimit    = int64(1 << 20)
-	telemetryDecisionPath         = "/internal/v1/telemetry/decision"
-	internalTelemetrySinglePrefix = "/internal/v1/devices/"
-	internalTelemetryBatchPath    = "/internal/v1/telemetry/observation-snapshots:batchGet"
+	defaultTelemetryTimeout                = 2 * time.Second
+	defaultTelemetryResponseLimit          = int64(2 << 20)
+	maximumTelemetryRequestSize            = int64(256 << 10)
+	telemetryDecisionBodyLimit             = int64(1 << 20)
+	telemetryDecisionPath                  = "/internal/v1/telemetry/decision"
+	internalTelemetrySinglePrefix          = "/internal/v1/devices/"
+	internalTelemetryBatchPath             = "/internal/v1/telemetry/observation-snapshots:batchGet"
+	internalTelemetryBootstrapPath         = "/internal/v1/telemetry/subscriptions:bootstrap"
+	internalTelemetryCheckpointResolvePath = "/internal/v1/telemetry/recovery-cursors:resolve"
+	internalTelemetryCheckpointPath        = "/internal/v1/telemetry/recovery-cursors:checkpoint"
+	telemetryContextGrantHeader            = "X-Telemetry-Context-Grant"
+	telemetryCheckpointResolveAction       = "telemetry:checkpoint:resolve"
+)
+
+var (
+	telemetryClientSubscriptionIDPattern = regexp.MustCompile("^[A-Za-z0-9_.:-]{1,128}$")
+	telemetryOpaqueSubscriptionIDPattern = regexp.MustCompile("^[A-Za-z0-9_-]{16,256}$")
+	telemetryRecoveryCursorPattern       = regexp.MustCompile("^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$")
+	telemetryTransportEpochPattern       = regexp.MustCompile("^[A-Za-z0-9_.:-]{1,128}$")
 )
 
 type TelemetryConfig struct {
@@ -60,9 +73,11 @@ type telemetryCallerContextKeyType struct{}
 var telemetryCallerContextKey telemetryCallerContextKeyType
 
 type publicTelemetryRoute struct {
-	template string
-	action   telemetryauth.Action
-	batch    bool
+	template   string
+	action     telemetryauth.Action
+	batch      bool
+	bootstrap  bool
+	checkpoint bool
 }
 
 type telemetryAuthorization struct {
@@ -167,6 +182,94 @@ func (h *handler) BatchGetDeviceObservationSnapshots(writer http.ResponseWriter,
 	writeJSON(writer, http.StatusOK, output)
 }
 
+func (h *handler) BootstrapTelemetrySubscriptions(writer http.ResponseWriter, request *http.Request, input s2telemetryapi.SubscriptionBootstrapRequest) {
+	targets := subscriptionTargets(input)
+	caller, ok := h.telemetryCaller(writer, request, true)
+	if !ok {
+		return
+	}
+	action := telemetryauth.ActionSubscribe
+	for _, subscription := range input.Subscriptions {
+		if subscription.RecoveryCursor != nil {
+			action = telemetryauth.ActionRecoveryUse
+			break
+		}
+	}
+	authorization, failure := h.authorizeTelemetry(request.Context(), request, caller, action, targets)
+	if failure != nil {
+		h.writeTelemetryFailure(writer, request, *failure)
+		return
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		h.writeTelemetryFailure(writer, request, telemetryUnavailable("The telemetry subscription request could not be encoded."))
+		return
+	}
+	response, failure := h.executeTelemetryRuntimeWithContext(request.Context(), request, http.MethodPost, internalTelemetryBootstrapPath, nil, body, authorization.grant, "")
+	if failure != nil {
+		h.writeTelemetryFailure(writer, request, *failure)
+		return
+	}
+	var output s2telemetryapi.SubscriptionBootstrapResponse
+	if decodeStrictTelemetryJSON(response, &output) != nil || !validateSubscriptionBootstrapResponse(output, input, h.now().UTC()) {
+		h.writeTelemetryFailure(writer, request, telemetryUnavailable("Telemetry Runtime returned an invalid subscription bootstrap response."))
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, output)
+}
+
+func (h *handler) CheckpointTelemetryRecoveryCursors(writer http.ResponseWriter, request *http.Request, input s2telemetryapi.RecoveryCursorCheckpointRequest) {
+	caller, ok := h.telemetryCaller(writer, request, true)
+	if !ok {
+		return
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		h.writeTelemetryFailure(writer, request, telemetryUnavailable("The telemetry checkpoint request could not be encoded."))
+		return
+	}
+	contextGrant, failure := h.signTelemetryContextGrant(caller)
+	if failure != nil {
+		h.writeTelemetryFailure(writer, request, *failure)
+		return
+	}
+	targets, failure := h.resolveTelemetryCheckpointTargets(request.Context(), request, body, contextGrant)
+	if failure != nil {
+		h.writeTelemetryFailure(writer, request, *failure)
+		return
+	}
+	authorization, failure := h.authorizeTelemetry(request.Context(), request, caller, telemetryauth.ActionRecoveryCheckpoint, targets)
+	if failure != nil {
+		h.writeTelemetryFailure(writer, request, *failure)
+		return
+	}
+	response, failure := h.executeTelemetryRuntimeWithContext(request.Context(), request, http.MethodPost, internalTelemetryCheckpointPath, nil, body, authorization.grant, contextGrant)
+	if failure != nil {
+		h.writeTelemetryFailure(writer, request, *failure)
+		return
+	}
+	var output s2telemetryapi.RecoveryCursorCheckpointResponse
+	if decodeStrictTelemetryJSON(response, &output) != nil || !validateRecoveryCheckpointResponse(output, input, h.now().UTC()) {
+		h.writeTelemetryFailure(writer, request, telemetryUnavailable("Telemetry Runtime returned an invalid recovery checkpoint response."))
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, output)
+}
+
+func subscriptionTargets(input s2telemetryapi.SubscriptionBootstrapRequest) []telemetryauth.Target {
+	targets := make([]telemetryauth.Target, len(input.Subscriptions))
+	for index, subscription := range input.Subscriptions {
+		keys := make([]string, len(subscription.Keys))
+		for keyIndex, key := range subscription.Keys {
+			keys[keyIndex] = string(key)
+		}
+		targets[index] = telemetryauth.Target{DeviceID: string(subscription.DeviceId), Keys: keys}
+	}
+	return targets
+}
+
 func (h *handler) telemetryCaller(writer http.ResponseWriter, request *http.Request, requireCSRF bool) (telemetryCaller, bool) {
 	if caller, ok := request.Context().Value(telemetryCallerContextKey).(telemetryCaller); ok {
 		return caller, true
@@ -261,6 +364,39 @@ func isVerifiedTelemetryWorkloadRequest(request *http.Request) bool {
 	}
 	_, _, ok := verifiedTelemetryWorkloadIdentity(request)
 	return ok
+}
+
+func (h *handler) signTelemetryContextGrant(caller telemetryCaller) (string, *telemetryFailure) {
+	if h.identity == nil || h.telemetry == nil || h.telemetry.runtimeAudience == "" {
+		failure := telemetryAuthorizationUnavailable("Telemetry context signing is not configured.")
+		return "", &failure
+	}
+	now := h.identity.now().UTC()
+	expiresAt := now.Add(h.identity.config.DelegationTTL)
+	if caller.expiresAt.IsZero() || caller.expiresAt.Before(expiresAt) {
+		expiresAt = caller.expiresAt
+	}
+	if !expiresAt.After(now) {
+		failure := telemetryFailure{http.StatusUnauthorized, "AUTHENTICATION_REQUIRED", "Authentication required", "The authenticated caller context has expired.", false}
+		return "", &failure
+	}
+	callerScope := "session:" + caller.contextID
+	if caller.workloadSPIFFE != "" {
+		callerScope = "workload:" + caller.workloadSPIFFE
+	}
+	claims := identitycontext.DelegationClaims{
+		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: caller.principal.Subject, SubjectIssuer: caller.principal.Issuer,
+		DisplayName: caller.principal.DisplayName, Email: caller.principal.Email, Roles: append([]string(nil), caller.principal.Roles...),
+		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE, Audience: h.telemetry.runtimeAudience,
+		ActingOrganizationID: caller.actingOrganizationID, Actions: []string{telemetryCheckpointResolveAction}, Scopes: []string{callerScope},
+		PolicyRevision: h.identity.config.PolicyRevision, SessionID: caller.contextID, IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
+	}
+	grant, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
+	if err != nil {
+		failure := telemetryAuthorizationUnavailable("The Gateway could not sign the Telemetry context grant.")
+		return "", &failure
+	}
+	return grant, nil
 }
 
 func (h *handler) authorizeTelemetry(ctx context.Context, publicRequest *http.Request, caller telemetryCaller, action telemetryauth.Action, targets []telemetryauth.Target) (telemetryAuthorization, *telemetryFailure) {
@@ -413,12 +549,20 @@ func telemetryPublicRoute(action telemetryauth.Action) string {
 		return s2telemetryapi.GetDeviceObservationSnapshotPathTemplate
 	case telemetryauth.ActionBatchRead:
 		return s2telemetryapi.BatchGetDeviceObservationSnapshotsPath
+	case telemetryauth.ActionSubscribe, telemetryauth.ActionRecoveryUse, telemetryauth.ActionResubscribe:
+		return s2telemetryapi.BootstrapTelemetrySubscriptionsPath
+	case telemetryauth.ActionRecoveryCheckpoint:
+		return s2telemetryapi.CheckpointTelemetryRecoveryCursorsPath
 	default:
 		return ""
 	}
 }
 
 func (h *handler) executeTelemetryRuntime(ctx context.Context, publicRequest *http.Request, method, path string, keys []string, body []byte, grant string) ([]byte, *telemetryFailure) {
+	return h.executeTelemetryRuntimeWithContext(ctx, publicRequest, method, path, keys, body, grant, "")
+}
+
+func (h *handler) executeTelemetryRuntimeWithContext(ctx context.Context, publicRequest *http.Request, method, path string, keys []string, body []byte, grant, contextGrant string) ([]byte, *telemetryFailure) {
 	if h.telemetry == nil || h.telemetry.runtimeBaseURL == "" || h.telemetry.runtimeHTTPClient == nil {
 		failure := telemetryUnavailable("Telemetry Runtime is not configured.")
 		return nil, &failure
@@ -442,7 +586,12 @@ func (h *handler) executeTelemetryRuntime(ctx context.Context, publicRequest *ht
 	if method == http.MethodPost {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	request.Header.Set("Authorization", "Bearer "+grant)
+	if grant != "" {
+		request.Header.Set("Authorization", "Bearer "+grant)
+	}
+	if contextGrant != "" {
+		request.Header.Set(telemetryContextGrantHeader, contextGrant)
+	}
 	request.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
 	observability.InjectHTTP(ctx, request.Header)
 	response, err := h.telemetry.runtimeHTTPClient.Do(request)
@@ -479,6 +628,30 @@ func (h *handler) executeTelemetryRuntime(ctx context.Context, publicRequest *ht
 		failure := telemetryUnavailable("Telemetry Runtime is temporarily unavailable.")
 		return nil, &failure
 	}
+}
+
+type telemetryCheckpointScopeResponse struct {
+	Targets []telemetryauth.Target `json:"targets"`
+}
+
+func (h *handler) resolveTelemetryCheckpointTargets(ctx context.Context, publicRequest *http.Request, body []byte, contextGrant string) ([]telemetryauth.Target, *telemetryFailure) {
+	raw, failure := h.executeTelemetryRuntimeWithContext(ctx, publicRequest, http.MethodPost, internalTelemetryCheckpointResolvePath, nil, body, "", contextGrant)
+	if failure != nil {
+		return nil, failure
+	}
+	var response telemetryCheckpointScopeResponse
+	if decodeStrictTelemetryJSON(raw, &response) != nil {
+		failure := telemetryUnavailable("Telemetry Runtime returned an invalid checkpoint scope response.")
+		return nil, &failure
+	}
+	canonical, err := telemetryauth.CanonicalTargets(response.Targets)
+	if err != nil || !slices.EqualFunc(response.Targets, canonical, func(left, right telemetryauth.Target) bool {
+		return left.DeviceID == right.DeviceID && slices.Equal(left.Keys, right.Keys)
+	}) {
+		failure := telemetryUnavailable("Telemetry Runtime returned a checkpoint scope outside the authenticated boundary.")
+		return nil, &failure
+	}
+	return canonical, nil
 }
 
 func validateTelemetrySnapshot(snapshot s2telemetryapi.DeviceObservationSnapshot, target telemetryauth.Target) bool {
@@ -655,6 +828,79 @@ func validateTelemetryBatchResponse(response s2telemetryapi.BatchGetObservationS
 	return true
 }
 
+func validateSubscriptionBootstrapResponse(response s2telemetryapi.SubscriptionBootstrapResponse, request s2telemetryapi.SubscriptionBootstrapRequest, now time.Time) bool {
+	if response.SchemaVersion != 1 || response.TransportProtocol != "CENTRIFUGO_JSON_V1" ||
+		len(response.ConnectionToken) < 16 || len(response.ConnectionToken) > 8192 || strings.ContainsAny(response.ConnectionToken, " \t\r\n") ||
+		response.Limits.MaxSubscriptions != telemetryauth.MaximumTargets || response.Limits.MaxKeysPerSubscription != telemetryauth.MaximumKeysPerTarget ||
+		response.Limits.MaxTotalKeySelections != telemetryauth.MaximumTotalKeys || len(response.Subscriptions) != len(request.Subscriptions) {
+		return false
+	}
+	endpoint, err := url.Parse(response.Endpoint)
+	if err != nil || endpoint.Scheme != "wss" || endpoint.Host == "" || endpoint.User != nil || endpoint.Fragment != "" {
+		return false
+	}
+	expiresAt, err := time.Parse("2006-01-02T15:04:05.000Z", string(response.ExpiresAt))
+	if err != nil || !expiresAt.After(now.Add(-5*time.Second)) || expiresAt.After(now.Add(5*time.Minute+5*time.Second)) {
+		return false
+	}
+	seenSubscriptions := make(map[string]struct{}, len(response.Subscriptions))
+	seenChannels := make(map[string]struct{}, len(response.Subscriptions))
+	for index, descriptor := range response.Subscriptions {
+		expected := request.Subscriptions[index]
+		subscriptionID := string(descriptor.SubscriptionId)
+		channel := string(descriptor.Channel)
+		if descriptor.ClientSubscriptionId != expected.ClientSubscriptionId || descriptor.DeviceId != expected.DeviceId || !slices.Equal(descriptor.Keys, expected.Keys) ||
+			!telemetryOpaqueSubscriptionIDPattern.MatchString(subscriptionID) || len(channel) < 16 || len(channel) > 512 || strings.Contains(channel, string(expected.DeviceId)) {
+			return false
+		}
+		if _, duplicate := seenSubscriptions[subscriptionID]; duplicate {
+			return false
+		}
+		seenSubscriptions[subscriptionID] = struct{}{}
+		if _, duplicate := seenChannels[channel]; duplicate {
+			return false
+		}
+		seenChannels[channel] = struct{}{}
+		if expected.RecoveryCursor == nil {
+			if descriptor.RecoveryMode != "SNAPSHOT_THEN_LIVE" || descriptor.TransportPosition != nil || descriptor.RecoveryCursor != nil {
+				return false
+			}
+			continue
+		}
+		if descriptor.RecoveryMode != "ATTEMPT_RECOVERY" || descriptor.TransportPosition == nil || descriptor.RecoveryCursor == nil ||
+			*descriptor.RecoveryCursor != *expected.RecoveryCursor || !validTelemetryTransportPosition(*descriptor.TransportPosition) {
+			return false
+		}
+	}
+	return true
+}
+
+func validateRecoveryCheckpointResponse(response s2telemetryapi.RecoveryCursorCheckpointResponse, request s2telemetryapi.RecoveryCursorCheckpointRequest, now time.Time) bool {
+	if response.SchemaVersion != 1 || len(response.Items) != len(request.Checkpoints) {
+		return false
+	}
+	seenCursors := make(map[string]struct{}, len(response.Items))
+	for index, item := range response.Items {
+		expected := request.Checkpoints[index]
+		cursor := string(item.RecoveryCursor)
+		expiresAt, err := time.Parse("2006-01-02T15:04:05.000Z", string(item.ExpiresAt))
+		if item.SubscriptionId != expected.SubscriptionId || item.BusinessRevision != expected.BusinessRevision ||
+			len(cursor) < 16 || len(cursor) > 4096 || !telemetryRecoveryCursorPattern.MatchString(cursor) ||
+			err != nil || !expiresAt.After(now.Add(-5*time.Second)) || expiresAt.After(now.Add(2*time.Minute+5*time.Second)) {
+			return false
+		}
+		if _, duplicate := seenCursors[cursor]; duplicate {
+			return false
+		}
+		seenCursors[cursor] = struct{}{}
+	}
+	return true
+}
+
+func validTelemetryTransportPosition(position s2telemetryapi.TransportPosition) bool {
+	return telemetryTransportEpochPattern.MatchString(position.Epoch) && position.Offset >= 0
+}
+
 func dispatchTelemetryRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicTelemetryRoute, deviceID string) {
 	decision := routeDecisionFromContext(request.Context())
 	if decision.RegistryRevision != 0 && (decision.SelectedOwner != ownershipregistry.OwnerTelemetryRuntime || decision.ReadFallbackOwner != "" || decision.ShadowOwner != "") {
@@ -680,6 +926,42 @@ func dispatchTelemetryRoute(h *handler, writer http.ResponseWriter, request *htt
 		h.BatchGetDeviceObservationSnapshots(writer, request, input)
 		return
 	}
+	if route.bootstrap {
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
+			return
+		}
+		caller, ok := h.telemetryCaller(writer, request, true)
+		if !ok {
+			return
+		}
+		request = request.WithContext(context.WithValue(request.Context(), telemetryCallerContextKey, caller))
+		input, failure := parseTelemetrySubscriptionRequest(writer, request)
+		if failure != nil {
+			h.writeTelemetryFailure(writer, request, *failure)
+			return
+		}
+		h.BootstrapTelemetrySubscriptions(writer, request, input)
+		return
+	}
+	if route.checkpoint {
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
+			return
+		}
+		caller, ok := h.telemetryCaller(writer, request, true)
+		if !ok {
+			return
+		}
+		request = request.WithContext(context.WithValue(request.Context(), telemetryCallerContextKey, caller))
+		input, failure := parseTelemetryCheckpointRequest(writer, request)
+		if failure != nil {
+			h.writeTelemetryFailure(writer, request, *failure)
+			return
+		}
+		h.CheckpointTelemetryRecoveryCursors(writer, request, input)
+		return
+	}
 	if request.Method != http.MethodGet {
 		writeMethodNotAllowedFor(writer, request, http.MethodGet)
 		return
@@ -695,6 +977,12 @@ func dispatchTelemetryRoute(h *handler, writer http.ResponseWriter, request *htt
 func matchPublicTelemetryRoute(path string) (publicTelemetryRoute, string, bool) {
 	if path == s2telemetryapi.BatchGetDeviceObservationSnapshotsPath {
 		return publicTelemetryRoute{template: s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, action: telemetryauth.ActionBatchRead, batch: true}, "", true
+	}
+	if path == s2telemetryapi.BootstrapTelemetrySubscriptionsPath {
+		return publicTelemetryRoute{template: s2telemetryapi.BootstrapTelemetrySubscriptionsPath, action: telemetryauth.ActionSubscribe, bootstrap: true}, "", true
+	}
+	if path == s2telemetryapi.CheckpointTelemetryRecoveryCursorsPath {
+		return publicTelemetryRoute{template: s2telemetryapi.CheckpointTelemetryRecoveryCursorsPath, action: telemetryauth.ActionRecoveryCheckpoint, checkpoint: true}, "", true
 	}
 	deviceID, matches := matchSinglePathParameter(path, s2telemetryapi.GetDeviceObservationSnapshotPathTemplate, "{deviceId}")
 	if !matches {
@@ -805,6 +1093,112 @@ func parseTelemetryBatchRequest(writer http.ResponseWriter, request *http.Reques
 	if _, err := telemetryauth.CanonicalTargets(targets); err != nil {
 		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "The telemetry batch resource selection is invalid.", false}
 		return input, &failure
+	}
+	return input, nil
+}
+
+func parseTelemetrySubscriptionRequest(writer http.ResponseWriter, request *http.Request) (s2telemetryapi.SubscriptionBootstrapRequest, *telemetryFailure) {
+	var input s2telemetryapi.SubscriptionBootstrapRequest
+	if request.URL.RawQuery != "" {
+		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "The telemetry subscription route does not accept query parameters.", false}
+		return input, &failure
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumTelemetryRequestSize)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			failure := telemetryLimitExceeded("The telemetry subscription request body exceeds the maximum size.")
+			return input, &failure
+		}
+		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "The telemetry subscription request is malformed.", false}
+		return input, &failure
+	}
+	if ensureTelemetryJSONEOF(decoder) != nil || len(input.Subscriptions) == 0 {
+		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "At least one valid telemetry subscription is required.", false}
+		return input, &failure
+	}
+	if len(input.Subscriptions) > telemetryauth.MaximumTargets {
+		failure := telemetryLimitExceeded("The request exceeds the maximum number of telemetry subscriptions.")
+		return input, &failure
+	}
+	seenClientIDs := make(map[string]struct{}, len(input.Subscriptions))
+	totalKeys := 0
+	for _, item := range input.Subscriptions {
+		clientID := string(item.ClientSubscriptionId)
+		if !telemetryClientSubscriptionIDPattern.MatchString(clientID) {
+			failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "Each subscription requires a valid clientSubscriptionId.", false}
+			return input, &failure
+		}
+		if _, duplicate := seenClientIDs[clientID]; duplicate {
+			failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "clientSubscriptionId values must be unique.", false}
+			return input, &failure
+		}
+		seenClientIDs[clientID] = struct{}{}
+		if len(item.Keys) > telemetryauth.MaximumKeysPerTarget {
+			failure := telemetryLimitExceeded("A subscription exceeds the maximum number of telemetry keys per Device.")
+			return input, &failure
+		}
+		totalKeys += len(item.Keys)
+		if totalKeys > telemetryauth.MaximumTotalKeys {
+			failure := telemetryLimitExceeded("The subscription request exceeds the maximum total telemetry key selections.")
+			return input, &failure
+		}
+		if item.RecoveryCursor != nil {
+			cursor := string(*item.RecoveryCursor)
+			if len(cursor) < 16 || len(cursor) > 4096 || !telemetryRecoveryCursorPattern.MatchString(cursor) {
+				failure := telemetryFailure{http.StatusBadRequest, "RECOVERY_CURSOR_INVALID", "Recovery cursor invalid", "The supplied recovery cursor is malformed or expired.", false}
+				return input, &failure
+			}
+		}
+	}
+	if _, err := telemetryauth.CanonicalTargets(subscriptionTargets(input)); err != nil {
+		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "The telemetry subscription scope is invalid.", false}
+		return input, &failure
+	}
+	return input, nil
+}
+
+func parseTelemetryCheckpointRequest(writer http.ResponseWriter, request *http.Request) (s2telemetryapi.RecoveryCursorCheckpointRequest, *telemetryFailure) {
+	var input s2telemetryapi.RecoveryCursorCheckpointRequest
+	if request.URL.RawQuery != "" {
+		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "The telemetry checkpoint route does not accept query parameters.", false}
+		return input, &failure
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumTelemetryRequestSize)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			failure := telemetryLimitExceeded("The telemetry checkpoint request body exceeds the maximum size.")
+			return input, &failure
+		}
+		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "The telemetry checkpoint request is malformed.", false}
+		return input, &failure
+	}
+	if ensureTelemetryJSONEOF(decoder) != nil || len(input.Checkpoints) == 0 {
+		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "At least one valid telemetry checkpoint is required.", false}
+		return input, &failure
+	}
+	if len(input.Checkpoints) > telemetryauth.MaximumTargets {
+		failure := telemetryLimitExceeded("The request exceeds the maximum number of telemetry checkpoints.")
+		return input, &failure
+	}
+	seen := make(map[string]struct{}, len(input.Checkpoints))
+	for _, checkpoint := range input.Checkpoints {
+		subscriptionID := string(checkpoint.SubscriptionId)
+		if !telemetryOpaqueSubscriptionIDPattern.MatchString(subscriptionID) || checkpoint.BusinessRevision < 1 ||
+			!telemetryTransportEpochPattern.MatchString(checkpoint.TransportPosition.Epoch) || checkpoint.TransportPosition.Offset < 0 {
+			failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "The telemetry checkpoint contains an invalid subscription, revision, or transport position.", false}
+			return input, &failure
+		}
+		if _, duplicate := seen[subscriptionID]; duplicate {
+			failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "Checkpoint subscriptionId values must be unique.", false}
+			return input, &failure
+		}
+		seen[subscriptionID] = struct{}{}
 	}
 	return input, nil
 }

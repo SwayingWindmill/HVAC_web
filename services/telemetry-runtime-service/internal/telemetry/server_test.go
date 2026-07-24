@@ -21,6 +21,7 @@ const gatewaySPIFFE = "spiffe://hvac.local/platform-gateway"
 
 type fakeAuthorizer struct {
 	err     error
+	access  AccessContext
 	peer    string
 	grant   string
 	action  telemetryauth.Action
@@ -33,7 +34,10 @@ func (fake *fakeAuthorizer) Authorize(_ context.Context, peer, grant string, act
 	if fake.err != nil {
 		return AccessContext{}, fake.err
 	}
-	return AccessContext{PrincipalID: "018f2e00-2000-7000-8000-000000000001", SessionID: "session-a", ActingOrganizationID: orgA, TokenID: "grant-a", PolicyRevision: "telemetry-access:1"}, nil
+	if fake.access.PrincipalID != "" {
+		return fake.access, nil
+	}
+	return AccessContext{PrincipalID: "018f2e00-2000-7000-8000-000000000001", Subject: "subject-a", SubjectIssuer: "https://issuer.example.test", SessionID: "session-a", ActingOrganizationID: orgA, TokenID: "grant-a", PolicyRevision: "telemetry-access:1"}, nil
 }
 
 type fakeSnapshotStore struct {
@@ -180,6 +184,94 @@ func TestInternalSnapshotFailsClosedForGrantAndStoreDependencies(t *testing.T) {
 				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 			}
 		})
+	}
+}
+
+func TestInternalRevocationRequiresIAMWorkloadAndUnsubscribes(t *testing.T) {
+	now := time.Date(2026, 7, 24, 15, 0, 0, 0, time.UTC)
+	repository := NewMemoryRealtimeRepository()
+	transport := &RecordingRealtimeTransport{}
+	service := newRealtimeTestService(t, repository, transport, &now)
+	access := realtimeTestAccess()
+	bootstrap, err := service.Bootstrap(context.Background(), access, telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{
+		{ClientSubscriptionId: "revoke-test", DeviceId: realtimeTestDevice1, Keys: []telemetryapi.TelemetryKey{"temperature"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.SetCurrentRevision(realtimeTestDevice1, 3)
+	checkpoint, err := service.Checkpoint(context.Background(), access, telemetryapi.RecoveryCursorCheckpointRequest{Checkpoints: []telemetryapi.RecoveryCursorCheckpoint{
+		{SubscriptionId: bootstrap.Subscriptions[0].SubscriptionId, BusinessRevision: 3, TransportPosition: telemetryapi.TransportPosition{Epoch: "epoch-a", Offset: 7}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(ServerConfig{Realtime: service, AllowedIAMSPIFFE: "spiffe://hvac.local/iam-service", Now: func() time.Time { return now }})
+	body := `{"principalId":"` + realtimeTestPrincipal + `","deviceId":"` + realtimeTestDevice1 + `","reason":"IAM_SCOPE_REVOKED","occurredAt":"` + now.Format(time.RFC3339Nano) + `"}`
+	request := httptest.NewRequest(http.MethodPost, InternalSubscriptionRevokePath, strings.NewReader(body))
+	request.TLS = verifiedTLSState("spiffe://hvac.local/iam-service")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || len(transport.Unsubscribes) != 1 {
+		t.Fatalf("revoke status=%d body=%s unsubscribes=%+v", recorder.Code, recorder.Body.String(), transport.Unsubscribes)
+	}
+	if _, err := service.AuthorizeSubscribe(context.Background(), access.PrincipalID, string(bootstrap.Subscriptions[0].Channel)); !errors.Is(err, ErrSubscriptionNotFound) {
+		t.Fatalf("revoked subscription remained active: %v", err)
+	}
+	cursor := checkpoint.Items[0].RecoveryCursor
+	input := telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{{ClientSubscriptionId: "revoke-test", DeviceId: realtimeTestDevice1, Keys: []telemetryapi.TelemetryKey{"temperature"}, RecoveryCursor: &cursor}}}
+	if _, err := service.Bootstrap(context.Background(), access, input); !errors.Is(err, ErrRecoveryCursorRejected) {
+		t.Fatalf("revoked recovery cursor remained usable: %v", err)
+	}
+
+	wrong := httptest.NewRequest(http.MethodPost, InternalSubscriptionRevokePath, strings.NewReader(body))
+	wrong.TLS = verifiedTLSState("spiffe://hvac.local/untrusted")
+	wrongRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(wrongRecorder, wrong)
+	if wrongRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("untrusted revoker status=%d body=%s", wrongRecorder.Code, wrongRecorder.Body.String())
+	}
+}
+
+func TestInternalBootstrapMapsCrossScopeCursorToStableInvalidProblem(t *testing.T) {
+	now := time.Date(2026, 7, 24, 15, 0, 0, 0, time.UTC)
+	repository := NewMemoryRealtimeRepository()
+	service := newRealtimeTestService(t, repository, &RecordingRealtimeTransport{}, &now)
+	ownerAccess := realtimeTestAccess()
+	bootstrap, err := service.Bootstrap(context.Background(), ownerAccess, telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{
+		{ClientSubscriptionId: "cursor-owner", DeviceId: realtimeTestDevice1, Keys: []telemetryapi.TelemetryKey{"temperature"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.SetCurrentRevision(realtimeTestDevice1, 3)
+	checkpoint, err := service.Checkpoint(context.Background(), ownerAccess, telemetryapi.RecoveryCursorCheckpointRequest{Checkpoints: []telemetryapi.RecoveryCursorCheckpoint{
+		{SubscriptionId: bootstrap.Subscriptions[0].SubscriptionId, BusinessRevision: 3, TransportPosition: telemetryapi.TransportPosition{Epoch: "epoch-a", Offset: 7}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	crossScope := ownerAccess
+	crossScope.PrincipalID = "018f2e00-2000-7000-8000-000000000002"
+	crossScope.Subject = "subject-b"
+	handler := NewHandler(ServerConfig{
+		Authorizer: &fakeAuthorizer{access: crossScope}, Realtime: service,
+		AllowedGatewaySPIFFE: gatewaySPIFFE, Now: func() time.Time { return now },
+	})
+	cursor := checkpoint.Items[0].RecoveryCursor
+	body, err := json.Marshal(telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{
+		{ClientSubscriptionId: "cursor-replay", DeviceId: realtimeTestDevice1, Keys: []telemetryapi.TelemetryKey{"temperature"}, RecoveryCursor: &cursor},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, InternalSubscriptionBootstrapPath, strings.NewReader(string(body)))
+	request.Header.Set("Authorization", "Bearer recovery-grant")
+	request.TLS = verifiedTLSState(gatewaySPIFFE)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "RECOVERY_CURSOR_INVALID") {
+		t.Fatalf("cross-scope cursor status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
