@@ -49,6 +49,12 @@ func main() {
 	}
 	defer store.Close()
 
+	sourceAuthenticator, err := telemetry.ParseSourceAuthenticatorJSON(requiredEnv("TELEMETRY_SOURCE_BINDINGS_JSON"))
+	if err != nil {
+		logger.Error("telemetry_source_bindings_invalid", "error_code", "TELEMETRY_SOURCE_BINDINGS_INVALID")
+		os.Exit(1)
+	}
+
 	iamClient := &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
@@ -76,6 +82,7 @@ func main() {
 		Handler: telemetry.NewHandler(telemetry.ServerConfig{
 			Store: store, Authorizer: authorizer,
 			AllowedGatewaySPIFFE: envOr("TELEMETRY_ALLOWED_GATEWAY_SPIFFE", "spiffe://hvac.local/platform-gateway"),
+			ObservationAcceptor:  store, CoverageReporter: store, SourceAuthenticator: sourceAuthenticator,
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate},

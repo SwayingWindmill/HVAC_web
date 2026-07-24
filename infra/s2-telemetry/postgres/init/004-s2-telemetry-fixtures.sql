@@ -23,19 +23,22 @@ INSERT INTO telemetry_runtime.iam_scope_projections (
 
 INSERT INTO telemetry_runtime.presence_policies (
   device_id, policy_revision, online_within_seconds, offline_after_seconds,
-  coverage_required, accepted_signal_types, updated_at
+  coverage_required, accepted_signal_types, max_future_clock_skew_seconds,
+  max_source_lag_seconds, updated_at
 ) VALUES
-  ('018f2e00-3000-7000-8000-000000000001', 2, 60, 180, true, ARRAY['SOURCE_ACTIVITY', 'EXPLICIT_CONNECT', 'EXPLICIT_DISCONNECT']::text[], '2026-07-23T00:00:00Z'),
-  ('018f2e00-3000-7000-8000-000000000002', 2, 60, 180, true, ARRAY['SOURCE_ACTIVITY', 'EXPLICIT_CONNECT']::text[], '2026-07-23T00:00:00Z'),
-  ('018f2e00-3000-7000-8000-000000000003', 2, 60, 180, true, ARRAY['SOURCE_ACTIVITY']::text[], '2026-07-23T00:00:00Z');
+  ('018f2e00-3000-7000-8000-000000000001', 2, 60, 180, true, ARRAY['SOURCE_ACTIVITY', 'EXPLICIT_CONNECT', 'EXPLICIT_DISCONNECT']::text[], 30, 600, '2026-07-23T00:00:00Z'),
+  ('018f2e00-3000-7000-8000-000000000002', 2, 60, 180, true, ARRAY['SOURCE_ACTIVITY', 'EXPLICIT_CONNECT']::text[], 30, 600, '2026-07-23T00:00:00Z'),
+  ('018f2e00-3000-7000-8000-000000000003', 2, 60, 180, true, ARRAY['SOURCE_ACTIVITY']::text[], 30, 600, '2026-07-23T00:00:00Z');
 
 INSERT INTO telemetry_runtime.freshness_policies (
-  device_id, telemetry_key, policy_revision, fresh_within_seconds, configured, updated_at
+  device_id, telemetry_key, policy_revision, fresh_within_seconds, configured,
+  expected_sample_interval_seconds, value_type, expected_unit,
+  minimum_number, maximum_number, updated_at
 ) VALUES
-  ('018f2e00-3000-7000-8000-000000000001', 'zone.temperature', 5, 300, true, '2026-07-23T00:00:00Z'),
-  ('018f2e00-3000-7000-8000-000000000001', 'zone.humidity', 5, 300, true, '2026-07-23T00:00:00Z'),
-  ('018f2e00-3000-7000-8000-000000000001', 'duct.pressure', 5, 120, true, '2026-07-23T00:00:00Z'),
-  ('018f2e00-3000-7000-8000-000000000003', 'zone.temperature', 2, 300, true, '2026-07-23T00:00:00Z');
+  ('018f2e00-3000-7000-8000-000000000001', 'zone.temperature', 5, 300, true, 60, 'NUMBER', 'Cel', -50, 100, '2026-07-23T00:00:00Z'),
+  ('018f2e00-3000-7000-8000-000000000001', 'zone.humidity', 5, 300, true, 60, 'NUMBER', '%RH', 0, 100, '2026-07-23T00:00:00Z'),
+  ('018f2e00-3000-7000-8000-000000000001', 'duct.pressure', 5, 120, true, 30, 'NUMBER', 'Pa', -5000, 5000, '2026-07-23T00:00:00Z'),
+  ('018f2e00-3000-7000-8000-000000000003', 'zone.temperature', 2, 300, true, 60, 'NUMBER', 'Cel', -50, 100, '2026-07-23T00:00:00Z');
 
 INSERT INTO telemetry_runtime.source_positions (
   integration_instance_id, source_partition, source_offset, source_event_id,
@@ -45,11 +48,12 @@ INSERT INTO telemetry_runtime.source_positions (
 
 INSERT INTO telemetry_runtime.source_observations (
   observation_id, integration_instance_id, source_event_id, source_partition,
-  source_offset, device_id, telemetry_key, value, value_type, unit, sampled_at,
-  received_at, acceptance_status, quality_reasons, payload_sha256, created_at
+  source_offset, source_path, device_id, telemetry_key, value, value_type, unit,
+  sampled_at, received_at, acceptance_status, quality, quality_reasons,
+  payload_sha256, created_at
 ) VALUES
-  ('018f2e00-8100-7000-8000-000000000001', '018f2e00-6000-7000-8000-000000000001', '018f2e00-8000-7000-8000-000000000001', 'tb-telemetry-0', 42, '018f2e00-3000-7000-8000-000000000001', 'zone.temperature', '23.5'::jsonb, 'NUMBER', 'Cel', '2026-07-23T00:00:00Z', '2026-07-23T00:00:02Z', 'ACCEPTED', '{}', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '2026-07-23T00:00:02Z'),
-  ('018f2e00-8100-7000-8000-000000000002', '018f2e00-6000-7000-8000-000000000001', '018f2e00-8000-7000-8000-000000000002', 'tb-telemetry-0', 43, '018f2e00-3000-7000-8000-000000000001', 'duct.pressure', '"invalid"'::jsonb, 'STRING', 'Pa', '2026-07-23T00:00:01Z', '2026-07-23T00:00:03Z', 'REJECTED', ARRAY['TYPE_MISMATCH'], 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', '2026-07-23T00:00:03Z');
+  ('018f2e00-8100-7000-8000-000000000001', '018f2e00-6000-7000-8000-000000000001', '018f2e00-8000-7000-8000-000000000001', 'tb-telemetry-0', 42, 'WEBHOOK', '018f2e00-3000-7000-8000-000000000001', 'zone.temperature', '23.5'::jsonb, 'NUMBER', 'Cel', '2026-07-23T00:00:00Z', '2026-07-23T00:00:02Z', 'ACCEPTED', 'GOOD', '{}', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '2026-07-23T00:00:02Z'),
+  ('018f2e00-8100-7000-8000-000000000002', '018f2e00-6000-7000-8000-000000000001', '018f2e00-8000-7000-8000-000000000002', 'tb-telemetry-0', 43, 'RECONCILIATION', '018f2e00-3000-7000-8000-000000000001', 'duct.pressure', NULL, 'STRING', 'Pa', '2026-07-23T00:00:01Z', '2026-07-23T00:00:03Z', 'REJECTED', 'REJECTED', ARRAY['TYPE_MISMATCH'], 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', '2026-07-23T00:00:03Z');
 
 INSERT INTO telemetry_runtime.ingest_quarantine (
   quarantine_id, integration_instance_id, external_entity_type, external_id,

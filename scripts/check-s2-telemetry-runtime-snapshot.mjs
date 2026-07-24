@@ -41,7 +41,7 @@ const [
   readText('services/telemetry-runtime-service/internal/telemetry/server_test.go'),
   readText('services/telemetry-runtime-service/internal/telemetry/postgres_integration_test.go'),
   readText('infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql'),
-  readText('infra/s2-telemetry/postgres/init/003-s2-telemetry-fixtures.sql'),
+  readText('infra/s2-telemetry/postgres/init/004-s2-telemetry-fixtures.sql'),
   readJSON('package.json'),
   readJSON('contracts/ownership/data-ownership.v1.json'),
   readJSON('contracts/ownership/ownership.v1.lock.json'),
@@ -165,7 +165,7 @@ includesAll(fixtureSQL, [
   'state_sha256',
 ], 'deterministic Snapshot fixtures');
 
-assert(dataRegistry.registryRevision === 8 && ownershipLock.dataRegistryRevision === 8, 'data ownership revision must be 8');
+assert(dataRegistry.registryRevision >= 8 && ownershipLock.dataRegistryRevision === dataRegistry.registryRevision, 'data ownership revision must remain monotonic and locked');
 const resources = new Map((dataRegistry.resources ?? []).map((resource) => [`${resource.kind}:${resource.name}`, resource]));
 for (const name of ['presence-signal', 'observation-coverage', 'device-presence', 'device-observation-snapshot']) {
   assert(resources.get(`projection:${name}`)?.writer === 'telemetry-runtime-service', `${name} writer drifted`);
@@ -210,9 +210,13 @@ for (const command of [
 }
 includesAll(workflow, ['runs-on: ubuntu-24.04', 'go-version: "1.25.12"', 'node-version: "20.19.4"', 'npm run s2:ticket-03', 's2-telemetry-runtime-snapshot-evidence'], 'Ticket 03 workflow');
 
-const runtimeSources = `${evaluatorGo}\n${storeGo}\n${authorizationGo}\n${serverGo}\n${mainGo}`.toLowerCase();
+const ticket03CoreSources = `${evaluatorGo}\n${authorizationGo}`.toLowerCase();
 for (const forbidden of ['thingsboard', 'centrifugo', 'legacy-hvac-backend', 'mock fallback', 'redis']) {
-  assert(!runtimeSources.includes(forbidden), `Ticket 03 crossed an out-of-scope boundary: ${forbidden}`);
+  assert(!ticket03CoreSources.includes(forbidden), `Ticket 03 core crossed an out-of-scope boundary: ${forbidden}`);
+}
+const laterRuntimeSources = `${storeGo}\n${serverGo}\n${mainGo}`.toLowerCase();
+for (const forbidden of ['centrifugo', 'legacy-hvac-backend', 'mock fallback', 'redis']) {
+  assert(!laterRuntimeSources.includes(forbidden), `Telemetry Runtime crossed an inactive later-ticket boundary: ${forbidden}`);
 }
 
 console.log('S2 Ticket 03 Telemetry Runtime Snapshot passed: authoritative semantics, atomic revision/outbox, exact internal reads and zero public traffic.');

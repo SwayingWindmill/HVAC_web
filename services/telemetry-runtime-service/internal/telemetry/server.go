@@ -30,6 +30,9 @@ type ServerConfig struct {
 	Store                SnapshotStore
 	Authorizer           GrantAuthorizer
 	AllowedGatewaySPIFFE string
+	ObservationAcceptor  ObservationAcceptor
+	CoverageReporter     CoverageReporter
+	SourceAuthenticator  SourceAuthenticator
 	Now                  func() time.Time
 }
 
@@ -37,6 +40,9 @@ type handler struct {
 	store                SnapshotStore
 	authorizer           GrantAuthorizer
 	allowedGatewaySPIFFE string
+	observationAcceptor  ObservationAcceptor
+	coverageReporter     CoverageReporter
+	sourceAuthenticator  SourceAuthenticator
 	now                  func() time.Time
 }
 
@@ -47,11 +53,21 @@ func NewHandler(config ServerConfig) http.Handler {
 	}
 	return &handler{
 		store: config.Store, authorizer: config.Authorizer,
-		allowedGatewaySPIFFE: strings.TrimSpace(config.AllowedGatewaySPIFFE), now: now,
+		allowedGatewaySPIFFE: strings.TrimSpace(config.AllowedGatewaySPIFFE),
+		observationAcceptor:  config.ObservationAcceptor, coverageReporter: config.CoverageReporter,
+		sourceAuthenticator: config.SourceAuthenticator, now: now,
 	}
 }
 
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if request.URL.Path == InternalThingsBoardObservationPath {
+		h.handleThingsBoardObservation(writer, request)
+		return
+	}
+	if request.URL.Path == InternalThingsBoardCoveragePath {
+		h.handleThingsBoardCoverage(writer, request)
+		return
+	}
 	if request.URL.Path == InternalBatchSnapshotPath {
 		h.handleBatch(writer, request)
 		return
@@ -242,10 +258,10 @@ func hasForgedIdentityHeader(header http.Header) bool {
 		}
 		lowerName := strings.ToLower(name)
 		switch lowerName {
-		case "x-principal", "x-roles", "x-role", "x-admin", "x-scope", "x-organization-id", "x-site-id", "x-delegation-grant":
+		case "x-principal", "x-roles", "x-role", "x-admin", "x-scope", "x-organization-id", "x-site-id", "x-delegation-grant", "x-integration-instance-id", "x-source-scope":
 			return true
 		}
-		if strings.HasPrefix(lowerName, "x-principal-") || strings.HasPrefix(lowerName, "x-organization-") || strings.HasPrefix(lowerName, "x-site-") {
+		if strings.HasPrefix(lowerName, "x-principal-") || strings.HasPrefix(lowerName, "x-organization-") || strings.HasPrefix(lowerName, "x-site-") || strings.HasPrefix(lowerName, "x-integration-") || strings.HasPrefix(lowerName, "x-source-") {
 			return true
 		}
 	}
