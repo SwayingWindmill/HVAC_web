@@ -51,6 +51,7 @@ const [
   ownershipLock,
   bootstrapSQL,
   baselineSQL,
+  runtimeSnapshotSQL,
   fixtureSQL,
   goGenerated,
   tsGenerated,
@@ -71,7 +72,8 @@ const [
   readJSON('contracts/ownership/ownership.v1.lock.json'),
   readText('infra/s2-telemetry/postgres/init/000-bootstrap-identities.sql'),
   readText('infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql'),
-  readText('infra/s2-telemetry/postgres/init/002-s2-telemetry-fixtures.sql'),
+  readText('infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql'),
+  readText('infra/s2-telemetry/postgres/init/003-s2-telemetry-fixtures.sql'),
   readText('services/telemetry-runtime-service/pkg/telemetryapi/api.gen.go'),
   readText('apps/hvac-web/src/api/generated/s2Telemetry.gen.ts'),
   readText('go.work'),
@@ -149,12 +151,14 @@ for (const path of webSourceFiles.filter((value) => ['.ts', '.tsx'].includes(ext
 }
 assert(goWork.includes('./services/telemetry-runtime-service'), 'Telemetry Runtime module is missing from go.work');
 assert(goMod.includes('module github.com/quanlaihe/hvac-web/services/telemetry-runtime-service'), 'Telemetry Runtime module path drifted');
-assert(!goMod.includes('require '), 'contract-only Go module must not introduce dependencies');
+assert(goMod.includes('github.com/jackc/pgx/v5') && goMod.includes('github.com/quanlaihe/hvac-web/libs/telemetryauth'), 'Telemetry Runtime implementation dependencies drifted');
+assert(goMod.includes('replace github.com/quanlaihe/hvac-web/libs/telemetryauth => ../../libs/telemetryauth'), 'Telemetry Runtime telemetryauth replacement is missing');
 
 assert(compatibility.postgres?.schema === 'telemetry_runtime', 'PostgreSQL schema lock drifted');
 assert(compatibility.postgres?.expandOnly === true, 'PostgreSQL baseline must remain expand-only');
+const expandSQL = `${baselineSQL}\n${runtimeSnapshotSQL}`;
 for (const forbidden of compatibility.postgres.forbiddenTokens ?? []) {
-  assert(!baselineSQL.toUpperCase().includes(forbidden), `expand migration contains forbidden token ${forbidden}`);
+  assert(!expandSQL.toUpperCase().includes(forbidden), `expand migration contains forbidden token ${forbidden}`);
 }
 const expectedTables = Object.keys(compatibility.postgres.tables ?? {});
 assert(expectedTables.length === 13, 'PostgreSQL table set must remain 13');
@@ -172,6 +176,17 @@ for (const [table, columns] of Object.entries(compatibility.postgres.tables ?? {
 }
 assert(baselineSQL.includes('registry_device_bindings_active_external_key_uidx'), 'active ExternalBinding uniqueness index is missing');
 assert(baselineSQL.includes('telemetry_publication_outbox_pending_idx'), 'outbox pending index is missing');
+for (const marker of [
+  'ADD COLUMN IF NOT EXISTS accepted_signal_types',
+  'presence_policies_accepted_signal_types_check',
+  'CREATE TABLE IF NOT EXISTS telemetry_runtime.presence_signals',
+  'CREATE TABLE IF NOT EXISTS telemetry_runtime.observation_coverage',
+  'ADD COLUMN IF NOT EXISTS state_sha256',
+  'ALTER TABLE telemetry_runtime.presence_signals FORCE ROW LEVEL SECURITY',
+  'ALTER TABLE telemetry_runtime.observation_coverage FORCE ROW LEVEL SECURITY',
+]) {
+  assert(runtimeSnapshotSQL.includes(marker), `runtime Snapshot expansion is missing ${marker}`);
+}
 assert(baselineSQL.includes('GRANT UPDATE (delivery_state, available_at, attempts, last_error_code, published_at)'), 'relay delivery-column grant drifted');
 assert(!/GRANT\s+INSERT[\s\S]*?TO\s+s2_telemetry_relay\s*;/i.test(baselineSQL), 'relay must not receive INSERT');
 
@@ -212,7 +227,7 @@ for (const marker of [
 }
 
 assert(routeRegistry.registryRevision === 7 && ownershipLock.routeRegistryRevision === 7, 'route ownership revision drifted');
-assert(dataRegistry.registryRevision === 7 && ownershipLock.dataRegistryRevision === 7, 'data ownership revision drifted');
+assert(dataRegistry.registryRevision === 8 && ownershipLock.dataRegistryRevision === 8, 'data ownership revision drifted');
 const activeRoutes = new Map((routeRegistry.routes ?? []).map((route) => [routeKey(route), route]));
 for (const expected of compatibility.operations) {
   const route = activeRoutes.get(`${expected.method} ${expected.path}`);
