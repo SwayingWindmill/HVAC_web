@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/services/iam-service/internal/iam"
 )
 
@@ -121,6 +122,29 @@ SET acting_organization_id = EXCLUDED.acting_organization_id,
 	}
 	if other.CurrentPolicyRevision != "registry-read:1" || other.Revoked {
 		t.Fatalf("cross-Organization status = %#v", other)
+	}
+}
+
+func TestPostgresTelemetryAuthorizationLoadsExactDeviceAndKeyFacts(t *testing.T) {
+	runtimeURL := requiredIAMPostgresEnv(t, "S1_IAM_DATABASE_URL")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := iam.OpenPostgresAuthorizationStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	facts, err := store.LookupTelemetryAuthorization(ctx, iam.TelemetryAuthorizationLookup{
+		SubjectIssuer:        postgresFixtureIssuer,
+		Subject:              "delegated",
+		ActingOrganizationID: postgresActingOrganizationID,
+		Targets:              []telemetryauth.Target{{DeviceID: "018f1e00-4000-7000-8000-000000000001", Keys: []string{"fan.speed", "zone.temperature"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !facts.Found || facts.PolicyRevision != "telemetry-access:1" || len(facts.RoleBindings) != 1 || len(facts.SiteBindings) != 1 || len(facts.ExplicitDenies) != 0 || len(facts.Devices) != 1 || len(facts.ScopeBindings) != 1 || len(facts.KeyBindings) != 2 {
+		t.Fatalf("Telemetry facts = %#v", facts)
 	}
 }
 

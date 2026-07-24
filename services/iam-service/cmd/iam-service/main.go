@@ -57,6 +57,8 @@ func main() {
 
 	policyRevision := envOr("IAM_POLICY_REVISION", "policy-unconfigured")
 	authorizationStore := iam.NewDenyAllAuthorizationStore(policyRevision)
+	var telemetryAuthorizationStore iam.TelemetryAuthorizationStore
+	var telemetryGrantStore iam.TelemetryGrantStore
 	var grantStatusStore iam.RegistryGrantStatusStore = iam.StaticRegistryGrantStatusStore{PolicyRevision: policyRevision}
 	databaseURL := strings.TrimSpace(os.Getenv("IAM_DATABASE_URL"))
 	fixtureEnabled := envEnabled("IAM_S1_AUTHORIZATION_FIXTURE")
@@ -74,6 +76,7 @@ func main() {
 		}
 		defer postgresStore.Close()
 		authorizationStore = postgresStore
+		telemetryAuthorizationStore = postgresStore
 		grantStatusStore = postgresStore
 		policyRevision = "database-managed"
 		logger.Info("iam_postgres_authorization_store_enabled")
@@ -85,19 +88,39 @@ func main() {
 		logger.Warn("iam_s1_authorization_fixture_enabled", "policy_revision", policyRevision)
 	}
 
+	telemetryGrantDatabaseURL := strings.TrimSpace(os.Getenv("IAM_TELEMETRY_GRANT_DATABASE_URL"))
+	if telemetryGrantDatabaseURL != "" {
+		openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
+		postgresGrantStore, err := iam.OpenPostgresTelemetryGrantStore(openContext, telemetryGrantDatabaseURL)
+		cancelOpen()
+		if err != nil {
+			logger.Error("iam_telemetry_grant_store_open_failed", "error_code", "IAM_TELEMETRY_GRANT_STORE_OPEN_FAILED")
+			os.Exit(1)
+		}
+		defer postgresGrantStore.Close()
+		telemetryGrantStore = postgresGrantStore
+		logger.Info("iam_telemetry_grant_store_enabled")
+	}
+
 	server := &http.Server{
 		Addr: address,
 		Handler: iam.NewHandler(iam.Config{
-			AllowedWorkloadSPIFFE: envOr("IAM_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
-			CoreWorkloadSPIFFE:    envOr("IAM_CORE_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-core-service"),
-			Audience:              envOr("IAM_AUDIENCE", "iam-service"),
-			Logger:                logger,
-			Observability:         telemetry,
-			AuthorizationStore:    authorizationStore,
-			RegistryGrantSigner:   registryGrantSigner,
-			RegistryGrantIssuer:   iamSPIFFEID,
-			RegistryGrantAudience: envOr("IAM_REGISTRY_GRANT_AUDIENCE", "platform-core-service"),
-			RegistryGrantStatus:   grantStatusStore,
+			AllowedWorkloadSPIFFE:       envOr("IAM_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
+			CoreWorkloadSPIFFE:          envOr("IAM_CORE_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-core-service"),
+			Audience:                    envOr("IAM_AUDIENCE", "iam-service"),
+			Logger:                      logger,
+			Observability:               telemetry,
+			AuthorizationStore:          authorizationStore,
+			RegistryGrantSigner:         registryGrantSigner,
+			RegistryGrantIssuer:         iamSPIFFEID,
+			RegistryGrantAudience:       envOr("IAM_REGISTRY_GRANT_AUDIENCE", "platform-core-service"),
+			RegistryGrantStatus:         grantStatusStore,
+			TelemetryAuthorizationStore: telemetryAuthorizationStore,
+			TelemetryGrantSigner:        registryGrantSigner,
+			TelemetryGrantIssuer:        iamSPIFFEID,
+			TelemetryGrantAudience:      envOr("IAM_TELEMETRY_GRANT_AUDIENCE", "telemetry-runtime-service"),
+			TelemetryRuntimeSPIFFE:      envOr("IAM_TELEMETRY_RUNTIME_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service"),
+			TelemetryGrantStore:         telemetryGrantStore,
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,

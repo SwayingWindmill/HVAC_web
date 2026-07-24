@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 )
 
 const iamRuntimeDatabaseRole = "s1_iam_runtime"
@@ -197,6 +198,9 @@ ORDER BY organization_id, role_key
 		if err != nil {
 			return nil, fmt.Errorf("validate IAM role binding actions: %w", err)
 		}
+		if len(binding.Actions) == 0 {
+			continue
+		}
 		binding.Status = FactStatusActive
 		bindings = append(bindings, binding)
 	}
@@ -276,6 +280,9 @@ ORDER BY acting_organization_id, owning_organization_id, site_id, action
 		}
 		parsedAction := registryauth.Action(action)
 		if !parsedAction.Valid() {
+			if telemetryauth.Action(action).Valid() {
+				continue
+			}
 			return nil, fmt.Errorf("validate IAM explicit deny action: unsupported action %q", action)
 		}
 		deny.Actions = []registryauth.Action{parsedAction}
@@ -292,10 +299,14 @@ func postgresRegistryActions(values []string) ([]registryauth.Action, error) {
 	actions := make([]registryauth.Action, 0, len(values))
 	for _, value := range values {
 		action := registryauth.Action(value)
-		if !action.Valid() {
-			return nil, fmt.Errorf("unsupported action %q", value)
+		if action.Valid() {
+			actions = append(actions, action)
+			continue
 		}
-		actions = append(actions, action)
+		if telemetryauth.Action(value).Valid() {
+			continue
+		}
+		return nil, fmt.Errorf("unsupported action %q", value)
 	}
 	return actions, nil
 }

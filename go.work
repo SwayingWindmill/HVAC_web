@@ -8,6 +8,7 @@ use (
 	./libs/registryauth
 	./libs/sessionevent
 	./libs/sessionstore
+	./libs/telemetryauth
 	./libs/testpki
 	./services/audit-ledger-service
 	./services/iam-service

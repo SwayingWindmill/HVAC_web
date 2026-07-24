@@ -1,0 +1,67 @@
+name: S2 IAM Exact Telemetry Authorization
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/s2-iam-authorization.yml'
+      - 'contracts/ownership/**'
+      - 'contracts/telemetry/s2-iam-authorization.v1.json'
+      - 'go.work'
+      - 'infra/s1-registry/postgres/init/006-s2-telemetry-authorization.sql'
+      - 'libs/telemetryauth/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'scripts/check-s0-release-evidence-assets.mjs'
+      - 'scripts/check-s2-iam-authorization.mjs'
+      - 'scripts/run-s1-registry-postgres-tests.mjs'
+      - 'scripts/run-s2-iam-postgres-tests.mjs'
+      - 'services/iam-service/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/s2-iam-authorization.yml'
+      - 'contracts/ownership/**'
+      - 'contracts/telemetry/s2-iam-authorization.v1.json'
+      - 'go.work'
+      - 'infra/s1-registry/postgres/init/006-s2-telemetry-authorization.sql'
+      - 'libs/telemetryauth/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'scripts/check-s0-release-evidence-assets.mjs'
+      - 'scripts/check-s2-iam-authorization.mjs'
+      - 'scripts/run-s1-registry-postgres-tests.mjs'
+      - 'scripts/run-s2-iam-postgres-tests.mjs'
+      - 'services/iam-service/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s2-iam-authorization-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+          cache: npm
+      - run: npm ci
+      - run: npm run s2:ticket-02
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: s2-ticket-02-iam-authorization-evidence
+          path: out/s2-ticket-02/iam-authorization-evidence.json
+          if-no-files-found: error
+          retention-days: 14

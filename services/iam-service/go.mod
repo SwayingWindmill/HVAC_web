@@ -7,6 +7,7 @@ require (
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/registryauth v0.0.0
+	github.com/quanlaihe/hvac-web/libs/telemetryauth v0.0.0
 	github.com/quanlaihe/hvac-web/libs/testpki v0.0.0
 )
 
@@ -23,5 +24,7 @@ replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identit
 replace github.com/quanlaihe/hvac-web/libs/observability => ../../libs/observability
 
 replace github.com/quanlaihe/hvac-web/libs/registryauth => ../../libs/registryauth
+
+replace github.com/quanlaihe/hvac-web/libs/telemetryauth => ../../libs/telemetryauth
 
 replace github.com/quanlaihe/hvac-web/libs/testpki => ../../libs/testpki

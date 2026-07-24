@@ -221,6 +221,7 @@ for (const access of dataRegistry.databaseAccess ?? []) {
 const requiredIdentities = new Map([
   ['iam:s1_iam_runtime', { migrationRole: 's1_iam_migrator' }],
   ['iam:s1_iam_reconciler', { migrationRole: 's1_iam_migrator', restrictedTo: ['principals', 'organization_memberships', 'role_bindings', 'site_bindings', 'explicit_denies', 'reconciliation_state', 'reconciliation_events', 'reconciliation_quarantine'] }],
+  ['iam:s2_iam_grant_runtime', { migrationRole: 's1_iam_migrator', accessMode: 'grant-state', restrictedTo: ['telemetry_grant_revocations', 'telemetry_grant_uses', 'telemetry_revocation_facts'] }],
   ['core_registry:s1_core_runtime', { migrationRole: 's1_core_migrator' }],
   ['core_registry:s1_core_service', { migrationRole: 's1_core_migrator', activationRole: 's1_core_runtime' }],
   ['core_registry:s1_migration_operator', { migrationRole: 's1_core_migrator', restrictedTo: ['organizations', 'sites', 'equipment', 'devices', 'legacy_resource_maps', 'migration_provenance', 'migration_quarantine'] }],
