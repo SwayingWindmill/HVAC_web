@@ -24,6 +24,33 @@ const (
 	telemetryTestOtherDevice   = "018f1e00-4000-7000-8000-000000000003"
 )
 
+func TestS2FixtureTelemetryAuthorizationSupportsBrowserSnapshotAndNondiscovery(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	store := NewS2FixtureTelemetryAuthorizationStore(telemetryTestIssuer)
+	allowed, err := evaluateTelemetryAuthorization(context.Background(), store, now, telemetryTestIssuer, "fixture-user", telemetryauth.DecisionRequest{
+		ActingOrganizationID: S2FixtureActingOrganization,
+		Action:               telemetryauth.ActionSnapshotRead,
+		Targets:              []telemetryauth.Target{{DeviceID: S2FixtureDevice, Keys: []string{"humidity", "temperature"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !allowed.Allowed || allowed.ReasonCode != telemetryauth.ReasonAllowExactScope || len(allowed.Targets) != 1 || allowed.Targets[0].DeviceID != S2FixtureDevice {
+		t.Fatalf("fixture allow decision = %#v", allowed)
+	}
+	denied, err := evaluateTelemetryAuthorization(context.Background(), store, now, telemetryTestIssuer, "fixture-user", telemetryauth.DecisionRequest{
+		ActingOrganizationID: S2FixtureActingOrganization,
+		Action:               telemetryauth.ActionSnapshotRead,
+		Targets:              []telemetryauth.Target{{DeviceID: "018f2e00-3000-7000-8000-000000000099"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if denied.Allowed || denied.ReasonCode != telemetryauth.ReasonResourceNotFound || len(denied.Targets) != 0 {
+		t.Fatalf("fixture nondiscovery decision = %#v", denied)
+	}
+}
+
 func TestTelemetryAuthorizationRequiresExactDeviceAndKeyScope(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	facts := telemetryFixtureFacts(now)

@@ -62,7 +62,8 @@ func main() {
 	var grantStatusStore iam.RegistryGrantStatusStore = iam.StaticRegistryGrantStatusStore{PolicyRevision: policyRevision}
 	databaseURL := strings.TrimSpace(os.Getenv("IAM_DATABASE_URL"))
 	fixtureEnabled := envEnabled("IAM_S1_AUTHORIZATION_FIXTURE")
-	if databaseURL != "" && fixtureEnabled {
+	telemetryFixtureEnabled := envEnabled("IAM_S2_AUTHORIZATION_FIXTURE")
+	if databaseURL != "" && (fixtureEnabled || telemetryFixtureEnabled) {
 		logger.Error("iam_authorization_store_configuration_conflict", "error_code", "IAM_AUTHORIZATION_STORE_CONFIGURATION_CONFLICT")
 		os.Exit(1)
 	}
@@ -86,6 +87,11 @@ func main() {
 		policyRevision = iam.S1FixturePolicyRevision
 		grantStatusStore = iam.StaticRegistryGrantStatusStore{PolicyRevision: policyRevision}
 		logger.Warn("iam_s1_authorization_fixture_enabled", "policy_revision", policyRevision)
+	}
+	if telemetryFixtureEnabled {
+		subjectIssuer := requiredEnv("IAM_EXTERNAL_SUBJECT_ISSUER")
+		telemetryAuthorizationStore = iam.NewS2FixtureTelemetryAuthorizationStore(subjectIssuer)
+		logger.Warn("iam_s2_authorization_fixture_enabled", "policy_revision", iam.S2FixturePolicyRevision)
 	}
 
 	telemetryGrantDatabaseURL := strings.TrimSpace(os.Getenv("IAM_TELEMETRY_GRANT_DATABASE_URL"))

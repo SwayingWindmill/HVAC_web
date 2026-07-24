@@ -1,0 +1,359 @@
+package gateway
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/sessionstore"
+	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
+	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/s2telemetryapi"
+)
+
+const (
+	telemetryTestOrganization = "018f2e00-1000-7000-8000-000000000001"
+	telemetryTestSite         = "018f2e00-2000-7000-8000-000000000001"
+	telemetryTestDeviceOne    = "018f2e00-3000-7000-8000-000000000001"
+	telemetryTestDeviceTwo    = "018f2e00-3000-7000-8000-000000000002"
+	telemetryTestPrincipal    = "018f2e00-6000-7000-8000-000000000001"
+	telemetryTestSPIFFE       = "spiffe://hvac.local/platform-gateway"
+	telemetryTestPolicy       = "telemetry-policy-7"
+	telemetryTestCSRF         = "csrf-fixture"
+)
+
+func TestTelemetryGatewaySingleAndBatchPreserveOrder(t *testing.T) {
+	fixture := newTelemetryGatewayFixture(t, "")
+
+	single := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+telemetryTestDeviceOne+"/observation-snapshot?keys=humidity,temperature", nil)
+	fixture.authenticate(single)
+	singleRecorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(singleRecorder, single)
+	if singleRecorder.Code != http.StatusOK {
+		t.Fatalf("single status=%d body=%s", singleRecorder.Code, singleRecorder.Body.String())
+	}
+	var snapshot s2telemetryapi.DeviceObservationSnapshot
+	if err := json.NewDecoder(singleRecorder.Body).Decode(&snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Values) != 2 || snapshot.Values[0].Missing == nil || snapshot.Values[1].Missing == nil || snapshot.Values[0].Missing.Key != "humidity" || snapshot.Values[1].Missing.Key != "temperature" {
+		t.Fatalf("single key order drifted: %#v", snapshot.Values)
+	}
+
+	batchInput := s2telemetryapi.BatchGetObservationSnapshotsRequest{Requests: []s2telemetryapi.ObservationSnapshotTarget{
+		{RequestId: "second", DeviceId: telemetryTestDeviceTwo, Keys: []s2telemetryapi.TelemetryKey{"supplyTemp"}},
+		{RequestId: "first", DeviceId: telemetryTestDeviceOne, Keys: []s2telemetryapi.TelemetryKey{}},
+	}}
+	body, _ := json.Marshal(batchInput)
+	batch := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, bytes.NewReader(body))
+	fixture.authenticate(batch)
+	batch.Header.Set("Origin", "https://web.example.test")
+	batch.Header.Set("X-CSRF-Token", telemetryTestCSRF)
+	batchRecorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(batchRecorder, batch)
+	if batchRecorder.Code != http.StatusOK {
+		t.Fatalf("batch status=%d body=%s", batchRecorder.Code, batchRecorder.Body.String())
+	}
+	var output s2telemetryapi.BatchGetObservationSnapshotsResponse
+	if err := json.NewDecoder(batchRecorder.Body).Decode(&output); err != nil {
+		t.Fatal(err)
+	}
+	if len(output.Items) != 2 || output.Items[0].Success == nil || output.Items[1].Success == nil || output.Items[0].Success.RequestId != "second" || output.Items[1].Success.RequestId != "first" {
+		t.Fatalf("batch order drifted: %#v", output.Items)
+	}
+	if fixture.iamCalls.Load() != 2 || fixture.runtimeCalls.Load() != 2 {
+		t.Fatalf("upstream calls IAM=%d runtime=%d", fixture.iamCalls.Load(), fixture.runtimeCalls.Load())
+	}
+}
+
+func TestTelemetryGatewayRejectsCSRFAndForgedIdentityBeforeUpstream(t *testing.T) {
+	fixture := newTelemetryGatewayFixture(t, "")
+	body := `{"requests":[{"requestId":"one","deviceId":"` + telemetryTestDeviceOne + `","keys":[]}]}`
+
+	missingCSRF := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
+	fixture.authenticate(missingCSRF)
+	missingCSRF.Header.Set("Origin", "https://web.example.test")
+	missingRecorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(missingRecorder, missingCSRF)
+	assertTelemetryProblem(t, missingRecorder, http.StatusForbidden, "CSRF_REQUIRED")
+
+	forged := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+telemetryTestDeviceOne+"/observation-snapshot", nil)
+	fixture.authenticate(forged)
+	forged.Header.Set("X-Admin", "true")
+	forgedRecorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(forgedRecorder, forged)
+	assertTelemetryProblem(t, forgedRecorder, http.StatusBadRequest, "FORGED_IDENTITY_HEADER")
+
+	if fixture.iamCalls.Load() != 0 || fixture.runtimeCalls.Load() != 0 {
+		t.Fatalf("rejected requests reached upstream IAM=%d runtime=%d", fixture.iamCalls.Load(), fixture.runtimeCalls.Load())
+	}
+}
+
+func TestTelemetryGatewayWorkloadMTLSUsesExactIAMScopeWithoutCSRF(t *testing.T) {
+	fixture := newTelemetryGatewayFixture(t, "")
+	body := `{"requests":[{"requestId":"workload-one","deviceId":"` + telemetryTestDeviceOne + `","keys":["temperature"]}]}`
+
+	request := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
+	request.TLS = verifiedWorkloadTLSState(t, "spiffe://hvac.local/automation-service")
+	request.Header.Set("X-Organization-ID", telemetryTestOrganization)
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("workload batch status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if fixture.iamCalls.Load() != 1 || fixture.runtimeCalls.Load() != 1 {
+		t.Fatalf("workload upstream calls IAM=%d runtime=%d", fixture.iamCalls.Load(), fixture.runtimeCalls.Load())
+	}
+
+	unverified := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
+	unverified.TLS = &tls.ConnectionState{PeerCertificates: verifiedWorkloadTLSState(t, "spiffe://hvac.local/automation-service").VerifiedChains[0]}
+	unverified.Header.Set("X-Organization-ID", telemetryTestOrganization)
+	unverifiedRecorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(unverifiedRecorder, unverified)
+	assertTelemetryProblem(t, unverifiedRecorder, http.StatusBadRequest, "FORGED_IDENTITY_HEADER")
+
+	forgedRole := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
+	forgedRole.TLS = verifiedWorkloadTLSState(t, "spiffe://hvac.local/automation-service")
+	forgedRole.Header.Set("X-Organization-ID", telemetryTestOrganization)
+	forgedRole.Header.Set("X-Roles", "admin")
+	forgedRoleRecorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(forgedRoleRecorder, forgedRole)
+	assertTelemetryProblem(t, forgedRoleRecorder, http.StatusBadRequest, "FORGED_IDENTITY_HEADER")
+
+	if fixture.iamCalls.Load() != 1 || fixture.runtimeCalls.Load() != 1 {
+		t.Fatalf("rejected workload requests reached upstream IAM=%d runtime=%d", fixture.iamCalls.Load(), fixture.runtimeCalls.Load())
+	}
+}
+
+func TestTelemetryGatewayIAMUnavailableIsStableAndDoesNotReachRuntime(t *testing.T) {
+	fixture := newTelemetryGatewayFixture(t, "")
+	fixture.iamHTTPClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		fixture.iamCalls.Add(1)
+		return nil, errors.New("iam unavailable")
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+telemetryTestDeviceOne+"/observation-snapshot", nil)
+	fixture.authenticate(request)
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	problem := assertTelemetryProblem(t, recorder, http.StatusServiceUnavailable, "TELEMETRY_AUTHORIZATION_UNAVAILABLE")
+	if !problem.Retryable || fixture.runtimeCalls.Load() != 0 {
+		t.Fatalf("IAM failure boundary drifted: retryable=%t runtime=%d", problem.Retryable, fixture.runtimeCalls.Load())
+	}
+}
+
+func TestTelemetryGatewayNondiscoveryLimitsAndTimeout(t *testing.T) {
+	denied := newTelemetryGatewayFixture(t, telemetryauth.ReasonResourceNotFound)
+	problems := make([]s2telemetryapi.ProblemDetails, 0, 2)
+	for _, deviceID := range []string{telemetryTestDeviceOne, telemetryTestDeviceTwo} {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/observation-snapshot", nil)
+		denied.authenticate(request)
+		recorder := httptest.NewRecorder()
+		denied.handler.ServeHTTP(recorder, request)
+		problems = append(problems, assertTelemetryProblem(t, recorder, http.StatusNotFound, "RESOURCE_NOT_FOUND"))
+	}
+	if problems[0].Title != problems[1].Title || problems[0].Detail != problems[1].Detail || problems[0].Retryable != problems[1].Retryable || denied.runtimeCalls.Load() != 0 {
+		t.Fatalf("nondiscovery boundary drifted: %#v %#v runtime=%d", problems[0], problems[1], denied.runtimeCalls.Load())
+	}
+
+	fixture := newTelemetryGatewayFixture(t, "")
+	keys := make([]string, telemetryauth.MaximumKeysPerTarget+1)
+	for index := range keys {
+		keys[index] = "key" + string(rune('a'+index%26)) + strings.Repeat("x", index/26)
+	}
+	limit := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+telemetryTestDeviceOne+"/observation-snapshot?keys="+strings.Join(keys, ","), nil)
+	fixture.authenticate(limit)
+	limitRecorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(limitRecorder, limit)
+	assertTelemetryProblem(t, limitRecorder, http.StatusRequestEntityTooLarge, "TELEMETRY_BATCH_LIMIT_EXCEEDED")
+	if fixture.iamCalls.Load() != 0 {
+		t.Fatal("limit failure reached IAM")
+	}
+
+	fixture.runtimeHTTPClient.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		fixture.runtimeCalls.Add(1)
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	})
+	fixture.handler.telemetry.timeout = 5 * time.Millisecond
+	timeout := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+telemetryTestDeviceOne+"/observation-snapshot", nil)
+	fixture.authenticate(timeout)
+	timeoutRecorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(timeoutRecorder, timeout)
+	problem := assertTelemetryProblem(t, timeoutRecorder, http.StatusGatewayTimeout, "TELEMETRY_TIMEOUT")
+	if !problem.Retryable {
+		t.Fatal("timeout must be retryable")
+	}
+}
+
+type telemetryGatewayFixture struct {
+	handler           *handler
+	sessionID         string
+	iamCalls          atomic.Int32
+	runtimeCalls      atomic.Int32
+	iamHTTPClient     *http.Client
+	runtimeHTTPClient *http.Client
+}
+
+func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCode) *telemetryGatewayFixture {
+	t.Helper()
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	gatewaySigner, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := sessionstore.NewMemoryStore()
+	fixture := &telemetryGatewayFixture{}
+	fixture.runtimeHTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		fixture.runtimeCalls.Add(1)
+		for _, header := range []string{"Cookie", "X-CSRF-Token", "X-Admin", "X-Principal", "X-Organization-ID"} {
+			if request.Header.Get(header) != "" {
+				t.Fatalf("browser authority leaked to runtime header %s", header)
+			}
+		}
+		if !strings.HasPrefix(request.Header.Get("Authorization"), "Bearer ") {
+			t.Fatal("runtime request omitted delegated authorization")
+		}
+		if request.Method == http.MethodGet {
+			keys := append([]string(nil), request.URL.Query()["key"]...)
+			return telemetryJSONResponse(http.StatusOK, telemetrySnapshot(telemetryTestDeviceOne, keys, now)), nil
+		}
+		var input s2telemetryapi.BatchGetObservationSnapshotsRequest
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+			t.Fatal(err)
+		}
+		output := s2telemetryapi.BatchGetObservationSnapshotsResponse{SchemaVersion: 1, Items: make([]s2telemetryapi.BatchObservationResult, 0, len(input.Requests))}
+		for _, item := range input.Requests {
+			keys := make([]string, len(item.Keys))
+			for index, key := range item.Keys {
+				keys[index] = string(key)
+			}
+			output.Items = append(output.Items, s2telemetryapi.BatchObservationResult{Success: &s2telemetryapi.BatchObservationSuccess{RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "OK", Snapshot: telemetrySnapshot(string(item.DeviceId), keys, now)}})
+		}
+		return telemetryJSONResponse(http.StatusOK, output), nil
+	})}
+
+	iamClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		fixture.iamCalls.Add(1)
+		for _, header := range []string{"Cookie", "X-CSRF-Token", "X-Admin", "X-Principal", "X-Organization-ID"} {
+			if request.Header.Get(header) != "" {
+				t.Fatalf("browser authority leaked to IAM header %s", header)
+			}
+		}
+		parent, err := identitycontext.VerifyDelegation(&gatewaySigner.PublicKey, request.Header.Get("X-Delegation-Grant"))
+		if err != nil {
+			t.Fatalf("parent delegation invalid: %v", err)
+		}
+		var input telemetryauth.DecisionRequest
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+			t.Fatal(err)
+		}
+		canonical, err := telemetryauth.CanonicalTargets(input.Targets)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision := telemetryauth.Decision{PrincipalID: telemetryTestPrincipal, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, ActingOrganizationID: parent.ActingOrganizationID, Action: input.Action, PolicyRevision: telemetryTestPolicy, DecidedAt: now.Format(time.RFC3339Nano), Targets: []telemetryauth.AuthorizedTarget{}}
+		if denyReason != "" {
+			decision.ReasonCode = denyReason
+			return telemetryJSONResponse(http.StatusOK, telemetryauth.DecisionResponse{Decision: decision}), nil
+		}
+		decision.Allowed = true
+		decision.ReasonCode = telemetryauth.ReasonAllowExactScope
+		decision.ScopeDigest, _ = telemetryauth.ScopeDigest(input.Action, input.ActingOrganizationID, canonical)
+		keyCount := 0
+		for _, target := range canonical {
+			keyCount += len(target.Keys)
+			decision.Targets = append(decision.Targets, telemetryauth.AuthorizedTarget{DeviceID: target.DeviceID, OwningOrganizationID: telemetryTestOrganization, SiteID: telemetryTestSite, Keys: target.Keys})
+		}
+		claims := telemetryauth.GrantClaims{Issuer: "spiffe://hvac.local/iam-service", Presenter: telemetryTestSPIFFE, Audience: "telemetry-runtime-service", PrincipalID: telemetryTestPrincipal, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, ActingOrganizationID: parent.ActingOrganizationID, ActorChain: []telemetryauth.Actor{{Service: "platform-gateway", SPIFFEID: telemetryTestSPIFFE}}, Action: input.Action, ScopeDigest: decision.ScopeDigest, TargetCount: len(canonical), KeyCount: keyCount, PolicyRevision: telemetryTestPolicy, SessionID: parent.SessionID, ParentTokenID: parent.TokenID, RequestID: request.Header.Get("X-Request-ID"), TraceID: traceIDFromTraceparent(request.Header.Get("Traceparent")), Route: telemetryPublicRoute(input.Action), IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "grant-id"}
+		return telemetryJSONResponse(http.StatusOK, telemetryauth.DecisionResponse{Decision: decision, DelegationGrant: unsignedTelemetryGrant(claims)}), nil
+	})}
+	fixture.iamHTTPClient = iamClient
+
+	configured := NewHandler(Config{Now: func() time.Time { return now }, Identity: &IdentityConfig{OIDCIssuer: "https://issuer.example.test", OIDCClientID: "client", OIDCRedirectURI: "https://web.example.test/api/v1/auth/callback", PublicOrigin: "https://web.example.test", IAMURL: "https://iam.example.test", IAMAudience: "iam-service", ExecutingWorkloadSPIFFE: telemetryTestSPIFFE, PolicyRevision: "identity-policy-1", DelegationSigner: gatewaySigner, TokenEncryptionKey: make([]byte, 32), SessionStore: store, SessionTTL: time.Hour, DelegationTTL: 30 * time.Second, IAMHTTPClient: iamClient}, Telemetry: &TelemetryConfig{RuntimeBaseURL: "https://telemetry.example.test", RuntimeHTTPClient: fixture.runtimeHTTPClient, RuntimeAudience: "telemetry-runtime-service", Timeout: time.Second}}).(*handler)
+	fixture.handler = configured
+	csrfCiphertext, err := configured.identity.encryptBytes([]byte(telemetryTestCSRF))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.CreateSession(context.Background(), sessionstore.Session{ID: "session-id", Principal: identitycontext.UserPrincipal{Subject: "fixture-user", Issuer: "https://issuer.example.test", Roles: []string{"operator"}}, ActingOrganizationID: telemetryTestOrganization, CSRFTokenCiphertext: csrfCiphertext, ExpiresAt: now.Add(time.Hour)}, sessionstore.MutationContext{Action: "SESSION_CREATED", Result: "SUCCEEDED", PolicyRevision: "identity-policy-1", CorrelationID: "fixture", TraceID: strings.Repeat("a", 32), Traceparent: "00-" + strings.Repeat("a", 32) + "-" + strings.Repeat("b", 16) + "-01", ExecutingService: "platform-gateway", ExecutingSPIFFEID: telemetryTestSPIFFE, OccurredAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.sessionID = created.ID
+	return fixture
+}
+
+func (fixture *telemetryGatewayFixture) authenticate(request *http.Request) {
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: fixture.sessionID})
+}
+
+func telemetrySnapshot(deviceID string, keys []string, now time.Time) s2telemetryapi.DeviceObservationSnapshot {
+	state := s2telemetryapi.DevicePresenceStateOnline
+	policy := s2telemetryapi.PolicyRevision(7)
+	display := s2telemetryapi.DeviceDisplayStateOnline
+	values := make([]s2telemetryapi.TelemetryKeyState, 0, len(keys))
+	for _, key := range keys {
+		values = append(values, s2telemetryapi.TelemetryKeyState{Missing: &s2telemetryapi.TelemetryMissingState{Key: s2telemetryapi.TelemetryKey(key), State: "MISSING", Freshness: "MISSING", MissingReason: "NEVER_OBSERVED", PolicyRevision: &policy}})
+	}
+	instant := s2telemetryapi.Instant(now.Format(time.RFC3339Nano))
+	return s2telemetryapi.DeviceObservationSnapshot{SchemaVersion: 1, DeviceId: s2telemetryapi.UUIDv7(deviceID), OwningOrganizationId: telemetryTestOrganization, SiteId: telemetryTestSite, BusinessRevision: 9, EvaluatedAt: instant, EvaluationAvailability: s2telemetryapi.EvaluationAvailabilityAvailable, AvailabilityReasons: []s2telemetryapi.AvailabilityReasonCode{}, Presence: s2telemetryapi.PresenceSnapshot{Applicability: s2telemetryapi.PresenceApplicabilityApplicable, CurrentState: &state, LastSeenAt: &instant, PolicyRevision: &policy}, TelemetryReadiness: s2telemetryapi.TelemetryReadinessIncomplete, DisplayState: &display, Values: values}
+}
+
+func verifiedWorkloadTLSState(t *testing.T, spiffeID string) *tls.ConnectionState {
+	t.Helper()
+	identity, err := url.Parse(spiffeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := &x509.Certificate{URIs: []*url.URL{identity}}
+	return &tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}, VerifiedChains: [][]*x509.Certificate{{leaf}}}
+}
+
+func unsignedTelemetryGrant(claims telemetryauth.GrantClaims) string {
+	claims.Version = telemetryauth.GrantVersion
+	payload, _ := json.Marshal(claims)
+	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString([]byte("signature"))
+}
+
+func telemetryJSONResponse(status int, value any) *http.Response {
+	body, _ := json.Marshal(value)
+	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(body))}
+}
+
+func traceIDFromTraceparent(value string) string {
+	parts := strings.Split(value, "-")
+	if len(parts) == 4 {
+		return parts[1]
+	}
+	return ""
+}
+
+func assertTelemetryProblem(t *testing.T, recorder *httptest.ResponseRecorder, status int, code string) s2telemetryapi.ProblemDetails {
+	t.Helper()
+	if recorder.Code != status {
+		t.Fatalf("status=%d want=%d body=%s", recorder.Code, status, recorder.Body.String())
+	}
+	var problem s2telemetryapi.ProblemDetails
+	if err := json.NewDecoder(recorder.Body).Decode(&problem); err != nil {
+		t.Fatal(err)
+	}
+	if problem.Status != status || problem.Code != code || problem.TraceId == "" || problem.Instance == "" {
+		t.Fatalf("unexpected Problem: %#v", problem)
+	}
+	return problem
+}

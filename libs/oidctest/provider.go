@@ -222,6 +222,8 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 	organizationID := "org-fixture-01"
 
 	switch code.LoginHint {
+	case "s2-telemetry":
+		organizationID = "018f2e00-1000-7000-8000-000000000003"
 	case "admin":
 		subject = "fixture-admin"
 		name = "Fixture Admin"

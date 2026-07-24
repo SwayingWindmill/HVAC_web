@@ -54,6 +54,7 @@ type Config struct {
 	RouteAudit    ownershipregistry.AuditSink
 	Legacy        *LegacyConfig
 	Registry      *RegistryConfig
+	Telemetry     *TelemetryConfig
 	Observability *observability.Runtime
 }
 
@@ -66,6 +67,7 @@ type handler struct {
 	routeAudit    ownershipregistry.AuditSink
 	legacy        *legacyController
 	registry      *registryController
+	telemetry     *telemetryController
 	observability *observability.Runtime
 }
 
@@ -101,6 +103,7 @@ func NewHandler(config Config) http.Handler {
 		routeAudit:    routeAudit,
 		legacy:        newLegacyController(config.Legacy),
 		registry:      newRegistryController(config.Registry),
+		telemetry:     newTelemetryController(config.Telemetry),
 		observability: telemetry,
 	}
 }
@@ -157,10 +160,14 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant"} {
-		if request.Header.Get(header) != "" {
-			writeProblem(writer, request, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Caller-supplied identity headers are not accepted at the public edge.", false, nil)
-			return
+		if request.Header.Get(header) == "" {
+			continue
 		}
+		if header == "X-Organization-ID" && isVerifiedTelemetryWorkloadRequest(request) {
+			continue
+		}
+		writeProblem(writer, request, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Caller-supplied identity headers are not accepted at the public edge.", false, nil)
+		return
 	}
 
 	if h.routeManager != nil {
@@ -182,6 +189,11 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			h.GetPlatformStatus(writer, request)
 			return
 		}
+	}
+
+	if telemetryRoute, deviceID, matches := matchPublicTelemetryRoute(request.URL.Path); matches {
+		dispatchTelemetryRoute(h, writer, request, telemetryRoute, deviceID)
+		return
 	}
 
 	switch request.URL.Path {
@@ -274,15 +286,27 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 	snapshot := h.routeManager.Current()
 	decision, err := snapshot.Resolve(request.Method, request.URL.Path, "")
 	var session bffSession
+	var workloadCaller telemetryCaller
 	if errors.Is(err, ownershipregistry.ErrCohortKey) {
-		resolved, failure := h.identitySession(request)
-		if failure != nil {
-			writeIdentityFailure(writer, request, *failure)
-			return request, false
+		if isVerifiedTelemetryWorkloadRequest(request) {
+			resolved, failure := h.telemetryWorkloadCaller(request)
+			if failure != nil {
+				h.writeTelemetryFailure(writer, request, *failure)
+				return request, false
+			}
+			workloadCaller = resolved
+			businessKey := workloadCaller.actingOrganizationID + "\x00" + workloadCaller.principal.Subject
+			decision, err = snapshot.Resolve(request.Method, request.URL.Path, businessKey)
+		} else {
+			resolved, failure := h.identitySession(request)
+			if failure != nil {
+				writeIdentityFailure(writer, request, *failure)
+				return request, false
+			}
+			session = resolved
+			businessKey := session.ActingOrganizationID + "\x00" + session.Principal.Subject
+			decision, err = snapshot.Resolve(request.Method, request.URL.Path, businessKey)
 		}
-		session = resolved
-		businessKey := session.ActingOrganizationID + "\x00" + session.Principal.Subject
-		decision, err = snapshot.Resolve(request.Method, request.URL.Path, businessKey)
 	}
 	if errors.Is(err, ownershipregistry.ErrRouteMissing) {
 		methods := snapshot.AllowedMethods(request.URL.Path)
@@ -298,7 +322,7 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 		writeProblem(writer, request, http.StatusServiceUnavailable, "ROUTE_OWNERSHIP_INVALID", "Route ownership invalid", "The applied route ownership policy could not select one owner.", true, nil)
 		return request, false
 	}
-	if session.ID == "" {
+	if session.ID == "" && workloadCaller.contextID == "" {
 		if _, _, registryRoute := matchPublicRegistryRoute(request.URL.Path); registryRoute {
 			resolved, failure := h.identitySession(request)
 			if failure != nil {
@@ -306,6 +330,22 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 				return request, false
 			}
 			session = resolved
+		} else if _, _, telemetryRoute := matchPublicTelemetryRoute(request.URL.Path); telemetryRoute {
+			if isVerifiedTelemetryWorkloadRequest(request) {
+				resolved, failure := h.telemetryWorkloadCaller(request)
+				if failure != nil {
+					h.writeTelemetryFailure(writer, request, *failure)
+					return request, false
+				}
+				workloadCaller = resolved
+			} else if _, cookieErr := request.Cookie(sessionCookieName); cookieErr == nil {
+				resolved, failure := h.identitySession(request)
+				if failure != nil {
+					writeIdentityFailure(writer, request, *failure)
+					return request, false
+				}
+				session = resolved
+			}
 		}
 	}
 
@@ -339,6 +379,10 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 		auditRecord.OrganizationID = session.ActingOrganizationID
 		auditRecord.InitiatingSubject = session.Principal.Subject
 		auditRecord.InitiatingIssuer = session.Principal.Issuer
+	} else if workloadCaller.contextID != "" {
+		auditRecord.OrganizationID = workloadCaller.actingOrganizationID
+		auditRecord.InitiatingSubject = workloadCaller.principal.Subject
+		auditRecord.InitiatingIssuer = workloadCaller.principal.Issuer
 	}
 	if err := h.routeAudit.Record(request.Context(), auditRecord); err != nil {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "ROUTE_AUDIT_FAILED", "Route audit unavailable", "The route decision could not be recorded before execution.", true, nil)
@@ -347,6 +391,8 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 	ctx := context.WithValue(request.Context(), routeDecisionContextKey, decision)
 	if session.ID != "" {
 		ctx = context.WithValue(ctx, routeSessionContextKey, session)
+	} else if workloadCaller.contextID != "" {
+		ctx = context.WithValue(ctx, telemetryCallerContextKey, workloadCaller)
 	}
 	return request.WithContext(ctx), true
 }
@@ -552,6 +598,9 @@ func safeLogPath(path string) string {
 	default:
 		if registryRoute, _, matches := matchPublicRegistryRoute(path); matches {
 			return registryRoute.template
+		}
+		if telemetryRoute, _, matches := matchPublicTelemetryRoute(path); matches {
+			return telemetryRoute.template
 		}
 		if _, matches := matchSessionAuditPath(path); matches {
 			return platformapi.GetSessionAuditEventPathTemplate

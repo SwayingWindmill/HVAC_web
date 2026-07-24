@@ -9,6 +9,7 @@
   ],
   "outputs": [
     "services/telemetry-runtime-service/pkg/telemetryapi/api.gen.go",
+    "services/platform-gateway/pkg/s2telemetryapi/api.gen.go",
     "apps/hvac-web/src/api/generated/s2Telemetry.gen.ts"
   ]
 }

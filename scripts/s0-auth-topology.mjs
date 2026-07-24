@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import https from 'node:https';
 import tls from 'node:tls';
 
 const root = resolve(process.cwd());
@@ -60,6 +61,116 @@ async function waitForTLS(port, label, child, options = {}) {
   throw new Error(`${label} did not become ready on TLS port ${port}`);
 }
 
+function telemetrySnapshot(deviceId, keys) {
+  const evaluatedAt = '2026-07-24T12:00:00Z';
+  return {
+    schemaVersion: 1,
+    deviceId,
+    owningOrganizationId: '018f2e00-1000-7000-8000-000000000001',
+    siteId: '018f2e00-2000-7000-8000-000000000001',
+    businessRevision: 9,
+    evaluatedAt,
+    evaluationAvailability: 'AVAILABLE',
+    availabilityReasons: [],
+    presence: {
+      applicability: 'APPLICABLE',
+      currentState: 'ONLINE',
+      lastSeenAt: evaluatedAt,
+      policyRevision: 7,
+    },
+    telemetryReadiness: keys.length === 0 ? 'INCOMPLETE' : 'CURRENT',
+    displayState: 'ONLINE',
+    values: keys.map((key, index) => ({
+      state: 'PRESENT',
+      key,
+      value: index === 0 ? 21.5 : 48,
+      valueType: 'NUMBER',
+      sampledAt: evaluatedAt,
+      receivedAt: evaluatedAt,
+      freshness: 'FRESH',
+      quality: 'GOOD',
+      qualityReasons: [],
+      policyRevision: 7,
+    })),
+  };
+}
+
+async function startTelemetryRuntimeFixture({ port, certPath, keyPath, caPath }) {
+  const [cert, key, ca] = await Promise.all([readFile(certPath), readFile(keyPath), readFile(caPath)]);
+  const evidence = {
+    requests: 0,
+    singleRequests: 0,
+    batchRequests: 0,
+    browserAuthorityHeaders: 0,
+    missingAuthorization: 0,
+  };
+  const server = https.createServer({
+    cert,
+    key,
+    ca,
+    requestCert: true,
+    rejectUnauthorized: true,
+    minVersion: 'TLSv1.3',
+  }, async (request, response) => {
+    evidence.requests += 1;
+    const peer = request.socket.getPeerCertificate();
+    if (!request.socket.authorized || !String(peer.subjectaltname ?? '').includes('URI:spiffe://hvac.local/platform-gateway')) {
+      response.writeHead(403, { 'Content-Type': 'application/problem+json' });
+      response.end(JSON.stringify({ code: 'TELEMETRY_WORKLOAD_IDENTITY_INVALID', status: 403, detail: 'Invalid workload identity.', retryable: false }));
+      return;
+    }
+    for (const header of ['cookie', 'x-csrf-token', 'x-admin', 'x-principal', 'x-organization-id', 'x-site-id', 'x-roles', 'x-scopes']) {
+      if (request.headers[header]) evidence.browserAuthorityHeaders += 1;
+    }
+    if (!String(request.headers.authorization ?? '').startsWith('Bearer ')) {
+      evidence.missingAuthorization += 1;
+      response.writeHead(503, { 'Content-Type': 'application/problem+json' });
+      response.end(JSON.stringify({ code: 'TELEMETRY_AUTHORIZATION_UNAVAILABLE', status: 503, detail: 'Delegation grant missing.', retryable: true }));
+      return;
+    }
+    const url = new URL(request.url, `https://127.0.0.1:${port}`);
+    const singleMatch = /^\/internal\/v1\/devices\/([^/]+)\/observation-snapshot$/.exec(url.pathname);
+    if (request.method === 'GET' && singleMatch) {
+      evidence.singleRequests += 1;
+      const deviceId = decodeURIComponent(singleMatch[1]);
+      const keys = url.searchParams.getAll('key');
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(telemetrySnapshot(deviceId, keys)));
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/internal/v1/telemetry/observation-snapshots:batchGet') {
+      evidence.batchRequests += 1;
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({
+        schemaVersion: 1,
+        items: input.requests.map((item) => ({
+          status: 'OK',
+          requestId: item.requestId,
+          deviceId: item.deviceId,
+          snapshot: telemetrySnapshot(item.deviceId, item.keys ?? []),
+        })),
+      }));
+      return;
+    }
+    response.writeHead(404, { 'Content-Type': 'application/problem+json' });
+    response.end(JSON.stringify({ code: 'RESOURCE_NOT_FOUND', status: 404, detail: 'Resource not found.', retryable: false }));
+  });
+  await new Promise((resolveListen, rejectListen) => {
+    server.once('error', rejectListen);
+    server.listen(port, '127.0.0.1', resolveListen);
+  });
+  return {
+    evidence,
+    url: `https://127.0.0.1:${port}`,
+    async stop() {
+      await new Promise((resolveClose) => server.close(resolveClose));
+    },
+  };
+}
+
 export async function stopProcess(child) {
   if (!child || processExited(child)) return;
   if (process.platform === 'win32') {
@@ -86,6 +197,8 @@ export async function startS0AuthTopology(options = {}) {
   const iamPort = Number(options.iamPort ?? process.env.S0_AUTH_IAM_PORT ?? 18444);
   const gatewayPort = Number(options.gatewayPort ?? process.env.S0_AUTH_GATEWAY_PORT ?? 18080);
   const webPort = Number(options.webPort ?? process.env.S0_AUTH_WEB_PORT ?? 5179);
+  const telemetryEnabled = options.telemetry === true;
+  const telemetryPort = Number(options.telemetryPort ?? process.env.S2_GATEWAY_TELEMETRY_PORT ?? 18446);
   const instanceRoot = join(tmpdir(), `hvac-s0-auth-${process.pid}-${randomBytes(5).toString('hex')}`);
   const pkiDir = join(instanceRoot, 'pki');
   const goCacheDir = process.env.GOCACHE || join(tmpdir(), 'hvac-go-build-cache');
@@ -115,6 +228,7 @@ export async function startS0AuthTopology(options = {}) {
   const webURL = `https://127.0.0.1:${webPort}`;
   const redirectURI = `${webURL}/api/v1/auth/callback`;
   const processes = [];
+  let telemetryFixture;
 
   try {
     const oidc = spawnService('OIDC fixture', goBinary, ['run', './services/oidc-test-provider/cmd/oidc-test-provider'], {
@@ -137,6 +251,10 @@ export async function startS0AuthTopology(options = {}) {
       IAM_CLIENT_CA: paths.ca,
       IAM_ALLOWED_WORKLOAD_SPIFFE: 'spiffe://hvac.local/platform-gateway',
       IAM_AUDIENCE: 'iam-service',
+      ...(telemetryEnabled ? {
+        IAM_S2_AUTHORIZATION_FIXTURE: 'true',
+        IAM_EXTERNAL_SUBJECT_ISSUER: oidcURL,
+      } : {}),
     });
     processes.push(iam);
     const [clientCert, clientKey, ca] = await Promise.all([
@@ -149,6 +267,15 @@ export async function startS0AuthTopology(options = {}) {
       servername: 'localhost',
       rejectUnauthorized: true,
     });
+
+    if (telemetryEnabled) {
+      telemetryFixture = await startTelemetryRuntimeFixture({
+        port: telemetryPort,
+        certPath: paths.serverCert,
+        keyPath: paths.serverKey,
+        caPath: paths.ca,
+      });
+    }
 
     const gateway = spawnService('Platform Gateway', goBinary, ['run', './services/platform-gateway/cmd/platform-gateway'], {
       GOCACHE: goCacheDir,
@@ -168,7 +295,13 @@ export async function startS0AuthTopology(options = {}) {
       GATEWAY_WORKLOAD_SPIFFE: 'spiffe://hvac.local/platform-gateway',
       IDENTITY_POLICY_REVISION: 'policy-v1',
       SESSION_TOKEN_KEY: randomBytes(32).toString('base64url'),
-      ROUTE_OWNERSHIP_REGISTRY: resolve(root, 'contracts/ownership/route-ownership.v1.json'),
+      ...(options.routeRegistry === false ? { S2_ALLOW_UNROUTED_GATEWAY_FIXTURE: 'true' } : { ROUTE_OWNERSHIP_REGISTRY: resolve(root, 'contracts/ownership/route-ownership.v1.json') }),
+      ...(telemetryEnabled ? {
+        TELEMETRY_RUNTIME_URL: telemetryFixture.url,
+        TELEMETRY_RUNTIME_SERVER_CA: paths.ca,
+        TELEMETRY_RUNTIME_SERVER_NAME: 'localhost',
+        TELEMETRY_RUNTIME_AUDIENCE: 'telemetry-runtime-service',
+      } : {}),
       S0_ALLOW_MEMORY_ROUTE_AUDIT: 'true',
       S0_ALLOW_NO_LEGACY: 'true',
       S1_ALLOW_NO_CORE: 'true',
@@ -206,13 +339,17 @@ export async function startS0AuthTopology(options = {}) {
       redirectURI,
       pkiDir,
       processes,
+      telemetryURL: telemetryFixture?.url ?? null,
+      telemetryEvidence: telemetryFixture?.evidence ?? null,
       async stop() {
         for (const child of [...processes].reverse()) await stopProcess(child);
+        await telemetryFixture?.stop();
         await rm(instanceRoot, { recursive: true, force: true });
       },
     };
   } catch (error) {
     for (const child of [...processes].reverse()) await stopProcess(child);
+    await telemetryFixture?.stop();
     await rm(instanceRoot, { recursive: true, force: true });
     throw error;
   }
