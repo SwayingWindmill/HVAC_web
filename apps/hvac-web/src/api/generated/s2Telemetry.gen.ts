@@ -241,3 +241,50 @@ export interface DeviceObservationPublication {
   displayState: DeviceDisplayState;
   telemetryChanges: Array<TelemetryKeyState>;
 }
+
+export interface S2TelemetryRequestOptions {
+  signal?: AbortSignal;
+  requestId?: string;
+  csrfToken?: string;
+}
+
+export class S2TelemetryClientError extends Error {
+  readonly problem: ProblemDetails;
+
+  constructor(problem: ProblemDetails) {
+    super(problem.detail);
+    this.name = "S2TelemetryClientError";
+    this.problem = problem;
+  }
+}
+
+export interface S2TelemetryClient {
+  getDeviceObservationSnapshot(deviceId: string, keys?: Array<string>, options?: S2TelemetryRequestOptions): Promise<DeviceObservationSnapshot>;
+  batchGetDeviceObservationSnapshots(request: BatchGetObservationSnapshotsRequest, options?: S2TelemetryRequestOptions): Promise<BatchGetObservationSnapshotsResponse>;
+}
+
+export function createS2TelemetryClient(baseURL = "", fetchImplementation: typeof fetch = fetch): S2TelemetryClient {
+  const requestJSON = async <T>(path: string, init: RequestInit): Promise<T> => {
+    const response = await fetchImplementation(baseURL + path, { credentials: "include", ...init });
+    const payload = await response.json() as T | ProblemDetails;
+    if (!response.ok) throw new S2TelemetryClientError(payload as ProblemDetails);
+    return payload as T;
+  };
+  const headers = (options?: S2TelemetryRequestOptions, post = false): Record<string, string> => {
+    const value: Record<string, string> = { Accept: "application/json, application/problem+json" };
+    if (post) value["Content-Type"] = "application/json";
+    if (options?.requestId) value["X-Request-ID"] = options.requestId;
+    if (post && options?.csrfToken) value["X-CSRF-Token"] = options.csrfToken;
+    return value;
+  };
+  return {
+    getDeviceObservationSnapshot: (deviceId, keys = [], options) => {
+      const query = keys.length > 0 ? "?keys=" + encodeURIComponent(keys.join(",")) : "";
+      return requestJSON<DeviceObservationSnapshot>("/api/v1/devices/" + encodeURIComponent(deviceId) + "/observation-snapshot" + query, { method: "GET", headers: headers(options), signal: options?.signal });
+    },
+    batchGetDeviceObservationSnapshots: (request, options) => requestJSON<BatchGetObservationSnapshotsResponse>(
+      "/api/v1/telemetry/observation-snapshots:batchGet",
+      { method: "POST", headers: headers(options, true), body: JSON.stringify(request), signal: options?.signal },
+    ),
+  };
+}

@@ -26,6 +26,18 @@ type routingRuntime struct {
 }
 
 func loadRoutingRuntime(ctx context.Context, logger *slog.Logger, identityEnabled bool) (routingRuntime, error) {
+	if os.Getenv("S2_ALLOW_UNROUTED_GATEWAY_FIXTURE") == "true" {
+		if os.Getenv("S0_ALLOW_MEMORY_ROUTE_AUDIT") != "true" || os.Getenv("S0_ALLOW_MEMORY_SESSION_STORE") != "true" || !isLoopbackTelemetryFixtureURL(os.Getenv("TELEMETRY_RUNTIME_URL")) {
+			return routingRuntime{}, errors.New("S2 un-routed Gateway fixture requires memory-only test stores and a loopback Telemetry Runtime")
+		}
+		logger.Warn("s2_unrouted_gateway_fixture_enabled")
+		return routingRuntime{
+			close: func() {},
+			watch: func(watchContext context.Context) {
+				<-watchContext.Done()
+			},
+		}, nil
+	}
 	registryPath := envOr("ROUTE_OWNERSHIP_REGISTRY", "contracts/ownership/route-ownership.v1.json")
 	initialBytes, err := os.ReadFile(registryPath)
 	if err != nil {
@@ -90,6 +102,19 @@ func loadRoutingRuntime(ctx context.Context, logger *slog.Logger, identityEnable
 		}
 	}
 	return routingRuntime{manager: manager, audit: audit, legacy: legacy, registry: registry, close: closeAudit, watch: watch}, nil
+}
+
+func isLoopbackTelemetryFixtureURL(value string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return false
+	}
+	switch parsed.Hostname() {
+	case "127.0.0.1", "::1", "localhost":
+		return true
+	default:
+		return false
+	}
 }
 
 func loadLegacyConfig(snapshot *ownershipregistry.Snapshot, identityEnabled bool) (*gateway.LegacyConfig, error) {

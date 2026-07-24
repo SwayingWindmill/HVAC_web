@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,12 +38,22 @@ func main() {
 	address := envOr("PLATFORM_GATEWAY_ADDR", ":8080")
 	runContext, cancelRun := context.WithCancel(context.Background())
 	defer cancelRun()
-	identity, closeIdentity, err := loadIdentityConfig(runContext)
+	identity, workloadCertificate, closeIdentity, err := loadIdentityConfig(runContext)
 	if err != nil {
 		logger.Error("gateway_identity_config_invalid", "error_code", "IDENTITY_CONFIG_INVALID")
 		os.Exit(1)
 	}
 	defer closeIdentity()
+	telemetryConfig, err := loadTelemetryConfig(workloadCertificate)
+	if err != nil {
+		logger.Error("gateway_telemetry_config_invalid", "error_code", "TELEMETRY_CONFIG_INVALID")
+		os.Exit(1)
+	}
+	serverTLSConfig, serverTLSEnabled, err := loadGatewayServerTLSConfig()
+	if err != nil {
+		logger.Error("gateway_server_tls_config_invalid", "error_code", "GATEWAY_SERVER_TLS_CONFIG_INVALID")
+		os.Exit(1)
+	}
 
 	routing, err := loadRoutingRuntime(runContext, logger, identity != nil)
 	if err != nil {
@@ -59,6 +70,7 @@ func main() {
 		RouteAudit:    routing.audit,
 		Legacy:        routing.legacy,
 		Registry:      routing.registry,
+		Telemetry:     telemetryConfig,
 		Observability: telemetry,
 		Build: platformapi.BuildInfo{
 			Service: "platform-gateway",
@@ -70,6 +82,7 @@ func main() {
 	server := &http.Server{
 		Addr:              address,
 		Handler:           handler,
+		TLSConfig:         serverTLSConfig,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -101,44 +114,48 @@ func main() {
 	}()
 
 	telemetry.MarkReady()
-	logger.Info("gateway_started", "service", "platform-gateway", "address", address, "version", version, "commit", commit, "identity_enabled", identity != nil)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	logger.Info("gateway_started", "service", "platform-gateway", "address", address, "version", version, "commit", commit, "identity_enabled", identity != nil, "tls_enabled", serverTLSEnabled)
+	serve := server.ListenAndServe
+	if serverTLSEnabled {
+		serve = func() error { return server.ListenAndServeTLS("", "") }
+	}
+	if err := serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("gateway_stopped_unexpectedly", "error_code", "GATEWAY_SERVE_FAILED")
 		os.Exit(1)
 	}
 	logger.Info("gateway_stopped", "service", "platform-gateway")
 }
 
-func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, func(), error) {
+func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Certificate, func(), error) {
 	issuer := os.Getenv("OIDC_ISSUER")
 	if issuer == "" {
-		return nil, func() {}, nil
+		return nil, nil, func() {}, nil
 	}
 	required := map[string]string{}
 	for _, name := range []string{"OIDC_CLIENT_ID", "OIDC_REDIRECT_URI", "PLATFORM_PUBLIC_ORIGIN", "IAM_URL", "IAM_CLIENT_CERT", "IAM_CLIENT_KEY", "IAM_SERVER_CA"} {
 		value := os.Getenv(name)
 		if value == "" {
-			return nil, func() {}, fmt.Errorf("%s is required when OIDC_ISSUER is configured", name)
+			return nil, nil, func() {}, fmt.Errorf("%s is required when OIDC_ISSUER is configured", name)
 		}
 		required[name] = value
 	}
 	certificate, err := tls.LoadX509KeyPair(required["IAM_CLIENT_CERT"], required["IAM_CLIENT_KEY"])
 	if err != nil {
-		return nil, func() {}, err
+		return nil, nil, func() {}, err
 	}
 	signer, ok := certificate.PrivateKey.(crypto.Signer)
 	if !ok {
-		return nil, func() {}, errors.New("Gateway workload private key cannot sign delegation grants")
+		return nil, nil, func() {}, errors.New("Gateway workload private key cannot sign delegation grants")
 	}
 	iamRoots, err := loadCertPool(required["IAM_SERVER_CA"], "IAM server CA")
 	if err != nil {
-		return nil, func() {}, err
+		return nil, nil, func() {}, err
 	}
 	oidcClient := &http.Client{Timeout: 5 * time.Second}
 	if oidcCAPath := os.Getenv("OIDC_SERVER_CA"); oidcCAPath != "" {
 		oidcRoots, err := loadCertPool(oidcCAPath, "OIDC server CA")
 		if err != nil {
-			return nil, func() {}, err
+			return nil, nil, func() {}, err
 		}
 		oidcClient.Transport = workloadTransport(oidcRoots, nil, envOr("OIDC_SERVER_NAME", "localhost"))
 	}
@@ -147,16 +164,16 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, func(), e
 	auditURL := os.Getenv("AUDIT_URL")
 	if auditURL == "" {
 		if os.Getenv("S0_ALLOW_NO_AUDIT_LEDGER") != "true" {
-			return nil, func() {}, errors.New("AUDIT_URL is required unless S0_ALLOW_NO_AUDIT_LEDGER=true")
+			return nil, nil, func() {}, errors.New("AUDIT_URL is required unless S0_ALLOW_NO_AUDIT_LEDGER=true")
 		}
 	} else {
 		auditCAPath := os.Getenv("AUDIT_SERVER_CA")
 		if auditCAPath == "" {
-			return nil, func() {}, errors.New("AUDIT_SERVER_CA is required when AUDIT_URL is configured")
+			return nil, nil, func() {}, errors.New("AUDIT_SERVER_CA is required when AUDIT_URL is configured")
 		}
 		auditRoots, err := loadCertPool(auditCAPath, "Audit server CA")
 		if err != nil {
-			return nil, func() {}, err
+			return nil, nil, func() {}, err
 		}
 		auditClient = &http.Client{Timeout: 5 * time.Second, Transport: workloadTransport(auditRoots, &certificate, envOr("AUDIT_SERVER_NAME", "localhost"))}
 	}
@@ -166,20 +183,20 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, func(), e
 	if dsn := os.Getenv("GATEWAY_DATABASE_URL"); dsn != "" {
 		postgresStore, err := sessionstore.OpenPostgres(ctx, dsn, sessionstore.PostgresConfig{})
 		if err != nil {
-			return nil, func() {}, errors.New("durable Session store is unavailable")
+			return nil, nil, func() {}, errors.New("durable Session store is unavailable")
 		}
 		store = postgresStore
 		closeStore = postgresStore.Close
 	} else if os.Getenv("S0_ALLOW_MEMORY_SESSION_STORE") == "true" {
 		store = sessionstore.NewMemoryStore()
 	} else {
-		return nil, func() {}, errors.New("GATEWAY_DATABASE_URL is required unless S0_ALLOW_MEMORY_SESSION_STORE=true")
+		return nil, nil, func() {}, errors.New("GATEWAY_DATABASE_URL is required unless S0_ALLOW_MEMORY_SESSION_STORE=true")
 	}
 
 	key, err := sessionEncryptionKey()
 	if err != nil {
 		closeStore()
-		return nil, func() {}, err
+		return nil, nil, func() {}, err
 	}
 	return &gateway.IdentityConfig{
 		OIDCIssuer:              issuer,
@@ -208,7 +225,63 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, func(), e
 		},
 		AuditHTTPClient: auditClient,
 		OIDCHTTPClient:  oidcClient,
-	}, closeStore, nil
+	}, &certificate, closeStore, nil
+}
+
+func loadGatewayServerTLSConfig() (*tls.Config, bool, error) {
+	certPath := strings.TrimSpace(os.Getenv("GATEWAY_SERVER_CERT"))
+	keyPath := strings.TrimSpace(os.Getenv("GATEWAY_SERVER_KEY"))
+	clientCAPath := strings.TrimSpace(os.Getenv("GATEWAY_CLIENT_CA"))
+	configured := certPath != "" || keyPath != "" || clientCAPath != ""
+	if !configured {
+		return nil, false, nil
+	}
+	if certPath == "" || keyPath == "" || clientCAPath == "" {
+		return nil, false, errors.New("GATEWAY_SERVER_CERT, GATEWAY_SERVER_KEY and GATEWAY_CLIENT_CA must be configured together")
+	}
+	certificate, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, false, err
+	}
+	clientCAs, err := loadCertPool(clientCAPath, "Gateway client CA")
+	if err != nil {
+		return nil, false, err
+	}
+	return gatewayServerTLSConfig(certificate, clientCAs), true, nil
+}
+
+func gatewayServerTLSConfig(certificate tls.Certificate, clientCAs *x509.CertPool) *tls.Config {
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{certificate},
+		ClientCAs:    clientCAs,
+		ClientAuth:   tls.VerifyClientCertIfGiven,
+	}
+}
+
+func loadTelemetryConfig(certificate *tls.Certificate) (*gateway.TelemetryConfig, error) {
+	runtimeURL := strings.TrimSpace(os.Getenv("TELEMETRY_RUNTIME_URL"))
+	if runtimeURL == "" {
+		return nil, nil
+	}
+	if certificate == nil {
+		return nil, errors.New("Telemetry Runtime requires the authenticated Gateway workload certificate")
+	}
+	caPath := os.Getenv("TELEMETRY_RUNTIME_SERVER_CA")
+	if caPath == "" {
+		return nil, errors.New("TELEMETRY_RUNTIME_SERVER_CA is required when TELEMETRY_RUNTIME_URL is configured")
+	}
+	roots, err := loadCertPool(caPath, "Telemetry Runtime server CA")
+	if err != nil {
+		return nil, err
+	}
+	return &gateway.TelemetryConfig{
+		RuntimeBaseURL:    runtimeURL,
+		RuntimeAudience:   envOr("TELEMETRY_RUNTIME_AUDIENCE", "telemetry-runtime-service"),
+		Timeout:           2 * time.Second,
+		MaxResponseBytes:  2 << 20,
+		RuntimeHTTPClient: &http.Client{Transport: workloadTransport(roots, certificate, envOr("TELEMETRY_RUNTIME_SERVER_NAME", "localhost"))},
+	}, nil
 }
 
 func workloadTransport(roots *x509.CertPool, certificate *tls.Certificate, serverName string) *http.Transport {
