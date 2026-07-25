@@ -40,7 +40,7 @@ assert(attestationSchema.properties?.steadyStateSeconds?.minimum === 3600 && att
 assert(attestationSchema.properties?.manualApproval?.const === true, 'formal attestation does not require manual approval');
 assert(attestationSchema.properties?.load?.properties?.connections?.minimum === 5000 && attestationSchema.properties?.reconnect?.properties?.clientsPerSecond?.minimum === 1000, 'formal attestation load/failure schema drifted');
 
-for (const marker of ['FROM golang:1.25.12-bookworm AS build', 'gcr.io/distroless/static-debian12:nonroot', 'USER 65532:65532', 'ENTRYPOINT ["/telemetry-runtime"]']) {
+for (const marker of ['FROM golang:1.25.12-bookworm AS build', 'COPY tools ./tools', 'gcr.io/distroless/static-debian12:nonroot', 'USER 65532:65532', 'ENTRYPOINT ["/telemetry-runtime"]']) {
   assert(runtimeImage.includes(marker), `runtime image is missing ${marker}`);
 }
 for (const marker of ['FROM postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412', 'USER postgres', '001-s2-telemetry-baseline.sql', '005-s2-realtime-backend.sql', 'run-telemetry-migrations', 'chmod 0555']) {

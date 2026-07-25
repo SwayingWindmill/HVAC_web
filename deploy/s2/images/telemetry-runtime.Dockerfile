@@ -4,6 +4,7 @@ WORKDIR /src
 COPY go.work go.work.sum ./
 COPY libs ./libs
 COPY services ./services
+COPY tools ./tools
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/telemetry-runtime ./services/telemetry-runtime-service/cmd/telemetry-runtime-service
 
 FROM gcr.io/distroless/static-debian12:nonroot
