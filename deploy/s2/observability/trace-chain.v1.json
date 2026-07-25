@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "services": ["platform-gateway","iam-service","telemetry-runtime-service","outbox-relay","centrifugo-api","telemetry-live-client","audit-ledger-service"],
+  "requiredReferences": ["request_ref","event_ref","subscription_ref","revision_ref"],
+  "rawIdentifiersAllowed": false,
+  "baggageAllowed": false
+}

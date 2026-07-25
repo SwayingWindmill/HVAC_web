@@ -1,0 +1,64 @@
+name: S2 Security Observability and Redaction
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/s2-security-observability.yml"
+      - "deploy/s2/observability/**"
+      - "libs/observability/**"
+      - "infra/s0-durable/observability/alerts/s2-telemetry.yaml"
+      - "infra/s0-durable/observability/dashboards/s2-telemetry.json"
+      - "scripts/check-s2-security-observability.mjs"
+      - "scripts/run-s2-security-negative.mjs"
+      - "scripts/run-s2-security-observability-audit.mjs"
+      - "scripts/check-npm-production-audit.mjs"
+      - "scripts/run-s2-hvac-web-presence-browser-audit.mjs"
+      - "docs/operations/s2-security-observability.md"
+      - "package.json"
+      - "package-lock.json"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+  GOMAXPROCS: "2"
+  GOFLAGS: -p=1
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
+          cache: true
+      - run: npm ci
+      - name: Validate S2 Prometheus alert rules
+        run: docker run --rm --entrypoint /bin/promtool -v "$PWD/infra/s0-durable/observability/alerts/s2-telemetry.yaml:/rules.yml:ro" prom/prometheus@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94 check rules /rules.yml
+      - run: npm run s2:ticket-10
+      - name: Upload Ticket 10 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: s2-security-observability-evidence
+          path: |
+            out/s2-ticket-10
+            out/s2-release-evidence/security-negative-report.json
+            out/s2-release-evidence/zero-invariant-report.json
+            out/s2-release-evidence/metric-cardinality-report.json
+            out/s2-release-evidence/trace-correlation-report.json
+            out/s2-release-evidence/log-redaction-report.json
+            out/s2-release-evidence/alert-rule-validation-report.json
+            out/s2-release-evidence/observability-outage-report.json
+          if-no-files-found: error
+          retention-days: 14
