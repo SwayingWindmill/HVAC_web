@@ -58,7 +58,7 @@ for (const marker of ['runAsNonRoot: true', 'maxUnavailable: 0', 'freshSnapshotR
 for (const marker of ['clean-runner-preflight', 'formalReleaseEligible', 'approved-wall-clock-attestation', 'manualApproval', 'snapshotP99Seconds', 'recoveryOrSnapshotFailureFraction', 'failureScenarios', 'postRevocationDeliveries', 'repository SHA', 'did not exercise 5k connections', 'did not exercise 50k subscriptions', 'did not exercise 2k revisions/s', 'computed headroom', 'minimum measured headroom', 'zero-tolerance counter']) {
   assert(capacity.includes(marker), `capacity certification is missing ${marker}`);
 }
-assert(capacity.includes("profile === 'preflight'") && capacity.includes('wall-clock-attestation') && capacity.includes("profile,\n    certificationLevel: 'formal'"), 'formal capacity path is not separately gated');
+assert(capacity.includes("profile === 'preflight'") && capacity.includes('wall-clock-attestation') && capacity.includes("certificationLevel: 'formal'"), 'formal capacity path is not separately gated');
 for (const marker of ["'rollout', 'undo'", "routeRevision: 'R3'", "freshSnapshotRequired: 'true'", 'databaseDownMigrationPerformed: false']) {
   assert(kindRunner.includes(marker), `Kind rollback runner is missing ${marker}`);
 }

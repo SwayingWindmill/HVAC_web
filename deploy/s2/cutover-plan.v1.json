@@ -1,0 +1,159 @@
+{
+  "schemaVersion": 1,
+  "ticket": 71,
+  "name": "s2-production-cutover-v1",
+  "appliedProductionPhase": "R0-contract-only",
+  "formalPromotionRequired": true,
+  "cohortGroup": "s2-current-state-v1",
+  "cohortSalt": "s2-current-state-rollout-v1",
+  "routeSurfaces": [
+    { "method": "GET", "path": "/api/v1/devices/{deviceId}/observation-snapshot", "surface": "single-snapshot" },
+    { "method": "POST", "path": "/api/v1/telemetry/observation-snapshots:batchGet", "surface": "batch-snapshot" },
+    { "method": "POST", "path": "/api/v1/telemetry/subscriptions:bootstrap", "surface": "live-bootstrap" },
+    { "method": "POST", "path": "/api/v1/telemetry/recovery-cursors:checkpoint", "surface": "live-checkpoint" }
+  ],
+  "phases": [
+    {
+      "id": "R1-dark-ingest",
+      "trafficPercent": 0,
+      "minimumHoldMinutes": 1440,
+      "registryRevision": 12,
+      "routeRevision": 6,
+      "owner": "legacy-hvac-backend",
+      "liveOwner": "legacy-hvac-backend",
+      "activationStatus": "dark-ingest",
+      "compatibilityMode": "legacy-read",
+      "rollout": { "mode": "all" }
+    },
+    {
+      "id": "R2-shadow-compare",
+      "trafficPercent": 0,
+      "minimumHoldMinutes": 1440,
+      "registryRevision": 13,
+      "routeRevision": 7,
+      "owner": "legacy-hvac-backend",
+      "liveOwner": "legacy-hvac-backend",
+      "activationStatus": "shadow-compare",
+      "compatibilityMode": "legacy-read",
+      "rollout": { "mode": "all" }
+    },
+    {
+      "id": "R3-internal-canary",
+      "trafficPercent": 1,
+      "minimumHoldMinutes": 120,
+      "minimumSnapshotRequests": 10000,
+      "minimumSubscriptions": 1000,
+      "registryRevision": 14,
+      "routeRevision": 8,
+      "owner": "telemetry-runtime-service",
+      "liveOwner": "telemetry-runtime-service",
+      "activationStatus": "canary",
+      "compatibilityMode": "native",
+      "rollout": { "mode": "percentage", "percentage": 1, "fallbackOwner": "legacy-hvac-backend", "cohortSalt": "s2-current-state-rollout-v1" }
+    },
+    {
+      "id": "R4-external-canary-5",
+      "trafficPercent": 5,
+      "minimumHoldMinutes": 240,
+      "minimumSnapshotRequests": 50000,
+      "minimumSubscriptions": 5000,
+      "minimumRecoveryAttempts": 100,
+      "registryRevision": 15,
+      "routeRevision": 9,
+      "owner": "telemetry-runtime-service",
+      "liveOwner": "telemetry-runtime-service",
+      "activationStatus": "canary",
+      "compatibilityMode": "native",
+      "rollout": { "mode": "percentage", "percentage": 5, "fallbackOwner": "legacy-hvac-backend", "cohortSalt": "s2-current-state-rollout-v1" }
+    },
+    {
+      "id": "R5-ramp-25",
+      "trafficPercent": 25,
+      "minimumHoldMinutes": 480,
+      "registryRevision": 16,
+      "routeRevision": 10,
+      "owner": "telemetry-runtime-service",
+      "liveOwner": "telemetry-runtime-service",
+      "activationStatus": "canary",
+      "compatibilityMode": "native",
+      "rollout": { "mode": "percentage", "percentage": 25, "fallbackOwner": "legacy-hvac-backend", "cohortSalt": "s2-current-state-rollout-v1" }
+    },
+    {
+      "id": "R6-ramp-50",
+      "trafficPercent": 50,
+      "minimumHoldMinutes": 720,
+      "registryRevision": 17,
+      "routeRevision": 11,
+      "owner": "telemetry-runtime-service",
+      "liveOwner": "telemetry-runtime-service",
+      "activationStatus": "canary",
+      "compatibilityMode": "native",
+      "rollout": { "mode": "percentage", "percentage": 50, "fallbackOwner": "legacy-hvac-backend", "cohortSalt": "s2-current-state-rollout-v1" }
+    },
+    {
+      "id": "R7-primary-100",
+      "trafficPercent": 100,
+      "minimumHoldMinutes": 1440,
+      "registryRevision": 18,
+      "routeRevision": 12,
+      "owner": "telemetry-runtime-service",
+      "liveOwner": "telemetry-runtime-service",
+      "activationStatus": "primary",
+      "compatibilityMode": "native",
+      "rollout": { "mode": "all" }
+    },
+    {
+      "id": "R8-legacy-current-state-retired",
+      "trafficPercent": 100,
+      "minimumHoldMinutes": 10080,
+      "registryRevision": 19,
+      "routeRevision": 13,
+      "owner": "telemetry-runtime-service",
+      "liveOwner": "telemetry-runtime-service",
+      "activationStatus": "legacy-retired",
+      "compatibilityMode": "native",
+      "rollout": { "mode": "all" }
+    }
+  ],
+  "rollback": {
+    "maximumDecisionMinutes": 5,
+    "maximumRouteRollbackMinutes": 15,
+    "disconnectOrExpireLiveSessions": true,
+    "freshSnapshotRequired": true,
+    "databaseDownMigrationPerformed": false
+  },
+  "retirement": {
+    "legacyLatestPath": "/telemetry/devices/:id/latest",
+    "legacyBatchPath": "/telemetry/latest/batch",
+    "legacyWebsocketPath": "/ws/telemetry",
+    "historicalPaths": [
+      "/telemetry/devices/:id/timeseries",
+      "/devices/:id/telemetry"
+    ],
+    "historicalCurrentStateFallbackForbidden": true,
+    "codeAndNetworkSealRequired": true,
+    "backendRepository": "SwayingWindmill/hvac-backend",
+    "backendPullRequest": 31,
+    "backendCommitSha": "d6743e9bdd5da8df17d941b28f31ee4a73ff66e3",
+    "backendMergeCommitSha": "0b9ccc35b238c03eae69076e54f09308f61adde3",
+    "backendEvidence": "deploy/s2/legacy-current-state-retirement.v1.json"
+  },
+  "requiredEvidence": [
+    "r1-phase-report.json",
+    "r2-phase-report.json",
+    "r3-phase-report.json",
+    "r4-phase-report.json",
+    "r5-phase-report.json",
+    "r6-phase-report.json",
+    "r7-phase-report.json",
+    "r8-phase-report.json",
+    "promotion-approvals.json",
+    "rollback-drill-report.json",
+    "zero-legacy-traffic-report.json",
+    "legacy-retirement-report.json",
+    "final-route-ownership-report.json",
+    "s2-completion-attestation.json",
+    "s2-completion.intoto.json",
+    "SHA256SUMS"
+  ]
+}

@@ -1,0 +1,98 @@
+name: S2 Telemetry Production Cutover Certification
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/s2-telemetry-cutover.yml
+      - deploy/s2/**
+      - docs/operations/s2-cutover-and-legacy-retirement.md
+      - scripts/*s2-cutover*
+      - scripts/verify-s2-completion-evidence.mjs
+      - libs/ownershipregistry/**
+      - apps/hvac-web/src/api/**
+      - hvac-backend/src/telemetry/**
+      - package.json
+      - package-lock.json
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Configuration preflight or formal production completion verification
+        required: true
+        default: preflight
+        type: choice
+        options: [preflight, formal]
+      release_run_id:
+        description: Successful formal S2 release workflow run containing s2-telemetry-release-evidence
+        required: false
+        type: string
+      cutover_attestation_json:
+        description: Approved R1-R8 cutover attestation JSON; required for formal profile
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s2-telemetry-cutover-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  cutover-preflight:
+    if: github.event_name == 'pull_request' || inputs.profile == 'preflight'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - run: npm run s2:ticket-12
+      - uses: actions/upload-artifact@v6
+        with:
+          name: s2-cutover-preflight
+          path: out/s2-completion-evidence/cutover-preflight-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  formal-production-completion:
+    if: github.event_name == 'workflow_dispatch' && inputs.profile == 'formal'
+    runs-on: ubuntu-24.04
+    environment: s2-production
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - name: Require formal inputs
+        shell: bash
+        env:
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          CUTOVER_ATTESTATION: ${{ inputs.cutover_attestation_json }}
+        run: |
+          test -n "$RELEASE_RUN_ID"
+          test -n "$CUTOVER_ATTESTATION"
+          mkdir -p out
+          printf '%s' "$CUTOVER_ATTESTATION" > out/s2-full-cutover-attestation.json
+      - name: Download formal S2 release evidence
+        uses: actions/download-artifact@v6
+        with:
+          name: s2-telemetry-release-evidence
+          path: out/s2-formal-release-evidence
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.release_run_id }}
+      - name: Verify formal R1-R8 cutover and retirement
+        run: node scripts/run-s2-cutover-certification.mjs --profile=formal --attestation=out/s2-full-cutover-attestation.json --release-evidence-dir=out/s2-formal-release-evidence
+      - run: npm run s2:completion:verify
+      - uses: actions/upload-artifact@v6
+        with:
+          name: s2-completion-evidence
+          path: out/s2-completion-evidence
+          if-no-files-found: error
+          retention-days: 90

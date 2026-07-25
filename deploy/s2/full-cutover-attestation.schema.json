@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hvac.local/schemas/s2-full-cutover-attestation.v1.json",
+  "title": "S2 R1-R8 production cutover attestation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "repositorySha",
+    "releaseEvidence",
+    "phases",
+    "rollbackDrill",
+    "legacyObservation",
+    "retirement",
+    "auditApproval",
+    "risks"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "repositorySha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "releaseEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflowRunId", "artifactSha256", "formalReleaseEligible", "certificationLevel"],
+      "properties": {
+        "workflowRunId": { "type": "string", "minLength": 1 },
+        "artifactSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "formalReleaseEligible": { "const": true },
+        "certificationLevel": { "const": "formal" }
+      }
+    },
+    "phases": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "registryRevision",
+          "routeRevision",
+          "trafficPercent",
+          "startedAt",
+          "endedAt",
+          "holdMinutes",
+          "sampleCounts",
+          "sloBurnRate",
+          "capacityHeadroom",
+          "zeroCounters",
+          "unclassifiedShadowDifferences",
+          "contractDrift",
+          "ownershipDrift",
+          "snapshotOwner",
+          "liveOwner",
+          "requestFallbacks",
+          "approval"
+        ],
+        "properties": {
+          "id": { "enum": ["R1-dark-ingest", "R2-shadow-compare", "R3-internal-canary", "R4-external-canary-5", "R5-ramp-25", "R6-ramp-50", "R7-primary-100", "R8-legacy-current-state-retired"] },
+          "registryRevision": { "type": "integer", "minimum": 1 },
+          "routeRevision": { "type": "integer", "minimum": 1 },
+          "trafficPercent": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "startedAt": { "type": "string", "format": "date-time" },
+          "endedAt": { "type": "string", "format": "date-time" },
+          "holdMinutes": { "type": "integer", "minimum": 0 },
+          "sampleCounts": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["snapshotRequests", "subscriptions", "recoveryAttempts"],
+            "properties": {
+              "snapshotRequests": { "type": "integer", "minimum": 0 },
+              "subscriptions": { "type": "integer", "minimum": 0 },
+              "recoveryAttempts": { "type": "integer", "minimum": 0 }
+            }
+          },
+          "sloBurnRate": { "type": "number", "minimum": 0, "maximum": 1 },
+          "capacityHeadroom": { "type": "number", "minimum": 0.3, "maximum": 1 },
+          "zeroCounters": { "type": "object", "minProperties": 15, "additionalProperties": { "const": 0 } },
+          "unclassifiedShadowDifferences": { "const": 0 },
+          "contractDrift": { "const": 0 },
+          "ownershipDrift": { "const": 0 },
+          "snapshotOwner": { "enum": ["legacy-hvac-backend", "telemetry-runtime-service"] },
+          "liveOwner": { "enum": ["legacy-hvac-backend", "telemetry-runtime-service"] },
+          "requestFallbacks": { "const": 0 },
+          "approval": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["manual", "primaryOwner", "secondaryOwner", "approvedAt"],
+            "properties": {
+              "manual": { "const": true },
+              "primaryOwner": { "type": "string", "minLength": 1 },
+              "secondaryOwner": { "type": "string", "minLength": 1 },
+              "approvedAt": { "type": "string", "format": "date-time" }
+            }
+          }
+        }
+      }
+    },
+    "rollbackDrill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "decisionMinutes", "routeRollbackMinutes", "disconnectOrExpireLiveSessions", "freshSnapshotRequired", "databaseDownMigrationPerformed", "fromRouteRevision", "toRouteRevision"],
+      "properties": {
+        "passed": { "const": true },
+        "decisionMinutes": { "type": "number", "minimum": 0, "maximum": 5 },
+        "routeRollbackMinutes": { "type": "number", "minimum": 0, "maximum": 15 },
+        "disconnectOrExpireLiveSessions": { "const": true },
+        "freshSnapshotRequired": { "const": true },
+        "databaseDownMigrationPerformed": { "const": false },
+        "fromRouteRevision": { "type": "integer", "minimum": 1 },
+        "toRouteRevision": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "legacyObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startedAt", "endedAt", "durationMinutes", "latestRequests", "batchRequests", "websocketConnections", "legacyWritesRequired", "browserReferences", "unauthenticatedIngestEffectsOnS2"],
+      "properties": {
+        "startedAt": { "type": "string", "format": "date-time" },
+        "endedAt": { "type": "string", "format": "date-time" },
+        "durationMinutes": { "type": "integer", "minimum": 10080 },
+        "latestRequests": { "const": 0 },
+        "batchRequests": { "const": 0 },
+        "websocketConnections": { "const": 0 },
+        "legacyWritesRequired": { "const": 0 },
+        "browserReferences": { "const": 0 },
+        "unauthenticatedIngestEffectsOnS2": { "const": 0 }
+      }
+    },
+    "retirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["publicRouteOwner", "backendRepositorySha", "currentStateEndpointsRemoved", "currentStateNetworkPolicyDenied", "socketIoRemoved", "historicalTimeseriesRetained", "historicalUsedAsCurrentFallback"],
+      "properties": {
+        "publicRouteOwner": { "const": "telemetry-runtime-service" },
+        "backendRepositorySha": { "const": "d6743e9bdd5da8df17d941b28f31ee4a73ff66e3" },
+        "currentStateEndpointsRemoved": { "const": true },
+        "currentStateNetworkPolicyDenied": { "const": true },
+        "socketIoRemoved": { "const": true },
+        "historicalTimeseriesRetained": { "const": true },
+        "historicalUsedAsCurrentFallback": { "const": false }
+      }
+    },
+    "auditApproval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manual", "approvedBy", "approvedAt", "statement"],
+      "properties": {
+        "manual": { "const": true },
+        "approvedBy": { "type": "string", "minLength": 1 },
+        "approvedAt": { "type": "string", "format": "date-time" },
+        "statement": { "type": "string", "minLength": 1 }
+      }
+    },
+    "risks": {
+      "type": "object",
+      "minProperties": 15,
+      "additionalProperties": { "const": 0 }
+    }
+  }
+}

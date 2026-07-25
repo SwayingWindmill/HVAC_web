@@ -1,0 +1,36 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-legacy-current-state
+  namespace: hvac-production
+  labels:
+    app.kubernetes.io/part-of: hvac-web
+    hvac.release: s2
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: legacy-hvac-backend
+      hvac.surface: legacy-current-state
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress: []
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: s2-legacy-current-state-retirement
+  namespace: hvac-production
+  labels:
+    app.kubernetes.io/part-of: hvac-web
+    hvac.release: s2
+data:
+  phase: R8-legacy-current-state-retired
+  publicCurrentStateOwner: telemetry-runtime-service
+  legacyLatestPath: /telemetry/devices/:id/latest
+  legacyBatchPath: /telemetry/latest/batch
+  legacyWebsocketPath: /ws/telemetry
+  historicalTimeseriesRetained: "true"
+  historicalCurrentStateFallback: "false"
+  removalRule: legacy current-state pods must carry hvac.surface=legacy-current-state before this deny-all policy is applied

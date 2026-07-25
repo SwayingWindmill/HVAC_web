@@ -157,6 +157,50 @@ func TestS2AdjacentPromotionAndRollbackAreAccepted(t *testing.T) {
 	}
 }
 
+func TestS2FullPromotionSequenceAndR8RetirementAccepted(t *testing.T) {
+	policies := []s2PhasePolicy{
+		{phase: ownershipregistry.PhaseS2ContractOnly, owner: ownershipregistry.OwnerTelemetryRuntime, activation: "expand-baseline", compatibility: "native", rollout: ownershipregistry.RolloutPolicy{Mode: "disabled"}, registryRev: 11, routeRevision: 5},
+		{phase: ownershipregistry.PhaseS2DarkIngest, owner: ownershipregistry.OwnerLegacy, activation: "dark-ingest", compatibility: "legacy-read", rollout: ownershipregistry.RolloutPolicy{Mode: "all"}, registryRev: 12, routeRevision: 6},
+		{phase: ownershipregistry.PhaseS2ShadowCompare, owner: ownershipregistry.OwnerLegacy, activation: "shadow-compare", compatibility: "legacy-read", rollout: ownershipregistry.RolloutPolicy{Mode: "all"}, registryRev: 13, routeRevision: 7},
+		{phase: ownershipregistry.PhaseS2InternalCanary, owner: ownershipregistry.OwnerTelemetryRuntime, activation: "canary", compatibility: "native", rollout: ownershipregistry.RolloutPolicy{Mode: "percentage", Percentage: 1, FallbackOwner: ownershipregistry.OwnerLegacy, CohortSalt: "s2-current-state-rollout-v1"}, registryRev: 14, routeRevision: 8},
+		{phase: ownershipregistry.PhaseS2ExternalCanary, owner: ownershipregistry.OwnerTelemetryRuntime, activation: "canary", compatibility: "native", rollout: ownershipregistry.RolloutPolicy{Mode: "percentage", Percentage: 5, FallbackOwner: ownershipregistry.OwnerLegacy, CohortSalt: "s2-current-state-rollout-v1"}, registryRev: 15, routeRevision: 9},
+		{phase: ownershipregistry.PhaseS2Ramp25, owner: ownershipregistry.OwnerTelemetryRuntime, activation: "canary", compatibility: "native", rollout: ownershipregistry.RolloutPolicy{Mode: "percentage", Percentage: 25, FallbackOwner: ownershipregistry.OwnerLegacy, CohortSalt: "s2-current-state-rollout-v1"}, registryRev: 16, routeRevision: 10},
+		{phase: ownershipregistry.PhaseS2Ramp50, owner: ownershipregistry.OwnerTelemetryRuntime, activation: "canary", compatibility: "native", rollout: ownershipregistry.RolloutPolicy{Mode: "percentage", Percentage: 50, FallbackOwner: ownershipregistry.OwnerLegacy, CohortSalt: "s2-current-state-rollout-v1"}, registryRev: 17, routeRevision: 11},
+		{phase: ownershipregistry.PhaseS2Primary, owner: ownershipregistry.OwnerTelemetryRuntime, activation: "primary", compatibility: "native", rollout: ownershipregistry.RolloutPolicy{Mode: "all"}, registryRev: 18, routeRevision: 12},
+		{phase: ownershipregistry.PhaseS2LegacyRetired, owner: ownershipregistry.OwnerTelemetryRuntime, activation: "legacy-retired", compatibility: "native", rollout: ownershipregistry.RolloutPolicy{Mode: "all"}, registryRev: 19, routeRevision: 13},
+	}
+
+	manager := ownershipregistry.NewManager(mustParseS2(t, policies[0]), ownershipregistry.NewMemoryAuditSink(), fixedNow)
+	invalidator := &recordingS2Invalidator{}
+	for _, policy := range policies[1:] {
+		result, err := manager.ReloadS2(context.Background(), mustMarshalS2(t, policy), ownershipregistry.PolicyChangeContext{ExecutingService: ownershipregistry.OwnerGateway}, invalidator)
+		if err != nil {
+			t.Fatalf("promote to %s: %v", policy.phase, err)
+		}
+		if result.MigrationPhase != policy.phase || result.RegistryRevision != policy.registryRev || result.RouteRevision != policy.routeRevision {
+			t.Fatalf("promotion result for %s = %#v", policy.phase, result)
+		}
+	}
+
+	if len(invalidator.commands) != 5 {
+		t.Fatalf("R3 through R8 session invalidations = %d, want 5", len(invalidator.commands))
+	}
+	for _, command := range invalidator.commands {
+		if command.Rollback || !command.DisconnectOrExpire || !command.FreshSnapshotRequired || command.DatabaseAction != "EXPAND_ONLY_NO_DOWN_MIGRATION" {
+			t.Fatalf("promotion invalidation = %#v", command)
+		}
+	}
+	for _, route := range s2RouteSurfaces {
+		decision, err := manager.Current().Resolve(route.method, route.actual, "organization-1\x00principal-1")
+		if err != nil {
+			t.Fatalf("resolve R8 %s %s: %v", route.method, route.actual, err)
+		}
+		if decision.SelectedOwner != ownershipregistry.OwnerTelemetryRuntime || decision.MigrationPhase != ownershipregistry.PhaseS2LegacyRetired || decision.RouteRevision != 13 || decision.CohortGroup != s2CohortGroup || decision.CohortBucket != nil {
+			t.Fatalf("R8 final decision = %#v", decision)
+		}
+	}
+}
+
 func TestS2CohortGroupRejectsRouteDrift(t *testing.T) {
 	policy := s2PhasePolicy{
 		phase:         ownershipregistry.PhaseS2InternalCanary,

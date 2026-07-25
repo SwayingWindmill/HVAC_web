@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { Badge, Button, Divider, Grid, Layout, List, Popover, Select, Segmented, Space, Switch, Tooltip, Avatar } from 'antd';
 import {
   BellOutlined, SunOutlined, MoonOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
@@ -10,30 +10,24 @@ import { API_MODE } from '@/api/config';
 import { useAuthorizedRegistrySites } from '@/api/registry';
 import { mockAlarms, SEVERITY_LABEL } from '@/mock/data';
 import { SEVERITY_COLOR } from '@/theme/tokens';
-import { telemetry, type RealtimeStatus } from '@/api';
 import { canViewPath } from '@/auth/permissions';
 
 const { Header } = Layout;
 const { useBreakpoint } = Grid;
 
-// 全局实时连接状态徽标：消费 TelemetryClient 的连接状态（#11 / #8 实时层可见性）。
-const STATUS_MAP: Record<RealtimeStatus, { color: string; text: string }> = {
-  open: { color: '#22c55e', text: '实时已连接' },
-  connecting: { color: '#f5a623', text: '实时连接中' },
-  degraded: { color: '#f5a623', text: '实时连接降级' },
-  closed: { color: '#ef4444', text: '实时未连接' },
-};
-
+// S2 live sessions are device-scoped. The header must not claim a global Socket.IO connection.
 function RealtimeBadge() {
-  const [status, setStatus] = useState<RealtimeStatus>(telemetry.getStatus());
-  useEffect(() => telemetry.onStatus(setStatus), []);
-  const s = STATUS_MAP[status];
+  const realMode = API_MODE === 'real';
+  const color = realMode ? '#0FB5AE' : '#f5a623';
+  const text = realMode
+    ? 'S2 实时连接按可见设备会话建立；此处不代表全局连接状态。'
+    : '当前为演示数据模式。';
   return (
-    <Tooltip title={s.text}>
+    <Tooltip title={text}>
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, opacity: 0.85 }}>
-        <ApiOutlined style={{ color: s.color }} />
-        <span style={{ width: 8, height: 8, borderRadius: 8, background: s.color, boxShadow: `0 0 6px ${s.color}`, display: 'inline-block' }} />
-        <span style={{ color: 'inherit' }}>实时</span>
+        <ApiOutlined style={{ color }} />
+        <span style={{ width: 8, height: 8, borderRadius: 8, background: color, display: 'inline-block' }} />
+        <span style={{ color: 'inherit' }}>{realMode ? 'S2 实时' : '演示'}</span>
       </span>
     </Tooltip>
   );

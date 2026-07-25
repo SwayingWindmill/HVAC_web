@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "ticket": 71,
+  "repository": "SwayingWindmill/hvac-backend",
+  "pullRequest": 31,
+  "commitSha": "d6743e9bdd5da8df17d941b28f31ee4a73ff66e3",
+  "mergeCommitSha": "0b9ccc35b238c03eae69076e54f09308f61adde3",
+  "branch": "feat/s2-legacy-current-state-retirement",
+  "pullRequestState": "MERGED",
+  "mergedAt": "2026-07-25T18:01:09Z",
+  "status": "merged-verified",
+  "removedSurfaces": [
+    "GET /telemetry/devices/:id/latest",
+    "POST /telemetry/latest/batch",
+    "Socket.IO /ws/telemetry",
+    "public ThingsBoard current-state ingest",
+    "Redis latest telemetry cache",
+    "Legacy current-state subscription manager"
+  ],
+  "removedCode": [
+    "src/telemetry/telemetry.gateway.ts",
+    "src/telemetry/telemetry-cache.service.ts",
+    "src/telemetry/telemetry-ingest.service.ts",
+    "src/telemetry/telemetry-ws.service.ts",
+    "src/telemetry/subscription.manager.ts",
+    "src/telemetry/tb-ingest.controller.ts"
+  ],
+  "retainedHistoricalSurfaces": [
+    "GET /telemetry/devices/:id/timeseries",
+    "GET /devices/:id/telemetry"
+  ],
+  "verification": {
+    "backendTestSuites": 27,
+    "backendTests": 148,
+    "buildPassed": true,
+    "targetedTelemetryLintPassed": true,
+    "repositoryWideLintBaselineErrors": 23
+  }
+}
