@@ -41,12 +41,15 @@ jobs:
   contracts-and-static:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.25.12"
           cache: true
-      - uses: actions/setup-node@v4
+          cache-dependency-path: |
+            "**/go.sum"
+            go.work.sum
+      - uses: actions/setup-node@v6
         with:
           node-version: "20.19.4"
           cache: npm
@@ -57,7 +60,7 @@ jobs:
       - name: Record shadow comparison release evidence
         run: node scripts/write-s2-release-report.mjs --name=shadow-comparison-report.json --kind=shadow-comparison --commands=s2:shadow-routing:compare,s2:shadow-routing:harness --sources=out/s2-ticket-08/shadow-comparison.json --details='{"sideEffectFree":true,"mappingMismatch":0,"missingOrExtraDevice":0}'
       - name: Upload contracts and static evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: s2-release-input-contracts
           path: out/s2-release-evidence/shadow-comparison-report.json
@@ -70,25 +73,28 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Scan repository for committed secrets
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.25.12"
           cache: true
-      - uses: actions/setup-node@v4
+          cache-dependency-path: |
+            "**/go.sum"
+            go.work.sum
+      - uses: actions/setup-node@v6
         with:
           node-version: "20.19.4"
           cache: npm
       - run: npm ci
       - run: npm run s2:ticket-10
       - name: Upload security and observability release evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: s2-release-input-security
           path: out/s2-release-evidence
@@ -98,12 +104,15 @@ jobs:
   postgres-integration:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.25.12"
           cache: true
-      - uses: actions/setup-node@v4
+          cache-dependency-path: |
+            "**/go.sum"
+            go.work.sum
+      - uses: actions/setup-node@v6
         with:
           node-version: "20.19.4"
           cache: npm
@@ -111,7 +120,7 @@ jobs:
       - run: npm run s2:postgres-integration
       - name: Record PostgreSQL integration evidence
         run: node scripts/write-s2-release-report.mjs --name=postgres-integration-report.json --kind=postgres-integration --commands=s2:postgres,test:s2-migrator-image --sources=out/s2-ticket-11/migrator-image-smoke.json --details='{"expandOnly":true,"previousVersionCompatible":true,"authoritativeSchema":"telemetry_runtime","migratorImageIdempotent":true,"migrationHashMismatchRejected":true,"incompleteMigrationRejected":true,"unauthorizedRuntimeIdentityRejected":true,"migrationLedgerPrivilegesRestricted":true}'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: s2-release-input-postgres
           path: out/s2-release-evidence/postgres-integration-report.json
@@ -121,12 +130,15 @@ jobs:
   transport-integration:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.25.12"
           cache: true
-      - uses: actions/setup-node@v4
+          cache-dependency-path: |
+            "**/go.sum"
+            go.work.sum
+      - uses: actions/setup-node@v6
         with:
           node-version: "20.19.4"
           cache: npm
@@ -134,7 +146,7 @@ jobs:
       - run: npm run s2:transport-integration
       - name: Record transport integration evidence
         run: node scripts/write-s2-release-report.mjs --name=transport-integration-report.json --kind=transport-integration --commands=test:docker-pull-retry,s2:realtime:config,s2:realtime:transport --sources=out/s2-centrifugo-poc/report.json --details='{"dedicatedRedis":true,"historyBounded":true,"snapshotAuthoritative":true,"immutableImagePullRetryBounded":true}'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: s2-release-input-transport
           path: out/s2-release-evidence/transport-integration-report.json
@@ -146,8 +158,8 @@ jobs:
     env:
       S2_FULL_ATTESTATION_JSON: ${{ inputs.wall_clock_attestation_json }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "20.19.4"
           cache: npm
@@ -163,7 +175,7 @@ jobs:
           else
             node scripts/run-s2-capacity-certification.mjs --profile=preflight
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: s2-release-input-capacity
           path: |
@@ -178,8 +190,8 @@ jobs:
   browser-real-mode:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "20.19.4"
           cache: npm
@@ -187,7 +199,7 @@ jobs:
       - run: npm run s2:hvac-web:browser
       - name: Record browser release evidence
         run: node scripts/write-s2-release-report.mjs --name=browser-report.json --kind=browser-real-mode --commands=s2:hvac-web:browser --sources=out/s2-ticket-09/browser-journey.json,out/s2-ticket-09/network-audit.json --details='{"legacyFallback":false,"mockFallback":false,"revocationPurgesState":true,"freshSnapshotAfterGap":true}'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: s2-release-input-browser
           path: out/s2-release-evidence/browser-report.json
@@ -210,16 +222,16 @@ jobs:
           - name: telemetry-runtime-migrator
             dockerfile: deploy/s2/images/telemetry-runtime-migrator.Dockerfile
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "20.19.4"
           cache: npm
       - run: npm ci
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Login for formal image publication
         if: env.S2_CAPACITY_PROFILE == 'full'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -232,7 +244,7 @@ jobs:
           echo "local=s2/${{ matrix.name }}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           echo "remote=ghcr.io/${OWNER,,}/hvac-web/${{ matrix.name }}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
       - id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -308,7 +320,7 @@ jobs:
             --github-attestation="$GITHUB_ATTESTATION"
       - name: Publish GitHub build provenance for formal certification
         if: env.S2_CAPACITY_PROFILE == 'full'
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ steps.names.outputs.remote }}
           subject-digest: ${{ steps.inspect.outputs.digest }}
@@ -320,7 +332,7 @@ jobs:
           cp "out/s2-image-evidence/${{ matrix.name }}.json" out/s2-image-artifact/
           cp "sbom-${{ matrix.name }}.cyclonedx.json" out/s2-image-artifact/
           cp "build-metadata-${{ matrix.name }}.json" out/s2-image-artifact/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: s2-image-evidence-${{ matrix.name }}
           path: out/s2-image-artifact/*
@@ -330,8 +342,8 @@ jobs:
   kind-rollout-rollback:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "20.19.4"
           cache: npm
@@ -344,7 +356,7 @@ jobs:
           cluster_name: s2-release-certification
           wait: 120s
       - run: npm run audit:s2-kind-rollout
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: s2-release-input-kind
           path: |
@@ -357,18 +369,18 @@ jobs:
     needs: [contracts-and-static, security-negative, postgres-integration, transport-integration, capacity-and-failure, browser-real-mode, production-images, kind-rollout-rollback]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "20.19.4"
           cache: npm
       - run: npm ci
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           pattern: s2-release-input-*
           path: out/s2-release-evidence
           merge-multiple: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           pattern: s2-image-evidence-*
           path: out/s2-image-evidence
@@ -383,7 +395,7 @@ jobs:
           if [[ "$S2_CAPACITY_PROFILE" == "full" ]]; then FORMAL=true; fi
           node scripts/build-s2-release-evidence.mjs --repository-sha="$GITHUB_SHA" --workflow-run-id="$GITHUB_RUN_ID" --require-formal="$FORMAL"
           npm run s2:release-evidence:verify
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: s2-telemetry-release-evidence
           path: out/s2-release-evidence
