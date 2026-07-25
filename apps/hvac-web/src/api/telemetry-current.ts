@@ -9,11 +9,13 @@ import {
 import {
   createS2TelemetryClient,
   S2TelemetryClientError,
-  type BatchObservationFailure,
-  type DeviceObservationSnapshot,
-  type ProblemDetails,
-  type S2TelemetryClient,
-  type TelemetryKey,
+} from './generated/s2Telemetry.gen';
+import type {
+  BatchObservationFailure,
+  DeviceObservationSnapshot,
+  ProblemDetails,
+  S2TelemetryClient,
+  TelemetryKey,
 } from './generated/s2Telemetry.gen';
 import {
   createTelemetryLiveClient,
