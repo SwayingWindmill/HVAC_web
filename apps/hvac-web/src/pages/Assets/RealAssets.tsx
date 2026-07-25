@@ -29,6 +29,7 @@ import {
   TabletOutlined,
 } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   flattenRegistryPages,
   useRegistryDeviceDetail,
@@ -40,6 +41,13 @@ import {
   useRegistrySites,
 } from '@/api/registry';
 import type { Device, Equipment } from '@/api/generated/platformGateway.gen';
+import {
+  purgeTelemetryCurrentState,
+  useDeviceTelemetryLive,
+  useVisibleDevicePresence,
+  type TelemetryCurrentRuntime,
+} from '@/api/telemetry-current';
+import { DevicePresenceCell, DeviceTelemetryPanel } from '@/components/DeviceTelemetryState';
 import { RegistryEmptyState, RegistryFailureState, RegistryLoadMore } from '@/components/RegistryState';
 import { LoadingState } from '@/components/PageState';
 import PageScaffold from '@/components/PageScaffold';
@@ -71,10 +79,15 @@ type LedgerTab = 'equipment' | 'devices';
 const isEquipmentKey = (key: Key): key is string => typeof key === 'string' && key.startsWith('equipment:');
 const isDeviceKey = (key: Key): key is string => typeof key === 'string' && key.startsWith('device:');
 
-export default function RealAssets() {
+export interface RealAssetsProps {
+  telemetryRuntime?: TelemetryCurrentRuntime;
+}
+
+export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
   const [searchParams, setSearchParams] = useSearchParams();
   const screens = Grid.useBreakpoint();
   const compactTable = !screens.xl;
+  const queryClient = useQueryClient();
   const buildingId = useUi((state) => state.buildingId);
   const setBuilding = useUi((state) => state.setBuilding);
   const detailFocus = useOperationsDetailFocus();
@@ -121,6 +134,7 @@ export default function RealAssets() {
   };
 
   const selectOrganization = (value: string) => {
+    purgeTelemetryCurrentState(queryClient, telemetryRuntime);
     clearDetailParams();
     setOrganizationId(value);
     setSiteId(null);
@@ -128,6 +142,7 @@ export default function RealAssets() {
   };
 
   const selectSite = (value: string) => {
+    purgeTelemetryCurrentState(queryClient, telemetryRuntime);
     clearDetailParams();
     setSiteId(value);
     setBuilding(value);
@@ -175,6 +190,21 @@ export default function RealAssets() {
       return [item.id, item.code, item.displayName, item.deviceType].some((value) => value.toLowerCase().includes(query));
     });
   }, [devices, keyword, lifecycle]);
+
+  const presenceQuery = useVisibleDevicePresence(deviceRows, organizationId, siteId, telemetryRuntime);
+  const selectedDevice = deviceParam
+    ? deviceDetail.data ?? devices.find((device) => device.id === deviceParam) ?? null
+    : null;
+  const deviceLive = useDeviceTelemetryLive(selectedDevice, telemetryRuntime);
+
+  useEffect(() => {
+    if (!deviceParam || devicesQuery.isPending || devicesQuery.isFetching || devicesQuery.hasNextPage) return;
+    if (devices.some((device) => device.id === deviceParam)) return;
+    purgeTelemetryCurrentState(queryClient, telemetryRuntime);
+    const next = new URLSearchParams(searchParams);
+    next.delete('device');
+    setSearchParams(next, { replace: true });
+  }, [deviceParam, devices, devicesQuery.hasNextPage, devicesQuery.isFetching, devicesQuery.isPending, queryClient, searchParams, setSearchParams, telemetryRuntime]);
 
   const treeData = useMemo<DataNode[]>(() => {
     const site = siteQuery.data;
@@ -262,7 +292,15 @@ export default function RealAssets() {
       ),
     },
     { title: 'Registry 生命周期', dataIndex: 'status', key: 'status', width: 150, render: (value: string) => <Tag color={lifecycleColor[value]}>{lifecycleLabel[value] ?? value}</Tag> },
-    { title: '在线 / 遥测', key: 'online', width: 130, render: () => <Typography.Text type="secondary">S2 尚未提供</Typography.Text> },
+    {
+      title: 'Presence / latest', key: 'online', width: 210,
+      render: (_, row) => (
+        <DevicePresenceCell
+          item={presenceQuery.data?.byDeviceId.get(row.id)}
+          pending={presenceQuery.isPending || presenceQuery.isFetching}
+        />
+      ),
+    },
     { title: 'Revision', dataIndex: 'revision', key: 'revision', width: 90 },
     {
       title: '操作', key: 'action', width: 100, fixed: 'right',
@@ -290,6 +328,10 @@ export default function RealAssets() {
   const selectedSite = siteQuery.data ?? sites.find((site) => site.id === siteId);
   const selectedOrganization = organizations.find((organization) => organization.id === organizationId);
   const attentionCount = [...equipment, ...devices].filter((item) => item.status !== 'ACTIVE').length;
+  const visiblePresence = presenceQuery.data?.items ?? [];
+  const onlineCount = visiblePresence.filter((item) => item.status === 'ok' && item.snapshot.displayState === 'ONLINE').length;
+  const telemetryAttentionCount = visiblePresence.filter((item) => item.status === 'error'
+    || (item.status === 'ok' && ['OFFLINE', 'STALE', 'UNKNOWN', 'UNAVAILABLE'].includes(item.snapshot.displayState ?? 'UNKNOWN'))).length;
   const detailOpen = Boolean(equipmentParam || deviceParam);
   const detailLoading = equipmentParam ? equipmentDetail.isPending : deviceDetail.isPending;
   const detailError = equipmentParam ? equipmentDetail.error : deviceDetail.error;
@@ -305,17 +347,38 @@ export default function RealAssets() {
         <OperationsMetrics
           items={[
             { label: '已加载 Equipment', value: equipment.length, icon: <BlockOutlined /> },
-            { label: '已加载 Device', value: devices.length, icon: <TabletOutlined /> },
-            { label: '非 ACTIVE', value: attentionCount, detail: '仅 Registry 生命周期', tone: attentionCount ? 'warning' : 'positive' },
-            { label: 'Site 时区', value: selectedSite?.timezone ?? '—', icon: <DatabaseOutlined />, tone: 'accent' },
+            { label: '可见 Device', value: devices.length, icon: <TabletOutlined /> },
+            { label: '当前 ONLINE', value: onlineCount, detail: '来自 Presence-only Snapshot', tone: 'positive' },
+            { label: '状态需关注', value: telemetryAttentionCount, detail: 'OFFLINE / STALE / UNKNOWN / UNAVAILABLE', tone: telemetryAttentionCount ? 'warning' : 'positive' },
+            { label: '非 ACTIVE', value: attentionCount, detail: 'Registry 生命周期，非在线状态', tone: attentionCount ? 'warning' : 'accent' },
           ]}
         />
-        <Alert
-          type="info"
-          showIcon
-          message="Device 在线与遥测状态在 S2 尚未提供"
-          description="本页仅展示 Registry 生命周期，不会用 ACTIVE 推断设备在线，也不会填充 Mock 遥测。"
-        />
+        {presenceQuery.error ? (
+          <Alert
+            type="error"
+            showIcon
+            message="可见 Device 的 Presence batch 暂不可用"
+            description="真实模式保持 Registry 列表可见，但不会回退到 Legacy、ThingsBoard、Socket.IO 或 Mock 状态。"
+            action={<Button size="small" onClick={() => void presenceQuery.refetch()}>重试</Button>}
+            data-presence-batch-state="error"
+          />
+        ) : presenceQuery.data?.partial ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="Presence batch 返回部分结果"
+            description="每个失败 Device 独立显示 UNAVAILABLE；成功 Device 仍使用同一批次的权威 Snapshot。"
+            data-presence-batch-state="partial"
+          />
+        ) : (
+          <Alert
+            type="info"
+            showIcon
+            message="S2 Presence 与 latest telemetry 已接入"
+            description="列表使用 bounded Presence-only batch；详情仅请求 UI 展示的 exact keys，并通过同一 Snapshot/Business Revision 状态模型应用实时 delta。"
+            data-presence-batch-state="ready"
+          />
+        )}
 
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={7} xl={6}>
@@ -375,14 +438,16 @@ export default function RealAssets() {
                     meta={selectedSite ? `${selectedSite.displayName} · ${selectedSite.timezone}` : '请选择 Site'}
                   />
                   <Space wrap>
-                    <Input.Search
+                    <Input
                       allowClear
+                      aria-label="搜索 Registry 资源"
                       placeholder="搜索平台 ID、code、名称或类型"
                       value={keyword}
                       onChange={(event) => setKeyword(event.target.value)}
                       style={{ width: 280 }}
                     />
                     <Select
+                      aria-label="筛选 Registry 生命周期"
                       value={lifecycle}
                       onChange={setLifecycle}
                       options={[
@@ -486,7 +551,7 @@ export default function RealAssets() {
           />
         ) : `${detailKind} 详情`}
         footer={(
-          <OperationsActionFooter note="S1 Registry 为只读切片；在线状态、遥测与控制能力不在本详情中推断。">
+          <OperationsActionFooter note="Registry 生命周期与 S2 current-state 分离；详情只读取 exact keys，不提供历史、控制或 Mock fallback。">
             <Button onClick={closeDetail}>关闭</Button>
           </OperationsActionFooter>
         )}
@@ -517,10 +582,12 @@ export default function RealAssets() {
               </Descriptions>
             </OperationsDetailSection>
             {!equipmentParam ? (
-              <OperationsDetailSection title="在线与遥测状态" icon={<DatabaseOutlined />}>
-                <Typography.Text type="secondary">
-                  S1 仅提供 Device Registry 生命周期状态。在线状态、最新遥测和点位质量将在 S2 接入，当前不使用 Mock 值填充。
-                </Typography.Text>
+              <OperationsDetailSection
+                title="S2 Presence 与 latest telemetry"
+                icon={<DatabaseOutlined />}
+                description="ONLINE/OFFLINE/STALE/UNKNOWN/UNAVAILABLE 与点位 MISSING/SUSPECT 均来自同一权威 Snapshot 状态模型。"
+              >
+                <DeviceTelemetryPanel result={deviceLive} />
               </OperationsDetailSection>
             ) : null}
           </div>

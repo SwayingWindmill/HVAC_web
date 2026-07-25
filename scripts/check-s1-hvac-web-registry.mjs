@@ -66,9 +66,9 @@ assert(systemEntry.includes("API_MODE === 'real'"), 'System Registry entry does 
 assert(systemEntry.includes("lazy(() => import('./MockRegistrySitePanel'))"), 'System mock Registry view is not isolated behind a lazy boundary');
 
 for (const marker of [
-  'selectedSite?.timezone',
+  'selectedSite.timezone',
   'Registry 生命周期',
-  'S2 尚未提供',
+  'DeviceTelemetryPanel',
   'RegistryLoadMore',
   'useRegistryEquipmentDetail',
   'useRegistryDeviceDetail',
