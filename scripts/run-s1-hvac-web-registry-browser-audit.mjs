@@ -28,6 +28,7 @@ const ids = {
 const organizationCursor = 'orgcursoraaaaaaa.orgcursorbbbbbbb';
 const equipmentCursor = 'equipmentaaaaaaa.equipmentbbbbbbb';
 const instant = '2026-07-23T00:00:00.000Z';
+const telemetryCsrf = ['s1', 'telemetry', String(process.pid)].join('-');
 const organization = {
   id: ids.organization,
   code: 'ORG-AUTH',
@@ -150,6 +151,39 @@ function createGatewayFixture() {
       return;
     }
     authenticatedRequests += 1;
+
+    if (url.pathname === '/api/v1/principal' && request.method === 'GET') {
+      const user = {
+        subject: 's1-registry-browser',
+        issuer: 'https://identity.hvac.local',
+        displayName: 'S1 Registry Browser',
+        email: ['s1-registry', 'example.invalid'].join('@'),
+        roles: ['MAINTENANCE'],
+      };
+      json(response, 200, {
+        principal: user,
+        context: {
+          initiatingPrincipal: user,
+          executingServicePrincipal: { service: 'platform-gateway', spiffeId: 'spiffe://hvac.local/platform-gateway' },
+          actingOrganizationId: ids.organization,
+          audience: 'iam-service',
+          policyRevision: 's1-registry-browser',
+          delegationExpiresAt: '2026-07-23T01:00:00.000Z',
+        },
+        session: {
+          id: 's1-registry-session',
+          expiresAt: '2026-07-23T01:00:00.000Z',
+          csrfToken: telemetryCsrf,
+          revocationObjectiveMs: 30000,
+          lastAuditMessageId: 's1-registry-audit',
+        },
+      });
+      return;
+    }
+    if (url.pathname === '/api/v1/telemetry/observation-snapshots:batchGet' && request.method === 'POST') {
+      json(response, 503, problem(503, 'OWNER_DEPENDENCY_UNAVAILABLE', 'S2 current-state is unavailable in the S1 Registry fixture.', true));
+      return;
+    }
 
     if (request.method !== 'GET') {
       json(response, 405, problem(405, 'METHOD_NOT_ALLOWED', 'Only read operations are available.'));
@@ -285,7 +319,7 @@ async function evaluate(client, expression) {
 
 async function waitForCondition(client, expression, label) {
   let last;
-  for (let attempt = 0; attempt < 600; attempt += 1) {
+  for (let attempt = 0; attempt < 1200; attempt += 1) {
     try {
       last = await evaluate(client, expression);
       if (last) return last;
@@ -406,6 +440,11 @@ try {
     `Boolean(document.querySelector('[data-testid="real-registry-assets-page"]')) && document.body.innerText.includes('冷水机组 A')`,
     'real Assets Registry page',
   );
+  await waitForCondition(
+    cdpClient,
+    `document.body.innerText.includes('可见 Device 的 Presence batch 暂不可用')`,
+    'S2 current-state fail-closed Alert',
+  );
   const assetsState = await evaluate(cdpClient, `({
     text: document.body.innerText,
     mockNameVisible: document.body.innerText.includes('总部大楼') || document.body.innerText.includes('冷水机组 #1'),
@@ -413,7 +452,7 @@ try {
   })`);
   assert(assetsState.realPage === true, 'Assets real page was not rendered');
   assert(assetsState.text.includes('Asia/Tokyo'), 'Assets page did not show authoritative Site timezone');
-  assert(assetsState.text.includes('S2 尚未提供'), 'Assets page synthesized Device online/telemetry state');
+  assert(assetsState.text.includes('可见 Device 的 Presence batch 暂不可用') && assetsState.text.includes('真实模式'), 'Assets page did not fail closed when S2 current-state was unavailable');
   assert(assetsState.mockNameVisible === false, 'Assets real mode displayed local Mock business data');
   assert(!assetsState.text.includes(ids.siblingSite) && !assetsState.text.includes(ids.siblingEquipment), 'authorized navigation disclosed sibling-Site resources');
   assert(!assetsState.text.includes(ids.foreignEquipment), 'authorized navigation disclosed a foreign-Organization resource');

@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Badge, Button, Space, Typography } from 'antd';
 import { LoginOutlined, LogoutOutlined, ReloadOutlined } from '@ant-design/icons';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   PlatformApiError,
   createPlatformGatewayClient,
   type CurrentPrincipalResponse,
 } from '@/api/generated/platformGateway.gen';
+import { purgeTelemetryCurrentState } from '@/api/telemetry-current';
 import { STATUS } from '@/theme/tokens';
 
 const { Text } = Typography;
@@ -18,6 +20,7 @@ type PrincipalSnapshot =
   | { state: 'error'; detail: string };
 
 export default function AuthenticatedPrincipalStatus() {
+  const queryClient = useQueryClient();
   const [refreshKey, setRefreshKey] = useState(0);
   const [snapshot, setSnapshot] = useState<PrincipalSnapshot>({ state: 'checking' });
   const [loggingOut, setLoggingOut] = useState(false);
@@ -48,6 +51,7 @@ export default function AuthenticatedPrincipalStatus() {
     setLoggingOut(true);
     try {
       await client.logout(snapshot.principal.session.csrfToken);
+      purgeTelemetryCurrentState(queryClient);
       setSnapshot({ state: 'anonymous' });
     } finally {
       setLoggingOut(false);
