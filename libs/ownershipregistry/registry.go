@@ -24,6 +24,14 @@ const (
 	PhaseGoPrimaryLegacyReadFallback = "GO_PRIMARY_LEGACY_READ_FALLBACK"
 	PhaseGoPrimary                   = "GO_PRIMARY"
 	PhaseS2ContractOnly              = "R0-contract-only"
+	PhaseS2DarkIngest                = "R1-dark-ingest"
+	PhaseS2ShadowCompare             = "R2-shadow-compare"
+	PhaseS2InternalCanary            = "R3-internal-canary"
+	PhaseS2ExternalCanary            = "R4-external-canary-5"
+	PhaseS2Ramp25                    = "R5-ramp-25"
+	PhaseS2Ramp50                    = "R6-ramp-50"
+	PhaseS2Primary                   = "R7-primary-100"
+	PhaseS2LegacyRetired             = "R8-legacy-current-state-retired"
 )
 
 var (
@@ -53,6 +61,7 @@ type RouteEntry struct {
 	ReadOnlyFallback         bool          `json:"readOnlyFallback,omitempty"`
 	ReadFallbackOwner        string        `json:"readFallbackOwner,omitempty"`
 	FallbackForbiddenResults []string      `json:"fallbackForbiddenResults,omitempty"`
+	CohortGroup              string        `json:"cohortGroup,omitempty"`
 }
 
 type RolloutPolicy struct {
@@ -76,6 +85,7 @@ type Decision struct {
 	ShadowOwner              string
 	ReadFallbackOwner        string
 	FallbackForbiddenResults []string
+	CohortGroup              string
 }
 
 type Snapshot struct {
@@ -116,6 +126,7 @@ func Parse(input []byte) (*Snapshot, error) {
 	seen := map[string]struct{}{}
 	canonical := map[string]struct{}{}
 	compiled := make([]compiledRoute, 0, len(registry.Routes))
+	cohortGroups := map[string]RouteEntry{}
 	for index := range registry.Routes {
 		entry := registry.Routes[index]
 		entry.Method = strings.ToUpper(strings.TrimSpace(entry.Method))
@@ -140,6 +151,15 @@ func Parse(input []byte) (*Snapshot, error) {
 			}
 		}
 		canonical[canonicalKey] = struct{}{}
+		if entry.CohortGroup != "" {
+			if previous, exists := cohortGroups[entry.CohortGroup]; exists {
+				if err := validateCohortGroup(previous, entry); err != nil {
+					return nil, fmt.Errorf("cohort group %s: %w", entry.CohortGroup, err)
+				}
+			} else {
+				cohortGroups[entry.CohortGroup] = entry
+			}
+		}
 		entry.AllowedScopeDimensions = append([]string(nil), entry.AllowedScopeDimensions...)
 		compiled = append(compiled, compiledRoute{entry: entry, segments: segments, canonical: canonicalKey})
 		registry.Routes[index] = entry
@@ -192,8 +212,8 @@ func validateEntry(entry RouteEntry) error {
 	}
 	if entry.MigrationPhase != "" {
 		var err error
-		if entry.MigrationPhase == PhaseS2ContractOnly {
-			err = validateS2ContractOnly(entry, seenScopes)
+		if isS2Phase(entry.MigrationPhase) {
+			err = validateS2Phase(entry, seenScopes)
 		} else {
 			err = validateMigrationPhase(entry)
 		}
@@ -201,30 +221,91 @@ func validateEntry(entry RouteEntry) error {
 			return err
 		}
 	}
-	if entry.Owner == OwnerTelemetryRuntime && entry.MigrationPhase != PhaseS2ContractOnly {
-		return errors.New("Telemetry Runtime ownership requires the S2 contract-only phase")
+	if entry.Owner == OwnerTelemetryRuntime && !isS2Phase(entry.MigrationPhase) {
+		return errors.New("Telemetry Runtime ownership requires an S2 migration phase")
 	}
 	return nil
 }
 
-func validateS2ContractOnly(entry RouteEntry, seenScopes map[string]bool) error {
-	if entry.Owner != OwnerTelemetryRuntime || entry.PublicIngress != OwnerGateway || entry.ActivationStatus != "expand-baseline" {
-		return errors.New("S2 contract-only ownership or activation is invalid")
-	}
-	if entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" || entry.ShadowSideEffectPolicy != "NONE" || entry.ReadOnlyFallback || entry.ReadFallbackOwner != "" {
-		return errors.New("S2 contract-only route must remain native, disabled and fallback-free")
+func validateS2Phase(entry RouteEntry, seenScopes map[string]bool) error {
+	if entry.PublicIngress != OwnerGateway || entry.ShadowSideEffectPolicy != "NONE" || entry.ReadOnlyFallback || entry.ReadFallbackOwner != "" {
+		return errors.New("S2 route must use Gateway ingress, side-effect-free shadowing and no request fallback")
 	}
 	for _, required := range []string{"organization", "site", "device", "principal", "key"} {
 		if !seenScopes[required] {
-			return errors.New("S2 contract-only scope dimensions are incomplete")
+			return errors.New("S2 scope dimensions are incomplete")
 		}
 	}
 	for _, required := range []string{"AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND", "REVISION_GAP", "RECOVERY_FAILED"} {
 		if !containsString(entry.FallbackForbiddenResults, required) {
-			return errors.New("S2 contract-only forbidden results are incomplete")
+			return errors.New("S2 forbidden results are incomplete")
 		}
 	}
+	if entry.CohortGroup == "" {
+		return errors.New("S2 route requires a cohort group")
+	}
+	switch entry.MigrationPhase {
+	case PhaseS2ContractOnly:
+		if entry.Owner != OwnerTelemetryRuntime || entry.ActivationStatus != "expand-baseline" || entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" {
+			return errors.New("S2 contract-only policy is invalid")
+		}
+	case PhaseS2DarkIngest:
+		if entry.Owner != OwnerLegacy || entry.ActivationStatus != "dark-ingest" || entry.Rollout.Mode != "all" || entry.CompatibilityMode != "legacy-read" {
+			return errors.New("S2 dark-ingest policy is invalid")
+		}
+	case PhaseS2ShadowCompare:
+		if entry.Owner != OwnerLegacy || entry.ActivationStatus != "shadow-compare" || entry.Rollout.Mode != "all" || entry.CompatibilityMode != "legacy-read" {
+			return errors.New("S2 shadow-compare policy is invalid")
+		}
+	case PhaseS2InternalCanary:
+		if err := validateS2PercentagePhase(entry, 1); err != nil {
+			return err
+		}
+	case PhaseS2ExternalCanary:
+		if err := validateS2PercentagePhase(entry, 5); err != nil {
+			return err
+		}
+	case PhaseS2Ramp25:
+		if err := validateS2PercentagePhase(entry, 25); err != nil {
+			return err
+		}
+	case PhaseS2Ramp50:
+		if err := validateS2PercentagePhase(entry, 50); err != nil {
+			return err
+		}
+	case PhaseS2Primary:
+		if entry.Owner != OwnerTelemetryRuntime || entry.ActivationStatus != "primary" || entry.Rollout.Mode != "all" || entry.CompatibilityMode != "native" {
+			return errors.New("S2 primary policy is invalid")
+		}
+	case PhaseS2LegacyRetired:
+		if entry.Owner != OwnerTelemetryRuntime || entry.ActivationStatus != "legacy-retired" || entry.Rollout.Mode != "all" || entry.CompatibilityMode != "native" {
+			return errors.New("S2 Legacy-retired policy is invalid")
+		}
+	default:
+		return errors.New("S2 migration phase is unsupported")
+	}
 	return nil
+}
+
+func validateS2PercentagePhase(entry RouteEntry, percentage int) error {
+	if entry.Owner != OwnerTelemetryRuntime || entry.ActivationStatus != "canary" || entry.CompatibilityMode != "native" ||
+		entry.Rollout.Mode != "percentage" || entry.Rollout.Percentage != percentage || entry.Rollout.FallbackOwner != OwnerLegacy {
+		return errors.New("S2 percentage rollout policy is invalid")
+	}
+	return nil
+}
+
+func validateCohortGroup(previous, next RouteEntry) error {
+	if previous.Revision != next.Revision || previous.MigrationPhase != next.MigrationPhase || previous.Owner != next.Owner ||
+		previous.ActivationStatus != next.ActivationStatus || previous.CompatibilityMode != next.CompatibilityMode || previous.Rollout != next.Rollout {
+		return errors.New("route revision, phase, owner or rollout is inconsistent")
+	}
+	return nil
+}
+
+func isS2Phase(phase string) bool {
+	_, ok := s2PhaseRank(phase)
+	return ok
 }
 
 func validateMigrationPhase(entry RouteEntry) error {
@@ -287,6 +368,10 @@ func (manager *Manager) Current() *Snapshot {
 }
 
 func (manager *Manager) Reload(ctx context.Context, input []byte, meta PolicyChangeContext) error {
+	return manager.reload(ctx, input, meta, false)
+}
+
+func (manager *Manager) reload(ctx context.Context, input []byte, meta PolicyChangeContext, allowS2SessionInvalidation bool) error {
 	candidate, err := Parse(input)
 	if err != nil {
 		return err
@@ -294,6 +379,9 @@ func (manager *Manager) Reload(ctx context.Context, input []byte, meta PolicyCha
 	current := manager.current.Load()
 	if err := validateRevisionTransition(current, candidate); err != nil {
 		return err
+	}
+	if !allowS2SessionInvalidation && s2SnapshotsTransitionInvalidatesSessions(current, candidate) {
+		return errors.New("S2 route transition requires ReloadS2 session invalidation")
 	}
 	if err := manager.audit.Record(ctx, AuditRecord{
 		EventType:         "ROUTE_POLICY_CHANGED",
@@ -353,7 +441,7 @@ func routePolicyChanged(old, next RouteEntry) bool {
 	return old.Owner != next.Owner || old.PublicIngress != next.PublicIngress || old.ActivationStatus != next.ActivationStatus ||
 		old.CompatibilityMode != next.CompatibilityMode || old.Rollout != next.Rollout ||
 		old.MigrationPhase != next.MigrationPhase || old.ShadowSideEffectPolicy != next.ShadowSideEffectPolicy ||
-		old.ReadOnlyFallback != next.ReadOnlyFallback || old.ReadFallbackOwner != next.ReadFallbackOwner ||
+		old.ReadOnlyFallback != next.ReadOnlyFallback || old.ReadFallbackOwner != next.ReadFallbackOwner || old.CohortGroup != next.CohortGroup ||
 		strings.Join(old.AllowedScopeDimensions, "\x00") != strings.Join(next.AllowedScopeDimensions, "\x00") ||
 		strings.Join(old.FallbackForbiddenResults, "\x00") != strings.Join(next.FallbackForbiddenResults, "\x00")
 }
@@ -370,6 +458,10 @@ func validatePhaseTransition(old, next string) error {
 	}
 	oldRank, oldOK := migrationPhaseRank(old)
 	nextRank, nextOK := migrationPhaseRank(next)
+	if !oldOK || !nextOK {
+		oldRank, oldOK = s2PhaseRank(old)
+		nextRank, nextOK = s2PhaseRank(next)
+	}
 	if !oldOK || !nextOK || nextRank-oldRank > 1 || oldRank-nextRank > 1 {
 		return errors.New("migration phase skipped a required adjacent state")
 	}
@@ -386,6 +478,31 @@ func migrationPhaseRank(phase string) (int, bool) {
 		return 3, true
 	case PhaseGoPrimary:
 		return 4, true
+	default:
+		return 0, false
+	}
+}
+
+func s2PhaseRank(phase string) (int, bool) {
+	switch phase {
+	case PhaseS2ContractOnly:
+		return 0, true
+	case PhaseS2DarkIngest:
+		return 1, true
+	case PhaseS2ShadowCompare:
+		return 2, true
+	case PhaseS2InternalCanary:
+		return 3, true
+	case PhaseS2ExternalCanary:
+		return 4, true
+	case PhaseS2Ramp25:
+		return 5, true
+	case PhaseS2Ramp50:
+		return 6, true
+	case PhaseS2Primary:
+		return 7, true
+	case PhaseS2LegacyRetired:
+		return 8, true
 	default:
 		return 0, false
 	}
@@ -424,12 +541,17 @@ func (snapshot *Snapshot) Resolve(method, requestPath, businessKey string) (Deci
 		MigrationPhase:           entry.MigrationPhase,
 		ReadFallbackOwner:        entry.ReadFallbackOwner,
 		FallbackForbiddenResults: append([]string(nil), entry.FallbackForbiddenResults...),
+		CohortGroup:              entry.CohortGroup,
 	}
 	if entry.Rollout.Mode == "percentage" {
 		if businessKey == "" {
 			return Decision{}, ErrCohortKey
 		}
-		digest := sha256.Sum256([]byte(entry.Rollout.CohortSalt + "\x00" + businessKey))
+		cohortMaterial := entry.Rollout.CohortSalt + "\x00" + businessKey
+		if entry.CohortGroup != "" {
+			cohortMaterial = fmt.Sprintf("%s\x00%s\x00%d\x00%s", entry.Rollout.CohortSalt, entry.CohortGroup, entry.Revision, businessKey)
+		}
+		digest := sha256.Sum256([]byte(cohortMaterial))
 		bucket := int(binary.BigEndian.Uint64(digest[:8]) % 100)
 		decision.CohortBucket = &bucket
 		if bucket >= entry.Rollout.Percentage {

@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "component": "telemetry-shadow-comparator",
+  "executionMode": "offline-batch",
+  "servingPath": false,
+  "identity": {
+    "serviceAccountToken": false,
+    "workloadCertificate": false,
+    "tokenMintPermission": false
+  },
+  "network": {
+    "ingress": "deny-all",
+    "egress": "deny-all",
+    "dns": false
+  },
+  "dataAccess": {
+    "input": "read-only-mounted-json",
+    "output": "write-only-audit-report",
+    "databaseCredentials": false,
+    "databaseWritePermission": false,
+    "legacyWritePermission": false,
+    "telemetryRuntimeWritePermission": false,
+    "sharedCacheAccess": false
+  },
+  "transportPermissions": {
+    "publish": false,
+    "subscribe": false,
+    "centrifugoApi": false,
+    "redis": false,
+    "thingsBoard": false
+  },
+  "mutationPermissions": {
+    "authorization": false,
+    "mappingRepair": false,
+    "routeOwnership": false,
+    "currentStateFeedback": false
+  },
+  "runtime": {
+    "readOnlyRootFilesystem": true,
+    "allowPrivilegeEscalation": false,
+    "capabilities": [],
+    "maximumInputBytes": 67108864,
+    "outputFileMode": "0600"
+  },
+  "failureSemantics": {
+    "comparisonFailureAffectsLegacyServing": false,
+    "comparisonFailureAffectsS2Serving": false,
+    "comparisonFailureBlocksPromotion": true
+  }
+}

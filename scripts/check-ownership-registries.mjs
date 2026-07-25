@@ -120,6 +120,7 @@ for (const route of routeRegistry.routes ?? []) {
     if (route.migrationPhase !== 'R0-contract-only' || route.readFallbackOwner !== undefined || route.readOnlyFallback !== false) {
       errors.push(`${key}: S2 baseline must remain R0 without request fallback`);
     }
+    if (route.cohortGroup !== 's2-current-state-v1') errors.push(`${key}: S2 route must use the shared current-state cohort group`);
     if (!Array.isArray(route.migrationPhases) || route.migrationPhases.join('|') !== expectedS2MigrationPhases.join('|')) {
       errors.push(`${key}: S2 rollout phases are incomplete or reordered`);
     }

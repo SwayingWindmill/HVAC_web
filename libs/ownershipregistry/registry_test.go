@@ -115,7 +115,7 @@ func TestRegistryRejectsMissingConflictingAndRegressedOwnership(t *testing.T) {
 }
 
 func TestDisabledS2BaselineLoadsButIsNotDiscoverable(t *testing.T) {
-	input := `{"registryVersion":1,"registryRevision":7,"routes":[{"method":"GET","path":"/api/v1/devices/{deviceId}/observation-snapshot","owner":"telemetry-runtime-service","publicIngress":"platform-gateway","activationStatus":"expand-baseline","revision":1,"rollout":{"mode":"disabled"},"compatibilityMode":"native","allowedScopeDimensions":["organization","site","device","principal","key"],"migrationPhase":"R0-contract-only","shadowSideEffectPolicy":"NONE","readOnlyFallback":false,"fallbackForbiddenResults":["AUTHORIZATION_DENIED","RESOURCE_NOT_FOUND","REVISION_GAP","RECOVERY_FAILED"]}]}`
+	input := `{"registryVersion":1,"registryRevision":7,"routes":[{"method":"GET","path":"/api/v1/devices/{deviceId}/observation-snapshot","owner":"telemetry-runtime-service","publicIngress":"platform-gateway","activationStatus":"expand-baseline","revision":1,"rollout":{"mode":"disabled"},"compatibilityMode":"native","allowedScopeDimensions":["organization","site","device","principal","key"],"migrationPhase":"R0-contract-only","cohortGroup":"s2-current-state-v1","shadowSideEffectPolicy":"NONE","readOnlyFallback":false,"fallbackForbiddenResults":["AUTHORIZATION_DENIED","RESOURCE_NOT_FOUND","REVISION_GAP","RECOVERY_FAILED"]}]}`
 	snapshot := mustParse(t, input)
 	if !snapshot.ContainsOwner(ownershipregistry.OwnerTelemetryRuntime) {
 		t.Fatal("Telemetry Runtime owner was not retained in the parsed baseline")
@@ -127,7 +127,7 @@ func TestDisabledS2BaselineLoadsButIsNotDiscoverable(t *testing.T) {
 		t.Fatalf("disabled S2 route leaked allowed methods: %v", methods)
 	}
 
-	active := `{"registryVersion":1,"registryRevision":7,"routes":[{"method":"GET","path":"/api/v1/devices/{deviceId}/observation-snapshot","owner":"telemetry-runtime-service","publicIngress":"platform-gateway","activationStatus":"expand-baseline","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["organization","site","device","principal","key"],"migrationPhase":"R0-contract-only","shadowSideEffectPolicy":"NONE","readOnlyFallback":false,"fallbackForbiddenResults":["AUTHORIZATION_DENIED","RESOURCE_NOT_FOUND","REVISION_GAP","RECOVERY_FAILED"]}]}`
+	active := `{"registryVersion":1,"registryRevision":7,"routes":[{"method":"GET","path":"/api/v1/devices/{deviceId}/observation-snapshot","owner":"telemetry-runtime-service","publicIngress":"platform-gateway","activationStatus":"expand-baseline","revision":1,"rollout":{"mode":"all"},"compatibilityMode":"native","allowedScopeDimensions":["organization","site","device","principal","key"],"migrationPhase":"R0-contract-only","cohortGroup":"s2-current-state-v1","shadowSideEffectPolicy":"NONE","readOnlyFallback":false,"fallbackForbiddenResults":["AUTHORIZATION_DENIED","RESOURCE_NOT_FOUND","REVISION_GAP","RECOVERY_FAILED"]}]}`
 	if _, err := ownershipregistry.Parse([]byte(active)); err == nil {
 		t.Fatal("S2 contract-only route accepted active traffic")
 	}
