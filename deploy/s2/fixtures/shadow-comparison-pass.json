@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "registryRevision": 9,
+  "routeRevision": 3,
+  "cohort": "shadow-fixture-17",
+  "expectedSampleIntervalMillis": 60000,
+  "numericAbsoluteTolerance": 0.01,
+  "mappings": [
+    {
+      "legacyDeviceId": "legacy-device-a",
+      "deviceId": "018f2e00-3000-7000-8000-000000000001"
+    }
+  ],
+  "legacyDevices": [
+    {
+      "legacyDeviceId": "legacy-device-a",
+      "active": true,
+      "values": {
+        "temperature": {
+          "ts": 1784937600000,
+          "value": 22.5
+        }
+      }
+    }
+  ],
+  "s2Snapshots": [
+    {
+      "schemaVersion": 1,
+      "deviceId": "018f2e00-3000-7000-8000-000000000001",
+      "owningOrganizationId": "018f2e00-1000-7000-8000-000000000001",
+      "siteId": "018f2e00-4000-7000-8000-000000000001",
+      "businessRevision": 42,
+      "evaluatedAt": "2026-07-25T00:00:30.000Z",
+      "evaluationAvailability": "AVAILABLE",
+      "availabilityReasons": [],
+      "presence": {
+        "applicability": "APPLICABLE",
+        "currentState": "ONLINE",
+        "lastSeenAt": "2026-07-25T00:00:30.000Z",
+        "policyRevision": 1,
+        "lastKnown": null
+      },
+      "telemetryReadiness": "CURRENT",
+      "displayState": "STALE",
+      "values": [
+        {
+          "key": "temperature",
+          "state": "PRESENT",
+          "value": 22.505,
+          "valueType": "NUMBER",
+          "unit": "Cel",
+          "sampledAt": "2026-07-25T00:00:30.000Z",
+          "receivedAt": "2026-07-25T00:00:31.000Z",
+          "freshness": "FRESH",
+          "quality": "GOOD",
+          "qualityReasons": [],
+          "policyRevision": 1
+        }
+      ]
+    }
+  ]
+}

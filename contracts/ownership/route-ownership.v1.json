@@ -378,7 +378,8 @@
         "REVISION_GAP",
         "RECOVERY_FAILED"
       ],
-      "migrationPhase": "R0-contract-only"
+      "migrationPhase": "R0-contract-only",
+      "cohortGroup": "s2-current-state-v1"
     },
     {
       "method": "POST",
@@ -417,7 +418,8 @@
         "REVISION_GAP",
         "RECOVERY_FAILED"
       ],
-      "migrationPhase": "R0-contract-only"
+      "migrationPhase": "R0-contract-only",
+      "cohortGroup": "s2-current-state-v1"
     },
     {
       "method": "POST",
@@ -456,7 +458,8 @@
         "REVISION_GAP",
         "RECOVERY_FAILED"
       ],
-      "migrationPhase": "R0-contract-only"
+      "migrationPhase": "R0-contract-only",
+      "cohortGroup": "s2-current-state-v1"
     },
     {
       "method": "POST",
@@ -495,7 +498,8 @@
         "REVISION_GAP",
         "RECOVERY_FAILED"
       ],
-      "migrationPhase": "R0-contract-only"
+      "migrationPhase": "R0-contract-only",
+      "cohortGroup": "s2-current-state-v1"
     }
   ]
 }

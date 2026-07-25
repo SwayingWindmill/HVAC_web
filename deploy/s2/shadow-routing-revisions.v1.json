@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "ticket": 67,
+  "appliedProductionPhase": "R0-contract-only",
+  "productionTrafficPercent": 0,
+  "cohortGroup": "s2-current-state-v1",
+  "cohortSalt": "s2-current-state-rollout-v1",
+  "businessIdentity": "actingOrganizationId+NUL+initiatingPrincipalSubject",
+  "routeSurfaces": [
+    {
+      "method": "GET",
+      "path": "/api/v1/devices/{deviceId}/observation-snapshot",
+      "surface": "single-snapshot"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/telemetry/observation-snapshots:batchGet",
+      "surface": "batch-snapshot"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/telemetry/subscriptions:bootstrap",
+      "surface": "live-bootstrap"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/telemetry/recovery-cursors:checkpoint",
+      "surface": "live-checkpoint"
+    }
+  ],
+  "revisions": [
+    {
+      "id": "R0-contract-only",
+      "registryRevision": 7,
+      "routeRevision": 1,
+      "owner": "telemetry-runtime-service",
+      "activationStatus": "expand-baseline",
+      "compatibilityMode": "native",
+      "rollout": { "mode": "disabled" },
+      "publicReader": "legacy-current-state",
+      "s2Writer": "none"
+    },
+    {
+      "id": "R1-dark-ingest",
+      "registryRevision": 8,
+      "routeRevision": 2,
+      "owner": "legacy-hvac-backend",
+      "activationStatus": "dark-ingest",
+      "compatibilityMode": "legacy-read",
+      "rollout": { "mode": "all" },
+      "publicReader": "legacy-current-state",
+      "s2Writer": "telemetry-runtime-service-to-telemetry_runtime-only"
+    },
+    {
+      "id": "R2-shadow-compare",
+      "registryRevision": 9,
+      "routeRevision": 3,
+      "owner": "legacy-hvac-backend",
+      "activationStatus": "shadow-compare",
+      "compatibilityMode": "legacy-read",
+      "rollout": { "mode": "all" },
+      "publicReader": "legacy-current-state",
+      "s2Writer": "telemetry-runtime-service-to-telemetry_runtime-only",
+      "shadowComparator": "offline-side-effect-free"
+    },
+    {
+      "id": "R3-internal-canary",
+      "registryRevision": 10,
+      "routeRevision": 4,
+      "owner": "telemetry-runtime-service",
+      "activationStatus": "canary",
+      "compatibilityMode": "native",
+      "rollout": {
+        "mode": "percentage",
+        "percentage": 1,
+        "fallbackOwner": "legacy-hvac-backend",
+        "cohortSalt": "s2-current-state-rollout-v1"
+      },
+      "publicReader": "cohort-route-owner",
+      "s2Writer": "telemetry-runtime-service"
+    },
+    {
+      "id": "R3-to-R2-rollback",
+      "fromPhase": "R3-internal-canary",
+      "toPhase": "R2-shadow-compare",
+      "registryRevision": 11,
+      "routeRevision": 5,
+      "owner": "legacy-hvac-backend",
+      "activationStatus": "shadow-compare",
+      "compatibilityMode": "legacy-read",
+      "rollout": { "mode": "all" },
+      "sessionInvalidation": {
+        "disconnectOrExpire": true,
+        "freshSnapshotRequired": true,
+        "databaseAction": "EXPAND_ONLY_NO_DOWN_MIGRATION"
+      }
+    }
+  ],
+  "invariants": {
+    "crossWriteCount": 0,
+    "sharedCacheCount": 0,
+    "requestFallback": false,
+    "browserOwnerSelection": false,
+    "sameOwnerForSingleBatchLive": true,
+    "productionCanaryActivationInTicket08": false
+  }
+}
