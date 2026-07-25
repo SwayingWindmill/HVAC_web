@@ -124,7 +124,20 @@
     "s2:security-observability:check": "node scripts/check-s2-security-observability.mjs",
     "s2:security-negative": "node scripts/run-s2-security-negative.mjs",
     "s2:observability:harness": "node scripts/run-go.mjs test ./libs/observability/... && node scripts/run-go.mjs run ./libs/observability/cmd/s2-ticket-10-harness --catalog deploy/s2/observability/metric-catalog.v1.json --output out/s2-ticket-10/observability-harness.json && node scripts/run-s2-security-observability-audit.mjs",
-    "s2:ticket-10": "npm run s2:security-observability:check && npm run s2:security-negative && npm run s2:observability:harness && npm run test:observability && npm run security:network-policies && npm run security:dependency-audit && npm run security:licenses && npm run lint && npm run build"
+    "s2:ticket-10": "npm run s2:security-observability:check && npm run s2:security-negative && npm run s2:observability:harness && npm run test:observability && npm run security:network-policies && npm run security:dependency-audit && npm run security:licenses && npm run lint && npm run build",
+    "build:telemetry-runtime-image": "docker build -f deploy/s2/images/telemetry-runtime.Dockerfile -t hvac/s2-telemetry-runtime:local .",
+    "build:telemetry-runtime-migrator": "docker build -f deploy/s2/images/telemetry-runtime-migrator.Dockerfile -t hvac/s2-telemetry-runtime-migrator:local .",
+    "s2:postgres-integration": "npm run s2:postgres",
+    "s2:transport-integration": "npm run s2:realtime:config && npm run s2:realtime:transport",
+    "audit:s2-browser": "npm run s2:hvac-web:browser",
+    "s2:release:check": "node scripts/check-s2-release-assets.mjs",
+    "s2:capacity": "node scripts/run-s2-capacity-certification.mjs --profile=preflight",
+    "audit:s2-kind-rollout": "node scripts/run-s2-kind-rollout.mjs",
+    "s2:release-evidence": "node scripts/build-s2-release-evidence.mjs --require-formal=false",
+    "s2:release-evidence:verify": "node scripts/verify-s2-release-evidence.mjs",
+    "test:s2-release-evidence": "node scripts/test-s2-release-evidence.mjs",
+    "test:s2-capacity": "node scripts/test-s2-capacity-certification.mjs",
+    "s2:ticket-11": "npm run s2:release:check && node scripts/run-go.mjs test ./services/platform-gateway/... ./services/telemetry-runtime-service/... && node scripts/run-go.mjs vet ./services/platform-gateway/... ./services/telemetry-runtime-service/... && npm run build:telemetry-runtime && npm run test:s2-release-evidence && npm run test:s2-capacity && npm run s2:capacity && npm run s2:security-observability:check && npm run s2:contracts:check && npm run s2:rollout-gates:check && npm run security:network-policies && npm run security:dependency-audit && npm run security:go-vuln && npm run security:licenses && npm run lint && npm run build"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.1",

@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hvac.local/schemas/s2-full-capacity-attestation.v1.json",
+  "title": "S2 full release capacity attestation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "repositorySha",
+    "steadyStateSeconds",
+    "peakSeconds",
+    "manualApproval",
+    "approvedBy",
+    "environment",
+    "fixture",
+    "load",
+    "observed",
+    "zeroCounters",
+    "reconnect",
+    "slowConsumer",
+    "revocation",
+    "failureScenarios"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "repositorySha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "steadyStateSeconds": { "type": "integer", "minimum": 3600 },
+    "peakSeconds": { "type": "integer", "minimum": 900 },
+    "manualApproval": { "const": true },
+    "approvedBy": { "type": "string", "minLength": 1 },
+    "environment": { "type": "object", "minProperties": 1 },
+    "fixture": { "type": "object", "minProperties": 1 },
+    "load": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["connections", "subscriptions", "businessRevisionsPerSecond", "peakMultiplier"],
+      "properties": {
+        "connections": { "type": "integer", "minimum": 5000 },
+        "subscriptions": { "type": "integer", "minimum": 50000 },
+        "businessRevisionsPerSecond": { "type": "integer", "minimum": 2000 },
+        "peakMultiplier": { "type": "number", "minimum": 2 }
+      }
+    },
+    "observed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshotP99Seconds", "publicationP99Seconds", "recoveryOrSnapshotFailureFraction", "maxQueueBytes", "cpuPeak", "memoryPeak", "redisMemoryPeak", "postgresPoolPeak", "networkPeak", "minimumHeadroom"],
+      "properties": {
+        "snapshotP99Seconds": { "type": "number", "minimum": 0 },
+        "publicationP99Seconds": { "type": "number", "minimum": 0 },
+        "recoveryOrSnapshotFailureFraction": { "type": "number", "minimum": 0, "maximum": 1 },
+        "maxQueueBytes": { "type": "integer", "minimum": 0 },
+        "cpuPeak": { "type": "number", "minimum": 0, "maximum": 1 },
+        "memoryPeak": { "type": "number", "minimum": 0, "maximum": 1 },
+        "redisMemoryPeak": { "type": "number", "minimum": 0, "maximum": 1 },
+        "postgresPoolPeak": { "type": "number", "minimum": 0, "maximum": 1 },
+        "networkPeak": { "type": "number", "minimum": 0, "maximum": 1 },
+        "minimumHeadroom": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "zeroCounters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["oom", "crash", "unboundedQueue", "securityInvariant", "businessRevisionCorruption"],
+      "properties": {
+        "oom": { "const": 0 },
+        "crash": { "const": 0 },
+        "unboundedQueue": { "const": 0 },
+        "securityInvariant": { "const": 0 },
+        "businessRevisionCorruption": { "const": 0 }
+      }
+    },
+    "reconnect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clients", "clientsPerSecond", "lostAuthorizedState", "mixedRevisionState", "snapshotFallbackRequired"],
+      "properties": {
+        "clients": { "type": "integer", "minimum": 10000 },
+        "clientsPerSecond": { "type": "integer", "minimum": 1000 },
+        "lostAuthorizedState": { "const": 0 },
+        "mixedRevisionState": { "const": 0 },
+        "snapshotFallbackRequired": { "const": true }
+      }
+    },
+    "slowConsumer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fraction", "disconnectFraction", "unboundedQueue"],
+      "properties": {
+        "fraction": { "type": "number", "minimum": 0.01 },
+        "disconnectFraction": { "type": "number", "minimum": 0, "maximum": 0.005 },
+        "unboundedQueue": { "const": 0 }
+      }
+    },
+    "revocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revocationsPerSecond", "postRevocationDeliveries", "staleRecoveryCursorsAccepted", "browserLastKnownRetained"],
+      "properties": {
+        "revocationsPerSecond": { "type": "integer", "minimum": 100 },
+        "postRevocationDeliveries": { "const": 0 },
+        "staleRecoveryCursorsAccepted": { "const": 0 },
+        "browserLastKnownRetained": { "const": 0 }
+      }
+    },
+    "failureScenarios": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "passed", "result"],
+        "properties": {
+          "name": { "enum": ["history-overflow", "epoch-reset", "centrifugo-node-loss", "redis-failover", "postgres-failover", "iam-outage", "upstream-outage"] },
+          "passed": { "const": true },
+          "result": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

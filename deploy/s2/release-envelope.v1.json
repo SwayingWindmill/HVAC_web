@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "name": "initial-production-release-envelope-v1",
+  "authority": "deploy/s2/release-gates.v1.json",
+  "steadyState": {
+    "durationSeconds": 3600,
+    "connections": 5000,
+    "subscriptions": 50000,
+    "businessRevisionsPerSecond": 2000,
+    "minimumHeadroomFraction": 0.30
+  },
+  "peak": {
+    "durationSeconds": 900,
+    "multiplier": 2,
+    "oomMaximum": 0,
+    "crashMaximum": 0,
+    "unboundedQueueMaximum": 0,
+    "securityInvariantMaximum": 0,
+    "businessCorruptionMaximum": 0
+  },
+  "failureScenarios": {
+    "reconnectClients": 10000,
+    "reconnectClientsPerSecond": 1000,
+    "slowConsumerFraction": 0.01,
+    "revocationsPerSecond": 100,
+    "historyOverflow": true,
+    "epochReset": true,
+    "centrifugoNodeLoss": true,
+    "redisFailover": true,
+    "postgresFailover": true,
+    "iamOutage": true,
+    "upstreamOutage": true
+  },
+  "slo": {
+    "snapshotP99SecondsMaximum": 1.5,
+    "publicationP99SecondsMaximum": 5,
+    "recoveryOrSnapshotFailureFractionMaximum": 0.005,
+    "slowConsumerDisconnectFractionMaximum": 0.005,
+    "cpuUtilizationFractionMaximum": 0.80,
+    "redisMemoryUtilizationFractionMaximum": 0.80,
+    "rollbackDecisionSecondsMaximum": 300,
+    "routeRollbackSecondsMaximum": 900
+  },
+  "transportBounds": {
+    "publicationBytesMaximum": 65536,
+    "clientQueueBytesMaximum": 262144,
+    "historyPublicationsMaximum": 256,
+    "historySecondsMaximum": 180,
+    "recoveryCursorSecondsMaximum": 120
+  },
+  "profiles": {
+    "preflight": {
+      "formalCertification": false,
+      "maximumWallClockSeconds": 120,
+      "virtualSteadyStateSeconds": 3600,
+      "virtualPeakSeconds": 900,
+      "purpose": "deterministic release-model, configuration and failure-invariant verification; never capacity certification"
+    },
+    "full": {
+      "formalCertification": true,
+      "minimumWallClockSteadyStateSeconds": 3600,
+      "minimumWallClockPeakSeconds": 900,
+      "requiresMeasuredAttestation": true,
+      "requiresRepositoryShaMatch": true,
+      "purpose": "formal production release certification from measured environment evidence"
+    }
+  }
+}
