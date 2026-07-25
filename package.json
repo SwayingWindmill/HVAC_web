@@ -120,7 +120,11 @@
     "audit:ui": "node scripts/run-browser-audit.mjs scripts/ui-audit.mjs",
     "audit:bigscreen": "node scripts/run-browser-audit.mjs scripts/bigscreen-layout-audit.mjs",
     "audit:ops-loop": "node scripts/run-browser-audit.mjs scripts/ops-loop-audit.mjs",
-    "audit:all": "node scripts/audit-all.mjs"
+    "audit:all": "node scripts/audit-all.mjs",
+    "s2:security-observability:check": "node scripts/check-s2-security-observability.mjs",
+    "s2:security-negative": "node scripts/run-s2-security-negative.mjs",
+    "s2:observability:harness": "node scripts/run-go.mjs test ./libs/observability/... && node scripts/run-go.mjs run ./libs/observability/cmd/s2-ticket-10-harness --catalog deploy/s2/observability/metric-catalog.v1.json --output out/s2-ticket-10/observability-harness.json && node scripts/run-s2-security-observability-audit.mjs",
+    "s2:ticket-10": "npm run s2:security-observability:check && npm run s2:security-negative && npm run s2:observability:harness && npm run test:observability && npm run security:network-policies && npm run security:dependency-audit && npm run security:licenses && npm run lint && npm run build"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.1",

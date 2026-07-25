@@ -15,6 +15,10 @@ var forbiddenMetricLabels = map[string]struct{}{
 	"request": {}, "request_id": {}, "trace": {}, "trace_id": {}, "span_id": {},
 	"resource": {}, "resource_id": {}, "message": {}, "message_id": {},
 	"organization": {}, "organization_id": {}, "tenant": {}, "tenant_id": {},
+	"site": {}, "site_id": {}, "device": {}, "device_id": {},
+	"subscription": {}, "subscription_id": {}, "cursor": {}, "recovery_cursor": {},
+	"revision": {}, "business_revision": {}, "key": {}, "telemetry_key": {}, "value": {},
+	"token": {}, "channel": {}, "authorization": {}, "cookie": {}, "csrf": {}, "source_credential": {},
 }
 
 type Registry struct {
@@ -121,6 +125,22 @@ func (registry *Registry) Handler() http.Handler {
 		writer.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		registry.writePrometheus(writer)
 	})
+}
+
+func (registry *Registry) SeriesCardinality() map[string]int {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	result := map[string]int{}
+	for _, point := range registry.counters {
+		result[point.name]++
+	}
+	for _, point := range registry.gauges {
+		result[point.name]++
+	}
+	for _, point := range registry.histograms {
+		result[point.name]++
+	}
+	return result
 }
 
 func (registry *Registry) writePrometheus(writer io.Writer) {

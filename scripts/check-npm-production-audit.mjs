@@ -10,6 +10,8 @@ if (!Number.isFinite(expiry.getTime()) || Date.now() > expiry.getTime()) {
 }
 
 const severities = ['low', 'moderate', 'high', 'critical'];
+const auditAttempts = 3;
+const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -64,16 +66,28 @@ for (const [name, project] of Object.entries(baseline.projects)) {
   const args = ['audit', '--omit=dev', '--json'];
   if (project.path !== '.') args.push('--prefix', project.path);
   const npmCLI = process.env.npm_execpath || resolve(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js');
-  const result = spawnSync(process.execPath, [npmCLI, ...args], { cwd: root, encoding: 'utf8', windowsHide: true });
-  if (result.error) throw result.error;
   let report;
-  try {
-    report = JSON.parse(result.stdout);
-  } catch {
-    throw new Error(`${name} npm audit did not return JSON: ${result.stderr || result.stdout}`);
+  let lastAuditFailure = '';
+  for (let attempt = 1; attempt <= auditAttempts; attempt += 1) {
+    const result = spawnSync(process.execPath, [npmCLI, ...args], { cwd: root, encoding: 'utf8', windowsHide: true });
+    if (result.error) throw result.error;
+    try {
+      const candidate = JSON.parse(result.stdout);
+      if (candidate.metadata?.vulnerabilities) {
+        report = candidate;
+        break;
+      }
+      lastAuditFailure = JSON.stringify(candidate.error ?? candidate);
+    } catch {
+      lastAuditFailure = result.stderr || result.stdout;
+    }
+    if (attempt < auditAttempts) {
+      console.warn(`${name} npm audit attempt ${attempt} returned no vulnerability metadata; retrying`);
+      await pause(attempt * 1000);
+    }
   }
-  const counts = report.metadata?.vulnerabilities;
-  if (!counts) throw new Error(`${name} npm audit response has no vulnerability metadata`);
+  if (!report) throw new Error(`${name} npm audit did not return complete vulnerability metadata after ${auditAttempts} attempts: ${lastAuditFailure}`);
+  const counts = report.metadata.vulnerabilities;
   if (Number(counts.critical || 0) !== 0) throw new Error(`${name} has ${counts.critical} production critical vulnerabilities`);
 
   const effectiveCounts = Object.fromEntries(severities.map((severity) => [severity, Number(counts[severity] || 0)]));

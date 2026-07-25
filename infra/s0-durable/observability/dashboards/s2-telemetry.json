@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 39,
+  "title": "S2 Telemetry Security and Reliability",
+  "tags": ["s2", "telemetry", "security"],
+  "templating": {"list": []},
+  "panels": [
+    {"id":1,"title":"Security zero invariants","type":"stat","targets":[{"expr":"sum(hvac_s2_security_zero_invariant_total)"}]},
+    {"id":2,"title":"Snapshot p99 duration","type":"timeseries","targets":[{"expr":"histogram_quantile(0.99, sum by (le) (rate(hvac_s2_snapshot_duration_seconds_bucket[5m])))"}]},
+    {"id":3,"title":"Snapshot age","type":"timeseries","targets":[{"expr":"max(hvac_s2_snapshot_age_seconds)"}]},
+    {"id":4,"title":"Source and publication lag","type":"timeseries","targets":[{"expr":"histogram_quantile(0.99, sum by (le) (rate(hvac_s2_source_lag_seconds_bucket[5m])))"},{"expr":"histogram_quantile(0.99, sum by (le) (rate(hvac_s2_publication_lag_seconds_bucket[5m])))"}]},
+    {"id":5,"title":"Recovery outcomes","type":"timeseries","targets":[{"expr":"sum by (outcome) (rate(hvac_s2_recovery_attempts_total[5m]))"}]},
+    {"id":6,"title":"Revocation outcomes","type":"timeseries","targets":[{"expr":"sum by (phase,outcome) (rate(hvac_s2_revocation_events_total[5m]))"}]},
+    {"id":7,"title":"Outbox lag","type":"timeseries","targets":[{"expr":"histogram_quantile(0.99, sum by (le) (rate(hvac_s2_outbox_lag_seconds_bucket[5m])))"}]},
+    {"id":8,"title":"Dependency failures","type":"timeseries","targets":[{"expr":"sum by (dependency,outcome) (rate(hvac_s2_upstream_requests_total[5m]))"}]},
+    {"id":9,"title":"Exporter drops and failures","type":"timeseries","targets":[{"expr":"sum by (outcome,reason_family) (rate(hvac_s2_exporter_events_total[5m]))"}]}
+  ]
+}

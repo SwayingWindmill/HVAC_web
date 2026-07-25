@@ -1,0 +1,170 @@
+groups:
+  - name: s2-telemetry-security
+    interval: 30s
+    rules:
+      - alert: S2SecurityZeroInvariantViolation
+        expr: sum(hvac_s2_security_zero_invariant_total) > 0
+        for: 0m
+        labels:
+          severity: critical
+          primary_owner: platform-security
+          secondary_owner: telemetry-platform
+        annotations:
+          summary: S2 security zero invariant is non-zero
+          runbook: docs/operations/s2-security-observability.md#security-zero-invariant
+      - alert: S2RequestFallbackDetected
+        expr: sum(hvac_s2_security_zero_invariant_total{invariant="request_fallback"}) > 0
+        for: 0m
+        labels:
+          severity: critical
+          primary_owner: platform-security
+          secondary_owner: gateway-platform
+        annotations:
+          summary: Legacy or Mock request-level fallback was detected
+          runbook: docs/operations/s2-security-observability.md#security-zero-invariant
+      - alert: S2PostRevocationDelivery
+        expr: sum(hvac_s2_revocation_events_total{phase="post_revocation",outcome!="blocked"}) > 0
+        for: 0m
+        labels:
+          severity: critical
+          primary_owner: platform-security
+          secondary_owner: realtime-platform
+        annotations:
+          summary: Delivery occurred after revocation
+          runbook: docs/operations/s2-security-observability.md#revocation
+  - name: s2-telemetry-slo
+    interval: 30s
+    rules:
+      - alert: S2SnapshotErrorBudgetBurn
+        expr: sum(rate(hvac_s2_snapshot_requests_total{outcome!="success"}[5m])) / clamp_min(sum(rate(hvac_s2_snapshot_requests_total[5m])), 1) > 0.01
+        for: 5m
+        labels:
+          severity: page
+          primary_owner: telemetry-platform
+          secondary_owner: gateway-platform
+        annotations:
+          summary: Snapshot errors are burning the S2 error budget
+          runbook: docs/operations/s2-security-observability.md#snapshot-slo
+      - alert: S2SnapshotAgeHigh
+        expr: max(hvac_s2_snapshot_age_seconds) > 180
+        for: 5m
+        labels:
+          severity: page
+          primary_owner: telemetry-platform
+          secondary_owner: platform-operations
+        annotations:
+          summary: Authoritative Snapshot age exceeds the release envelope
+          runbook: docs/operations/s2-security-observability.md#snapshot-age
+      - alert: S2IngestSourceLagHigh
+        expr: histogram_quantile(0.99, sum by (le) (rate(hvac_s2_source_lag_seconds_bucket[5m]))) > 30
+        for: 5m
+        labels:
+          severity: page
+          primary_owner: telemetry-platform
+          secondary_owner: connector-platform
+        annotations:
+          summary: Source ingest lag is high
+          runbook: docs/operations/s2-security-observability.md#ingest-lag
+      - alert: S2OutboxLagHigh
+        expr: histogram_quantile(0.99, sum by (le) (rate(hvac_s2_outbox_lag_seconds_bucket[5m]))) > 5
+        for: 5m
+        labels:
+          severity: page
+          primary_owner: realtime-platform
+          secondary_owner: telemetry-platform
+        annotations:
+          summary: Telemetry outbox lag is high
+          runbook: docs/operations/s2-security-observability.md#outbox-lag
+      - alert: S2PublicationLagHigh
+        expr: histogram_quantile(0.99, sum by (le) (rate(hvac_s2_publication_lag_seconds_bucket[5m]))) > 5
+        for: 5m
+        labels:
+          severity: page
+          primary_owner: realtime-platform
+          secondary_owner: telemetry-platform
+        annotations:
+          summary: Realtime publication lag is high
+          runbook: docs/operations/s2-security-observability.md#publication-lag
+      - alert: S2PresenceLate
+        expr: histogram_quantile(0.99, sum by (le) (rate(hvac_s2_presence_lateness_seconds_bucket[5m]))) > 60
+        for: 5m
+        labels:
+          severity: ticket
+          primary_owner: telemetry-platform
+          secondary_owner: platform-operations
+        annotations:
+          summary: Presence evaluation is late
+          runbook: docs/operations/s2-security-observability.md#presence-lateness
+      - alert: S2RecoveryFailureRateHigh
+        expr: sum(rate(hvac_s2_recovery_attempts_total{outcome!="success"}[5m])) / clamp_min(sum(rate(hvac_s2_recovery_attempts_total[5m])), 1) > 0.005
+        for: 5m
+        labels:
+          severity: page
+          primary_owner: realtime-platform
+          secondary_owner: frontend-platform
+        annotations:
+          summary: Recovery or Snapshot fallback failures are high
+          runbook: docs/operations/s2-security-observability.md#recovery
+      - alert: S2SubscriptionFailure
+        expr: sum(rate(hvac_s2_subscription_events_total{outcome!="success"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: ticket
+          primary_owner: realtime-platform
+          secondary_owner: platform-security
+        annotations:
+          summary: Subscription operations are failing
+          runbook: docs/operations/s2-security-observability.md#subscription
+      - alert: S2SlowConsumerDisconnects
+        expr: sum(rate(hvac_s2_slow_consumer_disconnects_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: ticket
+          primary_owner: realtime-platform
+          secondary_owner: platform-operations
+        annotations:
+          summary: Slow consumers are being disconnected
+          runbook: docs/operations/s2-security-observability.md#slow-consumers
+  - name: s2-telemetry-dependencies
+    interval: 30s
+    rules:
+      - alert: S2RedisUnavailable
+        expr: sum(rate(hvac_s2_upstream_requests_total{dependency="redis",outcome!="success"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: page
+          primary_owner: realtime-platform
+          secondary_owner: platform-operations
+        annotations:
+          summary: Redis dependency is failing
+          runbook: docs/operations/s2-security-observability.md#redis
+      - alert: S2PostgresUnavailable
+        expr: sum(rate(hvac_s2_upstream_requests_total{dependency="postgres",outcome!="success"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: page
+          primary_owner: telemetry-platform
+          secondary_owner: database-platform
+        annotations:
+          summary: PostgreSQL dependency is failing
+          runbook: docs/operations/s2-security-observability.md#postgres
+      - alert: S2UpstreamUnavailable
+        expr: sum(rate(hvac_s2_upstream_requests_total{outcome!="success"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: ticket
+          primary_owner: telemetry-platform
+          secondary_owner: connector-platform
+        annotations:
+          summary: S2 upstream dependency is failing
+          runbook: docs/operations/s2-security-observability.md#upstream
+      - alert: S2ExporterFailure
+        expr: sum(rate(hvac_s2_exporter_events_total{outcome=~"failed|dropped"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: ticket
+          primary_owner: platform-observability
+          secondary_owner: platform-operations
+        annotations:
+          summary: Observability exporter is failing or dropping signals
+          runbook: docs/operations/s2-security-observability.md#exporter

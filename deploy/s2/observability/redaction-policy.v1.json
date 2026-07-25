@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "referencePrefix": "hmac-sha256",
+  "minimumKeyBytes": 32,
+  "allowedCorrelationFields": ["trace_id","request_ref","event_ref","subscription_ref","revision_ref","operation","outcome","reason_family","phase"],
+  "rawForbiddenKeys": ["authorization","cookie","set-cookie","csrf","token","access_token","refresh_token","recovery_cursor","cursor","channel","telemetry_value","value","source_credential","password","secret"],
+  "rawForbiddenValueMarkers": ["Bearer ","Basic ","eyJ","centrifugo:subscription:","recovery-cursor:","thingsboard-credential:"]
+}

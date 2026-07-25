@@ -398,6 +398,11 @@ try {
   await cdpClient.send('Page.navigate', { url: `${webURL}/api/v1/auth/login?returnTo=%2F` });
 
   await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-testid="real-registry-assets-page"]')) && document.body.innerText.includes('Alpha Main Site')`, 'Organization Alpha Assets page');
+  await waitForCondition(
+    cdpClient,
+    `Array.from(document.querySelectorAll('[role="tab"]')).some((candidate) => candidate.textContent?.trim() === 'Device (2)' && candidate.getAttribute('aria-disabled') !== 'true')`,
+    'Device tab readiness',
+  );
   assert(await clickText(cdpClient, 'Device (2)', '[role="tab"]'), 'Device tab was not available');
   await waitForCondition(cdpClient, `document.body.innerText.includes('Presence batch 返回部分结果') && document.body.innerText.includes('Alpha AHU Sensor')`, 'partial Presence batch');
   const partialState = await evaluate(cdpClient, `({

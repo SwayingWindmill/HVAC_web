@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "invariants": [
+    {"id":"cross-organization-or-site-delivery","maximum":0,"evidence":["test:security-negative","out/s2-ticket-09/network-audit.json"]},
+    {"id":"hidden-device-disclosure","maximum":0,"evidence":["test:security-negative","out/s2-ticket-09/browser-journey.json"]},
+    {"id":"forged-scope-or-channel-accepted","maximum":0,"evidence":["test:security-negative","out/s2-ticket-07/browser-live-client.json"]},
+    {"id":"unauthorized-key-delivery","maximum":0,"evidence":["test:security-negative","out/s2-ticket-07/browser-live-client.json"]},
+    {"id":"post-revocation-delivery","maximum":0,"evidence":["test:security-negative","out/s2-ticket-07/browser-live-client.json","out/s2-ticket-09/browser-journey.json"]},
+    {"id":"cursor-replay-or-scope-expansion","maximum":0,"evidence":["test:security-negative","out/s2-ticket-07/browser-live-client.json"]},
+    {"id":"non-owner-write","maximum":0,"evidence":["test:security-negative","out/s2-ticket-08/shadow-routing.json"]},
+    {"id":"legacy-or-mock-request-fallback","maximum":0,"evidence":["out/s2-ticket-09/network-audit.json"]},
+    {"id":"undetected-business-revision-gap","maximum":0,"evidence":["out/s2-ticket-07/browser-live-client.json","out/s2-ticket-09/browser-journey.json"]}
+  ]
+}
