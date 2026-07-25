@@ -3,6 +3,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { pullDockerImageWithRetry } from './lib/docker-pull-retry.mjs';
 
 const root = resolve(process.cwd());
 const output = resolve(root, 'out/s2-ticket-06/centrifugo-config.json');
@@ -96,7 +97,8 @@ func main() {
   const certificate = new X509Certificate(await readFile(certPath));
   assert(certificate.subjectAltName?.includes('URI:spiffe://hvac.local/centrifugo'), 'fixture certificate is missing the Centrifugo SPIFFE URI SAN');
 
-  run('docker', ['create', '--name', containerName, '-e', 'CENTRIFUGO_VAR_S2_PROXY_SECRET=fixture-proxy-value', image,
+  await pullDockerImageWithRetry(image, { cwd: root });
+  run('docker', ['create', '--pull=never', '--name', containerName, '-e', 'CENTRIFUGO_VAR_S2_PROXY_SECRET=fixture-proxy-value', image,
     '/usr/local/bin/centrifugo', 'checkconfig', '-c', '/centrifugo/centrifugo.json']);
   run('docker', ['cp', `${temporary}/.`, `${containerName}:/`]);
   run('docker', ['start', '-a', containerName]);

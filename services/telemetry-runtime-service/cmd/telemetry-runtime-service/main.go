@@ -14,11 +14,21 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/services/telemetry-runtime-service/internal/telemetry"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	observabilityRuntime := observability.NewRuntime(observability.RuntimeConfig{
+		Service: "telemetry-runtime-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
+	})
+	defer func() {
+		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancelShutdown()
+		_ = observabilityRuntime.Shutdown(shutdownContext)
+	}()
+	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	certificate, err := tls.LoadX509KeyPair(requiredEnv("TELEMETRY_TLS_CERT"), requiredEnv("TELEMETRY_TLS_KEY"))
 	if err != nil {
 		logger.Error("telemetry_tls_identity_load_failed", "error_code", "TELEMETRY_TLS_IDENTITY_LOAD_FAILED")
@@ -77,7 +87,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	realtimeService, realtimeContext, realtimeCancel, err := loadRealtimeService(store, certificate)
+	realtimeService, realtimeContext, realtimeCancel, err := loadRealtimeService(store, certificate, observabilityRuntime.Metrics)
 	if err != nil {
 		logger.Error("telemetry_realtime_configuration_invalid", "error_code", "TELEMETRY_REALTIME_CONFIGURATION_INVALID")
 		os.Exit(1)
@@ -98,6 +108,7 @@ func main() {
 			AllowedCentrifugoSPIFFE: envOr("TELEMETRY_ALLOWED_CENTRIFUGO_SPIFFE", "spiffe://hvac.local/centrifugo"),
 			CentrifugoProxySecret:   strings.TrimSpace(os.Getenv("TELEMETRY_CENTRIFUGO_PROXY_SECRET")),
 			AllowedIAMSPIFFE:        envOr("TELEMETRY_ALLOWED_IAM_SPIFFE", "spiffe://hvac.local/iam-service"),
+			Metrics:                 observabilityRuntime.Metrics,
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate},
@@ -109,13 +120,26 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 	}
+	diagnostics := &http.Server{
+		Addr:              envOr("TELEMETRY_DIAGNOSTICS_ADDR", "127.0.0.1:19086"),
+		Handler:           observabilityRuntime.DiagnosticsHandler(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("telemetry_diagnostics_stopped_unexpectedly", "error_code", "TELEMETRY_DIAGNOSTICS_SERVE_FAILED")
+		}
+	}()
+	observabilityRuntime.MarkReady()
 
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-shutdown
+		observabilityRuntime.MarkNotReady()
 		context, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		_ = diagnostics.Shutdown(context)
 		_ = server.Shutdown(context)
 	}()
 
@@ -127,7 +151,7 @@ func main() {
 	logger.Info("telemetry_runtime_stopped", "service", "telemetry-runtime-service")
 }
 
-func loadRealtimeService(store *telemetry.PostgresStore, certificate tls.Certificate) (*telemetry.RealtimeService, context.Context, context.CancelFunc, error) {
+func loadRealtimeService(store *telemetry.PostgresStore, certificate tls.Certificate, metrics *observability.Registry) (*telemetry.RealtimeService, context.Context, context.CancelFunc, error) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_REALTIME_ENABLED")), "true") {
 		return nil, context.Background(), nil, nil
 	}
@@ -154,9 +178,10 @@ func loadRealtimeService(store *telemetry.PostgresStore, certificate tls.Certifi
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	instrumentedTransport := telemetry.InstrumentRealtimeTransport(centrifugo, metrics, time.Now)
 	service, err := telemetry.NewRealtimeService(telemetry.RealtimeConfig{
 		Repository:             store,
-		Transport:              centrifugo,
+		Transport:              instrumentedTransport,
 		PublicEndpoint:         requiredEnv("TELEMETRY_REALTIME_ENDPOINT"),
 		CapabilityHMACKey:      []byte(requiredEnv("TELEMETRY_REALTIME_CAPABILITY_HMAC_KEY")),
 		ConnectionTokenHMACKey: []byte(requiredEnv("TELEMETRY_CENTRIFUGO_TOKEN_HMAC_KEY")),

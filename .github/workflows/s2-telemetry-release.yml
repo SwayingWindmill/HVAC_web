@@ -1,0 +1,403 @@
+name: S2 Telemetry Production Release Certification
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/s2-telemetry-release.yml"
+      - "deploy/s2/**"
+      - "infra/s2-telemetry/**"
+      - "services/platform-gateway/**"
+      - "services/telemetry-runtime-service/**"
+      - "libs/observability/**"
+      - "scripts/**"
+      - "package.json"
+      - "package-lock.json"
+      - "go.work"
+      - "go.work.sum"
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Certification profile. full requires an approved wall-clock attestation.
+        type: choice
+        options: [preflight, full]
+        default: preflight
+      wall_clock_attestation_json:
+        description: Full-profile JSON matching deploy/s2/full-capacity-attestation.schema.json.
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+  GOMAXPROCS: "2"
+  GOFLAGS: -p=1
+  S2_CAPACITY_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'preflight' }}
+
+jobs:
+  contracts-and-static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.12"
+          cache: true
+          cache-dependency-path: |
+            "**/go.sum"
+            go.work.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - run: npm run s2:ticket-11
+      - run: npm run s2:shadow-routing:compare
+      - run: npm run s2:shadow-routing:harness
+      - name: Record shadow comparison release evidence
+        run: node scripts/write-s2-release-report.mjs --name=shadow-comparison-report.json --kind=shadow-comparison --commands=s2:shadow-routing:compare,s2:shadow-routing:harness --sources=out/s2-ticket-08/shadow-comparison.json --details='{"sideEffectFree":true,"mappingMismatch":0,"missingOrExtraDevice":0}'
+      - name: Upload contracts and static evidence
+        uses: actions/upload-artifact@v6
+        with:
+          name: s2-release-input-contracts
+          path: out/s2-release-evidence/shadow-comparison-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  security-negative:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Scan repository for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.12"
+          cache: true
+          cache-dependency-path: |
+            "**/go.sum"
+            go.work.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - run: npm run s2:ticket-10
+      - name: Upload security and observability release evidence
+        uses: actions/upload-artifact@v6
+        with:
+          name: s2-release-input-security
+          path: out/s2-release-evidence
+          if-no-files-found: error
+          retention-days: 14
+
+  postgres-integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.12"
+          cache: true
+          cache-dependency-path: |
+            "**/go.sum"
+            go.work.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - run: npm run s2:postgres-integration
+      - name: Record PostgreSQL integration evidence
+        run: node scripts/write-s2-release-report.mjs --name=postgres-integration-report.json --kind=postgres-integration --commands=s2:postgres,test:s2-migrator-image --sources=out/s2-ticket-11/migrator-image-smoke.json --details='{"expandOnly":true,"previousVersionCompatible":true,"authoritativeSchema":"telemetry_runtime","migratorImageIdempotent":true,"migrationHashMismatchRejected":true,"incompleteMigrationRejected":true,"unauthorizedRuntimeIdentityRejected":true,"migrationLedgerPrivilegesRestricted":true}'
+      - uses: actions/upload-artifact@v6
+        with:
+          name: s2-release-input-postgres
+          path: out/s2-release-evidence/postgres-integration-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  transport-integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.12"
+          cache: true
+          cache-dependency-path: |
+            "**/go.sum"
+            go.work.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - run: npm run s2:transport-integration
+      - name: Record transport integration evidence
+        run: node scripts/write-s2-release-report.mjs --name=transport-integration-report.json --kind=transport-integration --commands=test:docker-pull-retry,s2:realtime:config,s2:realtime:transport --sources=out/s2-centrifugo-poc/report.json --details='{"dedicatedRedis":true,"historyBounded":true,"snapshotAuthoritative":true,"immutableImagePullRetryBounded":true}'
+      - uses: actions/upload-artifact@v6
+        with:
+          name: s2-release-input-transport
+          path: out/s2-release-evidence/transport-integration-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  capacity-and-failure:
+    runs-on: ubuntu-24.04
+    env:
+      S2_FULL_ATTESTATION_JSON: ${{ inputs.wall_clock_attestation_json }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - name: Run capacity and failure certification
+        shell: bash
+        run: |
+          if [[ "$S2_CAPACITY_PROFILE" == "full" ]]; then
+            test -n "$S2_FULL_ATTESTATION_JSON"
+            mkdir -p out
+            printf '%s' "$S2_FULL_ATTESTATION_JSON" > out/s2-full-capacity-attestation.json
+            node scripts/run-s2-capacity-certification.mjs --profile=full --wall-clock-attestation=out/s2-full-capacity-attestation.json
+          else
+            node scripts/run-s2-capacity-certification.mjs --profile=preflight
+          fi
+      - uses: actions/upload-artifact@v6
+        with:
+          name: s2-release-input-capacity
+          path: |
+            out/s2-release-evidence/capacity-report.json
+            out/s2-release-evidence/reconnect-storm-report.json
+            out/s2-release-evidence/slow-consumer-report.json
+            out/s2-release-evidence/revocation-report.json
+            out/s2-release-evidence/failure-injection-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  browser-real-mode:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - run: npm run s2:hvac-web:browser
+      - name: Record browser release evidence
+        run: node scripts/write-s2-release-report.mjs --name=browser-report.json --kind=browser-real-mode --commands=s2:hvac-web:browser --sources=out/s2-ticket-09/browser-journey.json,out/s2-ticket-09/network-audit.json --details='{"legacyFallback":false,"mockFallback":false,"revocationPurgesState":true,"freshSnapshotAfterGap":true}'
+      - uses: actions/upload-artifact@v6
+        with:
+          name: s2-release-input-browser
+          path: out/s2-release-evidence/browser-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  production-images:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: telemetry-runtime
+            dockerfile: deploy/s2/images/telemetry-runtime.Dockerfile
+          - name: telemetry-runtime-migrator
+            dockerfile: deploy/s2/images/telemetry-runtime-migrator.Dockerfile
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - uses: docker/setup-buildx-action@v4
+      - name: Login for formal image publication
+        if: env.S2_CAPACITY_PROFILE == 'full'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: names
+        shell: bash
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          echo "local=s2/${{ matrix.name }}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "remote=ghcr.io/${OWNER,,}/hvac-web/${{ matrix.name }}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          load: ${{ env.S2_CAPACITY_PROFILE != 'full' }}
+          push: ${{ env.S2_CAPACITY_PROFILE == 'full' }}
+          tags: ${{ env.S2_CAPACITY_PROFILE == 'full' && steps.names.outputs.remote || steps.names.outputs.local }}
+          sbom: ${{ env.S2_CAPACITY_PROFILE == 'full' }}
+          provenance: ${{ env.S2_CAPACITY_PROFILE == 'full' && 'mode=max' || false }}
+      - name: Resolve immutable image identity and runtime user
+        id: inspect
+        shell: bash
+        run: |
+          IMAGE='${{ env.S2_CAPACITY_PROFILE == 'full' && steps.names.outputs.remote || steps.names.outputs.local }}'
+          DIGEST='${{ steps.build.outputs.digest }}'
+          if [[ "$S2_CAPACITY_PROFILE" == "full" ]]; then docker pull "$IMAGE@$DIGEST"; fi
+          if [[ -z "$DIGEST" ]]; then DIGEST="$(docker image inspect --format '{{.Id}}' "$IMAGE")"; fi
+          RUNTIME_USER="$(docker image inspect --format '{{.Config.User}}' "$IMAGE${DIGEST:+@$DIGEST}" 2>/dev/null || docker image inspect --format '{{.Config.User}}' "$IMAGE")"
+          SCAN_REF="$IMAGE"
+          if [[ "$S2_CAPACITY_PROFILE" == "full" ]]; then SCAN_REF="$IMAGE@$DIGEST"; fi
+          IMAGE="$(printf '%s' "$IMAGE" | tr -d '\r\n')"
+          SCAN_REF="$(printf '%s' "$SCAN_REF" | tr -d '\r\n')"
+          DIGEST="$(printf '%s' "$DIGEST" | tr -d '\r\n')"
+          RUNTIME_USER="$(printf '%s' "$RUNTIME_USER" | tr -d '\r\n')"
+          printf 'image=%s\nscan_ref=%s\ndigest=%s\nuser=%s\n' "$IMAGE" "$SCAN_REF" "$DIGEST" "$RUNTIME_USER" >> "$GITHUB_OUTPUT"
+      - name: Scan image vulnerabilities and secrets
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          scan-type: image
+          image-ref: ${{ steps.inspect.outputs.scan_ref }}
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          format: json
+          output: trivy-${{ matrix.name }}.json
+          exit-code: "1"
+          hide-progress: "true"
+          timeout: 10m
+      - name: Generate CycloneDX SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          scan-type: image
+          image-ref: ${{ steps.inspect.outputs.scan_ref }}
+          format: cyclonedx
+          output: sbom-${{ matrix.name }}.cyclonedx.json
+          exit-code: "0"
+          hide-progress: "true"
+          timeout: 10m
+      - name: Record Buildx metadata
+        shell: bash
+        env:
+          BUILD_METADATA: ${{ steps.build.outputs.metadata }}
+        run: printf '%s' "$BUILD_METADATA" > build-metadata-${{ matrix.name }}.json
+      - name: Record image evidence
+        shell: bash
+        run: |
+          FORMAL=false
+          PROVENANCE=preflight-build-metadata
+          GITHUB_ATTESTATION=not-applicable-preflight
+          if [[ "$S2_CAPACITY_PROFILE" == "full" ]]; then
+            FORMAL=true
+            PROVENANCE=buildkit-mode-max
+            GITHUB_ATTESTATION=published
+          fi
+          node scripts/write-s2-image-evidence.mjs \
+            --name=${{ matrix.name }} \
+            --image='${{ steps.inspect.outputs.image }}' \
+            --digest='${{ steps.inspect.outputs.digest }}' \
+            --user='${{ steps.inspect.outputs.user }}' \
+            --trivy=trivy-${{ matrix.name }}.json \
+            --sbom=sbom-${{ matrix.name }}.cyclonedx.json \
+            --build-metadata=build-metadata-${{ matrix.name }}.json \
+            --formal="$FORMAL" \
+            --provenance="$PROVENANCE" \
+            --github-attestation="$GITHUB_ATTESTATION"
+      - name: Publish GitHub build provenance for formal certification
+        if: env.S2_CAPACITY_PROFILE == 'full'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ steps.names.outputs.remote }}
+          subject-digest: ${{ steps.inspect.outputs.digest }}
+          push-to-registry: true
+      - name: Stage flat image evidence artifact
+        shell: bash
+        run: |
+          mkdir -p out/s2-image-artifact
+          cp "out/s2-image-evidence/${{ matrix.name }}.json" out/s2-image-artifact/
+          cp "sbom-${{ matrix.name }}.cyclonedx.json" out/s2-image-artifact/
+          cp "build-metadata-${{ matrix.name }}.json" out/s2-image-artifact/
+      - uses: actions/upload-artifact@v6
+        with:
+          name: s2-image-evidence-${{ matrix.name }}
+          path: out/s2-image-artifact/*
+          if-no-files-found: error
+          retention-days: 30
+
+  kind-rollout-rollback:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - name: Create disposable S2 release cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc
+        with:
+          version: v0.32.0
+          kubectl_version: v1.35.0
+          cluster_name: s2-release-certification
+          wait: 120s
+      - run: npm run audit:s2-kind-rollout
+      - uses: actions/upload-artifact@v6
+        with:
+          name: s2-release-input-kind
+          path: |
+            out/s2-release-evidence/kind-rollout-report.json
+            out/s2-release-evidence/rollback-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  release-evidence:
+    needs: [contracts-and-static, security-negative, postgres-integration, transport-integration, capacity-and-failure, browser-real-mode, production-images, kind-rollout-rollback]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: s2-release-input-*
+          path: out/s2-release-evidence
+          merge-multiple: true
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: s2-image-evidence-*
+          path: out/s2-image-evidence
+          merge-multiple: true
+      - run: node scripts/merge-s2-image-evidence.mjs
+      - name: Record blocking workflow jobs
+        run: node scripts/write-s2-release-report.mjs --name=workflow-jobs.json --kind=workflow-jobs --commands=s2:telemetry-release --details='{"jobs":["contracts-and-static","security-negative","postgres-integration","transport-integration","capacity-and-failure","browser-real-mode","production-images","kind-rollout-rollback"],"allBlocking":true}'
+      - name: Build and verify offline evidence bundle
+        shell: bash
+        run: |
+          FORMAL=false
+          if [[ "$S2_CAPACITY_PROFILE" == "full" ]]; then FORMAL=true; fi
+          node scripts/build-s2-release-evidence.mjs --repository-sha="$GITHUB_SHA" --workflow-run-id="$GITHUB_RUN_ID" --require-formal="$FORMAL"
+          npm run s2:release-evidence:verify
+      - uses: actions/upload-artifact@v6
+        with:
+          name: s2-telemetry-release-evidence
+          path: out/s2-release-evidence
+          if-no-files-found: error
+          retention-days: 30

@@ -7,13 +7,17 @@ const text = async (path) => readFile(resolve(root, path), 'utf8');
 const json = async (path) => JSON.parse(await text(path));
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
-const [catalog, invariants, redaction, trace, securityGo, metricsGo, harness, alerts, dashboard, negativeRunner, audit, runbook, workflow, packageJSON] = await Promise.all([
+const [catalog, invariants, redaction, trace, securityGo, metricsGo, runtimeMetrics, runtimeMain, gatewayMetrics, gatewayTelemetry, harness, alerts, dashboard, negativeRunner, audit, runbook, workflow, packageJSON] = await Promise.all([
   json('deploy/s2/observability/metric-catalog.v1.json'),
   json('deploy/s2/observability/zero-invariants.v1.json'),
   json('deploy/s2/observability/redaction-policy.v1.json'),
   json('deploy/s2/observability/trace-chain.v1.json'),
   text('libs/observability/s2_security.go'),
   text('libs/observability/metrics.go'),
+  text('services/telemetry-runtime-service/internal/telemetry/metrics.go'),
+  text('services/telemetry-runtime-service/cmd/telemetry-runtime-service/main.go'),
+  text('services/platform-gateway/internal/gateway/telemetry_metrics.go'),
+  text('services/platform-gateway/internal/gateway/telemetry.go'),
   text('libs/observability/cmd/s2-ticket-10-harness/main.go'),
   text('infra/s0-durable/observability/alerts/s2-telemetry.yaml'),
   text('infra/s0-durable/observability/dashboards/s2-telemetry.json'),
@@ -46,6 +50,22 @@ for (const marker of ['NewReferenceHasher', 'ValidateS2MetricCatalog', 'Validate
 }
 for (const marker of ['device_id', 'subscription_id', 'recovery_cursor', 'business_revision', 'telemetry_key', 'channel', 'csrf']) {
   assert(metricsGo.includes(marker), `global metric label denylist is missing ${marker}`);
+}
+for (const marker of [
+  'hvac_s2_ingest_records_total', 'hvac_s2_source_lag_seconds', 'hvac_s2_presence_evaluations_total',
+  'hvac_s2_snapshot_requests_total', 'hvac_s2_subscription_events_total', 'hvac_s2_revocation_events_total',
+  'hvac_s2_publications_total', 'hvac_s2_outbox_messages_total', 'hvac_s2_quarantine_records_total',
+]) assert(runtimeMetrics.includes(marker), `Telemetry Runtime production metrics are missing ${marker}`);
+for (const marker of ['observability.NewRuntime', 'DiagnosticsHandler()', 'Metrics:                 observabilityRuntime.Metrics', 'InstrumentRealtimeTransport']) {
+  assert(runtimeMain.includes(marker), `Telemetry Runtime observability wiring is missing ${marker}`);
+}
+for (const marker of ['hvac_s2_upstream_requests_total', 'hvac_s2_upstream_duration_seconds', 'telemetry-runtime']) {
+  assert(gatewayMetrics.includes(marker), `Gateway production metrics are missing ${marker}`);
+}
+assert(gatewayTelemetry.includes('observeTelemetryUpstream(path, outcome'), 'Gateway upstream metric hook is not on the production request path');
+for (const forbidden of ['device_id', 'organization_id', 'site_id', 'subscription_id', 'request_id', 'trace_id', 'cursor', 'channel']) {
+  assert(!runtimeMetrics.includes(`"${forbidden}"`), `Telemetry Runtime metric labels include forbidden identifier ${forbidden}`);
+  assert(!gatewayMetrics.includes(`"${forbidden}"`), `Gateway metric labels include forbidden identifier ${forbidden}`);
 }
 for (const marker of ['platform-gateway', 'iam-service', 'telemetry-runtime-service', 'outbox-relay', 'centrifugo-api', 'telemetry-live-client', 'audit-ledger-service', 'NewAsyncExporter']) {
   assert(harness.includes(marker), `observability harness is missing ${marker}`);

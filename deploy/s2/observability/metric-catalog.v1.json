@@ -69,7 +69,7 @@
         "dependency",
         "outcome"
       ],
-      "seriesBudget": 32
+      "seriesBudget": 36
     },
     {
       "name": "hvac_s2_presence_evaluations_total",
@@ -227,7 +227,7 @@
         "operation",
         "outcome"
       ],
-      "seriesBudget": 224
+      "seriesBudget": 256
     },
     {
       "name": "hvac_s2_upstream_duration_seconds",
@@ -238,7 +238,7 @@
         "operation",
         "outcome"
       ],
-      "seriesBudget": 224
+      "seriesBudget": 256
     },
     {
       "name": "hvac_s2_slow_consumer_disconnects_total",
@@ -311,6 +311,7 @@
       "redis",
       "thingsboard",
       "centrifugo",
+      "telemetry-runtime",
       "otel"
     ],
     "transport": [

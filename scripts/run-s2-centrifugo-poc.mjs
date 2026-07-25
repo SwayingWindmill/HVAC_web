@@ -128,9 +128,11 @@ function clientToken(user) {
 }
 
 function forgedToken(user) {
-  const token = clientToken(user);
-  const last = token.at(-1);
-  return `${token.slice(0, -1)}${last === 'a' ? 'b' : 'a'}`;
+  const [header, payload, encodedSignature] = clientToken(user).split('.');
+  const signature = Buffer.from(encodedSignature, 'base64url');
+  assert(signature.length > 0, 'connection token signature was empty');
+  signature[0] ^= 0x01;
+  return `${header}.${payload}.${signature.toString('base64url')}`;
 }
 
 class CentrifugoConnection {

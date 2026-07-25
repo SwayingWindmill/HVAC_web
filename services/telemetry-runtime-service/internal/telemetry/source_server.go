@@ -135,6 +135,16 @@ func (h *handler) handleThingsBoardObservation(writer http.ResponseWriter, reque
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The telemetry source acceptance path is temporarily unavailable.", true)
 		return
 	}
+	sourceOutcome, sourceReason := "success", "none"
+	if receipt.Status == ObservationQuarantined {
+		sourceOutcome = "rejected"
+		sourceReason = quarantineReasonFamily(receipt.QuarantineReason)
+	}
+	h.metrics.observeIngest(sourceOutcome, sourceReason)
+	h.metrics.observeSourceLag(candidate.SampledAt, candidate.ReceivedAt, sourceOutcome)
+	if receipt.Status == ObservationQuarantined {
+		h.metrics.observeQuarantine(sourceReason)
+	}
 	writeJSON(writer, http.StatusOK, receipt)
 }
 
@@ -205,6 +215,7 @@ func (h *handler) handleThingsBoardCoverage(writer http.ResponseWriter, request 
 	}
 	if receipt.Status == "QUARANTINED" {
 		receipt.DeviceID = ""
+		h.metrics.observeQuarantine("scope")
 	}
 	writeJSON(writer, http.StatusOK, receipt)
 }

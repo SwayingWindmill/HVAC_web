@@ -76,6 +76,7 @@ for (const scenario of [
 ]) {
   assert(runner.includes(scenario), `runner is missing required scenario: ${scenario}`);
 }
+assert(runner.includes('signature[0] ^= 0x01'), 'forged-token scenario must flip decoded signature bytes, not base64 padding bits');
 assert(runner.includes("decision: 'adopt-with-bounded-responsibility'"), 'runner must emit the bounded adoption decision');
 assert(runner.includes('productionScaleCertified: false'), 'bounded fan-out must not be represented as production certification');
 assert(runner.includes('secretsPersisted: false'), 'runner must assert runtime secrets are not persisted');

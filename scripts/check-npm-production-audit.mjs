@@ -10,8 +10,17 @@ if (!Number.isFinite(expiry.getTime()) || Date.now() > expiry.getTime()) {
 }
 
 const severities = ['low', 'moderate', 'high', 'critical'];
-const auditAttempts = 3;
+const boundedInteger = (name, fallback, minimum, maximum) => {
+  const parsed = Number.parseInt(process.env[name] ?? String(fallback), 10);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`);
+  }
+  return parsed;
+};
+const auditAttempts = boundedInteger('NPM_AUDIT_ATTEMPTS', 5, 1, 10);
+const auditRetryBaseMs = boundedInteger('NPM_AUDIT_RETRY_BASE_MS', 1000, 0, 10000);
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
+const boundedDetail = (value) => String(value ?? '').trim().slice(0, 2000);
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -77,13 +86,24 @@ for (const [name, project] of Object.entries(baseline.projects)) {
         report = candidate;
         break;
       }
-      lastAuditFailure = JSON.stringify(candidate.error ?? candidate);
-    } catch {
-      lastAuditFailure = result.stderr || result.stdout;
+      lastAuditFailure = JSON.stringify({
+        exitCode: result.status,
+        signal: result.signal,
+        npmError: boundedDetail(JSON.stringify(candidate.error ?? candidate)),
+        stderr: boundedDetail(result.stderr),
+      });
+    } catch (error) {
+      lastAuditFailure = JSON.stringify({
+        exitCode: result.status,
+        signal: result.signal,
+        parseError: error instanceof Error ? error.message : String(error),
+        stderr: boundedDetail(result.stderr),
+        stdout: boundedDetail(result.stdout),
+      });
     }
     if (attempt < auditAttempts) {
-      console.warn(`${name} npm audit attempt ${attempt} returned no vulnerability metadata; retrying`);
-      await pause(attempt * 1000);
+      console.warn(`${name} npm audit attempt ${attempt}/${auditAttempts} returned no vulnerability metadata; retrying`);
+      await pause(Math.min(attempt * auditRetryBaseMs, 10000));
     }
   }
   if (!report) throw new Error(`${name} npm audit did not return complete vulnerability metadata after ${auditAttempts} attempts: ${lastAuditFailure}`);

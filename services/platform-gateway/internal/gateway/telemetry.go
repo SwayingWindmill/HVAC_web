@@ -563,7 +563,11 @@ func (h *handler) executeTelemetryRuntime(ctx context.Context, publicRequest *ht
 }
 
 func (h *handler) executeTelemetryRuntimeWithContext(ctx context.Context, publicRequest *http.Request, method, path string, keys []string, body []byte, grant, contextGrant string) ([]byte, *telemetryFailure) {
+	startedAt := h.now().UTC()
+	outcome := "failed"
+	defer func() { h.observeTelemetryUpstream(path, outcome, h.now().UTC().Sub(startedAt)) }()
 	if h.telemetry == nil || h.telemetry.runtimeBaseURL == "" || h.telemetry.runtimeHTTPClient == nil {
+		outcome = "unavailable"
 		failure := telemetryUnavailable("Telemetry Runtime is not configured.")
 		return nil, &failure
 	}
@@ -579,6 +583,7 @@ func (h *handler) executeTelemetryRuntimeWithContext(ctx context.Context, public
 	}
 	request, err := http.NewRequestWithContext(requestContext, method, endpoint, bytes.NewReader(body))
 	if err != nil {
+		outcome = "unavailable"
 		failure := telemetryUnavailable("The Gateway could not construct the Telemetry Runtime request.")
 		return nil, &failure
 	}
@@ -597,23 +602,34 @@ func (h *handler) executeTelemetryRuntimeWithContext(ctx context.Context, public
 	response, err := h.telemetry.runtimeHTTPClient.Do(request)
 	if err != nil {
 		if errors.Is(requestContext.Err(), context.DeadlineExceeded) {
+			outcome = "timeout"
 			failure := telemetryFailure{http.StatusGatewayTimeout, "TELEMETRY_TIMEOUT", "Telemetry request timed out", "Telemetry Runtime did not respond within the bounded request deadline.", true}
 			return nil, &failure
 		}
+		outcome = "unavailable"
 		failure := telemetryUnavailable("Telemetry Runtime is temporarily unavailable.")
 		return nil, &failure
 	}
 	defer response.Body.Close()
 	raw, err := readBoundedBody(response.Body, h.telemetry.maxResponseBytes)
 	if err != nil {
+		outcome = "unavailable"
 		failure := telemetryUnavailable("Telemetry Runtime returned an oversized or unreadable response.")
 		return nil, &failure
 	}
 	if response.StatusCode == http.StatusOK {
+		outcome = "success"
 		return raw, nil
 	}
 	var problem s2telemetryapi.ProblemDetails
 	_ = decodeStrictTelemetryJSON(raw, &problem)
+	if response.StatusCode >= 400 && response.StatusCode < 500 {
+		outcome = "rejected"
+	} else if response.StatusCode == http.StatusGatewayTimeout {
+		outcome = "timeout"
+	} else {
+		outcome = "unavailable"
+	}
 	switch {
 	case response.StatusCode == http.StatusNotFound:
 		failure := telemetryFailure{http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested telemetry resource was not found.", false}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/services/telemetry-runtime-service/pkg/telemetryapi"
 )
@@ -43,6 +44,7 @@ type ServerConfig struct {
 	AllowedCentrifugoSPIFFE string
 	CentrifugoProxySecret   string
 	AllowedIAMSPIFFE        string
+	Metrics                 *observability.Registry
 	Now                     func() time.Time
 }
 
@@ -58,6 +60,7 @@ type handler struct {
 	allowedCentrifugoSPIFFE string
 	centrifugoProxySecret   string
 	allowedIAMSPIFFE        string
+	metrics                 *s2Metrics
 	now                     func() time.Time
 }
 
@@ -76,11 +79,22 @@ func NewHandler(config ServerConfig) http.Handler {
 		allowedCentrifugoSPIFFE: strings.TrimSpace(config.AllowedCentrifugoSPIFFE),
 		centrifugoProxySecret:   strings.TrimSpace(config.CentrifugoProxySecret),
 		allowedIAMSPIFFE:        strings.TrimSpace(config.AllowedIAMSPIFFE),
+		metrics:                 newS2Metrics(config.Metrics, now),
 		now:                     now,
 	}
 }
 
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	startedAt := h.now().UTC()
+	captured := h.metrics.capture(writer)
+	defer func() {
+		status := captured.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		h.metrics.observeRequest(request.URL.Path, status, h.now().UTC().Sub(startedAt))
+	}()
+	writer = captured
 	if request.URL.Path == InternalThingsBoardObservationPath {
 		h.handleThingsBoardObservation(writer, request)
 		return
@@ -159,6 +173,7 @@ func (h *handler) handleSingle(writer http.ResponseWriter, request *http.Request
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
 		return
 	}
+	h.metrics.observeSnapshot(commit.Snapshot)
 	writeJSON(writer, http.StatusOK, commit.Snapshot)
 }
 
@@ -220,6 +235,7 @@ func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request)
 			writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
 			return
 		}
+		h.metrics.observeSnapshot(commit.Snapshot)
 		response.Items = append(response.Items, telemetryapi.BatchObservationResult{Success: &telemetryapi.BatchObservationSuccess{
 			RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "OK", Snapshot: commit.Snapshot,
 		}})
@@ -265,7 +281,18 @@ func (h *handler) handleSubscriptionBootstrap(writer http.ResponseWriter, reques
 	if !ok {
 		return
 	}
+	recoveryStartedAt := h.now().UTC()
 	response, err := h.realtime.Bootstrap(request.Context(), access, input)
+	if action == telemetryauth.ActionRecoveryUse {
+		outcome, reason := "success", "none"
+		if err != nil {
+			outcome, reason = "rejected", "revision"
+			if !errors.Is(err, ErrRecoveryCursorRejected) && !errors.Is(err, ErrSubscriptionConflict) {
+				outcome, reason = "unavailable", "dependency"
+			}
+		}
+		h.metrics.observeRecovery(outcome, reason, h.now().UTC().Sub(recoveryStartedAt))
+	}
 	switch {
 	case errors.Is(err, ErrSubscriptionConflict):
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SUBSCRIPTION_INVALID", "The telemetry subscription request is invalid.", false)
