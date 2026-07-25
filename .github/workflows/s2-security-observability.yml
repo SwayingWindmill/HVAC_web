@@ -44,7 +44,7 @@ jobs:
           cache: true
       - run: npm ci
       - name: Validate S2 Prometheus alert rules
-        run: docker run --rm -v "$PWD/infra/s0-durable/observability/alerts/s2-telemetry.yaml:/rules.yml:ro" prom/prometheus:v2.54.1 promtool check rules /rules.yml
+        run: docker run --rm --entrypoint /bin/promtool -v "$PWD/infra/s0-durable/observability/alerts/s2-telemetry.yaml:/rules.yml:ro" prom/prometheus@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94 check rules /rules.yml
       - run: npm run s2:ticket-10
       - name: Upload Ticket 10 evidence
         if: always()
