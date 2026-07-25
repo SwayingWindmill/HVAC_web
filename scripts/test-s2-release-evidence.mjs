@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 
 const root = resolve(process.cwd());
 const directory = await mkdtemp(join(tmpdir(), 's2-release-evidence-test-'));
+const formalRepositorySha = '1'.repeat(40);
 const reports = [
   'workflow-jobs.json', 'security-negative-report.json', 'postgres-integration-report.json', 'transport-integration-report.json',
   'capacity-report.json', 'reconnect-storm-report.json', 'slow-consumer-report.json', 'revocation-report.json', 'failure-injection-report.json', 'browser-report.json',
@@ -22,6 +23,7 @@ const image = (name, formalReleaseEligible) => ({
   name,
   digest: `sha256:${(name === 'telemetry-runtime' ? '1' : '2').repeat(64)}`,
   user: name === 'telemetry-runtime' ? '65532:65532' : 'postgres',
+  repositorySha: formalReleaseEligible ? formalRepositorySha : 'local-uncommitted',
   formalReleaseEligible,
   provenance: formalReleaseEligible ? 'buildkit-mode-max' : 'preflight-build-metadata',
   githubAttestation: formalReleaseEligible ? 'published' : 'not-applicable-preflight',
@@ -29,7 +31,14 @@ const image = (name, formalReleaseEligible) => ({
 const writeReports = async (formalReleaseEligible) => {
   for (const name of reports) {
     let report = { schemaVersion: 1, status: 'passed' };
-    if (name === 'capacity-report.json') report = { ...report, formalReleaseEligible, certificationLevel: formalReleaseEligible ? 'formal' : 'clean-runner-preflight', measurementSource: formalReleaseEligible ? 'approved-wall-clock-attestation' : 'configuration-only-preflight' };
+    if (name === 'capacity-report.json') report = {
+      ...report,
+      formalReleaseEligible,
+      certificationLevel: formalReleaseEligible ? 'formal' : 'clean-runner-preflight',
+      measurementSource: formalReleaseEligible ? 'approved-wall-clock-attestation' : 'configuration-only-preflight',
+      repositorySha: formalReleaseEligible ? formalRepositorySha : 'local-uncommitted',
+      wallClockAttestation: formalReleaseEligible ? { repositorySha: formalRepositorySha } : null,
+    };
     if (name === 'production-image-report.json') report = { ...report, images: [image('telemetry-runtime', formalReleaseEligible), image('telemetry-runtime-migrator', formalReleaseEligible)] };
     if (name === 'sbom-provenance-report.json') report = { ...report, formalReleaseEligible };
     await writeFile(join(directory, name), `${JSON.stringify(report)}\n`);
@@ -114,10 +123,15 @@ try {
   if (!digestRejection.includes('digest mismatch')) throw new Error('offline verifier did not reject tampered evidence');
   await writeReports(false);
   run('scripts/build-s2-release-evidence.mjs', [`--directory=${directory}`, '--require-formal=false']);
-  const rejection = run('scripts/build-s2-release-evidence.mjs', [`--directory=${directory}`, '--require-formal=true', '--repository-sha=1111111111111111111111111111111111111111'], false);
+  const rejection = run('scripts/build-s2-release-evidence.mjs', [`--directory=${directory}`, '--require-formal=true', `--repository-sha=${formalRepositorySha}`], false);
   if (!rejection.includes('formal release evidence requires')) throw new Error('formal evidence rejection reason drifted');
   await writeReports(true);
-  run('scripts/build-s2-release-evidence.mjs', [`--directory=${directory}`, '--require-formal=true', '--repository-sha=1111111111111111111111111111111111111111']);
+  const mismatchedCapacity = JSON.parse(await readFile(join(directory, 'capacity-report.json'), 'utf8'));
+  await writeFile(join(directory, 'capacity-report.json'), `${JSON.stringify({ ...mismatchedCapacity, repositorySha: '0'.repeat(40) })}\n`);
+  const bindingRejection = run('scripts/build-s2-release-evidence.mjs', [`--directory=${directory}`, '--require-formal=true', `--repository-sha=${formalRepositorySha}`], false);
+  if (!bindingRejection.includes('not bound to the release repository SHA')) throw new Error('formal bundle did not reject cross-SHA capacity evidence');
+  await writeReports(true);
+  run('scripts/build-s2-release-evidence.mjs', [`--directory=${directory}`, '--require-formal=true', `--repository-sha=${formalRepositorySha}`]);
   run('scripts/verify-s2-release-evidence.mjs', [`--directory=${directory}`]);
   const statement = JSON.parse(await readFile(join(directory, 'release-evidence.intoto.json'), 'utf8'));
   if (statement.predicate?.formalReleaseEligible !== true) throw new Error('formal in-toto predicate was not recorded');

@@ -135,13 +135,15 @@ func (h *handler) handleThingsBoardObservation(writer http.ResponseWriter, reque
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The telemetry source acceptance path is temporarily unavailable.", true)
 		return
 	}
-	sourceOutcome := "success"
+	sourceOutcome, sourceReason := "success", "none"
 	if receipt.Status == ObservationQuarantined {
 		sourceOutcome = "rejected"
+		sourceReason = quarantineReasonFamily(receipt.QuarantineReason)
 	}
+	h.metrics.observeIngest(sourceOutcome, sourceReason)
 	h.metrics.observeSourceLag(candidate.SampledAt, candidate.ReceivedAt, sourceOutcome)
 	if receipt.Status == ObservationQuarantined {
-		h.metrics.observeQuarantine(quarantineReasonFamily(receipt.QuarantineReason))
+		h.metrics.observeQuarantine(sourceReason)
 	}
 	writeJSON(writer, http.StatusOK, receipt)
 }

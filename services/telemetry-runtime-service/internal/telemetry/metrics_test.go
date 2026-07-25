@@ -30,7 +30,9 @@ func TestS2MetricsUseBoundedLabelsAndBaseUnits(t *testing.T) {
 	registry := observability.NewRegistry()
 	metrics := newS2Metrics(registry, func() time.Time { return now })
 	metrics.observeRequest(InternalBatchSnapshotPath, 200, 250*time.Millisecond)
-	metrics.observeSourceLag(now.Add(-3*time.Second), now, "success")
+	metrics.observeRequest(InternalThingsBoardObservationPath, 200, 5*time.Millisecond)
+	metrics.observeIngest("rejected", "scope")
+	metrics.observeSourceLag(now.Add(-3*time.Second), now, "rejected")
 	metrics.observeQuarantine("scope")
 	metrics.observeRecovery("success", "none", 10*time.Millisecond)
 	metrics.observeInvariant("revision_gap")
@@ -39,6 +41,7 @@ func TestS2MetricsUseBoundedLabelsAndBaseUnits(t *testing.T) {
 	registry.Handler().ServeHTTP(recorder, httptest.NewRequest("GET", "/metrics", nil))
 	body := recorder.Body.String()
 	for _, marker := range []string{
+		"hvac_s2_ingest_records_total",
 		"hvac_s2_snapshot_requests_total",
 		"hvac_s2_snapshot_duration_seconds",
 		"hvac_s2_source_lag_seconds",
@@ -49,6 +52,12 @@ func TestS2MetricsUseBoundedLabelsAndBaseUnits(t *testing.T) {
 		if !strings.Contains(body, marker) {
 			t.Fatalf("expected metric %s in output: %s", marker, body)
 		}
+	}
+	if strings.Contains(body, `hvac_s2_ingest_records_total{outcome="success"`) {
+		t.Fatalf("HTTP 200 quarantine-compatible response was incorrectly counted as accepted ingest: %s", body)
+	}
+	if !strings.Contains(body, `hvac_s2_ingest_records_total{outcome="rejected",reason_family="scope"} 1`) {
+		t.Fatalf("expected receipt-derived rejected ingest metric: %s", body)
 	}
 	for _, forbidden := range []string{"device_id", "site_id", "organization_id", "subscription_id", "cursor", "channel", "telemetry_key"} {
 		if strings.Contains(body, forbidden) {

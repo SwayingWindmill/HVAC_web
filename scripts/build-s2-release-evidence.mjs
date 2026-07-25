@@ -8,27 +8,11 @@ const directory = resolve(root, arg('directory', 'out/s2-release-evidence'));
 const repositorySha = arg('repository-sha', process.env.GITHUB_SHA ?? 'local-uncommitted');
 const workflowRunId = arg('workflow-run-id', process.env.GITHUB_RUN_ID ?? 'local');
 const requireFormal = arg('require-formal', 'false') === 'true';
-const required = [
-  'workflow-jobs.json',
-  'security-negative-report.json',
-  'postgres-integration-report.json',
-  'transport-integration-report.json',
-  'capacity-report.json',
-  'reconnect-storm-report.json',
-  'slow-consumer-report.json',
-  'revocation-report.json',
-  'failure-injection-report.json',
-  'browser-report.json',
-  'kind-rollout-report.json',
-  'rollback-report.json',
-  'metric-cardinality-report.json',
-  'log-redaction-report.json',
-  'trace-correlation-report.json',
-  'shadow-comparison-report.json',
-  'alert-rule-validation-report.json',
-  'production-image-report.json',
-  'sbom-provenance-report.json',
-];
+const gates = JSON.parse(await readFile(resolve(root, 'deploy/s2/release-gates.v1.json'), 'utf8'));
+const required = gates.requiredEvidence
+  .map((path) => basename(path))
+  .filter((name) => name !== 'release-evidence.intoto.json' && name !== 'SHA256SUMS');
+if (required.length === 0 || new Set(required).size !== required.length) throw new Error('S2 release gate evidence list is empty or duplicated');
 const sha256 = (buffer) => createHash('sha256').update(buffer).digest('hex');
 await mkdir(directory, { recursive: true });
 const subjects = [];
@@ -54,8 +38,14 @@ if (requireFormal) {
   if (capacity.formalReleaseEligible !== true || capacity.certificationLevel !== 'formal' || capacity.measurementSource !== 'approved-wall-clock-attestation') {
     throw new Error('formal release evidence requires an approved wall-clock capacity attestation');
   }
+  if (capacity.repositorySha !== repositorySha || capacity.wallClockAttestation?.repositorySha !== repositorySha) {
+    throw new Error('formal capacity evidence is not bound to the release repository SHA');
+  }
   if (!Array.isArray(imageReport.images) || imageReport.images.length !== 2 || !imageReport.images.every((image) => image.formalReleaseEligible === true && image.provenance === 'buildkit-mode-max' && image.githubAttestation === 'published')) {
     throw new Error('formal release evidence requires formally attested runtime and migrator images');
+  }
+  if (!imageReport.images.every((image) => image.repositorySha === repositorySha)) {
+    throw new Error('formal image evidence is not bound to the release repository SHA');
   }
   if (provenanceReport.formalReleaseEligible !== true) throw new Error('formal SBOM/provenance evidence is incomplete');
 }

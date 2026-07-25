@@ -43,7 +43,7 @@ assert(attestationSchema.properties?.load?.properties?.connections?.minimum === 
 for (const marker of ['FROM golang:1.25.12-bookworm AS build', 'gcr.io/distroless/static-debian12:nonroot', 'USER 65532:65532', 'ENTRYPOINT ["/telemetry-runtime"]']) {
   assert(runtimeImage.includes(marker), `runtime image is missing ${marker}`);
 }
-for (const marker of ['FROM postgres:16.4-bookworm', 'USER postgres', '001-s2-telemetry-baseline.sql', '005-s2-realtime-backend.sql', 'run-telemetry-migrations', 'chmod 0555']) {
+for (const marker of ['FROM postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412', 'USER postgres', '001-s2-telemetry-baseline.sql', '005-s2-realtime-backend.sql', 'run-telemetry-migrations', 'chmod 0555']) {
   assert(migratorImage.includes(marker), `migrator image is missing ${marker}`);
 }
 assert(migrationScript.includes('ON_ERROR_STOP=1') && migrationScript.includes('/migrations/*.sql'), 'migrator is not deterministic/fail-fast');
@@ -74,7 +74,9 @@ for (const marker of ['hvac_s2_upstream_requests_total', 'hvac_s2_upstream_durat
 assert(runtimeMain.includes('DiagnosticsHandler()') && runtimeMain.includes('TELEMETRY_DIAGNOSTICS_ADDR'), 'Telemetry Runtime diagnostics endpoint is missing');
 
 const requiredReports = gates.requiredEvidence.filter((path) => !path.endsWith('release-evidence.intoto.json') && !path.endsWith('SHA256SUMS')).map((path) => path.split('/').at(-1));
-for (const report of requiredReports) assert(bundleBuilder.includes(`'${report}'`), `release builder omits ${report}`);
+for (const source of [bundleBuilder, bundleVerifier]) {
+  assert(source.includes('deploy/s2/release-gates.v1.json') && source.includes('requiredEvidence'), 'release evidence tooling is not derived from the authoritative gate list');
+}
 
 const jobs = ['contracts-and-static', 'security-negative', 'postgres-integration', 'transport-integration', 'capacity-and-failure', 'browser-real-mode', 'production-images', 'kind-rollout-rollback', 'release-evidence'];
 for (const job of jobs) assert(workflow.includes(`  ${job}:`), `workflow job ${job} is missing`);
