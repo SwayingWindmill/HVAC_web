@@ -108,9 +108,9 @@ jobs:
           node-version: "20.19.4"
           cache: npm
       - run: npm ci
-      - run: npm run s2:postgres
+      - run: npm run s2:postgres-integration
       - name: Record PostgreSQL integration evidence
-        run: node scripts/write-s2-release-report.mjs --name=postgres-integration-report.json --kind=postgres-integration --commands=s2:postgres --details='{"expandOnly":true,"previousVersionCompatible":true,"authoritativeSchema":"telemetry_runtime"}'
+        run: node scripts/write-s2-release-report.mjs --name=postgres-integration-report.json --kind=postgres-integration --commands=s2:postgres,test:s2-migrator-image --sources=out/s2-ticket-11/migrator-image-smoke.json --details='{"expandOnly":true,"previousVersionCompatible":true,"authoritativeSchema":"telemetry_runtime","migratorImageIdempotent":true,"migrationHashMismatchRejected":true,"incompleteMigrationRejected":true,"unauthorizedRuntimeIdentityRejected":true,"migrationLedgerPrivilegesRestricted":true}'
       - uses: actions/upload-artifact@v4
         with:
           name: s2-release-input-postgres

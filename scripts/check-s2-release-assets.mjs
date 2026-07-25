@@ -43,10 +43,12 @@ assert(attestationSchema.properties?.load?.properties?.connections?.minimum === 
 for (const marker of ['FROM golang:1.25.12-bookworm AS build', 'COPY tools ./tools', 'gcr.io/distroless/static-debian12:nonroot', 'USER 65532:65532', 'ENTRYPOINT ["/telemetry-runtime"]']) {
   assert(runtimeImage.includes(marker), `runtime image is missing ${marker}`);
 }
-for (const marker of ['FROM postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412', 'USER postgres', '001-s2-telemetry-baseline.sql', '005-s2-realtime-backend.sql', 'run-telemetry-migrations', 'chmod 0555']) {
+for (const marker of ['FROM postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777', 'rm -f /usr/local/bin/gosu', 'USER postgres', '001-s2-telemetry-baseline.sql', '005-s2-realtime-backend.sql', 'run-telemetry-migrations', 'chmod 0555']) {
   assert(migratorImage.includes(marker), `migrator image is missing ${marker}`);
 }
-assert(migrationScript.includes('ON_ERROR_STOP=1') && migrationScript.includes('/migrations/*.sql'), 'migrator is not deterministic/fail-fast');
+for (const marker of ['ON_ERROR_STOP=1', '/migrations/*.sql', 'sha256sum', 'pg_advisory_lock', 'telemetry_runtime.schema_migrations', "status IN ('APPLYING', 'APPLIED')", 'REVOKE ALL ON telemetry_runtime.schema_migrations', "RAISE EXCEPTION 'migration hash mismatch'", "RAISE EXCEPTION 'incomplete migration requires operator review'", "RAISE EXCEPTION 'failed to record applied migration'"]) {
+  assert(migrationScript.includes(marker), `migrator is missing deterministic execution marker: ${marker}`);
+}
 for (const marker of ['runAsNonRoot: true', 'maxUnavailable: 0', 'freshSnapshotRequired: "true"', 'automountServiceAccountToken: false', 'readOnlyRootFilesystem: true']) {
   assert(kindManifest.includes(marker), `Kind rollout fixture is missing ${marker}`);
 }
@@ -80,13 +82,13 @@ for (const source of [bundleBuilder, bundleVerifier]) {
 
 const jobs = ['contracts-and-static', 'security-negative', 'postgres-integration', 'transport-integration', 'capacity-and-failure', 'browser-real-mode', 'production-images', 'kind-rollout-rollback', 'release-evidence'];
 for (const job of jobs) assert(workflow.includes(`  ${job}:`), `workflow job ${job} is missing`);
-for (const marker of ['runs-on: ubuntu-24.04', 'npm run s2:ticket-11', 'npm run s2:ticket-10', 'gitleaks/gitleaks-action@v2', 'npm run s2:postgres', 'npm run s2:realtime:transport', 'npm run s2:hvac-web:browser', 'docker/build-push-action@v6', "tr -d '\\r\\n'", "printf 'image=%s\\nscan_ref=%s\\ndigest=%s\\nuser=%s\\n'", 'Generate CycloneDX SBOM', 'format: cyclonedx', 'severity: HIGH,CRITICAL', 'buildkit-mode-max', 'audit:s2-kind-rollout', 's2:release-evidence']) {
+for (const marker of ['runs-on: ubuntu-24.04', 'npm run s2:ticket-11', 'npm run s2:ticket-10', 'gitleaks/gitleaks-action@v2', 'npm run s2:postgres-integration', 'npm run s2:realtime:transport', 'npm run s2:hvac-web:browser', 'docker/build-push-action@v6', "tr -d '\\r\\n'", "printf 'image=%s\\nscan_ref=%s\\ndigest=%s\\nuser=%s\\n'", 'Generate CycloneDX SBOM', 'format: cyclonedx', 'severity: HIGH,CRITICAL', 'buildkit-mode-max', 'audit:s2-kind-rollout', 's2:release-evidence']) {
   assert(workflow.includes(marker), `release workflow is missing ${marker}`);
 }
 assert(workflow.includes('options: [preflight, full]') && workflow.includes('wall_clock_attestation_json') && workflow.includes('S2_CAPACITY_PROFILE'), 'formal workflow profile or attestation input is missing');
 assert(workflow.includes('needs: [contracts-and-static, security-negative, postgres-integration, transport-integration, capacity-and-failure, browser-real-mode, production-images, kind-rollout-rollback]'), 'release evidence is not blocked by all jobs');
 
-for (const script of ['build:telemetry-runtime-image', 'build:telemetry-runtime-migrator', 's2:release:check', 's2:capacity', 'audit:s2-kind-rollout', 's2:release-evidence', 's2:release-evidence:verify', 'test:s2-release-evidence', 'test:s2-capacity', 'test:dependency-audit-retry', 's2:ticket-11']) {
+for (const script of ['build:telemetry-runtime-image', 'build:telemetry-runtime-migrator', 'test:s2-migrator-image', 's2:release:check', 's2:capacity', 'audit:s2-kind-rollout', 's2:release-evidence', 's2:release-evidence:verify', 'test:s2-release-evidence', 'test:s2-capacity', 'test:dependency-audit-retry', 's2:ticket-11']) {
   assert(packageJSON.scripts?.[script], `package script ${script} is missing`);
 }
 for (const marker of ['preflight', 'formal', '60-minute', '15-minute', 'not production certification', 'SHA256SUMS', 'in-toto', 'fresh Snapshot']) {
