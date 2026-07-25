@@ -94,6 +94,9 @@ func requireEOF(decoder *json.Decoder) error {
 func writeAtomic(path string, value []byte) error {
 	clean := filepath.Clean(path)
 	directory := filepath.Dir(clean)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return fmt.Errorf("create comparison report directory: %w", err)
+	}
 	temporary, err := os.CreateTemp(directory, ".shadow-report-*.json")
 	if err != nil {
 		return fmt.Errorf("create comparison report: %w", err)

@@ -80,13 +80,13 @@ for (const source of [bundleBuilder, bundleVerifier]) {
 
 const jobs = ['contracts-and-static', 'security-negative', 'postgres-integration', 'transport-integration', 'capacity-and-failure', 'browser-real-mode', 'production-images', 'kind-rollout-rollback', 'release-evidence'];
 for (const job of jobs) assert(workflow.includes(`  ${job}:`), `workflow job ${job} is missing`);
-for (const marker of ['runs-on: ubuntu-24.04', 'npm run s2:ticket-11', 'npm run s2:ticket-10', 'gitleaks/gitleaks-action@v2', 'npm run s2:postgres', 'npm run s2:realtime:transport', 'npm run s2:hvac-web:browser', 'docker/build-push-action@v6', 'Generate CycloneDX SBOM', 'format: cyclonedx', 'severity: HIGH,CRITICAL', 'buildkit-mode-max', 'audit:s2-kind-rollout', 's2:release-evidence']) {
+for (const marker of ['runs-on: ubuntu-24.04', 'npm run s2:ticket-11', 'npm run s2:ticket-10', 'gitleaks/gitleaks-action@v2', 'npm run s2:postgres', 'npm run s2:realtime:transport', 'npm run s2:hvac-web:browser', 'docker/build-push-action@v6', "tr -d '\\r\\n'", "printf 'image=%s\\nscan_ref=%s\\ndigest=%s\\nuser=%s\\n'", 'Generate CycloneDX SBOM', 'format: cyclonedx', 'severity: HIGH,CRITICAL', 'buildkit-mode-max', 'audit:s2-kind-rollout', 's2:release-evidence']) {
   assert(workflow.includes(marker), `release workflow is missing ${marker}`);
 }
 assert(workflow.includes('options: [preflight, full]') && workflow.includes('wall_clock_attestation_json') && workflow.includes('S2_CAPACITY_PROFILE'), 'formal workflow profile or attestation input is missing');
 assert(workflow.includes('needs: [contracts-and-static, security-negative, postgres-integration, transport-integration, capacity-and-failure, browser-real-mode, production-images, kind-rollout-rollback]'), 'release evidence is not blocked by all jobs');
 
-for (const script of ['build:telemetry-runtime-image', 'build:telemetry-runtime-migrator', 's2:release:check', 's2:capacity', 'audit:s2-kind-rollout', 's2:release-evidence', 's2:release-evidence:verify', 'test:s2-release-evidence', 'test:s2-capacity', 's2:ticket-11']) {
+for (const script of ['build:telemetry-runtime-image', 'build:telemetry-runtime-migrator', 's2:release:check', 's2:capacity', 'audit:s2-kind-rollout', 's2:release-evidence', 's2:release-evidence:verify', 'test:s2-release-evidence', 'test:s2-capacity', 'test:dependency-audit-retry', 's2:ticket-11']) {
   assert(packageJSON.scripts?.[script], `package script ${script} is missing`);
 }
 for (const marker of ['preflight', 'formal', '60-minute', '15-minute', 'not production certification', 'SHA256SUMS', 'in-toto', 'fresh Snapshot']) {

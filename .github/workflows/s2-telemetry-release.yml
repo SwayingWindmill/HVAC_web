@@ -250,13 +250,14 @@ jobs:
           DIGEST='${{ steps.build.outputs.digest }}'
           if [[ "$S2_CAPACITY_PROFILE" == "full" ]]; then docker pull "$IMAGE@$DIGEST"; fi
           if [[ -z "$DIGEST" ]]; then DIGEST="$(docker image inspect --format '{{.Id}}' "$IMAGE")"; fi
-          USER="$(docker image inspect --format '{{.Config.User}}' "$IMAGE${DIGEST:+@$DIGEST}" 2>/dev/null || docker image inspect --format '{{.Config.User}}' "$IMAGE")"
+          RUNTIME_USER="$(docker image inspect --format '{{.Config.User}}' "$IMAGE${DIGEST:+@$DIGEST}" 2>/dev/null || docker image inspect --format '{{.Config.User}}' "$IMAGE")"
           SCAN_REF="$IMAGE"
           if [[ "$S2_CAPACITY_PROFILE" == "full" ]]; then SCAN_REF="$IMAGE@$DIGEST"; fi
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "scan_ref=$SCAN_REF" >> "$GITHUB_OUTPUT"
-          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
-          echo "user=$USER" >> "$GITHUB_OUTPUT"
+          IMAGE="$(printf '%s' "$IMAGE" | tr -d '\r\n')"
+          SCAN_REF="$(printf '%s' "$SCAN_REF" | tr -d '\r\n')"
+          DIGEST="$(printf '%s' "$DIGEST" | tr -d '\r\n')"
+          RUNTIME_USER="$(printf '%s' "$RUNTIME_USER" | tr -d '\r\n')"
+          printf 'image=%s\nscan_ref=%s\ndigest=%s\nuser=%s\n' "$IMAGE" "$SCAN_REF" "$DIGEST" "$RUNTIME_USER" >> "$GITHUB_OUTPUT"
       - name: Scan image vulnerabilities and secrets
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:

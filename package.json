@@ -137,7 +137,8 @@
     "s2:release-evidence:verify": "node scripts/verify-s2-release-evidence.mjs",
     "test:s2-release-evidence": "node scripts/test-s2-release-evidence.mjs",
     "test:s2-capacity": "node scripts/test-s2-capacity-certification.mjs",
-    "s2:ticket-11": "npm run s2:release:check && node scripts/run-go.mjs test ./services/platform-gateway/... ./services/telemetry-runtime-service/... && node scripts/run-go.mjs vet ./services/platform-gateway/... ./services/telemetry-runtime-service/... && npm run build:telemetry-runtime && npm run test:s2-release-evidence && npm run test:s2-capacity && npm run s2:capacity && npm run s2:security-observability:check && npm run s2:contracts:check && npm run s2:rollout-gates:check && npm run security:network-policies && npm run security:dependency-audit && npm run security:go-vuln && npm run security:licenses && npm run lint && npm run build"
+    "test:dependency-audit-retry": "node scripts/test-npm-production-audit-retry.mjs",
+    "s2:ticket-11": "npm run s2:release:check && node scripts/run-go.mjs test ./services/platform-gateway/... ./services/telemetry-runtime-service/... && node scripts/run-go.mjs vet ./services/platform-gateway/... ./services/telemetry-runtime-service/... && npm run build:telemetry-runtime && npm run test:s2-release-evidence && npm run test:s2-capacity && npm run test:dependency-audit-retry && npm run s2:capacity && npm run s2:security-observability:check && npm run s2:contracts:check && npm run s2:rollout-gates:check && npm run security:network-policies && npm run security:dependency-audit && npm run security:go-vuln && npm run security:licenses && npm run lint && npm run build"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.1",
