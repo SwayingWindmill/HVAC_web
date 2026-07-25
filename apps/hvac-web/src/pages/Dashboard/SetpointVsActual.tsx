@@ -1,6 +1,6 @@
 import { Card, Typography } from 'antd';
 import { CheckCircleOutlined } from '@ant-design/icons';
-import { useLatest, MOCK_DEVICES } from '@/api';
+import { MOCK_DEVICES, useTelemetryLive } from '@/api';
 
 type ControlPoint = {
   label: string;
@@ -31,9 +31,9 @@ function formatValue(value: number, unit: string) {
 }
 
 export default function SetpointVsActual() {
-  const { data: latest } = useLatest(MOCK_DEVICES[0], ['supplyTemp', 'returnTemp']);
-  const supply = latest?.supplyTemp?.value ?? 7.0;
-  const rtn = latest?.returnTemp?.value ?? 12.0;
+  const live = useTelemetryLive([MOCK_DEVICES[0]], ['supplyTemp', 'returnTemp']);
+  const supply = live.get(MOCK_DEVICES[0], 'supplyTemp') ?? 7.0;
+  const rtn = live.get(MOCK_DEVICES[0], 'returnTemp') ?? 12.0;
 
   const points: ControlPoint[] = [
     { label: '冷冻水供水温度', set: 7, actual: supply, unit: '℃', threshold: 1 },

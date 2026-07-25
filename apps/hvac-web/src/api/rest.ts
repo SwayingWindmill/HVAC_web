@@ -1,33 +1,135 @@
-import { useQuery, useQueries } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
-import { USE_MOCK } from './config';
+import { useQueries, useQuery } from '@tanstack/react-query';
+import { useCallback, useEffect, useState } from 'react';
+import type { TelemetryKey } from './generated/s2Telemetry.gen';
+import { API_MODE, USE_MOCK } from './config';
 import { http, unwrap } from './http';
-import { mockGetLatest, mockGetTimeseries, mockGetBatch, MOCK_DEVICES } from './mock';
-import { telemetry } from './telemetry';
-import type { LatestMap, TimeseriesMap, DeviceSnapshot, Range, TelemetryPoint } from './types';
+import {
+  MOCK_DEVICES,
+  mockGetBatch,
+  mockGetLatest,
+  mockGetTimeseries,
+  onMockPush,
+  startMockPush,
+} from './mock';
+import { createTelemetryCurrentRuntime } from './telemetry-current';
+import type { DeviceSnapshot, Range, TelemetryPoint, TimeseriesMap } from './types';
+import type { TelemetryLiveSession, TelemetryLiveState } from '@/platform/telemetry-live';
 
-const realGetLatest = (deviceId: string, keys: string[]) =>
-  unwrap<LatestMap>(http.get(`/telemetry/devices/${deviceId}/latest`, { params: { keys: keys.join(',') } }));
+const compatibilityRuntime = createTelemetryCurrentRuntime();
+
+function currentStateRetired(surface: string): Promise<never> {
+  return Promise.reject(
+    new Error(`${surface} is retired in real mode; use the S2 telemetry-current Snapshot/live client`),
+  );
+}
 
 const realGetTimeseries = (deviceId: string, keys: string[], range: Range) =>
   unwrap<TimeseriesMap>(
     http.get(`/telemetry/devices/${deviceId}/timeseries`, { params: { keys: keys.join(','), range } }),
   );
 
-const realGetBatch = (deviceIds: string[], keys: string[]) =>
-  unwrap<DeviceSnapshot[]>(http.post('/telemetry/latest/batch', { deviceIds, keys }));
+function useS2TelemetryLive(deviceIds: string[], keys: string[]) {
+  const [states, setStates] = useState<ReadonlyMap<string, TelemetryLiveState>>(new Map());
+  const [error, setError] = useState<Error | null>(null);
+  const deviceSignature = deviceIds.join('|');
+  const keySignature = keys.join('|');
 
-/** Latest snapshot of one device's keys. Mount-time initial value for the cockpit. */
+  useEffect(() => {
+    if (API_MODE !== 'real' || deviceIds.length === 0 || keys.length === 0) {
+      setStates(new Map());
+      setError(null);
+      return undefined;
+    }
+
+    let active = true;
+    let session: TelemetryLiveSession | null = null;
+    let unsubscribe: (() => void) | null = null;
+    const controller = new AbortController();
+    const targets = deviceIds.map((deviceId) => ({
+      clientSubscriptionId: `compatibility-${deviceId}`,
+      deviceId,
+      keys: [...keys] as TelemetryKey[],
+    }));
+
+    setStates(new Map());
+    setError(null);
+    compatibilityRuntime.live.open(targets, { signal: controller.signal }).then((opened) => {
+      if (!active) {
+        opened.close();
+        return;
+      }
+      session = opened;
+      const publish = () => {
+        const next = new Map<string, TelemetryLiveState>();
+        for (const state of opened.getStates()) {
+          if (state.status === 'revoked') compatibilityRuntime.live.purge();
+          next.set(state.deviceId, state);
+        }
+        setStates(next);
+      };
+      publish();
+      unsubscribe = opened.subscribe(publish);
+    }).catch((cause: unknown) => {
+      if (!active || controller.signal.aborted) return;
+      setError(cause instanceof Error ? cause : new Error(String(cause)));
+    });
+
+    return () => {
+      active = false;
+      controller.abort();
+      unsubscribe?.();
+      session?.close();
+    };
+  }, [deviceSignature, keySignature]);
+
+  const get = useCallback((deviceId: string, key: string): number | undefined => {
+    const value = states.get(deviceId)?.snapshot?.values.find((entry) => entry.key === key);
+    return value?.state === 'PRESENT' && typeof value.value === 'number' ? value.value : undefined;
+  }, [states]);
+
+  const loading = API_MODE === 'real' && deviceIds.length > 0 && !error && (
+    states.size < deviceIds.length || [...states.values()].some((state) => state.status === 'initializing')
+  );
+  return { get, loading, error };
+}
+
+function useMockTelemetryPush() {
+  const [values, setValues] = useState<ReadonlyMap<string, number>>(new Map());
+
+  useEffect(() => {
+    if (!USE_MOCK) return undefined;
+    const offPush = onMockPush((deviceId, key, value) => {
+      setValues((current) => {
+        const next = new Map(current);
+        next.set(`${deviceId}:${key}`, value);
+        return next;
+      });
+    });
+    const stop = startMockPush();
+    return () => {
+      offPush();
+      stop();
+    };
+  }, []);
+
+  return values;
+}
+
+/**
+ * Legacy-shaped hook retained for mock-only pages. Real mode fails closed and
+ * never calls Legacy latest, batch, ThingsBoard or Socket.IO current-state paths.
+ */
 export function useLatest(deviceId: string, keys: string[], enabled = true) {
   return useQuery({
-    queryKey: ['telemetry', 'latest', deviceId, keys.join(',')],
-    queryFn: () => (USE_MOCK ? mockGetLatest(deviceId, keys) : realGetLatest(deviceId, keys)),
+    queryKey: ['telemetry-retired', 'latest', deviceId, keys.join(',')],
+    queryFn: () => (USE_MOCK ? mockGetLatest(deviceId, keys) : currentStateRetired('Legacy latest telemetry')),
     staleTime: 30_000,
     enabled,
+    retry: false,
   });
 }
 
-/** Historical time-series for one device's keys (charts). */
+/** Historical time-series remains the explicit compatibility boundary. */
 export function useTimeseries(deviceId: string, keys: string[], range: Range = '24h', enabled = true) {
   return useQuery({
     queryKey: ['telemetry', 'ts', deviceId, keys.join(','), range],
@@ -37,21 +139,17 @@ export function useTimeseries(deviceId: string, keys: string[], range: Range = '
   });
 }
 
-/** Multi-device latest snapshot (fleet view on mount). */
+/** Mock-only batch compatibility hook; real current state uses telemetry-current. */
 export function useBatch(deviceIds: string[], keys: string[], enabled = true) {
   return useQuery({
-    queryKey: ['telemetry', 'batch', deviceIds.join(','), keys.join(',')],
-    queryFn: () => (USE_MOCK ? mockGetBatch(deviceIds, keys) : realGetBatch(deviceIds, keys)),
+    queryKey: ['telemetry-retired', 'batch', deviceIds.join(','), keys.join(',')],
+    queryFn: () => (USE_MOCK ? mockGetBatch(deviceIds, keys) : currentStateRetired('Legacy batch telemetry')),
     staleTime: 30_000,
     enabled,
+    retry: false,
   });
 }
 
-/**
- * Building-level historical trend: fetch each device's time-series via React Query
- * (cached) and sum them index-aligned into a single series. Backend has no aggregate
- * endpoint yet (#4 gap), so front-end aggregation is the chosen path per #8 spec.
- */
 export function useBuildingTimeseries(range: Range = 'day', deviceIds: string[] = MOCK_DEVICES, key = 'power') {
   const queries = useQueries({
     queries: deviceIds.map((id) => ({
@@ -60,54 +158,43 @@ export function useBuildingTimeseries(range: Range = 'day', deviceIds: string[] 
       staleTime: 60_000,
     })),
   });
-  const isLoading = queries.some((q) => q.isLoading);
-  const isError = queries.some((q) => q.isError);
-  const refetch = () => Promise.all(queries.map((q) => q.refetch()));
+  const isLoading = queries.some((query) => query.isLoading);
+  const isError = queries.some((query) => query.isError);
+  const refetch = () => Promise.all(queries.map((query) => query.refetch()));
   const data: TelemetryPoint[] = [];
   if (!isLoading) {
-    const n = Math.max(0, ...queries.map((q) => q.data?.[key]?.length ?? 0));
-    for (let i = 0; i < n; i++) {
+    const count = Math.max(0, ...queries.map((query) => query.data?.[key]?.length ?? 0));
+    for (let index = 0; index < count; index += 1) {
       let sum = 0;
-      let ts = 0;
-      let has = false;
-      queries.forEach((q) => {
-        const p = q.data?.[key]?.[i];
-        if (p) {
-          sum += p.value;
-          ts = p.ts;
-          has = true;
+      let timestamp = 0;
+      let found = false;
+      queries.forEach((query) => {
+        const point = query.data?.[key]?.[index];
+        if (point) {
+          sum += point.value;
+          timestamp = point.ts;
+          found = true;
         }
       });
-      if (has) data.push({ ts, value: Math.round(sum) });
+      if (found) data.push({ ts: timestamp, value: Math.round(sum) });
     }
   }
   return { data, isLoading, isError, refetch };
 }
 
 /**
- * Live building values: initial snapshot from React Query (cached) + realtime pushes
- * from TelemetryClient. This is the core #8/#11 pattern — REST for history/initial,
- * WebSocket for live updates. `get(deviceId, key)` returns the freshest value.
+ * Compatibility facade for pages not yet migrated to device-detail state. Real
+ * mode opens one S2 Snapshot/live session for the requested devices; Mock mode
+ * keeps the existing simulator behavior without retaining Socket.IO code.
  */
 export function useTelemetryLive(deviceIds: string[], keys: string[]) {
-  const { data: batch } = useBatch(deviceIds, keys);
-  const live = useRef<Record<string, number>>({});
-  const [, force] = useState(0);
+  const s2 = useS2TelemetryLive(deviceIds, keys);
+  const mockPush = useMockTelemetryPush();
+  const { data: batch, isLoading } = useBatch(deviceIds, keys, USE_MOCK);
 
-  useEffect(() => {
-    const cb = (deviceId: string, key: string, value: number) => {
-      live.current[`${deviceId}:${key}`] = value;
-      force((v) => v + 1);
-    };
-    deviceIds.forEach((id) => telemetry.subscribe(id, keys, cb));
-    return () => deviceIds.forEach((id) => telemetry.unsubscribe(id, keys, cb));
-  }, [deviceIds.join(','), keys.join(',')]);
-
-  const get = (deviceId: string, key: string): number | undefined => {
-    const k = `${deviceId}:${key}`;
-    if (k in live.current) return live.current[k];
-    return batch?.find((d) => d.deviceId === deviceId)?.latest[key]?.value;
-  };
-
-  return { get, loading: !batch };
+  if (!USE_MOCK) return s2;
+  const get = (deviceId: string, key: string): number | undefined =>
+    mockPush.get(`${deviceId}:${key}`)
+    ?? (batch as DeviceSnapshot[] | undefined)?.find((device) => device.deviceId === deviceId)?.latest[key]?.value;
+  return { get, loading: isLoading || !batch, error: null };
 }
