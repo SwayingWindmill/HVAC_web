@@ -7,7 +7,7 @@ const json = async (path) => JSON.parse(await text(path));
 const assert = (condition, message) => { if (!condition) throw new Error(`Invalid S2 Ticket 11 release asset: ${message}`); };
 const output = resolve(root, 'out/s2-ticket-11/release-assets.json');
 
-const [envelope, gates, attestationSchema, runtimeImage, migratorImage, migrationScript, kindManifest, capacity, kindRunner, bundleBuilder, bundleVerifier, imageWriter, imageMerger, reportWriter, workflow, runbook, runtimeMetrics, gatewayMetrics, runtimeMain, packageJSON] = await Promise.all([
+const [envelope, gates, attestationSchema, runtimeImage, migratorImage, migrationScript, kindManifest, capacity, kindRunner, bundleBuilder, bundleVerifier, imageWriter, imageMerger, reportWriter, workflow, runbook, runtimeMetrics, gatewayMetrics, runtimeMain, centrifugoConfigCheck, dockerPullRetry, packageJSON] = await Promise.all([
   json('deploy/s2/release-envelope.v1.json'),
   json('deploy/s2/release-gates.v1.json'),
   json('deploy/s2/full-capacity-attestation.schema.json'),
@@ -27,6 +27,8 @@ const [envelope, gates, attestationSchema, runtimeImage, migratorImage, migratio
   text('services/telemetry-runtime-service/internal/telemetry/metrics.go'),
   text('services/platform-gateway/internal/gateway/telemetry_metrics.go'),
   text('services/telemetry-runtime-service/cmd/telemetry-runtime-service/main.go'),
+  text('scripts/run-s2-realtime-centrifugo-config-check.mjs'),
+  text('scripts/lib/docker-pull-retry.mjs'),
   json('package.json'),
 ]);
 
@@ -74,6 +76,10 @@ for (const marker of ['hvac_s2_upstream_requests_total', 'hvac_s2_upstream_durat
   assert(gatewayMetrics.includes(marker), `Gateway production metrics are missing ${marker}`);
 }
 assert(runtimeMain.includes('DiagnosticsHandler()') && runtimeMain.includes('TELEMETRY_DIAGNOSTICS_ADDR'), 'Telemetry Runtime diagnostics endpoint is missing');
+assert(centrifugoConfigCheck.includes('pullDockerImageWithRetry') && centrifugoConfigCheck.includes("'--pull=never'"), 'Centrifugo config check is missing bounded immutable-image pull handling');
+for (const marker of ['immutable sha256 digest', 'attempts ?? 5', "['pull', image]", 'failed after ${attempts} attempts', 'slice(0, 2000)']) {
+  assert(dockerPullRetry.includes(marker), `Docker pull retry helper is missing ${marker}`);
+}
 
 const requiredReports = gates.requiredEvidence.filter((path) => !path.endsWith('release-evidence.intoto.json') && !path.endsWith('SHA256SUMS')).map((path) => path.split('/').at(-1));
 for (const source of [bundleBuilder, bundleVerifier]) {
@@ -82,13 +88,13 @@ for (const source of [bundleBuilder, bundleVerifier]) {
 
 const jobs = ['contracts-and-static', 'security-negative', 'postgres-integration', 'transport-integration', 'capacity-and-failure', 'browser-real-mode', 'production-images', 'kind-rollout-rollback', 'release-evidence'];
 for (const job of jobs) assert(workflow.includes(`  ${job}:`), `workflow job ${job} is missing`);
-for (const marker of ['runs-on: ubuntu-24.04', 'npm run s2:ticket-11', 'npm run s2:ticket-10', 'gitleaks/gitleaks-action@v2', 'npm run s2:postgres-integration', 'npm run s2:realtime:transport', 'npm run s2:hvac-web:browser', 'docker/build-push-action@v6', "tr -d '\\r\\n'", "printf 'image=%s\\nscan_ref=%s\\ndigest=%s\\nuser=%s\\n'", 'Generate CycloneDX SBOM', 'format: cyclonedx', 'severity: HIGH,CRITICAL', 'buildkit-mode-max', 'audit:s2-kind-rollout', 's2:release-evidence']) {
+for (const marker of ['runs-on: ubuntu-24.04', 'npm run s2:ticket-11', 'npm run s2:ticket-10', 'gitleaks/gitleaks-action@v2', 'npm run s2:postgres-integration', 'npm run s2:transport-integration', 'npm run s2:hvac-web:browser', 'docker/build-push-action@v6', 'Stage flat image evidence artifact', 'path: out/s2-image-artifact/*', "tr -d '\\r\\n'", "printf 'image=%s\\nscan_ref=%s\\ndigest=%s\\nuser=%s\\n'", 'Generate CycloneDX SBOM', 'format: cyclonedx', 'severity: HIGH,CRITICAL', 'buildkit-mode-max', 'audit:s2-kind-rollout', 's2:release-evidence']) {
   assert(workflow.includes(marker), `release workflow is missing ${marker}`);
 }
 assert(workflow.includes('options: [preflight, full]') && workflow.includes('wall_clock_attestation_json') && workflow.includes('S2_CAPACITY_PROFILE'), 'formal workflow profile or attestation input is missing');
 assert(workflow.includes('needs: [contracts-and-static, security-negative, postgres-integration, transport-integration, capacity-and-failure, browser-real-mode, production-images, kind-rollout-rollback]'), 'release evidence is not blocked by all jobs');
 
-for (const script of ['build:telemetry-runtime-image', 'build:telemetry-runtime-migrator', 'test:s2-migrator-image', 's2:release:check', 's2:capacity', 'audit:s2-kind-rollout', 's2:release-evidence', 's2:release-evidence:verify', 'test:s2-release-evidence', 'test:s2-capacity', 'test:dependency-audit-retry', 's2:ticket-11']) {
+for (const script of ['build:telemetry-runtime-image', 'build:telemetry-runtime-migrator', 'test:s2-migrator-image', 'test:docker-pull-retry', 's2:postgres-integration', 's2:transport-integration', 's2:release:check', 's2:capacity', 'audit:s2-kind-rollout', 's2:release-evidence', 's2:release-evidence:verify', 'test:s2-release-evidence', 'test:s2-capacity', 'test:dependency-audit-retry', 's2:ticket-11']) {
   assert(packageJSON.scripts?.[script], `package script ${script} is missing`);
 }
 for (const marker of ['preflight', 'formal', '60-minute', '15-minute', 'not production certification', 'SHA256SUMS', 'in-toto', 'fresh Snapshot']) {
