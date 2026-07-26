@@ -204,7 +204,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -224,3 +224,15 @@ jobs:
           path: out/s3-target-release/image-manifest.json
           if-no-files-found: error
           retention-days: 30
+      - name: Publish candidate manifest as prerelease asset
+        if: startsWith(github.ref, 'refs/tags/s3-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --prerelease \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "S3 target image release candidate. This release and its manifest do not claim formal S3-09 certification." \
+            out/s3-target-release/image-manifest.json

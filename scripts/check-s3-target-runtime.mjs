@@ -86,6 +86,11 @@ if (failures.length === 0) {
   requireText('.github/workflows/s3-ticket-09.yml', 'cosign verify');
   requireText('.github/workflows/s3-ticket-09.yml', 'write-s3-target-image-evidence.mjs');
   requireText('.github/workflows/s3-ticket-09.yml', 'aggregate-s3-target-image-evidence.mjs');
+  requireText('.github/workflows/s3-ticket-09.yml', 'Publish candidate manifest as prerelease asset');
+  requireText('.github/workflows/s3-ticket-09.yml', 'gh release create');
+  requireText('.github/workflows/s3-ticket-09.yml', '--verify-tag');
+  requireText('.github/workflows/s3-ticket-09.yml', '--prerelease');
+  requireText('.github/workflows/s3-ticket-09.yml', 'do not claim formal S3-09 certification');
   requireText('.github/workflows/s3-ticket-09.yml', 'tags: ${{ steps.image.outputs.name }}:${{ github.sha }}');
   forbidText('.github/workflows/s3-ticket-09.yml', ':latest');
   requireText('scripts/write-s3-target-image-evidence.mjs', 'formalCertificationClaim: false');

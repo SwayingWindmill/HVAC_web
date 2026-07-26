@@ -61,6 +61,8 @@ docker build -f deploy/s3/images/command-migrator.Dockerfile \
 
 Local Docker builds are verification-only. Formal target images must be published by `.github/workflows/s3-ticket-09.yml` from an `s3-v*` tag or explicit workflow dispatch. The workflow builds with BuildKit SBOM and maximum provenance, scans for embedded secrets, signs and verifies each digest with Cosign OIDC, then publishes the `s3-target-image-manifest` artifact.
 
+For an `s3-v*` tag, the aggregate job also creates a GitHub prerelease for that exact tag and attaches `image-manifest.json`. The release notes explicitly state that the candidate release does not claim formal S3-09 certification. This public, immutable release asset is the preferred operator download when the Actions artifact endpoint requires an authenticated browser session.
+
 Resolve and record each pushed image digest from that aggregated manifest. Do not render mutable tags such as `latest`, local image IDs or unverified registry references.
 
 ## Render the target package
