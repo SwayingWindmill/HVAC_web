@@ -20,6 +20,10 @@ const requiredFiles = [
   'services/command-dispatcher/pkg/commanddispatcher/reported_state_client.go',
   'services/thingsboard-connector-control/pkg/controlconnector/target_runtime.go',
   'services/telemetry-runtime-service/internal/telemetry/command_verifier_server.go',
+  'scripts/write-s3-target-image-evidence.mjs',
+  'scripts/aggregate-s3-target-image-evidence.mjs',
+  'scripts/test-s3-target-image-evidence.mjs',
+  '.github/workflows/s3-ticket-09.yml',
   'deploy/s3/images/command-migrator.Dockerfile',
   'deploy/s3/target/README.md',
   'deploy/s3/target/namespace.yaml',
@@ -68,6 +72,25 @@ if (failures.length === 0) {
   requireText('deploy/s3/target/README.md', '--build-arg SERVICE_PACKAGE=./services/command-dispatcher/cmd/command-verifier');
   forbidText('deploy/s3/target/README.md', '--build-arg SERVICE=');
   forbidText('deploy/s3/target/README.md', '--build-arg MODULE_PATH=');
+  requireText('deploy/s3/target/README.md', 's3-target-image-manifest');
+  requireText('deploy/s3/target/README.md', 'Local Docker builds are verification-only');
+
+  requireText('.github/workflows/s3-ticket-09.yml', "tags: ['s3-v*']");
+  requireText('.github/workflows/s3-ticket-09.yml', 'docker/setup-buildx-action@v3');
+  requireText('.github/workflows/s3-ticket-09.yml', 'docker/build-push-action@v6');
+  requireText('.github/workflows/s3-ticket-09.yml', 'sbom: true');
+  requireText('.github/workflows/s3-ticket-09.yml', 'provenance: mode=max');
+  requireText('.github/workflows/s3-ticket-09.yml', 'scanners: secret');
+  requireText('.github/workflows/s3-ticket-09.yml', 'sigstore/cosign-installer@v3.8.2');
+  requireText('.github/workflows/s3-ticket-09.yml', 'cosign sign --yes');
+  requireText('.github/workflows/s3-ticket-09.yml', 'cosign verify');
+  requireText('.github/workflows/s3-ticket-09.yml', 'write-s3-target-image-evidence.mjs');
+  requireText('.github/workflows/s3-ticket-09.yml', 'aggregate-s3-target-image-evidence.mjs');
+  requireText('.github/workflows/s3-ticket-09.yml', 'tags: ${{ steps.image.outputs.name }}:${{ github.sha }}');
+  forbidText('.github/workflows/s3-ticket-09.yml', ':latest');
+  requireText('scripts/write-s3-target-image-evidence.mjs', 'formalCertificationClaim: false');
+  requireText('scripts/aggregate-s3-target-image-evidence.mjs', 'candidate-target-images-published');
+  requireText('scripts/test-s3-target-image-evidence.mjs', 'aggregate must fail closed');
 
   requireText('libs/workloadtls/workloadtls.go', 'tls.RequireAndVerifyClientCert');
   requireText('libs/workloadtls/workloadtls.go', 'tls.VersionTLS13');

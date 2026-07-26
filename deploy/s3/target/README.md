@@ -59,7 +59,9 @@ docker build -f deploy/s3/images/command-migrator.Dockerfile \
   -t <registry>/command-migrator:<new-sha> .
 ```
 
-Resolve and record each pushed image digest. Do not render mutable tags such as `latest`.
+Local Docker builds are verification-only. Formal target images must be published by `.github/workflows/s3-ticket-09.yml` from an `s3-v*` tag or explicit workflow dispatch. The workflow builds with BuildKit SBOM and maximum provenance, scans for embedded secrets, signs and verifies each digest with Cosign OIDC, then publishes the `s3-target-image-manifest` artifact.
+
+Resolve and record each pushed image digest from that aggregated manifest. Do not render mutable tags such as `latest`, local image IDs or unverified registry references.
 
 ## Render the target package
 
