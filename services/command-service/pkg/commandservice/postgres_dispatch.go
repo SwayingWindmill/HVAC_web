@@ -17,14 +17,26 @@ const setpointControlGroup = "SETPOINT"
 var ErrNoDispatchAvailable = errors.New("no governed command is available for dispatch")
 
 func (store *PostgresStore) ClaimDispatch(ctx context.Context, organizationID, leaseOwner string, leaseFor time.Duration) (commandmodel.DispatchEnvelope, error) {
+	return store.claimDispatch(ctx, organizationID, unrestrictedCommandCohort(), leaseOwner, leaseFor)
+}
+
+func (store *PostgresStore) ClaimDispatchForCohort(ctx context.Context, organizationID, siteID, deviceID, leaseOwner string, leaseFor time.Duration) (commandmodel.DispatchEnvelope, error) {
+	scope, err := exactCommandCohort(siteID, deviceID)
+	if err != nil {
+		return commandmodel.DispatchEnvelope{}, err
+	}
+	return store.claimDispatch(ctx, organizationID, scope, leaseOwner, leaseFor)
+}
+
+func (store *PostgresStore) claimDispatch(ctx context.Context, organizationID string, scope commandCohortScope, leaseOwner string, leaseFor time.Duration) (commandmodel.DispatchEnvelope, error) {
 	if store == nil || store.pool == nil {
 		return commandmodel.DispatchEnvelope{}, errors.New("command store is closed")
 	}
-	if organizationID == "" || strings.TrimSpace(leaseOwner) == "" || leaseFor < time.Second || leaseFor > 2*time.Minute {
+	if !commandmodel.IsUUIDv7(organizationID) || strings.TrimSpace(leaseOwner) == "" || leaseFor < time.Second || leaseFor > 2*time.Minute {
 		return commandmodel.DispatchEnvelope{}, ErrInvalidRequest
 	}
 	for attempt := 0; attempt < 4; attempt++ {
-		envelope, err := store.claimDispatchOnce(ctx, organizationID, leaseOwner, leaseFor)
+		envelope, err := store.claimDispatchOnce(ctx, organizationID, scope, leaseOwner, leaseFor)
 		if err == nil || errors.Is(err, ErrNoDispatchAvailable) {
 			return envelope, err
 		}
@@ -35,7 +47,7 @@ func (store *PostgresStore) ClaimDispatch(ctx context.Context, organizationID, l
 	return commandmodel.DispatchEnvelope{}, errors.New("dispatch claim transaction retry limit exceeded")
 }
 
-func (store *PostgresStore) claimDispatchOnce(ctx context.Context, organizationID, leaseOwner string, leaseFor time.Duration) (commandmodel.DispatchEnvelope, error) {
+func (store *PostgresStore) claimDispatchOnce(ctx context.Context, organizationID string, scope commandCohortScope, leaseOwner string, leaseFor time.Duration) (commandmodel.DispatchEnvelope, error) {
 	now := store.now().UTC()
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
@@ -45,13 +57,13 @@ func (store *PostgresStore) claimDispatchOnce(ctx context.Context, organizationI
 	if err := activateOrganization(ctx, tx, organizationID); err != nil {
 		return commandmodel.DispatchEnvelope{}, err
 	}
-	if err := store.reconcileExpiredPreparedAttempts(ctx, tx, organizationID, now); err != nil {
+	if err := store.reconcileExpiredPreparedAttempts(ctx, tx, organizationID, scope, now); err != nil {
 		return commandmodel.DispatchEnvelope{}, err
 	}
-	if err := store.reconcileExpiredAcknowledgedAttempts(ctx, tx, organizationID, now); err != nil {
+	if err := store.reconcileExpiredAcknowledgedAttempts(ctx, tx, organizationID, scope, now); err != nil {
 		return commandmodel.DispatchEnvelope{}, err
 	}
-	if err := store.expireGovernanceInvalidQueued(ctx, tx, organizationID, now); err != nil {
+	if err := store.expireGovernanceInvalidQueued(ctx, tx, organizationID, scope, now); err != nil {
 		return commandmodel.DispatchEnvelope{}, err
 	}
 
@@ -69,6 +81,7 @@ JOIN command_runtime.command_intents i ON i.command_id = o.command_id
 JOIN command_runtime.device_control_state d
   ON d.organization_id = i.organization_id AND d.device_id = i.device_id
 WHERE o.organization_id = $1::uuid
+  AND (NOT $4 OR (i.site_id = $5::uuid AND i.device_id = $6::uuid))
   AND o.delivered_at IS NULL
   AND o.available_at <= $2
   AND (o.lease_until IS NULL OR o.lease_until <= $2)
@@ -104,7 +117,7 @@ WHERE o.organization_id = $1::uuid
 ORDER BY o.created_at, o.outbox_id
 FOR UPDATE OF o SKIP LOCKED
 LIMIT 1
-`, organizationID, now, setpointControlGroup).Scan(
+`, organizationID, now, setpointControlGroup, scope.enforced, scope.querySiteID(), scope.queryDeviceID()).Scan(
 		&outboxID, &intent.ID, &intent.OrganizationID, &intent.SiteID, &intent.DeviceID,
 		&capability, &intent.CapabilityRevision, &intent.SetpointC,
 		&intent.PayloadHash, &intent.DeviceCommandSequence, &intent.Version,
@@ -413,7 +426,7 @@ INSERT INTO command_runtime.command_dispatch_outbox (
 	return nil
 }
 
-func (store *PostgresStore) reconcileExpiredPreparedAttempts(ctx context.Context, tx pgx.Tx, organizationID string, now time.Time) error {
+func (store *PostgresStore) reconcileExpiredPreparedAttempts(ctx context.Context, tx pgx.Tx, organizationID string, scope commandCohortScope, now time.Time) error {
 	type expiredAttempt struct {
 		AttemptID, CommandID, SiteID, DeviceID, PayloadHash, LeaseOwner, OutboxID string
 		Fence, IntentVersion, AttemptVersion                                      uint64
@@ -427,12 +440,13 @@ JOIN command_runtime.command_intents i ON i.command_id = a.command_id
 JOIN command_runtime.command_dispatch_outbox o
   ON o.command_id = a.command_id AND o.delivered_at IS NULL AND o.lease_owner = a.lease_owner
 WHERE a.organization_id = $1::uuid
+  AND (NOT $3 OR (a.site_id = $4::uuid AND a.device_id = $5::uuid))
   AND a.status = 'PREPARED'
   AND a.lease_until <= $2
   AND i.status = 'DISPATCHING'
 FOR UPDATE OF a, i, o SKIP LOCKED
 LIMIT 50
-`, organizationID, now)
+`, organizationID, now, scope.enforced, scope.querySiteID(), scope.queryDeviceID())
 	if err != nil {
 		return fmt.Errorf("select expired prepared attempts: %w", err)
 	}
@@ -511,7 +525,7 @@ WHERE organization_id = $1::uuid AND device_id = $2::uuid
 	return nil
 }
 
-func (store *PostgresStore) expireGovernanceInvalidQueued(ctx context.Context, tx pgx.Tx, organizationID string, now time.Time) error {
+func (store *PostgresStore) expireGovernanceInvalidQueued(ctx context.Context, tx pgx.Tx, organizationID string, scope commandCohortScope, now time.Time) error {
 	type expiredCommand struct {
 		CommandID, SiteID, DeviceID, PayloadHash, OutboxID string
 		Version                                            uint64
@@ -522,6 +536,7 @@ SELECT i.command_id::text, i.site_id::text, i.device_id::text, i.payload_hash,
 FROM command_runtime.command_intents i
 JOIN command_runtime.command_dispatch_outbox o ON o.command_id = i.command_id AND o.delivered_at IS NULL
 WHERE i.organization_id = $1::uuid AND i.status = 'QUEUED'
+  AND (NOT $3 OR (i.site_id = $4::uuid AND i.device_id = $5::uuid))
   AND (
     EXISTS (
       SELECT 1 FROM command_runtime.command_approval_snapshots a
@@ -540,7 +555,7 @@ WHERE i.organization_id = $1::uuid AND i.status = 'QUEUED'
   )
 FOR UPDATE OF i, o SKIP LOCKED
 LIMIT 50
-`, organizationID, now)
+`, organizationID, now, scope.enforced, scope.querySiteID(), scope.queryDeviceID())
 	if err != nil {
 		return fmt.Errorf("select governance-expired queued commands: %w", err)
 	}

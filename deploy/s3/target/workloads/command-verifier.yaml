@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: command-verifier
+  namespace: s3-certification
+  labels: { app: command-verifier }
+  annotations:
+    s3.hvac/image-policy: digest-required
+    s3.hvac/template: render-before-apply
+    s3.hvac/database-access: forbidden
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: command-verifier }
+  template:
+    metadata:
+      labels: { app: command-verifier, s3.hvac/reported-state-reader: "true" }
+      annotations:
+        s3.hvac/workload-identity-required: "spiffe://hvac.local/command-verifier"
+    spec:
+      serviceAccountName: command-verifier
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: { type: RuntimeDefault }
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector: { matchLabels: { app: command-verifier } }
+      containers:
+        - name: command-verifier
+          image: "[SIGNED_IMAGE_COMMAND_VERIFIER_DIGEST]"
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: COMMAND_VERIFIER_DIAGNOSTICS_ADDR, value: ":19089" }
+            - { name: S3_APPROVED_COHORT_FILE, value: /var/run/hvac/cohort/approved-cohort.json }
+            - { name: COMMAND_RUNTIME_URL, value: "https://command-service.s3-certification.svc.cluster.local:8447" }
+            - { name: COMMAND_RUNTIME_SERVER_NAME, value: "command-service.s3-certification.svc.cluster.local" }
+            - { name: COMMAND_RUNTIME_CLIENT_CERT, value: /var/run/hvac/identity/tls.crt }
+            - { name: COMMAND_RUNTIME_CLIENT_KEY, value: /var/run/hvac/identity/tls.key }
+            - { name: COMMAND_RUNTIME_SERVER_CA, value: /var/run/hvac/trust/command-service-ca.pem }
+            - name: S2_REPORTED_STATE_URL
+              valueFrom: { configMapKeyRef: { name: s3-target-runtime-config, key: s2ReportedStateURL } }
+            - name: S2_REPORTED_STATE_SERVER_NAME
+              valueFrom: { configMapKeyRef: { name: s3-target-runtime-config, key: s2ReportedStateServerName } }
+            - { name: S2_REPORTED_STATE_CLIENT_CERT, value: /var/run/hvac/identity/tls.crt }
+            - { name: S2_REPORTED_STATE_CLIENT_KEY, value: /var/run/hvac/identity/tls.key }
+            - { name: S2_REPORTED_STATE_SERVER_CA, value: /var/run/hvac/trust/telemetry-runtime-ca.pem }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4318" }
+          ports:
+            - { name: diagnostics, containerPort: 19089 }
+          startupProbe: { httpGet: { path: /health/startup, port: diagnostics }, failureThreshold: 30, periodSeconds: 2 }
+          livenessProbe: { httpGet: { path: /health/live, port: diagnostics }, periodSeconds: 10, timeoutSeconds: 2 }
+          readinessProbe: { httpGet: { path: /health/ready, port: diagnostics }, periodSeconds: 3, timeoutSeconds: 2 }
+          resources:
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: approved-cohort, mountPath: /var/run/hvac/cohort, readOnly: true }
+            - { name: workload-identity, mountPath: /var/run/hvac/identity, readOnly: true }
+            - { name: trust-bundle, mountPath: /var/run/hvac/trust, readOnly: true }
+      volumes:
+        - name: approved-cohort
+          configMap:
+            name: s3-approved-cohort
+        - name: workload-identity
+          csi:
+            driver: csi.cert-manager.io
+            readOnly: true
+            volumeAttributes:
+              csi.cert-manager.io/issuer-name: "[COMMAND_WORKLOAD_ISSUER_NAME]"
+              csi.cert-manager.io/issuer-kind: "[COMMAND_WORKLOAD_ISSUER_KIND]"
+              csi.cert-manager.io/issuer-group: "[COMMAND_WORKLOAD_ISSUER_GROUP]"
+              csi.cert-manager.io/common-name: command-verifier.s3-certification
+              csi.cert-manager.io/uri-sans: spiffe://hvac.local/command-verifier
+              csi.cert-manager.io/key-usages: client auth
+              csi.cert-manager.io/duration: 24h
+              csi.cert-manager.io/renew-before: 8h
+              csi.cert-manager.io/certificate-file: tls.crt
+              csi.cert-manager.io/privatekey-file: tls.key
+              csi.cert-manager.io/ca-file: ca.crt
+              csi.cert-manager.io/fs-group: "65532"
+        - name: trust-bundle
+          configMap:
+            name: s3-command-trust-bundle

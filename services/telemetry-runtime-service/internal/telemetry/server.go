@@ -22,6 +22,7 @@ const (
 	InternalDeviceSnapshotPrefix          = "/internal/v1/devices/"
 	InternalBatchSnapshotPath             = "/internal/v1/telemetry/observation-snapshots:batchGet"
 	InternalRecoveryCheckpointResolvePath = "/internal/v1/telemetry/recovery-cursors:resolve"
+	InternalCommandReportedStatePath      = "/internal/v1/commands/reported-state"
 	telemetryContextGrantHeader           = "X-Telemetry-Context-Grant"
 	telemetryCheckpointResolveAction      = "telemetry:checkpoint:resolve"
 	maximumSnapshotRequestSize            = 256 << 10
@@ -33,35 +34,45 @@ var (
 )
 
 type ServerConfig struct {
-	Store                   SnapshotStore
-	Authorizer              GrantAuthorizer
-	AllowedGatewaySPIFFE    string
-	RuntimeAudience         string
-	ObservationAcceptor     ObservationAcceptor
-	CoverageReporter        CoverageReporter
-	SourceAuthenticator     SourceAuthenticator
-	Realtime                *RealtimeService
-	AllowedCentrifugoSPIFFE string
-	CentrifugoProxySecret   string
-	AllowedIAMSPIFFE        string
-	Metrics                 *observability.Registry
-	Now                     func() time.Time
+	Store                         SnapshotStore
+	Authorizer                    GrantAuthorizer
+	AllowedGatewaySPIFFE          string
+	RuntimeAudience               string
+	ObservationAcceptor           ObservationAcceptor
+	CoverageReporter              CoverageReporter
+	SourceAuthenticator           SourceAuthenticator
+	Realtime                      *RealtimeService
+	AllowedCentrifugoSPIFFE       string
+	CentrifugoProxySecret         string
+	AllowedIAMSPIFFE              string
+	AllowedCommandVerifierSPIFFE  string
+	CommandVerifierOrganizationID string
+	CommandVerifierSiteID         string
+	CommandVerifierDeviceID       string
+	CommandReportedStateKey       string
+	Metrics                       *observability.Registry
+	Now                           func() time.Time
 }
 
 type handler struct {
-	store                   SnapshotStore
-	authorizer              GrantAuthorizer
-	allowedGatewaySPIFFE    string
-	runtimeAudience         string
-	observationAcceptor     ObservationAcceptor
-	coverageReporter        CoverageReporter
-	sourceAuthenticator     SourceAuthenticator
-	realtime                *RealtimeService
-	allowedCentrifugoSPIFFE string
-	centrifugoProxySecret   string
-	allowedIAMSPIFFE        string
-	metrics                 *s2Metrics
-	now                     func() time.Time
+	store                         SnapshotStore
+	authorizer                    GrantAuthorizer
+	allowedGatewaySPIFFE          string
+	runtimeAudience               string
+	observationAcceptor           ObservationAcceptor
+	coverageReporter              CoverageReporter
+	sourceAuthenticator           SourceAuthenticator
+	realtime                      *RealtimeService
+	allowedCentrifugoSPIFFE       string
+	centrifugoProxySecret         string
+	allowedIAMSPIFFE              string
+	allowedCommandVerifierSPIFFE  string
+	commandVerifierOrganizationID string
+	commandVerifierSiteID         string
+	commandVerifierDeviceID       string
+	commandReportedStateKey       string
+	metrics                       *s2Metrics
+	now                           func() time.Time
 }
 
 func NewHandler(config ServerConfig) http.Handler {
@@ -74,13 +85,18 @@ func NewHandler(config ServerConfig) http.Handler {
 		allowedGatewaySPIFFE: strings.TrimSpace(config.AllowedGatewaySPIFFE),
 		runtimeAudience:      strings.TrimSpace(config.RuntimeAudience),
 		observationAcceptor:  config.ObservationAcceptor, coverageReporter: config.CoverageReporter,
-		sourceAuthenticator:     config.SourceAuthenticator,
-		realtime:                config.Realtime,
-		allowedCentrifugoSPIFFE: strings.TrimSpace(config.AllowedCentrifugoSPIFFE),
-		centrifugoProxySecret:   strings.TrimSpace(config.CentrifugoProxySecret),
-		allowedIAMSPIFFE:        strings.TrimSpace(config.AllowedIAMSPIFFE),
-		metrics:                 newS2Metrics(config.Metrics, now),
-		now:                     now,
+		sourceAuthenticator:           config.SourceAuthenticator,
+		realtime:                      config.Realtime,
+		allowedCentrifugoSPIFFE:       strings.TrimSpace(config.AllowedCentrifugoSPIFFE),
+		centrifugoProxySecret:         strings.TrimSpace(config.CentrifugoProxySecret),
+		allowedIAMSPIFFE:              strings.TrimSpace(config.AllowedIAMSPIFFE),
+		allowedCommandVerifierSPIFFE:  strings.TrimSpace(config.AllowedCommandVerifierSPIFFE),
+		commandVerifierOrganizationID: strings.TrimSpace(config.CommandVerifierOrganizationID),
+		commandVerifierSiteID:         strings.TrimSpace(config.CommandVerifierSiteID),
+		commandVerifierDeviceID:       strings.TrimSpace(config.CommandVerifierDeviceID),
+		commandReportedStateKey:       strings.TrimSpace(config.CommandReportedStateKey),
+		metrics:                       newS2Metrics(config.Metrics, now),
+		now:                           now,
 	}
 }
 
@@ -121,6 +137,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if request.URL.Path == InternalSubscriptionRevokePath {
 		h.handleSubscriptionRevoke(writer, request)
+		return
+	}
+	if request.URL.Path == InternalCommandReportedStatePath {
+		h.handleCommandReportedState(writer, request)
 		return
 	}
 	if request.URL.Path == InternalBatchSnapshotPath {

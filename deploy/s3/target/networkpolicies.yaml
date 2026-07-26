@@ -1,0 +1,162 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: s3-certification
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: s3-certification
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: command-service-ingress
+  namespace: s3-certification
+spec:
+  podSelector: { matchLabels: { app: command-service } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - { key: app, operator: In, values: [command-dispatcher, command-verifier] }
+        - namespaceSelector:
+            matchLabels: { s3.hvac/gateway-client: "true" }
+          podSelector:
+            matchLabels: { app: platform-gateway }
+      ports:
+        - { protocol: TCP, port: 8447 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: command-service-egress
+  namespace: s3-certification
+spec:
+  podSelector: { matchLabels: { app: command-service } }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { data.hvac/postgres: "true" }
+          podSelector:
+            matchLabels: { app: postgres }
+      ports:
+        - { protocol: TCP, port: 5432 }
+    - to:
+        - namespaceSelector:
+            matchLabels: { observability.hvac/collector: "true" }
+          podSelector:
+            matchLabels: { app: otel-collector }
+      ports:
+        - { protocol: TCP, port: 4318 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: command-dispatcher-egress
+  namespace: s3-certification
+spec:
+  podSelector: { matchLabels: { app: command-dispatcher } }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app: command-service } }
+      ports:
+        - { protocol: TCP, port: 8447 }
+    - to:
+        - namespaceSelector:
+            matchLabels: { s3.hvac/thingsboard-control: "true" }
+          podSelector:
+            matchLabels: { app: thingsboard }
+      ports:
+        - { protocol: TCP, port: 443 }
+    - to:
+        - namespaceSelector:
+            matchLabels: { observability.hvac/collector: "true" }
+          podSelector:
+            matchLabels: { app: otel-collector }
+      ports:
+        - { protocol: TCP, port: 4318 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: command-verifier-egress
+  namespace: s3-certification
+spec:
+  podSelector: { matchLabels: { app: command-verifier } }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app: command-service } }
+      ports:
+        - { protocol: TCP, port: 8447 }
+    - to:
+        - namespaceSelector:
+            matchLabels: { s2.hvac/runtime: "true" }
+          podSelector:
+            matchLabels: { app: telemetry-runtime-service }
+      ports:
+        - { protocol: TCP, port: 8446 }
+    - to:
+        - namespaceSelector:
+            matchLabels: { observability.hvac/collector: "true" }
+          podSelector:
+            matchLabels: { app: otel-collector }
+      ports:
+        - { protocol: TCP, port: 4318 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: command-migrator-egress
+  namespace: s3-certification
+spec:
+  podSelector: { matchLabels: { app: s3-command-migration } }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { data.hvac/postgres: "true" }
+          podSelector:
+            matchLabels: { app: postgres }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: diagnostics-scrape
+  namespace: s3-certification
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app, operator: In, values: [command-service, command-dispatcher, command-verifier] }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { observability.hvac/scraper: "true" }
+      ports:
+        - { protocol: TCP, port: 19087 }
+        - { protocol: TCP, port: 19088 }
+        - { protocol: TCP, port: 19089 }

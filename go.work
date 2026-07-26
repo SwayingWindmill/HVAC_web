@@ -12,6 +12,7 @@ use (
 	./libs/sessionstore
 	./libs/telemetryauth
 	./libs/testpki
+	./libs/workloadtls
 	./services/audit-ledger-service
 	./services/command-dispatcher
 	./services/command-service

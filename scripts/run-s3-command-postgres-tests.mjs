@@ -62,9 +62,9 @@ async function waitForPostgres() {
   let stableChecks = 0;
   for (let attempt = 0; attempt < 300; attempt += 1) {
     try {
-      const state = psql("SELECT pg_postmaster_start_time()::text || '|' || (to_regclass('command_runtime.command_intents') IS NOT NULL)::text || '|' || (to_regclass('command_runtime.command_dispatch_outbox') IS NOT NULL)::text");
-      const [startedAt, intentsReady, outboxReady] = state.split('|');
-      if (intentsReady === 'true' && outboxReady === 'true') {
+      const state = psql("SELECT pg_postmaster_start_time()::text || '|' || (to_regclass('command_runtime.command_intents') IS NOT NULL)::text || '|' || (to_regclass('command_runtime.command_dispatch_outbox') IS NOT NULL)::text || '|' || (to_regclass('command_runtime.connector_evidence') IS NOT NULL)::text || '|' || (to_regclass('command_runtime.command_grant_uses') IS NOT NULL)::text");
+      const [startedAt, intentsReady, outboxReady, evidenceReady, grantUsesReady] = state.split('|');
+      if (intentsReady === 'true' && outboxReady === 'true' && evidenceReady === 'true' && grantUsesReady === 'true') {
         if (startedAt === stableStart) stableChecks += 1;
         else {
           stableStart = startedAt;
@@ -136,14 +136,14 @@ try {
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'command_runtime' AND c.relkind = 'r'
   `);
-  expectEqual(tableState, '11|10|10', 'table/RLS baseline');
+  expectEqual(tableState, '13|12|12', 'table/RLS baseline');
   report.assertions.tableRlsState = tableState;
 
   const capability = psql(`
     SELECT capability_name || '|' || capability_revision || '|' || status || '|' || connector_kind || '|' || retry_policy
     FROM command_runtime.capability_profiles
   `);
-  expectEqual(capability, 'SET_TEMPERATURE_SETPOINT|capability:set-temperature-setpoint:v1|DRAFT|SYNTHETIC_ONLY|PRE_SEND_ONLY', 'Capability baseline');
+  expectEqual(capability, 'SET_TEMPERATURE_SETPOINT|capability:set-temperature-setpoint:v1|VERIFIED|THINGSBOARD_CE_4.3.1.3|PRE_SEND_ONLY', 'Capability target runtime');
   report.assertions.capability = capability;
 
   const serviceDenied = psql(`

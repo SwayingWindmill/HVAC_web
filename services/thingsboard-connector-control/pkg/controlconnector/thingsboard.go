@@ -61,31 +61,9 @@ type CredentialProvider interface {
 	ProviderCredential(context.Context, Target) (string, error)
 }
 
-type PreparedEvidence struct {
-	AttemptID        string
-	CommandID        string
-	OrganizationID   string
-	DeviceID         string
-	ExternalDeviceID string
-	ExecutionFence   uint64
-	PayloadHash      string
-	MappingRevision  string
-	BindingRevision  string
-	ProviderEndpoint string
-	ProviderMethod   string
-	RequestSHA256    string
-	PreparedAt       time.Time
-}
+type PreparedEvidence = commandmodel.PreparedConnectorEvidence
 
-type CompletedEvidence struct {
-	PreparedEvidence
-	ProviderStatusCode int
-	ResponseSHA256     string
-	RequestWritten     bool
-	ConnectorPhase     commandmodel.ConnectorPhase
-	FailureCode        string
-	CompletedAt        time.Time
-}
+type CompletedEvidence = commandmodel.CompletedConnectorEvidence
 
 type EvidenceStore interface {
 	Prepare(context.Context, PreparedEvidence) error
@@ -223,7 +201,7 @@ func (c *ThingsBoard) Execute(ctx context.Context, envelope commandmodel.Dispatc
 	endpoint := c.baseURL + "/api/rpc/twoway/" + url.PathEscape(target.ExternalDeviceID)
 	prepared := PreparedEvidence{
 		AttemptID: envelope.AttemptID, CommandID: envelope.CommandID,
-		OrganizationID: envelope.OrganizationID, DeviceID: envelope.DeviceID,
+		OrganizationID: envelope.OrganizationID, SiteID: envelope.SiteID, DeviceID: envelope.DeviceID,
 		ExternalDeviceID: target.ExternalDeviceID, ExecutionFence: envelope.ExecutionFence,
 		PayloadHash: envelope.PayloadHash, MappingRevision: mapping.MappingRevision,
 		BindingRevision: target.BindingRevision, ProviderEndpoint: "/api/rpc/twoway/{deviceId}",
@@ -257,14 +235,14 @@ func (c *ThingsBoard) Execute(ctx context.Context, envelope commandmodel.Dispatc
 			failure = "THINGSBOARD_TRANSPORT_ERROR_AFTER_WRITE"
 		}
 		return c.complete(ctx, key, envelope.PayloadHash, CompletedEvidence{
-			PreparedEvidence: prepared, RequestWritten: requestWritten, ConnectorPhase: phase,
+			PreparedConnectorEvidence: prepared, RequestWritten: requestWritten, ConnectorPhase: phase,
 			FailureCode: failure, CompletedAt: c.now().UTC(),
 		})
 	}
 	defer response.Body.Close()
 	responseBody, readErr := readBounded(response.Body, c.maxResponseBytes)
 	completed := CompletedEvidence{
-		PreparedEvidence: prepared, ProviderStatusCode: response.StatusCode,
+		PreparedConnectorEvidence: prepared, ProviderStatusCode: response.StatusCode,
 		ResponseSHA256: sha256Hex(responseBody), RequestWritten: requestWritten,
 		CompletedAt: c.now().UTC(),
 	}
@@ -307,7 +285,7 @@ func (c *ThingsBoard) mappingAllowed(status MappingStatus) bool {
 
 func (c *ThingsBoard) completeBeforeWrite(ctx context.Context, key, payloadHash string, prepared PreparedEvidence, failure string) (commandmodel.ConnectorResult, error) {
 	return c.complete(ctx, key, payloadHash, CompletedEvidence{
-		PreparedEvidence: prepared, ConnectorPhase: commandmodel.ConnectorPreSendRejected,
+		PreparedConnectorEvidence: prepared, ConnectorPhase: commandmodel.ConnectorPreSendRejected,
 		FailureCode: failure, CompletedAt: c.now().UTC(),
 	})
 }

@@ -260,6 +260,33 @@ type VerificationResult struct {
 	Reported    ReportedStateEvidence
 }
 
+type PreparedConnectorEvidence struct {
+	AttemptID        string
+	CommandID        string
+	OrganizationID   string
+	SiteID           string
+	DeviceID         string
+	ExternalDeviceID string
+	ExecutionFence   uint64
+	PayloadHash      string
+	MappingRevision  string
+	BindingRevision  string
+	ProviderEndpoint string
+	ProviderMethod   string
+	RequestSHA256    string
+	PreparedAt       time.Time
+}
+
+type CompletedConnectorEvidence struct {
+	PreparedConnectorEvidence
+	ProviderStatusCode int
+	ResponseSHA256     string
+	RequestWritten     bool
+	ConnectorPhase     ConnectorPhase
+	FailureCode        string
+	CompletedAt        time.Time
+}
+
 type ConnectorResult struct {
 	Phase        ConnectorPhase
 	Verified     bool

@@ -1,0 +1,26 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: command-service
+  namespace: s3-certification
+spec:
+  minAvailable: 2
+  selector: { matchLabels: { app: command-service } }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: command-dispatcher
+  namespace: s3-certification
+spec:
+  minAvailable: 2
+  selector: { matchLabels: { app: command-dispatcher } }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: command-verifier
+  namespace: s3-certification
+spec:
+  minAvailable: 2
+  selector: { matchLabels: { app: command-verifier } }

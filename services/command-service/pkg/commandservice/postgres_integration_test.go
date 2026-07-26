@@ -263,6 +263,8 @@ func resetCommandFixture(t *testing.T, admin *pgxpool.Pool) {
 	t.Helper()
 	ctx := t.Context()
 	for _, statement := range []string{
+		`DELETE FROM command_runtime.connector_evidence`,
+		`DELETE FROM command_runtime.command_grant_uses`,
 		`DELETE FROM command_runtime.command_audit_intents`,
 		`DELETE FROM command_runtime.command_dispatch_outbox`,
 		`DELETE FROM command_runtime.command_transitions`,

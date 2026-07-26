@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: s3-command-migration
+  namespace: s3-certification
+  annotations:
+    s3.hvac/image-policy: digest-required
+    s3.hvac/template: render-before-apply
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: { app: s3-command-migration }
+    spec:
+      serviceAccountName: s3-command-migrator
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: migrator
+          image: "[SIGNED_IMAGE_COMMAND_MIGRATOR_DIGEST]"
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: PGSERVICEFILE, value: /var/run/hvac/database/pg_service.conf }
+            - { name: PGSERVICE, value: s3-command-migrator }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 999
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: database-connection, mountPath: /var/run/hvac/database, readOnly: true }
+      volumes:
+        - name: database-connection
+          csi:
+            driver: "[SECRETS_STORE_CSI_DRIVER]"
+            readOnly: true
+            volumeAttributes:
+              "[SECRETS_STORE_CLASS_ATTRIBUTE]": s3-command-migrator-database
