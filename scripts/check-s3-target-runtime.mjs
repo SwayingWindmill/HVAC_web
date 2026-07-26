@@ -63,6 +63,12 @@ if (failures.length === 0) {
   ];
   for (const route of routes) requireText('services/command-service/pkg/commandservice/runtime_http.go', route);
 
+  requireText('deploy/s3/target/README.md', '--build-arg SERVICE_PACKAGE=./services/command-service/cmd/command-service');
+  requireText('deploy/s3/target/README.md', '--build-arg SERVICE_PACKAGE=./services/command-dispatcher/cmd/command-dispatcher');
+  requireText('deploy/s3/target/README.md', '--build-arg SERVICE_PACKAGE=./services/command-dispatcher/cmd/command-verifier');
+  forbidText('deploy/s3/target/README.md', '--build-arg SERVICE=');
+  forbidText('deploy/s3/target/README.md', '--build-arg MODULE_PATH=');
+
   requireText('libs/workloadtls/workloadtls.go', 'tls.RequireAndVerifyClientCert');
   requireText('libs/workloadtls/workloadtls.go', 'tls.VersionTLS13');
   requireText('libs/workloadtls/workloadtls.go', 'GetCertificate');

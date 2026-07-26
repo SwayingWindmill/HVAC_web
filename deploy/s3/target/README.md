@@ -42,20 +42,17 @@ Use the repository generic Go image and bind every image to a digest:
 ```bash
 # Command Service
 docker build -f deploy/s0/images/go-service.Dockerfile \
-  --build-arg SERVICE=command-service \
-  --build-arg MODULE_PATH=services/command-service \
+  --build-arg SERVICE_PACKAGE=./services/command-service/cmd/command-service \
   -t <registry>/command-service:<new-sha> .
 
 # Dispatcher
 docker build -f deploy/s0/images/go-service.Dockerfile \
-  --build-arg SERVICE=command-dispatcher \
-  --build-arg MODULE_PATH=services/command-dispatcher \
+  --build-arg SERVICE_PACKAGE=./services/command-dispatcher/cmd/command-dispatcher \
   -t <registry>/command-dispatcher:<new-sha> .
 
-# Verifier; the command name is command-verifier and the module is command-dispatcher
+# Verifier; the command is part of the command-dispatcher Go module
 docker build -f deploy/s0/images/go-service.Dockerfile \
-  --build-arg SERVICE=command-verifier \
-  --build-arg MODULE_PATH=services/command-dispatcher \
+  --build-arg SERVICE_PACKAGE=./services/command-dispatcher/cmd/command-verifier \
   -t <registry>/command-verifier:<new-sha> .
 
 docker build -f deploy/s3/images/command-migrator.Dockerfile \
