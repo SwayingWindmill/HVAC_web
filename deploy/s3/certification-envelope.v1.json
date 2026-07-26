@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "ticket": "S3-09",
+  "name": "S3 Command capacity, crash-point and internal Device canary certification",
+  "status": "formal-certification-pending",
+  "productionTrafficPercent": 0,
+  "formalCertificationRequired": true,
+  "capacity": {
+    "steadyState": {
+      "commandsPerSecond": 100,
+      "minimumDurationSeconds": 3600
+    },
+    "burst": {
+      "commandsPerSecond": 1000,
+      "durationSeconds": 60
+    },
+    "minimumHeadroomFraction": 0.3,
+    "latencySlo": {
+      "acceptedToSubmittedP95MillisecondsMaximum": 300,
+      "acceptedToSubmittedP99MillisecondsMaximum": 1000,
+      "governanceP95MillisecondsMaximum": 500,
+      "governanceP99MillisecondsMaximum": 2000,
+      "queuedReadyToSendStartedP95MillisecondsMaximum": 1000,
+      "queuedReadyToSendStartedP99MillisecondsMaximum": 3000,
+      "statusPropagationP95MillisecondsMaximum": 1000,
+      "statusPropagationP99MillisecondsMaximum": 3000
+    }
+  },
+  "recoveryObjectives": {
+    "singlePodSecondsMaximum": 30,
+    "consumerRebalanceSecondsMaximum": 60,
+    "connectorInstanceSecondsMaximum": 120,
+    "singleAvailabilityZoneSecondsMaximum": 300
+  },
+  "requiredCrashPoints": [
+    "command-postgres-transaction-failure",
+    "concurrent-idempotency-race",
+    "dispatcher-crash-after-claim-before-connector-result",
+    "consumer-rebalance",
+    "pre-send-rejection-safe-retry",
+    "request-committed-timeout-no-reissue",
+    "connector-crash-after-request-commit",
+    "late-old-fence-result",
+    "reported-state-mismatch",
+    "reported-state-verification-deadline",
+    "audit-intent-write-failure",
+    "single-availability-zone-loss"
+  ],
+  "zeroCounters": [
+    "lostAcceptedCommands",
+    "duplicateDeviceSideEffects",
+    "oldFenceExecutions",
+    "blindRetriesAfterRequestCommitted",
+    "crossTenantDispatches",
+    "unapprovedHighRiskDispatches",
+    "unverifiedCapabilityDispatches",
+    "unauditedControlActions",
+    "syntheticEvidenceUsedAsProductionAttestation",
+    "secretLeaks"
+  ],
+  "internalCanary": {
+    "phase": "S3-R2-internal-low-risk",
+    "publicRoutesEnabled": false,
+    "productionTrafficPercent": 0,
+    "organizationCount": 1,
+    "siteCount": 1,
+    "deviceCount": 1,
+    "capability": "SET_TEMPERATURE_SETPOINT",
+    "capabilityRevision": "capability:set-temperature-setpoint:v1",
+    "risk": "LOW",
+    "maximumSetpointDeltaC": 1,
+    "mappingStatusRequired": "VERIFIED",
+    "providerContract": "THINGSBOARD_CE_4.3.1.3",
+    "minimumCommands": 6,
+    "maximumCommands": 12,
+    "minimumHoldMinutes": 240,
+    "manualPromotionApprovalRequired": true,
+    "distinctApproversRequired": 2,
+    "s2CurrentStateProductionCertificationRequired": true,
+    "operatorConfirmationBetweenCommands": true,
+    "automaticRetryAfterRequestCommitted": false,
+    "rollback": {
+      "futureCommandsOnly": true,
+      "disableConnectorCredentialMaximumMinutes": 5,
+      "acceptedCommandsRemainWithOriginalOwner": true
+    }
+  },
+  "requiredEvidence": [
+    "capacity-report.json",
+    "failure-injection-report.json",
+    "command-fence-report.json",
+    "internal-canary-report.json",
+    "promotion-approvals.json",
+    "security-zero-report.json",
+    "rollback-report.json",
+    "s3-certification-attestation.json",
+    "s3-certification.intoto.json",
+    "SHA256SUMS"
+  ]
+}

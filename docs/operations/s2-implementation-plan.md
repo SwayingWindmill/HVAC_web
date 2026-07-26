@@ -10,6 +10,8 @@ Planning ticket: #53
 
 Machine-readable authority: `deploy/s2/implementation-plan.v1.json`
 
+Architecture update: ADR 0005 classifies `hvac-backend` and all Legacy cutover assets as non-production references. Ticket #67 shadow comparison and Ticket #71 Legacy retirement evidence remain historical implementation records; they are not prerequisites for the current production rollout. Current rollout authority is `deploy/platform/production-rollout.v1.json`.
+
 ## Purpose
 
 The S2 specification is decision-complete. This document hands implementation to short-lived, independently reviewable tracer-bullet tickets without reopening the accepted Presence/Freshness semantics, Telemetry Runtime ownership, public Snapshot/recovery contract or Release Envelope.
@@ -150,12 +152,12 @@ Closing the map means the route is clear and implementation can start. It does n
 
 No later business slice may rely on S2 until:
 
-- #60–#71 are closed with accepted evidence;
-- #71 publishes a passing S2 completion attestation;
-- active contract and ownership state match ADR 0002–0004;
+- #60–#70 are closed with accepted implementation, security and capacity evidence;
+- the S2 capability reaches `P6-operationally-certified` under `deploy/platform/production-rollout.v1.json`;
+- active contract and ownership state match ADR 0002–0005;
 - every S2 security-zero invariant equals zero;
 - Release Envelope v1 is certified, or a newly reviewed version replaces it;
-- Legacy latest, batch and current-state WebSocket have zero production traffic and are retired;
+- production deployment, rollback and disaster recovery have no `hvac-backend` dependency;
 - historical timeseries remains an explicit separate compatibility boundary;
 - no known limitation defers tenant security, business correctness, Audit or rollback.
 

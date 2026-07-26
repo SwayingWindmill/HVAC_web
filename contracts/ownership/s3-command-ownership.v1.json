@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "slice": "S3",
+  "activationStatus": "expand-baseline",
+  "productionTrafficPercent": 0,
+  "businessOwner": "command-service",
+  "publicIngress": "platform-gateway",
+  "gatewayBaseline": {
+    "activationStatus": "implemented-routes-disabled",
+    "sessionRequired": true,
+    "csrfRequiredForMutation": true,
+    "registryResolutionRequired": true,
+    "s2CurrentStateRequired": true,
+    "exactCommandGrantRequired": true
+  },
+  "authoritativeStore": {
+    "type": "postgresql",
+    "schema": "command_runtime",
+    "migrationRole": "s3_command_migrator",
+    "runtimeRole": "s3_command_runtime",
+    "runtimeBypassRls": false
+  },
+  "restrictedWorkers": [
+    {
+      "service": "command-dispatcher",
+      "activationStatus": "active-S3-05-synthetic-only",
+      "directDatabaseAccess": false,
+      "operations": [
+        "claim a governed Attempt and monotonic Fence from command-service",
+        "execute a leased DispatchEnvelope",
+        "resolve connector evidence through command-service"
+      ]
+    },
+    {
+      "service": "command-verifier",
+      "activationStatus": "active-S3-07-internal-test-only",
+      "directDatabaseAccess": false,
+      "operations": [
+        "claim an acknowledged Attempt verification lease from command-service",
+        "read S2 reported-state evidence for the exact Device and Capability",
+        "submit verification evidence to command-service without declaring business success"
+      ]
+    }
+  ],
+  "ownedResources": [
+    "command-intent",
+    "command-attempt",
+    "command-reported-state-verification",
+    "command-transition",
+    "command-idempotency",
+    "command-authorization-snapshot",
+    "command-risk-snapshot",
+    "command-approval-snapshot",
+    "capability-profile",
+    "device-control-state",
+    "command-dispatch-outbox",
+    "command-audit-intent"
+  ],
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/api/v1/commands",
+      "owner": "command-service",
+      "rollout": "disabled"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/commands/{commandId}",
+      "owner": "command-service",
+      "rollout": "disabled"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/commands/{commandId}:approve",
+      "owner": "command-service",
+      "rollout": "disabled"
+    }
+  ],
+  "firstCapability": {
+    "name": "SET_TEMPERATURE_SETPOINT",
+    "revision": "capability:set-temperature-setpoint:v1",
+    "canonicalUnit": "CELSIUS",
+    "minimum": 16,
+    "maximum": 30,
+    "maximumDelta": 3,
+    "risk": "LOW",
+    "approval": "NONE",
+    "retryPolicy": "PRE_SEND_ONLY",
+    "connector": "SYNTHETIC_ONLY"
+  },
+  "localProviderContract": {
+    "provider": "THINGSBOARD_CE",
+    "providerVersion": "4.3.1.3",
+    "verificationStatus": "LOCAL_VERIFIED",
+    "productionEligible": false,
+    "mappingRevision": "thingsboard-ce-4.3.1.3:setTemperatureSetpoint:v1",
+    "reportedStateVerificationRequired": true
+  },
+  "currentStateRequirements": {
+    "owner": "telemetry-runtime-service",
+    "evaluationAvailability": "AVAILABLE",
+    "presence": "ONLINE",
+    "readiness": "CURRENT",
+    "freshness": "FRESH",
+    "quality": "GOOD",
+    "businessRevisionRequired": true,
+    "historicalTelemetryAllowed": false
+  },
+  "forbiddenOwners": [
+    "platform-gateway",
+    "thingsboard-connector-control",
+    "automation-service",
+    "ai-platform-service",
+    "agent-worker",
+    "hvac-backend"
+  ],
+  "forbiddenFlows": [
+    "browser-to-thingsboard",
+    "arbitrary-method-and-params",
+    "old-fence-send",
+    "request-committed-auto-retry",
+    "historical-telemetry-control-validation",
+    "synthetic-production-attestation"
+  ]
+}

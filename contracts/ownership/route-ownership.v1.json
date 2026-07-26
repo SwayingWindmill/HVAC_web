@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 7,
+  "registryRevision": 10,
   "routes": [
     {
       "method": "GET",
@@ -105,15 +105,12 @@
     {
       "method": "GET",
       "path": "/api/v1/platform/status",
-      "owner": "legacy-hvac-backend",
-      "revision": 1,
+      "owner": "platform-gateway",
+      "revision": 2,
       "rollout": {
-        "mode": "percentage",
-        "percentage": 100,
-        "fallbackOwner": "platform-gateway",
-        "cohortSalt": "platform-status-v1"
+        "mode": "all"
       },
-      "compatibilityMode": "legacy-read",
+      "compatibilityMode": "native",
       "allowedScopeDimensions": [
         "organization",
         "principal"
@@ -139,7 +136,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
@@ -166,7 +163,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
@@ -194,7 +191,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
@@ -222,7 +219,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
@@ -250,7 +247,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
@@ -278,7 +275,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
@@ -306,7 +303,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
@@ -334,7 +331,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
@@ -500,6 +497,111 @@
       ],
       "migrationPhase": "R0-contract-only",
       "cohortGroup": "s2-current-state-v1"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/commands",
+      "owner": "command-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "expand-baseline",
+      "rollout": {
+        "mode": "disabled"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "device",
+        "principal"
+      ],
+      "migrationPhases": [
+        "S3-R0-contract-only",
+        "S3-R1-synthetic-only",
+        "S3-R2-internal-low-risk",
+        "S3-R3-site-canary",
+        "S3-R4-operationally-certified"
+      ],
+      "shadowSideEffectPolicy": "SYNTHETIC_ONLY",
+      "readOnlyFallback": false,
+      "fallbackForbiddenResults": [
+        "AUTHORIZATION_DENIED",
+        "RESOURCE_NOT_FOUND",
+        "CURRENT_STATE_UNSAFE",
+        "OUTCOME_UNKNOWN"
+      ],
+      "migrationPhase": "S3-R0-contract-only",
+      "cohortGroup": "s3-command-v1"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/commands/{commandId}",
+      "owner": "command-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "expand-baseline",
+      "rollout": {
+        "mode": "disabled"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "device",
+        "principal"
+      ],
+      "migrationPhases": [
+        "S3-R0-contract-only",
+        "S3-R1-synthetic-only",
+        "S3-R2-internal-low-risk",
+        "S3-R3-site-canary",
+        "S3-R4-operationally-certified"
+      ],
+      "shadowSideEffectPolicy": "SYNTHETIC_ONLY",
+      "readOnlyFallback": false,
+      "fallbackForbiddenResults": [
+        "AUTHORIZATION_DENIED",
+        "RESOURCE_NOT_FOUND",
+        "CURRENT_STATE_UNSAFE",
+        "OUTCOME_UNKNOWN"
+      ],
+      "migrationPhase": "S3-R0-contract-only",
+      "cohortGroup": "s3-command-v1"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/commands/{commandId}:approve",
+      "owner": "command-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "expand-baseline",
+      "rollout": {
+        "mode": "disabled"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "device",
+        "principal"
+      ],
+      "migrationPhases": [
+        "S3-R0-contract-only",
+        "S3-R1-synthetic-only",
+        "S3-R2-internal-low-risk",
+        "S3-R3-site-canary",
+        "S3-R4-operationally-certified"
+      ],
+      "shadowSideEffectPolicy": "SYNTHETIC_ONLY",
+      "readOnlyFallback": false,
+      "fallbackForbiddenResults": [
+        "AUTHORIZATION_DENIED",
+        "RESOURCE_NOT_FOUND",
+        "CURRENT_STATE_UNSAFE",
+        "OUTCOME_UNKNOWN"
+      ],
+      "migrationPhase": "S3-R0-contract-only",
+      "cohortGroup": "s3-command-v1"
     }
   ]
 }

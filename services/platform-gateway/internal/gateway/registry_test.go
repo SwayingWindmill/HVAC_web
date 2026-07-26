@@ -706,6 +706,7 @@ func registryPhaseSnapshot(t *testing.T, phase string, percentage int) *ownershi
 	compatibility := "native"
 	rollout := ownershipregistry.RolloutPolicy{Mode: "all"}
 	readFallback := ""
+	readOnlyFallback := true
 	registryRevision := int64(4)
 	routeRevision := int64(4)
 	switch phase {
@@ -720,13 +721,15 @@ func registryPhaseSnapshot(t *testing.T, phase string, percentage int) *ownershi
 	case ownershipregistry.PhaseGoPrimaryLegacyReadFallback:
 		readFallback = ownershipregistry.OwnerLegacy
 		registryRevision, routeRevision = 3, 3
+	case ownershipregistry.PhaseGoPrimary:
+		readOnlyFallback = false
 	}
 	entries := make([]ownershipregistry.RouteEntry, 0, len(paths))
 	for _, path := range paths {
 		entries = append(entries, ownershipregistry.RouteEntry{
 			Method: http.MethodGet, Path: path, Owner: owner, Revision: routeRevision, Rollout: rollout,
 			CompatibilityMode: compatibility, AllowedScopeDimensions: []string{"organization", "principal"},
-			MigrationPhase: phase, ShadowSideEffectPolicy: "NONE", ReadOnlyFallback: true,
+			MigrationPhase: phase, ShadowSideEffectPolicy: "NONE", ReadOnlyFallback: readOnlyFallback,
 			ReadFallbackOwner: readFallback, FallbackForbiddenResults: []string{"AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"},
 		})
 	}

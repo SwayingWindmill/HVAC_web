@@ -13,6 +13,7 @@ const Fdd = lazy(() => import('@/pages/Fdd'));
 const Alarms = lazy(() => import('@/pages/Alarms'));
 const BigScreen = lazy(() => import('@/pages/BigScreen'));
 const Assets = lazy(() => import('@/pages/Assets'));
+const Commands = lazy(() => import('@/pages/Commands'));
 const Energy = lazy(() => import('@/pages/Energy'));
 const EnergyYear = lazy(() => import('@/pages/Energy/Year'));
 const EnergyMonth = lazy(() => import('@/pages/Energy/Month'));
@@ -27,6 +28,7 @@ type LazyPage = ComponentType<Record<string, never>>;
 // Real pages built so far; each entry is route-level lazy-loaded.
 const REAL_PAGES: Record<string, LazyPage> = {
   '/assets': Assets,
+  '/commands': Commands,
   '/cost': Cost,
   '/ai': Ai,
   '/system': System,
@@ -58,6 +60,8 @@ function moduleRoutes() {
 export default function App() {
   const energySubject = routeSubjectFromModuleKey('energy');
   const energyElement = withSuspense(<Energy />);
+  const commandSubject = routeSubjectFromModuleKey('commands');
+  const commandElement = withSuspense(<Commands />);
 
   return (
     <Routes>
@@ -76,6 +80,10 @@ export default function App() {
           <Route path="week" element={withSuspense(<EnergyWeek />)} />
           <Route path="day" element={withSuspense(<EnergyDay />)} />
         </Route>
+        <Route
+          path="/commands/:commandId"
+          element={commandSubject ? <RequirePermission subject={commandSubject}>{commandElement}</RequirePermission> : commandElement}
+        />
         {moduleRoutes()}
         <Route path="*" element={<NotFound />} />
       </Route>

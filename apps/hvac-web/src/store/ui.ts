@@ -16,6 +16,7 @@ export interface ModuleDef {
 export const MODULES: ModuleDef[] = [
   { key: 'dashboard', path: '/dashboard', label: '总览驾驶舱', icon: 'DashboardOutlined', roles: ['demo', 'ops', 'rd'] },
   { key: 'assets', path: '/assets', label: '设备与建筑', icon: 'ApartmentOutlined', roles: ['ops', 'rd'] },
+  { key: 'commands', path: '/commands', label: '设备控制', icon: 'ControlOutlined', roles: ['ops', 'rd'] },
   { key: 'energy', path: '/energy', label: '能耗分析', icon: 'FundOutlined', roles: ['rd'] },
   { key: 'optimize', path: '/optimize', label: '节能优化', icon: 'ThunderboltOutlined', roles: ['rd'] },
   { key: 'fdd', path: '/fdd', label: '故障检测', icon: 'BugOutlined', roles: ['ops', 'rd'] },

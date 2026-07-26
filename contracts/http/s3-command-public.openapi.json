@@ -1,0 +1,310 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "S3 Command Public API",
+    "version": "0.3.0-disabled-command-ux-baseline",
+    "description": "Implemented Command detail, timeline and approval UX baseline. Routes remain registered disabled and permit no production Device control."
+  },
+  "servers": [
+    { "url": "/" }
+  ],
+  "paths": {
+    "/api/v1/commands": {
+      "post": {
+        "operationId": "createCommand",
+        "summary": "Create a governed canonical Command Intent",
+        "x-activation-status": "expand-baseline",
+        "x-production-traffic-percent": 0,
+        "x-client-forbidden-fields": [
+          "organizationId",
+          "siteId",
+          "principalId",
+          "providerMethod",
+          "providerParams",
+          "thingsBoardDeviceId",
+          "executionFence"
+        ],
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "minLength": 16 }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "minLength": 8, "maxLength": 128 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateCommandRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Intent durably accepted for governance; Device success is not implied.",
+            "headers": {
+              "Location": { "schema": { "type": "string" } }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Command" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/commands/{commandId}": {
+      "get": {
+        "operationId": "getCommand",
+        "summary": "Read a visible Command and its current timeline",
+        "x-activation-status": "expand-baseline",
+        "x-production-traffic-percent": 0,
+        "parameters": [
+          {
+            "name": "commandId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "minLength": 1 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Visible Command",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Command" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/commands/{commandId}:approve": {
+      "post": {
+        "operationId": "approveCommand",
+        "summary": "Approve a governed Command with Session-derived identity and role",
+        "x-activation-status": "expand-baseline",
+        "x-production-traffic-percent": 0,
+        "x-client-forbidden-fields": [
+          "organizationId",
+          "siteId",
+          "deviceId",
+          "principalId",
+          "approverRole",
+          "payloadHash",
+          "risk",
+          "riskRuleRevision",
+          "providerMethod",
+          "providerParams"
+        ],
+        "parameters": [
+          {
+            "name": "commandId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "minLength": 1 }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "minLength": 16 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ApproveCommandRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Approval recorded; Device success is not implied.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Command" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreateCommandRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["deviceId", "capability", "parameters"],
+        "properties": {
+          "deviceId": { "type": "string", "minLength": 1 },
+          "capability": {
+            "type": "string",
+            "enum": ["SET_TEMPERATURE_SETPOINT"]
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["setpointC"],
+            "properties": {
+              "setpointC": { "type": "number", "minimum": 16, "maximum": 30 }
+            }
+          }
+        }
+      },
+      "ApproveCommandRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "maxProperties": 0,
+        "description": "Empty by design. Principal, role and resource scope are derived from the authenticated Session, Registry and IAM."
+      },
+      "Command": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "commandId",
+          "deviceId",
+          "capability",
+          "capabilityRevision",
+          "status",
+          "risk",
+          "approvalPolicy",
+          "approvalCount",
+          "requiredApprovalCount",
+          "setpointC",
+          "deviceCommandSequence",
+          "snapshotRevision",
+          "version",
+          "transitions",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "schemaVersion": { "type": "integer", "const": 1 },
+          "commandId": { "type": "string" },
+          "deviceId": { "type": "string" },
+          "capability": { "type": "string", "enum": ["SET_TEMPERATURE_SETPOINT"] },
+          "capabilityRevision": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": [
+              "SUBMITTED",
+              "VALIDATING",
+              "AWAITING_APPROVAL",
+              "APPROVED",
+              "QUEUED",
+              "DISPATCHING",
+              "SUCCEEDED",
+              "FAILED",
+              "REJECTED",
+              "CANCELLED",
+              "EXPIRED",
+              "OUTCOME_UNKNOWN"
+            ]
+          },
+          "risk": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH"] },
+          "approvalPolicy": { "type": "string", "enum": ["NONE", "SINGLE_APPROVER", "TWO_PERSON"] },
+          "approvalCount": { "type": "integer", "minimum": 0 },
+          "requiredApprovalCount": { "type": "integer", "minimum": 0, "maximum": 2 },
+          "setpointC": { "type": "number", "minimum": 16, "maximum": 30 },
+          "deviceCommandSequence": { "type": "integer", "minimum": 1 },
+          "version": { "type": "integer", "minimum": 1 },
+          "snapshotRevision": { "type": "integer", "minimum": 1 },
+          "transitions": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 256,
+            "items": { "$ref": "#/components/schemas/CommandTransition" }
+          },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "CommandTransition": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["toStatus", "reason", "actorType", "occurredAt", "version"],
+        "properties": {
+          "fromStatus": {
+            "type": "string",
+            "enum": ["SUBMITTED", "VALIDATING", "AWAITING_APPROVAL", "APPROVED", "QUEUED", "DISPATCHING", "SUCCEEDED", "FAILED", "REJECTED", "CANCELLED", "EXPIRED", "OUTCOME_UNKNOWN"]
+          },
+          "toStatus": {
+            "type": "string",
+            "enum": ["SUBMITTED", "VALIDATING", "AWAITING_APPROVAL", "APPROVED", "QUEUED", "DISPATCHING", "SUCCEEDED", "FAILED", "REJECTED", "CANCELLED", "EXPIRED", "OUTCOME_UNKNOWN"]
+          },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "actorType": { "type": "string", "enum": ["PRINCIPAL", "WORKLOAD"] },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "version": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "required": ["type", "title", "status", "code", "retryable"],
+        "properties": {
+          "type": { "type": "string" },
+          "title": { "type": "string" },
+          "status": { "type": "integer" },
+          "code": {
+            "type": "string",
+            "enum": [
+              "RESOURCE_NOT_FOUND",
+              "COMMAND_REQUEST_INVALID",
+              "COMMAND_CAPABILITY_DENIED",
+              "COMMAND_CURRENT_STATE_UNSAFE",
+              "COMMAND_IDEMPOTENCY_CONFLICT",
+              "COMMAND_APPROVAL_REQUEST_INVALID",
+              "COMMAND_APPROVAL_INVALID",
+              "COMMAND_UNAVAILABLE"
+            ]
+          },
+          "retryable": { "type": "boolean" }
+        }
+      }
+    },
+    "responses": {
+      "Problem": {
+        "description": "Stable Problem Details",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bffSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "hvac_session"
+      }
+    }
+  },
+  "security": [
+    { "bffSession": [] }
+  ]
+}

@@ -17,7 +17,7 @@ const phaseRegistries = await Promise.all([
 ].map(readJSON));
 
 const errors = [];
-const allowedOwners = new Set(['platform-gateway', 'legacy-hvac-backend', 'platform-core-service', 'telemetry-runtime-service']);
+const allowedOwners = new Set(['platform-gateway', 'legacy-hvac-backend', 'platform-core-service', 'telemetry-runtime-service', 'command-service']);
 const s1RegistryPaths = new Set([
   '/api/v1/organizations',
   '/api/v1/organizations/{organizationId}',
@@ -50,6 +50,18 @@ const expectedS2MigrationPhases = [
   'R6-ramp-50',
   'R7-primary-100',
   'R8-legacy-current-state-retired',
+];
+const s3CommandRoutes = new Set([
+  'POST /api/v1/commands',
+  'GET /api/v1/commands/{commandId}',
+  'POST /api/v1/commands/{commandId}:approve',
+]);
+const expectedS3MigrationPhases = [
+  'S3-R0-contract-only',
+  'S3-R1-synthetic-only',
+  'S3-R2-internal-low-risk',
+  'S3-R3-site-canary',
+  'S3-R4-operationally-certified',
 ];
 const allowedScopes = new Set(['organization', 'principal', 'site', 'device', 'key']);
 const allowedCompatibility = new Set(['native', 'legacy-read']);
@@ -104,7 +116,7 @@ for (const route of routeRegistry.routes ?? []) {
       errors.push(`${key}: S1 migration phases are incomplete or reordered`);
     }
     if (route.shadowSideEffectPolicy !== 'NONE') errors.push(`${key}: S1 shadow must be side-effect free`);
-    if (route.readOnlyFallback !== true) errors.push(`${key}: S1 fallback must be explicitly read-only`);
+    if (route.readOnlyFallback !== false) errors.push(`${key}: active S1 route must not advertise runtime fallback`);
     const forbiddenResults = route.fallbackForbiddenResults ?? [];
     if (!forbiddenResults.includes('AUTHORIZATION_DENIED') || !forbiddenResults.includes('RESOURCE_NOT_FOUND')) {
       errors.push(`${key}: S1 fallback must be forbidden after denial or resource invisibility`);
@@ -133,6 +145,29 @@ for (const route of routeRegistry.routes ?? []) {
       if (!forbiddenResults.includes(result)) errors.push(`${key}: fallback is not forbidden for ${result}`);
     }
   }
+  if (s3CommandRoutes.has(key)) {
+    if (route.owner !== 'command-service' || route.publicIngress !== 'platform-gateway') {
+      errors.push(`${key}: S3 route must keep Command business ownership behind Gateway ingress`);
+    }
+    if (route.activationStatus !== 'expand-baseline' || rollout.mode !== 'disabled') {
+      errors.push(`${key}: S3 baseline must carry zero production control traffic`);
+    }
+    if (route.migrationPhase !== 'S3-R0-contract-only' || route.readOnlyFallback !== false) {
+      errors.push(`${key}: S3 baseline must remain contract-only without fallback`);
+    }
+    if (route.cohortGroup !== 's3-command-v1') errors.push(`${key}: S3 route must use the command cohort group`);
+    if (!Array.isArray(route.migrationPhases) || route.migrationPhases.join('|') !== expectedS3MigrationPhases.join('|')) {
+      errors.push(`${key}: S3 rollout phases are incomplete or reordered`);
+    }
+    if (route.shadowSideEffectPolicy !== 'SYNTHETIC_ONLY') errors.push(`${key}: S3 baseline must be Synthetic-only`);
+    for (const scope of ['organization', 'site', 'device', 'principal']) {
+      if (!(route.allowedScopeDimensions ?? []).includes(scope)) errors.push(`${key}: missing S3 scope ${scope}`);
+    }
+    const forbiddenResults = route.fallbackForbiddenResults ?? [];
+    for (const result of ['AUTHORIZATION_DENIED', 'RESOURCE_NOT_FOUND', 'CURRENT_STATE_UNSAFE', 'OUTCOME_UNKNOWN']) {
+      if (!forbiddenResults.includes(result)) errors.push(`${key}: fallback is not forbidden for ${result}`);
+    }
+  }
   const locked = lock.routes?.[key];
   if (!locked) {
     errors.push(`${key}: route is missing from compatibility lock`);
@@ -147,12 +182,15 @@ for (const key of Object.keys(lock.routes ?? {})) {
 for (const key of s2TelemetryRoutes.keys()) {
   if (!routeKeys.has(key)) errors.push(`${key}: required S2 route is missing`);
 }
+for (const key of s3CommandRoutes) {
+  if (!routeKeys.has(key)) errors.push(`${key}: required S3 route is missing`);
+}
 
 const phaseExpectations = [
-  { revision: 3, routeRevision: 2, phase: 'LEGACY_PRIMARY_GO_SHADOW', owner: 'legacy-hvac-backend', compatibility: 'legacy-read', rolloutMode: 'percentage', percentage: 100, fallbackOwner: 'platform-core-service' },
-  { revision: 4, routeRevision: 3, phase: 'GO_CANARY_LEGACY_SHADOW', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'percentage', percentage: 10, fallbackOwner: 'legacy-hvac-backend' },
-  { revision: 5, routeRevision: 4, phase: 'GO_PRIMARY_LEGACY_READ_FALLBACK', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'all', readFallbackOwner: 'legacy-hvac-backend' },
-  { revision: 6, routeRevision: 5, phase: 'GO_PRIMARY', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'all' },
+  { revision: 3, routeRevision: 2, phase: 'LEGACY_PRIMARY_GO_SHADOW', owner: 'legacy-hvac-backend', compatibility: 'legacy-read', rolloutMode: 'percentage', percentage: 100, fallbackOwner: 'platform-core-service', readOnlyFallback: true },
+  { revision: 4, routeRevision: 3, phase: 'GO_CANARY_LEGACY_SHADOW', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'percentage', percentage: 10, fallbackOwner: 'legacy-hvac-backend', readOnlyFallback: true },
+  { revision: 5, routeRevision: 4, phase: 'GO_PRIMARY_LEGACY_READ_FALLBACK', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'all', readFallbackOwner: 'legacy-hvac-backend', readOnlyFallback: true },
+  { revision: 6, routeRevision: 5, phase: 'GO_PRIMARY', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'all', readOnlyFallback: false },
 ];
 for (let index = 0; index < phaseRegistries.length; index += 1) {
   const registry = phaseRegistries[index];
@@ -165,7 +203,7 @@ for (let index = 0; index < phaseRegistries.length; index += 1) {
     if (route.revision !== expected.routeRevision || route.migrationPhase !== expected.phase || route.owner !== expected.owner || route.compatibilityMode !== expected.compatibility) errors.push(`${key}: phase ${expected.phase} ownership drifted`);
     if (route.rollout?.mode !== expected.rolloutMode || route.rollout?.percentage !== expected.percentage || route.rollout?.fallbackOwner !== expected.fallbackOwner) errors.push(`${key}: phase ${expected.phase} rollout drifted`);
     if ((route.readFallbackOwner ?? undefined) !== expected.readFallbackOwner) errors.push(`${key}: phase ${expected.phase} read fallback drifted`);
-    if (route.shadowSideEffectPolicy !== 'NONE' || route.readOnlyFallback !== true) errors.push(`${key}: phase ${expected.phase} safety policy drifted`);
+    if (route.shadowSideEffectPolicy !== 'NONE' || route.readOnlyFallback !== expected.readOnlyFallback) errors.push(`${key}: phase ${expected.phase} safety policy drifted`);
   }
 }
 const activeS1Routes = (routeRegistry.routes ?? []).filter((route) => s1RegistryPaths.has(route.path));
@@ -234,6 +272,8 @@ const requiredIdentities = new Map([
   ['telemetry_runtime:s2_telemetry_relay_service', { migrationRole: 's2_telemetry_migrator', activationRole: 's2_telemetry_relay', accessMode: 'relay', restrictedTo: ['telemetry_publication_outbox'] }],
   ['telemetry_runtime:s2_telemetry_gateway', { migrationRole: 's2_telemetry_migrator', accessMode: 'connect-only', restrictedTo: [] }],
   ['telemetry_runtime:s2_telemetry_iam', { migrationRole: 's2_telemetry_migrator', accessMode: 'connect-only', restrictedTo: [] }],
+  ['command_runtime:s3_command_runtime', { migrationRole: 's3_command_migrator', accessMode: 'write' }],
+  ['command_runtime:s3_command_service', { migrationRole: 's3_command_migrator', activationRole: 's3_command_runtime', accessMode: 'write' }],
 ]);
 for (const identity of dataRegistry.databaseIdentities ?? []) {
   const key = `${identity.schema}:${identity.runtimeRole}`;

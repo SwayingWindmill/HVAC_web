@@ -55,6 +55,7 @@ type Config struct {
 	Legacy        *LegacyConfig
 	Registry      *RegistryConfig
 	Telemetry     *TelemetryConfig
+	Command       *CommandConfig
 	Observability *observability.Runtime
 }
 
@@ -68,6 +69,7 @@ type handler struct {
 	legacy        *legacyController
 	registry      *registryController
 	telemetry     *telemetryController
+	command       *commandController
 	observability *observability.Runtime
 }
 
@@ -104,6 +106,7 @@ func NewHandler(config Config) http.Handler {
 		legacy:        newLegacyController(config.Legacy),
 		registry:      newRegistryController(config.Registry),
 		telemetry:     newTelemetryController(config.Telemetry),
+		command:       newCommandController(config.Command),
 		observability: telemetry,
 	}
 }
@@ -159,7 +162,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant"} {
+	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Acting-Organization-ID"} {
 		if request.Header.Get(header) == "" {
 			continue
 		}
@@ -193,6 +196,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 
 	if telemetryRoute, deviceID, matches := matchPublicTelemetryRoute(request.URL.Path); matches {
 		dispatchTelemetryRoute(h, writer, request, telemetryRoute, deviceID)
+		return
+	}
+	if commandRoute, commandID, matches := matchPublicCommandRoute(request.URL.Path); matches {
+		dispatchCommandRoute(h, writer, request, commandRoute, commandID)
 		return
 	}
 

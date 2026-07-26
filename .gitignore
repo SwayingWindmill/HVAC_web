@@ -30,12 +30,14 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 
-# scratch: headless-chrome temp profiles from screenshot scripts
+# scratch: local test profiles and generated Go caches
 .ctmp*
 .chrome_tmp/
 sys_*.png
 bigscreen_*.png
 prototype/
+.scratch/go-build-cache/
+.scratch/go-path/
 
 # build artifacts emitted by tsc -b (composite project)
 *.tsbuildinfo

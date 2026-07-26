@@ -27,12 +27,12 @@
 - [确定 AI 平台边界与工具治理](issues/09-ai-platform-boundary-and-tool-governance.md) — Go AI Platform 拥有长期 AI 业务状态、预算、Provenance、质量门禁与生命周期；Agent/Copilot 仅拥有短期执行或交互状态。Agent 经双主体授权、固定 Tool Manifest 与受治理 Model Policy异步执行，使用 Lease/Fencing、幂等计量、Evidence链和不可变结果版本；Recommendation 与 Command Governance强隔离，并补齐协作授权、保留删除、熔断隔离、SLO及迟到结果提升规则。
 - [确定安全、租户隔离与审计基线](issues/10-security-tenancy-and-audit-baseline.md) — 采用Gateway/BFF、短期Workload Identity、mTLS和Audience受限委托形成零信任身份链；Organization/Site租户上下文贯穿数据库RLS、缓存、消息、对象、搜索、Analytics、Realtime与AI。内部API和Egress默认关闭，ThingsBoard仅由隔离Connector访问，Secret由KMS/Secret Manager管理；Webhook执行签名、防重放与幂等，Audit Ledger采用事务Audit Intent、Hash Chain、签名Checkpoint和WORM归档。最小权限、职责分离、Break-glass、分层限流、签名供应链、安全撤销/隔离及零容忍安全验收均已定案。
 - [确定部署拓扑、可观测性与灾难恢复](issues/11-deployment-observability-and-disaster-recovery.md) — 生产采用Kubernetes兼容的单主地域三可用区架构和异步Warm Standby，按Command、Telemetry、在线查询、Core/IAM、Connector及Batch/AI隔离资源池。PostgreSQL单Writer跨AZ同步复制并执行PITR，Kafka三AZ多数确认，Redis仅作可重建缓存，ClickHouse分片复制并由对象存储重建；发布使用签名镜像、GitOps、金丝雀和Error Budget门禁，OpenTelemetry统一观测。区域切换先隔离旧地域并建立Fence，按实际复制水位报告RPO，4小时内恢复核心能力，并以季度故障注入、半年Restore和年度区域演练验证。
-- [确定 NestJS 到 Go 的迁移与共存路径](issues/12-nestjs-to-go-migration-and-coexistence.md) — 采用Gateway先行的Strangler与版本化Route/Data Ownership Registry，Legacy只在私网作为有退役期限的Anti-Corruption Layer。Go使用独立Schema和平台ID，数据通过快照回填、单向Outbox/CDC、尾差追平与Owner Fence迁移；只读可Shadow双读，写链路禁止双写。Command与Scheduler按唯一副作用Owner和Generation灰度，已接收动作由原Owner收敛，回滚只影响未来请求。NestJS功能冻结，退役前必须实现流量归零、无未决副作用/CDC尾差、历史审计可查询及灾备不再依赖Legacy。
-- [确定架构验收标准与首批纵向切片](issues/13-acceptance-and-first-vertical-slices.md) — 采用Architecture Exit Gate、Slice Release Gate和可复现Release Evidence Bundle，将契约、唯一Owner、租户零泄漏、容量/SLO、故障注入、备份Restore、迁移回滚及Command/AI安全不变量转为硬验收。首批按S0契约交付骨架、S1组织/站点/设备读取、S2遥测Snapshot+Delta、S3安全Command闭环推进，再扩展Schedule、AI、Recommendation交接和Legacy Cohort切换；每个Slice必须端到端交付前后端、数据、测试、观测、Runbook与回滚。
+- [明确 `hvac-backend` 的非生产参考边界](issues/12-nestjs-to-go-migration-and-coexistence.md) — ADR 0005取代原Strangler生产迁移假设：`hvac-backend`仅可作为非生产行为Fixture，不是架构模板、Route/Data Owner、fallback、迁移源或灾备依赖。生产Gateway只选择Go Owner；历史迁移、Shadow和退役资产降级为非阻断回归材料。Command与Scheduler仍按唯一副作用Owner、Generation和Fence灰度，已接收动作由原Owner收敛，回滚只影响未来请求。
+- [确定架构验收标准与首批纵向切片](issues/13-acceptance-and-first-vertical-slices.md) — 采用Architecture Exit Gate、Slice Release Gate和可复现Release Evidence Bundle，将契约、唯一Owner、租户零泄漏、容量/SLO、故障注入、备份Restore、生产Cohort回滚及Command/AI安全不变量转为硬验收。首批按S0契约交付骨架、S1组织/站点/设备读取、S2遥测Snapshot+Delta、S3安全Command闭环推进，再扩展Schedule、AI、Recommendation交接；S7负责Go能力的生产Cohort晋级和运行强化。每个Slice必须端到端交付前后端、数据、测试、观测、Runbook与回滚。
 
 ## Architecture status
 
-- 票据01–14均已解决，Wayfinder Destination已达到；NestJS保持Legacy Frozen并按Strangler计划迁移。
+- 票据01–14的原始研究已完成；ADR 0005已明确`hvac-backend`仅为非生产参考，原NestJS Strangler生产迁移假设不再适用。
 - 核心边界与安全不变量不得在实施中隐式重开；任何偏离必须通过显式ADR或架构变更票据治理。
 
 ## Implementation handoff
@@ -40,8 +40,9 @@
 - [S0 — Platform Contract & Delivery Foundation](../go-data-ai-platform-s0/spec.md) 已完成，正式 Release Evidence run 为 `29763231123`。
 - [S0 implementation tracker](../go-data-ai-platform-s0/README.md) 的8张纵向票据均已关闭。
 - [S1 — Organization–Site–Device Read Slice](../go-data-ai-platform-s1/spec.md) 已于2026-07-21显式接受。
-- [S1 implementation tracker](../go-data-ai-platform-s1/README.md) 已拆分8张纵向票据；当前唯一 frontier 为票据01“Contract, domain model and ownership baseline”。
-- S1实施必须遵守依赖图、外部黑盒验收、跨租户零成功、单一数据Owner、只读Shadow/回滚和NestJS Legacy Frozen边界。
+- [S1 implementation tracker](../go-data-ai-platform-s1/README.md) 已拆分8张纵向票据；当前活跃Registry路由已进入Go Primary且无生产Legacy fallback。
+- S2 current-state已形成Presence、latest、Snapshot、live delta和recovery实现资产；生产认证仍按Go平台P0–P6门禁推进，完整历史时序继续延期。
+- S3已于2026-07-26启动；S3-01至S3-08的仓库实现与门禁已完成，S3-09已交付容量包络、Crash-point矩阵、正式Attestation生成与离线验证基线。当前frontier为S3-09正式目标环境认证：真实内部Device Canary尚未执行，公开Command路由保持disabled，生产流量保持0%。
 
 ## Not yet specified
 

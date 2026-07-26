@@ -1,6 +1,8 @@
 go 1.25.12
 
 use (
+	./libs/commandauth
+	./libs/commandmodel
 	./libs/identitycontext
 	./libs/observability
 	./libs/oidctest
@@ -11,6 +13,8 @@ use (
 	./libs/telemetryauth
 	./libs/testpki
 	./services/audit-ledger-service
+	./services/command-dispatcher
+	./services/command-service
 	./services/iam-service
 	./services/legacy-migration-service
 	./services/oidc-test-provider
@@ -19,6 +23,7 @@ use (
 	./services/platform-gateway
 	./services/telemetry-runtime-service
 	./services/telemetry-shadow-comparator
+	./services/thingsboard-connector-control
 	./tools/legacy-private-fixture
 	./tools/s0-auth-fixture
 )

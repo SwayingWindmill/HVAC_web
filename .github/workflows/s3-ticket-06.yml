@@ -1,0 +1,69 @@
+name: S3 Ticket 06 Local ThingsBoard Contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/s3-ticket-06.yml'
+      - 'contracts/thingsboard/**'
+      - 'contracts/ownership/**'
+      - 'deploy/s3/**'
+      - 'docs/operations/s3-implementation-plan.md'
+      - 'infra/s3-thingsboard/**'
+      - 'libs/commandmodel/**'
+      - 'services/thingsboard-connector-control/**'
+      - 'scripts/check-s3-thingsboard-connector.mjs'
+      - 'scripts/run-s3-thingsboard-local-tests.mjs'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'package.json'
+      - 'package-lock.json'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/s3-ticket-06.yml'
+      - 'contracts/thingsboard/**'
+      - 'contracts/ownership/**'
+      - 'deploy/s3/**'
+      - 'docs/operations/s3-implementation-plan.md'
+      - 'infra/s3-thingsboard/**'
+      - 'libs/commandmodel/**'
+      - 'services/thingsboard-connector-control/**'
+      - 'scripts/check-s3-thingsboard-connector.mjs'
+      - 'scripts/run-s3-thingsboard-local-tests.mjs'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'package.json'
+      - 'package-lock.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s3-ticket-06-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  local-thingsboard-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+          cache: npm
+      - run: npm ci
+      - run: npm run s3:ticket-06
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: s3-ticket-06-thingsboard-local-contract
+          path: out/s3-ticket-06/thingsboard-local-contract.json
+          if-no-files-found: error
+          retention-days: 14

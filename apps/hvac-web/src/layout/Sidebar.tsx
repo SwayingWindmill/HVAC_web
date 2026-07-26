@@ -4,6 +4,7 @@ import type { MenuProps } from 'antd';
 import {
   DashboardOutlined,
   ApartmentOutlined,
+  ControlOutlined,
   FundOutlined,
   ThunderboltOutlined,
   BugOutlined,
@@ -31,6 +32,7 @@ type NavGroup = {
 const ICONS: Record<string, ComponentType> = {
   DashboardOutlined,
   ApartmentOutlined,
+  ControlOutlined,
   FundOutlined,
   ThunderboltOutlined,
   BugOutlined,
@@ -45,7 +47,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     key: 'operations',
     label: '运营管理',
-    paths: ['/assets', '/fdd', '/alarms', '/optimize'],
+    paths: ['/assets', '/commands', '/fdd', '/alarms', '/optimize'],
   },
   {
     key: 'analytics',

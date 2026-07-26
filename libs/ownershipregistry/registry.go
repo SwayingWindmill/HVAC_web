@@ -18,6 +18,7 @@ const (
 	OwnerLegacy           = "legacy-hvac-backend"
 	OwnerCore             = "platform-core-service"
 	OwnerTelemetryRuntime = "telemetry-runtime-service"
+	OwnerCommand          = "command-service"
 
 	PhaseLegacyPrimaryGoShadow       = "LEGACY_PRIMARY_GO_SHADOW"
 	PhaseGoCanaryLegacyShadow        = "GO_CANARY_LEGACY_SHADOW"
@@ -32,6 +33,7 @@ const (
 	PhaseS2Ramp50                    = "R6-ramp-50"
 	PhaseS2Primary                   = "R7-primary-100"
 	PhaseS2LegacyRetired             = "R8-legacy-current-state-retired"
+	PhaseS3ContractOnly              = "S3-R0-contract-only"
 )
 
 var (
@@ -214,6 +216,8 @@ func validateEntry(entry RouteEntry) error {
 		var err error
 		if isS2Phase(entry.MigrationPhase) {
 			err = validateS2Phase(entry, seenScopes)
+		} else if isS3Phase(entry.MigrationPhase) {
+			err = validateS3Phase(entry, seenScopes)
 		} else {
 			err = validateMigrationPhase(entry)
 		}
@@ -223,6 +227,9 @@ func validateEntry(entry RouteEntry) error {
 	}
 	if entry.Owner == OwnerTelemetryRuntime && !isS2Phase(entry.MigrationPhase) {
 		return errors.New("Telemetry Runtime ownership requires an S2 migration phase")
+	}
+	if entry.Owner == OwnerCommand && !isS3Phase(entry.MigrationPhase) {
+		return errors.New("Command ownership requires an S3 migration phase")
 	}
 	return nil
 }
@@ -287,6 +294,29 @@ func validateS2Phase(entry RouteEntry, seenScopes map[string]bool) error {
 	return nil
 }
 
+func validateS3Phase(entry RouteEntry, seenScopes map[string]bool) error {
+	if entry.PublicIngress != OwnerGateway || entry.ShadowSideEffectPolicy != "SYNTHETIC_ONLY" || entry.ReadOnlyFallback || entry.ReadFallbackOwner != "" {
+		return errors.New("S3 route must use Gateway ingress, Synthetic-only shadowing and no request fallback")
+	}
+	for _, required := range []string{"organization", "site", "device", "principal"} {
+		if !seenScopes[required] {
+			return errors.New("S3 scope dimensions are incomplete")
+		}
+	}
+	for _, required := range []string{"AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND", "CURRENT_STATE_UNSAFE", "OUTCOME_UNKNOWN"} {
+		if !containsString(entry.FallbackForbiddenResults, required) {
+			return errors.New("S3 forbidden results are incomplete")
+		}
+	}
+	if entry.CohortGroup == "" {
+		return errors.New("S3 route requires a cohort group")
+	}
+	if entry.MigrationPhase != PhaseS3ContractOnly || entry.Owner != OwnerCommand || entry.ActivationStatus != "expand-baseline" || entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" {
+		return errors.New("S3 contract-only policy is invalid")
+	}
+	return nil
+}
+
 func validateS2PercentagePhase(entry RouteEntry, percentage int) error {
 	if entry.Owner != OwnerTelemetryRuntime || entry.ActivationStatus != "canary" || entry.CompatibilityMode != "native" ||
 		entry.Rollout.Mode != "percentage" || entry.Rollout.Percentage != percentage || entry.Rollout.FallbackOwner != OwnerLegacy {
@@ -308,9 +338,13 @@ func isS2Phase(phase string) bool {
 	return ok
 }
 
+func isS3Phase(phase string) bool {
+	return phase == PhaseS3ContractOnly
+}
+
 func validateMigrationPhase(entry RouteEntry) error {
-	if entry.Method != http.MethodGet || entry.ShadowSideEffectPolicy != "NONE" || !entry.ReadOnlyFallback {
-		return errors.New("migration routes must be read-only GET routes with side-effect-free shadowing")
+	if entry.Method != http.MethodGet || entry.ShadowSideEffectPolicy != "NONE" {
+		return errors.New("migration routes must be GET routes with side-effect-free shadowing")
 	}
 	for _, required := range []string{"AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"} {
 		if !containsString(entry.FallbackForbiddenResults, required) {
@@ -319,19 +353,19 @@ func validateMigrationPhase(entry RouteEntry) error {
 	}
 	switch entry.MigrationPhase {
 	case PhaseLegacyPrimaryGoShadow:
-		if entry.Owner != OwnerLegacy || entry.CompatibilityMode != "legacy-read" || entry.Rollout.Mode != "percentage" || entry.Rollout.Percentage != 100 || entry.Rollout.FallbackOwner != OwnerCore || entry.ReadFallbackOwner != "" {
+		if !entry.ReadOnlyFallback || entry.Owner != OwnerLegacy || entry.CompatibilityMode != "legacy-read" || entry.Rollout.Mode != "percentage" || entry.Rollout.Percentage != 100 || entry.Rollout.FallbackOwner != OwnerCore || entry.ReadFallbackOwner != "" {
 			return errors.New("legacy-primary shadow phase policy is invalid")
 		}
 	case PhaseGoCanaryLegacyShadow:
-		if entry.Owner != OwnerCore || entry.CompatibilityMode != "native" || entry.Rollout.Mode != "percentage" || entry.Rollout.Percentage <= 0 || entry.Rollout.Percentage >= 100 || entry.Rollout.FallbackOwner != OwnerLegacy || entry.ReadFallbackOwner != "" {
+		if !entry.ReadOnlyFallback || entry.Owner != OwnerCore || entry.CompatibilityMode != "native" || entry.Rollout.Mode != "percentage" || entry.Rollout.Percentage <= 0 || entry.Rollout.Percentage >= 100 || entry.Rollout.FallbackOwner != OwnerLegacy || entry.ReadFallbackOwner != "" {
 			return errors.New("Go canary shadow phase policy is invalid")
 		}
 	case PhaseGoPrimaryLegacyReadFallback:
-		if entry.Owner != OwnerCore || entry.CompatibilityMode != "native" || entry.Rollout.Mode != "all" || entry.ReadFallbackOwner != OwnerLegacy {
+		if !entry.ReadOnlyFallback || entry.Owner != OwnerCore || entry.CompatibilityMode != "native" || entry.Rollout.Mode != "all" || entry.ReadFallbackOwner != OwnerLegacy {
 			return errors.New("Go-primary Legacy fallback phase policy is invalid")
 		}
 	case PhaseGoPrimary:
-		if entry.Owner != OwnerCore || entry.CompatibilityMode != "native" || entry.Rollout.Mode != "all" || entry.ReadFallbackOwner != "" {
+		if entry.ReadOnlyFallback || entry.Owner != OwnerCore || entry.CompatibilityMode != "native" || entry.Rollout.Mode != "all" || entry.ReadFallbackOwner != "" {
 			return errors.New("Go-primary phase policy is invalid")
 		}
 	default:
@@ -345,7 +379,7 @@ func isActiveOwner(owner string) bool {
 }
 
 func isCandidateOwner(owner string) bool {
-	return isActiveOwner(owner) || owner == OwnerCore || owner == OwnerTelemetryRuntime
+	return isActiveOwner(owner) || owner == OwnerCore || owner == OwnerTelemetryRuntime || owner == OwnerCommand
 }
 
 func NewManager(snapshot *Snapshot, audit AuditSink, now func() time.Time) *Manager {

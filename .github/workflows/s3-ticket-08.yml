@@ -1,0 +1,58 @@
+name: S3 Ticket 08 Command UX
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/s3-ticket-08.yml'
+      - 'apps/hvac-web/**'
+      - 'contracts/http/s3-command-public.openapi.json'
+      - 'contracts/ownership/**'
+      - 'deploy/s3/**'
+      - 'docs/operations/s3-implementation-plan.md'
+      - 'services/command-service/**'
+      - 'services/platform-gateway/**'
+      - 'scripts/check-s3-command-ux.mjs'
+      - 'scripts/check-s3-command-gateway.mjs'
+      - 'scripts/check-s3-command-verification.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/s3-ticket-08.yml'
+      - 'apps/hvac-web/**'
+      - 'contracts/http/s3-command-public.openapi.json'
+      - 'contracts/ownership/**'
+      - 'deploy/s3/**'
+      - 'docs/operations/s3-implementation-plan.md'
+      - 'services/command-service/**'
+      - 'services/platform-gateway/**'
+      - 'scripts/check-s3-command-ux.mjs'
+      - 'scripts/check-s3-command-gateway.mjs'
+      - 'scripts/check-s3-command-verification.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s3-ticket-08-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  command-ux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+          cache: npm
+      - run: npm ci
+      - run: npm run s3:ticket-08

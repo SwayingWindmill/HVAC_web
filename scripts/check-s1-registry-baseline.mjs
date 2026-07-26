@@ -59,7 +59,7 @@ for (const [method, path, operationId] of expectedRoutes) {
   const owner = routeRegistry.routes.find((route) => route.method === method && route.path === path);
   assert(owner?.owner === 'platform-core-service' && owner?.rollout?.mode === 'all', `${method} ${path} final owner must be Core`);
   assert(owner?.migrationPhase === 'GO_PRIMARY' && owner?.readFallbackOwner === undefined, `${method} ${path} did not finish Core-only cutover`);
-  assert(owner?.readOnlyFallback === true && owner?.shadowSideEffectPolicy === 'NONE', `${method} ${path} migration safety is incomplete`);
+  assert(owner?.readOnlyFallback === false && owner?.shadowSideEffectPolicy === 'NONE', `${method} ${path} active route still advertises runtime fallback`);
   assert(owner?.fallbackForbiddenResults?.includes('AUTHORIZATION_DENIED'), `${method} ${path} could fallback after denial`);
   assert(owner?.fallbackForbiddenResults?.includes('RESOURCE_NOT_FOUND'), `${method} ${path} could leak resource existence`);
   assert(ownershipLock.routes?.[`${method} ${path}`]?.owner === 'platform-core-service' && ownershipLock.routes?.[`${method} ${path}`]?.revision === 5, `${method} ${path} final ownership lock drifted`);

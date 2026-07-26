@@ -10,7 +10,7 @@ The checked-in authority is `contracts/http/platform-gateway.openapi.yaml`.
 | --- | --- | --- |
 | `GET` | `/api/v1/health` | Read Gateway health. `includeBuild=true` includes build identity. |
 | `GET` | `/api/v1/version` | Read the running build identity. |
-| `GET` | `/api/v1/platform/status` | Read normalized platform status through the applied Go/Legacy route owner. |
+| `GET` | `/api/v1/platform/status` | Read the Gateway-owned native Go platform status. |
 | `GET` | `/api/v1/auth/login` | Begin OIDC Authorization Code Flow with PKCE. |
 | `GET` | `/api/v1/auth/callback` | Complete the OIDC callback and create a BFF Session. |
 | `GET` | `/api/v1/principal` | Read the authenticated principal and actor chain through IAM. |

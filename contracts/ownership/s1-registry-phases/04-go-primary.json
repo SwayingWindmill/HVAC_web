@@ -139,7 +139,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
@@ -166,7 +166,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
@@ -194,7 +194,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
@@ -222,7 +222,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
@@ -250,7 +250,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
@@ -278,7 +278,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
@@ -306,7 +306,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
@@ -334,7 +334,7 @@
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": true,
+      "readOnlyFallback": false,
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"

@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "provider": "THINGSBOARD_CE",
+  "providerVersion": "4.3.1.3",
+  "verificationStatus": "LOCAL_VERIFIED",
+  "productionEligible": false,
+  "capability": "SET_TEMPERATURE_SETPOINT",
+  "capabilityRevision": "capability:set-temperature-setpoint:v1",
+  "mappingRevision": "thingsboard-ce-4.3.1.3:setTemperatureSetpoint:v1",
+  "transport": {
+    "api": "REST_SERVER_SIDE_RPC",
+    "operation": "TWO_WAY",
+    "method": "POST",
+    "pathTemplate": "/api/rpc/twoway/{deviceId}",
+    "timeoutMs": 5000,
+    "persistent": false
+  },
+  "request": {
+    "method": "setTemperatureSetpoint",
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["setpointC"],
+      "properties": {
+        "setpointC": {
+          "type": "number",
+          "minimum": 16,
+          "maximum": 30,
+          "unit": "CELSIUS"
+        }
+      }
+    }
+  },
+  "providerObservedContract": {
+    "httpDeviceRpcRequestId": {
+      "type": "integer",
+      "minimum": 0,
+      "note": "ThingsBoard CE 4.3.1.3 may allocate zero for the first HTTP server-side RPC request."
+    }
+  },
+  "acknowledgement": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["success"],
+    "properties": {
+      "success": { "type": "boolean", "const": true },
+      "appliedSetpointC": { "type": "number" }
+    },
+    "businessSuccess": false,
+    "reportedStateVerificationRequired": true
+  },
+  "failureClassification": {
+    "requestNotWritten": "PRE_SEND_REJECTED",
+    "requestWrittenTransportFailure": "REQUEST_COMMITTED",
+    "http504": "REQUEST_COMMITTED",
+    "invalidOrNegativeReply": "REQUEST_COMMITTED",
+    "automaticRetryAfterRequestWritten": false
+  },
+  "evidence": {
+    "credentialPersistenceAllowed": false,
+    "rawCredentialLoggingAllowed": false,
+    "requestAndResponseHashRequired": true,
+    "attemptFencePayloadBindingRequired": true
+  },
+  "sources": [
+    "https://thingsboard.io/docs/installation/docker/",
+    "https://thingsboard.io/docs/reference/rest-api/",
+    "https://thingsboard.io/docs/reference/http-api/rpc/",
+    "https://thingsboard.io/docs/user-guide/command-and-control/"
+  ]
+}

@@ -3,6 +3,8 @@ module github.com/quanlaihe/hvac-web/services/platform-gateway
 go 1.25.12
 
 require (
+	github.com/quanlaihe/hvac-web/libs/commandauth v0.0.0
+	github.com/quanlaihe/hvac-web/libs/commandmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/oidctest v0.0.0
@@ -29,6 +31,10 @@ require (
 	golang.org/x/text v0.39.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 )
+
+replace github.com/quanlaihe/hvac-web/libs/commandauth => ../../libs/commandauth
+
+replace github.com/quanlaihe/hvac-web/libs/commandmodel => ../../libs/commandmodel
 
 replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identitycontext
 

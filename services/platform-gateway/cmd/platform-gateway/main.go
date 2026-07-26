@@ -49,6 +49,11 @@ func main() {
 		logger.Error("gateway_telemetry_config_invalid", "error_code", "TELEMETRY_CONFIG_INVALID")
 		os.Exit(1)
 	}
+	commandConfig, err := loadCommandConfig(workloadCertificate)
+	if err != nil {
+		logger.Error("gateway_command_config_invalid", "error_code", "COMMAND_CONFIG_INVALID")
+		os.Exit(1)
+	}
 	serverTLSConfig, serverTLSEnabled, err := loadGatewayServerTLSConfig()
 	if err != nil {
 		logger.Error("gateway_server_tls_config_invalid", "error_code", "GATEWAY_SERVER_TLS_CONFIG_INVALID")
@@ -71,6 +76,7 @@ func main() {
 		Legacy:        routing.legacy,
 		Registry:      routing.registry,
 		Telemetry:     telemetryConfig,
+		Command:       commandConfig,
 		Observability: telemetry,
 		Build: platformapi.BuildInfo{
 			Service: "platform-gateway",
@@ -281,6 +287,33 @@ func loadTelemetryConfig(certificate *tls.Certificate) (*gateway.TelemetryConfig
 		Timeout:           2 * time.Second,
 		MaxResponseBytes:  2 << 20,
 		RuntimeHTTPClient: &http.Client{Transport: workloadTransport(roots, certificate, envOr("TELEMETRY_RUNTIME_SERVER_NAME", "localhost"))},
+	}, nil
+}
+
+func loadCommandConfig(certificate *tls.Certificate) (*gateway.CommandConfig, error) {
+	serviceURL := strings.TrimSpace(os.Getenv("COMMAND_SERVICE_URL"))
+	if serviceURL == "" {
+		return nil, nil
+	}
+	if certificate == nil {
+		return nil, errors.New("Command Service requires the authenticated Gateway workload certificate")
+	}
+	caPath := os.Getenv("COMMAND_SERVICE_SERVER_CA")
+	if caPath == "" {
+		return nil, errors.New("COMMAND_SERVICE_SERVER_CA is required when COMMAND_SERVICE_URL is configured")
+	}
+	roots, err := loadCertPool(caPath, "Command Service server CA")
+	if err != nil {
+		return nil, err
+	}
+	return &gateway.CommandConfig{
+		BackendBaseURL:    serviceURL,
+		BackendAudience:   envOr("COMMAND_SERVICE_AUDIENCE", "command-service"),
+		IAMGrantIssuer:    envOr("IAM_COMMAND_GRANT_ISSUER", "spiffe://hvac.local/iam-service"),
+		TemperatureKey:    envOr("COMMAND_TEMPERATURE_KEY", "zone.temperature"),
+		Timeout:           10 * time.Second,
+		MaxResponseBytes:  256 << 10,
+		BackendHTTPClient: &http.Client{Transport: workloadTransport(roots, certificate, envOr("COMMAND_SERVICE_SERVER_NAME", "localhost"))},
 	}, nil
 }
 

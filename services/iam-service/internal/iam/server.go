@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -21,8 +22,10 @@ const (
 	CurrentPrincipalPath       = "/internal/v1/principal/current"
 	RegistryReadDecisionPath   = "/internal/v1/registry-read/decision"
 	TelemetryDecisionPath      = "/internal/v1/telemetry/decision"
+	CommandDecisionPath        = "/internal/v1/command/decision"
 	registryAuthorizeAction    = "registry:authorize"
 	telemetryAuthorizeAction   = "telemetry:authorize"
+	commandAuthorizeAction     = "command:authorize"
 	maximumDecisionRequestSize = 64 << 10
 	maximumGrantStatusSize     = 16 << 10
 )
@@ -51,6 +54,12 @@ type Config struct {
 	TelemetryAuditSink          TelemetryDecisionAuditSink
 	TelemetryRuntimeSPIFFE      string
 	TelemetryGrantStore         TelemetryGrantStore
+	CommandAuthorizationStore   CommandAuthorizationStore
+	CommandGrantSigner          crypto.Signer
+	CommandGrantIssuer          string
+	CommandGrantAudience        string
+	CommandGrantLifetime        time.Duration
+	NewCommandGrantID           func() string
 }
 
 type handler struct {
@@ -77,6 +86,12 @@ type handler struct {
 	telemetryAuditSink          TelemetryDecisionAuditSink
 	telemetryRuntimeSPIFFE      string
 	telemetryGrantStore         TelemetryGrantStore
+	commandAuthorizationStore   CommandAuthorizationStore
+	commandGrantSigner          crypto.Signer
+	commandGrantIssuer          string
+	commandGrantAudience        string
+	commandGrantLifetime        time.Duration
+	newCommandGrantID           func() string
 }
 
 func NewHandler(config Config) http.Handler {
@@ -144,6 +159,30 @@ func NewHandler(config Config) http.Handler {
 	if telemetryAuditSink == nil {
 		telemetryAuditSink = newLoggerTelemetryDecisionAuditSink(logger)
 	}
+	commandStore := config.CommandAuthorizationStore
+	if commandStore == nil {
+		commandStore = newDenyAllCommandAuthorizationStore("command-policy-unconfigured")
+	}
+	commandSigner := config.CommandGrantSigner
+	if commandSigner == nil {
+		commandSigner = config.RegistryGrantSigner
+	}
+	commandIssuer := config.CommandGrantIssuer
+	if commandIssuer == "" {
+		commandIssuer = grantIssuer
+	}
+	commandAudience := config.CommandGrantAudience
+	if commandAudience == "" {
+		commandAudience = "command-service"
+	}
+	commandLifetime := config.CommandGrantLifetime
+	if commandLifetime <= 0 || commandLifetime > commandauth.MaximumGrantLifetime {
+		commandLifetime = commandauth.MaximumGrantLifetime
+	}
+	newCommandGrantID := config.NewCommandGrantID
+	if newCommandGrantID == nil {
+		newCommandGrantID = randomIdentifier
+	}
 	return &handler{
 		allowedWorkloadSPIFFE:       config.AllowedWorkloadSPIFFE,
 		coreWorkloadSPIFFE:          config.CoreWorkloadSPIFFE,
@@ -168,6 +207,12 @@ func NewHandler(config Config) http.Handler {
 		telemetryAuditSink:          telemetryAuditSink,
 		telemetryRuntimeSPIFFE:      config.TelemetryRuntimeSPIFFE,
 		telemetryGrantStore:         config.TelemetryGrantStore,
+		commandAuthorizationStore:   commandStore,
+		commandGrantSigner:          commandSigner,
+		commandGrantIssuer:          commandIssuer,
+		commandGrantAudience:        commandAudience,
+		commandGrantLifetime:        commandLifetime,
+		newCommandGrantID:           newCommandGrantID,
 	}
 }
 
@@ -254,6 +299,8 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		status = h.handleRegistryReadDecision(writer, request, claims, spiffeID)
 	case TelemetryDecisionPath:
 		status = h.handleTelemetryDecision(writer, request, claims, spiffeID)
+	case CommandDecisionPath:
+		status = h.handleCommandDecision(writer, request, claims, spiffeID)
 	}
 }
 
@@ -450,6 +497,8 @@ func expectedInboundAction(path string) (string, bool) {
 		return registryAuthorizeAction, true
 	case TelemetryDecisionPath:
 		return telemetryAuthorizeAction, true
+	case CommandDecisionPath:
+		return commandAuthorizeAction, true
 	default:
 		return "", false
 	}

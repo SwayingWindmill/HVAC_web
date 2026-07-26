@@ -1,0 +1,45 @@
+.commands-page-stack,
+.command-detail-stack {
+  width: 100%;
+}
+
+.command-workbench-card + .command-workbench-card {
+  margin-top: 16px;
+}
+
+.command-number-input {
+  width: 100%;
+}
+
+.command-permission-note {
+  margin-top: 12px;
+  margin-bottom: 0 !important;
+  text-align: center;
+}
+
+.command-inline-alert {
+  margin-top: 16px;
+}
+
+.command-monospace {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  overflow-wrap: anywhere;
+}
+
+.command-timeline-card .ant-card-body {
+  padding-bottom: 4px;
+}
+
+.command-timeline-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 8px;
+}
+
+@media (max-width: 767px) {
+  .commands-page .ant-descriptions-item-label,
+  .commands-page .ant-descriptions-item-content {
+    padding: 8px !important;
+  }
+}

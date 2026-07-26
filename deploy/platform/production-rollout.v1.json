@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "decision": "ADR-0005",
+  "slice": "S7 Production Cohort Rollout & Operational Hardening",
+  "legacyReference": {
+    "productionDependency": false,
+    "architectureSource": false,
+    "routeFallback": false,
+    "migrationSource": false,
+    "disasterRecoveryDependency": false
+  },
+  "phases": [
+    {
+      "id": "P0-contract-ready",
+      "trafficPercent": 0,
+      "minimumHoldMinutes": 0,
+      "rollbackTarget": "disabled"
+    },
+    {
+      "id": "P1-internal-synthetic",
+      "trafficPercent": 1,
+      "minimumHoldMinutes": 120,
+      "rollbackTarget": "P0-contract-ready"
+    },
+    {
+      "id": "P2-internal-site",
+      "trafficPercent": 5,
+      "minimumHoldMinutes": 240,
+      "rollbackTarget": "P1-internal-synthetic"
+    },
+    {
+      "id": "P3-limited-production",
+      "trafficPercent": 25,
+      "minimumHoldMinutes": 480,
+      "rollbackTarget": "P2-internal-site"
+    },
+    {
+      "id": "P4-broad-production",
+      "trafficPercent": 50,
+      "minimumHoldMinutes": 720,
+      "rollbackTarget": "P3-limited-production"
+    },
+    {
+      "id": "P5-primary",
+      "trafficPercent": 100,
+      "minimumHoldMinutes": 1440,
+      "rollbackTarget": "P4-broad-production"
+    },
+    {
+      "id": "P6-operationally-certified",
+      "trafficPercent": 100,
+      "minimumHoldMinutes": 10080,
+      "rollbackTarget": "P5-primary"
+    }
+  ],
+  "hardGates": {
+    "crossTenantSuccesses": 0,
+    "duplicateCommandSideEffects": 0,
+    "oldFenceExecutions": 0,
+    "blindRetriesAfterOutcomeUnknown": 0,
+    "unauditedControlActions": 0,
+    "secretLeaks": 0
+  },
+  "requiredEvidence": [
+    "capacity-report.json",
+    "failure-injection-report.json",
+    "restore-report.json",
+    "route-rollback-report.json",
+    "command-fence-report.json",
+    "security-zero-report.json",
+    "promotion-approvals.json",
+    "production-acceptance.json",
+    "SHA256SUMS"
+  ],
+  "rollback": {
+    "maximumDecisionMinutes": 5,
+    "maximumRouteRollbackMinutes": 15,
+    "futureCommandsOnly": true,
+    "acceptedCommandsRemainWithOriginalOwner": true
+  },
+  "historicalAssets": {
+    "legacyMigrationFixturesReleaseBlocking": false,
+    "legacyShadowComparisonReleaseBlocking": false,
+    "legacyTrafficObservationReleaseBlocking": false
+  }
+}

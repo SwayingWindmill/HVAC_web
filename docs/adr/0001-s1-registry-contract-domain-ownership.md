@@ -6,6 +6,8 @@ Date: 2026-07-21
 
 Issue: #32
 
+Superseded in part by ADR 0005: the public contract, domain model and Go ownership remain accepted; the Legacy production migration and fallback assumptions are historical only.
+
 ## Context
 
 S1 needs a stable Organization–Site–Equipment–Device read contract before IAM authorization, Core runtime, Legacy migration, Gateway routing or HVAC Web work can begin. The baseline must preserve S0's single-writer ownership, resource invisibility, reproducible generation and rollback rules while preventing Legacy or ThingsBoard identifiers from becoming public platform identity.

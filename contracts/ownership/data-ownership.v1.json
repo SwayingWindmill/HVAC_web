@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 9,
+  "registryRevision": 11,
   "resources": [
     { "kind": "schema", "name": "gateway", "writer": "platform-gateway", "revision": 1 },
     { "kind": "schema", "name": "audit_ledger", "writer": "audit-ledger-service", "revision": 1 },
@@ -8,9 +8,11 @@
     { "kind": "schema", "name": "iam", "writer": "iam-service", "revision": 1 },
     { "kind": "schema", "name": "core_registry", "writer": "platform-core-service", "revision": 1 },
     { "kind": "schema", "name": "telemetry_runtime", "writer": "telemetry-runtime-service", "revision": 1 },
+    { "kind": "schema", "name": "command_runtime", "writer": "command-service", "revision": 1 },
     { "kind": "event-family", "name": "hvac.security.session.v1", "writer": "platform-gateway", "revision": 1 },
     { "kind": "event-family", "name": "hvac.routing.decision.v1", "writer": "platform-gateway", "revision": 1 },
     { "kind": "event-family", "name": "hvac.telemetry.device-snapshot.v1", "writer": "telemetry-runtime-service", "revision": 1 },
+    { "kind": "event-family", "name": "hvac.command.lifecycle.v1", "writer": "command-service", "revision": 1 },
     { "kind": "projection", "name": "audit-session-record", "writer": "audit-ledger-service", "revision": 1 },
     { "kind": "projection", "name": "gateway-route-audit", "writer": "platform-gateway", "revision": 1 },
     { "kind": "projection", "name": "iam-registry-read-decision", "writer": "iam-service", "revision": 1 },
@@ -32,6 +34,17 @@
     { "kind": "projection", "name": "ingest-deduplication", "writer": "telemetry-runtime-service", "revision": 2 },
     { "kind": "projection", "name": "ingest-quarantine", "writer": "telemetry-runtime-service", "revision": 2 },
     { "kind": "outbox", "name": "telemetry-publication-outbox", "writer": "telemetry-runtime-service", "relay": "outbox-relay", "revision": 1 },
+    { "kind": "projection", "name": "command-intent", "writer": "command-service", "revision": 1 },
+    { "kind": "projection", "name": "command-attempt", "writer": "command-service", "revision": 1 },
+    { "kind": "projection", "name": "command-transition", "writer": "command-service", "revision": 1 },
+    { "kind": "projection", "name": "command-idempotency", "writer": "command-service", "revision": 1 },
+    { "kind": "projection", "name": "command-authorization-snapshot", "writer": "command-service", "revision": 1 },
+    { "kind": "projection", "name": "command-risk-snapshot", "writer": "command-service", "revision": 1 },
+    { "kind": "projection", "name": "command-approval-snapshot", "writer": "command-service", "revision": 1 },
+    { "kind": "projection", "name": "command-capability-profile", "writer": "command-service", "revision": 1 },
+    { "kind": "projection", "name": "device-control-state", "writer": "command-service", "revision": 1 },
+    { "kind": "projection", "name": "command-audit-intent", "writer": "command-service", "revision": 1 },
+    { "kind": "outbox", "name": "command-dispatch-outbox", "writer": "command-service", "relay": "command-dispatcher", "revision": 1 },
     { "kind": "transport-store", "name": "s2-telemetry-transport-redis", "writer": "centrifugo", "revision": 1, "authority": false, "sharedWithLegacy": false },
     { "kind": "compatibility-boundary", "name": "legacy-telemetry-timeseries", "writer": "legacy-hvac-backend", "revision": 1, "currentStateAuthority": false },
     { "kind": "migration-dataset", "name": "s1-legacy-resource-map", "writer": "platform-core-service", "revision": 1 },
@@ -49,7 +62,8 @@
     { "service": "platform-core-service", "schema": "core_registry", "mode": "write" },
     { "service": "legacy-migration-service", "schema": "core_registry", "mode": "migration" },
     { "service": "telemetry-runtime-service", "schema": "telemetry_runtime", "mode": "write" },
-    { "service": "outbox-relay", "schema": "telemetry_runtime", "mode": "relay", "restrictedTo": ["telemetry_publication_outbox"] }
+    { "service": "outbox-relay", "schema": "telemetry_runtime", "mode": "relay", "restrictedTo": ["telemetry_publication_outbox"] },
+    { "service": "command-service", "schema": "command_runtime", "mode": "write" }
   ],
   "databaseIdentities": [
     { "schema": "iam", "migrationRole": "s1_iam_migrator", "runtimeRole": "s1_iam_runtime", "runtimeBypassRls": false },
@@ -65,6 +79,8 @@
     { "schema": "telemetry_runtime", "migrationRole": "s2_telemetry_migrator", "runtimeRole": "s2_telemetry_relay", "runtimeBypassRls": false, "accessMode": "relay", "restrictedTo": ["telemetry_publication_outbox"] },
     { "schema": "telemetry_runtime", "migrationRole": "s2_telemetry_migrator", "runtimeRole": "s2_telemetry_relay_service", "runtimeBypassRls": false, "activationRole": "s2_telemetry_relay", "accessMode": "relay", "restrictedTo": ["telemetry_publication_outbox"] },
     { "schema": "telemetry_runtime", "migrationRole": "s2_telemetry_migrator", "runtimeRole": "s2_telemetry_gateway", "runtimeBypassRls": false, "accessMode": "connect-only", "restrictedTo": [] },
-    { "schema": "telemetry_runtime", "migrationRole": "s2_telemetry_migrator", "runtimeRole": "s2_telemetry_iam", "runtimeBypassRls": false, "accessMode": "connect-only", "restrictedTo": [] }
+    { "schema": "telemetry_runtime", "migrationRole": "s2_telemetry_migrator", "runtimeRole": "s2_telemetry_iam", "runtimeBypassRls": false, "accessMode": "connect-only", "restrictedTo": [] },
+    { "schema": "command_runtime", "migrationRole": "s3_command_migrator", "runtimeRole": "s3_command_runtime", "runtimeBypassRls": false, "accessMode": "write" },
+    { "schema": "command_runtime", "migrationRole": "s3_command_migrator", "runtimeRole": "s3_command_service", "runtimeBypassRls": false, "activationRole": "s3_command_runtime", "accessMode": "write" }
   ]
 }

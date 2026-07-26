@@ -127,6 +127,9 @@ func main() {
 			TelemetryGrantAudience:      envOr("IAM_TELEMETRY_GRANT_AUDIENCE", "telemetry-runtime-service"),
 			TelemetryRuntimeSPIFFE:      envOr("IAM_TELEMETRY_RUNTIME_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service"),
 			TelemetryGrantStore:         telemetryGrantStore,
+			CommandGrantSigner:          registryGrantSigner,
+			CommandGrantIssuer:          iamSPIFFEID,
+			CommandGrantAudience:        envOr("IAM_COMMAND_GRANT_AUDIENCE", "command-service"),
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,

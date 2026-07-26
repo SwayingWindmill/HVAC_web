@@ -133,6 +133,20 @@ func TestDisabledS2BaselineLoadsButIsNotDiscoverable(t *testing.T) {
 	}
 }
 
+func TestDisabledS3BaselineLoadsButIsNotDiscoverable(t *testing.T) {
+	input := `{"registryVersion":1,"registryRevision":10,"routes":[{"method":"POST","path":"/api/v1/commands","owner":"command-service","publicIngress":"platform-gateway","activationStatus":"expand-baseline","revision":1,"rollout":{"mode":"disabled"},"compatibilityMode":"native","allowedScopeDimensions":["organization","site","device","principal"],"migrationPhase":"S3-R0-contract-only","cohortGroup":"s3-command-v1","shadowSideEffectPolicy":"SYNTHETIC_ONLY","readOnlyFallback":false,"fallbackForbiddenResults":["AUTHORIZATION_DENIED","RESOURCE_NOT_FOUND","CURRENT_STATE_UNSAFE","OUTCOME_UNKNOWN"]}]}`
+	snapshot := mustParse(t, input)
+	if !snapshot.ContainsOwner(ownershipregistry.OwnerCommand) {
+		t.Fatal("Command owner was not retained in the parsed baseline")
+	}
+	if _, err := snapshot.Resolve("POST", "/api/v1/commands", "org\x00user"); !errors.Is(err, ownershipregistry.ErrRouteMissing) {
+		t.Fatalf("disabled S3 route became resolvable: %v", err)
+	}
+	if methods := snapshot.AllowedMethods("/api/v1/commands"); len(methods) != 0 {
+		t.Fatalf("disabled S3 route leaked allowed methods: %v", methods)
+	}
+}
+
 func TestPolicyRollbackOnlyChangesFutureDecisions(t *testing.T) {
 	audit := ownershipregistry.NewMemoryAuditSink()
 	manager := ownershipregistry.NewManager(mustParse(t, registryJSON(1, 1, ownershipregistry.OwnerLegacy, 100)), audit, fixedNow)
@@ -183,6 +197,7 @@ func phaseRegistryJSON(registryRevision, routeRevision int64, phase string, perc
 	compatibility := "native"
 	rollout := `{"mode":"all"}`
 	readFallback := ""
+	readOnlyFallback := true
 	switch phase {
 	case ownershipregistry.PhaseLegacyPrimaryGoShadow:
 		owner = ownershipregistry.OwnerLegacy
@@ -192,8 +207,10 @@ func phaseRegistryJSON(registryRevision, routeRevision int64, phase string, perc
 		rollout = fmt.Sprintf(`{"mode":"percentage","percentage":%d,"fallbackOwner":"legacy-hvac-backend","cohortSalt":"s1-organizations-v1"}`, percentage)
 	case ownershipregistry.PhaseGoPrimaryLegacyReadFallback:
 		readFallback = `,"readFallbackOwner":"legacy-hvac-backend"`
+	case ownershipregistry.PhaseGoPrimary:
+		readOnlyFallback = false
 	}
-	return fmt.Sprintf(`{"registryVersion":1,"registryRevision":%d,"routes":[{"method":"GET","path":"/api/v1/organizations","owner":%q,"revision":%d,"rollout":%s,"compatibilityMode":%q,"allowedScopeDimensions":["organization","principal"],"migrationPhase":%q,"shadowSideEffectPolicy":"NONE","readOnlyFallback":true%s,"fallbackForbiddenResults":["AUTHORIZATION_DENIED","RESOURCE_NOT_FOUND"]}]}`, registryRevision, owner, routeRevision, rollout, compatibility, phase, readFallback)
+	return fmt.Sprintf(`{"registryVersion":1,"registryRevision":%d,"routes":[{"method":"GET","path":"/api/v1/organizations","owner":%q,"revision":%d,"rollout":%s,"compatibilityMode":%q,"allowedScopeDimensions":["organization","principal"],"migrationPhase":%q,"shadowSideEffectPolicy":"NONE","readOnlyFallback":%t%s,"fallbackForbiddenResults":["AUTHORIZATION_DENIED","RESOURCE_NOT_FOUND"]}]}`, registryRevision, owner, routeRevision, rollout, compatibility, phase, readOnlyFallback, readFallback)
 }
 
 func routeJSON(routeRevision int64, owner string, percentage int) string {

@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "slice": "S3",
+  "name": "Safe Command Closed Loop",
+  "status": "implementation-in-progress",
+  "productionTrafficPercent": 0,
+  "completedTickets": ["S3-01", "S3-02", "S3-03", "S3-04", "S3-05", "S3-06", "S3-07", "S3-08"],
+  "currentFrontier": ["S3-09"],
+  "certificationEnvelope": "deploy/s3/certification-envelope.v1.json",
+  "firstTracerBullet": {
+    "capability": "SET_TEMPERATURE_SETPOINT",
+    "connector": "SYNTHETIC_ONLY",
+    "localProviderContract": "THINGSBOARD_CE_4.3.1.3_LOCAL_VERIFIED",
+    "productionProviderEnabled": false,
+    "risk": "LOW",
+    "approval": "NONE",
+    "publicRoutesEnabled": false
+  },
+  "phases": [
+    "S3-R0-contract-only",
+    "S3-R1-synthetic-only",
+    "S3-R2-internal-low-risk",
+    "S3-R3-site-canary",
+    "S3-R4-operationally-certified"
+  ],
+  "tickets": [
+    {
+      "sequence": 1,
+      "id": "S3-01",
+      "name": "Command ownership, domain safety and synthetic tracer bullet",
+      "blockedBy": [],
+      "deliverables": [
+        "ADR 0006",
+        "Command ownership lock",
+        "disabled public OpenAPI baseline",
+        "Intent and Attempt state machines",
+        "idempotency conflict handling",
+        "Synthetic Connector",
+        "PRE_SEND retry and OUTCOME_UNKNOWN tests"
+      ]
+    },
+    {
+      "sequence": 2,
+      "id": "S3-02",
+      "name": "PostgreSQL command authority and transactional outbox",
+      "blockedBy": ["S3-01"]
+    },
+    {
+      "sequence": 3,
+      "id": "S3-03",
+      "name": "IAM capability authorization, risk and approval snapshots",
+      "blockedBy": ["S3-02"]
+    },
+    {
+      "sequence": 4,
+      "id": "S3-04",
+      "name": "Gateway create and query routes",
+      "blockedBy": ["S3-02", "S3-03"]
+    },
+    {
+      "sequence": 5,
+      "id": "S3-05",
+      "name": "Durable dispatcher lease, device lane and fence takeover",
+      "blockedBy": ["S3-02"]
+    },
+    {
+      "sequence": 6,
+      "id": "S3-06",
+      "name": "ThingsBoard control connector and provider evidence",
+      "blockedBy": ["S3-03", "S3-05"]
+    },
+    {
+      "sequence": 7,
+      "id": "S3-07",
+      "name": "ACK, reported-state verification and unknown-outcome resolution",
+      "blockedBy": ["S3-04", "S3-06"]
+    },
+    {
+      "sequence": 8,
+      "id": "S3-08",
+      "name": "HVAC Web command timeline and approval UX",
+      "blockedBy": ["S3-04", "S3-07"]
+    },
+    {
+      "sequence": 9,
+      "id": "S3-09",
+      "name": "Capacity, failure injection and internal Device canary",
+      "status": "formal-certification-pending",
+      "blockedBy": ["S3-07", "S3-08"],
+      "deliverables": [
+        "100 commands/s 60-minute steady and 1000 commands/s one-minute burst certification envelope",
+        "deterministic crash-point and command-fence regression suite",
+        "offline-verifiable formal attestation validator and evidence bundle",
+        "one-Organization one-Site one-Device LOW-risk canary policy",
+        "future-command-only rollback drill contract"
+      ],
+      "formalCompletionRequires": [
+        "target-environment capacity attestation bound to the repository SHA",
+        "complete crash-point matrix with all zero-tolerance counters at zero",
+        "S2 current-state production certification for the selected internal cohort",
+        "VERIFIED ThingsBoard mapping without enabling public Command routes",
+        "four-hour approved internal Device canary with two distinct owners",
+        "formal evidence bundle and offline checksum verification"
+      ]
+    }
+  ],
+  "hardInvariants": [
+    "arbitrary provider RPC accepted = 0",
+    "old execution fence sends = 0",
+    "REQUEST_COMMITTED automatic retries = 0",
+    "unsafe S2 current-state commands queued = 0",
+    "idempotency key payload conflicts accepted = 0",
+    "Synthetic evidence used as production attestation = 0"
+  ]
+}

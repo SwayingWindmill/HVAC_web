@@ -4,6 +4,8 @@ Status: implementation-ready, production promotion fail-closed
 
 Issue: #71
 
+Historical status: ADR 0005 supersedes this document as the current production rollout authority. The assets below remain reproducible historical evidence for the former Legacy-production assumption; current production promotion follows `docs/operations/go-platform-production-rollout.md` and `deploy/platform/production-rollout.v1.json`.
+
 Machine authorities:
 
 - `deploy/s2/release-gates.v1.json`
