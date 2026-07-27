@@ -11,6 +11,7 @@ const requiredFiles = [
   'services/command-service/cmd/command-service/main.go',
   'services/command-service/cmd/command-service/main_test.go',
   'services/command-service/pkg/commandservice/runtime_http.go',
+  'services/command-service/pkg/commandservice/runtime_http_test.go',
   'services/command-service/pkg/commandservice/connector_evidence.go',
   'services/command-service/pkg/commandservice/grant_use.go',
   'services/command-service/migrations/002_s3_target_runtime.sql',
@@ -113,8 +114,14 @@ if (failures.length === 0) {
   requireText('services/command-service/pkg/commandservice/grant_use.go', 'command_grant_uses');
   requireText('services/command-service/pkg/commandservice/postgres_dispatch.go', 'ClaimDispatchForCohort');
   requireText('services/command-service/pkg/commandservice/postgres_verification.go', 'ClaimVerificationForCohort');
-  requireText('services/command-service/pkg/commandservice/runtime_http.go', 'handler.organizationID, handler.siteID, handler.deviceID');
-  forbidText('services/command-service/pkg/commandservice/runtime_http.go', 'json:"organizationId"');
+  requireText('services/command-service/pkg/commandservice/runtime_http.go', 'handler.dispatchers[identity]');
+  requireText('services/command-service/pkg/commandservice/runtime_http.go', 'handler.verifiers[identity]');
+  requireText('services/command-service/pkg/commandservice/runtime_http.go', 'cohort.OrganizationID, cohort.SiteID, cohort.DeviceID');
+  requireText('services/command-service/pkg/commandservice/runtime_http.go', 'type runtimeClaimRequest struct');
+  requireText('services/command-service/pkg/commandservice/runtime_http.go', 'LeaseOwner   string `json:"leaseOwner"`');
+  requireText('services/command-service/pkg/commandservice/runtime_http.go', 'LeaseSeconds int64  `json:"leaseSeconds"`');
+  requireText('services/command-service/pkg/commandservice/runtime_http_test.go', 'TestRuntimeHTTPRejectsClientSelectedCohortAndCrossCohortResolution');
+  requireText('services/command-service/pkg/commandservice/runtime_http_test.go', 'TestRuntimeHTTPSelectsExactMultiCohortByWorkloadIdentity');
   requireText('services/command-service/migrations/002_s3_target_runtime.sql', 'connector_evidence');
   requireText('services/command-service/migrations/002_s3_target_runtime.sql', 'command_grant_uses');
   requireText('services/command-service/migrations/002_s3_target_runtime.sql', "status = 'VERIFIED'");
@@ -151,6 +158,7 @@ if (failures.length === 0) {
   requireText('deploy/s3/target/workloads/command-service.yaml', 'COMMAND_APPROVED_ORGANIZATION_ID');
   requireText('deploy/s3/target/workloads/command-service.yaml', 'COMMAND_APPROVED_SITE_ID');
   requireText('deploy/s3/target/workloads/command-service.yaml', 'COMMAND_APPROVED_DEVICE_ID');
+  forbidText('deploy/s3/target/workloads/command-service.yaml', 'COMMAND_RUNTIME_COHORTS_FILE');
   requireText('deploy/s3/target/configmaps.yaml', '"mappingStatus": "VERIFIED"');
   requireText('deploy/s3/target/configmaps.yaml', '"providerContract": "THINGSBOARD_CE_4.3.1.3"');
   requireText('deploy/s3/target/configmaps.yaml', '"maximumSetpointDeltaC": 1');

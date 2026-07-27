@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: s3-local-thingsboard-bridge
+  namespace: s3-local
+  annotations:
+    s3.hvac/local-only: "true"
+spec:
+  type: ClusterIP
+  selector: { app: s3-local-thingsboard-bridge }
+  ports:
+    - { name: provider-tls, port: 8448, targetPort: provider-tls }
+    - { name: reported-tls, port: 8449, targetPort: reported-tls }
+    - { name: diagnostics, port: 19091, targetPort: diagnostics }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: s3-local-thingsboard-bridge
+  namespace: s3-local
+  annotations:
+    s3.hvac/local-only: "true"
+    s3.hvac/formal-certification: "false"
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: s3-local-thingsboard-bridge } }
+  template:
+    metadata: { labels: { app: s3-local-thingsboard-bridge } }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: s3-local-thingsboard-bridge
+          image: hvac-s3-local/thingsboard-bridge:dev
+          imagePullPolicy: Never
+          env:
+            - { name: S3_LOCAL_THINGSBOARD_CONFIG_FILE, value: /etc/s3/thingsboard/config.json }
+            - { name: S3_LOCAL_THINGSBOARD_TLS_CERT, value: /var/run/s3/thingsboard/tls.crt }
+            - { name: S3_LOCAL_THINGSBOARD_TLS_KEY, value: /var/run/s3/thingsboard/tls.key }
+            - { name: S3_LOCAL_THINGSBOARD_VERIFIER_CA, value: /var/run/s3/thingsboard/ca.crt }
+          ports:
+            - { name: provider-tls, containerPort: 8448 }
+            - { name: reported-tls, containerPort: 8449 }
+            - { name: diagnostics, containerPort: 19091 }
+          readinessProbe:
+            httpGet: { path: /health/ready, port: diagnostics }
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: { path: /health/live, port: diagnostics }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests: { cpu: 100m, memory: 96Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: bridge-config, mountPath: /etc/s3/thingsboard, readOnly: true }
+            - { name: bridge-pki, mountPath: /var/run/s3/thingsboard, readOnly: true }
+      volumes:
+        - name: bridge-config
+          secret: { secretName: __BRIDGE_CONFIG_RESOURCE__, defaultMode: 288 }
+        - name: bridge-pki
+          secret: { secretName: __BRIDGE_PKI_RESOURCE__, defaultMode: 288 }

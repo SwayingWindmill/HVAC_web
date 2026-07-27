@@ -66,6 +66,19 @@ export interface CreateCommandInput {
   setpointC: number;
 }
 
+const localCommandDeviceSchema = z.object({
+  deviceId: uuidV7Schema,
+  name: z.string().min(1).max(128),
+  type: z.string().min(1).max(64),
+}).strict();
+
+const localCommandDeviceCatalogSchema = z.object({
+  schemaVersion: z.literal(1),
+  devices: z.array(localCommandDeviceSchema).min(1).max(16),
+}).strict();
+
+export type LocalCommandDevice = z.infer<typeof localCommandDeviceSchema>;
+
 export class CommandApiError extends Error {
   constructor(
     readonly status: number,
@@ -169,8 +182,32 @@ async function commandRequest(path: string, init: RequestInit): Promise<Command>
   return commandSchema.parse(payload);
 }
 
+export async function listLocalCommandDevices(signal?: AbortSignal): Promise<LocalCommandDevice[]> {
+  if (API_MODE === 'mock') {
+    return [{ deviceId: mockDeviceId, name: 'Mock HVAC Device', type: 'HVAC' }];
+  }
+  if (!COMMAND_LOCAL_ROUTES_ENABLED) return [];
+  const response = await fetch('/api/v1/local/devices', {
+    method: 'GET',
+    credentials: 'same-origin',
+    signal,
+    headers: { Accept: 'application/json, application/problem+json' },
+  });
+  const payload: unknown = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const problem = problemSchema.parse(payload);
+    throw new CommandApiError(
+      response.status,
+      problem.code ?? 'COMMAND_DEVICE_CATALOG_UNAVAILABLE',
+      problem.detail ?? problem.title ?? '本地设备目录暂时不可用。',
+      problem.retryable ?? false,
+    );
+  }
+  return localCommandDeviceCatalogSchema.parse(payload).devices;
+}
+
 export async function getCommand(commandId: string, signal?: AbortSignal): Promise<Command> {
-  if (!uuidV7Schema.safeParse(commandId).success) {
+  if (!uuidSchema.safeParse(commandId).success) {
     throw new CommandApiError(404, 'RESOURCE_NOT_FOUND', 'Command ID 格式无效。');
   }
   if (API_MODE === 'mock') return structuredClone(ensureMockCommand(commandId));

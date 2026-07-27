@@ -21,6 +21,33 @@ func TestLoadRequiredValueFile(t *testing.T) {
 	}
 }
 
+func TestLoadRuntimeHTTPConfigFromExplicitCohortFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime-cohorts.json")
+	body := `{
+  "schemaVersion": 1,
+  "cohorts": [
+    {
+      "dispatcherSpiffe": "spiffe://hvac.local/command-dispatcher/ahu-01",
+      "verifierSpiffe": "spiffe://hvac.local/command-verifier/ahu-01",
+      "organizationId": "018f3e00-0000-7000-8000-000000000001",
+      "siteId": "018f3e00-1000-7000-8000-000000000001",
+      "deviceId": "018f3e00-3000-7000-8000-000000000001"
+    }
+  ]
+}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("COMMAND_RUNTIME_COHORTS_FILE", path)
+	config, err := loadRuntimeHTTPConfig(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Cohorts) != 1 || config.Cohorts[0].DeviceID != "018f3e00-3000-7000-8000-000000000001" || config.DispatcherSPIFFE != "" {
+		t.Fatalf("config=%#v", config)
+	}
+}
+
 func TestLoadRequiredValueFileRejectsInvalidContentAndSize(t *testing.T) {
 	for _, test := range []struct {
 		name    string

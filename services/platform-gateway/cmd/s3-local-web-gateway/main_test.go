@@ -125,7 +125,7 @@ func testGateway(grantKey, delegationKey *rsa.PrivateKey, client *http.Client, n
 		commandServiceURL:  "https://command.local",
 		organizationID:     testOrganizationID,
 		siteID:             testSiteID,
-		deviceID:           testDeviceID,
+		deviceCatalog:      []localDevice{{DeviceID: testDeviceID, Name: "AHU-01", Type: "AHU"}},
 		principalID:        testPrincipalID,
 		approverID:         testApproverID,
 		csrfToken:          "local-csrf",

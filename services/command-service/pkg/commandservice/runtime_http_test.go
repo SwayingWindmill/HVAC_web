@@ -163,6 +163,54 @@ func TestRuntimeHTTPRejectsWrongWorkloadIdentity(t *testing.T) {
 	}
 }
 
+func TestRuntimeHTTPSelectsExactMultiCohortByWorkloadIdentity(t *testing.T) {
+	secondDevice := "018f3e00-3000-7000-8000-000000000002"
+	stub := &runtimeStoreStub{claimDispatchErr: ErrNoDispatchAvailable, claimVerificationErr: ErrVerificationNotAvailable}
+	handler, err := NewRuntimeHTTPHandler(RuntimeHTTPConfig{
+		Store: stub,
+		Cohorts: []RuntimeCohort{
+			{
+				DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher/ahu-01",
+				VerifierSPIFFE:   "spiffe://hvac.local/command-verifier/ahu-01",
+				OrganizationID:   runtimeTestOrganization,
+				SiteID:           runtimeTestSite,
+				DeviceID:         runtimeTestDevice,
+			},
+			{
+				DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher/fcu-02",
+				VerifierSPIFFE:   "spiffe://hvac.local/command-verifier/fcu-02",
+				OrganizationID:   runtimeTestOrganization,
+				SiteID:           runtimeTestSite,
+				DeviceID:         secondDevice,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dispatch := runtimeRequest(t, http.MethodPost, InternalDispatchClaimPath, `{"leaseOwner":"dispatcher-fcu","leaseSeconds":15}`, "spiffe://hvac.local/command-dispatcher/fcu-02")
+	dispatchRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(dispatchRecorder, dispatch)
+	if dispatchRecorder.Code != http.StatusNoContent || stub.claimedDevice != secondDevice {
+		t.Fatalf("dispatch status=%d claimedDevice=%q body=%s", dispatchRecorder.Code, stub.claimedDevice, dispatchRecorder.Body.String())
+	}
+
+	verification := runtimeRequest(t, http.MethodPost, InternalVerificationClaimPath, `{"leaseOwner":"verifier-ahu","leaseSeconds":15}`, "spiffe://hvac.local/command-verifier/ahu-01")
+	verificationRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(verificationRecorder, verification)
+	if verificationRecorder.Code != http.StatusNoContent || stub.claimedDevice != runtimeTestDevice {
+		t.Fatalf("verification status=%d claimedDevice=%q body=%s", verificationRecorder.Code, stub.claimedDevice, verificationRecorder.Body.String())
+	}
+
+	wrongRole := runtimeRequest(t, http.MethodPost, InternalDispatchClaimPath, `{"leaseOwner":"wrong-role","leaseSeconds":15}`, "spiffe://hvac.local/command-verifier/fcu-02")
+	wrongRoleRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(wrongRoleRecorder, wrongRole)
+	if wrongRoleRecorder.Code != http.StatusForbidden {
+		t.Fatalf("wrong role status=%d body=%s", wrongRoleRecorder.Code, wrongRoleRecorder.Body.String())
+	}
+}
+
 func runtimeTestHandler(t *testing.T, stub RuntimeStore) http.Handler {
 	t.Helper()
 	handler, err := NewRuntimeHTTPHandler(RuntimeHTTPConfig{

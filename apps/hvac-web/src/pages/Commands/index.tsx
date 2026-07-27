@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -11,6 +11,7 @@ import {
   InputNumber,
   Result,
   Row,
+  Select,
   Space,
   Tag,
   Timeline,
@@ -29,6 +30,7 @@ import {
   commandErrorMessage,
   createCommand,
   getCommand,
+  listLocalCommandDevices,
   MOCK_COMMAND_DEVICE_ID,
   MOCK_PENDING_COMMAND_ID,
   type Command,
@@ -202,6 +204,21 @@ export default function Commands() {
   const mayCreate = can(role, 'create', 'command') && routesAvailable;
   const mayApprove = can(role, 'approve', 'command') && routesAvailable;
 
+  const localDevicesQuery = useQuery({
+    queryKey: ['command-local-devices'],
+    queryFn: ({ signal }) => listLocalCommandDevices(signal),
+    enabled: API_MODE === 'mock' || COMMAND_LOCAL_ROUTES_ENABLED,
+    retry: false,
+    staleTime: 30_000,
+  });
+
+  useEffect(() => {
+    const firstDevice = localDevicesQuery.data?.[0]?.deviceId;
+    if (firstDevice && !createForm.getFieldValue('deviceId')) {
+      createForm.setFieldValue('deviceId', firstDevice);
+    }
+  }, [createForm, localDevicesQuery.data]);
+
   const commandQuery = useQuery({
     queryKey: ['command', selectedCommandId],
     queryFn: ({ signal }) => getCommand(selectedCommandId, signal),
@@ -291,7 +308,7 @@ export default function Commands() {
               <Form<CreateFormValues>
                 form={createForm}
                 layout="vertical"
-                initialValues={{ deviceId: API_MODE === 'mock' || COMMAND_LOCAL_ROUTES_ENABLED ? MOCK_COMMAND_DEVICE_ID : '', setpointC: 24 }}
+                initialValues={{ deviceId: API_MODE === 'mock' ? MOCK_COMMAND_DEVICE_ID : '', setpointC: 24 }}
                 onFinish={(values) => createMutation.mutate(values)}
               >
                 <Form.Item
@@ -299,7 +316,20 @@ export default function Commands() {
                   label="Canonical Device ID"
                   rules={[{ required: true, message: '请输入 Device UUIDv7' }]}
                 >
-                  <Input placeholder="Device UUIDv7" autoComplete="off" />
+                  {API_MODE === 'mock' || COMMAND_LOCAL_ROUTES_ENABLED ? (
+                    <Select
+                      loading={localDevicesQuery.isLoading}
+                      placeholder="选择本地虚拟设备"
+                      options={(localDevicesQuery.data ?? []).map((device) => ({
+                        value: device.deviceId,
+                        label: `${device.name} · ${device.type}`,
+                      }))}
+                      optionFilterProp="label"
+                      showSearch
+                    />
+                  ) : (
+                    <Input placeholder="Device UUIDv7" autoComplete="off" />
+                  )}
                 </Form.Item>
                 <Form.Item
                   name="setpointC"

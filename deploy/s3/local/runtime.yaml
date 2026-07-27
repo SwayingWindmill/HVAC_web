@@ -299,6 +299,7 @@ spec:
             - { name: S3_LOCAL_ORGANIZATION_ID, value: 018f3e00-0000-7000-8000-000000000001 }
             - { name: S3_LOCAL_SITE_ID, value: 018f3e00-1000-7000-8000-000000000001 }
             - { name: S3_LOCAL_DEVICE_ID, value: 018f3e00-3000-7000-8000-000000000001 }
+            - { name: S3_LOCAL_DEVICE_CATALOG_FILE, value: /etc/s3/local-devices/device-catalog.json }
             - { name: S3_LOCAL_PRINCIPAL_ID, value: 018f3e00-5000-7000-8000-000000000001 }
             - { name: S3_LOCAL_APPROVER_ID, value: 018f3e00-5000-7000-8000-000000000002 }
             - { name: S3_LOCAL_POLICY_REVISION, value: s3-local-policy-v1 }
@@ -323,6 +324,9 @@ spec:
             capabilities: { drop: ["ALL"] }
           volumeMounts:
             - { name: gateway-pki, mountPath: /var/run/s3-local/gateway, readOnly: true }
+            - { name: device-catalog, mountPath: /etc/s3/local-devices, readOnly: true }
       volumes:
+        - name: device-catalog
+          configMap: { name: s3-local-device-catalog }
         - name: gateway-pki
           secret: { secretName: s3-local-web-gateway-pki, defaultMode: 288 }

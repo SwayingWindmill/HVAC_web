@@ -9,7 +9,7 @@ const statePath = resolve(out, 'web-processes.json');
 const gatewayLogPath = resolve(out, 'web-gateway-port-forward.log');
 const viteLogPath = resolve(out, 'web-vite.log');
 const webURL = 'http://127.0.0.1:5173/commands';
-const gatewayURL = 'http://127.0.0.1:18080/api/v1/health';
+const gatewayURL = 'http://127.0.0.1:18081/api/v1/health';
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -117,14 +117,14 @@ async function start() {
   rmSync(gatewayLogPath, { force: true });
   rmSync(viteLogPath, { force: true });
   const portForwardPID = spawnDetached('bash', [
-    '-lc', 'exec kubectl -n s3-local port-forward service/s3-local-web-gateway 18080:8080 --address 127.0.0.1',
+    '-lc', 'exec kubectl -n s3-local port-forward service/s3-local-web-gateway 18081:8080 --address 127.0.0.1',
   ], {}, gatewayLogPath);
 
   const vitePID = spawnDetached(process.execPath, [
     resolve(root, 'node_modules/vite/bin/vite.js'), 'apps/hvac-web',
     '--config', 'apps/hvac-web/vite.config.ts', '--host', '127.0.0.1', '--port', '5173', '--strictPort',
   ], {
-    PLATFORM_GATEWAY_PROXY_TARGET: 'http://127.0.0.1:18080',
+    PLATFORM_GATEWAY_PROXY_TARGET: 'http://127.0.0.1:18081',
     S0_GATEWAY_ONLY: 'true',
     VITE_API_MODE: 'real',
     VITE_S3_LOCAL_COMMANDS: 'true',

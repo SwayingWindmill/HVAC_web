@@ -8,10 +8,12 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -72,8 +74,6 @@ func main() {
 		os.Exit(1)
 	}
 	gatewaySPIFFE := envOr("COMMAND_GATEWAY_SPIFFE", "spiffe://hvac.local/platform-gateway")
-	dispatcherSPIFFE := envOr("COMMAND_DISPATCHER_SPIFFE", "spiffe://hvac.local/command-dispatcher")
-	verifierSPIFFE := envOr("COMMAND_VERIFIER_SPIFFE", "spiffe://hvac.local/command-verifier")
 
 	commandHandler, err := commandservice.NewHTTPHandler(commandservice.HTTPConfig{
 		Authority:                  store,
@@ -93,14 +93,12 @@ func main() {
 		logger.Error("command_http_configuration_invalid", "error_code", "COMMAND_HTTP_CONFIGURATION_INVALID")
 		os.Exit(1)
 	}
-	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(commandservice.RuntimeHTTPConfig{
-		Store:            store,
-		DispatcherSPIFFE: dispatcherSPIFFE,
-		VerifierSPIFFE:   verifierSPIFFE,
-		OrganizationID:   requiredEnv("COMMAND_APPROVED_ORGANIZATION_ID"),
-		SiteID:           requiredEnv("COMMAND_APPROVED_SITE_ID"),
-		DeviceID:         requiredEnv("COMMAND_APPROVED_DEVICE_ID"),
-	})
+	runtimeConfig, err := loadRuntimeHTTPConfig(store)
+	if err != nil {
+		logger.Error("command_runtime_cohort_load_failed", "error_code", "COMMAND_RUNTIME_COHORT_INVALID")
+		os.Exit(1)
+	}
+	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(runtimeConfig)
 	if err != nil {
 		logger.Error("command_runtime_configuration_invalid", "error_code", "COMMAND_RUNTIME_CONFIGURATION_INVALID")
 		os.Exit(1)
@@ -155,6 +153,47 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("command_service_stopped")
+}
+
+type runtimeCohortDocument struct {
+	SchemaVersion int                            `json:"schemaVersion"`
+	Cohorts       []commandservice.RuntimeCohort `json:"cohorts"`
+}
+
+func loadRuntimeHTTPConfig(store commandservice.RuntimeStore) (commandservice.RuntimeHTTPConfig, error) {
+	path := strings.TrimSpace(os.Getenv("COMMAND_RUNTIME_COHORTS_FILE"))
+	if path == "" {
+		return commandservice.RuntimeHTTPConfig{
+			Store:            store,
+			DispatcherSPIFFE: envOr("COMMAND_DISPATCHER_SPIFFE", "spiffe://hvac.local/command-dispatcher"),
+			VerifierSPIFFE:   envOr("COMMAND_VERIFIER_SPIFFE", "spiffe://hvac.local/command-verifier"),
+			OrganizationID:   requiredEnv("COMMAND_APPROVED_ORGANIZATION_ID"),
+			SiteID:           requiredEnv("COMMAND_APPROVED_SITE_ID"),
+			DeviceID:         requiredEnv("COMMAND_APPROVED_DEVICE_ID"),
+		}, nil
+	}
+	if !filepath.IsAbs(path) {
+		return commandservice.RuntimeHTTPConfig{}, errors.New("runtime cohort path must be absolute")
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Size() <= 0 || info.Size() > 64<<10 {
+		return commandservice.RuntimeHTTPConfig{}, errors.New("runtime cohort file size is invalid")
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return commandservice.RuntimeHTTPConfig{}, err
+	}
+	var document runtimeCohortDocument
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&document); err != nil {
+		return commandservice.RuntimeHTTPConfig{}, errors.New("runtime cohort document is invalid")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) || document.SchemaVersion != 1 || len(document.Cohorts) == 0 {
+		return commandservice.RuntimeHTTPConfig{}, errors.New("runtime cohort document is invalid")
+	}
+	return commandservice.RuntimeHTTPConfig{Store: store, Cohorts: document.Cohorts}, nil
 }
 
 func loadRequiredValueFile(path string, maximumBytes int64) (string, error) {

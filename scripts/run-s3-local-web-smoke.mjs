@@ -5,7 +5,7 @@ import { setTimeout as pause } from 'node:timers/promises';
 const root = resolve(process.cwd());
 const output = resolve(root, 'out/s3-local/web-smoke-report.json');
 const origin = process.env.S3_LOCAL_WEB_ORIGIN ?? 'http://127.0.0.1:5173';
-const deviceID = '018f3e00-3000-7000-8000-000000000001';
+const deviceID = process.env.S3_LOCAL_DEVICE_ID ?? '018f3e00-3000-7000-8000-000000000001';
 
 async function jsonRequest(path, init = {}) {
   const response = await fetch(`${origin}${path}`, {

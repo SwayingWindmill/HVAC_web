@@ -23,6 +23,7 @@ IMAGES=(
   "hvac-s3-local/device-simulator:dev"
   "hvac-s3-local/command-seed:dev"
   "hvac-s3-local/web-gateway:dev"
+  "hvac-s3-local/thingsboard-bridge:dev"
 )
 
 log() { printf '[s3-local] %s\n' "$*"; }
@@ -88,8 +89,16 @@ generate_local_inputs() {
   issue_certificate command-service command-service serverAuth,clientAuth spiffe://hvac.local/command-service \
     command-service command-service.s3-local command-service.s3-local.svc command-service.s3-local.svc.cluster.local
   issue_certificate command-dispatcher command-dispatcher clientAuth spiffe://hvac.local/command-dispatcher
+  issue_certificate command-dispatcher-ahu-01 command-dispatcher-ahu-01 clientAuth spiffe://hvac.local/command-dispatcher/ahu-01
+  issue_certificate command-dispatcher-fcu-02 command-dispatcher-fcu-02 clientAuth spiffe://hvac.local/command-dispatcher/fcu-02
+  issue_certificate command-dispatcher-chiller-03 command-dispatcher-chiller-03 clientAuth spiffe://hvac.local/command-dispatcher/chiller-03
   issue_certificate command-verifier command-verifier clientAuth spiffe://hvac.local/command-verifier
+  issue_certificate command-verifier-ahu-01 command-verifier-ahu-01 clientAuth spiffe://hvac.local/command-verifier/ahu-01
+  issue_certificate command-verifier-fcu-02 command-verifier-fcu-02 clientAuth spiffe://hvac.local/command-verifier/fcu-02
+  issue_certificate command-verifier-chiller-03 command-verifier-chiller-03 clientAuth spiffe://hvac.local/command-verifier/chiller-03
   issue_certificate platform-gateway platform-gateway clientAuth spiffe://hvac.local/platform-gateway
+  issue_certificate thingsboard-bridge s3-local-thingsboard-bridge serverAuth spiffe://hvac.local/s3-local-thingsboard-bridge \
+    s3-local-thingsboard-bridge s3-local-thingsboard-bridge.s3-local s3-local-thingsboard-bridge.s3-local.svc s3-local-thingsboard-bridge.s3-local.svc.cluster.local
   issue_certificate local-device-simulator local-device-simulator serverAuth spiffe://hvac.local/s3-local-device-simulator \
     local-device-simulator local-device-simulator.s3-local local-device-simulator.s3-local.svc local-device-simulator.s3-local.svc.cluster.local
   issue_certificate iam-grant iam-service clientAuth spiffe://hvac.local/iam-service
@@ -121,6 +130,14 @@ generate_local_inputs() {
 }
 JSON
   chmod 0600 "$OUT/provider-value" "$OUT/web-csrf-token" "$OUT/command-service-dsn"
+  cat > "$OUT/device-catalog.json" <<JSON
+{
+  "schemaVersion": 1,
+  "devices": [
+    {"deviceId": "$DEVICE_ID", "name": "Local HVAC Device", "type": "HVAC"}
+  ]
+}
+JSON
   openssl verify -CAfile "$PKI/ca.crt" "$PKI"/*.crt >/dev/null
 }
 
@@ -133,6 +150,7 @@ build_images() {
   docker build -f "$ROOT/deploy/s0/images/go-service.Dockerfile" --build-arg SERVICE_PACKAGE=./services/thingsboard-connector-control/cmd/s3-local-device-simulator -t "${IMAGES[4]}" "$ROOT"
   docker build -f "$ROOT/deploy/s0/images/go-service.Dockerfile" --build-arg SERVICE_PACKAGE=./services/command-service/cmd/s3-local-seed -t "${IMAGES[5]}" "$ROOT"
   docker build -f "$ROOT/deploy/s0/images/go-service.Dockerfile" --build-arg SERVICE_PACKAGE=./services/platform-gateway/cmd/s3-local-web-gateway -t "${IMAGES[6]}" "$ROOT"
+  docker build -f "$ROOT/deploy/s0/images/go-service.Dockerfile" --build-arg SERVICE_PACKAGE=./services/thingsboard-connector-control/cmd/s3-local-thingsboard-bridge -t "${IMAGES[7]}" "$ROOT"
 }
 
 cluster_exists() {
@@ -169,6 +187,8 @@ apply_runtime_inputs() {
   apply_generated approved-cohort.yaml kubectl -n "$NAMESPACE" create configmap s3-local-approved-cohort \
     --from-file=approved-cohort.json="$OUT/approved-cohort.json"
 
+  apply_generated device-catalog.yaml kubectl -n "$NAMESPACE" create configmap s3-local-device-catalog \
+    --from-file=device-catalog.json="$OUT/device-catalog.json"
   apply_generated command-service-pki.yaml kubectl -n "$NAMESPACE" create secret generic s3-local-command-service-pki \
     --from-file=tls.crt="$PKI/command-service.crt" --from-file=tls.key="$PKI/command-service.key" \
     --from-file=ca.crt="$PKI/ca.crt" --from-file=iam-grant.crt="$PKI/iam-grant.crt" \
