@@ -6,6 +6,11 @@ const root = resolve(process.cwd());
 const output = resolve(root, 'out/s3-local/web-smoke-report.json');
 const origin = process.env.S3_LOCAL_WEB_ORIGIN ?? 'http://127.0.0.1:5173';
 const deviceID = process.env.S3_LOCAL_DEVICE_ID ?? '018f3e00-3000-7000-8000-000000000001';
+const maximumTerminalMs = Number(process.env.S3_LOCAL_WEB_MAX_TERMINAL_MS ?? 150_000);
+const pollIntervalMs = 500;
+if (!Number.isFinite(maximumTerminalMs) || maximumTerminalMs < 1_000 || maximumTerminalMs > 300_000) {
+  throw new Error('S3_LOCAL_WEB_MAX_TERMINAL_MS must be between 1000 and 300000');
+}
 
 async function jsonRequest(path, init = {}) {
   const response = await fetch(`${origin}${path}`, {
@@ -28,6 +33,8 @@ if (typeof csrfToken !== 'string' || csrfToken.length < 16) {
   throw new Error('local principal response did not contain a usable CSRF token');
 }
 
+const submittedAt = new Date();
+const submittedAtMs = submittedAt.getTime();
 const created = await jsonRequest('/api/v1/commands', {
   method: 'POST',
   headers: {
@@ -47,18 +54,24 @@ if (typeof created.commandId !== 'string' || created.deviceId !== deviceID) {
 }
 
 let command = created;
-for (let attempt = 0; attempt < 300; attempt += 1) {
+const maximumPollAttempts = Math.ceil(maximumTerminalMs / pollIntervalMs) + 1;
+for (let attempt = 0; attempt < maximumPollAttempts; attempt += 1) {
   command = await jsonRequest(`/api/v1/commands/${encodeURIComponent(created.commandId)}`);
   if (command.status === 'SUCCEEDED') break;
   if (['FAILED', 'REJECTED', 'CANCELLED', 'EXPIRED', 'OUTCOME_UNKNOWN'].includes(command.status)) {
     throw new Error(`local Web Command reached terminal failure ${command.status}: ${JSON.stringify(command)}`);
   }
-  await pause(500);
+  if (Date.now() - submittedAtMs >= maximumTerminalMs) break;
+  await pause(pollIntervalMs);
 }
 
+const terminalDurationMs = Date.now() - submittedAtMs;
 const finalTransition = Array.isArray(command.transitions) ? command.transitions.at(-1) : null;
 if (command.status !== 'SUCCEEDED' || finalTransition?.reason !== 'ACKNOWLEDGED_AND_REPORTED_STATE_VERIFIED') {
-  throw new Error(`local Web Command did not reach SUCCEEDED / VERIFIED: ${JSON.stringify(command)}`);
+  throw new Error(`local Web Command did not reach SUCCEEDED / VERIFIED within ${maximumTerminalMs}ms: ${JSON.stringify(command)}`);
+}
+if (terminalDurationMs > maximumTerminalMs) {
+  throw new Error(`local Web Command terminal latency ${terminalDurationMs}ms exceeded ${maximumTerminalMs}ms`);
 }
 
 const report = {
@@ -71,6 +84,9 @@ const report = {
   commandStatus: command.status,
   verificationReason: finalTransition.reason,
   transitionCount: command.transitions.length,
+  submittedAt: submittedAt.toISOString(),
+  terminalDurationMs,
+  maximumTerminalMs,
   formalCertificationClaim: false,
   completedAt: new Date().toISOString(),
 };

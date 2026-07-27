@@ -181,6 +181,41 @@ func TestPostgresReportedStateMismatchFreezesOutcomeUnknown(t *testing.T) {
 	}
 }
 
+func TestPostgresVerificationLeaseUsesDatabaseTimestampPrecision(t *testing.T) {
+	store, admin, now, cleanup := postgresDispatchFixture(t)
+	defer cleanup()
+	*now = time.Date(2026, 7, 26, 11, 0, 0, 123456789, time.UTC)
+	ctx := t.Context()
+	created, err := store.Submit(ctx, postgresCommandRequest("verification-timestamp-precision", 24))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := store.ClaimDispatch(ctx, commandOrgA, "dispatcher-a", 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ResolveDispatch(ctx, dispatch, commandmodel.ConnectorResult{
+		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "provider-ack-timestamp-precision",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	verification, err := store.ClaimVerification(ctx, commandOrgA, "verifier-a", 15*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verification.LeaseUntil.Nanosecond()%int(time.Microsecond) != 0 {
+		t.Fatalf("verification LeaseUntil was not normalized to PostgreSQL precision: %s", verification.LeaseUntil.Format(time.RFC3339Nano))
+	}
+	*now = now.Add(time.Second)
+	if err := store.ResolveVerification(ctx, verification, commandmodel.VerificationResult{
+		Outcome: commandmodel.VerificationSucceeded, EvidenceID: "s2-timestamp-precision",
+		Reported: postgresReportedState(verification, verification.SetpointC),
+	}); err != nil {
+		t.Fatalf("verification resolution failed after PostgreSQL timestamp round trip: %v", err)
+	}
+	assertDispatchDatabaseState(t, admin, created.Intent.ID, "SUCCEEDED", "VERIFIED", 1, false)
+}
+
 func TestPostgresExpiredReportedStateVerificationFreezesOutcomeUnknown(t *testing.T) {
 	store, admin, now, cleanup := postgresDispatchFixture(t)
 	defer cleanup()

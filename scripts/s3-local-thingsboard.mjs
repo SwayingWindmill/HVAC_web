@@ -150,7 +150,9 @@ function startWeb() {
 function smoke(slug) {
   const deviceID = deviceIDs[slug];
   if (!deviceID) throw new Error(`unknown device ${slug}`);
-  run(process.execPath, ['scripts/run-s3-local-web-smoke.mjs'], { env: { S3_LOCAL_DEVICE_ID: deviceID } });
+  run(process.execPath, ['scripts/run-s3-local-web-smoke.mjs'], {
+    env: { S3_LOCAL_DEVICE_ID: deviceID, S3_LOCAL_WEB_MAX_TERMINAL_MS: '15000' },
+  });
   copyFileSync(resolve(root, 'out/s3-local/web-smoke-report.json'), resolve(out, `web-smoke-${slug}.json`));
 }
 

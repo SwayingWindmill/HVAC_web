@@ -12,6 +12,8 @@ const requiredFiles = [
   'services/command-service/cmd/command-service/main_test.go',
   'services/command-service/pkg/commandservice/runtime_http.go',
   'services/command-service/pkg/commandservice/runtime_http_test.go',
+  'services/command-service/pkg/commandservice/postgres_verification.go',
+  'services/command-service/pkg/commandservice/postgres_dispatch_integration_test.go',
   'services/command-service/pkg/commandservice/connector_evidence.go',
   'services/command-service/pkg/commandservice/grant_use.go',
   'services/command-service/migrations/002_s3_target_runtime.sql',
@@ -122,6 +124,8 @@ if (failures.length === 0) {
   requireText('services/command-service/pkg/commandservice/runtime_http.go', 'LeaseSeconds int64  `json:"leaseSeconds"`');
   requireText('services/command-service/pkg/commandservice/runtime_http_test.go', 'TestRuntimeHTTPRejectsClientSelectedCohortAndCrossCohortResolution');
   requireText('services/command-service/pkg/commandservice/runtime_http_test.go', 'TestRuntimeHTTPSelectsExactMultiCohortByWorkloadIdentity');
+  requireText('services/command-service/pkg/commandservice/postgres_verification.go', 'Truncate(time.Microsecond)');
+  requireText('services/command-service/pkg/commandservice/postgres_dispatch_integration_test.go', 'TestPostgresVerificationLeaseUsesDatabaseTimestampPrecision');
   requireText('services/command-service/migrations/002_s3_target_runtime.sql', 'connector_evidence');
   requireText('services/command-service/migrations/002_s3_target_runtime.sql', 'command_grant_uses');
   requireText('services/command-service/migrations/002_s3_target_runtime.sql', "status = 'VERIFIED'");

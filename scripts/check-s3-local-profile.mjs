@@ -137,6 +137,8 @@ requireMatch(webManager, /formalCertificationClaim:\s*false/, 'Web process claim
 requireMatch(webSmoke, /\/api\/v1\/principal/, 'same-origin principal preflight');
 requireMatch(webSmoke, /\/api\/v1\/commands/, 'same-origin Command submission');
 requireMatch(webSmoke, /SUCCEEDED/, 'Web smoke terminal status');
+requireMatch(webSmoke, /S3_LOCAL_WEB_MAX_TERMINAL_MS/, 'configurable Web smoke terminal ceiling');
+requireMatch(webSmoke, /terminalDurationMs/, 'Web smoke terminal latency evidence');
 requireMatch(webSmoke, /formalCertificationClaim:\s*false/, 'Web smoke claim denial');
 
 requireMatch(readme, /http:\/\/127\.0\.0\.1:5173\/commands/, 'local Web URL documentation');
@@ -161,6 +163,7 @@ requireMatch(thingsBoardRenderer, /command-dispatcher-\$\{device\.slug\}/, 'per-
 requireMatch(thingsBoardRenderer, /command-verifier-\$\{device\.slug\}/, 'per-Device Verifier rendering');
 requireMatch(thingsBoardManager, /127\.0\.0\.1:18080/, 'ThingsBoard manager loopback endpoint');
 requireMatch(thingsBoardManager, /COMMAND_RUNTIME_COHORTS_FILE/, 'multi-Cohort Command Runtime wiring');
+requireMatch(thingsBoardManager, /S3_LOCAL_WEB_MAX_TERMINAL_MS:\s*'15000'/, 'ThingsBoard 15-second terminal latency gate');
 forbidMatch(thingsBoardProvisioner, /formalCertificationClaim:\s*true/, 'ThingsBoard formal certification claim');
 
 requireMatch(commandServiceMain, /COMMAND_RUNTIME_COHORTS_FILE/, 'Command Service multi-Cohort file gate');
@@ -172,6 +175,8 @@ requireMatch(commandRuntimeTests, /TestRuntimeHTTPSelectsExactMultiCohortByWorkl
 requireMatch(thingsBoardReadme, /http:\/\/127\.0\.0\.1:18080/, 'ThingsBoard UI documentation');
 requireMatch(thingsBoardReadme, /http:\/\/127\.0\.0\.1:5173\/commands/, 'ThingsBoard HVAC Web documentation');
 requireMatch(thingsBoardReadme, /127\.0\.0\.1:18081/, 'Gateway internal port documentation');
+requireMatch(thingsBoardReadme, /15-second submit-to-`SUCCEEDED \/ VERIFIED` ceiling/, 'ThingsBoard local terminal latency documentation');
+requireMatch(thingsBoardReadme, /terminalDurationMs/, 'ThingsBoard terminal latency evidence documentation');
 requireMatch(thingsBoardReadme, /does not produce formal S3 certification evidence/, 'ThingsBoard certification boundary documentation');
 
 console.log(`S3 local profile check passed: files=${requiredFiles.length}; localImages=${localImageCount}; virtualDevices=3; publicRoutes=0; web=port-forward-only; formalClaim=false`);

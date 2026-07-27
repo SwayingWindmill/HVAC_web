@@ -21,4 +21,6 @@ node scripts/s3-local-thingsboard.mjs smoke chiller-03
 node scripts/s3-local-thingsboard.mjs down
 ```
 
+Each device Smoke enforces a 15-second submit-to-`SUCCEEDED / VERIFIED` ceiling and records `terminalDurationMs` in `out/s3-local-thingsboard/web-smoke-<device>.json`. This is a local integration performance gate, not a production SLO.
+
 This is a local integration profile only. It does not produce formal S3 certification evidence and does not enable production traffic.

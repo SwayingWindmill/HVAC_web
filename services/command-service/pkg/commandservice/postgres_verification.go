@@ -95,7 +95,7 @@ LIMIT 1
 		return commandmodel.VerificationEnvelope{}, fmt.Errorf("select acknowledged verification work: %w", err)
 	}
 	envelope.Capability = commandmodel.Capability(capability)
-	leaseUntil := now.Add(leaseFor)
+	leaseUntil := now.Add(leaseFor).UTC().Truncate(time.Microsecond)
 	if envelope.VerificationDeadline.Before(leaseUntil) {
 		leaseUntil = envelope.VerificationDeadline
 	}
