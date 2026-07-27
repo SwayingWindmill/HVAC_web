@@ -92,6 +92,10 @@ export function collectRealDependencyGraph({ entry, tsconfig, sourceRoot }) {
     for (const moduleSpecifier of discovered.specifiers) {
       const stylePath = resolveStyleImport(moduleSpecifier.value, absolute, absoluteSourceRoot);
       if (stylePath) {
+        if (!fs.existsSync(stylePath)) {
+          unresolved.push({ from: absolute, specifier: moduleSpecifier.value, dynamic: moduleSpecifier.dynamic });
+          continue;
+        }
         edges.push({ from: absolute, to: stylePath, specifier: moduleSpecifier.value, dynamic: moduleSpecifier.dynamic });
         continue;
       }
@@ -141,7 +145,13 @@ export const REAL_FORBIDDEN_PATH_RULES = [
 
 export function evaluateRealDependencyGraph(graph, rules = REAL_FORBIDDEN_PATH_RULES) {
   const violations = [];
-  for (const filename of graph.files) {
+  const reachableLocalPaths = new Set([
+    ...graph.files,
+    ...graph.edges
+      .map((edge) => edge.to)
+      .filter((filename) => path.resolve(filename).startsWith(graph.sourceRoot + path.sep)),
+  ]);
+  for (const filename of reachableLocalPaths) {
     const normalized = normalizePath(filename);
     for (const rule of rules) {
       if (rule.pattern.test(normalized)) violations.push({ rule: rule.id, file: normalized });

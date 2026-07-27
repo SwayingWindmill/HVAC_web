@@ -53,12 +53,22 @@ test('rejects a Real graph that reaches Demo modules', () => {
   fs.rmSync(subject.root, { recursive: true, force: true });
 });
 
+test('rejects Demo styles reached from the Real graph', () => {
+  const subject = fixture({
+    'src/real/main.ts': "import '@/demo/marker.css';",
+    'src/demo/marker.css': '.demo { display: block; }',
+  });
+  const violations = evaluateRealDependencyGraph(subject.graph());
+  assert.ok(violations.some((violation) => violation.rule === 'demo-entry'));
+  fs.rmSync(subject.root, { recursive: true, force: true });
+});
+
 test('rejects non-literal dynamic imports and unresolved local imports', () => {
   const subject = fixture({
-    'src/real/main.ts': "const path = './late'; import(path); import('./missing');",
+    'src/real/main.ts': "const path = './late'; import(path); import('./missing'); import('./missing.css');",
   });
   const violations = evaluateRealDependencyGraph(subject.graph());
   assert.ok(violations.some((violation) => violation.rule === 'non-literal-dynamic-import'));
-  assert.ok(violations.some((violation) => violation.rule === 'unresolved-local-import'));
+  assert.equal(violations.filter((violation) => violation.rule === 'unresolved-local-import').length, 2);
   fs.rmSync(subject.root, { recursive: true, force: true });
 });

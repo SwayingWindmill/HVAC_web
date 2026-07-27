@@ -5,10 +5,14 @@ const workspaceRoot = process.cwd();
 const realBundleRoot = path.join(workspaceRoot, 'apps', 'hvac-web', 'dist', 'real');
 const demoBundleRoot = path.join(workspaceRoot, 'apps', 'hvac-web', 'dist', 'demo');
 const outputPath = path.join(workspaceRoot, 'out', 'rms-01', 'build-artifact-audit.json');
+const configuredBuildId = process.env.HVAC_WEB_BUILD_ID?.trim();
+const realBuildId = configuredBuildId || 'real-local';
+const demoBuildId = configuredBuildId || 'demo-local';
 
 const realRequiredMarkers = [
   'HVAC_WEB_REAL_GRAPH_V1',
   'REAL MODE · AUTHORITATIVE SHELL',
+  realBuildId,
 ];
 
 const realForbiddenMarkers = [
@@ -25,7 +29,7 @@ const realForbiddenMarkers = [
 
 const demoRequiredMarkers = [
   'DEMO MODE · 非权威演示数据',
-  'demo-local',
+  demoBuildId,
 ];
 
 function walk(directory) {
