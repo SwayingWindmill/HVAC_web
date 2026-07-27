@@ -139,3 +139,11 @@ A side-effect-free comparison of Legacy and S2 read results used only to produce
 ## Rollout Cohort
 
 A deterministic set of authorized callers or resources assigned to one route-owner revision during a phased release. A Cohort changes owner only through an explicit promotion or rollback decision; it never chooses a per-request fallback.
+
+## Real Mode
+
+The HVAC Web operating mode in which every displayed business fact comes from an authoritative platform API or an explicitly defined derived read model. Missing, unavailable or unauthorized capabilities remain visibly unavailable; Real Mode never substitutes Mock, Legacy or fabricated values.
+
+## Demo Mode
+
+A separately identified, non-authoritative presentation mode that may use deterministic fixture data for product demonstration. Demo Mode must be visibly distinguishable from Real Mode and its values, actions and state transitions must never be presented as production facts or silently mixed into Real Mode.
