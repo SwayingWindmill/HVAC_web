@@ -3,8 +3,13 @@ import { API_MODE } from './config';
 import { createPlatformGatewayClient } from './generated/platformGateway.gen';
 
 export const COMMAND_PUBLIC_ROUTES_ENABLED = false as const;
+export const COMMAND_LOCAL_ROUTES_ENABLED = API_MODE === 'real'
+  && import.meta.env.DEV
+  && (import.meta.env.VITE_S3_LOCAL_COMMANDS as string | undefined) === 'true';
+export const COMMAND_ROUTES_AVAILABLE = COMMAND_PUBLIC_ROUTES_ENABLED || COMMAND_LOCAL_ROUTES_ENABLED;
 
-const uuidV7Schema = z.string().uuid().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+const uuidSchema = z.string().uuid();
+const uuidV7Schema = uuidSchema.regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 
 export const commandStatusSchema = z.enum([
   'SUBMITTED', 'VALIDATING', 'AWAITING_APPROVAL', 'APPROVED', 'QUEUED', 'DISPATCHING',
@@ -24,7 +29,7 @@ export const commandTransitionSchema = z.object({
 
 export const commandSchema = z.object({
   schemaVersion: z.literal(1),
-  commandId: uuidV7Schema,
+  commandId: uuidSchema,
   deviceId: uuidV7Schema,
   capability: z.literal('SET_TEMPERATURE_SETPOINT'),
   capabilityRevision: z.literal('capability:set-temperature-setpoint:v1'),
@@ -169,7 +174,7 @@ export async function getCommand(commandId: string, signal?: AbortSignal): Promi
     throw new CommandApiError(404, 'RESOURCE_NOT_FOUND', 'Command ID 格式无效。');
   }
   if (API_MODE === 'mock') return structuredClone(ensureMockCommand(commandId));
-  if (!COMMAND_PUBLIC_ROUTES_ENABLED) {
+  if (!COMMAND_ROUTES_AVAILABLE) {
     throw new CommandApiError(503, 'COMMAND_ROUTE_DISABLED', 'Command 控制路由已登记，但尚未启用生产流量。');
   }
   return commandRequest(`/api/v1/commands/${encodeURIComponent(commandId)}`, { method: 'GET', signal });
@@ -211,7 +216,7 @@ export async function createCommand(input: CreateCommandInput): Promise<Command>
     mockCommands.set(commandId, command);
     return structuredClone(command);
   }
-  if (!COMMAND_PUBLIC_ROUTES_ENABLED) {
+  if (!COMMAND_ROUTES_AVAILABLE) {
     throw new CommandApiError(503, 'COMMAND_ROUTE_DISABLED', 'Command 控制路由已登记，但尚未启用生产流量。');
   }
   const csrf = await csrfCapability();
@@ -254,7 +259,7 @@ export async function approveCommand(commandId: string): Promise<Command> {
     mockCommands.set(commandId, approved);
     return structuredClone(approved);
   }
-  if (!COMMAND_PUBLIC_ROUTES_ENABLED) {
+  if (!COMMAND_ROUTES_AVAILABLE) {
     throw new CommandApiError(503, 'COMMAND_ROUTE_DISABLED', 'Command 控制路由已登记，但尚未启用生产流量。');
   }
   const csrf = await csrfCapability();

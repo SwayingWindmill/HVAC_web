@@ -22,6 +22,7 @@ IMAGES=(
   "hvac-s3-local/command-migrator:dev"
   "hvac-s3-local/device-simulator:dev"
   "hvac-s3-local/command-seed:dev"
+  "hvac-s3-local/web-gateway:dev"
 )
 
 log() { printf '[s3-local] %s\n' "$*"; }
@@ -88,12 +89,14 @@ generate_local_inputs() {
     command-service command-service.s3-local command-service.s3-local.svc command-service.s3-local.svc.cluster.local
   issue_certificate command-dispatcher command-dispatcher clientAuth spiffe://hvac.local/command-dispatcher
   issue_certificate command-verifier command-verifier clientAuth spiffe://hvac.local/command-verifier
+  issue_certificate platform-gateway platform-gateway clientAuth spiffe://hvac.local/platform-gateway
   issue_certificate local-device-simulator local-device-simulator serverAuth spiffe://hvac.local/s3-local-device-simulator \
     local-device-simulator local-device-simulator.s3-local local-device-simulator.s3-local.svc local-device-simulator.s3-local.svc.cluster.local
   issue_certificate iam-grant iam-service clientAuth spiffe://hvac.local/iam-service
   issue_certificate gateway-delegation platform-gateway clientAuth spiffe://hvac.local/platform-gateway
 
   openssl rand -hex 24 > "$OUT/provider-value"
+  openssl rand -hex 24 > "$OUT/web-csrf-token"
   printf '%s\n' "postgres://s3_command_service:s3-command-service-local-only@postgres.s3-local.svc.cluster.local:5432/hvac_s3?sslmode=disable" > "$OUT/command-service-dsn"
   local opaque_scheme="se""cret"
   cat > "$OUT/approved-cohort.json" <<JSON
@@ -117,7 +120,7 @@ generate_local_inputs() {
   "credentialReference": "$opaque_scheme://s3-local/provider-value"
 }
 JSON
-  chmod 0600 "$OUT/provider-value" "$OUT/command-service-dsn"
+  chmod 0600 "$OUT/provider-value" "$OUT/web-csrf-token" "$OUT/command-service-dsn"
   openssl verify -CAfile "$PKI/ca.crt" "$PKI"/*.crt >/dev/null
 }
 
@@ -129,6 +132,7 @@ build_images() {
   docker build -f "$ROOT/deploy/s3/images/command-migrator.Dockerfile" -t "${IMAGES[3]}" "$ROOT"
   docker build -f "$ROOT/deploy/s0/images/go-service.Dockerfile" --build-arg SERVICE_PACKAGE=./services/thingsboard-connector-control/cmd/s3-local-device-simulator -t "${IMAGES[4]}" "$ROOT"
   docker build -f "$ROOT/deploy/s0/images/go-service.Dockerfile" --build-arg SERVICE_PACKAGE=./services/command-service/cmd/s3-local-seed -t "${IMAGES[5]}" "$ROOT"
+  docker build -f "$ROOT/deploy/s0/images/go-service.Dockerfile" --build-arg SERVICE_PACKAGE=./services/platform-gateway/cmd/s3-local-web-gateway -t "${IMAGES[6]}" "$ROOT"
 }
 
 cluster_exists() {
@@ -173,6 +177,10 @@ apply_runtime_inputs() {
     --from-file=tls.crt="$PKI/command-dispatcher.crt" --from-file=tls.key="$PKI/command-dispatcher.key" --from-file=ca.crt="$PKI/ca.crt"
   apply_generated verifier-pki.yaml kubectl -n "$NAMESPACE" create secret generic s3-local-verifier-pki \
     --from-file=tls.crt="$PKI/command-verifier.crt" --from-file=tls.key="$PKI/command-verifier.key" --from-file=ca.crt="$PKI/ca.crt"
+  apply_generated web-gateway-pki.yaml kubectl -n "$NAMESPACE" create secret generic s3-local-web-gateway-pki \
+    --from-file=tls.crt="$PKI/platform-gateway.crt" --from-file=tls.key="$PKI/platform-gateway.key" --from-file=ca.crt="$PKI/ca.crt" \
+    --from-file=command-grant.key="$PKI/iam-grant.key" --from-file=command-delegation.key="$PKI/gateway-delegation.key" \
+    --from-file=csrf-token="$OUT/web-csrf-token"
   apply_generated simulator-pki.yaml kubectl -n "$NAMESPACE" create secret generic s3-local-simulator-pki \
     --from-file=tls.crt="$PKI/local-device-simulator.crt" --from-file=tls.key="$PKI/local-device-simulator.key" --from-file=ca.crt="$PKI/ca.crt"
   apply_generated database.yaml kubectl -n "$NAMESPACE" create secret generic s3-local-database \
@@ -188,6 +196,7 @@ deploy_runtime() {
 
   log "deploying PostgreSQL"
   kubectl apply -f "$ROOT/deploy/s3/local/postgres.yaml" >/dev/null
+  kubectl -n "$NAMESPACE" rollout restart deployment/postgres >/dev/null
   kubectl -n "$NAMESPACE" rollout status deployment/postgres --timeout=180s
 
   log "running command migrations"
@@ -200,9 +209,9 @@ deploy_runtime() {
 
   log "deploying command runtime and local device simulator"
   kubectl apply -f "$ROOT/deploy/s3/local/runtime.yaml" >/dev/null
-  kubectl -n "$NAMESPACE" rollout restart deployment/local-device-simulator deployment/command-service deployment/command-dispatcher deployment/command-verifier >/dev/null
+  kubectl -n "$NAMESPACE" rollout restart deployment/local-device-simulator deployment/command-service deployment/command-dispatcher deployment/command-verifier deployment/s3-local-web-gateway >/dev/null
   local deployment
-  for deployment in local-device-simulator command-service command-dispatcher command-verifier; do
+  for deployment in local-device-simulator command-service command-dispatcher command-verifier s3-local-web-gateway; do
     if ! kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=180s; then
       kubectl -n "$NAMESPACE" describe "deployment/$deployment" || true
       kubectl -n "$NAMESPACE" logs "deployment/$deployment" --all-containers=true --tail=100 || true

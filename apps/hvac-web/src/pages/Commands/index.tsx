@@ -24,7 +24,8 @@ import { useUi } from '@/store/ui';
 import { API_MODE } from '@/api/config';
 import {
   approveCommand,
-  COMMAND_PUBLIC_ROUTES_ENABLED,
+  COMMAND_LOCAL_ROUTES_ENABLED,
+  COMMAND_ROUTES_AVAILABLE,
   commandErrorMessage,
   createCommand,
   getCommand,
@@ -75,6 +76,10 @@ const RISK_COLOR: Record<CommandRisk, string> = {
   MEDIUM: 'gold',
   HIGH: 'red',
 };
+
+const TERMINAL_STATUSES = new Set<CommandStatus>([
+  'SUCCEEDED', 'FAILED', 'REJECTED', 'CANCELLED', 'EXPIRED', 'OUTCOME_UNKNOWN',
+]);
 
 const REASON_LABEL: Record<string, string> = {
   COMMAND_SUBMITTED: '用户提交 Canonical Command Intent',
@@ -192,7 +197,7 @@ export default function Commands() {
   const [createForm] = Form.useForm<CreateFormValues>();
   const [lookupForm] = Form.useForm<LookupFormValues>();
   const [actionMessage, setActionMessage] = useState<string | null>(null);
-  const routesAvailable = API_MODE === 'mock' || COMMAND_PUBLIC_ROUTES_ENABLED;
+  const routesAvailable = API_MODE === 'mock' || COMMAND_ROUTES_AVAILABLE;
   const selectedCommandId = commandId ?? (API_MODE === 'mock' ? MOCK_PENDING_COMMAND_ID : '');
   const mayCreate = can(role, 'create', 'command') && routesAvailable;
   const mayApprove = can(role, 'approve', 'command') && routesAvailable;
@@ -202,6 +207,10 @@ export default function Commands() {
     queryFn: ({ signal }) => getCommand(selectedCommandId, signal),
     enabled: Boolean(selectedCommandId) && routesAvailable,
     retry: false,
+    refetchInterval: (query) => {
+      const command = query.state.data;
+      return command && !TERMINAL_STATUSES.has(command.status) ? 1000 : false;
+    },
   });
 
   const createMutation = useMutation({
@@ -234,6 +243,16 @@ export default function Commands() {
         />
       );
     }
+    if (COMMAND_LOCAL_ROUTES_ENABLED) {
+      return (
+        <Alert
+          type="success"
+          showIcon
+          message="S3 本地集成环境"
+          description="当前页面连接 kind 集群中的本地 Gateway、Command Runtime 与设备模拟器。操作会产生本地设备副作用，但不会访问生产设备，也不构成正式认证证据。"
+        />
+      );
+    }
     return (
       <Alert
         type="warning"
@@ -247,7 +266,11 @@ export default function Commands() {
   return (
     <PageScaffold
       title={<Space><ControlOutlined />设备控制</Space>}
-      extra={<Tag color={routesAvailable ? 'blue' : 'default'}>{API_MODE === 'mock' ? 'MOCK / 无设备副作用' : 'PRODUCTION DISABLED'}</Tag>}
+      extra={(
+        <Tag color={COMMAND_LOCAL_ROUTES_ENABLED ? 'green' : routesAvailable ? 'blue' : 'default'}>
+          {API_MODE === 'mock' ? 'MOCK / 无设备副作用' : COMMAND_LOCAL_ROUTES_ENABLED ? 'LOCAL / KIND' : 'PRODUCTION DISABLED'}
+        </Tag>
+      )}
       className="commands-page"
     >
       <Space direction="vertical" size={16} className="commands-page-stack">
@@ -268,7 +291,7 @@ export default function Commands() {
               <Form<CreateFormValues>
                 form={createForm}
                 layout="vertical"
-                initialValues={{ deviceId: API_MODE === 'mock' ? MOCK_COMMAND_DEVICE_ID : '', setpointC: 24 }}
+                initialValues={{ deviceId: API_MODE === 'mock' || COMMAND_LOCAL_ROUTES_ENABLED ? MOCK_COMMAND_DEVICE_ID : '', setpointC: 24 }}
                 onFinish={(values) => createMutation.mutate(values)}
               >
                 <Form.Item
@@ -305,7 +328,7 @@ export default function Commands() {
                 onFinish={({ commandId: lookupId }) => navigate(`/commands/${lookupId.trim()}`)}
               >
                 <Form.Item name="commandId" rules={[{ required: true, message: '请输入 Command ID' }]}>
-                  <Input prefix={<SearchOutlined />} placeholder="Command UUIDv7" autoComplete="off" />
+                  <Input prefix={<SearchOutlined />} placeholder="Command UUID" autoComplete="off" />
                 </Form.Item>
                 <Button htmlType="submit" block disabled={!routesAvailable}>打开 Command</Button>
               </Form>
