@@ -127,7 +127,7 @@
     "preview:real": "vite preview apps/hvac-web --config apps/hvac-web/vite.real.config.ts",
     "rms:real:graph": "node scripts/check-rms-real-build-graph.mjs",
     "rms:real:bundle": "node scripts/check-rms-real-bundle.mjs",
-    "test:rms-real-build-audit": "node --test scripts/test-rms-real-build-audit.mjs scripts/test-rms-real-runtime-config.mjs",
+    "test:rms-real-build-audit": "node --test scripts/test-rms-real-build-audit.mjs scripts/test-rms-real-runtime-config.mjs scripts/test-rms-vite-config.mjs",
     "rms:ticket-01": "npm run test:rms-real-build-audit && npm run rms:real:graph && npm run build:real && npm run build:demo && npm run rms:real:bundle",
     "lint": "tsc -p apps/hvac-web/tsconfig.json --noEmit",
     "audit:ui": "node scripts/run-browser-audit.mjs scripts/ui-audit.mjs",

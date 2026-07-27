@@ -65,7 +65,7 @@ test('rejects Demo styles reached from the Real graph', () => {
 
 test('rejects non-literal dynamic imports and unresolved local imports', () => {
   const subject = fixture({
-    'src/real/main.ts': "const path = './late'; import(path); import('./missing'); import('./missing.css');",
+    'src/real/main.ts': "const path = './late'; import(path); import('./missing'); import('./missing.css'); import.meta.glob('../demo/*.ts');",
   });
   const violations = evaluateRealDependencyGraph(subject.graph());
   assert.ok(violations.some((violation) => violation.rule === 'non-literal-dynamic-import'));

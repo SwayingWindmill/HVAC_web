@@ -8,6 +8,7 @@ export type HvacWebBuildTarget = 'demo' | 'real';
 const aiRuntimeTarget = process.env.AI_RUNTIME_PROXY_TARGET || 'http://127.0.0.1:3001';
 const platformGatewayTarget = process.env.PLATFORM_GATEWAY_PROXY_TARGET || 'http://127.0.0.1:8080';
 const legacyApiTarget = process.env.LEGACY_API_PROXY_TARGET || 'http://localhost:3000';
+const s0GatewayOnly = process.env.S0_GATEWAY_ONLY === 'true';
 const viteTLSCert = process.env.VITE_TLS_CERT;
 const viteTLSKey = process.env.VITE_TLS_KEY;
 const https = viteTLSCert && viteTLSKey ? { cert: readFileSync(viteTLSCert), key: readFileSync(viteTLSKey) } : undefined;
@@ -48,6 +49,12 @@ function entryGraphPlugin(target: HvacWebBuildTarget) {
 }
 
 function demoProxy() {
+  if (s0GatewayOnly) {
+    return {
+      '/api/v1': { target: platformGatewayTarget, changeOrigin: true },
+    };
+  }
+
   return {
     '/api/v1/health': { target: platformGatewayTarget, changeOrigin: true },
     '/api/v1/version': { target: platformGatewayTarget, changeOrigin: true },

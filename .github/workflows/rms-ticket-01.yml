@@ -15,6 +15,7 @@ on:
       - 'scripts/rms-real-build-audit-lib.mjs'
       - 'scripts/test-rms-real-build-audit.mjs'
       - 'scripts/test-rms-real-runtime-config.mjs'
+      - 'scripts/test-rms-vite-config.mjs'
   push:
     branches: [main]
     paths:
@@ -30,6 +31,7 @@ on:
       - 'scripts/rms-real-build-audit-lib.mjs'
       - 'scripts/test-rms-real-build-audit.mjs'
       - 'scripts/test-rms-real-runtime-config.mjs'
+      - 'scripts/test-rms-vite-config.mjs'
 
 permissions:
   contents: read

@@ -39,6 +39,15 @@ function collectModuleSpecifiers(sourceFile) {
         unknownDynamicImports.push(sourceFile.fileName);
       }
     }
+    if (
+      ts.isCallExpression(node)
+      && ts.isPropertyAccessExpression(node.expression)
+      && (node.expression.name.text === 'glob' || node.expression.name.text === 'globEager')
+      && ts.isMetaProperty(node.expression.expression)
+      && node.expression.expression.keywordToken === ts.SyntaxKind.ImportKeyword
+    ) {
+      unknownDynamicImports.push(sourceFile.fileName);
+    }
     ts.forEachChild(node, visit);
   }
 
