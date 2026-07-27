@@ -1,0 +1,247 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: command-service
+  namespace: s3-local
+spec:
+  type: ClusterIP
+  selector: { app: command-service }
+  ports:
+    - { name: https, port: 8447, targetPort: https }
+    - { name: diagnostics, port: 19087, targetPort: diagnostics }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: local-device-simulator
+  namespace: s3-local
+spec:
+  type: ClusterIP
+  selector: { app: local-device-simulator }
+  ports:
+    - { name: provider-https, port: 8448, targetPort: provider-https }
+    - { name: reported-https, port: 8449, targetPort: reported-https }
+    - { name: diagnostics, port: 19090, targetPort: diagnostics }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: local-device-simulator
+  namespace: s3-local
+  annotations:
+    s3.hvac/local-only: "true"
+    s3.hvac/formal-certification: "false"
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: local-device-simulator } }
+  template:
+    metadata: { labels: { app: local-device-simulator } }
+    spec:
+      automountServiceAccountToken: false
+      securityContext: &podSecurity
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: local-device-simulator
+          image: hvac-s3-local/device-simulator:dev
+          imagePullPolicy: Never
+          env:
+            - { name: S3_LOCAL_SIMULATOR_TLS_CERT, value: /var/run/s3-local/pki/tls.crt }
+            - { name: S3_LOCAL_SIMULATOR_TLS_KEY, value: /var/run/s3-local/pki/tls.key }
+            - { name: S3_LOCAL_SIMULATOR_VERIFIER_CA, value: /var/run/s3-local/pki/ca.crt }
+            - { name: S3_LOCAL_PROVIDER_CREDENTIAL_FILE, value: /var/run/s3-local/provider/value }
+            - { name: S3_LOCAL_ORGANIZATION_ID, value: 018f3e00-0000-7000-8000-000000000001 }
+            - { name: S3_LOCAL_SITE_ID, value: 018f3e00-1000-7000-8000-000000000001 }
+            - { name: S3_LOCAL_DEVICE_ID, value: 018f3e00-3000-7000-8000-000000000001 }
+            - { name: S3_LOCAL_EXTERNAL_DEVICE_ID, value: local-device-1 }
+            - { name: S3_LOCAL_PROVIDER_METHOD, value: setTemperatureSetpoint }
+            - { name: S3_LOCAL_REPORTED_STATE_KEY, value: temperatureSetpointC }
+          ports:
+            - { name: provider-https, containerPort: 8448 }
+            - { name: reported-https, containerPort: 8449 }
+            - { name: diagnostics, containerPort: 19090 }
+          readinessProbe: { httpGet: { path: /health/ready, port: diagnostics }, periodSeconds: 2, timeoutSeconds: 2, failureThreshold: 30 }
+          livenessProbe: { httpGet: { path: /health/live, port: diagnostics }, initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 2 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          securityContext: &containerSecurity
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: pki, mountPath: /var/run/s3-local/pki, readOnly: true }
+            - { name: provider-value, mountPath: /var/run/s3-local/provider, readOnly: true }
+      volumes:
+        - name: pki
+          secret: { secretName: s3-local-simulator-pki, defaultMode: 288 }
+        - name: provider-value
+          secret: { secretName: s3-local-provider-value, defaultMode: 288 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: command-service
+  namespace: s3-local
+  annotations:
+    s3.hvac/local-only: "true"
+    s3.hvac/public-route: disabled
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: command-service } }
+  template:
+    metadata: { labels: { app: command-service } }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: command-service
+          image: hvac-s3-local/command-service:dev
+          imagePullPolicy: Never
+          env:
+            - { name: COMMAND_SERVICE_ADDR, value: ":8447" }
+            - { name: COMMAND_DIAGNOSTICS_ADDR, value: ":19087" }
+            - { name: COMMAND_DATABASE_URL_FILE, value: /var/run/s3-local/database/command-service-dsn }
+            - { name: COMMAND_TLS_CERT, value: /var/run/s3-local/pki/tls.crt }
+            - { name: COMMAND_TLS_KEY, value: /var/run/s3-local/pki/tls.key }
+            - { name: COMMAND_CLIENT_CA, value: /var/run/s3-local/pki/ca.crt }
+            - { name: COMMAND_IAM_GRANT_CERT, value: /var/run/s3-local/pki/iam-grant.crt }
+            - { name: COMMAND_GATEWAY_DELEGATION_CERT, value: /var/run/s3-local/pki/gateway-delegation.crt }
+            - { name: COMMAND_POLICY_REVISION, value: s3-local-policy-v1 }
+            - { name: COMMAND_EMERGENCY_REVOCATION_REVISION, value: "1" }
+            - { name: COMMAND_APPROVED_ORGANIZATION_ID, value: 018f3e00-0000-7000-8000-000000000001 }
+            - { name: COMMAND_APPROVED_SITE_ID, value: 018f3e00-1000-7000-8000-000000000001 }
+            - { name: COMMAND_APPROVED_DEVICE_ID, value: 018f3e00-3000-7000-8000-000000000001 }
+          ports:
+            - { name: https, containerPort: 8447 }
+            - { name: diagnostics, containerPort: 19087 }
+          startupProbe: { httpGet: { path: /health/startup, port: diagnostics }, periodSeconds: 2, failureThreshold: 60 }
+          readinessProbe: { httpGet: { path: /health/ready, port: diagnostics }, periodSeconds: 2, timeoutSeconds: 2, failureThreshold: 30 }
+          livenessProbe: { httpGet: { path: /health/live, port: diagnostics }, initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 2 }
+          resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: "1", memory: 512Mi } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: pki, mountPath: /var/run/s3-local/pki, readOnly: true }
+            - { name: database, mountPath: /var/run/s3-local/database, readOnly: true }
+      volumes:
+        - name: pki
+          secret: { secretName: s3-local-command-service-pki, defaultMode: 288 }
+        - name: database
+          secret: { secretName: s3-local-database, defaultMode: 288 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: command-dispatcher
+  namespace: s3-local
+  annotations: { s3.hvac/local-only: "true" }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: command-dispatcher } }
+  template:
+    metadata: { labels: { app: command-dispatcher } }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: command-dispatcher
+          image: hvac-s3-local/command-dispatcher:dev
+          imagePullPolicy: Never
+          env:
+            - { name: COMMAND_DISPATCHER_DIAGNOSTICS_ADDR, value: ":19088" }
+            - { name: S3_APPROVED_COHORT_FILE, value: /var/run/s3-local/cohort/approved-cohort.json }
+            - { name: COMMAND_RUNTIME_URL, value: "https://command-service.s3-local.svc.cluster.local:8447" }
+            - { name: COMMAND_RUNTIME_SERVER_NAME, value: command-service.s3-local.svc.cluster.local }
+            - { name: COMMAND_RUNTIME_CLIENT_CERT, value: /var/run/s3-local/pki/tls.crt }
+            - { name: COMMAND_RUNTIME_CLIENT_KEY, value: /var/run/s3-local/pki/tls.key }
+            - { name: COMMAND_RUNTIME_SERVER_CA, value: /var/run/s3-local/pki/ca.crt }
+            - { name: THINGSBOARD_BASE_URL, value: "https://local-device-simulator.s3-local.svc.cluster.local:8448" }
+            - { name: THINGSBOARD_SERVER_NAME, value: local-device-simulator.s3-local.svc.cluster.local }
+            - { name: THINGSBOARD_SERVER_CA, value: /var/run/s3-local/pki/ca.crt }
+            - { name: THINGSBOARD_CREDENTIAL_FILE, value: /var/run/s3-local/provider/value }
+          ports: [{ name: diagnostics, containerPort: 19088 }]
+          readinessProbe: { httpGet: { path: /health/ready, port: diagnostics }, periodSeconds: 2, timeoutSeconds: 2, failureThreshold: 30 }
+          livenessProbe: { httpGet: { path: /health/live, port: diagnostics }, initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 2 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: cohort, mountPath: /var/run/s3-local/cohort, readOnly: true }
+            - { name: pki, mountPath: /var/run/s3-local/pki, readOnly: true }
+            - { name: provider-value, mountPath: /var/run/s3-local/provider, readOnly: true }
+      volumes:
+        - name: cohort
+          configMap: { name: s3-local-approved-cohort }
+        - name: pki
+          secret: { secretName: s3-local-dispatcher-pki, defaultMode: 288 }
+        - name: provider-value
+          secret: { secretName: s3-local-provider-value, defaultMode: 288 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: command-verifier
+  namespace: s3-local
+  annotations: { s3.hvac/local-only: "true" }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: command-verifier } }
+  template:
+    metadata: { labels: { app: command-verifier } }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: command-verifier
+          image: hvac-s3-local/command-verifier:dev
+          imagePullPolicy: Never
+          env:
+            - { name: COMMAND_VERIFIER_DIAGNOSTICS_ADDR, value: ":19089" }
+            - { name: S3_APPROVED_COHORT_FILE, value: /var/run/s3-local/cohort/approved-cohort.json }
+            - { name: COMMAND_RUNTIME_URL, value: "https://command-service.s3-local.svc.cluster.local:8447" }
+            - { name: COMMAND_RUNTIME_SERVER_NAME, value: command-service.s3-local.svc.cluster.local }
+            - { name: COMMAND_RUNTIME_CLIENT_CERT, value: /var/run/s3-local/pki/tls.crt }
+            - { name: COMMAND_RUNTIME_CLIENT_KEY, value: /var/run/s3-local/pki/tls.key }
+            - { name: COMMAND_RUNTIME_SERVER_CA, value: /var/run/s3-local/pki/ca.crt }
+            - { name: S2_REPORTED_STATE_URL, value: "https://local-device-simulator.s3-local.svc.cluster.local:8449" }
+            - { name: S2_REPORTED_STATE_SERVER_NAME, value: local-device-simulator.s3-local.svc.cluster.local }
+            - { name: S2_REPORTED_STATE_CLIENT_CERT, value: /var/run/s3-local/pki/tls.crt }
+            - { name: S2_REPORTED_STATE_CLIENT_KEY, value: /var/run/s3-local/pki/tls.key }
+            - { name: S2_REPORTED_STATE_SERVER_CA, value: /var/run/s3-local/pki/ca.crt }
+          ports: [{ name: diagnostics, containerPort: 19089 }]
+          readinessProbe: { httpGet: { path: /health/ready, port: diagnostics }, periodSeconds: 2, timeoutSeconds: 2, failureThreshold: 30 }
+          livenessProbe: { httpGet: { path: /health/live, port: diagnostics }, initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 2 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: cohort, mountPath: /var/run/s3-local/cohort, readOnly: true }
+            - { name: pki, mountPath: /var/run/s3-local/pki, readOnly: true }
+      volumes:
+        - name: cohort
+          configMap: { name: s3-local-approved-cohort }
+        - name: pki
+          secret: { secretName: s3-local-verifier-pki, defaultMode: 288 }

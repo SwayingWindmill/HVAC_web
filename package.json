@@ -166,6 +166,7 @@
     "s3:ticket-07": "npm run s3:verification:check && npm run ownership:check && npm run s3:postgres && node scripts/run-go.mjs test ./libs/commandmodel/... ./services/command-service/... ./services/command-dispatcher/... ./services/thingsboard-connector-control/... && node scripts/run-go.mjs vet ./libs/commandmodel/... ./services/command-service/... ./services/command-dispatcher/... ./services/thingsboard-connector-control/...",
     "s3:command-ux:check": "node scripts/check-s3-command-ux.mjs",
     "s3:ticket-08": "npm run s3:command-ux:check && npm run s3:gateway:check && npm run s3:verification:check && npm run ownership:check && node scripts/run-go.mjs test ./services/command-service/... ./services/platform-gateway/... && node scripts/run-go.mjs vet ./services/command-service/... ./services/platform-gateway/... && npm run lint && npm run build",
+    "s3:local:check": "node scripts/check-s3-local-profile.mjs && bash -n scripts/s3-local.sh",
     "s3:target-runtime:check": "node scripts/check-s3-target-runtime.mjs",
     "s3:target-runtime:test": "node scripts/run-s3-target-runtime-tests.mjs",
     "s3:certification:check": "node scripts/check-s3-command-certification.mjs",
@@ -173,7 +174,7 @@
     "s3:certification:verify": "node scripts/verify-s3-command-certification.mjs --directory=out/s3-formal-certification",
     "test:s3-certification": "node scripts/test-s3-command-certification.mjs",
     "test:s3-target-image-evidence": "node scripts/test-s3-target-image-evidence.mjs",
-    "s3:ticket-09": "npm run s3:target-runtime:test && npm run s3:certification:check && npm run test:s3-certification && npm run test:s3-target-image-evidence && npm run s3:certification:preflight && npm run ownership:check && npm run s3:postgres && npm run lint && npm run build",
+    "s3:ticket-09": "npm run s3:local:check && npm run s3:target-runtime:test && npm run s3:certification:check && npm run test:s3-certification && npm run test:s3-target-image-evidence && npm run s3:certification:preflight && npm run ownership:check && npm run s3:postgres && npm run lint && npm run build",
     "platform:production-rollout:check": "node scripts/check-production-rollout.mjs"
   },
   "dependencies": {
