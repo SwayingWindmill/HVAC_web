@@ -182,12 +182,99 @@
   font-size: 12px;
 }
 
+.real-shell-identity-context {
+  min-width: 0;
+}
+
+.real-shell-header-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 10px 0 0;
+}
+
+.real-shell-header-context div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.real-shell-header-context dt {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.real-shell-header-context dd {
+  margin: 0;
+  color: #172033;
+  font-size: 13px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
 .real-shell-header-actions {
   display: flex;
   align-items: center;
   gap: 16px;
   color: #667085;
   font-size: 13px;
+}
+
+.real-shell-realtime {
+  display: grid;
+  gap: 2px;
+  min-width: 190px;
+  padding: 9px 11px;
+  border: 1px solid #d7deea;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #344054;
+}
+
+.real-shell-realtime strong,
+.real-shell-realtime span,
+.real-shell-realtime small {
+  line-height: 1.3;
+}
+
+.real-shell-realtime strong {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.real-shell-realtime span {
+  color: #172033;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.real-shell-realtime small {
+  color: #667085;
+  font-size: 10px;
+}
+
+.real-shell-realtime[data-realtime-state="live"] {
+  border-color: #95de64;
+  background: #f6ffed;
+}
+
+.real-shell-realtime[data-realtime-state="connecting"],
+.real-shell-realtime[data-realtime-state="reconnecting"] {
+  border-color: #91caff;
+  background: #e6f4ff;
+}
+
+.real-shell-realtime[data-realtime-state="resync-required"] {
+  border-color: #ffd666;
+  background: #fffbe6;
+}
+
+.real-shell-realtime[data-realtime-state="unavailable"] {
+  border-color: #ffa39e;
+  background: #fff1f0;
 }
 
 .real-shell-header-actions button {
@@ -234,6 +321,15 @@
   color: #0958d9;
 }
 
+.real-shell-navigation a:focus-visible,
+.real-site-chooser-list a:focus-visible,
+.real-shell-link-action:focus-visible,
+.real-shell-header-actions button:focus-visible,
+.real-site-transition-dialog button:focus-visible {
+  outline: 3px solid rgb(22 119 255 / 30%);
+  outline-offset: 2px;
+}
+
 .real-shell-navigation small {
   color: #667085;
   font-size: 10px;
@@ -257,6 +353,17 @@
 .real-route-surface h1 {
   margin: 8px 0 12px;
   font-size: clamp(28px, 4vw, 40px);
+}
+
+.real-shell-card h1:focus,
+.real-route-surface h1:focus {
+  outline: none;
+}
+
+.real-shell-card h1:focus-visible,
+.real-route-surface h1:focus-visible {
+  border-radius: 4px;
+  box-shadow: 0 0 0 4px rgb(22 119 255 / 20%);
 }
 
 .real-route-surface p {
@@ -404,14 +511,23 @@
   }
 
   .real-shell-header {
-    align-items: flex-start;
+    align-items: stretch;
+    flex-direction: column;
     padding: 16px;
   }
 
   .real-shell-header-actions {
-    align-items: flex-end;
+    align-items: stretch;
     flex-direction: column;
     gap: 8px;
+  }
+
+  .real-shell-realtime {
+    min-width: 0;
+  }
+
+  .real-shell-header-actions button {
+    width: 100%;
   }
 
   .real-shell-navigation {

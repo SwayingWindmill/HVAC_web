@@ -1,3 +1,4 @@
+import { FocusHeading } from './FocusHeading';
 import { RealShellChrome } from './RealShellChrome';
 import type { RealNavigationItem, RouteDecision } from './route-policy';
 import type { RealRuntimeConfig } from './runtime-config';
@@ -14,7 +15,7 @@ function SystemSurface({ snapshot }: { snapshot: ShellSnapshot }) {
       data-business-state="POPULATED"
     >
       <p className="real-shell-eyebrow">REAL MODE · IMPLEMENTED</p>
-      <h1 id="real-system-title">系统状态</h1>
+      <FocusHeading id="real-system-title">系统状态</FocusHeading>
       <p>以下内容来自 Platform Gateway 的权威状态响应。</p>
       {status ? (
         <dl className="real-shell-facts">
@@ -34,7 +35,7 @@ function ForbiddenSurface() {
   return (
     <section className="real-route-surface" aria-labelledby="real-forbidden-title" data-testid="real-route-forbidden" data-route-state="FORBIDDEN">
       <p className="real-shell-eyebrow">REAL MODE · ACCESS DENIED</p>
-      <h1 id="real-forbidden-title">访问被拒绝</h1>
+      <FocusHeading id="real-forbidden-title">访问被拒绝</FocusHeading>
       <p>当前 Principal 无权打开此页面。为避免泄露受保护资源，此状态不说明目标功能或资源是否存在。</p>
       <a className="real-shell-link-action" href="/">返回 Site 入口</a>
     </section>
@@ -45,7 +46,7 @@ function NotIntegratedSurface({ decision }: { decision: Extract<RouteDecision, {
   return (
     <section className="real-route-surface" aria-labelledby="real-not-integrated-title" data-testid="real-route-not-integrated" data-route-state="NOT_INTEGRATED">
       <p className="real-shell-eyebrow">REAL MODE · NOT INTEGRATED</p>
-      <h1 id="real-not-integrated-title">{decision.feature.label}尚未接入</h1>
+      <FocusHeading id="real-not-integrated-title">{decision.feature.label}尚未接入</FocusHeading>
       <p>当前部署没有该模块的权威后端。Real Build 不会加载 Demo 页面、Mock 数据或本地状态作为替代。</p>
       <div className="real-shell-capabilities">
         <strong>进入该产品区域所需 Capability</strong>
@@ -60,7 +61,7 @@ function RouteUnavailableSurface({ snapshot, retry }: { snapshot: ShellSnapshot;
   return (
     <section className="real-route-surface" aria-labelledby="real-route-unavailable-title" data-testid="real-route-unavailable" data-route-state="UNAVAILABLE">
       <p className="real-shell-eyebrow">REAL MODE · UNAVAILABLE</p>
-      <h1 id="real-route-unavailable-title">服务当前不可用</h1>
+      <FocusHeading id="real-route-unavailable-title">服务当前不可用</FocusHeading>
       <p>Principal 仍然有效，但该已实现路由依赖的服务器状态无法确认。系统不会显示缓存或演示业务值。</p>
       {failure ? (
         <div className="real-shell-problem" role="alert" data-retryable={String(failure.retryable)}>
@@ -81,7 +82,7 @@ function DegradedSurface({ snapshot }: { snapshot: ShellSnapshot }) {
   return (
     <section className="real-route-surface" aria-labelledby="real-degraded-title" data-testid="real-route-degraded" data-route-state="DEGRADED">
       <p className="real-shell-eyebrow">REAL MODE · DEGRADED</p>
-      <h1 id="real-degraded-title">服务处于降级状态</h1>
+      <FocusHeading id="real-degraded-title">服务处于降级状态</FocusHeading>
       <p>服务器已明确报告降级。该状态不同于完全不可用，也不会被表示为空业务数据。</p>
       {status ? (
         <dl className="real-shell-facts">
@@ -99,7 +100,7 @@ function NotFoundSurface() {
   return (
     <section className="real-route-surface" aria-labelledby="real-not-found-title" data-testid="real-route-not-found" data-route-state="NOT_FOUND">
       <p className="real-shell-eyebrow">REAL MODE · 404</p>
-      <h1 id="real-not-found-title">页面不存在</h1>
+      <FocusHeading id="real-not-found-title">页面不存在</FocusHeading>
       <p>当前路径不属于此 Real Build 的公开路由。</p>
       <a className="real-shell-link-action" href="/">返回 Site 入口</a>
     </section>

@@ -283,13 +283,13 @@ async function evaluate(client, expression) {
   return result.result.value;
 }
 
-async function waitForCondition(client, expression, label) {
+async function waitForCondition(client, expression, label, pollMs = 100) {
   for (let attempt = 0; attempt < 400; attempt += 1) {
     try {
       const value = await evaluate(client, expression);
       if (value) return value;
     } catch {}
-    await pause(100);
+    await pause(pollMs);
   }
   const diagnostic = await evaluate(client, `({
     url: location.href,
@@ -312,6 +312,35 @@ async function clickTestId(client, testId) {
     return true;
   })()`);
   assert(clicked, `control ${testId} was not available`);
+}
+
+async function pressKey(client, key, code, keyCode) {
+  const text = key === 'Enter' ? '\r' : key === ' ' ? ' ' : undefined;
+  await client.send('Input.dispatchKeyEvent', {
+    type: 'rawKeyDown',
+    key,
+    code,
+    windowsVirtualKeyCode: keyCode,
+    nativeVirtualKeyCode: keyCode,
+  });
+  if (text) {
+    await client.send('Input.dispatchKeyEvent', {
+      type: 'char',
+      key,
+      code,
+      text,
+      unmodifiedText: text,
+      windowsVirtualKeyCode: keyCode,
+      nativeVirtualKeyCode: keyCode,
+    });
+  }
+  await client.send('Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key,
+    code,
+    windowsVirtualKeyCode: keyCode,
+    nativeVirtualKeyCode: keyCode,
+  });
 }
 
 async function assertStorageEmpty(client, label) {
@@ -417,10 +446,13 @@ try {
     mounted: document.querySelector('main')?.getAttribute('data-protected-route-mounted'),
     retryable: document.querySelector('[data-testid="real-shell-unavailable"] [role="alert"]')?.getAttribute('data-retryable'),
     text: document.body.innerText,
+    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-shell-unavailable"] h1'),
   })`);
   assert(failedBootstrap.mounted === 'false', 'failed bootstrap mounted protected routes');
   assert(failedBootstrap.retryable === 'true', 'failed bootstrap was not visibly retryable');
-  assert(failedBootstrap.text.includes('SESSION_STORE_UNAVAILABLE'), 'failed bootstrap omitted the server Problem code');
+  assert(failedBootstrap.text.includes('SESSION_STORE_UNAVAILABLE') && failedBootstrap.text.includes(`traceId ${traceId}`), 'failed bootstrap omitted safe Problem detail or trace ID');
+  assert(!failedBootstrap.text.includes(fixtureCapability) && !failedBootstrap.text.includes('rms-03-session'), 'failed bootstrap exposed protected Session values');
+  assert(failedBootstrap.focusedHeading, 'failed bootstrap did not restore focus to its heading');
   await assertStorageEmpty(cdpClient, 'failed bootstrap');
 
   fixture.state.principalMode = 'authenticated';
@@ -488,10 +520,15 @@ try {
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'UNAVAILABLE'`, 'unavailable implemented route');
   const unavailableRoute = await evaluate(cdpClient, `({
     systemNavigation: Boolean(document.querySelector('[data-feature-id="system"]')),
+    retryable: document.querySelector('[data-testid="real-route-unavailable"] [role="alert"]')?.getAttribute('data-retryable'),
     text: document.querySelector('[data-testid="real-route-unavailable"]')?.textContent ?? '',
+    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-route-unavailable"] h1'),
   })`);
   assert(unavailableRoute.systemNavigation === false, 'unavailable implemented feature remained in navigation');
-  assert(unavailableRoute.text.includes('PLATFORM_STATUS_UNAVAILABLE'), 'Unavailable route omitted the server failure code');
+  assert(unavailableRoute.retryable === 'true', 'Unavailable route did not expose retryability');
+  assert(unavailableRoute.text.includes('PLATFORM_STATUS_UNAVAILABLE') && unavailableRoute.text.includes(`traceId ${traceId}`), 'Unavailable route omitted safe Problem detail or trace ID');
+  assert(!unavailableRoute.text.includes(fixtureCapability) && !unavailableRoute.text.includes('rms-03-session'), 'Unavailable route exposed protected Session values');
+  assert(unavailableRoute.focusedHeading, 'Unavailable route did not restore focus to its heading');
 
   fixture.state.platformMode = 'ok';
   fixture.state.roles = ['descriptive-role-only'];
@@ -525,14 +562,18 @@ try {
     choices: Array.from(document.querySelectorAll('[data-testid="real-site-chooser"] [data-site-id]')).map((item) => ({
       id: item.getAttribute('data-site-id'),
       href: item.getAttribute('href'),
+      name: item.textContent?.trim() ?? '',
     })),
     siteRoute: Boolean(document.querySelector('[data-site-route]')),
+    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-site-chooser"] h1'),
   })`);
   assert(siteChooser.pathname === '/', 'multiple Sites silently changed the URL scope');
   assert(siteChooser.choices.length === 2, `expected two chooser entries, got ${JSON.stringify(siteChooser.choices)}`);
   assert(siteChooser.choices[0].id === siteAId && siteChooser.choices[1].id === siteBId, 'chooser did not preserve Registry Site identities');
   assert(siteChooser.choices.every((choice) => choice.href === `/sites/${choice.id}/assets`), 'chooser generated a non-Site-scoped target');
+  assert(siteChooser.choices.every((choice) => choice.name.length > 0), 'chooser links lacked accessible names');
   assert(siteChooser.siteRoute === false, 'chooser mounted a Site business surface before selection');
+  assert(siteChooser.focusedHeading, 'Site chooser did not restore focus to its heading');
 
   await navigate(cdpClient, `${webURL}/sites/${siteBId}/assets`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'READY' && document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-site-id') === '${siteBId}'`, 'validated explicit Site Assets route');
@@ -543,16 +584,39 @@ try {
     assets: document.querySelector('[data-feature-id="site-assets"]')?.getAttribute('href'),
     commands: document.querySelector('[data-feature-id="site-commands"]')?.getAttribute('href'),
     bigscreen: document.querySelector('[data-feature-id="site-bigscreen"]')?.getAttribute('href'),
+    headerPrincipal: document.querySelector('[data-testid="real-shell-principal"]')?.textContent,
+    headerSite: document.querySelector('[data-testid="real-shell-site"]')?.textContent,
+    shellState: document.querySelector('[data-testid="real-shell-state"]')?.textContent,
+    realtimeState: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-state'),
+    realtimeSite: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-site'),
+    realtimeText: document.querySelector('[data-testid="real-realtime-status"]')?.textContent ?? '',
+    headerText: document.querySelector('.real-shell-header')?.textContent ?? '',
+    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-site-route-assets"] h1'),
   })`);
   assert(explicitSite.siteId === siteBId && explicitSite.siteName && explicitSite.organization, 'validated SiteContext was not rendered from Registry route data');
   assert(explicitSite.assets === `/sites/${siteBId}/assets`, 'Assets navigation escaped validated Site scope');
   assert(explicitSite.commands === `/sites/${siteBId}/commands`, 'Commands navigation escaped validated Site scope');
   assert(explicitSite.bigscreen === `/sites/${siteBId}/bigscreen`, 'BigScreen navigation escaped validated Site scope');
+  assert(explicitSite.headerPrincipal === 'RMS-03 Operator', 'trusted header did not use the Principal snapshot');
+  assert(explicitSite.headerSite === 'Osaka Plant' && explicitSite.shellState === 'READY', 'trusted header did not use the validated Site and Shell state');
+  assert(explicitSite.realtimeState === 'idle' && explicitSite.realtimeSite === siteBId, 'realtime header was not scoped to the validated Site');
+  assert(explicitSite.realtimeText.includes('Idle — not subscribed') && !/global|platform health/i.test(explicitSite.realtimeText), 'realtime header overstated subscription health');
+  assert(!/Demo switch|role switch|Alarm|Copilot|Mock AI/i.test(explicitSite.headerText), 'trusted header mounted a Mock global affordance');
+  assert(explicitSite.focusedHeading, 'validated Site route did not restore focus to its heading');
 
   for (const leaf of ['commands', 'bigscreen']) {
     await navigate(cdpClient, `${webURL}/sites/${siteBId}/${leaf}`);
     await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'READY' && document.querySelector('[data-testid="real-site-route-${leaf}"]')?.getAttribute('data-site-id') === '${siteBId}'`, `validated explicit Site ${leaf} route`);
   }
+  const bigScreen = await evaluate(cdpClient, `({
+    pathname: location.pathname,
+    site: document.querySelector('[data-testid="real-site-route-bigscreen"]')?.getAttribute('data-site-id'),
+    headerSite: document.querySelector('[data-testid="real-shell-site"]')?.textContent,
+  })`);
+  assert(bigScreen.pathname === `/sites/${siteBId}/bigscreen` && bigScreen.site === siteBId && bigScreen.headerSite === 'Osaka Plant', 'BigScreen was not bound to the validated Site');
+  await navigate(cdpClient, `${webURL}/bigscreen`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'NOT_FOUND'`, 'unscoped BigScreen rejection');
+  assert(!await evaluate(cdpClient, `Boolean(document.querySelector('[data-site-route="bigscreen"]'))`), 'unscoped BigScreen mounted a Site surface');
 
   await navigate(cdpClient, `${webURL}/sites/${siteAId}/commands`);
   await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-commands"]')?.getAttribute('data-site-id') === '${siteAId}' && Boolean(document.querySelector('[data-testid="real-site-switcher"]'))`, 'RMS-06 Site transition source');
@@ -566,32 +630,52 @@ try {
     return true;
   })()`);
   await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-command-draft-value"]')?.value === 'Keep this unsaved command draft'`, 'dirty Site draft');
-  await evaluate(cdpClient, `document.querySelector('[data-site-switch-id="${siteBId}"]')?.click()`);
-  await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-testid="real-site-draft-confirmation"]'))`, 'Site draft confirmation');
+  assert(await evaluate(cdpClient, `(() => {
+    const button = document.querySelector('[data-site-switch-id="${siteBId}"]');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.focus();
+    return document.activeElement === button;
+  })()`), 'Site switcher button could not receive keyboard focus');
+  await pressKey(cdpClient, 'Enter', 'Enter', 13);
+  await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-testid="real-site-draft-confirmation"]')) && document.activeElement === document.querySelector('[data-testid="real-site-draft-confirm"]')`, 'Site draft confirmation focus');
   const retainedBeforeConfirmation = await evaluate(cdpClient, `({
     pathname: location.pathname,
     oldSite: document.body.innerText.includes('Tokyo Plant'),
     oldSubscription: document.querySelector('[data-testid="real-site-subscription"]')?.getAttribute('data-subscription-site'),
     draft: document.querySelector('[data-testid="real-command-draft-value"]')?.value,
+    dialogName: document.querySelector('[data-testid="real-site-draft-confirmation"]')?.getAttribute('aria-labelledby'),
+    modal: document.querySelector('[data-testid="real-site-draft-confirmation"]')?.getAttribute('aria-modal'),
   })`);
   assert(retainedBeforeConfirmation.pathname === `/sites/${siteAId}/commands`, 'draft warning changed Site before confirmation');
   assert(retainedBeforeConfirmation.oldSite && retainedBeforeConfirmation.oldSubscription === siteAId, 'draft warning purged the old Site before confirmation');
   assert(retainedBeforeConfirmation.draft === 'Keep this unsaved command draft', 'draft warning discarded the unsaved draft');
-  await clickTestId(cdpClient, 'real-site-draft-cancel');
-  await waitForCondition(cdpClient, `!document.querySelector('[data-testid="real-site-draft-confirmation"]') && document.querySelector('[data-testid="real-command-draft-value"]')?.value === 'Keep this unsaved command draft'`, 'cancelled Site transition');
+  assert(retainedBeforeConfirmation.dialogName === 'real-site-draft-title' && retainedBeforeConfirmation.modal === 'true', 'draft confirmation lacked an accessible modal name');
+  await pressKey(cdpClient, 'Tab', 'Tab', 9);
+  await waitForCondition(cdpClient, `document.activeElement === document.querySelector('[data-testid="real-site-draft-cancel"]')`, 'draft confirmation forward Tab');
+  await pressKey(cdpClient, 'Tab', 'Tab', 9);
+  await waitForCondition(cdpClient, `document.activeElement === document.querySelector('[data-testid="real-site-draft-confirm"]')`, 'draft confirmation focus loop');
+  await pressKey(cdpClient, 'Escape', 'Escape', 27);
+  await waitForCondition(cdpClient, `!document.querySelector('[data-testid="real-site-draft-confirmation"]') && document.querySelector('[data-testid="real-command-draft-value"]')?.value === 'Keep this unsaved command draft' && document.activeElement === document.querySelector('[data-site-switch-id="${siteBId}"]')`, 'cancelled Site transition and focus restoration');
 
-  await evaluate(cdpClient, `document.querySelector('[data-site-switch-id="${siteBId}"]')?.click()`);
-  await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-testid="real-site-draft-confirmation"]'))`, 'second Site draft confirmation');
+  await pressKey(cdpClient, 'Enter', 'Enter', 13);
+  await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-testid="real-site-draft-confirmation"]')) && document.activeElement === document.querySelector('[data-testid="real-site-draft-confirm"]')`, 'second Site draft confirmation');
   await clickTestId(cdpClient, 'real-site-draft-confirm');
-  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-purging"]') && !document.body.innerText.includes('Tokyo Plant') && !document.querySelector('[data-testid="real-site-subscription"]') && document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-resource-count') === '0'`, 'old Site purge before navigation');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-purging"]') && !document.querySelector('[data-site-route][data-site-id="${siteAId}"]') && !document.querySelector('[data-subscription-site="${siteAId}"]') && !document.querySelector('[data-testid="real-command-draft-value"]') && document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-resource-count') === '0'`, 'old Site purge before navigation', 5);
   const purgingState = await evaluate(cdpClient, `({
     pathname: location.pathname,
     transition: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-site-transition'),
     scopeSite: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-scope-site'),
+    realtimeState: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-state'),
+    realtimeSite: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-site'),
+    headerSite: document.querySelector('[data-testid="real-shell-site"]')?.textContent,
     newSiteRendered: document.body.innerText.includes('Osaka Plant'),
+    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-site-purging"] h1'),
   })`);
   assert(purgingState.pathname === `/sites/${siteAId}/commands`, 'navigation began before old Site purge became visible');
   assert(purgingState.transition === 'purging' && !purgingState.scopeSite, 'protected Site scope was not revoked during purge');
+  assert(purgingState.headerSite === 'No active Site', 'trusted header retained the revoked Site during purge');
+  assert(purgingState.realtimeState === 'idle' && !purgingState.realtimeSite, 'old Site realtime status survived protected purge');
+  assert(purgingState.focusedHeading, 'purging state did not restore focus to its heading');
   assert(purgingState.newSiteRendered === false, 'new Site rendered before old Site purge completed');
   await waitForCondition(cdpClient, `location.pathname === '/sites/${siteBId}/assets' && document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-site-id') === '${siteBId}'`, 'new Site after protected purge');
   const completedSiteTransition = await evaluate(cdpClient, `({
@@ -600,9 +684,14 @@ try {
     oldSubscription: Boolean(document.querySelector('[data-subscription-site="${siteAId}"]')),
     newSite: document.querySelector('[data-testid="real-site-route-assets"]')?.textContent?.includes('Osaka Plant') ?? false,
     newScope: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-scope-site'),
+    headerSite: document.querySelector('[data-testid="real-shell-site"]')?.textContent,
+    realtimeSite: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-site'),
+    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-site-route-assets"] h1'),
   })`);
   assert(!completedSiteTransition.oldRoute && !completedSiteTransition.oldDraft && !completedSiteTransition.oldSubscription, 'old Site protected values survived the transition');
   assert(completedSiteTransition.newSite && completedSiteTransition.newScope === siteBId, 'new Site did not establish a fresh protected scope');
+  assert(completedSiteTransition.headerSite === 'Osaka Plant' && completedSiteTransition.realtimeSite === siteBId, 'trusted header did not follow the new Site snapshot');
+  assert(completedSiteTransition.focusedHeading, 'new Site route did not restore focus to its heading');
 
   fixture.state.roles = ['platform-admin'];
   fixture.state.capabilities = ['site.list'];
@@ -653,6 +742,59 @@ try {
   assert(soleSite.empty === 'EMPTY' && soleSite.unavailableText === false, 'empty Site business state was confused with unavailability');
   await assertStorageEmpty(cdpClient, 'Site scope matrix');
 
+  await cdpClient.send('Emulation.setDeviceMetricsOverride', {
+    width: 390,
+    height: 844,
+    deviceScaleFactor: 1,
+    mobile: true,
+  });
+  fixture.state.sites = [siteA, siteB];
+  fixture.state.capabilities = ['site.list', 'site.read'];
+  await navigate(cdpClient, `${webURL}/`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'CHOOSE_SITE'`, 'mobile Site chooser');
+  const mobileChooser = await evaluate(cdpClient, `({
+    overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-site-chooser"] h1'),
+    choiceHeights: Array.from(document.querySelectorAll('[data-testid="real-site-chooser"] [data-site-id]')).map((item) => item.getBoundingClientRect().height),
+    headerRight: document.querySelector('.real-shell-header')?.getBoundingClientRect().right,
+    realtimeRight: document.querySelector('[data-testid="real-realtime-status"]')?.getBoundingClientRect().right,
+    viewport: window.innerWidth,
+  })`);
+  assert(!mobileChooser.overflow && mobileChooser.focusedHeading, 'mobile Site chooser overflowed or lost state focus');
+  assert(mobileChooser.choiceHeights.every((height) => height >= 40), 'mobile Site chooser targets were too small');
+  assert(mobileChooser.headerRight <= mobileChooser.viewport + 1 && mobileChooser.realtimeRight <= mobileChooser.viewport + 1, 'mobile trusted header exceeded the viewport');
+
+  fixture.state.capabilities = ['site.read'];
+  await navigate(cdpClient, `${webURL}/system`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'FORBIDDEN'`, 'mobile Access Denied');
+  const mobileForbidden = await evaluate(cdpClient, `({
+    overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-route-forbidden"] h1'),
+  })`);
+  assert(!mobileForbidden.overflow && mobileForbidden.focusedHeading, 'mobile Access Denied was unusable');
+
+  await navigate(cdpClient, `${webURL}/alarms`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'NOT_INTEGRATED'`, 'mobile Not Integrated');
+  const mobileNotIntegrated = await evaluate(cdpClient, `({
+    overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-route-not-integrated"] h1'),
+  })`);
+  assert(!mobileNotIntegrated.overflow && mobileNotIntegrated.focusedHeading, 'mobile Not Integrated was unusable');
+
+  fixture.state.capabilities = ['site.list', 'site.read'];
+  fixture.state.sites = [];
+  await navigate(cdpClient, `${webURL}/`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'NO_AUTHORIZED_SITE'`, 'mobile No Authorized Site');
+  const mobileNoSite = await evaluate(cdpClient, `({
+    overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-site-none"] h1'),
+    actionsVisible: Array.from(document.querySelectorAll('[data-testid="real-site-none"] button, [data-testid="real-site-none"] a')).every((item) => {
+      const rect = item.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && rect.right <= window.innerWidth + 1;
+    }),
+  })`);
+  assert(!mobileNoSite.overflow && mobileNoSite.focusedHeading && mobileNoSite.actionsVisible, 'mobile No Authorized Site was unusable');
+
   fixture.state.platformMode = 'ok';
   fixture.state.roles = ['descriptive-role-only'];
   fixture.state.capabilities = ['organization.list', 'organization.read', 'site.list', 'site.read', 'device.read'];
@@ -666,10 +808,13 @@ try {
     mounted: document.querySelector('main')?.getAttribute('data-protected-route-mounted'),
     retryable: document.querySelector('[data-testid="real-logout-failure"]')?.getAttribute('data-retryable'),
     text: document.querySelector('[data-testid="real-logout-failure"]')?.textContent ?? '',
+    overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
   })`);
   assert(failedLogout.mounted === 'true', 'retryable logout failure purged protected state before revocation');
   assert(failedLogout.retryable === 'true', 'logout failure was not marked retryable');
-  assert(failedLogout.text.includes('SESSION_PERSISTENCE_FAILED'), 'logout failure omitted the server Problem code');
+  assert(failedLogout.text.includes('SESSION_PERSISTENCE_FAILED') && failedLogout.text.includes(`traceId ${traceId}`), 'logout failure omitted safe Problem detail or trace ID');
+  assert(!failedLogout.text.includes(fixtureCapability) && !failedLogout.text.includes('rms-03-session'), 'logout failure exposed protected Session values');
+  assert(!failedLogout.overflow, 'mobile logout failure overflowed the viewport');
   assert(fixture.state.loginReturnTargets.length === loginCountBeforeLogout, 'logout failure incorrectly started login');
   await assertStorageEmpty(cdpClient, 'logout failure');
 
@@ -679,10 +824,15 @@ try {
   const completedLogout = await evaluate(cdpClient, `({
     mounted: document.querySelector('main')?.getAttribute('data-protected-route-mounted'),
     protectedShell: Boolean(document.querySelector('[data-testid="real-protected-shell"]')),
+    overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-shell-login-required"] h1'),
+    loginName: document.querySelector('[data-testid="real-shell-login-required"] button')?.textContent?.trim() ?? '',
   })`);
   assert(completedLogout.mounted === 'false' && completedLogout.protectedShell === false, 'confirmed logout did not purge protected state');
+  assert(!completedLogout.overflow && completedLogout.focusedHeading && completedLogout.loginName.length > 0, 'mobile Session ended state was not accessible');
   assert(fixture.state.loginReturnTargets.length === loginCountBeforeLogout, 'confirmed logout automatically started a new login');
   await assertStorageEmpty(cdpClient, 'logout success');
+  await cdpClient.send('Emulation.clearDeviceMetricsOverride');
 
   const authorizationRequests = fixture.state.requests.filter((entry) => 'authorization' in entry.headers);
   assert(authorizationRequests.length === 0, 'browser sent an Authorization header');

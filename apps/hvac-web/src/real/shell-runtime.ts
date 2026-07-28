@@ -19,6 +19,13 @@ import {
   type ProtectedScopeResource,
   type ProtectedScopeSnapshot,
 } from './protected-scope';
+import {
+  assertRealtimeStatusForSite,
+  createIdleRealtimeStatus,
+  createRealtimeStatus,
+  type RealtimeStatusSnapshot,
+  type RealtimeStatusUpdate,
+} from './realtime-status';
 import { isUUIDv7 } from './site-routing';
 
 export type ShellState = 'BOOTSTRAPPING' | 'LOGIN_REQUIRED' | 'UNAVAILABLE' | 'READY';
@@ -72,6 +79,7 @@ export interface ShellSnapshot {
   sites?: ShellSitesView;
   protectedScope?: ProtectedScopeSnapshot;
   siteTransition?: ShellSiteTransitionView;
+  realtime?: RealtimeStatusSnapshot;
   loginUrl?: string;
   reason?: string;
   failure?: ShellFailureView;
@@ -88,6 +96,7 @@ export interface ShellRuntime {
   registerUnsavedDraft(draft: ProtectedScopeDraft): () => void;
   registerProtectedResource(resource: ProtectedScopeResource): () => void;
   protectedRequestToken(): ProtectedScopeRequestToken;
+  publishRealtimeStatus(update: RealtimeStatusUpdate): void;
   requestSiteNavigation(target: string): Promise<SiteNavigationOutcome>;
   confirmSiteNavigation(): Promise<SiteNavigationOutcome>;
   cancelSiteNavigation(): void;
@@ -171,6 +180,7 @@ class BrowserShellRuntime implements ShellRuntime {
   private snapshot: ShellSnapshot = {
     state: 'BOOTSTRAPPING',
     protectedScope: this.protectedScope.current(),
+    realtime: createIdleRealtimeStatus(),
   };
   private readonly listeners = new Set<(snapshot: ShellSnapshot) => void>();
   private protectedPrincipal?: CurrentPrincipalResponse;
@@ -261,7 +271,10 @@ class BrowserShellRuntime implements ShellRuntime {
   activateSiteScope(siteId: string): void {
     if (this.snapshot.state !== 'READY' || !this.protectedPrincipal) return;
     this.protectedScope.activate(siteId);
-    this.refreshProtectedScopeView();
+    this.publish({
+      ...this.snapshot,
+      realtime: createRealtimeStatus({ state: 'idle', siteId }),
+    });
   }
 
   registerUnsavedDraft(draft: ProtectedScopeDraft): () => void {
@@ -284,6 +297,16 @@ class BrowserShellRuntime implements ShellRuntime {
 
   protectedRequestToken(): ProtectedScopeRequestToken {
     return this.protectedScope.requestToken();
+  }
+
+  publishRealtimeStatus(update: RealtimeStatusUpdate): void {
+    if (this.snapshot.state !== 'READY' || !this.protectedPrincipal) {
+      throw new Error('Realtime status requires an authenticated Shell.');
+    }
+    const activeSiteId = this.protectedScope.current().siteId;
+    if (!activeSiteId) throw new Error('Realtime status requires an active Site.');
+    const realtime = assertRealtimeStatusForSite(createRealtimeStatus(update), activeSiteId);
+    this.publish({ ...this.snapshot, realtime });
   }
 
   async requestSiteNavigation(target: string): Promise<SiteNavigationOutcome> {
@@ -441,11 +464,15 @@ class BrowserShellRuntime implements ShellRuntime {
   private publishReadyTransition(siteTransition: ShellSiteTransitionView | undefined): void {
     const principal = this.protectedPrincipal;
     if (!principal || this.snapshot.state !== 'READY') return;
+    const clearsSubscription = siteTransition?.status === 'purging' || siteTransition?.status === 'failed';
     this.publish({
       state: 'READY',
       principal,
       platform: this.snapshot.platform,
       sites: this.snapshot.sites,
+      realtime: clearsSubscription
+        ? createIdleRealtimeStatus()
+        : this.snapshot.realtime ?? createIdleRealtimeStatus(),
       logout: this.snapshot.logout ?? { status: 'idle' },
       siteTransition,
     });
@@ -509,7 +536,11 @@ class BrowserShellRuntime implements ShellRuntime {
   private publish(snapshot: ShellSnapshot): void {
     if (this.disposed) return;
     const published = snapshot.state === 'READY'
-      ? { ...snapshot, protectedScope: this.protectedScope.current() }
+      ? {
+        ...snapshot,
+        protectedScope: this.protectedScope.current(),
+        realtime: snapshot.realtime ?? this.snapshot.realtime ?? createIdleRealtimeStatus(),
+      }
       : snapshot;
     this.snapshot = published;
     for (const listener of this.listeners) listener(published);

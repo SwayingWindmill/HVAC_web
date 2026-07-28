@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Capability, Site } from '@/api/generated/platformGateway.gen';
+import { FocusHeading } from './FocusHeading';
+import { createIdleRealtimeStatus, realtimeStatusLabel } from './realtime-status';
 import { RealShellChrome } from './RealShellChrome';
 import type { RealNavigationItem } from './route-policy';
 import type { ProtectedScopeDraft, ProtectedScopeResource } from './protected-scope';
@@ -66,7 +68,7 @@ function SiteDiscoveryCheckingSurface() {
   return (
     <section className="real-route-surface" data-testid="real-site-discovery-checking" data-route-state="SITE_DISCOVERY_CHECKING">
       <p className="real-shell-eyebrow">REAL MODE · SITE DISCOVERY</p>
-      <h1>正在读取授权 Site</h1>
+      <FocusHeading>正在读取授权 Site</FocusHeading>
       <p>Shell 正在从当前 Acting Organization 的 Registry 边界读取授权 Site。完成前不会挂载 Site 页面。</p>
       <div className="real-shell-progress" role="status" aria-live="polite">正在验证 Site scope…</div>
     </section>
@@ -77,7 +79,7 @@ function SiteScopeActivatingSurface({ context }: { context: SiteContext }) {
   return (
     <section className="real-route-surface" data-testid="real-site-scope-activating" data-route-state="SITE_SCOPE_ACTIVATING">
       <p className="real-shell-eyebrow">REAL MODE · SITE SCOPE</p>
-      <h1>正在激活受保护 Site scope</h1>
+      <FocusHeading>正在激活受保护 Site scope</FocusHeading>
       <p>URL 与 Registry Site 已验证。Shell 正在建立新的 request generation 和受保护资源所有权，完成前不会渲染 Site 业务表面。</p>
       <dl className="real-shell-facts">
         <div><dt>Site</dt><dd>{context.site.displayName}</dd></div>
@@ -92,7 +94,7 @@ function SiteDiscoveryUnavailableSurface({ failure, retry }: { failure?: ShellFa
   return (
     <section className="real-route-surface" data-testid="real-site-discovery-unavailable" data-route-state="UNAVAILABLE">
       <p className="real-shell-eyebrow">REAL MODE · UNAVAILABLE</p>
-      <h1>无法读取授权 Site</h1>
+      <FocusHeading>无法读取授权 Site</FocusHeading>
       <p>Principal 仍然有效，但当前 Organization 的 Registry Site 集合无法确认。系统不会使用缓存 Site 或本地 building alias。</p>
       {failure ? (
         <div className="real-shell-problem" role="alert" data-retryable={String(failure.retryable)}>
@@ -113,7 +115,7 @@ function NoAuthorizedSiteSurface({ snapshot, retry }: { snapshot: ShellSnapshot;
   return (
     <section className="real-route-surface" data-testid="real-site-none" data-route-state="NO_AUTHORIZED_SITE">
       <p className="real-shell-eyebrow">REAL MODE · NO AUTHORIZED SITE</p>
-      <h1>当前账号没有授权 Site</h1>
+      <FocusHeading>当前账号没有授权 Site</FocusHeading>
       <p>Shell 已验证当前 Acting Organization，但 Registry 没有返回此 Principal 可进入的 Site。</p>
       <dl className="real-shell-facts">
         <div><dt>Account</dt><dd>{principal.principal.displayName}</dd></div>
@@ -136,7 +138,7 @@ function SiteChooserSurface({ sites }: { sites: readonly Readonly<Site>[] }) {
   return (
     <section className="real-route-surface" data-testid="real-site-chooser" data-route-state="CHOOSE_SITE">
       <p className="real-shell-eyebrow">REAL MODE · CHOOSE SITE</p>
-      <h1>选择一个授权 Site</h1>
+      <FocusHeading>选择一个授权 Site</FocusHeading>
       <p>当前账号可进入多个 Site。Shell 不会静默选择列表第一项，也不会使用浏览器中保存的 building alias。</p>
       <SiteChooserList sites={sites} />
     </section>
@@ -147,7 +149,7 @@ function SiteNotVisibleSurface({ sites }: { sites: readonly Readonly<Site>[] }) 
   return (
     <section className="real-route-surface" data-testid="real-site-not-visible" data-route-state="SITE_NOT_VISIBLE">
       <p className="real-shell-eyebrow">REAL MODE · SITE NOT VISIBLE</p>
-      <h1>Site 不可见或不存在</h1>
+      <FocusHeading>Site 不可见或不存在</FocusHeading>
       <p>Shell 无法在当前 Acting Organization 的授权 Registry 集合中验证 URL Site。为避免泄露，不说明具体原因，也不会自动切换 Scope。</p>
       {sites.length > 0 ? (
         <>
@@ -163,7 +165,7 @@ function GenericForbiddenSurface() {
   return (
     <section className="real-route-surface" data-testid="real-route-forbidden" data-route-state="FORBIDDEN">
       <p className="real-shell-eyebrow">REAL MODE · ACCESS DENIED</p>
-      <h1>访问被拒绝</h1>
+      <FocusHeading>访问被拒绝</FocusHeading>
       <p>当前 Principal 无权打开此页面。此状态不说明目标 Site、功能或资源是否存在。</p>
       <a className="real-shell-link-action" href="/">返回 Site 入口</a>
     </section>
@@ -174,7 +176,7 @@ function RedirectSurface() {
   return (
     <section className="real-route-surface" data-testid="real-site-redirect" data-route-state="REDIRECT">
       <p className="real-shell-eyebrow">REAL MODE · SITE REDIRECT</p>
-      <h1>正在进入唯一授权 Site</h1>
+      <FocusHeading>正在进入唯一授权 Site</FocusHeading>
       <div className="real-shell-progress" role="status" aria-live="polite">正在建立显式 Site URL…</div>
     </section>
   );
@@ -184,7 +186,7 @@ function SiteRouteNotFoundSurface({ decision }: { decision: Extract<SiteRoutingD
   return (
     <section className="real-route-surface" data-testid="real-site-route-not-found" data-route-state="NOT_FOUND">
       <p className="real-shell-eyebrow">REAL MODE · SITE 404</p>
-      <h1>此 Site 页面不存在</h1>
+      <FocusHeading>此 Site 页面不存在</FocusHeading>
       <p>URL Site 已通过 Registry 验证，但后续路径不属于当前 Real Build 的 Site 路由。</p>
       <a className="real-shell-link-action" href={siteRoute(decision.context.site, 'assets')}>返回 Site Assets</a>
     </section>
@@ -245,12 +247,15 @@ function CommandDraft({
 
 function ReadySiteSurface({
   decision,
+  snapshot,
   registerUnsavedDraft,
 }: {
   decision: Extract<SiteRoutingDecision, { state: 'READY' }>;
+  snapshot: ShellSnapshot;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
   const copy = SITE_ROUTE_COPY[decision.route];
+  const realtime = snapshot.realtime ?? createIdleRealtimeStatus();
   return (
     <section
       className="real-route-surface"
@@ -261,7 +266,7 @@ function ReadySiteSurface({
       data-site-route={decision.route}
     >
       <p className="real-shell-eyebrow">{copy.eyebrow}</p>
-      <h1>{copy.title}</h1>
+      <FocusHeading>{copy.title}</FocusHeading>
       <p>{copy.detail}</p>
       <dl className="real-shell-facts">
         <div><dt>Site</dt><dd>{decision.context.site.displayName}</dd></div>
@@ -273,10 +278,10 @@ function ReadySiteSurface({
       <div
         className="real-site-realtime-scope"
         data-testid="real-site-subscription"
-        data-subscription-site={decision.context.site.id}
-        data-subscription-state="idle"
+        data-subscription-site={realtime.siteId}
+        data-subscription-state={realtime.state}
       >
-        Realtime scope: idle for {decision.context.site.displayName}
+        Realtime scope: {realtimeStatusLabel(realtime)} for {decision.context.site.displayName}
       </div>
       {decision.route === 'commands' ? (
         <CommandDraft decision={decision} registerUnsavedDraft={registerUnsavedDraft} />
@@ -286,26 +291,43 @@ function ReadySiteSurface({
   );
 }
 
+function waitForSiteRoutePaint(): Promise<void> {
+  return new Promise((resolve) => {
+    let completed = false;
+    const finish = () => {
+      if (completed) return;
+      completed = true;
+      window.clearTimeout(timeout);
+      resolve();
+    };
+    const timeout = window.setTimeout(finish, 250);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(finish);
+    });
+  });
+}
+
 function ProtectedSiteRouteFrame({
   decision,
+  snapshot,
   registerProtectedResource,
   registerUnsavedDraft,
 }: {
   decision: Extract<SiteRoutingDecision, { state: 'READY' }>;
+  snapshot: ShellSnapshot;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
   useEffect(() => registerProtectedResource({
     id: `site-route-frame:${decision.context.site.id}:${decision.route}`,
     kind: 'temporary-state',
-    purge: () => new Promise<void>((resolve) => {
-      window.requestAnimationFrame(() => resolve());
-    }),
+    purge: waitForSiteRoutePaint,
   }), [decision.context.site.id, decision.route, registerProtectedResource]);
 
   return (
     <ReadySiteSurface
       decision={decision}
+      snapshot={snapshot}
       registerUnsavedDraft={registerUnsavedDraft}
     />
   );
@@ -347,6 +369,7 @@ function SiteSurface({
       return (
         <ProtectedSiteRouteFrame
           decision={decision}
+          snapshot={snapshot}
           registerProtectedResource={registerProtectedResource}
           registerUnsavedDraft={registerUnsavedDraft}
         />
