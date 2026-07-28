@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';
 import { AuthenticatedShell } from './AuthenticatedShell';
 import { REAL_FEATURE_MANIFEST } from './feature-manifest';
@@ -121,7 +121,16 @@ function resolveSiteShellDecision(snapshot: ShellSnapshot, pathname: string): Si
     snapshot.sites.items ?? [],
     snapshot.principal.authorization.capabilities,
   );
-  return decision.state === 'PLATFORM_ROUTE' ? undefined : decision;
+  if (decision.state === 'PLATFORM_ROUTE') return undefined;
+  if (decision.state === 'READY' || decision.state === 'SITE_ROUTE_NOT_FOUND') {
+    if (snapshot.siteTransition) return decision;
+    const protectedScope = snapshot.protectedScope;
+    if (protectedScope?.state === 'idle' && protectedScope.siteId === decision.context.site.id) {
+      return decision;
+    }
+    return { state: 'SITE_SCOPE_ACTIVATING', context: decision.context };
+  }
+  return decision;
 }
 
 function normalizedRouteState(decision: SiteShellDecision | RouteDecision | undefined): string | undefined {
@@ -145,6 +154,24 @@ export default function RealApp({ config }: RealAppProps) {
     };
   }, [runtime]);
 
+  const navigate = useCallback((target: string) => {
+    void runtime.requestSiteNavigation(target);
+  }, [runtime]);
+  const confirmSiteNavigation = useCallback(() => {
+    void runtime.confirmSiteNavigation();
+  }, [runtime]);
+  const cancelSiteNavigation = useCallback(() => {
+    runtime.cancelSiteNavigation();
+  }, [runtime]);
+  const registerProtectedResource = useCallback(
+    (resource: Parameters<typeof runtime.registerProtectedResource>[0]) => runtime.registerProtectedResource(resource),
+    [runtime],
+  );
+  const registerUnsavedDraft = useCallback(
+    (draft: Parameters<typeof runtime.registerUnsavedDraft>[0]) => runtime.registerUnsavedDraft(draft),
+    [runtime],
+  );
+
   const pathname = window.location.pathname;
   const platformAvailability = snapshot.platform?.state ?? 'checking';
   const platformNavigation = snapshot.principal
@@ -165,7 +192,9 @@ export default function RealApp({ config }: RealAppProps) {
       platformAvailability,
     )
     : undefined;
-  const selectedSite = siteDecision?.state === 'READY' || siteDecision?.state === 'SITE_ROUTE_NOT_FOUND'
+  const selectedSite = siteDecision?.state === 'READY'
+    || siteDecision?.state === 'SITE_ROUTE_NOT_FOUND'
+    || siteDecision?.state === 'SITE_SCOPE_ACTIVATING'
     ? siteDecision.context.site
     : undefined;
   const navigation = selectedSite && snapshot.principal
@@ -179,6 +208,19 @@ export default function RealApp({ config }: RealAppProps) {
   const displayedShellState = snapshot.state === 'READY' && routeState && routeState !== 'NOT_FOUND'
     ? routeState
     : snapshot.state;
+  const siteToActivate = selectedSite?.id;
+
+  useEffect(() => {
+    if (
+      siteToActivate
+      && snapshot.state === 'READY'
+      && snapshot.protectedScope?.state === 'idle'
+      && !snapshot.protectedScope.siteId
+      && !snapshot.siteTransition
+    ) {
+      runtime.activateSiteScope(siteToActivate);
+    }
+  }, [runtime, siteToActivate, snapshot.protectedScope, snapshot.siteTransition, snapshot.state]);
 
   useEffect(() => {
     if (redirectTarget) window.location.replace(redirectTarget);
@@ -208,6 +250,11 @@ export default function RealApp({ config }: RealAppProps) {
           decision={siteDecision}
           retry={() => { void runtime.retry(); }}
           logout={() => { void runtime.logout(); }}
+          onNavigate={navigate}
+          confirmSiteNavigation={confirmSiteNavigation}
+          cancelSiteNavigation={cancelSiteNavigation}
+          registerProtectedResource={registerProtectedResource}
+          registerUnsavedDraft={registerUnsavedDraft}
         />
       ) : null}
       {snapshot.state === 'READY' && platformDecision ? (
@@ -218,6 +265,9 @@ export default function RealApp({ config }: RealAppProps) {
           decision={platformDecision}
           retry={() => { void runtime.retry(); }}
           logout={() => { void runtime.logout(); }}
+          onNavigate={navigate}
+          confirmSiteNavigation={confirmSiteNavigation}
+          cancelSiteNavigation={cancelSiteNavigation}
         />
       ) : null}
     </main>

@@ -1,10 +1,24 @@
-import type { ReactNode } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import { RealRuntimeFacts } from './RealRuntimeFacts';
 import type { RealNavigationItem } from './route-policy';
 import type { RealRuntimeConfig } from './runtime-config';
 import type { ShellSnapshot } from './shell-runtime';
 
-function ShellNavigation({ items, pathname }: { items: RealNavigationItem[]; pathname: string }) {
+function ShellNavigation({
+  items,
+  pathname,
+  onNavigate,
+}: {
+  items: RealNavigationItem[];
+  pathname: string;
+  onNavigate?: (target: string) => void;
+}) {
+  const navigate = (event: MouseEvent<HTMLAnchorElement>, path: string) => {
+    if (!onNavigate) return;
+    event.preventDefault();
+    onNavigate(path);
+  };
+
   return (
     <nav className="real-shell-navigation" aria-label="Real navigation" data-testid="real-navigation">
       {items.map((item) => (
@@ -15,6 +29,7 @@ function ShellNavigation({ items, pathname }: { items: RealNavigationItem[]; pat
           data-feature-kind={item.kind}
           data-feature-degraded={String(item.degraded)}
           aria-current={pathname === item.path ? 'page' : undefined}
+          onClick={(event) => navigate(event, item.path)}
         >
           <span>{item.label}</span>
           {item.kind === 'not-integrated' ? <small>尚未接入</small> : null}
@@ -25,22 +40,93 @@ function ShellNavigation({ items, pathname }: { items: RealNavigationItem[]; pat
   );
 }
 
+function DraftConfirmation({
+  snapshot,
+  confirm,
+  cancel,
+}: {
+  snapshot: ShellSnapshot;
+  confirm: () => void;
+  cancel: () => void;
+}) {
+  const transition = snapshot.siteTransition;
+  if (!transition || transition.status !== 'confirmation-required') return null;
+  return (
+    <section
+      className="real-site-transition-dialog"
+      role="alertdialog"
+      aria-labelledby="real-site-draft-title"
+      aria-describedby="real-site-draft-detail"
+      data-testid="real-site-draft-confirmation"
+    >
+      <p className="real-shell-eyebrow">REAL MODE · UNSAVED DRAFTS</p>
+      <h2 id="real-site-draft-title">切换 Site 会丢弃未保存内容</h2>
+      <p id="real-site-draft-detail">确认后，Shell 会先清理当前 Site 的受保护状态，再进入目标 Scope。</p>
+      <ul>
+        {transition.dirtyDrafts?.map((draft) => <li key={draft.id}>{draft.label}</li>)}
+      </ul>
+      <div className="real-shell-actions">
+        <button type="button" onClick={confirm} data-testid="real-site-draft-confirm">丢弃并切换</button>
+        <button type="button" onClick={cancel} data-testid="real-site-draft-cancel">留在当前 Site</button>
+      </div>
+    </section>
+  );
+}
+
+function PurgingSurface() {
+  return (
+    <section className="real-route-surface" data-testid="real-site-purging" data-route-state="PURGING">
+      <p className="real-shell-eyebrow">REAL MODE · PURGING SITE SCOPE</p>
+      <h1>正在清理当前 Site</h1>
+      <p>旧请求已中止，realtime、Site cache、选中资源和业务临时状态正在关闭。新 Site 在清理完成前不会渲染。</p>
+      <div className="real-shell-progress" role="status" aria-live="assertive">正在撤销旧 Site generation…</div>
+    </section>
+  );
+}
+
+function PurgeFailedSurface({ snapshot }: { snapshot: ShellSnapshot }) {
+  const failure = snapshot.siteTransition?.failure;
+  return (
+    <section className="real-route-surface" data-testid="real-site-purge-failed" data-route-state="UNAVAILABLE">
+      <p className="real-shell-eyebrow">REAL MODE · PURGE FAILED</p>
+      <h1>无法安全切换 Site</h1>
+      <p>旧 Scope 已失效，但至少一个清理动作未确认完成。Shell 不会进入新 Site，也不会重新显示旧 Site 数据。</p>
+      {failure ? (
+        <div className="real-shell-problem" role="alert" data-retryable="false">
+          <strong>{failure.code}</strong>
+          <span>{failure.detail}</span>
+        </div>
+      ) : null}
+      <a className="real-shell-link-action" href={window.location.href}>重新建立可信 Scope</a>
+    </section>
+  );
+}
+
 export function RealShellChrome({
   config,
   snapshot,
   navigation,
   logout,
+  onNavigate,
+  confirmSiteNavigation,
+  cancelSiteNavigation,
   children,
 }: {
   config: RealRuntimeConfig;
   snapshot: ShellSnapshot;
   navigation: RealNavigationItem[];
   logout: () => void;
+  onNavigate?: (target: string) => void;
+  confirmSiteNavigation?: () => void;
+  cancelSiteNavigation?: () => void;
   children: ReactNode;
 }) {
   const principal = snapshot.principal!;
   const submitting = snapshot.logout?.status === 'submitting';
   const pathname = window.location.pathname;
+  const transition = snapshot.siteTransition;
+  const protectedScope = snapshot.protectedScope;
+  const transitionBlocksContent = transition?.status === 'purging' || transition?.status === 'failed';
 
   return (
     <section
@@ -49,6 +135,11 @@ export function RealShellChrome({
       data-protected-route-mounted="true"
       data-policy-revision={principal.authorization.policyRevision}
       data-capability-count={String(principal.authorization.capabilities.length)}
+      data-protected-scope-state={protectedScope?.state ?? 'idle'}
+      data-protected-scope-site={protectedScope?.siteId}
+      data-protected-scope-generation={String(protectedScope?.generation ?? 0)}
+      data-protected-resource-count={String(protectedScope?.resourceCount ?? 0)}
+      data-site-transition={transition?.status ?? 'idle'}
     >
       <header className="real-shell-header">
         <div>
@@ -66,7 +157,7 @@ export function RealShellChrome({
         </div>
       </header>
 
-      <ShellNavigation items={navigation} pathname={pathname} />
+      <ShellNavigation items={navigation} pathname={pathname} onNavigate={onNavigate} />
 
       <div className="real-shell-content">
         {snapshot.logout?.status === 'failed' ? (
@@ -76,7 +167,12 @@ export function RealShellChrome({
             {snapshot.logout.traceId ? <code>traceId {snapshot.logout.traceId}</code> : null}
           </div>
         ) : null}
-        {children}
+        {transition?.status === 'confirmation-required' && confirmSiteNavigation && cancelSiteNavigation ? (
+          <DraftConfirmation snapshot={snapshot} confirm={confirmSiteNavigation} cancel={cancelSiteNavigation} />
+        ) : null}
+        {transition?.status === 'purging' ? <PurgingSurface /> : null}
+        {transition?.status === 'failed' ? <PurgeFailedSurface snapshot={snapshot} /> : null}
+        {!transitionBlocksContent ? children : null}
         <RealRuntimeFacts config={config} />
       </div>
     </section>

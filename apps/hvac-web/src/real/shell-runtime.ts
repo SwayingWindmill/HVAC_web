@@ -10,6 +10,15 @@ import {
   isAlreadyInvalidLogout,
   normalizeReturnTo,
 } from './shell-policy';
+import {
+  createProtectedScopeCoordinator,
+  type DirtyProtectedScopeDraft,
+  type ProtectedScopeDraft,
+  type ProtectedScopePurgeOutcome,
+  type ProtectedScopeRequestToken,
+  type ProtectedScopeResource,
+  type ProtectedScopeSnapshot,
+} from './protected-scope';
 import { isUUIDv7 } from './site-routing';
 
 export type ShellState = 'BOOTSTRAPPING' | 'LOGIN_REQUIRED' | 'UNAVAILABLE' | 'READY';
@@ -42,11 +51,27 @@ export interface ShellSitesView {
   failure?: ShellFailureView;
 }
 
+export type SiteNavigationOutcome =
+  | 'confirmation-required'
+  | 'navigated'
+  | 'failed'
+  | 'busy'
+  | 'interrupted';
+
+export interface ShellSiteTransitionView {
+  status: 'confirmation-required' | 'purging' | 'failed';
+  target: string;
+  dirtyDrafts?: readonly DirtyProtectedScopeDraft[];
+  failure?: ShellFailureView;
+}
+
 export interface ShellSnapshot {
   state: ShellState;
   principal?: CurrentPrincipalResponse;
   platform?: ShellPlatformView;
   sites?: ShellSitesView;
+  protectedScope?: ProtectedScopeSnapshot;
+  siteTransition?: ShellSiteTransitionView;
   loginUrl?: string;
   reason?: string;
   failure?: ShellFailureView;
@@ -59,6 +84,14 @@ export interface ShellRuntime {
   bootstrap(currentUrl: string): Promise<void>;
   retry(): Promise<void>;
   beginLogin(): void;
+  activateSiteScope(siteId: string): void;
+  registerUnsavedDraft(draft: ProtectedScopeDraft): () => void;
+  registerProtectedResource(resource: ProtectedScopeResource): () => void;
+  protectedRequestToken(): ProtectedScopeRequestToken;
+  requestSiteNavigation(target: string): Promise<SiteNavigationOutcome>;
+  confirmSiteNavigation(): Promise<SiteNavigationOutcome>;
+  cancelSiteNavigation(): void;
+  handlePolicyRevision(policyRevision: string): Promise<'unchanged' | 'reloaded' | 'failed'>;
   logout(): Promise<LogoutOutcome>;
   purge(reason: string, beginLogin?: boolean): void;
   dispose(): void;
@@ -111,8 +144,34 @@ function browserEnvironment(): ShellRuntimeEnvironment {
   };
 }
 
+function normalizeSiteNavigationTarget(
+  target: string,
+  origin: string,
+): { target: string; siteId?: string } | undefined {
+  try {
+    const resolved = new URL(target, origin);
+    if (resolved.origin !== origin || resolved.username || resolved.password || resolved.search || resolved.hash) {
+      return undefined;
+    }
+    const pathname = resolved.pathname.length > 1 && resolved.pathname.endsWith('/')
+      ? resolved.pathname.slice(0, -1)
+      : resolved.pathname;
+    if (pathname === '/' || pathname === '/sites') return { target: pathname };
+    const segments = pathname.split('/').filter(Boolean);
+    if (segments[0] !== 'sites') return { target: pathname };
+    if (!segments[1] || !isUUIDv7(segments[1])) return undefined;
+    return { target: pathname, siteId: segments[1] };
+  } catch {
+    return undefined;
+  }
+}
+
 class BrowserShellRuntime implements ShellRuntime {
-  private snapshot: ShellSnapshot = { state: 'BOOTSTRAPPING' };
+  private readonly protectedScope = createProtectedScopeCoordinator();
+  private snapshot: ShellSnapshot = {
+    state: 'BOOTSTRAPPING',
+    protectedScope: this.protectedScope.current(),
+  };
   private readonly listeners = new Set<(snapshot: ShellSnapshot) => void>();
   private protectedPrincipal?: CurrentPrincipalResponse;
   private currentUrl = '/';
@@ -199,6 +258,111 @@ class BrowserShellRuntime implements ShellRuntime {
     this.environment.navigate(loginUrl);
   }
 
+  activateSiteScope(siteId: string): void {
+    if (this.snapshot.state !== 'READY' || !this.protectedPrincipal) return;
+    this.protectedScope.activate(siteId);
+    this.refreshProtectedScopeView();
+  }
+
+  registerUnsavedDraft(draft: ProtectedScopeDraft): () => void {
+    const unregister = this.protectedScope.registerDraft(draft);
+    this.refreshProtectedScopeView();
+    return () => {
+      unregister();
+      this.refreshProtectedScopeView();
+    };
+  }
+
+  registerProtectedResource(resource: ProtectedScopeResource): () => void {
+    const unregister = this.protectedScope.registerResource(resource);
+    this.refreshProtectedScopeView();
+    return () => {
+      unregister();
+      this.refreshProtectedScopeView();
+    };
+  }
+
+  protectedRequestToken(): ProtectedScopeRequestToken {
+    return this.protectedScope.requestToken();
+  }
+
+  async requestSiteNavigation(target: string): Promise<SiteNavigationOutcome> {
+    if (this.snapshot.state !== 'READY' || !this.protectedPrincipal) return 'interrupted';
+    if (this.snapshot.siteTransition?.status === 'purging') return 'busy';
+    const normalized = normalizeSiteNavigationTarget(target, this.environment.origin);
+    if (!normalized) return 'failed';
+    if (
+      normalized.siteId
+      && !this.snapshot.sites?.items?.some((site) => site.id === normalized.siteId)
+    ) {
+      return 'failed';
+    }
+
+    const activeSiteId = this.protectedScope.current().siteId;
+    if (!activeSiteId || normalized.siteId === activeSiteId) {
+      this.environment.navigate(normalized.target);
+      return 'navigated';
+    }
+
+    const dirtyDrafts = this.protectedScope.dirtyDrafts();
+    if (dirtyDrafts.length > 0) {
+      this.publishReadyTransition({
+        status: 'confirmation-required',
+        target: normalized.target,
+        dirtyDrafts,
+      });
+      return 'confirmation-required';
+    }
+
+    return this.performSiteNavigation(normalized.target);
+  }
+
+  confirmSiteNavigation(): Promise<SiteNavigationOutcome> {
+    const transition = this.snapshot.siteTransition;
+    if (!transition || transition.status !== 'confirmation-required') {
+      return Promise.resolve('interrupted');
+    }
+    return this.performSiteNavigation(transition.target);
+  }
+
+  cancelSiteNavigation(): void {
+    if (this.snapshot.siteTransition?.status !== 'confirmation-required') return;
+    this.publishReadyTransition(undefined);
+  }
+
+  async handlePolicyRevision(policyRevision: string): Promise<'unchanged' | 'reloaded' | 'failed'> {
+    const principal = this.protectedPrincipal;
+    if (!principal || this.snapshot.state !== 'READY') return 'failed';
+    if (principal.authorization.policyRevision === policyRevision) return 'unchanged';
+
+    const sequence = this.sequence;
+    this.publishReadyTransition({ status: 'purging', target: this.returnTo });
+    const purgePromise = this.protectedScope.purge('POLICY_CHANGE');
+    this.refreshProtectedScopeView();
+    const outcome = await purgePromise;
+    if (!this.isCurrent(sequence) || this.protectedPrincipal !== principal) return 'failed';
+    if (outcome.status !== 'completed') {
+      const failure = outcome.status === 'failed'
+        ? outcome.failure
+        : {
+          code: 'PROTECTED_SCOPE_PURGE_FAILED' as const,
+          detail: 'Protected scope purge is already in progress.',
+          retryable: false as const,
+        };
+      this.publish({
+        state: 'UNAVAILABLE',
+        failure,
+      });
+      return 'failed';
+    }
+
+    await this.bootstrap(this.currentUrl);
+    return this.snapshot.state === 'READY'
+      && this.snapshot.principal?.authorization.policyRevision === policyRevision
+      ? 'reloaded'
+      : 'failed';
+  }
+
   async logout(): Promise<LogoutOutcome> {
     const principal = this.protectedPrincipal;
     if (!principal || this.snapshot.state !== 'READY') return 'completed';
@@ -212,6 +376,7 @@ class BrowserShellRuntime implements ShellRuntime {
       principal,
       platform,
       sites,
+      siteTransition: this.snapshot.siteTransition,
       logout: { status: 'submitting' },
     });
 
@@ -237,6 +402,7 @@ class BrowserShellRuntime implements ShellRuntime {
         principal,
         platform,
         sites,
+        siteTransition: this.snapshot.siteTransition,
         logout: {
           status: 'failed',
           code: failure.code,
@@ -257,6 +423,7 @@ class BrowserShellRuntime implements ShellRuntime {
 
   dispose(): void {
     if (this.disposed) return;
+    void this.startProtectedPurge('DISPOSE');
     this.disposed = true;
     this.sequence += 1;
     this.bootstrapController?.abort();
@@ -266,7 +433,67 @@ class BrowserShellRuntime implements ShellRuntime {
     this.listeners.clear();
   }
 
+  private refreshProtectedScopeView(): void {
+    if (this.snapshot.state !== 'READY' || !this.protectedPrincipal) return;
+    this.publish({ ...this.snapshot });
+  }
+
+  private publishReadyTransition(siteTransition: ShellSiteTransitionView | undefined): void {
+    const principal = this.protectedPrincipal;
+    if (!principal || this.snapshot.state !== 'READY') return;
+    this.publish({
+      state: 'READY',
+      principal,
+      platform: this.snapshot.platform,
+      sites: this.snapshot.sites,
+      logout: this.snapshot.logout ?? { status: 'idle' },
+      siteTransition,
+    });
+  }
+
+  private async performSiteNavigation(target: string): Promise<SiteNavigationOutcome> {
+    const principal = this.protectedPrincipal;
+    if (!principal || this.snapshot.state !== 'READY') return 'interrupted';
+    const sequence = this.sequence;
+    this.publishReadyTransition({ status: 'purging', target });
+    const purgePromise = this.protectedScope.purge('SITE_CHANGE');
+    this.refreshProtectedScopeView();
+    const outcome = await purgePromise;
+
+    if (!this.isCurrent(sequence) || this.protectedPrincipal !== principal || this.snapshot.state !== 'READY') {
+      return 'interrupted';
+    }
+    if (outcome.status === 'busy') return 'busy';
+    if (outcome.status === 'failed') {
+      this.publishReadyTransition({
+        status: 'failed',
+        target,
+        failure: outcome.failure,
+      });
+      return 'failed';
+    }
+
+    this.environment.navigate(target);
+    return 'navigated';
+  }
+
+  private startProtectedPurge(
+    reason: 'SESSION_LOSS' | 'LOGOUT' | 'DISPOSE',
+  ): Promise<ProtectedScopePurgeOutcome> {
+    const current = this.protectedScope.current();
+    if (
+      current.state === 'idle'
+      && !current.siteId
+      && current.draftCount === 0
+      && current.resourceCount === 0
+    ) {
+      return Promise.resolve({ status: 'completed' });
+    }
+    return this.protectedScope.purge(reason);
+  }
+
   private beginProtectedTransition(): number {
+    void this.startProtectedPurge('SESSION_LOSS');
     this.sequence += 1;
     this.bootstrapController?.abort();
     this.bootstrapController = undefined;
@@ -281,11 +508,15 @@ class BrowserShellRuntime implements ShellRuntime {
 
   private publish(snapshot: ShellSnapshot): void {
     if (this.disposed) return;
-    this.snapshot = snapshot;
-    for (const listener of this.listeners) listener(snapshot);
+    const published = snapshot.state === 'READY'
+      ? { ...snapshot, protectedScope: this.protectedScope.current() }
+      : snapshot;
+    this.snapshot = published;
+    for (const listener of this.listeners) listener(published);
   }
 
   private enterLoginRequired(reason: string, navigate: boolean): void {
+    void this.startProtectedPurge('SESSION_LOSS');
     this.bootstrapController?.abort();
     this.bootstrapController = undefined;
     this.clearExpiration();
@@ -296,6 +527,7 @@ class BrowserShellRuntime implements ShellRuntime {
   }
 
   private completeLogout(reason: string): void {
+    void this.startProtectedPurge('LOGOUT');
     this.sequence += 1;
     this.enterLoginRequired(reason, false);
   }
@@ -316,6 +548,7 @@ class BrowserShellRuntime implements ShellRuntime {
           status: response.data,
         },
         sites: this.snapshot.sites,
+        siteTransition: this.snapshot.siteTransition,
         logout: this.snapshot.logout ?? { status: 'idle' },
       });
     } catch (error: unknown) {
@@ -337,6 +570,7 @@ class BrowserShellRuntime implements ShellRuntime {
           ),
         },
         sites: this.snapshot.sites,
+        siteTransition: this.snapshot.siteTransition,
         logout: this.snapshot.logout ?? { status: 'idle' },
       });
     }
@@ -404,6 +638,7 @@ class BrowserShellRuntime implements ShellRuntime {
           state: 'available',
           items: Object.freeze([...sites]),
         },
+        siteTransition: this.snapshot.siteTransition,
         logout: this.snapshot.logout ?? { status: 'idle' },
       });
     } catch (error: unknown) {
@@ -428,6 +663,7 @@ class BrowserShellRuntime implements ShellRuntime {
               : '无法读取当前 Organization 的授权 Site。',
           ),
         },
+        siteTransition: this.snapshot.siteTransition,
         logout: this.snapshot.logout ?? { status: 'idle' },
       });
     }

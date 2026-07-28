@@ -130,6 +130,9 @@ export function AuthenticatedShell({
   decision,
   retry,
   logout,
+  onNavigate,
+  confirmSiteNavigation,
+  cancelSiteNavigation,
 }: {
   config: RealRuntimeConfig;
   snapshot: ShellSnapshot;
@@ -137,9 +140,20 @@ export function AuthenticatedShell({
   decision: RouteDecision;
   retry: () => void;
   logout: () => void;
+  onNavigate: (target: string) => void;
+  confirmSiteNavigation: () => void;
+  cancelSiteNavigation: () => void;
 }) {
   return (
-    <RealShellChrome config={config} snapshot={snapshot} navigation={navigation} logout={logout}>
+    <RealShellChrome
+      config={config}
+      snapshot={snapshot}
+      navigation={navigation}
+      logout={logout}
+      onNavigate={onNavigate}
+      confirmSiteNavigation={confirmSiteNavigation}
+      cancelSiteNavigation={cancelSiteNavigation}
+    >
       <RouteSurface decision={decision} snapshot={snapshot} retry={retry} />
     </RealShellChrome>
   );

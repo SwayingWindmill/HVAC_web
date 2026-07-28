@@ -554,6 +554,56 @@ try {
     await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'READY' && document.querySelector('[data-testid="real-site-route-${leaf}"]')?.getAttribute('data-site-id') === '${siteBId}'`, `validated explicit Site ${leaf} route`);
   }
 
+  await navigate(cdpClient, `${webURL}/sites/${siteAId}/commands`);
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-commands"]')?.getAttribute('data-site-id') === '${siteAId}' && Boolean(document.querySelector('[data-testid="real-site-switcher"]'))`, 'RMS-06 Site transition source');
+  await evaluate(cdpClient, `(() => {
+    const input = document.querySelector('[data-testid="real-command-draft-value"]');
+    if (!(input instanceof HTMLTextAreaElement)) return false;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    setter?.call(input, 'Keep this unsaved command draft');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`);
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-command-draft-value"]')?.value === 'Keep this unsaved command draft'`, 'dirty Site draft');
+  await evaluate(cdpClient, `document.querySelector('[data-site-switch-id="${siteBId}"]')?.click()`);
+  await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-testid="real-site-draft-confirmation"]'))`, 'Site draft confirmation');
+  const retainedBeforeConfirmation = await evaluate(cdpClient, `({
+    pathname: location.pathname,
+    oldSite: document.body.innerText.includes('Tokyo Plant'),
+    oldSubscription: document.querySelector('[data-testid="real-site-subscription"]')?.getAttribute('data-subscription-site'),
+    draft: document.querySelector('[data-testid="real-command-draft-value"]')?.value,
+  })`);
+  assert(retainedBeforeConfirmation.pathname === `/sites/${siteAId}/commands`, 'draft warning changed Site before confirmation');
+  assert(retainedBeforeConfirmation.oldSite && retainedBeforeConfirmation.oldSubscription === siteAId, 'draft warning purged the old Site before confirmation');
+  assert(retainedBeforeConfirmation.draft === 'Keep this unsaved command draft', 'draft warning discarded the unsaved draft');
+  await clickTestId(cdpClient, 'real-site-draft-cancel');
+  await waitForCondition(cdpClient, `!document.querySelector('[data-testid="real-site-draft-confirmation"]') && document.querySelector('[data-testid="real-command-draft-value"]')?.value === 'Keep this unsaved command draft'`, 'cancelled Site transition');
+
+  await evaluate(cdpClient, `document.querySelector('[data-site-switch-id="${siteBId}"]')?.click()`);
+  await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-testid="real-site-draft-confirmation"]'))`, 'second Site draft confirmation');
+  await clickTestId(cdpClient, 'real-site-draft-confirm');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-purging"]') && !document.body.innerText.includes('Tokyo Plant') && !document.querySelector('[data-testid="real-site-subscription"]') && document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-resource-count') === '0'`, 'old Site purge before navigation');
+  const purgingState = await evaluate(cdpClient, `({
+    pathname: location.pathname,
+    transition: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-site-transition'),
+    scopeSite: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-scope-site'),
+    newSiteRendered: document.body.innerText.includes('Osaka Plant'),
+  })`);
+  assert(purgingState.pathname === `/sites/${siteAId}/commands`, 'navigation began before old Site purge became visible');
+  assert(purgingState.transition === 'purging' && !purgingState.scopeSite, 'protected Site scope was not revoked during purge');
+  assert(purgingState.newSiteRendered === false, 'new Site rendered before old Site purge completed');
+  await waitForCondition(cdpClient, `location.pathname === '/sites/${siteBId}/assets' && document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-site-id') === '${siteBId}'`, 'new Site after protected purge');
+  const completedSiteTransition = await evaluate(cdpClient, `({
+    oldRoute: Boolean(document.querySelector('[data-site-route][data-site-id="${siteAId}"]')),
+    oldDraft: Boolean(document.querySelector('[data-testid="real-command-draft-value"]')),
+    oldSubscription: Boolean(document.querySelector('[data-subscription-site="${siteAId}"]')),
+    newSite: document.querySelector('[data-testid="real-site-route-assets"]')?.textContent?.includes('Osaka Plant') ?? false,
+    newScope: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-scope-site'),
+  })`);
+  assert(!completedSiteTransition.oldRoute && !completedSiteTransition.oldDraft && !completedSiteTransition.oldSubscription, 'old Site protected values survived the transition');
+  assert(completedSiteTransition.newSite && completedSiteTransition.newScope === siteBId, 'new Site did not establish a fresh protected scope');
+
   fixture.state.roles = ['platform-admin'];
   fixture.state.capabilities = ['site.list'];
   await navigate(cdpClient, `${webURL}/sites/${siteAId}/assets`);
