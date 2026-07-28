@@ -58,9 +58,9 @@ function site(id, owningOrganizationId, code, displayName) {
   };
 }
 
-function device(id, owningOrganizationId, siteId, code, displayName) {
+function device(id, owningOrganizationId, siteId, code, displayName, deviceType = 'HVAC_SENSOR') {
   return {
-    id, owningOrganizationId, siteId, code, displayName, deviceType: 'HVAC_SENSOR', status: 'ACTIVE',
+    id, owningOrganizationId, siteId, code, displayName, deviceType, status: 'ACTIVE',
     revision: 1, createdAt: instant, updatedAt: instant,
   };
 }
@@ -81,7 +81,7 @@ const devices = {
     device(ids.deviceA1, ids.organizationA, ids.siteA, 'DEV-A1', 'Alpha AHU Sensor'),
     device(ids.deviceA2, ids.organizationA, ids.siteA, 'DEV-A2', 'Alpha Pump Sensor'),
   ],
-  [ids.siblingSiteA]: [device(ids.siblingDeviceA, ids.organizationA, ids.siblingSiteA, 'DEV-A3', 'Sibling Chiller Sensor')],
+  [ids.siblingSiteA]: [device(ids.siblingDeviceA, ids.organizationA, ids.siblingSiteA, 'DEV-A3', 'Sibling Chiller Sensor', 'CHILLER')],
   [ids.siteB]: [device(ids.deviceB, ids.organizationB, ids.siteB, 'DEV-B1', 'Beta AHU Sensor')],
 };
 const deviceById = new Map(Object.values(devices).flat().map((entry) => [entry.id, entry]));
@@ -479,6 +479,48 @@ try {
   assert(!siblingState.text.includes('Alpha AHU Sensor') && !siblingState.hasDeviceParam, 'Site switch retained hidden Device state');
   assert(siblingState.audit.purgeCount >= 2 && siblingState.cacheCount > 0, 'Site switch did not purge then install new Site cache');
   assertions.push('sibling-site-switch-purges-hidden-device');
+
+  assert(await evaluate(cdpClient, `(() => {
+    const row = Array.from(document.querySelectorAll('tr')).find((candidate) => candidate.textContent?.includes('Sibling Chiller Sensor'));
+    const button = Array.from(row?.querySelectorAll('button') ?? []).find((candidate) => candidate.textContent?.trim() === '详情');
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`), 'Sibling Chiller detail control was not available');
+  await waitForCondition(
+    cdpClient,
+    `Boolean(document.querySelector('[data-central-plant-profile="CHILLER"]')) && document.body.innerText.includes('冷水机组实时运行摘要') && document.body.innerText.includes('主机 COP') && document.body.innerText.includes('212.5 kW') && document.body.innerText.includes('1080 kW') && document.body.innerText.includes('6.7 °C')`,
+    'central-plant Chiller summary',
+  );
+  const chillerDetail = await evaluate(cdpClient, `({
+    text: document.querySelector('[data-central-plant-profile="CHILLER"]')?.innerText ?? '',
+    audit: window.__S2_HVAC_WEB_CONTROL__.audit(),
+  })`);
+  const expectedChillerKeys = [
+    'chiller.run_state',
+    'chiller.power',
+    'chiller.cop',
+    'chiller.cooling_capacity',
+    'chiller.compressor_load',
+    'chiller.leaving_chilled_water_temperature',
+    'chiller.entering_chilled_water_temperature',
+    'chiller.chilled_water_temperature_setpoint',
+    'chiller.entering_cooling_water_temperature',
+    'chiller.business_revision',
+    'chiller.fault_code',
+  ];
+  const chillerOpen = chillerDetail.audit.opens.at(-1);
+  assert(JSON.stringify(chillerOpen?.keys) === JSON.stringify(expectedChillerKeys), 'Chiller detail did not request the central-plant exact keys');
+  assert(chillerDetail.text.includes('5.08') && chillerDetail.text.includes('STALE') && chillerDetail.text.includes('SUSPECT'), 'Chiller summary lost COP or quality state');
+  assertions.push('central-plant-chiller-exact-keys-and-summary');
+  stateEvidence.chiller = { cop: 5.08, powerKw: 212.5, coolingCapacityKw: 1080, quality: 'SUSPECT' };
+  assert(await evaluate(cdpClient, `(() => {
+    const close = document.querySelector('.ant-drawer-close');
+    if (!close) return false;
+    close.click();
+    return true;
+  })()`), 'Chiller detail close control was not available');
+  await waitForCondition(cdpClient, `!new URLSearchParams(location.search).has('device')`, 'Chiller detail close');
 
   const cachedBeforeRouteChange = await evaluate(cdpClient, `window.__S2_HVAC_WEB_CONTROL__.cachedDeviceIds()`);
   const cachedAfterRouteChange = await evaluate(cdpClient, `window.__S2_HVAC_WEB_CONTROL__.routeCohortChanged()`);

@@ -9,6 +9,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 const realAssets = await text('apps/hvac-web/src/pages/Assets/RealAssets.tsx');
 const assetsEntry = await text('apps/hvac-web/src/pages/Assets/index.tsx');
 const current = await text('apps/hvac-web/src/api/telemetry-current.ts');
+const centralPlant = await text('apps/hvac-web/src/domain/centralPlantTelemetry.ts');
 const rendering = await text('apps/hvac-web/src/components/DeviceTelemetryState.tsx');
 const principal = await text('apps/hvac-web/src/components/AuthenticatedPrincipalStatus.tsx');
 const liveIndex = await text('apps/hvac-web/src/platform/telemetry-live/index.ts');
@@ -22,7 +23,7 @@ assert(assetsEntry.includes("API_MODE === 'real'") && assetsEntry.includes('<Rea
 for (const marker of [
   'useVisibleDevicePresence', 'useDeviceTelemetryLive', 'DevicePresenceCell', 'DeviceTelemetryPanel',
   'purgeTelemetryCurrentState(queryClient, telemetryRuntime)', 'Presence-only batch', 'exact keys',
-  'data-presence-batch-state="partial"', '真实模式保持 Registry 列表可见',
+  'deviceType={selectedDevice?.deviceType}', 'data-presence-batch-state="partial"', '真实模式保持 Registry 列表可见',
 ]) assert(realAssets.includes(marker), `RealAssets is missing ${marker}`);
 for (const forbidden of [
   "from '@/api/telemetry'", 'getToken(', 'hvac_token', 'socket.io-client', '/ws/telemetry', 'thingsboard/api', 'MockAssets',
@@ -30,7 +31,8 @@ for (const forbidden of [
 
 for (const marker of [
   'createS2TelemetryClient', "from '@/platform/telemetry-live'", 'batchGetDeviceObservationSnapshots',
-  'keys: []', 'MAX_BATCH_DEVICES = 100', "'temperature'", "'humidity'", "'setpoint'", "'power'",
+  'keys: []', 'MAX_BATCH_DEVICES = 100', 'getDeviceTelemetryProfile', 'deviceDetailTelemetryKeys',
+  'const selectedKeys = keys ?? deviceDetailTelemetryKeys(device?.deviceType)', 'keys: [...selectedKeys]',
   'Authenticated Organization changed during telemetry request', 'snapshot.values.length !== 0',
   'runtime.live.open', 'runtime.live.purge()', "queryClient?.removeQueries({ queryKey: ['s2-current'] })",
   'x-route-policy-revision', 'runtime.routePolicy.subscribe',
@@ -41,10 +43,20 @@ for (const forbidden of [
   '/ws/telemetry', 'socket.io-client', 'thingsboard/api', 'createMock', 'mockTelemetry',
 ]) assert(!current.toLowerCase().includes(forbidden.toLowerCase()), `telemetry-current contains forbidden authority/fallback marker: ${forbidden}`);
 
+for (const marker of [
+  "CHILLER: profile('CHILLER'", "CHILLED_WATER_PUMP: profile('CHILLED_WATER_PUMP'",
+  "COOLING_WATER_PUMP: profile('COOLING_WATER_PUMP'", "COOLING_TOWER: profile('COOLING_TOWER'",
+  "HVAC_POWER_METER: profile('HVAC_POWER_METER'", "BTU_METER: profile('BTU_METER'",
+  "GENERIC: profile('GENERIC'", "'temperature'", "'humidity'", "'setpoint'", "'power'",
+  "'chiller.cop'", "'hvac_meter.active_power'", "'btu_meter.instant_cooling_capacity'",
+  'buildDeviceTelemetryHighlights', 'telemetryPointDefinition',
+]) assert(centralPlant.includes(marker), `central-plant telemetry profile is missing ${marker}`);
+
 assert(liveIndex.includes('TelemetryLiveClient') && !liveIndex.includes('centrifugo-transport'), 'feature-facing live boundary exposes transport internals');
 for (const marker of [
   'ONLINE', 'OFFLINE', 'STALE', 'UNKNOWN', 'UNAVAILABLE', 'MISSING（不补零）', 'SUSPECT',
   'data-transport-state="degraded"', 'data-platform-availability="UNAVAILABLE"', 'data-device-live-state="revoked"',
+  'data-central-plant-profile', '实时运行摘要', 'telemetryPointDefinition',
   '原 sampledAt', '不会混合尚未连续应用的 publication', 'Last Known 值保留原 sampledAt',
 ]) assert(rendering.includes(marker), `state rendering is missing ${marker}`);
 assert(!rendering.includes('Date.now()') && !rendering.includes('new Date().toISOString()'), 'rendering invents a request-time device timestamp');
@@ -55,7 +67,8 @@ for (const marker of [
   'two-device-partial-presence-batch', 'exact-key-last-known-rendering', 'live-delta-shared-snapshot-model',
   'reconnect-no-mixed-current-state', 'gap-requires-resynchronization', 'transport-outage-explicit-no-fallback',
   'revocation-purges-browser-state', 'sibling-site-switch-purges-hidden-device',
-  'route-cohort-change-purges-browser-state', 'two-organization-dual-principal-fail-closed',
+  'central-plant-chiller-exact-keys-and-summary', 'route-cohort-change-purges-browser-state',
+  'two-organization-dual-principal-fail-closed',
   'browser-a11y-controls-labeled', 'real-mode-network-no-fallback',
 ]) assert(browserRunner.includes(marker), `browser journey is missing ${marker}`);
 
@@ -68,9 +81,10 @@ for (const marker of [
   'npm run s2:ticket-09', 'out/s2-ticket-09', 'if-no-files-found: error',
 ]) assert(workflow.includes(marker), `Ticket 09 workflow is missing ${marker}`);
 
-for (const script of ['s2:hvac-web:check', 's2:hvac-web:browser', 's2:ticket-09']) {
+for (const script of ['test:central-plant-telemetry', 's2:hvac-web:check', 's2:hvac-web:browser', 's2:ticket-09']) {
   assert(packageJSON.scripts?.[script], `package script ${script} is missing`);
 }
+assert(packageJSON.scripts['s2:hvac-web:check'].includes('test:central-plant-telemetry'), 'S2 HVAC Web check omits central-plant telemetry behavior tests');
 assert(packageJSON.scripts['s2:ticket-09'].includes('s2:hvac-web:browser'), 'Ticket 09 omits browser evidence');
 
 await mkdir(dirname(output), { recursive: true });

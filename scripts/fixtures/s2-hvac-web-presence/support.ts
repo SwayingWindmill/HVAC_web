@@ -21,7 +21,7 @@ export interface BrowserLiveAudit {
 const evaluatedAt = '2026-07-25T05:30:00.000Z';
 const sampledAt = '2026-07-25T05:28:00.000Z';
 
-function valueStates(updated: boolean): TelemetryKeyState[] {
+function genericValueStates(updated: boolean): TelemetryKeyState[] {
   if (updated) {
     return [
       {
@@ -66,7 +66,57 @@ function valueStates(updated: boolean): TelemetryKeyState[] {
   ];
 }
 
-function snapshot(deviceId: string, updated: boolean): DeviceObservationSnapshot {
+function chillerValueStates(keys: readonly string[], updated: boolean): TelemetryKeyState[] {
+  const observationTime = updated ? '2026-07-25T05:31:00.000Z' : sampledAt;
+  const receivedTime = updated ? '2026-07-25T05:31:01.000Z' : '2026-07-25T05:28:01.000Z';
+  const policyRevision = updated ? 12 : 11;
+  const present = (
+    key: string,
+    value: string | number,
+    valueType: 'STRING' | 'NUMBER',
+    unit: string | null,
+    freshness: 'FRESH' | 'STALE' = 'FRESH',
+    quality: 'GOOD' | 'SUSPECT' = 'GOOD',
+  ): TelemetryKeyState => ({
+    key,
+    state: 'PRESENT',
+    value,
+    valueType,
+    unit,
+    sampledAt: observationTime,
+    receivedAt: receivedTime,
+    freshness,
+    quality,
+    qualityReasons: quality === 'SUSPECT' ? ['SOURCE_LAG_EXCEEDED'] : [],
+    policyRevision,
+  });
+  const states = new Map<string, TelemetryKeyState>([
+    ['chiller.run_state', present('chiller.run_state', 'RUNNING', 'STRING', null)],
+    ['chiller.power', present('chiller.power', updated ? 220 : 212.5, 'NUMBER', 'kW')],
+    ['chiller.cop', present('chiller.cop', updated ? 5.15 : 5.08, 'NUMBER', null)],
+    ['chiller.cooling_capacity', present('chiller.cooling_capacity', updated ? 1133 : 1080, 'NUMBER', 'kW', updated ? 'FRESH' : 'STALE', updated ? 'GOOD' : 'SUSPECT')],
+    ['chiller.compressor_load', present('chiller.compressor_load', updated ? 82 : 78, 'NUMBER', '%')],
+    ['chiller.leaving_chilled_water_temperature', present('chiller.leaving_chilled_water_temperature', updated ? 6.5 : 6.7, 'NUMBER', 'Cel')],
+    ['chiller.entering_chilled_water_temperature', present('chiller.entering_chilled_water_temperature', updated ? 12.3 : 12.1, 'NUMBER', 'Cel')],
+    ['chiller.chilled_water_temperature_setpoint', present('chiller.chilled_water_temperature_setpoint', 6.5, 'NUMBER', 'Cel')],
+    ['chiller.entering_cooling_water_temperature', present('chiller.entering_cooling_water_temperature', updated ? 29.2 : 29.4, 'NUMBER', 'Cel')],
+    ['chiller.business_revision', present('chiller.business_revision', updated ? 8 : 7, 'NUMBER', null)],
+    ['chiller.fault_code', present('chiller.fault_code', 'NONE', 'STRING', null)],
+  ]);
+  return keys.map((key) => states.get(key) ?? {
+    key,
+    state: 'MISSING',
+    freshness: 'MISSING',
+    missingReason: 'NEVER_OBSERVED',
+    policyRevision,
+  });
+}
+
+function valueStates(keys: readonly string[], updated: boolean): TelemetryKeyState[] {
+  return keys.includes('chiller.cop') ? chillerValueStates(keys, updated) : genericValueStates(updated);
+}
+
+function snapshot(deviceId: string, keys: readonly string[], updated: boolean): DeviceObservationSnapshot {
   return {
     schemaVersion: 1,
     deviceId,
@@ -90,7 +140,7 @@ function snapshot(deviceId: string, updated: boolean): DeviceObservationSnapshot
     },
     telemetryReadiness: updated ? 'CURRENT' : 'DEGRADED',
     displayState: updated ? 'ONLINE' : 'STALE',
-    values: valueStates(updated),
+    values: valueStates(keys, updated),
   };
 }
 
@@ -109,7 +159,7 @@ class ControlledSession implements TelemetryLiveSession {
       deviceId: target.deviceId,
       keys: [...target.keys],
       updatedAt: evaluatedAt,
-      snapshot: snapshot(target.deviceId, false),
+      snapshot: snapshot(target.deviceId, target.keys, false),
       recovered: false,
     };
   }
@@ -142,11 +192,11 @@ class ControlledSession implements TelemetryLiveSession {
 
   transition(mode: BrowserLiveMode): void {
     if (this.closed) return;
-    const currentSnapshot = this.state.snapshot ?? snapshot(this.target.deviceId, false);
+    const currentSnapshot = this.state.snapshot ?? snapshot(this.target.deviceId, this.target.keys, false);
     if (mode === 'live-update') {
       this.state = {
         status: 'live', clientSubscriptionId: this.target.clientSubscriptionId, deviceId: this.target.deviceId,
-        keys: [...this.target.keys], updatedAt: '2026-07-25T05:31:02.000Z', snapshot: snapshot(this.target.deviceId, true), recovered: true,
+        keys: [...this.target.keys], updatedAt: '2026-07-25T05:31:02.000Z', snapshot: snapshot(this.target.deviceId, this.target.keys, true), recovered: true,
       };
     } else if (mode === 'reconnect') {
       this.state = {
