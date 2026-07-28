@@ -587,7 +587,7 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
                 icon={<DatabaseOutlined />}
                 description="ONLINE/OFFLINE/STALE/UNKNOWN/UNAVAILABLE 与点位 MISSING/SUSPECT 均来自同一权威 Snapshot 状态模型。"
               >
-                <DeviceTelemetryPanel result={deviceLive} />
+                <DeviceTelemetryPanel result={deviceLive} deviceType={selectedDevice?.deviceType} />
               </OperationsDetailSection>
             ) : null}
           </div>

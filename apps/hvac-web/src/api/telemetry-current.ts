@@ -23,13 +23,13 @@ import {
   type TelemetryLiveSession,
   type TelemetryLiveState,
 } from '@/platform/telemetry-live';
+import { getDeviceTelemetryProfile } from '@/domain/centralPlantTelemetry';
 
-export const DEVICE_DETAIL_TELEMETRY_KEYS = [
-  'temperature',
-  'humidity',
-  'setpoint',
-  'power',
-] as const satisfies ReadonlyArray<TelemetryKey>;
+export const DEVICE_DETAIL_TELEMETRY_KEYS = getDeviceTelemetryProfile('GENERIC').keys as ReadonlyArray<TelemetryKey>;
+
+export function deviceDetailTelemetryKeys(deviceType: string | null | undefined): ReadonlyArray<TelemetryKey> {
+  return getDeviceTelemetryProfile(deviceType).keys as ReadonlyArray<TelemetryKey>;
+}
 
 const PRESENCE_QUERY_ROOT = ['s2-current', 'presence'] as const;
 const MAX_BATCH_DEVICES = 100;
@@ -229,11 +229,12 @@ function liveSubscriptionId(deviceId: string): string {
 export function useDeviceTelemetryLive(
   device: Device | null,
   runtime: TelemetryCurrentRuntime = defaultRuntime,
-  keys: ReadonlyArray<TelemetryKey> = DEVICE_DETAIL_TELEMETRY_KEYS,
+  keys?: ReadonlyArray<TelemetryKey>,
 ): DeviceLiveResult {
   const queryClient = useQueryClient();
   const [result, setResult] = useState<DeviceLiveResult>({ state: null, pending: Boolean(device), error: null });
-  const keySignature = keys.join('|');
+  const selectedKeys = keys ?? deviceDetailTelemetryKeys(device?.deviceType);
+  const keySignature = selectedKeys.join('|');
 
   useEffect(() => {
     if (API_MODE !== 'real' || !device) {
@@ -248,7 +249,7 @@ export function useDeviceTelemetryLive(
     runtime.live.open([{
       clientSubscriptionId: liveSubscriptionId(device.id),
       deviceId: device.id,
-      keys: [...keys],
+      keys: [...selectedKeys],
     }], { signal: controller.signal }).then((opened) => {
       if (!active) {
         opened.close();
@@ -273,7 +274,7 @@ export function useDeviceTelemetryLive(
       unsubscribe?.();
       session?.close();
     };
-  }, [device?.id, device?.owningOrganizationId, device?.siteId, keySignature, queryClient, runtime]);
+  }, [device?.id, device?.owningOrganizationId, device?.siteId, device?.deviceType, keySignature, queryClient, runtime]);
 
   return result;
 }

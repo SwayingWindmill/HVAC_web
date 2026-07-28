@@ -1,4 +1,4 @@
-import { Alert, Descriptions, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Card, Col, Descriptions, Row, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type {
   DeviceObservationSnapshot,
@@ -7,6 +7,13 @@ import type {
 } from '@/api/generated/s2Telemetry.gen';
 import type { DeviceLiveResult, PresenceBatchItem } from '@/api/telemetry-current';
 import { presentTelemetryError } from '@/api/telemetry-current';
+import {
+  buildDeviceTelemetryHighlights,
+  formatTelemetryDisplayValue,
+  formatTelemetryUnit,
+  getDeviceTelemetryProfile,
+  telemetryPointDefinition,
+} from '@/domain/centralPlantTelemetry';
 import { LoadingState } from './PageState';
 
 const displayLabels: Record<Exclude<DeviceDisplayState, null>, string> = {
@@ -36,12 +43,6 @@ function formatInstant(value: string | null | undefined): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString('zh-CN', { hour12: false });
 }
 
-function formatTelemetryValue(value: unknown): string {
-  if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
-  if (typeof value === 'string' || typeof value === 'boolean') return String(value);
-  return JSON.stringify(value);
-}
-
 export function DevicePresenceCell({ item, pending }: { item?: PresenceBatchItem; pending: boolean }) {
   if (pending && !item) return <Typography.Text type="secondary">读取 Presence…</Typography.Text>;
   if (!item) return <Tag>UNKNOWN</Tag>;
@@ -68,6 +69,7 @@ export function DevicePresenceCell({ item, pending }: { item?: PresenceBatchItem
 
 interface TelemetryRow {
   key: string;
+  label: string;
   value: string;
   unit: string;
   freshness: string;
@@ -79,9 +81,11 @@ interface TelemetryRow {
 
 function telemetryRows(snapshot: DeviceObservationSnapshot): TelemetryRow[] {
   return snapshot.values.map((state: TelemetryKeyState) => {
+    const definition = telemetryPointDefinition(state.key);
     if (state.state === 'MISSING') {
       return {
         key: state.key,
+        label: definition.label,
         value: 'MISSING（不补零）',
         unit: '—',
         freshness: 'MISSING',
@@ -93,8 +97,9 @@ function telemetryRows(snapshot: DeviceObservationSnapshot): TelemetryRow[] {
     }
     return {
       key: state.key,
-      value: formatTelemetryValue(state.value),
-      unit: state.unit ?? '—',
+      label: definition.label,
+      value: formatTelemetryDisplayValue(state.value, definition.precision),
+      unit: formatTelemetryUnit(state.unit ?? definition.defaultUnit) ?? '—',
       freshness: state.freshness,
       quality: state.quality,
       sampledAt: formatInstant(state.sampledAt),
@@ -106,8 +111,13 @@ function telemetryRows(snapshot: DeviceObservationSnapshot): TelemetryRow[] {
 
 const telemetryColumns: ColumnsType<TelemetryRow> = [
   {
-    title: 'Key', dataIndex: 'key', key: 'key', width: 130,
-    render: (value: string) => <Typography.Text code>{value}</Typography.Text>,
+    title: '点位', dataIndex: 'label', key: 'label', width: 190,
+    render: (value: string, row) => (
+      <Space direction="vertical" size={0}>
+        <Typography.Text strong>{value}</Typography.Text>
+        <Typography.Text code type="secondary">{row.key}</Typography.Text>
+      </Space>
+    ),
   },
   {
     title: 'Last Known / Current value', dataIndex: 'value', key: 'value', width: 200,
@@ -126,6 +136,43 @@ const telemetryColumns: ColumnsType<TelemetryRow> = [
   { title: '原 sampledAt', dataIndex: 'sampledAt', key: 'sampledAt', width: 190 },
   { title: 'Reason', dataIndex: 'reasons', key: 'reasons', width: 220 },
 ];
+
+function DeviceTelemetryHighlights({ deviceType, snapshot }: { deviceType?: string | null; snapshot: DeviceObservationSnapshot }) {
+  const profile = getDeviceTelemetryProfile(deviceType);
+  if (profile.kind === 'GENERIC') return null;
+  const highlights = buildDeviceTelemetryHighlights(deviceType, snapshot);
+  return (
+    <Card
+      size="small"
+      title={`${profile.title}实时运行摘要`}
+      data-central-plant-profile={profile.kind}
+      styles={{ body: { padding: 12 } }}
+    >
+      <Row gutter={[10, 10]}>
+        {highlights.map((item) => (
+          <Col xs={12} md={6} key={item.key}>
+            <Space direction="vertical" size={2} style={{ width: '100%' }}>
+              <Typography.Text type="secondary">{item.label}</Typography.Text>
+              {item.state === 'MISSING' ? (
+                <Typography.Text type="secondary">MISSING（不补零）</Typography.Text>
+              ) : (
+                <Typography.Text strong style={{ fontSize: 18 }}>
+                  {item.displayValue}{item.unit ? ` ${item.unit}` : ''}
+                </Typography.Text>
+              )}
+              <Space size={4} wrap>
+                <Tag color={item.freshness === 'FRESH' ? 'green' : item.freshness === 'STALE' ? 'orange' : 'default'}>
+                  {item.freshness}
+                </Tag>
+                {item.quality ? <Tag color={item.quality === 'GOOD' ? 'green' : 'red'}>{item.quality}</Tag> : null}
+              </Space>
+            </Space>
+          </Col>
+        ))}
+      </Row>
+    </Card>
+  );
+}
 
 function TransportState({ result }: { result: DeviceLiveResult }) {
   const state = result.state;
@@ -155,7 +202,7 @@ function TransportState({ result }: { result: DeviceLiveResult }) {
   return null;
 }
 
-export function DeviceTelemetryPanel({ result }: { result: DeviceLiveResult }) {
+export function DeviceTelemetryPanel({ result, deviceType }: { result: DeviceLiveResult; deviceType?: string | null }) {
   if (result.pending && !result.state) return <LoadingState tip="正在读取 exact-key Snapshot 并建立实时订阅" minHeight={180} />;
   if (result.error) {
     const error = presentTelemetryError(result.error);
@@ -204,6 +251,7 @@ export function DeviceTelemetryPanel({ result }: { result: DeviceLiveResult }) {
         <Descriptions.Item label="Last Known Presence">{lastKnownPresence?.state ?? '—'}</Descriptions.Item>
         <Descriptions.Item label="Last Known At">{formatInstant(lastKnownPresence?.lastSeenAt ?? lastKnownPresence?.evaluatedAt)}</Descriptions.Item>
       </Descriptions>
+      <DeviceTelemetryHighlights deviceType={deviceType} snapshot={snapshot} />
       <Table<TelemetryRow>
         rowKey="key"
         size="small"
