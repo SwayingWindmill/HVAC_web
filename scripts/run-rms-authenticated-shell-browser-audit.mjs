@@ -15,6 +15,9 @@ const fixtureCapability = ['rms', '03', String(process.pid)].join('-');
 const sessionCapabilityField = ['csrf', 'Token'].join('');
 const stateChangeHeader = ['x', 'csrf', 'token'].join('-');
 const actingOrganizationId = '01900000-0000-7000-8000-000000000001';
+const siteAId = '01900000-0001-7000-8000-000000000001';
+const siteBId = '01900000-0002-7000-8000-000000000002';
+const invisibleSiteId = '01900000-0003-7000-8000-000000000003';
 const traceId = '0'.repeat(32);
 
 function assert(condition, message) {
@@ -43,6 +46,23 @@ function problem(status, code, detail, retryable) {
     retryable,
   };
 }
+
+function registrySite(id, code, displayName) {
+  return {
+    id,
+    owningOrganizationId: actingOrganizationId,
+    code,
+    displayName,
+    timezone: 'Asia/Tokyo',
+    status: 'ACTIVE',
+    revision: 1,
+    createdAt: '2026-07-28T00:00:00.000Z',
+    updatedAt: '2026-07-28T00:00:00.000Z',
+  };
+}
+
+const siteA = registrySite(siteAId, 'TOKYO-1', 'Tokyo Plant');
+const siteB = registrySite(siteBId, 'OSAKA-1', 'Osaka Plant');
 
 function principalResponse(state) {
   const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
@@ -86,8 +106,10 @@ function createGatewayFixture() {
     principalMode: 'delayed',
     logoutMode: 'success',
     platformMode: 'ok',
+    sitesMode: 'available',
+    sites: [siteA],
     roles: ['descriptive-role-only'],
-    capabilities: ['organization.list', 'organization.read', 'site.read', 'device.read'],
+    capabilities: ['organization.list', 'organization.read', 'site.list', 'site.read', 'device.read'],
     requests: [],
     loginReturnTargets: [],
     pendingPrincipalResponses: [],
@@ -150,6 +172,24 @@ function createGatewayFixture() {
         routePolicyRevision: 5,
         routeRevision: 8,
         compatibilityMode: 'native',
+      });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === `/api/v1/organizations/${actingOrganizationId}/sites`) {
+      if (state.sitesMode === 'unavailable') {
+        writeJson(response, 503, problem(
+          503,
+          'SITE_DISCOVERY_UNAVAILABLE',
+          'The authorized Site collection is unavailable.',
+          true,
+        ));
+        return;
+      }
+      writeJson(response, 200, {
+        items: state.sites.map((site) => ({ ...site })),
+        nextCursor: null,
+        hasMore: false,
       });
       return;
     }
@@ -453,14 +493,119 @@ try {
   assert(unavailableRoute.systemNavigation === false, 'unavailable implemented feature remained in navigation');
   assert(unavailableRoute.text.includes('PLATFORM_STATUS_UNAVAILABLE'), 'Unavailable route omitted the server failure code');
 
+  fixture.state.platformMode = 'ok';
+  fixture.state.roles = ['descriptive-role-only'];
+  fixture.state.capabilities = ['site.list', 'site.read'];
+  fixture.state.sitesMode = 'unavailable';
   await navigate(cdpClient, `${webURL}/`);
-  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'READY' && document.querySelector('[data-testid="real-route-home"]')?.getAttribute('data-business-state') === 'EMPTY'`, 'empty home business state');
-  assert(await evaluate(cdpClient, `!document.body.innerText.includes('服务当前不可用')`), 'empty business data was rendered as service unavailability');
-  await assertStorageEmpty(cdpClient, 'capability route matrix');
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'UNAVAILABLE' && Boolean(document.querySelector('[data-testid="real-site-discovery-unavailable"]'))`, 'Site discovery unavailable');
+  const siteDiscoveryUnavailable = await evaluate(cdpClient, `document.querySelector('[data-testid="real-site-discovery-unavailable"]')?.textContent ?? ''`);
+  assert(siteDiscoveryUnavailable.includes('SITE_DISCOVERY_UNAVAILABLE'), 'Site discovery failure omitted the server Problem code');
+  assert(!siteDiscoveryUnavailable.includes('Tokyo Plant'), 'unavailable Site discovery rendered cached Site data');
+
+  fixture.state.sitesMode = 'available';
+  fixture.state.sites = [];
+  await navigate(cdpClient, `${webURL}/`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'NO_AUTHORIZED_SITE'`, 'zero authorized Sites');
+  const noAuthorizedSite = await evaluate(cdpClient, `({
+    account: document.querySelector('[data-testid="real-site-none"]')?.textContent?.includes('RMS-03 Operator') ?? false,
+    retry: Array.from(document.querySelectorAll('[data-testid="real-site-none"] button')).some((button) => button.textContent?.includes('刷新授权 Site')),
+    help: Boolean(document.querySelector('[data-testid="real-site-none"] a[href="#real-site-help"]')),
+    logout: Boolean(document.querySelector('[data-testid="real-logout-button"]')),
+    siteRoute: Boolean(document.querySelector('[data-site-route]')),
+  })`);
+  assert(noAuthorizedSite.account && noAuthorizedSite.retry && noAuthorizedSite.help && noAuthorizedSite.logout, 'NO_AUTHORIZED_SITE omitted account, retry, help, or logout');
+  assert(noAuthorizedSite.siteRoute === false, 'NO_AUTHORIZED_SITE mounted a Site business surface');
+
+  fixture.state.sites = [siteA, siteB];
+  await navigate(cdpClient, `${webURL}/`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'CHOOSE_SITE'`, 'multiple Site chooser');
+  const siteChooser = await evaluate(cdpClient, `({
+    pathname: location.pathname,
+    choices: Array.from(document.querySelectorAll('[data-testid="real-site-chooser"] [data-site-id]')).map((item) => ({
+      id: item.getAttribute('data-site-id'),
+      href: item.getAttribute('href'),
+    })),
+    siteRoute: Boolean(document.querySelector('[data-site-route]')),
+  })`);
+  assert(siteChooser.pathname === '/', 'multiple Sites silently changed the URL scope');
+  assert(siteChooser.choices.length === 2, `expected two chooser entries, got ${JSON.stringify(siteChooser.choices)}`);
+  assert(siteChooser.choices[0].id === siteAId && siteChooser.choices[1].id === siteBId, 'chooser did not preserve Registry Site identities');
+  assert(siteChooser.choices.every((choice) => choice.href === `/sites/${choice.id}/assets`), 'chooser generated a non-Site-scoped target');
+  assert(siteChooser.siteRoute === false, 'chooser mounted a Site business surface before selection');
+
+  await navigate(cdpClient, `${webURL}/sites/${siteBId}/assets`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'READY' && document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-site-id') === '${siteBId}'`, 'validated explicit Site Assets route');
+  const explicitSite = await evaluate(cdpClient, `({
+    siteId: document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-site-id'),
+    siteName: document.querySelector('[data-testid="real-site-route-assets"]')?.textContent?.includes('Osaka Plant') ?? false,
+    organization: document.querySelector('[data-testid="real-site-route-assets"]')?.textContent?.includes('${actingOrganizationId}') ?? false,
+    assets: document.querySelector('[data-feature-id="site-assets"]')?.getAttribute('href'),
+    commands: document.querySelector('[data-feature-id="site-commands"]')?.getAttribute('href'),
+    bigscreen: document.querySelector('[data-feature-id="site-bigscreen"]')?.getAttribute('href'),
+  })`);
+  assert(explicitSite.siteId === siteBId && explicitSite.siteName && explicitSite.organization, 'validated SiteContext was not rendered from Registry route data');
+  assert(explicitSite.assets === `/sites/${siteBId}/assets`, 'Assets navigation escaped validated Site scope');
+  assert(explicitSite.commands === `/sites/${siteBId}/commands`, 'Commands navigation escaped validated Site scope');
+  assert(explicitSite.bigscreen === `/sites/${siteBId}/bigscreen`, 'BigScreen navigation escaped validated Site scope');
+
+  for (const leaf of ['commands', 'bigscreen']) {
+    await navigate(cdpClient, `${webURL}/sites/${siteBId}/${leaf}`);
+    await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'READY' && document.querySelector('[data-testid="real-site-route-${leaf}"]')?.getAttribute('data-site-id') === '${siteBId}'`, `validated explicit Site ${leaf} route`);
+  }
+
+  fixture.state.roles = ['platform-admin'];
+  fixture.state.capabilities = ['site.list'];
+  await navigate(cdpClient, `${webURL}/sites/${siteAId}/assets`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'FORBIDDEN'`, 'Site capability denial');
+  const forbiddenSite = await evaluate(cdpClient, `({
+    text: document.querySelector('[data-testid="real-route-forbidden"]')?.textContent ?? '',
+    siteNavigation: Boolean(document.querySelector('[data-feature-id="site-assets"]')),
+    roleDisplayed: document.querySelector('[data-testid="real-principal-roles"]')?.textContent?.includes('platform-admin') ?? false,
+  })`);
+  assert(forbiddenSite.roleDisplayed, 'descriptive Site role was not visible for audit context');
+  assert(forbiddenSite.siteNavigation === false, 'Site navigation remained visible without site.read');
+  assert(!forbiddenSite.text.includes(siteAId) && !forbiddenSite.text.includes('Tokyo Plant') && !forbiddenSite.text.includes('site.read'), 'Site Access Denied leaked protected metadata');
+
+  fixture.state.roles = ['descriptive-role-only'];
+  fixture.state.capabilities = ['site.list', 'site.read'];
+  for (const invalidPath of [
+    '/sites/b1/assets',
+    '/sites/b2/commands',
+    '/sites/not-a-uuid/assets',
+    `/sites/${invisibleSiteId}/assets`,
+  ]) {
+    await navigate(cdpClient, `${webURL}${invalidPath}`);
+    await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'SITE_NOT_VISIBLE'`, `safe invisible Site state for ${invalidPath}`);
+    const invisibleSite = await evaluate(cdpClient, `({
+      pathname: location.pathname,
+      text: document.querySelector('[data-testid="real-site-not-visible"]')?.textContent ?? '',
+      siteRoute: Boolean(document.querySelector('[data-site-route]')),
+    })`);
+    assert(invisibleSite.pathname === invalidPath, `invalid Site silently changed scope from ${invalidPath}`);
+    assert(!invisibleSite.text.includes(invisibleSiteId) && !invisibleSite.text.includes('b1') && !invisibleSite.text.includes('b2'), `invalid Site state leaked the requested identity for ${invalidPath}`);
+    assert(invisibleSite.siteRoute === false, `invalid Site mounted a Site business surface for ${invalidPath}`);
+  }
+
+  await navigate(cdpClient, `${webURL}/sites/${siteAId}/unknown`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'NOT_FOUND' && Boolean(document.querySelector('[data-testid="real-site-route-not-found"]'))`, 'validated Site route 404');
+
+  fixture.state.sites = [siteA];
+  await navigate(cdpClient, `${webURL}/`);
+  await waitForCondition(cdpClient, `location.pathname === '/sites/${siteAId}/assets' && document.querySelector('main')?.getAttribute('data-route-state') === 'READY'`, 'sole authorized Site auto-entry');
+  const soleSite = await evaluate(cdpClient, `({
+    pathname: location.pathname,
+    siteId: document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-site-id'),
+    empty: document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-business-state'),
+    unavailableText: document.body.innerText.includes('服务当前不可用'),
+  })`);
+  assert(soleSite.pathname === `/sites/${siteAId}/assets` && soleSite.siteId === siteAId, 'sole Site did not enter an explicit UUIDv7 URL');
+  assert(soleSite.empty === 'EMPTY' && soleSite.unavailableText === false, 'empty Site business state was confused with unavailability');
+  await assertStorageEmpty(cdpClient, 'Site scope matrix');
 
   fixture.state.platformMode = 'ok';
   fixture.state.roles = ['descriptive-role-only'];
-  fixture.state.capabilities = ['organization.list', 'organization.read', 'site.read', 'device.read'];
+  fixture.state.capabilities = ['organization.list', 'organization.read', 'site.list', 'site.read', 'device.read'];
   fixture.state.logoutMode = 'failure';
   await navigate(cdpClient, `${webURL}/logout-proof`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-shell-state') === 'READY'`, 'authenticated shell before logout');
