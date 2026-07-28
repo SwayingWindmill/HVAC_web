@@ -229,7 +229,10 @@ for (const marker of [
   assert(fixtureSQL.includes(marker), `deterministic fixture marker is missing: ${marker}`);
 }
 
-assert(routeRegistry.registryRevision === 7 && ownershipLock.routeRegistryRevision === 7, 'route ownership revision drifted');
+assert(
+  routeRegistry.registryRevision >= 7 && ownershipLock.routeRegistryRevision === routeRegistry.registryRevision,
+  'route ownership revision must remain monotonic and locked',
+);
 assert(dataRegistry.registryRevision >= 6 && ownershipLock.dataRegistryRevision === dataRegistry.registryRevision, 'data ownership revision must remain monotonic and locked');
 const activeRoutes = new Map((routeRegistry.routes ?? []).map((route) => [routeKey(route), route]));
 for (const expected of compatibility.operations) {
