@@ -1,61 +1,7 @@
-import { RealRuntimeFacts } from './RealRuntimeFacts';
+import { RealShellChrome } from './RealShellChrome';
 import type { RealNavigationItem, RouteDecision } from './route-policy';
 import type { RealRuntimeConfig } from './runtime-config';
 import type { ShellSnapshot } from './shell-runtime';
-
-function ShellNavigation({ items, pathname }: { items: RealNavigationItem[]; pathname: string }) {
-  return (
-    <nav className="real-shell-navigation" aria-label="Real navigation" data-testid="real-navigation">
-      {items.map((item) => (
-        <a
-          key={item.id}
-          href={item.path}
-          data-feature-id={item.id}
-          data-feature-kind={item.kind}
-          data-feature-degraded={String(item.degraded)}
-          aria-current={pathname === item.path ? 'page' : undefined}
-        >
-          <span>{item.label}</span>
-          {item.kind === 'not-integrated' ? <small>尚未接入</small> : null}
-          {item.degraded ? <small>降级</small> : null}
-        </a>
-      ))}
-    </nav>
-  );
-}
-
-function HomeSurface({ snapshot }: { snapshot: ShellSnapshot }) {
-  const principal = snapshot.principal!;
-  return (
-    <section
-      className="real-route-surface"
-      aria-labelledby="real-home-title"
-      data-testid="real-route-home"
-      data-route-state="READY"
-      data-business-state="EMPTY"
-    >
-      <p className="real-shell-eyebrow">REAL MODE · AUTHENTICATED</p>
-      <h1 id="real-home-title">可信 Shell 已就绪</h1>
-      <p>当前首页尚未请求任何 Site 级业务数据。这是明确的空业务状态，不是服务不可用、权限拒绝或演示数据。</p>
-
-      <dl className="real-shell-facts real-shell-principal-facts">
-        <div><dt>Principal</dt><dd>{principal.principal.displayName}</dd></div>
-        <div><dt>Subject</dt><dd>{principal.principal.subject}</dd></div>
-        <div><dt>Acting Organization</dt><dd>{principal.context.actingOrganizationId}</dd></div>
-        <div><dt>IAM policy revision</dt><dd>{principal.authorization.policyRevision}</dd></div>
-        <div><dt>Session expires</dt><dd>{principal.session.expiresAt}</dd></div>
-        <div><dt>描述性角色（不参与授权）</dt><dd>{principal.principal.roles.join(', ') || 'none'}</dd></div>
-      </dl>
-
-      <div className="real-shell-capabilities" aria-label="Effective capabilities">
-        <strong>Effective capabilities ({principal.authorization.capabilities.length})</strong>
-        {principal.authorization.capabilities.length ? (
-          <ul>{principal.authorization.capabilities.map((capability) => <li key={capability}><code>{capability}</code></li>)}</ul>
-        ) : <p>当前 Principal 没有已发布 Capability。</p>}
-      </div>
-    </section>
-  );
-}
 
 function SystemSurface({ snapshot }: { snapshot: ShellSnapshot }) {
   const status = snapshot.platform?.status;
@@ -90,7 +36,7 @@ function ForbiddenSurface() {
       <p className="real-shell-eyebrow">REAL MODE · ACCESS DENIED</p>
       <h1 id="real-forbidden-title">访问被拒绝</h1>
       <p>当前 Principal 无权打开此页面。为避免泄露受保护资源，此状态不说明目标功能或资源是否存在。</p>
-      <a className="real-shell-link-action" href="/">返回首页</a>
+      <a className="real-shell-link-action" href="/">返回 Site 入口</a>
     </section>
   );
 }
@@ -155,23 +101,15 @@ function NotFoundSurface() {
       <p className="real-shell-eyebrow">REAL MODE · 404</p>
       <h1 id="real-not-found-title">页面不存在</h1>
       <p>当前路径不属于此 Real Build 的公开路由。</p>
-      <a className="real-shell-link-action" href="/">返回首页</a>
+      <a className="real-shell-link-action" href="/">返回 Site 入口</a>
     </section>
   );
 }
 
-function RouteSurface({
-  decision,
-  snapshot,
-  retry,
-}: {
-  decision: RouteDecision;
-  snapshot: ShellSnapshot;
-  retry: () => void;
-}) {
+function RouteSurface({ decision, snapshot, retry }: { decision: RouteDecision; snapshot: ShellSnapshot; retry: () => void }) {
   switch (decision.state) {
     case 'READY':
-      return decision.feature.id === 'system' ? <SystemSurface snapshot={snapshot} /> : <HomeSurface snapshot={snapshot} />;
+      return <SystemSurface snapshot={snapshot} />;
     case 'FORBIDDEN':
       return <ForbiddenSurface />;
     case 'NOT_INTEGRATED':
@@ -200,47 +138,9 @@ export function AuthenticatedShell({
   retry: () => void;
   logout: () => void;
 }) {
-  const principal = snapshot.principal!;
-  const submitting = snapshot.logout?.status === 'submitting';
-  const pathname = window.location.pathname;
-
   return (
-    <section
-      className="real-shell-layout"
-      data-testid="real-protected-shell"
-      data-protected-route-mounted="true"
-      data-policy-revision={principal.authorization.policyRevision}
-      data-capability-count={String(principal.authorization.capabilities.length)}
-    >
-      <header className="real-shell-header">
-        <div>
-          <p className="real-shell-eyebrow">REAL MODE · AUTHORITATIVE SHELL</p>
-          <strong>{principal.principal.displayName}</strong>
-          <span className="real-shell-principal-roles" data-testid="real-principal-roles">
-            描述性角色：{principal.principal.roles.join(', ') || 'none'}（不参与授权）
-          </span>
-        </div>
-        <div className="real-shell-header-actions">
-          <span>Policy {principal.authorization.policyRevision}</span>
-          <button type="button" onClick={logout} disabled={submitting} data-testid="real-logout-button">
-            {submitting ? '正在撤销服务器 Session…' : '退出登录'}
-          </button>
-        </div>
-      </header>
-
-      <ShellNavigation items={navigation} pathname={pathname} />
-
-      <div className="real-shell-content">
-        {snapshot.logout?.status === 'failed' ? (
-          <div className="real-shell-problem" role="alert" data-testid="real-logout-failure" data-retryable={String(snapshot.logout.retryable)}>
-            <strong>{snapshot.logout.code}</strong>
-            <span>{snapshot.logout.detail}</span>
-            {snapshot.logout.traceId ? <code>traceId {snapshot.logout.traceId}</code> : null}
-          </div>
-        ) : null}
-        <RouteSurface decision={decision} snapshot={snapshot} retry={retry} />
-        <RealRuntimeFacts config={config} />
-      </div>
-    </section>
+    <RealShellChrome config={config} snapshot={snapshot} navigation={navigation} logout={logout}>
+      <RouteSurface decision={decision} snapshot={snapshot} retry={retry} />
+    </RealShellChrome>
   );
 }

@@ -34,10 +34,12 @@ function evaluateCommonJs(compiled, requireFn = () => { throw new Error('unexpec
 }
 
 const policy = evaluateCommonJs(compile('apps/hvac-web/src/real/shell-policy.ts'));
+const siteRouting = evaluateCommonJs(compile('apps/hvac-web/src/real/site-routing.ts'));
 const runtimeModule = evaluateCommonJs(
   compile('apps/hvac-web/src/real/shell-runtime.ts'),
   (specifier) => {
     if (specifier === './shell-policy') return policy;
+    if (specifier === './site-routing') return siteRouting;
     throw new Error(`unexpected require: ${specifier}`);
   },
 );
@@ -50,7 +52,10 @@ function deferred() {
   return { promise, resolve };
 }
 
-function principal(expiresAt = '2026-07-28T06:00:00.000Z') {
+function principal(
+  expiresAt = '2026-07-28T06:00:00.000Z',
+  capabilities = ['site.list', 'site.read'],
+) {
   return {
     principal: {
       subject: 'operator-1',
@@ -76,7 +81,7 @@ function principal(expiresAt = '2026-07-28T06:00:00.000Z') {
     authorization: {
       capabilitySetVersion: 1,
       policyRevision: 'iam:1',
-      capabilities: ['site.read'],
+      capabilities,
     },
     session: {
       id: 'session-1',
@@ -122,10 +127,32 @@ function platformStatus(status = 'ok') {
   };
 }
 
+function registrySite(
+  id = '01900000-0001-7000-8000-000000000001',
+  owningOrganizationId = '01900000-0000-7000-8000-000000000001',
+) {
+  return {
+    id,
+    owningOrganizationId,
+    code: `SITE-${id.slice(-4)}`,
+    displayName: `Site ${id.slice(-4)}`,
+    timezone: 'Asia/Tokyo',
+    status: 'ACTIVE',
+    revision: 1,
+    createdAt: '2026-07-28T00:00:00.000Z',
+    updatedAt: '2026-07-28T00:00:00.000Z',
+  };
+}
+
+function siteCollection(items = [], nextCursor = null, hasMore = false) {
+  return { items, nextCursor, hasMore };
+}
+
 function client(overrides = {}) {
   return {
     getCurrentPrincipal: async () => ({ data: principal() }),
     getPlatformStatus: async () => ({ data: platformStatus() }),
+    listOrganizationSites: async () => ({ data: siteCollection() }),
     loginUrl: ({ returnTo }) => `/api/v1/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
     logout: async () => ({ data: undefined }),
     ...overrides,
@@ -301,6 +328,178 @@ test('late platform availability cannot reset an in-flight logout', async () => 
   pendingPlatform.resolve({ data: platformStatus() });
   await bootstrap;
   assert.equal(runtime.current().platform.state, 'available');
+  assert.equal(runtime.current().logout.status, 'submitting');
+
+  pendingLogout.resolve({ data: undefined });
+  await logout;
+  assert.equal(runtime.current().state, 'LOGIN_REQUIRED');
+});
+
+test('does not request Registry Sites without the effective site.list capability', async () => {
+  let listCalls = 0;
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client({
+    getCurrentPrincipal: async () => ({ data: principal(undefined, ['site.read']) }),
+    listOrganizationSites: async () => {
+      listCalls += 1;
+      return { data: siteCollection([registrySite()]) };
+    },
+  }), env.value);
+
+  await runtime.bootstrap('/sites');
+
+  assert.equal(runtime.current().state, 'READY');
+  assert.equal(runtime.current().sites.state, 'forbidden');
+  assert.equal(listCalls, 0);
+});
+
+test('completed Site discovery does not orphan a pending platform request', async () => {
+  const pendingPlatform = deferred();
+  let platformSignal;
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client({
+    getPlatformStatus: ({ signal }) => {
+      platformSignal = signal;
+      return pendingPlatform.promise;
+    },
+    listOrganizationSites: async () => ({ data: siteCollection([registrySite()]) }),
+  }), env.value);
+
+  void runtime.bootstrap('/sites');
+  for (let attempt = 0; attempt < 10 && runtime.current().sites?.state !== 'available'; attempt += 1) {
+    await Promise.resolve();
+  }
+
+  assert.equal(runtime.current().sites.state, 'available');
+  assert.equal(platformSignal.aborted, false);
+  runtime.dispose();
+  assert.equal(platformSignal.aborted, true);
+});
+
+test('Site discovery is not blocked by a pending platform status request', async () => {
+  const pendingPlatform = deferred();
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client({
+    getPlatformStatus: () => pendingPlatform.promise,
+    listOrganizationSites: async () => ({ data: siteCollection([registrySite()]) }),
+  }), env.value);
+
+  const bootstrap = runtime.bootstrap('/sites');
+  for (let attempt = 0; attempt < 10 && runtime.current().sites?.state !== 'available'; attempt += 1) {
+    await Promise.resolve();
+  }
+
+  assert.equal(runtime.current().sites.state, 'available');
+  assert.equal(runtime.current().platform.state, 'checking');
+
+  pendingPlatform.resolve({ data: platformStatus() });
+  await bootstrap;
+  assert.equal(runtime.current().platform.state, 'available');
+  assert.equal(runtime.current().sites.state, 'available');
+});
+
+test('discovers all authorized Sites only under the acting Organization', async () => {
+  const calls = [];
+  const siteA = registrySite();
+  const siteB = registrySite('01900000-0002-7000-8000-000000000002');
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client({
+    listOrganizationSites: async (organizationId, params) => {
+      calls.push({ organizationId, params });
+      if (!params.cursor) {
+        return { data: siteCollection([siteA], 'cursor.page-two', true) };
+      }
+      return { data: siteCollection([siteB], null, false) };
+    },
+  }), env.value);
+
+  await runtime.bootstrap('/sites');
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].organizationId, '01900000-0000-7000-8000-000000000001');
+  assert.equal(calls[0].params.limit, 100);
+  assert.equal(calls[0].params.cursor, undefined);
+  assert.equal(calls[1].organizationId, '01900000-0000-7000-8000-000000000001');
+  assert.equal(calls[1].params.limit, 100);
+  assert.equal(calls[1].params.cursor, 'cursor.page-two');
+  assert.equal(runtime.current().sites.state, 'available');
+  assert.equal(runtime.current().sites.items.length, 2);
+  assert.equal(runtime.current().sites.items[0].id, siteA.id);
+  assert.equal(runtime.current().sites.items[1].id, siteB.id);
+});
+
+test('an empty Registry collection becomes an explicit available zero-Site result', async () => {
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client(), env.value);
+
+  await runtime.bootstrap('/sites');
+
+  assert.equal(runtime.current().sites.state, 'available');
+  assert.equal(runtime.current().sites.items.length, 0);
+});
+
+test('rejects malformed, cross-Organization, and duplicate Site discovery responses', async () => {
+  const actingOrganizationId = '01900000-0000-7000-8000-000000000001';
+  const invalidCollections = [
+    [registrySite('b1')],
+    [registrySite('01900000-0001-7000-8000-000000000001', '01900000-0009-7000-8000-000000000009')],
+    [registrySite(), registrySite()],
+  ];
+
+  for (const items of invalidCollections) {
+    const env = environment();
+    const runtime = runtimeModule.createShellRuntime(client({
+      listOrganizationSites: async (organizationId) => {
+        assert.equal(organizationId, actingOrganizationId);
+        return { data: siteCollection(items) };
+      },
+    }), env.value);
+
+    await runtime.bootstrap('/sites');
+
+    assert.equal(runtime.current().state, 'READY');
+    assert.equal(runtime.current().sites.state, 'unavailable');
+    assert.equal(runtime.current().sites.failure.code, 'SITE_DISCOVERY_INVALID');
+    assert.equal(runtime.current().sites.items, undefined);
+  }
+});
+
+test('an authentication failure during Site discovery purges protected memory', async () => {
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client({
+    listOrganizationSites: async () => {
+      throw { problem: { status: 401, code: 'SESSION_INVALID', detail: 'session invalid', traceId: '5'.repeat(32), retryable: false } };
+    },
+  }), env.value);
+
+  await runtime.bootstrap('/sites');
+
+  assert.equal(runtime.current().state, 'LOGIN_REQUIRED');
+  assert.equal(runtime.current().principal, undefined);
+  assert.deepEqual(env.navigations, ['/api/v1/auth/login?returnTo=%2Fsites']);
+});
+
+test('late Site discovery cannot reset an in-flight logout', async () => {
+  const pendingSites = deferred();
+  const pendingLogout = deferred();
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client({
+    listOrganizationSites: () => pendingSites.promise,
+    logout: () => pendingLogout.promise,
+  }), env.value);
+
+  const bootstrap = runtime.bootstrap('/sites');
+  for (let attempt = 0; attempt < 10 && runtime.current().sites?.state !== 'checking'; attempt += 1) {
+    await Promise.resolve();
+  }
+  assert.equal(runtime.current().sites.state, 'checking');
+
+  const logout = runtime.logout();
+  assert.equal(runtime.current().logout.status, 'submitting');
+
+  pendingSites.resolve({ data: siteCollection([registrySite()]) });
+  await bootstrap;
+  assert.equal(runtime.current().sites.state, 'available');
   assert.equal(runtime.current().logout.status, 'submitting');
 
   pendingLogout.resolve({ data: undefined });

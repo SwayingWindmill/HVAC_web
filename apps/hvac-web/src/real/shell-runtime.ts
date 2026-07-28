@@ -3,12 +3,14 @@ import type {
   PlatformGatewayClient,
   PlatformStatusResponse,
   ProblemDetails,
+  Site,
 } from '@/api/generated/platformGateway.gen';
 import {
   classifyBootstrapProblem,
   isAlreadyInvalidLogout,
   normalizeReturnTo,
 } from './shell-policy';
+import { isUUIDv7 } from './site-routing';
 
 export type ShellState = 'BOOTSTRAPPING' | 'LOGIN_REQUIRED' | 'UNAVAILABLE' | 'READY';
 export type LogoutOutcome = 'completed' | 'failed';
@@ -34,10 +36,17 @@ export interface ShellPlatformView {
   failure?: ShellFailureView;
 }
 
+export interface ShellSitesView {
+  state: 'checking' | 'available' | 'forbidden' | 'unavailable';
+  items?: readonly Readonly<Site>[];
+  failure?: ShellFailureView;
+}
+
 export interface ShellSnapshot {
   state: ShellState;
   principal?: CurrentPrincipalResponse;
   platform?: ShellPlatformView;
+  sites?: ShellSitesView;
   loginUrl?: string;
   reason?: string;
   failure?: ShellFailureView;
@@ -65,10 +74,14 @@ export interface ShellRuntimeEnvironment {
 
 type ShellRuntimeClient = Pick<
   PlatformGatewayClient,
-  'getCurrentPrincipal' | 'getPlatformStatus' | 'loginUrl' | 'logout'
+  'getCurrentPrincipal' | 'getPlatformStatus' | 'listOrganizationSites' | 'loginUrl' | 'logout'
 >;
 
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
+const SITE_PAGE_LIMIT = 100;
+const MAX_SITE_PAGES = 100;
+
+class SiteDiscoveryValidationError extends Error {}
 
 function problemFrom(error: unknown): ProblemDetails | undefined {
   if (!error || typeof error !== 'object' || !('problem' in error)) return undefined;
@@ -143,14 +156,21 @@ class BrowserShellRuntime implements ShellRuntime {
       }
 
       this.protectedPrincipal = response.data;
+      const canListSites = response.data.authorization.capabilities.includes('site.list');
       this.publish({
         state: 'READY',
         principal: response.data,
         platform: { state: 'checking' },
+        sites: { state: canListSites ? 'checking' : 'forbidden' },
         logout: { status: 'idle' },
       });
       this.scheduleExpiration(expiresAt);
-      await this.loadPlatformAvailability(sequence, response.data, controller);
+      const bootstrapTasks = [this.loadPlatformAvailability(sequence, response.data, controller)];
+      if (canListSites) bootstrapTasks.push(this.loadAuthorizedSites(sequence, response.data, controller));
+      await Promise.all(bootstrapTasks);
+      if (this.isCurrent(sequence) && this.bootstrapController === controller) {
+        this.bootstrapController = undefined;
+      }
     } catch (error: unknown) {
       if (!this.isCurrent(sequence) || controller.signal.aborted) return;
       this.bootstrapController = undefined;
@@ -186,10 +206,12 @@ class BrowserShellRuntime implements ShellRuntime {
 
     const sequence = this.sequence;
     const platform = this.snapshot.platform;
+    const sites = this.snapshot.sites;
     this.publish({
       state: 'READY',
       principal,
       platform,
+      sites,
       logout: { status: 'submitting' },
     });
 
@@ -214,6 +236,7 @@ class BrowserShellRuntime implements ShellRuntime {
         state: 'READY',
         principal,
         platform,
+        sites,
         logout: {
           status: 'failed',
           code: failure.code,
@@ -285,7 +308,6 @@ class BrowserShellRuntime implements ShellRuntime {
     try {
       const response = await this.client.getPlatformStatus({ signal: controller.signal });
       if (!this.isCurrent(sequence) || controller.signal.aborted || this.protectedPrincipal !== principal) return;
-      this.bootstrapController = undefined;
       this.publish({
         state: 'READY',
         principal,
@@ -293,11 +315,11 @@ class BrowserShellRuntime implements ShellRuntime {
           state: response.data.status === 'degraded' ? 'degraded' : 'available',
           status: response.data,
         },
+        sites: this.snapshot.sites,
         logout: this.snapshot.logout ?? { status: 'idle' },
       });
     } catch (error: unknown) {
       if (!this.isCurrent(sequence) || controller.signal.aborted || this.protectedPrincipal !== principal) return;
-      this.bootstrapController = undefined;
       const problem = problemFrom(error);
       if (problem && classifyBootstrapProblem(problem) === 'LOGIN_REQUIRED') {
         this.enterLoginRequired(problem.code, true);
@@ -312,6 +334,98 @@ class BrowserShellRuntime implements ShellRuntime {
             problem,
             'PLATFORM_STATUS_UNAVAILABLE',
             'Platform Gateway 状态暂时不可用。',
+          ),
+        },
+        sites: this.snapshot.sites,
+        logout: this.snapshot.logout ?? { status: 'idle' },
+      });
+    }
+  }
+
+  private async loadAuthorizedSites(
+    sequence: number,
+    principal: CurrentPrincipalResponse,
+    controller: AbortController,
+  ): Promise<void> {
+    const actingOrganizationId = principal.context.actingOrganizationId;
+    try {
+      const sites: Readonly<Site>[] = [];
+      const seenSiteIDs = new Set<string>();
+      const seenCursors = new Set<string>();
+      let cursor: string | undefined;
+      let completed = false;
+
+      for (let page = 0; page < MAX_SITE_PAGES; page += 1) {
+        const params = cursor ? { limit: SITE_PAGE_LIMIT, cursor } : { limit: SITE_PAGE_LIMIT };
+        const response = await this.client.listOrganizationSites(
+          actingOrganizationId,
+          params,
+          { signal: controller.signal },
+        );
+        if (!this.isCurrent(sequence) || controller.signal.aborted || this.protectedPrincipal !== principal) return;
+
+        for (const site of response.data.items) {
+          if (
+            !isUUIDv7(site.id)
+            || site.owningOrganizationId !== actingOrganizationId
+            || seenSiteIDs.has(site.id)
+          ) {
+            throw new SiteDiscoveryValidationError('Registry returned an invalid authorized Site collection.');
+          }
+          seenSiteIDs.add(site.id);
+          sites.push(Object.freeze({ ...site }));
+        }
+
+        if (!response.data.hasMore) {
+          if (response.data.nextCursor !== null) {
+            throw new SiteDiscoveryValidationError('Registry returned a cursor after the final Site page.');
+          }
+          completed = true;
+          break;
+        }
+
+        const nextCursor = response.data.nextCursor;
+        if (!nextCursor || seenCursors.has(nextCursor)) {
+          throw new SiteDiscoveryValidationError('Registry returned an invalid Site pagination cursor.');
+        }
+        seenCursors.add(nextCursor);
+        cursor = nextCursor;
+      }
+
+      if (!completed) {
+        throw new SiteDiscoveryValidationError('Registry Site pagination exceeded the bounded page count.');
+      }
+
+      this.publish({
+        state: 'READY',
+        principal,
+        platform: this.snapshot.platform,
+        sites: {
+          state: 'available',
+          items: Object.freeze([...sites]),
+        },
+        logout: this.snapshot.logout ?? { status: 'idle' },
+      });
+    } catch (error: unknown) {
+      if (!this.isCurrent(sequence) || controller.signal.aborted || this.protectedPrincipal !== principal) return;
+      const problem = problemFrom(error);
+      if (problem && classifyBootstrapProblem(problem) === 'LOGIN_REQUIRED') {
+        this.enterLoginRequired(problem.code, true);
+        return;
+      }
+      const invalid = error instanceof SiteDiscoveryValidationError;
+      this.publish({
+        state: 'READY',
+        principal,
+        platform: this.snapshot.platform,
+        sites: {
+          state: 'unavailable',
+          failure: failureFrom(
+            problem,
+            invalid ? 'SITE_DISCOVERY_INVALID' : 'SITE_DISCOVERY_UNAVAILABLE',
+            invalid
+              ? 'Registry 返回了无效的授权 Site 集合。'
+              : '无法读取当前 Organization 的授权 Site。',
           ),
         },
         logout: this.snapshot.logout ?? { status: 'idle' },

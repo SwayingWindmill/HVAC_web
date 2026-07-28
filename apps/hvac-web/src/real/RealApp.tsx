@@ -3,8 +3,10 @@ import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen
 import { AuthenticatedShell } from './AuthenticatedShell';
 import { REAL_FEATURE_MANIFEST } from './feature-manifest';
 import { RealRuntimeFacts } from './RealRuntimeFacts';
-import { resolveNavigation, resolveRoute } from './route-policy';
+import { resolveNavigation, resolveRoute, type RouteDecision } from './route-policy';
 import { createShellRuntime, type ShellSnapshot } from './shell-runtime';
+import { buildSiteNavigation, SiteScopedShell, type SiteShellDecision } from './SiteScopedShell';
+import { resolveSiteRouting } from './site-routing';
 import type { RealRuntimeConfig, RealRuntimeConfigFailure } from './runtime-config';
 import './real-shell.css';
 
@@ -103,6 +105,32 @@ function PrincipalUnavailableState({
   );
 }
 
+function isSiteShellPath(pathname: string): boolean {
+  return pathname === '/' || pathname === '/sites' || pathname.startsWith('/sites/');
+}
+
+function resolveSiteShellDecision(snapshot: ShellSnapshot, pathname: string): SiteShellDecision | undefined {
+  if (!snapshot.principal || !isSiteShellPath(pathname)) return undefined;
+  if (!snapshot.sites || snapshot.sites.state === 'checking') return { state: 'SITE_DISCOVERY_CHECKING' };
+  if (snapshot.sites.state === 'forbidden') return { state: 'FORBIDDEN' };
+  if (snapshot.sites.state === 'unavailable') {
+    return { state: 'SITE_DISCOVERY_UNAVAILABLE', failure: snapshot.sites.failure };
+  }
+  const decision = resolveSiteRouting(
+    pathname,
+    snapshot.sites.items ?? [],
+    snapshot.principal.authorization.capabilities,
+  );
+  return decision.state === 'PLATFORM_ROUTE' ? undefined : decision;
+}
+
+function normalizedRouteState(decision: SiteShellDecision | RouteDecision | undefined): string | undefined {
+  if (!decision) return undefined;
+  if (decision.state === 'SITE_DISCOVERY_UNAVAILABLE') return 'UNAVAILABLE';
+  if (decision.state === 'SITE_ROUTE_NOT_FOUND') return 'NOT_FOUND';
+  return decision.state;
+}
+
 export default function RealApp({ config }: RealAppProps) {
   const client = useMemo(() => createPlatformGatewayClient(), []);
   const runtime = useMemo(() => createShellRuntime(client), [client]);
@@ -117,25 +145,44 @@ export default function RealApp({ config }: RealAppProps) {
     };
   }, [runtime]);
 
+  const pathname = window.location.pathname;
   const platformAvailability = snapshot.platform?.state ?? 'checking';
-  const navigation = snapshot.principal
+  const platformNavigation = snapshot.principal
     ? resolveNavigation(
       REAL_FEATURE_MANIFEST,
       snapshot.principal.authorization.capabilities,
       platformAvailability,
     )
     : [];
-  const decision = snapshot.principal
+  const siteDecision = snapshot.state === 'READY'
+    ? resolveSiteShellDecision(snapshot, pathname)
+    : undefined;
+  const platformDecision = snapshot.principal && !isSiteShellPath(pathname)
     ? resolveRoute(
       REAL_FEATURE_MANIFEST,
-      window.location.pathname,
+      pathname,
       snapshot.principal.authorization.capabilities,
       platformAvailability,
     )
     : undefined;
-  const displayedShellState = snapshot.state === 'READY' && decision && decision.state !== 'NOT_FOUND'
-    ? decision.state
+  const selectedSite = siteDecision?.state === 'READY' || siteDecision?.state === 'SITE_ROUTE_NOT_FOUND'
+    ? siteDecision.context.site
+    : undefined;
+  const navigation = selectedSite && snapshot.principal
+    ? [
+      ...platformNavigation,
+      ...buildSiteNavigation(selectedSite, snapshot.principal.authorization.capabilities),
+    ]
+    : platformNavigation;
+  const redirectTarget = siteDecision?.state === 'REDIRECT' ? siteDecision.target : undefined;
+  const routeState = normalizedRouteState(siteDecision ?? platformDecision);
+  const displayedShellState = snapshot.state === 'READY' && routeState && routeState !== 'NOT_FOUND'
+    ? routeState
     : snapshot.state;
+
+  useEffect(() => {
+    if (redirectTarget) window.location.replace(redirectTarget);
+  }, [redirectTarget]);
 
   return (
     <main
@@ -143,7 +190,7 @@ export default function RealApp({ config }: RealAppProps) {
       aria-label={REAL_SHELL_MARKER}
       data-build-graph={REAL_GRAPH_MARKER}
       data-shell-state={displayedShellState}
-      data-route-state={decision?.state}
+      data-route-state={routeState}
       data-protected-route-mounted={snapshot.state === 'READY' ? 'true' : 'false'}
     >
       {snapshot.state === 'BOOTSTRAPPING' ? <BootstrappingState config={config} /> : null}
@@ -153,12 +200,22 @@ export default function RealApp({ config }: RealAppProps) {
       {snapshot.state === 'UNAVAILABLE' ? (
         <PrincipalUnavailableState config={config} snapshot={snapshot} retry={() => { void runtime.retry(); }} />
       ) : null}
-      {snapshot.state === 'READY' && decision ? (
+      {snapshot.state === 'READY' && siteDecision ? (
+        <SiteScopedShell
+          config={config}
+          snapshot={snapshot}
+          navigation={navigation}
+          decision={siteDecision}
+          retry={() => { void runtime.retry(); }}
+          logout={() => { void runtime.logout(); }}
+        />
+      ) : null}
+      {snapshot.state === 'READY' && platformDecision ? (
         <AuthenticatedShell
           config={config}
           snapshot={snapshot}
           navigation={navigation}
-          decision={decision}
+          decision={platformDecision}
           retry={() => { void runtime.retry(); }}
           logout={() => { void runtime.logout(); }}
         />

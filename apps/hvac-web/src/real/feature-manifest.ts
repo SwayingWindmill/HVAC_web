@@ -2,12 +2,12 @@ import type { RealFeatureDefinition } from './route-policy';
 
 export const REAL_FEATURE_MANIFEST = [
   {
-    id: 'home',
-    label: '首页',
+    id: 'site-entry',
+    label: 'Sites',
     path: '/',
     delivery: 'implemented',
     availability: 'none',
-    requiredCapabilities: [],
+    requiredCapabilities: ['site.list'],
   },
   {
     id: 'system',
