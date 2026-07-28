@@ -18,12 +18,17 @@ const checkOnly = process.argv.includes('--check');
 const windowsGofmtPath = 'C:\\Program Files\\Go\\bin\\gofmt.exe';
 const gofmtBinary = process.env.GOFMT_BINARY ?? (process.platform === 'win32' && existsSync(windowsGofmtPath) ? windowsGofmtPath : 'gofmt');
 
-const [specText, toolingLockText, goTemplate, tsTemplate] = await Promise.all([
+const normalizeLineEndings = (value) => value.replace(/\r\n?/g, '\n');
+const [specSource, toolingLockSource, goTemplateSource, tsTemplateSource] = await Promise.all([
   readFile(specPath, 'utf8'),
   readFile(toolingLockPath, 'utf8'),
   readFile(goTemplatePath, 'utf8'),
   readFile(tsTemplatePath, 'utf8'),
 ]);
+const specText = normalizeLineEndings(specSource);
+const toolingLockText = normalizeLineEndings(toolingLockSource);
+const goTemplate = normalizeLineEndings(goTemplateSource);
+const tsTemplate = normalizeLineEndings(tsTemplateSource);
 const spec = JSON.parse(specText);
 const toolingLock = JSON.parse(toolingLockText);
 const digest = createHash('sha256').update(specText).digest('hex');
@@ -241,7 +246,7 @@ async function emit(path, content) {
     if (error.code !== 'ENOENT') throw error;
   }
   if (checkOnly) {
-    if (existing !== content) {
+    if (existing === null || normalizeLineEndings(existing) !== content) {
       process.stderr.write(`Generated contract drift: ${path}\n`);
       process.exitCode = 1;
     }
