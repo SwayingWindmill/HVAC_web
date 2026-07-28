@@ -28,11 +28,22 @@ export const principalContextSchema = z.object({
   policyRevision: z.string(),
   delegationExpiresAt: z.string().datetime(),
 }).strict();
+export const capabilitySchema = z.enum([
+  'organization.list', 'organization.read', 'site.list', 'site.read',
+  'equipment.list', 'equipment.read', 'device.list', 'device.read',
+]);
+export const effectiveAuthorizationSchema = z.object({
+  capabilitySetVersion: z.literal(1),
+  policyRevision: z.string().min(1).max(128),
+  capabilities: z.array(capabilitySchema).max(8).refine((values) => new Set(values).size === values.length, {
+    message: 'effective capabilities must be unique',
+  }),
+}).strict();
 export const sessionViewSchema = z.object({
   id: z.string(), expiresAt: z.string().datetime(), csrfToken: z.string(), revocationObjectiveMs: z.number().int().nonnegative(), lastAuditMessageId: z.string(),
 }).strict();
 export const currentPrincipalResponseSchema = z.object({
-  principal: userPrincipalSchema, context: principalContextSchema, session: sessionViewSchema,
+  principal: userPrincipalSchema, context: principalContextSchema, authorization: effectiveAuthorizationSchema, session: sessionViewSchema,
 }).strict();
 export const sessionRevocationResponseSchema = z.object({
   sessionId: z.string(), revokedAt: z.string().datetime(), objectiveMs: z.number().int().nonnegative(), auditMessageId: z.string(),
@@ -151,6 +162,8 @@ export type BuildInfo = z.infer<typeof buildInfoSchema>;
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 export type PlatformStatusResponse = z.infer<typeof platformStatusResponseSchema>;
 export type UserPrincipal = z.infer<typeof userPrincipalSchema>;
+export type Capability = z.infer<typeof capabilitySchema>;
+export type EffectiveAuthorization = z.infer<typeof effectiveAuthorizationSchema>;
 export type CurrentPrincipalResponse = z.infer<typeof currentPrincipalResponseSchema>;
 export type SessionRevocationResponse = z.infer<typeof sessionRevocationResponseSchema>;
 export type AuditRecord = z.infer<typeof auditRecordSchema>;

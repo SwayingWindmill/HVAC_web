@@ -1,6 +1,7 @@
 package iam
 
 import (
+	"context"
 	"crypto"
 	"crypto/rand"
 	"encoding/hex"
@@ -38,6 +39,7 @@ type Config struct {
 	Observability               *observability.Runtime
 	Now                         func() time.Time
 	AuthorizationStore          AuthorizationStore
+	PrincipalCapabilityResolver PrincipalCapabilityResolver
 	RegistryGrantSigner         crypto.Signer
 	RegistryGrantIssuer         string
 	RegistryGrantAudience       string
@@ -70,6 +72,7 @@ type handler struct {
 	observability               *observability.Runtime
 	now                         func() time.Time
 	authorizationStore          AuthorizationStore
+	principalCapabilityResolver PrincipalCapabilityResolver
 	registryGrantSigner         crypto.Signer
 	registryGrantIssuer         string
 	registryGrantAudience       string
@@ -110,6 +113,10 @@ func NewHandler(config Config) http.Handler {
 	store := config.AuthorizationStore
 	if store == nil {
 		store = NewDenyAllAuthorizationStore("policy-unconfigured")
+	}
+	principalCapabilityResolver := config.PrincipalCapabilityResolver
+	if principalCapabilityResolver == nil {
+		principalCapabilityResolver = newRegistryPrincipalCapabilityResolver(store, now)
 	}
 	grantIssuer := config.RegistryGrantIssuer
 	if grantIssuer == "" {
@@ -191,6 +198,7 @@ func NewHandler(config Config) http.Handler {
 		observability:               telemetry,
 		now:                         now,
 		authorizationStore:          store,
+		principalCapabilityResolver: principalCapabilityResolver,
 		registryGrantSigner:         config.RegistryGrantSigner,
 		registryGrantIssuer:         grantIssuer,
 		registryGrantAudience:       grantAudience,
@@ -294,7 +302,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 	switch request.URL.Path {
 	case CurrentPrincipalPath:
-		status = h.handleCurrentPrincipal(writer, claims, spiffeID)
+		status = h.handleCurrentPrincipal(request.Context(), writer, claims, spiffeID)
 	case RegistryReadDecisionPath:
 		status = h.handleRegistryReadDecision(writer, request, claims, spiffeID)
 	case TelemetryDecisionPath:
@@ -340,7 +348,20 @@ func (h *handler) handleRegistryGrantStatusRoute(writer http.ResponseWriter, req
 	return http.StatusOK
 }
 
-func (h *handler) handleCurrentPrincipal(writer http.ResponseWriter, claims identitycontext.DelegationClaims, spiffeID string) int {
+func (h *handler) handleCurrentPrincipal(ctx context.Context, writer http.ResponseWriter, claims identitycontext.DelegationClaims, spiffeID string) int {
+	authorization, err := h.principalCapabilityResolver.ResolvePrincipalCapabilities(ctx, PrincipalCapabilityLookup{
+		SubjectIssuer:        claims.SubjectIssuer,
+		Subject:              claims.Subject,
+		ActingOrganizationID: claims.ActingOrganizationID,
+	})
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "IAM_PRINCIPAL_CAPABILITIES_UNAVAILABLE", "The effective capability decision is unavailable.")
+		return http.StatusServiceUnavailable
+	}
+	if err := authorization.Validate(); err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "IAM_PRINCIPAL_CAPABILITIES_INVALID", "The effective capability decision is invalid.")
+		return http.StatusServiceUnavailable
+	}
 	response := identitycontext.InternalPrincipalResponse{
 		Principal: identitycontext.UserPrincipal{
 			Subject:     claims.Subject,
@@ -366,6 +387,7 @@ func (h *handler) handleCurrentPrincipal(writer http.ResponseWriter, claims iden
 			PolicyRevision:       claims.PolicyRevision,
 			DelegationExpiresAt:  time.Unix(claims.ExpiresAt, 0).UTC().Format(time.RFC3339),
 		},
+		Authorization: authorization,
 	}
 	writeJSON(writer, http.StatusOK, response)
 	return http.StatusOK

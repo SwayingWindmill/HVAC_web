@@ -281,7 +281,7 @@ func (h *handler) GetCurrentPrincipal(writer http.ResponseWriter, request *http.
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
-	writeJSON(writer, http.StatusOK, platformapi.CurrentPrincipalResponse{Principal: toPublicUser(principal.Principal), Context: toPublicContext(principal.Context), Session: platformapi.SessionView{ID: session.ID, ExpiresAt: session.ExpiresAt.UTC().Format(time.RFC3339), CSRFToken: session.CSRFToken, RevocationObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds()), LastAuditMessageID: session.LastAuditMessageID}})
+	writeJSON(writer, http.StatusOK, platformapi.CurrentPrincipalResponse{Principal: toPublicUser(principal.Principal), Context: toPublicContext(principal.Context), Authorization: toPublicAuthorization(principal.Authorization), Session: platformapi.SessionView{ID: session.ID, ExpiresAt: session.ExpiresAt.UTC().Format(time.RFC3339), CSRFToken: session.CSRFToken, RevocationObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds()), LastAuditMessageID: session.LastAuditMessageID}})
 }
 
 func (h *handler) Logout(writer http.ResponseWriter, request *http.Request, params platformapi.LogoutParams) {
@@ -592,7 +592,14 @@ func (controller *identityController) fetchPrincipal(ctx context.Context, sessio
 		return identitycontext.InternalPrincipalResponse{}, &failure
 	}
 	var principal identitycontext.InternalPrincipalResponse
-	if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&principal) != nil {
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&principal) != nil || principal.Validate() != nil {
+		failure := identityFailure{503, "IAM_RESPONSE_INVALID", "IAM response invalid", "IAM returned an invalid principal response.", true}
+		return identitycontext.InternalPrincipalResponse{}, &failure
+	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF {
 		failure := identityFailure{503, "IAM_RESPONSE_INVALID", "IAM response invalid", "IAM returned an invalid principal response.", true}
 		return identitycontext.InternalPrincipalResponse{}, &failure
 	}
@@ -659,4 +666,11 @@ func toPublicUser(value identitycontext.UserPrincipal) platformapi.UserPrincipal
 }
 func toPublicContext(value identitycontext.PrincipalContext) platformapi.PrincipalContext {
 	return platformapi.PrincipalContext{InitiatingPrincipal: toPublicUser(value.InitiatingPrincipal), ExecutingServicePrincipal: platformapi.ServicePrincipal{Service: value.ExecutingServicePrincipal.Service, SPIFFEID: value.ExecutingServicePrincipal.SPIFFEID}, ActingOrganizationID: value.ActingOrganizationID, Audience: value.Audience, PolicyRevision: value.PolicyRevision, DelegationExpiresAt: value.DelegationExpiresAt}
+}
+func toPublicAuthorization(value identitycontext.EffectiveAuthorization) platformapi.EffectiveAuthorization {
+	capabilities := make([]platformapi.Capability, len(value.Capabilities))
+	for index, capability := range value.Capabilities {
+		capabilities[index] = platformapi.Capability(capability)
+	}
+	return platformapi.EffectiveAuthorization{CapabilitySetVersion: value.CapabilitySetVersion, PolicyRevision: value.PolicyRevision, Capabilities: capabilities}
 }

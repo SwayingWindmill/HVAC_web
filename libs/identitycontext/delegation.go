@@ -59,8 +59,19 @@ type PrincipalContext struct {
 }
 
 type InternalPrincipalResponse struct {
-	Principal UserPrincipal    `json:"principal"`
-	Context   PrincipalContext `json:"context"`
+	Principal     UserPrincipal          `json:"principal"`
+	Context       PrincipalContext       `json:"context"`
+	Authorization EffectiveAuthorization `json:"authorization"`
+}
+
+func (response InternalPrincipalResponse) Validate() error {
+	if strings.TrimSpace(response.Principal.Subject) == "" || strings.TrimSpace(response.Principal.Issuer) == "" {
+		return errors.New("principal identity is required")
+	}
+	if strings.TrimSpace(response.Context.ActingOrganizationID) == "" || strings.TrimSpace(response.Context.PolicyRevision) == "" {
+		return errors.New("principal context is incomplete")
+	}
+	return response.Authorization.Validate()
 }
 
 func SignDelegation(signer crypto.Signer, claims DelegationClaims) (string, error) {

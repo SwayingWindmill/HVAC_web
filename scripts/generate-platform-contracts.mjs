@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-const generatorVersion = '5.0.0';
+const generatorVersion = '6.0.0';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const specPath = resolve(root, 'contracts/http/platform-gateway.openapi.yaml');
 const toolingLockPath = resolve(root, 'contracts/http/tooling.lock.json');
@@ -87,7 +87,7 @@ const expectedOperations = {
 const operations = {};
 for (const [operationId, [method, path]] of Object.entries(expectedOperations)) {
   const value = operation(operationId);
-  invariant(value?.method === method && value?.path === path, `${operationId} method/path is unsupported by generator version 5`);
+  invariant(value?.method === method && value?.path === path, `${operationId} method/path is unsupported by generator version 6`);
   operations[operationId] = value;
 }
 
@@ -120,8 +120,9 @@ const schemaRequirements = {
   UserPrincipal: [['subject', 'issuer', 'displayName', 'email', 'roles'], ['subject', 'issuer', 'displayName', 'email', 'roles']],
   ServicePrincipal: [['service', 'spiffeId'], ['service', 'spiffeId']],
   PrincipalContext: [['initiatingPrincipal', 'executingServicePrincipal', 'actingOrganizationId', 'audience', 'policyRevision', 'delegationExpiresAt'], ['initiatingPrincipal', 'executingServicePrincipal', 'actingOrganizationId', 'audience', 'policyRevision', 'delegationExpiresAt']],
+  EffectiveAuthorization: [['capabilitySetVersion', 'policyRevision', 'capabilities'], ['capabilitySetVersion', 'policyRevision', 'capabilities']],
   SessionView: [['id', 'expiresAt', 'csrfToken', 'revocationObjectiveMs', 'lastAuditMessageId'], ['id', 'expiresAt', 'csrfToken', 'revocationObjectiveMs', 'lastAuditMessageId']],
-  CurrentPrincipalResponse: [['principal', 'context', 'session'], ['principal', 'context', 'session']],
+  CurrentPrincipalResponse: [['principal', 'context', 'authorization', 'session'], ['principal', 'context', 'authorization', 'session']],
   SessionRevocationResponse: [['sessionId', 'revokedAt', 'objectiveMs', 'auditMessageId'], ['sessionId', 'revokedAt', 'objectiveMs', 'auditMessageId']],
   AuditRecord: [[
     'ledgerSequence', 'messageId', 'schemaVersion', 'organizationId', 'aggregateType', 'aggregateId', 'aggregateVersion',
@@ -160,6 +161,20 @@ invariant(schemas.PlatformStatusResponse.properties.service.const === 'platform-
 invariant(exactMembers(schemas.PlatformStatusResponse.properties.implementation.enum, ['go', 'legacy']), 'PlatformStatusResponse implementations are unsupported');
 invariant(schemas.ServicePrincipal.properties.service.const === 'platform-gateway', 'ServicePrincipal.service must be platform-gateway');
 invariant(schemas.PrincipalContext.properties.audience.const === 'iam-service', 'PrincipalContext.audience must be iam-service');
+invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capability.enum, [
+  'organization.list',
+  'organization.read',
+  'site.list',
+  'site.read',
+  'equipment.list',
+  'equipment.read',
+  'device.list',
+  'device.read',
+]), 'Capability vocabulary is unsupported');
+invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 1, 'EffectiveAuthorization capability set version must be 1');
+invariant(schemas.EffectiveAuthorization.properties.policyRevision.minLength === 1 && schemas.EffectiveAuthorization.properties.policyRevision.maxLength === 128, 'EffectiveAuthorization policy revision bounds are unsupported');
+invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 8, 'EffectiveAuthorization capabilities must be unique and bounded');
+invariant(schemas.EffectiveAuthorization.properties.capabilities.items?.$ref === '#/components/schemas/Capability', 'EffectiveAuthorization capabilities must use the public Capability vocabulary');
 invariant(schemas.AuditRecord.properties.schemaVersion.const === 1, 'AuditRecord.schemaVersion must be 1');
 invariant(schemas.AuditRecord.properties.aggregateType.const === 'bff-session', 'AuditRecord.aggregateType must be bff-session');
 invariant(schemas.AuditRecord.properties.executingService.const === 'platform-gateway', 'AuditRecord.executingService must be platform-gateway');

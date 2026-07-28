@@ -2,6 +2,7 @@ package gateway_test
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/tls"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/oidctest"
 	"github.com/quanlaihe/hvac-web/libs/testpki"
 	"github.com/quanlaihe/hvac-web/services/iam-service/pkg/iamserver"
@@ -30,6 +32,14 @@ type authHarness struct {
 	transport     http.RoundTripper
 }
 
+type fixedPrincipalCapabilityResolver struct {
+	authorization identitycontext.EffectiveAuthorization
+}
+
+func (resolver fixedPrincipalCapabilityResolver) ResolvePrincipalCapabilities(context.Context, iamserver.PrincipalCapabilityLookup) (identitycontext.EffectiveAuthorization, error) {
+	return resolver.authorization, nil
+}
+
 func TestAuthenticatedPrincipalLoop(t *testing.T) {
 	harness := newAuthHarness(t)
 	client := harness.browserClient(t)
@@ -40,6 +50,12 @@ func TestAuthenticatedPrincipalLoop(t *testing.T) {
 	}
 	if principal.Context.ActingOrganizationID != "org-fixture-01" || principal.Context.Audience != "iam-service" || principal.Context.PolicyRevision != "policy-v1" {
 		t.Fatalf("identity context is incomplete: %#v", principal.Context)
+	}
+	if principal.Authorization.CapabilitySetVersion != identitycontext.CapabilitySetVersion || principal.Authorization.PolicyRevision != "registry-read:test" {
+		t.Fatalf("effective authorization is incomplete: %#v", principal.Authorization)
+	}
+	if len(principal.Authorization.Capabilities) != 2 || principal.Authorization.Capabilities[0] != platformapi.CapabilitySiteRead || principal.Authorization.Capabilities[1] != platformapi.CapabilityDeviceRead {
+		t.Fatalf("Gateway did not transport IAM capabilities exactly: %#v", principal.Authorization.Capabilities)
 	}
 	if principal.Session.CSRFToken == "" || principal.Session.ID == "" || principal.Session.RevocationObjectiveMS > 1000 {
 		t.Fatalf("session view is incomplete: %#v", principal.Session)
@@ -89,6 +105,51 @@ func TestAuthenticatedPrincipalLoop(t *testing.T) {
 	}
 	defer afterLogout.Body.Close()
 	assertProblemCode(t, afterLogout, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED")
+}
+
+func TestGatewayRejectsMalformedIAMCapabilityResponse(t *testing.T) {
+	harness := newAuthHarnessWithIAMFactory(t, func(_ string) http.Handler {
+		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.TLS == nil || len(request.TLS.PeerCertificates) == 0 {
+				t.Fatal("IAM fixture did not receive the Gateway workload certificate")
+			}
+			claims, err := identitycontext.VerifyDelegation(request.TLS.PeerCertificates[0].PublicKey, request.Header.Get("X-Delegation-Grant"))
+			if err != nil {
+				t.Fatalf("verify Gateway delegation: %v", err)
+			}
+			principal := identitycontext.UserPrincipal{
+				Subject: claims.Subject, Issuer: claims.SubjectIssuer, DisplayName: claims.DisplayName, Email: claims.Email, Roles: append([]string(nil), claims.Roles...),
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(writer).Encode(identitycontext.InternalPrincipalResponse{
+				Principal: principal,
+				Context: identitycontext.PrincipalContext{
+					InitiatingPrincipal:       principal,
+					ExecutingServicePrincipal: identitycontext.ServicePrincipal{Service: "platform-gateway", SPIFFEID: claims.ExecutingService},
+					ActingOrganizationID:      claims.ActingOrganizationID,
+					Audience:                  claims.Audience,
+					PolicyRevision:            claims.PolicyRevision,
+					DelegationExpiresAt:       time.Unix(claims.ExpiresAt, 0).UTC().Format(time.RFC3339),
+				},
+				Authorization: identitycontext.EffectiveAuthorization{
+					CapabilitySetVersion: identitycontext.CapabilitySetVersion,
+					PolicyRevision:       "registry-read:test",
+					Capabilities:         []identitycontext.Capability{identitycontext.CapabilitySiteRead, identitycontext.CapabilitySiteRead},
+				},
+			})
+		})
+	})
+	client := harness.browserClient(t)
+	response, err := client.Get(harness.gatewayURL + platformapi.BeginLoginPath + "?returnTo=%2Fapi%2Fv1%2Fprincipal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	assertProblemCode(t, response, http.StatusServiceUnavailable, "IAM_RESPONSE_INVALID")
+	gatewayURL, _ := url.Parse(harness.gatewayURL)
+	if cookies := client.Jar.Cookies(gatewayURL); len(cookies) != 0 {
+		t.Fatalf("malformed IAM response created a browser Session: %#v", cookies)
+	}
 }
 
 func TestOIDCRejectedIdentityPaths(t *testing.T) {
@@ -250,6 +311,10 @@ func TestAuthLogsExcludeQueryIdentityAndCredentials(t *testing.T) {
 }
 
 func newAuthHarness(t *testing.T) *authHarness {
+	return newAuthHarnessWithIAMFactory(t, nil)
+}
+
+func newAuthHarnessWithIAMFactory(t *testing.T, factory func(clientSPIFFEID string) http.Handler) *authHarness {
 	t.Helper()
 	bundle, err := testpki.Generate("spiffe://hvac.local/iam-service", "spiffe://hvac.local/platform-gateway", time.Now().UTC())
 	if err != nil {
@@ -259,7 +324,22 @@ func newAuthHarness(t *testing.T) *authHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iamServer := httptest.NewUnstartedServer(iamserver.NewHandler(iamserver.Config{AllowedWorkloadSPIFFE: bundle.ClientSPIFFEID, Audience: "iam-service"}))
+	iamHandler := http.Handler(iamserver.NewHandler(iamserver.Config{
+		AllowedWorkloadSPIFFE: bundle.ClientSPIFFEID,
+		Audience:              "iam-service",
+		PrincipalCapabilityResolver: fixedPrincipalCapabilityResolver{authorization: identitycontext.EffectiveAuthorization{
+			CapabilitySetVersion: identitycontext.CapabilitySetVersion,
+			PolicyRevision:       "registry-read:test",
+			Capabilities: []identitycontext.Capability{
+				identitycontext.CapabilitySiteRead,
+				identitycontext.CapabilityDeviceRead,
+			},
+		}},
+	}))
+	if factory != nil {
+		iamHandler = factory(bundle.ClientSPIFFEID)
+	}
+	iamServer := httptest.NewUnstartedServer(iamHandler)
 	iamServer.TLS = serverTLS
 	iamServer.StartTLS()
 	t.Cleanup(iamServer.Close)

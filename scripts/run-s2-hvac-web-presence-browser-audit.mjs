@@ -108,6 +108,11 @@ function principal() {
       actingOrganizationId: ids.organizationA,
       audience: 'iam-service', policyRevision: 'policy-09', delegationExpiresAt: '2026-07-25T06:00:00.000Z',
     },
+    authorization: {
+      capabilitySetVersion: 1,
+      policyRevision: 'telemetry-access:1',
+      capabilities: ['site.read', 'device.list', 'device.read'],
+    },
     session: {
       id: 'session-ticket-09', expiresAt: '2026-07-25T06:00:00.000Z', csrfToken: csrfValue,
       revocationObjectiveMs: 30000, lastAuditMessageId: 'audit-ticket-09',

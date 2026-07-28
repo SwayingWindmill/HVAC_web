@@ -170,6 +170,11 @@ function createGatewayFixture() {
           policyRevision: 's1-registry-browser',
           delegationExpiresAt: '2026-07-23T01:00:00.000Z',
         },
+        authorization: {
+          capabilitySetVersion: 1,
+          policyRevision: 's1-registry-browser',
+          capabilities: ['organization.list', 'organization.read', 'site.list', 'site.read', 'equipment.list', 'equipment.read', 'device.list', 'device.read'],
+        },
         session: {
           id: 's1-registry-session',
           expiresAt: '2026-07-23T01:00:00.000Z',
