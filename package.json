@@ -15,7 +15,7 @@
     "delivery:validate": "node scripts/validate-s0-delivery-config.mjs --file=deploy/s0/local.env.example && node scripts/validate-s0-delivery-config.mjs --file=deploy/s0/staging.env.example",
     "delivery:check": "node scripts/check-s0-delivery-assets.mjs && node scripts/test-render-s0-staging.mjs",
     "delivery:render": "node scripts/render-s0-staging.mjs",
-    "security:dependency-audit": "node scripts/check-npm-production-audit.mjs",
+    "security:dependency-audit": "node --test scripts/test-npm-production-audit-guard.mjs && node scripts/check-npm-production-audit.mjs",
     "security:go-vuln": "node scripts/run-go-vulnerability-scan.mjs",
     "security:licenses": "node scripts/check-production-licenses.mjs",
     "security:failure-assets": "node scripts/check-s0-security-failure-assets.mjs",

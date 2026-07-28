@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
+import { verifyReactRouterClientOnlyViteSpa } from './npm-production-audit-guards.mjs';
 
 const root = resolve(process.cwd());
 const baseline = JSON.parse(await readFile(resolve(root, 'deploy/s0/security/dependency-audit-baseline.json'), 'utf8'));
@@ -52,23 +53,15 @@ async function verifyGuard(guard) {
     throw new Error(`Unknown dependency audit exception guard: ${guard}`);
   }
   const packageJSON = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
-  assert(packageJSON.scripts?.build?.includes('vite build apps/hvac-web'), 'React Router exception requires the client-only Vite build');
-  const main = await readFile(resolve(root, 'apps/hvac-web/src/main.tsx'), 'utf8');
-  assert(main.includes('BrowserRouter'), 'React Router exception requires BrowserRouter');
+  const compatibilityEntry = await readFile(resolve(root, 'apps/hvac-web/src/main.tsx'), 'utf8');
+  const demoEntry = await readFile(resolve(root, 'apps/hvac-web/src/demo/main.tsx'), 'utf8');
   const source = await collectSource(resolve(root, 'apps/hvac-web/src'));
-  for (const forbidden of [
-    'createStaticRouter',
-    'ServerRouter',
-    'HydratedRouter',
-    'createRequestHandler',
-    'unstable_RSC',
-    '@react-router/node',
-    '@react-router/serve',
-    'react-router/dom-export',
-    'react-router/server',
-  ]) {
-    assert(!source.includes(forbidden), `React Router exception invalidated by server/RSC marker: ${forbidden}`);
-  }
+  verifyReactRouterClientOnlyViteSpa({
+    scripts: packageJSON.scripts,
+    compatibilityEntry,
+    demoEntry,
+    source,
+  });
 }
 
 for (const [name, project] of Object.entries(baseline.projects)) {
