@@ -44,14 +44,14 @@ function problem(status, code, detail, retryable) {
   };
 }
 
-function principalResponse() {
+function principalResponse(state) {
   const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
   const principal = {
     subject: 'rms-03-operator',
     issuer: 'https://identity.hvac.local',
     displayName: 'RMS-03 Operator',
     email: ['rms-03-operator', 'example.invalid'].join('@'),
-    roles: ['descriptive-role-only'],
+    roles: [...state.roles],
   };
   return {
     principal,
@@ -69,7 +69,7 @@ function principalResponse() {
     authorization: {
       capabilitySetVersion: 1,
       policyRevision: 'iam-effective:8',
-      capabilities: ['organization.list', 'site.read', 'device.read'],
+      capabilities: [...state.capabilities],
     },
     session: {
       id: 'rms-03-session',
@@ -85,6 +85,9 @@ function createGatewayFixture() {
   const state = {
     principalMode: 'delayed',
     logoutMode: 'success',
+    platformMode: 'ok',
+    roles: ['descriptive-role-only'],
+    capabilities: ['organization.list', 'organization.read', 'site.read', 'device.read'],
     requests: [],
     loginReturnTargets: [],
     pendingPrincipalResponses: [],
@@ -100,7 +103,7 @@ function createGatewayFixture() {
     response.end(JSON.stringify(payload));
   };
 
-  const writePrincipal = (response) => writeJson(response, 200, principalResponse());
+  const writePrincipal = (response) => writeJson(response, 200, principalResponse(state));
 
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://fixture.local');
@@ -125,6 +128,29 @@ function createGatewayFixture() {
         return;
       }
       writePrincipal(response);
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/v1/platform/status') {
+      if (state.platformMode === 'unavailable') {
+        writeJson(response, 503, problem(
+          503,
+          'PLATFORM_STATUS_UNAVAILABLE',
+          'The Platform Gateway status surface is unavailable.',
+          true,
+        ));
+        return;
+      }
+      writeJson(response, 200, {
+        status: state.platformMode === 'degraded' ? 'degraded' : 'ok',
+        service: 'platform-status',
+        implementation: 'go',
+        version: 'rms-04-fixture',
+        checkedAt: new Date().toISOString(),
+        routePolicyRevision: 5,
+        routeRevision: 8,
+        compatibilityMode: 'native',
+      });
       return;
     }
 
@@ -358,6 +384,83 @@ try {
   await assertStorageEmpty(cdpClient, 'failed bootstrap');
 
   fixture.state.principalMode = 'authenticated';
+  fixture.state.platformMode = 'ok';
+  fixture.state.roles = ['platform-admin'];
+  fixture.state.capabilities = ['site.read'];
+  await navigate(cdpClient, `${webURL}/system`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'FORBIDDEN'`, 'generic capability denial');
+  const forbiddenRoute = await evaluate(cdpClient, `({
+    systemNavigation: Boolean(document.querySelector('[data-feature-id="system"]')),
+    text: document.querySelector('[data-testid="real-route-forbidden"]')?.textContent ?? '',
+    roleDisplayed: document.querySelector('[data-testid="real-principal-roles"]')?.textContent?.includes('platform-admin') ?? false,
+  })`);
+  assert(forbiddenRoute.systemNavigation === false, 'unauthorized implemented feature remained in navigation');
+  assert(forbiddenRoute.text.includes('访问被拒绝'), 'direct unauthorized route did not show Access Denied');
+  assert(!forbiddenRoute.text.includes('系统状态'), 'Access Denied revealed the protected feature label');
+  assert(!forbiddenRoute.text.includes('organization.read'), 'Access Denied revealed the missing capability');
+  assert(forbiddenRoute.roleDisplayed === true, 'descriptive role was not visible for audit context');
+
+  fixture.state.capabilities = ['organization.read'];
+  await navigate(cdpClient, `${webURL}/system`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'READY' && Boolean(document.querySelector('[data-testid="real-route-system"]'))`, 'authorized implemented route');
+  const authorizedSystem = await evaluate(cdpClient, `({
+    systemNavigation: Boolean(document.querySelector('[data-feature-id="system"]')),
+    routeText: document.querySelector('[data-testid="real-route-system"]')?.textContent ?? '',
+  })`);
+  assert(authorizedSystem.systemNavigation === true, 'authorized implemented feature was absent from navigation');
+  assert(authorizedSystem.routeText.includes('rms-04-fixture'), 'implemented route did not render authoritative platform status');
+
+  fixture.state.capabilities = ['site.read'];
+  await navigate(cdpClient, `${webURL}/alarms`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'NOT_INTEGRATED'`, 'not-integrated product route');
+  const notIntegrated = await evaluate(cdpClient, `({
+    navigationKind: document.querySelector('[data-feature-id="alarms"]')?.getAttribute('data-feature-kind'),
+    text: document.querySelector('[data-testid="real-route-not-integrated"]')?.textContent ?? '',
+  })`);
+  assert(notIntegrated.navigationKind === 'not-integrated', 'accepted backend-missing feature was not marked in navigation');
+  assert(notIntegrated.text.includes('没有该模块的权威后端'), 'Not Integrated omitted authoritative-backend semantics');
+  assert(notIntegrated.text.includes('不会加载 Demo 页面'), 'Not Integrated did not reject Demo substitution');
+
+  await navigate(cdpClient, `${webURL}/optimization`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'NOT_FOUND'`, 'deployment-hidden route');
+  const hiddenFeature = await evaluate(cdpClient, `({
+    navigation: Boolean(document.querySelector('[data-feature-id="optimization"]')),
+    notFound: Boolean(document.querySelector('[data-testid="real-route-not-found"]')),
+  })`);
+  assert(hiddenFeature.navigation === false && hiddenFeature.notFound === true, 'deployment-hidden feature was exposed');
+
+  await navigate(cdpClient, `${webURL}/unknown-rms-04`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'NOT_FOUND'`, 'unknown route');
+  assert(await evaluate(cdpClient, `Boolean(document.querySelector('[data-testid="real-route-not-found"]'))`), 'unknown route did not remain 404');
+
+  fixture.state.capabilities = ['organization.read'];
+  fixture.state.platformMode = 'degraded';
+  await navigate(cdpClient, `${webURL}/system`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'DEGRADED'`, 'degraded implemented route');
+  const degradedRoute = await evaluate(cdpClient, `({
+    navigationDegraded: document.querySelector('[data-feature-id="system"]')?.getAttribute('data-feature-degraded'),
+    route: Boolean(document.querySelector('[data-testid="real-route-degraded"]')),
+  })`);
+  assert(degradedRoute.navigationDegraded === 'true' && degradedRoute.route === true, 'degraded service state was not distinct');
+
+  fixture.state.platformMode = 'unavailable';
+  await navigate(cdpClient, `${webURL}/system`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'UNAVAILABLE'`, 'unavailable implemented route');
+  const unavailableRoute = await evaluate(cdpClient, `({
+    systemNavigation: Boolean(document.querySelector('[data-feature-id="system"]')),
+    text: document.querySelector('[data-testid="real-route-unavailable"]')?.textContent ?? '',
+  })`);
+  assert(unavailableRoute.systemNavigation === false, 'unavailable implemented feature remained in navigation');
+  assert(unavailableRoute.text.includes('PLATFORM_STATUS_UNAVAILABLE'), 'Unavailable route omitted the server failure code');
+
+  await navigate(cdpClient, `${webURL}/`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'READY' && document.querySelector('[data-testid="real-route-home"]')?.getAttribute('data-business-state') === 'EMPTY'`, 'empty home business state');
+  assert(await evaluate(cdpClient, `!document.body.innerText.includes('服务当前不可用')`), 'empty business data was rendered as service unavailability');
+  await assertStorageEmpty(cdpClient, 'capability route matrix');
+
+  fixture.state.platformMode = 'ok';
+  fixture.state.roles = ['descriptive-role-only'];
+  fixture.state.capabilities = ['organization.list', 'organization.read', 'site.read', 'device.read'];
   fixture.state.logoutMode = 'failure';
   await navigate(cdpClient, `${webURL}/logout-proof`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-shell-state') === 'READY'`, 'authenticated shell before logout');
@@ -410,7 +513,13 @@ try {
     const url = String(event.params?.url ?? '');
     return /\/ws(?:\/|\?|$)|centrifugo|telemetry/i.test(url);
   });
-  assert(businessWebSockets.length === 0, `business realtime subscriptions started during RMS-03 shell flows: ${JSON.stringify(businessWebSockets)}`);
+  assert(businessWebSockets.length === 0, `business realtime subscriptions started during RMS shell flows: ${JSON.stringify(businessWebSockets)}`);
+  const forbiddenModuleRequests = cdpClient.events.filter((event) => {
+    if (event.method !== 'Network.requestWillBeSent') return false;
+    const url = String(event.params?.request?.url ?? '');
+    return /\/src\/(?:mock|pages|ai)\/|\/src\/App\.tsx|Mock[A-Z]/.test(url);
+  });
+  assert(forbiddenModuleRequests.length === 0, `Real loaded Demo or Mock modules: ${JSON.stringify(forbiddenModuleRequests)}`);
   const sensitiveLogEvents = cdpClient.events.filter((event) => {
     if (event.method !== 'Runtime.consoleAPICalled' && event.method !== 'Log.entryAdded') return false;
     const serialized = JSON.stringify(event.params);
@@ -421,7 +530,7 @@ try {
   });
   assert(sensitiveLogEvents.length === 0, 'protected Shell values reached browser logs');
 
-  console.log('RMS-03 authenticated Shell browser audit passed.');
+  console.log('RMS authenticated Shell and capability route browser audit passed.');
 } finally {
   cdpClient?.close();
   await stopProcess(browserProcess);
