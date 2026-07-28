@@ -15,6 +15,8 @@ const (
 type Config = iam.Config
 type AuthorizationStore = iam.AuthorizationStore
 type AuthorizationLookup = iam.AuthorizationLookup
+type PrincipalCapabilityResolver = iam.PrincipalCapabilityResolver
+type PrincipalCapabilityLookup = iam.PrincipalCapabilityLookup
 type BindingEffect = iam.BindingEffect
 type PostgresAuthorizationStore = iam.PostgresAuthorizationStore
 

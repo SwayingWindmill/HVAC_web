@@ -52,6 +52,11 @@ const platformApiResponses = new Map([
       policyRevision: 'ui-audit-1',
       delegationExpiresAt: auditInstant,
     },
+    authorization: {
+      capabilitySetVersion: 1,
+      policyRevision: 'ui-audit-1',
+      capabilities: ['organization.list', 'site.read', 'device.read'],
+    },
     session: {
       id: 'ui-audit-session',
       expiresAt: auditInstant,

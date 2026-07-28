@@ -15,6 +15,7 @@ import (
 )
 
 const (
+	CapabilitySetVersion                 = 1
 	GetHealthPath                         = "__HEALTH_PATH__"
 	GetVersionPath                        = "__VERSION_PATH__"
 	GetPlatformStatusPath                 = "__PLATFORM_STATUS_PATH__"
@@ -81,6 +82,25 @@ type PrincipalContext struct {
 	DelegationExpiresAt       string           `json:"delegationExpiresAt"`
 }
 
+type Capability string
+
+const (
+	CapabilityOrganizationList Capability = "organization.list"
+	CapabilityOrganizationRead Capability = "organization.read"
+	CapabilitySiteList         Capability = "site.list"
+	CapabilitySiteRead         Capability = "site.read"
+	CapabilityEquipmentList    Capability = "equipment.list"
+	CapabilityEquipmentRead    Capability = "equipment.read"
+	CapabilityDeviceList       Capability = "device.list"
+	CapabilityDeviceRead       Capability = "device.read"
+)
+
+type EffectiveAuthorization struct {
+	CapabilitySetVersion int          `json:"capabilitySetVersion"`
+	PolicyRevision       string       `json:"policyRevision"`
+	Capabilities         []Capability `json:"capabilities"`
+}
+
 type SessionView struct {
 	ID                    string `json:"id"`
 	ExpiresAt             string `json:"expiresAt"`
@@ -90,9 +110,10 @@ type SessionView struct {
 }
 
 type CurrentPrincipalResponse struct {
-	Principal UserPrincipal    `json:"principal"`
-	Context   PrincipalContext `json:"context"`
-	Session   SessionView      `json:"session"`
+	Principal     UserPrincipal          `json:"principal"`
+	Context       PrincipalContext       `json:"context"`
+	Authorization EffectiveAuthorization `json:"authorization"`
+	Session       SessionView            `json:"session"`
 }
 
 type SessionRevocationResponse struct {

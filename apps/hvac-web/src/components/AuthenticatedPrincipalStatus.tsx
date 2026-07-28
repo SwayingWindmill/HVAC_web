@@ -61,7 +61,7 @@ export default function AuthenticatedPrincipalStatus() {
   const authenticated = snapshot.state === 'authenticated';
   const checking = snapshot.state === 'checking';
   const detail = authenticated
-    ? `${snapshot.principal.principal.displayName} · ${snapshot.principal.principal.roles.join(', ')} · ${snapshot.principal.context.actingOrganizationId}`
+    ? `${snapshot.principal.principal.displayName} · roles ${snapshot.principal.principal.roles.join(', ') || 'none'} · org ${snapshot.principal.context.actingOrganizationId} · IAM policy ${snapshot.principal.authorization.policyRevision} · capabilities ${snapshot.principal.authorization.capabilities.length}: ${snapshot.principal.authorization.capabilities.join(', ') || 'none'}`
     : snapshot.state === 'anonymous'
       ? '浏览器仅持有 HttpOnly Secure BFF Session Cookie'
       : snapshot.state === 'error'
@@ -73,6 +73,8 @@ export default function AuthenticatedPrincipalStatus() {
       className="system-health-row"
       data-testid="authenticated-principal-status"
       data-principal-state={snapshot.state}
+      data-policy-revision={authenticated ? snapshot.principal.authorization.policyRevision : undefined}
+      data-capability-count={authenticated ? snapshot.principal.authorization.capabilities.length : undefined}
       aria-label={`Authenticated Principal ${snapshot.state}`}
     >
       <Badge color={checking ? STATUS.info : authenticated ? STATUS.ok : snapshot.state === 'anonymous' ? STATUS.warn : STATUS.err} />
