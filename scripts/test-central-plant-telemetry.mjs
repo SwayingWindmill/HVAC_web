@@ -22,6 +22,10 @@ const {
   formatTelemetryUnit,
   getDeviceTelemetryProfile,
 } = compiledModule;
+const adapterConfig = JSON.parse(await readFile(
+  resolve('services/thingsboard-telemetry-adapter/configs/central-plant.local.example.json'),
+  'utf8',
+));
 
 test('chiller profile requests the exact central-plant energy keys', () => {
   const profile = getDeviceTelemetryProfile('CHILLER');
@@ -40,6 +44,28 @@ test('chiller profile requests the exact central-plant energy keys', () => {
     'chiller.business_revision',
     'chiller.fault_code',
   ]);
+});
+
+test('all central-plant profiles match the ThingsBoard-to-S2 adapter point contract', () => {
+  const adapterKeys = adapterConfig.devices.flatMap((device) => device.points.map((point) => point.telemetryKey));
+  const prefixes = {
+    CHILLER: 'chiller.',
+    CHILLED_WATER_PUMP: 'chwp.',
+    COOLING_WATER_PUMP: 'cwp.',
+    COOLING_TOWER: 'cooling_tower.',
+    HVAC_POWER_METER: 'hvac_meter.',
+    BTU_METER: 'btu_meter.',
+  };
+  for (const [deviceType, prefix] of Object.entries(prefixes)) {
+    const profileKeys = [...getDeviceTelemetryProfile(deviceType).keys];
+    const contractKeys = adapterKeys.filter((key) => key.startsWith(prefix));
+    assert.equal(new Set(profileKeys).size, profileKeys.length, `${deviceType} profile contains duplicate keys`);
+    assert.deepEqual(
+      profileKeys.sort(),
+      contractKeys.sort(),
+      `${deviceType} profile drifted from the adapter point contract`,
+    );
+  }
 });
 
 test('unknown device types retain the existing generic exact keys', () => {
