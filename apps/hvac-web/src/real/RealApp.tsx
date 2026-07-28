@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';
 import { AuthenticatedShell } from './AuthenticatedShell';
 import { REAL_FEATURE_MANIFEST } from './feature-manifest';
+import { FocusHeading } from './FocusHeading';
 import { RealRuntimeFacts } from './RealRuntimeFacts';
 import { resolveNavigation, resolveRoute, type RouteDecision } from './route-policy';
 import { createShellRuntime, type ShellSnapshot } from './shell-runtime';
@@ -22,7 +23,7 @@ export function RealConfigurationBlocked({ failures }: { failures: RealRuntimeCo
     <main className="real-shell-state" data-build-graph={REAL_GRAPH_MARKER} data-shell-state="UNAVAILABLE">
       <section className="real-shell-card" aria-labelledby="real-config-title">
         <p className="real-shell-eyebrow">REAL MODE · STARTUP BLOCKED</p>
-        <h1 id="real-config-title">Real 配置无效</h1>
+        <FocusHeading id="real-config-title">Real 配置无效</FocusHeading>
         <p>应用已按失败关闭策略停止，未挂载业务路由、Demo 数据或 Mock 服务。</p>
         <ul className="real-shell-failures">
           {failures.map((failure) => (
@@ -41,7 +42,7 @@ function BootstrappingState({ config }: { config: RealRuntimeConfig }) {
   return (
     <section className="real-shell-card" aria-labelledby="real-bootstrap-title" data-testid="real-shell-bootstrapping">
       <p className="real-shell-eyebrow">REAL MODE · BOOTSTRAPPING</p>
-      <h1 id="real-bootstrap-title">正在建立可信会话</h1>
+      <FocusHeading id="real-bootstrap-title">正在建立可信会话</FocusHeading>
       <p>Shell 正在读取服务器 Principal 与 Session。完成前不会挂载业务路由或 realtime 订阅。</p>
       <div className="real-shell-progress" role="status" aria-live="polite">正在验证身份边界…</div>
       <RealRuntimeFacts config={config} />
@@ -62,7 +63,7 @@ function LoginRequiredState({
   return (
     <section className="real-shell-card" aria-labelledby="real-login-title" data-testid="real-shell-login-required">
       <p className="real-shell-eyebrow">REAL MODE · LOGIN REQUIRED</p>
-      <h1 id="real-login-title">{loggedOut ? '服务器 Session 已撤销' : '需要登录'}</h1>
+      <FocusHeading id="real-login-title">{loggedOut ? '服务器 Session 已撤销' : '需要登录'}</FocusHeading>
       <p>
         {loggedOut
           ? '受保护内存已清除。重新进入时将使用 Gateway 发起 OIDC 登录。'
@@ -88,7 +89,7 @@ function PrincipalUnavailableState({
   return (
     <section className="real-shell-card" aria-labelledby="real-unavailable-title" data-testid="real-shell-unavailable">
       <p className="real-shell-eyebrow">REAL MODE · UNAVAILABLE</p>
-      <h1 id="real-unavailable-title">无法建立可信 Principal</h1>
+      <FocusHeading id="real-unavailable-title">无法建立可信 Principal</FocusHeading>
       <p>业务路由保持未挂载。系统不会使用 Demo、Mock 或缓存身份作为替代。</p>
       {snapshot.failure ? (
         <div className="real-shell-problem" role="alert" data-retryable={String(snapshot.failure.retryable)}>

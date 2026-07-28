@@ -36,12 +36,20 @@ function evaluateCommonJs(compiled, requireFn = () => { throw new Error('unexpec
 const policy = evaluateCommonJs(compile('apps/hvac-web/src/real/shell-policy.ts'));
 const siteRouting = evaluateCommonJs(compile('apps/hvac-web/src/real/site-routing.ts'));
 const protectedScope = evaluateCommonJs(compile('apps/hvac-web/src/real/protected-scope.ts'));
+const realtimeStatus = evaluateCommonJs(
+  compile('apps/hvac-web/src/real/realtime-status.ts'),
+  (specifier) => {
+    if (specifier === './site-routing') return siteRouting;
+    throw new Error(`unexpected require: ${specifier}`);
+  },
+);
 const runtimeModule = evaluateCommonJs(
   compile('apps/hvac-web/src/real/shell-runtime.ts'),
   (specifier) => {
     if (specifier === './shell-policy') return policy;
     if (specifier === './site-routing') return siteRouting;
     if (specifier === './protected-scope') return protectedScope;
+    if (specifier === './realtime-status') return realtimeStatus;
     throw new Error(`unexpected require: ${specifier}`);
   },
 );
@@ -670,4 +678,39 @@ test('Session loss interrupts a pending Site purge before target navigation', as
 
   assert.equal(await navigation, 'interrupted');
   assert.equal(env.navigations.length, 0);
+});
+
+test('realtime status is scoped to the active Site and clears before Site navigation', async () => {
+  const siteA = registrySite();
+  const siteB = registrySite('01900000-0002-7000-8000-000000000002');
+  const pendingPurge = deferred();
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client({
+    listOrganizationSites: async () => ({ data: siteCollection([siteA, siteB]) }),
+  }), env.value);
+  await runtime.bootstrap(`/sites/${siteA.id}/assets`);
+  runtime.activateSiteScope(siteA.id);
+
+  assert.equal(runtime.current().realtime.state, 'idle');
+  assert.equal(runtime.current().realtime.siteId, siteA.id);
+  for (const state of ['connecting', 'live', 'reconnecting', 'resync-required', 'unavailable']) {
+    runtime.publishRealtimeStatus({ state, siteId: siteA.id });
+    assert.equal(runtime.current().realtime.state, state);
+    assert.equal(runtime.current().realtime.siteId, siteA.id);
+  }
+  assert.throws(
+    () => runtime.publishRealtimeStatus({ state: 'live', siteId: siteB.id }),
+    /active Site/i,
+  );
+
+  runtime.registerProtectedResource({
+    id: 's2-session',
+    kind: 'realtime',
+    purge: () => pendingPurge.promise,
+  });
+  const navigation = runtime.requestSiteNavigation(`/sites/${siteB.id}/assets`);
+  assert.equal(runtime.current().realtime.state, 'idle');
+  assert.equal(runtime.current().realtime.siteId, undefined);
+  pendingPurge.resolve();
+  assert.equal(await navigation, 'navigated');
 });

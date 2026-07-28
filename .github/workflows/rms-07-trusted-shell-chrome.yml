@@ -1,0 +1,73 @@
+name: RMS-07 Trusted Shell Chrome
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/rms-07-trusted-shell-chrome.yml"
+      - "apps/hvac-web/src/real/**"
+      - "apps/hvac-web/src/api/generated/platformGateway.gen.ts"
+      - "apps/hvac-web/vite.real.config.ts"
+      - "apps/hvac-web/vite.shared.config.ts"
+      - "contracts/http/**"
+      - "scripts/check-rms-real-build-graph.mjs"
+      - "scripts/check-rms-real-bundle.mjs"
+      - "scripts/rms-real-build-audit-lib.mjs"
+      - "scripts/run-rms-authenticated-shell-browser-audit.mjs"
+      - "scripts/test-rms-authenticated-shell-policy.mjs"
+      - "scripts/test-rms-feature-route-policy.mjs"
+      - "scripts/test-rms-site-routing.mjs"
+      - "scripts/test-rms-protected-scope.mjs"
+      - "scripts/test-rms-realtime-status.mjs"
+      - "scripts/test-rms-shell-runtime.mjs"
+      - "package.json"
+      - "package-lock.json"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/rms-07-trusted-shell-chrome.yml"
+      - "apps/hvac-web/src/real/**"
+      - "apps/hvac-web/src/api/generated/platformGateway.gen.ts"
+      - "apps/hvac-web/vite.real.config.ts"
+      - "apps/hvac-web/vite.shared.config.ts"
+      - "contracts/http/**"
+      - "scripts/check-rms-real-build-graph.mjs"
+      - "scripts/check-rms-real-bundle.mjs"
+      - "scripts/rms-real-build-audit-lib.mjs"
+      - "scripts/run-rms-authenticated-shell-browser-audit.mjs"
+      - "scripts/test-rms-authenticated-shell-policy.mjs"
+      - "scripts/test-rms-feature-route-policy.mjs"
+      - "scripts/test-rms-site-routing.mjs"
+      - "scripts/test-rms-protected-scope.mjs"
+      - "scripts/test-rms-realtime-status.mjs"
+      - "scripts/test-rms-shell-runtime.mjs"
+      - "package.json"
+      - "package-lock.json"
+
+permissions:
+  contents: read
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - run: npm run rms:ticket-07
+
+  browser:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+      - run: npm ci
+      - run: npm run rms:ticket-07:browser
