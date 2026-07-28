@@ -73,6 +73,76 @@
   background: #fff1f0;
 }
 
+.real-shell-progress {
+  margin: 20px 0;
+  padding: 14px;
+  border-radius: 10px;
+  background: #e6f4ff;
+  color: #0958d9;
+  font-weight: 700;
+}
+
+.real-shell-actions {
+  display: flex;
+  gap: 12px;
+  margin: 22px 0;
+}
+
+.real-shell-actions button {
+  min-height: 42px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 9px;
+  background: #1677ff;
+  color: #ffffff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.real-shell-actions button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.real-shell-problem {
+  display: grid;
+  gap: 6px;
+  margin: 20px 0;
+  padding: 14px;
+  border-left: 4px solid #cf1322;
+  background: #fff1f0;
+  color: #a8071a;
+}
+
+.real-shell-problem code {
+  overflow-wrap: anywhere;
+  color: #7a0612;
+}
+
+.real-shell-capabilities {
+  margin: 20px 0;
+  padding: 16px;
+  border: 1px solid #d7deea;
+  border-radius: 10px;
+  background: #fafcff;
+}
+
+.real-shell-capabilities ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.real-shell-capabilities li {
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: #e6f4ff;
+}
+
 .real-shell-success {
   color: #237804;
 }
