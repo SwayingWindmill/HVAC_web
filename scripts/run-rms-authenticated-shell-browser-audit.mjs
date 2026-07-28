@@ -3,13 +3,15 @@ import { once } from 'node:events';
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createTCPServer } from 'node:net';
-import { rm } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import WebSocket from 'ws';
+import { RMS_REQUIRED_BROWSER_SCENARIOS } from './rms-certification-evidence-lib.mjs';
 
 const root = resolve(process.cwd());
 const profileDir = join(tmpdir(), `rms-03-shell-browser-${process.pid}`);
+const evidencePath = join(root, 'out', 'rms-08', 'browser-evidence.json');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 const fixtureCapability = ['rms', '03', String(process.pid)].join('-');
 const sessionCapabilityField = ['csrf', 'Token'].join('');
@@ -19,6 +21,33 @@ const siteAId = '01900000-0001-7000-8000-000000000001';
 const siteBId = '01900000-0002-7000-8000-000000000002';
 const invisibleSiteId = '01900000-0003-7000-8000-000000000003';
 const traceId = '0'.repeat(32);
+const browserEvidence = {
+  schemaVersion: 1,
+  passed: false,
+  scenarios: {},
+  network: {},
+  storage: {
+    samples: [],
+    persistedSensitivePayloadCount: 0,
+    sensitiveCategories: {
+      token: 0,
+      csrf: 0,
+      principal: 0,
+      registry: 0,
+      telemetry: 0,
+      command: 0,
+    },
+  },
+  failures: [],
+};
+
+function recordScenario(name) {
+  browserEvidence.scenarios[name] = { passed: true };
+}
+
+function recordFailure(code) {
+  browserEvidence.failures.push({ code, traceId, fixtureFallback: false });
+}
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -65,7 +94,7 @@ const siteA = registrySite(siteAId, 'TOKYO-1', 'Tokyo Plant');
 const siteB = registrySite(siteBId, 'OSAKA-1', 'Osaka Plant');
 
 function principalResponse(state) {
-  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + state.sessionLifetimeMs).toISOString();
   const principal = {
     subject: 'rms-03-operator',
     issuer: 'https://identity.hvac.local',
@@ -110,6 +139,8 @@ function createGatewayFixture() {
     sites: [siteA],
     roles: ['descriptive-role-only'],
     capabilities: ['organization.list', 'organization.read', 'site.list', 'site.read', 'device.read'],
+    sessionLifetimeMs: 60 * 60 * 1000,
+    loginMode: 'success',
     requests: [],
     loginReturnTargets: [],
     pendingPrincipalResponses: [],
@@ -198,6 +229,14 @@ function createGatewayFixture() {
       const returnTo = url.searchParams.get('returnTo') ?? '/';
       state.loginReturnTargets.push(returnTo);
       assert(returnTo.startsWith('/') && !returnTo.startsWith('//'), `unsafe fixture returnTo ${returnTo}`);
+      if (state.loginMode === 'session-expiration-proof') {
+        response.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store',
+        });
+        response.end('<!doctype html><title>Session expiration proof</title><main data-testid="session-expiration-login-proof">Session expired login requested</main>');
+        return;
+      }
       state.principalMode = 'authenticated';
       response.writeHead(302, { location: returnTo, 'cache-control': 'no-store' });
       response.end();
@@ -347,6 +386,11 @@ async function assertStorageEmpty(client, label) {
   const state = await evaluate(client, `({ localLength: localStorage.length, sessionLength: sessionStorage.length })`);
   assert(state.localLength === 0, `${label} wrote local browser storage`);
   assert(state.sessionLength === 0, `${label} wrote session browser storage`);
+  browserEvidence.storage.samples.push({
+    label,
+    localStorageEntries: state.localLength,
+    sessionStorageEntries: state.sessionLength,
+  });
 }
 
 const browserCandidates = [
@@ -371,6 +415,8 @@ const fixture = createGatewayFixture();
 let viteProcess;
 let browserProcess;
 let cdpClient;
+
+await rm(evidencePath, { force: true });
 
 try {
   await new Promise((resolveListen, rejectListen) => {
@@ -438,6 +484,7 @@ try {
   assert(fixture.state.loginReturnTargets.length === 1, `unexpected login requests ${JSON.stringify(fixture.state.loginReturnTargets)}`);
   assert(fixture.state.loginReturnTargets[0] === '/system?tab=overview#device', `unsafe or incorrect returnTo ${fixture.state.loginReturnTargets[0]}`);
   await assertStorageEmpty(cdpClient, 'login round trip');
+  recordScenario('login');
 
   fixture.state.principalMode = 'unavailable';
   await navigate(cdpClient, `${webURL}/failed-bootstrap`);
@@ -454,6 +501,7 @@ try {
   assert(!failedBootstrap.text.includes(fixtureCapability) && !failedBootstrap.text.includes('rms-03-session'), 'failed bootstrap exposed protected Session values');
   assert(failedBootstrap.focusedHeading, 'failed bootstrap did not restore focus to its heading');
   await assertStorageEmpty(cdpClient, 'failed bootstrap');
+  recordFailure('SESSION_STORE_UNAVAILABLE');
 
   fixture.state.principalMode = 'authenticated';
   fixture.state.platformMode = 'ok';
@@ -471,6 +519,7 @@ try {
   assert(!forbiddenRoute.text.includes('系统状态'), 'Access Denied revealed the protected feature label');
   assert(!forbiddenRoute.text.includes('organization.read'), 'Access Denied revealed the missing capability');
   assert(forbiddenRoute.roleDisplayed === true, 'descriptive role was not visible for audit context');
+  recordScenario('capability-denial');
 
   fixture.state.capabilities = ['organization.read'];
   await navigate(cdpClient, `${webURL}/system`);
@@ -492,6 +541,7 @@ try {
   assert(notIntegrated.navigationKind === 'not-integrated', 'accepted backend-missing feature was not marked in navigation');
   assert(notIntegrated.text.includes('没有该模块的权威后端'), 'Not Integrated omitted authoritative-backend semantics');
   assert(notIntegrated.text.includes('不会加载 Demo 页面'), 'Not Integrated did not reject Demo substitution');
+  recordScenario('not-integrated');
 
   await navigate(cdpClient, `${webURL}/optimization`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'NOT_FOUND'`, 'deployment-hidden route');
@@ -529,6 +579,7 @@ try {
   assert(unavailableRoute.text.includes('PLATFORM_STATUS_UNAVAILABLE') && unavailableRoute.text.includes(`traceId ${traceId}`), 'Unavailable route omitted safe Problem detail or trace ID');
   assert(!unavailableRoute.text.includes(fixtureCapability) && !unavailableRoute.text.includes('rms-03-session'), 'Unavailable route exposed protected Session values');
   assert(unavailableRoute.focusedHeading, 'Unavailable route did not restore focus to its heading');
+  recordFailure('PLATFORM_STATUS_UNAVAILABLE');
 
   fixture.state.platformMode = 'ok';
   fixture.state.roles = ['descriptive-role-only'];
@@ -553,6 +604,7 @@ try {
   })`);
   assert(noAuthorizedSite.account && noAuthorizedSite.retry && noAuthorizedSite.help && noAuthorizedSite.logout, 'NO_AUTHORIZED_SITE omitted account, retry, help, or logout');
   assert(noAuthorizedSite.siteRoute === false, 'NO_AUTHORIZED_SITE mounted a Site business surface');
+  recordScenario('zero-sites');
 
   fixture.state.sites = [siteA, siteB];
   await navigate(cdpClient, `${webURL}/`);
@@ -574,6 +626,7 @@ try {
   assert(siteChooser.choices.every((choice) => choice.name.length > 0), 'chooser links lacked accessible names');
   assert(siteChooser.siteRoute === false, 'chooser mounted a Site business surface before selection');
   assert(siteChooser.focusedHeading, 'Site chooser did not restore focus to its heading');
+  recordScenario('many-sites');
 
   await navigate(cdpClient, `${webURL}/sites/${siteBId}/assets`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'READY' && document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-site-id') === '${siteBId}'`, 'validated explicit Site Assets route');
@@ -692,6 +745,7 @@ try {
   assert(completedSiteTransition.newSite && completedSiteTransition.newScope === siteBId, 'new Site did not establish a fresh protected scope');
   assert(completedSiteTransition.headerSite === 'Osaka Plant' && completedSiteTransition.realtimeSite === siteBId, 'trusted header did not follow the new Site snapshot');
   assert(completedSiteTransition.focusedHeading, 'new Site route did not restore focus to its heading');
+  recordScenario('site-switching');
 
   fixture.state.roles = ['platform-admin'];
   fixture.state.capabilities = ['site.list'];
@@ -725,6 +779,7 @@ try {
     assert(!invisibleSite.text.includes(invisibleSiteId) && !invisibleSite.text.includes('b1') && !invisibleSite.text.includes('b2'), `invalid Site state leaked the requested identity for ${invalidPath}`);
     assert(invisibleSite.siteRoute === false, `invalid Site mounted a Site business surface for ${invalidPath}`);
   }
+  recordScenario('invalid-site');
 
   await navigate(cdpClient, `${webURL}/sites/${siteAId}/unknown`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'NOT_FOUND' && Boolean(document.querySelector('[data-testid="real-site-route-not-found"]'))`, 'validated Site route 404');
@@ -741,6 +796,20 @@ try {
   assert(soleSite.pathname === `/sites/${siteAId}/assets` && soleSite.siteId === siteAId, 'sole Site did not enter an explicit UUIDv7 URL');
   assert(soleSite.empty === 'EMPTY' && soleSite.unavailableText === false, 'empty Site business state was confused with unavailability');
   await assertStorageEmpty(cdpClient, 'Site scope matrix');
+  recordScenario('one-site');
+
+  fixture.state.sessionLifetimeMs = 1500;
+  fixture.state.loginMode = 'session-expiration-proof';
+  const loginCountBeforeExpiration = fixture.state.loginReturnTargets.length;
+  await navigate(cdpClient, `${webURL}/sites/${siteAId}/assets?session=expires`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'READY'`, 'authenticated shell before Session expiration');
+  await waitForCondition(cdpClient, `location.pathname === '/api/v1/auth/login' && Boolean(document.querySelector('[data-testid="session-expiration-login-proof"]'))`, 'Session expiration login proof');
+  assert(fixture.state.loginReturnTargets.length === loginCountBeforeExpiration + 1, 'Session expiration did not start login');
+  assert(fixture.state.loginReturnTargets.at(-1) === `/sites/${siteAId}/assets?session=expires`, 'Session expiration lost its safe returnTo');
+  assert(!await evaluate(cdpClient, `Boolean(document.querySelector('[data-testid="real-protected-shell"]'))`), 'Session expiration retained the protected Shell');
+  recordScenario('session-expiration');
+  fixture.state.loginMode = 'success';
+  fixture.state.sessionLifetimeMs = 60 * 60 * 1000;
 
   await cdpClient.send('Emulation.setDeviceMetricsOverride', {
     width: 390,
@@ -794,6 +863,7 @@ try {
     }),
   })`);
   assert(!mobileNoSite.overflow && mobileNoSite.focusedHeading && mobileNoSite.actionsVisible, 'mobile No Authorized Site was unusable');
+  recordScenario('mobile');
 
   fixture.state.platformMode = 'ok';
   fixture.state.roles = ['descriptive-role-only'];
@@ -817,6 +887,7 @@ try {
   assert(!failedLogout.overflow, 'mobile logout failure overflowed the viewport');
   assert(fixture.state.loginReturnTargets.length === loginCountBeforeLogout, 'logout failure incorrectly started login');
   await assertStorageEmpty(cdpClient, 'logout failure');
+  recordFailure('SESSION_PERSISTENCE_FAILED');
 
   fixture.state.logoutMode = 'success';
   await clickTestId(cdpClient, 'real-logout-button');
@@ -832,6 +903,7 @@ try {
   assert(!completedLogout.overflow && completedLogout.focusedHeading && completedLogout.loginName.length > 0, 'mobile Session ended state was not accessible');
   assert(fixture.state.loginReturnTargets.length === loginCountBeforeLogout, 'confirmed logout automatically started a new login');
   await assertStorageEmpty(cdpClient, 'logout success');
+  recordScenario('logout');
   await cdpClient.send('Emulation.clearDeviceMetricsOverride');
 
   const authorizationRequests = fixture.state.requests.filter((entry) => 'authorization' in entry.headers);
@@ -875,7 +947,25 @@ try {
   });
   assert(sensitiveLogEvents.length === 0, 'protected Shell values reached browser logs');
 
-  console.log('RMS authenticated Shell and capability route browser audit passed.');
+  const organizationAuthorityRequests = fixture.state.requests.filter((entry) => 'x-organization-id' in entry.headers);
+  const siteAuthorityRequests = fixture.state.requests.filter((entry) => 'x-site-id' in entry.headers);
+  const otherAuthorityRequests = fixture.state.requests.filter((entry) =>
+    ['x-role', 'x-admin', 'x-scope'].some((name) => name in entry.headers));
+  browserEvidence.network = {
+    requestCount: fixture.state.requests.length,
+    browserAuthorizationHeaderCount: authorizationRequests.length,
+    browserOrganizationAuthorityHeaderCount: organizationAuthorityRequests.length,
+    browserSiteAuthorityHeaderCount: siteAuthorityRequests.length,
+    browserOtherAuthorityHeaderCount: otherAuthorityRequests.length,
+  };
+  for (const scenario of RMS_REQUIRED_BROWSER_SCENARIOS) {
+    assert(browserEvidence.scenarios[scenario]?.passed === true, `browser evidence omitted ${scenario}`);
+  }
+  browserEvidence.passed = true;
+  await mkdir(join(root, 'out', 'rms-08'), { recursive: true });
+  await writeFile(evidencePath, `${JSON.stringify(browserEvidence, null, 2)}\n`, 'utf8');
+
+  console.log(`RMS authenticated Shell and capability route browser audit passed. Evidence: ${evidencePath}`);
 } finally {
   cdpClient?.close();
   await stopProcess(browserProcess);

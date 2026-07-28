@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "artifactMode": "real",
+  "rollback": {
+    "previousRealArtifactOnly": true,
+    "demoFallbackAllowed": false,
+    "failClosedOnSessionOrCapabilityFailure": true
+  },
+  "commandTraffic": {
+    "productionTrafficChanged": false,
+    "formalProductionClaim": false,
+    "s3CertificationChanged": false
+  },
+  "scopeStatement": "RMS-08 certifies the Real Mode Shell only. It does not enable or expand S3 Command production traffic and does not change any formal S3 certification claim."
+}
