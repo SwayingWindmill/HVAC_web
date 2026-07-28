@@ -1,6 +1,7 @@
 import type {
   CurrentPrincipalResponse,
   PlatformGatewayClient,
+  PlatformStatusResponse,
   ProblemDetails,
 } from '@/api/generated/platformGateway.gen';
 import {
@@ -27,9 +28,16 @@ export interface ShellLogoutView {
   retryable?: boolean;
 }
 
+export interface ShellPlatformView {
+  state: 'checking' | 'available' | 'degraded' | 'unavailable';
+  status?: PlatformStatusResponse;
+  failure?: ShellFailureView;
+}
+
 export interface ShellSnapshot {
   state: ShellState;
   principal?: CurrentPrincipalResponse;
+  platform?: ShellPlatformView;
   loginUrl?: string;
   reason?: string;
   failure?: ShellFailureView;
@@ -55,7 +63,10 @@ export interface ShellRuntimeEnvironment {
   clearTimer(handle: unknown): void;
 }
 
-type ShellRuntimeClient = Pick<PlatformGatewayClient, 'getCurrentPrincipal' | 'loginUrl' | 'logout'>;
+type ShellRuntimeClient = Pick<
+  PlatformGatewayClient,
+  'getCurrentPrincipal' | 'getPlatformStatus' | 'loginUrl' | 'logout'
+>;
 
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
 
@@ -124,7 +135,6 @@ class BrowserShellRuntime implements ShellRuntime {
     try {
       const response = await this.client.getCurrentPrincipal({ signal: controller.signal });
       if (!this.isCurrent(sequence) || controller.signal.aborted) return;
-      this.bootstrapController = undefined;
 
       const expiresAt = Date.parse(response.data.session.expiresAt);
       if (!Number.isFinite(expiresAt) || expiresAt <= this.environment.now()) {
@@ -136,9 +146,11 @@ class BrowserShellRuntime implements ShellRuntime {
       this.publish({
         state: 'READY',
         principal: response.data,
+        platform: { state: 'checking' },
         logout: { status: 'idle' },
       });
       this.scheduleExpiration(expiresAt);
+      await this.loadPlatformAvailability(sequence, response.data, controller);
     } catch (error: unknown) {
       if (!this.isCurrent(sequence) || controller.signal.aborted) return;
       this.bootstrapController = undefined;
@@ -173,9 +185,11 @@ class BrowserShellRuntime implements ShellRuntime {
     if (this.snapshot.logout?.status === 'submitting') return 'failed';
 
     const sequence = this.sequence;
+    const platform = this.snapshot.platform;
     this.publish({
       state: 'READY',
       principal,
+      platform,
       logout: { status: 'submitting' },
     });
 
@@ -199,6 +213,7 @@ class BrowserShellRuntime implements ShellRuntime {
       this.publish({
         state: 'READY',
         principal,
+        platform,
         logout: {
           status: 'failed',
           code: failure.code,
@@ -260,6 +275,48 @@ class BrowserShellRuntime implements ShellRuntime {
   private completeLogout(reason: string): void {
     this.sequence += 1;
     this.enterLoginRequired(reason, false);
+  }
+
+  private async loadPlatformAvailability(
+    sequence: number,
+    principal: CurrentPrincipalResponse,
+    controller: AbortController,
+  ): Promise<void> {
+    try {
+      const response = await this.client.getPlatformStatus({ signal: controller.signal });
+      if (!this.isCurrent(sequence) || controller.signal.aborted || this.protectedPrincipal !== principal) return;
+      this.bootstrapController = undefined;
+      this.publish({
+        state: 'READY',
+        principal,
+        platform: {
+          state: response.data.status === 'degraded' ? 'degraded' : 'available',
+          status: response.data,
+        },
+        logout: this.snapshot.logout ?? { status: 'idle' },
+      });
+    } catch (error: unknown) {
+      if (!this.isCurrent(sequence) || controller.signal.aborted || this.protectedPrincipal !== principal) return;
+      this.bootstrapController = undefined;
+      const problem = problemFrom(error);
+      if (problem && classifyBootstrapProblem(problem) === 'LOGIN_REQUIRED') {
+        this.enterLoginRequired(problem.code, true);
+        return;
+      }
+      this.publish({
+        state: 'READY',
+        principal,
+        platform: {
+          state: 'unavailable',
+          failure: failureFrom(
+            problem,
+            'PLATFORM_STATUS_UNAVAILABLE',
+            'Platform Gateway 状态暂时不可用。',
+          ),
+        },
+        logout: this.snapshot.logout ?? { status: 'idle' },
+      });
+    }
   }
 
   private scheduleExpiration(expiresAt: number): void {

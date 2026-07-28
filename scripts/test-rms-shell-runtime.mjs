@@ -109,9 +109,23 @@ function environment() {
   };
 }
 
+function platformStatus(status = 'ok') {
+  return {
+    status,
+    service: 'platform-status',
+    implementation: 'go',
+    version: 'rms-04-test',
+    checkedAt: '2026-07-28T05:00:00.000Z',
+    routePolicyRevision: 7,
+    routeRevision: 11,
+    compatibilityMode: 'native',
+  };
+}
+
 function client(overrides = {}) {
   return {
     getCurrentPrincipal: async () => ({ data: principal() }),
+    getPlatformStatus: async () => ({ data: platformStatus() }),
     loginUrl: ({ returnTo }) => `/api/v1/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
     logout: async () => ({ data: undefined }),
     ...overrides,
@@ -216,4 +230,80 @@ test('disposing an unmounted shell clears timers and suppresses later navigation
 
   assert.equal(env.timers.size, 0);
   assert.deepEqual(env.navigations, []);
+});
+
+test('publishes available and degraded platform status without interpreting roles', async () => {
+  for (const [status, expected] of [['ok', 'available'], ['degraded', 'degraded']]) {
+    const env = environment();
+    const runtime = runtimeModule.createShellRuntime(client({
+      getPlatformStatus: async () => ({ data: platformStatus(status) }),
+    }), env.value);
+
+    await runtime.bootstrap('/system');
+
+    assert.equal(runtime.current().state, 'READY');
+    assert.equal(runtime.current().platform.state, expected);
+    assert.equal(runtime.current().platform.status.status, status);
+    assert.deepEqual(runtime.current().principal.principal.roles, ['descriptive-only']);
+  }
+});
+
+test('keeps the authenticated shell while platform availability is unavailable', async () => {
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client({
+    getPlatformStatus: async () => {
+      throw { problem: { status: 503, code: 'PLATFORM_STATUS_UNAVAILABLE', detail: 'status unavailable', traceId: '3'.repeat(32), retryable: true } };
+    },
+  }), env.value);
+
+  await runtime.bootstrap('/system');
+
+  assert.equal(runtime.current().state, 'READY');
+  assert.equal(runtime.current().principal.session.id, 'session-1');
+  assert.equal(runtime.current().platform.state, 'unavailable');
+  assert.equal(runtime.current().platform.failure.code, 'PLATFORM_STATUS_UNAVAILABLE');
+  assert.equal(runtime.current().platform.failure.retryable, true);
+});
+
+test('an authentication failure from platform status purges protected memory', async () => {
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client({
+    getPlatformStatus: async () => {
+      throw { problem: { status: 401, code: 'SESSION_INVALID', detail: 'session invalid', traceId: '4'.repeat(32), retryable: false } };
+    },
+  }), env.value);
+
+  await runtime.bootstrap('/system');
+
+  assert.equal(runtime.current().state, 'LOGIN_REQUIRED');
+  assert.equal(runtime.current().principal, undefined);
+  assert.deepEqual(env.navigations, ['/api/v1/auth/login?returnTo=%2Fsystem']);
+});
+
+test('late platform availability cannot reset an in-flight logout', async () => {
+  const pendingPlatform = deferred();
+  const pendingLogout = deferred();
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client({
+    getPlatformStatus: () => pendingPlatform.promise,
+    logout: () => pendingLogout.promise,
+  }), env.value);
+
+  const bootstrap = runtime.bootstrap('/system');
+  for (let attempt = 0; attempt < 5 && !runtime.current().platform; attempt += 1) {
+    await Promise.resolve();
+  }
+  assert.equal(runtime.current().platform.state, 'checking');
+
+  const logout = runtime.logout();
+  assert.equal(runtime.current().logout.status, 'submitting');
+
+  pendingPlatform.resolve({ data: platformStatus() });
+  await bootstrap;
+  assert.equal(runtime.current().platform.state, 'available');
+  assert.equal(runtime.current().logout.status, 'submitting');
+
+  pendingLogout.resolve({ data: undefined });
+  await logout;
+  assert.equal(runtime.current().state, 'LOGIN_REQUIRED');
 });

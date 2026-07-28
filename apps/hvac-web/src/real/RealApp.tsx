@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';
+import { AuthenticatedShell } from './AuthenticatedShell';
+import { REAL_FEATURE_MANIFEST } from './feature-manifest';
+import { RealRuntimeFacts } from './RealRuntimeFacts';
+import { resolveNavigation, resolveRoute } from './route-policy';
 import { createShellRuntime, type ShellSnapshot } from './shell-runtime';
 import type { RealRuntimeConfig, RealRuntimeConfigFailure } from './runtime-config';
 import './real-shell.css';
@@ -9,16 +13,6 @@ const REAL_SHELL_MARKER = 'REAL MODE · AUTHORITATIVE SHELL';
 
 interface RealAppProps {
   config: RealRuntimeConfig;
-}
-
-function RuntimeFacts({ config }: { config: RealRuntimeConfig }) {
-  return (
-    <dl className="real-shell-facts" aria-label="Real runtime facts">
-      <div><dt>Build identity</dt><dd>{config.buildId}</dd></div>
-      <div><dt>Gateway</dt><dd>{config.gatewayBasePath}</dd></div>
-      <div><dt>Realtime protocol</dt><dd>{config.realtimeProtocol}</dd></div>
-    </dl>
-  );
 }
 
 export function RealConfigurationBlocked({ failures }: { failures: RealRuntimeConfigFailure[] }) {
@@ -48,7 +42,7 @@ function BootstrappingState({ config }: { config: RealRuntimeConfig }) {
       <h1 id="real-bootstrap-title">正在建立可信会话</h1>
       <p>Shell 正在读取服务器 Principal 与 Session。完成前不会挂载业务路由或 realtime 订阅。</p>
       <div className="real-shell-progress" role="status" aria-live="polite">正在验证身份边界…</div>
-      <RuntimeFacts config={config} />
+      <RealRuntimeFacts config={config} />
     </section>
   );
 }
@@ -75,12 +69,12 @@ function LoginRequiredState({
       <div className="real-shell-actions">
         <button type="button" onClick={beginLogin}>通过身份提供方登录</button>
       </div>
-      <RuntimeFacts config={config} />
+      <RealRuntimeFacts config={config} />
     </section>
   );
 }
 
-function UnavailableState({
+function PrincipalUnavailableState({
   config,
   snapshot,
   retry,
@@ -104,65 +98,7 @@ function UnavailableState({
       <div className="real-shell-actions">
         <button type="button" onClick={retry}>重试 Principal bootstrap</button>
       </div>
-      <RuntimeFacts config={config} />
-    </section>
-  );
-}
-
-function ReadyState({
-  config,
-  snapshot,
-  logout,
-}: {
-  config: RealRuntimeConfig;
-  snapshot: ShellSnapshot;
-  logout: () => void;
-}) {
-  const principal = snapshot.principal!;
-  const submitting = snapshot.logout?.status === 'submitting';
-  return (
-    <section
-      className="real-shell-card"
-      aria-labelledby="real-ready-title"
-      data-testid="real-protected-shell"
-      data-protected-route-mounted="true"
-      data-policy-revision={principal.authorization.policyRevision}
-      data-capability-count={String(principal.authorization.capabilities.length)}
-    >
-      <p className="real-shell-eyebrow">REAL MODE · AUTHENTICATED</p>
-      <h1 id="real-ready-title">可信 Shell 已就绪</h1>
-      <p>Principal 与服务器授权快照仅保存在当前页面内存中。Site 路由将在后续 Ticket 接入。</p>
-
-      <dl className="real-shell-facts real-shell-principal-facts">
-        <div><dt>Principal</dt><dd>{principal.principal.displayName}</dd></div>
-        <div><dt>Subject</dt><dd>{principal.principal.subject}</dd></div>
-        <div><dt>Acting Organization</dt><dd>{principal.context.actingOrganizationId}</dd></div>
-        <div><dt>IAM policy revision</dt><dd>{principal.authorization.policyRevision}</dd></div>
-        <div><dt>Session expires</dt><dd>{principal.session.expiresAt}</dd></div>
-        <div><dt>描述性角色</dt><dd>{principal.principal.roles.join(', ') || 'none'}</dd></div>
-      </dl>
-
-      <div className="real-shell-capabilities" aria-label="Effective capabilities">
-        <strong>Effective capabilities ({principal.authorization.capabilities.length})</strong>
-        {principal.authorization.capabilities.length ? (
-          <ul>{principal.authorization.capabilities.map((capability) => <li key={capability}><code>{capability}</code></li>)}</ul>
-        ) : <p>当前 Principal 没有已发布 Capability。</p>}
-      </div>
-
-      {snapshot.logout?.status === 'failed' ? (
-        <div className="real-shell-problem" role="alert" data-testid="real-logout-failure" data-retryable={String(snapshot.logout.retryable)}>
-          <strong>{snapshot.logout.code}</strong>
-          <span>{snapshot.logout.detail}</span>
-          {snapshot.logout.traceId ? <code>traceId {snapshot.logout.traceId}</code> : null}
-        </div>
-      ) : null}
-
-      <div className="real-shell-actions">
-        <button type="button" onClick={logout} disabled={submitting} data-testid="real-logout-button">
-          {submitting ? '正在撤销服务器 Session…' : '退出登录'}
-        </button>
-      </div>
-      <RuntimeFacts config={config} />
+      <RealRuntimeFacts config={config} />
     </section>
   );
 }
@@ -181,12 +117,33 @@ export default function RealApp({ config }: RealAppProps) {
     };
   }, [runtime]);
 
+  const platformAvailability = snapshot.platform?.state ?? 'checking';
+  const navigation = snapshot.principal
+    ? resolveNavigation(
+      REAL_FEATURE_MANIFEST,
+      snapshot.principal.authorization.capabilities,
+      platformAvailability,
+    )
+    : [];
+  const decision = snapshot.principal
+    ? resolveRoute(
+      REAL_FEATURE_MANIFEST,
+      window.location.pathname,
+      snapshot.principal.authorization.capabilities,
+      platformAvailability,
+    )
+    : undefined;
+  const displayedShellState = snapshot.state === 'READY' && decision && decision.state !== 'NOT_FOUND'
+    ? decision.state
+    : snapshot.state;
+
   return (
     <main
-      className="real-shell-state"
+      className={`real-shell-state${snapshot.state === 'READY' ? ' real-shell-state--authenticated' : ''}`}
       aria-label={REAL_SHELL_MARKER}
       data-build-graph={REAL_GRAPH_MARKER}
-      data-shell-state={snapshot.state}
+      data-shell-state={displayedShellState}
+      data-route-state={decision?.state}
       data-protected-route-mounted={snapshot.state === 'READY' ? 'true' : 'false'}
     >
       {snapshot.state === 'BOOTSTRAPPING' ? <BootstrappingState config={config} /> : null}
@@ -194,10 +151,17 @@ export default function RealApp({ config }: RealAppProps) {
         <LoginRequiredState config={config} snapshot={snapshot} beginLogin={() => runtime.beginLogin()} />
       ) : null}
       {snapshot.state === 'UNAVAILABLE' ? (
-        <UnavailableState config={config} snapshot={snapshot} retry={() => { void runtime.retry(); }} />
+        <PrincipalUnavailableState config={config} snapshot={snapshot} retry={() => { void runtime.retry(); }} />
       ) : null}
-      {snapshot.state === 'READY' ? (
-        <ReadyState config={config} snapshot={snapshot} logout={() => { void runtime.logout(); }} />
+      {snapshot.state === 'READY' && decision ? (
+        <AuthenticatedShell
+          config={config}
+          snapshot={snapshot}
+          navigation={navigation}
+          decision={decision}
+          retry={() => { void runtime.retry(); }}
+          logout={() => { void runtime.logout(); }}
+        />
       ) : null}
     </main>
   );
