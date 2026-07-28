@@ -25,6 +25,7 @@ use (
 	./services/telemetry-runtime-service
 	./services/telemetry-shadow-comparator
 	./services/thingsboard-connector-control
+	./tools/eg8200-simulator
 	./tools/legacy-private-fixture
 	./tools/s0-auth-fixture
 )
