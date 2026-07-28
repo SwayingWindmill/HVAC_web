@@ -1,0 +1,96 @@
+.real-shell-state {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: #f4f7fb;
+  color: #172033;
+}
+
+.real-shell-card {
+  width: min(760px, 100%);
+  padding: 32px;
+  border: 1px solid #d7deea;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 14px 40px rgb(31 45 61 / 10%);
+}
+
+.real-shell-card h1 {
+  margin: 8px 0 12px;
+  font-size: clamp(28px, 4vw, 40px);
+}
+
+.real-shell-card p {
+  line-height: 1.65;
+}
+
+.real-shell-eyebrow {
+  margin: 0;
+  color: #1677ff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.real-shell-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 24px 0;
+}
+
+.real-shell-facts div {
+  padding: 14px;
+  border-radius: 10px;
+  background: #f7f9fc;
+}
+
+.real-shell-facts dt {
+  color: #667085;
+  font-size: 12px;
+}
+
+.real-shell-facts dd {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.real-shell-failures {
+  display: grid;
+  gap: 12px;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.real-shell-failures li {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border-left: 4px solid #cf1322;
+  background: #fff1f0;
+}
+
+.real-shell-success {
+  color: #237804;
+}
+
+.real-shell-error {
+  color: #a8071a;
+}
+
+@media (max-width: 640px) {
+  .real-shell-state {
+    padding: 16px;
+  }
+
+  .real-shell-card {
+    padding: 22px;
+  }
+
+  .real-shell-facts {
+    grid-template-columns: 1fr;
+  }
+}
