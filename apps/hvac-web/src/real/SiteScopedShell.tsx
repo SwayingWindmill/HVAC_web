@@ -1,16 +1,19 @@
+import { useEffect, useRef, useState } from 'react';
 import type { Capability, Site } from '@/api/generated/platformGateway.gen';
 import { RealShellChrome } from './RealShellChrome';
 import type { RealNavigationItem } from './route-policy';
+import type { ProtectedScopeDraft, ProtectedScopeResource } from './protected-scope';
 import type { RealRuntimeConfig } from './runtime-config';
 import type { ShellFailureView, ShellSnapshot } from './shell-runtime';
-import { siteRoute, type SiteRoutingDecision } from './site-routing';
+import { siteRoute, type SiteContext, type SiteRoutingDecision } from './site-routing';
 
 type RoutedSiteDecision = Exclude<SiteRoutingDecision, { state: 'PLATFORM_ROUTE' }>;
 
 export type SiteShellDecision =
   | RoutedSiteDecision
   | { state: 'SITE_DISCOVERY_CHECKING' }
-  | { state: 'SITE_DISCOVERY_UNAVAILABLE'; failure?: ShellFailureView };
+  | { state: 'SITE_DISCOVERY_UNAVAILABLE'; failure?: ShellFailureView }
+  | { state: 'SITE_SCOPE_ACTIVATING'; context: SiteContext };
 
 function SiteChooserList({ sites }: { sites: readonly Readonly<Site>[] }) {
   return (
@@ -28,6 +31,37 @@ function SiteChooserList({ sites }: { sites: readonly Readonly<Site>[] }) {
   );
 }
 
+function SiteScopeSwitcher({
+  sites,
+  currentSiteId,
+  onNavigate,
+}: {
+  sites: readonly Readonly<Site>[];
+  currentSiteId: string;
+  onNavigate: (target: string) => void;
+}) {
+  if (sites.length < 2) return null;
+  return (
+    <section className="real-site-switcher" data-testid="real-site-switcher" aria-label="Switch authorized Site">
+      <strong>Authorized Sites</strong>
+      <div>
+        {sites.map((site) => (
+          <button
+            key={site.id}
+            type="button"
+            data-site-switch-id={site.id}
+            aria-current={site.id === currentSiteId ? 'page' : undefined}
+            disabled={site.id === currentSiteId}
+            onClick={() => onNavigate(siteRoute(site, 'assets'))}
+          >
+            {site.displayName}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function SiteDiscoveryCheckingSurface() {
   return (
     <section className="real-route-surface" data-testid="real-site-discovery-checking" data-route-state="SITE_DISCOVERY_CHECKING">
@@ -35,6 +69,21 @@ function SiteDiscoveryCheckingSurface() {
       <h1>正在读取授权 Site</h1>
       <p>Shell 正在从当前 Acting Organization 的 Registry 边界读取授权 Site。完成前不会挂载 Site 页面。</p>
       <div className="real-shell-progress" role="status" aria-live="polite">正在验证 Site scope…</div>
+    </section>
+  );
+}
+
+function SiteScopeActivatingSurface({ context }: { context: SiteContext }) {
+  return (
+    <section className="real-route-surface" data-testid="real-site-scope-activating" data-route-state="SITE_SCOPE_ACTIVATING">
+      <p className="real-shell-eyebrow">REAL MODE · SITE SCOPE</p>
+      <h1>正在激活受保护 Site scope</h1>
+      <p>URL 与 Registry Site 已验证。Shell 正在建立新的 request generation 和受保护资源所有权，完成前不会渲染 Site 业务表面。</p>
+      <dl className="real-shell-facts">
+        <div><dt>Site</dt><dd>{context.site.displayName}</dd></div>
+        <div><dt>Registry Site ID</dt><dd>{context.site.id}</dd></div>
+      </dl>
+      <div className="real-shell-progress" role="status" aria-live="polite">正在建立 Site lifecycle boundary…</div>
     </section>
   );
 }
@@ -160,7 +209,47 @@ const SITE_ROUTE_COPY = {
   },
 } as const;
 
-function ReadySiteSurface({ decision }: { decision: Extract<SiteRoutingDecision, { state: 'READY' }> }) {
+function CommandDraft({
+  decision,
+  registerUnsavedDraft,
+}: {
+  decision: Extract<SiteRoutingDecision, { state: 'READY' }>;
+  registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
+}) {
+  const valueRef = useRef('');
+  const [value, setValue] = useState('');
+
+  useEffect(() => registerUnsavedDraft({
+    id: `command-draft:${decision.context.site.id}`,
+    label: `Command draft for ${decision.context.site.displayName}`,
+    isDirty: () => valueRef.current.trim().length > 0,
+  }), [decision.context.site.displayName, decision.context.site.id, registerUnsavedDraft]);
+
+  return (
+    <section className="real-command-draft" data-testid="real-command-draft">
+      <h2>Unsaved command draft</h2>
+      <p>此草稿仅保存在当前受保护内存中，不会发送命令，也不会跨 Site 保留。</p>
+      <label htmlFor="real-command-draft-value">Draft note</label>
+      <textarea
+        id="real-command-draft-value"
+        value={value}
+        onChange={(event) => {
+          valueRef.current = event.currentTarget.value;
+          setValue(event.currentTarget.value);
+        }}
+        data-testid="real-command-draft-value"
+      />
+    </section>
+  );
+}
+
+function ReadySiteSurface({
+  decision,
+  registerUnsavedDraft,
+}: {
+  decision: Extract<SiteRoutingDecision, { state: 'READY' }>;
+  registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
+}) {
   const copy = SITE_ROUTE_COPY[decision.route];
   return (
     <section
@@ -181,8 +270,44 @@ function ReadySiteSurface({ decision }: { decision: Extract<SiteRoutingDecision,
         <div><dt>Timezone</dt><dd>{decision.context.site.timezone}</dd></div>
         <div><dt>Acting Organization</dt><dd>{decision.context.actingOrganizationId}</dd></div>
       </dl>
+      <div
+        className="real-site-realtime-scope"
+        data-testid="real-site-subscription"
+        data-subscription-site={decision.context.site.id}
+        data-subscription-state="idle"
+      >
+        Realtime scope: idle for {decision.context.site.displayName}
+      </div>
+      {decision.route === 'commands' ? (
+        <CommandDraft decision={decision} registerUnsavedDraft={registerUnsavedDraft} />
+      ) : null}
       <p>当前业务数据状态为 EMPTY；这不代表权限拒绝、服务不可用或 Demo 数据。</p>
     </section>
+  );
+}
+
+function ProtectedSiteRouteFrame({
+  decision,
+  registerProtectedResource,
+  registerUnsavedDraft,
+}: {
+  decision: Extract<SiteRoutingDecision, { state: 'READY' }>;
+  registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
+}) {
+  useEffect(() => registerProtectedResource({
+    id: `site-route-frame:${decision.context.site.id}:${decision.route}`,
+    kind: 'temporary-state',
+    purge: () => new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    }),
+  }), [decision.context.site.id, decision.route, registerProtectedResource]);
+
+  return (
+    <ReadySiteSurface
+      decision={decision}
+      registerUnsavedDraft={registerUnsavedDraft}
+    />
   );
 }
 
@@ -190,14 +315,20 @@ function SiteSurface({
   decision,
   snapshot,
   retry,
+  registerProtectedResource,
+  registerUnsavedDraft,
 }: {
   decision: SiteShellDecision;
   snapshot: ShellSnapshot;
   retry: () => void;
+  registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
   switch (decision.state) {
     case 'SITE_DISCOVERY_CHECKING':
       return <SiteDiscoveryCheckingSurface />;
+    case 'SITE_SCOPE_ACTIVATING':
+      return <SiteScopeActivatingSurface context={decision.context} />;
     case 'SITE_DISCOVERY_UNAVAILABLE':
       return <SiteDiscoveryUnavailableSurface failure={decision.failure} retry={retry} />;
     case 'NO_AUTHORIZED_SITE':
@@ -213,7 +344,13 @@ function SiteSurface({
     case 'SITE_ROUTE_NOT_FOUND':
       return <SiteRouteNotFoundSurface decision={decision} />;
     case 'READY':
-      return <ReadySiteSurface decision={decision} />;
+      return (
+        <ProtectedSiteRouteFrame
+          decision={decision}
+          registerProtectedResource={registerProtectedResource}
+          registerUnsavedDraft={registerUnsavedDraft}
+        />
+      );
   }
 }
 
@@ -236,6 +373,11 @@ export function SiteScopedShell({
   decision,
   retry,
   logout,
+  onNavigate,
+  confirmSiteNavigation,
+  cancelSiteNavigation,
+  registerProtectedResource,
+  registerUnsavedDraft,
 }: {
   config: RealRuntimeConfig;
   snapshot: ShellSnapshot;
@@ -243,10 +385,36 @@ export function SiteScopedShell({
   decision: SiteShellDecision;
   retry: () => void;
   logout: () => void;
+  onNavigate: (target: string) => void;
+  confirmSiteNavigation: () => void;
+  cancelSiteNavigation: () => void;
+  registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
   return (
-    <RealShellChrome config={config} snapshot={snapshot} navigation={navigation} logout={logout}>
-      <SiteSurface decision={decision} snapshot={snapshot} retry={retry} />
+    <RealShellChrome
+      config={config}
+      snapshot={snapshot}
+      navigation={navigation}
+      logout={logout}
+      onNavigate={onNavigate}
+      confirmSiteNavigation={confirmSiteNavigation}
+      cancelSiteNavigation={cancelSiteNavigation}
+    >
+      {decision.state === 'READY' ? (
+        <SiteScopeSwitcher
+          sites={snapshot.sites?.items ?? []}
+          currentSiteId={decision.context.site.id}
+          onNavigate={onNavigate}
+        />
+      ) : null}
+      <SiteSurface
+        decision={decision}
+        snapshot={snapshot}
+        retry={retry}
+        registerProtectedResource={registerProtectedResource}
+        registerUnsavedDraft={registerUnsavedDraft}
+      />
     </RealShellChrome>
   );
 }

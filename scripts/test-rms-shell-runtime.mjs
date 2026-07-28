@@ -35,11 +35,13 @@ function evaluateCommonJs(compiled, requireFn = () => { throw new Error('unexpec
 
 const policy = evaluateCommonJs(compile('apps/hvac-web/src/real/shell-policy.ts'));
 const siteRouting = evaluateCommonJs(compile('apps/hvac-web/src/real/site-routing.ts'));
+const protectedScope = evaluateCommonJs(compile('apps/hvac-web/src/real/protected-scope.ts'));
 const runtimeModule = evaluateCommonJs(
   compile('apps/hvac-web/src/real/shell-runtime.ts'),
   (specifier) => {
     if (specifier === './shell-policy') return policy;
     if (specifier === './site-routing') return siteRouting;
+    if (specifier === './protected-scope') return protectedScope;
     throw new Error(`unexpected require: ${specifier}`);
   },
 );
@@ -505,4 +507,167 @@ test('late Site discovery cannot reset an in-flight logout', async () => {
   pendingLogout.resolve({ data: undefined });
   await logout;
   assert.equal(runtime.current().state, 'LOGIN_REQUIRED');
+});
+
+test('same-Site route navigation does not invoke a Site-change purge', async () => {
+  const site = registrySite();
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client({
+    listOrganizationSites: async () => ({ data: siteCollection([site]) }),
+  }), env.value);
+  await runtime.bootstrap(`/sites/${site.id}/assets`);
+  runtime.activateSiteScope(site.id);
+  runtime.registerUnsavedDraft({ id: 'notes', label: 'Operator notes', isDirty: () => true });
+  const request = runtime.protectedRequestToken();
+
+  const outcome = await runtime.requestSiteNavigation(`/sites/${site.id}/commands`);
+
+  assert.equal(outcome, 'navigated');
+  assert.equal(request.signal.aborted, false);
+  assert.equal(runtime.current().protectedScope.siteId, site.id);
+  assert.equal(runtime.current().protectedScope.draftCount, 1);
+  assert.deepEqual(env.navigations, [`/sites/${site.id}/commands`]);
+});
+
+test('cross-Site navigation warns for drafts and purges before navigation', async () => {
+  const siteA = registrySite();
+  const siteB = registrySite('01900000-0002-7000-8000-000000000002');
+  const events = [];
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client({
+    listOrganizationSites: async () => ({ data: siteCollection([siteA, siteB]) }),
+  }), env.value);
+  await runtime.bootstrap(`/sites/${siteA.id}/assets`);
+  runtime.activateSiteScope(siteA.id);
+  runtime.registerUnsavedDraft({ id: 'command-form', label: 'Unsaved command', isDirty: () => true });
+  runtime.registerProtectedResource({
+    id: 's2-session',
+    kind: 'realtime',
+    purge: (reason) => events.push(`realtime:${reason}`),
+  });
+  runtime.registerProtectedResource({
+    id: 'query-cache',
+    kind: 'query-cache',
+    purge: (reason) => events.push(`cache:${reason}`),
+  });
+  const request = runtime.protectedRequestToken();
+  const target = `/sites/${siteB.id}/assets`;
+
+  assert.equal(await runtime.requestSiteNavigation(target), 'confirmation-required');
+  assert.equal(runtime.current().siteTransition.status, 'confirmation-required');
+  assert.equal(runtime.current().siteTransition.dirtyDrafts[0].label, 'Unsaved command');
+  assert.equal(env.navigations.length, 0);
+  assert.equal(request.signal.aborted, false);
+
+  assert.equal(await runtime.confirmSiteNavigation(), 'navigated');
+  assert.equal(request.signal.aborted, true);
+  assert.deepEqual(events, ['realtime:SITE_CHANGE', 'cache:SITE_CHANGE']);
+  assert.deepEqual(env.navigations, [target]);
+});
+
+test('failed Site purge blocks navigation and exposes a fail-closed transition', async () => {
+  const siteA = registrySite();
+  const siteB = registrySite('01900000-0002-7000-8000-000000000002');
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client({
+    listOrganizationSites: async () => ({ data: siteCollection([siteA, siteB]) }),
+  }), env.value);
+  await runtime.bootstrap(`/sites/${siteA.id}/assets`);
+  runtime.activateSiteScope(siteA.id);
+  runtime.registerProtectedResource({
+    id: 's2-session',
+    kind: 'realtime',
+    purge: () => { throw new Error('close failed'); },
+  });
+
+  const outcome = await runtime.requestSiteNavigation(`/sites/${siteB.id}/assets`);
+
+  assert.equal(outcome, 'failed');
+  assert.equal(runtime.current().siteTransition.status, 'failed');
+  assert.equal(runtime.current().siteTransition.failure.code, 'PROTECTED_SCOPE_PURGE_FAILED');
+  assert.equal(runtime.current().protectedScope.siteId, undefined);
+  assert.equal(env.navigations.length, 0);
+});
+
+test('Session loss and logout completion invoke the same protected purge semantics', async () => {
+  for (const mode of ['session-loss', 'logout']) {
+    const site = registrySite();
+    const events = [];
+    const env = environment();
+    const runtime = runtimeModule.createShellRuntime(client({
+      listOrganizationSites: async () => ({ data: siteCollection([site]) }),
+    }), env.value);
+    await runtime.bootstrap(`/sites/${site.id}/assets`);
+    runtime.activateSiteScope(site.id);
+    const request = runtime.protectedRequestToken();
+    runtime.registerProtectedResource({
+      id: 'site-cache',
+      kind: 'query-cache',
+      purge: (reason) => events.push(reason),
+    });
+
+    if (mode === 'logout') await runtime.logout();
+    else runtime.purge('SESSION_REVOKED', false);
+    await Promise.resolve();
+
+    assert.equal(request.signal.aborted, true, mode);
+    assert.deepEqual(events, [mode === 'logout' ? 'LOGOUT' : 'SESSION_LOSS'], mode);
+    assert.equal(runtime.current().state, 'LOGIN_REQUIRED', mode);
+  }
+});
+
+test('material policy revision changes purge scope and rebootstrap the Principal', async () => {
+  const site = registrySite();
+  const events = [];
+  let policyRevision = 'iam:1';
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client({
+    getCurrentPrincipal: async () => {
+      const response = principal();
+      response.authorization.policyRevision = policyRevision;
+      return { data: response };
+    },
+    listOrganizationSites: async () => ({ data: siteCollection([site]) }),
+  }), env.value);
+  await runtime.bootstrap(`/sites/${site.id}/assets`);
+  runtime.activateSiteScope(site.id);
+  runtime.registerProtectedResource({
+    id: 'selected-device',
+    kind: 'selection',
+    purge: (reason) => events.push(reason),
+  });
+
+  assert.equal(await runtime.handlePolicyRevision('iam:1'), 'unchanged');
+  policyRevision = 'iam:2';
+  assert.equal(await runtime.handlePolicyRevision('iam:2'), 'reloaded');
+
+  assert.deepEqual(events, ['POLICY_CHANGE']);
+  assert.equal(runtime.current().principal.authorization.policyRevision, 'iam:2');
+});
+
+test('Session loss interrupts a pending Site purge before target navigation', async () => {
+  const siteA = registrySite();
+  const siteB = registrySite('01900000-0002-7000-8000-000000000002');
+  const pendingPurge = deferred();
+  const env = environment();
+  const runtime = runtimeModule.createShellRuntime(client({
+    listOrganizationSites: async () => ({ data: siteCollection([siteA, siteB]) }),
+  }), env.value);
+  await runtime.bootstrap(`/sites/${siteA.id}/assets`);
+  runtime.activateSiteScope(siteA.id);
+  runtime.registerProtectedResource({
+    id: 's2-session',
+    kind: 'realtime',
+    purge: () => pendingPurge.promise,
+  });
+
+  const navigation = runtime.requestSiteNavigation(`/sites/${siteB.id}/assets`);
+  assert.equal(runtime.current().siteTransition.status, 'purging');
+
+  runtime.purge('SESSION_REVOKED', false);
+  assert.equal(runtime.current().state, 'LOGIN_REQUIRED');
+  pendingPurge.resolve();
+
+  assert.equal(await navigation, 'interrupted');
+  assert.equal(env.navigations.length, 0);
 });
