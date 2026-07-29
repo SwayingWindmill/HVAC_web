@@ -713,17 +713,27 @@ try {
   await pressKey(cdpClient, 'Enter', 'Enter', 13);
   await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-testid="real-site-draft-confirmation"]')) && document.activeElement === document.querySelector('[data-testid="real-site-draft-confirm"]')`, 'second Site draft confirmation');
   await clickTestId(cdpClient, 'real-site-draft-confirm');
-  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-purging"]') && !document.querySelector('[data-site-route][data-site-id="${siteAId}"]') && !document.querySelector('[data-subscription-site="${siteAId}"]') && !document.querySelector('[data-testid="real-command-draft-value"]') && document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-resource-count') === '0'`, 'old Site purge before navigation', 5);
-  const purgingState = await evaluate(cdpClient, `({
-    pathname: location.pathname,
-    transition: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-site-transition'),
-    scopeSite: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-scope-site'),
-    realtimeState: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-state'),
-    realtimeSite: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-site'),
-    headerSite: document.querySelector('[data-testid="real-shell-site"]')?.textContent,
-    newSiteRendered: document.body.innerText.includes('Osaka Plant'),
-    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-site-purging"] h1'),
-  })`);
+  await waitForCondition(cdpClient, `(() => {
+    const purgeHeading = document.querySelector('[data-testid="real-site-purging"] h1');
+    const purgeVisible = Boolean(purgeHeading)
+      && !document.querySelector('[data-site-route][data-site-id="${siteAId}"]')
+      && !document.querySelector('[data-subscription-site="${siteAId}"]')
+      && !document.querySelector('[data-testid="real-command-draft-value"]')
+      && document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-resource-count') === '0';
+    if (!purgeVisible) return false;
+    globalThis.__rmsSitePurgeEvidence = {
+      pathname: location.pathname,
+      transition: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-site-transition'),
+      scopeSite: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-scope-site'),
+      realtimeState: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-state'),
+      realtimeSite: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-site'),
+      headerSite: document.querySelector('[data-testid="real-shell-site"]')?.textContent,
+      newSiteRendered: document.body.innerText.includes('Osaka Plant'),
+      focusedHeading: document.activeElement === purgeHeading,
+    };
+    return true;
+  })()`, 'old Site purge before navigation', 5);
+  const purgingState = await evaluate(cdpClient, 'globalThis.__rmsSitePurgeEvidence');
   assert(purgingState.pathname === `/sites/${siteAId}/commands`, 'navigation began before old Site purge became visible');
   assert(purgingState.transition === 'purging' && !purgingState.scopeSite, 'protected Site scope was not revoked during purge');
   assert(purgingState.headerSite === 'No active Site', 'trusted header retained the revoked Site during purge');
