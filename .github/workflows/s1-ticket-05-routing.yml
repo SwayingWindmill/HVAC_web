@@ -73,7 +73,7 @@ jobs:
       - run: node scripts/run-isolated-go.mjs --module=services/platform-gateway vet ./...
       - run: node scripts/run-isolated-go.mjs --module=tools/legacy-private-fixture vet ./...
       - run: npm run build:gateway
-      - run: npm run build:legacy-compatibility
+      - run: node scripts/run-isolated-go.mjs --module=tools/legacy-private-fixture build ./cmd/legacy-private-fixture
 
   postgres-routing:
     runs-on: ubuntu-24.04
