@@ -24,8 +24,8 @@
       ]
     },
     {
-      "id": "legacy-route-rollback",
-      "requirement": "A safe Legacy read path is routed through Gateway and can be rolled back by route revision without exposing Legacy.",
+      "id": "go-route-revision-guard",
+      "requirement": "The active platform status route remains Go-owned while a higher revision is adopted and a stale revision is rejected.",
       "decisions": [
         ".scratch/go-data-ai-platform-s0/spec.md#L74-L78",
         ".scratch/go-data-ai-platform-s0/spec.md#L95-L100"
@@ -33,8 +33,7 @@
       "implementation": [
         "contracts/ownership/route-ownership.v1.json",
         "services/platform-gateway/internal",
-        "tools/legacy-private-fixture",
-        "deploy/s0/staging/networkpolicies.yaml"
+        "scripts/s0-durable-topology.mjs"
       ],
       "tests": [
         "scripts/run-durable-session-browser-audit.mjs"
@@ -210,25 +209,24 @@
       ]
     },
     {
-      "id": "legacy-frozen-private",
-      "requirement": "NestJS remains frozen and private behind Gateway; S0 does not authorize deletion.",
+      "id": "legacy-retired-from-active-runtime",
+      "requirement": "Legacy remains historical evidence only and is absent from active routes, staging workloads, local topology and release images.",
       "decisions": [
         ".scratch/go-data-ai-platform-s0/spec.md#L76-L76",
         ".scratch/go-data-ai-platform-s0/spec.md#L112-L113"
       ],
       "implementation": [
-        "tools/legacy-private-fixture",
-        "deploy/s0/staging/services.yaml",
-        "deploy/s0/staging/networkpolicies.yaml",
-        "docs/operations/s0-release-evidence.md"
+        "docs/adr/0005-hvac-backend-non-production-reference.md",
+        "contracts/ownership/route-ownership.v1.json",
+        "deploy/s0/staging/kustomization.yaml",
+        ".github/workflows/s0-supply-chain.yml"
       ],
       "tests": [
-        "scripts/run-durable-session-browser-audit.mjs",
-        "scripts/check-s0-network-policies.mjs"
+        "scripts/check-production-rollout.mjs",
+        "scripts/check-s0-delivery-assets.mjs"
       ],
       "runtimeEvidence": [
-        "out/s0-security/browser-journey-report.json",
-        "out/s0-security/network-policy-report.json"
+        "out/s0-release-evidence/release-evidence.intoto.json"
       ]
     },
     {

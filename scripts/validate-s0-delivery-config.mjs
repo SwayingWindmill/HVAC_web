@@ -25,7 +25,6 @@ const required = [
   'OIDC_CLIENT_ID',
   'IAM_AUDIENCE',
   'AUDIT_AUDIENCE',
-  'LEGACY_AUDIENCE',
   'CONTROL_BACKBONE_BROKERS',
   'OTEL_EXPORTER_OTLP_ENDPOINT',
   'POSTGRES_ENDPOINT',
@@ -42,7 +41,7 @@ if (!/^\d+$/.test(config.S0_CONFIG_REVISION)) throw new Error('S0_CONFIG_REVISIO
 if (!/^[a-z0-9][a-z0-9.-]{1,126}[a-z0-9]$/.test(config.S0_TRUST_DOMAIN)) {
   throw new Error('S0_TRUST_DOMAIN must be a DNS trust domain');
 }
-for (const name of ['OIDC_CLIENT_ID', 'IAM_AUDIENCE', 'AUDIT_AUDIENCE', 'LEGACY_AUDIENCE']) {
+for (const name of ['OIDC_CLIENT_ID', 'IAM_AUDIENCE', 'AUDIT_AUDIENCE']) {
   if (!/^[A-Za-z0-9._:-]{3,128}$/.test(config[name])) throw new Error(`${name} is invalid`);
 }
 for (const name of ['OIDC_ISSUER', 'OTEL_EXPORTER_OTLP_ENDPOINT']) {

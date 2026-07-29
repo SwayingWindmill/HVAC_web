@@ -8,7 +8,6 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import tls from 'node:tls';
-import { seedLegacyPlatformStatusRoute } from './s0-route-registry-fixture.mjs';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/s0-durable/compose.yaml');
@@ -219,7 +218,6 @@ export async function startS0DurableTopology(options = {}) {
   const oidcPort = Number(options.oidcPort ?? process.env.S0_DURABLE_OIDC_PORT ?? 19094);
   const iamPort = Number(options.iamPort ?? process.env.S0_DURABLE_IAM_PORT ?? 18444);
   const auditPort = Number(options.auditPort ?? process.env.S0_DURABLE_AUDIT_PORT ?? 18446);
-  const legacyPort = Number(options.legacyPort ?? process.env.S0_DURABLE_LEGACY_PORT ?? 13001);
   const gatewayPort = Number(options.gatewayPort ?? process.env.S0_DURABLE_GATEWAY_PORT ?? 18082);
   const webPort = Number(options.webPort ?? process.env.S0_DURABLE_WEB_PORT ?? 5181);
   const otlpPort = Number(options.otlpPort ?? process.env.S0_DURABLE_OTLP_PORT ?? 0);
@@ -239,7 +237,6 @@ export async function startS0DurableTopology(options = {}) {
   const prometheusHostPort = await findAvailablePort(options.prometheusHostPort ?? process.env.S0_PROMETHEUS_HOST_PORT ?? 0);
   const toxiproxyAPIHostPort = await findAvailablePort(options.toxiproxyAPIHostPort ?? process.env.S0_TOXIPROXY_API_HOST_PORT ?? 0);
   const toxiproxyPostgresHostPort = await findAvailablePort(options.toxiproxyPostgresHostPort ?? process.env.S0_TOXIPROXY_POSTGRES_HOST_PORT ?? 0);
-  const toxiproxyLegacyHostPort = await findAvailablePort(options.toxiproxyLegacyHostPort ?? process.env.S0_TOXIPROXY_LEGACY_HOST_PORT ?? 0);
   const composeEnvironment = {
     ...process.env,
     S0_POSTGRES_HOST_PORT: String(postgresHostPort),
@@ -251,7 +248,6 @@ export async function startS0DurableTopology(options = {}) {
     S0_PROMETHEUS_HOST_PORT: String(prometheusHostPort),
     S0_TOXIPROXY_API_HOST_PORT: String(toxiproxyAPIHostPort),
     S0_TOXIPROXY_POSTGRES_HOST_PORT: String(toxiproxyPostgresHostPort),
-    S0_TOXIPROXY_LEGACY_HOST_PORT: String(toxiproxyLegacyHostPort),
   };
   const composeOptions = { env: composeEnvironment };
   const telemetryRecorder = options.captureTelemetry === false ? null : await startOTLPRecorder(otlpPort);
@@ -265,8 +261,6 @@ export async function startS0DurableTopology(options = {}) {
   const oidcURL = `https://127.0.0.1:${oidcPort}`;
   const iamURL = `https://127.0.0.1:${iamPort}`;
   const auditURL = `https://127.0.0.1:${auditPort}`;
-  const legacyDirectURL = `https://127.0.0.1:${legacyPort}`;
-  const legacyURL = `https://127.0.0.1:${toxiproxyLegacyHostPort}`;
   const toxiproxyURL = `http://127.0.0.1:${toxiproxyAPIHostPort}`;
   const gatewayURL = `http://127.0.0.1:${gatewayPort}`;
   const webURL = `https://127.0.0.1:${webPort}`;
@@ -279,7 +273,7 @@ export async function startS0DurableTopology(options = {}) {
     auditConsumer: `postgres://audit_consumer_runtime:audit-consumer-local-only@127.0.0.1:${toxiproxyPostgresHostPort}/hvac_s0?sslmode=disable&connect_timeout=1`,
     auditQuery: `postgres://audit_query_runtime:audit-query-local-only@127.0.0.1:${toxiproxyPostgresHostPort}/hvac_s0?sslmode=disable&connect_timeout=1`,
   };
-  const services = { oidc: null, iam: null, audit: null, relay: null, legacy: null, gateway: null, web: null };
+  const services = { oidc: null, iam: null, audit: null, relay: null, gateway: null, web: null };
 
   const paths = {
     ca: join(pkiDir, 'ca.pem'),
@@ -287,8 +281,6 @@ export async function startS0DurableTopology(options = {}) {
     iamKey: join(pkiDir, 'iam-key.pem'),
     auditCert: join(pkiDir, 'audit-cert.pem'),
     auditKey: join(pkiDir, 'audit-key.pem'),
-    legacyCert: join(pkiDir, 'legacy-cert.pem'),
-    legacyKey: join(pkiDir, 'legacy-key.pem'),
     gatewayCert: join(pkiDir, 'gateway-cert.pem'),
     gatewayKey: join(pkiDir, 'gateway-key.pem'),
     routeRegistry: join(instanceRoot, 'route-ownership.v1.json'),
@@ -310,11 +302,6 @@ export async function startS0DurableTopology(options = {}) {
       method: 'POST',
       body: JSON.stringify({ name: proxy.name, listen: proxy.listen, upstream: proxy.upstream, enabled: Boolean(enabled) }),
     });
-  };
-
-  const removeToxic = async (proxy, toxic) => {
-    const response = await fetch(`${toxiproxyURL}/proxies/${encodeURIComponent(proxy)}/toxics/${encodeURIComponent(toxic)}`, { method: 'DELETE' });
-    if (!response.ok && response.status !== 404) throw new Error(`Toxiproxy toxic removal failed with ${response.status}: ${await response.text()}`);
   };
 
   const startAudit = async () => {
@@ -350,20 +337,6 @@ export async function startS0DurableTopology(options = {}) {
     await waitForChildAlive(services.relay, 'Outbox Relay');
   };
 
-  const startLegacy = async () => {
-    services.legacy = spawnService('Legacy compatibility fixture', goBinary, ['run', './tools/legacy-private-fixture/cmd/legacy-private-fixture'], {
-      GOCACHE: goCacheDir,
-      LEGACY_FIXTURE_ADDR: `0.0.0.0:${legacyPort}`,
-      LEGACY_TLS_CERT: paths.legacyCert,
-      LEGACY_TLS_KEY: paths.legacyKey,
-      LEGACY_CLIENT_CA: paths.ca,
-      LEGACY_ALLOWED_WORKLOAD_SPIFFE: 'spiffe://hvac.local/platform-gateway',
-      LEGACY_AUDIENCE: 'legacy-hvac-backend',
-    });
-    const [clientCert, clientKey, ca] = await Promise.all([readFile(paths.gatewayCert), readFile(paths.gatewayKey), readFile(paths.ca)]);
-    await waitForTLS(legacyPort, 'Legacy compatibility fixture', services.legacy, { cert: clientCert, key: clientKey, ca, servername: 'localhost', rejectUnauthorized: true });
-  };
-
   try {
     try { compose(['down', '--volumes', '--remove-orphans'], composeOptions); } catch {}
     compose(['up', '-d'], composeOptions);
@@ -372,7 +345,6 @@ export async function startS0DurableTopology(options = {}) {
       method: 'POST',
       body: JSON.stringify([
         { name: 's0_postgres', listen: '0.0.0.0:15432', upstream: 'postgres:5432', enabled: true },
-        { name: 's0_legacy', listen: '0.0.0.0:18445', upstream: `host.docker.internal:${legacyPort}`, enabled: true },
       ]),
     });
     await waitForContainer(() => docker(['exec', postgresContainer, 'pg_isready', '-U', 'postgres', '-d', 'hvac_s0']), 'PostgreSQL');
@@ -395,10 +367,7 @@ export async function startS0DurableTopology(options = {}) {
     });
     if (generated.error || generated.status !== 0) throw new Error(`S0 PKI generation failed: ${generated.error?.message ?? generated.stderr ?? generated.status}`);
     const routeRegistry = JSON.parse(await readFile(resolve(root, 'contracts/ownership/route-ownership.v1.json'), 'utf8'));
-    const seededRouteRegistry = options.seedLegacyPlatformStatusRoute === true
-      ? seedLegacyPlatformStatusRoute(routeRegistry)
-      : routeRegistry;
-    await writeFile(paths.routeRegistry, `${JSON.stringify(seededRouteRegistry, null, 2)}\n`);
+    await writeFile(paths.routeRegistry, `${JSON.stringify(routeRegistry, null, 2)}\n`);
 
     services.oidc = spawnService('OIDC fixture', goBinary, ['run', './services/oidc-test-provider/cmd/oidc-test-provider'], {
       GOCACHE: goCacheDir,
@@ -428,7 +397,6 @@ export async function startS0DurableTopology(options = {}) {
 
     await startAudit();
     await startRelay();
-    await startLegacy();
 
     services.gateway = spawnService('Platform Gateway', goBinary, ['run', './services/platform-gateway/cmd/platform-gateway'], {
       ...telemetryEnvironment,
@@ -451,10 +419,6 @@ export async function startS0DurableTopology(options = {}) {
       AUDIT_AUDIENCE: 'audit-ledger-service',
       AUDIT_SERVER_CA: paths.ca,
       AUDIT_SERVER_NAME: 'localhost',
-      LEGACY_URL: legacyURL,
-      LEGACY_AUDIENCE: 'legacy-hvac-backend',
-      LEGACY_SERVER_CA: paths.ca,
-      LEGACY_SERVER_NAME: 'localhost',
       ROUTE_OWNERSHIP_REGISTRY: paths.routeRegistry,
       GATEWAY_DATABASE_URL: database.gateway,
       GATEWAY_WORKLOAD_SPIFFE: 'spiffe://hvac.local/platform-gateway',
@@ -477,21 +441,12 @@ export async function startS0DurableTopology(options = {}) {
     await waitForTLS(webPort, 'HVAC Web', services.web);
 
     return {
-      oidcURL, iamURL, auditURL, legacyURL, legacyDirectURL, toxiproxyURL, gatewayURL,
+      oidcURL, iamURL, auditURL, toxiproxyURL, gatewayURL,
       gatewayDiagnosticsURL: `http://127.0.0.1:${gatewayDiagnosticsPort}/diagnostics`,
       webURL, redirectURI, brokers, database, pkiDir, routeRegistryPath: paths.routeRegistry, services,
       telemetryPayloads() { return telemetryRecorder ? JSON.parse(JSON.stringify(telemetryRecorder.payloads)) : []; },
       setTelemetryAvailable(value) { telemetryRecorder?.setAvailable(value); },
       async setPostgresAvailable(value) { await setProxyEnabled('s0_postgres', value); },
-      async setLegacyAvailable(value) { await setProxyEnabled('s0_legacy', value); },
-      async setLegacyLatency(milliseconds) {
-        await removeToxic('s0_legacy', 's0_legacy_latency');
-        await toxiproxyRequest('/proxies/s0_legacy/toxics', {
-          method: 'POST',
-          body: JSON.stringify({ name: 's0_legacy_latency', type: 'latency', stream: 'downstream', toxicity: 1, attributes: { latency: Number(milliseconds), jitter: 0 } }),
-        });
-      },
-      async clearLegacyLatency() { await removeToxic('s0_legacy', 's0_legacy_latency'); },
       async resetFaults() { await toxiproxyRequest('/reset', { method: 'POST', body: '{}' }); },
       async stopBroker() { docker(['stop', redpandaContainer]); },
       async startBroker() {
@@ -510,20 +465,15 @@ export async function startS0DurableTopology(options = {}) {
       async startRelay() { if (!services.relay || processExited(services.relay)) await startRelay(); },
       async restartAudit(force = false) { await (force ? killProcess : stopProcess)(services.audit); await startAudit(); },
       async restartRelay(force = false) { await (force ? killProcess : stopProcess)(services.relay); await startRelay(); },
-      async setPlatformStatusOwner(owner, registryRevision, routeRevision, percentage = 100) {
+      async setPlatformStatusRevision(registryRevision, routeRevision) {
         const registry = JSON.parse(await readFile(paths.routeRegistry, 'utf8'));
         const route = registry.routes.find((entry) => entry.method === 'GET' && entry.path === '/api/v1/platform/status');
         if (!route) throw new Error('platform status route is missing from test registry');
         registry.registryRevision = registryRevision;
-        route.owner = owner;
+        route.owner = 'platform-gateway';
         route.revision = routeRevision;
-        route.compatibilityMode = owner === 'legacy-hvac-backend' ? 'legacy-read' : 'native';
-        route.rollout = {
-          mode: 'percentage',
-          percentage,
-          fallbackOwner: owner === 'legacy-hvac-backend' ? 'platform-gateway' : 'legacy-hvac-backend',
-          cohortSalt: 'platform-status-v1',
-        };
+        route.compatibilityMode = 'native';
+        route.rollout = { mode: 'all' };
         await writeFile(paths.routeRegistry, `${JSON.stringify(registry, null, 2)}\n`);
       },
       routeAuditCount(eventType = '') {
@@ -548,14 +498,14 @@ export async function startS0DurableTopology(options = {}) {
         return Number(docker(['exec', postgresContainer, 'psql', '-U', 'postgres', '-d', 'hvac_s0', '-Atc', `SELECT count(*) FROM audit_ledger.records WHERE message_id='${messageID}'`]));
       },
       async stop() {
-        for (const child of [services.web, services.gateway, services.legacy, services.relay, services.audit, services.iam, services.oidc]) await stopProcess(child);
+        for (const child of [services.web, services.gateway, services.relay, services.audit, services.iam, services.oidc]) await stopProcess(child);
         try { compose(['down', '--volumes', '--remove-orphans'], composeOptions); } catch {}
         if (telemetryRecorder) await telemetryRecorder.close();
         await rm(instanceRoot, { recursive: true, force: true });
       },
     };
   } catch (error) {
-    for (const child of [services.web, services.gateway, services.legacy, services.relay, services.audit, services.iam, services.oidc]) await stopProcess(child);
+    for (const child of [services.web, services.gateway, services.relay, services.audit, services.iam, services.oidc]) await stopProcess(child);
     try { compose(['down', '--volumes', '--remove-orphans'], composeOptions); } catch {}
     if (telemetryRecorder) await telemetryRecorder.close();
     await rm(instanceRoot, { recursive: true, force: true });

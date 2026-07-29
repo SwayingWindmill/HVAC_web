@@ -70,13 +70,14 @@ for (const edge of ['01 Contract-first Gateway bootstrap', '02 Authenticated pri
   assert(tracker.includes(edge), `S0 tracker is missing dependency node: ${edge}`);
 }
 
-for (const heading of ['## Reuse-first selection', '## Evidence model', '## Staging rolling update and rollback proof', '## Zero invariants', '## Reusable S0 surface for S1–S7', '## Legacy status', '## Known limitations', '## Approval and S0 completion']) {
+for (const heading of ['## Reuse-first selection', '## Evidence model', '## Staging rolling update and rollback proof', '## Zero invariants', '## Reusable S0 surface for S1–S7', '## Legacy retirement status', '## Known limitations', '## Approval and S0 completion']) {
   assert(operations.includes(heading), `release evidence runbook is missing ${heading}`);
 }
 for (const upstream of ['in-toto/attestation v1.2.0', 'slsa-framework/slsa-verifier v2.7.1', 'oras-project/oras v1.3.3', 'kubernetes-sigs/kind v0.32.0', 'helm/kind-action v1.14.0']) {
   assert(operations.includes(upstream), `release evidence runbook is missing upstream decision: ${upstream}`);
 }
-assert(operations.includes('NestJS remains Legacy Frozen and private'), 'release evidence runbook must preserve the Legacy Frozen decision');
+assert(operations.includes('Legacy is retained only as historical migration evidence'), 'release evidence runbook must record Legacy retirement');
+assert(operations.includes('not an active route owner, fallback, staging workload, local topology dependency or release image'), 'release evidence runbook must keep Legacy out of active runtime and release paths');
 assert(operations.includes('S0 is complete. S1 is ready to enter implementation specification.'), 'release evidence runbook is missing the final declaration text');
 
 for (const script of ['release:evidence-assets', 'audit:s0-kind-rollout', 'release:evidence:images', 'release:evidence:build', 'test:release-evidence']) {
@@ -97,7 +98,7 @@ for (const marker of [
 
 assert(schema.properties?._type?.const === 'https://in-toto.io/Statement/v1', 'bundle schema must use in-toto Statement v1');
 assert(schema.properties?.predicateType?.const === 'https://hvac.local/attestations/s0-release-evidence/v1', 'bundle predicate type is invalid');
-assert(schema.properties?.predicate?.properties?.images?.minItems === 7, 'bundle schema must require seven images');
+assert(schema.properties?.predicate?.properties?.images?.minItems === 6 && schema.properties?.predicate?.properties?.images?.maxItems === 6, 'bundle schema must require exactly six active release images');
 
 // S0 evidence remains valid when later phase contracts are added. S2 resources
 // are accepted only while they match the reviewed expand baseline and carry no

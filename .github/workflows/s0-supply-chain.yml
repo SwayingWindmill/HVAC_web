@@ -53,7 +53,6 @@ jobs:
       - run: npm run ownership:check
       - run: npm run contracts:check
       - run: npm run test:observability
-      - run: npm run test:legacy-compatibility
       - run: npm run test:durable-postgres
       - run: npm run lint
       - run: npm run build
@@ -96,7 +95,6 @@ jobs:
           go build ./services/audit-ledger-service/cmd/audit-ledger-service
           go build ./services/outbox-relay/cmd/outbox-relay
           go build ./services/oidc-test-provider/cmd/oidc-test-provider
-          go build ./tools/legacy-private-fixture/cmd/legacy-private-fixture
       - uses: github/codeql-action/analyze@v4
         with:
           output: codeql-results-${{ matrix.artifact }}
@@ -192,9 +190,6 @@ jobs:
           - name: oidc-test-provider
             dockerfile: deploy/s0/images/go-service.Dockerfile
             build_args: SERVICE_PACKAGE=./services/oidc-test-provider/cmd/oidc-test-provider
-          - name: legacy-private
-            dockerfile: deploy/s0/images/go-service.Dockerfile
-            build_args: SERVICE_PACKAGE=./tools/legacy-private-fixture/cmd/legacy-private-fixture
           - name: s0-migrator
             dockerfile: deploy/s0/images/migrator.Dockerfile
             build_args: ""

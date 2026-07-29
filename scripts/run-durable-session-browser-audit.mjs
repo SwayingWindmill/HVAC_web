@@ -14,8 +14,8 @@ const reportPath = resolve(root, reportArgument ?? 'out/s0-security/browser-jour
 const startedAt = new Date();
 const releaseEvidence = {
   userJourney: null,
-  legacyBoundary: null,
-  routeRollback: null,
+  routeOwnership: null,
+  routeRevisionGuard: null,
   traces: null,
   failureRecovery: null,
   invariants: null,
@@ -264,15 +264,14 @@ let edgeProcess;
 let cdpClient;
 try {
   await mkdir(profileDir, { recursive: true });
-  const [oidcPort, iamPort, auditPort, legacyPort, gatewayPort, webPort] = await Promise.all([
-    findAvailablePort(),
+  const [oidcPort, iamPort, auditPort, gatewayPort, webPort] = await Promise.all([
     findAvailablePort(),
     findAvailablePort(),
     findAvailablePort(),
     findAvailablePort(),
     findAvailablePort(),
   ]);
-  topology = await startS0DurableTopology({ oidcPort, iamPort, auditPort, legacyPort, gatewayPort, webPort, quiet: true, seedLegacyPlatformStatusRoute: true });
+  topology = await startS0DurableTopology({ oidcPort, iamPort, auditPort, gatewayPort, webPort, quiet: true });
   edgeProcess = spawn(browserPath, [
     '--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run', '--no-default-browser-check', '--hide-scrollbars',
     '--ignore-certificate-errors', '--allow-insecure-localhost', `--remote-debugging-port=${debugPort}`,
@@ -292,48 +291,36 @@ try {
   const principal = await fetchJSON(cdpClient, '/api/v1/principal');
   assert(principal.status === 200 && principal.body.context.actingOrganizationId === 'org-fixture-01', 'Default Organization Principal was invalid');
 
-  await waitForAttribute(cdpClient, '[data-testid="platform-route-status"]', 'data-route-implementation', 'legacy', 'Route Ownership UI');
-  const legacyStatus = await waitForPlatformOwner(cdpClient, 'legacy');
-  const initialRegistryRevision = Number(legacyStatus.routePolicyRevision);
-  const initialRouteRevision = Number(legacyStatus.body.routeRevision);
+  await waitForAttribute(cdpClient, '[data-testid="platform-route-status"]', 'data-route-implementation', 'go', 'Route Ownership UI');
+  const initialGoStatus = await waitForPlatformOwner(cdpClient, 'go');
+  const initialRegistryRevision = Number(initialGoStatus.routePolicyRevision);
+  const initialRouteRevision = Number(initialGoStatus.body?.routeRevision);
   const nextRegistryRevision = initialRegistryRevision + 1;
   const nextRouteRevision = initialRouteRevision + 1;
   assert(Number.isSafeInteger(initialRegistryRevision) && initialRegistryRevision > 0, 'Initial route policy revision was invalid');
   assert(Number.isSafeInteger(initialRouteRevision) && initialRouteRevision > 0, 'Initial route revision was invalid');
-  assert(legacyStatus.body.service === 'platform-status' && legacyStatus.body.compatibilityMode === 'legacy-read', 'Legacy route was not normalized by the Gateway');
+  assert(initialGoStatus.body.service === 'platform-status' && initialGoStatus.body.compatibilityMode === 'native', 'Go route was not served natively by the Gateway');
   for (const forbidden of ['code', 'message', 'memory', 'traceId', 'uptime']) {
-    assert(!(forbidden in legacyStatus.body), `Legacy anti-corruption response exposed ${forbidden}`);
+    assert(!(forbidden in initialGoStatus.body), `Go platform status exposed ${forbidden}`);
   }
   await evaluate(cdpClient, `document.cookie = 'route_cohort=forged-client-choice; Path=/; Secure; SameSite=Lax'`);
-  const forgedCohortStatus = await waitForPlatformOwner(cdpClient, 'legacy', initialRegistryRevision);
-  assert(forgedCohortStatus.body.implementation === legacyStatus.body.implementation && forgedCohortStatus.body.routePolicyRevision === legacyStatus.body.routePolicyRevision && forgedCohortStatus.body.routeRevision === legacyStatus.body.routeRevision && forgedCohortStatus.body.compatibilityMode === legacyStatus.body.compatibilityMode, 'Client-controlled cohort cookie changed route ownership');
+  const forgedCohortStatus = await waitForPlatformOwner(cdpClient, 'go', initialRegistryRevision);
+  assert(forgedCohortStatus.body.implementation === initialGoStatus.body.implementation && forgedCohortStatus.body.routePolicyRevision === initialGoStatus.body.routePolicyRevision && forgedCohortStatus.body.routeRevision === initialGoStatus.body.routeRevision && forgedCohortStatus.body.compatibilityMode === initialGoStatus.body.compatibilityMode, 'Client-controlled cohort cookie changed Go route ownership');
   const routeAudit = topology.platformRouteAuditSnapshot();
-  assert(routeAudit?.selected_owner === 'legacy-hvac-backend' && routeAudit?.registry_revision === initialRegistryRevision, 'Legacy route decision was not audited');
+  assert(routeAudit?.selected_owner === 'platform-gateway' && routeAudit?.registry_revision === initialRegistryRevision, 'Go route decision was not audited');
   assert(!JSON.stringify(routeAudit).includes(principal.body.session.id), 'Route audit leaked the browser Session identifier');
-  const legacyTrace = await waitForTrace(topology, traceIDFromTraceparent(legacyStatus.traceparent), ['http.gateway.request', 'http.legacy.platform_status'], 'Legacy route');
-  const legacyGatewaySpan = legacyTrace.find((span) => span.name === 'http.gateway.request');
-  assert(legacyGatewaySpan?.attributes['route.owner'] === 'legacy-hvac-backend', 'Legacy trace did not record the selected owner');
-  assert(Number(legacyGatewaySpan?.attributes['route.policy.revision']) === initialRegistryRevision && Number(legacyGatewaySpan?.attributes['route.revision']) === initialRouteRevision, 'Legacy trace did not record route revisions');
-  assertParent(legacyTrace, 'http.legacy.platform_status', 'http.gateway.request');
-  const directLegacy = await evaluate(cdpClient, `fetch(${JSON.stringify(`${topology.legacyDirectURL}/api/v1/health`)}).then(() => ({ resolved: true })).catch(() => ({ resolved: false }))`);
-  assert(directLegacy.resolved === false, 'Browser reached private Legacy service without a workload certificate');
+  const goTrace = await waitForTrace(topology, traceIDFromTraceparent(initialGoStatus.traceparent), ['http.gateway.request'], 'Go route');
+  const goGatewaySpan = goTrace.find((span) => span.name === 'http.gateway.request');
+  assert(goGatewaySpan?.attributes['route.owner'] === 'platform-gateway', 'Go trace did not record the selected owner');
+  assert(Number(goGatewaySpan?.attributes['route.policy.revision']) === initialRegistryRevision && Number(goGatewaySpan?.attributes['route.revision']) === initialRouteRevision, 'Go trace did not record route revisions');
 
-  await topology.setLegacyLatency(1200);
-  const firstLegacyTimeout = await fetchJSON(cdpClient, '/api/v1/platform/status');
-  const secondLegacyTimeout = await fetchJSON(cdpClient, '/api/v1/platform/status');
-  const openLegacyCircuit = await fetchJSON(cdpClient, '/api/v1/platform/status');
-  assertSafePublicProblem(firstLegacyTimeout, 504, 'LEGACY_TIMEOUT');
-  assertSafePublicProblem(secondLegacyTimeout, 504, 'LEGACY_TIMEOUT');
-  assertSafePublicProblem(openLegacyCircuit, 503, 'LEGACY_CIRCUIT_OPEN');
-  await topology.clearLegacyLatency();
-
-  await topology.setPlatformStatusOwner('platform-gateway', nextRegistryRevision, nextRouteRevision);
+  await topology.setPlatformStatusRevision(nextRegistryRevision, nextRouteRevision);
   const goStatus = await waitForPlatformOwner(cdpClient, 'go', nextRegistryRevision);
-  assert(goStatus.body.compatibilityMode === 'native' && goStatus.body.routeRevision === nextRouteRevision, 'Route policy change did not move future requests to Go');
-  await topology.setPlatformStatusOwner('legacy-hvac-backend', initialRegistryRevision, initialRouteRevision);
+  assert(goStatus.body.compatibilityMode === 'native' && goStatus.body.routeRevision === nextRouteRevision, 'Route policy revision did not preserve the native Go owner');
+  await topology.setPlatformStatusRevision(initialRegistryRevision, initialRouteRevision);
   await pause(750);
   const rejectedRevision = await waitForPlatformOwner(cdpClient, 'go', nextRegistryRevision);
-  assert(rejectedRevision.body.implementation === 'go', 'Registry revision rollback changed the active owner');
+  assert(rejectedRevision.body.implementation === 'go' && rejectedRevision.body.routeRevision === nextRouteRevision, 'Stale registry revision changed the active Go route');
   assert(topology.routeAuditCount('ROUTE_POLICY_CHANGED') === 1, 'Successful route policy change was not audited exactly once');
 
   const creationMessageID = principal.body.session.lastAuditMessageId;
@@ -476,21 +463,21 @@ try {
     authorizedAuditHistory: true,
     organizationsExercised: 2,
   };
-  releaseEvidence.legacyBoundary = {
-    normalizedReadThroughGateway: true,
-    directBrowserAccessBlocked: true,
-    timeoutWasExplicit: true,
-    circuitOpenedSafely: true,
+  releaseEvidence.routeOwnership = {
+    owner: 'platform-gateway',
+    implementation: 'go',
+    compatibilityMode: 'native',
+    clientCohortOverrideRejected: true,
   };
-  releaseEvidence.routeRollback = {
-    initialOwner: 'legacy-hvac-backend',
-    initialRegistryRevision: 2,
-    restoredOwner: 'platform-gateway',
-    restoredRegistryRevision: 3,
+  releaseEvidence.routeRevisionGuard = {
+    initialRegistryRevision,
+    promotedRegistryRevision: nextRegistryRevision,
+    initialRouteRevision,
+    promotedRouteRevision: nextRouteRevision,
     staleRevisionRejected: true,
   };
   releaseEvidence.traces = {
-    legacyRouteSpans: legacyTrace.map((span) => ({ service: span.service, name: span.name })),
+    goRouteSpans: goTrace.map((span) => ({ service: span.service, name: span.name })),
     loginToAuditSpans: loginTrace.map((span) => ({ service: span.service, name: span.name })),
     requiredServices: [...loginServices].sort(),
     collectorOutageNonBlocking: true,
