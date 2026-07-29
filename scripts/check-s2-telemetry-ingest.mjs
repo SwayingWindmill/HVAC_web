@@ -215,7 +215,7 @@ includesAll(fixtureSQL, [
 ], 'deterministic ingest fixtures');
 assert(!fixtureSQL.includes('"invalid"'), 'rejected fixture must not retain raw telemetry');
 
-assert(dataRegistry.registryRevision === 9 && ownershipLock.dataRegistryRevision === 9, 'data ownership revision must be 9');
+assert(dataRegistry.registryRevision >= 9 && ownershipLock.dataRegistryRevision === dataRegistry.registryRevision, 'data ownership revision must remain monotonic and locked');
 const resources = new Map((dataRegistry.resources ?? []).map((resource) => [`${resource.kind}:${resource.name}`, resource]));
 for (const [name, revision] of [['source-observation-evidence', 1], ['ingest-deduplication', 2], ['ingest-quarantine', 2]]) {
   const resource = resources.get(`projection:${name}`);
