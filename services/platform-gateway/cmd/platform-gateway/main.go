@@ -73,7 +73,6 @@ func main() {
 		Identity:      identity,
 		RouteManager:  routing.manager,
 		RouteAudit:    routing.audit,
-		Legacy:        routing.legacy,
 		Registry:      routing.registry,
 		Telemetry:     telemetryConfig,
 		Command:       commandConfig,

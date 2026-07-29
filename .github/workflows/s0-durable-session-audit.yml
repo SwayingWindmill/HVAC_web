@@ -20,7 +20,6 @@ on:
       - "services/iam-service/**"
       - "services/audit-ledger-service/**"
       - "services/outbox-relay/**"
-      - "tools/legacy-private-fixture/**"
       - "scripts/check-session-event-contract.mjs"
       - "scripts/check-ownership-registries.mjs"
       - "scripts/dev-s0-durable.mjs"
@@ -51,7 +50,6 @@ on:
       - "services/iam-service/**"
       - "services/audit-ledger-service/**"
       - "services/outbox-relay/**"
-      - "tools/legacy-private-fixture/**"
       - "scripts/check-session-event-contract.mjs"
       - "scripts/check-ownership-registries.mjs"
       - "scripts/dev-s0-durable.mjs"
@@ -88,7 +86,6 @@ jobs:
             services/iam-service/go.mod
             services/audit-ledger-service/go.mod
             services/outbox-relay/go.mod
-            tools/legacy-private-fixture/go.mod
       - uses: actions/setup-node@v4
         with:
           node-version: "22.22.0"
@@ -102,13 +99,11 @@ jobs:
       - run: npm run test:durable-unit
       - run: npm run test:observability
       - run: npm run test:durable-postgres
-      - run: node scripts/run-go.mjs test ./tools/legacy-private-fixture/...
-      - run: node scripts/run-go.mjs vet ./libs/observability/... ./libs/ownershipregistry/... ./libs/sessionevent/... ./libs/sessionstore/... ./services/iam-service/... ./services/audit-ledger-service/... ./services/outbox-relay/... ./services/platform-gateway/... ./tools/legacy-private-fixture/...
+      - run: node scripts/run-go.mjs vet ./libs/observability/... ./libs/ownershipregistry/... ./libs/sessionevent/... ./libs/sessionstore/... ./services/iam-service/... ./services/audit-ledger-service/... ./services/outbox-relay/... ./services/platform-gateway/...
       - run: npm run build:gateway
       - run: npm run build:iam
       - run: npm run build:audit-ledger
       - run: npm run build:outbox-relay
-      - run: node scripts/run-go.mjs build -o out/legacy-private-fixture ./tools/legacy-private-fixture/cmd/legacy-private-fixture
       - run: npm run lint
       - run: npm run build
 

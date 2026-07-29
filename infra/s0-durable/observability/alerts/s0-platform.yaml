@@ -31,16 +31,6 @@ groups:
         annotations:
           summary: Audit ingestion p95 latency exceeds five seconds
           runbook: docs/operations/s0-observability.md#audit-ingestion-lag
-      - alert: S0LegacyDependencyFailures
-        expr: increase(s0_http_requests_total{service="platform-gateway",result="error",route="/api/v1/platform/status"}[5m]) >= 3
-        for: 2m
-        labels:
-          severity: page
-          primary_owner: application-platform
-          secondary_owner: platform-runtime
-        annotations:
-          summary: Legacy compatibility route is failing
-          runbook: docs/operations/s0-observability.md#legacy-timeout-or-circuit-open
       - alert: S0TelemetryExportFailures
         expr: max(s0_telemetry_failed_exports) > 0
         for: 5m

@@ -118,7 +118,7 @@ try {
   await run('kubectl', ['-n', 'envoy-gateway-system', 'rollout', 'status', 'deployment/envoy-gateway', '--timeout=180s']);
   await run('kubectl', ['apply', '-f', 'pocs/platform-components/envoy/manifests.yaml']);
   await run('kubectl', ['-n', namespace, 'rollout', 'status', 'deployment/go-edge', '--timeout=120s']);
-  await run('kubectl', ['-n', namespace, 'rollout', 'status', 'deployment/legacy-private', '--timeout=120s']);
+  await run('kubectl', ['-n', namespace, 'rollout', 'status', 'deployment/go-canary', '--timeout=120s']);
   await run('kubectl', ['-n', namespace, 'wait', '--for=condition=Programmed', 'gateway/platform', '--timeout=180s']);
 
   const service = await waitFor(async () => {
@@ -152,14 +152,14 @@ try {
   }, 'Envoy port-forward did not become ready');
 
   const initial = await routeOwner('go-edge');
-  const unregistered = await fetchJson('/legacy');
-  assert(unregistered.status === 404, `unregistered Legacy path returned ${unregistered.status}`);
+  const unregistered = await fetchJson('/unregistered');
+  assert(unregistered.status === 404, `unregistered path returned ${unregistered.status}`);
 
   await run('kubectl', ['-n', namespace, 'patch', 'httproute', 'platform-status', '--type=json', '-p', JSON.stringify([
-    { op: 'replace', path: '/metadata/annotations/poc.hvac~1route-revision', value: 'legacy-canary-v2' },
-    { op: 'replace', path: '/spec/rules/0/backendRefs/0/name', value: 'legacy-private' },
+    { op: 'replace', path: '/metadata/annotations/poc.hvac~1route-revision', value: 'go-canary-v2' },
+    { op: 'replace', path: '/spec/rules/0/backendRefs/0/name', value: 'go-canary' },
   ])]);
-  const canary = await routeOwner('legacy-private');
+  const canary = await routeOwner('go-canary');
 
   await run('kubectl', ['-n', namespace, 'patch', 'httproute', 'platform-status', '--type=json', '-p', JSON.stringify([
     { op: 'replace', path: '/metadata/annotations/poc.hvac~1route-revision', value: 'go-primary-v3' },

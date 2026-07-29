@@ -19,7 +19,6 @@ import (
 type routingRuntime struct {
 	manager  *ownershipregistry.Manager
 	audit    ownershipregistry.AuditSink
-	legacy   *gateway.LegacyConfig
 	registry *gateway.RegistryConfig
 	close    func()
 	watch    func(context.Context)
@@ -43,9 +42,9 @@ func loadRoutingRuntime(ctx context.Context, logger *slog.Logger, identityEnable
 	if err != nil {
 		return routingRuntime{}, fmt.Errorf("read Route Ownership Registry: %w", err)
 	}
-	snapshot, err := ownershipregistry.Parse(initialBytes)
+	snapshot, err := parseActiveRouteRegistry(initialBytes)
 	if err != nil {
-		return routingRuntime{}, fmt.Errorf("validate Route Ownership Registry: %w", err)
+		return routingRuntime{}, err
 	}
 
 	var audit ownershipregistry.AuditSink
@@ -64,11 +63,6 @@ func loadRoutingRuntime(ctx context.Context, logger *slog.Logger, identityEnable
 	}
 
 	manager := ownershipregistry.NewManager(snapshot, audit, time.Now)
-	legacy, err := loadLegacyConfig(snapshot, identityEnabled)
-	if err != nil {
-		closeAudit()
-		return routingRuntime{}, err
-	}
 	registry, err := loadRegistryConfig(snapshot, identityEnabled)
 	if err != nil {
 		closeAudit()
@@ -88,6 +82,11 @@ func loadRoutingRuntime(ctx context.Context, logger *slog.Logger, identityEnable
 				if err != nil || bytes.Equal(candidate, last) {
 					continue
 				}
+				if _, err := parseActiveRouteRegistry(candidate); err != nil {
+					logger.Warn("route_registry_reload_rejected", "error_code", "ROUTE_REGISTRY_RELOAD_REJECTED")
+					last = append(last[:0], candidate...)
+					continue
+				}
 				if err := manager.Reload(watchContext, candidate, ownershipregistry.PolicyChangeContext{
 					ExecutingService:  "platform-gateway",
 					ExecutingSPIFFEID: envOr("GATEWAY_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
@@ -101,7 +100,18 @@ func loadRoutingRuntime(ctx context.Context, logger *slog.Logger, identityEnable
 			}
 		}
 	}
-	return routingRuntime{manager: manager, audit: audit, legacy: legacy, registry: registry, close: closeAudit, watch: watch}, nil
+	return routingRuntime{manager: manager, audit: audit, registry: registry, close: closeAudit, watch: watch}, nil
+}
+
+func parseActiveRouteRegistry(raw []byte) (*ownershipregistry.Snapshot, error) {
+	snapshot, err := ownershipregistry.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("validate Route Ownership Registry: %w", err)
+	}
+	if snapshot.ContainsOwner(ownershipregistry.OwnerLegacy) {
+		return nil, errors.New("retired Legacy owner is not allowed in the active Route Ownership Registry")
+	}
+	return snapshot, nil
 }
 
 func isLoopbackTelemetryFixtureURL(value string) bool {
@@ -115,42 +125,6 @@ func isLoopbackTelemetryFixtureURL(value string) bool {
 	default:
 		return false
 	}
-}
-
-func loadLegacyConfig(snapshot *ownershipregistry.Snapshot, identityEnabled bool) (*gateway.LegacyConfig, error) {
-	if !identityEnabled {
-		return nil, nil
-	}
-	legacyURL := os.Getenv("LEGACY_URL")
-	legacyCAPath := os.Getenv("LEGACY_SERVER_CA")
-	clientCertPath := os.Getenv("IAM_CLIENT_CERT")
-	clientKeyPath := os.Getenv("IAM_CLIENT_KEY")
-	configured := legacyURL != "" && legacyCAPath != "" && clientCertPath != "" && clientKeyPath != ""
-	if !configured {
-		if !snapshot.ContainsOwner(ownershipregistry.OwnerLegacy) || os.Getenv("S0_ALLOW_NO_LEGACY") == "true" {
-			return nil, nil
-		}
-		return nil, errors.New("LEGACY_URL, LEGACY_SERVER_CA and Gateway workload certificate are required for Legacy-owned routes")
-	}
-	if err := validatePrivateServiceURL(legacyURL, "LEGACY_URL"); err != nil {
-		return nil, err
-	}
-	certificate, err := tls.LoadX509KeyPair(clientCertPath, clientKeyPath)
-	if err != nil {
-		return nil, err
-	}
-	roots, err := loadCertPool(legacyCAPath, "Legacy server CA")
-	if err != nil {
-		return nil, err
-	}
-	return &gateway.LegacyConfig{
-		BaseURL:          legacyURL,
-		Audience:         envOr("LEGACY_AUDIENCE", "legacy-hvac-backend"),
-		HTTPClient:       nonRedirectingClient(workloadTransport(roots, &certificate, envOr("LEGACY_SERVER_NAME", "localhost"))),
-		Timeout:          durationEnv("LEGACY_TIMEOUT", 750*time.Millisecond),
-		FailureThreshold: intEnv("LEGACY_CIRCUIT_FAILURES", 2),
-		OpenDuration:     durationEnv("LEGACY_CIRCUIT_OPEN", 5*time.Second),
-	}, nil
 }
 
 func loadRegistryConfig(snapshot *ownershipregistry.Snapshot, identityEnabled bool) (*gateway.RegistryConfig, error) {

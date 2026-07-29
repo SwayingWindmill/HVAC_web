@@ -44,7 +44,7 @@ It uses:
 }
 ```
 
-The seven immutable release images are the in-toto subjects. The repository commit, ref and workflow run are recorded in the predicate source metadata. `SHA256SUMS` covers every retained evidence file in the bundle directory.
+The six immutable release images are the in-toto subjects. The repository commit, ref and workflow run are recorded in the predicate source metadata. `SHA256SUMS` covers every retained evidence file in the bundle directory.
 
 ## Evidence inputs
 
@@ -53,15 +53,15 @@ The bundle indexes rather than duplicates large upstream artifacts. It records h
 - contract generation, event compatibility and ownership locks;
 - current and previous-writer PostgreSQL compatibility;
 - browser login, current Principal, logout and authorized Audit query;
-- Gateway-normalized Legacy read, direct Legacy denial and route-revision rollback;
+- Go-owned route revision promotion and stale-revision rejection;
 - two-Organization isolation, credential absence, Outbox recovery and Audit deduplication;
 - W3C trace span coverage and observability-outage behavior;
 - NetworkPolicy connectivity proof;
 - real Kind rolling update and `kubectl rollout undo` observations;
 - staging render receipt and migration file state;
-- seven Trivy embedded-secret JSON reports;
-- seven BuildKit SBOM/provenance build records;
-- seven Cosign verification results and GitHub build-attestation verification results;
+- six Trivy embedded-secret JSON reports;
+- six BuildKit SBOM/provenance build records;
+- six Cosign verification results and GitHub build-attestation verification results;
 - CodeQL, Gitleaks, dependency, vulnerability and production-license job status;
 - delivery, observability, security and recovery runbooks;
 - release approval state.
@@ -170,9 +170,9 @@ Future slices must consume, rather than replace, these S0 conventions:
 
 A future slice may add Organization, Device, Telemetry, Command, Schedule or AI behavior only through a new specification. Ticket 08 does not introduce those implementations.
 
-## Legacy status
+## Legacy retirement status
 
-NestJS remains Legacy Frozen and private. The repository-owned Go compatibility fixture proves the anti-corruption and network boundary, but does not authorize deletion or replacement of the retained NestJS system. Browser access to Legacy remains forbidden; the only supported path is Gateway with workload identity, delegation, timeout, circuit breaking and response normalization.
+Legacy is retained only as historical migration evidence. It is not an active route owner, fallback, staging workload, local topology dependency or release image. The protected release gates verify that all active public routes remain owned by Go services.
 
 ## Known limitations
 
@@ -180,7 +180,7 @@ These limitations are explicit and are not deferred security, tenant, audit or r
 
 1. Kind validates Kubernetes Deployment, ReplicaSet and rollback mechanics; cloud-specific ingress, managed workload identity and persistent-volume behavior require the target environment's operational qualification.
 2. The evidence staging render uses synthetic secret values and file paths. Production secret material remains outside source control and must be supplied by the approved release environment.
-3. The local OIDC provider, Legacy fixture, Redpanda and telemetry collector are deterministic test implementations of production protocols, not production service selections.
+3. The local OIDC provider, Redpanda and telemetry collector are deterministic test implementations of production protocols, not production service selections.
 4. GitHub Actions artifact retention is finite. Long-term regulated archival, WORM retention and OCI publication of the complete evidence bundle are later infrastructure concerns; image signatures and attestations remain registry-backed.
 5. Complete legal-retention Audit archival is outside S0, as declared by the source architecture. The tested S0 Audit Ledger remains append-only and deduplicated for the delivered security events.
 

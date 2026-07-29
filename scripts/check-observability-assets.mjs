@@ -24,7 +24,7 @@ assert(prometheus.includes('host.docker.internal:19080'), 'Prometheus does not s
 assert(prometheus.includes('host.docker.internal:19083'), 'Prometheus does not scrape IAM diagnostics');
 
 const alertNames = [...alerts.matchAll(/^\s*- alert: (\S+)/gm)].map((match) => match[1]);
-assert(alertNames.length >= 5, 'Expected at least five S0 observability alerts');
+assert(alertNames.length >= 4, 'Expected at least four active S0 observability alerts');
 for (const alertName of alertNames) {
   const start = alerts.indexOf(`- alert: ${alertName}`);
   const next = alerts.indexOf('- alert:', start + 1);
@@ -34,13 +34,13 @@ for (const alertName of alertNames) {
   }
 }
 
-for (const heading of ['## Outbox stuck', '## Audit ingestion lag', '## Legacy timeout or circuit open', '## Collector unavailable', '## Secret-absence verification']) {
+for (const heading of ['## Outbox stuck', '## Audit ingestion lag', '## Collector unavailable', '## Secret-absence verification']) {
   assert(runbook.includes(heading), `Runbook is missing ${heading}`);
 }
 
 const dashboard = JSON.parse(dashboardText);
 const panelTitles = new Set((dashboard.panels ?? []).map((panel) => panel.title));
-for (const title of ['Public API failures', 'Internal identity failures', 'Legacy compatibility failures', 'Async Audit lag', 'Telemetry pressure']) {
+for (const title of ['Public API failures', 'Internal identity failures', 'Async Audit lag', 'Telemetry pressure']) {
   assert(panelTitles.has(title), `Dashboard is missing ${title}`);
 }
 

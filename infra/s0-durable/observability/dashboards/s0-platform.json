@@ -70,12 +70,6 @@
       "targets": [{ "expr": "sum by (route) (rate(s0_http_requests_total{service=\"iam-service\",result=\"error\"}[5m]))", "legendFormat": "{{route}}" }]
     },
     {
-      "id": 11,
-      "title": "Legacy compatibility failures",
-      "type": "timeseries",
-      "targets": [{ "expr": "sum(rate(s0_http_requests_total{service=\"platform-gateway\",route=\"/api/v1/platform/status\",result=\"error\"}[5m]))", "legendFormat": "legacy route" }]
-    },
-    {
       "id": 12,
       "title": "Async Audit lag",
       "type": "timeseries",

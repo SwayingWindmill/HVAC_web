@@ -44,7 +44,6 @@ const checks = [
   { id: 'browser-to-audit-denied', source: 'browser-probe', sourceNamespace: 'public-ingress', destination: 'audit-ledger-service', destinationNamespace: 's0-staging', port: '8446', expected: false },
   { id: 'browser-to-postgres-denied', source: 'browser-probe', sourceNamespace: 'public-ingress', destination: 'postgres', destinationNamespace: 's0-staging', port: '5432', expected: false },
   { id: 'browser-to-broker-denied', source: 'browser-probe', sourceNamespace: 'public-ingress', destination: 'redpanda', destinationNamespace: 's0-staging', port: '9092', expected: false },
-  { id: 'browser-to-legacy-denied', source: 'browser-probe', sourceNamespace: 'public-ingress', destination: 'legacy-private', destinationNamespace: 's0-staging', port: '8445', expected: false },
   { id: 'gateway-to-iam-allowed', source: 'platform-gateway', sourceNamespace: 's0-staging', destination: 'iam-service', destinationNamespace: 's0-staging', port: '8444', expected: true },
   { id: 'gateway-to-audit-allowed', source: 'platform-gateway', sourceNamespace: 's0-staging', destination: 'audit-ledger-service', destinationNamespace: 's0-staging', port: '8446', expected: true },
   { id: 'gateway-to-postgres-allowed', source: 'platform-gateway', sourceNamespace: 's0-staging', destination: 'postgres', destinationNamespace: 's0-staging', port: '5432', expected: true },
