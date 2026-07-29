@@ -53,7 +53,7 @@ services:
     networks: [poc]
 
   debezium:
-    image: quay.io/debezium/connect:3.6.0.Final@sha256:dbb329c4c5184b849c5f4dfb0d170658db9e775c02afe8d6117451c5d994eeed
+    image: quay.io/debezium/connect:3.6.0.Final@sha256:698f0559e667a242f962221079e75917b2b7a3ad4de62661e977628da0e33b45
     platform: linux/amd64
     environment:
       BOOTSTRAP_SERVERS: redpanda:9092

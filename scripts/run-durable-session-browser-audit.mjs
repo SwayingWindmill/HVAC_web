@@ -272,7 +272,7 @@ try {
     findAvailablePort(),
     findAvailablePort(),
   ]);
-  topology = await startS0DurableTopology({ oidcPort, iamPort, auditPort, legacyPort, gatewayPort, webPort, quiet: true });
+  topology = await startS0DurableTopology({ oidcPort, iamPort, auditPort, legacyPort, gatewayPort, webPort, quiet: true, seedLegacyPlatformStatusRoute: true });
   edgeProcess = spawn(browserPath, [
     '--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run', '--no-default-browser-check', '--hide-scrollbars',
     '--ignore-certificate-errors', '--allow-insecure-localhost', `--remote-debugging-port=${debugPort}`,
@@ -295,8 +295,11 @@ try {
   await waitForAttribute(cdpClient, '[data-testid="platform-route-status"]', 'data-route-implementation', 'legacy', 'Route Ownership UI');
   const legacyStatus = await waitForPlatformOwner(cdpClient, 'legacy');
   const initialRegistryRevision = Number(legacyStatus.routePolicyRevision);
+  const initialRouteRevision = Number(legacyStatus.body.routeRevision);
   const nextRegistryRevision = initialRegistryRevision + 1;
+  const nextRouteRevision = initialRouteRevision + 1;
   assert(Number.isSafeInteger(initialRegistryRevision) && initialRegistryRevision > 0, 'Initial route policy revision was invalid');
+  assert(Number.isSafeInteger(initialRouteRevision) && initialRouteRevision > 0, 'Initial route revision was invalid');
   assert(legacyStatus.body.service === 'platform-status' && legacyStatus.body.compatibilityMode === 'legacy-read', 'Legacy route was not normalized by the Gateway');
   for (const forbidden of ['code', 'message', 'memory', 'traceId', 'uptime']) {
     assert(!(forbidden in legacyStatus.body), `Legacy anti-corruption response exposed ${forbidden}`);
@@ -310,7 +313,7 @@ try {
   const legacyTrace = await waitForTrace(topology, traceIDFromTraceparent(legacyStatus.traceparent), ['http.gateway.request', 'http.legacy.platform_status'], 'Legacy route');
   const legacyGatewaySpan = legacyTrace.find((span) => span.name === 'http.gateway.request');
   assert(legacyGatewaySpan?.attributes['route.owner'] === 'legacy-hvac-backend', 'Legacy trace did not record the selected owner');
-  assert(Number(legacyGatewaySpan?.attributes['route.policy.revision']) === initialRegistryRevision && Number(legacyGatewaySpan?.attributes['route.revision']) === 1, 'Legacy trace did not record route revisions');
+  assert(Number(legacyGatewaySpan?.attributes['route.policy.revision']) === initialRegistryRevision && Number(legacyGatewaySpan?.attributes['route.revision']) === initialRouteRevision, 'Legacy trace did not record route revisions');
   assertParent(legacyTrace, 'http.legacy.platform_status', 'http.gateway.request');
   const directLegacy = await evaluate(cdpClient, `fetch(${JSON.stringify(`${topology.legacyDirectURL}/api/v1/health`)}).then(() => ({ resolved: true })).catch(() => ({ resolved: false }))`);
   assert(directLegacy.resolved === false, 'Browser reached private Legacy service without a workload certificate');
@@ -324,10 +327,10 @@ try {
   assertSafePublicProblem(openLegacyCircuit, 503, 'LEGACY_CIRCUIT_OPEN');
   await topology.clearLegacyLatency();
 
-  await topology.setPlatformStatusOwner('platform-gateway', nextRegistryRevision, 2);
+  await topology.setPlatformStatusOwner('platform-gateway', nextRegistryRevision, nextRouteRevision);
   const goStatus = await waitForPlatformOwner(cdpClient, 'go', nextRegistryRevision);
-  assert(goStatus.body.compatibilityMode === 'native' && goStatus.body.routeRevision === 2, 'Route policy change did not move future requests to Go');
-  await topology.setPlatformStatusOwner('legacy-hvac-backend', initialRegistryRevision, 1);
+  assert(goStatus.body.compatibilityMode === 'native' && goStatus.body.routeRevision === nextRouteRevision, 'Route policy change did not move future requests to Go');
+  await topology.setPlatformStatusOwner('legacy-hvac-backend', initialRegistryRevision, initialRouteRevision);
   await pause(750);
   const rejectedRevision = await waitForPlatformOwner(cdpClient, 'go', nextRegistryRevision);
   assert(rejectedRevision.body.implementation === 'go', 'Registry revision rollback changed the active owner');

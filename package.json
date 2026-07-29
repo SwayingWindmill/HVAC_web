@@ -90,7 +90,7 @@
     "audit:auth-principal": "node scripts/run-auth-principal-browser-audit.mjs",
     "audit:durable-session": "node scripts/run-durable-session-browser-audit.mjs",
     "audit:route-ownership": "node scripts/run-durable-session-browser-audit.mjs",
-    "audit:observability": "node scripts/run-durable-session-browser-audit.mjs",
+    "audit:observability": "node --test scripts/test-s0-route-registry-fixture.mjs && node scripts/run-durable-session-browser-audit.mjs",
     "audit:s0-rollout": "node scripts/audit-s0-rollout.mjs",
     "audit:s0-kind-rollout": "node scripts/run-s0-kind-rollout.mjs",
     "release:evidence-assets": "node scripts/check-s0-release-evidence-assets.mjs",
