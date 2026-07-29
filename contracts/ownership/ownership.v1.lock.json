@@ -26,7 +26,7 @@
     "GET /api/v1/commands/{commandId}": { "revision": 1, "owner": "command-service" },
     "POST /api/v1/commands/{commandId}:approve": { "revision": 1, "owner": "command-service" }
   },
-  "dataRegistryRevision": 11,
+  "dataRegistryRevision": 12,
   "resources": {
     "schema:gateway": { "revision": 1, "writer": "platform-gateway" },
     "schema:audit_ledger": { "revision": 1, "writer": "audit-ledger-service" },
@@ -75,6 +75,8 @@
     "compatibility-boundary:legacy-telemetry-timeseries": { "revision": 1, "writer": "legacy-hvac-backend" },
     "migration-dataset:s1-legacy-resource-map": { "revision": 1, "writer": "platform-core-service" },
     "migration-dataset:s1-migration-provenance": { "revision": 1, "writer": "platform-core-service" },
-    "migration-dataset:s1-migration-quarantine": { "revision": 1, "writer": "platform-core-service" }
+    "migration-dataset:s1-migration-quarantine": { "revision": 1, "writer": "platform-core-service" },
+    "query-contract:analytics-energy-series-v1": { "revision": 1, "writer": "telemetry-query-service" },
+    "semantic-model:cube-energy-usage-v1": { "revision": 1, "writer": "telemetry-query-service" }
   }
 }

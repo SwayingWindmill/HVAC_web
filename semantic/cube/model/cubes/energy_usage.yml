@@ -1,0 +1,83 @@
+cubes:
+  - name: energy_usage
+    title: Energy Usage
+    description: >-
+      Authorized HVAC energy interval facts. The source table is a future ClickHouse
+      read model and must contain normalized interval energy, quality and observation counts.
+    sql_table: analytics.energy_interval_facts
+
+    measures:
+      - name: energy_valid_kwh
+        title: Valid energy
+        description: Sum of normalized interval electrical energy from VALID facts only.
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality = 'VALID'"
+
+      - name: energy_valid_and_suspect_kwh
+        title: Valid and suspect energy
+        description: Sum of normalized interval electrical energy from VALID and SUSPECT facts.
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality IN ('VALID', 'SUSPECT')"
+
+      - name: valid_count
+        title: Valid observations
+        sql: observation_count
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality = 'VALID'"
+
+      - name: suspect_count
+        title: Suspect observations
+        sql: observation_count
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality = 'SUSPECT'"
+
+      - name: invalid_count
+        title: Invalid observations
+        sql: observation_count
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality = 'INVALID'"
+
+    dimensions:
+      - name: organization_id
+        sql: organization_id
+        type: string
+
+      - name: site_id
+        sql: site_id
+        type: string
+
+      - name: energy_type
+        sql: energy_type
+        type: string
+
+      - name: quality
+        sql: quality
+        type: string
+
+      - name: period_start
+        sql: period_start
+        type: time
+
+      - name: period_end
+        sql: period_end
+        type: time
+
+    access_policy:
+      - group: analytics_reader
+        member_level:
+          includes: "*"
+        row_level:
+          filters:
+            - member: organization_id
+              operator: equals
+              values: ["{ securityContext.organizationId }"]
+            - member: site_id
+              operator: equals
+              values: ["{ securityContext.siteId }"]

@@ -1,0 +1,22 @@
+services:
+  cube:
+    image: cubejs/cube:v1.6.51
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4000:4000"
+    environment:
+      CUBEJS_DB_TYPE: clickhouse
+      CUBEJS_DB_HOST: ${CUBEJS_DB_HOST:?set CUBEJS_DB_HOST}
+      CUBEJS_DB_PORT: ${CUBEJS_DB_PORT:-8123}
+      CUBEJS_DB_NAME: ${CUBEJS_DB_NAME:-analytics}
+      CUBEJS_DB_USER: ${CUBEJS_DB_USER:?set CUBEJS_DB_USER}
+      CUBEJS_DB_PASS: ${CUBEJS_DB_PASS:?set CUBEJS_DB_PASS}
+      CUBEJS_DB_CLICKHOUSE_READONLY: "true"
+      CUBEJS_DB_CLICKHOUSE_COMPRESSION: "true"
+      CUBEJS_DB_MAX_POOL: ${CUBEJS_DB_MAX_POOL:-4}
+      CUBEJS_CONCURRENCY: ${CUBEJS_CONCURRENCY:-4}
+      CUBEJS_API_SECRET: ${CUBEJS_API_SECRET:?set CUBEJS_API_SECRET}
+      CUBEJS_DEV_MODE: "false"
+      CUBEJS_TELEMETRY: "false"
+    volumes:
+      - ./:/cube/conf:ro

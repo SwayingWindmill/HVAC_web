@@ -1,6 +1,7 @@
 go 1.25.12
 
 use (
+	./libs/analyticsmodel
 	./libs/commandauth
 	./libs/commandmodel
 	./libs/identitycontext
@@ -22,6 +23,7 @@ use (
 	./services/outbox-relay
 	./services/platform-core-service
 	./services/platform-gateway
+	./services/telemetry-query-service
 	./services/telemetry-runtime-service
 	./services/telemetry-shadow-comparator
 	./services/thingsboard-connector-control

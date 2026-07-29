@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 11,
+  "registryRevision": 12,
   "resources": [
     { "kind": "schema", "name": "gateway", "writer": "platform-gateway", "revision": 1 },
     { "kind": "schema", "name": "audit_ledger", "writer": "audit-ledger-service", "revision": 1 },
@@ -49,7 +49,9 @@
     { "kind": "compatibility-boundary", "name": "legacy-telemetry-timeseries", "writer": "legacy-hvac-backend", "revision": 1, "currentStateAuthority": false },
     { "kind": "migration-dataset", "name": "s1-legacy-resource-map", "writer": "platform-core-service", "revision": 1 },
     { "kind": "migration-dataset", "name": "s1-migration-provenance", "writer": "platform-core-service", "revision": 1 },
-    { "kind": "migration-dataset", "name": "s1-migration-quarantine", "writer": "platform-core-service", "revision": 1 }
+    { "kind": "migration-dataset", "name": "s1-migration-quarantine", "writer": "platform-core-service", "revision": 1 },
+    { "kind": "query-contract", "name": "analytics-energy-series-v1", "writer": "telemetry-query-service", "revision": 1, "publicIngress": "platform-gateway" },
+    { "kind": "semantic-model", "name": "cube-energy-usage-v1", "writer": "telemetry-query-service", "revision": 1, "runtime": "cube-core", "source": "analytics.energy_interval_facts" }
   ],
   "databaseAccess": [
     { "service": "platform-gateway", "schema": "gateway", "mode": "write" },
