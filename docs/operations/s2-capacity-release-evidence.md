@@ -58,9 +58,10 @@ The final job has explicit `needs` on every prior job. Missing reports, failed c
 
 ## Production images
 
-The Telemetry Runtime and migrator are separate immutable images:
+The Telemetry Runtime, history projector, and migrator are separate immutable images:
 
 - `deploy/s2/images/telemetry-runtime.Dockerfile` builds a static Go binary and runs it as distroless UID 65532;
+- `deploy/s2/images/telemetry-history-projector.Dockerfile` builds the PostgreSQL-outbox-to-ClickHouse projector as a static Go binary and runs it as distroless UID 65532;
 - `deploy/s2/images/telemetry-runtime-migrator.Dockerfile` runs only expand-only S2 migrations as the PostgreSQL non-root user;
 - every preflight and formal image produces a Trivy CycloneDX SBOM and Buildx metadata with recorded SHA-256 digests;
 - Trivy scans high and critical vulnerabilities plus embedded secrets;

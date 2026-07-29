@@ -12,7 +12,7 @@ const sbomPath = resolve(root, arg('sbom'));
 const metadataPath = resolve(root, arg('build-metadata'));
 const output = resolve(root, arg('output', `out/s2-image-evidence/${name}.json`));
 const formalReleaseEligible = arg('formal', 'false') === 'true';
-if (!/^(telemetry-runtime|telemetry-runtime-migrator)$/.test(name)) throw new Error('unsupported S2 image name');
+if (!/^(telemetry-runtime|telemetry-history-projector|telemetry-runtime-migrator)$/.test(name)) throw new Error('unsupported S2 image name');
 if (!/^sha256:[0-9a-f]{64}$/.test(digest)) throw new Error('immutable image digest is required');
 if (!user || user === '0' || user === 'root' || user.startsWith('0:')) throw new Error('production image must run as non-root');
 const trivyRaw = await readFile(trivyPath);

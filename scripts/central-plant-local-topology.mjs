@@ -37,6 +37,7 @@ const databasePasswords = Object.freeze({
   s1Core: joined(['s1', 'core', 'service', 'local', 'only']),
   s1Grant: joined(['s2', 'iam', 'grant', 'runtime', 'local', 'only']),
   s2Runtime: joined(['s2', 'telemetry', 'runtime', 'local', 'only']),
+  s2History: joined(['s2', 'telemetry', 'history', 'local', 'only']),
 });
 
 const composeInvocation = (() => {
@@ -315,6 +316,7 @@ function buildGoBinaries(paths, goCache, quiet) {
     [paths.iamBinary, './services/iam-service/cmd/iam-service'],
     [paths.coreBinary, './services/platform-core-service/cmd/platform-core-service'],
     [paths.telemetryBinary, './services/telemetry-runtime-service/cmd/telemetry-runtime-service'],
+    [paths.historyProjectorBinary, './services/telemetry-runtime-service/cmd/telemetry-history-projector'],
     [paths.gatewayBinary, './services/platform-gateway/cmd/platform-gateway'],
     [paths.simulatorBinary, './tools/eg8200-simulator/cmd/eg8200-simulator'],
     [paths.adapterBinary, './services/thingsboard-telemetry-adapter/cmd/thingsboard-telemetry-adapter'],
@@ -330,9 +332,9 @@ function buildGoBinaries(paths, goCache, quiet) {
 export async function startCentralPlantLocalTopology(options = {}) {
   const quiet = Boolean(options.quiet);
   const portNames = [
-    'thingsBoard', 's1Postgres', 's2Postgres', 'oidc', 'iam', 'core', 'telemetry', 'gateway', 'web',
+    'thingsBoard', 's1Postgres', 's2Postgres', 'clickHouse', 'oidc', 'iam', 'core', 'telemetry', 'gateway', 'web',
     'simulatorDiagnostics', 'adapterDiagnostics', 'centrifugo', 'centrifugoWSS', 'subscribeProxy',
-    'oidcDiagnostics', 'iamDiagnostics', 'coreDiagnostics', 'telemetryDiagnostics', 'gatewayDiagnostics',
+    'oidcDiagnostics', 'iamDiagnostics', 'coreDiagnostics', 'telemetryDiagnostics', 'historyDiagnostics', 'gatewayDiagnostics',
   ];
   const ports = Object.fromEntries(await Promise.all(portNames.map(async (name) => [name, await findAvailablePort()])));
   const projectBase = `hvac-central-plant-${process.pid}-${randomBytes(3).toString('hex')}`;
@@ -376,6 +378,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
     iamBinary: join(binaryDirectory, 'iam-service.exe'),
     coreBinary: join(binaryDirectory, 'platform-core-service.exe'),
     telemetryBinary: join(binaryDirectory, 'telemetry-runtime-service.exe'),
+    historyProjectorBinary: join(binaryDirectory, 'telemetry-history-projector.exe'),
     gatewayBinary: join(binaryDirectory, 'platform-gateway.exe'),
     simulatorBinary: join(binaryDirectory, 'eg8200-simulator.exe'),
     adapterBinary: join(binaryDirectory, 'thingsboard-telemetry-adapter.exe'),
@@ -389,7 +392,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
     checkpoint: join(stateDirectory, 'adapter-checkpoint.json'),
     report: join(outRoot, 'stack-report.json'),
   };
-  const services = { oidc: null, iam: null, core: null, telemetry: null, gateway: null, web: null, simulator: null, adapter: null };
+  const services = { oidc: null, iam: null, core: null, telemetry: null, history: null, gateway: null, web: null, simulator: null, adapter: null };
   let subscribeProxy;
   let webSocketProxy;
 
@@ -398,7 +401,10 @@ export async function startCentralPlantLocalTopology(options = {}) {
   const thingsBoardCompose = resolve(root, 'infra/central-plant-local/thingsboard.compose.yaml');
   const realtimeCompose = resolve(root, 'infra/central-plant-local/realtime.compose.yaml');
   const s1Environment = { S1_POSTGRES_HOST_PORT: String(ports.s1Postgres) };
-  const s2Environment = { S2_POSTGRES_HOST_PORT: String(ports.s2Postgres) };
+  const s2Environment = {
+    S2_POSTGRES_HOST_PORT: String(ports.s2Postgres),
+    S2_CLICKHOUSE_HTTP_HOST_PORT: String(ports.clickHouse),
+  };
   const thingsBoardEnvironment = { CENTRAL_PLANT_THINGSBOARD_PORT: String(ports.thingsBoard) };
   const runtimeValues = {
     api: randomBytes(32).toString('base64url'),
@@ -416,6 +422,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
   const iamURL = `https://127.0.0.1:${ports.iam}`;
   const coreURL = `https://127.0.0.1:${ports.core}`;
   const telemetryURL = `https://127.0.0.1:${ports.telemetry}`;
+  const clickHouseURL = `http://127.0.0.1:${ports.clickHouse}`;
   const gatewayURL = `http://127.0.0.1:${ports.gateway}`;
   const webURL = `https://127.0.0.1:${ports.web}`;
   const thingsBoardURL = `http://127.0.0.1:${ports.thingsBoard}`;
@@ -430,7 +437,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       process.off('SIGINT', signalHandler);
       process.off('SIGTERM', signalHandler);
     }
-    for (const child of [services.adapter, services.simulator, services.web, services.gateway, services.telemetry, services.core, services.iam, services.oidc]) {
+    for (const child of [services.adapter, services.simulator, services.web, services.gateway, services.history, services.telemetry, services.core, services.iam, services.oidc]) {
       await stopProcess(child);
     }
     await closeServer(webSocketProxy);
@@ -470,8 +477,10 @@ export async function startCentralPlantLocalTopology(options = {}) {
 
     const s1Container = composeContainer(projects.s1, 'postgres');
     const s2Container = composeContainer(projects.s2, 'postgres');
+    const clickHouseContainer = composeContainer(projects.s2, 'clickhouse');
     await waitForContainer(() => dockerExec(s1Container, ['pg_isready', '-U', 'postgres', '-d', 'hvac_s1'], { capture: true }), 'S1 PostgreSQL');
     await waitForContainer(() => dockerExec(s2Container, ['pg_isready', '-U', 'postgres', '-d', 'hvac_s2'], { capture: true }), 'S2 PostgreSQL');
+    await waitForContainer(() => dockerExec(clickHouseContainer, ['clickhouse-client', '--user', 'telemetry_history', '--query', 'SELECT 1'], { capture: true }), 'S2 ClickHouse');
     await waitForHTTP(thingsBoardURL, 'ThingsBoard', { attempts: 900, interval: 500 });
 
     const adapterTemplate = JSON.parse(await readFile(resolve(root, 'services/thingsboard-telemetry-adapter/configs/central-plant.local.example.json'), 'utf8'));
@@ -571,6 +580,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       core: databaseURL('s1_core_service', databasePasswords.s1Core, ports.s1Postgres, 'hvac_s1'),
       grant: databaseURL('s2_iam_grant_runtime', databasePasswords.s1Grant, ports.s1Postgres, 'hvac_s1'),
       telemetry: databaseURL('s2_telemetry_service', databasePasswords.s2Runtime, ports.s2Postgres, 'hvac_s2'),
+      history: databaseURL('s2_telemetry_history_service', databasePasswords.s2History, ports.s2Postgres, 'hvac_s2'),
     };
     services.oidc = spawnService('OIDC fixture', paths.oidcBinary, [], {
       GOCACHE: goCache,
@@ -663,6 +673,22 @@ export async function startCentralPlantLocalTopology(options = {}) {
       rejectUnauthorized: true,
     });
 
+    services.history = spawnService('Telemetry History Projector', paths.historyProjectorBinary, [], {
+      GOCACHE: goCache,
+      TELEMETRY_HISTORY_DATABASE_URL: databases.history,
+      TELEMETRY_CLICKHOUSE_HTTP_URL: clickHouseURL,
+      TELEMETRY_CLICKHOUSE_DATABASE: 'telemetry_history',
+      TELEMETRY_CLICKHOUSE_TABLE: 'observations',
+      TELEMETRY_CLICKHOUSE_USERNAME: 'telemetry_history',
+      TELEMETRY_CLICKHOUSE_PASSWORD: '',
+      TELEMETRY_HISTORY_DIAGNOSTICS_ADDR: `127.0.0.1:${ports.historyDiagnostics}`,
+      TELEMETRY_HISTORY_POLL_INTERVAL: '100ms',
+    }, quiet);
+    await waitForHTTP(`http://127.0.0.1:${ports.historyDiagnostics}/health/ready`, 'Telemetry History Projector', {
+      child: services.history,
+      attempts: 600,
+    });
+
     const gatewayEnvironment = {
       GOCACHE: goCache,
       PLATFORM_GATEWAY_ADDR: `127.0.0.1:${ports.gateway}`,
@@ -747,6 +773,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       status: 'ready',
       webURL,
       thingsBoardURL,
+      clickHouseURL,
       gatewayURL,
       organizationId: centralPlantIdentity.organizationId,
       siteId: centralPlantIdentity.siteId,
@@ -763,7 +790,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       projects,
       services,
       paths,
-      database: { s1Container, s2Container },
+      database: { s1Container, s2Container, clickHouseContainer },
       stop,
     };
   } catch (error) {

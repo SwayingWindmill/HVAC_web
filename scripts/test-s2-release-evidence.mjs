@@ -7,7 +7,7 @@ const root = resolve(process.cwd());
 const directory = await mkdtemp(join(tmpdir(), 's2-release-evidence-test-'));
 const formalRepositorySha = '1'.repeat(40);
 const reports = [
-  'workflow-jobs.json', 'security-negative-report.json', 'postgres-integration-report.json', 'transport-integration-report.json',
+  'workflow-jobs.json', 'security-negative-report.json', 'postgres-integration-report.json', 'telemetry-history-report.json', 'transport-integration-report.json',
   'capacity-report.json', 'reconnect-storm-report.json', 'slow-consumer-report.json', 'revocation-report.json', 'failure-injection-report.json', 'browser-report.json',
   'kind-rollout-report.json', 'rollback-report.json', 'metric-cardinality-report.json', 'log-redaction-report.json',
   'trace-correlation-report.json', 'shadow-comparison-report.json', 'alert-rule-validation-report.json',
@@ -19,10 +19,15 @@ const run = (script, args, expectSuccess = true) => {
   if (!expectSuccess && result.status === 0) throw new Error(`${script} unexpectedly passed`);
   return `${result.stdout}\n${result.stderr}`;
 };
+const imageIdentity = {
+  'telemetry-runtime': { digit: '1', user: '65532:65532' },
+  'telemetry-history-projector': { digit: '2', user: '65532:65532' },
+  'telemetry-runtime-migrator': { digit: '3', user: 'postgres' },
+};
 const image = (name, formalReleaseEligible) => ({
   name,
-  digest: `sha256:${(name === 'telemetry-runtime' ? '1' : '2').repeat(64)}`,
-  user: name === 'telemetry-runtime' ? '65532:65532' : 'postgres',
+  digest: `sha256:${imageIdentity[name].digit.repeat(64)}`,
+  user: imageIdentity[name].user,
   repositorySha: formalReleaseEligible ? formalRepositorySha : 'local-uncommitted',
   formalReleaseEligible,
   provenance: formalReleaseEligible ? 'buildkit-mode-max' : 'preflight-build-metadata',
@@ -39,15 +44,19 @@ const writeReports = async (formalReleaseEligible) => {
       repositorySha: formalReleaseEligible ? formalRepositorySha : 'local-uncommitted',
       wallClockAttestation: formalReleaseEligible ? { repositorySha: formalRepositorySha } : null,
     };
-    if (name === 'production-image-report.json') report = { ...report, images: [image('telemetry-runtime', formalReleaseEligible), image('telemetry-runtime-migrator', formalReleaseEligible)] };
+    if (name === 'production-image-report.json') report = { ...report, images: [image('telemetry-runtime', formalReleaseEligible), image('telemetry-history-projector', formalReleaseEligible), image('telemetry-runtime-migrator', formalReleaseEligible)] };
     if (name === 'sbom-provenance-report.json') report = { ...report, formalReleaseEligible };
     await writeFile(join(directory, name), `${JSON.stringify(report)}\n`);
   }
 };
 try {
-  const repositoryShaResult = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true });
-  if (repositoryShaResult.status !== 0) throw new Error(`git rev-parse failed: ${repositoryShaResult.stderr}`);
-  const repositorySha = repositoryShaResult.stdout.trim();
+  let repositorySha = process.env.GITHUB_SHA?.trim() ?? '';
+  if (repositorySha === '') {
+    const repositoryShaResult = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true });
+    if (repositoryShaResult.status !== 0) throw new Error(`git rev-parse failed: ${repositoryShaResult.stderr}`);
+    repositorySha = repositoryShaResult.stdout.trim();
+  }
+  if (!/^[0-9a-f]{40}$/.test(repositorySha)) throw new Error(`invalid repository SHA: ${repositorySha}`);
   const capacityDirectory = join(directory, 'capacity');
   run('scripts/run-s2-capacity-certification.mjs', [`--profile=preflight`, `--output-dir=${capacityDirectory}`]);
   const preflightCapacity = JSON.parse(await readFile(join(capacityDirectory, 'capacity-report.json'), 'utf8'));
@@ -85,7 +94,7 @@ try {
   const imageInput = join(directory, 'image-input');
   const imageOutput = join(directory, 'image-output');
   await mkdir(imageInput, { recursive: true });
-  for (const [name, digit, user] of [['telemetry-runtime', '1', '65532:65532'], ['telemetry-runtime-migrator', '2', 'postgres']]) {
+  for (const [name, digit, user] of [['telemetry-runtime', '1', '65532:65532'], ['telemetry-history-projector', '2', '65532:65532'], ['telemetry-runtime-migrator', '3', 'postgres']]) {
     const sbomFile = `sbom-${name}.cyclonedx.json`;
     const metadataFile = `build-metadata-${name}.json`;
     await writeFile(join(imageInput, sbomFile), '{"bomFormat":"CycloneDX"}\n');
@@ -107,7 +116,7 @@ try {
   }
   run('scripts/merge-s2-image-evidence.mjs', [`--input=${imageInput}`, `--output=${imageOutput}`]);
   const mergedImages = JSON.parse(await readFile(join(imageOutput, 'production-image-report.json'), 'utf8'));
-  if (mergedImages.images?.length !== 2) throw new Error('image evidence merger did not preserve both production images');
+  if (mergedImages.images?.length !== 3) throw new Error('image evidence merger did not preserve all three production images');
   const badRuntime = JSON.parse(await readFile(join(imageInput, 'telemetry-runtime.json'), 'utf8'));
   await writeFile(join(imageInput, 'telemetry-runtime.json'), `${JSON.stringify({ ...badRuntime, highOrCriticalVulnerabilities: 1 })}\n`);
   const imageRejection = run('scripts/merge-s2-image-evidence.mjs', [`--input=${imageInput}`, `--output=${imageOutput}`], false);
