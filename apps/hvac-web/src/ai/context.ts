@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router';
 import { canViewPath } from '@/auth/permissions';
 import { isSuggestionPendingDecision, isWorkOrderActive, isWorkOrderSlaRisk } from '@/domain/opsMeta';
 import { DEVICE_META } from '@/pages/Assets/meta';

@@ -1,0 +1,73 @@
+name: Security 79 React Router 8
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "apps/hvac-web/src/**"
+      - "contracts/http/tooling.lock.json"
+      - "deploy/s0/security/dependency-audit-baseline.json"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/check-npm-production-audit.mjs"
+      - "scripts/check-s2-*.mjs"
+      - "scripts/fixtures/s2-hvac-web-presence/**"
+      - "scripts/run-rms-authenticated-shell-browser-audit.mjs"
+      - "scripts/run-s2-hvac-web-presence-browser-audit.mjs"
+      - "scripts/test-npm-production-audit-retry.mjs"
+      - "scripts/test-react-router-security-upgrade.mjs"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+      - "apps/hvac-web/src/**"
+      - "contracts/http/tooling.lock.json"
+      - "deploy/s0/security/dependency-audit-baseline.json"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/check-npm-production-audit.mjs"
+      - "scripts/check-s2-*.mjs"
+      - "scripts/fixtures/s2-hvac-web-presence/**"
+      - "scripts/run-rms-authenticated-shell-browser-audit.mjs"
+      - "scripts/run-s2-hvac-web-presence-browser-audit.mjs"
+      - "scripts/test-npm-production-audit-retry.mjs"
+      - "scripts/test-react-router-security-upgrade.mjs"
+
+permissions:
+  contents: read
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.22.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run security:ticket-79
+
+  browser:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.22.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run security:ticket-79:browser
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: security-79-browser-${{ github.sha }}
+          path: |
+            out/rms-08/browser-evidence.json
+            out/s2-ticket-09
+          if-no-files-found: warn
+          retention-days: 30

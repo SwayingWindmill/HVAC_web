@@ -24,19 +24,9 @@ if (attempt < succeedOn) {
 } else {
   process.stdout.write(JSON.stringify({
     auditReportVersion: 2,
-    vulnerabilities: {
-      'react-router': {
-        severity: 'high',
-        via: [{
-          source: 1124282,
-          url: 'https://github.com/advisories/GHSA-qwww-vcr4-c8h2',
-          severity: 'high',
-        }],
-      },
-      'react-router-dom': { severity: 'high', via: ['react-router'] },
-    },
+    vulnerabilities: {},
     metadata: {
-      vulnerabilities: { info: 0, low: 5, moderate: 2, high: 2, critical: 0, total: 9 },
+      vulnerabilities: { info: 0, low: 5, moderate: 2, high: 0, critical: 0, total: 7 },
     },
   }));
   process.exitCode = 1;

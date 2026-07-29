@@ -61,7 +61,7 @@ jobs:
           cache: false
       - uses: actions/setup-node@v4
         with:
-          node-version: '20.19.4'
+          node-version: '22.22.0'
           cache: npm
       - run: npm ci
       - run: npm run contracts:check
@@ -90,7 +90,7 @@ jobs:
           cache: false
       - uses: actions/setup-node@v4
         with:
-          node-version: '20.19.4'
+          node-version: '22.22.0'
           cache: npm
       - run: npm ci
       - run: docker compose -f infra/s1-registry/compose.yaml config
@@ -117,7 +117,7 @@ jobs:
           cache: false
       - uses: actions/setup-node@v4
         with:
-          node-version: '20.19.4'
+          node-version: '22.22.0'
           cache: npm
       - run: npm ci
       - run: docker compose -f infra/s0-durable/compose.yaml config

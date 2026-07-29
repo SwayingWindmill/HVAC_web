@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { Button, ConfigProvider, Switch, theme as antdTheme } from 'antd';
 import {
   ApiOutlined,

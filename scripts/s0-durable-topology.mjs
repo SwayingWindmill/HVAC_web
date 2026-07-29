@@ -8,6 +8,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import tls from 'node:tls';
+import { seedLegacyPlatformStatusRoute } from './s0-route-registry-fixture.mjs';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/s0-durable/compose.yaml');
@@ -393,7 +394,11 @@ export async function startS0DurableTopology(options = {}) {
       env: { ...process.env, GOCACHE: goCacheDir },
     });
     if (generated.error || generated.status !== 0) throw new Error(`S0 PKI generation failed: ${generated.error?.message ?? generated.stderr ?? generated.status}`);
-    await writeFile(paths.routeRegistry, await readFile(resolve(root, 'contracts/ownership/route-ownership.v1.json')));
+    const routeRegistry = JSON.parse(await readFile(resolve(root, 'contracts/ownership/route-ownership.v1.json'), 'utf8'));
+    const seededRouteRegistry = options.seedLegacyPlatformStatusRoute === true
+      ? seedLegacyPlatformStatusRoute(routeRegistry)
+      : routeRegistry;
+    await writeFile(paths.routeRegistry, `${JSON.stringify(seededRouteRegistry, null, 2)}\n`);
 
     services.oidc = spawnService('OIDC fixture', goBinary, ['run', './services/oidc-test-provider/cmd/oidc-test-provider'], {
       GOCACHE: goCacheDir,

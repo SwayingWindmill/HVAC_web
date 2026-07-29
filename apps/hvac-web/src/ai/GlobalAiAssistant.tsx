@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 import { CopilotPopup } from '@copilotkit/react-core/v2';
 import '@copilotkit/react-core/v2/styles.css';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router';
 import CopilotContextBridge from './CopilotContextBridge';
 import {
   HvacCopilotHeaderContent,

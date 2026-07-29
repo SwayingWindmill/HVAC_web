@@ -27,7 +27,7 @@ import {
   ToolOutlined,
   WifiOutlined,
 } from '@ant-design/icons';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import PageScaffold from '@/components/PageScaffold';
 import { OperationsMetrics, OperationsPanelHeading, useOperationsDetailFocus } from '@/components/OperationsUI';
 import { can } from '@/auth/permissions';

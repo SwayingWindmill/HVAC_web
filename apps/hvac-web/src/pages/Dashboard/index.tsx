@@ -17,7 +17,7 @@ import {
   SafetyCertificateOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { useOps, fddList } from '@/store/ops';
 import { MOCK_KPI } from '@/api';
 import { DEVICE_META, STATUS_MAP, type DevStatus, type DeviceAsset } from '@/pages/Assets/meta';

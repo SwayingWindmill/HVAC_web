@@ -208,7 +208,7 @@ for (const command of [
 ]) {
   assert(ticketCommand.includes(command), `s2:ticket-03 omits ${command}`);
 }
-includesAll(workflow, ['runs-on: ubuntu-24.04', 'go-version: "1.25.12"', 'node-version: "20.19.4"', 'npm run s2:ticket-03', 's2-telemetry-runtime-snapshot-evidence'], 'Ticket 03 workflow');
+includesAll(workflow, ['runs-on: ubuntu-24.04', 'go-version: "1.25.12"', 'node-version: "22.22.0"', 'npm run s2:ticket-03', 's2-telemetry-runtime-snapshot-evidence'], 'Ticket 03 workflow');
 
 const ticket03CoreSources = `${evaluatorGo}\n${authorizationGo}`.toLowerCase();
 for (const forbidden of ['thingsboard', 'centrifugo', 'legacy-hvac-backend', 'mock fallback', 'redis']) {

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { ArrowRightOutlined, CheckCircleFilled, ExclamationCircleFilled } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { z } from 'zod';
 import './AgentResultCards.css';
 

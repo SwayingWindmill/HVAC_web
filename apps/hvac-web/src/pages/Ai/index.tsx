@@ -30,7 +30,7 @@ import {
   SearchOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import CopilotContextBridge from '@/ai/CopilotContextBridge';
 import {
   HvacCopilotWorkspaceWelcomeScreen,

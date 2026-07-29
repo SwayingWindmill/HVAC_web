@@ -1,6 +1,6 @@
 import { Card, Typography } from 'antd';
 import { RightOutlined } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { fddList, useOps } from '@/store/ops';
 import { TICKET_STATUS_META, isWorkOrderActive, isWorkOrderSlaRisk } from '@/domain/opsMeta';
 
