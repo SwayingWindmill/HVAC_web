@@ -17,22 +17,24 @@ import (
 )
 
 type Config struct {
-	Issuer      string
-	ClientID    string
-	RedirectURI string
-	Now         func() time.Time
+	Issuer                      string
+	ClientID                    string
+	RedirectURI                 string
+	DefaultActingOrganizationID string
+	Now                         func() time.Time
 }
 
 type Provider struct {
-	mu          sync.Mutex
-	issuer      string
-	clientID    string
-	redirectURI string
-	now         func() time.Time
-	activeKey   *rsa.PrivateKey
-	activeKid   string
-	rogueKey    *rsa.PrivateKey
-	codes       map[string]authorizationCode
+	mu                          sync.Mutex
+	issuer                      string
+	clientID                    string
+	redirectURI                 string
+	defaultActingOrganizationID string
+	now                         func() time.Time
+	activeKey                   *rsa.PrivateKey
+	activeKid                   string
+	rogueKey                    *rsa.PrivateKey
+	codes                       map[string]authorizationCode
 }
 
 type authorizationCode struct {
@@ -74,15 +76,20 @@ func New(config Config) (*Provider, error) {
 	if now == nil {
 		now = time.Now
 	}
+	defaultActingOrganizationID := strings.TrimSpace(config.DefaultActingOrganizationID)
+	if defaultActingOrganizationID == "" {
+		defaultActingOrganizationID = "org-fixture-01"
+	}
 	return &Provider{
-		issuer:      strings.TrimRight(config.Issuer, "/"),
-		clientID:    config.ClientID,
-		redirectURI: config.RedirectURI,
-		now:         now,
-		activeKey:   active,
-		activeKid:   randomToken(8),
-		rogueKey:    rogue,
-		codes:       map[string]authorizationCode{},
+		issuer:                      strings.TrimRight(config.Issuer, "/"),
+		clientID:                    config.ClientID,
+		redirectURI:                 config.RedirectURI,
+		defaultActingOrganizationID: defaultActingOrganizationID,
+		now:                         now,
+		activeKey:                   active,
+		activeKid:                   randomToken(8),
+		rogueKey:                    rogue,
+		codes:                       map[string]authorizationCode{},
 	}, nil
 }
 
@@ -219,7 +226,7 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 	subject := "fixture-user"
 	name := "Fixture User"
 	email := "fixture.user@example.test"
-	organizationID := "org-fixture-01"
+	organizationID := provider.defaultActingOrganizationID
 
 	switch code.LoginHint {
 	case "s2-telemetry":

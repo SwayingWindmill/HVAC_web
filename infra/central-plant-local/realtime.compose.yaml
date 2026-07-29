@@ -1,0 +1,38 @@
+services:
+  redis:
+    image: redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+    platform: linux/amd64
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+    networks: [central-plant]
+
+  centrifugo:
+    image: centrifugo/centrifugo:v6.8.1@sha256:b20c036ed17c7151c6acc176b34870ac37f4eb84618de7cc6459094744dd42aa
+    platform: linux/amd64
+    command: ["centrifugo", "-c", "/centrifugo/config.json"]
+    environment:
+      CENTRIFUGO_CLIENT_TOKEN_HMAC_SECRET_KEY: ${CENTRAL_PLANT_CENTRIFUGO_HMAC}
+      CENTRIFUGO_HTTP_API_KEY: ${CENTRAL_PLANT_CENTRIFUGO_API_KEY}
+    volumes:
+      - ${CENTRAL_PLANT_CENTRIFUGO_CONFIG}:/centrifugo/config.json:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${CENTRAL_PLANT_CENTRIFUGO_PORT}:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "centrifugo", "checkconfig", "-c", "/centrifugo/config.json"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [central-plant]
+
+networks:
+  central-plant:
+    driver: bridge
