@@ -56,9 +56,10 @@ for (const marker of [
   'hvac_s2_snapshot_requests_total', 'hvac_s2_subscription_events_total', 'hvac_s2_revocation_events_total',
   'hvac_s2_publications_total', 'hvac_s2_outbox_messages_total', 'hvac_s2_quarantine_records_total',
 ]) assert(runtimeMetrics.includes(marker), `Telemetry Runtime production metrics are missing ${marker}`);
-for (const marker of ['observability.NewRuntime', 'DiagnosticsHandler()', 'Metrics:                 observabilityRuntime.Metrics', 'InstrumentRealtimeTransport']) {
+for (const marker of ['observability.NewRuntime', 'DiagnosticsHandler()', 'InstrumentRealtimeTransport']) {
   assert(runtimeMain.includes(marker), `Telemetry Runtime observability wiring is missing ${marker}`);
 }
+assert(/Metrics:\s+observabilityRuntime\.Metrics/.test(runtimeMain), 'Telemetry Runtime observability wiring is missing the metrics registry');
 for (const marker of ['hvac_s2_upstream_requests_total', 'hvac_s2_upstream_duration_seconds', 'telemetry-runtime']) {
   assert(gatewayMetrics.includes(marker), `Gateway production metrics are missing ${marker}`);
 }
