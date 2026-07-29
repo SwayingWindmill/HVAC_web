@@ -70,7 +70,7 @@ for (const marker of ['release-evidence.intoto.json', 'SHA256SUMS', 'allSecurity
   assert(bundleBuilder.includes(marker), `release evidence builder is missing ${marker}`);
 }
 assert(bundleVerifier.includes('digest mismatch') && bundleVerifier.includes('reviewerCanVerifyOffline') && bundleVerifier.includes('subject digest mismatch'), 'offline verifier is incomplete');
-assert(imageWriter.includes('highOrCriticalVulnerabilities') && imageWriter.includes('secretFindings') && imageWriter.includes('non-root') && imageWriter.includes('CycloneDX') && imageWriter.includes('formal image evidence requires'), 'image evidence writer is incomplete');
+assert(imageWriter.includes('telemetry-history-projector') && imageWriter.includes('highOrCriticalVulnerabilities') && imageWriter.includes('secretFindings') && imageWriter.includes('non-root') && imageWriter.includes('CycloneDX') && imageWriter.includes('formal image evidence requires'), 'image evidence writer is incomplete');
 assert(imageMerger.includes('production-image-report.json') && imageMerger.includes('sbom-provenance-report.json') && imageMerger.includes('copyFile') && imageMerger.includes('formalReleaseEligible'), 'image merger is incomplete');
 assert(reportWriter.includes('cleanRunner') && reportWriter.includes('commands') && reportWriter.includes('sha256') && reportWriter.includes('sources'), 'standard report writer is incomplete');
 for (const marker of ['hvac_s2_snapshot_requests_total', 'hvac_s2_publications_total', 'hvac_s2_recovery_attempts_total', 'hvac_s2_revocation_events_total', 'hvac_s2_quarantine_records_total']) {
