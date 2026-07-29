@@ -1,7 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
-import { dirname, extname, join, resolve } from 'node:path';
-import { verifyReactRouterClientOnlyViteSpa } from './npm-production-audit-guards.mjs';
+import { readFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const baseline = JSON.parse(await readFile(resolve(root, 'deploy/s0/security/dependency-audit-baseline.json'), 'utf8'));
@@ -31,37 +30,6 @@ function exactArray(actual, expected) {
   const left = [...actual].sort((a, b) => String(a).localeCompare(String(b)));
   const right = [...expected].sort((a, b) => String(a).localeCompare(String(b)));
   return JSON.stringify(left) === JSON.stringify(right);
-}
-
-async function collectSource(directory) {
-  const chunks = [];
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) {
-      chunks.push(await collectSource(path));
-      continue;
-    }
-    if (['.js', '.jsx', '.ts', '.tsx'].includes(extname(entry.name))) {
-      chunks.push(await readFile(path, 'utf8'));
-    }
-  }
-  return chunks.join('\n');
-}
-
-async function verifyGuard(guard) {
-  if (guard !== 'react-router-client-only-vite-spa') {
-    throw new Error(`Unknown dependency audit exception guard: ${guard}`);
-  }
-  const packageJSON = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
-  const compatibilityEntry = await readFile(resolve(root, 'apps/hvac-web/src/main.tsx'), 'utf8');
-  const demoEntry = await readFile(resolve(root, 'apps/hvac-web/src/demo/main.tsx'), 'utf8');
-  const source = await collectSource(resolve(root, 'apps/hvac-web/src'));
-  verifyReactRouterClientOnlyViteSpa({
-    scripts: packageJSON.scripts,
-    compatibilityEntry,
-    demoEntry,
-    source,
-  });
 }
 
 for (const [name, project] of Object.entries(baseline.projects)) {
@@ -105,7 +73,6 @@ for (const [name, project] of Object.entries(baseline.projects)) {
 
   const effectiveCounts = Object.fromEntries(severities.map((severity) => [severity, Number(counts[severity] || 0)]));
   const exceptionPackages = new Set();
-  const verifiedGuards = new Set();
   for (const exception of project.exceptions ?? []) {
     assert(!exceptionPackages.has(exception.package), `${name} duplicate dependency exception for ${exception.package}`);
     exceptionPackages.add(exception.package);
@@ -131,10 +98,6 @@ for (const [name, project] of Object.entries(baseline.projects)) {
     }
     if (exception.viaPackages) {
       assert(exactArray(viaPackages, exception.viaPackages), `${name} transitive advisory path drifted for ${exception.package}`);
-    }
-    if (exception.guard && !verifiedGuards.has(exception.guard)) {
-      await verifyGuard(exception.guard);
-      verifiedGuards.add(exception.guard);
     }
     assert(effectiveCounts[exception.severity] > 0, `${name} exception count underflow for ${exception.package}`);
     effectiveCounts[exception.severity] -= 1;

@@ -16,7 +16,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import ReactECharts from 'echarts-for-react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import {
   AlertOutlined,
   DashboardOutlined,

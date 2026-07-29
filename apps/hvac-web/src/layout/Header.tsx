@@ -4,7 +4,7 @@ import {
   BellOutlined, SunOutlined, MoonOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
   ExperimentOutlined, UserOutlined, DesktopOutlined, ApiOutlined,
 } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { ROLE_LABEL, useUi, type Role } from '@/store/ui';
 import { API_MODE } from '@/api/config';
 import { useAuthorizedRegistrySites } from '@/api/registry';

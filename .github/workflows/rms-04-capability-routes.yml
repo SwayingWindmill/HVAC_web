@@ -48,7 +48,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20.19.4"
+          node-version: "22.22.0"
           cache: npm
       - run: npm ci
       - run: npm run rms:ticket-04
@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20.19.4"
+          node-version: "22.22.0"
           cache: npm
       - run: npm ci
       - run: npm run rms:ticket-04:browser

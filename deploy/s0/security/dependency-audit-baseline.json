@@ -9,26 +9,7 @@
   "projects": {
     "root": {
       "path": ".",
-      "allowed": { "low": 5, "moderate": 3, "high": 0, "critical": 0 },
-      "exceptions": [
-        {
-          "package": "react-router",
-          "severity": "high",
-          "advisorySources": [1124282],
-          "advisoryUrls": ["https://github.com/advisories/GHSA-qwww-vcr4-c8h2"],
-          "guard": "react-router-client-only-vite-spa",
-          "expiresOn": "2026-08-01",
-          "remediationIssue": "#79"
-        },
-        {
-          "package": "react-router-dom",
-          "severity": "high",
-          "viaPackages": ["react-router"],
-          "guard": "react-router-client-only-vite-spa",
-          "expiresOn": "2026-08-01",
-          "remediationIssue": "#79"
-        }
-      ]
+      "allowed": { "low": 5, "moderate": 3, "high": 0, "critical": 0 }
     }
   }
 }

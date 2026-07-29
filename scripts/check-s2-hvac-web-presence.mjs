@@ -77,7 +77,7 @@ for (const marker of [
   'npm run s2:ticket-09', 'out/s2-ticket-09/network-audit.json',
 ]) assert(runbook.includes(marker), `Ticket 09 Runbook is missing ${marker}`);
 for (const marker of [
-  'name: S2 HVAC Web Presence and Latest Telemetry', 'ubuntu-24.04', 'node-version: "20.19.4"',
+  'name: S2 HVAC Web Presence and Latest Telemetry', 'ubuntu-24.04', 'node-version: "22.22.0"',
   'npm run s2:ticket-09', 'out/s2-ticket-09', 'if-no-files-found: error',
 ]) assert(workflow.includes(marker), `Ticket 09 workflow is missing ${marker}`);
 

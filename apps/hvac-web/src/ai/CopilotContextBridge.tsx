@@ -4,7 +4,7 @@ import {
   useConfigureSuggestions,
   useFrontendTool,
 } from '@copilotkit/react-core/v2';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { z } from 'zod';
 import { canViewPath } from '@/auth/permissions';
 import { useUi } from '@/store/ui';

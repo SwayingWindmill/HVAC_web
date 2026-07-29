@@ -143,7 +143,7 @@ const ticketCommand = packageJSON.scripts?.['s2:ticket-05'] ?? '';
 for (const command of ['s2:gateway:check', 's2:contracts:check', 'test:gateway', 'build:gateway', 'lint', 'build', 's2:gateway:browser']) {
   assert(ticketCommand.includes(command), `s2:ticket-05 is missing ${command}`);
 }
-includesAll(workflow, ['runs-on: ubuntu-24.04', 'go-version: "1.25.12"', 'node-version: "20.19.4"', 'npm run s2:ticket-05', 's2-gateway-snapshot-evidence'], 'Ticket 05 workflow');
+includesAll(workflow, ['runs-on: ubuntu-24.04', 'go-version: "1.25.12"', 'node-version: "22.22.0"', 'npm run s2:ticket-05', 's2-gateway-snapshot-evidence'], 'Ticket 05 workflow');
 for (const heading of ['## Reuse-first decision', '## Public request boundary', '## Authorization and mTLS chain', '## Error and nondiscovery semantics', '## Rollout boundary', '## Out of scope']) {
   assert(operations.includes(heading), `operations note is missing ${heading}`);
 }

@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Button, Card, Col, Empty, Row, Table, Tag, Typography, theme } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import ReactECharts from 'echarts-for-react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import {
   AlertOutlined,
   ClockCircleOutlined,

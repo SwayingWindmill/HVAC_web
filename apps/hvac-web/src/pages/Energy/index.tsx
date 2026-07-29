@@ -15,7 +15,7 @@ import {
   DownloadOutlined,
   FundOutlined,
 } from '@ant-design/icons';
-import { Navigate, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Navigate, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useUi } from '@/store/ui';
 import { getAvailableDayCount } from './data';
 import {

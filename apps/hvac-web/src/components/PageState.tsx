@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { Alert, Button, Empty, Result, Space, Spin, Typography } from 'antd';
 import { ExclamationCircleOutlined, LockOutlined } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { ROLE_LABEL, type Role } from '@/store/ui';
 import type { PermissionSubject } from '@/auth/permissions';
 

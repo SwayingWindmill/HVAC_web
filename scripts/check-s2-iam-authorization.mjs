@@ -152,6 +152,6 @@ assert(packageJSON.scripts?.['s2:iam:postgres'] === 'node scripts/run-s2-iam-pos
 for (const command of ['npm run s2:iam:check', 'npm run s2:iam:postgres', 'test ./libs/telemetryauth/...', 'test ./services/iam-service/...', 'npm run ownership:check', 'npm run lint', 'npm run build']) {
   assert(packageJSON.scripts?.['s2:ticket-02']?.includes(command), `s2:ticket-02 omits ${command}`);
 }
-includesAll(workflow, ['runs-on: ubuntu-24.04', "go-version: '1.25.12'", "node-version: '20.19.4'", 'npm run s2:ticket-02', 'out/s2-ticket-02/iam-authorization-evidence.json'], 'S2 IAM workflow');
+includesAll(workflow, ['runs-on: ubuntu-24.04', "go-version: '1.25.12'", "node-version: '22.22.0'", 'npm run s2:ticket-02', 'out/s2-ticket-02/iam-authorization-evidence.json'], 'S2 IAM workflow');
 
 console.log('S2 Ticket 02 IAM authorization passed: exact Device/key grants, single-use consumption, deny precedence and bounded revocation delivery.');

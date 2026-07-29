@@ -1,5 +1,5 @@
 import { Layout } from 'antd';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router';
 import Sidebar from './Sidebar';
 import TopHeader from './Header';
 import GlobalAiAssistant from '@/ai/GlobalAiAssistant';

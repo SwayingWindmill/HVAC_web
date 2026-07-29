@@ -14,7 +14,7 @@ import {
   DesktopOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import { visibleModules, useUi } from '@/store/ui';
 import './Sidebar.css';
 

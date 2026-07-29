@@ -18,7 +18,7 @@ import {
   Typography,
 } from 'antd';
 import { CheckCircleOutlined, ControlOutlined, SearchOutlined } from '@ant-design/icons';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import PageScaffold from '@/components/PageScaffold';
 import { can } from '@/auth/permissions';
 import { useUi } from '@/store/ui';

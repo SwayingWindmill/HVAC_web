@@ -1,5 +1,5 @@
-import { lazy, Suspense, type ComponentType } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { lazy, Suspense, type ComponentType, type ReactElement } from 'react';
+import { Routes, Route, Navigate } from 'react-router';
 import AppShell from '@/layout/AppShell';
 import NotFound from '@/pages/NotFound';
 import { MODULES } from '@/store/ui';
@@ -37,7 +37,7 @@ const REAL_PAGES: Record<string, LazyPage> = {
   '/alarms': Alarms,
 };
 
-function withSuspense(element: JSX.Element) {
+function withSuspense(element: ReactElement) {
   return <Suspense fallback={<LoadingState tip="加载页面" />}>{element}</Suspense>;
 }
 

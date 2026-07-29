@@ -255,7 +255,7 @@ for (const command of [
   'npm run build',
   'npm run s2:ingest:postgres',
 ]) assert(ticketCommand.includes(command), `s2:ticket-04 omits ${command}`);
-includesAll(workflow, ['runs-on: ubuntu-24.04', 'go-version: "1.25.12"', 'node-version: "20.19.4"', 'npm run s2:ticket-04', 's2-telemetry-ingest-evidence'], 'Ticket 04 workflow');
+includesAll(workflow, ['runs-on: ubuntu-24.04', 'go-version: "1.25.12"', 'node-version: "22.22.0"', 'npm run s2:ticket-04', 's2-telemetry-ingest-evidence'], 'Ticket 04 workflow');
 includesAll(runner, ['TestPostgresIngestEndToEnd', 'docker', 'restart', 'restartDurability', 'deliveryEvidence', 'rejectedAndQuarantined', 'coverageQuarantine', 'twoOrganizationIsolation'], 'Ticket 04 PostgreSQL runner');
 
 const allSources = `${decisionGo}\n${ingestStoreGo}\n${coverageGo}\n${sourceServerGo}\n${mainGo}`.toLowerCase();

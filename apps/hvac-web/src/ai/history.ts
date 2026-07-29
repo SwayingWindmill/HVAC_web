@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router';
 import { useAgent, useCopilotChatConfiguration } from '@copilotkit/react-core/v2';
 import { useAiApplicationContext } from './context';
 
