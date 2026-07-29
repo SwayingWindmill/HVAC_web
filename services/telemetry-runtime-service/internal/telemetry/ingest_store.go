@@ -108,6 +108,9 @@ func (store *PostgresStore) acceptObservationOnce(ctx context.Context, candidate
 	if err := insertSourceObservation(ctx, tx, observationID, candidate, decision, payloadSHA); err != nil {
 		return ObservationReceipt{}, err
 	}
+	if err := insertHistoryOutboxIntent(ctx, tx, observationID, candidate, decision, payloadSHA); err != nil {
+		return ObservationReceipt{}, err
+	}
 	if decision.QuarantineReason != "" {
 		if err := store.insertQuarantine(ctx, tx, candidate, decision, payloadSHA); err != nil {
 			return ObservationReceipt{}, err

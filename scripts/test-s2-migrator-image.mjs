@@ -12,6 +12,7 @@ const migrations = [
   '001-s2-telemetry-baseline.sql',
   '002-s2-telemetry-runtime-snapshot.sql',
   '003-s2-telemetry-ingest.sql',
+  '004-s2-telemetry-history-outbox.sql',
   '005-s2-realtime-backend.sql',
 ];
 const reportPath = resolve(root, 'out/s2-ticket-11/migrator-image-smoke.json');
@@ -123,7 +124,7 @@ try {
 
   const schemaReady = execute([
     'exec', databaseContainer, 'psql', '-U', 'postgres', '-d', 'hvac_s2', '-At', '-c',
-    "SELECT to_regclass('telemetry_runtime.latest_accepted_telemetry') IS NOT NULL AND to_regclass('telemetry_runtime.telemetry_publication_outbox') IS NOT NULL AND to_regclass('telemetry_runtime.schema_migrations') IS NOT NULL",
+    "SELECT to_regclass('telemetry_runtime.latest_accepted_telemetry') IS NOT NULL AND to_regclass('telemetry_runtime.telemetry_history_outbox') IS NOT NULL AND to_regclass('telemetry_runtime.telemetry_publication_outbox') IS NOT NULL AND to_regclass('telemetry_runtime.schema_migrations') IS NOT NULL",
   ], { quiet: true }).stdout.trim();
   assert(schemaReady === 't', 'migrator did not create the required runtime and realtime schema');
 

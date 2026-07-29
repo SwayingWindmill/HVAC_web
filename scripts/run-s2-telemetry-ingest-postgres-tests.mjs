@@ -53,9 +53,9 @@ async function waitForPostgres() {
   let stableChecks = 0;
   for (let attempt = 0; attempt < 300; attempt += 1) {
     try {
-      const state = psql("SELECT pg_postmaster_start_time()::text || '|' || (to_regclass('telemetry_runtime.source_delivery_evidence') IS NOT NULL)::text || '|' || EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='telemetry_runtime' AND table_name='source_observations' AND column_name='source_path')::text");
-      const [startedAt, evidenceReady, sourcePathReady] = state.split('|');
-      if (evidenceReady === 'true' && sourcePathReady === 'true') {
+      const state = psql("SELECT pg_postmaster_start_time()::text || '|' || (to_regclass('telemetry_runtime.source_delivery_evidence') IS NOT NULL)::text || '|' || EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='telemetry_runtime' AND table_name='source_observations' AND column_name='source_path')::text || '|' || (to_regclass('telemetry_runtime.telemetry_history_outbox') IS NOT NULL)::text");
+      const [startedAt, evidenceReady, sourcePathReady, historyOutboxReady] = state.split('|');
+      if (evidenceReady === 'true' && sourcePathReady === 'true' && historyOutboxReady === 'true') {
         if (startedAt === stableStart) stableChecks += 1;
         else {
           stableStart = startedAt;
@@ -134,6 +134,20 @@ try {
   `);
   if (report.assertions.rejectedAndQuarantined !== '3|1|0|1') {
     throw new Error(`unexpected rejected/quarantine evidence ${report.assertions.rejectedAndQuarantined}`);
+  }
+  report.assertions.historyOutbox = psql(`
+    SELECT count(*)::text || '|'
+      || count(*) FILTER (WHERE delivery_state = 'PENDING')::text || '|'
+      || count(*) FILTER (WHERE payload ->> 'acceptance_status' <> 'ACCEPTED'
+                           AND COALESCE(payload -> 'value_json', payload -> 'value_number', payload -> 'value_string', payload -> 'value_boolean') IS NOT NULL)::text || '|'
+      || count(*) FILTER (WHERE payload ->> 'owning_organization_id' IS NOT NULL
+                           AND payload ->> 'site_id' IS NOT NULL
+                           AND payload ->> 'device_id' IS NOT NULL)::text
+    FROM telemetry_runtime.telemetry_history_outbox
+    WHERE payload ->> 'source_partition' LIKE 'tb-ticket-04%'
+  `);
+  if (report.assertions.historyOutbox !== '9|9|0|8') {
+    throw new Error(`unexpected history outbox state ${report.assertions.historyOutbox}`);
   }
   report.assertions.coverageRecovery = psql(`
     SELECT available::text || '|' || source_revision::text || '|' || continuous_since::text

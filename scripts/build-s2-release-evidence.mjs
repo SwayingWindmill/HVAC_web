@@ -41,8 +41,8 @@ if (requireFormal) {
   if (capacity.repositorySha !== repositorySha || capacity.wallClockAttestation?.repositorySha !== repositorySha) {
     throw new Error('formal capacity evidence is not bound to the release repository SHA');
   }
-  if (!Array.isArray(imageReport.images) || imageReport.images.length !== 2 || !imageReport.images.every((image) => image.formalReleaseEligible === true && image.provenance === 'buildkit-mode-max' && image.githubAttestation === 'published')) {
-    throw new Error('formal release evidence requires formally attested runtime and migrator images');
+  if (!Array.isArray(imageReport.images) || imageReport.images.length !== 3 || !imageReport.images.every((image) => image.formalReleaseEligible === true && image.provenance === 'buildkit-mode-max' && image.githubAttestation === 'published')) {
+    throw new Error('formal release evidence requires formally attested runtime, history projector, and migrator images');
   }
   if (!imageReport.images.every((image) => image.repositorySha === repositorySha)) {
     throw new Error('formal image evidence is not bound to the release repository SHA');

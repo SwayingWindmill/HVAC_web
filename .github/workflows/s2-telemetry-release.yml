@@ -55,6 +55,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run s2:ticket-11
+      - run: npm run s2:history:check
       - run: npm run s2:shadow-routing:compare
       - run: npm run s2:shadow-routing:harness
       - name: Record shadow comparison release evidence
@@ -124,6 +125,32 @@ jobs:
         with:
           name: s2-release-input-postgres
           path: out/s2-release-evidence/postgres-integration-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  history-integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.12"
+          cache: true
+          cache-dependency-path: |
+            "**/go.sum"
+            go.work.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.22.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run s2:history:integration
+      - name: Record ClickHouse history integration evidence
+        run: node scripts/write-s2-release-report.mjs --name=telemetry-history-report.json --kind=clickhouse-history-integration --commands=s2:history:integration --sources=out/s2-history/clickhouse-integration.json --details='{"postgresRuntimeAuthority":true,"clickHouseHistoryAuthority":true,"transactionalOutbox":true,"retryDeduplicated":true,"hourlyRollupVerified":true}'
+      - uses: actions/upload-artifact@v6
+        with:
+          name: s2-release-input-history
+          path: out/s2-release-evidence/telemetry-history-report.json
           if-no-files-found: error
           retention-days: 14
 
@@ -219,6 +246,8 @@ jobs:
         include:
           - name: telemetry-runtime
             dockerfile: deploy/s2/images/telemetry-runtime.Dockerfile
+          - name: telemetry-history-projector
+            dockerfile: deploy/s2/images/telemetry-history-projector.Dockerfile
           - name: telemetry-runtime-migrator
             dockerfile: deploy/s2/images/telemetry-runtime-migrator.Dockerfile
     steps:
@@ -366,7 +395,7 @@ jobs:
           retention-days: 14
 
   release-evidence:
-    needs: [contracts-and-static, security-negative, postgres-integration, transport-integration, capacity-and-failure, browser-real-mode, production-images, kind-rollout-rollback]
+    needs: [contracts-and-static, security-negative, postgres-integration, history-integration, transport-integration, capacity-and-failure, browser-real-mode, production-images, kind-rollout-rollback]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -387,7 +416,7 @@ jobs:
           merge-multiple: true
       - run: node scripts/merge-s2-image-evidence.mjs
       - name: Record blocking workflow jobs
-        run: node scripts/write-s2-release-report.mjs --name=workflow-jobs.json --kind=workflow-jobs --commands=s2:telemetry-release --details='{"jobs":["contracts-and-static","security-negative","postgres-integration","transport-integration","capacity-and-failure","browser-real-mode","production-images","kind-rollout-rollback"],"allBlocking":true}'
+        run: node scripts/write-s2-release-report.mjs --name=workflow-jobs.json --kind=workflow-jobs --commands=s2:telemetry-release --details='{"jobs":["contracts-and-static","security-negative","postgres-integration","history-integration","transport-integration","capacity-and-failure","browser-real-mode","production-images","kind-rollout-rollback"],"allBlocking":true}'
       - name: Build and verify offline evidence bundle
         shell: bash
         run: |

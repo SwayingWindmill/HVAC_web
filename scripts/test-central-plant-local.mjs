@@ -15,6 +15,7 @@ const root = resolve(process.cwd());
 const adapterTemplate = JSON.parse(await readFile(resolve(root, 'services/thingsboard-telemetry-adapter/configs/central-plant.local.example.json'), 'utf8'));
 const thingsBoardCompose = await readFile(resolve(root, 'infra/central-plant-local/thingsboard.compose.yaml'), 'utf8');
 const realtimeCompose = await readFile(resolve(root, 'infra/central-plant-local/realtime.compose.yaml'), 'utf8');
+const s2Compose = await readFile(resolve(root, 'infra/s2-telemetry/compose.yaml'), 'utf8');
 const topology = await readFile(resolve(root, 'scripts/central-plant-local-topology.mjs'), 'utf8');
 const routeOwnershipSource = JSON.parse(await readFile(resolve(root, 'contracts/ownership/route-ownership.v1.json'), 'utf8'));
 
@@ -91,11 +92,18 @@ test('local topology stays isolated and fails closed around realtime and workloa
     'redis:7.4.2-alpine',
   ]) assert.ok(realtimeCompose.includes(marker));
   for (const marker of [
+    'clickhouse/clickhouse-server:26.3.12.3@sha256:1f7cd090d5c4e2b8bfe0ea5d8ae6125937e1d932c6371b4d25fbd6088829dc9c',
+    '127.0.0.1:${S2_CLICKHOUSE_HTTP_HOST_PORT:-58123}:8123',
+    './clickhouse/init:/docker-entrypoint-initdb.d:ro',
+  ]) assert.ok(s2Compose.includes(marker));
+  for (const marker of [
     "'spiffe://hvac.local/thingsboard-telemetry-adapter'",
     "'spiffe://hvac.local/centrifugo'",
     'await stop();',
     "['down', '--volumes', '--remove-orphans']",
     'ThingsBoard Telemetry Adapter',
+    'Telemetry History Projector',
+    'TELEMETRY_CLICKHOUSE_HTTP_URL',
     'HVAC Web Real',
   ]) assert.ok(topology.includes(marker), `topology is missing ${marker}`);
   assert.ok(topology.includes('buildGoBinaries(paths, goCache, quiet);'));

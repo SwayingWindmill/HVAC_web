@@ -4,8 +4,8 @@ import { resolve } from 'node:path';
 const root = resolve(process.cwd());
 const input = resolve(root, process.argv.find((value) => value.startsWith('--input='))?.slice(8) ?? 'out/s2-image-evidence');
 const outputDirectory = resolve(root, process.argv.find((value) => value.startsWith('--output='))?.slice(9) ?? 'out/s2-release-evidence');
-const files = (await readdir(input)).filter((name) => /^(telemetry-runtime|telemetry-runtime-migrator)\.json$/.test(name)).sort();
-if (files.length !== 2) throw new Error(`expected runtime and migrator image evidence, found ${files.length}`);
+const files = (await readdir(input)).filter((name) => /^(telemetry-runtime|telemetry-history-projector|telemetry-runtime-migrator)\.json$/.test(name)).sort();
+if (files.length !== 3) throw new Error(`expected runtime, history projector, and migrator image evidence, found ${files.length}`);
 const images = [];
 await mkdir(outputDirectory, { recursive: true });
 for (const file of files) {

@@ -55,6 +55,7 @@ func TestPostgresIngestEndToEnd(t *testing.T) {
 		t.Fatalf("accepted receipt=%#v", receipt)
 	}
 	assertObservationRow(t, admin, accepted.Position.EventID, "ACCEPTED", "GOOD", "WEBHOOK", true)
+	assertHistoryOutbox(t, admin, accepted.Position.EventID, "ACCEPTED", orgA, siteA, deviceA, true)
 	assertIngestRevision(t, admin, deviceA, 2, 2)
 	var latestValue string
 	var latestQuality string
@@ -127,6 +128,7 @@ WHERE device_id = $1::uuid AND telemetry_key = 'zone.temperature'
 		t.Fatalf("rejected=%#v", rejectedReceipt)
 	}
 	assertObservationRow(t, admin, rejected.Position.EventID, "REJECTED", "REJECTED", "PUSH", false)
+	assertHistoryOutbox(t, admin, rejected.Position.EventID, "REJECTED", orgA, siteA, deviceA, false)
 	assertIngestRevision(t, admin, deviceA, 3, 3)
 	var missingReason string
 	if err := admin.QueryRow(ctx, `
@@ -252,6 +254,7 @@ ORDER BY q.detected_at DESC LIMIT 1
 	if quarantinedValue != nil || strings.Contains(quarantineEvidence, "999.123") {
 		t.Fatalf("quarantine leaked raw telemetry: value=%v evidence=%s", quarantinedValue, quarantineEvidence)
 	}
+	assertHistoryOutbox(t, admin, missing.Position.EventID, "QUARANTINED", "", "", "", false)
 	assertIngestRevision(t, admin, deviceA, 7, 7)
 
 	coverageQuarantineAt := recentAt.Add(1500 * time.Millisecond)
@@ -374,6 +377,13 @@ ORDER BY business_revision LIMIT 1
 	if rollbackRows != 0 {
 		t.Fatalf("rollback observation rows=%d", rollbackRows)
 	}
+	var rollbackHistoryRows int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.telemetry_history_outbox WHERE payload ->> 'source_event_id' = $1`, rollbackCandidate.Position.EventID).Scan(&rollbackHistoryRows); err != nil {
+		t.Fatal(err)
+	}
+	if rollbackHistoryRows != 0 {
+		t.Fatalf("rollback history outbox rows=%d", rollbackHistoryRows)
+	}
 	var headOffset int64
 	if err := admin.QueryRow(ctx, `
 SELECT source_offset FROM telemetry_runtime.source_positions
@@ -430,6 +440,7 @@ func resetIngestState(t *testing.T, admin *pgxpool.Pool) {
 	t.Helper()
 	ctx := t.Context()
 	statements := []string{
+		`DELETE FROM telemetry_runtime.telemetry_history_outbox WHERE payload ->> 'source_partition' LIKE 'tb-ticket-04%'`,
 		`DELETE FROM telemetry_runtime.source_delivery_evidence WHERE source_partition LIKE 'tb-ticket-04%'`,
 		`DELETE FROM telemetry_runtime.ingest_quarantine WHERE detected_at >= '2026-07-24T00:00:00Z'`,
 		`DELETE FROM telemetry_runtime.presence_signals WHERE created_at >= '2026-07-24T00:00:00Z'`,
@@ -478,6 +489,35 @@ WHERE source_event_id = $1::uuid
 	}
 	if actualStatus != status || actualQuality != quality || actualSourcePath != sourcePath || (value != nil) != valuePresent {
 		t.Fatalf("observation=%s/%s/%s value=%v", actualStatus, actualQuality, actualSourcePath, value)
+	}
+}
+
+func assertHistoryOutbox(t *testing.T, admin *pgxpool.Pool, sourceEventID, status, organizationID, siteID, deviceID string, valuePresent bool) {
+	t.Helper()
+	var deliveryState, actualStatus string
+	var actualOrganizationID, actualSiteID, actualDeviceID, value *string
+	if err := admin.QueryRow(t.Context(), `
+SELECT delivery_state,
+       payload ->> 'acceptance_status',
+       payload ->> 'owning_organization_id',
+       payload ->> 'site_id',
+       payload ->> 'device_id',
+       COALESCE(payload ->> 'value_json', payload ->> 'value_number', payload ->> 'value_string', payload ->> 'value_boolean')
+FROM telemetry_runtime.telemetry_history_outbox
+WHERE payload ->> 'source_event_id' = $1
+`, sourceEventID).Scan(&deliveryState, &actualStatus, &actualOrganizationID, &actualSiteID, &actualDeviceID, &value); err != nil {
+		t.Fatal(err)
+	}
+	optionalMatches := func(actual *string, expected string) bool {
+		if expected == "" {
+			return actual == nil
+		}
+		return actual != nil && *actual == expected
+	}
+	if deliveryState != "PENDING" || actualStatus != status ||
+		!optionalMatches(actualOrganizationID, organizationID) || !optionalMatches(actualSiteID, siteID) || !optionalMatches(actualDeviceID, deviceID) ||
+		(value != nil) != valuePresent {
+		t.Fatalf("history outbox state=%s status=%s organization=%v site=%v device=%v value=%v", deliveryState, actualStatus, actualOrganizationID, actualSiteID, actualDeviceID, value)
 	}
 }
 
