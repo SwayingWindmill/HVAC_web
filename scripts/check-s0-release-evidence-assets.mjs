@@ -33,6 +33,7 @@ const openapiText = await readFile(resolve(root, 'contracts/http/platform-gatewa
 const ownership = JSON.parse(await readFile(resolve(root, 'contracts/ownership/data-ownership.v1.json'), 'utf8'));
 const routeOwnership = JSON.parse(await readFile(resolve(root, 'contracts/ownership/route-ownership.v1.json'), 'utf8'));
 const s2Ownership = JSON.parse(await readFile(resolve(root, 'contracts/ownership/s2-telemetry-ownership.v1.json'), 'utf8'));
+const s3Ownership = JSON.parse(await readFile(resolve(root, 'contracts/ownership/s3-command-ownership.v1.json'), 'utf8'));
 const s2ReleaseGates = JSON.parse(await readFile(resolve(root, 'deploy/s2/release-gates.v1.json'), 'utf8'));
 
 assert(matrix.schemaVersion === 1, 'acceptance matrix schemaVersion must be 1');
@@ -126,6 +127,19 @@ const acceptedS2OwnershipNames = new Set([
   's2-telemetry-transport-redis',
   'legacy-telemetry-timeseries',
 ]);
+assert(s3Ownership.activationStatus === 'expand-baseline', 'S3 ownership must remain an expand baseline');
+assert(s3Ownership.productionTrafficPercent === 0, 'S3 ownership must remain at zero production traffic');
+const acceptedS3OwnershipNames = new Set([
+  s3Ownership.authoritativeStore.schema,
+  'hvac.command.lifecycle.v1',
+  ...(s3Ownership.ownedResources ?? []).map((name) => name === 'capability-profile' ? 'command-capability-profile' : name),
+]);
+const registeredS3Resources = ownership.resources.filter((resource) => acceptedS3OwnershipNames.has(resource.name));
+assert(registeredS3Resources.length > 0, 'S3 ownership resources are missing from the data registry');
+assert(registeredS3Resources.every((resource) => resource.writer === s3Ownership.businessOwner), `S3 ownership resources have an unexpected writer: ${JSON.stringify(registeredS3Resources.filter((resource) => resource.writer !== s3Ownership.businessOwner))}`);
+const uncontractedS3Resources = ownership.resources.filter((resource) => resource.writer === s3Ownership.businessOwner && !acceptedS3OwnershipNames.has(resource.name));
+assert(uncontractedS3Resources.length === 0, `data registry contains S3 resources outside the S3 ownership contract: ${JSON.stringify(uncontractedS3Resources)}`);
+
 const allowedOwnershipNames = new Set([
   'gateway',
   'audit_ledger',
@@ -150,9 +164,10 @@ const allowedOwnershipNames = new Set([
   's1-migration-provenance',
   's1-migration-quarantine',
   ...acceptedS2OwnershipNames,
+  ...acceptedS3OwnershipNames,
 ]);
 const leakedOwnership = ownership.resources.filter((resource) => !allowedOwnershipNames.has(resource.name));
-assert(leakedOwnership.length === 0, `ownership registry contains resources outside the accepted S1/S2 baselines: ${JSON.stringify(leakedOwnership)}`);
+assert(leakedOwnership.length === 0, `ownership registry contains resources outside the accepted S1/S2/S3 baselines: ${JSON.stringify(leakedOwnership)}`);
 
 await mkdir(outputRoot, { recursive: true });
 const scopeAudit = {
@@ -164,6 +179,7 @@ const scopeAudit = {
   leakedPublicPaths: [],
   allowedOwnershipResources: [...allowedOwnershipNames].sort(),
   acceptedS2ExpandBaselineResources: [...acceptedS2OwnershipNames].sort(),
+  acceptedS3ExpandBaselineResources: [...acceptedS3OwnershipNames].sort(),
   leakedOwnershipResources: [],
 };
 await writeFile(resolve(outputRoot, 'scope-audit-report.json'), `${JSON.stringify(scopeAudit, null, 2)}\n`);
