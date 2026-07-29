@@ -139,7 +139,7 @@ try {
     SELECT count(*)::text || '|'
       || count(*) FILTER (WHERE delivery_state = 'PENDING')::text || '|'
       || count(*) FILTER (WHERE payload ->> 'acceptance_status' <> 'ACCEPTED'
-                           AND COALESCE(payload -> 'value_json', payload -> 'value_number', payload -> 'value_string', payload -> 'value_boolean') IS NOT NULL)::text || '|'
+                           AND COALESCE(payload ->> 'value_json', payload ->> 'value_number', payload ->> 'value_string', payload ->> 'value_boolean') IS NOT NULL)::text || '|'
       || count(*) FILTER (WHERE payload ->> 'owning_organization_id' IS NOT NULL
                            AND payload ->> 'site_id' IS NOT NULL
                            AND payload ->> 'device_id' IS NOT NULL)::text
