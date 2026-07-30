@@ -35,6 +35,7 @@ const (
 	testSiteA2        = "018f1e00-1000-7000-8000-000000000002"
 	testEquipmentA1   = "018f1e00-3000-7000-8000-000000000001"
 	testDeviceA1      = "018f1e00-4000-7000-8000-000000000001"
+	testBindingA1     = "018f1e00-5000-7000-8000-000000000001"
 )
 
 type countingGrantStatusProvider struct {
@@ -56,6 +57,7 @@ type fakeRegistryStore struct {
 	equipmentItem Equipment
 	devices       PageResult[Device]
 	device        Device
+	bindings      PageResult[DeviceBinding]
 	err           error
 	lastClaims    registryauth.GrantClaims
 	lastPage      PageRequest
@@ -93,6 +95,10 @@ func (store *fakeRegistryStore) ListDevices(_ context.Context, claims registryau
 func (store *fakeRegistryStore) GetDevice(_ context.Context, claims registryauth.GrantClaims, id string) (Device, error) {
 	store.lastClaims, store.lastID = claims, id
 	return store.device, store.err
+}
+func (store *fakeRegistryStore) ListDeviceBindings(_ context.Context, claims registryauth.GrantClaims, id string, page PageRequest) (PageResult[DeviceBinding], error) {
+	store.lastClaims, store.lastID, store.lastPage = claims, id, page
+	return store.bindings, store.err
 }
 
 func TestServerListsOrganizationsAndReturnsBoundCursor(t *testing.T) {
@@ -133,6 +139,7 @@ func TestServerRoutesAllRegistryReadsThroughConcreteGrantActions(t *testing.T) {
 		equipmentItem: Equipment{ID: testEquipmentA1},
 		devices:       PageResult[Device]{Items: []Device{}},
 		device:        Device{ID: testDeviceA1},
+		bindings:      PageResult[DeviceBinding]{Items: []DeviceBinding{{ID: testBindingA1}}},
 	}
 	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
 	tests := []struct {
@@ -145,6 +152,7 @@ func TestServerRoutesAllRegistryReadsThroughConcreteGrantActions(t *testing.T) {
 		{RegistryPathPrefix + "sites/" + testSiteA1 + "/equipment", registryauth.ActionEquipmentList},
 		{RegistryPathPrefix + "equipment/" + testEquipmentA1, registryauth.ActionEquipmentRead},
 		{RegistryPathPrefix + "sites/" + testSiteA1 + "/devices", registryauth.ActionDeviceList},
+		{RegistryPathPrefix + "sites/" + testSiteA1 + "/device-bindings", registryauth.ActionDeviceBindingList},
 		{RegistryPathPrefix + "devices/" + testDeviceA1, registryauth.ActionDeviceRead},
 	}
 	for _, test := range tests {

@@ -61,6 +61,7 @@ type publicRegistryRoute struct {
 	template     string
 	internalPath string
 	action       registryauth.Action
+	scopeID      string
 	list         bool
 }
 
@@ -175,6 +176,16 @@ func (h *handler) ListSiteDevices(writer http.ResponseWriter, request *http.Requ
 		template:     platformapi.ListSiteDevicesPathTemplate,
 		internalPath: "/internal/v1/registry/sites/" + siteID + "/devices",
 		action:       registryauth.ActionDeviceList,
+		list:         true,
+	}, params)
+}
+
+func (h *handler) ListSiteDeviceBindings(writer http.ResponseWriter, request *http.Request, siteID string, params platformapi.ListRegistryParams) {
+	h.serveRegistry(writer, request, publicRegistryRoute{
+		template:     platformapi.ListSiteDeviceBindingsPathTemplate,
+		internalPath: "/internal/v1/registry/sites/" + siteID + "/device-bindings",
+		action:       registryauth.ActionDeviceBindingList,
+		scopeID:      siteID,
 		list:         true,
 	}, params)
 }
@@ -495,7 +506,7 @@ func (h *handler) decodeRegistryBackendResponse(owner string, response *http.Res
 	}
 	result := registryBackendResult{owner: owner, status: response.StatusCode, bodySHA256: sha256Hex(raw)}
 	if response.StatusCode == http.StatusOK {
-		canonical, err := canonicalRegistrySuccess(route.action, raw)
+		canonical, err := canonicalRegistrySuccess(route.action, route.scopeID, raw)
 		if err != nil {
 			return invalidRegistryResult(owner, result.bodySHA256)
 		}
@@ -671,6 +682,7 @@ func matchPublicRegistryRoute(path string) (publicRegistryRoute, string, bool) {
 		{platformapi.ListSiteEquipmentPathTemplate, "{siteId}", registryauth.ActionEquipmentList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/equipment" }, true},
 		{platformapi.GetEquipmentPathTemplate, "{equipmentId}", registryauth.ActionEquipmentRead, func(id string) string { return "/internal/v1/registry/equipment/" + id }, false},
 		{platformapi.ListSiteDevicesPathTemplate, "{siteId}", registryauth.ActionDeviceList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/devices" }, true},
+		{platformapi.ListSiteDeviceBindingsPathTemplate, "{siteId}", registryauth.ActionDeviceBindingList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/device-bindings" }, true},
 		{platformapi.GetDevicePathTemplate, "{deviceId}", registryauth.ActionDeviceRead, func(id string) string { return "/internal/v1/registry/devices/" + id }, false},
 	}
 	for _, pattern := range patterns {
@@ -678,7 +690,7 @@ func matchPublicRegistryRoute(path string) (publicRegistryRoute, string, bool) {
 		if !ok {
 			continue
 		}
-		return publicRegistryRoute{template: pattern.template, internalPath: pattern.internal(id), action: pattern.action, list: pattern.list}, id, true
+		return publicRegistryRoute{template: pattern.template, internalPath: pattern.internal(id), action: pattern.action, scopeID: id, list: pattern.list}, id, true
 	}
 	return publicRegistryRoute{}, "", false
 }
@@ -718,6 +730,8 @@ func dispatchRegistryRoute(h *handler, writer http.ResponseWriter, request *http
 		h.GetEquipment(writer, request, id)
 	case registryauth.ActionDeviceList:
 		h.ListSiteDevices(writer, request, id, params)
+	case registryauth.ActionDeviceBindingList:
+		h.ListSiteDeviceBindings(writer, request, id, params)
 	case registryauth.ActionDeviceRead:
 		h.GetDevice(writer, request, id)
 	default:
@@ -725,7 +739,7 @@ func dispatchRegistryRoute(h *handler, writer http.ResponseWriter, request *http
 	}
 }
 
-func canonicalRegistrySuccess(action registryauth.Action, raw []byte) ([]byte, error) {
+func canonicalRegistrySuccess(action registryauth.Action, scopeID string, raw []byte) ([]byte, error) {
 	switch action {
 	case registryauth.ActionOrganizationList:
 		return decodeCanonical[platformapi.OrganizationCollection](raw, validateOrganizationCollection)
@@ -741,6 +755,10 @@ func canonicalRegistrySuccess(action registryauth.Action, raw []byte) ([]byte, e
 		return decodeCanonical[platformapi.Equipment](raw, validateEquipment)
 	case registryauth.ActionDeviceList:
 		return decodeCanonical[platformapi.DeviceCollection](raw, validateDeviceCollection)
+	case registryauth.ActionDeviceBindingList:
+		return decodeCanonical[platformapi.DeviceBindingCollection](raw, func(value platformapi.DeviceBindingCollection) error {
+			return validateDeviceBindingCollection(value, scopeID)
+		})
 	case registryauth.ActionDeviceRead:
 		return decodeCanonical[platformapi.Device](raw, validateDevice)
 	default:
@@ -797,6 +815,21 @@ func validateDeviceCollection(value platformapi.DeviceCollection) error {
 	return validateNextCursor(value.NextCursor)
 }
 
+func validateDeviceBindingCollection(value platformapi.DeviceBindingCollection, expectedSiteID string) error {
+	if !isLowerUUIDv7(expectedSiteID) {
+		return errors.New("invalid DeviceBinding request scope")
+	}
+	for _, item := range value.Items {
+		if err := validateDeviceBinding(item); err != nil {
+			return err
+		}
+		if item.SiteID != expectedSiteID {
+			return errors.New("DeviceBinding response escaped requested Site scope")
+		}
+	}
+	return validateNextCursor(value.NextCursor)
+}
+
 func validateOrganization(value platformapi.Organization) error {
 	if !isLowerUUIDv7(value.ID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !oneOf(value.Status, "ACTIVE", "SUSPENDED", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
 		return errors.New("invalid Organization response")
@@ -821,6 +854,17 @@ func validateEquipment(value platformapi.Equipment) error {
 func validateDevice(value platformapi.Device) error {
 	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.OwningOrganizationID) || !isLowerUUIDv7(value.SiteID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.DeviceType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
 		return errors.New("invalid Device response")
+	}
+	return nil
+}
+
+func validateDeviceBinding(value platformapi.DeviceBinding) error {
+	invalidIdentity := !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.OwningOrganizationID) || !isLowerUUIDv7(value.SiteID) || !isLowerUUIDv7(value.DeviceID) || !isLowerUUIDv7(value.EquipmentID)
+	invalidLifecycle := !validRegistryString(value.BindingRole, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED")
+	invalidValidity := !validRegistryInstant(value.ValidFrom) || (value.ValidTo != nil && !validRegistryInstant(*value.ValidTo))
+	invalidRevision := value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt)
+	if invalidIdentity || invalidLifecycle || invalidValidity || invalidRevision {
+		return errors.New("invalid DeviceBinding response")
 	}
 	return nil
 }

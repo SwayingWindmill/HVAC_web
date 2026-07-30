@@ -32,6 +32,7 @@ const (
 	ListSiteEquipmentPathTemplate         = "__SITE_EQUIPMENT_PATH__"
 	GetEquipmentPathTemplate              = "__EQUIPMENT_PATH__"
 	ListSiteDevicesPathTemplate           = "__SITE_DEVICES_PATH__"
+	ListSiteDeviceBindingsPathTemplate    = "__SITE_DEVICE_BINDINGS_PATH__"
 	GetDevicePathTemplate                 = "__DEVICE_PATH__"
 )
 
@@ -252,6 +253,12 @@ type DeviceCollection struct {
 	HasMore    bool     `json:"hasMore"`
 }
 
+type DeviceBindingCollection struct {
+	Items      []DeviceBinding `json:"items"`
+	NextCursor *string         `json:"nextCursor"`
+	HasMore    bool            `json:"hasMore"`
+}
+
 type FieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
@@ -302,6 +309,7 @@ type RegistryServerInterface interface {
 	ListSiteEquipment(http.ResponseWriter, *http.Request, string, ListRegistryParams)
 	GetEquipment(http.ResponseWriter, *http.Request, string)
 	ListSiteDevices(http.ResponseWriter, *http.Request, string, ListRegistryParams)
+	ListSiteDeviceBindings(http.ResponseWriter, *http.Request, string, ListRegistryParams)
 	GetDevice(http.ResponseWriter, *http.Request, string)
 }
 
@@ -420,6 +428,15 @@ func (c *Client) ListSiteDevices(ctx context.Context, siteID string, params *Lis
 		return nil, err
 	}
 	return doJSON[DeviceCollection](ctx, c.httpClient, http.MethodGet, endpoint, "", nil)
+}
+
+func (c *Client) ListSiteDeviceBindings(ctx context.Context, siteID string, params *ListRegistryParams) (*Response[DeviceBindingCollection], error) {
+	path := strings.Replace(ListSiteDeviceBindingsPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	endpoint, err := withListQuery(c.baseURL+path, params)
+	if err != nil {
+		return nil, err
+	}
+	return doJSON[DeviceBindingCollection](ctx, c.httpClient, http.MethodGet, endpoint, "", nil)
 }
 
 func (c *Client) GetDevice(ctx context.Context, deviceID string) (*Response[Device], error) {

@@ -160,40 +160,92 @@ func evaluateRegistryAuthorization(ctx context.Context, store AuthorizationStore
 	deniedSites := map[string]struct{}{}
 	allowReason := registryauth.ReasonCode("")
 
-	for _, binding := range facts.RoleBindings {
-		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.OrganizationID != request.ActingOrganizationID || !actionsAllow(binding.Actions, request.Action) || !bindingEffectAllows(binding.Effect) {
-			continue
+	if request.Action == registryauth.ActionDeviceBindingList {
+		organizationActions := []registryauth.Action{}
+		roleSiteActions := map[string][]registryauth.Action{}
+		roleSiteOwners := map[string]string{}
+		for _, binding := range facts.RoleBindings {
+			if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.OrganizationID != request.ActingOrganizationID || !bindingEffectAllows(binding.Effect) {
+				continue
+			}
+			if binding.SiteID == "" {
+				organizationActions = append(organizationActions, binding.Actions...)
+				continue
+			}
+			roleSiteActions[binding.SiteID] = append(roleSiteActions[binding.SiteID], binding.Actions...)
+			roleSiteOwners[binding.SiteID] = binding.OrganizationID
 		}
-		if binding.SiteID == "" {
-			allowedOrganizations[binding.OrganizationID] = struct{}{}
+		if actionsAllow(organizationActions, request.Action) {
+			allowedOrganizations[request.ActingOrganizationID] = struct{}{}
 			allowReason = registryauth.ReasonAllowOrganizationRole
-			continue
 		}
-		if request.Action.SiteScoped() {
-			allowedSites[binding.SiteID] = struct{}{}
-			allowedSiteOwners[binding.SiteID] = binding.OrganizationID
+		for siteID, siteActions := range roleSiteActions {
+			if !actionsAllow(combineRegistryActions(organizationActions, siteActions), request.Action) {
+				continue
+			}
+			allowedSites[siteID] = struct{}{}
+			allowedSiteOwners[siteID] = roleSiteOwners[siteID]
 			if allowReason == "" {
 				allowReason = registryauth.ReasonAllowSiteRole
 			}
 		}
-	}
 
-	if request.Action.SiteScoped() {
+		siteBindingActions := map[string][]registryauth.Action{}
+		siteBindingOwners := map[string]string{}
 		for _, binding := range facts.SiteBindings {
-			if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.ActingOrganizationID != request.ActingOrganizationID || !actionsAllow(binding.Actions, request.Action) || !bindingEffectAllows(binding.Effect) {
+			if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.ActingOrganizationID != request.ActingOrganizationID || !bindingEffectAllows(binding.Effect) {
 				continue
 			}
-			allowedSites[binding.SiteID] = struct{}{}
-			allowedSiteOwners[binding.SiteID] = binding.OwningOrganizationID
+			siteBindingActions[binding.SiteID] = append(siteBindingActions[binding.SiteID], binding.Actions...)
+			siteBindingOwners[binding.SiteID] = binding.OwningOrganizationID
+		}
+		for siteID, siteActions := range siteBindingActions {
+			combined := combineRegistryActions(organizationActions, roleSiteActions[siteID], siteActions)
+			if !actionsAllow(combined, request.Action) {
+				continue
+			}
+			allowedSites[siteID] = struct{}{}
+			allowedSiteOwners[siteID] = siteBindingOwners[siteID]
 			if allowReason == "" {
 				allowReason = registryauth.ReasonAllowSiteBinding
+			}
+		}
+	} else {
+		for _, binding := range facts.RoleBindings {
+			if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.OrganizationID != request.ActingOrganizationID || !actionsAllow(binding.Actions, request.Action) || !bindingEffectAllows(binding.Effect) {
+				continue
+			}
+			if binding.SiteID == "" {
+				allowedOrganizations[binding.OrganizationID] = struct{}{}
+				allowReason = registryauth.ReasonAllowOrganizationRole
+				continue
+			}
+			if request.Action.SiteScoped() {
+				allowedSites[binding.SiteID] = struct{}{}
+				allowedSiteOwners[binding.SiteID] = binding.OrganizationID
+				if allowReason == "" {
+					allowReason = registryauth.ReasonAllowSiteRole
+				}
+			}
+		}
+
+		if request.Action.SiteScoped() {
+			for _, binding := range facts.SiteBindings {
+				if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.ActingOrganizationID != request.ActingOrganizationID || !actionsAllow(binding.Actions, request.Action) || !bindingEffectAllows(binding.Effect) {
+					continue
+				}
+				allowedSites[binding.SiteID] = struct{}{}
+				allowedSiteOwners[binding.SiteID] = binding.OwningOrganizationID
+				if allowReason == "" {
+					allowReason = registryauth.ReasonAllowSiteBinding
+				}
 			}
 		}
 	}
 
 	explicitDenyMatched := false
 	for _, binding := range facts.RoleBindings {
-		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.OrganizationID != request.ActingOrganizationID || !actionsAllow(binding.Actions, request.Action) || binding.Effect != BindingEffectDeny {
+		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.OrganizationID != request.ActingOrganizationID || !actionsDeny(binding.Actions, request.Action) || binding.Effect != BindingEffectDeny {
 			continue
 		}
 		explicitDenyMatched = true
@@ -202,7 +254,7 @@ func evaluateRegistryAuthorization(ctx context.Context, store AuthorizationStore
 		deniedOrganizations[request.ActingOrganizationID] = struct{}{}
 	}
 	for _, binding := range facts.SiteBindings {
-		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.ActingOrganizationID != request.ActingOrganizationID || !actionsAllow(binding.Actions, request.Action) || binding.Effect != BindingEffectDeny {
+		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.ActingOrganizationID != request.ActingOrganizationID || !actionsDeny(binding.Actions, request.Action) || binding.Effect != BindingEffectDeny {
 			continue
 		}
 		explicitDenyMatched = true
@@ -210,7 +262,7 @@ func evaluateRegistryAuthorization(ctx context.Context, store AuthorizationStore
 		deniedSites[binding.SiteID] = struct{}{}
 	}
 	for _, deny := range facts.ExplicitDenies {
-		if deny.Status != FactStatusActive || !factEffective(deny.ValidFrom, deny.ValidTo, now) || !actionsAllow(deny.Actions, request.Action) {
+		if deny.Status != FactStatusActive || !factEffective(deny.ValidFrom, deny.ValidTo, now) || !actionsDeny(deny.Actions, request.Action) {
 			continue
 		}
 		if deny.ActingOrganizationID != "" && deny.ActingOrganizationID != request.ActingOrganizationID {
@@ -273,9 +325,45 @@ func factEffective(validFrom time.Time, validTo *time.Time, now time.Time) bool 
 	return validTo == nil || now.Before(*validTo)
 }
 
+func combineRegistryActions(groups ...[]registryauth.Action) []registryauth.Action {
+	total := 0
+	for _, group := range groups {
+		total += len(group)
+	}
+	combined := make([]registryauth.Action, 0, total)
+	for _, group := range groups {
+		combined = append(combined, group...)
+	}
+	return combined
+}
+
 func actionsAllow(actions []registryauth.Action, requested registryauth.Action) bool {
+	if requested == registryauth.ActionDeviceBindingList {
+		broadRead := hasRegistryAction(actions, registryauth.ActionRegistryRead)
+		explicitRead := hasRegistryAction(actions, registryauth.ActionDeviceBindingList)
+		constituentReads := hasRegistryAction(actions, registryauth.ActionEquipmentList) && hasRegistryAction(actions, registryauth.ActionDeviceList)
+		return broadRead || explicitRead || constituentReads
+	}
 	for _, action := range actions {
 		if registryauth.ActionAllows(action, requested) {
+			return true
+		}
+	}
+	return false
+}
+
+func actionsDeny(actions []registryauth.Action, requested registryauth.Action) bool {
+	if requested == registryauth.ActionDeviceBindingList {
+		broadDeny := hasRegistryAction(actions, registryauth.ActionRegistryRead) || hasRegistryAction(actions, registryauth.ActionDeviceBindingList)
+		constituentDeny := hasRegistryAction(actions, registryauth.ActionEquipmentList) || hasRegistryAction(actions, registryauth.ActionDeviceList)
+		return broadDeny || constituentDeny
+	}
+	return actionsAllow(actions, requested)
+}
+
+func hasRegistryAction(actions []registryauth.Action, requested registryauth.Action) bool {
+	for _, action := range actions {
+		if action == requested {
 			return true
 		}
 	}

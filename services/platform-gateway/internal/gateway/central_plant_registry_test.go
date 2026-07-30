@@ -22,7 +22,7 @@ func TestCanonicalRegistrySuccessAcceptsCentralPlantSite(t *testing.T) {
 		"nextCursor":null,
 		"hasMore":false
 	}`)
-	if _, err := canonicalRegistrySuccess(registryauth.ActionSiteList, raw); err != nil {
+	if _, err := canonicalRegistrySuccess(registryauth.ActionSiteList, "", raw); err != nil {
 		t.Fatalf("canonicalRegistrySuccess() error = %v", err)
 	}
 }

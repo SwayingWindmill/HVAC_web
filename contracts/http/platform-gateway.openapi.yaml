@@ -231,6 +231,17 @@
         }
       }
     },
+    "/api/v1/sites/{siteId}/device-bindings": {
+      "get": {
+        "operationId": "listSiteDeviceBindings",
+        "summary": "List visible Device-to-Equipment bindings at a Site",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/PageLimit" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "responses": {
+          "200": { "description": "Authorized DeviceBinding page.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceBindingCollection" } } } },
+          "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/devices/{deviceId}": {
       "get": {
         "operationId": "getDevice",
@@ -291,6 +302,7 @@
       "SiteCollection": { "type": "object", "additionalProperties": false, "required": ["items", "nextCursor", "hasMore"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Site" } }, "nextCursor": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueCursor" }, { "type": "null" }] }, "hasMore": { "type": "boolean" } } },
       "EquipmentCollection": { "type": "object", "additionalProperties": false, "required": ["items", "nextCursor", "hasMore"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Equipment" } }, "nextCursor": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueCursor" }, { "type": "null" }] }, "hasMore": { "type": "boolean" } } },
       "DeviceCollection": { "type": "object", "additionalProperties": false, "required": ["items", "nextCursor", "hasMore"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Device" } }, "nextCursor": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueCursor" }, { "type": "null" }] }, "hasMore": { "type": "boolean" } } },
+      "DeviceBindingCollection": { "type": "object", "additionalProperties": false, "required": ["items", "nextCursor", "hasMore"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/DeviceBinding" } }, "nextCursor": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueCursor" }, { "type": "null" }] }, "hasMore": { "type": "boolean" } } },
       "FieldError": { "type": "object", "additionalProperties": false, "required": ["field", "message"], "properties": { "field": { "type": "string" }, "message": { "type": "string" } } },
       "ProblemDetails": { "type": "object", "additionalProperties": false, "required": ["type", "title", "status", "detail", "instance", "code", "traceId", "retryable"], "properties": { "type": { "type": "string", "format": "uri-reference" }, "title": { "type": "string" }, "status": { "type": "integer", "minimum": 400, "maximum": 599 }, "detail": { "type": "string" }, "instance": { "type": "string" }, "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]+$", "x-stable-codes": ["RESOURCE_NOT_FOUND", "CURSOR_INVALID", "REGISTRY_UNAVAILABLE", "REGISTRY_TIMEOUT", "MAPPING_INVALID", "MAPPING_QUARANTINED"] }, "traceId": { "type": "string", "pattern": "^[a-f0-9]{32}$" }, "retryable": { "type": "boolean" }, "fieldErrors": { "type": "array", "items": { "$ref": "#/components/schemas/FieldError" } } } }
     }
