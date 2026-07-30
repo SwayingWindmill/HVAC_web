@@ -142,6 +142,7 @@ function createGatewayFixture() {
     sessionLifetimeMs: 60 * 60 * 1000,
     loginMode: 'success',
     requests: [],
+    energyQueries: [],
     loginReturnTargets: [],
     pendingPrincipalResponses: [],
   };
@@ -221,6 +222,44 @@ function createGatewayFixture() {
         items: state.sites.map((site) => ({ ...site })),
         nextCursor: null,
         hasMore: false,
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/v1/analytics/energy-series') {
+      if (request.headers[stateChangeHeader] !== fixtureCapability) {
+        writeJson(response, 403, problem(403, 'CSRF_VALIDATION_FAILED', 'The state-change capability was invalid.', false));
+        return;
+      }
+      const chunks = [];
+      request.on('data', (chunk) => chunks.push(chunk));
+      request.on('end', () => {
+        let query;
+        try {
+          query = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        } catch {
+          writeJson(response, 400, problem(400, 'INVALID_REQUEST', 'The energy query was not valid JSON.', false));
+          return;
+        }
+        state.energyQueries.push(query);
+        if (query.organizationId !== actingOrganizationId || query.siteId !== siteBId) {
+          writeJson(response, 403, problem(403, 'ENERGY_SCOPE_FORBIDDEN', 'The requested energy scope was not authorized.', false));
+          return;
+        }
+        const periodStart = new Date(Date.parse(query.to) - 24 * 60 * 60 * 1000).toISOString();
+        writeJson(response, 200, {
+          schemaVersion: 1,
+          points: [{ periodStart, periodEnd: query.to, energyKWh: 42.5 }],
+          metadata: {
+            requestedGranularity: query.granularity,
+            actualGranularity: query.granularity,
+            dataWatermark: query.to,
+            aggregateWatermark: query.to,
+            datasetRevision: 'rms-energy-revision-1',
+            partial: false,
+            qualitySummary: { valid: 1, suspect: 0, invalid: 0 },
+          },
+        });
       });
       return;
     }
@@ -635,6 +674,7 @@ try {
     siteName: document.querySelector('[data-testid="real-site-route-assets"]')?.textContent?.includes('Osaka Plant') ?? false,
     organization: document.querySelector('[data-testid="real-site-route-assets"]')?.textContent?.includes('${actingOrganizationId}') ?? false,
     assets: document.querySelector('[data-feature-id="site-assets"]')?.getAttribute('href'),
+    energy: document.querySelector('[data-feature-id="site-energy"]')?.getAttribute('href'),
     commands: document.querySelector('[data-feature-id="site-commands"]')?.getAttribute('href'),
     bigscreen: document.querySelector('[data-feature-id="site-bigscreen"]')?.getAttribute('href'),
     headerPrincipal: document.querySelector('[data-testid="real-shell-principal"]')?.textContent,
@@ -648,6 +688,7 @@ try {
   })`);
   assert(explicitSite.siteId === siteBId && explicitSite.siteName && explicitSite.organization, 'validated SiteContext was not rendered from Registry route data');
   assert(explicitSite.assets === `/sites/${siteBId}/assets`, 'Assets navigation escaped validated Site scope');
+  assert(explicitSite.energy === `/sites/${siteBId}/energy`, 'Energy navigation escaped validated Site scope');
   assert(explicitSite.commands === `/sites/${siteBId}/commands`, 'Commands navigation escaped validated Site scope');
   assert(explicitSite.bigscreen === `/sites/${siteBId}/bigscreen`, 'BigScreen navigation escaped validated Site scope');
   assert(explicitSite.headerPrincipal === 'RMS-03 Operator', 'trusted header did not use the Principal snapshot');
@@ -656,6 +697,29 @@ try {
   assert(explicitSite.realtimeText.includes('Idle — not subscribed') && !/global|platform health/i.test(explicitSite.realtimeText), 'realtime header overstated subscription health');
   assert(!/Demo switch|role switch|Alarm|Copilot|Mock AI/i.test(explicitSite.headerText), 'trusted header mounted a Mock global affordance');
   assert(explicitSite.focusedHeading, 'validated Site route did not restore focus to its heading');
+
+  await navigate(cdpClient, `${webURL}/sites/${siteBId}/energy`);
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-site-id') === '${siteBId}'`,
+    'validated explicit Site Energy route',
+  );
+  const energy = await evaluate(cdpClient, `({
+    pathname: location.pathname,
+    site: document.querySelector('[data-testid="real-site-route-energy"]')?.getAttribute('data-site-id'),
+    dashboardSite: document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-site-id'),
+    revision: document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-dataset-revision'),
+    state: document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-business-state'),
+    text: document.querySelector('[data-testid="real-energy-dashboard"]')?.textContent ?? '',
+    headerSite: document.querySelector('[data-testid="real-shell-site"]')?.textContent,
+    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-energy-dashboard"] h1'),
+  })`);
+  assert(energy.pathname === `/sites/${siteBId}/energy`, 'Energy route changed the validated Site URL');
+  assert(energy.site === siteBId && energy.dashboardSite === siteBId && energy.headerSite === 'Osaka Plant', 'Energy dashboard was not bound to the validated Site');
+  assert(energy.revision === 'rms-energy-revision-1' && energy.state === 'READY', 'Energy dashboard omitted authoritative revision or readiness state');
+  assert(energy.text.includes('42.5 kWh') && energy.text.includes('1 个已返回时段'), 'Energy dashboard omitted the returned aggregate');
+  assert(energy.focusedHeading, 'Energy dashboard did not restore focus after lazy loading');
+  recordScenario('site-energy');
 
   for (const leaf of ['commands', 'bigscreen']) {
     await navigate(cdpClient, `${webURL}/sites/${siteBId}/${leaf}`);
@@ -924,6 +988,13 @@ try {
     assert(request.headers[stateChangeHeader] === fixtureCapability, 'logout did not send the in-memory state-change capability');
     assert(request.headers.origin === webURL, `logout Origin was not the Real application origin: ${request.headers.origin}`);
   }
+  const energyRequests = fixture.state.requests.filter((entry) => entry.method === 'POST' && entry.path === '/api/v1/analytics/energy-series');
+  assert(energyRequests.length === 1, `expected one Energy query, got ${energyRequests.length}`);
+  assert(energyRequests[0].headers[stateChangeHeader] === fixtureCapability, 'Energy query did not send the in-memory state-change capability');
+  assert(energyRequests[0].headers.origin === webURL, `Energy query Origin was not the Real application origin: ${energyRequests[0].headers.origin}`);
+  assert(fixture.state.energyQueries.length === 1, `expected one parsed Energy query, got ${fixture.state.energyQueries.length}`);
+  assert(fixture.state.energyQueries[0].organizationId === actingOrganizationId, 'Energy query did not use the authenticated Organization');
+  assert(fixture.state.energyQueries[0].siteId === siteBId, 'Energy query did not use the validated Site');
   const forbiddenHeaders = fixture.state.requests.filter((entry) =>
     ['x-site-id', 'x-organization-id', 'x-role', 'x-admin', 'x-scope'].some((name) => name in entry.headers));
   assert(forbiddenHeaders.length === 0, `browser sent forbidden authorization headers: ${JSON.stringify(forbiddenHeaders)}`);

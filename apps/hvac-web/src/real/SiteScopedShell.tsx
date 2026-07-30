@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { Capability, Site } from '@/api/generated/platformGateway.gen';
 import { FocusHeading } from './FocusHeading';
 import { createIdleRealtimeStatus, realtimeStatusLabel } from './realtime-status';
@@ -8,6 +8,11 @@ import type { ProtectedScopeDraft, ProtectedScopeResource } from './protected-sc
 import type { RealRuntimeConfig } from './runtime-config';
 import type { ShellFailureView, ShellSnapshot } from './shell-runtime';
 import { siteRoute, type SiteContext, type SiteRoutingDecision } from './site-routing';
+
+const EnergyAnalytics = lazy(async () => {
+  const module = await import('./EnergyAnalytics');
+  return { default: module.EnergyAnalytics };
+});
 
 type RoutedSiteDecision = Exclude<SiteRoutingDecision, { state: 'PLATFORM_ROUTE' }>;
 
@@ -199,6 +204,11 @@ const SITE_ROUTE_COPY = {
     title: 'Assets',
     detail: 'Assets 路由已绑定到验证后的 SiteContext。资产数据仍由 Registry、设备与遥测域的权威接口负责。',
   },
+  energy: {
+    eyebrow: 'REAL MODE · SITE ENERGY',
+    title: 'Energy',
+    detail: 'Energy 路由只消费 Platform Gateway 的 Site 级权威分析接口，并保留水位、修订、质量和缺失数据语义。',
+  },
   commands: {
     eyebrow: 'REAL MODE · SITE COMMANDS',
     title: 'Commands',
@@ -254,6 +264,26 @@ function ReadySiteSurface({
   snapshot: ShellSnapshot;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
+  if (decision.route === 'energy') {
+    return (
+      <section
+        className="real-route-surface real-route-surface--energy"
+        data-testid="real-site-route-energy"
+        data-route-state="READY"
+        data-site-id={decision.context.site.id}
+        data-site-route="energy"
+      >
+        <Suspense fallback={(
+          <div className="real-shell-progress" role="status" aria-live="polite">
+            正在加载能源分析界面…
+          </div>
+        )}>
+          <EnergyAnalytics site={decision.context.site} principal={snapshot.principal!} />
+        </Suspense>
+      </section>
+    );
+  }
+
   const copy = SITE_ROUTE_COPY[decision.route];
   const realtime = snapshot.realtime ?? createIdleRealtimeStatus();
   return (
@@ -384,6 +414,7 @@ export function buildSiteNavigation(
   if (!effectiveCapabilities.includes('site.read')) return [];
   return [
     { id: 'site-assets', label: 'Assets', path: siteRoute(site, 'assets'), kind: 'link', degraded: false },
+    { id: 'site-energy', label: 'Energy', path: siteRoute(site, 'energy'), kind: 'link', degraded: false },
     { id: 'site-commands', label: 'Commands', path: siteRoute(site, 'commands'), kind: 'link', degraded: false },
     { id: 'site-bigscreen', label: 'BigScreen', path: siteRoute(site, 'bigscreen'), kind: 'link', degraded: false },
   ];
