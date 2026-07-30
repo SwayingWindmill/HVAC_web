@@ -39,7 +39,7 @@ Ticket identifiers are historical evidence, not permanent CI architecture. Durab
 | `s0-*` | `platform-contracts`, `platform-auth`, `platform-durability`, `platform-security`, `platform-release` |
 | `s1-ticket-*` | `registry-contracts`, `registry-postgres`, `registry-migration`, `registry-routing`, `registry-web` |
 | `s2-*` | `telemetry-contracts`, `telemetry-postgres`, `telemetry-realtime`, `telemetry-history`, `telemetry-web`, `telemetry-release` |
-| `s3-ticket-*` | `command-contracts`, `command-postgres`, `command-governance`, `command-dispatch`, `command-thingsboard`, `command-web`, `command-release` |
+| retired `s3-ticket-*` | `S3 Command Safety`, `S3 Command Authority`, `S3 Command API`, `S3 ThingsBoard Contract`, `S3 Command UX`, `S3 Command Certification` |
 
 ## Migration order
 
@@ -93,6 +93,8 @@ The first capability-consolidation slice replaces `S1 Ticket 01 Contract and Own
 The second capability-consolidation slice replaces S3 Tickets 02, 03, 05 and 07 with `S3 Command Authority`. The suite runs PostgreSQL authority, governance/dispatch and reported-state verification checks once, executes the shared command database integration once, then runs one Go test/vet union and one Lint/Build pass. Its evidence path is stable under `out/s3-command-authority`, and the PostgreSQL authority gate prevents the four retired workflow wrappers or Ticket 02 report path from returning.
 
 The third S3 slice replaces `S3 Ticket 09 Command Certification` with the stable `S3 Command Certification` workflow and `s3:certification:pr` command. Pull requests retain local-profile checks, target-runtime Go test/vet/build coverage, certification contract tests, target-image evidence tests, deterministic preflight and ownership validation. PostgreSQL command authority, TypeScript linting and the product build are no longer repeated because `S3 Command Authority` owns them. Signed images, SBOM, provenance, Trivy secret scanning, Cosign verification and the four-image candidate manifest remain restricted to `s3-v*` tags or manual certification runs. Static gates prevent the retired Ticket workflow/script and Ticket-scoped evidence path from returning.
+
+The final S3 topology slice renames the remaining Ticket 01, 04, 06 and 08 wrappers to `S3 Command Safety`, `S3 Command API`, `S3 ThingsBoard Contract` and `S3 Command UX`. The package entry points are now the six capability commands documented in the S3 implementation plan; obsolete Ticket 01–09 npm commands are removed. Every S3 workflow watches and executes `s3:topology:check`, which verifies stable names, self-trigger paths, capability commands, release-only image publication and capability-scoped evidence paths while rejecting any restored `s3-ticket-*` workflow or command.
 
 ### Phase 4: reusable setup
 

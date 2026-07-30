@@ -1,19 +1,19 @@
-name: S3 Ticket 01 Command Safety Baseline
+name: S3 ThingsBoard Contract
 
 on:
   pull_request:
     paths:
-      - '.github/workflows/s3-ticket-01.yml'
-      - 'contracts/http/s3-command-public.openapi.json'
+      - '.github/workflows/s3-thingsboard-contract.yml'
+      - 'scripts/check-s3-workflow-topology.mjs'
+      - 'contracts/thingsboard/**'
       - 'contracts/ownership/**'
       - 'deploy/s3/**'
-      - 'docs/adr/0006-s3-command-intent-attempt-safety.md'
       - 'docs/operations/s3-implementation-plan.md'
+      - 'infra/s3-thingsboard/**'
       - 'libs/commandmodel/**'
-      - 'services/command-service/**'
-      - 'services/command-dispatcher/**'
       - 'services/thingsboard-connector-control/**'
-      - 'scripts/check-s3-command-baseline.mjs'
+      - 'scripts/check-s3-thingsboard-connector.mjs'
+      - 'scripts/run-s3-thingsboard-local-tests.mjs'
       - 'scripts/check-ownership-registries.mjs'
       - 'go.work'
       - 'go.work.sum'
@@ -22,17 +22,17 @@ on:
   push:
     branches: [main]
     paths:
-      - '.github/workflows/s3-ticket-01.yml'
-      - 'contracts/http/s3-command-public.openapi.json'
+      - '.github/workflows/s3-thingsboard-contract.yml'
+      - 'scripts/check-s3-workflow-topology.mjs'
+      - 'contracts/thingsboard/**'
       - 'contracts/ownership/**'
       - 'deploy/s3/**'
-      - 'docs/adr/0006-s3-command-intent-attempt-safety.md'
       - 'docs/operations/s3-implementation-plan.md'
+      - 'infra/s3-thingsboard/**'
       - 'libs/commandmodel/**'
-      - 'services/command-service/**'
-      - 'services/command-dispatcher/**'
       - 'services/thingsboard-connector-control/**'
-      - 'scripts/check-s3-command-baseline.mjs'
+      - 'scripts/check-s3-thingsboard-connector.mjs'
+      - 'scripts/run-s3-thingsboard-local-tests.mjs'
       - 'scripts/check-ownership-registries.mjs'
       - 'go.work'
       - 'go.work.sum'
@@ -43,13 +43,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: s3-ticket-01-${{ github.workflow }}-${{ github.ref }}
+  group: s3-thingsboard-contract-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  command-safety-baseline:
+  local-thingsboard-contract:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -61,6 +61,12 @@ jobs:
           node-version: '22.22.0'
           cache: npm
       - run: npm ci
-      - run: npm run s3:ticket-01
-      - run: npm run lint
-      - run: npm run build
+      - run: npm run s3:topology:check
+      - run: npm run s3:thingsboard-contract
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: s3-thingsboard-contract-thingsboard-local-contract
+          path: out/s3-thingsboard-contract/thingsboard-local-contract.json
+          if-no-files-found: error
+          retention-days: 14

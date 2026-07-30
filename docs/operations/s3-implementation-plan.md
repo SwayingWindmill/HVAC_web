@@ -128,14 +128,11 @@ The public routes, production Connector credentials and real production Device c
 ## Verification commands
 
 ```bash
-npm run s3:ticket-01
-npm run s3:ticket-02
-npm run s3:ticket-03
-npm run s3:ticket-04
-npm run s3:ticket-05
-npm run s3:ticket-06
-npm run s3:ticket-07
-npm run s3:ticket-08
+npm run s3:command-safety
+npm run s3:command-authority
+npm run s3:command-api
+npm run s3:thingsboard-contract
+npm run s3:command-ux
 npm run s3:certification:pr
 ```
 
