@@ -3,7 +3,7 @@
   "info": {
     "title": "HVAC S2 Telemetry Public Contract",
     "version": "1.0.0",
-    "description": "Expand-baseline browser and service-caller contract for authoritative Device Observation Snapshots and realtime recovery. Production routing remains disabled until the rollout tickets."
+    "description": "Browser and service-caller contract for authoritative Device Observation Snapshots, realtime recovery, and bounded Device History product queries."
   },
   "servers": [{ "url": "/" }],
   "security": [
@@ -13,6 +13,7 @@
   "x-activation-status": "expand-baseline",
   "x-public-owner": "platform-gateway",
   "x-upstream-owner": "telemetry-runtime-service",
+  "x-product-query-owner": "telemetry-query-service",
   "x-contract-invariants": [
     "single-device-snapshot-is-coherent-at-one-business-revision",
     "snapshot-values-preserve-requested-key-order",
@@ -23,7 +24,10 @@
     "stale-missing-and-upstream-unavailable-are-explicit-data-states",
     "publication-revisions-are-contiguous-per-device",
     "recovery-failure-loads-an-authoritative-snapshot",
-    "real-mode-never-falls-back-to-mock-or-thingsboard-read-through"
+    "real-mode-never-falls-back-to-mock-or-thingsboard-read-through",
+    "device-history-public-requests-never-accept-organization-or-site-claims",
+    "device-history-authorization-binds-exact-device-keys-range-and-point-limit",
+    "device-history-is-numeric-accepted-observations-only"
   ],
   "x-client-forbidden-fields": [
     "organizationId",
@@ -43,7 +47,11 @@
     "maxBatchKeySelections": 2048,
     "maxSubscriptions": 100,
     "maxSubscriptionKeySelections": 2048,
-    "maxCursorCheckpoints": 100
+    "maxCursorCheckpoints": 100,
+    "maxHistoryKeys": 8,
+    "maxHistoryPointsPerKey": 500,
+    "maxHistoryRangeHours": 24,
+    "maxHistoryResponsePoints": 4000
   },
   "x-legacy-retirement": {
     "retire": [
@@ -161,6 +169,35 @@
           "default": { "$ref": "#/components/responses/Problem" }
         }
       }
+    },
+    "/api/v1/telemetry/device-history": {
+      "post": {
+        "operationId": "queryDeviceHistory",
+        "summary": "Read bounded numeric history for one authorized Device",
+        "parameters": [
+          { "$ref": "#/components/parameters/ConditionalCsrfToken" },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/DeviceHistoryRequest" } }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/DeviceHistory" },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "413": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" },
+          "502": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "504": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
     }
   },
   "components": {
@@ -232,6 +269,15 @@
           "Cache-Control": { "$ref": "#/components/headers/NoStore" }
         },
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RecoveryCursorCheckpointResponse" } } }
+      },
+      "DeviceHistory": {
+        "description": "Authorized bounded numeric Device History with explicit partial and watermark metadata.",
+        "headers": {
+          "X-Request-ID": { "$ref": "#/components/headers/RequestId" },
+          "traceparent": { "$ref": "#/components/headers/Traceparent" },
+          "Cache-Control": { "$ref": "#/components/headers/NoStore" }
+        },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceHistoryResponse" } } }
       },
       "Problem": {
         "description": "Stable public typed problem.",
@@ -505,6 +551,72 @@
         "properties": {
           "schemaVersion": { "type": "integer", "const": 1 },
           "items": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/components/schemas/RecoveryCursorCheckpointResult" } }
+        }
+      },
+      "HistoryInstant": { "type": "string", "format": "date-time", "description": "UTC timestamp emitted with a Z suffix." },
+      "DeviceHistoryQuality": { "type": "string", "enum": ["GOOD", "SUSPECT"] },
+      "DeviceHistoryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["deviceId", "keys", "from", "to", "maxPointsPerKey"],
+        "properties": {
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "keys": { "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": { "$ref": "#/components/schemas/TelemetryKey" } },
+          "from": { "$ref": "#/components/schemas/HistoryInstant" },
+          "to": { "$ref": "#/components/schemas/HistoryInstant" },
+          "maxPointsPerKey": { "type": "integer", "minimum": 1, "maximum": 500 }
+        }
+      },
+      "DeviceHistoryPoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["observationId", "sampledAt", "receivedAt", "value", "unit", "quality", "qualityReasons", "revision"],
+        "properties": {
+          "observationId": { "$ref": "#/components/schemas/UUIDv7" },
+          "sampledAt": { "$ref": "#/components/schemas/HistoryInstant" },
+          "receivedAt": { "$ref": "#/components/schemas/HistoryInstant" },
+          "value": { "type": "number" },
+          "unit": { "type": ["string", "null"], "maxLength": 64 },
+          "quality": { "$ref": "#/components/schemas/DeviceHistoryQuality" },
+          "qualityReasons": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]+$" } },
+          "revision": { "type": "integer", "format": "int64", "minimum": 0 }
+        }
+      },
+      "DeviceHistorySeries": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "points"],
+        "properties": {
+          "key": { "$ref": "#/components/schemas/TelemetryKey" },
+          "points": { "type": "array", "maxItems": 500, "items": { "$ref": "#/components/schemas/DeviceHistoryPoint" } }
+        }
+      },
+      "DeviceHistoryMetadata": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requestedFrom", "requestedTo", "dataWatermark", "datasetRevision", "partial", "maxPointsPerKey", "returnedPoints", "truncatedKeys"],
+        "properties": {
+          "requestedFrom": { "$ref": "#/components/schemas/HistoryInstant" },
+          "requestedTo": { "$ref": "#/components/schemas/HistoryInstant" },
+          "dataWatermark": { "oneOf": [{ "$ref": "#/components/schemas/HistoryInstant" }, { "type": "null" }] },
+          "datasetRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "partial": { "type": "boolean" },
+          "maxPointsPerKey": { "type": "integer", "minimum": 1, "maximum": 500 },
+          "returnedPoints": { "type": "integer", "minimum": 0, "maximum": 4000 },
+          "truncatedKeys": { "type": "array", "maxItems": 8, "uniqueItems": true, "items": { "$ref": "#/components/schemas/TelemetryKey" } }
+        }
+      },
+      "DeviceHistoryResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "owningOrganizationId", "siteId", "deviceId", "series", "metadata"],
+        "properties": {
+          "schemaVersion": { "type": "integer", "const": 1 },
+          "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "series": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/components/schemas/DeviceHistorySeries" } },
+          "metadata": { "$ref": "#/components/schemas/DeviceHistoryMetadata" }
         }
       },
       "FieldError": {

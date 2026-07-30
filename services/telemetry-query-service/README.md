@@ -18,8 +18,10 @@ Telemetry Runtime
                             -> Platform Gateway
 ```
 
-The Query Service reads no database directly. It calls Cube Core through an
-internal HTTP adapter and returns product-level DTOs.
+The Query Service exposes fixed product-level query contracts. Energy analytics
+calls Cube Core through an internal HTTP adapter. Bounded Device History uses a
+separate least-privilege ClickHouse reader for `telemetry_history.observations`;
+it never accepts arbitrary SQL, database names, table names or dimensions.
 
 ## Energy Series contract
 
@@ -45,6 +47,27 @@ The service:
 
 It does not ingest telemetry, own Presence/Freshness, write ClickHouse, construct
 energy intervals, execute commands or expose Cube directly to browsers.
+
+## Device History contract
+
+The bounded short-history route is:
+
+```text
+POST /internal/v1/telemetry/device-history
+```
+
+The public Gateway route is `POST /api/v1/telemetry/device-history`. Public
+requests contain only Device ID, telemetry keys, inclusive `from`, exclusive
+`to` and `maxPointsPerKey`; Organization and Site are derived from the
+authenticated Session and IAM exact-scope decision. The contract allows at most
+8 keys, 500 points per key, 4,000 points total and a 24-hour range.
+
+The fixed ClickHouse adapter reads only accepted finite numeric observations,
+orders results by key and sample time, applies an independent per-key limit and
+returns Quality, quality reasons, data watermark, dataset revision, partial
+state and truncated-key metadata. The `telemetry_query_history_reader` identity
+can select only `telemetry_history.observations` and cannot write history or read
+Analytics facts.
 
 ## Authoritative metadata
 
@@ -102,6 +125,8 @@ short-lived token and applies Organization/Site row-level access policy.
 | `QUERY_CUBE_ENDPOINT` | Cube origin, for example `http://cube:4000` |
 | `QUERY_CUBE_API_SECRET` | Minimum 32-byte HS256 key for short-lived internal Cube JWTs |
 | `QUERY_DATASET_REVISION` | Semantic/read-model schema revision prefix, for example `energy-interval:v1` |
+| `QUERY_HISTORY_CLICKHOUSE_ENDPOINT` | ClickHouse origin for bounded Device History |
+| `QUERY_HISTORY_DATASET_REVISION` | Raw-history schema revision prefix, for example `telemetry-history:v1` |
 
 Optional variables:
 
@@ -112,6 +137,11 @@ Optional variables:
 | `QUERY_ALLOWED_WORKLOAD_SPIFFE` | `spiffe://hvac.local/platform-gateway` |
 | `QUERY_AUDIENCE` | `telemetry-query-service` |
 | `QUERY_CUBE_CA` | System trust store when omitted |
+| `QUERY_HISTORY_CLICKHOUSE_CA` | System trust store when omitted |
+| `QUERY_HISTORY_CLICKHOUSE_DATABASE` | `telemetry_history` |
+| `QUERY_HISTORY_CLICKHOUSE_TABLE` | `observations` |
+| `QUERY_HISTORY_CLICKHOUSE_USERNAME` | `telemetry_query_history_reader` |
+| `QUERY_HISTORY_CLICKHOUSE_PASSWORD` | Empty for the local no-password fixture |
 
 ## Verification
 

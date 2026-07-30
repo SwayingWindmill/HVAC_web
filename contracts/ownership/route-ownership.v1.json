@@ -630,6 +630,27 @@
     },
     {
       "method": "POST",
+      "path": "/api/v1/telemetry/device-history",
+      "owner": "telemetry-query-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "primary",
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "device",
+        "principal",
+        "key"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false
+    },
+    {
+      "method": "POST",
       "path": "/api/v1/analytics/energy-series",
       "owner": "telemetry-query-service",
       "publicIngress": "platform-gateway",

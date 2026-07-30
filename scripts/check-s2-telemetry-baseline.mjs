@@ -106,7 +106,7 @@ for (const [path, item] of Object.entries(openAPI.paths ?? {})) {
     if (value?.operationId) operations.set(value.operationId, { method: method.toUpperCase(), path });
   }
 }
-assert(operations.size === 4, 'public surface must contain exactly four operations');
+assert(operations.size === 5, 'public surface must contain exactly five operations');
 for (const expected of compatibility.operations) {
   const actual = operations.get(expected.operationId);
   assert(actual?.method === expected.method && actual?.path === expected.path, `${expected.operationId} method/path drifted`);
@@ -141,7 +141,7 @@ for (const generated of [goGenerated, gatewayGoGenerated, tsGenerated]) {
   for (const expected of compatibility.operations) {
     assert(generated.includes(expected.operationId), `generated operation is missing: ${expected.operationId}`);
   }
-  for (const typeName of ['DeviceObservationSnapshot', 'ProblemDetails', 'RecoveryCursorCheckpoint', 'DeviceObservationPublication']) {
+  for (const typeName of ['DeviceObservationSnapshot', 'DeviceHistoryRequest', 'DeviceHistoryResponse', 'ProblemDetails', 'RecoveryCursorCheckpoint', 'DeviceObservationPublication']) {
     assert(generated.includes(typeName), `generated type is missing: ${typeName}`);
   }
 }
@@ -150,7 +150,7 @@ assert(exact(goContractFiles, ['services/telemetry-runtime-service/pkg/telemetry
 const webSourceFiles = await listSourceFiles('apps/hvac-web/src');
 for (const path of webSourceFiles.filter((value) => ['.ts', '.tsx'].includes(extname(value)) && !value.includes('/api/generated/'))) {
   const source = await readText(path);
-  assert(!/\b(?:interface|type)\s+(?:DeviceObservationSnapshot|RecoveryCursorCheckpoint|DeviceObservationPublication)\b/.test(source), `handwritten S2 DTO duplicates generated contract: ${path}`);
+  assert(!/\b(?:interface|type)\s+(?:DeviceObservationSnapshot|DeviceHistoryRequest|DeviceHistoryResponse|RecoveryCursorCheckpoint|DeviceObservationPublication)\b/.test(source), `handwritten S2 DTO duplicates generated contract: ${path}`);
 }
 assert(goWork.includes('./services/telemetry-runtime-service'), 'Telemetry Runtime module is missing from go.work');
 assert(goMod.includes('module github.com/quanlaihe/hvac-web/services/telemetry-runtime-service'), 'Telemetry Runtime module path drifted');
@@ -237,11 +237,16 @@ assert(dataRegistry.registryRevision >= 6 && ownershipLock.dataRegistryRevision 
 const activeRoutes = new Map((routeRegistry.routes ?? []).map((route) => [routeKey(route), route]));
 for (const expected of compatibility.operations) {
   const route = activeRoutes.get(`${expected.method} ${expected.path}`);
-  assert(route?.owner === 'telemetry-runtime-service', `${expected.operationId} business owner drifted`);
   assert(route?.publicIngress === 'platform-gateway', `${expected.operationId} public Gateway seam drifted`);
-  assert(route?.activationStatus === 'expand-baseline', `${expected.operationId} activation status drifted`);
-  assert(route?.rollout?.mode === 'disabled' && route.migrationPhase === 'R0-contract-only', `${expected.operationId} must carry zero production traffic`);
   assert(route?.readOnlyFallback === false && route.readFallbackOwner === undefined, `${expected.operationId} must not have request fallback`);
+  if (expected.operationId === 'queryDeviceHistory') {
+    assert(route?.owner === 'telemetry-query-service', 'queryDeviceHistory business owner drifted');
+    assert(route?.activationStatus === 'primary' && route?.rollout?.mode === 'all', 'queryDeviceHistory must use the active Query Service product boundary');
+  } else {
+    assert(route?.owner === 'telemetry-runtime-service', `${expected.operationId} business owner drifted`);
+    assert(route?.activationStatus === 'expand-baseline', `${expected.operationId} activation status drifted`);
+    assert(route?.rollout?.mode === 'disabled' && route.migrationPhase === 'R0-contract-only', `${expected.operationId} must carry zero production traffic`);
+  }
 }
 const resources = new Map((dataRegistry.resources ?? []).map((resource) => [`${resource.kind}:${resource.name}`, resource]));
 assert(resources.get('schema:telemetry_runtime')?.writer === 'telemetry-runtime-service', 'active telemetry_runtime writer drifted');
