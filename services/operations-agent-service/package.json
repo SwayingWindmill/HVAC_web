@@ -17,7 +17,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "boundaries": "node ../../scripts/check-operations-agent-service-boundaries.mjs",
-    "test": "npm run build && node --test ../../scripts/test-operations-agent-service-boundaries.mjs test/operations-investigation.test.mjs",
+    "test": "npm run build && node --test ../../scripts/test-operations-agent-service-boundaries.mjs test/operations-investigation.test.mjs test/investigation-coordinator.test.mjs",
     "check": "npm run typecheck && npm run boundaries && npm test"
   },
   "engines": {

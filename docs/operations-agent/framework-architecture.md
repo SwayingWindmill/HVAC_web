@@ -207,6 +207,10 @@ interface InvestigationCoordinator {
 
 Exact transport schemas are deferred. The important constraint is that callers never invoke LangGraph or checkpoint APIs directly.
 
+The initial implementation exports `createInvestigationCoordinator` from the package root. Its public commands cover creation, start, completed-Investigation reopen, READ advancement, effect commit, pause, resume, cancel, complete, fail and query. Every command reauthorizes the Investigation's authoritative Scope through an application port before state or data is returned. Runtime planning can return only typed parallel READ batches, an inability-to-conclude result and opaque Checkpoint state. It cannot return or persist Investigation Evidence, Findings or Proposed Actions. Those effects require a Coordinator command carrying the active Run, Agent Run Lease, expected Investigation Revision, Step Identity and Idempotency Key. Exact retries return the existing committed effect without another Repository write.
+
+The current Application ports cover authorization decisions, the business Investigation Repository, an atomic Investigation Transaction, Agent execution planning, Runtime Checkpoints, Registry/Telemetry/Analytics/Command READ owners, budget, Outbox append, Audit recording, clock and identity generation. The Investigation Transaction commits the new aggregate revision, Outbox event and Audit record as one unit; Map 2.4 must implement that contract in PostgreSQL. The ports contain no LangGraph, database, AG-UI, CopilotKit or model-provider types.
+
 ### 5.2 Application responsibilities
 
 ```text

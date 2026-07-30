@@ -129,6 +129,13 @@ export interface EndAgentRun {
   readonly expectedRevision: InvestigationRevision;
 }
 
+export interface AssertAgentRunAuthority {
+  readonly runId: string;
+  readonly leaseId: string;
+  readonly at: number;
+  readonly expectedRevision: InvestigationRevision;
+}
+
 export interface CancelInvestigation {
   readonly at: number;
   readonly expectedRevision: InvestigationRevision;
@@ -329,6 +336,14 @@ export class OperationsInvestigation {
         leaseHistory: [...run.leaseHistory, lease],
       }),
     });
+  }
+
+  assertRunAuthority(command: AssertAgentRunAuthority): AgentRunView {
+    this.#requireRevision(command.expectedRevision);
+    this.#requireStatus('RUNNING');
+    const run = this.#requireActiveRun(command.runId);
+    this.#requireLease(run, command.leaseId, command.at);
+    return cloneRun(run);
   }
 
   cancel(command: CancelInvestigation): OperationsInvestigation {

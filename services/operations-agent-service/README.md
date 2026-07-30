@@ -1,9 +1,9 @@
 # Operations Agent service
 
 This package is the separately deployable TypeScript boundary for the Operations Agent.
-It currently contains only the accepted modular-monolith skeleton and automated inward
-dependency rules. It does not connect a browser, Platform Gateway, model provider,
-LangGraph.js runtime, database, scheduler or platform tool.
+It contains the accepted modular-monolith boundary, Domain lifecycle model and public
+Investigation Coordinator application seam. It does not yet connect a browser, Platform
+Gateway, live model provider, LangGraph.js runtime, database, scheduler or platform tool.
 
 The module direction is:
 
@@ -21,6 +21,17 @@ non-reusable Agent Run Lease identities, Step Identity, Idempotency Key deduplic
 and cancellation rules that preserve committed Evidence, Findings and Proposed Actions.
 Completed Investigations may be reopened only by creating a new Agent Run; terminal Runs
 are never resumed.
+
+The package root exports `createInvestigationCoordinator` as the only supported business
+entry. The Coordinator reauthorizes every command against the authoritative Scope, owns
+lifecycle commands, validates active Run/Lease/Revision authority through Domain behavior,
+executes independent Owner READ batches in parallel, validates returned Owner identity,
+Scope, Revision, Quality and provenance, stores only opaque Runtime Checkpoint state and serializes every
+Evidence, Finding or Proposed Action effect through Step Identity and Idempotency Key.
+Runtime, persistence, Owner readers, Outbox, Audit, budget, clock and identity capabilities
+remain narrow Application ports with no framework or transport types. Business aggregate
+writes, Outbox append and Audit append are represented by one `InvestigationTransaction`
+port so a concrete persistence adapter cannot commit only part of the business mutation.
 
 Run the package checks from the repository root:
 

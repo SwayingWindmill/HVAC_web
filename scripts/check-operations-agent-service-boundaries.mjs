@@ -24,7 +24,7 @@ const adapterModules = OPERATIONS_AGENT_SERVICE_MODULES.filter((name) => (
 ));
 
 const allowedInternalDependencies = Object.freeze({
-  root: ['bootstrap'],
+  root: ['application', 'bootstrap'],
   domain: [],
   application: ['domain'],
   bootstrap: OPERATIONS_AGENT_SERVICE_MODULES.filter((name) => name !== 'bootstrap'),

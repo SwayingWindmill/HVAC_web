@@ -7,6 +7,7 @@ export {
   type AgentRunLeaseView,
   type AgentRunStatus,
   type AgentRunView,
+  type AssertAgentRunAuthority,
   type CancelInvestigation,
   type CommitEffectResult,
   type CommitInvestigationEffect,

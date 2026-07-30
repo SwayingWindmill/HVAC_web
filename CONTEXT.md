@@ -192,6 +192,10 @@ One stable, reviewable unit of intended work within an Operations Investigation.
 
 The stable identity of one Investigation Step used to correlate execution, Evidence and idempotent effects. Step Identity is not the identity of a worker attempt or graph-node invocation.
 
+## Independent Read Plan
+
+A bounded set of governed, read-only Owner queries proposed for one Agent Run. Queries within one declared batch may execute concurrently because they do not modify Investigation business state; every resulting Evidence, Finding or Proposed Action still requires a separate serialized Coordinator write.
+
 ## Idempotency Key
 
 The stable identity of one intended business effect or governed external submission across retries. An Investigation Step may produce multiple effects with different Idempotency Keys; reusing one Idempotency Key for a different Step or effect is a conflict.
