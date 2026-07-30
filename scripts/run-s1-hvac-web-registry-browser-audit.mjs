@@ -10,7 +10,7 @@ import WebSocket from 'ws';
 
 const root = resolve(process.cwd());
 const reportArgument = process.argv.find((value) => value.startsWith('--report='))?.slice('--report='.length);
-const reportPath = resolve(root, reportArgument ?? 'out/s1-ticket-06/hvac-web-registry-browser.json');
+const reportPath = resolve(root, reportArgument ?? 'out/s1-registry-web/hvac-web-registry-browser.json');
 const startedAt = new Date();
 const profileDir = join(tmpdir(), `s1-registry-browser-${process.pid}`);
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));

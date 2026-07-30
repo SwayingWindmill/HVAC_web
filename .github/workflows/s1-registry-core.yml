@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/s1-registry-core.yml'
+      - 'scripts/check-s1-workflow-topology.mjs'
       - 'apps/hvac-web/src/api/generated/platformGateway.gen.ts'
       - 'contracts/http/**'
       - 'contracts/ownership/**'
@@ -29,6 +30,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/s1-registry-core.yml'
+      - 'scripts/check-s1-workflow-topology.mjs'
       - 'apps/hvac-web/src/api/generated/platformGateway.gen.ts'
       - 'contracts/http/**'
       - 'contracts/ownership/**'
@@ -76,19 +78,8 @@ jobs:
           node-version: '22.22.0'
           cache: npm
       - run: npm ci
-      - run: npm run contracts:check
-      - run: npm run ownership:check
-      - run: npm run s1:registry:check
-      - run: npm run s1:sqlc:poc
-      - run: npm run test:identity
-      - run: node scripts/run-go.mjs vet ./libs/registryauth/... ./services/iam-service/... ./services/platform-core-service/...
-      - run: npm run build:iam
-      - run: npm run build:core
-      - run: npm run test:observability
-      - run: npm run test:security-negative
-      - run: npm run release:evidence-assets
-      - run: npm run lint
-      - run: npm run build
+      - run: npm run s1:topology:check
+      - run: npm run s1:registry-core
 
   postgres:
     runs-on: ubuntu-24.04

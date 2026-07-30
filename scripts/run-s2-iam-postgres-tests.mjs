@@ -15,7 +15,7 @@ const result = spawnSync(process.execPath, [resolve(root, 'scripts/run-s1-regist
 if (result.error || result.status !== 0) {
   throw new Error(`S2 IAM PostgreSQL evidence failed: ${result.error?.message ?? result.status}`);
 }
-const baselinePath = resolve(root, 'out/s1-ticket-01/postgres-baseline.json');
+const baselinePath = resolve(root, 'out/s1-registry-core/postgres-baseline.json');
 const baselineText = await readFile(baselinePath, 'utf8');
 const baseline = JSON.parse(baselineText);
 const evidence = {
@@ -26,7 +26,7 @@ const evidence = {
   activationStatus: 'expand-baseline',
   publicTrafficEnabled: false,
   underlyingEvidence: {
-    path: 'out/s1-ticket-01/postgres-baseline.json',
+    path: 'out/s1-registry-core/postgres-baseline.json',
     sha256: createHash('sha256').update(baselineText).digest('hex'),
     status: baseline.status ?? 'passed',
   },

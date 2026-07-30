@@ -1,9 +1,10 @@
-name: S1 Ticket 02 Logto SDK Adoption POC
+name: S1 IAM Provider POC
 
 on:
   pull_request:
     paths:
-      - '.github/workflows/s1-ticket-02-logto-poc.yml'
+      - '.github/workflows/s1-iam-provider-poc.yml'
+      - 'scripts/check-s1-workflow-topology.mjs'
       - '.scratch/go-data-ai-platform-s1/issues/02-iam-registry-read-authorization.md'
       - '.scratch/go-data-ai-platform-s1/research/reuse-first.md'
       - 'pocs/logto-sdk-adoption/**'
@@ -15,7 +16,8 @@ on:
   push:
     branches: [main]
     paths:
-      - '.github/workflows/s1-ticket-02-logto-poc.yml'
+      - '.github/workflows/s1-iam-provider-poc.yml'
+      - 'scripts/check-s1-workflow-topology.mjs'
       - '.scratch/go-data-ai-platform-s1/issues/02-iam-registry-read-authorization.md'
       - '.scratch/go-data-ai-platform-s1/research/reuse-first.md'
       - 'pocs/logto-sdk-adoption/**'
@@ -29,7 +31,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: s1-ticket-02-logto-poc-${{ github.workflow }}-${{ github.ref }}
+  group: s1-iam-provider-poc-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -47,13 +49,14 @@ jobs:
           node-version: '22.22.0'
           cache: npm
       - run: npm ci
-      - run: npm run s1:logto:poc
+      - run: npm run s1:topology:check
+      - run: npm run s1:iam-provider-poc
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: s1-ticket-02-logto-sdk-adoption-evidence
+          name: s1-iam-provider-poc-logto-sdk-adoption-evidence
           path: |
-            out/s1-ticket-02/logto-sdk-adoption.json
-            out/s1-ticket-02/logto-comparison.json
+            out/s1-iam-provider-poc/logto-sdk-adoption.json
+            out/s1-iam-provider-poc/logto-comparison.json
           if-no-files-found: error
           retention-days: 14
