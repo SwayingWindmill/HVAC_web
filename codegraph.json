@@ -1,0 +1,10 @@
+{
+  "exclude": [
+    ".worktrees/",
+    ".scratch/",
+    "hvac-backend/",
+    "references/",
+    "out/",
+    "prototype/"
+  ]
+}

@@ -1,6 +1,7 @@
 # Local project coordination data — keep out of the repo
 .workbuddy/
 .ai-bridge/
+.codegraph/
 
 # dependencies
 node_modules/

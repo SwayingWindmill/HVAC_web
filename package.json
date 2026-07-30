@@ -230,7 +230,10 @@
     "test:s3-certification": "node scripts/test-s3-command-certification.mjs",
     "test:s3-target-image-evidence": "node scripts/test-s3-target-image-evidence.mjs",
     "s3:ticket-09": "npm run s3:local:check && npm run s3:target-runtime:test && npm run s3:certification:check && npm run test:s3-certification && npm run test:s3-target-image-evidence && npm run s3:certification:preflight && npm run ownership:check && npm run s3:postgres && npm run lint && npm run build",
-    "platform:production-rollout:check": "node scripts/check-production-rollout.mjs"
+    "platform:production-rollout:check": "node scripts/check-production-rollout.mjs",
+    "codegraph:init": "codegraph init .",
+    "codegraph:sync": "codegraph sync .",
+    "codegraph:status": "codegraph status ."
   },
   "engines": {
     "node": ">=22.22.0"
@@ -256,6 +259,7 @@
     "zustand": "^4.5.5"
   },
   "devDependencies": {
+    "@colbymchenry/codegraph": "1.5.0",
     "@types/node": "22.20.1",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
