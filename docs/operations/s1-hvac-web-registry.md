@@ -32,10 +32,10 @@ In mock mode, the existing demo surfaces are loaded from isolated lazy chunks. T
 
 ## Operational checks
 
-Run the complete Ticket gate:
+Run the complete Registry Web capability gate:
 
 ```text
-npm run s1:ticket-06
+npm run s1:registry-web
 ```
 
 Individual evidence:
@@ -49,7 +49,7 @@ npm run audit:s1-hvac-web-registry
 The browser audit writes:
 
 ```text
-out/s1-ticket-06/hvac-web-registry-browser.json
+out/s1-registry-web/hvac-web-registry-browser.json
 ```
 
 The report records the Session-protected Gateway routes used, cursor calls, resource-invisibility assertion and zero counts for Mock asset-tree, telemetry and forged authorization-header usage.

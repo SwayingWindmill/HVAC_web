@@ -1,9 +1,10 @@
-name: S1 Ticket 04 Legacy Registry Migration
+name: S1 Registry Migration
 
 on:
   pull_request:
     paths:
-      - '.github/workflows/s1-ticket-04-migration.yml'
+      - '.github/workflows/s1-registry-migration.yml'
+      - 'scripts/check-s1-workflow-topology.mjs'
       - 'contracts/ownership/**'
       - 'contracts/registry/**'
       - 'infra/s1-registry/**'
@@ -19,7 +20,8 @@ on:
   push:
     branches: [main]
     paths:
-      - '.github/workflows/s1-ticket-04-migration.yml'
+      - '.github/workflows/s1-registry-migration.yml'
+      - 'scripts/check-s1-workflow-topology.mjs'
       - 'contracts/ownership/**'
       - 'contracts/registry/**'
       - 'infra/s1-registry/**'
@@ -37,7 +39,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: s1-ticket-04-${{ github.workflow }}-${{ github.ref }}
+  group: s1-registry-migration-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -58,16 +60,8 @@ jobs:
           node-version: '22.22.0'
           cache: npm
       - run: npm ci
-      - run: npm run contracts:check
-      - run: npm run ownership:check
-      - run: npm run s1:registry:check
-      - run: npm run test:legacy-migration
-      - run: node scripts/run-isolated-go.mjs --module=services/legacy-migration-service vet ./...
-      - run: npm run build:legacy-migration
-      - run: npm run test:security-negative
-      - run: npm run release:evidence-assets
-      - run: node scripts/run-isolated-go.mjs --module=services/legacy-migration-service mod verify
-      - run: node scripts/run-isolated-go.mjs --module=services/legacy-migration-service run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - run: npm run s1:topology:check
+      - run: npm run s1:registry-migration
 
   postgres:
     runs-on: ubuntu-24.04
@@ -75,7 +69,7 @@ jobs:
     env:
       GOMAXPROCS: '2'
       GOFLAGS: '-p=1'
-      S1_REGISTRY_REPORT_PATH: out/s1-ticket-04/postgres-baseline.json
+      S1_REGISTRY_REPORT_PATH: out/s1-registry-migration/postgres-baseline.json
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -92,7 +86,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: s1-ticket-04-postgres-evidence
-          path: out/s1-ticket-04/postgres-baseline.json
+          name: s1-registry-migration-postgres-evidence
+          path: out/s1-registry-migration/postgres-baseline.json
           if-no-files-found: error
           retention-days: 14

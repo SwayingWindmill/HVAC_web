@@ -62,5 +62,5 @@ Logs and telemetry contain route templates, status, duration and trace correlati
 npm run test:identity
 npm run build:core
 npm run s1:registry:postgres
-npm run s1:ticket-03
+npm run s1:registry-core
 ```

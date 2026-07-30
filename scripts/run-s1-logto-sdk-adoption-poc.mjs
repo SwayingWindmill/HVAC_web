@@ -3,8 +3,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
-const outputPath = resolve(root, 'out/s1-ticket-02/logto-comparison.json');
-const sdkOutputPath = resolve(root, 'out/s1-ticket-02/logto-sdk-adoption.json');
+const outputPath = resolve(root, 'out/s1-iam-provider-poc/logto-comparison.json');
+const sdkOutputPath = resolve(root, 'out/s1-iam-provider-poc/logto-sdk-adoption.json');
 const isolatedModule = 'pocs/logto-sdk-adoption';
 
 function run(label, args) {

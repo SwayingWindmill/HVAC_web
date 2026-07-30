@@ -37,8 +37,8 @@ npm run s1:logto:poc
 Machine-readable evidence is written to:
 
 ```text
-out/s1-ticket-02/logto-sdk-adoption.json
-out/s1-ticket-02/logto-comparison.json
+out/s1-iam-provider-poc/logto-sdk-adoption.json
+out/s1-iam-provider-poc/logto-comparison.json
 ```
 
 ## Security pin

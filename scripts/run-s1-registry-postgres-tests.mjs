@@ -10,7 +10,7 @@ const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/s1-registry/compose.yaml');
 const projectName = `hvac-s1-registry-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
-const reportPath = resolve(root, process.env.S1_REGISTRY_REPORT_PATH ?? 'out/s1-ticket-01/postgres-baseline.json');
+const reportPath = resolve(root, process.env.S1_REGISTRY_REPORT_PATH ?? 'out/s1-registry-core/postgres-baseline.json');
 const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
 const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
 const goCacheDir = process.env.GOCACHE || join(tmpdir(), 'hvac-go-build-cache');

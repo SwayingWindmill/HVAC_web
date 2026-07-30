@@ -37,7 +37,7 @@ Ticket identifiers are historical evidence, not permanent CI architecture. Durab
 |---|---|
 | `rms-*`, `rms-ticket-*` | `web-build`, `web-auth`, `web-routing`, `web-browser`, `web-certification` |
 | `s0-*` | `platform-contracts`, `platform-auth`, `platform-durability`, `platform-security`, `platform-release` |
-| `s1-ticket-*` | `registry-contracts`, `registry-postgres`, `registry-migration`, `registry-routing`, `registry-web` |
+| retired `s1-ticket-*` | `S1 Registry Core`, `S1 IAM Provider POC`, `S1 Registry Migration`, `S1 Registry Routing`, `S1 Registry Web` |
 | `s2-*` | `telemetry-contracts`, `telemetry-postgres`, `telemetry-realtime`, `telemetry-history`, `telemetry-web`, `telemetry-release` |
 | retired `s3-ticket-*` | `S3 Command Safety`, `S3 Command Authority`, `S3 Command API`, `S3 ThingsBoard Contract`, `S3 Command UX`, `S3 Command Certification` |
 
@@ -89,6 +89,8 @@ The next release-layer slice removes the duplicated S0 `release-evidence-pr` Kin
 - Keep historical Ticket numbers in release evidence and documentation, not workflow topology.
 
 The first capability-consolidation slice replaces `S1 Ticket 01 Contract and Ownership` and `S1 Ticket 03 Core Registry Read Service` with the stable `S1 Registry Core` workflow. The new suite keeps the union of contract generation, ownership validation, SQLC POC, Registry baseline, IAM/Core build and security checks, plus one stable PostgreSQL evidence job. Shared Registry changes therefore use one Node/Go setup per capability job instead of launching two Ticket wrappers and two equivalent PostgreSQL baselines. `s1:registry:check` enforces the stable workflow markers and prevents the retired Ticket files and Ticket-scoped evidence paths from returning.
+
+The final S1 topology slice renames the remaining Ticket 02, 04, 05 and 06 wrappers to `S1 IAM Provider POC`, `S1 Registry Migration`, `S1 Registry Routing` and `S1 Registry Web`. Five stable capability commands replace Ticket 01–06 package entry points, and evidence now lives under capability-scoped directories. Every S1 workflow watches and executes `s1:topology:check`, which rejects restored Ticket workflows or commands and verifies that S2 IAM continues to consume the stable Registry Core PostgreSQL evidence.
 
 The second capability-consolidation slice replaces S3 Tickets 02, 03, 05 and 07 with `S3 Command Authority`. The suite runs PostgreSQL authority, governance/dispatch and reported-state verification checks once, executes the shared command database integration once, then runs one Go test/vet union and one Lint/Build pass. Its evidence path is stable under `out/s3-command-authority`, and the PostgreSQL authority gate prevents the four retired workflow wrappers or Ticket 02 report path from returning.
 

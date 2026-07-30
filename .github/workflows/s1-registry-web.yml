@@ -1,9 +1,10 @@
-name: S1 Ticket 06 HVAC Web Registry
+name: S1 Registry Web
 
 on:
   pull_request:
     paths:
-      - '.github/workflows/s1-ticket-06-hvac-web.yml'
+      - '.github/workflows/s1-registry-web.yml'
+      - 'scripts/check-s1-workflow-topology.mjs'
       - 'apps/hvac-web/**'
       - 'contracts/http/**'
       - 'docs/operations/s1-hvac-web-registry.md'
@@ -15,7 +16,8 @@ on:
   push:
     branches: [main]
     paths:
-      - '.github/workflows/s1-ticket-06-hvac-web.yml'
+      - '.github/workflows/s1-registry-web.yml'
+      - 'scripts/check-s1-workflow-topology.mjs'
       - 'apps/hvac-web/**'
       - 'contracts/http/**'
       - 'docs/operations/s1-hvac-web-registry.md'
@@ -29,7 +31,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: s1-ticket-06-${{ github.workflow }}-${{ github.ref }}
+  group: s1-registry-web-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -43,11 +45,8 @@ jobs:
           node-version: '22.22.0'
           cache: npm
       - run: npm ci
-      - run: npm run contracts:check
-      - run: npm run s1:registry:check
-      - run: npm run s1:hvac-web:check
-      - run: npm run lint
-      - run: npm run s1:hvac-web:build
+      - run: npm run s1:topology:check
+      - run: npm run s1:registry-web
 
   browser:
     runs-on: ubuntu-24.04
@@ -59,11 +58,11 @@ jobs:
           node-version: '22.22.0'
           cache: npm
       - run: npm ci
-      - run: npm run audit:s1-hvac-web-registry
+      - run: npm run audit:s1-registry-web
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: s1-ticket-06-hvac-web-registry-browser
-          path: out/s1-ticket-06/hvac-web-registry-browser.json
+          name: s1-registry-web-hvac-web-registry-browser
+          path: out/s1-registry-web/hvac-web-registry-browser.json
           if-no-files-found: error
           retention-days: 14

@@ -1,9 +1,10 @@
-name: S1 Ticket 05 Registry Routing Cutover
+name: S1 Registry Routing
 
 on:
   pull_request:
     paths:
-      - '.github/workflows/s1-ticket-05-routing.yml'
+      - '.github/workflows/s1-registry-routing.yml'
+      - 'scripts/check-s1-workflow-topology.mjs'
       - 'contracts/http/**'
       - 'contracts/ownership/**'
       - 'docs/operations/s1-registry-routing-cutover.md'
@@ -22,7 +23,8 @@ on:
   push:
     branches: [main]
     paths:
-      - '.github/workflows/s1-ticket-05-routing.yml'
+      - '.github/workflows/s1-registry-routing.yml'
+      - 'scripts/check-s1-workflow-topology.mjs'
       - 'contracts/http/**'
       - 'contracts/ownership/**'
       - 'docs/operations/s1-registry-routing-cutover.md'
@@ -43,7 +45,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: s1-ticket-05-${{ github.workflow }}-${{ github.ref }}
+  group: s1-registry-routing-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -64,16 +66,8 @@ jobs:
           node-version: '22.22.0'
           cache: npm
       - run: npm ci
-      - run: npm run contracts:check
-      - run: npm run ownership:check
-      - run: npm run s1:registry:check
-      - run: npm run test:registry-routing
-      - run: node scripts/run-isolated-go.mjs --module=libs/identitycontext vet ./...
-      - run: node scripts/run-isolated-go.mjs --module=libs/ownershipregistry vet ./...
-      - run: node scripts/run-isolated-go.mjs --module=services/platform-gateway vet ./...
-      - run: node scripts/run-isolated-go.mjs --module=tools/legacy-private-fixture vet ./...
-      - run: npm run build:gateway
-      - run: node scripts/run-isolated-go.mjs --module=tools/legacy-private-fixture build ./cmd/legacy-private-fixture
+      - run: npm run s1:topology:check
+      - run: npm run s1:registry-routing
 
   postgres-routing:
     runs-on: ubuntu-24.04
@@ -81,7 +75,7 @@ jobs:
     env:
       GOMAXPROCS: '2'
       GOFLAGS: '-p=1'
-      S1_REGISTRY_REPORT_PATH: out/s1-ticket-05/postgres-routing.json
+      S1_REGISTRY_REPORT_PATH: out/s1-registry-routing/postgres-routing.json
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -98,8 +92,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: s1-ticket-05-postgres-routing
-          path: out/s1-ticket-05/postgres-routing.json
+          name: s1-registry-routing-postgres-routing
+          path: out/s1-registry-routing/postgres-routing.json
           if-no-files-found: error
           retention-days: 14
 
