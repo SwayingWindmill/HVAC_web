@@ -76,6 +76,8 @@ Because ClickHouse history integration previously existed only inside that relea
 - Treat `go.work` and `go.work.sum` as Go build/test triggers only for workflows that consume the affected modules.
 - Replace `scripts/**` with the exact scripts or stable script families owned by each workflow.
 
+The first trigger-precision slice updates `Security 79 React Router 8`. It no longer watches every workflow file or every `scripts/check-s2-*` script. Its path set now names its own workflow and the exact script/import closure reached by `security:ticket-79` and `security:ticket-79:browser`. The existing React Router security test enforces that the two broad patterns do not return and that the precise paths remain present for both pull requests and `main` pushes.
+
 ### Phase 3: capability consolidation
 
 - Merge Ticket workflows into the stable capability suites above.
