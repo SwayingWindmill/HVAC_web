@@ -170,8 +170,10 @@ function createCdpClient(webSocketUrl) {
   return new Promise((resolveClient, rejectClient) => {
     const socket = new WebSocket(webSocketUrl);
     const pending = new Map();
+    const events = [];
     let nextId = 0;
     socket.addEventListener('open', () => resolveClient({
+      events,
       send(method, params = {}) {
         const id = ++nextId;
         socket.send(JSON.stringify({ id, method, params }));
@@ -182,7 +184,10 @@ function createCdpClient(webSocketUrl) {
     socket.addEventListener('error', (event) => rejectClient(new Error(`CDP socket error: ${String(event)}`)));
     socket.addEventListener('message', (event) => {
       const message = JSON.parse(String(event.data));
-      if (!message.id) return;
+      if (!message.id) {
+        events.push(message);
+        return;
+      }
       const command = pending.get(message.id);
       if (!command) return;
       pending.delete(message.id);
@@ -198,16 +203,28 @@ async function evaluate(client, expression) {
   return result.result.value;
 }
 
-async function waitForCondition(client, expression, label) {
-  for (let attempt = 0; attempt < 300; attempt += 1) {
+async function waitForCondition(client, expression, label, attempts = 300) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const value = await evaluate(client, expression);
       if (value) return value;
     } catch {}
     await pause(100);
   }
-  const diagnostic = await evaluate(client, `({ url: location.href, text: document.body?.innerText?.slice(0, 4000) ?? '' })`);
+  const diagnostic = await evaluate(client, `({
+    url: location.href,
+    readyState: document.readyState,
+    text: document.body?.innerText?.slice(0, 4000) ?? '',
+    html: document.body?.innerHTML?.slice(0, 4000) ?? '',
+    rootHtml: document.getElementById('root')?.innerHTML?.slice(0, 4000) ?? null,
+  })`);
+  diagnostic.events = client.events.slice(-30);
   throw new Error(`${label} did not become ready: ${JSON.stringify(diagnostic)}`);
+}
+
+async function navigate(client, url) {
+  const result = await client.send('Page.navigate', { url });
+  if (result.errorText) throw new Error(`browser navigation failed for ${url}: ${result.errorText}`);
 }
 
 const browserCandidates = [
@@ -248,7 +265,7 @@ try {
     '--strictPort',
   ], {
     cwd: root,
-    stdio: 'ignore',
+    stdio: 'inherit',
     shell: false,
     env: {
       ...process.env,
@@ -276,14 +293,30 @@ try {
   assert(page?.webSocketDebuggerUrl, 'No browser page was available');
   cdpClient = await createCdpClient(page.webSocketDebuggerUrl);
   await cdpClient.send('Runtime.enable');
+  await cdpClient.send('Network.enable');
   await cdpClient.send('Page.enable');
-  await cdpClient.send('Page.navigate', { url: `${webURL}/system?tab=overview` });
+  await cdpClient.send('Log.enable');
 
-  await waitForCondition(
-    cdpClient,
-    `document.querySelector('[data-testid="authenticated-principal-status"]')?.getAttribute('data-principal-state') === 'authenticated'`,
-    'authenticated Principal diagnostic',
-  );
+  const principalReady = `document.querySelector('[data-testid="authenticated-principal-status"]')?.getAttribute('data-principal-state') === 'authenticated'`;
+  await navigate(cdpClient, `${webURL}/system?tab=overview`);
+  try {
+    await waitForCondition(cdpClient, principalReady, 'authenticated Principal diagnostic', 100);
+  } catch (firstError) {
+    const documentState = await evaluate(cdpClient, `({
+      text: document.body?.innerText ?? '',
+      rootHtml: document.getElementById('root')?.innerHTML ?? null,
+    })`);
+    const applicationRootBlank = documentState.text.trim() === '' && documentState.rootHtml === '';
+    if (!applicationRootBlank) throw firstError;
+    await cdpClient.send('Page.reload', { ignoreCache: true });
+    try {
+      await waitForCondition(cdpClient, principalReady, 'authenticated Principal diagnostic after cold-start reload');
+    } catch (secondError) {
+      const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
+      const secondMessage = secondError instanceof Error ? secondError.message : String(secondError);
+      throw new Error(`Principal UI remained blank after one cold-start reload. First failure: ${firstMessage}. Second failure: ${secondMessage}`);
+    }
+  }
   const diagnostic = await evaluate(cdpClient, `(() => {
     const element = document.querySelector('[data-testid="authenticated-principal-status"]');
     return {
