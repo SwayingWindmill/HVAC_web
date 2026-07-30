@@ -58,7 +58,7 @@ jobs:
       - run: npm run s2:shadow-routing:compare
       - run: npm run s2:shadow-routing:harness
       - name: Record shadow comparison release evidence
-        run: node scripts/write-s2-release-report.mjs --name=shadow-comparison-report.json --kind=shadow-comparison --commands=s2:shadow-routing:compare,s2:shadow-routing:harness --sources=out/s2-ticket-08/shadow-comparison.json --details='{"sideEffectFree":true,"mappingMismatch":0,"missingOrExtraDevice":0}'
+        run: node scripts/write-s2-release-report.mjs --name=shadow-comparison-report.json --kind=shadow-comparison --commands=s2:shadow-routing:compare,s2:shadow-routing:harness --sources=out/s2-shadow-routing/shadow-comparison.json --details='{"sideEffectFree":true,"mappingMismatch":0,"missingOrExtraDevice":0}'
       - name: Upload contracts and static evidence
         uses: actions/upload-artifact@v6
         with:
@@ -119,7 +119,7 @@ jobs:
       - run: npm ci
       - run: npm run s2:postgres-integration
       - name: Record PostgreSQL integration evidence
-        run: node scripts/write-s2-release-report.mjs --name=postgres-integration-report.json --kind=postgres-integration --commands=s2:postgres,test:s2-migrator-image --sources=out/s2-ticket-11/migrator-image-smoke.json --details='{"expandOnly":true,"previousVersionCompatible":true,"authoritativeSchema":"telemetry_runtime","migratorImageIdempotent":true,"migrationHashMismatchRejected":true,"incompleteMigrationRejected":true,"unauthorizedRuntimeIdentityRejected":true,"migrationLedgerPrivilegesRestricted":true}'
+        run: node scripts/write-s2-release-report.mjs --name=postgres-integration-report.json --kind=postgres-integration --commands=s2:postgres,test:s2-migrator-image --sources=out/s2-telemetry-release/migrator-image-smoke.json --details='{"expandOnly":true,"previousVersionCompatible":true,"authoritativeSchema":"telemetry_runtime","migratorImageIdempotent":true,"migrationHashMismatchRejected":true,"incompleteMigrationRejected":true,"unauthorizedRuntimeIdentityRejected":true,"migrationLedgerPrivilegesRestricted":true}'
       - uses: actions/upload-artifact@v6
         with:
           name: s2-release-input-postgres
@@ -224,7 +224,7 @@ jobs:
       - run: npm ci
       - run: npm run s2:hvac-web:browser
       - name: Record browser release evidence
-        run: node scripts/write-s2-release-report.mjs --name=browser-report.json --kind=browser-real-mode --commands=s2:hvac-web:browser --sources=out/s2-ticket-09/browser-journey.json,out/s2-ticket-09/network-audit.json --details='{"legacyFallback":false,"mockFallback":false,"revocationPurgesState":true,"freshSnapshotAfterGap":true}'
+        run: node scripts/write-s2-release-report.mjs --name=browser-report.json --kind=browser-real-mode --commands=s2:hvac-web:browser --sources=out/s2-hvac-web-presence/browser-journey.json,out/s2-hvac-web-presence/network-audit.json --details='{"legacyFallback":false,"mockFallback":false,"revocationPurgesState":true,"freshSnapshotAfterGap":true}'
       - uses: actions/upload-artifact@v6
         with:
           name: s2-release-input-browser

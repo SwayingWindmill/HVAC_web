@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
-const output = resolve(root, 'out/s2-ticket-07/live-client.json');
+const output = resolve(root, 'out/s2-telemetry-live-client/live-client.json');
 const moduleRoot = resolve(root, 'apps/hvac-web/src/platform/telemetry-live');
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
@@ -107,6 +107,6 @@ await writeFile(output, `${JSON.stringify({
   schemaVersion: 1, ticket: 66, status: 'passed', sdk: 'centrifuge@5.7.0',
   publicBoundary: 'platform/telemetry-live/index.ts', transportInternalsExposed: false,
   generatedDTOAuthority: true, snapshotFirst: true, businessRevisionAuthority: true,
-  browserEvidence: 'out/s2-ticket-07/browser-live-client.json', generatedAt: new Date().toISOString(),
+  browserEvidence: 'out/s2-telemetry-live-client/browser-live-client.json', generatedAt: new Date().toISOString(),
 }, null, 2)}\n`);
 console.log(`S2 Ticket 07 TelemetryLiveClient passed: ${output}`);

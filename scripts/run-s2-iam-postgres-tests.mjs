@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
-const output = resolve(root, 'out/s2-ticket-02/iam-authorization-evidence.json');
+const output = resolve(root, 'out/s2-iam-authorization/iam-authorization-evidence.json');
 const result = spawnSync(process.execPath, [resolve(root, 'scripts/run-s1-registry-postgres-tests.mjs')], {
   cwd: root,
   encoding: 'utf8',

@@ -9,7 +9,7 @@ import { startS0AuthTopology, stopProcess } from './s0-auth-topology.mjs';
 const root = resolve(process.cwd());
 const debugPort = Number(process.env.S2_GATEWAY_DEBUG_PORT ?? 9365);
 const profileDir = join(tmpdir(), `s2-gateway-browser-${process.pid}`);
-const outputPath = resolve(root, process.env.S2_GATEWAY_BROWSER_REPORT ?? 'out/s2-ticket-05/browser-session.json');
+const outputPath = resolve(root, process.env.S2_GATEWAY_BROWSER_REPORT ?? 'out/s2-gateway-snapshot/browser-session.json');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 const browserCandidates = [
   process.env.BROWSER_BINARY,

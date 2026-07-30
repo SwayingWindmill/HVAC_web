@@ -60,6 +60,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: s2-gateway-snapshot-evidence
-          path: out/s2-ticket-05
+          path: out/s2-gateway-snapshot
           if-no-files-found: error
           retention-days: 14

@@ -11,7 +11,7 @@ import WebSocket from 'ws';
 
 const root = resolve(process.cwd());
 const fixtureRoot = resolve(root, 'scripts/fixtures/s2-hvac-web-presence');
-const outputRoot = resolve(root, 'out/s2-ticket-09');
+const outputRoot = resolve(root, 'out/s2-hvac-web-presence');
 const profileDir = join(tmpdir(), `s2-hvac-web-presence-${process.pid}`);
 const startedAt = new Date();
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));

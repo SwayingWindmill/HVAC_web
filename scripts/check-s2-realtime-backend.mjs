@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
-const output = resolve(root, 'out/s2-ticket-06/realtime-backend.json');
+const output = resolve(root, 'out/s2-realtime-backend/realtime-backend.json');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);

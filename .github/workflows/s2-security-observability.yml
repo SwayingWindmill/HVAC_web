@@ -52,7 +52,7 @@ jobs:
         with:
           name: s2-security-observability-evidence
           path: |
-            out/s2-ticket-10
+            out/s2-security-observability
             out/s2-release-evidence/security-negative-report.json
             out/s2-release-evidence/zero-invariant-report.json
             out/s2-release-evidence/metric-cardinality-report.json

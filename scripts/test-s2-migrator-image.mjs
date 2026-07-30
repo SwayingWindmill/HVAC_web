@@ -15,7 +15,7 @@ const migrations = [
   '004-s2-telemetry-history-outbox.sql',
   '005-s2-realtime-backend.sql',
 ];
-const reportPath = resolve(root, 'out/s2-ticket-11/migrator-image-smoke.json');
+const reportPath = resolve(root, 'out/s2-telemetry-release/migrator-image-smoke.json');
 
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 

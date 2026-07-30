@@ -63,8 +63,8 @@ The real-browser CDP harness exercises multiple exact subscriptions, publication
 
 Evidence is written to:
 
-- `out/s2-ticket-07/live-client.json`
-- `out/s2-ticket-07/browser-live-client.json`
+- `out/s2-telemetry-live-client/live-client.json`
+- `out/s2-telemetry-live-client/browser-live-client.json`
 
 ## Out of scope
 
