@@ -80,7 +80,7 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 	diagnostics := &http.Server{
-		Addr: envOr("QUERY_DIAGNOSTICS_ADDR", "127.0.0.1:19087"), Handler: telemetry.DiagnosticsHandler(),
+		Addr: envOr("QUERY_DIAGNOSTICS_ADDR", "127.0.0.1:19088"), Handler: telemetry.DiagnosticsHandler(),
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
 	go func() {

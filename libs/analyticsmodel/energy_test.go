@@ -47,6 +47,7 @@ func TestEnergySeriesQueryRejectsUnsafeOrAmbiguousRequests(t *testing.T) {
 		{"unsupported granularity", func(query *EnergySeriesQuery) { query.Granularity = "minute" }},
 		{"timezone is invalid", func(query *EnergySeriesQuery) { query.Timezone = "Local" }},
 		{"range is reversed", func(query *EnergySeriesQuery) { query.To = query.From }},
+		{"range is below storage precision", func(query *EnergySeriesQuery) { query.To = query.From.Add(time.Microsecond) }},
 		{"range exceeds budget", func(query *EnergySeriesQuery) { query.To = query.From.Add(367 * 24 * time.Hour) }},
 		{"quality policy is implicit", func(query *EnergySeriesQuery) { query.QualityPolicy = "" }},
 	}

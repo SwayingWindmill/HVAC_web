@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 12,
+  "registryRevision": 13,
   "resources": [
     { "kind": "schema", "name": "gateway", "writer": "platform-gateway", "revision": 1 },
     { "kind": "schema", "name": "audit_ledger", "writer": "audit-ledger-service", "revision": 1 },
@@ -9,6 +9,8 @@
     { "kind": "schema", "name": "core_registry", "writer": "platform-core-service", "revision": 1 },
     { "kind": "schema", "name": "telemetry_runtime", "writer": "telemetry-runtime-service", "revision": 1 },
     { "kind": "schema", "name": "command_runtime", "writer": "command-service", "revision": 1 },
+    { "kind": "schema", "name": "telemetry_history", "writer": "telemetry-history-projector", "revision": 1, "database": "clickhouse" },
+    { "kind": "schema", "name": "analytics", "writer": "analytics-read-model-projector", "revision": 1, "database": "clickhouse" },
     { "kind": "event-family", "name": "hvac.security.session.v1", "writer": "platform-gateway", "revision": 1 },
     { "kind": "event-family", "name": "hvac.routing.decision.v1", "writer": "platform-gateway", "revision": 1 },
     { "kind": "event-family", "name": "hvac.telemetry.device-snapshot.v1", "writer": "telemetry-runtime-service", "revision": 1 },
@@ -50,6 +52,8 @@
     { "kind": "migration-dataset", "name": "s1-legacy-resource-map", "writer": "platform-core-service", "revision": 1 },
     { "kind": "migration-dataset", "name": "s1-migration-provenance", "writer": "platform-core-service", "revision": 1 },
     { "kind": "migration-dataset", "name": "s1-migration-quarantine", "writer": "platform-core-service", "revision": 1 },
+    { "kind": "projection", "name": "telemetry-history-observation", "writer": "telemetry-history-projector", "revision": 1, "sourceOwner": "telemetry-runtime-service" },
+    { "kind": "projection", "name": "analytics-energy-interval-fact", "writer": "analytics-read-model-projector", "revision": 1, "sourceOwner": "telemetry-history-projector" },
     { "kind": "query-contract", "name": "analytics-energy-series-v1", "writer": "telemetry-query-service", "revision": 1, "publicIngress": "platform-gateway" },
     { "kind": "semantic-model", "name": "cube-energy-usage-v1", "writer": "telemetry-query-service", "revision": 1, "runtime": "cube-core", "source": "analytics.energy_interval_facts" }
   ],
@@ -65,7 +69,11 @@
     { "service": "legacy-migration-service", "schema": "core_registry", "mode": "migration" },
     { "service": "telemetry-runtime-service", "schema": "telemetry_runtime", "mode": "write" },
     { "service": "outbox-relay", "schema": "telemetry_runtime", "mode": "relay", "restrictedTo": ["telemetry_publication_outbox"] },
-    { "service": "command-service", "schema": "command_runtime", "mode": "write" }
+    { "service": "command-service", "schema": "command_runtime", "mode": "write" },
+    { "service": "telemetry-history-projector", "schema": "telemetry_history", "mode": "write" },
+    { "service": "analytics-read-model-projector", "schema": "telemetry_history", "mode": "read" },
+    { "service": "analytics-read-model-projector", "schema": "analytics", "mode": "write" },
+    { "service": "cube-core", "schema": "analytics", "mode": "read" }
   ],
   "databaseIdentities": [
     { "schema": "iam", "migrationRole": "s1_iam_migrator", "runtimeRole": "s1_iam_runtime", "runtimeBypassRls": false },

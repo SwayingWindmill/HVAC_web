@@ -2,8 +2,8 @@ cubes:
   - name: energy_usage
     title: Energy Usage
     description: >-
-      Authorized HVAC energy interval facts. The source table is a future ClickHouse
-      read model and must contain normalized interval energy, quality and observation counts.
+      Authorized additive HVAC energy intervals projected from accepted cumulative meter
+      observations, with explicit quality, data watermark and dataset revision semantics.
     sql_table: analytics.energy_interval_facts
 
     measures:
@@ -24,25 +24,32 @@ cubes:
           - sql: "{CUBE}.quality IN ('VALID', 'SUSPECT')"
 
       - name: valid_count
-        title: Valid observations
-        sql: observation_count
-        type: sum
+        title: Valid intervals
+        type: count
         filters:
           - sql: "{CUBE}.quality = 'VALID'"
 
       - name: suspect_count
-        title: Suspect observations
-        sql: observation_count
-        type: sum
+        title: Suspect intervals
+        type: count
         filters:
           - sql: "{CUBE}.quality = 'SUSPECT'"
 
       - name: invalid_count
-        title: Invalid observations
-        sql: observation_count
-        type: sum
+        title: Invalid intervals
+        type: count
         filters:
           - sql: "{CUBE}.quality = 'INVALID'"
+
+      - name: max_data_watermark
+        title: Data watermark
+        sql: data_watermark
+        type: max
+
+      - name: max_dataset_revision
+        title: Dataset revision
+        sql: dataset_revision
+        type: max
 
     dimensions:
       - name: organization_id

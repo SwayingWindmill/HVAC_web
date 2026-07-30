@@ -35,6 +35,22 @@ services:
       retries: 90
     networks: [s2]
 
+  analytics-read-model-projector:
+    build:
+      context: ../..
+      dockerfile: deploy/analytics/images/analytics-read-model-projector.Dockerfile
+    environment:
+      ANALYTICS_CLICKHOUSE_HTTP_URL: http://clickhouse:8123
+      ANALYTICS_CLICKHOUSE_READER_USERNAME: analytics_projector_reader
+      ANALYTICS_CLICKHOUSE_WRITER_USERNAME: analytics_projector_writer
+      ANALYTICS_PROJECTOR_DIAGNOSTICS_ADDR: :19089
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${ANALYTICS_PROJECTOR_DIAGNOSTICS_HOST_PORT:-59089}:19089"
+    networks: [s2]
+
 networks:
   s2: {}
 

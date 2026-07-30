@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	loadPath                = "/cubejs-api/v1/load"
-	maximumCubeResponseSize = int64(8 << 20)
+	loadPath                 = "/cubejs-api/v1/load"
+	maximumCubeQueryDuration = 16 * time.Second
+	maximumCubeResponseSize  = int64(8 << 20)
 )
 
 type TokenFactory interface {
@@ -49,8 +50,8 @@ type loadRequest struct {
 type cubeQuery struct {
 	Measures       []string            `json:"measures"`
 	Filters        []cubeFilter        `json:"filters"`
-	TimeDimensions []cubeTimeDimension `json:"timeDimensions"`
-	Order          map[string]string   `json:"order"`
+	TimeDimensions []cubeTimeDimension `json:"timeDimensions,omitempty"`
+	Order          map[string]string   `json:"order,omitempty"`
 	Timezone       string              `json:"timezone"`
 	Limit          int                 `json:"limit"`
 }
@@ -99,18 +100,31 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 	if err := productQuery.Validate(); err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, err
 	}
-	token, err := client.tokenFactory.Token(ctx, caller, productQuery)
+	queryContext, cancel := context.WithTimeout(ctx, maximumCubeQueryDuration)
+	defer cancel()
+	token, err := client.tokenFactory.Token(queryContext, caller, productQuery)
 	if err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("create Cube token: %w", err)
 	}
-	requestBody := loadRequest{Query: buildCubeQuery(productQuery)}
-	body, err := json.Marshal(requestBody)
+	series, err := client.load(queryContext, token, buildSeriesQuery(productQuery))
 	if err != nil {
-		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("encode Cube query: %w", err)
+		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy series: %w", err)
+	}
+	metadata, err := client.load(queryContext, token, buildMetadataQuery(productQuery))
+	if err != nil {
+		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy metadata: %w", err)
+	}
+	return mapEnergySeries(series, metadata, productQuery, client.datasetRevision)
+}
+
+func (client *Client) load(ctx context.Context, token string, query cubeQuery) (loadResponse, error) {
+	body, err := json.Marshal(loadRequest{Query: query})
+	if err != nil {
+		return loadResponse{}, fmt.Errorf("encode Cube query: %w", err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.endpoint.String(), bytes.NewReader(body))
 	if err != nil {
-		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("create Cube request: %w", err)
+		return loadResponse{}, fmt.Errorf("create Cube request: %w", err)
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/json")
@@ -118,35 +132,35 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 	observability.InjectHTTP(ctx, request.Header)
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("call Cube: %w", err)
+		return loadResponse{}, fmt.Errorf("call Cube: %w", err)
 	}
 	defer response.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumCubeResponseSize+1))
 	if err != nil {
-		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("read Cube response: %w", err)
+		return loadResponse{}, fmt.Errorf("read Cube response: %w", err)
 	}
 	if int64(len(payload)) > maximumCubeResponseSize {
-		return analyticsmodel.EnergySeriesResponse{}, errors.New("Cube response exceeds the analytics response budget")
+		return loadResponse{}, errors.New("Cube response exceeds the analytics response budget")
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		message := strings.TrimSpace(string(payload))
 		if len(message) > 512 {
 			message = message[:512]
 		}
-		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("Cube returned %d: %s", response.StatusCode, message)
+		return loadResponse{}, fmt.Errorf("Cube returned %d: %s", response.StatusCode, message)
 	}
 	var decoded loadResponse
 	if err := json.Unmarshal(payload, &decoded); err != nil {
-		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube response: %w", err)
+		return loadResponse{}, fmt.Errorf("decode Cube response: %w", err)
 	}
 	if strings.TrimSpace(decoded.Error) != "" {
-		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("Cube query failed: %s", decoded.Error)
+		return loadResponse{}, fmt.Errorf("Cube query failed: %s", decoded.Error)
 	}
-	return mapEnergySeries(decoded, productQuery, client.datasetRevision)
+	return decoded, nil
 }
 
-func buildCubeQuery(productQuery analyticsmodel.EnergySeriesQuery) cubeQuery {
-	periodMember := "energy_usage.period_start." + string(productQuery.Granularity)
+func buildSeriesQuery(productQuery analyticsmodel.EnergySeriesQuery) cubeQuery {
+	periodMember := "energy_usage.period_end." + string(productQuery.Granularity)
 	return cubeQuery{
 		Measures: []string{
 			energyMeasure(productQuery.QualityPolicy),
@@ -154,19 +168,35 @@ func buildCubeQuery(productQuery analyticsmodel.EnergySeriesQuery) cubeQuery {
 			"energy_usage.suspect_count",
 			"energy_usage.invalid_count",
 		},
-		Filters: []cubeFilter{
-			{Member: "energy_usage.organization_id", Operator: "equals", Values: []string{productQuery.OrganizationID}},
-			{Member: "energy_usage.site_id", Operator: "equals", Values: []string{productQuery.SiteID}},
-			{Member: "energy_usage.energy_type", Operator: "equals", Values: []string{string(productQuery.EnergyType)}},
-		},
+		Filters: energyFilters(productQuery),
 		TimeDimensions: []cubeTimeDimension{{
-			Dimension:   "energy_usage.period_start",
-			DateRange:   []string{productQuery.From.Format(time.RFC3339Nano), productQuery.To.Format(time.RFC3339Nano)},
+			Dimension:   "energy_usage.period_end",
+			DateRange:   []string{productQuery.From.UTC().Format(time.RFC3339Nano), productQuery.To.UTC().Add(-time.Millisecond).Format(time.RFC3339Nano)},
 			Granularity: string(productQuery.Granularity),
 		}},
 		Order:    map[string]string{periodMember: "asc"},
 		Timezone: productQuery.Timezone,
 		Limit:    10000,
+	}
+}
+
+func buildMetadataQuery(productQuery analyticsmodel.EnergySeriesQuery) cubeQuery {
+	return cubeQuery{
+		Measures: []string{
+			"energy_usage.max_data_watermark",
+			"energy_usage.max_dataset_revision",
+		},
+		Filters:  energyFilters(productQuery),
+		Timezone: productQuery.Timezone,
+		Limit:    1,
+	}
+}
+
+func energyFilters(productQuery analyticsmodel.EnergySeriesQuery) []cubeFilter {
+	return []cubeFilter{
+		{Member: "energy_usage.organization_id", Operator: "equals", Values: []string{productQuery.OrganizationID}},
+		{Member: "energy_usage.site_id", Operator: "equals", Values: []string{productQuery.SiteID}},
+		{Member: "energy_usage.energy_type", Operator: "equals", Values: []string{string(productQuery.EnergyType)}},
 	}
 }
 
@@ -177,15 +207,15 @@ func energyMeasure(policy analyticsmodel.QualityPolicy) string {
 	return "energy_usage.energy_valid_kwh"
 }
 
-func mapEnergySeries(decoded loadResponse, productQuery analyticsmodel.EnergySeriesQuery, datasetRevision string) (analyticsmodel.EnergySeriesResponse, error) {
+func mapEnergySeries(series, metadata loadResponse, productQuery analyticsmodel.EnergySeriesQuery, datasetRevision string) (analyticsmodel.EnergySeriesResponse, error) {
 	location, err := time.LoadLocation(productQuery.Timezone)
 	if err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, err
 	}
-	periodMember := "energy_usage.period_start." + string(productQuery.Granularity)
-	points := make([]analyticsmodel.EnergySeriesPoint, 0, len(decoded.Data))
+	periodMember := "energy_usage.period_end." + string(productQuery.Granularity)
+	points := make([]analyticsmodel.EnergySeriesPoint, 0, len(series.Data))
 	quality := analyticsmodel.QualitySummary{}
-	for _, row := range decoded.Data {
+	for _, row := range series.Data {
 		periodValue, err := scalarString(row[periodMember])
 		if err != nil {
 			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube period: %w", err)
@@ -220,14 +250,101 @@ func mapEnergySeries(decoded loadResponse, productQuery analyticsmodel.EnergySer
 		})
 	}
 	sort.Slice(points, func(left, right int) bool { return points[left].PeriodStart.Before(points[right].PeriodStart) })
-	metadata := analyticsmodel.EnergySeriesMetadata{
+	maximumWatermark, maximumDatasetRevision, err := mapEnergyMetadata(metadata)
+	if err != nil {
+		return analyticsmodel.EnergySeriesResponse{}, err
+	}
+	resolvedDatasetRevision := datasetRevision + ":empty"
+	partial := true
+	var dataWatermark *time.Time
+	var aggregateWatermark *time.Time
+	if maximumDatasetRevision > 0 {
+		resolvedDatasetRevision = fmt.Sprintf("%s:%d", datasetRevision, maximumDatasetRevision)
+	}
+	if !maximumWatermark.IsZero() {
+		watermark := maximumWatermark.UTC()
+		dataWatermark = &watermark
+		aggregateWatermark = &watermark
+		partial = watermark.Before(productQuery.To.UTC()) || !coversRequestedBuckets(points, productQuery)
+	}
+	responseMetadata := analyticsmodel.EnergySeriesMetadata{
 		RequestedGranularity: productQuery.Granularity,
 		ActualGranularity:    productQuery.Granularity,
-		DatasetRevision:      datasetRevision,
-		Partial:              true,
+		DataWatermark:        dataWatermark,
+		AggregateWatermark:   aggregateWatermark,
+		DatasetRevision:      resolvedDatasetRevision,
+		Partial:              partial,
 		QualitySummary:       quality,
 	}
-	return analyticsmodel.EnergySeriesResponse{SchemaVersion: 1, Points: points, Metadata: metadata}, nil
+	return analyticsmodel.EnergySeriesResponse{SchemaVersion: 1, Points: points, Metadata: responseMetadata}, nil
+}
+
+func coversRequestedBuckets(points []analyticsmodel.EnergySeriesPoint, productQuery analyticsmodel.EnergySeriesQuery) bool {
+	location, err := time.LoadLocation(productQuery.Timezone)
+	if err != nil {
+		return false
+	}
+	available := make(map[int64]struct{}, len(points))
+	for _, point := range points {
+		available[point.PeriodStart.UTC().UnixNano()] = struct{}{}
+	}
+	bucket := bucketStart(productQuery.From.In(location), productQuery.Granularity)
+	end := productQuery.To.In(location)
+	for bucket.Before(end) {
+		if _, exists := available[bucket.UTC().UnixNano()]; !exists {
+			return false
+		}
+		next := periodEnd(bucket, productQuery.Granularity)
+		if !next.After(bucket) {
+			return false
+		}
+		bucket = next
+	}
+	return true
+}
+
+func bucketStart(value time.Time, granularity analyticsmodel.Granularity) time.Time {
+	year, month, day := value.Date()
+	switch granularity {
+	case analyticsmodel.GranularityHour:
+		return time.Date(year, month, day, value.Hour(), 0, 0, 0, value.Location())
+	case analyticsmodel.GranularityDay:
+		return time.Date(year, month, day, 0, 0, 0, 0, value.Location())
+	case analyticsmodel.GranularityMonth:
+		return time.Date(year, month, 1, 0, 0, 0, 0, value.Location())
+	default:
+		return value
+	}
+}
+
+func mapEnergyMetadata(decoded loadResponse) (time.Time, uint64, error) {
+	if len(decoded.Data) == 0 {
+		return time.Time{}, 0, nil
+	}
+	row := decoded.Data[0]
+	watermarkValue, hasWatermark, err := optionalScalarString(row["energy_usage.max_data_watermark"])
+	if err != nil {
+		return time.Time{}, 0, fmt.Errorf("decode Cube data watermark: %w", err)
+	}
+	revisionValue, hasRevision, err := optionalScalarString(row["energy_usage.max_dataset_revision"])
+	if err != nil {
+		return time.Time{}, 0, fmt.Errorf("decode Cube dataset revision: %w", err)
+	}
+	if !hasWatermark && !hasRevision {
+		return time.Time{}, 0, nil
+	}
+	if !hasWatermark || !hasRevision {
+		return time.Time{}, 0, errors.New("Cube energy metadata is incomplete")
+	}
+	watermark, err := parseCubeTime(watermarkValue, time.UTC)
+	if err != nil {
+		return time.Time{}, 0, fmt.Errorf("decode Cube data watermark: %w", err)
+	}
+	revision, err := strconv.ParseUint(revisionValue, 10, 64)
+	if err != nil {
+		return time.Time{}, 0, fmt.Errorf("decode Cube dataset revision: %w", err)
+	}
+	return watermark.UTC(), revision, nil
 }
 
 func parseCubeTime(value string, location *time.Location) (time.Time, error) {
@@ -256,14 +373,29 @@ func periodEnd(start time.Time, granularity analyticsmodel.Granularity) time.Tim
 }
 
 func scalarString(raw json.RawMessage) (string, error) {
-	if len(raw) == 0 || string(raw) == "null" {
+	value, exists, err := optionalScalarString(raw)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
 		return "", errors.New("Cube scalar is missing")
+	}
+	return value, nil
+}
+
+func optionalScalarString(raw json.RawMessage) (string, bool, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", false, nil
 	}
 	var value string
 	if err := json.Unmarshal(raw, &value); err == nil {
-		return value, nil
+		return value, true, nil
 	}
-	return strings.TrimSpace(string(raw)), nil
+	value = strings.TrimSpace(string(raw))
+	if value == "" {
+		return "", false, errors.New("Cube scalar is empty")
+	}
+	return value, true, nil
 }
 
 func scalarFloat(raw json.RawMessage) (float64, error) {

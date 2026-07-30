@@ -12,6 +12,7 @@ import (
 
 const (
 	EnergySeriesAction = "analytics.energy-series.read"
+	MinimumQueryRange  = time.Millisecond
 	MaximumQueryRange  = 366 * 24 * time.Hour
 )
 
@@ -87,6 +88,9 @@ func (query EnergySeriesQuery) Validate() error {
 	}
 	if query.From.IsZero() || query.To.IsZero() || !query.From.Before(query.To) {
 		return errors.New("analytics time range is invalid")
+	}
+	if query.To.Sub(query.From) < MinimumQueryRange {
+		return errors.New("analytics time range is below storage precision")
 	}
 	if query.To.Sub(query.From) > MaximumQueryRange {
 		return errors.New("analytics time range exceeds query budget")

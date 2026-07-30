@@ -94,7 +94,7 @@ components:
         to:
           type: string
           format: date-time
-          description: Exclusive range end; maximum supported range is 366 days.
+          description: Exclusive range end; minimum range is 1 millisecond and maximum supported range is 366 days.
         qualityPolicy:
           type: string
           enum: [VALID_ONLY, VALID_AND_SUSPECT]
@@ -120,12 +120,15 @@ components:
         valid:
           type: integer
           format: int64
+          description: Count of returned additive interval facts classified VALID.
         suspect:
           type: integer
           format: int64
+          description: Count of returned additive interval facts classified SUSPECT.
         invalid:
           type: integer
           format: int64
+          description: Count of returned additive interval facts classified INVALID.
     EnergySeriesMetadata:
       type: object
       additionalProperties: false

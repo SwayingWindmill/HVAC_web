@@ -14,6 +14,7 @@ use (
 	./libs/telemetryauth
 	./libs/testpki
 	./libs/workloadtls
+	./services/analytics-read-model-projector
 	./services/audit-ledger-service
 	./services/command-dispatcher
 	./services/command-service

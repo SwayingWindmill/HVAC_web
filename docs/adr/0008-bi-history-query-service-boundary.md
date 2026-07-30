@@ -1,117 +1,209 @@
-# ADR 0008: Separate BI history queries from Telemetry Runtime
+# ADR 0008: Modular BI history pipeline and query boundary
 
 ## Status
 
-Accepted for the first BI history-query vertical slice.
+Accepted and implemented for the first electricity Energy Series vertical slice.
 
 ## Context
 
 `telemetry-runtime-service` is the current-state authority for accepted telemetry,
-quality, freshness, presence and snapshot revision. BI workloads have a different
-resource and failure profile: they can scan long time ranges, aggregate many
-records, and evolve their metric definitions independently from ingestion.
+quality, freshness, presence and snapshot revision. Historical persistence,
+analytical read-model construction and BI queries have different resource,
+failure and release profiles:
 
-Putting BI endpoints, Cube queries and exports into Telemetry Runtime would
-couple analytical load to the latency and availability budget of real-time
-telemetry. It would also mix current-state authority with historical derived
-facts and encourage the browser or Gateway to depend directly on Cube members.
+- history delivery must survive retries without losing accepted observations;
+- cumulative meter readings require domain conversion before they become
+  additive energy facts;
+- BI queries can scan long ranges and must not consume the latency budget of
+  real-time telemetry ingestion;
+- semantic metric definitions must remain versioned and reusable across
+  Dashboard, Energy and future Cost products.
+
+Putting all of these responsibilities into Telemetry Runtime would mix
+current-state authority, asynchronous projection, analytical fact ownership and
+user-facing queries in one failure domain.
 
 ## Decision
 
-Introduce an independent `telemetry-query-service` with the following boundary:
+Use one BI history functional domain with separate modules and runtime units:
 
 ```text
-Platform Gateway
-    -> telemetry-query-service
-        -> Cube Core
-            -> ClickHouse analytics facts
+Telemetry Runtime
+    -> PostgreSQL telemetry history outbox
+        -> telemetry-history-projector
+            -> ClickHouse telemetry_history.observations
+                -> analytics-read-model-projector
+                    -> ClickHouse analytics.energy_interval_facts
+                        -> Cube Core
+                            -> telemetry-query-service
+                                -> Platform Gateway
+                                    -> Dashboard / Energy
 ```
 
-The service owns product-level historical query contracts, query validation,
-authorization scope binding, query budgets, the repository-managed Cube semantic
-model definition and semantic-engine adaptation. It does not own telemetry
-ingestion, current state, ClickHouse writes or historical data facts.
+### Telemetry Runtime
 
-The first product contract is Energy Series:
+Telemetry Runtime owns telemetry acceptance, validation, ordering, quality,
+current state and the transactionally written history outbox. It does not write
+ClickHouse directly and does not execute BI queries.
+
+### Telemetry History Projector
+
+`telemetry-history-projector` is an independent process and image, currently
+built from the `telemetry-runtime-service` Go module. It claims the PostgreSQL
+history outbox and writes immutable accepted/rejected observation evidence to
+`telemetry_history.observations`.
+
+It owns the raw historical projection but does not interpret cumulative meters
+or write analytical facts.
+
+### Analytics Read Model Projector
+
+`analytics-read-model-projector` is an independent Go module, process and image.
+It reads accepted cumulative electricity-meter observations and writes additive
+interval facts to `analytics.energy_interval_facts`.
+
+The first supported source contract is deliberately narrow:
+
+```text
+telemetry_key = hvac_meter.energy
+unit          = kWh
+energy_type   = electricity
+```
+
+For adjacent readings on the same Organization, Site, Device and telemetry key:
+
+- a non-negative difference becomes interval `energy_kwh`;
+- source `SUSPECT` quality propagates to the interval;
+- a meter rollback or reset produces a zero-energy `SUSPECT` interval with
+  reason `METER_RESET_OR_ROLLBACK`, never a negative energy value;
+- a negative cumulative reading produces an `INVALID` zero-energy interval;
+- the current observation ID is the fact identity;
+- the source offset is the dataset revision;
+- the current sampled time is the authoritative data watermark.
+
+The reader uses a fixed ClickHouse window query and an anti-join against the
+fact table. The writer inserts JSONEachRow batches with a deterministic
+ClickHouse deduplication token. Re-running the projector therefore does not
+create a second fact for the same current observation.
+
+Intervals are attributed to the business bucket containing `period_end`.
+Prorating an interval across an hour/day/month boundary is deferred until a
+product requirement needs that additional complexity.
+
+### Telemetry Query Service
+
+`telemetry-query-service` owns product-level historical query contracts, query
+validation, authorization scope binding, query budgets, the repository-managed
+Cube semantic model and semantic-engine adaptation.
+
+The first internal contract is:
 
 ```text
 POST /internal/v1/analytics/energy-series
 ```
 
-The route accepts Organization, Site, energy type, granularity, IANA timezone,
-time range and quality policy. The complete normalized request is bound to a
-short-lived Platform Gateway delegation grant by a SHA-256 scope digest.
+The complete normalized request is bound to a short-lived Platform Gateway
+delegation grant by a SHA-256 scope digest. The service accepts only the fixed
+Energy Series contract and never accepts arbitrary Cube members or SQL.
 
-The service translates the product request to a fixed Cube query. Callers cannot
-supply arbitrary Cube measures, dimensions, filters or SQL. Cube receives a
-separate 30-second JWT with Organization/Site security context and applies a
-second deny-by-default access policy.
+The service translates the product request to a fixed Cube query. Cube receives
+a separate 30-second JWT containing Organization, Site, Principal and policy
+revision. Cube applies a second deny-by-default Organization/Site access policy.
+
+Energy Series executes two fixed Cube queries under one 16-second budget:
+
+1. a time-series query using the requested inclusive `from` and exclusive `to`;
+   because ClickHouse facts use millisecond precision while Cube date ranges are
+   inclusive, the adapter sends `to - 1ms`;
+2. a metadata query without a time range but with the same Organization, Site
+   and energy-type filters.
+
+Responses expose authoritative read-model metadata:
+
+- `dataWatermark` and `aggregateWatermark` come from the metadata query's maximum
+  fact watermark, not from Cube cache refresh time or only the requested rows;
+- `datasetRevision` combines the configured model revision prefix with the
+  maximum numeric fact revision;
+- `partial` is true when the global fact watermark does not cover the requested
+  exclusive end or any requested local hour/day/month bucket has no returned
+  fact row;
+- a site with no analytical facts remains explicitly partial, and a covered
+  watermark never masks a gap in the requested bucket sequence.
 
 A small shared Go module, `libs/analyticsmodel`, owns the cross-process product
-DTOs and validation semantics. The Query Service does not import any other
+DTOs and validation semantics. The Query Service does not import another
 service implementation module.
+
+## Data ownership and identities
+
+| Resource | Writer / owner |
+|---|---|
+| PostgreSQL telemetry history outbox | `telemetry-runtime-service` |
+| `telemetry_history.observations` | `telemetry-history-projector` |
+| `analytics.energy_interval_facts` | `analytics-read-model-projector` |
+| Cube Energy Usage semantic model | `telemetry-query-service` boundary |
+| Energy Series product contract | `telemetry-query-service` |
+| Public Energy/Dashboard routes | `platform-gateway` |
+
+ClickHouse access is separated by runtime identity:
+
+- `analytics_projector_reader`: reads raw history and fact identities;
+- `analytics_projector_writer`: inserts energy facts only;
+- `cube_analytics_reader`: reads analytical facts only.
+
+The no-password users in the local ClickHouse initialization are development
+fixtures. Production deployment must provision authenticated identities and TLS
+outside this repository fixture.
 
 ## Reuse evaluation
 
 The implementation considered three shapes:
 
-- a custom Go-to-ClickHouse query layer, which is simple for a few fixed
-  endpoints but would duplicate semantic metrics, time dimensions and access
-  policy behavior as Dashboard, Energy and Cost expand;
-- a UI-oriented BI server, which adds a second user-facing application and does
-  not fit the platform-owned Gateway/BFF contract;
+- a custom Go-to-ClickHouse query layer, which would duplicate semantic metrics,
+  time dimensions and access policies as Dashboard, Energy and Cost expand;
+- a UI-oriented BI server, which would introduce a second public application and
+  bypass the platform Gateway/BFF contract;
 - Cube Core, a headless semantic layer with ClickHouse support, API-based query
   execution and declarative access policies.
 
-Cube Core was selected as the replaceable internal semantic engine. The PoC pins
-`cubejs/cube:v1.6.51`, keeps Cube inaccessible to browsers, and retains the Go
-Query Service as the platform security and product-contract boundary. Project
-specific code is limited to HVAC query semantics, delegation binding and the
-Cube adapter.
-
-## Data model
-
-Cube reads the planned ClickHouse read model
-`analytics.energy_interval_facts`, not raw telemetry observations. The upstream
-history/read-model pipeline remains responsible for:
-
-- cumulative-meter reset and rollback handling;
-- conversion to additive interval energy;
-- canonical units;
-- late and corrected data revisions;
-- quality classification;
-- data and aggregate watermarks.
-
-The Query Service boundary owns the semantic member definitions, while Cube Core
-executes them and may provide optional cache acceleration. The upstream read-model
-pipeline remains the authority for historical and aggregate facts stored in
-ClickHouse.
+Cube Core was selected as the replaceable internal semantic engine. The local
+scaffold pins `cubejs/cube:v1.6.51` by immutable image digest, keeps Cube
+inaccessible to browsers, and
+retains the Go Query Service as the platform security and product-contract
+boundary. Project-specific code is limited to HVAC interval construction,
+delegation binding and the Cube adapter.
 
 ## Consequences
 
 Positive:
 
-- BI failure and resource pressure are isolated from current-state telemetry;
+- raw history delivery, analytical transformation and BI query failures are
+  isolated from current-state telemetry;
+- every durable dataset has one writer;
+- cumulative meter semantics are centralized before Cube aggregation;
 - Dashboard and Energy can share versioned metric definitions;
-- authorization is enforced at both service and semantic layers;
-- Cube can be replaced behind `EnergySeriesEngine` without changing the public
-  product contract;
-- future export/cold-query work has a dedicated service boundary.
+- authorization is enforced at service and semantic layers;
+- the semantic engine can be replaced behind `EnergySeriesEngine`.
 
 Costs:
 
-- an additional Go service and Cube deployment must be operated;
-- Gateway delegation support and a ClickHouse read model are still required;
-- distributed tracing, timeout budgets and service health must cover one more
-  network hop.
+- three runtime units plus Cube must be operated and observed;
+- the initial projector scans for unprojected candidates rather than maintaining
+  a separate checkpoint table;
+- the first model supports only the canonical cumulative HVAC electricity meter;
+- distributed tracing and timeout budgets span additional network hops.
 
 ## Deferred work
 
-This ADR does not activate a public route or frontend integration. Follow-up
-work must add:
+This ADR does not activate a public route or frontend integration. Follow-up work
+must add:
 
-1. `analytics.energy_interval_facts` DDL and revision/watermark ownership;
-2. the independent History Relay deployment and ClickHouse writer identity;
-3. Gateway authorization and public Energy/Dashboard BFF routes;
-4. local and production deployment assets;
-5. browser acceptance tests and Mock-data retirement.
+1. Gateway authorization and public Energy/Dashboard BFF routes;
+2. Dashboard/Energy frontend integration and mock-data retirement;
+3. tariff, cost, baseline and comparison facts;
+4. water, gas and cooling-energy read models;
+5. correction/rebuild workflows for late historical amendments;
+6. optional durable projector checkpoints when source volume makes anti-join
+   discovery insufficient;
+7. production ClickHouse identities, TLS and deployment manifests;
+8. cross-boundary interval prorating when required by billing semantics.
