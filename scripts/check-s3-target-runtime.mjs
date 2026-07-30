@@ -26,7 +26,7 @@ const requiredFiles = [
   'scripts/write-s3-target-image-evidence.mjs',
   'scripts/aggregate-s3-target-image-evidence.mjs',
   'scripts/test-s3-target-image-evidence.mjs',
-  '.github/workflows/s3-ticket-09.yml',
+  '.github/workflows/s3-command-certification.yml',
   'deploy/s3/images/command-migrator.Dockerfile',
   'deploy/s3/target/README.md',
   'deploy/s3/target/namespace.yaml',
@@ -78,24 +78,24 @@ if (failures.length === 0) {
   requireText('deploy/s3/target/README.md', 's3-target-image-manifest');
   requireText('deploy/s3/target/README.md', 'Local Docker builds are verification-only');
 
-  requireText('.github/workflows/s3-ticket-09.yml', "tags: ['s3-v*']");
-  requireText('.github/workflows/s3-ticket-09.yml', 'docker/setup-buildx-action@v3');
-  requireText('.github/workflows/s3-ticket-09.yml', 'docker/build-push-action@v6');
-  requireText('.github/workflows/s3-ticket-09.yml', 'sbom: true');
-  requireText('.github/workflows/s3-ticket-09.yml', 'provenance: mode=max');
-  requireText('.github/workflows/s3-ticket-09.yml', 'scanners: secret');
-  requireText('.github/workflows/s3-ticket-09.yml', 'sigstore/cosign-installer@v3.8.2');
-  requireText('.github/workflows/s3-ticket-09.yml', 'cosign sign --yes');
-  requireText('.github/workflows/s3-ticket-09.yml', 'cosign verify');
-  requireText('.github/workflows/s3-ticket-09.yml', 'write-s3-target-image-evidence.mjs');
-  requireText('.github/workflows/s3-ticket-09.yml', 'aggregate-s3-target-image-evidence.mjs');
-  requireText('.github/workflows/s3-ticket-09.yml', 'Publish candidate manifest as prerelease asset');
-  requireText('.github/workflows/s3-ticket-09.yml', 'gh release create');
-  requireText('.github/workflows/s3-ticket-09.yml', '--verify-tag');
-  requireText('.github/workflows/s3-ticket-09.yml', '--prerelease');
-  requireText('.github/workflows/s3-ticket-09.yml', 'do not claim formal S3-09 certification');
-  requireText('.github/workflows/s3-ticket-09.yml', 'tags: ${{ steps.image.outputs.name }}:${{ github.sha }}');
-  forbidText('.github/workflows/s3-ticket-09.yml', ':latest');
+  requireText('.github/workflows/s3-command-certification.yml', "tags: ['s3-v*']");
+  requireText('.github/workflows/s3-command-certification.yml', 'docker/setup-buildx-action@v3');
+  requireText('.github/workflows/s3-command-certification.yml', 'docker/build-push-action@v6');
+  requireText('.github/workflows/s3-command-certification.yml', 'sbom: true');
+  requireText('.github/workflows/s3-command-certification.yml', 'provenance: mode=max');
+  requireText('.github/workflows/s3-command-certification.yml', 'scanners: secret');
+  requireText('.github/workflows/s3-command-certification.yml', 'sigstore/cosign-installer@v3.8.2');
+  requireText('.github/workflows/s3-command-certification.yml', 'cosign sign --yes');
+  requireText('.github/workflows/s3-command-certification.yml', 'cosign verify');
+  requireText('.github/workflows/s3-command-certification.yml', 'write-s3-target-image-evidence.mjs');
+  requireText('.github/workflows/s3-command-certification.yml', 'aggregate-s3-target-image-evidence.mjs');
+  requireText('.github/workflows/s3-command-certification.yml', 'Publish candidate manifest as prerelease asset');
+  requireText('.github/workflows/s3-command-certification.yml', 'gh release create');
+  requireText('.github/workflows/s3-command-certification.yml', '--verify-tag');
+  requireText('.github/workflows/s3-command-certification.yml', '--prerelease');
+  requireText('.github/workflows/s3-command-certification.yml', 'do not claim formal S3-09 certification');
+  requireText('.github/workflows/s3-command-certification.yml', 'tags: ${{ steps.image.outputs.name }}:${{ github.sha }}');
+  forbidText('.github/workflows/s3-command-certification.yml', ':latest');
   requireText('scripts/write-s3-target-image-evidence.mjs', 'formalCertificationClaim: false');
   requireText('scripts/aggregate-s3-target-image-evidence.mjs', 'candidate-target-images-published');
   requireText('scripts/test-s3-target-image-evidence.mjs', 'aggregate must fail closed');

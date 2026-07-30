@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
@@ -15,6 +15,7 @@ const [
   validatorTests,
   verifier,
   workflow,
+  authorityWorkflow,
   docs,
   certificationTests,
   postgresSubmissionTests,
@@ -31,7 +32,8 @@ const [
   read('scripts/run-s3-command-certification.mjs'),
   read('scripts/test-s3-command-certification.mjs'),
   read('scripts/verify-s3-command-certification.mjs'),
-  read('.github/workflows/s3-ticket-09.yml'),
+  read('.github/workflows/s3-command-certification.yml'),
+  read('.github/workflows/s3-command-authority.yml'),
   read('docs/operations/s3-implementation-plan.md'),
   read('services/command-service/pkg/commandservice/certification_test.go'),
   read('services/command-service/pkg/commandservice/postgres_integration_test.go'),
@@ -163,12 +165,37 @@ for (const test of [
   'TestThingsBoardRequiresVerifiedMappingAndRejectsOldFence',
 ]) assert(connectorTests.includes(test), `Connector certification test is missing: ${test}`);
 
-for (const script of ['s3:certification:check', 's3:certification:preflight', 's3:certification:verify', 'test:s3-certification', 's3:ticket-09']) {
+const workflowFiles = await readdir(resolve(root, '.github/workflows'));
+assert(workflowFiles.includes('s3-command-certification.yml'), 'stable S3 Command Certification workflow is missing');
+assert(!workflowFiles.includes('s3-ticket-09.yml'), 'retired S3 Ticket 09 workflow must not return');
+for (const script of ['s3:certification:check', 's3:certification:preflight', 's3:certification:verify', 'test:s3-certification', 'test:s3-target-image-evidence', 's3:certification:pr']) {
   assert(packageJSON.scripts?.[script], `package script is missing: ${script}`);
 }
-assert(packageJSON.scripts?.['s3:ticket-09']?.includes('s3:postgres'), 'S3-09 ticket gate omits PostgreSQL certification');
-assert(packageJSON.scripts?.['s3:ticket-09']?.includes('lint') && packageJSON.scripts?.['s3:ticket-09']?.includes('build'), 'S3-09 ticket gate omits TypeScript verification');
-assert(workflow.includes('npm run s3:ticket-09') && workflow.includes("go-version: '1.25.12'") && workflow.includes('verify-s3-command-certification.mjs'), 'S3-09 CI workflow is incomplete');
+assert(!packageJSON.scripts?.['s3:ticket-09'], 'retired s3:ticket-09 package script must not return');
+const certificationPr = packageJSON.scripts?.['s3:certification:pr'] ?? '';
+for (const marker of ['s3:local:check', 's3:target-runtime:test', 's3:certification:check', 'test:s3-certification', 'test:s3-target-image-evidence', 's3:certification:preflight', 'ownership:check']) {
+  assert(certificationPr.includes(marker), `S3 certification PR gate is missing ${marker}`);
+}
+for (const duplicate of ['s3:postgres', 'npm run lint', 'npm run build']) {
+  assert(!certificationPr.includes(duplicate), `S3 certification PR gate duplicates ${duplicate}`);
+}
+for (const marker of ['npm run s3:postgres', 'npm run lint', 'npm run build']) {
+  assert(authorityWorkflow.includes(marker), `S3 Command Authority no longer owns ${marker}`);
+}
+for (const marker of [
+  'name: S3 Command Certification',
+  '.github/workflows/s3-command-certification.yml',
+  'certification-preflight:',
+  'npm run s3:certification:pr',
+  'needs: [certification-preflight]',
+  'verify-s3-command-certification.mjs',
+  's3-command-certification.yml@refs/(heads|tags)/.+',
+]) {
+  assert(workflow.includes(marker), `S3 Command Certification workflow is missing ${marker}`);
+}
+assert(!workflow.includes('s3-ticket-09'), 'S3 Command Certification workflow still emits Ticket 09 topology');
+assert(runner.includes("out/s3-command-certification"), 'S3 certification preflight default output path is not stable');
+assert(!runner.includes("out/s3-ticket-09"), 'S3 certification runner still defaults to Ticket 09 evidence topology');
 for (const token of [
   '100 commands/s for a 60-minute steady-state certification',
   '1,000 commands/s for a one-minute burst',

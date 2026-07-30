@@ -136,10 +136,10 @@ npm run s3:ticket-05
 npm run s3:ticket-06
 npm run s3:ticket-07
 npm run s3:ticket-08
-npm run s3:ticket-09
+npm run s3:certification:pr
 ```
 
-`npm run s3:ticket-09` runs the deterministic/preflight gate only. Formal target-environment certification is invoked explicitly with an approved attestation:
+`npm run s3:certification:pr` runs the deterministic target-runtime and certification preflight gate only. PostgreSQL command authority, TypeScript linting and the product build remain owned by their stable capability workflows instead of being repeated here. Formal target-environment certification is invoked explicitly with an approved attestation:
 
 ```bash
 node scripts/run-s3-command-certification.mjs \

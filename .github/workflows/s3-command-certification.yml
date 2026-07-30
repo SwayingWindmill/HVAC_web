@@ -1,9 +1,9 @@
-name: S3 Ticket 09 Command Certification
+name: S3 Command Certification
 
 on:
   pull_request:
     paths:
-      - '.github/workflows/s3-ticket-09.yml'
+      - '.github/workflows/s3-command-certification.yml'
       - 'contracts/ownership/**'
       - 'contracts/thingsboard/**'
       - 'deploy/s0/images/go-service.Dockerfile'
@@ -32,7 +32,7 @@ on:
     branches: [main]
     tags: ['s3-v*']
     paths:
-      - '.github/workflows/s3-ticket-09.yml'
+      - '.github/workflows/s3-command-certification.yml'
       - 'contracts/ownership/**'
       - 'contracts/thingsboard/**'
       - 'deploy/s0/images/go-service.Dockerfile'
@@ -63,11 +63,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: s3-ticket-09-${{ github.workflow }}-${{ github.ref }}
+  group: s3-command-certification-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  command-certification:
+  certification-preflight:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -81,11 +81,11 @@ jobs:
           node-version: '22.22.0'
           cache: npm
       - run: npm ci
-      - run: npm run s3:ticket-09
+      - run: npm run s3:certification:pr
 
   signed-target-images:
     if: startsWith(github.ref, 'refs/tags/s3-v') || github.event_name == 'workflow_dispatch'
-    needs: [command-certification]
+    needs: [certification-preflight]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -164,7 +164,7 @@ jobs:
         env:
           IMAGE: ${{ steps.image.outputs.name }}
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign verify "$IMAGE@$DIGEST" --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/s3-ticket-09.yml@refs/(heads|tags)/.+$"
+        run: cosign verify "$IMAGE@$DIGEST" --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/s3-command-certification.yml@refs/(heads|tags)/.+$"
       - name: Publish GitHub build provenance
         if: github.event.repository.visibility == 'public'
         uses: actions/attest-build-provenance@v2
