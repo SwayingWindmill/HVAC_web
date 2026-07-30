@@ -363,6 +363,70 @@ test('terminal Agent Runs are immutable and reopening a completed Investigation 
   }), 'INVESTIGATION_STATE_INVALID');
 });
 
+test('framework-independent snapshots round-trip and reject corrupted Lease or effect indexes', () => {
+  const committed = startInvestigation().commitEffect({
+    runId: 'run-001',
+    leaseId: 'lease-001',
+    at: 1_200,
+    expectedRevision: 1,
+    stepId: createStepIdentity('step-energy-baseline'),
+    idempotencyKey: createIdempotencyKey('effect-evidence-001'),
+    kind: 'EVIDENCE',
+    recordId: 'evidence-001',
+  }).investigation;
+  const snapshot = committed.snapshot();
+
+  assert.deepEqual(OperationsInvestigation.restore(snapshot).snapshot(), snapshot);
+  assertDomainError(() => OperationsInvestigation.restore({
+    ...snapshot,
+    runs: [{
+      ...snapshot.runs[0],
+      lease: {
+        ...snapshot.runs[0].lease,
+        id: 'lease-not-in-history',
+      },
+    }],
+  }), 'LEASE_MISMATCH');
+  assertDomainError(() => OperationsInvestigation.restore({
+    ...snapshot,
+    evidenceIds: [],
+  }), 'INVESTIGATION_STATE_INVALID');
+  assertDomainError(() => OperationsInvestigation.restore({
+    ...snapshot,
+    scope: { ...snapshot.scope, siteId: '' },
+  }), 'IDENTITY_INVALID');
+  assertDomainError(() => OperationsInvestigation.restore({
+    ...snapshot,
+    committedEffects: [{ ...snapshot.committedEffects[0], kind: 'UNKNOWN' }],
+  }), 'INVESTIGATION_STATE_INVALID');
+  assertDomainError(() => OperationsInvestigation.restore({
+    ...snapshot,
+    runs: [
+      snapshot.runs[0],
+      {
+        ...snapshot.runs[0],
+        id: 'run-002',
+        lease: {
+          id: 'lease-002',
+          runId: 'run-002',
+          acquiredAt: 1_300,
+          expiresAt: 2_300,
+        },
+        leaseHistory: [{
+          id: 'lease-002',
+          runId: 'run-002',
+          acquiredAt: 1_300,
+          expiresAt: 2_300,
+        }],
+      },
+    ],
+  }), 'INVESTIGATION_STATE_INVALID');
+  assertDomainError(() => OperationsInvestigation.restore({
+    ...snapshot,
+    committedEffects: [{ ...snapshot.committedEffects[0], committedAt: 2_100 }],
+  }), 'LEASE_MISMATCH');
+});
+
 test('failed and cancelled Investigations cannot be reopened or resumed', () => {
   const failed = startInvestigation().failRun({
     runId: 'run-001',

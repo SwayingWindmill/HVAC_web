@@ -18,11 +18,18 @@
     "build": "tsc -p tsconfig.build.json",
     "boundaries": "node ../../scripts/check-operations-agent-service-boundaries.mjs",
     "test": "npm run build && node --test ../../scripts/test-operations-agent-service-boundaries.mjs test/operations-investigation.test.mjs test/investigation-coordinator.test.mjs",
+    "test:postgres": "node ../../scripts/run-operations-agent-postgres-tests.mjs",
+    "migrate:operations": "node ../../scripts/run-operations-agent-migration.mjs operations",
+    "migrate:checkpoints": "node ../../scripts/run-operations-agent-migration.mjs checkpoints",
     "check": "npm run typecheck && npm run boundaries && npm test"
   },
   "engines": {
     "node": ">=22.22.0"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "dependencies": {
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.0"
+  }
 }

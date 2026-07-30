@@ -20,6 +20,7 @@ export {
   type InvestigationScope,
   type InvestigationStatus,
   type OperationsInvestigationErrorCode,
+  type OperationsInvestigationSnapshot,
   type OperationsInvestigationView,
   type PauseAgentRun,
   type ReopenCompletedInvestigation,

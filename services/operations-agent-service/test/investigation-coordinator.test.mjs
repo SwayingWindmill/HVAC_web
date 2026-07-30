@@ -20,7 +20,10 @@ class FakeInvestigationRepository {
   async create({ investigation, event, audit }) {
     const id = investigation.view().id;
     if (this.records.has(id)) {
-      throw new InvestigationRepositoryConflictError('Investigation already exists.');
+      throw new InvestigationRepositoryConflictError(
+        'IDENTITY_CONFLICT',
+        'Investigation already exists.',
+      );
     }
     this.records.set(id, investigation);
     this.outboxEvents.push(event);
@@ -35,11 +38,17 @@ class FakeInvestigationRepository {
     const id = investigation.view().id;
     if (this.conflictNextSave) {
       this.conflictNextSave = false;
-      throw new InvestigationRepositoryConflictError('Concurrent Investigation write won the race.');
+      throw new InvestigationRepositoryConflictError(
+        'REVISION_CONFLICT',
+        'Concurrent Investigation write won the race.',
+      );
     }
     const current = this.records.get(id);
     if (current === undefined || current.view().revision !== expectedRevision) {
-      throw new InvestigationRepositoryConflictError('Investigation Revision changed.');
+      throw new InvestigationRepositoryConflictError(
+        'REVISION_CONFLICT',
+        'Investigation Revision changed.',
+      );
     }
     this.saveCalls.push({ id, expectedRevision, nextRevision: investigation.view().revision });
     this.records.set(id, investigation);

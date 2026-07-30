@@ -152,6 +152,10 @@ A separately identified, non-authoritative presentation mode that may use determ
 
 A durable, reviewable body of work in which the platform coordinates authorized evidence gathering, analysis, findings and proposed next actions for an operational question. An Operations Investigation is a business record and remains meaningful independently of any Agent framework or execution checkpoint.
 
+## Operations Investigation Snapshot
+
+A framework-independent persisted representation of one Operations Investigation aggregate, including its Scope, Revision, Agent Run and Lease history, and committed effect journal. It is validated by the Domain when restored and contains no LangGraph, transport or model-provider type.
+
 ## Investigation Evidence
 
 A scoped reference to an authoritative fact, snapshot, analytical result or governed knowledge source used by an Operations Investigation. Investigation Evidence preserves provenance, revision, quality and applicability; it does not become the owner of the referenced platform fact.

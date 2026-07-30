@@ -63,6 +63,10 @@ export interface OperationsInvestigationView {
   readonly proposedActionIds: readonly string[];
 }
 
+export interface OperationsInvestigationSnapshot extends OperationsInvestigationView {
+  readonly createdAt: number;
+}
+
 export type OperationsInvestigationErrorCode =
   | 'IDENTITY_INVALID'
   | 'TIMESTAMP_INVALID'
@@ -88,9 +92,7 @@ export class OperationsInvestigationError extends Error {
   }
 }
 
-interface InternalState extends OperationsInvestigationView {
-  readonly createdAt: number;
-}
+type InternalState = OperationsInvestigationSnapshot;
 
 export interface CreateOperationsInvestigation {
   readonly id: string;
@@ -238,6 +240,273 @@ const cloneState = (state: InternalState): InternalState => ({
   proposedActionIds: [...state.proposedActionIds],
 });
 
+const investigationStatuses = new Set<InvestigationStatus>([
+  'CREATED',
+  'RUNNING',
+  'PAUSED',
+  'CANCELLED',
+  'COMPLETED',
+  'FAILED',
+]);
+
+const runStatuses = new Set<AgentRunStatus>([
+  'ACTIVE',
+  'PAUSED',
+  'CANCELLED',
+  'COMPLETED',
+  'FAILED',
+]);
+
+const effectKinds = new Set<CommittedEffectKind>([
+  'EVIDENCE',
+  'FINDING',
+  'PROPOSED_ACTION',
+]);
+
+const arraysEqual = (left: readonly string[], right: readonly string[]): boolean => (
+  left.length === right.length && left.every((value, index) => value === right[index])
+);
+
+const requireNullableIdentity = (value: string | null, label: string): string | null => (
+  value === null ? null : requireIdentity(value, label)
+);
+
+const validateSnapshot = (snapshot: OperationsInvestigationSnapshot): InternalState => {
+  const id = requireIdentity(snapshot.id, 'Investigation identity');
+  const scope: InvestigationScope = {
+    organizationId: requireIdentity(snapshot.scope.organizationId, 'Organization identity'),
+    siteId: requireNullableIdentity(snapshot.scope.siteId, 'Site identity'),
+    equipmentId: requireNullableIdentity(snapshot.scope.equipmentId, 'Equipment identity'),
+    deviceId: requireNullableIdentity(snapshot.scope.deviceId, 'Device identity'),
+  };
+  const createdAt = requireTimestamp(snapshot.createdAt, 'createdAt');
+  const revision = createInvestigationRevision(snapshot.revision);
+  if (!investigationStatuses.has(snapshot.status)) {
+    throw new OperationsInvestigationError(
+      'INVESTIGATION_STATE_INVALID',
+      `Unknown Investigation status ${String(snapshot.status)}.`,
+    );
+  }
+
+  const runIds = new Set<string>();
+  const leaseIds = new Set<string>();
+  const runs = snapshot.runs.map((run): AgentRunView => {
+    const runId = requireIdentity(run.id, 'Agent Run identity');
+    if (runIds.has(runId)) {
+      throw new OperationsInvestigationError('RUN_ID_REUSED', `Agent Run ${runId} is duplicated.`);
+    }
+    runIds.add(runId);
+    requireIdentity(run.runtimeRevision, 'Agent Runtime Revision');
+    if (!runStatuses.has(run.status)) {
+      throw new OperationsInvestigationError(
+        'INVESTIGATION_STATE_INVALID',
+        `Unknown Agent Run status ${String(run.status)}.`,
+      );
+    }
+    const startedAt = requireTimestamp(run.startedAt, 'Agent Run startedAt');
+    if (startedAt < createdAt) {
+      throw new OperationsInvestigationError(
+        'TIMESTAMP_INVALID',
+        'Agent Run cannot start before Investigation creation.',
+      );
+    }
+    const pausedAt = run.pausedAt === null
+      ? null
+      : requireTimestamp(run.pausedAt, 'Agent Run pausedAt');
+    const endedAt = run.endedAt === null
+      ? null
+      : requireTimestamp(run.endedAt, 'Agent Run endedAt');
+    const leaseHistory = run.leaseHistory.map((lease): AgentRunLeaseView => {
+      const leaseId = requireIdentity(lease.id, 'Agent Run Lease identity');
+      if (leaseIds.has(leaseId)) {
+        throw new OperationsInvestigationError(
+          'LEASE_ID_REUSED',
+          `Agent Run Lease ${leaseId} is duplicated.`,
+        );
+      }
+      leaseIds.add(leaseId);
+      if (lease.runId !== runId) {
+        throw new OperationsInvestigationError(
+          'LEASE_MISMATCH',
+          `Agent Run Lease ${leaseId} is bound to another Run.`,
+        );
+      }
+      const window = requireLeaseWindow(lease.acquiredAt, lease.expiresAt);
+      return { ...window, id: leaseId, runId };
+    });
+    const lease = run.lease === null
+      ? null
+      : leaseHistory.find((candidate) => candidate.id === run.lease?.id) ?? null;
+    if (run.lease !== null && (lease === null
+      || lease.runId !== run.lease.runId
+      || lease.acquiredAt !== run.lease.acquiredAt
+      || lease.expiresAt !== run.lease.expiresAt)) {
+      throw new OperationsInvestigationError(
+        'LEASE_MISMATCH',
+        `Active Agent Run Lease for ${runId} is not present in Lease History.`,
+      );
+    }
+    if ((run.status === 'ACTIVE') !== (lease !== null)) {
+      throw new OperationsInvestigationError(
+        'INVESTIGATION_STATE_INVALID',
+        `Agent Run ${runId} active status and Lease do not agree.`,
+      );
+    }
+    if (run.status === 'PAUSED' && pausedAt === null) {
+      throw new OperationsInvestigationError(
+        'INVESTIGATION_STATE_INVALID',
+        `Paused Agent Run ${runId} requires pausedAt.`,
+      );
+    }
+    if ((run.status === 'CANCELLED' || run.status === 'COMPLETED' || run.status === 'FAILED')
+      && endedAt === null) {
+      throw new OperationsInvestigationError(
+        'INVESTIGATION_STATE_INVALID',
+        `Terminal Agent Run ${runId} requires endedAt.`,
+      );
+    }
+    return {
+      id: runId,
+      runtimeRevision: run.runtimeRevision,
+      status: run.status,
+      startedAt,
+      pausedAt,
+      endedAt,
+      lease,
+      leaseHistory,
+    };
+  });
+
+  const activeRun = snapshot.activeRunId === null
+    ? null
+    : runs.find((run) => run.id === snapshot.activeRunId) ?? null;
+  const nonTerminalRuns = runs.filter((run) => run.status === 'ACTIVE' || run.status === 'PAUSED');
+  if (nonTerminalRuns.length > 1
+    || (nonTerminalRuns.length === 1 && nonTerminalRuns[0]?.id !== snapshot.activeRunId)) {
+    throw new OperationsInvestigationError(
+      'INVESTIGATION_STATE_INVALID',
+      'An Investigation may retain at most one non-terminal Agent Run.',
+    );
+  }
+  if (snapshot.activeRunId !== null && activeRun === null) {
+    throw new OperationsInvestigationError(
+      'RUN_NOT_ACTIVE',
+      `Active Agent Run ${snapshot.activeRunId} does not exist.`,
+    );
+  }
+  if (snapshot.status === 'RUNNING' && activeRun?.status !== 'ACTIVE') {
+    throw new OperationsInvestigationError(
+      'INVESTIGATION_STATE_INVALID',
+      'A running Investigation requires one active Agent Run.',
+    );
+  }
+  if (snapshot.status === 'PAUSED' && activeRun?.status !== 'PAUSED') {
+    throw new OperationsInvestigationError(
+      'INVESTIGATION_STATE_INVALID',
+      'A paused Investigation requires one paused Agent Run.',
+    );
+  }
+  if (snapshot.status !== 'RUNNING' && snapshot.status !== 'PAUSED'
+    && snapshot.activeRunId !== null) {
+    throw new OperationsInvestigationError(
+      'INVESTIGATION_STATE_INVALID',
+      `Investigation status ${snapshot.status} cannot retain an active Run.`,
+    );
+  }
+  if (snapshot.status === 'CREATED' && runs.length !== 0) {
+    throw new OperationsInvestigationError(
+      'INVESTIGATION_STATE_INVALID',
+      'A created Investigation cannot already contain Agent Runs.',
+    );
+  }
+
+  const idempotencyKeys = new Set<string>();
+  const effectRecords = new Set<string>();
+  const committedEffects = snapshot.committedEffects.map((effect): CommittedEffectView => {
+    const effectRun = runs.find((run) => run.id === effect.runId);
+    if (effectRun === undefined) {
+      throw new OperationsInvestigationError(
+        'RUN_NOT_ACTIVE',
+        `Committed effect references unknown Agent Run ${effect.runId}.`,
+      );
+    }
+    const stepId = createStepIdentity(effect.stepId);
+    const idempotencyKey = createIdempotencyKey(effect.idempotencyKey);
+    const recordId = requireIdentity(effect.recordId, 'Committed effect record identity');
+    if (!effectKinds.has(effect.kind)) {
+      throw new OperationsInvestigationError(
+        'INVESTIGATION_STATE_INVALID',
+        `Unknown committed effect kind ${String(effect.kind)}.`,
+      );
+    }
+    if (idempotencyKeys.has(idempotencyKey)) {
+      throw new OperationsInvestigationError(
+        'IDEMPOTENCY_KEY_REUSED',
+        `Idempotency Key ${idempotencyKey} is duplicated.`,
+      );
+    }
+    idempotencyKeys.add(idempotencyKey);
+    const recordIdentity = `${effect.kind}:${recordId}`;
+    if (effectRecords.has(recordIdentity)) {
+      throw new OperationsInvestigationError(
+        'EFFECT_RECORD_ALREADY_COMMITTED',
+        `${recordIdentity} is duplicated.`,
+      );
+    }
+    effectRecords.add(recordIdentity);
+    const committedAt = requireTimestamp(effect.committedAt, 'Committed effect committedAt');
+    const authorizedByLease = effectRun.leaseHistory.some((lease) => (
+      committedAt >= lease.acquiredAt && committedAt < lease.expiresAt
+    ));
+    if (!authorizedByLease || (effectRun.endedAt !== null && committedAt > effectRun.endedAt)) {
+      throw new OperationsInvestigationError(
+        'LEASE_MISMATCH',
+        `Committed effect ${idempotencyKey} is outside the Agent Run Lease history.`,
+      );
+    }
+    return {
+      runId: effect.runId,
+      stepId,
+      idempotencyKey,
+      kind: effect.kind,
+      recordId,
+      committedAt,
+    };
+  });
+
+  const evidenceIds = committedEffects
+    .filter((effect) => effect.kind === 'EVIDENCE')
+    .map((effect) => effect.recordId);
+  const findingIds = committedEffects
+    .filter((effect) => effect.kind === 'FINDING')
+    .map((effect) => effect.recordId);
+  const proposedActionIds = committedEffects
+    .filter((effect) => effect.kind === 'PROPOSED_ACTION')
+    .map((effect) => effect.recordId);
+  if (!arraysEqual(snapshot.evidenceIds, evidenceIds)
+    || !arraysEqual(snapshot.findingIds, findingIds)
+    || !arraysEqual(snapshot.proposedActionIds, proposedActionIds)) {
+    throw new OperationsInvestigationError(
+      'INVESTIGATION_STATE_INVALID',
+      'Committed effect record indexes do not match the effect journal.',
+    );
+  }
+
+  return {
+    id,
+    scope: cloneScope(scope),
+    createdAt,
+    status: snapshot.status,
+    revision,
+    activeRunId: snapshot.activeRunId,
+    runs,
+    committedEffects,
+    evidenceIds,
+    findingIds,
+    proposedActionIds,
+  };
+};
+
 const replaceRun = (
   runs: readonly AgentRunView[],
   runId: string,
@@ -271,9 +540,17 @@ export class OperationsInvestigation {
     });
   }
 
+  static restore(snapshot: OperationsInvestigationSnapshot): OperationsInvestigation {
+    return new OperationsInvestigation(validateSnapshot(snapshot));
+  }
+
   view(): OperationsInvestigationView {
     const { createdAt: _createdAt, ...view } = cloneState(this.#state);
     return view;
+  }
+
+  snapshot(): OperationsInvestigationSnapshot {
+    return cloneState(this.#state);
   }
 
   startRun(command: StartAgentRun): OperationsInvestigation {

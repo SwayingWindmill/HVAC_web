@@ -1,14 +1,24 @@
 import type {
+  CommittedEffectView,
   InvestigationRevision,
   InvestigationScope,
   OperationsInvestigation,
   OperationsInvestigationView,
 } from '../../domain/index.js';
 
+export type InvestigationRepositoryConflictCode =
+  | 'IDENTITY_CONFLICT'
+  | 'REVISION_CONFLICT'
+  | 'LEASE_CONFLICT'
+  | 'DUPLICATE_EFFECT';
+
 export class InvestigationRepositoryConflictError extends Error {
-  constructor(message: string) {
+  readonly code: InvestigationRepositoryConflictCode;
+
+  constructor(code: InvestigationRepositoryConflictCode, message: string) {
     super(message);
     this.name = 'InvestigationRepositoryConflictError';
+    this.code = code;
   }
 }
 
@@ -173,6 +183,12 @@ export interface AuditRecorder {
   record(record: AuditRecord): Promise<void>;
 }
 
+export interface InvestigationWriteAuthority {
+  readonly runId: string;
+  readonly leaseId: string;
+  readonly at: number;
+}
+
 export interface InvestigationTransaction {
   create(input: {
     readonly investigation: OperationsInvestigation;
@@ -182,6 +198,8 @@ export interface InvestigationTransaction {
   save(input: {
     readonly investigation: OperationsInvestigation;
     readonly expectedRevision: InvestigationRevision;
+    readonly expectedAuthority?: InvestigationWriteAuthority;
+    readonly effect?: CommittedEffectView;
     readonly event: ApplicationEvent;
     readonly audit: AuditRecord;
   }): Promise<void>;

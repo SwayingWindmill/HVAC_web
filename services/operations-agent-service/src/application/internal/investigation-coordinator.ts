@@ -132,7 +132,14 @@ const duplicateErrorCodes = new Set<OperationsInvestigationErrorCode>([
 const mapApplicationError = (error: unknown): never => {
   if (error instanceof InvestigationCoordinatorError) throw error;
   if (error instanceof InvestigationRepositoryConflictError) {
-    throw new InvestigationCoordinatorError('REVISION_CONFLICT', error.message, { cause: error });
+    const code = error.code === 'LEASE_CONFLICT'
+      ? 'LEASE_CONFLICT'
+      : error.code === 'DUPLICATE_EFFECT'
+        ? 'DUPLICATE_EFFECT'
+        : error.code === 'IDENTITY_CONFLICT'
+          ? 'INVALID_INVESTIGATION_STATE'
+          : 'REVISION_CONFLICT';
+    throw new InvestigationCoordinatorError(code, error.message, { cause: error });
   }
   if (error instanceof OperationsInvestigationError) {
     if (error.code === 'REVISION_STALE') {
@@ -303,6 +310,12 @@ export const createInvestigationCoordinator = (
   const persistMutation = async (input: {
     readonly investigation: OperationsInvestigation;
     readonly expectedRevision: InvestigationRevision;
+    readonly expectedAuthority?: {
+      readonly runId: string;
+      readonly leaseId: string;
+      readonly at: number;
+    };
+    readonly effect?: CommittedEffectView;
     readonly occurredAt: number;
     readonly eventType: ApplicationEvent['type'];
     readonly auditAction: AuditRecord['action'];
@@ -312,6 +325,10 @@ export const createInvestigationCoordinator = (
     await ports.investigationTransaction.save({
       investigation: input.investigation,
       expectedRevision: input.expectedRevision,
+      ...(input.expectedAuthority === undefined
+        ? {}
+        : { expectedAuthority: input.expectedAuthority }),
+      ...(input.effect === undefined ? {} : { effect: input.effect }),
       event: {
         type: input.eventType,
         investigationId: view.id,
@@ -530,6 +547,12 @@ export const createInvestigationCoordinator = (
           ? await persistMutation({
             investigation: result.investigation,
             expectedRevision: command.expectedRevision,
+            expectedAuthority: {
+              runId: command.runId,
+              leaseId: command.leaseId,
+              at: now,
+            },
+            effect: result.effect,
             occurredAt: now,
             eventType: 'INVESTIGATION_EFFECT_COMMITTED',
             auditAction: 'COMMIT_EFFECT',
@@ -559,6 +582,11 @@ export const createInvestigationCoordinator = (
         return await persistMutation({
           investigation: next,
           expectedRevision: command.expectedRevision,
+          expectedAuthority: {
+            runId: command.runId,
+            leaseId: command.leaseId,
+            at: now,
+          },
           occurredAt: now,
           eventType: 'AGENT_RUN_PAUSED',
           auditAction: 'PAUSE_AGENT_RUN',
@@ -628,6 +656,11 @@ export const createInvestigationCoordinator = (
         return await persistMutation({
           investigation: next,
           expectedRevision: command.expectedRevision,
+          expectedAuthority: {
+            runId: command.runId,
+            leaseId: command.leaseId,
+            at: now,
+          },
           occurredAt: now,
           eventType: 'AGENT_RUN_COMPLETED',
           auditAction: 'COMPLETE_AGENT_RUN',
@@ -651,6 +684,11 @@ export const createInvestigationCoordinator = (
         return await persistMutation({
           investigation: next,
           expectedRevision: command.expectedRevision,
+          expectedAuthority: {
+            runId: command.runId,
+            leaseId: command.leaseId,
+            at: now,
+          },
           occurredAt: now,
           eventType: 'AGENT_RUN_FAILED',
           auditAction: 'FAIL_AGENT_RUN',

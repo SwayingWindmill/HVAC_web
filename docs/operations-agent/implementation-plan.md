@@ -169,11 +169,19 @@ A separately deployable TypeScript service compiles with enforced inward depende
 
 Planned tracer bullets:
 
-1. Scaffold the service and enforce deep module imports.
-2. Implement Operations Investigation lifecycle, Revision, Agent Run Lease and idempotent Step semantics.
-3. Define the Investigation Coordinator and narrow application ports.
-4. Establish separate business and checkpoint persistence identities and migration ownership.
-5. Add a deterministic fake runtime and fake owner adapters for application acceptance tests.
+1. Scaffold the service and enforce deep module imports — completed by #140.
+2. Implement Operations Investigation lifecycle, Revision, Agent Run Lease and idempotent Step semantics — completed by #141.
+3. Define the Investigation Coordinator and narrow application ports — completed by #142.
+4. Establish separate business and checkpoint persistence identities and migration ownership — completed by #144.
+5. Add a deterministic fake runtime and fake owner adapters for application acceptance tests — pending #145.
+
+Current persistence state:
+
+- `agent_operations` owns validated framework-independent Investigation snapshots, committed effects, Outbox and Audit;
+- `agent_checkpoints` owns opaque Runtime Checkpoints and expiry metadata only;
+- each Schema has an independent migrator login, runtime login and migration command;
+- PostgreSQL integration tests enforce Revision, Lease and effect conflicts plus cross-Schema permission denial;
+- deleting or expiring Checkpoints leaves Investigation business records intact.
 
 Completion gate:
 

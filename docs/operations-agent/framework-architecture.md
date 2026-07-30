@@ -425,27 +425,29 @@ Names such as `execute_sql`, provider RPC methods or ThingsBoard resource names 
 
 ### 9.1 Business persistence
 
-`agent_operations` is the authority for Operations Agent records. The future storage design should support:
+`agent_operations` is the authority for Operations Agent records. The initial physical schema contains:
 
 ```text
 investigations
-investigation_plans
-investigation_steps
-investigation_evidence
-investigation_findings
-proposed_actions
-verification_results
-tool_execution_receipts
-agent_runs
-model_invocations
+    framework-independent OperationsInvestigationSnapshot
+    current Revision and active Run/Lease projection
+
+investigation_effects
+    Step Identity, Idempotency Key, effect kind and business record identity
+
 application_outbox
+audit_records
 ```
 
-This list is a conceptual design, not an approved physical schema.
+One `InvestigationTransaction` locks the current Investigation row and atomically validates Revision, optional Run Lease and appended Effect metadata before writing the new snapshot, Effect row, Outbox event and Audit record. The runtime login can update the Investigation aggregate but can only append to Effect, Outbox and Audit tables. Scope, identity, creation time and prior effect history are immutable.
+
+The conceptual future tables for plans, steps, model invocations, verification results and typed business record payloads remain deferred until a vertical slice requires them. They are not hidden inside Runtime Checkpoints.
 
 ### 9.2 Checkpoint persistence
 
-`agent_checkpoints` is owned by the runtime adapter. It contains LangGraph checkpoint tables and minimal runtime metadata. Its database identity cannot modify `agent_operations`.
+`agent_checkpoints` is independently owned by the checkpoint migrator and contains only opaque Runtime Checkpoints plus lookup and expiry metadata. It has no foreign key or cascading delete into `agent_operations`. Its runtime database identity cannot read or modify `agent_operations`, and the Operations runtime identity cannot access `agent_checkpoints`.
+
+The initial adapter stores an opaque state string and Runtime Revision without importing or serializing LangGraph internals. A later LangGraph adapter may define the opaque payload, but business recovery always starts by restoring the validated `OperationsInvestigationSnapshot` from `agent_operations`.
 
 ### 9.3 Concurrency controls
 
