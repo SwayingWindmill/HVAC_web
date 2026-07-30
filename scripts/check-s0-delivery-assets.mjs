@@ -1,5 +1,5 @@
 import { readFile, readdir } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const read = (path) => readFile(resolve(root, path), 'utf8');
@@ -9,6 +9,45 @@ const assert = (condition, message) => {
 const includesAll = (text, markers, label) => {
   for (const marker of markers) assert(text.includes(marker), `${label} is missing ${marker}`);
 };
+
+async function collectSupplyChainScriptClosure(workflow, packageJSON) {
+  const permissionsIndex = workflow.indexOf('\npermissions:');
+  assert(permissionsIndex >= 0, 'supply-chain workflow is missing permissions boundary');
+  const workflowBody = workflow.slice(permissionsIndex);
+  const npmQueue = [...workflowBody.matchAll(/\bnpm run ([\w:-]+)/g)].map((match) => match[1]);
+  const npmSeen = new Set();
+  const scriptFiles = new Set([...workflowBody.matchAll(/scripts\/[\w./-]+\.(?:mjs|cjs|js)/g)].map((match) => match[0]));
+
+  while (npmQueue.length > 0) {
+    const name = npmQueue.shift();
+    if (npmSeen.has(name)) continue;
+    npmSeen.add(name);
+    const command = packageJSON.scripts?.[name];
+    assert(typeof command === 'string', `supply-chain workflow references missing npm script ${name}`);
+    for (const match of command.matchAll(/\bnpm run ([\w:-]+)/g)) npmQueue.push(match[1]);
+    for (const match of command.matchAll(/scripts\/[\w./-]+\.(?:mjs|cjs|js)/g)) scriptFiles.add(match[0]);
+  }
+
+  const fileQueue = [...scriptFiles];
+  const fileSeen = new Set();
+  while (fileQueue.length > 0) {
+    const path = fileQueue.shift();
+    if (fileSeen.has(path)) continue;
+    fileSeen.add(path);
+    const source = await read(path);
+    const references = new Set([...source.matchAll(/scripts\/[\w./-]+\.(?:mjs|cjs|js)/g)].map((match) => match[0]));
+    for (const match of source.matchAll(/['\"](\.\/[^'\"]+\.(?:mjs|cjs|js))['\"]/g)) {
+      references.add(relative(root, resolve(root, dirname(path), match[1])).replaceAll('\\', '/'));
+    }
+    for (const reference of references) {
+      if (!reference.startsWith('scripts/') || scriptFiles.has(reference)) continue;
+      scriptFiles.add(reference);
+      fileQueue.push(reference);
+    }
+  }
+
+  return scriptFiles;
+}
 
 const packageJSON = JSON.parse(await read('package.json'));
 for (const script of ['delivery:local', 'delivery:validate', 'delivery:check', 'delivery:render', 'security:dependency-audit', 'security:go-vuln', 'security:licenses', 'audit:s0-rollout', 'audit:delivery']) {
@@ -95,6 +134,14 @@ includesAll(renderer, ['@sha256:', 'Missing staging binding', 'Unresolved placeh
 
 const workflow = await read('.github/workflows/s0-supply-chain.yml');
 includesAll(workflow, ['go-version: "1.25.12"', 'gitleaks/gitleaks-action', 'github/codeql-action/init', 'build_mode: manual', 'build_mode: none', 'upload: never', 'security:go-vuln', 'npm audit', 'security:dependency-audit', 'security:licenses', 'sbom: true', 'provenance: mode=max', 'aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25', 'scanners: secret', 'trivy-secrets-${{ matrix.name }}.json', 'cosign sign', 'cosign verify', 'attest-build-provenance', "if: github.event.repository.visibility == 'public'", 'Record GitHub attestation skip', 'id-token: write'], 'supply-chain workflow');
+const triggerBlock = workflow.slice(0, workflow.indexOf('\npermissions:'));
+assert(!triggerBlock.includes('"scripts/**"'), 'supply-chain pull-request paths must not watch every repository script');
+const expectedTriggerScripts = await collectSupplyChainScriptClosure(workflow, packageJSON);
+const configuredTriggerScripts = new Set([...triggerBlock.matchAll(/-\s+"(scripts\/[^"]+)"/g)].map((match) => match[1]));
+const missingTriggerScripts = [...expectedTriggerScripts].filter((path) => !configuredTriggerScripts.has(path)).sort();
+const extraTriggerScripts = [...configuredTriggerScripts].filter((path) => !expectedTriggerScripts.has(path)).sort();
+assert(missingTriggerScripts.length === 0, `supply-chain pull-request paths are missing script dependencies: ${missingTriggerScripts.join(', ')}`);
+assert(extraTriggerScripts.length === 0, `supply-chain pull-request paths contain unrelated scripts: ${extraTriggerScripts.join(', ')}`);
 assert(!workflow.includes('hvac-backend'), 'supply-chain workflow must not depend on the local migration reference');
 assert(!workflow.includes('legacy-private'), 'supply-chain workflow must not build the retired Legacy fixture');
 const licenseGate = await read('scripts/check-production-licenses.mjs');
