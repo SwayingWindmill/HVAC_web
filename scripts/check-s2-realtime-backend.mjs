@@ -30,12 +30,14 @@ const [
   runtimePostgres,
   runtimeTest,
   runtimePostgresTest,
+  realtimePostgresRunner,
   migration,
   centrifugoConfig,
   realtimeCompose,
   pocConfig,
   pocRunner,
   docs,
+  workflow,
   packageJSON,
 ] = await Promise.all([
   json('contracts/http/s2-telemetry-public.openapi.json'),
@@ -51,12 +53,14 @@ const [
   text('services/telemetry-runtime-service/internal/telemetry/realtime_postgres.go'),
   text('services/telemetry-runtime-service/internal/telemetry/realtime_test.go'),
   text('services/telemetry-runtime-service/internal/telemetry/realtime_postgres_integration_test.go'),
+  text('scripts/run-s2-realtime-postgres-tests.mjs'),
   text('infra/s2-telemetry/postgres/init/005-s2-realtime-backend.sql'),
   text('infra/s2-telemetry/realtime/centrifugo.template.json'),
   text('infra/s2-telemetry/realtime/compose.yaml'),
   text('pocs/s2-centrifugo/centrifugo.json'),
   text('scripts/run-s2-centrifugo-poc.mjs'),
   text('docs/operations/s2-realtime-backend.md'),
+  text('.github/workflows/s2-realtime-backend.yml'),
   json('package.json'),
 ]);
 
@@ -152,6 +156,11 @@ for (const marker of [
 for (const marker of ['AuthorizeSubscribe', 'revoked IAM projection remained subscribable', 'RelayOnce', 'publication did not reuse authoritative revision']) {
   assert(runtimePostgresTest.includes(marker), `PostgreSQL realtime integration evidence is missing ${marker}`);
 }
+for (const marker of [
+  'scripts/run-s2-telemetry-runtime-postgres-tests.mjs',
+  "S2_RUNTIME_TEST_PATTERN: 'TestPostgresRealtime'",
+  "S2_RUNTIME_REPORT_PATH: 'out/s2-realtime-backend/realtime-postgres.json'",
+]) assert(realtimePostgresRunner.includes(marker), `Realtime PostgreSQL runner is missing ${marker}`);
 
 for (const marker of ['subject_issuer', 'session_id', 'channel', 'claim_owner', 'claim_until', 's2_telemetry_relay', "status = 'REVOKED'", 'UPDATE telemetry_runtime.recovery_cursors', 'migration-invalidated:']) {
   assert(migration.includes(marker), `expand-only realtime migration is missing ${marker}`);
@@ -198,6 +207,7 @@ for (const phrase of [
   'authoritative Snapshot',
   'server-side unsubscribe',
   '262,144 bytes',
+  'out/s2-realtime-backend/realtime-postgres.json',
   'does not route an individual request to Legacy',
 ]) assert(docs.includes(phrase), `runbook is missing boundary phrase: ${phrase}`);
 
@@ -208,8 +218,17 @@ for (const forbidden of ['thingsboard fallback', 'legacy fallback', 'mock fallba
 
 assert(packageJSON.scripts?.['s2:realtime:check'] === 'node scripts/check-s2-realtime-backend.mjs', 's2:realtime:check is not wired');
 assert(packageJSON.scripts?.['s2:realtime:config'] === 'node scripts/run-s2-realtime-centrifugo-config-check.mjs', 's2:realtime:config is not wired');
+assert(packageJSON.scripts?.['s2:realtime:postgres'] === 'node scripts/run-s2-realtime-postgres-tests.mjs', 's2:realtime:postgres is not wired');
 assert(packageJSON.scripts?.['s2:realtime:transport'] === 'node scripts/run-s2-centrifugo-poc.mjs', 's2:realtime:transport is not wired');
+assert(packageJSON.scripts?.['s2:realtime-backend']?.includes('npm run s2:realtime:postgres'), 's2:realtime-backend omits durable PostgreSQL realtime evidence');
+assert(!packageJSON.scripts?.['s2:realtime-backend']?.includes('npm run s2:postgres'), 's2:realtime-backend still runs the generic PostgreSQL baseline instead of its domain integration');
 assert(packageJSON.scripts?.['s2:realtime-backend']?.includes('npm run s2:realtime:config'), 's2:realtime-backend omits the formal Centrifugo mTLS configuration check');
+for (const marker of [
+  'scripts/run-s2-realtime-postgres-tests.mjs',
+  'scripts/run-s2-telemetry-runtime-postgres-tests.mjs',
+  'name: s2-realtime-backend-evidence',
+  'out/s2-realtime-backend',
+]) assert(workflow.includes(marker), `Realtime workflow is missing ${marker}`);
 
 const evidence = {
   schemaVersion: 1,
@@ -233,6 +252,7 @@ const evidence = {
     serverSideRevocation: true,
     requestFallbacks: 0,
   },
+  postgresEvidence: 'out/s2-realtime-backend/realtime-postgres.json',
   transportEvidence: 'out/s2-centrifugo-poc/report.json',
   generatedAt: new Date().toISOString(),
 };
