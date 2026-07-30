@@ -1,11 +1,11 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const read = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await read(path));
 
-const [plan, ownership, dataOwnership, migration, store, integration, bootstrap, compose] = await Promise.all([
+const [plan, ownership, dataOwnership, migration, store, integration, bootstrap, compose, workflow, postgresRunner] = await Promise.all([
   readJSON('deploy/s3/implementation-plan.v1.json'),
   readJSON('contracts/ownership/s3-command-ownership.v1.json'),
   readJSON('contracts/ownership/data-ownership.v1.json'),
@@ -14,12 +14,42 @@ const [plan, ownership, dataOwnership, migration, store, integration, bootstrap,
   read('services/command-service/pkg/commandservice/postgres_integration_test.go'),
   read('infra/s3-command/postgres/init/000-bootstrap-identities.sql'),
   read('infra/s3-command/compose.yaml'),
+  read('.github/workflows/s3-command-authority.yml'),
+  read('scripts/run-s3-command-postgres-tests.mjs'),
 ]);
 
 const errors = [];
 const assert = (condition, message) => {
   if (!condition) errors.push(message);
 };
+
+const workflowFiles = await readdir(resolve(root, '.github/workflows'));
+assert(workflowFiles.includes('s3-command-authority.yml'), 'stable S3 Command Authority workflow is missing');
+for (const retiredWorkflow of ['s3-ticket-02.yml', 's3-ticket-03.yml', 's3-ticket-05.yml', 's3-ticket-07.yml']) {
+  assert(!workflowFiles.includes(retiredWorkflow), `${retiredWorkflow} must not return`);
+}
+assert((workflow.match(/\.github\/workflows\/s3-command-authority\.yml/g) || []).length === 2, 'S3 Command Authority workflow must watch itself for pull requests and main pushes');
+for (const marker of [
+  'name: S3 Command Authority',
+  'npm run s3:postgres:check',
+  'npm run s3:governance-dispatch:check',
+  'npm run s3:verification:check',
+  'npm run ownership:check',
+  'npm run s3:postgres',
+  'S3_COMMAND_REPORT_PATH: out/s3-command-authority/postgres-authority.json',
+  'name: s3-command-authority-postgres',
+  'node scripts/run-go.mjs test ./libs/commandauth/... ./libs/commandmodel/... ./services/command-service/... ./services/command-dispatcher/... ./services/thingsboard-connector-control/...',
+  'node scripts/run-go.mjs vet ./libs/commandauth/... ./libs/commandmodel/... ./services/command-service/... ./services/command-dispatcher/... ./services/thingsboard-connector-control/...',
+  'npm run lint',
+  'npm run build',
+]) {
+  assert(workflow.includes(marker), `S3 Command Authority workflow is missing ${marker}`);
+}
+for (const retiredTicket of ['s3-ticket-02', 's3-ticket-03', 's3-ticket-05', 's3-ticket-07']) {
+  assert(!workflow.includes(retiredTicket), `S3 Command Authority workflow still emits ${retiredTicket} topology`);
+}
+assert(postgresRunner.includes("out/s3-command-authority/postgres-authority.json"), 'S3 Command Authority default report path is not stable');
+assert(!postgresRunner.includes("out/s3-ticket-02/postgres-authority.json"), 'S3 PostgreSQL runner still defaults to Ticket 02 evidence topology');
 
 assert(plan.completedTickets?.includes('S3-02'), 'S3-02 is not marked complete');
 assert(!(plan.currentFrontier ?? []).includes('S3-01') && !(plan.currentFrontier ?? []).includes('S3-02'), 'S3 frontier regressed to a completed PostgreSQL baseline ticket');
