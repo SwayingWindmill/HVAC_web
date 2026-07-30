@@ -88,12 +88,12 @@ test('the Coordinator owns a complete framework-independent Investigation accept
     (await environment.coordinator.get({ investigationId: started.id })).status,
     'RUNNING',
   );
-  await assert.rejects(() => environment.coordinator.advance({
+  await expectCoordinatorError(() => environment.coordinator.advance({
     investigationId: started.id,
     runId: firstRun.id,
     leaseId: firstRun.lease.id,
     expectedRevision: started.revision,
-  }), /no planned Investigation Step remaining/);
+  }), 'INVALID_INVESTIGATION_STATE');
   assert.equal(environment.runtime.calls.length, 1);
 
   environment.setTime(11_000);

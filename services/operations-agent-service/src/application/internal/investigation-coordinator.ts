@@ -18,6 +18,7 @@ import {
   type InvestigationCoordinatorPorts,
   type OwnerReadResult,
   type ParallelReadRequest,
+  type RuntimePlanningResult,
   type RuntimeReadPlan,
 } from './ports.js';
 
@@ -462,11 +463,20 @@ export const createInvestigationCoordinator = (
             'Runtime Checkpoint revision does not match the active Agent Run.',
           );
         }
-        const planning = await ports.agentExecutionRuntime.planReads({
-          investigation: investigation.view(),
-          runId: run.id,
-          checkpoint,
-        });
+        let planning: RuntimePlanningResult;
+        try {
+          planning = await ports.agentExecutionRuntime.planReads({
+            investigation: investigation.view(),
+            runId: run.id,
+            checkpoint,
+          });
+        } catch (cause) {
+          throw new InvestigationCoordinatorError(
+            'INVALID_INVESTIGATION_STATE',
+            'The Agent execution Runtime rejected the active Run or Checkpoint.',
+            { cause },
+          );
+        }
         if (planning.status === 'UNABLE_TO_CONCLUDE') {
           throw new InvestigationCoordinatorError('UNABLE_TO_CONCLUDE', planning.reason);
         }
@@ -492,6 +502,15 @@ export const createInvestigationCoordinator = (
         }
 
         const checkpointId = ports.idGenerator.next('checkpoint');
+        const checkpointSavedAt = checkpoint === null
+          ? now
+          : Math.max(now, checkpoint.savedAt + 1);
+        if (!Number.isSafeInteger(checkpointSavedAt)) {
+          throw new InvestigationCoordinatorError(
+            'INVALID_INVESTIGATION_STATE',
+            'Runtime Checkpoint time is outside the safe integer range.',
+          );
+        }
         await ports.checkpointRepository.save({
           id: checkpointId,
           investigationId: command.investigationId,
@@ -499,7 +518,7 @@ export const createInvestigationCoordinator = (
           runtimeRevision: run.runtimeRevision,
           position: planning.checkpoint.position,
           opaqueState: planning.checkpoint.opaqueState,
-          savedAt: now,
+          savedAt: checkpointSavedAt,
         });
 
         const view = investigation.view();

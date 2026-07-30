@@ -2,9 +2,9 @@
 
 This package is the separately deployable TypeScript boundary for the Operations Agent.
 It contains the accepted modular-monolith boundary, Domain lifecycle model, public
-Investigation Coordinator application seam and PostgreSQL persistence adapter. It does not
-yet connect a browser, Platform Gateway, live model provider, LangGraph.js runtime,
-scheduler or platform tool.
+Investigation Coordinator application seam, PostgreSQL persistence adapter and the first
+explicit LangGraph.js `AgentExecutionRuntime` adapter. It does not yet connect a browser,
+Platform Gateway, live model provider, scheduler or platform tool.
 
 The module direction is:
 
@@ -33,6 +33,14 @@ Runtime, persistence, Owner readers, Outbox, Audit, budget, clock and identity c
 remain narrow Application ports with no framework or transport types. Business aggregate
 writes, Outbox append and Audit append are represented by one `InvestigationTransaction`
 port so a concrete persistence adapter cannot commit only part of the business mutation.
+
+The LangGraph adapter compiles a project-owned `StateGraph` with explicit validation,
+selection, READ-plan emission and terminal transitions. Its versioned `runtime-state/v1`
+contains only Investigation/Run identity, Runtime Revision, the next Step index and completed
+Step identities. The Coordinator loads and authorizes the Operations Investigation before it
+loads this opaque Checkpoint. Repeating the same Checkpoint is deterministic; a mismatched
+Run, Runtime Revision, state prefix or external position fails closed. Runtime nodes emit
+READ plans only and cannot commit Evidence, Findings or Proposed Actions.
 
 PostgreSQL is split into two independently migrated and authorized Schemas:
 

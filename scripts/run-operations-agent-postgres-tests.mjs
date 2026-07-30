@@ -125,6 +125,7 @@ const report = {
   schemaVersion: 1,
   component: 'operations-agent-service',
   ticket: 144,
+  coveredTickets: [144, 151],
   status: 'failed',
   startedAt: new Date().toISOString(),
   postgresImage: 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412',
@@ -203,7 +204,9 @@ try {
   });
   run(process.execPath, [
     '--test',
+    '--test-concurrency=1',
     'services/operations-agent-service/test/postgres-persistence.test.mjs',
+    'services/operations-agent-service/test/postgres-langgraph-runtime.test.mjs',
   ], {
     env: {
       ...process.env,
@@ -213,6 +216,7 @@ try {
     stdio: 'inherit',
   });
   report.assertions.integrationTests = true;
+  report.assertions.runtimeCheckpointRecovery = true;
 
   report.status = 'passed';
   report.completedAt = new Date().toISOString();

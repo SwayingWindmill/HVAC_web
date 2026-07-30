@@ -88,7 +88,7 @@ services/operations-agent-service/
 
 The directory names describe module responsibility, not mandatory implementation file count. Each module should expose a small public surface and hide its internal structure.
 
-The initial service skeleton is implemented at `services/operations-agent-service`. It is an independent npm package with NodeNext TypeScript build output, one external package root, module-local `index.ts` entries and a repository-owned AST boundary check. At this stage it has no LangGraph.js, model, database, AG-UI, scheduler, browser or Platform Gateway integration. Run its complete local gate with `npm run operations-agent-service:check`.
+The service is implemented at `services/operations-agent-service` as an independent npm package with NodeNext TypeScript build output, one external package root, module-local `index.ts` entries and a repository-owned AST boundary check. Domain, Application and PostgreSQL persistence are implemented, and `runtime-langgraph` now contains the first explicit LangGraph.js `AgentExecutionRuntime`. Model, AG-UI, scheduler, browser and Platform Gateway integrations remain absent. Run its complete local gate with `npm run operations-agent-service:check`.
 
 ### 3.1 Dependency direction
 
@@ -293,6 +293,8 @@ validate_findings
 
 Graph changes may refine these nodes, but they must preserve bounded transitions and application-owned effects.
 
+The first implemented adapter uses the exact `@langchain/langgraph` 1.4.8 release under its MIT license. It was selected because its `StateGraph` supplies the requested explicit node/edge execution runtime without replacing the project-owned Domain, Application, authorization or persistence contracts. The graph contains explicit validation, next-Step selection, READ-plan emission and terminal nodes and implements only the project-owned `AgentExecutionRuntime` port. The package root and the Application module do not expose LangGraph state, node names, Checkpoint classes or provider messages.
+
 ### 6.2 Runtime state
 
 Runtime state contains only what is needed to continue execution:
@@ -311,6 +313,8 @@ model decision metadata
 ```
 
 Runtime state must not become the only copy of committed Evidence, Findings or Proposed Actions.
+
+The initial `runtime-state/v1` is deliberately narrower: program identity, Investigation identity, Agent Run identity, immutable Runtime Revision, next Step index and the ordered completed Step identities. The adapter encodes that bounded state as opaque JSON in the existing project-owned Checkpoint repository. Recovery first restores and authorizes the Operations Investigation, verifies the active Run and Lease, then loads a Checkpoint for the same Investigation, Run and Runtime Revision. Checkpoint identity, state prefix and external position must agree or recovery fails closed. Reusing the same Checkpoint produces the same next READ Plan.
 
 ### 6.3 Interrupt rules
 
