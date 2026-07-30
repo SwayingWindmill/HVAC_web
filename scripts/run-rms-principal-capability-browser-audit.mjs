@@ -11,7 +11,7 @@ import WebSocket from 'ws';
 const root = resolve(process.cwd());
 const profileDir = join(tmpdir(), `rms-02-principal-browser-${process.pid}`);
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-const instant = '2026-07-28T03:00:00.000Z';
+const instant = '2099-07-28T03:00:00.000Z';
 const actingOrganizationId = '01900000-0000-7000-8000-000000000001';
 const policyRevision = 'rms-policy:7';
 const capabilities = ['organization.list', 'site.read', 'device.read'];
@@ -259,7 +259,7 @@ try {
   viteProcess = spawn(process.execPath, [
     resolve(root, 'node_modules/vite/bin/vite.js'),
     'apps/hvac-web',
-    '--config', 'apps/hvac-web/vite.config.ts',
+    '--config', 'apps/hvac-web/vite.real.config.ts',
     '--host', '127.0.0.1',
     '--port', String(webPort),
     '--strictPort',
@@ -269,8 +269,9 @@ try {
     shell: false,
     env: {
       ...process.env,
-      VITE_API_MODE: 'real',
-      S0_GATEWAY_ONLY: 'true',
+      HVAC_WEB_BUILD_ID: 'rms-02-browser',
+      HVAC_WEB_GATEWAY_BASE_PATH: '/api/v1',
+      HVAC_WEB_REALTIME_PROTOCOL: 'centrifugo-v1',
       PLATFORM_GATEWAY_PROXY_TARGET: gatewayURL,
     },
   });
@@ -297,7 +298,7 @@ try {
   await cdpClient.send('Page.enable');
   await cdpClient.send('Log.enable');
 
-  const principalReady = `document.querySelector('[data-testid="authenticated-principal-status"]')?.getAttribute('data-principal-state') === 'authenticated'`;
+  const principalReady = `document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-policy-revision') === '${policyRevision}' && document.querySelector('[data-testid="real-shell-principal"]')?.textContent?.includes('RMS-02 Browser')`;
   await navigate(cdpClient, `${webURL}/system?tab=overview`);
   try {
     await waitForCondition(cdpClient, principalReady, 'authenticated Principal diagnostic', 100);
@@ -318,17 +319,21 @@ try {
     }
   }
   const diagnostic = await evaluate(cdpClient, `(() => {
-    const element = document.querySelector('[data-testid="authenticated-principal-status"]');
+    const shell = document.querySelector('[data-testid="real-protected-shell"]');
     return {
-      policyRevision: element?.getAttribute('data-policy-revision') ?? null,
-      capabilityCount: element?.getAttribute('data-capability-count') ?? null,
-      text: element?.textContent ?? '',
+      policyRevision: shell?.getAttribute('data-policy-revision') ?? null,
+      capabilityCount: shell?.getAttribute('data-capability-count') ?? null,
+      principal: document.querySelector('[data-testid="real-shell-principal"]')?.textContent ?? '',
+      roles: document.querySelector('[data-testid="real-principal-roles"]')?.textContent ?? '',
+      routeState: document.querySelector('[data-testid="real-route-forbidden"]')?.getAttribute('data-route-state') ?? null,
+      text: document.body?.innerText ?? '',
     };
   })()`);
   assert(diagnostic.policyRevision === policyRevision, `policy revision was not rendered: ${JSON.stringify(diagnostic)}`);
   assert(diagnostic.capabilityCount === String(capabilities.length), `capability count was not rendered: ${JSON.stringify(diagnostic)}`);
-  for (const capability of capabilities) assert(diagnostic.text.includes(capability), `capability ${capability} was not rendered`);
-  assert(diagnostic.text.includes('descriptive-role-only'), 'descriptive role context was not rendered');
+  assert(diagnostic.principal.includes('RMS-02 Browser'), `Principal identity was not rendered: ${JSON.stringify(diagnostic)}`);
+  assert(diagnostic.roles.includes('descriptive-role-only'), 'descriptive role context was not rendered');
+  assert(diagnostic.routeState === 'FORBIDDEN', `missing organization.read did not fail closed: ${JSON.stringify(diagnostic)}`);
   assert(!diagnostic.text.includes('organization.read'), 'the UI invented a capability from the descriptive role');
   assert(fixture.requests.some((entry) => entry.method === 'GET' && entry.path === '/api/v1/principal'), 'the browser did not read the current Principal resource');
 
