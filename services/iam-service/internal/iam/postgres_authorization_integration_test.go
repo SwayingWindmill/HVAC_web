@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/services/iam-service/internal/iam"
 )
@@ -48,6 +49,19 @@ func TestPostgresAuthorizationStoreLoadsImmutableIdentityAndScopedFacts(t *testi
 	}
 	if len(owner.RoleBindings) != 1 || owner.RoleBindings[0].Effect != iam.BindingEffectAllow {
 		t.Fatalf("unexpected Owner A role bindings: %#v", owner.RoleBindings)
+	}
+	if len(owner.SiteBindings) != 1 || owner.SiteBindings[0].ActingOrganizationID != postgresOwnerAOrganizationID ||
+		owner.SiteBindings[0].OwningOrganizationID != postgresOwnerAOrganizationID || owner.SiteBindings[0].SiteID != postgresOwnerASite1ID {
+		t.Fatalf("unexpected Owner A Analytics SiteBinding: %#v", owner.SiteBindings)
+	}
+	analyticsGranted := false
+	for _, action := range owner.SiteBindings[0].Actions {
+		if string(action) == analyticsmodel.EnergySeriesAction {
+			analyticsGranted = true
+		}
+	}
+	if !analyticsGranted {
+		t.Fatalf("Owner A Analytics action missing: %#v", owner.SiteBindings[0].Actions)
 	}
 
 	delegated, err := store.LookupRegistryAuthorization(ctx, iam.AuthorizationLookup{

@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 10,
+  "registryRevision": 11,
   "routes": [
     {
       "method": "GET",
@@ -602,6 +602,25 @@
       ],
       "migrationPhase": "S3-R0-contract-only",
       "cohortGroup": "s3-command-v1"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/analytics/energy-series",
+      "owner": "telemetry-query-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "primary",
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false
     }
   ]
 }

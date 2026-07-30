@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/testpki"
@@ -31,6 +32,7 @@ const (
 	fixtureSubjectIssuer        = "https://issuer.example.test"
 	fixtureCoreAudience         = "platform-core-service"
 	registryAuthorize           = "registry:authorize"
+	analyticsAuthorizeAction    = "analytics:authorize"
 	maximumTestDecisionBodySize = 70 << 10
 )
 
@@ -49,6 +51,44 @@ func TestIAMAcceptsOnlyVerifiedGatewayDelegation(t *testing.T) {
 	if principal.Principal.Subject != "fixture-user" || principal.Context.ExecutingServicePrincipal.SPIFFEID != harness.gatewaySPIFFEID {
 		t.Fatalf("unexpected actor chain: %#v", principal)
 	}
+}
+
+func TestIAMAuthorizesEnergyAnalyticsForExactSite(t *testing.T) {
+	harness := newIAMHarness(t)
+	claims := validIAMClaims(harness.now, "fixture-user", analyticsAuthorizeAction)
+	claims.ActingOrganizationID = iam.S1FixtureOwnerAOrganizationID
+	body, err := json.Marshal(analyticsmodel.AuthorizationDecisionRequest{
+		ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID,
+		SiteID:               iam.S1FixtureOwnerASite1ID,
+		Action:               analyticsmodel.EnergySeriesAction,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	harness.handler.ServeHTTP(recorder, harness.request(t, iam.AnalyticsDecisionPath, strings.NewReader(string(body)), claims, harness.gatewaySigner))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response analyticsmodel.AuthorizationDecisionResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.Decision.Allowed || response.Decision.SiteID != iam.S1FixtureOwnerASite1ID || response.Decision.Action != analyticsmodel.EnergySeriesAction {
+		t.Fatalf("decision=%#v", response.Decision)
+	}
+
+	mismatchBody, err := json.Marshal(analyticsmodel.AuthorizationDecisionRequest{
+		ActingOrganizationID: iam.S1FixtureActingOrganizationID,
+		SiteID:               iam.S1FixtureOwnerASite1ID,
+		Action:               analyticsmodel.EnergySeriesAction,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mismatch := httptest.NewRecorder()
+	harness.handler.ServeHTTP(mismatch, harness.request(t, iam.AnalyticsDecisionPath, strings.NewReader(string(mismatchBody)), claims, harness.gatewaySigner))
+	assertIAMProblem(t, mismatch, http.StatusForbidden, "IAM_ANALYTICS_CONTEXT_MISMATCH")
 }
 
 func TestIAMRejectsUnverifiedWorkloadAndForgedHeaders(t *testing.T) {

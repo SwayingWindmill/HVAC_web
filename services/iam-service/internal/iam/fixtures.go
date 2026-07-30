@@ -1,6 +1,7 @@
 package iam
 
 import (
+	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 )
@@ -43,6 +44,9 @@ func NewS1FixtureAuthorizationStore(subjectIssuer string) AuthorizationStore {
 			},
 			RoleBindings: []RoleBinding{
 				{OrganizationID: S1FixtureOwnerAOrganizationID, Actions: []registryauth.Action{registryauth.ActionRegistryRead}, Status: FactStatusActive},
+			},
+			SiteBindings: []SiteBinding{
+				{ActingOrganizationID: S1FixtureOwnerAOrganizationID, OwningOrganizationID: S1FixtureOwnerAOrganizationID, SiteID: S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.Action(analyticsmodel.EnergySeriesAction)}, Status: FactStatusActive},
 			},
 		},
 		{

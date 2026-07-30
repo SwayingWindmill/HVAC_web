@@ -1,5 +1,5 @@
 {
-  "routeRegistryRevision": 10,
+  "routeRegistryRevision": 11,
   "routes": {
     "GET /api/v1/health": { "revision": 1, "owner": "platform-gateway" },
     "GET /api/v1/version": { "revision": 1, "owner": "platform-gateway" },
@@ -24,7 +24,8 @@
     "POST /api/v1/telemetry/recovery-cursors:checkpoint": { "revision": 1, "owner": "telemetry-runtime-service" },
     "POST /api/v1/commands": { "revision": 1, "owner": "command-service" },
     "GET /api/v1/commands/{commandId}": { "revision": 1, "owner": "command-service" },
-    "POST /api/v1/commands/{commandId}:approve": { "revision": 1, "owner": "command-service" }
+    "POST /api/v1/commands/{commandId}:approve": { "revision": 1, "owner": "command-service" },
+    "POST /api/v1/analytics/energy-series": { "revision": 1, "owner": "telemetry-query-service" }
   },
   "dataRegistryRevision": 13,
   "resources": {

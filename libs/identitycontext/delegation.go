@@ -34,6 +34,7 @@ type DelegationClaims struct {
 	Issuer               string   `json:"issuer"`
 	Subject              string   `json:"subject"`
 	SubjectIssuer        string   `json:"subjectIssuer"`
+	PrincipalID          string   `json:"principalId,omitempty"`
 	DisplayName          string   `json:"displayName"`
 	Email                string   `json:"email"`
 	Roles                []string `json:"roles"`

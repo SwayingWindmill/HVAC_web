@@ -4,6 +4,7 @@ go 1.25.12
 
 require (
 	github.com/jackc/pgx/v5 v5.9.2
+	github.com/quanlaihe/hvac-web/libs/analyticsmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/commandauth v0.0.0
 	github.com/quanlaihe/hvac-web/libs/commandmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
@@ -20,6 +21,8 @@ require (
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
 )
+
+replace github.com/quanlaihe/hvac-web/libs/analyticsmodel => ../../libs/analyticsmodel
 
 replace github.com/quanlaihe/hvac-web/libs/commandauth => ../../libs/commandauth
 

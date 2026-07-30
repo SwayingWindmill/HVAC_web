@@ -1,0 +1,187 @@
+openapi: 3.1.0
+info:
+  title: HVAC Energy Analytics Public API
+  version: 1.0.0
+paths:
+  /api/v1/analytics/energy-series:
+    post:
+      operationId: queryEnergySeries
+      summary: Query additive site energy by time bucket
+      description: Requires an authenticated BFF Session, matching Origin and X-CSRF-Token. The browser never calls Telemetry Query Service or Cube directly.
+      security:
+        - BFFSession: []
+      parameters:
+        - name: X-CSRF-Token
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnergySeriesQuery'
+      responses:
+        '200':
+          description: Energy series and authoritative dataset metadata
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: Always private, no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnergySeriesResponse'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+        '502':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
+        '504':
+          $ref: '#/components/responses/Problem'
+components:
+  securitySchemes:
+    BFFSession:
+      type: apiKey
+      in: cookie
+      name: __Host-hvac_session
+  responses:
+    Problem:
+      description: RFC 9457-style product error
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+  schemas:
+    EnergySeriesQuery:
+      type: object
+      additionalProperties: false
+      required: [organizationId, siteId, energyType, granularity, timezone, from, to, qualityPolicy]
+      properties:
+        organizationId:
+          type: string
+          format: uuid
+        siteId:
+          type: string
+          format: uuid
+        energyType:
+          type: string
+          enum: [electricity]
+        granularity:
+          type: string
+          enum: [hour, day, month]
+        timezone:
+          type: string
+          description: IANA timezone, for example Asia/Shanghai.
+        from:
+          type: string
+          format: date-time
+          description: Inclusive range start.
+        to:
+          type: string
+          format: date-time
+          description: Exclusive range end; minimum range is 1 millisecond and maximum range is 366 days.
+        qualityPolicy:
+          type: string
+          enum: [VALID_ONLY, VALID_AND_SUSPECT]
+    EnergySeriesPoint:
+      type: object
+      additionalProperties: false
+      required: [periodStart, periodEnd, energyKWh]
+      properties:
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        energyKWh:
+          type: number
+          format: double
+          minimum: 0
+    QualitySummary:
+      type: object
+      additionalProperties: false
+      required: [valid, suspect, invalid]
+      properties:
+        valid:
+          type: integer
+          format: int64
+          minimum: 0
+        suspect:
+          type: integer
+          format: int64
+          minimum: 0
+        invalid:
+          type: integer
+          format: int64
+          minimum: 0
+    EnergySeriesMetadata:
+      type: object
+      additionalProperties: false
+      required: [requestedGranularity, actualGranularity, datasetRevision, partial, qualitySummary]
+      properties:
+        requestedGranularity:
+          type: string
+          enum: [hour, day, month]
+        actualGranularity:
+          type: string
+          enum: [hour, day, month]
+        dataWatermark:
+          type: string
+          format: date-time
+        aggregateWatermark:
+          type: string
+          format: date-time
+        datasetRevision:
+          type: string
+        partial:
+          type: boolean
+        qualitySummary:
+          $ref: '#/components/schemas/QualitySummary'
+    EnergySeriesResponse:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, points, metadata]
+      properties:
+        schemaVersion:
+          type: integer
+          enum: [1]
+        points:
+          type: array
+          maxItems: 10000
+          items:
+            $ref: '#/components/schemas/EnergySeriesPoint'
+        metadata:
+          $ref: '#/components/schemas/EnergySeriesMetadata'
+    ProblemDetails:
+      type: object
+      additionalProperties: true
+      required: [type, title, status, code, detail, retryable]
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        code:
+          type: string
+        detail:
+          type: string
+        retryable:
+          type: boolean
+        traceId:
+          type: string
+        instance:
+          type: string

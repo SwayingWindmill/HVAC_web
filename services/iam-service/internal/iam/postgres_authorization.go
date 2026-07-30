@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 )
@@ -279,7 +280,7 @@ ORDER BY acting_organization_id, owning_organization_id, site_id, action
 			deny.SiteID = *siteID
 		}
 		parsedAction := registryauth.Action(action)
-		if !parsedAction.Valid() {
+		if !parsedAction.Valid() && action != analyticsmodel.EnergySeriesAction {
 			if telemetryauth.Action(action).Valid() {
 				continue
 			}
@@ -299,7 +300,7 @@ func postgresRegistryActions(values []string) ([]registryauth.Action, error) {
 	actions := make([]registryauth.Action, 0, len(values))
 	for _, value := range values {
 		action := registryauth.Action(value)
-		if action.Valid() {
+		if action.Valid() || value == analyticsmodel.EnergySeriesAction {
 			actions = append(actions, action)
 			continue
 		}

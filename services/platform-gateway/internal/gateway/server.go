@@ -56,6 +56,7 @@ type Config struct {
 	Registry      *RegistryConfig
 	Telemetry     *TelemetryConfig
 	Command       *CommandConfig
+	Analytics     *AnalyticsConfig
 	Observability *observability.Runtime
 }
 
@@ -70,6 +71,7 @@ type handler struct {
 	registry      *registryController
 	telemetry     *telemetryController
 	command       *commandController
+	analytics     *analyticsController
 	observability *observability.Runtime
 }
 
@@ -107,6 +109,7 @@ func NewHandler(config Config) http.Handler {
 		registry:      newRegistryController(config.Registry),
 		telemetry:     newTelemetryController(config.Telemetry),
 		command:       newCommandController(config.Command),
+		analytics:     newAnalyticsController(config.Analytics),
 		observability: telemetry,
 	}
 }
@@ -200,6 +203,14 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 	}
 	if commandRoute, commandID, matches := matchPublicCommandRoute(request.URL.Path); matches {
 		dispatchCommandRoute(h, writer, request, commandRoute, commandID)
+		return
+	}
+	if request.URL.Path == PublicEnergySeriesPath {
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
+			return
+		}
+		h.QueryEnergySeries(writer, request)
 		return
 	}
 

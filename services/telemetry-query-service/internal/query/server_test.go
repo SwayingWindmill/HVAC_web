@@ -26,6 +26,7 @@ const (
 	testAudience       = "telemetry-query-service"
 	testOrganizationID = "018f1e00-0000-7000-8000-000000000001"
 	testSiteID         = "018f1e00-1000-7000-8000-000000000001"
+	testPrincipalID    = "018f1e00-2000-7000-8000-000000000001"
 )
 
 type engineStub struct {
@@ -63,7 +64,7 @@ func TestHandlerReturnsAuthorizedEnergySeries(t *testing.T) {
 	if engine.calls != 1 || engine.query.SiteID != testSiteID {
 		t.Fatalf("engine calls=%d query=%#v", engine.calls, engine.query)
 	}
-	if engine.caller.PrincipalID != "user-1" || engine.caller.PolicyRevision != "analytics-policy:1" {
+	if engine.caller.PrincipalID != testPrincipalID || engine.caller.PolicyRevision != "analytics-policy:1" {
 		t.Fatalf("caller = %#v", engine.caller)
 	}
 	var body analyticsmodel.EnergySeriesResponse
@@ -72,6 +73,34 @@ func TestHandlerReturnsAuthorizedEnergySeries(t *testing.T) {
 	}
 	if len(body.Points) != 1 || body.Points[0].EnergyKWh != 123.5 {
 		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestHandlerRejectsExpiredDelegation(t *testing.T) {
+	now := time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
+	engine := &engineStub{}
+	harness := newServerHarness(t, now, engine)
+	query := validEnergyQuery()
+	response := harness.serveWithGrantTimes(t, query, query, nil, analyticsmodel.EnergySeriesAction, testPrincipalID, now.Add(-time.Minute), now.Add(-time.Second))
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusForbidden, response.Body.String())
+	}
+	if engine.calls != 0 {
+		t.Fatalf("engine calls = %d", engine.calls)
+	}
+}
+
+func TestHandlerRejectsDelegationWithoutInternalPrincipalID(t *testing.T) {
+	now := time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
+	engine := &engineStub{}
+	harness := newServerHarness(t, now, engine)
+	query := validEnergyQuery()
+	response := harness.serveWithGrantTimes(t, query, query, nil, analyticsmodel.EnergySeriesAction, "", now.Add(-time.Second), now.Add(30*time.Second))
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusForbidden, response.Body.String())
+	}
+	if engine.calls != 0 {
+		t.Fatalf("engine calls = %d", engine.calls)
 	}
 }
 
@@ -142,6 +171,11 @@ func (harness serverHarness) serve(t *testing.T, query analyticsmodel.EnergySeri
 
 func (harness serverHarness) serveWithGrantQuery(t *testing.T, query, grantQuery analyticsmodel.EnergySeriesQuery, headers http.Header, action string) *httptest.ResponseRecorder {
 	t.Helper()
+	return harness.serveWithGrantTimes(t, query, grantQuery, headers, action, testPrincipalID, harness.now.Add(-time.Second), harness.now.Add(30*time.Second))
+}
+
+func (harness serverHarness) serveWithGrantTimes(t *testing.T, query, grantQuery analyticsmodel.EnergySeriesQuery, headers http.Header, action, principalID string, issuedAt, expiresAt time.Time) *httptest.ResponseRecorder {
+	t.Helper()
 	payload, err := json.Marshal(query)
 	if err != nil {
 		t.Fatal(err)
@@ -154,6 +188,7 @@ func (harness serverHarness) serveWithGrantQuery(t *testing.T, query, grantQuery
 		Issuer:               testPresenter,
 		Subject:              "user-1",
 		SubjectIssuer:        "issuer-test",
+		PrincipalID:          principalID,
 		ExecutingService:     testPresenter,
 		Audience:             testAudience,
 		ActingOrganizationID: testOrganizationID,
@@ -161,8 +196,8 @@ func (harness serverHarness) serveWithGrantQuery(t *testing.T, query, grantQuery
 		Scopes:               []string{scope},
 		PolicyRevision:       "analytics-policy:1",
 		SessionID:            "session-test",
-		IssuedAt:             harness.now.Add(-time.Second).Unix(),
-		ExpiresAt:            harness.now.Add(30 * time.Second).Unix(),
+		IssuedAt:             issuedAt.Unix(),
+		ExpiresAt:            expiresAt.Unix(),
 		TokenID:              "token-test",
 	})
 	if err != nil {

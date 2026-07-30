@@ -24,9 +24,11 @@ const (
 	RegistryReadDecisionPath   = "/internal/v1/registry-read/decision"
 	TelemetryDecisionPath      = "/internal/v1/telemetry/decision"
 	CommandDecisionPath        = "/internal/v1/command/decision"
+	AnalyticsDecisionPath      = "/internal/v1/analytics/decision"
 	registryAuthorizeAction    = "registry:authorize"
 	telemetryAuthorizeAction   = "telemetry:authorize"
 	commandAuthorizeAction     = "command:authorize"
+	analyticsAuthorizeAction   = "analytics:authorize"
 	maximumDecisionRequestSize = 64 << 10
 	maximumGrantStatusSize     = 16 << 10
 )
@@ -309,6 +311,8 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		status = h.handleTelemetryDecision(writer, request, claims, spiffeID)
 	case CommandDecisionPath:
 		status = h.handleCommandDecision(writer, request, claims, spiffeID)
+	case AnalyticsDecisionPath:
+		status = h.handleAnalyticsDecision(writer, request, claims)
 	}
 }
 
@@ -521,6 +525,8 @@ func expectedInboundAction(path string) (string, bool) {
 		return telemetryAuthorizeAction, true
 	case CommandDecisionPath:
 		return commandAuthorizeAction, true
+	case AnalyticsDecisionPath:
+		return analyticsAuthorizeAction, true
 	default:
 		return "", false
 	}
@@ -543,7 +549,7 @@ type x509CertificateView struct {
 
 func safePath(path string) string {
 	switch path {
-	case CurrentPrincipalPath, RegistryReadDecisionPath, TelemetryDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath:
+	case CurrentPrincipalPath, RegistryReadDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath:
 		return path
 	default:
 		return "unmatched"

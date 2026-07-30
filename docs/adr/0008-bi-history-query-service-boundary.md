@@ -134,6 +134,32 @@ A small shared Go module, `libs/analyticsmodel`, owns the cross-process product
 DTOs and validation semantics. The Query Service does not import another
 service implementation module.
 
+### Platform Gateway Energy API
+
+The browser-facing product route is:
+
+```text
+POST /api/v1/analytics/energy-series
+```
+
+The route requires an authenticated BFF Session, matching Origin and CSRF token.
+The requested Organization must equal the Session acting Organization. Gateway
+requests a dedicated IAM Analytics decision for the exact Site and action,
+`analytics.energy-series.read`. IAM requires an active Organization membership
+plus a same-Organization, exact Site Binding; an Organization-level Role alone
+is not Site ownership proof. Explicit deny takes precedence. After an allow
+decision, Gateway signs a short-lived delegation grant whose scope is the
+normalized query SHA-256 digest and whose `principalId` is the immutable IAM
+Principal ID, then calls Telemetry
+Query Service over the existing workload mTLS identity.
+Browser cookies, CSRF tokens and caller-supplied business-scope headers are never
+forwarded to IAM or Query Service.
+
+Gateway validates the internal response before returning it, preserves Dataset
+Revision, Watermark, Partial and Quality metadata, applies `private, no-store`,
+and maps timeout/unavailable/invalid-upstream states to bounded product errors.
+Cube and Telemetry Query Service remain private.
+
 ## Data ownership and identities
 
 | Resource | Writer / owner |
@@ -143,7 +169,8 @@ service implementation module.
 | `analytics.energy_interval_facts` | `analytics-read-model-projector` |
 | Cube Energy Usage semantic model | `telemetry-query-service` boundary |
 | Energy Series product contract | `telemetry-query-service` |
-| Public Energy/Dashboard routes | `platform-gateway` |
+| Public Energy Series business ownership | `telemetry-query-service` |
+| Public Energy Series ingress and BFF enforcement | `platform-gateway` |
 
 ClickHouse access is separated by runtime identity:
 
@@ -195,15 +222,13 @@ Costs:
 
 ## Deferred work
 
-This ADR does not activate a public route or frontend integration. Follow-up work
-must add:
+The public Energy Series Gateway route is active. Follow-up work must add:
 
-1. Gateway authorization and public Energy/Dashboard BFF routes;
-2. Dashboard/Energy frontend integration and mock-data retirement;
-3. tariff, cost, baseline and comparison facts;
-4. water, gas and cooling-energy read models;
-5. correction/rebuild workflows for late historical amendments;
-6. optional durable projector checkpoints when source volume makes anti-join
+1. Dashboard/Energy frontend integration and mock-data retirement;
+2. tariff, cost, baseline and comparison facts;
+3. water, gas and cooling-energy read models;
+4. correction/rebuild workflows for late historical amendments;
+5. optional durable projector checkpoints when source volume makes anti-join
    discovery insufficient;
-7. production ClickHouse identities, TLS and deployment manifests;
-8. cross-boundary interval prorating when required by billing semantics.
+6. production ClickHouse identities, TLS and deployment manifests;
+7. cross-boundary interval prorating when required by billing semantics.

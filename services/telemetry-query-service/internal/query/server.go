@@ -148,7 +148,7 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		writeProblem(writer, http.StatusUnauthorized, "ANALYTICS_DELEGATION_INVALID", "The analytics delegation grant is invalid.", false)
 		return
 	}
-	if claims.ActingOrganizationID != query.OrganizationID || identitycontext.ValidateDelegation(
+	if claims.PrincipalID == "" || claims.ActingOrganizationID != query.OrganizationID || identitycontext.ValidateDelegation(
 		claims,
 		server.now(),
 		server.allowedPresenterSPIFFE,
@@ -161,7 +161,7 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 	}
 
 	response, err := server.engine.QueryEnergySeries(request.Context(), analytics.CallerContext{
-		PrincipalID: claims.Subject, PolicyRevision: claims.PolicyRevision,
+		PrincipalID: claims.PrincipalID, PolicyRevision: claims.PolicyRevision,
 	}, query)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "ANALYTICS_ENGINE_UNAVAILABLE", "The semantic query engine could not complete the request.", true)

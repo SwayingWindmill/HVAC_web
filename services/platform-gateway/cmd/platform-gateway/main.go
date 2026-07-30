@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -54,6 +55,11 @@ func main() {
 		logger.Error("gateway_command_config_invalid", "error_code", "COMMAND_CONFIG_INVALID")
 		os.Exit(1)
 	}
+	analyticsConfig, err := loadAnalyticsConfig(workloadCertificate)
+	if err != nil {
+		logger.Error("gateway_analytics_config_invalid", "error_code", "ANALYTICS_CONFIG_INVALID")
+		os.Exit(1)
+	}
 	serverTLSConfig, serverTLSEnabled, err := loadGatewayServerTLSConfig()
 	if err != nil {
 		logger.Error("gateway_server_tls_config_invalid", "error_code", "GATEWAY_SERVER_TLS_CONFIG_INVALID")
@@ -76,6 +82,7 @@ func main() {
 		Registry:      routing.registry,
 		Telemetry:     telemetryConfig,
 		Command:       commandConfig,
+		Analytics:     analyticsConfig,
 		Observability: telemetry,
 		Build: platformapi.BuildInfo{
 			Service: "platform-gateway",
@@ -313,6 +320,37 @@ func loadCommandConfig(certificate *tls.Certificate) (*gateway.CommandConfig, er
 		Timeout:           10 * time.Second,
 		MaxResponseBytes:  256 << 10,
 		BackendHTTPClient: &http.Client{Transport: workloadTransport(roots, certificate, envOr("COMMAND_SERVICE_SERVER_NAME", "localhost"))},
+	}, nil
+}
+
+func loadAnalyticsConfig(certificate *tls.Certificate) (*gateway.AnalyticsConfig, error) {
+	queryURL := strings.TrimSpace(os.Getenv("TELEMETRY_QUERY_URL"))
+	if queryURL == "" {
+		return nil, nil
+	}
+	parsed, err := url.Parse(queryURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, errors.New("TELEMETRY_QUERY_URL must be an HTTPS origin without user info, path, query or fragment")
+	}
+	queryURL = strings.TrimRight(parsed.String(), "/")
+	if certificate == nil {
+		return nil, errors.New("Telemetry Query Service requires the authenticated Gateway workload certificate")
+	}
+	caPath := strings.TrimSpace(os.Getenv("TELEMETRY_QUERY_SERVER_CA"))
+	if caPath == "" {
+		return nil, errors.New("TELEMETRY_QUERY_SERVER_CA is required when TELEMETRY_QUERY_URL is configured")
+	}
+	roots, err := loadCertPool(caPath, "Telemetry Query server CA")
+	if err != nil {
+		return nil, err
+	}
+	return &gateway.AnalyticsConfig{
+		QueryBaseURL:     queryURL,
+		QueryAudience:    envOr("TELEMETRY_QUERY_AUDIENCE", "telemetry-query-service"),
+		Timeout:          8 * time.Second,
+		MaxResponseBytes: 8 << 20,
+		QueryHTTPClient:  &http.Client{Transport: workloadTransport(roots, certificate, envOr("TELEMETRY_QUERY_SERVER_NAME", "localhost"))},
 	}, nil
 }
 
