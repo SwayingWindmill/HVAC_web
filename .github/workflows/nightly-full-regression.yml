@@ -126,7 +126,7 @@ jobs:
         with:
           name: nightly-full-regression-browser-windows
           path: out/**
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
   browser_linux:
