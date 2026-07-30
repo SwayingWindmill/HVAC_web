@@ -31,17 +31,11 @@ for (const retiredWorkflow of ['s3-ticket-02.yml', 's3-ticket-03.yml', 's3-ticke
 assert((workflow.match(/\.github\/workflows\/s3-command-authority\.yml/g) || []).length === 2, 'S3 Command Authority workflow must watch itself for pull requests and main pushes');
 for (const marker of [
   'name: S3 Command Authority',
-  'npm run s3:postgres:check',
-  'npm run s3:governance-dispatch:check',
-  'npm run s3:verification:check',
-  'npm run ownership:check',
-  'npm run s3:postgres',
+  'scripts/check-s3-workflow-topology.mjs',
+  'npm run s3:topology:check',
+  'npm run s3:command-authority',
   'S3_COMMAND_REPORT_PATH: out/s3-command-authority/postgres-authority.json',
   'name: s3-command-authority-postgres',
-  'node scripts/run-go.mjs test ./libs/commandauth/... ./libs/commandmodel/... ./services/command-service/... ./services/command-dispatcher/... ./services/thingsboard-connector-control/...',
-  'node scripts/run-go.mjs vet ./libs/commandauth/... ./libs/commandmodel/... ./services/command-service/... ./services/command-dispatcher/... ./services/thingsboard-connector-control/...',
-  'npm run lint',
-  'npm run build',
 ]) {
   assert(workflow.includes(marker), `S3 Command Authority workflow is missing ${marker}`);
 }

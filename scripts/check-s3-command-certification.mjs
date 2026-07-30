@@ -179,9 +179,7 @@ for (const marker of ['s3:local:check', 's3:target-runtime:test', 's3:certificat
 for (const duplicate of ['s3:postgres', 'npm run lint', 'npm run build']) {
   assert(!certificationPr.includes(duplicate), `S3 certification PR gate duplicates ${duplicate}`);
 }
-for (const marker of ['npm run s3:postgres', 'npm run lint', 'npm run build']) {
-  assert(authorityWorkflow.includes(marker), `S3 Command Authority no longer owns ${marker}`);
-}
+assert(authorityWorkflow.includes('npm run s3:command-authority'), 'S3 Command Authority no longer owns the stable authority command');
 for (const marker of [
   'name: S3 Command Certification',
   '.github/workflows/s3-command-certification.yml',

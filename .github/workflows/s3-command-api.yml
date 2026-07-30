@@ -1,35 +1,43 @@
-name: S3 Ticket 08 Command UX
+name: S3 Command API
 
 on:
   pull_request:
     paths:
-      - '.github/workflows/s3-ticket-08.yml'
-      - 'apps/hvac-web/**'
+      - '.github/workflows/s3-command-api.yml'
+      - 'scripts/check-s3-workflow-topology.mjs'
       - 'contracts/http/s3-command-public.openapi.json'
       - 'contracts/ownership/**'
       - 'deploy/s3/**'
       - 'docs/operations/s3-implementation-plan.md'
+      - 'libs/commandauth/**'
+      - 'libs/commandmodel/**'
+      - 'services/iam-service/**'
       - 'services/command-service/**'
       - 'services/platform-gateway/**'
-      - 'scripts/check-s3-command-ux.mjs'
       - 'scripts/check-s3-command-gateway.mjs'
-      - 'scripts/check-s3-command-verification.mjs'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'go.work'
+      - 'go.work.sum'
       - 'package.json'
       - 'package-lock.json'
   push:
     branches: [main]
     paths:
-      - '.github/workflows/s3-ticket-08.yml'
-      - 'apps/hvac-web/**'
+      - '.github/workflows/s3-command-api.yml'
+      - 'scripts/check-s3-workflow-topology.mjs'
       - 'contracts/http/s3-command-public.openapi.json'
       - 'contracts/ownership/**'
       - 'deploy/s3/**'
       - 'docs/operations/s3-implementation-plan.md'
+      - 'libs/commandauth/**'
+      - 'libs/commandmodel/**'
+      - 'services/iam-service/**'
       - 'services/command-service/**'
       - 'services/platform-gateway/**'
-      - 'scripts/check-s3-command-ux.mjs'
       - 'scripts/check-s3-command-gateway.mjs'
-      - 'scripts/check-s3-command-verification.mjs'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'go.work'
+      - 'go.work.sum'
       - 'package.json'
       - 'package-lock.json'
 
@@ -37,13 +45,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: s3-ticket-08-${{ github.workflow }}-${{ github.ref }}
+  group: s3-command-api-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  command-ux:
+  gateway-command-api:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -55,4 +63,7 @@ jobs:
           node-version: '22.22.0'
           cache: npm
       - run: npm ci
-      - run: npm run s3:ticket-08
+      - run: npm run s3:topology:check
+      - run: npm run s3:command-api
+      - run: npm run lint
+      - run: npm run build

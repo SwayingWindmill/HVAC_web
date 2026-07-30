@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/s3-command-authority.yml'
+      - 'scripts/check-s3-workflow-topology.mjs'
       - 'contracts/ownership/**'
       - 'deploy/s3/**'
       - 'docs/adr/0006-s3-command-intent-attempt-safety.md'
@@ -27,6 +28,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/s3-command-authority.yml'
+      - 'scripts/check-s3-workflow-topology.mjs'
       - 'contracts/ownership/**'
       - 'deploy/s3/**'
       - 'docs/adr/0006-s3-command-intent-attempt-safety.md'
@@ -73,11 +75,8 @@ jobs:
           node-version: '22.22.0'
           cache: npm
       - run: npm ci
-      - run: npm run s3:postgres:check
-      - run: npm run s3:governance-dispatch:check
-      - run: npm run s3:verification:check
-      - run: npm run ownership:check
-      - run: npm run s3:postgres
+      - run: npm run s3:topology:check
+      - run: npm run s3:command-authority
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -85,7 +84,3 @@ jobs:
           path: out/s3-command-authority/postgres-authority.json
           if-no-files-found: error
           retention-days: 14
-      - run: node scripts/run-go.mjs test ./libs/commandauth/... ./libs/commandmodel/... ./services/command-service/... ./services/command-dispatcher/... ./services/thingsboard-connector-control/...
-      - run: node scripts/run-go.mjs vet ./libs/commandauth/... ./libs/commandmodel/... ./services/command-service/... ./services/command-dispatcher/... ./services/thingsboard-connector-control/...
-      - run: npm run lint
-      - run: npm run build

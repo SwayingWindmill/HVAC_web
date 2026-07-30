@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const composeFile = resolve(root, 'infra/s3-thingsboard/compose.yaml');
-const evidencePath = resolve(root, 'out/s3-ticket-06/thingsboard-local-contract.json');
+const evidencePath = resolve(root, 'out/s3-thingsboard-contract/thingsboard-local-contract.json');
 const baseURL = 'http://127.0.0.1:18080';
 const demoUsername = ['tenant', '@thingsboard.org'].join('');
 const demoPassword = ['ten', 'ant'].join('');
@@ -74,7 +74,7 @@ try {
     },
   });
 
-  await mkdir(resolve(root, 'out/s3-ticket-06'), { recursive: true });
+  await mkdir(resolve(root, 'out/s3-thingsboard-contract'), { recursive: true });
   await writeFile(evidencePath, `${JSON.stringify({
     schemaVersion: 1,
     ticket: 'S3-06',
