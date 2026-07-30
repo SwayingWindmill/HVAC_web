@@ -147,3 +147,59 @@ The HVAC Web operating mode in which every displayed business fact comes from an
 ## Demo Mode
 
 A separately identified, non-authoritative presentation mode that may use deterministic fixture data for product demonstration. Demo Mode must be visibly distinguishable from Real Mode and its values, actions and state transitions must never be presented as production facts or silently mixed into Real Mode.
+
+## Operations Investigation
+
+A durable, reviewable body of work in which the platform coordinates authorized evidence gathering, analysis, findings and proposed next actions for an operational question. An Operations Investigation is a business record and remains meaningful independently of any Agent framework or execution checkpoint.
+
+## Investigation Evidence
+
+A scoped reference to an authoritative fact, snapshot, analytical result or governed knowledge source used by an Operations Investigation. Investigation Evidence preserves provenance, revision, quality and applicability; it does not become the owner of the referenced platform fact.
+
+## Investigation Finding
+
+A reviewable conclusion produced within an Operations Investigation and supported by cited Investigation Evidence. A Finding distinguishes facts, deterministic analysis results, bounded inferences, hypotheses and inability to conclude.
+
+## Proposed Action
+
+A reviewable recommendation produced by an Operations Investigation. A Proposed Action is not an approval, Command Intent, execution attempt or evidence that a physical change occurred.
+
+## Agent Execution Checkpoint
+
+A recoverable record of where an Agent execution is currently paused or which execution steps have completed. An Agent Execution Checkpoint is operational runtime state, not an Operations Investigation, Evidence, Finding, Proposed Action or other business fact.
+
+## Agent Run
+
+One bounded execution attempt that advances an Operations Investigation. Multiple Operations Investigations may have active Agent Runs concurrently, but one Operations Investigation has at most one write-capable Agent Run at a time.
+
+## Agent Run Lease
+
+A short-lived exclusive claim that authorizes one Agent Run to advance the write state of one Operations Investigation. A lease does not grant domain authorization and does not replace Investigation revision checks or idempotency.
+
+## Investigation Revision
+
+A monotonic revision of the Operations Investigation business record used to reject stale concurrent writes. It is distinct from an Agent Execution Checkpoint version, Device Business Revision, Dataset Revision or transport position.
+
+## Investigation Coordinator
+
+The application boundary through which callers start, continue, inspect, cancel or provide input to an Operations Investigation. It coordinates domain rules and execution without exposing an Agent framework, checkpoint or model-provider API.
+
+## Investigation Step
+
+One stable, reviewable unit of intended work within an Operations Investigation. An Investigation Step remains the same logical step across runtime retries and process attempts.
+
+## Step Identity
+
+The stable identity of one Investigation Step used to correlate execution, Evidence and idempotent effects. Step Identity is not the identity of a worker attempt or graph-node invocation.
+
+## Tool Execution Receipt
+
+A bounded record that an Agent Run invoked a governed tool for a specific Investigation Step. It preserves tool identity, Scope, authorization and input/output digests, outcome and correlation references without becoming the owner of the returned platform fact.
+
+## Operator-Provided Information
+
+Information explicitly supplied by an authorized operator to an Operations Investigation. It may guide planning and may be cited as operator testimony, but it is not automatically an authoritative Device, Telemetry, Analytics or Command fact.
+
+## Agent Runtime Revision
+
+The immutable revision of the Agent execution graph and runtime policy assigned to an Agent Run. An active run never changes Agent Runtime Revision mid-execution; restarting under another revision creates a new Agent Run from authoritative Investigation state.

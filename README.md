@@ -32,30 +32,18 @@ contracts/
 infra/
   s0-durable/                PostgreSQL、Redpanda、OTel Collector 与 Prometheus fixture
 
-runtimes/
-  copilot-runtime/           CopilotKit Runtime module（Node.js）
-
-agents/
-  energy-agent/              EnergyAgent 领域与 LangGraph module（Python）
-
-references/
-  energy-agent-next/         原 Next.js Canvas，作为参考和验收 adapter
-
 scripts/                     本地编排、验证和浏览器审计
 docs/                        产品、架构和集成文档
 ```
 
-## 生产运行链路
+## 当前 AI 运行方式
 
 ```text
 apps/hvac-web
-  -> /api/v1/copilotkit
-runtimes/copilot-runtime
-  -> sample_agent
-agents/energy-agent
+  -> local read-only HvacMockAgent
 ```
 
-`references/energy-agent-next` 不参与 HVAC Web 的生产构建与部署。它保留完整 Investigation Canvas 和自定义 A2UI catalog，用于参考实现、协议验证与验收。
+旧 Python EnergyAgent、独立 Copilot Runtime 和 Next.js 参考 Canvas 已删除。未来 TypeScript Operations Agent 必须通过 Platform Gateway 接入；架构见 ADR 0009、ADR 0010 和 `docs/operations-agent/framework-architecture.md`。
 
 ## 常用命令
 
@@ -68,7 +56,6 @@ npm run delivery:local      # 校验本地交付契约后启动同一完整 S0 �
 npm run delivery:validate   # 校验 local/staging 显式配置与生产出口隔离
 npm run delivery:check      # 校验镜像、探针、身份、NetworkPolicy、迁移与供应链资产
 npm run delivery:render -- --bindings=<private.json> --output=out/s0-staging
-npm run dev:energyagent     # 启动 Web、Copilot Runtime 和 EnergyAgent
 npm run contracts:check     # 校验 OpenAPI 生成产物无漂移
 npm run events:check        # 校验 Protobuf 字段号和类型兼容锁
 npm run ownership:check     # 校验 Route/Data Ownership Registry 与 revision 锁
@@ -93,17 +80,13 @@ npm run audit:s0-rollout    # 验证 readiness 门控滚动升级与兼容版本
 npm run audit:delivery      # 汇总交付配置、静态资产、回滚模型与 PostgreSQL 兼容门禁
 npm run lint
 npm run build
-npm run verify:ai-runtime
-npm run verify:energyagent-stack
 ```
-
-EnergyAgent 模型配置放在 `agents/energy-agent/.env.local`，或通过进程环境变量提供。不得提交密钥。
 
 S0 服务默认通过独立 loopback 诊断端口暴露 `/health/startup`、`/health/live`、`/health/ready`、`/metrics` 和 `/diagnostics`。Gateway、Relay、Audit Ledger、IAM 与 OIDC fixture 的默认端口依次为 `19080`、`19081`、`19082`、`19083`、`19084`。Observability 说明见 `docs/operations/s0-observability.md`，可复现交付、签名镜像、staging 渲染和回滚说明见 `docs/operations/s0-delivery.md`。
 
 ## 依赖所有权
 
-- 根目录 `package.json`：HVAC Web、Copilot Runtime、契约生成与仓库编排所需 Node 依赖。
+- 根目录 `package.json`：HVAC Web、契约生成与仓库编排所需 Node 依赖。
 - `services/platform-gateway/go.mod`：Gateway 独立 Go module。
 - `services/iam-service/go.mod`：私有 IAM 独立 Go module。
 - `services/audit-ledger-service/go.mod`：Audit Consumer、Transactional Inbox 与查询服务依赖。
@@ -114,7 +97,4 @@ S0 服务默认通过独立 loopback 诊断端口暴露 `/health/startup`、`/he
 - `contracts/events/session-audit.v1.lock.json`：Protobuf v1 字段名、字段号和字段类型兼容锁。
 - `contracts/ownership/ownership.v1.lock.json`：公共路由 owner、数据 writer 与单调 revision 兼容锁。
 - `hvac-backend/package.json`：Legacy Frozen NestJS 依赖；S0 私有模式仅加载既有 health controller/service。
-- `agents/energy-agent/pyproject.toml`：Python Agent 依赖，使用 `uv.lock` 锁定。
-- `references/energy-agent-next/package.json`：参考 Next.js adapter 依赖，使用 `pnpm-lock.yaml` 锁定。
-
-不同 adapter 可以使用不同 React 或 CopilotKit 版本；跨进程兼容性由 Runtime 与协议验证保证，而不是通过强制统一所有依赖版本保证。
+未来 Agent adapter 的依赖必须由其所属模块独立管理，并通过 Platform Gateway 和版本化合同保证跨进程兼容性。

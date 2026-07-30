@@ -255,7 +255,7 @@ Dashboard 统一的是设计纪律，不是所有卡片的内部模板。运营�
 - 全局入口直接使用 CopilotKit 官方 `CopilotPopup`、官方 `CopilotKit` Provider 和官方 `styles.css`；不得再包裹自定义 Drawer、Popup 外壳、Skills 首页、历史页或标准/聚焦窗口状态。
 - `/ai` 不提供“场景选择器”。助手应根据当前路由、建筑、角色、遥测、FDD、工单和优化上下文自动理解问题；推荐问题只能作为启动提示，不能改变助手身份。
 - 当前页面上下文和前端工具统一通过 `CopilotContextBridge` 注册，并且所有 CopilotKit hooks 必须从 `@copilotkit/react-core/v2` 主入口导入，避免产生重复 Provider context。
-- 配置 `VITE_COPILOTKIT_RUNTIME_URL` 时连接真实 Runtime；未配置时注册只读 self-managed `HvacMockAgent`。两种执行源必须保持同一官方 Popup/Chat UI、同一活动线程和同一 `default` Agent 名称。
+- 当前仅注册只读 self-managed `HvacMockAgent`。未来远端 Operations Agent 必须通过 Platform Gateway 和受治理的 AG-UI 合同接入，并保持同一产品助手身份；不得恢复浏览器直连独立 Runtime 的环境变量开关。
 
 ### 官方 CopilotPopup
 
