@@ -1,8 +1,9 @@
 # Operations Agent benchmark design
 
-This document fixes the planned benchmark model for industrial-operations Agent
-work. It complements ADR 0009 and remains independent of the eventual TypeScript
-Agent framework. No scenario contract, fixture or validator is implemented yet.
+This document fixes the benchmark model for industrial-operations Agent work. It
+complements ADR 0009 and remains independent of the eventual TypeScript Agent
+framework. Ticket #124 implements the versioned scenario contract and deterministic
+validator; scenario fixtures and the aggregate runner remain later Map 1 work.
 
 ## Capability map
 
@@ -48,10 +49,35 @@ internal transport, but they must preserve the authoritative owner.
 Logical tools must not expose arbitrary SQL, arbitrary Cube members, provider
 method names or source-system identifiers as business identity.
 
+## Implemented v1 contract
+
+The repository-owned contract is `benchmarks/operations-agent/scenario-contract.v1.mjs`.
+It exposes the explicit versions `operations-agent-scenario/v1` and
+`operations-agent-tool-catalog/v1`, the exact logical tool catalog and the public
+`validateOperationsAgentScenario(value)` seam.
+
+The contract requires canonical Scope on the scenario, every input fact and every
+Evidence requirement. It separately models Purpose, task categories, Ground Truth
+outcomes, data-quality conditions, Planning and Execution DAGs, tool policy,
+blocker criteria and scored criteria. Authorization and safety dimensions cannot
+be downgraded into scored criteria.
+
+Use the file-level validation entry from CI or scenario-authoring work:
+
+```bash
+npm run operations-agent:benchmark:validate -- path/to/scenario.json
+```
+
+The command returns a non-zero status and stable error codes for invalid structure,
+duplicate identities, dangling references, invalid or unauthorized Scope, missing
+Evidence metadata, DAG cycles, unknown or disallowed tools, contradictory tool
+policy and blocker/scoring violations. Contract behavior tests run through
+`npm run operations-agent:benchmark:test`.
+
 ## Scenario authoring
 
-When implementation begins, each scenario fixture should conform to a versioned
-Operations Agent scenario contract and contain:
+Each scenario fixture must conform to the current versioned Operations Agent
+scenario contract and contain:
 
 - a stable scenario ID and version;
 - user utterance;
@@ -154,17 +180,15 @@ Evaluation should prefer deterministic checks for tool selection, Scope,
 metadata, classification and forbidden flows. LLM-as-judge may assess operational
 usefulness only after all deterministic blockers pass.
 
-## Planned scenario authoring workflow
-
-Once benchmark implementation starts:
+## Scenario authoring workflow
 
 1. Choose the decision purpose and task category.
 2. State the unique owner for every required fact or action.
 3. Define readiness gates before expected analysis.
 4. Define the smallest acceptable planning and execution DAGs.
 5. Add blocker criteria for authorization, evidence and safety.
-6. Add a versioned fixture in the future benchmark location.
-7. Run the future deterministic contract and DAG validator.
+6. Add a versioned fixture under the Operations Agent benchmark tree.
+7. Run the deterministic contract and DAG validator.
 
 Do not add a framework-specific checkpoint, prompt snapshot or exact final prose
 to the contract unless the behavior itself requires it.

@@ -203,3 +203,15 @@ Information explicitly supplied by an authorized operator to an Operations Inves
 ## Agent Runtime Revision
 
 The immutable revision of the Agent execution graph and runtime policy assigned to an Agent Run. An active run never changes Agent Runtime Revision mid-execution; restarting under another revision creates a new Agent Run from authoritative Investigation state.
+
+## Operations Agent Benchmark Scenario
+
+A versioned, framework-independent fixture that defines one operational question, its authorized Scope, authoritative input facts, Ground Truth, Evidence requirements, planning and execution constraints, tool policy, data-quality conditions and acceptance rules. A Benchmark Scenario specifies observable business behavior; it does not prescribe a prompt, model, graph implementation or checkpoint format.
+
+## Benchmark Blocker Criterion
+
+A deterministic acceptance invariant whose failure invalidates an Operations Agent Benchmark Scenario result regardless of any scored quality or usefulness. Authorization, tenant isolation and physical-action safety are always blocker concerns and cannot be offset by a higher aggregate score.
+
+## Benchmark Scored Criterion
+
+A non-blocking evaluation dimension used to compare acceptable results after every Benchmark Blocker Criterion has passed. Scored Criteria may assess qualities such as evidence completeness or operational usefulness, but they never weaken authorization, ownership or safety invariants.
