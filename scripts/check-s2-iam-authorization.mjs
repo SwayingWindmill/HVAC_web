@@ -62,6 +62,7 @@ const actions = [
   'telemetry.snapshot.read',
   'telemetry.batch.read',
   'telemetry.subscribe',
+  'telemetry.history.read',
   'telemetry.resubscribe',
   'telemetry.recovery.use',
   'telemetry.recovery.checkpoint',

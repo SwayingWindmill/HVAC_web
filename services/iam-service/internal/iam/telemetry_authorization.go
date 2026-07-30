@@ -61,6 +61,7 @@ type TelemetryAuthorizationLookup struct {
 
 type TelemetryAuthorizationStore interface {
 	LookupTelemetryAuthorization(context.Context, TelemetryAuthorizationLookup) (TelemetryAuthorizationFacts, error)
+	LookupPrincipalTelemetryCapabilities(context.Context, PrincipalCapabilityLookup) (TelemetryAuthorizationFacts, error)
 }
 
 type staticTelemetryAuthorizationStore struct {
@@ -77,6 +78,14 @@ func newDenyAllTelemetryAuthorizationStore(policyRevision string) TelemetryAutho
 }
 
 func (store *staticTelemetryAuthorizationStore) LookupTelemetryAuthorization(_ context.Context, lookup TelemetryAuthorizationLookup) (TelemetryAuthorizationFacts, error) {
+	facts := store.facts
+	if facts.Principal.SubjectIssuer != lookup.SubjectIssuer || facts.Principal.Subject != lookup.Subject {
+		return TelemetryAuthorizationFacts{PolicyRevision: facts.PolicyRevision}, nil
+	}
+	return cloneTelemetryAuthorizationFacts(facts), nil
+}
+
+func (store *staticTelemetryAuthorizationStore) LookupPrincipalTelemetryCapabilities(_ context.Context, lookup PrincipalCapabilityLookup) (TelemetryAuthorizationFacts, error) {
 	facts := store.facts
 	if facts.Principal.SubjectIssuer != lookup.SubjectIssuer || facts.Principal.Subject != lookup.Subject {
 		return TelemetryAuthorizationFacts{PolicyRevision: facts.PolicyRevision}, nil

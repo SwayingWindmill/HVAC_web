@@ -31,11 +31,12 @@ export const principalContextSchema = z.object({
 export const capabilitySchema = z.enum([
   'organization.list', 'organization.read', 'site.list', 'site.read',
   'equipment.list', 'equipment.read', 'device.list', 'device.read',
+  'telemetry.snapshot.read', 'telemetry.batch.read', 'telemetry.subscribe', 'telemetry.history.read',
 ]);
 export const effectiveAuthorizationSchema = z.object({
-  capabilitySetVersion: z.literal(1),
+  capabilitySetVersion: z.literal(2),
   policyRevision: z.string().min(1).max(128),
-  capabilities: z.array(capabilitySchema).max(8).refine((values) => new Set(values).size === values.length, {
+  capabilities: z.array(capabilitySchema).max(12).refine((values) => new Set(values).size === values.length, {
     message: 'effective capabilities must be unique',
   }),
 }).strict();
