@@ -48,7 +48,7 @@ Ticket identifiers are historical evidence, not permanent CI architecture. Durab
 - Codify the gate rules in `AGENTS.md`.
 - Keep release-specific PR validation lightweight.
 - Run formal evidence, images, capacity and rollout jobs only on affected `main`, a tag or explicit dispatch.
-- Record the existing orphan `scripts/run-s2-realtime-postgres-tests.mjs`; either wire its durable PostgreSQL assertion into `telemetry-realtime` or delete it after equivalent coverage is proven.
+- Keep Realtime PostgreSQL durability evidence inside the stable `realtime-backend` capability: `s2:realtime:postgres` replaces the generic baseline fixture and writes `out/s2-realtime-backend/realtime-postgres.json` without adding a second database job.
 
 ### Initial implementation
 
