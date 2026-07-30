@@ -30,6 +30,13 @@
       "path": "/api/v1/telemetry/recovery-cursors:checkpoint",
       "requestSchema": "RecoveryCursorCheckpointRequest",
       "responseSchema": "RecoveryCursorCheckpointResponse"
+    },
+    {
+      "operationId": "queryDeviceHistory",
+      "method": "POST",
+      "path": "/api/v1/telemetry/device-history",
+      "requestSchema": "DeviceHistoryRequest",
+      "responseSchema": "DeviceHistoryResponse"
     }
   ],
   "requiredSchemaProperties": {
@@ -71,6 +78,21 @@
       "recoveryMode",
       "transportPosition",
       "recoveryCursor"
+    ],
+    "DeviceHistoryRequest": [
+      "deviceId",
+      "keys",
+      "from",
+      "to",
+      "maxPointsPerKey"
+    ],
+    "DeviceHistoryResponse": [
+      "schemaVersion",
+      "owningOrganizationId",
+      "siteId",
+      "deviceId",
+      "series",
+      "metadata"
     ]
   },
   "publication": {
