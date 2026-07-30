@@ -35,7 +35,7 @@ Ticket identifiers are historical evidence, not permanent CI architecture. Durab
 
 | Current family | Target capability suite |
 |---|---|
-| `rms-*`, `rms-ticket-*` | `web-build`, `web-auth`, `web-routing`, `web-browser`, `web-certification` |
+| retired numbered `rms-*` and `rms-ticket-*` | `RMS Web Build`, `RMS Web Auth`, `RMS Web Routing`, `RMS Web Browser`, `RMS Web Certification` |
 | `s0-*` | `platform-contracts`, `platform-auth`, `platform-durability`, `platform-security`, `platform-release` |
 | retired `s1-ticket-*` | `S1 Registry Core`, `S1 IAM Provider POC`, `S1 Registry Migration`, `S1 Registry Routing`, `S1 Registry Web` |
 | `s2-*` | `telemetry-contracts`, `telemetry-postgres`, `telemetry-realtime`, `telemetry-history`, `telemetry-web`, `telemetry-release` |
@@ -87,6 +87,8 @@ The next release-layer slice removes the duplicated S0 `release-evidence-pr` Kin
 - Merge Ticket workflows into the stable capability suites above.
 - Preserve individual assertions and evidence artifacts while deleting duplicate wrappers.
 - Keep historical Ticket numbers in release evidence and documentation, not workflow topology.
+
+The RMS topology slice replaces eight numbered workflows with five stable capability suites. `RMS Web Routing` runs the complete Ticket 07 policy-test superset instead of relaunching the cumulative Ticket 03–07 build wrappers, while `RMS Web Browser` runs the two distinct Windows browser audits once with one checkout and dependency installation. Build and certification evidence now use `out/rms-web-build` and `out/rms-web-certification`. Every RMS workflow watches and executes `rms:topology:check`, which rejects restored numbered workflows, Ticket commands and Ticket-scoped evidence paths.
 
 The first capability-consolidation slice replaces `S1 Ticket 01 Contract and Ownership` and `S1 Ticket 03 Core Registry Read Service` with the stable `S1 Registry Core` workflow. The new suite keeps the union of contract generation, ownership validation, SQLC POC, Registry baseline, IAM/Core build and security checks, plus one stable PostgreSQL evidence job. Shared Registry changes therefore use one Node/Go setup per capability job instead of launching two Ticket wrappers and two equivalent PostgreSQL baselines. `s1:registry:check` enforces the stable workflow markers and prevents the retired Ticket files and Ticket-scoped evidence paths from returning.
 

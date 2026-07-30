@@ -11,7 +11,7 @@ import { RMS_REQUIRED_BROWSER_SCENARIOS } from './rms-certification-evidence-lib
 
 const root = resolve(process.cwd());
 const profileDir = join(tmpdir(), `rms-03-shell-browser-${process.pid}`);
-const evidencePath = join(root, 'out', 'rms-08', 'browser-evidence.json');
+const evidencePath = join(root, 'out', 'rms-web-certification', 'browser-evidence.json');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 const fixtureCapability = ['rms', '03', String(process.pid)].join('-');
 const sessionCapabilityField = ['csrf', 'Token'].join('');
@@ -1043,7 +1043,7 @@ try {
     assert(browserEvidence.scenarios[scenario]?.passed === true, `browser evidence omitted ${scenario}`);
   }
   browserEvidence.passed = true;
-  await mkdir(join(root, 'out', 'rms-08'), { recursive: true });
+  await mkdir(join(root, 'out', 'rms-web-certification'), { recursive: true });
   await writeFile(evidencePath, `${JSON.stringify(browserEvidence, null, 2)}\n`, 'utf8');
 
   console.log(`RMS authenticated Shell and capability route browser audit passed. Evidence: ${evidencePath}`);

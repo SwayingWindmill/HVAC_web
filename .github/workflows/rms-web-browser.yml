@@ -1,0 +1,53 @@
+name: RMS Web Browser
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/rms-web-browser.yml'
+      - 'scripts/check-rms-workflow-topology.mjs'
+      - 'apps/hvac-web/**'
+      - 'contracts/http/**'
+      - 'libs/identitycontext/**'
+      - 'services/iam-service/**'
+      - 'services/platform-gateway/**'
+      - 'scripts/run-rms-principal-capability-browser-audit.mjs'
+      - 'scripts/run-rms-authenticated-shell-browser-audit.mjs'
+      - 'scripts/ui-audit.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'go.work'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rms-web-browser.yml'
+      - 'scripts/check-rms-workflow-topology.mjs'
+      - 'apps/hvac-web/**'
+      - 'contracts/http/**'
+      - 'libs/identitycontext/**'
+      - 'services/iam-service/**'
+      - 'services/platform-gateway/**'
+      - 'scripts/run-rms-principal-capability-browser-audit.mjs'
+      - 'scripts/run-rms-authenticated-shell-browser-audit.mjs'
+      - 'scripts/ui-audit.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'go.work'
+
+permissions:
+  contents: read
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  browser:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run rms:topology:check
+      - run: npm run rms:web-browser

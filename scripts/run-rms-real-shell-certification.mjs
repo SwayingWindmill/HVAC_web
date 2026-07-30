@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
-const outputDirectory = join(root, 'out', 'rms-08');
+const outputDirectory = join(root, 'out', 'rms-web-certification');
 const gateResultsPath = join(outputDirectory, 'gate-results.json');
 const npmCli = process.env.npm_execpath;
 
@@ -58,7 +58,7 @@ const gates = [
   npmGate('real-build', 'build:real'),
   npmGate('demo-build', 'build:demo'),
   npmGate('bundle', 'rms:real:bundle'),
-  npmGate('browser', 'rms:ticket-08:browser'),
+  npmGate('browser', 'rms:web-routing:browser'),
 ];
 
 rmSync(outputDirectory, { recursive: true, force: true });

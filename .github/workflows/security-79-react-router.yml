@@ -103,7 +103,7 @@ jobs:
         with:
           name: security-79-browser-${{ github.sha }}
           path: |
-            out/rms-08/browser-evidence.json
+            out/rms-web-certification/browser-evidence.json
             out/s2-ticket-09
           if-no-files-found: warn
           retention-days: 30

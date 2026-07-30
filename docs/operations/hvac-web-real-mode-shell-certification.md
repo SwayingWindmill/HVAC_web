@@ -4,7 +4,7 @@
 
 RMS-08 provides one repeatable certification gate for the HVAC Web Real Mode Shell. The gate proves contract identity, generated-client drift protection, relevant IAM and Gateway behavior, Real/Demo build isolation, TypeScript correctness, Site-scoped lifecycle behavior, browser security properties, failure handling, and mobile accessibility.
 
-The generated machine-readable report is written to `out/rms-08/real-shell-certification.json`. Supporting evidence is written beside it and is covered by `out/rms-08/SHA256SUMS`.
+The generated machine-readable report is written to `out/rms-web-certification/real-shell-certification.json`. Supporting evidence is written beside it and is covered by `out/rms-web-certification/SHA256SUMS`.
 
 ## Certification command
 

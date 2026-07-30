@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved ticket breakdown derived from the accepted Q31–Q60 decisions and the Real Mode Shell specification. The eight tickets were published to GitHub on 2026-07-28 with the `ready-for-agent` label and native blocked-by relationships. RMS-01 has an implementation branch with separate Real and Demo build graphs, fail-closed Real startup validation, dependency and emitted-bundle audits, and a passing `npm run rms:ticket-01` gate; review and merge remain pending. RMS-02 has not started.
+Approved ticket breakdown derived from the accepted Q31–Q60 decisions and the Real Mode Shell specification. The eight historical tickets were published to GitHub on 2026-07-28 with native blocked-by relationships and have since been implemented. Permanent CI entry points now follow five stable capabilities: `rms:web-build`, `rms:web-auth`, `rms:web-routing`, `rms:web-browser` and `rms:web-certification`. Ticket identifiers remain historical delivery evidence rather than workflow topology.
 
 ## Objective
 
@@ -195,7 +195,7 @@ More explicitly:
 
 ## Verification strategy
 
-Each ticket receives a dedicated check command and CI workflow following the existing S1–S3 pattern. Ticket checks should compose prior checks rather than duplicate validation logic. RMS-08 provides the complete certification command.
+The permanent CI topology uses five capability suites. `RMS Web Build` owns Real/Demo graph isolation, `RMS Web Auth` owns Principal capability transport, `RMS Web Routing` runs the complete cumulative Shell policy suite, `RMS Web Browser` runs the two distinct Windows browser audits once, and `RMS Web Certification` produces the complete certification envelope. Historical Ticket assertions remain composed inside these capability commands rather than launching separate wrappers.
 
 Expected evidence categories:
 
@@ -235,4 +235,4 @@ Expected evidence categories:
 - RMS-07: #92 — Deliver trusted Real shell chrome and global states.
 - RMS-08: #93 — Certify Real Mode Shell and publish release evidence.
 
-The current implementation frontier is #86 and #87. All later tickets remain blocked by their native GitHub dependency edges.
+All eight implementation tickets are complete. Their dependency graph remains the historical delivery record; ongoing validation is owned by the five stable RMS capability suites.

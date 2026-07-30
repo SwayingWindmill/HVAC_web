@@ -7,7 +7,7 @@ import {
 } from './rms-real-build-audit-lib.mjs';
 
 const workspaceRoot = process.cwd();
-const outputPath = path.join(workspaceRoot, 'out', 'rms-01', 'real-dependency-graph.json');
+const outputPath = path.join(workspaceRoot, 'out', 'rms-web-build', 'real-dependency-graph.json');
 const graph = collectRealDependencyGraph({
   entry: path.join(workspaceRoot, 'apps', 'hvac-web', 'src', 'real', 'main.tsx'),
   tsconfig: path.join(workspaceRoot, 'apps', 'hvac-web', 'tsconfig.json'),
