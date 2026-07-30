@@ -90,6 +90,8 @@ The next release-layer slice removes the duplicated S0 `release-evidence-pr` Kin
 
 The first capability-consolidation slice replaces `S1 Ticket 01 Contract and Ownership` and `S1 Ticket 03 Core Registry Read Service` with the stable `S1 Registry Core` workflow. The new suite keeps the union of contract generation, ownership validation, SQLC POC, Registry baseline, IAM/Core build and security checks, plus one stable PostgreSQL evidence job. Shared Registry changes therefore use one Node/Go setup per capability job instead of launching two Ticket wrappers and two equivalent PostgreSQL baselines. `s1:registry:check` enforces the stable workflow markers and prevents the retired Ticket files and Ticket-scoped evidence paths from returning.
 
+The second capability-consolidation slice replaces S3 Tickets 02, 03, 05 and 07 with `S3 Command Authority`. The suite runs PostgreSQL authority, governance/dispatch and reported-state verification checks once, executes the shared command database integration once, then runs one Go test/vet union and one Lint/Build pass. Its evidence path is stable under `out/s3-command-authority`, and the PostgreSQL authority gate prevents the four retired workflow wrappers or Ticket 02 report path from returning.
+
 ### Phase 4: reusable setup
 
 - Centralize checkout, Node, Go, cache and dependency installation in reusable workflows or composite actions.

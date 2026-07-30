@@ -8,7 +8,7 @@ const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/s3-command/compose.yaml');
 const projectName = `hvac-s3-command-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
-const reportPath = resolve(root, process.env.S3_COMMAND_REPORT_PATH ?? 'out/s3-ticket-02/postgres-authority.json');
+const reportPath = resolve(root, process.env.S3_COMMAND_REPORT_PATH ?? 'out/s3-command-authority/postgres-authority.json');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 const composeInvocation = (() => {
   const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
