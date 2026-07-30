@@ -7,8 +7,6 @@ on:
       - "contracts/http/**"
       - "services/platform-gateway/**"
       - "scripts/generate-platform-contracts.mjs"
-      - "package.json"
-      - "package-lock.json"
       - "go.work"
       - ".github/workflows/s0-contract-gateway.yml"
   push:
@@ -18,8 +16,6 @@ on:
       - "contracts/http/**"
       - "services/platform-gateway/**"
       - "scripts/generate-platform-contracts.mjs"
-      - "package.json"
-      - "package-lock.json"
       - "go.work"
       - ".github/workflows/s0-contract-gateway.yml"
 

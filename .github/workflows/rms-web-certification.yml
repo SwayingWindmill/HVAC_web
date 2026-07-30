@@ -25,8 +25,6 @@ on:
       - 'scripts/run-rms-authenticated-shell-browser-audit.mjs'
       - 'scripts/run-rms-real-shell-certification.mjs'
       - 'scripts/test-rms-*.mjs'
-      - 'package.json'
-      - 'package-lock.json'
   push:
     branches: [main]
     paths:
@@ -52,8 +50,6 @@ on:
       - 'scripts/run-rms-authenticated-shell-browser-audit.mjs'
       - 'scripts/run-rms-real-shell-certification.mjs'
       - 'scripts/test-rms-*.mjs'
-      - 'package.json'
-      - 'package-lock.json'
 
 permissions:
   contents: read

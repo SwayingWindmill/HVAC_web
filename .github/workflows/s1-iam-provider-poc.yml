@@ -11,8 +11,6 @@ on:
       - 'scripts/run-s1-logto-sdk-adoption-poc.mjs'
       - 'scripts/run-auth-principal-browser-audit.mjs'
       - 'services/platform-gateway/internal/gateway/**'
-      - 'package.json'
-      - 'package-lock.json'
   push:
     branches: [main]
     paths:
@@ -24,8 +22,6 @@ on:
       - 'scripts/run-s1-logto-sdk-adoption-poc.mjs'
       - 'scripts/run-auth-principal-browser-audit.mjs'
       - 'services/platform-gateway/internal/gateway/**'
-      - 'package.json'
-      - 'package-lock.json'
 
 permissions:
   contents: read

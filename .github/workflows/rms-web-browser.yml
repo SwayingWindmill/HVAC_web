@@ -13,8 +13,6 @@ on:
       - 'scripts/run-rms-principal-capability-browser-audit.mjs'
       - 'scripts/run-rms-authenticated-shell-browser-audit.mjs'
       - 'scripts/ui-audit.mjs'
-      - 'package.json'
-      - 'package-lock.json'
       - 'go.work'
   push:
     branches: [main]
@@ -29,8 +27,6 @@ on:
       - 'scripts/run-rms-principal-capability-browser-audit.mjs'
       - 'scripts/run-rms-authenticated-shell-browser-audit.mjs'
       - 'scripts/ui-audit.mjs'
-      - 'package.json'
-      - 'package-lock.json'
       - 'go.work'
 
 permissions:

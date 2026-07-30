@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
 
 const runClassification = (files) => {
@@ -112,5 +112,18 @@ test('PR gate workflow always exposes the five stable required checks', async ()
     const end = nextJobMatch ? start + marker.length + nextJobMatch.index : workflow.length;
     const block = workflow.slice(start, end);
     assert.ok(block.includes('if: ${{ always() }}'), `${job} must always report a result`);
+  }
+});
+
+test('legacy workflows do not fan out on root package manifests', async () => {
+  const workflowNames = (await readdir('.github/workflows'))
+    .filter((name) => /\.ya?ml$/u.test(name) && name !== 'pr-gates.yml');
+  for (const name of workflowNames) {
+    const workflow = await readFile(`.github/workflows/${name}`, 'utf8');
+    const triggerBlock = workflow.split(/^jobs:\s*$/mu)[0];
+    assert.ok(
+      !/^\s*-\s*['"]?package(?:-lock)?\.json['"]?\s*$/mu.test(triggerBlock),
+      `${name} must delegate root package manifest classification to PR Gates`,
+    );
   }
 });

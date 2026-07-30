@@ -18,8 +18,6 @@ on:
       - 'scripts/check-ownership-registries.mjs'
       - 'go.work'
       - 'go.work.sum'
-      - 'package.json'
-      - 'package-lock.json'
   push:
     branches: [main]
     paths:
@@ -38,8 +36,6 @@ on:
       - 'scripts/check-ownership-registries.mjs'
       - 'go.work'
       - 'go.work.sum'
-      - 'package.json'
-      - 'package-lock.json'
 
 permissions:
   contents: read

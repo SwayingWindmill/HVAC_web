@@ -15,7 +15,6 @@ on:
       - "docs/operations/s2-shadow-routing.md"
       - "go.work"
       - "go.work.sum"
-      - "package.json"
   push:
     branches: [main]
   workflow_dispatch:

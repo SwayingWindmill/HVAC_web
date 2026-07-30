@@ -14,8 +14,6 @@ on:
       - "scripts/check-npm-production-audit.mjs"
       - "scripts/run-s2-hvac-web-presence-browser-audit.mjs"
       - "docs/operations/s2-security-observability.md"
-      - "package.json"
-      - "package-lock.json"
   push:
     branches: [main]
   workflow_dispatch:
