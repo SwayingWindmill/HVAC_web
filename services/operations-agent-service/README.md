@@ -15,6 +15,13 @@ bootstrap -> adapters
 Every module is imported through its `index.ts` entry. Cross-module imports into an
 `internal` path are rejected by the repository boundary check.
 
+The Domain module currently provides an immutable `OperationsInvestigation` aggregate.
+It owns Agent Run lifecycle transitions, monotonic Investigation Revision checks,
+non-reusable Agent Run Lease identities, Step Identity, Idempotency Key deduplication,
+and cancellation rules that preserve committed Evidence, Findings and Proposed Actions.
+Completed Investigations may be reopened only by creating a new Agent Run; terminal Runs
+are never resumed.
+
 Run the package checks from the repository root:
 
 ```bash

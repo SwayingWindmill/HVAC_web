@@ -159,6 +159,8 @@ OperatorProvidedInformation
 
 These are product concepts, not LangGraph state objects.
 
+The initial Domain implementation now owns Investigation creation, Agent Run start/pause/resume/cancel/complete/fail transitions, explicit reopening of completed Investigations through a new Run, monotonic Investigation Revision checks, non-reusable Agent Run Lease identities and idempotent Evidence/Finding/Proposed Action membership. Step Identity and Idempotency Key remain separate value types: one Step may produce multiple effects, while one Idempotency Key can bind only one effect.
+
 ### 4.3 Finding classification
 
 A Finding must identify one of:

@@ -192,6 +192,10 @@ One stable, reviewable unit of intended work within an Operations Investigation.
 
 The stable identity of one Investigation Step used to correlate execution, Evidence and idempotent effects. Step Identity is not the identity of a worker attempt or graph-node invocation.
 
+## Idempotency Key
+
+The stable identity of one intended business effect or governed external submission across retries. An Investigation Step may produce multiple effects with different Idempotency Keys; reusing one Idempotency Key for a different Step or effect is a conflict.
+
 ## Tool Execution Receipt
 
 A bounded record that an Agent Run invoked a governed tool for a specific Investigation Step. It preserves tool identity, Scope, authorization and input/output digests, outcome and correlation references without becoming the owner of the returned platform fact.
