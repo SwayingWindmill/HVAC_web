@@ -8,9 +8,11 @@ export const OPERATIONS_AGENT_TOOL_CATALOG = Object.freeze({
   'registry.getSite': 'platform-core-service',
   'registry.getEquipment': 'platform-core-service',
   'registry.listSiteEquipment': 'platform-core-service',
+  'registry.getEquipmentEnergyBindings': 'platform-core-service',
   'telemetry.current.getEquipmentState': 'telemetry-runtime-service',
   'analytics.energy.getSiteSeries': 'telemetry-query-service',
   'analytics.energy.compareSitePeriods': 'telemetry-query-service',
+  'analytics.energy.getEquipmentSeries': 'telemetry-query-service',
   'commands.createIntent': 'command-service',
   'commands.getIntent': 'command-service',
   'audit.getRecord': 'audit-ledger-service',
@@ -68,6 +70,7 @@ const evidenceRequirementSchema = z.object({
   id: identifier,
   kind: identifier,
   ownerTool: logicalTool,
+  status: z.enum(['AVAILABLE', 'REQUIRED_NEXT']).default('AVAILABLE'),
   scope: canonicalScopeSchema,
   factIds: z.array(identifier),
   requiredMetadata: z.array(z.enum([
@@ -145,6 +148,14 @@ const scoredCriterionSchema = blockerCriterionSchema.extend({
   weight: z.number().positive(),
 }).strict();
 
+const forbiddenPathSchema = z.enum([
+  'DIRECT_CLICKHOUSE_SQL',
+  'ARBITRARY_CUBE_QUERY',
+  'THINGSBOARD_READ_THROUGH',
+  'LEGACY_AGENT_MOCK',
+  'PHYSICAL_COMMAND_EXECUTION',
+]);
+
 const operationsAgentScenarioSchemaV1 = z.object({
   contractVersion: z.literal(OPERATIONS_AGENT_SCENARIO_CONTRACT_VERSION),
   toolCatalogVersion: z.literal(OPERATIONS_AGENT_TOOL_CATALOG_VERSION),
@@ -172,6 +183,7 @@ const operationsAgentScenarioSchemaV1 = z.object({
   tools: z.object({
     allowed: z.array(logicalTool),
     forbidden: z.array(logicalTool),
+    forbiddenPaths: z.array(forbiddenPathSchema).default([]),
   }).strict(),
   acceptance: z.object({
     blockers: z.array(blockerCriterionSchema).min(1),
@@ -279,6 +291,21 @@ const validateReferences = (scenario, errors) => {
   });
 
   scenario.evidenceRequirements.forEach((requirement, requirementIndex) => {
+    if (requirement.status === 'AVAILABLE' && requirement.factIds.length === 0) {
+      errors.push(error(
+        'EVIDENCE_STATUS_CONFLICT',
+        `$.evidenceRequirements[${requirementIndex}].factIds`,
+        'AVAILABLE Evidence must identify at least one input fact.',
+      ));
+    }
+    if (requirement.status === 'REQUIRED_NEXT' && requirement.factIds.length > 0) {
+      errors.push(error(
+        'EVIDENCE_STATUS_CONFLICT',
+        `$.evidenceRequirements[${requirementIndex}].factIds`,
+        'REQUIRED_NEXT Evidence must not claim an available input fact.',
+      ));
+    }
+
     requirement.factIds.forEach((factId, factIndex) => {
       if (!factIds.has(factId)) {
         errors.push(error(
@@ -288,6 +315,8 @@ const validateReferences = (scenario, errors) => {
         ));
         return;
       }
+
+      if (requirement.status !== 'AVAILABLE') return;
 
       const fact = factById.get(factId);
       requirement.requiredMetadata.forEach((metadataName, metadataIndex) => {
@@ -387,6 +416,7 @@ const validateToolPolicy = (scenario, errors) => {
 
   pushDuplicateValues(scenario.tools.allowed, '$.tools.allowed', errors);
   pushDuplicateValues(scenario.tools.forbidden, '$.tools.forbidden', errors);
+  pushDuplicateValues(scenario.tools.forbiddenPaths, '$.tools.forbiddenPaths', errors);
 
   scenario.tools.allowed.forEach((tool, index) => validateKnownTool(tool, `$.tools.allowed[${index}]`, errors));
   scenario.tools.forbidden.forEach((tool, index) => validateKnownTool(tool, `$.tools.forbidden[${index}]`, errors));
@@ -412,10 +442,22 @@ const validateToolPolicy = (scenario, errors) => {
   };
 
   scenario.inputFacts.forEach((fact, index) => requireAllowed(fact.ownerTool, `$.inputFacts[${index}].ownerTool`));
-  scenario.evidenceRequirements.forEach((requirement, index) => requireAllowed(
-    requirement.ownerTool,
-    `$.evidenceRequirements[${index}].ownerTool`,
-  ));
+  scenario.evidenceRequirements.forEach((requirement, index) => {
+    const path = `$.evidenceRequirements[${index}].ownerTool`;
+    if (requirement.status === 'AVAILABLE') {
+      requireAllowed(requirement.ownerTool, path);
+      return;
+    }
+
+    validateKnownTool(requirement.ownerTool, path, errors);
+    if (forbidden.has(requirement.ownerTool)) {
+      errors.push(error(
+        'REQUIRED_NEXT_TOOL_FORBIDDEN',
+        path,
+        `Required-next Evidence cannot depend on forbidden logical tool ${requirement.ownerTool}.`,
+      ));
+    }
+  });
   scenario.executionDag.nodes.forEach((node, index) => {
     if (node.kind === 'TOOL_CALL' && !node.tool) {
       errors.push(error(

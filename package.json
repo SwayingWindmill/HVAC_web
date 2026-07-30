@@ -25,7 +25,7 @@
     "test:security-negative": "node scripts/run-go.mjs test -count=1 ./libs/identitycontext/... ./libs/oidctest/... ./libs/ownershipregistry/... ./libs/registryauth/... ./libs/telemetryauth/... ./services/iam-service/... ./services/legacy-migration-service/... ./services/platform-core-service/... ./services/telemetry-runtime-service/... ./services/audit-ledger-service/... ./services/outbox-relay/... ./services/platform-gateway/...",
     "audit:security-failure": "node scripts/run-durable-session-browser-audit.mjs",
     "security:gates": "node scripts/run-s0-security-failure-gates.mjs",
-    "operations-agent:benchmark:test": "node --test scripts/test-operations-agent-scenario-validator.mjs",
+    "operations-agent:benchmark:test": "node --test scripts/test-operations-agent-scenario-validator.mjs scripts/test-operations-agent-night-energy-scenario.mjs",
     "operations-agent:benchmark:validate": "node scripts/validate-operations-agent-scenario.mjs",
     "contracts:generate": "node scripts/generate-platform-contracts.mjs",
     "contracts:check": "node scripts/generate-platform-contracts.mjs --check",

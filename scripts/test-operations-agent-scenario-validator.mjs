@@ -56,6 +56,7 @@ const buildValidScenario = () => ({
       id: 'evidence-authorization',
       kind: 'AUTHORIZATION_DECISION',
       ownerTool: 'authorization.checkScope',
+      status: 'AVAILABLE',
       scope: {
         organizationId: 'org-001',
         siteIds: ['site-001'],
@@ -103,6 +104,7 @@ const buildValidScenario = () => ({
   tools: {
     allowed: ['authorization.checkScope'],
     forbidden: ['commands.createIntent'],
+    forbiddenPaths: [],
   },
   acceptance: {
     blockers: [
@@ -129,6 +131,18 @@ test('accepts a complete versioned Operations Agent scenario', () => {
   assert.equal(result.valid, true, JSON.stringify(result.errors, null, 2));
   assert.equal(result.scenario?.scenarioId, 'contract-validator-smoke');
   assert.deepEqual(result.errors, []);
+});
+
+test('preserves compatibility with the original v1 shape', () => {
+  const scenario = buildValidScenario();
+  delete scenario.evidenceRequirements[0].status;
+  delete scenario.tools.forbiddenPaths;
+
+  const result = validateOperationsAgentScenario(scenario);
+
+  assert.equal(result.valid, true, JSON.stringify(result.errors, null, 2));
+  assert.equal(result.scenario.evidenceRequirements[0].status, 'AVAILABLE');
+  assert.deepEqual(result.scenario.tools.forbiddenPaths, []);
 });
 
 const errorCodes = (result) => new Set(result.errors.map(({ code }) => code));
@@ -197,6 +211,42 @@ test('rejects missing required Evidence metadata and invalid scoped time ranges'
   assert.equal(result.valid, false);
   assert(errorCodes(result).has('MISSING_REQUIRED_METADATA'));
   assert(errorCodes(result).has('INVALID_TIME_RANGE'));
+});
+
+test('rejects contradictory Evidence availability states', () => {
+  const availableWithoutFact = buildValidScenario();
+  availableWithoutFact.evidenceRequirements[0].factIds = [];
+  const requiredNextWithFact = buildValidScenario();
+  requiredNextWithFact.evidenceRequirements[0].status = 'REQUIRED_NEXT';
+
+  for (const scenario of [availableWithoutFact, requiredNextWithFact]) {
+    const result = validateOperationsAgentScenario(scenario);
+    assert.equal(result.valid, false);
+    assert(errorCodes(result).has('EVIDENCE_STATUS_CONFLICT'));
+  }
+});
+
+test('rejects required-next Evidence that depends on a forbidden logical tool', () => {
+  const scenario = buildValidScenario();
+  scenario.evidenceRequirements.push({
+    id: 'evidence-command-required-next',
+    kind: 'COMMAND_INTENT',
+    ownerTool: 'commands.createIntent',
+    status: 'REQUIRED_NEXT',
+    scope: {
+      organizationId: 'org-001',
+      siteIds: ['site-001'],
+      equipmentIds: [],
+      deviceIds: [],
+    },
+    factIds: [],
+    requiredMetadata: ['CAPTURED_AT'],
+  });
+
+  const result = validateOperationsAgentScenario(scenario);
+
+  assert.equal(result.valid, false);
+  assert(errorCodes(result).has('REQUIRED_NEXT_TOOL_FORBIDDEN'));
 });
 
 test('rejects unknown tools and contradictory tool policy', () => {

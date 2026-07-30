@@ -215,3 +215,7 @@ A deterministic acceptance invariant whose failure invalidates an Operations Age
 ## Benchmark Scored Criterion
 
 A non-blocking evaluation dimension used to compare acceptable results after every Benchmark Blocker Criterion has passed. Scored Criteria may assess qualities such as evidence completeness or operational usefulness, but they never weaken authorization, ownership or safety invariants.
+
+## Required-Next Evidence
+
+A structured Benchmark Evidence requirement that is not present in the current scenario input and must be obtained from its named authoritative owner before a blocked conclusion may be attempted. Required-Next Evidence identifies a governed next data product or fact; it does not authorize a tool, claim that an endpoint already exists or permit the Agent to fill the gap with inference.
