@@ -86,7 +86,7 @@ The production Runtime adapter for invalidating a concrete canary cohort is inte
 Run:
 
 ```bash
-npm run s2:ticket-08
+npm run s2:shadow-routing
 ```
 
 The suite verifies static invariants, all ownership transitions, the offline comparator, a real comparison fixture, 20,000 deterministic cohort identities across all four surfaces, revision-bound cohort reassignment, and R3-to-R2 rollback.

@@ -79,7 +79,7 @@ Configuration-only preflight:
 npm run s2:cutover:check
 npm run s2:cutover:preflight
 npm run test:s2-cutover
-npm run s2:ticket-12
+npm run s2:telemetry-cutover
 ```
 
 Formal verification is run by `.github/workflows/s2-telemetry-cutover.yml` with `profile=formal`. The operator supplies `release_run_id` and `cutover_attestation_json`. A passing run uploads `s2-completion-evidence`, including phase reports, approvals, rollback and zero-traffic reports, final ownership state, completion attestation, in-toto statement and `SHA256SUMS`.

@@ -37,7 +37,7 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm run s2:ticket-07
+      - run: npm run s2:telemetry-live-client
       - name: Upload Ticket 07 evidence
         if: always()
         uses: actions/upload-artifact@v4

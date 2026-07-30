@@ -37,7 +37,7 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm run s2:ticket-08
+      - run: npm run s2:shadow-routing
       - name: Upload Ticket 08 evidence
         if: always()
         uses: actions/upload-artifact@v4
