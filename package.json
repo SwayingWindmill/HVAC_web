@@ -42,6 +42,7 @@
     "rms:ticket-04": "npm run contracts:check && npm run rms:feature-routes:test && npm run lint && npm run rms:real:graph && npm run build:real && npm run build:demo && npm run rms:real:bundle",
     "rms:ticket-04:browser": "node scripts/run-rms-authenticated-shell-browser-audit.mjs",
     "rms:site-scope:test": "node --test scripts/test-rms-authenticated-shell-policy.mjs scripts/test-rms-feature-route-policy.mjs scripts/test-rms-site-routing.mjs scripts/test-rms-shell-runtime.mjs",
+    "web:energy:test": "node --experimental-strip-types --test scripts/test-web-energy-analytics.mjs",
     "rms:ticket-05": "npm run contracts:check && npm run rms:site-scope:test && npm run lint && npm run rms:real:graph && npm run build:real && npm run build:demo && npm run rms:real:bundle",
     "rms:ticket-05:browser": "node scripts/run-rms-authenticated-shell-browser-audit.mjs",
     "rms:protected-scope:test": "node --test scripts/test-rms-authenticated-shell-policy.mjs scripts/test-rms-feature-route-policy.mjs scripts/test-rms-site-routing.mjs scripts/test-rms-protected-scope.mjs scripts/test-rms-shell-runtime.mjs",

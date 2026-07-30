@@ -64,7 +64,7 @@ test('no explicit Site resolves zero, one, and many authorized Site states', () 
 });
 
 test('an explicit authorized UUIDv7 Site wins and creates a validated SiteContext', () => {
-  for (const leaf of ['assets', 'commands', 'bigscreen']) {
+  for (const leaf of ['assets', 'energy', 'commands', 'bigscreen']) {
     const decision = routing.resolveSiteRouting(`/sites/${siteBId}/${leaf}`, [siteA, siteB], ['site.read']);
     assert.equal(decision.state, 'READY');
     assert.equal(decision.route, leaf);
