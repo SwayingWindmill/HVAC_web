@@ -38,8 +38,8 @@ const composeEnvironment = {
   ...process.env,
   S2_CLICKHOUSE_HTTP_HOST_PORT: String(clickHouseHostPort),
   CUBE_HOST_PORT: String(cubeHostPort),
-  CUBEJS_DB_HOST: 'host.docker.internal',
-  CUBEJS_DB_PORT: String(clickHouseHostPort),
+  CUBEJS_DB_HOST: 'clickhouse',
+  CUBEJS_DB_PORT: '8123',
   CUBEJS_DB_NAME: 'analytics',
   CUBEJS_DB_USER: 'cube_analytics_reader',
   CUBEJS_DB_PASS: '',
@@ -66,6 +66,15 @@ const cubeCompose = (args) => compose(cubeComposePath, cubeProjectName, args);
 
 function container(service) {
   return s2Compose(['ps', '-q', service]);
+}
+
+function connectCubeToClickHouse() {
+  const clickHouseContainer = container('clickhouse');
+  const cubeContainer = cubeCompose(['ps', '-q', 'cube']);
+  const networks = JSON.parse(run('docker', ['inspect', '--format', '{{json .NetworkSettings.Networks}}', clickHouseContainer]));
+  const sourceNetwork = Object.keys(networks)[0];
+  if (!sourceNetwork) throw new Error('analytics ClickHouse source network was not found');
+  run('docker', ['network', 'connect', sourceNetwork, cubeContainer]);
 }
 
 function clickHouse(sql) {
@@ -187,6 +196,7 @@ try {
 
   await pullDockerImageWithRetry(cubeImage, { cwd: root, env: composeEnvironment, attempts: 3, retryBaseMs: 1000, timeoutMs: 40000 });
   cubeCompose(['up', '-d', 'cube']);
+  connectCubeToClickHouse();
   const response = await waitForCube();
   const rows = response.data ?? [];
   if (rows.length !== 1) throw new Error(`unexpected Cube row count ${rows.length}`);

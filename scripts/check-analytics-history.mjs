@@ -84,7 +84,15 @@ for (const marker of ['analytics-read-model-projector:', 'analytics_projector_re
 for (const marker of ['TestCumulativeMeterProjectsAdditiveEnergyFactsIdempotently', "factCount !== '2'", 'readerCannotInsert', 'writerCannotSelect', 'cubeCannotInsert']) {
   assert(integration.includes(marker), `missing analytics integration marker ${marker}`);
 }
-for (const marker of ['energy_usage.energy_valid_kwh', 'energy_usage.max_data_watermark', 'deniedSiteRows', 'randomBytes(32)']) {
+for (const marker of [
+  'energy_usage.energy_valid_kwh',
+  'energy_usage.max_data_watermark',
+  'deniedSiteRows',
+  'randomBytes(32)',
+  "CUBEJS_DB_HOST: 'clickhouse'",
+  "CUBEJS_DB_PORT: '8123'",
+  "'network', 'connect', sourceNetwork, cubeContainer",
+]) {
   assert(cubeIntegration.includes(marker), `missing Cube integration marker ${marker}`);
 }
 for (const marker of [

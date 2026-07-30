@@ -1,0 +1,116 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import test from 'node:test';
+
+const runClassification = (files) => {
+  const result = spawnSync(process.execPath, ['scripts/classify-pr-gates.mjs', `--files=${files.join(',')}`], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return JSON.parse(result.stdout.trim());
+};
+
+const runPlan = (gate, profiles) => {
+  const result = spawnSync(process.execPath, ['scripts/run-pr-gate.mjs', `--gate=${gate}`, `--profiles=${profiles.join(',')}`, '--dry-run=true'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return JSON.parse(result.stdout.trim());
+};
+
+test('documentation-only changes keep expensive affected gates idle', () => {
+  const classification = runClassification(['docs/architecture/overview.md']);
+  assert.equal(classification.contracts, false);
+  assert.equal(classification.units, false);
+  assert.equal(classification.integrations, false);
+  assert.equal(classification.browsers, false);
+  assert.equal(classification.broad, false);
+});
+
+test('package-lock changes compile and unit test without database or browser fan-out', () => {
+  const classification = runClassification(['package-lock.json']);
+  assert.deepEqual(classification.unitProfiles, ['web']);
+  assert.deepEqual(classification.integrationProfiles, []);
+  assert.deepEqual(classification.browserProfiles, []);
+  assert.equal(classification.broad, false);
+});
+
+test('HVAC Web changes select browser and web unit profiles on the correct runner platforms', () => {
+  const classification = runClassification(['apps/hvac-web/src/App.tsx']);
+  assert.deepEqual(classification.unitProfiles, ['web']);
+  assert.deepEqual(classification.browserWindowsProfiles, ['rms']);
+  assert.deepEqual(classification.browserLinuxProfiles, ['s0', 's1', 's2']);
+  assert.equal(classification.integrations, false);
+});
+
+test('Realtime backend changes select the durable realtime PostgreSQL profile', () => {
+  const classification = runClassification(['services/telemetry-runtime-service/internal/telemetry/realtime.go']);
+  assert.ok(classification.unitProfiles.includes('s2'));
+  assert.deepEqual(classification.integrationProfiles, ['s2-realtime']);
+  assert.equal(classification.broad, false);
+});
+
+test('package and workflow changes fail closed to the broad suite', () => {
+  for (const file of ['package.json', '.github/workflows/s2-realtime-backend.yml']) {
+    const classification = runClassification([file]);
+    assert.equal(classification.broad, true);
+    assert.equal(classification.unknown, false);
+    assert.ok(classification.integrationProfiles.includes('s2-realtime'));
+    assert.ok(classification.browserProfiles.includes('rms'));
+  }
+});
+
+test('unknown paths and automation scripts fail closed rather than selecting no checks', () => {
+  for (const file of ['new-platform-area/owner.go', 'scripts/new-automation-wrapper.mjs']) {
+    const classification = runClassification([file]);
+    assert.equal(classification.broad, true);
+    assert.equal(classification.unknown, true);
+    assert.equal(classification.contracts, true);
+    assert.equal(classification.units, true);
+    assert.equal(classification.integrations, true);
+    assert.equal(classification.browsers, true);
+  }
+});
+
+test('integration plans use domain-specific durable fixtures', () => {
+  const plan = runPlan('integration', ['s2-realtime', 's3']);
+  assert.ok(plan.commands.includes('npm run s2:realtime:postgres'));
+  assert.ok(plan.commands.includes('npm run s3:postgres'));
+  assert.ok(!plan.commands.includes('npm run s2:postgres'));
+});
+
+test('PR gate workflow always exposes the five stable required checks', async () => {
+  const workflow = await readFile('.github/workflows/pr-gates.yml', 'utf8');
+  const pullRequestBlock = workflow.split('  pull_request:')[1]?.split('  workflow_dispatch:')[0] ?? '';
+  assert.ok(pullRequestBlock.includes('types:'));
+  assert.ok(!pullRequestBlock.includes('paths:'));
+  for (const check of [
+    'pr / static',
+    'pr / contracts',
+    'pr / affected-unit',
+    'pr / affected-integration',
+    'pr / affected-browser',
+  ]) {
+    assert.equal(workflow.split(`name: ${check}`).length - 1, 1, `required check name drifted: ${check}`);
+  }
+  for (const [job, check] of [
+    ['contracts', 'pr / contracts'],
+    ['unit', 'pr / affected-unit'],
+    ['integration', 'pr / affected-integration'],
+    ['browser', 'pr / affected-browser'],
+  ]) {
+    const marker = `  ${job}:\n    name: ${check}`;
+    const start = workflow.indexOf(marker);
+    assert.notEqual(start, -1, `aggregate job is missing: ${job}`);
+    const tail = workflow.slice(start + marker.length);
+    const nextJobMatch = /\n  [a-z][a-z0-9_]*:\n/u.exec(tail);
+    const end = nextJobMatch ? start + marker.length + nextJobMatch.index : workflow.length;
+    const block = workflow.slice(start, end);
+    assert.ok(block.includes('if: ${{ always() }}'), `${job} must always report a result`);
+  }
+});
