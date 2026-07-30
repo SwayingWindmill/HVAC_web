@@ -19,8 +19,6 @@ on:
       - 'scripts/test-rms-protected-scope.mjs'
       - 'scripts/test-rms-realtime-status.mjs'
       - 'scripts/test-rms-shell-runtime.mjs'
-      - 'package.json'
-      - 'package-lock.json'
   push:
     branches: [main]
     paths:
@@ -40,8 +38,6 @@ on:
       - 'scripts/test-rms-protected-scope.mjs'
       - 'scripts/test-rms-realtime-status.mjs'
       - 'scripts/test-rms-shell-runtime.mjs'
-      - 'package.json'
-      - 'package-lock.json'
 
 permissions:
   contents: read

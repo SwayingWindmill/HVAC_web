@@ -25,8 +25,6 @@ on:
       - "scripts/run-s2-telemetry-runtime-postgres-tests.mjs"
       - "scripts/run-s2-centrifugo-poc.mjs"
       - "docs/operations/s2-realtime-backend.md"
-      - "package.json"
-      - "package-lock.json"
       - "go.work"
       - "go.work.sum"
   push:

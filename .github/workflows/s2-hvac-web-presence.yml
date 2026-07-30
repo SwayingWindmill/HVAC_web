@@ -16,8 +16,6 @@ on:
       - "scripts/run-s2-hvac-web-presence-browser-audit.mjs"
       - "scripts/fixtures/s2-hvac-web-presence/**"
       - "docs/operations/s2-hvac-web-presence.md"
-      - "package.json"
-      - "package-lock.json"
       - "deploy/s0/security/dependency-audit-baseline.json"
       - "scripts/check-npm-production-audit.mjs"
   push:

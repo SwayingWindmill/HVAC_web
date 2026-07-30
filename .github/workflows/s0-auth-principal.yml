@@ -19,8 +19,6 @@ on:
       - "scripts/run-go.mjs"
       - "scripts/generate-platform-contracts.mjs"
       - "go.work"
-      - "package.json"
-      - "package-lock.json"
       - ".github/workflows/s0-auth-principal.yml"
   push:
     branches: [main]
@@ -41,8 +39,6 @@ on:
       - "scripts/run-go.mjs"
       - "scripts/generate-platform-contracts.mjs"
       - "go.work"
-      - "package.json"
-      - "package-lock.json"
       - ".github/workflows/s0-auth-principal.yml"
 
 permissions:

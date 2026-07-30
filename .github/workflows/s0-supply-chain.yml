@@ -60,8 +60,6 @@ on:
       - "scripts/write-s0-release-image-evidence.mjs"
       - "contracts/**"
       - "apps/hvac-web/**"
-      - "package.json"
-      - "package-lock.json"
       - "go.work"
       - "go.work.sum"
   push:

@@ -21,8 +21,6 @@ on:
       - "scripts/s0-auth-topology.mjs"
       - "scripts/run-s2-gateway-browser-audit.mjs"
       - "docs/operations/s2-gateway-snapshot.md"
-      - "package.json"
-      - "package-lock.json"
       - "go.work"
       - "go.work.sum"
   push:

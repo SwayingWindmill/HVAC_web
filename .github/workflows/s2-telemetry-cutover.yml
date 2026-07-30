@@ -11,8 +11,6 @@ on:
       - libs/ownershipregistry/**
       - apps/hvac-web/src/api/**
       - hvac-backend/src/telemetry/**
-      - package.json
-      - package-lock.json
   workflow_dispatch:
     inputs:
       profile:
