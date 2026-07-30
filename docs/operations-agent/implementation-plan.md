@@ -153,8 +153,12 @@ Planned tracer bullets:
 
 Completion gate:
 
+Status: completed by Ticket #127 on 2026-07-30.
+
 - malformed scenarios fail deterministically;
 - all initial scenarios encode authoritative owner routing, Evidence requirements and forbidden paths;
+- the repository Runner discovers all scenarios, executes blocker-first validation and writes `operations-agent-benchmark-report/v1`;
+- blocker failure prevents scoring and returns a non-zero CI status;
 - framework code is not required to run the benchmark.
 
 # Map 2 — Establish the modular TypeScript service and domain seam

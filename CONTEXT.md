@@ -231,3 +231,11 @@ A small framework-independent candidate result used to prove that one Benchmark 
 ## Action Lifecycle Expectation
 
 A Benchmark Scenario declaration that distinguishes a Proposed Action, formal approval, Command Intent and physical execution result. It states which lifecycle artifacts may exist at the current Investigation stage and prevents a recommendation from being represented as approval, command submission or physical success.
+
+## Benchmark Blocker Profile
+
+The repository-owned deterministic evaluator registered for one Operations Agent Benchmark Scenario. It runs only after the scenario contract passes, returns stable dimensioned failure codes, and must cover the scenario's authorization, ownership, data-quality, diagnostic and action-safety invariants. A scenario without a Blocker Profile fails closed.
+
+## Operations Agent Benchmark Report
+
+The versioned machine-readable result produced by the repository Benchmark Runner. It records discovery status, scenario and contract versions, ordered structure and blocker phases, scored criteria that remain unevaluated or blocked, and stable failure codes by scenario and dimension. A passing score can never replace or offset a failed blocker phase.

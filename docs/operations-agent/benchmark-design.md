@@ -123,6 +123,45 @@ Three additional deterministic scenarios own the initial hard safety boundaries:
 evaluator for each boundary. Each evaluator has a passing and failing sample in the
 repository tests and returns stable failure codes without a model or Agent runtime.
 
+## Benchmark runner and report
+
+Run the complete repository benchmark with one command:
+
+```bash
+npm run operations-agent:benchmark
+```
+
+The command discovers every `*.v1.json` fixture under
+`benchmarks/operations-agent/scenarios`, prints a human-readable summary and writes
+`out/operations-agent-benchmark-report.v1.json`. The machine result is versioned as
+`operations-agent-benchmark-report/v1` and retains each scenario ID, scenario version,
+scenario contract version and tool-catalog version.
+
+Execution order is fixed:
+
+1. parse JSON and run the scenario contract, Scope, DAG, ownership and tool-policy checks;
+2. run the scenario's registered deterministic blocker profile;
+3. expose scored criteria as `NOT_EVALUATED` only after blockers pass.
+
+A structure failure marks blockers `NOT_RUN`. A blocker failure marks scoring `BLOCKED`.
+Neither phase can be offset by a weight, aggregate score, model judge or usefulness
+criterion. Every failure includes a stable code, dimension, scenario and optional
+criterion ID. Missing blocker profiles fail closed with `BLOCKER_EVALUATOR_MISSING`.
+The process exits non-zero on discovery, structure or blocker failure while still
+writing the machine report when `--report` is configured.
+
+Use `--json` for a JSON-only stdout projection, or override fixtures and output for
+local validation:
+
+```bash
+node scripts/run-operations-agent-benchmark.mjs \
+  --scenarios=benchmarks/operations-agent/scenarios \
+  --report=out/operations-agent-benchmark-report.v1.json \
+  --json
+```
+
+The runner imports no model SDK, LangGraph.js, CopilotKit or retired Agent code.
+
 ## Scenario authoring
 
 Each scenario fixture must conform to the current versioned Operations Agent
