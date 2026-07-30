@@ -1,0 +1,90 @@
+cubes:
+  - name: energy_usage
+    title: Energy Usage
+    description: >-
+      Authorized additive HVAC energy intervals projected from accepted cumulative meter
+      observations, with explicit quality, data watermark and dataset revision semantics.
+    sql_table: analytics.energy_interval_facts
+
+    measures:
+      - name: energy_valid_kwh
+        title: Valid energy
+        description: Sum of normalized interval electrical energy from VALID facts only.
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality = 'VALID'"
+
+      - name: energy_valid_and_suspect_kwh
+        title: Valid and suspect energy
+        description: Sum of normalized interval electrical energy from VALID and SUSPECT facts.
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.quality IN ('VALID', 'SUSPECT')"
+
+      - name: valid_count
+        title: Valid intervals
+        type: count
+        filters:
+          - sql: "{CUBE}.quality = 'VALID'"
+
+      - name: suspect_count
+        title: Suspect intervals
+        type: count
+        filters:
+          - sql: "{CUBE}.quality = 'SUSPECT'"
+
+      - name: invalid_count
+        title: Invalid intervals
+        type: count
+        filters:
+          - sql: "{CUBE}.quality = 'INVALID'"
+
+      - name: max_data_watermark
+        title: Data watermark
+        sql: data_watermark
+        type: max
+
+      - name: max_dataset_revision
+        title: Dataset revision
+        sql: dataset_revision
+        type: max
+
+    dimensions:
+      - name: organization_id
+        sql: organization_id
+        type: string
+
+      - name: site_id
+        sql: site_id
+        type: string
+
+      - name: energy_type
+        sql: energy_type
+        type: string
+
+      - name: quality
+        sql: quality
+        type: string
+
+      - name: period_start
+        sql: period_start
+        type: time
+
+      - name: period_end
+        sql: period_end
+        type: time
+
+    access_policy:
+      - group: analytics_reader
+        member_level:
+          includes: "*"
+        row_level:
+          filters:
+            - member: organization_id
+              operator: equals
+              values: ["{ securityContext.organizationId }"]
+            - member: site_id
+              operator: equals
+              values: ["{ securityContext.siteId }"]

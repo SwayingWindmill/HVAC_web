@@ -1,0 +1,133 @@
+import { spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { createServer as createTCPServer } from 'node:net';
+import { dirname, resolve } from 'node:path';
+
+const root = resolve(process.cwd());
+const composePath = resolve(root, 'infra/s2-telemetry/compose.yaml');
+const projectName = `hvac-analytics-history-${process.pid}`;
+const reportPath = resolve(root, process.env.ANALYTICS_HISTORY_REPORT_PATH ?? 'out/analytics-history/clickhouse-integration.json');
+const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
+const composeInvocation = (() => {
+  const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
+  if (!plugin.error && plugin.status === 0) return { command: 'docker', prefix: ['compose'] };
+  return { command: 'docker-compose', prefix: [] };
+})();
+
+async function findAvailablePort() {
+  const server = createTCPServer();
+  server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('analytics history port allocator failed');
+  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
+  return address.port;
+}
+
+const clickHouseHostPort = await findAvailablePort();
+const composeEnvironment = {
+  ...process.env,
+  S2_CLICKHOUSE_HTTP_HOST_PORT: String(clickHouseHostPort),
+};
+const clickHouseURL = `http://127.0.0.1:${clickHouseHostPort}`;
+
+function run(command, args, options = {}) {
+  const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
+  if (result.error || result.status !== 0) {
+    const detail = result.error?.message || result.stderr?.trim() || result.stdout?.trim() || String(result.status);
+    throw new Error(`${command} ${args.join(' ')} failed: ${detail}`);
+  }
+  return String(result.stdout ?? '').trim();
+}
+
+function runExpectFailure(command, args, options = {}) {
+  const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
+  if (!result.error && result.status === 0) {
+    throw new Error(`${command} ${args.join(' ')} unexpectedly succeeded`);
+  }
+  return String(result.stderr ?? result.stdout ?? '').trim().slice(-2000);
+}
+
+function compose(args) {
+  return run(composeInvocation.command, [...composeInvocation.prefix, '-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
+}
+
+function container(service) {
+  return compose(['ps', '-q', service]);
+}
+
+function clickHouse(sql) {
+  return run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'telemetry_history', '--query', sql]);
+}
+
+function clickHouseMustFail(sql, user) {
+  return runExpectFailure('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', user, '--query', sql]);
+}
+
+async function waitForClickHouse() {
+  let stableChecks = 0;
+  for (let attempt = 0; attempt < 360; attempt += 1) {
+    try {
+      const tableReady = clickHouse(`SELECT count() FROM system.tables WHERE database = 'analytics' AND name = 'energy_interval_facts'`);
+      const userCount = clickHouse(`SELECT count() FROM system.users WHERE name IN ('analytics_projector_reader', 'analytics_projector_writer', 'cube_analytics_reader')`);
+      if (tableReady === '1' && userCount === '3') {
+        stableChecks += 1;
+        if (stableChecks >= 3) return;
+      } else stableChecks = 0;
+    } catch {
+      stableChecks = 0;
+    }
+    await pause(250);
+  }
+  let logs = '';
+  try { logs = compose(['logs', '--no-color', 'clickhouse']); } catch (error) { logs = String(error); }
+  throw new Error(`analytics ClickHouse model did not initialize\n${logs}`);
+}
+
+const report = {
+  schemaVersion: 1,
+  capability: 'analytics-energy-interval-read-model',
+  status: 'failed',
+  startedAt: new Date().toISOString(),
+  clickHouseImage: 'clickhouse/clickhouse-server:26.3.12.3@sha256:1f7cd090d5c4e2b8bfe0ea5d8ae6125937e1d932c6371b4d25fbd6088829dc9c',
+  assertions: {},
+};
+
+try {
+  try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
+  compose(['up', '-d', 'clickhouse']);
+  await waitForClickHouse();
+  report.assertions.goIntegration = run(process.execPath, [
+    'scripts/run-isolated-go.mjs',
+    '--module=services/analytics-read-model-projector',
+    'test', '-count=1', '-run', 'TestCumulativeMeterProjectsAdditiveEnergyFactsIdempotently', '-v', './internal/clickhouse/...',
+  ], {
+    env: {
+      ...process.env,
+      ANALYTICS_CLICKHOUSE_TEST_URL: clickHouseURL,
+      ANALYTICS_CLICKHOUSE_TEST_ADMIN_USERNAME: 'telemetry_history',
+    },
+  });
+  report.assertions.factCount = clickHouse(`SELECT count() FROM analytics.energy_interval_facts`);
+  if (report.assertions.factCount !== '2') throw new Error(`unexpected energy interval fact count ${report.assertions.factCount}`);
+  report.assertions.readerCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'analytics_projector_reader', '--query', 'SELECT count() FROM telemetry_history.observations']);
+  report.assertions.cubeCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'cube_analytics_reader', '--query', 'SELECT count() FROM analytics.energy_interval_facts']);
+  report.assertions.readerCannotInsert = clickHouseMustFail('INSERT INTO analytics.energy_interval_facts (fact_id) VALUES (generateUUIDv4())', 'analytics_projector_reader');
+  report.assertions.writerCannotSelect = clickHouseMustFail('SELECT count() FROM analytics.energy_interval_facts', 'analytics_projector_writer');
+  report.assertions.cubeCannotInsert = clickHouseMustFail('INSERT INTO analytics.energy_interval_facts (fact_id) VALUES (generateUUIDv4())', 'cube_analytics_reader');
+
+  report.status = 'passed';
+  report.finishedAt = new Date().toISOString();
+  await mkdir(dirname(reportPath), { recursive: true });
+  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  console.log(`Analytics history evidence passed: ${reportPath}`);
+} catch (error) {
+  report.error = error instanceof Error ? error.message : String(error);
+  report.finishedAt = new Date().toISOString();
+  await mkdir(dirname(reportPath), { recursive: true });
+  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  throw error;
+} finally {
+  try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
+}

@@ -26,7 +26,7 @@
     "GET /api/v1/commands/{commandId}": { "revision": 1, "owner": "command-service" },
     "POST /api/v1/commands/{commandId}:approve": { "revision": 1, "owner": "command-service" }
   },
-  "dataRegistryRevision": 11,
+  "dataRegistryRevision": 13,
   "resources": {
     "schema:gateway": { "revision": 1, "writer": "platform-gateway" },
     "schema:audit_ledger": { "revision": 1, "writer": "audit-ledger-service" },
@@ -35,6 +35,8 @@
     "schema:core_registry": { "revision": 1, "writer": "platform-core-service" },
     "schema:telemetry_runtime": { "revision": 1, "writer": "telemetry-runtime-service" },
     "schema:command_runtime": { "revision": 1, "writer": "command-service" },
+    "schema:telemetry_history": { "revision": 1, "writer": "telemetry-history-projector" },
+    "schema:analytics": { "revision": 1, "writer": "analytics-read-model-projector" },
     "event-family:hvac.security.session.v1": { "revision": 1, "writer": "platform-gateway" },
     "event-family:hvac.routing.decision.v1": { "revision": 1, "writer": "platform-gateway" },
     "event-family:hvac.telemetry.device-snapshot.v1": { "revision": 1, "writer": "telemetry-runtime-service" },
@@ -75,6 +77,10 @@
     "compatibility-boundary:legacy-telemetry-timeseries": { "revision": 1, "writer": "legacy-hvac-backend" },
     "migration-dataset:s1-legacy-resource-map": { "revision": 1, "writer": "platform-core-service" },
     "migration-dataset:s1-migration-provenance": { "revision": 1, "writer": "platform-core-service" },
-    "migration-dataset:s1-migration-quarantine": { "revision": 1, "writer": "platform-core-service" }
+    "migration-dataset:s1-migration-quarantine": { "revision": 1, "writer": "platform-core-service" },
+    "projection:telemetry-history-observation": { "revision": 1, "writer": "telemetry-history-projector" },
+    "projection:analytics-energy-interval-fact": { "revision": 1, "writer": "analytics-read-model-projector" },
+    "query-contract:analytics-energy-series-v1": { "revision": 1, "writer": "telemetry-query-service" },
+    "semantic-model:cube-energy-usage-v1": { "revision": 1, "writer": "telemetry-query-service" }
   }
 }
