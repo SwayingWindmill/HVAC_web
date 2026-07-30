@@ -463,7 +463,7 @@ export const createInvestigationCoordinator = (
           );
         }
         const planning = await ports.agentExecutionRuntime.planReads({
-          investigation: investigationView,
+          investigation: investigation.view(),
           runId: run.id,
           checkpoint,
         });
@@ -502,7 +502,7 @@ export const createInvestigationCoordinator = (
           savedAt: now,
         });
 
-        const view = investigationView;
+        const view = investigation.view();
         await recordMutation(
           {
             type: 'READ_PLAN_COMPLETED',

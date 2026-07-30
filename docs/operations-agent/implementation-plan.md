@@ -173,7 +173,15 @@ Planned tracer bullets:
 2. Implement Operations Investigation lifecycle, Revision, Agent Run Lease and idempotent Step semantics — completed by #141.
 3. Define the Investigation Coordinator and narrow application ports — completed by #142.
 4. Establish separate business and checkpoint persistence identities and migration ownership — completed by #144.
-5. Add a deterministic fake runtime and fake owner adapters for application acceptance tests — pending #145.
+5. Add a deterministic fake runtime and fake owner adapters for application acceptance tests — completed by #145.
+
+Status: completed by Ticket #145 on 2026-07-30.
+
+- the package-root Coordinator seam owns the complete application acceptance path;
+- scripted Fake Runtime steps can request only declared read plans and cannot mutate authoritative Investigation state;
+- typed Fake Owner results preserve Scope, Owner, Revision, Quality and provenance metadata;
+- Fake Checkpoint deletion preserves business records and completed Investigations reopen through a new Agent Run;
+- exact replay, stale Lease, stale Revision, duplicate effect and repository CAS conflict paths are deterministic.
 
 Current persistence state:
 

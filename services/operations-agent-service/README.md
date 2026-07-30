@@ -52,10 +52,17 @@ new snapshot, Effect, Outbox and Audit atomically. Checkpoint deletion or expiry
 foreign key or cascade into business records. The persisted snapshot is restored through
 Domain validation and contains no LangGraph type.
 
+The deterministic application acceptance environment supplies a scripted Fake Runtime,
+typed Fake Owner readers, an in-memory business transaction and a disposable Fake
+Checkpoint store. It exercises the package only through `createInvestigationCoordinator`.
+The Runtime receives an isolated Investigation View, so attempted mutation cannot change the
+authoritative aggregate or Owner Scope validation.
+
 Run the package checks from the repository root:
 
 ```bash
 npm --prefix services/operations-agent-service run check
+npm --prefix services/operations-agent-service run test:acceptance
 npm run operations-agent-service:postgres
 
 OPERATIONS_AGENT_OPERATIONS_MIGRATOR_DATABASE_URL=... \
