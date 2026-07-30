@@ -179,10 +179,14 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'equipment.read',
   'device.list',
   'device.read',
+  'telemetry.snapshot.read',
+  'telemetry.batch.read',
+  'telemetry.subscribe',
+  'telemetry.history.read',
 ]), 'Capability vocabulary is unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 1, 'EffectiveAuthorization capability set version must be 1');
+invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 2, 'EffectiveAuthorization capability set version must be 2');
 invariant(schemas.EffectiveAuthorization.properties.policyRevision.minLength === 1 && schemas.EffectiveAuthorization.properties.policyRevision.maxLength === 128, 'EffectiveAuthorization policy revision bounds are unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 8, 'EffectiveAuthorization capabilities must be unique and bounded');
+invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 12, 'EffectiveAuthorization capabilities must be unique and bounded');
 invariant(schemas.EffectiveAuthorization.properties.capabilities.items?.$ref === '#/components/schemas/Capability', 'EffectiveAuthorization capabilities must use the public Capability vocabulary');
 invariant(schemas.AuditRecord.properties.schemaVersion.const === 1, 'AuditRecord.schemaVersion must be 1');
 invariant(schemas.AuditRecord.properties.aggregateType.const === 'bff-session', 'AuditRecord.aggregateType must be bff-session');
