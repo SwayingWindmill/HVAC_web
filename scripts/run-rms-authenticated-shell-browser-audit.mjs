@@ -777,7 +777,7 @@ try {
   await pressKey(cdpClient, 'Enter', 'Enter', 13);
   await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-testid="real-site-draft-confirmation"]')) && document.activeElement === document.querySelector('[data-testid="real-site-draft-confirm"]')`, 'second Site draft confirmation');
   await clickTestId(cdpClient, 'real-site-draft-confirm');
-  await waitForCondition(cdpClient, `(() => {
+  const purgingState = await waitForCondition(cdpClient, `(() => {
     const purgeHeading = document.querySelector('[data-testid="real-site-purging"] h1');
     const purgeVisible = Boolean(purgeHeading)
       && !document.querySelector('[data-site-route][data-site-id="${siteAId}"]')
@@ -785,7 +785,7 @@ try {
       && !document.querySelector('[data-testid="real-command-draft-value"]')
       && document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-resource-count') === '0';
     if (!purgeVisible) return false;
-    globalThis.__rmsSitePurgeEvidence = {
+    return {
       pathname: location.pathname,
       transition: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-site-transition'),
       scopeSite: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-scope-site'),
@@ -795,9 +795,7 @@ try {
       newSiteRendered: document.body.innerText.includes('Osaka Plant'),
       focusedHeading: document.activeElement === purgeHeading,
     };
-    return true;
   })()`, 'old Site purge before navigation', 5);
-  const purgingState = await evaluate(cdpClient, 'globalThis.__rmsSitePurgeEvidence');
   assert(purgingState.pathname === `/sites/${siteAId}/commands`, 'navigation began before old Site purge became visible');
   assert(purgingState.transition === 'purging' && !purgingState.scopeSite, 'protected Site scope was not revoked during purge');
   assert(purgingState.headerSite === 'No active Site', 'trusted header retained the revoked Site during purge');
