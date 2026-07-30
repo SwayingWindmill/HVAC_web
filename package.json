@@ -242,7 +242,7 @@
     "s3:certification:verify": "node scripts/verify-s3-command-certification.mjs --directory=out/s3-formal-certification",
     "test:s3-certification": "node scripts/test-s3-command-certification.mjs",
     "test:s3-target-image-evidence": "node scripts/test-s3-target-image-evidence.mjs",
-    "s3:ticket-09": "npm run s3:local:check && npm run s3:target-runtime:test && npm run s3:certification:check && npm run test:s3-certification && npm run test:s3-target-image-evidence && npm run s3:certification:preflight && npm run ownership:check && npm run s3:postgres && npm run lint && npm run build",
+    "s3:certification:pr": "npm run s3:local:check && npm run s3:target-runtime:test && npm run s3:certification:check && npm run test:s3-certification && npm run test:s3-target-image-evidence && npm run s3:certification:preflight && npm run ownership:check",
     "platform:production-rollout:check": "node scripts/check-production-rollout.mjs",
     "codegraph:init": "codegraph init .",
     "codegraph:sync": "codegraph sync .",

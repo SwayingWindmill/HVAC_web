@@ -92,6 +92,8 @@ The first capability-consolidation slice replaces `S1 Ticket 01 Contract and Own
 
 The second capability-consolidation slice replaces S3 Tickets 02, 03, 05 and 07 with `S3 Command Authority`. The suite runs PostgreSQL authority, governance/dispatch and reported-state verification checks once, executes the shared command database integration once, then runs one Go test/vet union and one Lint/Build pass. Its evidence path is stable under `out/s3-command-authority`, and the PostgreSQL authority gate prevents the four retired workflow wrappers or Ticket 02 report path from returning.
 
+The third S3 slice replaces `S3 Ticket 09 Command Certification` with the stable `S3 Command Certification` workflow and `s3:certification:pr` command. Pull requests retain local-profile checks, target-runtime Go test/vet/build coverage, certification contract tests, target-image evidence tests, deterministic preflight and ownership validation. PostgreSQL command authority, TypeScript linting and the product build are no longer repeated because `S3 Command Authority` owns them. Signed images, SBOM, provenance, Trivy secret scanning, Cosign verification and the four-image candidate manifest remain restricted to `s3-v*` tags or manual certification runs. Static gates prevent the retired Ticket workflow/script and Ticket-scoped evidence path from returning.
+
 ### Phase 4: reusable setup
 
 - Centralize checkout, Node, Go, cache and dependency installation in reusable workflows or composite actions.

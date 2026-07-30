@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 const root = resolve(process.cwd());
 const arg = (name, fallback = '') => process.argv.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const profile = arg('profile', process.env.S3_COMMAND_CERTIFICATION_PROFILE ?? 'preflight');
-const outputDir = resolve(root, arg('output-dir', 'out/s3-ticket-09'));
+const outputDir = resolve(root, arg('output-dir', 'out/s3-command-certification'));
 const expectedRepositorySha = process.env.GITHUB_SHA ?? execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
 const readJSON = async (path) => JSON.parse(await readFile(resolve(root, path), 'utf8'));
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
