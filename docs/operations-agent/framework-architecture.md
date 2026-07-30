@@ -88,6 +88,8 @@ services/operations-agent-service/
 
 The directory names describe module responsibility, not mandatory implementation file count. Each module should expose a small public surface and hide its internal structure.
 
+The initial service skeleton is implemented at `services/operations-agent-service`. It is an independent npm package with NodeNext TypeScript build output, one external package root, module-local `index.ts` entries and a repository-owned AST boundary check. At this stage it has no LangGraph.js, model, database, AG-UI, scheduler, browser or Platform Gateway integration. Run its complete local gate with `npm run operations-agent-service:check`.
+
 ### 3.1 Dependency direction
 
 ```text
