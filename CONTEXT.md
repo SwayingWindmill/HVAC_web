@@ -219,3 +219,15 @@ A non-blocking evaluation dimension used to compare acceptable results after eve
 ## Required-Next Evidence
 
 A structured Benchmark Evidence requirement that is not present in the current scenario input and must be obtained from its named authoritative owner before a blocked conclusion may be attempted. Required-Next Evidence identifies a governed next data product or fact; it does not authorize a tool, claim that an endpoint already exists or permit the Agent to fill the gap with inference.
+
+## Requested Operational Scope
+
+The exact Organization, Site, Equipment, Device and time boundary that a caller attempted to access but that is not part of the caller's authorized operational Scope. Requested Operational Scope may appear only in authorization decisions and their Evidence; it never authorizes Registry, Telemetry, Analytics or Command reads and must not disclose whether the requested resource exists.
+
+## Benchmark Deterministic Blocker Sample
+
+A small framework-independent candidate result used to prove that one Benchmark Blocker Criterion accepts the required behavior and rejects a known violation with a stable failure code. A Deterministic Blocker Sample is test evidence for benchmark semantics, not a model transcript or Agent checkpoint.
+
+## Action Lifecycle Expectation
+
+A Benchmark Scenario declaration that distinguishes a Proposed Action, formal approval, Command Intent and physical execution result. It states which lifecycle artifacts may exist at the current Investigation stage and prevents a recommendation from being represented as approval, command submission or physical success.

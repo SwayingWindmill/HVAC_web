@@ -10,11 +10,13 @@ export const OPERATIONS_AGENT_TOOL_CATALOG = Object.freeze({
   'registry.listSiteEquipment': 'platform-core-service',
   'registry.getEquipmentEnergyBindings': 'platform-core-service',
   'telemetry.current.getEquipmentState': 'telemetry-runtime-service',
+  'telemetry.current.getDeviceObservationSnapshot': 'telemetry-runtime-service',
   'analytics.energy.getSiteSeries': 'telemetry-query-service',
   'analytics.energy.compareSitePeriods': 'telemetry-query-service',
   'analytics.energy.getEquipmentSeries': 'telemetry-query-service',
   'commands.createIntent': 'command-service',
   'commands.getIntent': 'command-service',
+  'commands.approveIntent': 'command-service',
   'audit.getRecord': 'audit-ledger-service',
 });
 
@@ -38,12 +40,14 @@ const factSchema = z.object({
   id: identifier,
   kind: identifier,
   ownerTool: logicalTool,
+  scopeBasis: z.enum(['AUTHORIZED', 'REQUESTED']).default('AUTHORIZED'),
   scope: canonicalScopeSchema,
   metadata: z.object({
     businessRevision: z.union([z.string().min(1), z.number().int().nonnegative()]).optional(),
     datasetRevision: z.string().min(1).optional(),
     watermark: isoDateTime.optional(),
     partial: z.boolean().optional(),
+    freshness: z.enum(['FRESH', 'STALE', 'MISSING']).optional(),
     quality: z.enum(['GOOD', 'SUSPECT', 'REJECTED', 'UNKNOWN']),
     evaluatedAt: isoDateTime.optional(),
     capturedAt: isoDateTime,
@@ -71,6 +75,7 @@ const evidenceRequirementSchema = z.object({
   kind: identifier,
   ownerTool: logicalTool,
   status: z.enum(['AVAILABLE', 'REQUIRED_NEXT']).default('AVAILABLE'),
+  scopeBasis: z.enum(['AUTHORIZED', 'REQUESTED']).default('AUTHORIZED'),
   scope: canonicalScopeSchema,
   factIds: z.array(identifier),
   requiredMetadata: z.array(z.enum([
@@ -78,6 +83,7 @@ const evidenceRequirementSchema = z.object({
     'DATASET_REVISION',
     'WATERMARK',
     'PARTIAL',
+    'FRESHNESS',
     'QUALITY',
     'EVALUATED_AT',
     'CAPTURED_AT',
@@ -90,6 +96,7 @@ const requiredMetadataFields = Object.freeze({
   DATASET_REVISION: 'datasetRevision',
   WATERMARK: 'watermark',
   PARTIAL: 'partial',
+  FRESHNESS: 'freshness',
   QUALITY: 'quality',
   EVALUATED_AT: 'evaluatedAt',
   CAPTURED_AT: 'capturedAt',
@@ -154,7 +161,16 @@ const forbiddenPathSchema = z.enum([
   'THINGSBOARD_READ_THROUGH',
   'LEGACY_AGENT_MOCK',
   'PHYSICAL_COMMAND_EXECUTION',
+  'HISTORICAL_AS_CURRENT_STATE',
+  'UNAUTHORIZED_RESOURCE_DISCLOSURE',
 ]);
+
+const actionLifecycleSchema = z.object({
+  proposedAction: z.enum(['EXPECTED', 'ALLOWED', 'MUST_NOT_CREATE']),
+  formalApproval: z.enum(['NOT_PRESENT', 'ALLOWED', 'REQUIRED']),
+  commandIntent: z.enum(['NOT_PRESENT', 'ALLOWED', 'MUST_NOT_CREATE']),
+  physicalExecutionResult: z.enum(['NOT_PRESENT', 'ALLOWED', 'MUST_NOT_CLAIM']),
+}).strict();
 
 const operationsAgentScenarioSchemaV1 = z.object({
   contractVersion: z.literal(OPERATIONS_AGENT_SCENARIO_CONTRACT_VERSION),
@@ -174,6 +190,7 @@ const operationsAgentScenarioSchemaV1 = z.object({
     'ACTION_PROPOSAL',
   ])).min(1),
   scope: canonicalScopeSchema,
+  requestedScope: canonicalScopeSchema.optional(),
   inputFacts: z.array(factSchema).min(1),
   groundTruth: z.object({ outcomes: z.array(outcomeSchema).min(1) }).strict(),
   evidenceRequirements: z.array(evidenceRequirementSchema).min(1),
@@ -185,6 +202,7 @@ const operationsAgentScenarioSchemaV1 = z.object({
     forbidden: z.array(logicalTool),
     forbiddenPaths: z.array(forbiddenPathSchema).default([]),
   }).strict(),
+  actionLifecycle: actionLifecycleSchema.optional(),
   acceptance: z.object({
     blockers: z.array(blockerCriterionSchema).min(1),
     scored: z.array(scoredCriterionSchema),
@@ -319,6 +337,13 @@ const validateReferences = (scenario, errors) => {
       if (requirement.status !== 'AVAILABLE') return;
 
       const fact = factById.get(factId);
+      if (fact.scopeBasis !== requirement.scopeBasis) {
+        errors.push(error(
+          'EVIDENCE_SCOPE_BASIS_MISMATCH',
+          `$.evidenceRequirements[${requirementIndex}].scopeBasis`,
+          `Evidence ${requirement.id} and input fact ${factId} must use the same Scope basis.`,
+        ));
+      }
       requirement.requiredMetadata.forEach((metadataName, metadataIndex) => {
         const field = requiredMetadataFields[metadataName];
         if (fact.metadata[field] === undefined) {
@@ -361,53 +386,85 @@ const validateTimeRange = (timeRange, path, errors) => {
 };
 
 const validateScopeContainment = (scenario, errors) => {
-  const authorized = scenario.scope;
-  const validateScope = (scope, basePath) => {
+  const validateBoundary = (scope, basePath) => {
     pushDuplicateValues(scope.siteIds, `${basePath}.siteIds`, errors);
     pushDuplicateValues(scope.equipmentIds, `${basePath}.equipmentIds`, errors);
     pushDuplicateValues(scope.deviceIds, `${basePath}.deviceIds`, errors);
     validateTimeRange(scope.timeRange, `${basePath}.timeRange`, errors);
+  };
 
-    if (scope.organizationId !== authorized.organizationId) {
+  const validateScope = (scope, scopeBasis, basePath) => {
+    validateBoundary(scope, basePath);
+    const boundary = scopeBasis === 'REQUESTED' ? scenario.requestedScope : scenario.scope;
+    if (!boundary) {
+      errors.push(error(
+        'REQUESTED_SCOPE_MISSING',
+        basePath,
+        'REQUESTED-scoped facts and Evidence require scenario.requestedScope.',
+      ));
+      return;
+    }
+
+
+    if (scope.organizationId !== boundary.organizationId) {
       errors.push(error(
         'SCOPE_OUTSIDE_SCENARIO',
         `${basePath}.organizationId`,
-        `Organization ${scope.organizationId} is outside the authorized scenario Scope.`,
+        `Organization ${scope.organizationId} is outside the ${scopeBasis.toLowerCase()} scenario Scope.`,
       ));
     }
 
     for (const field of ['siteIds', 'equipmentIds', 'deviceIds']) {
-      const allowed = new Set(authorized[field]);
+      const allowed = new Set(boundary[field]);
       scope[field].forEach((id, index) => {
         if (!allowed.has(id)) {
           errors.push(error(
             'SCOPE_OUTSIDE_SCENARIO',
             `${basePath}.${field}[${index}]`,
-            `${id} is outside the authorized scenario Scope.`,
+            `${id} is outside the ${scopeBasis.toLowerCase()} scenario Scope.`,
           ));
         }
       });
     }
 
     if (scope.timeRange) {
-      const outsideTimeRange = !authorized.timeRange
-        || Date.parse(scope.timeRange.from) < Date.parse(authorized.timeRange.from)
-        || Date.parse(scope.timeRange.to) > Date.parse(authorized.timeRange.to);
+      const outsideTimeRange = !boundary.timeRange
+        || Date.parse(scope.timeRange.from) < Date.parse(boundary.timeRange.from)
+        || Date.parse(scope.timeRange.to) > Date.parse(boundary.timeRange.to);
       if (outsideTimeRange) {
         errors.push(error(
           'SCOPE_OUTSIDE_SCENARIO',
           `${basePath}.timeRange`,
-          'The scoped time range extends beyond the authorized scenario Scope.',
+          `The scoped time range extends beyond the ${scopeBasis.toLowerCase()} scenario Scope.`,
         ));
       }
     }
   };
 
-  scenario.inputFacts.forEach((fact, index) => validateScope(fact.scope, `$.inputFacts[${index}].scope`));
-  scenario.evidenceRequirements.forEach((requirement, index) => validateScope(
-    requirement.scope,
-    `$.evidenceRequirements[${index}].scope`,
-  ));
+  if (scenario.requestedScope) validateBoundary(scenario.requestedScope, '$.requestedScope');
+
+  scenario.inputFacts.forEach((fact, index) => {
+    const path = `$.inputFacts[${index}]`;
+    if (fact.scopeBasis === 'REQUESTED' && !fact.ownerTool.startsWith('authorization.')) {
+      errors.push(error(
+        'REQUESTED_SCOPE_OWNER_INVALID',
+        `${path}.ownerTool`,
+        'Only authorization facts may describe a requested but unauthorized Scope.',
+      ));
+    }
+    validateScope(fact.scope, fact.scopeBasis, `${path}.scope`);
+  });
+  scenario.evidenceRequirements.forEach((requirement, index) => {
+    const path = `$.evidenceRequirements[${index}]`;
+    if (requirement.scopeBasis === 'REQUESTED' && !requirement.ownerTool.startsWith('authorization.')) {
+      errors.push(error(
+        'REQUESTED_SCOPE_OWNER_INVALID',
+        `${path}.ownerTool`,
+        'Only authorization Evidence may describe a requested but unauthorized Scope.',
+      ));
+    }
+    validateScope(requirement.scope, requirement.scopeBasis, `${path}.scope`);
+  });
 };
 
 const validateToolPolicy = (scenario, errors) => {
@@ -479,6 +536,47 @@ const validateToolPolicy = (scenario, errors) => {
   });
 };
 
+const validateActionLifecycle = (scenario, errors) => {
+  if (!scenario.actionLifecycle) return;
+
+  const allowed = new Set(scenario.tools.allowed);
+  const forbidden = new Set(scenario.tools.forbidden);
+  const forbiddenPaths = new Set(scenario.tools.forbiddenPaths);
+
+  if (scenario.actionLifecycle.proposedAction === 'EXPECTED'
+    && !scenario.taskCategories.includes('ACTION_PROPOSAL')) {
+    errors.push(error(
+      'ACTION_LIFECYCLE_CONFLICT',
+      '$.actionLifecycle.proposedAction',
+      'An expected Proposed Action requires the ACTION_PROPOSAL task category.',
+    ));
+  }
+  if (scenario.actionLifecycle.commandIntent === 'MUST_NOT_CREATE'
+    && (!forbidden.has('commands.createIntent') || allowed.has('commands.createIntent'))) {
+    errors.push(error(
+      'ACTION_LIFECYCLE_CONFLICT',
+      '$.actionLifecycle.commandIntent',
+      'MUST_NOT_CREATE requires commands.createIntent to be forbidden and not allowed.',
+    ));
+  }
+  if (scenario.actionLifecycle.formalApproval === 'NOT_PRESENT'
+    && (!forbidden.has('commands.approveIntent') || allowed.has('commands.approveIntent'))) {
+    errors.push(error(
+      'ACTION_LIFECYCLE_CONFLICT',
+      '$.actionLifecycle.formalApproval',
+      'NOT_PRESENT formal approval requires commands.approveIntent to be forbidden and not allowed.',
+    ));
+  }
+  if (scenario.actionLifecycle.physicalExecutionResult === 'MUST_NOT_CLAIM'
+    && !forbiddenPaths.has('PHYSICAL_COMMAND_EXECUTION')) {
+    errors.push(error(
+      'ACTION_LIFECYCLE_CONFLICT',
+      '$.actionLifecycle.physicalExecutionResult',
+      'MUST_NOT_CLAIM requires PHYSICAL_COMMAND_EXECUTION to be a forbidden path.',
+    ));
+  }
+};
+
 const validateAcceptance = (scenario, errors) => {
   pushDuplicateErrors(scenario.acceptance.blockers, '$.acceptance.blockers', errors);
   pushDuplicateErrors(scenario.acceptance.scored, '$.acceptance.scored', errors);
@@ -534,6 +632,7 @@ export const validateOperationsAgentScenario = (value) => {
   validateDag(scenario.planningDag.nodes, '$.planningDag', errors);
   validateDag(scenario.executionDag.nodes, '$.executionDag', errors);
   validateToolPolicy(scenario, errors);
+  validateActionLifecycle(scenario, errors);
   validateAcceptance(scenario, errors);
 
   return errors.length === 0

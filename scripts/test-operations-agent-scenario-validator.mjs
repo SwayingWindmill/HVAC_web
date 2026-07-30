@@ -198,6 +198,56 @@ test('rejects input facts and Evidence requirements outside authorized Scope', (
   assert.equal(result.errors.filter(({ code }) => code === 'SCOPE_OUTSIDE_SCENARIO').length, 2);
 });
 
+test('rejects requested Scope without matching authorization ownership or Evidence basis', () => {
+  const nonAuthorizationOwner = buildValidScenario();
+  nonAuthorizationOwner.requestedScope = {
+    organizationId: 'org-001',
+    siteIds: ['site-requested'],
+    equipmentIds: [],
+    deviceIds: [],
+  };
+  nonAuthorizationOwner.inputFacts[0].ownerTool = 'registry.getSite';
+  nonAuthorizationOwner.inputFacts[0].scopeBasis = 'REQUESTED';
+  nonAuthorizationOwner.inputFacts[0].scope.siteIds = ['site-requested'];
+  nonAuthorizationOwner.evidenceRequirements[0].ownerTool = 'registry.getSite';
+  nonAuthorizationOwner.evidenceRequirements[0].scopeBasis = 'REQUESTED';
+  nonAuthorizationOwner.evidenceRequirements[0].scope.siteIds = ['site-requested'];
+  nonAuthorizationOwner.tools.allowed.push('registry.getSite');
+
+  const mismatchedEvidenceBasis = buildValidScenario();
+  mismatchedEvidenceBasis.requestedScope = {
+    organizationId: 'org-001',
+    siteIds: ['site-requested'],
+    equipmentIds: [],
+    deviceIds: [],
+  };
+  mismatchedEvidenceBasis.inputFacts[0].scopeBasis = 'REQUESTED';
+  mismatchedEvidenceBasis.inputFacts[0].scope.siteIds = ['site-requested'];
+
+  const ownerResult = validateOperationsAgentScenario(nonAuthorizationOwner);
+  const basisResult = validateOperationsAgentScenario(mismatchedEvidenceBasis);
+
+  assert.equal(ownerResult.valid, false);
+  assert(errorCodes(ownerResult).has('REQUESTED_SCOPE_OWNER_INVALID'));
+  assert.equal(basisResult.valid, false);
+  assert(errorCodes(basisResult).has('EVIDENCE_SCOPE_BASIS_MISMATCH'));
+});
+
+test('rejects action lifecycle policy that permits forbidden governance effects', () => {
+  const scenario = buildValidScenario();
+  scenario.actionLifecycle = {
+    proposedAction: 'EXPECTED',
+    formalApproval: 'NOT_PRESENT',
+    commandIntent: 'MUST_NOT_CREATE',
+    physicalExecutionResult: 'MUST_NOT_CLAIM',
+  };
+
+  const result = validateOperationsAgentScenario(scenario);
+
+  assert.equal(result.valid, false);
+  assert(errorCodes(result).has('ACTION_LIFECYCLE_CONFLICT'));
+});
+
 test('rejects missing required Evidence metadata and invalid scoped time ranges', () => {
   const scenario = buildValidScenario();
   scenario.evidenceRequirements[0].requiredMetadata.push('DATASET_REVISION');
