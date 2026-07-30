@@ -117,15 +117,15 @@ The final S3 topology slice renames the remaining Ticket 01, 04, 06 and 08 wrapp
 
 ## Required-check target
 
-The eventual branch rule should require stable aggregate checks rather than every historical job:
+`.github/workflows/pr-gates.yml` provides the stable aggregate checks that the branch Ruleset requires:
 
 - `pr / static`
 - `pr / contracts`
 - `pr / affected-unit`
 - `pr / affected-integration`
-- `pr / affected-browser` when the change classifier marks browser impact
+- `pr / affected-browser`
 
-The classifier itself must fail closed: an unknown path selects the broader affected-domain suite, not no suite.
+The workflow has no path filter, so all five check names exist on every pull request. Conditional execution jobs may be skipped when a gate has no affected profiles, but the aggregate result still reports success or propagates the execution failure. Browser profiles retain their required platform boundary: RMS audits run on Windows, while S0, S1 and S2 browser audits run on Linux so Docker-backed fixtures remain available. `scripts/classify-pr-gates.mjs` owns path classification and writes `out/pr-gates/classification.json`; `scripts/run-pr-gate.mjs` owns the fixed command mapping. Unknown paths, workflow changes and root `package.json` changes fail closed to the broad suite. A `package-lock.json` change selects compile and unit coverage without automatically launching database or browser suites.
 
 ## Gate acceptance record
 

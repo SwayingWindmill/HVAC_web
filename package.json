@@ -14,6 +14,8 @@
     "delivery:local": "node scripts/dev-s0-durable.mjs",
     "delivery:validate": "node scripts/validate-s0-delivery-config.mjs --file=deploy/s0/local.env.example && node scripts/validate-s0-delivery-config.mjs --file=deploy/s0/staging.env.example",
     "delivery:check": "node scripts/check-s0-delivery-assets.mjs && node scripts/test-render-s0-staging.mjs",
+    "pr:gates:classify": "node scripts/classify-pr-gates.mjs",
+    "pr:gates:test": "node --test scripts/test-pr-gate-classifier.mjs",
     "delivery:render": "node scripts/render-s0-staging.mjs",
     "security:dependency-audit": "node --test scripts/test-react-router-security-upgrade.mjs && node scripts/check-npm-production-audit.mjs",
     "security:ticket-79": "npm run security:dependency-audit && npm run test:dependency-audit-retry && npm run contracts:check && npm run rms:certification:test && npm run s2:hvac-web:check && npm run s2:contracts:check && npm run s2:live-client:check && npm run s2:shadow-routing:check && npm run s1:hvac-web:check && npm run security:licenses && npm run lint && npm run build:real && npm run build:demo && npm run rms:real:graph && npm run rms:real:bundle",
