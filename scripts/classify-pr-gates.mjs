@@ -64,8 +64,8 @@ const addReason = (file, reason) => reasons.push({ file, reason });
 const selectBroad = (file, reason) => {
   broad = true;
   add(contractProfiles, ['core', 'rms', 's1', 's2', 's3']);
-  add(unitProfiles, ['web', 's0', 's1', 's2', 's3', 'analytics']);
-  add(integrationProfiles, ['s0', 's1', 's2-baseline', 's2-ingest', 's2-realtime', 's2-history', 's3', 'analytics']);
+  add(unitProfiles, ['web', 's0', 's1', 's2', 's3', 'analytics', 'operations-agent', 'pocs']);
+  add(integrationProfiles, ['s0', 's1', 's2-baseline', 's2-ingest', 's2-realtime', 's2-history', 's3', 'analytics', 'operations-agent']);
   add(browserProfiles, ['rms', 's0', 's1', 's2']);
   addReason(file, reason);
 };
@@ -111,6 +111,13 @@ const selectAnalytics = (file, reason, { integration = false } = {}) => {
   add(contractProfiles, ['core']);
   add(unitProfiles, ['analytics']);
   if (integration) add(integrationProfiles, ['analytics']);
+  addReason(file, reason);
+};
+
+const selectOperationsAgent = (file, reason, { integration = false } = {}) => {
+  add(contractProfiles, ['core']);
+  add(unitProfiles, ['operations-agent']);
+  if (integration) add(integrationProfiles, ['operations-agent']);
   addReason(file, reason);
 };
 
@@ -160,6 +167,7 @@ for (const file of files) {
   });
   match(file.startsWith('libs/commandauth/') || file.startsWith('libs/commandmodel/') || file.startsWith('services/command-service/') || file.startsWith('services/command-dispatcher/') || file.startsWith('services/thingsboard-connector-control/') || file.startsWith('deploy/s3/'), () => selectS3(file, 'S3 command capability changed', { integration: true }));
   match(file.startsWith('libs/analyticsmodel/') || file.startsWith('services/telemetry-query-service/') || file.startsWith('services/analytics-read-model-projector/') || file.startsWith('deploy/analytics/'), () => selectAnalytics(file, 'analytics capability changed', { integration: true }));
+  match(file.startsWith('services/operations-agent-service/') || file.startsWith('benchmarks/operations-agent/') || file.startsWith('infra/operations-agent/'), () => selectOperationsAgent(file, 'Operations Agent capability changed', { integration: true }));
 
   match(file.startsWith('services/iam-service/') || file.startsWith('services/platform-gateway/'), () => {
     selectS0(file, 'shared IAM or Gateway boundary changed', { browser: true });
@@ -191,6 +199,7 @@ for (const file of files) {
     });
     scriptMatch(lower.includes('s3-') || lower.includes('command'), () => selectS3(file, 'S3 automation changed', { integration: lower.includes('postgres') || lower.includes('thingsboard') }));
     scriptMatch(lower.includes('analytics'), () => selectAnalytics(file, 'analytics automation changed', { integration: lower.includes('history') || lower.includes('cube') }));
+    scriptMatch(lower.includes('operations-agent'), () => selectOperationsAgent(file, 'Operations Agent automation changed', { integration: lower.includes('postgres') || lower.includes('migration') }));
     scriptMatch(lower.includes('ownership') || lower.includes('contract') || lower.includes('production-rollout'), () => add(contractProfiles, ['core']));
     if (!scriptMatched) {
       unknown = true;
