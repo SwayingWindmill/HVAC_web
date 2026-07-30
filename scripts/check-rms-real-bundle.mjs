@@ -4,7 +4,7 @@ import path from 'node:path';
 const workspaceRoot = process.cwd();
 const realBundleRoot = path.join(workspaceRoot, 'apps', 'hvac-web', 'dist', 'real');
 const demoBundleRoot = path.join(workspaceRoot, 'apps', 'hvac-web', 'dist', 'demo');
-const outputPath = path.join(workspaceRoot, 'out', 'rms-01', 'build-artifact-audit.json');
+const outputPath = path.join(workspaceRoot, 'out', 'rms-web-build', 'build-artifact-audit.json');
 const configuredBuildId = process.env.HVAC_WEB_BUILD_ID?.trim();
 const realBuildId = configuredBuildId || 'real-local';
 const demoBuildId = configuredBuildId || 'demo-local';

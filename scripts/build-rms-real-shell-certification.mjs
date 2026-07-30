@@ -5,15 +5,15 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { buildRealShellCertificationEnvelope } from './rms-certification-evidence-lib.mjs';
 
 const root = resolve(process.cwd());
-const outputDirectory = join(root, 'out', 'rms-08');
+const outputDirectory = join(root, 'out', 'rms-web-certification');
 const reportPath = join(outputDirectory, 'real-shell-certification.json');
 const checksumPath = join(outputDirectory, 'SHA256SUMS');
 
 const paths = {
   gates: join(outputDirectory, 'gate-results.json'),
   browser: join(outputDirectory, 'browser-evidence.json'),
-  graph: join(root, 'out', 'rms-01', 'real-dependency-graph.json'),
-  bundle: join(root, 'out', 'rms-01', 'build-artifact-audit.json'),
+  graph: join(root, 'out', 'rms-web-build', 'real-dependency-graph.json'),
+  bundle: join(root, 'out', 'rms-web-build', 'build-artifact-audit.json'),
   policy: join(root, 'deploy', 'rms', 'real-shell-release-policy.v1.json'),
   tooling: join(root, 'contracts', 'http', 'tooling.lock.json'),
   contract: join(root, 'contracts', 'http', 'platform-gateway.openapi.yaml'),

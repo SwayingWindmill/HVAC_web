@@ -1,0 +1,95 @@
+name: RMS Web Certification
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/rms-web-certification.yml'
+      - 'scripts/check-rms-workflow-topology.mjs'
+      - 'apps/hvac-web/src/real/**'
+      - 'apps/hvac-web/src/api/generated/platformGateway.gen.ts'
+      - 'apps/hvac-web/vite.real.config.ts'
+      - 'apps/hvac-web/vite.shared.config.ts'
+      - 'contracts/http/**'
+      - 'deploy/rms/**'
+      - 'docs/operations/hvac-web-real-mode-shell-*.md'
+      - 'libs/identitycontext/**'
+      - 'libs/ownershipregistry/**'
+      - 'libs/registryauth/**'
+      - 'services/iam-service/**'
+      - 'services/platform-gateway/**'
+      - 'scripts/build-rms-real-shell-certification.mjs'
+      - 'scripts/check-rms-real-build-graph.mjs'
+      - 'scripts/check-rms-real-bundle.mjs'
+      - 'scripts/rms-certification-evidence-lib.mjs'
+      - 'scripts/rms-real-build-audit-lib.mjs'
+      - 'scripts/run-rms-authenticated-shell-browser-audit.mjs'
+      - 'scripts/run-rms-real-shell-certification.mjs'
+      - 'scripts/test-rms-*.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rms-web-certification.yml'
+      - 'scripts/check-rms-workflow-topology.mjs'
+      - 'apps/hvac-web/src/real/**'
+      - 'apps/hvac-web/src/api/generated/platformGateway.gen.ts'
+      - 'apps/hvac-web/vite.real.config.ts'
+      - 'apps/hvac-web/vite.shared.config.ts'
+      - 'contracts/http/**'
+      - 'deploy/rms/**'
+      - 'docs/operations/hvac-web-real-mode-shell-*.md'
+      - 'libs/identitycontext/**'
+      - 'libs/ownershipregistry/**'
+      - 'libs/registryauth/**'
+      - 'services/iam-service/**'
+      - 'services/platform-gateway/**'
+      - 'scripts/build-rms-real-shell-certification.mjs'
+      - 'scripts/check-rms-real-build-graph.mjs'
+      - 'scripts/check-rms-real-bundle.mjs'
+      - 'scripts/rms-certification-evidence-lib.mjs'
+      - 'scripts/rms-real-build-audit-lib.mjs'
+      - 'scripts/run-rms-authenticated-shell-browser-audit.mjs'
+      - 'scripts/run-rms-real-shell-certification.mjs'
+      - 'scripts/test-rms-*.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+
+permissions:
+  contents: read
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  certify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache-dependency-path: |
+            libs/identitycontext/go.mod
+            libs/ownershipregistry/go.mod
+            libs/registryauth/go.mod
+            services/iam-service/go.mod
+            services/platform-gateway/go.mod
+      - run: npm ci
+      - run: npm run rms:topology:check
+      - run: npm run rms:web-certification
+      - name: Upload RMS certification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rms-web-certification-${{ github.sha }}
+          path: |
+            out/rms-web-certification
+            out/rms-web-build/real-dependency-graph.json
+            out/rms-web-build/build-artifact-audit.json
+          if-no-files-found: warn
+          retention-days: 30
