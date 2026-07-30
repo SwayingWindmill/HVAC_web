@@ -237,8 +237,8 @@ const expectedScripts = {
   's2:ingest:postgres': 'node scripts/run-s2-telemetry-ingest-postgres-tests.mjs',
 };
 for (const [name, command] of Object.entries(expectedScripts)) assert(packageJSON.scripts?.[name] === command, `${name} is not wired`);
-const ticketCommand = packageJSON.scripts?.['s2:ticket-04'];
-assert(typeof ticketCommand === 'string', 's2:ticket-04 is missing');
+const ticketCommand = packageJSON.scripts?.['s2:telemetry-ingest'];
+assert(typeof ticketCommand === 'string', 's2:telemetry-ingest is missing');
 for (const command of [
   'npm run s2:ingest:check',
   'test ./services/telemetry-runtime-service/...',
@@ -254,8 +254,8 @@ for (const command of [
   'npm run lint',
   'npm run build',
   'npm run s2:ingest:postgres',
-]) assert(ticketCommand.includes(command), `s2:ticket-04 omits ${command}`);
-includesAll(workflow, ['runs-on: ubuntu-24.04', 'go-version: "1.25.12"', 'node-version: "22.22.0"', 'npm run s2:ticket-04', 's2-telemetry-ingest-evidence'], 'Ticket 04 workflow');
+]) assert(ticketCommand.includes(command), `s2:telemetry-ingest omits ${command}`);
+includesAll(workflow, ['runs-on: ubuntu-24.04', 'go-version: "1.25.12"', 'node-version: "22.22.0"', 'npm run s2:telemetry-ingest', 's2-telemetry-ingest-evidence'], 'Ticket 04 workflow');
 includesAll(runner, ['TestPostgresIngestEndToEnd', 'docker', 'restart', 'restartDurability', 'deliveryEvidence', 'rejectedAndQuarantined', 'coverageQuarantine', 'twoOrganizationIsolation'], 'Ticket 04 PostgreSQL runner');
 
 const allSources = `${decisionGo}\n${ingestStoreGo}\n${coverageGo}\n${sourceServerGo}\n${mainGo}`.toLowerCase();

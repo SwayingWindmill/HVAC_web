@@ -57,7 +57,7 @@ jobs:
           node-version: '22.22.0'
           cache: npm
       - run: npm ci
-      - run: npm run s2:ticket-02
+      - run: npm run s2:iam-authorization
       - uses: actions/upload-artifact@v4
         if: always()
         with:

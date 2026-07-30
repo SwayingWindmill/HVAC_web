@@ -209,7 +209,7 @@ for (const forbidden of ['thingsboard fallback', 'legacy fallback', 'mock fallba
 assert(packageJSON.scripts?.['s2:realtime:check'] === 'node scripts/check-s2-realtime-backend.mjs', 's2:realtime:check is not wired');
 assert(packageJSON.scripts?.['s2:realtime:config'] === 'node scripts/run-s2-realtime-centrifugo-config-check.mjs', 's2:realtime:config is not wired');
 assert(packageJSON.scripts?.['s2:realtime:transport'] === 'node scripts/run-s2-centrifugo-poc.mjs', 's2:realtime:transport is not wired');
-assert(packageJSON.scripts?.['s2:ticket-06']?.includes('npm run s2:realtime:config'), 's2:ticket-06 omits the formal Centrifugo mTLS configuration check');
+assert(packageJSON.scripts?.['s2:realtime-backend']?.includes('npm run s2:realtime:config'), 's2:realtime-backend omits the formal Centrifugo mTLS configuration check');
 
 const evidence = {
   schemaVersion: 1,

@@ -53,7 +53,7 @@ jobs:
           node-version: "22.22.0"
           cache: npm
       - run: npm ci
-      - run: npm run s2:ticket-11
+      - run: npm run s2:telemetry-release
       - run: npm run s2:history:check
       - run: npm run s2:shadow-routing:compare
       - run: npm run s2:shadow-routing:harness
@@ -92,7 +92,7 @@ jobs:
           node-version: "22.22.0"
           cache: npm
       - run: npm ci
-      - run: npm run s2:ticket-10
+      - run: npm run s2:security-observability
       - name: Upload security and observability release evidence
         uses: actions/upload-artifact@v6
         with:

@@ -38,7 +38,7 @@ Ticket identifiers are historical evidence, not permanent CI architecture. Durab
 | retired numbered `rms-*` and `rms-ticket-*` | `RMS Web Build`, `RMS Web Auth`, `RMS Web Routing`, `RMS Web Browser`, `RMS Web Certification` |
 | `s0-*` | `platform-contracts`, `platform-auth`, `platform-durability`, `platform-security`, `platform-release` |
 | retired `s1-ticket-*` | `S1 Registry Core`, `S1 IAM Provider POC`, `S1 Registry Migration`, `S1 Registry Routing`, `S1 Registry Web` |
-| `s2-*` | `telemetry-contracts`, `telemetry-postgres`, `telemetry-realtime`, `telemetry-history`, `telemetry-web`, `telemetry-release` |
+| S2 telemetry workflows | `telemetry-baseline`, `iam-authorization`, `telemetry-runtime-snapshot`, `telemetry-ingest`, `gateway-snapshot`, `realtime-backend`, `telemetry-live-client`, `shadow-routing`, `hvac-web-presence`, `security-observability`, `telemetry-release`, `telemetry-cutover` |
 | retired `s3-ticket-*` | `S3 Command Safety`, `S3 Command Authority`, `S3 Command API`, `S3 ThingsBoard Contract`, `S3 Command UX`, `S3 Command Certification` |
 
 ## Migration order
@@ -89,6 +89,8 @@ The next release-layer slice removes the duplicated S0 `release-evidence-pr` Kin
 - Keep historical Ticket numbers in release evidence and documentation, not workflow topology.
 
 The RMS topology slice replaces eight numbered workflows with five stable capability suites. `RMS Web Routing` runs the complete Ticket 07 policy-test superset instead of relaunching the cumulative Ticket 03–07 build wrappers, while `RMS Web Browser` runs the two distinct Windows browser audits once with one checkout and dependency installation. Build and certification evidence now use `out/rms-web-build` and `out/rms-web-certification`. Every RMS workflow watches and executes `rms:topology:check`, which rejects restored numbered workflows, Ticket commands and Ticket-scoped evidence paths.
+
+The S2 command-topology slice replaces the twelve `s2:ticket-01` through `s2:ticket-12` package entry points with commands named after the existing telemetry capabilities. Every capability command executes `s2:topology:check` first; the shared gate verifies the workflow-to-command mapping and rejects restored Ticket commands or Ticket-named workflows. Existing `out/s2-ticket-*` evidence directories and historical harness names remain unchanged in this slice so command migration does not invalidate release evidence; evidence-path migration is a separate follow-up.
 
 The first capability-consolidation slice replaces `S1 Ticket 01 Contract and Ownership` and `S1 Ticket 03 Core Registry Read Service` with the stable `S1 Registry Core` workflow. The new suite keeps the union of contract generation, ownership validation, SQLC POC, Registry baseline, IAM/Core build and security checks, plus one stable PostgreSQL evidence job. Shared Registry changes therefore use one Node/Go setup per capability job instead of launching two Ticket wrappers and two equivalent PostgreSQL baselines. `s1:registry:check` enforces the stable workflow markers and prevents the retired Ticket files and Ticket-scoped evidence paths from returning.
 

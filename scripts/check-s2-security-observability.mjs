@@ -81,13 +81,13 @@ for (const marker of ['test:security-negative', 's2:live-client:browser', 's2:sh
 for (const report of ['security-negative-report.json', 'zero-invariant-report.json', 'metric-cardinality-report.json', 'trace-correlation-report.json', 'log-redaction-report.json', 'alert-rule-validation-report.json', 'observability-outage-report.json']) {
   assert(audit.includes(report), `audit runner does not generate ${report}`);
 }
-for (const marker of ['HMAC', '低基数', 'collector', 'security zero invariant', 'npm run s2:ticket-10']) {
+for (const marker of ['HMAC', '低基数', 'collector', 'security zero invariant', 'npm run s2:security-observability']) {
   assert(runbook.toLowerCase().includes(marker.toLowerCase()), `Runbook is missing ${marker}`);
 }
-for (const marker of ['npm run s2:ticket-10', 'out/s2-ticket-10', 'if-no-files-found: error', 'go-version: "1.25.12"', 'prom/prometheus@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94', '--entrypoint /bin/promtool', 'check rules /rules.yml']) {
+for (const marker of ['npm run s2:security-observability', 'out/s2-ticket-10', 'if-no-files-found: error', 'go-version: "1.25.12"', 'prom/prometheus@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94', '--entrypoint /bin/promtool', 'check rules /rules.yml']) {
   assert(workflow.includes(marker), `Ticket 10 workflow is missing ${marker}`);
 }
-for (const script of ['s2:security-observability:check', 's2:security-negative', 's2:observability:harness', 's2:ticket-10']) {
+for (const script of ['s2:security-observability:check', 's2:security-negative', 's2:observability:harness', 's2:security-observability']) {
   assert(packageJSON.scripts?.[script], `package script ${script} is missing`);
 }
 

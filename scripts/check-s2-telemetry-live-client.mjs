@@ -100,7 +100,7 @@ for (const phrase of [
 
 assert(packageJSON.scripts?.['s2:live-client:check'] === 'node scripts/check-s2-telemetry-live-client.mjs', 's2:live-client:check is not wired');
 assert(packageJSON.scripts?.['s2:live-client:browser'] === 'node scripts/run-s2-telemetry-live-browser-audit.mjs', 's2:live-client:browser is not wired');
-assert(packageJSON.scripts?.['s2:ticket-07']?.includes('npm run s2:live-client:browser'), 's2:ticket-07 omits browser evidence');
+assert(packageJSON.scripts?.['s2:telemetry-live-client']?.includes('npm run s2:live-client:browser'), 's2:telemetry-live-client omits browser evidence');
 
 await mkdir(dirname(output), { recursive: true });
 await writeFile(output, `${JSON.stringify({

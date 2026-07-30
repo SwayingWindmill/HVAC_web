@@ -41,7 +41,7 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm run s2:ticket-09
+      - run: npm run s2:hvac-web-presence
       - name: Upload Ticket 09 evidence
         if: always()
         uses: actions/upload-artifact@v4

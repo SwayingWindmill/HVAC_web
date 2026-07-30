@@ -110,7 +110,7 @@ The bundle records the repository SHA, workflow run, image digests, environment/
 ```text
 npm run s2:release:check
 npm run s2:capacity
-npm run s2:ticket-11
+npm run s2:telemetry-release
 npm run audit:s2-kind-rollout
 npm run s2:release-evidence
 npm run s2:release-evidence:verify
