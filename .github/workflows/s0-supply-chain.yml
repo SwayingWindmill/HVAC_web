@@ -390,36 +390,3 @@ jobs:
           path: out/s0-release-evidence
           if-no-files-found: error
           retention-days: 30
-
-  release-evidence-pr:
-    if: github.event_name == 'pull_request'
-    needs: [verify, codeql, dependency-and-license, security-failure-gates]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22.22.0"
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
-      - name: Create disposable Kubernetes PR evidence cluster
-        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
-        with:
-          version: v0.32.0
-          kubectl_version: v1.35.0
-          cluster_name: s0-release-evidence-pr
-          wait: 120s
-      - run: npm run release:evidence-assets
-      - run: npm run audit:s0-rollout -- --report=out/s0-release-evidence/rollout-model-report.json
-      - run: npm run audit:s0-kind-rollout
-      - name: Upload S0 release evidence PR results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: s0-release-evidence-pr-results
-          path: out/s0-release-evidence
-          if-no-files-found: error
-          retention-days: 14

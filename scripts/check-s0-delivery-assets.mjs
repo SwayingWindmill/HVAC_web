@@ -134,6 +134,9 @@ includesAll(renderer, ['@sha256:', 'Missing staging binding', 'Unresolved placeh
 
 const workflow = await read('.github/workflows/s0-supply-chain.yml');
 includesAll(workflow, ['go-version: "1.25.12"', 'gitleaks/gitleaks-action', 'github/codeql-action/init', 'build_mode: manual', 'build_mode: none', 'upload: never', 'security:go-vuln', 'npm audit', 'security:dependency-audit', 'security:licenses', 'sbom: true', 'provenance: mode=max', 'aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25', 'scanners: secret', 'trivy-secrets-${{ matrix.name }}.json', 'cosign sign', 'cosign verify', 'attest-build-provenance', "if: github.event.repository.visibility == 'public'", 'Record GitHub attestation skip', 'id-token: write'], 'supply-chain workflow');
+assert(!workflow.includes('release-evidence-pr:'), 'S0 release evidence must not create a Kind cluster on pull requests');
+assert(!workflow.includes('s0-release-evidence-pr'), 'S0 release evidence must not publish PR certification artifacts');
+includesAll(workflow, ["if: startsWith(github.ref, 'refs/tags/s0-v') || github.event_name == 'workflow_dispatch'", 'Create disposable Kubernetes evidence cluster', 'npm run audit:s0-kind-rollout'], 'formal S0 release certification');
 const triggerBlock = workflow.slice(0, workflow.indexOf('\npermissions:'));
 assert(!triggerBlock.includes('"scripts/**"'), 'supply-chain pull-request paths must not watch every repository script');
 const expectedTriggerScripts = await collectSupplyChainScriptClosure(workflow, packageJSON);
