@@ -1,41 +1,53 @@
-name: S1 Ticket 01 Contract and Ownership
+name: S1 Registry Core
 
 on:
   pull_request:
     paths:
-      - '.github/workflows/s1-ticket-01.yml'
+      - '.github/workflows/s1-registry-core.yml'
       - 'apps/hvac-web/src/api/generated/platformGateway.gen.ts'
       - 'contracts/http/**'
       - 'contracts/ownership/**'
       - 'contracts/registry/**'
       - 'docs/adr/0001-s1-registry-contract-domain-ownership.md'
       - 'infra/s1-registry/**'
+      - 'libs/registryauth/**'
       - 'pocs/s1-sqlc/**'
+      - 'services/iam-service/**'
+      - 'services/platform-core-service/**'
       - 'services/platform-gateway/pkg/platformapi/api.gen.go'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'scripts/check-s0-release-evidence-assets.mjs'
       - 'scripts/check-s1-registry-baseline.mjs'
+      - 'scripts/generate-platform-contracts.mjs'
       - 'scripts/run-s1-registry-postgres-tests.mjs'
       - 'scripts/run-s1-sqlc-poc.mjs'
-      - 'scripts/generate-platform-contracts.mjs'
-      - 'scripts/check-ownership-registries.mjs'
+      - 'go.work'
+      - 'go.work.sum'
       - 'package.json'
       - 'package-lock.json'
   push:
     branches: [main]
     paths:
-      - '.github/workflows/s1-ticket-01.yml'
+      - '.github/workflows/s1-registry-core.yml'
       - 'apps/hvac-web/src/api/generated/platformGateway.gen.ts'
       - 'contracts/http/**'
       - 'contracts/ownership/**'
       - 'contracts/registry/**'
       - 'docs/adr/0001-s1-registry-contract-domain-ownership.md'
       - 'infra/s1-registry/**'
+      - 'libs/registryauth/**'
       - 'pocs/s1-sqlc/**'
+      - 'services/iam-service/**'
+      - 'services/platform-core-service/**'
       - 'services/platform-gateway/pkg/platformapi/api.gen.go'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'scripts/check-s0-release-evidence-assets.mjs'
       - 'scripts/check-s1-registry-baseline.mjs'
+      - 'scripts/generate-platform-contracts.mjs'
       - 'scripts/run-s1-registry-postgres-tests.mjs'
       - 'scripts/run-s1-sqlc-poc.mjs'
-      - 'scripts/generate-platform-contracts.mjs'
-      - 'scripts/check-ownership-registries.mjs'
+      - 'go.work'
+      - 'go.work.sum'
       - 'package.json'
       - 'package-lock.json'
 
@@ -43,13 +55,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: s1-ticket-01-${{ github.workflow }}-${{ github.ref }}
+  group: s1-registry-core-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  assets:
+  verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -65,14 +80,29 @@ jobs:
       - run: npm run ownership:check
       - run: npm run s1:registry:check
       - run: npm run s1:sqlc:poc
+      - run: npm run test:identity
+      - run: node scripts/run-go.mjs vet ./libs/registryauth/... ./services/iam-service/... ./services/platform-core-service/...
+      - run: npm run build:iam
+      - run: npm run build:core
+      - run: npm run test:observability
+      - run: npm run test:security-negative
+      - run: npm run release:evidence-assets
       - run: npm run lint
       - run: npm run build
 
   postgres:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
+    env:
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=1'
+      S1_REGISTRY_REPORT_PATH: out/s1-registry-core/postgres-baseline.json
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22.22.0'
@@ -83,7 +113,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: s1-ticket-01-postgres-evidence
-          path: out/s1-ticket-01/postgres-baseline.json
+          name: s1-registry-core-postgres-evidence
+          path: out/s1-registry-core/postgres-baseline.json
           if-no-files-found: error
           retention-days: 14

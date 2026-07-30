@@ -1,10 +1,10 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const readJSON = async (path) => JSON.parse(await readFile(resolve(root, path), 'utf8'));
-const [model, openapi, routeRegistry, phaseOne, phaseTwo, phaseThree, phaseFour, dataRegistry, ownershipLock, ddl, fixtures, iamRuntimeResolver, iamReconciliation, coreReadService, legacyMigrationExecution, legacyMigrationSource, legacyMigrationTypes, gatewayRegistrySource, gatewayServerSource, routeAuditDDL, sqlcQueries, sqlcGenerated] = await Promise.all([
+const [model, openapi, routeRegistry, phaseOne, phaseTwo, phaseThree, phaseFour, dataRegistry, ownershipLock, ddl, fixtures, iamRuntimeResolver, iamReconciliation, coreReadService, legacyMigrationExecution, legacyMigrationSource, legacyMigrationTypes, gatewayRegistrySource, gatewayServerSource, routeAuditDDL, sqlcQueries, sqlcGenerated, registryCoreWorkflow] = await Promise.all([
   readJSON('contracts/registry/s1-registry-model.v1.json'),
   readJSON('contracts/http/platform-gateway.openapi.yaml'),
   readJSON('contracts/ownership/route-ownership.v1.json'),
@@ -27,11 +27,42 @@ const [model, openapi, routeRegistry, phaseOne, phaseTwo, phaseThree, phaseFour,
   readFile(resolve(root, 'infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql'), 'utf8'),
   readFile(resolve(root, 'pocs/s1-sqlc/queries.sql'), 'utf8'),
   readFile(resolve(root, 'pocs/s1-sqlc/generated/queries.sql.go'), 'utf8'),
+  readFile(resolve(root, '.github/workflows/s1-registry-core.yml'), 'utf8'),
 ]);
 
 function assert(condition, message) {
   if (!condition) throw new Error(`S1 Registry baseline check failed: ${message}`);
 }
+
+const workflowFiles = await readdir(resolve(root, '.github/workflows'));
+assert(workflowFiles.includes('s1-registry-core.yml'), 'stable S1 Registry Core workflow is missing');
+assert(!workflowFiles.includes('s1-ticket-01.yml'), 'retired S1 Ticket 01 workflow must not return');
+assert(!workflowFiles.includes('s1-ticket-03-core.yml'), 'retired S1 Ticket 03 workflow must not return');
+assert((registryCoreWorkflow.match(/\.github\/workflows\/s1-registry-core\.yml/g) || []).length === 2, 'Registry Core workflow must watch itself for pull requests and main pushes');
+for (const marker of [
+  'name: S1 Registry Core',
+  'npm run contracts:check',
+  'npm run ownership:check',
+  'npm run s1:registry:check',
+  'npm run s1:sqlc:poc',
+  'npm run test:identity',
+  'node scripts/run-go.mjs vet ./libs/registryauth/... ./services/iam-service/... ./services/platform-core-service/...',
+  'npm run build:iam',
+  'npm run build:core',
+  'npm run test:observability',
+  'npm run test:security-negative',
+  'npm run release:evidence-assets',
+  'npm run lint',
+  'npm run build',
+  'docker compose -f infra/s1-registry/compose.yaml config',
+  'npm run s1:registry:postgres',
+  'S1_REGISTRY_REPORT_PATH: out/s1-registry-core/postgres-baseline.json',
+  'name: s1-registry-core-postgres-evidence',
+]) {
+  assert(registryCoreWorkflow.includes(marker), `Registry Core workflow is missing ${marker}`);
+}
+assert(!registryCoreWorkflow.includes('s1-ticket-01'), 'Registry Core workflow still emits Ticket 01 topology');
+assert(!registryCoreWorkflow.includes('s1-ticket-03'), 'Registry Core workflow still emits Ticket 03 topology');
 
 const expectedRoutes = [
   ['GET', '/api/v1/organizations', 'listOrganizations'],
