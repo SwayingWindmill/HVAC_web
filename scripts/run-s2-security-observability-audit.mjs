@@ -22,12 +22,12 @@ const [
   readJSON('deploy/s2/observability/zero-invariants.v1.json'),
   readJSON('deploy/s2/observability/redaction-policy.v1.json'),
   readJSON('deploy/s2/observability/trace-chain.v1.json'),
-  readJSON('out/s2-ticket-10/security-command-evidence.json'),
-  readJSON('out/s2-ticket-10/observability-harness.json'),
-  readJSON('out/s2-ticket-07/browser-live-client.json'),
-  readJSON('out/s2-ticket-08/shadow-routing.json'),
-  readJSON('out/s2-ticket-09/browser-journey.json'),
-  readJSON('out/s2-ticket-09/network-audit.json'),
+  readJSON('out/s2-security-observability/security-command-evidence.json'),
+  readJSON('out/s2-security-observability/observability-harness.json'),
+  readJSON('out/s2-telemetry-live-client/browser-live-client.json'),
+  readJSON('out/s2-shadow-routing/shadow-routing.json'),
+  readJSON('out/s2-hvac-web-presence/browser-journey.json'),
+  readJSON('out/s2-hvac-web-presence/network-audit.json'),
   readText('infra/s0-durable/observability/alerts/s2-telemetry.yaml'),
 ]);
 
@@ -97,10 +97,10 @@ const reports = {
       ...commandEvidence.commands.map((entry) => `npm run ${entry.script}`),
     ],
     prerequisiteEvidence: {
-      liveClient: 'out/s2-ticket-07/browser-live-client.json',
-      shadowRouting: 'out/s2-ticket-08/shadow-routing.json',
-      browserJourney: 'out/s2-ticket-09/browser-journey.json',
-      networkAudit: 'out/s2-ticket-09/network-audit.json',
+      liveClient: 'out/s2-telemetry-live-client/browser-live-client.json',
+      shadowRouting: 'out/s2-shadow-routing/shadow-routing.json',
+      browserJourney: 'out/s2-hvac-web-presence/browser-journey.json',
+      networkAudit: 'out/s2-hvac-web-presence/network-audit.json',
     },
   },
   'zero-invariant-report.json': { schemaVersion: 1, status: 'passed', invariants: zeroInvariants },
@@ -118,7 +118,7 @@ const reports = {
   'observability-outage-report.json': { schemaVersion: 1, status: 'passed', ...harness.outage, businessTransactionBlocked: false },
 };
 
-for (const outputRoot of ['out/s2-ticket-10', 'out/s2-release-evidence']) {
+for (const outputRoot of ['out/s2-security-observability', 'out/s2-release-evidence']) {
   await mkdir(resolve(root, outputRoot), { recursive: true });
   for (const [name, report] of Object.entries(reports)) {
     await writeFile(resolve(root, outputRoot, name), `${JSON.stringify(report, null, 2)}\n`);

@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
-const outputRoot = resolve(root, 'out/s2-ticket-05');
+const outputRoot = resolve(root, 'out/s2-gateway-snapshot');
 const readText = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await readText(path));
 

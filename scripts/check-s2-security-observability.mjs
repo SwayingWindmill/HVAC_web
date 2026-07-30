@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
-const output = resolve(root, 'out/s2-ticket-10/static-assets.json');
+const output = resolve(root, 'out/s2-security-observability/static-assets.json');
 const text = async (path) => readFile(resolve(root, path), 'utf8');
 const json = async (path) => JSON.parse(await text(path));
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
@@ -84,7 +84,7 @@ for (const report of ['security-negative-report.json', 'zero-invariant-report.js
 for (const marker of ['HMAC', '低基数', 'collector', 'security zero invariant', 'npm run s2:security-observability']) {
   assert(runbook.toLowerCase().includes(marker.toLowerCase()), `Runbook is missing ${marker}`);
 }
-for (const marker of ['npm run s2:security-observability', 'out/s2-ticket-10', 'if-no-files-found: error', 'go-version: "1.25.12"', 'prom/prometheus@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94', '--entrypoint /bin/promtool', 'check rules /rules.yml']) {
+for (const marker of ['npm run s2:security-observability', 'out/s2-security-observability', 'if-no-files-found: error', 'go-version: "1.25.12"', 'prom/prometheus@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94', '--entrypoint /bin/promtool', 'check rules /rules.yml']) {
   assert(workflow.includes(marker), `Ticket 10 workflow is missing ${marker}`);
 }
 for (const script of ['s2:security-observability:check', 's2:security-negative', 's2:observability:harness', 's2:security-observability']) {

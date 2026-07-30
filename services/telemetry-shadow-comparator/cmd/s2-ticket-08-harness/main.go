@@ -118,7 +118,7 @@ func main() {
 	activePath := flag.String("active", "contracts/ownership/route-ownership.v1.json", "active route registry")
 	comparisonPath := flag.String("comparison", "deploy/s2/fixtures/shadow-comparison-pass.json", "comparison fixture")
 	policyPath := flag.String("policy", "deploy/s2/shadow-comparator-policy.v1.json", "comparator policy")
-	outputPath := flag.String("output", "out/s2-ticket-08/shadow-routing-harness.json", "evidence output")
+	outputPath := flag.String("output", "out/s2-shadow-routing/shadow-routing-harness.json", "evidence output")
 	flag.Parse()
 
 	var rollout plan

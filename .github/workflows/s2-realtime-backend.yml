@@ -63,7 +63,7 @@ jobs:
         with:
           name: s2-realtime-backend-evidence
           path: |
-            out/s2-ticket-06
+            out/s2-realtime-backend
             out/s2-centrifugo-poc
           if-no-files-found: error
           retention-days: 14

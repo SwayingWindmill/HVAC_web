@@ -82,7 +82,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: s2-ticket-01-baseline-evidence
-          path: out/s2-ticket-01/postgres-baseline.json
+          name: s2-telemetry-baseline-evidence
+          path: out/s2-telemetry-baseline/postgres-baseline.json
           if-no-files-found: error
           retention-days: 14

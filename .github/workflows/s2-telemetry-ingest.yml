@@ -54,6 +54,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: s2-telemetry-ingest-evidence
-          path: out/s2-ticket-04
+          path: out/s2-telemetry-ingest
           if-no-files-found: error
           retention-days: 14

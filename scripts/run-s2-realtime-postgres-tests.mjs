@@ -6,7 +6,7 @@ const result = spawnSync(process.execPath, ['scripts/run-s2-telemetry-runtime-po
     ...process.env,
     S2_RUNTIME_TEST_PATTERN: 'TestPostgresRealtime',
     S2_RUNTIME_TICKET_NUMBER: '65',
-    S2_RUNTIME_REPORT_PATH: 'out/s2-ticket-06/realtime-postgres.json',
+    S2_RUNTIME_REPORT_PATH: 'out/s2-realtime-backend/realtime-postgres.json',
   },
   encoding: 'utf8',
   windowsHide: true,

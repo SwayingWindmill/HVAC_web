@@ -93,9 +93,9 @@ The suite verifies static invariants, all ownership transitions, the offline com
 
 Evidence:
 
-- `out/s2-ticket-08/shadow-routing.json`
-- `out/s2-ticket-08/shadow-comparison.json`
-- `out/s2-ticket-08/shadow-routing-harness.json`
+- `out/s2-shadow-routing/shadow-routing.json`
+- `out/s2-shadow-routing/shadow-comparison.json`
+- `out/s2-shadow-routing/shadow-routing-harness.json`
 
 ## Out of scope
 

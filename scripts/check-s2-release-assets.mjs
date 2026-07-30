@@ -5,7 +5,7 @@ const root = resolve(process.cwd());
 const text = async (path) => readFile(resolve(root, path), 'utf8');
 const json = async (path) => JSON.parse(await text(path));
 const assert = (condition, message) => { if (!condition) throw new Error(`Invalid S2 Ticket 11 release asset: ${message}`); };
-const output = resolve(root, 'out/s2-ticket-11/release-assets.json');
+const output = resolve(root, 'out/s2-telemetry-release/release-assets.json');
 
 const [envelope, gates, attestationSchema, runtimeImage, historyProjectorImage, migratorImage, migrationScript, kindManifest, capacity, kindRunner, bundleBuilder, bundleVerifier, imageWriter, imageMerger, reportWriter, workflow, runbook, runtimeMetrics, gatewayMetrics, runtimeMain, centrifugoConfigCheck, dockerPullRetry, packageJSON] = await Promise.all([
   json('deploy/s2/release-envelope.v1.json'),

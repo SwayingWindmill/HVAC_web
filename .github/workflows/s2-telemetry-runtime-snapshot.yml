@@ -53,6 +53,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: s2-telemetry-runtime-snapshot-evidence
-          path: out/s2-ticket-03
+          path: out/s2-telemetry-runtime-snapshot
           if-no-files-found: error
           retention-days: 14

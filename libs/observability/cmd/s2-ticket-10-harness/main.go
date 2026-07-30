@@ -57,7 +57,7 @@ func (failingExporter) Shutdown(context.Context) error { return nil }
 
 func main() {
 	catalogPath := flag.String("catalog", "deploy/s2/observability/metric-catalog.v1.json", "metric catalog path")
-	outputPath := flag.String("output", "out/s2-ticket-10/observability-harness.json", "output report path")
+	outputPath := flag.String("output", "out/s2-security-observability/observability-harness.json", "output report path")
 	flag.Parse()
 
 	payload, err := os.ReadFile(*catalogPath)

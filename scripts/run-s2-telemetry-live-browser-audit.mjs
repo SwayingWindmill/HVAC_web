@@ -8,7 +8,7 @@ import WebSocket from 'ws';
 
 const root = resolve(process.cwd());
 const fixtureRoot = resolve(root, 'scripts/fixtures/s2-telemetry-live');
-const outputPath = resolve(root, 'out/s2-ticket-07/browser-live-client.json');
+const outputPath = resolve(root, 'out/s2-telemetry-live-client/browser-live-client.json');
 const debugPort = Number(process.env.S2_LIVE_DEBUG_PORT ?? 9375);
 const profileDir = join(tmpdir(), `s2-live-browser-${process.pid}`);
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));

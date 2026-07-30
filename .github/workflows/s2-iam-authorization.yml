@@ -61,7 +61,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: s2-ticket-02-iam-authorization-evidence
-          path: out/s2-ticket-02/iam-authorization-evidence.json
+          name: s2-iam-authorization-evidence
+          path: out/s2-iam-authorization/iam-authorization-evidence.json
           if-no-files-found: error
           retention-days: 14

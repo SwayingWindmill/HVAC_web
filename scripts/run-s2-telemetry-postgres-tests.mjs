@@ -8,7 +8,7 @@ const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/s2-telemetry/compose.yaml');
 const projectName = `hvac-s2-telemetry-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
-const reportPath = resolve(root, process.env.S2_TELEMETRY_REPORT_PATH ?? 'out/s2-ticket-01/postgres-baseline.json');
+const reportPath = resolve(root, process.env.S2_TELEMETRY_REPORT_PATH ?? 'out/s2-telemetry-baseline/postgres-baseline.json');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 const composeInvocation = (() => {
   const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
