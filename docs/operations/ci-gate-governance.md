@@ -80,6 +80,8 @@ The first trigger-precision slice updates `Security 79 React Router 8`. It no lo
 
 The second trigger-precision slice removes `scripts/**` from `S0 Reproducible Delivery and Supply Chain`. The workflow now lists the script closure reached by its own commands. `scripts/check-s0-delivery-assets.mjs` derives that closure from workflow `npm run` commands, recursive package-script calls, direct script execution and script-to-script references, then fails if the PR path list is missing a dependency, contains an unrelated script or restores the repository-wide wildcard.
 
+The next release-layer slice removes the duplicated S0 `release-evidence-pr` Kind job. Pull requests still run release asset validation and the deterministic rollout model in `verify`; the disposable Kind rollout, immutable image verification and final evidence bundle remain in the tag/manual `release-evidence` certification path. The S0 delivery gate prevents the PR Kind job from returning and verifies that formal certification still owns the rollout assertion.
+
 ### Phase 3: capability consolidation
 
 - Merge Ticket workflows into the stable capability suites above.
