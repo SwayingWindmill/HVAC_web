@@ -37,5 +37,5 @@ for (const child of Object.values(topology.services)) {
 process.once('SIGINT', () => void shutdown(0));
 process.once('SIGTERM', () => void shutdown(0));
 console.log(`S0 durable Session and Audit topology ready at ${topology.webURL}`);
-console.log('Browser -> HTTPS HVAC Web -> Gateway -> PostgreSQL / mTLS IAM / mTLS Audit Ledger / private Legacy; Outbox -> Redpanda -> Transactional Inbox; telemetry -> OpenTelemetry Collector.');
+console.log('Browser -> HTTPS HVAC Web -> Go Gateway -> PostgreSQL / mTLS IAM / mTLS Audit Ledger; Outbox -> Redpanda -> Transactional Inbox; telemetry -> OpenTelemetry Collector.');
 await new Promise(() => {});

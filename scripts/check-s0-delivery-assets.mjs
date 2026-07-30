@@ -14,14 +14,14 @@ const packageJSON = JSON.parse(await read('package.json'));
 for (const script of ['delivery:local', 'delivery:validate', 'delivery:check', 'delivery:render', 'security:dependency-audit', 'security:go-vuln', 'security:licenses', 'audit:s0-rollout', 'audit:delivery']) {
   assert(packageJSON.scripts?.[script], `package.json is missing ${script}`);
 }
-for (const script of ['test:legacy-compatibility', 'build:legacy-compatibility']) {
-  assert(packageJSON.scripts?.[script], `package.json is missing ${script}`);
-}
+assert(!packageJSON.scripts?.['test:legacy-compatibility'], 'retired Legacy compatibility test must not be exposed as an active root script');
+assert(!packageJSON.scripts?.['build:legacy-compatibility'], 'retired Legacy compatibility build must not be exposed as an active root script');
 
 const localConfig = await read('deploy/s0/local.env.example');
 const stagingConfig = await read('deploy/s0/staging.env.example');
 for (const [label, config] of [['local', localConfig], ['staging', stagingConfig]]) {
-  includesAll(config, ['S0_CONFIG_REVISION=', 'S0_TRUST_DOMAIN=', 'OIDC_ISSUER=', 'IAM_AUDIENCE=', 'AUDIT_AUDIENCE=', 'LEGACY_AUDIENCE=', 'ALLOW_PRODUCTION_EGRESS=false', 'THINGSBOARD_BASE_URL=', 'WEBHOOK_BASE_URL='], `${label} config`);
+  includesAll(config, ['S0_CONFIG_REVISION=', 'S0_TRUST_DOMAIN=', 'OIDC_ISSUER=', 'IAM_AUDIENCE=', 'AUDIT_AUDIENCE=', 'ALLOW_PRODUCTION_EGRESS=false', 'THINGSBOARD_BASE_URL=', 'WEBHOOK_BASE_URL='], `${label} config`);
+  assert(!config.includes('LEGACY_'), `${label} config still exposes retired Legacy settings`);
   assert(!/ALLOW_PRODUCTION_EGRESS=(?!false)/.test(config), `${label} config enables production egress`);
 }
 
@@ -64,14 +64,14 @@ const compatibilitySQL = await read('infra/s0-durable/postgres/compatibility/pre
 includesAll(compatibilitySQL, ['SET LOCAL ROLE gateway_runtime', 'SET LOCAL ROLE audit_consumer_runtime', 'omitting', 'ROLLBACK;'], 'previous writer compatibility test');
 
 const serviceAccounts = await read('deploy/s0/staging/serviceaccounts.yaml');
-for (const name of ['platform-gateway', 'iam-service', 'audit-ledger-service', 'outbox-relay', 'oidc-test-provider', 'legacy-private', 's0-migrator']) {
+for (const name of ['platform-gateway', 'iam-service', 'audit-ledger-service', 'outbox-relay', 'oidc-test-provider', 's0-migrator']) {
   assert(serviceAccounts.includes(`name: ${name}`), `missing ServiceAccount ${name}`);
 }
-assert((serviceAccounts.match(/automountServiceAccountToken: false/g) || []).length === 7, 'all ServiceAccounts must disable token automount');
+assert((serviceAccounts.match(/automountServiceAccountToken: false/g) || []).length === 6, 'all ServiceAccounts must disable token automount');
 
 const workloadDirectory = resolve(root, 'deploy/s0/staging/workloads');
 const workloadFiles = (await readdir(workloadDirectory)).filter((name) => name.endsWith('.yaml')).sort();
-assert(workloadFiles.length === 6, 'six S0 workload templates are required');
+assert(workloadFiles.length === 5, 'five active S0 workload templates are required');
 for (const file of workloadFiles) {
   const text = await read(`deploy/s0/staging/workloads/${file}`);
   includesAll(text, ['digest-required', 'render-before-apply', 'serviceAccountName:', 'terminationGracePeriodSeconds:', 'startupProbe:', 'livenessProbe:', 'readinessProbe:', 'runAsNonRoot: true', 'allowPrivilegeEscalation: false', 'readOnlyRootFilesystem: true', 'drop: ["ALL"]', 'requests:', 'limits:', '[SIGNED_IMAGE_'], file);
@@ -79,23 +79,24 @@ for (const file of workloadFiles) {
     assert(text.includes('maxUnavailable: 0'), `${file} rolling update must preserve availability`);
   }
 }
-const legacyWorkload = await read('deploy/s0/staging/workloads/legacy-private.yaml');
-includesAll(legacyWorkload, ['LEGACY_FIXTURE_ADDR', '0.0.0.0:8445', 'runAsUser: 65532'], 'Legacy compatibility fixture workload');
+assert(!workloadFiles.includes('legacy-private.yaml'), 'retired Legacy workload must not be present in active staging');
 
 const namespace = await read('deploy/s0/staging/namespace.yaml');
 includesAll(namespace, ['pod-security.kubernetes.io/enforce: restricted', 'pod-security.kubernetes.io/audit: restricted'], 'staging namespace');
 const networkPolicies = await read('deploy/s0/staging/networkpolicies.yaml');
-includesAll(networkPolicies, ['default-deny-all', 'policyTypes: [Ingress, Egress]', 'gateway-only-private-services', 'legacy-private', 'platform-gateway', 'redpanda', 'postgres', 'otel-collector'], 'staging NetworkPolicy');
+includesAll(networkPolicies, ['default-deny-all', 'policyTypes: [Ingress, Egress]', 'gateway-only-private-services', 'platform-gateway', 'redpanda', 'postgres', 'otel-collector'], 'staging NetworkPolicy');
+assert(!networkPolicies.includes('legacy-private'), 'retired Legacy workload must not appear in active NetworkPolicy');
 const budgets = await read('deploy/s0/staging/disruption-budgets.yaml');
-assert((budgets.match(/minAvailable: 1/g) || []).length >= 4, 'availability-critical workloads require disruption budgets');
+assert((budgets.match(/minAvailable: 1/g) || []).length >= 3, 'availability-critical workloads require disruption budgets');
 const migrationJob = await read('deploy/s0/staging/migration-job.yaml');
 includesAll(migrationJob, ['serviceAccountName: s0-migrator', '[SIGNED_IMAGE_S0_MIGRATOR]', 'backoffLimit: 0', 'readOnlyRootFilesystem: true'], 'migration Job');
 const renderer = await read('scripts/render-s0-staging.mjs');
 includesAll(renderer, ['@sha256:', 'Missing staging binding', 'Unresolved placeholder', 'without logging binding values'], 'staging renderer');
 
 const workflow = await read('.github/workflows/s0-supply-chain.yml');
-includesAll(workflow, ['go-version: "1.25.12"', 'gitleaks/gitleaks-action', 'github/codeql-action/init', 'build_mode: manual', 'build_mode: none', 'upload: never', 'security:go-vuln', 'npm audit', 'security:dependency-audit', 'security:licenses', 'SERVICE_PACKAGE=./tools/legacy-private-fixture/cmd/legacy-private-fixture', 'sbom: true', 'provenance: mode=max', 'aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25', 'scanners: secret', 'trivy-secrets-${{ matrix.name }}.json', 'cosign sign', 'cosign verify', 'attest-build-provenance', "if: github.event.repository.visibility == 'public'", 'Record GitHub attestation skip', 'id-token: write'], 'supply-chain workflow');
+includesAll(workflow, ['go-version: "1.25.12"', 'gitleaks/gitleaks-action', 'github/codeql-action/init', 'build_mode: manual', 'build_mode: none', 'upload: never', 'security:go-vuln', 'npm audit', 'security:dependency-audit', 'security:licenses', 'sbom: true', 'provenance: mode=max', 'aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25', 'scanners: secret', 'trivy-secrets-${{ matrix.name }}.json', 'cosign sign', 'cosign verify', 'attest-build-provenance', "if: github.event.repository.visibility == 'public'", 'Record GitHub attestation skip', 'id-token: write'], 'supply-chain workflow');
 assert(!workflow.includes('hvac-backend'), 'supply-chain workflow must not depend on the local migration reference');
+assert(!workflow.includes('legacy-private'), 'supply-chain workflow must not build the retired Legacy fixture');
 const licenseGate = await read('scripts/check-production-licenses.mjs');
 assert(!licenseGate.includes('hvac-backend'), 'license gate must not scan the local migration reference');
 const dependencyBaseline = JSON.parse(await read('deploy/s0/security/dependency-audit-baseline.json'));

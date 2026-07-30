@@ -349,6 +349,7 @@ assert(exact(gate.requiredCI?.jobs, [
   'contracts-and-static',
   'security-negative',
   'postgres-integration',
+  'history-integration',
   'transport-integration',
   'capacity-and-failure',
   'browser-real-mode',
@@ -356,7 +357,7 @@ assert(exact(gate.requiredCI?.jobs, [
   'kind-rollout-rollback',
   'release-evidence',
 ]), 'formal CI job set drifted');
-assert(gate.requiredEvidence?.length === 20, 'required evidence set size drifted');
+assert(gate.requiredEvidence?.length === 21, 'required evidence set size drifted');
 for (const path of gate.requiredEvidence) {
   assert(path.startsWith('out/s2-release-evidence/'), `evidence path is outside the S2 bundle: ${path}`);
 }
@@ -368,7 +369,7 @@ for (const path of [
 ]) {
   assert(gate.requiredEvidence.includes(path), `required clean-CI or production-build evidence missing: ${path}`);
 }
-assert(gate.releaseChecklist?.length === 18, 'release checklist size drifted');
+assert(gate.releaseChecklist?.length === 19, 'release checklist size drifted');
 
 for (const phrase of [
   'Initial Production Release Envelope v1',

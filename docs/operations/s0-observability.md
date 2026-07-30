@@ -38,19 +38,6 @@ A drill is successful when the broker is stopped long enough to trigger the aler
 5. Restore the failing dependency. Never bypass the Inbox transaction or mutate append-only Audit records.
 6. Query the original message through the Gateway and verify one ledger record exists with the original correlation, causation, and trace identifiers.
 
-## Legacy timeout or circuit open
-
-**Alert:** `S0LegacyDependencyFailures`  
-**Primary Owner:** `application-platform`  
-**Secondary Owner:** `platform-runtime`  
-**Severity:** `page`
-
-1. Inspect the Gateway route decision attributes `route.owner`, `route.policy.revision`, and `route.revision` for `/api/v1/platform/status`.
-2. Separate `LEGACY_TIMEOUT`, `LEGACY_UNAVAILABLE`, `LEGACY_RESPONSE_REJECTED`, and `LEGACY_CIRCUIT_OPEN` using stable error codes.
-3. Confirm the private Legacy mTLS listener and certificate chain are valid. Never disable mTLS or forward browser credentials as a workaround.
-4. If the route registry permits it, apply a higher revision selecting the Go owner; never roll back registry or route revisions.
-5. After recovery, verify the circuit closes and a new trace contains a Gateway client span to Legacy with no Cookie, Authorization, CSRF, Principal, Organization, or delegation contents.
-
 ## Collector unavailable
 
 **Alert:** `S0TelemetryExportFailures`  

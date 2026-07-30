@@ -49,9 +49,6 @@ services:
     ports:
       - "${S0_TOXIPROXY_API_HOST_PORT:-18474}:8474"
       - "${S0_TOXIPROXY_POSTGRES_HOST_PORT:-15432}:15432"
-      - "${S0_TOXIPROXY_LEGACY_HOST_PORT:-18445}:18445"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     networks: [s0]
 
   otel-collector:

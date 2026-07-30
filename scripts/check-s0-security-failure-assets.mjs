@@ -40,11 +40,14 @@ assert(upstream.get('aquasecurity/trivy-action')?.commit === 'ed142fd0673e97e23e
 const agents = await read('AGENTS.md');
 includesAll(agents, ['Reuse-first implementation', 'search GitHub', 'pin the selected version or commit'], 'reuse-first repository policy');
 const compose = await read('infra/s0-durable/compose.yaml');
-includesAll(compose, ['ghcr.io/shopify/toxiproxy:2.12.0@sha256:9378ed52a28bc50edc1350f936f518f31fa95f0d15917d6eb40b8e376d1a214e', 'S0_TOXIPROXY_POSTGRES_HOST_PORT', 'S0_TOXIPROXY_LEGACY_HOST_PORT'], 'Toxiproxy topology');
+includesAll(compose, ['ghcr.io/shopify/toxiproxy:2.12.0@sha256:9378ed52a28bc50edc1350f936f518f31fa95f0d15917d6eb40b8e376d1a214e', 'S0_TOXIPROXY_POSTGRES_HOST_PORT'], 'Toxiproxy topology');
+assert(!compose.includes('S0_TOXIPROXY_LEGACY_HOST_PORT'), 'active Toxiproxy topology must not expose a Legacy port');
 const topology = await read('scripts/s0-durable-topology.mjs');
-includesAll(topology, ['setPostgresAvailable', 'setLegacyLatency', 'killProcess', 'serviceProcessGroups', "process.kill(-child.pid, signal)", "detached: process.platform !== 'win32'", 's0_postgres', 's0_legacy'], 'failure-injection topology');
+includesAll(topology, ['setPostgresAvailable', 'setPlatformStatusRevision', 'killProcess', 'serviceProcessGroups', "process.kill(-child.pid, signal)", "detached: process.platform !== 'win32'", 's0_postgres'], 'failure-injection topology');
+assert(!topology.toLowerCase().includes('legacy'), 'active durable topology must not start or configure Legacy');
 const browserAudit = await read('scripts/run-durable-session-browser-audit.mjs');
-includesAll(browserAudit, ['ROUTE_AUDIT_FAILED', 'LEGACY_TIMEOUT', 'LEGACY_CIRCUIT_OPEN', 'stopAudit(true)', 'stopRelay(true)', 'Outbox backlog', 'AUDIT_RECORD_NOT_FOUND'], 'production-shaped failure matrix');
+includesAll(browserAudit, ['ROUTE_AUDIT_FAILED', 'setPlatformStatusRevision', 'staleRevisionRejected', 'stopAudit(true)', 'stopRelay(true)', 'Outbox backlog', 'AUDIT_RECORD_NOT_FOUND'], 'production-shaped failure matrix');
+assert(!browserAudit.toLowerCase().includes('legacy'), 'active browser audit must be Go-only');
 const networkGate = await read('scripts/check-s0-network-policies.mjs');
 includesAll(networkGate, ['netpol-analyzer', 'v1.4.4', '169.254.169.254', '10.0.0.1', 'browser-to-iam-denied', 'gateway-to-postgres-allowed'], 'NetworkPolicy gate');
 const workflow = await read('.github/workflows/s0-supply-chain.yml');

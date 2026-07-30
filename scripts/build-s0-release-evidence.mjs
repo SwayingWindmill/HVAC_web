@@ -16,6 +16,7 @@ const sourceWorkflow = argument('source-workflow') ?? process.env.GITHUB_WORKFLO
 const serverURL = argument('source-server-url') ?? process.env.GITHUB_SERVER_URL ?? 'https://github.com';
 const workflowReportArgument = argument('workflow-report');
 const startedAt = new Date();
+const releaseImageCount = 6;
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -135,11 +136,11 @@ async function collectWorkflow() {
     && jobSuccess('security-failure-gates')
     && codeqlJobs.length === 2
     && codeqlJobs.every((job) => job.conclusion === 'success')
-    && signedImageJobs.length === 7
+    && signedImageJobs.length === releaseImageCount
     && signedImageJobs.every((job) => job.conclusion === 'success')
-    && buildRecordArtifacts.length === 7
-    && trivyArtifacts.length === 7
-    && releaseImageArtifacts.length === 7
+    && buildRecordArtifacts.length === releaseImageCount
+    && trivyArtifacts.length === releaseImageCount
+    && releaseImageArtifacts.length === releaseImageCount
     && securityArtifacts.length === 1
     && failedDependencies.length === 0;
   const report = {
@@ -178,8 +179,8 @@ async function collectImageManifests() {
     if (value.ticket === '08-s0-release-evidence' && value.immutableReference) manifests.push(value);
   }
   manifests.sort((left, right) => left.name.localeCompare(right.name));
-  assert(manifests.length === 7, `release evidence requires seven image manifests; found ${manifests.length}`);
-  assert(new Set(manifests.map((manifest) => manifest.name)).size === 7, 'release image manifest names are not unique');
+  assert(manifests.length === releaseImageCount, `release evidence requires ${releaseImageCount} image manifests; found ${manifests.length}`);
+  assert(new Set(manifests.map((manifest) => manifest.name)).size === releaseImageCount, 'release image manifest names are not unique');
   for (const manifest of manifests) {
     assert(/^sha256:[a-f0-9]{64}$/.test(manifest.digest), `${manifest.name} digest is invalid`);
     assert(manifest.immutableReference === `${manifest.image}@${manifest.digest}`, `${manifest.name} immutable reference is inconsistent`);
@@ -244,7 +245,6 @@ async function renderStaging(images) {
     SIGNED_IMAGE_AUDIT_LEDGER_SERVICE: byName.get('audit-ledger-service'),
     SIGNED_IMAGE_OUTBOX_RELAY: byName.get('outbox-relay'),
     SIGNED_IMAGE_OIDC_TEST_PROVIDER: byName.get('oidc-test-provider'),
-    SIGNED_IMAGE_LEGACY_PRIVATE: byName.get('legacy-private'),
     SIGNED_IMAGE_S0_MIGRATOR: byName.get('s0-migrator'),
     GATEWAY_DATABASE_URL: 'postgres://s0_gateway@postgres:5432/s0?sslmode=require',
     SESSION_TOKEN_KEY: '[REDACTED_SECRET]',
@@ -260,7 +260,6 @@ async function renderStaging(images) {
     RUNTIME_BINDINGS_AUDIT_LEDGER_SERVICE: [],
     RUNTIME_BINDINGS_OUTBOX_RELAY: [],
     RUNTIME_BINDINGS_OIDC_TEST_PROVIDER: [],
-    RUNTIME_BINDINGS_LEGACY_PRIVATE: [],
     RUNTIME_IDENTITY_MOUNTS: [],
     RUNTIME_IDENTITY_VOLUMES: [],
     RUNTIME_IDENTITY_AND_ROUTE_MOUNTS: [],
@@ -500,7 +499,7 @@ const statement = {
     },
   },
 };
-assert(statement.subject.length === 7, 'in-toto statement must contain seven image subjects');
+assert(statement.subject.length === releaseImageCount, `in-toto statement must contain ${releaseImageCount} image subjects`);
 assert(statement.predicate.architectureDecisionTrace.length === 14, 'in-toto statement must contain fourteen acceptance criteria');
 assert(statement.predicate.status === 'passed' && statement.predicate.approval.eligible === true, 'release statement is not eligible for approval');
 

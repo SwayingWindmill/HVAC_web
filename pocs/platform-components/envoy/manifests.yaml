@@ -91,17 +91,17 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: legacy-private
+  name: go-canary
   namespace: platform-component-poc
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: legacy-private
+      app: go-canary
   template:
     metadata:
       labels:
-        app: legacy-private
+        app: go-canary
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -115,7 +115,7 @@ spec:
             - node
             - -e
             - >-
-              require('node:http').createServer((req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({owner:'legacy-private',path:req.url})+'\n')}).listen(8080,'0.0.0.0')
+              require('node:http').createServer((req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({owner:'go-canary',path:req.url})+'\n')}).listen(8080,'0.0.0.0')
           ports:
             - containerPort: 8080
           readinessProbe:
@@ -140,11 +140,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: legacy-private
+  name: go-canary
   namespace: platform-component-poc
 spec:
   selector:
-    app: legacy-private
+    app: go-canary
   ports:
     - name: http
       port: 8080

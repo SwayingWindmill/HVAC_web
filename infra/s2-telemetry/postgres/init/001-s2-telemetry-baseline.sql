@@ -12,7 +12,7 @@ AS $$
 $$;
 
 REVOKE ALL ON FUNCTION telemetry_runtime.is_uuid_v7(uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION telemetry_runtime.is_uuid_v7(uuid) TO s2_telemetry_runtime, s2_telemetry_relay;
+GRANT EXECUTE ON FUNCTION telemetry_runtime.is_uuid_v7(uuid) TO s2_telemetry_runtime, s2_telemetry_relay, s2_telemetry_history;
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.registry_device_bindings (
   device_id uuid PRIMARY KEY CHECK (telemetry_runtime.is_uuid_v7(device_id)),

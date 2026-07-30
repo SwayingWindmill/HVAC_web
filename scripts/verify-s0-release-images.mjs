@@ -16,7 +16,6 @@ const results = [];
 const expectedNames = [
   'audit-ledger-service',
   'iam-service',
-  'legacy-private',
   'oidc-test-provider',
   'outbox-relay',
   'platform-gateway',
@@ -93,7 +92,7 @@ try {
     const parsed = JSON.parse(await readFile(path, 'utf8'));
     if (parsed.ticket === '08-s0-release-evidence' && parsed.immutableReference) manifests.push({ path, value: parsed });
   }
-  assert(manifests.length === 7, `expected seven release image manifests, found ${manifests.length}`);
+  assert(manifests.length === expectedNames.length, `expected ${expectedNames.length} release image manifests, found ${manifests.length}`);
   const actualNames = manifests.map(({ value }) => value.name).sort();
   assert(JSON.stringify(actualNames) === JSON.stringify(expectedNames), `release image set mismatch: ${JSON.stringify(actualNames)}`);
 

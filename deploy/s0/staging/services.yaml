@@ -29,11 +29,3 @@ spec:
   selector: { app: oidc-test-provider }
   ports:
     - { name: https, port: 8443, targetPort: https }
----
-apiVersion: v1
-kind: Service
-metadata: { name: legacy-private }
-spec:
-  selector: { app: legacy-private }
-  ports:
-    - { name: https, port: 8445, targetPort: https }

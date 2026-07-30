@@ -163,7 +163,8 @@ for (const [name, [required, properties]] of Object.entries(schemaRequirements))
 invariant(schemas.BuildInfo.properties.service.const === 'platform-gateway', 'BuildInfo.service must be platform-gateway');
 invariant(schemas.HealthResponse.properties.status.const === 'ok', 'HealthResponse.status must be ok');
 invariant(schemas.PlatformStatusResponse.properties.service.const === 'platform-status', 'PlatformStatusResponse.service must be platform-status');
-invariant(exactMembers(schemas.PlatformStatusResponse.properties.implementation.enum, ['go', 'legacy']), 'PlatformStatusResponse implementations are unsupported');
+invariant(exactMembers(schemas.PlatformStatusResponse.properties.implementation.enum, ['go']), 'PlatformStatusResponse implementation must be Go-only');
+invariant(exactMembers(schemas.PlatformStatusResponse.properties.compatibilityMode.enum, ['native']), 'PlatformStatusResponse compatibility mode must be native-only');
 invariant(schemas.ServicePrincipal.properties.service.const === 'platform-gateway', 'ServicePrincipal.service must be platform-gateway');
 invariant(schemas.PrincipalContext.properties.audience.const === 'iam-service', 'PrincipalContext.audience must be iam-service');
 invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capability.enum, [

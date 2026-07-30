@@ -35,7 +35,6 @@ spec:
             - { name: IAM_CLIENT_KEY, value: "[WORKLOAD_KEY_PATH]" }
             - { name: IAM_SERVER_CA, value: "[TRUST_BUNDLE_PATH]" }
             - { name: AUDIT_SERVER_CA, value: "[TRUST_BUNDLE_PATH]" }
-            - { name: LEGACY_SERVER_CA, value: "[TRUST_BUNDLE_PATH]" }
             - { name: OIDC_SERVER_CA, value: "[TRUST_BUNDLE_PATH]" }
           ports:
             - { name: http, containerPort: 8080 }

@@ -19,9 +19,6 @@ data:
   AUDIT_URL: https://audit-ledger-service:8446
   AUDIT_AUDIENCE: audit-ledger-service
   AUDIT_SERVER_NAME: audit-ledger-service
-  LEGACY_URL: https://legacy-private:8445
-  LEGACY_AUDIENCE: legacy-hvac-backend
-  LEGACY_SERVER_NAME: legacy-private
   CONTROL_BACKBONE_BROKERS: redpanda:9092
   AUDIT_TOPIC: control.security.session.v1
   AUDIT_CONSUMER_GROUP: audit-ledger-session-v1
@@ -30,5 +27,4 @@ data:
   GATEWAY_WORKLOAD_SPIFFE: spiffe://hvac.staging.local/platform-gateway
   IAM_ALLOWED_WORKLOAD_SPIFFE: spiffe://hvac.staging.local/platform-gateway
   AUDIT_ALLOWED_WORKLOAD_SPIFFE: spiffe://hvac.staging.local/platform-gateway
-  LEGACY_ALLOWED_WORKLOAD_SPIFFE: spiffe://hvac.staging.local/platform-gateway
   IDENTITY_POLICY_REVISION: policy-v1

@@ -11,7 +11,6 @@ const reportPath = resolve(fixtureRoot, 'image-verification-report.json');
 const expectedNames = [
   'audit-ledger-service',
   'iam-service',
-  'legacy-private',
   'oidc-test-provider',
   'outbox-relay',
   'platform-gateway',
@@ -93,7 +92,7 @@ try {
   ]);
   const passed = JSON.parse(await readFile(reportPath, 'utf8'));
   assert(passed.status === 'passed', 'clean image evidence fixture did not pass');
-  assert(passed.results.length === 7, `clean image evidence fixture verified ${passed.results.length} images`);
+  assert(passed.results.length === expectedNames.length, `clean image evidence fixture verified ${passed.results.length} images`);
   assert(passed.results.every((result) => result.secretFindings === 0), 'clean image evidence fixture reported a secret finding');
 
   const poisonedPath = resolve(trivyRoot, 'trivy-secrets-platform-gateway.json');
@@ -111,7 +110,7 @@ try {
   assert(failed.status === 'failed', 'poisoned image evidence fixture did not fail');
   assert(String(failed.error).includes('embedded-secret findings'), `poisoned failure reason was unexpected: ${failed.error}`);
 
-  console.log('S0 release image evidence fixture tests passed for seven images and one injected failure.');
+  console.log(`S0 release image evidence fixture tests passed for ${expectedNames.length} images and one injected failure.`);
 } finally {
   await rm(fixtureRoot, { recursive: true, force: true });
 }
