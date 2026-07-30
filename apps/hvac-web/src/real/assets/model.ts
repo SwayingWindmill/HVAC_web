@@ -36,6 +36,8 @@ export interface RealAssetsPointView {
   readonly quality: 'GOOD' | 'SUSPECT' | null;
   readonly qualityReasons: readonly string[];
   readonly sampledAt: string | null;
+  readonly receivedAt: string | null;
+  readonly policyRevision: number | null;
   readonly missingReason?: 'NEVER_OBSERVED' | 'ONLY_REJECTED_CANDIDATES' | 'POLICY_NOT_CONFIGURED';
 }
 
@@ -109,6 +111,8 @@ function pointView(definition: RealAssetsPointDefinition, state: TelemetryKeySta
       quality: null,
       qualityReasons: [],
       sampledAt: null,
+      receivedAt: null,
+      policyRevision: state?.policyRevision ?? null,
       missingReason: state?.missingReason,
     };
   }
@@ -122,6 +126,8 @@ function pointView(definition: RealAssetsPointDefinition, state: TelemetryKeySta
     quality: state.quality,
     qualityReasons: [...state.qualityReasons],
     sampledAt: state.sampledAt,
+    receivedAt: state.receivedAt,
+    policyRevision: state.policyRevision,
   };
 }
 

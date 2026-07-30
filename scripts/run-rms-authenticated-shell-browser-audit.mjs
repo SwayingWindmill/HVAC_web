@@ -818,6 +818,91 @@ try {
   assert(explicitSite.telemetryPolicyRevision === routePolicyRevision, `Assets route discarded Telemetry route-policy revision evidence: actual=${explicitSite.telemetryPolicyRevision} expected=${routePolicyRevision}`);
   assert(explicitSite.rowState === 'ATTENTION' && explicitSite.equipmentText.includes('Osaka Chiller 01'), 'Assets route omitted the bound Equipment attention row');
   assert(explicitSite.powerZero, 'Assets route did not preserve the valid zero-power observation');
+  const snapshotQueriesBeforeDetailRefresh = fixture.state.assetSnapshotQueries.length;
+  await clickTestId(cdpClient, 'real-assets-open-device');
+  await waitForCondition(
+    cdpClient,
+    `location.pathname === '/sites/${siteBId}/assets/${osakaDeviceId}'
+      && document.querySelector('[data-testid="real-assets-device-detail"]')?.getAttribute('data-detail-state') === 'visible'
+      && document.activeElement?.id === 'real-assets-detail-title'`,
+    'Assets Device detail opened from the operating row',
+  );
+  const deviceDetail = await evaluate(cdpClient, `(() => {
+    const drawer = document.querySelector('[data-testid="real-assets-device-detail"]');
+    return {
+      pathname: location.pathname,
+      state: drawer?.getAttribute('data-detail-state'),
+      text: drawer?.textContent ?? '',
+      focusedHeading: document.activeElement?.id === 'real-assets-detail-title',
+      horizontalOverflow: drawer ? drawer.scrollWidth > drawer.clientWidth + 1 : true,
+    };
+  })()`);
+  assert(deviceDetail.pathname === `/sites/${siteBId}/assets/${osakaDeviceId}` && deviceDetail.state === 'visible', 'Device detail did not bind the URL to the visible Device');
+  assert(deviceDetail.focusedHeading && !deviceDetail.horizontalOverflow, 'Device detail focus or desktop Drawer overflow was invalid');
+  assert(deviceDetail.text.includes('Osaka Chiller Controller 01')
+    && deviceDetail.text.includes('Osaka Chiller 01')
+    && deviceDetail.text.includes(osakaDeviceId)
+    && deviceDetail.text.includes('0 kW')
+    && deviceDetail.text.includes('陈旧')
+    && deviceDetail.text.includes('Business revision')
+    && deviceDetail.text.includes('12')
+    && deviceDetail.text.includes(routePolicyRevision), 'Device detail omitted authoritative identity, hierarchy, zero value, quality or revision evidence');
+
+  await clickTestId(cdpClient, 'real-assets-detail-refresh');
+  for (let attempt = 0; attempt < 80 && fixture.state.assetSnapshotQueries.length <= snapshotQueriesBeforeDetailRefresh; attempt += 1) {
+    await pause(50);
+  }
+  assert(fixture.state.assetSnapshotQueries.length > snapshotQueriesBeforeDetailRefresh, 'Device detail manual refresh did not issue a new bounded Snapshot request');
+
+  await evaluate(cdpClient, 'history.back()');
+  await waitForCondition(
+    cdpClient,
+    `location.pathname === '/sites/${siteBId}/assets'
+      && !document.querySelector('[data-testid="real-assets-device-detail"]')
+      && document.activeElement?.getAttribute('data-testid') === 'real-assets-open-device'`,
+    'Device detail browser Back restored the operating row',
+  );
+  await evaluate(cdpClient, 'history.forward()');
+  await waitForCondition(
+    cdpClient,
+    `location.pathname === '/sites/${siteBId}/assets/${osakaDeviceId}'
+      && document.querySelector('[data-testid="real-assets-device-detail"]')?.getAttribute('data-detail-state') === 'visible'
+      && document.activeElement?.id === 'real-assets-detail-title'`,
+    'Device detail browser Forward restored the Drawer',
+  );
+  await clickTestId(cdpClient, 'real-assets-detail-close');
+  await waitForCondition(
+    cdpClient,
+    `location.pathname === '/sites/${siteBId}/assets'
+      && !document.querySelector('[data-testid="real-assets-device-detail"]')
+      && document.activeElement?.getAttribute('data-testid') === 'real-assets-open-device'`,
+    'Device detail Close restored the source row',
+  );
+
+  await navigate(cdpClient, `${webURL}/sites/${siteBId}/assets/${osakaDeviceId}`);
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-assets-device-detail"]')?.getAttribute('data-detail-state') === 'visible'
+      && document.activeElement?.id === 'real-assets-detail-title'`,
+    'direct Device detail URL',
+  );
+  await navigate(cdpClient, `${webURL}/sites/${siteBId}/assets/not-a-device`);
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-assets-device-detail"]')?.getAttribute('data-detail-state') === 'not-visible'
+      && document.activeElement?.id === 'real-assets-detail-title'`,
+    'non-enumerating Device detail state',
+  );
+  const invisibleDeviceDetail = await evaluate(cdpClient, `({
+    pathname: location.pathname,
+    text: document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent ?? '',
+  })`);
+  assert(invisibleDeviceDetail.pathname === `/sites/${siteBId}/assets/not-a-device`, 'invalid Device selector did not remain URL-addressable');
+  assert(invisibleDeviceDetail.text.includes('设备不可见')
+    && invisibleDeviceDetail.text.includes('不会确认对象是否存在')
+    && !invisibleDeviceDetail.text.includes('not-a-device')
+    && !invisibleDeviceDetail.text.includes(osakaDeviceId)
+    && !invisibleDeviceDetail.text.includes('Osaka Chiller'), 'Device not-visible state enumerated protected identity');
   recordScenario('site-assets');
 
   await navigate(cdpClient, `${webURL}/sites/${siteBId}/energy`);
@@ -1031,6 +1116,33 @@ try {
   assert(!mobileChooser.overflow && mobileChooser.focusedHeading, 'mobile Site chooser overflowed or lost state focus');
   assert(mobileChooser.choiceHeights.every((height) => height >= 40), 'mobile Site chooser targets were too small');
   assert(mobileChooser.headerRight <= mobileChooser.viewport + 1 && mobileChooser.realtimeRight <= mobileChooser.viewport + 1, 'mobile trusted header exceeded the viewport');
+
+  await navigate(cdpClient, `${webURL}/sites/${siteBId}/assets/${osakaDeviceId}`);
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-assets-device-detail"]')?.getAttribute('data-detail-state') === 'visible'
+      && document.activeElement?.id === 'real-assets-detail-title'`,
+    'mobile Device detail',
+  );
+  const mobileDeviceDetail = await evaluate(cdpClient, `(() => {
+    const drawer = document.querySelector('[data-testid="real-assets-device-detail"]');
+    const rect = drawer?.getBoundingClientRect();
+    return {
+      documentOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+      drawerOverflow: drawer ? drawer.scrollWidth > drawer.clientWidth + 1 : true,
+      left: rect?.left,
+      right: rect?.right,
+      width: rect?.width,
+      viewport: window.innerWidth,
+      focusedHeading: document.activeElement?.id === 'real-assets-detail-title',
+    };
+  })()`);
+  assert(!mobileDeviceDetail.documentOverflow
+    && !mobileDeviceDetail.drawerOverflow
+    && Math.abs(mobileDeviceDetail.left ?? 99) <= 1
+    && Math.abs((mobileDeviceDetail.right ?? 0) - mobileDeviceDetail.viewport) <= 1
+    && Math.abs((mobileDeviceDetail.width ?? 0) - mobileDeviceDetail.viewport) <= 1
+    && mobileDeviceDetail.focusedHeading, 'mobile Device detail was not a full-width, focus-safe surface');
 
   fixture.state.capabilities = ['site.read'];
   await navigate(cdpClient, `${webURL}/system`);

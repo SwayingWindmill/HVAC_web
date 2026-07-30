@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createPlatformGatewayClient,
@@ -10,6 +10,16 @@ import { presentRegistryError } from '../../api/registry';
 import { FocusHeading } from '../FocusHeading';
 import type { ProtectedScopeRequestToken, ProtectedScopeResource } from '../protected-scope';
 import { REAL_ASSETS_CATALOG_REVISION } from './catalog';
+import { DeviceDetailDrawer } from './DeviceDetailDrawer';
+import {
+  REAL_ASSETS_DETAIL_HISTORY_MARKER,
+  isRealAssetsDetailHistoryState,
+  parseRealAssetsDetailPath,
+  realAssetsDevicePath,
+  realAssetsListPath,
+  resolveRealAssetsDetail,
+  writeRealAssetsClipboard,
+} from './detail';
 import { runRealAssetsProtectedRequest } from './protected-request';
 import {
   loadRealAssetsCurrentState,
@@ -30,6 +40,7 @@ import './real-assets.css';
 interface RealAssetsWorkspaceProps {
   site: Readonly<Site>;
   principal: CurrentPrincipalResponse;
+  requestedDeviceId?: string;
   protectedGeneration: number;
   protectedRequestToken: () => ProtectedScopeRequestToken;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
@@ -191,6 +202,7 @@ function BindingLabel({ row }: { row: RealAssetsDeviceRow }) {
 export function RealAssetsWorkspace({
   site,
   principal,
+  requestedDeviceId,
   protectedGeneration,
   protectedRequestToken,
   registerProtectedResource,
@@ -205,6 +217,11 @@ export function RealAssetsWorkspace({
     () => telemetryRuntime.currentRoutePolicyRevision(),
   );
   const [routePolicyEpoch, setRoutePolicyEpoch] = useState(0);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(() => requestedDeviceId ?? null);
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const selectedDeviceIdRef = useRef<string | null>(selectedDeviceId);
+  const pendingFocusDeviceIdRef = useRef<string | null>(null);
+  const deviceTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
   const organizationId = principal.context.actingOrganizationId;
   const sessionCapability = principal.session.csrfToken;
   const capabilities = principal.authorization.capabilities;
@@ -214,6 +231,37 @@ export function RealAssetsWorkspace({
     () => ['real-assets', protectedGeneration, organizationId, site.id] as const,
     [organizationId, protectedGeneration, site.id],
   );
+
+  useEffect(() => {
+    selectedDeviceIdRef.current = requestedDeviceId ?? null;
+    setSelectedDeviceId(requestedDeviceId ?? null);
+  }, [protectedGeneration, requestedDeviceId, site.id]);
+
+  useEffect(() => {
+    selectedDeviceIdRef.current = selectedDeviceId;
+    setActionFeedback(null);
+  }, [selectedDeviceId]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const parsed = parseRealAssetsDetailPath(window.location.pathname, site.id);
+      if (parsed.state === 'outside') {
+        window.location.reload();
+        return;
+      }
+      const previousDeviceId = selectedDeviceIdRef.current;
+      if (parsed.state === 'list') {
+        if (previousDeviceId) pendingFocusDeviceIdRef.current = previousDeviceId;
+        selectedDeviceIdRef.current = null;
+        setSelectedDeviceId(null);
+        return;
+      }
+      selectedDeviceIdRef.current = parsed.deviceId;
+      setSelectedDeviceId(parsed.deviceId);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [site.id]);
 
   useEffect(() => {
     const purgeQueryCache = async () => {
@@ -238,6 +286,9 @@ export function RealAssetsWorkspace({
       setListMode('attention');
       setSearch('');
       setHierarchySelection('all');
+      selectedDeviceIdRef.current = null;
+      setSelectedDeviceId(null);
+      setActionFeedback(null);
     },
   }), [protectedGeneration, registerProtectedResource, site.id]);
 
@@ -322,6 +373,53 @@ export function RealAssetsWorkspace({
     item.id,
     rows.filter((row) => row.binding.state === 'bound' && row.binding.equipment.id === item.id).length,
   ])), [registry.data?.equipment, rows]);
+  const detailResolution = useMemo(() => resolveRealAssetsDetail(rows, selectedDeviceId), [rows, selectedDeviceId]);
+
+  useEffect(() => {
+    if (selectedDeviceId !== null) return;
+    const deviceId = pendingFocusDeviceIdRef.current;
+    if (!deviceId) return;
+    pendingFocusDeviceIdRef.current = null;
+    window.requestAnimationFrame(() => {
+      const trigger = deviceTriggerRefs.current.get(deviceId);
+      if (trigger) {
+        trigger.focus({ preventScroll: true });
+        return;
+      }
+      document.getElementById('real-assets-title')?.focus({ preventScroll: true });
+    });
+  }, [filteredRows, selectedDeviceId]);
+
+  const openDeviceDetail = (deviceId: string) => {
+    const target = realAssetsDevicePath(site.id, deviceId);
+    const historyState = { marker: REAL_ASSETS_DETAIL_HISTORY_MARKER, siteId: site.id, deviceId };
+    if (selectedDeviceIdRef.current) window.history.replaceState(historyState, '', target);
+    else window.history.pushState(historyState, '', target);
+    pendingFocusDeviceIdRef.current = deviceId;
+    selectedDeviceIdRef.current = deviceId;
+    setSelectedDeviceId(deviceId);
+  };
+
+  const closeDeviceDetail = () => {
+    const deviceId = selectedDeviceIdRef.current;
+    if (!deviceId) return;
+    pendingFocusDeviceIdRef.current = deviceId;
+    if (isRealAssetsDetailHistoryState(window.history.state, site.id, deviceId)) {
+      window.history.back();
+      return;
+    }
+    window.history.pushState(null, '', realAssetsListPath(site.id));
+    selectedDeviceIdRef.current = null;
+    setSelectedDeviceId(null);
+  };
+
+  const copyDetailValue = async (label: string, value: string) => {
+    const writer = navigator.clipboard?.writeText
+      ? navigator.clipboard.writeText.bind(navigator.clipboard)
+      : undefined;
+    const copied = await writeRealAssetsClipboard(writer, value);
+    setActionFeedback(copied ? `${label}已复制。` : `${label}复制失败；浏览器未授予剪贴板权限。`);
+  };
 
   const businessState = !registryAllowed || !telemetryAllowed
     ? 'FORBIDDEN'
@@ -388,11 +486,12 @@ export function RealAssetsWorkspace({
       data-registry-policy-revision={registry.data?.routePolicyRevision ?? 'unavailable'}
       data-telemetry-policy-revision={current.data?.routePolicyRevision ?? telemetryPolicyRevision ?? 'unavailable'}
       data-current-request-count={String(current.data?.requestCount ?? 0)}
+      data-detail-state={detailResolution.state}
     >
       <header className="real-assets__header">
         <div>
           <p className="real-shell-eyebrow">REAL MODE · SITE ASSETS</p>
-          <FocusHeading>资产运行工作台</FocusHeading>
+          <FocusHeading id="real-assets-title">资产运行工作台</FocusHeading>
           <p>{site.displayName} · 仅展示当前授权 Site 的 Registry 与 S2 当前状态。</p>
           <small>Acting Organization: {organizationId}</small>
         </div>
@@ -498,9 +597,22 @@ export function RealAssetsWorkspace({
                         data-operating-state={currentUnavailable ? 'UNAVAILABLE' : currentPending ? 'LOADING' : row.operatingState}
                       >
                         <th scope="row">
-                          <strong>{row.device.displayName}</strong>
-                          <span>{row.device.code} · {row.device.deviceType}</span>
-                          <code>{row.device.id}</code>
+                          <button
+                            type="button"
+                            className="real-assets__device-link"
+                            data-testid="real-assets-open-device"
+                            aria-haspopup="dialog"
+                            aria-expanded={selectedDeviceId === row.device.id}
+                            ref={(node) => {
+                              if (node) deviceTriggerRefs.current.set(row.device.id, node);
+                              else deviceTriggerRefs.current.delete(row.device.id);
+                            }}
+                            onClick={() => openDeviceDetail(row.device.id)}
+                          >
+                            <strong>{row.device.displayName}</strong>
+                            <span>{row.device.code} · {row.device.deviceType}</span>
+                            <code>{row.device.id}</code>
+                          </button>
                         </th>
                         <td><BindingLabel row={row} /></td>
                         <td><OperatingState row={row} pending={currentPending} unavailable={currentUnavailable} /></td>
@@ -518,6 +630,31 @@ export function RealAssetsWorkspace({
           </div>
         </div>
       ) : null}
+      <DeviceDetailDrawer
+        site={site}
+        resolution={detailResolution}
+        currentPending={currentPending}
+        currentUnavailable={currentUnavailable}
+        refreshing={registry.isFetching || current.isFetching}
+        routePolicyRevision={current.data?.routePolicyRevision ?? telemetryPolicyRevision}
+        actionFeedback={actionFeedback}
+        onClose={closeDeviceDetail}
+        onRefresh={() => {
+          void registry.refetch();
+          if (devices.length > 0) void current.refetch();
+        }}
+        onCopyDeviceId={() => {
+          if (detailResolution.state === 'visible') {
+            void copyDetailValue('Device ID', detailResolution.row.device.id);
+          }
+        }}
+        onCopyDeepLink={() => {
+          if (detailResolution.state === 'visible') {
+            const deepLink = new URL(realAssetsDevicePath(site.id, detailResolution.row.device.id), window.location.origin).toString();
+            void copyDetailValue('当前深链', deepLink);
+          }
+        }}
+      />
     </section>
   );
 }
