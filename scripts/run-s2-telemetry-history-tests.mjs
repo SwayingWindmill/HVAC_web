@@ -3,11 +3,14 @@ import { once } from 'node:events';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer as createTCPServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
+import { pullDockerImageWithRetry } from './lib/docker-pull-retry.mjs';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/s2-telemetry/compose.yaml');
 const projectName = `hvac-s2-history-${process.pid}`;
 const reportPath = resolve(root, process.env.S2_HISTORY_REPORT_PATH ?? 'out/s2-history/clickhouse-integration.json');
+const postgresImage = 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412';
+const clickHouseImage = 'clickhouse/clickhouse-server:26.3.12.3@sha256:1f7cd090d5c4e2b8bfe0ea5d8ae6125937e1d932c6371b4d25fbd6088829dc9c';
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 const composeInvocation = (() => {
   const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
@@ -86,14 +89,16 @@ const report = {
   capability: 's2-clickhouse-history',
   status: 'failed',
   startedAt: new Date().toISOString(),
-  postgresImage: 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412',
-  clickHouseImage: 'clickhouse/clickhouse-server:26.3.12.3@sha256:1f7cd090d5c4e2b8bfe0ea5d8ae6125937e1d932c6371b4d25fbd6088829dc9c',
+  postgresImage,
+  clickHouseImage,
   assertions: {},
 };
 
 try {
   try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
-  compose(['up', '-d', 'postgres', 'clickhouse']);
+  await pullDockerImageWithRetry(postgresImage, { cwd: root, env: composeEnvironment });
+  await pullDockerImageWithRetry(clickHouseImage, { cwd: root, env: composeEnvironment });
+  compose(['up', '-d', '--pull=never', 'postgres', 'clickhouse']);
   await waitForServices();
 
   report.assertions.goIntegration = run(process.execPath, [

@@ -141,6 +141,22 @@ assert(registeredS3Resources.every((resource) => resource.writer === s3Ownership
 const uncontractedS3Resources = ownership.resources.filter((resource) => resource.writer === s3Ownership.businessOwner && !acceptedS3OwnershipNames.has(resource.name));
 assert(uncontractedS3Resources.length === 0, `data registry contains S3 resources outside the S3 ownership contract: ${JSON.stringify(uncontractedS3Resources)}`);
 
+const acceptedHistoryAnalyticsOwnership = [
+  { kind: 'schema', name: 'telemetry_history', writer: 'telemetry-history-projector', revision: 1, database: 'clickhouse' },
+  { kind: 'schema', name: 'analytics', writer: 'analytics-read-model-projector', revision: 1, database: 'clickhouse' },
+  { kind: 'projection', name: 'telemetry-history-observation', writer: 'telemetry-history-projector', revision: 1, sourceOwner: 'telemetry-runtime-service' },
+  { kind: 'projection', name: 'analytics-energy-interval-fact', writer: 'analytics-read-model-projector', revision: 1, sourceOwner: 'telemetry-history-projector' },
+  { kind: 'query-contract', name: 'analytics-energy-series-v1', writer: 'telemetry-query-service', revision: 1, publicIngress: 'platform-gateway' },
+  { kind: 'semantic-model', name: 'cube-energy-usage-v1', writer: 'telemetry-query-service', revision: 1, runtime: 'cube-core', source: 'analytics.energy_interval_facts' },
+];
+for (const expected of acceptedHistoryAnalyticsOwnership) {
+  const registered = ownership.resources.find((resource) => resource.name === expected.name);
+  assert(registered, `history/analytics ownership resource is missing: ${expected.name}`);
+  for (const [field, value] of Object.entries(expected)) {
+    assert(registered[field] === value, `history/analytics ownership ${expected.name}.${field} drifted: ${JSON.stringify(registered)}`);
+  }
+}
+
 const allowedOwnershipNames = new Set([
   'gateway',
   'audit_ledger',
@@ -166,9 +182,10 @@ const allowedOwnershipNames = new Set([
   's1-migration-quarantine',
   ...acceptedS2OwnershipNames,
   ...acceptedS3OwnershipNames,
+  ...acceptedHistoryAnalyticsOwnership.map((resource) => resource.name),
 ]);
 const leakedOwnership = ownership.resources.filter((resource) => !allowedOwnershipNames.has(resource.name));
-assert(leakedOwnership.length === 0, `ownership registry contains resources outside the accepted S1/S2/S3 baselines: ${JSON.stringify(leakedOwnership)}`);
+assert(leakedOwnership.length === 0, `ownership registry contains resources outside the accepted S1/S2/S3/history/analytics baselines: ${JSON.stringify(leakedOwnership)}`);
 
 await mkdir(outputRoot, { recursive: true });
 const scopeAudit = {
@@ -181,6 +198,7 @@ const scopeAudit = {
   allowedOwnershipResources: [...allowedOwnershipNames].sort(),
   acceptedS2ExpandBaselineResources: [...acceptedS2OwnershipNames].sort(),
   acceptedS3ExpandBaselineResources: [...acceptedS3OwnershipNames].sort(),
+  acceptedHistoryAnalyticsResources: acceptedHistoryAnalyticsOwnership.map((resource) => resource.name).sort(),
   leakedOwnershipResources: [],
 };
 await writeFile(resolve(outputRoot, 'scope-audit-report.json'), `${JSON.stringify(scopeAudit, null, 2)}\n`);

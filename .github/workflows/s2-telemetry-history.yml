@@ -1,0 +1,41 @@
+name: S2 Telemetry History
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/s2-telemetry-history.yml"
+      - "contracts/telemetry/**"
+      - "deploy/s2/**"
+      - "infra/s2-telemetry/**"
+      - "services/telemetry-runtime-service/**"
+      - "scripts/check-s2-telemetry-history.mjs"
+      - "scripts/run-s2-telemetry-history-tests.mjs"
+      - "scripts/lib/docker-pull-retry.mjs"
+      - "scripts/run-isolated-go.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - "go.work"
+      - "go.work.sum"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.12"
+          cache: true
+          cache-dependency-path: |
+            "**/go.sum"
+            go.work.sum
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.22.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run test:docker-pull-retry
+      - run: npm run s2:history

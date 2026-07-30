@@ -62,6 +62,8 @@ assert.equal(
 );
 assert(compose.includes('clickhouse/clickhouse-server:26.3.12.3@sha256:1f7cd090d5c4e2b8bfe0ea5d8ae6125937e1d932c6371b4d25fbd6088829dc9c'), 'ClickHouse image must be version and digest pinned');
 assert(compose.includes('./clickhouse/init:/docker-entrypoint-initdb.d:ro'), 'ClickHouse init must be mounted read-only');
+assert(integration.includes('pullDockerImageWithRetry'), 'history integration must use bounded immutable-image pull retries');
+assert(integration.includes("'--pull=never'"), 'history integration compose startup must not repull images');
 for (const marker of ['TestPostgresOutboxProjectsClickHouseHistoryExactlyOnce', 'PUBLISHED|2|true', "'1|1|24.75'", "'1|24.75'"]) {
   assert(integration.includes(marker), `missing ClickHouse integration evidence marker ${marker}`);
 }

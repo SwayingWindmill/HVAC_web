@@ -1,0 +1,36 @@
+name: S2 Telemetry Release Assets
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/s2-telemetry-release.yml"
+      - ".github/workflows/s2-telemetry-release-assets.yml"
+      - "deploy/s2/**"
+      - "scripts/check-s2-release-assets.mjs"
+      - "scripts/build-s2-release-evidence.mjs"
+      - "scripts/verify-s2-release-evidence.mjs"
+      - "scripts/test-s2-release-evidence.mjs"
+      - "scripts/run-s2-capacity-certification.mjs"
+      - "scripts/test-s2-capacity-certification.mjs"
+      - "scripts/write-s2-image-evidence.mjs"
+      - "scripts/merge-s2-image-evidence.mjs"
+      - "scripts/write-s2-release-report.mjs"
+      - "package.json"
+      - "package-lock.json"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.22.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run s2:release:check
+      - run: npm run test:s2-release-evidence
+      - run: npm run test:s2-capacity
