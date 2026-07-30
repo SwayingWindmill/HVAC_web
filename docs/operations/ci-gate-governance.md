@@ -115,6 +115,10 @@ The final S3 topology slice renames the remaining Ticket 01, 04, 06 and 08 wrapp
 - Run broad regression after merge and formal certification only for a release candidate.
 - Track flaky checks as defects with an owner and expiry instead of silently retrying or making them optional.
 
+## Nightly full regression
+
+`.github/workflows/nightly-full-regression.yml` runs daily at 18:00 UTC and supports manual dispatch. It reuses `scripts/run-pr-gate.mjs` to execute the complete static, contract, unit, integration and browser profile sets across Linux and Windows. Pull requests remain affected-path selective, while the nightly workflow provides cross-domain coverage, including the Operations Agent service checks, benchmark tests and PostgreSQL integration. Static, integration and browser evidence is uploaded with a 14-day retention period so failures remain inspectable after ephemeral runners are removed.
+
 ## Required-check target
 
 `.github/workflows/pr-gates.yml` provides the stable aggregate checks that the branch Ruleset requires:

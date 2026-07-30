@@ -1,0 +1,157 @@
+name: Nightly Full Regression
+
+on:
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-full-regression
+  cancel-in-progress: false
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+  GOMAXPROCS: 2
+  GOFLAGS: -p=1
+
+jobs:
+  static:
+    name: nightly / static
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: node scripts/run-pr-gate.mjs --gate=static
+      - run: npm run --silent pr:gates:test
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: nightly-full-regression-static
+          path: out/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  contracts:
+    name: nightly / contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: node scripts/run-pr-gate.mjs --gate=contracts --profiles=core,rms,s1,s2,s3
+
+  unit:
+    name: nightly / unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
+          cache-dependency-path: |
+            libs/*/go.mod
+            services/*/go.mod
+            pocs/*/*/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: node scripts/run-pr-gate.mjs --gate=unit --profiles=analytics,operations-agent,pocs,s0,s1,s2,s3,web
+
+  integration:
+    name: nightly / integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
+          cache-dependency-path: |
+            libs/*/go.mod
+            services/*/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: node scripts/run-pr-gate.mjs --gate=integration --profiles=analytics,operations-agent,s0,s1,s2-baseline,s2-history,s2-ingest,s2-realtime,s3
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: nightly-full-regression-integration
+          path: out/**
+          if-no-files-found: error
+          retention-days: 14
+
+  browser_windows:
+    name: nightly / browser (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
+          cache-dependency-path: |
+            libs/*/go.mod
+            services/*/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: node scripts/run-pr-gate.mjs --gate=browser --profiles=rms
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: nightly-full-regression-browser-windows
+          path: out/**
+          if-no-files-found: error
+          retention-days: 14
+
+  browser_linux:
+    name: nightly / browser (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
+          cache-dependency-path: |
+            libs/*/go.mod
+            services/*/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: node scripts/run-pr-gate.mjs --gate=browser --profiles=s0,s1,s2
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: nightly-full-regression-browser-linux
+          path: out/**
+          if-no-files-found: error
+          retention-days: 14
