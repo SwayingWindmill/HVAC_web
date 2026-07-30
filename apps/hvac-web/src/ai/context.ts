@@ -5,7 +5,6 @@ import { isSuggestionPendingDecision, isWorkOrderActive, isWorkOrderSlaRisk } fr
 import { DEVICE_META } from '@/pages/Assets/meta';
 import { fddList, useOps } from '@/store/ops';
 import { ROLE_LABEL, useUi } from '@/store/ui';
-import { ENERGY_AGENT_PROFILE_ENABLED } from './config';
 
 export type AiApplicationContext = {
   route: string;
@@ -43,14 +42,6 @@ type PageMeta = {
 const BUILDING_LABELS: Record<string, string> = {
   b1: '总部大楼',
 };
-
-const ENERGY_AGENT_PROMPTS = [
-  '分析 Building A 最近 7 天的能耗变化，并与前 7 天比较。',
-  '分析 Building B 最近 24 小时的能耗异常和主要贡献。',
-  '分析 Building C 昨天的能耗表现，并给出可验证的节能建议。',
-];
-
-const ENERGY_AGENT_INPUT_PLACEHOLDER = '请注明 Building A/B/C，以及昨天、最近 24 小时或最近 7 天';
 
 const PAGE_META: Record<string, PageMeta> = {
   '/dashboard': {
@@ -196,11 +187,9 @@ export function useAiApplicationContext(): AiApplicationContext {
       objectLabel,
       scopeLabel: [buildingLabel, meta.title, objectLabel].filter(Boolean).join(' · '),
       welcomeTitle: meta.welcomeTitle,
-      inputPlaceholder: ENERGY_AGENT_PROFILE_ENABLED
-        ? ENERGY_AGENT_INPUT_PLACEHOLDER
-        : objectLabel
-          ? `询问「${objectLabel}」相关问题`
-          : meta.inputPlaceholder,
+      inputPlaceholder: objectLabel
+        ? `询问「${objectLabel}」相关问题`
+        : meta.inputPlaceholder,
       attentionCount: highRiskDiagnoses + slaRiskWorkOrders + pendingOptimizations,
       metrics: {
         activeWorkOrders: workOrders.filter(isWorkOrderActive).length,
@@ -210,7 +199,7 @@ export function useAiApplicationContext(): AiApplicationContext {
         pendingOptimizations,
       },
       permittedRoutes: ROUTES.filter((path) => canViewPath(role, path)),
-      suggestedPrompts: ENERGY_AGENT_PROFILE_ENABLED ? ENERGY_AGENT_PROMPTS : meta.prompts,
+      suggestedPrompts: meta.prompts,
     };
   }, [buildingId, demoMode, location.pathname, location.search, role, suggestions, workOrders]);
 }

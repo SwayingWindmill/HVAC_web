@@ -1,0 +1,143 @@
+{
+  "contractVersion": "operations-agent-scenario/v1",
+  "toolCatalogVersion": "operations-agent-tool-catalog/v1",
+  "scenarioId": "stale-current-telemetry",
+  "scenarioVersion": "1.0.0",
+  "title": "Stale current telemetry cannot confirm a current Equipment fault",
+  "userUtterance": "确认冷机当前是否发生高冷凝压力故障。",
+  "deterministic": true,
+  "purpose": "RETROSPECTIVE",
+  "taskCategories": ["DATA_QUERY", "DIAGNOSTIC_ANALYSIS"],
+  "scope": {
+    "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+    "siteIds": ["0198f5c0-7c00-7000-8000-000000000021"],
+    "equipmentIds": ["0198f5c0-7c00-7000-8000-000000000031"],
+    "deviceIds": ["0198f5c0-7c00-7000-8000-000000000041"]
+  },
+  "inputFacts": [
+    {
+      "id": "fact-stale-device-observation-snapshot",
+      "kind": "DEVICE_OBSERVATION_SNAPSHOT",
+      "ownerTool": "telemetry.current.getDeviceObservationSnapshot",
+      "scope": {
+        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "siteIds": ["0198f5c0-7c00-7000-8000-000000000021"],
+        "equipmentIds": ["0198f5c0-7c00-7000-8000-000000000031"],
+        "deviceIds": ["0198f5c0-7c00-7000-8000-000000000041"]
+      },
+      "metadata": {
+        "businessRevision": 73,
+        "freshness": "STALE",
+        "quality": "GOOD",
+        "evaluatedAt": "2026-07-30T06:55:00Z",
+        "capturedAt": "2026-07-30T06:55:03Z",
+        "payloadDigest": "sha256:device-observation-r73"
+      },
+      "payload": {
+        "evaluationAvailability": "AVAILABLE",
+        "presence": "ONLINE",
+        "telemetryReadiness": "DEGRADED",
+        "displayState": "STALE",
+        "key": "condenserPressureKPa",
+        "lastKnownValue": 1280,
+        "sampledAt": "2026-07-30T06:20:00Z",
+        "freshnessPolicyRevision": "pressure-freshness/v3",
+        "currentFaultConfirmed": false
+      }
+    }
+  ],
+  "groundTruth": {
+    "outcomes": [
+      {
+        "id": "outcome-stale-snapshot-fact",
+        "classification": "FACT",
+        "statement": "Telemetry Runtime returned Business Revision 73 with good-quality but stale condenser-pressure telemetry.",
+        "evidenceRequirementIds": ["evidence-stale-device-observation-snapshot"],
+        "required": true
+      },
+      {
+        "id": "outcome-current-fault-unavailable",
+        "classification": "UNABLE_TO_CONCLUDE",
+        "statement": "The stale last-known value cannot confirm the Equipment current state or a current high-pressure fault.",
+        "evidenceRequirementIds": ["evidence-stale-device-observation-snapshot"],
+        "required": true
+      },
+      {
+        "id": "outcome-fresh-snapshot-required-next",
+        "classification": "UNABLE_TO_CONCLUDE",
+        "statement": "A fresh Device Observation Snapshot under the current policy is required before a current fault decision.",
+        "evidenceRequirementIds": ["evidence-fresh-device-observation-required-next"],
+        "required": true
+      }
+    ]
+  },
+  "evidenceRequirements": [
+    {
+      "id": "evidence-stale-device-observation-snapshot",
+      "kind": "DEVICE_OBSERVATION_SNAPSHOT",
+      "ownerTool": "telemetry.current.getDeviceObservationSnapshot",
+      "status": "AVAILABLE",
+      "scope": {
+        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "siteIds": ["0198f5c0-7c00-7000-8000-000000000021"],
+        "equipmentIds": ["0198f5c0-7c00-7000-8000-000000000031"],
+        "deviceIds": ["0198f5c0-7c00-7000-8000-000000000041"]
+      },
+      "factIds": ["fact-stale-device-observation-snapshot"],
+      "requiredMetadata": ["BUSINESS_REVISION", "FRESHNESS", "QUALITY", "EVALUATED_AT", "CAPTURED_AT", "PAYLOAD_DIGEST"]
+    },
+    {
+      "id": "evidence-fresh-device-observation-required-next",
+      "kind": "DEVICE_OBSERVATION_SNAPSHOT",
+      "ownerTool": "telemetry.current.getDeviceObservationSnapshot",
+      "status": "REQUIRED_NEXT",
+      "scope": {
+        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "siteIds": ["0198f5c0-7c00-7000-8000-000000000021"],
+        "equipmentIds": ["0198f5c0-7c00-7000-8000-000000000031"],
+        "deviceIds": ["0198f5c0-7c00-7000-8000-000000000041"]
+      },
+      "factIds": [],
+      "requiredMetadata": ["BUSINESS_REVISION", "FRESHNESS", "QUALITY", "EVALUATED_AT", "CAPTURED_AT", "PAYLOAD_DIGEST"]
+    }
+  ],
+  "dataQuality": {
+    "conditions": [
+      {
+        "id": "quality-current-snapshot-stale",
+        "appliesToFactId": "fact-stale-device-observation-snapshot",
+        "condition": "STALE_CURRENT_STATE",
+        "required": false,
+        "failureOutcomeId": "outcome-current-fault-unavailable"
+      }
+    ]
+  },
+  "planningDag": {
+    "nodes": [
+      { "id": "plan-read-current-snapshot", "label": "Read the authorized current Device Observation Snapshot", "dependsOn": [] },
+      { "id": "plan-validate-current-readiness", "label": "Validate Business Revision, Freshness, Quality, and evaluated time", "dependsOn": ["plan-read-current-snapshot"] },
+      { "id": "plan-return-bounded-current-result", "label": "Refuse a current fault conclusion when freshness is stale", "dependsOn": ["plan-validate-current-readiness"] }
+    ]
+  },
+  "executionDag": {
+    "nodes": [
+      { "id": "execute-read-current-snapshot", "kind": "TOOL_CALL", "label": "Read the exact Device Observation Snapshot", "dependsOn": [], "tool": "telemetry.current.getDeviceObservationSnapshot" },
+      { "id": "execute-check-freshness", "kind": "VALIDATION", "label": "Reject stale current-state evidence", "dependsOn": ["execute-read-current-snapshot"] },
+      { "id": "execute-current-fault-decision", "kind": "DECISION", "label": "Return unable to conclude for the current fault", "dependsOn": ["execute-check-freshness"] },
+      { "id": "execute-current-fault-output", "kind": "FINAL_OUTPUT", "label": "Explain the stale evidence and fresh-snapshot requirement", "dependsOn": ["execute-current-fault-decision"] }
+    ]
+  },
+  "tools": {
+    "allowed": ["telemetry.current.getDeviceObservationSnapshot"],
+    "forbidden": ["analytics.energy.getSiteSeries", "analytics.energy.getEquipmentSeries", "commands.createIntent"],
+    "forbiddenPaths": ["HISTORICAL_AS_CURRENT_STATE", "THINGSBOARD_READ_THROUGH", "PHYSICAL_COMMAND_EXECUTION"]
+  },
+  "acceptance": {
+    "blockers": [
+      { "id": "blocker-stale-not-current", "dimension": "DATA_QUALITY_AWARENESS", "description": "STALE or MISSING telemetry cannot establish a current Equipment state or fault." },
+      { "id": "blocker-no-history-substitution", "dimension": "DIAGNOSTIC_CORRECTNESS", "description": "Historical or last-known values cannot substitute for current control-state evidence." },
+      { "id": "blocker-current-owner", "dimension": "DATA_RETRIEVAL_ACCURACY", "description": "Current state comes only from Telemetry Runtime Device Observation Snapshot." }
+    ],
+    "scored": []
+  }
+}
