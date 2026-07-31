@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createPlatformGatewayClient,
   type CurrentPrincipalResponse,
+  type PlatformGatewayClient,
   type Site,
 } from '../../api/generated/platformGateway.gen';
 import { S2TelemetryClientError } from '../../api/generated/s2Telemetry.gen';
@@ -34,7 +35,12 @@ import {
   type RealAssetsDeviceRow,
   type RealAssetsOperatingState,
 } from './model';
-import { createRealAssetsTelemetryRuntime } from './telemetry-runtime';
+import { projectRealAssetsRealtimeRow } from './realtime';
+import {
+  createRealAssetsTelemetryRuntime,
+  type RealAssetsTelemetryRuntime,
+} from './telemetry-runtime';
+import { useRealAssetsDeviceRealtime } from './useDeviceRealtime';
 import './real-assets.css';
 
 interface RealAssetsWorkspaceProps {
@@ -44,6 +50,8 @@ interface RealAssetsWorkspaceProps {
   protectedGeneration: number;
   protectedRequestToken: () => ProtectedScopeRequestToken;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  platformClient?: Pick<PlatformGatewayClient, 'listSiteEquipment' | 'listSiteDevices' | 'listSiteDeviceBindings'>;
+  telemetryRuntime?: RealAssetsTelemetryRuntime;
 }
 
 type ListMode = 'attention' | 'all';
@@ -206,10 +214,12 @@ export function RealAssetsWorkspace({
   protectedGeneration,
   protectedRequestToken,
   registerProtectedResource,
+  platformClient: providedPlatformClient,
+  telemetryRuntime: providedTelemetryRuntime,
 }: RealAssetsWorkspaceProps) {
   const queryClient = useQueryClient();
-  const platformClient = useMemo(() => createPlatformGatewayClient(), []);
-  const telemetryRuntime = useMemo(() => createRealAssetsTelemetryRuntime(), []);
+  const platformClient = useMemo(() => providedPlatformClient ?? createPlatformGatewayClient(), [providedPlatformClient]);
+  const telemetryRuntime = useMemo(() => providedTelemetryRuntime ?? createRealAssetsTelemetryRuntime(), [providedTelemetryRuntime]);
   const [listMode, setListMode] = useState<ListMode>('attention');
   const [search, setSearch] = useState('');
   const [hierarchySelection, setHierarchySelection] = useState<HierarchySelection>('all');
@@ -228,6 +238,7 @@ export function RealAssetsWorkspace({
   const registryAllowed = capabilities.includes('equipment.list') && capabilities.includes('device.list');
   const telemetryAllowed = capabilities.includes('telemetry.batch.read');
   const historyAllowed = capabilities.includes('telemetry.history.read');
+  const realtimeAllowed = capabilities.includes('telemetry.subscribe');
   const queryRoot = useMemo(
     () => ['real-assets', protectedGeneration, organizationId, site.id] as const,
     [organizationId, protectedGeneration, site.id],
@@ -296,6 +307,7 @@ export function RealAssetsWorkspace({
   useEffect(() => {
     let active = true;
     const unsubscribe = telemetryRuntime.subscribeRoutePolicyChange((_previousRevision, nextRevision) => {
+      telemetryRuntime.live.purge();
       void queryClient.cancelQueries({ queryKey: queryRoot }).then(() => {
         if (!active) return;
         queryClient.removeQueries({ queryKey: queryRoot });
@@ -375,6 +387,27 @@ export function RealAssetsWorkspace({
     rows.filter((row) => row.binding.state === 'bound' && row.binding.equipment.id === item.id).length,
   ])), [registry.data?.equipment, rows]);
   const detailResolution = useMemo(() => resolveRealAssetsDetail(rows, selectedDeviceId), [rows, selectedDeviceId]);
+  const detailRow = detailResolution.state === 'visible' ? detailResolution.row : null;
+  const onRealtimeRevoked = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: queryRoot });
+  }, [queryClient, queryRoot]);
+  const realtime = useRealAssetsDeviceRealtime({
+    row: detailRow,
+    allowed: realtimeAllowed,
+    protectedGeneration,
+    authorizationEpoch: `${principal.session.id}:${principal.authorization.policyRevision}:${routePolicyEpoch}`,
+    runtime: telemetryRuntime,
+    protectedRequestToken,
+    registerProtectedResource,
+    onRevoked: onRealtimeRevoked,
+  });
+  const realtimeProjection = useMemo(
+    () => detailRow ? projectRealAssetsRealtimeRow(detailRow, realtime.state) : null,
+    [detailRow, realtime.state],
+  );
+  const drawerResolution = detailResolution.state === 'visible' && realtimeProjection
+    ? { state: 'visible' as const, row: realtimeProjection.row }
+    : detailResolution;
 
   useEffect(() => {
     if (selectedDeviceId !== null) return;
@@ -633,7 +666,7 @@ export function RealAssetsWorkspace({
       ) : null}
       <DeviceDetailDrawer
         site={site}
-        resolution={detailResolution}
+        resolution={drawerResolution}
         currentPending={currentPending}
         currentUnavailable={currentUnavailable}
         refreshing={registry.isFetching || current.isFetching}
@@ -644,6 +677,8 @@ export function RealAssetsWorkspace({
         protectedRequestToken={protectedRequestToken}
         historyAllowed={historyAllowed}
         sessionCapability={sessionCapability}
+        realtime={realtime}
+        realtimeProjection={realtimeProjection}
         actionFeedback={actionFeedback}
         onClose={closeDeviceDetail}
         onRefresh={() => {

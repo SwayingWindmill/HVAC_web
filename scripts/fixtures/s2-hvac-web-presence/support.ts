@@ -261,6 +261,9 @@ export class ControlledTelemetryLiveClient implements TelemetryLiveClient {
 
   purge(): void {
     this.audit.purgeCount += 1;
-    for (const session of this.sessions) session.revoke();
+    for (const session of this.sessions) {
+      session.revoke();
+      session.close();
+    }
   }
 }

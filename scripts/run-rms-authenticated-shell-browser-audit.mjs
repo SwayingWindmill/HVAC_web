@@ -572,6 +572,9 @@ async function waitForCondition(client, expression, label, pollMs = 100) {
     text: document.body?.innerText?.slice(0, 4000) ?? '',
     html: document.body?.innerHTML?.slice(0, 4000) ?? '',
   })`);
+  diagnostic.runtimeFailures = client.events
+    .filter((event) => event.method === 'Runtime.exceptionThrown' || event.method === 'Log.entryAdded')
+    .slice(-20);
   diagnostic.events = client.events.slice(-20);
   throw new Error(`${label} did not become ready: ${JSON.stringify(diagnostic)}`);
 }
@@ -1034,8 +1037,12 @@ try {
   await clickTestId(cdpClient, 'real-assets-detail-refresh');
   await waitForCondition(
     cdpClient,
-    `document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('当前 Telemetry 服务不可用')
+    `document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('Site 列表的 Current batch 暂不可用')
       && !document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('Business revision')
+      && !document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('rms-device-history-revision-1')
+      && document.querySelector('[aria-labelledby="real-assets-detail-points"]')?.textContent?.includes('chiller.run_state')
+      && document.querySelector('[aria-labelledby="real-assets-detail-points"]')?.textContent?.includes('RUNNING')
+      && document.querySelector('[aria-labelledby="real-assets-detail-points"]')?.textContent?.includes('520 kW')
       && document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state') === 'PARTIAL'
       && !document.querySelector('[data-testid="real-assets-detail-refresh"]')?.disabled`,
     'current Snapshot failure with independent history',
