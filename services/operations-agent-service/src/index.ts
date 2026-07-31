@@ -33,6 +33,19 @@ export {
 } from './application/index.js';
 
 export {
+  InvestigationBusinessRecordError,
+  createInvestigationBusinessRecord,
+  type AnalysisReferenceRecord,
+  type EvidenceRecord,
+  type EvidenceSourceReference,
+  type FindingRecord,
+  type InvestigationBusinessRecord,
+  type InvestigationBusinessRecordErrorCode,
+  type InvestigationBusinessRecordType,
+  type ToolExecutionReceiptRecord,
+} from './application/index.js';
+
+export {
   operationsAgentServiceModules,
   type OperationsAgentServiceModules,
 } from './bootstrap/index.js';

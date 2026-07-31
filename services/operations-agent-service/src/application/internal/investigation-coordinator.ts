@@ -1,10 +1,14 @@
 import {
+  InvestigationBusinessRecordError,
   OperationsInvestigation,
   OperationsInvestigationError,
+  businessRecordsEqual,
   createIdempotencyKey,
+  createInvestigationBusinessRecord,
   createStepIdentity,
   type CommittedEffectKind,
   type CommittedEffectView,
+  type InvestigationBusinessRecord,
   type InvestigationRevision,
   type InvestigationScope,
   type OperationsInvestigationErrorCode,
@@ -31,6 +35,7 @@ export type InvestigationCoordinatorErrorCode =
   | 'LEASE_CONFLICT'
   | 'REVISION_CONFLICT'
   | 'DUPLICATE_EFFECT'
+  | 'DUPLICATE_RECORD'
   | 'BUDGET_EXHAUSTED'
   | 'UNABLE_TO_CONCLUDE'
   | 'OWNER_REQUEST_INVALID'
@@ -104,12 +109,14 @@ export interface CommitInvestigationEffectCommand extends RunLeaseMutationComman
   readonly idempotencyKey: string;
   readonly kind: CommittedEffectKind;
   readonly recordId: string;
+  readonly record?: InvestigationBusinessRecord;
 }
 
 export interface CommitInvestigationEffectResult {
   readonly outcome: 'COMMITTED' | 'DUPLICATE';
   readonly investigation: OperationsInvestigationView;
   readonly effect: CommittedEffectView;
+  readonly record?: InvestigationBusinessRecord;
 }
 
 export interface InvestigationCoordinator {
@@ -142,17 +149,26 @@ const duplicateErrorCodes = new Set<OperationsInvestigationErrorCode>([
 const mapApplicationError = (error: unknown): never => {
   if (error instanceof InvestigationCoordinatorError) throw error;
   if (error instanceof InvestigationRepositoryConflictError) {
-    const code = error.code === 'LEASE_CONFLICT'
+    const code: InvestigationCoordinatorErrorCode = error.code === 'LEASE_CONFLICT'
       ? 'LEASE_CONFLICT'
       : error.code === 'DUPLICATE_EFFECT'
         ? 'DUPLICATE_EFFECT'
-        : error.code === 'IDENTITY_CONFLICT'
-          ? 'INVALID_INVESTIGATION_STATE'
-          : 'REVISION_CONFLICT';
+        : error.code === 'DUPLICATE_RECORD'
+          ? 'DUPLICATE_RECORD'
+          : error.code === 'REVISION_CONFLICT'
+            ? 'REVISION_CONFLICT'
+            : 'INVALID_INVESTIGATION_STATE';
     throw new InvestigationCoordinatorError(code, error.message, { cause: error });
   }
   if (error instanceof OwnerReadError) {
     throw new InvestigationCoordinatorError(error.code, error.message, { cause: error });
+  }
+  if (error instanceof InvestigationBusinessRecordError) {
+    throw new InvestigationCoordinatorError(
+      'INVALID_INVESTIGATION_STATE',
+      error.message,
+      { cause: error },
+    );
   }
   if (error instanceof OperationsInvestigationError) {
     if (error.code === 'REVISION_STALE') {
@@ -395,6 +411,7 @@ export const createInvestigationCoordinator = (
       readonly at: number;
     };
     readonly effect?: CommittedEffectView;
+    readonly record?: InvestigationBusinessRecord;
     readonly occurredAt: number;
     readonly eventType: ApplicationEvent['type'];
     readonly auditAction: AuditRecord['action'];
@@ -408,6 +425,7 @@ export const createInvestigationCoordinator = (
         ? {}
         : { expectedAuthority: input.expectedAuthority }),
       ...(input.effect === undefined ? {} : { effect: input.effect }),
+      ...(input.record === undefined ? {} : { record: input.record }),
       event: {
         type: input.eventType,
         investigationId: view.id,
@@ -640,7 +658,27 @@ export const createInvestigationCoordinator = (
     async commitEffect(command) {
       try {
         const investigation = await loadAuthorized(command.investigationId, 'COMMIT_EFFECT');
+        const record = command.record === undefined
+          ? undefined
+          : createInvestigationBusinessRecord(command.record);
         const now = ports.clock.now();
+        if (record !== undefined
+          && (record.investigationId !== command.investigationId
+            || record.id !== command.recordId
+            || record.recordType !== command.kind
+            || record.recordedAt > now)) {
+          throw new InvestigationCoordinatorError(
+            'INVALID_INVESTIGATION_STATE',
+            'Business record identity, type, and time must match the committed effect.',
+          );
+        }
+        if (record?.recordType === 'TOOL_EXECUTION_RECEIPT'
+          && (record.runId !== command.runId || record.stepId !== command.stepId)) {
+          throw new InvestigationCoordinatorError(
+            'INVALID_INVESTIGATION_STATE',
+            'Tool Execution Receipt Run and Step must match the committing command.',
+          );
+        }
         const result = investigation.commitEffect({
           runId: command.runId,
           leaseId: command.leaseId,
@@ -651,6 +689,12 @@ export const createInvestigationCoordinator = (
           kind: command.kind,
           recordId: command.recordId,
         });
+        if (command.kind !== 'PROPOSED_ACTION' && record === undefined) {
+          throw new InvestigationCoordinatorError(
+            'INVALID_INVESTIGATION_STATE',
+            `${command.kind} effects require a typed business record.`,
+          );
+        }
         const view = result.outcome === 'COMMITTED'
           ? await persistMutation({
             investigation: result.investigation,
@@ -661,16 +705,38 @@ export const createInvestigationCoordinator = (
               at: now,
             },
             effect: result.effect,
+            ...(record === undefined ? {} : { record }),
             occurredAt: now,
             eventType: 'INVESTIGATION_EFFECT_COMMITTED',
             auditAction: 'COMMIT_EFFECT',
             runId: command.runId,
           })
           : result.investigation.view();
+        let persistedRecord = record;
+        if (result.outcome === 'DUPLICATE' && record !== undefined) {
+          const existing = await ports.businessRecordRepository.get(
+            command.investigationId,
+            record.id,
+          );
+          if (existing === null) {
+            throw new InvestigationCoordinatorError(
+              'INVALID_INVESTIGATION_STATE',
+              'Committed effect is missing its typed business record.',
+            );
+          }
+          if (!businessRecordsEqual(existing, record)) {
+            throw new InvestigationCoordinatorError(
+              'DUPLICATE_RECORD',
+              `Business record ${record.id} is already committed with different content.`,
+            );
+          }
+          persistedRecord = existing;
+        }
         return {
           outcome: result.outcome,
           investigation: view,
           effect: result.effect,
+          ...(persistedRecord === undefined ? {} : { record: persistedRecord }),
         };
       } catch (error) {
         return mapApplicationError(error);

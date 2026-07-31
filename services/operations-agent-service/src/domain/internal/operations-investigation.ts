@@ -45,7 +45,12 @@ export interface CommittedEffectView {
   readonly runId: string;
   readonly stepId: StepIdentity;
   readonly idempotencyKey: IdempotencyKey;
-  readonly kind: 'EVIDENCE' | 'FINDING' | 'PROPOSED_ACTION';
+  readonly kind:
+    | 'EVIDENCE'
+    | 'ANALYSIS_REFERENCE'
+    | 'FINDING'
+    | 'TOOL_EXECUTION_RECEIPT'
+    | 'PROPOSED_ACTION';
   readonly recordId: string;
   readonly committedAt: number;
 }
@@ -59,7 +64,9 @@ export interface OperationsInvestigationView {
   readonly runs: readonly AgentRunView[];
   readonly committedEffects: readonly CommittedEffectView[];
   readonly evidenceIds: readonly string[];
+  readonly analysisReferenceIds: readonly string[];
   readonly findingIds: readonly string[];
+  readonly toolReceiptIds: readonly string[];
   readonly proposedActionIds: readonly string[];
 }
 
@@ -236,7 +243,9 @@ const cloneState = (state: InternalState): InternalState => ({
   runs: state.runs.map(cloneRun),
   committedEffects: state.committedEffects.map(cloneEffect),
   evidenceIds: [...state.evidenceIds],
+  analysisReferenceIds: [...state.analysisReferenceIds],
   findingIds: [...state.findingIds],
+  toolReceiptIds: [...state.toolReceiptIds],
   proposedActionIds: [...state.proposedActionIds],
 });
 
@@ -259,7 +268,9 @@ const runStatuses = new Set<AgentRunStatus>([
 
 const effectKinds = new Set<CommittedEffectKind>([
   'EVIDENCE',
+  'ANALYSIS_REFERENCE',
   'FINDING',
+  'TOOL_EXECUTION_RECEIPT',
   'PROPOSED_ACTION',
 ]);
 
@@ -477,14 +488,22 @@ const validateSnapshot = (snapshot: OperationsInvestigationSnapshot): InternalSt
   const evidenceIds = committedEffects
     .filter((effect) => effect.kind === 'EVIDENCE')
     .map((effect) => effect.recordId);
+  const analysisReferenceIds = committedEffects
+    .filter((effect) => effect.kind === 'ANALYSIS_REFERENCE')
+    .map((effect) => effect.recordId);
   const findingIds = committedEffects
     .filter((effect) => effect.kind === 'FINDING')
+    .map((effect) => effect.recordId);
+  const toolReceiptIds = committedEffects
+    .filter((effect) => effect.kind === 'TOOL_EXECUTION_RECEIPT')
     .map((effect) => effect.recordId);
   const proposedActionIds = committedEffects
     .filter((effect) => effect.kind === 'PROPOSED_ACTION')
     .map((effect) => effect.recordId);
   if (!arraysEqual(snapshot.evidenceIds, evidenceIds)
+    || !arraysEqual(snapshot.analysisReferenceIds ?? [], analysisReferenceIds)
     || !arraysEqual(snapshot.findingIds, findingIds)
+    || !arraysEqual(snapshot.toolReceiptIds ?? [], toolReceiptIds)
     || !arraysEqual(snapshot.proposedActionIds, proposedActionIds)) {
     throw new OperationsInvestigationError(
       'INVESTIGATION_STATE_INVALID',
@@ -502,7 +521,9 @@ const validateSnapshot = (snapshot: OperationsInvestigationSnapshot): InternalSt
     runs,
     committedEffects,
     evidenceIds,
+    analysisReferenceIds,
     findingIds,
+    toolReceiptIds,
     proposedActionIds,
   };
 };
@@ -535,7 +556,9 @@ export class OperationsInvestigation {
       runs: [],
       committedEffects: [],
       evidenceIds: [],
+      analysisReferenceIds: [],
       findingIds: [],
+      toolReceiptIds: [],
       proposedActionIds: [],
     });
   }
@@ -705,10 +728,13 @@ export class OperationsInvestigation {
     this.#requireStatus('RUNNING');
     const run = this.#requireActiveRun(command.runId);
     this.#requireLease(run, command.leaseId, command.at);
-    if (this.#recordIds(command.kind).includes(recordId)) {
+    const existingRecord = this.#state.committedEffects.find((effect) => (
+      effect.recordId === recordId
+    ));
+    if (existingRecord !== undefined) {
       throw new OperationsInvestigationError(
         'EFFECT_RECORD_ALREADY_COMMITTED',
-        `${command.kind} record ${recordId} is already committed.`,
+        `Record ${recordId} is already committed as ${existingRecord.kind}.`,
       );
     }
 
@@ -725,9 +751,15 @@ export class OperationsInvestigation {
       evidenceIds: command.kind === 'EVIDENCE'
         ? [...this.#state.evidenceIds, recordId]
         : this.#state.evidenceIds,
+      analysisReferenceIds: command.kind === 'ANALYSIS_REFERENCE'
+        ? [...this.#state.analysisReferenceIds, recordId]
+        : this.#state.analysisReferenceIds,
       findingIds: command.kind === 'FINDING'
         ? [...this.#state.findingIds, recordId]
         : this.#state.findingIds,
+      toolReceiptIds: command.kind === 'TOOL_EXECUTION_RECEIPT'
+        ? [...this.#state.toolReceiptIds, recordId]
+        : this.#state.toolReceiptIds,
       proposedActionIds: command.kind === 'PROPOSED_ACTION'
         ? [...this.#state.proposedActionIds, recordId]
         : this.#state.proposedActionIds,
@@ -872,9 +904,4 @@ export class OperationsInvestigation {
     }
   }
 
-  #recordIds(kind: CommittedEffectKind): readonly string[] {
-    if (kind === 'EVIDENCE') return this.#state.evidenceIds;
-    if (kind === 'FINDING') return this.#state.findingIds;
-    return this.#state.proposedActionIds;
-  }
 }

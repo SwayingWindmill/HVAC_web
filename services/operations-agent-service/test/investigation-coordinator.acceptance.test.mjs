@@ -102,6 +102,30 @@ test('the Coordinator owns a complete framework-independent Investigation accept
   assert.equal(environment.runtime.calls.length, 1);
 
   environment.setTime(11_000);
+  const evidenceRecord = {
+    schemaVersion: 1,
+    recordType: 'EVIDENCE',
+    id: 'evidence-site-context',
+    investigationId: started.id,
+    recordedAt: 11_000,
+    evidenceKind: 'SITE_ENERGY_SERIES_READY',
+    classification: 'FACT',
+    statement: 'Authoritative Site context passed bounded readiness checks.',
+    analysisReferenceDigest: null,
+    sources: [{
+      owner: 'telemetry-query-service',
+      scope,
+      requestId: 'read-energy',
+      registryRevision: null,
+      datasetRevision: 'dataset-revision-29',
+      watermark: { data: '2026-07-08T00:00:00.000Z', aggregate: null },
+      partial: false,
+      quality: { classification: 'GOOD', valid: 168, suspect: 0, invalid: 0 },
+      capturedAt: 10_500,
+      evaluatedAt: 11_000,
+      provenanceDigest: `sha256:${'f'.repeat(64)}`,
+    }],
+  };
   const evidenceCommand = {
     investigationId: started.id,
     runId: firstRun.id,
@@ -111,6 +135,7 @@ test('the Coordinator owns a complete framework-independent Investigation accept
     idempotencyKey: 'effect-evidence-site-context',
     kind: 'EVIDENCE',
     recordId: 'evidence-site-context',
+    record: evidenceRecord,
   };
   const evidence = await environment.coordinator.commitEffect(evidenceCommand);
   const replay = await environment.coordinator.commitEffect(evidenceCommand);
@@ -119,6 +144,24 @@ test('the Coordinator owns a complete framework-independent Investigation accept
   assert.equal(replay.investigation.revision, evidence.investigation.revision);
 
   environment.setTime(11_100);
+  const findingRecord = {
+    schemaVersion: 1,
+    recordType: 'FINDING',
+    id: 'finding-site-context',
+    investigationId: started.id,
+    recordedAt: 11_100,
+    findingKind: 'UNABLE_TO_CONCLUDE',
+    classification: 'INFERENCE',
+    statement: 'The bounded Site context does not support a stronger conclusion.',
+    evidenceIds: [evidenceRecord.id],
+    analysisReferenceIds: [],
+    conclusion: {
+      status: 'UNABLE_TO_CONCLUDE',
+      scope: 'SITE',
+      reasonCode: 'ANALYSIS_REFERENCE_REQUIRED',
+      detail: 'A deterministic Analysis Reference is required before a supported Site Finding.',
+    },
+  };
   const findingCommand = {
     investigationId: started.id,
     runId: firstRun.id,
@@ -128,6 +171,7 @@ test('the Coordinator owns a complete framework-independent Investigation accept
     idempotencyKey: 'effect-finding-site-context',
     kind: 'FINDING',
     recordId: 'finding-site-context',
+    record: findingRecord,
   };
   const finding = await environment.coordinator.commitEffect(findingCommand);
   const findingReplay = await environment.coordinator.commitEffect(findingCommand);

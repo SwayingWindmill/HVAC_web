@@ -91,6 +91,7 @@ const ownerReaders = {
 const commonPorts = (persistence, currentTime, idGenerator, runtime) => {
   return {
     investigationRepository: persistence.investigationRepository,
+    businessRecordRepository: persistence.businessRecordRepository,
     investigationTransaction: persistence.investigationTransaction,
     checkpointRepository: persistence.checkpointRepository,
     applicationOutbox: persistence.applicationOutbox,

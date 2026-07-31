@@ -1,0 +1,646 @@
+import type { InvestigationScope, StepIdentity } from './operations-investigation.js';
+
+export type InvestigationBusinessRecordType =
+  | 'EVIDENCE'
+  | 'ANALYSIS_REFERENCE'
+  | 'FINDING'
+  | 'TOOL_EXECUTION_RECEIPT';
+
+export type EvidenceClassification = 'FACT' | 'ALGORITHM_RESULT';
+export type EvidenceOwner = 'registry' | 'telemetry-query-service';
+export type EvidenceQualityClassification = 'GOOD' | 'UNCERTAIN' | 'BAD' | 'STALE';
+
+export interface EvidenceQuality {
+  readonly classification: EvidenceQualityClassification;
+  readonly valid: number;
+  readonly suspect: number;
+  readonly invalid: number;
+}
+
+export interface EvidenceWatermark {
+  readonly data: string | null;
+  readonly aggregate: string | null;
+}
+
+export interface EvidenceSourceReference {
+  readonly owner: EvidenceOwner;
+  readonly scope: InvestigationScope;
+  readonly requestId: string;
+  readonly registryRevision: string | null;
+  readonly datasetRevision: string | null;
+  readonly watermark: EvidenceWatermark;
+  readonly partial: boolean;
+  readonly quality: EvidenceQuality;
+  readonly capturedAt: number;
+  readonly evaluatedAt: number;
+  readonly provenanceDigest: string;
+}
+
+interface InvestigationBusinessRecordBase {
+  readonly schemaVersion: 1;
+  readonly recordType: InvestigationBusinessRecordType;
+  readonly id: string;
+  readonly investigationId: string;
+  readonly recordedAt: number;
+}
+
+export interface EvidenceRecord extends InvestigationBusinessRecordBase {
+  readonly recordType: 'EVIDENCE';
+  readonly evidenceKind: 'SITE_ENERGY_SERIES_READY' | 'SITE_ENERGY_PERIOD_COMPARISON';
+  readonly classification: EvidenceClassification;
+  readonly statement: string;
+  readonly analysisReferenceDigest: string | null;
+  readonly sources: readonly EvidenceSourceReference[];
+}
+
+export interface AnalysisReferenceRecord extends InvestigationBusinessRecordBase {
+  readonly recordType: 'ANALYSIS_REFERENCE';
+  readonly analysisKind: 'SITE_NIGHT_ENERGY_COMPARISON';
+  readonly authority: 'DETERMINISTIC_ALGORITHM';
+  readonly algorithmVersion: string;
+  readonly policyVersion: string;
+  readonly inputEvidenceIds: readonly string[];
+  readonly parameterDigest: string;
+  readonly resultDigest: string;
+  readonly executedAt: number;
+  readonly outcome: 'SUPPORTED_SITE_FINDING' | 'UNABLE_TO_CONCLUDE';
+}
+
+export type FindingConclusion =
+  | {
+    readonly status: 'SUPPORTED';
+    readonly scope: 'SITE';
+    readonly organizationId: string;
+    readonly siteId: string;
+  }
+  | {
+    readonly status: 'UNABLE_TO_CONCLUDE';
+    readonly scope: 'SITE' | 'EQUIPMENT';
+    readonly reasonCode: string;
+    readonly detail: string;
+  };
+
+export interface FindingRecord extends InvestigationBusinessRecordBase {
+  readonly recordType: 'FINDING';
+  readonly findingKind:
+    | 'SITE_NIGHT_ENERGY_INCREASE'
+    | 'SITE_NIGHT_ENERGY_WITHIN_THRESHOLD'
+    | 'UNABLE_TO_CONCLUDE';
+  readonly classification: 'INFERENCE';
+  readonly statement: string;
+  readonly evidenceIds: readonly string[];
+  readonly analysisReferenceIds: readonly string[];
+  readonly conclusion: FindingConclusion;
+}
+
+export type LogicalTool =
+  | 'registry.getSite'
+  | 'registry.listSiteEquipment'
+  | 'telemetry.getCurrentSnapshot'
+  | 'analytics.getEnergySeries'
+  | 'commands.getCapabilities';
+
+export type ToolOwner = 'registry' | 'telemetry-query-service' | 'command-service';
+export type ToolExecutionResultCategory = 'SUCCEEDED' | 'REJECTED' | 'TIMED_OUT' | 'FAILED';
+export type ToolReceiptMetadataValue = string | number | boolean | null;
+
+export interface ToolExecutionReceiptRecord extends InvestigationBusinessRecordBase {
+  readonly recordType: 'TOOL_EXECUTION_RECEIPT';
+  readonly logicalTool: LogicalTool;
+  readonly owner: ToolOwner;
+  readonly requestId: string;
+  readonly attemptId: string;
+  readonly runId: string;
+  readonly stepId: StepIdentity;
+  readonly startedAt: number;
+  readonly completedAt: number;
+  readonly resultCategory: ToolExecutionResultCategory;
+  readonly metadata: Readonly<Record<string, ToolReceiptMetadataValue>>;
+}
+
+export type InvestigationBusinessRecord =
+  | EvidenceRecord
+  | AnalysisReferenceRecord
+  | FindingRecord
+  | ToolExecutionReceiptRecord;
+
+export type InvestigationBusinessRecordErrorCode = 'BUSINESS_RECORD_INVALID';
+
+export class InvestigationBusinessRecordError extends Error {
+  readonly code: InvestigationBusinessRecordErrorCode;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvestigationBusinessRecordError';
+    this.code = 'BUSINESS_RECORD_INVALID';
+  }
+}
+
+const digestPattern = /^sha256:[0-9a-f]{64}$/u;
+const metadataKeyPattern = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
+const forbiddenMetadataKeyPattern = /(authorization|cookie|credential|delegation|password|secret|token|api[-_.]?key)/iu;
+const maxRecordBytes = 64 * 1024;
+const maxStatementLength = 4_000;
+const maxEvidenceSources = 8;
+const maxReferenceIds = 32;
+const maxMetadataEntries = 16;
+const maxMetadataStringLength = 512;
+
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const hasExactKeys = (
+  value: Record<string, unknown>,
+  required: readonly string[],
+): boolean => {
+  const actual = Object.keys(value);
+  return actual.length === required.length && actual.every((key) => required.includes(key));
+};
+
+function fail(message: string): never {
+  throw new InvestigationBusinessRecordError(message);
+}
+
+const requireRecord = (value: unknown, label: string): Record<string, unknown> => {
+  if (!isRecord(value)) fail(`${label} must be an object.`);
+  return value;
+};
+
+const requireString = (
+  value: unknown,
+  label: string,
+  maximumLength = 256,
+): string => {
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > maximumLength) {
+    fail(`${label} must be a non-empty string no longer than ${maximumLength} characters.`);
+  }
+  return value;
+};
+
+const requireNullableString = (
+  value: unknown,
+  label: string,
+  maximumLength = 256,
+): string | null => value === null ? null : requireString(value, label, maximumLength);
+
+const requireTimestamp = (value: unknown, label: string): number => {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    fail(`${label} must be a non-negative safe-integer timestamp.`);
+  }
+  return value;
+};
+
+const requireCount = (value: unknown, label: string): number => {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    fail(`${label} must be a non-negative safe integer.`);
+  }
+  return value;
+};
+
+const requireDigest = (value: unknown, label: string): string => {
+  if (typeof value !== 'string' || !digestPattern.test(value)) {
+    fail(`${label} must be a lowercase SHA-256 digest.`);
+  }
+  return value;
+};
+
+const requireNullableDigest = (value: unknown, label: string): string | null => (
+  value === null ? null : requireDigest(value, label)
+);
+
+const normalizeScope = (value: unknown, label: string): InvestigationScope => {
+  const scope = requireRecord(value, label);
+  if (!hasExactKeys(scope, ['organizationId', 'siteId', 'equipmentId', 'deviceId'])) {
+    fail(`${label} has unsupported fields.`);
+  }
+  return {
+    organizationId: requireString(scope.organizationId, `${label}.organizationId`),
+    siteId: requireNullableString(scope.siteId, `${label}.siteId`),
+    equipmentId: requireNullableString(scope.equipmentId, `${label}.equipmentId`),
+    deviceId: requireNullableString(scope.deviceId, `${label}.deviceId`),
+  };
+};
+
+const normalizeStringIds = (
+  value: unknown,
+  label: string,
+  minimumLength: number,
+): readonly string[] => {
+  if (!Array.isArray(value) || value.length < minimumLength || value.length > maxReferenceIds) {
+    fail(`${label} must contain between ${minimumLength} and ${maxReferenceIds} identities.`);
+  }
+  const identities = value.map((identity, index) => (
+    requireString(identity, `${label}[${index}]`)
+  ));
+  if (new Set(identities).size !== identities.length) fail(`${label} must be unique.`);
+  return identities;
+};
+
+const normalizeQuality = (value: unknown, label: string): EvidenceQuality => {
+  const quality = requireRecord(value, label);
+  if (!hasExactKeys(quality, ['classification', 'valid', 'suspect', 'invalid'])) {
+    fail(`${label} has unsupported fields.`);
+  }
+  if (quality.classification !== 'GOOD'
+    && quality.classification !== 'UNCERTAIN'
+    && quality.classification !== 'BAD'
+    && quality.classification !== 'STALE') {
+    fail(`${label}.classification is unsupported.`);
+  }
+  return {
+    classification: quality.classification,
+    valid: requireCount(quality.valid, `${label}.valid`),
+    suspect: requireCount(quality.suspect, `${label}.suspect`),
+    invalid: requireCount(quality.invalid, `${label}.invalid`),
+  };
+};
+
+const normalizeWatermark = (value: unknown, label: string): EvidenceWatermark => {
+  const watermark = requireRecord(value, label);
+  if (!hasExactKeys(watermark, ['data', 'aggregate'])) fail(`${label} has unsupported fields.`);
+  return {
+    data: requireNullableString(watermark.data, `${label}.data`),
+    aggregate: requireNullableString(watermark.aggregate, `${label}.aggregate`),
+  };
+};
+
+const normalizeEvidenceSource = (value: unknown, index: number): EvidenceSourceReference => {
+  const label = `sources[${index}]`;
+  const source = requireRecord(value, label);
+  if (!hasExactKeys(source, [
+    'owner',
+    'scope',
+    'requestId',
+    'registryRevision',
+    'datasetRevision',
+    'watermark',
+    'partial',
+    'quality',
+    'capturedAt',
+    'evaluatedAt',
+    'provenanceDigest',
+  ])) fail(`${label} has unsupported fields.`);
+  if (source.owner !== 'registry' && source.owner !== 'telemetry-query-service') {
+    fail(`${label}.owner is unsupported.`);
+  }
+  const registryRevision = requireNullableString(
+    source.registryRevision,
+    `${label}.registryRevision`,
+  );
+  const datasetRevision = requireNullableString(
+    source.datasetRevision,
+    `${label}.datasetRevision`,
+  );
+  if (source.owner === 'registry' && registryRevision === null) {
+    fail(`${label} requires Registry Revision.`);
+  }
+  if (source.owner === 'telemetry-query-service' && datasetRevision === null) {
+    fail(`${label} requires Dataset Revision.`);
+  }
+  const watermark = normalizeWatermark(source.watermark, `${label}.watermark`);
+  if (source.owner === 'telemetry-query-service'
+    && watermark.data === null
+    && watermark.aggregate === null) {
+    fail(`${label} requires a data or aggregate Watermark.`);
+  }
+  if (typeof source.partial !== 'boolean') fail(`${label}.partial must be boolean.`);
+  const capturedAt = requireTimestamp(source.capturedAt, `${label}.capturedAt`);
+  const evaluatedAt = requireTimestamp(source.evaluatedAt, `${label}.evaluatedAt`);
+  if (evaluatedAt < capturedAt) fail(`${label}.evaluatedAt cannot precede capturedAt.`);
+  return {
+    owner: source.owner,
+    scope: normalizeScope(source.scope, `${label}.scope`),
+    requestId: requireString(source.requestId, `${label}.requestId`),
+    registryRevision,
+    datasetRevision,
+    watermark,
+    partial: source.partial,
+    quality: normalizeQuality(source.quality, `${label}.quality`),
+    capturedAt,
+    evaluatedAt,
+    provenanceDigest: requireDigest(source.provenanceDigest, `${label}.provenanceDigest`),
+  };
+};
+
+const normalizeSources = (value: unknown): readonly EvidenceSourceReference[] => {
+  if (!Array.isArray(value) || value.length === 0 || value.length > maxEvidenceSources) {
+    fail(`sources must contain between 1 and ${maxEvidenceSources} references.`);
+  }
+  const sources = value.map(normalizeEvidenceSource);
+  const requestIdentities = sources.map(({ owner, requestId }) => `${owner}:${requestId}`);
+  if (new Set(requestIdentities).size !== requestIdentities.length) {
+    fail('Evidence source request identities must be unique per Owner.');
+  }
+  return sources;
+};
+
+const normalizeBase = <TRecordType extends InvestigationBusinessRecordType>(
+  record: Record<string, unknown>,
+  expectedType: TRecordType,
+): {
+  readonly schemaVersion: 1;
+  readonly recordType: TRecordType;
+  readonly id: string;
+  readonly investigationId: string;
+  readonly recordedAt: number;
+} => {
+  if (record.schemaVersion !== 1 || record.recordType !== expectedType) {
+    fail(`Business record must use ${expectedType} schema version 1.`);
+  }
+  return {
+    schemaVersion: 1,
+    recordType: expectedType,
+    id: requireString(record.id, 'record.id'),
+    investigationId: requireString(record.investigationId, 'record.investigationId'),
+    recordedAt: requireTimestamp(record.recordedAt, 'record.recordedAt'),
+  };
+};
+
+const normalizeEvidence = (record: Record<string, unknown>): EvidenceRecord => {
+  if (!hasExactKeys(record, [
+    'schemaVersion',
+    'recordType',
+    'id',
+    'investigationId',
+    'recordedAt',
+    'evidenceKind',
+    'classification',
+    'statement',
+    'analysisReferenceDigest',
+    'sources',
+  ])) fail('Evidence record has unsupported fields.');
+  if (record.evidenceKind !== 'SITE_ENERGY_SERIES_READY'
+    && record.evidenceKind !== 'SITE_ENERGY_PERIOD_COMPARISON') {
+    fail('Evidence kind is unsupported.');
+  }
+  if (record.classification !== 'FACT' && record.classification !== 'ALGORITHM_RESULT') {
+    fail('Evidence classification is unsupported.');
+  }
+  const analysisReferenceDigest = requireNullableDigest(
+    record.analysisReferenceDigest,
+    'analysisReferenceDigest',
+  );
+  if (record.classification === 'ALGORITHM_RESULT' && analysisReferenceDigest === null) {
+    fail('Algorithm-result Evidence requires an Analysis Reference digest.');
+  }
+  return {
+    ...normalizeBase(record, 'EVIDENCE'),
+    evidenceKind: record.evidenceKind,
+    classification: record.classification,
+    statement: requireString(record.statement, 'statement', maxStatementLength),
+    analysisReferenceDigest,
+    sources: normalizeSources(record.sources),
+  };
+};
+
+const normalizeAnalysisReference = (record: Record<string, unknown>): AnalysisReferenceRecord => {
+  if (!hasExactKeys(record, [
+    'schemaVersion',
+    'recordType',
+    'id',
+    'investigationId',
+    'recordedAt',
+    'analysisKind',
+    'authority',
+    'algorithmVersion',
+    'policyVersion',
+    'inputEvidenceIds',
+    'parameterDigest',
+    'resultDigest',
+    'executedAt',
+    'outcome',
+  ])) fail('Analysis Reference record has unsupported fields.');
+  if (record.analysisKind !== 'SITE_NIGHT_ENERGY_COMPARISON') {
+    fail('Analysis kind is unsupported.');
+  }
+  if (record.authority !== 'DETERMINISTIC_ALGORITHM') {
+    fail('Analysis authority must be deterministic algorithm execution.');
+  }
+  if (record.outcome !== 'SUPPORTED_SITE_FINDING' && record.outcome !== 'UNABLE_TO_CONCLUDE') {
+    fail('Analysis outcome is unsupported.');
+  }
+  const base = normalizeBase(record, 'ANALYSIS_REFERENCE');
+  const executedAt = requireTimestamp(record.executedAt, 'executedAt');
+  if (executedAt > base.recordedAt) fail('executedAt cannot be after recordedAt.');
+  return {
+    ...base,
+    analysisKind: record.analysisKind,
+    authority: record.authority,
+    algorithmVersion: requireString(record.algorithmVersion, 'algorithmVersion', 128),
+    policyVersion: requireString(record.policyVersion, 'policyVersion', 128),
+    inputEvidenceIds: normalizeStringIds(record.inputEvidenceIds, 'inputEvidenceIds', 1),
+    parameterDigest: requireDigest(record.parameterDigest, 'parameterDigest'),
+    resultDigest: requireDigest(record.resultDigest, 'resultDigest'),
+    executedAt,
+    outcome: record.outcome,
+  };
+};
+
+const normalizeFindingConclusion = (value: unknown): FindingConclusion => {
+  const conclusion = requireRecord(value, 'conclusion');
+  if (conclusion.status === 'SUPPORTED') {
+    if (!hasExactKeys(conclusion, ['status', 'scope', 'organizationId', 'siteId'])
+      || conclusion.scope !== 'SITE') {
+      fail('Supported Findings are limited to Site Scope in schema version 1.');
+    }
+    return {
+      status: 'SUPPORTED',
+      scope: 'SITE',
+      organizationId: requireString(conclusion.organizationId, 'conclusion.organizationId'),
+      siteId: requireString(conclusion.siteId, 'conclusion.siteId'),
+    };
+  }
+  if (conclusion.status !== 'UNABLE_TO_CONCLUDE'
+    || !hasExactKeys(conclusion, ['status', 'scope', 'reasonCode', 'detail'])
+    || (conclusion.scope !== 'SITE' && conclusion.scope !== 'EQUIPMENT')) {
+    fail('Finding conclusion is unsupported.');
+  }
+  return {
+    status: 'UNABLE_TO_CONCLUDE',
+    scope: conclusion.scope,
+    reasonCode: requireString(conclusion.reasonCode, 'conclusion.reasonCode', 128),
+    detail: requireString(conclusion.detail, 'conclusion.detail', maxStatementLength),
+  };
+};
+
+const normalizeFinding = (record: Record<string, unknown>): FindingRecord => {
+  if (!hasExactKeys(record, [
+    'schemaVersion',
+    'recordType',
+    'id',
+    'investigationId',
+    'recordedAt',
+    'findingKind',
+    'classification',
+    'statement',
+    'evidenceIds',
+    'analysisReferenceIds',
+    'conclusion',
+  ])) fail('Finding record has unsupported fields.');
+  if (record.findingKind !== 'SITE_NIGHT_ENERGY_INCREASE'
+    && record.findingKind !== 'SITE_NIGHT_ENERGY_WITHIN_THRESHOLD'
+    && record.findingKind !== 'UNABLE_TO_CONCLUDE') {
+    fail('Finding kind is unsupported.');
+  }
+  if (record.classification !== 'INFERENCE') fail('Finding classification is unsupported.');
+  const evidenceIds = normalizeStringIds(record.evidenceIds, 'evidenceIds', 0);
+  const analysisReferenceIds = normalizeStringIds(
+    record.analysisReferenceIds,
+    'analysisReferenceIds',
+    0,
+  );
+  if (evidenceIds.length === 0 && analysisReferenceIds.length === 0) {
+    fail('Finding requires supporting Evidence or Analysis References.');
+  }
+  const conclusion = normalizeFindingConclusion(record.conclusion);
+  if (conclusion.status === 'SUPPORTED'
+    && (evidenceIds.length === 0 || analysisReferenceIds.length === 0)) {
+    fail('Supported Site Findings require Evidence and Analysis References.');
+  }
+  if ((record.findingKind === 'UNABLE_TO_CONCLUDE')
+    !== (conclusion.status === 'UNABLE_TO_CONCLUDE')) {
+    fail('Finding kind and conclusion status must agree.');
+  }
+  return {
+    ...normalizeBase(record, 'FINDING'),
+    findingKind: record.findingKind,
+    classification: 'INFERENCE',
+    statement: requireString(record.statement, 'statement', maxStatementLength),
+    evidenceIds,
+    analysisReferenceIds,
+    conclusion,
+  };
+};
+
+const expectedOwner = (logicalTool: LogicalTool): ToolOwner => {
+  if (logicalTool === 'registry.getSite' || logicalTool === 'registry.listSiteEquipment') {
+    return 'registry';
+  }
+  if (logicalTool === 'commands.getCapabilities') return 'command-service';
+  return 'telemetry-query-service';
+};
+
+const normalizeMetadata = (value: unknown): Readonly<Record<string, ToolReceiptMetadataValue>> => {
+  const metadata = requireRecord(value, 'metadata');
+  const entries = Object.entries(metadata);
+  if (entries.length > maxMetadataEntries) {
+    fail(`metadata may contain at most ${maxMetadataEntries} entries.`);
+  }
+  const normalized: Record<string, ToolReceiptMetadataValue> = {};
+  for (const [key, rawValue] of entries) {
+    if (!metadataKeyPattern.test(key) || forbiddenMetadataKeyPattern.test(key)) {
+      fail(`metadata key ${key} is invalid or sensitive.`);
+    }
+    if (rawValue === null || typeof rawValue === 'boolean') {
+      normalized[key] = rawValue;
+    } else if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
+      normalized[key] = rawValue;
+    } else if (typeof rawValue === 'string' && rawValue.length <= maxMetadataStringLength) {
+      normalized[key] = rawValue;
+    } else {
+      fail(`metadata value for ${key} is unsupported or unbounded.`);
+    }
+  }
+  return normalized;
+};
+
+const normalizeToolReceipt = (record: Record<string, unknown>): ToolExecutionReceiptRecord => {
+  if (!hasExactKeys(record, [
+    'schemaVersion',
+    'recordType',
+    'id',
+    'investigationId',
+    'recordedAt',
+    'logicalTool',
+    'owner',
+    'requestId',
+    'attemptId',
+    'runId',
+    'stepId',
+    'startedAt',
+    'completedAt',
+    'resultCategory',
+    'metadata',
+  ])) fail('Tool Execution Receipt has unsupported fields.');
+  if (record.logicalTool !== 'registry.getSite'
+    && record.logicalTool !== 'registry.listSiteEquipment'
+    && record.logicalTool !== 'telemetry.getCurrentSnapshot'
+    && record.logicalTool !== 'analytics.getEnergySeries'
+    && record.logicalTool !== 'commands.getCapabilities') {
+    fail('Logical Tool is unsupported.');
+  }
+  const owner = record.owner;
+  if (owner !== 'registry'
+    && owner !== 'telemetry-query-service'
+    && owner !== 'command-service') {
+    fail('Tool Execution Receipt Owner is unsupported.');
+  }
+  if (owner !== expectedOwner(record.logicalTool)) {
+    fail('Tool Execution Receipt Owner does not match the logical Tool.');
+  }
+  if (record.resultCategory !== 'SUCCEEDED'
+    && record.resultCategory !== 'REJECTED'
+    && record.resultCategory !== 'TIMED_OUT'
+    && record.resultCategory !== 'FAILED') {
+    fail('Tool Execution result category is unsupported.');
+  }
+  const base = normalizeBase(record, 'TOOL_EXECUTION_RECEIPT');
+  const startedAt = requireTimestamp(record.startedAt, 'startedAt');
+  const completedAt = requireTimestamp(record.completedAt, 'completedAt');
+  if (completedAt < startedAt) fail('completedAt cannot precede startedAt.');
+  if (base.recordedAt < completedAt) fail('recordedAt cannot precede completedAt.');
+  return {
+    ...base,
+    logicalTool: record.logicalTool,
+    owner,
+    requestId: requireString(record.requestId, 'requestId'),
+    attemptId: requireString(record.attemptId, 'attemptId'),
+    runId: requireString(record.runId, 'runId'),
+    stepId: requireString(record.stepId, 'stepId') as StepIdentity,
+    startedAt,
+    completedAt,
+    resultCategory: record.resultCategory,
+    metadata: normalizeMetadata(record.metadata),
+  };
+};
+
+const assertBoundedRecord = (record: InvestigationBusinessRecord): InvestigationBusinessRecord => {
+  const serialized = JSON.stringify(record);
+  if (Buffer.byteLength(serialized, 'utf8') > maxRecordBytes) {
+    fail(`Business record exceeds the ${maxRecordBytes}-byte limit.`);
+  }
+  return record;
+};
+
+export const createInvestigationBusinessRecord = (
+  value: unknown,
+): InvestigationBusinessRecord => {
+  const record = requireRecord(value, 'Business record');
+  let normalized: InvestigationBusinessRecord;
+  if (record.recordType === 'EVIDENCE') normalized = normalizeEvidence(record);
+  else if (record.recordType === 'ANALYSIS_REFERENCE') {
+    normalized = normalizeAnalysisReference(record);
+  } else if (record.recordType === 'FINDING') normalized = normalizeFinding(record);
+  else if (record.recordType === 'TOOL_EXECUTION_RECEIPT') {
+    normalized = normalizeToolReceipt(record);
+  } else {
+    fail('Business record type is unsupported.');
+  }
+  return assertBoundedRecord(normalized);
+};
+
+const canonicalizeJson = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonicalizeJson);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+      .map(([key, entry]) => [key, canonicalizeJson(entry)]),
+  );
+};
+
+export const businessRecordsEqual = (
+  left: InvestigationBusinessRecord,
+  right: InvestigationBusinessRecord,
+): boolean => JSON.stringify(canonicalizeJson(left)) === JSON.stringify(canonicalizeJson(right));

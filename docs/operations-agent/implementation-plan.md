@@ -2,9 +2,9 @@
 
 Status: accepted plan
 
-Date: 2026-07-30
+Date: 2026-07-31
 
-Tracking: GitHub Map #118; Maps 0–2 are merged through PR #149. Map 3 Runtime recovery (#151), authoritative Owner READ adapters (#152) and deterministic night-energy comparison/readiness validation (#153) are complete; typed business-record persistence (#154) is the current frontier.
+Tracking: GitHub Map #118; Maps 0–2 are merged through PR #149. Map 3 Runtime recovery (#151), authoritative Owner READ adapters (#152), deterministic night-energy comparison/readiness validation (#153) and typed business-record persistence (#154) are complete; Platform Gateway exposure (#155) is the current frontier.
 
 This plan turns ADR 0009, ADR 0010 and the accepted modular architecture into an implementation sequence. It deliberately starts with deletion of the retired Python Agent, then establishes an executable benchmark before introducing the TypeScript runtime.
 
@@ -209,8 +209,17 @@ Planned tracer bullets:
 1. Add the explicit LangGraph.js runtime adapter and PostgreSQL checkpoint recovery — completed by #151.
 2. Add typed Registry and Energy Analytics READ adapters — completed by #152.
 3. Implement deterministic period comparison and readiness validation — completed by #153.
-4. Persist Evidence, Analysis references, Findings and Tool Execution Receipts idempotently.
-5. Expose the Investigation application contract through Platform Gateway.
+4. Persist Evidence, Analysis references, Findings and Tool Execution Receipts idempotently — completed by #154.
+5. Expose the Investigation application contract through Platform Gateway — current frontier #155.
+
+Current persistence state after #154:
+
+- schema-versioned Evidence, Analysis Reference, Finding and Tool Execution Receipt records are validated before commit;
+- the typed record, Investigation Revision, committed effect, Outbox event and Audit record commit in one Operations transaction;
+- exact retries return the persisted record without advancing Revision or duplicating journals;
+- stale Revision, stale Lease, conflicting record identity and duplicate Tool request/attempt identities fail closed;
+- raw Energy Series points, arbitrary payloads, sensitive Receipt metadata and supported Equipment attribution are rejected;
+- process restart and Checkpoint deletion preserve authoritative business records.
 
 Completion gate:
 

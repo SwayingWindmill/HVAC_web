@@ -80,7 +80,9 @@ test('an Investigation starts, pauses, and resumes the same Agent Run with a new
     runs: [],
     committedEffects: [],
     evidenceIds: [],
+    analysisReferenceIds: [],
     findingIds: [],
+    toolReceiptIds: [],
     proposedActionIds: [],
   });
   assert.equal(started.view().status, 'RUNNING');
@@ -208,6 +210,17 @@ test('idempotency deduplicates one effect while Step Identity can own multiple e
     stepId,
     idempotencyKey: createIdempotencyKey('effect-evidence-duplicate-record'),
     kind: 'EVIDENCE',
+    recordId: 'evidence-001',
+  }), 'EFFECT_RECORD_ALREADY_COMMITTED');
+
+  assertDomainError(() => second.investigation.commitEffect({
+    runId: 'run-001',
+    leaseId: 'lease-001',
+    at: 1_350,
+    expectedRevision: 3,
+    stepId,
+    idempotencyKey: createIdempotencyKey('effect-cross-kind-duplicate-record'),
+    kind: 'PROPOSED_ACTION',
     recordId: 'evidence-001',
   }), 'EFFECT_RECORD_ALREADY_COMMITTED');
 });

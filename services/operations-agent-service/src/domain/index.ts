@@ -29,6 +29,30 @@ export {
   type StepIdentity,
 } from './internal/operations-investigation.js';
 
+export {
+  InvestigationBusinessRecordError,
+  businessRecordsEqual,
+  createInvestigationBusinessRecord,
+  type AnalysisReferenceRecord,
+  type EvidenceClassification,
+  type EvidenceOwner,
+  type EvidenceQuality,
+  type EvidenceQualityClassification,
+  type EvidenceRecord,
+  type EvidenceSourceReference,
+  type EvidenceWatermark,
+  type FindingConclusion,
+  type FindingRecord,
+  type InvestigationBusinessRecord,
+  type InvestigationBusinessRecordErrorCode,
+  type InvestigationBusinessRecordType,
+  type LogicalTool,
+  type ToolExecutionReceiptRecord,
+  type ToolExecutionResultCategory,
+  type ToolOwner,
+  type ToolReceiptMetadataValue,
+} from './internal/business-records.js';
+
 export const domainModule = Object.freeze({
   name: 'domain',
   layer: 'domain',

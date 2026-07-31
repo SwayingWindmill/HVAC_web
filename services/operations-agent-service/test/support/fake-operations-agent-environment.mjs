@@ -5,6 +5,7 @@ const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, mill
 
 class FakeBusinessStore {
   records = new Map();
+  businessRecords = new Map();
   outboxEvents = [];
   auditRecords = [];
   saveCalls = [];
@@ -12,6 +13,12 @@ class FakeBusinessStore {
 
   repository = {
     get: async (investigationId) => this.records.get(investigationId) ?? null,
+  };
+
+  businessRecordRepository = {
+    get: async (investigationId, recordId) => (
+      this.businessRecords.get(`${investigationId}:${recordId}`) ?? null
+    ),
   };
 
   transaction = {
@@ -27,7 +34,15 @@ class FakeBusinessStore {
       this.outboxEvents.push(event);
       this.auditRecords.push(audit);
     },
-    save: async ({ investigation, expectedRevision, expectedAuthority, effect, event, audit }) => {
+    save: async ({
+      investigation,
+      expectedRevision,
+      expectedAuthority,
+      effect,
+      record,
+      event,
+      audit,
+    }) => {
       if (this.nextConflict !== null) {
         const conflict = this.nextConflict;
         this.nextConflict = null;
@@ -54,6 +69,9 @@ class FakeBusinessStore {
         }
       }
 
+      if (record !== undefined) {
+        this.businessRecords.set(`${view.id}:${record.id}`, record);
+      }
       this.saveCalls.push({
         investigationId: view.id,
         expectedRevision,
@@ -225,6 +243,7 @@ export const createFakeOperationsAgentEnvironment = ({
 
   const coordinator = createInvestigationCoordinator({
     investigationRepository: businessStore.repository,
+    businessRecordRepository: businessStore.businessRecordRepository,
     investigationTransaction: businessStore.transaction,
     authorizationDecisionReader: {
       async authorizeScope() {

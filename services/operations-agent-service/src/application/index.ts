@@ -1,6 +1,19 @@
 import { domainModule } from '../domain/index.js';
 
 export {
+  InvestigationBusinessRecordError,
+  createInvestigationBusinessRecord,
+  type AnalysisReferenceRecord,
+  type EvidenceRecord,
+  type EvidenceSourceReference,
+  type FindingRecord,
+  type InvestigationBusinessRecord,
+  type InvestigationBusinessRecordErrorCode,
+  type InvestigationBusinessRecordType,
+  type ToolExecutionReceiptRecord,
+} from '../domain/index.js';
+
+export {
   InvestigationCoordinatorError,
   createInvestigationCoordinator,
   type AdvanceInvestigationCommand,
@@ -68,6 +81,7 @@ export {
   type GeneratedIdentityKind,
   type IdGenerator,
   type InvestigationAuthorizationAction,
+  type InvestigationBusinessRecordRepository,
   type InvestigationCoordinatorPorts,
   type InvestigationRepository,
   type InvestigationRepositoryConflictCode,

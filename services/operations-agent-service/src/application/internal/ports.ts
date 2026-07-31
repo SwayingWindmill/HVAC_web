@@ -2,6 +2,7 @@ import type {
   CommittedEffectView,
   InvestigationRevision,
   InvestigationScope,
+  InvestigationBusinessRecord,
   OperationsInvestigation,
   OperationsInvestigationView,
 } from '../../domain/index.js';
@@ -10,7 +11,9 @@ export type InvestigationRepositoryConflictCode =
   | 'IDENTITY_CONFLICT'
   | 'REVISION_CONFLICT'
   | 'LEASE_CONFLICT'
-  | 'DUPLICATE_EFFECT';
+  | 'DUPLICATE_EFFECT'
+  | 'DUPLICATE_RECORD'
+  | 'RECORD_REFERENCE_CONFLICT';
 
 export class InvestigationRepositoryConflictError extends Error {
   readonly code: InvestigationRepositoryConflictCode;
@@ -24,6 +27,13 @@ export class InvestigationRepositoryConflictError extends Error {
 
 export interface InvestigationRepository {
   get(investigationId: string): Promise<OperationsInvestigation | null>;
+}
+
+export interface InvestigationBusinessRecordRepository {
+  get(
+    investigationId: string,
+    recordId: string,
+  ): Promise<InvestigationBusinessRecord | null>;
 }
 
 export interface AuthorizationDecision {
@@ -216,6 +226,7 @@ export interface InvestigationTransaction {
     readonly expectedRevision: InvestigationRevision;
     readonly expectedAuthority?: InvestigationWriteAuthority;
     readonly effect?: CommittedEffectView;
+    readonly record?: InvestigationBusinessRecord;
     readonly event: ApplicationEvent;
     readonly audit: AuditRecord;
   }): Promise<void>;
@@ -310,6 +321,7 @@ export interface IdGenerator {
 
 export interface InvestigationCoordinatorPorts {
   readonly investigationRepository: InvestigationRepository;
+  readonly businessRecordRepository: InvestigationBusinessRecordRepository;
   readonly investigationTransaction: InvestigationTransaction;
   readonly authorizationDecisionReader: AuthorizationDecisionReader;
   readonly agentExecutionRuntime: AgentExecutionRuntime;
