@@ -56,7 +56,7 @@ test('no explicit Site resolves zero, one, and many authorized Site states', () 
 
   const one = routing.resolveSiteEntry([siteA], '/sites');
   assert.equal(one.state, 'REDIRECT');
-  assert.equal(one.target, `/sites/${siteAId}/assets`);
+  assert.equal(one.target, `/sites/${siteAId}/dashboard`);
 
   const many = routing.resolveSiteEntry([siteA, siteB], '/sites');
   assert.equal(many.state, 'CHOOSE_SITE');
@@ -64,7 +64,7 @@ test('no explicit Site resolves zero, one, and many authorized Site states', () 
 });
 
 test('an explicit authorized UUIDv7 Site wins and creates a validated SiteContext', () => {
-  for (const leaf of ['assets', 'energy', 'commands', 'bigscreen']) {
+  for (const leaf of ['dashboard', 'assets', 'energy', 'commands', 'bigscreen']) {
     const decision = routing.resolveSiteRouting(`/sites/${siteBId}/${leaf}`, [siteA, siteB], ['site.read']);
     assert.equal(decision.state, 'READY');
     assert.equal(decision.route, leaf);
@@ -76,7 +76,7 @@ test('an explicit authorized UUIDv7 Site wins and creates a validated SiteContex
 test('a bare authorized Site path redirects to the default Site route', () => {
   const decision = routing.resolveSiteRouting(`/sites/${siteAId}`, [siteA]);
   assert.equal(decision.state, 'REDIRECT');
-  assert.equal(decision.target, `/sites/${siteAId}/assets`);
+  assert.equal(decision.target, `/sites/${siteAId}/dashboard`);
 });
 
 test('invalid, invisible, and local building aliases share one safe state', () => {

@@ -4,12 +4,15 @@ import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createTCPServer } from 'node:net';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import WebSocket from 'ws';
 import { RMS_REQUIRED_BROWSER_SCENARIOS } from './rms-certification-evidence-lib.mjs';
 
 const root = resolve(process.cwd());
+const require = createRequire(import.meta.url);
+const viteEntry = resolve(dirname(require.resolve('vite/package.json')), 'bin/vite.js');
 const profileDir = join(tmpdir(), `rms-03-shell-browser-${process.pid}`);
 const evidencePath = join(root, 'out', 'rms-web-certification', 'browser-evidence.json');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
@@ -19,6 +22,8 @@ const stateChangeHeader = ['x', 'csrf', 'token'].join('-');
 const actingOrganizationId = '01900000-0000-7000-8000-000000000001';
 const siteAId = '01900000-0001-7000-8000-000000000001';
 const siteBId = '01900000-0002-7000-8000-000000000002';
+const siteBOnlineDeviceId = '01900000-0201-7000-8000-000000000001';
+const siteBOfflineDeviceId = '01900000-0202-7000-8000-000000000002';
 const invisibleSiteId = '01900000-0003-7000-8000-000000000003';
 const traceId = '0'.repeat(32);
 const browserEvidence = {
@@ -92,6 +97,26 @@ function registrySite(id, code, displayName) {
 
 const siteA = registrySite(siteAId, 'TOKYO-1', 'Tokyo Plant');
 const siteB = registrySite(siteBId, 'OSAKA-1', 'Osaka Plant');
+
+function registryDevice(id, siteId, code, displayName) {
+  return {
+    id,
+    owningOrganizationId: actingOrganizationId,
+    siteId,
+    code,
+    displayName,
+    deviceType: 'GENERIC',
+    status: 'ACTIVE',
+    revision: 1,
+    createdAt: '2026-07-28T00:00:00.000Z',
+    updatedAt: '2026-07-28T00:00:00.000Z',
+  };
+}
+
+const siteBDevices = [
+  registryDevice(siteBOnlineDeviceId, siteBId, 'AHU-01', 'Osaka AHU 01'),
+  registryDevice(siteBOfflineDeviceId, siteBId, 'PUMP-02', 'Osaka Pump 02'),
+];
 
 function principalResponse(state) {
   const expiresAt = new Date(Date.now() + state.sessionLifetimeMs).toISOString();
@@ -226,6 +251,74 @@ function createGatewayFixture() {
       return;
     }
 
+    if (request.method === 'GET' && url.pathname.startsWith('/api/v1/sites/') && url.pathname.endsWith('/devices')) {
+      const requestedSiteId = url.pathname.split('/')[4];
+      if (requestedSiteId !== siteAId && requestedSiteId !== siteBId) {
+        writeJson(response, 404, problem(404, 'RESOURCE_NOT_FOUND', 'The requested Site is not visible.', false));
+        return;
+      }
+      writeJson(response, 200, {
+        items: requestedSiteId === siteBId ? siteBDevices.map((device) => ({ ...device })) : [],
+        nextCursor: null,
+        hasMore: false,
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/v1/telemetry/observation-snapshots:batchGet') {
+      if (request.headers[stateChangeHeader] !== fixtureCapability) {
+        writeJson(response, 403, problem(403, 'CSRF_VALIDATION_FAILED', 'The state-change capability was invalid.', false));
+        return;
+      }
+      const chunks = [];
+      request.on('data', (chunk) => chunks.push(chunk));
+      request.on('end', () => {
+        const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        const evaluatedAt = new Date().toISOString();
+        writeJson(response, 200, {
+          schemaVersion: 1,
+          items: payload.requests.map((target) => {
+            const device = siteBDevices.find((candidate) => candidate.id === target.deviceId);
+            if (!device) {
+              return {
+                requestId: target.requestId,
+                deviceId: target.deviceId,
+                status: 'ERROR',
+                problem: problem(404, 'RESOURCE_NOT_FOUND', 'The requested Device is not visible.', false),
+              };
+            }
+            const offline = device.id === siteBOfflineDeviceId;
+            return {
+              requestId: target.requestId,
+              deviceId: device.id,
+              status: 'OK',
+              snapshot: {
+                schemaVersion: 1,
+                deviceId: device.id,
+                owningOrganizationId: actingOrganizationId,
+                siteId: device.siteId,
+                businessRevision: 4,
+                evaluatedAt,
+                evaluationAvailability: 'AVAILABLE',
+                availabilityReasons: [],
+                presence: {
+                  applicability: 'APPLICABLE',
+                  currentState: offline ? 'OFFLINE' : 'ONLINE',
+                  lastSeenAt: offline ? '2026-07-31T01:00:00.000Z' : evaluatedAt,
+                  policyRevision: 3,
+                  lastKnown: null,
+                },
+                telemetryReadiness: 'NOT_APPLICABLE',
+                displayState: offline ? 'OFFLINE' : 'ONLINE',
+                values: [],
+              },
+            };
+          }),
+        });
+      });
+      return;
+    }
+
     if (request.method === 'POST' && url.pathname === '/api/v1/analytics/energy-series') {
       if (request.headers[stateChangeHeader] !== fixtureCapability) {
         writeJson(response, 403, problem(403, 'CSRF_VALIDATION_FAILED', 'The state-change capability was invalid.', false));
@@ -242,14 +335,14 @@ function createGatewayFixture() {
           return;
         }
         state.energyQueries.push(query);
-        if (query.organizationId !== actingOrganizationId || query.siteId !== siteBId) {
+        if (query.organizationId !== actingOrganizationId || ![siteAId, siteBId].includes(query.siteId)) {
           writeJson(response, 403, problem(403, 'ENERGY_SCOPE_FORBIDDEN', 'The requested energy scope was not authorized.', false));
           return;
         }
         const periodStart = new Date(Date.parse(query.to) - 24 * 60 * 60 * 1000).toISOString();
         writeJson(response, 200, {
           schemaVersion: 1,
-          points: [{ periodStart, periodEnd: query.to, energyKWh: 42.5 }],
+          points: [{ periodStart, periodEnd: query.to, energyKWh: query.siteId === siteBId ? 42.5 : 31.5 }],
           metadata: {
             requestedGranularity: query.granularity,
             actualGranularity: query.granularity,
@@ -464,7 +557,7 @@ try {
   });
 
   viteProcess = spawn(process.execPath, [
-    resolve(root, 'node_modules/vite/bin/vite.js'),
+    viteEntry,
     'apps/hvac-web',
     '--config', 'apps/hvac-web/vite.real.config.ts',
     '--host', '127.0.0.1',
@@ -622,7 +715,7 @@ try {
 
   fixture.state.platformMode = 'ok';
   fixture.state.roles = ['descriptive-role-only'];
-  fixture.state.capabilities = ['site.list', 'site.read'];
+  fixture.state.capabilities = ['site.list', 'site.read', 'device.list'];
   fixture.state.sitesMode = 'unavailable';
   await navigate(cdpClient, `${webURL}/`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'UNAVAILABLE' && Boolean(document.querySelector('[data-testid="real-site-discovery-unavailable"]'))`, 'Site discovery unavailable');
@@ -661,7 +754,7 @@ try {
   assert(siteChooser.pathname === '/', 'multiple Sites silently changed the URL scope');
   assert(siteChooser.choices.length === 2, `expected two chooser entries, got ${JSON.stringify(siteChooser.choices)}`);
   assert(siteChooser.choices[0].id === siteAId && siteChooser.choices[1].id === siteBId, 'chooser did not preserve Registry Site identities');
-  assert(siteChooser.choices.every((choice) => choice.href === `/sites/${choice.id}/assets`), 'chooser generated a non-Site-scoped target');
+  assert(siteChooser.choices.every((choice) => choice.href === `/sites/${choice.id}/dashboard`), 'chooser generated a non-Site-scoped target');
   assert(siteChooser.choices.every((choice) => choice.name.length > 0), 'chooser links lacked accessible names');
   assert(siteChooser.siteRoute === false, 'chooser mounted a Site business surface before selection');
   assert(siteChooser.focusedHeading, 'Site chooser did not restore focus to its heading');
@@ -673,6 +766,7 @@ try {
     siteId: document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-site-id'),
     siteName: document.querySelector('[data-testid="real-site-route-assets"]')?.textContent?.includes('Osaka Plant') ?? false,
     organization: document.querySelector('[data-testid="real-site-route-assets"]')?.textContent?.includes('${actingOrganizationId}') ?? false,
+    dashboard: document.querySelector('[data-feature-id="site-dashboard"]')?.getAttribute('href'),
     assets: document.querySelector('[data-feature-id="site-assets"]')?.getAttribute('href'),
     energy: document.querySelector('[data-feature-id="site-energy"]')?.getAttribute('href'),
     commands: document.querySelector('[data-feature-id="site-commands"]')?.getAttribute('href'),
@@ -687,6 +781,7 @@ try {
     focusedHeading: document.activeElement === document.querySelector('[data-testid="real-site-route-assets"] h1'),
   })`);
   assert(explicitSite.siteId === siteBId && explicitSite.siteName && explicitSite.organization, 'validated SiteContext was not rendered from Registry route data');
+  assert(explicitSite.dashboard === `/sites/${siteBId}/dashboard`, 'Dashboard navigation escaped validated Site scope');
   assert(explicitSite.assets === `/sites/${siteBId}/assets`, 'Assets navigation escaped validated Site scope');
   assert(explicitSite.energy === `/sites/${siteBId}/energy`, 'Energy navigation escaped validated Site scope');
   assert(explicitSite.commands === `/sites/${siteBId}/commands`, 'Commands navigation escaped validated Site scope');
@@ -697,6 +792,26 @@ try {
   assert(explicitSite.realtimeText.includes('Idle — not subscribed') && !/global|platform health/i.test(explicitSite.realtimeText), 'realtime header overstated subscription health');
   assert(!/Demo switch|role switch|Alarm|Copilot|Mock AI/i.test(explicitSite.headerText), 'trusted header mounted a Mock global affordance');
   assert(explicitSite.focusedHeading, 'validated Site route did not restore focus to its heading');
+
+  await navigate(cdpClient, `${webURL}/sites/${siteBId}/dashboard`);
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-site-route-dashboard"]')?.getAttribute('data-business-state') === 'ATTENTION'`,
+    'authoritative Site Dashboard',
+  );
+  const dashboard = await evaluate(cdpClient, `({
+    pathname: location.pathname,
+    siteId: document.querySelector('[data-testid="real-site-route-dashboard"]')?.getAttribute('data-site-id'),
+    state: document.querySelector('[data-testid="real-site-route-dashboard"]')?.getAttribute('data-business-state'),
+    text: document.querySelector('[data-testid="real-site-route-dashboard"]')?.textContent ?? '',
+    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-site-route-dashboard"] h1'),
+  })`);
+  assert(dashboard.pathname === `/sites/${siteBId}/dashboard` && dashboard.siteId === siteBId, 'Dashboard was not bound to the validated Site URL');
+  assert(dashboard.state === 'ATTENTION', 'Dashboard did not expose the authoritative attention state');
+  assert(dashboard.text.includes('Osaka Pump 02') && dashboard.text.includes('离线'), 'Dashboard omitted the offline Device evidence');
+  assert(dashboard.text.includes('42.5 kWh'), 'Dashboard omitted the authoritative Energy aggregate');
+  assert(dashboard.text.includes('不会在浏览器中推导或补造'), 'Dashboard did not disclose its authority boundary');
+  assert(dashboard.focusedHeading, 'Dashboard did not restore focus after lazy loading');
 
   await navigate(cdpClient, `${webURL}/sites/${siteBId}/energy`);
   await waitForCondition(
@@ -802,16 +917,16 @@ try {
   assert(purgingState.realtimeState === 'idle' && !purgingState.realtimeSite, 'old Site realtime status survived protected purge');
   assert(purgingState.focusedHeading, 'purging state did not restore focus to its heading');
   assert(purgingState.newSiteRendered === false, 'new Site rendered before old Site purge completed');
-  await waitForCondition(cdpClient, `location.pathname === '/sites/${siteBId}/assets' && document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-site-id') === '${siteBId}'`, 'new Site after protected purge');
+  await waitForCondition(cdpClient, `location.pathname === '/sites/${siteBId}/dashboard' && document.querySelector('[data-testid="real-site-route-dashboard"]')?.getAttribute('data-site-id') === '${siteBId}'`, 'new Site after protected purge');
   const completedSiteTransition = await evaluate(cdpClient, `({
     oldRoute: Boolean(document.querySelector('[data-site-route][data-site-id="${siteAId}"]')),
     oldDraft: Boolean(document.querySelector('[data-testid="real-command-draft-value"]')),
     oldSubscription: Boolean(document.querySelector('[data-subscription-site="${siteAId}"]')),
-    newSite: document.querySelector('[data-testid="real-site-route-assets"]')?.textContent?.includes('Osaka Plant') ?? false,
+    newSite: document.querySelector('[data-testid="real-site-route-dashboard"]')?.textContent?.includes('Osaka Plant') ?? false,
     newScope: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-scope-site'),
     headerSite: document.querySelector('[data-testid="real-shell-site"]')?.textContent,
     realtimeSite: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-site'),
-    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-site-route-assets"] h1'),
+    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-site-route-dashboard"] h1'),
   })`);
   assert(!completedSiteTransition.oldRoute && !completedSiteTransition.oldDraft && !completedSiteTransition.oldSubscription, 'old Site protected values survived the transition');
   assert(completedSiteTransition.newSite && completedSiteTransition.newScope === siteBId, 'new Site did not establish a fresh protected scope');
@@ -833,7 +948,7 @@ try {
   assert(!forbiddenSite.text.includes(siteAId) && !forbiddenSite.text.includes('Tokyo Plant') && !forbiddenSite.text.includes('site.read'), 'Site Access Denied leaked protected metadata');
 
   fixture.state.roles = ['descriptive-role-only'];
-  fixture.state.capabilities = ['site.list', 'site.read'];
+  fixture.state.capabilities = ['site.list', 'site.read', 'device.list'];
   for (const invalidPath of [
     '/sites/b1/assets',
     '/sites/b2/commands',
@@ -858,14 +973,14 @@ try {
 
   fixture.state.sites = [siteA];
   await navigate(cdpClient, `${webURL}/`);
-  await waitForCondition(cdpClient, `location.pathname === '/sites/${siteAId}/assets' && document.querySelector('main')?.getAttribute('data-route-state') === 'READY'`, 'sole authorized Site auto-entry');
+  await waitForCondition(cdpClient, `location.pathname === '/sites/${siteAId}/dashboard' && document.querySelector('[data-testid="real-site-route-dashboard"]')?.getAttribute('data-business-state') === 'EMPTY'`, 'sole authorized Site auto-entry');
   const soleSite = await evaluate(cdpClient, `({
     pathname: location.pathname,
-    siteId: document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-site-id'),
-    empty: document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-business-state'),
+    siteId: document.querySelector('[data-testid="real-site-route-dashboard"]')?.getAttribute('data-site-id'),
+    empty: document.querySelector('[data-testid="real-site-route-dashboard"]')?.getAttribute('data-business-state'),
     unavailableText: document.body.innerText.includes('服务当前不可用'),
   })`);
-  assert(soleSite.pathname === `/sites/${siteAId}/assets` && soleSite.siteId === siteAId, 'sole Site did not enter an explicit UUIDv7 URL');
+  assert(soleSite.pathname === `/sites/${siteAId}/dashboard` && soleSite.siteId === siteAId, 'sole Site did not enter an explicit UUIDv7 URL');
   assert(soleSite.empty === 'EMPTY' && soleSite.unavailableText === false, 'empty Site business state was confused with unavailability');
   await assertStorageEmpty(cdpClient, 'Site scope matrix');
   recordScenario('one-site');
@@ -987,12 +1102,16 @@ try {
     assert(request.headers.origin === webURL, `logout Origin was not the Real application origin: ${request.headers.origin}`);
   }
   const energyRequests = fixture.state.requests.filter((entry) => entry.method === 'POST' && entry.path === '/api/v1/analytics/energy-series');
-  assert(energyRequests.length === 1, `expected one Energy query, got ${energyRequests.length}`);
-  assert(energyRequests[0].headers[stateChangeHeader] === fixtureCapability, 'Energy query did not send the in-memory state-change capability');
-  assert(energyRequests[0].headers.origin === webURL, `Energy query Origin was not the Real application origin: ${energyRequests[0].headers.origin}`);
-  assert(fixture.state.energyQueries.length === 1, `expected one parsed Energy query, got ${fixture.state.energyQueries.length}`);
-  assert(fixture.state.energyQueries[0].organizationId === actingOrganizationId, 'Energy query did not use the authenticated Organization');
-  assert(fixture.state.energyQueries[0].siteId === siteBId, 'Energy query did not use the validated Site');
+  assert(energyRequests.length >= 3, `expected Dashboard and Energy queries, got ${energyRequests.length}`);
+  for (const request of energyRequests) {
+    assert(request.headers[stateChangeHeader] === fixtureCapability, 'Energy query did not send the in-memory state-change capability');
+    assert(request.headers.origin === webURL, `Energy query Origin was not the Real application origin: ${request.headers.origin}`);
+  }
+  assert(fixture.state.energyQueries.length === energyRequests.length, 'not every Energy request was parsed by the fixture');
+  assert(fixture.state.energyQueries.every((query) => query.organizationId === actingOrganizationId), 'Energy query did not use the authenticated Organization');
+  assert(fixture.state.energyQueries.every((query) => [siteAId, siteBId].includes(query.siteId)), 'Energy query escaped the authorized Site set');
+  assert(fixture.state.energyQueries.some((query) => query.siteId === siteAId), 'sole-Site Dashboard did not query the validated Site');
+  assert(fixture.state.energyQueries.some((query) => query.siteId === siteBId), 'Site B Dashboard or Energy route did not query the validated Site');
   const forbiddenHeaders = fixture.state.requests.filter((entry) =>
     ['x-site-id', 'x-organization-id', 'x-role', 'x-admin', 'x-scope'].some((name) => name in entry.headers));
   assert(forbiddenHeaders.length === 0, `browser sent forbidden authorization headers: ${JSON.stringify(forbiddenHeaders)}`);

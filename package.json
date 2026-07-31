@@ -42,6 +42,7 @@
     "rms:feature-routes:test": "node --test scripts/test-rms-authenticated-shell-policy.mjs scripts/test-rms-feature-route-policy.mjs scripts/test-rms-shell-runtime.mjs",
     "rms:site-scope:test": "node --test scripts/test-rms-authenticated-shell-policy.mjs scripts/test-rms-feature-route-policy.mjs scripts/test-rms-site-routing.mjs scripts/test-rms-shell-runtime.mjs",
     "web:energy:test": "node --experimental-strip-types --test scripts/test-web-energy-analytics.mjs",
+    "real-dashboard:test": "node --test scripts/test-rms-site-routing.mjs scripts/test-real-dashboard-projection.mjs",
     "rms:protected-scope:test": "node --test scripts/test-rms-authenticated-shell-policy.mjs scripts/test-rms-feature-route-policy.mjs scripts/test-rms-site-routing.mjs scripts/test-rms-protected-scope.mjs scripts/test-rms-shell-runtime.mjs",
     "rms:trusted-shell:test": "node --test --test-concurrency=1 scripts/test-rms-authenticated-shell-policy.mjs scripts/test-rms-feature-route-policy.mjs scripts/test-rms-site-routing.mjs scripts/test-rms-protected-scope.mjs scripts/test-rms-realtime-status.mjs scripts/test-rms-shell-runtime.mjs",
     "rms:web-routing": "npm run contracts:check && npm run rms:trusted-shell:test && npm run lint && npm run rms:real:graph && npm run build:real && npm run build:demo && npm run rms:real:bundle",

@@ -9,6 +9,11 @@ import type { RealRuntimeConfig } from './runtime-config';
 import type { ShellFailureView, ShellSnapshot } from './shell-runtime';
 import { siteRoute, type SiteContext, type SiteRoutingDecision } from './site-routing';
 
+const RealDashboard = lazy(async () => {
+  const module = await import('./RealDashboard');
+  return { default: module.RealDashboard };
+});
+
 const EnergyAnalytics = lazy(async () => {
   const module = await import('./EnergyAnalytics');
   return { default: module.EnergyAnalytics };
@@ -27,7 +32,7 @@ function SiteChooserList({ sites }: { sites: readonly Readonly<Site>[] }) {
     <ul className="real-site-chooser-list" aria-label="Authorized Sites">
       {sites.map((site) => (
         <li key={site.id}>
-          <a href={siteRoute(site, 'assets')} data-site-id={site.id}>
+          <a href={siteRoute(site, 'dashboard')} data-site-id={site.id}>
             <strong>{site.displayName}</strong>
             <span>{site.code}</span>
             <small>{site.timezone}</small>
@@ -59,7 +64,7 @@ function SiteScopeSwitcher({
             data-site-switch-id={site.id}
             aria-current={site.id === currentSiteId ? 'page' : undefined}
             disabled={site.id === currentSiteId}
-            onClick={() => onNavigate(siteRoute(site, 'assets'))}
+            onClick={() => onNavigate(siteRoute(site, 'dashboard'))}
           >
             {site.displayName}
           </button>
@@ -193,12 +198,17 @@ function SiteRouteNotFoundSurface({ decision }: { decision: Extract<SiteRoutingD
       <p className="real-shell-eyebrow">REAL MODE · SITE 404</p>
       <FocusHeading>此 Site 页面不存在</FocusHeading>
       <p>URL Site 已通过 Registry 验证，但后续路径不属于当前 Real Build 的 Site 路由。</p>
-      <a className="real-shell-link-action" href={siteRoute(decision.context.site, 'assets')}>返回 Site Assets</a>
+      <a className="real-shell-link-action" href={siteRoute(decision.context.site, 'dashboard')}>返回 Site Dashboard</a>
     </section>
   );
 }
 
 const SITE_ROUTE_COPY = {
+  dashboard: {
+    eyebrow: 'REAL MODE · SITE DASHBOARD',
+    title: 'Dashboard',
+    detail: 'Dashboard 只汇总 Registry、当前遥测与 Energy Analytics 的权威事实。',
+  },
   assets: {
     eyebrow: 'REAL MODE · SITE ASSETS',
     title: 'Assets',
@@ -264,6 +274,25 @@ function ReadySiteSurface({
   snapshot: ShellSnapshot;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
+  if (decision.route === 'dashboard') {
+    return (
+      <section
+        className="real-route-surface real-route-surface--dashboard"
+        data-route-state="READY"
+        data-site-id={decision.context.site.id}
+        data-site-route="dashboard"
+      >
+        <Suspense fallback={(
+          <div className="real-shell-progress" role="status" aria-live="polite">
+            正在加载运行总览…
+          </div>
+        )}>
+          <RealDashboard site={decision.context.site} principal={snapshot.principal!} />
+        </Suspense>
+      </section>
+    );
+  }
+
   if (decision.route === 'energy') {
     return (
       <section
@@ -413,6 +442,7 @@ export function buildSiteNavigation(
 ): RealNavigationItem[] {
   if (!effectiveCapabilities.includes('site.read')) return [];
   return [
+    { id: 'site-dashboard', label: 'Dashboard', path: siteRoute(site, 'dashboard'), kind: 'link', degraded: false },
     { id: 'site-assets', label: 'Assets', path: siteRoute(site, 'assets'), kind: 'link', degraded: false },
     { id: 'site-energy', label: 'Energy', path: siteRoute(site, 'energy'), kind: 'link', degraded: false },
     { id: 'site-commands', label: 'Commands', path: siteRoute(site, 'commands'), kind: 'link', degraded: false },
