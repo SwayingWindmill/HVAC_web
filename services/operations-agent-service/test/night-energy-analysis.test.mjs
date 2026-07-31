@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { analyzeSiteNightEnergy } from '../dist/index.js';
+import { analyzeSiteNightEnergy, planSiteNightEnergyPeriods } from '../dist/index.js';
 
 const benchmarkScenario = JSON.parse(await readFile(
   new URL(
@@ -87,6 +87,21 @@ const assertUnableWith = (result, expectedCode) => {
   assert.equal('evidence' in result, false);
   assert.equal('comparison' in result, false);
 };
+
+test('period planning uses the same DST-aware boundaries as deterministic analysis', () => {
+  const plan = planSiteNightEnergyPeriods({
+    timezone: baseInput.site.timezone,
+    window: baseInput.window,
+    targetLocalDate: baseInput.targetLocalDate,
+    baselineLocalDate: baseInput.baselineLocalDate,
+  });
+  const result = analyzeSiteNightEnergy(baseInput);
+
+  assert.deepEqual(plan, {
+    targetPeriod: result.analysisReference.targetPeriod,
+    baselinePeriod: result.analysisReference.baselinePeriod,
+  });
+});
 
 test('complete benchmark data confirms a 24% Site increase without Equipment attribution', () => {
   const result = analyzeSiteNightEnergy(baseInput);

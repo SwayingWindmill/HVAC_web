@@ -80,6 +80,11 @@ export interface SiteNightEnergyPeriodReference {
   readonly expectedBuckets: number;
 }
 
+export interface SiteNightEnergyPeriodPlan {
+  readonly targetPeriod: SiteNightEnergyPeriodReference;
+  readonly baselinePeriod: SiteNightEnergyPeriodReference;
+}
+
 export interface SiteNightEnergyAnalysisReference {
   readonly algorithmVersion: 'site-night-energy-comparison/v1';
   readonly digest: string;
@@ -612,6 +617,27 @@ const periodReference = (period: ExpectedPeriod): SiteNightEnergyPeriodReference
   to: new Date(period.toMs).toISOString(),
   expectedBuckets: period.expectedBuckets,
 });
+
+export const planSiteNightEnergyPeriods = (input: {
+  readonly timezone: string;
+  readonly window: SiteNightEnergyWindow;
+  readonly targetLocalDate: string;
+  readonly baselineLocalDate: string;
+}): SiteNightEnergyPeriodPlan => {
+  const formatter = timezoneFormatter(input.timezone);
+  return {
+    targetPeriod: periodReference(createExpectedPeriod(
+      input.targetLocalDate,
+      input.window,
+      formatter,
+    )),
+    baselinePeriod: periodReference(createExpectedPeriod(
+      input.baselineLocalDate,
+      input.window,
+      formatter,
+    )),
+  };
+};
 
 const canonicalInstant = (value: string | undefined): string | null => {
   if (value === undefined) return null;

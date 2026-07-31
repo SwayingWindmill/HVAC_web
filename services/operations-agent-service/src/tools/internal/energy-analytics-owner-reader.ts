@@ -259,6 +259,7 @@ export const createEnergyAnalyticsOwnerReader = (
         path: '/internal/v1/analytics/energy-series',
         method: 'POST',
         headers: createOwnerHeaders(readInput.request.requestId, readInput.context, {
+          logicalTool: readInput.request.tool,
           includePolicyRevision: false,
           hasBody: true,
         }),

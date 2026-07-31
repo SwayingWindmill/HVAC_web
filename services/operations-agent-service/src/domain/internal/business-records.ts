@@ -46,7 +46,10 @@ interface InvestigationBusinessRecordBase {
 
 export interface EvidenceRecord extends InvestigationBusinessRecordBase {
   readonly recordType: 'EVIDENCE';
-  readonly evidenceKind: 'SITE_ENERGY_SERIES_READY' | 'SITE_ENERGY_PERIOD_COMPARISON';
+  readonly evidenceKind:
+    | 'SITE_ENERGY_SERIES_READY'
+    | 'SITE_ENERGY_SERIES_READINESS_ASSESSED'
+    | 'SITE_ENERGY_PERIOD_COMPARISON';
   readonly classification: EvidenceClassification;
   readonly statement: string;
   readonly analysisReferenceDigest: string | null;
@@ -371,6 +374,7 @@ const normalizeEvidence = (record: Record<string, unknown>): EvidenceRecord => {
     'sources',
   ])) fail('Evidence record has unsupported fields.');
   if (record.evidenceKind !== 'SITE_ENERGY_SERIES_READY'
+    && record.evidenceKind !== 'SITE_ENERGY_SERIES_READINESS_ASSESSED'
     && record.evidenceKind !== 'SITE_ENERGY_PERIOD_COMPARISON') {
     fail('Evidence kind is unsupported.');
   }

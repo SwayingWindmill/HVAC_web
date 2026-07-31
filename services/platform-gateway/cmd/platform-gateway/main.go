@@ -60,6 +60,11 @@ func main() {
 		logger.Error("gateway_analytics_config_invalid", "error_code", "ANALYTICS_CONFIG_INVALID")
 		os.Exit(1)
 	}
+	operationsConfig, err := loadOperationsConfig(workloadCertificate)
+	if err != nil {
+		logger.Error("gateway_operations_config_invalid", "error_code", "OPERATIONS_CONFIG_INVALID")
+		os.Exit(1)
+	}
 	serverTLSConfig, serverTLSEnabled, err := loadGatewayServerTLSConfig()
 	if err != nil {
 		logger.Error("gateway_server_tls_config_invalid", "error_code", "GATEWAY_SERVER_TLS_CONFIG_INVALID")
@@ -83,6 +88,7 @@ func main() {
 		Telemetry:     telemetryConfig,
 		Command:       commandConfig,
 		Analytics:     analyticsConfig,
+		Operations:    operationsConfig,
 		Observability: telemetry,
 		Build: platformapi.BuildInfo{
 			Service: "platform-gateway",
@@ -351,6 +357,42 @@ func loadAnalyticsConfig(certificate *tls.Certificate) (*gateway.AnalyticsConfig
 		Timeout:          8 * time.Second,
 		MaxResponseBytes: 8 << 20,
 		QueryHTTPClient:  &http.Client{Transport: workloadTransport(roots, certificate, envOr("TELEMETRY_QUERY_SERVER_NAME", "localhost"))},
+	}, nil
+}
+
+func loadOperationsConfig(certificate *tls.Certificate) (*gateway.OperationsAgentConfig, error) {
+	operationsURL := strings.TrimSpace(os.Getenv("OPERATIONS_AGENT_URL"))
+	if operationsURL == "" {
+		return nil, nil
+	}
+	parsed, err := url.Parse(operationsURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, errors.New("OPERATIONS_AGENT_URL must be an HTTPS origin without user info, path, query or fragment")
+	}
+	if certificate == nil {
+		return nil, errors.New("Operations Agent requires the authenticated Gateway workload certificate")
+	}
+	caPath := strings.TrimSpace(os.Getenv("OPERATIONS_AGENT_SERVER_CA"))
+	if caPath == "" {
+		return nil, errors.New("OPERATIONS_AGENT_SERVER_CA is required when OPERATIONS_AGENT_URL is configured")
+	}
+	roots, err := loadCertPool(caPath, "Operations Agent server CA")
+	if err != nil {
+		return nil, err
+	}
+	return &gateway.OperationsAgentConfig{
+		BaseURL:          strings.TrimRight(parsed.String(), "/"),
+		Audience:         envOr("OPERATIONS_AGENT_AUDIENCE", "operations-agent-service"),
+		WorkloadSPIFFEID: envOr("OPERATIONS_AGENT_SPIFFE_ID", "spiffe://hvac.local/operations-agent-service"),
+		Timeout:          8 * time.Second,
+		MaxRequestBytes:  8 << 10,
+		MaxResponseBytes: 1 << 20,
+		HTTPClient: &http.Client{Transport: workloadTransport(
+			roots,
+			certificate,
+			envOr("OPERATIONS_AGENT_SERVER_NAME", "localhost"),
+		)},
 	}, nil
 }
 

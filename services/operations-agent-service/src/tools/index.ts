@@ -11,6 +11,10 @@ export {
   type EnergySeriesResponseDto,
 } from './internal/energy-analytics-owner-reader.js';
 export {
+  createGatewayToolAuthorizationReader,
+  type GatewayToolAuthorizationReaderConfig,
+} from './internal/gateway-tool-authorization-reader.js';
+export {
   createRegistryOwnerReader,
   type RegistryEquipmentDto,
   type RegistryOwnerPayload,

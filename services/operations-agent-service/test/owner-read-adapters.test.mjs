@@ -4,6 +4,7 @@ import test from 'node:test';
 import { OwnerReadError } from '../dist/application/index.js';
 import {
   createEnergyAnalyticsOwnerReader,
+  createGatewayToolAuthorizationReader,
   createRegistryOwnerReader,
 } from '../dist/tools/index.js';
 
@@ -26,7 +27,11 @@ const context = Object.freeze({
   authorization: {
     decision: 'ALLOW',
     decisionId: 'decision-owner-read-001',
-    delegationGrant: 'delegation-grant-value',
+    delegationGrant: 'fallback-delegation-grant-value',
+    toolDelegationGrants: {
+      'registry.getSite': 'registry-site-grant-value',
+      'registry.listSiteEquipment': 'registry-equipment-grant-value',
+    },
     policyRevision: 'registry-policy-42',
     traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
   },
@@ -37,7 +42,10 @@ const energyContext = Object.freeze({
   authorization: {
     decision: 'ALLOW',
     decisionId: 'decision-owner-read-energy',
-    delegationGrant: 'energy-delegation-grant-value',
+    delegationGrant: 'fallback-energy-grant-value',
+    toolDelegationGrants: {
+      'analytics.getEnergySeries': 'energy-delegation-grant-value',
+    },
     traceparent: context.authorization.traceparent,
   },
 });
@@ -151,9 +159,10 @@ test('Registry reader exposes only Site and Site Equipment reads with authoritat
   });
 
   assert.equal(calls.length, 2);
+  assert.equal(calls[0].init.headers['X-Delegation-Grant'], 'registry-site-grant-value');
+  assert.equal(calls[1].init.headers['X-Delegation-Grant'], 'registry-equipment-grant-value');
   for (const call of calls) {
     assert.equal(call.init.method, 'GET');
-    assert.equal(call.init.headers['X-Delegation-Grant'], 'delegation-grant-value');
     assert.equal(call.init.headers['X-Route-Policy-Revision'], 'registry-policy-42');
     assert.equal(call.init.headers['X-Request-ID'].startsWith('read-'), true);
     assert.equal(call.init.headers.traceparent, context.authorization.traceparent);
@@ -325,4 +334,78 @@ test('Owner readers reject timeout, malformed JSON, missing authorization and cr
     () => invalidRequestEnergy.read({ request: energyRequest, context: energyContext }),
     'OWNER_REQUEST_INVALID',
   );
+});
+
+test('Gateway Tool authorization exchanges the service delegation for an exact Owner grant', async () => {
+  const calls = [];
+  const reader = createGatewayToolAuthorizationReader({
+    baseUrl: 'https://platform-gateway.internal',
+    fetchImplementation: async (url, init) => {
+      calls.push({ url: String(url), init });
+      return jsonResponse({
+        delegationGrant: 'exact-energy-owner-grant',
+        policyRevision: 'analytics-policy-7',
+      });
+    },
+  });
+  const authorizationContext = {
+    ...energyContext,
+    authorization: {
+      decision: 'ALLOW',
+      decisionId: 'operations-service-delegation',
+      delegationGrant: 'operations-service-grant',
+      traceparent: context.authorization.traceparent,
+    },
+  };
+
+  const grant = await reader.authorize({ request: energyRequest, context: authorizationContext });
+  assert.deepEqual(grant, {
+    delegationGrant: 'exact-energy-owner-grant',
+    policyRevision: 'analytics-policy-7',
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0].url,
+    'https://platform-gateway.internal/internal/v1/operations/tool-authorization',
+  );
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.headers['X-Delegation-Grant'], 'operations-service-grant');
+  assert.equal(calls[0].init.headers['X-Request-ID'], energyRequest.requestId);
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    investigationId: authorizationContext.investigationId,
+    runId: authorizationContext.runId,
+    request: energyRequest,
+  });
+});
+
+test('Gateway Tool authorization rejects incomplete context and malformed grant responses', async () => {
+  const reader = createGatewayToolAuthorizationReader({
+    baseUrl: 'https://platform-gateway.internal',
+    fetchImplementation: async () => jsonResponse({
+      delegationGrant: 'grant',
+      policyRevision: 'policy',
+      payload: { forbidden: true },
+    }),
+  });
+  await expectOwnerError(() => reader.authorize({
+    request: energyRequest,
+    context: {
+      ...energyContext,
+      authorization: {
+        decision: 'ALLOW',
+        decisionId: 'missing-service-grant',
+      },
+    },
+  }), 'OWNER_REQUEST_INVALID');
+  await expectOwnerError(() => reader.authorize({
+    request: energyRequest,
+    context: {
+      ...energyContext,
+      authorization: {
+        decision: 'ALLOW',
+        decisionId: 'service-grant-present',
+        delegationGrant: 'operations-service-grant',
+      },
+    },
+  }), 'OWNER_RESPONSE_INVALID');
 });

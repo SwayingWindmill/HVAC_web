@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 11,
+  "registryRevision": 12,
   "routes": [
     {
       "method": "GET",
@@ -607,6 +607,82 @@
       "method": "POST",
       "path": "/api/v1/analytics/energy-series",
       "owner": "telemetry-query-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "primary",
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/operations/investigations",
+      "owner": "operations-agent-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "primary",
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/operations/investigations/{investigationId}",
+      "owner": "operations-agent-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "primary",
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance",
+      "owner": "operations-agent-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "primary",
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel",
+      "owner": "operations-agent-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
       "activationStatus": "primary",

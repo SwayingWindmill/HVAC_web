@@ -130,14 +130,65 @@ func VerifyDelegation(publicKey crypto.PublicKey, token string) (DelegationClaim
 }
 
 func ValidateDelegation(claims DelegationClaims, now time.Time, executingService, audience, action, scope string) error {
+	return ValidateDelegationFromIssuer(
+		claims,
+		now,
+		executingService,
+		executingService,
+		audience,
+		action,
+		scope,
+	)
+}
+
+func ValidateDelegationFromIssuer(
+	claims DelegationClaims,
+	now time.Time,
+	issuer,
+	executingService,
+	audience,
+	action,
+	scope string,
+) error {
 	if len(claims.Scopes) != 1 {
 		return errors.New("delegation scope is invalid")
 	}
-	return ValidateDelegationAnyScope(claims, now, executingService, audience, action, []string{scope})
+	return ValidateDelegationFromIssuerAnyScope(
+		claims,
+		now,
+		issuer,
+		executingService,
+		audience,
+		action,
+		[]string{scope},
+	)
 }
 
 func ValidateDelegationAnyScope(claims DelegationClaims, now time.Time, executingService, audience, action string, acceptableScopes []string) error {
-	if claims.ExecutingService != executingService || claims.Issuer != executingService {
+	return ValidateDelegationFromIssuerAnyScope(
+		claims,
+		now,
+		executingService,
+		executingService,
+		audience,
+		action,
+		acceptableScopes,
+	)
+}
+
+func ValidateDelegationFromIssuerAnyScope(
+	claims DelegationClaims,
+	now time.Time,
+	issuer,
+	executingService,
+	audience,
+	action string,
+	acceptableScopes []string,
+) error {
+	if claims.Issuer != issuer {
+		return errors.New("delegation issuer is invalid")
+	}
+	if claims.ExecutingService != executingService {
 		return errors.New("delegation executing service is invalid")
 	}
 	if claims.Audience != audience {

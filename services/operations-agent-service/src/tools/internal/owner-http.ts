@@ -55,13 +55,16 @@ export const normalizeOwnerReaderHttpConfig = (
 
 const requireAuthorizationContext = (
   context: OwnerReadContext,
+  logicalTool: string,
   includePolicyRevision: boolean,
 ): {
   readonly delegationGrant: string;
   readonly policyRevision: string | undefined;
 } => {
   const { authorization } = context;
-  const delegationGrant = authorization.delegationGrant;
+  const delegationGrant = authorization.toolDelegationGrants?.[
+    logicalTool as keyof NonNullable<typeof authorization.toolDelegationGrants>
+  ] ?? authorization.delegationGrant;
   const policyRevision = authorization.policyRevision;
   const traceparent = authorization.traceparent;
   if (authorization.decision !== 'ALLOW'
@@ -86,9 +89,17 @@ const requireAuthorizationContext = (
 export const createOwnerHeaders = (
   requestId: string,
   context: OwnerReadContext,
-  options: { readonly includePolicyRevision: boolean; readonly hasBody: boolean },
+  options: {
+    readonly logicalTool: string;
+    readonly includePolicyRevision: boolean;
+    readonly hasBody: boolean;
+  },
 ): Record<string, string> => {
-  const authorization = requireAuthorizationContext(context, options.includePolicyRevision);
+  const authorization = requireAuthorizationContext(
+    context,
+    options.logicalTool,
+    options.includePolicyRevision,
+  );
   if (requestId.trim().length === 0) {
     throw new OwnerReadError('OWNER_REQUEST_INVALID', 'The Owner READ request identity is invalid.');
   }

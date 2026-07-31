@@ -31,6 +31,7 @@ const (
 	fixtureRegistryID           = "fixture-registry-identifier"
 	fixtureSubjectIssuer        = "https://issuer.example.test"
 	fixtureCoreAudience         = "platform-core-service"
+	fixtureOperationsPresenter  = "spiffe://hvac.local/operations-agent-service"
 	registryAuthorize           = "registry:authorize"
 	analyticsAuthorizeAction    = "analytics:authorize"
 	maximumTestDecisionBodySize = 70 << 10
@@ -169,6 +170,60 @@ func TestIAMIssuesOwnerOrganizationRegistryGrant(t *testing.T) {
 	if registryauth.ScopeAllows(claims, iam.S1FixtureOwnerBOrganizationID, iam.S1FixtureOwnerBSite1ID) {
 		t.Fatal("owner grant expanded into Owner B")
 	}
+}
+
+func TestIAMIssuesRegistryGrantForAllowedDelegatedPresenter(t *testing.T) {
+	harness := newIAMHarness(t)
+	claims := validIAMClaims(harness.now, "fixture-user", registryAuthorize)
+	payload, err := json.Marshal(registryauth.DecisionRequest{
+		ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID,
+		Action:               registryauth.ActionSiteRead,
+		GrantPresenter:       fixtureOperationsPresenter,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := harness.request(t, iam.RegistryReadDecisionPath, strings.NewReader(string(payload)), claims, harness.gatewaySigner)
+	recorder := httptest.NewRecorder()
+	harness.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response registryauth.DecisionResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	grant, err := registryauth.VerifyGrant(harness.iamSigner.Public(), response.DelegationGrant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.Presenter != fixtureOperationsPresenter {
+		t.Fatalf("grant presenter = %q", grant.Presenter)
+	}
+	if err := registryauth.ValidateGrant(grant, registryauth.GrantValidation{
+		Now:                   harness.now,
+		Issuer:                harness.iamSPIFFEID,
+		Presenter:             fixtureOperationsPresenter,
+		Audience:              fixtureCoreAudience,
+		Action:                registryauth.ActionSiteRead,
+		CurrentPolicyRevision: iam.S1FixturePolicyRevision,
+		IsRevoked:             func(string) (bool, error) { return false, nil },
+	}); err != nil {
+		t.Fatalf("delegated presenter grant invalid: %v", err)
+	}
+
+	payload, err = json.Marshal(registryauth.DecisionRequest{
+		ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID,
+		Action:               registryauth.ActionSiteRead,
+		GrantPresenter:       "spiffe://hvac.local/untrusted-service",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = harness.request(t, iam.RegistryReadDecisionPath, strings.NewReader(string(payload)), claims, harness.gatewaySigner)
+	recorder = httptest.NewRecorder()
+	harness.handler.ServeHTTP(recorder, request)
+	assertIAMProblem(t, recorder, http.StatusForbidden, "IAM_REGISTRY_GRANT_PRESENTER_REJECTED")
 }
 
 func TestIAMCrossOrganizationBindingIsSiteOnly(t *testing.T) {
@@ -483,15 +538,16 @@ func newIAMHarnessWithConfig(t *testing.T, mutate func(*iam.Config)) iamHarness 
 	}
 	var logs bytes.Buffer
 	config := iam.Config{
-		AllowedWorkloadSPIFFE: bundle.ClientSPIFFEID,
-		Audience:              "iam-service",
-		Now:                   func() time.Time { return now },
-		Logger:                slog.New(slog.NewJSONHandler(&logs, nil)),
-		AuthorizationStore:    iam.NewS1FixtureAuthorizationStore(fixtureSubjectIssuer),
-		RegistryGrantSigner:   iamSigner,
-		RegistryGrantIssuer:   bundle.ServerSPIFFEID,
-		RegistryGrantAudience: fixtureCoreAudience,
-		NewRegistryGrantID:    func() string { return fixtureRegistryID },
+		AllowedWorkloadSPIFFE:          bundle.ClientSPIFFEID,
+		Audience:                       "iam-service",
+		Now:                            func() time.Time { return now },
+		Logger:                         slog.New(slog.NewJSONHandler(&logs, nil)),
+		AuthorizationStore:             iam.NewS1FixtureAuthorizationStore(fixtureSubjectIssuer),
+		RegistryGrantSigner:            iamSigner,
+		RegistryGrantIssuer:            bundle.ServerSPIFFEID,
+		RegistryGrantAudience:          fixtureCoreAudience,
+		AllowedRegistryGrantPresenters: []string{fixtureOperationsPresenter},
+		NewRegistryGrantID:             func() string { return fixtureRegistryID },
 	}
 	if mutate != nil {
 		mutate(&config)

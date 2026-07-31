@@ -16,6 +16,7 @@ Telemetry Runtime
                     -> Cube Core
                         -> telemetry-query-service
                             -> Platform Gateway
+                            -> Operations Agent
 ```
 
 The Query Service reads no database directly. It calls Cube Core through an
@@ -35,8 +36,8 @@ The service:
 - rejects arbitrary Cube members, SQL, dimensions and measures;
 - validates UUIDv7 Organization/Site scope, IANA timezone, granularity, quality
   policy and a maximum 366-day query range;
-- requires a trusted Platform Gateway mTLS SPIFFE identity;
-- verifies a short-lived delegation grant bound to the complete query digest;
+- requires an allowlisted Platform Gateway or Operations Agent mTLS SPIFFE identity;
+- verifies a Gateway-issued short-lived delegation grant whose trusted issuer and actual executing workload are both explicit and whose Scope is bound to the complete query digest;
 - generates a separate 30-second Cube JWT with Organization/Site security
   context;
 - translates the product query to a fixed Cube `/load` query;
@@ -79,14 +80,16 @@ The browser never calls this service or Cube directly.
 
 ```text
 Browser -> Platform Gateway -> Telemetry Query Service -> Cube Core
+                       \\-> Operations Agent -> Telemetry Query Service -> Cube Core
 ```
 
 The service verifies:
 
-1. the caller's mTLS certificate and expected Gateway SPIFFE identity;
-2. a short-lived signed Delegation Grant;
-3. the fixed Energy Series action;
-4. the SHA-256 digest of the complete normalized product query.
+1. the caller's mTLS certificate against the Gateway/Operations Agent presenter allowlist;
+2. a short-lived Gateway-signed Delegation Grant;
+3. that the grant issuer is Gateway and `executingService` equals the actual mTLS presenter;
+4. the fixed Energy Series action;
+5. the SHA-256 digest of the complete normalized product query.
 
 It rejects caller-supplied identity or scope headers. Cube receives a second
 short-lived token and applies Organization/Site row-level access policy.
@@ -109,7 +112,9 @@ Optional variables:
 |---|---|
 | `QUERY_SERVICE_ADDR` | `127.0.0.1:18447` |
 | `QUERY_DIAGNOSTICS_ADDR` | `127.0.0.1:19088` |
+| `QUERY_DELEGATION_ISSUER_SPIFFE` | `spiffe://hvac.local/platform-gateway` |
 | `QUERY_ALLOWED_WORKLOAD_SPIFFE` | `spiffe://hvac.local/platform-gateway` |
+| `QUERY_OPERATIONS_AGENT_SPIFFE` | `spiffe://hvac.local/operations-agent-service` |
 | `QUERY_AUDIENCE` | `telemetry-query-service` |
 | `QUERY_CUBE_CA` | System trust store when omitted |
 
@@ -117,6 +122,7 @@ Optional variables:
 
 ```bash
 npm run test:analytics
+npm run test:analytics-gateway
 npm run build:telemetry-query
 ```
 

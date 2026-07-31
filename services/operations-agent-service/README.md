@@ -4,8 +4,9 @@ This package is the separately deployable TypeScript boundary for the Operations
 It contains the accepted modular-monolith boundary, Domain lifecycle model, public
 Investigation Coordinator application seam, deterministic night-energy analysis, typed
 business-record contracts, PostgreSQL persistence adapter, the first explicit LangGraph.js
-`AgentExecutionRuntime` adapter and authoritative Registry/Energy READ adapters. It does
-not yet connect a browser, Platform Gateway, live model provider or scheduler.
+`AgentExecutionRuntime` adapter, authoritative Registry/Energy READ adapters and the
+Site night-energy application/HTTP contract exposed through Platform Gateway. It does not
+yet connect the Operations Workspace UI, a live model provider or scheduler.
 
 The module direction is:
 
@@ -65,6 +66,17 @@ readers apply bounded response sizes and timeouts, map upstream failures to stab
 errors and keep unauthorized resources nondiscoverable. The boundary check rejects direct
 ClickHouse, Cube, ThingsBoard and Command API paths in Operations Agent tools.
 
+Platform Gateway owns the browser-facing Site Investigation routes and applies the BFF Session,
+Origin/CSRF, Site-visibility, request-size, timeout and per-Session rate boundaries. It signs a
+short-lived Site-scoped Operations service delegation for the internal Operations Agent HTTP
+contract. Immediately before each concrete Registry or Energy READ, the Operations Agent calls
+the Gateway's mTLS-only Tool Authorization route to exchange that service delegation for the
+exact Owner grant. IAM signs Registry grants directly for the Operations Agent presenter and
+keeps them non-transitive; Gateway signs Energy grants with Operations Agent as the explicit
+executingService and the normalized query digest as Scope. This exchange also applies during
+Checkpoint recovery replay. Browser headers, raw Energy points, Leases, Checkpoints and
+LangGraph state never cross the public Investigation contract.
+
 `analyzeSiteNightEnergy` consumes that shared versioned Energy Series contract plus a typed
 Registry Site Scope. It deterministically resolves local target and baseline night windows,
 including daylight-saving elapsed durations, and requires contiguous hourly buckets. Dataset
@@ -108,6 +120,8 @@ Run the package checks from the repository root:
 npm --prefix services/operations-agent-service run check
 npm --prefix services/operations-agent-service run test:acceptance
 npm run operations-agent-service:postgres
+npm run operations-agent:gateway:check
+npm run test:gateway
 
 OPERATIONS_AGENT_OPERATIONS_MIGRATOR_DATABASE_URL=... \
   npm --prefix services/operations-agent-service run migrate:operations

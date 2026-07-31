@@ -1,0 +1,206 @@
+openapi: 3.0.3
+info:
+  title: HVAC Operations Investigations Public API
+  version: 1.0.0
+  description: Platform Gateway contract for Site night-energy Operations Investigations.
+servers:
+  - url: https://api.example.invalid
+paths:
+  /api/v1/sites/{siteId}/operations/investigations:
+    post:
+      operationId: startSiteNightEnergyInvestigation
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmptyObject'
+      responses:
+        '201':
+          description: Investigation created and started.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteNightEnergyInvestigationView'
+        '404':
+          $ref: '#/components/responses/Nondiscoverable'
+  /api/v1/sites/{siteId}/operations/investigations/{investigationId}:
+    get:
+      operationId: getSiteNightEnergyInvestigation
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+        - $ref: '#/components/parameters/InvestigationId'
+      responses:
+        '200':
+          description: Authoritative Investigation snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteNightEnergyInvestigationView'
+        '404':
+          $ref: '#/components/responses/Nondiscoverable'
+  /api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance:
+    post:
+      operationId: advanceSiteNightEnergyInvestigation
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+        - $ref: '#/components/parameters/InvestigationId'
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmptyObject'
+      responses:
+        '200':
+          description: Advanced authoritative Investigation snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteNightEnergyInvestigationView'
+        '404':
+          $ref: '#/components/responses/Nondiscoverable'
+  /api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel:
+    post:
+      operationId: cancelSiteNightEnergyInvestigation
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+        - $ref: '#/components/parameters/InvestigationId'
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmptyObject'
+      responses:
+        '200':
+          description: Cancelled authoritative Investigation snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteNightEnergyInvestigationView'
+        '404':
+          $ref: '#/components/responses/Nondiscoverable'
+components:
+  parameters:
+    SiteId:
+      name: siteId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    InvestigationId:
+      name: investigationId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 256
+    CsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      schema:
+        type: string
+  responses:
+    Nondiscoverable:
+      description: Resource is absent or not visible to the caller.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    EmptyObject:
+      type: object
+      additionalProperties: false
+    InvestigationScope:
+      type: object
+      additionalProperties: false
+      required: [organizationId, siteId, equipmentId, deviceId]
+      properties:
+        organizationId: { type: string }
+        siteId: { type: string }
+        equipmentId: { type: string, nullable: true }
+        deviceId: { type: string, nullable: true }
+    BusinessRecord:
+      type: object
+      required: [schemaVersion, recordType, id, investigationId, recordedAt]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        recordType:
+          type: string
+          enum: [EVIDENCE, ANALYSIS_REFERENCE, FINDING, TOOL_EXECUTION_RECEIPT]
+        id: { type: string }
+        investigationId: { type: string }
+        recordedAt: { type: integer, format: int64 }
+      additionalProperties: true
+    SiteNightEnergyInvestigationView:
+      type: object
+      additionalProperties: false
+      required:
+        - schemaVersion
+        - id
+        - scope
+        - status
+        - revision
+        - createdAt
+        - activeRun
+        - outcome
+        - evidence
+        - analysisReferences
+        - findings
+        - toolReceipts
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        id: { type: string }
+        scope: { $ref: '#/components/schemas/InvestigationScope' }
+        status:
+          type: string
+          enum: [DRAFT, RUNNING, PAUSED, COMPLETED, FAILED, CANCELLED]
+        revision: { type: integer, minimum: 0 }
+        createdAt: { type: integer, format: int64 }
+        activeRun:
+          nullable: true
+          type: object
+          additionalProperties: false
+          required: [id, status, startedAt]
+          properties:
+            id: { type: string }
+            status: { type: string, enum: [ACTIVE, PAUSED] }
+            startedAt: { type: integer, format: int64 }
+        outcome:
+          type: string
+          nullable: true
+          enum: [SUPPORTED_SITE_FINDING, UNABLE_TO_CONCLUDE]
+        evidence:
+          type: array
+          maxItems: 32
+          items: { $ref: '#/components/schemas/BusinessRecord' }
+        analysisReferences:
+          type: array
+          maxItems: 32
+          items: { $ref: '#/components/schemas/BusinessRecord' }
+        findings:
+          type: array
+          maxItems: 32
+          items: { $ref: '#/components/schemas/BusinessRecord' }
+        toolReceipts:
+          type: array
+          maxItems: 64
+          items: { $ref: '#/components/schemas/BusinessRecord' }
+    Problem:
+      type: object
+      required: [type, title, status, code, detail]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }

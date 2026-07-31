@@ -152,7 +152,21 @@ func (h *handler) analyticsSession(writer http.ResponseWriter, request *http.Req
 }
 
 func (h *handler) authorizeAnalytics(ctx context.Context, publicRequest *http.Request, session bffSession, query analyticsmodel.EnergySeriesQuery) (string, *analyticsFailure) {
-	if h.identity == nil || h.analytics == nil || h.analytics.queryAudience == "" {
+	presenterSPIFFE := ""
+	if h.identity != nil {
+		presenterSPIFFE = h.identity.config.ExecutingWorkloadSPIFFE
+	}
+	return h.authorizeAnalyticsForPresenter(ctx, publicRequest, session, query, presenterSPIFFE)
+}
+
+func (h *handler) authorizeAnalyticsForPresenter(
+	ctx context.Context,
+	publicRequest *http.Request,
+	session bffSession,
+	query analyticsmodel.EnergySeriesQuery,
+	presenterSPIFFE string,
+) (string, *analyticsFailure) {
+	if h.identity == nil || h.analytics == nil || h.analytics.queryAudience == "" || strings.TrimSpace(presenterSPIFFE) == "" {
 		failure := analyticsUnavailable("Analytics authorization is not configured.")
 		return "", &failure
 	}
@@ -233,7 +247,7 @@ func (h *handler) authorizeAnalytics(ctx context.Context, publicRequest *http.Re
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
 		PrincipalID: result.Decision.PrincipalID,
 		DisplayName: session.Principal.DisplayName, Email: session.Principal.Email, Roles: append([]string(nil), session.Principal.Roles...),
-		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE, Audience: h.analytics.queryAudience,
+		ExecutingService: presenterSPIFFE, Audience: h.analytics.queryAudience,
 		ActingOrganizationID: session.ActingOrganizationID, Actions: []string{analyticsmodel.EnergySeriesAction}, Scopes: []string{scope},
 		PolicyRevision: result.Decision.PolicyRevision, SessionID: session.ID, IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	}

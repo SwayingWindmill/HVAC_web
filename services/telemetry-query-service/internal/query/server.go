@@ -22,28 +22,44 @@ const (
 )
 
 type ServerConfig struct {
-	Engine                 analytics.EnergySeriesEngine
-	DelegationPublicKey    crypto.PublicKey
-	AllowedPresenterSPIFFE string
-	Audience               string
-	Logger                 *slog.Logger
-	Observability          *observability.Runtime
-	Now                    func() time.Time
+	Engine                            analytics.EnergySeriesEngine
+	DelegationPublicKey               crypto.PublicKey
+	DelegationIssuerSPIFFE            string
+	AllowedPresenterSPIFFE            string
+	AdditionalAllowedPresenterSPIFFEs []string
+	Audience                          string
+	Logger                            *slog.Logger
+	Observability                     *observability.Runtime
+	Now                               func() time.Time
 }
 
 type handler struct {
-	engine                 analytics.EnergySeriesEngine
-	delegationPublicKey    crypto.PublicKey
-	allowedPresenterSPIFFE string
-	audience               string
-	logger                 *slog.Logger
-	observability          *observability.Runtime
-	now                    func() time.Time
+	engine                  analytics.EnergySeriesEngine
+	delegationPublicKey     crypto.PublicKey
+	delegationIssuerSPIFFE  string
+	allowedPresenterSPIFFEs map[string]struct{}
+	audience                string
+	logger                  *slog.Logger
+	observability           *observability.Runtime
+	now                     func() time.Time
 }
 
 func NewHandler(config ServerConfig) http.Handler {
-	if config.Engine == nil || config.DelegationPublicKey == nil || strings.TrimSpace(config.AllowedPresenterSPIFFE) == "" || strings.TrimSpace(config.Audience) == "" {
+	primaryPresenter := strings.TrimSpace(config.AllowedPresenterSPIFFE)
+	delegationIssuer := strings.TrimSpace(config.DelegationIssuerSPIFFE)
+	if delegationIssuer == "" {
+		delegationIssuer = primaryPresenter
+	}
+	if config.Engine == nil || config.DelegationPublicKey == nil || primaryPresenter == "" || delegationIssuer == "" || strings.TrimSpace(config.Audience) == "" {
 		panic("Telemetry Query server configuration is incomplete")
+	}
+	allowedPresenters := map[string]struct{}{primaryPresenter: {}}
+	for _, candidate := range config.AdditionalAllowedPresenterSPIFFEs {
+		presenter := strings.TrimSpace(candidate)
+		if presenter == "" {
+			panic("Telemetry Query allowed presenter is empty")
+		}
+		allowedPresenters[presenter] = struct{}{}
 	}
 	logger := config.Logger
 	if logger == nil {
@@ -58,13 +74,14 @@ func NewHandler(config ServerConfig) http.Handler {
 		now = time.Now
 	}
 	return &handler{
-		engine:                 config.Engine,
-		delegationPublicKey:    config.DelegationPublicKey,
-		allowedPresenterSPIFFE: config.AllowedPresenterSPIFFE,
-		audience:               config.Audience,
-		logger:                 logger,
-		observability:          telemetry,
-		now:                    now,
+		engine:                  config.Engine,
+		delegationPublicKey:     config.DelegationPublicKey,
+		delegationIssuerSPIFFE:  delegationIssuer,
+		allowedPresenterSPIFFEs: allowedPresenters,
+		audience:                config.Audience,
+		logger:                  logger,
+		observability:           telemetry,
+		now:                     now,
 	}
 }
 
@@ -122,7 +139,8 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	peerSPIFFE, ok := verifiedPeerSPIFFE(request)
-	if !ok || peerSPIFFE != server.allowedPresenterSPIFFE {
+	_, presenterAllowed := server.allowedPresenterSPIFFEs[peerSPIFFE]
+	if !ok || !presenterAllowed {
 		writeProblem(writer, http.StatusUnauthorized, "ANALYTICS_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.", false)
 		return
 	}
@@ -148,10 +166,11 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		writeProblem(writer, http.StatusUnauthorized, "ANALYTICS_DELEGATION_INVALID", "The analytics delegation grant is invalid.", false)
 		return
 	}
-	if claims.PrincipalID == "" || claims.ActingOrganizationID != query.OrganizationID || identitycontext.ValidateDelegation(
+	if claims.PrincipalID == "" || claims.ActingOrganizationID != query.OrganizationID || identitycontext.ValidateDelegationFromIssuer(
 		claims,
 		server.now(),
-		server.allowedPresenterSPIFFE,
+		server.delegationIssuerSPIFFE,
+		peerSPIFFE,
 		server.audience,
 		analyticsmodel.EnergySeriesAction,
 		scope,

@@ -41,6 +41,7 @@ export interface AuthorizationDecision {
   readonly decisionId: string;
   readonly reason?: string;
   readonly delegationGrant?: string;
+  readonly toolDelegationGrants?: Readonly<Partial<Record<ParallelReadRequest['tool'], string>>>;
   readonly policyRevision?: string;
   readonly traceparent?: string;
 }
@@ -286,6 +287,15 @@ export interface OwnerReadInput<TRequest extends ParallelReadRequest> {
   readonly context: OwnerReadContext;
 }
 
+export interface ToolAuthorizationGrant {
+  readonly delegationGrant: string;
+  readonly policyRevision?: string;
+}
+
+export interface ToolAuthorizationReader {
+  authorize(input: OwnerReadInput<ParallelReadRequest>): Promise<ToolAuthorizationGrant>;
+}
+
 export interface RegistryReader {
   read(input: OwnerReadInput<RegistryReadRequest>): Promise<OwnerReadResult>;
 }
@@ -329,6 +339,7 @@ export interface InvestigationCoordinatorPorts {
   readonly applicationOutbox: ApplicationOutbox;
   readonly auditRecorder: AuditRecorder;
   readonly budgetGuard: BudgetGuard;
+  readonly toolAuthorizationReader?: ToolAuthorizationReader;
   readonly ownerReaders: OwnerReaders;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;

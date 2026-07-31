@@ -447,17 +447,36 @@ export const createInvestigationCoordinator = (
     request: ParallelReadRequest,
     context: OwnerReadContext,
   ): Promise<OwnerReadResult> => {
+    const toolGrant = ports.toolAuthorizationReader === undefined
+      ? undefined
+      : await ports.toolAuthorizationReader.authorize({ request, context });
+    const authorizedContext: OwnerReadContext = toolGrant === undefined
+      ? context
+      : {
+        ...context,
+        authorization: {
+          ...context.authorization,
+          delegationGrant: toolGrant.delegationGrant,
+          toolDelegationGrants: {
+            ...context.authorization.toolDelegationGrants,
+            [request.tool]: toolGrant.delegationGrant,
+          },
+          ...(toolGrant.policyRevision === undefined
+            ? {}
+            : { policyRevision: toolGrant.policyRevision }),
+        },
+      };
     let result: OwnerReadResult;
     if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteEquipment') {
-      result = await ports.ownerReaders.registry.read({ request, context });
+      result = await ports.ownerReaders.registry.read({ request, context: authorizedContext });
     } else if (request.tool === 'telemetry.getCurrentSnapshot') {
-      result = await ports.ownerReaders.currentTelemetry.read({ request, context });
+      result = await ports.ownerReaders.currentTelemetry.read({ request, context: authorizedContext });
     } else if (request.tool === 'analytics.getEnergySeries') {
-      result = await ports.ownerReaders.energyAnalytics.read({ request, context });
+      result = await ports.ownerReaders.energyAnalytics.read({ request, context: authorizedContext });
     } else {
-      result = await ports.ownerReaders.commandCapabilities.read({ request, context });
+      result = await ports.ownerReaders.commandCapabilities.read({ request, context: authorizedContext });
     }
-    return validateOwnerResult(request, result, context.scope);
+    return validateOwnerResult(request, result, authorizedContext.scope);
   };
 
   return {

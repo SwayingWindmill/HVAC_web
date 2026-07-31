@@ -34,6 +34,7 @@ export {
 export {
   NightEnergyAnalysisError,
   analyzeSiteNightEnergy,
+  planSiteNightEnergyPeriods,
   type EquipmentAttributionRequiredNext,
   type NightEnergyAnalysisErrorCode,
   type NightEnergyEvidenceDraft,
@@ -50,6 +51,7 @@ export {
   type SiteNightEnergyAnalysisResult,
   type SiteNightEnergyComparison,
   type SiteNightEnergyFindingDraft,
+  type SiteNightEnergyPeriodPlan,
   type SiteNightEnergyPeriodReference,
   type SiteNightEnergyScope,
   type SiteNightEnergyWindow,
@@ -57,6 +59,17 @@ export {
   type UnableSiteNightEnergyAnalysis,
   type UnsupportedEquipmentAttribution,
 } from './internal/night-energy-analysis.js';
+
+export {
+  createSiteNightEnergyInvestigationCoordinator,
+  type SiteNightEnergyActiveRunView,
+  type SiteNightEnergyInvestigationCoordinator,
+  type SiteNightEnergyInvestigationCoordinatorPorts,
+  type SiteNightEnergyInvestigationPolicy,
+  type SiteNightEnergyInvestigationQuery,
+  type SiteNightEnergyInvestigationView,
+  type StartSiteNightEnergyInvestigationCommand,
+} from './internal/site-night-energy-investigation.js';
 
 export {
   InvestigationRepositoryConflictError,
@@ -100,6 +113,8 @@ export {
   type RuntimeCheckpointDraft,
   type RuntimePlanningResult,
   type RuntimeReadPlan,
+  type ToolAuthorizationGrant,
+  type ToolAuthorizationReader,
 } from './internal/ports.js';
 
 export const applicationModule = Object.freeze({

@@ -15,7 +15,7 @@ All routes are `GET` under `/internal/v1/registry`:
 - `/sites/{siteId}/devices`
 - `/devices/{deviceId}`
 
-The caller must present a verified client certificate whose single SPIFFE URI exactly matches `CORE_ALLOWED_WORKLOAD_SPIFFE`, normally `spiffe://hvac.local/platform-gateway`. Each request must also carry `X-Delegation-Grant`, signed by IAM for one concrete Registry action and audience `platform-core-service`.
+The caller must present a verified client certificate whose single SPIFFE URI matches the configured Gateway/Operations Agent presenter allowlist. Each request must also carry `X-Delegation-Grant`, signed directly by IAM for that exact mTLS presenter, one concrete Registry action and audience `platform-core-service`. Grants remain non-transitive; a Gateway-presenter grant cannot be replayed by Operations Agent.
 
 Before a database query, Core calls IAM's mTLS-only `/internal/v1/registry-read/grant-status` endpoint using its own workload identity. IAM returns only the current Registry policy revision and whether the grant `jti` is revoked. Core then rejects invalid signature, wrong issuer/presenter/audience/action, expired, excessive-lifetime, transitive, revoked, stale-policy and contradictory-scope grants.
 
@@ -51,6 +51,7 @@ Optional:
 - `CORE_DIAGNOSTICS_ADDR` (default `127.0.0.1:19084`)
 - `CORE_GRANT_ISSUER` (default IAM SPIFFE ID)
 - `CORE_ALLOWED_WORKLOAD_SPIFFE` (default Gateway SPIFFE ID)
+- `CORE_OPERATIONS_AGENT_SPIFFE` (default Operations Agent SPIFFE ID)
 - `CORE_AUDIENCE` (default `platform-core-service`)
 - `OTEL_EXPORTER_OTLP_ENDPOINT`
 

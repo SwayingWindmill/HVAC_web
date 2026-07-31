@@ -184,6 +184,7 @@ const readSite = async (
     path: `/internal/v1/registry/sites/${encodeURIComponent(requestedScope.siteId)}`,
     method: 'GET',
     headers: createOwnerHeaders(input.request.requestId, input.context, {
+      logicalTool: input.request.tool,
       includePolicyRevision: true,
       hasBody: false,
     }),
@@ -248,7 +249,7 @@ const readSiteEquipment = async (
       headers: createOwnerHeaders(
         page === 1 ? input.request.requestId : `${input.request.requestId}:page:${page}`,
         input.context,
-        { includePolicyRevision: true, hasBody: false },
+        { logicalTool: input.request.tool, includePolicyRevision: true, hasBody: false },
       ),
     });
     const collection = decodeCollection(payload);

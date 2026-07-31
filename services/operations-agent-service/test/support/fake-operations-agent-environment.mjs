@@ -166,9 +166,10 @@ const revisionForTool = (tool) => {
 };
 
 class FakeOwnerReaders {
-  constructor(scope, delayMs) {
+  constructor(scope, delayMs, resultFactory) {
     this.scope = scope;
     this.delayMs = delayMs;
+    this.resultFactory = resultFactory;
     this.activeReads = 0;
     this.maxConcurrentReads = 0;
     this.calls = [];
@@ -180,6 +181,9 @@ class FakeOwnerReaders {
     this.calls.push({ requestId: request.requestId, tool: request.tool });
     try {
       await wait(this.delayMs);
+      if (this.resultFactory !== undefined) {
+        return await this.resultFactory(request, this.scope);
+      }
       const equipmentId = 'equipmentId' in request.input ? request.input.equipmentId : null;
       return {
         requestId: request.requestId,
@@ -227,12 +231,13 @@ export const createFakeOperationsAgentEnvironment = ({
   initialTime = 10_000,
   leaseDurationMs = 10_000,
   ownerDelayMs = 15,
+  ownerResultFactory,
 }) => {
   let currentTime = initialTime;
   const businessStore = new FakeBusinessStore();
   const checkpointStore = new FakeCheckpointStore();
   const runtime = new ScriptedFakeRuntime(runtimeSteps);
-  const owners = new FakeOwnerReaders(scope, ownerDelayMs);
+  const owners = new FakeOwnerReaders(scope, ownerDelayMs, ownerResultFactory);
 
   const applicationOutbox = {
     append: async (event) => businessStore.outboxEvents.push(event),
@@ -241,7 +246,7 @@ export const createFakeOperationsAgentEnvironment = ({
     record: async (record) => businessStore.auditRecords.push(record),
   };
 
-  const coordinator = createInvestigationCoordinator({
+  const ports = {
     investigationRepository: businessStore.repository,
     businessRecordRepository: businessStore.businessRecordRepository,
     investigationTransaction: businessStore.transaction,
@@ -251,11 +256,15 @@ export const createFakeOperationsAgentEnvironment = ({
           decision: 'ALLOW',
           decisionId: 'fake-authorization-allow',
           delegationGrant: 'fake-delegation-grant',
+          toolDelegationGrants: {
+            'registry.getSite': 'fake-registry-site-grant',
+            'registry.listSiteEquipment': 'fake-registry-equipment-grant',
+            'analytics.getEnergySeries': 'fake-energy-grant',
+          },
           policyRevision: 'fake-policy-revision',
         };
       },
     },
-    agentExecutionRuntime: runtime,
     checkpointRepository: checkpointStore.repository,
     applicationOutbox,
     auditRecorder,
@@ -268,10 +277,18 @@ export const createFakeOperationsAgentEnvironment = ({
     clock: { now: () => currentTime },
     idGenerator: createIdentityGenerator(),
     leaseDurationMs,
+  };
+  const coordinator = createInvestigationCoordinator({
+    ...ports,
+    agentExecutionRuntime: runtime,
   });
 
   return Object.freeze({
     coordinator,
+    ports: {
+      ...ports,
+      createAgentExecutionRuntime: () => runtime,
+    },
     businessStore,
     checkpointStore,
     runtime,

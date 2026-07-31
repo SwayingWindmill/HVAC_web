@@ -63,10 +63,14 @@ func main() {
 		Handler: query.NewHandler(query.ServerConfig{
 			Engine:                 cubeClient,
 			DelegationPublicKey:    delegationPublicKey,
+			DelegationIssuerSPIFFE: envOr("QUERY_DELEGATION_ISSUER_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 			AllowedPresenterSPIFFE: envOr("QUERY_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
-			Audience:               envOr("QUERY_AUDIENCE", "telemetry-query-service"),
-			Logger:                 logger,
-			Observability:          telemetry,
+			AdditionalAllowedPresenterSPIFFEs: []string{
+				envOr("QUERY_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
+			},
+			Audience:      envOr("QUERY_AUDIENCE", "telemetry-query-service"),
+			Logger:        logger,
+			Observability: telemetry,
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,

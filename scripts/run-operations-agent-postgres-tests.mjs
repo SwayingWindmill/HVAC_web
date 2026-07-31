@@ -214,6 +214,7 @@ try {
     '--test-concurrency=1',
     'services/operations-agent-service/test/postgres-persistence.test.mjs',
     'services/operations-agent-service/test/postgres-langgraph-runtime.test.mjs',
+    'services/operations-agent-service/test/postgres-site-night-energy-investigation.test.mjs',
   ], {
     env: {
       ...process.env,
