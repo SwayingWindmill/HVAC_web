@@ -12,8 +12,6 @@ on:
       - "scripts/run-s2-telemetry-history-tests.mjs"
       - "scripts/lib/docker-pull-retry.mjs"
       - "scripts/run-isolated-go.mjs"
-      - "package.json"
-      - "package-lock.json"
       - "go.work"
       - "go.work.sum"
 

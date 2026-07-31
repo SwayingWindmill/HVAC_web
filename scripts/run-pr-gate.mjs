@@ -10,9 +10,11 @@ const argumentsMap = new Map(
 const gate = argumentsMap.get('--gate');
 const profiles = [...new Set((argumentsMap.get('--profiles') ?? '').split(',').map((value) => value.trim()).filter(Boolean))];
 const dryRun = argumentsMap.get('--dry-run') === 'true';
-const npmRun = (script) => process.platform === 'win32'
-  ? { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', `npm run --silent ${script}`], label: `npm run ${script}` }
-  : { command: 'npm', args: ['run', '--silent', script], label: `npm run ${script}` };
+const npmCommand = (args, label) => process.platform === 'win32'
+  ? { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', `npm ${args.join(' ')}`], label }
+  : { command: 'npm', args, label };
+const npmRun = (script) => npmCommand(['run', '--silent', script], `npm run ${script}`);
+const npmCi = (prefix) => npmCommand(['--prefix', prefix, 'ci'], `npm --prefix ${prefix} ci`);
 const nodeRun = (...args) => ({ command: process.execPath, args, label: `node ${args.join(' ')}` });
 
 const commandSets = {
@@ -40,6 +42,7 @@ const commandSets = {
     s2: [nodeRun('scripts/run-go.mjs', 'test', './libs/telemetryauth/...', './services/telemetry-runtime-service/...', './services/telemetry-shadow-comparator/...', './services/platform-gateway/...')],
     s3: [nodeRun('scripts/run-go.mjs', 'test', './libs/commandauth/...', './libs/commandmodel/...', './services/command-service/...', './services/command-dispatcher/...', './services/thingsboard-connector-control/...')],
     analytics: [npmRun('test:analytics'), npmRun('test:analytics-gateway')],
+    'operations-agent': [npmCi('services/operations-agent-service'), npmRun('operations-agent-service:check'), npmRun('operations-agent:benchmark:test')],
     pocs: [npmRun('pocs:components:check')],
   },
   integration: {
@@ -51,6 +54,7 @@ const commandSets = {
     's2-history': [npmRun('s2:history:integration')],
     s3: [npmRun('s3:postgres')],
     analytics: [npmRun('analytics:history:integration')],
+    'operations-agent': [npmCi('services/operations-agent-service'), npmRun('operations-agent-service:postgres')],
   },
   browser: {
     rms: [npmRun('rms:web-browser')],

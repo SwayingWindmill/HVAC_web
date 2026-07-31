@@ -15,7 +15,7 @@ const vitePackagePath = requireFromScript.resolve('vite/package.json');
 const viteBinPath = resolve(vitePackagePath, '../bin/vite.js');
 const profileDir = join(tmpdir(), `rms-02-principal-browser-${process.pid}`);
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-const instant = '2026-07-28T03:00:00.000Z';
+const instant = '2099-07-28T03:00:00.000Z';
 const actingOrganizationId = '01900000-0000-7000-8000-000000000001';
 const policyRevision = 'rms-policy:7';
 const capabilities = ['organization.list', 'site.read', 'device.read', 'telemetry.snapshot.read', 'telemetry.batch.read', 'telemetry.subscribe', 'telemetry.history.read'];
@@ -174,8 +174,10 @@ function createCdpClient(webSocketUrl) {
   return new Promise((resolveClient, rejectClient) => {
     const socket = new WebSocket(webSocketUrl);
     const pending = new Map();
+    const events = [];
     let nextId = 0;
     socket.addEventListener('open', () => resolveClient({
+      events,
       send(method, params = {}) {
         const id = ++nextId;
         socket.send(JSON.stringify({ id, method, params }));
@@ -186,7 +188,10 @@ function createCdpClient(webSocketUrl) {
     socket.addEventListener('error', (event) => rejectClient(new Error(`CDP socket error: ${String(event)}`)));
     socket.addEventListener('message', (event) => {
       const message = JSON.parse(String(event.data));
-      if (!message.id) return;
+      if (!message.id) {
+        events.push(message);
+        return;
+      }
       const command = pending.get(message.id);
       if (!command) return;
       pending.delete(message.id);
@@ -202,16 +207,28 @@ async function evaluate(client, expression) {
   return result.result.value;
 }
 
-async function waitForCondition(client, expression, label) {
-  for (let attempt = 0; attempt < 300; attempt += 1) {
+async function waitForCondition(client, expression, label, attempts = 300) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const value = await evaluate(client, expression);
       if (value) return value;
     } catch {}
     await pause(100);
   }
-  const diagnostic = await evaluate(client, `({ url: location.href, text: document.body?.innerText?.slice(0, 4000) ?? '' })`);
+  const diagnostic = await evaluate(client, `({
+    url: location.href,
+    readyState: document.readyState,
+    text: document.body?.innerText?.slice(0, 4000) ?? '',
+    html: document.body?.innerHTML?.slice(0, 4000) ?? '',
+    rootHtml: document.getElementById('root')?.innerHTML?.slice(0, 4000) ?? null,
+  })`);
+  diagnostic.events = client.events.slice(-30);
   throw new Error(`${label} did not become ready: ${JSON.stringify(diagnostic)}`);
+}
+
+async function navigate(client, url) {
+  const result = await client.send('Page.navigate', { url });
+  if (result.errorText) throw new Error(`browser navigation failed for ${url}: ${result.errorText}`);
 }
 
 const browserCandidates = [
@@ -246,18 +263,19 @@ try {
   viteProcess = spawn(process.execPath, [
     viteBinPath,
     'apps/hvac-web',
-    '--config', 'apps/hvac-web/vite.config.ts',
+    '--config', 'apps/hvac-web/vite.real.config.ts',
     '--host', '127.0.0.1',
     '--port', String(webPort),
     '--strictPort',
   ], {
     cwd: root,
-    stdio: 'ignore',
+    stdio: 'inherit',
     shell: false,
     env: {
       ...process.env,
-      VITE_API_MODE: 'real',
-      S0_GATEWAY_ONLY: 'true',
+      HVAC_WEB_BUILD_ID: 'rms-02-browser',
+      HVAC_WEB_GATEWAY_BASE_PATH: '/api/v1',
+      HVAC_WEB_REALTIME_PROTOCOL: 'centrifugo-v1',
       PLATFORM_GATEWAY_PROXY_TARGET: gatewayURL,
     },
   });
@@ -280,26 +298,46 @@ try {
   assert(page?.webSocketDebuggerUrl, 'No browser page was available');
   cdpClient = await createCdpClient(page.webSocketDebuggerUrl);
   await cdpClient.send('Runtime.enable');
+  await cdpClient.send('Network.enable');
   await cdpClient.send('Page.enable');
-  await cdpClient.send('Page.navigate', { url: `${webURL}/system?tab=overview` });
+  await cdpClient.send('Log.enable');
 
-  await waitForCondition(
-    cdpClient,
-    `document.querySelector('[data-testid="authenticated-principal-status"]')?.getAttribute('data-principal-state') === 'authenticated'`,
-    'authenticated Principal diagnostic',
-  );
+  const principalReady = `document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-policy-revision') === '${policyRevision}' && document.querySelector('[data-testid="real-shell-principal"]')?.textContent?.includes('RMS-02 Browser')`;
+  await navigate(cdpClient, `${webURL}/system?tab=overview`);
+  try {
+    await waitForCondition(cdpClient, principalReady, 'authenticated Principal diagnostic', 100);
+  } catch (firstError) {
+    const documentState = await evaluate(cdpClient, `({
+      text: document.body?.innerText ?? '',
+      rootHtml: document.getElementById('root')?.innerHTML ?? null,
+    })`);
+    const applicationRootBlank = documentState.text.trim() === '' && documentState.rootHtml === '';
+    if (!applicationRootBlank) throw firstError;
+    await cdpClient.send('Page.reload', { ignoreCache: true });
+    try {
+      await waitForCondition(cdpClient, principalReady, 'authenticated Principal diagnostic after cold-start reload');
+    } catch (secondError) {
+      const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
+      const secondMessage = secondError instanceof Error ? secondError.message : String(secondError);
+      throw new Error(`Principal UI remained blank after one cold-start reload. First failure: ${firstMessage}. Second failure: ${secondMessage}`);
+    }
+  }
   const diagnostic = await evaluate(cdpClient, `(() => {
-    const element = document.querySelector('[data-testid="authenticated-principal-status"]');
+    const shell = document.querySelector('[data-testid="real-protected-shell"]');
     return {
-      policyRevision: element?.getAttribute('data-policy-revision') ?? null,
-      capabilityCount: element?.getAttribute('data-capability-count') ?? null,
-      text: element?.textContent ?? '',
+      policyRevision: shell?.getAttribute('data-policy-revision') ?? null,
+      capabilityCount: shell?.getAttribute('data-capability-count') ?? null,
+      principal: document.querySelector('[data-testid="real-shell-principal"]')?.textContent ?? '',
+      roles: document.querySelector('[data-testid="real-principal-roles"]')?.textContent ?? '',
+      routeState: document.querySelector('[data-testid="real-route-forbidden"]')?.getAttribute('data-route-state') ?? null,
+      text: document.body?.innerText ?? '',
     };
   })()`);
   assert(diagnostic.policyRevision === policyRevision, `policy revision was not rendered: ${JSON.stringify(diagnostic)}`);
   assert(diagnostic.capabilityCount === String(capabilities.length), `capability count was not rendered: ${JSON.stringify(diagnostic)}`);
-  for (const capability of capabilities) assert(diagnostic.text.includes(capability), `capability ${capability} was not rendered`);
-  assert(diagnostic.text.includes('descriptive-role-only'), 'descriptive role context was not rendered');
+  assert(diagnostic.principal.includes('RMS-02 Browser'), `Principal identity was not rendered: ${JSON.stringify(diagnostic)}`);
+  assert(diagnostic.roles.includes('descriptive-role-only'), 'descriptive role context was not rendered');
+  assert(diagnostic.routeState === 'FORBIDDEN', `missing organization.read did not fail closed: ${JSON.stringify(diagnostic)}`);
   assert(!diagnostic.text.includes('organization.read'), 'the UI invented a capability from the descriptive role');
   assert(fixture.requests.some((entry) => entry.method === 'GET' && entry.path === '/api/v1/principal'), 'the browser did not read the current Principal resource');
 

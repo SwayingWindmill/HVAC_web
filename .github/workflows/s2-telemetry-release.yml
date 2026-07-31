@@ -11,8 +11,6 @@ on:
       - "services/telemetry-runtime-service/**"
       - "libs/observability/**"
       - "scripts/**"
-      - "package.json"
-      - "package-lock.json"
       - "go.work"
       - "go.work.sum"
   workflow_dispatch:

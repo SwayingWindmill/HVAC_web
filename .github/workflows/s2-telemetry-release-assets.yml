@@ -15,8 +15,6 @@ on:
       - "scripts/write-s2-image-evidence.mjs"
       - "scripts/merge-s2-image-evidence.mjs"
       - "scripts/write-s2-release-report.mjs"
-      - "package.json"
-      - "package-lock.json"
 
 permissions:
   contents: read

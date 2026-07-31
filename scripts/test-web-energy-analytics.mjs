@@ -9,6 +9,15 @@ import {
   energyTotal,
   queryEnergySeries,
 } from '../apps/hvac-web/src/api/energy-analytics.ts';
+import {
+  buildEnergyWorkspaceWindow,
+  compareEnergyTotals,
+  currentEnergyWorkspaceState,
+  drillDownEnergyWorkspaceState,
+  energyWorkspaceSearch,
+  parseEnergyWorkspaceSearch,
+  shiftEnergyWorkspaceState,
+} from '../apps/hvac-web/src/real/energy-workspace.ts';
 
 const organizationId = '01900000-0000-7000-8000-000000000001';
 const siteAId = '01900000-0001-7000-8000-000000000001';
@@ -152,4 +161,82 @@ test('aborted stale requests have a distinct non-retryable state', () => {
   const failure = classifyEnergyAnalyticsFailure(new DOMException('aborted', 'AbortError'));
   assert.equal(failure.kind, 'aborted');
   assert.equal(failure.retryable, false);
+});
+
+test('Energy workspace search state is canonical, reproducible, and fail-closed', () => {
+  const parsed = parseEnergyWorkspaceSearch(
+    '?period=week&anchor=2026-07-31&quality=VALID_AND_SUSPECT',
+    'Asia/Tokyo',
+  );
+  assert.deepEqual(parsed, {
+    period: 'week',
+    anchor: '2026-07-27',
+    qualityPolicy: 'VALID_AND_SUSPECT',
+  });
+  assert.equal(
+    energyWorkspaceSearch(parsed),
+    '?period=week&anchor=2026-07-27&quality=VALID_AND_SUSPECT',
+  );
+
+  assert.deepEqual(
+    parseEnergyWorkspaceSearch('?period=quarter&anchor=not-a-date&quality=ALL', 'Asia/Tokyo', new Date('2026-07-31T07:00:00.000Z')),
+    { period: 'month', anchor: '2026-07-01', qualityPolicy: 'VALID_ONLY' },
+  );
+});
+
+test('calendar windows use Site timezone and preserve DST-length days', () => {
+  const tokyoMonth = buildEnergyWorkspaceWindow({
+    period: 'month',
+    anchor: '2026-07-15',
+    qualityPolicy: 'VALID_ONLY',
+  }, 'Asia/Tokyo');
+  assert.equal(tokyoMonth.state.anchor, '2026-07-01');
+  assert.equal(tokyoMonth.from, '2026-06-30T15:00:00.000Z');
+  assert.equal(tokyoMonth.to, '2026-07-31T15:00:00.000Z');
+  assert.equal(tokyoMonth.previousFrom, '2026-05-31T15:00:00.000Z');
+  assert.equal(tokyoMonth.granularity, 'day');
+
+  const newYorkDstDay = buildEnergyWorkspaceWindow({
+    period: 'day',
+    anchor: '2026-03-08',
+    qualityPolicy: 'VALID_ONLY',
+  }, 'America/New_York');
+  assert.equal(newYorkDstDay.from, '2026-03-08T05:00:00.000Z');
+  assert.equal(newYorkDstDay.to, '2026-03-09T04:00:00.000Z');
+  assert.equal(Date.parse(newYorkDstDay.to) - Date.parse(newYorkDstDay.from), 23 * 60 * 60 * 1000);
+});
+
+test('period navigation and drill-down retain quality policy', () => {
+  const month = { period: 'month', anchor: '2026-07-01', qualityPolicy: 'VALID_AND_SUSPECT' };
+  assert.deepEqual(
+    shiftEnergyWorkspaceState(month, -1, 'Asia/Tokyo'),
+    { period: 'month', anchor: '2026-06-01', qualityPolicy: 'VALID_AND_SUSPECT' },
+  );
+  assert.deepEqual(
+    shiftEnergyWorkspaceState(month, 1, 'Asia/Tokyo'),
+    { period: 'month', anchor: '2026-08-01', qualityPolicy: 'VALID_AND_SUSPECT' },
+  );
+  assert.deepEqual(
+    drillDownEnergyWorkspaceState(month, '2026-07-14T15:00:00.000Z', 'Asia/Tokyo'),
+    { period: 'day', anchor: '2026-07-15', qualityPolicy: 'VALID_AND_SUSPECT' },
+  );
+  assert.equal(
+    drillDownEnergyWorkspaceState({ ...month, period: 'day', anchor: '2026-07-15' }, '2026-07-14T15:00:00.000Z', 'Asia/Tokyo'),
+    null,
+  );
+  assert.deepEqual(
+    currentEnergyWorkspaceState('year', 'VALID_ONLY', 'Asia/Tokyo', new Date('2026-07-31T07:00:00.000Z')),
+    { period: 'year', anchor: '2026-01-01', qualityPolicy: 'VALID_ONLY' },
+  );
+});
+
+test('period comparison keeps missing and zero baselines explicit', () => {
+  assert.deepEqual(compareEnergyTotals(null, 10), { kind: 'unavailable' });
+  assert.deepEqual(compareEnergyTotals(10, null), { kind: 'unavailable' });
+  assert.deepEqual(compareEnergyTotals(10, 0), { kind: 'baseline-zero', differenceKWh: 10 });
+  assert.deepEqual(compareEnergyTotals(75, 100), {
+    kind: 'percentage',
+    differenceKWh: -25,
+    percentage: -25,
+  });
 });

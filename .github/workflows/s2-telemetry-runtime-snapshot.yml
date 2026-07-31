@@ -15,7 +15,6 @@ on:
       - "scripts/run-s2-telemetry-postgres-tests.mjs"
       - "scripts/run-s2-telemetry-runtime-postgres-tests.mjs"
       - "scripts/check-s0-release-evidence-assets.mjs"
-      - "package.json"
       - "go.work"
       - "go.work.sum"
   push:

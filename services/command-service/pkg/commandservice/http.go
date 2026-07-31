@@ -87,6 +87,8 @@ type CommandTransitionView struct {
 type CommandView struct {
 	SchemaVersion         int                         `json:"schemaVersion"`
 	CommandID             string                      `json:"commandId"`
+	OrganizationID        string                      `json:"organizationId"`
+	SiteID                string                      `json:"siteId"`
 	DeviceID              string                      `json:"deviceId"`
 	Capability            commandmodel.Capability     `json:"capability"`
 	CapabilityRevision    string                      `json:"capabilityRevision"`
@@ -321,7 +323,8 @@ func commandView(intent commandmodel.CommandIntent) CommandView {
 		})
 	}
 	return CommandView{
-		SchemaVersion: 1, CommandID: intent.ID, DeviceID: intent.DeviceID,
+		SchemaVersion: 1, CommandID: intent.ID, OrganizationID: intent.OrganizationID,
+		SiteID: intent.SiteID, DeviceID: intent.DeviceID,
 		Capability: intent.Capability, CapabilityRevision: intent.CapabilityRevision,
 		Status: intent.Status, Risk: intent.Risk, ApprovalPolicy: intent.ApprovalPolicy,
 		ApprovalCount: len(intent.Approvals), RequiredApprovalCount: requiredApprovalCount(intent.ApprovalPolicy),

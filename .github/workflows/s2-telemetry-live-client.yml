@@ -12,8 +12,6 @@ on:
       - "scripts/run-s2-telemetry-live-browser-audit.mjs"
       - "scripts/fixtures/s2-telemetry-live/**"
       - "docs/operations/s2-telemetry-live-client.md"
-      - "package.json"
-      - "package-lock.json"
       - "deploy/s0/security/dependency-audit-baseline.json"
       - "scripts/check-npm-production-audit.mjs"
   push:

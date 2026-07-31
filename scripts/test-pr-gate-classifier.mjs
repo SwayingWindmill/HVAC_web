@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
 
 const runClassification = (files) => {
@@ -61,6 +61,9 @@ test('package and workflow changes fail closed to the broad suite', () => {
     assert.equal(classification.broad, true);
     assert.equal(classification.unknown, false);
     assert.ok(classification.integrationProfiles.includes('s2-realtime'));
+    assert.ok(classification.unitProfiles.includes('operations-agent'));
+    assert.ok(classification.integrationProfiles.includes('operations-agent'));
+    assert.ok(classification.unitProfiles.includes('pocs'));
     assert.ok(classification.browserProfiles.includes('rms'));
   }
 });
@@ -82,6 +85,40 @@ test('integration plans use domain-specific durable fixtures', () => {
   assert.ok(plan.commands.includes('npm run s2:realtime:postgres'));
   assert.ok(plan.commands.includes('npm run s3:postgres'));
   assert.ok(!plan.commands.includes('npm run s2:postgres'));
+});
+
+test('Operations Agent changes select dedicated unit and PostgreSQL profiles', () => {
+  const classification = runClassification(['services/operations-agent-service/src/index.ts']);
+  assert.deepEqual(classification.unitProfiles, ['operations-agent']);
+  assert.deepEqual(classification.integrationProfiles, ['operations-agent']);
+  assert.equal(classification.broad, false);
+
+  assert.deepEqual(runPlan('unit', ['operations-agent']).commands, [
+    'npm --prefix services/operations-agent-service ci',
+    'npm run operations-agent-service:check',
+    'npm run operations-agent:benchmark:test',
+  ]);
+  assert.deepEqual(runPlan('integration', ['operations-agent']).commands, [
+    'npm --prefix services/operations-agent-service ci',
+    'npm run operations-agent-service:postgres',
+  ]);
+});
+
+test('nightly regression preserves its schedule, manual trigger, and complete profile sets', async () => {
+  const workflow = await readFile('.github/workflows/nightly-full-regression.yml', 'utf8');
+  assert.ok(workflow.includes('schedule:'));
+  assert.ok(workflow.includes('cron: "0 18 * * *"'));
+  assert.ok(workflow.includes('workflow_dispatch:'));
+  for (const command of [
+    '--gate=static',
+    '--gate=contracts --profiles=core,rms,s1,s2,s3',
+    '--gate=unit --profiles=analytics,operations-agent,pocs,s0,s1,s2,s3,web',
+    '--gate=integration --profiles=analytics,operations-agent,s0,s1,s2-baseline,s2-history,s2-ingest,s2-realtime,s3',
+    '--gate=browser --profiles=rms',
+    '--gate=browser --profiles=s0,s1,s2',
+  ]) {
+    assert.ok(workflow.includes(command), `nightly coverage drifted: ${command}`);
+  }
 });
 
 test('PR gate workflow always exposes the five stable required checks', async () => {
@@ -112,5 +149,18 @@ test('PR gate workflow always exposes the five stable required checks', async ()
     const end = nextJobMatch ? start + marker.length + nextJobMatch.index : workflow.length;
     const block = workflow.slice(start, end);
     assert.ok(block.includes('if: ${{ always() }}'), `${job} must always report a result`);
+  }
+});
+
+test('legacy workflows do not fan out on root package manifests', async () => {
+  const workflowNames = (await readdir('.github/workflows'))
+    .filter((name) => /\.ya?ml$/u.test(name) && name !== 'pr-gates.yml');
+  for (const name of workflowNames) {
+    const workflow = await readFile(`.github/workflows/${name}`, 'utf8');
+    const triggerBlock = workflow.split(/^jobs:\s*$/mu)[0];
+    assert.ok(
+      !/^\s*-\s*['"]?package(?:-lock)?\.json['"]?\s*$/mu.test(triggerBlock),
+      `${name} must delegate root package manifest classification to PR Gates`,
+    );
   }
 });

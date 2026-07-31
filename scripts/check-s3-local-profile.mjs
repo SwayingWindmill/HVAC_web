@@ -20,6 +20,7 @@ const requiredFiles = [
   'scripts/render-s3-local-thingsboard-runtime.mjs',
   'scripts/s3-local-thingsboard.mjs',
   'apps/hvac-web/src/api/commands.ts',
+  'apps/hvac-web/src/real/RealCommands.tsx',
   'apps/hvac-web/src/pages/Commands/index.tsx',
   'services/command-service/cmd/command-service/main.go',
   'services/command-service/cmd/command-service/main_test.go',
@@ -61,6 +62,7 @@ const commandRuntimeTests = read('services/command-service/pkg/commandservice/ru
 const localGateway = read('services/platform-gateway/cmd/s3-local-web-gateway/main.go');
 const localGatewayTests = read('services/platform-gateway/cmd/s3-local-web-gateway/main_test.go');
 const commandApi = read('apps/hvac-web/src/api/commands.ts');
+const realCommands = read('apps/hvac-web/src/real/RealCommands.tsx');
 const commandPage = read('apps/hvac-web/src/pages/Commands/index.tsx');
 
 requireMatch(yaml, /name:\s+s3-local\b/, 's3-local namespace');
@@ -124,6 +126,12 @@ requireMatch(commandApi, /COMMAND_PUBLIC_ROUTES_ENABLED = false as const/, 'prod
 requireMatch(commandApi, /import\.meta\.env\.DEV/, 'development-only local Command gate');
 requireMatch(commandApi, /VITE_S3_LOCAL_COMMANDS/, 'explicit local Command flag');
 requireMatch(commandApi, /\/api\/v1\/local\/devices/, 'local Device catalog API');
+requireMatch(commandApi, /listScopedLocalCommandDevices/, 'Site-scoped local Device catalog client');
+requireMatch(localGateway, /OrganizationID string `json:"organizationId"`/, 'local Device Organization projection');
+requireMatch(localGateway, /SiteID\s+string `json:"siteId"`/, 'local Device Site projection');
+requireMatch(realCommands, /LOCAL \/ NON-FORMAL \/ PRODUCTION DISABLED/, 'Real local Command environment label');
+requireMatch(realCommands, /refetchInterval/, 'Real Command status polling');
+requireMatch(realCommands, /\? 1000 : false/, 'Real one-second non-terminal polling');
 requireMatch(commandPage, /LOCAL \/ KIND/, 'local Web environment label');
 requireMatch(commandPage, /选择本地虚拟设备/, 'local virtual Device selector');
 requireMatch(commandPage, /refetchInterval/, 'Command status polling');

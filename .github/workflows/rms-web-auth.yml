@@ -13,8 +13,6 @@ on:
       - 'scripts/generate-platform-contracts.mjs'
       - 'scripts/test-rms-principal-capability-contract.mjs'
       - 'scripts/run-go.mjs'
-      - 'package.json'
-      - 'package-lock.json'
       - 'go.work'
   push:
     branches: [main]
@@ -29,8 +27,6 @@ on:
       - 'scripts/generate-platform-contracts.mjs'
       - 'scripts/test-rms-principal-capability-contract.mjs'
       - 'scripts/run-go.mjs'
-      - 'package.json'
-      - 'package-lock.json'
       - 'go.work'
 
 permissions:

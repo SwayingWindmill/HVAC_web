@@ -27,8 +27,6 @@ on:
       - 'scripts/verify-s3-command-certification.mjs'
       - 'go.work'
       - 'go.work.sum'
-      - 'package.json'
-      - 'package-lock.json'
   push:
     branches: [main]
     tags: ['s3-v*']
@@ -57,8 +55,6 @@ on:
       - 'scripts/verify-s3-command-certification.mjs'
       - 'go.work'
       - 'go.work.sum'
-      - 'package.json'
-      - 'package-lock.json'
   workflow_dispatch:
 
 permissions:
