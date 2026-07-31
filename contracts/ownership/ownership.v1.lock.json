@@ -23,7 +23,7 @@
     "POST /api/v1/telemetry/observation-snapshots:batchGet": { "revision": 1, "owner": "telemetry-runtime-service" },
     "POST /api/v1/telemetry/subscriptions:bootstrap": { "revision": 1, "owner": "telemetry-runtime-service" },
     "POST /api/v1/telemetry/recovery-cursors:checkpoint": { "revision": 1, "owner": "telemetry-runtime-service" },
-    "POST /api/v1/telemetry/device-history": { "revision": 1, "owner": "telemetry-query-service" },
+    "POST /api/v1/telemetry/device-series:query": { "revision": 1, "owner": "telemetry-query-service" },
     "POST /api/v1/commands": { "revision": 1, "owner": "command-service" },
     "GET /api/v1/commands/{commandId}": { "revision": 1, "owner": "command-service" },
     "POST /api/v1/commands/{commandId}:approve": { "revision": 1, "owner": "command-service" },
