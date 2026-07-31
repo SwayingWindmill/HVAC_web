@@ -227,6 +227,7 @@ export function RealAssetsWorkspace({
   const capabilities = principal.authorization.capabilities;
   const registryAllowed = capabilities.includes('equipment.list') && capabilities.includes('device.list');
   const telemetryAllowed = capabilities.includes('telemetry.batch.read');
+  const historyAllowed = capabilities.includes('telemetry.history.read');
   const queryRoot = useMemo(
     () => ['real-assets', protectedGeneration, organizationId, site.id] as const,
     [organizationId, protectedGeneration, site.id],
@@ -637,6 +638,12 @@ export function RealAssetsWorkspace({
         currentUnavailable={currentUnavailable}
         refreshing={registry.isFetching || current.isFetching}
         routePolicyRevision={current.data?.routePolicyRevision ?? telemetryPolicyRevision}
+        principal={principal}
+        client={telemetryRuntime.client}
+        protectedGeneration={protectedGeneration}
+        protectedRequestToken={protectedRequestToken}
+        historyAllowed={historyAllowed}
+        sessionCapability={sessionCapability}
         actionFeedback={actionFeedback}
         onClose={closeDeviceDetail}
         onRefresh={() => {

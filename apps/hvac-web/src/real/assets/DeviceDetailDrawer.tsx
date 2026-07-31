@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
-import type { Site } from '../../api/generated/platformGateway.gen.ts';
-import type { DeviceObservationSnapshot } from '../../api/generated/s2Telemetry.gen.ts';
+import type { CurrentPrincipalResponse, Site } from '../../api/generated/platformGateway.gen.ts';
+import type { DeviceObservationSnapshot, S2TelemetryClient } from '../../api/generated/s2Telemetry.gen.ts';
+import type { ProtectedScopeRequestToken } from '../protected-scope.ts';
 import { REAL_ASSETS_CATALOG_REVISION } from './catalog.ts';
+import { DeviceHistoryTrends } from './DeviceHistoryTrends.tsx';
 import type { RealAssetsDetailResolution } from './detail.ts';
 import type { RealAssetsDeviceRow, RealAssetsPointView } from './model.ts';
 
@@ -12,6 +14,12 @@ interface DeviceDetailDrawerProps {
   readonly currentUnavailable: boolean;
   readonly refreshing: boolean;
   readonly routePolicyRevision: string | null;
+  readonly principal: CurrentPrincipalResponse;
+  readonly client: S2TelemetryClient;
+  readonly protectedGeneration: number;
+  readonly protectedRequestToken: () => ProtectedScopeRequestToken;
+  readonly historyAllowed: boolean;
+  readonly sessionCapability: string;
   readonly actionFeedback: string | null;
   readonly onClose: () => void;
   readonly onRefresh: () => void;
@@ -157,6 +165,12 @@ export function DeviceDetailDrawer({
   currentUnavailable,
   refreshing,
   routePolicyRevision,
+  principal,
+  client,
+  protectedGeneration,
+  protectedRequestToken,
+  historyAllowed,
+  sessionCapability,
   actionFeedback,
   onClose,
   onRefresh,
@@ -252,12 +266,28 @@ export function DeviceDetailDrawer({
                 当前 Device Snapshot 无法在现有授权与关键点位范围内建立；Registry 身份仍保留。
               </div>
             ) : null}
-            {snapshot ? <SnapshotFacts snapshot={snapshot} site={site} routePolicyRevision={routePolicyRevision} /> : null}
+            {!currentUnavailable && snapshot ? <SnapshotFacts snapshot={snapshot} site={site} routePolicyRevision={routePolicyRevision} /> : null}
           </section>
 
           <section aria-labelledby="real-assets-detail-points">
             <h3 id="real-assets-detail-points">当前关键点位</h3>
             {currentPending || currentUnavailable ? null : <PointDetails row={row} site={site} />}
+          </section>
+
+          <section aria-labelledby="real-assets-detail-history">
+            <h3 id="real-assets-detail-history">关键点位短趋势</h3>
+            <DeviceHistoryTrends
+              site={site}
+              row={row}
+              principal={principal}
+              client={client}
+              protectedGeneration={protectedGeneration}
+              protectedRequestToken={protectedRequestToken}
+              routePolicyRevision={routePolicyRevision}
+              historyAllowed={historyAllowed}
+              currentUnavailable={currentUnavailable}
+              sessionCapability={sessionCapability}
+            />
           </section>
         </div>
       )}
