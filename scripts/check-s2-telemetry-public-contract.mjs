@@ -73,7 +73,7 @@ const expectedOperations = {
   batchGetDeviceObservationSnapshots: ['post', '/api/v1/telemetry/observation-snapshots:batchGet'],
   bootstrapTelemetrySubscriptions: ['post', '/api/v1/telemetry/subscriptions:bootstrap'],
   checkpointTelemetryRecoveryCursors: ['post', '/api/v1/telemetry/recovery-cursors:checkpoint'],
-  queryDeviceHistory: ['post', '/api/v1/telemetry/device-history'],
+  queryDeviceHistory: ['post', '/api/v1/telemetry/device-series:query'],
 };
 const operations = {};
 for (const [operationId, [method, path]] of Object.entries(expectedOperations)) {

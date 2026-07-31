@@ -15,7 +15,7 @@ export type SiteEntryDecision =
 export type SiteRoutingDecision =
   | { state: 'PLATFORM_ROUTE' }
   | SiteEntryDecision
-  | { state: 'READY'; route: SiteRouteLeaf; context: SiteContext }
+  | { state: 'READY'; route: SiteRouteLeaf; context: SiteContext; deviceId?: string }
   | { state: 'FORBIDDEN' }
   | { state: 'SITE_NOT_VISIBLE' }
   | { state: 'SITE_ROUTE_NOT_FOUND'; context: SiteContext };
@@ -81,9 +81,14 @@ export function resolveSiteRouting(
   if (!effectiveCapabilities.includes('site.read')) return { state: 'FORBIDDEN' };
   const context = siteContext(site);
   const leaf = segments[2] as SiteRouteLeaf | undefined;
-  if (segments.length !== 3 || !leaf || !SITE_ROUTE_LEAVES.has(leaf)) {
+  if (!leaf || !SITE_ROUTE_LEAVES.has(leaf)) {
     return { state: 'SITE_ROUTE_NOT_FOUND', context };
   }
 
+  if (leaf === 'assets' && segments.length === 4) {
+    return { state: 'READY', route: leaf, context, deviceId: segments[3] };
+  }
+
+  if (segments.length !== 3) return { state: 'SITE_ROUTE_NOT_FOUND', context };
   return { state: 'READY', route: leaf, context };
 }
