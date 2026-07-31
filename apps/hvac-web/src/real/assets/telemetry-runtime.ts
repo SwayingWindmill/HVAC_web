@@ -47,7 +47,7 @@ function createLazyTelemetryLiveClient(telemetry: S2TelemetryClient): RealAssets
   return {
     open: async (targets, options) => (await load()).open(targets, options),
     purge: () => {
-      if (loaded) void loaded.then((client) => client.purge());
+      if (loaded) void loaded.then((client) => client.purge(), () => undefined);
     },
   };
 }
