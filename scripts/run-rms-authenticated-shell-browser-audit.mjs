@@ -4,12 +4,16 @@ import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createTCPServer } from 'node:net';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import WebSocket from 'ws';
 import { RMS_REQUIRED_BROWSER_SCENARIOS } from './rms-certification-evidence-lib.mjs';
 
 const root = resolve(process.cwd());
+const require = createRequire(import.meta.url);
+const vitePackagePath = require.resolve('vite/package.json');
+const viteBinPath = resolve(dirname(vitePackagePath), 'bin/vite.js');
 const profileDir = join(tmpdir(), `rms-03-shell-browser-${process.pid}`);
 const evidencePath = join(root, 'out', 'rms-web-certification', 'browser-evidence.json');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
@@ -464,7 +468,7 @@ try {
   });
 
   viteProcess = spawn(process.execPath, [
-    resolve(root, 'node_modules/vite/bin/vite.js'),
+    viteBinPath,
     'apps/hvac-web',
     '--config', 'apps/hvac-web/vite.real.config.ts',
     '--host', '127.0.0.1',
@@ -706,19 +710,44 @@ try {
   );
   const energy = await evaluate(cdpClient, `({
     pathname: location.pathname,
+    search: location.search,
     site: document.querySelector('[data-testid="real-site-route-energy"]')?.getAttribute('data-site-id'),
     dashboardSite: document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-site-id'),
     revision: document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-dataset-revision'),
     state: document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-business-state'),
+    period: document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-workspace-period'),
+    anchor: document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-workspace-anchor'),
     text: document.querySelector('[data-testid="real-energy-dashboard"]')?.textContent ?? '',
     headerSite: document.querySelector('[data-testid="real-shell-site"]')?.textContent,
     focusedHeading: document.activeElement === document.querySelector('[data-testid="real-energy-dashboard"] h1'),
   })`);
   assert(energy.pathname === `/sites/${siteBId}/energy`, 'Energy route changed the validated Site URL');
+  assert(energy.search.includes('period=month') && energy.search.includes('quality=VALID_ONLY'), 'Energy workspace did not persist its analysis context in the URL');
+  assert(energy.period === 'month' && /^\d{4}-\d{2}-01$/.test(energy.anchor ?? ''), 'Energy workspace did not canonicalize its calendar period');
   assert(energy.site === siteBId && energy.dashboardSite === siteBId && energy.headerSite === 'Osaka Plant', 'Energy dashboard was not bound to the validated Site');
   assert(energy.revision === 'rms-energy-revision-1' && energy.state === 'READY', 'Energy dashboard omitted authoritative revision or readiness state');
   assert(energy.text.includes('42.5 kWh') && energy.text.includes('1 个已返回时段'), 'Energy dashboard omitted the returned aggregate');
+  assert(energy.text.includes('环比上一周期') && energy.text.includes('返回时段') && energy.text.includes('Platform Gateway'), 'Energy workspace omitted comparison, period evidence, or authority boundary');
   assert(energy.focusedHeading, 'Energy dashboard did not restore focus after lazy loading');
+  assert(await evaluate(cdpClient, `(() => {
+    const button = Array.from(document.querySelectorAll('[data-testid="real-energy-dashboard"] table button'))
+      .find((candidate) => candidate.textContent?.includes('查看日'));
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  })()`), 'Energy period drill-down action was not available');
+  await waitForCondition(
+    cdpClient,
+    `location.search.includes('period=day') && document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-workspace-period') === 'day'`,
+    'Energy day drill-down',
+  );
+  const energyDrillDown = await evaluate(cdpClient, `({
+    search: location.search,
+    period: document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-workspace-period'),
+    text: document.querySelector('[data-testid="real-energy-dashboard"]')?.textContent ?? '',
+  })`);
+  assert(energyDrillDown.search.includes('anchor=') && energyDrillDown.period === 'day', 'Energy drill-down did not persist its child analysis context');
+  assert(energyDrillDown.text.includes('比较基期') && energyDrillDown.text.includes('未返回的时段不会补零'), 'Energy drill-down lost comparison or missing-bucket semantics');
   recordScenario('site-energy');
 
   for (const leaf of ['commands', 'bigscreen']) {
@@ -987,12 +1016,22 @@ try {
     assert(request.headers.origin === webURL, `logout Origin was not the Real application origin: ${request.headers.origin}`);
   }
   const energyRequests = fixture.state.requests.filter((entry) => entry.method === 'POST' && entry.path === '/api/v1/analytics/energy-series');
-  assert(energyRequests.length === 1, `expected one Energy query, got ${energyRequests.length}`);
-  assert(energyRequests[0].headers[stateChangeHeader] === fixtureCapability, 'Energy query did not send the in-memory state-change capability');
-  assert(energyRequests[0].headers.origin === webURL, `Energy query Origin was not the Real application origin: ${energyRequests[0].headers.origin}`);
-  assert(fixture.state.energyQueries.length === 1, `expected one parsed Energy query, got ${fixture.state.energyQueries.length}`);
-  assert(fixture.state.energyQueries[0].organizationId === actingOrganizationId, 'Energy query did not use the authenticated Organization');
-  assert(fixture.state.energyQueries[0].siteId === siteBId, 'Energy query did not use the validated Site');
+  assert(energyRequests.length === 4, `expected current and comparison queries for parent and drill-down Energy workspaces, got ${energyRequests.length}`);
+  for (const request of energyRequests) {
+    assert(request.headers[stateChangeHeader] === fixtureCapability, 'Energy query did not send the in-memory state-change capability');
+    assert(request.headers.origin === webURL, `Energy query Origin was not the Real application origin: ${request.headers.origin}`);
+  }
+  assert(fixture.state.energyQueries.length === 4, `expected four parsed Energy queries, got ${fixture.state.energyQueries.length}`);
+  assert(fixture.state.energyQueries.every((query) => query.organizationId === actingOrganizationId), 'Energy query did not use the authenticated Organization');
+  assert(fixture.state.energyQueries.every((query) => query.siteId === siteBId), 'Energy query did not use the validated Site');
+  assert(fixture.state.energyQueries.every((query) => query.qualityPolicy === 'VALID_ONLY'), 'Energy queries did not preserve the URL quality policy');
+  for (const granularity of ['day', 'hour']) {
+    const energyRanges = fixture.state.energyQueries
+      .filter((query) => query.granularity === granularity)
+      .map((query) => [Date.parse(query.from), Date.parse(query.to)])
+      .sort((left, right) => left[0] - right[0]);
+    assert(energyRanges.length === 2 && energyRanges[0][1] === energyRanges[1][0], `Energy ${granularity} current and comparison windows were not contiguous calendar periods`);
+  }
   const forbiddenHeaders = fixture.state.requests.filter((entry) =>
     ['x-site-id', 'x-organization-id', 'x-role', 'x-admin', 'x-scope'].some((name) => name in entry.headers));
   assert(forbiddenHeaders.length === 0, `browser sent forbidden authorization headers: ${JSON.stringify(forbiddenHeaders)}`);
