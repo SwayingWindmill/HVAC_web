@@ -1,0 +1,185 @@
+.real-commands {
+  display: grid;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+.real-commands__header,
+.real-commands__detail-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.real-commands__header h1,
+.real-commands__header p,
+.real-commands__detail-heading h2,
+.real-commands__detail-heading p {
+  margin-top: 0;
+}
+
+.real-commands__local-marker {
+  max-width: 22rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid #b7791f;
+  border-radius: 999px;
+  color: #694a12;
+  font-size: 0.75rem;
+  font-weight: 750;
+  text-align: center;
+}
+
+.real-commands__boundary,
+.real-commands__honesty,
+.real-commands__warning {
+  padding: 1rem;
+  border-inline-start: 0.3rem solid #b7791f;
+  background: #fff8e6;
+  color: #694a12;
+}
+
+.real-commands__boundary p,
+.real-commands__honesty {
+  margin-bottom: 0;
+}
+
+.real-commands__facts,
+.real-commands__composer,
+.real-commands__detail {
+  margin: 0;
+  border: 1px solid var(--real-border, #d8e0e8);
+  border-radius: 0.75rem;
+  background: var(--real-surface, #fff);
+}
+
+.real-commands__facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.real-commands__facts > div {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.45fr) 1fr;
+  gap: 0.75rem;
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid var(--real-border, #d8e0e8);
+}
+
+.real-commands__facts dt {
+  color: var(--real-muted, #526170);
+  font-size: 0.85rem;
+}
+
+.real-commands__facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.real-commands__composer {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1fr) minmax(10rem, 0.4fr) auto;
+  align-items: end;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.real-commands__composer h2,
+.real-commands__composer > p {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.real-commands__composer label {
+  display: grid;
+  gap: 0.45rem;
+  font-weight: 700;
+}
+
+.real-commands__composer select,
+.real-commands__composer input,
+.real-commands__composer button,
+.real-commands__detail > button {
+  min-height: 2.75rem;
+}
+
+.real-commands__composer select,
+.real-commands__composer input {
+  width: 100%;
+  padding-inline: 0.75rem;
+}
+
+.real-commands__number-field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.real-commands__detail {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.real-commands__detail-heading > strong {
+  padding: 0.5rem 0.75rem;
+  border-radius: 999px;
+  background: #eef4f8;
+  white-space: nowrap;
+}
+
+.real-commands__timeline ol {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.real-commands__timeline li {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.35fr) 1fr;
+  gap: 0.35rem 1rem;
+  padding: 0.9rem 0;
+  border-bottom: 1px solid var(--real-border, #d8e0e8);
+}
+
+.real-commands__timeline li:last-child {
+  border-bottom: 0;
+}
+
+.real-commands__timeline small {
+  grid-column: 2;
+  color: var(--real-muted, #526170);
+}
+
+@media (max-width: 860px) {
+  .real-commands__facts,
+  .real-commands__composer {
+    grid-template-columns: 1fr;
+  }
+
+  .real-commands__composer h2,
+  .real-commands__composer > p {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .real-commands__header,
+  .real-commands__detail-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .real-commands__facts > div,
+  .real-commands__timeline li {
+    grid-template-columns: 1fr;
+  }
+
+  .real-commands__timeline small {
+    grid-column: auto;
+  }
+}

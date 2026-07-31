@@ -1,6 +1,28 @@
 import { z } from 'zod';
+import {
+  CommandApiError,
+  commandSchema,
+  commandUUIDSchema,
+  commandUUIDv7Schema,
+  validateCommandScope,
+  type Command,
+  type CommandRisk,
+  type CommandStatus,
+  type CommandTransition,
+} from './command-contract';
 import { API_MODE } from './config';
 import { createPlatformGatewayClient } from './generated/platformGateway.gen';
+
+export {
+  CommandApiError,
+  commandApprovalPolicySchema,
+  commandRiskSchema,
+  commandSchema,
+  commandStatusSchema,
+  commandTransitionSchema,
+  validateCommandScope,
+} from './command-contract';
+export type { Command, CommandRisk, CommandStatus, CommandTransition } from './command-contract';
 
 export const COMMAND_PUBLIC_ROUTES_ENABLED = false as const;
 export const COMMAND_LOCAL_ROUTES_ENABLED = API_MODE === 'real'
@@ -8,66 +30,15 @@ export const COMMAND_LOCAL_ROUTES_ENABLED = API_MODE === 'real'
   && (import.meta.env.VITE_S3_LOCAL_COMMANDS as string | undefined) === 'true';
 export const COMMAND_ROUTES_AVAILABLE = COMMAND_PUBLIC_ROUTES_ENABLED || COMMAND_LOCAL_ROUTES_ENABLED;
 
-const uuidSchema = z.string().uuid();
-const uuidV7Schema = uuidSchema.regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-
-export const commandStatusSchema = z.enum([
-  'SUBMITTED', 'VALIDATING', 'AWAITING_APPROVAL', 'APPROVED', 'QUEUED', 'DISPATCHING',
-  'SUCCEEDED', 'FAILED', 'REJECTED', 'CANCELLED', 'EXPIRED', 'OUTCOME_UNKNOWN',
-]);
-export const commandRiskSchema = z.enum(['LOW', 'MEDIUM', 'HIGH']);
-export const commandApprovalPolicySchema = z.enum(['NONE', 'SINGLE_APPROVER', 'TWO_PERSON']);
-
-export const commandTransitionSchema = z.object({
-  fromStatus: commandStatusSchema.optional(),
-  toStatus: commandStatusSchema,
-  reason: z.string().min(1).max(256),
-  actorType: z.enum(['PRINCIPAL', 'WORKLOAD']),
-  occurredAt: z.string().datetime({ offset: true }),
-  version: z.number().int().positive(),
-}).strict();
-
-export const commandSchema = z.object({
-  schemaVersion: z.literal(1),
-  commandId: uuidSchema,
-  deviceId: uuidV7Schema,
-  capability: z.literal('SET_TEMPERATURE_SETPOINT'),
-  capabilityRevision: z.literal('capability:set-temperature-setpoint:v1'),
-  status: commandStatusSchema,
-  risk: commandRiskSchema,
-  approvalPolicy: commandApprovalPolicySchema,
-  approvalCount: z.number().int().nonnegative(),
-  requiredApprovalCount: z.number().int().min(0).max(2),
-  setpointC: z.number().min(16).max(30),
-  deviceCommandSequence: z.number().int().positive(),
-  version: z.number().int().positive(),
-  snapshotRevision: z.number().int().positive(),
-  transitions: z.array(commandTransitionSchema).min(1).max(256),
-  createdAt: z.string().datetime({ offset: true }),
-  updatedAt: z.string().datetime({ offset: true }),
-}).strict().superRefine((command, context) => {
-  const required = command.approvalPolicy === 'NONE' ? 0 : command.approvalPolicy === 'SINGLE_APPROVER' ? 1 : 2;
-  if (command.requiredApprovalCount !== required || command.approvalCount > required) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Command approval projection is inconsistent' });
-  }
-  const latest = command.transitions.at(-1);
-  if (!latest || latest.toStatus !== command.status || latest.version !== command.version) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Command timeline does not converge' });
-  }
-});
-
-export type CommandStatus = z.infer<typeof commandStatusSchema>;
-export type CommandRisk = z.infer<typeof commandRiskSchema>;
-export type CommandTransition = z.infer<typeof commandTransitionSchema>;
-export type Command = z.infer<typeof commandSchema>;
-
 export interface CreateCommandInput {
   deviceId: string;
   setpointC: number;
 }
 
 const localCommandDeviceSchema = z.object({
-  deviceId: uuidV7Schema,
+  organizationId: commandUUIDv7Schema,
+  siteId: commandUUIDv7Schema,
+  deviceId: commandUUIDv7Schema,
   name: z.string().min(1).max(128),
   type: z.string().min(1).max(64),
 }).strict();
@@ -79,16 +50,14 @@ const localCommandDeviceCatalogSchema = z.object({
 
 export type LocalCommandDevice = z.infer<typeof localCommandDeviceSchema>;
 
-export class CommandApiError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-    readonly retryable = false,
-  ) {
-    super(message);
-    this.name = 'CommandApiError';
-  }
+export interface ScopedCommandRequestOptions {
+  trustedOrganizationId: string;
+  trustedSiteId: string;
+  csrfToken?: string;
+  signal?: AbortSignal;
+  fetchImplementation?: typeof fetch;
+  baseUrl?: string;
+  idempotencyKey?: string;
 }
 
 const platformClient = createPlatformGatewayClient();
@@ -117,6 +86,8 @@ function buildPendingMockCommand(): Command {
   return commandSchema.parse({
     schemaVersion: 1,
     commandId: mockPendingCommandId,
+    organizationId: ['018f3e00', '1000', '7000', '8000', '000000000001'].join('-'),
+    siteId: ['018f3e00', '2000', '7000', '8000', '000000000001'].join('-'),
     deviceId: mockDeviceId,
     capability: 'SET_TEMPERATURE_SETPOINT',
     capabilityRevision: 'capability:set-temperature-setpoint:v1',
@@ -160,9 +131,15 @@ async function csrfCapability(): Promise<string> {
   return capability;
 }
 
-async function commandRequest(path: string, init: RequestInit): Promise<Command> {
-  const response = await fetch(path, {
+async function commandRequest(
+  path: string,
+  init: RequestInit,
+  options?: Partial<ScopedCommandRequestOptions>,
+): Promise<Command> {
+  const fetchImplementation = options?.fetchImplementation ?? globalThis.fetch.bind(globalThis);
+  const response = await fetchImplementation(`${options?.baseUrl ?? ''}${path}`, {
     ...init,
+    signal: options?.signal ?? init.signal,
     credentials: 'same-origin',
     headers: {
       Accept: 'application/json, application/problem+json',
@@ -179,12 +156,21 @@ async function commandRequest(path: string, init: RequestInit): Promise<Command>
       problem.retryable ?? false,
     );
   }
-  return commandSchema.parse(payload);
+  const command = commandSchema.parse(payload);
+  return options?.trustedOrganizationId && options.trustedSiteId
+    ? validateCommandScope(command, options as ScopedCommandRequestOptions)
+    : command;
 }
 
 export async function listLocalCommandDevices(signal?: AbortSignal): Promise<LocalCommandDevice[]> {
   if (API_MODE === 'mock') {
-    return [{ deviceId: mockDeviceId, name: 'Mock HVAC Device', type: 'HVAC' }];
+    return [{
+      organizationId: ['018f3e00', '1000', '7000', '8000', '000000000001'].join('-'),
+      siteId: ['018f3e00', '2000', '7000', '8000', '000000000001'].join('-'),
+      deviceId: mockDeviceId,
+      name: 'Mock HVAC Device',
+      type: 'HVAC',
+    }];
   }
   if (!COMMAND_LOCAL_ROUTES_ENABLED) return [];
   const response = await fetch('/api/v1/local/devices', {
@@ -206,8 +192,99 @@ export async function listLocalCommandDevices(signal?: AbortSignal): Promise<Loc
   return localCommandDeviceCatalogSchema.parse(payload).devices;
 }
 
+export async function listScopedLocalCommandDevices(
+  options: ScopedCommandRequestOptions,
+): Promise<LocalCommandDevice[]> {
+  if (!COMMAND_LOCAL_ROUTES_ENABLED) return [];
+  const organizationId = commandUUIDv7Schema.parse(options.trustedOrganizationId);
+  const siteId = commandUUIDv7Schema.parse(options.trustedSiteId);
+  const fetchImplementation = options.fetchImplementation ?? globalThis.fetch.bind(globalThis);
+  const response = await fetchImplementation(`${options.baseUrl ?? ''}/api/v1/local/devices`, {
+    method: 'GET',
+    credentials: 'same-origin',
+    signal: options.signal,
+    headers: { Accept: 'application/json, application/problem+json' },
+  });
+  const payload: unknown = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const problem = problemSchema.parse(payload);
+    throw new CommandApiError(
+      response.status,
+      problem.code ?? 'COMMAND_DEVICE_CATALOG_UNAVAILABLE',
+      problem.detail ?? problem.title ?? '本地设备目录暂时不可用。',
+      problem.retryable ?? false,
+    );
+  }
+  const devices = localCommandDeviceCatalogSchema.parse(payload).devices;
+  if (devices.some((device) => device.organizationId !== organizationId || device.siteId !== siteId)) {
+    throw new CommandApiError(503, 'COMMAND_DEVICE_CATALOG_INVALID', '本地设备目录超出当前 Site 范围。');
+  }
+  return devices;
+}
+
+export async function getScopedCommand(
+  commandId: string,
+  options: ScopedCommandRequestOptions,
+): Promise<Command> {
+  if (!commandUUIDSchema.safeParse(commandId).success) {
+    throw new CommandApiError(404, 'RESOURCE_NOT_FOUND', 'Command ID 格式无效。');
+  }
+  if (!COMMAND_ROUTES_AVAILABLE) {
+    throw new CommandApiError(503, 'COMMAND_ROUTE_DISABLED', 'Command 控制路由已登记，但尚未启用生产流量。');
+  }
+  return commandRequest(`/api/v1/commands/${encodeURIComponent(commandId)}`, { method: 'GET' }, options);
+}
+
+export async function createScopedCommand(
+  input: CreateCommandInput,
+  options: ScopedCommandRequestOptions,
+): Promise<Command> {
+  const deviceId = commandUUIDv7Schema.parse(input.deviceId);
+  const setpointC = z.number().min(16).max(30).parse(input.setpointC);
+  if (!COMMAND_ROUTES_AVAILABLE) {
+    throw new CommandApiError(503, 'COMMAND_ROUTE_DISABLED', 'Command 控制路由已登记，但尚未启用生产流量。');
+  }
+  if (!options.csrfToken) {
+    throw new CommandApiError(401, 'CSRF_REQUIRED', '认证会话没有提供 CSRF 能力。');
+  }
+  const idempotencyKey = options.idempotencyKey ?? `hvac-web-${crypto.randomUUID()}`;
+  return commandRequest('/api/v1/commands', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': options.csrfToken,
+      'Idempotency-Key': idempotencyKey,
+    },
+    body: JSON.stringify({
+      deviceId,
+      capability: 'SET_TEMPERATURE_SETPOINT',
+      parameters: { setpointC },
+    }),
+  }, options);
+}
+
+export async function approveScopedCommand(
+  commandId: string,
+  options: ScopedCommandRequestOptions,
+): Promise<Command> {
+  if (!commandUUIDSchema.safeParse(commandId).success) {
+    throw new CommandApiError(404, 'RESOURCE_NOT_FOUND', 'Command ID 格式无效。');
+  }
+  if (!COMMAND_ROUTES_AVAILABLE) {
+    throw new CommandApiError(503, 'COMMAND_ROUTE_DISABLED', 'Command 控制路由已登记，但尚未启用生产流量。');
+  }
+  if (!options.csrfToken) {
+    throw new CommandApiError(401, 'CSRF_REQUIRED', '认证会话没有提供 CSRF 能力。');
+  }
+  return commandRequest(`/api/v1/commands/${encodeURIComponent(commandId)}:approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': options.csrfToken },
+    body: JSON.stringify({}),
+  }, options);
+}
+
 export async function getCommand(commandId: string, signal?: AbortSignal): Promise<Command> {
-  if (!uuidSchema.safeParse(commandId).success) {
+  if (!commandUUIDSchema.safeParse(commandId).success) {
     throw new CommandApiError(404, 'RESOURCE_NOT_FOUND', 'Command ID 格式无效。');
   }
   if (API_MODE === 'mock') return structuredClone(ensureMockCommand(commandId));
@@ -218,7 +295,7 @@ export async function getCommand(commandId: string, signal?: AbortSignal): Promi
 }
 
 export async function createCommand(input: CreateCommandInput): Promise<Command> {
-  const deviceId = uuidV7Schema.parse(input.deviceId);
+  const deviceId = commandUUIDv7Schema.parse(input.deviceId);
   const setpointC = z.number().min(16).max(30).parse(input.setpointC);
   if (API_MODE === 'mock') {
     const commandId = mockUuidV7();
@@ -234,6 +311,8 @@ export async function createCommand(input: CreateCommandInput): Promise<Command>
     const command = commandSchema.parse({
       schemaVersion: 1,
       commandId,
+      organizationId: ['018f3e00', '1000', '7000', '8000', '000000000001'].join('-'),
+      siteId: ['018f3e00', '2000', '7000', '8000', '000000000001'].join('-'),
       deviceId,
       capability: 'SET_TEMPERATURE_SETPOINT',
       capabilityRevision: 'capability:set-temperature-setpoint:v1',

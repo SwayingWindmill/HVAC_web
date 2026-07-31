@@ -115,6 +115,8 @@ type commandTransitionView struct {
 type commandView struct {
 	SchemaVersion         int                         `json:"schemaVersion"`
 	CommandID             string                      `json:"commandId"`
+	OrganizationID        string                      `json:"organizationId"`
+	SiteID                string                      `json:"siteId"`
 	DeviceID              string                      `json:"deviceId"`
 	Capability            commandmodel.Capability     `json:"capability"`
 	CapabilityRevision    string                      `json:"capabilityRevision"`
@@ -656,7 +658,8 @@ func (h *handler) executeCommandCreate(ctx context.Context, prepared preparedCom
 		return commandView{}, 0, "", &failure
 	}
 	view, ok := h.decodeCommandView(response.Body)
-	if !ok || view.DeviceID != prepared.deviceID || view.Capability != prepared.capability {
+	if !ok || view.OrganizationID != prepared.organizationID || view.SiteID != prepared.siteID ||
+		view.DeviceID != prepared.deviceID || view.Capability != prepared.capability {
 		failure := commandUnavailable("Command Service returned an invalid accepted Command.")
 		return commandView{}, 0, "", &failure
 	}
@@ -697,7 +700,8 @@ func (h *handler) executeCommandApproval(ctx context.Context, commandID string, 
 		return commandView{}, &failure
 	}
 	view, ok := h.decodeCommandView(response.Body)
-	if !ok || view.CommandID != commandID || view.DeviceID != input.DeviceID || view.Capability != commandmodel.CapabilitySetTemperatureSetpoint {
+	if !ok || view.CommandID != commandID || view.OrganizationID != input.OrganizationID || view.SiteID != input.SiteID ||
+		view.DeviceID != input.DeviceID || view.Capability != commandmodel.CapabilitySetTemperatureSetpoint {
 		failure := commandUnavailable("Command Service returned an invalid approved Command.")
 		return commandView{}, &failure
 	}
@@ -751,7 +755,7 @@ func (h *handler) executeCommandRead(publicRequest *http.Request, session bffSes
 		return commandView{}, &failure
 	}
 	view, ok := h.decodeCommandView(response.Body)
-	if !ok || view.CommandID != commandID {
+	if !ok || view.CommandID != commandID || view.OrganizationID != session.ActingOrganizationID {
 		failure := commandUnavailable("Command Service returned an invalid Command projection.")
 		return commandView{}, &failure
 	}
@@ -767,7 +771,8 @@ func (h *handler) decodeCommandView(reader io.Reader) (commandView, bool) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&view) != nil || ensureCommandJSONEOF(decoder) != nil || view.SchemaVersion != 1 ||
-		!isLowerUUIDv7(view.CommandID) || !isLowerUUIDv7(view.DeviceID) || view.Capability != commandmodel.CapabilitySetTemperatureSetpoint ||
+		!isLowerUUIDv7(view.CommandID) || !isLowerUUIDv7(view.OrganizationID) || !isLowerUUIDv7(view.SiteID) ||
+		!isLowerUUIDv7(view.DeviceID) || view.Capability != commandmodel.CapabilitySetTemperatureSetpoint ||
 		view.CapabilityRevision != commandCapabilityRevision || !validCommandIntentStatus(view.Status) || !validCommandRisk(view.Risk) ||
 		!validCommandApprovalPolicy(view.ApprovalPolicy, view.ApprovalCount, view.RequiredApprovalCount) ||
 		view.SetpointC < 16 || view.SetpointC > 30 || view.DeviceCommandSequence == 0 || view.Version == 0 || view.SnapshotRevision == 0 ||
