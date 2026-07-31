@@ -1,0 +1,93 @@
+name: S4 Alarm Authoritative Read Baseline
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/s4-alarm-baseline.yml'
+      - 'apps/hvac-web/src/api/alarm-contract.ts'
+      - 'apps/hvac-web/src/api/alarms.ts'
+      - 'apps/hvac-web/src/real/RealAlarms.tsx'
+      - 'apps/hvac-web/src/real/RealApp.tsx'
+      - 'apps/hvac-web/src/real/real-alarms-projection.ts'
+      - 'apps/hvac-web/src/real/real-alarms.css'
+      - 'apps/hvac-web/src/real/SiteScopedShell.tsx'
+      - 'apps/hvac-web/src/real/site-routing.ts'
+      - 'contracts/http/s4-alarm-public.openapi.json'
+      - 'contracts/ownership/**'
+      - 'docs/operations/real-product-roadmap.md'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'libs/alarmmodel/**'
+      - 'libs/ownershipregistry/**'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'scripts/check-s0-release-evidence-assets.mjs'
+      - 'scripts/check-s4-alarm-baseline.mjs'
+      - 'scripts/fixtures/real-alarms/**'
+      - 'scripts/run-real-alarms-browser-audit.mjs'
+      - 'scripts/test-real-alarms.mjs'
+      - 'services/alarm-service/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/s4-alarm-baseline.yml'
+      - 'apps/hvac-web/src/api/alarm-contract.ts'
+      - 'apps/hvac-web/src/api/alarms.ts'
+      - 'apps/hvac-web/src/real/RealAlarms.tsx'
+      - 'apps/hvac-web/src/real/RealApp.tsx'
+      - 'apps/hvac-web/src/real/real-alarms-projection.ts'
+      - 'apps/hvac-web/src/real/real-alarms.css'
+      - 'apps/hvac-web/src/real/SiteScopedShell.tsx'
+      - 'apps/hvac-web/src/real/site-routing.ts'
+      - 'contracts/http/s4-alarm-public.openapi.json'
+      - 'contracts/ownership/**'
+      - 'docs/operations/real-product-roadmap.md'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'libs/alarmmodel/**'
+      - 'libs/ownershipregistry/**'
+      - 'scripts/check-ownership-registries.mjs'
+      - 'scripts/check-s0-release-evidence-assets.mjs'
+      - 'scripts/check-s4-alarm-baseline.mjs'
+      - 'scripts/fixtures/real-alarms/**'
+      - 'scripts/run-real-alarms-browser-audit.mjs'
+      - 'scripts/test-real-alarms.mjs'
+      - 'services/alarm-service/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s4-alarm-baseline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run s4:alarm-service
+      - run: npm run real-alarms:test
+      - run: npm run lint
+      - run: npm run build:alarm-service
+      - run: npm run build:real
+      - run: npm run rms:real:graph
+      - run: npm run real-alarms:browser
+      - name: Upload Real Alarm browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-alarm-browser-evidence
+          path: out/real-alarms-certification
+          if-no-files-found: error
+          retention-days: 14

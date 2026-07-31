@@ -15,8 +15,8 @@ Deliver an authoritative, Site-scoped HVAC operations product in which every vis
 | 1 | Real Assets | In progress | Site list, device detail, capability, history, and trend pull requests are active. |
 | 2 | Real Dashboard | In review | PR #165 provides the first authoritative Site overview. |
 | 3 | Complete Energy | Merged | PR #167 delivered calendar workspaces, comparisons, drill-down, and protected query lifecycle. |
-| 4 | Real Commands | In review | PR #169 adds authoritative Site scope and a local-only controlled workbench while production routes remain disabled. |
-| 5 | Alarm | Planned | No authoritative Alarm domain may be inferred from telemetry state. |
+| 4 | Real Commands | Merged | PR #169 delivered authoritative Site scope, local-only governed Command evidence, and a production-disabled control boundary. |
+| 5 | Alarm | In review | PR #171 establishes an independent read-only Alarm owner, strict lifecycle contract, Site list/detail, and browser certification while production routes remain disabled. |
 | 6 | Work Order | Planned | Must be a separate durable domain linked to, but not collapsed into, Alarm. |
 | 7 | FDD | Planned | Requires governed evidence from Assets, Telemetry, Energy, Alarm, and Work Order. |
 | 8 | Optimization | Planned | Requires FDD and Energy evidence plus explicit safety and approval boundaries. |
@@ -172,4 +172,4 @@ The Operations Agent and Platform/System Management are parallel programs rather
 
 ## Immediate next action
 
-Finish the first Real Commands slice: authoritative Organization/Site projections, exact scope rejection, local-only submit and approval evidence, and protected lifecycle certification. Production Command routes remain disabled at 0% until a separate activation and formal certification decision.
+Finish the first Real Alarm slice: independent Alarm ownership, exact signed read scope, durable source/evidence/lifecycle projections, bounded Site list and detail, protected cache cleanup, and browser certification. Production Alarm routes remain disabled at 0% until IAM/Gateway read authorization and operational rollout are separately certified.

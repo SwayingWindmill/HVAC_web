@@ -2,6 +2,7 @@ go 1.25.12
 
 use (
 	./libs/analyticsmodel
+	./libs/alarmmodel
 	./libs/commandauth
 	./libs/commandmodel
 	./libs/identitycontext
@@ -16,6 +17,7 @@ use (
 	./libs/testpki
 	./libs/workloadtls
 	./services/analytics-read-model-projector
+	./services/alarm-service
 	./services/audit-ledger-service
 	./services/command-dispatcher
 	./services/command-service

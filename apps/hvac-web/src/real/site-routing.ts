@@ -1,6 +1,6 @@
 import type { Capability, Site } from '@/api/generated/platformGateway.gen';
 
-export type SiteRouteLeaf = 'assets' | 'energy' | 'commands' | 'bigscreen';
+export type SiteRouteLeaf = 'assets' | 'energy' | 'alarms' | 'commands' | 'bigscreen';
 
 export interface SiteContext {
   readonly site: Readonly<Site>;
@@ -21,7 +21,7 @@ export type SiteRoutingDecision =
   | { state: 'SITE_ROUTE_NOT_FOUND'; context: SiteContext };
 
 const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const SITE_ROUTE_LEAVES = new Set<SiteRouteLeaf>(['assets', 'energy', 'commands', 'bigscreen']);
+const SITE_ROUTE_LEAVES = new Set<SiteRouteLeaf>(['assets', 'energy', 'alarms', 'commands', 'bigscreen']);
 
 export function isUUIDv7(value: string): boolean {
   return UUID_V7_PATTERN.test(value);

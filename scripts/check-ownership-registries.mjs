@@ -17,7 +17,7 @@ const phaseRegistries = await Promise.all([
 ].map(readJSON));
 
 const errors = [];
-const allowedOwners = new Set(['platform-gateway', 'legacy-hvac-backend', 'platform-core-service', 'telemetry-runtime-service', 'command-service', 'telemetry-query-service']);
+const allowedOwners = new Set(['platform-gateway', 'legacy-hvac-backend', 'platform-core-service', 'telemetry-runtime-service', 'command-service', 'telemetry-query-service', 'alarm-service']);
 const s1MigratedPaths = new Set([
   '/api/v1/organizations',
   '/api/v1/organizations/{organizationId}',
@@ -67,7 +67,7 @@ const expectedS3MigrationPhases = [
   'S3-R3-site-canary',
   'S3-R4-operationally-certified',
 ];
-const allowedScopes = new Set(['organization', 'principal', 'site', 'device', 'key']);
+const allowedScopes = new Set(['organization', 'principal', 'site', 'device', 'key', 'alarm']);
 const allowedCompatibility = new Set(['native', 'legacy-read']);
 const allowedMethods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -288,6 +288,8 @@ const requiredIdentities = new Map([
   ['telemetry_runtime:s2_telemetry_iam', { migrationRole: 's2_telemetry_migrator', accessMode: 'connect-only', restrictedTo: [] }],
   ['command_runtime:s3_command_runtime', { migrationRole: 's3_command_migrator', accessMode: 'write' }],
   ['command_runtime:s3_command_service', { migrationRole: 's3_command_migrator', activationRole: 's3_command_runtime', accessMode: 'write' }],
+  ['alarm_runtime:s4_alarm_runtime', { migrationRole: 's4_alarm_migrator', accessMode: 'read' }],
+  ['alarm_runtime:s4_alarm_service', { migrationRole: 's4_alarm_migrator', activationRole: 's4_alarm_runtime', accessMode: 'read' }],
 ]);
 for (const identity of dataRegistry.databaseIdentities ?? []) {
   const key = `${identity.schema}:${identity.runtimeRole}`;

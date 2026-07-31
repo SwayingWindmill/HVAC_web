@@ -24,6 +24,11 @@ const RealCommands = lazy(async () => {
   return { default: module.RealCommands };
 });
 
+const RealAlarms = lazy(async () => {
+  const module = await import('./RealAlarms');
+  return { default: module.RealAlarms };
+});
+
 type RoutedSiteDecision = Exclude<SiteRoutingDecision, { state: 'PLATFORM_ROUTE' }>;
 
 export type SiteShellDecision =
@@ -219,6 +224,11 @@ const SITE_ROUTE_COPY = {
     title: 'Energy',
     detail: 'Energy 路由只消费 Platform Gateway 的 Site 级权威分析接口，并保留水位、修订、质量和缺失数据语义。',
   },
+  alarms: {
+    eyebrow: 'REAL MODE · SITE ALARMS',
+    title: 'Alarm',
+    detail: 'Alarm 路由只消费 Alarm Service 发布的 durable lifecycle，不从 Telemetry 或 Presence 推导业务告警。',
+  },
   commands: {
     eyebrow: 'REAL MODE · SITE COMMANDS',
     title: 'Commands',
@@ -284,6 +294,30 @@ function ReadySiteSurface({
           </div>
         )}>
           <EnergyAnalytics site={decision.context.site} principal={snapshot.principal!} />
+        </Suspense>
+      </section>
+    );
+  }
+
+  if (decision.route === 'alarms') {
+    return (
+      <section
+        className="real-route-surface real-route-surface--alarms"
+        data-testid="real-site-route-alarms"
+        data-route-state="READY"
+        data-site-id={decision.context.site.id}
+        data-site-route="alarms"
+      >
+        <Suspense fallback={(
+          <div className="real-shell-progress" role="status" aria-live="polite">
+            正在加载 Alarm 界面…
+          </div>
+        )}>
+          <RealAlarms
+            site={decision.context.site}
+            principal={snapshot.principal!}
+            registerProtectedResource={registerProtectedResource}
+          />
         </Suspense>
       </section>
     );
@@ -449,6 +483,7 @@ export function buildSiteNavigation(
   return [
     { id: 'site-assets', label: 'Assets', path: siteRoute(site, 'assets'), kind: 'link', degraded: false },
     { id: 'site-energy', label: 'Energy', path: siteRoute(site, 'energy'), kind: 'link', degraded: false },
+    { id: 'site-alarms', label: 'Alarm', path: siteRoute(site, 'alarms'), kind: 'link', degraded: false },
     { id: 'site-commands', label: 'Commands', path: siteRoute(site, 'commands'), kind: 'link', degraded: false },
     { id: 'site-bigscreen', label: 'BigScreen', path: siteRoute(site, 'bigscreen'), kind: 'link', degraded: false },
   ];

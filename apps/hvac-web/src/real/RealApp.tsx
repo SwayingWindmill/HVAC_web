@@ -199,9 +199,12 @@ export default function RealApp({ config }: RealAppProps) {
     || siteDecision?.state === 'SITE_SCOPE_ACTIVATING'
     ? siteDecision.context.site
     : undefined;
+  const scopedPlatformNavigation = selectedSite
+    ? platformNavigation.filter((item) => item.id !== 'alarms')
+    : platformNavigation;
   const navigation = selectedSite && snapshot.principal
     ? [
-      ...platformNavigation,
+      ...scopedPlatformNavigation,
       ...buildSiteNavigation(selectedSite, snapshot.principal.authorization.capabilities),
     ]
     : platformNavigation;
