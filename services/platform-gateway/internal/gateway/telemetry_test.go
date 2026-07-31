@@ -24,8 +24,10 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
+	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/s2telemetryapi"
 )
 
@@ -81,6 +83,78 @@ func TestTelemetryGatewaySingleAndBatchPreserveOrder(t *testing.T) {
 	}
 	if fixture.iamCalls.Load() != 2 || fixture.runtimeCalls.Load() != 2 {
 		t.Fatalf("upstream calls IAM=%d runtime=%d", fixture.iamCalls.Load(), fixture.runtimeCalls.Load())
+	}
+}
+
+func TestTelemetryGatewayDeviceHistoryBindsExactScopeAndPreservesMetadata(t *testing.T) {
+	fixture := newTelemetryGatewayFixture(t, "")
+	input := s2telemetryapi.DeviceHistoryRequest{
+		DeviceId:        telemetryTestDeviceOne,
+		Keys:            []s2telemetryapi.TelemetryKey{"temperature"},
+		From:            s2telemetryapi.HistoryInstant("2026-07-24T06:00:00Z"),
+		To:              s2telemetryapi.HistoryInstant("2026-07-24T12:00:00Z"),
+		MaxPointsPerKey: 100,
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(body, []byte("organizationId")) || bytes.Contains(body, []byte("siteId")) {
+		t.Fatalf("public Device History request exposed authority fields: %s", body)
+	}
+	request := httptest.NewRequest(http.MethodPost, s2telemetryapi.QueryDeviceHistoryPath, bytes.NewReader(body))
+	fixture.authenticate(request)
+	request.Header.Set("Origin", "https://web.example.test")
+	request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
+	request = request.WithContext(context.WithValue(request.Context(), routeDecisionContextKey, ownershipregistry.Decision{
+		RegistryRevision: 12,
+		SelectedOwner:    ownershipregistry.OwnerAnalyticsQuery,
+	}))
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("history status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response s2telemetryapi.DeviceHistoryResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.OwningOrganizationId != telemetryTestOrganization || response.SiteId != telemetryTestSite || response.DeviceId != telemetryTestDeviceOne || response.Metadata.DatasetRevision != "telemetry-history:v1:7" || response.Metadata.ReturnedPoints != 1 || len(response.Series) != 1 || len(response.Series[0].Points) != 1 {
+		t.Fatalf("history response drifted: %+v", response)
+	}
+	fixture.mu.Lock()
+	actions := append([]telemetryauth.Action(nil), fixture.iamActions...)
+	fixture.mu.Unlock()
+	if !slices.Equal(actions, []telemetryauth.Action{telemetryauth.ActionHistoryRead}) || fixture.iamCalls.Load() != 1 || fixture.queryCalls.Load() != 1 || fixture.runtimeCalls.Load() != 0 {
+		t.Fatalf("history upstream boundary drifted: actions=%v IAM=%d query=%d runtime=%d", actions, fixture.iamCalls.Load(), fixture.queryCalls.Load(), fixture.runtimeCalls.Load())
+	}
+}
+
+func TestTelemetryGatewayDeviceHistoryRejectsRuntimeRouteOwner(t *testing.T) {
+	fixture := newTelemetryGatewayFixture(t, "")
+	input := s2telemetryapi.DeviceHistoryRequest{
+		DeviceId: telemetryTestDeviceOne, Keys: []s2telemetryapi.TelemetryKey{"temperature"},
+		From: s2telemetryapi.HistoryInstant("2026-07-24T06:00:00Z"), To: s2telemetryapi.HistoryInstant("2026-07-24T12:00:00Z"), MaxPointsPerKey: 100,
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, s2telemetryapi.QueryDeviceHistoryPath, bytes.NewReader(body))
+	fixture.authenticate(request)
+	request.Header.Set("Origin", "https://web.example.test")
+	request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
+	request = request.WithContext(context.WithValue(request.Context(), routeDecisionContextKey, ownershipregistry.Decision{
+		RegistryRevision: 12,
+		SelectedOwner:    ownershipregistry.OwnerTelemetryRuntime,
+	}))
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("history wrong-owner status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if fixture.iamCalls.Load() != 0 || fixture.queryCalls.Load() != 0 || fixture.runtimeCalls.Load() != 0 {
+		t.Fatalf("wrong route owner reached upstreams: IAM=%d query=%d runtime=%d", fixture.iamCalls.Load(), fixture.queryCalls.Load(), fixture.runtimeCalls.Load())
 	}
 }
 
@@ -274,8 +348,10 @@ type telemetryGatewayFixture struct {
 	sessionID         string
 	iamCalls          atomic.Int32
 	runtimeCalls      atomic.Int32
+	queryCalls        atomic.Int32
 	iamHTTPClient     *http.Client
 	runtimeHTTPClient *http.Client
+	queryHTTPClient   *http.Client
 	mu                sync.Mutex
 	iamActions        []telemetryauth.Action
 	runtimePaths      []string
@@ -437,8 +513,42 @@ func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCod
 		return telemetryJSONResponse(http.StatusOK, telemetryauth.DecisionResponse{Decision: decision, DelegationGrant: unsignedTelemetryGrant(claims)}), nil
 	})}
 	fixture.iamHTTPClient = iamClient
+	fixture.queryHTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		fixture.queryCalls.Add(1)
+		if request.Method != http.MethodPost || request.URL.Path != internalDeviceHistoryPath {
+			t.Fatalf("unexpected query service request %s %s", request.Method, request.URL.Path)
+		}
+		for _, header := range []string{"Cookie", "X-CSRF-Token", "X-Admin", "X-Principal", "X-Organization-ID", "X-Site-ID"} {
+			if request.Header.Get(header) != "" {
+				t.Fatalf("browser authority leaked to query service header %s", header)
+			}
+		}
+		var query telemetryhistorymodel.DeviceHistoryQuery
+		if err := json.NewDecoder(request.Body).Decode(&query); err != nil {
+			t.Fatal(err)
+		}
+		scope, err := query.ScopeDigest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		claims, err := identitycontext.VerifyDelegation(&gatewaySigner.PublicKey, request.Header.Get("X-Delegation-Grant"))
+		if err != nil || claims.PrincipalID != telemetryTestPrincipal || claims.PolicyRevision != telemetryTestPolicy || claims.ActingOrganizationID != telemetryTestOrganization || identitycontext.ValidateDelegation(claims, now, telemetryTestSPIFFE, "telemetry-query-service", telemetryhistorymodel.DeviceHistoryAction, scope) != nil {
+			t.Fatalf("query delegation invalid: claims=%+v err=%v", claims, err)
+		}
+		if query.ActingOrganizationID != telemetryTestOrganization || query.OwningOrganizationID != telemetryTestOrganization || query.SiteID != telemetryTestSite || query.DeviceID != telemetryTestDeviceOne || len(query.Keys) != 1 || query.Keys[0] != "temperature" || query.MaxPointsPerKey != 100 {
+			t.Fatalf("query scope drifted: %+v", query)
+		}
+		unit := "Cel"
+		watermark := query.To
+		response := telemetryhistorymodel.DeviceHistoryResponse{
+			SchemaVersion: 1, OwningOrganizationID: query.OwningOrganizationID, SiteID: query.SiteID, DeviceID: query.DeviceID,
+			Series:   []telemetryhistorymodel.DeviceHistorySeries{{Key: "temperature", Points: []telemetryhistorymodel.DeviceHistoryPoint{{ObservationID: "018f2e00-8000-7000-8000-000000000001", SampledAt: query.From.Add(time.Hour), ReceivedAt: query.From.Add(time.Hour + time.Second), Value: 22.5, Unit: &unit, Quality: telemetryhistorymodel.QualityGood, QualityReasons: []string{}, Revision: 7}}}},
+			Metadata: telemetryhistorymodel.DeviceHistoryMetadata{RequestedFrom: query.From, RequestedTo: query.To, DataWatermark: &watermark, DatasetRevision: "telemetry-history:v1:7", Partial: false, MaxPointsPerKey: query.MaxPointsPerKey, ReturnedPoints: 1, TruncatedKeys: []string{}},
+		}
+		return telemetryJSONResponse(http.StatusOK, response), nil
+	})}
 
-	configured := NewHandler(Config{Now: func() time.Time { return now }, Identity: &IdentityConfig{OIDCIssuer: "https://issuer.example.test", OIDCClientID: "client", OIDCRedirectURI: "https://web.example.test/api/v1/auth/callback", PublicOrigin: "https://web.example.test", IAMURL: "https://iam.example.test", IAMAudience: "iam-service", ExecutingWorkloadSPIFFE: telemetryTestSPIFFE, PolicyRevision: "identity-policy-1", DelegationSigner: gatewaySigner, TokenEncryptionKey: make([]byte, 32), SessionStore: store, SessionTTL: time.Hour, DelegationTTL: 30 * time.Second, IAMHTTPClient: iamClient}, Telemetry: &TelemetryConfig{RuntimeBaseURL: "https://telemetry.example.test", RuntimeHTTPClient: fixture.runtimeHTTPClient, RuntimeAudience: "telemetry-runtime-service", Timeout: time.Second}}).(*handler)
+	configured := NewHandler(Config{Now: func() time.Time { return now }, Identity: &IdentityConfig{OIDCIssuer: "https://issuer.example.test", OIDCClientID: "client", OIDCRedirectURI: "https://web.example.test/api/v1/auth/callback", PublicOrigin: "https://web.example.test", IAMURL: "https://iam.example.test", IAMAudience: "iam-service", ExecutingWorkloadSPIFFE: telemetryTestSPIFFE, PolicyRevision: "identity-policy-1", DelegationSigner: gatewaySigner, TokenEncryptionKey: make([]byte, 32), SessionStore: store, SessionTTL: time.Hour, DelegationTTL: 30 * time.Second, IAMHTTPClient: iamClient}, Telemetry: &TelemetryConfig{RuntimeBaseURL: "https://telemetry.example.test", RuntimeHTTPClient: fixture.runtimeHTTPClient, RuntimeAudience: "telemetry-runtime-service", Timeout: time.Second}, Analytics: &AnalyticsConfig{QueryBaseURL: "https://query.example.test", QueryHTTPClient: fixture.queryHTTPClient, QueryAudience: "telemetry-query-service", Timeout: time.Second}}).(*handler)
 	fixture.handler = configured
 	csrfCiphertext, err := configured.identity.encryptBytes([]byte(telemetryTestCSRF))
 	if err != nil {

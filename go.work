@@ -12,6 +12,7 @@ use (
 	./libs/sessionevent
 	./libs/sessionstore
 	./libs/telemetryauth
+	./libs/telemetryhistorymodel
 	./libs/testpki
 	./libs/workloadtls
 	./services/analytics-read-model-projector

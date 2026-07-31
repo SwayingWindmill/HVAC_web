@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 11,
+  "registryRevision": 12,
   "routes": [
     {
       "method": "GET",
@@ -602,6 +602,27 @@
       ],
       "migrationPhase": "S3-R0-contract-only",
       "cohortGroup": "s3-command-v1"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/telemetry/device-series:query",
+      "owner": "telemetry-query-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "primary",
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "device",
+        "principal",
+        "key"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false
     },
     {
       "method": "POST",

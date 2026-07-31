@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 13,
+  "registryRevision": 14,
   "resources": [
     { "kind": "schema", "name": "gateway", "writer": "platform-gateway", "revision": 1 },
     { "kind": "schema", "name": "audit_ledger", "writer": "audit-ledger-service", "revision": 1 },
@@ -55,6 +55,7 @@
     { "kind": "projection", "name": "telemetry-history-observation", "writer": "telemetry-history-projector", "revision": 1, "sourceOwner": "telemetry-runtime-service" },
     { "kind": "projection", "name": "analytics-energy-interval-fact", "writer": "analytics-read-model-projector", "revision": 1, "sourceOwner": "telemetry-history-projector" },
     { "kind": "query-contract", "name": "analytics-energy-series-v1", "writer": "telemetry-query-service", "revision": 1, "publicIngress": "platform-gateway" },
+    { "kind": "query-contract", "name": "telemetry-device-history-v1", "writer": "telemetry-query-service", "revision": 1, "publicIngress": "platform-gateway", "source": "telemetry_history.observations" },
     { "kind": "semantic-model", "name": "cube-energy-usage-v1", "writer": "telemetry-query-service", "revision": 1, "runtime": "cube-core", "source": "analytics.energy_interval_facts" }
   ],
   "databaseAccess": [
@@ -72,6 +73,7 @@
     { "service": "command-service", "schema": "command_runtime", "mode": "write" },
     { "service": "telemetry-history-projector", "schema": "telemetry_history", "mode": "write" },
     { "service": "analytics-read-model-projector", "schema": "telemetry_history", "mode": "read" },
+    { "service": "telemetry-query-service", "schema": "telemetry_history", "mode": "read", "restrictedTo": ["observations"] },
     { "service": "analytics-read-model-projector", "schema": "analytics", "mode": "write" },
     { "service": "cube-core", "schema": "analytics", "mode": "read" }
   ],

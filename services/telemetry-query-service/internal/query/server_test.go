@@ -18,6 +18,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
 	"github.com/quanlaihe/hvac-web/services/telemetry-query-service/internal/analytics"
 )
 
@@ -40,6 +41,19 @@ type engineStub struct {
 func (stub *engineStub) QueryEnergySeries(_ context.Context, caller analytics.CallerContext, query analyticsmodel.EnergySeriesQuery) (analyticsmodel.EnergySeriesResponse, error) {
 	stub.calls++
 	stub.caller = caller
+	stub.query = query
+	return stub.response, stub.err
+}
+
+type historyEngineStub struct {
+	response telemetryhistorymodel.DeviceHistoryResponse
+	err      error
+	query    telemetryhistorymodel.DeviceHistoryQuery
+	calls    int
+}
+
+func (stub *historyEngineStub) QueryDeviceHistory(_ context.Context, query telemetryhistorymodel.DeviceHistoryQuery) (telemetryhistorymodel.DeviceHistoryResponse, error) {
+	stub.calls++
 	stub.query = query
 	return stub.response, stub.err
 }
@@ -154,6 +168,7 @@ func newServerHarness(t *testing.T, now time.Time, engine analytics.EnergySeries
 	return serverHarness{
 		handler: NewHandler(ServerConfig{
 			Engine:                 engine,
+			HistoryEngine:          &historyEngineStub{},
 			DelegationPublicKey:    signer.Public(),
 			AllowedPresenterSPIFFE: testPresenter,
 			Audience:               testAudience,
