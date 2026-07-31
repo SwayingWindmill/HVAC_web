@@ -1,9 +1,6 @@
-import {
-  S2TelemetryClientError,
-  type DeviceHistoryPoint,
-  type DeviceHistoryResponse,
-  type S2TelemetryClient,
-} from '../../api/generated/s2Telemetry.gen.ts';
+import { S2TelemetryClientError } from '../../api/generated/s2Telemetry.gen.ts';
+import type { DeviceHistoryPoint, S2TelemetryClient } from '../../api/generated/s2Telemetry.gen.ts';
+import type * as S2TelemetryContract from '../../api/generated/s2Telemetry.gen.ts';
 import {
   REAL_ASSETS_CATALOG_REVISION,
   type RealAssetsPointDefinition,
@@ -142,14 +139,14 @@ export function realAssetsHistoryQueryKey(query: RealAssetsHistoryQuery): readon
   ] as const;
 }
 
-export function realAssetsHistoryRevisionKey(query: RealAssetsHistoryQuery, response: DeviceHistoryResponse): readonly unknown[] {
+export function realAssetsHistoryRevisionKey(query: RealAssetsHistoryQuery, response: S2TelemetryContract.DeviceHistoryResponse): readonly unknown[] {
   return [
     ...realAssetsHistoryQueryKey(query),
     'revision', response.metadata.datasetRevision, response.metadata.dataWatermark ?? 'no-watermark',
   ] as const;
 }
 
-export function validateRealAssetsHistoryResponse(response: DeviceHistoryResponse, query: RealAssetsHistoryQuery): DeviceHistoryResponse {
+export function validateRealAssetsHistoryResponse(response: S2TelemetryContract.DeviceHistoryResponse, query: RealAssetsHistoryQuery): S2TelemetryContract.DeviceHistoryResponse {
   if (response.schemaVersion !== 1) throw new Error('Device history schema version is unsupported.');
   if (response.owningOrganizationId !== query.owningOrganizationId
     || response.siteId !== query.siteId
@@ -192,7 +189,7 @@ export function validateRealAssetsHistoryResponse(response: DeviceHistoryRespons
   return response;
 }
 
-export async function loadRealAssetsHistory(input: LoadRealAssetsHistoryInput): Promise<DeviceHistoryResponse> {
+export async function loadRealAssetsHistory(input: LoadRealAssetsHistoryInput): Promise<S2TelemetryContract.DeviceHistoryResponse> {
   const options = {
     ['csrf' + 'Token']: input.sessionCapability,
     signal: input.signal,

@@ -342,7 +342,7 @@ function createGatewayFixture() {
       return;
     }
 
-    if (request.method === 'POST' && url.pathname === '/api/v1/telemetry/device-history') {
+    if (request.method === 'POST' && url.pathname === '/api/v1/telemetry/device-series:query') {
       if (request.headers[stateChangeHeader] !== fixtureCapability) {
         writeJson(response, 403, problem(403, 'CSRF_VALIDATION_FAILED', 'The state-change capability was invalid.', false));
         return;
@@ -1454,7 +1454,7 @@ try {
   assert(assetSnapshotRequests.length >= 1, 'Assets route did not issue a bounded Snapshot batch');
   assert(assetSnapshotRequests.every((entry) => entry.headers[stateChangeHeader] === fixtureCapability && entry.headers.origin === webURL), 'Assets Snapshot batch omitted Session CSRF capability or same-origin proof');
   assert(fixture.state.assetSnapshotQueries.every((batch) => batch.requests.length <= 100 && batch.requests.every((target) => target.deviceId === osakaDeviceId)), 'Assets Snapshot batch escaped the visible Device set or batch limit');
-  const assetHistoryRequests = fixture.state.requests.filter((entry) => entry.method === 'POST' && entry.path === '/api/v1/telemetry/device-history');
+  const assetHistoryRequests = fixture.state.requests.filter((entry) => entry.method === 'POST' && entry.path === '/api/v1/telemetry/device-series:query');
   assert(assetHistoryRequests.length >= 5, `expected range, failure and retry Device history requests, got ${assetHistoryRequests.length}`);
   assert(assetHistoryRequests.every((entry) => entry.headers[stateChangeHeader] === fixtureCapability && entry.headers.origin === webURL), 'Assets Device history omitted Session CSRF capability or same-origin proof');
   assert(fixture.state.assetHistoryQueries.every((query) => {
