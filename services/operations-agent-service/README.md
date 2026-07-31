@@ -24,8 +24,9 @@ and cancellation rules that preserve committed Evidence, Findings and Proposed A
 Completed Investigations may be reopened only by creating a new Agent Run; terminal Runs
 are never resumed.
 
-The package root exports `createInvestigationCoordinator` as the only supported business
-entry. The Coordinator reauthorizes every command against the authoritative Scope, owns
+The package root exports `createInvestigationCoordinator` and the framework-independent
+`analyzeSiteNightEnergy` Application seam. The Coordinator reauthorizes every command against
+the authoritative Scope, owns
 lifecycle commands, validates active Run/Lease/Revision authority through Domain behavior,
 executes independent Owner READ batches in parallel, validates returned Owner identity,
 Scope, Revision, Quality and provenance, stores only opaque Runtime Checkpoint state and serializes every
@@ -60,6 +61,16 @@ aggregate watermarks, partial state, requested/actual granularity and Quality Su
 readers apply bounded response sizes and timeouts, map upstream failures to stable Application
 errors and keep unauthorized resources nondiscoverable. The boundary check rejects direct
 ClickHouse, Cube, ThingsBoard and Command API paths in Operations Agent tools.
+
+`analyzeSiteNightEnergy` consumes that shared versioned Energy Series contract plus a typed
+Registry Site Scope. It deterministically resolves local target and baseline night windows,
+including daylight-saving elapsed durations, and requires contiguous hourly buckets. Dataset
+Revision, both Watermarks, Partial, Granularity, Quality Policy, missing buckets, non-finite
+energy and zero baseline all gate confirmation. Complete benchmark data produces FACT and
+ALGORITHM_RESULT drafts plus a Site-only Finding; Equipment attribution remains structured
+`UNABLE_TO_CONCLUDE` with REQUIRED_NEXT binding and Equipment-series requests. The result
+contains a canonical SHA-256 Analysis reference and metadata summaries, not raw point arrays,
+and has no Proposed Action or Command path.
 
 PostgreSQL is split into two independently migrated and authorized Schemas:
 

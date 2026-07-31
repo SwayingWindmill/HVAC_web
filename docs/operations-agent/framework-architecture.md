@@ -248,6 +248,28 @@ IdGenerator
 
 A port is added only when a real seam exists. Domain-specific readers are preferred over one generic `ToolClient` or `PlatformClient` interface.
 
+### 5.4 Deterministic Site night-energy analysis
+
+The package root also exposes `analyzeSiteNightEnergy` as a framework-independent Application
+seam. It accepts only the project-owned Site Scope, local night window and versioned Energy
+Series contract shared with the Telemetry Query Service adapter. Model-generated totals,
+generic query payloads and unvalidated result shapes are rejected before analysis.
+
+The `site-night-energy-comparison/v1` algorithm resolves target and baseline local windows
+through the Registry timezone, including seven-hour spring-forward and nine-hour fall-back
+windows. It requires contiguous hourly buckets and matching elapsed window durations. Dataset
+Revision, data and aggregate Watermarks, Partial, requested/actual Granularity and Quality
+Summary are blockers before any confirmatory Site Finding is created. A zero baseline,
+non-finite energy or missing bucket also produces a structured `UNABLE_TO_CONCLUDE` result.
+
+A supported result contains small FACT and ALGORITHM_RESULT drafts, a Site-only Finding draft,
+the adopted windows, metadata summaries and a canonical SHA-256 Analysis reference digest.
+Raw Energy Series points are hashed but are not copied into the result. Site aggregate change
+never establishes Equipment causality: Equipment attribution remains `UNABLE_TO_CONCLUDE`
+with REQUIRED_NEXT requests for canonical Equipment energy bindings and comparable
+Equipment-level series. The analyzer cannot create Proposed Actions, Formal Approvals, Command
+Intents or physical execution claims.
+
 ## 6. Runtime LangGraph adapter
 
 LangGraph.js is an adapter implementing `AgentExecutionRuntime`.

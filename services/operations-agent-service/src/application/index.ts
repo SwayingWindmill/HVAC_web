@@ -19,6 +19,33 @@ export {
 } from './internal/investigation-coordinator.js';
 
 export {
+  NightEnergyAnalysisError,
+  analyzeSiteNightEnergy,
+  type EquipmentAttributionRequiredNext,
+  type NightEnergyAnalysisErrorCode,
+  type NightEnergyEvidenceDraft,
+  type NightEnergyGranularity,
+  type NightEnergyQualityPolicy,
+  type NightEnergyQualitySummary,
+  type NightEnergyReadinessBlocker,
+  type NightEnergyReadinessBlockerCode,
+  type NightEnergySeries,
+  type NightEnergySeriesMetadata,
+  type NightEnergySeriesPoint,
+  type SiteNightEnergyAnalysisInput,
+  type SiteNightEnergyAnalysisReference,
+  type SiteNightEnergyAnalysisResult,
+  type SiteNightEnergyComparison,
+  type SiteNightEnergyFindingDraft,
+  type SiteNightEnergyPeriodReference,
+  type SiteNightEnergyScope,
+  type SiteNightEnergyWindow,
+  type SupportedSiteNightEnergyAnalysis,
+  type UnableSiteNightEnergyAnalysis,
+  type UnsupportedEquipmentAttribution,
+} from './internal/night-energy-analysis.js';
+
+export {
   InvestigationRepositoryConflictError,
   OwnerReadError,
   type AgentExecutionRuntime,

@@ -2,6 +2,12 @@ import {
   OwnerReadError,
   type EnergyAnalyticsReadRequest,
   type EnergyAnalyticsReader,
+  type NightEnergyGranularity,
+  type NightEnergyQualityPolicy,
+  type NightEnergyQualitySummary,
+  type NightEnergySeries,
+  type NightEnergySeriesMetadata,
+  type NightEnergySeriesPoint,
   type OwnerReadInput,
   type OwnerReadResult,
 } from '../../application/index.js';
@@ -16,36 +22,12 @@ import {
   type OwnerReaderHttpConfig,
 } from './owner-http.js';
 
-export type EnergyGranularity = 'hour' | 'day' | 'month';
-export type EnergyQualityPolicy = 'VALID_ONLY' | 'VALID_AND_SUSPECT';
-
-export interface EnergySeriesPointDto {
-  readonly periodStart: string;
-  readonly periodEnd: string;
-  readonly energyKWh: number;
-}
-
-export interface EnergyQualitySummaryDto {
-  readonly valid: number;
-  readonly suspect: number;
-  readonly invalid: number;
-}
-
-export interface EnergySeriesMetadataDto {
-  readonly requestedGranularity: EnergyGranularity;
-  readonly actualGranularity: EnergyGranularity;
-  readonly dataWatermark?: string;
-  readonly aggregateWatermark?: string;
-  readonly datasetRevision: string;
-  readonly partial: boolean;
-  readonly qualitySummary: EnergyQualitySummaryDto;
-}
-
-export interface EnergySeriesResponseDto {
-  readonly schemaVersion: 1;
-  readonly points: readonly EnergySeriesPointDto[];
-  readonly metadata: EnergySeriesMetadataDto;
-}
+export type EnergyGranularity = NightEnergyGranularity;
+export type EnergyQualityPolicy = NightEnergyQualityPolicy;
+export type EnergySeriesPointDto = NightEnergySeriesPoint;
+export type EnergyQualitySummaryDto = NightEnergyQualitySummary;
+export type EnergySeriesMetadataDto = NightEnergySeriesMetadata;
+export type EnergySeriesResponseDto = NightEnergySeries;
 
 export type EnergyAnalyticsOwnerReaderConfig = OwnerReaderHttpConfig;
 
