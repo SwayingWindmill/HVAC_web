@@ -16,6 +16,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/services/telemetry-query-service/internal/cube"
+	"github.com/quanlaihe/hvac-web/services/telemetry-query-service/internal/history"
 	"github.com/quanlaihe/hvac-web/services/telemetry-query-service/internal/query"
 )
 
@@ -57,11 +58,26 @@ func main() {
 		logger.Error("query_cube_client_invalid", "error_code", "QUERY_CUBE_CLIENT_INVALID")
 		os.Exit(1)
 	}
+	historyHTTPClient, err := newCubeHTTPClient(strings.TrimSpace(os.Getenv("QUERY_HISTORY_CLICKHOUSE_CA")))
+	if err != nil {
+		logger.Error("query_history_clickhouse_ca_invalid", "error_code", "QUERY_HISTORY_CLICKHOUSE_CA_INVALID")
+		os.Exit(1)
+	}
+	historyClient, err := history.NewClient(history.Config{
+		BaseURL: requiredEnv("QUERY_HISTORY_CLICKHOUSE_ENDPOINT"), Database: envOr("QUERY_HISTORY_CLICKHOUSE_DATABASE", "telemetry_history"),
+		Table: envOr("QUERY_HISTORY_CLICKHOUSE_TABLE", "observations"), Username: envOr("QUERY_HISTORY_CLICKHOUSE_USERNAME", "telemetry_query_history_reader"),
+		Password: os.Getenv("QUERY_HISTORY_CLICKHOUSE_PASSWORD"), DatasetRevision: requiredEnv("QUERY_HISTORY_DATASET_REVISION"), HTTPClient: historyHTTPClient,
+	})
+	if err != nil {
+		logger.Error("query_history_clickhouse_client_invalid", "error_code", "QUERY_HISTORY_CLICKHOUSE_CLIENT_INVALID")
+		os.Exit(1)
+	}
 
 	server := &http.Server{
 		Addr: envOr("QUERY_SERVICE_ADDR", "127.0.0.1:18447"),
 		Handler: query.NewHandler(query.ServerConfig{
 			Engine:                 cubeClient,
+			HistoryEngine:          historyClient,
 			DelegationPublicKey:    delegationPublicKey,
 			DelegationIssuerSPIFFE: envOr("QUERY_DELEGATION_ISSUER_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 			AllowedPresenterSPIFFE: envOr("QUERY_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),

@@ -157,8 +157,31 @@ func TestPostgresTelemetryAuthorizationLoadsExactDeviceAndKeyFacts(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !facts.Found || facts.PolicyRevision != "telemetry-access:1" || len(facts.RoleBindings) != 1 || len(facts.SiteBindings) != 1 || len(facts.ExplicitDenies) != 0 || len(facts.Devices) != 1 || len(facts.ScopeBindings) != 1 || len(facts.KeyBindings) != 2 {
+	if !facts.Found || facts.PolicyRevision != "telemetry-access:2" || len(facts.RoleBindings) != 1 || len(facts.SiteBindings) != 1 || len(facts.ExplicitDenies) != 0 || len(facts.Devices) != 1 || len(facts.ScopeBindings) != 1 || len(facts.KeyBindings) != 2 {
 		t.Fatalf("Telemetry facts = %#v", facts)
+	}
+}
+
+func TestPostgresPrincipalTelemetryCapabilityLookupDoesNotEnumerateDevicesOrKeys(t *testing.T) {
+	runtimeURL := requiredIAMPostgresEnv(t, "S1_IAM_DATABASE_URL")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := iam.OpenPostgresAuthorizationStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	facts, err := store.LookupPrincipalTelemetryCapabilities(ctx, iam.PrincipalCapabilityLookup{
+		SubjectIssuer: postgresFixtureIssuer, Subject: "delegated", ActingOrganizationID: postgresActingOrganizationID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !facts.Found || facts.PolicyRevision != "telemetry-access:2" || len(facts.RoleBindings) != 1 || len(facts.SiteBindings) != 1 || len(facts.ScopeBindings) != 1 {
+		t.Fatalf("principal Telemetry capability facts = %#v", facts)
+	}
+	if len(facts.Devices) != 0 || len(facts.KeyBindings) != 0 {
+		t.Fatalf("capability lookup enumerated Device/key facts: %#v", facts)
 	}
 }
 

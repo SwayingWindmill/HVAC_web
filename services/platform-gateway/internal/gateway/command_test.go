@@ -46,7 +46,8 @@ func TestGatewayCreateCommandDerivesAuthorityAndCurrentState(t *testing.T) {
 		t.Fatalf("calls iam=%d registry=%d telemetry=%d command=%d", fixture.iamCalls.Load(), fixture.registryCalls.Load(), fixture.telemetryCalls.Load(), fixture.commandCalls.Load())
 	}
 	var view commandView
-	if json.NewDecoder(recorder.Body).Decode(&view) != nil || view.CommandID != fixture.commandID || view.SnapshotRevision != 17 {
+	if json.NewDecoder(recorder.Body).Decode(&view) != nil || view.CommandID != fixture.commandID ||
+		view.OrganizationID != fixture.organizationID || view.SiteID != fixture.siteID || view.SnapshotRevision != 17 {
 		t.Fatalf("unexpected view %#v", view)
 	}
 }
@@ -114,6 +115,21 @@ func TestGatewayGetCommandUsesScopedReadContext(t *testing.T) {
 	}
 	if fixture.commandCalls.Load() != 1 || fixture.iamCalls.Load()+fixture.registryCalls.Load()+fixture.telemetryCalls.Load() != 0 {
 		t.Fatal("command read called unrelated upstreams")
+	}
+}
+
+func TestGatewayGetCommandRejectsCrossOrganizationProjection(t *testing.T) {
+	fixture := newCommandGatewayFixture(t)
+	fixture.crossOrganizationView.Store(true)
+	request := httptest.NewRequest(http.MethodGet, publicCommandsPath+"/"+fixture.commandID, nil)
+	fixture.authenticate(request, false)
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "018f3e00-1000-7000-8000-000000000002") {
+		t.Fatal("cross-Organization Command projection leaked its scope")
 	}
 }
 
@@ -209,22 +225,23 @@ func TestCommandRegistryDecisionUsesRegistryRouteOwnership(t *testing.T) {
 }
 
 type commandGatewayFixture struct {
-	handler           *handler
-	sessionID         string
-	organizationID    string
-	siteID            string
-	deviceID          string
-	commandID         string
-	principalID       string
-	gatewaySigner     *ecdsa.PrivateKey
-	iamSigner         *ecdsa.PrivateKey
-	iamCalls          atomic.Int32
-	registryCalls     atomic.Int32
-	telemetryCalls    atomic.Int32
-	commandCalls      atomic.Int32
-	unsafeState       atomic.Bool
-	approvalPending   atomic.Bool
-	approvalCompleted atomic.Bool
+	handler                 *handler
+	sessionID               string
+	organizationID          string
+	siteID                  string
+	deviceID                string
+	commandID               string
+	principalID             string
+	gatewaySigner           *ecdsa.PrivateKey
+	iamSigner               *ecdsa.PrivateKey
+	iamCalls                atomic.Int32
+	registryCalls           atomic.Int32
+	telemetryCalls          atomic.Int32
+	commandCalls            atomic.Int32
+	unsafeState             atomic.Bool
+	crossOrganizationView   atomic.Bool
+	approvalPending         atomic.Bool
+	approvalCompleted       atomic.Bool
 }
 
 func newCommandGatewayFixture(t *testing.T) *commandGatewayFixture {
@@ -496,6 +513,10 @@ func (fixture *commandGatewayFixture) commandBackendClient(t *testing.T, now tim
 }
 
 func (fixture *commandGatewayFixture) commandView(now time.Time) commandView {
+	organizationID := fixture.organizationID
+	if fixture.crossOrganizationView.Load() {
+		organizationID = "018f3e00-1000-7000-8000-000000000002"
+	}
 	status := commandmodel.IntentQueued
 	risk := commandmodel.RiskLow
 	policy := commandmodel.ApprovalNone
@@ -527,7 +548,8 @@ func (fixture *commandGatewayFixture) commandView(now time.Time) commandView {
 		)
 	}
 	return commandView{
-		SchemaVersion: 1, CommandID: fixture.commandID, DeviceID: fixture.deviceID,
+		SchemaVersion: 1, CommandID: fixture.commandID, OrganizationID: organizationID,
+		SiteID: fixture.siteID, DeviceID: fixture.deviceID,
 		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: commandCapabilityRevision,
 		Status: status, Risk: risk, ApprovalPolicy: policy, ApprovalCount: approvalCount, RequiredApprovalCount: requiredCount,
 		SetpointC: 24, DeviceCommandSequence: 1, Version: version, SnapshotRevision: 17,

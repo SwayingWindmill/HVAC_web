@@ -344,13 +344,13 @@ $site_revocation$;
 INSERT INTO iam.role_bindings
   (id, organization_id, principal_id, role_key, actions, effect, valid_from, valid_to, revision, created_at, updated_at)
 VALUES
-  ('018f1e00-2200-7000-8000-000000000011', '018f1e00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', 'telemetry-reader', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
-  ('018f1e00-2200-7000-8000-000000000012', '018f1e00-0000-7000-8000-000000000003', '018f1e00-2000-7000-8000-000000000002', 'telemetry-reader', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2200-7000-8000-000000000011', '018f1e00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', 'telemetry-reader', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2200-7000-8000-000000000012', '018f1e00-0000-7000-8000-000000000003', '018f1e00-2000-7000-8000-000000000002', 'telemetry-reader', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
   ('018f1e00-2200-7000-8000-000000000013', '018f1e00-0000-7000-8000-000000000003', '018f1e00-2000-7000-8000-000000000003', 'telemetry-reader', ARRAY['telemetry.snapshot.read'], 'ALLOW', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')
 ON CONFLICT DO NOTHING;
 
 UPDATE iam.site_bindings
-SET actions = actions || ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'],
+SET actions = actions || ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'],
     revision = revision + 1,
     updated_at = '2026-07-21T00:00:00Z'
 WHERE id = '018f1e00-2300-7000-8000-000000000001';
@@ -383,8 +383,8 @@ AFTER UPDATE OR DELETE ON iam.site_bindings
 FOR EACH ROW EXECUTE FUNCTION iam.emit_site_binding_telemetry_revocation();
 
 INSERT INTO iam.policies (id, organization_id, policy_key, policy_revision, status, document, created_at, updated_at) VALUES
-  ('018f1e00-2500-7000-8000-000000000011', '018f1e00-0000-7000-8000-000000000001', 'telemetry-access', 1, 'ACTIVE', '{"denyPrecedence":true,"exactDeviceKeyScope":true}', '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
-  ('018f1e00-2500-7000-8000-000000000013', '018f1e00-0000-7000-8000-000000000003', 'telemetry-access', 1, 'ACTIVE', '{"denyPrecedence":true,"exactDeviceKeyScope":true}', '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')
+  ('018f1e00-2500-7000-8000-000000000011', '018f1e00-0000-7000-8000-000000000001', 'telemetry-access', 2, 'ACTIVE', '{"denyPrecedence":true,"exactDeviceKeyScope":true}', '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2500-7000-8000-000000000013', '018f1e00-0000-7000-8000-000000000003', 'telemetry-access', 2, 'ACTIVE', '{"denyPrecedence":true,"exactDeviceKeyScope":true}', '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO iam.explicit_denies
@@ -396,16 +396,16 @@ ON CONFLICT DO NOTHING;
 INSERT INTO iam.telemetry_scope_bindings
   (id, principal_id, acting_organization_id, owning_organization_id, site_id, device_id, actions, effect, status, valid_from, valid_to, revision, created_at, updated_at)
 VALUES
-  ('018f1e00-2600-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
-  ('018f1e00-2600-7000-8000-000000000002', '018f1e00-2000-7000-8000-000000000002', '018f1e00-0000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2600-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2600-7000-8000-000000000002', '018f1e00-2000-7000-8000-000000000002', '018f1e00-0000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
   ('018f1e00-2600-7000-8000-000000000003', '018f1e00-2000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', ARRAY['telemetry.snapshot.read'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO iam.telemetry_key_bindings
   (id, principal_id, acting_organization_id, device_id, telemetry_key, actions, effect, status, valid_from, valid_to, revision, created_at, updated_at)
 VALUES
-  ('018f1e00-2700-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
-  ('018f1e00-2700-7000-8000-000000000002', '018f1e00-2000-7000-8000-000000000002', '018f1e00-0000-7000-8000-000000000003', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2700-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2700-7000-8000-000000000002', '018f1e00-2000-7000-8000-000000000002', '018f1e00-0000-7000-8000-000000000003', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
   ('018f1e00-2700-7000-8000-000000000003', '018f1e00-2000-7000-8000-000000000002', '018f1e00-0000-7000-8000-000000000003', '018f1e00-4000-7000-8000-000000000001', 'fan.speed', ARRAY['telemetry.snapshot.read','telemetry.subscribe'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
   ('018f1e00-2700-7000-8000-000000000004', '018f1e00-2000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000003', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
   ('018f1e00-2700-7000-8000-000000000005', '018f1e00-2000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000003', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read'], 'DENY', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')

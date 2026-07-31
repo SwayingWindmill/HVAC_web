@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import type { Capability, Site } from '@/api/generated/platformGateway.gen';
 import { FocusHeading } from './FocusHeading';
 import { createIdleRealtimeStatus, realtimeStatusLabel } from './realtime-status';
@@ -12,6 +12,16 @@ import { siteRoute, type SiteContext, type SiteRoutingDecision } from './site-ro
 const EnergyAnalytics = lazy(async () => {
   const module = await import('./EnergyAnalytics');
   return { default: module.EnergyAnalytics };
+});
+
+const RealCommands = lazy(async () => {
+  const module = await import('./RealCommands');
+  return { default: module.RealCommands };
+});
+
+const RealAlarms = lazy(async () => {
+  const module = await import('./RealAlarms');
+  return { default: module.RealAlarms };
 });
 
 type RoutedSiteDecision = Exclude<SiteRoutingDecision, { state: 'PLATFORM_ROUTE' }>;
@@ -209,6 +219,11 @@ const SITE_ROUTE_COPY = {
     title: 'Energy',
     detail: 'Energy 路由只消费 Platform Gateway 的 Site 级权威分析接口，并保留水位、修订、质量和缺失数据语义。',
   },
+  alarms: {
+    eyebrow: 'REAL MODE · SITE ALARMS',
+    title: 'Alarm',
+    detail: 'Alarm 路由只消费 Alarm Service 发布的 durable lifecycle，不从 Telemetry 或 Presence 推导业务告警。',
+  },
   commands: {
     eyebrow: 'REAL MODE · SITE COMMANDS',
     title: 'Commands',
@@ -221,48 +236,16 @@ const SITE_ROUTE_COPY = {
   },
 } as const;
 
-function CommandDraft({
-  decision,
-  registerUnsavedDraft,
-}: {
-  decision: Extract<SiteRoutingDecision, { state: 'READY' }>;
-  registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
-}) {
-  const valueRef = useRef('');
-  const [value, setValue] = useState('');
-
-  useEffect(() => registerUnsavedDraft({
-    id: `command-draft:${decision.context.site.id}`,
-    label: `Command draft for ${decision.context.site.displayName}`,
-    isDirty: () => valueRef.current.trim().length > 0,
-  }), [decision.context.site.displayName, decision.context.site.id, registerUnsavedDraft]);
-
-  return (
-    <section className="real-command-draft" data-testid="real-command-draft">
-      <h2>Unsaved command draft</h2>
-      <p>此草稿仅保存在当前受保护内存中，不会发送命令，也不会跨 Site 保留。</p>
-      <label htmlFor="real-command-draft-value">Draft note</label>
-      <textarea
-        id="real-command-draft-value"
-        value={value}
-        onChange={(event) => {
-          valueRef.current = event.currentTarget.value;
-          setValue(event.currentTarget.value);
-        }}
-        data-testid="real-command-draft-value"
-      />
-    </section>
-  );
-}
-
 function ReadySiteSurface({
   decision,
   snapshot,
   registerUnsavedDraft,
+  registerProtectedResource,
 }: {
   decision: Extract<SiteRoutingDecision, { state: 'READY' }>;
   snapshot: ShellSnapshot;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
+  registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
 }) {
   if (decision.route === 'energy') {
     return (
@@ -279,6 +262,55 @@ function ReadySiteSurface({
           </div>
         )}>
           <EnergyAnalytics site={decision.context.site} principal={snapshot.principal!} />
+        </Suspense>
+      </section>
+    );
+  }
+
+  if (decision.route === 'alarms') {
+    return (
+      <section
+        className="real-route-surface real-route-surface--alarms"
+        data-testid="real-site-route-alarms"
+        data-route-state="READY"
+        data-site-id={decision.context.site.id}
+        data-site-route="alarms"
+      >
+        <Suspense fallback={(
+          <div className="real-shell-progress" role="status" aria-live="polite">
+            正在加载 Alarm 界面…
+          </div>
+        )}>
+          <RealAlarms
+            site={decision.context.site}
+            principal={snapshot.principal!}
+            registerProtectedResource={registerProtectedResource}
+          />
+        </Suspense>
+      </section>
+    );
+  }
+
+  if (decision.route === 'commands') {
+    return (
+      <section
+        className="real-route-surface real-route-surface--commands"
+        data-testid="real-site-route-commands"
+        data-route-state="READY"
+        data-site-id={decision.context.site.id}
+        data-site-route="commands"
+      >
+        <Suspense fallback={(
+          <div className="real-shell-progress" role="status" aria-live="polite">
+            正在加载 Command 工作台…
+          </div>
+        )}>
+          <RealCommands
+            site={decision.context.site}
+            principal={snapshot.principal!}
+            registerUnsavedDraft={registerUnsavedDraft}
+            registerProtectedResource={registerProtectedResource}
+          />
         </Suspense>
       </section>
     );
@@ -313,9 +345,6 @@ function ReadySiteSurface({
       >
         Realtime scope: {realtimeStatusLabel(realtime)} for {decision.context.site.displayName}
       </div>
-      {decision.route === 'commands' ? (
-        <CommandDraft decision={decision} registerUnsavedDraft={registerUnsavedDraft} />
-      ) : null}
       <p>当前业务数据状态为 EMPTY；这不代表权限拒绝、服务不可用或 Demo 数据。</p>
     </section>
   );
@@ -359,6 +388,7 @@ function ProtectedSiteRouteFrame({
       decision={decision}
       snapshot={snapshot}
       registerUnsavedDraft={registerUnsavedDraft}
+      registerProtectedResource={registerProtectedResource}
     />
   );
 }
@@ -415,6 +445,7 @@ export function buildSiteNavigation(
   return [
     { id: 'site-assets', label: 'Assets', path: siteRoute(site, 'assets'), kind: 'link', degraded: false },
     { id: 'site-energy', label: 'Energy', path: siteRoute(site, 'energy'), kind: 'link', degraded: false },
+    { id: 'site-alarms', label: 'Alarm', path: siteRoute(site, 'alarms'), kind: 'link', degraded: false },
     { id: 'site-commands', label: 'Commands', path: siteRoute(site, 'commands'), kind: 'link', degraded: false },
     { id: 'site-bigscreen', label: 'BigScreen', path: siteRoute(site, 'bigscreen'), kind: 'link', degraded: false },
   ];

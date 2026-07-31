@@ -118,9 +118,13 @@ func NewHandler(config Config) http.Handler {
 	if store == nil {
 		store = NewDenyAllAuthorizationStore("policy-unconfigured")
 	}
+	telemetryStore := config.TelemetryAuthorizationStore
+	if telemetryStore == nil {
+		telemetryStore = newDenyAllTelemetryAuthorizationStore("telemetry-policy-unconfigured")
+	}
 	principalCapabilityResolver := config.PrincipalCapabilityResolver
 	if principalCapabilityResolver == nil {
-		principalCapabilityResolver = newRegistryPrincipalCapabilityResolver(store, now)
+		principalCapabilityResolver = newPrincipalCapabilityResolver(store, telemetryStore, now)
 	}
 	grantIssuer := config.RegistryGrantIssuer
 	if grantIssuer == "" {
@@ -152,10 +156,6 @@ func NewHandler(config Config) http.Handler {
 	auditSink := config.RegistryAuditSink
 	if auditSink == nil {
 		auditSink = newLoggerRegistryDecisionAuditSink(logger)
-	}
-	telemetryStore := config.TelemetryAuthorizationStore
-	if telemetryStore == nil {
-		telemetryStore = newDenyAllTelemetryAuthorizationStore("telemetry-policy-unconfigured")
 	}
 	telemetrySigner := config.TelemetryGrantSigner
 	if telemetrySigner == nil {

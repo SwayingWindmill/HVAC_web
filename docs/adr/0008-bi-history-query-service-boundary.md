@@ -96,15 +96,18 @@ product requirement needs that additional complexity.
 validation, authorization scope binding, query budgets, the repository-managed
 Cube semantic model and semantic-engine adaptation.
 
-The first internal contract is:
+The first internal contracts are:
 
 ```text
 POST /internal/v1/analytics/energy-series
+POST /internal/v1/telemetry/device-history
 ```
 
-The complete normalized request is bound to a short-lived Platform Gateway
-delegation grant by a SHA-256 scope digest. The service accepts only the fixed
-Energy Series contract and never accepts arbitrary Cube members or SQL.
+Each complete normalized request is bound to a short-lived Platform Gateway
+delegation grant by a SHA-256 scope digest. The service accepts only fixed
+product contracts and never accepts arbitrary Cube members, SQL, database names
+or table names. Energy Series uses Cube Core. Device History uses a dedicated
+least-privilege ClickHouse reader restricted to `telemetry_history.observations`.
 
 The service translates the product request to a fixed Cube query. Cube receives
 a separate 30-second JWT containing Organization, Site, Principal and policy
@@ -155,10 +158,17 @@ Query Service over the existing workload mTLS identity.
 Browser cookies, CSRF tokens and caller-supplied business-scope headers are never
 forwarded to IAM or Query Service.
 
-Gateway validates the internal response before returning it, preserves Dataset
+The public Device History route is `POST /api/v1/telemetry/device-series:query`.
+Browser requests contain only Device ID, keys, UTC range and per-key point limit.
+Gateway first requests the exact S2 `telemetry.history.read` Device/key decision,
+then builds an internal query from the Session Acting Organization and IAM
+Owning Organization/Site facts. A second grant binds the full query, including
+the maximum 24-hour range and point limit, before Query Service reads history.
+
+Gateway validates internal responses before returning them, preserves Dataset
 Revision, Watermark, Partial and Quality metadata, applies `private, no-store`,
 and maps timeout/unavailable/invalid-upstream states to bounded product errors.
-Cube and Telemetry Query Service remain private.
+Cube, ClickHouse and Telemetry Query Service remain private.
 
 ## Data ownership and identities
 

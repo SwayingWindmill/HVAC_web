@@ -104,8 +104,8 @@ func NewS2FixtureTelemetryAuthorizationStore(subjectIssuer string) TelemetryAuth
 	if subjectIssuer == "" {
 		subjectIssuer = "https://issuer.example.test"
 	}
-	actions := []telemetryauth.Action{telemetryauth.ActionSnapshotRead, telemetryauth.ActionBatchRead}
-	registryActions := []registryauth.Action{registryauth.Action(telemetryauth.ActionSnapshotRead), registryauth.Action(telemetryauth.ActionBatchRead)}
+	actions := []telemetryauth.Action{telemetryauth.ActionSnapshotRead, telemetryauth.ActionBatchRead, telemetryauth.ActionSubscribe, telemetryauth.ActionHistoryRead}
+	registryActions := []registryauth.Action{registryauth.Action(telemetryauth.ActionSnapshotRead), registryauth.Action(telemetryauth.ActionBatchRead), registryauth.Action(telemetryauth.ActionSubscribe), registryauth.Action(telemetryauth.ActionHistoryRead)}
 	return newStaticTelemetryAuthorizationStore(TelemetryAuthorizationFacts{
 		PolicyRevision: S2FixturePolicyRevision,
 		Principal:      PrincipalRecord{ID: S2FixturePrincipal, SubjectIssuer: subjectIssuer, Subject: "fixture-user", Status: FactStatusActive},

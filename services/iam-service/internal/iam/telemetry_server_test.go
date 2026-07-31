@@ -64,6 +64,10 @@ func (store fixedTelemetryStore) LookupTelemetryAuthorization(context.Context, i
 	return store.facts, store.err
 }
 
+func (store fixedTelemetryStore) LookupPrincipalTelemetryCapabilities(context.Context, iam.PrincipalCapabilityLookup) (iam.TelemetryAuthorizationFacts, error) {
+	return store.facts, store.err
+}
+
 func TestIAMTelemetryDecisionIssuesExactNonTransitiveGrant(t *testing.T) {
 	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
 		config.TelemetryAuthorizationStore = fixedTelemetryStore{facts: telemetryHTTPFacts(harnessTime())}

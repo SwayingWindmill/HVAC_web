@@ -2,6 +2,8 @@ package iam_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,11 +11,17 @@ import (
 	"testing"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/services/iam-service/internal/iam"
 )
 
+const principalCapabilityTelemetryPolicy = "telemetry-access:2"
+
 func TestIAMPublishesEffectiveCapabilitiesFromAuthorizationFacts(t *testing.T) {
-	harness := newIAMHarness(t)
+	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
+		config.TelemetryAuthorizationStore = fixedTelemetryStore{facts: principalTelemetryFacts(nil)}
+	})
 	claims := validIAMClaims(harness.now, "fixture-user", "principal:read")
 	claims.ActingOrganizationID = iam.S1FixtureOwnerAOrganizationID
 	claims.Roles = []string{"descriptive-role-only"}
@@ -32,12 +40,50 @@ func TestIAMPublishesEffectiveCapabilitiesFromAuthorizationFacts(t *testing.T) {
 	if response.Authorization.CapabilitySetVersion != identitycontext.CapabilitySetVersion {
 		t.Fatalf("capability set version = %d", response.Authorization.CapabilitySetVersion)
 	}
-	if response.Authorization.PolicyRevision != iam.S1FixturePolicyRevision {
+	if response.Authorization.PolicyRevision != capabilityPolicyRevision(iam.S1FixturePolicyRevision, principalCapabilityTelemetryPolicy) {
 		t.Fatalf("policy revision = %q", response.Authorization.PolicyRevision)
 	}
 	assertCapabilitiesEqual(t, response.Authorization.Capabilities, identitycontext.SupportedCapabilities())
 	if len(response.Principal.Roles) != 1 || response.Principal.Roles[0] != "descriptive-role-only" {
 		t.Fatalf("roles were reinterpreted or rewritten: %#v", response.Principal.Roles)
+	}
+}
+
+func TestIAMTelemetryCapabilityProjectionPreservesExplicitDenyPrecedence(t *testing.T) {
+	denies := []iam.ExplicitDeny{{
+		ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID,
+		OrganizationID:       iam.S1FixtureOwnerAOrganizationID,
+		SiteID:               iam.S1FixtureOwnerASite1ID,
+		Actions:              []registryauth.Action{registryauth.Action(telemetryauth.ActionSubscribe)},
+		Status:               iam.FactStatusActive,
+	}}
+	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
+		config.TelemetryAuthorizationStore = fixedTelemetryStore{facts: principalTelemetryFacts(denies)}
+	})
+	claims := validIAMClaims(harness.now, "fixture-user", "principal:read")
+	claims.ActingOrganizationID = iam.S1FixtureOwnerAOrganizationID
+	recorder := httptest.NewRecorder()
+	harness.handler.ServeHTTP(recorder, harness.request(t, iam.CurrentPrincipalPath, nil, claims, harness.gatewaySigner))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response identitycontext.InternalPrincipalResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	for _, capability := range response.Authorization.Capabilities {
+		if capability == identitycontext.CapabilityTelemetrySubscribe {
+			t.Fatal("explicit telemetry subscribe deny was projected as allowed")
+		}
+	}
+	for _, expected := range []identitycontext.Capability{
+		identitycontext.CapabilityTelemetrySnapshotRead,
+		identitycontext.CapabilityTelemetryBatchRead,
+		identitycontext.CapabilityTelemetryHistoryRead,
+	} {
+		if !containsCapability(response.Authorization.Capabilities, expected) {
+			t.Fatalf("capability %q was unexpectedly removed", expected)
+		}
 	}
 }
 
@@ -60,7 +106,7 @@ func TestIAMPublishesExplicitEmptyCapabilities(t *testing.T) {
 	if response.Authorization.Capabilities == nil || len(response.Authorization.Capabilities) != 0 {
 		t.Fatalf("empty capability set must be an explicit array: %#v", response.Authorization.Capabilities)
 	}
-	if response.Authorization.PolicyRevision != iam.S1FixturePolicyRevision {
+	if response.Authorization.PolicyRevision != capabilityPolicyRevision(iam.S1FixturePolicyRevision, "telemetry-policy-unconfigured") {
 		t.Fatalf("policy revision = %q", response.Authorization.PolicyRevision)
 	}
 }
@@ -101,6 +147,60 @@ func TestIAMRejectsInvalidOrUnavailableCapabilityDecisions(t *testing.T) {
 			assertIAMProblem(t, recorder, http.StatusServiceUnavailable, testCase.problemCode)
 		})
 	}
+}
+
+func principalTelemetryFacts(denies []iam.ExplicitDeny) iam.TelemetryAuthorizationFacts {
+	actions := []telemetryauth.Action{
+		telemetryauth.ActionSnapshotRead,
+		telemetryauth.ActionBatchRead,
+		telemetryauth.ActionSubscribe,
+		telemetryauth.ActionHistoryRead,
+	}
+	registryActions := make([]registryauth.Action, len(actions))
+	for index, action := range actions {
+		registryActions[index] = registryauth.Action(action)
+	}
+	return iam.TelemetryAuthorizationFacts{
+		Found:          true,
+		PolicyRevision: principalCapabilityTelemetryPolicy,
+		Principal: iam.PrincipalRecord{
+			ID:            iam.S1FixtureOwnerAPrincipalID,
+			SubjectIssuer: fixtureSubjectIssuer,
+			Subject:       "fixture-user",
+			Status:        iam.FactStatusActive,
+		},
+		Memberships: []iam.OrganizationMembership{{OrganizationID: iam.S1FixtureOwnerAOrganizationID, Status: iam.FactStatusActive}},
+		RoleBindings: []iam.RoleBinding{{
+			OrganizationID: iam.S1FixtureOwnerAOrganizationID,
+			Actions:        registryActions,
+			Effect:         iam.BindingEffectAllow,
+			Status:         iam.FactStatusActive,
+		}},
+		ExplicitDenies: denies,
+		ScopeBindings: []iam.TelemetryScopeBinding{{
+			ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID,
+			OwningOrganizationID: iam.S1FixtureOwnerAOrganizationID,
+			SiteID:               iam.S1FixtureOwnerASite1ID,
+			DeviceID:             iam.S2FixtureDevice,
+			Actions:              actions,
+			Effect:               iam.BindingEffectAllow,
+			Status:               iam.FactStatusActive,
+		}},
+	}
+}
+
+func capabilityPolicyRevision(registryRevision, telemetryRevision string) string {
+	digest := sha256.Sum256([]byte(registryRevision + "\x00" + telemetryRevision))
+	return "capability-v2:" + hex.EncodeToString(digest[:])
+}
+
+func containsCapability(capabilities []identitycontext.Capability, expected identitycontext.Capability) bool {
+	for _, capability := range capabilities {
+		if capability == expected {
+			return true
+		}
+	}
+	return false
 }
 
 type fixedPrincipalCapabilityResolver struct {

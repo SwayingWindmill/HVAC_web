@@ -3,18 +3,22 @@ import { once } from 'node:events';
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createTCPServer } from 'node:net';
+import { createRequire } from 'node:module';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import WebSocket from 'ws';
 
 const root = resolve(process.cwd());
+const requireFromScript = createRequire(import.meta.url);
+const vitePackagePath = requireFromScript.resolve('vite/package.json');
+const viteBinPath = resolve(vitePackagePath, '../bin/vite.js');
 const profileDir = join(tmpdir(), `rms-02-principal-browser-${process.pid}`);
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 const instant = '2099-07-28T03:00:00.000Z';
 const actingOrganizationId = '01900000-0000-7000-8000-000000000001';
 const policyRevision = 'rms-policy:7';
-const capabilities = ['organization.list', 'site.read', 'device.read'];
+const capabilities = ['organization.list', 'site.read', 'device.read', 'telemetry.snapshot.read', 'telemetry.batch.read', 'telemetry.subscribe', 'telemetry.history.read'];
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -75,7 +79,7 @@ function principalResponse() {
       delegationExpiresAt: instant,
     },
     authorization: {
-      capabilitySetVersion: 1,
+      capabilitySetVersion: 2,
       policyRevision,
       capabilities,
     },
@@ -257,7 +261,7 @@ try {
   });
 
   viteProcess = spawn(process.execPath, [
-    resolve(root, 'node_modules/vite/bin/vite.js'),
+    viteBinPath,
     'apps/hvac-web',
     '--config', 'apps/hvac-web/vite.real.config.ts',
     '--host', '127.0.0.1',

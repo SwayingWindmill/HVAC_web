@@ -62,9 +62,11 @@ type config struct {
 }
 
 type localDevice struct {
-	DeviceID string `json:"deviceId"`
-	Name     string `json:"name"`
-	Type     string `json:"type"`
+	OrganizationID string `json:"organizationId"`
+	SiteID         string `json:"siteId"`
+	DeviceID       string `json:"deviceId"`
+	Name           string `json:"name"`
+	Type           string `json:"type"`
 }
 
 type localDeviceCatalog struct {
@@ -306,7 +308,13 @@ func (g *gateway) principal(writer http.ResponseWriter, _ *http.Request) {
 }
 
 func (g *gateway) localDevices(writer http.ResponseWriter, _ *http.Request) {
-	writeJSON(writer, http.StatusOK, localDeviceCatalog{SchemaVersion: 1, Devices: g.config.deviceCatalog})
+	devices := make([]localDevice, 0, len(g.config.deviceCatalog))
+	for _, device := range g.config.deviceCatalog {
+		device.OrganizationID = g.config.organizationID
+		device.SiteID = g.config.siteID
+		devices = append(devices, device)
+	}
+	writeJSON(writer, http.StatusOK, localDeviceCatalog{SchemaVersion: 1, Devices: devices})
 }
 
 func (g *gateway) createCommand(writer http.ResponseWriter, request *http.Request) {

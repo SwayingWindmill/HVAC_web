@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	CapabilitySetVersion                 = 1
+	CapabilitySetVersion                 = 2
 	GetHealthPath                         = "__HEALTH_PATH__"
 	GetVersionPath                        = "__VERSION_PATH__"
 	GetPlatformStatusPath                 = "__PLATFORM_STATUS_PATH__"
@@ -92,7 +92,11 @@ const (
 	CapabilityEquipmentList    Capability = "equipment.list"
 	CapabilityEquipmentRead    Capability = "equipment.read"
 	CapabilityDeviceList       Capability = "device.list"
-	CapabilityDeviceRead       Capability = "device.read"
+	CapabilityDeviceRead              Capability = "device.read"
+	CapabilityTelemetrySnapshotRead   Capability = "telemetry.snapshot.read"
+	CapabilityTelemetryBatchRead      Capability = "telemetry.batch.read"
+	CapabilityTelemetrySubscribe      Capability = "telemetry.subscribe"
+	CapabilityTelemetryHistoryRead    Capability = "telemetry.history.read"
 )
 
 type EffectiveAuthorization struct {

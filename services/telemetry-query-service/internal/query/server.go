@@ -13,16 +13,20 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
 	"github.com/quanlaihe/hvac-web/services/telemetry-query-service/internal/analytics"
+	"github.com/quanlaihe/hvac-web/services/telemetry-query-service/internal/history"
 )
 
 const (
 	EnergySeriesPath       = "/internal/v1/analytics/energy-series"
+	DeviceHistoryPath      = "/internal/v1/telemetry/device-history"
 	maximumRequestBodySize = int64(64 << 10)
 )
 
 type ServerConfig struct {
 	Engine                            analytics.EnergySeriesEngine
+	HistoryEngine                     history.Engine
 	DelegationPublicKey               crypto.PublicKey
 	DelegationIssuerSPIFFE            string
 	AllowedPresenterSPIFFE            string
@@ -35,6 +39,7 @@ type ServerConfig struct {
 
 type handler struct {
 	engine                  analytics.EnergySeriesEngine
+	historyEngine           history.Engine
 	delegationPublicKey     crypto.PublicKey
 	delegationIssuerSPIFFE  string
 	allowedPresenterSPIFFEs map[string]struct{}
@@ -50,7 +55,7 @@ func NewHandler(config ServerConfig) http.Handler {
 	if delegationIssuer == "" {
 		delegationIssuer = primaryPresenter
 	}
-	if config.Engine == nil || config.DelegationPublicKey == nil || primaryPresenter == "" || delegationIssuer == "" || strings.TrimSpace(config.Audience) == "" {
+	if config.Engine == nil || config.HistoryEngine == nil || config.DelegationPublicKey == nil || primaryPresenter == "" || delegationIssuer == "" || strings.TrimSpace(config.Audience) == "" {
 		panic("Telemetry Query server configuration is incomplete")
 	}
 	allowedPresenters := map[string]struct{}{primaryPresenter: {}}
@@ -75,6 +80,7 @@ func NewHandler(config ServerConfig) http.Handler {
 	}
 	return &handler{
 		engine:                  config.Engine,
+		historyEngine:           config.HistoryEngine,
 		delegationPublicKey:     config.DelegationPublicKey,
 		delegationIssuerSPIFFE:  delegationIssuer,
 		allowedPresenterSPIFFEs: allowedPresenters,
@@ -88,11 +94,12 @@ func NewHandler(config ServerConfig) http.Handler {
 func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	started := server.now()
 	routeName := "unmatched"
-	if request.URL.Path == EnergySeriesPath {
-		routeName = EnergySeriesPath
+	switch request.URL.Path {
+	case EnergySeriesPath, DeviceHistoryPath:
+		routeName = request.URL.Path
 	}
 	ctx := server.observability.Tracer.ExtractHTTP(request.Context(), request.Header)
-	ctx, span := server.observability.Tracer.Start(ctx, "http.analytics.energy-series", observability.SpanKindServer, map[string]any{
+	ctx, span := server.observability.Tracer.Start(ctx, "http.product-query", observability.SpanKindServer, map[string]any{
 		"http.request.method": request.Method,
 		"http.route":          routeName,
 	})
@@ -125,7 +132,7 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		)
 	}()
 
-	if request.URL.Path != EnergySeriesPath {
+	if request.URL.Path != EnergySeriesPath && request.URL.Path != DeviceHistoryPath {
 		writeProblem(writer, http.StatusNotFound, "ANALYTICS_ROUTE_NOT_FOUND", "The requested analytics route does not exist.", false)
 		return
 	}
@@ -142,6 +149,11 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 	_, presenterAllowed := server.allowedPresenterSPIFFEs[peerSPIFFE]
 	if !ok || !presenterAllowed {
 		writeProblem(writer, http.StatusUnauthorized, "ANALYTICS_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.", false)
+		return
+	}
+
+	if request.URL.Path == DeviceHistoryPath {
+		server.serveDeviceHistory(writer, request, peerSPIFFE)
 		return
 	}
 
@@ -186,6 +198,54 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		writeProblem(writer, http.StatusServiceUnavailable, "ANALYTICS_ENGINE_UNAVAILABLE", "The semantic query engine could not complete the request.", true)
 		return
 	}
+	writeJSON(writer, http.StatusOK, response)
+}
+
+func (server *handler) serveDeviceHistory(writer http.ResponseWriter, request *http.Request, peerSPIFFE string) {
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, maximumRequestBodySize))
+	decoder.DisallowUnknownFields()
+	var query telemetryhistorymodel.DeviceHistoryQuery
+	if err := decoder.Decode(&query); err != nil || ensureJSONEOF(decoder) != nil {
+		writeProblem(writer, http.StatusBadRequest, "TELEMETRY_HISTORY_REQUEST_INVALID", "The Device History request body is invalid.", false)
+		return
+	}
+	canonical, err := query.Canonical()
+	if err != nil {
+		writeProblem(writer, http.StatusBadRequest, "TELEMETRY_HISTORY_QUERY_INVALID", "The Device History query exceeds the supported product boundary.", false)
+		return
+	}
+	scope, err := canonical.ScopeDigest()
+	if err != nil {
+		writeProblem(writer, http.StatusBadRequest, "TELEMETRY_HISTORY_QUERY_INVALID", "The Device History query exceeds the supported product boundary.", false)
+		return
+	}
+	claims, err := identitycontext.VerifyDelegation(server.delegationPublicKey, request.Header.Get("X-Delegation-Grant"))
+	if err != nil {
+		writeProblem(writer, http.StatusUnauthorized, "TELEMETRY_HISTORY_DELEGATION_INVALID", "The Device History delegation grant is invalid.", false)
+		return
+	}
+	if claims.PrincipalID == "" || claims.ActingOrganizationID != canonical.ActingOrganizationID || identitycontext.ValidateDelegationFromIssuer(
+		claims,
+		server.now(),
+		server.delegationIssuerSPIFFE,
+		peerSPIFFE,
+		server.audience,
+		telemetryhistorymodel.DeviceHistoryAction,
+		scope,
+	) != nil {
+		writeProblem(writer, http.StatusForbidden, "TELEMETRY_HISTORY_DELEGATION_REJECTED", "The Device History delegation grant is not authorized for this query.", false)
+		return
+	}
+	response, err := server.historyEngine.QueryDeviceHistory(request.Context(), canonical)
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "TELEMETRY_HISTORY_ENGINE_UNAVAILABLE", "The Device History engine could not complete the request.", true)
+		return
+	}
+	if err := response.ValidateFor(canonical); err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "TELEMETRY_HISTORY_RESPONSE_INVALID", "The Device History engine returned an invalid response.", true)
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(writer, http.StatusOK, response)
 }
 
