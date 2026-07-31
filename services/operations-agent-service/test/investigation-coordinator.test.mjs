@@ -9,6 +9,7 @@ import { InvestigationRepositoryConflictError } from '../dist/application/index.
 
 class FakeInvestigationRepository {
   records = new Map();
+  businessRecords = new Map();
   saveCalls = [];
   conflictNextSave = false;
 
@@ -34,7 +35,7 @@ class FakeInvestigationRepository {
     return this.records.get(id) ?? null;
   }
 
-  async save({ investigation, expectedRevision, event, audit }) {
+  async save({ investigation, expectedRevision, record, event, audit }) {
     const id = investigation.view().id;
     if (this.conflictNextSave) {
       this.conflictNextSave = false;
@@ -49,6 +50,16 @@ class FakeInvestigationRepository {
         'REVISION_CONFLICT',
         'Investigation Revision changed.',
       );
+    }
+    if (record !== undefined) {
+      const recordKey = `${id}:${record.id}`;
+      if (this.businessRecords.has(recordKey)) {
+        throw new InvestigationRepositoryConflictError(
+          'DUPLICATE_RECORD',
+          'Business record already exists.',
+        );
+      }
+      this.businessRecords.set(recordKey, record);
     }
     this.saveCalls.push({ id, expectedRevision, nextRevision: investigation.view().revision });
     this.records.set(id, investigation);
@@ -83,11 +94,21 @@ const createHarness = ({
 
   const coordinator = createInvestigationCoordinator({
     investigationRepository: repository,
+    businessRecordRepository: {
+      async get(investigationId, recordId) {
+        return repository.businessRecords.get(`${investigationId}:${recordId}`) ?? null;
+      },
+    },
     investigationTransaction: repository,
     authorizationDecisionReader: {
       async authorizeScope() {
         return authorizationAllowed
-          ? { decision: 'ALLOW', decisionId: 'decision-001' }
+          ? {
+            decision: 'ALLOW',
+            decisionId: 'decision-001',
+            delegationGrant: 'delegation-grant-001',
+            policyRevision: 'policy-revision-001',
+          }
           : { decision: 'DENY', decisionId: 'decision-001', reason: 'Scope is not authorized.' };
       },
     },
@@ -117,10 +138,24 @@ const createHarness = ({
       async check() { return budgetDecision; },
     },
     ownerReaders: {
-      registry: { read: readerHandlers.registry ?? defaultReader },
-      currentTelemetry: { read: readerHandlers.currentTelemetry ?? defaultReader },
-      energyAnalytics: { read: readerHandlers.energyAnalytics ?? defaultReader },
-      commandCapabilities: { read: readerHandlers.commandCapabilities ?? defaultReader },
+      registry: {
+        read: ({ request, context }) => (readerHandlers.registry ?? defaultReader)(request, context),
+      },
+      currentTelemetry: {
+        read: ({ request, context }) => (
+          readerHandlers.currentTelemetry ?? defaultReader
+        )(request, context),
+      },
+      energyAnalytics: {
+        read: ({ request, context }) => (
+          readerHandlers.energyAnalytics ?? defaultReader
+        )(request, context),
+      },
+      commandCapabilities: {
+        read: ({ request, context }) => (
+          readerHandlers.commandCapabilities ?? defaultReader
+        )(request, context),
+      },
     },
     clock: {
       now() { return currentTime; },
@@ -248,14 +283,16 @@ test('advance executes independent READ requests in parallel and saves only Runt
   const readGate = new Promise((resolve) => { releaseReads = resolve; });
   const allStarted = new Promise((resolve) => { resolveAllStarted = resolve; });
   const startedRequests = [];
+  const readContexts = [];
   const scope = {
     organizationId: 'organization-001',
     siteId: 'site-001',
     equipmentId: null,
     deviceId: null,
   };
-  const read = (owner) => async (request) => {
+  const read = (owner) => async (request, context) => {
     startedRequests.push(request.requestId);
+    readContexts.push(context);
     if (startedRequests.length === 2) resolveAllStarted();
     await readGate;
     return {
@@ -277,8 +314,8 @@ test('advance executes independent READ requests in parallel and saves only Runt
           requests: [
             {
               requestId: 'read-registry',
-              tool: 'registry.getEquipment',
-              input: { equipmentId: 'equipment-001' },
+              tool: 'registry.getSite',
+              input: { siteId: 'site-001' },
             },
             {
               requestId: 'read-current',
@@ -313,6 +350,15 @@ test('advance executes independent READ requests in parallel and saves only Runt
   const advanced = await advancePromise;
 
   assert.equal(advanced.investigation.revision, started.revision);
+  assert.equal(readContexts.length, 2);
+  for (const readContext of readContexts) {
+    assert.equal(readContext.investigationId, started.id);
+    assert.equal(readContext.runId, started.activeRunId);
+    assert.deepEqual(readContext.scope, scope);
+    assert.equal(readContext.authorization.decisionId, 'decision-001');
+    assert.equal(readContext.authorization.delegationGrant, 'delegation-grant-001');
+    assert.equal(readContext.authorization.policyRevision, 'policy-revision-001');
+  }
   assert.equal(harness.runtimeInputs.length, 1);
   assert.equal(harness.runtimeInputs[0].checkpoint, null);
   assert.deepEqual(advanced.investigation.evidenceIds, []);
@@ -343,8 +389,8 @@ test('advance resumes from a matching Checkpoint and rejects a mismatched Runtim
         batchId: 'batch-001',
         requests: [{
           requestId: 'read-registry',
-          tool: 'registry.getEquipment',
-          input: { equipmentId: 'equipment-001' },
+          tool: 'registry.getSite',
+          input: { siteId: 'site-001' },
         }],
       }],
     },
@@ -420,8 +466,8 @@ test('advance rejects Owner results whose identity, Owner, Scope, or provenance 
           batchId: 'batch-001',
           requests: [{
             requestId: 'read-registry',
-            tool: 'registry.getEquipment',
-            input: { equipmentId: 'equipment-001' },
+            tool: 'registry.getSite',
+            input: { siteId: 'site-001' },
           }],
         }],
       },
@@ -465,8 +511,8 @@ test('advance reports budget exhaustion and inability to conclude as distinct ty
         batchId: 'batch-001',
         requests: [{
           requestId: 'read-registry',
-          tool: 'registry.getEquipment',
-          input: {},
+          tool: 'registry.getSite',
+          input: { siteId: 'site-001' },
         }],
       }],
     },
@@ -505,6 +551,31 @@ test('business effects are serialized and exact retries do not save twice', asyn
   const harness = createHarness();
   const started = await createAndStart(harness);
   harness.setTime(1_100);
+  const digest = `sha256:${'c'.repeat(64)}`;
+  const evidenceRecord = {
+    schemaVersion: 1,
+    recordType: 'EVIDENCE',
+    id: 'evidence-001',
+    investigationId: started.id,
+    recordedAt: 1_100,
+    evidenceKind: 'SITE_ENERGY_SERIES_READY',
+    classification: 'FACT',
+    statement: 'Authoritative Site series is ready for deterministic analysis.',
+    analysisReferenceDigest: null,
+    sources: [{
+      owner: 'telemetry-query-service',
+      scope: started.scope,
+      requestId: 'energy-request-effect-001',
+      registryRevision: null,
+      datasetRevision: 'dataset-revision-effect-001',
+      watermark: { data: '2026-07-30T08:00:00.000Z', aggregate: null },
+      partial: false,
+      quality: { classification: 'GOOD', valid: 8, suspect: 0, invalid: 0 },
+      capturedAt: 1_050,
+      evaluatedAt: 1_100,
+      provenanceDigest: digest,
+    }],
+  };
 
   const committed = await harness.coordinator.commitEffect({
     investigationId: started.id,
@@ -515,6 +586,7 @@ test('business effects are serialized and exact retries do not save twice', asyn
     idempotencyKey: 'effect-evidence-001',
     kind: 'EVIDENCE',
     recordId: 'evidence-001',
+    record: evidenceRecord,
   });
   const saveCountAfterCommit = harness.repository.saveCalls.length;
   const duplicate = await harness.coordinator.commitEffect({
@@ -526,6 +598,7 @@ test('business effects are serialized and exact retries do not save twice', asyn
     idempotencyKey: 'effect-evidence-001',
     kind: 'EVIDENCE',
     recordId: 'evidence-001',
+    record: evidenceRecord,
   });
 
   assert.equal(committed.outcome, 'COMMITTED');
@@ -570,6 +643,24 @@ test('business effects are serialized and exact retries do not save twice', asyn
     recordId: 'finding-001',
   }), 'LEASE_CONFLICT');
 
+  const concurrentFindingRecord = {
+    schemaVersion: 1,
+    recordType: 'FINDING',
+    id: 'finding-concurrent',
+    investigationId: started.id,
+    recordedAt: 1_100,
+    findingKind: 'UNABLE_TO_CONCLUDE',
+    classification: 'INFERENCE',
+    statement: 'A concurrent writer prevented this Finding from being committed.',
+    evidenceIds: ['evidence-001'],
+    analysisReferenceIds: [],
+    conclusion: {
+      status: 'UNABLE_TO_CONCLUDE',
+      scope: 'SITE',
+      reasonCode: 'CONCURRENT_WRITE',
+      detail: 'Reload the authoritative Investigation Revision before retrying.',
+    },
+  };
   const outboxCountBeforeConflict = harness.outboxEvents.length;
   const auditCountBeforeConflict = harness.auditRecords.length;
   harness.repository.conflictNextSave = true;
@@ -582,6 +673,7 @@ test('business effects are serialized and exact retries do not save twice', asyn
     idempotencyKey: 'effect-concurrent-finding',
     kind: 'FINDING',
     recordId: 'finding-concurrent',
+    record: concurrentFindingRecord,
   }), 'REVISION_CONFLICT');
   const afterConflict = await harness.coordinator.get({ investigationId: started.id });
   assert.deepEqual(afterConflict.findingIds, []);
@@ -589,10 +681,102 @@ test('business effects are serialized and exact retries do not save twice', asyn
   assert.equal(harness.auditRecords.length, auditCountBeforeConflict);
 });
 
+test('typed business records commit atomically and exact retries return persisted content', async () => {
+  const harness = createHarness();
+  const started = await createAndStart(harness);
+  harness.setTime(1_100);
+  const digest = `sha256:${'a'.repeat(64)}`;
+  const record = {
+    schemaVersion: 1,
+    recordType: 'EVIDENCE',
+    id: 'evidence-record-001',
+    investigationId: started.id,
+    recordedAt: 1_100,
+    evidenceKind: 'SITE_ENERGY_SERIES_READY',
+    classification: 'FACT',
+    statement: 'Authoritative Site energy series passed deterministic readiness checks.',
+    analysisReferenceDigest: null,
+    sources: [{
+      owner: 'telemetry-query-service',
+      scope: started.scope,
+      requestId: 'energy-request-001',
+      registryRevision: null,
+      datasetRevision: 'dataset-revision-29',
+      watermark: {
+        data: '2026-07-30T08:00:00.000Z',
+        aggregate: '2026-07-30T08:00:00.000Z',
+      },
+      partial: false,
+      quality: { classification: 'GOOD', valid: 8, suspect: 0, invalid: 0 },
+      capturedAt: 1_050,
+      evaluatedAt: 1_100,
+      provenanceDigest: digest,
+    }],
+  };
+  const command = {
+    investigationId: started.id,
+    runId: started.activeRunId,
+    leaseId: started.runs[0].lease.id,
+    expectedRevision: started.revision,
+    stepId: 'step-typed-evidence',
+    idempotencyKey: 'typed-evidence-001',
+    kind: 'EVIDENCE',
+    recordId: record.id,
+    record,
+  };
+
+  const committed = await harness.coordinator.commitEffect(command);
+  const saveCount = harness.repository.saveCalls.length;
+  const outboxCount = harness.outboxEvents.length;
+  const auditCount = harness.auditRecords.length;
+  const duplicate = await harness.coordinator.commitEffect(command);
+
+  assert.equal(committed.outcome, 'COMMITTED');
+  assert.deepEqual(committed.record, record);
+  assert.deepEqual(committed.investigation.evidenceIds, [record.id]);
+  assert.equal(duplicate.outcome, 'DUPLICATE');
+  assert.deepEqual(duplicate.record, record);
+  assert.equal(harness.repository.saveCalls.length, saveCount);
+  assert.equal(harness.outboxEvents.length, outboxCount);
+  assert.equal(harness.auditRecords.length, auditCount);
+
+  await assertCoordinatorError(() => harness.coordinator.commitEffect({
+    ...command,
+    record: { ...record, statement: 'Conflicting retry content.' },
+  }), 'DUPLICATE_RECORD');
+  assert.equal(harness.repository.saveCalls.length, saveCount);
+  assert.equal(harness.outboxEvents.length, outboxCount);
+  assert.equal(harness.auditRecords.length, auditCount);
+});
+
 test('pause, resume, and cancel preserve committed records and reject the old lease', async () => {
   const harness = createHarness();
   const started = await createAndStart(harness);
   harness.setTime(1_100);
+  const evidenceRecord = {
+    schemaVersion: 1,
+    recordType: 'EVIDENCE',
+    id: 'evidence-001',
+    investigationId: started.id,
+    recordedAt: 1_100,
+    evidenceKind: 'SITE_ENERGY_SERIES_READY',
+    classification: 'FACT',
+    statement: 'Authoritative Site series remains durable across Run lifecycle changes.',
+    analysisReferenceDigest: null,
+    sources: [{
+      owner: 'telemetry-query-service',
+      scope: started.scope,
+      requestId: 'energy-request-lifecycle-001',
+      registryRevision: null,
+      datasetRevision: 'dataset-revision-lifecycle-001',
+      watermark: { data: '2026-07-30T08:00:00.000Z', aggregate: null },
+      partial: false,
+      quality: { classification: 'GOOD', valid: 8, suspect: 0, invalid: 0 },
+      capturedAt: 1_050,
+      evaluatedAt: 1_100,
+      provenanceDigest: `sha256:${'d'.repeat(64)}`,
+    }],
+  };
   const committed = await harness.coordinator.commitEffect({
     investigationId: started.id,
     runId: started.activeRunId,
@@ -602,6 +786,7 @@ test('pause, resume, and cancel preserve committed records and reject the old le
     idempotencyKey: 'effect-evidence-001',
     kind: 'EVIDENCE',
     recordId: 'evidence-001',
+    record: evidenceRecord,
   });
 
   harness.setTime(1_200);
@@ -646,6 +831,7 @@ test('pause, resume, and cancel preserve committed records and reject the old le
     idempotencyKey: 'effect-evidence-001',
     kind: 'EVIDENCE',
     recordId: 'evidence-001',
+    record: evidenceRecord,
   });
 
   assert.equal(cancelled.status, 'CANCELLED');

@@ -27,9 +27,13 @@
     "POST /api/v1/commands": { "revision": 1, "owner": "command-service" },
     "GET /api/v1/commands/{commandId}": { "revision": 1, "owner": "command-service" },
     "POST /api/v1/commands/{commandId}:approve": { "revision": 1, "owner": "command-service" },
+    "POST /api/v1/analytics/energy-series": { "revision": 1, "owner": "telemetry-query-service" },
+    "POST /api/v1/sites/{siteId}/operations/investigations": { "revision": 1, "owner": "operations-agent-service" },
+    "GET /api/v1/sites/{siteId}/operations/investigations/{investigationId}": { "revision": 1, "owner": "operations-agent-service" },
+    "POST /api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance": { "revision": 1, "owner": "operations-agent-service" },
+    "POST /api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel": { "revision": 1, "owner": "operations-agent-service" },
     "GET /api/v1/sites/{siteId}/alarms": { "revision": 1, "owner": "alarm-service" },
-    "GET /api/v1/sites/{siteId}/alarms/{alarmId}": { "revision": 1, "owner": "alarm-service" },
-    "POST /api/v1/analytics/energy-series": { "revision": 1, "owner": "telemetry-query-service" }
+    "GET /api/v1/sites/{siteId}/alarms/{alarmId}": { "revision": 1, "owner": "alarm-service" }
   },
   "dataRegistryRevision": 14,
   "resources": {

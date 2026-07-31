@@ -88,7 +88,7 @@ services/operations-agent-service/
 
 The directory names describe module responsibility, not mandatory implementation file count. Each module should expose a small public surface and hide its internal structure.
 
-The initial service skeleton is implemented at `services/operations-agent-service`. It is an independent npm package with NodeNext TypeScript build output, one external package root, module-local `index.ts` entries and a repository-owned AST boundary check. At this stage it has no LangGraph.js, model, database, AG-UI, scheduler, browser or Platform Gateway integration. Run its complete local gate with `npm run operations-agent-service:check`.
+The service is implemented at `services/operations-agent-service` as an independent npm package with NodeNext TypeScript build output, one external package root, module-local `index.ts` entries and a repository-owned AST boundary check. Domain, Application and PostgreSQL persistence are implemented, and `runtime-langgraph` now contains the first explicit LangGraph.js `AgentExecutionRuntime`. Model, AG-UI, scheduler, browser and Platform Gateway integrations remain absent. Run its complete local gate with `npm run operations-agent-service:check`.
 
 ### 3.1 Dependency direction
 
@@ -248,6 +248,28 @@ IdGenerator
 
 A port is added only when a real seam exists. Domain-specific readers are preferred over one generic `ToolClient` or `PlatformClient` interface.
 
+### 5.4 Deterministic Site night-energy analysis
+
+The package root also exposes `analyzeSiteNightEnergy` as a framework-independent Application
+seam. It accepts only the project-owned Site Scope, local night window and versioned Energy
+Series contract shared with the Telemetry Query Service adapter. Model-generated totals,
+generic query payloads and unvalidated result shapes are rejected before analysis.
+
+The `site-night-energy-comparison/v1` algorithm resolves target and baseline local windows
+through the Registry timezone, including seven-hour spring-forward and nine-hour fall-back
+windows. It requires contiguous hourly buckets and matching elapsed window durations. Dataset
+Revision, data and aggregate Watermarks, Partial, requested/actual Granularity and Quality
+Summary are blockers before any confirmatory Site Finding is created. A zero baseline,
+non-finite energy or missing bucket also produces a structured `UNABLE_TO_CONCLUDE` result.
+
+A supported result contains small FACT and ALGORITHM_RESULT drafts, a Site-only Finding draft,
+the adopted windows, metadata summaries and a canonical SHA-256 Analysis reference digest.
+Raw Energy Series points are hashed but are not copied into the result. Site aggregate change
+never establishes Equipment causality: Equipment attribution remains `UNABLE_TO_CONCLUDE`
+with REQUIRED_NEXT requests for canonical Equipment energy bindings and comparable
+Equipment-level series. The analyzer cannot create Proposed Actions, Formal Approvals, Command
+Intents or physical execution claims.
+
 ## 6. Runtime LangGraph adapter
 
 LangGraph.js is an adapter implementing `AgentExecutionRuntime`.
@@ -293,6 +315,8 @@ validate_findings
 
 Graph changes may refine these nodes, but they must preserve bounded transitions and application-owned effects.
 
+The first implemented adapter uses the exact `@langchain/langgraph` 1.4.8 release under its MIT license. It was selected because its `StateGraph` supplies the requested explicit node/edge execution runtime without replacing the project-owned Domain, Application, authorization or persistence contracts. The graph contains explicit validation, next-Step selection, READ-plan emission and terminal nodes and implements only the project-owned `AgentExecutionRuntime` port. The package root and the Application module do not expose LangGraph state, node names, Checkpoint classes or provider messages.
+
 ### 6.2 Runtime state
 
 Runtime state contains only what is needed to continue execution:
@@ -311,6 +335,8 @@ model decision metadata
 ```
 
 Runtime state must not become the only copy of committed Evidence, Findings or Proposed Actions.
+
+The initial `runtime-state/v1` is deliberately narrower: program identity, Investigation identity, Agent Run identity, immutable Runtime Revision, next Step index and the ordered completed Step identities. The adapter encodes that bounded state as opaque JSON in the existing project-owned Checkpoint repository. Recovery first restores and authorizes the Operations Investigation, verifies the active Run and Lease, then loads a Checkpoint for the same Investigation, Run and Runtime Revision. Checkpoint identity, state prefix and external position must agree or recovery fails closed. Reusing the same Checkpoint produces the same next READ Plan.
 
 ### 6.3 Interrupt rules
 
@@ -380,15 +406,25 @@ Each tool module contains:
 
 ```text
 application-facing port implementation
-input normalization and Zod validation
-scoped delegation propagation
-owner-client call
+strict project-owned request and DTO validation
+scoped delegation and correlation propagation
+fixed owner-product call
 owner-error translation
 Evidence provenance mapping
-bounded logging and metrics
+bounded response, timeout, logging and metrics
 ```
 
 Tool modules do not contain investigation planning or Finding synthesis.
+
+The first implemented READ adapters expose only `registry.getSite`,
+`registry.listSiteEquipment` and `analytics.getEnergySeries`. Registry calls are fixed to the
+Platform Core Service Site and Site Equipment routes. Historical energy calls are fixed to the
+Telemetry Query Service Energy Series product contract with Organization, Site, time range,
+timezone, granularity, electricity energy type and Quality Policy. The Coordinator injects the
+current authorization decision, complete Scope, Investigation/Run identity and correlation
+context; the Runtime cannot supply delegation or service routing. Responses are strictly
+validated and mapped to project-owned `OwnerReadResult` metadata. Direct ClickHouse, Cube,
+ThingsBoard and Command API paths are rejected by the source boundary gate.
 
 ### 8.1 Tool classes
 

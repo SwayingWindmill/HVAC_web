@@ -124,7 +124,8 @@ const checkpointsUrl = `postgres://operations_agent_checkpoints_runtime:checkpoi
 const report = {
   schemaVersion: 1,
   component: 'operations-agent-service',
-  ticket: 144,
+  ticket: 154,
+  coveredTickets: [144, 151, 154],
   status: 'failed',
   startedAt: new Date().toISOString(),
   postgresImage: 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412',
@@ -140,6 +141,11 @@ try {
     'operations_agent_operations_migrator',
     'operations-migrator-local-only',
     '/migrations/operations/001_agent_operations.sql',
+  );
+  applyMigration(
+    'operations_agent_operations_migrator',
+    'operations-migrator-local-only',
+    '/migrations/operations/002_typed_business_records.sql',
   );
   applyMigration(
     'operations_agent_checkpoints_migrator',
@@ -184,9 +190,11 @@ try {
       || '|'
       || (to_regclass('agent_operations.investigation_effects') IS NOT NULL)::text
       || '|'
+      || (to_regclass('agent_operations.investigation_business_records') IS NOT NULL)::text
+      || '|'
       || (to_regclass('agent_checkpoints.runtime_checkpoints') IS NOT NULL)::text
   `);
-  if (migrationState !== 'true|true|true') {
+  if (migrationState !== 'true|true|true|true') {
     throw new Error(`Operations Agent migrations are incomplete: ${migrationState}`);
   }
   report.assertions.migrations = migrationState;
@@ -203,7 +211,10 @@ try {
   });
   run(process.execPath, [
     '--test',
+    '--test-concurrency=1',
     'services/operations-agent-service/test/postgres-persistence.test.mjs',
+    'services/operations-agent-service/test/postgres-langgraph-runtime.test.mjs',
+    'services/operations-agent-service/test/postgres-site-night-energy-investigation.test.mjs',
   ], {
     env: {
       ...process.env,
@@ -213,6 +224,10 @@ try {
     stdio: 'inherit',
   });
   report.assertions.integrationTests = true;
+  report.assertions.runtimeCheckpointRecovery = true;
+  report.assertions.typedBusinessRecordPersistence = true;
+  report.assertions.atomicRollback = true;
+  report.assertions.checkpointIndependence = true;
 
   report.status = 'passed';
   report.completedAt = new Date().toISOString();

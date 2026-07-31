@@ -20,6 +20,7 @@ const (
 	OwnerTelemetryRuntime = "telemetry-runtime-service"
 	OwnerCommand          = "command-service"
 	OwnerAnalyticsQuery   = "telemetry-query-service"
+	OwnerOperationsAgent  = "operations-agent-service"
 	OwnerAlarm            = "alarm-service"
 
 	PhaseLegacyPrimaryGoShadow       = "LEGACY_PRIMARY_GO_SHADOW"
@@ -414,7 +415,7 @@ func isActiveOwner(owner string) bool {
 }
 
 func isCandidateOwner(owner string) bool {
-	return isActiveOwner(owner) || owner == OwnerCore || owner == OwnerTelemetryRuntime || owner == OwnerCommand || owner == OwnerAnalyticsQuery || owner == OwnerAlarm
+	return isActiveOwner(owner) || owner == OwnerCore || owner == OwnerTelemetryRuntime || owner == OwnerCommand || owner == OwnerAnalyticsQuery || owner == OwnerOperationsAgent || owner == OwnerAlarm
 }
 
 func NewManager(snapshot *Snapshot, audit AuditSink, now func() time.Time) *Manager {

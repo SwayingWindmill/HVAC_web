@@ -62,6 +62,7 @@ test('PostgreSQL keeps Operations facts authoritative and Checkpoints independen
   };
   const coordinator = createInvestigationCoordinator({
     investigationRepository: persistence.investigationRepository,
+    businessRecordRepository: persistence.businessRecordRepository,
     investigationTransaction: persistence.investigationTransaction,
     checkpointRepository: persistence.checkpointRepository,
     applicationOutbox: persistence.applicationOutbox,
@@ -111,6 +112,30 @@ test('PostgreSQL keeps Operations facts authoritative and Checkpoints independen
   });
 
   currentTime = 11_000;
+  const evidenceRecord = {
+    schemaVersion: 1,
+    recordType: 'EVIDENCE',
+    id: 'evidence-001',
+    investigationId: started.id,
+    recordedAt: currentTime,
+    evidenceKind: 'SITE_ENERGY_SERIES_READY',
+    classification: 'FACT',
+    statement: 'Authoritative Site series passed deterministic readiness checks.',
+    analysisReferenceDigest: null,
+    sources: [{
+      owner: 'telemetry-query-service',
+      scope: started.scope,
+      requestId: 'energy-request-postgres-001',
+      registryRevision: null,
+      datasetRevision: 'dataset-revision-postgres-001',
+      watermark: { data: '2026-07-30T08:00:00.000Z', aggregate: null },
+      partial: false,
+      quality: { classification: 'GOOD', valid: 8, suspect: 0, invalid: 0 },
+      capturedAt: 10_900,
+      evaluatedAt: currentTime,
+      provenanceDigest: `sha256:${'e'.repeat(64)}`,
+    }],
+  };
   const evidenceCommand = {
     investigationId: started.id,
     runId: started.activeRunId,
@@ -120,6 +145,7 @@ test('PostgreSQL keeps Operations facts authoritative and Checkpoints independen
     idempotencyKey: 'effect-evidence-001',
     kind: 'EVIDENCE',
     recordId: 'evidence-001',
+    record: evidenceRecord,
   };
   const evidence = await coordinator.commitEffect(evidenceCommand);
   const duplicate = await coordinator.commitEffect(evidenceCommand);
@@ -149,8 +175,8 @@ test('PostgreSQL keeps Operations facts authoritative and Checkpoints independen
     expectedRevision: evidence.investigation.revision,
     stepId: 'step-stale-lease',
     idempotencyKey: 'effect-stale-lease',
-    kind: 'FINDING',
-    recordId: 'finding-stale-lease',
+    kind: 'PROPOSED_ACTION',
+    recordId: 'proposed-action-stale-lease',
   }), 'LEASE_CONFLICT');
   await operationsPool.query(
     `UPDATE agent_operations.investigations
@@ -180,8 +206,8 @@ test('PostgreSQL keeps Operations facts authoritative and Checkpoints independen
     expectedRevision: evidence.investigation.revision,
     stepId: 'step-finding',
     idempotencyKey: 'effect-finding-001',
-    kind: 'FINDING',
-    recordId: 'finding-001',
+    kind: 'PROPOSED_ACTION',
+    recordId: 'proposed-action-001',
   });
   assert.equal(committedFinding.outcome, 'COMMITTED');
 
@@ -212,7 +238,7 @@ test('PostgreSQL keeps Operations facts authoritative and Checkpoints independen
   const restored = await persistence.investigationRepository.get(started.id);
   assert.notEqual(restored, null);
   assert.deepEqual(restored.view().evidenceIds, ['evidence-001']);
-  assert.deepEqual(restored.view().findingIds, ['finding-001']);
+  assert.deepEqual(restored.view().proposedActionIds, ['proposed-action-001']);
   assert.equal(restored.view().committedEffects.length, 2);
 
   currentTime = 12_000;
@@ -295,4 +321,425 @@ test('PostgreSQL keeps Operations facts authoritative and Checkpoints independen
   );
   assert.equal(journalCounts.rows[0].outbox_count, 4);
   assert.equal(journalCounts.rows[0].audit_count, 4);
+});
+
+test('PostgreSQL atomically persists typed records across restart, retry, and rollback', async (t) => {
+  let currentTime = 20_000;
+  let firstPersistence = createPostgresOperationsAgentPersistence({
+    operationsConnectionString,
+    checkpointsConnectionString,
+    checkpointRetentionMs: 60_000,
+    now: () => currentTime,
+  });
+  let secondPersistence = null;
+  const operationsPool = new Pool({ connectionString: operationsConnectionString, max: 1 });
+  t.after(async () => {
+    await Promise.all([
+      firstPersistence?.close(),
+      secondPersistence?.close(),
+      operationsPool.end(),
+    ].filter(Boolean));
+  });
+
+  const scope = {
+    organizationId: 'organization-records-postgres',
+    siteId: 'site-records-postgres',
+    equipmentId: null,
+    deviceId: null,
+  };
+  const createCoordinator = (persistence, identities) => createInvestigationCoordinator({
+    investigationRepository: persistence.investigationRepository,
+    businessRecordRepository: persistence.businessRecordRepository,
+    investigationTransaction: persistence.investigationTransaction,
+    checkpointRepository: persistence.checkpointRepository,
+    applicationOutbox: persistence.applicationOutbox,
+    auditRecorder: persistence.auditRecorder,
+    authorizationDecisionReader: {
+      async authorizeScope() {
+        return { decision: 'ALLOW', decisionId: 'typed-records-postgres-allow' };
+      },
+    },
+    agentExecutionRuntime: {
+      async planReads() { throw new Error('not used'); },
+    },
+    budgetGuard: { async check() { return { decision: 'ALLOW' }; } },
+    ownerReaders: {
+      registry: { async read() { throw new Error('not used'); } },
+      currentTelemetry: { async read() { throw new Error('not used'); } },
+      energyAnalytics: { async read() { throw new Error('not used'); } },
+      commandCapabilities: { async read() { throw new Error('not used'); } },
+    },
+    clock: { now: () => currentTime },
+    idGenerator: {
+      next(kind) {
+        const value = identities[kind]?.shift();
+        assert.notEqual(value, undefined, `No identity configured for ${kind}.`);
+        return value;
+      },
+    },
+    leaseDurationMs: 10_000,
+  });
+
+  const firstCoordinator = createCoordinator(firstPersistence, {
+    investigation: ['investigation-records-postgres'],
+    run: ['run-records-postgres'],
+    lease: ['lease-records-postgres'],
+    checkpoint: [],
+  });
+  const created = await firstCoordinator.create({ scope });
+  const started = await firstCoordinator.start({
+    investigationId: created.id,
+    runtimeRevision: 'runtime-records-r1',
+    expectedRevision: created.revision,
+  });
+  const runId = started.activeRunId;
+  const leaseId = started.runs[0].lease.id;
+  const digest = `sha256:${'b'.repeat(64)}`;
+  const source = {
+    owner: 'telemetry-query-service',
+    scope,
+    requestId: 'energy-request-records-001',
+    registryRevision: null,
+    datasetRevision: 'dataset-revision-records-29',
+    watermark: {
+      data: '2026-07-30T08:00:00.000Z',
+      aggregate: '2026-07-30T08:00:00.000Z',
+    },
+    partial: false,
+    quality: { classification: 'GOOD', valid: 8, suspect: 0, invalid: 0 },
+    capturedAt: 20_900,
+    evaluatedAt: 21_000,
+    provenanceDigest: digest,
+  };
+
+  currentTime = 21_000;
+  const evidenceRecord = {
+    schemaVersion: 1,
+    recordType: 'EVIDENCE',
+    id: 'evidence-records-001',
+    investigationId: started.id,
+    recordedAt: currentTime,
+    evidenceKind: 'SITE_ENERGY_SERIES_READY',
+    classification: 'FACT',
+    statement: 'Authoritative bounded Site energy series passed readiness checks.',
+    analysisReferenceDigest: null,
+    sources: [source],
+  };
+  const evidenceCommand = {
+    investigationId: started.id,
+    runId,
+    leaseId,
+    expectedRevision: started.revision,
+    stepId: 'step-records-evidence',
+    idempotencyKey: 'effect-records-evidence',
+    kind: 'EVIDENCE',
+    recordId: evidenceRecord.id,
+    record: evidenceRecord,
+  };
+  const evidence = await firstCoordinator.commitEffect(evidenceCommand);
+  assert.equal(evidence.outcome, 'COMMITTED');
+  assert.deepEqual(evidence.record, evidenceRecord);
+
+  await firstPersistence.close();
+  firstPersistence = null;
+  secondPersistence = createPostgresOperationsAgentPersistence({
+    operationsConnectionString,
+    checkpointsConnectionString,
+    checkpointRetentionMs: 60_000,
+    now: () => currentTime,
+  });
+  const secondCoordinator = createCoordinator(secondPersistence, {
+    investigation: [],
+    run: [],
+    lease: [],
+    checkpoint: [],
+  });
+
+  const duplicate = await secondCoordinator.commitEffect(evidenceCommand);
+  assert.equal(duplicate.outcome, 'DUPLICATE');
+  assert.deepEqual(duplicate.record, evidenceRecord);
+  const afterDuplicate = await secondCoordinator.get({ investigationId: started.id });
+  assert.equal(afterDuplicate.revision, evidence.investigation.revision);
+
+  let counts = await operationsPool.query(
+    `SELECT
+      (SELECT count(*)::int FROM agent_operations.investigation_business_records WHERE investigation_id = $1) AS record_count,
+      (SELECT count(*)::int FROM agent_operations.investigation_effects WHERE investigation_id = $1) AS effect_count,
+      (SELECT count(*)::int FROM agent_operations.application_outbox WHERE investigation_id = $1) AS outbox_count,
+      (SELECT count(*)::int FROM agent_operations.audit_records WHERE investigation_id = $1) AS audit_count`,
+    [started.id],
+  );
+  assert.deepEqual(counts.rows[0], {
+    record_count: 1,
+    effect_count: 1,
+    outbox_count: 3,
+    audit_count: 3,
+  });
+
+  currentTime = 21_100;
+  const analysisRecord = {
+    schemaVersion: 1,
+    recordType: 'ANALYSIS_REFERENCE',
+    id: 'analysis-records-001',
+    investigationId: started.id,
+    recordedAt: currentTime,
+    analysisKind: 'SITE_NIGHT_ENERGY_COMPARISON',
+    authority: 'DETERMINISTIC_ALGORITHM',
+    algorithmVersion: 'site-night-energy-comparison/v1',
+    policyVersion: 'night-energy-readiness/v1',
+    inputEvidenceIds: [evidenceRecord.id],
+    parameterDigest: digest,
+    resultDigest: digest,
+    executedAt: currentTime,
+    outcome: 'SUPPORTED_SITE_FINDING',
+  };
+  const analysis = await secondCoordinator.commitEffect({
+    investigationId: started.id,
+    runId,
+    leaseId,
+    expectedRevision: evidence.investigation.revision,
+    stepId: 'step-records-analysis',
+    idempotencyKey: 'effect-records-analysis',
+    kind: 'ANALYSIS_REFERENCE',
+    recordId: analysisRecord.id,
+    record: analysisRecord,
+  });
+  assert.equal(analysis.outcome, 'COMMITTED');
+
+  const findingRecord = {
+    schemaVersion: 1,
+    recordType: 'FINDING',
+    id: 'finding-records-001',
+    investigationId: started.id,
+    recordedAt: 21_200,
+    findingKind: 'SITE_NIGHT_ENERGY_INCREASE',
+    classification: 'INFERENCE',
+    statement: 'Site night energy increased by 24%.',
+    evidenceIds: [evidenceRecord.id],
+    analysisReferenceIds: [analysisRecord.id],
+    conclusion: {
+      status: 'SUPPORTED',
+      scope: 'SITE',
+      organizationId: scope.organizationId,
+      siteId: scope.siteId,
+    },
+  };
+  currentTime = 21_200;
+  await assertCoordinatorError(() => secondCoordinator.commitEffect({
+    investigationId: started.id,
+    runId,
+    leaseId,
+    expectedRevision: evidence.investigation.revision,
+    stepId: 'step-records-finding-stale-revision',
+    idempotencyKey: 'effect-records-finding-stale-revision',
+    kind: 'FINDING',
+    recordId: 'finding-records-stale-revision',
+    record: { ...findingRecord, id: 'finding-records-stale-revision' },
+  }), 'REVISION_CONFLICT');
+  await assertCoordinatorError(() => secondCoordinator.commitEffect({
+    investigationId: started.id,
+    runId,
+    leaseId: 'lease-records-stale',
+    expectedRevision: analysis.investigation.revision,
+    stepId: 'step-records-finding-stale-lease',
+    idempotencyKey: 'effect-records-finding-stale-lease',
+    kind: 'FINDING',
+    recordId: 'finding-records-stale-lease',
+    record: { ...findingRecord, id: 'finding-records-stale-lease' },
+  }), 'LEASE_CONFLICT');
+  const finding = await secondCoordinator.commitEffect({
+    investigationId: started.id,
+    runId,
+    leaseId,
+    expectedRevision: analysis.investigation.revision,
+    stepId: 'step-records-finding',
+    idempotencyKey: 'effect-records-finding',
+    kind: 'FINDING',
+    recordId: findingRecord.id,
+    record: findingRecord,
+  });
+  assert.equal(finding.outcome, 'COMMITTED');
+
+  currentTime = 21_300;
+  const receiptRecord = {
+    schemaVersion: 1,
+    recordType: 'TOOL_EXECUTION_RECEIPT',
+    id: 'receipt-records-001',
+    investigationId: started.id,
+    recordedAt: currentTime,
+    logicalTool: 'analytics.getEnergySeries',
+    owner: 'telemetry-query-service',
+    requestId: 'energy-request-records-001',
+    attemptId: 'energy-attempt-records-001',
+    runId,
+    stepId: 'step-records-receipt',
+    startedAt: 21_250,
+    completedAt: 21_290,
+    resultCategory: 'SUCCEEDED',
+    metadata: {
+      datasetRevision: 'dataset-revision-records-29',
+      partial: false,
+      bucketCount: 8,
+    },
+  };
+  const receipt = await secondCoordinator.commitEffect({
+    investigationId: started.id,
+    runId,
+    leaseId,
+    expectedRevision: finding.investigation.revision,
+    stepId: receiptRecord.stepId,
+    idempotencyKey: 'effect-records-receipt',
+    kind: 'TOOL_EXECUTION_RECEIPT',
+    recordId: receiptRecord.id,
+    record: receiptRecord,
+  });
+  assert.equal(receipt.outcome, 'COMMITTED');
+
+  counts = await operationsPool.query(
+    `SELECT
+      (SELECT count(*)::int FROM agent_operations.investigation_business_records WHERE investigation_id = $1) AS record_count,
+      (SELECT count(*)::int FROM agent_operations.investigation_effects WHERE investigation_id = $1) AS effect_count,
+      (SELECT count(*)::int FROM agent_operations.application_outbox WHERE investigation_id = $1) AS outbox_count,
+      (SELECT count(*)::int FROM agent_operations.audit_records WHERE investigation_id = $1) AS audit_count`,
+    [started.id],
+  );
+  assert.deepEqual(counts.rows[0], {
+    record_count: 4,
+    effect_count: 4,
+    outbox_count: 6,
+    audit_count: 6,
+  });
+
+  currentTime = 21_400;
+  await assertCoordinatorError(() => secondCoordinator.commitEffect({
+    investigationId: started.id,
+    runId,
+    leaseId,
+    expectedRevision: receipt.investigation.revision,
+    stepId: 'step-records-receipt-duplicate',
+    idempotencyKey: 'effect-records-receipt-duplicate',
+    kind: 'TOOL_EXECUTION_RECEIPT',
+    recordId: 'receipt-records-duplicate',
+    record: {
+      ...receiptRecord,
+      id: 'receipt-records-duplicate',
+      recordedAt: currentTime,
+      stepId: 'step-records-receipt-duplicate',
+      startedAt: 21_350,
+      completedAt: 21_390,
+    },
+  }), 'DUPLICATE_RECORD');
+  assert.equal(
+    (await secondCoordinator.get({ investigationId: started.id })).revision,
+    receipt.investigation.revision,
+  );
+
+  const rollbackBase = await secondPersistence.investigationRepository.get(started.id);
+  assert.notEqual(rollbackBase, null);
+  currentTime = 21_500;
+  const rollbackEffect = rollbackBase.commitEffect({
+    runId,
+    leaseId,
+    at: currentTime,
+    expectedRevision: receipt.investigation.revision,
+    stepId: createStepIdentity('step-records-rollback'),
+    idempotencyKey: createIdempotencyKey('effect-records-rollback'),
+    kind: 'EVIDENCE',
+    recordId: 'evidence-records-rollback',
+  });
+  const rollbackRecord = {
+    ...evidenceRecord,
+    id: 'evidence-records-rollback',
+    recordedAt: currentTime,
+    statement: 'This record must roll back with the failed Audit insert.',
+    sources: [{
+      ...source,
+      requestId: 'energy-request-records-rollback',
+      capturedAt: 21_450,
+      evaluatedAt: currentTime,
+    }],
+  };
+  await assert.rejects(() => secondPersistence.investigationTransaction.save({
+    investigation: rollbackEffect.investigation,
+    expectedRevision: receipt.investigation.revision,
+    expectedAuthority: { runId, leaseId, at: currentTime },
+    effect: rollbackEffect.effect,
+    record: rollbackRecord,
+    event: {
+      type: 'INVESTIGATION_EFFECT_COMMITTED',
+      investigationId: started.id,
+      revision: rollbackEffect.investigation.view().revision,
+      occurredAt: currentTime,
+    },
+    audit: {
+      action: '',
+      investigationId: started.id,
+      runId,
+      revision: rollbackEffect.investigation.view().revision,
+      occurredAt: currentTime,
+    },
+  }));
+
+  assert.equal(
+    (await secondPersistence.investigationRepository.get(started.id)).view().revision,
+    receipt.investigation.revision,
+  );
+  assert.equal(
+    await secondPersistence.businessRecordRepository.get(started.id, rollbackRecord.id),
+    null,
+  );
+  counts = await operationsPool.query(
+    `SELECT
+      (SELECT count(*)::int FROM agent_operations.investigation_business_records WHERE investigation_id = $1) AS record_count,
+      (SELECT count(*)::int FROM agent_operations.investigation_effects WHERE investigation_id = $1) AS effect_count,
+      (SELECT count(*)::int FROM agent_operations.application_outbox WHERE investigation_id = $1) AS outbox_count,
+      (SELECT count(*)::int FROM agent_operations.audit_records WHERE investigation_id = $1) AS audit_count`,
+    [started.id],
+  );
+  assert.deepEqual(counts.rows[0], {
+    record_count: 4,
+    effect_count: 4,
+    outbox_count: 6,
+    audit_count: 6,
+  });
+
+  await secondPersistence.checkpointRepository.save({
+    id: 'checkpoint-records-disposable',
+    investigationId: started.id,
+    runId,
+    runtimeRevision: 'runtime-records-r1',
+    position: 'typed-records-complete',
+    opaqueState: 'disposable-runtime-state',
+    savedAt: currentTime,
+  });
+  await secondPersistence.checkpointRepository.delete(started.id, runId);
+  assert.equal(await secondPersistence.checkpointRepository.load(started.id, runId), null);
+  assert.deepEqual(
+    await secondPersistence.businessRecordRepository.get(started.id, evidenceRecord.id),
+    evidenceRecord,
+  );
+
+  const payloadBounds = await operationsPool.query(
+    `SELECT
+      bool_and(octet_length(record_payload::text) <= 65536) AS bounded,
+      bool_or(record_payload ? 'points') AS contains_points,
+      array_agg(record_type ORDER BY recorded_at_ms, record_id) AS record_types
+     FROM agent_operations.investigation_business_records
+     WHERE investigation_id = $1`,
+    [started.id],
+  );
+  assert.equal(payloadBounds.rows[0].bounded, true);
+  assert.equal(payloadBounds.rows[0].contains_points, false);
+  assert.deepEqual(payloadBounds.rows[0].record_types, [
+    'EVIDENCE',
+    'ANALYSIS_REFERENCE',
+    'FINDING',
+    'TOOL_EXECUTION_RECEIPT',
+  ]);
+  await assertPermissionDenied(() => operationsPool.query(
+    `UPDATE agent_operations.investigation_business_records
+     SET record_payload = '{}'::jsonb
+     WHERE investigation_id = $1`,
+    [started.id],
+  ));
 });

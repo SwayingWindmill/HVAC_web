@@ -17,7 +17,7 @@ const phaseRegistries = await Promise.all([
 ].map(readJSON));
 
 const errors = [];
-const allowedOwners = new Set(['platform-gateway', 'legacy-hvac-backend', 'platform-core-service', 'telemetry-runtime-service', 'command-service', 'telemetry-query-service', 'alarm-service']);
+const allowedOwners = new Set(['platform-gateway', 'legacy-hvac-backend', 'platform-core-service', 'telemetry-runtime-service', 'command-service', 'telemetry-query-service', 'operations-agent-service', 'alarm-service']);
 const s1MigratedPaths = new Set([
   '/api/v1/organizations',
   '/api/v1/organizations/{organizationId}',

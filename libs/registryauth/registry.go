@@ -92,6 +92,7 @@ func ActionAllows(granted, requested Action) bool {
 type DecisionRequest struct {
 	ActingOrganizationID string `json:"actingOrganizationId"`
 	Action               Action `json:"action"`
+	GrantPresenter       string `json:"grantPresenter,omitempty"`
 }
 
 func (request DecisionRequest) Validate() error {
@@ -100,6 +101,9 @@ func (request DecisionRequest) Validate() error {
 	}
 	if !request.Action.Valid() || request.Action == ActionRegistryRead {
 		return errors.New("a concrete registry read action is required")
+	}
+	if request.GrantPresenter != "" && (len(request.GrantPresenter) > 512 || !strings.HasPrefix(request.GrantPresenter, "spiffe://")) {
+		return errors.New("registry grant presenter is invalid")
 	}
 	return nil
 }

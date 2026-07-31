@@ -13,6 +13,7 @@ export const OPERATIONS_AGENT_SERVICE_MODULES = Object.freeze([
   'model',
   'tools',
   'persistence',
+  'transport-http',
   'transport-ag-ui',
   'scheduling',
   'observability',
@@ -32,6 +33,13 @@ const allowedInternalDependencies = Object.freeze({
 });
 
 const externalImportForbiddenModules = new Set(['domain', 'application']);
+const forbiddenToolBypassPatterns = Object.freeze([
+  { name: 'ClickHouse', pattern: /clickhouse/iu },
+  { name: 'Cube', pattern: /\bcube(?:js)?\b/iu },
+  { name: 'ThingsBoard', pattern: /thingsboard/iu },
+  { name: 'Command API', pattern: /\/(?:api|internal)\/v\d+\/commands?(?:\/|['"`])/iu },
+  { name: 'Command Intent API', pattern: /\/(?:api|internal)\/v\d+\/command-intents?(?:\/|['"`])/iu },
+]);
 const toPortablePath = (value) => value.split(sep).join('/');
 const removeSourceExtension = (value) => value.replace(/\.(?:[cm]?ts|[cm]?js)$/u, '');
 
@@ -63,8 +71,12 @@ const moduleForFile = (srcRoot, absolutePath) => {
   return OPERATIONS_AGENT_SERVICE_MODULES.includes(moduleName) ? moduleName : null;
 };
 
+const parseSourceFile = (sourceText, fileName) => (
+  ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true)
+);
+
 const importSpecifiers = (sourceText, fileName) => {
-  const sourceFile = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true);
+  const sourceFile = parseSourceFile(sourceText, fileName);
   const imports = [];
 
   const visit = (node) => {
@@ -83,6 +95,19 @@ const importSpecifiers = (sourceText, fileName) => {
 
   visit(sourceFile);
   return imports;
+};
+
+const sourceStringLiterals = (sourceText, fileName) => {
+  const sourceFile = parseSourceFile(sourceText, fileName);
+  const values = [];
+  const visit = (node) => {
+    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      values.push(node.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return values;
 };
 
 const expectedModuleEntry = (srcRoot, moduleName) => removeSourceExtension(
@@ -216,6 +241,19 @@ export const inspectOperationsAgentServiceBoundaries = async (serviceRoot, {
     const sourceText = await readFile(sourceFile, 'utf8');
     for (const specifier of importSpecifiers(sourceText, sourceFile)) {
       errors.push(...inspectImport({ srcRoot, sourceFile, sourceModule, specifier }));
+    }
+    if (sourceModule === 'tools') {
+      const literalValues = sourceStringLiterals(sourceText, sourceFile);
+      for (const forbidden of forbiddenToolBypassPatterns) {
+        if (literalValues.some((value) => forbidden.pattern.test(value))) {
+          errors.push({
+            code: 'FORBIDDEN_OWNER_BYPASS_PATH',
+            file: toPortablePath(relative(srcRoot, sourceFile)),
+            import: null,
+            message: `Operations Agent tools cannot contain a ${forbidden.name} access path.`,
+          });
+        }
+      }
     }
   }
 

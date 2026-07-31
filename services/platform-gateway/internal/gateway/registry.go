@@ -240,7 +240,20 @@ func (h *handler) serveRegistry(writer http.ResponseWriter, request *http.Reques
 }
 
 func (h *handler) authorizeRegistry(ctx context.Context, session bffSession, action registryauth.Action) (registryAuthorization, *registryAuthorizationFailure) {
-	if h.identity == nil {
+	presenterSPIFFE := ""
+	if h.identity != nil {
+		presenterSPIFFE = h.identity.config.ExecutingWorkloadSPIFFE
+	}
+	return h.authorizeRegistryForPresenter(ctx, session, action, presenterSPIFFE)
+}
+
+func (h *handler) authorizeRegistryForPresenter(
+	ctx context.Context,
+	session bffSession,
+	action registryauth.Action,
+	presenterSPIFFE string,
+) (registryAuthorization, *registryAuthorizationFailure) {
+	if h.identity == nil || strings.TrimSpace(presenterSPIFFE) == "" {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "IAM authorization is not configured.", true}
 	}
 	now := h.identity.now().UTC()
@@ -270,7 +283,11 @@ func (h *handler) authorizeRegistry(ctx context.Context, session bffSession, act
 	if err != nil {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Registry authorization request could not be signed.", true}
 	}
-	body, err := json.Marshal(registryauth.DecisionRequest{ActingOrganizationID: session.ActingOrganizationID, Action: action})
+	body, err := json.Marshal(registryauth.DecisionRequest{
+		ActingOrganizationID: session.ActingOrganizationID,
+		Action:               action,
+		GrantPresenter:       presenterSPIFFE,
+	})
 	if err != nil {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Registry authorization request could not be encoded.", true}
 	}

@@ -730,6 +730,82 @@
       ],
       "shadowSideEffectPolicy": "NONE",
       "readOnlyFallback": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/operations/investigations",
+      "owner": "operations-agent-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "primary",
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/operations/investigations/{investigationId}",
+      "owner": "operations-agent-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "primary",
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance",
+      "owner": "operations-agent-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "primary",
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel",
+      "owner": "operations-agent-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "primary",
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false
     }
   ]
 }

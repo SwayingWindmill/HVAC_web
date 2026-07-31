@@ -1,6 +1,19 @@
 import { domainModule } from '../domain/index.js';
 
 export {
+  InvestigationBusinessRecordError,
+  createInvestigationBusinessRecord,
+  type AnalysisReferenceRecord,
+  type EvidenceRecord,
+  type EvidenceSourceReference,
+  type FindingRecord,
+  type InvestigationBusinessRecord,
+  type InvestigationBusinessRecordErrorCode,
+  type InvestigationBusinessRecordType,
+  type ToolExecutionReceiptRecord,
+} from '../domain/index.js';
+
+export {
   InvestigationCoordinatorError,
   createInvestigationCoordinator,
   type AdvanceInvestigationCommand,
@@ -19,7 +32,48 @@ export {
 } from './internal/investigation-coordinator.js';
 
 export {
+  NightEnergyAnalysisError,
+  analyzeSiteNightEnergy,
+  planSiteNightEnergyPeriods,
+  type EquipmentAttributionRequiredNext,
+  type NightEnergyAnalysisErrorCode,
+  type NightEnergyEvidenceDraft,
+  type NightEnergyGranularity,
+  type NightEnergyQualityPolicy,
+  type NightEnergyQualitySummary,
+  type NightEnergyReadinessBlocker,
+  type NightEnergyReadinessBlockerCode,
+  type NightEnergySeries,
+  type NightEnergySeriesMetadata,
+  type NightEnergySeriesPoint,
+  type SiteNightEnergyAnalysisInput,
+  type SiteNightEnergyAnalysisReference,
+  type SiteNightEnergyAnalysisResult,
+  type SiteNightEnergyComparison,
+  type SiteNightEnergyFindingDraft,
+  type SiteNightEnergyPeriodPlan,
+  type SiteNightEnergyPeriodReference,
+  type SiteNightEnergyScope,
+  type SiteNightEnergyWindow,
+  type SupportedSiteNightEnergyAnalysis,
+  type UnableSiteNightEnergyAnalysis,
+  type UnsupportedEquipmentAttribution,
+} from './internal/night-energy-analysis.js';
+
+export {
+  createSiteNightEnergyInvestigationCoordinator,
+  type SiteNightEnergyActiveRunView,
+  type SiteNightEnergyInvestigationCoordinator,
+  type SiteNightEnergyInvestigationCoordinatorPorts,
+  type SiteNightEnergyInvestigationPolicy,
+  type SiteNightEnergyInvestigationQuery,
+  type SiteNightEnergyInvestigationView,
+  type StartSiteNightEnergyInvestigationCommand,
+} from './internal/site-night-energy-investigation.js';
+
+export {
   InvestigationRepositoryConflictError,
+  OwnerReadError,
   type AgentExecutionRuntime,
   type ApplicationEvent,
   type ApplicationOutbox,
@@ -40,11 +94,15 @@ export {
   type GeneratedIdentityKind,
   type IdGenerator,
   type InvestigationAuthorizationAction,
+  type InvestigationBusinessRecordRepository,
   type InvestigationCoordinatorPorts,
   type InvestigationRepository,
   type InvestigationRepositoryConflictCode,
   type InvestigationTransaction,
   type InvestigationWriteAuthority,
+  type OwnerReadContext,
+  type OwnerReadErrorCode,
+  type OwnerReadInput,
   type OwnerReadResult,
   type OwnerReaders,
   type ParallelReadBatch,
@@ -55,6 +113,8 @@ export {
   type RuntimeCheckpointDraft,
   type RuntimePlanningResult,
   type RuntimeReadPlan,
+  type ToolAuthorizationGrant,
+  type ToolAuthorizationReader,
 } from './internal/ports.js';
 
 export const applicationModule = Object.freeze({

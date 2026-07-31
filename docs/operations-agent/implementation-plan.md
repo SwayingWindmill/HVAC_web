@@ -2,9 +2,9 @@
 
 Status: accepted plan
 
-Date: 2026-07-30
+Date: 2026-07-31
 
-Tracking: GitHub Map #118; Map 0 completed by Tickets #119 and #120. The next frontier is Map 1 benchmark work.
+Tracking: GitHub Map #118; Maps 0–2 are merged through PR #149. Map 3 Runtime recovery (#151), authoritative Owner READ adapters (#152), deterministic night-energy comparison/readiness validation (#153), typed business-record persistence (#154) and Platform Gateway exposure (#155) are complete. Map 4 Operations Workspace delivery is the current frontier.
 
 This plan turns ADR 0009, ADR 0010 and the accepted modular architecture into an implementation sequence. It deliberately starts with deletion of the retired Python Agent, then establishes an executable benchmark before introducing the TypeScript runtime.
 
@@ -206,13 +206,33 @@ An authorized operator can start a Site night-energy Investigation that queries 
 
 Planned tracer bullets:
 
-1. Add the explicit LangGraph.js runtime adapter and PostgreSQL checkpoint recovery.
-2. Add typed Registry and Energy Analytics READ adapters.
-3. Implement deterministic period comparison and readiness validation.
-4. Persist Evidence, Analysis references, Findings and Tool Execution Receipts idempotently.
-5. Expose the Investigation application contract through Platform Gateway.
+1. Add the explicit LangGraph.js runtime adapter and PostgreSQL checkpoint recovery — completed by #151.
+2. Add typed Registry and Energy Analytics READ adapters — completed by #152.
+3. Implement deterministic period comparison and readiness validation — completed by #153.
+4. Persist Evidence, Analysis references, Findings and Tool Execution Receipts idempotently — completed by #154.
+5. Expose the Investigation application contract through Platform Gateway — completed by #155.
+
+Current persistence state after #154:
+
+- schema-versioned Evidence, Analysis Reference, Finding and Tool Execution Receipt records are validated before commit;
+- the typed record, Investigation Revision, committed effect, Outbox event and Audit record commit in one Operations transaction;
+- exact retries return the persisted record without advancing Revision or duplicating journals;
+- stale Revision, stale Lease, conflicting record identity and duplicate Tool request/attempt identities fail closed;
+- raw Energy Series points, arbitrary payloads, sensitive Receipt metadata and supported Equipment attribution are rejected;
+- process restart and Checkpoint deletion preserve authoritative business records.
+
+Current Gateway state after #155:
+
+- Platform Gateway owns the public start, get, advance and cancel routes and enforces Session, Origin/CSRF, Site visibility, bounded payloads, timeout and per-Session rate limits;
+- Gateway signs a short-lived Site-scoped Operations service delegation and exposes a separate mTLS-only Tool Authorization route for exact Registry and Energy grants;
+- Registry grants are signed directly by IAM for the Operations Agent mTLS presenter and remain non-transitive; Energy grants remain Gateway-issued but bind `executingService` to the actual Operations Agent presenter and Scope to the complete normalized query digest;
+- Operations Agent exchanges the service delegation immediately before each fixed Owner READ, including recovery replay after a persisted Checkpoint;
+- public and internal contracts expose only authoritative Investigation views and typed business records, never Leases, Checkpoints, LangGraph state or raw Energy points;
+- exact PostgreSQL restart replay completes the Investigation without duplicate records, effects, Outbox events or Audit records.
 
 Completion gate:
+
+Status: completed by Ticket #155 on 2026-07-31.
 
 - process restart resumes the run without duplicate domain writes;
 - independent READ calls may run concurrently while writes remain serialized;

@@ -10,13 +10,16 @@ import type {
   AuditRecord,
   AuditRecorder,
   CheckpointRepository,
+  InvestigationBusinessRecordRepository,
   InvestigationRepository,
   InvestigationTransaction,
   RuntimeCheckpoint,
 } from '../../application/index.js';
 import {
   OperationsInvestigation,
+  createInvestigationBusinessRecord,
   type CommittedEffectView,
+  type InvestigationBusinessRecord,
   type OperationsInvestigationSnapshot,
 } from '../../domain/index.js';
 import { InvestigationRepositoryConflictError } from '../../application/index.js';
@@ -35,6 +38,7 @@ export interface PostgresCheckpointRepository extends CheckpointRepository {
 
 export interface PostgresOperationsAgentPersistence {
   readonly investigationRepository: InvestigationRepository;
+  readonly businessRecordRepository: InvestigationBusinessRecordRepository;
   readonly investigationTransaction: InvestigationTransaction;
   readonly checkpointRepository: PostgresCheckpointRepository;
   readonly applicationOutbox: ApplicationOutbox;
@@ -52,6 +56,10 @@ interface InvestigationRow extends QueryResultRow {
 
 interface SnapshotRow extends QueryResultRow {
   readonly snapshot: unknown;
+}
+
+interface BusinessRecordRow extends QueryResultRow {
+  readonly record_payload: unknown;
 }
 
 interface CheckpointRow extends QueryResultRow {
@@ -189,6 +197,131 @@ const validateEffectTransition = (
   }
 };
 
+const scopeContains = (
+  investigation: OperationsInvestigationSnapshot['scope'],
+  candidate: OperationsInvestigationSnapshot['scope'],
+): boolean => investigation.organizationId === candidate.organizationId
+  && (investigation.siteId === null || investigation.siteId === candidate.siteId)
+  && (investigation.equipmentId === null || investigation.equipmentId === candidate.equipmentId)
+  && (investigation.deviceId === null || investigation.deviceId === candidate.deviceId);
+
+const validateBusinessRecord = (
+  current: OperationsInvestigationSnapshot,
+  effect: CommittedEffectView | undefined,
+  record: InvestigationBusinessRecord | undefined,
+): void => {
+  if (record === undefined) {
+    if (effect !== undefined && effect.kind !== 'PROPOSED_ACTION') {
+      throw new InvestigationRepositoryConflictError(
+        'RECORD_REFERENCE_CONFLICT',
+        `${effect.kind} effects require a typed business record.`,
+      );
+    }
+    return;
+  }
+  if (effect === undefined
+    || record.investigationId !== current.id
+    || record.id !== effect.recordId
+    || record.recordType !== effect.kind
+    || record.recordedAt !== effect.committedAt) {
+    throw new InvestigationRepositoryConflictError(
+      'RECORD_REFERENCE_CONFLICT',
+      'Business record identity, type, and timestamp must match its committed effect.',
+    );
+  }
+  if (record.recordType === 'EVIDENCE') {
+    if (record.sources.some(({ scope }) => !scopeContains(current.scope, scope))) {
+      throw new InvestigationRepositoryConflictError(
+        'RECORD_REFERENCE_CONFLICT',
+        'Evidence source Scope is outside the Investigation Scope.',
+      );
+    }
+    return;
+  }
+  if (record.recordType === 'ANALYSIS_REFERENCE') {
+    if (record.inputEvidenceIds.some((identity) => !current.evidenceIds.includes(identity))) {
+      throw new InvestigationRepositoryConflictError(
+        'RECORD_REFERENCE_CONFLICT',
+        'Analysis Reference cites Evidence that is not committed to the Investigation.',
+      );
+    }
+    return;
+  }
+  if (record.recordType === 'FINDING') {
+    if (record.evidenceIds.some((identity) => !current.evidenceIds.includes(identity))
+      || record.analysisReferenceIds.some((identity) => (
+        !current.analysisReferenceIds.includes(identity)
+      ))) {
+      throw new InvestigationRepositoryConflictError(
+        'RECORD_REFERENCE_CONFLICT',
+        'Finding support references are not committed to the Investigation.',
+      );
+    }
+    if (record.conclusion.status === 'SUPPORTED'
+      && (record.conclusion.organizationId !== current.scope.organizationId
+        || record.conclusion.siteId !== current.scope.siteId)) {
+      throw new InvestigationRepositoryConflictError(
+        'RECORD_REFERENCE_CONFLICT',
+        'Supported Site Finding conclusion is outside the Investigation Scope.',
+      );
+    }
+    return;
+  }
+  if (record.runId !== effect.runId || record.stepId !== effect.stepId) {
+    throw new InvestigationRepositoryConflictError(
+      'RECORD_REFERENCE_CONFLICT',
+      'Tool Execution Receipt Run and Step must match its committed effect.',
+    );
+  }
+};
+
+const insertBusinessRecord = async (
+  client: PoolClient,
+  record: InvestigationBusinessRecord,
+): Promise<void> => {
+  const toolOwner = record.recordType === 'TOOL_EXECUTION_RECEIPT' ? record.owner : null;
+  const toolRequestId = record.recordType === 'TOOL_EXECUTION_RECEIPT'
+    ? record.requestId
+    : null;
+  const toolAttemptId = record.recordType === 'TOOL_EXECUTION_RECEIPT'
+    ? record.attemptId
+    : null;
+  try {
+    await client.query(
+      `INSERT INTO agent_operations.investigation_business_records (
+        investigation_id,
+        record_id,
+        record_type,
+        schema_version,
+        record_payload,
+        recorded_at_ms,
+        tool_owner,
+        tool_request_id,
+        tool_attempt_id
+      ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)`,
+      [
+        record.investigationId,
+        record.id,
+        record.recordType,
+        record.schemaVersion,
+        JSON.stringify(record),
+        record.recordedAt,
+        toolOwner,
+        toolRequestId,
+        toolAttemptId,
+      ],
+    );
+  } catch (error) {
+    if (postgresCode(error) === '23505') {
+      throw new InvestigationRepositoryConflictError(
+        'DUPLICATE_RECORD',
+        'Business record identity or Tool request-attempt identity already exists.',
+      );
+    }
+    throw error;
+  }
+};
+
 const insertEvent = async (client: PoolClient, event: ApplicationEvent): Promise<void> => {
   await client.query(
     `INSERT INTO agent_operations.application_outbox (
@@ -301,6 +434,21 @@ export const createPostgresOperationsAgentPersistence = (
     },
   };
 
+  const businessRecordRepository: InvestigationBusinessRecordRepository = {
+    async get(investigationId, recordId) {
+      const result = await operationsPool.query<BusinessRecordRow>(
+        `SELECT record_payload
+         FROM agent_operations.investigation_business_records
+         WHERE investigation_id = $1 AND record_id = $2`,
+        [investigationId, recordId],
+      );
+      const row = result.rows[0];
+      return row === undefined
+        ? null
+        : createInvestigationBusinessRecord(row.record_payload);
+    },
+  };
+
   const investigationTransaction: InvestigationTransaction = {
     async create(input) {
       const snapshot = input.investigation.snapshot();
@@ -403,8 +551,15 @@ export const createPostgresOperationsAgentPersistence = (
         }
 
         const currentSnapshot = restoreSnapshot(row.snapshot).snapshot();
+        const record = input.record === undefined
+          ? undefined
+          : createInvestigationBusinessRecord(input.record);
         validateImmutableFields(currentSnapshot, nextSnapshot);
         validateEffectTransition(currentSnapshot, nextSnapshot, input.effect);
+        validateBusinessRecord(currentSnapshot, input.effect, record);
+        if (record !== undefined) {
+          await insertBusinessRecord(client, record);
+        }
         if (input.effect !== undefined) {
           await insertEffect(client, nextSnapshot.id, input.effect);
         }
@@ -528,6 +683,7 @@ export const createPostgresOperationsAgentPersistence = (
 
   return Object.freeze({
     investigationRepository,
+    businessRecordRepository,
     investigationTransaction,
     checkpointRepository,
     applicationOutbox,

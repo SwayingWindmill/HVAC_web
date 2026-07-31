@@ -1,0 +1,236 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  createOperationsAgentHttpHandler,
+  createSiteNightEnergyInvestigationCoordinator,
+} from '../dist/index.js';
+import { createFakeOperationsAgentEnvironment } from './support/fake-operations-agent-environment.mjs';
+
+const organizationId = '0198f5c0-7c00-7000-8000-000000000001';
+const siteId = '0198f5c0-7c00-7000-8000-000000000002';
+const investigationId = 'investigation-001';
+const scope = Object.freeze({ organizationId, siteId, equipmentId: null, deviceId: null });
+const currentTime = Date.parse('2026-07-31T00:00:00.000Z');
+
+const energySeries = (request, energyPerHour) => {
+  const from = Date.parse(request.input.from);
+  const to = Date.parse(request.input.to);
+  const hours = (to - from) / 3_600_000;
+  return {
+    schemaVersion: 1,
+    points: Array.from({ length: hours }, (_value, index) => ({
+      periodStart: new Date(from + index * 3_600_000).toISOString(),
+      periodEnd: new Date(from + (index + 1) * 3_600_000).toISOString(),
+      energyKWh: energyPerHour,
+    })),
+    metadata: {
+      requestedGranularity: 'hour',
+      actualGranularity: 'hour',
+      dataWatermark: new Date(to).toISOString(),
+      aggregateWatermark: new Date(to).toISOString(),
+      datasetRevision: 'energy-dataset-r17',
+      partial: false,
+      qualitySummary: { valid: hours, suspect: 0, invalid: 0 },
+    },
+  };
+};
+
+const ownerResultFactory = async (request) => {
+  if (request.tool === 'registry.getSite') {
+    return {
+      requestId: request.requestId,
+      owner: 'registry',
+      scope,
+      revision: 'registry-site:17',
+      quality: 'GOOD',
+      provenance: 'platform-core-service:registry-site/v1',
+      payload: {
+        kind: 'SITE',
+        site: { id: siteId, owningOrganizationId: organizationId, timezone: 'Asia/Tokyo' },
+      },
+    };
+  }
+  if (request.tool === 'registry.listSiteEquipment') {
+    return {
+      requestId: request.requestId,
+      owner: 'registry',
+      scope,
+      revision: 'registry-equipment:29',
+      quality: 'GOOD',
+      provenance: 'platform-core-service:registry-site-equipment/v1',
+      payload: {
+        kind: 'SITE_EQUIPMENT',
+        siteId,
+        equipment: [{ id: '0198f5c0-7c00-7000-8000-000000000010' }],
+      },
+    };
+  }
+  const target = request.requestId.endsWith('energy-target');
+  return {
+    requestId: request.requestId,
+    owner: 'telemetry-query-service',
+    scope,
+    revision: 'energy-dataset-r17',
+    quality: 'GOOD',
+    provenance: 'telemetry-query-service:energy-series/v1',
+    payload: energySeries(request, target ? 155 : 125),
+  };
+};
+
+const headers = Object.freeze({
+  'Content-Type': 'application/json',
+  'X-Acting-Organization-ID': organizationId,
+  'X-Delegation-Grant': 'gateway-service-grant',
+  'X-Operations-Registry-Site-Grant': 'registry-site-grant',
+  'X-Operations-Registry-Equipment-Grant': 'registry-equipment-grant',
+  'X-Operations-Energy-Grant': 'energy-grant',
+  'X-Route-Policy-Revision': 'policy-v17',
+  traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+});
+
+const createHarness = ({ deny = false } = {}) => {
+  const environment = createFakeOperationsAgentEnvironment({
+    scope,
+    initialTime: currentTime,
+    leaseDurationMs: 86_400_000,
+    ownerDelayMs: 1,
+    ownerResultFactory,
+    runtimeSteps: [{
+      stepId: 'collect-registry-context',
+      plan: {
+        batches: [{
+          batchId: 'registry-context',
+          requests: [{
+            requestId: `${investigationId}:registry-site`,
+            tool: 'registry.getSite',
+            input: { siteId },
+          }, {
+            requestId: `${investigationId}:registry-equipment`,
+            tool: 'registry.listSiteEquipment',
+            input: { siteId },
+          }],
+        }],
+      },
+      checkpointPosition: 'complete',
+    }],
+  });
+  const authorizationCalls = [];
+  const handler = createOperationsAgentHttpHandler({
+    now: () => currentTime,
+    authorizer: {
+      async authorize(input) {
+        authorizationCalls.push(input);
+        if (deny) return { decision: 'DENY', decisionId: 'deny-site' };
+        return {
+          decision: 'ALLOW',
+          decisionId: 'allow-site',
+          policyRevision: input.policyRevision,
+          traceparent: input.traceparent,
+          toolDelegationGrants: {
+            'registry.getSite': input.registrySiteGrant,
+            'registry.listSiteEquipment': input.registryEquipmentGrant,
+            'analytics.getEnergySeries': input.energyGrant,
+          },
+        };
+      },
+    },
+    createCoordinator(context) {
+      return createSiteNightEnergyInvestigationCoordinator({
+        ...environment.ports,
+        clock: { now: () => context.now },
+        authorizationDecisionReader: {
+          authorizeScope: async () => context.authorization,
+        },
+      });
+    },
+  });
+  return { environment, handler, authorizationCalls };
+};
+
+const body = async (response) => JSON.parse(await response.text());
+
+test('internal HTTP contract exposes only start, advance and safe authoritative snapshots', async () => {
+  const harness = createHarness();
+  const collection = `https://operations-agent.internal/internal/v1/sites/${siteId}/operations/investigations`;
+  const startedResponse = await harness.handler.handle(new Request(collection, {
+    method: 'POST',
+    headers,
+    body: '{}',
+  }));
+  assert.equal(startedResponse.status, 201);
+  const started = await body(startedResponse);
+  assert.equal(started.status, 'RUNNING');
+  assert.equal(JSON.stringify(started).includes('lease'), false);
+  assert.equal(JSON.stringify(started).includes('checkpoint'), false);
+  assert.equal(JSON.stringify(started).includes('runtimeRevision'), false);
+
+  const item = `${collection}/${started.id}`;
+  const advancedResponse = await harness.handler.handle(new Request(`${item}:advance`, {
+    method: 'POST',
+    headers,
+    body: '{}',
+  }));
+  assert.equal(advancedResponse.status, 200);
+  const advanced = await body(advancedResponse);
+  assert.equal(advanced.status, 'COMPLETED');
+  assert.equal(advanced.outcome, 'SUPPORTED_SITE_FINDING');
+  assert.equal(advanced.toolReceipts.length, 4);
+  assert.equal(JSON.stringify(advanced).includes('"points"'), false);
+
+  const getHeaders = { ...headers };
+  delete getHeaders['Content-Type'];
+  const getResponse = await harness.handler.handle(new Request(item, {
+    method: 'GET',
+    headers: getHeaders,
+  }));
+  assert.equal(getResponse.status, 200);
+  assert.deepEqual(await body(getResponse), advanced);
+
+  assert.equal(harness.authorizationCalls.length, 3);
+  assert.deepEqual(harness.authorizationCalls[1], {
+    method: 'POST',
+    path: `/internal/v1/sites/${siteId}/operations/investigations/${started.id}:advance`,
+    organizationId,
+    siteId,
+    investigationId: started.id,
+    gatewayDelegationGrant: 'gateway-service-grant',
+    registrySiteGrant: 'registry-site-grant',
+    registryEquipmentGrant: 'registry-equipment-grant',
+    energyGrant: 'energy-grant',
+    policyRevision: 'policy-v17',
+    traceparent: headers.traceparent,
+  });
+});
+
+test('internal HTTP authorization denial is nondiscoverable and malformed requests fail before use cases', async () => {
+  const denied = createHarness({ deny: true });
+  const item = `https://operations-agent.internal/internal/v1/sites/${siteId}/operations/investigations/missing`;
+  const getHeaders = { ...headers };
+  delete getHeaders['Content-Type'];
+  const deniedResponse = await denied.handler.handle(new Request(item, {
+    method: 'GET',
+    headers: getHeaders,
+  }));
+  assert.equal(deniedResponse.status, 404);
+  assert.equal((await body(deniedResponse)).code, 'RESOURCE_NOT_FOUND');
+
+  const missingHeaders = { ...headers };
+  delete missingHeaders['X-Delegation-Grant'];
+  const unauthorizedResponse = await denied.handler.handle(new Request(
+    `https://operations-agent.internal/internal/v1/sites/${siteId}/operations/investigations`,
+    { method: 'POST', headers: missingHeaders, body: '{}' },
+  ));
+  assert.equal(unauthorizedResponse.status, 401);
+  assert.equal(denied.authorizationCalls.length, 1);
+
+  const oversized = await denied.handler.handle(new Request(
+    `https://operations-agent.internal/internal/v1/sites/${siteId}/operations/investigations`,
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ unexpected: 'x'.repeat(9_000) }),
+    },
+  ));
+  assert.equal(oversized.status, 413);
+});

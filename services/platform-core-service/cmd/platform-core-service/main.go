@@ -85,10 +85,13 @@ func main() {
 			GrantPublicKey:         iamGrantPublicKey,
 			GrantIssuer:            envOr("CORE_GRANT_ISSUER", "spiffe://hvac.local/iam-service"),
 			AllowedPresenterSPIFFE: envOr("CORE_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
-			Audience:               envOr("CORE_AUDIENCE", "platform-core-service"),
-			GrantStatus:            grantStatus,
-			Logger:                 logger,
-			Observability:          telemetry,
+			AdditionalAllowedPresenterSPIFFEs: []string{
+				envOr("CORE_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
+			},
+			Audience:      envOr("CORE_AUDIENCE", "platform-core-service"),
+			GrantStatus:   grantStatus,
+			Logger:        logger,
+			Observability: telemetry,
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,

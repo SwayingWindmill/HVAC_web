@@ -5,6 +5,7 @@ const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, mill
 
 class FakeBusinessStore {
   records = new Map();
+  businessRecords = new Map();
   outboxEvents = [];
   auditRecords = [];
   saveCalls = [];
@@ -12,6 +13,12 @@ class FakeBusinessStore {
 
   repository = {
     get: async (investigationId) => this.records.get(investigationId) ?? null,
+  };
+
+  businessRecordRepository = {
+    get: async (investigationId, recordId) => (
+      this.businessRecords.get(`${investigationId}:${recordId}`) ?? null
+    ),
   };
 
   transaction = {
@@ -27,7 +34,15 @@ class FakeBusinessStore {
       this.outboxEvents.push(event);
       this.auditRecords.push(audit);
     },
-    save: async ({ investigation, expectedRevision, expectedAuthority, effect, event, audit }) => {
+    save: async ({
+      investigation,
+      expectedRevision,
+      expectedAuthority,
+      effect,
+      record,
+      event,
+      audit,
+    }) => {
       if (this.nextConflict !== null) {
         const conflict = this.nextConflict;
         this.nextConflict = null;
@@ -54,6 +69,9 @@ class FakeBusinessStore {
         }
       }
 
+      if (record !== undefined) {
+        this.businessRecords.set(`${view.id}:${record.id}`, record);
+      }
       this.saveCalls.push({
         investigationId: view.id,
         expectedRevision,
@@ -134,34 +152,38 @@ class ScriptedFakeRuntime {
 }
 
 const ownerForTool = (tool) => {
-  if (tool === 'registry.getEquipment') return 'registry';
+  if (tool === 'registry.getSite') return 'registry';
   if (tool === 'telemetry.getCurrentSnapshot') return 'telemetry-query-service';
-  if (tool === 'analytics.getEnergySeries') return 'analytics-service';
+  if (tool === 'analytics.getEnergySeries') return 'telemetry-query-service';
   return 'command-service';
 };
 
 const revisionForTool = (tool) => {
-  if (tool === 'registry.getEquipment') return 'registry-revision-17';
+  if (tool === 'registry.getSite') return 'registry-revision-17';
   if (tool === 'telemetry.getCurrentSnapshot') return 'telemetry-revision-73';
   if (tool === 'analytics.getEnergySeries') return 'dataset-revision-29';
   return 'capability-revision-5';
 };
 
 class FakeOwnerReaders {
-  constructor(scope, delayMs) {
+  constructor(scope, delayMs, resultFactory) {
     this.scope = scope;
     this.delayMs = delayMs;
+    this.resultFactory = resultFactory;
     this.activeReads = 0;
     this.maxConcurrentReads = 0;
     this.calls = [];
   }
 
-  async read(request) {
+  async read({ request }) {
     this.activeReads += 1;
     this.maxConcurrentReads = Math.max(this.maxConcurrentReads, this.activeReads);
     this.calls.push({ requestId: request.requestId, tool: request.tool });
     try {
       await wait(this.delayMs);
+      if (this.resultFactory !== undefined) {
+        return await this.resultFactory(request, this.scope);
+      }
       const equipmentId = 'equipmentId' in request.input ? request.input.equipmentId : null;
       return {
         requestId: request.requestId,
@@ -209,12 +231,13 @@ export const createFakeOperationsAgentEnvironment = ({
   initialTime = 10_000,
   leaseDurationMs = 10_000,
   ownerDelayMs = 15,
+  ownerResultFactory,
 }) => {
   let currentTime = initialTime;
   const businessStore = new FakeBusinessStore();
   const checkpointStore = new FakeCheckpointStore();
   const runtime = new ScriptedFakeRuntime(runtimeSteps);
-  const owners = new FakeOwnerReaders(scope, ownerDelayMs);
+  const owners = new FakeOwnerReaders(scope, ownerDelayMs, ownerResultFactory);
 
   const applicationOutbox = {
     append: async (event) => businessStore.outboxEvents.push(event),
@@ -223,15 +246,25 @@ export const createFakeOperationsAgentEnvironment = ({
     record: async (record) => businessStore.auditRecords.push(record),
   };
 
-  const coordinator = createInvestigationCoordinator({
+  const ports = {
     investigationRepository: businessStore.repository,
+    businessRecordRepository: businessStore.businessRecordRepository,
     investigationTransaction: businessStore.transaction,
     authorizationDecisionReader: {
       async authorizeScope() {
-        return { decision: 'ALLOW', decisionId: 'fake-authorization-allow' };
+        return {
+          decision: 'ALLOW',
+          decisionId: 'fake-authorization-allow',
+          delegationGrant: 'fake-delegation-grant',
+          toolDelegationGrants: {
+            'registry.getSite': 'fake-registry-site-grant',
+            'registry.listSiteEquipment': 'fake-registry-equipment-grant',
+            'analytics.getEnergySeries': 'fake-energy-grant',
+          },
+          policyRevision: 'fake-policy-revision',
+        };
       },
     },
-    agentExecutionRuntime: runtime,
     checkpointRepository: checkpointStore.repository,
     applicationOutbox,
     auditRecorder,
@@ -244,10 +277,18 @@ export const createFakeOperationsAgentEnvironment = ({
     clock: { now: () => currentTime },
     idGenerator: createIdentityGenerator(),
     leaseDurationMs,
+  };
+  const coordinator = createInvestigationCoordinator({
+    ...ports,
+    agentExecutionRuntime: runtime,
   });
 
   return Object.freeze({
     coordinator,
+    ports: {
+      ...ports,
+      createAgentExecutionRuntime: () => runtime,
+    },
     businessStore,
     checkpointStore,
     runtime,

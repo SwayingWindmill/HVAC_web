@@ -68,6 +68,49 @@ func TestDelegationGrantCannotExpandOrForward(t *testing.T) {
 	}
 }
 
+func TestDelegationCanSeparateTrustedIssuerFromExecutingWorkload(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	claims := validClaims(now)
+	claims.ExecutingService = "spiffe://hvac.local/operations-agent-service"
+	claims.Audience = "telemetry-query-service"
+	claims.Actions = []string{"analytics.energy-series.read"}
+	claims.Scopes = []string{"query-digest"}
+	if err := identitycontext.ValidateDelegationFromIssuer(
+		claims,
+		now,
+		"spiffe://hvac.local/platform-gateway",
+		"spiffe://hvac.local/operations-agent-service",
+		"telemetry-query-service",
+		"analytics.energy-series.read",
+		"query-digest",
+	); err != nil {
+		t.Fatalf("issuer-to-executor delegation rejected: %v", err)
+	}
+	if err := identitycontext.ValidateDelegationFromIssuer(
+		claims,
+		now,
+		"spiffe://hvac.local/platform-gateway",
+		"spiffe://hvac.local/other-service",
+		"telemetry-query-service",
+		"analytics.energy-series.read",
+		"query-digest",
+	); err == nil {
+		t.Fatal("delegation was accepted for a different executing workload")
+	}
+	claims.Issuer = "spiffe://hvac.local/other-issuer"
+	if err := identitycontext.ValidateDelegationFromIssuer(
+		claims,
+		now,
+		"spiffe://hvac.local/platform-gateway",
+		"spiffe://hvac.local/operations-agent-service",
+		"telemetry-query-service",
+		"analytics.energy-series.read",
+		"query-digest",
+	); err == nil {
+		t.Fatal("delegation was accepted from a different issuer")
+	}
+}
+
 func TestDelegationAnyScopePreservesExactResourceProjection(t *testing.T) {
 	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 	claims := validClaims(now)

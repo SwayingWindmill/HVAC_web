@@ -20,29 +20,30 @@ import (
 const RegistryPathPrefix = "/internal/v1/registry/"
 
 type ServerConfig struct {
-	Store                  RegistryStore
-	CursorCodec            *CursorCodec
-	GrantPublicKey         crypto.PublicKey
-	GrantIssuer            string
-	AllowedPresenterSPIFFE string
-	Audience               string
-	GrantStatus            GrantStatusProvider
-	Logger                 *slog.Logger
-	Observability          *observability.Runtime
-	Now                    func() time.Time
+	Store                             RegistryStore
+	CursorCodec                       *CursorCodec
+	GrantPublicKey                    crypto.PublicKey
+	GrantIssuer                       string
+	AllowedPresenterSPIFFE            string
+	AdditionalAllowedPresenterSPIFFEs []string
+	Audience                          string
+	GrantStatus                       GrantStatusProvider
+	Logger                            *slog.Logger
+	Observability                     *observability.Runtime
+	Now                               func() time.Time
 }
 
 type server struct {
-	store                  RegistryStore
-	cursorCodec            *CursorCodec
-	grantPublicKey         crypto.PublicKey
-	grantIssuer            string
-	allowedPresenterSPIFFE string
-	audience               string
-	grantStatus            GrantStatusProvider
-	logger                 *slog.Logger
-	observability          *observability.Runtime
-	now                    func() time.Time
+	store                   RegistryStore
+	cursorCodec             *CursorCodec
+	grantPublicKey          crypto.PublicKey
+	grantIssuer             string
+	allowedPresenterSPIFFEs map[string]struct{}
+	audience                string
+	grantStatus             GrantStatusProvider
+	logger                  *slog.Logger
+	observability           *observability.Runtime
+	now                     func() time.Time
 }
 
 type registryRoute struct {
@@ -55,8 +56,17 @@ type registryRoute struct {
 }
 
 func NewHandler(config ServerConfig) http.Handler {
-	if config.Store == nil || config.CursorCodec == nil || config.GrantPublicKey == nil || strings.TrimSpace(config.GrantIssuer) == "" || strings.TrimSpace(config.AllowedPresenterSPIFFE) == "" || strings.TrimSpace(config.Audience) == "" || config.GrantStatus == nil {
+	primaryPresenter := strings.TrimSpace(config.AllowedPresenterSPIFFE)
+	if config.Store == nil || config.CursorCodec == nil || config.GrantPublicKey == nil || strings.TrimSpace(config.GrantIssuer) == "" || primaryPresenter == "" || strings.TrimSpace(config.Audience) == "" || config.GrantStatus == nil {
 		panic("Core Registry server configuration is incomplete")
+	}
+	allowedPresenters := map[string]struct{}{primaryPresenter: {}}
+	for _, candidate := range config.AdditionalAllowedPresenterSPIFFEs {
+		presenter := strings.TrimSpace(candidate)
+		if presenter == "" || !strings.HasPrefix(presenter, "spiffe://") {
+			panic("Core Registry allowed presenter is invalid")
+		}
+		allowedPresenters[presenter] = struct{}{}
 	}
 	logger := config.Logger
 	if logger == nil {
@@ -71,16 +81,16 @@ func NewHandler(config ServerConfig) http.Handler {
 		now = time.Now
 	}
 	return &server{
-		store:                  config.Store,
-		cursorCodec:            config.CursorCodec,
-		grantPublicKey:         config.GrantPublicKey,
-		grantIssuer:            config.GrantIssuer,
-		allowedPresenterSPIFFE: config.AllowedPresenterSPIFFE,
-		audience:               config.Audience,
-		grantStatus:            config.GrantStatus,
-		logger:                 logger,
-		observability:          telemetry,
-		now:                    now,
+		store:                   config.Store,
+		cursorCodec:             config.CursorCodec,
+		grantPublicKey:          config.GrantPublicKey,
+		grantIssuer:             config.GrantIssuer,
+		allowedPresenterSPIFFEs: allowedPresenters,
+		audience:                config.Audience,
+		grantStatus:             config.GrantStatus,
+		logger:                  logger,
+		observability:           telemetry,
+		now:                     now,
 	}
 }
 
@@ -137,7 +147,8 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	peerSPIFFE, ok := verifiedPeerSPIFFE(request)
-	if !ok || peerSPIFFE != server.allowedPresenterSPIFFE {
+	_, presenterAllowed := server.allowedPresenterSPIFFEs[peerSPIFFE]
+	if !ok || !presenterAllowed {
 		statusCode = http.StatusUnauthorized
 		writeProblem(writer, request, statusCode, "CORE_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.", false)
 		return
