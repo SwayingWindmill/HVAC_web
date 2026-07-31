@@ -41,12 +41,14 @@ for (const marker of [
   'analytics_projector_reader',
   'analytics_projector_writer',
   'cube_analytics_reader',
+  'telemetry_query_history_reader',
 ]) {
   assert(ddl.includes(marker), `missing analytics DDL marker ${marker}`);
 }
 assert(ddl.includes('GRANT SELECT ON telemetry_history.observations TO analytics_projector_reader'), 'analytics reader must have raw-history read access');
 assert(ddl.includes('GRANT INSERT ON analytics.energy_interval_facts TO analytics_projector_writer'), 'analytics writer must only insert facts');
 assert(ddl.includes('GRANT SELECT ON analytics.energy_interval_facts TO cube_analytics_reader'), 'Cube must use a read-only analytics identity');
+assert(ddl.includes('GRANT SELECT ON telemetry_history.observations TO telemetry_query_history_reader'), 'Telemetry Query Service must use a raw-history read-only identity');
 
 for (const marker of [
   'hvac_meter.energy',
@@ -81,7 +83,7 @@ for (const marker of ['buildMetadataQuery', 'maximumCubeQueryDuration', 'Add(-ti
 for (const marker of ['analytics-read-model-projector:', 'analytics_projector_reader', 'analytics_projector_writer', ':19089']) {
   assert(compose.includes(marker), `missing analytics compose marker ${marker}`);
 }
-for (const marker of ['TestCumulativeMeterProjectsAdditiveEnergyFactsIdempotently', "factCount !== '2'", 'readerCannotInsert', 'writerCannotSelect', 'cubeCannotInsert']) {
+for (const marker of ['TestCumulativeMeterProjectsAdditiveEnergyFactsIdempotently', 'TestClickHouseHistoryClientQueriesBoundedRealProjection', 'deviceHistoryQuery', "factCount !== '2'", 'historyQueryCanSelect', 'historyQueryCannotInsert', 'historyQueryCannotSelectAnalytics', 'readerCannotInsert', 'writerCannotSelect', 'cubeCannotInsert']) {
   assert(integration.includes(marker), `missing analytics integration marker ${marker}`);
 }
 for (const marker of [

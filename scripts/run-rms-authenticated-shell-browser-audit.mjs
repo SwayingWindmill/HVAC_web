@@ -158,7 +158,7 @@ function principalResponse(state) {
       delegationExpiresAt: expiresAt,
     },
     authorization: {
-      capabilitySetVersion: 1,
+      capabilitySetVersion: 2,
       policyRevision: 'iam-effective:8',
       capabilities: [...state.capabilities],
     },

@@ -10,10 +10,11 @@ import (
 func TestEffectiveAuthorizationAcceptsCanonicalCapabilitySet(t *testing.T) {
 	authorization := identitycontext.EffectiveAuthorization{
 		CapabilitySetVersion: identitycontext.CapabilitySetVersion,
-		PolicyRevision:       "registry-read:7",
+		PolicyRevision:       "cap-v2:registry-and-telemetry",
 		Capabilities: []identitycontext.Capability{
 			identitycontext.CapabilityOrganizationList,
 			identitycontext.CapabilitySiteRead,
+			identitycontext.CapabilityTelemetryBatchRead,
 		},
 	}
 	if err := authorization.Validate(); err != nil {
@@ -29,7 +30,7 @@ func TestEffectiveAuthorizationRejectsMalformedCapabilitySets(t *testing.T) {
 		{
 			name: "unsupported version",
 			authorization: identitycontext.EffectiveAuthorization{
-				CapabilitySetVersion: 2,
+				CapabilitySetVersion: 1,
 				PolicyRevision:       "registry-read:7",
 				Capabilities:         []identitycontext.Capability{},
 			},

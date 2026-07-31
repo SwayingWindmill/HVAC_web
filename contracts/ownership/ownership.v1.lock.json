@@ -1,5 +1,5 @@
 {
-  "routeRegistryRevision": 11,
+  "routeRegistryRevision": 12,
   "routes": {
     "GET /api/v1/health": { "revision": 1, "owner": "platform-gateway" },
     "GET /api/v1/version": { "revision": 1, "owner": "platform-gateway" },
@@ -22,12 +22,13 @@
     "POST /api/v1/telemetry/observation-snapshots:batchGet": { "revision": 1, "owner": "telemetry-runtime-service" },
     "POST /api/v1/telemetry/subscriptions:bootstrap": { "revision": 1, "owner": "telemetry-runtime-service" },
     "POST /api/v1/telemetry/recovery-cursors:checkpoint": { "revision": 1, "owner": "telemetry-runtime-service" },
+    "POST /api/v1/telemetry/device-series:query": { "revision": 1, "owner": "telemetry-query-service" },
     "POST /api/v1/commands": { "revision": 1, "owner": "command-service" },
     "GET /api/v1/commands/{commandId}": { "revision": 1, "owner": "command-service" },
     "POST /api/v1/commands/{commandId}:approve": { "revision": 1, "owner": "command-service" },
     "POST /api/v1/analytics/energy-series": { "revision": 1, "owner": "telemetry-query-service" }
   },
-  "dataRegistryRevision": 13,
+  "dataRegistryRevision": 14,
   "resources": {
     "schema:gateway": { "revision": 1, "writer": "platform-gateway" },
     "schema:audit_ledger": { "revision": 1, "writer": "audit-ledger-service" },
@@ -82,6 +83,7 @@
     "projection:telemetry-history-observation": { "revision": 1, "writer": "telemetry-history-projector" },
     "projection:analytics-energy-interval-fact": { "revision": 1, "writer": "analytics-read-model-projector" },
     "query-contract:analytics-energy-series-v1": { "revision": 1, "writer": "telemetry-query-service" },
+    "query-contract:telemetry-device-history-v1": { "revision": 1, "writer": "telemetry-query-service" },
     "semantic-model:cube-energy-usage-v1": { "revision": 1, "writer": "telemetry-query-service" }
   }
 }

@@ -22,6 +22,7 @@ const (
 	ActionSnapshotRead       Action = "telemetry.snapshot.read"
 	ActionBatchRead          Action = "telemetry.batch.read"
 	ActionSubscribe          Action = "telemetry.subscribe"
+	ActionHistoryRead        Action = "telemetry.history.read"
 	ActionResubscribe        Action = "telemetry.resubscribe"
 	ActionRecoveryUse        Action = "telemetry.recovery.use"
 	ActionRecoveryCheckpoint Action = "telemetry.recovery.checkpoint"
@@ -29,7 +30,7 @@ const (
 
 func (action Action) Valid() bool {
 	switch action {
-	case ActionSnapshotRead, ActionBatchRead, ActionSubscribe, ActionResubscribe, ActionRecoveryUse, ActionRecoveryCheckpoint:
+	case ActionSnapshotRead, ActionBatchRead, ActionSubscribe, ActionHistoryRead, ActionResubscribe, ActionRecoveryUse, ActionRecoveryCheckpoint:
 		return true
 	default:
 		return false
