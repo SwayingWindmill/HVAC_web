@@ -87,6 +87,7 @@ const expectedOperations = {
   listSiteEquipment: ['get', '/api/v1/sites/{siteId}/equipment'],
   getEquipment: ['get', '/api/v1/equipment/{equipmentId}'],
   listSiteDevices: ['get', '/api/v1/sites/{siteId}/devices'],
+  listSiteDeviceBindings: ['get', '/api/v1/sites/{siteId}/device-bindings'],
   getDevice: ['get', '/api/v1/devices/{deviceId}'],
 };
 const operations = {};
@@ -110,6 +111,7 @@ const expectedSuccessSchemas = {
   listSiteEquipment: 'EquipmentCollection',
   getEquipment: 'Equipment',
   listSiteDevices: 'DeviceCollection',
+  listSiteDeviceBindings: 'DeviceBindingCollection',
   getDevice: 'Device',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
@@ -150,6 +152,7 @@ const schemaRequirements = {
   SiteCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   EquipmentCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   DeviceCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
+  DeviceBindingCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   FieldError: [['field', 'message'], ['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'fieldErrors']],
 };
@@ -223,6 +226,7 @@ const replacements = {
   __SITE_EQUIPMENT_PATH__: operations.listSiteEquipment.path,
   __EQUIPMENT_PATH__: operations.getEquipment.path,
   __SITE_DEVICES_PATH__: operations.listSiteDevices.path,
+  __SITE_DEVICE_BINDINGS_PATH__: operations.listSiteDeviceBindings.path,
   __DEVICE_PATH__: operations.getDevice.path,
 };
 

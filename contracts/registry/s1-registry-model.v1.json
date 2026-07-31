@@ -65,6 +65,7 @@
       { "operationId": "listSiteEquipment", "method": "GET", "path": "/api/v1/sites/{siteId}/equipment", "response": "EquipmentCollection", "scope": ["organization", "site", "principal"] },
       { "operationId": "getEquipment", "method": "GET", "path": "/api/v1/equipment/{equipmentId}", "response": "Equipment", "scope": ["organization", "site", "principal"] },
       { "operationId": "listSiteDevices", "method": "GET", "path": "/api/v1/sites/{siteId}/devices", "response": "DeviceCollection", "scope": ["organization", "site", "principal"] },
+      { "operationId": "listSiteDeviceBindings", "method": "GET", "path": "/api/v1/sites/{siteId}/device-bindings", "response": "DeviceBindingCollection", "scope": ["organization", "site", "principal"] },
       { "operationId": "getDevice", "method": "GET", "path": "/api/v1/devices/{deviceId}", "response": "Device", "scope": ["organization", "site", "principal"] }
     ],
     "collections": {

@@ -17,6 +17,7 @@
     "GET /api/v1/sites/{siteId}/equipment": { "revision": 5, "owner": "platform-core-service" },
     "GET /api/v1/equipment/{equipmentId}": { "revision": 5, "owner": "platform-core-service" },
     "GET /api/v1/sites/{siteId}/devices": { "revision": 5, "owner": "platform-core-service" },
+    "GET /api/v1/sites/{siteId}/device-bindings": { "revision": 1, "owner": "platform-core-service" },
     "GET /api/v1/devices/{deviceId}": { "revision": 5, "owner": "platform-core-service" },
     "GET /api/v1/devices/{deviceId}/observation-snapshot": { "revision": 1, "owner": "telemetry-runtime-service" },
     "POST /api/v1/telemetry/observation-snapshots:batchGet": { "revision": 1, "owner": "telemetry-runtime-service" },

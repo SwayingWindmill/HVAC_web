@@ -5,6 +5,8 @@ import {
   PlatformApiError,
   createPlatformGatewayClient,
   type Device,
+  type DeviceBinding,
+  type DeviceBindingCollection,
   type DeviceCollection,
   type Equipment,
   type EquipmentCollection,
@@ -188,6 +190,21 @@ export function useRegistryDeviceDetail(deviceId: string | null, enabled = true)
   });
 }
 
+export function useRegistryDeviceBindings(siteId: string | null, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: ['registry', 'sites', siteId, 'device-bindings'],
+    queryFn: async ({ pageParam, signal }) => {
+      const params: RegistryListParams = { limit: DEFAULT_PAGE_SIZE };
+      if (typeof pageParam === 'string') params.cursor = pageParam;
+      return (await client.listSiteDeviceBindings(registryId(siteId!), params, { signal })).data;
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: nextCursor,
+    enabled: registryQueryEnabled(enabled && Boolean(siteId)),
+    retry: retryRegistryQuery,
+  });
+}
+
 async function collectCollection<T>(
   fetchPage: (params: RegistryListParams, signal: AbortSignal) => Promise<{ data: { items: T[]; hasMore: boolean; nextCursor: string | null } }>,
   signal: AbortSignal,
@@ -230,5 +247,7 @@ export type RegistryOrganizationCollection = OrganizationCollection;
 export type RegistrySiteCollection = SiteCollection;
 export type RegistryEquipmentCollection = EquipmentCollection;
 export type RegistryDeviceCollection = DeviceCollection;
+export type RegistryDeviceBindingCollection = DeviceBindingCollection;
 export type RegistryEquipment = Equipment;
 export type RegistryDevice = Device;
+export type RegistryDeviceBinding = DeviceBinding;

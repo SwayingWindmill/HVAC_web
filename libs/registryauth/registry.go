@@ -46,15 +46,16 @@ type GrantStatus struct {
 type Action string
 
 const (
-	ActionRegistryRead     Action = "registry.read"
-	ActionOrganizationList Action = "organization.list"
-	ActionOrganizationRead Action = "organization.read"
-	ActionSiteList         Action = "site.list"
-	ActionSiteRead         Action = "site.read"
-	ActionEquipmentList    Action = "equipment.list"
-	ActionEquipmentRead    Action = "equipment.read"
-	ActionDeviceList       Action = "device.list"
-	ActionDeviceRead       Action = "device.read"
+	ActionRegistryRead      Action = "registry.read"
+	ActionOrganizationList  Action = "organization.list"
+	ActionOrganizationRead  Action = "organization.read"
+	ActionSiteList          Action = "site.list"
+	ActionSiteRead          Action = "site.read"
+	ActionEquipmentList     Action = "equipment.list"
+	ActionEquipmentRead     Action = "equipment.read"
+	ActionDeviceList        Action = "device.list"
+	ActionDeviceRead        Action = "device.read"
+	ActionDeviceBindingList Action = "device-binding.list"
 )
 
 func (action Action) Valid() bool {
@@ -67,7 +68,8 @@ func (action Action) Valid() bool {
 		ActionEquipmentList,
 		ActionEquipmentRead,
 		ActionDeviceList,
-		ActionDeviceRead:
+		ActionDeviceRead,
+		ActionDeviceBindingList:
 		return true
 	default:
 		return false
@@ -76,7 +78,7 @@ func (action Action) Valid() bool {
 
 func (action Action) SiteScoped() bool {
 	switch action {
-	case ActionSiteList, ActionSiteRead, ActionEquipmentList, ActionEquipmentRead, ActionDeviceList, ActionDeviceRead:
+	case ActionSiteList, ActionSiteRead, ActionEquipmentList, ActionEquipmentRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList:
 		return true
 	default:
 		return false
