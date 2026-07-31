@@ -627,3 +627,41 @@
     padding: 14px;
   }
 }
+
+.real-assets-realtime {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 16px;
+  border: 1px solid #9ac7a3;
+  border-radius: 8px;
+  background: #f4fbf5;
+  color: #244e2d;
+}
+
+.real-assets-realtime--degraded {
+  border-color: #e5c77a;
+  background: #fff9e8;
+  color: #6b4b00;
+}
+
+.real-assets-realtime > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.real-assets-realtime h3,
+.real-assets-realtime p {
+  margin: 0;
+}
+
+.real-assets-realtime header div {
+  display: grid;
+  gap: 4px;
+}
+
+.real-assets-realtime small {
+  overflow-wrap: anywhere;
+}

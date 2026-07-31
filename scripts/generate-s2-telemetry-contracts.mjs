@@ -28,8 +28,9 @@ const openAPI = JSON.parse(openAPIText);
 const eventContract = JSON.parse(eventText);
 const toolingLock = JSON.parse(toolingLockText);
 const compatibility = JSON.parse(compatibilityText);
-const openAPIDigest = createHash('sha256').update(openAPIText).digest('hex');
-const eventDigest = createHash('sha256').update(eventText).digest('hex');
+const normalizedDigest = (text) => createHash('sha256').update(text.replace(/\r\n?/g, '\n')).digest('hex');
+const openAPIDigest = normalizedDigest(openAPIText);
+const eventDigest = normalizedDigest(eventText);
 
 function invariant(condition, message) {
   if (!condition) throw new Error(`Invalid S2 telemetry contract: ${message}`);

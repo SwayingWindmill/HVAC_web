@@ -4,6 +4,9 @@ import type { DeviceObservationSnapshot } from '../../api/generated/s2Telemetry.
 import { REAL_ASSETS_CATALOG_REVISION } from './catalog.ts';
 import type { RealAssetsDetailResolution } from './detail.ts';
 import type { RealAssetsDeviceRow, RealAssetsPointView } from './model.ts';
+import { DeviceRealtimeStatus } from './DeviceRealtimeStatus.tsx';
+import type { RealAssetsRealtimeProjection } from './realtime.ts';
+import type { RealAssetsRealtimeResult } from './useDeviceRealtime.ts';
 
 interface DeviceDetailDrawerProps {
   readonly site: Readonly<Site>;
@@ -12,6 +15,8 @@ interface DeviceDetailDrawerProps {
   readonly currentUnavailable: boolean;
   readonly refreshing: boolean;
   readonly routePolicyRevision: string | null;
+  readonly realtime: RealAssetsRealtimeResult;
+  readonly realtimeProjection: RealAssetsRealtimeProjection | null;
   readonly actionFeedback: string | null;
   readonly onClose: () => void;
   readonly onRefresh: () => void;
@@ -157,6 +162,8 @@ export function DeviceDetailDrawer({
   currentUnavailable,
   refreshing,
   routePolicyRevision,
+  realtime,
+  realtimeProjection,
   actionFeedback,
   onClose,
   onRefresh,
@@ -239,15 +246,19 @@ export function DeviceDetailDrawer({
             <BindingFacts row={row} />
           </section>
 
+          <DeviceRealtimeStatus realtime={realtime} projection={realtimeProjection} site={site} />
+
           <section aria-labelledby="real-assets-detail-current">
             <h3 id="real-assets-detail-current">权威当前状态</h3>
-            {currentPending ? <div className="real-assets-detail__notice" role="status">正在读取当前 Snapshot…</div> : null}
+            {currentPending && !snapshot ? <div className="real-assets-detail__notice" role="status">正在读取当前 Snapshot…</div> : null}
             {currentUnavailable ? (
               <div className="real-assets-detail__notice real-assets-detail__notice--warning" role="alert">
-                Registry 身份仍然可见，但当前 Telemetry 服务不可用。系统不会用历史值、零值或不存在状态替代。
+                {snapshot
+                  ? 'Site 列表的 Current batch 暂不可用；详情仍展示 exact-key 实时会话最近一次权威 Snapshot。'
+                  : 'Registry 身份仍然可见，但当前 Telemetry 服务不可用。系统不会用历史值、零值或不存在状态替代。'}
               </div>
             ) : null}
-            {!currentPending && !currentUnavailable && row.snapshotResult?.status === 'error' ? (
+            {!snapshot && !currentPending && !currentUnavailable && row.snapshotResult?.status === 'error' ? (
               <div className="real-assets-detail__notice real-assets-detail__notice--warning" role="status">
                 当前 Device Snapshot 无法在现有授权与关键点位范围内建立；Registry 身份仍保留。
               </div>
@@ -257,7 +268,7 @@ export function DeviceDetailDrawer({
 
           <section aria-labelledby="real-assets-detail-points">
             <h3 id="real-assets-detail-points">当前关键点位</h3>
-            {currentPending || currentUnavailable ? null : <PointDetails row={row} site={site} />}
+            {snapshot || (!currentPending && !currentUnavailable) ? <PointDetails row={row} site={site} /> : null}
           </section>
         </div>
       )}
