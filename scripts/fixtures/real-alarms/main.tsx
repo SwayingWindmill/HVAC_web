@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
-import type { ProtectedScopeResource } from '@/real/protected-scope';
+import type { ProtectedScopeDraft, ProtectedScopeResource } from '@/real/protected-scope';
 import { RealAlarms } from '@/real/RealAlarms';
 import '@/real/real-shell.css';
 
@@ -31,6 +31,7 @@ Reflect.set(principal.session, ['csrf', 'Token'].join(''), 'fixture-capability')
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 let registeredResource: ProtectedScopeResource | null = null;
+let registeredDraft: ProtectedScopeDraft | null = null;
 
 function App() {
   const [site, setSite] = useState<Site>(siteA);
@@ -39,6 +40,7 @@ function App() {
       cacheCount: () => queryClient.getQueryCache().findAll({ queryKey: ['real-alarms'] }).length,
       cacheKeys: () => queryClient.getQueryCache().findAll({ queryKey: ['real-alarms'] }).map((query) => query.queryKey),
       purge: async () => registeredResource?.purge(),
+      draftDirty: () => registeredDraft?.isDirty() ?? false,
       switchSite: () => {
         globalThis.history.replaceState(null, '', '/');
         setSite(siteB);
@@ -51,6 +53,12 @@ function App() {
       <RealAlarms
         site={site}
         principal={principal}
+        registerUnsavedDraft={(draft) => {
+          registeredDraft = draft;
+          return () => {
+            if (registeredDraft?.id === draft.id) registeredDraft = null;
+          };
+        }}
         registerProtectedResource={(resource) => {
           registeredResource = resource;
           return () => {
