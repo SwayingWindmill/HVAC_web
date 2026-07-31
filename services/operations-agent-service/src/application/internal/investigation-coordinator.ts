@@ -12,10 +12,13 @@ import {
 } from '../../domain/index.js';
 import {
   InvestigationRepositoryConflictError,
+  OwnerReadError,
   type ApplicationEvent,
   type AuditRecord,
+  type AuthorizationDecision,
   type InvestigationAuthorizationAction,
   type InvestigationCoordinatorPorts,
+  type OwnerReadContext,
   type OwnerReadResult,
   type ParallelReadRequest,
   type RuntimePlanningResult,
@@ -30,6 +33,12 @@ export type InvestigationCoordinatorErrorCode =
   | 'DUPLICATE_EFFECT'
   | 'BUDGET_EXHAUSTED'
   | 'UNABLE_TO_CONCLUDE'
+  | 'OWNER_REQUEST_INVALID'
+  | 'OWNER_RESOURCE_NOT_FOUND'
+  | 'OWNER_READ_TIMEOUT'
+  | 'OWNER_READ_UNAVAILABLE'
+  | 'OWNER_RESPONSE_TOO_LARGE'
+  | 'OWNER_RESPONSE_INVALID'
   | 'INVALID_INVESTIGATION_STATE';
 
 export class InvestigationCoordinatorError extends Error {
@@ -142,6 +151,9 @@ const mapApplicationError = (error: unknown): never => {
           : 'REVISION_CONFLICT';
     throw new InvestigationCoordinatorError(code, error.message, { cause: error });
   }
+  if (error instanceof OwnerReadError) {
+    throw new InvestigationCoordinatorError(error.code, error.message, { cause: error });
+  }
   if (error instanceof OperationsInvestigationError) {
     if (error.code === 'REVISION_STALE') {
       throw new InvestigationCoordinatorError('REVISION_CONFLICT', error.message, { cause: error });
@@ -169,7 +181,8 @@ const requirePositiveLeaseDuration = (value: number): number => {
 };
 
 const supportedReadTools = new Set<ParallelReadRequest['tool']>([
-  'registry.getEquipment',
+  'registry.getSite',
+  'registry.listSiteEquipment',
   'telemetry.getCurrentSnapshot',
   'analytics.getEnergySeries',
   'commands.getCapabilities',
@@ -193,9 +206,10 @@ const scopeIsWithin = (
 );
 
 const expectedOwner = (tool: ParallelReadRequest['tool']): OwnerReadResult['owner'] => {
-  if (tool === 'registry.getEquipment') return 'registry';
-  if (tool === 'telemetry.getCurrentSnapshot') return 'telemetry-query-service';
-  if (tool === 'analytics.getEnergySeries') return 'analytics-service';
+  if (tool === 'registry.getSite' || tool === 'registry.listSiteEquipment') return 'registry';
+  if (tool === 'telemetry.getCurrentSnapshot' || tool === 'analytics.getEnergySeries') {
+    return 'telemetry-query-service';
+  }
   return 'command-service';
 };
 
@@ -216,6 +230,63 @@ const validateOwnerResult = (
     );
   }
   return result;
+};
+
+const isReadInputRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const hasExactReadInputKeys = (
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): boolean => {
+  const actual = Object.keys(value);
+  return actual.length === expected.length && actual.every((key) => expected.includes(key));
+};
+
+const isNonEmptyReadString = (value: unknown): value is string => (
+  typeof value === 'string' && value.trim().length > 0
+);
+
+const hasValidReadInput = (request: ParallelReadRequest): boolean => {
+  const input: unknown = request.input;
+  if (!isReadInputRecord(input)) return false;
+  if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteEquipment') {
+    return hasExactReadInputKeys(input, ['siteId']) && isNonEmptyReadString(input.siteId);
+  }
+  if (request.tool === 'telemetry.getCurrentSnapshot') {
+    return (hasExactReadInputKeys(input, ['equipmentId'])
+      || hasExactReadInputKeys(input, ['equipmentId', 'pointKeys']))
+      && isNonEmptyReadString(input.equipmentId)
+      && (input.pointKeys === undefined
+        || (Array.isArray(input.pointKeys)
+          && input.pointKeys.every(isNonEmptyReadString)));
+  }
+  if (request.tool === 'analytics.getEnergySeries') {
+    return hasExactReadInputKeys(input, [
+      'organizationId',
+      'siteId',
+      'energyType',
+      'granularity',
+      'timezone',
+      'from',
+      'to',
+      'qualityPolicy',
+    ])
+      && isNonEmptyReadString(input.organizationId)
+      && isNonEmptyReadString(input.siteId)
+      && input.energyType === 'electricity'
+      && (input.granularity === 'hour'
+        || input.granularity === 'day'
+        || input.granularity === 'month')
+      && isNonEmptyReadString(input.timezone)
+      && isNonEmptyReadString(input.from)
+      && isNonEmptyReadString(input.to)
+      && (input.qualityPolicy === 'VALID_ONLY'
+        || input.qualityPolicy === 'VALID_AND_SUSPECT');
+  }
+  return hasExactReadInputKeys(input, ['equipmentId'])
+    && isNonEmptyReadString(input.equipmentId);
 };
 
 const countValidatedReads = (plan: RuntimeReadPlan): number => {
@@ -255,6 +326,12 @@ const countValidatedReads = (plan: RuntimeReadPlan): number => {
           `Runtime requested unsupported READ tool ${String(request.tool)}.`,
         );
       }
+      if (!hasValidReadInput(request)) {
+        throw new InvestigationCoordinatorError(
+          'INVALID_INVESTIGATION_STATE',
+          `Runtime READ request ${request.requestId} has an invalid fixed-tool input.`,
+        );
+      }
       requestIds.add(request.requestId);
       count += 1;
     }
@@ -281,7 +358,7 @@ export const createInvestigationCoordinator = (
   const authorize = async (
     scope: InvestigationScope,
     action: InvestigationAuthorizationAction,
-  ): Promise<void> => {
+  ): Promise<AuthorizationDecision> => {
     const authorization = await ports.authorizationDecisionReader.authorizeScope({ scope, action });
     if (authorization.decision === 'DENY') {
       throw new InvestigationCoordinatorError(
@@ -289,6 +366,7 @@ export const createInvestigationCoordinator = (
         authorization.reason ?? 'The requested Investigation Scope is not authorized.',
       );
     }
+    return authorization;
   };
 
   const loadAuthorized = async (
@@ -349,16 +427,19 @@ export const createInvestigationCoordinator = (
 
   const executeRead = async (
     request: ParallelReadRequest,
-    authorizedScope: InvestigationScope,
+    context: OwnerReadContext,
   ): Promise<OwnerReadResult> => {
-    const result = request.tool === 'registry.getEquipment'
-      ? await ports.ownerReaders.registry.read(request)
-      : request.tool === 'telemetry.getCurrentSnapshot'
-        ? await ports.ownerReaders.currentTelemetry.read(request)
-        : request.tool === 'analytics.getEnergySeries'
-          ? await ports.ownerReaders.energyAnalytics.read(request)
-          : await ports.ownerReaders.commandCapabilities.read(request);
-    return validateOwnerResult(request, result, authorizedScope);
+    let result: OwnerReadResult;
+    if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteEquipment') {
+      result = await ports.ownerReaders.registry.read({ request, context });
+    } else if (request.tool === 'telemetry.getCurrentSnapshot') {
+      result = await ports.ownerReaders.currentTelemetry.read({ request, context });
+    } else if (request.tool === 'analytics.getEnergySeries') {
+      result = await ports.ownerReaders.energyAnalytics.read({ request, context });
+    } else {
+      result = await ports.ownerReaders.commandCapabilities.read({ request, context });
+    }
+    return validateOwnerResult(request, result, context.scope);
   };
 
   return {
@@ -447,7 +528,9 @@ export const createInvestigationCoordinator = (
 
     async advance(command) {
       try {
-        const investigation = await loadAuthorized(command.investigationId, 'ADVANCE_AGENT_RUN');
+        const investigation = await load(command.investigationId);
+        const investigationScope = investigation.view().scope;
+        const authorization = await authorize(investigationScope, 'ADVANCE_AGENT_RUN');
         const now = ports.clock.now();
         const run = investigation.assertRunAuthority({
           runId: command.runId,
@@ -455,7 +538,6 @@ export const createInvestigationCoordinator = (
           at: now,
           expectedRevision: command.expectedRevision,
         });
-        const investigationView = investigation.view();
         const checkpoint = await ports.checkpointRepository.load(command.investigationId, run.id);
         if (checkpoint !== null && checkpoint.runtimeRevision !== run.runtimeRevision) {
           throw new InvestigationCoordinatorError(
@@ -494,10 +576,17 @@ export const createInvestigationCoordinator = (
           );
         }
 
+        const ownerReadContext: OwnerReadContext = {
+          investigationId: command.investigationId,
+          runId: run.id,
+          scope: investigationScope,
+          authorization,
+          correlationId: `${command.investigationId}:${run.id}`,
+        };
         const results: OwnerReadResult[] = [];
         for (const batch of planning.plan.batches) {
           results.push(...await Promise.all(batch.requests.map((request) => (
-            executeRead(request, investigationView.scope)
+            executeRead(request, ownerReadContext)
           ))));
         }
 

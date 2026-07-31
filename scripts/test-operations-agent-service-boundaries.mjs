@@ -137,3 +137,38 @@ test('service modules cannot bypass boundaries through a package self-import', a
     assert(result.errors.some(({ code }) => code === 'SELF_PACKAGE_IMPORT_FORBIDDEN'));
   });
 });
+
+test('tools cannot add direct data-store, Cube, ThingsBoard, or Command API paths', async () => {
+  await withTemporaryService(async (root) => {
+    await writeSource(root, 'tools/index.ts', [
+      "export const forbidden = ['http://clickhouse:8123', 'http://cube:4000/load',",
+      "  'http://thingsboard:8080', '/internal/v1/commands'];",
+      '',
+    ].join('\n'));
+
+    const result = await inspectOperationsAgentServiceBoundaries(root, {
+      requireCompleteModuleSet: false,
+      requirePackageExports: false,
+    });
+
+    assert.equal(result.valid, false);
+    assert(result.errors.some(({ code }) => code === 'FORBIDDEN_OWNER_BYPASS_PATH'));
+  });
+});
+
+test('tools may document forbidden owners without creating a bypass path', async () => {
+  await withTemporaryService(async (root) => {
+    await writeSource(root, 'tools/index.ts', [
+      '// Operations Agent tools must never call ClickHouse, Cube, ThingsBoard, or Command APIs.',
+      "export const toolsModule = 'tools';",
+      '',
+    ].join('\n'));
+
+    const result = await inspectOperationsAgentServiceBoundaries(root, {
+      requireCompleteModuleSet: false,
+      requirePackageExports: false,
+    });
+
+    assert.equal(result.valid, true, JSON.stringify(result.errors, null, 2));
+  });
+});

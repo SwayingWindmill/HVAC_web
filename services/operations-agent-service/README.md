@@ -2,9 +2,10 @@
 
 This package is the separately deployable TypeScript boundary for the Operations Agent.
 It contains the accepted modular-monolith boundary, Domain lifecycle model, public
-Investigation Coordinator application seam, PostgreSQL persistence adapter and the first
-explicit LangGraph.js `AgentExecutionRuntime` adapter. It does not yet connect a browser,
-Platform Gateway, live model provider, scheduler or platform tool.
+Investigation Coordinator application seam, PostgreSQL persistence adapter, the first
+explicit LangGraph.js `AgentExecutionRuntime` adapter and authoritative Registry/Energy
+READ adapters. It does not yet connect a browser, Platform Gateway, live model provider or
+scheduler.
 
 The module direction is:
 
@@ -41,6 +42,24 @@ Step identities. The Coordinator loads and authorizes the Operations Investigati
 loads this opaque Checkpoint. Repeating the same Checkpoint is deterministic; a mismatched
 Run, Runtime Revision, state prefix or external position fails closed. Runtime nodes emit
 READ plans only and cannot commit Evidence, Findings or Proposed Actions.
+
+The `tools` module implements two narrow authoritative READ boundaries:
+
+```text
+registry.getSite / registry.listSiteEquipment
+  -> Platform Core Service Registry routes only
+
+analytics.getEnergySeries
+  -> Telemetry Query Service Energy Series product route only
+```
+
+The Coordinator injects the current Investigation/Run identity, complete Scope, authorization
+decision, delegation grant and correlation information. Registry results are strictly decoded
+from the project Site and Equipment DTOs. Energy results retain Dataset Revision, data and
+aggregate watermarks, partial state, requested/actual granularity and Quality Summary. Both
+readers apply bounded response sizes and timeouts, map upstream failures to stable Application
+errors and keep unauthorized resources nondiscoverable. The boundary check rejects direct
+ClickHouse, Cube, ThingsBoard and Command API paths in Operations Agent tools.
 
 PostgreSQL is split into two independently migrated and authorized Schemas:
 

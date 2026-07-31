@@ -87,7 +87,12 @@ const createHarness = ({
     authorizationDecisionReader: {
       async authorizeScope() {
         return authorizationAllowed
-          ? { decision: 'ALLOW', decisionId: 'decision-001' }
+          ? {
+            decision: 'ALLOW',
+            decisionId: 'decision-001',
+            delegationGrant: 'delegation-grant-001',
+            policyRevision: 'policy-revision-001',
+          }
           : { decision: 'DENY', decisionId: 'decision-001', reason: 'Scope is not authorized.' };
       },
     },
@@ -117,10 +122,24 @@ const createHarness = ({
       async check() { return budgetDecision; },
     },
     ownerReaders: {
-      registry: { read: readerHandlers.registry ?? defaultReader },
-      currentTelemetry: { read: readerHandlers.currentTelemetry ?? defaultReader },
-      energyAnalytics: { read: readerHandlers.energyAnalytics ?? defaultReader },
-      commandCapabilities: { read: readerHandlers.commandCapabilities ?? defaultReader },
+      registry: {
+        read: ({ request, context }) => (readerHandlers.registry ?? defaultReader)(request, context),
+      },
+      currentTelemetry: {
+        read: ({ request, context }) => (
+          readerHandlers.currentTelemetry ?? defaultReader
+        )(request, context),
+      },
+      energyAnalytics: {
+        read: ({ request, context }) => (
+          readerHandlers.energyAnalytics ?? defaultReader
+        )(request, context),
+      },
+      commandCapabilities: {
+        read: ({ request, context }) => (
+          readerHandlers.commandCapabilities ?? defaultReader
+        )(request, context),
+      },
     },
     clock: {
       now() { return currentTime; },
@@ -248,14 +267,16 @@ test('advance executes independent READ requests in parallel and saves only Runt
   const readGate = new Promise((resolve) => { releaseReads = resolve; });
   const allStarted = new Promise((resolve) => { resolveAllStarted = resolve; });
   const startedRequests = [];
+  const readContexts = [];
   const scope = {
     organizationId: 'organization-001',
     siteId: 'site-001',
     equipmentId: null,
     deviceId: null,
   };
-  const read = (owner) => async (request) => {
+  const read = (owner) => async (request, context) => {
     startedRequests.push(request.requestId);
+    readContexts.push(context);
     if (startedRequests.length === 2) resolveAllStarted();
     await readGate;
     return {
@@ -277,8 +298,8 @@ test('advance executes independent READ requests in parallel and saves only Runt
           requests: [
             {
               requestId: 'read-registry',
-              tool: 'registry.getEquipment',
-              input: { equipmentId: 'equipment-001' },
+              tool: 'registry.getSite',
+              input: { siteId: 'site-001' },
             },
             {
               requestId: 'read-current',
@@ -313,6 +334,15 @@ test('advance executes independent READ requests in parallel and saves only Runt
   const advanced = await advancePromise;
 
   assert.equal(advanced.investigation.revision, started.revision);
+  assert.equal(readContexts.length, 2);
+  for (const readContext of readContexts) {
+    assert.equal(readContext.investigationId, started.id);
+    assert.equal(readContext.runId, started.activeRunId);
+    assert.deepEqual(readContext.scope, scope);
+    assert.equal(readContext.authorization.decisionId, 'decision-001');
+    assert.equal(readContext.authorization.delegationGrant, 'delegation-grant-001');
+    assert.equal(readContext.authorization.policyRevision, 'policy-revision-001');
+  }
   assert.equal(harness.runtimeInputs.length, 1);
   assert.equal(harness.runtimeInputs[0].checkpoint, null);
   assert.deepEqual(advanced.investigation.evidenceIds, []);
@@ -343,8 +373,8 @@ test('advance resumes from a matching Checkpoint and rejects a mismatched Runtim
         batchId: 'batch-001',
         requests: [{
           requestId: 'read-registry',
-          tool: 'registry.getEquipment',
-          input: { equipmentId: 'equipment-001' },
+          tool: 'registry.getSite',
+          input: { siteId: 'site-001' },
         }],
       }],
     },
@@ -420,8 +450,8 @@ test('advance rejects Owner results whose identity, Owner, Scope, or provenance 
           batchId: 'batch-001',
           requests: [{
             requestId: 'read-registry',
-            tool: 'registry.getEquipment',
-            input: { equipmentId: 'equipment-001' },
+            tool: 'registry.getSite',
+            input: { siteId: 'site-001' },
           }],
         }],
       },
@@ -465,8 +495,8 @@ test('advance reports budget exhaustion and inability to conclude as distinct ty
         batchId: 'batch-001',
         requests: [{
           requestId: 'read-registry',
-          tool: 'registry.getEquipment',
-          input: {},
+          tool: 'registry.getSite',
+          input: { siteId: 'site-001' },
         }],
       }],
     },

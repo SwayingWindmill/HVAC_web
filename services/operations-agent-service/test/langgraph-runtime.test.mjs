@@ -54,8 +54,8 @@ const program = {
           batchId: 'registry-batch',
           requests: [{
             requestId: 'registry-equipment-001',
-            tool: 'registry.getEquipment',
-            input: { equipmentId: 'equipment-runtime-001' },
+            tool: 'registry.getSite',
+            input: { siteId: 'equipment-runtime-001' },
           }],
         }],
       },
@@ -67,8 +67,8 @@ const program = {
           batchId: 'registry-batch-002',
           requests: [{
             requestId: 'registry-equipment-002',
-            tool: 'registry.getEquipment',
-            input: { equipmentId: 'equipment-runtime-002' },
+            tool: 'registry.getSite',
+            input: { siteId: 'equipment-runtime-002' },
           }],
         }],
       },

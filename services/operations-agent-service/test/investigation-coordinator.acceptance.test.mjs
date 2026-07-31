@@ -29,16 +29,21 @@ test('the Coordinator owns a complete framework-independent Investigation accept
           requests: [
             {
               requestId: 'read-equipment',
-              tool: 'registry.getEquipment',
-              input: { equipmentId: 'equipment-chiller-001' },
+              tool: 'registry.getSite',
+              input: { siteId: 'site-acceptance' },
             },
             {
               requestId: 'read-energy',
               tool: 'analytics.getEnergySeries',
               input: {
+                organizationId: 'organization-acceptance',
                 siteId: 'site-acceptance',
-                rangeStart: '2026-07-01T00:00:00Z',
-                rangeEnd: '2026-07-08T00:00:00Z',
+                energyType: 'electricity',
+                granularity: 'hour',
+                timezone: 'Asia/Tokyo',
+                from: '2026-07-01T00:00:00Z',
+                to: '2026-07-08T00:00:00Z',
+                qualityPolicy: 'VALID_AND_SUSPECT',
               },
             },
           ],

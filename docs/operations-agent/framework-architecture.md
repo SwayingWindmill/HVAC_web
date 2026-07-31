@@ -384,15 +384,25 @@ Each tool module contains:
 
 ```text
 application-facing port implementation
-input normalization and Zod validation
-scoped delegation propagation
-owner-client call
+strict project-owned request and DTO validation
+scoped delegation and correlation propagation
+fixed owner-product call
 owner-error translation
 Evidence provenance mapping
-bounded logging and metrics
+bounded response, timeout, logging and metrics
 ```
 
 Tool modules do not contain investigation planning or Finding synthesis.
+
+The first implemented READ adapters expose only `registry.getSite`,
+`registry.listSiteEquipment` and `analytics.getEnergySeries`. Registry calls are fixed to the
+Platform Core Service Site and Site Equipment routes. Historical energy calls are fixed to the
+Telemetry Query Service Energy Series product contract with Organization, Site, time range,
+timezone, granularity, electricity energy type and Quality Policy. The Coordinator injects the
+current authorization decision, complete Scope, Investigation/Run identity and correlation
+context; the Runtime cannot supply delegation or service routing. Responses are strictly
+validated and mapped to project-owned `OwnerReadResult` metadata. Direct ClickHouse, Cube,
+ThingsBoard and Command API paths are rejected by the source boundary gate.
 
 ### 8.1 Tool classes
 

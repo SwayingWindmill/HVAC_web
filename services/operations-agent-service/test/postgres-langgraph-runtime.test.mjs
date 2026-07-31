@@ -33,8 +33,8 @@ const program = {
           batchId: 'registry-first',
           requests: [{
             requestId: 'registry-first-request',
-            tool: 'registry.getEquipment',
-            input: { equipmentId: 'equipment-langgraph-first' },
+            tool: 'registry.getSite',
+            input: { siteId: 'equipment-langgraph-first' },
           }],
         }],
       },
@@ -46,8 +46,8 @@ const program = {
           batchId: 'registry-second',
           requests: [{
             requestId: 'registry-second-request',
-            tool: 'registry.getEquipment',
-            input: { equipmentId: 'equipment-langgraph-second' },
+            tool: 'registry.getSite',
+            input: { siteId: 'equipment-langgraph-second' },
           }],
         }],
       },
@@ -71,7 +71,7 @@ const createIdGenerator = (values) => ({
 
 const ownerReaders = {
   registry: {
-    async read(request) {
+    async read({ request }) {
       return {
         requestId: request.requestId,
         owner: 'registry',

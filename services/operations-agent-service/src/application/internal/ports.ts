@@ -30,6 +30,9 @@ export interface AuthorizationDecision {
   readonly decision: 'ALLOW' | 'DENY';
   readonly decisionId: string;
   readonly reason?: string;
+  readonly delegationGrant?: string;
+  readonly policyRevision?: string;
+  readonly traceparent?: string;
 }
 
 export type InvestigationAuthorizationAction =
@@ -52,13 +55,21 @@ export interface AuthorizationDecisionReader {
   }): Promise<AuthorizationDecision>;
 }
 
-export interface RegistryReadRequest {
-  readonly requestId: string;
-  readonly tool: 'registry.getEquipment';
-  readonly input: {
-    readonly equipmentId: string;
+export type RegistryReadRequest =
+  | {
+    readonly requestId: string;
+    readonly tool: 'registry.getSite';
+    readonly input: {
+      readonly siteId: string;
+    };
+  }
+  | {
+    readonly requestId: string;
+    readonly tool: 'registry.listSiteEquipment';
+    readonly input: {
+      readonly siteId: string;
+    };
   };
-}
 
 export interface CurrentTelemetryReadRequest {
   readonly requestId: string;
@@ -73,9 +84,14 @@ export interface EnergyAnalyticsReadRequest {
   readonly requestId: string;
   readonly tool: 'analytics.getEnergySeries';
   readonly input: {
+    readonly organizationId: string;
     readonly siteId: string;
-    readonly rangeStart: string;
-    readonly rangeEnd: string;
+    readonly energyType: 'electricity';
+    readonly granularity: 'hour' | 'day' | 'month';
+    readonly timezone: string;
+    readonly from: string;
+    readonly to: string;
+    readonly qualityPolicy: 'VALID_ONLY' | 'VALID_AND_SUSPECT';
   };
 }
 
@@ -220,7 +236,7 @@ export interface BudgetGuard {
 
 export interface OwnerReadResult {
   readonly requestId: string;
-  readonly owner: 'registry' | 'telemetry-query-service' | 'analytics-service' | 'command-service';
+  readonly owner: 'registry' | 'telemetry-query-service' | 'command-service';
   readonly scope: InvestigationScope;
   readonly revision: string;
   readonly quality: 'GOOD' | 'UNCERTAIN' | 'BAD' | 'STALE';
@@ -228,20 +244,51 @@ export interface OwnerReadResult {
   readonly payload: unknown;
 }
 
+export type OwnerReadErrorCode =
+  | 'OWNER_REQUEST_INVALID'
+  | 'OWNER_RESOURCE_NOT_FOUND'
+  | 'OWNER_READ_TIMEOUT'
+  | 'OWNER_READ_UNAVAILABLE'
+  | 'OWNER_RESPONSE_TOO_LARGE'
+  | 'OWNER_RESPONSE_INVALID';
+
+export class OwnerReadError extends Error {
+  readonly code: OwnerReadErrorCode;
+
+  constructor(code: OwnerReadErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'OwnerReadError';
+    this.code = code;
+  }
+}
+
+export interface OwnerReadContext {
+  readonly investigationId: string;
+  readonly runId: string;
+  readonly scope: InvestigationScope;
+  readonly authorization: AuthorizationDecision;
+  readonly correlationId: string;
+}
+
+export interface OwnerReadInput<TRequest extends ParallelReadRequest> {
+  readonly request: TRequest;
+  readonly context: OwnerReadContext;
+}
+
 export interface RegistryReader {
-  read(request: RegistryReadRequest): Promise<OwnerReadResult>;
+  read(input: OwnerReadInput<RegistryReadRequest>): Promise<OwnerReadResult>;
 }
 
 export interface CurrentTelemetryReader {
-  read(request: CurrentTelemetryReadRequest): Promise<OwnerReadResult>;
+  read(input: OwnerReadInput<CurrentTelemetryReadRequest>): Promise<OwnerReadResult>;
 }
 
 export interface EnergyAnalyticsReader {
-  read(request: EnergyAnalyticsReadRequest): Promise<OwnerReadResult>;
+  read(input: OwnerReadInput<EnergyAnalyticsReadRequest>): Promise<OwnerReadResult>;
 }
 
 export interface CommandCapabilityReader {
-  read(request: CommandCapabilityReadRequest): Promise<OwnerReadResult>;
+  read(input: OwnerReadInput<CommandCapabilityReadRequest>): Promise<OwnerReadResult>;
 }
 
 export interface OwnerReaders {

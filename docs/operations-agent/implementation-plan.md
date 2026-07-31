@@ -4,7 +4,7 @@ Status: accepted plan
 
 Date: 2026-07-30
 
-Tracking: GitHub Map #118; Maps 0–2 are merged through PR #149. Map 3 Runtime recovery is completed by #151; authoritative Owner READ adapters (#152) are the current frontier.
+Tracking: GitHub Map #118; Maps 0–2 are merged through PR #149. Map 3 Runtime recovery (#151) and authoritative Owner READ adapters (#152) are complete; deterministic night-energy comparison and readiness validation (#153) are the current frontier.
 
 This plan turns ADR 0009, ADR 0010 and the accepted modular architecture into an implementation sequence. It deliberately starts with deletion of the retired Python Agent, then establishes an executable benchmark before introducing the TypeScript runtime.
 
@@ -207,7 +207,7 @@ An authorized operator can start a Site night-energy Investigation that queries 
 Planned tracer bullets:
 
 1. Add the explicit LangGraph.js runtime adapter and PostgreSQL checkpoint recovery — completed by #151.
-2. Add typed Registry and Energy Analytics READ adapters.
+2. Add typed Registry and Energy Analytics READ adapters — completed by #152.
 3. Implement deterministic period comparison and readiness validation.
 4. Persist Evidence, Analysis references, Findings and Tool Execution Receipts idempotently.
 5. Expose the Investigation application contract through Platform Gateway.

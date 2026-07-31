@@ -134,14 +134,14 @@ class ScriptedFakeRuntime {
 }
 
 const ownerForTool = (tool) => {
-  if (tool === 'registry.getEquipment') return 'registry';
+  if (tool === 'registry.getSite') return 'registry';
   if (tool === 'telemetry.getCurrentSnapshot') return 'telemetry-query-service';
-  if (tool === 'analytics.getEnergySeries') return 'analytics-service';
+  if (tool === 'analytics.getEnergySeries') return 'telemetry-query-service';
   return 'command-service';
 };
 
 const revisionForTool = (tool) => {
-  if (tool === 'registry.getEquipment') return 'registry-revision-17';
+  if (tool === 'registry.getSite') return 'registry-revision-17';
   if (tool === 'telemetry.getCurrentSnapshot') return 'telemetry-revision-73';
   if (tool === 'analytics.getEnergySeries') return 'dataset-revision-29';
   return 'capability-revision-5';
@@ -156,7 +156,7 @@ class FakeOwnerReaders {
     this.calls = [];
   }
 
-  async read(request) {
+  async read({ request }) {
     this.activeReads += 1;
     this.maxConcurrentReads = Math.max(this.maxConcurrentReads, this.activeReads);
     this.calls.push({ requestId: request.requestId, tool: request.tool });
@@ -228,7 +228,12 @@ export const createFakeOperationsAgentEnvironment = ({
     investigationTransaction: businessStore.transaction,
     authorizationDecisionReader: {
       async authorizeScope() {
-        return { decision: 'ALLOW', decisionId: 'fake-authorization-allow' };
+        return {
+          decision: 'ALLOW',
+          decisionId: 'fake-authorization-allow',
+          delegationGrant: 'fake-delegation-grant',
+          policyRevision: 'fake-policy-revision',
+        };
       },
     },
     agentExecutionRuntime: runtime,

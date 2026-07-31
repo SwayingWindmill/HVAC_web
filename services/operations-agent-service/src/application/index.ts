@@ -20,6 +20,7 @@ export {
 
 export {
   InvestigationRepositoryConflictError,
+  OwnerReadError,
   type AgentExecutionRuntime,
   type ApplicationEvent,
   type ApplicationOutbox,
@@ -45,6 +46,9 @@ export {
   type InvestigationRepositoryConflictCode,
   type InvestigationTransaction,
   type InvestigationWriteAuthority,
+  type OwnerReadContext,
+  type OwnerReadErrorCode,
+  type OwnerReadInput,
   type OwnerReadResult,
   type OwnerReaders,
   type ParallelReadBatch,
