@@ -56,7 +56,7 @@ The bounded short-history route is:
 POST /internal/v1/telemetry/device-history
 ```
 
-The public Gateway route is `POST /api/v1/telemetry/device-history`. Public
+The public Gateway route is `POST /api/v1/telemetry/device-series:query`. Public
 requests contain only Device ID, telemetry keys, inclusive `from`, exclusive
 `to` and `maxPointsPerKey`; Organization and Site are derived from the
 authenticated Session and IAM exact-scope decision. The contract allows at most
