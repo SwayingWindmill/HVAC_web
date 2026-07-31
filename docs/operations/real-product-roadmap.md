@@ -15,7 +15,7 @@ Deliver an authoritative, Site-scoped HVAC operations product in which every vis
 | 1 | Real Assets | In progress | Site list, device detail, capability, history, and trend pull requests are active. |
 | 2 | Real Dashboard | In review | PR #165 provides the first authoritative Site overview. |
 | 3 | Complete Energy | Merged | PR #167 delivered calendar workspaces, comparisons, drill-down, and protected query lifecycle. |
-| 4 | Real Commands | In progress | Branch `feat/real-commands` adds authoritative Site scope and a local-only controlled workbench while production routes remain disabled. |
+| 4 | Real Commands | In review | PR #169 adds authoritative Site scope and a local-only controlled workbench while production routes remain disabled. |
 | 5 | Alarm | Planned | No authoritative Alarm domain may be inferred from telemetry state. |
 | 6 | Work Order | Planned | Must be a separate durable domain linked to, but not collapsed into, Alarm. |
 | 7 | FDD | Planned | Requires governed evidence from Assets, Telemetry, Energy, Alarm, and Work Order. |
