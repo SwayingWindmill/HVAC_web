@@ -630,7 +630,7 @@
     },
     {
       "method": "POST",
-      "path": "/api/v1/telemetry/device-history",
+      "path": "/api/v1/telemetry/device-series:query",
       "owner": "telemetry-query-service",
       "publicIngress": "platform-gateway",
       "revision": 1,

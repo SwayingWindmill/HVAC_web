@@ -158,7 +158,7 @@ Query Service over the existing workload mTLS identity.
 Browser cookies, CSRF tokens and caller-supplied business-scope headers are never
 forwarded to IAM or Query Service.
 
-The public Device History route is `POST /api/v1/telemetry/device-history`.
+The public Device History route is `POST /api/v1/telemetry/device-series:query`.
 Browser requests contain only Device ID, keys, UTC range and per-key point limit.
 Gateway first requests the exact S2 `telemetry.history.read` Device/key decision,
 then builds an internal query from the Session Acting Organization and IAM

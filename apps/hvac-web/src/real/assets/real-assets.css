@@ -608,6 +608,150 @@
   overflow-wrap: anywhere;
 }
 
+.real-assets-history {
+  display: grid;
+  min-width: 0;
+  max-width: 100%;
+  gap: 14px;
+}
+
+.real-assets-history__controls,
+.real-assets-history__controls fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.real-assets-history__controls {
+  min-width: 0;
+  max-width: 100%;
+  justify-content: space-between;
+}
+
+.real-assets-history__controls fieldset {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+}
+
+.real-assets-history__controls legend {
+  box-sizing: border-box;
+  width: auto;
+  max-width: 100%;
+  margin-bottom: 4px;
+  color: #4e6176;
+  font-size: 0.78rem;
+}
+
+.real-assets-history__controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 38px;
+  padding: 6px 10px;
+  border: 1px solid #cbd6e2;
+  border-radius: 999px;
+  background: #fff;
+}
+
+.real-assets-history__scope {
+  margin: 0;
+  color: #65758b;
+  font-size: 0.8rem;
+}
+
+.real-assets-history__notice,
+.real-assets-history__loading,
+.real-assets-history__error,
+.real-assets-history__empty {
+  padding: 12px 14px;
+  border: 1px solid #b8d3ef;
+  border-radius: 9px;
+  background: #f1f7fd;
+  color: #214d78;
+}
+
+.real-assets-history__notice--warning,
+.real-assets-history__error {
+  border-color: #e5c77a;
+  background: #fff9e8;
+  color: #6b4b00;
+}
+
+.real-assets-history__error {
+  display: grid;
+  gap: 7px;
+}
+
+.real-assets-history__metadata,
+.real-assets-history__series-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.real-assets-history__metadata div,
+.real-assets-history__series-facts div {
+  min-width: 0;
+  padding: 9px;
+  border-radius: 7px;
+  background: #f7f9fb;
+}
+
+.real-assets-history__metadata dt,
+.real-assets-history__series-facts dt {
+  color: #718094;
+  font-size: 0.72rem;
+}
+
+.real-assets-history__metadata dd,
+.real-assets-history__series-facts dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.real-assets-history__series-grid {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+}
+
+.real-assets-history__chart {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.real-assets-history__series {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid #dce3eb;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.real-assets-history__series > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.real-assets-history__series h4 {
+  margin: 0 0 3px;
+  color: #243d56;
+}
+
+.real-assets-history__series code {
+  color: #65758b;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 720px) {
   .real-assets-detail {
     left: 0;
@@ -615,7 +759,9 @@
     border-left: 0;
   }
 
-  .real-assets-detail__facts {
+  .real-assets-detail__facts,
+  .real-assets-history__metadata,
+  .real-assets-history__series-facts {
     grid-template-columns: 1fr;
   }
 

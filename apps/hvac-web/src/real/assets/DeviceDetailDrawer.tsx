@@ -1,12 +1,18 @@
-import { useEffect, useRef } from 'react';
-import type { Site } from '../../api/generated/platformGateway.gen.ts';
-import type { DeviceObservationSnapshot } from '../../api/generated/s2Telemetry.gen.ts';
+import { lazy, Suspense, useEffect, useRef } from 'react';
+import type { CurrentPrincipalResponse, Site } from '../../api/generated/platformGateway.gen.ts';
+import type { DeviceObservationSnapshot, S2TelemetryClient } from '../../api/generated/s2Telemetry.gen.ts';
+import type { ProtectedScopeRequestToken } from '../protected-scope.ts';
 import { REAL_ASSETS_CATALOG_REVISION } from './catalog.ts';
 import type { RealAssetsDetailResolution } from './detail.ts';
 import type { RealAssetsDeviceRow, RealAssetsPointView } from './model.ts';
 import { DeviceRealtimeStatus } from './DeviceRealtimeStatus.tsx';
 import type { RealAssetsRealtimeProjection } from './realtime.ts';
 import type { RealAssetsRealtimeResult } from './useDeviceRealtime.ts';
+
+const DeviceHistoryTrends = lazy(async () => {
+  const module = await import('./DeviceHistoryTrends.tsx');
+  return { default: module.DeviceHistoryTrends };
+});
 
 interface DeviceDetailDrawerProps {
   readonly site: Readonly<Site>;
@@ -15,6 +21,12 @@ interface DeviceDetailDrawerProps {
   readonly currentUnavailable: boolean;
   readonly refreshing: boolean;
   readonly routePolicyRevision: string | null;
+  readonly principal: CurrentPrincipalResponse;
+  readonly client: S2TelemetryClient;
+  readonly protectedGeneration: number;
+  readonly protectedRequestToken: () => ProtectedScopeRequestToken;
+  readonly historyAllowed: boolean;
+  readonly sessionCapability: string;
   readonly realtime: RealAssetsRealtimeResult;
   readonly realtimeProjection: RealAssetsRealtimeProjection | null;
   readonly actionFeedback: string | null;
@@ -162,6 +174,12 @@ export function DeviceDetailDrawer({
   currentUnavailable,
   refreshing,
   routePolicyRevision,
+  principal,
+  client,
+  protectedGeneration,
+  protectedRequestToken,
+  historyAllowed,
+  sessionCapability,
   realtime,
   realtimeProjection,
   actionFeedback,
@@ -263,12 +281,30 @@ export function DeviceDetailDrawer({
                 当前 Device Snapshot 无法在现有授权与关键点位范围内建立；Registry 身份仍保留。
               </div>
             ) : null}
-            {snapshot ? <SnapshotFacts snapshot={snapshot} site={site} routePolicyRevision={routePolicyRevision} /> : null}
+            {!currentUnavailable && snapshot ? <SnapshotFacts snapshot={snapshot} site={site} routePolicyRevision={routePolicyRevision} /> : null}
           </section>
 
           <section aria-labelledby="real-assets-detail-points">
             <h3 id="real-assets-detail-points">当前关键点位</h3>
             {snapshot || (!currentPending && !currentUnavailable) ? <PointDetails row={row} site={site} /> : null}
+          </section>
+
+          <section aria-labelledby="real-assets-detail-history">
+            <h3 id="real-assets-detail-history">关键点位短趋势</h3>
+            <Suspense fallback={<div className="real-assets-history__loading" role="status" aria-live="polite">正在加载短趋势模块…</div>}>
+              <DeviceHistoryTrends
+                site={site}
+                row={row}
+                principal={principal}
+                client={client}
+                protectedGeneration={protectedGeneration}
+                protectedRequestToken={protectedRequestToken}
+                routePolicyRevision={routePolicyRevision}
+                historyAllowed={historyAllowed}
+                currentUnavailable={currentUnavailable}
+                sessionCapability={sessionCapability}
+              />
+            </Suspense>
           </section>
         </div>
       )}

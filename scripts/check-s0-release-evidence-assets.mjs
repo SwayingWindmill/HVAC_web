@@ -147,6 +147,7 @@ const acceptedHistoryAnalyticsOwnership = [
   { kind: 'projection', name: 'telemetry-history-observation', writer: 'telemetry-history-projector', revision: 1, sourceOwner: 'telemetry-runtime-service' },
   { kind: 'projection', name: 'analytics-energy-interval-fact', writer: 'analytics-read-model-projector', revision: 1, sourceOwner: 'telemetry-history-projector' },
   { kind: 'query-contract', name: 'analytics-energy-series-v1', writer: 'telemetry-query-service', revision: 1, publicIngress: 'platform-gateway' },
+  { kind: 'query-contract', name: 'telemetry-device-history-v1', writer: 'telemetry-query-service', revision: 1, publicIngress: 'platform-gateway', source: 'telemetry_history.observations' },
   { kind: 'semantic-model', name: 'cube-energy-usage-v1', writer: 'telemetry-query-service', revision: 1, runtime: 'cube-core', source: 'analytics.energy_interval_facts' },
 ];
 for (const expected of acceptedHistoryAnalyticsOwnership) {

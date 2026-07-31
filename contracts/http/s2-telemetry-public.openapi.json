@@ -170,7 +170,7 @@
         }
       }
     },
-    "/api/v1/telemetry/device-history": {
+    "/api/v1/telemetry/device-series:query": {
       "post": {
         "operationId": "queryDeviceHistory",
         "summary": "Read bounded numeric history for one authorized Device",

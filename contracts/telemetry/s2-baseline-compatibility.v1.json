@@ -34,7 +34,7 @@
     {
       "operationId": "queryDeviceHistory",
       "method": "POST",
-      "path": "/api/v1/telemetry/device-history",
+      "path": "/api/v1/telemetry/device-series:query",
       "requestSchema": "DeviceHistoryRequest",
       "responseSchema": "DeviceHistoryResponse"
     }

@@ -167,6 +167,9 @@ function createGatewayFixture() {
     requests: [],
     energyQueries: [],
     assetSnapshotQueries: [],
+    assetSnapshotMode: 'ok',
+    assetHistoryQueries: [],
+    assetHistoryMode: 'ok',
     loginReturnTargets: [],
     pendingPrincipalResponses: [],
   };
@@ -289,6 +292,10 @@ function createGatewayFixture() {
           writeJson(response, 413, problem(413, 'TELEMETRY_BATCH_LIMIT_EXCEEDED', 'The Snapshot batch was outside the fixture boundary.', false));
           return;
         }
+        if (state.assetSnapshotMode === 'unavailable') {
+          writeJson(response, 503, problem(503, 'TELEMETRY_CURRENT_UNAVAILABLE', 'The authoritative current Snapshot owner is unavailable.', true));
+          return;
+        }
         const valueByKey = {
           'chiller.run_state': ['RUNNING', null, 'FRESH'],
           'chiller.power': [0, 'kW', 'STALE'],
@@ -331,6 +338,88 @@ function createGatewayFixture() {
           };
         });
         writeJson(response, 200, { schemaVersion: 1, items });
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/v1/telemetry/device-series:query') {
+      if (request.headers[stateChangeHeader] !== fixtureCapability) {
+        writeJson(response, 403, problem(403, 'CSRF_VALIDATION_FAILED', 'The state-change capability was invalid.', false));
+        return;
+      }
+      const chunks = [];
+      request.on('data', (chunk) => chunks.push(chunk));
+      request.on('end', () => {
+        let query;
+        try {
+          query = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        } catch {
+          writeJson(response, 400, problem(400, 'TELEMETRY_HISTORY_REQUEST_INVALID', 'The history query was not valid JSON.', false));
+          return;
+        }
+        state.assetHistoryQueries.push(query);
+        if (state.assetHistoryMode === 'unavailable') {
+          writeJson(response, 503, problem(503, 'HISTORY_OWNER_UNAVAILABLE', 'The bounded history owner is unavailable.', true));
+          return;
+        }
+        const expectedKeys = ['chiller.power', 'chiller.cop', 'chiller.cooling_capacity'];
+        if (Object.hasOwn(query, 'organizationId') || Object.hasOwn(query, 'siteId')
+          || query.deviceId !== osakaDeviceId
+          || !Array.isArray(query.keys)
+          || query.keys.length !== expectedKeys.length
+          || query.keys.some((key, index) => key !== expectedKeys[index])) {
+          writeJson(response, 403, problem(403, 'TELEMETRY_HISTORY_SCOPE_FORBIDDEN', 'The history query escaped the visible Device profile.', false));
+          return;
+        }
+        const fromMs = Date.parse(query.from);
+        const toMs = Date.parse(query.to);
+        const duration = toMs - fromMs;
+        if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || duration <= 0 || duration > 24 * 60 * 60 * 1000
+          || ![240, 360, 500].includes(query.maxPointsPerKey)) {
+          writeJson(response, 400, problem(400, 'TELEMETRY_HISTORY_RANGE_INVALID', 'The history range or point limit was invalid.', false));
+          return;
+        }
+        const at = (fraction) => new Date(fromMs + Math.floor(duration * fraction)).toISOString();
+        const makePoint = (observationId, fraction, value, unit, quality = 'GOOD') => ({
+          observationId,
+          sampledAt: at(fraction),
+          receivedAt: new Date(Date.parse(at(fraction)) + 1000).toISOString(),
+          value,
+          unit,
+          quality,
+          qualityReasons: quality === 'SUSPECT' ? ['SOURCE_LAG_EXCEEDED'] : [],
+          revision: 7,
+        });
+        writeJson(response, 200, {
+          schemaVersion: 1,
+          owningOrganizationId: osakaDevice.owningOrganizationId,
+          siteId: siteBId,
+          deviceId: osakaDeviceId,
+          series: [
+            {
+              key: 'chiller.power',
+              points: [
+                makePoint('01900000-0311-7000-8000-000000000311', 0.12, 0, 'kW'),
+                makePoint('01900000-0312-7000-8000-000000000312', 0.82, 18.5, 'kW', 'SUSPECT'),
+              ],
+            },
+            {
+              key: 'chiller.cop',
+              points: [makePoint('01900000-0313-7000-8000-000000000313', 0.64, 4.8, null)],
+            },
+            { key: 'chiller.cooling_capacity', points: [] },
+          ],
+          metadata: {
+            requestedFrom: query.from,
+            requestedTo: query.to,
+            dataWatermark: at(0.95),
+            datasetRevision: 'rms-device-history-revision-1',
+            partial: true,
+            maxPointsPerKey: query.maxPointsPerKey,
+            returnedPoints: 3,
+            truncatedKeys: ['chiller.power'],
+          },
+        });
       });
       return;
     }
@@ -483,6 +572,9 @@ async function waitForCondition(client, expression, label, pollMs = 100) {
     text: document.body?.innerText?.slice(0, 4000) ?? '',
     html: document.body?.innerHTML?.slice(0, 4000) ?? '',
   })`);
+  diagnostic.runtimeFailures = client.events
+    .filter((event) => event.method === 'Runtime.exceptionThrown' || event.method === 'Log.entryAdded')
+    .slice(-20);
   diagnostic.events = client.events.slice(-20);
   throw new Error(`${label} did not become ready: ${JSON.stringify(diagnostic)}`);
 }
@@ -731,7 +823,7 @@ try {
 
   fixture.state.platformMode = 'ok';
   fixture.state.roles = ['descriptive-role-only'];
-  fixture.state.capabilities = ['site.list', 'site.read', 'equipment.list', 'device.list', 'telemetry.batch.read'];
+  fixture.state.capabilities = ['site.list', 'site.read', 'equipment.list', 'device.list', 'telemetry.batch.read', 'telemetry.history.read'];
   fixture.state.sitesMode = 'unavailable';
   await navigate(cdpClient, `${webURL}/`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'UNAVAILABLE' && Boolean(document.querySelector('[data-testid="real-site-discovery-unavailable"]'))`, 'Site discovery unavailable');
@@ -848,11 +940,136 @@ try {
     && deviceDetail.text.includes('12')
     && deviceDetail.text.includes(routePolicyRevision), 'Device detail omitted authoritative identity, hierarchy, zero value, quality or revision evidence');
 
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state') === 'PARTIAL'
+      && document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-range') === '1h'`,
+    'default one-hour Device history',
+  );
+  const defaultHistory = await evaluate(cdpClient, `(() => {
+    const history = document.querySelector('[data-testid="real-assets-device-history"]');
+    return {
+      state: history?.getAttribute('data-history-state'),
+      range: history?.getAttribute('data-history-range'),
+      revision: history?.getAttribute('data-history-revision'),
+      text: history?.textContent ?? '',
+      series: Array.from(history?.querySelectorAll('[data-history-key]') ?? []).map((item) => ({
+        key: item.getAttribute('data-history-key'),
+        state: item.getAttribute('data-business-state'),
+        unit: item.getAttribute('data-unit'),
+      })),
+      charts: history?.querySelectorAll('svg').length ?? 0,
+      ariaDescriptions: history?.querySelectorAll('[aria-label*="Site 时区"]').length ?? 0,
+      checkedRange: history?.querySelector('input[type="radio"]:checked')?.getAttribute('value'),
+    };
+  })()`);
+  assert(defaultHistory.state === 'PARTIAL' && defaultHistory.range === '1h' && defaultHistory.checkedRange === '1h', 'Device history default range or partial state was incorrect');
+  assert(defaultHistory.revision === 'rms-device-history-revision-1'
+    && defaultHistory.text.includes('固定 RAW 查询')
+    && defaultHistory.text.includes('Asia/Tokyo')
+    && defaultHistory.text.includes('0 kW')
+    && defaultHistory.text.includes('可疑点')
+    && defaultHistory.text.includes('无已接受历史点')
+    && defaultHistory.charts === 2
+    && defaultHistory.ariaDescriptions === 2, 'Device history omitted revision, timezone, zero, suspect, empty-series, chart or ARIA evidence');
+  assert(defaultHistory.series.some((item) => item.key === 'chiller.power' && item.state === 'PARTIAL' && item.unit === 'kW')
+    && defaultHistory.series.some((item) => item.key === 'chiller.cop' && item.state === 'PARTIAL')
+    && defaultHistory.series.some((item) => item.key === 'chiller.cooling_capacity' && item.state === 'EMPTY'), 'Device history per-key states were not observable');
+  const oneHourQuery = fixture.state.assetHistoryQueries.at(-1);
+  assert(oneHourQuery.deviceId === osakaDeviceId
+    && JSON.stringify(oneHourQuery.keys) === JSON.stringify(['chiller.power', 'chiller.cop', 'chiller.cooling_capacity'])
+    && !Object.hasOwn(oneHourQuery, 'organizationId')
+    && !Object.hasOwn(oneHourQuery, 'siteId')
+    && oneHourQuery.maxPointsPerKey === 240
+    && Date.parse(oneHourQuery.to) - Date.parse(oneHourQuery.from) === 60 * 60 * 1000, 'one-hour history request escaped the public exact Device/key boundary');
+
+  const historyBeforeSixHours = fixture.state.assetHistoryQueries.length;
+  assert(await evaluate(cdpClient, `(() => {
+    const input = document.querySelector('[data-testid="real-assets-history-range-6h"]');
+    if (!(input instanceof HTMLInputElement)) return false;
+    input.focus();
+    return document.activeElement === input;
+  })()`), 'six-hour history range could not receive keyboard focus');
+  await pressKey(cdpClient, ' ', 'Space', 32);
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-range') === '6h'
+    && document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state') === 'PARTIAL'`, 'six-hour Device history');
+  for (let attempt = 0; attempt < 80 && fixture.state.assetHistoryQueries.length <= historyBeforeSixHours; attempt += 1) await pause(50);
+  const sixHourQuery = fixture.state.assetHistoryQueries.at(-1);
+  assert(sixHourQuery.maxPointsPerKey === 360
+    && Date.parse(sixHourQuery.to) - Date.parse(sixHourQuery.from) === 6 * 60 * 60 * 1000, 'six-hour history range did not issue its bounded request');
+
+  const historyBeforeTwentyFourHours = fixture.state.assetHistoryQueries.length;
+  await clickTestId(cdpClient, 'real-assets-history-range-24h');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-range') === '24h'
+    && document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state') === 'PARTIAL'
+    && !document.querySelector('[data-testid="real-assets-history-refresh"]')?.disabled`, 'twenty-four-hour Device history');
+  for (let attempt = 0; attempt < 80 && fixture.state.assetHistoryQueries.length <= historyBeforeTwentyFourHours; attempt += 1) await pause(50);
+  const twentyFourHourQuery = fixture.state.assetHistoryQueries.at(-1);
+  assert(twentyFourHourQuery.maxPointsPerKey === 500
+    && Date.parse(twentyFourHourQuery.to) - Date.parse(twentyFourHourQuery.from) === 24 * 60 * 60 * 1000, 'twenty-four-hour history range did not issue its bounded request');
+
+  const snapshotQueriesBeforeHistoryFailure = fixture.state.assetSnapshotQueries.length;
+  const historyQueriesBeforeFailure = fixture.state.assetHistoryQueries.length;
+  fixture.state.assetHistoryMode = 'unavailable';
+  await clickTestId(cdpClient, 'real-assets-history-refresh');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state') === 'ERROR'
+    && Boolean(document.querySelector('[data-testid="real-assets-history-retry"]'))`, 'independent Device history failure');
+  assert(fixture.state.assetHistoryQueries.length > historyQueriesBeforeFailure, 'history refresh did not issue a new history request');
+  assert(fixture.state.assetSnapshotQueries.length === snapshotQueriesBeforeHistoryFailure, 'history failure retriggered current Snapshot initialization');
+  const independentHistoryFailure = await evaluate(cdpClient, `({
+    error: document.querySelector('[data-testid="real-assets-device-history"] [data-history-error]')?.textContent ?? '',
+    current: document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent ?? '',
+  })`);
+  assert(independentHistoryFailure.error.includes('短历史暂不可用')
+    && independentHistoryFailure.current.includes('Business revision')
+    && independentHistoryFailure.current.includes('12'), 'history failure replaced or obscured the authoritative current state');
+
+  const historyQueriesBeforeRetry = fixture.state.assetHistoryQueries.length;
+  fixture.state.assetHistoryMode = 'ok';
+  await clickTestId(cdpClient, 'real-assets-history-retry');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state') === 'PARTIAL'`, 'Device history retry recovery');
+  assert(fixture.state.assetHistoryQueries.length > historyQueriesBeforeRetry, 'history retry did not retry the same bounded query');
+  assert(fixture.state.assetSnapshotQueries.length === snapshotQueriesBeforeHistoryFailure, 'history retry retriggered current Snapshot initialization');
+
+  const historyQueriesBeforeCurrentFailure = fixture.state.assetHistoryQueries.length;
+  const snapshotQueriesBeforeCurrentFailure = fixture.state.assetSnapshotQueries.length;
+  fixture.state.assetSnapshotMode = 'unavailable';
   await clickTestId(cdpClient, 'real-assets-detail-refresh');
-  for (let attempt = 0; attempt < 80 && fixture.state.assetSnapshotQueries.length <= snapshotQueriesBeforeDetailRefresh; attempt += 1) {
-    await pause(50);
-  }
-  assert(fixture.state.assetSnapshotQueries.length > snapshotQueriesBeforeDetailRefresh, 'Device detail manual refresh did not issue a new bounded Snapshot request');
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('Site 列表的 Current batch 暂不可用')
+      && !document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('Business revision')
+      && !document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('rms-device-history-revision-1')
+      && document.querySelector('[aria-labelledby="real-assets-detail-points"]')?.textContent?.includes('chiller.run_state')
+      && document.querySelector('[aria-labelledby="real-assets-detail-points"]')?.textContent?.includes('RUNNING')
+      && document.querySelector('[aria-labelledby="real-assets-detail-points"]')?.textContent?.includes('520 kW')
+      && document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state') === 'PARTIAL'
+      && !document.querySelector('[data-testid="real-assets-detail-refresh"]')?.disabled`,
+    'current Snapshot failure with independent history',
+  );
+  assert(fixture.state.assetSnapshotQueries.length > snapshotQueriesBeforeCurrentFailure, 'current-state refresh did not issue a new bounded Snapshot request');
+  assert(fixture.state.assetHistoryQueries.length === historyQueriesBeforeCurrentFailure, 'current-state failure retriggered short history');
+  const historyDuringCurrentFailure = await evaluate(cdpClient, `({
+    state: document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state'),
+    revision: document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-revision'),
+    text: document.querySelector('[data-testid="real-assets-device-history"]')?.textContent ?? '',
+  })`);
+  assert(historyDuringCurrentFailure.state === 'PARTIAL'
+    && historyDuringCurrentFailure.revision === 'rms-device-history-revision-1'
+    && historyDuringCurrentFailure.text.includes('当前 Snapshot 不可用，但短历史仍独立查询'), 'current-state failure obscured or reclassified short history');
+
+  fixture.state.assetSnapshotMode = 'ok';
+  const snapshotQueriesBeforeCurrentRecovery = fixture.state.assetSnapshotQueries.length;
+  await clickTestId(cdpClient, 'real-assets-detail-refresh');
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('Business revision')
+      && document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('12')
+      && !document.querySelector('[data-testid="real-assets-detail-refresh"]')?.disabled`,
+    'current Snapshot recovery',
+  );
+  assert(fixture.state.assetSnapshotQueries.length > snapshotQueriesBeforeCurrentRecovery, 'current-state recovery did not issue a new bounded Snapshot request');
+  assert(fixture.state.assetHistoryQueries.length === historyQueriesBeforeCurrentFailure, 'current-state recovery retriggered short history');
 
   await evaluate(cdpClient, 'history.back()');
   await waitForCondition(
@@ -1043,7 +1260,7 @@ try {
   assert(!forbiddenSite.text.includes(siteAId) && !forbiddenSite.text.includes('Tokyo Plant') && !forbiddenSite.text.includes('site.read'), 'Site Access Denied leaked protected metadata');
 
   fixture.state.roles = ['descriptive-role-only'];
-  fixture.state.capabilities = ['site.list', 'site.read', 'equipment.list', 'device.list', 'telemetry.batch.read'];
+  fixture.state.capabilities = ['site.list', 'site.read', 'equipment.list', 'device.list', 'telemetry.batch.read', 'telemetry.history.read'];
   for (const invalidPath of [
     '/sites/b1/assets',
     '/sites/b2/commands',
@@ -1102,7 +1319,7 @@ try {
     mobile: true,
   });
   fixture.state.sites = [siteA, siteB];
-  fixture.state.capabilities = ['site.list', 'site.read', 'equipment.list', 'device.list', 'telemetry.batch.read'];
+  fixture.state.capabilities = ['site.list', 'site.read', 'equipment.list', 'device.list', 'telemetry.batch.read', 'telemetry.history.read'];
   await navigate(cdpClient, `${webURL}/`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'CHOOSE_SITE'`, 'mobile Site chooser');
   const mobileChooser = await evaluate(cdpClient, `({
@@ -1121,8 +1338,9 @@ try {
   await waitForCondition(
     cdpClient,
     `document.querySelector('[data-testid="real-assets-device-detail"]')?.getAttribute('data-detail-state') === 'visible'
+      && document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state') === 'PARTIAL'
       && document.activeElement?.id === 'real-assets-detail-title'`,
-    'mobile Device detail',
+    'mobile Device detail and history',
   );
   const mobileDeviceDetail = await evaluate(cdpClient, `(() => {
     const drawer = document.querySelector('[data-testid="real-assets-device-detail"]');
@@ -1135,6 +1353,11 @@ try {
       width: rect?.width,
       viewport: window.innerWidth,
       focusedHeading: document.activeElement?.id === 'real-assets-detail-title',
+      historyOverflow: (() => {
+        const history = document.querySelector('[data-testid="real-assets-device-history"]');
+        return history ? history.scrollWidth > history.clientWidth + 1 : true;
+      })(),
+      historyCharts: document.querySelectorAll('[data-testid="real-assets-device-history"] svg').length,
     };
   })()`);
   assert(!mobileDeviceDetail.documentOverflow
@@ -1142,7 +1365,9 @@ try {
     && Math.abs(mobileDeviceDetail.left ?? 99) <= 1
     && Math.abs((mobileDeviceDetail.right ?? 0) - mobileDeviceDetail.viewport) <= 1
     && Math.abs((mobileDeviceDetail.width ?? 0) - mobileDeviceDetail.viewport) <= 1
-    && mobileDeviceDetail.focusedHeading, 'mobile Device detail was not a full-width, focus-safe surface');
+    && mobileDeviceDetail.focusedHeading
+    && !mobileDeviceDetail.historyOverflow
+    && mobileDeviceDetail.historyCharts === 2, 'mobile Device detail or short trends were not full-width, chart-complete and focus-safe');
 
   fixture.state.capabilities = ['site.read'];
   await navigate(cdpClient, `${webURL}/system`);
@@ -1161,7 +1386,7 @@ try {
   })`);
   assert(!mobileNotIntegrated.overflow && mobileNotIntegrated.focusedHeading, 'mobile Not Integrated was unusable');
 
-  fixture.state.capabilities = ['site.list', 'site.read', 'equipment.list', 'device.list', 'telemetry.batch.read'];
+  fixture.state.capabilities = ['site.list', 'site.read', 'equipment.list', 'device.list', 'telemetry.batch.read', 'telemetry.history.read'];
   fixture.state.sites = [];
   await navigate(cdpClient, `${webURL}/`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'NO_AUTHORIZED_SITE'`, 'mobile No Authorized Site');
@@ -1229,6 +1454,19 @@ try {
   assert(assetSnapshotRequests.length >= 1, 'Assets route did not issue a bounded Snapshot batch');
   assert(assetSnapshotRequests.every((entry) => entry.headers[stateChangeHeader] === fixtureCapability && entry.headers.origin === webURL), 'Assets Snapshot batch omitted Session CSRF capability or same-origin proof');
   assert(fixture.state.assetSnapshotQueries.every((batch) => batch.requests.length <= 100 && batch.requests.every((target) => target.deviceId === osakaDeviceId)), 'Assets Snapshot batch escaped the visible Device set or batch limit');
+  const assetHistoryRequests = fixture.state.requests.filter((entry) => entry.method === 'POST' && entry.path === '/api/v1/telemetry/device-series:query');
+  assert(assetHistoryRequests.length >= 5, `expected range, failure and retry Device history requests, got ${assetHistoryRequests.length}`);
+  assert(assetHistoryRequests.every((entry) => entry.headers[stateChangeHeader] === fixtureCapability && entry.headers.origin === webURL), 'Assets Device history omitted Session CSRF capability or same-origin proof');
+  assert(fixture.state.assetHistoryQueries.every((query) => {
+    const duration = Date.parse(query.to) - Date.parse(query.from);
+    return query.deviceId === osakaDeviceId
+      && JSON.stringify(query.keys) === JSON.stringify(['chiller.power', 'chiller.cop', 'chiller.cooling_capacity'])
+      && !Object.hasOwn(query, 'organizationId')
+      && !Object.hasOwn(query, 'siteId')
+      && duration > 0
+      && duration <= 24 * 60 * 60 * 1000
+      && [240, 360, 500].includes(query.maxPointsPerKey);
+  }), 'Assets Device history escaped the exact Device/profile/range boundary');
   const energyRequests = fixture.state.requests.filter((entry) => entry.method === 'POST' && entry.path === '/api/v1/analytics/energy-series');
   assert(energyRequests.length === 1, `expected one Energy query, got ${energyRequests.length}`);
   assert(energyRequests[0].headers[stateChangeHeader] === fixtureCapability, 'Energy query did not send the in-memory state-change capability');
