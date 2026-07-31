@@ -141,6 +141,20 @@ assert(registeredS3Resources.every((resource) => resource.writer === s3Ownership
 const uncontractedS3Resources = ownership.resources.filter((resource) => resource.writer === s3Ownership.businessOwner && !acceptedS3OwnershipNames.has(resource.name));
 assert(uncontractedS3Resources.length === 0, `data registry contains S3 resources outside the S3 ownership contract: ${JSON.stringify(uncontractedS3Resources)}`);
 
+const acceptedS4OwnershipNames = new Set([
+  'alarm_runtime',
+  'hvac.alarm.lifecycle.v1',
+  'alarm-current',
+  'alarm-transition',
+  'alarm-evidence',
+  'alarm-occurrence-deduplication',
+]);
+const registeredS4Resources = ownership.resources.filter((resource) => acceptedS4OwnershipNames.has(resource.name));
+assert(registeredS4Resources.length === acceptedS4OwnershipNames.size, `S4 Alarm ownership resources are incomplete: ${JSON.stringify(registeredS4Resources)}`);
+assert(registeredS4Resources.every((resource) => resource.writer === 'alarm-service'), `S4 Alarm ownership resources have an unexpected writer: ${JSON.stringify(registeredS4Resources.filter((resource) => resource.writer !== 'alarm-service'))}`);
+const uncontractedS4Resources = ownership.resources.filter((resource) => resource.writer === 'alarm-service' && !acceptedS4OwnershipNames.has(resource.name));
+assert(uncontractedS4Resources.length === 0, `data registry contains S4 resources outside the S4 Alarm ownership contract: ${JSON.stringify(uncontractedS4Resources)}`);
+
 const acceptedHistoryAnalyticsOwnership = [
   { kind: 'schema', name: 'telemetry_history', writer: 'telemetry-history-projector', revision: 1, database: 'clickhouse' },
   { kind: 'schema', name: 'analytics', writer: 'analytics-read-model-projector', revision: 1, database: 'clickhouse' },
@@ -183,10 +197,11 @@ const allowedOwnershipNames = new Set([
   's1-migration-quarantine',
   ...acceptedS2OwnershipNames,
   ...acceptedS3OwnershipNames,
+  ...acceptedS4OwnershipNames,
   ...acceptedHistoryAnalyticsOwnership.map((resource) => resource.name),
 ]);
 const leakedOwnership = ownership.resources.filter((resource) => !allowedOwnershipNames.has(resource.name));
-assert(leakedOwnership.length === 0, `ownership registry contains resources outside the accepted S1/S2/S3/history/analytics baselines: ${JSON.stringify(leakedOwnership)}`);
+assert(leakedOwnership.length === 0, `ownership registry contains resources outside the accepted S1/S2/S3/S4/history/analytics baselines: ${JSON.stringify(leakedOwnership)}`);
 
 await mkdir(outputRoot, { recursive: true });
 const scopeAudit = {
@@ -199,6 +214,7 @@ const scopeAudit = {
   allowedOwnershipResources: [...allowedOwnershipNames].sort(),
   acceptedS2ExpandBaselineResources: [...acceptedS2OwnershipNames].sort(),
   acceptedS3ExpandBaselineResources: [...acceptedS3OwnershipNames].sort(),
+  acceptedS4AlarmBaselineResources: [...acceptedS4OwnershipNames].sort(),
   acceptedHistoryAnalyticsResources: acceptedHistoryAnalyticsOwnership.map((resource) => resource.name).sort(),
   leakedOwnershipResources: [],
 };

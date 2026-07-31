@@ -20,6 +20,7 @@ const (
 	OwnerTelemetryRuntime = "telemetry-runtime-service"
 	OwnerCommand          = "command-service"
 	OwnerAnalyticsQuery   = "telemetry-query-service"
+	OwnerAlarm            = "alarm-service"
 
 	PhaseLegacyPrimaryGoShadow       = "LEGACY_PRIMARY_GO_SHADOW"
 	PhaseGoCanaryLegacyShadow        = "GO_CANARY_LEGACY_SHADOW"
@@ -35,6 +36,7 @@ const (
 	PhaseS2Primary                   = "R7-primary-100"
 	PhaseS2LegacyRetired             = "R8-legacy-current-state-retired"
 	PhaseS3ContractOnly              = "S3-R0-contract-only"
+	PhaseS4ContractOnly              = "S4-R0-contract-only"
 )
 
 var (
@@ -183,7 +185,7 @@ func validateEntry(entry RouteEntry) error {
 	if entry.Owner == OwnerLegacy && entry.CompatibilityMode != "legacy-read" {
 		return errors.New("Legacy ownership requires legacy-read compatibility")
 	}
-	allowed := map[string]bool{"organization": true, "principal": true, "site": true, "device": true, "key": true}
+	allowed := map[string]bool{"organization": true, "principal": true, "site": true, "device": true, "key": true, "alarm": true}
 	seenScopes := map[string]bool{}
 	for _, scope := range entry.AllowedScopeDimensions {
 		if !allowed[scope] || seenScopes[scope] {
@@ -219,6 +221,8 @@ func validateEntry(entry RouteEntry) error {
 			err = validateS2Phase(entry, seenScopes)
 		} else if isS3Phase(entry.MigrationPhase) {
 			err = validateS3Phase(entry, seenScopes)
+		} else if isS4Phase(entry.MigrationPhase) {
+			err = validateS4Phase(entry, seenScopes)
 		} else {
 			err = validateMigrationPhase(entry)
 		}
@@ -231,6 +235,9 @@ func validateEntry(entry RouteEntry) error {
 	}
 	if entry.Owner == OwnerCommand && !isS3Phase(entry.MigrationPhase) {
 		return errors.New("Command ownership requires an S3 migration phase")
+	}
+	if entry.Owner == OwnerAlarm && !isS4Phase(entry.MigrationPhase) {
+		return errors.New("Alarm ownership requires an S4 migration phase")
 	}
 	return nil
 }
@@ -318,6 +325,29 @@ func validateS3Phase(entry RouteEntry, seenScopes map[string]bool) error {
 	return nil
 }
 
+func validateS4Phase(entry RouteEntry, seenScopes map[string]bool) error {
+	if entry.PublicIngress != OwnerGateway || entry.ShadowSideEffectPolicy != "NONE" || entry.ReadOnlyFallback || entry.ReadFallbackOwner != "" {
+		return errors.New("S4 route must use Gateway ingress, side-effect-free reads and no request fallback")
+	}
+	for _, required := range []string{"organization", "site", "principal"} {
+		if !seenScopes[required] {
+			return errors.New("S4 scope dimensions are incomplete")
+		}
+	}
+	for _, required := range []string{"AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"} {
+		if !containsString(entry.FallbackForbiddenResults, required) {
+			return errors.New("S4 forbidden results are incomplete")
+		}
+	}
+	if entry.CohortGroup == "" {
+		return errors.New("S4 route requires a cohort group")
+	}
+	if entry.MigrationPhase != PhaseS4ContractOnly || entry.Owner != OwnerAlarm || entry.ActivationStatus != "expand-baseline" || entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" {
+		return errors.New("S4 contract-only policy is invalid")
+	}
+	return nil
+}
+
 func validateS2PercentagePhase(entry RouteEntry, percentage int) error {
 	if entry.Owner != OwnerTelemetryRuntime || entry.ActivationStatus != "canary" || entry.CompatibilityMode != "native" ||
 		entry.Rollout.Mode != "percentage" || entry.Rollout.Percentage != percentage || entry.Rollout.FallbackOwner != OwnerLegacy {
@@ -341,6 +371,10 @@ func isS2Phase(phase string) bool {
 
 func isS3Phase(phase string) bool {
 	return phase == PhaseS3ContractOnly
+}
+
+func isS4Phase(phase string) bool {
+	return phase == PhaseS4ContractOnly
 }
 
 func validateMigrationPhase(entry RouteEntry) error {
@@ -380,7 +414,7 @@ func isActiveOwner(owner string) bool {
 }
 
 func isCandidateOwner(owner string) bool {
-	return isActiveOwner(owner) || owner == OwnerCore || owner == OwnerTelemetryRuntime || owner == OwnerCommand || owner == OwnerAnalyticsQuery
+	return isActiveOwner(owner) || owner == OwnerCore || owner == OwnerTelemetryRuntime || owner == OwnerCommand || owner == OwnerAnalyticsQuery || owner == OwnerAlarm
 }
 
 func NewManager(snapshot *Snapshot, audit AuditSink, now func() time.Time) *Manager {
