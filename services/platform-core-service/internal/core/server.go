@@ -285,6 +285,17 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		}
 		writeJSON(writer, http.StatusOK, item)
 		return http.StatusOK
+	case "device-bindings":
+		result, err := server.store.ListDeviceBindings(request.Context(), claims, route.parentID, page)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		collection, err := server.deviceBindingCollection(route, claims, result)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, collection)
+		return http.StatusOK
 	default:
 		writeProblem(writer, request, http.StatusNotFound, "CORE_ROUTE_NOT_FOUND", "The requested Core Registry route does not exist.", false)
 		return http.StatusNotFound
@@ -376,6 +387,19 @@ func (server *server) deviceCollection(route registryRoute, claims registryauth.
 	return collection, nil
 }
 
+func (server *server) deviceBindingCollection(route registryRoute, claims registryauth.GrantClaims, result PageResult[DeviceBinding]) (Collection[DeviceBinding], error) {
+	collection := Collection[DeviceBinding]{Items: result.Items, HasMore: result.HasMore}
+	if result.HasMore && len(result.Items) > 0 {
+		last := result.Items[len(result.Items)-1]
+		cursor, err := server.cursorCodec.Encode(route.resource, route.parentID, route.action, claims, last.BindingRole, last.ID)
+		if err != nil {
+			return Collection[DeviceBinding]{}, err
+		}
+		collection.NextCursor = &cursor
+	}
+	return collection, nil
+}
+
 func (server *server) writeStoreError(writer http.ResponseWriter, request *http.Request, err error) int {
 	if errors.Is(err, ErrNotFound) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested Registry resource was not found.", false)
@@ -419,6 +443,8 @@ func parseRegistryRoute(path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "equipment/{equipmentId}", resource: "equipment", id: segments[1], action: registryauth.ActionEquipmentRead}, true
 	case len(segments) == 3 && segments[0] == "sites" && segments[2] == "devices":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices", resource: "devices", parentID: segments[1], action: registryauth.ActionDeviceList, list: true}, true
+	case len(segments) == 3 && segments[0] == "sites" && segments[2] == "device-bindings":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/device-bindings", resource: "device-bindings", parentID: segments[1], action: registryauth.ActionDeviceBindingList, list: true}, true
 	case len(segments) == 2 && segments[0] == "devices":
 		return registryRoute{template: RegistryPathPrefix + "devices/{deviceId}", resource: "devices", id: segments[1], action: registryauth.ActionDeviceRead}, true
 	default:

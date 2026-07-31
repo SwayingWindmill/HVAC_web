@@ -4,10 +4,15 @@ import { FocusHeading } from './FocusHeading';
 import { createIdleRealtimeStatus, realtimeStatusLabel } from './realtime-status';
 import { RealShellChrome } from './RealShellChrome';
 import type { RealNavigationItem } from './route-policy';
-import type { ProtectedScopeDraft, ProtectedScopeResource } from './protected-scope';
+import type { ProtectedScopeDraft, ProtectedScopeRequestToken, ProtectedScopeResource } from './protected-scope';
 import type { RealRuntimeConfig } from './runtime-config';
 import type { ShellFailureView, ShellSnapshot } from './shell-runtime';
 import { siteRoute, type SiteContext, type SiteRoutingDecision } from './site-routing';
+
+const RealAssetsWorkspace = lazy(async () => {
+  const module = await import('./assets/RealAssetsWorkspace');
+  return { default: module.RealAssetsWorkspace };
+});
 
 const EnergyAnalytics = lazy(async () => {
   const module = await import('./EnergyAnalytics');
@@ -239,14 +244,41 @@ const SITE_ROUTE_COPY = {
 function ReadySiteSurface({
   decision,
   snapshot,
-  registerUnsavedDraft,
   registerProtectedResource,
+  protectedRequestToken,
+  registerUnsavedDraft,
 }: {
   decision: Extract<SiteRoutingDecision, { state: 'READY' }>;
   snapshot: ShellSnapshot;
-  registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  protectedRequestToken: () => ProtectedScopeRequestToken;
+  registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
+  if (decision.route === 'assets') {
+    return (
+      <Suspense fallback={(
+        <section
+          className="real-route-surface"
+          data-testid="real-site-route-assets"
+          data-route-state="READY"
+          data-business-state="LOADING"
+          data-site-id={decision.context.site.id}
+        >
+          <div className="real-shell-progress" role="status" aria-live="polite">正在加载资产运行工作台…</div>
+        </section>
+      )}>
+        <RealAssetsWorkspace
+          site={decision.context.site}
+          principal={snapshot.principal!}
+          requestedDeviceId={decision.deviceId}
+          protectedGeneration={snapshot.protectedScope!.generation}
+          protectedRequestToken={protectedRequestToken}
+          registerProtectedResource={registerProtectedResource}
+        />
+      </Suspense>
+    );
+  }
+
   if (decision.route === 'energy') {
     return (
       <section
@@ -370,11 +402,13 @@ function ProtectedSiteRouteFrame({
   decision,
   snapshot,
   registerProtectedResource,
+  protectedRequestToken,
   registerUnsavedDraft,
 }: {
   decision: Extract<SiteRoutingDecision, { state: 'READY' }>;
   snapshot: ShellSnapshot;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  protectedRequestToken: () => ProtectedScopeRequestToken;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
   useEffect(() => registerProtectedResource({
@@ -387,8 +421,9 @@ function ProtectedSiteRouteFrame({
     <ReadySiteSurface
       decision={decision}
       snapshot={snapshot}
-      registerUnsavedDraft={registerUnsavedDraft}
       registerProtectedResource={registerProtectedResource}
+      protectedRequestToken={protectedRequestToken}
+      registerUnsavedDraft={registerUnsavedDraft}
     />
   );
 }
@@ -398,12 +433,14 @@ function SiteSurface({
   snapshot,
   retry,
   registerProtectedResource,
+  protectedRequestToken,
   registerUnsavedDraft,
 }: {
   decision: SiteShellDecision;
   snapshot: ShellSnapshot;
   retry: () => void;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  protectedRequestToken: () => ProtectedScopeRequestToken;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
   switch (decision.state) {
@@ -431,6 +468,7 @@ function SiteSurface({
           decision={decision}
           snapshot={snapshot}
           registerProtectedResource={registerProtectedResource}
+          protectedRequestToken={protectedRequestToken}
           registerUnsavedDraft={registerUnsavedDraft}
         />
       );
@@ -462,6 +500,7 @@ export function SiteScopedShell({
   confirmSiteNavigation,
   cancelSiteNavigation,
   registerProtectedResource,
+  protectedRequestToken,
   registerUnsavedDraft,
 }: {
   config: RealRuntimeConfig;
@@ -474,6 +513,7 @@ export function SiteScopedShell({
   confirmSiteNavigation: () => void;
   cancelSiteNavigation: () => void;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  protectedRequestToken: () => ProtectedScopeRequestToken;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
   return (
@@ -498,6 +538,7 @@ export function SiteScopedShell({
         snapshot={snapshot}
         retry={retry}
         registerProtectedResource={registerProtectedResource}
+        protectedRequestToken={protectedRequestToken}
         registerUnsavedDraft={registerUnsavedDraft}
       />
     </RealShellChrome>

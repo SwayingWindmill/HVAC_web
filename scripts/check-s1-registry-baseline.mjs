@@ -62,6 +62,7 @@ const expectedRoutes = [
   ['GET', '/api/v1/sites/{siteId}/equipment', 'listSiteEquipment'],
   ['GET', '/api/v1/equipment/{equipmentId}', 'getEquipment'],
   ['GET', '/api/v1/sites/{siteId}/devices', 'listSiteDevices'],
+  ['GET', '/api/v1/sites/{siteId}/device-bindings', 'listSiteDeviceBindings'],
   ['GET', '/api/v1/devices/{deviceId}', 'getDevice'],
 ];
 const s1RegistryPaths = new Set(expectedRoutes.map(([, path]) => path));
@@ -83,19 +84,26 @@ for (const [method, path, operationId] of expectedRoutes) {
   assert(owner?.readOnlyFallback === false && owner?.shadowSideEffectPolicy === 'NONE', `${method} ${path} active route still advertises runtime fallback`);
   assert(owner?.fallbackForbiddenResults?.includes('AUTHORIZATION_DENIED'), `${method} ${path} could fallback after denial`);
   assert(owner?.fallbackForbiddenResults?.includes('RESOURCE_NOT_FOUND'), `${method} ${path} could leak resource existence`);
-  assert(ownershipLock.routes?.[`${method} ${path}`]?.owner === 'platform-core-service' && ownershipLock.routes?.[`${method} ${path}`]?.revision === 5, `${method} ${path} final ownership lock drifted`);
+  const expectedOwnershipRevision = path === '/api/v1/sites/{siteId}/device-bindings' ? 1 : 5;
+  assert(ownershipLock.routes?.[`${method} ${path}`]?.owner === 'platform-core-service' && ownershipLock.routes?.[`${method} ${path}`]?.revision === expectedOwnershipRevision, `${method} ${path} final ownership lock drifted`);
 }
 
 const phaseSequence = [phaseOne, phaseTwo, phaseThree, phaseFour];
 const phaseNames = ['LEGACY_PRIMARY_GO_SHADOW', 'GO_CANARY_LEGACY_SHADOW', 'GO_PRIMARY_LEGACY_READ_FALLBACK', 'GO_PRIMARY'];
+const migratedRoutes = expectedRoutes.filter(([, path]) => path !== '/api/v1/sites/{siteId}/device-bindings');
 for (let index = 0; index < phaseSequence.length; index += 1) {
   const phaseRegistry = phaseSequence[index];
-  for (const [, path] of expectedRoutes) {
+  for (const [, path] of migratedRoutes) {
     const route = phaseRegistry.routes.find((candidate) => candidate.path === path);
     assert(route?.migrationPhase === phaseNames[index], `${path} phase asset ${phaseNames[index]} drifted`);
     assert(route?.revision === index + 2, `${path} phase route revision is not monotonic`);
   }
 }
+for (const phaseRegistry of [phaseOne, phaseTwo, phaseThree]) {
+  assert(!phaseRegistry.routes.some((route) => route.path === '/api/v1/sites/{siteId}/device-bindings'), 'native DeviceBinding route must not appear in Legacy migration phases');
+}
+const deviceBindingFinal = phaseFour.routes.find((route) => route.path === '/api/v1/sites/{siteId}/device-bindings');
+assert(deviceBindingFinal?.migrationPhase === 'GO_PRIMARY' && deviceBindingFinal?.revision === 1, 'native DeviceBinding final phase asset drifted');
 const activeS1Routes = (routeRegistry.routes ?? []).filter((route) => s1RegistryPaths.has(route.path));
 const finalS1Routes = (phaseFour.routes ?? []).filter((route) => s1RegistryPaths.has(route.path));
 assert(JSON.stringify(activeS1Routes) === JSON.stringify(finalS1Routes), 'active S1 route subset is not the final GO_PRIMARY phase');
@@ -187,7 +195,7 @@ for (const table of ['organizations', 'sites', 'equipment', 'devices', 'device_b
 }
 assert(ddl.includes('FOREIGN KEY (organization_id) REFERENCES core_registry.organizations(id)'), 'Site owning Organization foreign key is missing');
 assert(ddl.includes('external_bindings_active_external_key_uidx'), 'ExternalBinding active uniqueness is missing');
-assert(ddl.includes('equipment_registry_page_idx') && ddl.includes('devices_registry_page_idx'), 'tenant-leading keyset indexes are missing');
+assert(ddl.includes('equipment_registry_page_idx') && ddl.includes('devices_registry_page_idx') && ddl.includes('device_bindings_registry_page_idx'), 'tenant-leading keyset indexes are missing');
 assert(ddl.includes('pg_timezone_names'), 'IANA timezone enforcement is missing');
 for (const state of model.migration.mappingStates) assert(ddl.includes(`'${state}'`), `mapping state ${state} is missing`);
 assert(fixtures.includes("'QUARANTINED'") && fixtures.includes("'ambiguous-asset-1'"), 'ambiguous Legacy fixture is missing');

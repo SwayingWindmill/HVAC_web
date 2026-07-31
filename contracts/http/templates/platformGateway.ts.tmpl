@@ -148,6 +148,7 @@ export const organizationCollectionSchema = collectionSchema(organizationSchema)
 export const siteCollectionSchema = collectionSchema(siteSchema);
 export const equipmentCollectionSchema = collectionSchema(equipmentSchema);
 export const deviceCollectionSchema = collectionSchema(deviceSchema);
+export const deviceBindingCollectionSchema = collectionSchema(deviceBindingSchema);
 
 export const fieldErrorSchema = z.object({ field: z.string(), message: z.string() }).strict();
 export const registryProblemCodes = [
@@ -178,6 +179,7 @@ export type OrganizationCollection = z.infer<typeof organizationCollectionSchema
 export type SiteCollection = z.infer<typeof siteCollectionSchema>;
 export type EquipmentCollection = z.infer<typeof equipmentCollectionSchema>;
 export type DeviceCollection = z.infer<typeof deviceCollectionSchema>;
+export type DeviceBindingCollection = z.infer<typeof deviceBindingCollectionSchema>;
 export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
 export type RegistryListParams = { limit?: number; cursor?: string };
 
@@ -257,6 +259,9 @@ export function createPlatformGatewayClient(baseUrl = '') {
     ),
     listSiteDevices: (siteId: string, params: RegistryListParams = {}, init?: RequestInit) => request(
       listPath('__SITE_DEVICES_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), params), deviceCollectionSchema, { ...init, method: 'GET' },
+    ),
+    listSiteDeviceBindings: (siteId: string, params: RegistryListParams = {}, init?: RequestInit) => request(
+      listPath('__SITE_DEVICE_BINDINGS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), params), deviceBindingCollectionSchema, { ...init, method: 'GET' },
     ),
     getDevice: (deviceId: string, init?: RequestInit) => request(
       '__DEVICE_PATH__'.replace('{deviceId}', encodeURIComponent(deviceId)), deviceSchema, { ...init, method: 'GET' },

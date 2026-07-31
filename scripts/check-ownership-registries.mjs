@@ -18,7 +18,7 @@ const phaseRegistries = await Promise.all([
 
 const errors = [];
 const allowedOwners = new Set(['platform-gateway', 'legacy-hvac-backend', 'platform-core-service', 'telemetry-runtime-service', 'command-service', 'telemetry-query-service', 'operations-agent-service', 'alarm-service']);
-const s1RegistryPaths = new Set([
+const s1MigratedPaths = new Set([
   '/api/v1/organizations',
   '/api/v1/organizations/{organizationId}',
   '/api/v1/organizations/{organizationId}/sites',
@@ -28,6 +28,10 @@ const s1RegistryPaths = new Set([
   '/api/v1/sites/{siteId}/devices',
   '/api/v1/devices/{deviceId}',
 ]);
+const s1NativeAdditivePaths = new Set([
+  '/api/v1/sites/{siteId}/device-bindings',
+]);
+const s1RegistryPaths = new Set([...s1MigratedPaths, ...s1NativeAdditivePaths]);
 const expectedMigrationPhases = [
   'LEGACY_PRIMARY_GO_SHADOW',
   'GO_CANARY_LEGACY_SHADOW',
@@ -112,8 +116,12 @@ for (const route of routeRegistry.routes ?? []) {
     if (route.migrationPhase !== 'GO_PRIMARY' || route.readFallbackOwner !== undefined) {
       errors.push(`${key}: active S1 route must finish in GO_PRIMARY without Legacy fallback`);
     }
-    if (!Array.isArray(route.migrationPhases) || route.migrationPhases.join('|') !== expectedMigrationPhases.join('|')) {
-      errors.push(`${key}: S1 migration phases are incomplete or reordered`);
+    if (s1MigratedPaths.has(route.path)) {
+      if (!Array.isArray(route.migrationPhases) || route.migrationPhases.join('|') !== expectedMigrationPhases.join('|')) {
+        errors.push(`${key}: S1 migration phases are incomplete or reordered`);
+      }
+    } else if (!Array.isArray(route.migrationPhases) || route.migrationPhases.join('|') !== 'GO_PRIMARY') {
+      errors.push(`${key}: native additive S1 route must declare GO_PRIMARY only`);
     }
     if (route.shadowSideEffectPolicy !== 'NONE') errors.push(`${key}: S1 shadow must be side-effect free`);
     if (route.readOnlyFallback !== false) errors.push(`${key}: active S1 route must not advertise runtime fallback`);
@@ -190,16 +198,22 @@ const phaseExpectations = [
   { revision: 3, routeRevision: 2, phase: 'LEGACY_PRIMARY_GO_SHADOW', owner: 'legacy-hvac-backend', compatibility: 'legacy-read', rolloutMode: 'percentage', percentage: 100, fallbackOwner: 'platform-core-service', readOnlyFallback: true },
   { revision: 4, routeRevision: 3, phase: 'GO_CANARY_LEGACY_SHADOW', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'percentage', percentage: 10, fallbackOwner: 'legacy-hvac-backend', readOnlyFallback: true },
   { revision: 5, routeRevision: 4, phase: 'GO_PRIMARY_LEGACY_READ_FALLBACK', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'all', readFallbackOwner: 'legacy-hvac-backend', readOnlyFallback: true },
-  { revision: 6, routeRevision: 5, phase: 'GO_PRIMARY', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'all', readOnlyFallback: false },
+  { revision: 7, routeRevision: 5, phase: 'GO_PRIMARY', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'all', readOnlyFallback: false },
 ];
 for (let index = 0; index < phaseRegistries.length; index += 1) {
   const registry = phaseRegistries[index];
   const expected = phaseExpectations[index];
   if (registry.registryRevision !== expected.revision) errors.push(`S1 phase ${expected.phase}: registry revision mismatch`);
   const phaseRoutes = (registry.routes ?? []).filter((route) => s1RegistryPaths.has(route.path));
-  if (phaseRoutes.length !== s1RegistryPaths.size) errors.push(`S1 phase ${expected.phase}: route set is incomplete`);
+  const expectedPaths = index === phaseRegistries.length - 1 ? s1RegistryPaths : s1MigratedPaths;
+  if (phaseRoutes.length !== expectedPaths.size) errors.push(`S1 phase ${expected.phase}: route set is incomplete`);
   for (const route of phaseRoutes) {
     const key = `${route.method} ${route.path}`;
+    if (s1NativeAdditivePaths.has(route.path)) {
+      if (index !== phaseRegistries.length - 1 || route.revision !== 1 || route.migrationPhase !== 'GO_PRIMARY' || route.owner !== 'platform-core-service' || route.compatibilityMode !== 'native') errors.push(`${key}: native additive ownership drifted`);
+      if (route.rollout?.mode !== 'all' || route.readOnlyFallback !== false || route.readFallbackOwner !== undefined) errors.push(`${key}: native additive rollout drifted`);
+      continue;
+    }
     if (route.revision !== expected.routeRevision || route.migrationPhase !== expected.phase || route.owner !== expected.owner || route.compatibilityMode !== expected.compatibility) errors.push(`${key}: phase ${expected.phase} ownership drifted`);
     if (route.rollout?.mode !== expected.rolloutMode || route.rollout?.percentage !== expected.percentage || route.rollout?.fallbackOwner !== expected.fallbackOwner) errors.push(`${key}: phase ${expected.phase} rollout drifted`);
     if ((route.readFallbackOwner ?? undefined) !== expected.readFallbackOwner) errors.push(`${key}: phase ${expected.phase} read fallback drifted`);

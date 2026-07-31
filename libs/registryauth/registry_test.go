@@ -148,6 +148,12 @@ func TestDecisionRequestRequiresConcreteActionAndActingOrganization(t *testing.T
 			t.Fatalf("valid request was rejected: %v", err)
 		}
 	}
+	if err := (registryauth.DecisionRequest{ActingOrganizationID: ownerA, Action: registryauth.ActionDeviceBindingList}).Validate(); err != nil {
+		t.Fatalf("valid DeviceBinding request was rejected: %v", err)
+	}
+	if !registryauth.ActionDeviceBindingList.SiteScoped() {
+		t.Fatal("DeviceBinding list action must remain Site scoped")
+	}
 }
 
 type errRevocationUnavailable struct{}

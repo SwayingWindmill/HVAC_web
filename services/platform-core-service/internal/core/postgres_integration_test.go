@@ -122,6 +122,26 @@ func TestPostgresStoreAppliesOrganizationAndSiteRLSWithStablePagination(t *testi
 	if len(deniedDevices.Items) != 0 {
 		t.Fatalf("denied devices = %#v", deniedDevices)
 	}
+
+	bindingClaims := siteClaims
+	bindingClaims.Actions = []registryauth.Action{registryauth.ActionDeviceBindingList}
+	bindings, err := store.ListDeviceBindings(ctx, bindingClaims, testSiteA1, PageRequest{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bindings.Items) != 1 || bindings.Items[0].ID != testBindingA1 || bindings.Items[0].DeviceID != testDeviceA1 || bindings.Items[0].EquipmentID != testEquipmentA1 {
+		t.Fatalf("site-scoped DeviceBindings = %#v", bindings)
+	}
+	deniedBindingClaims := integrationClaims(registryauth.ActionDeviceBindingList)
+	deniedBindingClaims.AllowedOrganizationIDs = []string{testOrganizationA}
+	deniedBindingClaims.DeniedSiteIDs = []string{testSiteA1}
+	deniedBindings, err := store.ListDeviceBindings(ctx, deniedBindingClaims, testSiteA1, PageRequest{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deniedBindings.Items) != 0 {
+		t.Fatalf("denied DeviceBindings = %#v", deniedBindings)
+	}
 }
 
 func TestPostgresBackedServerRejectsWrongActionStaleAndRevokedGrants(t *testing.T) {

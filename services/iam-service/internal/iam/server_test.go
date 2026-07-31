@@ -251,6 +251,78 @@ func TestIAMCrossOrganizationBindingIsSiteOnly(t *testing.T) {
 	}
 }
 
+func TestIAMDeviceBindingListRequiresBothConstituentReadActions(t *testing.T) {
+	validFrom := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	facts := func(actions []registryauth.Action, denies []iam.ExplicitDeny) iam.AuthorizationFacts {
+		return iam.AuthorizationFacts{
+			Found:          true,
+			PolicyRevision: iam.S1FixturePolicyRevision,
+			Principal: iam.PrincipalRecord{
+				ID:            iam.S1FixtureOwnerAPrincipalID,
+				SubjectIssuer: fixtureSubjectIssuer,
+				Subject:       "fixture-user",
+				Status:        iam.FactStatusActive,
+			},
+			Memberships: []iam.OrganizationMembership{{
+				OrganizationID: iam.S1FixtureOwnerAOrganizationID,
+				Status:         iam.FactStatusActive,
+				ValidFrom:      validFrom,
+			}},
+			RoleBindings: []iam.RoleBinding{{
+				OrganizationID: iam.S1FixtureOwnerAOrganizationID,
+				Actions:        actions,
+				Effect:         iam.BindingEffectAllow,
+				Status:         iam.FactStatusActive,
+				ValidFrom:      validFrom,
+			}},
+			ExplicitDenies: denies,
+		}
+	}
+
+	t.Run("actions may be aggregated across effective role bindings", func(t *testing.T) {
+		splitFacts := facts(nil, nil)
+		splitFacts.RoleBindings = []iam.RoleBinding{
+			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, Actions: []registryauth.Action{registryauth.ActionEquipmentList}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: validFrom},
+			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, Actions: []registryauth.Action{registryauth.ActionDeviceList}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: validFrom},
+		}
+		harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
+			config.AuthorizationStore = fixedAuthorizationStore{facts: splitFacts}
+		})
+		response := harness.registryDecision(t, "fixture-user", iam.S1FixtureOwnerAOrganizationID, registryauth.ActionDeviceBindingList)
+		if !response.Decision.Allowed || response.Decision.ReasonCode != registryauth.ReasonAllowOrganizationRole {
+			t.Fatalf("unexpected DeviceBinding decision: %#v", response.Decision)
+		}
+		harness.verifyRegistryGrant(t, response.DelegationGrant, registryauth.ActionDeviceBindingList)
+	})
+
+	t.Run("one constituent action is insufficient", func(t *testing.T) {
+		harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
+			config.AuthorizationStore = fixedAuthorizationStore{facts: facts([]registryauth.Action{registryauth.ActionDeviceList}, nil)}
+		})
+		response := harness.registryDecision(t, "fixture-user", iam.S1FixtureOwnerAOrganizationID, registryauth.ActionDeviceBindingList)
+		if response.Decision.Allowed || response.DelegationGrant != "" || response.Decision.ReasonCode != registryauth.ReasonDenyActionNotGranted {
+			t.Fatalf("partial DeviceBinding permission was accepted: %#v", response)
+		}
+	})
+
+	t.Run("a deny on either constituent action denies relationships", func(t *testing.T) {
+		denies := []iam.ExplicitDeny{{
+			ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID,
+			OrganizationID:       iam.S1FixtureOwnerAOrganizationID,
+			Actions:              []registryauth.Action{registryauth.ActionEquipmentList},
+			Status:               iam.FactStatusActive,
+			ValidFrom:            validFrom,
+		}}
+		harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
+			config.AuthorizationStore = fixedAuthorizationStore{facts: facts([]registryauth.Action{registryauth.ActionEquipmentList, registryauth.ActionDeviceList}, denies)}
+		})
+		response := harness.registryDecision(t, "fixture-user", iam.S1FixtureOwnerAOrganizationID, registryauth.ActionDeviceBindingList)
+		if response.Decision.Allowed || response.DelegationGrant != "" || response.Decision.ReasonCode != registryauth.ReasonDenyExplicit {
+			t.Fatalf("constituent deny did not fail closed: %#v", response)
+		}
+	})
+}
+
 func TestIAMDenyMatrixDoesNotIssueDelegations(t *testing.T) {
 	harness := newIAMHarness(t)
 	cases := []struct {
