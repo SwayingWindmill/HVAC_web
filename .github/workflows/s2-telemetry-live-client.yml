@@ -12,8 +12,6 @@ on:
       - "scripts/run-s2-telemetry-live-browser-audit.mjs"
       - "scripts/fixtures/s2-telemetry-live/**"
       - "docs/operations/s2-telemetry-live-client.md"
-      - "package.json"
-      - "package-lock.json"
       - "deploy/s0/security/dependency-audit-baseline.json"
       - "scripts/check-npm-production-audit.mjs"
   push:
@@ -37,12 +35,12 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm run s2:ticket-07
+      - run: npm run s2:telemetry-live-client
       - name: Upload Ticket 07 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: s2-telemetry-live-client-evidence
-          path: out/s2-ticket-07
+          path: out/s2-telemetry-live-client
           if-no-files-found: error
           retention-days: 14

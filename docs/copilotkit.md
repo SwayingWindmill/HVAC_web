@@ -1,6 +1,6 @@
 # CopilotKit integration
 
-> This document describes the current frontend integration baseline. The target Agent product, runtime, context, tool, approval, audit, and rollout architecture is defined in `docs/ai-agent-product-technical-design.md`.
+> This document describes the current frontend integration baseline. The target Operations Agent runtime and modular architecture is defined by ADR 0009, ADR 0010 and `docs/operations-agent/framework-architecture.md`.
 
 ## Current UI baseline
 
@@ -35,7 +35,7 @@ The Popup must not be wrapped in an application Drawer or Modal, and the applica
 
 ### CopilotKit UI boundary
 
-The product keeps the official `CopilotChat` for the main message surface because it is designed to be embedded and sized inside any application layout. Product styling should prefer the component slot system for message, composer, and nested controls, while the HVAC application owns the surrounding thread navigation and evidence inspector. Fully Headless UI is reserved for a future non-chat interaction model or a layout that the official slots cannot express; it must not be introduced merely to restyle the current workspace.
+The product keeps the official `CopilotChat` for the main message surface because it is designed to be embedded and sized inside any application layout. Product styling should prefer the component slot system for message, composer, and nested controls, while the HVAC application owns the surrounding thread navigation and evidence inspector. The current demo keeps the official chat surfaces. The future Operations Workspace uses CopilotKit Headless only where required by the accepted Investigation-oriented layout; Headless must not create a second Agent authority or bypass Platform Gateway.
 
 The current local Zustand thread repository mirrors the product interactions needed for the frontend phase. A later authenticated backend may adopt CopilotKit `useThreads` for persistent, resumable conversations, rename/archive/delete operations, and realtime cross-device synchronization when the Enterprise Intelligence Platform is part of the deployment architecture.
 
@@ -45,15 +45,11 @@ The current local Zustand thread repository mirrors the product interactions nee
 
 The `/ai` route is a fixed, full-bleed workspace. It deliberately omits the standard page Hero, 20px content padding, and outer Card because the left application navigation already identifies the module and the active thread header supplies the working context. It retains the shared operations colors, 8px controls, and 12–14px business copy. The browser document, AppShell Content, AI hub, thread navigator, and evidence inspector must not scroll vertically. The only vertical scrolling surface is the CopilotKit message viewport in the center column; the composer remains visible. At tablet/mobile widths, thread and evidence rails move into Ant Design Drawers while the page remains fixed.
 
-This local persistence layer is a frontend implementation boundary, not the final source of truth. Remote Runtime mode must eventually replace it with authenticated server-side thread, task, report, and audit persistence while preserving the same UI contract.
+This local persistence layer is a frontend implementation boundary, not the final source of truth. The future Operations Agent may replace it with authenticated Investigation and thread views through Platform Gateway while preserving the same UI contract.
 
-## Agent execution modes
+## Current Agent execution mode
 
-The UI always uses the same `default` Agent identity.
-
-### Local self-managed mode
-
-When `VITE_COPILOTKIT_RUNTIME_URL` is empty, `AiProvider` registers `HvacMockAgent` through `selfManagedAgents`.
+The UI uses the `default` Agent identity and `AiProvider` registers `HvacMockAgent` through `selfManagedAgents`.
 
 The local Agent:
 
@@ -63,17 +59,7 @@ The local Agent:
 - remains strictly read-only;
 - exposes no device-control, work-order mutation, or optimization-dispatch capability.
 
-### Remote Runtime mode
-
-When `VITE_COPILOTKIT_RUNTIME_URL` is configured, the provider connects the same official UI to the trusted backend Runtime:
-
-```bash
-VITE_COPILOTKIT_RUNTIME_URL=/api/v1/copilotkit
-```
-
-The backend Runtime is responsible for model credentials, authentication, RBAC, tool authorization, audit logging, persistence, and human approval for write operations. Model credentials must never be exposed through Vite environment variables.
-
-The repository includes an EnergyAgent adapter Runtime and local three-service launcher. See [`energyagent-integration.md`](energyagent-integration.md) for topology, configuration, commands, health checks, and the current read-only boundary.
+No remote Agent Runtime is active after legacy EnergyAgent removal. Future remote execution must be introduced through Platform Gateway under the accepted Operations Agent contracts. Model credentials, authorization, tool governance, persistence and approval remain server-side concerns and must never be exposed through Vite environment variables.
 
 ## Registered application context
 

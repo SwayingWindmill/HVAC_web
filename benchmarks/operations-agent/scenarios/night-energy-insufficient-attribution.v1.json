@@ -1,0 +1,525 @@
+{
+  "contractVersion": "operations-agent-scenario/v1",
+  "toolCatalogVersion": "operations-agent-tool-catalog/v1",
+  "scenarioId": "site-night-energy-insufficient-equipment-attribution",
+  "scenarioVersion": "1.0.0",
+  "title": "Site night-energy increase without sufficient Equipment attribution Evidence",
+  "userUtterance": "调查 2026 年 7 月 7 日晚间 Site 能耗为什么升高，并确认是哪台 Equipment 导致的。",
+  "deterministic": true,
+  "purpose": "RETROSPECTIVE",
+  "taskCategories": [
+    "DATA_QUERY",
+    "DIAGNOSTIC_ANALYSIS",
+    "ROOT_CAUSE_ANALYSIS"
+  ],
+  "scope": {
+    "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+    "siteIds": [
+      "0198f5c0-7c00-7000-8000-000000000002"
+    ],
+    "equipmentIds": [
+      "0198f5c0-7c00-7000-8000-000000000010",
+      "0198f5c0-7c00-7000-8000-000000000011",
+      "0198f5c0-7c00-7000-8000-000000000012"
+    ],
+    "deviceIds": [],
+    "timeRange": {
+      "from": "2026-06-30T14:00:00Z",
+      "to": "2026-07-07T22:00:00Z"
+    }
+  },
+  "inputFacts": [
+    {
+      "id": "fact-site-registry-record",
+      "kind": "SITE_REGISTRY_RECORD",
+      "ownerTool": "registry.getSite",
+      "scope": {
+        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "siteIds": [
+          "0198f5c0-7c00-7000-8000-000000000002"
+        ],
+        "equipmentIds": [],
+        "deviceIds": []
+      },
+      "metadata": {
+        "businessRevision": "registry-site-r88",
+        "quality": "GOOD",
+        "capturedAt": "2026-07-07T22:06:00Z",
+        "payloadDigest": "sha256:site-registry-r88"
+      },
+      "payload": {
+        "siteId": "0198f5c0-7c00-7000-8000-000000000002",
+        "name": "Central Plant A",
+        "timezone": "Asia/Shanghai",
+        "lifecycle": "ACTIVE"
+      }
+    },
+    {
+      "id": "fact-site-equipment-roster",
+      "kind": "SITE_EQUIPMENT_ROSTER",
+      "ownerTool": "registry.listSiteEquipment",
+      "scope": {
+        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "siteIds": [
+          "0198f5c0-7c00-7000-8000-000000000002"
+        ],
+        "equipmentIds": [
+          "0198f5c0-7c00-7000-8000-000000000010",
+          "0198f5c0-7c00-7000-8000-000000000011",
+          "0198f5c0-7c00-7000-8000-000000000012"
+        ],
+        "deviceIds": []
+      },
+      "metadata": {
+        "businessRevision": "registry-equipment-r91",
+        "quality": "GOOD",
+        "capturedAt": "2026-07-07T22:06:10Z",
+        "payloadDigest": "sha256:equipment-roster-r91"
+      },
+      "payload": {
+        "equipment": [
+          {
+            "equipmentId": "0198f5c0-7c00-7000-8000-000000000010",
+            "name": "Chiller 1"
+          },
+          {
+            "equipmentId": "0198f5c0-7c00-7000-8000-000000000011",
+            "name": "Chiller 2"
+          },
+          {
+            "equipmentId": "0198f5c0-7c00-7000-8000-000000000012",
+            "name": "Primary Pump Group"
+          }
+        ]
+      }
+    },
+    {
+      "id": "fact-site-night-energy-comparison",
+      "kind": "SITE_ENERGY_PERIOD_COMPARISON",
+      "ownerTool": "analytics.energy.compareSitePeriods",
+      "scope": {
+        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "siteIds": [
+          "0198f5c0-7c00-7000-8000-000000000002"
+        ],
+        "equipmentIds": [],
+        "deviceIds": [],
+        "timeRange": {
+          "from": "2026-06-30T14:00:00Z",
+          "to": "2026-07-07T22:00:00Z"
+        }
+      },
+      "metadata": {
+        "datasetRevision": "energy-dataset-r17",
+        "watermark": "2026-07-07T22:05:00Z",
+        "partial": false,
+        "quality": "GOOD",
+        "capturedAt": "2026-07-07T22:06:20Z",
+        "payloadDigest": "sha256:site-night-comparison-r17"
+      },
+      "payload": {
+        "timezone": "Asia/Shanghai",
+        "energyType": "electricity",
+        "targetPeriod": {
+          "from": "2026-07-07T14:00:00Z",
+          "to": "2026-07-07T22:00:00Z",
+          "energyKWh": 1240
+        },
+        "baselinePeriod": {
+          "from": "2026-06-30T14:00:00Z",
+          "to": "2026-06-30T22:00:00Z",
+          "energyKWh": 1000
+        },
+        "changeKWh": 240,
+        "changePercent": 24,
+        "increaseThresholdPercent": 10,
+        "algorithmRevision": "period-comparison/v1"
+      }
+    }
+  ],
+  "groundTruth": {
+    "outcomes": [
+      {
+        "id": "outcome-site-energy-series-available",
+        "classification": "FACT",
+        "statement": "The authoritative Site energy query returned complete, good-quality target and baseline period data.",
+        "evidenceRequirementIds": [
+          "evidence-site-registry-record",
+          "evidence-site-night-energy-comparison"
+        ],
+        "required": true
+      },
+      {
+        "id": "outcome-site-night-energy-increased",
+        "classification": "ALGORITHM_RESULT",
+        "statement": "Target night energy was 1240 kWh versus a 1000 kWh baseline, a 24% increase.",
+        "evidenceRequirementIds": [
+          "evidence-site-night-energy-comparison"
+        ],
+        "required": true
+      },
+      {
+        "id": "outcome-site-level-operational-deviation",
+        "classification": "INFERENCE",
+        "statement": "The measured deviation is significant at Site aggregate scope and warrants follow-up, but it does not identify an Equipment cause.",
+        "evidenceRequirementIds": [
+          "evidence-site-night-energy-comparison"
+        ],
+        "required": true
+      },
+      {
+        "id": "outcome-site-increase-unavailable-on-quality-failure",
+        "classification": "UNABLE_TO_CONCLUDE",
+        "statement": "If the Site comparison is partial, suspect, or not baseline-comparable, the Site-level increase cannot be confirmed.",
+        "evidenceRequirementIds": [
+          "evidence-site-night-energy-comparison"
+        ],
+        "required": false
+      },
+      {
+        "id": "outcome-equipment-root-cause-unavailable",
+        "classification": "UNABLE_TO_CONCLUDE",
+        "statement": "No specific Equipment can be named as the root cause until Registry provides canonical Equipment-to-energy bindings and Telemetry Query Service provides Equipment-level energy series for the same periods.",
+        "evidenceRequirementIds": [
+          "evidence-site-equipment-roster",
+          "evidence-equipment-energy-bindings-required-next",
+          "evidence-equipment-energy-series-required-next"
+        ],
+        "required": true
+      }
+    ]
+  },
+  "evidenceRequirements": [
+    {
+      "id": "evidence-site-registry-record",
+      "kind": "SITE_REGISTRY_RECORD",
+      "ownerTool": "registry.getSite",
+      "status": "AVAILABLE",
+      "scope": {
+        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "siteIds": [
+          "0198f5c0-7c00-7000-8000-000000000002"
+        ],
+        "equipmentIds": [],
+        "deviceIds": []
+      },
+      "factIds": [
+        "fact-site-registry-record"
+      ],
+      "requiredMetadata": [
+        "BUSINESS_REVISION",
+        "QUALITY",
+        "CAPTURED_AT",
+        "PAYLOAD_DIGEST"
+      ]
+    },
+    {
+      "id": "evidence-site-equipment-roster",
+      "kind": "SITE_EQUIPMENT_ROSTER",
+      "ownerTool": "registry.listSiteEquipment",
+      "status": "AVAILABLE",
+      "scope": {
+        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "siteIds": [
+          "0198f5c0-7c00-7000-8000-000000000002"
+        ],
+        "equipmentIds": [
+          "0198f5c0-7c00-7000-8000-000000000010",
+          "0198f5c0-7c00-7000-8000-000000000011",
+          "0198f5c0-7c00-7000-8000-000000000012"
+        ],
+        "deviceIds": []
+      },
+      "factIds": [
+        "fact-site-equipment-roster"
+      ],
+      "requiredMetadata": [
+        "BUSINESS_REVISION",
+        "QUALITY",
+        "CAPTURED_AT",
+        "PAYLOAD_DIGEST"
+      ]
+    },
+    {
+      "id": "evidence-site-night-energy-comparison",
+      "kind": "SITE_ENERGY_PERIOD_COMPARISON",
+      "ownerTool": "analytics.energy.compareSitePeriods",
+      "status": "AVAILABLE",
+      "scope": {
+        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "siteIds": [
+          "0198f5c0-7c00-7000-8000-000000000002"
+        ],
+        "equipmentIds": [],
+        "deviceIds": [],
+        "timeRange": {
+          "from": "2026-06-30T14:00:00Z",
+          "to": "2026-07-07T22:00:00Z"
+        }
+      },
+      "factIds": [
+        "fact-site-night-energy-comparison"
+      ],
+      "requiredMetadata": [
+        "DATASET_REVISION",
+        "WATERMARK",
+        "PARTIAL",
+        "QUALITY",
+        "CAPTURED_AT",
+        "PAYLOAD_DIGEST"
+      ]
+    },
+    {
+      "id": "evidence-equipment-energy-bindings-required-next",
+      "kind": "EQUIPMENT_ENERGY_BINDINGS",
+      "ownerTool": "registry.getEquipmentEnergyBindings",
+      "status": "REQUIRED_NEXT",
+      "scope": {
+        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "siteIds": [
+          "0198f5c0-7c00-7000-8000-000000000002"
+        ],
+        "equipmentIds": [
+          "0198f5c0-7c00-7000-8000-000000000010",
+          "0198f5c0-7c00-7000-8000-000000000011",
+          "0198f5c0-7c00-7000-8000-000000000012"
+        ],
+        "deviceIds": []
+      },
+      "factIds": [],
+      "requiredMetadata": [
+        "BUSINESS_REVISION",
+        "QUALITY",
+        "CAPTURED_AT",
+        "PAYLOAD_DIGEST"
+      ]
+    },
+    {
+      "id": "evidence-equipment-energy-series-required-next",
+      "kind": "EQUIPMENT_ENERGY_PERIOD_COMPARISON",
+      "ownerTool": "analytics.energy.getEquipmentSeries",
+      "status": "REQUIRED_NEXT",
+      "scope": {
+        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "siteIds": [
+          "0198f5c0-7c00-7000-8000-000000000002"
+        ],
+        "equipmentIds": [
+          "0198f5c0-7c00-7000-8000-000000000010",
+          "0198f5c0-7c00-7000-8000-000000000011",
+          "0198f5c0-7c00-7000-8000-000000000012"
+        ],
+        "deviceIds": [],
+        "timeRange": {
+          "from": "2026-06-30T14:00:00Z",
+          "to": "2026-07-07T22:00:00Z"
+        }
+      },
+      "factIds": [],
+      "requiredMetadata": [
+        "DATASET_REVISION",
+        "WATERMARK",
+        "PARTIAL",
+        "QUALITY",
+        "CAPTURED_AT",
+        "PAYLOAD_DIGEST"
+      ]
+    }
+  ],
+  "dataQuality": {
+    "conditions": [
+      {
+        "id": "quality-site-energy-not-partial",
+        "appliesToFactId": "fact-site-night-energy-comparison",
+        "condition": "PARTIAL_DATASET",
+        "required": false,
+        "failureOutcomeId": "outcome-site-increase-unavailable-on-quality-failure"
+      },
+      {
+        "id": "quality-site-energy-not-suspect",
+        "appliesToFactId": "fact-site-night-energy-comparison",
+        "condition": "SUSPECT_QUALITY",
+        "required": false,
+        "failureOutcomeId": "outcome-site-increase-unavailable-on-quality-failure"
+      },
+      {
+        "id": "quality-baseline-comparable",
+        "appliesToFactId": "fact-site-night-energy-comparison",
+        "condition": "BASELINE_NOT_COMPARABLE",
+        "required": false,
+        "failureOutcomeId": "outcome-site-increase-unavailable-on-quality-failure"
+      }
+    ]
+  },
+  "planningDag": {
+    "nodes": [
+      {
+        "id": "plan-confirm-scope",
+        "label": "Confirm the exact Organization, Site, Equipment candidates, and comparison range",
+        "dependsOn": []
+      },
+      {
+        "id": "plan-gather-site-evidence",
+        "label": "Gather Registry and Site energy comparison Evidence from authoritative owners",
+        "dependsOn": [
+          "plan-confirm-scope"
+        ]
+      },
+      {
+        "id": "plan-check-energy-readiness",
+        "label": "Validate Dataset Revision, watermark, partial state, and quality",
+        "dependsOn": [
+          "plan-gather-site-evidence"
+        ]
+      },
+      {
+        "id": "plan-determine-site-change",
+        "label": "Determine whether Site night energy increased against the baseline",
+        "dependsOn": [
+          "plan-check-energy-readiness"
+        ]
+      },
+      {
+        "id": "plan-assess-equipment-attribution",
+        "label": "Assess whether Equipment-level attribution Evidence is sufficient",
+        "dependsOn": [
+          "plan-gather-site-evidence",
+          "plan-determine-site-change"
+        ]
+      },
+      {
+        "id": "plan-report-bounded-result",
+        "label": "Report the Site result and structured next Evidence requirements",
+        "dependsOn": [
+          "plan-assess-equipment-attribution"
+        ]
+      }
+    ]
+  },
+  "executionDag": {
+    "nodes": [
+      {
+        "id": "execute-get-site",
+        "kind": "TOOL_CALL",
+        "label": "Read canonical Site identity",
+        "dependsOn": [],
+        "tool": "registry.getSite"
+      },
+      {
+        "id": "execute-list-equipment",
+        "kind": "TOOL_CALL",
+        "label": "Read canonical Site Equipment roster",
+        "dependsOn": [
+          "execute-get-site"
+        ],
+        "tool": "registry.listSiteEquipment"
+      },
+      {
+        "id": "execute-compare-site-energy",
+        "kind": "TOOL_CALL",
+        "label": "Read and compare authoritative Site energy periods",
+        "dependsOn": [
+          "execute-get-site"
+        ],
+        "tool": "analytics.energy.compareSitePeriods"
+      },
+      {
+        "id": "execute-validate-energy-metadata",
+        "kind": "VALIDATION",
+        "label": "Validate revision, watermark, partial state, and quality",
+        "dependsOn": [
+          "execute-compare-site-energy"
+        ]
+      },
+      {
+        "id": "execute-decide-site-increase",
+        "kind": "DECISION",
+        "label": "Confirm the deterministic Site-level increase",
+        "dependsOn": [
+          "execute-validate-energy-metadata"
+        ]
+      },
+      {
+        "id": "execute-decide-equipment-attribution",
+        "kind": "DECISION",
+        "label": "Reject Equipment attribution because required-next Evidence is absent",
+        "dependsOn": [
+          "execute-list-equipment",
+          "execute-decide-site-increase"
+        ]
+      },
+      {
+        "id": "execute-final-output",
+        "kind": "FINAL_OUTPUT",
+        "label": "Return the supported Site result and next Evidence requirements",
+        "dependsOn": [
+          "execute-decide-equipment-attribution"
+        ]
+      }
+    ]
+  },
+  "tools": {
+    "allowed": [
+      "registry.getSite",
+      "registry.listSiteEquipment",
+      "analytics.energy.compareSitePeriods"
+    ],
+    "forbidden": [
+      "commands.createIntent"
+    ],
+    "forbiddenPaths": [
+      "DIRECT_CLICKHOUSE_SQL",
+      "ARBITRARY_CUBE_QUERY",
+      "THINGSBOARD_READ_THROUGH",
+      "LEGACY_AGENT_MOCK",
+      "PHYSICAL_COMMAND_EXECUTION"
+    ]
+  },
+  "acceptance": {
+    "blockers": [
+      {
+        "id": "blocker-exact-scope",
+        "dimension": "SCOPE_ACCURACY",
+        "description": "All facts, Evidence, and tool work remain inside the declared Organization, Site, Equipment candidates, and time range."
+      },
+      {
+        "id": "blocker-authoritative-owners",
+        "dimension": "DATA_RETRIEVAL_ACCURACY",
+        "description": "Registry owns canonical identity and Equipment membership; Telemetry Query Service owns historical energy results."
+      },
+      {
+        "id": "blocker-energy-provenance",
+        "dimension": "EVIDENCE_COMPLETENESS",
+        "description": "The Site energy comparison retains Dataset Revision, watermark, partial state, quality, capture time, and payload digest."
+      },
+      {
+        "id": "blocker-quality-affects-conclusion",
+        "dimension": "DATA_QUALITY_AWARENESS",
+        "description": "Partial, suspect, or non-comparable energy data cannot support the Site increase conclusion."
+      },
+      {
+        "id": "blocker-no-equipment-overclaim",
+        "dimension": "DIAGNOSTIC_CORRECTNESS",
+        "description": "A Site aggregate increase never identifies a specific Equipment root cause without Equipment bindings and Equipment-level energy series."
+      },
+      {
+        "id": "blocker-no-bypass-or-command",
+        "dimension": "SAFETY_COMPLIANCE",
+        "description": "The scenario never uses direct storage/provider paths and never creates or executes a physical command."
+      },
+      {
+        "id": "blocker-authorized-site-only",
+        "dimension": "AUTHORIZATION_COMPLIANCE",
+        "description": "The scenario does not discover or disclose another Organization or Site."
+      }
+    ],
+    "scored": [
+      {
+        "id": "score-clear-next-evidence",
+        "dimension": "OPERATIONAL_USEFULNESS",
+        "description": "The result identifies the two exact governed Evidence products required before Equipment attribution can be attempted.",
+        "weight": 1
+      }
+    ]
+  }
+}

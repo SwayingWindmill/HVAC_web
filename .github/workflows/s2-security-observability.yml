@@ -14,8 +14,6 @@ on:
       - "scripts/check-npm-production-audit.mjs"
       - "scripts/run-s2-hvac-web-presence-browser-audit.mjs"
       - "docs/operations/s2-security-observability.md"
-      - "package.json"
-      - "package-lock.json"
   push:
     branches: [main]
   workflow_dispatch:
@@ -45,14 +43,14 @@ jobs:
       - run: npm ci
       - name: Validate S2 Prometheus alert rules
         run: docker run --rm --entrypoint /bin/promtool -v "$PWD/infra/s0-durable/observability/alerts/s2-telemetry.yaml:/rules.yml:ro" prom/prometheus@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94 check rules /rules.yml
-      - run: npm run s2:ticket-10
+      - run: npm run s2:security-observability
       - name: Upload Ticket 10 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: s2-security-observability-evidence
           path: |
-            out/s2-ticket-10
+            out/s2-security-observability
             out/s2-release-evidence/security-negative-report.json
             out/s2-release-evidence/zero-invariant-report.json
             out/s2-release-evidence/metric-cardinality-report.json

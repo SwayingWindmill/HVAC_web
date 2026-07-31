@@ -27,8 +27,6 @@ on:
       - "scripts/run-durable-session-browser-audit.mjs"
       - "scripts/s0-durable-topology.mjs"
       - "go.work"
-      - "package.json"
-      - "package-lock.json"
       - ".github/workflows/s0-durable-session-audit.yml"
   push:
     branches: [main]
@@ -57,8 +55,6 @@ on:
       - "scripts/run-durable-session-browser-audit.mjs"
       - "scripts/s0-durable-topology.mjs"
       - "go.work"
-      - "package.json"
-      - "package-lock.json"
       - ".github/workflows/s0-durable-session-audit.yml"
 
 permissions:

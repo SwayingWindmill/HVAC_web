@@ -83,15 +83,15 @@ Purge 同时执行：
 ```bash
 npm run s2:hvac-web:check
 npm run s2:hvac-web:browser
-npm run s2:ticket-09
+npm run s2:hvac-web-presence
 ```
 
 Ticket 09 输出：
 
-- `out/s2-ticket-09/hvac-web-presence.json`
-- `out/s2-ticket-09/browser-journey.json`
-- `out/s2-ticket-09/network-audit.json`
-- `out/s2-ticket-09/state-rendering.json`
+- `out/s2-hvac-web-presence/hvac-web-presence.json`
+- `out/s2-hvac-web-presence/browser-journey.json`
+- `out/s2-hvac-web-presence/network-audit.json`
+- `out/s2-hvac-web-presence/state-rendering.json`
 
 浏览器 journey 必须覆盖：两个 Organization、sibling Site、partial batch、live update、reconnect、revision gap、transport outage、revocation、route cohort purge、a11y 和 no-fallback 网络审计。
 

@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
-const output = resolve(root, 'out/s2-ticket-09/hvac-web-presence.json');
+const output = resolve(root, 'out/s2-hvac-web-presence/hvac-web-presence.json');
 const text = async (path) => readFile(resolve(root, path), 'utf8');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
@@ -74,18 +74,18 @@ for (const marker of [
 
 for (const marker of [
   'Presence-only', 'exact keys', 'MISSING', 'SUSPECT', 'route cohort', 'RESOURCE_NOT_FOUND',
-  'npm run s2:ticket-09', 'out/s2-ticket-09/network-audit.json',
+  'npm run s2:hvac-web-presence', 'out/s2-hvac-web-presence/network-audit.json',
 ]) assert(runbook.includes(marker), `Ticket 09 Runbook is missing ${marker}`);
 for (const marker of [
   'name: S2 HVAC Web Presence and Latest Telemetry', 'ubuntu-24.04', 'node-version: "22.22.0"',
-  'npm run s2:ticket-09', 'out/s2-ticket-09', 'if-no-files-found: error',
+  'npm run s2:hvac-web-presence', 'out/s2-hvac-web-presence', 'if-no-files-found: error',
 ]) assert(workflow.includes(marker), `Ticket 09 workflow is missing ${marker}`);
 
-for (const script of ['test:central-plant-telemetry', 's2:hvac-web:check', 's2:hvac-web:browser', 's2:ticket-09']) {
+for (const script of ['test:central-plant-telemetry', 's2:hvac-web:check', 's2:hvac-web:browser', 's2:hvac-web-presence']) {
   assert(packageJSON.scripts?.[script], `package script ${script} is missing`);
 }
 assert(packageJSON.scripts['s2:hvac-web:check'].includes('test:central-plant-telemetry'), 'S2 HVAC Web check omits central-plant telemetry behavior tests');
-assert(packageJSON.scripts['s2:ticket-09'].includes('s2:hvac-web:browser'), 'Ticket 09 omits browser evidence');
+assert(packageJSON.scripts['s2:hvac-web-presence'].includes('s2:hvac-web:browser'), 'Ticket 09 omits browser evidence');
 
 await mkdir(dirname(output), { recursive: true });
 await writeFile(output, `${JSON.stringify({
@@ -99,9 +99,9 @@ await writeFile(output, `${JSON.stringify({
   explicitStates: ['ONLINE', 'OFFLINE', 'STALE', 'UNKNOWN', 'UNAVAILABLE', 'MISSING', 'SUSPECT', 'revoked'],
   browserCachePurge: ['organization-switch', 'site-switch', 'logout', 'revocation', 'resource-not-found'],
   requestFallback: false,
-  browserEvidence: 'out/s2-ticket-09/browser-journey.json',
-  networkEvidence: 'out/s2-ticket-09/network-audit.json',
-  renderingEvidence: 'out/s2-ticket-09/state-rendering.json',
+  browserEvidence: 'out/s2-hvac-web-presence/browser-journey.json',
+  networkEvidence: 'out/s2-hvac-web-presence/network-audit.json',
+  renderingEvidence: 'out/s2-hvac-web-presence/state-rendering.json',
   generatedAt: new Date().toISOString(),
 }, null, 2)}\n`);
 console.log(`S2 Ticket 09 HVAC Web Presence/latest passed: ${output}`);

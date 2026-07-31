@@ -52,7 +52,7 @@ Centrifugo's HTTP subscribe proxy uses its native TLS client configuration with 
 
 ## Evidence and rollback
 
-Run `npm run s2:ticket-06`. Evidence is written under `out/s2-ticket-06/` and `out/s2-centrifugo-poc/`.
+Run `npm run s2:realtime-backend`. The capability executes `npm run s2:realtime:postgres` against an isolated PostgreSQL fixture, verifying durable subscription ownership, authoritative publication revisions, current IAM scope rechecks, revocation, server-side unsubscribe, and the restricted Runtime database identity. Evidence is written to `out/s2-realtime-backend/realtime-postgres.json`, the remaining backend reports under `out/s2-realtime-backend/`, and transport evidence under `out/s2-centrifugo-poc/`.
 
 Rollback disables the bootstrap/checkpoint route revision, expires live connection capabilities, performs server-side unsubscribe, and returns clients to authoritative Snapshot reads. It does not route an individual request to Legacy, Mock, Socket.IO, or ThingsBoard. PostgreSQL migrations are expand-only and remain compatible during rollback.
 

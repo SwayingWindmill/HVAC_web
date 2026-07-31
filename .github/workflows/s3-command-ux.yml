@@ -15,8 +15,6 @@ on:
       - 'scripts/check-s3-command-ux.mjs'
       - 'scripts/check-s3-command-gateway.mjs'
       - 'scripts/check-s3-command-verification.mjs'
-      - 'package.json'
-      - 'package-lock.json'
   push:
     branches: [main]
     paths:
@@ -32,8 +30,6 @@ on:
       - 'scripts/check-s3-command-ux.mjs'
       - 'scripts/check-s3-command-gateway.mjs'
       - 'scripts/check-s3-command-verification.mjs'
-      - 'package.json'
-      - 'package-lock.json'
 
 permissions:
   contents: read

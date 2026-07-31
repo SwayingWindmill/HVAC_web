@@ -11,8 +11,6 @@ on:
       - libs/ownershipregistry/**
       - apps/hvac-web/src/api/**
       - hvac-backend/src/telemetry/**
-      - package.json
-      - package-lock.json
   workflow_dispatch:
     inputs:
       profile:
@@ -48,7 +46,7 @@ jobs:
           node-version: "22.22.0"
           cache: npm
       - run: npm ci
-      - run: npm run s2:ticket-12
+      - run: npm run s2:telemetry-cutover
       - uses: actions/upload-artifact@v6
         with:
           name: s2-cutover-preflight

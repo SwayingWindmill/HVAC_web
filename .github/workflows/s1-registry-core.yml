@@ -24,8 +24,6 @@ on:
       - 'scripts/run-s1-sqlc-poc.mjs'
       - 'go.work'
       - 'go.work.sum'
-      - 'package.json'
-      - 'package-lock.json'
   push:
     branches: [main]
     paths:
@@ -50,8 +48,6 @@ on:
       - 'scripts/run-s1-sqlc-poc.mjs'
       - 'go.work'
       - 'go.work.sum'
-      - 'package.json'
-      - 'package-lock.json'
 
 permissions:
   contents: read

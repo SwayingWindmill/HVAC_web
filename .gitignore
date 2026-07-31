@@ -48,4 +48,3 @@ vite.config.*.timestamp-*.mjs
 
 # Independent nested repositories checked out locally
 hvac-backend/
-references/energy-agent-next/

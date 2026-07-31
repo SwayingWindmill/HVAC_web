@@ -21,8 +21,6 @@ on:
       - "scripts/s0-auth-topology.mjs"
       - "scripts/run-s2-gateway-browser-audit.mjs"
       - "docs/operations/s2-gateway-snapshot.md"
-      - "package.json"
-      - "package-lock.json"
       - "go.work"
       - "go.work.sum"
   push:
@@ -54,12 +52,12 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm run s2:ticket-05
+      - run: npm run s2:gateway-snapshot
       - name: Upload Ticket 05 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: s2-gateway-snapshot-evidence
-          path: out/s2-ticket-05
+          path: out/s2-gateway-snapshot
           if-no-files-found: error
           retention-days: 14

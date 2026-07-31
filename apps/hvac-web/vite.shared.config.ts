@@ -5,7 +5,6 @@ import type { UserConfig } from 'vite';
 
 export type HvacWebBuildTarget = 'demo' | 'real';
 
-const aiRuntimeTarget = process.env.AI_RUNTIME_PROXY_TARGET || 'http://127.0.0.1:3001';
 const platformGatewayTarget = process.env.PLATFORM_GATEWAY_PROXY_TARGET || 'http://127.0.0.1:8080';
 const legacyApiTarget = process.env.LEGACY_API_PROXY_TARGET || 'http://localhost:3000';
 const s0GatewayOnly = process.env.S0_GATEWAY_ONLY === 'true';
@@ -58,12 +57,6 @@ function demoProxy() {
   return {
     '/api/v1/health': { target: platformGatewayTarget, changeOrigin: true },
     '/api/v1/version': { target: platformGatewayTarget, changeOrigin: true },
-    '/api/v1/copilotkit': {
-      target: aiRuntimeTarget,
-      changeOrigin: true,
-      timeout: 0,
-      proxyTimeout: 0,
-    },
     '/api/v1': { target: legacyApiTarget, changeOrigin: true },
     '/ws': { target: 'ws://localhost:3000', ws: true, changeOrigin: true },
   };

@@ -108,6 +108,7 @@ assert(!certificationRunner.includes('rms:ticket-'), 'RMS certification runner s
 const graphRunner = await readFile(resolve(root, 'scripts/check-rms-real-build-graph.mjs'), 'utf8');
 const bundleRunner = await readFile(resolve(root, 'scripts/check-rms-real-bundle.mjs'), 'utf8');
 const evidenceBuilder = await readFile(resolve(root, 'scripts/build-rms-real-shell-certification.mjs'), 'utf8');
+const principalBrowserRunner = await readFile(resolve(root, 'scripts/run-rms-principal-capability-browser-audit.mjs'), 'utf8');
 const browserRunner = await readFile(resolve(root, 'scripts/run-rms-authenticated-shell-browser-audit.mjs'), 'utf8');
 for (const [label, content] of [
   ['build graph', graphRunner],
@@ -118,6 +119,9 @@ for (const [label, content] of [
   assert(!content.includes('rms-01'), `RMS ${label} still uses Ticket 01 evidence topology`);
 }
 assert(evidenceBuilder.includes('rms-web-certification'), 'RMS certification builder does not use the stable certification evidence directory');
+for (const marker of ["apps/hvac-web/vite.real.config.ts", "HVAC_WEB_GATEWAY_BASE_PATH: '/api/v1'", "HVAC_WEB_REALTIME_PROTOCOL: 'centrifugo-v1'", 'real-protected-shell', "stdio: 'inherit'", "Network.enable", "Log.enable", 'applicationRootBlank', "Page.reload", 'events.slice(-30)']) {
+  assert(principalBrowserRunner.includes(marker), `RMS Principal browser audit is missing required marker ${marker}`);
+}
 assert(browserRunner.includes('rms-web-certification'), 'RMS browser audit does not use the stable certification evidence directory');
 assert(!evidenceBuilder.includes('rms-08'), 'RMS certification builder still uses Ticket 08 evidence topology');
 assert(!browserRunner.includes("'rms-08'"), 'RMS browser audit still uses Ticket 08 evidence topology');

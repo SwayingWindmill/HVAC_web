@@ -268,7 +268,7 @@ const expectedScripts = {
 for (const [name, command] of Object.entries(expectedScripts)) {
   assert(packageJSON.scripts?.[name] === command, `${name} is not wired`);
 }
-assert(typeof packageJSON.scripts?.['s2:ticket-01'] === 'string', 's2:ticket-01 clean baseline command is missing');
+assert(typeof packageJSON.scripts?.['s2:telemetry-baseline'] === 'string', 's2:telemetry-baseline clean baseline command is missing');
 for (const command of [
   'npm run s2:contracts:check',
   'npm run ownership:check',
@@ -281,9 +281,9 @@ for (const command of [
   'npm run lint',
   'npm run build',
 ]) {
-  assert(packageJSON.scripts['s2:ticket-01'].includes(command), `s2:ticket-01 omits ${command}`);
+  assert(packageJSON.scripts['s2:telemetry-baseline'].includes(command), `s2:telemetry-baseline omits ${command}`);
 }
-assert(workflow.includes('npm run s2:ticket-01'), 'clean CI workflow does not run the Ticket 01 command');
+assert(workflow.includes('npm run s2:telemetry-baseline'), 'clean CI workflow does not run the Ticket 01 command');
 assert(workflow.includes('actions/setup-go@v5') && workflow.includes('actions/setup-node@v4'), 'clean CI workflow must provision Go and Node');
 assert(workflow.includes('runs-on: ubuntu-24.04'), 'clean CI workflow must use the pinned clean hosted runner');
 

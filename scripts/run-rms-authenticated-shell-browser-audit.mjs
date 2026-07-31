@@ -4,12 +4,16 @@ import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createTCPServer } from 'node:net';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import WebSocket from 'ws';
 import { RMS_REQUIRED_BROWSER_SCENARIOS } from './rms-certification-evidence-lib.mjs';
 
 const root = resolve(process.cwd());
+const require = createRequire(import.meta.url);
+const vitePackagePath = require.resolve('vite/package.json');
+const viteBinPath = resolve(dirname(vitePackagePath), 'bin/vite.js');
 const profileDir = join(tmpdir(), `rms-03-shell-browser-${process.pid}`);
 const evidencePath = join(root, 'out', 'rms-web-certification', 'browser-evidence.json');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
@@ -20,6 +24,8 @@ const actingOrganizationId = '01900000-0000-7000-8000-000000000001';
 const siteAId = '01900000-0001-7000-8000-000000000001';
 const siteBId = '01900000-0002-7000-8000-000000000002';
 const invisibleSiteId = '01900000-0003-7000-8000-000000000003';
+const commandDeviceId = '01900000-1000-7000-8000-000000000001';
+const commandId = '01900000-2000-7000-8000-000000000001';
 const traceId = '0'.repeat(32);
 const browserEvidence = {
   schemaVersion: 1,
@@ -93,6 +99,42 @@ function registrySite(id, code, displayName) {
 const siteA = registrySite(siteAId, 'TOKYO-1', 'Tokyo Plant');
 const siteB = registrySite(siteBId, 'OSAKA-1', 'Osaka Plant');
 
+function commandProjection(approved = false) {
+  const createdAt = '2026-07-31T09:00:00.000Z';
+  const transitions = [
+    { toStatus: 'SUBMITTED', reason: 'COMMAND_SUBMITTED', actorType: 'PRINCIPAL', occurredAt: createdAt, version: 1 },
+    { fromStatus: 'SUBMITTED', toStatus: 'VALIDATING', reason: 'COMMAND_VALIDATING', actorType: 'WORKLOAD', occurredAt: '2026-07-31T09:00:01.000Z', version: 2 },
+    { fromStatus: 'VALIDATING', toStatus: 'AWAITING_APPROVAL', reason: 'APPROVAL_REQUIRED', actorType: 'WORKLOAD', occurredAt: '2026-07-31T09:00:02.000Z', version: 3 },
+  ];
+  if (approved) {
+    transitions.push(
+      { fromStatus: 'AWAITING_APPROVAL', toStatus: 'APPROVED', reason: 'APPROVAL_THRESHOLD_MET', actorType: 'PRINCIPAL', occurredAt: '2026-07-31T09:00:03.000Z', version: 4 },
+      { fromStatus: 'APPROVED', toStatus: 'QUEUED', reason: 'COMMAND_QUEUED', actorType: 'WORKLOAD', occurredAt: '2026-07-31T09:00:04.000Z', version: 5 },
+    );
+  }
+  return {
+    schemaVersion: 1,
+    commandId,
+    organizationId: actingOrganizationId,
+    siteId: siteBId,
+    deviceId: commandDeviceId,
+    capability: 'SET_TEMPERATURE_SETPOINT',
+    capabilityRevision: 'capability:set-temperature-setpoint:v1',
+    status: approved ? 'QUEUED' : 'AWAITING_APPROVAL',
+    risk: 'MEDIUM',
+    approvalPolicy: 'SINGLE_APPROVER',
+    approvalCount: approved ? 1 : 0,
+    requiredApprovalCount: 1,
+    setpointC: 26.5,
+    deviceCommandSequence: 1,
+    version: approved ? 5 : 3,
+    snapshotRevision: 17,
+    transitions,
+    createdAt,
+    updatedAt: approved ? '2026-07-31T09:00:04.000Z' : '2026-07-31T09:00:02.000Z',
+  };
+}
+
 function principalResponse(state) {
   const expiresAt = new Date(Date.now() + state.sessionLifetimeMs).toISOString();
   const principal = {
@@ -143,6 +185,8 @@ function createGatewayFixture() {
     loginMode: 'success',
     requests: [],
     energyQueries: [],
+    commandRequests: [],
+    commandApproved: false,
     loginReturnTargets: [],
     pendingPrincipalResponses: [],
   };
@@ -260,6 +304,87 @@ function createGatewayFixture() {
             qualitySummary: { valid: 1, suspect: 0, invalid: 0 },
           },
         });
+      });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/v1/local/devices') {
+      writeJson(response, 200, {
+        schemaVersion: 1,
+        devices: [{
+          organizationId: actingOrganizationId,
+          siteId: siteBId,
+          deviceId: commandDeviceId,
+          name: 'Osaka AHU 01',
+          type: 'AHU',
+        }],
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/v1/commands') {
+      if (request.headers[stateChangeHeader] !== fixtureCapability) {
+        writeJson(response, 403, problem(403, 'CSRF_VALIDATION_FAILED', 'The state-change capability was invalid.', false));
+        return;
+      }
+      const idempotencyKey = String(request.headers['idempotency-key'] ?? '');
+      if (!idempotencyKey.startsWith('real-command-')) {
+        writeJson(response, 400, problem(400, 'COMMAND_REQUEST_INVALID', 'A stable Idempotency-Key is required.', false));
+        return;
+      }
+      const chunks = [];
+      request.on('data', (chunk) => chunks.push(chunk));
+      request.on('end', () => {
+        let payload;
+        try {
+          payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        } catch {
+          writeJson(response, 400, problem(400, 'COMMAND_REQUEST_INVALID', 'The Command request was not valid JSON.', false));
+          return;
+        }
+        state.commandRequests.push({ kind: 'create', payload, idempotencyKey });
+        const forbiddenFields = ['organizationId', 'siteId', 'principalId', 'approverRole', 'providerMethod', 'providerParams'];
+        if (forbiddenFields.some((field) => Object.hasOwn(payload, field))
+          || payload.deviceId !== commandDeviceId
+          || payload.capability !== 'SET_TEMPERATURE_SETPOINT'
+          || payload.parameters?.setpointC !== 26.5) {
+          writeJson(response, 400, problem(400, 'COMMAND_REQUEST_INVALID', 'The Command request crossed its public authority boundary.', false));
+          return;
+        }
+        state.commandApproved = false;
+        writeJson(response, 202, commandProjection(false));
+      });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === `/api/v1/commands/${commandId}`) {
+      state.commandRequests.push({ kind: 'read' });
+      writeJson(response, 200, commandProjection(state.commandApproved));
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === `/api/v1/commands/${commandId}:approve`) {
+      if (request.headers[stateChangeHeader] !== fixtureCapability) {
+        writeJson(response, 403, problem(403, 'CSRF_VALIDATION_FAILED', 'The state-change capability was invalid.', false));
+        return;
+      }
+      const chunks = [];
+      request.on('data', (chunk) => chunks.push(chunk));
+      request.on('end', () => {
+        let payload;
+        try {
+          payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        } catch {
+          writeJson(response, 400, problem(400, 'COMMAND_REQUEST_INVALID', 'The approval request was not valid JSON.', false));
+          return;
+        }
+        if (Object.keys(payload).length !== 0) {
+          writeJson(response, 400, problem(400, 'COMMAND_REQUEST_INVALID', 'The public approval request must remain empty.', false));
+          return;
+        }
+        state.commandRequests.push({ kind: 'approve', payload });
+        state.commandApproved = true;
+        writeJson(response, 200, commandProjection(true));
       });
       return;
     }
@@ -464,7 +589,7 @@ try {
   });
 
   viteProcess = spawn(process.execPath, [
-    resolve(root, 'node_modules/vite/bin/vite.js'),
+    viteBinPath,
     'apps/hvac-web',
     '--config', 'apps/hvac-web/vite.real.config.ts',
     '--host', '127.0.0.1',
@@ -479,6 +604,7 @@ try {
       HVAC_WEB_BUILD_ID: 'rms-03-browser',
       HVAC_WEB_GATEWAY_BASE_PATH: '/api/v1',
       HVAC_WEB_REALTIME_PROTOCOL: 'centrifugo-v1',
+      VITE_S3_LOCAL_COMMANDS: 'true',
       PLATFORM_GATEWAY_PROXY_TARGET: gatewayURL,
     },
   });
@@ -706,25 +832,81 @@ try {
   );
   const energy = await evaluate(cdpClient, `({
     pathname: location.pathname,
+    search: location.search,
     site: document.querySelector('[data-testid="real-site-route-energy"]')?.getAttribute('data-site-id'),
     dashboardSite: document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-site-id'),
     revision: document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-dataset-revision'),
     state: document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-business-state'),
+    period: document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-workspace-period'),
+    anchor: document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-workspace-anchor'),
     text: document.querySelector('[data-testid="real-energy-dashboard"]')?.textContent ?? '',
     headerSite: document.querySelector('[data-testid="real-shell-site"]')?.textContent,
     focusedHeading: document.activeElement === document.querySelector('[data-testid="real-energy-dashboard"] h1'),
   })`);
   assert(energy.pathname === `/sites/${siteBId}/energy`, 'Energy route changed the validated Site URL');
+  assert(energy.search.includes('period=month') && energy.search.includes('quality=VALID_ONLY'), 'Energy workspace did not persist its analysis context in the URL');
+  assert(energy.period === 'month' && /^\d{4}-\d{2}-01$/.test(energy.anchor ?? ''), 'Energy workspace did not canonicalize its calendar period');
   assert(energy.site === siteBId && energy.dashboardSite === siteBId && energy.headerSite === 'Osaka Plant', 'Energy dashboard was not bound to the validated Site');
   assert(energy.revision === 'rms-energy-revision-1' && energy.state === 'READY', 'Energy dashboard omitted authoritative revision or readiness state');
   assert(energy.text.includes('42.5 kWh') && energy.text.includes('1 个已返回时段'), 'Energy dashboard omitted the returned aggregate');
+  assert(energy.text.includes('环比上一周期') && energy.text.includes('返回时段') && energy.text.includes('Platform Gateway'), 'Energy workspace omitted comparison, period evidence, or authority boundary');
   assert(energy.focusedHeading, 'Energy dashboard did not restore focus after lazy loading');
+  assert(await evaluate(cdpClient, `(() => {
+    const button = Array.from(document.querySelectorAll('[data-testid="real-energy-dashboard"] table button'))
+      .find((candidate) => candidate.textContent?.includes('查看日'));
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  })()`), 'Energy period drill-down action was not available');
+  await waitForCondition(
+    cdpClient,
+    `location.search.includes('period=day') && document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-workspace-period') === 'day'`,
+    'Energy day drill-down',
+  );
+  const energyDrillDown = await evaluate(cdpClient, `({
+    search: location.search,
+    period: document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-workspace-period'),
+    text: document.querySelector('[data-testid="real-energy-dashboard"]')?.textContent ?? '',
+  })`);
+  assert(energyDrillDown.search.includes('anchor=') && energyDrillDown.period === 'day', 'Energy drill-down did not persist its child analysis context');
+  assert(energyDrillDown.text.includes('比较基期') && energyDrillDown.text.includes('未返回的时段不会补零'), 'Energy drill-down lost comparison or missing-bucket semantics');
   recordScenario('site-energy');
 
-  for (const leaf of ['commands', 'bigscreen']) {
-    await navigate(cdpClient, `${webURL}/sites/${siteBId}/${leaf}`);
-    await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'READY' && document.querySelector('[data-testid="real-site-route-${leaf}"]')?.getAttribute('data-site-id') === '${siteBId}'`, `validated explicit Site ${leaf} route`);
-  }
+  await navigate(cdpClient, `${webURL}/sites/${siteBId}/commands`);
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-commands-workbench"]')?.getAttribute('data-site-id') === '${siteBId}' && Boolean(document.querySelector('[data-testid="real-command-setpoint"]'))`, 'validated explicit Site Commands route');
+  assert(await evaluate(cdpClient, `(() => {
+    const input = document.querySelector('[data-testid="real-command-setpoint"]');
+    if (!(input instanceof HTMLInputElement)) return false;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    setter?.call(input, '26.5');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`), 'Real Command setpoint was not editable');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-command-setpoint"]')?.value === '26.5'`, 'Real Command draft setpoint');
+  await clickTestId(cdpClient, 'real-command-submit');
+  await waitForCondition(cdpClient, `location.search.includes('command=${commandId}') && document.querySelector('[data-testid="real-command-detail"]')?.getAttribute('data-command-status') === 'AWAITING_APPROVAL'`, 'authoritative Command approval state');
+  const commandBeforeApproval = await evaluate(cdpClient, `({
+    pathname: location.pathname,
+    site: document.querySelector('[data-testid="real-commands-workbench"]')?.getAttribute('data-site-id'),
+    commandId: document.querySelector('[data-testid="real-commands-workbench"]')?.getAttribute('data-command-id'),
+    text: document.querySelector('[data-testid="real-commands-workbench"]')?.textContent ?? '',
+    approve: Boolean(document.querySelector('[data-testid="real-command-approve"]')),
+    focusedHeading: document.activeElement === document.querySelector('[data-testid="real-commands-workbench"] h1'),
+  })`);
+  assert(commandBeforeApproval.pathname === `/sites/${siteBId}/commands` && commandBeforeApproval.site === siteBId, 'Real Commands escaped the validated Site route');
+  assert(commandBeforeApproval.commandId === commandId && commandBeforeApproval.approve, 'Real Commands omitted authoritative identity or approval action');
+  assert(commandBeforeApproval.text.includes('LOCAL / NON-FORMAL / PRODUCTION DISABLED') && commandBeforeApproval.text.includes('不表示设备已经成功执行'), 'Real Commands overstated local or execution authority');
+  assert(commandBeforeApproval.text.includes('S2 Snapshot Revision') && commandBeforeApproval.text.includes('状态时间线'), 'Real Commands omitted snapshot or timeline evidence');
+  assert(commandBeforeApproval.focusedHeading, 'Real Commands did not restore focus after lazy loading');
+  await clickTestId(cdpClient, 'real-command-approve');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-command-detail"]')?.getAttribute('data-command-status') === 'QUEUED'`, 'approved Command queue state');
+  const approvedCommandText = await evaluate(cdpClient, `document.querySelector('[data-testid="real-command-detail"]')?.textContent ?? ''`);
+  assert(approvedCommandText.includes('1 / 1') && approvedCommandText.includes('已排队'), 'Real Commands omitted approved queue evidence');
+  recordScenario('site-commands');
+
+  await navigate(cdpClient, `${webURL}/sites/${siteBId}/bigscreen`);
+  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'READY' && document.querySelector('[data-testid="real-site-route-bigscreen"]')?.getAttribute('data-site-id') === '${siteBId}'`, 'validated explicit Site BigScreen route');
   const bigScreen = await evaluate(cdpClient, `({
     pathname: location.pathname,
     site: document.querySelector('[data-testid="real-site-route-bigscreen"]')?.getAttribute('data-site-id'),
@@ -735,20 +917,20 @@ try {
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'NOT_FOUND'`, 'unscoped BigScreen rejection');
   assert(!await evaluate(cdpClient, `Boolean(document.querySelector('[data-site-route="bigscreen"]'))`), 'unscoped BigScreen mounted a Site surface');
 
-  await navigate(cdpClient, `${webURL}/sites/${siteAId}/commands`);
-  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-commands"]')?.getAttribute('data-site-id') === '${siteAId}' && Boolean(document.querySelector('[data-testid="real-site-switcher"]'))`, 'RMS-06 Site transition source');
-  await evaluate(cdpClient, `(() => {
-    const input = document.querySelector('[data-testid="real-command-draft-value"]');
-    if (!(input instanceof HTMLTextAreaElement)) return false;
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-    setter?.call(input, 'Keep this unsaved command draft');
+  await navigate(cdpClient, `${webURL}/sites/${siteBId}/commands`);
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-commands-workbench"]')?.getAttribute('data-site-id') === '${siteBId}' && Boolean(document.querySelector('[data-testid="real-site-switcher"]')) && Boolean(document.querySelector('[data-testid="real-command-setpoint"]'))`, 'RMS-06 Site transition source');
+  assert(await evaluate(cdpClient, `(() => {
+    const input = document.querySelector('[data-testid="real-command-setpoint"]');
+    if (!(input instanceof HTMLInputElement)) return false;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    setter?.call(input, '25');
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
-  })()`);
-  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-command-draft-value"]')?.value === 'Keep this unsaved command draft'`, 'dirty Site draft');
+  })()`), 'Real Command Site-transition draft was not editable');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-command-setpoint"]')?.value === '25'`, 'dirty Site draft');
   assert(await evaluate(cdpClient, `(() => {
-    const button = document.querySelector('[data-site-switch-id="${siteBId}"]');
+    const button = document.querySelector('[data-site-switch-id="${siteAId}"]');
     if (!(button instanceof HTMLButtonElement)) return false;
     button.focus();
     return document.activeElement === button;
@@ -757,67 +939,65 @@ try {
   await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-testid="real-site-draft-confirmation"]')) && document.activeElement === document.querySelector('[data-testid="real-site-draft-confirm"]')`, 'Site draft confirmation focus');
   const retainedBeforeConfirmation = await evaluate(cdpClient, `({
     pathname: location.pathname,
-    oldSite: document.body.innerText.includes('Tokyo Plant'),
-    oldSubscription: document.querySelector('[data-testid="real-site-subscription"]')?.getAttribute('data-subscription-site'),
-    draft: document.querySelector('[data-testid="real-command-draft-value"]')?.value,
+    oldSite: document.body.innerText.includes('Osaka Plant'),
+    oldSubscription: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-site'),
+    draft: document.querySelector('[data-testid="real-command-setpoint"]')?.value,
     dialogName: document.querySelector('[data-testid="real-site-draft-confirmation"]')?.getAttribute('aria-labelledby'),
     modal: document.querySelector('[data-testid="real-site-draft-confirmation"]')?.getAttribute('aria-modal'),
   })`);
-  assert(retainedBeforeConfirmation.pathname === `/sites/${siteAId}/commands`, 'draft warning changed Site before confirmation');
-  assert(retainedBeforeConfirmation.oldSite && retainedBeforeConfirmation.oldSubscription === siteAId, 'draft warning purged the old Site before confirmation');
-  assert(retainedBeforeConfirmation.draft === 'Keep this unsaved command draft', 'draft warning discarded the unsaved draft');
+  assert(retainedBeforeConfirmation.pathname === `/sites/${siteBId}/commands`, 'draft warning changed Site before confirmation');
+  assert(retainedBeforeConfirmation.oldSite && retainedBeforeConfirmation.oldSubscription === siteBId, 'draft warning purged the old Site before confirmation');
+  assert(retainedBeforeConfirmation.draft === '25', 'draft warning discarded the unsaved draft');
   assert(retainedBeforeConfirmation.dialogName === 'real-site-draft-title' && retainedBeforeConfirmation.modal === 'true', 'draft confirmation lacked an accessible modal name');
   await pressKey(cdpClient, 'Tab', 'Tab', 9);
   await waitForCondition(cdpClient, `document.activeElement === document.querySelector('[data-testid="real-site-draft-cancel"]')`, 'draft confirmation forward Tab');
   await pressKey(cdpClient, 'Tab', 'Tab', 9);
   await waitForCondition(cdpClient, `document.activeElement === document.querySelector('[data-testid="real-site-draft-confirm"]')`, 'draft confirmation focus loop');
   await pressKey(cdpClient, 'Escape', 'Escape', 27);
-  await waitForCondition(cdpClient, `!document.querySelector('[data-testid="real-site-draft-confirmation"]') && document.querySelector('[data-testid="real-command-draft-value"]')?.value === 'Keep this unsaved command draft' && document.activeElement === document.querySelector('[data-site-switch-id="${siteBId}"]')`, 'cancelled Site transition and focus restoration');
+  await waitForCondition(cdpClient, `!document.querySelector('[data-testid="real-site-draft-confirmation"]') && document.querySelector('[data-testid="real-command-setpoint"]')?.value === '25' && document.activeElement === document.querySelector('[data-site-switch-id="${siteAId}"]')`, 'cancelled Site transition and focus restoration');
 
   await pressKey(cdpClient, 'Enter', 'Enter', 13);
   await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-testid="real-site-draft-confirmation"]')) && document.activeElement === document.querySelector('[data-testid="real-site-draft-confirm"]')`, 'second Site draft confirmation');
   await clickTestId(cdpClient, 'real-site-draft-confirm');
-  await waitForCondition(cdpClient, `(() => {
+  const purgingState = await waitForCondition(cdpClient, `(() => {
     const purgeHeading = document.querySelector('[data-testid="real-site-purging"] h1');
     const purgeVisible = Boolean(purgeHeading)
-      && !document.querySelector('[data-site-route][data-site-id="${siteAId}"]')
-      && !document.querySelector('[data-subscription-site="${siteAId}"]')
-      && !document.querySelector('[data-testid="real-command-draft-value"]')
+      && !document.querySelector('[data-site-route][data-site-id="${siteBId}"]')
+      && document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-site') !== '${siteBId}'
+      && !document.querySelector('[data-testid="real-commands-workbench"]')
       && document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-resource-count') === '0';
     if (!purgeVisible) return false;
-    globalThis.__rmsSitePurgeEvidence = {
+    return {
       pathname: location.pathname,
       transition: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-site-transition'),
       scopeSite: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-scope-site'),
       realtimeState: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-state'),
       realtimeSite: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-site'),
       headerSite: document.querySelector('[data-testid="real-shell-site"]')?.textContent,
-      newSiteRendered: document.body.innerText.includes('Osaka Plant'),
+      newSiteRendered: document.body.innerText.includes('Tokyo Plant'),
       focusedHeading: document.activeElement === purgeHeading,
     };
-    return true;
   })()`, 'old Site purge before navigation', 5);
-  const purgingState = await evaluate(cdpClient, 'globalThis.__rmsSitePurgeEvidence');
-  assert(purgingState.pathname === `/sites/${siteAId}/commands`, 'navigation began before old Site purge became visible');
+  assert(purgingState.pathname === `/sites/${siteBId}/commands`, 'navigation began before old Site purge became visible');
   assert(purgingState.transition === 'purging' && !purgingState.scopeSite, 'protected Site scope was not revoked during purge');
   assert(purgingState.headerSite === 'No active Site', 'trusted header retained the revoked Site during purge');
   assert(purgingState.realtimeState === 'idle' && !purgingState.realtimeSite, 'old Site realtime status survived protected purge');
   assert(purgingState.focusedHeading, 'purging state did not restore focus to its heading');
   assert(purgingState.newSiteRendered === false, 'new Site rendered before old Site purge completed');
-  await waitForCondition(cdpClient, `location.pathname === '/sites/${siteBId}/assets' && document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-site-id') === '${siteBId}'`, 'new Site after protected purge');
+  await waitForCondition(cdpClient, `location.pathname === '/sites/${siteAId}/assets' && document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-site-id') === '${siteAId}'`, 'new Site after protected purge');
   const completedSiteTransition = await evaluate(cdpClient, `({
-    oldRoute: Boolean(document.querySelector('[data-site-route][data-site-id="${siteAId}"]')),
-    oldDraft: Boolean(document.querySelector('[data-testid="real-command-draft-value"]')),
-    oldSubscription: Boolean(document.querySelector('[data-subscription-site="${siteAId}"]')),
-    newSite: document.querySelector('[data-testid="real-site-route-assets"]')?.textContent?.includes('Osaka Plant') ?? false,
+    oldRoute: Boolean(document.querySelector('[data-site-route][data-site-id="${siteBId}"]')),
+    oldDraft: Boolean(document.querySelector('[data-testid="real-commands-workbench"]')),
+    oldSubscription: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-site') === '${siteBId}',
+    newSite: document.querySelector('[data-testid="real-site-route-assets"]')?.textContent?.includes('Tokyo Plant') ?? false,
     newScope: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-scope-site'),
     headerSite: document.querySelector('[data-testid="real-shell-site"]')?.textContent,
     realtimeSite: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-site'),
     focusedHeading: document.activeElement === document.querySelector('[data-testid="real-site-route-assets"] h1'),
   })`);
   assert(!completedSiteTransition.oldRoute && !completedSiteTransition.oldDraft && !completedSiteTransition.oldSubscription, 'old Site protected values survived the transition');
-  assert(completedSiteTransition.newSite && completedSiteTransition.newScope === siteBId, 'new Site did not establish a fresh protected scope');
-  assert(completedSiteTransition.headerSite === 'Osaka Plant' && completedSiteTransition.realtimeSite === siteBId, 'trusted header did not follow the new Site snapshot');
+  assert(completedSiteTransition.newSite && completedSiteTransition.newScope === siteAId, 'new Site did not establish a fresh protected scope');
+  assert(completedSiteTransition.headerSite === 'Tokyo Plant' && completedSiteTransition.realtimeSite === siteAId, 'trusted header did not follow the new Site snapshot');
   assert(completedSiteTransition.focusedHeading, 'new Site route did not restore focus to its heading');
   recordScenario('site-switching');
 
@@ -989,12 +1169,36 @@ try {
     assert(request.headers.origin === webURL, `logout Origin was not the Real application origin: ${request.headers.origin}`);
   }
   const energyRequests = fixture.state.requests.filter((entry) => entry.method === 'POST' && entry.path === '/api/v1/analytics/energy-series');
-  assert(energyRequests.length === 1, `expected one Energy query, got ${energyRequests.length}`);
-  assert(energyRequests[0].headers[stateChangeHeader] === fixtureCapability, 'Energy query did not send the in-memory state-change capability');
-  assert(energyRequests[0].headers.origin === webURL, `Energy query Origin was not the Real application origin: ${energyRequests[0].headers.origin}`);
-  assert(fixture.state.energyQueries.length === 1, `expected one parsed Energy query, got ${fixture.state.energyQueries.length}`);
-  assert(fixture.state.energyQueries[0].organizationId === actingOrganizationId, 'Energy query did not use the authenticated Organization');
-  assert(fixture.state.energyQueries[0].siteId === siteBId, 'Energy query did not use the validated Site');
+  assert(energyRequests.length === 4, `expected current and comparison queries for parent and drill-down Energy workspaces, got ${energyRequests.length}`);
+  for (const request of energyRequests) {
+    assert(request.headers[stateChangeHeader] === fixtureCapability, 'Energy query did not send the in-memory state-change capability');
+    assert(request.headers.origin === webURL, `Energy query Origin was not the Real application origin: ${request.headers.origin}`);
+  }
+  assert(fixture.state.energyQueries.length === 4, `expected four parsed Energy queries, got ${fixture.state.energyQueries.length}`);
+  assert(fixture.state.energyQueries.every((query) => query.organizationId === actingOrganizationId), 'Energy query did not use the authenticated Organization');
+  assert(fixture.state.energyQueries.every((query) => query.siteId === siteBId), 'Energy query did not use the validated Site');
+  assert(fixture.state.energyQueries.every((query) => query.qualityPolicy === 'VALID_ONLY'), 'Energy queries did not preserve the URL quality policy');
+  for (const granularity of ['day', 'hour']) {
+    const energyRanges = fixture.state.energyQueries
+      .filter((query) => query.granularity === granularity)
+      .map((query) => [Date.parse(query.from), Date.parse(query.to)])
+      .sort((left, right) => left[0] - right[0]);
+    assert(energyRanges.length === 2 && energyRanges[0][1] === energyRanges[1][0], `Energy ${granularity} current and comparison windows were not contiguous calendar periods`);
+  }
+  const commandCreateRequests = fixture.state.requests.filter((entry) => entry.method === 'POST' && entry.path === '/api/v1/commands');
+  const commandApprovalRequests = fixture.state.requests.filter((entry) => entry.method === 'POST' && entry.path === `/api/v1/commands/${commandId}:approve`);
+  const commandReadRequests = fixture.state.requests.filter((entry) => entry.method === 'GET' && entry.path === `/api/v1/commands/${commandId}`);
+  assert(commandCreateRequests.length === 1, `expected one Command creation request, got ${commandCreateRequests.length}`);
+  assert(commandApprovalRequests.length === 1, `expected one Command approval request, got ${commandApprovalRequests.length}`);
+  assert(commandReadRequests.length >= 1, 'Real Commands did not poll the authoritative Command projection');
+  for (const request of [...commandCreateRequests, ...commandApprovalRequests]) {
+    assert(request.headers[stateChangeHeader] === fixtureCapability, 'Command mutation omitted the in-memory state-change capability');
+    assert(request.headers.origin === webURL, `Command mutation Origin was not the Real application origin: ${request.headers.origin}`);
+  }
+  const createdCommand = fixture.state.commandRequests.find((entry) => entry.kind === 'create');
+  assert(createdCommand?.payload?.deviceId === commandDeviceId && createdCommand?.payload?.parameters?.setpointC === 26.5, 'Command creation omitted the selected Device or setpoint');
+  assert(!['organizationId', 'siteId', 'principalId', 'approverRole', 'providerMethod', 'providerParams'].some((field) => Object.hasOwn(createdCommand?.payload ?? {}, field)), 'Command creation sent browser-owned authority fields');
+  assert(fixture.state.commandRequests.some((entry) => entry.kind === 'approve'), 'Real Commands did not submit the empty approval request');
   const forbiddenHeaders = fixture.state.requests.filter((entry) =>
     ['x-site-id', 'x-organization-id', 'x-role', 'x-admin', 'x-scope'].some((name) => name in entry.headers));
   assert(forbiddenHeaders.length === 0, `browser sent forbidden authorization headers: ${JSON.stringify(forbiddenHeaders)}`);

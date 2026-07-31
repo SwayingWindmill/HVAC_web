@@ -11,6 +11,8 @@ const [
   ownership,
   openapi,
   commandApi,
+  commandContract,
+  realCommands,
   commandPage,
   permissions,
   app,
@@ -25,6 +27,8 @@ const [
   readJSON('contracts/ownership/s3-command-ownership.v1.json'),
   readJSON('contracts/http/s3-command-public.openapi.json'),
   read('apps/hvac-web/src/api/commands.ts'),
+  read('apps/hvac-web/src/api/command-contract.ts'),
+  read('apps/hvac-web/src/real/RealCommands.tsx'),
   read('apps/hvac-web/src/pages/Commands/index.tsx'),
   read('apps/hvac-web/src/auth/permissions.ts'),
   read('apps/hvac-web/src/App.tsx'),
@@ -61,23 +65,25 @@ for (const [method, path] of [
   assert(ownership.routes?.some((route) => route.method === method && route.path === path && route.rollout === 'disabled'), `Command ownership is missing: ${method} ${path}`);
 }
 
-assert(openapi.info?.version === '0.3.0-disabled-command-ux-baseline', 'Command OpenAPI version is not the S3-08 UX baseline');
+assert(openapi.info?.version === '0.4.0-disabled-real-site-scope', 'Command OpenAPI version is not the Real Site scope baseline');
 const approvalOperation = openapi.paths?.['/api/v1/commands/{commandId}:approve']?.post;
 assert(approvalOperation?.['x-production-traffic-percent'] === 0, 'Approval OpenAPI enabled production traffic');
 assert(openapi.components?.schemas?.ApproveCommandRequest?.maxProperties === 0, 'Public approval request is not empty by contract');
 for (const forbidden of ['organizationId', 'siteId', 'deviceId', 'principalId', 'approverRole', 'payloadHash', 'risk', 'riskRuleRevision', 'providerMethod', 'providerParams']) {
   assert(approvalOperation?.['x-client-forbidden-fields']?.includes(forbidden), `Approval OpenAPI no longer forbids ${forbidden}`);
 }
-for (const field of ['requiredApprovalCount', 'setpointC', 'transitions']) {
+for (const field of ['organizationId', 'siteId', 'requiredApprovalCount', 'setpointC', 'transitions']) {
   assert(openapi.components?.schemas?.Command?.required?.includes(field), `Command detail is missing required ${field}`);
 }
 assert(openapi.components?.schemas?.CommandTransition?.properties?.actorType?.enum?.join('|') === 'PRINCIPAL|WORKLOAD', 'Timeline exposes unsupported actor identity');
 
 for (const token of [
   'COMMAND_PUBLIC_ROUTES_ENABLED = false as const',
-  'commandSchema',
-  'superRefine',
-  'Command timeline does not converge',
+  'createScopedCommand',
+  'getScopedCommand',
+  'approveScopedCommand',
+  'trustedOrganizationId',
+  'trustedSiteId',
   "capability: 'SET_TEMPERATURE_SETPOINT'",
   'parameters: { setpointC }',
   'body: JSON.stringify({})',
@@ -85,10 +91,24 @@ for (const token of [
 ]) {
   assert(commandApi.includes(token), `HVAC Web Command API invariant is missing: ${token}`);
 }
-for (const forbidden of ['organizationId', 'principalId', 'approverRole', 'providerMethod', 'providerParams']) {
+for (const token of ['organizationId', 'siteId', 'superRefine', 'Command timeline does not converge', 'validateCommandScope', 'RESOURCE_NOT_FOUND']) {
+  assert(commandContract.includes(token), `HVAC Web Command contract invariant is missing: ${token}`);
+}
+for (const forbidden of ['principalId', 'approverRole', 'providerMethod', 'providerParams']) {
   assert(!commandApi.includes(forbidden), `HVAC Web public Command client contains forbidden authority field ${forbidden}`);
 }
 
+for (const token of [
+  '生产控制保持禁用',
+  '生产流量为 0%',
+  'LOCAL / NON-FORMAL / PRODUCTION DISABLED',
+  '不表示设备已经成功执行',
+  'S2 Snapshot Revision',
+  '状态时间线',
+  '批准 Command',
+]) {
+  assert(realCommands.includes(token), `Real Command UX invariant is missing: ${token}`);
+}
 for (const token of [
   '设备结果待确认',
   '不会自动重发',
@@ -99,7 +119,7 @@ for (const token of [
   'S2 Snapshot Revision',
   '状态时间线',
 ]) {
-  assert(commandPage.includes(token), `Command UX invariant is missing: ${token}`);
+  assert(commandPage.includes(token), `Demo Command UX invariant is missing: ${token}`);
 }
 assert(permissions.includes("| 'commands'") && permissions.includes("| 'command'"), 'Command permission subjects are missing');
 assert(permissions.includes("{ actions: ['approve'], subjects: ['command'] }") || permissions.includes("{ actions: ['create', 'approve'], subjects: ['command'] }"), 'Command approval permission is missing');

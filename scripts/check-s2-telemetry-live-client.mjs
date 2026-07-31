@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
-const output = resolve(root, 'out/s2-ticket-07/live-client.json');
+const output = resolve(root, 'out/s2-telemetry-live-client/live-client.json');
 const moduleRoot = resolve(root, 'apps/hvac-web/src/platform/telemetry-live');
 
 function assert(condition, message) { if (!condition) throw new Error(message); }
@@ -100,13 +100,13 @@ for (const phrase of [
 
 assert(packageJSON.scripts?.['s2:live-client:check'] === 'node scripts/check-s2-telemetry-live-client.mjs', 's2:live-client:check is not wired');
 assert(packageJSON.scripts?.['s2:live-client:browser'] === 'node scripts/run-s2-telemetry-live-browser-audit.mjs', 's2:live-client:browser is not wired');
-assert(packageJSON.scripts?.['s2:ticket-07']?.includes('npm run s2:live-client:browser'), 's2:ticket-07 omits browser evidence');
+assert(packageJSON.scripts?.['s2:telemetry-live-client']?.includes('npm run s2:live-client:browser'), 's2:telemetry-live-client omits browser evidence');
 
 await mkdir(dirname(output), { recursive: true });
 await writeFile(output, `${JSON.stringify({
   schemaVersion: 1, ticket: 66, status: 'passed', sdk: 'centrifuge@5.7.0',
   publicBoundary: 'platform/telemetry-live/index.ts', transportInternalsExposed: false,
   generatedDTOAuthority: true, snapshotFirst: true, businessRevisionAuthority: true,
-  browserEvidence: 'out/s2-ticket-07/browser-live-client.json', generatedAt: new Date().toISOString(),
+  browserEvidence: 'out/s2-telemetry-live-client/browser-live-client.json', generatedAt: new Date().toISOString(),
 }, null, 2)}\n`);
 console.log(`S2 Ticket 07 TelemetryLiveClient passed: ${output}`);

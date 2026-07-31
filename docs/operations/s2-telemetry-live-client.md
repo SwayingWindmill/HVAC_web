@@ -56,15 +56,15 @@ There is no Legacy, Mock, Socket.IO, or ThingsBoard request fallback in this mod
 Run:
 
 ```bash
-npm run s2:ticket-07
+npm run s2:telemetry-live-client
 ```
 
 The real-browser CDP harness exercises multiple exact subscriptions, publication-before-Snapshot buffering, duplicate and contiguous revisions, gap fallback, successful reconnect recovery, recovery failure and epoch reset, slow-consumer disconnect, checkpoint and page restore, capability renewal, revocation, wrong-scope publication, and Organization switch/logout purge.
 
 Evidence is written to:
 
-- `out/s2-ticket-07/live-client.json`
-- `out/s2-ticket-07/browser-live-client.json`
+- `out/s2-telemetry-live-client/live-client.json`
+- `out/s2-telemetry-live-client/browser-live-client.json`
 
 ## Out of scope
 

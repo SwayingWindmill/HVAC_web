@@ -78,17 +78,17 @@ Exporter 使用有界异步队列。Collector 不可用、export timeout 或 que
 npm run s2:security-observability:check
 npm run s2:security-negative
 npm run s2:observability:harness
-npm run s2:ticket-10
+npm run s2:security-observability
 ```
 
 输出：
 
-- `out/s2-ticket-10/security-negative-report.json`
-- `out/s2-ticket-10/zero-invariant-report.json`
-- `out/s2-ticket-10/metric-cardinality-report.json`
-- `out/s2-ticket-10/trace-correlation-report.json`
-- `out/s2-ticket-10/log-redaction-report.json`
-- `out/s2-ticket-10/alert-rule-validation-report.json`
-- `out/s2-ticket-10/observability-outage-report.json`
+- `out/s2-security-observability/security-negative-report.json`
+- `out/s2-security-observability/zero-invariant-report.json`
+- `out/s2-security-observability/metric-cardinality-report.json`
+- `out/s2-security-observability/trace-correlation-report.json`
+- `out/s2-security-observability/log-redaction-report.json`
+- `out/s2-security-observability/alert-rule-validation-report.json`
+- `out/s2-security-observability/observability-outage-report.json`
 
 相同报告同步写入 `out/s2-release-evidence/`，供后续容量与 release ticket 复用。

@@ -1,7 +1,15 @@
-// Mock-first: hvac-backend is not running in this dev environment.
-// Set VITE_API_MODE=real (or flip the literal below) once the backend is live.
-export const API_MODE: 'mock' | 'real' =
-  (import.meta.env.VITE_API_MODE as string | undefined) === 'real' ? 'real' : 'mock';
+declare const __HVAC_WEB_BUILD_TARGET__: 'demo' | 'real' | undefined;
+
+const buildTarget = typeof __HVAC_WEB_BUILD_TARGET__ === 'undefined'
+  ? undefined
+  : __HVAC_WEB_BUILD_TARGET__;
+
+// Real builds always use authoritative APIs. Demo remains mock-first, while
+// VITE_API_MODE=real is retained for local integration profiles.
+export const API_MODE: 'mock' | 'real' = buildTarget === 'real'
+  || import.meta.env.VITE_API_MODE === 'real'
+  ? 'real'
+  : 'mock';
 export const USE_MOCK = API_MODE === 'mock';
 
 export const WS_PATH = '/ws/telemetry';

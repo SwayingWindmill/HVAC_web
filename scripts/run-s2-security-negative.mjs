@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
-const output = resolve(root, 'out/s2-ticket-10/security-command-evidence.json');
+const output = resolve(root, 'out/s2-security-observability/security-command-evidence.json');
 const npmExecPath = process.env.npm_execpath;
 if (!npmExecPath) throw new Error('npm_execpath is unavailable; run this script through npm');
 const scripts = [

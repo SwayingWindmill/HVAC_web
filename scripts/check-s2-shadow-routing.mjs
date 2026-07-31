@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
-const output = resolve(root, 'out/s2-ticket-08/shadow-routing.json');
+const output = resolve(root, 'out/s2-shadow-routing/shadow-routing.json');
 const readJSON = async (path) => JSON.parse(await readFile(resolve(root, path), 'utf8'));
 const text = async (path) => readFile(resolve(root, path), 'utf8');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
@@ -118,8 +118,8 @@ await writeFile(output, `${JSON.stringify({
   timestampAgreementThreshold: 0.995,
   comparatorSideEffectFree: true,
   rollbackRequiresSessionInvalidation: true,
-  harnessEvidence: 'out/s2-ticket-08/shadow-routing-harness.json',
-  comparisonEvidence: 'out/s2-ticket-08/shadow-comparison.json',
+  harnessEvidence: 'out/s2-shadow-routing/shadow-routing-harness.json',
+  comparisonEvidence: 'out/s2-shadow-routing/shadow-comparison.json',
   generatedAt: new Date().toISOString(),
 }, null, 2)}\n`);
 console.log(`S2 Ticket 08 shadow routing passed: ${output}`);

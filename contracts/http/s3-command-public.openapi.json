@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "S3 Command Public API",
-    "version": "0.3.0-disabled-command-ux-baseline",
-    "description": "Implemented Command detail, timeline and approval UX baseline. Routes remain registered disabled and permit no production Device control."
+    "version": "0.4.0-disabled-real-site-scope",
+    "description": "Adds authoritative Organization and Site scope to Command projections for Real UI validation. Routes remain registered disabled and permit no production Device control."
   },
   "servers": [
     { "url": "/" }
@@ -186,6 +186,8 @@
         "required": [
           "schemaVersion",
           "commandId",
+          "organizationId",
+          "siteId",
           "deviceId",
           "capability",
           "capabilityRevision",
@@ -205,6 +207,8 @@
         "properties": {
           "schemaVersion": { "type": "integer", "const": 1 },
           "commandId": { "type": "string" },
+          "organizationId": { "type": "string", "format": "uuid" },
+          "siteId": { "type": "string", "format": "uuid" },
           "deviceId": { "type": "string" },
           "capability": { "type": "string", "enum": ["SET_TEMPERATURE_SETPOINT"] },
           "capabilityRevision": { "type": "string" },

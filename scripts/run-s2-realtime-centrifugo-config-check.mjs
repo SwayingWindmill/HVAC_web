@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { pullDockerImageWithRetry } from './lib/docker-pull-retry.mjs';
 
 const root = resolve(process.cwd());
-const output = resolve(root, 'out/s2-ticket-06/centrifugo-config.json');
+const output = resolve(root, 'out/s2-realtime-backend/centrifugo-config.json');
 const lock = JSON.parse(await readFile(resolve(root, 'pocs/platform-components/versions.lock.json'), 'utf8'));
 const image = lock.components?.centrifugo?.image;
 

@@ -73,6 +73,6 @@ for (const forbidden of ["from './telemetry'", '/telemetry/devices/${deviceId}/l
 assert(legacyRest.includes('currentStateRetired') && legacyRest.includes('compatibilityRuntime.live.open') && legacyRest.includes('/telemetry/devices/${deviceId}/timeseries'), 'browser compatibility hooks are not S2-backed, fail-closed, or historical-only');
 assert(!apiIndex.includes("from './telemetry'") && !headerSource.includes('telemetry.getStatus') && headerSource.includes('must not claim a global Socket.IO connection'), 'browser barrel or header still depends on the Legacy realtime client');
 assert(rolloutTest.includes('TestS2FullPromotionSequenceAndR8RetirementAccepted'), 'ownership registry lacks full R1-R8 promotion coverage');
-for (const script of ['s2:cutover:check', 's2:cutover:preflight', 's2:completion:verify', 'test:s2-cutover', 's2:ticket-12']) assert(packageJSON.scripts?.[script], `package script ${script} is missing`);
+for (const script of ['s2:cutover:check', 's2:cutover:preflight', 's2:completion:verify', 'test:s2-cutover', 's2:telemetry-cutover']) assert(packageJSON.scripts?.[script], `package script ${script} is missing`);
 assert(!packageJSON.scripts?.['test:s2-legacy-retirement'] && !packageJSON.scripts?.['build:s2-legacy-retirement'], 'root clean runner must not depend on the ignored nested backend repository');
 console.log('S2 Ticket 12 cutover, retirement, and completion assets passed.');

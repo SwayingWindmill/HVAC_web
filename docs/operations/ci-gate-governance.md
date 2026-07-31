@@ -38,7 +38,7 @@ Ticket identifiers are historical evidence, not permanent CI architecture. Durab
 | retired numbered `rms-*` and `rms-ticket-*` | `RMS Web Build`, `RMS Web Auth`, `RMS Web Routing`, `RMS Web Browser`, `RMS Web Certification` |
 | `s0-*` | `platform-contracts`, `platform-auth`, `platform-durability`, `platform-security`, `platform-release` |
 | retired `s1-ticket-*` | `S1 Registry Core`, `S1 IAM Provider POC`, `S1 Registry Migration`, `S1 Registry Routing`, `S1 Registry Web` |
-| `s2-*` | `telemetry-contracts`, `telemetry-postgres`, `telemetry-realtime`, `telemetry-history`, `telemetry-web`, `telemetry-release` |
+| S2 telemetry workflows | `telemetry-baseline`, `iam-authorization`, `telemetry-runtime-snapshot`, `telemetry-ingest`, `gateway-snapshot`, `realtime-backend`, `telemetry-live-client`, `shadow-routing`, `hvac-web-presence`, `security-observability`, `telemetry-release`, `telemetry-cutover` |
 | retired `s3-ticket-*` | `S3 Command Safety`, `S3 Command Authority`, `S3 Command API`, `S3 ThingsBoard Contract`, `S3 Command UX`, `S3 Command Certification` |
 
 ## Migration order
@@ -48,7 +48,7 @@ Ticket identifiers are historical evidence, not permanent CI architecture. Durab
 - Codify the gate rules in `AGENTS.md`.
 - Keep release-specific PR validation lightweight.
 - Run formal evidence, images, capacity and rollout jobs only on affected `main`, a tag or explicit dispatch.
-- Record the existing orphan `scripts/run-s2-realtime-postgres-tests.mjs`; either wire its durable PostgreSQL assertion into `telemetry-realtime` or delete it after equivalent coverage is proven.
+- Keep Realtime PostgreSQL durability evidence inside the stable `realtime-backend` capability: `s2:realtime:postgres` replaces the generic baseline fixture and writes `out/s2-realtime-backend/realtime-postgres.json` without adding a second database job.
 
 ### Initial implementation
 
@@ -90,6 +90,8 @@ The next release-layer slice removes the duplicated S0 `release-evidence-pr` Kin
 
 The RMS topology slice replaces eight numbered workflows with five stable capability suites. `RMS Web Routing` runs the complete Ticket 07 policy-test superset instead of relaunching the cumulative Ticket 03–07 build wrappers, while `RMS Web Browser` runs the two distinct Windows browser audits once with one checkout and dependency installation. Build and certification evidence now use `out/rms-web-build` and `out/rms-web-certification`. Every RMS workflow watches and executes `rms:topology:check`, which rejects restored numbered workflows, Ticket commands and Ticket-scoped evidence paths.
 
+The S2 topology migration replaces the twelve `s2:ticket-01` through `s2:ticket-12` package entry points with commands named after the existing telemetry capabilities. Evidence now uses capability-scoped directories for baseline, IAM, runtime Snapshot, ingest, Gateway Snapshot, realtime, live client, shadow routing, HVAC Web, security/observability and release, while cutover keeps the established completion-evidence directory. Every capability command executes `s2:topology:check` first; the shared gate verifies workflow, command, artifact and evidence-directory mappings, and rejects restored Ticket commands, Ticket-named workflows or numbered evidence paths. Historical Go harness names remain unchanged because they are implementation entry points rather than CI topology or evidence ownership.
+
 The first capability-consolidation slice replaces `S1 Ticket 01 Contract and Ownership` and `S1 Ticket 03 Core Registry Read Service` with the stable `S1 Registry Core` workflow. The new suite keeps the union of contract generation, ownership validation, SQLC POC, Registry baseline, IAM/Core build and security checks, plus one stable PostgreSQL evidence job. Shared Registry changes therefore use one Node/Go setup per capability job instead of launching two Ticket wrappers and two equivalent PostgreSQL baselines. `s1:registry:check` enforces the stable workflow markers and prevents the retired Ticket files and Ticket-scoped evidence paths from returning.
 
 The final S1 topology slice renames the remaining Ticket 02, 04, 05 and 06 wrappers to `S1 IAM Provider POC`, `S1 Registry Migration`, `S1 Registry Routing` and `S1 Registry Web`. Five stable capability commands replace Ticket 01–06 package entry points, and evidence now lives under capability-scoped directories. Every S1 workflow watches and executes `s1:topology:check`, which rejects restored Ticket workflows or commands and verifies that S2 IAM continues to consume the stable Registry Core PostgreSQL evidence.
@@ -113,17 +115,23 @@ The final S3 topology slice renames the remaining Ticket 01, 04, 06 and 08 wrapp
 - Run broad regression after merge and formal certification only for a release candidate.
 - Track flaky checks as defects with an owner and expiry instead of silently retrying or making them optional.
 
+## Nightly full regression
+
+`.github/workflows/nightly-full-regression.yml` runs daily at 18:00 UTC and supports manual dispatch. It reuses `scripts/run-pr-gate.mjs` to execute the complete static, contract, unit, integration and browser profile sets across Linux and Windows. Pull requests remain affected-path selective, while the nightly workflow provides cross-domain coverage, including the Operations Agent service checks, benchmark tests and PostgreSQL integration. Static, integration and browser evidence is uploaded with a 14-day retention period so failures remain inspectable after ephemeral runners are removed.
+
 ## Required-check target
 
-The eventual branch rule should require stable aggregate checks rather than every historical job:
+`.github/workflows/pr-gates.yml` provides the stable aggregate checks that the branch Ruleset requires:
 
 - `pr / static`
 - `pr / contracts`
 - `pr / affected-unit`
 - `pr / affected-integration`
-- `pr / affected-browser` when the change classifier marks browser impact
+- `pr / affected-browser`
 
-The classifier itself must fail closed: an unknown path selects the broader affected-domain suite, not no suite.
+The workflow has no path filter, so all five check names exist on every pull request. Conditional execution jobs may be skipped when a gate has no affected profiles, but the aggregate result still reports success or propagates the execution failure. Browser profiles retain their required platform boundary: RMS audits run on Windows, while S0, S1 and S2 browser audits run on Linux so Docker-backed fixtures remain available. `scripts/classify-pr-gates.mjs` owns path classification and writes `out/pr-gates/classification.json`; `scripts/run-pr-gate.mjs` owns the fixed command mapping. Unknown paths, workflow changes and root `package.json` changes fail closed to the broad suite. A `package-lock.json` change selects compile and unit coverage without automatically launching database or browser suites.
+
+Root package manifests are classified only by `PR Gates`. The 36 legacy domain workflows no longer list `package.json` or `package-lock.json` in their `push.paths` or `pull_request.paths`, eliminating 116 broad trigger entries while preserving each workflow's domain-specific paths and npm cache configuration. `scripts/test-pr-gate-classifier.mjs` scans every legacy workflow trigger block and fails if either root manifest is reintroduced.
 
 ## Gate acceptance record
 

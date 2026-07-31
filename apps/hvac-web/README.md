@@ -15,4 +15,4 @@ npm run lint
 npm run build
 ```
 
-该目录只负责浏览器端产品界面。CopilotKit Runtime 和 EnergyAgent 分别位于 `runtimes/copilot-runtime` 与 `agents/energy-agent`。
+该目录只负责浏览器端产品界面。当前 AI 功能使用本地只读 `HvacMockAgent`；未来 Operations Agent 通过 Platform Gateway 接入，不允许浏览器直连 Agent Runtime。

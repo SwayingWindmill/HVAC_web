@@ -9,8 +9,6 @@ on:
       - 'go.work'
       - 'infra/s1-registry/postgres/init/006-s2-telemetry-authorization.sql'
       - 'libs/telemetryauth/**'
-      - 'package.json'
-      - 'package-lock.json'
       - 'scripts/check-ownership-registries.mjs'
       - 'scripts/check-s0-release-evidence-assets.mjs'
       - 'scripts/check-s2-iam-authorization.mjs'
@@ -26,8 +24,6 @@ on:
       - 'go.work'
       - 'infra/s1-registry/postgres/init/006-s2-telemetry-authorization.sql'
       - 'libs/telemetryauth/**'
-      - 'package.json'
-      - 'package-lock.json'
       - 'scripts/check-ownership-registries.mjs'
       - 'scripts/check-s0-release-evidence-assets.mjs'
       - 'scripts/check-s2-iam-authorization.mjs'
@@ -57,11 +53,11 @@ jobs:
           node-version: '22.22.0'
           cache: npm
       - run: npm ci
-      - run: npm run s2:ticket-02
+      - run: npm run s2:iam-authorization
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: s2-ticket-02-iam-authorization-evidence
-          path: out/s2-ticket-02/iam-authorization-evidence.json
+          name: s2-iam-authorization-evidence
+          path: out/s2-iam-authorization/iam-authorization-evidence.json
           if-no-files-found: error
           retention-days: 14

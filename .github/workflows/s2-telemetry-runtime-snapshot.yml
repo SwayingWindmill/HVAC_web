@@ -15,7 +15,6 @@ on:
       - "scripts/run-s2-telemetry-postgres-tests.mjs"
       - "scripts/run-s2-telemetry-runtime-postgres-tests.mjs"
       - "scripts/check-s0-release-evidence-assets.mjs"
-      - "package.json"
       - "go.work"
       - "go.work.sum"
   push:
@@ -47,12 +46,12 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm run s2:ticket-03
+      - run: npm run s2:telemetry-runtime-snapshot
       - name: Upload Ticket 03 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: s2-telemetry-runtime-snapshot-evidence
-          path: out/s2-ticket-03
+          path: out/s2-telemetry-runtime-snapshot
           if-no-files-found: error
           retention-days: 14
