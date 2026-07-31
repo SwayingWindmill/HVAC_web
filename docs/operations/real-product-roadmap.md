@@ -16,7 +16,7 @@ Deliver an authoritative, Site-scoped HVAC operations product in which every vis
 | 2 | Real Dashboard | In review | PR #165 provides the first authoritative Site overview. |
 | 3 | Complete Energy | Merged | PR #167 delivered calendar workspaces, comparisons, drill-down, and protected query lifecycle. |
 | 4 | Real Commands | Merged | PR #169 delivered authoritative Site scope, local-only governed Command evidence, and a production-disabled control boundary. |
-| 5 | Alarm | In progress | Issue #170 and branch `feat/real-alarms` establish an independent read-only Alarm owner, strict lifecycle contract, and local browser certification while production routes remain disabled. |
+| 5 | Alarm | In review | PR #171 establishes an independent read-only Alarm owner, strict lifecycle contract, Site list/detail, and browser certification while production routes remain disabled. |
 | 6 | Work Order | Planned | Must be a separate durable domain linked to, but not collapsed into, Alarm. |
 | 7 | FDD | Planned | Requires governed evidence from Assets, Telemetry, Energy, Alarm, and Work Order. |
 | 8 | Optimization | Planned | Requires FDD and Energy evidence plus explicit safety and approval boundaries. |
