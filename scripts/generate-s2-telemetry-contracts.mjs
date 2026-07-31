@@ -28,7 +28,8 @@ const openAPI = JSON.parse(openAPIText);
 const eventContract = JSON.parse(eventText);
 const toolingLock = JSON.parse(toolingLockText);
 const compatibility = JSON.parse(compatibilityText);
-const normalizedDigest = (text) => createHash('sha256').update(text.replace(/\r\n?/g, '\n')).digest('hex');
+const normalizeLineEndings = (text) => text.replace(/\r\n?/g, '\n');
+const normalizedDigest = (text) => createHash('sha256').update(normalizeLineEndings(text)).digest('hex');
 const openAPIDigest = normalizedDigest(openAPIText);
 const eventDigest = normalizedDigest(eventText);
 
@@ -322,14 +323,14 @@ async function emit(path, content) {
     if (error.code !== 'ENOENT') throw error;
   }
   if (checkOnly) {
-    if (existing !== content) {
+    if (existing === null || normalizeLineEndings(existing) !== normalizeLineEndings(content)) {
       process.stderr.write(`Generated S2 contract drift: ${path}\n`);
       process.exitCode = 1;
     }
     return;
   }
   await mkdir(dirname(path), { recursive: true });
-  if (existing !== content) await writeFile(path, content, 'utf8');
+  if (existing === null || normalizeLineEndings(existing) !== normalizeLineEndings(content)) await writeFile(path, content, 'utf8');
 }
 
 await Promise.all([

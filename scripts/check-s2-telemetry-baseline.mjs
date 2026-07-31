@@ -85,8 +85,9 @@ const [
 ]);
 const openAPI = JSON.parse(openAPIText);
 const publication = JSON.parse(publicationText);
-const openAPIDigest = createHash('sha256').update(openAPIText).digest('hex');
-const publicationDigest = createHash('sha256').update(publicationText).digest('hex');
+const normalizedDigest = (text) => createHash('sha256').update(text.replace(/\r\n?/g, '\n')).digest('hex');
+const openAPIDigest = normalizedDigest(openAPIText);
+const publicationDigest = normalizedDigest(publicationText);
 
 assert(compatibility.schemaVersion === 1, 'compatibility lock schema version drifted');
 assert(compatibility.predecessorContractVersion === '1.0.0-planned', 'predecessor contract version drifted');
