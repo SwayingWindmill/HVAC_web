@@ -124,6 +124,7 @@ const createPorts = (persistence, identities) => ({
       return {
         decision: 'ALLOW',
         decisionId: 'postgres-night-energy-allow',
+        policyRevision: 'operations-policy-1',
         toolDelegationGrants: {
           'registry.getSite': 'postgres-registry-site-grant',
           'registry.listSiteEquipment': 'postgres-registry-equipment-grant',
@@ -151,13 +152,13 @@ const createPorts = (persistence, identities) => ({
   leaseDurationMs: 86_400_000,
 });
 
-const journalCounts = async (pool) => {
+const journalCounts = async (pool, targetInvestigationId = investigationId) => {
   const [investigation, records, effects, outbox, audit] = await Promise.all([
-    pool.query('SELECT revision::int FROM agent_operations.investigations WHERE investigation_id = $1', [investigationId]),
-    pool.query('SELECT count(*)::int AS count FROM agent_operations.investigation_business_records WHERE investigation_id = $1', [investigationId]),
-    pool.query('SELECT count(*)::int AS count FROM agent_operations.investigation_effects WHERE investigation_id = $1', [investigationId]),
-    pool.query('SELECT count(*)::int AS count FROM agent_operations.application_outbox WHERE investigation_id = $1', [investigationId]),
-    pool.query('SELECT count(*)::int AS count FROM agent_operations.audit_records WHERE investigation_id = $1', [investigationId]),
+    pool.query('SELECT revision::int FROM agent_operations.investigations WHERE investigation_id = $1', [targetInvestigationId]),
+    pool.query('SELECT count(*)::int AS count FROM agent_operations.investigation_business_records WHERE investigation_id = $1', [targetInvestigationId]),
+    pool.query('SELECT count(*)::int AS count FROM agent_operations.investigation_effects WHERE investigation_id = $1', [targetInvestigationId]),
+    pool.query('SELECT count(*)::int AS count FROM agent_operations.application_outbox WHERE investigation_id = $1', [targetInvestigationId]),
+    pool.query('SELECT count(*)::int AS count FROM agent_operations.audit_records WHERE investigation_id = $1', [targetInvestigationId]),
   ]);
   return {
     revision: investigation.rows[0].revision,
@@ -257,4 +258,83 @@ test('PostgreSQL resumes a checkpointed night-energy Run without duplicate busin
     }],
   });
   assert.deepEqual(await journalCounts(operationsPool), committedCounts);
+});
+
+test('PostgreSQL commits Operator Input atomically and exact retry survives restart', async (t) => {
+  const operatorInvestigationId = 'investigation-postgres-operator-input-001';
+  const operatorRunId = 'run-postgres-operator-input-001';
+  const firstLeaseId = 'lease-postgres-operator-input-001';
+  const resumedLeaseId = 'lease-postgres-operator-input-002';
+  const requestId = 'operator-input-request-postgres-001';
+  const recordId = 'operator-input-record-postgres-001';
+  const idempotencyKey = 'operator-input-retry-postgres-001';
+  let persistence = createPostgresOperationsAgentPersistence({
+    operationsConnectionString,
+    checkpointsConnectionString,
+    checkpointRetentionMs: 86_400_000,
+    now: () => currentTime,
+  });
+  const operationsPool = new Pool({ connectionString: operationsConnectionString, max: 1 });
+  t.after(async () => {
+    await persistence.close();
+    await operationsPool.end();
+  });
+
+  const ports = createPorts(persistence, {
+    investigation: [operatorInvestigationId],
+    run: [operatorRunId],
+    lease: [firstLeaseId, resumedLeaseId],
+    'operator-input-request': [requestId],
+    'operator-input-record': [recordId],
+  });
+  const application = createSiteNightEnergyInvestigationCoordinator(ports);
+  const started = await application.start({ organizationId, siteId });
+  const waiting = await application.requestOperatorInput({ investigationId: started.id });
+  assert.equal(waiting.status, 'WAITING_FOR_OPERATOR_INPUT');
+  assert.equal(waiting.activeRun.id, started.activeRun.id);
+  assert.equal(waiting.operatorInputRequest.id, requestId);
+
+  const command = {
+    investigationId: started.id,
+    requestId,
+    expectedRevision: waiting.revision,
+    idempotencyKey,
+    values: {
+      analysisScope: 'SITE_ONLY',
+      operatorNote: 'Persist one bounded Operator decision.',
+    },
+  };
+  const accepted = await application.acceptOperatorInput(command);
+  assert.equal(accepted.outcome, 'COMMITTED');
+  assert.equal(accepted.investigation.status, 'RUNNING');
+  assert.equal(accepted.investigation.activeRun.id, operatorRunId);
+  assert.equal(accepted.investigation.acceptedOperatorInputs.length, 1);
+  assert.equal(accepted.investigation.acceptedOperatorInputs[0].id, recordId);
+  const committedCounts = await journalCounts(operationsPool, operatorInvestigationId);
+  assert.equal(committedCounts.records, 1);
+  assert.equal(committedCounts.effects, 0);
+  const acceptedRows = await operationsPool.query(
+    `SELECT count(*)::int AS count
+       FROM agent_operations.investigation_business_records
+      WHERE investigation_id = $1 AND record_type = 'OPERATOR_INPUT_ACCEPTED'`,
+    [operatorInvestigationId],
+  );
+  assert.equal(acceptedRows.rows[0].count, 1);
+
+  await persistence.close();
+  persistence = createPostgresOperationsAgentPersistence({
+    operationsConnectionString,
+    checkpointsConnectionString,
+    checkpointRetentionMs: 86_400_000,
+    now: () => currentTime,
+  });
+  const restarted = createSiteNightEnergyInvestigationCoordinator(createPorts(persistence, {}));
+  const retry = await restarted.acceptOperatorInput(command);
+  assert.equal(retry.outcome, 'DUPLICATE');
+  assert.equal(retry.investigation.acceptedOperatorInputs[0].id, recordId);
+  assert.equal(retry.investigation.activeRun.id, operatorRunId);
+  assert.deepEqual(await journalCounts(operationsPool, operatorInvestigationId), committedCounts);
+  const reloaded = await restarted.get({ investigationId: operatorInvestigationId });
+  assert.equal(reloaded.acceptedOperatorInputs.length, 1);
+  assert.equal(reloaded.acceptedOperatorInputs[0].idempotencyKey, idempotencyKey);
 });
