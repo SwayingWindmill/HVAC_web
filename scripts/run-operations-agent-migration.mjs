@@ -15,6 +15,10 @@ const targets = Object.freeze({
         root,
         'services/operations-agent-service/migrations/operations/002_typed_business_records.sql',
       ),
+      resolve(
+        root,
+        'services/operations-agent-service/migrations/operations/003_operator_input_interrupt.sql',
+      ),
     ],
   },
   checkpoints: {

@@ -33,6 +33,7 @@
     "GET /api/v1/sites/{siteId}/operations/investigations/{investigationId}": { "revision": 1, "owner": "operations-agent-service" },
     "GET /api/v1/sites/{siteId}/operations/investigations/{investigationId}/events": { "revision": 1, "owner": "operations-agent-service" },
     "POST /api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance": { "revision": 1, "owner": "operations-agent-service" },
+    "POST /api/v1/sites/{siteId}/operations/investigations/{investigationId}:submit-operator-input": { "revision": 1, "owner": "operations-agent-service" },
     "POST /api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel": { "revision": 1, "owner": "operations-agent-service" },
     "GET /api/v1/sites/{siteId}/alarms": { "revision": 2, "owner": "alarm-service" },
     "GET /api/v1/sites/{siteId}/alarms/{alarmId}": { "revision": 2, "owner": "alarm-service" },

@@ -3,11 +3,15 @@ import { createPlatformGatewayClient } from './generated/platformGateway.gen';
 import {
   operationsInvestigationListSchema,
   operationsInvestigationViewSchema,
+  operationsOperatorInputSubmissionRequestSchema,
+  operationsOperatorInputSubmissionSchema,
   parseOperationsAgUiEventStream,
   type OperationsAgUiStreamBatch,
   type OperationsAgUiStreamRecovery,
   type OperationsInvestigationList,
   type OperationsInvestigationView,
+  type OperationsOperatorInputSubmission,
+  type OperationsOperatorInputValues,
   type ParsedOperationsAgUiEvent,
 } from './operations-contract';
 
@@ -40,6 +44,13 @@ export interface ScopedOperationsRequestOptions {
   readonly recoveryPosition?: string;
   readonly fetchImplementation?: typeof fetch;
   readonly baseUrl?: string;
+}
+
+export interface SubmitOperatorInputCommand {
+  readonly requestId: string;
+  readonly expectedRevision: number;
+  readonly idempotencyKey: string;
+  readonly values: OperationsOperatorInputValues;
 }
 
 const platformClient = createPlatformGatewayClient();
@@ -172,6 +183,56 @@ export async function advanceSiteNightEnergyInvestigation(
   );
 }
 
+export async function submitSiteNightEnergyOperatorInput(
+  investigationId: string,
+  command: SubmitOperatorInputCommand,
+  options: ScopedOperationsRequestOptions,
+): Promise<OperationsOperatorInputSubmission> {
+  const idempotencyKey = command.idempotencyKey.trim();
+  if (!idempotencyKey || idempotencyKey.length > 256) {
+    throw new OperationsApiError(
+      400,
+      'IDEMPOTENCY_KEY_REQUIRED',
+      'Operator Input 提交需要有效的 Idempotency Key。',
+    );
+  }
+  const requestBody = operationsOperatorInputSubmissionRequestSchema.parse({
+    schemaVersion: 1,
+    requestId: command.requestId,
+    expectedRevision: command.expectedRevision,
+    values: command.values,
+  });
+  const csrfToken = await csrfCapability(options);
+  const fetchImplementation = options.fetchImplementation ?? globalThis.fetch.bind(globalThis);
+  const response = await fetchImplementation(
+    `${options.baseUrl ?? ''}${pathFor(options.trustedSiteId, `/${encodeURIComponent(investigationId)}:submit-operator-input`)}`,
+    {
+      method: 'POST',
+      credentials: 'same-origin',
+      signal: options.signal,
+      headers: {
+        Accept: 'application/json, application/problem+json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken,
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify(requestBody),
+    },
+  );
+  if (!response.ok) throw await problemFrom(response);
+  const parsed = operationsOperatorInputSubmissionSchema.parse(await response.json());
+  if (parsed.investigation.id !== investigationId) {
+    throw new OperationsApiError(
+      502,
+      'OPERATIONS_CONTRACT_INVALID',
+      'Operator Input 响应与请求的 Investigation 不一致。',
+      true,
+    );
+  }
+  ensureScope(parsed.investigation, options);
+  return parsed;
+}
+
 const streamPositionPattern = /^(0|[1-9]\d*):(0|[1-9]\d*)$/u;
 
 function streamRecoveryFrom(
@@ -269,6 +330,11 @@ export type {
   OperationsInvestigationStateSnapshot,
   OperationsInvestigationSummary,
   OperationsInvestigationView,
+  OperationsOperatorInputAccepted,
+  OperationsOperatorInputRequest,
+  OperationsOperatorInputSubmission,
+  OperationsOperatorInputSubmissionRequest,
+  OperationsOperatorInputValues,
   OperationsRequiredNext,
   OperationsStreamRecoveryMode,
   OperationsStreamRecoveryReason,

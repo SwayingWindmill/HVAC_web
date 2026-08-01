@@ -12,12 +12,18 @@ export {
   type InvestigationBusinessRecord,
   type InvestigationBusinessRecordErrorCode,
   type InvestigationBusinessRecordType,
+  type OperatorInputAcceptedProvenance,
+  type OperatorInputAcceptedRecord,
+  type OperatorInputAcceptedValues,
+  type OperatorInputRequestView,
   type ToolExecutionReceiptRecord,
 } from '../domain/index.js';
 
 export {
   InvestigationCoordinatorError,
   createInvestigationCoordinator,
+  type AcceptOperatorInputCommand,
+  type AcceptOperatorInputResult,
   type AdvanceInvestigationCommand,
   type AdvanceInvestigationResult,
   type CancelInvestigationCommand,
@@ -28,6 +34,7 @@ export {
   type InvestigationCoordinator,
   type InvestigationCoordinatorErrorCode,
   type ReopenInvestigationCommand,
+  type RequestOperatorInputCommand,
   type ResumeInvestigationCommand,
   type RunLeaseMutationCommand,
   type StartInvestigationCommand,
@@ -64,6 +71,8 @@ export {
 
 export {
   createSiteNightEnergyInvestigationCoordinator,
+  type AcceptSiteNightEnergyOperatorInputCommand,
+  type AcceptSiteNightEnergyOperatorInputResult,
   type ListSiteNightEnergyInvestigationsQuery,
   type SiteNightEnergyActiveRunView,
   type SiteNightEnergyInvestigationCoordinator,

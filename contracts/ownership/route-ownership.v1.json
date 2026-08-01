@@ -951,6 +951,25 @@
     },
     {
       "method": "POST",
+      "path": "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:submit-operator-input",
+      "owner": "operations-agent-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "primary",
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false
+    },
+    {
+      "method": "POST",
       "path": "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel",
       "owner": "operations-agent-service",
       "publicIngress": "platform-gateway",

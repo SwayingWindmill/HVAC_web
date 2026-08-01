@@ -18,6 +18,7 @@ const organizationId = '01910000-0000-7000-8000-000000000001';
 const siteId = '01910000-0001-7000-8000-000000000001';
 const investigationId = 'investigation-browser-001';
 const unableInvestigationId = 'investigation-browser-unable';
+const operatorInputInvestigationId = 'investigation-browser-operator-input';
 const hiddenInvestigationId = 'hidden-investigation';
 const digest = (character) => `sha256:${character.repeat(64)}`;
 
@@ -40,7 +41,8 @@ function event(id, type, payload) {
 }
 
 function plan(status) {
-  const terminal = status !== 'RUNNING';
+  const terminal = status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+  const waiting = status === 'WAITING_FOR_OPERATOR_INPUT';
   return {
     schemaVersion: 1,
     id: 'site-night-energy-investigation',
@@ -51,7 +53,7 @@ function plan(status) {
     steps: [
       { id: 'READ_SITE_CONTEXT', label: 'Read authoritative Site context', status: 'COMPLETED' },
       { id: 'READ_ENERGY_SERIES', label: 'Read authoritative night-energy periods', status: 'COMPLETED' },
-      { id: 'ANALYZE', label: 'Run deterministic night-energy analysis', status: terminal ? 'COMPLETED' : 'IN_PROGRESS' },
+      { id: 'ANALYZE', label: 'Run deterministic night-energy analysis', status: terminal ? 'COMPLETED' : waiting ? 'PAUSED' : 'IN_PROGRESS' },
       { id: 'COMMIT_RESULT', label: 'Commit Evidence, Analysis and Finding', status: terminal ? 'COMPLETED' : 'PENDING' },
     ],
   };
@@ -265,6 +267,55 @@ function toolReceipts(id, activities) {
   }));
 }
 
+function operatorInputRequest(id) {
+  return {
+    schemaVersion: 1,
+    id: `${id}:operator-input-request`,
+    investigationId: id,
+    runId: `${id}:active-run`,
+    scope: scope(),
+    kind: 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION',
+    requestedAt: 9,
+    requestedBy: 'DETERMINISTIC_POLICY',
+    policyVersion: 'operator-input-policy/v1',
+    fields: [{
+      id: 'analysisScope',
+      type: 'SINGLE_SELECT',
+      required: true,
+      options: ['SITE_ONLY', 'DEFER'],
+    }, {
+      id: 'operatorNote',
+      type: 'SHORT_TEXT',
+      required: false,
+      maximumLength: 500,
+    }],
+  };
+}
+
+function acceptedOperatorInput(id, idempotencyKey) {
+  return {
+    schemaVersion: 1,
+    recordType: 'OPERATOR_INPUT_ACCEPTED',
+    id: `${id}:operator-input-accepted`,
+    investigationId: id,
+    recordedAt: 10,
+    requestId: `${id}:operator-input-request`,
+    runId: `${id}:active-run`,
+    idempotencyKey,
+    inputKind: 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION',
+    inputDigest: digest('f'),
+    scope: scope(),
+    values: { analysisScope: 'SITE_ONLY', operatorNote: 'Browser exact-retry acceptance.' },
+    provenance: {
+      actorType: 'OPERATOR',
+      source: 'PLATFORM_GATEWAY',
+      authorizationDecisionId: 'browser-operator-decision',
+      policyRevision: 'operations-policy-1',
+      submittedAt: 10,
+    },
+  };
+}
+
 function investigation(id, revision, status, outcome, activities = []) {
   const records = outcome === 'SUPPORTED_SITE_FINDING'
     ? supportedRecords(id)
@@ -278,9 +329,15 @@ function investigation(id, revision, status, outcome, activities = []) {
     status,
     revision,
     createdAt: id === unableInvestigationId ? 2 : 1,
-    activeRun: status === 'RUNNING' ? { id: `${id}:active-run`, status: 'ACTIVE', startedAt: 1 } : null,
+    activeRun: status === 'RUNNING'
+      ? { id: `${id}:active-run`, status: 'ACTIVE', startedAt: 1 }
+      : status === 'WAITING_FOR_OPERATOR_INPUT'
+        ? { id: `${id}:active-run`, status: 'WAITING_FOR_OPERATOR_INPUT', startedAt: 1 }
+        : null,
     outcome,
     ...records,
+    operatorInputRequest: status === 'WAITING_FOR_OPERATOR_INPUT' ? operatorInputRequest(id) : null,
+    acceptedOperatorInputs: [],
     toolReceipts: toolReceipts(id, activities),
   };
 }
@@ -359,6 +416,7 @@ function summary(view) {
     analysisReferenceCount: view.analysisReferences.length,
     findingCount: view.findings.length,
     toolReceiptCount: view.toolReceipts.length,
+    acceptedOperatorInputCount: view.acceptedOperatorInputs.length,
   };
 }
 
@@ -367,17 +425,99 @@ function createGatewayFixture() {
   let supportedEventRequestCount = 0;
   let hiddenRequestCount = 0;
   let listRequestCount = 0;
+  let operatorInputAccepted = false;
+  let operatorInputRetryAcknowledged = false;
+  let operatorInputIdempotencyKey = null;
+  const operatorInputSubmissions = [];
   const collectionPath = `/api/v1/sites/${siteId}/operations/investigations`;
   const itemPrefix = `${collectionPath}/`;
+  const operatorInputSubmitPath = `${itemPrefix}${operatorInputInvestigationId}:submit-operator-input`;
   const currentSupported = () => supportedEventRequestCount >= 3
     ? investigation(investigationId, 2, 'COMPLETED', 'SUPPORTED_SITE_FINDING', [stableActivity, finalActivity])
     : investigation(investigationId, 1, 'RUNNING', null, [stableActivity]);
   const unable = investigation(unableInvestigationId, 5, 'COMPLETED', 'UNABLE_TO_CONCLUDE', [stableActivity]);
+  const currentOperatorInput = () => {
+    if (!operatorInputRetryAcknowledged) {
+      return investigation(operatorInputInvestigationId, 7, 'WAITING_FOR_OPERATOR_INPUT', null, [stableActivity]);
+    }
+    const completed = investigation(
+      operatorInputInvestigationId,
+      8,
+      'COMPLETED',
+      'SUPPORTED_SITE_FINDING',
+      [stableActivity, finalActivity],
+    );
+    return {
+      ...completed,
+      acceptedOperatorInputs: [acceptedOperatorInput(operatorInputInvestigationId, operatorInputIdempotencyKey)],
+    };
+  };
 
-  const server = createHTTPServer((request, response) => {
+  const server = createHTTPServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://fixture.local');
+    if (request.method === 'GET' && url.pathname === '/api/v1/principal') {
+      json(response, {
+        principal: {
+          subject: 'operations-reconnect-audit',
+          issuer: 'https://identity.example.test',
+          displayName: 'Operations Auditor',
+          email: '',
+          roles: ['operator'],
+        },
+        context: {
+          initiatingPrincipal: {
+            subject: 'operations-reconnect-audit',
+            issuer: 'https://identity.example.test',
+            displayName: 'Operations Auditor',
+            email: '',
+            roles: ['operator'],
+          },
+          executingServicePrincipal: {
+            service: 'platform-gateway',
+            spiffeId: 'spiffe://hvac.local/platform-gateway',
+          },
+          actingOrganizationId: organizationId,
+          audience: 'iam-service',
+          policyRevision: 'operations-policy-1',
+          delegationExpiresAt: '2026-08-02T00:00:00.000Z',
+        },
+        authorization: {
+          capabilitySetVersion: 3,
+          policyRevision: 'operations-policy-1',
+          capabilities: ['site.read'],
+        },
+        session: {
+          id: 'operations-reconnect-session',
+          expiresAt: '2026-08-02T00:00:00.000Z',
+          csrfToken: '[REDACTED_SECRET]',
+          revocationObjectiveMs: 30_000,
+          lastAuditMessageId: 'operations-reconnect-audit-message',
+        },
+      });
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === operatorInputSubmitPath) {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      const idempotencyKey = String(request.headers['idempotency-key'] ?? '');
+      operatorInputSubmissions.push({ idempotencyKey, body });
+      if (!operatorInputAccepted) {
+        operatorInputAccepted = true;
+        operatorInputIdempotencyKey = idempotencyKey;
+        problem(response, 502, 'OPERATIONS_AGENT_BAD_GATEWAY', 'Synthetic response loss after atomic acceptance.', true);
+        return;
+      }
+      if (idempotencyKey !== operatorInputIdempotencyKey) {
+        problem(response, 409, 'DUPLICATE_EFFECT', 'Exact retry must reuse the original identity.', false);
+        return;
+      }
+      operatorInputRetryAcknowledged = true;
+      json(response, { outcome: 'DUPLICATE', investigation: currentOperatorInput() });
+      return;
+    }
     if (request.method !== 'GET') {
-      problem(response, 405, 'METHOD_NOT_ALLOWED', 'Fixture accepts GET only.', false);
+      problem(response, 405, 'METHOD_NOT_ALLOWED', 'Fixture accepts this method only on the Operator Input route.', false);
       return;
     }
     if (url.pathname === collectionPath) {
@@ -397,13 +537,51 @@ function createGatewayFixture() {
     const isEvents = relative.endsWith('/events');
     const encodedId = isEvents ? relative.slice(0, -'/events'.length) : relative;
     const requestedId = decodeURIComponent(encodedId);
-    if (requestedId !== investigationId && requestedId !== unableInvestigationId) {
+    if (requestedId !== investigationId
+      && requestedId !== unableInvestigationId
+      && requestedId !== operatorInputInvestigationId) {
       hiddenRequestCount += 1;
       problem(response, 404, 'RESOURCE_NOT_FOUND', 'The Investigation is not visible.', false);
       return;
     }
     if (!isEvents) {
-      json(response, requestedId === investigationId ? currentSupported() : unable);
+      json(response, requestedId === investigationId
+        ? currentSupported()
+        : requestedId === unableInvestigationId
+          ? unable
+          : currentOperatorInput());
+      return;
+    }
+
+    if (requestedId === operatorInputInvestigationId) {
+      const view = currentOperatorInput();
+      const current = stream(
+        operatorInputInvestigationId,
+        view.revision,
+        view.status,
+        view.outcome,
+        view.toolReceipts.map((receipt) => ({
+          recordId: receipt.id,
+          logicalTool: receipt.logicalTool,
+          owner: receipt.owner,
+          resultCategory: receipt.resultCategory,
+          startedAt: receipt.startedAt,
+          completedAt: receipt.completedAt,
+        })),
+      );
+      const projected = current.body.replace(
+        '"acceptedOperatorInputs":[]',
+        `"acceptedOperatorInputs":${JSON.stringify(view.acceptedOperatorInputs)}`,
+      );
+      response.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-store, no-transform',
+        'x-operations-recovery-mode': 'FULL_SNAPSHOT',
+        'x-operations-recovery-reason': 'INITIAL',
+        'x-operations-snapshot-position': `${view.revision}:1`,
+        'x-operations-latest-position': current.latest,
+      });
+      response.end(projected);
       return;
     }
 
@@ -444,6 +622,7 @@ function createGatewayFixture() {
   return {
     server,
     requests,
+    operatorInputSubmissions,
     hiddenRequests: () => hiddenRequestCount,
     listRequests: () => listRequestCount,
   };
@@ -651,6 +830,78 @@ try {
   assert(fixture.requests[1].recoveryPosition === '1:5' && fixture.requests[2].recoveryPosition === '1:5', 'reconnect did not retain the stable last position');
   assertions.push('stable-last-event-id-across-retry');
 
+  await evaluate(cdpClient, `(() => {
+    history.pushState(null, '', '?investigation=${operatorInputInvestigationId}');
+    dispatchEvent(new PopStateEvent('popstate'));
+  })()`);
+  let operatorWaiting = null;
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    operatorWaiting = await evaluate(cdpClient, `({
+      status: document.querySelector('.operations-workspace')?.getAttribute('data-investigation-status') ?? null,
+      form: Boolean(document.querySelector('.operations-operator-input-form')),
+      advanceDisabled: document.querySelector('.operations-open button[title="先提交当前 Operator Input。"]')?.disabled ?? false,
+      text: document.body?.innerText ?? '',
+    })`);
+    if (operatorWaiting.status === 'WAITING_FOR_OPERATOR_INPUT'
+      && operatorWaiting.form
+      && operatorWaiting.advanceDisabled
+      && operatorWaiting.text.includes('ACTION REQUIRED')) break;
+    await pause(100);
+  }
+  assert(operatorWaiting?.status === 'WAITING_FOR_OPERATOR_INPUT' && operatorWaiting.form, `Operator Input form did not stabilize: ${JSON.stringify(operatorWaiting)}`);
+  assert(operatorWaiting.advanceDisabled, 'ordinary advance remained enabled during Operator Input interrupt');
+
+  const submitOperatorInput = async () => evaluate(cdpClient, `(() => {
+    const note = document.querySelector('#operations-operator-note');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(note, 'Browser exact-retry acceptance.');
+    note.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('.operations-operator-input-form button[type="submit"]').click();
+    return true;
+  })()`);
+  await submitOperatorInput();
+  let ambiguousFailureVisible = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const state = await evaluate(cdpClient, `({
+      alert: document.querySelector('[role="alert"]')?.innerText ?? '',
+      form: Boolean(document.querySelector('.operations-operator-input-form')),
+    })`);
+    if (state.form && state.alert.includes('Synthetic response loss after atomic acceptance.')) {
+      ambiguousFailureVisible = true;
+      break;
+    }
+    await pause(100);
+  }
+  assert(ambiguousFailureVisible, 'ambiguous Operator Input response loss did not preserve the retry form');
+  await submitOperatorInput();
+
+  let operatorCompleted = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    operatorCompleted = await evaluate(cdpClient, `({
+      status: document.querySelector('.operations-workspace')?.getAttribute('data-investigation-status') ?? null,
+      acceptedCount: document.querySelectorAll('.operations-operator-input-history li').length,
+      form: Boolean(document.querySelector('.operations-operator-input-form')),
+      text: document.body?.innerText ?? '',
+    })`);
+    if (operatorCompleted.status === 'COMPLETED'
+      && operatorCompleted.acceptedCount === 1
+      && !operatorCompleted.form
+      && operatorCompleted.text.includes('Browser exact-retry acceptance.')) break;
+    await pause(100);
+  }
+  assert(operatorCompleted?.status === 'COMPLETED' && operatorCompleted.acceptedCount === 1, `Operator Input exact retry did not complete: ${JSON.stringify(operatorCompleted)}`);
+  assert(fixture.operatorInputSubmissions.length === 2, `expected two Operator Input submissions, got ${fixture.operatorInputSubmissions.length}`);
+  assert(
+    fixture.operatorInputSubmissions[0].idempotencyKey === fixture.operatorInputSubmissions[1].idempotencyKey,
+    'ambiguous Operator Input retry changed the Idempotency Key',
+  );
+  assert(
+    fixture.operatorInputSubmissions[0].body.requestId === `${operatorInputInvestigationId}:operator-input-request`
+      && fixture.operatorInputSubmissions[1].body.expectedRevision === 7,
+    'Operator Input retry changed the committed Request identity or revision',
+  );
+  assertions.push('operator-input-exact-retry-same-run');
+
   const openedUnable = await evaluate(cdpClient, `(() => {
     const button = [...document.querySelectorAll('.operations-list-item')]
       .find((candidate) => candidate.textContent.includes(${JSON.stringify(unableInvestigationId)}));
@@ -733,6 +984,7 @@ try {
     generatedAt: new Date().toISOString(),
     assertions,
     requests: fixture.requests,
+    operatorInputSubmissions: fixture.operatorInputSubmissions,
     listRequestCount: fixture.listRequests(),
     hiddenRequestCount: fixture.hiddenRequests(),
     finalState: {
@@ -746,9 +998,10 @@ try {
     },
     safety: {
       productionTrafficPercent: 0,
-      localReadOnly: true,
+      localOnly: true,
       duplicateDurableRecords: false,
-      businessWrites: 0,
+      businessWrites: 1,
+      exactRetryBusinessWrites: 0,
       rawPointsRendered: false,
       equipmentRootCauseClaimed: false,
     },

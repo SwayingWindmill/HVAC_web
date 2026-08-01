@@ -20,16 +20,17 @@ import (
 )
 
 const (
-	PublicOperationsInvestigationsPathTemplate = "/api/v1/sites/{siteId}/operations/investigations"
-	PublicOperationsInvestigationPathTemplate  = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}"
-	PublicOperationsEventsPathTemplate         = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}/events"
-	PublicOperationsAdvancePathTemplate        = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance"
-	PublicOperationsCancelPathTemplate         = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel"
-	InternalOperationsToolAuthorizationPath    = "/internal/v1/operations/tool-authorization"
-	defaultOperationsTimeout                   = 8 * time.Second
-	defaultOperationsRequestBytes              = int64(8 << 10)
-	defaultOperationsResponseBytes             = int64(1 << 20)
-	defaultOperationsRatePerMinute             = 30
+	PublicOperationsInvestigationsPathTemplate      = "/api/v1/sites/{siteId}/operations/investigations"
+	PublicOperationsInvestigationPathTemplate       = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}"
+	PublicOperationsEventsPathTemplate              = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}/events"
+	PublicOperationsAdvancePathTemplate             = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance"
+	PublicOperationsSubmitOperatorInputPathTemplate = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:submit-operator-input"
+	PublicOperationsCancelPathTemplate              = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel"
+	InternalOperationsToolAuthorizationPath         = "/internal/v1/operations/tool-authorization"
+	defaultOperationsTimeout                        = 8 * time.Second
+	defaultOperationsRequestBytes                   = int64(8 << 10)
+	defaultOperationsResponseBytes                  = int64(1 << 20)
+	defaultOperationsRatePerMinute                  = 30
 )
 
 var errOperationsBodyTooLarge = errors.New("Operations request or response body is too large")
@@ -86,6 +87,16 @@ type operationsToolAuthorizationRequest struct {
 type operationsToolAuthorizationResponse struct {
 	DelegationGrant string `json:"delegationGrant"`
 	PolicyRevision  string `json:"policyRevision"`
+}
+
+type operationsSubmitOperatorInputRequest struct {
+	SchemaVersion    int         `json:"schemaVersion"`
+	RequestID        string      `json:"requestId"`
+	ExpectedRevision json.Number `json:"expectedRevision"`
+	Values           struct {
+		AnalysisScope string          `json:"analysisScope"`
+		OperatorNote  json.RawMessage `json:"operatorNote"`
+	} `json:"values"`
 }
 
 func newOperationsAgentController(config *OperationsAgentConfig) *operationsAgentController {
@@ -161,6 +172,9 @@ func matchPublicOperationsRoute(path string) (publicOperationsRoute, bool) {
 	if strings.HasSuffix(segment, ":advance") {
 		kind, suffix, method, mutation = "ADVANCE", ":advance", http.MethodPost, true
 		segment = strings.TrimSuffix(segment, suffix)
+	} else if strings.HasSuffix(segment, ":submit-operator-input") {
+		kind, suffix, method, mutation = "SUBMIT_OPERATOR_INPUT", ":submit-operator-input", http.MethodPost, true
+		segment = strings.TrimSuffix(segment, suffix)
 	} else if strings.HasSuffix(segment, ":cancel") {
 		kind, suffix, method, mutation = "CANCEL", ":cancel", http.MethodPost, true
 		segment = strings.TrimSuffix(segment, suffix)
@@ -172,6 +186,8 @@ func matchPublicOperationsRoute(path string) (publicOperationsRoute, bool) {
 	template := PublicOperationsInvestigationPathTemplate
 	if kind == "ADVANCE" {
 		template = PublicOperationsAdvancePathTemplate
+	} else if kind == "SUBMIT_OPERATOR_INPUT" {
+		template = PublicOperationsSubmitOperatorInputPathTemplate
 	} else if kind == "CANCEL" {
 		template = PublicOperationsCancelPathTemplate
 	}
@@ -384,6 +400,32 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 		writeProblem(writer, request, http.StatusUnsupportedMediaType, "CONTENT_TYPE_UNSUPPORTED", "Content type unsupported", "Operations Investigation mutations require application/json.", false, nil)
 		return
 	}
+	idempotencyKey := ""
+	if route.kind == "SUBMIT_OPERATOR_INPUT" {
+		idempotencyKey = strings.TrimSpace(request.Header.Get("Idempotency-Key"))
+		if idempotencyKey == "" || len(idempotencyKey) > 256 || strings.ContainsAny(idempotencyKey, "\r\n") {
+			writeProblem(writer, request, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency Key required", "Operator Input submission requires a bounded Idempotency-Key header.", false, nil)
+			return
+		}
+	}
+	body := []byte(nil)
+	var err error
+	if route.mutation {
+		body, err = readOperationsMutationBody(
+			request.Body,
+			request.ContentLength,
+			h.operations.maxRequestBytes,
+			route.kind,
+		)
+		if err != nil {
+			status, code := http.StatusBadRequest, "REQUEST_INVALID"
+			if errors.Is(err, errOperationsBodyTooLarge) {
+				status, code = http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE"
+			}
+			writeProblem(writer, request, status, code, "Request invalid", "The Operations Investigation request body is invalid.", false, nil)
+			return
+		}
+	}
 	if !h.operations.allow(session.ID, h.now()) {
 		writeProblem(writer, request, http.StatusTooManyRequests, "OPERATIONS_RATE_LIMITED", "Operations rate limited", "The Operations Investigation request rate has been exceeded.", true, nil)
 		return
@@ -398,18 +440,6 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 		writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AGENT_UNAVAILABLE", "Operations Agent unavailable", "The Operations Agent delegation could not be created.", true, nil)
 		return
 	}
-	body := []byte(nil)
-	if route.mutation {
-		body, err = readOperationsMutationBody(request.Body, request.ContentLength, h.operations.maxRequestBytes)
-		if err != nil {
-			status, code := http.StatusBadRequest, "REQUEST_INVALID"
-			if errors.Is(err, errOperationsBodyTooLarge) {
-				status, code = http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE"
-			}
-			writeProblem(writer, request, status, code, "Request invalid", "The Operations Investigation request body is invalid.", false, nil)
-			return
-		}
-	}
 	ctx, cancel := context.WithTimeout(request.Context(), h.operations.timeout)
 	defer cancel()
 	upstream, err := http.NewRequestWithContext(ctx, route.method, h.operations.baseURL+route.internalPath, bytes.NewReader(body))
@@ -419,6 +449,9 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 	}
 	if route.mutation {
 		upstream.Header.Set("Content-Type", "application/json")
+	}
+	if idempotencyKey != "" {
+		upstream.Header.Set("Idempotency-Key", idempotencyKey)
 	}
 	requestedPosition := ""
 	if route.kind == "STREAM" {
@@ -481,6 +514,8 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 		contractErr := validateOperationsSnapshot(raw)
 		if route.kind == "LIST" {
 			contractErr = validateOperationsInvestigationList(raw)
+		} else if route.kind == "SUBMIT_OPERATOR_INPUT" {
+			contractErr = validateOperationsOperatorInputSubmission(raw)
 		}
 		if !strings.HasPrefix(contentType, "application/json") || contractErr != nil {
 			writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_CONTRACT_FAILED", "Operations Agent contract failed", "The Operations Agent returned an invalid authoritative projection.", true, nil)
@@ -548,7 +583,7 @@ func (h *handler) operationsServiceDelegation(session bffSession, siteID string)
 	})
 }
 
-func readOperationsMutationBody(reader io.Reader, contentLength, limit int64) ([]byte, error) {
+func readOperationsMutationBody(reader io.Reader, contentLength, limit int64, kind string) ([]byte, error) {
 	if contentLength > limit {
 		return nil, errOperationsBodyTooLarge
 	}
@@ -556,13 +591,45 @@ func readOperationsMutationBody(reader io.Reader, contentLength, limit int64) ([
 	if err != nil {
 		return nil, errOperationsBodyTooLarge
 	}
-	var value map[string]any
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil || len(value) != 0 || decoder.Decode(&struct{}{}) != io.EOF {
-		return nil, errors.New("invalid Operations mutation body")
+	if kind != "SUBMIT_OPERATOR_INPUT" {
+		var value map[string]any
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&value); err != nil || len(value) != 0 || decoder.Decode(&struct{}{}) != io.EOF {
+			return nil, errors.New("invalid Operations mutation body")
+		}
+		return []byte("{}"), nil
 	}
-	return []byte("{}"), nil
+
+	var value operationsSubmitOperatorInputRequest
+	if err := decodeStrictOperationsJSON(raw, &value); err != nil || value.SchemaVersion != 1 {
+		return nil, errors.New("invalid Operations Operator Input body")
+	}
+	if _, ok := operationsBoundedString(value.RequestID, 256); !ok {
+		return nil, errors.New("invalid Operations Operator Input Request identity")
+	}
+	revision, err := strconv.ParseInt(string(value.ExpectedRevision), 10, 64)
+	if err != nil || revision < 0 {
+		return nil, errors.New("invalid Operations Operator Input revision")
+	}
+	if value.Values.AnalysisScope != "SITE_ONLY" && value.Values.AnalysisScope != "DEFER" {
+		return nil, errors.New("invalid Operations Operator Input scope")
+	}
+	if len(value.Values.OperatorNote) == 0 {
+		return nil, errors.New("missing Operations Operator Input note field")
+	}
+	var note any
+	decoder := json.NewDecoder(bytes.NewReader(value.Values.OperatorNote))
+	if err := decoder.Decode(&note); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return nil, errors.New("invalid Operations Operator Input note")
+	}
+	if note != nil {
+		text, ok := note.(string)
+		if !ok || strings.TrimSpace(text) == "" || len(text) > 500 {
+			return nil, errors.New("invalid Operations Operator Input note")
+		}
+	}
+	return raw, nil
 }
 
 func decodeStrictOperationsJSON(raw []byte, value any) error {
@@ -642,6 +709,13 @@ func validateOperationsScopeValue(value any, siteOnly bool) error {
 		return errors.New("invalid Operations Device Scope")
 	}
 	return nil
+}
+
+func operationsScopesEqual(left, right map[string]any) bool {
+	return left["organizationId"] == right["organizationId"] &&
+		left["siteId"] == right["siteId"] &&
+		left["equipmentId"] == right["equipmentId"] &&
+		left["deviceId"] == right["deviceId"]
 }
 
 func validateOperationsRecordBase(record map[string]any, recordType, investigationID string) error {
@@ -913,6 +987,118 @@ func validateOperationsFindingRecord(value any, investigationID, organizationID,
 	return id, nil
 }
 
+func validateOperationsOperatorInputRequest(
+	value any,
+	investigationID string,
+	scope map[string]any,
+	activeRun map[string]any,
+) (string, error) {
+	request, ok := value.(map[string]any)
+	if !ok || !operationsExactKeys(request,
+		"schemaVersion", "id", "investigationId", "runId", "scope", "kind", "requestedAt",
+		"requestedBy", "policyVersion", "fields",
+	) || request["schemaVersion"] != json.Number("1") || request["investigationId"] != investigationID ||
+		request["kind"] != "SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION" ||
+		request["requestedBy"] != "DETERMINISTIC_POLICY" ||
+		request["policyVersion"] != "operator-input-policy/v1" {
+		return "", errors.New("invalid Operations Operator Input Request")
+	}
+	requestID, requestOK := operationsBoundedString(request["id"], 256)
+	runID, runOK := operationsBoundedString(request["runId"], 256)
+	if !requestOK || !runOK || activeRun["id"] != runID || activeRun["status"] != "WAITING_FOR_OPERATOR_INPUT" {
+		return "", errors.New("invalid Operations Operator Input Request identity")
+	}
+	requestScope, ok := request["scope"].(map[string]any)
+	if !ok || validateOperationsScopeValue(requestScope, true) != nil || !operationsScopesEqual(requestScope, scope) {
+		return "", errors.New("invalid Operations Operator Input Request Scope")
+	}
+	if _, ok := operationsNonnegativeInteger(request["requestedAt"]); !ok {
+		return "", errors.New("invalid Operations Operator Input Request timestamp")
+	}
+	fields, ok := request["fields"].([]any)
+	if !ok || len(fields) != 2 {
+		return "", errors.New("invalid Operations Operator Input fields")
+	}
+	selectField, ok := fields[0].(map[string]any)
+	if !ok || !operationsExactKeys(selectField, "id", "type", "required", "options") ||
+		selectField["id"] != "analysisScope" || selectField["type"] != "SINGLE_SELECT" || selectField["required"] != true {
+		return "", errors.New("invalid Operations Operator Input select field")
+	}
+	options, ok := selectField["options"].([]any)
+	if !ok || len(options) != 2 || options[0] != "SITE_ONLY" || options[1] != "DEFER" {
+		return "", errors.New("invalid Operations Operator Input options")
+	}
+	textField, ok := fields[1].(map[string]any)
+	if !ok || !operationsExactKeys(textField, "id", "type", "required", "maximumLength") ||
+		textField["id"] != "operatorNote" || textField["type"] != "SHORT_TEXT" || textField["required"] != false ||
+		textField["maximumLength"] != json.Number("500") {
+		return "", errors.New("invalid Operations Operator Input text field")
+	}
+	return requestID, nil
+}
+
+type operationsAcceptedOperatorInputIdentity struct {
+	recordID       string
+	requestID      string
+	idempotencyKey string
+}
+
+func validateOperationsAcceptedOperatorInputRecord(
+	value any,
+	investigationID string,
+	scope map[string]any,
+) (operationsAcceptedOperatorInputIdentity, error) {
+	record, ok := value.(map[string]any)
+	if !ok || !operationsExactKeys(record,
+		"schemaVersion", "recordType", "id", "investigationId", "recordedAt", "requestId", "runId",
+		"idempotencyKey", "inputKind", "inputDigest", "scope", "values", "provenance",
+	) || validateOperationsRecordBase(record, "OPERATOR_INPUT_ACCEPTED", investigationID) != nil ||
+		record["inputKind"] != "SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION" || !operationsDigest(record["inputDigest"]) {
+		return operationsAcceptedOperatorInputIdentity{}, errors.New("invalid accepted Operations Operator Input")
+	}
+	recordID, recordOK := operationsBoundedString(record["id"], 256)
+	requestID, requestOK := operationsBoundedString(record["requestId"], 256)
+	_, runOK := operationsBoundedString(record["runId"], 256)
+	idempotencyKey, idempotencyOK := operationsBoundedString(record["idempotencyKey"], 256)
+	if !recordOK || !requestOK || !runOK || !idempotencyOK {
+		return operationsAcceptedOperatorInputIdentity{}, errors.New("invalid accepted Operations Operator Input identity")
+	}
+	recordScope, ok := record["scope"].(map[string]any)
+	if !ok || validateOperationsScopeValue(recordScope, true) != nil || !operationsScopesEqual(recordScope, scope) {
+		return operationsAcceptedOperatorInputIdentity{}, errors.New("invalid accepted Operations Operator Input Scope")
+	}
+	values, ok := record["values"].(map[string]any)
+	if !ok || !operationsExactKeys(values, "analysisScope", "operatorNote") ||
+		!operationsAllowedString(values["analysisScope"], "SITE_ONLY", "DEFER") {
+		return operationsAcceptedOperatorInputIdentity{}, errors.New("invalid accepted Operations Operator Input values")
+	}
+	if values["operatorNote"] != nil {
+		if _, ok := operationsBoundedString(values["operatorNote"], 500); !ok {
+			return operationsAcceptedOperatorInputIdentity{}, errors.New("invalid accepted Operations Operator Input note")
+		}
+	}
+	provenance, ok := record["provenance"].(map[string]any)
+	if !ok || !operationsExactKeys(provenance,
+		"actorType", "source", "authorizationDecisionId", "policyRevision", "submittedAt",
+	) || provenance["actorType"] != "OPERATOR" || provenance["source"] != "PLATFORM_GATEWAY" {
+		return operationsAcceptedOperatorInputIdentity{}, errors.New("invalid accepted Operations Operator Input provenance")
+	}
+	if _, ok := operationsBoundedString(provenance["authorizationDecisionId"], 256); !ok {
+		return operationsAcceptedOperatorInputIdentity{}, errors.New("invalid accepted Operations Operator Input authorization decision")
+	}
+	if _, ok := operationsBoundedString(provenance["policyRevision"], 256); !ok {
+		return operationsAcceptedOperatorInputIdentity{}, errors.New("invalid accepted Operations Operator Input policy revision")
+	}
+	recordedAt, recordedOK := operationsNonnegativeInteger(record["recordedAt"])
+	submittedAt, submittedOK := operationsNonnegativeInteger(provenance["submittedAt"])
+	if !recordedOK || !submittedOK || submittedAt != recordedAt {
+		return operationsAcceptedOperatorInputIdentity{}, errors.New("invalid accepted Operations Operator Input timestamp")
+	}
+	return operationsAcceptedOperatorInputIdentity{
+		recordID: recordID, requestID: requestID, idempotencyKey: idempotencyKey,
+	}, nil
+}
+
 func validateOperationsToolReceiptRecord(value any, investigationID string) (string, error) {
 	record, ok := value.(map[string]any)
 	if !ok || !operationsExactKeys(record,
@@ -994,7 +1180,10 @@ func validateOperationsRecordArray(value any, maximum int, validate func(any) (s
 }
 
 func validateOperationsInvestigationValue(root map[string]any, includeToolReceipts bool) error {
-	expected := []string{"schemaVersion", "id", "scope", "status", "revision", "createdAt", "activeRun", "outcome", "evidence", "analysisReferences", "findings"}
+	expected := []string{
+		"schemaVersion", "id", "scope", "status", "revision", "createdAt", "activeRun", "outcome",
+		"evidence", "analysisReferences", "findings", "operatorInputRequest", "acceptedOperatorInputs",
+	}
 	if includeToolReceipts {
 		expected = append(expected, "toolReceipts")
 	}
@@ -1003,7 +1192,7 @@ func validateOperationsInvestigationValue(root map[string]any, includeToolReceip
 	}
 	investigationID, ok := operationsBoundedString(root["id"], 256)
 	if !ok || validateOperationsScopeValue(root["scope"], true) != nil ||
-		!operationsAllowedString(root["status"], "DRAFT", "RUNNING", "PAUSED", "COMPLETED", "FAILED", "CANCELLED") {
+		!operationsAllowedString(root["status"], "DRAFT", "RUNNING", "PAUSED", "WAITING_FOR_OPERATOR_INPUT", "COMPLETED", "FAILED", "CANCELLED") {
 		return errors.New("invalid Operations Investigation identity or Scope")
 	}
 	if _, ok := operationsNonnegativeInteger(root["revision"]); !ok {
@@ -1012,10 +1201,11 @@ func validateOperationsInvestigationValue(root map[string]any, includeToolReceip
 	if _, ok := operationsNonnegativeInteger(root["createdAt"]); !ok {
 		return errors.New("invalid Operations Investigation creation timestamp")
 	}
+	var activeRun map[string]any
 	if root["activeRun"] != nil {
 		run, ok := root["activeRun"].(map[string]any)
 		if !ok || !operationsExactKeys(run, "id", "status", "startedAt") ||
-			!operationsAllowedString(run["status"], "ACTIVE", "PAUSED") {
+			!operationsAllowedString(run["status"], "ACTIVE", "PAUSED", "WAITING_FOR_OPERATOR_INPUT") {
 			return errors.New("invalid Operations active Agent Run")
 		}
 		if _, ok := operationsBoundedString(run["id"], 256); !ok {
@@ -1024,6 +1214,14 @@ func validateOperationsInvestigationValue(root map[string]any, includeToolReceip
 		if _, ok := operationsNonnegativeInteger(run["startedAt"]); !ok {
 			return errors.New("invalid Operations active Agent Run timestamp")
 		}
+		activeRun = run
+	}
+	if root["status"] == "WAITING_FOR_OPERATOR_INPUT" {
+		if activeRun == nil || activeRun["status"] != "WAITING_FOR_OPERATOR_INPUT" {
+			return errors.New("Operations waiting Investigation requires one waiting Agent Run")
+		}
+	} else if activeRun != nil && activeRun["status"] == "WAITING_FOR_OPERATOR_INPUT" {
+		return errors.New("Operations waiting Agent Run requires a waiting Investigation")
 	}
 	if root["outcome"] != nil && !operationsAllowedString(root["outcome"], "SUPPORTED_SITE_FINDING", "UNABLE_TO_CONCLUDE") {
 		return errors.New("invalid Operations Investigation outcome")
@@ -1031,6 +1229,51 @@ func validateOperationsInvestigationValue(root map[string]any, includeToolReceip
 	scope := root["scope"].(map[string]any)
 	organizationID := scope["organizationId"].(string)
 	siteID := scope["siteId"].(string)
+	activeRequestID := ""
+	if root["operatorInputRequest"] != nil {
+		if root["status"] != "WAITING_FOR_OPERATOR_INPUT" || activeRun == nil {
+			return errors.New("Operations Operator Input Request requires a waiting Investigation")
+		}
+		requestID, err := validateOperationsOperatorInputRequest(
+			root["operatorInputRequest"], investigationID, scope, activeRun,
+		)
+		if err != nil {
+			return err
+		}
+		activeRequestID = requestID
+	} else if root["status"] == "WAITING_FOR_OPERATOR_INPUT" {
+		return errors.New("Operations waiting Investigation is missing its Operator Input Request")
+	}
+	acceptedInputs, ok := root["acceptedOperatorInputs"].([]any)
+	if !ok || len(acceptedInputs) > 32 {
+		return errors.New("invalid accepted Operations Operator Input array")
+	}
+	acceptedRecordIDs := make(map[string]struct{}, len(acceptedInputs))
+	acceptedRequestIDs := make(map[string]struct{}, len(acceptedInputs))
+	acceptedIdempotencyKeys := make(map[string]struct{}, len(acceptedInputs))
+	for _, candidate := range acceptedInputs {
+		identity, err := validateOperationsAcceptedOperatorInputRecord(candidate, investigationID, scope)
+		if err != nil {
+			return err
+		}
+		if _, duplicate := acceptedRecordIDs[identity.recordID]; duplicate {
+			return errors.New("duplicate accepted Operations Operator Input record")
+		}
+		if _, duplicate := acceptedRequestIDs[identity.requestID]; duplicate {
+			return errors.New("duplicate accepted Operations Operator Input Request")
+		}
+		if _, duplicate := acceptedIdempotencyKeys[identity.idempotencyKey]; duplicate {
+			return errors.New("duplicate accepted Operations Operator Input Idempotency Key")
+		}
+		acceptedRecordIDs[identity.recordID] = struct{}{}
+		acceptedRequestIDs[identity.requestID] = struct{}{}
+		acceptedIdempotencyKeys[identity.idempotencyKey] = struct{}{}
+	}
+	if activeRequestID != "" {
+		if _, alreadyAccepted := acceptedRequestIDs[activeRequestID]; alreadyAccepted {
+			return errors.New("active Operations Operator Input Request was already accepted")
+		}
+	}
 	if err := validateOperationsRecordArray(root["evidence"], 32, func(candidate any) (string, error) {
 		return validateOperationsEvidenceRecord(candidate, investigationID, organizationID, siteID)
 	}); err != nil {
@@ -1123,6 +1366,25 @@ func validateOperationsSnapshot(raw []byte) error {
 	return inspectOperationsSnapshotPayload(root)
 }
 
+func validateOperationsOperatorInputSubmission(raw []byte) error {
+	var root map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&root); err != nil || decoder.Decode(&struct{}{}) != io.EOF ||
+		!operationsExactKeys(root, "outcome", "investigation") ||
+		!operationsAllowedString(root["outcome"], "COMMITTED", "DUPLICATE") {
+		return errors.New("invalid Operations Operator Input submission response")
+	}
+	investigation, ok := root["investigation"].(map[string]any)
+	if !ok {
+		return errors.New("missing Operations Operator Input Investigation")
+	}
+	if err := validateOperationsInvestigationValue(investigation, true); err != nil {
+		return err
+	}
+	return inspectOperationsSnapshotPayload(root)
+}
+
 func validateOperationsInvestigationList(raw []byte) error {
 	var root map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -1141,6 +1403,7 @@ func validateOperationsInvestigationList(raw []byte) error {
 		if !ok || !operationsExactKeys(item,
 			"schemaVersion", "id", "scope", "status", "revision", "createdAt", "outcome",
 			"evidenceCount", "analysisReferenceCount", "findingCount", "toolReceiptCount",
+			"acceptedOperatorInputCount",
 		) || item["schemaVersion"] != json.Number("1") {
 			return errors.New("invalid Operations Investigation summary")
 		}
@@ -1155,7 +1418,7 @@ func validateOperationsInvestigationList(raw []byte) error {
 		if _, ok := operationsBoundedString(scope["siteId"], 256); !ok || scope["equipmentId"] != nil || scope["deviceId"] != nil {
 			return errors.New("invalid Operations Investigation Site Scope")
 		}
-		if !operationsAllowedString(item["status"], "DRAFT", "RUNNING", "PAUSED", "COMPLETED", "FAILED", "CANCELLED") {
+		if !operationsAllowedString(item["status"], "DRAFT", "RUNNING", "PAUSED", "WAITING_FOR_OPERATOR_INPUT", "COMPLETED", "FAILED", "CANCELLED") {
 			return errors.New("invalid Operations Investigation status")
 		}
 		outcome := item["outcome"]
@@ -1167,7 +1430,8 @@ func validateOperationsInvestigationList(raw []byte) error {
 			return errors.New("invalid Operations Investigation summary revision")
 		}
 		maximumCounts := map[string]int64{
-			"evidenceCount": 32, "analysisReferenceCount": 32, "findingCount": 32, "toolReceiptCount": 64,
+			"evidenceCount": 32, "analysisReferenceCount": 32, "findingCount": 32,
+			"toolReceiptCount": 64, "acceptedOperatorInputCount": 32,
 		}
 		for countKey, maximum := range maximumCounts {
 			count, ok := operationsNonnegativeInteger(item[countKey])

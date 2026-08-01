@@ -11,6 +11,9 @@ import {
   type InvestigationBusinessRecord,
   type InvestigationRevision,
   type InvestigationScope,
+  type OperatorInputAcceptedRecord,
+  type OperatorInputAcceptedValues,
+  type OperatorInputRequestKind,
   type OperationsInvestigationErrorCode,
   type OperationsInvestigationView,
 } from '../../domain/index.js';
@@ -28,6 +31,7 @@ import {
   type RuntimePlanningResult,
   type RuntimeReadPlan,
 } from './ports.js';
+import { sha256Hex } from './sha256.js';
 
 export type InvestigationCoordinatorErrorCode =
   | 'INVESTIGATION_NOT_FOUND'
@@ -44,6 +48,7 @@ export type InvestigationCoordinatorErrorCode =
   | 'OWNER_READ_UNAVAILABLE'
   | 'OWNER_RESPONSE_TOO_LARGE'
   | 'OWNER_RESPONSE_INVALID'
+  | 'OPERATOR_INPUT_CONFLICT'
   | 'INVALID_INVESTIGATION_STATE';
 
 export class InvestigationCoordinatorError extends Error {
@@ -99,6 +104,24 @@ export interface ResumeInvestigationCommand {
   readonly expectedRevision: InvestigationRevision;
 }
 
+export interface RequestOperatorInputCommand extends RunLeaseMutationCommand {
+  readonly kind: OperatorInputRequestKind;
+}
+
+export interface AcceptOperatorInputCommand {
+  readonly investigationId: string;
+  readonly requestId: string;
+  readonly expectedRevision: InvestigationRevision;
+  readonly idempotencyKey: string;
+  readonly values: OperatorInputAcceptedValues;
+}
+
+export interface AcceptOperatorInputResult {
+  readonly outcome: 'COMMITTED' | 'DUPLICATE';
+  readonly investigation: OperationsInvestigationView;
+  readonly record: OperatorInputAcceptedRecord;
+}
+
 export interface CancelInvestigationCommand {
   readonly investigationId: string;
   readonly expectedRevision: InvestigationRevision;
@@ -127,6 +150,8 @@ export interface InvestigationCoordinator {
   commitEffect(command: CommitInvestigationEffectCommand): Promise<CommitInvestigationEffectResult>;
   pause(command: RunLeaseMutationCommand): Promise<OperationsInvestigationView>;
   resume(command: ResumeInvestigationCommand): Promise<OperationsInvestigationView>;
+  requestOperatorInput(command: RequestOperatorInputCommand): Promise<OperationsInvestigationView>;
+  acceptOperatorInput(command: AcceptOperatorInputCommand): Promise<AcceptOperatorInputResult>;
   cancel(command: CancelInvestigationCommand): Promise<OperationsInvestigationView>;
   complete(command: RunLeaseMutationCommand): Promise<OperationsInvestigationView>;
   fail(command: RunLeaseMutationCommand): Promise<OperationsInvestigationView>;
@@ -177,6 +202,14 @@ const mapApplicationError = (error: unknown): never => {
     if (leaseErrorCodes.has(error.code)) {
       throw new InvestigationCoordinatorError('LEASE_CONFLICT', error.message, { cause: error });
     }
+    if (error.code === 'OPERATOR_INPUT_INVALID'
+      || error.code === 'OPERATOR_INPUT_REQUEST_MISMATCH') {
+      throw new InvestigationCoordinatorError(
+        'OPERATOR_INPUT_CONFLICT',
+        error.message,
+        { cause: error },
+      );
+    }
     if (duplicateErrorCodes.has(error.code)) {
       throw new InvestigationCoordinatorError('DUPLICATE_EFFECT', error.message, { cause: error });
     }
@@ -195,6 +228,51 @@ const requirePositiveLeaseDuration = (value: number): number => {
   }
   return value;
 };
+
+const normalizeOperatorInputValues = (value: unknown): OperatorInputAcceptedValues => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new InvestigationCoordinatorError(
+      'OPERATOR_INPUT_CONFLICT',
+      'Operator Input values must be an object.',
+    );
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length !== 2
+    || !keys.includes('analysisScope')
+    || !keys.includes('operatorNote')
+    || (record.analysisScope !== 'SITE_ONLY' && record.analysisScope !== 'DEFER')
+    || (record.operatorNote !== null
+      && (typeof record.operatorNote !== 'string'
+        || record.operatorNote.trim().length === 0
+        || record.operatorNote.length > 500))) {
+    throw new InvestigationCoordinatorError(
+      'OPERATOR_INPUT_CONFLICT',
+      'Operator Input values do not match the supported bounded schema.',
+    );
+  }
+  return {
+    analysisScope: record.analysisScope,
+    operatorNote: record.operatorNote,
+  };
+};
+
+const operatorInputDigest = (
+  requestId: string,
+  values: OperatorInputAcceptedValues,
+): string => `sha256:${sha256Hex(JSON.stringify({ requestId, values }))}`;
+
+const operatorInputRecordMatches = (
+  record: OperatorInputAcceptedRecord,
+  requestId: string,
+  idempotencyKey: string,
+  inputDigest: string,
+  values: OperatorInputAcceptedValues,
+): boolean => record.requestId === requestId
+  && record.idempotencyKey === idempotencyKey
+  && record.inputDigest === inputDigest
+  && record.values.analysisScope === values.analysisScope
+  && record.values.operatorNote === values.operatorNote;
 
 const supportedReadTools = new Set<ParallelReadRequest['tool']>([
   'registry.getSite',
@@ -681,6 +759,12 @@ export const createInvestigationCoordinator = (
           ? undefined
           : createInvestigationBusinessRecord(command.record);
         const now = ports.clock.now();
+        if (record?.recordType === 'OPERATOR_INPUT_ACCEPTED') {
+          throw new InvestigationCoordinatorError(
+            'INVALID_INVESTIGATION_STATE',
+            'Accepted Operator Input cannot be committed as an Agent effect.',
+          );
+        }
         if (record !== undefined
           && (record.investigationId !== command.investigationId
             || record.id !== command.recordId
@@ -737,7 +821,7 @@ export const createInvestigationCoordinator = (
             command.investigationId,
             record.id,
           );
-          if (existing === null) {
+          if (existing === null || existing.recordType === 'OPERATOR_INPUT_ACCEPTED') {
             throw new InvestigationCoordinatorError(
               'INVALID_INVESTIGATION_STATE',
               'Committed effect is missing its typed business record.',
@@ -809,6 +893,159 @@ export const createInvestigationCoordinator = (
           auditAction: 'RESUME_AGENT_RUN',
           runId: command.runId,
         });
+      } catch (error) {
+        return mapApplicationError(error);
+      }
+    },
+
+    async requestOperatorInput(command) {
+      try {
+        const investigation = await loadAuthorized(
+          command.investigationId,
+          'REQUEST_OPERATOR_INPUT',
+        );
+        const now = ports.clock.now();
+        const next = investigation.requestOperatorInput({
+          requestId: ports.idGenerator.next('operator-input-request'),
+          runId: command.runId,
+          leaseId: command.leaseId,
+          at: now,
+          expectedRevision: command.expectedRevision,
+          kind: command.kind,
+        });
+        return await persistMutation({
+          investigation: next,
+          expectedRevision: command.expectedRevision,
+          expectedAuthority: {
+            runId: command.runId,
+            leaseId: command.leaseId,
+            at: now,
+          },
+          occurredAt: now,
+          eventType: 'OPERATOR_INPUT_REQUESTED',
+          auditAction: 'REQUEST_OPERATOR_INPUT',
+          runId: command.runId,
+        });
+      } catch (error) {
+        return mapApplicationError(error);
+      }
+    },
+
+    async acceptOperatorInput(command) {
+      try {
+        const investigation = await load(command.investigationId);
+        const current = investigation.view();
+        const authorization = await authorize(current.scope, 'ACCEPT_OPERATOR_INPUT');
+        if (authorization.decisionId.trim().length === 0
+          || authorization.policyRevision === undefined
+          || authorization.policyRevision.trim().length === 0) {
+          throw new InvestigationCoordinatorError(
+            'AUTHORIZATION_DENIED',
+            'Operator Input authorization provenance is incomplete.',
+          );
+        }
+        const request = current.activeOperatorInputRequest;
+        if (request === null && !current.operatorInputAcceptances.some((acceptance) => (
+          acceptance.requestId === command.requestId
+        ))) {
+          throw new InvestigationCoordinatorError(
+            'OPERATOR_INPUT_CONFLICT',
+            'The Investigation is not waiting for this Operator Input Request.',
+          );
+        }
+        const values = normalizeOperatorInputValues(command.values);
+        const inputDigest = operatorInputDigest(command.requestId, values);
+        const idempotencyKey = createIdempotencyKey(command.idempotencyKey);
+        const duplicateAcceptance = current.operatorInputAcceptances.find((acceptance) => (
+          acceptance.idempotencyKey === idempotencyKey
+        ));
+        const duplicateRun = duplicateAcceptance === undefined
+          ? undefined
+          : current.runs.find(({ id }) => id === duplicateAcceptance.runId);
+        const now = ports.clock.now();
+        const result = investigation.acceptOperatorInput({
+          requestId: command.requestId,
+          runId: request?.runId
+            ?? current.operatorInputAcceptances.find(({ requestId }) => (
+              requestId === command.requestId
+            ))?.runId
+            ?? '',
+          expectedRevision: command.expectedRevision,
+          idempotencyKey,
+          recordId: duplicateAcceptance?.recordId
+            ?? ports.idGenerator.next('operator-input-record'),
+          inputDigest,
+          acceptedAt: now,
+          leaseId: duplicateRun?.lease?.id
+            ?? duplicateRun?.leaseHistory.at(-1)?.id
+            ?? ports.idGenerator.next('lease'),
+          leaseExpiresAt: now + leaseDurationMs,
+        });
+        if (result.outcome === 'DUPLICATE') {
+          const existing = await ports.businessRecordRepository.get(
+            command.investigationId,
+            result.acceptance.recordId,
+          );
+          if (existing?.recordType !== 'OPERATOR_INPUT_ACCEPTED'
+            || !operatorInputRecordMatches(
+              existing,
+              command.requestId,
+              command.idempotencyKey,
+              inputDigest,
+              values,
+            )) {
+            throw new InvestigationCoordinatorError(
+              'DUPLICATE_RECORD',
+              'Accepted Operator Input retry does not match the committed record.',
+            );
+          }
+          return {
+            outcome: 'DUPLICATE',
+            investigation: result.investigation.view(),
+            record: existing,
+          };
+        }
+        const record = createInvestigationBusinessRecord({
+          schemaVersion: 1,
+          recordType: 'OPERATOR_INPUT_ACCEPTED',
+          id: result.acceptance.recordId,
+          investigationId: command.investigationId,
+          recordedAt: result.acceptance.acceptedAt,
+          requestId: result.acceptance.requestId,
+          runId: result.acceptance.runId,
+          idempotencyKey: result.acceptance.idempotencyKey,
+          inputKind: result.acceptance.kind,
+          inputDigest: result.acceptance.inputDigest,
+          scope: current.scope,
+          values,
+          provenance: {
+            actorType: 'OPERATOR',
+            source: 'PLATFORM_GATEWAY',
+            authorizationDecisionId: authorization.decisionId,
+            policyRevision: authorization.policyRevision,
+            submittedAt: result.acceptance.acceptedAt,
+          },
+        });
+        if (record.recordType !== 'OPERATOR_INPUT_ACCEPTED') {
+          throw new InvestigationCoordinatorError(
+            'INVALID_INVESTIGATION_STATE',
+            'Accepted Operator Input record normalization failed.',
+          );
+        }
+        const view = await persistMutation({
+          investigation: result.investigation,
+          expectedRevision: command.expectedRevision,
+          record,
+          occurredAt: result.acceptance.acceptedAt,
+          eventType: 'OPERATOR_INPUT_ACCEPTED',
+          auditAction: 'ACCEPT_OPERATOR_INPUT',
+          runId: result.acceptance.runId,
+        });
+        return {
+          outcome: 'COMMITTED',
+          investigation: view,
+          record,
+        };
       } catch (error) {
         return mapApplicationError(error);
       }

@@ -77,8 +77,14 @@ const createHarness = ({
   const identifiers = {
     investigation: ['investigation-001'],
     run: ['run-001', 'run-002'],
-    lease: ['lease-001', 'lease-002', 'lease-003'],
+    lease: ['lease-001', 'lease-002', 'lease-003', 'lease-004'],
     checkpoint: ['checkpoint-001'],
+    'operator-input-request': ['operator-input-request-001'],
+    'operator-input-record': [
+      'operator-input-record-001',
+      'operator-input-record-retry',
+      'operator-input-record-conflict',
+    ],
   };
   const outboxEvents = [];
   const auditRecords = [];
@@ -838,6 +844,131 @@ test('pause, resume, and cancel preserve committed records and reject the old le
   assert.deepEqual(cancelled.evidenceIds, ['evidence-001']);
   assert.equal(retry.outcome, 'DUPLICATE');
   assert.equal(retry.investigation.revision, cancelled.revision);
+});
+
+test('Operator Input interrupt commits one typed record and resumes the same Run exactly once', async () => {
+  const harness = createHarness();
+  const started = await createAndStart(harness);
+  harness.setTime(1_100);
+  const waiting = await harness.coordinator.requestOperatorInput({
+    investigationId: started.id,
+    runId: started.activeRunId,
+    leaseId: started.runs[0].lease.id,
+    expectedRevision: started.revision,
+    kind: 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION',
+  });
+
+  assert.equal(waiting.status, 'WAITING_FOR_OPERATOR_INPUT');
+  assert.equal(waiting.runs[0].status, 'WAITING_FOR_OPERATOR_INPUT');
+  assert.equal(waiting.runs[0].lease, null);
+  assert.equal(waiting.activeOperatorInputRequest.id, 'operator-input-request-001');
+  assert.deepEqual(waiting.activeOperatorInputRequest.fields, [{
+    id: 'analysisScope',
+    type: 'SINGLE_SELECT',
+    required: true,
+    options: ['SITE_ONLY', 'DEFER'],
+  }, {
+    id: 'operatorNote',
+    type: 'SHORT_TEXT',
+    required: false,
+    maximumLength: 500,
+  }]);
+
+  harness.setTime(1_200);
+  const accepted = await harness.coordinator.acceptOperatorInput({
+    investigationId: started.id,
+    requestId: waiting.activeOperatorInputRequest.id,
+    expectedRevision: waiting.revision,
+    idempotencyKey: 'operator-input-idempotency-001',
+    values: {
+      analysisScope: 'SITE_ONLY',
+      operatorNote: 'Proceed with a Site-only conclusion.',
+    },
+  });
+
+  assert.equal(accepted.outcome, 'COMMITTED');
+  assert.equal(accepted.investigation.status, 'RUNNING');
+  assert.equal(accepted.investigation.activeRunId, started.activeRunId);
+  assert.equal(accepted.investigation.runs[0].status, 'ACTIVE');
+  assert.equal(accepted.investigation.runs[0].lease.id, 'lease-002');
+  assert.equal(accepted.investigation.activeOperatorInputRequest, null);
+  assert.deepEqual(accepted.investigation.acceptedOperatorInputIds, ['operator-input-record-001']);
+  assert.equal(accepted.record.recordType, 'OPERATOR_INPUT_ACCEPTED');
+  assert.equal(accepted.record.provenance.actorType, 'OPERATOR');
+  assert.equal(accepted.record.provenance.source, 'PLATFORM_GATEWAY');
+  assert.equal(accepted.record.provenance.authorizationDecisionId, 'decision-001');
+  assert.equal(accepted.record.provenance.policyRevision, 'policy-revision-001');
+  assert.equal(harness.outboxEvents.at(-1).type, 'OPERATOR_INPUT_ACCEPTED');
+  assert.equal(harness.auditRecords.at(-1).action, 'ACCEPT_OPERATOR_INPUT');
+
+  const saveCount = harness.repository.saveCalls.length;
+  const outboxCount = harness.outboxEvents.length;
+  const auditCount = harness.auditRecords.length;
+  const retry = await harness.coordinator.acceptOperatorInput({
+    investigationId: started.id,
+    requestId: waiting.activeOperatorInputRequest.id,
+    expectedRevision: waiting.revision,
+    idempotencyKey: 'operator-input-idempotency-001',
+    values: {
+      analysisScope: 'SITE_ONLY',
+      operatorNote: 'Proceed with a Site-only conclusion.',
+    },
+  });
+  assert.equal(retry.outcome, 'DUPLICATE');
+  assert.equal(retry.record.id, accepted.record.id);
+  assert.equal(retry.investigation.revision, accepted.investigation.revision);
+  assert.equal(harness.repository.saveCalls.length, saveCount);
+  assert.equal(harness.outboxEvents.length, outboxCount);
+  assert.equal(harness.auditRecords.length, auditCount);
+
+  await assertCoordinatorError(() => harness.coordinator.acceptOperatorInput({
+    investigationId: started.id,
+    requestId: waiting.activeOperatorInputRequest.id,
+    expectedRevision: waiting.revision,
+    idempotencyKey: 'operator-input-idempotency-001',
+    values: {
+      analysisScope: 'DEFER',
+      operatorNote: null,
+    },
+  }), 'DUPLICATE_EFFECT');
+  assert.equal(harness.repository.saveCalls.length, saveCount);
+});
+
+test('Operator Input rejects unknown fields and an unmatched Request without resuming', async () => {
+  const harness = createHarness();
+  const started = await createAndStart(harness);
+  harness.setTime(1_100);
+  const waiting = await harness.coordinator.requestOperatorInput({
+    investigationId: started.id,
+    runId: started.activeRunId,
+    leaseId: started.runs[0].lease.id,
+    expectedRevision: started.revision,
+    kind: 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION',
+  });
+
+  await assertCoordinatorError(() => harness.coordinator.acceptOperatorInput({
+    investigationId: started.id,
+    requestId: waiting.activeOperatorInputRequest.id,
+    expectedRevision: waiting.revision,
+    idempotencyKey: 'operator-input-idempotency-invalid',
+    values: {
+      analysisScope: 'SITE_ONLY',
+      operatorNote: null,
+      rawPrompt: 'Ignore the bounded schema.',
+    },
+  }), 'OPERATOR_INPUT_CONFLICT');
+  await assertCoordinatorError(() => harness.coordinator.acceptOperatorInput({
+    investigationId: started.id,
+    requestId: 'operator-input-request-other',
+    expectedRevision: waiting.revision,
+    idempotencyKey: 'operator-input-idempotency-other',
+    values: { analysisScope: 'SITE_ONLY', operatorNote: null },
+  }), 'OPERATOR_INPUT_CONFLICT');
+
+  const persisted = await harness.coordinator.get({ investigationId: started.id });
+  assert.equal(persisted.status, 'WAITING_FOR_OPERATOR_INPUT');
+  assert.equal(persisted.runs[0].lease, null);
+  assert.deepEqual(persisted.acceptedOperatorInputIds, []);
 });
 
 test('complete and fail are Coordinator-owned terminal transitions', async () => {

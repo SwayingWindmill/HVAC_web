@@ -52,6 +52,8 @@ const investigation = {
   evidence: [],
   analysisReferences: [],
   findings: [],
+  operatorInputRequest: null,
+  acceptedOperatorInputs: [],
 };
 const plan = {
   schemaVersion: 1,
@@ -208,6 +210,7 @@ test('scoped Operations API lists only exact authorized Site summaries', async (
     analysisReferenceCount: 1,
     findingCount: 1,
     toolReceiptCount: 4,
+    acceptedOperatorInputCount: 0,
   };
   const requests = [];
   const fetchImplementation = async (input, init) => {
@@ -234,6 +237,165 @@ test('scoped Operations API lists only exact authorized Site summaries', async (
       fetchImplementation,
     }),
     /超出当前已验证 Site Scope/u,
+  );
+});
+
+test('Operations Workspace accepts one bounded waiting Request and rejects forged Operator Input state', async () => {
+  const {
+    operationsInvestigationViewSchema,
+    operationsOperatorInputAcceptedSchema,
+  } = await loadContract();
+  const request = {
+    schemaVersion: 1,
+    id: 'operator-input-request-001',
+    investigationId: investigation.id,
+    runId: 'run-001',
+    scope: investigation.scope,
+    kind: 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION',
+    requestedAt: 10,
+    requestedBy: 'DETERMINISTIC_POLICY',
+    policyVersion: 'operator-input-policy/v1',
+    fields: [{
+      id: 'analysisScope',
+      type: 'SINGLE_SELECT',
+      required: true,
+      options: ['SITE_ONLY', 'DEFER'],
+    }, {
+      id: 'operatorNote',
+      type: 'SHORT_TEXT',
+      required: false,
+      maximumLength: 500,
+    }],
+  };
+  const waiting = operationsInvestigationViewSchema.parse({
+    ...investigation,
+    status: 'WAITING_FOR_OPERATOR_INPUT',
+    revision: 10,
+    activeRun: { id: 'run-001', status: 'WAITING_FOR_OPERATOR_INPUT', startedAt: 1 },
+    outcome: null,
+    operatorInputRequest: request,
+    acceptedOperatorInputs: [],
+    toolReceipts: [],
+  });
+  assert.equal(waiting.operatorInputRequest.id, request.id);
+  assert.deepEqual(waiting.operatorInputRequest.fields[0].options, ['SITE_ONLY', 'DEFER']);
+
+  const accepted = {
+    schemaVersion: 1,
+    recordType: 'OPERATOR_INPUT_ACCEPTED',
+    id: 'operator-input-record-001',
+    investigationId: investigation.id,
+    recordedAt: 11,
+    requestId: request.id,
+    runId: request.runId,
+    idempotencyKey: 'operator-input-retry-001',
+    inputKind: request.kind,
+    inputDigest: `sha256:${'a'.repeat(64)}`,
+    scope: investigation.scope,
+    values: { analysisScope: 'SITE_ONLY', operatorNote: 'Proceed with Site-only authority.' },
+    provenance: {
+      actorType: 'OPERATOR',
+      source: 'PLATFORM_GATEWAY',
+      authorizationDecisionId: 'decision-fixture-001',
+      policyRevision: 'policy-v17',
+      submittedAt: 11,
+    },
+  };
+  assert.deepEqual(operationsOperatorInputAcceptedSchema.parse(accepted), accepted);
+  assert.throws(
+    () => operationsOperatorInputAcceptedSchema.parse({
+      ...accepted,
+      values: { ...accepted.values, rawPrompt: 'forbidden' },
+    }),
+    /Unrecognized key/u,
+  );
+  assert.throws(
+    () => operationsOperatorInputAcceptedSchema.parse({
+      ...accepted,
+      provenance: { ...accepted.provenance, actorType: 'MODEL' },
+    }),
+    /Invalid literal value/u,
+  );
+});
+
+test('scoped Operations API submits Operator Input and preserves exact-retry identity', async () => {
+  const { submitSiteNightEnergyOperatorInput } = await loadBundledModule('apps/hvac-web/src/api/operations.ts');
+  const acceptedRecord = {
+    schemaVersion: 1,
+    recordType: 'OPERATOR_INPUT_ACCEPTED',
+    id: 'operator-input-record-001',
+    investigationId: investigation.id,
+    recordedAt: 11,
+    requestId: 'operator-input-request-001',
+    runId: 'run-001',
+    idempotencyKey: 'operator-input-retry-001',
+    inputKind: 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION',
+    inputDigest: `sha256:${'b'.repeat(64)}`,
+    scope: investigation.scope,
+    values: { analysisScope: 'SITE_ONLY', operatorNote: null },
+    provenance: {
+      actorType: 'OPERATOR',
+      source: 'PLATFORM_GATEWAY',
+      authorizationDecisionId: 'decision-fixture-001',
+      policyRevision: 'policy-v17',
+      submittedAt: 11,
+    },
+  };
+  const resumed = {
+    ...investigation,
+    status: 'RUNNING',
+    revision: 11,
+    activeRun: { id: 'run-001', status: 'ACTIVE', startedAt: 1 },
+    outcome: null,
+    operatorInputRequest: null,
+    acceptedOperatorInputs: [acceptedRecord],
+    toolReceipts: [],
+  };
+  const requests = [];
+  const outcomes = ['COMMITTED', 'DUPLICATE'];
+  const fetchImplementation = async (input, init) => {
+    requests.push({ input: String(input), init });
+    return new Response(JSON.stringify({ outcome: outcomes.shift(), investigation: resumed }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  const command = {
+    requestId: acceptedRecord.requestId,
+    expectedRevision: 10,
+    idempotencyKey: acceptedRecord.idempotencyKey,
+    values: acceptedRecord.values,
+  };
+  const options = {
+    trustedOrganizationId: investigation.scope.organizationId,
+    trustedSiteId: investigation.scope.siteId,
+    csrfToken: '[REDACTED_SECRET]',
+    fetchImplementation,
+  };
+  const committed = await submitSiteNightEnergyOperatorInput(investigation.id, command, options);
+  const duplicate = await submitSiteNightEnergyOperatorInput(investigation.id, command, options);
+  assert.equal(committed.outcome, 'COMMITTED');
+  assert.equal(duplicate.outcome, 'DUPLICATE');
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].input, '/api/v1/sites/site-001/operations/investigations/investigation-001:submit-operator-input');
+  assert.equal(requests[0].init.headers['Idempotency-Key'], acceptedRecord.idempotencyKey);
+  assert.equal(requests[1].init.headers['Idempotency-Key'], acceptedRecord.idempotencyKey);
+  assert.deepEqual(JSON.parse(requests[0].init.body), {
+    schemaVersion: 1,
+    requestId: acceptedRecord.requestId,
+    expectedRevision: 10,
+    values: acceptedRecord.values,
+  });
+
+  await assert.rejects(
+    submitSiteNightEnergyOperatorInput(investigation.id, command, {
+      ...options,
+      fetchImplementation: async () => new Response(JSON.stringify({
+        outcome: 'COMMITTED',
+        investigation: { ...resumed, id: 'investigation-other' },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    }),
+    /响应与请求的 Investigation 不一致/u,
   );
 });
 

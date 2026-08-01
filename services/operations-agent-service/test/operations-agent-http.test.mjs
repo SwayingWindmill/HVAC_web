@@ -199,6 +199,7 @@ test('internal HTTP contract exposes only start, advance and safe authoritative 
     analysisReferenceCount: advanced.analysisReferences.length,
     findingCount: advanced.findings.length,
     toolReceiptCount: advanced.toolReceipts.length,
+    acceptedOperatorInputCount: advanced.acceptedOperatorInputs.length,
   }]);
 
   const getResponse = await harness.handler.handle(new Request(item, {
@@ -268,6 +269,84 @@ test('internal HTTP contract exposes only start, advance and safe authoritative 
     policyRevision: 'policy-v17',
     traceparent: headers.traceparent,
   });
+});
+
+test('internal HTTP accepts one bounded Operator Input and exact retry is inert', async () => {
+  const harness = createHarness();
+  const collection = `https://operations-agent.internal/internal/v1/sites/${siteId}/operations/investigations`;
+  const startedResponse = await harness.handler.handle(new Request(collection, {
+    method: 'POST',
+    headers,
+    body: '{}',
+  }));
+  const started = await body(startedResponse);
+  const directCoordinator = createSiteNightEnergyInvestigationCoordinator(harness.environment.ports);
+  const waiting = await directCoordinator.requestOperatorInput({ investigationId: started.id });
+  assert.equal(waiting.status, 'WAITING_FOR_OPERATOR_INPUT');
+  assert.equal(waiting.operatorInputRequest.kind, 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION');
+  assert.equal(JSON.stringify(waiting).includes('rawPrompt'), false);
+
+  const endpoint = `${collection}/${started.id}:submit-operator-input`;
+  const submitHeaders = {
+    ...headers,
+    'Idempotency-Key': 'operator-input-idempotency-http-001',
+  };
+  const submitBody = JSON.stringify({
+    schemaVersion: 1,
+    requestId: waiting.operatorInputRequest.id,
+    expectedRevision: waiting.revision,
+    values: {
+      analysisScope: 'SITE_ONLY',
+      operatorNote: 'Proceed with Site-only authority.',
+    },
+  });
+  const acceptedResponse = await harness.handler.handle(new Request(endpoint, {
+    method: 'POST',
+    headers: submitHeaders,
+    body: submitBody,
+  }));
+  assert.equal(acceptedResponse.status, 200);
+  const accepted = await body(acceptedResponse);
+  assert.equal(accepted.outcome, 'COMMITTED');
+  assert.equal(accepted.investigation.status, 'RUNNING');
+  assert.equal(accepted.investigation.activeRun.id, waiting.activeRun.id);
+  assert.equal(accepted.investigation.operatorInputRequest, null);
+  assert.equal(accepted.investigation.acceptedOperatorInputs.length, 1);
+  assert.equal(accepted.investigation.acceptedOperatorInputs[0].values.analysisScope, 'SITE_ONLY');
+  assert.equal(accepted.investigation.acceptedOperatorInputs[0].provenance.source, 'PLATFORM_GATEWAY');
+  assert.equal(accepted.investigation.acceptedOperatorInputs[0].provenance.policyRevision, 'policy-v17');
+
+  const outboxCount = harness.environment.businessStore.outboxEvents.length;
+  const auditCount = harness.environment.businessStore.auditRecords.length;
+  const retryResponse = await harness.handler.handle(new Request(endpoint, {
+    method: 'POST',
+    headers: submitHeaders,
+    body: submitBody,
+  }));
+  assert.equal(retryResponse.status, 200);
+  const retry = await body(retryResponse);
+  assert.equal(retry.outcome, 'DUPLICATE');
+  assert.equal(retry.investigation.revision, accepted.investigation.revision);
+  assert.equal(harness.environment.businessStore.outboxEvents.length, outboxCount);
+  assert.equal(harness.environment.businessStore.auditRecords.length, auditCount);
+
+  const authorizationCount = harness.authorizationCalls.length;
+  const unknownFieldResponse = await harness.handler.handle(new Request(endpoint, {
+    method: 'POST',
+    headers: submitHeaders,
+    body: JSON.stringify({
+      schemaVersion: 1,
+      requestId: waiting.operatorInputRequest.id,
+      expectedRevision: waiting.revision,
+      values: {
+        analysisScope: 'SITE_ONLY',
+        operatorNote: null,
+        rawPrompt: 'This field must never cross the contract.',
+      },
+    }),
+  }));
+  assert.equal(unknownFieldResponse.status, 400);
+  assert.equal(harness.authorizationCalls.length, authorizationCount);
 });
 
 test('internal HTTP authorization denial is nondiscoverable and malformed requests fail before use cases', async () => {
