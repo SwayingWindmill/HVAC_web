@@ -404,8 +404,16 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 	if route.mutation {
 		upstream.Header.Set("Content-Type", "application/json")
 	}
+	requestedPosition := ""
 	if route.kind == "STREAM" {
 		upstream.Header.Set("Accept", "text/event-stream, application/problem+json")
+		requestedPosition = strings.TrimSpace(request.Header.Get("Last-Event-ID"))
+		if requestedPosition != "" {
+			if len(requestedPosition) > 128 || strings.ContainsAny(requestedPosition, "\r\n") {
+				requestedPosition = "invalid"
+			}
+			upstream.Header.Set("Last-Event-ID", requestedPosition)
+		}
 	} else {
 		upstream.Header.Set("Accept", "application/json, application/problem+json")
 	}
@@ -435,13 +443,21 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 	contentType := strings.ToLower(response.Header.Get("Content-Type"))
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
 		if route.kind == "STREAM" {
-			if !strings.HasPrefix(contentType, "text/event-stream") || validateOperationsEventStream(raw) != nil {
+			recovery, recoveryErr := validateOperationsEventStream(raw, response.Header, requestedPosition)
+			if !strings.HasPrefix(contentType, "text/event-stream") || recoveryErr != nil {
 				writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_CONTRACT_FAILED", "Operations Agent contract failed", "The Operations Agent returned an invalid event stream.", true, nil)
 				return
 			}
 			writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 			writer.Header().Set("Cache-Control", "no-store, no-transform")
 			writer.Header().Set("X-Accel-Buffering", "no")
+			writer.Header().Set("X-Operations-Recovery-Mode", recovery.mode)
+			writer.Header().Set("X-Operations-Recovery-Reason", recovery.reason)
+			writer.Header().Set("X-Operations-Snapshot-Position", recovery.snapshotPosition)
+			writer.Header().Set("X-Operations-Latest-Position", recovery.latestPosition)
+			if recovery.replayFromPosition != "" {
+				writer.Header().Set("X-Operations-Replay-From", recovery.replayFromPosition)
+			}
 			writer.WriteHeader(response.StatusCode)
 			_, _ = writer.Write(raw)
 			return
@@ -817,9 +833,79 @@ func validateOperationsEvent(name string, value map[string]any) error {
 	return nil
 }
 
-func validateOperationsEventSequence(names []string, values []map[string]any, streamRevision uint64) error {
-	if len(names) < 3 || len(values) != len(names) || names[0] != "RUN_STARTED" || names[1] != "STATE_SNAPSHOT" || names[len(names)-1] != "RUN_FINISHED" {
+type operationsStreamRecovery struct {
+	mode               string
+	reason             string
+	snapshotPosition   string
+	latestPosition     string
+	replayFromPosition string
+	revision           uint64
+	latestSequence     uint64
+	replaySequence     uint64
+}
+
+func operationsReplayBoundary(sequence, latest uint64) bool {
+	return sequence == 0 || sequence == 1 || sequence == latest || (sequence >= 4 && sequence < latest && (sequence-4)%3 == 0)
+}
+
+func validateOperationsRecoveryHeaders(headers http.Header, requestedPosition string) (operationsStreamRecovery, error) {
+	recovery := operationsStreamRecovery{
+		mode:               strings.TrimSpace(headers.Get("X-Operations-Recovery-Mode")),
+		reason:             strings.TrimSpace(headers.Get("X-Operations-Recovery-Reason")),
+		snapshotPosition:   strings.TrimSpace(headers.Get("X-Operations-Snapshot-Position")),
+		latestPosition:     strings.TrimSpace(headers.Get("X-Operations-Latest-Position")),
+		replayFromPosition: strings.TrimSpace(headers.Get("X-Operations-Replay-From")),
+	}
+	if recovery.mode != "FULL_SNAPSHOT" && recovery.mode != "RESUME" {
+		return operationsStreamRecovery{}, errors.New("invalid Operations recovery mode")
+	}
+	if recovery.mode == "RESUME" {
+		if requestedPosition == "" || recovery.reason != "VALID" || recovery.replayFromPosition != requestedPosition {
+			return operationsStreamRecovery{}, errors.New("invalid Operations resume metadata")
+		}
+	} else {
+		switch recovery.reason {
+		case "INITIAL":
+			if requestedPosition != "" {
+				return operationsStreamRecovery{}, errors.New("initial Operations recovery must not follow a requested position")
+			}
+		case "UNKNOWN", "EXPIRED", "CONFLICT":
+			if requestedPosition == "" {
+				return operationsStreamRecovery{}, errors.New("fallback Operations recovery requires a requested position")
+			}
+		default:
+			return operationsStreamRecovery{}, errors.New("invalid Operations snapshot recovery metadata")
+		}
+		if recovery.replayFromPosition != "" {
+			return operationsStreamRecovery{}, errors.New("snapshot recovery must not claim a replay position")
+		}
+	}
+	snapshotRevision, snapshotSequence, err := parseOperationsEventID(recovery.snapshotPosition)
+	if err != nil || snapshotSequence != 1 {
+		return operationsStreamRecovery{}, errors.New("invalid Operations snapshot position")
+	}
+	latestRevision, latestSequence, err := parseOperationsEventID(recovery.latestPosition)
+	if err != nil || latestRevision != snapshotRevision || latestSequence < 2 {
+		return operationsStreamRecovery{}, errors.New("invalid Operations latest position")
+	}
+	recovery.revision = snapshotRevision
+	recovery.latestSequence = latestSequence
+	if recovery.mode == "RESUME" {
+		replayRevision, replaySequence, err := parseOperationsEventID(recovery.replayFromPosition)
+		if err != nil || replayRevision != snapshotRevision || replaySequence > latestSequence || !operationsReplayBoundary(replaySequence, latestSequence) {
+			return operationsStreamRecovery{}, errors.New("invalid Operations replay position")
+		}
+		recovery.replaySequence = replaySequence
+	}
+	return recovery, nil
+}
+
+func validateOperationsEventSequence(names []string, values []map[string]any, sequences []uint64, recovery operationsStreamRecovery) error {
+	if len(names) < 3 || len(values) != len(names) || len(sequences) != len(names) || names[0] != "RUN_STARTED" || names[1] != "STATE_SNAPSHOT" || names[len(names)-1] != "RUN_FINISHED" {
 		return errors.New("Operations event stream lifecycle is invalid")
+	}
+	if sequences[0] != 0 || sequences[1] != 1 || sequences[len(sequences)-1] != recovery.latestSequence {
+		return errors.New("Operations event stream control positions are invalid")
 	}
 	startThread, _ := values[0]["threadId"].(string)
 	startRun, _ := values[0]["runId"].(string)
@@ -832,23 +918,43 @@ func validateOperationsEventSequence(names []string, values []map[string]any, st
 	investigation := snapshot["investigation"].(map[string]any)
 	investigationRevision, revisionOK := operationsNonnegativeInteger(investigation["revision"])
 	investigationID, idOK := operationsBoundedString(investigation["id"], 256)
-	if !revisionOK || uint64(investigationRevision) != streamRevision || !idOK || investigationID != startThread {
+	if !revisionOK || uint64(investigationRevision) != recovery.revision || !idOK || investigationID != startThread {
 		return errors.New("Operations event stream does not match the authoritative snapshot")
 	}
 	activities := snapshot["toolActivities"].([]any)
-	toolEventCount := len(names) - 3
-	if toolEventCount%3 != 0 || len(activities) != toolEventCount/3 {
-		return errors.New("Operations Tool event count does not match the snapshot")
+	expectedLatest := uint64(2 + len(activities)*3)
+	if recovery.latestSequence != expectedLatest {
+		return errors.New("Operations latest position does not match the committed snapshot")
 	}
-	for index, candidate := range activities {
-		activity := candidate.(map[string]any)
-		startIndex := 2 + index*3
-		if names[startIndex] != "TOOL_CALL_START" || names[startIndex+1] != "TOOL_CALL_ARGS" || names[startIndex+2] != "TOOL_CALL_END" {
+	startActivity := 0
+	if recovery.mode == "RESUME" {
+		switch {
+		case recovery.replaySequence <= 1:
+			startActivity = 0
+		case recovery.replaySequence == recovery.latestSequence:
+			startActivity = len(activities)
+		default:
+			startActivity = int((recovery.replaySequence-4)/3) + 1
+		}
+	}
+	toolEventCount := len(names) - 3
+	if toolEventCount != (len(activities)-startActivity)*3 {
+		return errors.New("Operations replay event count does not match the committed snapshot suffix")
+	}
+	for replayIndex := 0; replayIndex < toolEventCount/3; replayIndex++ {
+		activityIndex := startActivity + replayIndex
+		activity := activities[activityIndex].(map[string]any)
+		streamIndex := 2 + replayIndex*3
+		if names[streamIndex] != "TOOL_CALL_START" || names[streamIndex+1] != "TOOL_CALL_ARGS" || names[streamIndex+2] != "TOOL_CALL_END" {
 			return errors.New("Operations Tool events are out of order")
 		}
-		start := values[startIndex]
-		arguments := values[startIndex+1]
-		end := values[startIndex+2]
+		expectedStart := uint64(2 + activityIndex*3)
+		if sequences[streamIndex] != expectedStart || sequences[streamIndex+1] != expectedStart+1 || sequences[streamIndex+2] != expectedStart+2 {
+			return errors.New("Operations Tool event positions are invalid")
+		}
+		start := values[streamIndex]
+		arguments := values[streamIndex+1]
+		end := values[streamIndex+2]
 		toolCallID, _ := start["toolCallId"].(string)
 		if arguments["toolCallId"] != toolCallID || end["toolCallId"] != toolCallID || activity["recordId"] != toolCallID || start["toolCallName"] != activity["logicalTool"] {
 			return errors.New("Operations Tool event identity changed")
@@ -867,9 +973,21 @@ func validateOperationsEventSequence(names []string, values []map[string]any, st
 	return nil
 }
 
+func canonicalOperationsEventNumber(value string) bool {
+	if value == "" || (len(value) > 1 && value[0] == '0') {
+		return false
+	}
+	for _, candidate := range value {
+		if candidate < '0' || candidate > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func parseOperationsEventID(id string) (uint64, uint64, error) {
 	revisionText, sequenceText, ok := strings.Cut(id, ":")
-	if !ok || revisionText == "" || sequenceText == "" || strings.Contains(sequenceText, ":") {
+	if !ok || strings.Contains(sequenceText, ":") || !canonicalOperationsEventNumber(revisionText) || !canonicalOperationsEventNumber(sequenceText) {
 		return 0, 0, errors.New("invalid Operations event identity")
 	}
 	revision, err := strconv.ParseUint(revisionText, 10, 64)
@@ -883,14 +1001,19 @@ func parseOperationsEventID(id string) (uint64, uint64, error) {
 	return revision, sequence, nil
 }
 
-func validateOperationsEventStream(raw []byte) error {
+func validateOperationsEventStream(raw []byte, headers http.Header, requestedPosition string) (operationsStreamRecovery, error) {
+	recovery, err := validateOperationsRecoveryHeaders(headers, requestedPosition)
+	if err != nil {
+		return operationsStreamRecovery{}, err
+	}
 	if len(raw) == 0 || !bytes.HasSuffix(raw, []byte("\n\n")) {
-		return errors.New("Operations event stream is incomplete")
+		return operationsStreamRecovery{}, errors.New("Operations event stream is incomplete")
 	}
 	normalized := strings.ReplaceAll(string(raw), "\r\n", "\n")
 	blocks := strings.Split(normalized, "\n\n")
 	eventNames := make([]string, 0, len(blocks))
 	eventValues := make([]map[string]any, 0, len(blocks))
+	eventSequences := make([]uint64, 0, len(blocks))
 	var streamRevision uint64
 	for _, block := range blocks {
 		if block == "" {
@@ -906,28 +1029,38 @@ func validateOperationsEventStream(raw []byte) error {
 			case strings.HasPrefix(line, "data: ") && data == "":
 				data = strings.TrimPrefix(line, "data: ")
 			default:
-				return errors.New("invalid Operations event stream field")
+				return operationsStreamRecovery{}, errors.New("invalid Operations event stream field")
 			}
 		}
 		if id == "" || len(id) > 128 || eventName == "" || data == "" {
-			return errors.New("incomplete Operations event stream block")
+			return operationsStreamRecovery{}, errors.New("incomplete Operations event stream block")
 		}
 		revision, sequence, err := parseOperationsEventID(id)
-		if err != nil || sequence != uint64(len(eventNames)) || (len(eventNames) > 0 && revision != streamRevision) {
-			return errors.New("Operations event stream identity is invalid")
+		if err != nil || (len(eventNames) > 0 && revision != streamRevision) {
+			return operationsStreamRecovery{}, errors.New("Operations event stream identity is invalid")
+		}
+		if len(eventSequences) > 0 && sequence <= eventSequences[len(eventSequences)-1] {
+			return operationsStreamRecovery{}, errors.New("Operations event stream positions are not ordered")
 		}
 		if len(eventNames) == 0 {
 			streamRevision = revision
 		}
 		value, err := decodeOperationsEventJSON(data)
 		if err != nil || validateOperationsEvent(eventName, value) != nil {
-			return errors.New("invalid Operations event stream payload")
+			return operationsStreamRecovery{}, errors.New("invalid Operations event stream payload")
 		}
 		eventNames = append(eventNames, eventName)
 		eventValues = append(eventValues, value)
+		eventSequences = append(eventSequences, sequence)
 		if len(eventNames) > 256 {
-			return errors.New("Operations event stream has too many events")
+			return operationsStreamRecovery{}, errors.New("Operations event stream has too many events")
 		}
 	}
-	return validateOperationsEventSequence(eventNames, eventValues, streamRevision)
+	if streamRevision != recovery.revision {
+		return operationsStreamRecovery{}, errors.New("Operations recovery metadata does not match stream revision")
+	}
+	if err := validateOperationsEventSequence(eventNames, eventValues, eventSequences, recovery); err != nil {
+		return operationsStreamRecovery{}, err
+	}
+	return recovery, nil
 }

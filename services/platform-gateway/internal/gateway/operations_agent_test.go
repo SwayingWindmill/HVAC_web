@@ -205,7 +205,22 @@ func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, now time
 			if fixture.invalidIdentity.Load() {
 				stream = strings.Replace(stream, "id: 9:1", "id: 9:2", 1)
 			}
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream; charset=utf-8"}}, Body: io.NopCloser(strings.NewReader(stream))}, nil
+			recoveryHeaders := http.Header{
+				"Content-Type":                   []string{"text/event-stream; charset=utf-8"},
+				"X-Operations-Recovery-Mode":     []string{"FULL_SNAPSHOT"},
+				"X-Operations-Recovery-Reason":   []string{"INITIAL"},
+				"X-Operations-Snapshot-Position": []string{"9:1"},
+				"X-Operations-Latest-Position":   []string{"9:2"},
+			}
+			requestedPosition := strings.TrimSpace(request.Header.Get("Last-Event-ID"))
+			if requestedPosition == "9:2" {
+				recoveryHeaders.Set("X-Operations-Recovery-Mode", "RESUME")
+				recoveryHeaders.Set("X-Operations-Recovery-Reason", "VALID")
+				recoveryHeaders.Set("X-Operations-Replay-From", requestedPosition)
+			} else if requestedPosition != "" {
+				recoveryHeaders.Set("X-Operations-Recovery-Reason", "UNKNOWN")
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: recoveryHeaders, Body: io.NopCloser(strings.NewReader(stream))}, nil
 		}
 		body := `{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","evidence":[],"analysisReferences":[],"findings":[],"toolReceipts":[]}`
 		status := http.StatusOK
@@ -311,7 +326,11 @@ func TestOperationsGatewayStreamsValidatedCommittedEvents(t *testing.T) {
 	}
 	if !strings.HasPrefix(recorder.Header().Get("Content-Type"), "text/event-stream") ||
 		!strings.Contains(recorder.Header().Get("Cache-Control"), "no-store") ||
-		recorder.Header().Get("X-Accel-Buffering") != "no" {
+		recorder.Header().Get("X-Accel-Buffering") != "no" ||
+		recorder.Header().Get("X-Operations-Recovery-Mode") != "FULL_SNAPSHOT" ||
+		recorder.Header().Get("X-Operations-Recovery-Reason") != "INITIAL" ||
+		recorder.Header().Get("X-Operations-Snapshot-Position") != "9:1" ||
+		recorder.Header().Get("X-Operations-Latest-Position") != "9:2" {
 		t.Fatalf("invalid stream headers: %v", recorder.Header())
 	}
 	body := recorder.Body.String()
@@ -329,6 +348,25 @@ func TestOperationsGatewayStreamsValidatedCommittedEvents(t *testing.T) {
 	if upstream == nil || upstream.URL.Path != "/internal/v1/sites/"+fixture.siteID+"/operations/investigations/investigation-001/events" ||
 		!strings.Contains(upstream.Header.Get("Accept"), "text/event-stream") {
 		t.Fatalf("invalid Operations stream forwarding: %+v", upstream)
+	}
+
+	firstIAMCalls := fixture.iamCalls.Load()
+	reconnect := httptest.NewRequest(http.MethodGet, path, nil)
+	reconnect.Header.Set("Last-Event-ID", "9:2")
+	fixture.authenticate(reconnect, false)
+	reconnectRecorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(reconnectRecorder, reconnect)
+	if reconnectRecorder.Code != http.StatusOK ||
+		reconnectRecorder.Header().Get("X-Operations-Recovery-Mode") != "RESUME" ||
+		reconnectRecorder.Header().Get("X-Operations-Replay-From") != "9:2" {
+		t.Fatalf("invalid reconnect response: status=%d headers=%v body=%s", reconnectRecorder.Code, reconnectRecorder.Header(), reconnectRecorder.Body.String())
+	}
+	if fixture.operationsCalls.Load() != 2 || fixture.iamCalls.Load() <= firstIAMCalls {
+		t.Fatalf("reconnect did not reauthorize: IAM before=%d after=%d Operations=%d", firstIAMCalls, fixture.iamCalls.Load(), fixture.operationsCalls.Load())
+	}
+	upstream = fixture.lastUpstream.Load()
+	if upstream == nil || upstream.Header.Get("Last-Event-ID") != "9:2" {
+		t.Fatalf("recovery position was not forwarded upstream: %+v", upstream)
 	}
 }
 
@@ -413,6 +451,19 @@ func TestOperationsGatewayRejectsUnsafeOrUnauthorizedEventStreams(t *testing.T) 
 	deniedFixture.handler.ServeHTTP(deniedRecorder, deniedRequest)
 	if deniedRecorder.Code != http.StatusNotFound || deniedFixture.operationsCalls.Load() != 0 {
 		t.Fatalf("unauthorized stream was discoverable or forwarded: status=%d calls=%d", deniedRecorder.Code, deniedFixture.operationsCalls.Load())
+	}
+}
+
+func TestParseOperationsEventIDRequiresCanonicalDecimalPositions(t *testing.T) {
+	for _, candidate := range []string{"01:2", "1:02", "+1:2", "1:-2", "1:2:3", " 1:2"} {
+		if _, _, err := parseOperationsEventID(candidate); err == nil {
+			t.Fatalf("noncanonical Operations event position was accepted: %q", candidate)
+		}
+	}
+	for _, candidate := range []string{"0:0", "1:2", "18446744073709551615:0"} {
+		if _, _, err := parseOperationsEventID(candidate); err != nil {
+			t.Fatalf("canonical Operations event position was rejected: %q: %v", candidate, err)
+		}
 	}
 }
 

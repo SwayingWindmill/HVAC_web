@@ -194,6 +194,10 @@ test('internal HTTP contract exposes only start, advance and safe authoritative 
   assert.equal(streamResponse.status, 200);
   assert.match(streamResponse.headers.get('content-type') ?? '', /^text\/event-stream/u);
   assert.match(streamResponse.headers.get('cache-control') ?? '', /no-store/u);
+  assert.equal(streamResponse.headers.get('x-operations-recovery-mode'), 'FULL_SNAPSHOT');
+  assert.equal(streamResponse.headers.get('x-operations-recovery-reason'), 'INITIAL');
+  const latestPosition = streamResponse.headers.get('x-operations-latest-position');
+  assert.match(latestPosition ?? '', /^\d+:\d+$/u);
   const stream = await streamResponse.text();
   assert.match(stream, /event: RUN_STARTED/u);
   assert.match(stream, /event: STATE_SNAPSHOT/u);
@@ -204,7 +208,19 @@ test('internal HTTP contract exposes only start, advance and safe authoritative 
   assert.equal(stream.includes('"metadata"'), false);
   assert.equal(stream.includes('"checkpoint"'), false);
 
-  assert.equal(harness.authorizationCalls.length, 4);
+  const resumedHeaders = { ...getHeaders, 'Last-Event-ID': latestPosition };
+  const resumedResponse = await harness.handler.handle(new Request(`${item}/events`, {
+    method: 'GET',
+    headers: resumedHeaders,
+  }));
+  assert.equal(resumedResponse.status, 200);
+  assert.equal(resumedResponse.headers.get('x-operations-recovery-mode'), 'RESUME');
+  assert.equal(resumedResponse.headers.get('x-operations-replay-from'), latestPosition);
+  const resumedStream = await resumedResponse.text();
+  assert.match(resumedStream, /event: STATE_SNAPSHOT/u);
+  assert.equal(resumedStream.includes('event: TOOL_CALL_START'), false);
+
+  assert.equal(harness.authorizationCalls.length, 5);
   assert.deepEqual(harness.authorizationCalls[1], {
     method: 'POST',
     path: `/internal/v1/sites/${siteId}/operations/investigations/${started.id}:advance`,

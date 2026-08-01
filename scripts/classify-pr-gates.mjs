@@ -66,7 +66,7 @@ const selectBroad = (file, reason) => {
   add(contractProfiles, ['core', 'rms', 's1', 's2', 's3']);
   add(unitProfiles, ['web', 's0', 's1', 's2', 's3', 'analytics', 'operations-agent', 'pocs']);
   add(integrationProfiles, ['s0', 's1', 's2-baseline', 's2-ingest', 's2-realtime', 's2-history', 's3', 'analytics', 'operations-agent']);
-  add(browserProfiles, ['rms', 's0', 's1', 's2']);
+  add(browserProfiles, ['operations-agent', 'rms', 's0', 's1', 's2']);
   addReason(file, reason);
 };
 
@@ -114,10 +114,11 @@ const selectAnalytics = (file, reason, { integration = false } = {}) => {
   addReason(file, reason);
 };
 
-const selectOperationsAgent = (file, reason, { integration = false } = {}) => {
+const selectOperationsAgent = (file, reason, { integration = false, browser = true } = {}) => {
   add(contractProfiles, ['core']);
   add(unitProfiles, ['operations-agent']);
   if (integration) add(integrationProfiles, ['operations-agent']);
+  if (browser) add(browserProfiles, ['operations-agent']);
   addReason(file, reason);
 };
 
@@ -145,9 +146,17 @@ for (const file of files) {
   match(file === 'scripts/classify-pr-gates.mjs' || file === 'scripts/run-pr-gate.mjs' || file === 'scripts/test-pr-gate-classifier.mjs', () => selectBroad(file, 'PR gate implementation changed'));
 
   match(file.startsWith('apps/hvac-web/') || file.startsWith('runtimes/copilot-runtime/'), () => selectWeb(file, 'HVAC Web runtime changed'));
+  match(
+    file.startsWith('apps/hvac-web/src/api/operations')
+      || file.startsWith('apps/hvac-web/src/real/OperationsInvestigation')
+      || file.startsWith('apps/hvac-web/src/real/operations/'),
+    () => selectOperationsAgent(file, 'Operations Workspace runtime changed', { integration: false }),
+  );
   match(file.startsWith('contracts/'), () => {
     add(contractProfiles, ['core']);
-    if (file.includes('telemetry') || file.includes('s2-')) selectS2(file, 'telemetry contract changed', { integration: false, browser: true });
+    if (file.includes('operations-agent') || file.includes('operations-investigation')) {
+      selectOperationsAgent(file, 'Operations Investigation contract changed', { integration: false });
+    } else if (file.includes('telemetry') || file.includes('s2-')) selectS2(file, 'telemetry contract changed', { integration: false, browser: true });
     else if (file.includes('command') || file.includes('s3-')) selectS3(file, 'command contract changed');
     else selectBroad(file, 'shared contract changed');
   });
@@ -176,6 +185,10 @@ for (const file of files) {
     selectS3(file, 'shared IAM or Gateway boundary changed');
     add(browserProfiles, ['rms']);
   });
+  match(
+    file.startsWith('services/platform-gateway/internal/gateway/operations_agent'),
+    () => selectOperationsAgent(file, 'Operations Gateway boundary changed', { integration: false }),
+  );
 
   match(file.startsWith('pocs/platform-components/'), () => {
     add(unitProfiles, ['pocs']);
@@ -199,7 +212,7 @@ for (const file of files) {
     });
     scriptMatch(lower.includes('s3-') || lower.includes('command'), () => selectS3(file, 'S3 automation changed', { integration: lower.includes('postgres') || lower.includes('thingsboard') }));
     scriptMatch(lower.includes('analytics'), () => selectAnalytics(file, 'analytics automation changed', { integration: lower.includes('history') || lower.includes('cube') }));
-    scriptMatch(lower.includes('operations-agent'), () => selectOperationsAgent(file, 'Operations Agent automation changed', { integration: lower.includes('postgres') || lower.includes('migration') }));
+    scriptMatch(lower.includes('operations-agent') || lower.includes('operations-workspace') || lower.includes('operations-reconnect'), () => selectOperationsAgent(file, 'Operations Agent automation changed', { integration: lower.includes('postgres') || lower.includes('migration') }));
     scriptMatch(lower.includes('ownership') || lower.includes('contract') || lower.includes('production-rollout'), () => add(contractProfiles, ['core']));
     if (!scriptMatched) {
       unknown = true;

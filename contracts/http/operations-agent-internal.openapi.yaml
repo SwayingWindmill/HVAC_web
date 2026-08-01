@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: Operations Agent Internal HTTP API
-  version: 1.0.0
-  description: Workload-authenticated Coordinator use cases for Site night-energy Investigations.
+  version: 1.1.0
+  description: Workload-authenticated Coordinator use cases for Site night-energy Investigations and reconnect-safe AG-UI recovery batches.
 servers:
   - url: https://operations-agent.internal.invalid
 paths:
@@ -37,18 +37,30 @@ paths:
   /internal/v1/sites/{siteId}/operations/investigations/{investigationId}/events:
     get:
       operationId: internalStreamSiteNightEnergyInvestigationEvents
+      description: Reauthorizes the delegated request, loads the current committed Investigation view and returns a finite recovery batch. Every response starts with an authoritative snapshot.
       parameters:
         - $ref: '#/components/parameters/SiteId'
         - $ref: '#/components/parameters/InvestigationId'
         - $ref: '#/components/parameters/ActingOrganization'
         - $ref: '#/components/parameters/DelegationGrant'
         - $ref: '#/components/parameters/PolicyRevision'
+        - $ref: '#/components/parameters/LastEventId'
       responses:
         '200':
-          description: Finite AG-UI event batch projected from the committed Investigation view.
+          description: Finite AG-UI recovery batch projected from the committed Investigation view.
           headers:
             Cache-Control:
               schema: { type: string, example: no-store, no-transform }
+            X-Operations-Recovery-Mode:
+              schema: { type: string, enum: [FULL_SNAPSHOT, RESUME] }
+            X-Operations-Recovery-Reason:
+              schema: { type: string, enum: [INITIAL, VALID, UNKNOWN, EXPIRED, CONFLICT] }
+            X-Operations-Snapshot-Position:
+              schema: { type: string, pattern: '^(0|[1-9][0-9]*):(0|[1-9][0-9]*)$' }
+            X-Operations-Latest-Position:
+              schema: { type: string, pattern: '^(0|[1-9][0-9]*):(0|[1-9][0-9]*)$' }
+            X-Operations-Replay-From:
+              schema: { type: string, pattern: '^(0|[1-9][0-9]*):(0|[1-9][0-9]*)$' }
           content:
             text/event-stream:
               schema: { type: string }
@@ -114,6 +126,15 @@ components:
       in: header
       required: true
       schema: { type: string, maxLength: 256 }
+    LastEventId:
+      name: Last-Event-ID
+      in: header
+      required: false
+      description: Last fully applied stable recovery position supplied by Platform Gateway.
+      schema:
+        type: string
+        maxLength: 128
+        pattern: '^(0|[1-9][0-9]*):(0|[1-9][0-9]*)$'
   responses:
     Investigation:
       description: Authoritative safe Investigation snapshot.

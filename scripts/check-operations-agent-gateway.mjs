@@ -72,6 +72,12 @@ for (const required of [
   'RUN_STARTED',
   'STATE_SNAPSHOT',
   'RUN_FINISHED',
+  'Last-Event-ID',
+  'X-Operations-Recovery-Mode',
+  'X-Operations-Recovery-Reason',
+  'X-Operations-Snapshot-Position',
+  'X-Operations-Latest-Position',
+  'X-Operations-Replay-From',
 ]) {
   if (!publicContract.includes(required)) failures.push(`Public OpenAPI is missing ${required}.`);
 }
@@ -80,6 +86,9 @@ for (const required of [
   'X-Delegation-Grant',
   'X-Route-Policy-Revision',
   'Cache-Control',
+  'Last-Event-ID',
+  'X-Operations-Recovery-Mode',
+  'X-Operations-Replay-From',
 ]) {
   if (!internalContract.includes(required)) failures.push(`Internal OpenAPI is missing ${required}.`);
 }
@@ -128,6 +137,9 @@ for (const required of [
   'RateLimitPerMinute',
   'validateOperationsSnapshot',
   'validateOperationsEventStream',
+  'validateOperationsRecoveryHeaders',
+  'Last-Event-ID',
+  'X-Operations-Recovery-Mode',
   'text/event-stream',
   'no-store, no-transform',
   'X-Accel-Buffering',

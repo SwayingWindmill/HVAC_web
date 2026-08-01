@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: HVAC Operations Investigations Public API
-  version: 1.0.0
-  description: Platform Gateway contract for Site night-energy Operations Investigations.
+  version: 1.1.0
+  description: Platform Gateway contract for Site night-energy Operations Investigations and reconnect-safe AG-UI recovery batches.
 servers:
   - url: https://api.example.invalid
 paths:
@@ -45,21 +45,32 @@ paths:
   /api/v1/sites/{siteId}/operations/investigations/{investigationId}/events:
     get:
       operationId: streamSiteNightEnergyInvestigationEvents
-      description: Returns a finite AG-UI event batch projected only from the current committed Investigation view. Cursor-based reconnect and delta replay are added by Map 4.2.
+      description: Returns a finite AG-UI recovery batch projected only from the current committed Investigation view. Every connection starts with an authoritative snapshot; a valid Last-Event-ID receives only the missing committed Tool-event suffix, while unknown, expired or conflicting positions fall back to a full snapshot.
       parameters:
         - $ref: '#/components/parameters/SiteId'
         - $ref: '#/components/parameters/InvestigationId'
+        - $ref: '#/components/parameters/LastEventId'
       responses:
         '200':
-          description: Committed Operations Investigation AG-UI events.
+          description: Committed Operations Investigation AG-UI recovery batch.
           headers:
             Cache-Control:
               schema: { type: string, example: no-store, no-transform }
+            X-Operations-Recovery-Mode:
+              schema: { type: string, enum: [FULL_SNAPSHOT, RESUME] }
+            X-Operations-Recovery-Reason:
+              schema: { type: string, enum: [INITIAL, VALID, UNKNOWN, EXPIRED, CONFLICT] }
+            X-Operations-Snapshot-Position:
+              schema: { type: string, pattern: '^(0|[1-9][0-9]*):(0|[1-9][0-9]*)$' }
+            X-Operations-Latest-Position:
+              schema: { type: string, pattern: '^(0|[1-9][0-9]*):(0|[1-9][0-9]*)$' }
+            X-Operations-Replay-From:
+              schema: { type: string, pattern: '^(0|[1-9][0-9]*):(0|[1-9][0-9]*)$' }
           content:
             text/event-stream:
               schema:
                 type: string
-                description: SSE blocks containing RUN_STARTED, STATE_SNAPSHOT, bounded TOOL_CALL events and RUN_FINISHED.
+                description: SSE blocks containing RUN_STARTED, the current STATE_SNAPSHOT, the missing bounded TOOL_CALL suffix and RUN_FINISHED.
         '404':
           $ref: '#/components/responses/Nondiscoverable'
   /api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance:
@@ -123,6 +134,15 @@ components:
         type: string
         minLength: 1
         maxLength: 256
+    LastEventId:
+      name: Last-Event-ID
+      in: header
+      required: false
+      description: Last fully applied stable recovery position. Only current-revision snapshot, complete Tool-call end, or batch-end positions are resumable.
+      schema:
+        type: string
+        maxLength: 128
+        pattern: '^(0|[1-9][0-9]*):(0|[1-9][0-9]*)$'
     CsrfToken:
       name: X-CSRF-Token
       in: header

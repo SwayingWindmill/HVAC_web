@@ -148,11 +148,29 @@ export interface ParsedOperationsAgUiEvent {
   event: OperationsAgUiEvent;
 }
 
+export type OperationsStreamRecoveryMode = 'FULL_SNAPSHOT' | 'RESUME';
+export type OperationsStreamRecoveryReason = 'INITIAL' | 'VALID' | 'UNKNOWN' | 'EXPIRED' | 'CONFLICT';
+
+export interface OperationsAgUiStreamRecovery {
+  readonly mode: OperationsStreamRecoveryMode;
+  readonly reason: OperationsStreamRecoveryReason;
+  readonly snapshotPosition: string;
+  readonly latestPosition: string;
+  readonly replayFromPosition: string | null;
+}
+
+export interface OperationsAgUiStreamBatch {
+  readonly events: readonly ParsedOperationsAgUiEvent[];
+  readonly recovery: OperationsAgUiStreamRecovery;
+}
+
 export function parseOperationsAgUiEventStream(raw: string): ParsedOperationsAgUiEvent[] {
   const normalized = raw.replace(/\r\n/gu, '\n');
   if (!normalized.endsWith('\n\n')) throw new Error('Operations event stream is incomplete.');
   const parsed: ParsedOperationsAgUiEvent[] = [];
+  const sequences: number[] = [];
   let streamRevision: string | undefined;
+  let previousSequence = -1;
   for (const block of normalized.split('\n\n')) {
     if (!block) continue;
     let id = '';
@@ -168,11 +186,16 @@ export function parseOperationsAgUiEventStream(raw: string): ParsedOperationsAgU
     if (!identity || !eventName || !data) {
       throw new Error('Operations event stream block is incomplete.');
     }
-    const [revision, sequence] = identity.slice(1);
-    if (Number(sequence) !== parsed.length || (streamRevision !== undefined && revision !== streamRevision)) {
+    const [revision, sequenceText] = identity.slice(1);
+    const sequence = Number(sequenceText);
+    if (!Number.isSafeInteger(sequence)
+      || sequence <= previousSequence
+      || (streamRevision !== undefined && revision !== streamRevision)) {
       throw new Error('Operations event stream identity is invalid.');
     }
     streamRevision ??= revision;
+    previousSequence = sequence;
+    sequences.push(sequence);
     const candidate: unknown = JSON.parse(data);
     rejectForbiddenStreamFields(candidate);
     const event = operationsAgUiEventSchema.parse(candidate);
@@ -202,15 +225,32 @@ export function parseOperationsAgUiEventStream(raw: string): ParsedOperationsAgU
     throw new Error('Operations event stream does not match its authoritative snapshot.');
   }
   const toolEvents = parsed.slice(2, -1);
+  const toolSequences = sequences.slice(2, -1);
   const activities = snapshotEvent.snapshot.toolActivities;
-  if (toolEvents.length % 3 !== 0 || activities.length !== toolEvents.length / 3) {
-    throw new Error('Operations Tool events do not match the committed snapshot.');
+  const expectedLatest = 2 + activities.length * 3;
+  if (sequences[0] !== 0 || sequences[1] !== 1 || sequences.at(-1) !== expectedLatest) {
+    throw new Error('Operations event stream control positions are invalid.');
   }
-  activities.forEach((activity, index) => {
-    const start = toolEvents[index * 3]?.event;
-    const args = toolEvents[index * 3 + 1]?.event;
-    const end = toolEvents[index * 3 + 2]?.event;
-    if (start?.type !== 'TOOL_CALL_START'
+  const startActivity = toolSequences.length === 0
+    ? activities.length
+    : (toolSequences[0] - 2) / 3;
+  if (!Number.isInteger(startActivity)
+    || startActivity < 0
+    || startActivity > activities.length
+    || toolEvents.length !== (activities.length - startActivity) * 3) {
+    throw new Error('Operations Tool replay suffix does not match the committed snapshot.');
+  }
+  for (let replayIndex = 0; replayIndex < toolEvents.length / 3; replayIndex += 1) {
+    const activityIndex = startActivity + replayIndex;
+    const activity = activities[activityIndex];
+    const start = toolEvents[replayIndex * 3]?.event;
+    const args = toolEvents[replayIndex * 3 + 1]?.event;
+    const end = toolEvents[replayIndex * 3 + 2]?.event;
+    const expectedStart = 2 + activityIndex * 3;
+    if (toolSequences[replayIndex * 3] !== expectedStart
+      || toolSequences[replayIndex * 3 + 1] !== expectedStart + 1
+      || toolSequences[replayIndex * 3 + 2] !== expectedStart + 2
+      || start?.type !== 'TOOL_CALL_START'
       || args?.type !== 'TOOL_CALL_ARGS'
       || end?.type !== 'TOOL_CALL_END'
       || start.toolCallId !== args.toolCallId
@@ -223,6 +263,6 @@ export function parseOperationsAgUiEventStream(raw: string): ParsedOperationsAgU
     if (JSON.stringify(deltaActivity) !== JSON.stringify(activity)) {
       throw new Error('Operations Tool event differs from the committed snapshot.');
     }
-  });
+  }
   return parsed;
 }
