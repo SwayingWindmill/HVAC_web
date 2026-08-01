@@ -327,26 +327,66 @@ func validateS3Phase(entry RouteEntry, seenScopes map[string]bool) error {
 }
 
 func validateS4Phase(entry RouteEntry, seenScopes map[string]bool) error {
-	if entry.PublicIngress != OwnerGateway || entry.ShadowSideEffectPolicy != "NONE" || entry.ReadOnlyFallback || entry.ReadFallbackOwner != "" {
-		return errors.New("S4 route must use Gateway ingress, side-effect-free reads and no request fallback")
+	if entry.PublicIngress != OwnerGateway || entry.ReadOnlyFallback || entry.ReadFallbackOwner != "" {
+		return errors.New("S4 route must use Gateway ingress and no request fallback")
 	}
-	for _, required := range []string{"organization", "site", "principal"} {
-		if !seenScopes[required] {
-			return errors.New("S4 scope dimensions are incomplete")
+	switch entry.Method {
+	case http.MethodGet:
+		if entry.ShadowSideEffectPolicy != "NONE" {
+			return errors.New("S4 read route must be side-effect-free")
 		}
-	}
-	for _, required := range []string{"AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"} {
-		if !containsString(entry.FallbackForbiddenResults, required) {
-			return errors.New("S4 forbidden results are incomplete")
+		for _, required := range []string{"organization", "site", "principal"} {
+			if !seenScopes[required] {
+				return errors.New("S4 read scope dimensions are incomplete")
+			}
 		}
-	}
-	if entry.CohortGroup == "" {
-		return errors.New("S4 route requires a cohort group")
+		for _, required := range []string{"AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"} {
+			if !containsString(entry.FallbackForbiddenResults, required) {
+				return errors.New("S4 read forbidden results are incomplete")
+			}
+		}
+		if entry.CohortGroup != "s4-alarm-read-v1" {
+			return errors.New("S4 read route requires the Alarm read cohort group")
+		}
+	case http.MethodPost:
+		if entry.ShadowSideEffectPolicy != "SYNTHETIC_ONLY" || !isS4LifecyclePath(entry.Path) {
+			return errors.New("S4 lifecycle route must be a declared synthetic-only Alarm operation")
+		}
+		for _, required := range []string{"organization", "site", "alarm", "principal", "key"} {
+			if !seenScopes[required] {
+				return errors.New("S4 lifecycle scope dimensions are incomplete")
+			}
+		}
+		for _, required := range []string{"AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND", "VERSION_CONFLICT", "IDEMPOTENCY_CONFLICT"} {
+			if !containsString(entry.FallbackForbiddenResults, required) {
+				return errors.New("S4 lifecycle forbidden results are incomplete")
+			}
+		}
+		if entry.CohortGroup != "s4-alarm-lifecycle-v1" {
+			return errors.New("S4 lifecycle route requires the Alarm lifecycle cohort group")
+		}
+	default:
+		return errors.New("S4 route method is unsupported")
 	}
 	if entry.MigrationPhase != PhaseS4ContractOnly || entry.Owner != OwnerAlarm || entry.ActivationStatus != "expand-baseline" || entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" {
 		return errors.New("S4 contract-only policy is invalid")
 	}
 	return nil
+}
+
+func isS4LifecyclePath(path string) bool {
+	switch path {
+	case "/api/v1/sites/{siteId}/alarms/{alarmId}:acknowledge",
+		"/api/v1/sites/{siteId}/alarms/{alarmId}:assign",
+		"/api/v1/sites/{siteId}/alarms/{alarmId}:unassign",
+		"/api/v1/sites/{siteId}/alarms/{alarmId}:suppress",
+		"/api/v1/sites/{siteId}/alarms/{alarmId}:unsuppress",
+		"/api/v1/sites/{siteId}/alarms/{alarmId}:close",
+		"/api/v1/sites/{siteId}/alarms/{alarmId}:reopen":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateS2PercentagePhase(entry RouteEntry, percentage int) error {
