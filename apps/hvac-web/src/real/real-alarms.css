@@ -168,6 +168,57 @@
   padding: 0.5rem 0.9rem;
 }
 
+.real-alarms__lifecycle {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 0.7rem;
+  background: rgba(128, 128, 128, 0.06);
+}
+
+.real-alarms__lifecycle label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.real-alarms__lifecycle textarea,
+.real-alarms__lifecycle input,
+.real-alarms__lifecycle select {
+  width: 100%;
+  min-height: 2.5rem;
+  box-sizing: border-box;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(128, 128, 128, 0.45);
+  border-radius: 0.55rem;
+  background: inherit;
+  color: inherit;
+  font: inherit;
+}
+
+.real-alarms__lifecycle textarea {
+  min-height: 5.5rem;
+  resize: vertical;
+}
+
+.real-alarms__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.real-alarms__actions button {
+  min-height: 2.4rem;
+  padding: 0.45rem 0.8rem;
+}
+
+.real-alarms__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 @media (max-width: 900px) {
   .real-alarms__workspace,
   .real-alarms__facts {

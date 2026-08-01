@@ -148,6 +148,7 @@ const acceptedS4OwnershipNames = new Set([
   'alarm-transition',
   'alarm-evidence',
   'alarm-occurrence-deduplication',
+  'alarm-idempotency',
 ]);
 const registeredS4Resources = ownership.resources.filter((resource) => acceptedS4OwnershipNames.has(resource.name));
 assert(registeredS4Resources.length === acceptedS4OwnershipNames.size, `S4 Alarm ownership resources are incomplete: ${JSON.stringify(registeredS4Resources)}`);

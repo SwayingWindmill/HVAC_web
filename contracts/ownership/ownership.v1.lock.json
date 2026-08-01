@@ -1,5 +1,5 @@
 {
-  "routeRegistryRevision": 12,
+  "routeRegistryRevision": 13,
   "routes": {
     "GET /api/v1/health": { "revision": 1, "owner": "platform-gateway" },
     "GET /api/v1/version": { "revision": 1, "owner": "platform-gateway" },
@@ -34,9 +34,16 @@
     "POST /api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance": { "revision": 1, "owner": "operations-agent-service" },
     "POST /api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel": { "revision": 1, "owner": "operations-agent-service" },
     "GET /api/v1/sites/{siteId}/alarms": { "revision": 1, "owner": "alarm-service" },
-    "GET /api/v1/sites/{siteId}/alarms/{alarmId}": { "revision": 1, "owner": "alarm-service" }
+    "GET /api/v1/sites/{siteId}/alarms/{alarmId}": { "revision": 1, "owner": "alarm-service" },
+    "POST /api/v1/sites/{siteId}/alarms/{alarmId}:acknowledge": { "revision": 1, "owner": "alarm-service" },
+    "POST /api/v1/sites/{siteId}/alarms/{alarmId}:assign": { "revision": 1, "owner": "alarm-service" },
+    "POST /api/v1/sites/{siteId}/alarms/{alarmId}:unassign": { "revision": 1, "owner": "alarm-service" },
+    "POST /api/v1/sites/{siteId}/alarms/{alarmId}:suppress": { "revision": 1, "owner": "alarm-service" },
+    "POST /api/v1/sites/{siteId}/alarms/{alarmId}:unsuppress": { "revision": 1, "owner": "alarm-service" },
+    "POST /api/v1/sites/{siteId}/alarms/{alarmId}:close": { "revision": 1, "owner": "alarm-service" },
+    "POST /api/v1/sites/{siteId}/alarms/{alarmId}:reopen": { "revision": 1, "owner": "alarm-service" }
   },
-  "dataRegistryRevision": 14,
+  "dataRegistryRevision": 15,
   "resources": {
     "schema:gateway": { "revision": 1, "writer": "platform-gateway" },
     "schema:audit_ledger": { "revision": 1, "writer": "audit-ledger-service" },
@@ -89,6 +96,7 @@
     "projection:alarm-transition": { "revision": 1, "writer": "alarm-service" },
     "projection:alarm-evidence": { "revision": 1, "writer": "alarm-service" },
     "projection:alarm-occurrence-deduplication": { "revision": 1, "writer": "alarm-service" },
+    "projection:alarm-idempotency": { "revision": 1, "writer": "alarm-service" },
     "transport-store:s2-telemetry-transport-redis": { "revision": 1, "writer": "centrifugo" },
     "compatibility-boundary:legacy-telemetry-timeseries": { "revision": 1, "writer": "legacy-hvac-backend" },
     "migration-dataset:s1-legacy-resource-map": { "revision": 1, "writer": "platform-core-service" },

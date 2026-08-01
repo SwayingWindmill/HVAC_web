@@ -321,6 +321,7 @@ function ReadySiteSurface({
           <RealAlarms
             site={decision.context.site}
             principal={snapshot.principal!}
+            registerUnsavedDraft={registerUnsavedDraft}
             registerProtectedResource={registerProtectedResource}
           />
         </Suspense>

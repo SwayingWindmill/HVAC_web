@@ -16,7 +16,7 @@ Deliver an authoritative, Site-scoped HVAC operations product in which every vis
 | 2 | Real Dashboard | In review | PR #165 provides the first authoritative Site overview. |
 | 3 | Complete Energy | Merged | PR #167 delivered calendar workspaces, comparisons, drill-down, and protected query lifecycle. |
 | 4 | Real Commands | Merged | PR #169 delivered authoritative Site scope, local-only governed Command evidence, and a production-disabled control boundary. |
-| 5 | Alarm | In review | PR #171 establishes an independent read-only Alarm owner, strict lifecycle contract, Site list/detail, and browser certification while production routes remain disabled. |
+| 5 | Alarm | P1 merged; P2 certifying | PR #171 merged the independent read owner. P2 adds authoritative acknowledgement, assignment, suppression, closure, optimistic concurrency, idempotent retry, PostgreSQL authority evidence, protected local lifecycle UI, and browser certification while every public Alarm route remains disabled at 0%. |
 | 6 | Work Order | Planned | Must be a separate durable domain linked to, but not collapsed into, Alarm. |
 | 7 | FDD | Planned | Requires governed evidence from Assets, Telemetry, Energy, Alarm, and Work Order. |
 | 8 | Optimization | Planned | Requires FDD and Energy evidence plus explicit safety and approval boundaries. |
@@ -89,12 +89,19 @@ Exit criteria:
 
 Create an authoritative Alarm domain for durable operational exceptions.
 
-Exit criteria:
+Delivered P1/P2 baseline:
 
 - Alarm identity, source, severity, lifecycle, acknowledgement, suppression, assignment, and closure are server-owned.
+- Every lifecycle write requires exact signed action and scope, CSRF, expected aggregate version, stable idempotency binding, and durable actor/policy/correlation evidence.
 - Telemetry state alone is never displayed as an Alarm unless an Alarm owner publishes it.
 - Duplicate and correlated occurrences preserve evidence and lifecycle history.
-- Site list, detail, filtering, acknowledgement, and audit evidence are browser-certified.
+- Site list, detail, filtering, acknowledgement, assignment, suppression, closure, conflict recovery, and audit evidence are browser-certified locally.
+- PostgreSQL certification proves FORCE RLS, explicit runtime-role activation, cross-Organization isolation, restricted column updates, atomic lifecycle persistence, and idempotent replay.
+
+Remaining activation work:
+
+- Public Gateway/IAM lifecycle authorization and operational rollout require a separate certification; all public read and write routes remain at 0% production traffic.
+- Automated suppression expiry, notification delivery, correlation policy, and Work Order linkage remain later independent slices.
 
 ### 6. Work Order
 
@@ -172,4 +179,4 @@ The Operations Agent and Platform/System Management are parallel programs rather
 
 ## Immediate next action
 
-Finish the first Real Alarm slice: independent Alarm ownership, exact signed read scope, durable source/evidence/lifecycle projections, bounded Site list and detail, protected cache cleanup, and browser certification. Production Alarm routes remain disabled at 0% until IAM/Gateway read authorization and operational rollout are separately certified.
+Merge and review the Real Alarm P2 lifecycle baseline, then define the separate activation slice for Gateway/IAM lifecycle authorization and operational rollout. Public Alarm read and write routes remain disabled at 0%; automated suppression expiry, notifications, correlation policy, and Work Order linkage must not be folded into activation without their own contracts and certification.

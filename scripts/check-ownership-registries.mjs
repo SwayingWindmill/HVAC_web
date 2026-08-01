@@ -67,6 +67,21 @@ const expectedS3MigrationPhases = [
   'S3-R3-site-canary',
   'S3-R4-operationally-certified',
 ];
+const s4AlarmReadRoutes = new Set([
+  'GET /api/v1/sites/{siteId}/alarms',
+  'GET /api/v1/sites/{siteId}/alarms/{alarmId}',
+]);
+const s4AlarmLifecycleRoutes = new Set([
+  'POST /api/v1/sites/{siteId}/alarms/{alarmId}:acknowledge',
+  'POST /api/v1/sites/{siteId}/alarms/{alarmId}:assign',
+  'POST /api/v1/sites/{siteId}/alarms/{alarmId}:unassign',
+  'POST /api/v1/sites/{siteId}/alarms/{alarmId}:suppress',
+  'POST /api/v1/sites/{siteId}/alarms/{alarmId}:unsuppress',
+  'POST /api/v1/sites/{siteId}/alarms/{alarmId}:close',
+  'POST /api/v1/sites/{siteId}/alarms/{alarmId}:reopen',
+]);
+const expectedS4ReadPhases = ['S4-R0-contract-only', 'S4-R1-internal-read-only', 'S4-R2-site-canary', 'S4-R3-operationally-certified'];
+const expectedS4LifecyclePhases = ['S4-R0-contract-only', 'S4-R1-internal-lifecycle', 'S4-R2-site-canary', 'S4-R3-operationally-certified'];
 const allowedScopes = new Set(['organization', 'principal', 'site', 'device', 'key', 'alarm']);
 const allowedCompatibility = new Set(['native', 'legacy-read']);
 const allowedMethods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -176,6 +191,25 @@ for (const route of routeRegistry.routes ?? []) {
       if (!forbiddenResults.includes(result)) errors.push(`${key}: fallback is not forbidden for ${result}`);
     }
   }
+  if (s4AlarmReadRoutes.has(key) || s4AlarmLifecycleRoutes.has(key)) {
+    if (route.owner !== 'alarm-service' || route.publicIngress !== 'platform-gateway') errors.push(`${key}: S4 Alarm route must remain behind Gateway ingress`);
+    if (route.activationStatus !== 'expand-baseline' || rollout.mode !== 'disabled') errors.push(`${key}: S4 Alarm baseline must carry zero production traffic`);
+    if (route.migrationPhase !== 'S4-R0-contract-only' || route.readOnlyFallback !== false) errors.push(`${key}: S4 Alarm baseline must remain contract-only without fallback`);
+    const lifecycle = s4AlarmLifecycleRoutes.has(key);
+    const expectedPhases = lifecycle ? expectedS4LifecyclePhases : expectedS4ReadPhases;
+    const expectedCohort = lifecycle ? 's4-alarm-lifecycle-v1' : 's4-alarm-read-v1';
+    const expectedShadow = lifecycle ? 'SYNTHETIC_ONLY' : 'NONE';
+    if (route.cohortGroup !== expectedCohort) errors.push(`${key}: S4 Alarm cohort group drifted`);
+    if (!Array.isArray(route.migrationPhases) || route.migrationPhases.join('|') !== expectedPhases.join('|')) errors.push(`${key}: S4 Alarm phases are incomplete or reordered`);
+    if (route.shadowSideEffectPolicy !== expectedShadow) errors.push(`${key}: S4 Alarm shadow policy drifted`);
+    for (const scope of lifecycle ? ['organization', 'site', 'alarm', 'principal', 'key'] : ['organization', 'site', 'principal']) {
+      if (!(route.allowedScopeDimensions ?? []).includes(scope)) errors.push(`${key}: missing S4 Alarm scope ${scope}`);
+    }
+    const forbiddenResults = route.fallbackForbiddenResults ?? [];
+    for (const result of lifecycle ? ['AUTHORIZATION_DENIED', 'RESOURCE_NOT_FOUND', 'VERSION_CONFLICT', 'IDEMPOTENCY_CONFLICT'] : ['AUTHORIZATION_DENIED', 'RESOURCE_NOT_FOUND']) {
+      if (!forbiddenResults.includes(result)) errors.push(`${key}: S4 Alarm fallback is not forbidden for ${result}`);
+    }
+  }
   const locked = lock.routes?.[key];
   if (!locked) {
     errors.push(`${key}: route is missing from compatibility lock`);
@@ -192,6 +226,12 @@ for (const key of s2TelemetryRoutes.keys()) {
 }
 for (const key of s3CommandRoutes) {
   if (!routeKeys.has(key)) errors.push(`${key}: required S3 route is missing`);
+}
+for (const key of s4AlarmReadRoutes) {
+  if (!routeKeys.has(key)) errors.push(`${key}: required S4 read route is missing`);
+}
+for (const key of s4AlarmLifecycleRoutes) {
+  if (!routeKeys.has(key)) errors.push(`${key}: required S4 lifecycle route is missing`);
 }
 
 const phaseExpectations = [
@@ -288,8 +328,8 @@ const requiredIdentities = new Map([
   ['telemetry_runtime:s2_telemetry_iam', { migrationRole: 's2_telemetry_migrator', accessMode: 'connect-only', restrictedTo: [] }],
   ['command_runtime:s3_command_runtime', { migrationRole: 's3_command_migrator', accessMode: 'write' }],
   ['command_runtime:s3_command_service', { migrationRole: 's3_command_migrator', activationRole: 's3_command_runtime', accessMode: 'write' }],
-  ['alarm_runtime:s4_alarm_runtime', { migrationRole: 's4_alarm_migrator', accessMode: 'read' }],
-  ['alarm_runtime:s4_alarm_service', { migrationRole: 's4_alarm_migrator', activationRole: 's4_alarm_runtime', accessMode: 'read' }],
+  ['alarm_runtime:s4_alarm_runtime', { migrationRole: 's4_alarm_migrator', accessMode: 'write' }],
+  ['alarm_runtime:s4_alarm_service', { migrationRole: 's4_alarm_migrator', activationRole: 's4_alarm_runtime', accessMode: 'write' }],
 ]);
 for (const identity of dataRegistry.databaseIdentities ?? []) {
   const key = `${identity.schema}:${identity.runtimeRole}`;

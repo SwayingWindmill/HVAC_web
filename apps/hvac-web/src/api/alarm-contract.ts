@@ -5,6 +5,16 @@ export const alarmUUIDv7Schema = alarmUUIDSchema.regex(/^[0-9a-f]{8}-[0-9a-f]{4}
 export const alarmSeveritySchema = z.enum(['INFO', 'WARNING', 'MAJOR', 'CRITICAL']);
 export const alarmStatusSchema = z.enum(['OPEN', 'ACKNOWLEDGED', 'SUPPRESSED', 'CLOSED']);
 export const alarmSourceTypeSchema = z.enum(['DEVICE_RULE', 'SITE_RULE', 'EXTERNAL']);
+export const alarmOperationSchema = z.enum([
+  'PUBLISH',
+  'ACKNOWLEDGE',
+  'ASSIGN',
+  'UNASSIGN',
+  'SUPPRESS',
+  'UNSUPPRESS',
+  'CLOSE',
+  'REOPEN',
+]);
 
 export const alarmEvidenceReferenceSchema = z.object({
   kind: z.string().min(1).max(128),
@@ -15,12 +25,80 @@ export const alarmEvidenceReferenceSchema = z.object({
 export const alarmTransitionSchema = z.object({
   fromStatus: alarmStatusSchema.optional(),
   toStatus: alarmStatusSchema,
+  operation: alarmOperationSchema.optional(),
   reason: z.string().min(1).max(256),
   actorType: z.string().min(1).max(64),
   actorId: z.string().min(1).max(256).optional(),
+  assigneeId: z.string().min(1).max(256).optional(),
+  suppressedUntil: z.string().datetime({ offset: true }).optional(),
+  policyRevision: z.string().min(1).max(128).optional(),
+  correlationId: z.string().min(1).max(256).optional(),
   occurredAt: z.string().datetime({ offset: true }),
   version: z.number().int().positive(),
 }).strict();
+
+function addIssue(context: z.RefinementCtx, message: string): void {
+  context.addIssue({ code: z.ZodIssueCode.custom, message });
+}
+
+function validateOperationShape(
+  transition: z.infer<typeof alarmTransitionSchema>,
+  context: z.RefinementCtx,
+): void {
+  if (!transition.fromStatus || !transition.operation) return;
+  const sameStatus = transition.toStatus === transition.fromStatus;
+  switch (transition.operation) {
+    case 'ACKNOWLEDGE':
+      if (transition.fromStatus !== 'OPEN' || transition.toStatus !== 'ACKNOWLEDGED' || transition.assigneeId || transition.suppressedUntil) {
+        addIssue(context, 'Alarm acknowledgement transition is invalid');
+      }
+      break;
+    case 'ASSIGN':
+      if (transition.fromStatus === 'CLOSED' || !sameStatus || !transition.assigneeId || transition.suppressedUntil) {
+        addIssue(context, 'Alarm assignment transition is invalid');
+      }
+      break;
+    case 'UNASSIGN':
+      if (transition.fromStatus === 'CLOSED' || !sameStatus || transition.assigneeId || transition.suppressedUntil) {
+        addIssue(context, 'Alarm unassignment transition is invalid');
+      }
+      break;
+    case 'SUPPRESS': {
+      const occurredAt = Date.parse(transition.occurredAt);
+      const suppressedUntil = transition.suppressedUntil ? Date.parse(transition.suppressedUntil) : Number.NaN;
+      const duration = suppressedUntil - occurredAt;
+      if (
+        !['OPEN', 'ACKNOWLEDGED'].includes(transition.fromStatus)
+        || transition.toStatus !== 'SUPPRESSED'
+        || transition.assigneeId
+        || !Number.isFinite(suppressedUntil)
+        || duration <= 0
+        || duration > 30 * 24 * 60 * 60 * 1000
+      ) {
+        addIssue(context, 'Alarm suppression transition is invalid');
+      }
+      break;
+    }
+    case 'UNSUPPRESS':
+      if (transition.fromStatus !== 'SUPPRESSED' || !['OPEN', 'ACKNOWLEDGED'].includes(transition.toStatus) || transition.assigneeId || transition.suppressedUntil) {
+        addIssue(context, 'Alarm unsuppression transition is invalid');
+      }
+      break;
+    case 'CLOSE':
+      if (transition.fromStatus === 'CLOSED' || transition.toStatus !== 'CLOSED' || transition.assigneeId || transition.suppressedUntil) {
+        addIssue(context, 'Alarm close transition is invalid');
+      }
+      break;
+    case 'REOPEN':
+      if (transition.fromStatus !== 'CLOSED' || transition.toStatus !== 'OPEN' || transition.assigneeId || transition.suppressedUntil) {
+        addIssue(context, 'Alarm reopen transition is invalid');
+      }
+      break;
+    case 'PUBLISH':
+      addIssue(context, 'Alarm publish operation is only valid for the initial transition');
+      break;
+  }
+}
 
 export const alarmSchema = z.object({
   schemaVersion: z.literal(1),
@@ -34,6 +112,8 @@ export const alarmSchema = z.object({
   summary: z.string().min(1).max(2048),
   severity: alarmSeveritySchema,
   status: alarmStatusSchema,
+  assigneeId: z.string().min(1).max(256).optional(),
+  suppressedUntil: z.string().datetime({ offset: true }).optional(),
   occurrenceCount: z.number().int().positive(),
   firstOccurredAt: z.string().datetime({ offset: true }),
   lastOccurredAt: z.string().datetime({ offset: true }),
@@ -48,26 +128,57 @@ export const alarmSchema = z.object({
   const created = Date.parse(alarm.createdAt);
   const updated = Date.parse(alarm.updatedAt);
   if (last < first || updated < created || updated < last) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Alarm time ordering is invalid' });
+    addIssue(context, 'Alarm time ordering is invalid');
   }
+
   let previousStatus: z.infer<typeof alarmStatusSchema> | undefined;
   let previousVersion = 0;
+  let projectedAssigneeId: string | undefined;
+  let projectedSuppressedUntil: string | undefined;
+  let projectedSuppressionReturnStatus: z.infer<typeof alarmStatusSchema> | undefined;
   alarm.transitions.forEach((transition, index) => {
-    if (transition.version <= previousVersion) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Alarm transition versions are not increasing' });
+    if (transition.version <= previousVersion) addIssue(context, 'Alarm transition versions are not increasing');
+    if (index === 0) {
+      if (transition.fromStatus !== undefined) addIssue(context, 'Alarm initial transition has a source status');
+      if (transition.operation !== undefined && transition.operation !== 'PUBLISH') addIssue(context, 'Alarm initial operation is invalid');
+    } else {
+      if (transition.fromStatus !== previousStatus) addIssue(context, 'Alarm transition chain is invalid');
+      if (!transition.operation || transition.operation === 'PUBLISH') addIssue(context, 'Alarm lifecycle operation is missing');
+      if (!transition.actorId || !transition.policyRevision || !transition.correlationId) addIssue(context, 'Alarm transition audit evidence is incomplete');
+      validateOperationShape(transition, context);
     }
-    if (index === 0 && transition.fromStatus !== undefined) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Alarm initial transition has a source status' });
+    if (transition.operation === 'ASSIGN') projectedAssigneeId = transition.assigneeId;
+    if (transition.operation === 'UNASSIGN') projectedAssigneeId = undefined;
+    if (transition.operation === 'SUPPRESS') {
+      projectedSuppressedUntil = transition.suppressedUntil;
+      projectedSuppressionReturnStatus = transition.fromStatus;
     }
-    if (index > 0 && transition.fromStatus !== previousStatus) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Alarm transition chain is invalid' });
+    if (transition.operation === 'UNSUPPRESS') {
+      if (!projectedSuppressionReturnStatus || transition.toStatus !== projectedSuppressionReturnStatus) {
+        addIssue(context, 'Alarm unsuppression does not restore the suppressed lifecycle state');
+      }
+      projectedSuppressedUntil = undefined;
+      projectedSuppressionReturnStatus = undefined;
+    }
+    if (transition.operation === 'CLOSE' || transition.operation === 'REOPEN') {
+      projectedSuppressedUntil = undefined;
+      projectedSuppressionReturnStatus = undefined;
     }
     previousStatus = transition.toStatus;
     previousVersion = transition.version;
   });
   const latest = alarm.transitions.at(-1);
   if (!latest || latest.toStatus !== alarm.status || latest.version !== alarm.version) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Alarm timeline does not converge' });
+    addIssue(context, 'Alarm timeline does not converge');
+  }
+  if (projectedAssigneeId !== alarm.assigneeId || projectedSuppressedUntil !== alarm.suppressedUntil) {
+    addIssue(context, 'Alarm lifecycle facts do not converge');
+  }
+  if (
+    (alarm.status === 'SUPPRESSED') !== Boolean(alarm.suppressedUntil)
+    || (alarm.status === 'SUPPRESSED') !== Boolean(projectedSuppressionReturnStatus)
+  ) {
+    addIssue(context, 'Alarm suppression state is inconsistent');
   }
 });
 
@@ -78,16 +189,17 @@ export const alarmListResponseSchema = z.object({
   hasMore: z.boolean(),
 }).strict().superRefine((response, context) => {
   if (response.hasMore !== Boolean(response.nextCursor)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Alarm cursor state is inconsistent' });
+    addIssue(context, 'Alarm cursor state is inconsistent');
   }
   if (new Set(response.items.map((item) => item.alarmId)).size !== response.items.length) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Alarm list contains duplicate identity' });
+    addIssue(context, 'Alarm list contains duplicate identity');
   }
 });
 
 export type AlarmSeverity = z.infer<typeof alarmSeveritySchema>;
 export type AlarmStatus = z.infer<typeof alarmStatusSchema>;
 export type AlarmSourceType = z.infer<typeof alarmSourceTypeSchema>;
+export type AlarmOperation = z.infer<typeof alarmOperationSchema>;
 export type AlarmEvidenceReference = z.infer<typeof alarmEvidenceReferenceSchema>;
 export type AlarmTransition = z.infer<typeof alarmTransitionSchema>;
 export type Alarm = z.infer<typeof alarmSchema>;
