@@ -2,8 +2,6 @@ package workorderservice
 
 import (
 	"crypto"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,6 +11,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
@@ -24,6 +23,13 @@ const (
 	WorkOrderReadAction          = "work-order:read"
 	WorkOrderCreateAction        = "work-order:create"
 	WorkOrderAssignAction        = "work-order:assign"
+	WorkOrderPlanAction          = "work-order:plan"
+	WorkOrderStartAction         = "work-order:start"
+	WorkOrderBlockAction         = "work-order:block"
+	WorkOrderResumeAction        = "work-order:resume"
+	WorkOrderCompleteAction      = "work-order:complete"
+	WorkOrderCancelAction        = "work-order:cancel"
+	WorkOrderReopenAction        = "work-order:reopen"
 	DefaultGatewaySPIFFEID       = "spiffe://hvac.local/platform-gateway"
 	DefaultAudience              = "work-order-service"
 	maximumMutationBodyBytes     = 32 * 1024
@@ -64,12 +70,16 @@ const (
 	workOrderCollectionRoute workOrderRouteKind = iota + 1
 	workOrderDetailRoute
 	workOrderAssignmentRoute
+	workOrderLifecycleRoute
+	workOrderLifecyclePreconditionRoute
 )
 
 type workOrderRoute struct {
 	kind        workOrderRouteKind
 	siteID      string
 	workOrderID string
+	action      string
+	operation   workordermodel.Operation
 }
 
 type createWorkOrderRequest struct {
@@ -88,6 +98,14 @@ type assignWorkOrderRequest struct {
 	AssigneeID      json.RawMessage `json:"assigneeId"`
 	TeamID          json.RawMessage `json:"teamId"`
 	Reason          string          `json:"reason"`
+}
+
+type lifecycleWorkOrderRequest struct {
+	ExpectedVersion    uint64                             `json:"expectedVersion"`
+	ScheduledStart     json.RawMessage                    `json:"scheduledStart"`
+	DueAt              json.RawMessage                    `json:"dueAt"`
+	CompletionEvidence []workordermodel.EvidenceReference `json:"completionEvidence"`
+	Reason             string                             `json:"reason"`
 }
 
 func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
@@ -157,6 +175,20 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 			return
 		}
 		handler.handleAssign(writer, request, route)
+	case workOrderLifecycleRoute:
+		if request.Method != http.MethodPost {
+			writer.Header().Set("Allow", http.MethodPost)
+			handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Work Order lifecycle actions only support POST.", false)
+			return
+		}
+		handler.handleLifecycle(writer, request, route)
+	case workOrderLifecyclePreconditionRoute:
+		if request.Method != http.MethodGet {
+			writer.Header().Set("Allow", http.MethodGet)
+			handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Work Order lifecycle precondition only supports GET.", false)
+			return
+		}
+		handler.handleLifecyclePrecondition(writer, request, route)
 	}
 }
 
@@ -281,9 +313,126 @@ func (handler *httpHandler) handleAssign(writer http.ResponseWriter, request *ht
 	writeJSON(writer, http.StatusOK, result.WorkOrder)
 }
 
+func (handler *httpHandler) handleLifecyclePrecondition(writer http.ResponseWriter, request *http.Request, route workOrderRoute) {
+	if request.URL.RawQuery != "" {
+		handler.writeProblem(writer, http.StatusBadRequest, "WORK_ORDER_LIFECYCLE_INVALID", "Work Order lifecycle invalid", "Lifecycle precondition does not accept query parameters.", false)
+		return
+	}
+	idempotencyKey := strings.TrimSpace(request.Header.Get("Idempotency-Key"))
+	if !idempotencyKeyPattern.MatchString(idempotencyKey) {
+		handler.writeProblem(writer, http.StatusBadRequest, "IDEMPOTENCY_KEY_INVALID", "Idempotency key invalid", "A bounded Idempotency-Key is required for lifecycle precondition reads.", false)
+		return
+	}
+	claims, err := identitycontext.VerifyDelegation(handler.gatewayPublicKey, request.Header.Get(WorkOrderWriteContextHeader))
+	if err != nil || len(claims.Actions) != 1 || !isLifecycleAction(claims.Actions[0]) {
+		handler.writeAccessDenied(writer)
+		return
+	}
+	claims, ok := handler.authorize(request, claims.Actions[0], []string{"site:" + route.siteID, "work-order:" + route.workOrderID, mutationKeyScope(idempotencyKey)}, true)
+	if !ok {
+		handler.writeAccessDenied(writer)
+		return
+	}
+	workOrder, err := handler.store.Get(request.Context(), claims.ActingOrganizationID, route.siteID, route.workOrderID)
+	if err != nil {
+		handler.writeStoreFailure(writer, err)
+		return
+	}
+	if workOrder.Validate() != nil || workOrder.OrganizationID != claims.ActingOrganizationID || workOrder.SiteID != route.siteID || workOrder.WorkOrderID != route.workOrderID {
+		handler.writeProblem(writer, http.StatusBadGateway, "WORK_ORDER_RESPONSE_INVALID", "Work Order response invalid", "Work Order Store returned a precondition projection outside the requested scope.", true)
+		return
+	}
+	writeJSON(writer, http.StatusOK, workOrder)
+}
+
+func isLifecycleAction(action string) bool {
+	switch action {
+	case WorkOrderPlanAction, WorkOrderStartAction, WorkOrderBlockAction, WorkOrderResumeAction, WorkOrderCompleteAction, WorkOrderCancelAction, WorkOrderReopenAction:
+		return true
+	default:
+		return false
+	}
+}
+
+func (handler *httpHandler) handleLifecycle(writer http.ResponseWriter, request *http.Request, route workOrderRoute) {
+	if request.URL.RawQuery != "" {
+		handler.writeProblem(writer, http.StatusBadRequest, "WORK_ORDER_LIFECYCLE_INVALID", "Work Order lifecycle invalid", "Work Order lifecycle actions do not accept query parameters.", false)
+		return
+	}
+	idempotencyKey := strings.TrimSpace(request.Header.Get("Idempotency-Key"))
+	if !idempotencyKeyPattern.MatchString(idempotencyKey) {
+		handler.writeProblem(writer, http.StatusBadRequest, "IDEMPOTENCY_KEY_INVALID", "Idempotency key invalid", "A bounded Idempotency-Key is required for Work Order lifecycle actions.", false)
+		return
+	}
+	claims, ok := handler.authorize(request, route.action, []string{"site:" + route.siteID, "work-order:" + route.workOrderID, mutationKeyScope(idempotencyKey)}, true)
+	if !ok {
+		handler.writeAccessDenied(writer)
+		return
+	}
+	var body lifecycleWorkOrderRequest
+	if !decodeStrictJSON(request, &body) || body.ExpectedVersion == 0 {
+		handler.writeProblem(writer, http.StatusBadRequest, "WORK_ORDER_LIFECYCLE_INVALID", "Work Order lifecycle invalid", "The lifecycle request is not a closed bounded JSON object.", false)
+		return
+	}
+	var scheduledStart, dueAt *string
+	if route.operation == workordermodel.OperationSchedule {
+		if len(body.ScheduledStart) == 0 || len(body.DueAt) == 0 {
+			handler.writeProblem(writer, http.StatusBadRequest, "WORK_ORDER_LIFECYCLE_INVALID", "Work Order lifecycle invalid", "plan must explicitly provide scheduledStart and dueAt, including null when one boundary is open.", false)
+			return
+		}
+		var valid bool
+		scheduledStart, valid = decodeNullableString(body.ScheduledStart)
+		if !valid {
+			handler.writeProblem(writer, http.StatusBadRequest, "WORK_ORDER_LIFECYCLE_INVALID", "Work Order lifecycle invalid", "scheduledStart must be an RFC3339 instant or null.", false)
+			return
+		}
+		dueAt, valid = decodeNullableString(body.DueAt)
+		if !valid {
+			handler.writeProblem(writer, http.StatusBadRequest, "WORK_ORDER_LIFECYCLE_INVALID", "Work Order lifecycle invalid", "dueAt must be an RFC3339 instant or null.", false)
+			return
+		}
+	} else if len(body.ScheduledStart) != 0 || len(body.DueAt) != 0 {
+		handler.writeProblem(writer, http.StatusBadRequest, "WORK_ORDER_LIFECYCLE_INVALID", "Work Order lifecycle invalid", "Only plan can change scheduledStart or dueAt.", false)
+		return
+	}
+	if route.operation != workordermodel.OperationComplete && body.CompletionEvidence != nil {
+		handler.writeProblem(writer, http.StatusBadRequest, "WORK_ORDER_LIFECYCLE_INVALID", "Work Order lifecycle invalid", "Only complete can append completionEvidence.", false)
+		return
+	}
+	now := handler.now().UTC()
+	actorID := initiatingActorID(claims)
+	reason := strings.TrimSpace(body.Reason)
+	result, err := handler.store.Transition(request.Context(), claims.ActingOrganizationID, route.siteID, route.workOrderID, LifecycleMutation{
+		Operation: route.operation, ExpectedVersion: body.ExpectedVersion, ScheduledStart: scheduledStart, DueAt: dueAt,
+		CompletionEvidence: body.CompletionEvidence, Reason: reason,
+		ActorType: "PRINCIPAL", ActorID: actorID, PolicyRevision: claims.PolicyRevision,
+		CorrelationID: idempotencyKey, IdempotencyKey: idempotencyKey, OccurredAt: now.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		handler.writeStoreFailure(writer, err)
+		return
+	}
+	workOrder := result.WorkOrder
+	last := workordermodel.TimelineEvent{}
+	if len(workOrder.Timeline) > 0 {
+		last = workOrder.Timeline[len(workOrder.Timeline)-1]
+	}
+	if workOrder.Validate() != nil || workOrder.OrganizationID != claims.ActingOrganizationID || workOrder.SiteID != route.siteID || workOrder.WorkOrderID != route.workOrderID ||
+		workOrder.Version != body.ExpectedVersion+1 || len(workOrder.Timeline) != int(workOrder.Version) || last.Operation != route.operation ||
+		last.Reason != reason || last.ActorType != "PRINCIPAL" || last.ActorID != actorID || last.OccurredAt != workOrder.UpdatedAt ||
+		last.PolicyRevision == nil || *last.PolicyRevision != claims.PolicyRevision || last.CorrelationID == nil || *last.CorrelationID != idempotencyKey ||
+		last.AssigneeID != nil || last.TeamID != nil {
+		handler.writeProblem(writer, http.StatusBadGateway, "WORK_ORDER_RESPONSE_INVALID", "Work Order response invalid", "Work Order Store returned a lifecycle projection outside the requested operation or scope.", true)
+		return
+	}
+	if result.Replayed {
+		writer.Header().Set("Idempotency-Replayed", "true")
+	}
+	writeJSON(writer, http.StatusOK, workOrder)
+}
+
 func mutationKeyScope(idempotencyKey string) string {
-	digest := sha256.Sum256([]byte(strings.TrimSpace(idempotencyKey)))
-	return "key:" + hex.EncodeToString(digest[:])
+	return workorderauth.MutationKeyScope(idempotencyKey)
 }
 
 func (handler *httpHandler) authorize(request *http.Request, action string, resourceScopes []string, write bool) (identitycontext.DelegationClaims, bool) {
@@ -434,6 +583,8 @@ func (handler *httpHandler) writeStoreFailure(writer http.ResponseWriter, err er
 		handler.writeProblem(writer, http.StatusUnprocessableEntity, "WORK_ORDER_CREATE_INVALID", "Work Order create invalid", "The create request violates the authoritative Work Order contract.", false)
 	case errors.Is(err, workordermodel.ErrInvalidAssignment):
 		handler.writeProblem(writer, http.StatusUnprocessableEntity, "WORK_ORDER_ASSIGNMENT_INVALID", "Work Order assignment invalid", "The assignment request violates the authoritative Work Order contract.", false)
+	case errors.Is(err, workordermodel.ErrInvalidLifecycle):
+		handler.writeProblem(writer, http.StatusUnprocessableEntity, "WORK_ORDER_LIFECYCLE_INVALID", "Work Order lifecycle invalid", "The lifecycle request violates the authoritative Work Order transition graph.", false)
 	default:
 		handler.writeProblem(writer, http.StatusServiceUnavailable, "WORK_ORDER_UNAVAILABLE", "Work Order unavailable", "Work Order Service cannot access its authoritative store.", true)
 	}
@@ -465,17 +616,45 @@ func matchWorkOrderPath(path string) (workOrderRoute, bool) {
 	if len(segments) != 3 || segments[0] == "" || segments[1] != "work-orders" || segments[2] == "" {
 		return workOrderRoute{}, false
 	}
-	if strings.HasSuffix(segments[2], ":assign") {
-		workOrderID := strings.TrimSuffix(segments[2], ":assign")
+	resource := segments[2]
+	if strings.HasSuffix(resource, ":lifecycle-precondition") {
+		workOrderID := strings.TrimSuffix(resource, ":lifecycle-precondition")
+		if workOrderID == "" || strings.Contains(workOrderID, ":") {
+			return workOrderRoute{}, false
+		}
+		return workOrderRoute{kind: workOrderLifecyclePreconditionRoute, siteID: segments[0], workOrderID: workOrderID}, true
+	}
+	if strings.HasSuffix(resource, ":assign") {
+		workOrderID := strings.TrimSuffix(resource, ":assign")
 		if workOrderID == "" || strings.Contains(workOrderID, ":") {
 			return workOrderRoute{}, false
 		}
 		return workOrderRoute{kind: workOrderAssignmentRoute, siteID: segments[0], workOrderID: workOrderID}, true
 	}
-	if strings.Contains(segments[2], ":") {
+	for suffix, metadata := range map[string]struct {
+		action    string
+		operation workordermodel.Operation
+	}{
+		":plan":     {WorkOrderPlanAction, workordermodel.OperationSchedule},
+		":start":    {WorkOrderStartAction, workordermodel.OperationStart},
+		":block":    {WorkOrderBlockAction, workordermodel.OperationBlock},
+		":resume":   {WorkOrderResumeAction, workordermodel.OperationResume},
+		":complete": {WorkOrderCompleteAction, workordermodel.OperationComplete},
+		":cancel":   {WorkOrderCancelAction, workordermodel.OperationCancel},
+		":reopen":   {WorkOrderReopenAction, workordermodel.OperationReopen},
+	} {
+		if strings.HasSuffix(resource, suffix) {
+			workOrderID := strings.TrimSuffix(resource, suffix)
+			if workOrderID == "" || strings.Contains(workOrderID, ":") {
+				return workOrderRoute{}, false
+			}
+			return workOrderRoute{kind: workOrderLifecycleRoute, siteID: segments[0], workOrderID: workOrderID, action: metadata.action, operation: metadata.operation}, true
+		}
+	}
+	if strings.Contains(resource, ":") {
 		return workOrderRoute{}, false
 	}
-	return workOrderRoute{kind: workOrderDetailRoute, siteID: segments[0], workOrderID: segments[2]}, true
+	return workOrderRoute{kind: workOrderDetailRoute, siteID: segments[0], workOrderID: resource}, true
 }
 
 func sameStringSet(left, right []string) bool {

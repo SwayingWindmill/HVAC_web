@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 20,
+  "registryRevision": 21,
   "resources": [
     {
       "kind": "schema",
@@ -558,7 +558,8 @@
         "work_order_source_reference",
         "work_order_timeline",
         "work_order_idempotency",
-        "work_order_mutation_audit"
+        "work_order_mutation_audit",
+        "work_order_completion_evidence"
       ]
     },
     {
@@ -785,7 +786,8 @@
         "work_order_source_reference",
         "work_order_timeline",
         "work_order_idempotency",
-        "work_order_mutation_audit"
+        "work_order_mutation_audit",
+        "work_order_completion_evidence"
       ]
     },
     {
@@ -800,7 +802,8 @@
         "work_order_source_reference",
         "work_order_timeline",
         "work_order_idempotency",
-        "work_order_mutation_audit"
+        "work_order_mutation_audit",
+        "work_order_completion_evidence"
       ]
     }
   ]

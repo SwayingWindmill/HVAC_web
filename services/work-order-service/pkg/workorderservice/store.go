@@ -15,6 +15,8 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
+const lifecycleIdempotencyOperation = "LIFECYCLE"
+
 var (
 	ErrNotFound            = errors.New("work order not found")
 	ErrUnavailable         = errors.New("work order store unavailable")
@@ -64,6 +66,21 @@ type AssignmentMutation struct {
 	OccurredAt      string
 }
 
+type LifecycleMutation struct {
+	Operation          workordermodel.Operation
+	ExpectedVersion    uint64
+	ScheduledStart     *string
+	DueAt              *string
+	CompletionEvidence []workordermodel.EvidenceReference
+	Reason             string
+	ActorType          string
+	ActorID            string
+	PolicyRevision     string
+	CorrelationID      string
+	IdempotencyKey     string
+	OccurredAt         string
+}
+
 type MutationResult struct {
 	WorkOrder workordermodel.WorkOrder
 	Replayed  bool
@@ -74,6 +91,7 @@ type Store interface {
 	Get(context.Context, string, string, string) (workordermodel.WorkOrder, error)
 	Create(context.Context, string, string, CreateMutation) (MutationResult, error)
 	Assign(context.Context, string, string, string, AssignmentMutation) (MutationResult, error)
+	Transition(context.Context, string, string, string, LifecycleMutation) (MutationResult, error)
 }
 
 type idempotencyRecord struct {
@@ -241,6 +259,36 @@ func (store *MemoryStore) Assign(_ context.Context, organizationID, siteID, work
 	return MutationResult{WorkOrder: cloneStoredWorkOrder(updated)}, nil
 }
 
+func (store *MemoryStore) Transition(_ context.Context, organizationID, siteID, workOrderID string, mutation LifecycleMutation) (MutationResult, error) {
+	if !idempotencyKeyPattern.MatchString(strings.TrimSpace(mutation.IdempotencyKey)) {
+		return MutationResult{}, workordermodel.ErrInvalidLifecycle
+	}
+	digest, err := lifecycleMutationDigest(mutation)
+	if err != nil {
+		return MutationResult{}, workordermodel.ErrInvalidLifecycle
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	current, ok := store.items[workOrderID]
+	if !ok || current.OrganizationID != organizationID || current.SiteID != siteID {
+		return MutationResult{}, ErrNotFound
+	}
+	key := organizationID + "|" + siteID + "|" + workOrderID + "|" + lifecycleIdempotencyOperation + "|" + strings.TrimSpace(mutation.IdempotencyKey)
+	if record, exists := store.idempotency[key]; exists {
+		if record.digest != digest {
+			return MutationResult{}, ErrIdempotencyConflict
+		}
+		return MutationResult{WorkOrder: cloneStoredWorkOrder(record.workOrder), Replayed: true}, nil
+	}
+	updated, err := workordermodel.ApplyLifecycle(current, mutation.lifecycleInput())
+	if err != nil {
+		return MutationResult{}, err
+	}
+	store.items[workOrderID] = cloneStoredWorkOrder(updated)
+	store.idempotency[key] = idempotencyRecord{digest: digest, workOrder: cloneStoredWorkOrder(updated)}
+	return MutationResult{WorkOrder: cloneStoredWorkOrder(updated)}, nil
+}
+
 func (mutation CreateMutation) createInput(organizationID, siteID string) workordermodel.CreateInput {
 	return workordermodel.CreateInput{
 		WorkOrderID: mutation.WorkOrderID, OrganizationID: organizationID, SiteID: siteID,
@@ -255,6 +303,15 @@ func (mutation CreateMutation) createInput(organizationID, siteID string) workor
 func (mutation AssignmentMutation) assignmentInput() workordermodel.AssignmentInput {
 	return workordermodel.AssignmentInput{
 		ExpectedVersion: mutation.ExpectedVersion, AssigneeID: mutation.AssigneeID, TeamID: mutation.TeamID,
+		Reason: mutation.Reason, ActorType: mutation.ActorType, ActorID: mutation.ActorID,
+		PolicyRevision: mutation.PolicyRevision, CorrelationID: mutation.CorrelationID, OccurredAt: mutation.OccurredAt,
+	}
+}
+
+func (mutation LifecycleMutation) lifecycleInput() workordermodel.LifecycleInput {
+	return workordermodel.LifecycleInput{
+		Operation: mutation.Operation, ExpectedVersion: mutation.ExpectedVersion,
+		ScheduledStart: mutation.ScheduledStart, DueAt: mutation.DueAt, CompletionEvidence: mutation.CompletionEvidence,
 		Reason: mutation.Reason, ActorType: mutation.ActorType, ActorID: mutation.ActorID,
 		PolicyRevision: mutation.PolicyRevision, CorrelationID: mutation.CorrelationID, OccurredAt: mutation.OccurredAt,
 	}
@@ -297,6 +354,35 @@ func assignmentMutationDigest(mutation AssignmentMutation) (string, error) {
 		ActorType: strings.TrimSpace(mutation.ActorType), ActorID: strings.TrimSpace(mutation.ActorID),
 	}
 	return digestJSON(payload)
+}
+
+func lifecycleMutationDigest(mutation LifecycleMutation) (string, error) {
+	payload := struct {
+		Operation          workordermodel.Operation           `json:"operation"`
+		ExpectedVersion    uint64                             `json:"expectedVersion"`
+		ScheduledStart     *string                            `json:"scheduledStart"`
+		DueAt              *string                            `json:"dueAt"`
+		CompletionEvidence []workordermodel.EvidenceReference `json:"completionEvidence"`
+		Reason             string                             `json:"reason"`
+		ActorType          string                             `json:"actorType"`
+		ActorID            string                             `json:"actorId"`
+	}{
+		Operation: mutation.Operation, ExpectedVersion: mutation.ExpectedVersion,
+		ScheduledStart: trimmedOptional(mutation.ScheduledStart), DueAt: trimmedOptional(mutation.DueAt),
+		CompletionEvidence: normalizedEvidence(mutation.CompletionEvidence), Reason: strings.TrimSpace(mutation.Reason),
+		ActorType: strings.TrimSpace(mutation.ActorType), ActorID: strings.TrimSpace(mutation.ActorID),
+	}
+	return digestJSON(payload)
+}
+
+func normalizedEvidence(values []workordermodel.EvidenceReference) []workordermodel.EvidenceReference {
+	result := append([]workordermodel.EvidenceReference(nil), values...)
+	for index := range result {
+		result[index].Kind = strings.TrimSpace(result[index].Kind)
+		result[index].Reference = strings.TrimSpace(result[index].Reference)
+		result[index].CapturedAt = strings.TrimSpace(result[index].CapturedAt)
+	}
+	return result
 }
 
 func digestJSON(value any) (string, error) {

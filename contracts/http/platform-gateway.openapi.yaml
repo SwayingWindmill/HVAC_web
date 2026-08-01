@@ -1296,7 +1296,7 @@
       },
       "Capability": {
         "type": "string",
-        "description": "Version 5 IAM-authored browser capability identifier.",
+        "description": "Version 6 IAM-authored browser capability identifier.",
         "enum": [
           "organization.list",
           "organization.read",
@@ -1315,12 +1315,13 @@
           "work-order.list",
           "work-order.read",
           "work-order.create",
-          "work-order.assign"
+          "work-order.assign",
+          "work-order.lifecycle"
         ]
       },
       "EffectiveAuthorization": {
         "type": "object",
-        "description": "IAM-authored effective authorization for the current Principal and acting Organization. Platform Gateway transports this value without deriving permissions from roles. Version 5 adds governed Work Order create and assignment capabilities; exact Site and Work Order authorization remains server-side for every request.",
+        "description": "IAM-authored effective authorization for the current Principal and acting Organization. Platform Gateway transports this value without deriving permissions from roles. Version 6 adds a high-level governed Work Order lifecycle capability; every exact Site, Work Order, action and transition remains server-authorized.",
         "additionalProperties": false,
         "required": [
           "capabilitySetVersion",
@@ -1330,7 +1331,7 @@
         "properties": {
           "capabilitySetVersion": {
             "type": "integer",
-            "const": 5
+            "const": 6
           },
           "policyRevision": {
             "type": "string",
@@ -1339,7 +1340,7 @@
           },
           "capabilities": {
             "type": "array",
-            "maxItems": 18,
+            "maxItems": 19,
             "uniqueItems": true,
             "items": {
               "$ref": "#/components/schemas/Capability"

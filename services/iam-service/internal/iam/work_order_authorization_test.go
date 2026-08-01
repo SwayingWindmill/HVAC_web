@@ -125,3 +125,22 @@ func workOrderAuthorizationFixture(now time.Time, permissions []WorkOrderPermiss
 		Permissions: permissions,
 	}})
 }
+
+func TestEvaluateWorkOrderLifecycleAuthorizationRequiresExactResourceAndPreservesDenyWins(t *testing.T) {
+	now := time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)
+	store := workOrderAuthorizationFixture(now, []WorkOrderPermission{
+		{OrganizationID: workOrderTestOrganizationID, SiteID: workOrderTestSiteID, Action: workorderauth.ActionComplete, Effect: BindingEffectAllow, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)},
+		{OrganizationID: workOrderTestOrganizationID, SiteID: workOrderTestSiteID, Action: workorderauth.ActionComplete, Effect: BindingEffectDeny, Status: FactStatusActive, ValidFrom: now.Add(-time.Minute)},
+	})
+	decision, err := evaluateWorkOrderAuthorization(context.Background(), store, now, workOrderTestIssuer, workOrderTestSubject, workorderauth.DecisionRequest{
+		ActingOrganizationID: workOrderTestOrganizationID, SiteID: workOrderTestSiteID, WorkOrderID: workOrderTestWorkOrderID, Action: workorderauth.ActionComplete,
+	})
+	if err != nil || decision.Allowed || decision.ReasonCode != workorderauth.ReasonDenyExplicit {
+		t.Fatalf("lifecycle deny-wins decision=%#v err=%v", decision, err)
+	}
+	for _, action := range []workorderauth.Action{workorderauth.ActionPlan, workorderauth.ActionStart, workorderauth.ActionBlock, workorderauth.ActionResume, workorderauth.ActionComplete, workorderauth.ActionCancel, workorderauth.ActionReopen} {
+		if err := (workorderauth.DecisionRequest{ActingOrganizationID: workOrderTestOrganizationID, SiteID: workOrderTestSiteID, Action: action}).Validate(); err == nil {
+			t.Fatalf("action %q accepted without Work Order identity", action)
+		}
+	}
+}

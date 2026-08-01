@@ -6,7 +6,7 @@ const readText = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await readText(path));
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
-const [openapi, routes, data, lock, model, migration001, migration002] = await Promise.all([
+const [openapi, routes, data, lock, model, migration001, migration002, migration003] = await Promise.all([
   readJSON('contracts/http/s5-work-order-public.openapi.json'),
   readJSON('contracts/ownership/route-ownership.v1.json'),
   readJSON('contracts/ownership/data-ownership.v1.json'),
@@ -14,8 +14,9 @@ const [openapi, routes, data, lock, model, migration001, migration002] = await P
   readText('libs/workordermodel/model.go'),
   readText('services/work-order-service/migrations/001_s5_work_order_runtime.sql'),
   readText('services/work-order-service/migrations/002_s5_work_order_create_assignment.sql'),
+  readText('services/work-order-service/migrations/003_s5_work_order_lifecycle.sql'),
 ]);
-const migration = migration001 + '\n' + migration002;
+const migration = migration001 + '\n' + migration002 + '\n' + migration003;
 
 assert(openapi.openapi === '3.1.0', 'Work Order OpenAPI baseline is invalid');
 const listPath = '/api/v1/sites/{siteId}/work-orders';
@@ -58,7 +59,8 @@ const phasePolicies = {
 let observedPhase = '';
 
 const declaredPaths = Object.keys(openapi.paths ?? {}).sort();
-assert(JSON.stringify(declaredPaths) === JSON.stringify([listPath, detailPath, assignPath].sort()), 'Work Order contract exposes undeclared routes');
+const lifecyclePaths = ["/api/v1/sites/{siteId}/work-orders/{workOrderId}:plan", "/api/v1/sites/{siteId}/work-orders/{workOrderId}:start", "/api/v1/sites/{siteId}/work-orders/{workOrderId}:block", "/api/v1/sites/{siteId}/work-orders/{workOrderId}:resume", "/api/v1/sites/{siteId}/work-orders/{workOrderId}:complete", "/api/v1/sites/{siteId}/work-orders/{workOrderId}:cancel", "/api/v1/sites/{siteId}/work-orders/{workOrderId}:reopen"];
+assert(JSON.stringify(declaredPaths) === JSON.stringify([listPath, detailPath, assignPath, ...lifecyclePaths].sort()), 'Work Order contract exposes undeclared routes');
 assert(openapi.paths?.[listPath]?.post?.['x-iam-action'] === 'work-order:create', 'Work Order create route is missing from the governed public contract');
 assert(openapi.paths?.[assignPath]?.post?.['x-iam-action'] === 'work-order:assign', 'Work Order assignment route is missing from the governed public contract');
 for (const [path, action] of [[listPath, 'work-order:list'], [detailPath, 'work-order:read']]) {
@@ -136,7 +138,7 @@ for (const [kind, name] of expectedResources) {
 const workOrderDatabaseAccess = data.databaseAccess?.find((entry) => entry.service === 'work-order-service' && entry.schema === 'work_order_runtime');
 assert(workOrderDatabaseAccess && ['read', 'write'].includes(workOrderDatabaseAccess.mode), 'Work Order database access is missing');
 if (workOrderDatabaseAccess.mode === 'write') {
-  const expectedMutationTables = ['work_order_current', 'work_order_source_reference', 'work_order_timeline', 'work_order_idempotency', 'work_order_mutation_audit'];
+  const expectedMutationTables = ['work_order_current', 'work_order_source_reference', 'work_order_timeline', 'work_order_idempotency', 'work_order_mutation_audit', 'work_order_completion_evidence'];
   assert(JSON.stringify([...(workOrderDatabaseAccess.restrictedTo ?? [])].sort()) === JSON.stringify(expectedMutationTables.sort()), 'Work Order write access is not restricted to create/assignment persistence');
 }
 assert(data.databaseIdentities?.some((entry) => entry.schema === 'work_order_runtime' && entry.migrationRole === 's5_work_order_migrator' && entry.runtimeRole === 's5_work_order_runtime' && entry.runtimeBypassRls === false && entry.accessMode === 'read'), 'Work Order database identity is invalid');
@@ -156,6 +158,7 @@ for (const forbidden of ['GRANT INSERT', 'GRANT UPDATE', 'GRANT DELETE', 'GRANT 
   assert(!runtimeGrantLines.some((line) => line.includes(forbidden)), 'Work Order read runtime has forbidden grant ' + forbidden);
 }
 assert(migration002.includes('GRANT INSERT ON work_order_runtime.work_order_current TO s5_work_order_writer') && migration002.includes('GRANT UPDATE (assignee_id, team_id, version, updated_at)'), 'Work Order writer current projection grants are missing or too broad');
+assert(migration003.includes('GRANT INSERT ON work_order_runtime.work_order_completion_evidence TO s5_work_order_writer'), 'Work Order lifecycle evidence grant is missing');
 assert(migration.includes('GRANT INSERT ON work_order_runtime.work_order_idempotency TO s5_work_order_writer') && migration.includes('GRANT INSERT ON work_order_runtime.work_order_mutation_audit TO s5_work_order_writer'), 'Work Order writer durable mutation evidence grants are missing');
 assert(!migration.split(/\r?\n/).some((line) => line.includes('GRANT DELETE') || line.includes('GRANT ALL')), 'Work Order authority grants include delete or all privileges');
 assert(!migration.includes('ON DELETE CASCADE'), 'Work Order authoritative evidence can be cascade-deleted');

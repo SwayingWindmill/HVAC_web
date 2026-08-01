@@ -99,6 +99,9 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 			capabilities = append(capabilities, candidate.capability)
 		}
 	}
+	if workOrderLifecycleCapabilityAllowed(workOrderFacts, decidedAt, lookup.ActingOrganizationID) {
+		capabilities = append(capabilities, identitycontext.CapabilityWorkOrderLifecycle)
+	}
 
 	return identitycontext.EffectiveAuthorization{
 		CapabilitySetVersion: identitycontext.CapabilitySetVersion,
@@ -109,7 +112,7 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 
 func combinedCapabilityPolicyRevision(registryRevision, telemetryRevision, alarmRevision, workOrderRevision string) string {
 	digest := sha256.Sum256([]byte(registryRevision + "\x00" + telemetryRevision + "\x00" + alarmRevision + "\x00" + workOrderRevision))
-	return "capability-v5:" + hex.EncodeToString(digest[:])
+	return "capability-v6:" + hex.EncodeToString(digest[:])
 }
 
 func telemetryCapabilityAllowed(facts TelemetryAuthorizationFacts, now time.Time, actingOrganizationID string, action telemetryauth.Action) bool {
@@ -173,6 +176,25 @@ var principalAlarmCapabilities = []struct {
 }{
 	{identitycontext.CapabilityAlarmList, alarmauth.ActionList},
 	{identitycontext.CapabilityAlarmRead, alarmauth.ActionRead},
+}
+
+var principalWorkOrderLifecycleActions = [...]workorderauth.Action{
+	workorderauth.ActionPlan,
+	workorderauth.ActionStart,
+	workorderauth.ActionBlock,
+	workorderauth.ActionResume,
+	workorderauth.ActionComplete,
+	workorderauth.ActionCancel,
+	workorderauth.ActionReopen,
+}
+
+func workOrderLifecycleCapabilityAllowed(facts WorkOrderAuthorizationFacts, now time.Time, actingOrganizationID string) bool {
+	for _, action := range principalWorkOrderLifecycleActions {
+		if workOrderCapabilityAllowed(facts, now, actingOrganizationID, action) {
+			return true
+		}
+	}
+	return false
 }
 
 var principalWorkOrderCapabilities = []struct {

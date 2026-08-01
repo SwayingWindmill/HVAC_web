@@ -23,17 +23,30 @@ func TestWorkOrderValidateAcceptsAuthoritativeProjection(t *testing.T) {
 func TestWorkOrderValidateRequiresCompletionEvidence(t *testing.T) {
 	item := validWorkOrder()
 	item.Status = workordermodel.StatusCompleted
-	item.Timeline = append(item.Timeline, workordermodel.TimelineEvent{
-		Operation:  workordermodel.OperationComplete,
-		FromStatus: ptrStatus(workordermodel.StatusOpen),
-		ToStatus:   workordermodel.StatusCompleted,
-		Reason:     "verified repair",
-		ActorType:  "PRINCIPAL",
-		ActorID:    "principal:operator",
-		OccurredAt: "2026-08-01T02:00:00Z",
-		Version:    2,
-	})
-	item.Version = 2
+	item.Tasks.Completed = item.Tasks.Total
+	item.Timeline = append(item.Timeline,
+		workordermodel.TimelineEvent{
+			Operation:  workordermodel.OperationStart,
+			FromStatus: ptrStatus(workordermodel.StatusOpen),
+			ToStatus:   workordermodel.StatusInProgress,
+			Reason:     "maintenance started",
+			ActorType:  "PRINCIPAL",
+			ActorID:    "principal:operator",
+			OccurredAt: "2026-08-01T01:00:00Z",
+			Version:    2,
+		},
+		workordermodel.TimelineEvent{
+			Operation:  workordermodel.OperationComplete,
+			FromStatus: ptrStatus(workordermodel.StatusInProgress),
+			ToStatus:   workordermodel.StatusCompleted,
+			Reason:     "verified repair",
+			ActorType:  "PRINCIPAL",
+			ActorID:    "principal:operator",
+			OccurredAt: "2026-08-01T02:00:00Z",
+			Version:    3,
+		},
+	)
+	item.Version = 3
 	item.UpdatedAt = "2026-08-01T02:00:00Z"
 	if err := item.Validate(); err == nil {
 		t.Fatal("completed Work Order without completion evidence was accepted")

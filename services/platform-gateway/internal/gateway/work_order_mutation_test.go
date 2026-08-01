@@ -92,8 +92,8 @@ func TestGatewayWorkOrderMutationRejectsProjectionDriftAndUnreviewedRoutes(t *te
 	if recorder.Code != http.StatusServiceUnavailable || strings.Contains(recorder.Body.String(), gatewayWorkOrderOtherSiteID) {
 		t.Fatalf("status=%d response=%s", recorder.Code, recorder.Body.String())
 	}
-	if _, ok := matchPublicWorkOrderRoute("/api/v1/sites/" + gatewayWorkOrderSiteID + "/work-orders/" + gatewayWorkOrderID + ":complete"); ok {
-		t.Fatal("unreviewed lifecycle route is publicly matchable")
+	if _, ok := matchPublicWorkOrderRoute("/api/v1/sites/" + gatewayWorkOrderSiteID + "/work-orders/" + gatewayWorkOrderID + ":link-alarm"); ok {
+		t.Fatal("unreviewed collaboration route is publicly matchable")
 	}
 	route, ok := matchPublicWorkOrderRoute("/api/v1/sites/" + gatewayWorkOrderSiteID + "/work-orders/" + gatewayWorkOrderID + ":assign")
 	if !ok || route.kind != publicWorkOrderAssignment || route.action != workorderauth.ActionAssign {

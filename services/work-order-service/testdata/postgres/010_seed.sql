@@ -37,7 +37,7 @@ INSERT INTO work_order_runtime.work_order_current (
   'MEDIUM', 'COMPLETED', NULL, 'team:mechanical',
   '2026-07-31T01:00:00Z', '2026-07-31T03:00:00Z',
   1, 1, 0, 0, 0,
-  2, '2026-07-31T00:00:00Z', '2026-07-31T02:00:00Z'
+  3, '2026-07-31T00:00:00Z', '2026-07-31T02:00:00Z'
 ),
 (
   '01920000-1000-7000-8000-000000000004',
@@ -68,7 +68,8 @@ INSERT INTO work_order_runtime.work_order_timeline (
 ('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000001', '01920000-1000-7000-8000-000000000002', 1, 'CREATE', NULL, 'OPEN', 'created by operator', 'PRINCIPAL', 'principal:operator-b', 'principal:operator-b', 'team:controls', 'work-order-policy-1', 'correlation-wo-2-create', '2026-08-01T08:00:00Z'),
 ('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000001', '01920000-1000-7000-8000-000000000002', 2, 'START', 'OPEN', 'IN_PROGRESS', 'calibration started', 'PRINCIPAL', 'principal:operator-b', NULL, NULL, 'work-order-policy-2', 'correlation-wo-2-start', '2026-08-01T11:00:00Z'),
 ('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000002', '01920000-1000-7000-8000-000000000003', 1, 'CREATE', NULL, 'OPEN', 'created from authoritative Alarm', 'PRINCIPAL', 'principal:operator-c', NULL, 'team:mechanical', 'work-order-policy-1', 'correlation-wo-3-create', '2026-07-31T00:00:00Z'),
-('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000002', '01920000-1000-7000-8000-000000000003', 2, 'COMPLETE', 'OPEN', 'COMPLETED', 'filter replacement verified', 'PRINCIPAL', 'principal:operator-c', NULL, NULL, 'work-order-policy-2', 'correlation-wo-3-complete', '2026-07-31T02:00:00Z'),
+('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000002', '01920000-1000-7000-8000-000000000003', 2, 'START', 'OPEN', 'IN_PROGRESS', 'filter replacement started', 'PRINCIPAL', 'principal:operator-c', NULL, NULL, 'work-order-policy-2', 'correlation-wo-3-start', '2026-07-31T01:00:00Z'),
+('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000002', '01920000-1000-7000-8000-000000000003', 3, 'COMPLETE', 'IN_PROGRESS', 'COMPLETED', 'filter replacement verified', 'PRINCIPAL', 'principal:operator-c', NULL, NULL, 'work-order-policy-3', 'correlation-wo-3-complete', '2026-07-31T02:00:00Z'),
 ('01920000-0000-7000-8000-000000000002', '01920000-0001-7000-8000-000000000003', '01920000-1000-7000-8000-000000000004', 1, 'CREATE', NULL, 'OPEN', 'created from external request', 'PRINCIPAL', 'principal:operator-d', NULL, NULL, 'work-order-policy-1', 'correlation-wo-4', '2026-08-01T07:00:00Z');
 
 INSERT INTO work_order_runtime.work_order_task (
@@ -90,8 +91,8 @@ INSERT INTO work_order_runtime.work_order_attachment_metadata (
 ('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000001', '01920000-1000-7000-8000-000000000001', '01920000-6000-7000-8000-000000000001', 'object://work-orders/wo-1/vibration-photo', 'image/jpeg', 2048, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'principal:operator-a', '2026-08-01T09:45:00Z');
 
 INSERT INTO work_order_runtime.work_order_completion_evidence (
-  organization_id, site_id, work_order_id, kind, reference, captured_at
+  organization_id, site_id, work_order_id, kind, reference, captured_at, completion_version
 ) VALUES
-('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000002', '01920000-1000-7000-8000-000000000003', 'verification-report', 'evidence://work-orders/wo-3/verification', '2026-07-31T02:00:00Z');
+('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000002', '01920000-1000-7000-8000-000000000003', 'verification-report', 'evidence://work-orders/wo-3/verification', '2026-07-31T02:00:00Z', 3);
 
 COMMIT;

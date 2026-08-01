@@ -265,12 +265,26 @@ func TestPostgresWorkOrderAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !facts.Found || facts.Principal.ID != postgresOwnerAPrincipalID || facts.PolicyRevision != "work-order-access:1" || len(facts.Permissions) != 4 || len(facts.Targets) != 2 {
+	if !facts.Found || facts.Principal.ID != postgresOwnerAPrincipalID || facts.PolicyRevision != "work-order-access:1" || len(facts.Permissions) != 11 || len(facts.Targets) != 2 {
 		t.Fatalf("Work Order facts = %#v", facts)
+	}
+	expectedActions := map[workorderauth.Action]bool{
+		workorderauth.ActionList: false, workorderauth.ActionRead: false, workorderauth.ActionCreate: false, workorderauth.ActionAssign: false,
+		workorderauth.ActionPlan: false, workorderauth.ActionStart: false, workorderauth.ActionBlock: false, workorderauth.ActionResume: false,
+		workorderauth.ActionComplete: false, workorderauth.ActionCancel: false, workorderauth.ActionReopen: false,
 	}
 	for _, permission := range facts.Permissions {
 		if permission.OrganizationID != postgresOwnerAOrganizationID || permission.SiteID != postgresOwnerASite1ID || permission.Effect != iam.BindingEffectAllow || permission.Status != iam.FactStatusActive {
 			t.Fatalf("unexpected Work Order permission: %#v", permission)
+		}
+		if seen, ok := expectedActions[permission.Action]; !ok || seen {
+			t.Fatalf("unexpected or duplicate Work Order action: %q", permission.Action)
+		}
+		expectedActions[permission.Action] = true
+	}
+	for action, seen := range expectedActions {
+		if !seen {
+			t.Fatalf("missing Work Order permission action: %q", action)
 		}
 	}
 

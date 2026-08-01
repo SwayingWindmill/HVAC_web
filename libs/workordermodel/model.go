@@ -16,6 +16,7 @@ var (
 	ErrVersionConflict   = errors.New("work order version conflict")
 	ErrInvalidCreate     = errors.New("work order create request is invalid")
 	ErrInvalidAssignment = errors.New("work order assignment request is invalid")
+	ErrInvalidLifecycle  = errors.New("work order lifecycle request is invalid")
 )
 
 type Priority string
@@ -167,6 +168,20 @@ type AssignmentInput struct {
 	OccurredAt      string
 }
 
+type LifecycleInput struct {
+	Operation          Operation
+	ExpectedVersion    uint64
+	ScheduledStart     *string
+	DueAt              *string
+	CompletionEvidence []EvidenceReference
+	Reason             string
+	ActorType          string
+	ActorID            string
+	PolicyRevision     string
+	CorrelationID      string
+	OccurredAt         string
+}
+
 func IsUUIDv7(value string) bool { return uuidV7Pattern.MatchString(value) }
 
 func Create(input CreateInput) (WorkOrder, error) {
@@ -272,6 +287,122 @@ func ApplyAssignment(workOrder WorkOrder, input AssignmentInput) (WorkOrder, err
 	return result, nil
 }
 
+func ApplyLifecycle(workOrder WorkOrder, input LifecycleInput) (WorkOrder, error) {
+	if err := workOrder.Validate(); err != nil {
+		return WorkOrder{}, err
+	}
+	if input.ExpectedVersion != workOrder.Version {
+		return WorkOrder{}, ErrVersionConflict
+	}
+	if !bounded(input.Reason, 256) || !bounded(input.ActorType, 64) || !bounded(input.ActorID, 256) ||
+		!bounded(input.PolicyRevision, 128) || !bounded(input.CorrelationID, 256) {
+		return WorkOrder{}, ErrInvalidLifecycle
+	}
+	occurredAt, err := parseInstant(input.OccurredAt)
+	updatedAt, updatedErr := parseInstant(workOrder.UpdatedAt)
+	if err != nil || updatedErr != nil || occurredAt.Before(updatedAt) {
+		return WorkOrder{}, ErrInvalidLifecycle
+	}
+	result := cloneWorkOrder(workOrder)
+	fromStatus := result.Status
+	toStatus := fromStatus
+	switch input.Operation {
+	case OperationSchedule:
+		if fromStatus != StatusOpen || len(input.CompletionEvidence) != 0 {
+			return WorkOrder{}, ErrInvalidLifecycle
+		}
+		scheduledStart, ok := normalizeOptionalInstant(input.ScheduledStart)
+		if !ok {
+			return WorkOrder{}, ErrInvalidLifecycle
+		}
+		dueAt, ok := normalizeOptionalInstant(input.DueAt)
+		if !ok || (scheduledStart == nil && dueAt == nil) || validateLifecycleSchedule(scheduledStart, dueAt, occurredAt) != nil {
+			return WorkOrder{}, ErrInvalidLifecycle
+		}
+		result.ScheduledStart = scheduledStart
+		result.DueAt = dueAt
+	case OperationStart:
+		if fromStatus != StatusOpen || (result.AssigneeID == nil && result.TeamID == nil) || input.ScheduledStart != nil || input.DueAt != nil || len(input.CompletionEvidence) != 0 {
+			return WorkOrder{}, ErrInvalidLifecycle
+		}
+		toStatus = StatusInProgress
+	case OperationBlock:
+		if fromStatus != StatusInProgress || input.ScheduledStart != nil || input.DueAt != nil || len(input.CompletionEvidence) != 0 {
+			return WorkOrder{}, ErrInvalidLifecycle
+		}
+		toStatus = StatusBlocked
+	case OperationResume:
+		if fromStatus != StatusBlocked || input.ScheduledStart != nil || input.DueAt != nil || len(input.CompletionEvidence) != 0 {
+			return WorkOrder{}, ErrInvalidLifecycle
+		}
+		toStatus = StatusInProgress
+	case OperationComplete:
+		if fromStatus != StatusInProgress || input.ScheduledStart != nil || input.DueAt != nil || len(input.CompletionEvidence) == 0 ||
+			result.Tasks.Completed != result.Tasks.Total || result.Tasks.Blocked != 0 {
+			return WorkOrder{}, ErrInvalidLifecycle
+		}
+		evidence, err := normalizeLifecycleEvidence(result.CompletionEvidence, input.CompletionEvidence, occurredAt)
+		if err != nil {
+			return WorkOrder{}, ErrInvalidLifecycle
+		}
+		result.CompletionEvidence = evidence
+		toStatus = StatusCompleted
+	case OperationCancel:
+		if (fromStatus != StatusOpen && fromStatus != StatusInProgress && fromStatus != StatusBlocked) || input.ScheduledStart != nil || input.DueAt != nil || len(input.CompletionEvidence) != 0 {
+			return WorkOrder{}, ErrInvalidLifecycle
+		}
+		toStatus = StatusCancelled
+	case OperationReopen:
+		if (fromStatus != StatusCompleted && fromStatus != StatusCancelled) || input.ScheduledStart != nil || input.DueAt != nil || len(input.CompletionEvidence) != 0 {
+			return WorkOrder{}, ErrInvalidLifecycle
+		}
+		toStatus = StatusOpen
+	default:
+		return WorkOrder{}, ErrInvalidLifecycle
+	}
+	result.Status = toStatus
+	result.Version++
+	result.UpdatedAt = occurredAt.UTC().Format(time.RFC3339Nano)
+	policyRevision := strings.TrimSpace(input.PolicyRevision)
+	correlationID := strings.TrimSpace(input.CorrelationID)
+	result.Timeline = append(result.Timeline, TimelineEvent{
+		Operation: input.Operation, FromStatus: &fromStatus, ToStatus: toStatus,
+		Reason: strings.TrimSpace(input.Reason), ActorType: strings.TrimSpace(input.ActorType), ActorID: strings.TrimSpace(input.ActorID),
+		PolicyRevision: &policyRevision, CorrelationID: &correlationID, OccurredAt: result.UpdatedAt, Version: result.Version,
+	})
+	if err := result.Validate(); err != nil {
+		return WorkOrder{}, ErrInvalidLifecycle
+	}
+	return result, nil
+}
+
+func normalizeLifecycleEvidence(existing, added []EvidenceReference, occurredAt time.Time) ([]EvidenceReference, error) {
+	result := append([]EvidenceReference(nil), existing...)
+	seen := make(map[string]struct{}, len(existing)+len(added))
+	for _, reference := range existing {
+		seen[reference.Kind+"\x00"+reference.Reference] = struct{}{}
+	}
+	for _, reference := range added {
+		reference.Kind = strings.TrimSpace(reference.Kind)
+		reference.Reference = strings.TrimSpace(reference.Reference)
+		capturedAt, err := parseInstant(strings.TrimSpace(reference.CapturedAt))
+		if err != nil || capturedAt.After(occurredAt) {
+			return nil, ErrInvalidLifecycle
+		}
+		reference.CapturedAt = capturedAt.UTC().Format(time.RFC3339Nano)
+		key := reference.Kind + "\x00" + reference.Reference
+		if _, duplicate := seen[key]; duplicate {
+			return nil, ErrInvalidLifecycle
+		}
+		seen[key] = struct{}{}
+		result = append(result, reference)
+	}
+	if validateEvidence(result) != nil {
+		return nil, ErrInvalidLifecycle
+	}
+	return result, nil
+}
+
 func (workOrder WorkOrder) Validate() error {
 	if workOrder.SchemaVersion != SchemaVersion || !IsUUIDv7(workOrder.WorkOrderID) || !IsUUIDv7(workOrder.OrganizationID) || !IsUUIDv7(workOrder.SiteID) {
 		return errors.New("work order identity is invalid")
@@ -305,8 +436,8 @@ func (workOrder WorkOrder) Validate() error {
 	if err := validateEvidence(workOrder.CompletionEvidence); err != nil {
 		return err
 	}
-	if workOrder.Status == StatusCompleted && len(workOrder.CompletionEvidence) == 0 {
-		return errors.New("completed work order requires completion evidence")
+	if workOrder.Status == StatusCompleted && (len(workOrder.CompletionEvidence) == 0 || workOrder.Tasks.Completed != workOrder.Tasks.Total || workOrder.Tasks.Blocked != 0) {
+		return errors.New("completed work order requires completion evidence and converged tasks")
 	}
 	if err := validateTimeline(workOrder.Timeline, workOrder.Status, workOrder.Version, workOrder.AssigneeID, workOrder.TeamID, createdAt, updatedAt); err != nil {
 		return err
@@ -423,17 +554,21 @@ func validateTimeline(events []TimelineEvent, currentStatus Status, version uint
 			}
 			switch event.Operation {
 			case OperationAssign:
-				if event.ToStatus != *event.FromStatus || (event.AssigneeID == nil && event.TeamID == nil) {
+				if event.ToStatus != *event.FromStatus || event.ToStatus == StatusCompleted || event.ToStatus == StatusCancelled || (event.AssigneeID == nil && event.TeamID == nil) {
 					return errors.New("work order assignment timeline is invalid")
 				}
 				projectedAssigneeID = cloneOptional(event.AssigneeID)
 				projectedTeamID = cloneOptional(event.TeamID)
 			case OperationUnassign:
-				if event.ToStatus != *event.FromStatus || event.AssigneeID != nil || event.TeamID != nil {
+				if event.ToStatus != *event.FromStatus || event.ToStatus == StatusCompleted || event.ToStatus == StatusCancelled || event.AssigneeID != nil || event.TeamID != nil {
 					return errors.New("work order unassignment timeline is invalid")
 				}
 				projectedAssigneeID = nil
 				projectedTeamID = nil
+			default:
+				if event.AssigneeID != nil || event.TeamID != nil || !validLifecycleTransition(event.Operation, *event.FromStatus, event.ToStatus) {
+					return errors.New("work order lifecycle timeline is invalid")
+				}
 			}
 		}
 		previousStatus = event.ToStatus
@@ -443,6 +578,29 @@ func validateTimeline(events []TimelineEvent, currentStatus Status, version uint
 		return errors.New("work order timeline does not converge with projection")
 	}
 	return nil
+}
+
+func validLifecycleTransition(operation Operation, fromStatus, toStatus Status) bool {
+	switch operation {
+	case OperationOpen:
+		return fromStatus == StatusDraft && toStatus == StatusOpen
+	case OperationSchedule:
+		return fromStatus == StatusOpen && toStatus == StatusOpen
+	case OperationStart:
+		return fromStatus == StatusOpen && toStatus == StatusInProgress
+	case OperationBlock:
+		return fromStatus == StatusInProgress && toStatus == StatusBlocked
+	case OperationResume:
+		return fromStatus == StatusBlocked && toStatus == StatusInProgress
+	case OperationComplete:
+		return fromStatus == StatusInProgress && toStatus == StatusCompleted
+	case OperationCancel:
+		return (fromStatus == StatusOpen || fromStatus == StatusInProgress || fromStatus == StatusBlocked) && toStatus == StatusCancelled
+	case OperationReopen:
+		return (fromStatus == StatusCompleted || fromStatus == StatusCancelled) && toStatus == StatusOpen
+	default:
+		return false
+	}
 }
 
 func validateSchedule(scheduledStart, dueAt *string) error {
@@ -475,6 +633,13 @@ func validateMutationSchedule(scheduledStart, dueAt *string, now time.Time) erro
 		if instant.Before(now) || instant.After(now.Add(MaximumScheduleHorizon)) {
 			return ErrInvalidCreate
 		}
+	}
+	return nil
+}
+
+func validateLifecycleSchedule(scheduledStart, dueAt *string, now time.Time) error {
+	if validateMutationSchedule(scheduledStart, dueAt, now) != nil {
+		return ErrInvalidLifecycle
 	}
 	return nil
 }

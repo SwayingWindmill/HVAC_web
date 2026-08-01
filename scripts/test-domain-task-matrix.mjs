@@ -136,6 +136,7 @@ test('migrated capability tasks preserve their public package entry points', () 
     's3:thingsboard-contract',
     's3:command-ux',
     's5:work-order:create-assign',
+    's5:work-order:lifecycle',
   ]);
   const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
   for (const task of Object.keys(capabilityTaskMatrix)) {

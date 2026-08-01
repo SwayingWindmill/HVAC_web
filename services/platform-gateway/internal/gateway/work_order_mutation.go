@@ -92,6 +92,12 @@ func dispatchWorkOrderRoute(h *handler, writer http.ResponseWriter, request *htt
 		}
 		route.action = workorderauth.ActionAssign
 		dispatchWorkOrderMutationRoute(h, writer, request, route)
+	case publicWorkOrderLifecycle:
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
+			return
+		}
+		dispatchWorkOrderLifecycleRoute(h, writer, request, route)
 	default:
 		writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested public API route does not exist.", false, nil)
 	}
@@ -122,7 +128,7 @@ func dispatchWorkOrderMutationRoute(h *handler, writer http.ResponseWriter, requ
 		h.writeWorkOrderFailure(writer, request, *failure)
 		return
 	}
-	writeContext, failure := h.signWorkOrderWriteContext(session, route, decision)
+	writeContext, failure := h.signWorkOrderWriteContext(session, route, decision, mutation.idempotencyKey)
 	if failure != nil {
 		h.writeWorkOrderFailure(writer, request, *failure)
 		return
@@ -295,7 +301,7 @@ func boundedWorkOrderText(value string, maximum int) bool {
 	return trimmed != "" && len(trimmed) <= maximum
 }
 
-func (h *handler) signWorkOrderWriteContext(session bffSession, route publicWorkOrderRoute, decision workorderauth.Decision) (string, *workOrderFailure) {
+func (h *handler) signWorkOrderWriteContext(session bffSession, route publicWorkOrderRoute, decision workorderauth.Decision, idempotencyKey string) (string, *workOrderFailure) {
 	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.workOrder == nil {
 		failure := workOrderUnavailable("Work Order write context signing is unavailable.")
 		return "", &failure
@@ -308,6 +314,9 @@ func (h *handler) signWorkOrderWriteContext(session bffSession, route publicWork
 	scopes := []string{"organization:" + session.ActingOrganizationID, "site:" + route.siteID}
 	if route.workOrderID != "" {
 		scopes = append(scopes, "work-order:"+route.workOrderID)
+	}
+	if idempotencyKey != "" {
+		scopes = append(scopes, workOrderMutationKeyScope(idempotencyKey))
 	}
 	claims := identitycontext.DelegationClaims{
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
@@ -392,12 +401,12 @@ func mapWorkOrderMutationProblem(status int, body []byte) workOrderFailure {
 		case "IDEMPOTENCY_CONFLICT":
 			return workOrderFailure{status: status, code: upstream.Code, title: "Idempotency conflict", detail: "The Idempotency-Key was already committed with a different Work Order request."}
 		case "VERSION_CONFLICT":
-			return workOrderFailure{status: status, code: upstream.Code, title: "Version conflict", detail: "The Work Order changed before this assignment could commit."}
+			return workOrderFailure{status: status, code: upstream.Code, title: "Version conflict", detail: "The Work Order changed before this mutation could commit."}
 		default:
 			return workOrderUnavailable("Work Order Service returned an unsupported conflict response.")
 		}
 	case http.StatusUnprocessableEntity:
-		if upstream.Code != "WORK_ORDER_CREATE_INVALID" && upstream.Code != "WORK_ORDER_ASSIGNMENT_INVALID" {
+		if upstream.Code != "WORK_ORDER_CREATE_INVALID" && upstream.Code != "WORK_ORDER_ASSIGNMENT_INVALID" && upstream.Code != "WORK_ORDER_LIFECYCLE_INVALID" {
 			return workOrderUnavailable("Work Order Service returned an unsupported validation response.")
 		}
 		return workOrderFailure{status: status, code: upstream.Code, title: "Work Order mutation invalid", detail: "The Work Order mutation violates the authoritative contract."}

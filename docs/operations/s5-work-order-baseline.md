@@ -1,4 +1,4 @@
-# S5 Work Order contract-only baseline
+# S5 Work Order governed authority baseline
 
 ## Authority boundary
 
@@ -46,9 +46,23 @@ The existing `s5_work_order_service` login and `s5_work_order_runtime` role rema
 
 The two mutation routes use one stable `S5-R1-internal-create-assign` 1% Organization/principal cohort with no fallback and no shadow owner. Browser certification proves authorized create and assignment, exact replay, stale-version conflict, authorization denial without retained data, non-selected route absence, cross-Site nondiscovery, Session-loss purge, public Gateway-only POST traffic, and absence of unreviewed lifecycle routes.
 
+## P5 governed lifecycle graph
+
+IAM owns exact `work-order:plan`, `work-order:start`, `work-order:block`, `work-order:resume`, `work-order:complete`, `work-order:cancel`, and `work-order:reopen` decisions. Every action is exact to Organization, Site, Principal, Work Order, and the hashed idempotency-key scope; explicit deny wins and no browser-supplied identity or authority is accepted.
+
+The fixed graph is `OPEN -> OPEN` for plan, `OPEN -> IN_PROGRESS` for start, `IN_PROGRESS -> BLOCKED` for block, `BLOCKED -> IN_PROGRESS` for resume, `IN_PROGRESS -> COMPLETED` for complete, `OPEN | IN_PROGRESS | BLOCKED -> CANCELLED` for cancel, and `COMPLETED | CANCELLED -> OPEN` for reopen. Start requires an assignee or team. Plan replaces only the bounded future schedule window. Complete requires non-empty typed evidence plus a task summary with zero incomplete or blocked tasks. Reopen never deletes prior completion evidence.
+
+Platform Gateway exposes exactly those seven POST action routes under a separate stable 1% lifecycle cohort. It derives all scope from Session and route, requires Origin-bound CSRF and a bounded `Idempotency-Key`, includes the shared `key:<sha256>` scope in the short-lived write context, performs an internal write-context-protected precondition read, forwards only the fixed action, and rejects downstream Organization, Site, Work Order, title, description, priority, source, ownership, task, note, attachment, schedule, evidence, status, version, or timeline drift.
+
+Work Order Service applies one server-owned transition per successful request, increments version exactly once, appends exactly one timeline event, and preserves title, description, priority, source, ownership, task, note, and attachment projections. Illegal graphs, stale versions, future or invalid schedules, missing evidence, duplicate evidence, cross-Site access, and malformed requests make no state change.
+
+Lifecycle persistence uses the isolated `s5_work_order_mutation_service` login and `s5_work_order_writer` role. Current status or plan, timeline, newly appended completion evidence, idempotency snapshot, and mutation audit commit in one FORCE RLS transaction. Completion evidence records the completing Work Order version internally. Exact retries return the original committed snapshot after restart; payload reuse and concurrent stale versions fail closed.
+
+The seven lifecycle routes share `S5-R1-internal-lifecycle`, cohort `s5-work-order-lifecycle-v1`, and salt `s5-work-order-lifecycle-canary-v1`, with no fallback and no shadow owner. Browser certification proves the legal graph, exact retry, illegal transition, stale version, missing evidence, authorization cleanup, non-selected route absence, cross-Site nondiscovery, Session-loss purge, public Gateway-only POST traffic, and absence of collaboration routes.
+
 ## Explicit exclusions
 
-P4 does not expose start, block, resume, complete, cancel, reopen, task, note, attachment, completion-evidence, or Alarm-link mutations. It does not infer Work Orders from Telemetry or browser state, change Alarm status, run FDD, execute Commands, or admit arbitrary JSON source payloads. Every unreviewed Work Order write route remains absent.
+P5 does not expose task/checklist mutation, note, attachment, collaboration, notification, escalation, SLA automation, Alarm link/unlink, title, description, priority, source, assignment, or Site changes through lifecycle endpoints. It does not infer Work Orders from Telemetry or browser state, change Alarm status, run FDD, execute Commands, or admit arbitrary JSON evidence. Historical timeline and completion evidence cannot be purged or rewritten.
 
 ## Next slices
 

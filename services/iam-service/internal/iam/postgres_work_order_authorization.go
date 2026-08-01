@@ -114,7 +114,11 @@ ORDER BY site_id, action, effect
 		}
 		permission.Action = workorderauth.Action(action)
 		if permission.Action != workorderauth.ActionList && permission.Action != workorderauth.ActionRead &&
-			permission.Action != workorderauth.ActionCreate && permission.Action != workorderauth.ActionAssign {
+			permission.Action != workorderauth.ActionCreate && permission.Action != workorderauth.ActionAssign &&
+			permission.Action != workorderauth.ActionPlan && permission.Action != workorderauth.ActionStart &&
+			permission.Action != workorderauth.ActionBlock && permission.Action != workorderauth.ActionResume &&
+			permission.Action != workorderauth.ActionComplete && permission.Action != workorderauth.ActionCancel &&
+			permission.Action != workorderauth.ActionReopen {
 			return nil, fmt.Errorf("validate IAM Work Order permission action: unsupported action %q", action)
 		}
 		permissions = append(permissions, permission)

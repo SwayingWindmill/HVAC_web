@@ -1,6 +1,8 @@
 package workorderauth
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -11,10 +13,17 @@ import (
 type Action string
 
 const (
-	ActionList   Action = "work-order:list"
-	ActionRead   Action = "work-order:read"
-	ActionCreate Action = "work-order:create"
-	ActionAssign Action = "work-order:assign"
+	ActionList     Action = "work-order:list"
+	ActionRead     Action = "work-order:read"
+	ActionCreate   Action = "work-order:create"
+	ActionAssign   Action = "work-order:assign"
+	ActionPlan     Action = "work-order:plan"
+	ActionStart    Action = "work-order:start"
+	ActionBlock    Action = "work-order:block"
+	ActionResume   Action = "work-order:resume"
+	ActionComplete Action = "work-order:complete"
+	ActionCancel   Action = "work-order:cancel"
+	ActionReopen   Action = "work-order:reopen"
 )
 
 type ReasonCode string
@@ -56,6 +65,10 @@ func (request DecisionRequest) Validate() error {
 	case ActionAssign:
 		if !workordermodel.IsUUIDv7(request.WorkOrderID) || !validOptionalTarget(request.AssigneeID) || !validOptionalTarget(request.TeamID) {
 			return errors.New("Work Order assignment authorization scope is invalid")
+		}
+	case ActionPlan, ActionStart, ActionBlock, ActionResume, ActionComplete, ActionCancel, ActionReopen:
+		if !workordermodel.IsUUIDv7(request.WorkOrderID) || request.AssigneeID != nil || request.TeamID != nil {
+			return errors.New("Work Order lifecycle authorization requires only Work Order identity")
 		}
 	default:
 		return errors.New("Work Order authorization action is unsupported")
@@ -109,6 +122,11 @@ func (decision Decision) Validate() error {
 
 type DecisionResponse struct {
 	Decision Decision `json:"decision"`
+}
+
+func MutationKeyScope(idempotencyKey string) string {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(idempotencyKey)))
+	return "key:" + hex.EncodeToString(digest[:])
 }
 
 func validOptionalTarget(value *string) bool {

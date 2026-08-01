@@ -115,6 +115,8 @@ type workOrderGatewayFixture struct {
 	workOrderCalls          atomic.Int64
 	deny                    atomic.Bool
 	crossSite               atomic.Bool
+	lifecycleDrift          atomic.Bool
+	lifecycleAuditDrift     atomic.Bool
 	lastUpstreamPath        atomic.Value
 	lastUpstreamMethod      atomic.Value
 	lastUpstreamBody        atomic.Value
@@ -176,9 +178,15 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 		header := workOrderReadContextHeader
 		action := string(workorderauth.ActionList)
 		scopes := []string{"organization:" + gatewayWorkOrderOrganizationID, "site:" + gatewayWorkOrderSiteID}
+		precondition := strings.HasSuffix(request.URL.Path, "/"+gatewayWorkOrderID+":lifecycle-precondition")
+		if precondition {
+			header = workOrderWriteContextHeader
+			scopes = append(scopes, "work-order:"+gatewayWorkOrderID, workOrderMutationKeyScope(request.Header.Get("Idempotency-Key")))
+		}
 		if request.Method == http.MethodPost {
 			header = workOrderWriteContextHeader
 			action = string(workorderauth.ActionCreate)
+			scopes = append(scopes, workOrderMutationKeyScope(request.Header.Get("Idempotency-Key")))
 		}
 		if strings.HasSuffix(request.URL.Path, "/"+gatewayWorkOrderID) {
 			action = string(workorderauth.ActionRead)
@@ -189,14 +197,41 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 			action = string(workorderauth.ActionAssign)
 			scopes = append(scopes, "work-order:"+gatewayWorkOrderID)
 		}
+		for suffix, lifecycleAction := range map[string]workorderauth.Action{
+			":plan": workorderauth.ActionPlan, ":start": workorderauth.ActionStart, ":block": workorderauth.ActionBlock,
+			":resume": workorderauth.ActionResume, ":complete": workorderauth.ActionComplete,
+			":cancel": workorderauth.ActionCancel, ":reopen": workorderauth.ActionReopen,
+		} {
+			if strings.HasSuffix(request.URL.Path, "/"+gatewayWorkOrderID+suffix) {
+				header = workOrderWriteContextHeader
+				action = string(lifecycleAction)
+				scopes = append(scopes, "work-order:"+gatewayWorkOrderID)
+			}
+		}
 		claims, verifyErr := identitycontext.VerifyDelegation(signer.Public(), request.Header.Get(header))
-		if verifyErr != nil || identitycontext.ValidateDelegationAnyScope(claims, now, "spiffe://hvac.local/platform-gateway", "work-order-service", action, scopes) != nil || claims.PrincipalID != "principal-work-order-1" || claims.PolicyRevision != "work-order-policy-1" {
+		preconditionActionOK := !precondition
+		if precondition && verifyErr == nil && len(claims.Actions) == 1 {
+			switch workorderauth.Action(claims.Actions[0]) {
+			case workorderauth.ActionPlan, workorderauth.ActionStart, workorderauth.ActionBlock, workorderauth.ActionResume, workorderauth.ActionComplete, workorderauth.ActionCancel, workorderauth.ActionReopen:
+				action = claims.Actions[0]
+				preconditionActionOK = true
+			}
+		}
+		if verifyErr != nil || !preconditionActionOK || identitycontext.ValidateDelegationAnyScope(claims, now, "spiffe://hvac.local/platform-gateway", "work-order-service", action, scopes) != nil || claims.PrincipalID != "principal-work-order-1" || claims.PolicyRevision != "work-order-policy-1" {
 			writer.Header().Set("Content-Type", "application/problem+json")
 			writer.WriteHeader(http.StatusForbidden)
 			_ = json.NewEncoder(writer).Encode(upstreamWorkOrderProblem{Type: "https://example.test/problems/work-order-access-denied", Title: "denied", Status: http.StatusForbidden, Detail: "denied", Code: "WORK_ORDER_ACCESS_DENIED"})
 			return
 		}
 		workOrder := validGatewayWorkOrder(gatewayWorkOrderSiteID)
+		if fixture.crossSite.Load() {
+			workOrder.SiteID = gatewayWorkOrderOtherSiteID
+		}
+		if precondition {
+			writer.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(writer).Encode(workOrder)
+			return
+		}
 		if action == string(workorderauth.ActionAssign) {
 			assigneeID := "principal:operator-b"
 			teamID := "team:controls"
@@ -211,8 +246,24 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 				AssigneeID: &assigneeID, TeamID: &teamID, OccurredAt: workOrder.UpdatedAt, Version: 2,
 			})
 		}
-		if fixture.crossSite.Load() {
-			workOrder.SiteID = gatewayWorkOrderOtherSiteID
+		if action == string(workorderauth.ActionStart) {
+			fromStatus := workordermodel.StatusOpen
+			policyRevision := "work-order-policy-1"
+			correlationID := request.Header.Get("Idempotency-Key")
+			workOrder.Status = workordermodel.StatusInProgress
+			workOrder.Version = 2
+			workOrder.UpdatedAt = "2026-08-01T10:01:00Z"
+			workOrder.Timeline = append(workOrder.Timeline, workordermodel.TimelineEvent{
+				Operation: workordermodel.OperationStart, FromStatus: &fromStatus, ToStatus: workordermodel.StatusInProgress,
+				Reason: "begin repair", ActorType: "PRINCIPAL", ActorID: "principal-work-order-1", PolicyRevision: &policyRevision, CorrelationID: &correlationID,
+				OccurredAt: workOrder.UpdatedAt, Version: 2,
+			})
+		}
+		if fixture.lifecycleDrift.Load() && action == string(workorderauth.ActionStart) {
+			workOrder.Title = "tampered downstream title"
+		}
+		if fixture.lifecycleAuditDrift.Load() && action == string(workorderauth.ActionStart) {
+			workOrder.Timeline[len(workOrder.Timeline)-1].Reason = "tampered downstream reason"
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		switch action {
