@@ -52,7 +52,7 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=contracts --profiles=core,rms,s1,s2,s3
+      - run: node scripts/run-pr-gate.mjs --gate=contracts --profile-set=all
 
   unit:
     name: nightly / unit
@@ -73,7 +73,7 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=unit --profiles=analytics,operations-agent,pocs,s0,s1,s2,s3,web
+      - run: node scripts/run-pr-gate.mjs --gate=unit --profile-set=all
 
   integration:
     name: nightly / integration
@@ -93,7 +93,7 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=integration --profiles=analytics,operations-agent,s0,s1,s2-baseline,s2-history,s2-ingest,s2-realtime,s3
+      - run: node scripts/run-pr-gate.mjs --gate=integration --profile-set=all
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
@@ -120,7 +120,7 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=browser --profiles=rms
+      - run: node scripts/run-pr-gate.mjs --gate=browser --profile-set=browser-windows
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
@@ -147,7 +147,7 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=browser --profiles=operations-agent,s0,s1,s2
+      - run: node scripts/run-pr-gate.mjs --gate=browser --profile-set=browser-linux
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:

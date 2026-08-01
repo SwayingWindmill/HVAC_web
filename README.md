@@ -1,100 +1,128 @@
 # 泉来禾智慧能源平台
 
-本仓库采用单仓库、多运行时结构。根目录只负责编排、共享文档和跨层验证，不承载具体应用源码。
+本仓库采用单仓库、多运行时结构。根目录负责编排、共享契约、跨服务验证与发布证据；具体产品代码位于 `apps/`、`services/` 和 `libs/`。
 
-## 目录结构
-
-```text
-apps/
-  hvac-web/                  生产 Web adapter（Vite + React）
-
-services/
-  platform-gateway/          S0 公共 HTTP 入口（Go）
-  iam-service/               S0 私有身份服务（Go，mTLS）
-  audit-ledger-service/      S0 Transactional Inbox 与 append-only Audit（Go）
-  outbox-relay/              S0 PostgreSQL Outbox → Kafka API Relay（Go）
-  oidc-test-provider/        S0 确定性 OIDC 测试提供者（Go）
-
-libs/
-  identitycontext/           受约束委托与 actor chain 类型
-  observability/             W3C Trace、非阻塞 OTLP、低基数指标与日志脱敏
-  ownershipregistry/         版本化路由所有权、稳定 cohort 与决策审计
-  sessionevent/              版本化 Session Audit Protobuf
-  sessionstore/              Session、Audit Intent 与 Outbox 事务层
-  oidctest/                  OIDC 测试 fixture
-  testpki/                   临时测试 CA 与 Workload 证书
-
-contracts/
-  http/                      OpenAPI 权威契约与生成工具锁
-  events/                    Protobuf 事件契约与兼容锁
-  ownership/                 Route/Data Ownership Registry 与 revision 锁
-
-infra/
-  s0-durable/                PostgreSQL、Redpanda、OTel Collector 与 Prometheus fixture
-
-scripts/                     本地编排、验证和浏览器审计
-docs/                        产品、架构和集成文档
-```
-
-## 当前 AI 运行方式
+## 系统结构
 
 ```text
 apps/hvac-web
-  -> local read-only HvacMockAgent
+  -> platform-gateway
+       -> IAM / Registry / Telemetry / Analytics / Command / Alarm / Work Order
+       -> operations-agent-service
 ```
 
-旧 Python EnergyAgent、独立 Copilot Runtime 和 Next.js 参考 Canvas 已删除。未来 TypeScript Operations Agent 必须通过 Platform Gateway 接入；架构见 ADR 0009、ADR 0010 和 `docs/operations-agent/framework-architecture.md`。
+浏览器只访问 Platform Gateway。服务间通过版本化 HTTP、事件和所有权契约协作；浏览器不直连模型提供方、数据库、ThingsBoard 或内部服务。
 
-## 常用命令
+## 目录
+
+```text
+apps/hvac-web/        React + Vite Web，包含 Demo 与 Real 两种运行模式
+services/             独立部署的 Go 服务与 TypeScript Operations Agent
+libs/                 窄接口 Go 领域库、授权库和基础设施库
+contracts/            OpenAPI、事件、数据所有权和设备集成契约
+infra/                PostgreSQL、ClickHouse、Centrifugo、ThingsBoard 等本地拓扑
+deploy/               镜像、Kubernetes、发布门禁和切换配置
+benchmarks/           Operations Agent 确定性与安全基准
+scripts/              构建、测试、审计、契约生成和发布认证入口
+docs/                 ADR、领域设计、运维方案、安全与研究文档
+semantic/cube/        分析语义层
+tools/                模拟器和测试工具
+```
+
+## Web 运行模式
+
+- Demo：使用演示数据和本地只读能力，入口为 `apps/hvac-web/src/demo/main.tsx`。
+- Real：使用受保护 Shell、站点范围、Platform Gateway API 和实时遥测，入口为 `apps/hvac-web/src/real/main.tsx`。
 
 ```bash
-npm run dev                 # 仅启动 HVAC Web
-npm run dev:s0-gateway      # 启动 HVAC Web + Go Platform Gateway
-npm run dev:s0-auth         # 启动 HTTPS Web、OIDC、Gateway 与 mTLS IAM
-npm run dev:s0-durable      # 启动 PostgreSQL、Redpanda、Collector、OIDC、IAM、Relay、Audit、Legacy、Gateway 与 Web
-npm run delivery:local      # 校验本地交付契约后启动同一完整 S0 拓扑
-npm run delivery:validate   # 校验 local/staging 显式配置与生产出口隔离
-npm run delivery:check      # 校验镜像、探针、身份、NetworkPolicy、迁移与供应链资产
-npm run delivery:render -- --bindings=<private.json> --output=out/s0-staging
-npm run contracts:check     # 校验 OpenAPI 生成产物无漂移
-npm run events:check        # 校验 Protobuf 字段号和类型兼容锁
-npm run ownership:check     # 校验 Route/Data Ownership Registry 与 revision 锁
-npm run test:gateway        # Gateway Go 黑盒测试
-npm run test:identity       # OIDC、委托、IAM、撤销与 Gateway 身份测试
-npm run test:durable-unit   # Session 事件、存储、Relay、Inbox 与 Audit 单元测试
-npm run test:observability  # Trace、OTLP、指标标签、日志脱敏与跨服务集成测试
-npm run test:ownership      # Route Registry、稳定 cohort、Legacy 代理与公共故障测试
-npm run test:legacy-compatibility # Go Legacy 兼容夹具 mTLS/委托边界测试
-npm run test:durable-postgres # 真实 PostgreSQL 事务、RLS、所有权审计和重启测试
-npm run build:gateway       # 独立构建 Gateway 二进制
-npm run build:legacy-compatibility # 构建 Go Legacy 兼容夹具
-npm run build:iam           # 独立构建 IAM 二进制
-npm run build:audit-ledger
-npm run build:outbox-relay
-npm run audit:platform-gateway
-npm run audit:auth-principal
-npm run audit:durable-session
-npm run audit:route-ownership
-npm run audit:observability # Trace 连续性、Collector 故障隔离与秘密缺失黑盒审计
-npm run audit:s0-rollout    # 验证 readiness 门控滚动升级与兼容版本回滚模型
-npm run audit:delivery      # 汇总交付配置、静态资产、回滚模型与 PostgreSQL 兼容门禁
+npm run dev:demo
+npm run dev:real
+npm run build:demo
+npm run build:real
+```
+
+## 服务目录
+
+### 平台入口与身份
+
+- `platform-gateway/`：浏览器公共入口、BFF 安全边界和内部路由编排。
+- `iam-service/`：身份、授权、委托和站点访问决策。
+- `platform-core-service/`：站点、设备和 Registry 权威数据。
+- `audit-ledger-service/`：追加式审计账本和事务 Inbox。
+- `outbox-relay/`：事务 Outbox 事件转发。
+- `oidc-test-provider/`：确定性本地 OIDC 测试提供方。
+- `legacy-migration-service/`：旧 Registry 数据迁移边界。
+
+### 遥测与分析
+
+- `telemetry-runtime-service/`：当前遥测、摄取和历史投影运行时。
+- `telemetry-query-service/`：历史遥测与能源分析产品查询。
+- `analytics-read-model-projector/`：分析读取模型投影。
+- `telemetry-shadow-comparator/`：迁移与切换期间的遥测影子比较。
+- `thingsboard-telemetry-adapter/`：ThingsBoard 遥测适配。
+
+### 命令、告警与工单
+
+- `command-service/`：命令意图和治理状态权威服务。
+- `command-dispatcher/`：命令派发与结果验证。
+- `thingsboard-connector-control/`：ThingsBoard 控制连接器。
+- `alarm-service/`：告警读取模型与生命周期。
+- `work-order-service/`：工单领域和持久化运行时。
+
+### 智能运维
+
+- `operations-agent-service/`：TypeScript 模块化单体，负责授权范围内的调查编排、确定性分析、LangGraph 只读运行时、业务记录和 AG-UI 投影。
+
+Operations Agent 通过 Platform Gateway 暴露受保护的调查接口。现有实现包含 Registry/Energy 权威读取、PostgreSQL 持久化、只读运行时和首个 Web Operations Workspace；实时模型提供方、断线游标恢复和调度器仍是后续工作。
+
+## 契约和所有权
+
+- `contracts/http/`：公共及内部 OpenAPI 契约和生成锁。
+- `contracts/events/`：Protobuf 与事件兼容锁。
+- `contracts/ownership/`：路由、数据写入权威和切换阶段。
+- `contracts/telemetry/`：遥测兼容性和 IAM 授权规则。
+- `contracts/thingsboard/`：设备控制映射。
+
+常用检查：
+
+```bash
+npm run repo:check
+npm run repo:governance:test
+npm run domain:matrix:test
+npm run contracts:check
+npm run events:check
+npm run ownership:check
 npm run lint
 npm run build
 ```
 
-S0 服务默认通过独立 loopback 诊断端口暴露 `/health/startup`、`/health/live`、`/health/ready`、`/metrics` 和 `/diagnostics`。Gateway、Relay、Audit Ledger、IAM 与 OIDC fixture 的默认端口依次为 `19080`、`19081`、`19082`、`19083`、`19084`。Observability 说明见 `docs/operations/s0-observability.md`，可复现交付、签名镜像、staging 渲染和回滚说明见 `docs/operations/s0-delivery.md`。
+领域任务矩阵统一维护 PR、本地和夜间回归使用的命令组合。默认只运行所选领域的单元层；先用 `domain:plan` 查看计划，再按需增加持久化或浏览器层：
+
+```bash
+npm run domain:plan -- --domain=operations-agent --layers=unit,integration
+npm run domain:run -- --domain=telemetry --layers=contracts,unit
+npm run domain:run -- --domain=command --layers=unit,integration
+```
+
+支持的领域包括 `web`、`platform`、`registry`、`telemetry`、`command`、`analytics`、`operations-agent` 和 `pocs`。命令及 Profile 的唯一配置源是 `scripts/domain-task-matrix.mjs`。全量回归通过命名集合执行：`all` 覆盖某个 Gate 的全部 Profile，`browser-linux` 和 `browser-windows` 保持浏览器检查的运行平台边界；新增 Profile 未加入这些集合时矩阵会立即失败。
+
+较长但仍需保留公共名称的能力检查也由同一矩阵维护。`s2:telemetry-baseline`、`s2:realtime-backend`、`s3:command-safety` 和 `s3:command-authority` 目前委托给受限的 capability runner；可在不执行真实测试的情况下查看展开顺序：
+
+```bash
+node scripts/run-capability-task.mjs --task=s2:telemetry-baseline --dry-run=true
+node scripts/run-capability-task.mjs --task=s2:realtime-backend --dry-run=true
+node scripts/run-capability-task.mjs --task=s3:command-safety --dry-run=true
+node scripts/run-capability-task.mjs --task=s3:command-authority --dry-run=true
+```
+
+`repo:check` 只检查 Git 已跟踪文件，防止日志、本地协调数据和生成产物进入版本库，并校验服务目录与 README 服务清单一致。`.worktrees/` 当前仅保持 Git 忽略，不纳入该检查的失败规则。
 
 ## 依赖所有权
 
-- 根目录 `package.json`：HVAC Web、契约生成与仓库编排所需 Node 依赖。
-- `services/platform-gateway/go.mod`：Gateway 独立 Go module。
-- `services/iam-service/go.mod`：私有 IAM 独立 Go module。
-- `services/audit-ledger-service/go.mod`：Audit Consumer、Transactional Inbox 与查询服务依赖。
-- `services/outbox-relay/go.mod`：独立 Outbox Relay 与 Kafka API 客户端依赖。
-- `services/oidc-test-provider/go.mod`：本地/测试 OIDC fixture 独立 Go module。
-- `libs/*/go.mod`：委托、Observability、Route Ownership、Session 事件、事务存储、OIDC fixture 与测试 PKI 的窄接口模块；根目录 `go.work` 只负责编排。
-- `contracts/http/tooling.lock.json`：OpenAPI 生成器、模板、Go、Node 与运行时校验版本锁。
-- `contracts/events/session-audit.v1.lock.json`：Protobuf v1 字段名、字段号和字段类型兼容锁。
-- `contracts/ownership/ownership.v1.lock.json`：公共路由 owner、数据 writer 与单调 revision 兼容锁。
-- `hvac-backend/package.json`：Legacy Frozen NestJS 依赖；S0 私有模式仅加载既有 health controller/service。
-未来 Agent adapter 的依赖必须由其所属模块独立管理，并通过 Platform Gateway 和版本化合同保证跨进程兼容性。
+- 根目录 `package.json`：Web、契约生成、仓库编排和跨层验证。
+- `services/operations-agent-service/package.json`：Operations Agent 独立 Node 依赖。
+- `services/*/go.mod`：各 Go 服务独立依赖。
+- `libs/*/go.mod`：共享领域与安全能力的窄模块依赖。
+- 根目录 `go.work`：仅负责本地 Go workspace 编排。
+
+设计规则见 `DESIGN.md`，架构决策见 `docs/adr/`，当前领域上下文见 `CONTEXT.md`。

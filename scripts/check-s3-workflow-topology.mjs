@@ -1,6 +1,8 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { resolveCapabilityTask } from './domain-task-matrix.mjs';
+
 const root = resolve(process.cwd());
 const workflowsDir = resolve(root, '.github/workflows');
 const packageJSON = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
@@ -68,7 +70,16 @@ for (const capability of capabilities) {
   assert(!workflow.includes('s3-ticket-'), `${capability.file} still contains Ticket workflow topology`);
 }
 
-const authority = packageJSON.scripts?.['s3:command-authority'] ?? '';
+const authorityCommand = packageJSON.scripts?.['s3:command-authority'] ?? '';
+const authorityTaskMatch = authorityCommand.match(/^node scripts\/run-capability-task\.mjs --task=([^\s]+)$/u);
+let authority = authorityCommand;
+if (authorityTaskMatch?.[1] === 's3:command-authority') {
+  try {
+    authority = resolveCapabilityTask('s3:command-authority').map(({ label }) => label).join(' && ');
+  } catch {
+    authority = authorityCommand;
+  }
+}
 for (const marker of [
   's3:postgres:check',
   's3:governance-dispatch:check',
