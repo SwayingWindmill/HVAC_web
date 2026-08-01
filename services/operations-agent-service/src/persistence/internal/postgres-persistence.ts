@@ -207,6 +207,7 @@ const scopeContains = (
 
 const validateBusinessRecord = (
   current: OperationsInvestigationSnapshot,
+  next: OperationsInvestigationSnapshot,
   effect: CommittedEffectView | undefined,
   record: InvestigationBusinessRecord | undefined,
 ): void => {
@@ -215,6 +216,38 @@ const validateBusinessRecord = (
       throw new InvestigationRepositoryConflictError(
         'RECORD_REFERENCE_CONFLICT',
         `${effect.kind} effects require a typed business record.`,
+      );
+    }
+    return;
+  }
+  if (record.recordType === 'OPERATOR_INPUT_ACCEPTED') {
+    const appended = next.operatorInputAcceptances[current.operatorInputAcceptances.length];
+    const request = current.activeOperatorInputRequest;
+    if (effect !== undefined
+      || next.operatorInputAcceptances.length !== current.operatorInputAcceptances.length + 1
+      || next.acceptedOperatorInputIds.length !== current.acceptedOperatorInputIds.length + 1
+      || appended === undefined
+      || request === null
+      || current.status !== 'WAITING_FOR_OPERATOR_INPUT'
+      || next.status !== 'RUNNING'
+      || record.investigationId !== current.id
+      || record.id !== appended.recordId
+      || record.recordedAt !== appended.acceptedAt
+      || record.requestId !== request.id
+      || record.requestId !== appended.requestId
+      || record.runId !== request.runId
+      || record.runId !== appended.runId
+      || record.idempotencyKey !== appended.idempotencyKey
+      || record.inputKind !== request.kind
+      || record.inputKind !== appended.kind
+      || record.inputDigest !== appended.inputDigest
+      || record.scope.organizationId !== current.scope.organizationId
+      || record.scope.siteId !== current.scope.siteId
+      || record.scope.equipmentId !== current.scope.equipmentId
+      || record.scope.deviceId !== current.scope.deviceId) {
+      throw new InvestigationRepositoryConflictError(
+        'RECORD_REFERENCE_CONFLICT',
+        'Accepted Operator Input record does not match the authoritative interrupt transition.',
       );
     }
     return;
@@ -568,7 +601,7 @@ export const createPostgresOperationsAgentPersistence = (
           : createInvestigationBusinessRecord(input.record);
         validateImmutableFields(currentSnapshot, nextSnapshot);
         validateEffectTransition(currentSnapshot, nextSnapshot, input.effect);
-        validateBusinessRecord(currentSnapshot, input.effect, record);
+        validateBusinessRecord(currentSnapshot, nextSnapshot, input.effect, record);
         if (record !== undefined) {
           await insertBusinessRecord(client, record);
         }

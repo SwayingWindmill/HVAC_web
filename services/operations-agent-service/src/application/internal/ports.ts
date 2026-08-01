@@ -61,6 +61,8 @@ export type InvestigationAuthorizationAction =
   | 'COMMIT_EFFECT'
   | 'PAUSE_AGENT_RUN'
   | 'RESUME_AGENT_RUN'
+  | 'REQUEST_OPERATOR_INPUT'
+  | 'ACCEPT_OPERATOR_INPUT'
   | 'CANCEL_INVESTIGATION'
   | 'COMPLETE_AGENT_RUN'
   | 'FAIL_AGENT_RUN';
@@ -183,6 +185,8 @@ export interface ApplicationEvent {
     | 'INVESTIGATION_EFFECT_COMMITTED'
     | 'AGENT_RUN_PAUSED'
     | 'AGENT_RUN_RESUMED'
+    | 'OPERATOR_INPUT_REQUESTED'
+    | 'OPERATOR_INPUT_ACCEPTED'
     | 'INVESTIGATION_CANCELLED'
     | 'AGENT_RUN_COMPLETED'
     | 'AGENT_RUN_FAILED';
@@ -203,6 +207,8 @@ export interface AuditRecord {
     | 'COMMIT_EFFECT'
     | 'PAUSE_AGENT_RUN'
     | 'RESUME_AGENT_RUN'
+    | 'REQUEST_OPERATOR_INPUT'
+    | 'ACCEPT_OPERATOR_INPUT'
     | 'CANCEL_INVESTIGATION'
     | 'COMPLETE_AGENT_RUN'
     | 'FAIL_AGENT_RUN';
@@ -329,7 +335,13 @@ export interface Clock {
   now(): number;
 }
 
-export type GeneratedIdentityKind = 'investigation' | 'run' | 'lease' | 'checkpoint';
+export type GeneratedIdentityKind =
+  | 'investigation'
+  | 'run'
+  | 'lease'
+  | 'checkpoint'
+  | 'operator-input-request'
+  | 'operator-input-record';
 
 export interface IdGenerator {
   next(kind: GeneratedIdentityKind): string;

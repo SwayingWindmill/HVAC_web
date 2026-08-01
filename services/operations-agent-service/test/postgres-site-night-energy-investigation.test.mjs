@@ -253,6 +253,7 @@ test('PostgreSQL resumes a checkpointed night-energy Run without duplicate busin
       analysisReferenceCount: completed.analysisReferences.length,
       findingCount: completed.findings.length,
       toolReceiptCount: completed.toolReceipts.length,
+      acceptedOperatorInputCount: completed.acceptedOperatorInputs.length,
     }],
   });
   assert.deepEqual(await journalCounts(operationsPool), committedCounts);

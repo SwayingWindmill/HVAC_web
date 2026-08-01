@@ -1,10 +1,17 @@
-import type { InvestigationScope, StepIdentity } from './operations-investigation.js';
+import type {
+  IdempotencyKey,
+  InvestigationScope,
+  OperatorInputAnalysisScope,
+  OperatorInputRequestKind,
+  StepIdentity,
+} from './operations-investigation.js';
 
 export type InvestigationBusinessRecordType =
   | 'EVIDENCE'
   | 'ANALYSIS_REFERENCE'
   | 'FINDING'
-  | 'TOOL_EXECUTION_RECEIPT';
+  | 'TOOL_EXECUTION_RECEIPT'
+  | 'OPERATOR_INPUT_ACCEPTED';
 
 export type EvidenceClassification = 'FACT' | 'ALGORITHM_RESULT';
 export type EvidenceOwner = 'registry' | 'telemetry-query-service';
@@ -167,11 +174,37 @@ export interface ToolExecutionReceiptRecord extends InvestigationBusinessRecordB
   readonly metadata: Readonly<Record<string, ToolReceiptMetadataValue>>;
 }
 
+export interface OperatorInputAcceptedValues {
+  readonly analysisScope: OperatorInputAnalysisScope;
+  readonly operatorNote: string | null;
+}
+
+export interface OperatorInputAcceptedProvenance {
+  readonly actorType: 'OPERATOR';
+  readonly source: 'PLATFORM_GATEWAY';
+  readonly authorizationDecisionId: string;
+  readonly policyRevision: string;
+  readonly submittedAt: number;
+}
+
+export interface OperatorInputAcceptedRecord extends InvestigationBusinessRecordBase {
+  readonly recordType: 'OPERATOR_INPUT_ACCEPTED';
+  readonly requestId: string;
+  readonly runId: string;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly inputKind: OperatorInputRequestKind;
+  readonly inputDigest: string;
+  readonly scope: InvestigationScope;
+  readonly values: OperatorInputAcceptedValues;
+  readonly provenance: OperatorInputAcceptedProvenance;
+}
+
 export type InvestigationBusinessRecord =
   | EvidenceRecord
   | AnalysisReferenceRecord
   | FindingRecord
-  | ToolExecutionReceiptRecord;
+  | ToolExecutionReceiptRecord
+  | OperatorInputAcceptedRecord;
 
 export type InvestigationBusinessRecordErrorCode = 'BUSINESS_RECORD_INVALID';
 
@@ -773,6 +806,74 @@ const normalizeToolReceipt = (record: Record<string, unknown>): ToolExecutionRec
   };
 };
 
+const normalizeOperatorInputAccepted = (
+  record: Record<string, unknown>,
+): OperatorInputAcceptedRecord => {
+  if (!hasExactKeys(record, [
+    'schemaVersion',
+    'recordType',
+    'id',
+    'investigationId',
+    'recordedAt',
+    'requestId',
+    'runId',
+    'idempotencyKey',
+    'inputKind',
+    'inputDigest',
+    'scope',
+    'values',
+    'provenance',
+  ])) fail('Accepted Operator Input record has unsupported fields.');
+  if (record.inputKind !== 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION') {
+    fail('Accepted Operator Input kind is unsupported.');
+  }
+  const values = requireRecord(record.values, 'values');
+  if (!hasExactKeys(values, ['analysisScope', 'operatorNote'])
+    || (values.analysisScope !== 'SITE_ONLY' && values.analysisScope !== 'DEFER')) {
+    fail('Accepted Operator Input values do not match the supported schema.');
+  }
+  const provenance = requireRecord(record.provenance, 'provenance');
+  if (!hasExactKeys(provenance, [
+    'actorType',
+    'source',
+    'authorizationDecisionId',
+    'policyRevision',
+    'submittedAt',
+  ])
+    || provenance.actorType !== 'OPERATOR'
+    || provenance.source !== 'PLATFORM_GATEWAY') {
+    fail('Accepted Operator Input provenance is invalid.');
+  }
+  const base = normalizeBase(record, 'OPERATOR_INPUT_ACCEPTED');
+  const submittedAt = requireTimestamp(provenance.submittedAt, 'provenance.submittedAt');
+  if (submittedAt !== base.recordedAt) {
+    fail('Accepted Operator Input provenance timestamp must match recordedAt.');
+  }
+  return {
+    ...base,
+    requestId: requireString(record.requestId, 'requestId'),
+    runId: requireString(record.runId, 'runId'),
+    idempotencyKey: requireString(record.idempotencyKey, 'idempotencyKey') as IdempotencyKey,
+    inputKind: record.inputKind,
+    inputDigest: requireDigest(record.inputDigest, 'inputDigest'),
+    scope: normalizeScope(record.scope, 'scope'),
+    values: {
+      analysisScope: values.analysisScope,
+      operatorNote: requireNullableString(values.operatorNote, 'operatorNote', 500),
+    },
+    provenance: {
+      actorType: 'OPERATOR',
+      source: 'PLATFORM_GATEWAY',
+      authorizationDecisionId: requireString(
+        provenance.authorizationDecisionId,
+        'authorizationDecisionId',
+      ),
+      policyRevision: requireString(provenance.policyRevision, 'policyRevision'),
+      submittedAt,
+    },
+  };
+};
+
 const assertBoundedRecord = (record: InvestigationBusinessRecord): InvestigationBusinessRecord => {
   const serialized = JSON.stringify(record);
   if (Buffer.byteLength(serialized, 'utf8') > maxRecordBytes) {
@@ -792,6 +893,8 @@ export const createInvestigationBusinessRecord = (
   } else if (record.recordType === 'FINDING') normalized = normalizeFinding(record);
   else if (record.recordType === 'TOOL_EXECUTION_RECEIPT') {
     normalized = normalizeToolReceipt(record);
+  } else if (record.recordType === 'OPERATOR_INPUT_ACCEPTED') {
+    normalized = normalizeOperatorInputAccepted(record);
   } else {
     fail('Business record type is unsupported.');
   }

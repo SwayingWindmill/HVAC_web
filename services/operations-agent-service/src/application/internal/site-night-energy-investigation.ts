@@ -1,6 +1,7 @@
 import {
   businessRecordsEqual,
   createInvestigationBusinessRecord,
+  createInvestigationRevision,
   type AnalysisReferenceRecord,
   type EvidenceQualityClassification,
   type EvidenceRecord,
@@ -9,6 +10,9 @@ import {
   type InvestigationBusinessRecord,
   type InvestigationScope,
   type InvestigationStatus,
+  type OperatorInputAcceptedRecord,
+  type OperatorInputAcceptedValues,
+  type OperatorInputRequestView,
   type OperationsInvestigationView,
   type ToolExecutionReceiptRecord,
 } from '../../domain/index.js';
@@ -66,7 +70,7 @@ export interface ListSiteNightEnergyInvestigationsQuery {
 
 export interface SiteNightEnergyActiveRunView {
   readonly id: string;
-  readonly status: 'ACTIVE' | 'PAUSED';
+  readonly status: 'ACTIVE' | 'PAUSED' | 'WAITING_FOR_OPERATOR_INPUT';
   readonly startedAt: number;
 }
 
@@ -83,6 +87,8 @@ export interface SiteNightEnergyInvestigationView {
   readonly analysisReferences: readonly AnalysisReferenceRecord[];
   readonly findings: readonly FindingRecord[];
   readonly toolReceipts: readonly ToolExecutionReceiptRecord[];
+  readonly operatorInputRequest: OperatorInputRequestView | null;
+  readonly acceptedOperatorInputs: readonly OperatorInputAcceptedRecord[];
 }
 
 export interface SiteNightEnergyInvestigationSummary {
@@ -97,6 +103,7 @@ export interface SiteNightEnergyInvestigationSummary {
   readonly analysisReferenceCount: number;
   readonly findingCount: number;
   readonly toolReceiptCount: number;
+  readonly acceptedOperatorInputCount: number;
 }
 
 export interface SiteNightEnergyInvestigationList {
@@ -104,11 +111,28 @@ export interface SiteNightEnergyInvestigationList {
   readonly investigations: readonly SiteNightEnergyInvestigationSummary[];
 }
 
+export interface AcceptSiteNightEnergyOperatorInputCommand {
+  readonly investigationId: string;
+  readonly requestId: string;
+  readonly expectedRevision: number;
+  readonly idempotencyKey: string;
+  readonly values: OperatorInputAcceptedValues;
+}
+
+export interface AcceptSiteNightEnergyOperatorInputResult {
+  readonly outcome: 'COMMITTED' | 'DUPLICATE';
+  readonly investigation: SiteNightEnergyInvestigationView;
+}
+
 export interface SiteNightEnergyInvestigationCoordinator {
   start(command: StartSiteNightEnergyInvestigationCommand): Promise<SiteNightEnergyInvestigationView>;
   list(query: ListSiteNightEnergyInvestigationsQuery): Promise<SiteNightEnergyInvestigationList>;
   get(query: SiteNightEnergyInvestigationQuery): Promise<SiteNightEnergyInvestigationView>;
   advance(query: SiteNightEnergyInvestigationQuery): Promise<SiteNightEnergyInvestigationView>;
+  requestOperatorInput(query: SiteNightEnergyInvestigationQuery): Promise<SiteNightEnergyInvestigationView>;
+  acceptOperatorInput(
+    command: AcceptSiteNightEnergyOperatorInputCommand,
+  ): Promise<AcceptSiteNightEnergyOperatorInputResult>;
   cancel(query: SiteNightEnergyInvestigationQuery): Promise<SiteNightEnergyInvestigationView>;
 }
 
@@ -401,6 +425,12 @@ export const createSiteNightEnergyInvestigationCoordinator = (
     stepId: string,
     record: InvestigationBusinessRecord,
   ): Promise<OperationsInvestigationView> => {
+    if (record.recordType === 'OPERATOR_INPUT_ACCEPTED') {
+      throw new InvestigationCoordinatorError(
+        'INVALID_INVESTIGATION_STATE',
+        'Accepted Operator Input cannot be committed as an Agent effect.',
+      );
+    }
     const authority = activeAuthority(view);
     const result = await coordinator.commitEffect({
       investigationId: view.id,
@@ -498,6 +528,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
       ...view.analysisReferenceIds,
       ...view.findingIds,
       ...view.toolReceiptIds,
+      ...view.acceptedOperatorInputIds,
     ].map((identity) => ports.businessRecordRepository.get(view.id, identity)));
     if (records.some((record) => record === null)) {
       throw new InvestigationCoordinatorError(
@@ -514,6 +545,9 @@ export const createSiteNightEnergyInvestigationCoordinator = (
     const toolReceipts = typed.filter(
       (record): record is ToolExecutionReceiptRecord => record.recordType === 'TOOL_EXECUTION_RECEIPT',
     );
+    const acceptedOperatorInputs = typed.filter(
+      (record): record is OperatorInputAcceptedRecord => record.recordType === 'OPERATOR_INPUT_ACCEPTED',
+    );
     const active = view.runs.find(({ id }) => id === view.activeRunId);
     const lastFinding = findings.at(-1);
     return {
@@ -523,7 +557,9 @@ export const createSiteNightEnergyInvestigationCoordinator = (
       status: view.status,
       revision: view.revision,
       createdAt: persisted.snapshot().createdAt,
-      activeRun: active === undefined || (active.status !== 'ACTIVE' && active.status !== 'PAUSED')
+      activeRun: active === undefined || (active.status !== 'ACTIVE'
+        && active.status !== 'PAUSED'
+        && active.status !== 'WAITING_FOR_OPERATOR_INPUT')
         ? null
         : { id: active.id, status: active.status, startedAt: active.startedAt },
       outcome: lastFinding === undefined
@@ -535,6 +571,8 @@ export const createSiteNightEnergyInvestigationCoordinator = (
       analysisReferences,
       findings,
       toolReceipts,
+      operatorInputRequest: view.activeOperatorInputRequest,
+      acceptedOperatorInputs,
     };
   };
 
@@ -563,6 +601,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
     analysisReferenceCount: view.analysisReferences.length,
     findingCount: view.findings.length,
     toolReceiptCount: view.toolReceipts.length,
+    acceptedOperatorInputCount: view.acceptedOperatorInputs.length,
   });
 
   return Object.freeze({
@@ -632,6 +671,38 @@ export const createSiteNightEnergyInvestigationCoordinator = (
         query.investigationId,
         'Investigation identity',
       )));
+    },
+
+    async requestOperatorInput(query: SiteNightEnergyInvestigationQuery) {
+      const view = await loadAuthorizedView(requireIdentity(
+        query.investigationId,
+        'Investigation identity',
+      ));
+      const authority = activeAuthority(view);
+      const requested = await genericFor(view.scope).requestOperatorInput({
+        investigationId: view.id,
+        runId: authority.runId,
+        leaseId: authority.leaseId,
+        expectedRevision: view.revision,
+        kind: 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION',
+      });
+      return snapshot(requested);
+    },
+
+    async acceptOperatorInput(command: AcceptSiteNightEnergyOperatorInputCommand) {
+      const investigationId = requireIdentity(command.investigationId, 'Investigation identity');
+      const current = await loadAuthorizedView(investigationId);
+      const result = await genericFor(current.scope).acceptOperatorInput({
+        investigationId,
+        requestId: requireIdentity(command.requestId, 'Operator Input Request identity'),
+        expectedRevision: createInvestigationRevision(command.expectedRevision),
+        idempotencyKey: requireIdentity(command.idempotencyKey, 'Idempotency Key'),
+        values: command.values,
+      });
+      return {
+        outcome: result.outcome,
+        investigation: await snapshot(result.investigation),
+      };
     },
 
     async cancel(query: SiteNightEnergyInvestigationQuery) {

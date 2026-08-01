@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CopilotKit, useAgent } from '@copilotkit/react-core/v2';
 import '@copilotkit/react-core/v2/styles.css';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
@@ -8,11 +8,15 @@ import {
   listSiteNightEnergyInvestigations,
   OperationsApiError,
   startSiteNightEnergyInvestigation,
+  submitSiteNightEnergyOperatorInput,
   type OperationsAnalysisReference,
   type OperationsEvidence,
   type OperationsFinding,
   type OperationsInvestigationStateSnapshot,
   type OperationsInvestigationSummary,
+  type OperationsOperatorInputAccepted,
+  type OperationsOperatorInputRequest,
+  type OperationsOperatorInputValues,
   type OperationsRequiredNext,
   type OperationsToolReceipt,
 } from '@/api/operations';
@@ -55,9 +59,16 @@ function formatTimestamp(value: number, timezone: string): string {
 }
 
 function statusLabel(status: OperationsInvestigationSummary['status'], outcome: OperationsInvestigationSummary['outcome']): string {
+  if (status === 'WAITING_FOR_OPERATOR_INPUT') return 'WAITING · OPERATOR INPUT';
   if (status === 'COMPLETED' && outcome === 'UNABLE_TO_CONCLUDE') return 'UNABLE TO CONCLUDE';
   if (status === 'COMPLETED' && outcome === 'SUPPORTED_SITE_FINDING') return 'COMPLETED · SITE FINDING';
   return status;
+}
+
+function createOperatorInputIdempotencyKey(): string {
+  const randomIdentity = globalThis.crypto?.randomUUID?.()
+    ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `operator-input-${randomIdentity}`.slice(0, 256);
 }
 
 function OperationsAgentRunner({ runRevision, onFailure }: {
@@ -119,7 +130,7 @@ function SummaryList({
                 <span className="operations-list-id">{investigation.id}</span>
                 <span>{formatTimestamp(investigation.createdAt, timezone)}</span>
                 <span className="operations-list-counts">
-                  E {investigation.evidenceCount} · A {investigation.analysisReferenceCount} · F {investigation.findingCount} · T {investigation.toolReceiptCount}
+                  E {investigation.evidenceCount} · A {investigation.analysisReferenceCount} · F {investigation.findingCount} · T {investigation.toolReceiptCount} · O {investigation.acceptedOperatorInputCount}
                 </span>
               </button>
             </li>
@@ -312,14 +323,132 @@ function ToolReceiptCard({ receipt, timezone }: {
   );
 }
 
+function OperatorInputPanel({
+  request,
+  acceptedInputs,
+  timezone,
+  busy,
+  onSubmit,
+}: {
+  readonly request: OperationsOperatorInputRequest | null;
+  readonly acceptedInputs: readonly OperationsOperatorInputAccepted[];
+  readonly timezone: string;
+  readonly busy: boolean;
+  readonly onSubmit: (values: OperationsOperatorInputValues) => Promise<void>;
+}) {
+  const [analysisScope, setAnalysisScope] = useState<OperationsOperatorInputValues['analysisScope']>('SITE_ONLY');
+  const [operatorNote, setOperatorNote] = useState('');
+
+  useEffect(() => {
+    setAnalysisScope('SITE_ONLY');
+    setOperatorNote('');
+  }, [request?.id]);
+
+  if (request === null && acceptedInputs.length === 0) return null;
+  return (
+    <section className="operations-operator-input" aria-labelledby="operations-operator-input-title">
+      <div className="operations-section-heading">
+        <div>
+          <p className="real-shell-eyebrow">OPERATOR INPUT · COMMITTED INTERRUPT</p>
+          <h3 id="operations-operator-input-title">Operator decision</h3>
+        </div>
+        <strong>{request ? 'ACTION REQUIRED' : `${acceptedInputs.length} ACCEPTED`}</strong>
+      </div>
+
+      {request ? (
+        <form
+          className="operations-operator-input-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void onSubmit({
+              analysisScope,
+              operatorNote: operatorNote.trim() || null,
+            });
+          }}
+        >
+          <div className="operations-operator-input-context" role="note">
+            <strong>{request.kind}</strong>
+            <span>Request {request.id} · Run {request.runId}</span>
+            <span>Policy {request.policyVersion} · {formatTimestamp(request.requestedAt, timezone)}</span>
+          </div>
+          <fieldset disabled={busy}>
+            <legend>Analysis authority</legend>
+            {request.fields[0].options.map((option) => (
+              <label key={option} className="operations-operator-input-choice">
+                <input
+                  type="radio"
+                  name="operations-analysis-scope"
+                  value={option}
+                  checked={analysisScope === option}
+                  onChange={() => setAnalysisScope(option)}
+                />
+                <span>
+                  <strong>{option === 'SITE_ONLY' ? 'Proceed with Site-only authority' : 'Defer the conclusion'}</strong>
+                  <small>
+                    {option === 'SITE_ONLY'
+                      ? '继续同一 Agent Run，但不会把 Site Evidence 提升为 Equipment root cause。'
+                      : '保留当前已提交记录并推迟结论。'}
+                  </small>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+          <label className="operations-operator-input-note" htmlFor="operations-operator-note">
+            <span>Operator note <small>optional · max {request.fields[1].maximumLength}</small></span>
+            <textarea
+              id="operations-operator-note"
+              value={operatorNote}
+              maxLength={request.fields[1].maximumLength}
+              rows={4}
+              disabled={busy}
+              onChange={(event) => setOperatorNote(event.target.value)}
+            />
+            <small>{operatorNote.length}/{request.fields[1].maximumLength}</small>
+          </label>
+          <button type="submit" disabled={busy}>
+            {busy ? '正在原子提交并恢复…' : '提交 Operator Input 并恢复同一 Run'}
+          </button>
+        </form>
+      ) : null}
+
+      {acceptedInputs.length > 0 ? (
+        <div className="operations-operator-input-history">
+          <h4>Accepted input history</h4>
+          <ul>
+            {acceptedInputs.map((record) => (
+              <li key={record.id}>
+                <div className="operations-card-heading">
+                  <strong>{record.values.analysisScope}</strong>
+                  <span>{formatTimestamp(record.recordedAt, timezone)}</span>
+                </div>
+                {record.values.operatorNote ? <p>{record.values.operatorNote}</p> : null}
+                <dl className="operations-provenance">
+                  <div><dt>Request / Run</dt><dd>{record.requestId} / {record.runId}</dd></div>
+                  <div><dt>Decision</dt><dd>{record.provenance.authorizationDecisionId}</dd></div>
+                  <div><dt>Policy</dt><dd>{record.provenance.policyRevision}</dd></div>
+                  <div><dt>Input digest</dt><dd className="operations-digest">{record.inputDigest}</dd></div>
+                </dl>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function SnapshotWorkspace({
   snapshot,
   toolReceipts,
   timezone,
+  operatorInputBusy,
+  onSubmitOperatorInput,
 }: {
   readonly snapshot: OperationsInvestigationStateSnapshot;
   readonly toolReceipts: readonly OperationsToolReceipt[];
   readonly timezone: string;
+  readonly operatorInputBusy: boolean;
+  readonly onSubmitOperatorInput: (values: OperationsOperatorInputValues) => Promise<void>;
 }) {
   const investigation = snapshot.investigation;
   return (
@@ -354,6 +483,14 @@ function SnapshotWorkspace({
           ))}
         </ol>
       </section>
+
+      <OperatorInputPanel
+        request={investigation.operatorInputRequest}
+        acceptedInputs={investigation.acceptedOperatorInputs}
+        timezone={timezone}
+        busy={operatorInputBusy}
+        onSubmit={onSubmitOperatorInput}
+      />
 
       <section aria-labelledby="operations-evidence-title">
         <div className="operations-section-heading">
@@ -432,7 +569,9 @@ export function OperationsInvestigation({
   const [listFailure, setListFailure] = useState<Error | null>(null);
   const [runRevision, setRunRevision] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [operatorInputBusy, setOperatorInputBusy] = useState(false);
   const [failure, setFailure] = useState<Error | null>(null);
+  const operatorInputIdempotencyKeys = useRef(new Map<string, string>());
   const [connection, setConnection] = useState<OperationsInvestigationConnectionState | null>(null);
 
   const requestOptions = useMemo(() => ({
@@ -450,6 +589,7 @@ export function OperationsInvestigation({
     setToolReceipts([]);
     setFailure(null);
     setConnection(null);
+    operatorInputIdempotencyKeys.current.clear();
     setRunRevision((value) => value + 1);
   }, []);
 
@@ -462,6 +602,7 @@ export function OperationsInvestigation({
       setToolReceipts([]);
       setFailure(null);
       setConnection(null);
+      operatorInputIdempotencyKeys.current.clear();
       setRunRevision((value) => value + 1);
     };
     window.addEventListener('popstate', onPopState);
@@ -537,6 +678,7 @@ export function OperationsInvestigation({
         setToolReceipts([]);
         setFailure(null);
         setConnection(null);
+        operatorInputIdempotencyKeys.current.clear();
       },
     });
   }, [agent, investigationId, registerProtectedResource, site.id]);
@@ -557,7 +699,7 @@ export function OperationsInvestigation({
   };
 
   const advance = async () => {
-    if (!investigationId) return;
+    if (!investigationId || snapshotStatus === 'WAITING_FOR_OPERATOR_INPUT') return;
     setBusy(true);
     setFailure(null);
     setConnection(null);
@@ -571,6 +713,39 @@ export function OperationsInvestigation({
       setFailure(error instanceof Error ? error : new Error(String(error)));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const submitOperatorInput = async (values: OperationsOperatorInputValues) => {
+    const request = snapshot?.investigation.operatorInputRequest;
+    if (!investigationId || !request || snapshot.investigation.status !== 'WAITING_FOR_OPERATOR_INPUT') return;
+    const idempotencyKey = operatorInputIdempotencyKeys.current.get(request.id)
+      ?? createOperatorInputIdempotencyKey();
+    operatorInputIdempotencyKeys.current.set(request.id, idempotencyKey);
+    setOperatorInputBusy(true);
+    setFailure(null);
+    setConnection(null);
+    try {
+      await submitSiteNightEnergyOperatorInput(investigationId, {
+        requestId: request.id,
+        expectedRevision: snapshot.investigation.revision,
+        idempotencyKey,
+        values,
+      }, requestOptions);
+      operatorInputIdempotencyKeys.current.delete(request.id);
+      setSnapshot(null);
+      setToolReceipts([]);
+      setRunRevision((value) => value + 1);
+      setListRevision((value) => value + 1);
+    } catch (error) {
+      setFailure(error instanceof Error ? error : new Error(String(error)));
+      if (error instanceof OperationsApiError && error.status === 409) {
+        setSnapshot(null);
+        setToolReceipts([]);
+        setRunRevision((value) => value + 1);
+      }
+    } finally {
+      setOperatorInputBusy(false);
     }
   };
 
@@ -596,8 +771,13 @@ export function OperationsInvestigation({
           maxLength={256}
           placeholder="输入已授权 Investigation ID"
         />
-        <button type="button" onClick={() => openInvestigation(openValue)} disabled={!openValue.trim() || busy}>打开</button>
-        <button type="button" onClick={() => { void advance(); }} disabled={!investigationId || busy}>推进</button>
+        <button type="button" onClick={() => openInvestigation(openValue)} disabled={!openValue.trim() || busy || operatorInputBusy}>打开</button>
+        <button
+          type="button"
+          onClick={() => { void advance(); }}
+          disabled={!investigationId || busy || operatorInputBusy || snapshotStatus === 'WAITING_FOR_OPERATOR_INPUT'}
+          title={snapshotStatus === 'WAITING_FOR_OPERATOR_INPUT' ? '先提交当前 Operator Input。' : undefined}
+        >推进</button>
       </section>
 
       {connection ? (
@@ -672,6 +852,8 @@ export function OperationsInvestigation({
                   snapshot={snapshot}
                   toolReceipts={toolReceipts}
                   timezone={site.timezone}
+                  operatorInputBusy={operatorInputBusy}
+                  onSubmitOperatorInput={submitOperatorInput}
                 />
               ) : (
                 <div className="real-shell-progress" role="status" aria-live="polite">

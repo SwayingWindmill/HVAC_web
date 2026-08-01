@@ -43,6 +43,7 @@ const publicRoutes = [
   ['GET', '/api/v1/sites/{siteId}/operations/investigations/{investigationId}'],
   ['GET', '/api/v1/sites/{siteId}/operations/investigations/{investigationId}/events'],
   ['POST', '/api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance'],
+  ['POST', '/api/v1/sites/{siteId}/operations/investigations/{investigationId}:submit-operator-input'],
   ['POST', '/api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel'],
 ];
 const internalRoutes = [
@@ -50,6 +51,7 @@ const internalRoutes = [
   '/internal/v1/sites/{siteId}/operations/investigations/{investigationId}',
   '/internal/v1/sites/{siteId}/operations/investigations/{investigationId}/events',
   '/internal/v1/sites/{siteId}/operations/investigations/{investigationId}:advance',
+  '/internal/v1/sites/{siteId}/operations/investigations/{investigationId}:submit-operator-input',
   '/internal/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel',
 ];
 
@@ -75,6 +77,11 @@ for (const required of [
   'registry.getEquipmentEnergyBindings',
   'analytics.energy.getEquipmentSeries',
   'TOOL_EXECUTION_RECEIPT',
+  'WAITING_FOR_OPERATOR_INPUT',
+  'OPERATOR_INPUT_ACCEPTED',
+  'SubmitOperatorInputRequest',
+  'SubmitOperatorInputResponse',
+  'Idempotency-Key',
   'text/event-stream',
   'RUN_STARTED',
   'STATE_SNAPSHOT',
