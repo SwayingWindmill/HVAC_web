@@ -223,6 +223,17 @@ test('PostgreSQL resumes a checkpointed night-energy Run without duplicate busin
   assert.equal(completed.analysisReferences.length, 1);
   assert.equal(completed.findings.length, 1);
   assert.equal(JSON.stringify(completed).includes('"points"'), false);
+  assert.equal(JSON.stringify(completed).includes('synthesis'), false);
+  const findingRows = await operationsPool.query(
+    `SELECT record_payload
+       FROM agent_operations.investigation_business_records
+      WHERE investigation_id = $1 AND record_type = 'FINDING'`,
+    [investigationId],
+  );
+  assert.equal(findingRows.rows.length, 1);
+  assert.equal(findingRows.rows[0].record_payload.synthesis.source, 'DETERMINISTIC_FALLBACK');
+  assert.equal(findingRows.rows[0].record_payload.synthesis.fallbackReason, 'NOT_CONFIGURED');
+  assert.equal(findingRows.rows[0].record_payload.synthesis.provider, null);
   const committedCounts = await journalCounts(operationsPool);
   assert.equal(committedCounts.records, 8);
   assert.equal(committedCounts.effects, 8);

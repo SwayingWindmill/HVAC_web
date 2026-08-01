@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createSiteNightEnergyInvestigationCoordinator } from '../dist/index.js';
+import { createFakeFindingSynthesizer } from '../dist/model/index.js';
 import { createFakeOperationsAgentEnvironment } from './support/fake-operations-agent-environment.mjs';
 
 const organizationId = '0198f5c0-7c00-7000-8000-000000000001';
@@ -146,6 +147,14 @@ test('Site night-energy use case commits a supported Investigation and exact rep
   assert.equal(completed.findings[0].statement.includes('24%'), true);
   assert.equal(completed.analysisReferences[0].authority, 'DETERMINISTIC_ALGORITHM');
   assert.equal(JSON.stringify(completed).includes('"points"'), false);
+  assert.equal(JSON.stringify(completed).includes('synthesis'), false);
+  const deterministicFinding = await environment.ports.businessRecordRepository.get(
+    started.id,
+    `${started.id}:finding:night-energy`,
+  );
+  assert.equal(deterministicFinding.synthesis.source, 'DETERMINISTIC_FALLBACK');
+  assert.equal(deterministicFinding.synthesis.fallbackReason, 'NOT_CONFIGURED');
+  assert.equal(deterministicFinding.synthesis.provider, null);
   assert.equal(environment.owners.maxConcurrentReads, 2);
   assert.deepEqual([...toolAuthorizationCalls].sort(), [
     `${investigationId}:registry-site`,
@@ -173,6 +182,52 @@ test('Site night-energy use case commits a supported Investigation and exact rep
 
   await environment.checkpointStore.repository.delete(started.id, started.activeRun.id);
   assert.deepEqual(await coordinator.get({ investigationId: started.id }), completed);
+});
+
+test('model synthesis can refine Finding text without controlling outcome or replay', async () => {
+  const environment = createEnvironment();
+  const findingSynthesizer = createFakeFindingSynthesizer({
+    output(input) {
+      return {
+        classification: input.expectedClassification,
+        statement: 'Model-assisted summary: Site night energy was 24% above baseline, without Equipment attribution.',
+        evidenceIds: input.evidence.map(({ id }) => id),
+        limitations: ['Equipment attribution remains unavailable.'],
+      };
+    },
+  });
+  const coordinator = createSiteNightEnergyInvestigationCoordinator({
+    ...environment.ports,
+    findingSynthesizer,
+  });
+
+  const started = await coordinator.start({ organizationId, siteId });
+  const completed = await coordinator.advance({ investigationId: started.id });
+  assert.equal(completed.status, 'COMPLETED');
+  assert.equal(completed.outcome, 'SUPPORTED_SITE_FINDING');
+  assert.equal(completed.findings[0].findingKind, 'SITE_NIGHT_ENERGY_INCREASE');
+  assert.equal(completed.findings[0].conclusion.status, 'SUPPORTED');
+  assert.equal(completed.findings[0].conclusion.scope, 'SITE');
+  assert.equal(completed.findings[0].statement.startsWith('Model-assisted summary:'), true);
+  assert.equal(completed.analysisReferences[0].authority, 'DETERMINISTIC_ALGORITHM');
+  assert.equal(findingSynthesizer.calls.length, 1);
+  assert.equal(JSON.stringify(completed).includes('fake-provider'), false);
+  assert.equal(JSON.stringify(completed).includes('limitations'), false);
+  assert.equal(JSON.stringify(completed).includes('synthesis'), false);
+
+  const persistedFinding = await environment.ports.businessRecordRepository.get(
+    started.id,
+    `${started.id}:finding:night-energy`,
+  );
+  assert.equal(persistedFinding.recordType, 'FINDING');
+  assert.equal(persistedFinding.synthesis.source, 'MODEL');
+  assert.equal(persistedFinding.synthesis.provider, 'fake-provider');
+  assert.equal(persistedFinding.synthesis.configurationDigest, `sha256:${'0'.repeat(64)}`);
+  assert.equal(persistedFinding.synthesis.fallbackReason, null);
+
+  const replay = await coordinator.advance({ investigationId: started.id });
+  assert.deepEqual(replay, completed);
+  assert.equal(findingSynthesizer.calls.length, 1);
 });
 
 test('a saved Runtime Checkpoint without receipts recovers by replaying only the fixed Registry reads', async () => {

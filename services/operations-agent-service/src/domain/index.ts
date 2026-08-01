@@ -39,6 +39,13 @@ export {
 } from './internal/operations-investigation.js';
 
 export {
+  OPERATIONS_AGENT_RUNTIME_READ_TOOLS,
+  OPERATIONS_AGENT_TOOL_CATALOG_VERSION,
+  OPERATIONS_AGENT_TOOL_RECEIPT_OWNER_BY_LOGICAL_TOOL,
+  OPERATIONS_AGENT_TOOL_RECEIPT_OWNERS,
+} from './internal/generated-tool-contract.js';
+
+export {
   InvestigationBusinessRecordError,
   businessRecordsEqual,
   createInvestigationBusinessRecord,
@@ -53,6 +60,8 @@ export {
   type FindingConclusion,
   type FindingRecord,
   type FindingRequiredNext,
+  type FindingSynthesisMetering,
+  type FindingSynthesisProvenance,
   type FindingRequiredNextPeriod,
   type InvestigationBusinessRecord,
   type InvestigationBusinessRecordErrorCode,

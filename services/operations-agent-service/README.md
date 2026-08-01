@@ -7,8 +7,9 @@ business-record contracts, PostgreSQL persistence adapter, the first explicit La
 `AgentExecutionRuntime` adapter, authoritative Registry/Energy READ adapters and the
 Site night-energy application/HTTP contract and committed AG-UI event projection exposed through
 Platform Gateway. The existing React/Vite Real Shell now consumes the first bounded Operations
-Workspace slice through CopilotKit Headless; a live model provider, reconnect cursor and scheduler
-remain out of this slice.
+Workspace slice through CopilotKit Headless. A project-owned `FindingSynthesizer`, strict structured
+output validation, deterministic fallback and Fake Provider are implemented; a live external model
+provider, reconnect cursor and scheduler remain out of this slice.
 
 The module direction is:
 
@@ -49,6 +50,21 @@ Step identities. The Coordinator loads and authorizes the Operations Investigati
 loads this opaque Checkpoint. Repeating the same Checkpoint is deterministic; a mismatched
 Run, Runtime Revision, state prefix or external position fails closed. Runtime nodes emit
 READ plans only and cannot commit Evidence, Findings or Proposed Actions.
+
+The logical Tool catalog and trusted Runtime Context are versioned under
+`contracts/operations-agent/`. Generated Domain/Application constants define the Runtime READ
+union, Receipt owner mapping, exact context keys and immutable control policy. The package
+`contracts` check also verifies Benchmark, Web and OpenAPI projections before TypeScript or tests run.
+
+The first Model slice is limited to Finding presentation. `FindingSynthesizer` receives exact Scope,
+committed Evidence, committed Analysis References and a deterministic fallback statement. The
+Application layer accepts only the exact `finding-synthesis-output/v1` shape, rechecks every Evidence
+identity, rejects execution claims and confirmed conclusions when the deterministic result is unable
+to conclude, and falls back on missing configuration, timeout, Provider failure or invalid output.
+Finding kind, conclusion, analysis authority and committed effects remain deterministic. Bounded
+invocation provenance is stored atomically inside the Finding JSONB record and restored through
+Domain validation; public HTTP and AG-UI projections omit it. Raw prompts and raw Provider responses
+are never persisted.
 
 The `tools` module implements two narrow authoritative READ boundaries:
 
@@ -126,6 +142,7 @@ authoritative aggregate or Owner Scope validation.
 Run the package checks from the repository root:
 
 ```bash
+npm run operations-agent:contracts:check
 npm --prefix services/operations-agent-service run check
 npm --prefix services/operations-agent-service run test:acceptance
 npm run operations-agent-service:postgres

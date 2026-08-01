@@ -1,7 +1,12 @@
-import type {
-  RuntimeCheckpoint,
-  RuntimePlanningContext,
-  RuntimeReadPlan,
+import {
+  OPERATIONS_AGENT_RUNTIME_READ_TOOLS,
+  OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTEXT_KEYS,
+  OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY,
+  OPERATIONS_AGENT_TRUSTED_RUNTIME_MAXIMUM_IDENTITY_CHARACTERS,
+  OPERATIONS_AGENT_TRUSTED_RUNTIME_SCOPE_KEYS,
+  type RuntimeCheckpoint,
+  type RuntimePlanningContext,
+  type RuntimeReadPlan,
 } from '../../application/index.js';
 
 export type LangGraphRuntimeErrorCode =
@@ -55,38 +60,16 @@ const exactStateKeys = new Set([
 ]);
 
 const maximumProgramSteps = 64;
-const maximumIdentityCharacters = 256;
+const maximumIdentityCharacters = OPERATIONS_AGENT_TRUSTED_RUNTIME_MAXIMUM_IDENTITY_CHARACTERS;
 const maximumReadPlanCharacters = 65_536;
 const maximumCheckpointStateCharacters = 32_768;
 
-const runtimeContextKeys = new Set([
-  'schemaVersion',
-  'source',
-  'trust',
-  'investigationId',
-  'scope',
-  'revision',
-  'runId',
-  'runStatus',
-  'runtimeRevision',
-  'allowedReadTools',
-  'effectPolicy',
-  'scopePolicy',
-  'untrustedContentPolicy',
-]);
-const runtimeScopeKeys = new Set([
-  'organizationId',
-  'siteId',
-  'equipmentId',
-  'deviceId',
-]);
-const runtimeReadTools = new Set<RuntimePlanningContext['allowedReadTools'][number]>([
-  'registry.getSite',
-  'registry.listSiteEquipment',
-  'telemetry.getCurrentSnapshot',
-  'analytics.getEnergySeries',
-  'commands.getCapabilities',
-]);
+const runtimeContextKeys = new Set<string>(OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTEXT_KEYS);
+const runtimeScopeKeys = new Set<string>(OPERATIONS_AGENT_TRUSTED_RUNTIME_SCOPE_KEYS);
+const runtimeReadTools = new Set<RuntimePlanningContext['allowedReadTools'][number]>(
+  OPERATIONS_AGENT_RUNTIME_READ_TOOLS,
+);
+const runtimeControlPolicy = OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -116,13 +99,13 @@ export const normalizeRuntimePlanningContext = (
   const value: unknown = input;
   if (!isRecord(value)
     || !hasExactKeys(value, runtimeContextKeys)
-    || value.schemaVersion !== 1
-    || value.source !== 'APPLICATION_POLICY'
-    || value.trust !== 'TRUSTED_CONTROL'
-    || value.runStatus !== 'ACTIVE'
-    || value.effectPolicy !== 'READ_ONLY'
-    || value.scopePolicy !== 'EXACT_INVESTIGATION_SCOPE'
-    || value.untrustedContentPolicy !== 'EXCLUDED'
+    || value.schemaVersion !== runtimeControlPolicy.schemaVersion
+    || value.source !== runtimeControlPolicy.source
+    || value.trust !== runtimeControlPolicy.trust
+    || value.runStatus !== runtimeControlPolicy.runStatus
+    || value.effectPolicy !== runtimeControlPolicy.effectPolicy
+    || value.scopePolicy !== runtimeControlPolicy.scopePolicy
+    || value.untrustedContentPolicy !== runtimeControlPolicy.untrustedContentPolicy
     || typeof value.investigationId !== 'string'
     || value.investigationId.trim().length === 0
     || value.investigationId.length > maximumIdentityCharacters
@@ -161,9 +144,9 @@ export const normalizeRuntimePlanningContext = (
     uniqueTools.add(tool);
   }
   return Object.freeze({
-    schemaVersion: 1,
-    source: 'APPLICATION_POLICY',
-    trust: 'TRUSTED_CONTROL',
+    schemaVersion: runtimeControlPolicy.schemaVersion,
+    source: runtimeControlPolicy.source,
+    trust: runtimeControlPolicy.trust,
     investigationId: value.investigationId,
     scope: Object.freeze({
       organizationId: value.scope.organizationId,
@@ -173,14 +156,14 @@ export const normalizeRuntimePlanningContext = (
     }),
     revision: value.revision as RuntimePlanningContext['revision'],
     runId: value.runId,
-    runStatus: 'ACTIVE',
+    runStatus: runtimeControlPolicy.runStatus,
     runtimeRevision: value.runtimeRevision,
     allowedReadTools: Object.freeze([
       ...(allowedReadTools as RuntimePlanningContext['allowedReadTools']),
     ]),
-    effectPolicy: 'READ_ONLY',
-    scopePolicy: 'EXACT_INVESTIGATION_SCOPE',
-    untrustedContentPolicy: 'EXCLUDED',
+    effectPolicy: runtimeControlPolicy.effectPolicy,
+    scopePolicy: runtimeControlPolicy.scopePolicy,
+    untrustedContentPolicy: runtimeControlPolicy.untrustedContentPolicy,
   });
 };
 

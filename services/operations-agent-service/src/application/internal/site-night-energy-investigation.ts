@@ -7,6 +7,7 @@ import {
   type EvidenceRecord,
   type EvidenceSourceReference,
   type FindingRecord,
+  type FindingSynthesisProvenance,
   type InvestigationBusinessRecord,
   type InvestigationScope,
   type InvestigationStatus,
@@ -28,6 +29,13 @@ import {
   type NightEnergySeries,
   type SiteNightEnergyWindow,
 } from './night-energy-analysis.js';
+import {
+  FINDING_SYNTHESIS_OUTPUT_SCHEMA_VERSION,
+  FINDING_SYNTHESIS_PROMPT_POLICY_VERSION,
+  synthesizeFinding,
+  type FindingSynthesisDecision,
+  type FindingSynthesizer,
+} from './finding-synthesis.js';
 import type {
   AgentExecutionRuntime,
   AuthorizationDecision,
@@ -44,6 +52,7 @@ export interface SiteNightEnergyInvestigationPolicy {
   readonly baselineOffsetDays: number;
   readonly increaseThresholdPercent: number;
   readonly qualityPolicy: NightEnergyQualityPolicy;
+  readonly findingSynthesisTimeoutMs: number;
 }
 
 export type SiteNightEnergyInvestigationCoordinatorPorts = Omit<
@@ -51,6 +60,7 @@ export type SiteNightEnergyInvestigationCoordinatorPorts = Omit<
   'agentExecutionRuntime'
 > & {
   readonly createAgentExecutionRuntime: (scope: InvestigationScope) => AgentExecutionRuntime;
+  readonly findingSynthesizer?: FindingSynthesizer;
 };
 
 export interface StartSiteNightEnergyInvestigationCommand {
@@ -74,6 +84,8 @@ export interface SiteNightEnergyActiveRunView {
   readonly startedAt: number;
 }
 
+export type SiteNightEnergyFindingView = Omit<FindingRecord, 'synthesis'>;
+
 export interface SiteNightEnergyInvestigationView {
   readonly schemaVersion: 1;
   readonly id: string;
@@ -85,7 +97,7 @@ export interface SiteNightEnergyInvestigationView {
   readonly outcome: 'SUPPORTED_SITE_FINDING' | 'UNABLE_TO_CONCLUDE' | null;
   readonly evidence: readonly EvidenceRecord[];
   readonly analysisReferences: readonly AnalysisReferenceRecord[];
-  readonly findings: readonly FindingRecord[];
+  readonly findings: readonly SiteNightEnergyFindingView[];
   readonly toolReceipts: readonly ToolExecutionReceiptRecord[];
   readonly operatorInputRequest: OperatorInputRequestView | null;
   readonly acceptedOperatorInputs: readonly OperatorInputAcceptedRecord[];
@@ -157,6 +169,7 @@ const defaultPolicy: SiteNightEnergyInvestigationPolicy = Object.freeze({
   baselineOffsetDays: 7,
   increaseThresholdPercent: 10,
   qualityPolicy: 'VALID_AND_SUSPECT',
+  findingSynthesisTimeoutMs: 2_000,
 });
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (
@@ -174,6 +187,29 @@ const canonicalize = (value: unknown): unknown => {
 };
 
 const digest = (value: unknown): string => `sha256:${sha256Hex(JSON.stringify(canonicalize(value)))}`;
+
+const synthesisProvenanceFor = (
+  decision: FindingSynthesisDecision,
+): FindingSynthesisProvenance => {
+  const invocation = decision.invocation;
+  const usage = invocation?.tokenUsage ?? null;
+  return Object.freeze({
+    source: decision.source,
+    provider: invocation?.provider ?? null,
+    model: invocation?.model ?? null,
+    configurationDigest: invocation?.configurationDigest ?? null,
+    promptPolicyVersion: FINDING_SYNTHESIS_PROMPT_POLICY_VERSION,
+    outputSchemaVersion: FINDING_SYNTHESIS_OUTPUT_SCHEMA_VERSION,
+    inputDigest: decision.inputDigest,
+    outputDigest: decision.outputDigest,
+    latencyMs: invocation?.latencyMs ?? null,
+    metering: usage === null
+      ? null
+      : Object.freeze({ inputUnits: usage.inputTokens, outputUnits: usage.outputTokens }),
+    traceId: invocation?.traceId ?? null,
+    fallbackReason: decision.fallbackReason,
+  });
+};
 
 const requireIdentity = (value: string, label: string): string => {
   if (value.trim().length === 0 || value.length > 256) {
@@ -376,6 +412,11 @@ export const createSiteNightEnergyInvestigationCoordinator = (
   if (!Number.isSafeInteger(policy.baselineOffsetDays) || policy.baselineOffsetDays <= 0) {
     throw new Error('baselineOffsetDays must be a positive safe integer.');
   }
+  if (!Number.isSafeInteger(policy.findingSynthesisTimeoutMs)
+    || policy.findingSynthesisTimeoutMs <= 0
+    || policy.findingSynthesisTimeoutMs > 600_000) {
+    throw new Error('findingSynthesisTimeoutMs must be between 1 and 600000.');
+  }
 
   const genericFor = (
     scope: InvestigationScope,
@@ -541,7 +582,13 @@ export const createSiteNightEnergyInvestigationCoordinator = (
     const analysisReferences = typed.filter(
       (record): record is AnalysisReferenceRecord => record.recordType === 'ANALYSIS_REFERENCE',
     );
-    const findings = typed.filter((record): record is FindingRecord => record.recordType === 'FINDING');
+    const findingRecords = typed.filter(
+      (record): record is FindingRecord => record.recordType === 'FINDING',
+    );
+    const findings: SiteNightEnergyFindingView[] = findingRecords.map((record) => {
+      const { synthesis: _synthesis, ...publicFinding } = record;
+      return publicFinding;
+    });
     const toolReceipts = typed.filter(
       (record): record is ToolExecutionReceiptRecord => record.recordType === 'TOOL_EXECUTION_RECEIPT',
     );
@@ -918,7 +965,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
       }), operationTime);
       view = await commitRecord(coordinator, view, 'analyze-night-energy', analysisRecord);
 
-      const evidenceIds: string[] = [readiness.id];
+      const evidenceRecords: EvidenceRecord[] = [readiness];
       if (analysis.status === 'SUPPORTED_SITE_FINDING') {
         const comparisonIdentity = recordId(view.id, 'evidence:energy-comparison');
         const comparison = await ensureRecord(view.id, comparisonIdentity, (recordedAt) => ({
@@ -934,50 +981,84 @@ export const createSiteNightEnergyInvestigationCoordinator = (
           sources: energyResults.map((result) => sourceFor(result, recordedAt)),
         }), operationTime);
         view = await commitRecord(coordinator, view, 'record-energy-comparison', comparison);
-        evidenceIds.push(comparison.id);
+        evidenceRecords.push(comparison);
       }
 
       const findingIdentity = recordId(view.id, 'finding:night-energy');
-      const finding = await ensureRecord(view.id, findingIdentity, (recordedAt): FindingRecord => (
-        analysis.status === 'SUPPORTED_SITE_FINDING'
-          ? {
-            schemaVersion: 1,
-            recordType: 'FINDING',
-            id: findingIdentity,
-            investigationId: view.id,
-            recordedAt,
-            findingKind: analysis.siteFinding.kind,
-            classification: 'INFERENCE',
-            statement: analysis.siteFinding.statement,
-            evidenceIds,
-            analysisReferenceIds: [analysisRecord.id],
-            conclusion: {
-              status: 'SUPPORTED',
-              scope: 'SITE',
-              organizationId: scope.organizationId,
-              siteId,
-            },
-          }
-          : {
-            schemaVersion: 1,
-            recordType: 'FINDING',
-            id: findingIdentity,
-            investigationId: view.id,
-            recordedAt,
-            findingKind: 'UNABLE_TO_CONCLUDE',
-            classification: 'INFERENCE',
-            statement: 'The Site night-energy Investigation cannot produce a supported conclusion.',
-            evidenceIds,
-            analysisReferenceIds: [analysisRecord.id],
-            conclusion: {
-              status: 'UNABLE_TO_CONCLUDE',
-              scope: 'SITE',
-              reasonCode: analysis.blockers[0]?.code ?? 'ENERGY_READINESS_FAILED',
-              detail: analysis.blockers.map(({ detail }) => detail).join(' '),
-              requiredNext: analysis.equipmentAttribution.requiredNext,
-            },
-          }
-      ), operationTime);
+      const existingFinding = await ports.businessRecordRepository.get(view.id, findingIdentity);
+      if (existingFinding !== null && existingFinding.recordType !== 'FINDING') {
+        throw new InvestigationCoordinatorError(
+          'DUPLICATE_RECORD',
+          `Business record ${findingIdentity} already exists with another record type.`,
+        );
+      }
+      const deterministicStatement = analysis.status === 'SUPPORTED_SITE_FINDING'
+        ? analysis.siteFinding.statement
+        : 'The Site night-energy Investigation cannot produce a supported conclusion.';
+      const synthesis = existingFinding === null
+        ? await synthesizeFinding({
+          ...(ports.findingSynthesizer === undefined
+            ? {}
+            : { synthesizer: ports.findingSynthesizer }),
+          timeoutMs: policy.findingSynthesisTimeoutMs,
+          investigationId: view.id,
+          scope,
+          expectedClassification: analysis.status === 'SUPPORTED_SITE_FINDING'
+            ? 'INFERENCE'
+            : 'UNABLE_TO_CONCLUDE',
+          deterministicStatement,
+          evidence: evidenceRecords,
+          analysisReferences: [analysisRecord],
+        })
+        : null;
+      const synthesisProvenance = synthesis === null ? undefined : synthesisProvenanceFor(synthesis);
+      const finding = existingFinding ?? await ensureRecord(
+        view.id,
+        findingIdentity,
+        (recordedAt): FindingRecord => (
+          analysis.status === 'SUPPORTED_SITE_FINDING'
+            ? {
+              schemaVersion: 1,
+              recordType: 'FINDING',
+              id: findingIdentity,
+              investigationId: view.id,
+              recordedAt,
+              findingKind: analysis.siteFinding.kind,
+              classification: 'INFERENCE',
+              statement: synthesis?.statement ?? deterministicStatement,
+              evidenceIds: synthesis?.evidenceIds ?? evidenceRecords.map(({ id }) => id),
+              analysisReferenceIds: [analysisRecord.id],
+              ...(synthesisProvenance === undefined ? {} : { synthesis: synthesisProvenance }),
+              conclusion: {
+                status: 'SUPPORTED',
+                scope: 'SITE',
+                organizationId: scope.organizationId,
+                siteId,
+              },
+            }
+            : {
+              schemaVersion: 1,
+              recordType: 'FINDING',
+              id: findingIdentity,
+              investigationId: view.id,
+              recordedAt,
+              findingKind: 'UNABLE_TO_CONCLUDE',
+              classification: 'INFERENCE',
+              statement: synthesis?.statement ?? deterministicStatement,
+              evidenceIds: synthesis?.evidenceIds ?? evidenceRecords.map(({ id }) => id),
+              analysisReferenceIds: [analysisRecord.id],
+              ...(synthesisProvenance === undefined ? {} : { synthesis: synthesisProvenance }),
+              conclusion: {
+                status: 'UNABLE_TO_CONCLUDE',
+                scope: 'SITE',
+                reasonCode: analysis.blockers[0]?.code ?? 'ENERGY_READINESS_FAILED',
+                detail: analysis.blockers.map(({ detail }) => detail).join(' '),
+                requiredNext: analysis.equipmentAttribution.requiredNext,
+              },
+            }
+        ),
+        operationTime,
+      ) as FindingRecord;
       view = await commitRecord(coordinator, view, 'record-night-energy-finding', finding);
 
       const latestAuthority = activeAuthority(view);
