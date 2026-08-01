@@ -11,6 +11,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
+	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/services/iam-service/internal/iam"
 )
 
@@ -244,6 +245,68 @@ func TestPostgresAlarmAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *testin
 	}
 	if !allowed || policyRevision != "alarm-access:1" || reasonCode != string(alarmauth.ReasonAllowExactScope) {
 		t.Fatalf("durable Alarm decision = allowed=%v policy=%q reason=%q", allowed, policyRevision, reasonCode)
+	}
+}
+
+func TestPostgresWorkOrderAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *testing.T) {
+	runtimeURL := requiredIAMPostgresEnv(t, "S1_IAM_DATABASE_URL")
+	adminURL := requiredIAMPostgresEnv(t, "S1_ADMIN_DATABASE_URL")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := iam.OpenPostgresAuthorizationStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	facts, err := store.LookupWorkOrderAuthorization(ctx, iam.AuthorizationLookup{
+		SubjectIssuer: postgresFixtureIssuer, Subject: "owner-a", ActingOrganizationID: postgresOwnerAOrganizationID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !facts.Found || facts.Principal.ID != postgresOwnerAPrincipalID || facts.PolicyRevision != "work-order-access:1" || len(facts.Permissions) != 2 {
+		t.Fatalf("Work Order facts = %#v", facts)
+	}
+	for _, permission := range facts.Permissions {
+		if permission.OrganizationID != postgresOwnerAOrganizationID || permission.SiteID != postgresOwnerASite1ID || permission.Effect != iam.BindingEffectAllow || permission.Status != iam.FactStatusActive {
+			t.Fatalf("unexpected Work Order permission: %#v", permission)
+		}
+	}
+
+	other, err := store.LookupWorkOrderAuthorization(ctx, iam.AuthorizationLookup{
+		SubjectIssuer: postgresFixtureIssuer, Subject: "owner-a", ActingOrganizationID: postgresActingOrganizationID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !other.Found || other.PolicyRevision != "work-order-access:unconfigured" || len(other.Permissions) != 0 {
+		t.Fatalf("cross-Organization Work Order facts were not fail-closed: %#v", other)
+	}
+
+	requestID := "work-order-postgres-decision-1"
+	if err := store.RecordWorkOrderDecision(ctx, iam.WorkOrderDecisionAudit{
+		PrincipalID: postgresOwnerAPrincipalID, ActingOrganizationID: postgresOwnerAOrganizationID,
+		SiteID: postgresOwnerASite1ID, WorkOrderID: "01910000-1000-7000-8000-000000000001",
+		Action: workorderauth.ActionRead, Allowed: true,
+		PolicyRevision: "work-order-access:1", ReasonCode: workorderauth.ReasonAllowExactScope,
+		RequestID: requestID, TraceID: "trace-work-order-postgres-1", OccurredAt: "2026-08-01T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	defer admin.Exec(context.Background(), `DELETE FROM iam.work_order_authorization_decisions WHERE request_id = $1`, requestID)
+	var allowed bool
+	var policyRevision, reasonCode, workOrderID string
+	if err := admin.QueryRow(ctx, `SELECT allowed, policy_revision, reason_code, work_order_id::text FROM iam.work_order_authorization_decisions WHERE request_id = $1`, requestID).Scan(&allowed, &policyRevision, &reasonCode, &workOrderID); err != nil {
+		t.Fatal(err)
+	}
+	if !allowed || policyRevision != "work-order-access:1" || reasonCode != string(workorderauth.ReasonAllowExactScope) || workOrderID != "01910000-1000-7000-8000-000000000001" {
+		t.Fatalf("durable Work Order decision = allowed=%v policy=%q reason=%q workOrder=%q", allowed, policyRevision, reasonCode, workOrderID)
 	}
 }
 

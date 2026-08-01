@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const CapabilitySetVersion = 3
+const CapabilitySetVersion = 4
 
 type Capability string
 
@@ -25,6 +25,8 @@ const (
 	CapabilityTelemetryHistoryRead  Capability = "telemetry.history.read"
 	CapabilityAlarmList             Capability = "alarm.list"
 	CapabilityAlarmRead             Capability = "alarm.read"
+	CapabilityWorkOrderList         Capability = "work-order.list"
+	CapabilityWorkOrderRead         Capability = "work-order.read"
 )
 
 var supportedCapabilities = [...]Capability{
@@ -42,6 +44,8 @@ var supportedCapabilities = [...]Capability{
 	CapabilityTelemetryHistoryRead,
 	CapabilityAlarmList,
 	CapabilityAlarmRead,
+	CapabilityWorkOrderList,
+	CapabilityWorkOrderRead,
 }
 
 func SupportedCapabilities() []Capability {
@@ -63,7 +67,9 @@ func (capability Capability) Valid() bool {
 		CapabilityTelemetrySubscribe,
 		CapabilityTelemetryHistoryRead,
 		CapabilityAlarmList,
-		CapabilityAlarmRead:
+		CapabilityAlarmRead,
+		CapabilityWorkOrderList,
+		CapabilityWorkOrderRead:
 		return true
 	default:
 		return false

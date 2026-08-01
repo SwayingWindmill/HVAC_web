@@ -16,8 +16,8 @@ Deliver an authoritative, Site-scoped HVAC operations product in which every vis
 | 2 | Real Dashboard | Merged | PR #165 delivered the authoritative default Site overview with full release gates. |
 | 3 | Complete Energy | Merged | PR #167 delivered calendar workspaces, comparisons, drill-down, and protected query lifecycle. |
 | 4 | Real Commands | Merged | PR #169 delivered authoritative Site scope, local-only governed Command evidence, and a production-disabled control boundary. |
-| 5 | Alarm | P1–P3 merged; P4 implementing | PR #184 merged exact IAM/Gateway list and detail reads through a 1% internal no-fallback canary. Issue #187 adds the formal 1%-to-5% promotion evidence and rollback gate without changing repository traffic; every lifecycle POST remains disabled at 0%. |
-| 6 | Work Order | P1 merged; P2 certifying | PR #193 established the independent contract-only owner and 0% no-fallback list/detail routes. Issue #194 certifies authoritative PostgreSQL reads, exact signed internal scope, FORCE RLS, deterministic pagination, and fail-closed projection convergence. |
+| 5 | Alarm | P1–P4 merged | PR #188 added the formal read-promotion evidence gate without changing the exact 1% internal no-fallback read canary; every lifecycle POST remains disabled at 0%. |
+| 6 | Work Order | P1–P2 merged; P3 certifying | PR #200 delivered authoritative PostgreSQL list/detail reads and PR #202 hardened the read boundary. Issue #201 adds exact IAM/Gateway authorization and a stable 1% internal no-fallback read canary while every write remains 0%. |
 | 7 | FDD | Planned | Requires governed evidence from Assets, Telemetry, Energy, Alarm, and Work Order. |
 | 8 | Optimization | Planned | Requires FDD and Energy evidence plus explicit safety and approval boundaries. |
 | 9 | Cost & Carbon | Planned | Requires stable Energy intervals and versioned tariff and emission-factor authority. |
@@ -125,13 +125,20 @@ P1 contract-only baseline delivered:
 - Alarm, FDD, Investigation, manual, and external identities may be referenced; Telemetry and browser inference cannot publish Work Order facts.
 - IAM/Gateway activation and every lifecycle mutation remain later independently certified slices.
 
-P2 authoritative PostgreSQL reads in certification:
+P2 authoritative PostgreSQL reads delivered:
 
 - Work Order Service activates a SELECT-only runtime role inside read-only transactions and binds every query to Organization FORCE RLS.
 - Internal Site list/detail GETs require an exact short-lived signed Gateway context; forged headers, wrong action, scope expansion, stale context, and cross-Site access fail closed.
 - Status, priority, assignee, and opaque cursor filters are deterministic and bounded.
 - Sources, timeline, task/note/attachment counts, and completion evidence must reconstruct one valid projection; malformed stored state is unavailable rather than partially rendered.
-- Public Work Order routes remain disabled at 0%, with no fallback and no lifecycle routes.
+- Public Work Order routes remained disabled at 0% through P2, with no fallback and no lifecycle routes.
+
+P3 exact IAM/Gateway read canary in certification:
+
+- IAM owns exact `work-order:list` and `work-order:read` decisions and durable allow/deny audit evidence.
+- Gateway derives scope from the authenticated Session and route, signs a short-lived Work Order read context, proxies bounded GETs, and rejects cross-scope responses.
+- Both public GET routes use one stable 1% internal cohort with no fallback or shadow; non-selected Sessions receive route absence.
+- Browser and Gateway evidence prove GET-only public traffic, stable selection, authorization denial without retained data, cross-Site nondiscovery, Session-loss purge, and zero lifecycle writes.
 
 Exit criteria:
 
@@ -205,4 +212,4 @@ The Operations Agent and Platform/System Management are parallel programs rather
 
 ## Immediate next action
 
-Complete and merge Work Order P2 authoritative PostgreSQL read certification while retaining both public Work Order routes at 0% and exposing no lifecycle routes. IAM/Gateway public read activation remains a separate reviewed slice; Alarm lifecycle rollout remains separately governed.
+Complete and merge Work Order P3 exact IAM/Gateway 1% read canary while keeping every Work Order write route absent and production write traffic at 0%. The next Work Order slice is governed creation and assignment; Alarm lifecycle rollout remains separately governed.

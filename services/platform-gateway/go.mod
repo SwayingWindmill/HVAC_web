@@ -15,6 +15,8 @@ require (
 	github.com/quanlaihe/hvac-web/libs/sessionevent v0.0.0
 	github.com/quanlaihe/hvac-web/libs/sessionstore v0.0.0
 	github.com/quanlaihe/hvac-web/libs/testpki v0.0.0
+	github.com/quanlaihe/hvac-web/libs/workorderauth v0.0.0
+	github.com/quanlaihe/hvac-web/libs/workordermodel v0.0.0
 	github.com/quanlaihe/hvac-web/services/iam-service v0.0.0
 )
 
@@ -59,6 +61,10 @@ replace github.com/quanlaihe/hvac-web/libs/sessionevent => ../../libs/sessioneve
 replace github.com/quanlaihe/hvac-web/libs/sessionstore => ../../libs/sessionstore
 
 replace github.com/quanlaihe/hvac-web/libs/testpki => ../../libs/testpki
+
+replace github.com/quanlaihe/hvac-web/libs/workorderauth => ../../libs/workorderauth
+
+replace github.com/quanlaihe/hvac-web/libs/workordermodel => ../../libs/workordermodel
 
 replace github.com/quanlaihe/hvac-web/services/iam-service => ../iam-service
 

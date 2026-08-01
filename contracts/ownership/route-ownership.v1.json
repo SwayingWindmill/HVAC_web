@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 15,
+  "registryRevision": 16,
   "routes": [
     {
       "method": "GET",
@@ -992,16 +992,20 @@
       "path": "/api/v1/sites/{siteId}/work-orders",
       "owner": "work-order-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
-      "rollout": { "mode": "disabled" },
+      "revision": 2,
+      "activationStatus": "internal-canary",
+      "rollout": {
+        "mode": "percentage",
+        "percentage": 1,
+        "cohortSalt": "s5-work-order-read-canary-v1"
+      },
       "compatibilityMode": "native",
       "allowedScopeDimensions": ["organization", "site", "principal"],
       "migrationPhases": ["S5-R0-contract-only", "S5-R1-internal-read-only", "S5-R2-site-canary", "S5-R3-operationally-certified"],
       "shadowSideEffectPolicy": "NONE",
       "readOnlyFallback": false,
       "fallbackForbiddenResults": ["AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"],
-      "migrationPhase": "S5-R0-contract-only",
+      "migrationPhase": "S5-R1-internal-read-only",
       "cohortGroup": "s5-work-order-read-v1"
     },
     {
@@ -1009,16 +1013,20 @@
       "path": "/api/v1/sites/{siteId}/work-orders/{workOrderId}",
       "owner": "work-order-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
-      "rollout": { "mode": "disabled" },
+      "revision": 2,
+      "activationStatus": "internal-canary",
+      "rollout": {
+        "mode": "percentage",
+        "percentage": 1,
+        "cohortSalt": "s5-work-order-read-canary-v1"
+      },
       "compatibilityMode": "native",
       "allowedScopeDimensions": ["organization", "site", "principal", "work-order"],
       "migrationPhases": ["S5-R0-contract-only", "S5-R1-internal-read-only", "S5-R2-site-canary", "S5-R3-operationally-certified"],
       "shadowSideEffectPolicy": "NONE",
       "readOnlyFallback": false,
       "fallbackForbiddenResults": ["AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"],
-      "migrationPhase": "S5-R0-contract-only",
+      "migrationPhase": "S5-R1-internal-read-only",
       "cohortGroup": "s5-work-order-read-v1"
     }
   ]

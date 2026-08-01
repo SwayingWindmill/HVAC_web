@@ -126,6 +126,9 @@ FROM iam.resolve_principal_identity($1, $2)
 }
 
 func setIAMAuthorizationContext(ctx context.Context, transaction pgx.Tx, principalID, actingOrganizationID string) error {
+	if _, err := transaction.Exec(ctx, "SET LOCAL ROLE s1_iam_runtime"); err != nil {
+		return fmt.Errorf("activate IAM runtime role: %w", err)
+	}
 	var configuredPrincipal string
 	var configuredOrganization string
 	if err := transaction.QueryRow(ctx, `

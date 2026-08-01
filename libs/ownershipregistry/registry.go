@@ -211,8 +211,10 @@ func validateEntry(entry RouteEntry) error {
 			return errors.New("rollout percentage is outside 0..100")
 		}
 		if entry.Rollout.FallbackOwner == "" {
-			if entry.Owner != OwnerAlarm || entry.Method != http.MethodGet || !isS4Phase(entry.MigrationPhase) {
-				return errors.New("no-fallback percentage rollout is only supported for S4 Alarm reads")
+			alarmRead := entry.Owner == OwnerAlarm && entry.Method == http.MethodGet && isS4Phase(entry.MigrationPhase)
+			workOrderRead := entry.Owner == OwnerWorkOrder && entry.Method == http.MethodGet && isS5Phase(entry.MigrationPhase)
+			if !alarmRead && !workOrderRead {
+				return errors.New("no-fallback percentage rollout is only supported for governed Alarm or Work Order reads")
 			}
 		} else if entry.Rollout.FallbackOwner == entry.Owner || !isCandidateOwner(entry.Rollout.FallbackOwner) {
 			return errors.New("fallback owner is invalid")
@@ -431,8 +433,18 @@ func validateS5Phase(entry RouteEntry, seenScopes map[string]bool) error {
 	if entry.CohortGroup != "s5-work-order-read-v1" {
 		return errors.New("S5 Work Order route requires the read cohort group")
 	}
-	if entry.MigrationPhase != PhaseS5ContractOnly || entry.Owner != OwnerWorkOrder || entry.ActivationStatus != "expand-baseline" || entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" {
-		return errors.New("S5 Work Order contract-only policy is invalid")
+	switch entry.MigrationPhase {
+	case PhaseS5ContractOnly:
+		if entry.Owner != OwnerWorkOrder || entry.ActivationStatus != "expand-baseline" || entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" {
+			return errors.New("S5 Work Order contract-only policy is invalid")
+		}
+	case PhaseS5InternalReadOnly:
+		if entry.Owner != OwnerWorkOrder || entry.ActivationStatus != "internal-canary" || entry.Rollout.Mode != "percentage" ||
+			entry.Rollout.Percentage != 1 || entry.Rollout.FallbackOwner != "" || len(entry.Rollout.CohortSalt) < 8 || entry.CompatibilityMode != "native" {
+			return errors.New("S5 Work Order internal read-only canary policy is invalid")
+		}
+	default:
+		return errors.New("S5 Work Order migration phase is unsupported")
 	}
 	return nil
 }
@@ -718,10 +730,6 @@ func s5PhaseRank(phase string) (int, bool) {
 		return 0, true
 	case PhaseS5InternalReadOnly:
 		return 1, true
-	case PhaseS5SiteCanary:
-		return 2, true
-	case PhaseS5OperationallyCertified:
-		return 3, true
 	default:
 		return 0, false
 	}

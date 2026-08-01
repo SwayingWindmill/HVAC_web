@@ -1,5 +1,5 @@
 {
-  "routeRegistryRevision": 15,
+  "routeRegistryRevision": 16,
   "routes": {
     "GET /api/v1/health": { "revision": 1, "owner": "platform-gateway" },
     "GET /api/v1/version": { "revision": 1, "owner": "platform-gateway" },
@@ -44,10 +44,10 @@
     "POST /api/v1/sites/{siteId}/alarms/{alarmId}:unsuppress": { "revision": 1, "owner": "alarm-service" },
     "POST /api/v1/sites/{siteId}/alarms/{alarmId}:close": { "revision": 1, "owner": "alarm-service" },
     "POST /api/v1/sites/{siteId}/alarms/{alarmId}:reopen": { "revision": 1, "owner": "alarm-service" },
-    "GET /api/v1/sites/{siteId}/work-orders": { "revision": 1, "owner": "work-order-service" },
-    "GET /api/v1/sites/{siteId}/work-orders/{workOrderId}": { "revision": 1, "owner": "work-order-service" }
+    "GET /api/v1/sites/{siteId}/work-orders": { "revision": 2, "owner": "work-order-service" },
+    "GET /api/v1/sites/{siteId}/work-orders/{workOrderId}": { "revision": 2, "owner": "work-order-service" }
   },
-  "dataRegistryRevision": 18,
+  "dataRegistryRevision": 19,
   "resources": {
     "schema:gateway": { "revision": 1, "writer": "platform-gateway" },
     "schema:audit_ledger": { "revision": 1, "writer": "audit-ledger-service" },
@@ -75,6 +75,8 @@
     "projection:iam-telemetry-revocation-fact": { "revision": 1, "writer": "iam-service" },
     "projection:iam-alarm-permission": { "revision": 1, "writer": "iam-service" },
     "projection:iam-alarm-authorization-decision": { "revision": 1, "writer": "iam-service" },
+    "projection:iam-work-order-permission": { "revision": 1, "writer": "iam-service" },
+    "projection:iam-work-order-authorization-decision": { "revision": 1, "writer": "iam-service" },
     "projection:iam-onboarding-reconciliation": { "revision": 1, "writer": "iam-service" },
     "projection:iam-reconciliation-quarantine": { "revision": 1, "writer": "iam-service" },
     "projection:device-runtime-binding": { "revision": 1, "writer": "telemetry-runtime-service" },

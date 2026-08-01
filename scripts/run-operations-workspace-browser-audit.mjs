@@ -489,7 +489,7 @@ function createGatewayFixture() {
           delegationExpiresAt: '2026-08-02T00:00:00.000Z',
         },
         authorization: {
-          capabilitySetVersion: 3,
+          capabilitySetVersion: 4,
           policyRevision: 'operations-policy-1',
           capabilities: ['site.read'],
         },
