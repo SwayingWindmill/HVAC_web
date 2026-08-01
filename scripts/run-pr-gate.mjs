@@ -42,7 +42,14 @@ const commandSets = {
     s2: [nodeRun('scripts/run-go.mjs', 'test', './libs/telemetryauth/...', './services/telemetry-runtime-service/...', './services/telemetry-shadow-comparator/...', './services/platform-gateway/...')],
     s3: [nodeRun('scripts/run-go.mjs', 'test', './libs/commandauth/...', './libs/commandmodel/...', './services/command-service/...', './services/command-dispatcher/...', './services/thingsboard-connector-control/...')],
     analytics: [npmRun('test:analytics'), npmRun('test:analytics-gateway')],
-    'operations-agent': [npmCi('services/operations-agent-service'), npmRun('operations-agent-service:check'), npmRun('operations-agent:benchmark:test')],
+    'operations-agent': [
+      npmCi('services/operations-agent-service'),
+      npmRun('operations-agent-service:check'),
+      npmRun('operations-agent:benchmark:test'),
+      npmRun('operations-agent:gateway:check'),
+      npmRun('operations-workspace:test'),
+      npmRun('test:gateway'),
+    ],
     pocs: [npmRun('pocs:components:check')],
   },
   integration: {
@@ -58,6 +65,7 @@ const commandSets = {
   },
   browser: {
     rms: [npmRun('rms:web-browser')],
+    'operations-agent': [npmRun('operations-workspace:browser')],
     s0: [npmRun('audit:security-failure')],
     s1: [npmRun('audit:s1-registry-web')],
     s2: [npmRun('s2:hvac-web:browser')],

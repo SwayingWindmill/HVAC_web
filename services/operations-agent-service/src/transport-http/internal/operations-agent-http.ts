@@ -37,6 +37,7 @@ export interface OperationsAgentHttpOptions {
   ) => SiteNightEnergyInvestigationCoordinator;
   readonly createAgUiEventStreamResponse?: (
     view: SiteNightEnergyInvestigationView,
+    requestedPosition?: string | null,
   ) => Response;
   readonly now?: () => number;
   readonly maximumRequestBytes?: number;
@@ -327,7 +328,13 @@ export const createOperationsAgentHttpHandler = (
               'The Operations Agent event projection is not configured.',
             );
           }
-          return options.createAgUiEventStreamResponse(await coordinator.get({ investigationId }));
+          const requestedPosition = request.headers.get('Last-Event-ID');
+          return options.createAgUiEventStreamResponse(
+            await coordinator.get({ investigationId }),
+            requestedPosition !== null && requestedPosition.length <= 128
+              ? requestedPosition
+              : requestedPosition === null ? null : 'invalid',
+          );
         }
         if (route.kind === 'GET') {
           return jsonResponse(200, await coordinator.get({ investigationId }));

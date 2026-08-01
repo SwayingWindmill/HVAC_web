@@ -47,6 +47,22 @@
   gap: 1rem;
 }
 
+.operations-connection {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid var(--border-color, #d8dee8);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface-color, #fff);
+}
+
+.operations-connection strong {
+  min-width: 6.5rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+}
+
 .operations-progress {
   display: grid;
   gap: 0.25rem;

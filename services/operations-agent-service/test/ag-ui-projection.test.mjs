@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createOperationsAgUiEventStreamResponse,
   encodeOperationsAgUiEventStream,
+  projectOperationsInvestigationToAgUiEventBatch,
   projectOperationsInvestigationToAgUiEvents,
 } from '../dist/transport-ag-ui/index.js';
 
@@ -183,4 +185,52 @@ test('SSE encoding carries stable revision-based identities and no-store event J
   assert.match(stream, /id: 7:1\nevent: STATE_SNAPSHOT\ndata: /u);
   assert.equal(stream.endsWith('\n\n'), true);
   assert.equal(stream.includes('internal-r17'), false);
+});
+
+test('valid recovery positions replay only the committed missing suffix after a fresh snapshot', async () => {
+  const batch = projectOperationsInvestigationToAgUiEventBatch(completedView, '7:4');
+  assert.deepEqual(batch.recovery, {
+    mode: 'RESUME',
+    reason: 'VALID',
+    snapshotPosition: '7:1',
+    latestPosition: '7:14',
+    replayFromPosition: '7:4',
+  });
+  assert.deepEqual(batch.frames.map((frame) => frame.id), [
+    '7:0', '7:1',
+    '7:5', '7:6', '7:7',
+    '7:8', '7:9', '7:10',
+    '7:11', '7:12', '7:13',
+    '7:14',
+  ]);
+  assert.equal(batch.frames[1].event.type, 'STATE_SNAPSHOT');
+  assert.equal(batch.frames[2].event.type, 'TOOL_CALL_START');
+  assert.equal(batch.frames[2].event.toolCallId, 'receipt-equipment');
+
+  const response = createOperationsAgUiEventStreamResponse(completedView, '7:4');
+  assert.equal(response.headers.get('X-Operations-Recovery-Mode'), 'RESUME');
+  assert.equal(response.headers.get('X-Operations-Replay-From'), '7:4');
+  assert.equal(response.headers.get('X-Operations-Latest-Position'), '7:14');
+  const body = await response.text();
+  assert.equal(body.includes('id: 7:2\n'), false);
+  assert.equal(body.includes('id: 7:5\n'), true);
+});
+
+test('unknown expired and conflicting recovery positions fall back to a full authoritative snapshot', () => {
+  const cases = [
+    ['not-a-position', 'UNKNOWN'],
+    ['6:14', 'EXPIRED'],
+    ['8:1', 'CONFLICT'],
+    ['7:3', 'CONFLICT'],
+    ['7:99', 'CONFLICT'],
+  ];
+  for (const [requestedPosition, reason] of cases) {
+    const batch = projectOperationsInvestigationToAgUiEventBatch(completedView, requestedPosition);
+    assert.equal(batch.recovery.mode, 'FULL_SNAPSHOT');
+    assert.equal(batch.recovery.reason, reason);
+    assert.equal(batch.recovery.replayFromPosition, null);
+    assert.equal(batch.frames.length, 15);
+    assert.deepEqual(batch.frames.slice(0, 2).map((frame) => frame.id), ['7:0', '7:1']);
+    assert.equal(batch.frames.at(-1).id, '7:14');
+  }
 });

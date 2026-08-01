@@ -147,7 +147,7 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=browser --profiles=s0,s1,s2
+      - run: node scripts/run-pr-gate.mjs --gate=browser --profiles=operations-agent,s0,s1,s2
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:

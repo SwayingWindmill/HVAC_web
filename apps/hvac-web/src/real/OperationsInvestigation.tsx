@@ -4,10 +4,14 @@ import '@copilotkit/react-core/v2/styles.css';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import {
   advanceSiteNightEnergyInvestigation,
+  OperationsApiError,
   startSiteNightEnergyInvestigation,
   type OperationsInvestigationStateSnapshot,
 } from '@/api/operations';
-import { OperationsInvestigationAgent } from './operations/OperationsInvestigationAgent';
+import {
+  OperationsInvestigationAgent,
+  type OperationsInvestigationConnectionState,
+} from './operations/OperationsInvestigationAgent';
 import type { ProtectedScopeResource } from './protected-scope';
 import './operations-investigation.css';
 
@@ -130,6 +134,7 @@ export function OperationsInvestigation({
   const [runRevision, setRunRevision] = useState(0);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<Error | null>(null);
+  const [connection, setConnection] = useState<OperationsInvestigationConnectionState | null>(null);
 
   const requestOptions = useMemo(() => ({
     trustedOrganizationId: principal.context.actingOrganizationId,
@@ -144,6 +149,7 @@ export function OperationsInvestigation({
       setSnapshot(next);
       setFailure(null);
     },
+    onConnectionState: setConnection,
   }) : null, [investigationId, requestOptions.trustedOrganizationId, requestOptions.trustedSiteId, runRevision]);
 
   useEffect(() => {
@@ -155,6 +161,7 @@ export function OperationsInvestigation({
         agent.abortRun();
         setSnapshot(null);
         setFailure(null);
+        setConnection(null);
       },
     });
   }, [agent, investigationId, registerProtectedResource, site.id]);
@@ -162,6 +169,7 @@ export function OperationsInvestigation({
   const start = async () => {
     setBusy(true);
     setFailure(null);
+    setConnection(null);
     try {
       const created = await startSiteNightEnergyInvestigation(requestOptions);
       setInvestigationLocation(created.id);
@@ -183,6 +191,7 @@ export function OperationsInvestigation({
     setInvestigationId(next);
     setSnapshot(null);
     setFailure(null);
+    setConnection(null);
     setRunRevision((value) => value + 1);
   };
 
@@ -190,6 +199,7 @@ export function OperationsInvestigation({
     if (!investigationId) return;
     setBusy(true);
     setFailure(null);
+    setConnection(null);
     try {
       await advanceSiteNightEnergyInvestigation(investigationId, requestOptions);
       setSnapshot(null);
@@ -227,9 +237,33 @@ export function OperationsInvestigation({
         <button type="button" onClick={() => { void advance(); }} disabled={!investigationId || busy}>推进</button>
       </section>
 
+      {connection ? (
+        <div
+          className="operations-connection"
+          data-connection-status={connection.status}
+          role="status"
+          aria-live="polite"
+        >
+          <strong>{connection.status}</strong>
+          <span>
+            {connection.status === 'RETRYING'
+              ? '连接中断，正在重新授权并从权威位置恢复；不会触发新的业务写入。'
+              : connection.status === 'LIVE'
+                ? `${connection.recovery?.mode ?? 'FULL_SNAPSHOT'} · ${connection.recovery?.latestPosition ?? 'snapshot pending'}`
+                : connection.status === 'TERMINAL'
+                  ? 'Investigation 已进入稳定终态。'
+                  : '正在读取当前授权下的权威 Investigation snapshot。'}
+          </span>
+        </div>
+      ) : null}
+
       {failure ? (
         <div className="real-shell-problem" role="alert">
-          <strong>Operations Investigation unavailable</strong>
+          <strong>
+            {failure instanceof OperationsApiError && failure.status === 404
+              ? 'Investigation not visible'
+              : 'Operations Investigation unavailable'}
+          </strong>
           <span>{failure.message}</span>
         </div>
       ) : null}
