@@ -253,7 +253,12 @@
     "platform:production-rollout:check": "node scripts/check-production-rollout.mjs",
     "codegraph:init": "codegraph init .",
     "codegraph:sync": "codegraph sync .",
-    "codegraph:status": "codegraph status ."
+    "codegraph:status": "codegraph status .",
+    "real-assets:certification:check": "node scripts/check-real-assets-certification.mjs",
+    "real-assets:certification:test": "node --test scripts/test-real-assets-certification.mjs",
+    "real-assets:certification:browser": "node scripts/run-real-assets-certification.mjs",
+    "real-assets:certification:evidence": "node scripts/check-real-assets-certification.mjs --evidence",
+    "real-assets:certify": "npm run real-assets:certification:check && npm run web:real-assets:test && npm run real-assets:certification:test && npm run rms:web-routing && npm run real-assets:certification:browser && npm run real-assets:certification:evidence && npm run rms:web-routing:browser && npm run s1:hvac-web:check && npm run s2:hvac-web:check && npm run s2:contracts:check && npm run s2:live-client:browser && npm run ownership:check && npm run security:dependency-audit && npm run security:licenses"
   },
   "engines": {
     "node": ">=22.22.0"

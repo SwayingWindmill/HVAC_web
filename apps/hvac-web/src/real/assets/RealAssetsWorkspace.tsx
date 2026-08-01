@@ -521,6 +521,10 @@ export function RealAssetsWorkspace({
       data-telemetry-policy-revision={current.data?.routePolicyRevision ?? telemetryPolicyRevision ?? 'unavailable'}
       data-current-request-count={String(current.data?.requestCount ?? 0)}
       data-detail-state={detailResolution.state}
+      data-total-device-count={String(rows.length)}
+      data-filtered-device-count={String(filteredRows.length)}
+      data-list-mode={listMode}
+      data-hierarchy-selection={hierarchySelection}
     >
       <header className="real-assets__header">
         <div>
@@ -576,23 +580,26 @@ export function RealAssetsWorkspace({
         <div className="real-assets__workspace">
           <aside className="real-assets__hierarchy" aria-label="Site Equipment hierarchy">
             <h2>资产层级</h2>
-            <button type="button" className={hierarchySelection === 'all' ? 'is-active' : ''} onClick={() => setHierarchySelection('all')}>
+            <button type="button" data-testid="real-assets-hierarchy-all" aria-pressed={hierarchySelection === 'all'} className={hierarchySelection === 'all' ? 'is-active' : ''} onClick={() => setHierarchySelection('all')}>
               {site.displayName}<span>{rows.length}</span>
             </button>
             {(registry.data?.equipment ?? []).map((item) => (
               <button
                 key={item.id}
                 type="button"
+                data-testid="real-assets-hierarchy-equipment"
+                data-equipment-id={item.id}
+                aria-pressed={hierarchySelection === `equipment:${item.id}`}
                 className={hierarchySelection === `equipment:${item.id}` ? 'is-active' : ''}
                 onClick={() => setHierarchySelection(`equipment:${item.id}`)}
               >
                 {item.displayName}<span>{equipmentCounts.get(item.id) ?? 0}</span>
               </button>
             ))}
-            <button type="button" className={hierarchySelection === 'unbound' ? 'is-active' : ''} onClick={() => setHierarchySelection('unbound')}>
+            <button type="button" data-testid="real-assets-hierarchy-unbound" aria-pressed={hierarchySelection === 'unbound'} className={hierarchySelection === 'unbound' ? 'is-active' : ''} onClick={() => setHierarchySelection('unbound')}>
               未绑定 Equipment<span>{rows.filter((row) => row.binding.state === 'unbound').length}</span>
             </button>
-            <button type="button" className={hierarchySelection === 'ambiguous' ? 'is-active' : ''} onClick={() => setHierarchySelection('ambiguous')}>
+            <button type="button" data-testid="real-assets-hierarchy-ambiguous" aria-pressed={hierarchySelection === 'ambiguous'} className={hierarchySelection === 'ambiguous' ? 'is-active' : ''} onClick={() => setHierarchySelection('ambiguous')}>
               绑定关系冲突<span>{rows.filter((row) => row.binding.state === 'ambiguous').length}</span>
             </button>
           </aside>
@@ -601,12 +608,12 @@ export function RealAssetsWorkspace({
             <form className="real-assets__filters" aria-label="Device 筛选" onSubmit={(event) => event.preventDefault()}>
               <fieldset>
                 <legend>列表范围</legend>
-                <label><input type="radio" name="assets-list-mode" checked={listMode === 'attention'} onChange={() => setListMode('attention')} />需关注</label>
-                <label><input type="radio" name="assets-list-mode" checked={listMode === 'all'} onChange={() => setListMode('all')} />全部 Device</label>
+                <label><input type="radio" data-testid="real-assets-list-attention" name="assets-list-mode" checked={listMode === 'attention'} onChange={() => setListMode('attention')} />需关注</label>
+                <label><input type="radio" data-testid="real-assets-list-all" name="assets-list-mode" checked={listMode === 'all'} onChange={() => setListMode('all')} />全部 Device</label>
               </fieldset>
               <label>
                 搜索 Device 或 Equipment
-                <input type="search" value={search} onChange={(event) => setSearch(event.currentTarget.value)} />
+                <input type="search" data-testid="real-assets-search" value={search} onChange={(event) => setSearch(event.currentTarget.value)} />
               </label>
             </form>
 
@@ -617,7 +624,7 @@ export function RealAssetsWorkspace({
                   : '当前筛选条件没有匹配的 Device。'}
               </div>
             ) : (
-              <div className="real-assets__table-wrap">
+              <div className="real-assets__table-wrap" data-testid="real-assets-table-wrap">
                 <table className="real-assets__table">
                   <caption>授权 Device 运行列表</caption>
                   <thead>
