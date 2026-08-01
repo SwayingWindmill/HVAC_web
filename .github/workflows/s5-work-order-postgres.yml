@@ -1,0 +1,67 @@
+name: S5 Work Order PostgreSQL Authority
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/s5-work-order-postgres.yml'
+      - 'contracts/ownership/**'
+      - 'docs/operations/real-product-roadmap.md'
+      - 'docs/operations/s5-work-order-baseline.md'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'infra/s5-work-order/**'
+      - 'libs/workordermodel/**'
+      - 'services/work-order-service/**'
+      - 'scripts/check-s5-work-order-baseline.mjs'
+      - 'scripts/check-s5-work-order-postgres.mjs'
+      - 'scripts/run-s5-work-order-postgres-tests.mjs'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/s5-work-order-postgres.yml'
+      - 'contracts/ownership/**'
+      - 'docs/operations/real-product-roadmap.md'
+      - 'docs/operations/s5-work-order-baseline.md'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'infra/s5-work-order/**'
+      - 'libs/workordermodel/**'
+      - 'services/work-order-service/**'
+      - 'scripts/check-s5-work-order-baseline.mjs'
+      - 'scripts/check-s5-work-order-postgres.mjs'
+      - 'scripts/run-s5-work-order-postgres-tests.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s5-work-order-postgres-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run s5:work-order:postgres
+      - run: npm run contracts:check
+      - run: npm run release:evidence-assets
+      - name: Upload Work Order PostgreSQL evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: s5-work-order-postgres-authority
+          path: out/s5-work-order-authority
+          if-no-files-found: error
+          retention-days: 14

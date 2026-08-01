@@ -17,7 +17,7 @@ Deliver an authoritative, Site-scoped HVAC operations product in which every vis
 | 3 | Complete Energy | Merged | PR #167 delivered calendar workspaces, comparisons, drill-down, and protected query lifecycle. |
 | 4 | Real Commands | Merged | PR #169 delivered authoritative Site scope, local-only governed Command evidence, and a production-disabled control boundary. |
 | 5 | Alarm | P1–P3 merged; P4 implementing | PR #184 merged exact IAM/Gateway list and detail reads through a 1% internal no-fallback canary. Issue #187 adds the formal 1%-to-5% promotion evidence and rollback gate without changing repository traffic; every lifecycle POST remains disabled at 0%. |
-| 6 | Work Order | P1 implementing | The S5 contract-only baseline establishes an independent owner, strict list/detail model, 0% no-fallback routes, and read-only FORCE RLS persistence. |
+| 6 | Work Order | P1 merged; P2 certifying | PR #193 established the independent contract-only owner and 0% no-fallback list/detail routes. Issue #194 certifies authoritative PostgreSQL reads, exact signed internal scope, FORCE RLS, deterministic pagination, and fail-closed projection convergence. |
 | 7 | FDD | Planned | Requires governed evidence from Assets, Telemetry, Energy, Alarm, and Work Order. |
 | 8 | Optimization | Planned | Requires FDD and Energy evidence plus explicit safety and approval boundaries. |
 | 9 | Cost & Carbon | Planned | Requires stable Energy intervals and versioned tariff and emission-factor authority. |
@@ -117,13 +117,21 @@ P4 read promotion gate in implementation:
 
 Create the human-maintenance execution domain.
 
-P1 contract-only baseline in implementation:
+P1 contract-only baseline delivered:
 
 - `work-order-service` owns a strict Site-scoped list/detail contract while both public routes remain disabled at 0%.
 - The read model requires one origin source, bounded related references, task/note/attachment summaries, completion evidence, version, timestamps, and a convergent timeline.
 - `work_order_runtime` separates current state, sources, timeline, tasks, notes, attachment metadata, and completion evidence behind Organization FORCE RLS and a SELECT-only runtime role.
 - Alarm, FDD, Investigation, manual, and external identities may be referenced; Telemetry and browser inference cannot publish Work Order facts.
 - IAM/Gateway activation and every lifecycle mutation remain later independently certified slices.
+
+P2 authoritative PostgreSQL reads in certification:
+
+- Work Order Service activates a SELECT-only runtime role inside read-only transactions and binds every query to Organization FORCE RLS.
+- Internal Site list/detail GETs require an exact short-lived signed Gateway context; forged headers, wrong action, scope expansion, stale context, and cross-Site access fail closed.
+- Status, priority, assignee, and opaque cursor filters are deterministic and bounded.
+- Sources, timeline, task/note/attachment counts, and completion evidence must reconstruct one valid projection; malformed stored state is unavailable rather than partially rendered.
+- Public Work Order routes remain disabled at 0%, with no fallback and no lifecycle routes.
 
 Exit criteria:
 
@@ -197,4 +205,4 @@ The Operations Agent and Platform/System Management are parallel programs rather
 
 ## Immediate next action
 
-Merge the Work Order P1 contract-only authority baseline while retaining both public Work Order reads at 0% and exposing no lifecycle routes. Then certify PostgreSQL role/RLS behavior before any IAM/Gateway read activation. Alarm read promotion and lifecycle rollout remain separately governed.
+Complete and merge Work Order P2 authoritative PostgreSQL read certification while retaining both public Work Order routes at 0% and exposing no lifecycle routes. IAM/Gateway public read activation remains a separate reviewed slice; Alarm lifecycle rollout remains separately governed.
