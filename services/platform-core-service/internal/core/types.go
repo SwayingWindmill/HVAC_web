@@ -65,6 +65,21 @@ type Device struct {
 	UpdatedAt            string `json:"updatedAt"`
 }
 
+type DeviceBinding struct {
+	ID                   string  `json:"id"`
+	OwningOrganizationID string  `json:"owningOrganizationId"`
+	SiteID               string  `json:"siteId"`
+	DeviceID             string  `json:"deviceId"`
+	EquipmentID          string  `json:"equipmentId"`
+	BindingRole          string  `json:"bindingRole"`
+	Status               string  `json:"status"`
+	ValidFrom            string  `json:"validFrom"`
+	ValidTo              *string `json:"validTo,omitempty"`
+	Revision             int64   `json:"revision"`
+	CreatedAt            string  `json:"createdAt"`
+	UpdatedAt            string  `json:"updatedAt"`
+}
+
 type Collection[T any] struct {
 	Items      []T     `json:"items"`
 	NextCursor *string `json:"nextCursor"`

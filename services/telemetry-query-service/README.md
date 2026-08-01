@@ -16,10 +16,13 @@ Telemetry Runtime
                     -> Cube Core
                         -> telemetry-query-service
                             -> Platform Gateway
+                            -> Operations Agent
 ```
 
-The Query Service reads no database directly. It calls Cube Core through an
-internal HTTP adapter and returns product-level DTOs.
+The Query Service exposes fixed product-level query contracts. Energy analytics
+calls Cube Core through an internal HTTP adapter. Bounded Device History uses a
+separate least-privilege ClickHouse reader for `telemetry_history.observations`;
+it never accepts arbitrary SQL, database names, table names or dimensions.
 
 ## Energy Series contract
 
@@ -35,8 +38,8 @@ The service:
 - rejects arbitrary Cube members, SQL, dimensions and measures;
 - validates UUIDv7 Organization/Site scope, IANA timezone, granularity, quality
   policy and a maximum 366-day query range;
-- requires a trusted Platform Gateway mTLS SPIFFE identity;
-- verifies a short-lived delegation grant bound to the complete query digest;
+- requires an allowlisted Platform Gateway or Operations Agent mTLS SPIFFE identity;
+- verifies a Gateway-issued short-lived delegation grant whose trusted issuer and actual executing workload are both explicit and whose Scope is bound to the complete query digest;
 - generates a separate 30-second Cube JWT with Organization/Site security
   context;
 - translates the product query to a fixed Cube `/load` query;
@@ -45,6 +48,27 @@ The service:
 
 It does not ingest telemetry, own Presence/Freshness, write ClickHouse, construct
 energy intervals, execute commands or expose Cube directly to browsers.
+
+## Device History contract
+
+The bounded short-history route is:
+
+```text
+POST /internal/v1/telemetry/device-history
+```
+
+The public Gateway route is `POST /api/v1/telemetry/device-series:query`. Public
+requests contain only Device ID, telemetry keys, inclusive `from`, exclusive
+`to` and `maxPointsPerKey`; Organization and Site are derived from the
+authenticated Session and IAM exact-scope decision. The contract allows at most
+8 keys, 500 points per key, 4,000 points total and a 24-hour range.
+
+The fixed ClickHouse adapter reads only accepted finite numeric observations,
+orders results by key and sample time, applies an independent per-key limit and
+returns Quality, quality reasons, data watermark, dataset revision, partial
+state and truncated-key metadata. The `telemetry_query_history_reader` identity
+can select only `telemetry_history.observations` and cannot write history or read
+Analytics facts.
 
 ## Authoritative metadata
 
@@ -79,14 +103,16 @@ The browser never calls this service or Cube directly.
 
 ```text
 Browser -> Platform Gateway -> Telemetry Query Service -> Cube Core
+                       \\-> Operations Agent -> Telemetry Query Service -> Cube Core
 ```
 
 The service verifies:
 
-1. the caller's mTLS certificate and expected Gateway SPIFFE identity;
-2. a short-lived signed Delegation Grant;
-3. the fixed Energy Series action;
-4. the SHA-256 digest of the complete normalized product query.
+1. the caller's mTLS certificate against the Gateway/Operations Agent presenter allowlist;
+2. a short-lived Gateway-signed Delegation Grant;
+3. that the grant issuer is Gateway and `executingService` equals the actual mTLS presenter;
+4. the fixed Energy Series action;
+5. the SHA-256 digest of the complete normalized product query.
 
 It rejects caller-supplied identity or scope headers. Cube receives a second
 short-lived token and applies Organization/Site row-level access policy.
@@ -102,6 +128,8 @@ short-lived token and applies Organization/Site row-level access policy.
 | `QUERY_CUBE_ENDPOINT` | Cube origin, for example `http://cube:4000` |
 | `QUERY_CUBE_API_SECRET` | Minimum 32-byte HS256 key for short-lived internal Cube JWTs |
 | `QUERY_DATASET_REVISION` | Semantic/read-model schema revision prefix, for example `energy-interval:v1` |
+| `QUERY_HISTORY_CLICKHOUSE_ENDPOINT` | ClickHouse origin for bounded Device History |
+| `QUERY_HISTORY_DATASET_REVISION` | Raw-history schema revision prefix, for example `telemetry-history:v1` |
 
 Optional variables:
 
@@ -109,14 +137,22 @@ Optional variables:
 |---|---|
 | `QUERY_SERVICE_ADDR` | `127.0.0.1:18447` |
 | `QUERY_DIAGNOSTICS_ADDR` | `127.0.0.1:19088` |
+| `QUERY_DELEGATION_ISSUER_SPIFFE` | `spiffe://hvac.local/platform-gateway` |
 | `QUERY_ALLOWED_WORKLOAD_SPIFFE` | `spiffe://hvac.local/platform-gateway` |
+| `QUERY_OPERATIONS_AGENT_SPIFFE` | `spiffe://hvac.local/operations-agent-service` |
 | `QUERY_AUDIENCE` | `telemetry-query-service` |
 | `QUERY_CUBE_CA` | System trust store when omitted |
+| `QUERY_HISTORY_CLICKHOUSE_CA` | System trust store when omitted |
+| `QUERY_HISTORY_CLICKHOUSE_DATABASE` | `telemetry_history` |
+| `QUERY_HISTORY_CLICKHOUSE_TABLE` | `observations` |
+| `QUERY_HISTORY_CLICKHOUSE_USERNAME` | `telemetry_query_history_reader` |
+| `QUERY_HISTORY_CLICKHOUSE_PASSWORD` | Empty for the local no-password fixture |
 
 ## Verification
 
 ```bash
 npm run test:analytics
+npm run test:analytics-gateway
 npm run build:telemetry-query
 ```
 

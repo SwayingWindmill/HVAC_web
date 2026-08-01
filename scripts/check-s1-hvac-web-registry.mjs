@@ -35,6 +35,7 @@ for (const method of [
   'listSiteEquipment',
   'getEquipment',
   'listSiteDevices',
+  'listSiteDeviceBindings',
   'getDevice',
 ]) {
   assert(generated.includes(`${method}:`), `generated Registry client is missing ${method}`);
@@ -48,6 +49,7 @@ for (const hook of [
   'useRegistryEquipmentDetail',
   'useRegistryDevices',
   'useRegistryDeviceDetail',
+  'useRegistryDeviceBindings',
   'useAuthorizedRegistrySites',
 ]) {
   assert(registryApi.includes(`function ${hook}`), `Registry adapter is missing ${hook}`);

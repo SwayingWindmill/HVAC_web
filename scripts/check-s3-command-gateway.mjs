@@ -39,7 +39,7 @@ const createRoute = routes.routes?.find((item) => item.method === 'POST' && item
 const getRoute = routes.routes?.find((item) => item.method === 'GET' && item.path === '/api/v1/commands/{commandId}');
 assert(createRoute?.owner === 'command-service' && getRoute?.owner === 'command-service', 'Command public route ownership is missing');
 
-assert(openapi.info?.version === '0.3.0-disabled-command-ux-baseline', 'Command OpenAPI is not the implemented disabled Command UX baseline');
+assert(openapi.info?.version === '0.4.0-disabled-real-site-scope', 'Command OpenAPI is not the implemented disabled Real Site scope baseline');
 assert(openapi.paths?.['/api/v1/commands']?.post?.['x-production-traffic-percent'] === 0, 'Command POST OpenAPI enabled production traffic');
 assert(openapi.paths?.['/api/v1/commands/{commandId}']?.get?.['x-production-traffic-percent'] === 0, 'Command GET OpenAPI enabled production traffic');
 for (const forbidden of ['organizationId', 'siteId', 'principalId', 'providerMethod', 'providerParams', 'thingsBoardDeviceId', 'executionFence']) {

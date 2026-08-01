@@ -342,6 +342,9 @@
 }
 
 .real-route-surface {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
   width: min(900px, 100%);
   padding: 30px;
   border: 1px solid #d7deea;

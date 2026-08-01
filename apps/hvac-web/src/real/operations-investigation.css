@@ -1,0 +1,119 @@
+.operations-investigation {
+  display: grid;
+  gap: 1rem;
+}
+
+.operations-header,
+.operations-summary,
+.operations-open,
+.operations-record-grid,
+.operations-tools li,
+.operations-plan li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.operations-header,
+.operations-open,
+.operations-workspace,
+.operations-empty {
+  border: 1px solid var(--border-color, #d8dee8);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  background: var(--surface-color, #fff);
+}
+
+.operations-header h1,
+.operations-summary h2,
+.operations-workspace h3,
+.operations-empty h2 {
+  margin: 0;
+}
+
+.operations-open {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.operations-open input {
+  min-width: min(28rem, 100%);
+  flex: 1;
+}
+
+.operations-workspace {
+  display: grid;
+  gap: 1rem;
+}
+
+.operations-progress {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 10rem;
+  text-align: right;
+}
+
+.operations-progress progress {
+  width: 100%;
+}
+
+.operations-plan,
+.operations-tools,
+.operations-record-grid ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.operations-plan {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.operations-plan li,
+.operations-tools li {
+  border: 1px solid var(--border-color, #d8dee8);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+}
+
+.operations-plan li[data-step-status="COMPLETED"] strong,
+.operations-tools li span:last-child {
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+}
+
+.operations-record-grid {
+  align-items: stretch;
+}
+
+.operations-record-grid > section {
+  flex: 1;
+  border: 1px solid var(--border-color, #d8dee8);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+}
+
+.operations-record-grid li + li,
+.operations-tools li + li {
+  margin-top: 0.5rem;
+}
+
+.operations-tools li {
+  justify-content: flex-start;
+}
+
+@media (max-width: 720px) {
+  .operations-header,
+  .operations-summary,
+  .operations-record-grid {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .operations-progress {
+    min-width: 0;
+    text-align: left;
+  }
+}

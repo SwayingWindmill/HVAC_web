@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 6,
+  "registryRevision": 7,
   "routes": [
     {
       "method": "GET",
@@ -303,6 +303,31 @@
         "LEGACY_PRIMARY_GO_SHADOW",
         "GO_CANARY_LEGACY_SHADOW",
         "GO_PRIMARY_LEGACY_READ_FALLBACK",
+        "GO_PRIMARY"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false,
+      "fallbackForbiddenResults": [
+        "AUTHORIZATION_DENIED",
+        "RESOURCE_NOT_FOUND"
+      ],
+      "migrationPhase": "GO_PRIMARY"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/device-bindings",
+      "owner": "platform-core-service",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal"
+      ],
+      "migrationPhases": [
         "GO_PRIMARY"
       ],
       "shadowSideEffectPolicy": "NONE",

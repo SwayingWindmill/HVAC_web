@@ -415,6 +415,8 @@ CREATE INDEX IF NOT EXISTS equipment_registry_page_idx
   ON core_registry.equipment (organization_id, site_id, display_name COLLATE "C", id);
 CREATE INDEX IF NOT EXISTS devices_registry_page_idx
   ON core_registry.devices (organization_id, site_id, display_name COLLATE "C", id);
+CREATE INDEX IF NOT EXISTS device_bindings_registry_page_idx
+  ON core_registry.device_bindings (organization_id, site_id, binding_role COLLATE "C", id);
 CREATE INDEX IF NOT EXISTS legacy_resource_maps_scope_state_idx
   ON core_registry.legacy_resource_maps (organization_id, site_id, mapping_state, source_system, source_table, source_key);
 CREATE INDEX IF NOT EXISTS migration_quarantine_open_idx

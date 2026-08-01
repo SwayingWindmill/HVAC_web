@@ -1,6 +1,6 @@
 import type { Capability, Site } from '@/api/generated/platformGateway.gen';
 
-export type SiteRouteLeaf = 'dashboard' | 'assets' | 'energy' | 'commands' | 'bigscreen';
+export type SiteRouteLeaf = 'dashboard' | 'assets' | 'energy' | 'alarms' | 'operations' | 'commands' | 'bigscreen';
 
 export interface SiteContext {
   readonly site: Readonly<Site>;
@@ -15,13 +15,13 @@ export type SiteEntryDecision =
 export type SiteRoutingDecision =
   | { state: 'PLATFORM_ROUTE' }
   | SiteEntryDecision
-  | { state: 'READY'; route: SiteRouteLeaf; context: SiteContext }
+  | { state: 'READY'; route: SiteRouteLeaf; context: SiteContext; deviceId?: string }
   | { state: 'FORBIDDEN' }
   | { state: 'SITE_NOT_VISIBLE' }
   | { state: 'SITE_ROUTE_NOT_FOUND'; context: SiteContext };
 
 const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const SITE_ROUTE_LEAVES = new Set<SiteRouteLeaf>(['dashboard', 'assets', 'energy', 'commands', 'bigscreen']);
+const SITE_ROUTE_LEAVES = new Set<SiteRouteLeaf>(['dashboard', 'assets', 'energy', 'alarms', 'operations', 'commands', 'bigscreen']);
 
 export function isUUIDv7(value: string): boolean {
   return UUID_V7_PATTERN.test(value);
@@ -81,9 +81,14 @@ export function resolveSiteRouting(
   if (!effectiveCapabilities.includes('site.read')) return { state: 'FORBIDDEN' };
   const context = siteContext(site);
   const leaf = segments[2] as SiteRouteLeaf | undefined;
-  if (segments.length !== 3 || !leaf || !SITE_ROUTE_LEAVES.has(leaf)) {
+  if (!leaf || !SITE_ROUTE_LEAVES.has(leaf)) {
     return { state: 'SITE_ROUTE_NOT_FOUND', context };
   }
 
+  if (leaf === 'assets' && segments.length === 4) {
+    return { state: 'READY', route: leaf, context, deviceId: segments[3] };
+  }
+
+  if (segments.length !== 3) return { state: 'SITE_ROUTE_NOT_FOUND', context };
   return { state: 'READY', route: leaf, context };
 }

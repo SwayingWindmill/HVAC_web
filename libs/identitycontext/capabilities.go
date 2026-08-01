@@ -6,19 +6,23 @@ import (
 	"strings"
 )
 
-const CapabilitySetVersion = 1
+const CapabilitySetVersion = 2
 
 type Capability string
 
 const (
-	CapabilityOrganizationList Capability = "organization.list"
-	CapabilityOrganizationRead Capability = "organization.read"
-	CapabilitySiteList         Capability = "site.list"
-	CapabilitySiteRead         Capability = "site.read"
-	CapabilityEquipmentList    Capability = "equipment.list"
-	CapabilityEquipmentRead    Capability = "equipment.read"
-	CapabilityDeviceList       Capability = "device.list"
-	CapabilityDeviceRead       Capability = "device.read"
+	CapabilityOrganizationList      Capability = "organization.list"
+	CapabilityOrganizationRead      Capability = "organization.read"
+	CapabilitySiteList              Capability = "site.list"
+	CapabilitySiteRead              Capability = "site.read"
+	CapabilityEquipmentList         Capability = "equipment.list"
+	CapabilityEquipmentRead         Capability = "equipment.read"
+	CapabilityDeviceList            Capability = "device.list"
+	CapabilityDeviceRead            Capability = "device.read"
+	CapabilityTelemetrySnapshotRead Capability = "telemetry.snapshot.read"
+	CapabilityTelemetryBatchRead    Capability = "telemetry.batch.read"
+	CapabilityTelemetrySubscribe    Capability = "telemetry.subscribe"
+	CapabilityTelemetryHistoryRead  Capability = "telemetry.history.read"
 )
 
 var supportedCapabilities = [...]Capability{
@@ -30,6 +34,10 @@ var supportedCapabilities = [...]Capability{
 	CapabilityEquipmentRead,
 	CapabilityDeviceList,
 	CapabilityDeviceRead,
+	CapabilityTelemetrySnapshotRead,
+	CapabilityTelemetryBatchRead,
+	CapabilityTelemetrySubscribe,
+	CapabilityTelemetryHistoryRead,
 }
 
 func SupportedCapabilities() []Capability {
@@ -45,7 +53,11 @@ func (capability Capability) Valid() bool {
 		CapabilityEquipmentList,
 		CapabilityEquipmentRead,
 		CapabilityDeviceList,
-		CapabilityDeviceRead:
+		CapabilityDeviceRead,
+		CapabilityTelemetrySnapshotRead,
+		CapabilityTelemetryBatchRead,
+		CapabilityTelemetrySubscribe,
+		CapabilityTelemetryHistoryRead:
 		return true
 	default:
 		return false

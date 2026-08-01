@@ -1,0 +1,132 @@
+openapi: 3.0.3
+info:
+  title: Operations Agent Internal HTTP API
+  version: 1.0.0
+  description: Workload-authenticated Coordinator use cases for Site night-energy Investigations.
+servers:
+  - url: https://operations-agent.internal.invalid
+paths:
+  /internal/v1/sites/{siteId}/operations/investigations:
+    post:
+      operationId: internalStartSiteNightEnergyInvestigation
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+        - $ref: '#/components/parameters/ActingOrganization'
+        - $ref: '#/components/parameters/DelegationGrant'
+        - $ref: '#/components/parameters/PolicyRevision'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: './operations-investigations-public.openapi.yaml#/components/schemas/EmptyObject' }
+      responses:
+        '201': { $ref: '#/components/responses/Investigation' }
+        '404': { $ref: '#/components/responses/Nondiscoverable' }
+  /internal/v1/sites/{siteId}/operations/investigations/{investigationId}:
+    get:
+      operationId: internalGetSiteNightEnergyInvestigation
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+        - $ref: '#/components/parameters/InvestigationId'
+        - $ref: '#/components/parameters/ActingOrganization'
+        - $ref: '#/components/parameters/DelegationGrant'
+        - $ref: '#/components/parameters/PolicyRevision'
+      responses:
+        '200': { $ref: '#/components/responses/Investigation' }
+        '404': { $ref: '#/components/responses/Nondiscoverable' }
+  /internal/v1/sites/{siteId}/operations/investigations/{investigationId}/events:
+    get:
+      operationId: internalStreamSiteNightEnergyInvestigationEvents
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+        - $ref: '#/components/parameters/InvestigationId'
+        - $ref: '#/components/parameters/ActingOrganization'
+        - $ref: '#/components/parameters/DelegationGrant'
+        - $ref: '#/components/parameters/PolicyRevision'
+      responses:
+        '200':
+          description: Finite AG-UI event batch projected from the committed Investigation view.
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store, no-transform }
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '404': { $ref: '#/components/responses/Nondiscoverable' }
+  /internal/v1/sites/{siteId}/operations/investigations/{investigationId}:advance:
+    post:
+      operationId: internalAdvanceSiteNightEnergyInvestigation
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+        - $ref: '#/components/parameters/InvestigationId'
+        - $ref: '#/components/parameters/ActingOrganization'
+        - $ref: '#/components/parameters/DelegationGrant'
+        - $ref: '#/components/parameters/PolicyRevision'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: './operations-investigations-public.openapi.yaml#/components/schemas/EmptyObject' }
+      responses:
+        '200': { $ref: '#/components/responses/Investigation' }
+        '404': { $ref: '#/components/responses/Nondiscoverable' }
+  /internal/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel:
+    post:
+      operationId: internalCancelSiteNightEnergyInvestigation
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+        - $ref: '#/components/parameters/InvestigationId'
+        - $ref: '#/components/parameters/ActingOrganization'
+        - $ref: '#/components/parameters/DelegationGrant'
+        - $ref: '#/components/parameters/PolicyRevision'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: './operations-investigations-public.openapi.yaml#/components/schemas/EmptyObject' }
+      responses:
+        '200': { $ref: '#/components/responses/Investigation' }
+        '404': { $ref: '#/components/responses/Nondiscoverable' }
+components:
+  parameters:
+    SiteId:
+      name: siteId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    InvestigationId:
+      name: investigationId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 256 }
+    ActingOrganization:
+      name: X-Acting-Organization-ID
+      in: header
+      required: true
+      schema: { type: string }
+    DelegationGrant:
+      name: X-Delegation-Grant
+      in: header
+      required: true
+      schema: { type: string, maxLength: 8192 }
+    PolicyRevision:
+      name: X-Route-Policy-Revision
+      in: header
+      required: true
+      schema: { type: string, maxLength: 256 }
+  responses:
+    Investigation:
+      description: Authoritative safe Investigation snapshot.
+      headers:
+        Cache-Control:
+          schema: { type: string, enum: [no-store] }
+      content:
+        application/json:
+          schema:
+            $ref: './operations-investigations-public.openapi.yaml#/components/schemas/SiteNightEnergyInvestigationView'
+    Nondiscoverable:
+      description: Resource is absent or outside delegated Scope.
+      content:
+        application/problem+json:
+          schema:
+            $ref: './operations-investigations-public.openapi.yaml#/components/schemas/Problem'

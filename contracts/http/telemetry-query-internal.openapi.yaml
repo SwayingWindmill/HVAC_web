@@ -3,8 +3,9 @@ info:
   title: HVAC Telemetry Query Internal API
   version: 0.1.0
   description: >-
-    Internal, mTLS-protected analytics API used by Platform Gateway. This contract
-    exposes product queries and never accepts arbitrary Cube members or SQL.
+    Internal, mTLS-protected analytics API used by Platform Gateway and Operations
+    Agent. Delegation grants are Gateway-issued, bind the actual mTLS presenter as
+    executingService and never authorize arbitrary Cube members or SQL.
 servers:
   - url: https://telemetry-query-service:18447
 paths:
@@ -44,10 +45,12 @@ components:
   securitySchemes:
     workloadMTLS:
       type: mutualTLS
+      description: Allowlisted Platform Gateway or Operations Agent workload identity.
     delegationGrant:
       type: apiKey
       in: header
       name: X-Delegation-Grant
+      description: Gateway-issued grant whose executingService must equal the mTLS presenter and whose Scope is the normalized query digest.
   responses:
     Problem:
       description: RFC 9457-style problem details

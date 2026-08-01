@@ -87,6 +87,7 @@ const expectedOperations = {
   listSiteEquipment: ['get', '/api/v1/sites/{siteId}/equipment'],
   getEquipment: ['get', '/api/v1/equipment/{equipmentId}'],
   listSiteDevices: ['get', '/api/v1/sites/{siteId}/devices'],
+  listSiteDeviceBindings: ['get', '/api/v1/sites/{siteId}/device-bindings'],
   getDevice: ['get', '/api/v1/devices/{deviceId}'],
 };
 const operations = {};
@@ -110,6 +111,7 @@ const expectedSuccessSchemas = {
   listSiteEquipment: 'EquipmentCollection',
   getEquipment: 'Equipment',
   listSiteDevices: 'DeviceCollection',
+  listSiteDeviceBindings: 'DeviceBindingCollection',
   getDevice: 'Device',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
@@ -150,6 +152,7 @@ const schemaRequirements = {
   SiteCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   EquipmentCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   DeviceCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
+  DeviceBindingCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   FieldError: [['field', 'message'], ['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'fieldErrors']],
 };
@@ -176,10 +179,14 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'equipment.read',
   'device.list',
   'device.read',
+  'telemetry.snapshot.read',
+  'telemetry.batch.read',
+  'telemetry.subscribe',
+  'telemetry.history.read',
 ]), 'Capability vocabulary is unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 1, 'EffectiveAuthorization capability set version must be 1');
+invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 2, 'EffectiveAuthorization capability set version must be 2');
 invariant(schemas.EffectiveAuthorization.properties.policyRevision.minLength === 1 && schemas.EffectiveAuthorization.properties.policyRevision.maxLength === 128, 'EffectiveAuthorization policy revision bounds are unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 8, 'EffectiveAuthorization capabilities must be unique and bounded');
+invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 12, 'EffectiveAuthorization capabilities must be unique and bounded');
 invariant(schemas.EffectiveAuthorization.properties.capabilities.items?.$ref === '#/components/schemas/Capability', 'EffectiveAuthorization capabilities must use the public Capability vocabulary');
 invariant(schemas.AuditRecord.properties.schemaVersion.const === 1, 'AuditRecord.schemaVersion must be 1');
 invariant(schemas.AuditRecord.properties.aggregateType.const === 'bff-session', 'AuditRecord.aggregateType must be bff-session');
@@ -219,6 +226,7 @@ const replacements = {
   __SITE_EQUIPMENT_PATH__: operations.listSiteEquipment.path,
   __EQUIPMENT_PATH__: operations.getEquipment.path,
   __SITE_DEVICES_PATH__: operations.listSiteDevices.path,
+  __SITE_DEVICE_BINDINGS_PATH__: operations.listSiteDeviceBindings.path,
   __DEVICE_PATH__: operations.getDevice.path,
 };
 

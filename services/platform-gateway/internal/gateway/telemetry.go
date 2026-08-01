@@ -78,10 +78,15 @@ type publicTelemetryRoute struct {
 	batch      bool
 	bootstrap  bool
 	checkpoint bool
+	history    bool
 }
 
 type telemetryAuthorization struct {
-	grant string
+	grant                string
+	principalID          string
+	policyRevision       string
+	owningOrganizationID string
+	siteID               string
 }
 
 type telemetryFailure struct {
@@ -484,7 +489,11 @@ func (h *handler) authorizeTelemetry(ctx context.Context, publicRequest *http.Re
 		failure := telemetryAuthorizationUnavailable("IAM returned a Telemetry decision outside the authenticated request boundary.")
 		return telemetryAuthorization{}, &failure
 	}
-	return telemetryAuthorization{grant: decision.DelegationGrant}, nil
+	authorizedTarget := decision.Decision.Targets[0]
+	return telemetryAuthorization{
+		grant: decision.DelegationGrant, principalID: decision.Decision.PrincipalID, policyRevision: decision.Decision.PolicyRevision,
+		owningOrganizationID: authorizedTarget.OwningOrganizationID, siteID: authorizedTarget.SiteID,
+	}, nil
 }
 
 func validateTelemetryDecision(decision telemetryauth.Decision, caller telemetryCaller, action telemetryauth.Action, expected []telemetryauth.Target, expectedDigest string) bool {
@@ -919,7 +928,11 @@ func validTelemetryTransportPosition(position s2telemetryapi.TransportPosition) 
 
 func dispatchTelemetryRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicTelemetryRoute, deviceID string) {
 	decision := routeDecisionFromContext(request.Context())
-	if decision.RegistryRevision != 0 && (decision.SelectedOwner != ownershipregistry.OwnerTelemetryRuntime || decision.ReadFallbackOwner != "" || decision.ShadowOwner != "") {
+	expectedOwner := ownershipregistry.OwnerTelemetryRuntime
+	if route.history {
+		expectedOwner = ownershipregistry.OwnerAnalyticsQuery
+	}
+	if decision.RegistryRevision != 0 && (decision.SelectedOwner != expectedOwner || decision.ReadFallbackOwner != "" || decision.ShadowOwner != "") {
 		h.writeTelemetryFailure(writer, request, telemetryUnavailable("The selected telemetry route owner is unavailable."))
 		return
 	}
@@ -978,6 +991,24 @@ func dispatchTelemetryRoute(h *handler, writer http.ResponseWriter, request *htt
 		h.CheckpointTelemetryRecoveryCursors(writer, request, input)
 		return
 	}
+	if route.history {
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
+			return
+		}
+		caller, ok := h.telemetryCaller(writer, request, true)
+		if !ok {
+			return
+		}
+		request = request.WithContext(context.WithValue(request.Context(), telemetryCallerContextKey, caller))
+		input, failure := parseTelemetryHistoryRequest(writer, request)
+		if failure != nil {
+			h.writeTelemetryFailure(writer, request, *failure)
+			return
+		}
+		h.QueryDeviceHistory(writer, request, input)
+		return
+	}
 	if request.Method != http.MethodGet {
 		writeMethodNotAllowedFor(writer, request, http.MethodGet)
 		return
@@ -999,6 +1030,9 @@ func matchPublicTelemetryRoute(path string) (publicTelemetryRoute, string, bool)
 	}
 	if path == s2telemetryapi.CheckpointTelemetryRecoveryCursorsPath {
 		return publicTelemetryRoute{template: s2telemetryapi.CheckpointTelemetryRecoveryCursorsPath, action: telemetryauth.ActionRecoveryCheckpoint, checkpoint: true}, "", true
+	}
+	if path == s2telemetryapi.QueryDeviceHistoryPath {
+		return publicTelemetryRoute{template: s2telemetryapi.QueryDeviceHistoryPath, action: telemetryauth.ActionHistoryRead, history: true}, "", true
 	}
 	deviceID, matches := matchSinglePathParameter(path, s2telemetryapi.GetDeviceObservationSnapshotPathTemplate, "{deviceId}")
 	if !matches {
@@ -1215,6 +1249,31 @@ func parseTelemetryCheckpointRequest(writer http.ResponseWriter, request *http.R
 			return input, &failure
 		}
 		seen[subscriptionID] = struct{}{}
+	}
+	return input, nil
+}
+
+func parseTelemetryHistoryRequest(writer http.ResponseWriter, request *http.Request) (s2telemetryapi.DeviceHistoryRequest, *telemetryFailure) {
+	var input s2telemetryapi.DeviceHistoryRequest
+	if request.URL.RawQuery != "" {
+		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_HISTORY_REQUEST_INVALID", "Device History request invalid", "The Device History route does not accept query parameters.", false}
+		return input, &failure
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumTelemetryRequestSize)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			failure := telemetryLimitExceeded("The Device History request body exceeds the maximum size.")
+			return input, &failure
+		}
+		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_HISTORY_REQUEST_INVALID", "Device History request invalid", "The Device History request is malformed.", false}
+		return input, &failure
+	}
+	if ensureTelemetryJSONEOF(decoder) != nil {
+		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_HISTORY_REQUEST_INVALID", "Device History request invalid", "The Device History request contains additional JSON data.", false}
+		return input, &failure
 	}
 	return input, nil
 }

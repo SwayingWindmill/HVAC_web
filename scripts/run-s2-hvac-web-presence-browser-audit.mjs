@@ -109,7 +109,7 @@ function principal() {
       audience: 'iam-service', policyRevision: 'policy-09', delegationExpiresAt: '2026-07-25T06:00:00.000Z',
     },
     authorization: {
-      capabilitySetVersion: 1,
+      capabilitySetVersion: 2,
       policyRevision: 'telemetry-access:1',
       capabilities: ['site.read', 'device.list', 'device.read'],
     },
@@ -533,6 +533,192 @@ try {
   assert(!organizationBState.text.includes('Alpha AHU Sensor') && !organizationBState.text.includes('Sibling Chiller Sensor'), 'Organization switch retained prior Organization state');
   assert(organizationBState.text.includes('真实模式') && !organizationBState.cachedDeviceIds.some((deviceId) => deviceId.startsWith('018f6a00-3000-7000-8000-00000000000')), 'Organization mismatch retained prior telemetry data');
   assertions.push('two-organization-dual-principal-fail-closed');
+
+  await cdpClient.send('Page.navigate', { url: `${webURL}/real-assets-v2` });
+  await waitForCondition(
+    cdpClient,
+    `Boolean(window.__REAL_ASSETS_REALTIME_CONTROL__)
+      && document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-business-state') === 'READY'
+      && document.querySelectorAll('.real-assets__table tbody tr').length === 2`,
+    'Real Assets v2 realtime list',
+  );
+  const realtimeListAudit = await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.audit()`);
+  assert(realtimeListAudit.opens.length === 0, 'Real Assets list opened an all-Device realtime subscription');
+
+  assert(await evaluate(cdpClient, `(() => {
+    const row = document.querySelector('tr[data-device-id="${ids.deviceA1}"]');
+    const button = row?.querySelector('[data-testid="real-assets-open-device"]');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  })()`), 'first realtime Device detail control was unavailable');
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state') === 'live'
+      && document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-source') === 'realtime'
+      && document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent?.includes('212.5 kW')`,
+    'Snapshot-first exact live baseline',
+  );
+  const firstRealtimeDetail = await evaluate(cdpClient, `({
+    pathname: location.pathname,
+    audit: window.__REAL_ASSETS_REALTIME_CONTROL__.audit(),
+    realtime: {
+      state: document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state'),
+      source: document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-source'),
+      revision: document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-revision'),
+      baseline: document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-baseline-revision'),
+    },
+  })`);
+  assert(firstRealtimeDetail.audit.opens.length === 1, 'opening one Device did not create exactly one live session');
+  assert(firstRealtimeDetail.audit.opens[0].deviceId === ids.deviceA1, 'first live session targeted the wrong Device');
+  assert(JSON.stringify(firstRealtimeDetail.audit.opens[0].keys) === JSON.stringify([
+    'chiller.run_state', 'chiller.power', 'chiller.cop', 'chiller.cooling_capacity',
+  ]), 'first live session did not use exact critical detail keys');
+  assert(firstRealtimeDetail.realtime.revision === '41' && firstRealtimeDetail.realtime.baseline === '40', 'Snapshot-first revision evidence was not observable');
+
+  assert(await evaluate(cdpClient, `(() => {
+    const row = document.querySelector('tr[data-device-id="${ids.deviceA2}"]');
+    const button = row?.querySelector('[data-testid="real-assets-open-device"]');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  })()`), 'second realtime Device detail control was unavailable');
+  await waitForCondition(
+    cdpClient,
+    `location.pathname.endsWith('/${ids.deviceA2}')
+      && window.__REAL_ASSETS_REALTIME_CONTROL__.audit().opens.length === 2
+      && window.__REAL_ASSETS_REALTIME_CONTROL__.audit().closeCount >= 1`,
+    'Device switch closes and reopens exact live session',
+  );
+  const switchedAudit = await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.audit()`);
+  assert(switchedAudit.opens[1].deviceId === ids.deviceA2, 'Device switch reopened the wrong live target');
+
+  assert(await evaluate(cdpClient, `(() => {
+    history.pushState(null, '', '/sites/${ids.siteA}/assets');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    return true;
+  })()`), 'realtime Device detail URL close could not be dispatched');
+  await waitForCondition(
+    cdpClient,
+    `!document.querySelector('[data-testid="real-assets-device-detail"]')
+      && window.__REAL_ASSETS_REALTIME_CONTROL__.audit().closeCount >= 2`,
+    'Device detail close ends exact live session',
+  );
+
+  assert(await evaluate(cdpClient, `(() => {
+    const row = document.querySelector('tr[data-device-id="${ids.deviceA2}"]');
+    const button = row?.querySelector('[data-testid="real-assets-open-device"]');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  })()`), 'reopen realtime Device detail control was unavailable');
+  await waitForCondition(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.audit().opens.length === 3`, 'reopened exact live session');
+
+  await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.setMode('live-update')`);
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-source') === 'realtime'
+      && document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-revision') === '42'
+      && document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent?.includes('220 kW')`,
+    'continuous live update',
+  );
+  await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.setMode('reconnect')`);
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state') === 'snapshot'
+      && document.querySelector('[data-testid="real-assets-device-realtime"]')?.textContent?.includes('正在重连')
+      && document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent?.includes('220 kW')`,
+    'reconnect retains authoritative Snapshot',
+  );
+  await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.setMode('gap')`);
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state') === 'unavailable'
+      && document.querySelector('[data-testid="real-assets-device-realtime"]')?.textContent?.includes('实时连续性需要重新同步')
+      && document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent?.includes('220 kW')`,
+    'revision gap retains Snapshot and requires recovery',
+  );
+  await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.setMode('outage')`);
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-assets-device-realtime"]')?.textContent?.includes('实时 transport 暂不可用')
+      && document.querySelector('[data-testid="real-assets-device-detail"]')?.textContent?.includes('220 kW')`,
+    'transport outage remains separate from current truth',
+  );
+  assert(await evaluate(cdpClient, `(() => {
+    const button = document.querySelector('[data-testid="real-assets-realtime-refresh"]');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  })()`), 'realtime recovery button was unavailable');
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state') === 'live'
+      && document.querySelector('[data-testid="real-assets-device-realtime"]')?.textContent?.includes('实时已恢复')`,
+    'manual live baseline recovery',
+  );
+
+  await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.setMode('revoke')`);
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state') === 'revoked'
+      && document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-source') === 'none'
+      && !document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('Business revision')`,
+    'realtime revocation clears protected Snapshot',
+  );
+  const revokedRealtimeAudit = await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.audit()`);
+  assert(revokedRealtimeAudit.purgeCount >= 1 && revokedRealtimeAudit.closeCount >= 3, 'revocation did not purge and close live state');
+  await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.setMode('live-update')`);
+  await pause(200);
+  assert(await evaluate(cdpClient, `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state') === 'revoked'
+    && !document.querySelector('[aria-labelledby="real-assets-detail-current"]')?.textContent?.includes('Business revision')`), 'late live update wrote after revocation');
+
+  await cdpClient.send('Page.navigate', { url: `${webURL}/real-assets-v2` });
+  await waitForCondition(cdpClient, `Boolean(window.__REAL_ASSETS_REALTIME_CONTROL__) && document.querySelectorAll('.real-assets__table tbody tr').length === 2`, 'reloaded realtime harness');
+  await cdpClient.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  assert(await evaluate(cdpClient, `(() => {
+    const row = document.querySelector('tr[data-device-id="${ids.deviceA1}"]');
+    const button = row?.querySelector('[data-testid="real-assets-open-device"]');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  })()`), 'mobile realtime Device detail control was unavailable');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-assets-device-realtime"]')?.getAttribute('data-realtime-state') === 'live'`, 'mobile realtime detail');
+  const mobileRealtime = await evaluate(cdpClient, `(() => {
+    const drawer = document.querySelector('[data-testid="real-assets-device-detail"]');
+    const status = document.querySelector('[data-testid="real-assets-device-realtime"]');
+    return {
+      documentOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+      drawerOverflow: drawer ? drawer.scrollWidth > drawer.clientWidth + 1 : true,
+      statusOverflow: status ? status.scrollWidth > status.clientWidth + 1 : true,
+      focusedHeading: document.activeElement?.id === 'real-assets-detail-title',
+    };
+  })()`);
+  assert(!mobileRealtime.documentOverflow && !mobileRealtime.drawerOverflow && !mobileRealtime.statusOverflow && mobileRealtime.focusedHeading, 'mobile realtime detail overflowed or lost focus');
+  const purgeOutcome = await evaluate(cdpClient, `window.__REAL_ASSETS_REALTIME_CONTROL__.purgeScope()`);
+  await waitForCondition(
+    cdpClient,
+    `!document.querySelector('[data-testid="real-assets-device-detail"]')
+      && window.__REAL_ASSETS_REALTIME_CONTROL__.audit().purgeCount >= 1
+      && window.__REAL_ASSETS_REALTIME_CONTROL__.protectedScope().resourceCount === 0`,
+    'ProtectedScope realtime purge',
+  );
+  assert(purgeOutcome.status === 'completed', 'ProtectedScope purge did not complete');
+  await cdpClient.send('Emulation.clearDeviceMetricsOverride');
+  assertions.push('real-assets-v2-exact-device-realtime-lifecycle');
+  assertions.push('real-assets-v2-recovery-revocation-protected-purge');
+  stateEvidence.realAssetsRealtime = {
+    listSubscriptionCount: realtimeListAudit.opens.length,
+    exactKeys: firstRealtimeDetail.audit.opens[0].keys,
+    snapshotFirst: true,
+    liveRevision: 42,
+    reconnectRetainedSnapshot: true,
+    gapRequiredRecovery: true,
+    revocationPurged: true,
+    lateEventIgnored: true,
+    mobileOverflow: false,
+    protectedPurge: purgeOutcome.status,
+  };
 
   accessibility = await evaluate(cdpClient, `(() => {
     const unnamedButtons = Array.from(document.querySelectorAll('button')).filter((button) => {

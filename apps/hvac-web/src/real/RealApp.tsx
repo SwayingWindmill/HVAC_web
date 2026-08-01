@@ -172,6 +172,7 @@ export default function RealApp({ config }: RealAppProps) {
     (draft: Parameters<typeof runtime.registerUnsavedDraft>[0]) => runtime.registerUnsavedDraft(draft),
     [runtime],
   );
+  const protectedRequestToken = useCallback(() => runtime.protectedRequestToken(), [runtime]);
 
   const pathname = window.location.pathname;
   const platformAvailability = snapshot.platform?.state ?? 'checking';
@@ -198,9 +199,12 @@ export default function RealApp({ config }: RealAppProps) {
     || siteDecision?.state === 'SITE_SCOPE_ACTIVATING'
     ? siteDecision.context.site
     : undefined;
+  const scopedPlatformNavigation = selectedSite
+    ? platformNavigation.filter((item) => item.id !== 'alarms')
+    : platformNavigation;
   const navigation = selectedSite && snapshot.principal
     ? [
-      ...platformNavigation,
+      ...scopedPlatformNavigation,
       ...buildSiteNavigation(selectedSite, snapshot.principal.authorization.capabilities),
     ]
     : platformNavigation;
@@ -255,6 +259,7 @@ export default function RealApp({ config }: RealAppProps) {
           confirmSiteNavigation={confirmSiteNavigation}
           cancelSiteNavigation={cancelSiteNavigation}
           registerProtectedResource={registerProtectedResource}
+          protectedRequestToken={protectedRequestToken}
           registerUnsavedDraft={registerUnsavedDraft}
         />
       ) : null}

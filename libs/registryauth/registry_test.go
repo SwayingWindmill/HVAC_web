@@ -128,14 +128,31 @@ func TestDecisionRequestRequiresConcreteActionAndActingOrganization(t *testing.T
 		{ActingOrganizationID: ownerA},
 		{ActingOrganizationID: ownerA, Action: registryauth.ActionRegistryRead},
 		{ActingOrganizationID: ownerA, Action: registryauth.Action("registry.delete")},
+		{ActingOrganizationID: ownerA, Action: registryauth.ActionSiteRead, GrantPresenter: "not-a-spiffe-id"},
+		{ActingOrganizationID: ownerA, Action: registryauth.ActionSiteRead, GrantPresenter: "spiffe://" + strings.Repeat("x", 513)},
 	}
 	for _, request := range cases {
 		if err := request.Validate(); err == nil {
 			t.Fatalf("invalid request was accepted: %#v", request)
 		}
 	}
-	if err := (registryauth.DecisionRequest{ActingOrganizationID: ownerA, Action: registryauth.ActionSiteRead}).Validate(); err != nil {
-		t.Fatalf("valid request was rejected: %v", err)
+	for _, request := range []registryauth.DecisionRequest{
+		{ActingOrganizationID: ownerA, Action: registryauth.ActionSiteRead},
+		{
+			ActingOrganizationID: ownerA,
+			Action:               registryauth.ActionSiteRead,
+			GrantPresenter:       "spiffe://hvac.local/operations-agent-service",
+		},
+	} {
+		if err := request.Validate(); err != nil {
+			t.Fatalf("valid request was rejected: %v", err)
+		}
+	}
+	if err := (registryauth.DecisionRequest{ActingOrganizationID: ownerA, Action: registryauth.ActionDeviceBindingList}).Validate(); err != nil {
+		t.Fatalf("valid DeviceBinding request was rejected: %v", err)
+	}
+	if !registryauth.ActionDeviceBindingList.SiteScoped() {
+		t.Fatal("DeviceBinding list action must remain Site scoped")
 	}
 }
 

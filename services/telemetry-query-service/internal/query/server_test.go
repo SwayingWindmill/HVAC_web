@@ -18,15 +18,17 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
 	"github.com/quanlaihe/hvac-web/services/telemetry-query-service/internal/analytics"
 )
 
 const (
-	testPresenter      = "spiffe://hvac.local/platform-gateway"
-	testAudience       = "telemetry-query-service"
-	testOrganizationID = "018f1e00-0000-7000-8000-000000000001"
-	testSiteID         = "018f1e00-1000-7000-8000-000000000001"
-	testPrincipalID    = "018f1e00-2000-7000-8000-000000000001"
+	testPresenter           = "spiffe://hvac.local/platform-gateway"
+	testOperationsPresenter = "spiffe://hvac.local/operations-agent-service"
+	testAudience            = "telemetry-query-service"
+	testOrganizationID      = "018f1e00-0000-7000-8000-000000000001"
+	testSiteID              = "018f1e00-1000-7000-8000-000000000001"
+	testPrincipalID         = "018f1e00-2000-7000-8000-000000000001"
 )
 
 type engineStub struct {
@@ -40,6 +42,19 @@ type engineStub struct {
 func (stub *engineStub) QueryEnergySeries(_ context.Context, caller analytics.CallerContext, query analyticsmodel.EnergySeriesQuery) (analyticsmodel.EnergySeriesResponse, error) {
 	stub.calls++
 	stub.caller = caller
+	stub.query = query
+	return stub.response, stub.err
+}
+
+type historyEngineStub struct {
+	response telemetryhistorymodel.DeviceHistoryResponse
+	err      error
+	query    telemetryhistorymodel.DeviceHistoryQuery
+	calls    int
+}
+
+func (stub *historyEngineStub) QueryDeviceHistory(_ context.Context, query telemetryhistorymodel.DeviceHistoryQuery) (telemetryhistorymodel.DeviceHistoryResponse, error) {
+	stub.calls++
 	stub.query = query
 	return stub.response, stub.err
 }
@@ -73,6 +88,27 @@ func TestHandlerReturnsAuthorizedEnergySeries(t *testing.T) {
 	}
 	if len(body.Points) != 1 || body.Points[0].EnergyKWh != 123.5 {
 		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestHandlerAcceptsGatewayIssuedGrantForOperationsAgentPresenter(t *testing.T) {
+	now := time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC)
+	query := validEnergyQuery()
+	engine := &engineStub{response: analyticsmodel.EnergySeriesResponse{
+		SchemaVersion: 1,
+		Metadata: analyticsmodel.EnergySeriesMetadata{
+			RequestedGranularity: query.Granularity,
+			ActualGranularity:    query.Granularity,
+			DatasetRevision:      "energy-daily:v1",
+		},
+	}}
+	harness := newServerHarness(t, now, engine)
+	response := harness.serveAsPresenter(t, query, testOperationsPresenter)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
+	}
+	if engine.calls != 1 {
+		t.Fatalf("engine calls = %d", engine.calls)
 	}
 }
 
@@ -153,11 +189,14 @@ func newServerHarness(t *testing.T, now time.Time, engine analytics.EnergySeries
 	}
 	return serverHarness{
 		handler: NewHandler(ServerConfig{
-			Engine:                 engine,
-			DelegationPublicKey:    signer.Public(),
-			AllowedPresenterSPIFFE: testPresenter,
-			Audience:               testAudience,
-			Now:                    func() time.Time { return now },
+			Engine:                            engine,
+			HistoryEngine:                     &historyEngineStub{},
+			DelegationPublicKey:               signer.Public(),
+			DelegationIssuerSPIFFE:            testPresenter,
+			AllowedPresenterSPIFFE:            testPresenter,
+			AdditionalAllowedPresenterSPIFFEs: []string{testOperationsPresenter},
+			Audience:                          testAudience,
+			Now:                               func() time.Time { return now },
 		}),
 		signer: signer,
 		now:    now,
@@ -169,12 +208,56 @@ func (harness serverHarness) serve(t *testing.T, query analyticsmodel.EnergySeri
 	return harness.serveWithGrantQuery(t, query, query, headers, action)
 }
 
+func (harness serverHarness) serveAsPresenter(
+	t *testing.T,
+	query analyticsmodel.EnergySeriesQuery,
+	presenterSPIFFE string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	return harness.serveWithGrant(
+		t,
+		query,
+		query,
+		nil,
+		analyticsmodel.EnergySeriesAction,
+		testPrincipalID,
+		harness.now.Add(-time.Second),
+		harness.now.Add(30*time.Second),
+		presenterSPIFFE,
+	)
+}
+
 func (harness serverHarness) serveWithGrantQuery(t *testing.T, query, grantQuery analyticsmodel.EnergySeriesQuery, headers http.Header, action string) *httptest.ResponseRecorder {
 	t.Helper()
 	return harness.serveWithGrantTimes(t, query, grantQuery, headers, action, testPrincipalID, harness.now.Add(-time.Second), harness.now.Add(30*time.Second))
 }
 
 func (harness serverHarness) serveWithGrantTimes(t *testing.T, query, grantQuery analyticsmodel.EnergySeriesQuery, headers http.Header, action, principalID string, issuedAt, expiresAt time.Time) *httptest.ResponseRecorder {
+	t.Helper()
+	return harness.serveWithGrant(
+		t,
+		query,
+		grantQuery,
+		headers,
+		action,
+		principalID,
+		issuedAt,
+		expiresAt,
+		testPresenter,
+	)
+}
+
+func (harness serverHarness) serveWithGrant(
+	t *testing.T,
+	query,
+	grantQuery analyticsmodel.EnergySeriesQuery,
+	headers http.Header,
+	action,
+	principalID string,
+	issuedAt,
+	expiresAt time.Time,
+	presenterSPIFFE string,
+) *httptest.ResponseRecorder {
 	t.Helper()
 	payload, err := json.Marshal(query)
 	if err != nil {
@@ -189,7 +272,7 @@ func (harness serverHarness) serveWithGrantTimes(t *testing.T, query, grantQuery
 		Subject:              "user-1",
 		SubjectIssuer:        "issuer-test",
 		PrincipalID:          principalID,
-		ExecutingService:     testPresenter,
+		ExecutingService:     presenterSPIFFE,
 		Audience:             testAudience,
 		ActingOrganizationID: testOrganizationID,
 		Actions:              []string{action},
@@ -209,7 +292,7 @@ func (harness serverHarness) serveWithGrantTimes(t *testing.T, query, grantQuery
 	for name, values := range headers {
 		request.Header[name] = append([]string(nil), values...)
 	}
-	spiffe, err := url.Parse(testPresenter)
+	spiffe, err := url.Parse(presenterSPIFFE)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,10 +1,10 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import type { Capability, Site } from '@/api/generated/platformGateway.gen';
 import { FocusHeading } from './FocusHeading';
 import { createIdleRealtimeStatus, realtimeStatusLabel } from './realtime-status';
 import { RealShellChrome } from './RealShellChrome';
 import type { RealNavigationItem } from './route-policy';
-import type { ProtectedScopeDraft, ProtectedScopeResource } from './protected-scope';
+import type { ProtectedScopeDraft, ProtectedScopeRequestToken, ProtectedScopeResource } from './protected-scope';
 import type { RealRuntimeConfig } from './runtime-config';
 import type { ShellFailureView, ShellSnapshot } from './shell-runtime';
 import { siteRoute, type SiteContext, type SiteRoutingDecision } from './site-routing';
@@ -14,9 +14,29 @@ const RealDashboard = lazy(async () => {
   return { default: module.RealDashboard };
 });
 
+const RealAssetsWorkspace = lazy(async () => {
+  const module = await import('./assets/RealAssetsWorkspace');
+  return { default: module.RealAssetsWorkspace };
+});
+
 const EnergyAnalytics = lazy(async () => {
   const module = await import('./EnergyAnalytics');
   return { default: module.EnergyAnalytics };
+});
+
+const RealCommands = lazy(async () => {
+  const module = await import('./RealCommands');
+  return { default: module.RealCommands };
+});
+
+const RealAlarms = lazy(async () => {
+  const module = await import('./RealAlarms');
+  return { default: module.RealAlarms };
+});
+
+const OperationsInvestigation = lazy(async () => {
+  const module = await import('./OperationsInvestigation');
+  return { default: module.OperationsInvestigation };
 });
 
 type RoutedSiteDecision = Exclude<SiteRoutingDecision, { state: 'PLATFORM_ROUTE' }>;
@@ -204,11 +224,6 @@ function SiteRouteNotFoundSurface({ decision }: { decision: Extract<SiteRoutingD
 }
 
 const SITE_ROUTE_COPY = {
-  dashboard: {
-    eyebrow: 'REAL MODE · SITE DASHBOARD',
-    title: 'Dashboard',
-    detail: 'Dashboard 只汇总 Registry、当前遥测与 Energy Analytics 的权威事实。',
-  },
   assets: {
     eyebrow: 'REAL MODE · SITE ASSETS',
     title: 'Assets',
@@ -218,6 +233,11 @@ const SITE_ROUTE_COPY = {
     eyebrow: 'REAL MODE · SITE ENERGY',
     title: 'Energy',
     detail: 'Energy 路由只消费 Platform Gateway 的 Site 级权威分析接口，并保留水位、修订、质量和缺失数据语义。',
+  },
+  alarms: {
+    eyebrow: 'REAL MODE · SITE ALARMS',
+    title: 'Alarm',
+    detail: 'Alarm 路由只消费 Alarm Service 发布的 durable lifecycle，不从 Telemetry 或 Presence 推导业务告警。',
   },
   commands: {
     eyebrow: 'REAL MODE · SITE COMMANDS',
@@ -231,47 +251,17 @@ const SITE_ROUTE_COPY = {
   },
 } as const;
 
-function CommandDraft({
-  decision,
-  registerUnsavedDraft,
-}: {
-  decision: Extract<SiteRoutingDecision, { state: 'READY' }>;
-  registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
-}) {
-  const valueRef = useRef('');
-  const [value, setValue] = useState('');
-
-  useEffect(() => registerUnsavedDraft({
-    id: `command-draft:${decision.context.site.id}`,
-    label: `Command draft for ${decision.context.site.displayName}`,
-    isDirty: () => valueRef.current.trim().length > 0,
-  }), [decision.context.site.displayName, decision.context.site.id, registerUnsavedDraft]);
-
-  return (
-    <section className="real-command-draft" data-testid="real-command-draft">
-      <h2>Unsaved command draft</h2>
-      <p>此草稿仅保存在当前受保护内存中，不会发送命令，也不会跨 Site 保留。</p>
-      <label htmlFor="real-command-draft-value">Draft note</label>
-      <textarea
-        id="real-command-draft-value"
-        value={value}
-        onChange={(event) => {
-          valueRef.current = event.currentTarget.value;
-          setValue(event.currentTarget.value);
-        }}
-        data-testid="real-command-draft-value"
-      />
-    </section>
-  );
-}
-
 function ReadySiteSurface({
   decision,
   snapshot,
+  registerProtectedResource,
+  protectedRequestToken,
   registerUnsavedDraft,
 }: {
   decision: Extract<SiteRoutingDecision, { state: 'READY' }>;
   snapshot: ShellSnapshot;
+  registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  protectedRequestToken: () => ProtectedScopeRequestToken;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
   if (decision.route === 'dashboard') {
@@ -293,6 +283,31 @@ function ReadySiteSurface({
     );
   }
 
+  if (decision.route === 'assets') {
+    return (
+      <Suspense fallback={(
+        <section
+          className="real-route-surface"
+          data-testid="real-site-route-assets"
+          data-route-state="READY"
+          data-business-state="LOADING"
+          data-site-id={decision.context.site.id}
+        >
+          <div className="real-shell-progress" role="status" aria-live="polite">正在加载资产运行工作台…</div>
+        </section>
+      )}>
+        <RealAssetsWorkspace
+          site={decision.context.site}
+          principal={snapshot.principal!}
+          requestedDeviceId={decision.deviceId}
+          protectedGeneration={snapshot.protectedScope!.generation}
+          protectedRequestToken={protectedRequestToken}
+          registerProtectedResource={registerProtectedResource}
+        />
+      </Suspense>
+    );
+  }
+
   if (decision.route === 'energy') {
     return (
       <section
@@ -308,6 +323,79 @@ function ReadySiteSurface({
           </div>
         )}>
           <EnergyAnalytics site={decision.context.site} principal={snapshot.principal!} />
+        </Suspense>
+      </section>
+    );
+  }
+
+  if (decision.route === 'alarms') {
+    return (
+      <section
+        className="real-route-surface real-route-surface--alarms"
+        data-testid="real-site-route-alarms"
+        data-route-state="READY"
+        data-site-id={decision.context.site.id}
+        data-site-route="alarms"
+      >
+        <Suspense fallback={(
+          <div className="real-shell-progress" role="status" aria-live="polite">
+            正在加载 Alarm 界面…
+          </div>
+        )}>
+          <RealAlarms
+            site={decision.context.site}
+            principal={snapshot.principal!}
+            registerUnsavedDraft={registerUnsavedDraft}
+            registerProtectedResource={registerProtectedResource}
+          />
+        </Suspense>
+      </section>
+    );
+  }
+
+  if (decision.route === 'operations') {
+    return (
+      <section
+        className="real-route-surface real-route-surface--operations"
+        data-route-state="READY"
+        data-site-id={decision.context.site.id}
+        data-site-route="operations"
+      >
+        <Suspense fallback={(
+          <div className="real-shell-progress" role="status" aria-live="polite">
+            正在加载 Operations Investigation…
+          </div>
+        )}>
+          <OperationsInvestigation
+            site={decision.context.site}
+            principal={snapshot.principal!}
+            registerProtectedResource={registerProtectedResource}
+          />
+        </Suspense>
+      </section>
+    );
+  }
+
+  if (decision.route === 'commands') {
+    return (
+      <section
+        className="real-route-surface real-route-surface--commands"
+        data-testid="real-site-route-commands"
+        data-route-state="READY"
+        data-site-id={decision.context.site.id}
+        data-site-route="commands"
+      >
+        <Suspense fallback={(
+          <div className="real-shell-progress" role="status" aria-live="polite">
+            正在加载 Command 工作台…
+          </div>
+        )}>
+          <RealCommands
+            site={decision.context.site}
+            principal={snapshot.principal!}
+            registerUnsavedDraft={registerUnsavedDraft}
+            registerProtectedResource={registerProtectedResource}
+          />
         </Suspense>
       </section>
     );
@@ -342,9 +430,6 @@ function ReadySiteSurface({
       >
         Realtime scope: {realtimeStatusLabel(realtime)} for {decision.context.site.displayName}
       </div>
-      {decision.route === 'commands' ? (
-        <CommandDraft decision={decision} registerUnsavedDraft={registerUnsavedDraft} />
-      ) : null}
       <p>当前业务数据状态为 EMPTY；这不代表权限拒绝、服务不可用或 Demo 数据。</p>
     </section>
   );
@@ -370,11 +455,13 @@ function ProtectedSiteRouteFrame({
   decision,
   snapshot,
   registerProtectedResource,
+  protectedRequestToken,
   registerUnsavedDraft,
 }: {
   decision: Extract<SiteRoutingDecision, { state: 'READY' }>;
   snapshot: ShellSnapshot;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  protectedRequestToken: () => ProtectedScopeRequestToken;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
   useEffect(() => registerProtectedResource({
@@ -387,6 +474,8 @@ function ProtectedSiteRouteFrame({
     <ReadySiteSurface
       decision={decision}
       snapshot={snapshot}
+      registerProtectedResource={registerProtectedResource}
+      protectedRequestToken={protectedRequestToken}
       registerUnsavedDraft={registerUnsavedDraft}
     />
   );
@@ -397,12 +486,14 @@ function SiteSurface({
   snapshot,
   retry,
   registerProtectedResource,
+  protectedRequestToken,
   registerUnsavedDraft,
 }: {
   decision: SiteShellDecision;
   snapshot: ShellSnapshot;
   retry: () => void;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  protectedRequestToken: () => ProtectedScopeRequestToken;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
   switch (decision.state) {
@@ -430,6 +521,7 @@ function SiteSurface({
           decision={decision}
           snapshot={snapshot}
           registerProtectedResource={registerProtectedResource}
+          protectedRequestToken={protectedRequestToken}
           registerUnsavedDraft={registerUnsavedDraft}
         />
       );
@@ -445,6 +537,8 @@ export function buildSiteNavigation(
     { id: 'site-dashboard', label: 'Dashboard', path: siteRoute(site, 'dashboard'), kind: 'link', degraded: false },
     { id: 'site-assets', label: 'Assets', path: siteRoute(site, 'assets'), kind: 'link', degraded: false },
     { id: 'site-energy', label: 'Energy', path: siteRoute(site, 'energy'), kind: 'link', degraded: false },
+    { id: 'site-alarms', label: 'Alarm', path: siteRoute(site, 'alarms'), kind: 'link', degraded: false },
+    { id: 'site-operations', label: 'Operations', path: siteRoute(site, 'operations'), kind: 'link', degraded: false },
     { id: 'site-commands', label: 'Commands', path: siteRoute(site, 'commands'), kind: 'link', degraded: false },
     { id: 'site-bigscreen', label: 'BigScreen', path: siteRoute(site, 'bigscreen'), kind: 'link', degraded: false },
   ];
@@ -461,6 +555,7 @@ export function SiteScopedShell({
   confirmSiteNavigation,
   cancelSiteNavigation,
   registerProtectedResource,
+  protectedRequestToken,
   registerUnsavedDraft,
 }: {
   config: RealRuntimeConfig;
@@ -473,6 +568,7 @@ export function SiteScopedShell({
   confirmSiteNavigation: () => void;
   cancelSiteNavigation: () => void;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  protectedRequestToken: () => ProtectedScopeRequestToken;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
   return (
@@ -497,6 +593,7 @@ export function SiteScopedShell({
         snapshot={snapshot}
         retry={retry}
         registerProtectedResource={registerProtectedResource}
+        protectedRequestToken={protectedRequestToken}
         registerUnsavedDraft={registerUnsavedDraft}
       />
     </RealShellChrome>

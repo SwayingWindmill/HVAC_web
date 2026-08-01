@@ -107,7 +107,7 @@ The fixture covers direct Owner A membership plus role, a cross-Organization Sit
 
 ## Header and claim boundary
 
-IAM rejects client-supplied Principal, Role, Organization, Site, admin or scope headers, including prefixed variants. Mutable email, display name, Logto organization, role and custom claims do not select or expand Registry authorization facts. Registry decisions use only the verified external issuer/subject plus platform-owned Membership/Binding/Policy data.
+IAM rejects client-supplied Principal, Role, Organization, Site, admin or scope headers, including prefixed variants. Mutable email, display name, Logto organization, role and custom claims do not select or expand Registry authorization facts. Registry decisions use only the verified external issuer/subject plus platform-owned Membership/Binding/Policy data. A trusted Gateway caller may request a Registry grant for an explicitly allowlisted downstream presenter such as Operations Agent; IAM signs that presenter directly and rejects arbitrary presenter expansion.
 
 Decision telemetry contains safe identifiers, action, reason, policy revision, scope counts and trace correlation. It does not contain provider tokens, cookies, raw delegations, email or display name.
 
@@ -121,6 +121,7 @@ Decision telemetry contains safe identifiers, action, reason, policy revision, s
 - `IAM_CORE_WORKLOAD_SPIFFE`
 - `IAM_AUDIENCE`
 - `IAM_REGISTRY_GRANT_AUDIENCE`
+- `IAM_OPERATIONS_AGENT_SPIFFE`
 - `IAM_POLICY_REVISION`
 - `IAM_DATABASE_URL`
 - `IAM_S1_AUTHORIZATION_FIXTURE`

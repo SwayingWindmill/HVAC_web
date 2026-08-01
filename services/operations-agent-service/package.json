@@ -17,7 +17,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "boundaries": "node ../../scripts/check-operations-agent-service-boundaries.mjs",
-    "test": "npm run build && node --test ../../scripts/test-operations-agent-service-boundaries.mjs test/operations-investigation.test.mjs test/investigation-coordinator.test.mjs test/investigation-coordinator.acceptance.test.mjs",
+    "test": "npm run build && node --test ../../scripts/test-operations-agent-service-boundaries.mjs test/business-records.test.mjs test/operations-investigation.test.mjs test/investigation-coordinator.test.mjs test/investigation-coordinator.acceptance.test.mjs test/langgraph-runtime.test.mjs test/owner-read-adapters.test.mjs test/night-energy-analysis.test.mjs test/site-night-energy-investigation.test.mjs test/ag-ui-projection.test.mjs test/operations-agent-http.test.mjs",
     "test:acceptance": "npm run build && node --test test/investigation-coordinator.acceptance.test.mjs",
     "test:postgres": "node ../../scripts/run-operations-agent-postgres-tests.mjs",
     "migrate:operations": "node ../../scripts/run-operations-agent-migration.mjs operations",
@@ -28,9 +28,11 @@
     "node": ">=22.22.0"
   },
   "dependencies": {
+    "@langchain/langgraph": "1.4.8",
     "pg": "^8.22.0"
   },
   "devDependencies": {
+    "@types/node": "^26.1.2",
     "@types/pg": "^8.20.0"
   }
 }

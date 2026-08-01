@@ -23,18 +23,20 @@ import (
 )
 
 const (
-	testGrantIssuer   = "spiffe://hvac.local/iam-service"
-	testPresenter     = "spiffe://hvac.local/platform-gateway"
-	testAudience      = "platform-core-service"
-	testPolicy        = "registry-read:1"
-	testPrincipal     = "018f1e00-2000-7000-8000-000000000002"
-	testOrganizationA = "018f1e00-0000-7000-8000-000000000001"
-	testOrganizationB = "018f1e00-0000-7000-8000-000000000002"
-	testActingOrg     = "018f1e00-0000-7000-8000-000000000003"
-	testSiteA1        = "018f1e00-1000-7000-8000-000000000001"
-	testSiteA2        = "018f1e00-1000-7000-8000-000000000002"
-	testEquipmentA1   = "018f1e00-3000-7000-8000-000000000001"
-	testDeviceA1      = "018f1e00-4000-7000-8000-000000000001"
+	testGrantIssuer         = "spiffe://hvac.local/iam-service"
+	testPresenter           = "spiffe://hvac.local/platform-gateway"
+	testOperationsPresenter = "spiffe://hvac.local/operations-agent-service"
+	testAudience            = "platform-core-service"
+	testPolicy              = "registry-read:1"
+	testPrincipal           = "018f1e00-2000-7000-8000-000000000002"
+	testOrganizationA       = "018f1e00-0000-7000-8000-000000000001"
+	testOrganizationB       = "018f1e00-0000-7000-8000-000000000002"
+	testActingOrg           = "018f1e00-0000-7000-8000-000000000003"
+	testSiteA1              = "018f1e00-1000-7000-8000-000000000001"
+	testSiteA2              = "018f1e00-1000-7000-8000-000000000002"
+	testEquipmentA1         = "018f1e00-3000-7000-8000-000000000001"
+	testDeviceA1            = "018f1e00-4000-7000-8000-000000000001"
+	testBindingA1           = "018f1e00-5000-7000-8000-000000000001"
 )
 
 type countingGrantStatusProvider struct {
@@ -56,6 +58,7 @@ type fakeRegistryStore struct {
 	equipmentItem Equipment
 	devices       PageResult[Device]
 	device        Device
+	bindings      PageResult[DeviceBinding]
 	err           error
 	lastClaims    registryauth.GrantClaims
 	lastPage      PageRequest
@@ -94,6 +97,10 @@ func (store *fakeRegistryStore) GetDevice(_ context.Context, claims registryauth
 	store.lastClaims, store.lastID = claims, id
 	return store.device, store.err
 }
+func (store *fakeRegistryStore) ListDeviceBindings(_ context.Context, claims registryauth.GrantClaims, id string, page PageRequest) (PageResult[DeviceBinding], error) {
+	store.lastClaims, store.lastID, store.lastPage = claims, id, page
+	return store.bindings, store.err
+}
 
 func TestServerListsOrganizationsAndReturnsBoundCursor(t *testing.T) {
 	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
@@ -123,6 +130,27 @@ func TestServerListsOrganizationsAndReturnsBoundCursor(t *testing.T) {
 	}
 }
 
+func TestServerAcceptsIAMGrantBoundToOperationsAgentPresenter(t *testing.T) {
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	store := &fakeRegistryStore{site: Site{ID: testSiteA1, OwningOrganizationID: testOrganizationA}}
+	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	claims := testGrantClaims(registryauth.ActionSiteRead)
+	response, _ := harness.serveAndGrantAsPresenter(
+		t,
+		http.MethodGet,
+		RegistryPathPrefix+"sites/"+testSiteA1,
+		claims,
+		nil,
+		testOperationsPresenter,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
+	}
+	if store.lastClaims.Presenter != testOperationsPresenter {
+		t.Fatalf("presenter = %q", store.lastClaims.Presenter)
+	}
+}
+
 func TestServerRoutesAllRegistryReadsThroughConcreteGrantActions(t *testing.T) {
 	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	store := &fakeRegistryStore{
@@ -133,6 +161,7 @@ func TestServerRoutesAllRegistryReadsThroughConcreteGrantActions(t *testing.T) {
 		equipmentItem: Equipment{ID: testEquipmentA1},
 		devices:       PageResult[Device]{Items: []Device{}},
 		device:        Device{ID: testDeviceA1},
+		bindings:      PageResult[DeviceBinding]{Items: []DeviceBinding{{ID: testBindingA1}}},
 	}
 	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
 	tests := []struct {
@@ -145,6 +174,7 @@ func TestServerRoutesAllRegistryReadsThroughConcreteGrantActions(t *testing.T) {
 		{RegistryPathPrefix + "sites/" + testSiteA1 + "/equipment", registryauth.ActionEquipmentList},
 		{RegistryPathPrefix + "equipment/" + testEquipmentA1, registryauth.ActionEquipmentRead},
 		{RegistryPathPrefix + "sites/" + testSiteA1 + "/devices", registryauth.ActionDeviceList},
+		{RegistryPathPrefix + "sites/" + testSiteA1 + "/device-bindings", registryauth.ActionDeviceBindingList},
 		{RegistryPathPrefix + "devices/" + testDeviceA1, registryauth.ActionDeviceRead},
 	}
 	for _, test := range tests {
@@ -258,15 +288,16 @@ func newCoreHarnessWithLogger(t *testing.T, now time.Time, store RegistryStore, 
 	}
 	return coreHarness{
 		handler: NewHandler(ServerConfig{
-			Store:                  store,
-			CursorCodec:            codec,
-			GrantPublicKey:         &signer.PublicKey,
-			GrantIssuer:            testGrantIssuer,
-			AllowedPresenterSPIFFE: testPresenter,
-			Audience:               testAudience,
-			GrantStatus:            status,
-			Logger:                 logger,
-			Now:                    func() time.Time { return now },
+			Store:                             store,
+			CursorCodec:                       codec,
+			GrantPublicKey:                    &signer.PublicKey,
+			GrantIssuer:                       testGrantIssuer,
+			AllowedPresenterSPIFFE:            testPresenter,
+			AdditionalAllowedPresenterSPIFFEs: []string{testOperationsPresenter},
+			Audience:                          testAudience,
+			GrantStatus:                       status,
+			Logger:                            logger,
+			Now:                               func() time.Time { return now },
 		}),
 		signer: signer,
 		peer:   peer,
@@ -282,8 +313,21 @@ func (harness coreHarness) serve(t *testing.T, method, path string, claims regis
 
 func (harness coreHarness) serveAndGrant(t *testing.T, method, path string, claims registryauth.GrantClaims, headers http.Header) (*httptest.ResponseRecorder, string) {
 	t.Helper()
+	return harness.serveAndGrantAsPresenter(t, method, path, claims, headers, testPresenter)
+}
+
+func (harness coreHarness) serveAndGrantAsPresenter(
+	t *testing.T,
+	method,
+	path string,
+	claims registryauth.GrantClaims,
+	headers http.Header,
+	presenterSPIFFE string,
+) (*httptest.ResponseRecorder, string) {
+	t.Helper()
 	claims.IssuedAt = harness.now.Unix()
 	claims.ExpiresAt = harness.now.Add(20 * time.Second).Unix()
+	claims.Presenter = presenterSPIFFE
 	grant, err := registryauth.SignGrant(harness.signer, claims)
 	if err != nil {
 		t.Fatal(err)
@@ -293,9 +337,14 @@ func (harness coreHarness) serveAndGrant(t *testing.T, method, path string, clai
 	for name, values := range headers {
 		request.Header[name] = append([]string(nil), values...)
 	}
+	peerURI, err := url.Parse(presenterSPIFFE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := &x509.Certificate{URIs: []*url.URL{peerURI}}
 	request.TLS = &tls.ConnectionState{
-		PeerCertificates: []*x509.Certificate{harness.peer},
-		VerifiedChains:   [][]*x509.Certificate{{harness.peer}},
+		PeerCertificates: []*x509.Certificate{peer},
+		VerifiedChains:   [][]*x509.Certificate{{peer}},
 	}
 	recorder := httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, request)

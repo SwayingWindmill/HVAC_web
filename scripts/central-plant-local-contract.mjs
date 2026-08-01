@@ -18,6 +18,7 @@ export const telemetryActions = Object.freeze([
   'telemetry.snapshot.read',
   'telemetry.batch.read',
   'telemetry.subscribe',
+  'telemetry.history.read',
   'telemetry.resubscribe',
   'telemetry.recovery.use',
   'telemetry.recovery.checkpoint',

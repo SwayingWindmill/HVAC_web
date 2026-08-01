@@ -110,3 +110,19 @@ test('an authorized Site without site.read remains generically forbidden', () =>
   assert.equal('context' in decision, false);
   assert.equal('siteId' in decision, false);
 });
+
+
+test('Assets accepts one opaque Device selector while other extra segments remain not found', () => {
+  const deviceId = '01900000-0011-7000-8000-000000000011';
+  const detail = routing.resolveSiteRouting('/sites/' + siteAId + '/assets/' + deviceId, [siteA], ['site.read']);
+  assert.equal(detail.state, 'READY');
+  assert.equal(detail.route, 'assets');
+  assert.equal(detail.deviceId, deviceId);
+
+  const invalid = routing.resolveSiteRouting('/sites/' + siteAId + '/assets/not-a-device', [siteA], ['site.read']);
+  assert.equal(invalid.state, 'READY');
+  assert.equal(invalid.deviceId, 'not-a-device');
+
+  assert.equal(routing.resolveSiteRouting('/sites/' + siteAId + '/assets/' + deviceId + '/extra', [siteA], ['site.read']).state, 'SITE_ROUTE_NOT_FOUND');
+  assert.equal(routing.resolveSiteRouting('/sites/' + siteAId + '/energy/' + deviceId, [siteA], ['site.read']).state, 'SITE_ROUTE_NOT_FOUND');
+});

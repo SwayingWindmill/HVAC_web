@@ -57,6 +57,7 @@ type Config struct {
 	Telemetry     *TelemetryConfig
 	Command       *CommandConfig
 	Analytics     *AnalyticsConfig
+	Operations    *OperationsAgentConfig
 	Observability *observability.Runtime
 }
 
@@ -72,6 +73,7 @@ type handler struct {
 	telemetry     *telemetryController
 	command       *commandController
 	analytics     *analyticsController
+	operations    *operationsAgentController
 	observability *observability.Runtime
 }
 
@@ -110,6 +112,7 @@ func NewHandler(config Config) http.Handler {
 		telemetry:     newTelemetryController(config.Telemetry),
 		command:       newCommandController(config.Command),
 		analytics:     newAnalyticsController(config.Analytics),
+		operations:    newOperationsAgentController(config.Operations),
 		observability: telemetry,
 	}
 }
@@ -165,7 +168,11 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Acting-Organization-ID"} {
+	if request.URL.Path == InternalOperationsToolAuthorizationPath {
+		h.authorizeOperationsTool(writer, request)
+		return
+	}
+	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant"} {
 		if request.Header.Get(header) == "" {
 			continue
 		}
@@ -186,6 +193,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			dispatchRegistryRoute(h, writer, request, registryRoute, id)
 			return
 		}
+		if operationsRoute, matches := matchPublicOperationsRoute(request.URL.Path); matches {
+			dispatchOperationsRoute(h, writer, request, operationsRoute)
+			return
+		}
 		decision := routeDecisionFromContext(request.Context())
 		if decision.SelectedOwner == ownershipregistry.OwnerLegacy {
 			if request.URL.Path != platformapi.GetPlatformStatusPath || request.Method != http.MethodGet {
@@ -197,6 +208,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if operationsRoute, matches := matchPublicOperationsRoute(request.URL.Path); matches {
+		dispatchOperationsRoute(h, writer, request, operationsRoute)
+		return
+	}
 	if telemetryRoute, deviceID, matches := matchPublicTelemetryRoute(request.URL.Path); matches {
 		dispatchTelemetryRoute(h, writer, request, telemetryRoute, deviceID)
 		return
@@ -611,11 +626,14 @@ func writeProblem(
 
 func safeLogPath(path string) string {
 	switch path {
-	case platformapi.GetHealthPath, platformapi.GetVersionPath, platformapi.GetPlatformStatusPath, platformapi.BeginLoginPath, platformapi.CompleteLoginPath, platformapi.GetCurrentPrincipalPath, platformapi.LogoutPath:
+	case platformapi.GetHealthPath, platformapi.GetVersionPath, platformapi.GetPlatformStatusPath, platformapi.BeginLoginPath, platformapi.CompleteLoginPath, platformapi.GetCurrentPrincipalPath, platformapi.LogoutPath, InternalOperationsToolAuthorizationPath:
 		return path
 	default:
 		if registryRoute, _, matches := matchPublicRegistryRoute(path); matches {
 			return registryRoute.template
+		}
+		if operationsRoute, matches := matchPublicOperationsRoute(path); matches {
+			return operationsRoute.template
 		}
 		if telemetryRoute, _, matches := matchPublicTelemetryRoute(path); matches {
 			return telemetryRoute.template

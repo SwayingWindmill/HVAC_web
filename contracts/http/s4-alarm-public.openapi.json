@@ -1,0 +1,276 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "S4 Alarm Public Read and Lifecycle API",
+    "version": "0.2.0-contract-only",
+    "description": "Authoritative Site-scoped Alarm read and lifecycle contract. Production traffic remains disabled until separate Gateway authorization and operational certification."
+  },
+  "paths": {
+    "/api/v1/sites/{siteId}/alarms": {
+      "get": {
+        "operationId": "listSiteAlarms",
+        "x-owner": "alarm-service",
+        "x-public-ingress": "platform-gateway",
+        "x-production-traffic-percent": 0,
+        "x-migration-phase": "S4-R0-contract-only",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "status", "in": "query", "schema": { "$ref": "#/components/schemas/AlarmStatus" } },
+          { "name": "severity", "in": "query", "schema": { "$ref": "#/components/schemas/AlarmSeverity" } },
+          { "name": "cursor", "in": "query", "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 } }
+        ],
+        "responses": {
+          "200": { "description": "Authoritative bounded Alarm list.", "headers": { "Cache-Control": { "schema": { "type": "string", "const": "private, no-store" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmListResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/alarms/{alarmId}": {
+      "get": {
+        "operationId": "getSiteAlarm",
+        "x-owner": "alarm-service",
+        "x-public-ingress": "platform-gateway",
+        "x-production-traffic-percent": 0,
+        "x-migration-phase": "S4-R0-contract-only",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "$ref": "#/components/parameters/AlarmId" }
+        ],
+        "responses": {
+          "200": { "description": "Authoritative Alarm detail and lifecycle timeline.", "headers": { "Cache-Control": { "schema": { "type": "string", "const": "private, no-store" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Alarm" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/alarms/{alarmId}:acknowledge": {
+      "post": {
+        "operationId": "acknowledgeSiteAlarm",
+        "x-owner": "alarm-service",
+        "x-public-ingress": "platform-gateway",
+        "x-production-traffic-percent": 0,
+        "x-migration-phase": "S4-R0-contract-only",
+        "parameters": [ { "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/AlarmId" }, { "$ref": "#/components/parameters/IdempotencyKey" } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmLifecycleRequest" } } } },
+        "responses": { "200": { "$ref": "#/components/responses/AlarmMutation" }, "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "403": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "409": { "$ref": "#/components/responses/Problem" }, "415": { "$ref": "#/components/responses/Problem" }, "422": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/alarms/{alarmId}:assign": {
+      "post": {
+        "operationId": "assignSiteAlarm",
+        "x-owner": "alarm-service",
+        "x-public-ingress": "platform-gateway",
+        "x-production-traffic-percent": 0,
+        "x-migration-phase": "S4-R0-contract-only",
+        "parameters": [ { "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/AlarmId" }, { "$ref": "#/components/parameters/IdempotencyKey" } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmAssignRequest" } } } },
+        "responses": { "200": { "$ref": "#/components/responses/AlarmMutation" }, "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "403": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "409": { "$ref": "#/components/responses/Problem" }, "415": { "$ref": "#/components/responses/Problem" }, "422": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/alarms/{alarmId}:unassign": {
+      "post": {
+        "operationId": "unassignSiteAlarm",
+        "x-owner": "alarm-service",
+        "x-public-ingress": "platform-gateway",
+        "x-production-traffic-percent": 0,
+        "x-migration-phase": "S4-R0-contract-only",
+        "parameters": [ { "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/AlarmId" }, { "$ref": "#/components/parameters/IdempotencyKey" } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmLifecycleRequest" } } } },
+        "responses": { "200": { "$ref": "#/components/responses/AlarmMutation" }, "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "403": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "409": { "$ref": "#/components/responses/Problem" }, "415": { "$ref": "#/components/responses/Problem" }, "422": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/alarms/{alarmId}:suppress": {
+      "post": {
+        "operationId": "suppressSiteAlarm",
+        "x-owner": "alarm-service",
+        "x-public-ingress": "platform-gateway",
+        "x-production-traffic-percent": 0,
+        "x-migration-phase": "S4-R0-contract-only",
+        "parameters": [ { "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/AlarmId" }, { "$ref": "#/components/parameters/IdempotencyKey" } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmSuppressRequest" } } } },
+        "responses": { "200": { "$ref": "#/components/responses/AlarmMutation" }, "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "403": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "409": { "$ref": "#/components/responses/Problem" }, "415": { "$ref": "#/components/responses/Problem" }, "422": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/alarms/{alarmId}:unsuppress": {
+      "post": {
+        "operationId": "unsuppressSiteAlarm",
+        "x-owner": "alarm-service",
+        "x-public-ingress": "platform-gateway",
+        "x-production-traffic-percent": 0,
+        "x-migration-phase": "S4-R0-contract-only",
+        "parameters": [ { "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/AlarmId" }, { "$ref": "#/components/parameters/IdempotencyKey" } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmLifecycleRequest" } } } },
+        "responses": { "200": { "$ref": "#/components/responses/AlarmMutation" }, "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "403": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "409": { "$ref": "#/components/responses/Problem" }, "415": { "$ref": "#/components/responses/Problem" }, "422": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/alarms/{alarmId}:close": {
+      "post": {
+        "operationId": "closeSiteAlarm",
+        "x-owner": "alarm-service",
+        "x-public-ingress": "platform-gateway",
+        "x-production-traffic-percent": 0,
+        "x-migration-phase": "S4-R0-contract-only",
+        "parameters": [ { "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/AlarmId" }, { "$ref": "#/components/parameters/IdempotencyKey" } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmLifecycleRequest" } } } },
+        "responses": { "200": { "$ref": "#/components/responses/AlarmMutation" }, "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "403": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "409": { "$ref": "#/components/responses/Problem" }, "415": { "$ref": "#/components/responses/Problem" }, "422": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/alarms/{alarmId}:reopen": {
+      "post": {
+        "operationId": "reopenSiteAlarm",
+        "x-owner": "alarm-service",
+        "x-public-ingress": "platform-gateway",
+        "x-production-traffic-percent": 0,
+        "x-migration-phase": "S4-R0-contract-only",
+        "parameters": [ { "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/AlarmId" }, { "$ref": "#/components/parameters/IdempotencyKey" } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmLifecycleRequest" } } } },
+        "responses": { "200": { "$ref": "#/components/responses/AlarmMutation" }, "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "403": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "409": { "$ref": "#/components/responses/Problem" }, "415": { "$ref": "#/components/responses/Problem" }, "422": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" } }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "SiteId": { "name": "siteId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+      "AlarmId": { "name": "alarmId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+      "IdempotencyKey": { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$" } }
+    },
+    "responses": {
+      "AlarmMutation": {
+        "description": "Authoritative Alarm after one lifecycle operation. Idempotent retries return the original response.",
+        "headers": {
+          "Cache-Control": { "schema": { "type": "string", "const": "private, no-store" } },
+          "Idempotent-Replay": { "schema": { "type": "string", "enum": ["true"] } }
+        },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Alarm" } } }
+      },
+      "Problem": {
+        "description": "Non-leaking Problem Details response.",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      }
+    },
+    "schemas": {
+      "UUIDv7": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+      "AlarmSeverity": { "type": "string", "enum": ["INFO", "WARNING", "MAJOR", "CRITICAL"] },
+      "AlarmStatus": { "type": "string", "enum": ["OPEN", "ACKNOWLEDGED", "SUPPRESSED", "CLOSED"] },
+      "AlarmSourceType": { "type": "string", "enum": ["DEVICE_RULE", "SITE_RULE", "EXTERNAL"] },
+      "AlarmOperation": { "type": "string", "enum": ["PUBLISH", "ACKNOWLEDGE", "ASSIGN", "UNASSIGN", "SUPPRESS", "UNSUPPRESS", "CLOSE", "REOPEN"] },
+      "AlarmEvidenceReference": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "reference", "capturedAt"],
+        "properties": {
+          "kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "reference": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "capturedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "AlarmTransition": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["toStatus", "reason", "actorType", "occurredAt", "version"],
+        "properties": {
+          "fromStatus": { "$ref": "#/components/schemas/AlarmStatus" },
+          "toStatus": { "$ref": "#/components/schemas/AlarmStatus" },
+          "operation": { "$ref": "#/components/schemas/AlarmOperation" },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "actorType": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "actorId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "assigneeId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "suppressedUntil": { "type": "string", "format": "date-time" },
+          "policyRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "correlationId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "occurredAt": { "type": "string", "format": "date-time" },
+          "version": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "Alarm": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "alarmId", "organizationId", "siteId", "sourceType", "sourceReference", "title", "summary", "severity", "status", "occurrenceCount", "firstOccurredAt", "lastOccurredAt", "evidence", "transitions", "version", "createdAt", "updatedAt"],
+        "properties": {
+          "schemaVersion": { "type": "integer", "const": 1 },
+          "alarmId": { "$ref": "#/components/schemas/UUIDv7" },
+          "organizationId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "sourceType": { "$ref": "#/components/schemas/AlarmSourceType" },
+          "sourceReference": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 2048 },
+          "severity": { "$ref": "#/components/schemas/AlarmSeverity" },
+          "status": { "$ref": "#/components/schemas/AlarmStatus" },
+          "assigneeId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "suppressedUntil": { "type": "string", "format": "date-time" },
+          "occurrenceCount": { "type": "integer", "minimum": 1 },
+          "firstOccurredAt": { "type": "string", "format": "date-time" },
+          "lastOccurredAt": { "type": "string", "format": "date-time" },
+          "evidence": { "type": "array", "maxItems": 256, "items": { "$ref": "#/components/schemas/AlarmEvidenceReference" } },
+          "transitions": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/components/schemas/AlarmTransition" } },
+          "version": { "type": "integer", "minimum": 1 },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "AlarmListResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "items", "hasMore"],
+        "properties": {
+          "schemaVersion": { "type": "integer", "const": 1 },
+          "items": { "type": "array", "maxItems": 100, "items": { "$ref": "#/components/schemas/Alarm" } },
+          "nextCursor": { "$ref": "#/components/schemas/UUIDv7" },
+          "hasMore": { "type": "boolean" }
+        }
+      },
+      "AlarmLifecycleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedVersion", "reason"],
+        "properties": {
+          "expectedVersion": { "type": "integer", "minimum": 1 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      },
+      "AlarmAssignRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedVersion", "reason", "assigneeId"],
+        "properties": {
+          "expectedVersion": { "type": "integer", "minimum": 1 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "assigneeId": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      },
+      "AlarmSuppressRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedVersion", "reason", "suppressedUntil"],
+        "properties": {
+          "expectedVersion": { "type": "integer", "minimum": 1 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "suppressedUntil": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["type", "title", "status", "detail", "code", "retryable"],
+        "properties": {
+          "type": { "type": "string" },
+          "title": { "type": "string" },
+          "status": { "type": "integer" },
+          "detail": { "type": "string" },
+          "code": { "type": "string" },
+          "retryable": { "type": "boolean" },
+          "traceId": { "type": "string" }
+        }
+      }
+    }
+  }
+}

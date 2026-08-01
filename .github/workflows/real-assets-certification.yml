@@ -1,0 +1,69 @@
+name: Real Assets 200 Device Certification
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/real-assets-certification.yml'
+      - 'apps/hvac-web/src/real/assets/**'
+      - 'apps/hvac-web/src/real/SiteScopedShell.tsx'
+      - 'apps/hvac-web/src/real/FocusHeading.tsx'
+      - 'apps/hvac-web/src/real/real-shell.css'
+      - 'apps/hvac-web/src/real/protected-scope.ts'
+      - 'apps/hvac-web/src/platform/telemetry-live/**'
+      - 'apps/hvac-web/src/api/generated/**'
+      - 'contracts/http/**'
+      - 'contracts/ownership/**'
+      - 'scripts/fixtures/real-assets-certification/**'
+      - 'scripts/check-real-assets-certification.mjs'
+      - 'scripts/real-assets-certification-lib.mjs'
+      - 'scripts/run-real-assets-certification.mjs'
+      - 'scripts/test-real-assets-certification.mjs'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/real-assets-certification.yml'
+      - 'apps/hvac-web/src/real/assets/**'
+      - 'apps/hvac-web/src/real/SiteScopedShell.tsx'
+      - 'apps/hvac-web/src/real/FocusHeading.tsx'
+      - 'apps/hvac-web/src/real/real-shell.css'
+      - 'apps/hvac-web/src/real/protected-scope.ts'
+      - 'apps/hvac-web/src/platform/telemetry-live/**'
+      - 'apps/hvac-web/src/api/generated/**'
+      - 'contracts/http/**'
+      - 'contracts/ownership/**'
+      - 'scripts/fixtures/real-assets-certification/**'
+      - 'scripts/check-real-assets-certification.mjs'
+      - 'scripts/real-assets-certification-lib.mjs'
+      - 'scripts/run-real-assets-certification.mjs'
+      - 'scripts/test-real-assets-certification.mjs'
+
+permissions:
+  contents: read
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  certify:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run real-assets:certify
+      - name: Upload Real Assets certification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-assets-certification-${{ github.sha }}
+          path: |
+            out/real-assets-certification
+            out/rms-web-certification
+            out/rms-web-build
+            out/s2-telemetry-live-client
+          if-no-files-found: warn
+          retention-days: 30

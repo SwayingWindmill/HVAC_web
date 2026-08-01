@@ -4,11 +4,15 @@ import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { createServer as createTCPServer } from 'node:net';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import WebSocket from 'ws';
 
 const root = resolve(process.cwd());
+const requireFromScript = createRequire(import.meta.url);
+const vitePackagePath = requireFromScript.resolve('vite/package.json');
+const viteBinPath = resolve(dirname(vitePackagePath), 'bin/vite.js');
 const reportArgument = process.argv.find((value) => value.startsWith('--report='))?.slice('--report='.length);
 const reportPath = resolve(root, reportArgument ?? 'out/s1-registry-web/hvac-web-registry-browser.json');
 const startedAt = new Date();
@@ -21,6 +25,7 @@ const ids = {
   equipment1: '018f4e20-7a21-7abc-8def-1234567890ab',
   equipment2: '018f4e20-7a22-7abc-8def-1234567890ab',
   device: '018f4e20-7a31-7abc-8def-1234567890ab',
+  deviceBinding: '018f4e20-7a41-7abc-8def-1234567890ab',
   siblingSite: '018f4e20-7a12-7abc-8def-1234567890ab',
   siblingEquipment: '018f4e20-7a23-7abc-8def-1234567890ab',
   foreignEquipment: '018f4e20-7aff-7abc-8def-1234567890ab',
@@ -84,6 +89,20 @@ const device = {
   deviceType: 'EDGE_GATEWAY',
   status: 'ACTIVE',
   revision: 5,
+  createdAt: instant,
+  updatedAt: instant,
+};
+const deviceBinding = {
+  id: ids.deviceBinding,
+  owningOrganizationId: ids.organization,
+  siteId: ids.site,
+  deviceId: ids.device,
+  equipmentId: ids.equipment1,
+  bindingRole: 'PRIMARY_CONTROLLER',
+  status: 'ACTIVE',
+  validFrom: instant,
+  validTo: null,
+  revision: 1,
   createdAt: instant,
   updatedAt: instant,
 };
@@ -171,7 +190,7 @@ function createGatewayFixture() {
           delegationExpiresAt: '2026-07-23T01:00:00.000Z',
         },
         authorization: {
-          capabilitySetVersion: 1,
+          capabilitySetVersion: 2,
           policyRevision: 's1-registry-browser',
           capabilities: ['organization.list', 'organization.read', 'site.list', 'site.read', 'equipment.list', 'equipment.read', 'device.list', 'device.read'],
         },
@@ -235,6 +254,14 @@ function createGatewayFixture() {
     }
     if (url.pathname === `/api/v1/sites/${ids.site}/devices`) {
       json(response, 200, { items: [device], nextCursor: null, hasMore: false });
+      return;
+    }
+    if (url.pathname === `/api/v1/sites/${ids.site}/device-bindings`) {
+      json(response, 200, { items: [deviceBinding], nextCursor: null, hasMore: false });
+      return;
+    }
+    if (url.pathname === `/api/v1/sites/${ids.siblingSite}/device-bindings`) {
+      json(response, 404, problem(404, 'RESOURCE_NOT_FOUND', 'The requested resource was not found.'));
       return;
     }
     if (url.pathname === `/api/v1/equipment/${ids.equipment1}`) {
@@ -379,7 +406,7 @@ try {
   });
 
   viteProcess = spawn(process.execPath, [
-    resolve(root, 'node_modules/vite/bin/vite.js'),
+    viteBinPath,
     'apps/hvac-web',
     '--config', 'apps/hvac-web/vite.config.ts',
     '--host', '127.0.0.1',
@@ -463,6 +490,21 @@ try {
   assert(!assetsState.text.includes(ids.foreignEquipment), 'authorized navigation disclosed a foreign-Organization resource');
   assertions.push('assets-no-mock-fallback');
 
+  const bindingRead = await evaluate(cdpClient, `(async () => {
+    const response = await fetch('/api/v1/sites/${ids.site}/device-bindings?limit=50');
+    return { status: response.status, body: await response.json() };
+  })()`);
+  assert(bindingRead.status === 200, `DeviceBinding list status=${bindingRead.status}`);
+  assert(bindingRead.body?.items?.length === 1, 'DeviceBinding list did not return the authorized relation');
+  assert(bindingRead.body.items[0].siteId === ids.site && bindingRead.body.items[0].deviceId === ids.device && bindingRead.body.items[0].equipmentId === ids.equipment1, 'DeviceBinding response scope drifted');
+  const siblingBindingRead = await evaluate(cdpClient, `(async () => {
+    const response = await fetch('/api/v1/sites/${ids.siblingSite}/device-bindings?limit=50');
+    return { status: response.status, body: await response.json() };
+  })()`);
+  assert(siblingBindingRead.status === 404 && siblingBindingRead.body?.code === 'RESOURCE_NOT_FOUND', 'sibling-Site DeviceBinding list did not fail as resource-invisible');
+  assert(!JSON.stringify(siblingBindingRead.body).includes(ids.siblingSite), 'sibling-Site DeviceBinding failure disclosed the Site');
+  assertions.push('device-binding-public-scope');
+
   const loadMoreClicked = await evaluate(cdpClient, `(() => {
     const button = Array.from(document.querySelectorAll('button')).find((candidate) => candidate.textContent?.includes('加载更多 Equipment'));
     if (!button) return false;
@@ -530,6 +572,8 @@ try {
   assert(fixture.authenticatedRequests > 0, 'Registry requests were not protected by the fixture Session');
   assert(fixture.requests.some((entry) => entry.path === '/api/v1/organizations' && entry.query.includes(`cursor=${encodeURIComponent(organizationCursor)}`)), 'authorized navigation did not use its Organization-bound cursor');
   assert(fixture.requests.some((entry) => entry.path === `/api/v1/sites/${ids.site}/equipment` && entry.query.includes(`cursor=${encodeURIComponent(equipmentCursor)}`)), 'Equipment load-more did not use its action/parent-bound cursor');
+  assert(fixture.requests.some((entry) => entry.path === `/api/v1/sites/${ids.site}/device-bindings` && entry.query === '?limit=50'), 'authorized DeviceBinding collection was not requested through the Gateway');
+  assert(fixture.requests.some((entry) => entry.path === `/api/v1/sites/${ids.siblingSite}/device-bindings` && entry.query === '?limit=50'), 'sibling-Site DeviceBinding negative request was not audited');
   assert(!fixture.requests.some((entry) => entry.path === '/api/v1/organizations' && entry.query.includes(equipmentCursor)), 'Equipment cursor was reused for Organization navigation');
   assert(fixture.requests.filter((entry) => entry.path === `/api/v1/sites/${ids.site}/equipment` && entry.query.includes(`cursor=${encodeURIComponent(organizationCursor)}`)).length === 1, 'Organization cursor was reused outside the explicit negative test');
   assert(!fixture.requests.some((entry) => entry.path.includes('/assets/tree') || entry.path.includes('/ws/telemetry')), 'real Registry journey called a Mock/Legacy asset or telemetry endpoint');

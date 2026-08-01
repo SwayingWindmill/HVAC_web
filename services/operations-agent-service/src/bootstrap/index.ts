@@ -6,7 +6,34 @@ import { persistenceModule } from '../persistence/index.js';
 import { runtimeLanggraphModule } from '../runtime-langgraph/index.js';
 import { schedulingModule } from '../scheduling/index.js';
 import { toolsModule } from '../tools/index.js';
-import { transportAgUiModule } from '../transport-ag-ui/index.js';
+import {
+  createOperationsAgUiEventStreamResponse,
+  transportAgUiModule,
+} from '../transport-ag-ui/index.js';
+import {
+  createOperationsAgentHttpHandler as createOperationsAgentHttpTransportHandler,
+  transportHttpModule,
+  type OperationsAgentHttpAuthorizationInput,
+  type OperationsAgentHttpAuthorizer,
+  type OperationsAgentHttpCoordinatorContext,
+  type OperationsAgentHttpHandler,
+  type OperationsAgentHttpOptions,
+} from '../transport-http/index.js';
+
+export type {
+  OperationsAgentHttpAuthorizationInput,
+  OperationsAgentHttpAuthorizer,
+  OperationsAgentHttpCoordinatorContext,
+  OperationsAgentHttpHandler,
+  OperationsAgentHttpOptions,
+};
+
+export const createOperationsAgentHttpHandler = (
+  options: OperationsAgentHttpOptions,
+): OperationsAgentHttpHandler => createOperationsAgentHttpTransportHandler({
+  ...options,
+  createAgUiEventStreamResponse: createOperationsAgUiEventStreamResponse,
+});
 
 export const bootstrapModule = Object.freeze({
   name: 'bootstrap',
@@ -18,6 +45,7 @@ export const bootstrapModule = Object.freeze({
     modelModule.name,
     toolsModule.name,
     persistenceModule.name,
+    transportHttpModule.name,
     transportAgUiModule.name,
     schedulingModule.name,
     observabilityModule.name,
@@ -31,6 +59,7 @@ export const operationsAgentServiceModules = Object.freeze([
   modelModule,
   toolsModule,
   persistenceModule,
+  transportHttpModule,
   transportAgUiModule,
   schedulingModule,
   observabilityModule,

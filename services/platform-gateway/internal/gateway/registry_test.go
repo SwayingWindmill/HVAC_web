@@ -29,6 +29,7 @@ const (
 	registryTestSiteID         = "018f1e00-1000-7000-8000-000000000002"
 	registryTestEquipmentID    = "018f1e00-1000-7000-8000-000000000003"
 	registryTestDeviceID       = "018f1e00-1000-7000-8000-000000000004"
+	registryTestBindingID      = "018f1e00-1000-7000-8000-000000000005"
 )
 
 type eventFailingAuditSink struct {
@@ -41,6 +42,18 @@ func (sink eventFailingAuditSink) Record(ctx context.Context, record ownershipre
 		return errors.New("forced route audit failure")
 	}
 	return sink.delegate.Record(ctx, record)
+}
+
+func TestGatewayRegistryRejectsDeviceBindingScopeDrift(t *testing.T) {
+	binding := registryDeviceBinding()
+	binding.SiteID = "018f1e00-1000-7000-8000-000000000006"
+	raw, err := json.Marshal(platformapi.DeviceBindingCollection{Items: []platformapi.DeviceBinding{binding}, NextCursor: nil, HasMore: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := canonicalRegistrySuccess(registryauth.ActionDeviceBindingList, registryTestSiteID, raw); err == nil {
+		t.Fatal("cross-Site DeviceBinding response was accepted")
+	}
 }
 
 func TestGatewayRegistryRoutesAuthorizeAndForwardOnlyGrant(t *testing.T) {
@@ -76,6 +89,7 @@ func TestGatewayRegistryRoutesAuthorizeAndForwardOnlyGrant(t *testing.T) {
 		{"/api/v1/sites/" + registryTestSiteID + "/equipment", registryauth.ActionEquipmentList},
 		{"/api/v1/equipment/" + registryTestEquipmentID, registryauth.ActionEquipmentRead},
 		{"/api/v1/sites/" + registryTestSiteID + "/devices", registryauth.ActionDeviceList},
+		{"/api/v1/sites/" + registryTestSiteID + "/device-bindings", registryauth.ActionDeviceBindingList},
 		{"/api/v1/devices/" + registryTestDeviceID, registryauth.ActionDeviceRead},
 	}
 	for _, test := range tests {
@@ -700,6 +714,7 @@ func registryPhaseSnapshot(t *testing.T, phase string, percentage int) *ownershi
 		platformapi.ListSiteEquipmentPathTemplate,
 		platformapi.GetEquipmentPathTemplate,
 		platformapi.ListSiteDevicesPathTemplate,
+		platformapi.ListSiteDeviceBindingsPathTemplate,
 		platformapi.GetDevicePathTemplate,
 	}
 	owner := ownershipregistry.OwnerCore
@@ -767,6 +782,8 @@ func registrySuccessResponse(path string) *http.Response {
 		return jsonHTTPResponse(http.StatusOK, platformapi.EquipmentCollection{Items: []platformapi.Equipment{registryEquipment()}, NextCursor: nil, HasMore: false})
 	case strings.HasPrefix(path, "/internal/v1/registry/sites/") && strings.HasSuffix(path, "/devices"):
 		return jsonHTTPResponse(http.StatusOK, platformapi.DeviceCollection{Items: []platformapi.Device{registryDevice()}, NextCursor: nil, HasMore: false})
+	case strings.HasPrefix(path, "/internal/v1/registry/sites/") && strings.HasSuffix(path, "/device-bindings"):
+		return jsonHTTPResponse(http.StatusOK, platformapi.DeviceBindingCollection{Items: []platformapi.DeviceBinding{registryDeviceBinding()}, NextCursor: nil, HasMore: false})
 	case strings.HasPrefix(path, "/internal/v1/registry/sites/"):
 		return jsonHTTPResponse(http.StatusOK, registrySite())
 	case strings.HasPrefix(path, "/internal/v1/registry/equipment/"):
@@ -792,6 +809,10 @@ func registryEquipment() platformapi.Equipment {
 
 func registryDevice() platformapi.Device {
 	return platformapi.Device{ID: registryTestDeviceID, OwningOrganizationID: registryTestOrganizationID, SiteID: registryTestSiteID, Code: "device", DisplayName: "Device", DeviceType: "CONTROLLER", Status: "ACTIVE", Revision: 1, CreatedAt: "2026-07-22T12:00:00.000Z", UpdatedAt: "2026-07-22T12:00:00.000Z"}
+}
+
+func registryDeviceBinding() platformapi.DeviceBinding {
+	return platformapi.DeviceBinding{ID: registryTestBindingID, OwningOrganizationID: registryTestOrganizationID, SiteID: registryTestSiteID, DeviceID: registryTestDeviceID, EquipmentID: registryTestEquipmentID, BindingRole: "PRIMARY_CONTROLLER", Status: "ACTIVE", ValidFrom: "2026-07-22T12:00:00.000Z", Revision: 1, CreatedAt: "2026-07-22T12:00:00.000Z", UpdatedAt: "2026-07-22T12:00:00.000Z"}
 }
 
 func jsonHTTPResponse(status int, value any) *http.Response {

@@ -23,6 +23,7 @@ type RegistryStore interface {
 	GetEquipment(context.Context, registryauth.GrantClaims, string) (Equipment, error)
 	ListDevices(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[Device], error)
 	GetDevice(context.Context, registryauth.GrantClaims, string) (Device, error)
+	ListDeviceBindings(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[DeviceBinding], error)
 }
 
 type PostgresStore struct {
@@ -373,6 +374,69 @@ WHERE id = $1::uuid
 	return result, err
 }
 
+func (store *PostgresStore) ListDeviceBindings(ctx context.Context, claims registryauth.GrantClaims, siteID string, page PageRequest) (PageResult[DeviceBinding], error) {
+	if !validUUIDv7(siteID) {
+		return PageResult[DeviceBinding]{}, ErrNotFound
+	}
+	page, err := normalizedPageRequest(page)
+	if err != nil {
+		return PageResult[DeviceBinding]{}, err
+	}
+	limit := page.Limit
+	result := PageResult[DeviceBinding]{Items: []DeviceBinding{}}
+	err = store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
+		rows, err := transaction.Query(ctx, `
+SELECT binding.id::text,
+       binding.organization_id::text,
+       binding.site_id::text,
+       binding.device_id::text,
+       binding.equipment_id::text,
+       binding.binding_role,
+       binding.status,
+       binding.valid_from,
+       binding.valid_to,
+       binding.revision,
+       binding.created_at,
+       binding.updated_at
+FROM core_registry.device_bindings AS binding
+JOIN core_registry.devices AS device
+  ON device.organization_id = binding.organization_id
+ AND device.site_id = binding.site_id
+ AND device.id = binding.device_id
+JOIN core_registry.equipment AS equipment
+  ON equipment.organization_id = binding.organization_id
+ AND equipment.site_id = binding.site_id
+ AND equipment.id = binding.equipment_id
+WHERE binding.site_id = $1::uuid
+  AND NOT (binding.organization_id = ANY($2::uuid[]))
+  AND NOT (binding.site_id = ANY($3::uuid[]))
+  AND ($4 = '' OR (binding.binding_role COLLATE "C", binding.id) > ($4 COLLATE "C", $5::uuid))
+ORDER BY binding.binding_role COLLATE "C", binding.id
+LIMIT $6
+`, siteID, postgresUUIDArray(claims.DeniedOrganizationIDs), postgresUUIDArray(claims.DeniedSiteIDs), page.DisplayName, nullableCursorID(page.ID), limit+1)
+		if err != nil {
+			return fmt.Errorf("query Registry DeviceBindings: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			item, err := scanDeviceBinding(rows)
+			if err != nil {
+				return err
+			}
+			result.Items = append(result.Items, item)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterate Registry DeviceBindings: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return PageResult[DeviceBinding]{}, err
+	}
+	result.Items, result.HasMore = trimPage(result.Items, limit)
+	return result, nil
+}
+
 type rowScanner interface {
 	Scan(...any) error
 }
@@ -419,6 +483,38 @@ func scanDevice(row rowScanner) (Device, error) {
 	var updatedAt time.Time
 	if err := row.Scan(&item.ID, &item.OwningOrganizationID, &item.SiteID, &item.Code, &item.DisplayName, &item.DeviceType, &item.Status, &item.Revision, &createdAt, &updatedAt); err != nil {
 		return Device{}, err
+	}
+	item.CreatedAt = formatInstant(createdAt)
+	item.UpdatedAt = formatInstant(updatedAt)
+	return item, nil
+}
+
+func scanDeviceBinding(row rowScanner) (DeviceBinding, error) {
+	var item DeviceBinding
+	var validFrom time.Time
+	var validTo *time.Time
+	var createdAt time.Time
+	var updatedAt time.Time
+	if err := row.Scan(
+		&item.ID,
+		&item.OwningOrganizationID,
+		&item.SiteID,
+		&item.DeviceID,
+		&item.EquipmentID,
+		&item.BindingRole,
+		&item.Status,
+		&validFrom,
+		&validTo,
+		&item.Revision,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return DeviceBinding{}, err
+	}
+	item.ValidFrom = formatInstant(validFrom)
+	if validTo != nil {
+		formatted := formatInstant(*validTo)
+		item.ValidTo = &formatted
 	}
 	item.CreatedAt = formatInstant(createdAt)
 	item.UpdatedAt = formatInstant(updatedAt)

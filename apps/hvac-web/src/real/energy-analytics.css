@@ -20,7 +20,10 @@
 }
 
 .real-energy__header button,
-.real-energy__controls select {
+.real-energy__controls select,
+.real-energy__controls input[type='date'],
+.real-energy__period-navigation button,
+.real-energy__table button {
   min-height: 2.75rem;
 }
 
@@ -57,9 +60,44 @@
   gap: 0.45rem;
 }
 
-.real-energy__controls select {
+.real-energy__controls select,
+.real-energy__controls input[type='date'] {
   margin-inline-start: 0.5rem;
   padding-inline: 0.75rem;
+}
+
+.real-energy__period-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.real-energy__period-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--real-border, #d8e0e8);
+  border-radius: 0.75rem;
+  background: var(--real-border, #d8e0e8);
+}
+
+.real-energy__period-summary > div {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.9rem 1rem;
+  background: var(--real-surface, #fff);
+}
+
+.real-energy__period-summary span {
+  color: var(--real-muted, #526170);
+  font-size: 0.85rem;
+}
+
+.real-energy__period-summary strong,
+.real-energy__period-summary code {
+  overflow-wrap: anywhere;
 }
 
 .real-energy__notices {
@@ -88,6 +126,7 @@
 
 .real-energy__metrics > div,
 .real-energy__chart,
+.real-energy__table,
 .real-energy__provenance {
   border: 1px solid var(--real-border, #d8e0e8);
   border-radius: 0.75rem;
@@ -122,9 +161,40 @@
   font-size: 1rem !important;
 }
 
-.real-energy__chart {
+.real-energy__chart,
+.real-energy__table {
   min-width: 0;
   padding: 1rem;
+}
+
+.real-energy__table-scroll {
+  overflow: auto;
+}
+
+.real-energy__table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.real-energy__table th,
+.real-energy__table td {
+  padding: 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--real-border, #d8e0e8);
+  vertical-align: middle;
+}
+
+.real-energy__table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.real-energy__table td:nth-child(2) {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.real-energy__table button {
+  white-space: nowrap;
 }
 
 .real-energy__panel-heading p,
@@ -172,6 +242,7 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .real-energy__period-summary,
   .real-energy__provenance {
     grid-template-columns: 1fr;
   }
@@ -199,7 +270,17 @@
     flex-direction: column;
   }
 
-  .real-energy__controls select {
+  .real-energy__controls select,
+  .real-energy__controls input[type='date'] {
     margin-inline-start: 0;
+  }
+
+  .real-energy__period-navigation {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .real-energy__period-navigation button {
+    width: 100%;
   }
 }
