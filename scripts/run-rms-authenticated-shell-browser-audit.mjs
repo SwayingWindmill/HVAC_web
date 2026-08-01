@@ -811,6 +811,8 @@ try {
   browserProcess = spawn(browserPath, [
     '--headless=new',
     '--disable-gpu',
+    '--disable-extensions',
+    '--disable-component-extensions-with-background-pages',
     '--no-sandbox',
     '--no-first-run',
     '--no-default-browser-check',
@@ -1066,7 +1068,9 @@ try {
   await waitForCondition(
     cdpClient,
     `document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-state') === 'PARTIAL'
-      && document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-range') === '1h'`,
+      && document.querySelector('[data-testid="real-assets-device-history"]')?.getAttribute('data-history-range') === '1h'
+      && document.querySelector('[data-testid="real-assets-device-history"]')?.querySelectorAll('svg').length === 2
+      && document.querySelector('[data-testid="real-assets-device-history"]')?.querySelectorAll('[aria-label*="Site 时区"]').length === 2`,
     'default one-hour Device history',
   );
   const defaultHistory = await evaluate(cdpClient, `(() => {
@@ -1379,26 +1383,40 @@ try {
 
   await pressKey(cdpClient, 'Enter', 'Enter', 13);
   await waitForCondition(cdpClient, `Boolean(document.querySelector('[data-testid="real-site-draft-confirmation"]')) && document.activeElement === document.querySelector('[data-testid="real-site-draft-confirm"]')`, 'second Site draft confirmation');
-  await clickTestId(cdpClient, 'real-site-draft-confirm');
-  const purgingState = await waitForCondition(cdpClient, `(() => {
-    const purgeHeading = document.querySelector('[data-testid="real-site-purging"] h1');
-    const purgeVisible = Boolean(purgeHeading)
-      && !document.querySelector('[data-site-route][data-site-id="${siteBId}"]')
-      && document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-site') !== '${siteBId}'
-      && !document.querySelector('[data-testid="real-commands-workbench"]')
-      && document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-resource-count') === '0';
-    if (!purgeVisible) return false;
-    return {
-      pathname: location.pathname,
-      transition: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-site-transition'),
-      scopeSite: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-scope-site'),
-      realtimeState: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-state'),
-      realtimeSite: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-site'),
-      headerSite: document.querySelector('[data-testid="real-shell-site"]')?.textContent,
-      newSiteRendered: document.body.innerText.includes('Tokyo Plant'),
-      focusedHeading: document.activeElement === purgeHeading,
+  const purgingStatePromise = evaluate(cdpClient, `new Promise((resolve) => {
+    let observer;
+    const inspect = () => {
+      const purgeHeading = document.querySelector('[data-testid="real-site-purging"] h1');
+      const purgeVisible = Boolean(purgeHeading)
+        && !document.querySelector('[data-site-route][data-site-id="${siteBId}"]')
+        && document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-site') !== '${siteBId}'
+        && !document.querySelector('[data-testid="real-commands-workbench"]')
+        && document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-resource-count') === '0';
+      if (!purgeVisible) return false;
+      observer?.disconnect();
+      resolve({
+        pathname: location.pathname,
+        transition: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-site-transition'),
+        scopeSite: document.querySelector('[data-testid="real-protected-shell"]')?.getAttribute('data-protected-scope-site'),
+        realtimeState: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-state'),
+        realtimeSite: document.querySelector('[data-testid="real-realtime-status"]')?.getAttribute('data-realtime-site'),
+        headerSite: document.querySelector('[data-testid="real-shell-site"]')?.textContent,
+        newSiteRendered: document.body.innerText.includes('Tokyo Plant'),
+        focusedHeading: document.activeElement === purgeHeading,
+      });
+      return true;
     };
-  })()`, 'old Site purge before navigation', 5);
+    if (inspect()) return;
+    observer = new MutationObserver(inspect);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+    setTimeout(() => {
+      observer.disconnect();
+      resolve(false);
+    }, 2000);
+  })`);
+  await clickTestId(cdpClient, 'real-site-draft-confirm');
+  const purgingState = await purgingStatePromise;
+  assert(purgingState, 'old Site purge before navigation was not observed');
   assert(purgingState.pathname === `/sites/${siteBId}/commands`, 'navigation began before old Site purge became visible');
   assert(purgingState.transition === 'purging' && !purgingState.scopeSite, 'protected Site scope was not revoked during purge');
   assert(purgingState.headerSite === 'No active Site', 'trusted header retained the revoked Site during purge');

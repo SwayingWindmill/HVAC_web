@@ -137,7 +137,7 @@ test('nightly regression preserves its schedule, manual trigger, and complete pr
 });
 
 test('PR gate workflow always exposes the five stable required checks', async () => {
-  const workflow = await readFile('.github/workflows/pr-gates.yml', 'utf8');
+  const workflow = (await readFile('.github/workflows/pr-gates.yml', 'utf8')).replace(/\r\n?/gu, '\n');
   const pullRequestBlock = workflow.split('  pull_request:')[1]?.split('  workflow_dispatch:')[0] ?? '';
   assert.ok(pullRequestBlock.includes('types:'));
   assert.ok(!pullRequestBlock.includes('paths:'));
