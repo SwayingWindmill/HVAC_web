@@ -59,6 +59,12 @@ const runCapabilityPlan = (task) => {
   return JSON.parse(result.stdout.trim());
 };
 
+const assertCapabilityPlan = (task, expectedCommands) => {
+  const plan = runCapabilityPlan(task);
+  assert.deepEqual(plan.commands, expectedCommands);
+  assert.deepEqual(plan.commands, labels(resolveCapabilityTask(task)));
+};
+
 test('domain matrix exposes stable product domains and layers', () => {
   assert.deepEqual(Object.keys(domainTaskProfiles), [
     'web',
@@ -109,9 +115,17 @@ test('profile-set CLI expansion matches the explicit full profile list', () => {
 test('migrated capability tasks preserve their public package entry points', () => {
   assert.deepEqual(Object.keys(capabilityTaskMatrix), [
     's2:telemetry-baseline',
+    's2:iam-authorization',
+    's2:telemetry-runtime-snapshot',
+    's2:history',
+    's2:telemetry-ingest',
+    's2:gateway-snapshot',
     's2:realtime-backend',
     's3:command-safety',
     's3:command-authority',
+    's3:command-api',
+    's3:thingsboard-contract',
+    's3:command-ux',
   ]);
   const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
   for (const task of Object.keys(capabilityTaskMatrix)) {
@@ -144,6 +158,86 @@ test('capability task CLI preserves command order for migrated aggregates', () =
     'npm run s2:postgres',
   ]);
   assert.deepEqual(baselinePlan.commands, labels(resolveCapabilityTask('s2:telemetry-baseline')));
+
+  assertCapabilityPlan('s2:iam-authorization', [
+    'npm run s2:topology:check',
+    'npm run s2:iam:check',
+    'node scripts/run-go.mjs test ./libs/telemetryauth/...',
+    'node scripts/run-go.mjs test ./services/iam-service/...',
+    'npm run ownership:check',
+    'npm run s2:baseline:check',
+    'npm run s1:registry:check',
+    'npm run release:evidence-assets',
+    'npm run lint',
+    'npm run build',
+    'npm run s2:iam:postgres',
+  ]);
+
+  assertCapabilityPlan('s2:telemetry-runtime-snapshot', [
+    'npm run s2:topology:check',
+    'npm run s2:runtime:check',
+    'node scripts/run-go.mjs test ./services/telemetry-runtime-service/...',
+    'node scripts/run-go.mjs vet ./services/telemetry-runtime-service/...',
+    'npm run build:telemetry-runtime',
+    'npm run ownership:check',
+    'npm run s2:baseline:check',
+    'npm run s2:iam:check',
+    'npm run s2:contracts:check',
+    'npm run contracts:check',
+    'npm run release:evidence-assets',
+    'npm run lint',
+    'npm run build',
+    'npm run s2:runtime:postgres',
+  ]);
+
+  assertCapabilityPlan('s2:history', [
+    'npm run s2:history:check',
+    'node scripts/run-go.mjs test ./services/telemetry-runtime-service/...',
+    'node scripts/run-go.mjs vet ./services/telemetry-runtime-service/...',
+    'npm run build:telemetry-history-projector',
+    'npm run s2:history:integration',
+  ]);
+
+  assertCapabilityPlan('s2:telemetry-ingest', [
+    'npm run s2:topology:check',
+    'npm run s2:ingest:check',
+    'node scripts/run-go.mjs test ./services/telemetry-runtime-service/...',
+    'node scripts/run-go.mjs vet ./services/telemetry-runtime-service/...',
+    'npm run build:telemetry-runtime',
+    'npm run ownership:check',
+    'npm run s2:baseline:check',
+    'npm run s2:runtime:check',
+    'npm run s2:iam:check',
+    'npm run s2:contracts:check',
+    'npm run contracts:check',
+    'npm run release:evidence-assets',
+    'npm run lint',
+    'npm run build',
+    'npm run s2:ingest:postgres',
+  ]);
+
+  assertCapabilityPlan('s2:gateway-snapshot', [
+    'npm run s2:topology:check',
+    'npm run s2:gateway:check',
+    'npm run s2:contracts:check',
+    'npm run ownership:check',
+    'npm run s2:baseline:check',
+    'npm run s2:ownership:check',
+    'npm run s2:public-contract:check',
+    'npm run s2:rollout-gates:check',
+    'npm run s2:implementation-plan:check',
+    'npm run s2:iam:check',
+    'npm run s2:runtime:check',
+    'npm run contracts:check',
+    'npm run release:evidence-assets',
+    'npm run test:gateway',
+    'node scripts/run-go.mjs test ./libs/telemetryauth/... ./services/iam-service/... ./services/telemetry-runtime-service/...',
+    'node scripts/run-go.mjs vet ./services/platform-gateway/...',
+    'npm run build:gateway',
+    'npm run lint',
+    'npm run build',
+    'npm run s2:gateway:browser',
+  ]);
 
   const realtimePlan = runCapabilityPlan('s2:realtime-backend');
   assert.deepEqual(realtimePlan.commands, [
@@ -195,6 +289,32 @@ test('capability task CLI preserves command order for migrated aggregates', () =
     'npm run build',
   ]);
   assert.deepEqual(commandPlan.commands, labels(resolveCapabilityTask('s3:command-authority')));
+
+  assertCapabilityPlan('s3:command-api', [
+    'npm run s3:gateway:check',
+    'npm run ownership:check',
+    'node scripts/run-go.mjs test ./libs/commandauth/... ./services/iam-service/... ./services/command-service/... ./services/platform-gateway/...',
+    'node scripts/run-go.mjs vet ./libs/commandauth/... ./services/iam-service/... ./services/command-service/... ./services/platform-gateway/...',
+  ]);
+
+  assertCapabilityPlan('s3:thingsboard-contract', [
+    'npm run s3:thingsboard:check',
+    'npm run ownership:check',
+    'node scripts/run-go.mjs test ./services/thingsboard-connector-control/...',
+    'node scripts/run-go.mjs vet ./services/thingsboard-connector-control/...',
+    'npm run s3:thingsboard:local',
+  ]);
+
+  assertCapabilityPlan('s3:command-ux', [
+    'npm run s3:command-ux:check',
+    'npm run s3:gateway:check',
+    'npm run s3:verification:check',
+    'npm run ownership:check',
+    'node scripts/run-go.mjs test ./services/command-service/... ./services/platform-gateway/...',
+    'node scripts/run-go.mjs vet ./services/command-service/... ./services/platform-gateway/...',
+    'npm run lint',
+    'npm run build',
+  ]);
 });
 
 test('PR gate resolution remains compatible with the previous Operations Agent plan', () => {
