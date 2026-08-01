@@ -6,7 +6,7 @@ const readText = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await readText(path));
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
-const [routes, data, store, cursor, http, main, migration, roles, seed, compose, runner] = await Promise.all([
+const [routes, data, store, cursor, http, main, migration, roles, seed, compose, runner, workflow] = await Promise.all([
   readJSON('contracts/ownership/route-ownership.v1.json'),
   readJSON('contracts/ownership/data-ownership.v1.json'),
   readText('services/work-order-service/pkg/workorderservice/postgres.go'),
@@ -18,6 +18,7 @@ const [routes, data, store, cursor, http, main, migration, roles, seed, compose,
   readText('services/work-order-service/testdata/postgres/010_seed.sql'),
   readText('infra/s5-work-order/compose.yaml'),
   readText('scripts/run-s5-work-order-postgres-tests.mjs'),
+  readText('.github/workflows/s5-work-order-postgres.yml'),
 ]);
 
 const workOrderRoutes = routes.routes.filter((route) => route.path.includes('/work-orders'));
@@ -64,6 +65,9 @@ assert(!migration.includes('GRANT INSERT') && !migration.includes('GRANT UPDATE'
 assert(roles.includes('s5_work_order_service LOGIN') && roles.includes('GRANT s5_work_order_runtime TO s5_work_order_service'), 'Work Order fixture lacks explicit service-to-runtime activation');
 assert(seed.includes("'01920000-0000-7000-8000-000000000002'") && seed.includes('work_order_completion_evidence'), 'Work Order fixture lacks cross-Organization or completion evidence coverage');
 assert(compose.includes('postgres:16.4-bookworm@sha256:') && compose.includes('S5_POSTGRES_HOST_PORT'), 'Work Order PostgreSQL fixture is not pinned or isolated');
+const goWorkTriggers = (workflow.match(/^\s+- 'go\.work'$/gm) ?? []).length;
+const goWorkSumTriggers = (workflow.match(/^\s+- 'go\.work\.sum'$/gm) ?? []).length;
+assert(goWorkTriggers === 2 && goWorkSumTriggers === 2, 'Work Order PostgreSQL workflow must run when the root Go workspace changes');
 for (const marker of ['explicitActivationRequired', 'organizationRls', 'readOnlyRuntime', 'goIntegrationTests', 'projectionConvergence']) {
   assert(runner.includes(marker), `Work Order PostgreSQL runner lacks assertion ${marker}`);
 }
