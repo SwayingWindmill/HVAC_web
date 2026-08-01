@@ -6,6 +6,13 @@ export {
   type FakeFindingSynthesizerOptions,
 } from './internal/fake-finding-synthesizer.js';
 
+export {
+  OpenAiFindingSynthesizerError,
+  createOpenAiFindingSynthesizer,
+  type OpenAiFindingSynthesizer,
+  type OpenAiFindingSynthesizerOptions,
+} from './internal/openai-finding-synthesizer.js';
+
 export const modelModule = Object.freeze({
   name: 'model',
   layer: 'adapter',

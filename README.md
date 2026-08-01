@@ -73,7 +73,7 @@ npm run build:real
 
 - `operations-agent-service/`：TypeScript 模块化单体，负责授权范围内的调查编排、确定性分析、LangGraph 只读运行时、业务记录和 AG-UI 投影。
 
-Operations Agent 通过 Platform Gateway 暴露受保护的调查接口。现有实现包含 Registry/Energy 权威读取、PostgreSQL 持久化、只读运行时、首个 Web Operations Workspace，以及受控 Finding 合成接口与 Fake Provider。调用来源、配置摘要、输入输出摘要、延迟和有界计量会与 Finding 原子持久化，但不会进入公共投影。真实外部模型、断线游标恢复和调度器仍是后续工作；模型当前不能选择工具、扩大 Scope 或提交业务效果。
+Operations Agent 通过 Platform Gateway 暴露受保护的调查接口。现有实现包含 Registry/Energy 权威读取、PostgreSQL 持久化、只读运行时、首个 Web Operations Workspace，以及受控 Finding 合成接口、Fake Provider 和默认关闭的 OpenAI Responses API Adapter。调用来源、配置摘要、输入输出摘要、延迟和有界计量会与 Finding 原子持久化，但不会进入公共投影。外部模型仅在 Provider、精确模型 allowlist、服务端凭据及有界超时/输出配置全部有效时启用；模型仍不能选择工具、扩大 Scope 或提交业务效果。断线游标恢复和调度器仍是后续工作。
 
 ## 契约和所有权
 

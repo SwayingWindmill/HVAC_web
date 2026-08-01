@@ -380,7 +380,7 @@ ResponseComposer
 
 The interface should use Zod-validated project types and return structured decisions. A single large `invoke(messages)` interface is not sufficient for core product decisions because it hides policy and makes evaluation difficult.
 
-The current implementation exposes only `FindingSynthesizer`. It receives exact Investigation Scope, committed Evidence, committed Analysis References and the deterministic statement. A Provider candidate can refine the bounded statement and select a subset of already committed Evidence identities; it cannot return Tools, Scope, Finding kind, conclusion, approvals or effects. Application validation requires the exact `finding-synthesis-output/v1` shape, rejects unknown or duplicate Evidence, extra fields, execution claims and confirmatory claims when deterministic analysis is unable to conclude, and falls back on missing configuration, timeout, Provider error or invalid output. The Fake Provider is exported only from the internal Model module, not the package root.
+The current implementation exposes only `FindingSynthesizer`. It receives exact Investigation Scope, committed Evidence, committed Analysis References and the deterministic statement. A Provider candidate can refine the bounded statement and select a subset of already committed Evidence identities; it cannot return Tools, Scope, Finding kind, conclusion, approvals or effects. Application validation requires the exact `finding-synthesis-output/v1` shape, rejects unknown or duplicate Evidence, extra fields, execution claims and confirmatory claims when deterministic analysis is unable to conclude, and falls back on missing configuration, timeout, Provider error or invalid output. The Model module contains both a Fake Provider for tests and a default-disabled OpenAI Responses API adapter behind the same project interface.
 
 The accepted synthesis decision persists bounded invocation provenance atomically inside the Finding business record: source, Provider/model identifiers, configuration digest, policy/schema versions, application-computed input/output digests, latency, bounded metering, trace identity and fallback reason. Exact Domain validation rejects extra fields and contradictory states. Public Investigation and AG-UI projections explicitly omit this provenance, and raw prompts or raw Provider responses are never stored.
 
@@ -398,6 +398,16 @@ trace correlation identity
 ```
 
 Raw platform datasets, secrets and unrestricted prompts must not be persisted by default.
+
+The OpenAI adapter is an optional composition concern, not a Domain or Application dependency. It uses
+the official SDK, `store: false`, strict JSON Schema output, no Tools, no streaming, no background mode,
+zero SDK retries and one deterministic idempotency key derived from the bounded request plus the
+non-secret configuration digest. Runtime enablement requires an explicit Provider, an exact model
+identifier present in an explicit allowlist, the standard server credential, and bounded timeout/output
+settings. Every real Provider attempt first consumes the active Run's durable `modelInvocations`
+budget under a stable Finding operation identity; exhaustion prevents the external request and Finding
+commit. Missing configuration preserves deterministic behavior; partial, contradictory or unsupported
+configuration fails closed before a coordinator or Provider request is created.
 
 ## 8. Tool modules
 
