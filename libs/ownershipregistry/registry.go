@@ -39,6 +39,7 @@ const (
 	PhaseS3ContractOnly              = "S3-R0-contract-only"
 	PhaseS4ContractOnly              = "S4-R0-contract-only"
 	PhaseS4InternalReadOnly          = "S4-R1-internal-read-only"
+	PhaseS4SiteCanary                = "S4-R2-site-canary"
 )
 
 var (
@@ -363,6 +364,11 @@ func validateS4Phase(entry RouteEntry, seenScopes map[string]bool) error {
 				entry.Rollout.Percentage != 1 || entry.Rollout.FallbackOwner != "" || len(entry.Rollout.CohortSalt) < 8 || entry.CompatibilityMode != "native" {
 				return errors.New("S4 internal read-only canary policy is invalid")
 			}
+		case PhaseS4SiteCanary:
+			if entry.Owner != OwnerAlarm || entry.ActivationStatus != "site-canary" || entry.Rollout.Mode != "percentage" ||
+				entry.Rollout.Percentage != 5 || entry.Rollout.FallbackOwner != "" || len(entry.Rollout.CohortSalt) < 8 || entry.CompatibilityMode != "native" {
+				return errors.New("S4 site canary policy is invalid")
+			}
 		default:
 			return errors.New("S4 read migration phase is unsupported")
 		}
@@ -647,6 +653,8 @@ func s4PhaseRank(phase string) (int, bool) {
 		return 0, true
 	case PhaseS4InternalReadOnly:
 		return 1, true
+	case PhaseS4SiteCanary:
+		return 2, true
 	default:
 		return 0, false
 	}
@@ -692,7 +700,9 @@ func (snapshot *Snapshot) Resolve(method, requestPath, businessKey string) (Deci
 			return Decision{}, ErrCohortKey
 		}
 		cohortMaterial := entry.Rollout.CohortSalt + "\x00" + businessKey
-		if entry.CohortGroup != "" {
+		if entry.CohortGroup == "s4-alarm-read-v1" {
+			cohortMaterial = fmt.Sprintf("%s\x00%s\x00%s", entry.Rollout.CohortSalt, entry.CohortGroup, businessKey)
+		} else if entry.CohortGroup != "" {
 			cohortMaterial = fmt.Sprintf("%s\x00%s\x00%d\x00%s", entry.Rollout.CohortSalt, entry.CohortGroup, entry.Revision, businessKey)
 		}
 		digest := sha256.Sum256([]byte(cohortMaterial))

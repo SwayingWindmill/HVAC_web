@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "repositorySha": "REPOSITORY_SHA",
+  "workflowRunId": "s4-alarm-read-promotion-fixture-run-001",
+  "environment": {
+    "name": "s4-alarm-read-promotion-fixture",
+    "classification": "production-like",
+    "region": "ap-northeast-1",
+    "observabilitySource": "target-environment-observability",
+    "synthetic": false,
+    "testFixture": true
+  },
+  "sourceCanary": {
+    "phase": "S4-R1-internal-read-only",
+    "activationStatus": "internal-canary",
+    "trafficPercent": 1,
+    "registryRevision": 14,
+    "listRouteRevision": 2,
+    "detailRouteRevision": 2,
+    "cohortGroup": "s4-alarm-read-v1",
+    "cohortSalt": "s4-alarm-read-canary-v1",
+    "startedAt": "2026-07-30T00:00:00.000Z",
+    "endedAt": "2026-07-31T00:00:00.000Z",
+    "holdMinutes": 1440
+  },
+  "cohort": {
+    "organizations": [
+      "org-alarm-canary-a",
+      "org-alarm-canary-b"
+    ],
+    "sites": [
+      {
+        "organizationId": "org-alarm-canary-a",
+        "siteId": "site-alarm-canary-a1",
+        "listRequests": 500,
+        "detailRequests": 100
+      },
+      {
+        "organizationId": "org-alarm-canary-a",
+        "siteId": "site-alarm-canary-a2",
+        "listRequests": 350,
+        "detailRequests": 70
+      },
+      {
+        "organizationId": "org-alarm-canary-b",
+        "siteId": "site-alarm-canary-b1",
+        "listRequests": 350,
+        "detailRequests": 70
+      }
+    ]
+  },
+  "observed": {
+    "listRequests": 1200,
+    "detailRequests": 240,
+    "routeDecisionCount": 1440,
+    "availabilityFraction": 0.9995,
+    "p95Milliseconds": 220,
+    "p99Milliseconds": 700,
+    "serverErrorRateFraction": 0.0004
+  },
+  "zeroCounters": {
+    "crossOrganizationResponses": 0,
+    "crossSiteResponses": 0,
+    "crossAlarmResponses": 0,
+    "authorizationMismatches": 0,
+    "stalePolicyAccepts": 0,
+    "responseScopeMismatches": 0,
+    "fallbackSelections": 0,
+    "localSeamRequests": 0,
+    "demoContaminationEvents": 0,
+    "unauditedRouteDecisions": 0
+  },
+  "targetPlan": {
+    "phase": "S4-R2-site-canary",
+    "activationStatus": "site-canary",
+    "trafficPercent": 5,
+    "registryRevision": 15,
+    "listRouteRevision": 3,
+    "detailRouteRevision": 3,
+    "cohortGroup": "s4-alarm-read-v1",
+    "cohortSalt": "s4-alarm-read-canary-v1",
+    "routesPromotedTogether": true,
+    "fallbackOwner": ""
+  },
+  "rollback": {
+    "passed": true,
+    "completedAt": "2026-07-31T00:10:00.000Z",
+    "decisionMinutes": 3,
+    "routeRollbackMinutes": 8,
+    "futureReadsOnly": true,
+    "fallbackSelected": false,
+    "restoredPhase": "S4-R1-internal-read-only",
+    "restoredActivationStatus": "internal-canary",
+    "restoredTrafficPercent": 1,
+    "registryRevision": 16,
+    "listRouteRevision": 4,
+    "detailRouteRevision": 4
+  },
+  "approval": {
+    "manual": true,
+    "approvers": [
+      "alarm-platform-owner",
+      "site-operations-owner"
+    ],
+    "approvedAt": "2026-07-31T00:15:00.000Z",
+    "statement": "Reviewed the source canary, SLOs, zero counters, adjacent route plan and rollback drill."
+  }
+}
