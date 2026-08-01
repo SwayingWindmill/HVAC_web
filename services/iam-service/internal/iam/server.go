@@ -25,10 +25,12 @@ const (
 	TelemetryDecisionPath      = "/internal/v1/telemetry/decision"
 	CommandDecisionPath        = "/internal/v1/command/decision"
 	AnalyticsDecisionPath      = "/internal/v1/analytics/decision"
+	AlarmDecisionPath          = "/internal/v1/alarm/decision"
 	registryAuthorizeAction    = "registry:authorize"
 	telemetryAuthorizeAction   = "telemetry:authorize"
 	commandAuthorizeAction     = "command:authorize"
 	analyticsAuthorizeAction   = "analytics:authorize"
+	alarmAuthorizeAction       = "alarm:authorize"
 	maximumDecisionRequestSize = 64 << 10
 	maximumGrantStatusSize     = 16 << 10
 )
@@ -65,6 +67,8 @@ type Config struct {
 	CommandGrantAudience           string
 	CommandGrantLifetime           time.Duration
 	NewCommandGrantID              func() string
+	AlarmAuthorizationStore        AlarmAuthorizationStore
+	AlarmAuditSink                 AlarmDecisionAuditSink
 }
 
 type handler struct {
@@ -99,6 +103,8 @@ type handler struct {
 	commandGrantAudience           string
 	commandGrantLifetime           time.Duration
 	newCommandGrantID              func() string
+	alarmAuthorizationStore        AlarmAuthorizationStore
+	alarmAuditSink                 AlarmDecisionAuditSink
 }
 
 func NewHandler(config Config) http.Handler {
@@ -122,9 +128,13 @@ func NewHandler(config Config) http.Handler {
 	if telemetryStore == nil {
 		telemetryStore = newDenyAllTelemetryAuthorizationStore("telemetry-policy-unconfigured")
 	}
+	alarmStore := config.AlarmAuthorizationStore
+	if alarmStore == nil {
+		alarmStore = newDenyAllAlarmAuthorizationStore("alarm-policy-unconfigured")
+	}
 	principalCapabilityResolver := config.PrincipalCapabilityResolver
 	if principalCapabilityResolver == nil {
-		principalCapabilityResolver = newPrincipalCapabilityResolver(store, telemetryStore, now)
+		principalCapabilityResolver = newPrincipalCapabilityResolver(store, telemetryStore, alarmStore, now)
 	}
 	grantIssuer := config.RegistryGrantIssuer
 	if grantIssuer == "" {
@@ -205,6 +215,10 @@ func NewHandler(config Config) http.Handler {
 	if newCommandGrantID == nil {
 		newCommandGrantID = randomIdentifier
 	}
+	alarmAuditSink := config.AlarmAuditSink
+	if alarmAuditSink == nil {
+		alarmAuditSink = newLoggerAlarmDecisionAuditSink(logger)
+	}
 	return &handler{
 		allowedWorkloadSPIFFE:          config.AllowedWorkloadSPIFFE,
 		coreWorkloadSPIFFE:             config.CoreWorkloadSPIFFE,
@@ -237,6 +251,8 @@ func NewHandler(config Config) http.Handler {
 		commandGrantAudience:           commandAudience,
 		commandGrantLifetime:           commandLifetime,
 		newCommandGrantID:              newCommandGrantID,
+		alarmAuthorizationStore:        alarmStore,
+		alarmAuditSink:                 alarmAuditSink,
 	}
 }
 
@@ -327,6 +343,8 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		status = h.handleCommandDecision(writer, request, claims, spiffeID)
 	case AnalyticsDecisionPath:
 		status = h.handleAnalyticsDecision(writer, request, claims)
+	case AlarmDecisionPath:
+		status = h.handleAlarmDecision(writer, request, claims)
 	}
 }
 
@@ -550,6 +568,8 @@ func expectedInboundAction(path string) (string, bool) {
 		return commandAuthorizeAction, true
 	case AnalyticsDecisionPath:
 		return analyticsAuthorizeAction, true
+	case AlarmDecisionPath:
+		return alarmAuthorizeAction, true
 	default:
 		return "", false
 	}
@@ -572,7 +592,7 @@ type x509CertificateView struct {
 
 func safePath(path string) string {
 	switch path {
-	case CurrentPrincipalPath, RegistryReadDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath:
+	case CurrentPrincipalPath, RegistryReadDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath:
 		return path
 	default:
 		return "unmatched"

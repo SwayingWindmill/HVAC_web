@@ -1,5 +1,5 @@
 {
-  "routeRegistryRevision": 13,
+  "routeRegistryRevision": 14,
   "routes": {
     "GET /api/v1/health": { "revision": 1, "owner": "platform-gateway" },
     "GET /api/v1/version": { "revision": 1, "owner": "platform-gateway" },
@@ -33,8 +33,8 @@
     "GET /api/v1/sites/{siteId}/operations/investigations/{investigationId}/events": { "revision": 1, "owner": "operations-agent-service" },
     "POST /api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance": { "revision": 1, "owner": "operations-agent-service" },
     "POST /api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel": { "revision": 1, "owner": "operations-agent-service" },
-    "GET /api/v1/sites/{siteId}/alarms": { "revision": 1, "owner": "alarm-service" },
-    "GET /api/v1/sites/{siteId}/alarms/{alarmId}": { "revision": 1, "owner": "alarm-service" },
+    "GET /api/v1/sites/{siteId}/alarms": { "revision": 2, "owner": "alarm-service" },
+    "GET /api/v1/sites/{siteId}/alarms/{alarmId}": { "revision": 2, "owner": "alarm-service" },
     "POST /api/v1/sites/{siteId}/alarms/{alarmId}:acknowledge": { "revision": 1, "owner": "alarm-service" },
     "POST /api/v1/sites/{siteId}/alarms/{alarmId}:assign": { "revision": 1, "owner": "alarm-service" },
     "POST /api/v1/sites/{siteId}/alarms/{alarmId}:unassign": { "revision": 1, "owner": "alarm-service" },
@@ -43,7 +43,7 @@
     "POST /api/v1/sites/{siteId}/alarms/{alarmId}:close": { "revision": 1, "owner": "alarm-service" },
     "POST /api/v1/sites/{siteId}/alarms/{alarmId}:reopen": { "revision": 1, "owner": "alarm-service" }
   },
-  "dataRegistryRevision": 15,
+  "dataRegistryRevision": 16,
   "resources": {
     "schema:gateway": { "revision": 1, "writer": "platform-gateway" },
     "schema:audit_ledger": { "revision": 1, "writer": "audit-ledger-service" },
@@ -67,6 +67,8 @@
     "projection:iam-telemetry-authorization-decision": { "revision": 1, "writer": "iam-service" },
     "projection:iam-telemetry-grant-use": { "revision": 1, "writer": "iam-service" },
     "projection:iam-telemetry-revocation-fact": { "revision": 1, "writer": "iam-service" },
+    "projection:iam-alarm-permission": { "revision": 1, "writer": "iam-service" },
+    "projection:iam-alarm-authorization-decision": { "revision": 1, "writer": "iam-service" },
     "projection:iam-onboarding-reconciliation": { "revision": 1, "writer": "iam-service" },
     "projection:iam-reconciliation-quarantine": { "revision": 1, "writer": "iam-service" },
     "projection:device-runtime-binding": { "revision": 1, "writer": "telemetry-runtime-service" },

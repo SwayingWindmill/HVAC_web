@@ -115,7 +115,8 @@ for (const route of routeRegistry.routes ?? []) {
     }
   } else if (rollout.mode === 'percentage') {
     if (!Number.isInteger(rollout.percentage) || rollout.percentage < 0 || rollout.percentage > 100) errors.push(`${key}: rollout percentage must be 0..100`);
-    if (!allowedOwners.has(rollout.fallbackOwner) || rollout.fallbackOwner === route.owner) errors.push(`${key}: invalid fallback owner`);
+    const noFallbackS4Read = rollout.fallbackOwner === undefined && route.owner === 'alarm-service' && route.method === 'GET' && route.migrationPhase === 'S4-R1-internal-read-only';
+    if (!noFallbackS4Read && (!allowedOwners.has(rollout.fallbackOwner) || rollout.fallbackOwner === route.owner)) errors.push(`${key}: invalid fallback owner`);
     if (typeof rollout.cohortSalt !== 'string' || rollout.cohortSalt.length < 8) errors.push(`${key}: cohort salt is required`);
     if (!(route.allowedScopeDimensions ?? []).includes('organization') || !(route.allowedScopeDimensions ?? []).includes('principal')) {
       errors.push(`${key}: percentage rollout requires organization and principal scope dimensions`);
@@ -193,9 +194,13 @@ for (const route of routeRegistry.routes ?? []) {
   }
   if (s4AlarmReadRoutes.has(key) || s4AlarmLifecycleRoutes.has(key)) {
     if (route.owner !== 'alarm-service' || route.publicIngress !== 'platform-gateway') errors.push(`${key}: S4 Alarm route must remain behind Gateway ingress`);
-    if (route.activationStatus !== 'expand-baseline' || rollout.mode !== 'disabled') errors.push(`${key}: S4 Alarm baseline must carry zero production traffic`);
-    if (route.migrationPhase !== 'S4-R0-contract-only' || route.readOnlyFallback !== false) errors.push(`${key}: S4 Alarm baseline must remain contract-only without fallback`);
     const lifecycle = s4AlarmLifecycleRoutes.has(key);
+    if (lifecycle) {
+      if (route.activationStatus !== 'expand-baseline' || rollout.mode !== 'disabled' || route.migrationPhase !== 'S4-R0-contract-only') errors.push(`${key}: S4 Alarm lifecycle must remain contract-only at zero traffic`);
+    } else {
+      if (route.activationStatus !== 'internal-canary' || rollout.mode !== 'percentage' || rollout.percentage !== 1 || rollout.fallbackOwner !== undefined || typeof rollout.cohortSalt !== 'string' || route.migrationPhase !== 'S4-R1-internal-read-only') errors.push(`${key}: S4 Alarm read must use the no-fallback 1% internal canary`);
+    }
+    if (route.readOnlyFallback !== false) errors.push(`${key}: S4 Alarm request fallback is forbidden`);
     const expectedPhases = lifecycle ? expectedS4LifecyclePhases : expectedS4ReadPhases;
     const expectedCohort = lifecycle ? 's4-alarm-lifecycle-v1' : 's4-alarm-read-v1';
     const expectedShadow = lifecycle ? 'SYNTHETIC_ONLY' : 'NONE';

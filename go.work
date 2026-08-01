@@ -1,6 +1,7 @@
 go 1.25.12
 
 use (
+	./libs/alarmauth
 	./libs/analyticsmodel
 	./libs/alarmmodel
 	./libs/commandauth

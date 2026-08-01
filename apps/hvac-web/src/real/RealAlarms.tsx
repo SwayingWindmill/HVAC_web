@@ -1,21 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import {
   ALARM_LOCAL_ROUTES_ENABLED,
-  AlarmApiError,
-  acknowledgeScopedAlarm,
+  ALARM_PUBLIC_ROUTES_ENABLED,
   alarmErrorMessage,
-  assignScopedAlarm,
-  closeScopedAlarm,
   getScopedAlarm,
   listScopedAlarms,
-  reopenScopedAlarm,
-  suppressScopedAlarm,
-  unassignScopedAlarm,
-  unsuppressScopedAlarm,
-  type Alarm,
-  type AlarmOperation,
   type AlarmSeverity,
   type AlarmStatus,
   type ScopedAlarmRequestOptions,
@@ -33,25 +24,9 @@ interface RealAlarmsProps {
 }
 
 const ALARM_QUERY_PARAMETER = 'alarm';
-const DEFAULT_SUPPRESSION_HOURS = 4;
-
-type LifecycleOperation = Exclude<AlarmOperation, 'PUBLISH'>;
-
-interface LifecycleVariables {
-  operation: LifecycleOperation;
-  alarmId: string;
-  expectedVersion: number;
-  reason: string;
-  assigneeId?: string;
-  suppressedUntil?: string;
-  idempotencyKey: string;
-}
-
-interface LifecycleDraft {
-  reason: string;
-  assigneeId: string;
-  suppressionHours: number;
-}
+const LocalAlarmLifecycle = ALARM_LOCAL_ROUTES_ENABLED
+  ? lazy(() => import('./LocalAlarmLifecycle'))
+  : null;
 
 function alarmFromLocation(): string {
   return new URLSearchParams(globalThis.location.search).get(ALARM_QUERY_PARAMETER) ?? '';
@@ -61,17 +36,12 @@ function buildOptions(
   principal: CurrentPrincipalResponse,
   site: Readonly<Site>,
   signal?: AbortSignal,
-  idempotencyKey?: string,
 ): ScopedAlarmRequestOptions {
-  const options: ScopedAlarmRequestOptions = {
+  return {
     trustedOrganizationId: principal.context.actingOrganizationId,
     trustedSiteId: site.id,
     signal,
-    idempotencyKey,
   };
-  const sessionCapability = Reflect.get(principal.session, ['csrf', 'Token'].join('')) as string | undefined;
-  if (sessionCapability) options.csrfToken = sessionCapability;
-  return options;
 }
 
 function formatInstant(value: string, timeZone: string): string {
@@ -82,22 +52,28 @@ function formatInstant(value: string, timeZone: string): string {
   }).format(new Date(value));
 }
 
-function DisabledAlarmSurface({ site, principal }: Pick<RealAlarmsProps, 'site' | 'principal'>) {
+function DisabledAlarmSurface({
+  site,
+  principal,
+  reason,
+}: Pick<RealAlarmsProps, 'site' | 'principal'> & { reason: 'ROUTE_DISABLED' | 'CAPABILITY_DENIED' }) {
+  const capabilityDenied = reason === 'CAPABILITY_DENIED';
   return (
     <section className="real-alarms" data-testid="real-alarms-disabled" data-business-state="DISABLED" data-site-id={site.id}>
       <p className="real-shell-eyebrow">REAL MODE · SITE ALARMS</p>
       <FocusHeading>Alarm</FocusHeading>
       <div className="real-alarms__boundary" role="status">
-        <strong>生产 Alarm 读写保持禁用</strong>
-        <p>S4 Alarm 路由已登记，但生产流量仍为 0%。此页面不会读取、确认、指派、抑制或关闭 Alarm，也不会把设备状态推导成 Alarm。</p>
+        <strong>{capabilityDenied ? '当前会话没有 Alarm 列表能力' : 'Alarm 读取路由未启用'}</strong>
+        <p>{capabilityDenied
+          ? 'IAM 未向当前 Principal 与 acting Organization 发布 alarm.list。浏览器不会根据角色标签或 Site 访问权自行推导 Alarm 权限。'
+          : 'S4 Alarm 读取尚未对当前构建开放。此页面不会从 Telemetry、Presence 或 Device 状态补造 Alarm。'}</p>
       </div>
       <dl className="real-alarms__facts" aria-label="Alarm authority boundary">
         <div><dt>Site</dt><dd>{site.displayName}</dd></div>
         <div><dt>Registry Site ID</dt><dd>{site.id}</dd></div>
         <div><dt>Acting Organization</dt><dd>{principal.context.actingOrganizationId}</dd></div>
-        <div><dt>权威领域</dt><dd>Platform Gateway → Alarm Service</dd></div>
-        <div><dt>生产流量</dt><dd>0%</dd></div>
-        <div><dt>生命周期写入</dt><dd>未启用</dd></div>
+        <div><dt>权威读取</dt><dd>Platform Gateway → IAM → Alarm Service</dd></div>
+        <div><dt>生命周期写入</dt><dd>生产禁用</dd></div>
       </dl>
       <p className="real-alarms__honesty">没有 Alarm 数据不等于设备健康；只有 Alarm Service 发布并持久化的 lifecycle 才能显示为 Alarm。</p>
     </section>
@@ -105,13 +81,16 @@ function DisabledAlarmSurface({ site, principal }: Pick<RealAlarmsProps, 'site' 
 }
 
 export function RealAlarms(props: RealAlarmsProps) {
-  if (!ALARM_LOCAL_ROUTES_ENABLED) {
-    return <DisabledAlarmSurface site={props.site} principal={props.principal} />;
+  if (!ALARM_PUBLIC_ROUTES_ENABLED && !ALARM_LOCAL_ROUTES_ENABLED) {
+    return <DisabledAlarmSurface site={props.site} principal={props.principal} reason="ROUTE_DISABLED" />;
   }
-  return <LocalAlarmWorkbench {...props} />;
+  if (!props.principal.authorization.capabilities.includes('alarm.list')) {
+    return <DisabledAlarmSurface site={props.site} principal={props.principal} reason="CAPABILITY_DENIED" />;
+  }
+  return <AlarmWorkbench {...props} />;
 }
 
-function LocalAlarmWorkbench({
+function AlarmWorkbench({
   site,
   principal,
   registerUnsavedDraft,
@@ -123,28 +102,13 @@ function LocalAlarmWorkbench({
   const [status, setStatus] = useState<AlarmStatus | ''>('');
   const [severity, setSeverity] = useState<AlarmSeverity | ''>('');
   const [selectedAlarmId, setSelectedAlarmId] = useState(alarmFromLocation);
-  const [reason, setReason] = useState('');
-  const [assigneeId, setAssigneeId] = useState('');
-  const [suppressionHours, setSuppressionHours] = useState(DEFAULT_SUPPRESSION_HOURS);
-  const draftRef = useRef<LifecycleDraft>({ reason: '', assigneeId: '', suppressionHours: DEFAULT_SUPPRESSION_HOURS });
-  const idempotencyRef = useRef<{ fingerprint: string; key: string; suppressedUntil?: string } | null>(null);
-  const mutationControllerRef = useRef<AbortController | undefined>(undefined);
-
-  const resetDraft = useCallback(() => {
-    setReason('');
-    setAssigneeId('');
-    setSuppressionHours(DEFAULT_SUPPRESSION_HOURS);
-    draftRef.current = { reason: '', assigneeId: '', suppressionHours: DEFAULT_SUPPRESSION_HOURS };
-    idempotencyRef.current = null;
-  }, []);
+  const canReadDetail = principal.authorization.capabilities.includes('alarm.read');
 
   const purgeAlarmState = useCallback(async () => {
-    mutationControllerRef.current?.abort();
-    mutationControllerRef.current = undefined;
     await queryClient.cancelQueries({ queryKey: queryPrefix });
     queryClient.removeQueries({ queryKey: queryPrefix });
-    resetDraft();
-  }, [queryClient, queryPrefix, resetDraft]);
+    setSelectedAlarmId('');
+  }, [queryClient, queryPrefix]);
 
   useEffect(() => registerProtectedResource({
     id: `real-alarms-cache:${organizationId}:${site.id}`,
@@ -152,26 +116,15 @@ function LocalAlarmWorkbench({
     purge: purgeAlarmState,
   }), [organizationId, purgeAlarmState, registerProtectedResource, site.id]);
 
-  useEffect(() => registerUnsavedDraft({
-    id: `real-alarm-lifecycle-draft:${site.id}`,
-    label: `Alarm lifecycle draft for ${site.displayName}`,
-    isDirty: () => draftRef.current.reason.trim().length > 0
-      || draftRef.current.assigneeId.trim().length > 0
-      || draftRef.current.suppressionHours !== DEFAULT_SUPPRESSION_HOURS,
-  }), [registerUnsavedDraft, site.displayName, site.id]);
-
   useEffect(() => () => {
     void purgeAlarmState();
   }, [principal.authorization.policyRevision, principal.context.policyRevision, principal.session.id, purgeAlarmState]);
 
   useEffect(() => {
-    const handlePopState = () => {
-      setSelectedAlarmId(alarmFromLocation());
-      resetDraft();
-    };
+    const handlePopState = () => setSelectedAlarmId(alarmFromLocation());
     globalThis.addEventListener('popstate', handlePopState);
     return () => globalThis.removeEventListener('popstate', handlePopState);
-  }, [resetDraft]);
+  }, []);
 
   const listQuery = useInfiniteQuery({
     queryKey: [...queryPrefix, 'list', status || 'ALL', severity || 'ALL'],
@@ -198,97 +151,17 @@ function LocalAlarmWorkbench({
   const detailQuery = useQuery({
     queryKey: [...queryPrefix, 'detail', selectedAlarmId],
     queryFn: ({ signal }) => getScopedAlarm(selectedAlarmId, buildOptions(principal, site, signal)),
-    enabled: selectedAlarmId.length > 0,
+    enabled: selectedAlarmId.length > 0 && canReadDetail,
     staleTime: 15_000,
   });
 
   const publishAlarmId = useCallback((alarmId: string) => {
+    if (!canReadDetail) return;
     const parameters = new URLSearchParams(globalThis.location.search);
     parameters.set(ALARM_QUERY_PARAMETER, alarmId);
     globalThis.history.pushState(null, '', `${globalThis.location.pathname}?${parameters.toString()}${globalThis.location.hash}`);
     setSelectedAlarmId(alarmId);
-    resetDraft();
-  }, [resetDraft]);
-
-  const stableIdempotencyKey = useCallback((
-    fingerprint: string,
-    operation: LifecycleOperation,
-  ): { key: string; suppressedUntil?: string } => {
-    if (idempotencyRef.current?.fingerprint === fingerprint) return idempotencyRef.current;
-    const envelope = {
-      fingerprint,
-      key: `real-alarm-${crypto.randomUUID()}`,
-      ...(operation === 'SUPPRESS'
-        ? { suppressedUntil: new Date(Date.now() + suppressionHours * 60 * 60 * 1000).toISOString() }
-        : {}),
-    };
-    idempotencyRef.current = envelope;
-    return envelope;
-  }, [suppressionHours]);
-
-  const lifecycleMutation = useMutation({
-    mutationFn: async (variables: LifecycleVariables) => {
-      mutationControllerRef.current?.abort();
-      const controller = new AbortController();
-      mutationControllerRef.current = controller;
-      const options = buildOptions(principal, site, controller.signal, variables.idempotencyKey);
-      const baseInput = { expectedVersion: variables.expectedVersion, reason: variables.reason };
-      switch (variables.operation) {
-        case 'ACKNOWLEDGE':
-          return acknowledgeScopedAlarm(variables.alarmId, baseInput, options);
-        case 'ASSIGN':
-          return assignScopedAlarm(variables.alarmId, { ...baseInput, assigneeId: variables.assigneeId ?? '' }, options);
-        case 'UNASSIGN':
-          return unassignScopedAlarm(variables.alarmId, baseInput, options);
-        case 'SUPPRESS':
-          return suppressScopedAlarm(variables.alarmId, { ...baseInput, suppressedUntil: variables.suppressedUntil ?? '' }, options);
-        case 'UNSUPPRESS':
-          return unsuppressScopedAlarm(variables.alarmId, baseInput, options);
-        case 'CLOSE':
-          return closeScopedAlarm(variables.alarmId, baseInput, options);
-        case 'REOPEN':
-          return reopenScopedAlarm(variables.alarmId, baseInput, options);
-      }
-    },
-    onSuccess: (alarm) => {
-      queryClient.setQueryData([...queryPrefix, 'detail', alarm.alarmId], alarm);
-      void queryClient.invalidateQueries({ queryKey: [...queryPrefix, 'list'] });
-      resetDraft();
-    },
-    onError: (error) => {
-      if (error instanceof AlarmApiError && error.code === 'ALARM_VERSION_CONFLICT') {
-        void queryClient.invalidateQueries({ queryKey: [...queryPrefix, 'detail', selectedAlarmId] });
-        void queryClient.invalidateQueries({ queryKey: [...queryPrefix, 'list'] });
-      }
-    },
-    onSettled: () => {
-      mutationControllerRef.current = undefined;
-    },
-  });
-
-  const submitLifecycle = useCallback((operation: LifecycleOperation, alarm: Alarm) => {
-    const normalizedReason = reason.trim();
-    const normalizedAssignee = assigneeId.trim();
-    if (!normalizedReason) return;
-    const fingerprint = JSON.stringify({
-      operation,
-      alarmId: alarm.alarmId,
-      expectedVersion: alarm.version,
-      reason: normalizedReason,
-      assigneeId: operation === 'ASSIGN' ? normalizedAssignee : undefined,
-      suppressionHours: operation === 'SUPPRESS' ? suppressionHours : undefined,
-    });
-    const stableRequest = stableIdempotencyKey(fingerprint, operation);
-    lifecycleMutation.mutate({
-      operation,
-      alarmId: alarm.alarmId,
-      expectedVersion: alarm.version,
-      reason: normalizedReason,
-      assigneeId: operation === 'ASSIGN' ? normalizedAssignee : undefined,
-      suppressedUntil: stableRequest.suppressedUntil,
-      idempotencyKey: stableRequest.key,
-    });
-  }, [assigneeId, lifecycleMutation, reason, stableIdempotencyKey, suppressionHours]);
+  }, [canReadDetail]);
 
   const businessState = listQuery.isPending
     ? 'LOADING'
@@ -301,8 +174,6 @@ function LocalAlarmWorkbench({
           : 'READY';
   const detail = detailQuery.data;
   const detailProjection = detail ? projectRealAlarm(detail) : null;
-  const mutationReasonValid = reason.trim().length > 0;
-  const mutationDisabled = lifecycleMutation.isPending || !mutationReasonValid;
 
   return (
     <section
@@ -318,12 +189,16 @@ function LocalAlarmWorkbench({
           <FocusHeading>Alarm</FocusHeading>
           <p>{site.displayName} · {site.code} · {site.timezone}</p>
         </div>
-        <span className="real-alarms__local-marker">LOCAL / LIFECYCLE / PRODUCTION DISABLED</span>
+        <span className="real-alarms__local-marker">{ALARM_LOCAL_ROUTES_ENABLED
+          ? 'LOCAL / LIFECYCLE / PRODUCTION WRITES DISABLED'
+          : 'GATEWAY / IAM AUTHORIZED / 1% INTERNAL CANARY'}</span>
       </header>
 
       <div className="real-alarms__boundary" role="status">
-        <strong>本地 S4 权威生命周期</strong>
-        <p>页面只读取和更新 Alarm Service 发布的 durable Alarm。每次写入都带 expected version、CSRF 和稳定 Idempotency-Key；Telemetry、Presence 和 Device 状态不会在浏览器中转译为 Alarm。</p>
+        <strong>{ALARM_LOCAL_ROUTES_ENABLED ? '本地 S4 权威生命周期' : '生产 Alarm 权威只读 canary'}</strong>
+        <p>{ALARM_LOCAL_ROUTES_ENABLED
+          ? '页面只读取和更新 Alarm Service 发布的 durable Alarm。每次写入都带 expected version、CSRF 和稳定 Idempotency-Key；公共生产 POST 路由保持 0%。'
+          : '列表与详情经 Platform Gateway 和 IAM 精确授权后读取 Alarm Service。生命周期写入仍为 0%，Telemetry、Presence 和 Device 状态不会在浏览器中转译为 Alarm。'}</p>
       </div>
 
       <section className="real-alarms__filters" aria-label="Alarm filters">
@@ -370,7 +245,7 @@ function LocalAlarmWorkbench({
               const projection = projectRealAlarm(alarm);
               return (
                 <li key={alarm.alarmId} data-alarm-status={alarm.status} data-alarm-severity={alarm.severity}>
-                  <button type="button" onClick={() => publishAlarmId(alarm.alarmId)} aria-current={selectedAlarmId === alarm.alarmId ? 'true' : undefined}>
+                  <button type="button" disabled={!canReadDetail} onClick={() => publishAlarmId(alarm.alarmId)} aria-current={selectedAlarmId === alarm.alarmId ? 'true' : undefined}>
                     <span className="real-alarms__list-heading"><strong>{alarm.title}</strong><em>{projection.severityLabel}</em></span>
                     <span>{projection.statusLabel} · {projection.occurrenceLabel}</span>
                     <small>{projection.sourceLabel} · {formatInstant(alarm.lastOccurredAt, site.timezone)}</small>
@@ -381,8 +256,14 @@ function LocalAlarmWorkbench({
           </ol>
 
           <section className="real-alarms__detail-shell" aria-label="Alarm detail">
-            {!selectedAlarmId ? <div className="real-alarms__empty"><strong>选择一条 Alarm 查看权威详情</strong></div> : null}
-            {selectedAlarmId && detailQuery.isPending ? <div className="real-shell-progress" role="status">正在读取 Alarm 详情…</div> : null}
+            {!canReadDetail ? (
+              <div className="real-alarms__empty" data-testid="real-alarm-detail-denied">
+                <strong>当前会话没有 Alarm 详情能力</strong>
+                <p>IAM 未发布 alarm.read。列表不会被浏览器角色或其他 Site 能力扩展为详情访问。</p>
+              </div>
+            ) : null}
+            {canReadDetail && !selectedAlarmId ? <div className="real-alarms__empty"><strong>选择一条 Alarm 查看权威详情</strong></div> : null}
+            {canReadDetail && selectedAlarmId && detailQuery.isPending ? <div className="real-shell-progress" role="status">正在读取 Alarm 详情…</div> : null}
             {detailQuery.isError ? <div className="real-shell-problem" role="alert">{alarmErrorMessage(detailQuery.error)}</div> : null}
             {detail && detailProjection ? (
               <article className="real-alarms__detail" data-testid="real-alarm-detail" data-alarm-status={detail.status} data-alarm-version={detail.version}>
@@ -403,77 +284,23 @@ function LocalAlarmWorkbench({
                   <div><dt>Alarm Version</dt><dd>{detail.version}</dd></div>
                 </dl>
 
-                <section className="real-alarms__lifecycle" aria-labelledby="real-alarm-lifecycle-title">
-                  <h3 id="real-alarm-lifecycle-title">生命周期操作</h3>
-                  <p>原因会写入权威时间线。相同草稿重试沿用同一 Idempotency-Key；版本冲突会重新读取最新 Alarm，不会覆盖他人操作。</p>
-                  <label>
-                    操作原因
-                    <textarea
-                      data-testid="real-alarm-reason"
-                      maxLength={256}
-                      value={reason}
-                      onChange={(event) => {
-                        const value = event.currentTarget.value;
-                        setReason(value);
-                        draftRef.current = { ...draftRef.current, reason: value };
-                        idempotencyRef.current = null;
-                      }}
+                {LocalAlarmLifecycle ? (
+                  <Suspense fallback={<div className="real-shell-progress" role="status">正在载入本地 Alarm 生命周期工具…</div>}>
+                    <LocalAlarmLifecycle
+                      alarm={detail}
+                      projection={detailProjection}
+                      site={site}
+                      principal={principal}
+                      queryPrefix={queryPrefix}
+                      registerUnsavedDraft={registerUnsavedDraft}
                     />
-                  </label>
-                  {detail.status !== 'CLOSED' ? (
-                    <label>
-                      指派对象
-                      <input
-                        data-testid="real-alarm-assignee"
-                        maxLength={256}
-                        value={assigneeId}
-                        placeholder="principal 或 operator 标识"
-                        onChange={(event) => {
-                          const value = event.currentTarget.value;
-                          setAssigneeId(value);
-                          draftRef.current = { ...draftRef.current, assigneeId: value };
-                          idempotencyRef.current = null;
-                        }}
-                      />
-                    </label>
-                  ) : null}
-                  {detail.status === 'OPEN' || detail.status === 'ACKNOWLEDGED' ? (
-                    <label>
-                      抑制时长
-                      <select
-                        data-testid="real-alarm-suppression-hours"
-                        value={suppressionHours}
-                        onChange={(event) => {
-                          const value = Number(event.currentTarget.value);
-                          setSuppressionHours(value);
-                          draftRef.current = { ...draftRef.current, suppressionHours: value };
-                          idempotencyRef.current = null;
-                        }}
-                      >
-                        <option value={1}>1 小时</option>
-                        <option value={4}>4 小时</option>
-                        <option value={24}>24 小时</option>
-                        <option value={168}>7 天</option>
-                      </select>
-                    </label>
-                  ) : null}
-                  <div className="real-alarms__actions">
-                    {detailProjection.canAcknowledge ? <button data-testid="real-alarm-acknowledge" type="button" disabled={mutationDisabled} onClick={() => submitLifecycle('ACKNOWLEDGE', detail)}>确认</button> : null}
-                    {detailProjection.canAssign ? <button data-testid="real-alarm-assign" type="button" disabled={mutationDisabled || !assigneeId.trim()} onClick={() => submitLifecycle('ASSIGN', detail)}>指派</button> : null}
-                    {detailProjection.canUnassign ? <button data-testid="real-alarm-unassign" type="button" disabled={mutationDisabled} onClick={() => submitLifecycle('UNASSIGN', detail)}>取消指派</button> : null}
-                    {detailProjection.canSuppress ? <button data-testid="real-alarm-suppress" type="button" disabled={mutationDisabled} onClick={() => submitLifecycle('SUPPRESS', detail)}>抑制</button> : null}
-                    {detailProjection.canUnsuppress ? <button data-testid="real-alarm-unsuppress" type="button" disabled={mutationDisabled} onClick={() => submitLifecycle('UNSUPPRESS', detail)}>解除抑制</button> : null}
-                    {detailProjection.canClose ? <button data-testid="real-alarm-close" type="button" disabled={mutationDisabled} onClick={() => submitLifecycle('CLOSE', detail)}>关闭</button> : null}
-                    {detailProjection.canReopen ? <button data-testid="real-alarm-reopen" type="button" disabled={mutationDisabled} onClick={() => submitLifecycle('REOPEN', detail)}>重新打开</button> : null}
-                  </div>
-                  {lifecycleMutation.isPending ? <div className="real-shell-progress" role="status">正在提交 Alarm 生命周期操作…</div> : null}
-                  {lifecycleMutation.isError ? (
-                    <div className="real-shell-problem" role="alert" data-testid="real-alarm-mutation-error">
-                      <strong>Alarm 生命周期操作失败</strong>
-                      <span>{alarmErrorMessage(lifecycleMutation.error)}</span>
-                    </div>
-                  ) : null}
-                </section>
+                  </Suspense>
+                ) : (
+                  <section className="real-alarms__lifecycle" data-testid="real-alarm-read-only" aria-labelledby="real-alarm-read-only-title">
+                    <h3 id="real-alarm-read-only-title">只读 Alarm canary</h3>
+                    <p>当前生产阶段仅允许经 Gateway 与 IAM 授权的列表和详情读取。确认、指派、抑制、关闭和重新打开仍保持 0% 公共流量。</p>
+                  </section>
+                )}
 
                 <section className="real-alarms__evidence" aria-labelledby="real-alarm-evidence-title">
                   <h3 id="real-alarm-evidence-title">证据引用</h3>

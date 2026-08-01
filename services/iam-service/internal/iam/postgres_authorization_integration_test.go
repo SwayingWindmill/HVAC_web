@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/services/iam-service/internal/iam"
@@ -182,6 +183,67 @@ func TestPostgresPrincipalTelemetryCapabilityLookupDoesNotEnumerateDevicesOrKeys
 	}
 	if len(facts.Devices) != 0 || len(facts.KeyBindings) != 0 {
 		t.Fatalf("capability lookup enumerated Device/key facts: %#v", facts)
+	}
+}
+
+func TestPostgresAlarmAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *testing.T) {
+	runtimeURL := requiredIAMPostgresEnv(t, "S1_IAM_DATABASE_URL")
+	adminURL := requiredIAMPostgresEnv(t, "S1_ADMIN_DATABASE_URL")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := iam.OpenPostgresAuthorizationStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	facts, err := store.LookupAlarmAuthorization(ctx, iam.AuthorizationLookup{
+		SubjectIssuer: postgresFixtureIssuer, Subject: "owner-a", ActingOrganizationID: postgresOwnerAOrganizationID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !facts.Found || facts.Principal.ID != postgresOwnerAPrincipalID || facts.PolicyRevision != "alarm-access:1" || len(facts.Permissions) != 2 {
+		t.Fatalf("Alarm facts = %#v", facts)
+	}
+	for _, permission := range facts.Permissions {
+		if permission.OrganizationID != postgresOwnerAOrganizationID || permission.SiteID != postgresOwnerASite1ID || permission.Effect != iam.BindingEffectAllow || permission.Status != iam.FactStatusActive {
+			t.Fatalf("unexpected Alarm permission: %#v", permission)
+		}
+	}
+
+	other, err := store.LookupAlarmAuthorization(ctx, iam.AuthorizationLookup{
+		SubjectIssuer: postgresFixtureIssuer, Subject: "owner-a", ActingOrganizationID: postgresActingOrganizationID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !other.Found || other.PolicyRevision != "alarm-access:unconfigured" || len(other.Permissions) != 0 {
+		t.Fatalf("cross-Organization Alarm facts were not fail-closed: %#v", other)
+	}
+
+	requestID := "alarm-postgres-decision-1"
+	if err := store.RecordAlarmDecision(ctx, iam.AlarmDecisionAudit{
+		PrincipalID: postgresOwnerAPrincipalID, ActingOrganizationID: postgresOwnerAOrganizationID,
+		SiteID: postgresOwnerASite1ID, Action: alarmauth.ActionList, Allowed: true,
+		PolicyRevision: "alarm-access:1", ReasonCode: alarmauth.ReasonAllowExactScope,
+		RequestID: requestID, TraceID: "trace-alarm-postgres-1", OccurredAt: "2026-08-01T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	defer admin.Exec(context.Background(), `DELETE FROM iam.alarm_authorization_decisions WHERE request_id = $1`, requestID)
+	var allowed bool
+	var policyRevision, reasonCode string
+	if err := admin.QueryRow(ctx, `SELECT allowed, policy_revision, reason_code FROM iam.alarm_authorization_decisions WHERE request_id = $1`, requestID).Scan(&allowed, &policyRevision, &reasonCode); err != nil {
+		t.Fatal(err)
+	}
+	if !allowed || policyRevision != "alarm-access:1" || reasonCode != string(alarmauth.ReasonAllowExactScope) {
+		t.Fatalf("durable Alarm decision = allowed=%v policy=%q reason=%q", allowed, policyRevision, reasonCode)
 	}
 }
 

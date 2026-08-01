@@ -12,6 +12,7 @@ function assert(condition, message) {
 const [
   openapi,
   routes,
+  dataOwnership,
   ownershipLock,
   model,
   serviceHTTP,
@@ -21,13 +22,24 @@ const [
   lifecycleMigration,
   postgresFixture,
   postgresRunner,
+  alarmAuth,
+  iamAuthorization,
+  iamServer,
+  iamPostgres,
+  iamMigration,
+  gatewayAlarm,
+  gatewayServer,
   webAPI,
   realAlarms,
+  localLifecycle,
   siteScopedShell,
   realApp,
+  publicBrowser,
+  lifecycleBrowser,
 ] = await Promise.all([
   readJSON('contracts/http/s4-alarm-public.openapi.json'),
   readJSON('contracts/ownership/route-ownership.v1.json'),
+  readJSON('contracts/ownership/data-ownership.v1.json'),
   readJSON('contracts/ownership/ownership.v1.lock.json'),
   readText('libs/alarmmodel/model.go'),
   readText('services/alarm-service/pkg/alarmservice/http.go'),
@@ -37,28 +49,43 @@ const [
   readText('services/alarm-service/migrations/002_s4_alarm_lifecycle.sql'),
   readText('infra/s4-alarm/compose.yaml'),
   readText('scripts/run-s4-alarm-postgres-tests.mjs'),
+  readText('libs/alarmauth/authorization.go'),
+  readText('services/iam-service/internal/iam/alarm_authorization.go'),
+  readText('services/iam-service/internal/iam/alarm_server.go'),
+  readText('services/iam-service/internal/iam/postgres_alarm_authorization.go'),
+  readText('infra/s1-registry/postgres/init/007-s4-alarm-authorization.sql'),
+  readText('services/platform-gateway/internal/gateway/alarm.go'),
+  readText('services/platform-gateway/internal/gateway/server.go'),
   readText('apps/hvac-web/src/api/alarms.ts'),
   readText('apps/hvac-web/src/real/RealAlarms.tsx'),
+  readText('apps/hvac-web/src/real/LocalAlarmLifecycle.tsx'),
   readText('apps/hvac-web/src/real/SiteScopedShell.tsx'),
   readText('apps/hvac-web/src/real/RealApp.tsx'),
+  readText('scripts/run-real-alarms-browser-audit.mjs'),
+  readText('scripts/run-real-alarm-lifecycle-browser-audit.mjs'),
 ]);
 
-assert(openapi.info?.version === '0.2.0-contract-only', 'Alarm OpenAPI is not the S4 lifecycle contract-only baseline');
+assert(openapi.info?.version === '0.3.0-internal-read-canary', 'Alarm OpenAPI is not the S4 internal read canary contract');
 const listPath = '/api/v1/sites/{siteId}/alarms';
 const detailPath = '/api/v1/sites/{siteId}/alarms/{alarmId}';
-for (const path of [listPath, detailPath]) {
+const readActions = new Map([[listPath, 'alarm:list'], [detailPath, 'alarm:read']]);
+for (const [path, action] of readActions) {
   const operation = openapi.paths?.[path]?.get;
   assert(operation?.['x-owner'] === 'alarm-service', `Alarm owner is missing for ${path}`);
   assert(operation?.['x-public-ingress'] === 'platform-gateway', `Gateway ingress is missing for ${path}`);
-  assert(operation?.['x-production-traffic-percent'] === 0, `Alarm production traffic is enabled for ${path}`);
-  assert(operation?.['x-migration-phase'] === 'S4-R0-contract-only', `Alarm phase is not contract-only for ${path}`);
+  assert(operation?.['x-production-traffic-percent'] === 1, `Alarm read canary is not exactly 1% for ${path}`);
+  assert(operation?.['x-migration-phase'] === 'S4-R1-internal-read-only', `Alarm read phase is invalid for ${path}`);
+  assert(operation?.['x-iam-action'] === action && operation?.['x-no-fallback'] === true, `Alarm IAM action or no-fallback marker is missing for ${path}`);
   const route = routes.routes?.find((entry) => entry.method === 'GET' && entry.path === path);
-  assert(route?.owner === 'alarm-service', `Route Ownership Registry is missing ${path}`);
-  assert(route?.rollout?.mode === 'disabled', `Alarm route ${path} is not disabled`);
-  assert(route?.migrationPhase === 'S4-R0-contract-only', `Alarm route ${path} has the wrong phase`);
+  assert(route?.owner === 'alarm-service' && route?.publicIngress === 'platform-gateway', `Route Ownership Registry is missing ${path}`);
+  assert(route?.revision === 2 && route?.activationStatus === 'internal-canary', `Alarm route ${path} is not the reviewed revision-2 internal canary`);
+  assert(route?.rollout?.mode === 'percentage' && route?.rollout?.percentage === 1, `Alarm route ${path} is not the exact 1% canary`);
+  assert(route?.rollout?.fallbackOwner === undefined && route?.rollout?.cohortSalt === 's4-alarm-read-canary-v1', `Alarm route ${path} has fallback or an unexpected cohort salt`);
+  assert(route?.migrationPhase === 'S4-R1-internal-read-only', `Alarm route ${path} has the wrong phase`);
   assert(route?.shadowSideEffectPolicy === 'NONE' && route?.readOnlyFallback === false, `Alarm route ${path} permits fallback or side effects`);
+  for (const scope of ['organization', 'site', 'principal']) assert(route?.allowedScopeDimensions?.includes(scope), `Alarm route ${path} is missing scope ${scope}`);
   assert(route?.fallbackForbiddenResults?.includes('AUTHORIZATION_DENIED') && route?.fallbackForbiddenResults?.includes('RESOURCE_NOT_FOUND'), `Alarm route ${path} has incomplete non-leaking results`);
-  assert(ownershipLock.routes?.[`GET ${path}`]?.owner === 'alarm-service', `Alarm ownership lock is missing ${path}`);
+  assert(ownershipLock.routes?.[`GET ${path}`]?.owner === 'alarm-service' && ownershipLock.routes?.[`GET ${path}`]?.revision === 2, `Alarm ownership lock is missing revision 2 for ${path}`);
 }
 
 const lifecycleSuffixes = ['acknowledge', 'assign', 'unassign', 'suppress', 'unsuppress', 'close', 'reopen'];
@@ -78,7 +105,14 @@ for (const suffix of lifecycleSuffixes) {
   assert(route?.shadowSideEffectPolicy === 'SYNTHETIC_ONLY' && route?.readOnlyFallback === false, `Alarm lifecycle route ${path} permits unsafe shadow or fallback`);
   for (const scope of ['organization', 'site', 'alarm', 'principal', 'key']) assert(route?.allowedScopeDimensions?.includes(scope), `Alarm lifecycle route ${path} is missing scope ${scope}`);
   for (const result of ['AUTHORIZATION_DENIED', 'RESOURCE_NOT_FOUND', 'VERSION_CONFLICT', 'IDEMPOTENCY_CONFLICT']) assert(route?.fallbackForbiddenResults?.includes(result), `Alarm lifecycle fallback is not forbidden for ${result} at ${path}`);
-  assert(ownershipLock.routes?.[`POST ${path}`]?.owner === 'alarm-service', `Alarm lifecycle ownership lock is missing ${path}`);
+  assert(ownershipLock.routes?.[`POST ${path}`]?.owner === 'alarm-service' && ownershipLock.routes?.[`POST ${path}`]?.revision === 1, `Alarm lifecycle ownership lock drifted for ${path}`);
+}
+
+assert(dataOwnership.registryRevision >= 16 && ownershipLock.dataRegistryRevision >= 16, 'Alarm IAM ownership revision was not advanced');
+for (const name of ['iam-alarm-permission', 'iam-alarm-authorization-decision']) {
+  const resource = dataOwnership.resources?.find((entry) => entry.name === name);
+  assert(resource?.kind === 'projection' && resource?.writer === 'iam-service' && resource?.revision === 1, `Alarm IAM ownership resource ${name} is missing`);
+  assert(ownershipLock.resources?.[`projection:${name}`]?.writer === 'iam-service', `Alarm IAM ownership lock is missing ${name}`);
 }
 
 const alarmSchema = openapi.components?.schemas?.Alarm;
@@ -90,6 +124,22 @@ const transitionSchema = openapi.components?.schemas?.AlarmTransition;
 for (const field of ['operation', 'actorId', 'assigneeId', 'suppressedUntil', 'policyRevision', 'correlationId']) {
   assert(transitionSchema?.properties?.[field], `Alarm transition evidence field ${field} is missing`);
 }
+
+assert(alarmAuth.includes('ActionList Action = "alarm:list"') && alarmAuth.includes('ActionRead Action = "alarm:read"'), 'Alarm IAM action vocabulary is incomplete');
+assert(alarmAuth.includes('DecisionRequest') && alarmAuth.includes('Decision') && alarmAuth.includes('ReasonAllowExactScope'), 'Alarm IAM decision contract is incomplete');
+assert(iamAuthorization.includes('LookupAlarmAuthorization') && iamAuthorization.includes('ReasonDenyExplicit') && iamAuthorization.includes('alarmCapabilityAllowed'), 'IAM exact Alarm authorization is incomplete');
+assert(iamServer.includes('handleAlarmDecision') && iamServer.includes('AlarmDecisionAudit') && iamServer.includes('IAM_AUTHORIZATION_AUDIT_UNAVAILABLE'), 'IAM Alarm decision or audit fail-closed boundary is missing');
+assert(iamPostgres.includes('iam.alarm_permissions') && iamPostgres.includes('iam.alarm_authorization_decisions'), 'IAM Alarm Postgres store is incomplete');
+assert(iamMigration.includes('FORCE ROW LEVEL SECURITY') && iamMigration.includes('GRANT SELECT ON iam.alarm_permissions') && iamMigration.includes('GRANT INSERT ON iam.alarm_authorization_decisions'), 'IAM Alarm RLS or least-privilege grants are missing');
+assert(!iamMigration.includes('GRANT UPDATE ON iam.alarm_permissions TO s1_iam_runtime') && !iamMigration.includes('GRANT DELETE'), 'IAM Alarm runtime has excessive privileges');
+
+assert(gatewayServer.includes('X-Alarm-Read-Context') && gatewayServer.includes('X-Alarm-Write-Context'), 'Gateway does not reject browser Alarm authority headers');
+assert(gatewayAlarm.includes('alarm:authorize') && gatewayAlarm.includes('alarmDecisionPath'), 'Gateway does not request exact IAM Alarm authorization');
+assert(gatewayAlarm.includes('X-Alarm-Read-Context') && gatewayAlarm.includes('SignDelegation'), 'Gateway does not sign the Alarm read context');
+assert(gatewayAlarm.includes('validatePublicAlarmQuery') && gatewayAlarm.includes('maximumAlarmQueryLength'), 'Gateway Alarm query bounds are missing');
+assert(gatewayAlarm.includes('response.Validate(session.ActingOrganizationID, route.siteID, limit)') && gatewayAlarm.includes('alarm.OrganizationID != session.ActingOrganizationID'), 'Gateway does not revalidate Alarm response scope');
+assert(gatewayAlarm.includes('Cache-Control') && gatewayAlarm.includes('private, no-store'), 'Gateway Alarm responses are not protected from caching');
+assert(!gatewayAlarm.includes('/telemetry/'), 'Gateway derives Alarm state from Telemetry HTTP');
 
 for (const symbol of ['OperationAcknowledge', 'OperationAssign', 'OperationUnassign', 'OperationSuppress', 'OperationUnsuppress', 'OperationClose', 'OperationReopen']) {
   assert(model.includes(symbol), `Alarm lifecycle model is missing ${symbol}`);
@@ -120,15 +170,21 @@ assert(postgresRunner.includes('S4_ALARM_TEST_DATABASE_URL'), 'Alarm PostgreSQL 
 assert(postgresRunner.includes('runtime login bypassed explicit role activation') && postgresRunner.includes('runtime can insert Alarm authority rows'), 'Alarm PostgreSQL integration does not prove activation and least privilege');
 assert(postgresRunner.includes('durable lifecycle projection') && postgresRunner.includes('durable idempotency record'), 'Alarm PostgreSQL integration does not prove durable mutation convergence');
 
-assert(webAPI.includes("'X-CSRF-Token'") && webAPI.includes("'Idempotency-Key'"), 'Alarm Web mutation does not require CSRF and idempotency');
-assert(webAPI.includes('expectedVersion') && webAPI.includes('acknowledgeScopedAlarm') && webAPI.includes('reopenScopedAlarm'), 'Alarm Web lifecycle API is incomplete');
-const disabledBoundaryIndex = realAlarms.indexOf('if (!ALARM_LOCAL_ROUTES_ENABLED)');
-const localWorkbenchIndex = realAlarms.indexOf('function LocalAlarmWorkbench');
-assert(disabledBoundaryIndex >= 0 && localWorkbenchIndex > disabledBoundaryIndex, 'Real Alarm production path does not fail closed before local hooks');
-assert(realAlarms.includes('useMutation') && realAlarms.includes('registerUnsavedDraft'), 'Real Alarm lifecycle workbench or draft protection is missing');
-assert(realAlarms.includes('ALARM_VERSION_CONFLICT') && realAlarms.includes('stableIdempotencyKey'), 'Real Alarm conflict recovery or stable retry key is missing');
-assert(realAlarms.includes('不会把设备状态推导成 Alarm'), 'Real Alarm disabled surface does not state the non-inference boundary');
-assert(siteScopedShell.includes('registerUnsavedDraft={registerUnsavedDraft}'), 'Site shell does not protect Alarm lifecycle drafts');
+assert(webAPI.includes("ALARM_PUBLIC_ROUTES_ENABLED = API_MODE === 'real'"), 'Alarm Web public GET route is not enabled in Real mode');
+assert(webAPI.includes('if (!ALARM_LOCAL_ROUTES_ENABLED)') && webAPI.includes('ALARM_LIFECYCLE_DISABLED'), 'Alarm Web mutations are not local-only fail-closed');
+assert(webAPI.includes("'X-CSRF-Token'") && webAPI.includes("'Idempotency-Key'"), 'Alarm Web local mutation does not require CSRF and idempotency');
+assert(realAlarms.includes("capabilities.includes('alarm.list')") && realAlarms.includes("capabilities.includes('alarm.read')"), 'Real Alarm does not honor IAM list/detail capabilities');
+assert(realAlarms.includes("lazy(() => import('./LocalAlarmLifecycle'))") && !realAlarms.includes('useMutation'), 'Real Alarm production component still instantiates lifecycle mutation hooks');
+assert(realAlarms.includes('1% INTERNAL CANARY') && realAlarms.includes('只读 Alarm canary'), 'Real Alarm production read canary boundary is missing');
+assert(localLifecycle.includes('useMutation') && localLifecycle.includes('registerUnsavedDraft'), 'Local Alarm lifecycle workbench or draft protection is missing');
+assert(localLifecycle.includes('ALARM_VERSION_CONFLICT') && localLifecycle.includes('stableIdempotencyRequest'), 'Local Alarm conflict recovery or stable retry key is missing');
+assert(realAlarms.includes('Telemetry、Presence 和 Device 状态不会在浏览器中转译为 Alarm'), 'Real Alarm non-inference boundary is missing');
+assert(siteScopedShell.includes("effectiveCapabilities.includes('alarm.list')"), 'Site Alarm navigation is not capability gated');
+assert(siteScopedShell.includes('registerUnsavedDraft={registerUnsavedDraft}'), 'Site shell does not protect local Alarm lifecycle drafts');
 assert(realApp.includes("platformNavigation.filter((item) => item.id !== 'alarms')"), 'Site navigation still exposes the obsolete global Alarm placeholder');
 
-console.log('S4 Alarm lifecycle baseline passed: disabled public routes, exact signed scope, durable state machine, optimistic concurrency, idempotent replay, least-privilege RLS and protected local UI are present.');
+assert(publicBrowser.includes("delete process.env.VITE_S4_LOCAL_ALARMS") && publicBrowser.includes('public-gateway-get-only-no-local-or-telemetry-inference'), 'Public Alarm browser certification is not Gateway-only');
+assert(publicBrowser.includes('capability-denial-generic-boundary-and-cache-purge') && publicBrowser.includes('lifecycleWrites: false'), 'Public Alarm browser certification does not prove denial and no writes');
+assert(lifecycleBrowser.includes("process.env.VITE_S4_LOCAL_ALARMS = 'true'") && lifecycleBrowser.includes('stable-suppression-payload-and-idempotency'), 'Local Alarm lifecycle browser certification was not preserved');
+
+console.log('S4 Alarm read activation passed: exact IAM authorization, durable audit, no-fallback 1% Gateway reads, response scope validation, production read-only Web and 0% lifecycle writes are present.');

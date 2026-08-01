@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "S4 Alarm Public Read and Lifecycle API",
-    "version": "0.2.0-contract-only",
-    "description": "Authoritative Site-scoped Alarm read and lifecycle contract. Production traffic remains disabled until separate Gateway authorization and operational certification."
+    "version": "0.3.0-internal-read-canary",
+    "description": "Authoritative Site-scoped Alarm contract. List and detail reads use a 1% internal no-fallback canary through Platform Gateway and exact IAM authorization; every lifecycle POST remains production-disabled at 0%."
   },
   "paths": {
     "/api/v1/sites/{siteId}/alarms": {
@@ -11,8 +11,10 @@
         "operationId": "listSiteAlarms",
         "x-owner": "alarm-service",
         "x-public-ingress": "platform-gateway",
-        "x-production-traffic-percent": 0,
-        "x-migration-phase": "S4-R0-contract-only",
+        "x-production-traffic-percent": 1,
+        "x-migration-phase": "S4-R1-internal-read-only",
+        "x-iam-action": "alarm:list",
+        "x-no-fallback": true,
         "parameters": [
           { "$ref": "#/components/parameters/SiteId" },
           { "name": "status", "in": "query", "schema": { "$ref": "#/components/schemas/AlarmStatus" } },
@@ -34,8 +36,10 @@
         "operationId": "getSiteAlarm",
         "x-owner": "alarm-service",
         "x-public-ingress": "platform-gateway",
-        "x-production-traffic-percent": 0,
-        "x-migration-phase": "S4-R0-contract-only",
+        "x-production-traffic-percent": 1,
+        "x-migration-phase": "S4-R1-internal-read-only",
+        "x-iam-action": "alarm:read",
+        "x-no-fallback": true,
         "parameters": [
           { "$ref": "#/components/parameters/SiteId" },
           { "$ref": "#/components/parameters/AlarmId" }
