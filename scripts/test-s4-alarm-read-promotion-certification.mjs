@@ -10,11 +10,11 @@ const runner = resolve(root, 'scripts/run-s4-alarm-read-promotion-certification.
 const verifier = resolve(root, 'scripts/verify-s4-alarm-read-promotion-certification.mjs');
 const templatePath = resolve(root, 'scripts/fixtures/s4-alarm-read-promotion/formal-attestation.template.json');
 const routeRegistry = JSON.parse(await readFile(resolve(root, 'contracts/ownership/route-ownership.v1.json'), 'utf8'));
-const repositorySha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+const repositorySha = process.env.GITHUB_SHA ?? execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
 const run = (script, args, options = {}) => spawnSync(process.execPath, [script, ...args], {
   cwd: root,
   encoding: 'utf8',
-  env: { ...process.env, GITHUB_SHA: repositorySha, S4_ALARM_ALLOW_TEST_FIXTURE: 'true', ...options.env },
+  env: { ...process.env, GITHUB_SHA: repositorySha, GITHUB_RUN_ID: 's4-alarm-read-promotion-fixture-run-001', S4_ALARM_ALLOW_TEST_FIXTURE: 'true', ...options.env },
 });
 const withTemp = async (callback) => {
   const directory = await mkdtemp(join(tmpdir(), 's4-alarm-promotion-'));
@@ -85,6 +85,14 @@ await test('test fixtures, synthetic, incomplete and tampered evidence fail clos
     assert.notEqual(synthetic.status, 0);
     assert.match(synthetic.stderr, /synthetic evidence cannot certify/i);
 
+    const wrongRunPath = await materializeAttestation(directory, (value) => {
+      value.workflowRunId = 'different-workflow-run';
+      return value;
+    });
+    const wrongRun = run(runner, ['--profile=formal', `--attestation=${wrongRunPath}`, `--output-dir=${join(directory, 'wrong-run')}`]);
+    assert.notEqual(wrongRun.status, 0);
+    assert.match(wrongRun.stderr, /workflow run .* does not match/i);
+
     const incompletePath = await materializeAttestation(directory, (value) => {
       delete value.zeroCounters.responseScopeMismatches;
       return value;
@@ -119,6 +127,12 @@ await test('test fixtures, synthetic, incomplete and tampered evidence fail clos
     const evidenceDir = join(directory, 'tampered');
     const valid = run(runner, ['--profile=formal', `--attestation=${validPath}`, `--output-dir=${evidenceDir}`]);
     assert.equal(valid.status, 0, valid.stderr || valid.stdout);
+    const unexpectedPath = join(evidenceDir, 'notes.txt');
+    await writeFile(unexpectedPath, 'unexpected evidence\n');
+    const unexpected = run(verifier, [`--directory=${evidenceDir}`]);
+    assert.notEqual(unexpected.status, 0);
+    assert.match(unexpected.stderr, /unexpected files: notes\.txt/i);
+    await rm(unexpectedPath, { force: true });
     const sloPath = join(evidenceDir, 'slo-report.json');
     const slo = JSON.parse(await readFile(sloPath, 'utf8'));
     slo.observed.p95Milliseconds = 999;

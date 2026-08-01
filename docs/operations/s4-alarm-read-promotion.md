@@ -26,7 +26,7 @@ Preflight must prove:
 The target environment supplies a JSON attestation bound to the exact repository SHA and workflow run. Run:
 
 ```text
-node scripts/run-s4-alarm-read-promotion-certification.mjs --profile=formal --attestation=<attestation.json> --output-dir=<evidence-directory>
+node scripts/run-s4-alarm-read-promotion-certification.mjs --profile=formal --attestation=<attestation.json> --workflow-run-id=<workflow-run-id> --output-dir=<evidence-directory>
 node scripts/verify-s4-alarm-read-promotion-certification.mjs --directory=<evidence-directory>
 ```
 

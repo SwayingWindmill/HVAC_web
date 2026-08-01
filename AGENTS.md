@@ -65,17 +65,19 @@ Use CodeGraph first for code structure, call paths and change-impact questions w
 
 ### Git branches and worktrees
 
-Use one Git path model for this repository: run repository Git operations from WSL and use `/mnt/e/Code/HVAC_web` as the canonical checkout. Do not alternate between Windows-style `E:/...` worktree metadata and WSL `/mnt/e/...` metadata.
+Use Windows Git exclusively for this repository. The canonical checkout is `E:\Code\HVAC_web`, and every worktree must be registered with Windows-style paths. Never run WSL Git against this repository or its worktrees, and never alternate Windows `E:/...` metadata with WSL `/mnt/e/...` metadata. WSL or Bash may run non-Git tools only.
 
-Keep worktrees outside the repository root under `/mnt/e/Code/HVAC_web-worktrees/<issue>-<slug>`. Never create `.worktrees/`, `.clones/`, nested repository copies, or generated checkout trees inside `HVAC_web`. Keep at most two active auxiliary worktrees unless a Map explicitly records why more are required.
+When automation starts from Bash or WSL, resolve Windows Git with `where git` and invoke the returned `git.exe` explicitly through `cmd.exe`, PowerShell, or a Windows process. Clear inherited `GIT_*`, `PWD`, `OLDPWD`, and `WSL*` variables before launching Windows Git, and pass `-C <Windows path>` instead of relying on a WSL working directory.
 
-Create a worktree from current `origin/main` with `git fetch --prune origin` followed by `git worktree add /mnt/e/Code/HVAC_web-worktrees/<issue>-<slug> -b <branch> origin/main`. One implementation branch owns one worktree; do not reuse a branch in multiple directories and do not replace a worktree with an ad-hoc full clone.
+Keep worktrees outside the repository root under `E:\Code\HVAC_web-worktrees\<issue>-<slug>`. Never create `.worktrees`, `.clones`, nested repository copies, or generated checkout trees inside `HVAC_web`. Keep at most two active auxiliary worktrees unless a Map explicitly records why more are required.
 
-Before retiring a worktree or branch, prove the working tree is clean, push or otherwise preserve every unique commit, confirm the related PR is merged or closed, and check that no open PR uses the branch. Then remove the worktree with `git worktree remove`, delete the local branch, prune remote references, and run `git worktree prune`. Never use forced removal to bypass uncommitted work.
+Create a worktree from current `origin/main` with Windows Git: run `git fetch --prune origin`, then `git worktree add E:\Code\HVAC_web-worktrees\<issue>-<slug> -b <branch> origin/main`. One implementation branch owns one worktree; do not reuse a branch in multiple directories and do not replace a worktree with an ad-hoc full clone.
+
+Before retiring a worktree or branch, prove the working tree is clean, push or otherwise preserve every unique commit, confirm the related PR is merged or closed, and check that no open PR uses the branch. Then remove the worktree with Windows Git, delete the local branch, prune remote references, and run `git worktree prune`. Never use forced removal to bypass uncommitted work.
 
 Merged remote branches should be deleted immediately; repository settings must keep automatic branch deletion after merge enabled. Long-lived branches are limited to `main` plus explicitly documented release or recovery branches. Archive branches must use the `archive/` prefix, name the preserved commit or incident, and be removed after the recovery decision is recorded.
 
-At the start and end of parallel work, run `git worktree list`, `git branch -vv`, and `git fetch --prune origin`. Broken `prunable` entries, gone upstreams, inactive worktrees, and merged branches are cleanup defects, not permanent workspace state.
+At the start and end of parallel work, run `git worktree list`, `git branch -vv`, and `git fetch --prune origin` with Windows Git. Broken `prunable` entries, gone upstreams, inactive worktrees, and merged branches are cleanup defects, not permanent workspace state.
 
 ### Ticket implementation workflow
 
