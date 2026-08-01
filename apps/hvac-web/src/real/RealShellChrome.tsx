@@ -30,10 +30,12 @@ function ShellNavigation({
           data-feature-id={item.id}
           data-feature-kind={item.kind}
           data-feature-degraded={String(item.degraded)}
+          data-feature-primary={String(item.primary === true)}
           aria-current={pathname === item.path ? 'page' : undefined}
           onClick={(event) => navigate(event, item.path)}
         >
           <span>{item.label}</span>
+          {item.primary ? <small>Primary</small> : null}
           {item.kind === 'not-integrated' ? <small>尚未接入</small> : null}
           {item.degraded ? <small>降级</small> : null}
         </a>

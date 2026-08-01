@@ -49,6 +49,44 @@
   color: #38575b;
 }
 
+.real-dashboard__operations-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border: 1px solid #b8d9de;
+  border-left: 4px solid #176d77;
+  background: #f2f9fa;
+  padding: 18px;
+}
+
+.real-dashboard__operations-entry > div {
+  display: grid;
+  gap: 6px;
+}
+
+.real-dashboard__operations-entry h2,
+.real-dashboard__operations-entry p {
+  margin: 0;
+}
+
+.real-dashboard__operations-entry a {
+  flex: 0 0 auto;
+  border: 1px solid #176d77;
+  border-radius: 6px;
+  background: #176d77;
+  color: #fff;
+  padding: 10px 14px;
+  font: inherit;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.real-dashboard__operations-entry a:focus-visible {
+  outline: 3px solid rgba(0, 121, 140, 0.25);
+  outline-offset: 2px;
+}
+
 .real-dashboard__metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -235,6 +273,7 @@
 
 @media (max-width: 620px) {
   .real-dashboard__header,
+  .real-dashboard__operations-entry,
   .real-dashboard__panel-heading,
   .real-dashboard__attention-list li {
     align-items: stretch;

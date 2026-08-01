@@ -535,6 +535,14 @@ export function buildSiteNavigation(
   if (!effectiveCapabilities.includes('site.read')) return [];
   const navigation: RealNavigationItem[] = [
     { id: 'site-dashboard', label: 'Dashboard', path: siteRoute(site, 'dashboard'), kind: 'link', degraded: false },
+    {
+      id: 'site-operations',
+      label: 'Operations Workspace',
+      path: siteRoute(site, 'operations'),
+      kind: 'link',
+      degraded: false,
+      primary: true,
+    },
     { id: 'site-assets', label: 'Assets', path: siteRoute(site, 'assets'), kind: 'link', degraded: false },
     { id: 'site-energy', label: 'Energy', path: siteRoute(site, 'energy'), kind: 'link', degraded: false },
   ];
@@ -542,7 +550,6 @@ export function buildSiteNavigation(
     navigation.push({ id: 'site-alarms', label: 'Alarm', path: siteRoute(site, 'alarms'), kind: 'link', degraded: false });
   }
   navigation.push(
-    { id: 'site-operations', label: 'Operations', path: siteRoute(site, 'operations'), kind: 'link', degraded: false },
     { id: 'site-commands', label: 'Commands', path: siteRoute(site, 'commands'), kind: 'link', degraded: false },
     { id: 'site-bigscreen', label: 'BigScreen', path: siteRoute(site, 'bigscreen'), kind: 'link', degraded: false },
   );

@@ -183,6 +183,25 @@ export async function advanceSiteNightEnergyInvestigation(
   );
 }
 
+export async function cancelSiteNightEnergyInvestigation(
+  investigationId: string,
+  options: ScopedOperationsRequestOptions,
+): Promise<OperationsInvestigationView> {
+  const csrfToken = await csrfCapability(options);
+  return investigationRequest(
+    pathFor(options.trustedSiteId, `/${encodeURIComponent(investigationId)}:cancel`),
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken,
+      },
+      body: '{}',
+    },
+    options,
+  );
+}
+
 export async function submitSiteNightEnergyOperatorInput(
   investigationId: string,
   command: SubmitOperatorInputCommand,

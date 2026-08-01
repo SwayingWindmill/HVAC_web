@@ -167,6 +167,17 @@ export function RealDashboard({ site, principal }: RealDashboardProps) {
         本页只汇总 Registry、Device Presence、当前遥测状态和 Energy Analytics。告警、工单、FDD 与优化尚未接入时不会在浏览器中推导或补造。
       </p>
 
+      <article className="real-dashboard__operations-entry" data-testid="real-dashboard-operations-entry">
+        <div>
+          <p className="real-shell-eyebrow">PRIMARY AGENT EXPERIENCE</p>
+          <h2>Operations Workspace</h2>
+          <p>创建、恢复和审阅 Site Investigation。Plan、Evidence、Finding、Tool activity 与 Operator Input 只来自 Gateway 的权威 projection。</p>
+        </div>
+        <a href={siteRoute(site, 'operations')} data-testid="real-dashboard-open-operations">
+          进入 Operations Workspace
+        </a>
+      </article>
+
       <div className="real-dashboard__metrics" aria-label="Site 运行关键指标">
         <article>
           <span>已加载设备</span>

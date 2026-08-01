@@ -4,6 +4,7 @@ import '@copilotkit/react-core/v2/styles.css';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import {
   advanceSiteNightEnergyInvestigation,
+  cancelSiteNightEnergyInvestigation,
   getSiteNightEnergyInvestigation,
   listSiteNightEnergyInvestigations,
   OperationsApiError,
@@ -63,6 +64,10 @@ function statusLabel(status: OperationsInvestigationSummary['status'], outcome: 
   if (status === 'COMPLETED' && outcome === 'UNABLE_TO_CONCLUDE') return 'UNABLE TO CONCLUDE';
   if (status === 'COMPLETED' && outcome === 'SUPPORTED_SITE_FINDING') return 'COMPLETED · SITE FINDING';
   return status;
+}
+
+function isTerminalStatus(status: OperationsInvestigationSummary['status'] | null): boolean {
+  return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
 }
 
 function createOperatorInputIdempotencyKey(): string {
@@ -716,6 +721,29 @@ export function OperationsInvestigation({
     }
   };
 
+  const cancel = async () => {
+    if (!investigationId || !snapshotStatus || isTerminalStatus(snapshotStatus)) return;
+    setBusy(true);
+    setFailure(null);
+    setConnection(null);
+    try {
+      await cancelSiteNightEnergyInvestigation(investigationId, requestOptions);
+      setSnapshot(null);
+      setToolReceipts([]);
+      setRunRevision((value) => value + 1);
+      setListRevision((value) => value + 1);
+    } catch (error) {
+      setFailure(error instanceof Error ? error : new Error(String(error)));
+      if (error instanceof OperationsApiError && error.status === 409) {
+        setSnapshot(null);
+        setToolReceipts([]);
+        setRunRevision((value) => value + 1);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const submitOperatorInput = async (values: OperationsOperatorInputValues) => {
     const request = snapshot?.investigation.operatorInputRequest;
     if (!investigationId || !request || snapshot.investigation.status !== 'WAITING_FOR_OPERATOR_INPUT') return;
@@ -750,12 +778,16 @@ export function OperationsInvestigation({
   };
 
   return (
-    <div className="operations-investigation" data-testid="real-site-route-operations">
+    <div
+      className="operations-investigation"
+      data-testid="real-site-route-operations"
+      data-primary-agent-experience="true"
+    >
       <header className="operations-header">
         <div>
-          <p className="real-shell-eyebrow">REAL MODE · SITE OPERATIONS</p>
-          <h1>Operations Investigations</h1>
-          <p>Site {site.displayName} · 列表、Plan 和领域记录均来自已提交权威 projection。</p>
+          <p className="real-shell-eyebrow">REAL MODE · PRIMARY AGENT EXPERIENCE</p>
+          <h1>Operations Workspace</h1>
+          <p>Site {site.displayName} · Investigation 列表、Plan 和领域记录均来自已提交权威 projection。</p>
         </div>
         <button type="button" onClick={() => { void start(); }} disabled={busy}>
           {busy ? '处理中…' : '新建夜间能耗调查'}
@@ -775,9 +807,19 @@ export function OperationsInvestigation({
         <button
           type="button"
           onClick={() => { void advance(); }}
-          disabled={!investigationId || busy || operatorInputBusy || snapshotStatus === 'WAITING_FOR_OPERATOR_INPUT'}
+          disabled={!investigationId || busy || operatorInputBusy || snapshotStatus === 'WAITING_FOR_OPERATOR_INPUT' || isTerminalStatus(snapshotStatus)}
           title={snapshotStatus === 'WAITING_FOR_OPERATOR_INPUT' ? '先提交当前 Operator Input。' : undefined}
+          data-testid="operations-advance"
         >推进</button>
+        <button
+          type="button"
+          className="operations-cancel"
+          onClick={() => { void cancel(); }}
+          disabled={!investigationId || !snapshotStatus || busy || operatorInputBusy || isTerminalStatus(snapshotStatus)}
+          data-testid="operations-cancel"
+        >
+          {busy ? '处理中…' : '取消 Investigation'}
+        </button>
       </section>
 
       {connection ? (
