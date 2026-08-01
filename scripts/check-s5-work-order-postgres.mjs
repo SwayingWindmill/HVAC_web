@@ -26,7 +26,9 @@ assert(workOrderRoutes.length === 2, 'S5 Work Order must expose exactly list and
 for (const route of workOrderRoutes) {
   assert(route.method === 'GET', `S5 Work Order mutation route leaked: ${route.method} ${route.path}`);
   assert(route.owner === 'work-order-service' && route.publicIngress === 'platform-gateway', `S5 Work Order owner or ingress drifted: ${route.path}`);
-  assert(route.migrationPhase === 'S5-R0-contract-only' && route.rollout?.mode === 'disabled' && route.activationStatus === 'expand-baseline', `S5 Work Order public route gained traffic: ${route.path}`);
+  const contractOnly = route.revision === 1 && route.migrationPhase === 'S5-R0-contract-only' && route.rollout?.mode === 'disabled' && route.activationStatus === 'expand-baseline';
+  const internalReadCanary = route.revision === 2 && route.migrationPhase === 'S5-R1-internal-read-only' && route.rollout?.mode === 'percentage' && route.rollout?.percentage === 1 && route.rollout?.cohortSalt === 's5-work-order-read-canary-v1' && route.activationStatus === 'internal-canary';
+  assert(contractOnly || internalReadCanary, 'S5 Work Order route is outside the governed R0/R1 read states: ' + route.path);
   assert(route.readOnlyFallback === false && route.readFallbackOwner === undefined && route.rollout?.fallbackOwner === undefined, `S5 Work Order fallback was introduced: ${route.path}`);
 }
 

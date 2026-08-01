@@ -57,6 +57,7 @@ type Config struct {
 	Telemetry     *TelemetryConfig
 	Command       *CommandConfig
 	Alarm         *AlarmConfig
+	WorkOrder     *WorkOrderConfig
 	Analytics     *AnalyticsConfig
 	Operations    *OperationsAgentConfig
 	Observability *observability.Runtime
@@ -74,6 +75,7 @@ type handler struct {
 	telemetry     *telemetryController
 	command       *commandController
 	alarm         *alarmController
+	workOrder     *workOrderController
 	analytics     *analyticsController
 	operations    *operationsAgentController
 	observability *observability.Runtime
@@ -114,6 +116,7 @@ func NewHandler(config Config) http.Handler {
 		telemetry:     newTelemetryController(config.Telemetry),
 		command:       newCommandController(config.Command),
 		alarm:         newAlarmController(config.Alarm),
+		workOrder:     newWorkOrderController(config.WorkOrder),
 		analytics:     newAnalyticsController(config.Analytics),
 		operations:    newOperationsAgentController(config.Operations),
 		observability: telemetry,
@@ -175,7 +178,7 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		h.authorizeOperationsTool(writer, request)
 		return
 	}
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant"} {
+	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Work-Order-Read-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant"} {
 		if request.Header.Get(header) == "" {
 			continue
 		}
@@ -198,6 +201,15 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		}
 		if operationsRoute, matches := matchPublicOperationsRoute(request.URL.Path); matches {
 			dispatchOperationsRoute(h, writer, request, operationsRoute)
+			return
+		}
+		if workOrderRoute, matches := matchPublicWorkOrderRoute(request.URL.Path); matches {
+			decision := routeDecisionFromContext(request.Context())
+			if decision.SelectedOwner != ownershipregistry.OwnerWorkOrder || decision.ReadFallbackOwner != "" || decision.ShadowOwner != "" {
+				writeProblem(writer, request, http.StatusServiceUnavailable, "WORK_ORDER_UNAVAILABLE", "Work Order unavailable", "The Work Order route is not active for this Session.", true, nil)
+				return
+			}
+			dispatchWorkOrderRoute(h, writer, request, workOrderRoute)
 			return
 		}
 		if alarmRoute, matches := matchPublicAlarmRoute(request.URL.Path); matches {

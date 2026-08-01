@@ -12,6 +12,7 @@ require (
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/registryauth v0.0.0
 	github.com/quanlaihe/hvac-web/libs/telemetryauth v0.0.0
+	github.com/quanlaihe/hvac-web/libs/workorderauth v0.0.0
 	github.com/quanlaihe/hvac-web/libs/testpki v0.0.0
 )
 
@@ -38,5 +39,7 @@ replace github.com/quanlaihe/hvac-web/libs/observability => ../../libs/observabi
 replace github.com/quanlaihe/hvac-web/libs/registryauth => ../../libs/registryauth
 
 replace github.com/quanlaihe/hvac-web/libs/telemetryauth => ../../libs/telemetryauth
+
+replace github.com/quanlaihe/hvac-web/libs/workorderauth => ../../libs/workorderauth
 
 replace github.com/quanlaihe/hvac-web/libs/testpki => ../../libs/testpki

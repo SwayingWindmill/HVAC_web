@@ -120,8 +120,8 @@ for (const route of routeRegistry.routes ?? []) {
     }
   } else if (rollout.mode === 'percentage') {
     if (!Number.isInteger(rollout.percentage) || rollout.percentage < 0 || rollout.percentage > 100) errors.push(`${key}: rollout percentage must be 0..100`);
-    const noFallbackS4Read = rollout.fallbackOwner === undefined && route.owner === 'alarm-service' && route.method === 'GET' && route.migrationPhase === 'S4-R1-internal-read-only';
-    if (!noFallbackS4Read && (!allowedOwners.has(rollout.fallbackOwner) || rollout.fallbackOwner === route.owner)) errors.push(`${key}: invalid fallback owner`);
+    const noFallbackInternalRead = rollout.fallbackOwner === undefined && route.method === 'GET' && ((route.owner === 'alarm-service' && route.migrationPhase === 'S4-R1-internal-read-only') || (route.owner === 'work-order-service' && route.migrationPhase === 'S5-R1-internal-read-only'));
+    if (!noFallbackInternalRead && (!allowedOwners.has(rollout.fallbackOwner) || rollout.fallbackOwner === route.owner)) errors.push(`${key}: invalid fallback owner`);
     if (typeof rollout.cohortSalt !== 'string' || rollout.cohortSalt.length < 8) errors.push(`${key}: cohort salt is required`);
     if (!(route.allowedScopeDimensions ?? []).includes('organization') || !(route.allowedScopeDimensions ?? []).includes('principal')) {
       errors.push(`${key}: percentage rollout requires organization and principal scope dimensions`);
@@ -222,7 +222,7 @@ for (const route of routeRegistry.routes ?? []) {
   }
   if (s5WorkOrderReadRoutes.has(key)) {
     if (route.owner !== 'work-order-service' || route.publicIngress !== 'platform-gateway') errors.push(`${key}: S5 Work Order route must remain behind Gateway ingress`);
-    if (route.activationStatus !== 'expand-baseline' || rollout.mode !== 'disabled' || route.migrationPhase !== 'S5-R0-contract-only') errors.push(`${key}: S5 Work Order read must remain contract-only at zero traffic`);
+    if (route.activationStatus !== 'internal-canary' || rollout.mode !== 'percentage' || rollout.percentage !== 1 || rollout.fallbackOwner !== undefined || typeof rollout.cohortSalt !== 'string' || route.migrationPhase !== 'S5-R1-internal-read-only') errors.push(`${key}: S5 Work Order read must use the no-fallback 1% internal canary`);
     if (route.readOnlyFallback !== false || route.readFallbackOwner !== undefined || rollout.fallbackOwner !== undefined) errors.push(`${key}: S5 Work Order fallback is forbidden`);
     if (route.cohortGroup !== 's5-work-order-read-v1') errors.push(`${key}: S5 Work Order cohort group drifted`);
     if (!Array.isArray(route.migrationPhases) || route.migrationPhases.join('|') !== expectedS5ReadPhases.join('|')) errors.push(`${key}: S5 Work Order phases are incomplete or reordered`);

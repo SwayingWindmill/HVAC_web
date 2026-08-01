@@ -56,9 +56,9 @@ function principalResponse(overrides = {}) {
       delegationExpiresAt: '2026-07-28T00:00:00Z',
     },
     authorization: {
-      capabilitySetVersion: 3,
+      capabilitySetVersion: 4,
       policyRevision: 'registry-read:7',
-      capabilities: ['organization.list', 'site.read'],
+      capabilities: ['organization.list', 'site.read', 'work-order.list', 'work-order.read'],
     },
     session: {
       id: 'session-1',
@@ -74,7 +74,7 @@ function principalResponse(overrides = {}) {
 test('generated browser contract accepts IAM-authored effective capabilities', () => {
   const parsed = currentPrincipalResponseSchema.parse(principalResponse());
   assert.equal(parsed.authorization.policyRevision, 'registry-read:7');
-  assert.deepEqual(Array.from(parsed.authorization.capabilities), ['organization.list', 'site.read']);
+  assert.deepEqual(Array.from(parsed.authorization.capabilities), ['organization.list', 'site.read', 'work-order.list', 'work-order.read']);
   assert.deepEqual(Array.from(parsed.principal.roles), ['descriptive-role-only']);
 });
 
@@ -85,7 +85,7 @@ test('generated browser contract rejects missing, duplicate, and unsupported cap
 
   assert.equal(currentPrincipalResponseSchema.safeParse(principalResponse({
     authorization: {
-      capabilitySetVersion: 3,
+      capabilitySetVersion: 4,
       policyRevision: 'registry-read:7',
       capabilities: ['site.read', 'site.read'],
     },
@@ -93,7 +93,7 @@ test('generated browser contract rejects missing, duplicate, and unsupported cap
 
   assert.equal(currentPrincipalResponseSchema.safeParse(principalResponse({
     authorization: {
-      capabilitySetVersion: 3,
+      capabilitySetVersion: 4,
       policyRevision: 'registry-read:7',
       capabilities: ['role.admin'],
     },

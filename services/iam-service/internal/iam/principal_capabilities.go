@@ -10,6 +10,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
+	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 )
 
 type PrincipalCapabilityLookup struct {
@@ -26,6 +27,7 @@ type principalCapabilityResolver struct {
 	registryStore  AuthorizationStore
 	telemetryStore TelemetryAuthorizationStore
 	alarmStore     AlarmAuthorizationStore
+	workOrderStore WorkOrderAuthorizationStore
 	now            func() time.Time
 }
 
@@ -33,8 +35,8 @@ type resolvedAuthorizationStore struct {
 	facts AuthorizationFacts
 }
 
-func newPrincipalCapabilityResolver(registryStore AuthorizationStore, telemetryStore TelemetryAuthorizationStore, alarmStore AlarmAuthorizationStore, now func() time.Time) PrincipalCapabilityResolver {
-	return &principalCapabilityResolver{registryStore: registryStore, telemetryStore: telemetryStore, alarmStore: alarmStore, now: now}
+func newPrincipalCapabilityResolver(registryStore AuthorizationStore, telemetryStore TelemetryAuthorizationStore, alarmStore AlarmAuthorizationStore, workOrderStore WorkOrderAuthorizationStore, now func() time.Time) PrincipalCapabilityResolver {
+	return &principalCapabilityResolver{registryStore: registryStore, telemetryStore: telemetryStore, alarmStore: alarmStore, workOrderStore: workOrderStore, now: now}
 }
 
 func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx context.Context, lookup PrincipalCapabilityLookup) (identitycontext.EffectiveAuthorization, error) {
@@ -58,8 +60,16 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 	if err != nil {
 		return identitycontext.EffectiveAuthorization{}, err
 	}
+	workOrderFacts, err := resolver.workOrderStore.LookupWorkOrderAuthorization(ctx, AuthorizationLookup{
+		SubjectIssuer:        lookup.SubjectIssuer,
+		Subject:              lookup.Subject,
+		ActingOrganizationID: lookup.ActingOrganizationID,
+	})
+	if err != nil {
+		return identitycontext.EffectiveAuthorization{}, err
+	}
 
-	capabilities := make([]identitycontext.Capability, 0, len(principalRegistryCapabilities)+len(principalTelemetryCapabilities)+len(principalAlarmCapabilities))
+	capabilities := make([]identitycontext.Capability, 0, len(principalRegistryCapabilities)+len(principalTelemetryCapabilities)+len(principalAlarmCapabilities)+len(principalWorkOrderCapabilities))
 	factStore := resolvedAuthorizationStore{facts: registryFacts}
 	decidedAt := resolver.now()
 	for _, candidate := range principalRegistryCapabilities {
@@ -84,17 +94,22 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 			capabilities = append(capabilities, candidate.capability)
 		}
 	}
+	for _, candidate := range principalWorkOrderCapabilities {
+		if workOrderCapabilityAllowed(workOrderFacts, decidedAt, lookup.ActingOrganizationID, candidate.action) {
+			capabilities = append(capabilities, candidate.capability)
+		}
+	}
 
 	return identitycontext.EffectiveAuthorization{
 		CapabilitySetVersion: identitycontext.CapabilitySetVersion,
-		PolicyRevision:       combinedCapabilityPolicyRevision(registryFacts.PolicyRevision, telemetryFacts.PolicyRevision, alarmFacts.PolicyRevision),
+		PolicyRevision:       combinedCapabilityPolicyRevision(registryFacts.PolicyRevision, telemetryFacts.PolicyRevision, alarmFacts.PolicyRevision, workOrderFacts.PolicyRevision),
 		Capabilities:         capabilities,
 	}, nil
 }
 
-func combinedCapabilityPolicyRevision(registryRevision, telemetryRevision, alarmRevision string) string {
-	digest := sha256.Sum256([]byte(registryRevision + "\x00" + telemetryRevision + "\x00" + alarmRevision))
-	return "capability-v3:" + hex.EncodeToString(digest[:])
+func combinedCapabilityPolicyRevision(registryRevision, telemetryRevision, alarmRevision, workOrderRevision string) string {
+	digest := sha256.Sum256([]byte(registryRevision + "\x00" + telemetryRevision + "\x00" + alarmRevision + "\x00" + workOrderRevision))
+	return "capability-v4:" + hex.EncodeToString(digest[:])
 }
 
 func telemetryCapabilityAllowed(facts TelemetryAuthorizationFacts, now time.Time, actingOrganizationID string, action telemetryauth.Action) bool {
@@ -158,4 +173,12 @@ var principalAlarmCapabilities = []struct {
 }{
 	{identitycontext.CapabilityAlarmList, alarmauth.ActionList},
 	{identitycontext.CapabilityAlarmRead, alarmauth.ActionRead},
+}
+
+var principalWorkOrderCapabilities = []struct {
+	capability identitycontext.Capability
+	action     workorderauth.Action
+}{
+	{identitycontext.CapabilityWorkOrderList, workorderauth.ActionList},
+	{identitycontext.CapabilityWorkOrderRead, workorderauth.ActionRead},
 }

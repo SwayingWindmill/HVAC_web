@@ -14,18 +14,21 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
+	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/services/iam-service/internal/iam"
 )
 
 const (
 	principalCapabilityTelemetryPolicy = "telemetry-access:2"
 	principalCapabilityAlarmPolicy     = "alarm-access:1"
+	principalCapabilityWorkOrderPolicy = "work-order-access:1"
 )
 
 func TestIAMPublishesEffectiveCapabilitiesFromAuthorizationFacts(t *testing.T) {
 	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
 		config.TelemetryAuthorizationStore = fixedTelemetryStore{facts: principalTelemetryFacts(nil)}
 		config.AlarmAuthorizationStore = fixedAlarmStore{facts: principalAlarmFacts()}
+		config.WorkOrderAuthorizationStore = fixedWorkOrderStore{facts: principalWorkOrderFacts()}
 	})
 	claims := validIAMClaims(harness.now, "fixture-user", "principal:read")
 	claims.ActingOrganizationID = iam.S1FixtureOwnerAOrganizationID
@@ -45,7 +48,7 @@ func TestIAMPublishesEffectiveCapabilitiesFromAuthorizationFacts(t *testing.T) {
 	if response.Authorization.CapabilitySetVersion != identitycontext.CapabilitySetVersion {
 		t.Fatalf("capability set version = %d", response.Authorization.CapabilitySetVersion)
 	}
-	if response.Authorization.PolicyRevision != capabilityPolicyRevision(iam.S1FixturePolicyRevision, principalCapabilityTelemetryPolicy, principalCapabilityAlarmPolicy) {
+	if response.Authorization.PolicyRevision != capabilityPolicyRevision(iam.S1FixturePolicyRevision, principalCapabilityTelemetryPolicy, principalCapabilityAlarmPolicy, principalCapabilityWorkOrderPolicy) {
 		t.Fatalf("policy revision = %q", response.Authorization.PolicyRevision)
 	}
 	assertCapabilitiesEqual(t, response.Authorization.Capabilities, identitycontext.SupportedCapabilities())
@@ -111,7 +114,7 @@ func TestIAMPublishesExplicitEmptyCapabilities(t *testing.T) {
 	if response.Authorization.Capabilities == nil || len(response.Authorization.Capabilities) != 0 {
 		t.Fatalf("empty capability set must be an explicit array: %#v", response.Authorization.Capabilities)
 	}
-	if response.Authorization.PolicyRevision != capabilityPolicyRevision(iam.S1FixturePolicyRevision, "telemetry-policy-unconfigured", "alarm-policy-unconfigured") {
+	if response.Authorization.PolicyRevision != capabilityPolicyRevision(iam.S1FixturePolicyRevision, "telemetry-policy-unconfigured", "alarm-policy-unconfigured", "work-order-policy-unconfigured") {
 		t.Fatalf("policy revision = %q", response.Authorization.PolicyRevision)
 	}
 }
@@ -221,9 +224,36 @@ func (store fixedAlarmStore) LookupAlarmAuthorization(context.Context, iam.Autho
 	return store.facts, store.err
 }
 
-func capabilityPolicyRevision(registryRevision, telemetryRevision, alarmRevision string) string {
-	digest := sha256.Sum256([]byte(registryRevision + "\x00" + telemetryRevision + "\x00" + alarmRevision))
-	return "capability-v3:" + hex.EncodeToString(digest[:])
+func principalWorkOrderFacts() iam.WorkOrderAuthorizationFacts {
+	return iam.WorkOrderAuthorizationFacts{
+		Found:          true,
+		PolicyRevision: principalCapabilityWorkOrderPolicy,
+		Principal: iam.PrincipalRecord{
+			ID:            iam.S1FixtureOwnerAPrincipalID,
+			SubjectIssuer: fixtureSubjectIssuer,
+			Subject:       "fixture-user",
+			Status:        iam.FactStatusActive,
+		},
+		Memberships: []iam.OrganizationMembership{{OrganizationID: iam.S1FixtureOwnerAOrganizationID, Status: iam.FactStatusActive}},
+		Permissions: []iam.WorkOrderPermission{
+			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionList, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
+			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionRead, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
+		},
+	}
+}
+
+type fixedWorkOrderStore struct {
+	facts iam.WorkOrderAuthorizationFacts
+	err   error
+}
+
+func (store fixedWorkOrderStore) LookupWorkOrderAuthorization(context.Context, iam.AuthorizationLookup) (iam.WorkOrderAuthorizationFacts, error) {
+	return store.facts, store.err
+}
+
+func capabilityPolicyRevision(registryRevision, telemetryRevision, alarmRevision, workOrderRevision string) string {
+	digest := sha256.Sum256([]byte(registryRevision + "\x00" + telemetryRevision + "\x00" + alarmRevision + "\x00" + workOrderRevision))
+	return "capability-v4:" + hex.EncodeToString(digest[:])
 }
 
 func containsCapability(capabilities []identitycontext.Capability, expected identitycontext.Capability) bool {

@@ -26,11 +26,13 @@ const (
 	CommandDecisionPath        = "/internal/v1/command/decision"
 	AnalyticsDecisionPath      = "/internal/v1/analytics/decision"
 	AlarmDecisionPath          = "/internal/v1/alarm/decision"
+	WorkOrderDecisionPath      = "/internal/v1/work-order/decision"
 	registryAuthorizeAction    = "registry:authorize"
 	telemetryAuthorizeAction   = "telemetry:authorize"
 	commandAuthorizeAction     = "command:authorize"
 	analyticsAuthorizeAction   = "analytics:authorize"
 	alarmAuthorizeAction       = "alarm:authorize"
+	workOrderAuthorizeAction   = "work-order:authorize"
 	maximumDecisionRequestSize = 64 << 10
 	maximumGrantStatusSize     = 16 << 10
 )
@@ -69,6 +71,8 @@ type Config struct {
 	NewCommandGrantID              func() string
 	AlarmAuthorizationStore        AlarmAuthorizationStore
 	AlarmAuditSink                 AlarmDecisionAuditSink
+	WorkOrderAuthorizationStore    WorkOrderAuthorizationStore
+	WorkOrderAuditSink             WorkOrderDecisionAuditSink
 }
 
 type handler struct {
@@ -105,6 +109,8 @@ type handler struct {
 	newCommandGrantID              func() string
 	alarmAuthorizationStore        AlarmAuthorizationStore
 	alarmAuditSink                 AlarmDecisionAuditSink
+	workOrderAuthorizationStore    WorkOrderAuthorizationStore
+	workOrderAuditSink             WorkOrderDecisionAuditSink
 }
 
 func NewHandler(config Config) http.Handler {
@@ -132,9 +138,13 @@ func NewHandler(config Config) http.Handler {
 	if alarmStore == nil {
 		alarmStore = newDenyAllAlarmAuthorizationStore("alarm-policy-unconfigured")
 	}
+	workOrderStore := config.WorkOrderAuthorizationStore
+	if workOrderStore == nil {
+		workOrderStore = newDenyAllWorkOrderAuthorizationStore("work-order-policy-unconfigured")
+	}
 	principalCapabilityResolver := config.PrincipalCapabilityResolver
 	if principalCapabilityResolver == nil {
-		principalCapabilityResolver = newPrincipalCapabilityResolver(store, telemetryStore, alarmStore, now)
+		principalCapabilityResolver = newPrincipalCapabilityResolver(store, telemetryStore, alarmStore, workOrderStore, now)
 	}
 	grantIssuer := config.RegistryGrantIssuer
 	if grantIssuer == "" {
@@ -219,6 +229,10 @@ func NewHandler(config Config) http.Handler {
 	if alarmAuditSink == nil {
 		alarmAuditSink = newLoggerAlarmDecisionAuditSink(logger)
 	}
+	workOrderAuditSink := config.WorkOrderAuditSink
+	if workOrderAuditSink == nil {
+		workOrderAuditSink = newLoggerWorkOrderDecisionAuditSink(logger)
+	}
 	return &handler{
 		allowedWorkloadSPIFFE:          config.AllowedWorkloadSPIFFE,
 		coreWorkloadSPIFFE:             config.CoreWorkloadSPIFFE,
@@ -253,6 +267,8 @@ func NewHandler(config Config) http.Handler {
 		newCommandGrantID:              newCommandGrantID,
 		alarmAuthorizationStore:        alarmStore,
 		alarmAuditSink:                 alarmAuditSink,
+		workOrderAuthorizationStore:    workOrderStore,
+		workOrderAuditSink:             workOrderAuditSink,
 	}
 }
 
@@ -345,6 +361,8 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		status = h.handleAnalyticsDecision(writer, request, claims)
 	case AlarmDecisionPath:
 		status = h.handleAlarmDecision(writer, request, claims)
+	case WorkOrderDecisionPath:
+		status = h.handleWorkOrderDecision(writer, request, claims)
 	}
 }
 
@@ -570,6 +588,8 @@ func expectedInboundAction(path string) (string, bool) {
 		return analyticsAuthorizeAction, true
 	case AlarmDecisionPath:
 		return alarmAuthorizeAction, true
+	case WorkOrderDecisionPath:
+		return workOrderAuthorizeAction, true
 	default:
 		return "", false
 	}
@@ -592,7 +612,7 @@ type x509CertificateView struct {
 
 func safePath(path string) string {
 	switch path {
-	case CurrentPrincipalPath, RegistryReadDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath:
+	case CurrentPrincipalPath, RegistryReadDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath:
 		return path
 	default:
 		return "unmatched"
@@ -613,10 +633,10 @@ func hasForgedIdentityHeader(header http.Header) bool {
 		}
 		lowerName := strings.ToLower(name)
 		switch lowerName {
-		case "x-principal", "x-roles", "x-role", "x-admin", "x-scope", "x-organization-id", "x-site-id":
+		case "x-principal", "x-roles", "x-role", "x-admin", "x-scope", "x-organization-id", "x-site-id", "x-work-order-id":
 			return true
 		}
-		if strings.HasPrefix(lowerName, "x-principal-") || strings.HasPrefix(lowerName, "x-organization-") || strings.HasPrefix(lowerName, "x-site-") {
+		if strings.HasPrefix(lowerName, "x-principal-") || strings.HasPrefix(lowerName, "x-organization-") || strings.HasPrefix(lowerName, "x-site-") || strings.HasPrefix(lowerName, "x-work-order-") {
 			return true
 		}
 	}

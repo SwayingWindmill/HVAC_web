@@ -184,6 +184,17 @@ for (const expected of acceptedS4IAMOwnership) {
     assert(registered[field] === value, `S4 IAM Alarm ownership ${expected.name}.${field} drifted: ${JSON.stringify(registered)}`);
   }
 }
+const acceptedS5IAMOwnership = [
+  { kind: 'projection', name: 'iam-work-order-permission', writer: 'iam-service', revision: 1 },
+  { kind: 'projection', name: 'iam-work-order-authorization-decision', writer: 'iam-service', revision: 1 },
+];
+for (const expected of acceptedS5IAMOwnership) {
+  const registered = ownership.resources.find((resource) => resource.name === expected.name);
+  assert(registered, `S5 IAM Work Order ownership resource is missing: ${expected.name}`);
+  for (const [field, value] of Object.entries(expected)) {
+    assert(registered[field] === value, `S5 IAM Work Order ownership ${expected.name}.${field} drifted: ${JSON.stringify(registered)}`);
+  }
+}
 assert(s4AlarmPromotion.schemaVersion === 1 && s4AlarmPromotion.issue === 187, 'S4 Alarm promotion evidence contract is invalid');
 assert(s4AlarmPromotion.formalPromotionRequired === true && s4AlarmPromotion.repositoryMutationByCertification === false, 'S4 Alarm promotion evidence can bypass formal review or mutate routing');
 assert(s4AlarmPromotion.routeGroup?.source?.phase === 'S4-R1-internal-read-only' && s4AlarmPromotion.routeGroup?.source?.trafficPercent === 1, 'S4 Alarm promotion source phase drifted');
@@ -224,6 +235,7 @@ const allowedOwnershipNames = new Set([
   'iam-telemetry-grant-use',
   'iam-telemetry-revocation-fact',
   ...acceptedS4IAMOwnership.map((resource) => resource.name),
+  ...acceptedS5IAMOwnership.map((resource) => resource.name),
   'iam-onboarding-reconciliation',
   'iam-reconciliation-quarantine',
   'presence-signal',
@@ -254,6 +266,7 @@ const scopeAudit = {
   acceptedS3ExpandBaselineResources: [...acceptedS3OwnershipNames].sort(),
   acceptedS4AlarmBaselineResources: [...acceptedS4OwnershipNames].sort(),
   acceptedS5WorkOrderBaselineResources: [...acceptedS5OwnershipNames].sort(),
+  acceptedS5IAMWorkOrderResources: acceptedS5IAMOwnership.map((resource) => resource.name).sort(),
   acceptedS4IAMAlarmResources: acceptedS4IAMOwnership.map((resource) => resource.name).sort(),
   acceptedHistoryAnalyticsResources: acceptedHistoryAnalyticsOwnership.map((resource) => resource.name).sort(),
   leakedOwnershipResources: [],

@@ -60,6 +60,8 @@ func main() {
 	var telemetryAuthorizationStore iam.TelemetryAuthorizationStore
 	var alarmAuthorizationStore iam.AlarmAuthorizationStore
 	var alarmAuditSink iam.AlarmDecisionAuditSink
+	var workOrderAuthorizationStore iam.WorkOrderAuthorizationStore
+	var workOrderAuditSink iam.WorkOrderDecisionAuditSink
 	var telemetryGrantStore iam.TelemetryGrantStore
 	var grantStatusStore iam.RegistryGrantStatusStore = iam.StaticRegistryGrantStatusStore{PolicyRevision: policyRevision}
 	databaseURL := strings.TrimSpace(os.Getenv("IAM_DATABASE_URL"))
@@ -82,6 +84,8 @@ func main() {
 		telemetryAuthorizationStore = postgresStore
 		alarmAuthorizationStore = postgresStore
 		alarmAuditSink = postgresStore
+		workOrderAuthorizationStore = postgresStore
+		workOrderAuditSink = postgresStore
 		grantStatusStore = postgresStore
 		policyRevision = "database-managed"
 		logger.Info("iam_postgres_authorization_store_enabled")
@@ -131,6 +135,8 @@ func main() {
 			TelemetryAuthorizationStore: telemetryAuthorizationStore,
 			AlarmAuthorizationStore:     alarmAuthorizationStore,
 			AlarmAuditSink:              alarmAuditSink,
+			WorkOrderAuthorizationStore: workOrderAuthorizationStore,
+			WorkOrderAuditSink:          workOrderAuditSink,
 			TelemetryGrantSigner:        registryGrantSigner,
 			TelemetryGrantIssuer:        iamSPIFFEID,
 			TelemetryGrantAudience:      envOr("IAM_TELEMETRY_GRANT_AUDIENCE", "telemetry-runtime-service"),

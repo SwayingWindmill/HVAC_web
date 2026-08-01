@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "S5 Work Order Public Read API",
-    "version": "0.1.0-contract-only",
-    "description": "Authoritative Site-scoped Work Order contract. Public list and detail routes are registered at 0% production traffic; lifecycle writes are intentionally excluded until separately governed."
+    "version": "0.2.0-internal-read-only",
+    "description": "Authoritative Site-scoped Work Order contract. Public list and detail routes are active for the no-fallback 1% internal read canary; lifecycle writes are intentionally excluded until separately governed."
   },
   "paths": {
     "/api/v1/sites/{siteId}/work-orders": {
@@ -11,24 +11,86 @@
         "operationId": "listSiteWorkOrders",
         "x-owner": "work-order-service",
         "x-public-ingress": "platform-gateway",
-        "x-production-traffic-percent": 0,
-        "x-migration-phase": "S5-R0-contract-only",
+        "x-production-traffic-percent": 1,
+        "x-migration-phase": "S5-R1-internal-read-only",
         "x-iam-action": "work-order:list",
         "x-no-fallback": true,
         "parameters": [
-          { "$ref": "#/components/parameters/SiteId" },
-          { "name": "status", "in": "query", "schema": { "$ref": "#/components/schemas/WorkOrderStatus" } },
-          { "name": "priority", "in": "query", "schema": { "$ref": "#/components/schemas/WorkOrderPriority" } },
-          { "name": "assigneeId", "in": "query", "schema": { "type": "string", "minLength": 1, "maxLength": 256 } },
-          { "name": "cursor", "in": "query", "schema": { "$ref": "#/components/schemas/OpaqueCursor" } },
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 } }
+          {
+            "$ref": "#/components/parameters/SiteId"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/WorkOrderStatus"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/WorkOrderPriority"
+            }
+          },
+          {
+            "name": "assigneeId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/OpaqueCursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Authoritative bounded Work Order list.", "headers": { "Cache-Control": { "schema": { "type": "string", "const": "private, no-store" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkOrderListResponse" } } } },
-          "401": { "$ref": "#/components/responses/Problem" },
-          "403": { "$ref": "#/components/responses/Problem" },
-          "404": { "$ref": "#/components/responses/Problem" },
-          "503": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Authoritative bounded Work Order list.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkOrderListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -37,136 +99,447 @@
         "operationId": "getSiteWorkOrder",
         "x-owner": "work-order-service",
         "x-public-ingress": "platform-gateway",
-        "x-production-traffic-percent": 0,
-        "x-migration-phase": "S5-R0-contract-only",
+        "x-production-traffic-percent": 1,
+        "x-migration-phase": "S5-R1-internal-read-only",
         "x-iam-action": "work-order:read",
         "x-no-fallback": true,
         "parameters": [
-          { "$ref": "#/components/parameters/SiteId" },
-          { "$ref": "#/components/parameters/WorkOrderId" }
+          {
+            "$ref": "#/components/parameters/SiteId"
+          },
+          {
+            "$ref": "#/components/parameters/WorkOrderId"
+          }
         ],
         "responses": {
-          "200": { "description": "Authoritative Work Order detail and timeline.", "headers": { "Cache-Control": { "schema": { "type": "string", "const": "private, no-store" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkOrder" } } } },
-          "401": { "$ref": "#/components/responses/Problem" },
-          "403": { "$ref": "#/components/responses/Problem" },
-          "404": { "$ref": "#/components/responses/Problem" },
-          "503": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Authoritative Work Order detail and timeline.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkOrder"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     }
   },
   "components": {
     "parameters": {
-      "SiteId": { "name": "siteId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
-      "WorkOrderId": { "name": "workOrderId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }
+      "SiteId": {
+        "name": "siteId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/UUIDv7"
+        }
+      },
+      "WorkOrderId": {
+        "name": "workOrderId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/UUIDv7"
+        }
+      }
     },
     "responses": {
-      "Problem": { "description": "Non-leaking Problem Details response.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } }
+      "Problem": {
+        "description": "Non-leaking Problem Details response.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      }
     },
     "schemas": {
-      "UUIDv7": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
-      "OpaqueCursor": { "type": "string", "minLength": 1, "maxLength": 512 },
-      "WorkOrderPriority": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "URGENT"] },
-      "WorkOrderStatus": { "type": "string", "enum": ["DRAFT", "OPEN", "IN_PROGRESS", "BLOCKED", "COMPLETED", "CANCELLED"] },
-      "WorkOrderOperation": { "type": "string", "enum": ["CREATE", "OPEN", "ASSIGN", "UNASSIGN", "SCHEDULE", "START", "BLOCK", "RESUME", "COMPLETE", "CANCEL", "REOPEN"] },
-      "WorkOrderSourceDomain": { "type": "string", "enum": ["MANUAL", "ALARM", "ASSET", "EQUIPMENT", "INVESTIGATION", "EXTERNAL"] },
-      "WorkOrderSourceRelationship": { "type": "string", "enum": ["ORIGIN", "RELATED"] },
+      "UUIDv7": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+      },
+      "OpaqueCursor": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      },
+      "WorkOrderPriority": {
+        "type": "string",
+        "enum": [
+          "LOW",
+          "MEDIUM",
+          "HIGH",
+          "URGENT"
+        ]
+      },
+      "WorkOrderStatus": {
+        "type": "string",
+        "enum": [
+          "DRAFT",
+          "OPEN",
+          "IN_PROGRESS",
+          "BLOCKED",
+          "COMPLETED",
+          "CANCELLED"
+        ]
+      },
+      "WorkOrderOperation": {
+        "type": "string",
+        "enum": [
+          "CREATE",
+          "OPEN",
+          "ASSIGN",
+          "UNASSIGN",
+          "SCHEDULE",
+          "START",
+          "BLOCK",
+          "RESUME",
+          "COMPLETE",
+          "CANCEL",
+          "REOPEN"
+        ]
+      },
+      "WorkOrderSourceDomain": {
+        "type": "string",
+        "enum": [
+          "MANUAL",
+          "ALARM",
+          "ASSET",
+          "EQUIPMENT",
+          "INVESTIGATION",
+          "EXTERNAL"
+        ]
+      },
+      "WorkOrderSourceRelationship": {
+        "type": "string",
+        "enum": [
+          "ORIGIN",
+          "RELATED"
+        ]
+      },
       "WorkOrderSourceReference": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["domain", "resourceId", "relationship"],
+        "required": [
+          "domain",
+          "resourceId",
+          "relationship"
+        ],
         "properties": {
-          "domain": { "$ref": "#/components/schemas/WorkOrderSourceDomain" },
-          "resourceId": { "type": "string", "minLength": 1, "maxLength": 512 },
-          "relationship": { "$ref": "#/components/schemas/WorkOrderSourceRelationship" }
+          "domain": {
+            "$ref": "#/components/schemas/WorkOrderSourceDomain"
+          },
+          "resourceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "relationship": {
+            "$ref": "#/components/schemas/WorkOrderSourceRelationship"
+          }
         }
       },
       "WorkOrderEvidenceReference": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["kind", "reference", "capturedAt"],
+        "required": [
+          "kind",
+          "reference",
+          "capturedAt"
+        ],
         "properties": {
-          "kind": { "type": "string", "minLength": 1, "maxLength": 128 },
-          "reference": { "type": "string", "minLength": 1, "maxLength": 512 },
-          "capturedAt": { "type": "string", "format": "date-time" }
+          "kind": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "reference": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "capturedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "WorkOrderTaskSummary": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["total", "completed", "blocked"],
+        "required": [
+          "total",
+          "completed",
+          "blocked"
+        ],
         "properties": {
-          "total": { "type": "integer", "minimum": 0 },
-          "completed": { "type": "integer", "minimum": 0 },
-          "blocked": { "type": "integer", "minimum": 0 }
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "completed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "blocked": {
+            "type": "integer",
+            "minimum": 0
+          }
         }
       },
       "WorkOrderTimelineEvent": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["operation", "toStatus", "reason", "actorType", "actorId", "occurredAt", "version"],
+        "required": [
+          "operation",
+          "toStatus",
+          "reason",
+          "actorType",
+          "actorId",
+          "occurredAt",
+          "version"
+        ],
         "properties": {
-          "operation": { "$ref": "#/components/schemas/WorkOrderOperation" },
-          "fromStatus": { "$ref": "#/components/schemas/WorkOrderStatus" },
-          "toStatus": { "$ref": "#/components/schemas/WorkOrderStatus" },
-          "reason": { "type": "string", "minLength": 1, "maxLength": 256 },
-          "actorType": { "type": "string", "minLength": 1, "maxLength": 64 },
-          "actorId": { "type": "string", "minLength": 1, "maxLength": 256 },
-          "policyRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
-          "correlationId": { "type": "string", "minLength": 1, "maxLength": 256 },
-          "occurredAt": { "type": "string", "format": "date-time" },
-          "version": { "type": "integer", "minimum": 1 }
+          "operation": {
+            "$ref": "#/components/schemas/WorkOrderOperation"
+          },
+          "fromStatus": {
+            "$ref": "#/components/schemas/WorkOrderStatus"
+          },
+          "toStatus": {
+            "$ref": "#/components/schemas/WorkOrderStatus"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "actorType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "actorId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "policyRevision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "correlationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          }
         }
       },
       "WorkOrder": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["schemaVersion", "workOrderId", "organizationId", "siteId", "title", "description", "priority", "status", "sourceReferences", "tasks", "noteCount", "attachmentCount", "completionEvidence", "timeline", "version", "createdAt", "updatedAt"],
+        "required": [
+          "schemaVersion",
+          "workOrderId",
+          "organizationId",
+          "siteId",
+          "title",
+          "description",
+          "priority",
+          "status",
+          "sourceReferences",
+          "tasks",
+          "noteCount",
+          "attachmentCount",
+          "completionEvidence",
+          "timeline",
+          "version",
+          "createdAt",
+          "updatedAt"
+        ],
         "properties": {
-          "schemaVersion": { "type": "integer", "const": 1 },
-          "workOrderId": { "$ref": "#/components/schemas/UUIDv7" },
-          "organizationId": { "$ref": "#/components/schemas/UUIDv7" },
-          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
-          "title": { "type": "string", "minLength": 1, "maxLength": 256 },
-          "description": { "type": "string", "minLength": 1, "maxLength": 4096 },
-          "priority": { "$ref": "#/components/schemas/WorkOrderPriority" },
-          "status": { "$ref": "#/components/schemas/WorkOrderStatus" },
-          "sourceReferences": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/components/schemas/WorkOrderSourceReference" } },
-          "assigneeId": { "type": "string", "minLength": 1, "maxLength": 256 },
-          "teamId": { "type": "string", "minLength": 1, "maxLength": 256 },
-          "scheduledStart": { "type": "string", "format": "date-time" },
-          "dueAt": { "type": "string", "format": "date-time" },
-          "tasks": { "$ref": "#/components/schemas/WorkOrderTaskSummary" },
-          "noteCount": { "type": "integer", "minimum": 0 },
-          "attachmentCount": { "type": "integer", "minimum": 0 },
-          "completionEvidence": { "type": "array", "maxItems": 256, "items": { "$ref": "#/components/schemas/WorkOrderEvidenceReference" } },
-          "timeline": { "type": "array", "minItems": 1, "maxItems": 512, "items": { "$ref": "#/components/schemas/WorkOrderTimelineEvent" } },
-          "version": { "type": "integer", "minimum": 1 },
-          "createdAt": { "type": "string", "format": "date-time" },
-          "updatedAt": { "type": "string", "format": "date-time" }
+          "schemaVersion": {
+            "type": "integer",
+            "const": 1
+          },
+          "workOrderId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "organizationId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "priority": {
+            "$ref": "#/components/schemas/WorkOrderPriority"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkOrderStatus"
+          },
+          "sourceReferences": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/WorkOrderSourceReference"
+            }
+          },
+          "assigneeId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "teamId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "scheduledStart": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dueAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "tasks": {
+            "$ref": "#/components/schemas/WorkOrderTaskSummary"
+          },
+          "noteCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "attachmentCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "completionEvidence": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "$ref": "#/components/schemas/WorkOrderEvidenceReference"
+            }
+          },
+          "timeline": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 512,
+            "items": {
+              "$ref": "#/components/schemas/WorkOrderTimelineEvent"
+            }
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "WorkOrderListResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["schemaVersion", "items", "hasMore"],
+        "required": [
+          "schemaVersion",
+          "items",
+          "hasMore"
+        ],
         "properties": {
-          "schemaVersion": { "type": "integer", "const": 1 },
-          "items": { "type": "array", "maxItems": 100, "items": { "$ref": "#/components/schemas/WorkOrder" } },
-          "nextCursor": { "$ref": "#/components/schemas/OpaqueCursor" },
-          "hasMore": { "type": "boolean" }
+          "schemaVersion": {
+            "type": "integer",
+            "const": 1
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/WorkOrder"
+            }
+          },
+          "nextCursor": {
+            "$ref": "#/components/schemas/OpaqueCursor"
+          },
+          "hasMore": {
+            "type": "boolean"
+          }
         }
       },
       "Problem": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "title", "status"],
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
         "properties": {
-          "type": { "type": "string" },
-          "title": { "type": "string" },
-          "status": { "type": "integer", "minimum": 400, "maximum": 599 },
-          "code": { "type": "string" },
-          "correlationId": { "type": "string" }
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 599
+          },
+          "code": {
+            "type": "string"
+          },
+          "correlationId": {
+            "type": "string"
+          }
         }
       }
     }

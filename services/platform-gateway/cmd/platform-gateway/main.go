@@ -60,6 +60,11 @@ func main() {
 		logger.Error("gateway_alarm_config_invalid", "error_code", "ALARM_CONFIG_INVALID")
 		os.Exit(1)
 	}
+	workOrderConfig, err := loadWorkOrderConfig(workloadCertificate)
+	if err != nil {
+		logger.Error("gateway_work_order_config_invalid", "error_code", "WORK_ORDER_CONFIG_INVALID")
+		os.Exit(1)
+	}
 	analyticsConfig, err := loadAnalyticsConfig(workloadCertificate)
 	if err != nil {
 		logger.Error("gateway_analytics_config_invalid", "error_code", "ANALYTICS_CONFIG_INVALID")
@@ -93,6 +98,7 @@ func main() {
 		Telemetry:     telemetryConfig,
 		Command:       commandConfig,
 		Alarm:         alarmConfig,
+		WorkOrder:     workOrderConfig,
 		Analytics:     analyticsConfig,
 		Operations:    operationsConfig,
 		Observability: telemetry,
@@ -365,6 +371,38 @@ func loadAlarmConfig(certificate *tls.Certificate) (*gateway.AlarmConfig, error)
 			roots,
 			certificate,
 			envOr("ALARM_SERVICE_SERVER_NAME", "localhost"),
+		)},
+	}, nil
+}
+
+func loadWorkOrderConfig(certificate *tls.Certificate) (*gateway.WorkOrderConfig, error) {
+	serviceURL := strings.TrimSpace(os.Getenv("WORK_ORDER_SERVICE_URL"))
+	if serviceURL == "" {
+		return nil, nil
+	}
+	parsed, err := url.Parse(serviceURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, errors.New("WORK_ORDER_SERVICE_URL must be an HTTPS origin without user info, path, query or fragment")
+	}
+	if certificate == nil {
+		return nil, errors.New("Work Order Service requires the authenticated Gateway workload certificate")
+	}
+	caPath := strings.TrimSpace(os.Getenv("WORK_ORDER_SERVICE_SERVER_CA"))
+	if caPath == "" {
+		return nil, errors.New("WORK_ORDER_SERVICE_SERVER_CA is required when WORK_ORDER_SERVICE_URL is configured")
+	}
+	roots, err := loadCertPool(caPath, "Work Order Service server CA")
+	if err != nil {
+		return nil, err
+	}
+	return &gateway.WorkOrderConfig{
+		BackendBaseURL:   strings.TrimRight(parsed.String(), "/"),
+		BackendAudience:  envOr("WORK_ORDER_SERVICE_AUDIENCE", "work-order-service"),
+		Timeout:          5 * time.Second,
+		MaxResponseBytes: 2 << 20,
+		BackendHTTPClient: &http.Client{Transport: workloadTransport(
+			roots, certificate, envOr("WORK_ORDER_SERVICE_SERVER_NAME", "localhost"),
 		)},
 	}, nil
 }
