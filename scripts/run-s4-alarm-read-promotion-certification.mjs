@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
@@ -8,6 +8,7 @@ const arg = (name, fallback = '') => process.argv.find((value) => value.startsWi
 const profile = arg('profile', process.env.S4_ALARM_READ_PROMOTION_PROFILE ?? 'preflight');
 const outputDir = resolve(root, arg('output-dir', profile === 'formal' ? 'out/s4-alarm-read-promotion' : 'out/s4-alarm-read-promotion-preflight'));
 const expectedRepositorySha = process.env.GITHUB_SHA ?? execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+const expectedWorkflowRunId = arg('workflow-run-id', process.env.GITHUB_RUN_ID ?? '');
 const readJSON = async (path) => JSON.parse(await readFile(resolve(root, path), 'utf8'));
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
@@ -76,6 +77,7 @@ for (const route of lifecycleRoutes) {
   assert(route.rollout?.mode === 'disabled' && route.migrationPhase === 'S4-R0-contract-only', `${route.method} ${route.path} escaped the 0% lifecycle boundary`);
 }
 
+await rm(outputDir, { recursive: true, force: true });
 await mkdir(outputDir, { recursive: true });
 if (profile === 'preflight') {
   const report = {
@@ -118,7 +120,10 @@ const attestationRaw = await readFile(resolve(root, attestationPath));
 const attestation = JSON.parse(attestationRaw.toString('utf8'));
 assert(attestation.schemaVersion === 1, 'formal S4 Alarm attestation schema version is unsupported');
 assert(attestation.repositorySha === expectedRepositorySha, `formal S4 Alarm attestation repository SHA ${attestation.repositorySha} does not match ${expectedRepositorySha}`);
-assert(String(attestation.workflowRunId ?? '').trim(), 'formal S4 Alarm attestation lacks workflowRunId');
+const workflowRunId = String(attestation.workflowRunId ?? '').trim();
+assert(workflowRunId, 'formal S4 Alarm attestation lacks workflowRunId');
+assert(expectedWorkflowRunId, 'formal S4 Alarm certification requires GITHUB_RUN_ID or --workflow-run-id');
+assert(workflowRunId === expectedWorkflowRunId, `formal S4 Alarm attestation workflow run ${workflowRunId} does not match ${expectedWorkflowRunId}`);
 const environment = attestation.environment ?? {};
 assert(environment.synthetic === false, 'synthetic evidence cannot certify an Alarm read promotion');
 const testFixture = environment.testFixture === true;
@@ -221,6 +226,7 @@ await writeEvidence('source-canary-report.json', {
   status: 'passed',
   formal: true,
   repositorySha: expectedRepositorySha,
+  workflowRunId,
   environment,
   sourceCanary: source,
   cohort,
@@ -260,7 +266,7 @@ const certification = {
   formalPromotionEligible: !testFixture,
   testFixture,
   repositorySha: expectedRepositorySha,
-  workflowRunId: attestation.workflowRunId,
+  workflowRunId,
   sourceAttestationSha256: sha256(attestationRaw),
   completedSourcePhase: source.phase,
   sourceTrafficPercent: source.trafficPercent,
@@ -282,6 +288,7 @@ const statement = {
   predicate: {
     issue: 187,
     repositorySha: expectedRepositorySha,
+    workflowRunId,
     sourcePhase: source.phase,
     eligibleTargetPhase: target.phase,
     eligibleTargetTrafficPercent: target.trafficPercent,

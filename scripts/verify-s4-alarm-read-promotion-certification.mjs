@@ -15,7 +15,7 @@ const allowTestFixture = process.env.S4_ALARM_ALLOW_TEST_FIXTURE === 'true';
 const requiredFiles = envelope.requiredEvidence;
 const actualFiles = await readdir(directory);
 for (const name of requiredFiles) assert(actualFiles.includes(name), `S4 Alarm read promotion evidence is missing ${name}`);
-const unexpectedEvidence = actualFiles.filter((name) => (name.endsWith('.json') || name === 'SHA256SUMS') && !requiredFiles.includes(name));
+const unexpectedEvidence = actualFiles.filter((name) => !requiredFiles.includes(name));
 assert(unexpectedEvidence.length === 0, `S4 Alarm read promotion evidence contains unexpected files: ${unexpectedEvidence.join(', ')}`);
 
 const checksumRaw = await readFile(resolve(directory, 'SHA256SUMS'), 'utf8');
@@ -49,6 +49,7 @@ assert(certification.issue === 187 && certification.status === 'passed', 'formal
 const testFixture = certification.testFixture === true;
 assert(testFixture ? allowTestFixture && certification.formalPromotionEligible === false : certification.formalPromotionEligible === true, 'formal S4 Alarm promotion attestation is not eligible');
 assert(String(certification.repositorySha ?? '').trim() && source.repositorySha === certification.repositorySha, 'S4 Alarm source and certification repository SHAs do not match');
+assert(String(certification.workflowRunId ?? '').trim() && source.workflowRunId === certification.workflowRunId, 'S4 Alarm source and certification workflow run IDs do not match');
 assert(certification.completedSourcePhase === envelope.routeGroup.source.phase && certification.sourceTrafficPercent === envelope.routeGroup.source.trafficPercent, 'S4 Alarm certification source phase drifted');
 assert(certification.eligibleTargetPhase === envelope.routeGroup.target.phase && certification.eligibleTargetTrafficPercent === envelope.routeGroup.target.trafficPercent, 'S4 Alarm certification target phase drifted');
 assert(certification.repositoryMutationPerformed === false, 'S4 Alarm certification mutated repository policy');
@@ -92,7 +93,7 @@ assert(approvals.status === 'passed' && approvals.manualPromotion === true && ap
 assert(new Set(approvals.approval?.approvers ?? []).size === envelope.approval.distinctApproversRequired, 'S4 Alarm promotion approval is not two-person');
 
 assert(statement._type === 'https://in-toto.io/Statement/v1' && statement.predicateType === 'https://hvac.local/attestations/s4-alarm-read-promotion/v1', 'S4 Alarm in-toto statement type is invalid');
-assert(statement.predicate?.repositorySha === certification.repositorySha && statement.predicate?.reviewerCanVerifyOffline === true, 'S4 Alarm in-toto predicate is not bound to the certified repository SHA');
+assert(statement.predicate?.repositorySha === certification.repositorySha && statement.predicate?.workflowRunId === certification.workflowRunId && statement.predicate?.reviewerCanVerifyOffline === true, 'S4 Alarm in-toto predicate is not bound to the certified repository SHA and workflow run');
 assert((statement.predicate?.testFixture === true) === testFixture && statement.predicate?.formalPromotionEligible === certification.formalPromotionEligible, 'S4 Alarm in-toto fixture or eligibility classification drifted');
 assert(statement.predicate?.repositoryMutationPerformed === false && statement.predicate?.eligibleTargetTrafficPercent === 5, 'S4 Alarm in-toto predicate overclaims repository mutation or target traffic');
 const statementSubjects = new Map((statement.subject ?? []).map((subject) => [subject.name, subject.digest?.sha256]));
