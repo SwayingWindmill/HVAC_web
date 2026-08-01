@@ -8,8 +8,8 @@ business-record contracts, PostgreSQL persistence adapter, the first explicit La
 Site night-energy application/HTTP contract and committed AG-UI event projection exposed through
 Platform Gateway. The existing React/Vite Real Shell now consumes the first bounded Operations
 Workspace slice through CopilotKit Headless. A project-owned `FindingSynthesizer`, strict structured
-output validation, deterministic fallback and Fake Provider are implemented; a live external model
-provider, reconnect cursor and scheduler remain out of this slice.
+output validation, deterministic fallback, Fake Provider and default-disabled OpenAI Responses API
+adapter are implemented; reconnect cursor and scheduler remain out of this slice.
 
 The module direction is:
 
@@ -65,6 +65,27 @@ Finding kind, conclusion, analysis authority and committed effects remain determ
 invocation provenance is stored atomically inside the Finding JSONB record and restored through
 Domain validation; public HTTP and AG-UI projections omit it. Raw prompts and raw Provider responses
 are never persisted.
+
+The production OpenAI adapter uses the official SDK, sends one strict JSON Schema request through the
+Responses API, sets `store: false`, exposes no Tools, streaming or background mode, and binds retries
+to a deterministic idempotency key derived from the bounded input and non-secret configuration digest.
+A real Provider attempt first consumes one durable Run `modelInvocations` unit; budget exhaustion blocks
+the external request and Finding commit. It is disabled unless all of the following server environment
+values are valid:
+
+```text
+OPERATIONS_AGENT_FINDING_MODEL_PROVIDER=openai
+OPERATIONS_AGENT_FINDING_MODEL=<exact model identifier>
+OPERATIONS_AGENT_FINDING_MODEL_ALLOWLIST=<comma-separated exact identifiers>
+OPERATIONS_AGENT_FINDING_MODEL_TIMEOUT_MS=<100..30000, default 5000>
+OPERATIONS_AGENT_FINDING_MODEL_MAX_OUTPUT_TOKENS=<64..2048, default 512>
+OPENAI_API_KEY=<server credential>
+```
+
+`createEnvironmentConfiguredSiteNightEnergyInvestigationCoordinator` is the production composition
+entry. Missing Provider configuration keeps the deterministic fallback. Partial configuration,
+unsupported Providers, model/allowlist mismatch, conflicting explicit injection and conflicting
+timeout policy fail during composition before any investigation or external request is created.
 
 The `tools` module implements two narrow authoritative READ boundaries:
 

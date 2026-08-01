@@ -98,8 +98,20 @@ export {
 } from './application/index.js';
 
 export {
+  OPERATIONS_AGENT_FINDING_MODEL_ALLOWLIST_ENV,
+  OPERATIONS_AGENT_FINDING_MODEL_ENV,
+  OPERATIONS_AGENT_FINDING_MODEL_MAX_OUTPUT_TOKENS_ENV,
+  OPERATIONS_AGENT_FINDING_MODEL_PROVIDER_ENV,
+  OPERATIONS_AGENT_FINDING_MODEL_TIMEOUT_MS_ENV,
+  OperationsAgentFindingModelConfigurationError,
+  createEnvironmentConfiguredSiteNightEnergyInvestigationCoordinator,
+  createOperationsAgentFindingModelRuntimeFromEnvironment,
   createOperationsAgentHttpHandler,
   operationsAgentServiceModules,
+  type EnvironmentConfiguredSiteNightEnergyCoordinatorOptions,
+  type OperationsAgentEnvironment,
+  type OperationsAgentFindingModelRuntime,
+  type OperationsAgentFindingModelRuntimeOptions,
   type OperationsAgentHttpAuthorizationInput,
   type OperationsAgentHttpAuthorizer,
   type OperationsAgentHttpCoordinatorContext,

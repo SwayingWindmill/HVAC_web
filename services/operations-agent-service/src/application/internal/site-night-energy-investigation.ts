@@ -48,6 +48,7 @@ import type {
 } from './ports.js';
 import {
   DEFAULT_RUN_RESOURCE_BUDGET_POLICY,
+  ZERO_RUN_RESOURCE_BUDGET_COST,
   normalizeRunResourceBudgetPolicy,
   runResourceOwnerResultBatchCost,
   runResourceOwnerResultBatchOperationId,
@@ -1095,6 +1096,15 @@ export const createSiteNightEnergyInvestigationCoordinator = (
           'DUPLICATE_RECORD',
           `Business record ${findingIdentity} already exists with another record type.`,
         );
+      }
+      if (existingFinding === null && ports.findingSynthesizer !== undefined) {
+        const modelBudget = await checkResourceBudget({
+          view,
+          at: operationTime,
+          operationId: `finding-synthesis:${findingIdentity}`,
+          cost: { ...ZERO_RUN_RESOURCE_BUDGET_COST, modelInvocations: 1 },
+        });
+        if (modelBudget !== null) return snapshot(view);
       }
       const deterministicStatement = analysis.status === 'SUPPORTED_SITE_FINDING'
         ? analysis.siteFinding.statement

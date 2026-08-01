@@ -35,6 +35,21 @@ export const createOperationsAgentHttpHandler = (
   createAgUiEventStreamResponse: createOperationsAgUiEventStreamResponse,
 });
 
+export {
+  OPERATIONS_AGENT_FINDING_MODEL_ALLOWLIST_ENV,
+  OPERATIONS_AGENT_FINDING_MODEL_ENV,
+  OPERATIONS_AGENT_FINDING_MODEL_MAX_OUTPUT_TOKENS_ENV,
+  OPERATIONS_AGENT_FINDING_MODEL_PROVIDER_ENV,
+  OPERATIONS_AGENT_FINDING_MODEL_TIMEOUT_MS_ENV,
+  OperationsAgentFindingModelConfigurationError,
+  createEnvironmentConfiguredSiteNightEnergyInvestigationCoordinator,
+  createOperationsAgentFindingModelRuntimeFromEnvironment,
+  type EnvironmentConfiguredSiteNightEnergyCoordinatorOptions,
+  type OperationsAgentEnvironment,
+  type OperationsAgentFindingModelRuntime,
+  type OperationsAgentFindingModelRuntimeOptions,
+} from './internal/finding-model-runtime.js';
+
 export const bootstrapModule = Object.freeze({
   name: 'bootstrap',
   layer: 'composition',
