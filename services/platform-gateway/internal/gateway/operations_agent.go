@@ -139,7 +139,7 @@ func matchPublicOperationsRoute(path string) (publicOperationsRoute, bool) {
 	}
 	internalBase := "/internal/v1/sites/" + url.PathEscape(siteID) + "/operations/investigations"
 	if len(parts) == 3 {
-		return publicOperationsRoute{kind: "START", template: PublicOperationsInvestigationsPathTemplate, siteID: siteID, internalPath: internalBase, method: http.MethodPost, mutation: true}, true
+		return publicOperationsRoute{kind: "COLLECTION", template: PublicOperationsInvestigationsPathTemplate, siteID: siteID, internalPath: internalBase}, true
 	}
 	if len(parts) == 5 && parts[3] != "" && parts[4] == "events" {
 		investigationID, err := url.PathUnescape(parts[3])
@@ -150,7 +150,7 @@ func matchPublicOperationsRoute(path string) (publicOperationsRoute, bool) {
 			kind: "STREAM", template: PublicOperationsEventsPathTemplate,
 			siteID: siteID, investigationID: investigationID,
 			internalPath: internalBase + "/" + url.PathEscape(investigationID) + "/events",
-			method: http.MethodGet, mutation: false,
+			method:       http.MethodGet, mutation: false,
 		}, true
 	}
 	if len(parts) != 4 || parts[3] == "" {
@@ -179,7 +179,23 @@ func matchPublicOperationsRoute(path string) (publicOperationsRoute, bool) {
 }
 
 func dispatchOperationsRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicOperationsRoute) {
-	if route.siteID == "" || (route.kind != "START" && route.investigationID == "") {
+	if route.siteID == "" {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Operations Investigation was not found.", false, nil)
+		return
+	}
+	if route.kind == "COLLECTION" {
+		switch request.Method {
+		case http.MethodGet:
+			route.kind, route.method, route.mutation = "LIST", http.MethodGet, false
+		case http.MethodPost:
+			route.kind, route.method, route.mutation = "START", http.MethodPost, true
+		default:
+			writer.Header().Set("Allow", "GET, POST")
+			writeProblem(writer, request, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "This Operations Investigation collection accepts GET or POST.", false, nil)
+			return
+		}
+	}
+	if route.kind != "START" && route.kind != "LIST" && route.investigationID == "" {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Operations Investigation was not found.", false, nil)
 		return
 	}
@@ -462,8 +478,12 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 			_, _ = writer.Write(raw)
 			return
 		}
-		if !strings.HasPrefix(contentType, "application/json") || validateOperationsSnapshot(raw) != nil {
-			writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_CONTRACT_FAILED", "Operations Agent contract failed", "The Operations Agent returned an invalid authoritative snapshot.", true, nil)
+		contractErr := validateOperationsSnapshot(raw)
+		if route.kind == "LIST" {
+			contractErr = validateOperationsInvestigationList(raw)
+		}
+		if !strings.HasPrefix(contentType, "application/json") || contractErr != nil {
+			writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_CONTRACT_FAILED", "Operations Agent contract failed", "The Operations Agent returned an invalid authoritative projection.", true, nil)
 			return
 		}
 		writer.Header().Set("Content-Type", "application/json")
@@ -557,17 +577,514 @@ func decodeStrictOperationsJSON(raw []byte, value any) error {
 	return nil
 }
 
-func validateOperationsSnapshot(raw []byte) error {
-	var value any
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if err := decoder.Decode(&value); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
-		return errors.New("invalid Operations snapshot JSON")
+func operationsNullableBoundedString(value any, maximum int) (string, bool) {
+	if value == nil {
+		return "", true
 	}
-	root, ok := value.(map[string]any)
-	if !ok || root["schemaVersion"] != json.Number("1") || root["id"] == "" || root["status"] == "" {
-		return errors.New("invalid Operations snapshot")
+	return operationsBoundedString(value, maximum)
+}
+
+func operationsDigest(value any) bool {
+	text, ok := value.(string)
+	if !ok || len(text) != 71 || !strings.HasPrefix(text, "sha256:") {
+		return false
 	}
+	for _, candidate := range text[7:] {
+		if (candidate < '0' || candidate > '9') && (candidate < 'a' || candidate > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func operationsStringArray(value any, minimum, maximum int) ([]string, bool) {
+	items, ok := value.([]any)
+	if !ok || len(items) < minimum || len(items) > maximum {
+		return nil, false
+	}
+	result := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, candidate := range items {
+		identity, valid := operationsBoundedString(candidate, 256)
+		if !valid {
+			return nil, false
+		}
+		if _, duplicate := seen[identity]; duplicate {
+			return nil, false
+		}
+		seen[identity] = struct{}{}
+		result = append(result, identity)
+	}
+	return result, true
+}
+
+func validateOperationsScopeValue(value any, siteOnly bool) error {
+	scope, ok := value.(map[string]any)
+	if !ok || !operationsExactKeys(scope, "organizationId", "siteId", "equipmentId", "deviceId") {
+		return errors.New("invalid Operations Scope")
+	}
+	if _, ok := operationsBoundedString(scope["organizationId"], 256); !ok {
+		return errors.New("invalid Operations Organization Scope")
+	}
+	if _, ok := operationsBoundedString(scope["siteId"], 256); !ok {
+		return errors.New("invalid Operations Site Scope")
+	}
+	if siteOnly {
+		if scope["equipmentId"] != nil || scope["deviceId"] != nil {
+			return errors.New("Operations Investigation Scope must remain Site-only")
+		}
+		return nil
+	}
+	if _, ok := operationsNullableBoundedString(scope["equipmentId"], 256); !ok {
+		return errors.New("invalid Operations Equipment Scope")
+	}
+	if _, ok := operationsNullableBoundedString(scope["deviceId"], 256); !ok {
+		return errors.New("invalid Operations Device Scope")
+	}
+	return nil
+}
+
+func validateOperationsRecordBase(record map[string]any, recordType, investigationID string) error {
+	if record["schemaVersion"] != json.Number("1") || record["recordType"] != recordType {
+		return errors.New("invalid Operations business record identity")
+	}
+	if _, ok := operationsBoundedString(record["id"], 256); !ok || record["investigationId"] != investigationID {
+		return errors.New("Operations business record does not match the Investigation")
+	}
+	if _, ok := operationsNonnegativeInteger(record["recordedAt"]); !ok {
+		return errors.New("invalid Operations business record timestamp")
+	}
+	return nil
+}
+
+func validateOperationsEvidenceQuality(value any) error {
+	quality, ok := value.(map[string]any)
+	if !ok || !operationsExactKeys(quality, "classification", "valid", "suspect", "invalid") ||
+		!operationsAllowedString(quality["classification"], "GOOD", "UNCERTAIN", "BAD", "STALE") {
+		return errors.New("invalid Operations Evidence quality")
+	}
+	for _, key := range []string{"valid", "suspect", "invalid"} {
+		if count, ok := operationsNonnegativeInteger(quality[key]); !ok || count > 1_000_000 {
+			return errors.New("invalid Operations Evidence quality count")
+		}
+	}
+	return nil
+}
+
+func validateOperationsEvidenceSource(value any, organizationID, siteID string) (string, error) {
+	source, ok := value.(map[string]any)
+	if !ok || !operationsExactKeys(source,
+		"owner", "scope", "requestId", "registryRevision", "datasetRevision", "watermark",
+		"partial", "quality", "capturedAt", "evaluatedAt", "provenanceDigest",
+	) {
+		return "", errors.New("invalid Operations Evidence source shape")
+	}
+	owner, ok := source["owner"].(string)
+	if !ok || (owner != "registry" && owner != "telemetry-query-service") || validateOperationsScopeValue(source["scope"], false) != nil {
+		return "", errors.New("invalid Operations Evidence source Owner or Scope")
+	}
+	sourceScope := source["scope"].(map[string]any)
+	if sourceScope["organizationId"] != organizationID || sourceScope["siteId"] != siteID {
+		return "", errors.New("Operations Evidence source exceeds Investigation Scope")
+	}
+	requestID, ok := operationsBoundedString(source["requestId"], 256)
+	if !ok {
+		return "", errors.New("invalid Operations Evidence request identity")
+	}
+	registryRevision, registryOK := operationsNullableBoundedString(source["registryRevision"], 256)
+	datasetRevision, datasetOK := operationsNullableBoundedString(source["datasetRevision"], 256)
+	if !registryOK || !datasetOK || (owner == "registry" && registryRevision == "") || (owner == "telemetry-query-service" && datasetRevision == "") {
+		return "", errors.New("Operations Evidence source lacks its Owner revision")
+	}
+	watermark, ok := source["watermark"].(map[string]any)
+	if !ok || !operationsExactKeys(watermark, "data", "aggregate") {
+		return "", errors.New("invalid Operations Evidence watermark")
+	}
+	dataWatermark, dataOK := operationsNullableBoundedString(watermark["data"], 256)
+	aggregateWatermark, aggregateOK := operationsNullableBoundedString(watermark["aggregate"], 256)
+	if !dataOK || !aggregateOK || (owner == "telemetry-query-service" && dataWatermark == "" && aggregateWatermark == "") {
+		return "", errors.New("Operations telemetry Evidence lacks a Watermark")
+	}
+	if _, ok := source["partial"].(bool); !ok || validateOperationsEvidenceQuality(source["quality"]) != nil || !operationsDigest(source["provenanceDigest"]) {
+		return "", errors.New("invalid Operations Evidence provenance")
+	}
+	capturedAt, capturedOK := operationsNonnegativeInteger(source["capturedAt"])
+	evaluatedAt, evaluatedOK := operationsNonnegativeInteger(source["evaluatedAt"])
+	if !capturedOK || !evaluatedOK || evaluatedAt < capturedAt {
+		return "", errors.New("invalid Operations Evidence provenance timing")
+	}
+	return owner + ":" + requestID, nil
+}
+
+func validateOperationsEvidenceRecord(value any, investigationID, organizationID, siteID string) (string, error) {
+	record, ok := value.(map[string]any)
+	if !ok || !operationsExactKeys(record,
+		"schemaVersion", "recordType", "id", "investigationId", "recordedAt", "evidenceKind",
+		"classification", "statement", "analysisReferenceDigest", "sources",
+	) || validateOperationsRecordBase(record, "EVIDENCE", investigationID) != nil {
+		return "", errors.New("invalid Operations Evidence record")
+	}
+	if !operationsAllowedString(record["evidenceKind"], "SITE_ENERGY_SERIES_READY", "SITE_ENERGY_SERIES_READINESS_ASSESSED", "SITE_ENERGY_PERIOD_COMPARISON") ||
+		!operationsAllowedString(record["classification"], "FACT", "ALGORITHM_RESULT") {
+		return "", errors.New("invalid Operations Evidence classification")
+	}
+	if _, ok := operationsBoundedString(record["statement"], 4_000); !ok {
+		return "", errors.New("invalid Operations Evidence statement")
+	}
+	if record["analysisReferenceDigest"] != nil && !operationsDigest(record["analysisReferenceDigest"]) {
+		return "", errors.New("invalid Operations Evidence analysis digest")
+	}
+	sources, ok := record["sources"].([]any)
+	if !ok || len(sources) == 0 || len(sources) > 8 {
+		return "", errors.New("invalid Operations Evidence source count")
+	}
+	seen := make(map[string]struct{}, len(sources))
+	for _, candidate := range sources {
+		identity, err := validateOperationsEvidenceSource(candidate, organizationID, siteID)
+		if err != nil {
+			return "", err
+		}
+		if _, duplicate := seen[identity]; duplicate {
+			return "", errors.New("duplicate Operations Evidence source")
+		}
+		seen[identity] = struct{}{}
+	}
+	id, _ := record["id"].(string)
+	return id, nil
+}
+
+func validateOperationsAnalysisReference(value any, investigationID string) (string, error) {
+	record, ok := value.(map[string]any)
+	if !ok || !operationsExactKeys(record,
+		"schemaVersion", "recordType", "id", "investigationId", "recordedAt", "analysisKind",
+		"authority", "algorithmVersion", "policyVersion", "inputEvidenceIds", "parameterDigest",
+		"resultDigest", "executedAt", "outcome",
+	) || validateOperationsRecordBase(record, "ANALYSIS_REFERENCE", investigationID) != nil {
+		return "", errors.New("invalid Operations Analysis Reference")
+	}
+	if record["analysisKind"] != "SITE_NIGHT_ENERGY_COMPARISON" || record["authority"] != "DETERMINISTIC_ALGORITHM" ||
+		!operationsAllowedString(record["outcome"], "SUPPORTED_SITE_FINDING", "UNABLE_TO_CONCLUDE") {
+		return "", errors.New("invalid Operations Analysis authority or outcome")
+	}
+	if _, ok := operationsBoundedString(record["algorithmVersion"], 128); !ok {
+		return "", errors.New("invalid Operations Analysis algorithm")
+	}
+	if _, ok := operationsBoundedString(record["policyVersion"], 128); !ok {
+		return "", errors.New("invalid Operations Analysis policy")
+	}
+	if _, ok := operationsStringArray(record["inputEvidenceIds"], 1, 32); !ok || !operationsDigest(record["parameterDigest"]) || !operationsDigest(record["resultDigest"]) {
+		return "", errors.New("invalid Operations Analysis references or digest")
+	}
+	if _, ok := operationsNonnegativeInteger(record["executedAt"]); !ok {
+		return "", errors.New("invalid Operations Analysis timestamp")
+	}
+	id, _ := record["id"].(string)
+	return id, nil
+}
+
+func validateOperationsRequiredNextPeriod(value any) error {
+	period, ok := value.(map[string]any)
+	if !ok || !operationsExactKeys(period, "localDate", "from", "to", "expectedBuckets") {
+		return errors.New("invalid Operations required-next period")
+	}
+	if _, ok := operationsBoundedString(period["localDate"], 32); !ok {
+		return errors.New("invalid Operations required-next local date")
+	}
+	if _, ok := operationsBoundedString(period["from"], 64); !ok {
+		return errors.New("invalid Operations required-next period start")
+	}
+	if _, ok := operationsBoundedString(period["to"], 64); !ok {
+		return errors.New("invalid Operations required-next period end")
+	}
+	buckets, ok := operationsNonnegativeInteger(period["expectedBuckets"])
+	if !ok || buckets < 1 || buckets > 48 {
+		return errors.New("invalid Operations required-next bucket count")
+	}
+	return nil
+}
+
+func validateOperationsRequiredNext(value any, organizationID, siteID string) error {
+	requirement, ok := value.(map[string]any)
+	if !ok || !operationsExactKeys(requirement,
+		"status", "kind", "owner", "capability", "organizationId", "siteId", "equipmentIds",
+		"targetPeriod", "baselinePeriod", "requiredMetadata",
+	) || requirement["status"] != "REQUIRED_NEXT" || requirement["organizationId"] != organizationID || requirement["siteId"] != siteID {
+		return errors.New("invalid Operations required-next Scope")
+	}
+	if _, ok := operationsStringArray(requirement["equipmentIds"], 0, 32); !ok ||
+		validateOperationsRequiredNextPeriod(requirement["targetPeriod"]) != nil ||
+		validateOperationsRequiredNextPeriod(requirement["baselinePeriod"]) != nil {
+		return errors.New("invalid Operations required-next Evidence period")
+	}
+	metadata, ok := requirement["requiredMetadata"].([]any)
+	if !ok {
+		return errors.New("invalid Operations required-next metadata")
+	}
+	var expected []string
+	switch requirement["kind"] {
+	case "EQUIPMENT_ENERGY_BINDINGS":
+		if requirement["owner"] != "registry" || requirement["capability"] != "registry.getEquipmentEnergyBindings" {
+			return errors.New("invalid Operations Registry required-next capability")
+		}
+		expected = []string{"BUSINESS_REVISION", "QUALITY", "CAPTURED_AT", "PAYLOAD_DIGEST"}
+	case "EQUIPMENT_ENERGY_PERIOD_COMPARISON":
+		if requirement["owner"] != "telemetry-query-service" || requirement["capability"] != "analytics.energy.getEquipmentSeries" {
+			return errors.New("invalid Operations telemetry required-next capability")
+		}
+		expected = []string{"DATASET_REVISION", "WATERMARK", "PARTIAL", "QUALITY", "CAPTURED_AT", "PAYLOAD_DIGEST"}
+	default:
+		return errors.New("invalid Operations required-next kind")
+	}
+	if len(metadata) != len(expected) {
+		return errors.New("invalid Operations required-next metadata count")
+	}
+	for index, expectedValue := range expected {
+		if metadata[index] != expectedValue {
+			return errors.New("invalid Operations required-next metadata order")
+		}
+	}
+	return nil
+}
+
+func validateOperationsFindingRecord(value any, investigationID, organizationID, siteID string) (string, error) {
+	record, ok := value.(map[string]any)
+	if !ok || !operationsExactKeys(record,
+		"schemaVersion", "recordType", "id", "investigationId", "recordedAt", "findingKind",
+		"classification", "statement", "evidenceIds", "analysisReferenceIds", "conclusion",
+	) || validateOperationsRecordBase(record, "FINDING", investigationID) != nil || record["classification"] != "INFERENCE" {
+		return "", errors.New("invalid Operations Finding")
+	}
+	if !operationsAllowedString(record["findingKind"], "SITE_NIGHT_ENERGY_INCREASE", "SITE_NIGHT_ENERGY_WITHIN_THRESHOLD", "UNABLE_TO_CONCLUDE") {
+		return "", errors.New("invalid Operations Finding kind")
+	}
+	if _, ok := operationsBoundedString(record["statement"], 4_000); !ok {
+		return "", errors.New("invalid Operations Finding statement")
+	}
+	if _, ok := operationsStringArray(record["evidenceIds"], 0, 32); !ok {
+		return "", errors.New("invalid Operations Finding Evidence identities")
+	}
+	if _, ok := operationsStringArray(record["analysisReferenceIds"], 0, 32); !ok {
+		return "", errors.New("invalid Operations Finding Analysis identities")
+	}
+	conclusion, ok := record["conclusion"].(map[string]any)
+	if !ok {
+		return "", errors.New("invalid Operations Finding conclusion")
+	}
+	switch conclusion["status"] {
+	case "SUPPORTED":
+		if !operationsExactKeys(conclusion, "status", "scope", "organizationId", "siteId") || conclusion["scope"] != "SITE" ||
+			conclusion["organizationId"] != organizationID || conclusion["siteId"] != siteID || record["findingKind"] == "UNABLE_TO_CONCLUDE" {
+			return "", errors.New("Operations supported Finding exceeds Site authority")
+		}
+	case "UNABLE_TO_CONCLUDE":
+		legacy := operationsExactKeys(conclusion, "status", "scope", "reasonCode", "detail")
+		withRequirements := operationsExactKeys(conclusion, "status", "scope", "reasonCode", "detail", "requiredNext")
+		if (!legacy && !withRequirements) || !operationsAllowedString(conclusion["scope"], "SITE", "EQUIPMENT") || record["findingKind"] != "UNABLE_TO_CONCLUDE" {
+			return "", errors.New("invalid Operations unable-to-conclude Finding")
+		}
+		if _, ok := operationsBoundedString(conclusion["reasonCode"], 128); !ok {
+			return "", errors.New("invalid Operations Finding reason")
+		}
+		if _, ok := operationsBoundedString(conclusion["detail"], 4_000); !ok {
+			return "", errors.New("invalid Operations Finding detail")
+		}
+		if withRequirements {
+			requirements, ok := conclusion["requiredNext"].([]any)
+			if !ok || len(requirements) == 0 || len(requirements) > 8 {
+				return "", errors.New("invalid Operations required-next count")
+			}
+			seen := make(map[string]struct{}, len(requirements))
+			for _, candidate := range requirements {
+				if err := validateOperationsRequiredNext(candidate, organizationID, siteID); err != nil {
+					return "", err
+				}
+				requirement := candidate.(map[string]any)
+				identity := requirement["owner"].(string) + ":" + requirement["kind"].(string)
+				if _, duplicate := seen[identity]; duplicate {
+					return "", errors.New("duplicate Operations required-next Evidence")
+				}
+				seen[identity] = struct{}{}
+			}
+		}
+	default:
+		return "", errors.New("unsupported Operations Finding conclusion")
+	}
+	id, _ := record["id"].(string)
+	return id, nil
+}
+
+func validateOperationsToolReceiptRecord(value any, investigationID string) (string, error) {
+	record, ok := value.(map[string]any)
+	if !ok || !operationsExactKeys(record,
+		"schemaVersion", "recordType", "id", "investigationId", "recordedAt", "logicalTool", "owner",
+		"requestId", "attemptId", "runId", "stepId", "startedAt", "completedAt", "resultCategory", "metadata",
+	) || validateOperationsRecordBase(record, "TOOL_EXECUTION_RECEIPT", investigationID) != nil {
+		return "", errors.New("invalid Operations Tool Receipt")
+	}
+	tool, toolOK := record["logicalTool"].(string)
+	owner, ownerOK := record["owner"].(string)
+	expectedOwner := map[string]string{
+		"registry.getSite": "registry", "registry.listSiteEquipment": "registry",
+		"telemetry.getCurrentSnapshot": "telemetry-query-service", "analytics.getEnergySeries": "telemetry-query-service",
+		"commands.getCapabilities": "command-service",
+	}[tool]
+	if !toolOK || !ownerOK || expectedOwner == "" || owner != expectedOwner ||
+		!operationsAllowedString(record["resultCategory"], "SUCCEEDED", "REJECTED", "TIMED_OUT", "FAILED") {
+		return "", errors.New("invalid Operations Tool Receipt identity")
+	}
+	for _, key := range []string{"requestId", "attemptId", "runId"} {
+		if _, ok := operationsBoundedString(record[key], 256); !ok {
+			return "", errors.New("invalid Operations Tool Receipt execution identity")
+		}
+	}
+	if _, ok := operationsBoundedString(record["stepId"], 128); !ok {
+		return "", errors.New("invalid Operations Tool Receipt Step")
+	}
+	startedAt, startedOK := operationsNonnegativeInteger(record["startedAt"])
+	completedAt, completedOK := operationsNonnegativeInteger(record["completedAt"])
+	if !startedOK || !completedOK || completedAt < startedAt {
+		return "", errors.New("invalid Operations Tool Receipt timing")
+	}
+	metadata, ok := record["metadata"].(map[string]any)
+	if !ok || len(metadata) > 32 {
+		return "", errors.New("invalid Operations Tool Receipt metadata")
+	}
+	for key, candidate := range metadata {
+		lower := strings.ToLower(key)
+		if strings.TrimSpace(key) == "" || len(key) > 128 || strings.Contains(lower, "secret") || strings.Contains(lower, "token") ||
+			strings.Contains(lower, "authorization") || strings.Contains(lower, "cookie") || strings.Contains(lower, "prompt") ||
+			strings.Contains(lower, "payload") || strings.Contains(lower, "response") || strings.Contains(lower, "body") || strings.Contains(lower, "raw") {
+			return "", errors.New("unsafe Operations Tool Receipt metadata key")
+		}
+		switch typed := candidate.(type) {
+		case nil, bool:
+		case string:
+			if len(typed) > 512 {
+				return "", errors.New("oversized Operations Tool Receipt metadata")
+			}
+		case json.Number:
+			if _, err := strconv.ParseFloat(string(typed), 64); err != nil {
+				return "", errors.New("invalid Operations Tool Receipt numeric metadata")
+			}
+		default:
+			return "", errors.New("nested Operations Tool Receipt metadata is forbidden")
+		}
+	}
+	id, _ := record["id"].(string)
+	return id, nil
+}
+
+func validateOperationsRecordArray(value any, maximum int, validate func(any) (string, error)) error {
+	items, ok := value.([]any)
+	if !ok || len(items) > maximum {
+		return errors.New("invalid Operations record array")
+	}
+	seen := make(map[string]struct{}, len(items))
+	for _, candidate := range items {
+		identity, err := validate(candidate)
+		if err != nil {
+			return err
+		}
+		if _, duplicate := seen[identity]; duplicate {
+			return errors.New("duplicate Operations business record identity")
+		}
+		seen[identity] = struct{}{}
+	}
+	return nil
+}
+
+func validateOperationsInvestigationValue(root map[string]any, includeToolReceipts bool) error {
+	expected := []string{"schemaVersion", "id", "scope", "status", "revision", "createdAt", "activeRun", "outcome", "evidence", "analysisReferences", "findings"}
+	if includeToolReceipts {
+		expected = append(expected, "toolReceipts")
+	}
+	if !operationsExactKeys(root, expected...) || root["schemaVersion"] != json.Number("1") {
+		return errors.New("invalid Operations Investigation shape")
+	}
+	investigationID, ok := operationsBoundedString(root["id"], 256)
+	if !ok || validateOperationsScopeValue(root["scope"], true) != nil ||
+		!operationsAllowedString(root["status"], "DRAFT", "RUNNING", "PAUSED", "COMPLETED", "FAILED", "CANCELLED") {
+		return errors.New("invalid Operations Investigation identity or Scope")
+	}
+	if _, ok := operationsNonnegativeInteger(root["revision"]); !ok {
+		return errors.New("invalid Operations Investigation revision")
+	}
+	if _, ok := operationsNonnegativeInteger(root["createdAt"]); !ok {
+		return errors.New("invalid Operations Investigation creation timestamp")
+	}
+	if root["activeRun"] != nil {
+		run, ok := root["activeRun"].(map[string]any)
+		if !ok || !operationsExactKeys(run, "id", "status", "startedAt") ||
+			!operationsAllowedString(run["status"], "ACTIVE", "PAUSED") {
+			return errors.New("invalid Operations active Agent Run")
+		}
+		if _, ok := operationsBoundedString(run["id"], 256); !ok {
+			return errors.New("invalid Operations active Agent Run identity")
+		}
+		if _, ok := operationsNonnegativeInteger(run["startedAt"]); !ok {
+			return errors.New("invalid Operations active Agent Run timestamp")
+		}
+	}
+	if root["outcome"] != nil && !operationsAllowedString(root["outcome"], "SUPPORTED_SITE_FINDING", "UNABLE_TO_CONCLUDE") {
+		return errors.New("invalid Operations Investigation outcome")
+	}
+	scope := root["scope"].(map[string]any)
+	organizationID := scope["organizationId"].(string)
+	siteID := scope["siteId"].(string)
+	if err := validateOperationsRecordArray(root["evidence"], 32, func(candidate any) (string, error) {
+		return validateOperationsEvidenceRecord(candidate, investigationID, organizationID, siteID)
+	}); err != nil {
+		return err
+	}
+	if err := validateOperationsRecordArray(root["analysisReferences"], 32, func(candidate any) (string, error) {
+		return validateOperationsAnalysisReference(candidate, investigationID)
+	}); err != nil {
+		return err
+	}
+	if err := validateOperationsRecordArray(root["findings"], 32, func(candidate any) (string, error) {
+		return validateOperationsFindingRecord(candidate, investigationID, organizationID, siteID)
+	}); err != nil {
+		return err
+	}
+	evidenceIDs := make(map[string]struct{})
+	for _, candidate := range root["evidence"].([]any) {
+		record := candidate.(map[string]any)
+		evidenceIDs[record["id"].(string)] = struct{}{}
+	}
+	analysisIDs := make(map[string]struct{})
+	for _, candidate := range root["analysisReferences"].([]any) {
+		record := candidate.(map[string]any)
+		analysisIDs[record["id"].(string)] = struct{}{}
+		for _, evidenceID := range record["inputEvidenceIds"].([]any) {
+			if _, exists := evidenceIDs[evidenceID.(string)]; !exists {
+				return errors.New("Operations Analysis references unknown Evidence")
+			}
+		}
+	}
+	for _, candidate := range root["findings"].([]any) {
+		record := candidate.(map[string]any)
+		for _, evidenceID := range record["evidenceIds"].([]any) {
+			if _, exists := evidenceIDs[evidenceID.(string)]; !exists {
+				return errors.New("Operations Finding references unknown Evidence")
+			}
+		}
+		for _, analysisID := range record["analysisReferenceIds"].([]any) {
+			if _, exists := analysisIDs[analysisID.(string)]; !exists {
+				return errors.New("Operations Finding references unknown Analysis")
+			}
+		}
+	}
+	if includeToolReceipts {
+		if err := validateOperationsRecordArray(root["toolReceipts"], 64, func(candidate any) (string, error) {
+			return validateOperationsToolReceiptRecord(candidate, investigationID)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func inspectOperationsSnapshotPayload(value any) error {
 	forbidden := map[string]struct{}{"lease": {}, "leaseHistory": {}, "checkpoint": {}, "opaqueState": {}, "runtimeRevision": {}, "providerMessage": {}, "points": {}}
 	var inspect func(any) error
 	inspect = func(candidate any) error {
@@ -591,6 +1108,79 @@ func validateOperationsSnapshot(raw []byte) error {
 		return nil
 	}
 	return inspect(value)
+}
+
+func validateOperationsSnapshot(raw []byte) error {
+	var root map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&root); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return errors.New("invalid Operations snapshot JSON")
+	}
+	if err := validateOperationsInvestigationValue(root, true); err != nil {
+		return err
+	}
+	return inspectOperationsSnapshotPayload(root)
+}
+
+func validateOperationsInvestigationList(raw []byte) error {
+	var root map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&root); err != nil || decoder.Decode(&struct{}{}) != io.EOF || !operationsExactKeys(root, "schemaVersion", "investigations") || root["schemaVersion"] != json.Number("1") {
+		return errors.New("invalid Operations Investigation list")
+	}
+	investigations, ok := root["investigations"].([]any)
+	if !ok || len(investigations) > 50 {
+		return errors.New("invalid Operations Investigation list size")
+	}
+	var previousCreated int64 = 1<<63 - 1
+	previousID := ""
+	for index, candidate := range investigations {
+		item, ok := candidate.(map[string]any)
+		if !ok || !operationsExactKeys(item,
+			"schemaVersion", "id", "scope", "status", "revision", "createdAt", "outcome",
+			"evidenceCount", "analysisReferenceCount", "findingCount", "toolReceiptCount",
+		) || item["schemaVersion"] != json.Number("1") {
+			return errors.New("invalid Operations Investigation summary")
+		}
+		id, idOK := operationsBoundedString(item["id"], 256)
+		scope, scopeOK := item["scope"].(map[string]any)
+		if !idOK || !scopeOK || !operationsExactKeys(scope, "organizationId", "siteId", "equipmentId", "deviceId") {
+			return errors.New("invalid Operations Investigation summary Scope")
+		}
+		if _, ok := operationsBoundedString(scope["organizationId"], 256); !ok {
+			return errors.New("invalid Operations Investigation Organization")
+		}
+		if _, ok := operationsBoundedString(scope["siteId"], 256); !ok || scope["equipmentId"] != nil || scope["deviceId"] != nil {
+			return errors.New("invalid Operations Investigation Site Scope")
+		}
+		if !operationsAllowedString(item["status"], "DRAFT", "RUNNING", "PAUSED", "COMPLETED", "FAILED", "CANCELLED") {
+			return errors.New("invalid Operations Investigation status")
+		}
+		outcome := item["outcome"]
+		if outcome != nil && !operationsAllowedString(outcome, "SUPPORTED_SITE_FINDING", "UNABLE_TO_CONCLUDE") {
+			return errors.New("invalid Operations Investigation outcome")
+		}
+		createdAt, createdOK := operationsNonnegativeInteger(item["createdAt"])
+		if _, ok := operationsNonnegativeInteger(item["revision"]); !ok || !createdOK {
+			return errors.New("invalid Operations Investigation summary revision")
+		}
+		maximumCounts := map[string]int64{
+			"evidenceCount": 32, "analysisReferenceCount": 32, "findingCount": 32, "toolReceiptCount": 64,
+		}
+		for countKey, maximum := range maximumCounts {
+			count, ok := operationsNonnegativeInteger(item[countKey])
+			if !ok || count > maximum {
+				return errors.New("invalid Operations Investigation summary count")
+			}
+		}
+		if createdAt > previousCreated || (createdAt == previousCreated && index > 0 && id > previousID) {
+			return errors.New("Operations Investigation list order is unstable")
+		}
+		previousCreated, previousID = createdAt, id
+	}
+	return nil
 }
 
 func operationsExactKeys(value map[string]any, expected ...string) bool {
@@ -743,8 +1333,7 @@ func validateOperationsStateSnapshot(value map[string]any) error {
 	if _, exposesReceipts := investigation["toolReceipts"]; exposesReceipts {
 		return errors.New("Operations state exposes Tool Receipts")
 	}
-	rawInvestigation, err := json.Marshal(investigation)
-	if err != nil || validateOperationsSnapshot(rawInvestigation) != nil {
+	if validateOperationsInvestigationValue(investigation, false) != nil || inspectOperationsSnapshotPayload(investigation) != nil {
 		return errors.New("invalid Operations Investigation projection")
 	}
 	plan, ok := snapshot["plan"].(map[string]any)

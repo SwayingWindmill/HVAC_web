@@ -225,7 +225,11 @@ func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, now time
 		body := `{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","evidence":[],"analysisReferences":[],"findings":[],"toolReceipts":[]}`
 		status := http.StatusOK
 		if strings.HasSuffix(request.URL.Path, "/operations/investigations") {
-			status = http.StatusCreated
+			if request.Method == http.MethodGet {
+				body = `{"schemaVersion":1,"investigations":[{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"outcome":"SUPPORTED_SITE_FINDING","evidenceCount":2,"analysisReferenceCount":1,"findingCount":1,"toolReceiptCount":4}]}`
+			} else {
+				status = http.StatusCreated
+			}
 		}
 		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})}
@@ -311,6 +315,28 @@ func TestOperationsGatewayEnforcesSessionCSRFScopeAndServiceDelegation(t *testin
 	fixture.handler.ServeHTTP(wrongContentRecorder, wrongContentType)
 	if wrongContentRecorder.Code != http.StatusUnsupportedMediaType || fixture.iamCalls.Load() != 1 || fixture.operationsCalls.Load() != 1 {
 		t.Fatalf("content type failure reached upstreams: status=%d IAM=%d Operations=%d", wrongContentRecorder.Code, fixture.iamCalls.Load(), fixture.operationsCalls.Load())
+	}
+}
+
+func TestOperationsGatewayListsAuthorizedSiteInvestigationsWithoutCSRF(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	path := "/api/v1/sites/" + fixture.siteID + "/operations/investigations"
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	fixture.authenticate(request, false)
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if fixture.iamCalls.Load() != 1 || fixture.operationsCalls.Load() != 1 {
+		t.Fatalf("unexpected list upstream counts IAM=%d Operations=%d", fixture.iamCalls.Load(), fixture.operationsCalls.Load())
+	}
+	if !strings.Contains(recorder.Body.String(), `"investigations"`) || !strings.Contains(recorder.Body.String(), `"evidenceCount":2`) {
+		t.Fatalf("authorized Investigation list was not returned: %s", recorder.Body.String())
+	}
+	upstream := fixture.lastUpstream.Load()
+	if upstream == nil || upstream.Method != http.MethodGet || upstream.URL.Path != "/internal/v1/sites/"+fixture.siteID+"/operations/investigations" {
+		t.Fatalf("invalid Operations list forwarding: %+v", upstream)
 	}
 }
 
@@ -451,6 +477,197 @@ func TestOperationsGatewayRejectsUnsafeOrUnauthorizedEventStreams(t *testing.T) 
 	deniedFixture.handler.ServeHTTP(deniedRecorder, deniedRequest)
 	if deniedRecorder.Code != http.StatusNotFound || deniedFixture.operationsCalls.Load() != 0 {
 		t.Fatalf("unauthorized stream was discoverable or forwarded: status=%d calls=%d", deniedRecorder.Code, deniedFixture.operationsCalls.Load())
+	}
+}
+
+func TestOperationsGatewayTypedSnapshotValidatorRejectsForgedAuthority(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	organizationID := "organization-001"
+	siteID := "site-001"
+	investigationID := "investigation-001"
+	scope := map[string]any{
+		"organizationId": organizationID,
+		"siteId":         siteID,
+		"equipmentId":    nil,
+		"deviceId":       nil,
+	}
+	period := map[string]any{
+		"localDate":       "2026-07-30",
+		"from":            "2026-07-30T00:00:00Z",
+		"to":              "2026-07-30T08:00:00Z",
+		"expectedBuckets": 8,
+	}
+	snapshot := map[string]any{
+		"schemaVersion": 1,
+		"id":            investigationID,
+		"scope":         scope,
+		"status":        "COMPLETED",
+		"revision":      9,
+		"createdAt":     1,
+		"activeRun":     nil,
+		"outcome":       "UNABLE_TO_CONCLUDE",
+		"evidence": []any{map[string]any{
+			"schemaVersion":           1,
+			"recordType":              "EVIDENCE",
+			"id":                      "evidence-001",
+			"investigationId":         investigationID,
+			"recordedAt":              2,
+			"evidenceKind":            "SITE_ENERGY_SERIES_READINESS_ASSESSED",
+			"classification":          "FACT",
+			"statement":               "Site energy readiness was assessed.",
+			"analysisReferenceDigest": nil,
+			"sources": []any{map[string]any{
+				"owner":            "telemetry-query-service",
+				"scope":            scope,
+				"requestId":        "energy-request-001",
+				"registryRevision": nil,
+				"datasetRevision":  "dataset-r17",
+				"watermark": map[string]any{
+					"data":      "2026-07-30T08:00:00Z",
+					"aggregate": "2026-07-30T08:05:00Z",
+				},
+				"partial": false,
+				"quality": map[string]any{
+					"classification": "GOOD",
+					"valid":          8,
+					"suspect":        0,
+					"invalid":        0,
+				},
+				"capturedAt":       2,
+				"evaluatedAt":      3,
+				"provenanceDigest": digest,
+			}},
+		}},
+		"analysisReferences": []any{map[string]any{
+			"schemaVersion":    1,
+			"recordType":       "ANALYSIS_REFERENCE",
+			"id":               "analysis-001",
+			"investigationId":  investigationID,
+			"recordedAt":       3,
+			"analysisKind":     "SITE_NIGHT_ENERGY_COMPARISON",
+			"authority":        "DETERMINISTIC_ALGORITHM",
+			"algorithmVersion": "night-energy-v1",
+			"policyVersion":    "quality-v1",
+			"inputEvidenceIds": []any{"evidence-001"},
+			"parameterDigest":  digest,
+			"resultDigest":     digest,
+			"executedAt":       3,
+			"outcome":          "UNABLE_TO_CONCLUDE",
+		}},
+		"findings": []any{map[string]any{
+			"schemaVersion":        1,
+			"recordType":           "FINDING",
+			"id":                   "finding-001",
+			"investigationId":      investigationID,
+			"recordedAt":           4,
+			"findingKind":          "UNABLE_TO_CONCLUDE",
+			"classification":       "INFERENCE",
+			"statement":            "Equipment attribution is unsupported.",
+			"evidenceIds":          []any{"evidence-001"},
+			"analysisReferenceIds": []any{"analysis-001"},
+			"conclusion": map[string]any{
+				"status":     "UNABLE_TO_CONCLUDE",
+				"scope":      "EQUIPMENT",
+				"reasonCode": "EQUIPMENT_EVIDENCE_MISSING",
+				"detail":     "Canonical Equipment series are required.",
+				"requiredNext": []any{map[string]any{
+					"status":           "REQUIRED_NEXT",
+					"kind":             "EQUIPMENT_ENERGY_PERIOD_COMPARISON",
+					"owner":            "telemetry-query-service",
+					"capability":       "analytics.energy.getEquipmentSeries",
+					"organizationId":   organizationID,
+					"siteId":           siteID,
+					"equipmentIds":     []any{"equipment-001"},
+					"targetPeriod":     period,
+					"baselinePeriod":   period,
+					"requiredMetadata": []any{"DATASET_REVISION", "WATERMARK", "PARTIAL", "QUALITY", "CAPTURED_AT", "PAYLOAD_DIGEST"},
+				}},
+			},
+		}},
+		"toolReceipts": []any{map[string]any{
+			"schemaVersion":   1,
+			"recordType":      "TOOL_EXECUTION_RECEIPT",
+			"id":              "receipt-001",
+			"investigationId": investigationID,
+			"recordedAt":      5,
+			"logicalTool":     "analytics.getEnergySeries",
+			"owner":           "telemetry-query-service",
+			"requestId":       "energy-request-001",
+			"attemptId":       "energy-attempt-001",
+			"runId":           "run-001",
+			"stepId":          "READ_ENERGY_SERIES",
+			"startedAt":       4,
+			"completedAt":     5,
+			"resultCategory":  "SUCCEEDED",
+			"metadata": map[string]any{
+				"datasetRevision": "dataset-r17",
+				"partial":         false,
+			},
+		}},
+	}
+	encode := func(value map[string]any) []byte {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	clone := func(value map[string]any) map[string]any {
+		raw := encode(value)
+		var result map[string]any
+		if err := json.Unmarshal(raw, &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	if err := validateOperationsSnapshot(encode(snapshot)); err != nil {
+		t.Fatalf("valid typed Operations snapshot was rejected: %v", err)
+	}
+
+	missingRevision := clone(snapshot)
+	missingRevision["evidence"].([]any)[0].(map[string]any)["sources"].([]any)[0].(map[string]any)["datasetRevision"] = nil
+	if err := validateOperationsSnapshot(encode(missingRevision)); err == nil {
+		t.Fatal("telemetry Evidence without Dataset Revision was accepted")
+	}
+
+	crossScope := clone(snapshot)
+	crossScope["evidence"].([]any)[0].(map[string]any)["sources"].([]any)[0].(map[string]any)["scope"].(map[string]any)["siteId"] = "site-other"
+	if err := validateOperationsSnapshot(encode(crossScope)); err == nil {
+		t.Fatal("cross-Site Evidence provenance was accepted")
+	}
+
+	danglingReference := clone(snapshot)
+	danglingReference["analysisReferences"].([]any)[0].(map[string]any)["inputEvidenceIds"] = []any{"evidence-missing"}
+	if err := validateOperationsSnapshot(encode(danglingReference)); err == nil {
+		t.Fatal("dangling Analysis Evidence reference was accepted")
+	}
+
+	equipmentAuthority := clone(snapshot)
+	finding := equipmentAuthority["findings"].([]any)[0].(map[string]any)
+	finding["findingKind"] = "SITE_NIGHT_ENERGY_INCREASE"
+	finding["conclusion"] = map[string]any{
+		"status":         "SUPPORTED",
+		"scope":          "EQUIPMENT",
+		"organizationId": organizationID,
+		"siteId":         siteID,
+	}
+	if err := validateOperationsSnapshot(encode(equipmentAuthority)); err == nil {
+		t.Fatal("supported Equipment root-cause authority was accepted")
+	}
+
+	ownerMismatch := clone(snapshot)
+	requirement := ownerMismatch["findings"].([]any)[0].(map[string]any)["conclusion"].(map[string]any)["requiredNext"].([]any)[0].(map[string]any)
+	requirement["owner"] = "registry"
+	if err := validateOperationsSnapshot(encode(ownerMismatch)); err == nil {
+		t.Fatal("required-next Owner and capability mismatch was accepted")
+	}
+
+	unsafeReceipt := clone(snapshot)
+	unsafeReceipt["toolReceipts"].([]any)[0].(map[string]any)["metadata"] = map[string]any{
+		"responsePayload": map[string]any{"raw": true},
+	}
+	if err := validateOperationsSnapshot(encode(unsafeReceipt)); err == nil {
+		t.Fatal("nested sensitive Tool Receipt metadata was accepted")
 	}
 }
 

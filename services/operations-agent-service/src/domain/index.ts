@@ -43,6 +43,8 @@ export {
   type EvidenceWatermark,
   type FindingConclusion,
   type FindingRecord,
+  type FindingRequiredNext,
+  type FindingRequiredNextPeriod,
   type InvestigationBusinessRecord,
   type InvestigationBusinessRecordErrorCode,
   type InvestigationBusinessRecordType,

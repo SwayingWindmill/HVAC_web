@@ -146,6 +146,49 @@ test('Analysis References reject model authority and unsupported input reference
 });
 
 test('Findings allow typed insufficiency but never supported Equipment attribution', () => {
+  const requiredNext = [{
+    status: 'REQUIRED_NEXT',
+    kind: 'EQUIPMENT_ENERGY_BINDINGS',
+    owner: 'registry',
+    capability: 'registry.getEquipmentEnergyBindings',
+    organizationId: 'organization-001',
+    siteId: 'site-001',
+    equipmentIds: ['equipment-001'],
+    targetPeriod: {
+      localDate: '2026-07-30',
+      from: '2026-07-30T00:00:00Z',
+      to: '2026-07-30T08:00:00Z',
+      expectedBuckets: 8,
+    },
+    baselinePeriod: {
+      localDate: '2026-07-23',
+      from: '2026-07-23T00:00:00Z',
+      to: '2026-07-23T08:00:00Z',
+      expectedBuckets: 8,
+    },
+    requiredMetadata: ['BUSINESS_REVISION', 'QUALITY', 'CAPTURED_AT', 'PAYLOAD_DIGEST'],
+  }, {
+    status: 'REQUIRED_NEXT',
+    kind: 'EQUIPMENT_ENERGY_PERIOD_COMPARISON',
+    owner: 'telemetry-query-service',
+    capability: 'analytics.energy.getEquipmentSeries',
+    organizationId: 'organization-001',
+    siteId: 'site-001',
+    equipmentIds: ['equipment-001'],
+    targetPeriod: {
+      localDate: '2026-07-30',
+      from: '2026-07-30T00:00:00Z',
+      to: '2026-07-30T08:00:00Z',
+      expectedBuckets: 8,
+    },
+    baselinePeriod: {
+      localDate: '2026-07-23',
+      from: '2026-07-23T00:00:00Z',
+      to: '2026-07-23T08:00:00Z',
+      expectedBuckets: 8,
+    },
+    requiredMetadata: ['DATASET_REVISION', 'WATERMARK', 'PARTIAL', 'QUALITY', 'CAPTURED_AT', 'PAYLOAD_DIGEST'],
+  }];
   const unable = createInvestigationBusinessRecord({
     ...finding,
     id: 'finding-unable-001',
@@ -156,10 +199,37 @@ test('Findings allow typed insufficiency but never supported Equipment attributi
       scope: 'EQUIPMENT',
       reasonCode: 'EQUIPMENT_ENERGY_BINDINGS_MISSING',
       detail: 'Canonical Equipment energy bindings and comparable series are required.',
+      requiredNext,
     },
   });
   assert.equal(unable.recordType, 'FINDING');
   assert.equal(unable.conclusion.status, 'UNABLE_TO_CONCLUDE');
+  assert.deepEqual(unable.conclusion.requiredNext, requiredNext);
+
+  assertRecordError(() => createInvestigationBusinessRecord({
+    ...finding,
+    id: 'finding-unable-owner-mismatch',
+    findingKind: 'UNABLE_TO_CONCLUDE',
+    conclusion: {
+      status: 'UNABLE_TO_CONCLUDE',
+      scope: 'EQUIPMENT',
+      reasonCode: 'EQUIPMENT_ENERGY_BINDINGS_MISSING',
+      detail: 'Owner mismatch must fail closed.',
+      requiredNext: [{ ...requiredNext[0], owner: 'telemetry-query-service' }],
+    },
+  }));
+  assertRecordError(() => createInvestigationBusinessRecord({
+    ...finding,
+    id: 'finding-unable-metadata-mismatch',
+    findingKind: 'UNABLE_TO_CONCLUDE',
+    conclusion: {
+      status: 'UNABLE_TO_CONCLUDE',
+      scope: 'EQUIPMENT',
+      reasonCode: 'EQUIPMENT_ENERGY_BINDINGS_MISSING',
+      detail: 'Metadata mismatch must fail closed.',
+      requiredNext: [{ ...requiredNext[1], requiredMetadata: ['QUALITY'] }],
+    },
+  }));
 
   assertRecordError(() => createInvestigationBusinessRecord({
     ...finding,

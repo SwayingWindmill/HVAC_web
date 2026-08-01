@@ -432,6 +432,18 @@ export const createPostgresOperationsAgentPersistence = (
       const row = result.rows[0];
       return row === undefined ? null : restoreSnapshot(row.snapshot);
     },
+    async listByScope(input) {
+      const result = await operationsPool.query<SnapshotRow>(
+        `SELECT snapshot
+         FROM agent_operations.investigations
+         WHERE snapshot->'scope'->>'organizationId' = $1
+           AND snapshot->'scope'->>'siteId' = $2
+         ORDER BY created_at_ms DESC, investigation_id DESC
+         LIMIT $3`,
+        [input.organizationId, input.siteId, input.limit],
+      );
+      return result.rows.map((row) => restoreSnapshot(row.snapshot));
+    },
   };
 
   const businessRecordRepository: InvestigationBusinessRecordRepository = {

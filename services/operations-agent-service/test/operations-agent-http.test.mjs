@@ -180,6 +180,27 @@ test('internal HTTP contract exposes only start, advance and safe authoritative 
 
   const getHeaders = { ...headers };
   delete getHeaders['Content-Type'];
+  const listResponse = await harness.handler.handle(new Request(collection, {
+    method: 'GET',
+    headers: getHeaders,
+  }));
+  assert.equal(listResponse.status, 200);
+  const listed = await body(listResponse);
+  assert.equal(listed.schemaVersion, 1);
+  assert.deepEqual(listed.investigations, [{
+    schemaVersion: 1,
+    id: advanced.id,
+    scope,
+    status: 'COMPLETED',
+    revision: advanced.revision,
+    createdAt: advanced.createdAt,
+    outcome: 'SUPPORTED_SITE_FINDING',
+    evidenceCount: advanced.evidence.length,
+    analysisReferenceCount: advanced.analysisReferences.length,
+    findingCount: advanced.findings.length,
+    toolReceiptCount: advanced.toolReceipts.length,
+  }]);
+
   const getResponse = await harness.handler.handle(new Request(item, {
     method: 'GET',
     headers: getHeaders,
@@ -220,7 +241,20 @@ test('internal HTTP contract exposes only start, advance and safe authoritative 
   assert.match(resumedStream, /event: STATE_SNAPSHOT/u);
   assert.equal(resumedStream.includes('event: TOOL_CALL_START'), false);
 
-  assert.equal(harness.authorizationCalls.length, 5);
+  assert.equal(harness.authorizationCalls.length, 6);
+  assert.deepEqual(harness.authorizationCalls[2], {
+    method: 'GET',
+    path: `/internal/v1/sites/${siteId}/operations/investigations`,
+    organizationId,
+    siteId,
+    investigationId: null,
+    gatewayDelegationGrant: 'gateway-service-grant',
+    registrySiteGrant: 'registry-site-grant',
+    registryEquipmentGrant: 'registry-equipment-grant',
+    energyGrant: 'energy-grant',
+    policyRevision: 'policy-v17',
+    traceparent: headers.traceparent,
+  });
   assert.deepEqual(harness.authorizationCalls[1], {
     method: 'POST',
     path: `/internal/v1/sites/${siteId}/operations/investigations/${started.id}:advance`,

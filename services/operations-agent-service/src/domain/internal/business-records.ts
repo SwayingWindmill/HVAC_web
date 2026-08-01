@@ -69,6 +69,51 @@ export interface AnalysisReferenceRecord extends InvestigationBusinessRecordBase
   readonly outcome: 'SUPPORTED_SITE_FINDING' | 'UNABLE_TO_CONCLUDE';
 }
 
+export interface FindingRequiredNextPeriod {
+  readonly localDate: string;
+  readonly from: string;
+  readonly to: string;
+  readonly expectedBuckets: number;
+}
+
+export type FindingRequiredNext =
+  | {
+    readonly status: 'REQUIRED_NEXT';
+    readonly kind: 'EQUIPMENT_ENERGY_BINDINGS';
+    readonly owner: 'registry';
+    readonly capability: 'registry.getEquipmentEnergyBindings';
+    readonly organizationId: string;
+    readonly siteId: string;
+    readonly equipmentIds: readonly string[];
+    readonly targetPeriod: FindingRequiredNextPeriod;
+    readonly baselinePeriod: FindingRequiredNextPeriod;
+    readonly requiredMetadata: readonly [
+      'BUSINESS_REVISION',
+      'QUALITY',
+      'CAPTURED_AT',
+      'PAYLOAD_DIGEST',
+    ];
+  }
+  | {
+    readonly status: 'REQUIRED_NEXT';
+    readonly kind: 'EQUIPMENT_ENERGY_PERIOD_COMPARISON';
+    readonly owner: 'telemetry-query-service';
+    readonly capability: 'analytics.energy.getEquipmentSeries';
+    readonly organizationId: string;
+    readonly siteId: string;
+    readonly equipmentIds: readonly string[];
+    readonly targetPeriod: FindingRequiredNextPeriod;
+    readonly baselinePeriod: FindingRequiredNextPeriod;
+    readonly requiredMetadata: readonly [
+      'DATASET_REVISION',
+      'WATERMARK',
+      'PARTIAL',
+      'QUALITY',
+      'CAPTURED_AT',
+      'PAYLOAD_DIGEST',
+    ];
+  };
+
 export type FindingConclusion =
   | {
     readonly status: 'SUPPORTED';
@@ -81,6 +126,7 @@ export type FindingConclusion =
     readonly scope: 'SITE' | 'EQUIPMENT';
     readonly reasonCode: string;
     readonly detail: string;
+    readonly requiredNext?: readonly FindingRequiredNext[];
   };
 
 export interface FindingRecord extends InvestigationBusinessRecordBase {
@@ -441,6 +487,109 @@ const normalizeAnalysisReference = (record: Record<string, unknown>): AnalysisRe
   };
 };
 
+const normalizeFindingRequiredNextPeriod = (
+  value: unknown,
+  label: string,
+): FindingRequiredNextPeriod => {
+  const period = requireRecord(value, label);
+  if (!hasExactKeys(period, ['localDate', 'from', 'to', 'expectedBuckets'])) {
+    fail(`${label} has unsupported fields.`);
+  }
+  const expectedBuckets = requireCount(period.expectedBuckets, `${label}.expectedBuckets`);
+  if (expectedBuckets === 0 || expectedBuckets > 48) {
+    fail(`${label}.expectedBuckets must be between 1 and 48.`);
+  }
+  return {
+    localDate: requireString(period.localDate, `${label}.localDate`, 32),
+    from: requireString(period.from, `${label}.from`, 64),
+    to: requireString(period.to, `${label}.to`, 64),
+    expectedBuckets,
+  };
+};
+
+const normalizeFindingRequiredNext = (value: unknown, index: number): FindingRequiredNext => {
+  const label = `conclusion.requiredNext[${index}]`;
+  const required = requireRecord(value, label);
+  if (!hasExactKeys(required, [
+    'status',
+    'kind',
+    'owner',
+    'capability',
+    'organizationId',
+    'siteId',
+    'equipmentIds',
+    'targetPeriod',
+    'baselinePeriod',
+    'requiredMetadata',
+  ]) || required.status !== 'REQUIRED_NEXT') {
+    fail(`${label} has unsupported fields.`);
+  }
+  const bindingMetadata = ['BUSINESS_REVISION', 'QUALITY', 'CAPTURED_AT', 'PAYLOAD_DIGEST'];
+  const seriesMetadata = [
+    'DATASET_REVISION',
+    'WATERMARK',
+    'PARTIAL',
+    'QUALITY',
+    'CAPTURED_AT',
+    'PAYLOAD_DIGEST',
+  ];
+  const expectedMetadata = required.kind === 'EQUIPMENT_ENERGY_BINDINGS'
+    ? bindingMetadata
+    : required.kind === 'EQUIPMENT_ENERGY_PERIOD_COMPARISON'
+      ? seriesMetadata
+      : null;
+  if (expectedMetadata === null
+    || !Array.isArray(required.requiredMetadata)
+    || required.requiredMetadata.length !== expectedMetadata.length
+    || required.requiredMetadata.some((item, metadataIndex) => item !== expectedMetadata[metadataIndex])) {
+    fail(`${label}.requiredMetadata is invalid.`);
+  }
+  if ((required.kind === 'EQUIPMENT_ENERGY_BINDINGS'
+      && (required.owner !== 'registry'
+        || required.capability !== 'registry.getEquipmentEnergyBindings'))
+    || (required.kind === 'EQUIPMENT_ENERGY_PERIOD_COMPARISON'
+      && (required.owner !== 'telemetry-query-service'
+        || required.capability !== 'analytics.energy.getEquipmentSeries'))) {
+    fail(`${label} Owner and capability do not match its kind.`);
+  }
+  const common = {
+    status: 'REQUIRED_NEXT' as const,
+    organizationId: requireString(required.organizationId, `${label}.organizationId`),
+    siteId: requireString(required.siteId, `${label}.siteId`),
+    equipmentIds: normalizeStringIds(required.equipmentIds, `${label}.equipmentIds`, 0),
+    targetPeriod: normalizeFindingRequiredNextPeriod(required.targetPeriod, `${label}.targetPeriod`),
+    baselinePeriod: normalizeFindingRequiredNextPeriod(required.baselinePeriod, `${label}.baselinePeriod`),
+  };
+  if (required.kind === 'EQUIPMENT_ENERGY_BINDINGS') {
+    return {
+      ...common,
+      kind: 'EQUIPMENT_ENERGY_BINDINGS',
+      owner: 'registry',
+      capability: 'registry.getEquipmentEnergyBindings',
+      requiredMetadata: [
+        'BUSINESS_REVISION',
+        'QUALITY',
+        'CAPTURED_AT',
+        'PAYLOAD_DIGEST',
+      ],
+    };
+  }
+  return {
+    ...common,
+    kind: 'EQUIPMENT_ENERGY_PERIOD_COMPARISON',
+    owner: 'telemetry-query-service',
+    capability: 'analytics.energy.getEquipmentSeries',
+    requiredMetadata: [
+      'DATASET_REVISION',
+      'WATERMARK',
+      'PARTIAL',
+      'QUALITY',
+      'CAPTURED_AT',
+      'PAYLOAD_DIGEST',
+    ],
+  };
+};
+
 const normalizeFindingConclusion = (value: unknown): FindingConclusion => {
   const conclusion = requireRecord(value, 'conclusion');
   if (conclusion.status === 'SUPPORTED') {
@@ -455,16 +604,31 @@ const normalizeFindingConclusion = (value: unknown): FindingConclusion => {
       siteId: requireString(conclusion.siteId, 'conclusion.siteId'),
     };
   }
+  const hasLegacyShape = hasExactKeys(conclusion, ['status', 'scope', 'reasonCode', 'detail']);
+  const hasRequiredNextShape = hasExactKeys(
+    conclusion,
+    ['status', 'scope', 'reasonCode', 'detail', 'requiredNext'],
+  );
   if (conclusion.status !== 'UNABLE_TO_CONCLUDE'
-    || !hasExactKeys(conclusion, ['status', 'scope', 'reasonCode', 'detail'])
+    || (!hasLegacyShape && !hasRequiredNextShape)
     || (conclusion.scope !== 'SITE' && conclusion.scope !== 'EQUIPMENT')) {
     fail('Finding conclusion is unsupported.');
+  }
+  let requiredNext: readonly FindingRequiredNext[] | undefined;
+  if (hasRequiredNextShape) {
+    if (!Array.isArray(conclusion.requiredNext)
+      || conclusion.requiredNext.length === 0
+      || conclusion.requiredNext.length > 8) {
+      fail('conclusion.requiredNext must contain between 1 and 8 requirements.');
+    }
+    requiredNext = conclusion.requiredNext.map(normalizeFindingRequiredNext);
   }
   return {
     status: 'UNABLE_TO_CONCLUDE',
     scope: conclusion.scope,
     reasonCode: requireString(conclusion.reasonCode, 'conclusion.reasonCode', 128),
     detail: requireString(conclusion.detail, 'conclusion.detail', maxStatementLength),
+    ...(requiredNext === undefined ? {} : { requiredNext }),
   };
 };
 

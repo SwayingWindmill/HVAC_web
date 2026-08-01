@@ -27,6 +27,11 @@ export class InvestigationRepositoryConflictError extends Error {
 
 export interface InvestigationRepository {
   get(investigationId: string): Promise<OperationsInvestigation | null>;
+  listByScope?(input: {
+    readonly organizationId: string;
+    readonly siteId: string;
+    readonly limit: number;
+  }): Promise<readonly OperationsInvestigation[]>;
 }
 
 export interface InvestigationBusinessRecordRepository {
@@ -48,6 +53,7 @@ export interface AuthorizationDecision {
 
 export type InvestigationAuthorizationAction =
   | 'CREATE_INVESTIGATION'
+  | 'LIST_INVESTIGATIONS'
   | 'READ_INVESTIGATION'
   | 'START_AGENT_RUN'
   | 'REOPEN_INVESTIGATION'

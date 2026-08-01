@@ -48,7 +48,7 @@ export interface OperationsAgentHttpHandler {
 }
 
 interface MatchedRoute {
-  readonly kind: 'START' | 'GET' | 'STREAM' | 'ADVANCE' | 'CANCEL';
+  readonly kind: 'START' | 'LIST' | 'GET' | 'STREAM' | 'ADVANCE' | 'CANCEL';
   readonly siteId: string;
   readonly investigationId: string | null;
 }
@@ -103,8 +103,17 @@ const decodeIdentity = (value: string): string | null => {
 
 const matchRoute = (request: Request): MatchedRoute | null => {
   const path = new URL(request.url).pathname;
+  const collection = collectionPattern.exec(path);
+  if (collection !== null) {
+    const siteId = decodeIdentity(collection[1] ?? '');
+    if (siteId === null) {
+      throw problem(404, 'RESOURCE_NOT_FOUND', 'Resource not found', 'The requested Site was not found.');
+    }
+    if (request.method === 'GET') return { kind: 'LIST', siteId, investigationId: null };
+    if (request.method === 'POST') return { kind: 'START', siteId, investigationId: null };
+    throw problem(405, 'METHOD_NOT_ALLOWED', 'Method not allowed', 'This route requires GET or POST.');
+  }
   const candidates: readonly [RegExp, MatchedRoute['kind'], string][] = [
-    [collectionPattern, 'START', 'POST'],
     [streamPattern, 'STREAM', 'GET'],
     [advancePattern, 'ADVANCE', 'POST'],
     [cancelPattern, 'CANCEL', 'POST'],
@@ -117,8 +126,8 @@ const matchRoute = (request: Request): MatchedRoute | null => {
       throw problem(405, 'METHOD_NOT_ALLOWED', 'Method not allowed', `This route requires ${method}.`);
     }
     const siteId = decodeIdentity(match[1] ?? '');
-    const investigationId = kind === 'START' ? null : decodeIdentity(match[2] ?? '');
-    if (siteId === null || (kind !== 'START' && investigationId === null)) {
+    const investigationId = decodeIdentity(match[2] ?? '');
+    if (siteId === null || investigationId === null) {
       throw problem(
         404,
         'RESOURCE_NOT_FOUND',
@@ -252,7 +261,7 @@ export const createOperationsAgentHttpHandler = (
         if (route === null) {
           return problem(404, 'ROUTE_NOT_FOUND', 'Route not found', 'The requested internal route does not exist.');
         }
-        if (route.kind === 'GET' || route.kind === 'STREAM') {
+        if (route.kind === 'GET' || route.kind === 'LIST' || route.kind === 'STREAM') {
           if (request.body !== null) {
             return problem(400, 'REQUEST_INVALID', 'Request invalid', 'GET requests must not contain a body.');
           }
@@ -309,6 +318,12 @@ export const createOperationsAgentHttpHandler = (
           authorization,
           now: now(),
         });
+        if (route.kind === 'LIST') {
+          return jsonResponse(200, await coordinator.list({
+            organizationId,
+            siteId: route.siteId,
+          }));
+        }
         if (route.kind === 'START') {
           return jsonResponse(201, await coordinator.start({
             organizationId,

@@ -194,6 +194,49 @@ test('scoped Operations API accepts the authorized stream and rejects a mismatch
   );
 });
 
+test('scoped Operations API lists only exact authorized Site summaries', async () => {
+  const { listSiteNightEnergyInvestigations } = await loadBundledModule('apps/hvac-web/src/api/operations.ts');
+  const summary = {
+    schemaVersion: 1,
+    id: investigation.id,
+    scope: investigation.scope,
+    status: investigation.status,
+    revision: investigation.revision,
+    createdAt: investigation.createdAt,
+    outcome: investigation.outcome,
+    evidenceCount: 1,
+    analysisReferenceCount: 1,
+    findingCount: 1,
+    toolReceiptCount: 4,
+  };
+  const requests = [];
+  const fetchImplementation = async (input, init) => {
+    requests.push({ input: String(input), init });
+    return new Response(JSON.stringify({ schemaVersion: 1, investigations: [summary] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  const listed = await listSiteNightEnergyInvestigations({
+    trustedOrganizationId: investigation.scope.organizationId,
+    trustedSiteId: investigation.scope.siteId,
+    fetchImplementation,
+  });
+  assert.deepEqual(listed.investigations, [summary]);
+  assert.equal(requests[0].input, '/api/v1/sites/site-001/operations/investigations');
+  assert.equal(requests[0].init.method, 'GET');
+  assert.equal(requests[0].init.credentials, 'same-origin');
+
+  await assert.rejects(
+    listSiteNightEnergyInvestigations({
+      trustedOrganizationId: 'organization-other',
+      trustedSiteId: investigation.scope.siteId,
+      fetchImplementation,
+    }),
+    /超出当前已验证 Site Scope/u,
+  );
+});
+
 test('Headless Operations agent reconnects after interruption without duplicating durable Tool records', async () => {
   const { OperationsInvestigationAgent } = await loadBundledModule(
     'apps/hvac-web/src/real/operations/OperationsInvestigationAgent.ts',
