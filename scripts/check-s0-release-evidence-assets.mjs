@@ -35,6 +35,7 @@ const routeOwnership = JSON.parse(await readFile(resolve(root, 'contracts/owners
 const s2Ownership = JSON.parse(await readFile(resolve(root, 'contracts/ownership/s2-telemetry-ownership.v1.json'), 'utf8'));
 const s3Ownership = JSON.parse(await readFile(resolve(root, 'contracts/ownership/s3-command-ownership.v1.json'), 'utf8'));
 const s2ReleaseGates = JSON.parse(await readFile(resolve(root, 'deploy/s2/release-gates.v1.json'), 'utf8'));
+const s4AlarmPromotion = JSON.parse(await readFile(resolve(root, 'deploy/s4/alarm-read-promotion-envelope.v1.json'), 'utf8'));
 
 assert(matrix.schemaVersion === 1, 'acceptance matrix schemaVersion must be 1');
 assert(matrix.ticket === '08-s0-release-evidence', 'acceptance matrix ticket identifier is invalid');
@@ -166,6 +167,12 @@ for (const expected of acceptedS4IAMOwnership) {
     assert(registered[field] === value, `S4 IAM Alarm ownership ${expected.name}.${field} drifted: ${JSON.stringify(registered)}`);
   }
 }
+assert(s4AlarmPromotion.schemaVersion === 1 && s4AlarmPromotion.issue === 187, 'S4 Alarm promotion evidence contract is invalid');
+assert(s4AlarmPromotion.formalPromotionRequired === true && s4AlarmPromotion.repositoryMutationByCertification === false, 'S4 Alarm promotion evidence can bypass formal review or mutate routing');
+assert(s4AlarmPromotion.routeGroup?.source?.phase === 'S4-R1-internal-read-only' && s4AlarmPromotion.routeGroup?.source?.trafficPercent === 1, 'S4 Alarm promotion source phase drifted');
+assert(s4AlarmPromotion.routeGroup?.target?.phase === 'S4-R2-site-canary' && s4AlarmPromotion.routeGroup?.target?.trafficPercent === 5, 'S4 Alarm promotion target phase drifted');
+assert(s4AlarmPromotion.routeGroup?.rollback?.phase === 'S4-R1-internal-read-only' && s4AlarmPromotion.routeGroup?.rollback?.trafficPercent === 1, 'S4 Alarm promotion rollback phase drifted');
+assert(s4AlarmPromotion.requiredEvidence?.includes('s4-alarm-read-promotion.intoto.json') && s4AlarmPromotion.requiredEvidence?.includes('SHA256SUMS'), 'S4 Alarm promotion offline evidence is incomplete');
 
 const acceptedHistoryAnalyticsOwnership = [
   { kind: 'schema', name: 'telemetry_history', writer: 'telemetry-history-projector', revision: 1, database: 'clickhouse' },

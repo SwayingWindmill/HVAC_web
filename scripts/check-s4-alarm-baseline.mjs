@@ -36,6 +36,10 @@ const [
   realApp,
   publicBrowser,
   lifecycleBrowser,
+  promotionEnvelope,
+  promotionRunner,
+  promotionVerifier,
+  promotionRunbook,
 ] = await Promise.all([
   readJSON('contracts/http/s4-alarm-public.openapi.json'),
   readJSON('contracts/ownership/route-ownership.v1.json'),
@@ -63,6 +67,10 @@ const [
   readText('apps/hvac-web/src/real/RealApp.tsx'),
   readText('scripts/run-real-alarms-browser-audit.mjs'),
   readText('scripts/run-real-alarm-lifecycle-browser-audit.mjs'),
+  readJSON('deploy/s4/alarm-read-promotion-envelope.v1.json'),
+  readText('scripts/run-s4-alarm-read-promotion-certification.mjs'),
+  readText('scripts/verify-s4-alarm-read-promotion-certification.mjs'),
+  readText('docs/operations/s4-alarm-read-promotion.md'),
 ]);
 
 assert(openapi.info?.version === '0.3.0-internal-read-canary', 'Alarm OpenAPI is not the S4 internal read canary contract');
@@ -187,4 +195,26 @@ assert(publicBrowser.includes("delete process.env.VITE_S4_LOCAL_ALARMS") && publ
 assert(publicBrowser.includes('capability-denial-generic-boundary-and-cache-purge') && publicBrowser.includes('lifecycleWrites: false'), 'Public Alarm browser certification does not prove denial and no writes');
 assert(lifecycleBrowser.includes("process.env.VITE_S4_LOCAL_ALARMS = 'true'") && lifecycleBrowser.includes('stable-suppression-payload-and-idempotency'), 'Local Alarm lifecycle browser certification was not preserved');
 
-console.log('S4 Alarm read activation passed: exact IAM authorization, durable audit, no-fallback 1% Gateway reads, response scope validation, production read-only Web and 0% lifecycle writes are present.');
+assert(promotionEnvelope.schemaVersion === 1 && promotionEnvelope.issue === 187 && promotionEnvelope.formalPromotionRequired === true, 'Alarm read promotion envelope is invalid');
+assert(promotionEnvelope.repositoryMutationByCertification === false, 'Alarm promotion certification may not mutate repository routing');
+assert(promotionEnvelope.routeGroup?.source?.phase === 'S4-R1-internal-read-only' && promotionEnvelope.routeGroup?.source?.trafficPercent === 1 && promotionEnvelope.routeGroup?.source?.routeRevision === 2, 'Alarm promotion source phase drifted');
+assert(promotionEnvelope.routeGroup?.target?.phase === 'S4-R2-site-canary' && promotionEnvelope.routeGroup?.target?.trafficPercent === 5 && promotionEnvelope.routeGroup?.target?.routeRevision === 3, 'Alarm promotion target phase drifted');
+assert(promotionEnvelope.routeGroup?.rollback?.phase === 'S4-R1-internal-read-only' && promotionEnvelope.routeGroup?.rollback?.trafficPercent === 1 && promotionEnvelope.routeGroup?.rollback?.routeRevision === 4, 'Alarm promotion rollback phase drifted');
+assert(promotionEnvelope.sourceCanary?.minimumHoldMinutes === 1440 && promotionEnvelope.sourceCanary?.minimumListRequests === 1000 && promotionEnvelope.sourceCanary?.minimumDetailRequests === 200, 'Alarm promotion source evidence thresholds drifted');
+assert(promotionEnvelope.serviceLevelObjectives?.availabilityFractionMinimum === 0.999 && promotionEnvelope.serviceLevelObjectives?.p95MillisecondsMaximum === 500 && promotionEnvelope.serviceLevelObjectives?.p99MillisecondsMaximum === 1500, 'Alarm promotion SLOs drifted');
+assert(promotionEnvelope.rollbackObjectives?.maximumDecisionMinutes === 5 && promotionEnvelope.rollbackObjectives?.maximumRouteRollbackMinutes === 15, 'Alarm promotion rollback objectives drifted');
+assert(promotionEnvelope.approval?.distinctApproversRequired === 2, 'Alarm promotion does not require two distinct approvers');
+for (const counter of ['crossOrganizationResponses', 'crossSiteResponses', 'crossAlarmResponses', 'authorizationMismatches', 'stalePolicyAccepts', 'responseScopeMismatches', 'fallbackSelections', 'localSeamRequests', 'demoContaminationEvents', 'unauditedRouteDecisions']) {
+  assert(promotionEnvelope.zeroCounters?.includes(counter), `Alarm promotion zero counter ${counter} is missing`);
+}
+for (const evidence of ['source-canary-report.json', 'slo-report.json', 'security-zero-report.json', 'route-promotion-plan.json', 'rollback-report.json', 'promotion-approvals.json', 's4-alarm-read-promotion-attestation.json', 's4-alarm-read-promotion.intoto.json', 'SHA256SUMS']) {
+  assert(promotionEnvelope.requiredEvidence?.includes(evidence), `Alarm promotion evidence ${evidence} is missing`);
+}
+assert(promotionRunner.includes("profile === 'formal'") && promotionRunner.includes('synthetic evidence cannot certify') && promotionRunner.includes('routesPromotedTogether'), 'Alarm formal promotion runner is incomplete');
+assert(promotionRunner.includes('repositoryMutationPerformed: false') && promotionRunner.includes('twoPersonApprovalPassed: true'), 'Alarm promotion runner overclaims mutation or omits approval evidence');
+assert(promotionVerifier.includes('SHA256SUMS') && promotionVerifier.includes('reviewerCanVerifyOffline') && promotionVerifier.includes('digest mismatch'), 'Alarm promotion offline verifier is incomplete');
+for (const marker of ['## Repository preflight', '## Formal attestation', '## Evidence bundle', '## Promotion and rollback', '## Explicit exclusions']) {
+  assert(promotionRunbook.includes(marker), `Alarm promotion runbook is missing ${marker}`);
+}
+
+console.log('S4 Alarm read activation and promotion preflight passed: exact IAM authorization, durable audit, no-fallback 1% Gateway reads, formal 1%-to-5% evidence gating, production read-only Web and 0% lifecycle writes are present.');

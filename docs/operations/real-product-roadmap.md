@@ -16,7 +16,7 @@ Deliver an authoritative, Site-scoped HVAC operations product in which every vis
 | 2 | Real Dashboard | Merged | PR #165 delivered the authoritative default Site overview with full release gates. |
 | 3 | Complete Energy | Merged | PR #167 delivered calendar workspaces, comparisons, drill-down, and protected query lifecycle. |
 | 4 | Real Commands | Merged | PR #169 delivered authoritative Site scope, local-only governed Command evidence, and a production-disabled control boundary. |
-| 5 | Alarm | P1/P2 merged; P3 certifying | PR #171 established the independent read owner and PR #179 merged authoritative lifecycle operations. Issue #181 activates only exact IAM/Gateway list and detail reads through a 1% internal no-fallback canary; every lifecycle POST remains disabled at 0%. |
+| 5 | Alarm | P1–P3 merged; P4 implementing | PR #184 merged exact IAM/Gateway list and detail reads through a 1% internal no-fallback canary. Issue #187 adds the formal 1%-to-5% promotion evidence and rollback gate without changing repository traffic; every lifecycle POST remains disabled at 0%. |
 | 6 | Work Order | Planned | Must be a separate durable domain linked to, but not collapsed into, Alarm. |
 | 7 | FDD | Planned | Requires governed evidence from Assets, Telemetry, Energy, Alarm, and Work Order. |
 | 8 | Optimization | Planned | Requires FDD and Energy evidence plus explicit safety and approval boundaries. |
@@ -98,7 +98,7 @@ Delivered P1/P2 baseline:
 - Site list, detail, filtering, acknowledgement, assignment, suppression, closure, conflict recovery, and audit evidence are browser-certified locally.
 - PostgreSQL certification proves FORCE RLS, explicit runtime-role activation, cross-Organization isolation, restricted column updates, atomic lifecycle persistence, and idempotent replay.
 
-P3 read activation in certification:
+P3 read activation delivered:
 
 - IAM owns `alarm:list` and `alarm:read` decisions with exact Organization/Site/Alarm scope, explicit-deny precedence, policy revision, request ID, trace ID, and durable allow/deny evidence.
 - Platform Gateway derives scope from the authenticated Session, calls IAM, signs a short-lived Alarm read context, proxies bounded GET requests over mTLS, and revalidates response scope.
@@ -106,9 +106,11 @@ P3 read activation in certification:
 - Production Web renders only authorized list/detail reads. Local lifecycle mutations are isolated in a development-only lazy component and every public lifecycle POST remains at 0%.
 - Browser certification proves public Gateway GET-only traffic, no local seam, no lifecycle controls, no Telemetry inference, Site cache purge, and generic capability denial.
 
-Remaining activation work:
+P4 read promotion gate in implementation:
 
-- Operational review may advance Alarm reads beyond the 1% internal cohort only through a separately reviewed adjacent route phase.
+- Issue #187 defines the only adjacent promotion from `S4-R1-internal-read-only` at 1% to `S4-R2-site-canary` at 5%.
+- Promotion requires a SHA-bound target-environment attestation, 24-hour hold, minimum cohort and volume, SLO compliance, zero security counters, rollback drill, checksums, in-toto evidence, and two distinct manual approvers.
+- Certification itself never edits routing; an accepted bundle authorizes a separate reviewed registry commit, and rollback is a later registry revision affecting future reads only.
 - Public lifecycle authorization and rollout, automated suppression expiry, notification delivery, correlation policy, and Work Order linkage remain later independent slices.
 
 ### 6. Work Order
@@ -187,4 +189,4 @@ The Operations Agent and Platform/System Management are parallel programs rather
 
 ## Immediate next action
 
-Complete and merge the Real Alarm P3 authorized read canary. Public list/detail reads remain limited to the exact 1% internal no-fallback cohort, while every lifecycle POST stays disabled at 0%. Any read ramp, lifecycle activation, automated suppression expiry, notifications, correlation policy, or Work Order linkage requires a separate reviewed contract and certification.
+Merge the Real Alarm P4 promotion evidence gate while retaining the repository at the reviewed 1% read canary and 0% lifecycle traffic. Only accepted formal target-environment evidence may authorize a separate 5% registry commit. After this gate is merged, begin the independent Work Order domain map; lifecycle rollout, suppression expiry, notifications, correlation policy, and Alarm-to-Work-Order linkage remain separately certified slices.
