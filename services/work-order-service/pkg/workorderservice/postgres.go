@@ -64,7 +64,7 @@ func (store *PostgresStore) List(ctx context.Context, organizationID, siteID str
 	}
 	filter = normalizeFilter(filter)
 	if !validStatusFilter(filter.Status) || !validPriorityFilter(filter.Priority) || len(filter.AssigneeID) > 256 {
-		return workordermodel.ListResponse{}, ErrUnavailable
+		return workordermodel.ListResponse{}, ErrInvalidFilter
 	}
 	tx, err := store.beginOrganizationTransaction(ctx, organizationID)
 	if err != nil {

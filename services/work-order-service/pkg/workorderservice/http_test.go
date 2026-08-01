@@ -87,11 +87,14 @@ func TestWorkOrderHTTPRejectsUntrustedScopeBeforeStore(t *testing.T) {
 	missing := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
 	forged := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
 	forged.Header.Set("X-Organization-ID", httpTestOrganizationID)
+	forged.Header.Set("X-Work-Order-ID", httpTestWorkOrderID)
 	forged.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestOrganizationID, httpTestSiteID, ""))
 	crossSite := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
 	crossSite.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestOrganizationID, httpTestOtherSiteID, ""))
-	expanded := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
-	expanded.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction, WorkOrderReadAction}, httpTestOrganizationID, httpTestSiteID, ""))
+	multiAction := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
+	multiAction.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction, WorkOrderReadAction}, httpTestOrganizationID, httpTestSiteID, ""))
+	expandedScope := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
+	expandedScope.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestOrganizationID, httpTestSiteID, "", "site:"+httpTestOtherSiteID))
 	wrongAction := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
 	wrongAction.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderReadAction}, httpTestOrganizationID, httpTestSiteID, ""))
 	expired := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
@@ -99,7 +102,7 @@ func TestWorkOrderHTTPRejectsUntrustedScopeBeforeStore(t *testing.T) {
 	tampered := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
 	tampered.Header.Set(WorkOrderReadContextHeader, signContext(t, signer, now, []string{WorkOrderListAction}, httpTestOrganizationID, httpTestSiteID, "")+"x")
 
-	for index, request := range []*http.Request{missing, forged, crossSite, expanded, wrongAction, expired, tampered} {
+	for index, request := range []*http.Request{missing, forged, crossSite, multiAction, expandedScope, wrongAction, expired, tampered} {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, request)
 		if index == 1 {
@@ -177,12 +180,13 @@ func TestWorkOrderHTTPRejectsProjectionOutsideRequestedFilter(t *testing.T) {
 	}
 }
 
-func signContext(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, actions []string, organizationID, siteID, workOrderID string) string {
+func signContext(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, actions []string, organizationID, siteID, workOrderID string, extraScopes ...string) string {
 	t.Helper()
 	scopes := []string{"organization:" + organizationID, "site:" + siteID}
 	if workOrderID != "" {
 		scopes = append(scopes, "work-order:"+workOrderID)
 	}
+	scopes = append(scopes, extraScopes...)
 	value, err := identitycontext.SignDelegation(signer, identitycontext.DelegationClaims{
 		Issuer: DefaultGatewaySPIFFEID, Subject: "operator", SubjectIssuer: "https://identity.example.test",
 		DisplayName: "Operator", ExecutingService: DefaultGatewaySPIFFEID, Audience: DefaultAudience,
