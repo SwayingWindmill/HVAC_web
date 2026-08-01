@@ -1,6 +1,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
+import { resolveCapabilityTask } from './domain-task-matrix.mjs';
+
 const root = resolve(process.cwd());
 const output = resolve(root, 'out/s2-realtime-backend/realtime-backend.json');
 
@@ -15,6 +17,22 @@ async function text(path) {
 async function json(path) {
   return JSON.parse(await text(path));
 }
+
+const aggregateCommandLabels = (task) => {
+  const packageCommand = packageJSON.scripts?.[task];
+  const taskMatch = packageCommand?.match(/^node scripts\/run-capability-task\.mjs --task=([^\s]+)$/u);
+  if (taskMatch) {
+    if (taskMatch[1] !== task) return [];
+    try {
+      return resolveCapabilityTask(task).map(({ label }) => label);
+    } catch {
+      return [];
+    }
+  }
+  return typeof packageCommand === 'string'
+    ? packageCommand.split(/\s*&&\s*/u).map((command) => command.trim()).filter(Boolean)
+    : [];
+};
 
 const [
   openapi,
@@ -220,9 +238,10 @@ assert(packageJSON.scripts?.['s2:realtime:check'] === 'node scripts/check-s2-rea
 assert(packageJSON.scripts?.['s2:realtime:config'] === 'node scripts/run-s2-realtime-centrifugo-config-check.mjs', 's2:realtime:config is not wired');
 assert(packageJSON.scripts?.['s2:realtime:postgres'] === 'node scripts/run-s2-realtime-postgres-tests.mjs', 's2:realtime:postgres is not wired');
 assert(packageJSON.scripts?.['s2:realtime:transport'] === 'node scripts/run-s2-centrifugo-poc.mjs', 's2:realtime:transport is not wired');
-assert(packageJSON.scripts?.['s2:realtime-backend']?.includes('npm run s2:realtime:postgres'), 's2:realtime-backend omits durable PostgreSQL realtime evidence');
-assert(!packageJSON.scripts?.['s2:realtime-backend']?.includes('npm run s2:postgres'), 's2:realtime-backend still runs the generic PostgreSQL baseline instead of its domain integration');
-assert(packageJSON.scripts?.['s2:realtime-backend']?.includes('npm run s2:realtime:config'), 's2:realtime-backend omits the formal Centrifugo mTLS configuration check');
+const realtimeBackendCommands = aggregateCommandLabels('s2:realtime-backend');
+assert(realtimeBackendCommands.includes('npm run s2:realtime:postgres'), 's2:realtime-backend omits durable PostgreSQL realtime evidence');
+assert(!realtimeBackendCommands.includes('npm run s2:postgres'), 's2:realtime-backend still runs the generic PostgreSQL baseline instead of its domain integration');
+assert(realtimeBackendCommands.includes('npm run s2:realtime:config'), 's2:realtime-backend omits the formal Centrifugo mTLS configuration check');
 for (const marker of [
   'scripts/run-s2-realtime-postgres-tests.mjs',
   'scripts/run-s2-telemetry-runtime-postgres-tests.mjs',

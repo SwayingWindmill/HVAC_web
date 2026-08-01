@@ -187,10 +187,12 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'alarm.read',
   'work-order.list',
   'work-order.read',
+  'work-order.create',
+  'work-order.assign',
 ]), 'Capability vocabulary is unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 4, 'EffectiveAuthorization capability set version must be 4');
+invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 5, 'EffectiveAuthorization capability set version must be 5');
 invariant(schemas.EffectiveAuthorization.properties.policyRevision.minLength === 1 && schemas.EffectiveAuthorization.properties.policyRevision.maxLength === 128, 'EffectiveAuthorization policy revision bounds are unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 16, 'EffectiveAuthorization capabilities must be unique and bounded');
+invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 18, 'EffectiveAuthorization capabilities must be unique and bounded');
 invariant(schemas.EffectiveAuthorization.properties.capabilities.items?.$ref === '#/components/schemas/Capability', 'EffectiveAuthorization capabilities must use the public Capability vocabulary');
 invariant(schemas.AuditRecord.properties.schemaVersion.const === 1, 'AuditRecord.schemaVersion must be 1');
 invariant(schemas.AuditRecord.properties.aggregateType.const === 'bff-session', 'AuditRecord.aggregateType must be bff-session');

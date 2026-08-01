@@ -183,7 +183,7 @@ function renderRealAssetsRealtimeHarness() {
       delegationExpiresAt: '2026-07-31T06:00:00.000Z',
     },
     authorization: {
-      capabilitySetVersion: 4,
+      capabilitySetVersion: 5,
       policyRevision: 'real-assets-realtime:1',
       capabilities: ['site.read', 'equipment.list', 'device.list', 'telemetry.batch.read', 'telemetry.subscribe'],
     },

@@ -42,13 +42,18 @@ func main() {
 		logger.Error("work_order_database_reference_invalid", "error_code", "WORK_ORDER_DATABASE_REFERENCE_INVALID")
 		os.Exit(1)
 	}
+	mutationDatabaseURL, err := loadRequiredValueFile(requiredEnv("WORK_ORDER_MUTATION_DATABASE_URL_FILE"), 64<<10)
+	if err != nil {
+		logger.Error("work_order_mutation_database_reference_invalid", "error_code", "WORK_ORDER_MUTATION_DATABASE_REFERENCE_INVALID")
+		os.Exit(1)
+	}
 	cursorSecret, err := loadRequiredValueFile(requiredEnv("WORK_ORDER_CURSOR_SECRET_FILE"), 4<<10)
 	if err != nil || len(cursorSecret) < 32 {
 		logger.Error("work_order_cursor_secret_invalid", "error_code", "WORK_ORDER_CURSOR_SECRET_INVALID")
 		os.Exit(1)
 	}
 	openContext, cancelOpen := context.WithTimeout(context.Background(), 10*time.Second)
-	store, err := workorderservice.OpenPostgresStore(openContext, databaseURL, []byte(cursorSecret))
+	store, err := workorderservice.OpenPostgresStoreWithMutations(openContext, databaseURL, mutationDatabaseURL, []byte(cursorSecret))
 	cancelOpen()
 	if err != nil {
 		logger.Error("work_order_database_open_failed", "error_code", "WORK_ORDER_DATABASE_OPEN_FAILED")

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, join, relative, resolve } from 'node:path';
+import { resolveCapabilityTask } from './domain-task-matrix.mjs';
 
 const root = resolve(process.cwd());
 
@@ -21,6 +22,22 @@ function exact(actual, expected) {
     && actual.length === expected.length
     && actual.every((value, index) => value === expected[index]);
 }
+
+const aggregateCommandLabels = (task) => {
+  const packageCommand = packageJSON.scripts?.[task];
+  const taskMatch = packageCommand?.match(/^node scripts\/run-capability-task\.mjs --task=([^\s]+)$/u);
+  if (taskMatch) {
+    if (taskMatch[1] !== task) return [];
+    try {
+      return resolveCapabilityTask(task).map(({ label }) => label);
+    } catch {
+      return [];
+    }
+  }
+  return typeof packageCommand === 'string'
+    ? packageCommand.split(/\s*&&\s*/u).map((command) => command.trim()).filter(Boolean)
+    : [];
+};
 
 function routeKey(route) {
   return `${route.method} ${route.path}`;
@@ -268,7 +285,8 @@ const expectedScripts = {
 for (const [name, command] of Object.entries(expectedScripts)) {
   assert(packageJSON.scripts?.[name] === command, `${name} is not wired`);
 }
-assert(typeof packageJSON.scripts?.['s2:telemetry-baseline'] === 'string', 's2:telemetry-baseline clean baseline command is missing');
+const baselineCommands = aggregateCommandLabels('s2:telemetry-baseline');
+assert(baselineCommands.length > 0, 's2:telemetry-baseline clean baseline command is missing');
 for (const command of [
   'npm run s2:contracts:check',
   'npm run ownership:check',
@@ -281,7 +299,7 @@ for (const command of [
   'npm run lint',
   'npm run build',
 ]) {
-  assert(packageJSON.scripts['s2:telemetry-baseline'].includes(command), `s2:telemetry-baseline omits ${command}`);
+  assert(baselineCommands.some((label) => label.includes(command)), `s2:telemetry-baseline omits ${command}`);
 }
 assert(workflow.includes('npm run s2:telemetry-baseline'), 'clean CI workflow does not run the Ticket 01 command');
 assert(workflow.includes('actions/setup-go@v5') && workflow.includes('actions/setup-node@v4'), 'clean CI workflow must provision Go and Node');

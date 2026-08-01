@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { resolveCapabilityTask } from './domain-task-matrix.mjs';
 
 const root = resolve(process.cwd());
 const readText = (path) => readFile(resolve(root, path), 'utf8');
@@ -12,6 +13,22 @@ function assert(condition, message) {
 function includesAll(source, markers, label) {
   for (const marker of markers) assert(source.includes(marker), `${label} is missing ${marker}`);
 }
+
+const aggregateCommandLabels = (task) => {
+  const packageCommand = packageJSON.scripts?.[task];
+  const taskMatch = packageCommand?.match(/^node scripts\/run-capability-task\.mjs --task=([^\s]+)$/u);
+  if (taskMatch) {
+    if (taskMatch[1] !== task) return [];
+    try {
+      return resolveCapabilityTask(task).map(({ label }) => label);
+    } catch {
+      return [];
+    }
+  }
+  return typeof packageCommand === 'string'
+    ? packageCommand.split(/\s*&&\s*/u).map((command) => command.trim()).filter(Boolean)
+    : [];
+};
 
 const [
   decisionGo,
@@ -237,8 +254,8 @@ const expectedScripts = {
   's2:ingest:postgres': 'node scripts/run-s2-telemetry-ingest-postgres-tests.mjs',
 };
 for (const [name, command] of Object.entries(expectedScripts)) assert(packageJSON.scripts?.[name] === command, `${name} is not wired`);
-const ticketCommand = packageJSON.scripts?.['s2:telemetry-ingest'];
-assert(typeof ticketCommand === 'string', 's2:telemetry-ingest is missing');
+const ticketCommands = aggregateCommandLabels('s2:telemetry-ingest');
+assert(ticketCommands.length > 0, 's2:telemetry-ingest is missing');
 for (const command of [
   'npm run s2:ingest:check',
   'test ./services/telemetry-runtime-service/...',
@@ -254,7 +271,7 @@ for (const command of [
   'npm run lint',
   'npm run build',
   'npm run s2:ingest:postgres',
-]) assert(ticketCommand.includes(command), `s2:telemetry-ingest omits ${command}`);
+]) assert(ticketCommands.some((label) => label.includes(command)), `s2:telemetry-ingest omits ${command}`);
 includesAll(workflow, ['runs-on: ubuntu-24.04', 'go-version: "1.25.12"', 'node-version: "22.22.0"', 'npm run s2:telemetry-ingest', 's2-telemetry-ingest-evidence'], 'Ticket 04 workflow');
 includesAll(runner, ['TestPostgresIngestEndToEnd', 'docker', 'restart', 'restartDurability', 'deliveryEvidence', 'rejectedAndQuarantined', 'coverageQuarantine', 'twoOrganizationIsolation'], 'Ticket 04 PostgreSQL runner');
 

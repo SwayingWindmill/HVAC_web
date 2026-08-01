@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -25,6 +26,8 @@ const (
 	gatewayWorkOrderOtherSiteID    = "01910000-0002-7000-8000-000000000001"
 	gatewayWorkOrderID             = "01910000-1000-7000-8000-000000000001"
 	gatewayWorkOrderAlarmID        = "01910000-2000-7000-8000-000000000001"
+	gatewayWorkOrderCSRF           = "work-order-csrf-fixture"
+	gatewayWorkOrderOrigin         = "https://web.example.test"
 )
 
 func TestGatewayWorkOrderListUsesIAMAndExactSignedReadContext(t *testing.T) {
@@ -106,13 +109,16 @@ func TestGatewayRejectsBrowserWorkOrderAuthorityHeaders(t *testing.T) {
 }
 
 type workOrderGatewayFixture struct {
-	handler          *handler
-	session          bffSession
-	iamCalls         atomic.Int64
-	workOrderCalls   atomic.Int64
-	deny             atomic.Bool
-	crossSite        atomic.Bool
-	lastUpstreamPath atomic.Value
+	handler                 *handler
+	session                 bffSession
+	iamCalls                atomic.Int64
+	workOrderCalls          atomic.Int64
+	deny                    atomic.Bool
+	crossSite               atomic.Bool
+	lastUpstreamPath        atomic.Value
+	lastUpstreamMethod      atomic.Value
+	lastUpstreamBody        atomic.Value
+	lastUpstreamIdempotency atomic.Value
 }
 
 func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
@@ -124,12 +130,15 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 	}
 	fixture := &workOrderGatewayFixture{}
 	fixture.lastUpstreamPath.Store("")
+	fixture.lastUpstreamMethod.Store("")
+	fixture.lastUpstreamBody.Store("")
+	fixture.lastUpstreamIdempotency.Store("")
 	fixture.session = bffSession{Session: sessionstore.Session{
 		ID:                   "session-work-order-1",
 		Principal:            identitycontext.UserPrincipal{Subject: "subject-work-order", Issuer: "https://issuer.example", DisplayName: "Work Order Operator", Email: "work-order@example.test", Roles: []string{"operator"}},
 		ActingOrganizationID: gatewayWorkOrderOrganizationID,
 		ExpiresAt:            now.Add(15 * time.Minute),
-	}}
+	}, CSRFToken: gatewayWorkOrderCSRF}
 	iamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		fixture.iamCalls.Add(1)
 		claims, verifyErr := identitycontext.VerifyDelegation(signer.Public(), request.Header.Get("X-Delegation-Grant"))
@@ -145,7 +154,8 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 		decision := workorderauth.Decision{
 			Allowed: !fixture.deny.Load(), PrincipalID: "principal-work-order-1",
 			SubjectIssuer: fixture.session.Principal.Issuer, Subject: fixture.session.Principal.Subject,
-			ActingOrganizationID: gatewayWorkOrderOrganizationID, SiteID: input.SiteID, WorkOrderID: input.WorkOrderID, Action: input.Action,
+			ActingOrganizationID: gatewayWorkOrderOrganizationID, SiteID: input.SiteID, WorkOrderID: input.WorkOrderID,
+			AssigneeID: input.AssigneeID, TeamID: input.TeamID, Action: input.Action,
 			PolicyRevision: "work-order-policy-1", ReasonCode: workorderauth.ReasonAllowExactScope, DecidedAt: now.Format(time.RFC3339Nano),
 		}
 		if fixture.deny.Load() {
@@ -159,35 +169,68 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 	workOrderServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		fixture.workOrderCalls.Add(1)
 		fixture.lastUpstreamPath.Store(request.URL.Path)
-		claims, verifyErr := identitycontext.VerifyDelegation(signer.Public(), request.Header.Get(workOrderReadContextHeader))
+		fixture.lastUpstreamMethod.Store(request.Method)
+		fixture.lastUpstreamIdempotency.Store(request.Header.Get("Idempotency-Key"))
+		body, _ := io.ReadAll(request.Body)
+		fixture.lastUpstreamBody.Store(string(body))
+		header := workOrderReadContextHeader
 		action := string(workorderauth.ActionList)
 		scopes := []string{"organization:" + gatewayWorkOrderOrganizationID, "site:" + gatewayWorkOrderSiteID}
+		if request.Method == http.MethodPost {
+			header = workOrderWriteContextHeader
+			action = string(workorderauth.ActionCreate)
+		}
 		if strings.HasSuffix(request.URL.Path, "/"+gatewayWorkOrderID) {
 			action = string(workorderauth.ActionRead)
 			scopes = append(scopes, "work-order:"+gatewayWorkOrderID)
 		}
+		if strings.HasSuffix(request.URL.Path, "/"+gatewayWorkOrderID+":assign") {
+			header = workOrderWriteContextHeader
+			action = string(workorderauth.ActionAssign)
+			scopes = append(scopes, "work-order:"+gatewayWorkOrderID)
+		}
+		claims, verifyErr := identitycontext.VerifyDelegation(signer.Public(), request.Header.Get(header))
 		if verifyErr != nil || identitycontext.ValidateDelegationAnyScope(claims, now, "spiffe://hvac.local/platform-gateway", "work-order-service", action, scopes) != nil || claims.PrincipalID != "principal-work-order-1" || claims.PolicyRevision != "work-order-policy-1" {
 			writer.Header().Set("Content-Type", "application/problem+json")
 			writer.WriteHeader(http.StatusForbidden)
-			_, _ = writer.Write([]byte(`{"code":"WORK_ORDER_FORBIDDEN","retryable":false}`))
+			_ = json.NewEncoder(writer).Encode(upstreamWorkOrderProblem{Type: "https://example.test/problems/work-order-access-denied", Title: "denied", Status: http.StatusForbidden, Detail: "denied", Code: "WORK_ORDER_ACCESS_DENIED"})
 			return
 		}
 		workOrder := validGatewayWorkOrder(gatewayWorkOrderSiteID)
+		if action == string(workorderauth.ActionAssign) {
+			assigneeID := "principal:operator-b"
+			teamID := "team:controls"
+			fromStatus := workordermodel.StatusOpen
+			workOrder.AssigneeID = &assigneeID
+			workOrder.TeamID = &teamID
+			workOrder.Version = 2
+			workOrder.UpdatedAt = "2026-08-01T10:01:00Z"
+			workOrder.Timeline = append(workOrder.Timeline, workordermodel.TimelineEvent{
+				Operation: workordermodel.OperationAssign, FromStatus: &fromStatus, ToStatus: workordermodel.StatusOpen,
+				Reason: "route to controls", ActorType: "PRINCIPAL", ActorID: "principal-work-order-1",
+				AssigneeID: &assigneeID, TeamID: &teamID, OccurredAt: workOrder.UpdatedAt, Version: 2,
+			})
+		}
 		if fixture.crossSite.Load() {
 			workOrder.SiteID = gatewayWorkOrderOtherSiteID
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		if action == string(workorderauth.ActionList) {
+		switch action {
+		case string(workorderauth.ActionList):
 			_ = json.NewEncoder(writer).Encode(workordermodel.ListResponse{SchemaVersion: workordermodel.SchemaVersion, Items: []workordermodel.WorkOrder{workOrder}, HasMore: false})
-			return
+		case string(workorderauth.ActionCreate):
+			writer.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(writer).Encode(workOrder)
+		default:
+			_ = json.NewEncoder(writer).Encode(workOrder)
 		}
-		_ = json.NewEncoder(writer).Encode(workOrder)
 	}))
 	t.Cleanup(workOrderServer.Close)
 
 	fixture.handler = &handler{
 		identity: &identityController{config: IdentityConfig{
-			IAMURL: iamServer.URL, IAMAudience: "iam-service", IAMHTTPClient: iamServer.Client(),
+			PublicOrigin: gatewayWorkOrderOrigin,
+			IAMURL:       iamServer.URL, IAMAudience: "iam-service", IAMHTTPClient: iamServer.Client(),
 			ExecutingWorkloadSPIFFE: "spiffe://hvac.local/platform-gateway", PolicyRevision: "gateway-policy-1",
 			DelegationSigner: signer, DelegationTTL: 30 * time.Second,
 		}, now: func() time.Time { return now }},
@@ -204,7 +247,7 @@ func validGatewayWorkOrder(siteID string) workordermodel.WorkOrder {
 		Priority: workordermodel.PriorityHigh, Status: workordermodel.StatusOpen, AssigneeID: &assigneeID,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: gatewayWorkOrderAlarmID, Relationship: workordermodel.RelationshipOrigin}},
 		Tasks:            workordermodel.TaskSummary{}, CompletionEvidence: []workordermodel.EvidenceReference{},
-		Timeline: []workordermodel.TimelineEvent{{Operation: workordermodel.OperationCreate, ToStatus: workordermodel.StatusOpen, Reason: "created from Alarm", ActorType: "PRINCIPAL", ActorID: "principal:operator", OccurredAt: "2026-08-01T10:00:00Z", Version: 1}},
+		Timeline: []workordermodel.TimelineEvent{{Operation: workordermodel.OperationCreate, ToStatus: workordermodel.StatusOpen, Reason: "created from Alarm", ActorType: "PRINCIPAL", ActorID: "principal:operator", AssigneeID: &assigneeID, OccurredAt: "2026-08-01T10:00:00Z", Version: 1}},
 		Version:  1, CreatedAt: "2026-08-01T10:00:00Z", UpdatedAt: "2026-08-01T10:00:00Z",
 	}
 }

@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { resolveCapabilityTask } from './domain-task-matrix.mjs';
 
 const root = resolve(process.cwd());
 const readText = (path) => readFile(resolve(root, path), 'utf8');
@@ -12,6 +13,22 @@ function assert(condition, message) {
 function includesAll(source, markers, label) {
   for (const marker of markers) assert(source.includes(marker), `${label} is missing ${marker}`);
 }
+
+const aggregateCommandLabels = (task) => {
+  const packageCommand = packageJSON.scripts?.[task];
+  const taskMatch = packageCommand?.match(/^node scripts\/run-capability-task\.mjs --task=([^\s]+)$/u);
+  if (taskMatch) {
+    if (taskMatch[1] !== task) return [];
+    try {
+      return resolveCapabilityTask(task).map(({ label }) => label);
+    } catch {
+      return [];
+    }
+  }
+  return typeof packageCommand === 'string'
+    ? packageCommand.split(/\s*&&\s*/u).map((command) => command.trim()).filter(Boolean)
+    : [];
+};
 
 const [
   evaluatorGo,
@@ -189,8 +206,8 @@ for (const [name, command] of Object.entries(expectedScripts)) {
 }
 assert(packageJSON.scripts?.['test:identity']?.includes('./services/telemetry-runtime-service/...'), 'global identity tests omit Telemetry Runtime');
 assert(packageJSON.scripts?.['test:security-negative']?.includes('./services/telemetry-runtime-service/...'), 'global security-negative tests omit Telemetry Runtime');
-const ticketCommand = packageJSON.scripts?.['s2:telemetry-runtime-snapshot'];
-assert(typeof ticketCommand === 'string', 's2:telemetry-runtime-snapshot is missing');
+const ticketCommands = aggregateCommandLabels('s2:telemetry-runtime-snapshot');
+assert(ticketCommands.length > 0, 's2:telemetry-runtime-snapshot is missing');
 for (const command of [
   'npm run s2:runtime:check',
   'test ./services/telemetry-runtime-service/...',
@@ -206,7 +223,7 @@ for (const command of [
   'npm run build',
   'npm run s2:runtime:postgres',
 ]) {
-  assert(ticketCommand.includes(command), `s2:telemetry-runtime-snapshot omits ${command}`);
+  assert(ticketCommands.some((label) => label.includes(command)), `s2:telemetry-runtime-snapshot omits ${command}`);
 }
 includesAll(workflow, ['runs-on: ubuntu-24.04', 'go-version: "1.25.12"', 'node-version: "22.22.0"', 'npm run s2:telemetry-runtime-snapshot', 's2-telemetry-runtime-snapshot-evidence'], 'Ticket 03 workflow');
 
@@ -221,7 +238,7 @@ for (const forbidden of ['legacy-hvac-backend', 'mock fallback']) {
 const realtimeTicketActive = packageJSON.scripts?.['s2:realtime:check'] === 'node scripts/check-s2-realtime-backend.mjs';
 if (laterRuntimeSources.includes('centrifugo') || laterRuntimeSources.includes('redis')) {
   assert(realtimeTicketActive, 'Telemetry transport code is present without the Ticket 06 realtime boundary gate');
-  assert(packageJSON.scripts?.['s2:realtime-backend']?.includes('npm run s2:realtime:check'), 'Ticket 06 command omits its realtime boundary gate');
+  assert(aggregateCommandLabels('s2:realtime-backend').some((label) => label.includes('npm run s2:realtime:check')), 'Ticket 06 command omits its realtime boundary gate');
 }
 
 console.log('S2 Ticket 03 Telemetry Runtime Snapshot passed: authoritative semantics, atomic revision/outbox, exact internal reads and zero public traffic.');

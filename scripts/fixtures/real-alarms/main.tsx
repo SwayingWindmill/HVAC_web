@@ -24,7 +24,7 @@ const principal = {
     executingServicePrincipal: { service: 'platform-gateway', spiffeId: 'spiffe://hvac.local/platform-gateway' },
     actingOrganizationId: organizationId, audience: 'iam-service', policyRevision: 'alarm-policy-1', delegationExpiresAt: '2026-08-01T00:00:00.000Z',
   },
-  authorization: { capabilitySetVersion: 4, policyRevision: 'alarm-policy-1', capabilities: ['site.read', 'alarm.list', 'alarm.read'] },
+  authorization: { capabilitySetVersion: 5, policyRevision: 'alarm-policy-1', capabilities: ['site.read', 'alarm.list', 'alarm.read'] },
   session: { id: 'alarm-audit-session', expiresAt: '2026-08-01T00:00:00.000Z', revocationObjectiveMs: 30000, lastAuditMessageId: 'alarm-audit-message' },
 } as unknown as CurrentPrincipalResponse;
 Reflect.set(principal.session, ['csrf', 'Token'].join(''), 'fixture-capability');

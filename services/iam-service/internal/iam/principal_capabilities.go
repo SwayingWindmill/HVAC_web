@@ -109,7 +109,7 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 
 func combinedCapabilityPolicyRevision(registryRevision, telemetryRevision, alarmRevision, workOrderRevision string) string {
 	digest := sha256.Sum256([]byte(registryRevision + "\x00" + telemetryRevision + "\x00" + alarmRevision + "\x00" + workOrderRevision))
-	return "capability-v4:" + hex.EncodeToString(digest[:])
+	return "capability-v5:" + hex.EncodeToString(digest[:])
 }
 
 func telemetryCapabilityAllowed(facts TelemetryAuthorizationFacts, now time.Time, actingOrganizationID string, action telemetryauth.Action) bool {
@@ -181,4 +181,6 @@ var principalWorkOrderCapabilities = []struct {
 }{
 	{identitycontext.CapabilityWorkOrderList, workorderauth.ActionList},
 	{identitycontext.CapabilityWorkOrderRead, workorderauth.ActionRead},
+	{identitycontext.CapabilityWorkOrderCreate, workorderauth.ActionCreate},
+	{identitycontext.CapabilityWorkOrderAssign, workorderauth.ActionAssign},
 }

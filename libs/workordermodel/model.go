@@ -9,7 +9,14 @@ import (
 
 const SchemaVersion = 1
 
-var uuidV7Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+const MaximumScheduleHorizon = 365 * 24 * time.Hour
+
+var (
+	uuidV7Pattern        = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	ErrVersionConflict   = errors.New("work order version conflict")
+	ErrInvalidCreate     = errors.New("work order create request is invalid")
+	ErrInvalidAssignment = errors.New("work order assignment request is invalid")
+)
 
 type Priority string
 
@@ -90,6 +97,8 @@ type TimelineEvent struct {
 	Reason         string    `json:"reason"`
 	ActorType      string    `json:"actorType"`
 	ActorID        string    `json:"actorId"`
+	AssigneeID     *string   `json:"assigneeId,omitempty"`
+	TeamID         *string   `json:"teamId,omitempty"`
 	PolicyRevision *string   `json:"policyRevision,omitempty"`
 	CorrelationID  *string   `json:"correlationId,omitempty"`
 	OccurredAt     string    `json:"occurredAt"`
@@ -127,7 +136,141 @@ type ListResponse struct {
 	HasMore       bool        `json:"hasMore"`
 }
 
+type CreateInput struct {
+	WorkOrderID      string
+	OrganizationID   string
+	SiteID           string
+	Title            string
+	Description      string
+	Priority         Priority
+	SourceReferences []SourceReference
+	AssigneeID       *string
+	TeamID           *string
+	ScheduledStart   *string
+	DueAt            *string
+	ActorType        string
+	ActorID          string
+	PolicyRevision   string
+	CorrelationID    string
+	OccurredAt       string
+}
+
+type AssignmentInput struct {
+	ExpectedVersion uint64
+	AssigneeID      *string
+	TeamID          *string
+	Reason          string
+	ActorType       string
+	ActorID         string
+	PolicyRevision  string
+	CorrelationID   string
+	OccurredAt      string
+}
+
 func IsUUIDv7(value string) bool { return uuidV7Pattern.MatchString(value) }
+
+func Create(input CreateInput) (WorkOrder, error) {
+	occurredAt, err := parseInstant(input.OccurredAt)
+	if err != nil || !IsUUIDv7(input.WorkOrderID) || !IsUUIDv7(input.OrganizationID) || !IsUUIDv7(input.SiteID) {
+		return WorkOrder{}, ErrInvalidCreate
+	}
+	assigneeID, ok := normalizeOptional(input.AssigneeID, 256)
+	if !ok {
+		return WorkOrder{}, ErrInvalidCreate
+	}
+	teamID, ok := normalizeOptional(input.TeamID, 256)
+	if !ok {
+		return WorkOrder{}, ErrInvalidCreate
+	}
+	scheduledStart, ok := normalizeOptionalInstant(input.ScheduledStart)
+	if !ok {
+		return WorkOrder{}, ErrInvalidCreate
+	}
+	dueAt, ok := normalizeOptionalInstant(input.DueAt)
+	if !ok || validateMutationSchedule(scheduledStart, dueAt, occurredAt) != nil {
+		return WorkOrder{}, ErrInvalidCreate
+	}
+	references := append([]SourceReference(nil), input.SourceReferences...)
+	for index := range references {
+		references[index].ResourceID = strings.TrimSpace(references[index].ResourceID)
+	}
+	if len(references) != 1 || references[0].Relationship != RelationshipOrigin {
+		return WorkOrder{}, ErrInvalidCreate
+	}
+	if !bounded(input.Title, 256) || !bounded(input.Description, 4096) || !validPriority(input.Priority) || validateSources(references) != nil ||
+		!bounded(input.ActorType, 64) || !bounded(input.ActorID, 256) || !bounded(input.PolicyRevision, 128) || !bounded(input.CorrelationID, 256) {
+		return WorkOrder{}, ErrInvalidCreate
+	}
+	instant := occurredAt.UTC().Format(time.RFC3339Nano)
+	policyRevision := strings.TrimSpace(input.PolicyRevision)
+	correlationID := strings.TrimSpace(input.CorrelationID)
+	workOrder := WorkOrder{
+		SchemaVersion: SchemaVersion,
+		WorkOrderID:   strings.TrimSpace(input.WorkOrderID), OrganizationID: strings.TrimSpace(input.OrganizationID), SiteID: strings.TrimSpace(input.SiteID),
+		Title: strings.TrimSpace(input.Title), Description: strings.TrimSpace(input.Description), Priority: input.Priority, Status: StatusOpen,
+		SourceReferences: references, AssigneeID: assigneeID, TeamID: teamID, ScheduledStart: scheduledStart, DueAt: dueAt,
+		Tasks: TaskSummary{}, CompletionEvidence: []EvidenceReference{},
+		Timeline: []TimelineEvent{{
+			Operation: OperationCreate, ToStatus: StatusOpen, Reason: "WORK_ORDER_CREATED",
+			ActorType: strings.TrimSpace(input.ActorType), ActorID: strings.TrimSpace(input.ActorID),
+			AssigneeID: cloneOptional(assigneeID), TeamID: cloneOptional(teamID), PolicyRevision: &policyRevision, CorrelationID: &correlationID,
+			OccurredAt: instant, Version: 1,
+		}},
+		Version: 1, CreatedAt: instant, UpdatedAt: instant,
+	}
+	if err := workOrder.Validate(); err != nil {
+		return WorkOrder{}, ErrInvalidCreate
+	}
+	return workOrder, nil
+}
+
+func ApplyAssignment(workOrder WorkOrder, input AssignmentInput) (WorkOrder, error) {
+	if err := workOrder.Validate(); err != nil {
+		return WorkOrder{}, err
+	}
+	if input.ExpectedVersion != workOrder.Version {
+		return WorkOrder{}, ErrVersionConflict
+	}
+	if workOrder.Status == StatusCompleted || workOrder.Status == StatusCancelled || !bounded(input.Reason, 256) ||
+		!bounded(input.ActorType, 64) || !bounded(input.ActorID, 256) || !bounded(input.PolicyRevision, 128) || !bounded(input.CorrelationID, 256) {
+		return WorkOrder{}, ErrInvalidAssignment
+	}
+	occurredAt, err := parseInstant(input.OccurredAt)
+	updatedAt, updatedErr := parseInstant(workOrder.UpdatedAt)
+	if err != nil || updatedErr != nil || occurredAt.Before(updatedAt) {
+		return WorkOrder{}, ErrInvalidAssignment
+	}
+	assigneeID, ok := normalizeOptional(input.AssigneeID, 256)
+	if !ok {
+		return WorkOrder{}, ErrInvalidAssignment
+	}
+	teamID, ok := normalizeOptional(input.TeamID, 256)
+	if !ok {
+		return WorkOrder{}, ErrInvalidAssignment
+	}
+	operation := OperationAssign
+	if assigneeID == nil && teamID == nil {
+		operation = OperationUnassign
+	}
+	result := cloneWorkOrder(workOrder)
+	result.AssigneeID = assigneeID
+	result.TeamID = teamID
+	result.Version++
+	result.UpdatedAt = occurredAt.UTC().Format(time.RFC3339Nano)
+	fromStatus := result.Status
+	policyRevision := strings.TrimSpace(input.PolicyRevision)
+	correlationID := strings.TrimSpace(input.CorrelationID)
+	result.Timeline = append(result.Timeline, TimelineEvent{
+		Operation: operation, FromStatus: &fromStatus, ToStatus: result.Status,
+		Reason: strings.TrimSpace(input.Reason), ActorType: strings.TrimSpace(input.ActorType), ActorID: strings.TrimSpace(input.ActorID),
+		AssigneeID: cloneOptional(assigneeID), TeamID: cloneOptional(teamID), PolicyRevision: &policyRevision, CorrelationID: &correlationID,
+		OccurredAt: result.UpdatedAt, Version: result.Version,
+	})
+	if err := result.Validate(); err != nil {
+		return WorkOrder{}, ErrInvalidAssignment
+	}
+	return result, nil
+}
 
 func (workOrder WorkOrder) Validate() error {
 	if workOrder.SchemaVersion != SchemaVersion || !IsUUIDv7(workOrder.WorkOrderID) || !IsUUIDv7(workOrder.OrganizationID) || !IsUUIDv7(workOrder.SiteID) {
@@ -165,7 +308,7 @@ func (workOrder WorkOrder) Validate() error {
 	if workOrder.Status == StatusCompleted && len(workOrder.CompletionEvidence) == 0 {
 		return errors.New("completed work order requires completion evidence")
 	}
-	if err := validateTimeline(workOrder.Timeline, workOrder.Status, workOrder.Version, createdAt, updatedAt); err != nil {
+	if err := validateTimeline(workOrder.Timeline, workOrder.Status, workOrder.Version, workOrder.AssigneeID, workOrder.TeamID, createdAt, updatedAt); err != nil {
 		return err
 	}
 	return nil
@@ -240,15 +383,23 @@ func validateEvidence(references []EvidenceReference) error {
 	return nil
 }
 
-func validateTimeline(events []TimelineEvent, currentStatus Status, version uint64, createdAt, updatedAt time.Time) error {
+func validateTimeline(events []TimelineEvent, currentStatus Status, version uint64, assigneeID, teamID *string, createdAt, updatedAt time.Time) error {
 	if len(events) == 0 || len(events) > 512 || uint64(len(events)) != version {
 		return errors.New("work order timeline is invalid")
 	}
 	var previousStatus Status
 	var previousAt time.Time
+	var projectedAssigneeID *string
+	var projectedTeamID *string
 	for index, event := range events {
 		if !validOperation(event.Operation) || !validStatus(event.ToStatus) || !bounded(event.Reason, 256) || !bounded(event.ActorType, 64) || !bounded(event.ActorID, 256) || event.Version != uint64(index+1) {
 			return errors.New("work order timeline event is invalid")
+		}
+		if event.AssigneeID != nil && !bounded(*event.AssigneeID, 256) {
+			return errors.New("work order timeline assignee is invalid")
+		}
+		if event.TeamID != nil && !bounded(*event.TeamID, 256) {
+			return errors.New("work order timeline team is invalid")
 		}
 		if event.PolicyRevision != nil && !bounded(*event.PolicyRevision, 128) {
 			return errors.New("work order timeline policy revision is invalid")
@@ -261,16 +412,34 @@ func validateTimeline(events []TimelineEvent, currentStatus Status, version uint
 			return errors.New("work order timeline instant is invalid")
 		}
 		if index == 0 {
-			if event.Operation != OperationCreate || event.FromStatus != nil {
+			if event.Operation != OperationCreate || event.FromStatus != nil || event.ToStatus != StatusOpen {
 				return errors.New("work order timeline origin is invalid")
 			}
-		} else if event.FromStatus == nil || *event.FromStatus != previousStatus || event.Operation == OperationCreate {
-			return errors.New("work order timeline continuity is invalid")
+			projectedAssigneeID = cloneOptional(event.AssigneeID)
+			projectedTeamID = cloneOptional(event.TeamID)
+		} else {
+			if event.FromStatus == nil || *event.FromStatus != previousStatus || event.Operation == OperationCreate {
+				return errors.New("work order timeline continuity is invalid")
+			}
+			switch event.Operation {
+			case OperationAssign:
+				if event.ToStatus != *event.FromStatus || (event.AssigneeID == nil && event.TeamID == nil) {
+					return errors.New("work order assignment timeline is invalid")
+				}
+				projectedAssigneeID = cloneOptional(event.AssigneeID)
+				projectedTeamID = cloneOptional(event.TeamID)
+			case OperationUnassign:
+				if event.ToStatus != *event.FromStatus || event.AssigneeID != nil || event.TeamID != nil {
+					return errors.New("work order unassignment timeline is invalid")
+				}
+				projectedAssigneeID = nil
+				projectedTeamID = nil
+			}
 		}
 		previousStatus = event.ToStatus
 		previousAt = occurredAt
 	}
-	if previousStatus != currentStatus {
+	if previousStatus != currentStatus || !sameOptional(projectedAssigneeID, assigneeID) || !sameOptional(projectedTeamID, teamID) {
 		return errors.New("work order timeline does not converge with projection")
 	}
 	return nil
@@ -292,6 +461,87 @@ func validateSchedule(scheduledStart, dueAt *string) error {
 		}
 	}
 	return nil
+}
+
+func validateMutationSchedule(scheduledStart, dueAt *string, now time.Time) error {
+	if validateSchedule(scheduledStart, dueAt) != nil {
+		return ErrInvalidCreate
+	}
+	for _, value := range []*string{scheduledStart, dueAt} {
+		if value == nil {
+			continue
+		}
+		instant, _ := parseInstant(*value)
+		if instant.Before(now) || instant.After(now.Add(MaximumScheduleHorizon)) {
+			return ErrInvalidCreate
+		}
+	}
+	return nil
+}
+
+func normalizeOptional(value *string, maximum int) (*string, bool) {
+	if value == nil {
+		return nil, true
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" || len(trimmed) > maximum {
+		return nil, false
+	}
+	return &trimmed, true
+}
+
+func normalizeOptionalInstant(value *string) (*string, bool) {
+	if value == nil {
+		return nil, true
+	}
+	instant, err := parseInstant(strings.TrimSpace(*value))
+	if err != nil {
+		return nil, false
+	}
+	normalized := instant.UTC().Format(time.RFC3339Nano)
+	return &normalized, true
+}
+
+func cloneOptional(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func sameOptional(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func cloneWorkOrder(workOrder WorkOrder) WorkOrder {
+	result := workOrder
+	result.SourceReferences = append([]SourceReference(nil), workOrder.SourceReferences...)
+	result.CompletionEvidence = append([]EvidenceReference(nil), workOrder.CompletionEvidence...)
+	result.Timeline = append([]TimelineEvent(nil), workOrder.Timeline...)
+	result.AssigneeID = cloneOptional(workOrder.AssigneeID)
+	result.TeamID = cloneOptional(workOrder.TeamID)
+	result.ScheduledStart = cloneOptional(workOrder.ScheduledStart)
+	result.DueAt = cloneOptional(workOrder.DueAt)
+	for index := range result.Timeline {
+		result.Timeline[index].FromStatus = cloneStatus(result.Timeline[index].FromStatus)
+		result.Timeline[index].AssigneeID = cloneOptional(result.Timeline[index].AssigneeID)
+		result.Timeline[index].TeamID = cloneOptional(result.Timeline[index].TeamID)
+		result.Timeline[index].PolicyRevision = cloneOptional(result.Timeline[index].PolicyRevision)
+		result.Timeline[index].CorrelationID = cloneOptional(result.Timeline[index].CorrelationID)
+	}
+	return result
+}
+
+func cloneStatus(value *Status) *Status {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func parseInstant(value string) (time.Time, error) { return time.Parse(time.RFC3339Nano, value) }

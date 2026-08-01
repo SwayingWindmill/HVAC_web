@@ -45,6 +45,15 @@ const runGateProfileSetPlan = (gate, profileSet) => {
   return JSON.parse(result.stdout.trim());
 };
 
+const runChecker = (script) => {
+  const result = spawnSync(process.execPath, [script], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+};
+
 const runCapabilityPlan = (task) => {
   const result = spawnSync(process.execPath, [
     'scripts/run-capability-task.mjs',
@@ -126,6 +135,7 @@ test('migrated capability tasks preserve their public package entry points', () 
     's3:command-api',
     's3:thingsboard-contract',
     's3:command-ux',
+    's5:work-order:create-assign',
   ]);
   const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
   for (const task of Object.keys(capabilityTaskMatrix)) {
@@ -315,6 +325,27 @@ test('capability task CLI preserves command order for migrated aggregates', () =
     'npm run lint',
     'npm run build',
   ]);
+
+  assertCapabilityPlan('s5:work-order:create-assign', [
+    'npm run s5:work-order',
+    'npm run s5:work-order:read-canary:check',
+    'npm run s5:work-order:create-assign:check',
+    'node scripts/run-go.mjs test -count=1 ./libs/workorderauth/... ./libs/workordermodel/... ./libs/identitycontext/... ./libs/ownershipregistry/... ./services/iam-service/... ./services/platform-gateway/... ./services/work-order-service/...',
+    'node scripts/run-go.mjs vet ./libs/workorderauth/... ./libs/workordermodel/... ./libs/identitycontext/... ./libs/ownershipregistry/... ./services/iam-service/... ./services/platform-gateway/... ./services/work-order-service/...',
+    'node scripts/run-s5-work-order-postgres-tests.mjs',
+    'npm run s5:work-order:create-assign:browser',
+  ]);
+});
+
+test('S2 capability checkers resolve delegated aggregate commands', () => {
+  for (const checker of [
+    'scripts/check-s2-telemetry-baseline.mjs',
+    'scripts/check-s2-iam-authorization.mjs',
+    'scripts/check-s2-telemetry-runtime-snapshot.mjs',
+    'scripts/check-s2-telemetry-ingest.mjs',
+    'scripts/check-s2-gateway-snapshot.mjs',
+    'scripts/check-s2-realtime-backend.mjs',
+  ]) runChecker(checker);
 });
 
 test('PR gate resolution remains compatible with the previous Operations Agent plan', () => {

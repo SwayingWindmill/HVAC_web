@@ -5,22 +5,61 @@
     "version": "0.4.0",
     "description": "The public HTTP contract owned by platform-gateway. Gateway is the only browser-facing platform service."
   },
-  "servers": [{ "url": "/" }],
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
   "paths": {
     "/api/v1/health": {
       "get": {
         "operationId": "getHealth",
         "summary": "Read platform gateway health",
         "parameters": [
-          { "name": "includeBuild", "in": "query", "required": false, "schema": { "type": "boolean", "default": false } },
-          { "$ref": "#/components/parameters/RequestId" },
-          { "$ref": "#/components/parameters/Traceparent" }
+          {
+            "name": "includeBuild",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
         ],
         "responses": {
-          "200": { "description": "Gateway is serving requests.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthResponse" } } } },
-          "400": { "$ref": "#/components/responses/Problem" },
-          "405": { "$ref": "#/components/responses/Problem" },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Gateway is serving requests.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/Traceparent"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "405": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -28,11 +67,39 @@
       "get": {
         "operationId": "getVersion",
         "summary": "Read the running gateway build identity",
-        "parameters": [{ "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
         "responses": {
-          "200": { "description": "Build identity for the running gateway.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BuildInfo" } } } },
-          "405": { "$ref": "#/components/responses/Problem" },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Build identity for the running gateway.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/Traceparent"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuildInfo"
+                }
+              }
+            }
+          },
+          "405": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -40,14 +107,51 @@
       "get": {
         "operationId": "getPlatformStatus",
         "summary": "Read normalized platform status through the applied route owner",
-        "parameters": [{ "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
         "responses": {
-          "200": { "description": "Normalized status from the selected Go or Legacy implementation.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PlatformStatusResponse" } } } },
-          "401": { "$ref": "#/components/responses/Problem" },
-          "403": { "$ref": "#/components/responses/Problem" },
-          "503": { "$ref": "#/components/responses/Problem" },
-          "504": { "$ref": "#/components/responses/Problem" },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Normalized status from the selected Go or Legacy implementation.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/Traceparent"
+              },
+              "X-Route-Policy-Revision": {
+                "$ref": "#/components/headers/RoutePolicyRevision"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "504": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -56,16 +160,43 @@
         "operationId": "beginLogin",
         "summary": "Begin OIDC Authorization Code Flow with PKCE",
         "parameters": [
-          { "name": "returnTo", "in": "query", "required": false, "schema": { "type": "string", "default": "/system" } },
-          { "name": "login_hint", "in": "query", "required": false, "schema": { "type": "string" } },
-          { "$ref": "#/components/parameters/RequestId" },
-          { "$ref": "#/components/parameters/Traceparent" }
+          {
+            "name": "returnTo",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "/system"
+            }
+          },
+          {
+            "name": "login_hint",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
         ],
         "responses": {
-          "302": { "description": "Redirect to the configured OIDC provider." },
-          "400": { "$ref": "#/components/responses/Problem" },
-          "503": { "$ref": "#/components/responses/Problem" },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "302": {
+            "description": "Redirect to the configured OIDC provider."
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -74,17 +205,45 @@
         "operationId": "completeLogin",
         "summary": "Complete OIDC callback and create an opaque BFF Session",
         "parameters": [
-          { "name": "code", "in": "query", "required": true, "schema": { "type": "string" } },
-          { "name": "state", "in": "query", "required": true, "schema": { "type": "string" } },
-          { "$ref": "#/components/parameters/RequestId" },
-          { "$ref": "#/components/parameters/Traceparent" }
+          {
+            "name": "code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
         ],
         "responses": {
-          "302": { "description": "Secure BFF Session created and browser redirected to returnTo." },
-          "400": { "$ref": "#/components/responses/Problem" },
-          "401": { "$ref": "#/components/responses/Problem" },
-          "503": { "$ref": "#/components/responses/Problem" },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "302": {
+            "description": "Secure BFF Session created and browser redirected to returnTo."
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -92,13 +251,45 @@
       "get": {
         "operationId": "getCurrentPrincipal",
         "summary": "Read authenticated principal and actor chain through IAM",
-        "parameters": [{ "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
         "responses": {
-          "200": { "description": "Authenticated principal and session context.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CurrentPrincipalResponse" } } } },
-          "401": { "$ref": "#/components/responses/Problem" },
-          "403": { "$ref": "#/components/responses/Problem" },
-          "503": { "$ref": "#/components/responses/Problem" },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Authenticated principal and session context.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/Traceparent"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentPrincipalResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -106,12 +297,30 @@
       "post": {
         "operationId": "logout",
         "summary": "Revoke the current BFF Session",
-        "parameters": [{ "$ref": "#/components/parameters/CsrfToken" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
         "responses": {
-          "204": { "description": "Current session revoked." },
-          "401": { "$ref": "#/components/responses/Problem" },
-          "403": { "$ref": "#/components/responses/Problem" },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "204": {
+            "description": "Current session revoked."
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -120,18 +329,57 @@
         "operationId": "revokeSession",
         "summary": "Administratively revoke a BFF Session",
         "parameters": [
-          { "name": "sessionId", "in": "path", "required": true, "schema": { "type": "string", "minLength": 16, "maxLength": 128 } },
-          { "$ref": "#/components/parameters/CsrfToken" },
-          { "$ref": "#/components/parameters/RequestId" },
-          { "$ref": "#/components/parameters/Traceparent" }
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
         ],
         "responses": {
-          "200": { "description": "Session revoked and durable audit intent committed.", "headers": { "X-Audit-Message-ID": { "$ref": "#/components/headers/AuditMessageId" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SessionRevocationResponse" } } } },
-          "401": { "$ref": "#/components/responses/Problem" },
-          "403": { "$ref": "#/components/responses/Problem" },
-          "404": { "$ref": "#/components/responses/Problem" },
-          "503": { "$ref": "#/components/responses/Problem" },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Session revoked and durable audit intent committed.",
+            "headers": {
+              "X-Audit-Message-ID": {
+                "$ref": "#/components/headers/AuditMessageId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRevocationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -140,17 +388,49 @@
         "operationId": "getSessionAuditEvent",
         "summary": "Read one Organization-scoped durable Session audit record",
         "parameters": [
-          { "name": "messageId", "in": "path", "required": true, "schema": { "type": "string", "minLength": 16, "maxLength": 128 } },
-          { "$ref": "#/components/parameters/RequestId" },
-          { "$ref": "#/components/parameters/Traceparent" }
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
         ],
         "responses": {
-          "200": { "description": "Append-only audit record visible to the authenticated Organization.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuditRecord" } } } },
-          "401": { "$ref": "#/components/responses/Problem" },
-          "403": { "$ref": "#/components/responses/Problem" },
-          "404": { "$ref": "#/components/responses/Problem" },
-          "503": { "$ref": "#/components/responses/Problem" },
-          "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Append-only audit record visible to the authenticated Organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditRecord"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -158,10 +438,57 @@
       "get": {
         "operationId": "listOrganizations",
         "summary": "List Organizations visible to the current Principal",
-        "parameters": [{ "$ref": "#/components/parameters/PageLimit" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PageLimit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
         "responses": {
-          "200": { "description": "Authorized Organization page.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrganizationCollection" } } } },
-          "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Authorized Organization page.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/Traceparent"
+              },
+              "X-Route-Policy-Revision": {
+                "$ref": "#/components/headers/RoutePolicyRevision"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationCollection"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "504": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -169,10 +496,54 @@
       "get": {
         "operationId": "getOrganization",
         "summary": "Read one visible Organization",
-        "parameters": [{ "$ref": "#/components/parameters/OrganizationId" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OrganizationId"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
         "responses": {
-          "200": { "description": "Visible Organization.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Organization" } } } },
-          "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Visible Organization.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/Traceparent"
+              },
+              "X-Route-Policy-Revision": {
+                "$ref": "#/components/headers/RoutePolicyRevision"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Organization"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "504": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -180,10 +551,63 @@
       "get": {
         "operationId": "listOrganizationSites",
         "summary": "List visible Sites under an Organization target",
-        "parameters": [{ "$ref": "#/components/parameters/OrganizationId" }, { "$ref": "#/components/parameters/PageLimit" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OrganizationId"
+          },
+          {
+            "$ref": "#/components/parameters/PageLimit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
         "responses": {
-          "200": { "description": "Authorized Site page.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteCollection" } } } },
-          "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Authorized Site page.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/Traceparent"
+              },
+              "X-Route-Policy-Revision": {
+                "$ref": "#/components/headers/RoutePolicyRevision"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteCollection"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "504": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -191,10 +615,54 @@
       "get": {
         "operationId": "getSite",
         "summary": "Read one visible Site",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SiteId"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
         "responses": {
-          "200": { "description": "Visible Site.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Site" } } } },
-          "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Visible Site.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/Traceparent"
+              },
+              "X-Route-Policy-Revision": {
+                "$ref": "#/components/headers/RoutePolicyRevision"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Site"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "504": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -202,10 +670,63 @@
       "get": {
         "operationId": "listSiteEquipment",
         "summary": "List visible Equipment at a Site",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/PageLimit" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SiteId"
+          },
+          {
+            "$ref": "#/components/parameters/PageLimit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
         "responses": {
-          "200": { "description": "Authorized Equipment page.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EquipmentCollection" } } } },
-          "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Authorized Equipment page.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/Traceparent"
+              },
+              "X-Route-Policy-Revision": {
+                "$ref": "#/components/headers/RoutePolicyRevision"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EquipmentCollection"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "504": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -213,10 +734,54 @@
       "get": {
         "operationId": "getEquipment",
         "summary": "Read one visible Equipment resource",
-        "parameters": [{ "$ref": "#/components/parameters/EquipmentId" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/EquipmentId"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
         "responses": {
-          "200": { "description": "Visible Equipment.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Equipment" } } } },
-          "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Visible Equipment.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/Traceparent"
+              },
+              "X-Route-Policy-Revision": {
+                "$ref": "#/components/headers/RoutePolicyRevision"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Equipment"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "504": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -224,10 +789,63 @@
       "get": {
         "operationId": "listSiteDevices",
         "summary": "List visible Devices at a Site",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/PageLimit" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SiteId"
+          },
+          {
+            "$ref": "#/components/parameters/PageLimit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
         "responses": {
-          "200": { "description": "Authorized Device page.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceCollection" } } } },
-          "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Authorized Device page.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/Traceparent"
+              },
+              "X-Route-Policy-Revision": {
+                "$ref": "#/components/headers/RoutePolicyRevision"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceCollection"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "504": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -235,10 +853,63 @@
       "get": {
         "operationId": "listSiteDeviceBindings",
         "summary": "List visible Device-to-Equipment bindings at a Site",
-        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/PageLimit" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SiteId"
+          },
+          {
+            "$ref": "#/components/parameters/PageLimit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
         "responses": {
-          "200": { "description": "Authorized DeviceBinding page.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceBindingCollection" } } } },
-          "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Authorized DeviceBinding page.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/Traceparent"
+              },
+              "X-Route-Policy-Revision": {
+                "$ref": "#/components/headers/RoutePolicyRevision"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceBindingCollection"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "504": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     },
@@ -246,65 +917,1240 @@
       "get": {
         "operationId": "getDevice",
         "summary": "Read one visible Device resource",
-        "parameters": [{ "$ref": "#/components/parameters/DeviceId" }, { "$ref": "#/components/parameters/RequestId" }, { "$ref": "#/components/parameters/Traceparent" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DeviceId"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
         "responses": {
-          "200": { "description": "Visible Device.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" }, "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Device" } } } },
-          "401": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }, "504": { "$ref": "#/components/responses/Problem" }, "default": { "$ref": "#/components/responses/Problem" }
+          "200": {
+            "description": "Visible Device.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/Traceparent"
+              },
+              "X-Route-Policy-Revision": {
+                "$ref": "#/components/headers/RoutePolicyRevision"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Device"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "504": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
         }
       }
     }
   },
   "components": {
     "parameters": {
-      "RequestId": { "name": "X-Request-ID", "in": "header", "required": false, "description": "Caller-provided correlation identifier. Invalid values are replaced at the edge.", "schema": { "type": "string", "minLength": 1, "maxLength": 128 } },
-      "Traceparent": { "name": "traceparent", "in": "header", "required": false, "description": "W3C Trace Context. Invalid values start a new trace.", "schema": { "type": "string" } },
-      "CsrfToken": { "name": "X-CSRF-Token", "in": "header", "required": true, "description": "Session-bound CSRF token returned by the current-principal resource.", "schema": { "type": "string", "minLength": 16, "maxLength": 128 } },
-      "OrganizationId": { "name": "organizationId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
-      "SiteId": { "name": "siteId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
-      "EquipmentId": { "name": "equipmentId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
-      "DeviceId": { "name": "deviceId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
-      "PageLimit": { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } },
-      "Cursor": { "name": "cursor", "in": "query", "required": false, "description": "Opaque integrity-protected keyset cursor. Authorization is re-evaluated for every page.", "schema": { "$ref": "#/components/schemas/OpaqueCursor" } }
+      "RequestId": {
+        "name": "X-Request-ID",
+        "in": "header",
+        "required": false,
+        "description": "Caller-provided correlation identifier. Invalid values are replaced at the edge.",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "Traceparent": {
+        "name": "traceparent",
+        "in": "header",
+        "required": false,
+        "description": "W3C Trace Context. Invalid values start a new trace.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "CsrfToken": {
+        "name": "X-CSRF-Token",
+        "in": "header",
+        "required": true,
+        "description": "Session-bound CSRF token returned by the current-principal resource.",
+        "schema": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 128
+        }
+      },
+      "OrganizationId": {
+        "name": "organizationId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/UUIDv7"
+        }
+      },
+      "SiteId": {
+        "name": "siteId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/UUIDv7"
+        }
+      },
+      "EquipmentId": {
+        "name": "equipmentId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/UUIDv7"
+        }
+      },
+      "DeviceId": {
+        "name": "deviceId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/UUIDv7"
+        }
+      },
+      "PageLimit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "default": 50
+        }
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Opaque integrity-protected keyset cursor. Authorization is re-evaluated for every page.",
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueCursor"
+        }
+      }
     },
     "headers": {
-      "RequestId": { "description": "Request correlation identifier selected by Gateway.", "schema": { "type": "string" } },
-      "Traceparent": { "description": "W3C trace context for the Gateway span.", "schema": { "type": "string" } },
-      "RoutePolicyRevision": { "description": "Applied Route Ownership Registry revision.", "schema": { "type": "integer", "minimum": 1 } },
-      "AuditMessageId": { "description": "Stable message ID committed with Session state, Audit Intent and Outbox.", "schema": { "type": "string" } }
+      "RequestId": {
+        "description": "Request correlation identifier selected by Gateway.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Traceparent": {
+        "description": "W3C trace context for the Gateway span.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "RoutePolicyRevision": {
+        "description": "Applied Route Ownership Registry revision.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "AuditMessageId": {
+        "description": "Stable message ID committed with Session state, Audit Intent and Outbox.",
+        "schema": {
+          "type": "string"
+        }
+      }
     },
     "responses": {
-      "Problem": { "description": "Stable public error representation.", "headers": { "X-Request-ID": { "$ref": "#/components/headers/RequestId" }, "traceparent": { "$ref": "#/components/headers/Traceparent" } }, "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/ProblemDetails" } } } }
+      "Problem": {
+        "description": "Stable public error representation.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "traceparent": {
+            "$ref": "#/components/headers/Traceparent"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProblemDetails"
+            }
+          }
+        }
+      }
     },
     "schemas": {
-      "BuildInfo": { "type": "object", "additionalProperties": false, "required": ["service", "version", "commit", "builtAt"], "properties": { "service": { "type": "string", "const": "platform-gateway" }, "version": { "type": "string" }, "commit": { "type": "string" }, "builtAt": { "type": "string" } } },
-      "HealthResponse": { "type": "object", "additionalProperties": false, "required": ["status", "service", "checkedAt"], "properties": { "status": { "type": "string", "const": "ok" }, "service": { "type": "string", "const": "platform-gateway" }, "checkedAt": { "type": "string", "format": "date-time" }, "build": { "$ref": "#/components/schemas/BuildInfo" } } },
-      "PlatformStatusResponse": { "type": "object", "additionalProperties": false, "required": ["status", "service", "implementation", "version", "checkedAt", "routePolicyRevision", "routeRevision", "compatibilityMode"], "properties": { "status": { "type": "string", "enum": ["ok", "degraded"] }, "service": { "type": "string", "const": "platform-status" }, "implementation": { "type": "string", "enum": ["go"] }, "version": { "type": "string" }, "checkedAt": { "type": "string", "format": "date-time" }, "routePolicyRevision": { "type": "integer", "minimum": 1 }, "routeRevision": { "type": "integer", "minimum": 1 }, "compatibilityMode": { "type": "string", "enum": ["native"] } } },
-      "UserPrincipal": { "type": "object", "description": "Authenticated user identity. Roles are descriptive display and audit context only; browser authorization uses EffectiveAuthorization.capabilities.", "additionalProperties": false, "required": ["subject", "issuer", "displayName", "email", "roles"], "properties": { "subject": { "type": "string" }, "issuer": { "type": "string", "format": "uri" }, "displayName": { "type": "string" }, "email": { "type": "string" }, "roles": { "type": "array", "description": "Descriptive role labels retained for display and audit. The SPA must not interpret these values as permissions.", "items": { "type": "string" } } } },
-      "ServicePrincipal": { "type": "object", "additionalProperties": false, "required": ["service", "spiffeId"], "properties": { "service": { "type": "string", "const": "platform-gateway" }, "spiffeId": { "type": "string", "pattern": "^spiffe://" } } },
-      "PrincipalContext": { "type": "object", "additionalProperties": false, "required": ["initiatingPrincipal", "executingServicePrincipal", "actingOrganizationId", "audience", "policyRevision", "delegationExpiresAt"], "properties": { "initiatingPrincipal": { "$ref": "#/components/schemas/UserPrincipal" }, "executingServicePrincipal": { "$ref": "#/components/schemas/ServicePrincipal" }, "actingOrganizationId": { "type": "string" }, "audience": { "type": "string", "const": "iam-service" }, "policyRevision": { "type": "string" }, "delegationExpiresAt": { "type": "string", "format": "date-time" } } },
-      "Capability": { "type": "string", "description": "Version 4 IAM-authored browser capability identifier.", "enum": ["organization.list", "organization.read", "site.list", "site.read", "equipment.list", "equipment.read", "device.list", "device.read", "telemetry.snapshot.read", "telemetry.batch.read", "telemetry.subscribe", "telemetry.history.read", "alarm.list", "alarm.read", "work-order.list", "work-order.read"] },
-      "EffectiveAuthorization": { "type": "object", "description": "IAM-authored effective authorization for the current Principal and acting Organization. Platform Gateway transports this value without deriving permissions from roles. Version 4 adds high-level Work Order list and detail capabilities; exact Site, Alarm, and Work Order authorization remains server-side for every request.", "additionalProperties": false, "required": ["capabilitySetVersion", "policyRevision", "capabilities"], "properties": { "capabilitySetVersion": { "type": "integer", "const": 4 }, "policyRevision": { "type": "string", "minLength": 1, "maxLength": 128 }, "capabilities": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/components/schemas/Capability" } } } },
-      "SessionView": { "type": "object", "additionalProperties": false, "required": ["id", "expiresAt", "csrfToken", "revocationObjectiveMs", "lastAuditMessageId"], "properties": { "id": { "type": "string" }, "expiresAt": { "type": "string", "format": "date-time" }, "csrfToken": { "type": "string" }, "revocationObjectiveMs": { "type": "integer", "minimum": 0 }, "lastAuditMessageId": { "type": "string" } } },
-      "CurrentPrincipalResponse": { "type": "object", "additionalProperties": false, "required": ["principal", "context", "authorization", "session"], "properties": { "principal": { "$ref": "#/components/schemas/UserPrincipal" }, "context": { "$ref": "#/components/schemas/PrincipalContext" }, "authorization": { "$ref": "#/components/schemas/EffectiveAuthorization" }, "session": { "$ref": "#/components/schemas/SessionView" } } },
-      "SessionRevocationResponse": { "type": "object", "additionalProperties": false, "required": ["sessionId", "revokedAt", "objectiveMs", "auditMessageId"], "properties": { "sessionId": { "type": "string" }, "revokedAt": { "type": "string", "format": "date-time" }, "objectiveMs": { "type": "integer", "minimum": 0 }, "auditMessageId": { "type": "string" } } },
-      "AuditRecord": { "type": "object", "additionalProperties": false, "required": ["ledgerSequence", "messageId", "schemaVersion", "organizationId", "aggregateType", "aggregateId", "aggregateVersion", "occurredAt", "initiatingSubject", "initiatingIssuer", "executingService", "executingSpiffeId", "actingOrganizationId", "action", "result", "policyRevision", "correlationId", "causationId", "traceId", "payloadSha256", "previousRecordHash", "recordHash", "recordedAt"], "properties": { "ledgerSequence": { "type": "integer", "minimum": 1 }, "messageId": { "type": "string" }, "schemaVersion": { "type": "integer", "const": 1 }, "organizationId": { "type": "string" }, "aggregateType": { "type": "string", "const": "bff-session" }, "aggregateId": { "type": "string" }, "aggregateVersion": { "type": "integer", "minimum": 1 }, "occurredAt": { "type": "string", "format": "date-time" }, "initiatingSubject": { "type": "string" }, "initiatingIssuer": { "type": "string", "format": "uri" }, "executingService": { "type": "string", "const": "platform-gateway" }, "executingSpiffeId": { "type": "string", "pattern": "^spiffe://" }, "actingOrganizationId": { "type": "string" }, "action": { "type": "string" }, "result": { "type": "string" }, "policyRevision": { "type": "string" }, "correlationId": { "type": "string" }, "causationId": { "type": "string" }, "traceId": { "type": "string", "pattern": "^[a-f0-9]{32}$" }, "payloadSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "previousRecordHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "recordHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "recordedAt": { "type": "string", "format": "date-time" } } },
-      "UUIDv7": { "type": "string", "format": "uuid", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
-      "Revision": { "type": "integer", "format": "int64", "minimum": 1 },
-      "Instant": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$" },
-      "OpaqueCursor": { "type": "string", "minLength": 16, "maxLength": 4096, "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$" },
-      "Organization": { "type": "object", "additionalProperties": false, "required": ["id", "code", "displayName", "status", "revision", "createdAt", "updatedAt"], "properties": { "id": { "$ref": "#/components/schemas/UUIDv7" }, "code": { "type": "string", "minLength": 1, "maxLength": 128 }, "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }, "status": { "type": "string", "enum": ["ACTIVE", "SUSPENDED", "RETIRED"] }, "revision": { "$ref": "#/components/schemas/Revision" }, "createdAt": { "$ref": "#/components/schemas/Instant" }, "updatedAt": { "$ref": "#/components/schemas/Instant" } } },
-      "Site": { "type": "object", "additionalProperties": false, "required": ["id", "owningOrganizationId", "code", "displayName", "timezone", "status", "revision", "createdAt", "updatedAt"], "properties": { "id": { "$ref": "#/components/schemas/UUIDv7" }, "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" }, "code": { "type": "string", "minLength": 1, "maxLength": 128 }, "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }, "timezone": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^(?:UTC|[A-Za-z_+-]+(?:/[A-Za-z0-9_+.-]+)+)$" }, "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] }, "revision": { "$ref": "#/components/schemas/Revision" }, "createdAt": { "$ref": "#/components/schemas/Instant" }, "updatedAt": { "$ref": "#/components/schemas/Instant" } } },
-      "Equipment": { "type": "object", "additionalProperties": false, "required": ["id", "owningOrganizationId", "siteId", "code", "displayName", "equipmentType", "status", "revision", "createdAt", "updatedAt"], "properties": { "id": { "$ref": "#/components/schemas/UUIDv7" }, "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" }, "siteId": { "$ref": "#/components/schemas/UUIDv7" }, "code": { "type": "string", "minLength": 1, "maxLength": 128 }, "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }, "equipmentType": { "type": "string", "minLength": 1, "maxLength": 128 }, "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] }, "revision": { "$ref": "#/components/schemas/Revision" }, "createdAt": { "$ref": "#/components/schemas/Instant" }, "updatedAt": { "$ref": "#/components/schemas/Instant" } } },
-      "Device": { "type": "object", "additionalProperties": false, "required": ["id", "owningOrganizationId", "siteId", "code", "displayName", "deviceType", "status", "revision", "createdAt", "updatedAt"], "properties": { "id": { "$ref": "#/components/schemas/UUIDv7" }, "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" }, "siteId": { "$ref": "#/components/schemas/UUIDv7" }, "code": { "type": "string", "minLength": 1, "maxLength": 128 }, "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }, "deviceType": { "type": "string", "minLength": 1, "maxLength": 128 }, "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] }, "revision": { "$ref": "#/components/schemas/Revision" }, "createdAt": { "$ref": "#/components/schemas/Instant" }, "updatedAt": { "$ref": "#/components/schemas/Instant" } } },
-      "DeviceBinding": { "type": "object", "additionalProperties": false, "required": ["id", "owningOrganizationId", "siteId", "deviceId", "equipmentId", "bindingRole", "status", "validFrom", "revision", "createdAt", "updatedAt"], "properties": { "id": { "$ref": "#/components/schemas/UUIDv7" }, "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" }, "siteId": { "$ref": "#/components/schemas/UUIDv7" }, "deviceId": { "$ref": "#/components/schemas/UUIDv7" }, "equipmentId": { "$ref": "#/components/schemas/UUIDv7" }, "bindingRole": { "type": "string", "minLength": 1, "maxLength": 128 }, "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] }, "validFrom": { "$ref": "#/components/schemas/Instant" }, "validTo": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] }, "revision": { "$ref": "#/components/schemas/Revision" }, "createdAt": { "$ref": "#/components/schemas/Instant" }, "updatedAt": { "$ref": "#/components/schemas/Instant" } } },
-      "ExternalBinding": { "type": "object", "additionalProperties": false, "required": ["id", "owningOrganizationId", "siteId", "integrationInstanceId", "provider", "externalEntityType", "externalId", "bindingStatus", "validFrom", "revision", "createdAt", "updatedAt"], "properties": { "id": { "$ref": "#/components/schemas/UUIDv7" }, "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" }, "siteId": { "$ref": "#/components/schemas/UUIDv7" }, "integrationInstanceId": { "$ref": "#/components/schemas/UUIDv7" }, "provider": { "type": "string", "minLength": 1, "maxLength": 128 }, "externalEntityType": { "type": "string", "minLength": 1, "maxLength": 128 }, "externalId": { "type": "string", "minLength": 1, "maxLength": 512 }, "bindingStatus": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] }, "validFrom": { "$ref": "#/components/schemas/Instant" }, "validTo": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] }, "revision": { "$ref": "#/components/schemas/Revision" }, "createdAt": { "$ref": "#/components/schemas/Instant" }, "updatedAt": { "$ref": "#/components/schemas/Instant" } } },
-      "OrganizationCollection": { "type": "object", "additionalProperties": false, "required": ["items", "nextCursor", "hasMore"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Organization" } }, "nextCursor": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueCursor" }, { "type": "null" }] }, "hasMore": { "type": "boolean" } } },
-      "SiteCollection": { "type": "object", "additionalProperties": false, "required": ["items", "nextCursor", "hasMore"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Site" } }, "nextCursor": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueCursor" }, { "type": "null" }] }, "hasMore": { "type": "boolean" } } },
-      "EquipmentCollection": { "type": "object", "additionalProperties": false, "required": ["items", "nextCursor", "hasMore"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Equipment" } }, "nextCursor": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueCursor" }, { "type": "null" }] }, "hasMore": { "type": "boolean" } } },
-      "DeviceCollection": { "type": "object", "additionalProperties": false, "required": ["items", "nextCursor", "hasMore"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Device" } }, "nextCursor": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueCursor" }, { "type": "null" }] }, "hasMore": { "type": "boolean" } } },
-      "DeviceBindingCollection": { "type": "object", "additionalProperties": false, "required": ["items", "nextCursor", "hasMore"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/DeviceBinding" } }, "nextCursor": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueCursor" }, { "type": "null" }] }, "hasMore": { "type": "boolean" } } },
-      "FieldError": { "type": "object", "additionalProperties": false, "required": ["field", "message"], "properties": { "field": { "type": "string" }, "message": { "type": "string" } } },
-      "ProblemDetails": { "type": "object", "additionalProperties": false, "required": ["type", "title", "status", "detail", "instance", "code", "traceId", "retryable"], "properties": { "type": { "type": "string", "format": "uri-reference" }, "title": { "type": "string" }, "status": { "type": "integer", "minimum": 400, "maximum": 599 }, "detail": { "type": "string" }, "instance": { "type": "string" }, "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]+$", "x-stable-codes": ["RESOURCE_NOT_FOUND", "CURSOR_INVALID", "REGISTRY_UNAVAILABLE", "REGISTRY_TIMEOUT", "MAPPING_INVALID", "MAPPING_QUARANTINED"] }, "traceId": { "type": "string", "pattern": "^[a-f0-9]{32}$" }, "retryable": { "type": "boolean" }, "fieldErrors": { "type": "array", "items": { "$ref": "#/components/schemas/FieldError" } } } }
+      "BuildInfo": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "service",
+          "version",
+          "commit",
+          "builtAt"
+        ],
+        "properties": {
+          "service": {
+            "type": "string",
+            "const": "platform-gateway"
+          },
+          "version": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "builtAt": {
+            "type": "string"
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "service",
+          "checkedAt"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok"
+          },
+          "service": {
+            "type": "string",
+            "const": "platform-gateway"
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "build": {
+            "$ref": "#/components/schemas/BuildInfo"
+          }
+        }
+      },
+      "PlatformStatusResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "service",
+          "implementation",
+          "version",
+          "checkedAt",
+          "routePolicyRevision",
+          "routeRevision",
+          "compatibilityMode"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded"
+            ]
+          },
+          "service": {
+            "type": "string",
+            "const": "platform-status"
+          },
+          "implementation": {
+            "type": "string",
+            "enum": [
+              "go"
+            ]
+          },
+          "version": {
+            "type": "string"
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "routePolicyRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "routeRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "compatibilityMode": {
+            "type": "string",
+            "enum": [
+              "native"
+            ]
+          }
+        }
+      },
+      "UserPrincipal": {
+        "type": "object",
+        "description": "Authenticated user identity. Roles are descriptive display and audit context only; browser authorization uses EffectiveAuthorization.capabilities.",
+        "additionalProperties": false,
+        "required": [
+          "subject",
+          "issuer",
+          "displayName",
+          "email",
+          "roles"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string",
+            "format": "uri"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "roles": {
+            "type": "array",
+            "description": "Descriptive role labels retained for display and audit. The SPA must not interpret these values as permissions.",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ServicePrincipal": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "service",
+          "spiffeId"
+        ],
+        "properties": {
+          "service": {
+            "type": "string",
+            "const": "platform-gateway"
+          },
+          "spiffeId": {
+            "type": "string",
+            "pattern": "^spiffe://"
+          }
+        }
+      },
+      "PrincipalContext": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "initiatingPrincipal",
+          "executingServicePrincipal",
+          "actingOrganizationId",
+          "audience",
+          "policyRevision",
+          "delegationExpiresAt"
+        ],
+        "properties": {
+          "initiatingPrincipal": {
+            "$ref": "#/components/schemas/UserPrincipal"
+          },
+          "executingServicePrincipal": {
+            "$ref": "#/components/schemas/ServicePrincipal"
+          },
+          "actingOrganizationId": {
+            "type": "string"
+          },
+          "audience": {
+            "type": "string",
+            "const": "iam-service"
+          },
+          "policyRevision": {
+            "type": "string"
+          },
+          "delegationExpiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Capability": {
+        "type": "string",
+        "description": "Version 5 IAM-authored browser capability identifier.",
+        "enum": [
+          "organization.list",
+          "organization.read",
+          "site.list",
+          "site.read",
+          "equipment.list",
+          "equipment.read",
+          "device.list",
+          "device.read",
+          "telemetry.snapshot.read",
+          "telemetry.batch.read",
+          "telemetry.subscribe",
+          "telemetry.history.read",
+          "alarm.list",
+          "alarm.read",
+          "work-order.list",
+          "work-order.read",
+          "work-order.create",
+          "work-order.assign"
+        ]
+      },
+      "EffectiveAuthorization": {
+        "type": "object",
+        "description": "IAM-authored effective authorization for the current Principal and acting Organization. Platform Gateway transports this value without deriving permissions from roles. Version 5 adds governed Work Order create and assignment capabilities; exact Site and Work Order authorization remains server-side for every request.",
+        "additionalProperties": false,
+        "required": [
+          "capabilitySetVersion",
+          "policyRevision",
+          "capabilities"
+        ],
+        "properties": {
+          "capabilitySetVersion": {
+            "type": "integer",
+            "const": 5
+          },
+          "policyRevision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "capabilities": {
+            "type": "array",
+            "maxItems": 18,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/Capability"
+            }
+          }
+        }
+      },
+      "SessionView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "expiresAt",
+          "csrfToken",
+          "revocationObjectiveMs",
+          "lastAuditMessageId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "csrfToken": {
+            "type": "string"
+          },
+          "revocationObjectiveMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastAuditMessageId": {
+            "type": "string"
+          }
+        }
+      },
+      "CurrentPrincipalResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "principal",
+          "context",
+          "authorization",
+          "session"
+        ],
+        "properties": {
+          "principal": {
+            "$ref": "#/components/schemas/UserPrincipal"
+          },
+          "context": {
+            "$ref": "#/components/schemas/PrincipalContext"
+          },
+          "authorization": {
+            "$ref": "#/components/schemas/EffectiveAuthorization"
+          },
+          "session": {
+            "$ref": "#/components/schemas/SessionView"
+          }
+        }
+      },
+      "SessionRevocationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sessionId",
+          "revokedAt",
+          "objectiveMs",
+          "auditMessageId"
+        ],
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "revokedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "objectiveMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "auditMessageId": {
+            "type": "string"
+          }
+        }
+      },
+      "AuditRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ledgerSequence",
+          "messageId",
+          "schemaVersion",
+          "organizationId",
+          "aggregateType",
+          "aggregateId",
+          "aggregateVersion",
+          "occurredAt",
+          "initiatingSubject",
+          "initiatingIssuer",
+          "executingService",
+          "executingSpiffeId",
+          "actingOrganizationId",
+          "action",
+          "result",
+          "policyRevision",
+          "correlationId",
+          "causationId",
+          "traceId",
+          "payloadSha256",
+          "previousRecordHash",
+          "recordHash",
+          "recordedAt"
+        ],
+        "properties": {
+          "ledgerSequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "messageId": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "type": "integer",
+            "const": 1
+          },
+          "organizationId": {
+            "type": "string"
+          },
+          "aggregateType": {
+            "type": "string",
+            "const": "bff-session"
+          },
+          "aggregateId": {
+            "type": "string"
+          },
+          "aggregateVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "initiatingSubject": {
+            "type": "string"
+          },
+          "initiatingIssuer": {
+            "type": "string",
+            "format": "uri"
+          },
+          "executingService": {
+            "type": "string",
+            "const": "platform-gateway"
+          },
+          "executingSpiffeId": {
+            "type": "string",
+            "pattern": "^spiffe://"
+          },
+          "actingOrganizationId": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          },
+          "policyRevision": {
+            "type": "string"
+          },
+          "correlationId": {
+            "type": "string"
+          },
+          "causationId": {
+            "type": "string"
+          },
+          "traceId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{32}$"
+          },
+          "payloadSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "previousRecordHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "recordHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "recordedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UUIDv7": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+      },
+      "Revision": {
+        "type": "integer",
+        "format": "int64",
+        "minimum": 1
+      },
+      "Instant": {
+        "type": "string",
+        "format": "date-time",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+      },
+      "OpaqueCursor": {
+        "type": "string",
+        "minLength": 16,
+        "maxLength": 4096,
+        "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+      },
+      "Organization": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "code",
+          "displayName",
+          "status",
+          "revision",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "SUSPENDED",
+              "RETIRED"
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Instant"
+          }
+        }
+      },
+      "Site": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "owningOrganizationId",
+          "code",
+          "displayName",
+          "timezone",
+          "status",
+          "revision",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "owningOrganizationId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 128,
+            "pattern": "^(?:UTC|[A-Za-z_+-]+(?:/[A-Za-z0-9_+.-]+)+)$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE",
+              "RETIRED"
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Instant"
+          }
+        }
+      },
+      "Equipment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "owningOrganizationId",
+          "siteId",
+          "code",
+          "displayName",
+          "equipmentType",
+          "status",
+          "revision",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "owningOrganizationId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "equipmentType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE",
+              "RETIRED"
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Instant"
+          }
+        }
+      },
+      "Device": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "owningOrganizationId",
+          "siteId",
+          "code",
+          "displayName",
+          "deviceType",
+          "status",
+          "revision",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "owningOrganizationId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "deviceType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE",
+              "RETIRED"
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Instant"
+          }
+        }
+      },
+      "DeviceBinding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "owningOrganizationId",
+          "siteId",
+          "deviceId",
+          "equipmentId",
+          "bindingRole",
+          "status",
+          "validFrom",
+          "revision",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "owningOrganizationId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "deviceId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "equipmentId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "bindingRole": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE",
+              "RETIRED"
+            ]
+          },
+          "validFrom": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "validTo": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Instant"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Instant"
+          }
+        }
+      },
+      "ExternalBinding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "owningOrganizationId",
+          "siteId",
+          "integrationInstanceId",
+          "provider",
+          "externalEntityType",
+          "externalId",
+          "bindingStatus",
+          "validFrom",
+          "revision",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "owningOrganizationId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "integrationInstanceId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "externalEntityType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "externalId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "bindingStatus": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "INACTIVE",
+              "RETIRED"
+            ]
+          },
+          "validFrom": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "validTo": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Instant"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Instant"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Instant"
+          }
+        }
+      },
+      "OrganizationCollection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "nextCursor",
+          "hasMore"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Organization"
+            }
+          },
+          "nextCursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hasMore": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SiteCollection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "nextCursor",
+          "hasMore"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Site"
+            }
+          },
+          "nextCursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hasMore": {
+            "type": "boolean"
+          }
+        }
+      },
+      "EquipmentCollection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "nextCursor",
+          "hasMore"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Equipment"
+            }
+          },
+          "nextCursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hasMore": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DeviceCollection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "nextCursor",
+          "hasMore"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Device"
+            }
+          },
+          "nextCursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hasMore": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DeviceBindingCollection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "nextCursor",
+          "hasMore"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeviceBinding"
+            }
+          },
+          "nextCursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hasMore": {
+            "type": "boolean"
+          }
+        }
+      },
+      "FieldError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "field",
+          "message"
+        ],
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "instance",
+          "code",
+          "traceId",
+          "retryable"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri-reference"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 599
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]+$",
+            "x-stable-codes": [
+              "RESOURCE_NOT_FOUND",
+              "CURSOR_INVALID",
+              "REGISTRY_UNAVAILABLE",
+              "REGISTRY_TIMEOUT",
+              "MAPPING_INVALID",
+              "MAPPING_QUARANTINED"
+            ]
+          },
+          "traceId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{32}$"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "fieldErrors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldError"
+            }
+          }
+        }
+      }
     }
   }
 }

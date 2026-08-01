@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { resolveCapabilityTask } from './domain-task-matrix.mjs';
 
 const root = resolve(process.cwd());
 const outputRoot = resolve(root, 'out/s2-gateway-snapshot');
@@ -13,6 +14,22 @@ function assert(condition, message) {
 function includesAll(source, markers, label) {
   for (const marker of markers) assert(source.includes(marker), `${label} is missing ${marker}`);
 }
+
+const aggregateCommandLabels = (task) => {
+  const packageCommand = packageJSON.scripts?.[task];
+  const taskMatch = packageCommand?.match(/^node scripts\/run-capability-task\.mjs --task=([^\s]+)$/u);
+  if (taskMatch) {
+    if (taskMatch[1] !== task) return [];
+    try {
+      return resolveCapabilityTask(task).map(({ label }) => label);
+    } catch {
+      return [];
+    }
+  }
+  return typeof packageCommand === 'string'
+    ? packageCommand.split(/\s*&&\s*/u).map((command) => command.trim()).filter(Boolean)
+    : [];
+};
 
 const [
   openapi,
@@ -139,9 +156,9 @@ for (const route of selectedRoutes) {
 
 assert(packageJSON.scripts?.['s2:gateway:check'] === 'node scripts/check-s2-gateway-snapshot.mjs', 's2:gateway:check is not wired');
 assert(packageJSON.scripts?.['s2:gateway:browser'] === 'node scripts/run-s2-gateway-browser-audit.mjs', 's2:gateway:browser is not wired');
-const ticketCommand = packageJSON.scripts?.['s2:gateway-snapshot'] ?? '';
+const ticketCommands = aggregateCommandLabels('s2:gateway-snapshot');
 for (const command of ['s2:gateway:check', 's2:contracts:check', 'test:gateway', 'build:gateway', 'lint', 'build', 's2:gateway:browser']) {
-  assert(ticketCommand.includes(command), `s2:gateway-snapshot is missing ${command}`);
+  assert(ticketCommands.some((label) => label.includes(command)), `s2:gateway-snapshot is missing ${command}`);
 }
 includesAll(workflow, ['runs-on: ubuntu-24.04', 'go-version: "1.25.12"', 'node-version: "22.22.0"', 'npm run s2:gateway-snapshot', 's2-gateway-snapshot-evidence'], 'Ticket 05 workflow');
 for (const heading of ['## Reuse-first decision', '## Public request boundary', '## Authorization and mTLS chain', '## Error and nondiscovery semantics', '## Rollout boundary', '## Out of scope']) {

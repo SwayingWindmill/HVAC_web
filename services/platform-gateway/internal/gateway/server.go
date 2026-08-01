@@ -178,7 +178,7 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		h.authorizeOperationsTool(writer, request)
 		return
 	}
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Work-Order-Read-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant"} {
+	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Work-Order-Read-Context", "X-Work-Order-Write-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant"} {
 		if request.Header.Get(header) == "" {
 			continue
 		}

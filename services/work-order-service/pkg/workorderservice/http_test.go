@@ -45,6 +45,16 @@ func (store *fakeStore) Get(context.Context, string, string, string) (workorderm
 	return store.item, nil
 }
 
+func (store *fakeStore) Create(context.Context, string, string, CreateMutation) (MutationResult, error) {
+	store.calls.Add(1)
+	return MutationResult{WorkOrder: store.item}, nil
+}
+
+func (store *fakeStore) Assign(context.Context, string, string, string, AssignmentMutation) (MutationResult, error) {
+	store.calls.Add(1)
+	return MutationResult{WorkOrder: store.item}, nil
+}
+
 func TestWorkOrderHTTPListAndDetail(t *testing.T) {
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	signer := newSigner(t)
@@ -143,11 +153,11 @@ func TestWorkOrderHTTPRejectsInvalidBoundary(t *testing.T) {
 		}
 	}
 
-	post := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", strings.NewReader(`{}`))
+	post := httptest.NewRequest(http.MethodPut, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", strings.NewReader(`{}`))
 	post.Header.Set(WorkOrderReadContextHeader, contextValue)
 	postRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(postRecorder, post)
-	if postRecorder.Code != http.StatusMethodNotAllowed || postRecorder.Header().Get("Allow") != http.MethodGet {
+	if postRecorder.Code != http.StatusMethodNotAllowed || postRecorder.Header().Get("Allow") != http.MethodGet+", "+http.MethodPost {
 		t.Fatalf("status=%d allow=%s", postRecorder.Code, postRecorder.Header().Get("Allow"))
 	}
 
@@ -188,7 +198,7 @@ func signContext(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, actions 
 	}
 	scopes = append(scopes, extraScopes...)
 	value, err := identitycontext.SignDelegation(signer, identitycontext.DelegationClaims{
-		Issuer: DefaultGatewaySPIFFEID, Subject: "operator", SubjectIssuer: "https://identity.example.test",
+		Issuer: DefaultGatewaySPIFFEID, Subject: "operator", SubjectIssuer: "https://identity.example.test", PrincipalID: "principal:operator",
 		DisplayName: "Operator", ExecutingService: DefaultGatewaySPIFFEID, Audience: DefaultAudience,
 		ActingOrganizationID: organizationID, Actions: actions, Scopes: scopes,
 		PolicyRevision: "policy-1", SessionID: "session-1", IssuedAt: now.Add(-time.Second).Unix(),
@@ -217,7 +227,7 @@ func validHTTPWorkOrder() workordermodel.WorkOrder {
 		Priority: workordermodel.PriorityHigh, Status: workordermodel.StatusOpen, AssigneeID: &assigneeID,
 		SourceReferences: []workordermodel.SourceReference{{Domain: workordermodel.SourceAlarm, ResourceID: testAlarmID, Relationship: workordermodel.RelationshipOrigin}},
 		Tasks:            workordermodel.TaskSummary{}, CompletionEvidence: []workordermodel.EvidenceReference{},
-		Timeline: []workordermodel.TimelineEvent{{Operation: workordermodel.OperationCreate, ToStatus: workordermodel.StatusOpen, Reason: "created from Alarm", ActorType: "PRINCIPAL", ActorID: "principal:operator", OccurredAt: "2026-08-01T10:00:00Z", Version: 1}},
+		Timeline: []workordermodel.TimelineEvent{{Operation: workordermodel.OperationCreate, ToStatus: workordermodel.StatusOpen, Reason: "created from Alarm", ActorType: "PRINCIPAL", ActorID: "principal:operator", AssigneeID: &assigneeID, OccurredAt: "2026-08-01T10:00:00Z", Version: 1}},
 		Version:  1, CreatedAt: "2026-08-01T10:00:00Z", UpdatedAt: "2026-08-01T10:00:00Z",
 	}
 }
