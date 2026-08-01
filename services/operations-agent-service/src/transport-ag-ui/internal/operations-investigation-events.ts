@@ -72,6 +72,31 @@ export type OperationsAgUiEvent =
     readonly outcome: { readonly type: 'success' };
   };
 
+export type OperationsStreamRecoveryMode = 'FULL_SNAPSHOT' | 'RESUME';
+
+export type OperationsStreamRecoveryReason =
+  | 'INITIAL'
+  | 'VALID'
+  | 'UNKNOWN'
+  | 'EXPIRED'
+  | 'CONFLICT';
+
+export interface OperationsAgUiEventFrame {
+  readonly id: string;
+  readonly event: OperationsAgUiEvent;
+}
+
+export interface OperationsAgUiEventBatch {
+  readonly frames: readonly OperationsAgUiEventFrame[];
+  readonly recovery: {
+    readonly mode: OperationsStreamRecoveryMode;
+    readonly reason: OperationsStreamRecoveryReason;
+    readonly snapshotPosition: string;
+    readonly latestPosition: string;
+    readonly replayFromPosition: string | null;
+  };
+}
+
 const cloneJson = <Value>(value: Value): Value => JSON.parse(JSON.stringify(value)) as Value;
 
 const sortedReceipts = (
@@ -151,6 +176,27 @@ const snapshotRunId = (view: SiteNightEnergyInvestigationView): string => (
   `${view.id}:projection:${view.revision}`
 );
 
+const position = (revision: number, sequence: number): string => `${revision}:${sequence}`;
+
+const parseRecoveryPosition = (
+  value: string | null | undefined,
+): { readonly revision: number; readonly sequence: number; readonly value: string } | null => {
+  const normalized = value?.trim() ?? '';
+  const match = /^(0|[1-9]\d*):(0|[1-9]\d*)$/u.exec(normalized);
+  if (match === null) return null;
+  const revision = Number(match[1]);
+  const sequence = Number(match[2]);
+  if (!Number.isSafeInteger(revision) || !Number.isSafeInteger(sequence)) return null;
+  return Object.freeze({ revision, sequence, value: normalized });
+};
+
+const isReplayBoundary = (sequence: number, latestSequence: number): boolean => (
+  sequence === 0
+  || sequence === 1
+  || sequence === latestSequence
+  || (sequence >= 4 && sequence < latestSequence && (sequence - 4) % 3 === 0)
+);
+
 export const projectOperationsInvestigationToAgUiEvents = (
   view: SiteNightEnergyInvestigationView,
 ): readonly OperationsAgUiEvent[] => {
@@ -206,13 +252,74 @@ export const projectOperationsInvestigationToAgUiEvents = (
   return Object.freeze(events);
 };
 
+const canonicalFrames = (
+  view: SiteNightEnergyInvestigationView,
+): readonly OperationsAgUiEventFrame[] => Object.freeze(
+  projectOperationsInvestigationToAgUiEvents(view).map((event, sequence) => Object.freeze({
+    id: position(view.revision, sequence),
+    event,
+  })),
+);
+
+export const projectOperationsInvestigationToAgUiEventBatch = (
+  view: SiteNightEnergyInvestigationView,
+  requestedPosition?: string | null,
+): OperationsAgUiEventBatch => {
+  const allFrames = canonicalFrames(view);
+  const latestSequence = allFrames.length - 1;
+  const parsed = parseRecoveryPosition(requestedPosition);
+  let mode: OperationsStreamRecoveryMode = 'FULL_SNAPSHOT';
+  let reason: OperationsStreamRecoveryReason = 'INITIAL';
+  let replayFromPosition: string | null = null;
+
+  if ((requestedPosition?.trim() ?? '') !== '') {
+    if (parsed === null) {
+      reason = 'UNKNOWN';
+    } else if (parsed.revision < view.revision) {
+      reason = 'EXPIRED';
+    } else if (parsed.revision > view.revision
+      || parsed.sequence > latestSequence
+      || !isReplayBoundary(parsed.sequence, latestSequence)) {
+      reason = 'CONFLICT';
+    } else {
+      mode = 'RESUME';
+      reason = 'VALID';
+      replayFromPosition = parsed.value;
+    }
+  }
+
+  const frames = mode === 'FULL_SNAPSHOT' || parsed === null
+    ? allFrames
+    : Object.freeze([
+        allFrames[0],
+        allFrames[1],
+        ...allFrames.slice(2, -1).filter((frame) => {
+          const sequence = Number(frame.id.slice(frame.id.indexOf(':') + 1));
+          return sequence > parsed.sequence;
+        }),
+        allFrames.at(-1),
+      ].filter((frame): frame is OperationsAgUiEventFrame => frame !== undefined));
+
+  return Object.freeze({
+    frames,
+    recovery: Object.freeze({
+      mode,
+      reason,
+      snapshotPosition: position(view.revision, 1),
+      latestPosition: position(view.revision, latestSequence),
+      replayFromPosition,
+    }),
+  });
+};
+
 export const encodeOperationsAgUiEventStream = (
   view: SiteNightEnergyInvestigationView,
-): string => projectOperationsInvestigationToAgUiEvents(view)
-  .map((event, index) => [
-    `id: ${view.revision}:${index}`,
-    `event: ${event.type}`,
-    `data: ${JSON.stringify(event)}`,
+  requestedPosition?: string | null,
+): string => projectOperationsInvestigationToAgUiEventBatch(view, requestedPosition).frames
+  .map((frame) => [
+    `id: ${frame.id}`,
+    `event: ${frame.event.type}`,
+    `data: ${JSON.stringify(frame.event)}`,
     '',
     '',
   ].join('\n'))
@@ -220,11 +327,23 @@ export const encodeOperationsAgUiEventStream = (
 
 export const createOperationsAgUiEventStreamResponse = (
   view: SiteNightEnergyInvestigationView,
-): Response => new Response(encodeOperationsAgUiEventStream(view), {
-  status: 200,
-  headers: {
+  requestedPosition?: string | null,
+): Response => {
+  const batch = projectOperationsInvestigationToAgUiEventBatch(view, requestedPosition);
+  const headers = new Headers({
     'Cache-Control': 'no-store, no-transform',
     'Content-Type': 'text/event-stream; charset=utf-8',
     'X-Accel-Buffering': 'no',
-  },
-});
+    'X-Operations-Recovery-Mode': batch.recovery.mode,
+    'X-Operations-Recovery-Reason': batch.recovery.reason,
+    'X-Operations-Snapshot-Position': batch.recovery.snapshotPosition,
+    'X-Operations-Latest-Position': batch.recovery.latestPosition,
+  });
+  if (batch.recovery.replayFromPosition !== null) {
+    headers.set('X-Operations-Replay-From', batch.recovery.replayFromPosition);
+  }
+  return new Response(encodeOperationsAgUiEventStream(view, requestedPosition), {
+    status: 200,
+    headers,
+  });
+};

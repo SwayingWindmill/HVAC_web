@@ -3,6 +3,8 @@ import { createPlatformGatewayClient } from './generated/platformGateway.gen';
 import {
   operationsInvestigationViewSchema,
   parseOperationsAgUiEventStream,
+  type OperationsAgUiStreamBatch,
+  type OperationsAgUiStreamRecovery,
   type OperationsInvestigationView,
   type ParsedOperationsAgUiEvent,
 } from './operations-contract';
@@ -33,6 +35,7 @@ export interface ScopedOperationsRequestOptions {
   readonly trustedSiteId: string;
   readonly csrfToken?: string;
   readonly signal?: AbortSignal;
+  readonly recoveryPosition?: string;
   readonly fetchImplementation?: typeof fetch;
   readonly baseUrl?: string;
 }
@@ -142,10 +145,60 @@ export async function advanceSiteNightEnergyInvestigation(
   );
 }
 
+const streamPositionPattern = /^(0|[1-9]\d*):(0|[1-9]\d*)$/u;
+
+function streamRecoveryFrom(
+  response: Response,
+  events: readonly ParsedOperationsAgUiEvent[],
+  requestedPosition?: string,
+): OperationsAgUiStreamRecovery {
+  const mode = response.headers.get('X-Operations-Recovery-Mode');
+  const reason = response.headers.get('X-Operations-Recovery-Reason');
+  const snapshotPosition = response.headers.get('X-Operations-Snapshot-Position');
+  const latestPosition = response.headers.get('X-Operations-Latest-Position');
+  const replayFromPosition = response.headers.get('X-Operations-Replay-From');
+  const snapshotMatch = snapshotPosition === null ? null : streamPositionPattern.exec(snapshotPosition);
+  const latestMatch = latestPosition === null ? null : streamPositionPattern.exec(latestPosition);
+  const snapshotEvent = events[1];
+  const latestEvent = events.at(-1);
+  const normalizedRequestedPosition = requestedPosition?.trim() ?? '';
+  const validFullReason = mode === 'FULL_SNAPSHOT'
+    && replayFromPosition === null
+    && (normalizedRequestedPosition === ''
+      ? reason === 'INITIAL'
+      : reason === 'UNKNOWN' || reason === 'EXPIRED' || reason === 'CONFLICT');
+  const validResume = mode === 'RESUME'
+    && normalizedRequestedPosition !== ''
+    && reason === 'VALID'
+    && replayFromPosition === normalizedRequestedPosition
+    && streamPositionPattern.test(replayFromPosition);
+  if ((!validFullReason && !validResume)
+    || snapshotMatch === null
+    || latestMatch === null
+    || snapshotMatch[1] !== latestMatch[1]
+    || snapshotMatch[2] !== '1'
+    || snapshotEvent?.id !== snapshotPosition
+    || latestEvent?.id !== latestPosition) {
+    throw new OperationsApiError(
+      502,
+      'OPERATIONS_STREAM_INVALID',
+      'Operations Agent 返回了无效恢复元数据。',
+      true,
+    );
+  }
+  return Object.freeze({
+    mode,
+    reason,
+    snapshotPosition,
+    latestPosition,
+    replayFromPosition,
+  } as OperationsAgUiStreamRecovery);
+}
+
 export async function streamSiteNightEnergyInvestigationEvents(
   investigationId: string,
   options: ScopedOperationsRequestOptions,
-): Promise<ParsedOperationsAgUiEvent[]> {
+): Promise<OperationsAgUiStreamBatch> {
   const fetchImplementation = options.fetchImplementation ?? globalThis.fetch.bind(globalThis);
   const response = await fetchImplementation(
     `${options.baseUrl ?? ''}${pathFor(options.trustedSiteId, `/${encodeURIComponent(investigationId)}/events`)}`,
@@ -153,7 +206,12 @@ export async function streamSiteNightEnergyInvestigationEvents(
       method: 'GET',
       credentials: 'same-origin',
       signal: options.signal,
-      headers: { Accept: 'text/event-stream, application/problem+json' },
+      headers: {
+        Accept: 'text/event-stream, application/problem+json',
+        ...(options.recoveryPosition?.trim()
+          ? { 'Last-Event-ID': options.recoveryPosition.trim().slice(0, 128) }
+          : {}),
+      },
     },
   );
   if (!response.ok) throw await problemFrom(response);
@@ -167,12 +225,19 @@ export async function streamSiteNightEnergyInvestigationEvents(
     || snapshot.event.snapshot.investigation.scope.siteId !== options.trustedSiteId) {
     throw new OperationsApiError(503, 'OPERATIONS_SCOPE_INVALID', 'Operations 事件流超出当前已验证 Site Scope。');
   }
-  return events;
+  return Object.freeze({
+    events: Object.freeze(events),
+    recovery: streamRecoveryFrom(response, events, options.recoveryPosition),
+  });
 }
 
 export type {
   OperationsAgUiEvent,
+  OperationsAgUiStreamBatch,
+  OperationsAgUiStreamRecovery,
   OperationsInvestigationStateSnapshot,
   OperationsInvestigationView,
+  OperationsStreamRecoveryMode,
+  OperationsStreamRecoveryReason,
   ParsedOperationsAgUiEvent,
 } from './operations-contract';

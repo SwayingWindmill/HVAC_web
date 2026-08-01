@@ -48,6 +48,14 @@ test('HVAC Web changes select browser and web unit profiles on the correct runne
   assert.equal(classification.integrations, false);
 });
 
+test('Operations Workspace changes select dedicated unit and Linux browser profiles', () => {
+  const classification = runClassification(['apps/hvac-web/src/real/operations/OperationsInvestigationAgent.ts']);
+  assert.ok(classification.unitProfiles.includes('web'));
+  assert.ok(classification.unitProfiles.includes('operations-agent'));
+  assert.deepEqual(classification.browserWindowsProfiles, ['rms']);
+  assert.ok(classification.browserLinuxProfiles.includes('operations-agent'));
+});
+
 test('Realtime backend changes select the durable realtime PostgreSQL profile', () => {
   const classification = runClassification(['services/telemetry-runtime-service/internal/telemetry/realtime.go']);
   assert.ok(classification.unitProfiles.includes('s2'));
@@ -91,16 +99,23 @@ test('Operations Agent changes select dedicated unit and PostgreSQL profiles', (
   const classification = runClassification(['services/operations-agent-service/src/index.ts']);
   assert.deepEqual(classification.unitProfiles, ['operations-agent']);
   assert.deepEqual(classification.integrationProfiles, ['operations-agent']);
+  assert.deepEqual(classification.browserLinuxProfiles, ['operations-agent']);
   assert.equal(classification.broad, false);
 
   assert.deepEqual(runPlan('unit', ['operations-agent']).commands, [
     'npm --prefix services/operations-agent-service ci',
     'npm run operations-agent-service:check',
     'npm run operations-agent:benchmark:test',
+    'npm run operations-agent:gateway:check',
+    'npm run operations-workspace:test',
+    'npm run test:gateway',
   ]);
   assert.deepEqual(runPlan('integration', ['operations-agent']).commands, [
     'npm --prefix services/operations-agent-service ci',
     'npm run operations-agent-service:postgres',
+  ]);
+  assert.deepEqual(runPlan('browser', ['operations-agent']).commands, [
+    'npm run operations-workspace:browser',
   ]);
 });
 
@@ -115,7 +130,7 @@ test('nightly regression preserves its schedule, manual trigger, and complete pr
     '--gate=unit --profiles=analytics,operations-agent,pocs,s0,s1,s2,s3,web',
     '--gate=integration --profiles=analytics,operations-agent,s0,s1,s2-baseline,s2-history,s2-ingest,s2-realtime,s3',
     '--gate=browser --profiles=rms',
-    '--gate=browser --profiles=s0,s1,s2',
+    '--gate=browser --profiles=operations-agent,s0,s1,s2',
   ]) {
     assert.ok(workflow.includes(command), `nightly coverage drifted: ${command}`);
   }
