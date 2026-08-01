@@ -18,6 +18,7 @@ const organizationId = '01910000-0000-7000-8000-000000000001';
 const siteId = '01910000-0001-7000-8000-000000000001';
 const investigationId = 'investigation-browser-001';
 const unableInvestigationId = 'investigation-browser-unable';
+const budgetInvestigationId = 'investigation-browser-budget-exhausted';
 const operatorInputInvestigationId = 'investigation-browser-operator-input';
 const cancelInvestigationId = 'investigation-browser-cancel';
 const hiddenInvestigationId = 'hidden-investigation';
@@ -68,6 +69,15 @@ const stableActivity = {
   startedAt: 1,
   completedAt: 2,
 };
+const exhaustedBudget = {
+  schemaVersion: 1,
+  policyRevision: 'operations-agent-run-resource-policy/v1',
+  outcome: 'PARTIAL',
+  exhaustedDimension: 'PAYLOAD_BYTES',
+  consumed: 1_025,
+  limit: 1_024,
+};
+
 const finalActivity = {
   recordId: 'receipt-final',
   logicalTool: 'analytics.getEnergySeries',
@@ -317,7 +327,7 @@ function acceptedOperatorInput(id, idempotencyKey) {
   };
 }
 
-function investigation(id, revision, status, outcome, activities = []) {
+function investigation(id, revision, status, outcome, activities = [], resourceBudget = null) {
   const records = outcome === 'SUPPORTED_SITE_FINDING'
     ? supportedRecords(id)
     : outcome === 'UNABLE_TO_CONCLUDE'
@@ -336,6 +346,7 @@ function investigation(id, revision, status, outcome, activities = []) {
         ? { id: `${id}:active-run`, status: 'WAITING_FOR_OPERATOR_INPUT', startedAt: 1 }
         : null,
     outcome,
+    resourceBudget,
     ...records,
     operatorInputRequest: status === 'WAITING_FOR_OPERATOR_INPUT' ? operatorInputRequest(id) : null,
     acceptedOperatorInputs: [],
@@ -343,9 +354,9 @@ function investigation(id, revision, status, outcome, activities = []) {
   };
 }
 
-function stream(id, revision, status, outcome, activities) {
+function stream(id, revision, status, outcome, activities, resourceBudget = null) {
   const runId = `${id}:projection:${revision}`;
-  const view = investigation(id, revision, status, outcome, activities);
+  const view = investigation(id, revision, status, outcome, activities, resourceBudget);
   const { toolReceipts: _toolReceipts, ...projection } = view;
   const frames = [
     event(`${revision}:0`, 'RUN_STARTED', { threadId: id, runId }),
@@ -413,6 +424,7 @@ function summary(view) {
     revision: view.revision,
     createdAt: view.createdAt,
     outcome: view.outcome,
+    resourceBudget: view.resourceBudget,
     evidenceCount: view.evidence.length,
     analysisReferenceCount: view.analysisReferences.length,
     findingCount: view.findings.length,
@@ -440,6 +452,7 @@ function createGatewayFixture() {
     ? investigation(investigationId, 2, 'COMPLETED', 'SUPPORTED_SITE_FINDING', [stableActivity, finalActivity])
     : investigation(investigationId, 1, 'RUNNING', null, [stableActivity]);
   const unable = investigation(unableInvestigationId, 5, 'COMPLETED', 'UNABLE_TO_CONCLUDE', [stableActivity]);
+  const budgetExhausted = investigation(budgetInvestigationId, 6, 'RUNNING', 'UNABLE_TO_CONCLUDE', [stableActivity], exhaustedBudget);
   const currentCancel = () => cancelAccepted
     ? investigation(cancelInvestigationId, 4, 'CANCELLED', null, [stableActivity])
     : investigation(cancelInvestigationId, 3, 'RUNNING', null, [stableActivity]);
@@ -544,7 +557,7 @@ function createGatewayFixture() {
       listRequestCount += 1;
       json(response, {
         schemaVersion: 1,
-        investigations: [summary(unable), summary(currentSupported())]
+        investigations: [summary(unable), summary(budgetExhausted), summary(currentSupported())]
           .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id)),
       });
       return;
@@ -559,6 +572,7 @@ function createGatewayFixture() {
     const requestedId = decodeURIComponent(encodedId);
     if (requestedId !== investigationId
       && requestedId !== unableInvestigationId
+      && requestedId !== budgetInvestigationId
       && requestedId !== operatorInputInvestigationId
       && requestedId !== cancelInvestigationId) {
       hiddenRequestCount += 1;
@@ -570,7 +584,9 @@ function createGatewayFixture() {
         ? currentSupported()
         : requestedId === unableInvestigationId
           ? unable
-          : requestedId === operatorInputInvestigationId
+          : requestedId === budgetInvestigationId
+            ? budgetExhausted
+            : requestedId === operatorInputInvestigationId
             ? currentOperatorInput()
             : currentCancel());
       return;
@@ -633,6 +649,27 @@ function createGatewayFixture() {
         'x-operations-latest-position': current.latest,
       });
       response.end(projected);
+      return;
+    }
+
+    if (requestedId === budgetInvestigationId) {
+      const current = stream(
+        budgetInvestigationId,
+        6,
+        'RUNNING',
+        'UNABLE_TO_CONCLUDE',
+        [stableActivity],
+        exhaustedBudget,
+      );
+      response.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-store, no-transform',
+        'x-operations-recovery-mode': 'FULL_SNAPSHOT',
+        'x-operations-recovery-reason': 'INITIAL',
+        'x-operations-snapshot-position': '6:1',
+        'x-operations-latest-position': current.latest,
+      });
+      response.end(current.body);
       return;
     }
 
@@ -856,13 +893,13 @@ try {
       text: document.body.textContent ?? '',
       protectedResourceId: globalThis.__OPERATIONS_RECONNECT_AUDIT__?.protectedResourceId(),
     })`);
-    if (supportedState.listCount === 2 && supportedState.toolCount === 2) break;
+    if (supportedState.listCount === 3 && supportedState.toolCount === 2) break;
     await pause(100);
   }
   assert(supportedState.connection === 'TERMINAL' && supportedState.investigation === 'COMPLETED', 'terminal UI state is unstable');
   assert(supportedState.toolCount === 2, 'committed Tool receipts were duplicated or lost');
   assert(supportedState.evidenceCount === 1 && supportedState.analysisCount === 1 && supportedState.findingCount === 1, 'typed committed records were duplicated or lost');
-  assert(supportedState.listCount === 2, 'Site Investigation list did not expose both authorized records');
+  assert(supportedState.listCount === 3, 'Site Investigation list did not expose all authorized records');
   for (const requiredText of [
     'dataset-r42',
     'Data watermark',
@@ -997,6 +1034,32 @@ try {
     assert(unableState.text.includes(requiredText), `unable Workspace omitted ${requiredText}`);
   }
   assertions.push('unable-to-conclude-required-next');
+
+  await evaluate(cdpClient, "globalThis.__OPERATIONS_RECONNECT_AUDIT__.navigate('/operations?investigation=" + budgetInvestigationId + "')");
+  let budgetState = null;
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    budgetState = await evaluate(cdpClient, `({
+      status: document.querySelector('.operations-workspace')?.getAttribute('data-investigation-status') ?? null,
+      dimension: document.querySelector('.operations-workspace')?.getAttribute('data-resource-budget') ?? null,
+      panel: Boolean(document.querySelector('[data-testid="operations-resource-budget"]')),
+      advanceDisabled: document.querySelector('[data-testid="operations-advance"]')?.disabled ?? false,
+      text: document.body?.innerText ?? '',
+    })`);
+    if (budgetState.status === 'RUNNING'
+      && budgetState.dimension === 'PAYLOAD_BYTES'
+      && budgetState.panel
+      && budgetState.advanceDisabled) break;
+    await pause(100);
+  }
+  assert(
+    budgetState?.dimension === 'PAYLOAD_BYTES'
+      && budgetState.panel
+      && budgetState.advanceDisabled
+      && budgetState.text.includes('1025 / 1024')
+      && budgetState.text.includes('保留已提交部分结果'),
+    `budget-exhausted Workspace did not stabilize: ${JSON.stringify(budgetState)}`,
+  );
+  assertions.push('budget-exhaustion-visible-and-advance-disabled');
 
   await evaluate(cdpClient, `globalThis.__OPERATIONS_RECONNECT_AUDIT__.navigate('/operations?investigation=${cancelInvestigationId}')`);
   let cancelRunning = null;

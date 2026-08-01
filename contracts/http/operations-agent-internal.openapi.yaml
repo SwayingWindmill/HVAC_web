@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: Operations Agent Internal HTTP API
-  version: 1.4.0
-  description: Workload-authenticated Coordinator use cases for Site Investigation lists, typed provenance views, bounded Operator Input interrupts, typed untrusted-content rejection and reconnect-safe AG-UI recovery batches.
+  version: 1.5.0
+  description: Workload-authenticated Coordinator use cases for Site Investigation lists, typed provenance views, bounded Operator Input interrupts, typed untrusted-content rejection, bounded per-Run resource exhaustion and reconnect-safe AG-UI recovery batches.
 servers:
   - url: https://operations-agent.internal.invalid
 paths:

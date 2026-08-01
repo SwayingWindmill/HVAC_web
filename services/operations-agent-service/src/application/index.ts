@@ -117,6 +117,24 @@ export {
 } from './internal/site-night-energy-investigation.js';
 
 export {
+  DEFAULT_RUN_RESOURCE_BUDGET_POLICY,
+  ZERO_RUN_RESOURCE_BUDGET_COST,
+  createInMemoryRunResourceBudgetGuard,
+  createRunResourceBudgetSnapshot,
+  evaluateRunResourceBudgetCheck,
+  normalizeRunResourceBudgetCost,
+  normalizeRunResourceBudgetPolicy,
+  runResourceEffectOperationId,
+  runResourceOwnerResultBatchCost,
+  runResourceOwnerResultBatchOperationId,
+  runResourceOwnerResultCost,
+  runResourceOwnerResultOperationId,
+  runResourceReadBatchCost,
+  runResourceReadBatchOperationId,
+  toRunResourceBudgetOutcome,
+} from './internal/run-resource-budget.js';
+
+export {
   InvestigationRepositoryConflictError,
   OwnerReadError,
   type AgentExecutionRuntime,
@@ -128,6 +146,14 @@ export {
   type AuthorizationDecisionReader,
   type BudgetDecision,
   type BudgetGuard,
+  type RunResourceBudgetCost,
+  type RunResourceBudgetDimension,
+  type RunResourceBudgetExhaustion,
+  type RunResourceBudgetLimits,
+  type RunResourceBudgetOutcome,
+  type RunResourceBudgetPolicy,
+  type RunResourceBudgetSnapshot,
+  type RunResourceBudgetUsage,
   type CheckpointRepository,
   type Clock,
   type CommandCapabilityReadRequest,

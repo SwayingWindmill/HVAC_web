@@ -102,7 +102,7 @@ const commonPorts = (persistence, currentTime, idGenerator, runtime) => {
       },
     },
     agentExecutionRuntime: runtime,
-    budgetGuard: { async check() { return { decision: 'ALLOW' }; } },
+    budgetGuard: persistence.budgetGuard,
     ownerReaders,
     clock: { now: currentTime },
     idGenerator,

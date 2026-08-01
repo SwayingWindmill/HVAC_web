@@ -75,6 +75,9 @@ for (const required of [
   'DETERMINISTIC_ALGORITHM',
   'SUPPORTED_SITE_FINDING',
   'UNABLE_TO_CONCLUDE',
+  'RunResourceBudgetOutcome',
+  'exhaustedDimension',
+  'PAYLOAD_BYTES',
   'REQUIRED_NEXT',
   'registry.getEquipmentEnergyBindings',
   'analytics.energy.getEquipmentSeries',
@@ -137,6 +140,8 @@ for (const forbidden of [
   'effectPolicy',
   'scopePolicy',
   'untrustedContentPolicy',
+  'acceptedOperations',
+  'maximumQueryRangeMs',
 ]) {
   if (publicContract.includes(forbidden)
     || internalContract.includes(forbidden)
@@ -167,6 +172,7 @@ for (const required of [
   'validateOperationsSnapshot',
   'validateOperationsEventStream',
   'validateOperationsRecoveryHeaders',
+  'validateOperationsRunResourceBudget',
   'Last-Event-ID',
   'X-Operations-Recovery-Mode',
   'text/event-stream',

@@ -134,7 +134,7 @@ const createPorts = (persistence, identities) => ({
     },
   },
   createAgentExecutionRuntime: runtime,
-  budgetGuard: { async check() { return { decision: 'ALLOW' }; } },
+  budgetGuard: persistence.budgetGuard,
   ownerReaders: {
     registry: { read: ownerRead },
     currentTelemetry: { async read() { throw new Error('not used'); } },
@@ -261,6 +261,7 @@ test('PostgreSQL resumes a checkpointed night-energy Run without duplicate busin
       revision: completed.revision,
       createdAt: completed.createdAt,
       outcome: completed.outcome,
+      resourceBudget: null,
       evidenceCount: completed.evidence.length,
       analysisReferenceCount: completed.analysisReferences.length,
       findingCount: completed.findings.length,

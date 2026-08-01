@@ -261,17 +261,93 @@ export interface InvestigationTransaction {
   }): Promise<void>;
 }
 
+export type RunResourceBudgetDimension =
+  | 'MODEL_INVOCATIONS'
+  | 'TOOL_REQUESTS'
+  | 'WALL_CLOCK_MS'
+  | 'QUERY_RANGE_MS'
+  | 'QUERY_BUCKETS'
+  | 'OWNER_RECORDS'
+  | 'PAYLOAD_BYTES';
+
+export interface RunResourceBudgetLimits {
+  readonly modelInvocations: number;
+  readonly toolRequests: number;
+  readonly wallClockMs: number;
+  readonly queryRangeMs: number;
+  readonly queryBuckets: number;
+  readonly ownerRecords: number;
+  readonly payloadBytes: number;
+}
+
+export interface RunResourceBudgetPolicy {
+  readonly schemaVersion: 1;
+  readonly revision: string;
+  readonly limits: RunResourceBudgetLimits;
+}
+
+export interface RunResourceBudgetUsage {
+  readonly modelInvocations: number;
+  readonly toolRequests: number;
+  readonly maximumQueryRangeMs: number;
+  readonly queryBuckets: number;
+  readonly ownerRecords: number;
+  readonly payloadBytes: number;
+}
+
+export interface RunResourceBudgetExhaustion {
+  readonly dimension: RunResourceBudgetDimension;
+  readonly at: number;
+  readonly consumed: number;
+  readonly limit: number;
+  readonly outcome: 'PARTIAL' | 'UNABLE_TO_CONCLUDE';
+}
+
+export interface RunResourceBudgetSnapshot {
+  readonly schemaVersion: 1;
+  readonly investigationId: string;
+  readonly runId: string;
+  readonly policyRevision: string;
+  readonly startedAt: number;
+  readonly usage: RunResourceBudgetUsage;
+  readonly exhaustion: RunResourceBudgetExhaustion | null;
+}
+
+export interface RunResourceBudgetCost {
+  readonly modelInvocations: number;
+  readonly toolRequests: number;
+  readonly queryRangeMs: number;
+  readonly queryBuckets: number;
+  readonly ownerRecords: number;
+  readonly payloadBytes: number;
+}
+
+export interface RunResourceBudgetOutcome {
+  readonly schemaVersion: 1;
+  readonly policyRevision: string;
+  readonly outcome: 'PARTIAL' | 'UNABLE_TO_CONCLUDE';
+  readonly exhaustedDimension: RunResourceBudgetDimension;
+  readonly consumed: number;
+  readonly limit: number;
+}
+
 export interface BudgetDecision {
   readonly decision: 'ALLOW' | 'DENY';
-  readonly reason?: string;
+  readonly duplicate: boolean;
+  readonly snapshot: RunResourceBudgetSnapshot;
 }
 
 export interface BudgetGuard {
   check(input: {
     readonly investigationId: string;
     readonly runId: string;
-    readonly plannedReadCount: number;
+    readonly startedAt: number;
+    readonly at: number;
+    readonly operationId: string;
+    readonly policy: RunResourceBudgetPolicy;
+    readonly cost: RunResourceBudgetCost;
   }): Promise<BudgetDecision>;
+  get(investigationId: string, runId: string): Promise<RunResourceBudgetSnapshot | null>;
 }
 
 export interface OwnerReadResult {
@@ -373,6 +449,7 @@ export interface InvestigationCoordinatorPorts {
   readonly applicationOutbox: ApplicationOutbox;
   readonly auditRecorder: AuditRecorder;
   readonly budgetGuard: BudgetGuard;
+  readonly resourceBudgetPolicy?: RunResourceBudgetPolicy;
   readonly toolAuthorizationReader?: ToolAuthorizationReader;
   readonly ownerReaders: OwnerReaders;
   readonly clock: Clock;

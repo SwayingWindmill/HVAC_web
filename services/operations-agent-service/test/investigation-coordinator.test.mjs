@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   InvestigationCoordinatorError,
+  createInMemoryRunResourceBudgetGuard,
   createInvestigationCoordinator,
 } from '../dist/index.js';
 import { InvestigationRepositoryConflictError } from '../dist/application/index.js';
@@ -71,7 +72,7 @@ class FakeInvestigationRepository {
 const createHarness = ({
   authorized = true,
   planningResult = null,
-  budgetDecision = { decision: 'ALLOW' },
+  resourceBudgetPolicy,
   readerHandlers = {},
 } = {}) => {
   const identifiers = {
@@ -91,6 +92,7 @@ const createHarness = ({
   const repository = new FakeInvestigationRepository(outboxEvents, auditRecords);
   const checkpoints = [];
   const runtimeInputs = [];
+  const budgetGuard = createInMemoryRunResourceBudgetGuard();
   let currentTime = 1_000;
   let authorizationAllowed = authorized;
 
@@ -140,9 +142,8 @@ const createHarness = ({
     auditRecorder: {
       async record(record) { auditRecords.push(record); },
     },
-    budgetGuard: {
-      async check() { return budgetDecision; },
-    },
+    budgetGuard,
+    ...(resourceBudgetPolicy === undefined ? {} : { resourceBudgetPolicy }),
     ownerReaders: {
       registry: {
         read: ({ request, context }) => (readerHandlers.registry ?? defaultReader)(request, context),
@@ -580,6 +581,10 @@ test('advance reports budget exhaustion and inability to conclude as distinct ty
           requestId: 'read-registry',
           tool: 'registry.getSite',
           input: { siteId: 'site-001' },
+        }, {
+          requestId: 'read-equipment',
+          tool: 'registry.listSiteEquipment',
+          input: { siteId: 'site-001' },
         }],
       }],
     },
@@ -587,17 +592,43 @@ test('advance reports budget exhaustion and inability to conclude as distinct ty
   };
   const exhausted = createHarness({
     planningResult: plan,
-    budgetDecision: { decision: 'DENY', reason: 'Read budget is exhausted.' },
+    resourceBudgetPolicy: {
+      schemaVersion: 1,
+      revision: 'test-tool-budget/v1',
+      limits: {
+        modelInvocations: 2,
+        toolRequests: 1,
+        wallClockMs: 10_000,
+        queryRangeMs: 86_400_000,
+        queryBuckets: 24,
+        ownerRecords: 100,
+        payloadBytes: 1_000_000,
+      },
+    },
   });
   const exhaustedStarted = await createAndStart(exhausted);
 
-  await assertCoordinatorError(() => exhausted.coordinator.advance({
+  const exhaustedResult = await exhausted.coordinator.advance({
     investigationId: exhaustedStarted.id,
     runId: exhaustedStarted.activeRunId,
     leaseId: exhaustedStarted.runs[0].lease.id,
     expectedRevision: exhaustedStarted.revision,
-  }), 'BUDGET_EXHAUSTED');
+  });
+  assert.deepEqual(exhaustedResult, {
+    outcome: 'BUDGET_EXHAUSTED',
+    investigation: exhaustedStarted,
+    budget: {
+      schemaVersion: 1,
+      policyRevision: 'test-tool-budget/v1',
+      outcome: 'UNABLE_TO_CONCLUDE',
+      exhaustedDimension: 'TOOL_REQUESTS',
+      consumed: 2,
+      limit: 1,
+    },
+  });
   assert.equal(exhausted.checkpoints.length, 0);
+  assert.equal(exhausted.outboxEvents.filter(({ type }) => type === 'READ_PLAN_COMPLETED').length, 0);
+  assert.equal(exhausted.auditRecords.filter(({ action }) => action === 'PLAN_READS').length, 0);
 
   const unable = createHarness({
     planningResult: {

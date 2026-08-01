@@ -30,11 +30,24 @@ import {
   type OwnerReadContext,
   type OwnerReadResult,
   type ParallelReadRequest,
+  type RunResourceBudgetCost,
+  type RunResourceBudgetOutcome,
   type RuntimePlanningContext,
   type RuntimePlanningResult,
   type RuntimeReadPlan,
 } from './ports.js';
 import { OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY } from './generated-runtime-control-contract.js';
+import {
+  DEFAULT_RUN_RESOURCE_BUDGET_POLICY,
+  ZERO_RUN_RESOURCE_BUDGET_COST,
+  normalizeRunResourceBudgetPolicy,
+  runResourceEffectOperationId,
+  runResourceOwnerResultBatchCost,
+  runResourceOwnerResultBatchOperationId,
+  runResourceReadBatchCost,
+  runResourceReadBatchOperationId,
+  toRunResourceBudgetOutcome,
+} from './run-resource-budget.js';
 import { sha256Hex } from './sha256.js';
 
 export type InvestigationCoordinatorErrorCode =
@@ -89,12 +102,19 @@ export interface AdvanceInvestigationCommand {
   readonly expectedRevision: InvestigationRevision;
 }
 
-export interface AdvanceInvestigationResult {
-  readonly investigation: OperationsInvestigationView;
-  readonly plan: RuntimeReadPlan;
-  readonly results: readonly OwnerReadResult[];
-  readonly checkpointId: string;
-}
+export type AdvanceInvestigationResult =
+  | {
+    readonly outcome: 'READ_PLAN_COMPLETED';
+    readonly investigation: OperationsInvestigationView;
+    readonly plan: RuntimeReadPlan;
+    readonly results: readonly OwnerReadResult[];
+    readonly checkpointId: string;
+  }
+  | {
+    readonly outcome: 'BUDGET_EXHAUSTED';
+    readonly investigation: OperationsInvestigationView;
+    readonly budget: RunResourceBudgetOutcome;
+  };
 
 export interface RunLeaseMutationCommand {
   readonly investigationId: string;
@@ -524,6 +544,36 @@ export const createInvestigationCoordinator = (
   ports: InvestigationCoordinatorPorts,
 ): InvestigationCoordinator => {
   const leaseDurationMs = requirePositiveLeaseDuration(ports.leaseDurationMs);
+  const resourceBudgetPolicy = normalizeRunResourceBudgetPolicy(
+    ports.resourceBudgetPolicy ?? DEFAULT_RUN_RESOURCE_BUDGET_POLICY,
+  );
+
+  const checkRunResourceBudget = async (input: {
+    readonly investigationId: string;
+    readonly run: AgentRunView;
+    readonly at: number;
+    readonly operationId: string;
+    readonly cost: RunResourceBudgetCost;
+  }): Promise<RunResourceBudgetOutcome | null> => {
+    const decision = await ports.budgetGuard.check({
+      investigationId: input.investigationId,
+      runId: input.run.id,
+      startedAt: input.run.startedAt,
+      at: input.at,
+      operationId: input.operationId,
+      policy: resourceBudgetPolicy,
+      cost: input.cost,
+    });
+    if (decision.decision === 'ALLOW') return null;
+    const outcome = toRunResourceBudgetOutcome(decision.snapshot);
+    if (outcome === null) {
+      throw new InvestigationCoordinatorError(
+        'INVALID_INVESTIGATION_STATE',
+        'Budget Guard denied work without a typed exhaustion outcome.',
+      );
+    }
+    return outcome;
+  };
 
   const load = async (investigationId: string): Promise<OperationsInvestigation> => {
     const investigation = await ports.investigationRepository.get(investigationId);
@@ -748,6 +798,20 @@ export const createInvestigationCoordinator = (
           );
         }
         const runtimeContext = createRuntimePlanningContext(investigation.view(), run);
+        const modelBudget = await checkRunResourceBudget({
+          investigationId: command.investigationId,
+          run,
+          at: now,
+          operationId: `runtime-plan:${checkpoint?.position ?? 'start'}`,
+          cost: { ...ZERO_RUN_RESOURCE_BUDGET_COST, modelInvocations: 1 },
+        });
+        if (modelBudget !== null) {
+          return {
+            outcome: 'BUDGET_EXHAUSTED',
+            investigation: investigation.view(),
+            budget: modelBudget,
+          };
+        }
         let runtimePlanning: RuntimePlanningResult;
         try {
           runtimePlanning = await ports.agentExecutionRuntime.planReads({
@@ -769,19 +833,7 @@ export const createInvestigationCoordinator = (
           );
         }
 
-        const plannedReadCount = countValidatedReads(planning.plan, runtimeContext);
-        const budget = await ports.budgetGuard.check({
-          investigationId: command.investigationId,
-          runId: run.id,
-          plannedReadCount,
-        });
-        if (budget.decision === 'DENY') {
-          throw new InvestigationCoordinatorError(
-            'BUDGET_EXHAUSTED',
-            budget.reason ?? 'The Agent Run budget is exhausted.',
-          );
-        }
-
+        countValidatedReads(planning.plan, runtimeContext);
         const ownerReadContext: OwnerReadContext = {
           investigationId: command.investigationId,
           runId: run.id,
@@ -791,9 +843,38 @@ export const createInvestigationCoordinator = (
         };
         const results: OwnerReadResult[] = [];
         for (const batch of planning.plan.batches) {
-          results.push(...await Promise.all(batch.requests.map((request) => (
+          const readBudget = await checkRunResourceBudget({
+            investigationId: command.investigationId,
+            run,
+            at: ports.clock.now(),
+            operationId: runResourceReadBatchOperationId(batch.requests),
+            cost: runResourceReadBatchCost(batch.requests),
+          });
+          if (readBudget !== null) {
+            return {
+              outcome: 'BUDGET_EXHAUSTED',
+              investigation: investigation.view(),
+              budget: readBudget,
+            };
+          }
+          const batchResults = await Promise.all(batch.requests.map((request) => (
             executeRead(request, ownerReadContext)
-          ))));
+          )));
+          const resultBudget = await checkRunResourceBudget({
+            investigationId: command.investigationId,
+            run,
+            at: ports.clock.now(),
+            operationId: runResourceOwnerResultBatchOperationId(batch.requests),
+            cost: runResourceOwnerResultBatchCost(batchResults),
+          });
+          if (resultBudget !== null) {
+            return {
+              outcome: 'BUDGET_EXHAUSTED',
+              investigation: investigation.view(),
+              budget: resultBudget,
+            };
+          }
+          results.push(...batchResults);
         }
 
         const checkpointId = ports.idGenerator.next('checkpoint');
@@ -833,6 +914,7 @@ export const createInvestigationCoordinator = (
           },
         );
         return {
+          outcome: 'READ_PLAN_COMPLETED',
           investigation: view,
           plan: planning.plan,
           results,
@@ -883,6 +965,28 @@ export const createInvestigationCoordinator = (
           kind: command.kind,
           recordId: command.recordId,
         });
+        if (result.outcome === 'COMMITTED') {
+          const run = investigation.view().runs.find(({ id }) => id === command.runId);
+          if (run === undefined) {
+            throw new InvestigationCoordinatorError(
+              'INVALID_INVESTIGATION_STATE',
+              'The committing Agent Run is missing from the Investigation.',
+            );
+          }
+          const budget = await checkRunResourceBudget({
+            investigationId: command.investigationId,
+            run,
+            at: now,
+            operationId: runResourceEffectOperationId(command.idempotencyKey),
+            cost: ZERO_RUN_RESOURCE_BUDGET_COST,
+          });
+          if (budget !== null) {
+            throw new InvestigationCoordinatorError(
+              'BUDGET_EXHAUSTED',
+              `Agent Run resource budget exhausted: ${budget.exhaustedDimension}.`,
+            );
+          }
+        }
         if (command.kind !== 'PROPOSED_ACTION' && record === undefined) {
           throw new InvestigationCoordinatorError(
             'INVALID_INVESTIGATION_STATE',

@@ -77,9 +77,7 @@ test('PostgreSQL keeps Operations facts authoritative and Checkpoints independen
         throw new Error('Runtime planning is not used by this persistence test.');
       },
     },
-    budgetGuard: {
-      async check() { return { decision: 'ALLOW' }; },
-    },
+    budgetGuard: persistence.budgetGuard,
     ownerReaders: {
       registry: { async read() { throw new Error('not used'); } },
       currentTelemetry: { async read() { throw new Error('not used'); } },
@@ -362,7 +360,7 @@ test('PostgreSQL atomically persists typed records across restart, retry, and ro
     agentExecutionRuntime: {
       async planReads() { throw new Error('not used'); },
     },
-    budgetGuard: { async check() { return { decision: 'ALLOW' }; } },
+    budgetGuard: persistence.budgetGuard,
     ownerReaders: {
       registry: { async read() { throw new Error('not used'); } },
       currentTelemetry: { async read() { throw new Error('not used'); } },

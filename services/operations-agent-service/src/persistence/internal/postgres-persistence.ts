@@ -9,10 +9,14 @@ import type {
   ApplicationOutbox,
   AuditRecord,
   AuditRecorder,
+  BudgetGuard,
   CheckpointRepository,
   InvestigationBusinessRecordRepository,
   InvestigationRepository,
   InvestigationTransaction,
+  RunResourceBudgetDimension,
+  RunResourceBudgetPolicy,
+  RunResourceBudgetSnapshot,
   RuntimeCheckpoint,
 } from '../../application/index.js';
 import {
@@ -22,7 +26,12 @@ import {
   type InvestigationBusinessRecord,
   type OperationsInvestigationSnapshot,
 } from '../../domain/index.js';
-import { InvestigationRepositoryConflictError } from '../../application/index.js';
+import {
+  InvestigationRepositoryConflictError,
+  createRunResourceBudgetSnapshot,
+  evaluateRunResourceBudgetCheck,
+  normalizeRunResourceBudgetPolicy,
+} from '../../application/index.js';
 
 export interface PostgresOperationsAgentPersistenceOptions {
   readonly operationsConnectionString: string;
@@ -41,6 +50,7 @@ export interface PostgresOperationsAgentPersistence {
   readonly businessRecordRepository: InvestigationBusinessRecordRepository;
   readonly investigationTransaction: InvestigationTransaction;
   readonly checkpointRepository: PostgresCheckpointRepository;
+  readonly budgetGuard: BudgetGuard;
   readonly applicationOutbox: ApplicationOutbox;
   readonly auditRecorder: AuditRecorder;
   close(): Promise<void>;
@@ -72,6 +82,35 @@ interface CheckpointRow extends QueryResultRow {
   readonly saved_at_ms: string;
 }
 
+interface BooleanRow extends QueryResultRow {
+  readonly value: boolean;
+}
+
+interface RunResourceBudgetRow extends QueryResultRow {
+  readonly investigation_id: string;
+  readonly run_id: string;
+  readonly policy_revision: string;
+  readonly started_at_ms: string;
+  readonly limit_model_invocations: string;
+  readonly limit_tool_requests: string;
+  readonly limit_wall_clock_ms: string;
+  readonly limit_query_range_ms: string;
+  readonly limit_query_buckets: string;
+  readonly limit_owner_records: string;
+  readonly limit_payload_bytes: string;
+  readonly model_invocations: string;
+  readonly tool_requests: string;
+  readonly maximum_query_range_ms: string;
+  readonly query_buckets: string;
+  readonly owner_records: string;
+  readonly payload_bytes: string;
+  readonly exhausted_dimension: RunResourceBudgetDimension | null;
+  readonly exhausted_at_ms: string | null;
+  readonly exhausted_consumed: string | null;
+  readonly exhausted_limit: string | null;
+  readonly exhausted_outcome: 'PARTIAL' | 'UNABLE_TO_CONCLUDE' | null;
+}
+
 const requireIdentity = (value: string, label: string): string => {
   if (value.trim().length === 0) throw new Error(`${label} must not be empty.`);
   return value;
@@ -89,6 +128,57 @@ const toSafeInteger = (value: string | number, label: string): number => {
   if (!Number.isSafeInteger(parsed)) throw new Error(`${label} is outside the safe integer range.`);
   return parsed;
 };
+
+const budgetPolicyFromRow = (row: RunResourceBudgetRow): RunResourceBudgetPolicy => ({
+  schemaVersion: 1,
+  revision: row.policy_revision,
+  limits: {
+    modelInvocations: toSafeInteger(row.limit_model_invocations, 'Model invocation limit'),
+    toolRequests: toSafeInteger(row.limit_tool_requests, 'Tool request limit'),
+    wallClockMs: toSafeInteger(row.limit_wall_clock_ms, 'Wall-clock limit'),
+    queryRangeMs: toSafeInteger(row.limit_query_range_ms, 'Query range limit'),
+    queryBuckets: toSafeInteger(row.limit_query_buckets, 'Query bucket limit'),
+    ownerRecords: toSafeInteger(row.limit_owner_records, 'Owner record limit'),
+    payloadBytes: toSafeInteger(row.limit_payload_bytes, 'Payload byte limit'),
+  },
+});
+
+const budgetSnapshotFromRow = (row: RunResourceBudgetRow): RunResourceBudgetSnapshot => ({
+  schemaVersion: 1,
+  investigationId: row.investigation_id,
+  runId: row.run_id,
+  policyRevision: row.policy_revision,
+  startedAt: toSafeInteger(row.started_at_ms, 'Run budget startedAt'),
+  usage: {
+    modelInvocations: toSafeInteger(row.model_invocations, 'Model invocation usage'),
+    toolRequests: toSafeInteger(row.tool_requests, 'Tool request usage'),
+    maximumQueryRangeMs: toSafeInteger(row.maximum_query_range_ms, 'Maximum query range'),
+    queryBuckets: toSafeInteger(row.query_buckets, 'Query bucket usage'),
+    ownerRecords: toSafeInteger(row.owner_records, 'Owner record usage'),
+    payloadBytes: toSafeInteger(row.payload_bytes, 'Payload byte usage'),
+  },
+  exhaustion: row.exhausted_dimension === null
+    ? null
+    : {
+      dimension: row.exhausted_dimension,
+      at: toSafeInteger(row.exhausted_at_ms as string, 'Budget exhaustion time'),
+      consumed: toSafeInteger(row.exhausted_consumed as string, 'Budget exhaustion usage'),
+      limit: toSafeInteger(row.exhausted_limit as string, 'Budget exhaustion limit'),
+      outcome: row.exhausted_outcome as 'PARTIAL' | 'UNABLE_TO_CONCLUDE',
+    },
+});
+
+const sameBudgetPolicy = (
+  left: RunResourceBudgetPolicy,
+  right: RunResourceBudgetPolicy,
+): boolean => left.revision === right.revision
+  && left.limits.modelInvocations === right.limits.modelInvocations
+  && left.limits.toolRequests === right.limits.toolRequests
+  && left.limits.wallClockMs === right.limits.wallClockMs
+  && left.limits.queryRangeMs === right.limits.queryRangeMs
+  && left.limits.queryBuckets === right.limits.queryBuckets
+  && left.limits.ownerRecords === right.limits.ownerRecords
+  && left.limits.payloadBytes === right.limits.payloadBytes;
 
 const postgresCode = (error: unknown): string | null => (
   typeof error === 'object'
@@ -714,6 +804,170 @@ export const createPostgresOperationsAgentPersistence = (
     },
   };
 
+  const runResourceBudgetColumns = `
+    investigation_id,
+    run_id,
+    policy_revision,
+    started_at_ms,
+    limit_model_invocations,
+    limit_tool_requests,
+    limit_wall_clock_ms,
+    limit_query_range_ms,
+    limit_query_buckets,
+    limit_owner_records,
+    limit_payload_bytes,
+    model_invocations,
+    tool_requests,
+    maximum_query_range_ms,
+    query_buckets,
+    owner_records,
+    payload_bytes,
+    exhausted_dimension,
+    exhausted_at_ms,
+    exhausted_consumed,
+    exhausted_limit,
+    exhausted_outcome`;
+
+  const budgetGuard: BudgetGuard = {
+    async check(input) {
+      const operationId = requireIdentity(input.operationId, 'Budget operation identity');
+      if (operationId.length > 256) {
+        throw new Error('Budget operation identity must not exceed 256 characters.');
+      }
+      const policy = normalizeRunResourceBudgetPolicy(input.policy);
+      const initial = createRunResourceBudgetSnapshot({
+        investigationId: input.investigationId,
+        runId: input.runId,
+        policy,
+        startedAt: input.startedAt,
+      });
+      return withTransaction(operationsPool, async (client) => {
+        await client.query(
+          `INSERT INTO agent_operations.run_resource_budgets (
+             investigation_id,
+             run_id,
+             policy_revision,
+             started_at_ms,
+             limit_model_invocations,
+             limit_tool_requests,
+             limit_wall_clock_ms,
+             limit_query_range_ms,
+             limit_query_buckets,
+             limit_owner_records,
+             limit_payload_bytes
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           ON CONFLICT (investigation_id, run_id) DO NOTHING`,
+          [
+            initial.investigationId,
+            initial.runId,
+            policy.revision,
+            initial.startedAt,
+            policy.limits.modelInvocations,
+            policy.limits.toolRequests,
+            policy.limits.wallClockMs,
+            policy.limits.queryRangeMs,
+            policy.limits.queryBuckets,
+            policy.limits.ownerRecords,
+            policy.limits.payloadBytes,
+          ],
+        );
+        const selected = await client.query<RunResourceBudgetRow>(
+          `SELECT ${runResourceBudgetColumns}
+           FROM agent_operations.run_resource_budgets
+           WHERE investigation_id = $1 AND run_id = $2
+           FOR UPDATE`,
+          [initial.investigationId, initial.runId],
+        );
+        const row = selected.rows[0];
+        if (row === undefined) throw new Error('Agent Run resource budget was not persisted.');
+        if (toSafeInteger(row.started_at_ms, 'Run budget startedAt') !== initial.startedAt) {
+          throw new Error('Agent Run resource budget start time cannot change.');
+        }
+        if (!sameBudgetPolicy(budgetPolicyFromRow(row), policy)) {
+          throw new Error('Agent Run resource budget policy cannot change after the Run starts.');
+        }
+        const duplicateResult = await client.query<BooleanRow>(
+          `SELECT EXISTS (
+             SELECT 1
+             FROM agent_operations.run_resource_budget_operations
+             WHERE investigation_id = $1 AND run_id = $2 AND operation_id = $3
+           ) AS value`,
+          [initial.investigationId, initial.runId, operationId],
+        );
+        const operationAlreadyAccepted = duplicateResult.rows[0]?.value ?? false;
+        const decision = evaluateRunResourceBudgetCheck({
+          snapshot: budgetSnapshotFromRow(row),
+          policy,
+          at: input.at,
+          operationAlreadyAccepted,
+          cost: input.cost,
+        });
+        const snapshot = decision.snapshot;
+        await client.query(
+          `UPDATE agent_operations.run_resource_budgets
+           SET model_invocations = $3,
+               tool_requests = $4,
+               maximum_query_range_ms = $5,
+               query_buckets = $6,
+               owner_records = $7,
+               payload_bytes = $8,
+               exhausted_dimension = $9,
+               exhausted_at_ms = $10,
+               exhausted_consumed = $11,
+               exhausted_limit = $12,
+               exhausted_outcome = $13,
+               updated_at = clock_timestamp()
+           WHERE investigation_id = $1 AND run_id = $2`,
+          [
+            snapshot.investigationId,
+            snapshot.runId,
+            snapshot.usage.modelInvocations,
+            snapshot.usage.toolRequests,
+            snapshot.usage.maximumQueryRangeMs,
+            snapshot.usage.queryBuckets,
+            snapshot.usage.ownerRecords,
+            snapshot.usage.payloadBytes,
+            snapshot.exhaustion?.dimension ?? null,
+            snapshot.exhaustion?.at ?? null,
+            snapshot.exhaustion?.consumed ?? null,
+            snapshot.exhaustion?.limit ?? null,
+            snapshot.exhaustion?.outcome ?? null,
+          ],
+        );
+        if (decision.decision === 'ALLOW' && !decision.duplicate) {
+          const inserted = await client.query(
+            `INSERT INTO agent_operations.run_resource_budget_operations (
+               investigation_id,
+               run_id,
+               operation_id,
+               accepted_at_ms
+             ) VALUES ($1, $2, $3, $4)
+             ON CONFLICT (investigation_id, run_id, operation_id) DO NOTHING`,
+            [snapshot.investigationId, snapshot.runId, operationId, input.at],
+          );
+          if (inserted.rowCount !== 1) {
+            throw new Error('Budget operation identity was concurrently reused.');
+          }
+        }
+        return decision;
+      });
+    },
+
+    async get(investigationId, runId) {
+      const selected = await operationsPool.query<RunResourceBudgetRow>(
+        `SELECT ${runResourceBudgetColumns}
+         FROM agent_operations.run_resource_budgets
+         WHERE investigation_id = $1 AND run_id = $2`,
+        [
+          requireIdentity(investigationId, 'Investigation identity'),
+          requireIdentity(runId, 'Run identity'),
+        ],
+      );
+      const row = selected.rows[0];
+      return row === undefined ? null : budgetSnapshotFromRow(row);
+    },
+  };
+
   const applicationOutbox: ApplicationOutbox = {
     async append(event) {
       await withTransaction(operationsPool, (client) => insertEvent(client, event));
@@ -731,6 +985,7 @@ export const createPostgresOperationsAgentPersistence = (
     businessRecordRepository,
     investigationTransaction,
     checkpointRepository,
+    budgetGuard,
     applicationOutbox,
     auditRecorder,
     async close() {

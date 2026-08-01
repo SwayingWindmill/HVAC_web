@@ -153,6 +153,11 @@ try {
     '/migrations/operations/003_operator_input_interrupt.sql',
   );
   applyMigration(
+    'operations_agent_operations_migrator',
+    'operations-migrator-local-only',
+    '/migrations/operations/004_run_resource_budgets.sql',
+  );
+  applyMigration(
     'operations_agent_checkpoints_migrator',
     'checkpoints-migrator-local-only',
     '/migrations/checkpoints/001_agent_checkpoints.sql',
@@ -197,9 +202,13 @@ try {
       || '|'
       || (to_regclass('agent_operations.investigation_business_records') IS NOT NULL)::text
       || '|'
+      || (to_regclass('agent_operations.run_resource_budgets') IS NOT NULL)::text
+      || '|'
+      || (to_regclass('agent_operations.run_resource_budget_operations') IS NOT NULL)::text
+      || '|'
       || (to_regclass('agent_checkpoints.runtime_checkpoints') IS NOT NULL)::text
   `);
-  if (migrationState !== 'true|true|true|true') {
+  if (migrationState !== 'true|true|true|true|true|true') {
     throw new Error(`Operations Agent migrations are incomplete: ${migrationState}`);
   }
   report.assertions.migrations = migrationState;
@@ -218,6 +227,7 @@ try {
     '--test',
     '--test-concurrency=1',
     'services/operations-agent-service/test/postgres-persistence.test.mjs',
+    'services/operations-agent-service/test/postgres-run-resource-budget.test.mjs',
     'services/operations-agent-service/test/postgres-langgraph-runtime.test.mjs',
     'services/operations-agent-service/test/postgres-site-night-energy-investigation.test.mjs',
   ], {

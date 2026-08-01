@@ -1179,10 +1179,38 @@ func validateOperationsRecordArray(value any, maximum int, validate func(any) (s
 	return nil
 }
 
+func validateOperationsRunResourceBudget(value any) error {
+	if value == nil {
+		return nil
+	}
+	budget, ok := value.(map[string]any)
+	if !ok || !operationsExactKeys(
+		budget,
+		"schemaVersion", "policyRevision", "outcome", "exhaustedDimension", "consumed", "limit",
+	) || budget["schemaVersion"] != json.Number("1") {
+		return errors.New("invalid Operations Run resource budget shape")
+	}
+	if _, ok := operationsBoundedString(budget["policyRevision"], 256); !ok ||
+		!operationsAllowedString(budget["outcome"], "PARTIAL", "UNABLE_TO_CONCLUDE") ||
+		!operationsAllowedString(
+			budget["exhaustedDimension"],
+			"MODEL_INVOCATIONS", "TOOL_REQUESTS", "WALL_CLOCK_MS", "QUERY_RANGE_MS",
+			"QUERY_BUCKETS", "OWNER_RECORDS", "PAYLOAD_BYTES",
+		) {
+		return errors.New("invalid Operations Run resource budget identity")
+	}
+	consumed, consumedOK := operationsNonnegativeInteger(budget["consumed"])
+	limit, limitOK := operationsNonnegativeInteger(budget["limit"])
+	if !consumedOK || !limitOK || limit == 0 || consumed <= limit {
+		return errors.New("invalid Operations Run resource budget usage")
+	}
+	return nil
+}
+
 func validateOperationsInvestigationValue(root map[string]any, includeToolReceipts bool) error {
 	expected := []string{
 		"schemaVersion", "id", "scope", "status", "revision", "createdAt", "activeRun", "outcome",
-		"evidence", "analysisReferences", "findings", "operatorInputRequest", "acceptedOperatorInputs",
+		"resourceBudget", "evidence", "analysisReferences", "findings", "operatorInputRequest", "acceptedOperatorInputs",
 	}
 	if includeToolReceipts {
 		expected = append(expected, "toolReceipts")
@@ -1225,6 +1253,12 @@ func validateOperationsInvestigationValue(root map[string]any, includeToolReceip
 	}
 	if root["outcome"] != nil && !operationsAllowedString(root["outcome"], "SUPPORTED_SITE_FINDING", "UNABLE_TO_CONCLUDE") {
 		return errors.New("invalid Operations Investigation outcome")
+	}
+	if err := validateOperationsRunResourceBudget(root["resourceBudget"]); err != nil {
+		return err
+	}
+	if root["resourceBudget"] != nil && root["outcome"] != "UNABLE_TO_CONCLUDE" {
+		return errors.New("Operations resource exhaustion requires an unable-to-conclude Investigation outcome")
 	}
 	scope := root["scope"].(map[string]any)
 	organizationID := scope["organizationId"].(string)
@@ -1333,6 +1367,9 @@ func inspectOperationsSnapshotPayload(value any) error {
 		"runtimeRevision": {}, "providerMessage": {}, "points": {}, "rawPrompt": {},
 		"instructions": {}, "ownerPayload": {}, "modelOutput": {}, "allowedReadTools": {},
 		"effectPolicy": {}, "scopePolicy": {}, "untrustedContentPolicy": {},
+		"operationId": {}, "acceptedOperations": {}, "usage": {}, "limits": {},
+		"modelInvocations": {}, "toolRequests": {}, "wallClockMs": {}, "queryRangeMs": {},
+		"queryBuckets": {}, "ownerRecords": {}, "payloadBytes": {}, "maximumQueryRangeMs": {},
 	}
 	var inspect func(any) error
 	inspect = func(candidate any) error {
@@ -1406,7 +1443,7 @@ func validateOperationsInvestigationList(raw []byte) error {
 	for index, candidate := range investigations {
 		item, ok := candidate.(map[string]any)
 		if !ok || !operationsExactKeys(item,
-			"schemaVersion", "id", "scope", "status", "revision", "createdAt", "outcome",
+			"schemaVersion", "id", "scope", "status", "revision", "createdAt", "outcome", "resourceBudget",
 			"evidenceCount", "analysisReferenceCount", "findingCount", "toolReceiptCount",
 			"acceptedOperatorInputCount",
 		) || item["schemaVersion"] != json.Number("1") {
@@ -1429,6 +1466,12 @@ func validateOperationsInvestigationList(raw []byte) error {
 		outcome := item["outcome"]
 		if outcome != nil && !operationsAllowedString(outcome, "SUPPORTED_SITE_FINDING", "UNABLE_TO_CONCLUDE") {
 			return errors.New("invalid Operations Investigation outcome")
+		}
+		if err := validateOperationsRunResourceBudget(item["resourceBudget"]); err != nil {
+			return err
+		}
+		if item["resourceBudget"] != nil && outcome != "UNABLE_TO_CONCLUDE" {
+			return errors.New("Operations summary resource exhaustion requires an unable-to-conclude outcome")
 		}
 		createdAt, createdOK := operationsNonnegativeInteger(item["createdAt"])
 		if _, ok := operationsNonnegativeInteger(item["revision"]); !ok || !createdOK {
@@ -1550,6 +1593,9 @@ func inspectOperationsEventPayload(value any) error {
 		"effectPolicy": {}, "scopePolicy": {}, "untrustedContentPolicy": {},
 		"toolPayload": {}, "delegationGrant": {}, "authorizationDecision": {},
 		"metadata": {}, "attemptId": {},
+		"operationId": {}, "acceptedOperations": {}, "usage": {}, "limits": {},
+		"modelInvocations": {}, "toolRequests": {}, "wallClockMs": {}, "queryRangeMs": {},
+		"queryBuckets": {}, "ownerRecords": {}, "payloadBytes": {}, "maximumQueryRangeMs": {},
 	}
 	var inspect func(any) error
 	inspect = func(candidate any) error {

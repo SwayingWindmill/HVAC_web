@@ -218,7 +218,7 @@ func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, now time
 				unsafe := "id: 9:0\nevent: RUN_STARTED\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"investigation-001\",\"runId\":\"run-001\",\"checkpoint\":{}}\n\n"
 				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(unsafe))}, nil
 			}
-			investigation := `{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[]}`
+			investigation := `{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","resourceBudget":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[]}`
 			plan := `{"schemaVersion":1,"id":"site-night-energy-investigation","label":"Site night-energy investigation","completedSteps":4,"totalSteps":4,"progressPercent":100,"steps":[{"id":"READ_SITE_CONTEXT","label":"Read authoritative Site context","status":"COMPLETED"},{"id":"READ_ENERGY_SERIES","label":"Read authoritative night-energy periods","status":"COMPLETED"},{"id":"ANALYZE","label":"Run deterministic night-energy analysis","status":"COMPLETED"},{"id":"COMMIT_RESULT","label":"Commit Evidence, Analysis and Finding","status":"COMPLETED"}]}`
 			stream := "id: 9:0\nevent: RUN_STARTED\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"investigation-001\",\"runId\":\"run-001\"}\n\n" +
 				"id: 9:1\nevent: STATE_SNAPSHOT\ndata: {\"type\":\"STATE_SNAPSHOT\",\"snapshot\":{\"schemaVersion\":\"operations-investigation-ui/v1\",\"investigation\":" + investigation + ",\"plan\":" + plan + ",\"toolActivities\":[]}}\n\n" +
@@ -243,16 +243,16 @@ func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, now time
 			}
 			return &http.Response{StatusCode: http.StatusOK, Header: recoveryHeaders, Body: io.NopCloser(strings.NewReader(stream))}, nil
 		}
-		body := `{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[],"toolReceipts":[]}`
+		body := `{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","resourceBudget":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[],"toolReceipts":[]}`
 		status := http.StatusOK
 		if strings.HasSuffix(request.URL.Path, "/operations/investigations") {
 			if request.Method == http.MethodGet {
-				body = `{"schemaVersion":1,"investigations":[{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"outcome":"SUPPORTED_SITE_FINDING","evidenceCount":2,"analysisReferenceCount":1,"findingCount":1,"toolReceiptCount":4,"acceptedOperatorInputCount":0}]}`
+				body = `{"schemaVersion":1,"investigations":[{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"outcome":"SUPPORTED_SITE_FINDING","resourceBudget":null,"evidenceCount":2,"analysisReferenceCount":1,"findingCount":1,"toolReceiptCount":4,"acceptedOperatorInputCount":0}]}`
 			} else {
 				status = http.StatusCreated
 			}
 		} else if strings.HasSuffix(request.URL.Path, ":submit-operator-input") {
-			body = `{"outcome":"COMMITTED","investigation":{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"RUNNING","revision":10,"createdAt":1,"activeRun":{"id":"run-001","status":"ACTIVE","startedAt":1},"outcome":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[{"schemaVersion":1,"recordType":"OPERATOR_INPUT_ACCEPTED","id":"operator-input-record-001","investigationId":"investigation-001","recordedAt":2,"requestId":"operator-input-request-001","runId":"run-001","idempotencyKey":"operator-input-idempotency-001","inputKind":"SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION","inputDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"values":{"analysisScope":"SITE_ONLY","operatorNote":"Proceed with Site-only authority."},"provenance":{"actorType":"OPERATOR","source":"PLATFORM_GATEWAY","authorizationDecisionId":"allow-site","policyRevision":"identity-policy-1","submittedAt":2}}],"toolReceipts":[]}}`
+			body = `{"outcome":"COMMITTED","investigation":{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"RUNNING","revision":10,"createdAt":1,"activeRun":{"id":"run-001","status":"ACTIVE","startedAt":1},"outcome":null,"resourceBudget":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[{"schemaVersion":1,"recordType":"OPERATOR_INPUT_ACCEPTED","id":"operator-input-record-001","investigationId":"investigation-001","recordedAt":2,"requestId":"operator-input-request-001","runId":"run-001","idempotencyKey":"operator-input-idempotency-001","inputKind":"SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION","inputDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"values":{"analysisScope":"SITE_ONLY","operatorNote":"Proceed with Site-only authority."},"provenance":{"actorType":"OPERATOR","source":"PLATFORM_GATEWAY","authorizationDecisionId":"allow-site","policyRevision":"identity-policy-1","submittedAt":2}}],"toolReceipts":[]}}`
 		}
 		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})}
@@ -338,6 +338,22 @@ func TestOperationsGatewayEnforcesSessionCSRFScopeAndServiceDelegation(t *testin
 	fixture.handler.ServeHTTP(wrongContentRecorder, wrongContentType)
 	if wrongContentRecorder.Code != http.StatusUnsupportedMediaType || fixture.iamCalls.Load() != 1 || fixture.operationsCalls.Load() != 1 {
 		t.Fatalf("content type failure reached upstreams: status=%d IAM=%d Operations=%d", wrongContentRecorder.Code, fixture.iamCalls.Load(), fixture.operationsCalls.Load())
+	}
+}
+
+func TestOperationsGatewayRejectsCallerSuppliedRunBudgetWidening(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	path := "/api/v1/sites/" + fixture.siteID + "/operations/investigations/investigation-001:advance"
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{\"resourceBudget\":{\"limits\":{\"toolRequests\":999999}}}"))
+	fixture.authenticate(request, true)
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("caller-supplied budget widening was not rejected: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if fixture.iamCalls.Load() != 0 || fixture.operationsCalls.Load() != 0 {
+		t.Fatalf("caller-supplied budget widening reached upstreams: IAM=%d Operations=%d", fixture.iamCalls.Load(), fixture.operationsCalls.Load())
 	}
 }
 
@@ -599,14 +615,15 @@ func TestOperationsGatewayTypedSnapshotValidatorRejectsForgedAuthority(t *testin
 		"expectedBuckets": 8,
 	}
 	snapshot := map[string]any{
-		"schemaVersion": 1,
-		"id":            investigationID,
-		"scope":         scope,
-		"status":        "COMPLETED",
-		"revision":      9,
-		"createdAt":     1,
-		"activeRun":     nil,
-		"outcome":       "UNABLE_TO_CONCLUDE",
+		"schemaVersion":  1,
+		"id":             investigationID,
+		"scope":          scope,
+		"status":         "COMPLETED",
+		"revision":       9,
+		"createdAt":      1,
+		"activeRun":      nil,
+		"outcome":        "UNABLE_TO_CONCLUDE",
+		"resourceBudget": nil,
 		"evidence": []any{map[string]any{
 			"schemaVersion":           1,
 			"recordType":              "EVIDENCE",
@@ -727,6 +744,31 @@ func TestOperationsGatewayTypedSnapshotValidatorRejectsForgedAuthority(t *testin
 		t.Fatalf("valid typed Operations snapshot was rejected: %v", err)
 	}
 
+	exhausted := clone(snapshot)
+	exhausted["resourceBudget"] = map[string]any{
+		"schemaVersion":      1,
+		"policyRevision":     "operations-agent-run-resource-policy/v1",
+		"outcome":            "PARTIAL",
+		"exhaustedDimension": "PAYLOAD_BYTES",
+		"consumed":           1_025,
+		"limit":              1_024,
+	}
+	if err := validateOperationsSnapshot(encode(exhausted)); err != nil {
+		t.Fatalf("bounded Run resource exhaustion was rejected: %v", err)
+	}
+
+	leakedBudget := clone(exhausted)
+	leakedBudget["resourceBudget"].(map[string]any)["usage"] = map[string]any{"payloadBytes": 1_025}
+	if err := validateOperationsSnapshot(encode(leakedBudget)); err == nil {
+		t.Fatal("internal Run resource usage crossed the Gateway")
+	}
+
+	nonExhaustedBudget := clone(exhausted)
+	nonExhaustedBudget["resourceBudget"].(map[string]any)["consumed"] = 1_024
+	if err := validateOperationsSnapshot(encode(nonExhaustedBudget)); err == nil {
+		t.Fatal("non-exhausted Run resource outcome was accepted")
+	}
+
 	missingRevision := clone(snapshot)
 	missingRevision["evidence"].([]any)[0].(map[string]any)["sources"].([]any)[0].(map[string]any)["datasetRevision"] = nil
 	if err := validateOperationsSnapshot(encode(missingRevision)); err == nil {
@@ -784,6 +826,11 @@ func TestOperationsGatewayRejectsRuntimeControlFieldsFromPublicProjections(t *te
 		"effectPolicy",
 		"scopePolicy",
 		"untrustedContentPolicy",
+		"operationId",
+		"acceptedOperations",
+		"usage",
+		"limits",
+		"maximumQueryRangeMs",
 	} {
 		payload := map[string]any{field: "forbidden"}
 		if err := inspectOperationsSnapshotPayload(payload); err == nil {

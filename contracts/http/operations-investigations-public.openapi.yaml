@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: HVAC Operations Investigations Public API
-  version: 1.4.0
-  description: Platform Gateway contract for Site-scoped Investigation lists, typed provenance views, bounded Operator Input interrupts, typed untrusted-content rejection and reconnect-safe AG-UI recovery batches.
+  version: 1.5.0
+  description: Platform Gateway contract for Site-scoped Investigation lists, typed provenance views, bounded Operator Input interrupts, typed untrusted-content rejection, bounded per-Run resource exhaustion and reconnect-safe AG-UI recovery batches.
 servers:
   - url: https://api.example.invalid
 paths:
@@ -568,10 +568,23 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/ToolReceiptMetadataValue'
+    RunResourceBudgetOutcome:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, policyRevision, outcome, exhaustedDimension, consumed, limit]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        policyRevision: { type: string, minLength: 1, maxLength: 256 }
+        outcome: { type: string, enum: [PARTIAL, UNABLE_TO_CONCLUDE] }
+        exhaustedDimension:
+          type: string
+          enum: [MODEL_INVOCATIONS, TOOL_REQUESTS, WALL_CLOCK_MS, QUERY_RANGE_MS, QUERY_BUCKETS, OWNER_RECORDS, PAYLOAD_BYTES]
+        consumed: { type: integer, format: int64, minimum: 0 }
+        limit: { type: integer, format: int64, minimum: 1 }
     SiteNightEnergyInvestigationView:
       type: object
       additionalProperties: false
-      required: [schemaVersion, id, scope, status, revision, createdAt, activeRun, outcome, evidence, analysisReferences, findings, operatorInputRequest, acceptedOperatorInputs, toolReceipts]
+      required: [schemaVersion, id, scope, status, revision, createdAt, activeRun, outcome, resourceBudget, evidence, analysisReferences, findings, operatorInputRequest, acceptedOperatorInputs, toolReceipts]
       properties:
         schemaVersion: { type: integer, enum: [1] }
         id: { type: string, minLength: 1, maxLength: 256 }
@@ -587,6 +600,10 @@ components:
           type: string
           nullable: true
           enum: [SUPPORTED_SITE_FINDING, UNABLE_TO_CONCLUDE]
+        resourceBudget:
+          nullable: true
+          allOf:
+            - : '#/components/schemas/RunResourceBudgetOutcome'
         evidence:
           type: array
           maxItems: 32
@@ -614,7 +631,7 @@ components:
     SiteNightEnergyInvestigationSummary:
       type: object
       additionalProperties: false
-      required: [schemaVersion, id, scope, status, revision, createdAt, outcome, evidenceCount, analysisReferenceCount, findingCount, toolReceiptCount, acceptedOperatorInputCount]
+      required: [schemaVersion, id, scope, status, revision, createdAt, outcome, resourceBudget, evidenceCount, analysisReferenceCount, findingCount, toolReceiptCount, acceptedOperatorInputCount]
       properties:
         schemaVersion: { type: integer, enum: [1] }
         id: { type: string, minLength: 1, maxLength: 256 }
@@ -626,6 +643,10 @@ components:
           type: string
           nullable: true
           enum: [SUPPORTED_SITE_FINDING, UNABLE_TO_CONCLUDE]
+        resourceBudget:
+          nullable: true
+          allOf:
+            - : '#/components/schemas/RunResourceBudgetOutcome'
         evidenceCount: { type: integer, minimum: 0, maximum: 32 }
         analysisReferenceCount: { type: integer, minimum: 0, maximum: 32 }
         findingCount: { type: integer, minimum: 0, maximum: 32 }

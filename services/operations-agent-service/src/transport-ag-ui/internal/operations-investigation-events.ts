@@ -215,6 +215,7 @@ export const projectOperationsInvestigationToAgUiEvents = (
     createdAt: view.createdAt,
     activeRun: view.activeRun,
     outcome: view.outcome,
+    resourceBudget: view.resourceBudget,
     evidence: view.evidence,
     analysisReferences: view.analysisReferences,
     findings: view.findings,

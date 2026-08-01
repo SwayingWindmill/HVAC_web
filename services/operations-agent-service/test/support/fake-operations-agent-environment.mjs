@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 
-import { createInvestigationCoordinator } from '../../dist/index.js';
+import {
+  createInMemoryRunResourceBudgetGuard,
+  createInvestigationCoordinator,
+} from '../../dist/index.js';
 import { InvestigationRepositoryConflictError } from '../../dist/application/index.js';
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -256,6 +259,7 @@ export const createFakeOperationsAgentEnvironment = ({
   const checkpointStore = new FakeCheckpointStore();
   const runtime = new ScriptedFakeRuntime(runtimeSteps);
   const owners = new FakeOwnerReaders(scope, ownerDelayMs, ownerResultFactory);
+  const budgetGuard = createInMemoryRunResourceBudgetGuard();
 
   const applicationOutbox = {
     append: async (event) => businessStore.outboxEvents.push(event),
@@ -286,11 +290,7 @@ export const createFakeOperationsAgentEnvironment = ({
     checkpointRepository: checkpointStore.repository,
     applicationOutbox,
     auditRecorder,
-    budgetGuard: {
-      async check() {
-        return { decision: 'ALLOW' };
-      },
-    },
+    budgetGuard,
     ownerReaders: owners.ports,
     clock: { now: () => currentTime },
     idGenerator: createIdentityGenerator(),

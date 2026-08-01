@@ -4,7 +4,7 @@ Status: accepted plan
 
 Date: 2026-07-31
 
-Tracking: GitHub Map #118; Maps 0–4 are complete through #178. Map 5 production gates are split into #206–#211; Map 5.1 untrusted-content and prompt-injection boundaries are implemented by #206.
+Tracking: GitHub Map #118; Maps 0–4 are complete through #178. Map 5 production gates are split into #206–#211; Map 5.1 is implemented by #206 and Map 5.2 per-Run resource budgets are implemented by #207.
 
 This plan turns ADR 0009, ADR 0010 and the accepted modular architecture into an implementation sequence. It deliberately starts with deletion of the retired Python Agent, then establishes an executable benchmark before introducing the TypeScript runtime.
 
@@ -288,7 +288,7 @@ The Operations Agent has enforceable authorization, safety, resource, audit, obs
 Planned tracer bullets:
 
 1. Add prompt-injection and untrusted-content controls.
-2. Add per-run model, tool, time, query and payload budgets.
+2. Add per-run model, Tool, time, query and payload budgets — implemented by #207.
 3. Add OpenTelemetry correlation and redacted model/tool metrics.
 4. Add Audit Ledger records for governed business events.
 5. Add authorization-negative, retry, restart, concurrency and stream-recovery suites.
@@ -297,6 +297,12 @@ Planned tracer bullets:
 Map 5.1 establishes the Runtime trust boundary. Operator text, bounded Operator notes, Owner-returned text or metadata, retrieved content and model output are classified as untrusted data and cannot select Tools, widen Scope, alter authorization, budgets or effect policy. The Coordinator supplies only a frozen, versioned `trusted-runtime-context/v1` to the LangGraph adapter. The adapter revalidates that exact context, and the Coordinator validates the exact bounded planning result before any authorization exchange or Owner call. Unsafe fields, unsupported Tools, malformed fixed inputs and Scope widening fail with typed safety errors and create no Checkpoint, Outbox, Audit or business effect. A deterministic injection scenario hard-blocks missing trust policy or Tool allowlist widening, while AG-UI and Platform Gateway reject Runtime control fields and raw prompt content from public projections.
 
 Map 5.1 status: implemented by Ticket #206.
+
+Map 5.2 establishes one immutable versioned resource policy per Agent Run. The Application guard accounts for model planning, Tool requests, wall-clock duration, query range and buckets, Owner records and payload bytes. It checks before new external work and before business effects; exact retries use stable operation identities and do not consume twice. PostgreSQL stores limits, monotonic counters, operation identities and typed exhaustion in agent_operations under row locks. Checkpoint deletion, process restart and concurrent workers cannot reset or overrun the remaining budget.
+
+Public HTTP, AG-UI and the Real Operations Workspace expose only the bounded exhaustion result. Platform Gateway rejects caller-supplied budget fields before IAM or Operations upstream calls and rejects full counters, limits or operation identities from public projections. Four deterministic scenarios independently certify wall-clock, Tool-request, query-range and payload exhaustion, including PARTIAL preservation when Evidence was already committed.
+
+Map 5.2 status: implemented by Ticket #207.
 
 Completion gate:
 
