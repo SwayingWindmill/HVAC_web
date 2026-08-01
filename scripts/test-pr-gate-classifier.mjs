@@ -68,6 +68,7 @@ test('package, workflow, and central task-matrix changes fail closed to the broa
     'package.json',
     '.github/workflows/s2-realtime-backend.yml',
     'scripts/domain-task-matrix.mjs',
+    'scripts/package-script-long-chain-baseline.json',
     'scripts/run-capability-task.mjs',
   ]) {
     const classification = runClassification([file]);

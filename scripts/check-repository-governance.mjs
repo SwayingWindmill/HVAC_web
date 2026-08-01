@@ -1,9 +1,14 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { capabilityTaskMatrix } from './domain-task-matrix.mjs';
+
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const maximumInlineCommands = 4;
+const longChainBaselinePath = 'scripts/package-script-long-chain-baseline.json';
 
 const forbiddenTrackedPrefixes = Object.freeze([
   '.ai-bridge/',
@@ -28,6 +33,62 @@ const forbiddenTrackedSuffixes = Object.freeze([
 const forbiddenTrackedBasenames = new Set(['.DS_Store', 'Thumbs.db']);
 
 const normalizePath = (value) => value.split(sep).join('/').replaceAll('\\', '/');
+const hashScriptCommand = (command) => createHash('sha256').update(command).digest('hex');
+const countInlineCommands = (command) => command.split(/\s*&&\s*/u).filter(Boolean).length;
+
+export const createPackageScriptLongChainBaseline = (scripts) => ({
+  schemaVersion: 1,
+  maximumInlineCommands,
+  scripts: Object.fromEntries(
+    Object.entries(scripts)
+      .filter(([, command]) => countInlineCommands(command) > maximumInlineCommands)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, command]) => [name, {
+        sha256: hashScriptCommand(command),
+        reason: 'Legacy inline orchestration; migrate to capabilityTaskMatrix before changing.',
+      }]),
+  ),
+});
+
+export const findPackageScriptViolations = ({ scripts, baseline, capabilityTasks = capabilityTaskMatrix }) => {
+  const violations = [];
+  if (baseline?.schemaVersion !== 1 || baseline?.maximumInlineCommands !== maximumInlineCommands
+    || !baseline.scripts || typeof baseline.scripts !== 'object') {
+    return [`${longChainBaselinePath}: invalid or unsupported baseline schema`];
+  }
+
+  for (const task of Object.keys(capabilityTasks)) {
+    const expected = `node scripts/run-capability-task.mjs --task=${task}`;
+    if (scripts[task] !== expected) {
+      violations.push(`package.json: capability task \`${task}\` must delegate to \`${expected}\``);
+    }
+    if (Object.hasOwn(baseline.scripts, task)) {
+      violations.push(`${longChainBaselinePath}: migrated capability task \`${task}\` must not remain exempted`);
+    }
+  }
+
+  for (const [name, command] of Object.entries(scripts)) {
+    const commandCount = countInlineCommands(command);
+    if (commandCount <= maximumInlineCommands) continue;
+    const baselineEntry = baseline.scripts[name];
+    if (!baselineEntry) {
+      violations.push(`package.json: script \`${name}\` contains ${commandCount} inline commands; migrate it or add a reviewed baseline entry`);
+      continue;
+    }
+    if (baselineEntry.sha256 !== hashScriptCommand(command)) {
+      violations.push(`package.json: long-chain script \`${name}\` changed; migrate it instead of updating inline orchestration`);
+    }
+  }
+
+  for (const name of Object.keys(baseline.scripts)) {
+    const command = scripts[name];
+    if (!command || countInlineCommands(command) <= maximumInlineCommands) {
+      violations.push(`${longChainBaselinePath}: stale exemption for \`${name}\``);
+    }
+  }
+
+  return violations;
+};
 
 export const findTrackedArtifactViolations = (trackedFiles) => {
   const violations = [];
@@ -104,8 +165,13 @@ const listServiceNames = (root) => readdirSync(join(root, 'services'), {
 
 export const checkRepositoryGovernance = (root = repositoryRoot) => {
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  const longChainBaseline = JSON.parse(readFileSync(join(root, longChainBaselinePath), 'utf8'));
   const violations = [
     ...findTrackedArtifactViolations(listTrackedFiles(root)),
+    ...findPackageScriptViolations({
+      scripts: packageJson.scripts ?? {},
+      baseline: longChainBaseline,
+    }),
     ...findDocumentationViolations({
       serviceNames: listServiceNames(root),
       rootReadme: readFileSync(join(root, 'README.md'), 'utf8'),

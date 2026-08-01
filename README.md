@@ -106,16 +106,14 @@ npm run domain:run -- --domain=command --layers=unit,integration
 
 支持的领域包括 `web`、`platform`、`registry`、`telemetry`、`command`、`analytics`、`operations-agent` 和 `pocs`。命令及 Profile 的唯一配置源是 `scripts/domain-task-matrix.mjs`。全量回归通过命名集合执行：`all` 覆盖某个 Gate 的全部 Profile，`browser-linux` 和 `browser-windows` 保持浏览器检查的运行平台边界；新增 Profile 未加入这些集合时矩阵会立即失败。
 
-较长但仍需保留公共名称的能力检查也由同一矩阵维护。`s2:telemetry-baseline`、`s2:realtime-backend`、`s3:command-safety` 和 `s3:command-authority` 目前委托给受限的 capability runner；可在不执行真实测试的情况下查看展开顺序：
+较长但仍需保留公共名称的能力检查也由同一矩阵维护。目前已迁移 12 个 S2/S3 能力入口，包括 Telemetry Baseline、IAM、Runtime、History、Ingest、Gateway、Realtime，以及 Command Safety、Authority、API、ThingsBoard 和 UX。公共 npm 名称保持不变；可在不执行真实测试的情况下查看展开顺序：
 
 ```bash
-node scripts/run-capability-task.mjs --task=s2:telemetry-baseline --dry-run=true
-node scripts/run-capability-task.mjs --task=s2:realtime-backend --dry-run=true
-node scripts/run-capability-task.mjs --task=s3:command-safety --dry-run=true
-node scripts/run-capability-task.mjs --task=s3:command-authority --dry-run=true
+node scripts/run-capability-task.mjs --task=s2:gateway-snapshot --dry-run=true
+node scripts/run-capability-task.mjs --task=s3:command-ux --dry-run=true
 ```
 
-`repo:check` 只检查 Git 已跟踪文件，防止日志、本地协调数据和生成产物进入版本库，并校验服务目录与 README 服务清单一致。`.worktrees/` 当前仅保持 Git 忽略，不纳入该检查的失败规则。
+`repo:check` 只检查 Git 已跟踪文件，防止日志、本地协调数据和生成产物进入版本库，并校验服务目录与 README 服务清单一致。它还通过 `scripts/package-script-long-chain-baseline.json` 对根脚本执行棘轮治理：超过四个内联命令的旧链条只能原样保留，新增或修改长链必须迁入任务矩阵；已迁移能力入口不得回退为 `&&` 命令链。基线更新命令 `npm run repo:long-chains:update` 仅用于显式审查后的例外调整。`.worktrees/` 当前仅保持 Git 忽略，不纳入该检查的失败规则。
 
 ## 依赖所有权
 

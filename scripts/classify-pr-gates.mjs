@@ -146,13 +146,17 @@ for (const file of files) {
   });
   match(file.startsWith('.github/workflows/'), () => selectBroad(file, 'workflow behavior changed'));
   match([
+    'scripts/check-repository-governance.mjs',
     'scripts/classify-pr-gates.mjs',
     'scripts/domain-task-matrix.mjs',
+    'scripts/package-script-long-chain-baseline.json',
     'scripts/run-capability-task.mjs',
     'scripts/run-domain-task.mjs',
     'scripts/run-pr-gate.mjs',
     'scripts/test-domain-task-matrix.mjs',
     'scripts/test-pr-gate-classifier.mjs',
+    'scripts/test-repository-governance.mjs',
+    'scripts/update-package-script-long-chain-baseline.mjs',
   ].includes(file), () => selectBroad(file, 'PR gate or domain task matrix implementation changed'));
 
   match(file.startsWith('apps/hvac-web/') || file.startsWith('runtimes/copilot-runtime/'), () => selectWeb(file, 'HVAC Web runtime changed'));
@@ -214,13 +218,17 @@ for (const file of files) {
       callback();
     };
     scriptMatch([
+      'scripts/check-repository-governance.mjs',
       'scripts/classify-pr-gates.mjs',
       'scripts/domain-task-matrix.mjs',
+      'scripts/package-script-long-chain-baseline.json',
       'scripts/run-capability-task.mjs',
       'scripts/run-domain-task.mjs',
       'scripts/run-pr-gate.mjs',
       'scripts/test-domain-task-matrix.mjs',
       'scripts/test-pr-gate-classifier.mjs',
+      'scripts/test-repository-governance.mjs',
+      'scripts/update-package-script-long-chain-baseline.mjs',
     ].includes(file), () => {});
     scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.includes('ui-audit') || lower.includes('bigscreen') || lower.includes('ops-loop'), () => selectWeb(file, 'browser or RMS automation changed'));
     scriptMatch(lower.includes('s0-') || lower.includes('durable') || lower.includes('auth-principal') || lower.includes('platform-gateway'), () => selectS0(file, 'S0 automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') || lower.includes('audit') }));

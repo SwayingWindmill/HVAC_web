@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createPackageScriptLongChainBaseline,
   findDocumentationViolations,
+  findPackageScriptViolations,
   findTrackedArtifactViolations,
   findWorkflowViolations,
 } from './check-repository-governance.mjs';
@@ -43,4 +45,55 @@ test('workflow checks require repository governance in the protected static gate
     - run: npm run --silent repo:check
     - run: npm run --silent repo:governance:test
   `), []);
+});
+
+test('package script governance ratchets long chains and capability delegates', () => {
+  const scripts = {
+    legacy: 'one && two && three && four && five',
+    migrated: 'node scripts/run-capability-task.mjs --task=migrated',
+    compact: 'one && two && three && four',
+  };
+  const baseline = createPackageScriptLongChainBaseline(scripts);
+  const capabilityTasks = { migrated: [] };
+
+  assert.deepEqual(findPackageScriptViolations({ scripts, baseline, capabilityTasks }), []);
+  assert.deepEqual(Object.keys(baseline.scripts), ['legacy']);
+
+  const newLongChain = {
+    ...scripts,
+    added: 'one && two && three && four && five',
+  };
+  assert.ok(findPackageScriptViolations({
+    scripts: newLongChain,
+    baseline,
+    capabilityTasks,
+  }).some((violation) => violation.includes('script `added` contains 5 inline commands')));
+
+  const modifiedLongChain = {
+    ...scripts,
+    legacy: `${scripts.legacy} && six`,
+  };
+  assert.ok(findPackageScriptViolations({
+    scripts: modifiedLongChain,
+    baseline,
+    capabilityTasks,
+  }).some((violation) => violation.includes('long-chain script `legacy` changed')));
+
+  const revertedCapability = {
+    ...scripts,
+    migrated: 'one && two && three && four && five',
+  };
+  assert.ok(findPackageScriptViolations({
+    scripts: revertedCapability,
+    baseline,
+    capabilityTasks,
+  }).some((violation) => violation.includes('capability task `migrated` must delegate')));
+
+  const removedLegacy = { ...scripts };
+  delete removedLegacy.legacy;
+  assert.ok(findPackageScriptViolations({
+    scripts: removedLegacy,
+    baseline,
+    capabilityTasks,
+  }).some((violation) => violation.includes('stale exemption for `legacy`')));
 });
