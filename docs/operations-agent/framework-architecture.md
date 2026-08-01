@@ -209,7 +209,7 @@ Exact transport schemas are deferred. The important constraint is that callers n
 
 The initial implementation exports `createInvestigationCoordinator` from the package root. Its public commands cover creation, start, completed-Investigation reopen, READ advancement, effect commit, pause, resume, cancel, complete, fail and query. Every command reauthorizes the Investigation's authoritative Scope through an application port before state or data is returned. Runtime planning can return only typed parallel READ batches, an inability-to-conclude result and opaque Checkpoint state. It cannot return or persist Investigation Evidence, Findings or Proposed Actions. Those effects require a Coordinator command carrying the active Run, Agent Run Lease, expected Investigation Revision, Step Identity and Idempotency Key. Exact retries return the existing committed effect without another Repository write.
 
-The current Application ports cover authorization decisions, the business Investigation Repository, an atomic Investigation Transaction, Agent execution planning, Runtime Checkpoints, Registry/Telemetry/Analytics/Command READ owners, budget, Outbox append, Audit recording, clock and identity generation. The Investigation Transaction commits the new aggregate revision, Outbox event and Audit record as one unit; Map 2.4 must implement that contract in PostgreSQL. The ports contain no LangGraph, database, AG-UI, CopilotKit or model-provider types.
+The current Application ports cover authorization decisions, the business Investigation Repository, an atomic Investigation Transaction, Agent execution planning, Runtime Checkpoints, Registry/Telemetry/Analytics/Command READ owners, a durable per-Run resource budget guard, Outbox append, Audit recording, clock and identity generation. The Investigation Transaction commits the new aggregate revision, Outbox event and Audit record as one unit; Map 2.4 must implement that contract in PostgreSQL. The ports contain no LangGraph, database, AG-UI, CopilotKit or model-provider types.
 
 ### 5.2 Application responsibilities
 
@@ -489,11 +489,11 @@ audit_records
 
 One `InvestigationTransaction` locks the current Investigation row and atomically validates Revision, optional Run Lease and appended Effect metadata before writing the new snapshot, Effect row, Outbox event and Audit record. The runtime login can update the Investigation aggregate but can only append to Effect, Outbox and Audit tables. Scope, identity, creation time and prior effect history are immutable.
 
-The conceptual future tables for plans, steps, model invocations, verification results and typed business record payloads remain deferred until a vertical slice requires them. They are not hidden inside Runtime Checkpoints.
+Plans, detailed model traces and verification-result tables remain deferred until a vertical slice requires them. Per-Run resource counters are no longer deferred: run_resource_budgets stores the immutable policy revision, fixed limits, monotonic counters and typed exhaustion, while run_resource_budget_operations deduplicates stable logical operations. They are deliberately not hidden inside Runtime Checkpoints.
 
 ### 9.2 Checkpoint persistence
 
-`agent_checkpoints` is independently owned by the checkpoint migrator and contains only opaque Runtime Checkpoints plus lookup and expiry metadata. It has no foreign key or cascading delete into `agent_operations`. Its runtime database identity cannot read or modify `agent_operations`, and the Operations runtime identity cannot access `agent_checkpoints`.
+`agent_checkpoints` is independently owned by the checkpoint migrator and contains only opaque Runtime Checkpoints plus lookup and expiry metadata. It never stores resource limits, counters, accepted budget operation identities or exhaustion state. It has no foreign key or cascading delete into `agent_operations`. Its runtime database identity cannot read or modify `agent_operations`, and the Operations runtime identity cannot access `agent_checkpoints`.
 
 The initial adapter stores an opaque state string and Runtime Revision without importing or serializing LangGraph internals. A later LangGraph adapter may define the opaque payload, but business recovery always starts by restoring the validated `OperationsInvestigationSnapshot` from `agent_operations`.
 
@@ -633,22 +633,25 @@ Security controls include:
 
 ## 15. Resource budgets
 
-Every Agent Run has explicit limits for:
+Every Agent Run receives one immutable, versioned Application policy with explicit limits for:
 
-```text
+~~~text
 model invocations
-model tokens
-read tool calls
-write or proposal attempts
-parallel reads
-elapsed time
-historical query range
-returned buckets or rows
-Evidence count and payload size
-final output size
-```
+read Tool requests
+wall-clock duration
+maximum historical query range
+query buckets
+Owner records
+Owner payload bytes
+~~~
 
-Budget exhaustion is an expected typed outcome. The Agent may preserve collected Evidence and return a partial or unable-to-conclude result. It must not enter an unbounded retry or planning loop.
+The Coordinator checks the budget before Runtime planning, before each READ batch, after each Owner response and before a new business effect. Stable logical operation identities make exact retries inert. PostgreSQL row locks serialize concurrent checks for the same Run, and the operation journal prevents two processes from consuming the same logical operation twice. A policy revision or any limit cannot change after the Run starts, even when the caller supplies the same revision name.
+
+Budget state belongs to agent_operations, not agent_checkpoints. Process restart, Checkpoint deletion and Checkpoint expiry therefore cannot reset counters. Exhaustion is persisted as one typed dimension with the exact consumed and limit values. Once exhausted, no further model call, Owner read or business effect may begin.
+
+The authoritative public projection exposes only policyRevision, outcome, exhaustedDimension, consumed and limit. Internal counters, full limits, operation identities and timestamps are rejected by AG-UI and Platform Gateway. If committed Evidence already exists the result is PARTIAL; otherwise it is UNABLE_TO_CONCLUDE. The Real Operations Workspace displays this terminal Run condition and disables further advancement.
+
+Four repository-owned deterministic scenarios independently certify wall-clock, Tool-request, query-range and payload exhaustion. Mutations that remove the policy, reset counters across restart, double-count exact retries, allow caller overrides, continue external work, continue business effects or report the wrong typed outcome fail closed.
 
 ## 16. Evaluation boundary
 

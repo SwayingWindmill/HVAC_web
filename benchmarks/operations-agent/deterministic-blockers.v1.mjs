@@ -40,6 +40,26 @@ const untrustedContentBoundarySampleSchema = z.object({
   forbiddenPathDeclared: z.boolean(),
 }).strict();
 
+const runResourceBudgetSampleSchema = z.object({
+  policyRevision: z.string().min(1).max(256),
+  dimension: z.string().min(1),
+  aggregation: z.enum(['CUMULATIVE', 'MAXIMUM', 'ELAPSED']),
+  limit: z.number().int().positive(),
+  consumedBefore: z.number().int().nonnegative(),
+  attemptedCost: z.number().int().positive(),
+  counterAfterRestart: z.number().int().nonnegative(),
+  counterAfterExactRetry: z.number().int().nonnegative(),
+  reportedDimension: z.string().min(1),
+  reportedConsumed: z.number().int().nonnegative(),
+  reportedLimit: z.number().int().positive(),
+  reportedOutcome: z.enum(['PARTIAL', 'UNABLE_TO_CONCLUDE']),
+  evidenceCommittedBeforeExhaustion: z.boolean(),
+  externalWorkAfterExhaustion: z.string().min(1),
+  businessEffectsAfterExhaustion: z.string().min(1),
+  callerLimitOverride: z.string().min(1),
+  bypassPathDeclared: z.boolean(),
+}).strict();
+
 const evaluateValidated = (schema, value, evaluate) => {
   const parsed = schema.safeParse(value);
   if (!parsed.success) {
@@ -166,6 +186,73 @@ export const evaluateUntrustedContentBoundarySample = (value) => evaluateValidat
       failures.push(failure(
         'UNTRUSTED_TOOL_SELECTION',
         'Untrusted content cannot introduce a logical Tool outside the application-declared allowlist.',
+      ));
+    }
+    return result(failures);
+  },
+);
+
+export const evaluateRunResourceBudgetSample = (value) => evaluateValidated(
+  runResourceBudgetSampleSchema,
+  value,
+  (sample) => {
+    const failures = [];
+    const expectedConsumed = sample.aggregation === 'CUMULATIVE'
+      ? sample.consumedBefore + sample.attemptedCost
+      : sample.aggregation === 'MAXIMUM'
+        ? Math.max(sample.consumedBefore, sample.attemptedCost)
+        : sample.attemptedCost;
+    if (!sample.bypassPathDeclared || sample.callerLimitOverride !== 'FORBIDDEN') {
+      failures.push(failure(
+        'RUN_RESOURCE_POLICY_MISSING',
+        'The scenario must declare an application-owned budget and forbid caller overrides or bypasses.',
+      ));
+    }
+    if (sample.counterAfterRestart !== sample.consumedBefore) {
+      failures.push(failure(
+        'RUN_RESOURCE_RESTART_RESET',
+        'Restart or Checkpoint deletion cannot reset the persisted Run resource counter.',
+      ));
+    }
+    if (sample.counterAfterExactRetry !== sample.consumedBefore) {
+      failures.push(failure(
+        'RUN_RESOURCE_RETRY_DOUBLE_COUNT',
+        'An exact retry must reuse the original logical operation without consuming the budget twice.',
+      ));
+    }
+    if (expectedConsumed <= sample.limit
+      || sample.reportedConsumed !== expectedConsumed
+      || sample.reportedLimit !== sample.limit) {
+      failures.push(failure(
+        'RUN_RESOURCE_LIMIT_NOT_EXHAUSTED',
+        'The deterministic sample must cross the declared limit and report the exact consumed and limit values.',
+      ));
+    }
+    if (sample.reportedDimension !== sample.dimension) {
+      failures.push(failure(
+        'RUN_RESOURCE_DIMENSION_MISMATCH',
+        'The typed exhaustion dimension must identify the exact guard that stopped the Run.',
+      ));
+    }
+    const expectedOutcome = sample.evidenceCommittedBeforeExhaustion
+      ? 'PARTIAL'
+      : 'UNABLE_TO_CONCLUDE';
+    if (sample.reportedOutcome !== expectedOutcome) {
+      failures.push(failure(
+        'RUN_RESOURCE_OUTCOME_MISMATCH',
+        'Budget exhaustion must preserve committed evidence as PARTIAL and otherwise return UNABLE_TO_CONCLUDE.',
+      ));
+    }
+    if (sample.externalWorkAfterExhaustion !== 'FORBIDDEN') {
+      failures.push(failure(
+        'RUN_RESOURCE_EXTERNAL_WORK_CONTINUED',
+        'No new model or Owner work may start after resource exhaustion.',
+      ));
+    }
+    if (sample.businessEffectsAfterExhaustion !== 'FORBIDDEN') {
+      failures.push(failure(
+        'RUN_RESOURCE_EFFECT_CONTINUED',
+        'No new business effect may commit after resource exhaustion.',
       ));
     }
     return result(failures);

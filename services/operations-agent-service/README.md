@@ -38,7 +38,7 @@ Evidence, Analysis Reference, Finding, Tool Execution Receipt and Proposed Actio
 through Step Identity and Idempotency Key. Evidence, Analysis Reference, Finding and Tool
 Receipt effects require a validated typed record; exact replay returns the persisted content
 without advancing Revision or duplicating journals. Runtime, persistence, Owner readers,
-Outbox, Audit, budget, clock and identity capabilities remain narrow Application ports with
+Outbox, Audit, durable per-Run resource budget, clock and identity capabilities remain narrow Application ports with
 no framework or transport types. Business aggregate writes, typed record insert, Outbox
 append and Audit append are represented by one `InvestigationTransaction` port so a concrete
 persistence adapter cannot commit only part of the business mutation.
@@ -117,13 +117,20 @@ PostgreSQL is split into two independently migrated and authorized Schemas:
 ```text
 agent_operations
   Operations Investigation snapshots, typed business records, committed effect journal,
-  Outbox and Audit
+  Outbox, Audit, per-Run resource budgets and accepted budget operation identities
   runtime identity: operations_agent_operations_runtime
 
 agent_checkpoints
   opaque Runtime Checkpoints and expiry metadata only
   runtime identity: operations_agent_checkpoints_runtime
 ```
+
+The per-Run resource guard stores an immutable policy revision and fixed limits for model
+invocations, Tool requests, wall-clock duration, query range/buckets, Owner records and payload
+bytes. It locks the Run budget row for every check and journals stable logical operation IDs, so
+concurrent workers serialize, exact retries do not double count, and process restart or Checkpoint
+deletion cannot reset counters. Exhaustion blocks new external work and business effects and
+projects only a bounded PARTIAL or UNABLE_TO_CONCLUDE result through Gateway and AG-UI.
 
 The Operations transaction locks the current Investigation row, checks the expected
 Revision and optional Run Lease, rejects rewritten Step/Idempotency history, validates

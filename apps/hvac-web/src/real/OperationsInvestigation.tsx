@@ -19,6 +19,7 @@ import {
   type OperationsOperatorInputRequest,
   type OperationsOperatorInputValues,
   type OperationsRequiredNext,
+  type OperationsRunResourceBudget,
   type OperationsToolReceipt,
 } from '@/api/operations';
 import {
@@ -68,6 +69,18 @@ function statusLabel(status: OperationsInvestigationSummary['status'], outcome: 
 
 function isTerminalStatus(status: OperationsInvestigationSummary['status'] | null): boolean {
   return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+}
+
+function budgetDimensionLabel(dimension: OperationsRunResourceBudget['exhaustedDimension']): string {
+  return ({
+    MODEL_INVOCATIONS: 'Model 调用次数',
+    TOOL_REQUESTS: 'Tool 请求数',
+    WALL_CLOCK_MS: '运行时长',
+    QUERY_RANGE_MS: '查询时间范围',
+    QUERY_BUCKETS: '查询 buckets',
+    OWNER_RECORDS: 'Owner records',
+    PAYLOAD_BYTES: 'Payload bytes',
+  } as const)[dimension];
 }
 
 function createOperatorInputIdempotencyKey(): string {
@@ -461,6 +474,7 @@ function SnapshotWorkspace({
       className="operations-workspace"
       data-investigation-status={investigation.status}
       data-investigation-outcome={investigation.outcome ?? 'NONE'}
+      data-resource-budget={investigation.resourceBudget?.exhaustedDimension ?? 'AVAILABLE'}
       aria-labelledby="operations-plan-title"
     >
       <section className="operations-summary">
@@ -476,6 +490,19 @@ function SnapshotWorkspace({
           <strong>{snapshot.plan.progressPercent}%</strong>
         </div>
       </section>
+
+      {investigation.resourceBudget ? (
+        <div className="real-shell-problem" role="status" data-testid="operations-resource-budget">
+          <strong>Agent Run 资源预算已耗尽</strong>
+          <span>
+            {budgetDimensionLabel(investigation.resourceBudget.exhaustedDimension)} ·
+            {' '}{investigation.resourceBudget.consumed} / {investigation.resourceBudget.limit} ·
+            {' '}{investigation.resourceBudget.outcome === 'PARTIAL'
+              ? '保留已提交部分结果，不再执行新的外部工作。'
+              : '当前证据不足，无法得出结论。'}
+          </span>
+        </div>
+      ) : null}
 
       <section aria-labelledby="operations-plan-steps-title">
         <h3 id="operations-plan-steps-title">Authoritative plan</h3>
@@ -648,6 +675,7 @@ export function OperationsInvestigation({
   const snapshotRevision = snapshot?.investigation.revision ?? -1;
   const snapshotStatus = snapshot?.investigation.status ?? null;
   const snapshotOutcome = snapshot?.investigation.outcome ?? null;
+  const snapshotBudget = snapshot?.investigation.resourceBudget ?? null;
 
   useEffect(() => {
     if (!snapshotInvestigationId || snapshotRevision < 0 || !investigationId) return undefined;
@@ -704,7 +732,7 @@ export function OperationsInvestigation({
   };
 
   const advance = async () => {
-    if (!investigationId || snapshotStatus === 'WAITING_FOR_OPERATOR_INPUT') return;
+    if (!investigationId || snapshotStatus === 'WAITING_FOR_OPERATOR_INPUT' || snapshotBudget !== null) return;
     setBusy(true);
     setFailure(null);
     setConnection(null);
@@ -807,8 +835,12 @@ export function OperationsInvestigation({
         <button
           type="button"
           onClick={() => { void advance(); }}
-          disabled={!investigationId || busy || operatorInputBusy || snapshotStatus === 'WAITING_FOR_OPERATOR_INPUT' || isTerminalStatus(snapshotStatus)}
-          title={snapshotStatus === 'WAITING_FOR_OPERATOR_INPUT' ? '先提交当前 Operator Input。' : undefined}
+          disabled={!investigationId || busy || operatorInputBusy || snapshotStatus === 'WAITING_FOR_OPERATOR_INPUT' || snapshotBudget !== null || isTerminalStatus(snapshotStatus)}
+          title={snapshotStatus === 'WAITING_FOR_OPERATOR_INPUT'
+            ? '先提交当前 Operator Input。'
+            : snapshotBudget !== null
+              ? 'Agent Run 资源预算已耗尽，不能继续推进。'
+              : undefined}
           data-testid="operations-advance"
         >推进</button>
         <button

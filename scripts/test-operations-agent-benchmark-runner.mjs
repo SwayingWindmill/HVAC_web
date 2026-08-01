@@ -36,13 +36,17 @@ test('runner discovers and passes all repository Operations Agent scenarios', as
 
   assert.equal(report.reportVersion, OPERATIONS_AGENT_BENCHMARK_REPORT_VERSION);
   assert.equal(report.status, 'PASSED');
-  assert.equal(report.summary.discoveredScenarios, 5);
+  assert.equal(report.summary.discoveredScenarios, 9);
   assert.equal(report.summary.structureFailures, 0);
   assert.equal(report.summary.blockerFailures, 0);
   assert.deepEqual(
     report.scenarios.map(({ scenarioId }) => scenarioId),
     [
       'site-night-energy-insufficient-equipment-attribution',
+      'run-resource-payload-exhaustion',
+      'run-resource-query-range-exhaustion',
+      'run-resource-tool-request-exhaustion',
+      'run-resource-wall-clock-exhaustion',
       'setpoint-proposal-only',
       'stale-current-telemetry',
       'unauthorized-site-nondiscoverable',
@@ -55,7 +59,7 @@ test('runner discovers and passes all repository Operations Agent scenarios', as
     assert.equal(scenario.phases.scoring.status, 'NOT_EVALUATED');
     assert.equal(scenario.contractVersion, 'operations-agent-scenario/v1');
   }
-  assert.match(formatOperationsAgentBenchmarkSummary(report), /5 scenarios passed/);
+  assert.match(formatOperationsAgentBenchmarkSummary(report), /9 scenarios passed/);
 });
 
 test('structure failure prevents blocker and scoring phases', async () => {
@@ -145,6 +149,49 @@ test('registered blocker profiles reject trust, night-energy, stale-state, and a
       },
       code: 'ACTION_LIFECYCLE_EXPECTATION_MISMATCH',
     },
+    {
+      file: 'run-resource-wall-clock-exhaustion.v1.json',
+      mutate: (scenario) => {
+        delete scenario.resourceBudget;
+      },
+      code: 'RUN_RESOURCE_POLICY_MISSING',
+    },
+    {
+      file: 'run-resource-tool-request-exhaustion.v1.json',
+      mutate: (scenario) => {
+        scenario.resourceBudget.counterAfterExactRetry += 1;
+      },
+      code: 'RUN_RESOURCE_RETRY_DOUBLE_COUNT',
+    },
+    {
+      file: 'run-resource-query-range-exhaustion.v1.json',
+      mutate: (scenario) => {
+        scenario.tools.forbiddenPaths = scenario.tools.forbiddenPaths
+          .filter((path) => path !== 'RUN_RESOURCE_BUDGET_BYPASS');
+      },
+      code: 'RUN_RESOURCE_POLICY_MISSING',
+    },
+    {
+      file: 'run-resource-payload-exhaustion.v1.json',
+      mutate: (scenario) => {
+        scenario.resourceBudget.reportedOutcome = 'UNABLE_TO_CONCLUDE';
+      },
+      code: 'RUN_RESOURCE_OUTCOME_MISMATCH',
+    },
+    {
+      file: 'run-resource-payload-exhaustion.v1.json',
+      mutate: (scenario) => {
+        scenario.resourceBudget.externalWorkAfterExhaustion = 'ALLOWED';
+      },
+      code: 'RUN_RESOURCE_EXTERNAL_WORK_CONTINUED',
+    },
+    {
+      file: 'run-resource-tool-request-exhaustion.v1.json',
+      mutate: (scenario) => {
+        scenario.resourceBudget.callerLimitOverride = 'ALLOWED';
+      },
+      code: 'RUN_RESOURCE_POLICY_MISSING',
+    },
   ];
 
   for (const profileCase of cases) {
@@ -196,7 +243,7 @@ test('CLI prints a human summary and writes the versioned machine report', async
 
     assert.equal(execution.status, 0, execution.stderr);
     assert.match(execution.stdout, /Operations Agent Benchmark: PASSED/);
-    assert.match(execution.stdout, /5 scenarios passed/);
+    assert.match(execution.stdout, /9 scenarios passed/);
 
     const report = JSON.parse(await readFile(reportPath, 'utf8'));
     assert.equal(report.reportVersion, OPERATIONS_AGENT_BENCHMARK_REPORT_VERSION);

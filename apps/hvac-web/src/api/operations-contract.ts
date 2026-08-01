@@ -238,6 +238,23 @@ export const operationsOperatorInputAcceptedSchema = z.object({
   }).strict(),
 }).strict();
 
+export const operationsRunResourceBudgetSchema = z.object({
+  schemaVersion: z.literal(1),
+  policyRevision: identitySchema,
+  outcome: z.enum(['PARTIAL', 'UNABLE_TO_CONCLUDE']),
+  exhaustedDimension: z.enum([
+    'MODEL_INVOCATIONS',
+    'TOOL_REQUESTS',
+    'WALL_CLOCK_MS',
+    'QUERY_RANGE_MS',
+    'QUERY_BUCKETS',
+    'OWNER_RECORDS',
+    'PAYLOAD_BYTES',
+  ]),
+  consumed: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+}).strict();
+
 export const operationsInvestigationViewSchema = z.object({
   schemaVersion: z.literal(1),
   id: identitySchema,
@@ -247,6 +264,7 @@ export const operationsInvestigationViewSchema = z.object({
   createdAt: timestampSchema,
   activeRun: activeRunSchema.nullable(),
   outcome: z.enum(['SUPPORTED_SITE_FINDING', 'UNABLE_TO_CONCLUDE']).nullable(),
+  resourceBudget: operationsRunResourceBudgetSchema.nullable(),
   evidence: z.array(operationsEvidenceSchema).max(32),
   analysisReferences: z.array(operationsAnalysisReferenceSchema).max(32),
   findings: z.array(operationsFindingSchema).max(32),
@@ -275,6 +293,7 @@ export const operationsInvestigationSummarySchema = z.object({
   revision: z.number().int().nonnegative(),
   createdAt: timestampSchema,
   outcome: operationsInvestigationViewSchema.shape.outcome,
+  resourceBudget: operationsRunResourceBudgetSchema.nullable(),
   evidenceCount: z.number().int().nonnegative().max(32),
   analysisReferenceCount: z.number().int().nonnegative().max(32),
   findingCount: z.number().int().nonnegative().max(32),
@@ -370,6 +389,7 @@ export type OperationsOperatorInputRequest = z.infer<typeof operationsOperatorIn
 export type OperationsOperatorInputAccepted = z.infer<typeof operationsOperatorInputAcceptedSchema>;
 export type OperationsOperatorInputSubmissionRequest = z.infer<typeof operationsOperatorInputSubmissionRequestSchema>;
 export type OperationsOperatorInputSubmission = z.infer<typeof operationsOperatorInputSubmissionSchema>;
+export type OperationsRunResourceBudget = z.infer<typeof operationsRunResourceBudgetSchema>;
 export type OperationsInvestigationView = z.infer<typeof operationsInvestigationViewSchema>;
 export type OperationsInvestigationSummary = z.infer<typeof operationsInvestigationSummarySchema>;
 export type OperationsInvestigationList = z.infer<typeof operationsInvestigationListSchema>;

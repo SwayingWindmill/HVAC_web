@@ -43,7 +43,18 @@ import type {
   OwnerReadContext,
   OwnerReadResult,
   ParallelReadRequest,
+  RunResourceBudgetCost,
+  RunResourceBudgetOutcome,
 } from './ports.js';
+import {
+  DEFAULT_RUN_RESOURCE_BUDGET_POLICY,
+  normalizeRunResourceBudgetPolicy,
+  runResourceOwnerResultBatchCost,
+  runResourceOwnerResultBatchOperationId,
+  runResourceReadBatchCost,
+  runResourceReadBatchOperationId,
+  toRunResourceBudgetOutcome,
+} from './run-resource-budget.js';
 import { sha256Hex } from './sha256.js';
 
 export interface SiteNightEnergyInvestigationPolicy {
@@ -95,6 +106,7 @@ export interface SiteNightEnergyInvestigationView {
   readonly createdAt: number;
   readonly activeRun: SiteNightEnergyActiveRunView | null;
   readonly outcome: 'SUPPORTED_SITE_FINDING' | 'UNABLE_TO_CONCLUDE' | null;
+  readonly resourceBudget: RunResourceBudgetOutcome | null;
   readonly evidence: readonly EvidenceRecord[];
   readonly analysisReferences: readonly AnalysisReferenceRecord[];
   readonly findings: readonly SiteNightEnergyFindingView[];
@@ -111,6 +123,7 @@ export interface SiteNightEnergyInvestigationSummary {
   readonly revision: number;
   readonly createdAt: number;
   readonly outcome: 'SUPPORTED_SITE_FINDING' | 'UNABLE_TO_CONCLUDE' | null;
+  readonly resourceBudget: RunResourceBudgetOutcome | null;
   readonly evidenceCount: number;
   readonly analysisReferenceCount: number;
   readonly findingCount: number;
@@ -417,6 +430,9 @@ export const createSiteNightEnergyInvestigationCoordinator = (
     || policy.findingSynthesisTimeoutMs > 600_000) {
     throw new Error('findingSynthesisTimeoutMs must be between 1 and 600000.');
   }
+  const runResourcePolicy = normalizeRunResourceBudgetPolicy(
+    ports.resourceBudgetPolicy ?? DEFAULT_RUN_RESOURCE_BUDGET_POLICY,
+  );
 
   const genericFor = (
     scope: InvestigationScope,
@@ -428,6 +444,39 @@ export const createSiteNightEnergyInvestigationCoordinator = (
       agentExecutionRuntime: ports.createAgentExecutionRuntime(scope),
     })
   );
+
+  const checkResourceBudget = async (input: {
+    readonly view: OperationsInvestigationView;
+    readonly at: number;
+    readonly operationId: string;
+    readonly cost: RunResourceBudgetCost;
+  }): Promise<RunResourceBudgetOutcome | null> => {
+    const run = input.view.runs.find(({ id }) => id === input.view.activeRunId);
+    if (run === undefined) {
+      throw new InvestigationCoordinatorError(
+        'INVALID_INVESTIGATION_STATE',
+        'The Night-energy Investigation has no active Agent Run for resource accounting.',
+      );
+    }
+    const decision = await ports.budgetGuard.check({
+      investigationId: input.view.id,
+      runId: run.id,
+      startedAt: run.startedAt,
+      at: input.at,
+      operationId: input.operationId,
+      policy: runResourcePolicy,
+      cost: input.cost,
+    });
+    if (decision.decision === 'ALLOW') return null;
+    const outcome = toRunResourceBudgetOutcome(decision.snapshot);
+    if (outcome === null) {
+      throw new InvestigationCoordinatorError(
+        'INVALID_INVESTIGATION_STATE',
+        'Budget Guard denied Night-energy work without a typed exhaustion outcome.',
+      );
+    }
+    return outcome;
+  };
 
   const loadAuthorizedView = async (
     investigationId: string,
@@ -554,6 +603,35 @@ export const createSiteNightEnergyInvestigationCoordinator = (
     );
   };
 
+  const readBudgetedBatch = async (input: {
+    readonly view: OperationsInvestigationView;
+    readonly requests: readonly ParallelReadRequest[];
+    readonly context: OwnerReadContext;
+    readonly operationTime: number;
+  }): Promise<
+    | { readonly outcome: 'READS_COMPLETED'; readonly results: readonly OwnerReadResult[] }
+    | { readonly outcome: 'BUDGET_EXHAUSTED'; readonly budget: RunResourceBudgetOutcome }
+  > => {
+    const readBudget = await checkResourceBudget({
+      view: input.view,
+      at: input.operationTime,
+      operationId: runResourceReadBatchOperationId(input.requests),
+      cost: runResourceReadBatchCost(input.requests),
+    });
+    if (readBudget !== null) return { outcome: 'BUDGET_EXHAUSTED', budget: readBudget };
+    const results = await Promise.all(input.requests.map((request) => (
+      readDirect(request, input.context)
+    )));
+    const resultBudget = await checkResourceBudget({
+      view: input.view,
+      at: ports.clock.now(),
+      operationId: runResourceOwnerResultBatchOperationId(input.requests),
+      cost: runResourceOwnerResultBatchCost(results),
+    });
+    if (resultBudget !== null) return { outcome: 'BUDGET_EXHAUSTED', budget: resultBudget };
+    return { outcome: 'READS_COMPLETED', results };
+  };
+
   const snapshot = async (
     view: OperationsInvestigationView,
   ): Promise<SiteNightEnergyInvestigationView> => {
@@ -596,6 +674,13 @@ export const createSiteNightEnergyInvestigationCoordinator = (
       (record): record is OperatorInputAcceptedRecord => record.recordType === 'OPERATOR_INPUT_ACCEPTED',
     );
     const active = view.runs.find(({ id }) => id === view.activeRunId);
+    const budgetRun = active ?? view.runs.at(-1);
+    const budgetSnapshot = budgetRun === undefined
+      ? null
+      : await ports.budgetGuard.get(view.id, budgetRun.id);
+    const resourceBudget = budgetSnapshot === null
+      ? null
+      : toRunResourceBudgetOutcome(budgetSnapshot);
     const lastFinding = findings.at(-1);
     return {
       schemaVersion: 1,
@@ -610,10 +695,11 @@ export const createSiteNightEnergyInvestigationCoordinator = (
         ? null
         : { id: active.id, status: active.status, startedAt: active.startedAt },
       outcome: lastFinding === undefined
-        ? null
+        ? resourceBudget === null ? null : 'UNABLE_TO_CONCLUDE'
         : lastFinding.conclusion.status === 'SUPPORTED'
           ? 'SUPPORTED_SITE_FINDING'
           : 'UNABLE_TO_CONCLUDE',
+      resourceBudget,
       evidence,
       analysisReferences,
       findings,
@@ -644,6 +730,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
     revision: view.revision,
     createdAt: view.createdAt,
     outcome: view.outcome,
+    resourceBudget: view.resourceBudget,
     evidenceCount: view.evidence.length,
     analysisReferenceCount: view.analysisReferences.length,
     findingCount: view.findings.length,
@@ -788,6 +875,8 @@ export const createSiteNightEnergyInvestigationCoordinator = (
       const operationTime = ports.clock.now();
       const coordinator = genericFor(scope, operationTime);
       const authority = activeAuthority(view);
+      const existingBudget = await ports.budgetGuard.get(view.id, authority.runId);
+      if (existingBudget !== null && existingBudget.exhaustion !== null) return snapshot(view);
       const authorization = requireAllowed(await ports.authorizationDecisionReader.authorizeScope({
         scope,
         action: 'ADVANCE_AGENT_RUN',
@@ -807,7 +896,14 @@ export const createSiteNightEnergyInvestigationCoordinator = (
       const existingCheckpoint = await ports.checkpointRepository.load(view.id, authority.runId);
       if (existingCheckpoint !== null
         || registryReceiptIdentities.every((identity) => view.toolReceiptIds.includes(identity))) {
-        registryResults = await Promise.all(registry.map((request) => readDirect(request, context)));
+        const directRegistry = await readBudgetedBatch({
+          view,
+          requests: registry,
+          context,
+          operationTime,
+        });
+        if (directRegistry.outcome === 'BUDGET_EXHAUSTED') return snapshot(view);
+        registryResults = directRegistry.results;
       } else {
         const advanced = await coordinator.advance({
           investigationId: view.id,
@@ -815,6 +911,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
           leaseId: authority.leaseId,
           expectedRevision: view.revision,
         });
+        if (advanced.outcome === 'BUDGET_EXHAUSTED') return snapshot(advanced.investigation);
         registryResults = advanced.results;
         if (advanced.plan.batches.length !== 1
           || registryResults.length !== 2
@@ -892,7 +989,14 @@ export const createSiteNightEnergyInvestigationCoordinator = (
           qualityPolicy: policy.qualityPolicy,
         },
       }];
-      const energyResults = await Promise.all(energyRequests.map((request) => readDirect(request, context)));
+      const energyRead = await readBudgetedBatch({
+        view,
+        requests: energyRequests,
+        context,
+        operationTime,
+      });
+      if (energyRead.outcome === 'BUDGET_EXHAUSTED') return snapshot(view);
+      const energyResults = energyRead.results;
       for (const [index, request] of energyRequests.entries()) {
         const receipt = await receiptFor(
           view.id,

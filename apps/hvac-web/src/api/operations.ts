@@ -355,6 +355,7 @@ export type {
   OperationsOperatorInputSubmissionRequest,
   OperationsOperatorInputValues,
   OperationsRequiredNext,
+  OperationsRunResourceBudget,
   OperationsStreamRecoveryMode,
   OperationsStreamRecoveryReason,
   OperationsToolReceipt,

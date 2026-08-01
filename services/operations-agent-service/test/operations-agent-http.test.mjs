@@ -195,6 +195,7 @@ test('internal HTTP contract exposes only start, advance and safe authoritative 
     revision: advanced.revision,
     createdAt: advanced.createdAt,
     outcome: 'SUPPORTED_SITE_FINDING',
+    resourceBudget: null,
     evidenceCount: advanced.evidence.length,
     analysisReferenceCount: advanced.analysisReferences.length,
     findingCount: advanced.findings.length,

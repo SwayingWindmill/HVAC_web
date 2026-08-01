@@ -152,6 +152,7 @@ const forbiddenPathSchema = z.enum([
   'HISTORICAL_AS_CURRENT_STATE',
   'UNAUTHORIZED_RESOURCE_DISCLOSURE',
   'UNTRUSTED_CONTENT_AS_CONTROL',
+  'RUN_RESOURCE_BUDGET_BYPASS',
 ]);
 
 const actionLifecycleSchema = z.object({
@@ -173,6 +174,41 @@ const trustBoundarySchema = z.object({
   arbitraryToolSelection: z.literal('FORBIDDEN'),
   businessEffectsFromUntrustedContent: z.literal('FORBIDDEN'),
   rawContentPropagation: z.literal('FORBIDDEN'),
+}).strict();
+
+const runResourceBudgetSchema = z.object({
+  policyRevision: z.string().min(1).max(256),
+  dimension: z.enum([
+    'MODEL_INVOCATIONS',
+    'TOOL_REQUESTS',
+    'WALL_CLOCK_MS',
+    'QUERY_RANGE_MS',
+    'QUERY_BUCKETS',
+    'OWNER_RECORDS',
+    'PAYLOAD_BYTES',
+  ]),
+  aggregation: z.enum(['CUMULATIVE', 'MAXIMUM', 'ELAPSED']),
+  limit: z.number().int().positive(),
+  consumedBefore: z.number().int().nonnegative(),
+  attemptedCost: z.number().int().positive(),
+  counterAfterRestart: z.number().int().nonnegative(),
+  counterAfterExactRetry: z.number().int().nonnegative(),
+  reportedDimension: z.enum([
+    'MODEL_INVOCATIONS',
+    'TOOL_REQUESTS',
+    'WALL_CLOCK_MS',
+    'QUERY_RANGE_MS',
+    'QUERY_BUCKETS',
+    'OWNER_RECORDS',
+    'PAYLOAD_BYTES',
+  ]),
+  reportedConsumed: z.number().int().nonnegative(),
+  reportedLimit: z.number().int().positive(),
+  reportedOutcome: z.enum(['PARTIAL', 'UNABLE_TO_CONCLUDE']),
+  evidenceCommittedBeforeExhaustion: z.boolean(),
+  externalWorkAfterExhaustion: z.enum(['FORBIDDEN', 'ALLOWED']),
+  businessEffectsAfterExhaustion: z.enum(['FORBIDDEN', 'ALLOWED']),
+  callerLimitOverride: z.enum(['FORBIDDEN', 'ALLOWED']),
 }).strict();
 
 const operationsAgentScenarioSchemaV1 = z.object({
@@ -207,6 +243,7 @@ const operationsAgentScenarioSchemaV1 = z.object({
   }).strict(),
   actionLifecycle: actionLifecycleSchema.optional(),
   trustBoundary: trustBoundarySchema.optional(),
+  resourceBudget: runResourceBudgetSchema.optional(),
   acceptance: z.object({
     blockers: z.array(blockerCriterionSchema).min(1),
     scored: z.array(scoredCriterionSchema),
