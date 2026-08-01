@@ -955,6 +955,13 @@ export const createInvestigationCoordinator = (
         }
         const values = normalizeOperatorInputValues(command.values);
         const inputDigest = operatorInputDigest(command.requestId, values);
+        const idempotencyKey = createIdempotencyKey(command.idempotencyKey);
+        const duplicateAcceptance = current.operatorInputAcceptances.find((acceptance) => (
+          acceptance.idempotencyKey === idempotencyKey
+        ));
+        const duplicateRun = duplicateAcceptance === undefined
+          ? undefined
+          : current.runs.find(({ id }) => id === duplicateAcceptance.runId);
         const now = ports.clock.now();
         const result = investigation.acceptOperatorInput({
           requestId: command.requestId,
@@ -964,11 +971,14 @@ export const createInvestigationCoordinator = (
             ))?.runId
             ?? '',
           expectedRevision: command.expectedRevision,
-          idempotencyKey: createIdempotencyKey(command.idempotencyKey),
-          recordId: ports.idGenerator.next('operator-input-record'),
+          idempotencyKey,
+          recordId: duplicateAcceptance?.recordId
+            ?? ports.idGenerator.next('operator-input-record'),
           inputDigest,
           acceptedAt: now,
-          leaseId: ports.idGenerator.next('lease'),
+          leaseId: duplicateRun?.lease?.id
+            ?? duplicateRun?.leaseHistory.at(-1)?.id
+            ?? ports.idGenerator.next('lease'),
           leaseExpiresAt: now + leaseDurationMs,
         });
         if (result.outcome === 'DUPLICATE') {

@@ -332,6 +332,28 @@ const fixedOperatorInputFields = (): OperatorInputRequestView['fields'] => ([
   },
 ]);
 
+const operatorInputFieldsMatch = (
+  fields: OperatorInputRequestView['fields'],
+): boolean => {
+  if (!Array.isArray(fields) || fields.length !== 2) return false;
+  const select = fields[0] as unknown as Record<string, unknown>;
+  const note = fields[1] as unknown as Record<string, unknown>;
+  const options = select.options;
+  return Object.keys(select).length === 4
+    && select.id === 'analysisScope'
+    && select.type === 'SINGLE_SELECT'
+    && select.required === true
+    && Array.isArray(options)
+    && options.length === 2
+    && options[0] === 'SITE_ONLY'
+    && options[1] === 'DEFER'
+    && Object.keys(note).length === 4
+    && note.id === 'operatorNote'
+    && note.type === 'SHORT_TEXT'
+    && note.required === false
+    && note.maximumLength === 500;
+};
+
 const cloneOperatorInputRequest = (
   request: OperatorInputRequestView | null,
 ): OperatorInputRequestView | null => request === null ? null : ({
@@ -427,7 +449,7 @@ const validateOperatorInputRequest = (
       'Operator Input cannot be requested before the Agent Run starts.',
     );
   }
-  if (JSON.stringify(request.fields) !== JSON.stringify(fixedOperatorInputFields())) {
+  if (!operatorInputFieldsMatch(request.fields)) {
     throw new OperationsInvestigationError(
       'OPERATOR_INPUT_INVALID',
       'Operator Input Request fields do not match the supported bounded schema.',
