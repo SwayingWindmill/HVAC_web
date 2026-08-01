@@ -78,7 +78,7 @@ func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 
 func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "private, no-store")
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant"} {
+	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Work-Order-ID", "X-Admin", "X-Delegation-Grant"} {
 		if request.Header.Get(header) != "" {
 			handler.writeProblem(writer, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Caller-supplied identity headers are not accepted by Work Order Service.", false)
 			return
@@ -207,6 +207,8 @@ func (handler *httpHandler) writeStoreFailure(writer http.ResponseWriter, err er
 		handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Work Order resource is not visible.", false)
 	case errors.Is(err, ErrInvalidCursor):
 		handler.writeProblem(writer, http.StatusBadRequest, "WORK_ORDER_CURSOR_INVALID", "Work Order cursor invalid", "The Work Order cursor is invalid for this scope or filter.", false)
+	case errors.Is(err, ErrInvalidFilter):
+		handler.writeProblem(writer, http.StatusBadRequest, "WORK_ORDER_FILTER_INVALID", "Work Order filter invalid", "The Work Order list filter exceeds the supported read boundary.", false)
 	default:
 		handler.writeProblem(writer, http.StatusServiceUnavailable, "WORK_ORDER_UNAVAILABLE", "Work Order unavailable", "Work Order Service cannot read its authoritative store.", true)
 	}

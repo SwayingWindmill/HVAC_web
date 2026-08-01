@@ -15,7 +15,7 @@ var (
 	ErrNotFound      = errors.New("work order not found")
 	ErrUnavailable   = errors.New("work order store unavailable")
 	ErrInvalidCursor = errors.New("work order cursor invalid")
-	ErrInvalidFilter = ErrInvalidCursor
+	ErrInvalidFilter = errors.New("work order filter invalid")
 )
 
 type Filter struct {
