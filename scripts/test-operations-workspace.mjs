@@ -54,6 +54,7 @@ const investigation = {
   findings: [],
   operatorInputRequest: null,
   acceptedOperatorInputs: [],
+  resourceBudget: null,
 };
 const plan = {
   schemaVersion: 1,
@@ -211,6 +212,7 @@ test('scoped Operations API lists only exact authorized Site summaries', async (
     findingCount: 1,
     toolReceiptCount: 4,
     acceptedOperatorInputCount: 0,
+    resourceBudget: null,
   };
   const requests = [];
   const fetchImplementation = async (input, init) => {
