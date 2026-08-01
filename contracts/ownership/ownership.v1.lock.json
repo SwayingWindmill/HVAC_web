@@ -1,5 +1,5 @@
 {
-  "routeRegistryRevision": 14,
+  "routeRegistryRevision": 15,
   "routes": {
     "GET /api/v1/health": { "revision": 1, "owner": "platform-gateway" },
     "GET /api/v1/version": { "revision": 1, "owner": "platform-gateway" },
@@ -42,9 +42,11 @@
     "POST /api/v1/sites/{siteId}/alarms/{alarmId}:suppress": { "revision": 1, "owner": "alarm-service" },
     "POST /api/v1/sites/{siteId}/alarms/{alarmId}:unsuppress": { "revision": 1, "owner": "alarm-service" },
     "POST /api/v1/sites/{siteId}/alarms/{alarmId}:close": { "revision": 1, "owner": "alarm-service" },
-    "POST /api/v1/sites/{siteId}/alarms/{alarmId}:reopen": { "revision": 1, "owner": "alarm-service" }
+    "POST /api/v1/sites/{siteId}/alarms/{alarmId}:reopen": { "revision": 1, "owner": "alarm-service" },
+    "GET /api/v1/sites/{siteId}/work-orders": { "revision": 1, "owner": "work-order-service" },
+    "GET /api/v1/sites/{siteId}/work-orders/{workOrderId}": { "revision": 1, "owner": "work-order-service" }
   },
-  "dataRegistryRevision": 16,
+  "dataRegistryRevision": 17,
   "resources": {
     "schema:gateway": { "revision": 1, "writer": "platform-gateway" },
     "schema:audit_ledger": { "revision": 1, "writer": "audit-ledger-service" },
@@ -54,6 +56,7 @@
     "schema:telemetry_runtime": { "revision": 1, "writer": "telemetry-runtime-service" },
     "schema:command_runtime": { "revision": 1, "writer": "command-service" },
     "schema:alarm_runtime": { "revision": 1, "writer": "alarm-service" },
+    "schema:work_order_runtime": { "revision": 1, "writer": "work-order-service" },
     "schema:telemetry_history": { "revision": 1, "writer": "telemetry-history-projector" },
     "schema:analytics": { "revision": 1, "writer": "analytics-read-model-projector" },
     "event-family:hvac.security.session.v1": { "revision": 1, "writer": "platform-gateway" },
@@ -61,6 +64,7 @@
     "event-family:hvac.telemetry.device-snapshot.v1": { "revision": 1, "writer": "telemetry-runtime-service" },
     "event-family:hvac.command.lifecycle.v1": { "revision": 1, "writer": "command-service" },
     "event-family:hvac.alarm.lifecycle.v1": { "revision": 1, "writer": "alarm-service" },
+    "event-family:hvac.work-order.lifecycle.v1": { "revision": 1, "writer": "work-order-service" },
     "projection:audit-session-record": { "revision": 1, "writer": "audit-ledger-service" },
     "projection:gateway-route-audit": { "revision": 1, "writer": "platform-gateway" },
     "projection:iam-registry-read-decision": { "revision": 1, "writer": "iam-service" },
@@ -100,6 +104,13 @@
     "projection:alarm-evidence": { "revision": 1, "writer": "alarm-service" },
     "projection:alarm-occurrence-deduplication": { "revision": 1, "writer": "alarm-service" },
     "projection:alarm-idempotency": { "revision": 1, "writer": "alarm-service" },
+    "projection:work-order-current": { "revision": 1, "writer": "work-order-service" },
+    "projection:work-order-source-reference": { "revision": 1, "writer": "work-order-service" },
+    "projection:work-order-timeline": { "revision": 1, "writer": "work-order-service" },
+    "projection:work-order-task": { "revision": 1, "writer": "work-order-service" },
+    "projection:work-order-note": { "revision": 1, "writer": "work-order-service" },
+    "projection:work-order-attachment-metadata": { "revision": 1, "writer": "work-order-service" },
+    "projection:work-order-completion-evidence": { "revision": 1, "writer": "work-order-service" },
     "transport-store:s2-telemetry-transport-redis": { "revision": 1, "writer": "centrifugo" },
     "compatibility-boundary:legacy-telemetry-timeseries": { "revision": 1, "writer": "legacy-hvac-backend" },
     "migration-dataset:s1-legacy-resource-map": { "revision": 1, "writer": "platform-core-service" },

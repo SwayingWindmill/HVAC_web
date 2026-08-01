@@ -156,6 +156,23 @@ assert(registeredS4Resources.length === acceptedS4OwnershipNames.size, `S4 Alarm
 assert(registeredS4Resources.every((resource) => resource.writer === 'alarm-service'), `S4 Alarm ownership resources have an unexpected writer: ${JSON.stringify(registeredS4Resources.filter((resource) => resource.writer !== 'alarm-service'))}`);
 const uncontractedS4Resources = ownership.resources.filter((resource) => resource.writer === 'alarm-service' && !acceptedS4OwnershipNames.has(resource.name));
 assert(uncontractedS4Resources.length === 0, `data registry contains S4 resources outside the S4 Alarm ownership contract: ${JSON.stringify(uncontractedS4Resources)}`);
+const acceptedS5OwnershipNames = new Set([
+  'work_order_runtime',
+  'hvac.work-order.lifecycle.v1',
+  'work-order-current',
+  'work-order-source-reference',
+  'work-order-timeline',
+  'work-order-task',
+  'work-order-note',
+  'work-order-attachment-metadata',
+  'work-order-completion-evidence',
+]);
+const registeredS5Resources = ownership.resources.filter((resource) => acceptedS5OwnershipNames.has(resource.name));
+assert(registeredS5Resources.length === acceptedS5OwnershipNames.size, `S5 Work Order ownership resources are incomplete: ${JSON.stringify(registeredS5Resources)}`);
+assert(registeredS5Resources.every((resource) => resource.writer === 'work-order-service'), `S5 Work Order ownership resources have an unexpected writer: ${JSON.stringify(registeredS5Resources.filter((resource) => resource.writer !== 'work-order-service'))}`);
+const uncontractedS5Resources = ownership.resources.filter((resource) => resource.writer === 'work-order-service' && !acceptedS5OwnershipNames.has(resource.name));
+assert(uncontractedS5Resources.length === 0, `data registry contains S5 resources outside the S5 Work Order ownership contract: ${JSON.stringify(uncontractedS5Resources)}`);
+
 const acceptedS4IAMOwnership = [
   { kind: 'projection', name: 'iam-alarm-permission', writer: 'iam-service', revision: 1 },
   { kind: 'projection', name: 'iam-alarm-authorization-decision', writer: 'iam-service', revision: 1 },
@@ -218,10 +235,11 @@ const allowedOwnershipNames = new Set([
   ...acceptedS2OwnershipNames,
   ...acceptedS3OwnershipNames,
   ...acceptedS4OwnershipNames,
+  ...acceptedS5OwnershipNames,
   ...acceptedHistoryAnalyticsOwnership.map((resource) => resource.name),
 ]);
 const leakedOwnership = ownership.resources.filter((resource) => !allowedOwnershipNames.has(resource.name));
-assert(leakedOwnership.length === 0, `ownership registry contains resources outside the accepted S1/S2/S3/S4/history/analytics baselines: ${JSON.stringify(leakedOwnership)}`);
+assert(leakedOwnership.length === 0, `ownership registry contains resources outside the accepted S1/S2/S3/S4/S5/history/analytics baselines: ${JSON.stringify(leakedOwnership)}`);
 
 await mkdir(outputRoot, { recursive: true });
 const scopeAudit = {
@@ -235,6 +253,7 @@ const scopeAudit = {
   acceptedS2ExpandBaselineResources: [...acceptedS2OwnershipNames].sort(),
   acceptedS3ExpandBaselineResources: [...acceptedS3OwnershipNames].sort(),
   acceptedS4AlarmBaselineResources: [...acceptedS4OwnershipNames].sort(),
+  acceptedS5WorkOrderBaselineResources: [...acceptedS5OwnershipNames].sort(),
   acceptedS4IAMAlarmResources: acceptedS4IAMOwnership.map((resource) => resource.name).sort(),
   acceptedHistoryAnalyticsResources: acceptedHistoryAnalyticsOwnership.map((resource) => resource.name).sort(),
   leakedOwnershipResources: [],
