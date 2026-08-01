@@ -57,9 +57,12 @@ test('all central-plant profiles match the ThingsBoard-to-S2 adapter point contr
     BTU_METER: 'btu_meter.',
   };
   for (const [deviceType, prefix] of Object.entries(prefixes)) {
-    const profileKeys = [...getDeviceTelemetryProfile(deviceType).keys];
+    const profile = getDeviceTelemetryProfile(deviceType);
+    const profileKeys = [...profile.keys];
     const contractKeys = adapterKeys.filter((key) => key.startsWith(prefix));
     assert.equal(new Set(profileKeys).size, profileKeys.length, `${deviceType} profile contains duplicate keys`);
+    assert.equal(new Set(contractKeys).size, contractKeys.length, `${deviceType} adapter contract contains duplicate keys`);
+    assert(profile.highlightKeys.every((key) => profileKeys.includes(key)), `${deviceType} highlights escape its exact-key profile`);
     assert.deepEqual(
       profileKeys.sort(),
       contractKeys.sort(),

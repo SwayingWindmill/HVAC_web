@@ -222,6 +222,7 @@ const PROFILES: Readonly<Record<CentralPlantProfileKind, DeviceTelemetryProfile>
 });
 
 const TYPE_ALIASES: Readonly<Record<string, CentralPlantProfileKind>> = Object.freeze({
+  GENERIC: 'GENERIC',
   CHILLER: 'CHILLER',
   WATER_COOLED_CHILLER: 'CHILLER',
   CHILLED_WATER_PUMP: 'CHILLED_WATER_PUMP',

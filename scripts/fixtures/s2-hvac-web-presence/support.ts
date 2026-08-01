@@ -20,6 +20,8 @@ export interface BrowserLiveAudit {
 
 const evaluatedAt = '2026-07-25T05:30:00.000Z';
 const sampledAt = '2026-07-25T05:28:00.000Z';
+const siblingChillerDeviceId = '018f6a00-3000-7000-8000-000000000003';
+const siblingChillerSiteId = '018f6a00-2000-7000-8000-000000000002';
 
 function genericValueStates(updated: boolean): TelemetryKeyState[] {
   if (updated) {
@@ -121,7 +123,7 @@ function snapshot(deviceId: string, keys: readonly string[], updated: boolean): 
     schemaVersion: 1,
     deviceId,
     owningOrganizationId: '018f6a00-1000-7000-8000-000000000001',
-    siteId: '018f6a00-2000-7000-8000-000000000001',
+    siteId: deviceId === siblingChillerDeviceId ? siblingChillerSiteId : '018f6a00-2000-7000-8000-000000000001',
     businessRevision: updated ? 42 : 41,
     evaluatedAt: updated ? '2026-07-25T05:31:02.000Z' : evaluatedAt,
     evaluationAvailability: 'AVAILABLE',
