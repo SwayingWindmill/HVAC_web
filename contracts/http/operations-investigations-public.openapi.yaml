@@ -42,6 +42,26 @@ paths:
                 $ref: '#/components/schemas/SiteNightEnergyInvestigationView'
         '404':
           $ref: '#/components/responses/Nondiscoverable'
+  /api/v1/sites/{siteId}/operations/investigations/{investigationId}/events:
+    get:
+      operationId: streamSiteNightEnergyInvestigationEvents
+      description: Returns a finite AG-UI event batch projected only from the current committed Investigation view. Cursor-based reconnect and delta replay are added by Map 4.2.
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+        - $ref: '#/components/parameters/InvestigationId'
+      responses:
+        '200':
+          description: Committed Operations Investigation AG-UI events.
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store, no-transform }
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE blocks containing RUN_STARTED, STATE_SNAPSHOT, bounded TOOL_CALL events and RUN_FINISHED.
+        '404':
+          $ref: '#/components/responses/Nondiscoverable'
   /api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance:
     post:
       operationId: advanceSiteNightEnergyInvestigation

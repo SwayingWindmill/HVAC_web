@@ -40,12 +40,14 @@ const failures = [];
 const publicRoutes = [
   ['POST', '/api/v1/sites/{siteId}/operations/investigations'],
   ['GET', '/api/v1/sites/{siteId}/operations/investigations/{investigationId}'],
+  ['GET', '/api/v1/sites/{siteId}/operations/investigations/{investigationId}/events'],
   ['POST', '/api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance'],
   ['POST', '/api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel'],
 ];
 const internalRoutes = [
   '/internal/v1/sites/{siteId}/operations/investigations',
   '/internal/v1/sites/{siteId}/operations/investigations/{investigationId}',
+  '/internal/v1/sites/{siteId}/operations/investigations/{investigationId}/events',
   '/internal/v1/sites/{siteId}/operations/investigations/{investigationId}:advance',
   '/internal/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel',
 ];
@@ -66,6 +68,10 @@ for (const required of [
   'SUPPORTED_SITE_FINDING',
   'UNABLE_TO_CONCLUDE',
   'TOOL_EXECUTION_RECEIPT',
+  'text/event-stream',
+  'RUN_STARTED',
+  'STATE_SNAPSHOT',
+  'RUN_FINISHED',
 ]) {
   if (!publicContract.includes(required)) failures.push(`Public OpenAPI is missing ${required}.`);
 }
@@ -101,7 +107,13 @@ for (const forbidden of ['LangGraph', 'opaqueState', 'runtimeRevision', 'provide
     failures.push(`HTTP contracts expose forbidden runtime or raw-series field ${forbidden}.`);
   }
 }
-for (const required of ['maximumRequestBytes', 'AUTHORIZATION_DENIED', 'RESOURCE_NOT_FOUND']) {
+for (const required of [
+  'maximumRequestBytes',
+  'AUTHORIZATION_DENIED',
+  'RESOURCE_NOT_FOUND',
+  'streamPattern',
+  'createAgUiEventStreamResponse',
+]) {
   if (!serviceHandler.includes(required)) failures.push(`Internal HTTP handler is missing ${required}.`);
 }
 for (const required of [
@@ -115,6 +127,10 @@ for (const required of [
   'context.WithTimeout',
   'RateLimitPerMinute',
   'validateOperationsSnapshot',
+  'validateOperationsEventStream',
+  'text/event-stream',
+  'no-store, no-transform',
+  'X-Accel-Buffering',
 ]) {
   if (!gateway.includes(required)) failures.push(`Gateway implementation is missing ${required}.`);
 }
