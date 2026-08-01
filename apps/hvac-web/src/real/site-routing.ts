@@ -1,6 +1,6 @@
 import type { Capability, Site } from '@/api/generated/platformGateway.gen';
 
-export type SiteRouteLeaf = 'assets' | 'energy' | 'alarms' | 'operations' | 'commands' | 'bigscreen';
+export type SiteRouteLeaf = 'dashboard' | 'assets' | 'energy' | 'alarms' | 'operations' | 'commands' | 'bigscreen';
 
 export interface SiteContext {
   readonly site: Readonly<Site>;
@@ -21,7 +21,7 @@ export type SiteRoutingDecision =
   | { state: 'SITE_ROUTE_NOT_FOUND'; context: SiteContext };
 
 const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const SITE_ROUTE_LEAVES = new Set<SiteRouteLeaf>(['assets', 'energy', 'alarms', 'operations', 'commands', 'bigscreen']);
+const SITE_ROUTE_LEAVES = new Set<SiteRouteLeaf>(['dashboard', 'assets', 'energy', 'alarms', 'operations', 'commands', 'bigscreen']);
 
 export function isUUIDv7(value: string): boolean {
   return UUID_V7_PATTERN.test(value);
@@ -50,7 +50,7 @@ export function resolveSiteEntry(
 ): SiteEntryDecision {
   if (authorizedSites.length === 0) return { state: 'NO_AUTHORIZED_SITE' };
   if (authorizedSites.length === 1) {
-    return { state: 'REDIRECT', target: siteRoute(authorizedSites[0], 'assets') };
+    return { state: 'REDIRECT', target: siteRoute(authorizedSites[0], 'dashboard') };
   }
   return {
     state: 'CHOOSE_SITE',
@@ -75,7 +75,7 @@ export function resolveSiteRouting(
   if (!site) return { state: 'SITE_NOT_VISIBLE' };
 
   if (segments.length === 2) {
-    return { state: 'REDIRECT', target: siteRoute(site, 'assets') };
+    return { state: 'REDIRECT', target: siteRoute(site, 'dashboard') };
   }
 
   if (!effectiveCapabilities.includes('site.read')) return { state: 'FORBIDDEN' };

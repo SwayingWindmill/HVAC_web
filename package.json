@@ -45,6 +45,7 @@
     "rms:feature-routes:test": "node --test scripts/test-rms-authenticated-shell-policy.mjs scripts/test-rms-feature-route-policy.mjs scripts/test-rms-shell-runtime.mjs",
     "rms:site-scope:test": "node --test scripts/test-rms-authenticated-shell-policy.mjs scripts/test-rms-feature-route-policy.mjs scripts/test-rms-site-routing.mjs scripts/test-rms-shell-runtime.mjs",
     "web:energy:test": "node --experimental-strip-types --test scripts/test-web-energy-analytics.mjs",
+    "real-dashboard:test": "node --test scripts/test-rms-site-routing.mjs scripts/test-real-dashboard-projection.mjs",
     "web:real-assets:test": "node --experimental-strip-types --test scripts/test-real-assets-model.mjs scripts/test-real-assets-data.mjs scripts/test-real-assets-detail.mjs scripts/test-real-assets-history.mjs scripts/test-real-assets-realtime.mjs",
     "real-commands:test": "node --experimental-strip-types --test scripts/test-real-commands.mjs",
     "real-alarms:test": "node --experimental-strip-types --test scripts/test-real-alarms.mjs",
