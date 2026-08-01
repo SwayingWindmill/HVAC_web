@@ -32,3 +32,15 @@ test('uses an isolated Real entry plugin, output directory, and Gateway-only pro
   assert.deepEqual(Object.keys(config.server?.proxy ?? {}), ['/api/v1']);
   assert.equal(config.server?.proxy?.['/api/v1']?.target, 'http://127.0.0.1:8080');
 });
+
+test('can disable HMR only for bounded browser certification servers', async () => {
+  const previous = process.env.HVAC_WEB_AUDIT_DISABLE_HMR;
+  process.env.HVAC_WEB_AUDIT_DISABLE_HMR = 'true';
+  try {
+    const config = await loadConfig('apps/hvac-web/vite.real.config.ts');
+    assert.equal(config.server?.hmr, false);
+  } finally {
+    if (previous === undefined) delete process.env.HVAC_WEB_AUDIT_DISABLE_HMR;
+    else process.env.HVAC_WEB_AUDIT_DISABLE_HMR = previous;
+  }
+});

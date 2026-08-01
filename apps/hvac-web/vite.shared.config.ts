@@ -8,6 +8,7 @@ export type HvacWebBuildTarget = 'demo' | 'real';
 const platformGatewayTarget = process.env.PLATFORM_GATEWAY_PROXY_TARGET || 'http://127.0.0.1:8080';
 const legacyApiTarget = process.env.LEGACY_API_PROXY_TARGET || 'http://localhost:3000';
 const s0GatewayOnly = process.env.S0_GATEWAY_ONLY === 'true';
+const auditDisableHMR = process.env.HVAC_WEB_AUDIT_DISABLE_HMR === 'true';
 const viteTLSCert = process.env.VITE_TLS_CERT;
 const viteTLSKey = process.env.VITE_TLS_KEY;
 const https = viteTLSCert && viteTLSKey ? { cert: readFileSync(viteTLSCert), key: readFileSync(viteTLSKey) } : undefined;
@@ -91,6 +92,7 @@ export function createHvacWebConfig(target: HvacWebBuildTarget): UserConfig {
     server: {
       port: isReal ? 5174 : 5173,
       https,
+      hmr: auditDisableHMR ? false : undefined,
       proxy: isReal ? realProxy() : demoProxy(),
     },
     build: {

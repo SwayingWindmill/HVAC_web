@@ -276,6 +276,7 @@ try {
       HVAC_WEB_BUILD_ID: 'rms-02-browser',
       HVAC_WEB_GATEWAY_BASE_PATH: '/api/v1',
       HVAC_WEB_REALTIME_PROTOCOL: 'centrifugo-v1',
+      HVAC_WEB_AUDIT_DISABLE_HMR: 'true',
       PLATFORM_GATEWAY_PROXY_TARGET: gatewayURL,
     },
   });
@@ -284,6 +285,8 @@ try {
   browserProcess = spawn(browserPath, [
     '--headless=new',
     '--disable-gpu',
+    '--disable-extensions',
+    '--disable-component-extensions-with-background-pages',
     '--no-sandbox',
     '--no-first-run',
     '--no-default-browser-check',
