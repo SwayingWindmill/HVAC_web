@@ -44,6 +44,7 @@ const (
 	PhaseS5ContractOnly              = "S5-R0-contract-only"
 	PhaseS5InternalReadOnly          = "S5-R1-internal-read-only"
 	PhaseS5InternalCreateAssign      = "S5-R1-internal-create-assign"
+	PhaseS5InternalLifecycle         = "S5-R1-internal-lifecycle"
 	PhaseS5SiteCanary                = "S5-R2-site-canary"
 	PhaseS5OperationallyCertified    = "S5-R3-operationally-certified"
 )
@@ -214,7 +215,7 @@ func validateEntry(entry RouteEntry) error {
 		if entry.Rollout.FallbackOwner == "" {
 			alarmRead := entry.Owner == OwnerAlarm && entry.Method == http.MethodGet && isS4Phase(entry.MigrationPhase)
 			workOrderRead := entry.Owner == OwnerWorkOrder && entry.Method == http.MethodGet && isS5Phase(entry.MigrationPhase)
-			workOrderMutation := entry.Owner == OwnerWorkOrder && entry.Method == http.MethodPost && entry.MigrationPhase == PhaseS5InternalCreateAssign && isS5MutationPath(entry.Path)
+			workOrderMutation := entry.Owner == OwnerWorkOrder && entry.Method == http.MethodPost && ((entry.MigrationPhase == PhaseS5InternalCreateAssign && isS5MutationPath(entry.Path)) || (entry.MigrationPhase == PhaseS5InternalLifecycle && isS5LifecyclePath(entry.Path)))
 			if !alarmRead && !workOrderRead && !workOrderMutation {
 				return errors.New("no-fallback percentage rollout is outside the governed Alarm or Work Order canaries")
 			}
@@ -447,16 +448,28 @@ func validateS5Phase(entry RouteEntry, seenScopes map[string]bool) error {
 			return errors.New("S5 Work Order read migration phase is unsupported")
 		}
 	case http.MethodPost:
-		if !isS5MutationPath(entry.Path) || entry.CohortGroup != "s5-work-order-write-v1" || !seenScopes["key"] {
-			return errors.New("S5 Work Order create/assign route, cohort or key scope is invalid")
+		if !seenScopes["key"] {
+			return errors.New("S5 Work Order mutation key scope is invalid")
 		}
 		for _, required := range []string{"VERSION_CONFLICT", "IDEMPOTENCY_CONFLICT"} {
 			if !containsString(entry.FallbackForbiddenResults, required) {
 				return errors.New("S5 Work Order mutation forbidden results are incomplete")
 			}
 		}
-		if entry.MigrationPhase != PhaseS5InternalCreateAssign || entry.Owner != OwnerWorkOrder || entry.ActivationStatus != "internal-canary" || entry.Rollout.Mode != "percentage" || entry.Rollout.Percentage != 1 || entry.Rollout.FallbackOwner != "" || len(entry.Rollout.CohortSalt) < 8 || entry.CompatibilityMode != "native" {
-			return errors.New("S5 Work Order internal create/assign canary policy is invalid")
+		switch entry.MigrationPhase {
+		case PhaseS5InternalCreateAssign:
+			if !isS5MutationPath(entry.Path) || entry.CohortGroup != "s5-work-order-write-v1" {
+				return errors.New("S5 Work Order create/assign route or cohort is invalid")
+			}
+		case PhaseS5InternalLifecycle:
+			if !isS5LifecyclePath(entry.Path) || entry.CohortGroup != "s5-work-order-lifecycle-v1" || !seenScopes["work-order"] {
+				return errors.New("S5 Work Order lifecycle route, cohort or resource scope is invalid")
+			}
+		default:
+			return errors.New("S5 Work Order mutation phase is unsupported")
+		}
+		if entry.Owner != OwnerWorkOrder || entry.ActivationStatus != "internal-canary" || entry.Rollout.Mode != "percentage" || entry.Rollout.Percentage != 1 || entry.Rollout.FallbackOwner != "" || len(entry.Rollout.CohortSalt) < 8 || entry.CompatibilityMode != "native" {
+			return errors.New("S5 Work Order internal mutation canary policy is invalid")
 		}
 	default:
 		return errors.New("S5 Work Order route method is unsupported")
@@ -468,6 +481,21 @@ func isS5ReadPath(path string) bool {
 }
 func isS5MutationPath(path string) bool {
 	return path == "/api/v1/sites/{siteId}/work-orders" || path == "/api/v1/sites/{siteId}/work-orders/{workOrderId}:assign"
+}
+
+func isS5LifecyclePath(path string) bool {
+	switch path {
+	case "/api/v1/sites/{siteId}/work-orders/{workOrderId}:plan",
+		"/api/v1/sites/{siteId}/work-orders/{workOrderId}:start",
+		"/api/v1/sites/{siteId}/work-orders/{workOrderId}:block",
+		"/api/v1/sites/{siteId}/work-orders/{workOrderId}:resume",
+		"/api/v1/sites/{siteId}/work-orders/{workOrderId}:complete",
+		"/api/v1/sites/{siteId}/work-orders/{workOrderId}:cancel",
+		"/api/v1/sites/{siteId}/work-orders/{workOrderId}:reopen":
+		return true
+	default:
+		return false
+	}
 }
 
 func isS4LifecyclePath(path string) bool {
@@ -745,7 +773,7 @@ func s5PhaseRank(phase string) (int, bool) {
 	switch phase {
 	case PhaseS5ContractOnly:
 		return 0, true
-	case PhaseS5InternalReadOnly, PhaseS5InternalCreateAssign:
+	case PhaseS5InternalReadOnly, PhaseS5InternalCreateAssign, PhaseS5InternalLifecycle:
 		return 1, true
 	default:
 		return 0, false

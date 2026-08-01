@@ -50,6 +50,7 @@ const (
 	publicWorkOrderCollection publicWorkOrderRouteKind = iota + 1
 	publicWorkOrderDetail
 	publicWorkOrderAssignment
+	publicWorkOrderLifecycle
 )
 
 type publicWorkOrderRoute struct {
@@ -58,6 +59,7 @@ type publicWorkOrderRoute struct {
 	siteID      string
 	workOrderID string
 	action      workorderauth.Action
+	operation   workordermodel.Operation
 }
 
 type workOrderFailure struct {
@@ -127,6 +129,31 @@ func matchPublicWorkOrderRoute(path string) (publicWorkOrderRoute, bool) {
 		route.workOrderID = workOrderID
 		route.action = workorderauth.ActionAssign
 		return route, true
+	}
+	for suffix, metadata := range map[string]struct {
+		action    workorderauth.Action
+		operation workordermodel.Operation
+	}{
+		":plan":     {workorderauth.ActionPlan, workordermodel.OperationSchedule},
+		":start":    {workorderauth.ActionStart, workordermodel.OperationStart},
+		":block":    {workorderauth.ActionBlock, workordermodel.OperationBlock},
+		":resume":   {workorderauth.ActionResume, workordermodel.OperationResume},
+		":complete": {workorderauth.ActionComplete, workordermodel.OperationComplete},
+		":cancel":   {workorderauth.ActionCancel, workordermodel.OperationCancel},
+		":reopen":   {workorderauth.ActionReopen, workordermodel.OperationReopen},
+	} {
+		if strings.HasSuffix(resourceSegment, suffix) {
+			workOrderID := strings.TrimSuffix(resourceSegment, suffix)
+			if !workordermodel.IsUUIDv7(workOrderID) || strings.Contains(workOrderID, ":") {
+				return publicWorkOrderRoute{}, false
+			}
+			route.kind = publicWorkOrderLifecycle
+			route.template = "/api/v1/sites/{siteId}/work-orders/{workOrderId}" + suffix
+			route.workOrderID = workOrderID
+			route.action = metadata.action
+			route.operation = metadata.operation
+			return route, true
+		}
 	}
 	if strings.Contains(resourceSegment, ":") || !workordermodel.IsUUIDv7(resourceSegment) {
 		return publicWorkOrderRoute{}, false

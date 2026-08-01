@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS iam.work_order_permissions (
   principal_id uuid NOT NULL REFERENCES iam.principals(id),
   acting_organization_id uuid NOT NULL CHECK (iam.is_uuid_v7(acting_organization_id)),
   site_id uuid NOT NULL CHECK (iam.is_uuid_v7(site_id)),
-  action text NOT NULL CHECK (action IN ('work-order:list', 'work-order:read', 'work-order:create', 'work-order:assign')),
+  action text NOT NULL CHECK (action IN ('work-order:list', 'work-order:read', 'work-order:create', 'work-order:assign', 'work-order:plan', 'work-order:start', 'work-order:block', 'work-order:resume', 'work-order:complete', 'work-order:cancel', 'work-order:reopen')),
   effect text NOT NULL CHECK (effect IN ('ALLOW', 'DENY')),
   status text NOT NULL CHECK (status IN ('ACTIVE', 'SUSPENDED', 'REVOKED')),
   valid_from timestamptz NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS iam.work_order_authorization_decisions (
   work_order_id uuid,
   assignee_id text CHECK (assignee_id IS NULL OR char_length(btrim(assignee_id)) BETWEEN 1 AND 256),
   team_id text CHECK (team_id IS NULL OR char_length(btrim(team_id)) BETWEEN 1 AND 256),
-  action text NOT NULL CHECK (action IN ('work-order:list', 'work-order:read', 'work-order:create', 'work-order:assign')),
+  action text NOT NULL CHECK (action IN ('work-order:list', 'work-order:read', 'work-order:create', 'work-order:assign', 'work-order:plan', 'work-order:start', 'work-order:block', 'work-order:resume', 'work-order:complete', 'work-order:cancel', 'work-order:reopen')),
   allowed boolean NOT NULL,
   policy_revision text NOT NULL CHECK (char_length(policy_revision) BETWEEN 1 AND 128),
   reason_code text NOT NULL CHECK (reason_code IN ('ALLOW_EXACT_SCOPE','DENY_PRINCIPAL','DENY_MEMBERSHIP','DENY_EXPLICIT','DENY_SCOPE')),
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS iam.work_order_authorization_decisions (
   occurred_at timestamptz NOT NULL,
   CHECK (principal_id IS NULL OR iam.is_uuid_v7(principal_id)),
   CHECK (work_order_id IS NULL OR iam.is_uuid_v7(work_order_id)),
-  CHECK ((action IN ('work-order:list', 'work-order:create') AND work_order_id IS NULL) OR (action IN ('work-order:read', 'work-order:assign') AND work_order_id IS NOT NULL))
+  CHECK ((action IN ('work-order:list', 'work-order:create') AND work_order_id IS NULL) OR (action IN ('work-order:read', 'work-order:assign', 'work-order:plan', 'work-order:start', 'work-order:block', 'work-order:resume', 'work-order:complete', 'work-order:cancel', 'work-order:reopen') AND work_order_id IS NOT NULL))
 );
 
 CREATE INDEX IF NOT EXISTS work_order_permissions_lookup_idx
@@ -109,7 +109,7 @@ INSERT INTO iam.policies
   (id, organization_id, policy_key, policy_revision, status, document, created_at, updated_at)
 VALUES
   ('018f1e00-1400-7000-8000-000000000031', '018f1e00-0000-7000-8000-000000000001', 'work-order-access', 1, 'ACTIVE',
-   '{"actions":["work-order:list","work-order:read","work-order:create","work-order:assign"],"scope":"site-and-resource","denyWins":true}'::jsonb,
+   '{"actions":["work-order:list","work-order:read","work-order:create","work-order:assign","work-order:plan","work-order:start","work-order:block","work-order:resume","work-order:complete","work-order:cancel","work-order:reopen"],"scope":"site-and-resource","denyWins":true}'::jsonb,
    '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')
 ON CONFLICT DO NOTHING;
 
@@ -119,7 +119,14 @@ VALUES
   ('018f1e00-2400-7000-8000-000000000031', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'work-order:list', 'ALLOW', 'ACTIVE', '2026-08-01T00:00:00Z', NULL, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'),
   ('018f1e00-2400-7000-8000-000000000032', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'work-order:read', 'ALLOW', 'ACTIVE', '2026-08-01T00:00:00Z', NULL, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'),
   ('018f1e00-2400-7000-8000-000000000033', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'work-order:create', 'ALLOW', 'ACTIVE', '2026-08-01T00:00:00Z', NULL, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'),
-  ('018f1e00-2400-7000-8000-000000000034', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'work-order:assign', 'ALLOW', 'ACTIVE', '2026-08-01T00:00:00Z', NULL, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')
+  ('018f1e00-2400-7000-8000-000000000034', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'work-order:assign', 'ALLOW', 'ACTIVE', '2026-08-01T00:00:00Z', NULL, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'),
+  ('018f1e00-2400-7000-8000-000000000035', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'work-order:plan', 'ALLOW', 'ACTIVE', '2026-08-01T00:00:00Z', NULL, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'),
+  ('018f1e00-2400-7000-8000-000000000036', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'work-order:start', 'ALLOW', 'ACTIVE', '2026-08-01T00:00:00Z', NULL, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'),
+  ('018f1e00-2400-7000-8000-000000000037', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'work-order:block', 'ALLOW', 'ACTIVE', '2026-08-01T00:00:00Z', NULL, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'),
+  ('018f1e00-2400-7000-8000-000000000038', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'work-order:resume', 'ALLOW', 'ACTIVE', '2026-08-01T00:00:00Z', NULL, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'),
+  ('018f1e00-2400-7000-8000-000000000039', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'work-order:complete', 'ALLOW', 'ACTIVE', '2026-08-01T00:00:00Z', NULL, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'),
+  ('018f1e00-2400-7000-8000-000000000040', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'work-order:cancel', 'ALLOW', 'ACTIVE', '2026-08-01T00:00:00Z', NULL, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'),
+  ('018f1e00-2400-7000-8000-000000000041', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'work-order:reopen', 'ALLOW', 'ACTIVE', '2026-08-01T00:00:00Z', NULL, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO iam.work_order_ownership_targets

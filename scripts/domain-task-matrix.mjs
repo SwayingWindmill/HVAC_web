@@ -458,6 +458,37 @@ export const capabilityTaskMatrix = Object.freeze({
     nodeRun('scripts/run-s5-work-order-postgres-tests.mjs'),
     npmRun('s5:work-order:create-assign:browser'),
   ]),
+  's5:work-order:lifecycle': Object.freeze([
+    npmRun('s5:work-order'),
+    npmRun('s5:work-order:read-canary:check'),
+    npmRun('s5:work-order:create-assign:check'),
+    npmRun('s5:work-order:lifecycle:check'),
+    nodeRun(
+      'scripts/run-go.mjs',
+      'test',
+      '-count=1',
+      './libs/workorderauth/...',
+      './libs/workordermodel/...',
+      './libs/identitycontext/...',
+      './libs/ownershipregistry/...',
+      './services/iam-service/...',
+      './services/platform-gateway/...',
+      './services/work-order-service/...',
+    ),
+    nodeRun(
+      'scripts/run-go.mjs',
+      'vet',
+      './libs/workorderauth/...',
+      './libs/workordermodel/...',
+      './libs/identitycontext/...',
+      './libs/ownershipregistry/...',
+      './services/iam-service/...',
+      './services/platform-gateway/...',
+      './services/work-order-service/...',
+    ),
+    nodeRun('scripts/run-s5-work-order-postgres-tests.mjs'),
+    npmRun('s5:work-order:lifecycle:browser'),
+  ]),
 });
 
 export const resolveCapabilityTask = (task) => {

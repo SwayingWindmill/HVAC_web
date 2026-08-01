@@ -55,6 +55,11 @@ func (store *fakeStore) Assign(context.Context, string, string, string, Assignme
 	return MutationResult{WorkOrder: store.item}, nil
 }
 
+func (store *fakeStore) Transition(context.Context, string, string, string, LifecycleMutation) (MutationResult, error) {
+	store.calls.Add(1)
+	return MutationResult{WorkOrder: store.item}, nil
+}
+
 func TestWorkOrderHTTPListAndDetail(t *testing.T) {
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	signer := newSigner(t)

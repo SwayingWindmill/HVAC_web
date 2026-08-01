@@ -1,0 +1,69 @@
+name: S5 Work Order Governed Lifecycle
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/s5-work-order-lifecycle.yml"
+      - "contracts/http/platform-gateway.openapi.yaml"
+      - "contracts/http/s5-work-order-public.openapi.json"
+      - "contracts/http/templates/**"
+      - "contracts/ownership/**"
+      - "docs/operations/real-product-roadmap.md"
+      - "docs/operations/s5-work-order-baseline.md"
+      - "infra/s1-registry/postgres/init/008-s5-work-order-authorization.sql"
+      - "libs/identitycontext/**"
+      - "libs/ownershipregistry/**"
+      - "libs/workorderauth/**"
+      - "libs/workordermodel/**"
+      - "scripts/check-s5-work-order-lifecycle.mjs"
+      - "scripts/check-s5-work-order-postgres.mjs"
+      - "scripts/domain-task-matrix.mjs"
+      - "scripts/generate-platform-contracts.mjs"
+      - "scripts/run-s5-work-order-lifecycle-browser-audit.mjs"
+      - "scripts/run-s5-work-order-postgres-tests.mjs"
+      - "services/iam-service/**"
+      - "services/platform-gateway/**"
+      - "services/work-order-service/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/s5-work-order-lifecycle.yml"
+      - "contracts/http/platform-gateway.openapi.yaml"
+      - "contracts/http/s5-work-order-public.openapi.json"
+      - "contracts/http/templates/**"
+      - "contracts/ownership/**"
+      - "docs/operations/real-product-roadmap.md"
+      - "docs/operations/s5-work-order-baseline.md"
+      - "infra/s1-registry/postgres/init/008-s5-work-order-authorization.sql"
+      - "libs/identitycontext/**"
+      - "libs/ownershipregistry/**"
+      - "libs/workorderauth/**"
+      - "libs/workordermodel/**"
+      - "scripts/check-s5-work-order-lifecycle.mjs"
+      - "scripts/check-s5-work-order-postgres.mjs"
+      - "scripts/domain-task-matrix.mjs"
+      - "scripts/generate-platform-contracts.mjs"
+      - "scripts/run-s5-work-order-lifecycle-browser-audit.mjs"
+      - "scripts/run-s5-work-order-postgres-tests.mjs"
+      - "services/iam-service/**"
+      - "services/platform-gateway/**"
+      - "services/work-order-service/**"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+          cache: npm
+      - run: npm ci
+      - run: npm run contracts:check
+      - run: npm run s5:work-order:lifecycle

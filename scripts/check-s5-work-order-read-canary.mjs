@@ -30,15 +30,15 @@ for (const route of routes) {
   assert(route.rollout?.cohortSalt === 's5-work-order-read-canary-v1' && route.cohortGroup === 's5-work-order-read-v1', `${route.path} changed cohort identity`);
   assert(!route.rollout?.fallbackOwner && !route.readFallbackOwner && route.shadowSideEffectPolicy === 'NONE', `${route.path} gained fallback or shadow behavior`);
 }
-const mutations = registry.routes.filter((route) => route.owner === 'work-order-service' && route.method !== 'GET');
+const mutations = registry.routes.filter((route) => route.owner === 'work-order-service' && route.migrationPhase === 'S5-R1-internal-create-assign');
 assert(mutations.length === 2 && mutations.every((route) => route.method === 'POST'), 'Work Order exposes an undeclared non-read route');
 assert(mutations.some((route) => route.path === '/api/v1/sites/{siteId}/work-orders') && mutations.some((route) => route.path === '/api/v1/sites/{siteId}/work-orders/{workOrderId}:assign'), 'Work Order create/assign route pair is incomplete');
 assert(mutations.every((route) => route.migrationPhase === 'S5-R1-internal-create-assign' && route.cohortGroup === 's5-work-order-write-v1' && route.rollout?.percentage === 1 && !route.rollout?.fallbackOwner), 'Work Order mutation routes escaped their governed 1% no-fallback cohort');
 for (const name of ['iam-work-order-permission', 'iam-work-order-authorization-decision']) {
   assert(dataRegistry.resources.some((resource) => resource.kind === 'projection' && resource.name === name && resource.writer === 'iam-service' && resource.revision === 1), 'IAM ownership projection is missing: ' + name);
 }
-assert(openapi.includes('"const": 5') && openapi.includes('"work-order.list"') && openapi.includes('"work-order.read"') && openapi.includes('"work-order.create"') && openapi.includes('"work-order.assign"') && openapi.includes('"maxItems": 18'), 'public capability v5 contract is incomplete');
-for (const marker of ['CapabilitySetVersion = 5', 'CapabilityWorkOrderList', 'CapabilityWorkOrderRead', 'CapabilityWorkOrderCreate', 'CapabilityWorkOrderAssign']) assert(capabilities.includes(marker), `identity capability contract is missing ${marker}`);
+assert(openapi.includes('"const": 6') && openapi.includes('"work-order.list"') && openapi.includes('"work-order.read"') && openapi.includes('"work-order.create"') && openapi.includes('"work-order.assign"') && openapi.includes('"maxItems": 19'), 'public capability v6 contract is incomplete');
+for (const marker of ['CapabilitySetVersion = 6', 'CapabilityWorkOrderList', 'CapabilityWorkOrderRead', 'CapabilityWorkOrderCreate', 'CapabilityWorkOrderAssign', 'CapabilityWorkOrderLifecycle']) assert(capabilities.includes(marker), `identity capability contract is missing ${marker}`);
 for (const marker of ['PhaseS5InternalReadOnly', 's5-work-order-read-v1', 'Percentage != 1']) assert(ownership.includes(marker), `ownership validator is missing ${marker}`);
 for (const marker of ['ActionList', 'ActionRead', 'ReasonDenyExplicit', 'ALLOW_EXACT_SCOPE']) assert(workOrderAuth.includes(marker), `Work Order authorization contract is missing ${marker}`);
 for (const marker of ['WorkOrderDecisionPath', 'work-order:authorize', 'handleWorkOrderDecision']) assert(iamMainServer.includes(marker), 'IAM Work Order route is missing ' + marker);

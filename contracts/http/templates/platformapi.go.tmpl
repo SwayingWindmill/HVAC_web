@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	CapabilitySetVersion                 = 5
+	CapabilitySetVersion                 = 6
 	GetHealthPath                         = "__HEALTH_PATH__"
 	GetVersionPath                        = "__VERSION_PATH__"
 	GetPlatformStatusPath                 = "__PLATFORM_STATUS_PATH__"
@@ -104,6 +104,7 @@ const (
 	CapabilityWorkOrderRead           Capability = "work-order.read"
 	CapabilityWorkOrderCreate         Capability = "work-order.create"
 	CapabilityWorkOrderAssign         Capability = "work-order.assign"
+	CapabilityWorkOrderLifecycle      Capability = "work-order.lifecycle"
 )
 
 type EffectiveAuthorization struct {

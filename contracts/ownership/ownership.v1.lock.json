@@ -1,5 +1,5 @@
 {
-  "routeRegistryRevision": 17,
+  "routeRegistryRevision": 18,
   "routes": {
     "GET /api/v1/health": {
       "revision": 1,
@@ -188,9 +188,37 @@
     "POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:assign": {
       "revision": 1,
       "owner": "work-order-service"
+    },
+    "POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:plan": {
+      "revision": 1,
+      "owner": "work-order-service"
+    },
+    "POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:start": {
+      "revision": 1,
+      "owner": "work-order-service"
+    },
+    "POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:block": {
+      "revision": 1,
+      "owner": "work-order-service"
+    },
+    "POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:resume": {
+      "revision": 1,
+      "owner": "work-order-service"
+    },
+    "POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:complete": {
+      "revision": 1,
+      "owner": "work-order-service"
+    },
+    "POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:cancel": {
+      "revision": 1,
+      "owner": "work-order-service"
+    },
+    "POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:reopen": {
+      "revision": 1,
+      "owner": "work-order-service"
     }
   },
-  "dataRegistryRevision": 20,
+  "dataRegistryRevision": 21,
   "resources": {
     "schema:gateway": {
       "revision": 1,

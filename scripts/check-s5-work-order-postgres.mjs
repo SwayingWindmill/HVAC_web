@@ -6,7 +6,7 @@ const readText = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await readText(path));
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
-const [routes, data, storeRead, storeMutation, cursor, http, main, migration001, migration002, roles, seed, compose, runner, workflow] = await Promise.all([
+const [routes, data, storeRead, storeMutation, cursor, http, main, migration001, migration002, migration003, roles, seed, compose, runner, workflow] = await Promise.all([
   readJSON('contracts/ownership/route-ownership.v1.json'),
   readJSON('contracts/ownership/data-ownership.v1.json'),
   readText('services/work-order-service/pkg/workorderservice/postgres.go'),
@@ -16,6 +16,7 @@ const [routes, data, storeRead, storeMutation, cursor, http, main, migration001,
   readText('services/work-order-service/cmd/work-order-service/main.go'),
   readText('services/work-order-service/migrations/001_s5_work_order_runtime.sql'),
   readText('services/work-order-service/migrations/002_s5_work_order_create_assignment.sql'),
+  readText('services/work-order-service/migrations/003_s5_work_order_lifecycle.sql'),
   readText('services/work-order-service/testdata/postgres/000_roles.sql'),
   readText('services/work-order-service/testdata/postgres/010_seed.sql'),
   readText('infra/s5-work-order/compose.yaml'),
@@ -23,7 +24,7 @@ const [routes, data, storeRead, storeMutation, cursor, http, main, migration001,
   readText('.github/workflows/s5-work-order-postgres.yml'),
 ]);
 const store = storeRead + '\n' + storeMutation;
-const migration = migration001 + '\n' + migration002;
+const migration = migration001 + '\n' + migration002 + '\n' + migration003;
 
 const workOrderRoutes = routes.routes.filter((route) => route.method === 'GET' && route.path.includes('/work-orders'));
 assert(workOrderRoutes.length === 2, 'S5 Work Order must expose exactly list and detail GET ownership entries');
@@ -61,7 +62,7 @@ assert(http.includes('WorkOrderListAction') && http.includes('WorkOrderReadActio
 assert(http.includes('sameStringSet(claims.Scopes, expectedScopes)'), 'Work Order internal read context is not exact-scope');
 assert(http.includes('WorkOrderWriteContextHeader') && http.includes('WorkOrderCreateAction') && http.includes('WorkOrderAssignAction'), 'Work Order reviewed mutation boundary is missing');
 assert(http.includes('Idempotency-Key') && http.includes('ExpectedVersion'), 'Work Order mutation idempotency or optimistic concurrency is missing');
-assert(!http.includes('work-order:complete') && !http.includes('work-order:cancel') && !http.includes('work-order:reopen'), 'Work Order internal boundary contains unreviewed lifecycle mutation behavior');
+for (const action of ['plan', 'start', 'block', 'resume', 'complete', 'cancel', 'reopen']) assert(http.includes('work-order:' + action), 'Work Order internal lifecycle boundary lacks ' + action);
 assert(main.includes('workloadtls.NewServerTLSConfig') && main.includes('peerSPIFFE(request) != gatewaySPIFFE'), 'Work Order service does not enforce Gateway mTLS identity');
 assert(main.includes('WORK_ORDER_CURSOR_SECRET_FILE') && main.includes('WORK_ORDER_DATABASE_URL_FILE') && main.includes('WORK_ORDER_MUTATION_DATABASE_URL_FILE'), 'Work Order service does not load protected read/write runtime references from files');
 
@@ -70,6 +71,7 @@ for (const table of ['work_order_current', 'work_order_source_reference', 'work_
 }
 assert(migration001.includes('FORCE ROW LEVEL SECURITY') && migration001.includes('GRANT SELECT ON ALL TABLES'), 'Work Order read migration lacks FORCE RLS or read-only grants');
 assert(migration002.includes('FORCE ROW LEVEL SECURITY') && migration002.includes('GRANT UPDATE (assignee_id, team_id, version, updated_at)'), 'Work Order mutation migration lacks FORCE RLS or bounded assignment grants');
+assert(migration003.includes('GRANT UPDATE (status, scheduled_start, due_at, version, updated_at)') && migration003.includes('GRANT INSERT ON work_order_runtime.work_order_completion_evidence'), 'Work Order lifecycle migration lacks bounded current or evidence grants');
 const readRuntimeGrants = migration.split(/\r?\n/).filter((line) => line.includes('TO s5_work_order_runtime'));
 assert(!readRuntimeGrants.some((line) => /GRANT (INSERT|UPDATE|DELETE|ALL)/.test(line)), 'Work Order read runtime was granted mutation authority');
 assert(migration.includes('s5_work_order_writer') && migration.includes('work_order_idempotency') && migration.includes('work_order_mutation_audit'), 'Work Order writer authority or durable mutation evidence is missing');

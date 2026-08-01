@@ -89,7 +89,7 @@ function principal(
       delegationExpiresAt: expiresAt,
     },
     authorization: {
-      capabilitySetVersion: 5,
+      capabilitySetVersion: 6,
       policyRevision: 'iam:1',
       capabilities,
     },

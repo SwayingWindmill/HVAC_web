@@ -121,7 +121,7 @@ func TestWorkOrderHTTPMutationBoundaryFailsClosedBeforeStore(t *testing.T) {
 		t.Fatalf("unknown field status=%d body=%s", unknownRecorder.Code, unknownRecorder.Body.String())
 	}
 
-	unreviewed := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders/"+httpMutationWorkOrderID+":complete", strings.NewReader(`{}`))
+	unreviewed := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders/"+httpMutationWorkOrderID+":link-alarm", strings.NewReader(`{}`))
 	unreviewed.Header.Set("Content-Type", "application/json")
 	unreviewed.Header.Set("Idempotency-Key", "complete-http-01")
 	unreviewed.Header.Set(WorkOrderWriteContextHeader, signContext(t, signer, now, []string{"work-order:complete"}, httpTestOrganizationID, httpTestSiteID, httpMutationWorkOrderID, mutationKeyScope("complete-http-01")))
