@@ -73,13 +73,14 @@ npm run build:real
 
 - `operations-agent-service/`：TypeScript 模块化单体，负责授权范围内的调查编排、确定性分析、LangGraph 只读运行时、业务记录和 AG-UI 投影。
 
-Operations Agent 通过 Platform Gateway 暴露受保护的调查接口。现有实现包含 Registry/Energy 权威读取、PostgreSQL 持久化、只读运行时和首个 Web Operations Workspace；实时模型提供方、断线游标恢复和调度器仍是后续工作。
+Operations Agent 通过 Platform Gateway 暴露受保护的调查接口。现有实现包含 Registry/Energy 权威读取、PostgreSQL 持久化、只读运行时、首个 Web Operations Workspace，以及受控 Finding 合成接口与 Fake Provider。调用来源、配置摘要、输入输出摘要、延迟和有界计量会与 Finding 原子持久化，但不会进入公共投影。真实外部模型、断线游标恢复和调度器仍是后续工作；模型当前不能选择工具、扩大 Scope 或提交业务效果。
 
 ## 契约和所有权
 
 - `contracts/http/`：公共及内部 OpenAPI 契约和生成锁。
 - `contracts/events/`：Protobuf 与事件兼容锁。
 - `contracts/ownership/`：路由、数据写入权威和切换阶段。
+- `contracts/operations-agent/`：Operations Agent Tool Catalog 与可信 Runtime Context Schema。
 - `contracts/telemetry/`：遥测兼容性和 IAM 授权规则。
 - `contracts/thingsboard/`：设备控制映射。
 
@@ -89,12 +90,15 @@ Operations Agent 通过 Platform Gateway 暴露受保护的调查接口。现有
 npm run repo:check
 npm run repo:governance:test
 npm run domain:matrix:test
+npm run operations-agent:contracts:check
 npm run contracts:check
 npm run events:check
 npm run ownership:check
 npm run lint
 npm run build
 ```
+
+Operations Agent 的逻辑工具、Owner、Runtime READ 白名单、Tool Authorization 子集、Receipt owner 与可信控制字段以 `contracts/operations-agent/` 为来源。`npm run operations-agent:contracts:generate` 更新 Service、Benchmark 和 Web 生成常量；`operations-agent:contracts:check` 同时校验生成漂移以及公共/内部 OpenAPI 枚举。
 
 领域任务矩阵统一维护 PR、本地和夜间回归使用的命令组合。默认只运行所选领域的单元层；先用 `domain:plan` 查看计划，再按需增加持久化或浏览器层：
 

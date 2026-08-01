@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "catalogVersion": "operations-agent-tool-catalog/v1",
+  "tools": [
+    {"logicalTool":"authorization.checkScope","ownerService":"iam-service","receiptOwner":null,"benchmarkAllowed":true,"runtimeReadAllowed":false,"toolAuthorizationSupported":false},
+    {"logicalTool":"registry.getSite","ownerService":"platform-core-service","receiptOwner":"registry","benchmarkAllowed":true,"runtimeReadAllowed":true,"toolAuthorizationSupported":true},
+    {"logicalTool":"registry.getEquipment","ownerService":"platform-core-service","receiptOwner":null,"benchmarkAllowed":true,"runtimeReadAllowed":false,"toolAuthorizationSupported":false},
+    {"logicalTool":"registry.listSiteEquipment","ownerService":"platform-core-service","receiptOwner":"registry","benchmarkAllowed":true,"runtimeReadAllowed":true,"toolAuthorizationSupported":true},
+    {"logicalTool":"registry.getEquipmentEnergyBindings","ownerService":"platform-core-service","receiptOwner":null,"benchmarkAllowed":true,"runtimeReadAllowed":false,"toolAuthorizationSupported":false},
+    {"logicalTool":"telemetry.current.getEquipmentState","ownerService":"telemetry-runtime-service","receiptOwner":null,"benchmarkAllowed":true,"runtimeReadAllowed":false,"toolAuthorizationSupported":false},
+    {"logicalTool":"telemetry.current.getDeviceObservationSnapshot","ownerService":"telemetry-runtime-service","receiptOwner":null,"benchmarkAllowed":true,"runtimeReadAllowed":false,"toolAuthorizationSupported":false},
+    {"logicalTool":"telemetry.getCurrentSnapshot","ownerService":"telemetry-runtime-service","receiptOwner":"telemetry-query-service","benchmarkAllowed":true,"runtimeReadAllowed":true,"toolAuthorizationSupported":false},
+    {"logicalTool":"analytics.energy.getSiteSeries","ownerService":"telemetry-query-service","receiptOwner":null,"benchmarkAllowed":true,"runtimeReadAllowed":false,"toolAuthorizationSupported":false},
+    {"logicalTool":"analytics.energy.compareSitePeriods","ownerService":"telemetry-query-service","receiptOwner":null,"benchmarkAllowed":true,"runtimeReadAllowed":false,"toolAuthorizationSupported":false},
+    {"logicalTool":"analytics.energy.getEquipmentSeries","ownerService":"telemetry-query-service","receiptOwner":null,"benchmarkAllowed":true,"runtimeReadAllowed":false,"toolAuthorizationSupported":false},
+    {"logicalTool":"analytics.getEnergySeries","ownerService":"telemetry-query-service","receiptOwner":"telemetry-query-service","benchmarkAllowed":true,"runtimeReadAllowed":true,"toolAuthorizationSupported":true},
+    {"logicalTool":"commands.getCapabilities","ownerService":"command-service","receiptOwner":"command-service","benchmarkAllowed":true,"runtimeReadAllowed":true,"toolAuthorizationSupported":false},
+    {"logicalTool":"commands.createIntent","ownerService":"command-service","receiptOwner":null,"benchmarkAllowed":true,"runtimeReadAllowed":false,"toolAuthorizationSupported":false},
+    {"logicalTool":"commands.getIntent","ownerService":"command-service","receiptOwner":null,"benchmarkAllowed":true,"runtimeReadAllowed":false,"toolAuthorizationSupported":false},
+    {"logicalTool":"commands.approveIntent","ownerService":"command-service","receiptOwner":null,"benchmarkAllowed":true,"runtimeReadAllowed":false,"toolAuthorizationSupported":false},
+    {"logicalTool":"audit.getRecord","ownerService":"audit-ledger-service","receiptOwner":null,"benchmarkAllowed":true,"runtimeReadAllowed":false,"toolAuthorizationSupported":false}
+  ]
+}

@@ -85,6 +85,21 @@ const finding = {
   },
 };
 
+const modelSynthesis = {
+  source: 'MODEL',
+  provider: 'fake-provider',
+  model: 'fake-structured-model',
+  configurationDigest: digest,
+  promptPolicyVersion: 'finding-synthesis-policy/v1',
+  outputSchemaVersion: 'finding-synthesis-output/v1',
+  inputDigest: digest,
+  outputDigest: digest,
+  latencyMs: 25,
+  metering: { inputUnits: 80, outputUnits: 24 },
+  traceId: 'trace-001',
+  fallbackReason: null,
+};
+
 const receipt = {
   schemaVersion: 1,
   recordType: 'TOOL_EXECUTION_RECEIPT',
@@ -266,6 +281,55 @@ test('Findings allow typed insufficiency but never supported Equipment attributi
       siteId: 'site-001',
       equipmentId: 'equipment-001',
     },
+  }));
+});
+
+test('Finding synthesis provenance persists bounded metadata but rejects raw Provider content', () => {
+  const persisted = createInvestigationBusinessRecord({
+    ...finding,
+    synthesis: modelSynthesis,
+  });
+  assert.deepEqual(persisted.synthesis, modelSynthesis);
+
+  const fallback = createInvestigationBusinessRecord({
+    ...finding,
+    id: 'finding-fallback-001',
+    synthesis: {
+      source: 'DETERMINISTIC_FALLBACK',
+      provider: null,
+      model: null,
+      configurationDigest: null,
+      promptPolicyVersion: 'finding-synthesis-policy/v1',
+      outputSchemaVersion: 'finding-synthesis-output/v1',
+      inputDigest: digest,
+      outputDigest: digest,
+      latencyMs: null,
+      metering: null,
+      traceId: null,
+      fallbackReason: 'NOT_CONFIGURED',
+    },
+  });
+  assert.equal(fallback.synthesis.source, 'DETERMINISTIC_FALLBACK');
+
+  assertRecordError(() => createInvestigationBusinessRecord({
+    ...finding,
+    id: 'finding-raw-provider-content',
+    synthesis: { ...modelSynthesis, rawResponse: 'unbounded Provider output' },
+  }));
+  assertRecordError(() => createInvestigationBusinessRecord({
+    ...finding,
+    id: 'finding-contradictory-model-fallback',
+    synthesis: { ...modelSynthesis, fallbackReason: 'TIMEOUT' },
+  }));
+  assertRecordError(() => createInvestigationBusinessRecord({
+    ...finding,
+    id: 'finding-invalid-configuration-digest',
+    synthesis: { ...modelSynthesis, configurationDigest: 'configuration-v1' },
+  }));
+  assertRecordError(() => createInvestigationBusinessRecord({
+    ...finding,
+    id: 'finding-unbounded-metering',
+    synthesis: { ...modelSynthesis, metering: { inputUnits: 10_000_001, outputUnits: 1 } },
   }));
 });
 

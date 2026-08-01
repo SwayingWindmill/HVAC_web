@@ -1,3 +1,8 @@
+import {
+  OPERATIONS_AGENT_TOOL_RECEIPT_OWNER_BY_LOGICAL_TOOL,
+  type LogicalTool,
+  type ToolOwner,
+} from './generated-tool-contract.js';
 import type {
   IdempotencyKey,
   InvestigationScope,
@@ -5,6 +10,8 @@ import type {
   OperatorInputRequestKind,
   StepIdentity,
 } from './operations-investigation.js';
+
+export type { LogicalTool, ToolOwner } from './generated-tool-contract.js';
 
 export type InvestigationBusinessRecordType =
   | 'EVIDENCE'
@@ -136,6 +143,31 @@ export type FindingConclusion =
     readonly requiredNext?: readonly FindingRequiredNext[];
   };
 
+export interface FindingSynthesisMetering {
+  readonly inputUnits: number;
+  readonly outputUnits: number;
+}
+
+export interface FindingSynthesisProvenance {
+  readonly source: 'MODEL' | 'DETERMINISTIC_FALLBACK';
+  readonly provider: string | null;
+  readonly model: string | null;
+  readonly configurationDigest: string | null;
+  readonly promptPolicyVersion: 'finding-synthesis-policy/v1';
+  readonly outputSchemaVersion: 'finding-synthesis-output/v1';
+  readonly inputDigest: string;
+  readonly outputDigest: string;
+  readonly latencyMs: number | null;
+  readonly metering: FindingSynthesisMetering | null;
+  readonly traceId: string | null;
+  readonly fallbackReason:
+    | 'NOT_CONFIGURED'
+    | 'PROVIDER_ERROR'
+    | 'TIMEOUT'
+    | 'OUTPUT_INVALID'
+    | null;
+}
+
 export interface FindingRecord extends InvestigationBusinessRecordBase {
   readonly recordType: 'FINDING';
   readonly findingKind:
@@ -147,16 +179,9 @@ export interface FindingRecord extends InvestigationBusinessRecordBase {
   readonly evidenceIds: readonly string[];
   readonly analysisReferenceIds: readonly string[];
   readonly conclusion: FindingConclusion;
+  readonly synthesis?: FindingSynthesisProvenance;
 }
 
-export type LogicalTool =
-  | 'registry.getSite'
-  | 'registry.listSiteEquipment'
-  | 'telemetry.getCurrentSnapshot'
-  | 'analytics.getEnergySeries'
-  | 'commands.getCapabilities';
-
-export type ToolOwner = 'registry' | 'telemetry-query-service' | 'command-service';
 export type ToolExecutionResultCategory = 'SUCCEEDED' | 'REJECTED' | 'TIMED_OUT' | 'FAILED';
 export type ToolReceiptMetadataValue = string | number | boolean | null;
 
@@ -665,7 +690,99 @@ const normalizeFindingConclusion = (value: unknown): FindingConclusion => {
   };
 };
 
+const normalizeFindingSynthesisMetering = (
+  value: unknown,
+): FindingSynthesisMetering | null => {
+  if (value === null) return null;
+  const metering = requireRecord(value, 'synthesis.metering');
+  if (!hasExactKeys(metering, ['inputUnits', 'outputUnits'])) {
+    fail('synthesis.metering has unsupported fields.');
+  }
+  const inputUnits = requireCount(metering.inputUnits, 'synthesis.metering.inputUnits');
+  const outputUnits = requireCount(metering.outputUnits, 'synthesis.metering.outputUnits');
+  if (inputUnits > 10_000_000 || outputUnits > 10_000_000) {
+    fail('synthesis.metering exceeds the supported bound.');
+  }
+  return { inputUnits, outputUnits };
+};
+
+const normalizeFindingSynthesis = (value: unknown): FindingSynthesisProvenance => {
+  const synthesis = requireRecord(value, 'synthesis');
+  if (!hasExactKeys(synthesis, [
+    'source',
+    'provider',
+    'model',
+    'configurationDigest',
+    'promptPolicyVersion',
+    'outputSchemaVersion',
+    'inputDigest',
+    'outputDigest',
+    'latencyMs',
+    'metering',
+    'traceId',
+    'fallbackReason',
+  ])) fail('Finding synthesis provenance has unsupported fields.');
+  if (synthesis.source !== 'MODEL' && synthesis.source !== 'DETERMINISTIC_FALLBACK') {
+    fail('Finding synthesis source is unsupported.');
+  }
+  if (synthesis.promptPolicyVersion !== 'finding-synthesis-policy/v1'
+    || synthesis.outputSchemaVersion !== 'finding-synthesis-output/v1') {
+    fail('Finding synthesis policy or output schema version is unsupported.');
+  }
+  const provider = requireNullableString(synthesis.provider, 'synthesis.provider');
+  const model = requireNullableString(synthesis.model, 'synthesis.model');
+  const configurationDigest = requireNullableDigest(
+    synthesis.configurationDigest,
+    'synthesis.configurationDigest',
+  );
+  const latencyMs = synthesis.latencyMs === null
+    ? null
+    : requireCount(synthesis.latencyMs, 'synthesis.latencyMs');
+  if (latencyMs !== null && latencyMs > 600_000) {
+    fail('synthesis.latencyMs exceeds the supported bound.');
+  }
+  const metering = normalizeFindingSynthesisMetering(synthesis.metering);
+  const traceId = requireNullableString(synthesis.traceId, 'synthesis.traceId');
+  if (synthesis.fallbackReason !== null
+    && synthesis.fallbackReason !== 'NOT_CONFIGURED'
+    && synthesis.fallbackReason !== 'PROVIDER_ERROR'
+    && synthesis.fallbackReason !== 'TIMEOUT'
+    && synthesis.fallbackReason !== 'OUTPUT_INVALID') {
+    fail('Finding synthesis fallback reason is unsupported.');
+  }
+  if (synthesis.source === 'MODEL') {
+    if (provider === null || model === null || configurationDigest === null
+      || latencyMs === null || synthesis.fallbackReason !== null) {
+      fail('Model synthesis provenance is incomplete or contradictory.');
+    }
+  } else if (synthesis.fallbackReason === null) {
+    fail('Deterministic fallback provenance requires a reason.');
+  } else if (synthesis.fallbackReason === 'NOT_CONFIGURED') {
+    if (provider !== null || model !== null || configurationDigest !== null
+      || latencyMs !== null || metering !== null || traceId !== null) {
+      fail('Unconfigured synthesis fallback cannot contain Provider metadata.');
+    }
+  } else if (provider === null || model === null || configurationDigest === null || latencyMs === null) {
+    fail('Configured synthesis fallback requires bounded Provider metadata.');
+  }
+  return {
+    source: synthesis.source,
+    provider,
+    model,
+    configurationDigest,
+    promptPolicyVersion: 'finding-synthesis-policy/v1',
+    outputSchemaVersion: 'finding-synthesis-output/v1',
+    inputDigest: requireDigest(synthesis.inputDigest, 'synthesis.inputDigest'),
+    outputDigest: requireDigest(synthesis.outputDigest, 'synthesis.outputDigest'),
+    latencyMs,
+    metering,
+    traceId,
+    fallbackReason: synthesis.fallbackReason,
+  };
+};
+
 const normalizeFinding = (record: Record<string, unknown>): FindingRecord => {
+  const hasSynthesis = Object.hasOwn(record, 'synthesis');
   if (!hasExactKeys(record, [
     'schemaVersion',
     'recordType',
@@ -678,6 +795,7 @@ const normalizeFinding = (record: Record<string, unknown>): FindingRecord => {
     'evidenceIds',
     'analysisReferenceIds',
     'conclusion',
+    ...(hasSynthesis ? ['synthesis'] : []),
   ])) fail('Finding record has unsupported fields.');
   if (record.findingKind !== 'SITE_NIGHT_ENERGY_INCREASE'
     && record.findingKind !== 'SITE_NIGHT_ENERGY_WITHIN_THRESHOLD'
@@ -711,16 +829,13 @@ const normalizeFinding = (record: Record<string, unknown>): FindingRecord => {
     evidenceIds,
     analysisReferenceIds,
     conclusion,
+    ...(hasSynthesis ? { synthesis: normalizeFindingSynthesis(record.synthesis) } : {}),
   };
 };
 
-const expectedOwner = (logicalTool: LogicalTool): ToolOwner => {
-  if (logicalTool === 'registry.getSite' || logicalTool === 'registry.listSiteEquipment') {
-    return 'registry';
-  }
-  if (logicalTool === 'commands.getCapabilities') return 'command-service';
-  return 'telemetry-query-service';
-};
+const expectedOwner = (logicalTool: LogicalTool): ToolOwner => (
+  OPERATIONS_AGENT_TOOL_RECEIPT_OWNER_BY_LOGICAL_TOOL[logicalTool]
+);
 
 const normalizeMetadata = (value: unknown): Readonly<Record<string, ToolReceiptMetadataValue>> => {
   const metadata = requireRecord(value, 'metadata');

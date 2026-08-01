@@ -26,6 +26,7 @@ export {
   type SiteNightEnergyComparison,
   type SiteNightEnergyActiveRunView,
   type SiteNightEnergyFindingDraft,
+  type SiteNightEnergyFindingView,
   type SiteNightEnergyInvestigationCoordinator,
   type SiteNightEnergyInvestigationCoordinatorPorts,
   type SiteNightEnergyInvestigationPolicy,
@@ -43,12 +44,30 @@ export {
 } from './application/index.js';
 
 export {
+  FINDING_SYNTHESIS_DEFAULT_TIMEOUT_MS,
+  FINDING_SYNTHESIS_OUTPUT_SCHEMA_VERSION,
+  FINDING_SYNTHESIS_PROMPT_POLICY_VERSION,
+  synthesizeFinding,
+  type FindingSynthesisClassification,
+  type FindingSynthesisDecision,
+  type FindingSynthesisFallbackReason,
+  type FindingSynthesisInput,
+  type FindingSynthesisProviderMetadata,
+  type FindingSynthesisProviderResponse,
+  type FindingSynthesizer,
+  type FindingSynthesizerDescriptor,
+  type SynthesizeFindingInput,
+} from './application/index.js';
+
+export {
   InvestigationBusinessRecordError,
   createInvestigationBusinessRecord,
   type AnalysisReferenceRecord,
   type EvidenceRecord,
   type EvidenceSourceReference,
   type FindingRecord,
+  type FindingSynthesisMetering,
+  type FindingSynthesisProvenance,
   type InvestigationBusinessRecord,
   type InvestigationBusinessRecordErrorCode,
   type InvestigationBusinessRecordType,

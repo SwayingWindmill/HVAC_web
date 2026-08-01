@@ -1,6 +1,10 @@
 import { domainModule } from '../domain/index.js';
 
 export {
+  OPERATIONS_AGENT_RUNTIME_READ_TOOLS,
+  OPERATIONS_AGENT_TOOL_CATALOG_VERSION,
+  OPERATIONS_AGENT_TOOL_RECEIPT_OWNER_BY_LOGICAL_TOOL,
+  OPERATIONS_AGENT_TOOL_RECEIPT_OWNERS,
   InvestigationBusinessRecordError,
   createInvestigationBusinessRecord,
   type AnalysisReferenceRecord,
@@ -9,6 +13,8 @@ export {
   type FindingRecord,
   type FindingRequiredNext,
   type FindingRequiredNextPeriod,
+  type FindingSynthesisMetering,
+  type FindingSynthesisProvenance,
   type InvestigationBusinessRecord,
   type InvestigationBusinessRecordErrorCode,
   type InvestigationBusinessRecordType,
@@ -18,6 +24,30 @@ export {
   type OperatorInputRequestView,
   type ToolExecutionReceiptRecord,
 } from '../domain/index.js';
+
+export {
+  OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTEXT_ID,
+  OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTEXT_KEYS,
+  OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY,
+  OPERATIONS_AGENT_TRUSTED_RUNTIME_MAXIMUM_IDENTITY_CHARACTERS,
+  OPERATIONS_AGENT_TRUSTED_RUNTIME_SCOPE_KEYS,
+} from './internal/generated-runtime-control-contract.js';
+
+export {
+  FINDING_SYNTHESIS_DEFAULT_TIMEOUT_MS,
+  FINDING_SYNTHESIS_OUTPUT_SCHEMA_VERSION,
+  FINDING_SYNTHESIS_PROMPT_POLICY_VERSION,
+  synthesizeFinding,
+  type FindingSynthesisClassification,
+  type FindingSynthesisDecision,
+  type FindingSynthesisFallbackReason,
+  type FindingSynthesisInput,
+  type FindingSynthesisProviderMetadata,
+  type FindingSynthesisProviderResponse,
+  type FindingSynthesizer,
+  type FindingSynthesizerDescriptor,
+  type SynthesizeFindingInput,
+} from './internal/finding-synthesis.js';
 
 export {
   InvestigationCoordinatorError,
@@ -75,6 +105,7 @@ export {
   type AcceptSiteNightEnergyOperatorInputResult,
   type ListSiteNightEnergyInvestigationsQuery,
   type SiteNightEnergyActiveRunView,
+  type SiteNightEnergyFindingView,
   type SiteNightEnergyInvestigationCoordinator,
   type SiteNightEnergyInvestigationCoordinatorPorts,
   type SiteNightEnergyInvestigationList,

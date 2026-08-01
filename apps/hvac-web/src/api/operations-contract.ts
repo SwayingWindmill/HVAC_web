@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+import {
+  OPERATIONS_AGENT_RUNTIME_READ_TOOLS,
+  OPERATIONS_AGENT_TOOL_RECEIPT_OWNERS,
+} from './generated/operations-tool-contract';
+
 const identitySchema = z.string().min(1).max(256);
 const projectionRunIdentitySchema = z.string().min(1).max(512);
 const timestampSchema = z.number().int().nonnegative();
@@ -167,14 +172,8 @@ export const operationsToolReceiptSchema = z.object({
   id: identitySchema,
   investigationId: identitySchema,
   recordedAt: timestampSchema,
-  logicalTool: z.enum([
-    'registry.getSite',
-    'registry.listSiteEquipment',
-    'telemetry.getCurrentSnapshot',
-    'analytics.getEnergySeries',
-    'commands.getCapabilities',
-  ]),
-  owner: z.enum(['registry', 'telemetry-query-service', 'command-service']),
+  logicalTool: z.enum(OPERATIONS_AGENT_RUNTIME_READ_TOOLS),
+  owner: z.enum(OPERATIONS_AGENT_TOOL_RECEIPT_OWNERS),
   requestId: identitySchema,
   attemptId: identitySchema,
   runId: identitySchema,
@@ -308,14 +307,8 @@ export const operationsPlanSchema = z.object({
 
 export const operationsToolActivitySchema = z.object({
   recordId: identitySchema,
-  logicalTool: z.enum([
-    'registry.getSite',
-    'registry.listSiteEquipment',
-    'telemetry.getCurrentSnapshot',
-    'analytics.getEnergySeries',
-    'commands.getCapabilities',
-  ]),
-  owner: z.enum(['registry', 'telemetry-query-service', 'command-service']),
+  logicalTool: z.enum(OPERATIONS_AGENT_RUNTIME_READ_TOOLS),
+  owner: z.enum(OPERATIONS_AGENT_TOOL_RECEIPT_OWNERS),
   resultCategory: z.enum(['SUCCEEDED', 'REJECTED', 'TIMED_OUT', 'FAILED']),
   startedAt: timestampSchema,
   completedAt: timestampSchema,

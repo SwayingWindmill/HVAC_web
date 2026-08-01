@@ -88,7 +88,7 @@ services/operations-agent-service/
 
 The directory names describe module responsibility, not mandatory implementation file count. Each module should expose a small public surface and hide its internal structure.
 
-The service is implemented at `services/operations-agent-service` as an independent npm package with NodeNext TypeScript build output, one external package root, module-local `index.ts` entries and a repository-owned AST boundary check. Domain, Application, PostgreSQL persistence, the first explicit LangGraph.js `AgentExecutionRuntime`, authoritative Registry/Energy READ adapters, public/internal HTTP contracts, committed AG-UI projection, Platform Gateway integration and the first Real Shell Operations Workspace slice are implemented. A live model provider, cursor-based reconnect and scheduler remain outside the current slice. Run its complete local gate with `npm run operations-agent-service:check`.
+The service is implemented at `services/operations-agent-service` as an independent npm package with NodeNext TypeScript build output, one external package root, module-local `index.ts` entries and a repository-owned AST boundary check. Domain, Application, PostgreSQL persistence, the first explicit LangGraph.js `AgentExecutionRuntime`, authoritative Registry/Energy READ adapters, public/internal HTTP contracts, committed AG-UI projection, Platform Gateway integration and the first Real Shell Operations Workspace slice are implemented. A project-owned `FindingSynthesizer`, strict output validation, deterministic fallback and Fake Provider are implemented; a live external model provider, cursor-based reconnect and scheduler remain outside the current slice. Run its complete local gate with `npm run operations-agent-service:check`.
 
 ### 3.1 Dependency direction
 
@@ -323,6 +323,8 @@ Operator text, bounded Operator notes, Owner-returned labels or metadata, retrie
 
 Before Runtime execution, the Coordinator creates `trusted-runtime-context/v1`. It contains only Investigation and active Run identities, exact authorized Scope, immutable Revision, Runtime Revision, a fixed READ-only Tool allowlist and explicit policy literals. The context and its nested Scope and Tool list are frozen. Full Investigation records, accepted Operator notes, Owner payloads, Evidence statements, Findings, prompts and provider messages are excluded.
 
+The canonical definitions live in `contracts/operations-agent/tool-catalog.v1.json` and `trusted-runtime-context.v1.schema.json`. Repository generation projects the Runtime Tool union, Receipt owner map, exact keys and policy literals into Domain, Application, Benchmark and Web artifacts. The generation check also compares the public Tool Receipt enum and internal Tool Authorization variants, so aliases, case changes or unsupported Tool additions cannot enter one boundary independently.
+
 The LangGraph adapter validates the exact context again at runtime. Extra fields, forged source or trust markers, duplicate or unsupported Tools and malformed Scope fail with `TRUST_BOUNDARY_INVALID`. Runtime output crosses a second exact contract in the Coordinator: only bounded planning results, batches, READ requests and Checkpoint metadata are accepted. An extra field, unsupported Tool, invalid fixed input or Scope widening attempt produces `UNTRUSTED_CONTENT_REJECTED` before authorization exchange, Owner work, Checkpoint persistence, Outbox publication, Audit recording or business effects.
 
 Arbitrary prompt fields and raw untrusted content are rejected by transport and record schemas. The typed `operatorNote` remains a bounded committed Operator fact for auditability and display, but is never fed back into Runtime control. AG-UI and Platform Gateway reject Runtime policy fields, prompts, instructions, model output and raw Owner payloads from public projections.
@@ -377,6 +379,10 @@ ResponseComposer
 ```
 
 The interface should use Zod-validated project types and return structured decisions. A single large `invoke(messages)` interface is not sufficient for core product decisions because it hides policy and makes evaluation difficult.
+
+The current implementation exposes only `FindingSynthesizer`. It receives exact Investigation Scope, committed Evidence, committed Analysis References and the deterministic statement. A Provider candidate can refine the bounded statement and select a subset of already committed Evidence identities; it cannot return Tools, Scope, Finding kind, conclusion, approvals or effects. Application validation requires the exact `finding-synthesis-output/v1` shape, rejects unknown or duplicate Evidence, extra fields, execution claims and confirmatory claims when deterministic analysis is unable to conclude, and falls back on missing configuration, timeout, Provider error or invalid output. The Fake Provider is exported only from the internal Model module, not the package root.
+
+The accepted synthesis decision persists bounded invocation provenance atomically inside the Finding business record: source, Provider/model identifiers, configuration digest, policy/schema versions, application-computed input/output digests, latency, bounded metering, trace identity and fallback reason. Exact Domain validation rejects extra fields and contradictory states. Public Investigation and AG-UI projections explicitly omit this provenance, and raw prompts or raw Provider responses are never stored.
 
 Every material decision records bounded metadata:
 

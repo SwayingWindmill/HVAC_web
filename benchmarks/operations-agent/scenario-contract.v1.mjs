@@ -1,24 +1,12 @@
 import { z } from 'zod';
 
-export const OPERATIONS_AGENT_SCENARIO_CONTRACT_VERSION = 'operations-agent-scenario/v1';
-export const OPERATIONS_AGENT_TOOL_CATALOG_VERSION = 'operations-agent-tool-catalog/v1';
+import {
+  OPERATIONS_AGENT_TOOL_CATALOG,
+  OPERATIONS_AGENT_TOOL_CATALOG_VERSION,
+} from './generated/tool-catalog.v1.mjs';
 
-export const OPERATIONS_AGENT_TOOL_CATALOG = Object.freeze({
-  'authorization.checkScope': 'iam-service',
-  'registry.getSite': 'platform-core-service',
-  'registry.getEquipment': 'platform-core-service',
-  'registry.listSiteEquipment': 'platform-core-service',
-  'registry.getEquipmentEnergyBindings': 'platform-core-service',
-  'telemetry.current.getEquipmentState': 'telemetry-runtime-service',
-  'telemetry.current.getDeviceObservationSnapshot': 'telemetry-runtime-service',
-  'analytics.energy.getSiteSeries': 'telemetry-query-service',
-  'analytics.energy.compareSitePeriods': 'telemetry-query-service',
-  'analytics.energy.getEquipmentSeries': 'telemetry-query-service',
-  'commands.createIntent': 'command-service',
-  'commands.getIntent': 'command-service',
-  'commands.approveIntent': 'command-service',
-  'audit.getRecord': 'audit-ledger-service',
-});
+export { OPERATIONS_AGENT_TOOL_CATALOG, OPERATIONS_AGENT_TOOL_CATALOG_VERSION };
+export const OPERATIONS_AGENT_SCENARIO_CONTRACT_VERSION = 'operations-agent-scenario/v1';
 
 const identifier = z.string().min(1).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const nonEmptyText = z.string().trim().min(1);

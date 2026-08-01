@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises';
 
+import { OPERATIONS_AGENT_TOOL_AUTHORIZATION_TOOLS } from '../benchmarks/operations-agent/generated/tool-catalog.v1.mjs';
+
 const publicContractPath = 'contracts/http/operations-investigations-public.openapi.yaml';
 const internalContractPath = 'contracts/http/operations-agent-internal.openapi.yaml';
 const toolAuthorizationContractPath = 'contracts/http/operations-tool-authorization-internal.openapi.yaml';
@@ -111,9 +113,7 @@ for (const required of [
   'type: mutualTLS',
   'X-Request-ID',
   'application/json',
-  'registry.getSite',
-  'registry.listSiteEquipment',
-  'analytics.getEnergySeries',
+  ...OPERATIONS_AGENT_TOOL_AUTHORIZATION_TOOLS,
   'additionalProperties: false',
   'delegationGrant',
   'policyRevision',

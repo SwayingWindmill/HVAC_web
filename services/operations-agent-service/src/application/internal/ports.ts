@@ -3,8 +3,10 @@ import type {
   InvestigationRevision,
   InvestigationScope,
   InvestigationBusinessRecord,
+  LogicalTool,
   OperationsInvestigation,
 } from '../../domain/index.js';
+import { OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY } from './generated-runtime-control-contract.js';
 
 export type InvestigationRepositoryConflictCode =
   | 'IDENTITY_CONFLICT'
@@ -142,19 +144,19 @@ export interface RuntimeCheckpointDraft {
 }
 
 export interface RuntimePlanningContext {
-  readonly schemaVersion: 1;
-  readonly source: 'APPLICATION_POLICY';
-  readonly trust: 'TRUSTED_CONTROL';
+  readonly schemaVersion: typeof OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY.schemaVersion;
+  readonly source: typeof OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY.source;
+  readonly trust: typeof OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY.trust;
   readonly investigationId: string;
   readonly scope: InvestigationScope;
   readonly revision: InvestigationRevision;
   readonly runId: string;
-  readonly runStatus: 'ACTIVE';
+  readonly runStatus: typeof OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY.runStatus;
   readonly runtimeRevision: string;
-  readonly allowedReadTools: readonly ParallelReadRequest['tool'][];
-  readonly effectPolicy: 'READ_ONLY';
-  readonly scopePolicy: 'EXACT_INVESTIGATION_SCOPE';
-  readonly untrustedContentPolicy: 'EXCLUDED';
+  readonly allowedReadTools: readonly LogicalTool[];
+  readonly effectPolicy: typeof OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY.effectPolicy;
+  readonly scopePolicy: typeof OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY.scopePolicy;
+  readonly untrustedContentPolicy: typeof OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY.untrustedContentPolicy;
 }
 
 export type RuntimePlanningResult =

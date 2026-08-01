@@ -1,4 +1,5 @@
 import {
+  OPERATIONS_AGENT_RUNTIME_READ_TOOLS,
   InvestigationBusinessRecordError,
   OperationsInvestigation,
   OperationsInvestigationError,
@@ -33,6 +34,7 @@ import {
   type RuntimePlanningResult,
   type RuntimeReadPlan,
 } from './ports.js';
+import { OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY } from './generated-runtime-control-contract.js';
 import { sha256Hex } from './sha256.js';
 
 export type InvestigationCoordinatorErrorCode =
@@ -277,15 +279,9 @@ const operatorInputRecordMatches = (
   && record.values.analysisScope === values.analysisScope
   && record.values.operatorNote === values.operatorNote;
 
-const supportedReadToolCatalog = Object.freeze<readonly ParallelReadRequest['tool'][]>([
-  'registry.getSite',
-  'registry.listSiteEquipment',
-  'telemetry.getCurrentSnapshot',
-  'analytics.getEnergySeries',
-  'commands.getCapabilities',
-]);
-
-const supportedReadTools = new Set<ParallelReadRequest['tool']>(supportedReadToolCatalog);
+const supportedReadTools = new Set<ParallelReadRequest['tool']>(
+  OPERATIONS_AGENT_RUNTIME_READ_TOOLS,
+);
 
 const supportedQualities = new Set<OwnerReadResult['quality']>([
   'GOOD',
@@ -392,9 +388,9 @@ const createRuntimePlanningContext = (
   investigation: OperationsInvestigationView,
   run: AgentRunView,
 ): RuntimePlanningContext => Object.freeze({
-  schemaVersion: 1,
-  source: 'APPLICATION_POLICY',
-  trust: 'TRUSTED_CONTROL',
+  schemaVersion: OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY.schemaVersion,
+  source: OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY.source,
+  trust: OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY.trust,
   investigationId: investigation.id,
   scope: Object.freeze({
     organizationId: investigation.scope.organizationId,
@@ -404,12 +400,12 @@ const createRuntimePlanningContext = (
   }),
   revision: investigation.revision,
   runId: run.id,
-  runStatus: 'ACTIVE',
+  runStatus: OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY.runStatus,
   runtimeRevision: run.runtimeRevision,
-  allowedReadTools: Object.freeze([...supportedReadToolCatalog]),
-  effectPolicy: 'READ_ONLY',
-  scopePolicy: 'EXACT_INVESTIGATION_SCOPE',
-  untrustedContentPolicy: 'EXCLUDED',
+  allowedReadTools: Object.freeze([...OPERATIONS_AGENT_RUNTIME_READ_TOOLS]),
+  effectPolicy: OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY.effectPolicy,
+  scopePolicy: OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY.scopePolicy,
+  untrustedContentPolicy: OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY.untrustedContentPolicy,
 });
 
 const requestIsWithinPlanningScope = (
