@@ -63,6 +63,8 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
+      - run: npm run --silent repo:check
+      - run: npm run --silent repo:governance:test
       - run: node scripts/run-pr-gate.mjs --gate=static
       - run: npm run --silent pr:gates:test
 

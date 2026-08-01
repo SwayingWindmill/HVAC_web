@@ -88,7 +88,7 @@ services/operations-agent-service/
 
 The directory names describe module responsibility, not mandatory implementation file count. Each module should expose a small public surface and hide its internal structure.
 
-The service is implemented at `services/operations-agent-service` as an independent npm package with NodeNext TypeScript build output, one external package root, module-local `index.ts` entries and a repository-owned AST boundary check. Domain, Application and PostgreSQL persistence are implemented, and `runtime-langgraph` now contains the first explicit LangGraph.js `AgentExecutionRuntime`. Model, AG-UI, scheduler, browser and Platform Gateway integrations remain absent. Run its complete local gate with `npm run operations-agent-service:check`.
+The service is implemented at `services/operations-agent-service` as an independent npm package with NodeNext TypeScript build output, one external package root, module-local `index.ts` entries and a repository-owned AST boundary check. Domain, Application, PostgreSQL persistence, the first explicit LangGraph.js `AgentExecutionRuntime`, authoritative Registry/Energy READ adapters, public/internal HTTP contracts, committed AG-UI projection, Platform Gateway integration and the first Real Shell Operations Workspace slice are implemented. A live model provider, cursor-based reconnect and scheduler remain outside the current slice. Run its complete local gate with `npm run operations-agent-service:check`.
 
 ### 3.1 Dependency direction
 

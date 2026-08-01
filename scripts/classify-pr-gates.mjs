@@ -2,6 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
+import { gateProfileSets } from './domain-task-matrix.mjs';
+
 const root = resolve(process.cwd());
 const argumentsMap = new Map(
   process.argv.slice(2).map((argument) => {
@@ -63,10 +65,10 @@ const add = (set, values) => values.forEach((value) => set.add(value));
 const addReason = (file, reason) => reasons.push({ file, reason });
 const selectBroad = (file, reason) => {
   broad = true;
-  add(contractProfiles, ['core', 'rms', 's1', 's2', 's3']);
-  add(unitProfiles, ['web', 's0', 's1', 's2', 's3', 'analytics', 'operations-agent', 'pocs']);
-  add(integrationProfiles, ['s0', 's1', 's2-baseline', 's2-ingest', 's2-realtime', 's2-history', 's3', 'analytics', 'operations-agent']);
-  add(browserProfiles, ['operations-agent', 'rms', 's0', 's1', 's2']);
+  add(contractProfiles, gateProfileSets.all.contracts);
+  add(unitProfiles, gateProfileSets.all.unit);
+  add(integrationProfiles, gateProfileSets.all.integration);
+  add(browserProfiles, gateProfileSets.all.browser);
   addReason(file, reason);
 };
 
@@ -143,7 +145,15 @@ for (const file of files) {
     addReason(file, 'repository documentation or metadata only');
   });
   match(file.startsWith('.github/workflows/'), () => selectBroad(file, 'workflow behavior changed'));
-  match(file === 'scripts/classify-pr-gates.mjs' || file === 'scripts/run-pr-gate.mjs' || file === 'scripts/test-pr-gate-classifier.mjs', () => selectBroad(file, 'PR gate implementation changed'));
+  match([
+    'scripts/classify-pr-gates.mjs',
+    'scripts/domain-task-matrix.mjs',
+    'scripts/run-capability-task.mjs',
+    'scripts/run-domain-task.mjs',
+    'scripts/run-pr-gate.mjs',
+    'scripts/test-domain-task-matrix.mjs',
+    'scripts/test-pr-gate-classifier.mjs',
+  ].includes(file), () => selectBroad(file, 'PR gate or domain task matrix implementation changed'));
 
   match(file.startsWith('apps/hvac-web/') || file.startsWith('runtimes/copilot-runtime/'), () => selectWeb(file, 'HVAC Web runtime changed'));
   match(
@@ -203,6 +213,15 @@ for (const file of files) {
       scriptMatched = true;
       callback();
     };
+    scriptMatch([
+      'scripts/classify-pr-gates.mjs',
+      'scripts/domain-task-matrix.mjs',
+      'scripts/run-capability-task.mjs',
+      'scripts/run-domain-task.mjs',
+      'scripts/run-pr-gate.mjs',
+      'scripts/test-domain-task-matrix.mjs',
+      'scripts/test-pr-gate-classifier.mjs',
+    ].includes(file), () => {});
     scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.includes('ui-audit') || lower.includes('bigscreen') || lower.includes('ops-loop'), () => selectWeb(file, 'browser or RMS automation changed'));
     scriptMatch(lower.includes('s0-') || lower.includes('durable') || lower.includes('auth-principal') || lower.includes('platform-gateway'), () => selectS0(file, 'S0 automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') || lower.includes('audit') }));
     scriptMatch(lower.includes('s1-') || lower.includes('registry'), () => selectS1(file, 'S1 automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') || lower.includes('hvac-web') }));
@@ -237,8 +256,10 @@ for (const file of files) {
   }
 }
 
-const browserWindowsProfiles = sorted([...browserProfiles].filter((profile) => profile === 'rms'));
-const browserLinuxProfiles = sorted([...browserProfiles].filter((profile) => profile !== 'rms'));
+const browserWindowsProfileSet = new Set(gateProfileSets['browser-windows'].browser);
+const browserLinuxProfileSet = new Set(gateProfileSets['browser-linux'].browser);
+const browserWindowsProfiles = sorted([...browserProfiles].filter((profile) => browserWindowsProfileSet.has(profile)));
+const browserLinuxProfiles = sorted([...browserProfiles].filter((profile) => browserLinuxProfileSet.has(profile)));
 const classification = {
   schemaVersion: 1,
   changedFiles: sorted(files),

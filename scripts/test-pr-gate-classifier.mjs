@@ -63,8 +63,13 @@ test('Realtime backend changes select the durable realtime PostgreSQL profile', 
   assert.equal(classification.broad, false);
 });
 
-test('package and workflow changes fail closed to the broad suite', () => {
-  for (const file of ['package.json', '.github/workflows/s2-realtime-backend.yml']) {
+test('package, workflow, and central task-matrix changes fail closed to the broad suite', () => {
+  for (const file of [
+    'package.json',
+    '.github/workflows/s2-realtime-backend.yml',
+    'scripts/domain-task-matrix.mjs',
+    'scripts/run-capability-task.mjs',
+  ]) {
     const classification = runClassification([file]);
     assert.equal(classification.broad, true);
     assert.equal(classification.unknown, false);
@@ -126,11 +131,11 @@ test('nightly regression preserves its schedule, manual trigger, and complete pr
   assert.ok(workflow.includes('workflow_dispatch:'));
   for (const command of [
     '--gate=static',
-    '--gate=contracts --profiles=core,rms,s1,s2,s3',
-    '--gate=unit --profiles=analytics,operations-agent,pocs,s0,s1,s2,s3,web',
-    '--gate=integration --profiles=analytics,operations-agent,s0,s1,s2-baseline,s2-history,s2-ingest,s2-realtime,s3',
-    '--gate=browser --profiles=rms',
-    '--gate=browser --profiles=operations-agent,s0,s1,s2',
+    '--gate=contracts --profile-set=all',
+    '--gate=unit --profile-set=all',
+    '--gate=integration --profile-set=all',
+    '--gate=browser --profile-set=browser-windows',
+    '--gate=browser --profile-set=browser-linux',
   ]) {
     assert.ok(workflow.includes(command), `nightly coverage drifted: ${command}`);
   }

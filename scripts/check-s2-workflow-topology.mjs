@@ -1,6 +1,8 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, resolve } from 'node:path';
 
+import { resolveCapabilityTask } from './domain-task-matrix.mjs';
+
 const root = resolve(process.cwd());
 const workflowsRoot = resolve(root, '.github', 'workflows');
 const packageJSON = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
@@ -58,12 +60,23 @@ for (const file of workflowFiles) {
   assert(!/^s2-ticket-/i.test(file), `Ticket-named S2 workflow must not return: ${file}`);
 }
 
+const startsWithSharedTopologyGate = (command, packageCommand) => {
+  if (packageCommand?.startsWith('npm run s2:topology:check && ')) return true;
+  const taskMatch = packageCommand?.match(/^node scripts\/run-capability-task\.mjs --task=([^\s]+)$/u);
+  if (!taskMatch || taskMatch[1] !== command) return false;
+  try {
+    return resolveCapabilityTask(command)[0]?.label === 'npm run s2:topology:check';
+  } catch {
+    return false;
+  }
+};
+
 for (const [file, command, evidenceDirectory] of capabilities) {
   assert(workflowFiles.includes(file), `stable S2 workflow is missing: ${file}`);
   const packageCommand = packageJSON.scripts?.[command];
   assert(typeof packageCommand === 'string', `stable S2 package command is missing: ${command}`);
   assert(
-    packageCommand?.startsWith('npm run s2:topology:check && '),
+    startsWithSharedTopologyGate(command, packageCommand),
     `${command} must execute the shared S2 topology gate first`,
   );
   if (!workflowFiles.includes(file)) continue;
