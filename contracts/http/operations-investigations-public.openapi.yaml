@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: HVAC Operations Investigations Public API
-  version: 1.2.0
-  description: Platform Gateway contract for Site-scoped Investigation lists, typed provenance views and reconnect-safe AG-UI recovery batches.
+  version: 1.3.0
+  description: Platform Gateway contract for Site-scoped Investigation lists, typed provenance views, bounded Operator Input interrupts and reconnect-safe AG-UI recovery batches.
 servers:
   - url: https://api.example.invalid
 paths:
@@ -109,6 +109,36 @@ paths:
                 $ref: '#/components/schemas/SiteNightEnergyInvestigationView'
         '404':
           $ref: '#/components/responses/Nondiscoverable'
+  /api/v1/sites/{siteId}/operations/investigations/{investigationId}:submit-operator-input:
+    post:
+      operationId: submitSiteNightEnergyOperatorInput
+      description: Accepts exactly one bounded response to the current committed Operator Input Request and resumes the same Agent Run only after atomic persistence.
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+        - $ref: '#/components/parameters/InvestigationId'
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitOperatorInputRequest'
+      responses:
+        '200':
+          description: Accepted input committed or exact retry returned without a second effect.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitOperatorInputResponse'
+        '404':
+          $ref: '#/components/responses/Nondiscoverable'
+        '409':
+          description: Stale revision, mismatched Request, reused Idempotency Key or terminal Investigation.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
   /api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel:
     post:
       operationId: cancelSiteNightEnergyInvestigation
@@ -157,6 +187,11 @@ components:
       in: header
       required: true
       schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 256 }
   responses:
     Nondiscoverable:
       description: Resource is absent or not visible to the caller.
@@ -183,8 +218,103 @@ components:
       required: [id, status, startedAt]
       properties:
         id: { type: string, minLength: 1, maxLength: 256 }
-        status: { type: string, enum: [ACTIVE, PAUSED] }
+        status: { type: string, enum: [ACTIVE, PAUSED, WAITING_FOR_OPERATOR_INPUT] }
         startedAt: { type: integer, format: int64, minimum: 0 }
+    OperatorInputSelectField:
+      type: object
+      additionalProperties: false
+      required: [id, type, required, options]
+      properties:
+        id: { type: string, enum: [analysisScope] }
+        type: { type: string, enum: [SINGLE_SELECT] }
+        required: { type: boolean, enum: [true] }
+        options:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items: { type: string, enum: [SITE_ONLY, DEFER] }
+    OperatorInputTextField:
+      type: object
+      additionalProperties: false
+      required: [id, type, required, maximumLength]
+      properties:
+        id: { type: string, enum: [operatorNote] }
+        type: { type: string, enum: [SHORT_TEXT] }
+        required: { type: boolean, enum: [false] }
+        maximumLength: { type: integer, enum: [500] }
+    OperatorInputRequest:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, id, investigationId, runId, scope, kind, requestedAt, requestedBy, policyVersion, fields]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        id: { type: string, minLength: 1, maxLength: 256 }
+        investigationId: { type: string, minLength: 1, maxLength: 256 }
+        runId: { type: string, minLength: 1, maxLength: 256 }
+        scope: { $ref: '#/components/schemas/InvestigationScope' }
+        kind: { type: string, enum: [SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION] }
+        requestedAt: { type: integer, format: int64, minimum: 0 }
+        requestedBy: { type: string, enum: [DETERMINISTIC_POLICY] }
+        policyVersion: { type: string, enum: [operator-input-policy/v1] }
+        fields:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/OperatorInputSelectField'
+              - $ref: '#/components/schemas/OperatorInputTextField'
+    OperatorInputValues:
+      type: object
+      additionalProperties: false
+      required: [analysisScope, operatorNote]
+      properties:
+        analysisScope: { type: string, enum: [SITE_ONLY, DEFER] }
+        operatorNote: { type: string, nullable: true, minLength: 1, maxLength: 500 }
+    OperatorInputProvenance:
+      type: object
+      additionalProperties: false
+      required: [actorType, source, authorizationDecisionId, policyRevision, submittedAt]
+      properties:
+        actorType: { type: string, enum: [OPERATOR] }
+        source: { type: string, enum: [PLATFORM_GATEWAY] }
+        authorizationDecisionId: { type: string, minLength: 1, maxLength: 256 }
+        policyRevision: { type: string, minLength: 1, maxLength: 256 }
+        submittedAt: { type: integer, format: int64, minimum: 0 }
+    OperatorInputAcceptedRecord:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, recordType, id, investigationId, recordedAt, requestId, runId, idempotencyKey, inputKind, inputDigest, scope, values, provenance]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        recordType: { type: string, enum: [OPERATOR_INPUT_ACCEPTED] }
+        id: { type: string, minLength: 1, maxLength: 256 }
+        investigationId: { type: string, minLength: 1, maxLength: 256 }
+        recordedAt: { type: integer, format: int64, minimum: 0 }
+        requestId: { type: string, minLength: 1, maxLength: 256 }
+        runId: { type: string, minLength: 1, maxLength: 256 }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 256 }
+        inputKind: { type: string, enum: [SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION] }
+        inputDigest: { type: string, minLength: 71, maxLength: 71 }
+        scope: { $ref: '#/components/schemas/InvestigationScope' }
+        values: { $ref: '#/components/schemas/OperatorInputValues' }
+        provenance: { $ref: '#/components/schemas/OperatorInputProvenance' }
+    SubmitOperatorInputRequest:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, requestId, expectedRevision, values]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        requestId: { type: string, minLength: 1, maxLength: 256 }
+        expectedRevision: { type: integer, minimum: 0 }
+        values: { $ref: '#/components/schemas/OperatorInputValues' }
+    SubmitOperatorInputResponse:
+      type: object
+      additionalProperties: false
+      required: [outcome, investigation]
+      properties:
+        outcome: { type: string, enum: [COMMITTED, DUPLICATE] }
+        investigation: { $ref: '#/components/schemas/SiteNightEnergyInvestigationView' }
     EvidenceQuality:
       type: object
       additionalProperties: false
@@ -435,12 +565,12 @@ components:
     SiteNightEnergyInvestigationView:
       type: object
       additionalProperties: false
-      required: [schemaVersion, id, scope, status, revision, createdAt, activeRun, outcome, evidence, analysisReferences, findings, toolReceipts]
+      required: [schemaVersion, id, scope, status, revision, createdAt, activeRun, outcome, evidence, analysisReferences, findings, operatorInputRequest, acceptedOperatorInputs, toolReceipts]
       properties:
         schemaVersion: { type: integer, enum: [1] }
         id: { type: string, minLength: 1, maxLength: 256 }
         scope: { $ref: '#/components/schemas/InvestigationScope' }
-        status: { type: string, enum: [DRAFT, RUNNING, PAUSED, COMPLETED, FAILED, CANCELLED] }
+        status: { type: string, enum: [DRAFT, RUNNING, PAUSED, WAITING_FOR_OPERATOR_INPUT, COMPLETED, FAILED, CANCELLED] }
         revision: { type: integer, minimum: 0 }
         createdAt: { type: integer, format: int64, minimum: 0 }
         activeRun:
@@ -463,6 +593,14 @@ components:
           type: array
           maxItems: 32
           items: { $ref: '#/components/schemas/FindingRecord' }
+        operatorInputRequest:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/OperatorInputRequest'
+        acceptedOperatorInputs:
+          type: array
+          maxItems: 32
+          items: { $ref: '#/components/schemas/OperatorInputAcceptedRecord' }
         toolReceipts:
           type: array
           maxItems: 64
@@ -470,12 +608,12 @@ components:
     SiteNightEnergyInvestigationSummary:
       type: object
       additionalProperties: false
-      required: [schemaVersion, id, scope, status, revision, createdAt, outcome, evidenceCount, analysisReferenceCount, findingCount, toolReceiptCount]
+      required: [schemaVersion, id, scope, status, revision, createdAt, outcome, evidenceCount, analysisReferenceCount, findingCount, toolReceiptCount, acceptedOperatorInputCount]
       properties:
         schemaVersion: { type: integer, enum: [1] }
         id: { type: string, minLength: 1, maxLength: 256 }
         scope: { $ref: '#/components/schemas/InvestigationScope' }
-        status: { type: string, enum: [DRAFT, RUNNING, PAUSED, COMPLETED, FAILED, CANCELLED] }
+        status: { type: string, enum: [DRAFT, RUNNING, PAUSED, WAITING_FOR_OPERATOR_INPUT, COMPLETED, FAILED, CANCELLED] }
         revision: { type: integer, minimum: 0 }
         createdAt: { type: integer, format: int64, minimum: 0 }
         outcome:
@@ -486,6 +624,7 @@ components:
         analysisReferenceCount: { type: integer, minimum: 0, maximum: 32 }
         findingCount: { type: integer, minimum: 0, maximum: 32 }
         toolReceiptCount: { type: integer, minimum: 0, maximum: 64 }
+        acceptedOperatorInputCount: { type: integer, minimum: 0, maximum: 32 }
     SiteNightEnergyInvestigationList:
       type: object
       additionalProperties: false

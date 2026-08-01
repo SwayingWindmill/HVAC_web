@@ -84,6 +84,9 @@ test('an Investigation starts, pauses, and resumes the same Agent Run with a new
     findingIds: [],
     toolReceiptIds: [],
     proposedActionIds: [],
+    activeOperatorInputRequest: null,
+    operatorInputAcceptances: [],
+    acceptedOperatorInputIds: [],
   });
   assert.equal(started.view().status, 'RUNNING');
   assert.equal(paused.view().status, 'PAUSED');

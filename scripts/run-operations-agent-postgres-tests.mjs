@@ -148,6 +148,11 @@ try {
     '/migrations/operations/002_typed_business_records.sql',
   );
   applyMigration(
+    'operations_agent_operations_migrator',
+    'operations-migrator-local-only',
+    '/migrations/operations/003_operator_input_interrupt.sql',
+  );
+  applyMigration(
     'operations_agent_checkpoints_migrator',
     'checkpoints-migrator-local-only',
     '/migrations/checkpoints/001_agent_checkpoints.sql',

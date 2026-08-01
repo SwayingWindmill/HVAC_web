@@ -48,7 +48,14 @@ export interface OperationsAgentHttpHandler {
 }
 
 interface MatchedRoute {
-  readonly kind: 'START' | 'LIST' | 'GET' | 'STREAM' | 'ADVANCE' | 'CANCEL';
+  readonly kind:
+    | 'START'
+    | 'LIST'
+    | 'GET'
+    | 'STREAM'
+    | 'ADVANCE'
+    | 'SUBMIT_OPERATOR_INPUT'
+    | 'CANCEL';
   readonly siteId: string;
   readonly investigationId: string | null;
 }
@@ -59,6 +66,7 @@ const collectionPattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/investig
 const itemPattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/investigations\/([^/:]+)$/u;
 const streamPattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/investigations\/([^/:]+)\/events$/u;
 const advancePattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/investigations\/([^/:]+):advance$/u;
+const submitOperatorInputPattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/investigations\/([^/:]+):submit-operator-input$/u;
 const cancelPattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/investigations\/([^/:]+):cancel$/u;
 const traceparentPattern = /^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/iu;
 
@@ -116,6 +124,7 @@ const matchRoute = (request: Request): MatchedRoute | null => {
   const candidates: readonly [RegExp, MatchedRoute['kind'], string][] = [
     [streamPattern, 'STREAM', 'GET'],
     [advancePattern, 'ADVANCE', 'POST'],
+    [submitOperatorInputPattern, 'SUBMIT_OPERATOR_INPUT', 'POST'],
     [cancelPattern, 'CANCEL', 'POST'],
     [itemPattern, 'GET', 'GET'],
   ];
@@ -191,6 +200,13 @@ const readBoundedBody = async (request: Request, maximumBytes: number): Promise<
   } catch {
     throw problem(400, 'REQUEST_INVALID', 'Request invalid', 'The request body is not valid JSON.');
   }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw problem(400, 'REQUEST_INVALID', 'Request invalid', 'A JSON object body is required.');
+  }
+  return value;
+};
+
+const requireEmptyMutationBody = (value: unknown): void => {
   if (typeof value !== 'object'
     || value === null
     || Array.isArray(value)
@@ -202,7 +218,59 @@ const readBoundedBody = async (request: Request, maximumBytes: number): Promise<
       'This Operations Investigation mutation accepts only an empty JSON object.',
     );
   }
-  return value;
+};
+
+interface SubmitOperatorInputBody {
+  readonly requestId: string;
+  readonly expectedRevision: number;
+  readonly values: {
+    readonly analysisScope: 'SITE_ONLY' | 'DEFER';
+    readonly operatorNote: string | null;
+  };
+}
+
+const parseSubmitOperatorInputBody = (value: unknown): SubmitOperatorInputBody => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw problem(400, 'REQUEST_INVALID', 'Request invalid', 'A JSON object body is required.');
+  }
+  const body = value as Record<string, unknown>;
+  const bodyKeys = Object.keys(body);
+  if (bodyKeys.length !== 4
+    || !bodyKeys.includes('schemaVersion')
+    || !bodyKeys.includes('requestId')
+    || !bodyKeys.includes('expectedRevision')
+    || !bodyKeys.includes('values')
+    || body.schemaVersion !== 1
+    || typeof body.requestId !== 'string'
+    || body.requestId.trim().length === 0
+    || body.requestId.length > maximumIdentityLength
+    || !Number.isSafeInteger(body.expectedRevision)
+    || (body.expectedRevision as number) < 0
+    || typeof body.values !== 'object'
+    || body.values === null
+    || Array.isArray(body.values)) {
+    throw problem(400, 'REQUEST_INVALID', 'Request invalid', 'Operator Input submission is invalid.');
+  }
+  const values = body.values as Record<string, unknown>;
+  const valueKeys = Object.keys(values);
+  if (valueKeys.length !== 2
+    || !valueKeys.includes('analysisScope')
+    || !valueKeys.includes('operatorNote')
+    || (values.analysisScope !== 'SITE_ONLY' && values.analysisScope !== 'DEFER')
+    || (values.operatorNote !== null
+      && (typeof values.operatorNote !== 'string'
+        || values.operatorNote.trim().length === 0
+        || values.operatorNote.length > 500))) {
+    throw problem(400, 'REQUEST_INVALID', 'Request invalid', 'Operator Input values are invalid.');
+  }
+  return {
+    requestId: body.requestId,
+    expectedRevision: body.expectedRevision as number,
+    values: {
+      analysisScope: values.analysisScope,
+      operatorNote: values.operatorNote as string | null,
+    },
+  };
 };
 
 const mapError = (error: unknown): Response => {
@@ -261,12 +329,19 @@ export const createOperationsAgentHttpHandler = (
         if (route === null) {
           return problem(404, 'ROUTE_NOT_FOUND', 'Route not found', 'The requested internal route does not exist.');
         }
+        let mutationBody: unknown = undefined;
+        let operatorInputBody: SubmitOperatorInputBody | null = null;
         if (route.kind === 'GET' || route.kind === 'LIST' || route.kind === 'STREAM') {
           if (request.body !== null) {
             return problem(400, 'REQUEST_INVALID', 'Request invalid', 'GET requests must not contain a body.');
           }
         } else {
-          await readBoundedBody(request, maximumRequestBytes);
+          mutationBody = await readBoundedBody(request, maximumRequestBytes);
+          if (route.kind === 'SUBMIT_OPERATOR_INPUT') {
+            operatorInputBody = parseSubmitOperatorInputBody(mutationBody);
+          } else {
+            requireEmptyMutationBody(mutationBody);
+          }
         }
 
         const organizationId = requiredHeader(request, 'X-Acting-Organization-ID');
@@ -356,6 +431,27 @@ export const createOperationsAgentHttpHandler = (
         }
         if (route.kind === 'ADVANCE') {
           return jsonResponse(200, await coordinator.advance({ investigationId }));
+        }
+        if (route.kind === 'SUBMIT_OPERATOR_INPUT') {
+          const idempotencyKey = requiredHeader(request, 'Idempotency-Key');
+          if (idempotencyKey === null || idempotencyKey.length > maximumIdentityLength) {
+            return problem(
+              400,
+              'IDEMPOTENCY_KEY_REQUIRED',
+              'Idempotency Key required',
+              'Operator Input submission requires a bounded Idempotency-Key header.',
+            );
+          }
+          if (operatorInputBody === null) {
+            return problem(400, 'REQUEST_INVALID', 'Request invalid', 'Operator Input submission is invalid.');
+          }
+          return jsonResponse(200, await coordinator.acceptOperatorInput({
+            investigationId,
+            requestId: operatorInputBody.requestId,
+            expectedRevision: operatorInputBody.expectedRevision,
+            idempotencyKey,
+            values: operatorInputBody.values,
+          }));
         }
         return jsonResponse(200, await coordinator.cancel({ investigationId }));
       } catch (error) {

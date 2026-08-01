@@ -29,8 +29,9 @@ type operationsGatewayFixture struct {
 	operationsCalls atomic.Int32
 	denySite        atomic.Bool
 	invalidStream   atomic.Bool
-	invalidIdentity atomic.Bool
-	lastUpstream    atomic.Pointer[http.Request]
+	invalidIdentity  atomic.Bool
+	lastUpstream     atomic.Pointer[http.Request]
+	lastUpstreamBody atomic.Pointer[string]
 }
 
 func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGatewayFixture {
@@ -192,12 +193,23 @@ func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, now time
 		if request.Header.Get("X-Acting-Organization-ID") != fixture.organizationID || request.Header.Get("X-Route-Policy-Revision") != "0" {
 			t.Fatal("missing authoritative Operations headers")
 		}
+		if strings.HasSuffix(request.URL.Path, ":submit-operator-input") {
+			raw, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatalf("failed to read Operator Input body: %v", err)
+			}
+			body := string(raw)
+			fixture.lastUpstreamBody.Store(&body)
+			if request.Header.Get("Idempotency-Key") == "" {
+				t.Fatal("Operator Input Idempotency-Key was not forwarded")
+			}
+		}
 		if strings.HasSuffix(request.URL.Path, "/events") {
 			if fixture.invalidStream.Load() {
 				unsafe := "id: 9:0\nevent: RUN_STARTED\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"investigation-001\",\"runId\":\"run-001\",\"checkpoint\":{}}\n\n"
 				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(unsafe))}, nil
 			}
-			investigation := `{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","evidence":[],"analysisReferences":[],"findings":[]}`
+			investigation := `{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[]}`
 			plan := `{"schemaVersion":1,"id":"site-night-energy-investigation","label":"Site night-energy investigation","completedSteps":4,"totalSteps":4,"progressPercent":100,"steps":[{"id":"READ_SITE_CONTEXT","label":"Read authoritative Site context","status":"COMPLETED"},{"id":"READ_ENERGY_SERIES","label":"Read authoritative night-energy periods","status":"COMPLETED"},{"id":"ANALYZE","label":"Run deterministic night-energy analysis","status":"COMPLETED"},{"id":"COMMIT_RESULT","label":"Commit Evidence, Analysis and Finding","status":"COMPLETED"}]}`
 			stream := "id: 9:0\nevent: RUN_STARTED\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"investigation-001\",\"runId\":\"run-001\"}\n\n" +
 				"id: 9:1\nevent: STATE_SNAPSHOT\ndata: {\"type\":\"STATE_SNAPSHOT\",\"snapshot\":{\"schemaVersion\":\"operations-investigation-ui/v1\",\"investigation\":" + investigation + ",\"plan\":" + plan + ",\"toolActivities\":[]}}\n\n" +
@@ -222,14 +234,16 @@ func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, now time
 			}
 			return &http.Response{StatusCode: http.StatusOK, Header: recoveryHeaders, Body: io.NopCloser(strings.NewReader(stream))}, nil
 		}
-		body := `{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","evidence":[],"analysisReferences":[],"findings":[],"toolReceipts":[]}`
+		body := `{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[],"toolReceipts":[]}`
 		status := http.StatusOK
 		if strings.HasSuffix(request.URL.Path, "/operations/investigations") {
 			if request.Method == http.MethodGet {
-				body = `{"schemaVersion":1,"investigations":[{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"outcome":"SUPPORTED_SITE_FINDING","evidenceCount":2,"analysisReferenceCount":1,"findingCount":1,"toolReceiptCount":4}]}`
+				body = `{"schemaVersion":1,"investigations":[{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"outcome":"SUPPORTED_SITE_FINDING","evidenceCount":2,"analysisReferenceCount":1,"findingCount":1,"toolReceiptCount":4,"acceptedOperatorInputCount":0}]}`
 			} else {
 				status = http.StatusCreated
 			}
+		} else if strings.HasSuffix(request.URL.Path, ":submit-operator-input") {
+			body = `{"outcome":"COMMITTED","investigation":{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"RUNNING","revision":10,"createdAt":1,"activeRun":{"id":"run-001","status":"ACTIVE","startedAt":1},"outcome":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[{"schemaVersion":1,"recordType":"OPERATOR_INPUT_ACCEPTED","id":"operator-input-record-001","investigationId":"investigation-001","recordedAt":2,"requestId":"operator-input-request-001","runId":"run-001","idempotencyKey":"operator-input-idempotency-001","inputKind":"SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION","inputDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"values":{"analysisScope":"SITE_ONLY","operatorNote":"Proceed with Site-only authority."},"provenance":{"actorType":"OPERATOR","source":"PLATFORM_GATEWAY","authorizationDecisionId":"allow-site","policyRevision":"identity-policy-1","submittedAt":2}}],"toolReceipts":[]}}`
 		}
 		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})}
@@ -315,6 +329,57 @@ func TestOperationsGatewayEnforcesSessionCSRFScopeAndServiceDelegation(t *testin
 	fixture.handler.ServeHTTP(wrongContentRecorder, wrongContentType)
 	if wrongContentRecorder.Code != http.StatusUnsupportedMediaType || fixture.iamCalls.Load() != 1 || fixture.operationsCalls.Load() != 1 {
 		t.Fatalf("content type failure reached upstreams: status=%d IAM=%d Operations=%d", wrongContentRecorder.Code, fixture.iamCalls.Load(), fixture.operationsCalls.Load())
+	}
+}
+
+func TestOperationsGatewaySubmitsBoundedOperatorInputWithIdempotency(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	path := "/api/v1/sites/" + fixture.siteID + "/operations/investigations/investigation-001:submit-operator-input"
+	body := `{"schemaVersion":1,"requestId":"operator-input-request-001","expectedRevision":9,"values":{"analysisScope":"SITE_ONLY","operatorNote":"Proceed with Site-only authority."}}`
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	fixture.authenticate(request, true)
+	request.Header.Set("Idempotency-Key", "operator-input-idempotency-001")
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"outcome":"COMMITTED"`) {
+		t.Fatalf("expected committed Operator Input, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if fixture.iamCalls.Load() != 1 || fixture.operationsCalls.Load() != 1 {
+		t.Fatalf("unexpected Operator Input upstream counts IAM=%d Operations=%d", fixture.iamCalls.Load(), fixture.operationsCalls.Load())
+	}
+	upstream := fixture.lastUpstream.Load()
+	upstreamBody := fixture.lastUpstreamBody.Load()
+	if upstream == nil || upstream.URL.Path != "/internal/v1/sites/"+fixture.siteID+"/operations/investigations/investigation-001:submit-operator-input" ||
+		upstream.Header.Get("Idempotency-Key") != "operator-input-idempotency-001" || upstreamBody == nil || *upstreamBody != body {
+		t.Fatalf("invalid Operator Input forwarding: request=%+v body=%v", upstream, upstreamBody)
+	}
+
+	missingKey := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	fixture.authenticate(missingKey, true)
+	missingKeyRecorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(missingKeyRecorder, missingKey)
+	if missingKeyRecorder.Code != http.StatusBadRequest || fixture.iamCalls.Load() != 1 || fixture.operationsCalls.Load() != 1 {
+		t.Fatalf("missing Idempotency-Key reached upstreams: status=%d IAM=%d Operations=%d", missingKeyRecorder.Code, fixture.iamCalls.Load(), fixture.operationsCalls.Load())
+	}
+
+	unknownField := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"schemaVersion":1,"requestId":"operator-input-request-001","expectedRevision":9,"values":{"analysisScope":"SITE_ONLY","operatorNote":null,"rawPrompt":"forbidden"}}`))
+	fixture.authenticate(unknownField, true)
+	unknownField.Header.Set("Idempotency-Key", "operator-input-idempotency-002")
+	unknownRecorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(unknownRecorder, unknownField)
+	if unknownRecorder.Code != http.StatusBadRequest || fixture.iamCalls.Load() != 1 || fixture.operationsCalls.Load() != 1 {
+		t.Fatalf("unknown Operator Input field reached upstreams: status=%d IAM=%d Operations=%d", unknownRecorder.Code, fixture.iamCalls.Load(), fixture.operationsCalls.Load())
+	}
+
+	denied := newOperationsGatewayFixture(t, 30)
+	denied.denySite.Store(true)
+	deniedRequest := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	denied.authenticate(deniedRequest, true)
+	deniedRequest.Header.Set("Idempotency-Key", "operator-input-idempotency-003")
+	deniedRecorder := httptest.NewRecorder()
+	denied.handler.ServeHTTP(deniedRecorder, deniedRequest)
+	if deniedRecorder.Code != http.StatusNotFound || denied.operationsCalls.Load() != 0 {
+		t.Fatalf("unauthorized Operator Input was discoverable or forwarded: status=%d calls=%d", deniedRecorder.Code, denied.operationsCalls.Load())
 	}
 }
 
@@ -554,6 +619,8 @@ func TestOperationsGatewayTypedSnapshotValidatorRejectsForgedAuthority(t *testin
 			"executedAt":       3,
 			"outcome":          "UNABLE_TO_CONCLUDE",
 		}},
+		"operatorInputRequest":  nil,
+		"acceptedOperatorInputs": []any{},
 		"findings": []any{map[string]any{
 			"schemaVersion":        1,
 			"recordType":           "FINDING",

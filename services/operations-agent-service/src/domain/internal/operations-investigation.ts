@@ -2,11 +2,18 @@ export type InvestigationStatus =
   | 'CREATED'
   | 'RUNNING'
   | 'PAUSED'
+  | 'WAITING_FOR_OPERATOR_INPUT'
   | 'CANCELLED'
   | 'COMPLETED'
   | 'FAILED';
 
-export type AgentRunStatus = 'ACTIVE' | 'PAUSED' | 'CANCELLED' | 'COMPLETED' | 'FAILED';
+export type AgentRunStatus =
+  | 'ACTIVE'
+  | 'PAUSED'
+  | 'WAITING_FOR_OPERATOR_INPUT'
+  | 'CANCELLED'
+  | 'COMPLETED'
+  | 'FAILED';
 
 declare const stepIdentityBrand: unique symbol;
 declare const idempotencyKeyBrand: unique symbol;
@@ -55,6 +62,47 @@ export interface CommittedEffectView {
   readonly committedAt: number;
 }
 
+export type OperatorInputRequestKind = 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION';
+export type OperatorInputAnalysisScope = 'SITE_ONLY' | 'DEFER';
+
+export interface OperatorInputSelectField {
+  readonly id: 'analysisScope';
+  readonly type: 'SINGLE_SELECT';
+  readonly required: true;
+  readonly options: readonly ['SITE_ONLY', 'DEFER'];
+}
+
+export interface OperatorInputTextField {
+  readonly id: 'operatorNote';
+  readonly type: 'SHORT_TEXT';
+  readonly required: false;
+  readonly maximumLength: 500;
+}
+
+export interface OperatorInputRequestView {
+  readonly schemaVersion: 1;
+  readonly id: string;
+  readonly investigationId: string;
+  readonly runId: string;
+  readonly scope: InvestigationScope;
+  readonly kind: OperatorInputRequestKind;
+  readonly requestedAt: number;
+  readonly requestedBy: 'DETERMINISTIC_POLICY';
+  readonly policyVersion: 'operator-input-policy/v1';
+  readonly fields: readonly [OperatorInputSelectField, OperatorInputTextField];
+}
+
+export interface OperatorInputAcceptanceView {
+  readonly requestId: string;
+  readonly runId: string;
+  readonly kind: OperatorInputRequestKind;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly recordId: string;
+  readonly inputDigest: string;
+  readonly requestedAt: number;
+  readonly acceptedAt: number;
+}
+
 export interface OperationsInvestigationView {
   readonly id: string;
   readonly scope: InvestigationScope;
@@ -68,6 +116,9 @@ export interface OperationsInvestigationView {
   readonly findingIds: readonly string[];
   readonly toolReceiptIds: readonly string[];
   readonly proposedActionIds: readonly string[];
+  readonly activeOperatorInputRequest: OperatorInputRequestView | null;
+  readonly operatorInputAcceptances: readonly OperatorInputAcceptanceView[];
+  readonly acceptedOperatorInputIds: readonly string[];
 }
 
 export interface OperationsInvestigationSnapshot extends OperationsInvestigationView {
@@ -87,7 +138,9 @@ export type OperationsInvestigationErrorCode =
   | 'LEASE_MISMATCH'
   | 'LEASE_EXPIRED'
   | 'IDEMPOTENCY_KEY_REUSED'
-  | 'EFFECT_RECORD_ALREADY_COMMITTED';
+  | 'EFFECT_RECORD_ALREADY_COMMITTED'
+  | 'OPERATOR_INPUT_INVALID'
+  | 'OPERATOR_INPUT_REQUEST_MISMATCH';
 
 export class OperationsInvestigationError extends Error {
   readonly code: OperationsInvestigationErrorCode;
@@ -129,6 +182,33 @@ export interface ResumeAgentRun {
   readonly leaseAcquiredAt: number;
   readonly leaseExpiresAt: number;
   readonly expectedRevision: InvestigationRevision;
+}
+
+export interface RequestOperatorInput {
+  readonly requestId: string;
+  readonly runId: string;
+  readonly leaseId: string;
+  readonly at: number;
+  readonly expectedRevision: InvestigationRevision;
+  readonly kind: OperatorInputRequestKind;
+}
+
+export interface AcceptOperatorInput {
+  readonly requestId: string;
+  readonly runId: string;
+  readonly expectedRevision: InvestigationRevision;
+  readonly idempotencyKey: IdempotencyKey;
+  readonly recordId: string;
+  readonly inputDigest: string;
+  readonly acceptedAt: number;
+  readonly leaseId: string;
+  readonly leaseExpiresAt: number;
+}
+
+export interface AcceptOperatorInputResult {
+  readonly outcome: 'COMMITTED' | 'DUPLICATE';
+  readonly investigation: OperationsInvestigation;
+  readonly acceptance: OperatorInputAcceptanceView;
 }
 
 export interface EndAgentRun {
@@ -237,6 +317,33 @@ const cloneRun = (run: AgentRunView): AgentRunView => ({
 
 const cloneEffect = (effect: CommittedEffectView): CommittedEffectView => ({ ...effect });
 
+const fixedOperatorInputFields = (): OperatorInputRequestView['fields'] => ([
+  {
+    id: 'analysisScope',
+    type: 'SINGLE_SELECT',
+    required: true,
+    options: ['SITE_ONLY', 'DEFER'],
+  },
+  {
+    id: 'operatorNote',
+    type: 'SHORT_TEXT',
+    required: false,
+    maximumLength: 500,
+  },
+]);
+
+const cloneOperatorInputRequest = (
+  request: OperatorInputRequestView | null,
+): OperatorInputRequestView | null => request === null ? null : ({
+  ...request,
+  scope: cloneScope(request.scope),
+  fields: fixedOperatorInputFields(),
+});
+
+const cloneOperatorInputAcceptance = (
+  acceptance: OperatorInputAcceptanceView,
+): OperatorInputAcceptanceView => ({ ...acceptance });
+
 const cloneState = (state: InternalState): InternalState => ({
   ...state,
   scope: cloneScope(state.scope),
@@ -247,12 +354,16 @@ const cloneState = (state: InternalState): InternalState => ({
   findingIds: [...state.findingIds],
   toolReceiptIds: [...state.toolReceiptIds],
   proposedActionIds: [...state.proposedActionIds],
+  activeOperatorInputRequest: cloneOperatorInputRequest(state.activeOperatorInputRequest),
+  operatorInputAcceptances: state.operatorInputAcceptances.map(cloneOperatorInputAcceptance),
+  acceptedOperatorInputIds: [...state.acceptedOperatorInputIds],
 });
 
 const investigationStatuses = new Set<InvestigationStatus>([
   'CREATED',
   'RUNNING',
   'PAUSED',
+  'WAITING_FOR_OPERATOR_INPUT',
   'CANCELLED',
   'COMPLETED',
   'FAILED',
@@ -261,6 +372,7 @@ const investigationStatuses = new Set<InvestigationStatus>([
 const runStatuses = new Set<AgentRunStatus>([
   'ACTIVE',
   'PAUSED',
+  'WAITING_FOR_OPERATOR_INPUT',
   'CANCELLED',
   'COMPLETED',
   'FAILED',
@@ -281,6 +393,59 @@ const arraysEqual = (left: readonly string[], right: readonly string[]): boolean
 const requireNullableIdentity = (value: string | null, label: string): string | null => (
   value === null ? null : requireIdentity(value, label)
 );
+
+const scopesEqual = (left: InvestigationScope, right: InvestigationScope): boolean => (
+  left.organizationId === right.organizationId
+  && left.siteId === right.siteId
+  && left.equipmentId === right.equipmentId
+  && left.deviceId === right.deviceId
+);
+
+const validateOperatorInputRequest = (
+  request: OperatorInputRequestView,
+  investigationId: string,
+  scope: InvestigationScope,
+  run: AgentRunView,
+): OperatorInputRequestView => {
+  const id = requireIdentity(request.id, 'Operator Input Request identity');
+  if (request.schemaVersion !== 1
+    || request.investigationId !== investigationId
+    || request.runId !== run.id
+    || request.kind !== 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION'
+    || request.requestedBy !== 'DETERMINISTIC_POLICY'
+    || request.policyVersion !== 'operator-input-policy/v1'
+    || !scopesEqual(request.scope, scope)) {
+    throw new OperationsInvestigationError(
+      'OPERATOR_INPUT_INVALID',
+      'Operator Input Request identity, Scope, kind, or policy is invalid.',
+    );
+  }
+  const requestedAt = requireTimestamp(request.requestedAt, 'Operator Input requestedAt');
+  if (requestedAt < run.startedAt) {
+    throw new OperationsInvestigationError(
+      'TIMESTAMP_INVALID',
+      'Operator Input cannot be requested before the Agent Run starts.',
+    );
+  }
+  if (JSON.stringify(request.fields) !== JSON.stringify(fixedOperatorInputFields())) {
+    throw new OperationsInvestigationError(
+      'OPERATOR_INPUT_INVALID',
+      'Operator Input Request fields do not match the supported bounded schema.',
+    );
+  }
+  return {
+    schemaVersion: 1,
+    id,
+    investigationId,
+    runId: run.id,
+    scope: cloneScope(scope),
+    kind: request.kind,
+    requestedAt,
+    requestedBy: request.requestedBy,
+    policyVersion: request.policyVersion,
+    fields: fixedOperatorInputFields(),
+  };
+};
 
 const validateSnapshot = (snapshot: OperationsInvestigationSnapshot): InternalState => {
   const id = requireIdentity(snapshot.id, 'Investigation identity');
@@ -363,7 +528,8 @@ const validateSnapshot = (snapshot: OperationsInvestigationSnapshot): InternalSt
         `Agent Run ${runId} active status and Lease do not agree.`,
       );
     }
-    if (run.status === 'PAUSED' && pausedAt === null) {
+    if ((run.status === 'PAUSED' || run.status === 'WAITING_FOR_OPERATOR_INPUT')
+      && pausedAt === null) {
       throw new OperationsInvestigationError(
         'INVESTIGATION_STATE_INVALID',
         `Paused Agent Run ${runId} requires pausedAt.`,
@@ -391,7 +557,11 @@ const validateSnapshot = (snapshot: OperationsInvestigationSnapshot): InternalSt
   const activeRun = snapshot.activeRunId === null
     ? null
     : runs.find((run) => run.id === snapshot.activeRunId) ?? null;
-  const nonTerminalRuns = runs.filter((run) => run.status === 'ACTIVE' || run.status === 'PAUSED');
+  const nonTerminalRuns = runs.filter((run) => (
+    run.status === 'ACTIVE'
+    || run.status === 'PAUSED'
+    || run.status === 'WAITING_FOR_OPERATOR_INPUT'
+  ));
   if (nonTerminalRuns.length > 1
     || (nonTerminalRuns.length === 1 && nonTerminalRuns[0]?.id !== snapshot.activeRunId)) {
     throw new OperationsInvestigationError(
@@ -417,7 +587,16 @@ const validateSnapshot = (snapshot: OperationsInvestigationSnapshot): InternalSt
       'A paused Investigation requires one paused Agent Run.',
     );
   }
-  if (snapshot.status !== 'RUNNING' && snapshot.status !== 'PAUSED'
+  if (snapshot.status === 'WAITING_FOR_OPERATOR_INPUT'
+    && activeRun?.status !== 'WAITING_FOR_OPERATOR_INPUT') {
+    throw new OperationsInvestigationError(
+      'INVESTIGATION_STATE_INVALID',
+      'An Investigation waiting for Operator Input requires one waiting Agent Run.',
+    );
+  }
+  if (snapshot.status !== 'RUNNING'
+    && snapshot.status !== 'PAUSED'
+    && snapshot.status !== 'WAITING_FOR_OPERATOR_INPUT'
     && snapshot.activeRunId !== null) {
     throw new OperationsInvestigationError(
       'INVESTIGATION_STATE_INVALID',
@@ -511,6 +690,75 @@ const validateSnapshot = (snapshot: OperationsInvestigationSnapshot): InternalSt
     );
   }
 
+  const requestCandidate = snapshot.activeOperatorInputRequest ?? null;
+  const activeOperatorInputRequest = requestCandidate === null
+    ? null
+    : activeRun === null
+      ? (() => {
+        throw new OperationsInvestigationError(
+          'OPERATOR_INPUT_INVALID',
+          'Operator Input Request requires an active Agent Run.',
+        );
+      })()
+      : validateOperatorInputRequest(requestCandidate, id, scope, activeRun);
+  if ((snapshot.status === 'WAITING_FOR_OPERATOR_INPUT') !== (activeOperatorInputRequest !== null)) {
+    throw new OperationsInvestigationError(
+      'INVESTIGATION_STATE_INVALID',
+      'Investigation waiting status and active Operator Input Request do not agree.',
+    );
+  }
+
+  const acceptanceIdempotencyKeys = new Set<string>();
+  const acceptedRequestIds = new Set<string>();
+  const acceptedRecordIds = new Set<string>();
+  const operatorInputAcceptances = (snapshot.operatorInputAcceptances ?? []).map((acceptance) => {
+    const requestId = requireIdentity(acceptance.requestId, 'Accepted Operator Input Request identity');
+    const runId = requireIdentity(acceptance.runId, 'Accepted Operator Input Run identity');
+    if (!runs.some((run) => run.id === runId)
+      || acceptance.kind !== 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION') {
+      throw new OperationsInvestigationError(
+        'OPERATOR_INPUT_INVALID',
+        'Accepted Operator Input references an unknown Run or kind.',
+      );
+    }
+    const idempotencyKey = createIdempotencyKey(acceptance.idempotencyKey);
+    const recordId = requireIdentity(acceptance.recordId, 'Accepted Operator Input record identity');
+    const inputDigest = requireIdentity(acceptance.inputDigest, 'Accepted Operator Input digest');
+    const requestedAt = requireTimestamp(acceptance.requestedAt, 'Accepted Operator Input requestedAt');
+    const acceptedAt = requireTimestamp(acceptance.acceptedAt, 'Accepted Operator Input acceptedAt');
+    if (acceptedAt < requestedAt
+      || acceptanceIdempotencyKeys.has(idempotencyKey)
+      || acceptedRequestIds.has(requestId)
+      || acceptedRecordIds.has(recordId)) {
+      throw new OperationsInvestigationError(
+        'OPERATOR_INPUT_INVALID',
+        'Accepted Operator Input journal contains invalid timestamps or duplicate identities.',
+      );
+    }
+    acceptanceIdempotencyKeys.add(idempotencyKey);
+    acceptedRequestIds.add(requestId);
+    acceptedRecordIds.add(recordId);
+    return {
+      requestId,
+      runId,
+      kind: acceptance.kind,
+      idempotencyKey,
+      recordId,
+      inputDigest,
+      requestedAt,
+      acceptedAt,
+    };
+  });
+  const acceptedOperatorInputIds = operatorInputAcceptances.map(({ recordId }) => recordId);
+  if (!arraysEqual(snapshot.acceptedOperatorInputIds ?? [], acceptedOperatorInputIds)
+    || (activeOperatorInputRequest !== null
+      && acceptedRequestIds.has(activeOperatorInputRequest.id))) {
+    throw new OperationsInvestigationError(
+      'OPERATOR_INPUT_INVALID',
+      'Accepted Operator Input indexes or active Request identity are inconsistent.',
+    );
+  }
+
   return {
     id,
     scope: cloneScope(scope),
@@ -525,6 +773,9 @@ const validateSnapshot = (snapshot: OperationsInvestigationSnapshot): InternalSt
     findingIds,
     toolReceiptIds,
     proposedActionIds,
+    activeOperatorInputRequest,
+    operatorInputAcceptances,
+    acceptedOperatorInputIds,
   };
 };
 
@@ -560,6 +811,9 @@ export class OperationsInvestigation {
       findingIds: [],
       toolReceiptIds: [],
       proposedActionIds: [],
+      activeOperatorInputRequest: null,
+      operatorInputAcceptances: [],
+      acceptedOperatorInputIds: [],
     });
   }
 
@@ -636,6 +890,133 @@ export class OperationsInvestigation {
         leaseHistory: [...run.leaseHistory, lease],
       }),
     });
+  }
+
+  requestOperatorInput(command: RequestOperatorInput): OperationsInvestigation {
+    this.#requireRevision(command.expectedRevision);
+    this.#requireStatus('RUNNING');
+    const run = this.#requireActiveRun(command.runId);
+    this.#requireLease(run, command.leaseId, command.at);
+    if (this.#state.activeOperatorInputRequest !== null
+      || this.#state.operatorInputAcceptances.some(({ requestId }) => requestId === command.requestId)) {
+      throw new OperationsInvestigationError(
+        'OPERATOR_INPUT_INVALID',
+        'Operator Input Request identity is already active or accepted.',
+      );
+    }
+    if (command.kind !== 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION') {
+      throw new OperationsInvestigationError(
+        'OPERATOR_INPUT_INVALID',
+        'Operator Input Request kind is unsupported.',
+      );
+    }
+    const request: OperatorInputRequestView = {
+      schemaVersion: 1,
+      id: requireIdentity(command.requestId, 'Operator Input Request identity'),
+      investigationId: this.#state.id,
+      runId: run.id,
+      scope: cloneScope(this.#state.scope),
+      kind: command.kind,
+      requestedAt: command.at,
+      requestedBy: 'DETERMINISTIC_POLICY',
+      policyVersion: 'operator-input-policy/v1',
+      fields: fixedOperatorInputFields(),
+    };
+    return this.#next({
+      status: 'WAITING_FOR_OPERATOR_INPUT',
+      activeOperatorInputRequest: request,
+      runs: replaceRun(this.#state.runs, run.id, {
+        ...run,
+        status: 'WAITING_FOR_OPERATOR_INPUT',
+        pausedAt: command.at,
+        lease: null,
+      }),
+    });
+  }
+
+  acceptOperatorInput(command: AcceptOperatorInput): AcceptOperatorInputResult {
+    const idempotencyKey = createIdempotencyKey(command.idempotencyKey);
+    const inputDigest = requireIdentity(command.inputDigest, 'Accepted Operator Input digest');
+    const duplicate = this.#state.operatorInputAcceptances.find((candidate) => (
+      candidate.idempotencyKey === idempotencyKey
+    ));
+    if (duplicate !== undefined) {
+      if (duplicate.requestId === command.requestId && duplicate.inputDigest === inputDigest) {
+        return {
+          outcome: 'DUPLICATE',
+          investigation: this,
+          acceptance: cloneOperatorInputAcceptance(duplicate),
+        };
+      }
+      throw new OperationsInvestigationError(
+        'IDEMPOTENCY_KEY_REUSED',
+        `Idempotency Key ${idempotencyKey} is already bound to another Operator Input.`,
+      );
+    }
+
+    this.#requireRevision(command.expectedRevision);
+    this.#requireStatus('WAITING_FOR_OPERATOR_INPUT');
+    const request = this.#state.activeOperatorInputRequest;
+    if (request === null
+      || request.id !== command.requestId
+      || request.runId !== command.runId) {
+      throw new OperationsInvestigationError(
+        'OPERATOR_INPUT_REQUEST_MISMATCH',
+        'The Investigation is not waiting for the submitted Operator Input Request.',
+      );
+    }
+    const run = this.#requireActiveRun(command.runId);
+    if (run.status !== 'WAITING_FOR_OPERATOR_INPUT' || run.lease !== null) {
+      throw new OperationsInvestigationError(
+        'INVESTIGATION_STATE_INVALID',
+        'Only an Agent Run waiting without a Lease can accept Operator Input.',
+      );
+    }
+    const acceptedAt = requireTimestamp(command.acceptedAt, 'Operator Input acceptedAt');
+    if (acceptedAt < request.requestedAt) {
+      throw new OperationsInvestigationError(
+        'TIMESTAMP_INVALID',
+        'Operator Input cannot be accepted before it was requested.',
+      );
+    }
+    if (this.#state.operatorInputAcceptances.some(({ requestId }) => requestId === request.id)) {
+      throw new OperationsInvestigationError(
+        'OPERATOR_INPUT_REQUEST_MISMATCH',
+        'The Operator Input Request was already accepted.',
+      );
+    }
+    const leaseId = requireIdentity(command.leaseId, 'Agent Run Lease identity');
+    this.#requireUnusedLeaseId(leaseId);
+    const window = requireLeaseWindow(acceptedAt, command.leaseExpiresAt);
+    const lease: AgentRunLeaseView = { ...window, id: leaseId, runId: run.id };
+    const acceptance: OperatorInputAcceptanceView = {
+      requestId: request.id,
+      runId: run.id,
+      kind: request.kind,
+      idempotencyKey,
+      recordId: requireIdentity(command.recordId, 'Accepted Operator Input record identity'),
+      inputDigest,
+      requestedAt: request.requestedAt,
+      acceptedAt,
+    };
+    const investigation = this.#next({
+      status: 'RUNNING',
+      activeOperatorInputRequest: null,
+      operatorInputAcceptances: [...this.#state.operatorInputAcceptances, acceptance],
+      acceptedOperatorInputIds: [...this.#state.acceptedOperatorInputIds, acceptance.recordId],
+      runs: replaceRun(this.#state.runs, run.id, {
+        ...run,
+        status: 'ACTIVE',
+        pausedAt: null,
+        lease,
+        leaseHistory: [...run.leaseHistory, lease],
+      }),
+    });
+    return {
+      outcome: 'COMMITTED',
+      investigation,
+      acceptance: cloneOperatorInputAcceptance(acceptance),
+    };
   }
 
   assertRunAuthority(command: AssertAgentRunAuthority): AgentRunView {

@@ -13,7 +13,7 @@ export const operationsScopeSchema = z.object({
 
 const activeRunSchema = z.object({
   id: identitySchema,
-  status: z.enum(['ACTIVE', 'PAUSED']),
+  status: z.enum(['ACTIVE', 'PAUSED', 'WAITING_FOR_OPERATOR_INPUT']),
   startedAt: timestampSchema,
 }).strict();
 
@@ -185,11 +185,65 @@ export const operationsToolReceiptSchema = z.object({
   metadata: z.record(z.string(), toolReceiptMetadataValueSchema),
 }).strict();
 
+export const operationsOperatorInputValuesSchema = z.object({
+  analysisScope: z.enum(['SITE_ONLY', 'DEFER']),
+  operatorNote: z.string().min(1).max(500).nullable(),
+}).strict();
+
+const operatorInputSelectFieldSchema = z.object({
+  id: z.literal('analysisScope'),
+  type: z.literal('SINGLE_SELECT'),
+  required: z.literal(true),
+  options: z.tuple([z.literal('SITE_ONLY'), z.literal('DEFER')]),
+}).strict();
+
+const operatorInputTextFieldSchema = z.object({
+  id: z.literal('operatorNote'),
+  type: z.literal('SHORT_TEXT'),
+  required: z.literal(false),
+  maximumLength: z.literal(500),
+}).strict();
+
+export const operationsOperatorInputRequestSchema = z.object({
+  schemaVersion: z.literal(1),
+  id: identitySchema,
+  investigationId: identitySchema,
+  runId: identitySchema,
+  scope: operationsScopeSchema,
+  kind: z.literal('SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION'),
+  requestedAt: timestampSchema,
+  requestedBy: z.literal('DETERMINISTIC_POLICY'),
+  policyVersion: z.literal('operator-input-policy/v1'),
+  fields: z.tuple([operatorInputSelectFieldSchema, operatorInputTextFieldSchema]),
+}).strict();
+
+export const operationsOperatorInputAcceptedSchema = z.object({
+  schemaVersion: z.literal(1),
+  recordType: z.literal('OPERATOR_INPUT_ACCEPTED'),
+  id: identitySchema,
+  investigationId: identitySchema,
+  recordedAt: timestampSchema,
+  requestId: identitySchema,
+  runId: identitySchema,
+  idempotencyKey: identitySchema,
+  inputKind: z.literal('SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION'),
+  inputDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/u),
+  scope: operationsScopeSchema,
+  values: operationsOperatorInputValuesSchema,
+  provenance: z.object({
+    actorType: z.literal('OPERATOR'),
+    source: z.literal('PLATFORM_GATEWAY'),
+    authorizationDecisionId: identitySchema,
+    policyRevision: identitySchema,
+    submittedAt: timestampSchema,
+  }).strict(),
+}).strict();
+
 export const operationsInvestigationViewSchema = z.object({
   schemaVersion: z.literal(1),
   id: identitySchema,
   scope: operationsScopeSchema,
-  status: z.enum(['DRAFT', 'RUNNING', 'PAUSED', 'COMPLETED', 'FAILED', 'CANCELLED']),
+  status: z.enum(['DRAFT', 'RUNNING', 'PAUSED', 'WAITING_FOR_OPERATOR_INPUT', 'COMPLETED', 'FAILED', 'CANCELLED']),
   revision: z.number().int().nonnegative(),
   createdAt: timestampSchema,
   activeRun: activeRunSchema.nullable(),
@@ -197,7 +251,21 @@ export const operationsInvestigationViewSchema = z.object({
   evidence: z.array(operationsEvidenceSchema).max(32),
   analysisReferences: z.array(operationsAnalysisReferenceSchema).max(32),
   findings: z.array(operationsFindingSchema).max(32),
+  operatorInputRequest: operationsOperatorInputRequestSchema.nullable(),
+  acceptedOperatorInputs: z.array(operationsOperatorInputAcceptedSchema).max(32),
   toolReceipts: z.array(operationsToolReceiptSchema).max(64),
+}).strict();
+
+export const operationsOperatorInputSubmissionRequestSchema = z.object({
+  schemaVersion: z.literal(1),
+  requestId: identitySchema,
+  expectedRevision: z.number().int().nonnegative(),
+  values: operationsOperatorInputValuesSchema,
+}).strict();
+
+export const operationsOperatorInputSubmissionSchema = z.object({
+  outcome: z.enum(['COMMITTED', 'DUPLICATE']),
+  investigation: operationsInvestigationViewSchema,
 }).strict();
 
 export const operationsInvestigationSummarySchema = z.object({
@@ -212,6 +280,7 @@ export const operationsInvestigationSummarySchema = z.object({
   analysisReferenceCount: z.number().int().nonnegative().max(32),
   findingCount: z.number().int().nonnegative().max(32),
   toolReceiptCount: z.number().int().nonnegative().max(64),
+  acceptedOperatorInputCount: z.number().int().nonnegative().max(32),
 }).strict();
 
 export const operationsInvestigationListSchema = z.object({
@@ -303,6 +372,11 @@ export type OperationsAnalysisReference = z.infer<typeof operationsAnalysisRefer
 export type OperationsFinding = z.infer<typeof operationsFindingSchema>;
 export type OperationsRequiredNext = z.infer<typeof operationsRequiredNextSchema>;
 export type OperationsToolReceipt = z.infer<typeof operationsToolReceiptSchema>;
+export type OperationsOperatorInputValues = z.infer<typeof operationsOperatorInputValuesSchema>;
+export type OperationsOperatorInputRequest = z.infer<typeof operationsOperatorInputRequestSchema>;
+export type OperationsOperatorInputAccepted = z.infer<typeof operationsOperatorInputAcceptedSchema>;
+export type OperationsOperatorInputSubmissionRequest = z.infer<typeof operationsOperatorInputSubmissionRequestSchema>;
+export type OperationsOperatorInputSubmission = z.infer<typeof operationsOperatorInputSubmissionSchema>;
 export type OperationsInvestigationView = z.infer<typeof operationsInvestigationViewSchema>;
 export type OperationsInvestigationSummary = z.infer<typeof operationsInvestigationSummarySchema>;
 export type OperationsInvestigationList = z.infer<typeof operationsInvestigationListSchema>;

@@ -107,6 +107,31 @@ const receipt = {
   },
 };
 
+const acceptedOperatorInput = {
+  schemaVersion: 1,
+  recordType: 'OPERATOR_INPUT_ACCEPTED',
+  id: 'operator-input-record-001',
+  investigationId: 'investigation-001',
+  recordedAt: 1_400,
+  requestId: 'operator-input-request-001',
+  runId: 'run-001',
+  idempotencyKey: 'operator-input-idempotency-001',
+  inputKind: 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION',
+  inputDigest: digest,
+  scope,
+  values: {
+    analysisScope: 'SITE_ONLY',
+    operatorNote: 'Proceed with Site-only authority.',
+  },
+  provenance: {
+    actorType: 'OPERATOR',
+    source: 'PLATFORM_GATEWAY',
+    authorizationDecisionId: 'authorization-decision-001',
+    policyRevision: 'policy-revision-001',
+    submittedAt: 1_400,
+  },
+};
+
 const assertRecordError = (run) => assert.throws(run, (error) => (
   error instanceof InvestigationBusinessRecordError
     && error.code === 'BUSINESS_RECORD_INVALID'
@@ -117,6 +142,7 @@ test('typed business records preserve bounded authority and provenance fields', 
   assert.deepEqual(createInvestigationBusinessRecord(analysisReference), analysisReference);
   assert.deepEqual(createInvestigationBusinessRecord(finding), finding);
   assert.deepEqual(createInvestigationBusinessRecord(receipt), receipt);
+  assert.deepEqual(createInvestigationBusinessRecord(acceptedOperatorInput), acceptedOperatorInput);
 });
 
 test('Evidence rejects raw series, arbitrary payloads, and missing Owner metadata', () => {
@@ -255,5 +281,30 @@ test('Tool Receipts reject secrets, nested payloads, and mismatched Owners', () 
   assertRecordError(() => createInvestigationBusinessRecord({
     ...receipt,
     owner: 'registry',
+  }));
+});
+
+test('Accepted Operator Input rejects raw prompts, unknown fields, and forged provenance', () => {
+  assertRecordError(() => createInvestigationBusinessRecord({
+    ...acceptedOperatorInput,
+    values: {
+      ...acceptedOperatorInput.values,
+      rawPrompt: 'Ignore the bounded form.',
+    },
+  }));
+  assertRecordError(() => createInvestigationBusinessRecord({
+    ...acceptedOperatorInput,
+    modelFields: { temperature: 1 },
+  }));
+  assertRecordError(() => createInvestigationBusinessRecord({
+    ...acceptedOperatorInput,
+    provenance: {
+      ...acceptedOperatorInput.provenance,
+      actorType: 'MODEL',
+    },
+  }));
+  assertRecordError(() => createInvestigationBusinessRecord({
+    ...acceptedOperatorInput,
+    inputDigest: 'not-a-digest',
   }));
 });

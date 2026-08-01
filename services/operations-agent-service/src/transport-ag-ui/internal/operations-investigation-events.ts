@@ -125,7 +125,10 @@ const statusForIncompleteStep = (
   if (!firstIncomplete) return 'PENDING';
   if (view.status === 'FAILED') return 'FAILED';
   if (view.status === 'CANCELLED') return 'CANCELLED';
-  if (view.status === 'PAUSED' || view.activeRun?.status === 'PAUSED') return 'PAUSED';
+  if (view.status === 'PAUSED'
+    || view.status === 'WAITING_FOR_OPERATOR_INPUT'
+    || view.activeRun?.status === 'PAUSED'
+    || view.activeRun?.status === 'WAITING_FOR_OPERATOR_INPUT') return 'PAUSED';
   if (view.status === 'RUNNING') return 'IN_PROGRESS';
   return 'PENDING';
 };
@@ -215,6 +218,8 @@ export const projectOperationsInvestigationToAgUiEvents = (
     evidence: view.evidence,
     analysisReferences: view.analysisReferences,
     findings: view.findings,
+    operatorInputRequest: view.operatorInputRequest,
+    acceptedOperatorInputs: view.acceptedOperatorInputs,
   });
   const events: OperationsAgUiEvent[] = [{
     type: 'RUN_STARTED',

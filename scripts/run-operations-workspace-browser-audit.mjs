@@ -18,6 +18,7 @@ const organizationId = '01910000-0000-7000-8000-000000000001';
 const siteId = '01910000-0001-7000-8000-000000000001';
 const investigationId = 'investigation-browser-001';
 const unableInvestigationId = 'investigation-browser-unable';
+const operatorInputInvestigationId = 'investigation-browser-operator-input';
 const hiddenInvestigationId = 'hidden-investigation';
 const digest = (character) => `sha256:${character.repeat(64)}`;
 
@@ -40,7 +41,8 @@ function event(id, type, payload) {
 }
 
 function plan(status) {
-  const terminal = status !== 'RUNNING';
+  const terminal = status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
+  const waiting = status === 'WAITING_FOR_OPERATOR_INPUT';
   return {
     schemaVersion: 1,
     id: 'site-night-energy-investigation',
@@ -51,7 +53,7 @@ function plan(status) {
     steps: [
       { id: 'READ_SITE_CONTEXT', label: 'Read authoritative Site context', status: 'COMPLETED' },
       { id: 'READ_ENERGY_SERIES', label: 'Read authoritative night-energy periods', status: 'COMPLETED' },
-      { id: 'ANALYZE', label: 'Run deterministic night-energy analysis', status: terminal ? 'COMPLETED' : 'IN_PROGRESS' },
+      { id: 'ANALYZE', label: 'Run deterministic night-energy analysis', status: terminal ? 'COMPLETED' : waiting ? 'PAUSED' : 'IN_PROGRESS' },
       { id: 'COMMIT_RESULT', label: 'Commit Evidence, Analysis and Finding', status: terminal ? 'COMPLETED' : 'PENDING' },
     ],
   };
@@ -265,6 +267,55 @@ function toolReceipts(id, activities) {
   }));
 }
 
+function operatorInputRequest(id) {
+  return {
+    schemaVersion: 1,
+    id: `${id}:operator-input-request`,
+    investigationId: id,
+    runId: `${id}:active-run`,
+    scope: scope(),
+    kind: 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION',
+    requestedAt: 9,
+    requestedBy: 'DETERMINISTIC_POLICY',
+    policyVersion: 'operator-input-policy/v1',
+    fields: [{
+      id: 'analysisScope',
+      type: 'SINGLE_SELECT',
+      required: true,
+      options: ['SITE_ONLY', 'DEFER'],
+    }, {
+      id: 'operatorNote',
+      type: 'SHORT_TEXT',
+      required: false,
+      maximumLength: 500,
+    }],
+  };
+}
+
+function acceptedOperatorInput(id, idempotencyKey) {
+  return {
+    schemaVersion: 1,
+    recordType: 'OPERATOR_INPUT_ACCEPTED',
+    id: `${id}:operator-input-accepted`,
+    investigationId: id,
+    recordedAt: 10,
+    requestId: `${id}:operator-input-request`,
+    runId: `${id}:active-run`,
+    idempotencyKey,
+    inputKind: 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION',
+    inputDigest: digest('f'),
+    scope: scope(),
+    values: { analysisScope: 'SITE_ONLY', operatorNote: 'Browser exact-retry acceptance.' },
+    provenance: {
+      actorType: 'OPERATOR',
+      source: 'PLATFORM_GATEWAY',
+      authorizationDecisionId: 'browser-operator-decision',
+      policyRevision: 'operations-policy-1',
+      submittedAt: 10,
+    },
+  };
+}
+
 function investigation(id, revision, status, outcome, activities = []) {
   const records = outcome === 'SUPPORTED_SITE_FINDING'
     ? supportedRecords(id)
@@ -278,9 +329,15 @@ function investigation(id, revision, status, outcome, activities = []) {
     status,
     revision,
     createdAt: id === unableInvestigationId ? 2 : 1,
-    activeRun: status === 'RUNNING' ? { id: `${id}:active-run`, status: 'ACTIVE', startedAt: 1 } : null,
+    activeRun: status === 'RUNNING'
+      ? { id: `${id}:active-run`, status: 'ACTIVE', startedAt: 1 }
+      : status === 'WAITING_FOR_OPERATOR_INPUT'
+        ? { id: `${id}:active-run`, status: 'WAITING_FOR_OPERATOR_INPUT', startedAt: 1 }
+        : null,
     outcome,
     ...records,
+    operatorInputRequest: status === 'WAITING_FOR_OPERATOR_INPUT' ? operatorInputRequest(id) : null,
+    acceptedOperatorInputs: [],
     toolReceipts: toolReceipts(id, activities),
   };
 }
@@ -359,6 +416,7 @@ function summary(view) {
     analysisReferenceCount: view.analysisReferences.length,
     findingCount: view.findings.length,
     toolReceiptCount: view.toolReceipts.length,
+    acceptedOperatorInputCount: view.acceptedOperatorInputs.length,
   };
 }
 
@@ -367,6 +425,10 @@ function createGatewayFixture() {
   let supportedEventRequestCount = 0;
   let hiddenRequestCount = 0;
   let listRequestCount = 0;
+  let operatorInputAccepted = false;
+  let operatorInputRetryAcknowledged = false;
+  let operatorInputIdempotencyKey = null;
+  const operatorInputSubmissions = [];
   const collectionPath = `/api/v1/sites/${siteId}/operations/investigations`;
   const itemPrefix = `${collectionPath}/`;
   const currentSupported = () => supportedEventRequestCount >= 3
