@@ -317,28 +317,34 @@ Graph changes may refine these nodes, but they must preserve bounded transitions
 
 The first implemented adapter uses the exact `@langchain/langgraph` 1.4.8 release under its MIT license. It was selected because its `StateGraph` supplies the requested explicit node/edge execution runtime without replacing the project-owned Domain, Application, authorization or persistence contracts. The graph contains explicit validation, next-Step selection, READ-plan emission and terminal nodes and implements only the project-owned `AgentExecutionRuntime` port. The package root and the Application module do not expose LangGraph state, node names, Checkpoint classes or provider messages.
 
-### 6.2 Runtime state
+### 6.2 Untrusted-content boundary
+
+Operator text, bounded Operator notes, Owner-returned labels or metadata, retrieved content and model output are untrusted data. They never become Runtime control, authorization context, Scope, budget policy, logical Tool catalog or business-effect policy. The Application layer is the only control source.
+
+Before Runtime execution, the Coordinator creates `trusted-runtime-context/v1`. It contains only Investigation and active Run identities, exact authorized Scope, immutable Revision, Runtime Revision, a fixed READ-only Tool allowlist and explicit policy literals. The context and its nested Scope and Tool list are frozen. Full Investigation records, accepted Operator notes, Owner payloads, Evidence statements, Findings, prompts and provider messages are excluded.
+
+The LangGraph adapter validates the exact context again at runtime. Extra fields, forged source or trust markers, duplicate or unsupported Tools and malformed Scope fail with `TRUST_BOUNDARY_INVALID`. Runtime output crosses a second exact contract in the Coordinator: only bounded planning results, batches, READ requests and Checkpoint metadata are accepted. An extra field, unsupported Tool, invalid fixed input or Scope widening attempt produces `UNTRUSTED_CONTENT_REJECTED` before authorization exchange, Owner work, Checkpoint persistence, Outbox publication, Audit recording or business effects.
+
+Arbitrary prompt fields and raw untrusted content are rejected by transport and record schemas. The typed `operatorNote` remains a bounded committed Operator fact for auditability and display, but is never fed back into Runtime control. AG-UI and Platform Gateway reject Runtime policy fields, prompts, instructions, model output and raw Owner payloads from public projections.
+
+### 6.3 Runtime state
 
 Runtime state contains only what is needed to continue execution:
 
 ```text
-Investigation ID
-Agent Run ID
-runtime revision
-current node or pending transition
-Plan reference or bounded execution copy
-pending and completed Step identities
-Evidence identities already observed
-pending interrupt data
-bounded conversation context
-model decision metadata
+program identity
+Investigation identity
+Agent Run identity
+immutable Runtime Revision
+next Step index
+ordered completed Step identities
 ```
 
 Runtime state must not become the only copy of committed Evidence, Findings or Proposed Actions.
 
-The initial `runtime-state/v1` is deliberately narrower: program identity, Investigation identity, Agent Run identity, immutable Runtime Revision, next Step index and the ordered completed Step identities. The adapter encodes that bounded state as opaque JSON in the existing project-owned Checkpoint repository. Recovery first restores and authorizes the Operations Investigation, verifies the active Run and Lease, then loads a Checkpoint for the same Investigation, Run and Runtime Revision. Checkpoint identity, state prefix and external position must agree or recovery fails closed. Reusing the same Checkpoint produces the same next READ Plan.
+The initial `runtime-state/v1` encodes that bounded state as opaque JSON in the existing project-owned Checkpoint repository. Recovery first restores and authorizes the Operations Investigation, verifies the active Run and Lease, then loads a Checkpoint for the same Investigation, Run and Runtime Revision. Checkpoint identity, state prefix and external position must agree or recovery fails closed. Reusing the same Checkpoint produces the same next READ Plan.
 
-### 6.3 Interrupt rules
+### 6.4 Interrupt rules
 
 LangGraph interrupt is allowed for:
 
@@ -352,7 +358,7 @@ Interrupt is not formal approval for Command, work order or another governed act
 
 A node containing an interrupt may replay on resume. Therefore side-effecting application operations must occur in separate idempotent nodes before or after the interrupt, never as an unguarded effect in the same replayable section.
 
-### 6.4 Runtime revision
+### 6.5 Runtime revision
 
 Every new Investigation is assigned one runtime revision. A run does not switch graph implementation mid-execution. Restart under another revision loads authoritative Investigation state and begins a new Agent Run.
 

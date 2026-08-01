@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: Operations Agent Internal HTTP API
-  version: 1.3.0
-  description: Workload-authenticated Coordinator use cases for Site Investigation lists, typed provenance views, bounded Operator Input interrupts and reconnect-safe AG-UI recovery batches.
+  version: 1.4.0
+  description: Workload-authenticated Coordinator use cases for Site Investigation lists, typed provenance views, bounded Operator Input interrupts, typed untrusted-content rejection and reconnect-safe AG-UI recovery batches.
 servers:
   - url: https://operations-agent.internal.invalid
 paths:
@@ -92,6 +92,11 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Investigation' }
         '404': { $ref: '#/components/responses/Nondiscoverable' }
+        '422':
+          description: Runtime output attempted to alter the bounded Operations Agent control policy.
+          content:
+            application/problem+json:
+              schema: { $ref: './operations-investigations-public.openapi.yaml#/components/schemas/Problem' }
   /internal/v1/sites/{siteId}/operations/investigations/{investigationId}:submit-operator-input:
     post:
       operationId: internalSubmitSiteNightEnergyOperatorInput

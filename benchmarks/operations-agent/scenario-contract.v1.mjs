@@ -163,6 +163,7 @@ const forbiddenPathSchema = z.enum([
   'PHYSICAL_COMMAND_EXECUTION',
   'HISTORICAL_AS_CURRENT_STATE',
   'UNAUTHORIZED_RESOURCE_DISCLOSURE',
+  'UNTRUSTED_CONTENT_AS_CONTROL',
 ]);
 
 const actionLifecycleSchema = z.object({
@@ -170,6 +171,20 @@ const actionLifecycleSchema = z.object({
   formalApproval: z.enum(['NOT_PRESENT', 'ALLOWED', 'REQUIRED']),
   commandIntent: z.enum(['NOT_PRESENT', 'ALLOWED', 'MUST_NOT_CREATE']),
   physicalExecutionResult: z.enum(['NOT_PRESENT', 'ALLOWED', 'MUST_NOT_CLAIM']),
+}).strict();
+
+const trustBoundarySchema = z.object({
+  untrustedSources: z.array(z.enum([
+    'OPERATOR_TEXT',
+    'OWNER_TEXT',
+    'MODEL_OUTPUT',
+  ])).min(1),
+  controlSource: z.literal('APPLICATION_POLICY'),
+  runtimeInput: z.literal('TRUSTED_CONTROL_ONLY'),
+  scopeExpansion: z.literal('FORBIDDEN'),
+  arbitraryToolSelection: z.literal('FORBIDDEN'),
+  businessEffectsFromUntrustedContent: z.literal('FORBIDDEN'),
+  rawContentPropagation: z.literal('FORBIDDEN'),
 }).strict();
 
 const operationsAgentScenarioSchemaV1 = z.object({
@@ -203,6 +218,7 @@ const operationsAgentScenarioSchemaV1 = z.object({
     forbiddenPaths: z.array(forbiddenPathSchema).default([]),
   }).strict(),
   actionLifecycle: actionLifecycleSchema.optional(),
+  trustBoundary: trustBoundarySchema.optional(),
   acceptance: z.object({
     blockers: z.array(blockerCriterionSchema).min(1),
     scored: z.array(scoredCriterionSchema),

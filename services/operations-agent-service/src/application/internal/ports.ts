@@ -4,7 +4,6 @@ import type {
   InvestigationScope,
   InvestigationBusinessRecord,
   OperationsInvestigation,
-  OperationsInvestigationView,
 } from '../../domain/index.js';
 
 export type InvestigationRepositoryConflictCode =
@@ -142,6 +141,22 @@ export interface RuntimeCheckpointDraft {
   readonly opaqueState: string;
 }
 
+export interface RuntimePlanningContext {
+  readonly schemaVersion: 1;
+  readonly source: 'APPLICATION_POLICY';
+  readonly trust: 'TRUSTED_CONTROL';
+  readonly investigationId: string;
+  readonly scope: InvestigationScope;
+  readonly revision: InvestigationRevision;
+  readonly runId: string;
+  readonly runStatus: 'ACTIVE';
+  readonly runtimeRevision: string;
+  readonly allowedReadTools: readonly ParallelReadRequest['tool'][];
+  readonly effectPolicy: 'READ_ONLY';
+  readonly scopePolicy: 'EXACT_INVESTIGATION_SCOPE';
+  readonly untrustedContentPolicy: 'EXCLUDED';
+}
+
 export type RuntimePlanningResult =
   | {
     readonly status: 'PLANNED';
@@ -150,13 +165,12 @@ export type RuntimePlanningResult =
   }
   | {
     readonly status: 'UNABLE_TO_CONCLUDE';
-    readonly reason: string;
+    readonly reasonCode: 'NO_REMAINING_READ_STEP';
   };
 
 export interface AgentExecutionRuntime {
   planReads(input: {
-    readonly investigation: OperationsInvestigationView;
-    readonly runId: string;
+    readonly context: RuntimePlanningContext;
     readonly checkpoint: RuntimeCheckpoint | null;
   }): Promise<RuntimePlanningResult>;
 }

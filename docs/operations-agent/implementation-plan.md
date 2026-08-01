@@ -4,7 +4,7 @@ Status: accepted plan
 
 Date: 2026-07-31
 
-Tracking: GitHub Map #118; Maps 0–3 are complete. Map 4.1 AG-UI projection (#174), Map 4.2 reconnect recovery (#175), Map 4.3 Plan, Evidence and Findings Workspace (#176), and Map 4.4 bounded Operator Input interrupt/resume (#177) are complete. Map 4.5 primary Operations Workspace and the Map 4 completion gate are tracked by #178.
+Tracking: GitHub Map #118; Maps 0–4 are complete through #178. Map 5 production gates are split into #206–#211; Map 5.1 untrusted-content and prompt-injection boundaries are implemented by #206.
 
 This plan turns ADR 0009, ADR 0010 and the accepted modular architecture into an implementation sequence. It deliberately starts with deletion of the retired Python Agent, then establishes an executable benchmark before introducing the TypeScript runtime.
 
@@ -293,6 +293,10 @@ Planned tracer bullets:
 4. Add Audit Ledger records for governed business events.
 5. Add authorization-negative, retry, restart, concurrency and stream-recovery suites.
 6. Add affected-domain CI and release certification evidence.
+
+Map 5.1 establishes the Runtime trust boundary. Operator text, bounded Operator notes, Owner-returned text or metadata, retrieved content and model output are classified as untrusted data and cannot select Tools, widen Scope, alter authorization, budgets or effect policy. The Coordinator supplies only a frozen, versioned `trusted-runtime-context/v1` to the LangGraph adapter. The adapter revalidates that exact context, and the Coordinator validates the exact bounded planning result before any authorization exchange or Owner call. Unsafe fields, unsupported Tools, malformed fixed inputs and Scope widening fail with typed safety errors and create no Checkpoint, Outbox, Audit or business effect. A deterministic injection scenario hard-blocks missing trust policy or Tool allowlist widening, while AG-UI and Platform Gateway reject Runtime control fields and raw prompt content from public projections.
+
+Map 5.1 status: implemented by Ticket #206.
 
 Completion gate:
 

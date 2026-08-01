@@ -20,16 +20,17 @@ import (
 )
 
 type operationsGatewayFixture struct {
-	handler         http.Handler
-	organizationID  string
-	siteID          string
-	sessionID       string
-	gatewaySigner   *ecdsa.PrivateKey
-	iamCalls        atomic.Int32
-	operationsCalls atomic.Int32
-	denySite        atomic.Bool
-	invalidStream   atomic.Bool
+	handler          http.Handler
+	organizationID   string
+	siteID           string
+	sessionID        string
+	gatewaySigner    *ecdsa.PrivateKey
+	iamCalls         atomic.Int32
+	operationsCalls  atomic.Int32
+	denySite         atomic.Bool
+	invalidStream    atomic.Bool
 	invalidIdentity  atomic.Bool
+	rejectUnsafe     atomic.Bool
 	lastUpstream     atomic.Pointer[http.Request]
 	lastUpstreamBody atomic.Pointer[string]
 }
@@ -193,6 +194,14 @@ func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, now time
 		if request.Header.Get("X-Acting-Organization-ID") != fixture.organizationID || request.Header.Get("X-Route-Policy-Revision") != "0" {
 			t.Fatal("missing authoritative Operations headers")
 		}
+		if fixture.rejectUnsafe.Load() && strings.HasSuffix(request.URL.Path, ":advance") {
+			body := `{"type":"urn:hvac:operations-agent:untrusted_content_rejected","title":"Untrusted content rejected","status":422,"code":"UNTRUSTED_CONTENT_REJECTED","detail":"Runtime output attempted to alter the bounded Operations Agent control policy."}`
+			return &http.Response{
+				StatusCode: http.StatusUnprocessableEntity,
+				Header:     http.Header{"Content-Type": []string{"application/problem+json"}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}, nil
+		}
 		if strings.HasSuffix(request.URL.Path, ":submit-operator-input") {
 			raw, err := io.ReadAll(request.Body)
 			if err != nil {
@@ -332,6 +341,29 @@ func TestOperationsGatewayEnforcesSessionCSRFScopeAndServiceDelegation(t *testin
 	}
 }
 
+func TestOperationsGatewayPreservesTypedSafetyRejection(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	fixture.rejectUnsafe.Store(true)
+	path := "/api/v1/sites/" + fixture.siteID + "/operations/investigations/investigation-001:advance"
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+	fixture.authenticate(request, true)
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(recorder.Body.String(), `"code":"UNTRUSTED_CONTENT_REJECTED"`) {
+		t.Fatalf("typed safety rejection was not preserved: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	for _, forbidden := range []string{"rawPrompt", "instructions", "ownerPayload", "modelOutput"} {
+		if strings.Contains(recorder.Body.String(), forbidden) {
+			t.Fatalf("safety response disclosed forbidden content field %q", forbidden)
+		}
+	}
+	if fixture.iamCalls.Load() != 1 || fixture.operationsCalls.Load() != 1 {
+		t.Fatalf("unexpected safety rejection upstream counts IAM=%d Operations=%d", fixture.iamCalls.Load(), fixture.operationsCalls.Load())
+	}
+}
+
 func TestOperationsGatewaySubmitsBoundedOperatorInputWithIdempotency(t *testing.T) {
 	fixture := newOperationsGatewayFixture(t, 30)
 	path := "/api/v1/sites/" + fixture.siteID + "/operations/investigations/investigation-001:submit-operator-input"
@@ -430,7 +462,11 @@ func TestOperationsGatewayStreamsValidatedCommittedEvents(t *testing.T) {
 			t.Fatalf("missing event %q: %s", expected, body)
 		}
 	}
-	for _, forbidden := range []string{"checkpoint", "providerMessage", "points", "metadata", "delegationGrant"} {
+	for _, forbidden := range []string{
+		"checkpoint", "providerMessage", "points", "metadata", "delegationGrant",
+		"rawPrompt", "instructions", "ownerPayload", "modelOutput", "allowedReadTools",
+		"effectPolicy", "scopePolicy", "untrustedContentPolicy",
+	} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("unsafe stream field %q crossed the Gateway", forbidden)
 		}
@@ -619,7 +655,7 @@ func TestOperationsGatewayTypedSnapshotValidatorRejectsForgedAuthority(t *testin
 			"executedAt":       3,
 			"outcome":          "UNABLE_TO_CONCLUDE",
 		}},
-		"operatorInputRequest":  nil,
+		"operatorInputRequest":   nil,
 		"acceptedOperatorInputs": []any{},
 		"findings": []any{map[string]any{
 			"schemaVersion":        1,
@@ -735,6 +771,27 @@ func TestOperationsGatewayTypedSnapshotValidatorRejectsForgedAuthority(t *testin
 	}
 	if err := validateOperationsSnapshot(encode(unsafeReceipt)); err == nil {
 		t.Fatal("nested sensitive Tool Receipt metadata was accepted")
+	}
+}
+
+func TestOperationsGatewayRejectsRuntimeControlFieldsFromPublicProjections(t *testing.T) {
+	for _, field := range []string{
+		"rawPrompt",
+		"instructions",
+		"ownerPayload",
+		"modelOutput",
+		"allowedReadTools",
+		"effectPolicy",
+		"scopePolicy",
+		"untrustedContentPolicy",
+	} {
+		payload := map[string]any{field: "forbidden"}
+		if err := inspectOperationsSnapshotPayload(payload); err == nil {
+			t.Fatalf("snapshot accepted Runtime control field %q", field)
+		}
+		if err := inspectOperationsEventPayload(payload); err == nil {
+			t.Fatalf("event accepted Runtime control field %q", field)
+		}
 	}
 }
 

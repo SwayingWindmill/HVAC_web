@@ -34,7 +34,7 @@ const program = {
           requests: [{
             requestId: 'registry-first-request',
             tool: 'registry.getSite',
-            input: { siteId: 'equipment-langgraph-first' },
+            input: { siteId: scope.siteId },
           }],
         }],
       },
@@ -47,7 +47,7 @@ const program = {
           requests: [{
             requestId: 'registry-second-request',
             tool: 'registry.getSite',
-            input: { siteId: 'equipment-langgraph-second' },
+            input: { siteId: scope.siteId },
           }],
         }],
       },

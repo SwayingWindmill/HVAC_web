@@ -20,17 +20,17 @@ import (
 )
 
 const (
-	PublicOperationsInvestigationsPathTemplate = "/api/v1/sites/{siteId}/operations/investigations"
-	PublicOperationsInvestigationPathTemplate  = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}"
-	PublicOperationsEventsPathTemplate         = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}/events"
-	PublicOperationsAdvancePathTemplate        = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance"
+	PublicOperationsInvestigationsPathTemplate      = "/api/v1/sites/{siteId}/operations/investigations"
+	PublicOperationsInvestigationPathTemplate       = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}"
+	PublicOperationsEventsPathTemplate              = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}/events"
+	PublicOperationsAdvancePathTemplate             = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance"
 	PublicOperationsSubmitOperatorInputPathTemplate = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:submit-operator-input"
-	PublicOperationsCancelPathTemplate         = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel"
-	InternalOperationsToolAuthorizationPath    = "/internal/v1/operations/tool-authorization"
-	defaultOperationsTimeout                   = 8 * time.Second
-	defaultOperationsRequestBytes              = int64(8 << 10)
-	defaultOperationsResponseBytes             = int64(1 << 20)
-	defaultOperationsRatePerMinute             = 30
+	PublicOperationsCancelPathTemplate              = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel"
+	InternalOperationsToolAuthorizationPath         = "/internal/v1/operations/tool-authorization"
+	defaultOperationsTimeout                        = 8 * time.Second
+	defaultOperationsRequestBytes                   = int64(8 << 10)
+	defaultOperationsResponseBytes                  = int64(1 << 20)
+	defaultOperationsRatePerMinute                  = 30
 )
 
 var errOperationsBodyTooLarge = errors.New("Operations request or response body is too large")
@@ -1328,7 +1328,12 @@ func validateOperationsInvestigationValue(root map[string]any, includeToolReceip
 }
 
 func inspectOperationsSnapshotPayload(value any) error {
-	forbidden := map[string]struct{}{"lease": {}, "leaseHistory": {}, "checkpoint": {}, "opaqueState": {}, "runtimeRevision": {}, "providerMessage": {}, "points": {}}
+	forbidden := map[string]struct{}{
+		"lease": {}, "leaseHistory": {}, "checkpoint": {}, "opaqueState": {},
+		"runtimeRevision": {}, "providerMessage": {}, "points": {}, "rawPrompt": {},
+		"instructions": {}, "ownerPayload": {}, "modelOutput": {}, "allowedReadTools": {},
+		"effectPolicy": {}, "scopePolicy": {}, "untrustedContentPolicy": {},
+	}
 	var inspect func(any) error
 	inspect = func(candidate any) error {
 		switch typed := candidate.(type) {
@@ -1541,6 +1546,8 @@ func inspectOperationsEventPayload(value any) error {
 	forbidden := map[string]struct{}{
 		"lease": {}, "leaseHistory": {}, "checkpoint": {}, "opaqueState": {},
 		"runtimeRevision": {}, "providerMessage": {}, "points": {}, "rawPrompt": {},
+		"instructions": {}, "ownerPayload": {}, "modelOutput": {}, "allowedReadTools": {},
+		"effectPolicy": {}, "scopePolicy": {}, "untrustedContentPolicy": {},
 		"toolPayload": {}, "delegationGrant": {}, "authorizationDecision": {},
 		"metadata": {}, "attemptId": {},
 	}

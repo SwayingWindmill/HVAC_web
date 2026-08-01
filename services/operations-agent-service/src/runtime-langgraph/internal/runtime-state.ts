@@ -1,11 +1,12 @@
 import type {
   RuntimeCheckpoint,
+  RuntimePlanningContext,
   RuntimeReadPlan,
 } from '../../application/index.js';
-import type { OperationsInvestigationView } from '../../domain/index.js';
 
 export type LangGraphRuntimeErrorCode =
   | 'PROGRAM_INVALID'
+  | 'TRUST_BOUNDARY_INVALID'
   | 'ACTIVE_RUN_MISMATCH'
   | 'RUNTIME_REVISION_MISMATCH'
   | 'CHECKPOINT_IDENTITY_MISMATCH'
@@ -57,6 +58,131 @@ const maximumProgramSteps = 64;
 const maximumIdentityCharacters = 256;
 const maximumReadPlanCharacters = 65_536;
 const maximumCheckpointStateCharacters = 32_768;
+
+const runtimeContextKeys = new Set([
+  'schemaVersion',
+  'source',
+  'trust',
+  'investigationId',
+  'scope',
+  'revision',
+  'runId',
+  'runStatus',
+  'runtimeRevision',
+  'allowedReadTools',
+  'effectPolicy',
+  'scopePolicy',
+  'untrustedContentPolicy',
+]);
+const runtimeScopeKeys = new Set([
+  'organizationId',
+  'siteId',
+  'equipmentId',
+  'deviceId',
+]);
+const runtimeReadTools = new Set<RuntimePlanningContext['allowedReadTools'][number]>([
+  'registry.getSite',
+  'registry.listSiteEquipment',
+  'telemetry.getCurrentSnapshot',
+  'analytics.getEnergySeries',
+  'commands.getCapabilities',
+]);
+
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const hasExactKeys = (value: Record<string, unknown>, expected: ReadonlySet<string>): boolean => {
+  const keys = Object.keys(value);
+  return keys.length === expected.size && keys.every((key) => expected.has(key));
+};
+
+const requireNullableIdentity = (value: unknown, label: string): string | null => {
+  if (value === null) return null;
+  if (typeof value !== 'string'
+    || value.trim().length === 0
+    || value.length > maximumIdentityCharacters) {
+    throw new LangGraphRuntimeError(
+      'TRUST_BOUNDARY_INVALID',
+      `${label} must be null or contain 1 to ${maximumIdentityCharacters} characters.`,
+    );
+  }
+  return value;
+};
+
+export const normalizeRuntimePlanningContext = (
+  input: RuntimePlanningContext,
+): RuntimePlanningContext => {
+  const value: unknown = input;
+  if (!isRecord(value)
+    || !hasExactKeys(value, runtimeContextKeys)
+    || value.schemaVersion !== 1
+    || value.source !== 'APPLICATION_POLICY'
+    || value.trust !== 'TRUSTED_CONTROL'
+    || value.runStatus !== 'ACTIVE'
+    || value.effectPolicy !== 'READ_ONLY'
+    || value.scopePolicy !== 'EXACT_INVESTIGATION_SCOPE'
+    || value.untrustedContentPolicy !== 'EXCLUDED'
+    || typeof value.investigationId !== 'string'
+    || value.investigationId.trim().length === 0
+    || value.investigationId.length > maximumIdentityCharacters
+    || typeof value.runId !== 'string'
+    || value.runId.trim().length === 0
+    || value.runId.length > maximumIdentityCharacters
+    || typeof value.runtimeRevision !== 'string'
+    || value.runtimeRevision.trim().length === 0
+    || value.runtimeRevision.length > maximumIdentityCharacters
+    || typeof value.revision !== 'number'
+    || !Number.isSafeInteger(value.revision)
+    || value.revision < 0
+    || !isRecord(value.scope)
+    || !hasExactKeys(value.scope, runtimeScopeKeys)
+    || typeof value.scope.organizationId !== 'string'
+    || value.scope.organizationId.trim().length === 0
+    || value.scope.organizationId.length > maximumIdentityCharacters
+    || !Array.isArray(value.allowedReadTools)
+    || value.allowedReadTools.length === 0) {
+    throw new LangGraphRuntimeError(
+      'TRUST_BOUNDARY_INVALID',
+      'Runtime planning context is outside trusted-runtime-context/v1.',
+    );
+  }
+  const allowedReadTools = value.allowedReadTools as unknown[];
+  const uniqueTools = new Set<string>();
+  for (const tool of allowedReadTools) {
+    if (typeof tool !== 'string'
+      || !runtimeReadTools.has(tool as RuntimePlanningContext['allowedReadTools'][number])
+      || uniqueTools.has(tool)) {
+      throw new LangGraphRuntimeError(
+        'TRUST_BOUNDARY_INVALID',
+        'Runtime planning context contains an unsupported or duplicate logical Tool.',
+      );
+    }
+    uniqueTools.add(tool);
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    source: 'APPLICATION_POLICY',
+    trust: 'TRUSTED_CONTROL',
+    investigationId: value.investigationId,
+    scope: Object.freeze({
+      organizationId: value.scope.organizationId,
+      siteId: requireNullableIdentity(value.scope.siteId, 'Site identity'),
+      equipmentId: requireNullableIdentity(value.scope.equipmentId, 'Equipment identity'),
+      deviceId: requireNullableIdentity(value.scope.deviceId, 'Device identity'),
+    }),
+    revision: value.revision as RuntimePlanningContext['revision'],
+    runId: value.runId,
+    runStatus: 'ACTIVE',
+    runtimeRevision: value.runtimeRevision,
+    allowedReadTools: Object.freeze([
+      ...(allowedReadTools as RuntimePlanningContext['allowedReadTools']),
+    ]),
+    effectPolicy: 'READ_ONLY',
+    scopePolicy: 'EXACT_INVESTIGATION_SCOPE',
+    untrustedContentPolicy: 'EXCLUDED',
+  });
+};
 
 const requireIdentity = (value: string, label: string): string => {
   if (value.trim().length === 0 || value.length > maximumIdentityCharacters) {
@@ -129,24 +255,19 @@ export const positionFor = (
 };
 
 export const initialExecution = (
-  investigation: OperationsInvestigationView,
-  runId: string,
+  context: RuntimePlanningContext,
   program: LangGraphRuntimeProgram,
 ): RuntimeExecutionStateV1 => {
   return {
     schemaVersion: 1,
     programId: program.id,
-    investigationId: investigation.id,
-    runId,
+    investigationId: context.investigationId,
+    runId: context.runId,
     runtimeRevision: program.runtimeRevision,
     nextStepIndex: 0,
     completedStepIds: [],
   };
 };
-
-const isRecord = (value: unknown): value is Record<string, unknown> => (
-  typeof value === 'object' && value !== null && !Array.isArray(value)
-);
 
 const decodeState = (
   checkpoint: RuntimeCheckpoint,
@@ -222,34 +343,31 @@ const decodeState = (
 };
 
 export const assertActiveRun = (
-  investigation: OperationsInvestigationView,
-  runId: string,
+  context: RuntimePlanningContext,
   program: LangGraphRuntimeProgram,
 ): void => {
-  const run = investigation.runs.find((candidate) => candidate.id === runId);
-  if (investigation.activeRunId !== runId || run === undefined || run.status !== 'ACTIVE') {
+  if (context.runStatus !== 'ACTIVE') {
     throw new LangGraphRuntimeError(
       'ACTIVE_RUN_MISMATCH',
-      `Agent Run ${runId} is not the active writable Run for Investigation ${investigation.id}.`,
+      `Agent Run ${context.runId} is not active for Investigation ${context.investigationId}.`,
     );
   }
-  if (run.runtimeRevision !== program.runtimeRevision) {
+  if (context.runtimeRevision !== program.runtimeRevision) {
     throw new LangGraphRuntimeError(
       'RUNTIME_REVISION_MISMATCH',
-      `Agent Run ${runId} is bound to a different Runtime Revision.`,
+      `Agent Run ${context.runId} is bound to a different Runtime Revision.`,
     );
   }
 };
 
 export const restoreExecution = (
-  investigation: OperationsInvestigationView,
-  runId: string,
+  context: RuntimePlanningContext,
   checkpoint: RuntimeCheckpoint | null,
   program: LangGraphRuntimeProgram,
 ): RuntimeExecutionStateV1 => {
-  if (checkpoint === null) return initialExecution(investigation, runId, program);
-  if (checkpoint.investigationId !== investigation.id
-    || checkpoint.runId !== runId
+  if (checkpoint === null) return initialExecution(context, program);
+  if (checkpoint.investigationId !== context.investigationId
+    || checkpoint.runId !== context.runId
     || checkpoint.runtimeRevision !== program.runtimeRevision) {
     throw new LangGraphRuntimeError(
       'CHECKPOINT_IDENTITY_MISMATCH',
@@ -257,7 +375,7 @@ export const restoreExecution = (
     );
   }
   const state = decodeState(checkpoint, program);
-  if (state.investigationId !== investigation.id || state.runId !== runId) {
+  if (state.investigationId !== context.investigationId || state.runId !== context.runId) {
     throw new LangGraphRuntimeError(
       'CHECKPOINT_IDENTITY_MISMATCH',
       'Runtime Checkpoint state identity does not match the active Investigation and Agent Run.',
