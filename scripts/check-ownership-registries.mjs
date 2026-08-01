@@ -17,7 +17,7 @@ const phaseRegistries = await Promise.all([
 ].map(readJSON));
 
 const errors = [];
-const allowedOwners = new Set(['platform-gateway', 'legacy-hvac-backend', 'platform-core-service', 'telemetry-runtime-service', 'command-service', 'telemetry-query-service', 'operations-agent-service', 'alarm-service']);
+const allowedOwners = new Set(['platform-gateway', 'legacy-hvac-backend', 'platform-core-service', 'telemetry-runtime-service', 'command-service', 'telemetry-query-service', 'operations-agent-service', 'alarm-service', 'work-order-service']);
 const s1MigratedPaths = new Set([
   '/api/v1/organizations',
   '/api/v1/organizations/{organizationId}',
@@ -82,7 +82,12 @@ const s4AlarmLifecycleRoutes = new Set([
 ]);
 const expectedS4ReadPhases = ['S4-R0-contract-only', 'S4-R1-internal-read-only', 'S4-R2-site-canary', 'S4-R3-operationally-certified'];
 const expectedS4LifecyclePhases = ['S4-R0-contract-only', 'S4-R1-internal-lifecycle', 'S4-R2-site-canary', 'S4-R3-operationally-certified'];
-const allowedScopes = new Set(['organization', 'principal', 'site', 'device', 'key', 'alarm']);
+const s5WorkOrderReadRoutes = new Set([
+  'GET /api/v1/sites/{siteId}/work-orders',
+  'GET /api/v1/sites/{siteId}/work-orders/{workOrderId}',
+]);
+const expectedS5ReadPhases = ['S5-R0-contract-only', 'S5-R1-internal-read-only', 'S5-R2-site-canary', 'S5-R3-operationally-certified'];
+const allowedScopes = new Set(['organization', 'principal', 'site', 'device', 'key', 'alarm', 'work-order']);
 const allowedCompatibility = new Set(['native', 'legacy-read']);
 const allowedMethods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -215,6 +220,22 @@ for (const route of routeRegistry.routes ?? []) {
       if (!forbiddenResults.includes(result)) errors.push(`${key}: S4 Alarm fallback is not forbidden for ${result}`);
     }
   }
+  if (s5WorkOrderReadRoutes.has(key)) {
+    if (route.owner !== 'work-order-service' || route.publicIngress !== 'platform-gateway') errors.push(`${key}: S5 Work Order route must remain behind Gateway ingress`);
+    if (route.activationStatus !== 'expand-baseline' || rollout.mode !== 'disabled' || route.migrationPhase !== 'S5-R0-contract-only') errors.push(`${key}: S5 Work Order read must remain contract-only at zero traffic`);
+    if (route.readOnlyFallback !== false || route.readFallbackOwner !== undefined || rollout.fallbackOwner !== undefined) errors.push(`${key}: S5 Work Order fallback is forbidden`);
+    if (route.cohortGroup !== 's5-work-order-read-v1') errors.push(`${key}: S5 Work Order cohort group drifted`);
+    if (!Array.isArray(route.migrationPhases) || route.migrationPhases.join('|') !== expectedS5ReadPhases.join('|')) errors.push(`${key}: S5 Work Order phases are incomplete or reordered`);
+    if (route.shadowSideEffectPolicy !== 'NONE') errors.push(`${key}: S5 Work Order read must be side-effect-free`);
+    for (const scope of ['organization', 'site', 'principal']) {
+      if (!(route.allowedScopeDimensions ?? []).includes(scope)) errors.push(`${key}: missing S5 Work Order scope ${scope}`);
+    }
+    if (route.path.includes('{workOrderId}') && !(route.allowedScopeDimensions ?? []).includes('work-order')) errors.push(`${key}: missing S5 Work Order identity scope`);
+    const forbiddenResults = route.fallbackForbiddenResults ?? [];
+    for (const result of ['AUTHORIZATION_DENIED', 'RESOURCE_NOT_FOUND']) {
+      if (!forbiddenResults.includes(result)) errors.push(`${key}: S5 Work Order fallback is not forbidden for ${result}`);
+    }
+  }
   const locked = lock.routes?.[key];
   if (!locked) {
     errors.push(`${key}: route is missing from compatibility lock`);
@@ -237,6 +258,9 @@ for (const key of s4AlarmReadRoutes) {
 }
 for (const key of s4AlarmLifecycleRoutes) {
   if (!routeKeys.has(key)) errors.push(`${key}: required S4 lifecycle route is missing`);
+}
+for (const key of s5WorkOrderReadRoutes) {
+  if (!routeKeys.has(key)) errors.push(`${key}: required S5 Work Order read route is missing`);
 }
 
 const phaseExpectations = [
@@ -335,6 +359,7 @@ const requiredIdentities = new Map([
   ['command_runtime:s3_command_service', { migrationRole: 's3_command_migrator', activationRole: 's3_command_runtime', accessMode: 'write' }],
   ['alarm_runtime:s4_alarm_runtime', { migrationRole: 's4_alarm_migrator', accessMode: 'write' }],
   ['alarm_runtime:s4_alarm_service', { migrationRole: 's4_alarm_migrator', activationRole: 's4_alarm_runtime', accessMode: 'write' }],
+  ['work_order_runtime:s5_work_order_runtime', { migrationRole: 's5_work_order_migrator', accessMode: 'read' }],
 ]);
 for (const identity of dataRegistry.databaseIdentities ?? []) {
   const key = `${identity.schema}:${identity.runtimeRole}`;

@@ -4,6 +4,7 @@ use (
 	./libs/alarmauth
 	./libs/analyticsmodel
 	./libs/alarmmodel
+	./libs/workordermodel
 	./libs/commandauth
 	./libs/commandmodel
 	./libs/identitycontext

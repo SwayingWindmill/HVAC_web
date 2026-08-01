@@ -22,6 +22,7 @@ const (
 	OwnerAnalyticsQuery   = "telemetry-query-service"
 	OwnerOperationsAgent  = "operations-agent-service"
 	OwnerAlarm            = "alarm-service"
+	OwnerWorkOrder        = "work-order-service"
 
 	PhaseLegacyPrimaryGoShadow       = "LEGACY_PRIMARY_GO_SHADOW"
 	PhaseGoCanaryLegacyShadow        = "GO_CANARY_LEGACY_SHADOW"
@@ -40,6 +41,10 @@ const (
 	PhaseS4ContractOnly              = "S4-R0-contract-only"
 	PhaseS4InternalReadOnly          = "S4-R1-internal-read-only"
 	PhaseS4SiteCanary                = "S4-R2-site-canary"
+	PhaseS5ContractOnly              = "S5-R0-contract-only"
+	PhaseS5InternalReadOnly          = "S5-R1-internal-read-only"
+	PhaseS5SiteCanary                = "S5-R2-site-canary"
+	PhaseS5OperationallyCertified    = "S5-R3-operationally-certified"
 )
 
 var (
@@ -188,7 +193,7 @@ func validateEntry(entry RouteEntry) error {
 	if entry.Owner == OwnerLegacy && entry.CompatibilityMode != "legacy-read" {
 		return errors.New("Legacy ownership requires legacy-read compatibility")
 	}
-	allowed := map[string]bool{"organization": true, "principal": true, "site": true, "device": true, "key": true, "alarm": true}
+	allowed := map[string]bool{"organization": true, "principal": true, "site": true, "device": true, "key": true, "alarm": true, "work-order": true}
 	seenScopes := map[string]bool{}
 	for _, scope := range entry.AllowedScopeDimensions {
 		if !allowed[scope] || seenScopes[scope] {
@@ -230,6 +235,8 @@ func validateEntry(entry RouteEntry) error {
 			err = validateS3Phase(entry, seenScopes)
 		} else if isS4Phase(entry.MigrationPhase) {
 			err = validateS4Phase(entry, seenScopes)
+		} else if isS5Phase(entry.MigrationPhase) {
+			err = validateS5Phase(entry, seenScopes)
 		} else {
 			err = validateMigrationPhase(entry)
 		}
@@ -245,6 +252,9 @@ func validateEntry(entry RouteEntry) error {
 	}
 	if entry.Owner == OwnerAlarm && !isS4Phase(entry.MigrationPhase) {
 		return errors.New("Alarm ownership requires an S4 migration phase")
+	}
+	if entry.Owner == OwnerWorkOrder && !isS5Phase(entry.MigrationPhase) {
+		return errors.New("Work Order ownership requires an S5 migration phase")
 	}
 	return nil
 }
@@ -398,6 +408,39 @@ func validateS4Phase(entry RouteEntry, seenScopes map[string]bool) error {
 	return nil
 }
 
+func validateS5Phase(entry RouteEntry, seenScopes map[string]bool) error {
+	if entry.Method != http.MethodGet || !isS5ReadPath(entry.Path) {
+		return errors.New("S5 Work Order baseline supports read routes only")
+	}
+	if entry.PublicIngress != OwnerGateway || entry.ShadowSideEffectPolicy != "NONE" || entry.ReadOnlyFallback || entry.ReadFallbackOwner != "" {
+		return errors.New("S5 Work Order route must use Gateway ingress and no request fallback")
+	}
+	for _, required := range []string{"organization", "site", "principal"} {
+		if !seenScopes[required] {
+			return errors.New("S5 Work Order scope dimensions are incomplete")
+		}
+	}
+	if strings.Contains(entry.Path, "{workOrderId}") && !seenScopes["work-order"] {
+		return errors.New("S5 Work Order detail scope is incomplete")
+	}
+	for _, required := range []string{"AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"} {
+		if !containsString(entry.FallbackForbiddenResults, required) {
+			return errors.New("S5 Work Order forbidden results are incomplete")
+		}
+	}
+	if entry.CohortGroup != "s5-work-order-read-v1" {
+		return errors.New("S5 Work Order route requires the read cohort group")
+	}
+	if entry.MigrationPhase != PhaseS5ContractOnly || entry.Owner != OwnerWorkOrder || entry.ActivationStatus != "expand-baseline" || entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" {
+		return errors.New("S5 Work Order contract-only policy is invalid")
+	}
+	return nil
+}
+
+func isS5ReadPath(path string) bool {
+	return path == "/api/v1/sites/{siteId}/work-orders" || path == "/api/v1/sites/{siteId}/work-orders/{workOrderId}"
+}
+
 func isS4LifecyclePath(path string) bool {
 	switch path {
 	case "/api/v1/sites/{siteId}/alarms/{alarmId}:acknowledge",
@@ -443,6 +486,11 @@ func isS4Phase(phase string) bool {
 	return ok
 }
 
+func isS5Phase(phase string) bool {
+	_, ok := s5PhaseRank(phase)
+	return ok
+}
+
 func validateMigrationPhase(entry RouteEntry) error {
 	if entry.Method != http.MethodGet || entry.ShadowSideEffectPolicy != "NONE" {
 		return errors.New("migration routes must be GET routes with side-effect-free shadowing")
@@ -480,7 +528,7 @@ func isActiveOwner(owner string) bool {
 }
 
 func isCandidateOwner(owner string) bool {
-	return isActiveOwner(owner) || owner == OwnerCore || owner == OwnerTelemetryRuntime || owner == OwnerCommand || owner == OwnerAnalyticsQuery || owner == OwnerOperationsAgent || owner == OwnerAlarm
+	return isActiveOwner(owner) || owner == OwnerCore || owner == OwnerTelemetryRuntime || owner == OwnerCommand || owner == OwnerAnalyticsQuery || owner == OwnerOperationsAgent || owner == OwnerAlarm || owner == OwnerWorkOrder
 }
 
 func NewManager(snapshot *Snapshot, audit AuditSink, now func() time.Time) *Manager {
@@ -601,6 +649,10 @@ func validatePhaseTransition(old, next string) error {
 		oldRank, oldOK = s4PhaseRank(old)
 		nextRank, nextOK = s4PhaseRank(next)
 	}
+	if !oldOK || !nextOK {
+		oldRank, oldOK = s5PhaseRank(old)
+		nextRank, nextOK = s5PhaseRank(next)
+	}
 	if !oldOK || !nextOK || nextRank-oldRank > 1 || oldRank-nextRank > 1 {
 		return errors.New("migration phase skipped a required adjacent state")
 	}
@@ -655,6 +707,21 @@ func s4PhaseRank(phase string) (int, bool) {
 		return 1, true
 	case PhaseS4SiteCanary:
 		return 2, true
+	default:
+		return 0, false
+	}
+}
+
+func s5PhaseRank(phase string) (int, bool) {
+	switch phase {
+	case PhaseS5ContractOnly:
+		return 0, true
+	case PhaseS5InternalReadOnly:
+		return 1, true
+	case PhaseS5SiteCanary:
+		return 2, true
+	case PhaseS5OperationallyCertified:
+		return 3, true
 	default:
 		return 0, false
 	}
