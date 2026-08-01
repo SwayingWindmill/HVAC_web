@@ -802,6 +802,7 @@ try {
       HVAC_WEB_BUILD_ID: 'rms-03-browser',
       HVAC_WEB_GATEWAY_BASE_PATH: '/api/v1',
       HVAC_WEB_REALTIME_PROTOCOL: 'centrifugo-v1',
+      HVAC_WEB_AUDIT_DISABLE_HMR: 'true',
       VITE_S3_LOCAL_COMMANDS: 'true',
       PLATFORM_GATEWAY_PROXY_TARGET: gatewayURL,
     },
