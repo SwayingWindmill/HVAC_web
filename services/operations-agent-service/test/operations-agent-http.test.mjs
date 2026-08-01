@@ -187,7 +187,24 @@ test('internal HTTP contract exposes only start, advance and safe authoritative 
   assert.equal(getResponse.status, 200);
   assert.deepEqual(await body(getResponse), advanced);
 
-  assert.equal(harness.authorizationCalls.length, 3);
+  const streamResponse = await harness.handler.handle(new Request(`${item}/events`, {
+    method: 'GET',
+    headers: getHeaders,
+  }));
+  assert.equal(streamResponse.status, 200);
+  assert.match(streamResponse.headers.get('content-type') ?? '', /^text\/event-stream/u);
+  assert.match(streamResponse.headers.get('cache-control') ?? '', /no-store/u);
+  const stream = await streamResponse.text();
+  assert.match(stream, /event: RUN_STARTED/u);
+  assert.match(stream, /event: STATE_SNAPSHOT/u);
+  assert.match(stream, /event: TOOL_CALL_START/u);
+  assert.match(stream, /event: RUN_FINISHED/u);
+  assert.equal(stream.includes('"finding-001"'), false);
+  assert.equal(stream.includes('"points"'), false);
+  assert.equal(stream.includes('"metadata"'), false);
+  assert.equal(stream.includes('"checkpoint"'), false);
+
+  assert.equal(harness.authorizationCalls.length, 4);
   assert.deepEqual(harness.authorizationCalls[1], {
     method: 'POST',
     path: `/internal/v1/sites/${siteId}/operations/investigations/${started.id}:advance`,

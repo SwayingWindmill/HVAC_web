@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,8 @@ type operationsGatewayFixture struct {
 	iamCalls        atomic.Int32
 	operationsCalls atomic.Int32
 	denySite        atomic.Bool
+	invalidStream   atomic.Bool
+	invalidIdentity atomic.Bool
 	lastUpstream    atomic.Pointer[http.Request]
 }
 
@@ -189,6 +192,21 @@ func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, now time
 		if request.Header.Get("X-Acting-Organization-ID") != fixture.organizationID || request.Header.Get("X-Route-Policy-Revision") != "0" {
 			t.Fatal("missing authoritative Operations headers")
 		}
+		if strings.HasSuffix(request.URL.Path, "/events") {
+			if fixture.invalidStream.Load() {
+				unsafe := "id: 9:0\nevent: RUN_STARTED\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"investigation-001\",\"runId\":\"run-001\",\"checkpoint\":{}}\n\n"
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(unsafe))}, nil
+			}
+			investigation := `{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","evidence":[],"analysisReferences":[],"findings":[]}`
+			plan := `{"schemaVersion":1,"id":"site-night-energy-investigation","label":"Site night-energy investigation","completedSteps":4,"totalSteps":4,"progressPercent":100,"steps":[{"id":"READ_SITE_CONTEXT","label":"Read authoritative Site context","status":"COMPLETED"},{"id":"READ_ENERGY_SERIES","label":"Read authoritative night-energy periods","status":"COMPLETED"},{"id":"ANALYZE","label":"Run deterministic night-energy analysis","status":"COMPLETED"},{"id":"COMMIT_RESULT","label":"Commit Evidence, Analysis and Finding","status":"COMPLETED"}]}`
+			stream := "id: 9:0\nevent: RUN_STARTED\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"investigation-001\",\"runId\":\"run-001\"}\n\n" +
+				"id: 9:1\nevent: STATE_SNAPSHOT\ndata: {\"type\":\"STATE_SNAPSHOT\",\"snapshot\":{\"schemaVersion\":\"operations-investigation-ui/v1\",\"investigation\":" + investigation + ",\"plan\":" + plan + ",\"toolActivities\":[]}}\n\n" +
+				"id: 9:2\nevent: RUN_FINISHED\ndata: {\"type\":\"RUN_FINISHED\",\"threadId\":\"investigation-001\",\"runId\":\"run-001\",\"outcome\":{\"type\":\"success\"}}\n\n"
+			if fixture.invalidIdentity.Load() {
+				stream = strings.Replace(stream, "id: 9:1", "id: 9:2", 1)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream; charset=utf-8"}}, Body: io.NopCloser(strings.NewReader(stream))}, nil
+		}
 		body := `{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","evidence":[],"analysisReferences":[],"findings":[],"toolReceipts":[]}`
 		status := http.StatusOK
 		if strings.HasSuffix(request.URL.Path, "/operations/investigations") {
@@ -278,6 +296,123 @@ func TestOperationsGatewayEnforcesSessionCSRFScopeAndServiceDelegation(t *testin
 	fixture.handler.ServeHTTP(wrongContentRecorder, wrongContentType)
 	if wrongContentRecorder.Code != http.StatusUnsupportedMediaType || fixture.iamCalls.Load() != 1 || fixture.operationsCalls.Load() != 1 {
 		t.Fatalf("content type failure reached upstreams: status=%d IAM=%d Operations=%d", wrongContentRecorder.Code, fixture.iamCalls.Load(), fixture.operationsCalls.Load())
+	}
+}
+
+func TestOperationsGatewayStreamsValidatedCommittedEvents(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	path := "/api/v1/sites/" + fixture.siteID + "/operations/investigations/investigation-001/events"
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	fixture.authenticate(request, false)
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.HasPrefix(recorder.Header().Get("Content-Type"), "text/event-stream") ||
+		!strings.Contains(recorder.Header().Get("Cache-Control"), "no-store") ||
+		recorder.Header().Get("X-Accel-Buffering") != "no" {
+		t.Fatalf("invalid stream headers: %v", recorder.Header())
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{"event: RUN_STARTED", "event: STATE_SNAPSHOT", "event: RUN_FINISHED"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("missing event %q: %s", expected, body)
+		}
+	}
+	for _, forbidden := range []string{"checkpoint", "providerMessage", "points", "metadata", "delegationGrant"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("unsafe stream field %q crossed the Gateway", forbidden)
+		}
+	}
+	upstream := fixture.lastUpstream.Load()
+	if upstream == nil || upstream.URL.Path != "/internal/v1/sites/"+fixture.siteID+"/operations/investigations/investigation-001/events" ||
+		!strings.Contains(upstream.Header.Get("Accept"), "text/event-stream") {
+		t.Fatalf("invalid Operations stream forwarding: %+v", upstream)
+	}
+}
+
+func TestOperationsGatewayPropagatesStreamCancellation(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	controller := fixture.handler.(*handler)
+	started := make(chan struct{})
+	cancelled := make(chan error, 1)
+	controller.operations.httpClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		close(started)
+		<-request.Context().Done()
+		cancelled <- request.Context().Err()
+		return nil, request.Context().Err()
+	})}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/sites/"+fixture.siteID+"/operations/investigations/investigation-001/events",
+		nil,
+	).WithContext(ctx)
+	fixture.authenticate(request, false)
+	recorder := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		fixture.handler.ServeHTTP(recorder, request)
+		close(done)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("Operations stream request did not reach the upstream")
+	}
+	cancel()
+
+	select {
+	case err := <-cancelled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("upstream request was not cancelled: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("client cancellation did not reach the Operations Agent request")
+	}
+	select {
+	case <-done:
+		if recorder.Code != http.StatusBadGateway {
+			t.Fatalf("expected cancellation to terminate the Gateway request, got %d", recorder.Code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Gateway handler did not return after client cancellation")
+	}
+}
+
+func TestOperationsGatewayRejectsUnsafeOrUnauthorizedEventStreams(t *testing.T) {
+	unsafeFixture := newOperationsGatewayFixture(t, 30)
+	unsafeFixture.invalidStream.Store(true)
+	path := "/api/v1/sites/" + unsafeFixture.siteID + "/operations/investigations/investigation-001/events"
+	unsafeRequest := httptest.NewRequest(http.MethodGet, path, nil)
+	unsafeFixture.authenticate(unsafeRequest, false)
+	unsafeRecorder := httptest.NewRecorder()
+	unsafeFixture.handler.ServeHTTP(unsafeRecorder, unsafeRequest)
+	if unsafeRecorder.Code != http.StatusBadGateway || strings.Contains(unsafeRecorder.Body.String(), "checkpoint") {
+		t.Fatalf("unsafe event stream was not rejected: status=%d body=%s", unsafeRecorder.Code, unsafeRecorder.Body.String())
+	}
+
+	identityFixture := newOperationsGatewayFixture(t, 30)
+	identityFixture.invalidIdentity.Store(true)
+	identityRequest := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+identityFixture.siteID+"/operations/investigations/investigation-001/events", nil)
+	identityFixture.authenticate(identityRequest, false)
+	identityRecorder := httptest.NewRecorder()
+	identityFixture.handler.ServeHTTP(identityRecorder, identityRequest)
+	if identityRecorder.Code != http.StatusBadGateway {
+		t.Fatalf("out-of-order event identities were accepted: status=%d body=%s", identityRecorder.Code, identityRecorder.Body.String())
+	}
+
+	deniedFixture := newOperationsGatewayFixture(t, 30)
+	deniedFixture.denySite.Store(true)
+	deniedRequest := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+deniedFixture.siteID+"/operations/investigations/investigation-001/events", nil)
+	deniedFixture.authenticate(deniedRequest, false)
+	deniedRecorder := httptest.NewRecorder()
+	deniedFixture.handler.ServeHTTP(deniedRecorder, deniedRequest)
+	if deniedRecorder.Code != http.StatusNotFound || deniedFixture.operationsCalls.Load() != 0 {
+		t.Fatalf("unauthorized stream was discoverable or forwarded: status=%d calls=%d", deniedRecorder.Code, deniedFixture.operationsCalls.Load())
 	}
 }
 

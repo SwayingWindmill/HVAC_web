@@ -2,6 +2,7 @@ import {
   InvestigationCoordinatorError,
   type AuthorizationDecision,
   type SiteNightEnergyInvestigationCoordinator,
+  type SiteNightEnergyInvestigationView,
 } from '../../application/index.js';
 
 export interface OperationsAgentHttpAuthorizationInput {
@@ -34,6 +35,9 @@ export interface OperationsAgentHttpOptions {
   readonly createCoordinator: (
     context: OperationsAgentHttpCoordinatorContext,
   ) => SiteNightEnergyInvestigationCoordinator;
+  readonly createAgUiEventStreamResponse?: (
+    view: SiteNightEnergyInvestigationView,
+  ) => Response;
   readonly now?: () => number;
   readonly maximumRequestBytes?: number;
 }
@@ -43,7 +47,7 @@ export interface OperationsAgentHttpHandler {
 }
 
 interface MatchedRoute {
-  readonly kind: 'START' | 'GET' | 'ADVANCE' | 'CANCEL';
+  readonly kind: 'START' | 'GET' | 'STREAM' | 'ADVANCE' | 'CANCEL';
   readonly siteId: string;
   readonly investigationId: string | null;
 }
@@ -52,6 +56,7 @@ const defaultMaximumRequestBytes = 8_192;
 const maximumIdentityLength = 256;
 const collectionPattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/investigations$/u;
 const itemPattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/investigations\/([^/:]+)$/u;
+const streamPattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/investigations\/([^/:]+)\/events$/u;
 const advancePattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/investigations\/([^/:]+):advance$/u;
 const cancelPattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/investigations\/([^/:]+):cancel$/u;
 const traceparentPattern = /^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/iu;
@@ -99,6 +104,7 @@ const matchRoute = (request: Request): MatchedRoute | null => {
   const path = new URL(request.url).pathname;
   const candidates: readonly [RegExp, MatchedRoute['kind'], string][] = [
     [collectionPattern, 'START', 'POST'],
+    [streamPattern, 'STREAM', 'GET'],
     [advancePattern, 'ADVANCE', 'POST'],
     [cancelPattern, 'CANCEL', 'POST'],
     [itemPattern, 'GET', 'GET'],
@@ -245,7 +251,7 @@ export const createOperationsAgentHttpHandler = (
         if (route === null) {
           return problem(404, 'ROUTE_NOT_FOUND', 'Route not found', 'The requested internal route does not exist.');
         }
-        if (route.kind === 'GET') {
+        if (route.kind === 'GET' || route.kind === 'STREAM') {
           if (request.body !== null) {
             return problem(400, 'REQUEST_INVALID', 'Request invalid', 'GET requests must not contain a body.');
           }
@@ -311,6 +317,17 @@ export const createOperationsAgentHttpHandler = (
         const investigationId = route.investigationId;
         if (investigationId === null) {
           return problem(404, 'RESOURCE_NOT_FOUND', 'Resource not found', 'The requested Investigation was not found.');
+        }
+        if (route.kind === 'STREAM') {
+          if (options.createAgUiEventStreamResponse === undefined) {
+            return problem(
+              503,
+              'OPERATIONS_AGENT_STREAM_UNAVAILABLE',
+              'Operations Agent stream unavailable',
+              'The Operations Agent event projection is not configured.',
+            );
+          }
+          return options.createAgUiEventStreamResponse(await coordinator.get({ investigationId }));
         }
         if (route.kind === 'GET') {
           return jsonResponse(200, await coordinator.get({ investigationId }));

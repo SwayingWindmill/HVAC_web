@@ -29,6 +29,11 @@ const RealAlarms = lazy(async () => {
   return { default: module.RealAlarms };
 });
 
+const OperationsInvestigation = lazy(async () => {
+  const module = await import('./OperationsInvestigation');
+  return { default: module.OperationsInvestigation };
+});
+
 type RoutedSiteDecision = Exclude<SiteRoutingDecision, { state: 'PLATFORM_ROUTE' }>;
 
 export type SiteShellDecision =
@@ -323,6 +328,29 @@ function ReadySiteSurface({
     );
   }
 
+  if (decision.route === 'operations') {
+    return (
+      <section
+        className="real-route-surface real-route-surface--operations"
+        data-route-state="READY"
+        data-site-id={decision.context.site.id}
+        data-site-route="operations"
+      >
+        <Suspense fallback={(
+          <div className="real-shell-progress" role="status" aria-live="polite">
+            正在加载 Operations Investigation…
+          </div>
+        )}>
+          <OperationsInvestigation
+            site={decision.context.site}
+            principal={snapshot.principal!}
+            registerProtectedResource={registerProtectedResource}
+          />
+        </Suspense>
+      </section>
+    );
+  }
+
   if (decision.route === 'commands') {
     return (
       <section
@@ -484,6 +512,7 @@ export function buildSiteNavigation(
     { id: 'site-assets', label: 'Assets', path: siteRoute(site, 'assets'), kind: 'link', degraded: false },
     { id: 'site-energy', label: 'Energy', path: siteRoute(site, 'energy'), kind: 'link', degraded: false },
     { id: 'site-alarms', label: 'Alarm', path: siteRoute(site, 'alarms'), kind: 'link', degraded: false },
+    { id: 'site-operations', label: 'Operations', path: siteRoute(site, 'operations'), kind: 'link', degraded: false },
     { id: 'site-commands', label: 'Commands', path: siteRoute(site, 'commands'), kind: 'link', degraded: false },
     { id: 'site-bigscreen', label: 'BigScreen', path: siteRoute(site, 'bigscreen'), kind: 'link', degraded: false },
   ];

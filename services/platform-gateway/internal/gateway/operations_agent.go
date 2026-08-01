@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ import (
 const (
 	PublicOperationsInvestigationsPathTemplate = "/api/v1/sites/{siteId}/operations/investigations"
 	PublicOperationsInvestigationPathTemplate  = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}"
+	PublicOperationsEventsPathTemplate         = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}/events"
 	PublicOperationsAdvancePathTemplate        = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:advance"
 	PublicOperationsCancelPathTemplate         = "/api/v1/sites/{siteId}/operations/investigations/{investigationId}:cancel"
 	InternalOperationsToolAuthorizationPath    = "/internal/v1/operations/tool-authorization"
@@ -138,6 +140,18 @@ func matchPublicOperationsRoute(path string) (publicOperationsRoute, bool) {
 	internalBase := "/internal/v1/sites/" + url.PathEscape(siteID) + "/operations/investigations"
 	if len(parts) == 3 {
 		return publicOperationsRoute{kind: "START", template: PublicOperationsInvestigationsPathTemplate, siteID: siteID, internalPath: internalBase, method: http.MethodPost, mutation: true}, true
+	}
+	if len(parts) == 5 && parts[3] != "" && parts[4] == "events" {
+		investigationID, err := url.PathUnescape(parts[3])
+		if err != nil || strings.TrimSpace(investigationID) == "" || len(investigationID) > 256 {
+			return publicOperationsRoute{siteID: siteID}, true
+		}
+		return publicOperationsRoute{
+			kind: "STREAM", template: PublicOperationsEventsPathTemplate,
+			siteID: siteID, investigationID: investigationID,
+			internalPath: internalBase + "/" + url.PathEscape(investigationID) + "/events",
+			method: http.MethodGet, mutation: false,
+		}, true
 	}
 	if len(parts) != 4 || parts[3] == "" {
 		return publicOperationsRoute{}, false
@@ -390,7 +404,11 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 	if route.mutation {
 		upstream.Header.Set("Content-Type", "application/json")
 	}
-	upstream.Header.Set("Accept", "application/json, application/problem+json")
+	if route.kind == "STREAM" {
+		upstream.Header.Set("Accept", "text/event-stream, application/problem+json")
+	} else {
+		upstream.Header.Set("Accept", "application/json, application/problem+json")
+	}
 	upstream.Header.Set("X-Acting-Organization-ID", session.ActingOrganizationID)
 	upstream.Header.Set("X-Delegation-Grant", serviceDelegation)
 	upstream.Header.Set(
@@ -416,6 +434,18 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 	}
 	contentType := strings.ToLower(response.Header.Get("Content-Type"))
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		if route.kind == "STREAM" {
+			if !strings.HasPrefix(contentType, "text/event-stream") || validateOperationsEventStream(raw) != nil {
+				writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_CONTRACT_FAILED", "Operations Agent contract failed", "The Operations Agent returned an invalid event stream.", true, nil)
+				return
+			}
+			writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+			writer.Header().Set("Cache-Control", "no-store, no-transform")
+			writer.Header().Set("X-Accel-Buffering", "no")
+			writer.WriteHeader(response.StatusCode)
+			_, _ = writer.Write(raw)
+			return
+		}
 		if !strings.HasPrefix(contentType, "application/json") || validateOperationsSnapshot(raw) != nil {
 			writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_CONTRACT_FAILED", "Operations Agent contract failed", "The Operations Agent returned an invalid authoritative snapshot.", true, nil)
 			return
@@ -545,4 +575,359 @@ func validateOperationsSnapshot(raw []byte) error {
 		return nil
 	}
 	return inspect(value)
+}
+
+func operationsExactKeys(value map[string]any, expected ...string) bool {
+	if len(value) != len(expected) {
+		return false
+	}
+	for _, key := range expected {
+		if _, ok := value[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func operationsBoundedString(value any, maximum int) (string, bool) {
+	text, ok := value.(string)
+	return text, ok && strings.TrimSpace(text) != "" && len(text) <= maximum
+}
+
+func operationsAllowedString(value any, allowed ...string) bool {
+	text, ok := value.(string)
+	if !ok {
+		return false
+	}
+	for _, candidate := range allowed {
+		if text == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func operationsNonnegativeInteger(value any) (int64, bool) {
+	number, ok := value.(json.Number)
+	if !ok {
+		return 0, false
+	}
+	parsed, err := strconv.ParseInt(string(number), 10, 64)
+	return parsed, err == nil && parsed >= 0
+}
+
+func validateOperationsToolActivity(activity map[string]any) error {
+	if !operationsExactKeys(activity, "recordId", "logicalTool", "owner", "resultCategory", "startedAt", "completedAt") {
+		return errors.New("invalid Operations Tool activity shape")
+	}
+	if _, ok := operationsBoundedString(activity["recordId"], 256); !ok ||
+		!operationsAllowedString(activity["logicalTool"], "registry.getSite", "registry.listSiteEquipment", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities") ||
+		!operationsAllowedString(activity["owner"], "registry", "telemetry-query-service", "command-service") ||
+		!operationsAllowedString(activity["resultCategory"], "SUCCEEDED", "REJECTED", "TIMED_OUT", "FAILED") {
+		return errors.New("invalid Operations Tool activity identity")
+	}
+	startedAt, startedOK := operationsNonnegativeInteger(activity["startedAt"])
+	completedAt, completedOK := operationsNonnegativeInteger(activity["completedAt"])
+	if !startedOK || !completedOK || completedAt < startedAt {
+		return errors.New("invalid Operations Tool activity timing")
+	}
+	return nil
+}
+
+func validateOperationsPlan(plan map[string]any) error {
+	if !operationsExactKeys(plan, "schemaVersion", "id", "label", "completedSteps", "totalSteps", "progressPercent", "steps") ||
+		plan["schemaVersion"] != json.Number("1") || plan["id"] != "site-night-energy-investigation" ||
+		plan["label"] != "Site night-energy investigation" || plan["totalSteps"] != json.Number("4") {
+		return errors.New("invalid Operations plan projection")
+	}
+	completedSteps, completedOK := operationsNonnegativeInteger(plan["completedSteps"])
+	progressPercent, progressOK := operationsNonnegativeInteger(plan["progressPercent"])
+	steps, ok := plan["steps"].([]any)
+	if !completedOK || completedSteps > 4 || !progressOK || progressPercent > 100 || !ok || len(steps) != 4 {
+		return errors.New("invalid Operations plan progress")
+	}
+	expectedIDs := [...]string{"READ_SITE_CONTEXT", "READ_ENERGY_SERIES", "ANALYZE", "COMMIT_RESULT"}
+	completedCount := int64(0)
+	for index, candidate := range steps {
+		step, ok := candidate.(map[string]any)
+		if !ok || !operationsExactKeys(step, "id", "label", "status") || step["id"] != expectedIDs[index] {
+			return errors.New("invalid Operations plan step")
+		}
+		if _, ok := operationsBoundedString(step["label"], 256); !ok ||
+			!operationsAllowedString(step["status"], "PENDING", "IN_PROGRESS", "PAUSED", "COMPLETED", "FAILED", "CANCELLED") {
+			return errors.New("invalid Operations plan step value")
+		}
+		if step["status"] == "COMPLETED" {
+			completedCount++
+		}
+	}
+	if completedSteps != completedCount || progressPercent != completedCount*25 {
+		return errors.New("inconsistent Operations plan progress")
+	}
+	return nil
+}
+
+func inspectOperationsEventPayload(value any) error {
+	forbidden := map[string]struct{}{
+		"lease": {}, "leaseHistory": {}, "checkpoint": {}, "opaqueState": {},
+		"runtimeRevision": {}, "providerMessage": {}, "points": {}, "rawPrompt": {},
+		"toolPayload": {}, "delegationGrant": {}, "authorizationDecision": {},
+		"metadata": {}, "attemptId": {},
+	}
+	var inspect func(any) error
+	inspect = func(candidate any) error {
+		switch typed := candidate.(type) {
+		case map[string]any:
+			for key, nested := range typed {
+				if _, denied := forbidden[key]; denied {
+					return errors.New("Operations event exposes internal state")
+				}
+				if err := inspect(nested); err != nil {
+					return err
+				}
+			}
+		case []any:
+			for _, nested := range typed {
+				if err := inspect(nested); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return inspect(value)
+}
+
+func decodeOperationsEventJSON(raw string) (map[string]any, error) {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	var value map[string]any
+	if err := decoder.Decode(&value); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return nil, errors.New("invalid Operations event JSON")
+	}
+	if err := inspectOperationsEventPayload(value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+func validateOperationsStateSnapshot(value map[string]any) error {
+	if !operationsExactKeys(value, "type", "snapshot") || value["type"] != "STATE_SNAPSHOT" {
+		return errors.New("invalid Operations state event")
+	}
+	snapshot, ok := value["snapshot"].(map[string]any)
+	if !ok || !operationsExactKeys(snapshot, "schemaVersion", "investigation", "plan", "toolActivities") ||
+		snapshot["schemaVersion"] != "operations-investigation-ui/v1" {
+		return errors.New("invalid Operations state snapshot")
+	}
+	investigation, ok := snapshot["investigation"].(map[string]any)
+	if !ok {
+		return errors.New("invalid Operations Investigation projection")
+	}
+	if _, exposesReceipts := investigation["toolReceipts"]; exposesReceipts {
+		return errors.New("Operations state exposes Tool Receipts")
+	}
+	rawInvestigation, err := json.Marshal(investigation)
+	if err != nil || validateOperationsSnapshot(rawInvestigation) != nil {
+		return errors.New("invalid Operations Investigation projection")
+	}
+	plan, ok := snapshot["plan"].(map[string]any)
+	if !ok || validateOperationsPlan(plan) != nil {
+		return errors.New("invalid Operations plan projection")
+	}
+	activities, ok := snapshot["toolActivities"].([]any)
+	if !ok || len(activities) > 64 {
+		return errors.New("invalid Operations Tool activities")
+	}
+	for _, candidate := range activities {
+		activity, ok := candidate.(map[string]any)
+		if !ok || validateOperationsToolActivity(activity) != nil {
+			return errors.New("invalid Operations Tool activity")
+		}
+	}
+	return nil
+}
+
+func validateOperationsToolArguments(value map[string]any) error {
+	if !operationsExactKeys(value, "type", "toolCallId", "delta") || value["type"] != "TOOL_CALL_ARGS" {
+		return errors.New("invalid Operations Tool arguments event")
+	}
+	delta, ok := value["delta"].(string)
+	if !ok || len(delta) > 4096 {
+		return errors.New("invalid Operations Tool activity payload")
+	}
+	activity, err := decodeOperationsEventJSON(delta)
+	if err != nil || validateOperationsToolActivity(activity) != nil {
+		return errors.New("invalid Operations Tool activity payload")
+	}
+	return nil
+}
+
+func validateOperationsEvent(name string, value map[string]any) error {
+	if value["type"] != name {
+		return errors.New("Operations event name and payload type differ")
+	}
+	switch name {
+	case "RUN_STARTED":
+		if !operationsExactKeys(value, "type", "threadId", "runId") {
+			return errors.New("invalid Operations run-start event")
+		}
+		if _, ok := operationsBoundedString(value["threadId"], 256); !ok {
+			return errors.New("invalid Operations run thread")
+		}
+		if _, ok := operationsBoundedString(value["runId"], 512); !ok {
+			return errors.New("invalid Operations projection run")
+		}
+	case "STATE_SNAPSHOT":
+		return validateOperationsStateSnapshot(value)
+	case "TOOL_CALL_START":
+		if !operationsExactKeys(value, "type", "toolCallId", "toolCallName") {
+			return errors.New("invalid Operations Tool start event")
+		}
+		if _, ok := operationsBoundedString(value["toolCallId"], 256); !ok ||
+			!operationsAllowedString(value["toolCallName"], "registry.getSite", "registry.listSiteEquipment", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities") {
+			return errors.New("invalid Operations Tool start value")
+		}
+	case "TOOL_CALL_ARGS":
+		return validateOperationsToolArguments(value)
+	case "TOOL_CALL_END":
+		if !operationsExactKeys(value, "type", "toolCallId") {
+			return errors.New("invalid Operations Tool end event")
+		}
+		if _, ok := operationsBoundedString(value["toolCallId"], 256); !ok {
+			return errors.New("invalid Operations Tool end value")
+		}
+	case "RUN_FINISHED":
+		if !operationsExactKeys(value, "type", "threadId", "runId", "outcome") {
+			return errors.New("invalid Operations run-finished event")
+		}
+		if _, ok := operationsBoundedString(value["threadId"], 256); !ok {
+			return errors.New("invalid Operations run thread")
+		}
+		if _, ok := operationsBoundedString(value["runId"], 512); !ok {
+			return errors.New("invalid Operations projection run")
+		}
+		outcome, ok := value["outcome"].(map[string]any)
+		if !ok || !operationsExactKeys(outcome, "type") || outcome["type"] != "success" {
+			return errors.New("invalid Operations run outcome")
+		}
+	default:
+		return errors.New("unsupported Operations event")
+	}
+	return nil
+}
+
+func validateOperationsEventSequence(names []string, values []map[string]any, streamRevision uint64) error {
+	if len(names) < 3 || len(values) != len(names) || names[0] != "RUN_STARTED" || names[1] != "STATE_SNAPSHOT" || names[len(names)-1] != "RUN_FINISHED" {
+		return errors.New("Operations event stream lifecycle is invalid")
+	}
+	startThread, _ := values[0]["threadId"].(string)
+	startRun, _ := values[0]["runId"].(string)
+	finishedThread, _ := values[len(values)-1]["threadId"].(string)
+	finishedRun, _ := values[len(values)-1]["runId"].(string)
+	if startThread != finishedThread || startRun != finishedRun {
+		return errors.New("Operations event stream run identity changed")
+	}
+	snapshot := values[1]["snapshot"].(map[string]any)
+	investigation := snapshot["investigation"].(map[string]any)
+	investigationRevision, revisionOK := operationsNonnegativeInteger(investigation["revision"])
+	investigationID, idOK := operationsBoundedString(investigation["id"], 256)
+	if !revisionOK || uint64(investigationRevision) != streamRevision || !idOK || investigationID != startThread {
+		return errors.New("Operations event stream does not match the authoritative snapshot")
+	}
+	activities := snapshot["toolActivities"].([]any)
+	toolEventCount := len(names) - 3
+	if toolEventCount%3 != 0 || len(activities) != toolEventCount/3 {
+		return errors.New("Operations Tool event count does not match the snapshot")
+	}
+	for index, candidate := range activities {
+		activity := candidate.(map[string]any)
+		startIndex := 2 + index*3
+		if names[startIndex] != "TOOL_CALL_START" || names[startIndex+1] != "TOOL_CALL_ARGS" || names[startIndex+2] != "TOOL_CALL_END" {
+			return errors.New("Operations Tool events are out of order")
+		}
+		start := values[startIndex]
+		arguments := values[startIndex+1]
+		end := values[startIndex+2]
+		toolCallID, _ := start["toolCallId"].(string)
+		if arguments["toolCallId"] != toolCallID || end["toolCallId"] != toolCallID || activity["recordId"] != toolCallID || start["toolCallName"] != activity["logicalTool"] {
+			return errors.New("Operations Tool event identity changed")
+		}
+		delta, _ := arguments["delta"].(string)
+		deltaActivity, err := decodeOperationsEventJSON(delta)
+		if err != nil {
+			return errors.New("invalid Operations Tool activity payload")
+		}
+		for _, key := range []string{"recordId", "logicalTool", "owner", "resultCategory", "startedAt", "completedAt"} {
+			if deltaActivity[key] != activity[key] {
+				return errors.New("Operations Tool event differs from the committed snapshot")
+			}
+		}
+	}
+	return nil
+}
+
+func parseOperationsEventID(id string) (uint64, uint64, error) {
+	revisionText, sequenceText, ok := strings.Cut(id, ":")
+	if !ok || revisionText == "" || sequenceText == "" || strings.Contains(sequenceText, ":") {
+		return 0, 0, errors.New("invalid Operations event identity")
+	}
+	revision, err := strconv.ParseUint(revisionText, 10, 64)
+	if err != nil {
+		return 0, 0, errors.New("invalid Operations event revision")
+	}
+	sequence, err := strconv.ParseUint(sequenceText, 10, 64)
+	if err != nil {
+		return 0, 0, errors.New("invalid Operations event sequence")
+	}
+	return revision, sequence, nil
+}
+
+func validateOperationsEventStream(raw []byte) error {
+	if len(raw) == 0 || !bytes.HasSuffix(raw, []byte("\n\n")) {
+		return errors.New("Operations event stream is incomplete")
+	}
+	normalized := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	blocks := strings.Split(normalized, "\n\n")
+	eventNames := make([]string, 0, len(blocks))
+	eventValues := make([]map[string]any, 0, len(blocks))
+	var streamRevision uint64
+	for _, block := range blocks {
+		if block == "" {
+			continue
+		}
+		var id, eventName, data string
+		for _, line := range strings.Split(block, "\n") {
+			switch {
+			case strings.HasPrefix(line, "id: ") && id == "":
+				id = strings.TrimPrefix(line, "id: ")
+			case strings.HasPrefix(line, "event: ") && eventName == "":
+				eventName = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: ") && data == "":
+				data = strings.TrimPrefix(line, "data: ")
+			default:
+				return errors.New("invalid Operations event stream field")
+			}
+		}
+		if id == "" || len(id) > 128 || eventName == "" || data == "" {
+			return errors.New("incomplete Operations event stream block")
+		}
+		revision, sequence, err := parseOperationsEventID(id)
+		if err != nil || sequence != uint64(len(eventNames)) || (len(eventNames) > 0 && revision != streamRevision) {
+			return errors.New("Operations event stream identity is invalid")
+		}
+		if len(eventNames) == 0 {
+			streamRevision = revision
+		}
+		value, err := decodeOperationsEventJSON(data)
+		if err != nil || validateOperationsEvent(eventName, value) != nil {
+			return errors.New("invalid Operations event stream payload")
+		}
+		eventNames = append(eventNames, eventName)
+		eventValues = append(eventValues, value)
+		if len(eventNames) > 256 {
+			return errors.New("Operations event stream has too many events")
+		}
+	}
+	return validateOperationsEventSequence(eventNames, eventValues, streamRevision)
 }
