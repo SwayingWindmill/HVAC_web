@@ -12,8 +12,8 @@ Deliver an authoritative, Site-scoped HVAC operations product in which every vis
 
 | Sequence | Product area | Status on 2026-08-01 | Current evidence |
 | --- | --- | --- | --- |
-| 1 | Real Assets | In progress | Site list, device detail, capability, history, and trend pull requests are active. |
-| 2 | Real Dashboard | In review | PR #165 provides the first authoritative Site overview. |
+| 1 | Real Assets | Merged and certified | PR #182 completed the authoritative Site asset workspace and 200-Device browser certification. |
+| 2 | Real Dashboard | Merged | PR #165 delivered the authoritative default Site overview with full release gates. |
 | 3 | Complete Energy | Merged | PR #167 delivered calendar workspaces, comparisons, drill-down, and protected query lifecycle. |
 | 4 | Real Commands | Merged | PR #169 delivered authoritative Site scope, local-only governed Command evidence, and a production-disabled control boundary. |
 | 5 | Alarm | P1/P2 merged; P3 certifying | PR #171 established the independent read owner and PR #179 merged authoritative lifecycle operations. Issue #181 activates only exact IAM/Gateway list and detail reads through a 1% internal no-fallback canary; every lifecycle POST remains disabled at 0%. |
@@ -187,4 +187,4 @@ The Operations Agent and Platform/System Management are parallel programs rather
 
 ## Immediate next action
 
-Merge and review the Real Alarm P2 lifecycle baseline, then define the separate activation slice for Gateway/IAM lifecycle authorization and operational rollout. Public Alarm read and write routes remain disabled at 0%; automated suppression expiry, notifications, correlation policy, and Work Order linkage must not be folded into activation without their own contracts and certification.
+Complete and merge the Real Alarm P3 authorized read canary. Public list/detail reads remain limited to the exact 1% internal no-fallback cohort, while every lifecycle POST stays disabled at 0%. Any read ramp, lifecycle activation, automated suppression expiry, notifications, correlation policy, or Work Order linkage requires a separate reviewed contract and certification.
