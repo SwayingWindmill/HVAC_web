@@ -63,6 +63,20 @@ Single-context: one `CONTEXT.md` at the repo root plus `docs/adr/` for architect
 
 Use CodeGraph first for code structure, call paths and change-impact questions when the local index exists. Treat its returned source as read; use file search only when the index is missing, stale or incomplete. Run `npm run codegraph:init` once per checkout and keep `.codegraph/` local. See `docs/agents/codegraph.md`.
 
+### Git branches and worktrees
+
+Use one Git path model for this repository: run repository Git operations from WSL and use `/mnt/e/Code/HVAC_web` as the canonical checkout. Do not alternate between Windows-style `E:/...` worktree metadata and WSL `/mnt/e/...` metadata.
+
+Keep worktrees outside the repository root under `/mnt/e/Code/HVAC_web-worktrees/<issue>-<slug>`. Never create `.worktrees/`, `.clones/`, nested repository copies, or generated checkout trees inside `HVAC_web`. Keep at most two active auxiliary worktrees unless a Map explicitly records why more are required.
+
+Create a worktree from current `origin/main` with `git fetch --prune origin` followed by `git worktree add /mnt/e/Code/HVAC_web-worktrees/<issue>-<slug> -b <branch> origin/main`. One implementation branch owns one worktree; do not reuse a branch in multiple directories and do not replace a worktree with an ad-hoc full clone.
+
+Before retiring a worktree or branch, prove the working tree is clean, push or otherwise preserve every unique commit, confirm the related PR is merged or closed, and check that no open PR uses the branch. Then remove the worktree with `git worktree remove`, delete the local branch, prune remote references, and run `git worktree prune`. Never use forced removal to bypass uncommitted work.
+
+Merged remote branches should be deleted immediately; repository settings must keep automatic branch deletion after merge enabled. Long-lived branches are limited to `main` plus explicitly documented release or recovery branches. Archive branches must use the `archive/` prefix, name the preserved commit or incident, and be removed after the recovery decision is recorded.
+
+At the start and end of parallel work, run `git worktree list`, `git branch -vv`, and `git fetch --prune origin`. Broken `prunable` entries, gone upstreams, inactive worktrees, and merged branches are cleanup defects, not permanent workspace state.
+
 ### Ticket implementation workflow
 
 Every implementation Ticket must start by loading and following the workspace Matt Pocock `implement` skill at `.agents/skills/implement/SKILL.md`. Use its TDD guidance at pre-agreed seams, review the completed Ticket with the workspace `code-review` skill, and commit the Ticket to the current branch.

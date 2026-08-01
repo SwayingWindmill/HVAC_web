@@ -1,6 +1,7 @@
 {
   "exclude": [
     ".worktrees/",
+    ".clones/",
     ".scratch/",
     "hvac-backend/",
     "references/",
