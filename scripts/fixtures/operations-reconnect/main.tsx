@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import type { ProtectedScopeResource } from '@/real/protected-scope';
@@ -56,14 +56,28 @@ const principal = {
 } as unknown as CurrentPrincipalResponse;
 
 let protectedResource: ProtectedScopeResource | null = null;
-Reflect.set(globalThis, '__OPERATIONS_RECONNECT_AUDIT__', {
-  protectedResourceId: () => protectedResource?.id ?? null,
-  purge: async () => protectedResource?.purge(),
-});
 
-createRoot(document.getElementById('root')!).render(
-  <main className="real-route-surface" data-testid="operations-reconnect-audit-root">
+function AuditApp() {
+  const [locationKey, setLocationKey] = useState(() => `${window.location.pathname}${window.location.search}`);
+
+  useEffect(() => {
+    const updateLocation = () => setLocationKey(`${window.location.pathname}${window.location.search}`);
+    window.addEventListener('popstate', updateLocation);
+    return () => window.removeEventListener('popstate', updateLocation);
+  }, []);
+
+  if (window.location.pathname !== '/operations') {
+    return (
+      <section className="real-route-surface" data-testid="operations-route-left">
+        <h1>Route left</h1>
+        <p>The Operations projection is unmounted.</p>
+      </section>
+    );
+  }
+
+  return (
     <OperationsInvestigation
+      key={locationKey}
       site={site}
       principal={principal}
       registerProtectedResource={(resource) => {
@@ -73,5 +87,20 @@ createRoot(document.getElementById('root')!).render(
         };
       }}
     />
+  );
+}
+
+Reflect.set(globalThis, '__OPERATIONS_RECONNECT_AUDIT__', {
+  protectedResourceId: () => protectedResource?.id ?? null,
+  purge: async () => protectedResource?.purge(),
+  navigate: (target: string) => {
+    window.history.pushState(null, '', target);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  },
+});
+
+createRoot(document.getElementById('root')!).render(
+  <main className="real-route-surface" data-testid="operations-reconnect-audit-root">
+    <AuditApp />
   </main>,
 );

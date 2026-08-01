@@ -4,7 +4,7 @@ Status: accepted plan
 
 Date: 2026-07-31
 
-Tracking: GitHub Map #118; Maps 0–2 are merged through PR #149. Map 3 Runtime recovery (#151), authoritative Owner READ adapters (#152), deterministic night-energy comparison/readiness validation (#153), typed business-record persistence (#154) and Platform Gateway exposure (#155) are complete. Map 4.1 AG-UI projection (#174) and Map 4.2 reconnect recovery (#175) are complete; Map 4.3 Plan, Evidence and Findings Workspace (#176) is implemented on the current branch.
+Tracking: GitHub Map #118; Maps 0–3 are complete. Map 4.1 AG-UI projection (#174), Map 4.2 reconnect recovery (#175), Map 4.3 Plan, Evidence and Findings Workspace (#176), and Map 4.4 bounded Operator Input interrupt/resume (#177) are complete. Map 4.5 primary Operations Workspace and the Map 4 completion gate are tracked by #178.
 
 This plan turns ADR 0009, ADR 0010 and the accepted modular architecture into an implementation sequence. It deliberately starts with deletion of the retired Python Agent, then establishes an executable benchmark before introducing the TypeScript runtime.
 
@@ -263,6 +263,14 @@ Map 4.2 status: implemented by Ticket #175. Long-lived push publication is not r
 Map 4.3 implements the project-owned Operations Investigation Workspace. Platform Gateway now exposes a bounded, Site-scoped Investigation index in stable descending order and validates exact typed Evidence, Analysis Reference, Finding, Tool Receipt and REQUIRED_NEXT contracts before forwarding them. The Vite Real Shell renders URL-addressable list/detail navigation, authoritative Plan progress, Owner provenance, Dataset/Registry revisions, Watermarks, Partial and Quality state, deterministic-analysis identities, Site-only Finding boundaries and explicit unable-to-conclude blockers. Full Tool Receipts are loaded only when their detail Revision exactly matches the AG-UI snapshot Revision, and reconnect/browser tests prove durable record identities are not duplicated. Supported Site Findings are explicitly prevented from being presented as Equipment root cause; Equipment attribution insufficiency remains a typed REQUIRED_NEXT path.
 
 Map 4.3 status: implemented by Ticket #176.
+
+Map 4.4 adds one bounded, versioned Operator Input interrupt to the authoritative Investigation lifecycle. A waiting request releases the Agent Run Lease, accepted input commits as a typed business record with Operator authorization provenance, and the same Run resumes only after the Investigation Revision, record, Outbox and Audit commit atomically. Exact retries reuse the original request, record and lease identities across ambiguous responses and process restart. The Workspace renders the fixed form from the committed projection and never accepts arbitrary prompts or browser-owned durable facts.
+
+Map 4.4 status: implemented by Ticket #177 through merged PRs #195 and #197.
+
+Map 4.5 makes `/sites/{siteId}/operations` the explicit primary Agent experience in the existing Real Shell. Site navigation and Dashboard both lead to the URL-addressable Workspace; the global or Demo assistant remains outside the Real graph and cannot own Investigation facts. The Workspace creates, opens, advances, cancels, reconnects and resumes only through Platform Gateway. Route leave, Site scope purge, logout and reload abort or discard protected projection state, then rebuild from the authoritative list/detail/event contracts. Browser certification covers supported and unable outcomes, nondiscoverability, duplicate-event recovery, Operator Input exact retry, cancellation, terminal reload and route-leave purge without a separate Next.js Runtime.
+
+Map 4.5 status: implemented by Ticket #178.
 
 Completion gate:
 

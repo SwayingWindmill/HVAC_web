@@ -19,6 +19,7 @@ export interface RealNavigationItem {
   path: string;
   kind: 'link' | 'not-integrated';
   degraded: boolean;
+  primary?: boolean;
 }
 
 export type RouteDecision =

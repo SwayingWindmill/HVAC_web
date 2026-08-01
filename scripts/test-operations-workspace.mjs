@@ -240,6 +240,48 @@ test('scoped Operations API lists only exact authorized Site summaries', async (
   );
 });
 
+test('scoped Operations API cancels the selected Investigation through the authoritative mutation route', async () => {
+  const { cancelSiteNightEnergyInvestigation } = await loadBundledModule('apps/hvac-web/src/api/operations.ts');
+  const cancelled = {
+    ...investigation,
+    status: 'CANCELLED',
+    activeRun: null,
+    outcome: null,
+    toolReceipts: [],
+  };
+  const requests = [];
+  const fetchImplementation = async (input, init) => {
+    requests.push({ input: String(input), init });
+    return new Response(JSON.stringify(cancelled), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  const result = await cancelSiteNightEnergyInvestigation(investigation.id, {
+    trustedOrganizationId: investigation.scope.organizationId,
+    trustedSiteId: investigation.scope.siteId,
+    csrfToken: '[REDACTED_SECRET]',
+    fetchImplementation,
+  });
+  assert.equal(result.status, 'CANCELLED');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].input, '/api/v1/sites/site-001/operations/investigations/investigation-001:cancel');
+  assert.equal(requests[0].init.method, 'POST');
+  assert.equal(requests[0].init.credentials, 'same-origin');
+  assert.equal(new Headers(requests[0].init.headers).get('X-CSRF-Token'), '[REDACTED_SECRET]');
+  assert.equal(requests[0].init.body, '{}');
+
+  await assert.rejects(
+    cancelSiteNightEnergyInvestigation(investigation.id, {
+      trustedOrganizationId: 'organization-other',
+      trustedSiteId: investigation.scope.siteId,
+      csrfToken: '[REDACTED_SECRET]',
+      fetchImplementation,
+    }),
+    /超出当前已验证 Site Scope/u,
+  );
+});
+
 test('Operations Workspace accepts one bounded waiting Request and rejects forged Operator Input state', async () => {
   const {
     operationsInvestigationViewSchema,
@@ -575,15 +617,28 @@ test('Real Site shell resolves a URL Operations route backed by CopilotKit Headl
   );
   assert.deepEqual(routingModule.resolveSiteRouting(path, [site], []), { state: 'FORBIDDEN' });
 
-  const [shell, workspace, agent] = await Promise.all([
+  const [shell, workspace, agent, dashboard, realEntry, realApp, demoEntry] = await Promise.all([
     readFile('apps/hvac-web/src/real/SiteScopedShell.tsx', 'utf8'),
     readFile('apps/hvac-web/src/real/OperationsInvestigation.tsx', 'utf8'),
     readFile('apps/hvac-web/src/real/operations/OperationsInvestigationAgent.ts', 'utf8'),
+    readFile('apps/hvac-web/src/real/RealDashboard.tsx', 'utf8'),
+    readFile('apps/hvac-web/src/real/main.tsx', 'utf8'),
+    readFile('apps/hvac-web/src/real/RealApp.tsx', 'utf8'),
+    readFile('apps/hvac-web/src/demo/main.tsx', 'utf8'),
   ]);
   assert.match(shell, /siteRoute\(site, 'operations'\)/u);
+  assert.match(shell, /label: 'Operations Workspace'/u);
+  assert.match(shell, /primary: true/u);
   assert.match(shell, /<OperationsInvestigation/u);
+  assert.match(dashboard, /real-dashboard-open-operations/u);
   assert.match(workspace, /<CopilotKit/u);
   assert.match(workspace, /registerProtectedResource/u);
+  assert.match(workspace, /cancelSiteNightEnergyInvestigation/u);
+  assert.match(workspace, /data-primary-agent-experience="true"/u);
   assert.match(agent, /streamSiteNightEnergyInvestigationEvents/u);
-  assert.doesNotMatch(workspace, /HvacMockAgent|readAiSnapshot|mock telemetry/iu);
+  assert.doesNotMatch(
+    `${realEntry}\n${realApp}\n${shell}\n${workspace}\n${agent}`,
+    /HvacMockAgent|AiProvider|GlobalAiAssistant|useAiHistory|localStorage|mock telemetry|variant="popup"/iu,
+  );
+  assert.match(demoEntry, /AiProvider/u);
 });

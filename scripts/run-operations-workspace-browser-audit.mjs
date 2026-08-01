@@ -19,6 +19,7 @@ const siteId = '01910000-0001-7000-8000-000000000001';
 const investigationId = 'investigation-browser-001';
 const unableInvestigationId = 'investigation-browser-unable';
 const operatorInputInvestigationId = 'investigation-browser-operator-input';
+const cancelInvestigationId = 'investigation-browser-cancel';
 const hiddenInvestigationId = 'hidden-investigation';
 const digest = (character) => `sha256:${character.repeat(64)}`;
 
@@ -428,14 +429,20 @@ function createGatewayFixture() {
   let operatorInputAccepted = false;
   let operatorInputRetryAcknowledged = false;
   let operatorInputIdempotencyKey = null;
+  let cancelAccepted = false;
+  let cancelRequestCount = 0;
   const operatorInputSubmissions = [];
   const collectionPath = `/api/v1/sites/${siteId}/operations/investigations`;
   const itemPrefix = `${collectionPath}/`;
   const operatorInputSubmitPath = `${itemPrefix}${operatorInputInvestigationId}:submit-operator-input`;
+  const cancelPath = `${itemPrefix}${cancelInvestigationId}:cancel`;
   const currentSupported = () => supportedEventRequestCount >= 3
     ? investigation(investigationId, 2, 'COMPLETED', 'SUPPORTED_SITE_FINDING', [stableActivity, finalActivity])
     : investigation(investigationId, 1, 'RUNNING', null, [stableActivity]);
   const unable = investigation(unableInvestigationId, 5, 'COMPLETED', 'UNABLE_TO_CONCLUDE', [stableActivity]);
+  const currentCancel = () => cancelAccepted
+    ? investigation(cancelInvestigationId, 4, 'CANCELLED', null, [stableActivity])
+    : investigation(cancelInvestigationId, 3, 'RUNNING', null, [stableActivity]);
   const currentOperatorInput = () => {
     if (!operatorInputRetryAcknowledged) {
       return investigation(operatorInputInvestigationId, 7, 'WAITING_FOR_OPERATOR_INPUT', null, [stableActivity]);
@@ -496,6 +503,19 @@ function createGatewayFixture() {
       });
       return;
     }
+    if (request.method === 'POST' && url.pathname === cancelPath) {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      if (Object.keys(body).length !== 0) {
+        problem(response, 400, 'REQUEST_INVALID', 'Cancel accepts an empty bounded object.', false);
+        return;
+      }
+      cancelRequestCount += 1;
+      cancelAccepted = true;
+      json(response, currentCancel());
+      return;
+    }
     if (request.method === 'POST' && url.pathname === operatorInputSubmitPath) {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
@@ -539,7 +559,8 @@ function createGatewayFixture() {
     const requestedId = decodeURIComponent(encodedId);
     if (requestedId !== investigationId
       && requestedId !== unableInvestigationId
-      && requestedId !== operatorInputInvestigationId) {
+      && requestedId !== operatorInputInvestigationId
+      && requestedId !== cancelInvestigationId) {
       hiddenRequestCount += 1;
       problem(response, 404, 'RESOURCE_NOT_FOUND', 'The Investigation is not visible.', false);
       return;
@@ -549,7 +570,37 @@ function createGatewayFixture() {
         ? currentSupported()
         : requestedId === unableInvestigationId
           ? unable
-          : currentOperatorInput());
+          : requestedId === operatorInputInvestigationId
+            ? currentOperatorInput()
+            : currentCancel());
+      return;
+    }
+
+    if (requestedId === cancelInvestigationId) {
+      const view = currentCancel();
+      const current = stream(
+        cancelInvestigationId,
+        view.revision,
+        view.status,
+        view.outcome,
+        view.toolReceipts.map((receipt) => ({
+          recordId: receipt.id,
+          logicalTool: receipt.logicalTool,
+          owner: receipt.owner,
+          resultCategory: receipt.resultCategory,
+          startedAt: receipt.startedAt,
+          completedAt: receipt.completedAt,
+        })),
+      );
+      response.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-store, no-transform',
+        'x-operations-recovery-mode': 'FULL_SNAPSHOT',
+        'x-operations-recovery-reason': 'INITIAL',
+        'x-operations-snapshot-position': `${view.revision}:1`,
+        'x-operations-latest-position': current.latest,
+      });
+      response.end(current.body);
       return;
     }
 
@@ -623,6 +674,7 @@ function createGatewayFixture() {
     server,
     requests,
     operatorInputSubmissions,
+    cancelRequests: () => cancelRequestCount,
     hiddenRequests: () => hiddenRequestCount,
     listRequests: () => listRequestCount,
   };
@@ -730,7 +782,7 @@ try {
   const viteAddress = viteServer.httpServer?.address();
   assert(viteAddress && typeof viteAddress === 'object', 'Vite fixture server has no address');
   const viteOrigin = `http://127.0.0.1:${viteAddress.port}`;
-  const webURL = `${viteOrigin}/?investigation=${investigationId}`;
+  const webURL = `${viteOrigin}/operations?investigation=${investigationId}`;
 
   browserProcess = spawn(browserPath, [
     '--headless=new',
@@ -946,17 +998,89 @@ try {
   }
   assertions.push('unable-to-conclude-required-next');
 
-  await evaluate(cdpClient, 'globalThis.__OPERATIONS_RECONNECT_AUDIT__.purge()');
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    const purged = await evaluate(cdpClient, `!document.querySelector('.operations-workspace')`);
-    if (purged) break;
-    if (attempt === 49) throw new Error('protected resource purge did not remove the Investigation projection');
+  await evaluate(cdpClient, `globalThis.__OPERATIONS_RECONNECT_AUDIT__.navigate('/operations?investigation=${cancelInvestigationId}')`);
+  let cancelRunning = null;
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    cancelRunning = await evaluate(cdpClient, `({
+      status: document.querySelector('.operations-workspace')?.getAttribute('data-investigation-status') ?? null,
+      cancelDisabled: document.querySelector('[data-testid="operations-cancel"]')?.disabled ?? true,
+      primary: document.querySelector('[data-primary-agent-experience="true"]')?.getAttribute('data-primary-agent-experience') ?? null,
+      protectedResourceId: globalThis.__OPERATIONS_RECONNECT_AUDIT__?.protectedResourceId(),
+    })`);
+    if (cancelRunning.status === 'RUNNING'
+      && !cancelRunning.cancelDisabled
+      && cancelRunning.primary === 'true'
+      && cancelRunning.protectedResourceId === `operations-investigation:${siteId}:${cancelInvestigationId}`) break;
+    await pause(100);
+  }
+  assert(cancelRunning?.status === 'RUNNING' && !cancelRunning.cancelDisabled, `cancellable Investigation did not stabilize: ${JSON.stringify(cancelRunning)}`);
+  await evaluate(cdpClient, `document.querySelector('[data-testid="operations-cancel"]').click()`);
+
+  let cancelledState = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    cancelledState = await evaluate(cdpClient, `({
+      connection: document.querySelector('.operations-connection')?.getAttribute('data-connection-status') ?? null,
+      status: document.querySelector('.operations-workspace')?.getAttribute('data-investigation-status') ?? null,
+      cancelDisabled: document.querySelector('[data-testid="operations-cancel"]')?.disabled ?? false,
+      advanceDisabled: document.querySelector('[data-testid="operations-advance"]')?.disabled ?? false,
+    })`);
+    if (cancelledState.connection === 'TERMINAL'
+      && cancelledState.status === 'CANCELLED'
+      && cancelledState.cancelDisabled
+      && cancelledState.advanceDisabled) break;
+    await pause(100);
+  }
+  assert(cancelledState?.status === 'CANCELLED' && cancelledState.connection === 'TERMINAL', `cancelled Investigation did not stabilize: ${JSON.stringify(cancelledState)}`);
+  assert(fixture.cancelRequests() === 1, `cancel mutation executed ${fixture.cancelRequests()} times`);
+
+  await cdpClient.send('Page.reload', { ignoreCache: true });
+  let terminalReload = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    terminalReload = await evaluate(cdpClient, `({
+      connection: document.querySelector('.operations-connection')?.getAttribute('data-connection-status') ?? null,
+      status: document.querySelector('.operations-workspace')?.getAttribute('data-investigation-status') ?? null,
+      href: location.href,
+    })`).catch((error) => ({ error: String(error) }));
+    if (terminalReload.connection === 'TERMINAL'
+      && terminalReload.status === 'CANCELLED'
+      && terminalReload.href.includes(`investigation=${cancelInvestigationId}`)) break;
+    await pause(100);
+  }
+  assert(terminalReload?.status === 'CANCELLED' && terminalReload.connection === 'TERMINAL', `terminal reload did not rebuild the cancelled Investigation: ${JSON.stringify(terminalReload)}`);
+  assert(fixture.cancelRequests() === 1, 'terminal reload repeated the cancel mutation');
+
+  await evaluate(cdpClient, `globalThis.__OPERATIONS_RECONNECT_AUDIT__.navigate('/dashboard')`);
+  let routeLeft = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    routeLeft = await evaluate(cdpClient, `({
+      left: Boolean(document.querySelector('[data-testid="operations-route-left"]')),
+      workspace: Boolean(document.querySelector('.operations-workspace')),
+      protectedResourceId: globalThis.__OPERATIONS_RECONNECT_AUDIT__?.protectedResourceId(),
+    })`);
+    if (routeLeft.left && !routeLeft.workspace && routeLeft.protectedResourceId === null) break;
     await pause(50);
   }
-  assertions.push('protected-resource-purge');
+  assert(routeLeft?.left && !routeLeft.workspace && routeLeft.protectedResourceId === null, `route leave did not purge protected Operations state: ${JSON.stringify(routeLeft)}`);
+
+  await evaluate(cdpClient, `globalThis.__OPERATIONS_RECONNECT_AUDIT__.navigate('/operations?investigation=${cancelInvestigationId}')`);
+  let returnedTerminal = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    returnedTerminal = await evaluate(cdpClient, `({
+      connection: document.querySelector('.operations-connection')?.getAttribute('data-connection-status') ?? null,
+      status: document.querySelector('.operations-workspace')?.getAttribute('data-investigation-status') ?? null,
+      protectedResourceId: globalThis.__OPERATIONS_RECONNECT_AUDIT__?.protectedResourceId(),
+    })`);
+    if (returnedTerminal.connection === 'TERMINAL'
+      && returnedTerminal.status === 'CANCELLED'
+      && returnedTerminal.protectedResourceId === `operations-investigation:${siteId}:${cancelInvestigationId}`) break;
+    await pause(100);
+  }
+  assert(returnedTerminal?.status === 'CANCELLED' && returnedTerminal.connection === 'TERMINAL', `route return did not rebuild authoritative terminal state: ${JSON.stringify(returnedTerminal)}`);
+  assert(fixture.cancelRequests() === 1, 'route return repeated the cancel mutation');
+  assertions.push('cancel-terminal-reload-and-route-leave-purge');
 
   await cdpClient.send('Page.navigate', {
-    url: `${viteOrigin}/?investigation=${hiddenInvestigationId}`,
+    url: `${viteOrigin}/operations?investigation=${hiddenInvestigationId}`,
   });
   let nondiscoverableVisible = false;
   let hiddenDiagnostic = null;
@@ -985,6 +1109,7 @@ try {
     assertions,
     requests: fixture.requests,
     operatorInputSubmissions: fixture.operatorInputSubmissions,
+    cancelRequestCount: fixture.cancelRequests(),
     listRequestCount: fixture.listRequests(),
     hiddenRequestCount: fixture.hiddenRequests(),
     finalState: {
@@ -995,12 +1120,13 @@ try {
       analysisCount: supportedState.analysisCount,
       findingCount: supportedState.findingCount,
       requiredNextCount: unableState.requiredNextCount,
+      cancelledInvestigation: returnedTerminal.status,
     },
     safety: {
       productionTrafficPercent: 0,
       localOnly: true,
       duplicateDurableRecords: false,
-      businessWrites: 1,
+      businessWrites: 2,
       exactRetryBusinessWrites: 0,
       rawPointsRendered: false,
       equipmentRootCauseClaimed: false,
@@ -1026,6 +1152,7 @@ try {
       generatedAt: new Date().toISOString(),
       assertions,
       requests: fixture.requests,
+      cancelRequestCount: fixture.cancelRequests(),
       listRequestCount: fixture.listRequests(),
       hiddenRequestCount: fixture.hiddenRequests(),
     }, null, 2));

@@ -48,6 +48,21 @@
   flex: 1;
 }
 
+.operations-cancel {
+  border-color: #b64a43;
+  background: #fff;
+  color: #8d302b;
+}
+
+.operations-cancel:focus-visible {
+  outline: 3px solid rgba(182, 74, 67, 0.25);
+  outline-offset: 2px;
+}
+
+.operations-cancel:disabled {
+  opacity: 0.55;
+}
+
 .operations-connection {
   display: flex;
   align-items: center;

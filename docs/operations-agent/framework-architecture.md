@@ -549,11 +549,11 @@ apps/hvac-web/src/features/operations-agent/
 └── copilot/
 ```
 
-CopilotKit hooks and primitives provide conversation and Agent interaction. Project components own domain presentation and accessibility. The main surface is the Investigation workspace, not a popup-only chatbot.
+CopilotKit Headless hooks and primitives provide the transport-facing Agent interaction seam. Project components own domain presentation, accessibility and operator controls. The main surface is the Investigation Workspace, not a popup-only chatbot; browser chat history, popup state and Demo mock agents are not durable-state owners and are excluded from the Real build graph.
 
-The first Site-scoped Real Shell surface is available at `/sites/{siteId}/operations`. It creates or opens one authorized Investigation, runs a self-managed CopilotKit Headless agent against the Gateway event endpoint and renders Plan progress, committed Evidence, committed Findings and bounded read-only Tool activity with project-owned components. The stream is registered as protected Site state so Site change, logout or policy-driven purge aborts the Agent run and clears the projection.
+The primary Site-scoped Real Shell Agent surface is available at `/sites/{siteId}/operations` and is linked directly from Site navigation and Dashboard. It creates, opens, advances or cancels one authorized Investigation through Platform Gateway, runs a self-managed CopilotKit Headless agent against the Gateway event endpoint and renders Plan progress, committed Evidence, Analysis References, Findings, bounded read-only Tool activity and typed Operator Input with project-owned components. The stream is registered as protected Site state so Site change, logout, policy-driven purge or route leave aborts the Agent run and clears the projection.
 
-Frontend state is a projection. Reload and reconnect must recover from the authoritative Investigation API rather than relying only on local CopilotKit state.
+Frontend state is a projection. Reload, reconnect and route return recover from the authoritative Investigation list, detail and event APIs rather than relying on local CopilotKit state. A terminal reload performs no repeat mutation, and cancellation remains a governed server mutation rather than a local UI status change.
 
 ## 12. Scheduling module
 

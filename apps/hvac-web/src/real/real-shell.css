@@ -315,6 +315,12 @@
   text-decoration: none;
 }
 
+.real-shell-navigation a[data-feature-primary="true"] {
+  border: 1px solid #b8d9de;
+  background: #f2f9fa;
+  color: #164f57;
+}
+
 .real-shell-navigation a:hover,
 .real-shell-navigation a[aria-current="page"] {
   background: #e6f4ff;
@@ -334,6 +340,10 @@
   color: #667085;
   font-size: 10px;
   white-space: nowrap;
+}
+
+.real-shell-navigation a[data-feature-primary="true"] small {
+  color: #176d77;
 }
 
 .real-shell-content {
