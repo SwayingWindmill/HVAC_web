@@ -62,14 +62,14 @@ INSERT INTO work_order_runtime.work_order_source_reference (
 
 INSERT INTO work_order_runtime.work_order_timeline (
   organization_id, site_id, work_order_id, version, operation, from_status, to_status,
-  reason, actor_type, actor_id, policy_revision, correlation_id, occurred_at
+  reason, actor_type, actor_id, assignee_id, team_id, policy_revision, correlation_id, occurred_at
 ) VALUES
-('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000001', '01920000-1000-7000-8000-000000000001', 1, 'CREATE', NULL, 'OPEN', 'created from authoritative Alarm', 'PRINCIPAL', 'principal:operator-a', 'work-order-policy-1', 'correlation-wo-1', '2026-08-01T09:00:00Z'),
-('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000001', '01920000-1000-7000-8000-000000000002', 1, 'CREATE', NULL, 'OPEN', 'created by operator', 'PRINCIPAL', 'principal:operator-b', 'work-order-policy-1', 'correlation-wo-2-create', '2026-08-01T08:00:00Z'),
-('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000001', '01920000-1000-7000-8000-000000000002', 2, 'START', 'OPEN', 'IN_PROGRESS', 'calibration started', 'PRINCIPAL', 'principal:operator-b', 'work-order-policy-2', 'correlation-wo-2-start', '2026-08-01T11:00:00Z'),
-('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000002', '01920000-1000-7000-8000-000000000003', 1, 'CREATE', NULL, 'OPEN', 'created from authoritative Alarm', 'PRINCIPAL', 'principal:operator-c', 'work-order-policy-1', 'correlation-wo-3-create', '2026-07-31T00:00:00Z'),
-('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000002', '01920000-1000-7000-8000-000000000003', 2, 'COMPLETE', 'OPEN', 'COMPLETED', 'filter replacement verified', 'PRINCIPAL', 'principal:operator-c', 'work-order-policy-2', 'correlation-wo-3-complete', '2026-07-31T02:00:00Z'),
-('01920000-0000-7000-8000-000000000002', '01920000-0001-7000-8000-000000000003', '01920000-1000-7000-8000-000000000004', 1, 'CREATE', NULL, 'OPEN', 'created from external request', 'PRINCIPAL', 'principal:operator-d', 'work-order-policy-1', 'correlation-wo-4', '2026-08-01T07:00:00Z');
+('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000001', '01920000-1000-7000-8000-000000000001', 1, 'CREATE', NULL, 'OPEN', 'created from authoritative Alarm', 'PRINCIPAL', 'principal:operator-a', 'principal:operator-a', 'team:mechanical', 'work-order-policy-1', 'correlation-wo-1', '2026-08-01T09:00:00Z'),
+('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000001', '01920000-1000-7000-8000-000000000002', 1, 'CREATE', NULL, 'OPEN', 'created by operator', 'PRINCIPAL', 'principal:operator-b', 'principal:operator-b', 'team:controls', 'work-order-policy-1', 'correlation-wo-2-create', '2026-08-01T08:00:00Z'),
+('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000001', '01920000-1000-7000-8000-000000000002', 2, 'START', 'OPEN', 'IN_PROGRESS', 'calibration started', 'PRINCIPAL', 'principal:operator-b', NULL, NULL, 'work-order-policy-2', 'correlation-wo-2-start', '2026-08-01T11:00:00Z'),
+('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000002', '01920000-1000-7000-8000-000000000003', 1, 'CREATE', NULL, 'OPEN', 'created from authoritative Alarm', 'PRINCIPAL', 'principal:operator-c', NULL, 'team:mechanical', 'work-order-policy-1', 'correlation-wo-3-create', '2026-07-31T00:00:00Z'),
+('01920000-0000-7000-8000-000000000001', '01920000-0001-7000-8000-000000000002', '01920000-1000-7000-8000-000000000003', 2, 'COMPLETE', 'OPEN', 'COMPLETED', 'filter replacement verified', 'PRINCIPAL', 'principal:operator-c', NULL, NULL, 'work-order-policy-2', 'correlation-wo-3-complete', '2026-07-31T02:00:00Z'),
+('01920000-0000-7000-8000-000000000002', '01920000-0001-7000-8000-000000000003', '01920000-1000-7000-8000-000000000004', 1, 'CREATE', NULL, 'OPEN', 'created from external request', 'PRINCIPAL', 'principal:operator-d', NULL, NULL, 'work-order-policy-1', 'correlation-wo-4', '2026-08-01T07:00:00Z');
 
 INSERT INTO work_order_runtime.work_order_task (
   organization_id, site_id, work_order_id, task_id, position, title, status, version, created_at, updated_at

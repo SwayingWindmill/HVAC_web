@@ -22,6 +22,7 @@ func TestMemoryStoreFiltersAndPaginatesDeterministically(t *testing.T) {
 	third := validWorkOrder("01910000-5000-7000-8000-000000000003", testOrganizationID, testSiteID, "2026-08-01T00:00:00Z")
 	assignee := "principal:operator-1"
 	second.AssigneeID = &assignee
+	second.Timeline[0].AssigneeID = &assignee
 	second.Priority = workordermodel.PriorityUrgent
 	store, err := NewMemoryStore([]workordermodel.WorkOrder{third, first, second})
 	if err != nil {

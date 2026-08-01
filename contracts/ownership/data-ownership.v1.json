@@ -1,124 +1,807 @@
 {
   "registryVersion": 1,
-  "registryRevision": 19,
+  "registryRevision": 20,
   "resources": [
-    { "kind": "schema", "name": "gateway", "writer": "platform-gateway", "revision": 1 },
-    { "kind": "schema", "name": "audit_ledger", "writer": "audit-ledger-service", "revision": 1 },
-    { "kind": "schema", "name": "legacy", "writer": "legacy-hvac-backend", "revision": 1 },
-    { "kind": "schema", "name": "iam", "writer": "iam-service", "revision": 1 },
-    { "kind": "schema", "name": "core_registry", "writer": "platform-core-service", "revision": 1 },
-    { "kind": "schema", "name": "telemetry_runtime", "writer": "telemetry-runtime-service", "revision": 1 },
-    { "kind": "schema", "name": "command_runtime", "writer": "command-service", "revision": 1 },
-    { "kind": "schema", "name": "alarm_runtime", "writer": "alarm-service", "revision": 1 },
-    { "kind": "schema", "name": "work_order_runtime", "writer": "work-order-service", "revision": 1 },
-    { "kind": "schema", "name": "telemetry_history", "writer": "telemetry-history-projector", "revision": 1, "database": "clickhouse" },
-    { "kind": "schema", "name": "analytics", "writer": "analytics-read-model-projector", "revision": 1, "database": "clickhouse" },
-    { "kind": "event-family", "name": "hvac.security.session.v1", "writer": "platform-gateway", "revision": 1 },
-    { "kind": "event-family", "name": "hvac.routing.decision.v1", "writer": "platform-gateway", "revision": 1 },
-    { "kind": "event-family", "name": "hvac.telemetry.device-snapshot.v1", "writer": "telemetry-runtime-service", "revision": 1 },
-    { "kind": "event-family", "name": "hvac.command.lifecycle.v1", "writer": "command-service", "revision": 1 },
-    { "kind": "event-family", "name": "hvac.alarm.lifecycle.v1", "writer": "alarm-service", "revision": 1 },
-    { "kind": "event-family", "name": "hvac.work-order.lifecycle.v1", "writer": "work-order-service", "revision": 1 },
-    { "kind": "projection", "name": "audit-session-record", "writer": "audit-ledger-service", "revision": 1 },
-    { "kind": "projection", "name": "gateway-route-audit", "writer": "platform-gateway", "revision": 1 },
-    { "kind": "projection", "name": "iam-registry-read-decision", "writer": "iam-service", "revision": 1 },
-    { "kind": "projection", "name": "iam-registry-grant-revocation", "writer": "iam-service", "revision": 1 },
-    { "kind": "projection", "name": "iam-telemetry-authorization-decision", "writer": "iam-service", "revision": 1 },
-    { "kind": "projection", "name": "iam-telemetry-grant-use", "writer": "iam-service", "revision": 1 },
-    { "kind": "projection", "name": "iam-telemetry-revocation-fact", "writer": "iam-service", "revision": 1 },
-    { "kind": "projection", "name": "iam-alarm-permission", "writer": "iam-service", "revision": 1 },
-    { "kind": "projection", "name": "iam-alarm-authorization-decision", "writer": "iam-service", "revision": 1 },
-    { "kind": "projection", "name": "iam-work-order-permission", "writer": "iam-service", "revision": 1 },
-    { "kind": "projection", "name": "iam-work-order-authorization-decision", "writer": "iam-service", "revision": 1 },
-    { "kind": "projection", "name": "iam-onboarding-reconciliation", "writer": "iam-service", "revision": 1 },
-    { "kind": "projection", "name": "iam-reconciliation-quarantine", "writer": "iam-service", "revision": 1 },
-    { "kind": "projection", "name": "device-runtime-binding", "writer": "telemetry-runtime-service", "revision": 1, "sourceOwner": "platform-core-service" },
-    { "kind": "projection", "name": "presence-policy", "writer": "telemetry-runtime-service", "revision": 1 },
-    { "kind": "projection", "name": "presence-signal", "writer": "telemetry-runtime-service", "revision": 1 },
-    { "kind": "projection", "name": "observation-coverage", "writer": "telemetry-runtime-service", "revision": 1 },
-    { "kind": "projection", "name": "freshness-policy", "writer": "telemetry-runtime-service", "revision": 1 },
-    { "kind": "projection", "name": "latest-accepted-telemetry", "writer": "telemetry-runtime-service", "revision": 1 },
-    { "kind": "projection", "name": "device-presence", "writer": "telemetry-runtime-service", "revision": 1 },
-    { "kind": "projection", "name": "device-observation-snapshot", "writer": "telemetry-runtime-service", "revision": 1 },
-    { "kind": "projection", "name": "source-observation-evidence", "writer": "telemetry-runtime-service", "revision": 1 },
-    { "kind": "projection", "name": "ingest-deduplication", "writer": "telemetry-runtime-service", "revision": 2 },
-    { "kind": "projection", "name": "ingest-quarantine", "writer": "telemetry-runtime-service", "revision": 2 },
-    { "kind": "outbox", "name": "telemetry-publication-outbox", "writer": "telemetry-runtime-service", "relay": "outbox-relay", "revision": 1 },
-    { "kind": "projection", "name": "command-intent", "writer": "command-service", "revision": 1 },
-    { "kind": "projection", "name": "command-attempt", "writer": "command-service", "revision": 1 },
-    { "kind": "projection", "name": "command-transition", "writer": "command-service", "revision": 1 },
-    { "kind": "projection", "name": "command-idempotency", "writer": "command-service", "revision": 1 },
-    { "kind": "projection", "name": "command-authorization-snapshot", "writer": "command-service", "revision": 1 },
-    { "kind": "projection", "name": "command-risk-snapshot", "writer": "command-service", "revision": 1 },
-    { "kind": "projection", "name": "command-approval-snapshot", "writer": "command-service", "revision": 1 },
-    { "kind": "projection", "name": "command-capability-profile", "writer": "command-service", "revision": 1 },
-    { "kind": "projection", "name": "device-control-state", "writer": "command-service", "revision": 1 },
-    { "kind": "projection", "name": "command-audit-intent", "writer": "command-service", "revision": 1 },
-    { "kind": "outbox", "name": "command-dispatch-outbox", "writer": "command-service", "relay": "command-dispatcher", "revision": 1 },
-    { "kind": "projection", "name": "alarm-current", "writer": "alarm-service", "revision": 1 },
-    { "kind": "projection", "name": "alarm-transition", "writer": "alarm-service", "revision": 1 },
-    { "kind": "projection", "name": "alarm-evidence", "writer": "alarm-service", "revision": 1 },
-    { "kind": "projection", "name": "alarm-occurrence-deduplication", "writer": "alarm-service", "revision": 1 },
-    { "kind": "projection", "name": "alarm-idempotency", "writer": "alarm-service", "revision": 1 },
-    { "kind": "projection", "name": "work-order-current", "writer": "work-order-service", "revision": 1 },
-    { "kind": "projection", "name": "work-order-source-reference", "writer": "work-order-service", "revision": 1 },
-    { "kind": "projection", "name": "work-order-timeline", "writer": "work-order-service", "revision": 1 },
-    { "kind": "projection", "name": "work-order-task", "writer": "work-order-service", "revision": 1 },
-    { "kind": "projection", "name": "work-order-note", "writer": "work-order-service", "revision": 1 },
-    { "kind": "projection", "name": "work-order-attachment-metadata", "writer": "work-order-service", "revision": 1 },
-    { "kind": "projection", "name": "work-order-completion-evidence", "writer": "work-order-service", "revision": 1 },
-    { "kind": "transport-store", "name": "s2-telemetry-transport-redis", "writer": "centrifugo", "revision": 1, "authority": false, "sharedWithLegacy": false },
-    { "kind": "compatibility-boundary", "name": "legacy-telemetry-timeseries", "writer": "legacy-hvac-backend", "revision": 1, "currentStateAuthority": false },
-    { "kind": "migration-dataset", "name": "s1-legacy-resource-map", "writer": "platform-core-service", "revision": 1 },
-    { "kind": "migration-dataset", "name": "s1-migration-provenance", "writer": "platform-core-service", "revision": 1 },
-    { "kind": "migration-dataset", "name": "s1-migration-quarantine", "writer": "platform-core-service", "revision": 1 },
-    { "kind": "projection", "name": "telemetry-history-observation", "writer": "telemetry-history-projector", "revision": 1, "sourceOwner": "telemetry-runtime-service" },
-    { "kind": "projection", "name": "analytics-energy-interval-fact", "writer": "analytics-read-model-projector", "revision": 1, "sourceOwner": "telemetry-history-projector" },
-    { "kind": "query-contract", "name": "analytics-energy-series-v1", "writer": "telemetry-query-service", "revision": 1, "publicIngress": "platform-gateway" },
-    { "kind": "query-contract", "name": "telemetry-device-history-v1", "writer": "telemetry-query-service", "revision": 1, "publicIngress": "platform-gateway", "source": "telemetry_history.observations" },
-    { "kind": "semantic-model", "name": "cube-energy-usage-v1", "writer": "telemetry-query-service", "revision": 1, "runtime": "cube-core", "source": "analytics.energy_interval_facts" }
+    {
+      "kind": "schema",
+      "name": "gateway",
+      "writer": "platform-gateway",
+      "revision": 1
+    },
+    {
+      "kind": "schema",
+      "name": "audit_ledger",
+      "writer": "audit-ledger-service",
+      "revision": 1
+    },
+    {
+      "kind": "schema",
+      "name": "legacy",
+      "writer": "legacy-hvac-backend",
+      "revision": 1
+    },
+    {
+      "kind": "schema",
+      "name": "iam",
+      "writer": "iam-service",
+      "revision": 1
+    },
+    {
+      "kind": "schema",
+      "name": "core_registry",
+      "writer": "platform-core-service",
+      "revision": 1
+    },
+    {
+      "kind": "schema",
+      "name": "telemetry_runtime",
+      "writer": "telemetry-runtime-service",
+      "revision": 1
+    },
+    {
+      "kind": "schema",
+      "name": "command_runtime",
+      "writer": "command-service",
+      "revision": 1
+    },
+    {
+      "kind": "schema",
+      "name": "alarm_runtime",
+      "writer": "alarm-service",
+      "revision": 1
+    },
+    {
+      "kind": "schema",
+      "name": "work_order_runtime",
+      "writer": "work-order-service",
+      "revision": 1
+    },
+    {
+      "kind": "schema",
+      "name": "telemetry_history",
+      "writer": "telemetry-history-projector",
+      "revision": 1,
+      "database": "clickhouse"
+    },
+    {
+      "kind": "schema",
+      "name": "analytics",
+      "writer": "analytics-read-model-projector",
+      "revision": 1,
+      "database": "clickhouse"
+    },
+    {
+      "kind": "event-family",
+      "name": "hvac.security.session.v1",
+      "writer": "platform-gateway",
+      "revision": 1
+    },
+    {
+      "kind": "event-family",
+      "name": "hvac.routing.decision.v1",
+      "writer": "platform-gateway",
+      "revision": 1
+    },
+    {
+      "kind": "event-family",
+      "name": "hvac.telemetry.device-snapshot.v1",
+      "writer": "telemetry-runtime-service",
+      "revision": 1
+    },
+    {
+      "kind": "event-family",
+      "name": "hvac.command.lifecycle.v1",
+      "writer": "command-service",
+      "revision": 1
+    },
+    {
+      "kind": "event-family",
+      "name": "hvac.alarm.lifecycle.v1",
+      "writer": "alarm-service",
+      "revision": 1
+    },
+    {
+      "kind": "event-family",
+      "name": "hvac.work-order.lifecycle.v1",
+      "writer": "work-order-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "audit-session-record",
+      "writer": "audit-ledger-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "gateway-route-audit",
+      "writer": "platform-gateway",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "iam-registry-read-decision",
+      "writer": "iam-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "iam-registry-grant-revocation",
+      "writer": "iam-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "iam-telemetry-authorization-decision",
+      "writer": "iam-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "iam-telemetry-grant-use",
+      "writer": "iam-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "iam-telemetry-revocation-fact",
+      "writer": "iam-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "iam-alarm-permission",
+      "writer": "iam-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "iam-alarm-authorization-decision",
+      "writer": "iam-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "iam-work-order-permission",
+      "writer": "iam-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "iam-work-order-authorization-decision",
+      "writer": "iam-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "iam-onboarding-reconciliation",
+      "writer": "iam-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "iam-reconciliation-quarantine",
+      "writer": "iam-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "device-runtime-binding",
+      "writer": "telemetry-runtime-service",
+      "revision": 1,
+      "sourceOwner": "platform-core-service"
+    },
+    {
+      "kind": "projection",
+      "name": "presence-policy",
+      "writer": "telemetry-runtime-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "presence-signal",
+      "writer": "telemetry-runtime-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "observation-coverage",
+      "writer": "telemetry-runtime-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "freshness-policy",
+      "writer": "telemetry-runtime-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "latest-accepted-telemetry",
+      "writer": "telemetry-runtime-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "device-presence",
+      "writer": "telemetry-runtime-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "device-observation-snapshot",
+      "writer": "telemetry-runtime-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "source-observation-evidence",
+      "writer": "telemetry-runtime-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "ingest-deduplication",
+      "writer": "telemetry-runtime-service",
+      "revision": 2
+    },
+    {
+      "kind": "projection",
+      "name": "ingest-quarantine",
+      "writer": "telemetry-runtime-service",
+      "revision": 2
+    },
+    {
+      "kind": "outbox",
+      "name": "telemetry-publication-outbox",
+      "writer": "telemetry-runtime-service",
+      "relay": "outbox-relay",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "command-intent",
+      "writer": "command-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "command-attempt",
+      "writer": "command-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "command-transition",
+      "writer": "command-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "command-idempotency",
+      "writer": "command-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "command-authorization-snapshot",
+      "writer": "command-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "command-risk-snapshot",
+      "writer": "command-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "command-approval-snapshot",
+      "writer": "command-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "command-capability-profile",
+      "writer": "command-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "device-control-state",
+      "writer": "command-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "command-audit-intent",
+      "writer": "command-service",
+      "revision": 1
+    },
+    {
+      "kind": "outbox",
+      "name": "command-dispatch-outbox",
+      "writer": "command-service",
+      "relay": "command-dispatcher",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "alarm-current",
+      "writer": "alarm-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "alarm-transition",
+      "writer": "alarm-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "alarm-evidence",
+      "writer": "alarm-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "alarm-occurrence-deduplication",
+      "writer": "alarm-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "alarm-idempotency",
+      "writer": "alarm-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "work-order-current",
+      "writer": "work-order-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "work-order-source-reference",
+      "writer": "work-order-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "work-order-timeline",
+      "writer": "work-order-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "work-order-task",
+      "writer": "work-order-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "work-order-note",
+      "writer": "work-order-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "work-order-attachment-metadata",
+      "writer": "work-order-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "work-order-completion-evidence",
+      "writer": "work-order-service",
+      "revision": 1
+    },
+    {
+      "kind": "transport-store",
+      "name": "s2-telemetry-transport-redis",
+      "writer": "centrifugo",
+      "revision": 1,
+      "authority": false,
+      "sharedWithLegacy": false
+    },
+    {
+      "kind": "compatibility-boundary",
+      "name": "legacy-telemetry-timeseries",
+      "writer": "legacy-hvac-backend",
+      "revision": 1,
+      "currentStateAuthority": false
+    },
+    {
+      "kind": "migration-dataset",
+      "name": "s1-legacy-resource-map",
+      "writer": "platform-core-service",
+      "revision": 1
+    },
+    {
+      "kind": "migration-dataset",
+      "name": "s1-migration-provenance",
+      "writer": "platform-core-service",
+      "revision": 1
+    },
+    {
+      "kind": "migration-dataset",
+      "name": "s1-migration-quarantine",
+      "writer": "platform-core-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "telemetry-history-observation",
+      "writer": "telemetry-history-projector",
+      "revision": 1,
+      "sourceOwner": "telemetry-runtime-service"
+    },
+    {
+      "kind": "projection",
+      "name": "analytics-energy-interval-fact",
+      "writer": "analytics-read-model-projector",
+      "revision": 1,
+      "sourceOwner": "telemetry-history-projector"
+    },
+    {
+      "kind": "query-contract",
+      "name": "analytics-energy-series-v1",
+      "writer": "telemetry-query-service",
+      "revision": 1,
+      "publicIngress": "platform-gateway"
+    },
+    {
+      "kind": "query-contract",
+      "name": "telemetry-device-history-v1",
+      "writer": "telemetry-query-service",
+      "revision": 1,
+      "publicIngress": "platform-gateway",
+      "source": "telemetry_history.observations"
+    },
+    {
+      "kind": "semantic-model",
+      "name": "cube-energy-usage-v1",
+      "writer": "telemetry-query-service",
+      "revision": 1,
+      "runtime": "cube-core",
+      "source": "analytics.energy_interval_facts"
+    },
+    {
+      "kind": "projection",
+      "name": "work-order-idempotency",
+      "writer": "work-order-service",
+      "revision": 1
+    },
+    {
+      "kind": "projection",
+      "name": "work-order-mutation-audit",
+      "writer": "work-order-service",
+      "revision": 1
+    }
   ],
   "databaseAccess": [
-    { "service": "platform-gateway", "schema": "gateway", "mode": "write" },
-    { "service": "outbox-relay", "schema": "gateway", "mode": "relay" },
-    { "service": "audit-ledger-service", "schema": "audit_ledger", "mode": "write" },
-    { "service": "audit-ledger-query", "schema": "audit_ledger", "mode": "read" },
-    { "service": "legacy-hvac-backend", "schema": "legacy", "mode": "write" },
-    { "service": "iam-service", "schema": "iam", "mode": "write" },
-    { "service": "iam-reconciler", "schema": "iam", "mode": "reconciliation" },
-    { "service": "platform-core-service", "schema": "core_registry", "mode": "write" },
-    { "service": "legacy-migration-service", "schema": "core_registry", "mode": "migration" },
-    { "service": "telemetry-runtime-service", "schema": "telemetry_runtime", "mode": "write" },
-    { "service": "outbox-relay", "schema": "telemetry_runtime", "mode": "relay", "restrictedTo": ["telemetry_publication_outbox"] },
-    { "service": "command-service", "schema": "command_runtime", "mode": "write" },
-    { "service": "alarm-service", "schema": "alarm_runtime", "mode": "write" },
-    { "service": "work-order-service", "schema": "work_order_runtime", "mode": "read" },
-    { "service": "telemetry-history-projector", "schema": "telemetry_history", "mode": "write" },
-    { "service": "analytics-read-model-projector", "schema": "telemetry_history", "mode": "read" },
-    { "service": "telemetry-query-service", "schema": "telemetry_history", "mode": "read", "restrictedTo": ["observations"] },
-    { "service": "analytics-read-model-projector", "schema": "analytics", "mode": "write" },
-    { "service": "cube-core", "schema": "analytics", "mode": "read" }
+    {
+      "service": "platform-gateway",
+      "schema": "gateway",
+      "mode": "write"
+    },
+    {
+      "service": "outbox-relay",
+      "schema": "gateway",
+      "mode": "relay"
+    },
+    {
+      "service": "audit-ledger-service",
+      "schema": "audit_ledger",
+      "mode": "write"
+    },
+    {
+      "service": "audit-ledger-query",
+      "schema": "audit_ledger",
+      "mode": "read"
+    },
+    {
+      "service": "legacy-hvac-backend",
+      "schema": "legacy",
+      "mode": "write"
+    },
+    {
+      "service": "iam-service",
+      "schema": "iam",
+      "mode": "write"
+    },
+    {
+      "service": "iam-reconciler",
+      "schema": "iam",
+      "mode": "reconciliation"
+    },
+    {
+      "service": "platform-core-service",
+      "schema": "core_registry",
+      "mode": "write"
+    },
+    {
+      "service": "legacy-migration-service",
+      "schema": "core_registry",
+      "mode": "migration"
+    },
+    {
+      "service": "telemetry-runtime-service",
+      "schema": "telemetry_runtime",
+      "mode": "write"
+    },
+    {
+      "service": "outbox-relay",
+      "schema": "telemetry_runtime",
+      "mode": "relay",
+      "restrictedTo": [
+        "telemetry_publication_outbox"
+      ]
+    },
+    {
+      "service": "command-service",
+      "schema": "command_runtime",
+      "mode": "write"
+    },
+    {
+      "service": "alarm-service",
+      "schema": "alarm_runtime",
+      "mode": "write"
+    },
+    {
+      "service": "work-order-service",
+      "schema": "work_order_runtime",
+      "mode": "write",
+      "restrictedTo": [
+        "work_order_current",
+        "work_order_source_reference",
+        "work_order_timeline",
+        "work_order_idempotency",
+        "work_order_mutation_audit"
+      ]
+    },
+    {
+      "service": "telemetry-history-projector",
+      "schema": "telemetry_history",
+      "mode": "write"
+    },
+    {
+      "service": "analytics-read-model-projector",
+      "schema": "telemetry_history",
+      "mode": "read"
+    },
+    {
+      "service": "telemetry-query-service",
+      "schema": "telemetry_history",
+      "mode": "read",
+      "restrictedTo": [
+        "observations"
+      ]
+    },
+    {
+      "service": "analytics-read-model-projector",
+      "schema": "analytics",
+      "mode": "write"
+    },
+    {
+      "service": "cube-core",
+      "schema": "analytics",
+      "mode": "read"
+    }
   ],
   "databaseIdentities": [
-    { "schema": "iam", "migrationRole": "s1_iam_migrator", "runtimeRole": "s1_iam_runtime", "runtimeBypassRls": false },
-    { "schema": "iam", "migrationRole": "s1_iam_migrator", "runtimeRole": "s1_iam_reconciler", "runtimeBypassRls": false, "restrictedTo": ["principals", "organization_memberships", "role_bindings", "site_bindings", "explicit_denies", "reconciliation_state", "reconciliation_events", "reconciliation_quarantine"] },
-    { "schema": "iam", "migrationRole": "s1_iam_migrator", "runtimeRole": "s2_iam_grant_runtime", "runtimeBypassRls": false, "accessMode": "grant-state", "restrictedTo": ["telemetry_grant_revocations", "telemetry_grant_uses", "telemetry_revocation_facts"] },
-    { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_core_runtime", "runtimeBypassRls": false },
-    { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_core_service", "runtimeBypassRls": false, "activationRole": "s1_core_runtime" },
-    { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_migration_operator", "runtimeBypassRls": false, "restrictedTo": ["organizations", "sites", "equipment", "devices", "legacy_resource_maps", "migration_provenance", "migration_quarantine"] },
-    { "schema": "core_registry", "migrationRole": "s1_core_migrator", "runtimeRole": "s1_legacy_migration_service", "runtimeBypassRls": false, "activationRole": "s1_migration_operator", "restrictedTo": ["organizations", "sites", "equipment", "devices", "legacy_resource_maps", "migration_provenance", "migration_quarantine"] },
-    { "schema": "telemetry_runtime", "migrationRole": "s2_telemetry_migrator", "runtimeRole": "s2_telemetry_migrator_service", "runtimeBypassRls": false, "activationRole": "s2_telemetry_migrator", "accessMode": "migration" },
-    { "schema": "telemetry_runtime", "migrationRole": "s2_telemetry_migrator", "runtimeRole": "s2_telemetry_runtime", "runtimeBypassRls": false, "accessMode": "write" },
-    { "schema": "telemetry_runtime", "migrationRole": "s2_telemetry_migrator", "runtimeRole": "s2_telemetry_service", "runtimeBypassRls": false, "activationRole": "s2_telemetry_runtime", "accessMode": "write" },
-    { "schema": "telemetry_runtime", "migrationRole": "s2_telemetry_migrator", "runtimeRole": "s2_telemetry_relay", "runtimeBypassRls": false, "accessMode": "relay", "restrictedTo": ["telemetry_publication_outbox"] },
-    { "schema": "telemetry_runtime", "migrationRole": "s2_telemetry_migrator", "runtimeRole": "s2_telemetry_relay_service", "runtimeBypassRls": false, "activationRole": "s2_telemetry_relay", "accessMode": "relay", "restrictedTo": ["telemetry_publication_outbox"] },
-    { "schema": "telemetry_runtime", "migrationRole": "s2_telemetry_migrator", "runtimeRole": "s2_telemetry_gateway", "runtimeBypassRls": false, "accessMode": "connect-only", "restrictedTo": [] },
-    { "schema": "telemetry_runtime", "migrationRole": "s2_telemetry_migrator", "runtimeRole": "s2_telemetry_iam", "runtimeBypassRls": false, "accessMode": "connect-only", "restrictedTo": [] },
-    { "schema": "command_runtime", "migrationRole": "s3_command_migrator", "runtimeRole": "s3_command_runtime", "runtimeBypassRls": false, "accessMode": "write" },
-    { "schema": "command_runtime", "migrationRole": "s3_command_migrator", "runtimeRole": "s3_command_service", "runtimeBypassRls": false, "activationRole": "s3_command_runtime", "accessMode": "write" },
-    { "schema": "alarm_runtime", "migrationRole": "s4_alarm_migrator", "runtimeRole": "s4_alarm_runtime", "runtimeBypassRls": false, "accessMode": "write" },
-    { "schema": "alarm_runtime", "migrationRole": "s4_alarm_migrator", "runtimeRole": "s4_alarm_service", "runtimeBypassRls": false, "activationRole": "s4_alarm_runtime", "accessMode": "write" },
-    { "schema": "work_order_runtime", "migrationRole": "s5_work_order_migrator", "runtimeRole": "s5_work_order_runtime", "runtimeBypassRls": false, "accessMode": "read" },
-    { "schema": "work_order_runtime", "migrationRole": "s5_work_order_migrator", "runtimeRole": "s5_work_order_service", "runtimeBypassRls": false, "activationRole": "s5_work_order_runtime", "accessMode": "read" }
+    {
+      "schema": "iam",
+      "migrationRole": "s1_iam_migrator",
+      "runtimeRole": "s1_iam_runtime",
+      "runtimeBypassRls": false
+    },
+    {
+      "schema": "iam",
+      "migrationRole": "s1_iam_migrator",
+      "runtimeRole": "s1_iam_reconciler",
+      "runtimeBypassRls": false,
+      "restrictedTo": [
+        "principals",
+        "organization_memberships",
+        "role_bindings",
+        "site_bindings",
+        "explicit_denies",
+        "reconciliation_state",
+        "reconciliation_events",
+        "reconciliation_quarantine"
+      ]
+    },
+    {
+      "schema": "iam",
+      "migrationRole": "s1_iam_migrator",
+      "runtimeRole": "s2_iam_grant_runtime",
+      "runtimeBypassRls": false,
+      "accessMode": "grant-state",
+      "restrictedTo": [
+        "telemetry_grant_revocations",
+        "telemetry_grant_uses",
+        "telemetry_revocation_facts"
+      ]
+    },
+    {
+      "schema": "core_registry",
+      "migrationRole": "s1_core_migrator",
+      "runtimeRole": "s1_core_runtime",
+      "runtimeBypassRls": false
+    },
+    {
+      "schema": "core_registry",
+      "migrationRole": "s1_core_migrator",
+      "runtimeRole": "s1_core_service",
+      "runtimeBypassRls": false,
+      "activationRole": "s1_core_runtime"
+    },
+    {
+      "schema": "core_registry",
+      "migrationRole": "s1_core_migrator",
+      "runtimeRole": "s1_migration_operator",
+      "runtimeBypassRls": false,
+      "restrictedTo": [
+        "organizations",
+        "sites",
+        "equipment",
+        "devices",
+        "legacy_resource_maps",
+        "migration_provenance",
+        "migration_quarantine"
+      ]
+    },
+    {
+      "schema": "core_registry",
+      "migrationRole": "s1_core_migrator",
+      "runtimeRole": "s1_legacy_migration_service",
+      "runtimeBypassRls": false,
+      "activationRole": "s1_migration_operator",
+      "restrictedTo": [
+        "organizations",
+        "sites",
+        "equipment",
+        "devices",
+        "legacy_resource_maps",
+        "migration_provenance",
+        "migration_quarantine"
+      ]
+    },
+    {
+      "schema": "telemetry_runtime",
+      "migrationRole": "s2_telemetry_migrator",
+      "runtimeRole": "s2_telemetry_migrator_service",
+      "runtimeBypassRls": false,
+      "activationRole": "s2_telemetry_migrator",
+      "accessMode": "migration"
+    },
+    {
+      "schema": "telemetry_runtime",
+      "migrationRole": "s2_telemetry_migrator",
+      "runtimeRole": "s2_telemetry_runtime",
+      "runtimeBypassRls": false,
+      "accessMode": "write"
+    },
+    {
+      "schema": "telemetry_runtime",
+      "migrationRole": "s2_telemetry_migrator",
+      "runtimeRole": "s2_telemetry_service",
+      "runtimeBypassRls": false,
+      "activationRole": "s2_telemetry_runtime",
+      "accessMode": "write"
+    },
+    {
+      "schema": "telemetry_runtime",
+      "migrationRole": "s2_telemetry_migrator",
+      "runtimeRole": "s2_telemetry_relay",
+      "runtimeBypassRls": false,
+      "accessMode": "relay",
+      "restrictedTo": [
+        "telemetry_publication_outbox"
+      ]
+    },
+    {
+      "schema": "telemetry_runtime",
+      "migrationRole": "s2_telemetry_migrator",
+      "runtimeRole": "s2_telemetry_relay_service",
+      "runtimeBypassRls": false,
+      "activationRole": "s2_telemetry_relay",
+      "accessMode": "relay",
+      "restrictedTo": [
+        "telemetry_publication_outbox"
+      ]
+    },
+    {
+      "schema": "telemetry_runtime",
+      "migrationRole": "s2_telemetry_migrator",
+      "runtimeRole": "s2_telemetry_gateway",
+      "runtimeBypassRls": false,
+      "accessMode": "connect-only",
+      "restrictedTo": []
+    },
+    {
+      "schema": "telemetry_runtime",
+      "migrationRole": "s2_telemetry_migrator",
+      "runtimeRole": "s2_telemetry_iam",
+      "runtimeBypassRls": false,
+      "accessMode": "connect-only",
+      "restrictedTo": []
+    },
+    {
+      "schema": "command_runtime",
+      "migrationRole": "s3_command_migrator",
+      "runtimeRole": "s3_command_runtime",
+      "runtimeBypassRls": false,
+      "accessMode": "write"
+    },
+    {
+      "schema": "command_runtime",
+      "migrationRole": "s3_command_migrator",
+      "runtimeRole": "s3_command_service",
+      "runtimeBypassRls": false,
+      "activationRole": "s3_command_runtime",
+      "accessMode": "write"
+    },
+    {
+      "schema": "alarm_runtime",
+      "migrationRole": "s4_alarm_migrator",
+      "runtimeRole": "s4_alarm_runtime",
+      "runtimeBypassRls": false,
+      "accessMode": "write"
+    },
+    {
+      "schema": "alarm_runtime",
+      "migrationRole": "s4_alarm_migrator",
+      "runtimeRole": "s4_alarm_service",
+      "runtimeBypassRls": false,
+      "activationRole": "s4_alarm_runtime",
+      "accessMode": "write"
+    },
+    {
+      "schema": "work_order_runtime",
+      "migrationRole": "s5_work_order_migrator",
+      "runtimeRole": "s5_work_order_runtime",
+      "runtimeBypassRls": false,
+      "accessMode": "read"
+    },
+    {
+      "schema": "work_order_runtime",
+      "migrationRole": "s5_work_order_migrator",
+      "runtimeRole": "s5_work_order_service",
+      "runtimeBypassRls": false,
+      "activationRole": "s5_work_order_runtime",
+      "accessMode": "read"
+    },
+    {
+      "schema": "work_order_runtime",
+      "migrationRole": "s5_work_order_migrator",
+      "runtimeRole": "s5_work_order_writer",
+      "runtimeBypassRls": false,
+      "accessMode": "write",
+      "restrictedTo": [
+        "work_order_current",
+        "work_order_source_reference",
+        "work_order_timeline",
+        "work_order_idempotency",
+        "work_order_mutation_audit"
+      ]
+    },
+    {
+      "schema": "work_order_runtime",
+      "migrationRole": "s5_work_order_migrator",
+      "runtimeRole": "s5_work_order_mutation_service",
+      "runtimeBypassRls": false,
+      "activationRole": "s5_work_order_writer",
+      "accessMode": "write",
+      "restrictedTo": [
+        "work_order_current",
+        "work_order_source_reference",
+        "work_order_timeline",
+        "work_order_idempotency",
+        "work_order_mutation_audit"
+      ]
+    }
   ]
 }

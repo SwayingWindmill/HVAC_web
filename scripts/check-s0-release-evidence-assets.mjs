@@ -166,6 +166,8 @@ const acceptedS5OwnershipNames = new Set([
   'work-order-note',
   'work-order-attachment-metadata',
   'work-order-completion-evidence',
+  'work-order-idempotency',
+  'work-order-mutation-audit',
 ]);
 const registeredS5Resources = ownership.resources.filter((resource) => acceptedS5OwnershipNames.has(resource.name));
 assert(registeredS5Resources.length === acceptedS5OwnershipNames.size, `S5 Work Order ownership resources are incomplete: ${JSON.stringify(registeredS5Resources)}`);

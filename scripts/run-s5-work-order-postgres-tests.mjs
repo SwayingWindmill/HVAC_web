@@ -91,19 +91,21 @@ try {
     SELECT string_agg(rolname || ':' || rolcanlogin::text || ':' || rolinherit::text || ':' || rolbypassrls::text, ',' ORDER BY rolname)
     FROM pg_roles WHERE rolname LIKE 's5_work_order_%'
   `);
-  for (const role of ['s5_work_order_migrator', 's5_work_order_runtime']) {
+  for (const role of ['s5_work_order_migrator', 's5_work_order_runtime', 's5_work_order_writer']) {
     if (!roleState.includes(`${role}:false:false:false`)) throw new Error(`${role} must be NOLOGIN, NOINHERIT and NOBYPASSRLS`);
   }
   if (!roleState.includes('s5_work_order_service:true:false:false')) throw new Error('s5_work_order_service must be LOGIN, NOINHERIT and NOBYPASSRLS');
+  if (!roleState.includes('s5_work_order_mutation_service:true:false:false')) throw new Error('s5_work_order_mutation_service must be LOGIN, NOINHERIT and NOBYPASSRLS');
   report.assertions.roleState = roleState;
 
   expectEqual(psql("SELECT pg_has_role('s5_work_order_service', 's5_work_order_runtime', 'MEMBER')::text"), 'true', 'runtime membership');
+  expectEqual(psql("SELECT pg_has_role('s5_work_order_mutation_service', 's5_work_order_writer', 'MEMBER')::text"), 'true', 'writer membership');
   expectEqual(psql("SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'work_order_runtime'"), 's5_work_order_migrator', 'schema owner');
   expectEqual(psql(`
     SELECT count(*)::text || '|' || count(*) FILTER (WHERE relrowsecurity)::text || '|' || count(*) FILTER (WHERE relforcerowsecurity)::text
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'work_order_runtime' AND c.relkind = 'r'
-  `), '7|7|7', 'table/RLS baseline');
+  `), '9|9|9', 'table/RLS baseline');
   report.assertions.forceRls = true;
 
   const directLoginDenied = psql(`
@@ -142,9 +144,25 @@ try {
   }
   report.assertions.readOnlyRuntime = true;
 
+
+  for (const [operation, sql] of [
+    ['delete current', `DELETE FROM work_order_runtime.work_order_current`],
+    ['insert task', `INSERT INTO work_order_runtime.work_order_task (organization_id, site_id, work_order_id, task_id, position, title, status, version, created_at, updated_at) VALUES ('01920000-0000-7000-8000-000000000001','01920000-0001-7000-8000-000000000001','01920000-1000-7000-8000-000000000001','01930000-4000-7000-8000-000000000099',99,'forbidden','OPEN',1,now(),now())`],
+  ]) {
+    const denied = psql(`
+      SET SESSION AUTHORIZATION s5_work_order_mutation_service;
+      SET ROLE s5_work_order_writer;
+      SELECT set_config('app.organization_id', '01920000-0000-7000-8000-000000000001', false);
+      ${sql};
+    `, { expectFailure: true }).toLowerCase();
+    if (!denied.includes('permission denied')) throw new Error(`writer can perform unreviewed ${operation}: ${denied}`);
+  }
+  report.assertions.boundedWriter = true;
+
   const testEnvironment = {
     ...process.env,
     S5_WORK_ORDER_TEST_DATABASE_URL: `postgres://s5_work_order_service:local-fixture-only@127.0.0.1:${postgresHostPort}/hvac_s5?sslmode=disable`,
+    S5_WORK_ORDER_MUTATION_TEST_DATABASE_URL: `postgres://s5_work_order_mutation_service:local-mutation-fixture-only@127.0.0.1:${postgresHostPort}/hvac_s5?sslmode=disable`,
     S5_WORK_ORDER_ADMIN_DATABASE_URL: `postgres://postgres:local-fixture-only@127.0.0.1:${postgresHostPort}/hvac_s5?sslmode=disable`,
   };
   run(process.execPath, ['scripts/run-go.mjs', 'test', '-count=1', './services/work-order-service/...'], { env: testEnvironment, stdio: 'inherit' });

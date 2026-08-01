@@ -265,7 +265,7 @@ func TestPostgresWorkOrderAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !facts.Found || facts.Principal.ID != postgresOwnerAPrincipalID || facts.PolicyRevision != "work-order-access:1" || len(facts.Permissions) != 2 {
+	if !facts.Found || facts.Principal.ID != postgresOwnerAPrincipalID || facts.PolicyRevision != "work-order-access:1" || len(facts.Permissions) != 4 || len(facts.Targets) != 2 {
 		t.Fatalf("Work Order facts = %#v", facts)
 	}
 	for _, permission := range facts.Permissions {

@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { resolveCapabilityTask } from './domain-task-matrix.mjs';
+
 const root = resolve(process.cwd());
 const readText = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await readText(path));
@@ -13,6 +15,22 @@ const includesAll = (text, markers, label) => {
 const exact = (actual, expected) => Array.isArray(actual)
   && actual.length === expected.length
   && actual.every((value, index) => value === expected[index]);
+
+const aggregateCommandLabels = (task) => {
+  const packageCommand = packageJSON.scripts?.[task];
+  const taskMatch = packageCommand?.match(/^node scripts\/run-capability-task\.mjs --task=([^\s]+)$/u);
+  if (taskMatch) {
+    if (taskMatch[1] !== task) return [];
+    try {
+      return resolveCapabilityTask(task).map(({ label }) => label);
+    } catch {
+      return [];
+    }
+  }
+  return typeof packageCommand === 'string'
+    ? packageCommand.split(/\s*&&\s*/u).map((command) => command.trim()).filter(Boolean)
+    : [];
+};
 
 const [
   contract,
@@ -150,8 +168,9 @@ assert(packageJSON.scripts?.['test:identity']?.includes('./libs/telemetryauth/..
 assert(packageJSON.scripts?.['test:security-negative']?.includes('./libs/telemetryauth/...'), 'global security-negative tests omit telemetryauth');
 assert(packageJSON.scripts?.['s2:iam:check'] === 'node scripts/check-s2-iam-authorization.mjs', 's2:iam:check is not wired');
 assert(packageJSON.scripts?.['s2:iam:postgres'] === 'node scripts/run-s2-iam-postgres-tests.mjs', 's2:iam:postgres is not wired');
+const iamAuthorizationCommands = aggregateCommandLabels('s2:iam-authorization');
 for (const command of ['npm run s2:iam:check', 'npm run s2:iam:postgres', 'test ./libs/telemetryauth/...', 'test ./services/iam-service/...', 'npm run ownership:check', 'npm run lint', 'npm run build']) {
-  assert(packageJSON.scripts?.['s2:iam-authorization']?.includes(command), `s2:iam-authorization omits ${command}`);
+  assert(iamAuthorizationCommands.some((label) => label.includes(command)), `s2:iam-authorization omits ${command}`);
 }
 includesAll(workflow, ['runs-on: ubuntu-24.04', "go-version: '1.25.12'", "node-version: '22.22.0'", 'npm run s2:iam-authorization', 'out/s2-iam-authorization/iam-authorization-evidence.json'], 'S2 IAM workflow');
 

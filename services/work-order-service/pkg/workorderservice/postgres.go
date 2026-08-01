@@ -13,10 +13,10 @@ import (
 )
 
 type PostgresStore struct {
-	pool   *pgxpool.Pool
-	cursor *cursorCodec
+	readPool     *pgxpool.Pool
+	mutationPool *pgxpool.Pool
+	cursor       *cursorCodec
 }
-
 type currentRecord struct {
 	workOrder workordermodel.WorkOrder
 	updatedAt time.Time
@@ -27,20 +27,38 @@ func OpenPostgresStore(ctx context.Context, databaseURL string, cursorSecret []b
 	if err != nil {
 		return nil, err
 	}
+	readPool, err := openWorkOrderPool(ctx, databaseURL, "s5_work_order_service")
+	if err != nil {
+		return nil, err
+	}
+	return &PostgresStore{readPool: readPool, cursor: codec}, nil
+}
+
+func OpenPostgresStoreWithMutations(ctx context.Context, readDatabaseURL, mutationDatabaseURL string, cursorSecret []byte) (*PostgresStore, error) {
+	store, err := OpenPostgresStore(ctx, readDatabaseURL, cursorSecret)
+	if err != nil {
+		return nil, err
+	}
+	mutationPool, err := openWorkOrderPool(ctx, mutationDatabaseURL, "s5_work_order_mutation_service")
+	if err != nil {
+		store.Close()
+		return nil, err
+	}
+	store.mutationPool = mutationPool
+	return store, nil
+}
+
+func openWorkOrderPool(ctx context.Context, databaseURL, expectedUser string) (*pgxpool.Pool, error) {
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse Work Order database URL: %w", err)
 	}
-	if config.ConnConfig.User != "s5_work_order_service" {
-		return nil, errors.New("Work Order database identity must be s5_work_order_service")
+	if config.ConnConfig.User != expectedUser {
+		return nil, fmt.Errorf("Work Order database identity must be %s", expectedUser)
 	}
 	config.MaxConns = 16
 	config.MinConns = 1
 	config.MaxConnLifetime = 30 * time.Minute
-	config.AfterConnect = func(ctx context.Context, connection *pgx.Conn) error {
-		_, err := connection.Exec(ctx, `SET ROLE s5_work_order_runtime`)
-		return err
-	}
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("open Work Order database: %w", err)
@@ -49,24 +67,30 @@ func OpenPostgresStore(ctx context.Context, databaseURL string, cursorSecret []b
 		pool.Close()
 		return nil, fmt.Errorf("ping Work Order database: %w", err)
 	}
-	return &PostgresStore{pool: pool, cursor: codec}, nil
+	return pool, nil
 }
 
 func (store *PostgresStore) Close() {
-	if store != nil && store.pool != nil {
-		store.pool.Close()
+	if store == nil {
+		return
+	}
+	if store.readPool != nil {
+		store.readPool.Close()
+	}
+	if store.mutationPool != nil {
+		store.mutationPool.Close()
 	}
 }
 
 func (store *PostgresStore) List(ctx context.Context, organizationID, siteID string, filter Filter) (workordermodel.ListResponse, error) {
-	if store == nil || store.pool == nil || store.cursor == nil {
+	if store == nil || store.readPool == nil || store.cursor == nil {
 		return workordermodel.ListResponse{}, ErrUnavailable
 	}
 	filter = normalizeFilter(filter)
 	if !validStatusFilter(filter.Status) || !validPriorityFilter(filter.Priority) || len(filter.AssigneeID) > 256 {
 		return workordermodel.ListResponse{}, ErrInvalidFilter
 	}
-	tx, err := store.beginOrganizationTransaction(ctx, organizationID)
+	tx, err := store.beginReadTransaction(ctx, organizationID)
 	if err != nil {
 		return workordermodel.ListResponse{}, err
 	}
@@ -146,10 +170,10 @@ func (store *PostgresStore) List(ctx context.Context, organizationID, siteID str
 }
 
 func (store *PostgresStore) Get(ctx context.Context, organizationID, siteID, workOrderID string) (workordermodel.WorkOrder, error) {
-	if store == nil || store.pool == nil {
+	if store == nil || store.readPool == nil {
 		return workordermodel.WorkOrder{}, ErrUnavailable
 	}
-	tx, err := store.beginOrganizationTransaction(ctx, organizationID)
+	tx, err := store.beginReadTransaction(ctx, organizationID)
 	if err != nil {
 		return workordermodel.WorkOrder{}, err
 	}
@@ -168,10 +192,14 @@ func (store *PostgresStore) Get(ctx context.Context, organizationID, siteID, wor
 	return workOrder, nil
 }
 
-func (store *PostgresStore) beginOrganizationTransaction(ctx context.Context, organizationID string) (pgx.Tx, error) {
-	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+func (store *PostgresStore) beginReadTransaction(ctx context.Context, organizationID string) (pgx.Tx, error) {
+	tx, err := store.readPool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return nil, fmt.Errorf("begin Work Order transaction: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE s5_work_order_runtime`); err != nil {
+		_ = tx.Rollback(ctx)
+		return nil, fmt.Errorf("activate Work Order read role: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, organizationID); err != nil {
 		_ = tx.Rollback(ctx)
@@ -260,7 +288,7 @@ func hydrateProjection(ctx context.Context, tx pgx.Tx, record currentRecord) (wo
 
 	timelineRows, err := tx.Query(ctx, `
 		SELECT operation, from_status, to_status, reason, actor_type, actor_id,
-		       policy_revision, correlation_id, occurred_at, version
+		       assignee_id, team_id, policy_revision, correlation_id, occurred_at, version
 		FROM work_order_runtime.work_order_timeline
 		WHERE organization_id = $1 AND site_id = $2 AND work_order_id = $3
 		ORDER BY version ASC
@@ -270,11 +298,11 @@ func hydrateProjection(ctx context.Context, tx pgx.Tx, record currentRecord) (wo
 	}
 	for timelineRows.Next() {
 		var event workordermodel.TimelineEvent
-		var fromStatus, policyRevision, correlationID sql.NullString
+		var fromStatus, assigneeID, teamID, policyRevision, correlationID sql.NullString
 		var occurredAt time.Time
 		if err := timelineRows.Scan(
 			&event.Operation, &fromStatus, &event.ToStatus, &event.Reason, &event.ActorType, &event.ActorID,
-			&policyRevision, &correlationID, &occurredAt, &event.Version,
+			&assigneeID, &teamID, &policyRevision, &correlationID, &occurredAt, &event.Version,
 		); err != nil {
 			timelineRows.Close()
 			return workordermodel.WorkOrder{}, fmt.Errorf("scan Work Order timeline: %w", err)
@@ -283,6 +311,8 @@ func hydrateProjection(ctx context.Context, tx pgx.Tx, record currentRecord) (wo
 			value := workordermodel.Status(fromStatus.String)
 			event.FromStatus = &value
 		}
+		event.AssigneeID = nullableStringPointer(assigneeID)
+		event.TeamID = nullableStringPointer(teamID)
 		event.PolicyRevision = nullableStringPointer(policyRevision)
 		event.CorrelationID = nullableStringPointer(correlationID)
 		event.OccurredAt = occurredAt.UTC().Format(time.RFC3339Nano)

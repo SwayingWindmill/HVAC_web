@@ -11,8 +11,10 @@ import (
 type Action string
 
 const (
-	ActionList Action = "work-order:list"
-	ActionRead Action = "work-order:read"
+	ActionList   Action = "work-order:list"
+	ActionRead   Action = "work-order:read"
+	ActionCreate Action = "work-order:create"
+	ActionAssign Action = "work-order:assign"
 )
 
 type ReasonCode string
@@ -26,10 +28,12 @@ const (
 )
 
 type DecisionRequest struct {
-	ActingOrganizationID string `json:"actingOrganizationId"`
-	SiteID               string `json:"siteId"`
-	WorkOrderID          string `json:"workOrderId,omitempty"`
-	Action               Action `json:"action"`
+	ActingOrganizationID string  `json:"actingOrganizationId"`
+	SiteID               string  `json:"siteId"`
+	WorkOrderID          string  `json:"workOrderId,omitempty"`
+	AssigneeID           *string `json:"assigneeId,omitempty"`
+	TeamID               *string `json:"teamId,omitempty"`
+	Action               Action  `json:"action"`
 }
 
 func (request DecisionRequest) Validate() error {
@@ -38,12 +42,20 @@ func (request DecisionRequest) Validate() error {
 	}
 	switch request.Action {
 	case ActionList:
-		if strings.TrimSpace(request.WorkOrderID) != "" {
-			return errors.New("Work Order list authorization cannot include Work Order identity")
+		if strings.TrimSpace(request.WorkOrderID) != "" || request.AssigneeID != nil || request.TeamID != nil {
+			return errors.New("Work Order list authorization cannot include resource or ownership targets")
 		}
 	case ActionRead:
-		if !workordermodel.IsUUIDv7(request.WorkOrderID) {
-			return errors.New("Work Order read authorization requires Work Order identity")
+		if !workordermodel.IsUUIDv7(request.WorkOrderID) || request.AssigneeID != nil || request.TeamID != nil {
+			return errors.New("Work Order read authorization requires only Work Order identity")
+		}
+	case ActionCreate:
+		if strings.TrimSpace(request.WorkOrderID) != "" || !validOptionalTarget(request.AssigneeID) || !validOptionalTarget(request.TeamID) {
+			return errors.New("Work Order create authorization scope is invalid")
+		}
+	case ActionAssign:
+		if !workordermodel.IsUUIDv7(request.WorkOrderID) || !validOptionalTarget(request.AssigneeID) || !validOptionalTarget(request.TeamID) {
+			return errors.New("Work Order assignment authorization scope is invalid")
 		}
 	default:
 		return errors.New("Work Order authorization action is unsupported")
@@ -59,6 +71,8 @@ type Decision struct {
 	ActingOrganizationID string     `json:"actingOrganizationId"`
 	SiteID               string     `json:"siteId"`
 	WorkOrderID          string     `json:"workOrderId,omitempty"`
+	AssigneeID           *string    `json:"assigneeId,omitempty"`
+	TeamID               *string    `json:"teamId,omitempty"`
 	Action               Action     `json:"action"`
 	PolicyRevision       string     `json:"policyRevision"`
 	ReasonCode           ReasonCode `json:"reasonCode"`
@@ -74,6 +88,8 @@ func (decision Decision) Validate() error {
 		ActingOrganizationID: decision.ActingOrganizationID,
 		SiteID:               decision.SiteID,
 		WorkOrderID:          decision.WorkOrderID,
+		AssigneeID:           decision.AssigneeID,
+		TeamID:               decision.TeamID,
 		Action:               decision.Action,
 	}).Validate(); err != nil {
 		return err
@@ -93,4 +109,12 @@ func (decision Decision) Validate() error {
 
 type DecisionResponse struct {
 	Decision Decision `json:"decision"`
+}
+
+func validOptionalTarget(value *string) bool {
+	if value == nil {
+		return true
+	}
+	trimmed := strings.TrimSpace(*value)
+	return trimmed != "" && trimmed == *value && len(trimmed) <= 256
 }

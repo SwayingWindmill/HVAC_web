@@ -17,12 +17,24 @@ type WorkOrderPermission struct {
 	ValidTo        *time.Time
 }
 
+type WorkOrderOwnershipTarget struct {
+	OrganizationID string
+	SiteID         string
+	TargetType     string
+	TargetID       string
+	Effect         BindingEffect
+	Status         FactStatus
+	ValidFrom      time.Time
+	ValidTo        *time.Time
+}
+
 type WorkOrderAuthorizationFacts struct {
 	Found          bool
 	PolicyRevision string
 	Principal      PrincipalRecord
 	Memberships    []OrganizationMembership
 	Permissions    []WorkOrderPermission
+	Targets        []WorkOrderOwnershipTarget
 }
 
 type WorkOrderAuthorizationStore interface {
@@ -66,6 +78,7 @@ func evaluateWorkOrderAuthorization(ctx context.Context, store WorkOrderAuthoriz
 	decision := workorderauth.Decision{
 		SubjectIssuer: subjectIssuer, Subject: subject,
 		ActingOrganizationID: request.ActingOrganizationID, SiteID: request.SiteID, WorkOrderID: request.WorkOrderID,
+		AssigneeID: request.AssigneeID, TeamID: request.TeamID,
 		Action: request.Action, PolicyRevision: facts.PolicyRevision, ReasonCode: workorderauth.ReasonDenyPrincipal,
 		DecidedAt: now.UTC().Format(time.RFC3339Nano),
 	}
@@ -95,6 +108,32 @@ func evaluateWorkOrderAuthorization(ctx context.Context, store WorkOrderAuthoriz
 	if !allowFound {
 		decision.ReasonCode = workorderauth.ReasonDenyScope
 		return decision, nil
+	}
+	if request.Action == workorderauth.ActionCreate || request.Action == workorderauth.ActionAssign {
+		for targetType, targetID := range map[string]*string{"PRINCIPAL": request.AssigneeID, "TEAM": request.TeamID} {
+			if targetID == nil {
+				continue
+			}
+			targetAllowed := false
+			for _, target := range facts.Targets {
+				if target.Status != FactStatusActive || !factEffective(target.ValidFrom, target.ValidTo, now) ||
+					target.OrganizationID != request.ActingOrganizationID || target.SiteID != request.SiteID ||
+					target.TargetType != targetType || target.TargetID != *targetID {
+					continue
+				}
+				if target.Effect == BindingEffectDeny {
+					decision.ReasonCode = workorderauth.ReasonDenyExplicit
+					return decision, nil
+				}
+				if target.Effect == BindingEffectAllow {
+					targetAllowed = true
+				}
+			}
+			if !targetAllowed {
+				decision.ReasonCode = workorderauth.ReasonDenyScope
+				return decision, nil
+			}
+		}
 	}
 	decision.Allowed = true
 	decision.ReasonCode = workorderauth.ReasonAllowExactScope
@@ -135,5 +174,6 @@ func cloneWorkOrderAuthorizationFacts(value WorkOrderAuthorizationFacts) WorkOrd
 	cloned := value
 	cloned.Memberships = append([]OrganizationMembership(nil), value.Memberships...)
 	cloned.Permissions = append([]WorkOrderPermission(nil), value.Permissions...)
+	cloned.Targets = append([]WorkOrderOwnershipTarget(nil), value.Targets...)
 	return cloned
 }

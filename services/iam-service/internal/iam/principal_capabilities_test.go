@@ -238,6 +238,8 @@ func principalWorkOrderFacts() iam.WorkOrderAuthorizationFacts {
 		Permissions: []iam.WorkOrderPermission{
 			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionList, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
 			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionRead, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
+			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionCreate, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
+			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionAssign, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
 		},
 	}
 }
@@ -253,7 +255,7 @@ func (store fixedWorkOrderStore) LookupWorkOrderAuthorization(context.Context, i
 
 func capabilityPolicyRevision(registryRevision, telemetryRevision, alarmRevision, workOrderRevision string) string {
 	digest := sha256.Sum256([]byte(registryRevision + "\x00" + telemetryRevision + "\x00" + alarmRevision + "\x00" + workOrderRevision))
-	return "capability-v4:" + hex.EncodeToString(digest[:])
+	return "capability-v5:" + hex.EncodeToString(digest[:])
 }
 
 func containsCapability(capabilities []identitycontext.Capability, expected identitycontext.Capability) bool {

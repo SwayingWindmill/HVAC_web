@@ -21,6 +21,7 @@ const (
 	workOrderDecisionPath          = "/internal/v1/work-order/decision"
 	internalSiteWorkOrdersPrefix   = "/internal/v1/sites/"
 	workOrderReadContextHeader     = "X-Work-Order-Read-Context"
+	workOrderWriteContextHeader    = "X-Work-Order-Write-Context"
 	defaultWorkOrderTimeout        = 5 * time.Second
 	defaultWorkOrderResponseLimit  = int64(2 << 20)
 	maximumWorkOrderQueryLength    = 2048
@@ -43,7 +44,16 @@ type workOrderController struct {
 	maxResponseBytes int64
 }
 
+type publicWorkOrderRouteKind uint8
+
+const (
+	publicWorkOrderCollection publicWorkOrderRouteKind = iota + 1
+	publicWorkOrderDetail
+	publicWorkOrderAssignment
+)
+
 type publicWorkOrderRoute struct {
+	kind        publicWorkOrderRouteKind
 	template    string
 	siteID      string
 	workOrderID string
@@ -84,7 +94,7 @@ func newWorkOrderController(config *WorkOrderConfig) *workOrderController {
 
 func matchPublicWorkOrderRoute(path string) (publicWorkOrderRoute, bool) {
 	prefix := "/api/v1/sites/"
-	if !strings.HasPrefix(path, prefix) {
+	if !strings.HasPrefix(path, prefix) || strings.HasSuffix(path, "/") {
 		return publicWorkOrderRoute{}, false
 	}
 	remainder := strings.TrimPrefix(path, prefix)
@@ -97,24 +107,38 @@ func matchPublicWorkOrderRoute(path string) (publicWorkOrderRoute, bool) {
 		return publicWorkOrderRoute{}, false
 	}
 	route := publicWorkOrderRoute{
-		template: "/api/v1/sites/{siteId}/work-orders",
-		siteID:   siteID,
-		action:   workorderauth.ActionList,
+		kind: publicWorkOrderCollection, template: "/api/v1/sites/{siteId}/work-orders",
+		siteID: siteID, action: workorderauth.ActionList,
 	}
 	if len(segments) == 2 {
 		return route, true
 	}
-	workOrderID, err := url.PathUnescape(segments[2])
-	if err != nil || !workordermodel.IsUUIDv7(workOrderID) {
+	resourceSegment, err := url.PathUnescape(segments[2])
+	if err != nil || resourceSegment == "" {
 		return publicWorkOrderRoute{}, false
 	}
+	if strings.HasSuffix(resourceSegment, ":assign") {
+		workOrderID := strings.TrimSuffix(resourceSegment, ":assign")
+		if !workordermodel.IsUUIDv7(workOrderID) || strings.Contains(workOrderID, ":") {
+			return publicWorkOrderRoute{}, false
+		}
+		route.kind = publicWorkOrderAssignment
+		route.template = "/api/v1/sites/{siteId}/work-orders/{workOrderId}:assign"
+		route.workOrderID = workOrderID
+		route.action = workorderauth.ActionAssign
+		return route, true
+	}
+	if strings.Contains(resourceSegment, ":") || !workordermodel.IsUUIDv7(resourceSegment) {
+		return publicWorkOrderRoute{}, false
+	}
+	route.kind = publicWorkOrderDetail
 	route.template = "/api/v1/sites/{siteId}/work-orders/{workOrderId}"
-	route.workOrderID = workOrderID
+	route.workOrderID = resourceSegment
 	route.action = workorderauth.ActionRead
 	return route, true
 }
 
-func dispatchWorkOrderRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicWorkOrderRoute) {
+func dispatchWorkOrderReadRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicWorkOrderRoute) {
 	if request.Method != http.MethodGet {
 		writeMethodNotAllowedFor(writer, request, http.MethodGet)
 		return
@@ -136,7 +160,7 @@ func dispatchWorkOrderRoute(h *handler, writer http.ResponseWriter, request *htt
 	if !ok {
 		return
 	}
-	decision, failure := h.authorizeWorkOrder(request, session, route)
+	decision, failure := h.authorizeWorkOrder(request, session, route, nil, nil)
 	if failure != nil {
 		h.writeWorkOrderFailure(writer, request, *failure)
 		return
@@ -254,7 +278,7 @@ func (h *handler) workOrderSession(writer http.ResponseWriter, request *http.Req
 	return session, true
 }
 
-func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, route publicWorkOrderRoute) (workorderauth.Decision, *workOrderFailure) {
+func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, route publicWorkOrderRoute, assigneeID, teamID *string) (workorderauth.Decision, *workOrderFailure) {
 	if h.identity == nil || h.identity.config.IAMURL == "" || h.identity.config.IAMHTTPClient == nil || h.identity.config.DelegationSigner == nil {
 		failure := workOrderUnavailable("Work Order authorization is not configured.")
 		return workorderauth.Decision{}, &failure
@@ -281,6 +305,8 @@ func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, 
 		ActingOrganizationID: session.ActingOrganizationID,
 		SiteID:               route.siteID,
 		WorkOrderID:          route.workOrderID,
+		AssigneeID:           assigneeID,
+		TeamID:               teamID,
 		Action:               route.action,
 	}
 	body, err := json.Marshal(input)
@@ -322,7 +348,8 @@ func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, 
 	}
 	decision := output.Decision
 	if decision.Subject != session.Principal.Subject || decision.SubjectIssuer != session.Principal.Issuer ||
-		decision.ActingOrganizationID != session.ActingOrganizationID || decision.SiteID != route.siteID || decision.WorkOrderID != route.workOrderID || decision.Action != route.action {
+		decision.ActingOrganizationID != session.ActingOrganizationID || decision.SiteID != route.siteID || decision.WorkOrderID != route.workOrderID ||
+		!sameOptionalWorkOrderTarget(decision.AssigneeID, assigneeID) || !sameOptionalWorkOrderTarget(decision.TeamID, teamID) || decision.Action != route.action {
 		failure := workOrderUnavailable("IAM returned a Work Order decision outside the authenticated boundary.")
 		return workorderauth.Decision{}, &failure
 	}
@@ -452,4 +479,11 @@ func workOrderDenied() workOrderFailure {
 
 func workOrderUnavailable(detail string) workOrderFailure {
 	return workOrderFailure{status: http.StatusServiceUnavailable, code: "WORK_ORDER_UNAVAILABLE", title: "Work Order unavailable", detail: detail, retryable: true}
+}
+
+func sameOptionalWorkOrderTarget(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }

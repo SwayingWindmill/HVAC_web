@@ -6,18 +6,21 @@ const readText = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await readText(path));
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
-const [openapi, routes, data, lock, model, migration] = await Promise.all([
+const [openapi, routes, data, lock, model, migration001, migration002] = await Promise.all([
   readJSON('contracts/http/s5-work-order-public.openapi.json'),
   readJSON('contracts/ownership/route-ownership.v1.json'),
   readJSON('contracts/ownership/data-ownership.v1.json'),
   readJSON('contracts/ownership/ownership.v1.lock.json'),
   readText('libs/workordermodel/model.go'),
   readText('services/work-order-service/migrations/001_s5_work_order_runtime.sql'),
+  readText('services/work-order-service/migrations/002_s5_work_order_create_assignment.sql'),
 ]);
+const migration = migration001 + '\n' + migration002;
 
 assert(openapi.openapi === '3.1.0', 'Work Order OpenAPI baseline is invalid');
 const listPath = '/api/v1/sites/{siteId}/work-orders';
 const detailPath = '/api/v1/sites/{siteId}/work-orders/{workOrderId}';
+const assignPath = '/api/v1/sites/{siteId}/work-orders/{workOrderId}:assign';
 const phasePolicies = {
   'S5-R0-contract-only': {
     infoVersion: '0.1.0-contract-only',
@@ -54,10 +57,15 @@ const phasePolicies = {
 };
 let observedPhase = '';
 
-assert(Object.keys(openapi.paths ?? {}).length === 2, 'Work Order contract exposes undeclared routes');
+const declaredPaths = Object.keys(openapi.paths ?? {}).sort();
+assert(JSON.stringify(declaredPaths) === JSON.stringify([listPath, detailPath, assignPath].sort()), 'Work Order contract exposes undeclared routes');
+assert(openapi.paths?.[listPath]?.post?.['x-iam-action'] === 'work-order:create', 'Work Order create route is missing from the governed public contract');
+assert(openapi.paths?.[assignPath]?.post?.['x-iam-action'] === 'work-order:assign', 'Work Order assignment route is missing from the governed public contract');
 for (const [path, action] of [[listPath, 'work-order:list'], [detailPath, 'work-order:read']]) {
   const pathItem = openapi.paths?.[path];
-  assert(pathItem?.get && Object.keys(pathItem).every((method) => method === 'get'), 'Work Order ' + path + ' is not GET-only');
+  assert(pathItem?.get, 'Work Order read operation is missing for ' + path);
+  const expectedMethods = path === listPath ? ['get', 'post'] : ['get'];
+  assert(JSON.stringify(Object.keys(pathItem).sort()) === JSON.stringify(expectedMethods), 'Work Order ' + path + ' exposes an undeclared method');
   const operation = pathItem.get;
   assert(operation['x-owner'] === 'work-order-service' && operation['x-public-ingress'] === 'platform-gateway', 'Work Order owner or ingress is invalid for ' + path);
   const phase = operation['x-migration-phase'];
@@ -125,7 +133,12 @@ for (const [kind, name] of expectedResources) {
   assert(resource?.writer === 'work-order-service' && resource?.revision === 1, 'Work Order ownership resource ' + kind + ':' + name + ' is missing');
   assert(lock.resources?.[kind + ':' + name]?.writer === 'work-order-service', 'Work Order lock resource ' + kind + ':' + name + ' is missing');
 }
-assert(data.databaseAccess?.some((entry) => entry.service === 'work-order-service' && entry.schema === 'work_order_runtime' && entry.mode === 'read'), 'Work Order read-only database access is missing');
+const workOrderDatabaseAccess = data.databaseAccess?.find((entry) => entry.service === 'work-order-service' && entry.schema === 'work_order_runtime');
+assert(workOrderDatabaseAccess && ['read', 'write'].includes(workOrderDatabaseAccess.mode), 'Work Order database access is missing');
+if (workOrderDatabaseAccess.mode === 'write') {
+  const expectedMutationTables = ['work_order_current', 'work_order_source_reference', 'work_order_timeline', 'work_order_idempotency', 'work_order_mutation_audit'];
+  assert(JSON.stringify([...(workOrderDatabaseAccess.restrictedTo ?? [])].sort()) === JSON.stringify(expectedMutationTables.sort()), 'Work Order write access is not restricted to create/assignment persistence');
+}
 assert(data.databaseIdentities?.some((entry) => entry.schema === 'work_order_runtime' && entry.migrationRole === 's5_work_order_migrator' && entry.runtimeRole === 's5_work_order_runtime' && entry.runtimeBypassRls === false && entry.accessMode === 'read'), 'Work Order database identity is invalid');
 assert(data.databaseIdentities?.some((entry) => entry.schema === 'work_order_runtime' && entry.migrationRole === 's5_work_order_migrator' && entry.runtimeRole === 's5_work_order_service' && entry.activationRole === 's5_work_order_runtime' && entry.runtimeBypassRls === false && entry.accessMode === 'read'), 'Work Order service database identity is invalid');
 
@@ -136,10 +149,15 @@ assert(migration.includes('CREATE UNIQUE INDEX IF NOT EXISTS work_order_one_orig
 assert(migration.includes('PRIMARY KEY (organization_id, site_id, work_order_id, source_domain, source_resource_id)'), 'Work Order source identity can carry conflicting relationships');
 assert(migration.includes('ENABLE ROW LEVEL SECURITY') && migration.includes('FORCE ROW LEVEL SECURITY'), 'Work Order FORCE RLS is missing');
 assert(migration.includes("current_setting(''app.organization_id''"), 'Work Order Organization RLS binding is missing');
-assert(migration.includes('GRANT SELECT ON ALL TABLES IN SCHEMA work_order_runtime TO s5_work_order_runtime'), 'Work Order runtime SELECT grant is missing');
+assert(migration001.includes('GRANT SELECT ON ALL TABLES IN SCHEMA work_order_runtime TO s5_work_order_runtime'), 'Work Order read runtime SELECT grant is missing');
+assert(migration002.includes('TO s5_work_order_writer;'), 'Work Order writer SELECT grant is missing');
+const runtimeGrantLines = migration.split(/\r?\n/).filter((line) => line.includes('TO s5_work_order_runtime'));
 for (const forbidden of ['GRANT INSERT', 'GRANT UPDATE', 'GRANT DELETE', 'GRANT ALL']) {
-  assert(!migration.includes(forbidden), 'Work Order runtime has forbidden grant ' + forbidden);
+  assert(!runtimeGrantLines.some((line) => line.includes(forbidden)), 'Work Order read runtime has forbidden grant ' + forbidden);
 }
+assert(migration002.includes('GRANT INSERT ON work_order_runtime.work_order_current TO s5_work_order_writer') && migration002.includes('GRANT UPDATE (assignee_id, team_id, version, updated_at)'), 'Work Order writer current projection grants are missing or too broad');
+assert(migration.includes('GRANT INSERT ON work_order_runtime.work_order_idempotency TO s5_work_order_writer') && migration.includes('GRANT INSERT ON work_order_runtime.work_order_mutation_audit TO s5_work_order_writer'), 'Work Order writer durable mutation evidence grants are missing');
+assert(!migration.split(/\r?\n/).some((line) => line.includes('GRANT DELETE') || line.includes('GRANT ALL')), 'Work Order authority grants include delete or all privileges');
 assert(!migration.includes('ON DELETE CASCADE'), 'Work Order authoritative evidence can be cascade-deleted');
 
 console.log('S5 Work Order ' + observedPhase + ' baseline passed: independent owner, strict read model, governed no-fallback rollout and read-only FORCE RLS persistence are present.');

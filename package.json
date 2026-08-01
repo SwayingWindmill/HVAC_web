@@ -277,7 +277,10 @@
     "real-assets:certification:test": "node --test scripts/test-real-assets-certification.mjs",
     "real-assets:certification:browser": "node scripts/run-real-assets-certification.mjs",
     "real-assets:certification:evidence": "node scripts/check-real-assets-certification.mjs --evidence",
-    "real-assets:certify": "npm run real-assets:certification:check && npm run web:real-assets:test && npm run real-assets:certification:test && npm run rms:web-routing && npm run real-assets:certification:browser && npm run real-assets:certification:evidence && npm run rms:web-routing:browser && npm run s1:hvac-web:check && npm run s2:hvac-web:check && npm run s2:contracts:check && npm run s2:live-client:browser && npm run ownership:check && npm run security:dependency-audit && npm run security:licenses"
+    "real-assets:certify": "npm run real-assets:certification:check && npm run web:real-assets:test && npm run real-assets:certification:test && npm run rms:web-routing && npm run real-assets:certification:browser && npm run real-assets:certification:evidence && npm run rms:web-routing:browser && npm run s1:hvac-web:check && npm run s2:hvac-web:check && npm run s2:contracts:check && npm run s2:live-client:browser && npm run ownership:check && npm run security:dependency-audit && npm run security:licenses",
+    "s5:work-order:create-assign:check": "node scripts/check-s5-work-order-create-assign.mjs",
+    "s5:work-order:create-assign:browser": "node scripts/run-s5-work-order-create-assign-browser-audit.mjs",
+    "s5:work-order:create-assign": "node scripts/run-capability-task.mjs --task=s5:work-order:create-assign"
   },
   "engines": {
     "node": ">=22.22.0"

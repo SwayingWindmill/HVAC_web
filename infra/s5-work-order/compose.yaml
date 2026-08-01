@@ -9,6 +9,7 @@ services:
     volumes:
       - ../../services/work-order-service/testdata/postgres/000_roles.sql:/docker-entrypoint-initdb.d/000_roles.sql:ro
       - ../../services/work-order-service/migrations/001_s5_work_order_runtime.sql:/docker-entrypoint-initdb.d/001_s5_work_order_runtime.sql:ro
+      - ../../services/work-order-service/migrations/002_s5_work_order_create_assignment.sql:/docker-entrypoint-initdb.d/002_s5_work_order_create_assignment.sql:ro
       - ../../services/work-order-service/testdata/postgres/010_seed.sql:/docker-entrypoint-initdb.d/010_seed.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d hvac_s5"]

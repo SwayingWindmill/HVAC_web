@@ -43,6 +43,7 @@ const (
 	PhaseS4SiteCanary                = "S4-R2-site-canary"
 	PhaseS5ContractOnly              = "S5-R0-contract-only"
 	PhaseS5InternalReadOnly          = "S5-R1-internal-read-only"
+	PhaseS5InternalCreateAssign      = "S5-R1-internal-create-assign"
 	PhaseS5SiteCanary                = "S5-R2-site-canary"
 	PhaseS5OperationallyCertified    = "S5-R3-operationally-certified"
 )
@@ -213,8 +214,9 @@ func validateEntry(entry RouteEntry) error {
 		if entry.Rollout.FallbackOwner == "" {
 			alarmRead := entry.Owner == OwnerAlarm && entry.Method == http.MethodGet && isS4Phase(entry.MigrationPhase)
 			workOrderRead := entry.Owner == OwnerWorkOrder && entry.Method == http.MethodGet && isS5Phase(entry.MigrationPhase)
-			if !alarmRead && !workOrderRead {
-				return errors.New("no-fallback percentage rollout is only supported for governed Alarm or Work Order reads")
+			workOrderMutation := entry.Owner == OwnerWorkOrder && entry.Method == http.MethodPost && entry.MigrationPhase == PhaseS5InternalCreateAssign && isS5MutationPath(entry.Path)
+			if !alarmRead && !workOrderRead && !workOrderMutation {
+				return errors.New("no-fallback percentage rollout is outside the governed Alarm or Work Order canaries")
 			}
 		} else if entry.Rollout.FallbackOwner == entry.Owner || !isCandidateOwner(entry.Rollout.FallbackOwner) {
 			return errors.New("fallback owner is invalid")
@@ -411,9 +413,6 @@ func validateS4Phase(entry RouteEntry, seenScopes map[string]bool) error {
 }
 
 func validateS5Phase(entry RouteEntry, seenScopes map[string]bool) error {
-	if entry.Method != http.MethodGet || !isS5ReadPath(entry.Path) {
-		return errors.New("S5 Work Order baseline supports read routes only")
-	}
 	if entry.PublicIngress != OwnerGateway || entry.ShadowSideEffectPolicy != "NONE" || entry.ReadOnlyFallback || entry.ReadFallbackOwner != "" {
 		return errors.New("S5 Work Order route must use Gateway ingress and no request fallback")
 	}
@@ -423,34 +422,52 @@ func validateS5Phase(entry RouteEntry, seenScopes map[string]bool) error {
 		}
 	}
 	if strings.Contains(entry.Path, "{workOrderId}") && !seenScopes["work-order"] {
-		return errors.New("S5 Work Order detail scope is incomplete")
+		return errors.New("S5 Work Order resource scope is incomplete")
 	}
 	for _, required := range []string{"AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND"} {
 		if !containsString(entry.FallbackForbiddenResults, required) {
 			return errors.New("S5 Work Order forbidden results are incomplete")
 		}
 	}
-	if entry.CohortGroup != "s5-work-order-read-v1" {
-		return errors.New("S5 Work Order route requires the read cohort group")
-	}
-	switch entry.MigrationPhase {
-	case PhaseS5ContractOnly:
-		if entry.Owner != OwnerWorkOrder || entry.ActivationStatus != "expand-baseline" || entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" {
-			return errors.New("S5 Work Order contract-only policy is invalid")
+	switch entry.Method {
+	case http.MethodGet:
+		if !isS5ReadPath(entry.Path) || entry.CohortGroup != "s5-work-order-read-v1" {
+			return errors.New("S5 Work Order read route or cohort is invalid")
 		}
-	case PhaseS5InternalReadOnly:
-		if entry.Owner != OwnerWorkOrder || entry.ActivationStatus != "internal-canary" || entry.Rollout.Mode != "percentage" ||
-			entry.Rollout.Percentage != 1 || entry.Rollout.FallbackOwner != "" || len(entry.Rollout.CohortSalt) < 8 || entry.CompatibilityMode != "native" {
-			return errors.New("S5 Work Order internal read-only canary policy is invalid")
+		switch entry.MigrationPhase {
+		case PhaseS5ContractOnly:
+			if entry.Owner != OwnerWorkOrder || entry.ActivationStatus != "expand-baseline" || entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" {
+				return errors.New("S5 Work Order contract-only policy is invalid")
+			}
+		case PhaseS5InternalReadOnly:
+			if entry.Owner != OwnerWorkOrder || entry.ActivationStatus != "internal-canary" || entry.Rollout.Mode != "percentage" || entry.Rollout.Percentage != 1 || entry.Rollout.FallbackOwner != "" || len(entry.Rollout.CohortSalt) < 8 || entry.CompatibilityMode != "native" {
+				return errors.New("S5 Work Order internal read-only canary policy is invalid")
+			}
+		default:
+			return errors.New("S5 Work Order read migration phase is unsupported")
+		}
+	case http.MethodPost:
+		if !isS5MutationPath(entry.Path) || entry.CohortGroup != "s5-work-order-write-v1" || !seenScopes["key"] {
+			return errors.New("S5 Work Order create/assign route, cohort or key scope is invalid")
+		}
+		for _, required := range []string{"VERSION_CONFLICT", "IDEMPOTENCY_CONFLICT"} {
+			if !containsString(entry.FallbackForbiddenResults, required) {
+				return errors.New("S5 Work Order mutation forbidden results are incomplete")
+			}
+		}
+		if entry.MigrationPhase != PhaseS5InternalCreateAssign || entry.Owner != OwnerWorkOrder || entry.ActivationStatus != "internal-canary" || entry.Rollout.Mode != "percentage" || entry.Rollout.Percentage != 1 || entry.Rollout.FallbackOwner != "" || len(entry.Rollout.CohortSalt) < 8 || entry.CompatibilityMode != "native" {
+			return errors.New("S5 Work Order internal create/assign canary policy is invalid")
 		}
 	default:
-		return errors.New("S5 Work Order migration phase is unsupported")
+		return errors.New("S5 Work Order route method is unsupported")
 	}
 	return nil
 }
-
 func isS5ReadPath(path string) bool {
 	return path == "/api/v1/sites/{siteId}/work-orders" || path == "/api/v1/sites/{siteId}/work-orders/{workOrderId}"
+}
+func isS5MutationPath(path string) bool {
+	return path == "/api/v1/sites/{siteId}/work-orders" || path == "/api/v1/sites/{siteId}/work-orders/{workOrderId}:assign"
 }
 
 func isS4LifecyclePath(path string) bool {
@@ -728,7 +745,7 @@ func s5PhaseRank(phase string) (int, bool) {
 	switch phase {
 	case PhaseS5ContractOnly:
 		return 0, true
-	case PhaseS5InternalReadOnly:
+	case PhaseS5InternalReadOnly, PhaseS5InternalCreateAssign:
 		return 1, true
 	default:
 		return 0, false
