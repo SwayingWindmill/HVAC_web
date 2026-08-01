@@ -1131,7 +1131,12 @@ func TestOperationsGatewayPropagatesCorrelatedRedactedTelemetry(t *testing.T) {
 			t.Fatalf("recovery span left the incoming trace: %+v", recoverySpan)
 		}
 	}
-	serialized, err := json.Marshal(spans)
+	redactionSurface := append([]observability.SpanData(nil), spans...)
+	for index := range redactionSurface {
+		redactionSurface[index].StartTime = time.Time{}
+		redactionSurface[index].EndTime = time.Time{}
+	}
+	serialized, err := json.Marshal(redactionSurface)
 	if err != nil {
 		t.Fatal(err)
 	}
