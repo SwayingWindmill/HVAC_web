@@ -50,7 +50,7 @@ func (store *PostgresStore) List(ctx context.Context, organizationID, siteID str
 	if store == nil || store.pool == nil {
 		return alarmmodel.ListResponse{}, ErrUnavailable
 	}
-	tx, err := store.beginOrganizationRead(ctx, organizationID)
+	tx, err := store.beginOrganizationTransaction(ctx, organizationID, true)
 	if err != nil {
 		return alarmmodel.ListResponse{}, err
 	}
@@ -77,8 +77,8 @@ func (store *PostgresStore) List(ctx context.Context, organizationID, siteID str
 	}
 	rows, err := tx.Query(ctx, `
 		SELECT alarm_id, organization_id, site_id, device_id, source_type, source_reference,
-		       title, summary, severity, status, occurrence_count, first_occurred_at,
-		       last_occurred_at, evidence, transitions, version, created_at, updated_at
+		       title, summary, severity, status, assignee_id, suppressed_until, occurrence_count,
+		       first_occurred_at, last_occurred_at, evidence, transitions, version, created_at, updated_at
 		FROM alarm_runtime.alarm_current
 		WHERE organization_id = $1
 		  AND site_id = $2
@@ -120,22 +120,12 @@ func (store *PostgresStore) Get(ctx context.Context, organizationID, siteID, ala
 	if store == nil || store.pool == nil {
 		return alarmmodel.Alarm{}, ErrUnavailable
 	}
-	tx, err := store.beginOrganizationRead(ctx, organizationID)
+	tx, err := store.beginOrganizationTransaction(ctx, organizationID, true)
 	if err != nil {
 		return alarmmodel.Alarm{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	row := tx.QueryRow(ctx, `
-		SELECT alarm_id, organization_id, site_id, device_id, source_type, source_reference,
-		       title, summary, severity, status, occurrence_count, first_occurred_at,
-		       last_occurred_at, evidence, transitions, version, created_at, updated_at
-		FROM alarm_runtime.alarm_current
-		WHERE organization_id = $1 AND site_id = $2 AND alarm_id = $3
-	`, organizationID, siteID, alarmID)
-	alarm, err := scanAlarm(row)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return alarmmodel.Alarm{}, ErrNotFound
-	}
+	alarm, err := getAlarmRow(ctx, tx, organizationID, siteID, alarmID, false)
 	if err != nil {
 		return alarmmodel.Alarm{}, err
 	}
@@ -145,10 +135,99 @@ func (store *PostgresStore) Get(ctx context.Context, organizationID, siteID, ala
 	return alarm, nil
 }
 
-func (store *PostgresStore) beginOrganizationRead(ctx context.Context, organizationID string) (pgx.Tx, error) {
-	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+func (store *PostgresStore) Apply(ctx context.Context, organizationID, siteID, alarmID string, mutation Mutation) (MutationResult, error) {
+	if store == nil || store.pool == nil {
+		return MutationResult{}, ErrUnavailable
+	}
+	digest, err := mutationDigest(mutation)
 	if err != nil {
-		return nil, fmt.Errorf("begin Alarm read transaction: %w", err)
+		return MutationResult{}, alarmmodel.ErrInvalidOperation
+	}
+	tx, err := store.beginOrganizationTransaction(ctx, organizationID, false)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	current, err := getAlarmRow(ctx, tx, organizationID, siteID, alarmID, true)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	var storedDigest string
+	var responseJSON []byte
+	err = tx.QueryRow(ctx, `
+		SELECT request_digest, response
+		FROM alarm_runtime.alarm_idempotency
+		WHERE organization_id = $1 AND site_id = $2 AND alarm_id = $3 AND idempotency_key = $4
+	`, organizationID, siteID, alarmID, mutation.IdempotencyKey).Scan(&storedDigest, &responseJSON)
+	if err == nil {
+		if storedDigest != digest {
+			return MutationResult{}, ErrIdempotencyConflict
+		}
+		var replay alarmmodel.Alarm
+		if json.Unmarshal(responseJSON, &replay) != nil || replay.Validate() != nil || replay.OrganizationID != organizationID || replay.SiteID != siteID || replay.AlarmID != alarmID {
+			return MutationResult{}, ErrUnavailable
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return MutationResult{}, fmt.Errorf("commit Alarm idempotency replay: %w", err)
+		}
+		return MutationResult{Alarm: replay, Replayed: true}, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return MutationResult{}, fmt.Errorf("read Alarm idempotency record: %w", err)
+	}
+
+	updated, err := alarmmodel.ApplyOperation(current, mutation.operationInput())
+	if err != nil {
+		return MutationResult{}, err
+	}
+	evidenceJSON, err := json.Marshal(updated.Evidence)
+	if err != nil {
+		return MutationResult{}, fmt.Errorf("encode Alarm evidence: %w", err)
+	}
+	transitionsJSON, err := json.Marshal(updated.Transitions)
+	if err != nil {
+		return MutationResult{}, fmt.Errorf("encode Alarm transitions: %w", err)
+	}
+	command, err := tx.Exec(ctx, `
+		UPDATE alarm_runtime.alarm_current
+		SET status = $5, assignee_id = $6, suppressed_until = $7, evidence = $8,
+		    transitions = $9, version = $10, updated_at = $11
+		WHERE organization_id = $1 AND site_id = $2 AND alarm_id = $3 AND version = $4
+	`, organizationID, siteID, alarmID, current.Version, string(updated.Status), updated.AssigneeID, updated.SuppressedUntil,
+		evidenceJSON, transitionsJSON, updated.Version, updated.UpdatedAt)
+	if err != nil {
+		return MutationResult{}, fmt.Errorf("update Alarm projection: %w", err)
+	}
+	if command.RowsAffected() != 1 {
+		return MutationResult{}, alarmmodel.ErrVersionConflict
+	}
+	responseJSON, err = json.Marshal(updated)
+	if err != nil {
+		return MutationResult{}, fmt.Errorf("encode Alarm mutation response: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO alarm_runtime.alarm_idempotency (
+			organization_id, site_id, alarm_id, idempotency_key, request_digest, response, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, organizationID, siteID, alarmID, mutation.IdempotencyKey, digest, responseJSON, mutation.OccurredAt)
+	if err != nil {
+		return MutationResult{}, fmt.Errorf("write Alarm idempotency record: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return MutationResult{}, fmt.Errorf("commit Alarm mutation: %w", err)
+	}
+	return MutationResult{Alarm: updated}, nil
+}
+
+func (store *PostgresStore) beginOrganizationTransaction(ctx context.Context, organizationID string, readOnly bool) (pgx.Tx, error) {
+	options := pgx.TxOptions{}
+	if readOnly {
+		options.AccessMode = pgx.ReadOnly
+	}
+	tx, err := store.pool.BeginTx(ctx, options)
+	if err != nil {
+		return nil, fmt.Errorf("begin Alarm transaction: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, organizationID); err != nil {
 		_ = tx.Rollback(ctx)
@@ -157,17 +236,38 @@ func (store *PostgresStore) beginOrganizationRead(ctx context.Context, organizat
 	return tx, nil
 }
 
+func getAlarmRow(ctx context.Context, tx pgx.Tx, organizationID, siteID, alarmID string, lock bool) (alarmmodel.Alarm, error) {
+	query := `
+		SELECT alarm_id, organization_id, site_id, device_id, source_type, source_reference,
+		       title, summary, severity, status, assignee_id, suppressed_until, occurrence_count,
+		       first_occurred_at, last_occurred_at, evidence, transitions, version, created_at, updated_at
+		FROM alarm_runtime.alarm_current
+		WHERE organization_id = $1 AND site_id = $2 AND alarm_id = $3`
+	if lock {
+		query += ` FOR UPDATE`
+	}
+	alarm, err := scanAlarm(tx.QueryRow(ctx, query, organizationID, siteID, alarmID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return alarmmodel.Alarm{}, ErrNotFound
+	}
+	if err != nil {
+		return alarmmodel.Alarm{}, err
+	}
+	return alarm, nil
+}
+
 type alarmScanner interface{ Scan(...any) error }
 
 func scanAlarm(scanner alarmScanner) (alarmmodel.Alarm, error) {
 	var alarm alarmmodel.Alarm
 	var evidenceJSON, transitionsJSON []byte
 	var firstOccurredAt, lastOccurredAt, createdAt, updatedAt time.Time
+	var suppressedUntil *time.Time
 	if err := scanner.Scan(
 		&alarm.AlarmID, &alarm.OrganizationID, &alarm.SiteID, &alarm.DeviceID,
 		&alarm.SourceType, &alarm.SourceReference, &alarm.Title, &alarm.Summary,
-		&alarm.Severity, &alarm.Status, &alarm.OccurrenceCount, &firstOccurredAt,
-		&lastOccurredAt, &evidenceJSON, &transitionsJSON, &alarm.Version, &createdAt, &updatedAt,
+		&alarm.Severity, &alarm.Status, &alarm.AssigneeID, &suppressedUntil, &alarm.OccurrenceCount,
+		&firstOccurredAt, &lastOccurredAt, &evidenceJSON, &transitionsJSON, &alarm.Version, &createdAt, &updatedAt,
 	); err != nil {
 		return alarmmodel.Alarm{}, err
 	}
@@ -176,6 +276,10 @@ func scanAlarm(scanner alarmScanner) (alarmmodel.Alarm, error) {
 	alarm.LastOccurredAt = lastOccurredAt.UTC().Format(time.RFC3339Nano)
 	alarm.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
 	alarm.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
+	if suppressedUntil != nil {
+		value := suppressedUntil.UTC().Format(time.RFC3339Nano)
+		alarm.SuppressedUntil = &value
+	}
 	if err := json.Unmarshal(evidenceJSON, &alarm.Evidence); err != nil {
 		return alarmmodel.Alarm{}, fmt.Errorf("decode Alarm evidence: %w", err)
 	}

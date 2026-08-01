@@ -39,6 +39,11 @@ func (store *countingStore) Get(ctx context.Context, organizationID, siteID, ala
 	return store.delegate.Get(ctx, organizationID, siteID, alarmID)
 }
 
+func (store *countingStore) Apply(ctx context.Context, organizationID, siteID, alarmID string, mutation Mutation) (MutationResult, error) {
+	store.calls.Add(1)
+	return store.delegate.Apply(ctx, organizationID, siteID, alarmID, mutation)
+}
+
 type invalidProjectionStore struct{ alarm alarmmodel.Alarm }
 
 func (store invalidProjectionStore) List(context.Context, string, string, Filter) (alarmmodel.ListResponse, error) {
@@ -47,6 +52,10 @@ func (store invalidProjectionStore) List(context.Context, string, string, Filter
 
 func (store invalidProjectionStore) Get(context.Context, string, string, string) (alarmmodel.Alarm, error) {
 	return store.alarm, nil
+}
+
+func (store invalidProjectionStore) Apply(context.Context, string, string, string, Mutation) (MutationResult, error) {
+	return MutationResult{}, ErrUnavailable
 }
 
 func TestAlarmHTTPListsAndReadsExactScopedProjection(t *testing.T) {
@@ -182,6 +191,108 @@ func TestAlarmHTTPRejectsCrossScopeStoreProjection(t *testing.T) {
 	}
 }
 
+func TestAlarmHTTPAppliesAndReplaysAcknowledgement(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	signer := testSigner(t)
+	memory, err := NewMemoryStore([]alarmmodel.Alarm{validHTTPAlarm()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewHTTPHandler(HTTPConfig{Store: memory, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := InternalSiteAlarmsPrefix + testSiteID + "/alarms/" + testAlarmID + ":acknowledge"
+	for attempt := 0; attempt < 2; attempt++ {
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"expectedVersion":1,"reason":"operator acknowledged"}`))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", "alarm-http-ack-1")
+		request.Header.Set(AlarmWriteContextHeader, signedReadContext(t, signer, now, AlarmAcknowledgeAction, testOrganizationID, testSiteID, testAlarmID))
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("attempt=%d status=%d body=%s", attempt, recorder.Code, recorder.Body.String())
+		}
+		if attempt == 1 && recorder.Header().Get("Idempotent-Replay") != "true" {
+			t.Fatal("idempotent replay header is missing")
+		}
+		var alarm alarmmodel.Alarm
+		if json.NewDecoder(recorder.Body).Decode(&alarm) != nil || alarm.Status != alarmmodel.StatusAcknowledged || alarm.Version != 2 || len(alarm.Transitions) != 2 {
+			t.Fatalf("unexpected acknowledged Alarm: %#v", alarm)
+		}
+	}
+	current, err := memory.Get(context.Background(), testOrganizationID, testSiteID, testAlarmID)
+	if err != nil || current.Version != 2 || len(current.Transitions) != 2 {
+		t.Fatalf("idempotent replay duplicated transition: %#v err=%v", current, err)
+	}
+}
+
+func TestAlarmHTTPRejectsStaleVersionAndInvalidTransition(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	signer := testSigner(t)
+	memory, err := NewMemoryStore([]alarmmodel.Alarm{validHTTPAlarm()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewHTTPHandler(HTTPConfig{Store: memory, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	acknowledgePath := InternalSiteAlarmsPrefix + testSiteID + "/alarms/" + testAlarmID + ":acknowledge"
+	first := httptest.NewRequest(http.MethodPost, acknowledgePath, strings.NewReader(`{"expectedVersion":1,"reason":"first acknowledgement"}`))
+	first.Header.Set("Content-Type", "application/json")
+	first.Header.Set("Idempotency-Key", "alarm-http-ack-2")
+	first.Header.Set(AlarmWriteContextHeader, signedReadContext(t, signer, now, AlarmAcknowledgeAction, testOrganizationID, testSiteID, testAlarmID))
+	firstRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(firstRecorder, first)
+	if firstRecorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", firstRecorder.Code, firstRecorder.Body.String())
+	}
+
+	stale := httptest.NewRequest(http.MethodPost, acknowledgePath, strings.NewReader(`{"expectedVersion":1,"reason":"stale acknowledgement"}`))
+	stale.Header.Set("Content-Type", "application/json")
+	stale.Header.Set("Idempotency-Key", "alarm-http-ack-3")
+	stale.Header.Set(AlarmWriteContextHeader, signedReadContext(t, signer, now, AlarmAcknowledgeAction, testOrganizationID, testSiteID, testAlarmID))
+	staleRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(staleRecorder, stale)
+	if staleRecorder.Code != http.StatusConflict || !strings.Contains(staleRecorder.Body.String(), "ALARM_VERSION_CONFLICT") {
+		t.Fatalf("status=%d body=%s", staleRecorder.Code, staleRecorder.Body.String())
+	}
+
+	illegal := httptest.NewRequest(http.MethodPost, acknowledgePath, strings.NewReader(`{"expectedVersion":2,"reason":"duplicate acknowledgement"}`))
+	illegal.Header.Set("Content-Type", "application/json")
+	illegal.Header.Set("Idempotency-Key", "alarm-http-ack-4")
+	illegal.Header.Set(AlarmWriteContextHeader, signedReadContext(t, signer, now, AlarmAcknowledgeAction, testOrganizationID, testSiteID, testAlarmID))
+	illegalRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(illegalRecorder, illegal)
+	if illegalRecorder.Code != http.StatusUnprocessableEntity || !strings.Contains(illegalRecorder.Body.String(), "ALARM_TRANSITION_INVALID") {
+		t.Fatalf("status=%d body=%s", illegalRecorder.Code, illegalRecorder.Body.String())
+	}
+}
+
+func TestAlarmHTTPRejectsWrongWriteActionBeforeStore(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	signer := testSigner(t)
+	memory, err := NewMemoryStore([]alarmmodel.Alarm{validHTTPAlarm()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &countingStore{delegate: memory}
+	handler, err := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, InternalSiteAlarmsPrefix+testSiteID+"/alarms/"+testAlarmID+":close", strings.NewReader(`{"expectedVersion":1,"reason":"close"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "alarm-http-close-1")
+	request.Header.Set(AlarmWriteContextHeader, signedReadContextWithActions(t, signer, now, []string{AlarmCloseAction, AlarmReadAction}, testOrganizationID, testSiteID, testAlarmID))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden || store.calls.Load() != 0 {
+		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, store.calls.Load(), recorder.Body.String())
+	}
+}
+
 func signedReadContext(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, action, organizationID, siteID, alarmID string) string {
 	t.Helper()
 	return signedReadContextWithActions(t, signer, now, []string{action}, organizationID, siteID, alarmID)
@@ -224,7 +335,7 @@ func validHTTPAlarm() alarmmodel.Alarm {
 		Severity: alarmmodel.SeverityMajor, Status: status, OccurrenceCount: 2,
 		FirstOccurredAt: "2026-07-31T09:00:00Z", LastOccurredAt: "2026-07-31T09:05:00Z",
 		Evidence:    []alarmmodel.EvidenceReference{{Kind: "telemetry-snapshot", Reference: "snapshot:41", CapturedAt: "2026-07-31T09:05:00Z"}},
-		Transitions: []alarmmodel.Transition{{ToStatus: status, Reason: "ALARM_PUBLISHED", ActorType: "WORKLOAD", OccurredAt: "2026-07-31T09:00:00Z", Version: 1}},
+		Transitions: []alarmmodel.Transition{{ToStatus: status, Operation: alarmmodel.OperationPublish, Reason: "ALARM_PUBLISHED", ActorType: "WORKLOAD", OccurredAt: "2026-07-31T09:00:00Z", Version: 1}},
 		Version:     1, CreatedAt: "2026-07-31T09:00:00Z", UpdatedAt: "2026-07-31T09:05:00Z",
 	}
 }

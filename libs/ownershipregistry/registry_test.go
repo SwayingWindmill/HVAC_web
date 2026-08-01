@@ -147,6 +147,42 @@ func TestDisabledS3BaselineLoadsButIsNotDiscoverable(t *testing.T) {
 	}
 }
 
+func TestDisabledS4ReadAndLifecycleBaselinesLoadButAreNotDiscoverable(t *testing.T) {
+	input := `{"registryVersion":1,"registryRevision":13,"routes":[` +
+		`{"method":"GET","path":"/api/v1/sites/{siteId}/alarms/{alarmId}","owner":"alarm-service","publicIngress":"platform-gateway","activationStatus":"expand-baseline","revision":1,"rollout":{"mode":"disabled"},"compatibilityMode":"native","allowedScopeDimensions":["organization","site","principal","alarm"],"migrationPhase":"S4-R0-contract-only","cohortGroup":"s4-alarm-read-v1","shadowSideEffectPolicy":"NONE","readOnlyFallback":false,"fallbackForbiddenResults":["AUTHORIZATION_DENIED","RESOURCE_NOT_FOUND"]},` +
+		`{"method":"POST","path":"/api/v1/sites/{siteId}/alarms/{alarmId}:acknowledge","owner":"alarm-service","publicIngress":"platform-gateway","activationStatus":"expand-baseline","revision":1,"rollout":{"mode":"disabled"},"compatibilityMode":"native","allowedScopeDimensions":["organization","site","alarm","principal","key"],"migrationPhase":"S4-R0-contract-only","cohortGroup":"s4-alarm-lifecycle-v1","shadowSideEffectPolicy":"SYNTHETIC_ONLY","readOnlyFallback":false,"fallbackForbiddenResults":["AUTHORIZATION_DENIED","RESOURCE_NOT_FOUND","VERSION_CONFLICT","IDEMPOTENCY_CONFLICT"]}]}`
+	snapshot := mustParse(t, input)
+	if !snapshot.ContainsOwner(ownershipregistry.OwnerAlarm) {
+		t.Fatal("Alarm owner was not retained in the parsed baseline")
+	}
+	if _, err := snapshot.Resolve("GET", "/api/v1/sites/site-1/alarms/alarm-1", "org\x00user"); !errors.Is(err, ownershipregistry.ErrRouteMissing) {
+		t.Fatalf("disabled S4 read route became resolvable: %v", err)
+	}
+	if _, err := snapshot.Resolve("POST", "/api/v1/sites/site-1/alarms/alarm-1:acknowledge", "org\x00user"); !errors.Is(err, ownershipregistry.ErrRouteMissing) {
+		t.Fatalf("disabled S4 lifecycle route became resolvable: %v", err)
+	}
+	if methods := snapshot.AllowedMethods("/api/v1/sites/site-1/alarms/alarm-1:acknowledge"); len(methods) != 0 {
+		t.Fatalf("disabled S4 lifecycle route leaked allowed methods: %v", methods)
+	}
+}
+
+func TestS4LifecycleBaselineRejectsReadPolicyAndIncompleteWriteAuthority(t *testing.T) {
+	readPolicy := `{"registryVersion":1,"registryRevision":13,"routes":[{"method":"POST","path":"/api/v1/sites/{siteId}/alarms/{alarmId}:acknowledge","owner":"alarm-service","publicIngress":"platform-gateway","activationStatus":"expand-baseline","revision":1,"rollout":{"mode":"disabled"},"compatibilityMode":"native","allowedScopeDimensions":["organization","site","alarm","principal","key"],"migrationPhase":"S4-R0-contract-only","cohortGroup":"s4-alarm-lifecycle-v1","shadowSideEffectPolicy":"NONE","readOnlyFallback":false,"fallbackForbiddenResults":["AUTHORIZATION_DENIED","RESOURCE_NOT_FOUND","VERSION_CONFLICT","IDEMPOTENCY_CONFLICT"]}]}`
+	if _, err := ownershipregistry.Parse([]byte(readPolicy)); err == nil {
+		t.Fatal("S4 lifecycle route accepted a read-only shadow policy")
+	}
+
+	missingIdempotencyScope := `{"registryVersion":1,"registryRevision":13,"routes":[{"method":"POST","path":"/api/v1/sites/{siteId}/alarms/{alarmId}:acknowledge","owner":"alarm-service","publicIngress":"platform-gateway","activationStatus":"expand-baseline","revision":1,"rollout":{"mode":"disabled"},"compatibilityMode":"native","allowedScopeDimensions":["organization","site","alarm","principal"],"migrationPhase":"S4-R0-contract-only","cohortGroup":"s4-alarm-lifecycle-v1","shadowSideEffectPolicy":"SYNTHETIC_ONLY","readOnlyFallback":false,"fallbackForbiddenResults":["AUTHORIZATION_DENIED","RESOURCE_NOT_FOUND","VERSION_CONFLICT","IDEMPOTENCY_CONFLICT"]}]}`
+	if _, err := ownershipregistry.Parse([]byte(missingIdempotencyScope)); err == nil {
+		t.Fatal("S4 lifecycle route accepted missing idempotency scope")
+	}
+
+	unknownOperation := `{"registryVersion":1,"registryRevision":13,"routes":[{"method":"POST","path":"/api/v1/sites/{siteId}/alarms/{alarmId}:delete","owner":"alarm-service","publicIngress":"platform-gateway","activationStatus":"expand-baseline","revision":1,"rollout":{"mode":"disabled"},"compatibilityMode":"native","allowedScopeDimensions":["organization","site","alarm","principal","key"],"migrationPhase":"S4-R0-contract-only","cohortGroup":"s4-alarm-lifecycle-v1","shadowSideEffectPolicy":"SYNTHETIC_ONLY","readOnlyFallback":false,"fallbackForbiddenResults":["AUTHORIZATION_DENIED","RESOURCE_NOT_FOUND","VERSION_CONFLICT","IDEMPOTENCY_CONFLICT"]}]}`
+	if _, err := ownershipregistry.Parse([]byte(unknownOperation)); err == nil {
+		t.Fatal("S4 lifecycle route accepted an undeclared operation")
+	}
+}
+
 func TestPolicyRollbackOnlyChangesFutureDecisions(t *testing.T) {
 	audit := ownershipregistry.NewMemoryAuditSink()
 	manager := ownershipregistry.NewManager(mustParse(t, registryJSON(1, 1, ownershipregistry.OwnerLegacy, 100)), audit, fixedNow)
