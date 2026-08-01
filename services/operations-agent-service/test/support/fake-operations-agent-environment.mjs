@@ -1,3 +1,5 @@
+import assert from 'node:assert/strict';
+
 import { createInvestigationCoordinator } from '../../dist/index.js';
 import { InvestigationRepositoryConflictError } from '../../dist/application/index.js';
 
@@ -141,14 +143,19 @@ class ScriptedFakeRuntime {
 
     this.calls.push({
       stepId: step.stepId,
-      runId: input.runId,
+      runId: input.context.runId,
       checkpointPosition: input.checkpoint?.position ?? null,
+      context: input.context,
     });
 
     if (step.attemptBusinessMutation === true) {
-      input.investigation.status = 'FAILED';
-      input.investigation.evidenceIds.push('runtime-forged-evidence');
       this.attemptedBusinessMutation = true;
+      assert.throws(() => {
+        input.context.runStatus = 'FAILED';
+      }, TypeError);
+      assert.throws(() => {
+        input.context.allowedReadTools.push('commands.createIntent');
+      }, TypeError);
     }
 
     return {

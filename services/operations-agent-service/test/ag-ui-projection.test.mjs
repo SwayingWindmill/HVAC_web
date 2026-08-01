@@ -143,7 +143,9 @@ test('committed Investigation state projects to a stable bounded AG-UI event bat
   const serialized = JSON.stringify(events);
   for (const forbidden of [
     'metadata', 'requestId', 'attemptId', 'lease', 'checkpoint', 'runtimeRevision',
-    'providerMessage', 'rawPrompt', 'points', 'delegationGrant',
+    'providerMessage', 'rawPrompt', 'points', 'delegationGrant', 'instructions',
+    'ownerPayload', 'modelOutput', 'allowedReadTools', 'effectPolicy',
+    'scopePolicy', 'untrustedContentPolicy', 'TRUSTED_CONTROL',
   ]) {
     assert.equal(serialized.includes(forbidden), false, `must not expose ${forbidden}`);
   }

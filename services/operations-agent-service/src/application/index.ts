@@ -125,6 +125,7 @@ export {
   type RegistryReader,
   type RuntimeCheckpoint,
   type RuntimeCheckpointDraft,
+  type RuntimePlanningContext,
   type RuntimePlanningResult,
   type RuntimeReadPlan,
   type ToolAuthorizationGrant,

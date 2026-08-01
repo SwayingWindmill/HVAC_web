@@ -15,6 +15,7 @@ import {
   assertActiveRun,
   copyPlan,
   normalizeProgram,
+  normalizeRuntimePlanningContext,
   positionFor,
   restoreExecution,
   type LangGraphRuntimeProgram,
@@ -86,9 +87,10 @@ export const createLangGraphAgentExecutionRuntime = (
 
   const runtime: AgentExecutionRuntime = {
     async planReads(input): Promise<RuntimePlanningResult> {
-      const { investigation, runId, checkpoint } = input;
-      assertActiveRun(investigation, runId, program);
-      const execution = restoreExecution(investigation, runId, checkpoint, program);
+      const { checkpoint } = input;
+      const context = normalizeRuntimePlanningContext(input.context);
+      assertActiveRun(context, program);
+      const execution = restoreExecution(context, checkpoint, program);
       const result = await graph.invoke({
         execution,
         selectedStepIndex: null,
@@ -97,7 +99,7 @@ export const createLangGraphAgentExecutionRuntime = (
       if (result.planning === null) {
         return {
           status: 'UNABLE_TO_CONCLUDE',
-          reason: `Runtime program ${program.id} has no remaining READ Step.`,
+          reasonCode: 'NO_REMAINING_READ_STEP',
         };
       }
       return {

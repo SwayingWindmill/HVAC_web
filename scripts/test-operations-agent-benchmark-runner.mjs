@@ -36,7 +36,7 @@ test('runner discovers and passes all repository Operations Agent scenarios', as
 
   assert.equal(report.reportVersion, OPERATIONS_AGENT_BENCHMARK_REPORT_VERSION);
   assert.equal(report.status, 'PASSED');
-  assert.equal(report.summary.discoveredScenarios, 4);
+  assert.equal(report.summary.discoveredScenarios, 5);
   assert.equal(report.summary.structureFailures, 0);
   assert.equal(report.summary.blockerFailures, 0);
   assert.deepEqual(
@@ -46,6 +46,7 @@ test('runner discovers and passes all repository Operations Agent scenarios', as
       'setpoint-proposal-only',
       'stale-current-telemetry',
       'unauthorized-site-nondiscoverable',
+      'untrusted-content-injection-boundary',
     ],
   );
   for (const scenario of report.scenarios) {
@@ -54,7 +55,7 @@ test('runner discovers and passes all repository Operations Agent scenarios', as
     assert.equal(scenario.phases.scoring.status, 'NOT_EVALUATED');
     assert.equal(scenario.contractVersion, 'operations-agent-scenario/v1');
   }
-  assert.match(formatOperationsAgentBenchmarkSummary(report), /4 scenarios passed/);
+  assert.match(formatOperationsAgentBenchmarkSummary(report), /5 scenarios passed/);
 });
 
 test('structure failure prevents blocker and scoring phases', async () => {
@@ -102,8 +103,24 @@ test('deterministic blocker failure cannot be offset by scored criteria', async 
   });
 });
 
-test('registered blocker profiles reject night-energy, stale-state, and action-safety regressions', async () => {
+test('registered blocker profiles reject trust, night-energy, stale-state, and action-safety regressions', async () => {
   const cases = [
+    {
+      file: 'untrusted-content-injection-boundary.v1.json',
+      mutate: (scenario) => {
+        delete scenario.trustBoundary;
+      },
+      code: 'UNTRUSTED_CONTENT_POLICY_MISSING',
+    },
+    {
+      file: 'untrusted-content-injection-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.tools.allowed.push('commands.createIntent');
+        scenario.tools.forbidden = scenario.tools.forbidden
+          .filter((tool) => tool !== 'commands.createIntent');
+      },
+      code: 'UNTRUSTED_TOOL_SELECTION',
+    },
     {
       file: 'night-energy-insufficient-attribution.v1.json',
       mutate: (scenario) => {
@@ -179,7 +196,7 @@ test('CLI prints a human summary and writes the versioned machine report', async
 
     assert.equal(execution.status, 0, execution.stderr);
     assert.match(execution.stdout, /Operations Agent Benchmark: PASSED/);
-    assert.match(execution.stdout, /4 scenarios passed/);
+    assert.match(execution.stdout, /5 scenarios passed/);
 
     const report = JSON.parse(await readFile(reportPath, 'utf8'));
     assert.equal(report.reportVersion, OPERATIONS_AGENT_BENCHMARK_REPORT_VERSION);

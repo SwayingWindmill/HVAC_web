@@ -6,6 +6,7 @@ import {
   createIdempotencyKey,
   createInvestigationBusinessRecord,
   createStepIdentity,
+  type AgentRunView,
   type CommittedEffectKind,
   type CommittedEffectView,
   type InvestigationBusinessRecord,
@@ -28,6 +29,7 @@ import {
   type OwnerReadContext,
   type OwnerReadResult,
   type ParallelReadRequest,
+  type RuntimePlanningContext,
   type RuntimePlanningResult,
   type RuntimeReadPlan,
 } from './ports.js';
@@ -49,6 +51,7 @@ export type InvestigationCoordinatorErrorCode =
   | 'OWNER_RESPONSE_TOO_LARGE'
   | 'OWNER_RESPONSE_INVALID'
   | 'OPERATOR_INPUT_CONFLICT'
+  | 'UNTRUSTED_CONTENT_REJECTED'
   | 'INVALID_INVESTIGATION_STATE';
 
 export class InvestigationCoordinatorError extends Error {
@@ -274,13 +277,15 @@ const operatorInputRecordMatches = (
   && record.values.analysisScope === values.analysisScope
   && record.values.operatorNote === values.operatorNote;
 
-const supportedReadTools = new Set<ParallelReadRequest['tool']>([
+const supportedReadToolCatalog = Object.freeze<readonly ParallelReadRequest['tool'][]>([
   'registry.getSite',
   'registry.listSiteEquipment',
   'telemetry.getCurrentSnapshot',
   'analytics.getEnergySeries',
   'commands.getCapabilities',
 ]);
+
+const supportedReadTools = new Set<ParallelReadRequest['tool']>(supportedReadToolCatalog);
 
 const supportedQualities = new Set<OwnerReadResult['quality']>([
   'GOOD',
@@ -383,47 +388,133 @@ const hasValidReadInput = (request: ParallelReadRequest): boolean => {
     && isNonEmptyReadString(input.equipmentId);
 };
 
-const countValidatedReads = (plan: RuntimeReadPlan): number => {
-  if (plan.batches.length === 0) {
+const createRuntimePlanningContext = (
+  investigation: OperationsInvestigationView,
+  run: AgentRunView,
+): RuntimePlanningContext => Object.freeze({
+  schemaVersion: 1,
+  source: 'APPLICATION_POLICY',
+  trust: 'TRUSTED_CONTROL',
+  investigationId: investigation.id,
+  scope: Object.freeze({
+    organizationId: investigation.scope.organizationId,
+    siteId: investigation.scope.siteId,
+    equipmentId: investigation.scope.equipmentId,
+    deviceId: investigation.scope.deviceId,
+  }),
+  revision: investigation.revision,
+  runId: run.id,
+  runStatus: 'ACTIVE',
+  runtimeRevision: run.runtimeRevision,
+  allowedReadTools: Object.freeze([...supportedReadToolCatalog]),
+  effectPolicy: 'READ_ONLY',
+  scopePolicy: 'EXACT_INVESTIGATION_SCOPE',
+  untrustedContentPolicy: 'EXCLUDED',
+});
+
+const requestIsWithinPlanningScope = (
+  request: ParallelReadRequest,
+  scope: InvestigationScope,
+): boolean => {
+  if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteEquipment') {
+    return scope.siteId === null || request.input.siteId === scope.siteId;
+  }
+  if (request.tool === 'analytics.getEnergySeries') {
+    return request.input.organizationId === scope.organizationId
+      && (scope.siteId === null || request.input.siteId === scope.siteId);
+  }
+  return scope.equipmentId === null || request.input.equipmentId === scope.equipmentId;
+};
+
+const validateRuntimePlanningResult = (value: unknown): RuntimePlanningResult => {
+  if (!isReadInputRecord(value) || typeof value.status !== 'string') {
     throw new InvestigationCoordinatorError(
-      'INVALID_INVESTIGATION_STATE',
-      'Runtime READ plan must contain at least one batch.',
+      'UNTRUSTED_CONTENT_REJECTED',
+      'Runtime planning result must match the bounded result contract.',
+    );
+  }
+  if (value.status === 'UNABLE_TO_CONCLUDE') {
+    if (!hasExactReadInputKeys(value, ['status', 'reasonCode'])
+      || value.reasonCode !== 'NO_REMAINING_READ_STEP') {
+      throw new InvestigationCoordinatorError(
+        'UNTRUSTED_CONTENT_REJECTED',
+        'Runtime unable-to-conclude result is outside the bounded result contract.',
+      );
+    }
+    return { status: 'UNABLE_TO_CONCLUDE', reasonCode: value.reasonCode };
+  }
+  if (value.status !== 'PLANNED'
+    || !hasExactReadInputKeys(value, ['status', 'plan', 'checkpoint'])
+    || !isReadInputRecord(value.checkpoint)
+    || !hasExactReadInputKeys(value.checkpoint, ['position', 'opaqueState'])
+    || !isNonEmptyReadString(value.checkpoint.position)
+    || typeof value.checkpoint.opaqueState !== 'string') {
+    throw new InvestigationCoordinatorError(
+      'UNTRUSTED_CONTENT_REJECTED',
+      'Runtime planned result is outside the bounded result contract.',
+    );
+  }
+  return value as unknown as RuntimePlanningResult;
+};
+
+const countValidatedReads = (
+  plan: RuntimeReadPlan,
+  context: RuntimePlanningContext,
+): number => {
+  const planValue: unknown = plan;
+  if (!isReadInputRecord(planValue)
+    || !hasExactReadInputKeys(planValue, ['batches'])
+    || !Array.isArray(planValue.batches)
+    || planValue.batches.length === 0) {
+    throw new InvestigationCoordinatorError(
+      'UNTRUSTED_CONTENT_REJECTED',
+      'Runtime READ plan must contain only a non-empty batches array.',
     );
   }
   const batchIds = new Set<string>();
   const requestIds = new Set<string>();
   let count = 0;
-  for (const batch of plan.batches) {
-    if (batch.batchId.trim().length === 0 || batchIds.has(batch.batchId)) {
+  for (const batchValue of planValue.batches) {
+    if (!isReadInputRecord(batchValue)
+      || !hasExactReadInputKeys(batchValue, ['batchId', 'requests'])
+      || !isNonEmptyReadString(batchValue.batchId)
+      || !Array.isArray(batchValue.requests)
+      || batchValue.requests.length === 0
+      || batchIds.has(batchValue.batchId)) {
       throw new InvestigationCoordinatorError(
-        'INVALID_INVESTIGATION_STATE',
-        `Runtime READ batch identity ${batch.batchId} is invalid or duplicated.`,
+        'UNTRUSTED_CONTENT_REJECTED',
+        'Runtime READ batch shape, identity, or requests are invalid.',
       );
     }
-    batchIds.add(batch.batchId);
-    if (batch.requests.length === 0) {
-      throw new InvestigationCoordinatorError(
-        'INVALID_INVESTIGATION_STATE',
-        `Runtime READ batch ${batch.batchId} must contain at least one request.`,
-      );
-    }
-    for (const request of batch.requests) {
-      if (request.requestId.trim().length === 0 || requestIds.has(request.requestId)) {
+    batchIds.add(batchValue.batchId);
+    for (const requestValue of batchValue.requests) {
+      if (!isReadInputRecord(requestValue)
+        || !hasExactReadInputKeys(requestValue, ['requestId', 'tool', 'input'])
+        || !isNonEmptyReadString(requestValue.requestId)
+        || requestIds.has(requestValue.requestId)) {
         throw new InvestigationCoordinatorError(
-          'INVALID_INVESTIGATION_STATE',
-          `Runtime READ request identity ${request.requestId} is invalid or duplicated.`,
+          'UNTRUSTED_CONTENT_REJECTED',
+          'Runtime READ request shape or identity is invalid.',
         );
       }
-      if (!supportedReadTools.has(request.tool)) {
+      const request = requestValue as unknown as ParallelReadRequest;
+      if (!supportedReadTools.has(request.tool)
+        || !context.allowedReadTools.includes(request.tool)) {
         throw new InvestigationCoordinatorError(
-          'INVALID_INVESTIGATION_STATE',
-          `Runtime requested unsupported READ tool ${String(request.tool)}.`,
+          'UNTRUSTED_CONTENT_REJECTED',
+          `Runtime requested unsupported or disallowed READ tool ${String(request.tool)}.`,
         );
       }
       if (!hasValidReadInput(request)) {
         throw new InvestigationCoordinatorError(
-          'INVALID_INVESTIGATION_STATE',
+          'UNTRUSTED_CONTENT_REJECTED',
           `Runtime READ request ${request.requestId} has an invalid fixed-tool input.`,
+        );
+      }
+      if (!requestIsWithinPlanningScope(request, context.scope)) {
+        throw new InvestigationCoordinatorError(
+          'UNTRUSTED_CONTENT_REJECTED',
+          `Runtime READ request ${request.requestId} attempts to widen Investigation Scope.`,
         );
       }
       requestIds.add(request.requestId);
@@ -660,11 +751,11 @@ export const createInvestigationCoordinator = (
             'Runtime Checkpoint revision does not match the active Agent Run.',
           );
         }
-        let planning: RuntimePlanningResult;
+        const runtimeContext = createRuntimePlanningContext(investigation.view(), run);
+        let runtimePlanning: RuntimePlanningResult;
         try {
-          planning = await ports.agentExecutionRuntime.planReads({
-            investigation: investigation.view(),
-            runId: run.id,
+          runtimePlanning = await ports.agentExecutionRuntime.planReads({
+            context: runtimeContext,
             checkpoint,
           });
         } catch (cause) {
@@ -674,11 +765,15 @@ export const createInvestigationCoordinator = (
             { cause },
           );
         }
+        const planning = validateRuntimePlanningResult(runtimePlanning);
         if (planning.status === 'UNABLE_TO_CONCLUDE') {
-          throw new InvestigationCoordinatorError('UNABLE_TO_CONCLUDE', planning.reason);
+          throw new InvestigationCoordinatorError(
+            'UNABLE_TO_CONCLUDE',
+            'The Runtime has no remaining authorized bounded READ Step.',
+          );
         }
 
-        const plannedReadCount = countValidatedReads(planning.plan);
+        const plannedReadCount = countValidatedReads(planning.plan, runtimeContext);
         const budget = await ports.budgetGuard.check({
           investigationId: command.investigationId,
           runId: run.id,

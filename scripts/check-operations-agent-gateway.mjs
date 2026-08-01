@@ -123,7 +123,21 @@ for (const required of [
     failures.push(`Tool Authorization OpenAPI is missing ${required}.`);
   }
 }
-for (const forbidden of ['LangGraph', 'opaqueState', 'runtimeRevision', 'providerMessage', 'points:']) {
+for (const forbidden of [
+  'LangGraph',
+  'opaqueState',
+  'runtimeRevision',
+  'providerMessage',
+  'points:',
+  'rawPrompt',
+  'instructions',
+  'ownerPayload',
+  'modelOutput',
+  'allowedReadTools',
+  'effectPolicy',
+  'scopePolicy',
+  'untrustedContentPolicy',
+]) {
   if (publicContract.includes(forbidden)
     || internalContract.includes(forbidden)
     || toolAuthorizationContract.includes(forbidden)) {
@@ -133,6 +147,7 @@ for (const forbidden of ['LangGraph', 'opaqueState', 'runtimeRevision', 'provide
 for (const required of [
   'maximumRequestBytes',
   'AUTHORIZATION_DENIED',
+  'UNTRUSTED_CONTENT_REJECTED',
   'RESOURCE_NOT_FOUND',
   'streamPattern',
   'createAgUiEventStreamResponse',

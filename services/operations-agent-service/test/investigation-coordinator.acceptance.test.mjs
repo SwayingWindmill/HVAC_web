@@ -71,11 +71,43 @@ test('the Coordinator owns a complete framework-independent Investigation accept
     expectedRevision: started.revision,
   });
 
-  assert.deepEqual(environment.runtime.calls, [{
+  assert.equal(environment.runtime.calls.length, 1);
+  const runtimeCall = environment.runtime.calls[0];
+  assert.deepEqual({
+    stepId: runtimeCall.stepId,
+    runId: runtimeCall.runId,
+    checkpointPosition: runtimeCall.checkpointPosition,
+  }, {
     stepId: 'step-collect-site-context',
     runId: firstRun.id,
     checkpointPosition: null,
-  }]);
+  });
+  assert.deepEqual(Object.keys(runtimeCall.context).sort(), [
+    'allowedReadTools',
+    'effectPolicy',
+    'investigationId',
+    'revision',
+    'runId',
+    'runStatus',
+    'runtimeRevision',
+    'schemaVersion',
+    'scope',
+    'scopePolicy',
+    'source',
+    'trust',
+    'untrustedContentPolicy',
+  ]);
+  assert.equal(runtimeCall.context.source, 'APPLICATION_POLICY');
+  assert.equal(runtimeCall.context.trust, 'TRUSTED_CONTROL');
+  assert.equal(runtimeCall.context.untrustedContentPolicy, 'EXCLUDED');
+  assert.equal(runtimeCall.context.effectPolicy, 'READ_ONLY');
+  assert.equal(Object.isFrozen(runtimeCall.context), true);
+  assert.equal(Object.isFrozen(runtimeCall.context.scope), true);
+  assert.equal(Object.isFrozen(runtimeCall.context.allowedReadTools), true);
+  assert.doesNotMatch(
+    JSON.stringify(runtimeCall.context),
+    /operatorNote|rawPrompt|payload|finding|evidence|instruction/iu,
+  );
   assert.equal(environment.runtime.attemptedBusinessMutation, true);
   assert.equal(environment.owners.maxConcurrentReads, 2);
   assert.equal(advanced.results.length, 2);

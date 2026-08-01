@@ -299,6 +299,14 @@ const mapError = (error: unknown): Response => {
     if (error.code === 'BUDGET_EXHAUSTED') {
       return problem(429, 'INVESTIGATION_BUDGET_EXHAUSTED', 'Investigation budget exhausted', error.message);
     }
+    if (error.code === 'UNTRUSTED_CONTENT_REJECTED') {
+      return problem(
+        422,
+        'UNTRUSTED_CONTENT_REJECTED',
+        'Untrusted content rejected',
+        'Runtime output attempted to alter the bounded Operations Agent control policy.',
+      );
+    }
     return problem(409, error.code, 'Investigation conflict', error.message);
   }
   return problem(
