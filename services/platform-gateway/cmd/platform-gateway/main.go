@@ -55,6 +55,11 @@ func main() {
 		logger.Error("gateway_command_config_invalid", "error_code", "COMMAND_CONFIG_INVALID")
 		os.Exit(1)
 	}
+	alarmConfig, err := loadAlarmConfig(workloadCertificate)
+	if err != nil {
+		logger.Error("gateway_alarm_config_invalid", "error_code", "ALARM_CONFIG_INVALID")
+		os.Exit(1)
+	}
 	analyticsConfig, err := loadAnalyticsConfig(workloadCertificate)
 	if err != nil {
 		logger.Error("gateway_analytics_config_invalid", "error_code", "ANALYTICS_CONFIG_INVALID")
@@ -87,6 +92,7 @@ func main() {
 		Registry:      routing.registry,
 		Telemetry:     telemetryConfig,
 		Command:       commandConfig,
+		Alarm:         alarmConfig,
 		Analytics:     analyticsConfig,
 		Operations:    operationsConfig,
 		Observability: telemetry,
@@ -326,6 +332,40 @@ func loadCommandConfig(certificate *tls.Certificate) (*gateway.CommandConfig, er
 		Timeout:           10 * time.Second,
 		MaxResponseBytes:  256 << 10,
 		BackendHTTPClient: &http.Client{Transport: workloadTransport(roots, certificate, envOr("COMMAND_SERVICE_SERVER_NAME", "localhost"))},
+	}, nil
+}
+
+func loadAlarmConfig(certificate *tls.Certificate) (*gateway.AlarmConfig, error) {
+	serviceURL := strings.TrimSpace(os.Getenv("ALARM_SERVICE_URL"))
+	if serviceURL == "" {
+		return nil, nil
+	}
+	parsed, err := url.Parse(serviceURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, errors.New("ALARM_SERVICE_URL must be an HTTPS origin without user info, path, query or fragment")
+	}
+	if certificate == nil {
+		return nil, errors.New("Alarm Service requires the authenticated Gateway workload certificate")
+	}
+	caPath := strings.TrimSpace(os.Getenv("ALARM_SERVICE_SERVER_CA"))
+	if caPath == "" {
+		return nil, errors.New("ALARM_SERVICE_SERVER_CA is required when ALARM_SERVICE_URL is configured")
+	}
+	roots, err := loadCertPool(caPath, "Alarm Service server CA")
+	if err != nil {
+		return nil, err
+	}
+	return &gateway.AlarmConfig{
+		BackendBaseURL:   strings.TrimRight(parsed.String(), "/"),
+		BackendAudience:  envOr("ALARM_SERVICE_AUDIENCE", "alarm-service"),
+		Timeout:          5 * time.Second,
+		MaxResponseBytes: 2 << 20,
+		BackendHTTPClient: &http.Client{Transport: workloadTransport(
+			roots,
+			certificate,
+			envOr("ALARM_SERVICE_SERVER_NAME", "localhost"),
+		)},
 	}, nil
 }
 

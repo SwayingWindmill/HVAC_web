@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
@@ -24,6 +25,7 @@ type PrincipalCapabilityResolver interface {
 type principalCapabilityResolver struct {
 	registryStore  AuthorizationStore
 	telemetryStore TelemetryAuthorizationStore
+	alarmStore     AlarmAuthorizationStore
 	now            func() time.Time
 }
 
@@ -31,8 +33,8 @@ type resolvedAuthorizationStore struct {
 	facts AuthorizationFacts
 }
 
-func newPrincipalCapabilityResolver(registryStore AuthorizationStore, telemetryStore TelemetryAuthorizationStore, now func() time.Time) PrincipalCapabilityResolver {
-	return &principalCapabilityResolver{registryStore: registryStore, telemetryStore: telemetryStore, now: now}
+func newPrincipalCapabilityResolver(registryStore AuthorizationStore, telemetryStore TelemetryAuthorizationStore, alarmStore AlarmAuthorizationStore, now func() time.Time) PrincipalCapabilityResolver {
+	return &principalCapabilityResolver{registryStore: registryStore, telemetryStore: telemetryStore, alarmStore: alarmStore, now: now}
 }
 
 func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx context.Context, lookup PrincipalCapabilityLookup) (identitycontext.EffectiveAuthorization, error) {
@@ -48,8 +50,16 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 	if err != nil {
 		return identitycontext.EffectiveAuthorization{}, err
 	}
+	alarmFacts, err := resolver.alarmStore.LookupAlarmAuthorization(ctx, AuthorizationLookup{
+		SubjectIssuer:        lookup.SubjectIssuer,
+		Subject:              lookup.Subject,
+		ActingOrganizationID: lookup.ActingOrganizationID,
+	})
+	if err != nil {
+		return identitycontext.EffectiveAuthorization{}, err
+	}
 
-	capabilities := make([]identitycontext.Capability, 0, len(principalRegistryCapabilities)+len(principalTelemetryCapabilities))
+	capabilities := make([]identitycontext.Capability, 0, len(principalRegistryCapabilities)+len(principalTelemetryCapabilities)+len(principalAlarmCapabilities))
 	factStore := resolvedAuthorizationStore{facts: registryFacts}
 	decidedAt := resolver.now()
 	for _, candidate := range principalRegistryCapabilities {
@@ -69,17 +79,22 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 			capabilities = append(capabilities, candidate.capability)
 		}
 	}
+	for _, candidate := range principalAlarmCapabilities {
+		if alarmCapabilityAllowed(alarmFacts, decidedAt, lookup.ActingOrganizationID, candidate.action) {
+			capabilities = append(capabilities, candidate.capability)
+		}
+	}
 
 	return identitycontext.EffectiveAuthorization{
 		CapabilitySetVersion: identitycontext.CapabilitySetVersion,
-		PolicyRevision:       combinedCapabilityPolicyRevision(registryFacts.PolicyRevision, telemetryFacts.PolicyRevision),
+		PolicyRevision:       combinedCapabilityPolicyRevision(registryFacts.PolicyRevision, telemetryFacts.PolicyRevision, alarmFacts.PolicyRevision),
 		Capabilities:         capabilities,
 	}, nil
 }
 
-func combinedCapabilityPolicyRevision(registryRevision, telemetryRevision string) string {
-	digest := sha256.Sum256([]byte(registryRevision + "\x00" + telemetryRevision))
-	return "capability-v2:" + hex.EncodeToString(digest[:])
+func combinedCapabilityPolicyRevision(registryRevision, telemetryRevision, alarmRevision string) string {
+	digest := sha256.Sum256([]byte(registryRevision + "\x00" + telemetryRevision + "\x00" + alarmRevision))
+	return "capability-v3:" + hex.EncodeToString(digest[:])
 }
 
 func telemetryCapabilityAllowed(facts TelemetryAuthorizationFacts, now time.Time, actingOrganizationID string, action telemetryauth.Action) bool {
@@ -135,4 +150,12 @@ var principalTelemetryCapabilities = []struct {
 	{identitycontext.CapabilityTelemetryBatchRead, telemetryauth.ActionBatchRead},
 	{identitycontext.CapabilityTelemetrySubscribe, telemetryauth.ActionSubscribe},
 	{identitycontext.CapabilityTelemetryHistoryRead, telemetryauth.ActionHistoryRead},
+}
+
+var principalAlarmCapabilities = []struct {
+	capability identitycontext.Capability
+	action     alarmauth.Action
+}{
+	{identitycontext.CapabilityAlarmList, alarmauth.ActionList},
+	{identitycontext.CapabilityAlarmRead, alarmauth.ActionRead},
 }

@@ -50,6 +50,7 @@
     "real-commands:test": "node --experimental-strip-types --test scripts/test-real-commands.mjs",
     "real-alarms:test": "node --experimental-strip-types --test scripts/test-real-alarms.mjs",
     "real-alarms:browser": "node scripts/run-real-alarms-browser-audit.mjs",
+    "real-alarms:lifecycle-browser": "node scripts/run-real-alarm-lifecycle-browser-audit.mjs",
     "s4:alarm:check": "node scripts/check-s4-alarm-baseline.mjs",
     "s4:alarm:postgres": "node scripts/run-s4-alarm-postgres-tests.mjs",
     "s4:alarm-service": "npm run s4:alarm:check && npm run ownership:check && node scripts/run-go.mjs test ./libs/alarmmodel/... ./libs/ownershipregistry/... ./services/alarm-service/... && node scripts/run-go.mjs vet ./libs/alarmmodel/... ./libs/ownershipregistry/... ./services/alarm-service/...",

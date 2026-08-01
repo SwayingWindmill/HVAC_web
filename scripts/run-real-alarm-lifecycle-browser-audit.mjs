@@ -11,8 +11,8 @@ import WebSocket from 'ws';
 
 const root = resolve(process.cwd());
 const fixtureRoot = resolve(root, 'scripts/fixtures/real-alarms');
-const outputRoot = resolve(root, 'out/real-alarms-certification');
-const profileDir = join(tmpdir(), `real-alarms-browser-${process.pid}`);
+const outputRoot = resolve(root, 'out/real-alarm-lifecycle-certification');
+const profileDir = join(tmpdir(), `real-alarm-lifecycle-browser-${process.pid}`);
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 const organizationId = '01910000-0000-7000-8000-000000000001';
 const siteAId = '01910000-0001-7000-8000-000000000001';
@@ -338,7 +338,7 @@ function createGatewayFixture() {
         return;
       }
 
-      const detailMatch = url.pathname.match(/^\/api\/v1\/sites\/([^/]+)\/alarms\/([^/]+)$/);
+      const detailMatch = url.pathname.match(/^\/api\/v1\/local\/sites\/([^/]+)\/alarms\/([^/]+)$/);
       if (detailMatch && request.method === 'GET') {
         const [, siteId, alarmId] = detailMatch;
         const item = (alarmsBySite.get(siteId) ?? []).find((entry) => entry.alarmId === alarmId);
@@ -347,7 +347,7 @@ function createGatewayFixture() {
         return;
       }
 
-      const listMatch = url.pathname.match(/^\/api\/v1\/sites\/([^/]+)\/alarms$/);
+      const listMatch = url.pathname.match(/^\/api\/v1\/local\/sites\/([^/]+)\/alarms$/);
       if (listMatch && request.method === 'GET') {
         const siteId = listMatch[1];
         const status = url.searchParams.get('status');
@@ -502,7 +502,7 @@ try {
     fixture.server.listen(gatewayPort, '127.0.0.1', resolveListen);
   });
   process.env.VITE_API_MODE = 'real';
-  delete process.env.VITE_S4_LOCAL_ALARMS;
+  process.env.VITE_S4_LOCAL_ALARMS = 'true';
   viteServer = await createViteServer({
     root: fixtureRoot,
     configFile: false,
@@ -560,21 +560,47 @@ try {
     `document.querySelector('[data-testid="real-alarm-detail"]')?.getAttribute('data-alarm-status') === 'OPEN' && document.body.innerText.includes('rule:tokyo-supply-temperature-drift:v4') && document.body.innerText.includes('ALARM_PUBLISHED')`,
     'authoritative Alarm detail',
   );
+  await waitForCondition(
+    cdpClient,
+    `Boolean(document.querySelector('[data-testid="real-alarm-local-lifecycle"]')) && Boolean(document.querySelector('[data-testid="real-alarm-reason"]'))`,
+    'local Alarm lifecycle workbench',
+  );
 
-  const readOnlyState = await evaluate(cdpClient, `({
-    marker: document.querySelector('.real-alarms__local-marker')?.textContent ?? '',
-    readOnly: Boolean(document.querySelector('[data-testid="real-alarm-read-only"]')),
-    lifecycle: Boolean(document.querySelector('[data-testid="real-alarm-local-lifecycle"]')),
-    reason: Boolean(document.querySelector('[data-testid="real-alarm-reason"]')),
-    acknowledge: Boolean(document.querySelector('[data-testid="real-alarm-acknowledge"]')),
-    assign: Boolean(document.querySelector('[data-testid="real-alarm-assign"]')),
-    suppress: Boolean(document.querySelector('[data-testid="real-alarm-suppress"]')),
-    close: Boolean(document.querySelector('[data-testid="real-alarm-close"]')),
-  })`);
-  assert(readOnlyState.marker.includes('1% INTERNAL CANARY'), 'Alarm production read canary marker was missing');
-  assert(readOnlyState.readOnly && !readOnlyState.lifecycle, 'Production Alarm surface loaded the local lifecycle workbench');
-  assert(!readOnlyState.reason && !readOnlyState.acknowledge && !readOnlyState.assign && !readOnlyState.suppress && !readOnlyState.close, 'Production Alarm surface exposed lifecycle controls');
-  assertions.push('public-read-only-canary-no-lifecycle-controls');
+  await submitLifecycle(cdpClient, 'real-alarm-acknowledge', 'browser acknowledgement', 'ACKNOWLEDGED', 2);
+  assert(await setControlValue(cdpClient, 'real-alarm-assignee', 'principal:operator-2'), 'Alarm assignee control was unavailable');
+  await submitLifecycle(cdpClient, 'real-alarm-assign', 'browser assignment', 'ACKNOWLEDGED', 3);
+  await waitForCondition(cdpClient, `document.body.innerText.includes('principal:operator-2')`, 'Alarm assignment projection');
+  fixture.forceConflictOnce();
+  assert(await setControlValue(cdpClient, 'real-alarm-reason', 'browser suppression retry'), 'Alarm suppression reason was unavailable');
+  assert(await clickControl(cdpClient, 'real-alarm-suppress'), 'Alarm suppress control was unavailable for conflict');
+  await waitForCondition(
+    cdpClient,
+    `Boolean(document.querySelector('[data-testid="real-alarm-mutation-error"]')) && document.body.innerText.includes('changed before this lifecycle transition')`,
+    'Alarm suppression version conflict',
+  );
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-alarm-detail"]')?.getAttribute('data-alarm-version') === '3'`,
+    'Alarm suppression conflict refetch',
+  );
+  assert(await clickControl(cdpClient, 'real-alarm-suppress'), 'Alarm suppress retry control was unavailable');
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('[data-testid="real-alarm-detail"]')?.getAttribute('data-alarm-status') === 'SUPPRESSED' && document.querySelector('[data-testid="real-alarm-detail"]')?.getAttribute('data-alarm-version') === '4'`,
+    'Alarm suppress retry result',
+  );
+  const suppressAttempts = fixture.requests.filter((entry) => entry.method === 'POST' && entry.path.endsWith(':suppress') && entry.body?.reason === 'browser suppression retry');
+  assert(suppressAttempts.length === 2, 'Alarm suppression retry did not issue exactly two attempts');
+  assert(suppressAttempts[0].status === 409 && suppressAttempts[1].status === 200, 'Alarm suppression retry status evidence is invalid');
+  assert(suppressAttempts[0].idempotencyKey === suppressAttempts[1].idempotencyKey, 'Alarm suppression retry did not preserve Idempotency-Key');
+  assert(suppressAttempts[0].body?.suppressedUntil === suppressAttempts[1].body?.suppressedUntil, 'Alarm suppression retry did not preserve the absolute suppression deadline');
+  assertions.push('version-conflict-refetch-stable-suppression-payload-and-idempotency');
+
+  await submitLifecycle(cdpClient, 'real-alarm-unsuppress', 'browser unsuppression', 'ACKNOWLEDGED', 5);
+  await submitLifecycle(cdpClient, 'real-alarm-close', 'browser close', 'CLOSED', 6);
+  await submitLifecycle(cdpClient, 'real-alarm-reopen', 'browser reopen', 'OPEN', 7);
+  await submitLifecycle(cdpClient, 'real-alarm-close', 'browser final close', 'CLOSED', 8);
+  assertions.push('acknowledge-assign-suppress-unsuppress-close-reopen-close');
 
   await evaluate(cdpClient, `globalThis.__REAL_ALARMS_AUDIT__.switchSite()`);
   await waitForCondition(
@@ -591,61 +617,44 @@ try {
   assert(afterSwitch.siteId === siteBId, 'Alarm fixture did not switch to Site B');
   assert(!JSON.stringify(afterSwitch.cacheKeys).includes(siteAId), 'old Site Alarm cache survived Site transition');
   assert(!afterSwitch.text.includes('Tokyo supply temperature drift'), 'old Site Alarm content survived Site transition');
-  assert(afterSwitch.draftDirty === false, 'production Alarm read created a protected lifecycle draft');
-  assertions.push('cross-site-cache-and-view-purge');
-
-  await evaluate(cdpClient, `globalThis.__REAL_ALARMS_AUDIT__.denyAlarm()`);
-  await waitForCondition(
-    cdpClient,
-    `document.querySelector('[data-testid="real-alarms-disabled"]')?.getAttribute('data-business-state') === 'DISABLED' && globalThis.__REAL_ALARMS_AUDIT__.cacheCount() === 0`,
-    'Alarm capability denial',
-  );
-  const denied = await evaluate(cdpClient, `({
-    text: document.body.innerText,
-    cacheCount: globalThis.__REAL_ALARMS_AUDIT__.cacheCount(),
-    disabled: Boolean(document.querySelector('[data-testid="real-alarms-disabled"]')),
-  })`);
-  assert(denied.disabled && denied.cacheCount === 0, 'Alarm capability denial did not purge protected cache');
-  assert(denied.text.includes('当前会话没有 Alarm 列表能力'), 'Alarm capability denial did not render the generic IAM boundary');
-  assert(!denied.text.includes('Osaka condenser approach') && !denied.text.includes(alarmBId), 'Alarm capability denial retained protected Alarm data');
-  assertions.push('capability-denial-generic-boundary-and-cache-purge');
+  assert(afterSwitch.draftDirty === false, 'old Site Alarm lifecycle draft survived Site transition');
+  assertions.push('cross-site-cache-view-and-draft-purge');
 
   const alarmRequests = fixture.requests.filter((entry) => entry.path.includes('/alarms'));
-  assert(alarmRequests.length >= 3, 'Alarm browser audit did not exercise public list and detail reads');
-  assert(alarmRequests.filter((entry) => entry.path.endsWith('/alarms')).length >= 2, 'Alarm browser audit did not read both Site lists');
-  assert(alarmRequests.some((entry) => entry.path.endsWith(`/alarms/${alarmAOpenId}`)), 'Alarm browser audit did not read the public Alarm detail');
-  assert(alarmRequests.every((entry) => entry.method === 'GET'), 'Production Alarm browser audit issued a lifecycle write');
-  assert(alarmRequests.every((entry) => entry.path.startsWith('/api/v1/sites/')), 'Production Alarm browser audit bypassed the public Gateway seam');
-  assert(alarmRequests.every((entry) => !entry.path.includes('/api/v1/local/')), 'Production Alarm browser audit used the local seam');
+  const mutationRequests = alarmRequests.filter((entry) => entry.method === 'POST');
+  assert(mutationRequests.length >= 8, 'Alarm browser audit did not exercise lifecycle writes');
+  assert(mutationRequests.every((entry) => entry.csrf === 'fixture-capability'), 'Alarm lifecycle request omitted CSRF capability');
+  assert(mutationRequests.every((entry) => typeof entry.idempotencyKey === 'string' && entry.idempotencyKey.startsWith('real-alarm-')), 'Alarm lifecycle request omitted stable Idempotency-Key');
+  assert(mutationRequests.every((entry) => Number.isInteger(entry.body?.expectedVersion) && entry.body.expectedVersion > 0), 'Alarm lifecycle request omitted expected version');
+  assert(alarmRequests.every((entry) => entry.path.startsWith('/api/v1/local/sites/')), 'Alarm browser audit bypassed the local Site-scoped seam');
   assert(fixture.requests.every((entry) => !entry.path.includes('/telemetry/')), 'Alarm browser audit used Telemetry as an Alarm source');
-  assertions.push('public-gateway-get-only-no-local-or-telemetry-inference');
+  assertions.push('csrf-idempotency-expected-version-no-telemetry-inference');
 
-  stateEvidence.readCanary = {
-    productionReadCanaryPercent: 1,
-    sitesRead: [siteAId, siteBId],
-    detailRead: alarmAOpenId,
-    lifecycleWrites: 0,
-    capabilityDenied: true,
+  stateEvidence.lifecycle = {
+    finalStatus: 'CLOSED',
+    finalVersion: 8,
+    operations: ['ACKNOWLEDGE', 'ASSIGN', 'SUPPRESS', 'UNSUPPRESS', 'CLOSE', 'REOPEN', 'CLOSE'],
+    conflictRetried: true,
   };
   conclusion = 'passed';
   const evidence = {
-    schemaVersion: 3,
+    schemaVersion: 2,
     passed: true,
     generatedAt: new Date().toISOString(),
     assertions,
     stateEvidence,
     network: { requests: fixture.requests },
     safety: {
-      productionReadCanaryPercent: 1,
-      publicGatewayReads: true,
-      lifecycleWrites: false,
-      localSeam: false,
+      productionTrafficPercent: 0,
+      localLifecycle: true,
+      optimisticConcurrency: true,
+      idempotentRetry: true,
       telemetryInference: false,
       demoContamination: false,
     },
   };
   await writeFile(join(outputRoot, 'browser-evidence.json'), JSON.stringify(evidence, null, 2));
-  console.log(`Real Alarm public read browser audit passed. Evidence: ${join(outputRoot, 'browser-evidence.json')}`);
+  console.log(`Real Alarm lifecycle browser audit passed. Evidence: ${join(outputRoot, 'browser-evidence.json')}`);
 } finally {
   cdpClient?.close();
   await stopBrowser(browserProcess);
@@ -658,6 +667,6 @@ try {
   }
   if (conclusion !== 'passed') {
     await mkdir(outputRoot, { recursive: true });
-    await writeFile(join(outputRoot, 'browser-evidence.json'), JSON.stringify({ schemaVersion: 3, passed: false, generatedAt: new Date().toISOString(), assertions, stateEvidence, network: { requests: fixture.requests } }, null, 2));
+    await writeFile(join(outputRoot, 'browser-evidence.json'), JSON.stringify({ schemaVersion: 2, passed: false, generatedAt: new Date().toISOString(), assertions, stateEvidence, network: { requests: fixture.requests } }, null, 2));
   }
 }

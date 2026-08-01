@@ -24,7 +24,7 @@ const principal = {
     executingServicePrincipal: { service: 'platform-gateway', spiffeId: 'spiffe://hvac.local/platform-gateway' },
     actingOrganizationId: organizationId, audience: 'iam-service', policyRevision: 'alarm-policy-1', delegationExpiresAt: '2026-08-01T00:00:00.000Z',
   },
-  authorization: { capabilitySetVersion: 1, policyRevision: 'alarm-policy-1', capabilities: ['site.read'] },
+  authorization: { capabilitySetVersion: 3, policyRevision: 'alarm-policy-1', capabilities: ['site.read', 'alarm.list', 'alarm.read'] },
   session: { id: 'alarm-audit-session', expiresAt: '2026-08-01T00:00:00.000Z', revocationObjectiveMs: 30000, lastAuditMessageId: 'alarm-audit-message' },
 } as unknown as CurrentPrincipalResponse;
 Reflect.set(principal.session, ['csrf', 'Token'].join(''), 'fixture-capability');
@@ -35,6 +35,15 @@ let registeredDraft: ProtectedScopeDraft | null = null;
 
 function App() {
   const [site, setSite] = useState<Site>(siteA);
+  const [alarmAccess, setAlarmAccess] = useState(true);
+  const effectivePrincipal = {
+    ...principal,
+    authorization: {
+      ...principal.authorization,
+      policyRevision: alarmAccess ? 'alarm-policy-1' : 'alarm-policy-denied',
+      capabilities: alarmAccess ? ['site.read', 'alarm.list', 'alarm.read'] : ['site.read'],
+    },
+  } as CurrentPrincipalResponse;
   useEffect(() => {
     Reflect.set(globalThis, '__REAL_ALARMS_AUDIT__', {
       cacheCount: () => queryClient.getQueryCache().findAll({ queryKey: ['real-alarms'] }).length,
@@ -45,14 +54,15 @@ function App() {
         globalThis.history.replaceState(null, '', '/');
         setSite(siteB);
       },
+      denyAlarm: () => setAlarmAccess(false),
       siteId: () => site.id,
     });
-  }, [site]);
+  }, [alarmAccess, site]);
   return (
     <main className="real-route-surface" data-testid="real-alarms-audit-root">
       <RealAlarms
         site={site}
-        principal={principal}
+        principal={effectivePrincipal}
         registerUnsavedDraft={(draft) => {
           registeredDraft = draft;
           return () => {

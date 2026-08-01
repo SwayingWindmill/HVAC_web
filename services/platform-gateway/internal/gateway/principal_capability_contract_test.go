@@ -25,6 +25,8 @@ func TestIAMCapabilityVocabularyMatchesPublicGoContract(t *testing.T) {
 		platformapi.CapabilityTelemetryBatchRead,
 		platformapi.CapabilityTelemetrySubscribe,
 		platformapi.CapabilityTelemetryHistoryRead,
+		platformapi.CapabilityAlarmList,
+		platformapi.CapabilityAlarmRead,
 	}
 	internalCapabilities := identitycontext.SupportedCapabilities()
 	if len(publicCapabilities) != len(internalCapabilities) {

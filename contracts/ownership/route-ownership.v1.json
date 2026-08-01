@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 13,
+  "registryRevision": 14,
   "routes": [
     {
       "method": "GET",
@@ -633,10 +633,12 @@
       "path": "/api/v1/sites/{siteId}/alarms",
       "owner": "alarm-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
+      "revision": 2,
+      "activationStatus": "internal-canary",
       "rollout": {
-        "mode": "disabled"
+        "mode": "percentage",
+        "percentage": 1,
+        "cohortSalt": "s4-alarm-read-canary-v1"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -656,7 +658,7 @@
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
       ],
-      "migrationPhase": "S4-R0-contract-only",
+      "migrationPhase": "S4-R1-internal-read-only",
       "cohortGroup": "s4-alarm-read-v1"
     },
     {
@@ -664,10 +666,12 @@
       "path": "/api/v1/sites/{siteId}/alarms/{alarmId}",
       "owner": "alarm-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
+      "revision": 2,
+      "activationStatus": "internal-canary",
       "rollout": {
-        "mode": "disabled"
+        "mode": "percentage",
+        "percentage": 1,
+        "cohortSalt": "s4-alarm-read-canary-v1"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -688,7 +692,7 @@
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
       ],
-      "migrationPhase": "S4-R0-contract-only",
+      "migrationPhase": "S4-R1-internal-read-only",
       "cohortGroup": "s4-alarm-read-v1"
     },
     {

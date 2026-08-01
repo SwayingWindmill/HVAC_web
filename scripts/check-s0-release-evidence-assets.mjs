@@ -155,6 +155,17 @@ assert(registeredS4Resources.length === acceptedS4OwnershipNames.size, `S4 Alarm
 assert(registeredS4Resources.every((resource) => resource.writer === 'alarm-service'), `S4 Alarm ownership resources have an unexpected writer: ${JSON.stringify(registeredS4Resources.filter((resource) => resource.writer !== 'alarm-service'))}`);
 const uncontractedS4Resources = ownership.resources.filter((resource) => resource.writer === 'alarm-service' && !acceptedS4OwnershipNames.has(resource.name));
 assert(uncontractedS4Resources.length === 0, `data registry contains S4 resources outside the S4 Alarm ownership contract: ${JSON.stringify(uncontractedS4Resources)}`);
+const acceptedS4IAMOwnership = [
+  { kind: 'projection', name: 'iam-alarm-permission', writer: 'iam-service', revision: 1 },
+  { kind: 'projection', name: 'iam-alarm-authorization-decision', writer: 'iam-service', revision: 1 },
+];
+for (const expected of acceptedS4IAMOwnership) {
+  const registered = ownership.resources.find((resource) => resource.name === expected.name);
+  assert(registered, `S4 IAM Alarm ownership resource is missing: ${expected.name}`);
+  for (const [field, value] of Object.entries(expected)) {
+    assert(registered[field] === value, `S4 IAM Alarm ownership ${expected.name}.${field} drifted: ${JSON.stringify(registered)}`);
+  }
+}
 
 const acceptedHistoryAnalyticsOwnership = [
   { kind: 'schema', name: 'telemetry_history', writer: 'telemetry-history-projector', revision: 1, database: 'clickhouse' },
@@ -188,6 +199,7 @@ const allowedOwnershipNames = new Set([
   'iam-telemetry-authorization-decision',
   'iam-telemetry-grant-use',
   'iam-telemetry-revocation-fact',
+  ...acceptedS4IAMOwnership.map((resource) => resource.name),
   'iam-onboarding-reconciliation',
   'iam-reconciliation-quarantine',
   'presence-signal',
@@ -216,6 +228,7 @@ const scopeAudit = {
   acceptedS2ExpandBaselineResources: [...acceptedS2OwnershipNames].sort(),
   acceptedS3ExpandBaselineResources: [...acceptedS3OwnershipNames].sort(),
   acceptedS4AlarmBaselineResources: [...acceptedS4OwnershipNames].sort(),
+  acceptedS4IAMAlarmResources: acceptedS4IAMOwnership.map((resource) => resource.name).sort(),
   acceptedHistoryAnalyticsResources: acceptedHistoryAnalyticsOwnership.map((resource) => resource.name).sort(),
   leakedOwnershipResources: [],
 };
