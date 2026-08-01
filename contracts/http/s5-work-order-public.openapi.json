@@ -69,7 +69,7 @@
       "WorkOrderPriority": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "URGENT"] },
       "WorkOrderStatus": { "type": "string", "enum": ["DRAFT", "OPEN", "IN_PROGRESS", "BLOCKED", "COMPLETED", "CANCELLED"] },
       "WorkOrderOperation": { "type": "string", "enum": ["CREATE", "OPEN", "ASSIGN", "UNASSIGN", "SCHEDULE", "START", "BLOCK", "RESUME", "COMPLETE", "CANCEL", "REOPEN"] },
-      "WorkOrderSourceDomain": { "type": "string", "enum": ["MANUAL", "ALARM", "FDD", "INVESTIGATION", "EXTERNAL"] },
+      "WorkOrderSourceDomain": { "type": "string", "enum": ["MANUAL", "ALARM", "ASSET", "EQUIPMENT", "INVESTIGATION", "EXTERNAL"] },
       "WorkOrderSourceRelationship": { "type": "string", "enum": ["ORIGIN", "RELATED"] },
       "WorkOrderSourceReference": {
         "type": "object",

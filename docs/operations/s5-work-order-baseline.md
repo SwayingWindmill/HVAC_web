@@ -2,7 +2,7 @@
 
 ## Authority boundary
 
-Work Order is an independent authoritative domain. It may reference Alarm, FDD, Investigation, manual, or external source identities, but those domains cannot publish or mutate Work Order facts. Telemetry and browser inference are not Work Order sources.
+Work Order is an independent authoritative domain. It may reference Alarm, Asset, Equipment, Investigation, manual, or external source identities, but those domains cannot publish or mutate Work Order facts. Telemetry and browser inference are not Work Order sources.
 
 ## P1 contract
 

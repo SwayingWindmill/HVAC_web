@@ -49,9 +49,15 @@ func TestWorkOrderValidateRejectsProjectionDrift(t *testing.T) {
 		"duplicate source": func(item *workordermodel.WorkOrder) {
 			item.SourceReferences = append(item.SourceReferences, item.SourceReferences[0])
 		},
-		"task counts":            func(item *workordermodel.WorkOrder) { item.Tasks.Completed = item.Tasks.Total + 1 },
-		"timeline version":       func(item *workordermodel.WorkOrder) { item.Timeline[0].Version = 2 },
-		"invalid source":         func(item *workordermodel.WorkOrder) { item.SourceReferences[0].Domain = "TELEMETRY" },
+		"task counts":       func(item *workordermodel.WorkOrder) { item.Tasks.Completed = item.Tasks.Total + 1 },
+		"timeline version":  func(item *workordermodel.WorkOrder) { item.Timeline[0].Version = 2 },
+		"invalid source":    func(item *workordermodel.WorkOrder) { item.SourceReferences[0].Domain = "TELEMETRY" },
+		"future FDD source": func(item *workordermodel.WorkOrder) { item.SourceReferences[0].Domain = "FDD" },
+		"conflicting source relationship": func(item *workordermodel.WorkOrder) {
+			item.SourceReferences = append(item.SourceReferences, workordermodel.SourceReference{
+				Domain: workordermodel.SourceAlarm, ResourceID: alarmID, Relationship: workordermodel.RelationshipRelated,
+			})
+		},
 		"updated before created": func(item *workordermodel.WorkOrder) { item.UpdatedAt = "2026-07-31T23:59:59Z" },
 	}
 	for name, mutate := range tests {
@@ -62,6 +68,17 @@ func TestWorkOrderValidateRejectsProjectionDrift(t *testing.T) {
 				t.Fatal("invalid Work Order was accepted")
 			}
 		})
+	}
+}
+
+func TestWorkOrderValidateAcceptsAssetAndEquipmentReferences(t *testing.T) {
+	item := validWorkOrder()
+	item.SourceReferences = append(item.SourceReferences,
+		workordermodel.SourceReference{Domain: workordermodel.SourceAsset, ResourceID: "01910000-0004-7000-8000-000000000001", Relationship: workordermodel.RelationshipRelated},
+		workordermodel.SourceReference{Domain: workordermodel.SourceEquipment, ResourceID: "01910000-0005-7000-8000-000000000001", Relationship: workordermodel.RelationshipRelated},
+	)
+	if err := item.Validate(); err != nil {
+		t.Fatalf("Asset and Equipment references were rejected: %v", err)
 	}
 }
 

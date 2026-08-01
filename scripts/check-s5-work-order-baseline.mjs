@@ -45,12 +45,13 @@ for (const field of ['workOrderId', 'organizationId', 'siteId', 'title', 'descri
   assert(schema?.required?.includes(field), `Work Order contract does not require ${field}`);
 }
 assert(JSON.stringify(openapi.components.schemas.WorkOrderStatus.enum) === JSON.stringify(['DRAFT', 'OPEN', 'IN_PROGRESS', 'BLOCKED', 'COMPLETED', 'CANCELLED']), 'Work Order status vocabulary drifted');
-assert(!openapi.components.schemas.WorkOrderSourceDomain.enum.includes('TELEMETRY'), 'Telemetry was admitted as Work Order authority');
+assert(JSON.stringify(openapi.components.schemas.WorkOrderSourceDomain.enum) === JSON.stringify(['MANUAL', 'ALARM', 'ASSET', 'EQUIPMENT', 'INVESTIGATION', 'EXTERNAL']), 'Work Order source authority vocabulary drifted');
+assert(!openapi.components.schemas.WorkOrderSourceDomain.enum.includes('TELEMETRY') && !openapi.components.schemas.WorkOrderSourceDomain.enum.includes('FDD'), 'Telemetry or FDD was admitted as P1 Work Order authority');
 assert(openapi.components.schemas.WorkOrderSourceRelationship.enum.includes('ORIGIN'), 'Work Order origin relationship is missing');
 assert(openapi.components.schemas.WorkOrderListResponse.properties.nextCursor?.$ref === '#/components/schemas/OpaqueCursor', 'Work Order cursor is not opaque');
 assert(model.includes('func (workOrder WorkOrder) Validate() error') && model.includes('func (response ListResponse) Validate('), 'Work Order model validation is missing');
 assert(model.includes('originCount != 1') && model.includes('completed work order requires completion evidence'), 'Work Order origin or completion invariants are missing');
-assert(model.includes('SourceAlarm') && !model.includes('SourceTelemetry'), 'Work Order source authority vocabulary is invalid');
+assert(model.includes('SourceAlarm') && model.includes('SourceAsset') && model.includes('SourceEquipment') && !model.includes('SourceTelemetry') && !model.includes('SourceFDD'), 'Work Order source authority vocabulary is invalid');
 assert(!model.includes('/telemetry/'), 'Work Order model depends on Telemetry HTTP');
 
 assert(data.registryRevision >= 17 && lock.dataRegistryRevision >= 17, 'Work Order data ownership revision was not advanced');
@@ -77,6 +78,7 @@ for (const table of ['work_order_current', 'work_order_source_reference', 'work_
   assert(migration.includes(`CREATE TABLE IF NOT EXISTS work_order_runtime.${table}`), `Work Order migration lacks ${table}`);
 }
 assert(migration.includes('CREATE UNIQUE INDEX IF NOT EXISTS work_order_one_origin_idx') && migration.includes("WHERE relationship = 'ORIGIN'"), 'Work Order durable origin uniqueness is missing');
+assert(migration.includes('PRIMARY KEY (organization_id, site_id, work_order_id, source_domain, source_resource_id)'), 'Work Order source identity can carry conflicting relationships');
 assert(migration.includes('ENABLE ROW LEVEL SECURITY') && migration.includes('FORCE ROW LEVEL SECURITY'), 'Work Order FORCE RLS is missing');
 assert(migration.includes("current_setting(''app.organization_id''"), 'Work Order Organization RLS binding is missing');
 assert(migration.includes('GRANT SELECT ON ALL TABLES IN SCHEMA work_order_runtime TO s5_work_order_runtime'), 'Work Order runtime SELECT grant is missing');

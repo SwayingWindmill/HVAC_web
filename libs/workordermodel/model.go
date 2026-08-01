@@ -52,7 +52,8 @@ type SourceDomain string
 const (
 	SourceManual        SourceDomain = "MANUAL"
 	SourceAlarm         SourceDomain = "ALARM"
-	SourceFDD           SourceDomain = "FDD"
+	SourceAsset         SourceDomain = "ASSET"
+	SourceEquipment     SourceDomain = "EQUIPMENT"
 	SourceInvestigation SourceDomain = "INVESTIGATION"
 	SourceExternal      SourceDomain = "EXTERNAL"
 )
@@ -203,7 +204,7 @@ func validateSources(references []SourceReference) error {
 		if reference.Domain != SourceManual && reference.Domain != SourceExternal && !IsUUIDv7(reference.ResourceID) {
 			return errors.New("work order authoritative source identity is invalid")
 		}
-		key := string(reference.Domain) + "\x00" + reference.ResourceID + "\x00" + string(reference.Relationship)
+		key := string(reference.Domain) + "\x00" + reference.ResourceID
 		if _, exists := seen[key]; exists {
 			return errors.New("work order source reference is duplicated")
 		}
@@ -329,7 +330,7 @@ func validOperation(value Operation) bool {
 
 func validSourceDomain(value SourceDomain) bool {
 	switch value {
-	case SourceManual, SourceAlarm, SourceFDD, SourceInvestigation, SourceExternal:
+	case SourceManual, SourceAlarm, SourceAsset, SourceEquipment, SourceInvestigation, SourceExternal:
 		return true
 	default:
 		return false

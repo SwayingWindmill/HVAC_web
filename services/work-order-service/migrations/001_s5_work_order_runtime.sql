@@ -28,11 +28,11 @@ CREATE TABLE IF NOT EXISTS work_order_runtime.work_order_source_reference (
   organization_id uuid NOT NULL,
   site_id uuid NOT NULL,
   work_order_id uuid NOT NULL,
-  source_domain text NOT NULL CHECK (source_domain IN ('MANUAL', 'ALARM', 'FDD', 'INVESTIGATION', 'EXTERNAL')),
+  source_domain text NOT NULL CHECK (source_domain IN ('MANUAL', 'ALARM', 'ASSET', 'EQUIPMENT', 'INVESTIGATION', 'EXTERNAL')),
   source_resource_id text NOT NULL CHECK (length(btrim(source_resource_id)) BETWEEN 1 AND 512),
   relationship text NOT NULL CHECK (relationship IN ('ORIGIN', 'RELATED')),
   created_at timestamptz NOT NULL,
-  PRIMARY KEY (organization_id, site_id, work_order_id, source_domain, source_resource_id, relationship),
+  PRIMARY KEY (organization_id, site_id, work_order_id, source_domain, source_resource_id),
   FOREIGN KEY (organization_id, site_id, work_order_id)
     REFERENCES work_order_runtime.work_order_current (organization_id, site_id, work_order_id)
     ON DELETE RESTRICT
