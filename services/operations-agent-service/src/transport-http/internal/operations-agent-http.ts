@@ -1,6 +1,13 @@
 import {
   InvestigationCoordinatorError,
+  safeAddOperationsTelemetryCounter,
+  safeObserveOperationsTelemetryHistogram,
+  safeStartOperationsTelemetrySpan,
   type AuthorizationDecision,
+  type OperationsAgentTelemetry,
+  type OperationsTelemetryCorrelation,
+  type OperationsTelemetryOperation,
+  type OperationsTelemetryOutcome,
   type SiteNightEnergyInvestigationCoordinator,
   type SiteNightEnergyInvestigationView,
 } from '../../application/index.js';
@@ -17,6 +24,7 @@ export interface OperationsAgentHttpAuthorizationInput {
   readonly energyGrant?: string;
   readonly policyRevision: string;
   readonly traceparent?: string;
+  readonly tracestate?: string;
 }
 
 export interface OperationsAgentHttpAuthorizer {
@@ -27,6 +35,7 @@ export interface OperationsAgentHttpCoordinatorContext {
   readonly organizationId: string;
   readonly siteId: string;
   readonly authorization: AuthorizationDecision;
+  readonly telemetryContext: OperationsTelemetryCorrelation;
   readonly now: number;
 }
 
@@ -41,6 +50,7 @@ export interface OperationsAgentHttpOptions {
   ) => Response;
   readonly now?: () => number;
   readonly maximumRequestBytes?: number;
+  readonly telemetry?: OperationsAgentTelemetry;
 }
 
 export interface OperationsAgentHttpHandler {
@@ -69,6 +79,35 @@ const advancePattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/investigati
 const submitOperatorInputPattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/investigations\/([^/:]+):submit-operator-input$/u;
 const cancelPattern = /^\/internal\/v1\/sites\/([^/]+)\/operations\/investigations\/([^/:]+):cancel$/u;
 const traceparentPattern = /^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/iu;
+
+const validTraceparent = (value: string): boolean => {
+  const normalized = value.toLowerCase();
+  return traceparentPattern.test(normalized)
+    && normalized.slice(3, 35) !== '0'.repeat(32)
+    && normalized.slice(36, 52) !== '0'.repeat(16);
+};
+
+const validTracestate = (value: string | undefined): boolean => (
+  value === undefined
+  || (value.trim().length > 0
+    && value.length <= 512
+    && !value.includes(String.fromCharCode(13))
+    && !value.includes(String.fromCharCode(10)))
+);
+
+const operationForRoute = (kind: MatchedRoute['kind']): OperationsTelemetryOperation => kind;
+
+const telemetryOutcomeForStatus = (status: number): OperationsTelemetryOutcome => {
+  if (status >= 200 && status < 300) return 'SUCCESS';
+  if (status === 400 || status === 413 || status === 415 || status === 422) return 'INVALID';
+  if (status === 401 || status === 403) return 'DENIED';
+  if (status === 404) return 'NOT_FOUND';
+  if (status === 408 || status === 504) return 'TIMEOUT';
+  if (status === 409) return 'CONFLICT';
+  if (status === 429) return 'EXHAUSTED';
+  if (status === 502 || status === 503) return 'UNAVAILABLE';
+  return 'ERROR';
+};
 
 const jsonHeaders = Object.freeze({
   'Cache-Control': 'no-store',
@@ -326,9 +365,11 @@ export const createOperationsAgentHttpHandler = (
   }
   const now = options.now ?? Date.now;
 
-  return Object.freeze({
-    async handle(request: Request): Promise<Response> {
-      try {
+  const handleRequest = async (
+    request: Request,
+    telemetryContext: OperationsTelemetryCorrelation,
+  ): Promise<Response> => {
+    try {
         const url = new URL(request.url);
         if (url.search !== '') {
           return problem(400, 'QUERY_UNSUPPORTED', 'Query unsupported', 'Operations Investigation routes do not accept query parameters.');
@@ -361,11 +402,10 @@ export const createOperationsAgentHttpHandler = (
         );
         const energyGrant = requiredHeader(request, 'X-Operations-Energy-Grant');
         const policyRevision = requiredHeader(request, 'X-Route-Policy-Revision');
-        const traceparent = request.headers.get('traceparent') ?? undefined;
+        const requestId = telemetryContext.requestId ?? telemetryContext.traceparent ?? 'operations-request';
         if (organizationId === null
           || gatewayDelegationGrant === null
-          || policyRevision === null
-          || (traceparent !== undefined && !traceparentPattern.test(traceparent))) {
+          || policyRevision === null) {
           return problem(
             401,
             'OPERATIONS_AGENT_AUTHORIZATION_INVALID',
@@ -374,19 +414,52 @@ export const createOperationsAgentHttpHandler = (
           );
         }
 
-        const authorization = await options.authorizer.authorize({
-          method: request.method,
-          path: url.pathname,
-          organizationId,
-          siteId: route.siteId,
-          investigationId: route.investigationId,
-          gatewayDelegationGrant,
-          ...(registrySiteGrant === null ? {} : { registrySiteGrant }),
-          ...(registryEquipmentGrant === null ? {} : { registryEquipmentGrant }),
-          ...(energyGrant === null ? {} : { energyGrant }),
-          policyRevision,
-          ...(traceparent === undefined ? {} : { traceparent }),
+        const authorizationStartedAt = now();
+        const authorizationSpan = safeStartOperationsTelemetrySpan(options.telemetry, {
+          name: 'operations.authorization',
+          kind: 'CLIENT',
+          correlation: {
+            ...telemetryContext,
+            requestId,
+            ...(route.investigationId === null
+              ? {} : { investigationId: route.investigationId }),
+          },
+          attributes: { operation: 'AUTHORIZE', owner: 'platform-gateway' },
         });
+        let authorization: AuthorizationDecision;
+        try {
+          authorization = await options.authorizer.authorize({
+            method: request.method,
+            path: url.pathname,
+            organizationId,
+            siteId: route.siteId,
+            investigationId: route.investigationId,
+            gatewayDelegationGrant,
+            ...(registrySiteGrant === null ? {} : { registrySiteGrant }),
+            ...(registryEquipmentGrant === null ? {} : { registryEquipmentGrant }),
+            ...(energyGrant === null ? {} : { energyGrant }),
+            policyRevision,
+            ...((authorizationSpan.traceparent ?? telemetryContext.traceparent) === undefined
+              ? {}
+              : { traceparent: authorizationSpan.traceparent ?? telemetryContext.traceparent }),
+            ...((authorizationSpan.tracestate ?? telemetryContext.tracestate) === undefined
+              ? {}
+              : { tracestate: authorizationSpan.tracestate ?? telemetryContext.tracestate }),
+          });
+          authorizationSpan.setStatus(authorization.decision === 'ALLOW' ? 'SUCCESS' : 'DENIED');
+        } catch (error) {
+          authorizationSpan.setStatus('ERROR');
+          throw error;
+        } finally {
+          const authorizationDurationMs = Math.max(0, now() - authorizationStartedAt);
+          authorizationSpan.setAttributes({ durationMs: authorizationDurationMs });
+          authorizationSpan.end();
+          safeObserveOperationsTelemetryHistogram(options.telemetry, {
+            name: 'operations_agent_operation_duration_ms',
+            value: authorizationDurationMs,
+            labels: { operation: 'AUTHORIZE' },
+          });
+        }
         if (authorization.decision !== 'ALLOW') {
           return problem(
             404,
@@ -395,10 +468,23 @@ export const createOperationsAgentHttpHandler = (
             'The requested Operations Investigation was not found.',
           );
         }
+        const coordinatorAuthorization: AuthorizationDecision = {
+          ...authorization,
+          ...(telemetryContext.traceparent === undefined
+            ? {} : { traceparent: telemetryContext.traceparent }),
+          ...(telemetryContext.tracestate === undefined
+            ? {} : { tracestate: telemetryContext.tracestate }),
+        };
         const coordinator = options.createCoordinator({
           organizationId,
           siteId: route.siteId,
-          authorization,
+          authorization: coordinatorAuthorization,
+          telemetryContext: {
+            ...telemetryContext,
+            requestId,
+            ...(route.investigationId === null
+              ? {} : { investigationId: route.investigationId }),
+          },
           now: now(),
         });
         if (route.kind === 'LIST') {
@@ -462,9 +548,111 @@ export const createOperationsAgentHttpHandler = (
           }));
         }
         return jsonResponse(200, await coordinator.cancel({ investigationId }));
-      } catch (error) {
-        return mapError(error);
+    } catch (error) {
+      return mapError(error);
+    }
+  };
+
+  return Object.freeze({
+    async handle(request: Request): Promise<Response> {
+      const startedAt = now();
+      const rawRequestId = request.headers.get('X-Request-ID') ?? undefined;
+      const requestIdCandidate = rawRequestId !== undefined
+        && rawRequestId.trim().length > 0
+        && rawRequestId.length <= maximumIdentityLength
+        ? rawRequestId
+        : undefined;
+      const rawTraceparent = request.headers.get('traceparent') ?? undefined;
+      const incomingTraceparent = rawTraceparent !== undefined
+        && validTraceparent(rawTraceparent)
+        ? rawTraceparent
+        : undefined;
+      const rawTracestate = request.headers.get('tracestate') ?? undefined;
+      const incomingTracestate = validTracestate(rawTracestate) ? rawTracestate : undefined;
+      let operation: OperationsTelemetryOperation = 'GET';
+      try {
+        const route = matchRoute(request);
+        if (route !== null) operation = operationForRoute(route.kind);
+      } catch {
+        // The authoritative route parser inside handleRequest owns the HTTP result.
       }
+      const span = safeStartOperationsTelemetrySpan(options.telemetry, {
+        name: 'operations.http.request',
+        kind: 'SERVER',
+        correlation: {
+          ...(requestIdCandidate === undefined ? {} : { requestId: requestIdCandidate }),
+          ...(incomingTraceparent === undefined ? {} : { traceparent: incomingTraceparent }),
+          ...(incomingTracestate === undefined ? {} : { tracestate: incomingTracestate }),
+        },
+        attributes: { operation },
+      });
+      const telemetryContext: OperationsTelemetryCorrelation = {
+        requestId: requestIdCandidate ?? span.traceparent ?? 'operations-request',
+        ...(span.traceparent === undefined
+          ? (incomingTraceparent === undefined ? {} : { traceparent: incomingTraceparent })
+          : { traceparent: span.traceparent }),
+        ...(span.tracestate === undefined
+          ? (incomingTracestate === undefined ? {} : { tracestate: incomingTracestate })
+          : { tracestate: span.tracestate }),
+      };
+      const response = await handleRequest(request, telemetryContext);
+      const outcome = telemetryOutcomeForStatus(response.status);
+      if (operation === 'STREAM' && response.status >= 200 && response.status < 300) {
+        const recoveryMode = response.headers.get('X-Operations-Recovery-Mode');
+        const recoveryReason = response.headers.get('X-Operations-Recovery-Reason');
+        const validMode = recoveryMode === 'FULL_SNAPSHOT' || recoveryMode === 'RESUME';
+        const validReason = recoveryReason === 'INITIAL'
+          || recoveryReason === 'VALID'
+          || recoveryReason === 'EXPIRED'
+          || recoveryReason === 'UNKNOWN'
+          || recoveryReason === 'FUTURE'
+          || recoveryReason === 'CONFLICT'
+          || recoveryReason === 'INVALID';
+        if (validMode && validReason) {
+          const recoverySpan = safeStartOperationsTelemetrySpan(options.telemetry, {
+            name: 'operations.stream.recovery',
+            kind: 'INTERNAL',
+            correlation: telemetryContext,
+            attributes: {
+              operation: 'STREAM',
+              outcome: 'SUCCESS',
+              recoveryMode,
+              recoveryReason,
+              restarted: recoveryMode === 'RESUME',
+            },
+          });
+          recoverySpan.setStatus('SUCCESS');
+          recoverySpan.end();
+          safeAddOperationsTelemetryCounter(options.telemetry, {
+            name: 'operations_agent_recovery_total',
+            labels: { operation: 'STREAM', recoveryMode, recoveryReason, outcome: 'SUCCESS' },
+          });
+        }
+      }
+      const durationMs = Math.max(0, now() - startedAt);
+      span.setAttributes({ operation, outcome, durationMs });
+      span.setStatus(outcome);
+      span.end();
+      safeAddOperationsTelemetryCounter(options.telemetry, {
+        name: 'operations_agent_requests_total',
+        labels: { operation, outcome },
+      });
+      safeObserveOperationsTelemetryHistogram(options.telemetry, {
+        name: 'operations_agent_operation_duration_ms',
+        value: durationMs,
+        labels: { operation, outcome },
+      });
+      try {
+        if (telemetryContext.traceparent !== undefined) {
+          response.headers.set('traceparent', telemetryContext.traceparent);
+        }
+        if (telemetryContext.tracestate !== undefined) {
+          response.headers.set('tracestate', telemetryContext.tracestate);
+        }
+      } catch {
+        // Correlation response headers are diagnostic and cannot replace the HTTP result.
+      }
+      return response;
     },
   });
 };

@@ -20,6 +20,13 @@ export interface NormalizedOwnerReaderHttpConfig {
 const defaultRequestTimeoutMs = 5_000;
 const defaultMaximumResponseBytes = 1_048_576;
 
+const validTraceparent = (value: string): boolean => {
+  const normalized = value.toLowerCase();
+  return /^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/u.test(normalized)
+    && normalized.slice(3, 35) !== '0'.repeat(32)
+    && normalized.slice(36, 52) !== '0'.repeat(16);
+};
+
 const requirePositiveSafeInteger = (value: number, label: string): number => {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error(`${label} must be a positive safe integer.`);
@@ -67,14 +74,18 @@ const requireAuthorizationContext = (
   ] ?? authorization.delegationGrant;
   const policyRevision = authorization.policyRevision;
   const traceparent = authorization.traceparent;
+  const tracestate = authorization.tracestate;
   if (authorization.decision !== 'ALLOW'
     || authorization.decisionId.trim().length === 0
     || delegationGrant === undefined
     || delegationGrant.trim().length === 0
     || (includePolicyRevision
       && (policyRevision === undefined || policyRevision.trim().length === 0))
-    || (traceparent !== undefined
-      && !/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/i.test(traceparent))
+    || (traceparent !== undefined && !validTraceparent(traceparent))
+    || (tracestate !== undefined
+      && (tracestate.length > 512
+        || tracestate.includes(String.fromCharCode(13))
+        || tracestate.includes(String.fromCharCode(10))))
     || context.investigationId.trim().length === 0
     || context.runId.trim().length === 0
     || context.correlationId.trim().length === 0) {
@@ -124,6 +135,9 @@ export const createOwnerHeaders = (
   }
   if (context.authorization.traceparent !== undefined) {
     headers.traceparent = context.authorization.traceparent;
+  }
+  if (context.authorization.tracestate !== undefined) {
+    headers.tracestate = context.authorization.tracestate;
   }
   return headers;
 };

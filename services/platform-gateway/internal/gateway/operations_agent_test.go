@@ -15,6 +15,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 )
@@ -1021,5 +1022,156 @@ func TestOperationsToolAuthorizationFailsClosedBeforeIAM(t *testing.T) {
 	}
 	if fixture.iamCalls.Load() != 0 {
 		t.Fatalf("invalid internal requests reached IAM %d times", fixture.iamCalls.Load())
+	}
+}
+
+type failingOperationsTelemetryExporter struct{}
+
+func (failingOperationsTelemetryExporter) Export(context.Context, []observability.SpanData) error {
+	return errors.New("collector unavailable")
+}
+
+func (failingOperationsTelemetryExporter) Shutdown(context.Context) error { return nil }
+
+func TestOperationsGatewayPropagatesCorrelatedRedactedTelemetry(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	exporter := &observability.MemoryExporter{}
+	runtime := observability.NewRuntime(observability.RuntimeConfig{
+		Service:  serviceName,
+		Exporter: exporter,
+	})
+	fixture.handler.(*handler).observability = runtime
+	incomingTraceID := strings.Repeat("1", 32)
+	incomingSpanID := strings.Repeat("2", 16)
+	path := "/api/v1/sites/" + fixture.siteID + "/operations/investigations/investigation-001/events"
+
+	performRequest := func(lastEventID string) string {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("traceparent", "00-"+incomingTraceID+"-"+incomingSpanID+"-01")
+		request.Header.Set("tracestate", "vendor=opaque")
+		request.Header.Set("X-Request-ID", "request-operations-telemetry")
+		if lastEventID != "" {
+			request.Header.Set("Last-Event-ID", lastEventID)
+		}
+		fixture.authenticate(request, false)
+		recorder := httptest.NewRecorder()
+		fixture.handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		upstream := fixture.lastUpstream.Load()
+		if upstream == nil {
+			t.Fatal("Operations upstream request was not captured")
+		}
+		upstreamContext, ok := observability.ParseTraceparent(
+			upstream.Header.Get("traceparent"),
+			upstream.Header.Get("tracestate"),
+		)
+		if !ok || upstreamContext.TraceID != incomingTraceID || upstreamContext.SpanID == incomingSpanID {
+			t.Fatalf("Operations upstream did not receive child trace context: %+v", upstreamContext)
+		}
+		if upstreamContext.TraceState != "vendor=opaque" {
+			t.Fatalf("Operations upstream tracestate was not propagated: %q", upstreamContext.TraceState)
+		}
+		if lastEventID != "" && upstream.Header.Get("Last-Event-ID") != lastEventID {
+			t.Fatalf("Operations reconnect position was not forwarded: %q", upstream.Header.Get("Last-Event-ID"))
+		}
+		return upstreamContext.SpanID
+	}
+
+	initialSpanID := performRequest("")
+	reconnectSpanID := performRequest("9:2")
+	if initialSpanID == reconnectSpanID {
+		t.Fatal("reconnect reused the previous upstream span identity")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runtime.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	spans := exporter.Spans()
+	gatewaySpans := make([]observability.SpanData, 0, 2)
+	upstreamSpans := make([]observability.SpanData, 0, 2)
+	recoverySpans := make([]observability.SpanData, 0, 2)
+	for _, span := range spans {
+		switch span.Name {
+		case "http.gateway.request":
+			gatewaySpans = append(gatewaySpans, span)
+		case "operations.gateway.upstream":
+			upstreamSpans = append(upstreamSpans, span)
+		case "operations.gateway.recovery":
+			recoverySpans = append(recoverySpans, span)
+		}
+	}
+	if len(gatewaySpans) != 2 || len(upstreamSpans) != 2 || len(recoverySpans) != 2 {
+		t.Fatalf("missing correlated Operations spans: %+v", spans)
+	}
+	expectedCorrelation := operationsTelemetryCorrelation("investigation", "investigation-001")
+	for _, upstreamSpan := range upstreamSpans {
+		if upstreamSpan.TraceID != incomingTraceID {
+			t.Fatalf("upstream span left the incoming trace: %+v", upstreamSpan)
+		}
+		if upstreamSpan.Attributes["operations.investigation.correlation"] != expectedCorrelation {
+			t.Fatalf("missing hashed Investigation correlation: %+v", upstreamSpan.Attributes)
+		}
+		parentFound := false
+		for _, gatewaySpan := range gatewaySpans {
+			if upstreamSpan.ParentSpanID == gatewaySpan.SpanID {
+				parentFound = true
+				break
+			}
+		}
+		if !parentFound {
+			t.Fatalf("upstream span was not a Gateway child: %+v", upstreamSpan)
+		}
+	}
+	for _, recoverySpan := range recoverySpans {
+		if recoverySpan.TraceID != incomingTraceID {
+			t.Fatalf("recovery span left the incoming trace: %+v", recoverySpan)
+		}
+	}
+	serialized, err := json.Marshal(spans)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{
+		"investigation-001", "request-operations-telemetry", "operations-csrf-fixture",
+		"operatorNote", "ownerPayload", "rawPrompt", "completion", "delegationGrant", "9:2",
+	} {
+		if strings.Contains(string(serialized), forbidden) {
+			t.Fatalf("telemetry disclosed forbidden content %q: %s", forbidden, serialized)
+		}
+	}
+	cardinality := runtime.Metrics.SeriesCardinality()
+	if cardinality[operationsGatewayUpstreamRequests] != 1 ||
+		cardinality[operationsGatewayUpstreamDuration] != 1 ||
+		cardinality[operationsGatewayRecoveryTotal] != 2 {
+		t.Fatalf("unexpected Operations metric cardinality: %+v", cardinality)
+	}
+}
+
+func TestOperationsGatewayTelemetryExporterFailureDoesNotAlterResponse(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	runtime := observability.NewRuntime(observability.RuntimeConfig{
+		Service:  serviceName,
+		Exporter: failingOperationsTelemetryExporter{},
+	})
+	fixture.handler.(*handler).observability = runtime
+	path := "/api/v1/sites/" + fixture.siteID + "/operations/investigations"
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	fixture.authenticate(request, false)
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("telemetry exporter failure altered response: %d %s", recorder.Code, recorder.Body.String())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runtime.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.FailedExports() == 0 {
+		t.Fatal("telemetry exporter failure was not isolated and counted")
 	}
 }

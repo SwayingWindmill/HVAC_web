@@ -36,13 +36,14 @@ test('runner discovers and passes all repository Operations Agent scenarios', as
 
   assert.equal(report.reportVersion, OPERATIONS_AGENT_BENCHMARK_REPORT_VERSION);
   assert.equal(report.status, 'PASSED');
-  assert.equal(report.summary.discoveredScenarios, 9);
+  assert.equal(report.summary.discoveredScenarios, 10);
   assert.equal(report.summary.structureFailures, 0);
   assert.equal(report.summary.blockerFailures, 0);
   assert.deepEqual(
     report.scenarios.map(({ scenarioId }) => scenarioId),
     [
       'site-night-energy-insufficient-equipment-attribution',
+      'operations-telemetry-boundary',
       'run-resource-payload-exhaustion',
       'run-resource-query-range-exhaustion',
       'run-resource-tool-request-exhaustion',
@@ -59,7 +60,7 @@ test('runner discovers and passes all repository Operations Agent scenarios', as
     assert.equal(scenario.phases.scoring.status, 'NOT_EVALUATED');
     assert.equal(scenario.contractVersion, 'operations-agent-scenario/v1');
   }
-  assert.match(formatOperationsAgentBenchmarkSummary(report), /9 scenarios passed/);
+  assert.match(formatOperationsAgentBenchmarkSummary(report), /10 scenarios passed/);
 });
 
 test('structure failure prevents blocker and scoring phases', async () => {
@@ -148,6 +149,63 @@ test('registered blocker profiles reject trust, night-energy, stale-state, and a
         scenario.actionLifecycle.formalApproval = 'ALLOWED';
       },
       code: 'ACTION_LIFECYCLE_EXPECTATION_MISMATCH',
+    },
+    {
+      file: 'operations-telemetry-boundary.v1.json',
+      mutate: (scenario) => {
+        delete scenario.telemetryBoundary;
+      },
+      code: 'OPERATIONS_TELEMETRY_POLICY_MISSING',
+    },
+    {
+      file: 'operations-telemetry-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.telemetryBoundary.gatewayToAgent = 'PARENT_REUSE';
+      },
+      code: 'OPERATIONS_TRACE_CORRELATION_BROKEN',
+    },
+    {
+      file: 'operations-telemetry-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.telemetryBoundary.reconnectCorrelation = 'RESET';
+      },
+      code: 'OPERATIONS_TELEMETRY_RECOVERY_CORRELATION_BROKEN',
+    },
+    {
+      file: 'operations-telemetry-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.telemetryBoundary.operatorTextExport = 'ALLOWED';
+      },
+      code: 'OPERATIONS_TELEMETRY_CONTENT_LEAK',
+    },
+    {
+      file: 'operations-telemetry-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.telemetryBoundary.metricIdentityLabels = 'ALLOWED';
+      },
+      code: 'OPERATIONS_TELEMETRY_CARDINALITY_UNBOUNDED',
+    },
+    {
+      file: 'operations-telemetry-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.telemetryBoundary.exporterFailureAffectsBusiness = 'ALLOWED';
+      },
+      code: 'OPERATIONS_TELEMETRY_AFFECTS_BUSINESS',
+    },
+    {
+      file: 'operations-telemetry-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.telemetryBoundary.telemetryInAuditRecords = 'ALLOWED';
+      },
+      code: 'OPERATIONS_TELEMETRY_AUTHORITY_LEAK',
+    },
+    {
+      file: 'operations-telemetry-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.tools.forbiddenPaths = scenario.tools.forbiddenPaths
+          .filter((path) => path !== 'TELEMETRY_CONTENT_LEAK');
+      },
+      code: 'OPERATIONS_TELEMETRY_CONTENT_LEAK',
     },
     {
       file: 'run-resource-wall-clock-exhaustion.v1.json',
@@ -243,7 +301,7 @@ test('CLI prints a human summary and writes the versioned machine report', async
 
     assert.equal(execution.status, 0, execution.stderr);
     assert.match(execution.stdout, /Operations Agent Benchmark: PASSED/);
-    assert.match(execution.stdout, /9 scenarios passed/);
+    assert.match(execution.stdout, /10 scenarios passed/);
 
     const report = JSON.parse(await readFile(reportPath, 'utf8'));
     assert.equal(report.reportVersion, OPERATIONS_AGENT_BENCHMARK_REPORT_VERSION);

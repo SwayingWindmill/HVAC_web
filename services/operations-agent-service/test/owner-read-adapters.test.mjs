@@ -334,6 +334,19 @@ test('Owner readers reject timeout, malformed JSON, missing authorization and cr
     () => invalidRequestEnergy.read({ request: energyRequest, context: energyContext }),
     'OWNER_REQUEST_INVALID',
   );
+  await expectOwnerError(
+    () => invalidRequestEnergy.read({
+      request: energyRequest,
+      context: {
+        ...energyContext,
+        authorization: {
+          ...energyContext.authorization,
+          traceparent: '00-' + '0'.repeat(32) + '-' + '0'.repeat(16) + '-01',
+        },
+      },
+    }),
+    'OWNER_REQUEST_INVALID',
+  );
 });
 
 test('Gateway Tool authorization exchanges the service delegation for an exact Owner grant', async () => {

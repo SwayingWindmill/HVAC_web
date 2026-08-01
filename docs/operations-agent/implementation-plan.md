@@ -304,6 +304,12 @@ Public HTTP, AG-UI and the Real Operations Workspace expose only the bounded exh
 
 Map 5.2 status: implemented by Ticket #207.
 
+Map 5.3 adds correlated, redacted Operations telemetry without creating a new state owner. Platform Gateway starts a CLIENT span only after local Session, Site and delegated authorization succeeds, injects W3C child context into the Operations Agent request and records only the fixed route kind, bounded result class, duration and a hashed Investigation correlation. The Operations Agent continues the same trace through authorization, Runtime planning and Steps, logical Tools, fixed Owner calls, resource checks, atomic business commits, model synthesis, terminal transitions and stream recovery.
+
+Stable SHA-256 correlations for Investigation, Run and Step identities survive process restart, Checkpoint recovery and stream reconnect while raw identities, cursors and payloads remain excluded. Prompt text, completion text, operator notes, Owner payloads, grants, cookies, tokens and secrets are rejected before export. Metrics accept only fixed low-cardinality labels. Exporter failure, timeout and bounded-queue pressure are isolated from business state, Audit, Outbox, retry and HTTP outcomes. Unit, Gateway and deterministic benchmark tests certify the trace lineage, redaction, recovery correlation, bounded cardinality and diagnostic-only authority boundary.
+
+Map 5.3 status: implemented by Ticket #208.
+
 Completion gate:
 
 - benchmark authorization and safety blockers pass;

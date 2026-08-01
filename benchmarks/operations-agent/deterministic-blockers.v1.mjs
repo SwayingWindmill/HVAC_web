@@ -60,6 +60,29 @@ const runResourceBudgetSampleSchema = z.object({
   bypassPathDeclared: z.boolean(),
 }).strict();
 
+const operationsTelemetryBoundarySampleSchema = z.object({
+  traceContext: z.string().min(1),
+  gatewayToAgent: z.string().min(1),
+  runtimeToOwner: z.string().min(1),
+  stableCorrelation: z.string().min(1),
+  restartCorrelation: z.string().min(1),
+  reconnectCorrelation: z.string().min(1),
+  rawPromptExport: z.string().min(1),
+  completionExport: z.string().min(1),
+  operatorTextExport: z.string().min(1),
+  ownerPayloadExport: z.string().min(1),
+  secretExport: z.string().min(1),
+  metricIdentityLabels: z.string().min(1),
+  metricCardinality: z.string().min(1),
+  exporterFailureAffectsBusiness: z.string().min(1),
+  queueBackpressureAffectsBusiness: z.string().min(1),
+  telemetryInBusinessRecords: z.string().min(1),
+  telemetryInAuditRecords: z.string().min(1),
+  contentLeakPathDeclared: z.boolean(),
+  highCardinalityPathDeclared: z.boolean(),
+  authorityCouplingPathDeclared: z.boolean(),
+}).strict();
+
 const evaluateValidated = (schema, value, evaluate) => {
   const parsed = schema.safeParse(value);
   if (!parsed.success) {
@@ -253,6 +276,66 @@ export const evaluateRunResourceBudgetSample = (value) => evaluateValidated(
       failures.push(failure(
         'RUN_RESOURCE_EFFECT_CONTINUED',
         'No new business effect may commit after resource exhaustion.',
+      ));
+    }
+    return result(failures);
+  },
+);
+
+
+export const evaluateOperationsTelemetryBoundarySample = (value) => evaluateValidated(
+  operationsTelemetryBoundarySampleSchema,
+  value,
+  (sample) => {
+    const failures = [];
+    if (sample.traceContext !== 'W3C'
+      || sample.gatewayToAgent !== 'CHILD_SPAN'
+      || sample.runtimeToOwner !== 'CHILD_SPAN'
+      || sample.stableCorrelation !== 'HASHED_DURABLE_IDS') {
+      failures.push(failure(
+        'OPERATIONS_TRACE_CORRELATION_BROKEN',
+        'Gateway, Operations Agent, Runtime, Tool, and Owner work must use W3C child spans with hashed durable correlation identities.',
+      ));
+    }
+    if (sample.restartCorrelation !== 'PRESERVED'
+      || sample.reconnectCorrelation !== 'PRESERVED') {
+      failures.push(failure(
+        'OPERATIONS_TELEMETRY_RECOVERY_CORRELATION_BROKEN',
+        'Restart and reconnect must retain stable hashed Investigation, Run, and Step correlation.',
+      ));
+    }
+    if (sample.rawPromptExport !== 'FORBIDDEN'
+      || sample.completionExport !== 'FORBIDDEN'
+      || sample.operatorTextExport !== 'FORBIDDEN'
+      || sample.ownerPayloadExport !== 'FORBIDDEN'
+      || sample.secretExport !== 'FORBIDDEN'
+      || !sample.contentLeakPathDeclared) {
+      failures.push(failure(
+        'OPERATIONS_TELEMETRY_CONTENT_LEAK',
+        'Prompts, completions, operator text, Owner payloads, and secrets must be rejected before telemetry export.',
+      ));
+    }
+    if (sample.metricIdentityLabels !== 'FORBIDDEN'
+      || sample.metricCardinality !== 'BOUNDED'
+      || !sample.highCardinalityPathDeclared) {
+      failures.push(failure(
+        'OPERATIONS_TELEMETRY_CARDINALITY_UNBOUNDED',
+        'Metrics must use only fixed low-cardinality labels and reject durable or request identities.',
+      ));
+    }
+    if (sample.exporterFailureAffectsBusiness !== 'FORBIDDEN'
+      || sample.queueBackpressureAffectsBusiness !== 'FORBIDDEN') {
+      failures.push(failure(
+        'OPERATIONS_TELEMETRY_AFFECTS_BUSINESS',
+        'Exporter failure, timeout, or queue pressure cannot alter business state, retries, Audit, or Outbox.',
+      ));
+    }
+    if (sample.telemetryInBusinessRecords !== 'FORBIDDEN'
+      || sample.telemetryInAuditRecords !== 'FORBIDDEN'
+      || !sample.authorityCouplingPathDeclared) {
+      failures.push(failure(
+        'OPERATIONS_TELEMETRY_AUTHORITY_LEAK',
+        'Telemetry is diagnostic only and must not enter authoritative business or Audit records.',
       ));
     }
     return result(failures);

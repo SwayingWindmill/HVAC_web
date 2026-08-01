@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createMemoryOperationsTelemetryExporter,
   createOperationsAgentHttpHandler,
+  createOperationsTelemetryRuntime,
   createSiteNightEnergyInvestigationCoordinator,
 } from '../dist/index.js';
 import { createFakeOperationsAgentEnvironment } from './support/fake-operations-agent-environment.mjs';
@@ -89,13 +91,14 @@ const headers = Object.freeze({
   traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
 });
 
-const createHarness = ({ deny = false, runtimeSteps } = {}) => {
+const createHarness = ({ deny = false, runtimeSteps, telemetry } = {}) => {
   const environment = createFakeOperationsAgentEnvironment({
     scope,
     initialTime: currentTime,
     leaseDurationMs: 86_400_000,
     ownerDelayMs: 1,
     ownerResultFactory,
+    telemetry,
     runtimeSteps: runtimeSteps ?? [{
       stepId: 'collect-registry-context',
       plan: {
@@ -116,7 +119,9 @@ const createHarness = ({ deny = false, runtimeSteps } = {}) => {
     }],
   });
   const authorizationCalls = [];
+  const coordinatorContexts = [];
   const handler = createOperationsAgentHttpHandler({
+    telemetry,
     now: () => currentTime,
     authorizer: {
       async authorize(input) {
@@ -136,16 +141,19 @@ const createHarness = ({ deny = false, runtimeSteps } = {}) => {
       },
     },
     createCoordinator(context) {
+      coordinatorContexts.push(context);
       return createSiteNightEnergyInvestigationCoordinator({
         ...environment.ports,
         clock: { now: () => context.now },
+        telemetry,
+        telemetryContext: context.telemetryContext,
         authorizationDecisionReader: {
           authorizeScope: async () => context.authorization,
         },
       });
     },
   });
-  return { environment, handler, authorizationCalls };
+  return { environment, handler, authorizationCalls, coordinatorContexts };
 };
 
 const body = async (response) => JSON.parse(await response.text());
@@ -419,4 +427,67 @@ test('internal HTTP authorization denial is nondiscoverable and malformed reques
     },
   ));
   assert.equal(oversized.status, 413);
+});
+
+
+test('internal HTTP telemetry creates child trace context and bounded recovery metrics', async () => {
+  const exporter = createMemoryOperationsTelemetryExporter();
+  const telemetry = createOperationsTelemetryRuntime({ exporter, now: () => currentTime });
+  const harness = createHarness({ telemetry });
+  const telemetryHeaders = {
+    ...headers,
+    'X-Request-ID': 'request-http-observability',
+    tracestate: 'vendor=opaque',
+  };
+  const collection = 'https://operations-agent.internal/internal/v1/sites/'
+    + siteId + '/operations/investigations';
+  const startedResponse = await harness.handler.handle(new Request(collection, {
+    method: 'POST',
+    headers: telemetryHeaders,
+    body: '{}',
+  }));
+  assert.equal(startedResponse.status, 201);
+  const responseTraceparent = startedResponse.headers.get('traceparent');
+  assert.match(responseTraceparent ?? '', /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/u);
+  assert.equal(responseTraceparent.slice(3, 35), headers.traceparent.slice(3, 35));
+  assert.notEqual(responseTraceparent.slice(36, 52), headers.traceparent.slice(36, 52));
+  assert.equal(startedResponse.headers.get('tracestate'), 'vendor=opaque');
+  const started = await body(startedResponse);
+
+  const streamHeaders = { ...telemetryHeaders };
+  delete streamHeaders['Content-Type'];
+  const streamResponse = await harness.handler.handle(new Request(
+    collection + '/' + started.id + '/events',
+    { method: 'GET', headers: streamHeaders },
+  ));
+  assert.equal(streamResponse.status, 200);
+  await streamResponse.text();
+  await telemetry.flush();
+
+  const spans = exporter.spans();
+  assert.equal(spans.some(({ name }) => name === 'operations.http.request'), true);
+  assert.equal(spans.some(({ name }) => name === 'operations.authorization'), true);
+  assert.equal(spans.some(({ name }) => name === 'operations.stream.recovery'), true);
+  const firstAuthorization = spans.find(({ name }) => name === 'operations.authorization');
+  assert.ok(firstAuthorization);
+  assert.equal(
+    harness.authorizationCalls[0].traceparent.slice(36, 52),
+    firstAuthorization.spanId,
+  );
+  assert.equal(harness.authorizationCalls[0].tracestate, 'vendor=opaque');
+  assert.equal(harness.coordinatorContexts[0].telemetryContext.requestId, 'request-http-observability');
+  const recoveryMetric = telemetry.metrics().find(({ name }) => (
+    name === 'operations_agent_recovery_total'
+  ));
+  assert.ok(recoveryMetric);
+  assert.deepEqual(recoveryMetric.labels, {
+    operation: 'STREAM',
+    outcome: 'SUCCESS',
+    recoveryMode: 'FULL_SNAPSHOT',
+    recoveryReason: 'INITIAL',
+  });
+  assert.doesNotMatch(
+    JSON.stringify(spans),
+    /request-http-observability|investigation-001|Last-Event-ID|snapshot-position/u,
+  );
 });

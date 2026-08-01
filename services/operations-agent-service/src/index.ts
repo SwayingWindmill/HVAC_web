@@ -98,6 +98,27 @@ export {
 } from './application/index.js';
 
 export {
+  NOOP_OPERATIONS_AGENT_TELEMETRY,
+  safeAddOperationsTelemetryCounter,
+  safeObserveOperationsTelemetryHistogram,
+  safeStartOperationsTelemetrySpan,
+  type OperationsAgentTelemetry,
+  type OperationsTelemetryAttributes,
+  type OperationsTelemetryBudgetDimension,
+  type OperationsTelemetryCorrelation,
+  type OperationsTelemetryMetricLabels,
+  type OperationsTelemetryMetricName,
+  type OperationsTelemetryOperation,
+  type OperationsTelemetryOutcome,
+  type OperationsTelemetryOwner,
+  type OperationsTelemetryRecoveryMode,
+  type OperationsTelemetryRecoveryReason,
+  type OperationsTelemetrySpan,
+  type OperationsTelemetrySpanKind,
+  type OperationsTelemetrySpanName,
+} from './application/index.js';
+
+export {
   OPERATIONS_AGENT_FINDING_MODEL_ALLOWLIST_ENV,
   OPERATIONS_AGENT_FINDING_MODEL_ENV,
   OPERATIONS_AGENT_FINDING_MODEL_MAX_OUTPUT_TOKENS_ENV,
@@ -105,8 +126,12 @@ export {
   OPERATIONS_AGENT_FINDING_MODEL_TIMEOUT_MS_ENV,
   OperationsAgentFindingModelConfigurationError,
   createEnvironmentConfiguredSiteNightEnergyInvestigationCoordinator,
+  createMemoryOperationsTelemetryExporter,
   createOperationsAgentFindingModelRuntimeFromEnvironment,
   createOperationsAgentHttpHandler,
+  createOperationsOtlpHttpExporter,
+  createOperationsTelemetryRuntime,
+  hashOperationsTelemetryIdentity,
   operationsAgentServiceModules,
   type EnvironmentConfiguredSiteNightEnergyCoordinatorOptions,
   type OperationsAgentEnvironment,
@@ -118,4 +143,11 @@ export {
   type OperationsAgentHttpHandler,
   type OperationsAgentHttpOptions,
   type OperationsAgentServiceModules,
+  type OperationsOtlpHttpExporterOptions,
+  type OperationsTelemetryExporter,
+  type OperationsTelemetryMetricPoint,
+  type OperationsTelemetryRuntime,
+  type OperationsTelemetryRuntimeDiagnostics,
+  type OperationsTelemetryRuntimeOptions,
+  type OperationsTelemetrySpanData,
 } from './bootstrap/index.js';

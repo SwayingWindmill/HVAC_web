@@ -596,18 +596,34 @@ Temporal is reconsidered only after demonstrated requirements for multi-day cros
 
 ### 13.1 Observability
 
-OpenTelemetry should cover:
+Operations telemetry is a diagnostic side channel, never an authority or recovery store. The Platform Gateway, Operations Agent Service, Runtime, logical Tool boundary and fixed Owner calls propagate validated W3C traceparent and tracestate values. Every outbound boundary starts a child span instead of copying the parent span identity.
 
-```text
-Investigation and Agent Run correlation
-runtime node and transition timing
-model latency and token usage
-tool-call latency and owner error class
-lease acquisition and conflict
-revision conflict and idempotency deduplication
-budget consumption
-AG-UI stream lifecycle
-```
+The span tree uses fixed names:
+
+~~~text
+operations.gateway.upstream
+operations.http.request
+operations.authorization
+operations.runtime.plan
+operations.runtime.step
+operations.model.call
+operations.tool.call
+operations.owner.request
+operations.budget.check
+operations.business.commit
+operations.run.terminal
+operations.stream.recovery
+~~~
+
+Investigation, Run, Step and request identities are not exported directly. Each service derives a stable SHA-256 correlation value with a fixed type prefix. This lets a restart, Checkpoint recovery or event-stream reconnect produce a new trace while remaining queryable by the same durable Investigation, Run or Step correlation. Recovery positions, Last-Event-ID values and opaque Checkpoint state are not telemetry attributes.
+
+Only fixed categories and bounded numbers may be exported: operation and result class, logical Tool, fixed Owner, recovery mode and reason, budget dimension, duration, retry count, record count, payload bytes and model token counts. Raw prompts, model completions, operator text, Owner payloads, authorization grants, cookies, CSRF values, tokens, secrets and unrestricted error messages are rejected before export.
+
+Metrics use fixed low-cardinality labels only. Request IDs, Investigation IDs, Run IDs, Step IDs, cursors, resource identifiers and arbitrary content are forbidden as labels. Runtime validation rejects both unknown label keys and values outside the fixed operation, outcome, Owner, Tool, recovery and budget catalogs.
+
+Export is asynchronous and bounded. Queue pressure drops diagnostic spans and increments diagnostics; exporter failure or timeout is caught and counted. Telemetry cannot change the Investigation transaction, resource budget, Checkpoint, retry decision, Outbox, Audit record or public HTTP result. Telemetry fields are absent from all authoritative business and Audit schemas.
+
+The deterministic telemetry-boundary benchmark hard-fails when W3C child propagation, restart or reconnect correlation, redaction, bounded cardinality, exporter isolation or authority separation is removed.
 
 ### 13.2 Audit
 
