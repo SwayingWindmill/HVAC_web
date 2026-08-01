@@ -655,7 +655,11 @@ try {
   await stopBrowser(browserProcess);
   if (viteServer) await viteServer.close();
   await new Promise((resolveClose) => fixture.server.close(() => resolveClose()));
-  await rm(profileDir, { recursive: true, force: true });
+  try {
+    await rm(profileDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+  } catch (error) {
+    console.warn(`Real Alarm browser profile cleanup was deferred: ${error instanceof Error ? error.message : String(error)}`);
+  }
   if (conclusion !== 'passed') {
     await mkdir(outputRoot, { recursive: true });
     await writeFile(join(outputRoot, 'browser-evidence.json'), JSON.stringify({ schemaVersion: 2, passed: false, generatedAt: new Date().toISOString(), assertions, stateEvidence, network: { requests: fixture.requests } }, null, 2));
