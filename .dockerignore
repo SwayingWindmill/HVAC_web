@@ -1,6 +1,8 @@
 .git
 .ai-bridge
 .scratch
+.worktrees
+.clones
 **/node_modules
 **/.venv
 **/.env
