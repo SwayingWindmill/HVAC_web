@@ -402,7 +402,12 @@ try {
   await stopBrowser(browserProcess);
   if (viteServer) await viteServer.close();
   await new Promise((resolveClose) => fixture.server.close(() => resolveClose()));
-  await rm(profileDir, { recursive: true, force: true });
+  await rm(profileDir, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 100,
+  });
   if (conclusion !== 'passed') {
     await mkdir(outputRoot, { recursive: true });
     await writeFile(join(outputRoot, 'browser-evidence.json'), JSON.stringify({ schemaVersion: 1, passed: false, generatedAt: new Date().toISOString(), assertions, stateEvidence, network: { requests: fixture.requests } }, null, 2));
