@@ -611,18 +611,23 @@ try {
   assert(sawRetrying, 'Operations reconnect browser audit did not expose a stable retrying state');
   assertions.push('retryable-interruption-visible-and-recovered');
 
-  await evaluate(cdpClient, `document.querySelectorAll('.operations-record-card details').forEach((details) => { details.open = true; })`);
-  const supportedState = await evaluate(cdpClient, `({
-    connection: document.querySelector('.operations-connection')?.getAttribute('data-connection-status'),
-    investigation: document.querySelector('.operations-workspace')?.getAttribute('data-investigation-status'),
-    toolCount: document.querySelectorAll('.operations-tools > li').length,
-    evidenceCount: document.querySelectorAll('[data-record-type="EVIDENCE"]').length,
-    analysisCount: document.querySelectorAll('[data-record-type="ANALYSIS_REFERENCE"]').length,
-    findingCount: document.querySelectorAll('[data-record-type="FINDING"]').length,
-    listCount: document.querySelectorAll('.operations-list-item').length,
-    text: document.body.textContent ?? '',
-    protectedResourceId: globalThis.__OPERATIONS_RECONNECT_AUDIT__?.protectedResourceId(),
-  })`);
+  let supportedState = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await evaluate(cdpClient, `document.querySelectorAll('.operations-record-card details').forEach((details) => { details.open = true; })`);
+    supportedState = await evaluate(cdpClient, `({
+      connection: document.querySelector('.operations-connection')?.getAttribute('data-connection-status'),
+      investigation: document.querySelector('.operations-workspace')?.getAttribute('data-investigation-status'),
+      toolCount: document.querySelectorAll('.operations-tools > li').length,
+      evidenceCount: document.querySelectorAll('[data-record-type="EVIDENCE"]').length,
+      analysisCount: document.querySelectorAll('[data-record-type="ANALYSIS_REFERENCE"]').length,
+      findingCount: document.querySelectorAll('[data-record-type="FINDING"]').length,
+      listCount: document.querySelectorAll('.operations-list-item').length,
+      text: document.body.textContent ?? '',
+      protectedResourceId: globalThis.__OPERATIONS_RECONNECT_AUDIT__?.protectedResourceId(),
+    })`);
+    if (supportedState.listCount === 2 && supportedState.toolCount === 2) break;
+    await pause(100);
+  }
   assert(supportedState.connection === 'TERMINAL' && supportedState.investigation === 'COMPLETED', 'terminal UI state is unstable');
   assert(supportedState.toolCount === 2, 'committed Tool receipts were duplicated or lost');
   assert(supportedState.evidenceCount === 1 && supportedState.analysisCount === 1 && supportedState.findingCount === 1, 'typed committed records were duplicated or lost');
