@@ -73,6 +73,7 @@ for (const [kind, name] of expectedResources) {
 }
 assert(data.databaseAccess?.some((entry) => entry.service === 'work-order-service' && entry.schema === 'work_order_runtime' && entry.mode === 'read'), 'Work Order read-only database access is missing');
 assert(data.databaseIdentities?.some((entry) => entry.schema === 'work_order_runtime' && entry.migrationRole === 's5_work_order_migrator' && entry.runtimeRole === 's5_work_order_runtime' && entry.runtimeBypassRls === false && entry.accessMode === 'read'), 'Work Order database identity is invalid');
+assert(data.databaseIdentities?.some((entry) => entry.schema === 'work_order_runtime' && entry.migrationRole === 's5_work_order_migrator' && entry.runtimeRole === 's5_work_order_service' && entry.activationRole === 's5_work_order_runtime' && entry.runtimeBypassRls === false && entry.accessMode === 'read'), 'Work Order service database identity is invalid');
 
 for (const table of ['work_order_current', 'work_order_source_reference', 'work_order_timeline', 'work_order_task', 'work_order_note', 'work_order_attachment_metadata', 'work_order_completion_evidence']) {
   assert(migration.includes(`CREATE TABLE IF NOT EXISTS work_order_runtime.${table}`), `Work Order migration lacks ${table}`);

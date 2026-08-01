@@ -47,7 +47,7 @@
     "GET /api/v1/sites/{siteId}/work-orders": { "revision": 1, "owner": "work-order-service" },
     "GET /api/v1/sites/{siteId}/work-orders/{workOrderId}": { "revision": 1, "owner": "work-order-service" }
   },
-  "dataRegistryRevision": 17,
+  "dataRegistryRevision": 18,
   "resources": {
     "schema:gateway": { "revision": 1, "writer": "platform-gateway" },
     "schema:audit_ledger": { "revision": 1, "writer": "audit-ledger-service" },

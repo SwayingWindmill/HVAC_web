@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412
+    environment:
+      POSTGRES_DB: hvac_s5
+      POSTGRES_PASSWORD: local-fixture-only
+    ports:
+      - "${S5_POSTGRES_HOST_PORT:-55435}:5432"
+    volumes:
+      - ../../services/work-order-service/testdata/postgres/000_roles.sql:/docker-entrypoint-initdb.d/000_roles.sql:ro
+      - ../../services/work-order-service/migrations/001_s5_work_order_runtime.sql:/docker-entrypoint-initdb.d/001_s5_work_order_runtime.sql:ro
+      - ../../services/work-order-service/testdata/postgres/010_seed.sql:/docker-entrypoint-initdb.d/010_seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hvac_s5"]
+      interval: 1s
+      timeout: 3s
+      retries: 60

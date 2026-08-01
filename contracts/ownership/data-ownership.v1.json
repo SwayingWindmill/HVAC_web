@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 17,
+  "registryRevision": 18,
   "resources": [
     { "kind": "schema", "name": "gateway", "writer": "platform-gateway", "revision": 1 },
     { "kind": "schema", "name": "audit_ledger", "writer": "audit-ledger-service", "revision": 1 },
@@ -116,6 +116,7 @@
     { "schema": "command_runtime", "migrationRole": "s3_command_migrator", "runtimeRole": "s3_command_service", "runtimeBypassRls": false, "activationRole": "s3_command_runtime", "accessMode": "write" },
     { "schema": "alarm_runtime", "migrationRole": "s4_alarm_migrator", "runtimeRole": "s4_alarm_runtime", "runtimeBypassRls": false, "accessMode": "write" },
     { "schema": "alarm_runtime", "migrationRole": "s4_alarm_migrator", "runtimeRole": "s4_alarm_service", "runtimeBypassRls": false, "activationRole": "s4_alarm_runtime", "accessMode": "write" },
-    { "schema": "work_order_runtime", "migrationRole": "s5_work_order_migrator", "runtimeRole": "s5_work_order_runtime", "runtimeBypassRls": false, "accessMode": "read" }
+    { "schema": "work_order_runtime", "migrationRole": "s5_work_order_migrator", "runtimeRole": "s5_work_order_runtime", "runtimeBypassRls": false, "accessMode": "read" },
+    { "schema": "work_order_runtime", "migrationRole": "s5_work_order_migrator", "runtimeRole": "s5_work_order_service", "runtimeBypassRls": false, "activationRole": "s5_work_order_runtime", "accessMode": "read" }
   ]
 }

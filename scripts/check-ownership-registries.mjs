@@ -360,6 +360,7 @@ const requiredIdentities = new Map([
   ['alarm_runtime:s4_alarm_runtime', { migrationRole: 's4_alarm_migrator', accessMode: 'write' }],
   ['alarm_runtime:s4_alarm_service', { migrationRole: 's4_alarm_migrator', activationRole: 's4_alarm_runtime', accessMode: 'write' }],
   ['work_order_runtime:s5_work_order_runtime', { migrationRole: 's5_work_order_migrator', accessMode: 'read' }],
+  ['work_order_runtime:s5_work_order_service', { migrationRole: 's5_work_order_migrator', activationRole: 's5_work_order_runtime', accessMode: 'read' }],
 ]);
 for (const identity of dataRegistry.databaseIdentities ?? []) {
   const key = `${identity.schema}:${identity.runtimeRole}`;
