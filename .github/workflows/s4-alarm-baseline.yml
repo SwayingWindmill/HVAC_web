@@ -1,4 +1,4 @@
-name: S4 Alarm Authoritative Read Baseline
+name: S4 Alarm Authoritative Lifecycle Baseline
 
 on:
   pull_request:
@@ -17,6 +17,7 @@ on:
       - 'docs/operations/real-product-roadmap.md'
       - 'go.work'
       - 'go.work.sum'
+      - 'infra/s4-alarm/**'
       - 'libs/alarmmodel/**'
       - 'libs/ownershipregistry/**'
       - 'scripts/check-ownership-registries.mjs'
@@ -24,6 +25,7 @@ on:
       - 'scripts/check-s4-alarm-baseline.mjs'
       - 'scripts/fixtures/real-alarms/**'
       - 'scripts/run-real-alarms-browser-audit.mjs'
+      - 'scripts/run-s4-alarm-postgres-tests.mjs'
       - 'scripts/test-real-alarms.mjs'
       - 'services/alarm-service/**'
   push:
@@ -43,6 +45,7 @@ on:
       - 'docs/operations/real-product-roadmap.md'
       - 'go.work'
       - 'go.work.sum'
+      - 'infra/s4-alarm/**'
       - 'libs/alarmmodel/**'
       - 'libs/ownershipregistry/**'
       - 'scripts/check-ownership-registries.mjs'
@@ -50,6 +53,7 @@ on:
       - 'scripts/check-s4-alarm-baseline.mjs'
       - 'scripts/fixtures/real-alarms/**'
       - 'scripts/run-real-alarms-browser-audit.mjs'
+      - 'scripts/run-s4-alarm-postgres-tests.mjs'
       - 'scripts/test-real-alarms.mjs'
       - 'services/alarm-service/**'
   workflow_dispatch:
@@ -80,14 +84,17 @@ jobs:
       - run: npm run real-alarms:test
       - run: npm run lint
       - run: npm run build:alarm-service
+      - run: npm run s4:alarm:postgres
       - run: npm run build:real
       - run: npm run rms:real:graph
       - run: npm run real-alarms:browser
-      - name: Upload Real Alarm browser evidence
+      - name: Upload Real Alarm lifecycle evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-alarm-browser-evidence
-          path: out/real-alarms-certification
+          name: real-alarm-lifecycle-evidence
+          path: |
+            out/real-alarms-certification
+            out/s4-alarm-authority
           if-no-files-found: error
           retention-days: 14

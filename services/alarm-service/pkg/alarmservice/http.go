@@ -4,7 +4,9 @@ import (
 	"crypto"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -16,11 +18,22 @@ import (
 const (
 	InternalSiteAlarmsPrefix = "/internal/v1/sites/"
 	AlarmReadContextHeader   = "X-Alarm-Read-Context"
+	AlarmWriteContextHeader  = "X-Alarm-Write-Context"
 	AlarmListAction          = "alarm:list"
 	AlarmReadAction          = "alarm:read"
+	AlarmAcknowledgeAction   = "alarm:acknowledge"
+	AlarmAssignAction        = "alarm:assign"
+	AlarmUnassignAction      = "alarm:unassign"
+	AlarmSuppressAction      = "alarm:suppress"
+	AlarmUnsuppressAction    = "alarm:unsuppress"
+	AlarmCloseAction         = "alarm:close"
+	AlarmReopenAction        = "alarm:reopen"
 	DefaultGatewaySPIFFEID   = "spiffe://hvac.local/platform-gateway"
 	DefaultAudience          = "alarm-service"
+	maximumMutationBody      = 8 * 1024
 )
+
+var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$`)
 
 type HTTPConfig struct {
 	Store            Store
@@ -49,6 +62,19 @@ type problem struct {
 	Retryable bool   `json:"retryable"`
 }
 
+type mutationRequest struct {
+	ExpectedVersion uint64  `json:"expectedVersion"`
+	Reason          string  `json:"reason"`
+	AssigneeID      *string `json:"assigneeId,omitempty"`
+	SuppressedUntil *string `json:"suppressedUntil,omitempty"`
+}
+
+type alarmRoute struct {
+	siteID    string
+	alarmID   string
+	operation alarmmodel.Operation
+}
+
 func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 	if config.Store == nil || config.GatewayPublicKey == nil {
 		return nil, errors.New("Alarm Store and Gateway public key are required")
@@ -73,46 +99,55 @@ func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 
 func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "private, no-store")
-	if request.Method != http.MethodGet {
-		writer.Header().Set("Allow", http.MethodGet)
-		handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Alarm reads only support GET.", false)
-		return
-	}
 	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant"} {
 		if request.Header.Get(header) != "" {
 			handler.writeProblem(writer, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Caller-supplied identity headers are not accepted by Alarm Service.", false)
 			return
 		}
 	}
-	siteID, alarmID, ok := matchAlarmPath(request.URL.Path)
+	route, ok := matchAlarmPath(request.URL.Path)
 	if !ok {
 		handler.writeProblem(writer, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested Alarm route does not exist.", false)
 		return
 	}
-	if !alarmmodel.IsUUIDv7(siteID) || (alarmID != "" && !alarmmodel.IsUUIDv7(alarmID)) {
+	if !alarmmodel.IsUUIDv7(route.siteID) || (route.alarmID != "" && !alarmmodel.IsUUIDv7(route.alarmID)) {
 		handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Alarm resource is not visible.", false)
 		return
 	}
-	action := AlarmListAction
-	scopes := []string{"site:" + siteID}
-	if alarmID != "" {
-		action = AlarmReadAction
-		scopes = append(scopes, "alarm:"+alarmID)
+	if route.operation != "" {
+		if request.Method != http.MethodPost {
+			writer.Header().Set("Allow", http.MethodPost)
+			handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Alarm lifecycle transitions only support POST.", false)
+			return
+		}
+		handler.mutate(writer, request, route)
+		return
 	}
-	claims, ok := handler.authorize(request, action, scopes)
+	if request.Method != http.MethodGet {
+		writer.Header().Set("Allow", http.MethodGet)
+		handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Alarm reads only support GET.", false)
+		return
+	}
+	action := AlarmListAction
+	scopes := []string{"site:" + route.siteID}
+	if route.alarmID != "" {
+		action = AlarmReadAction
+		scopes = append(scopes, "alarm:"+route.alarmID)
+	}
+	claims, ok := handler.authorize(request, AlarmReadContextHeader, action, scopes)
 	if !ok {
 		handler.writeProblem(writer, http.StatusForbidden, "ALARM_ACCESS_DENIED", "Alarm access denied", "The requested Alarm resource is outside the authorized read scope.", false)
 		return
 	}
-	if alarmID == "" {
-		handler.list(writer, request, claims.ActingOrganizationID, siteID)
+	if route.alarmID == "" {
+		handler.list(writer, request, claims.ActingOrganizationID, route.siteID)
 		return
 	}
-	handler.get(writer, request, claims.ActingOrganizationID, siteID, alarmID)
+	handler.get(writer, request, claims.ActingOrganizationID, route.siteID, route.alarmID)
 }
 
-func (handler *httpHandler) authorize(request *http.Request, action string, resourceScopes []string) (identitycontext.DelegationClaims, bool) {
-	token := strings.TrimSpace(request.Header.Get(AlarmReadContextHeader))
+func (handler *httpHandler) authorize(request *http.Request, header, action string, resourceScopes []string) (identitycontext.DelegationClaims, bool) {
+	token := strings.TrimSpace(request.Header.Get(header))
 	claims, err := identitycontext.VerifyDelegation(handler.gatewayPublicKey, token)
 	if err != nil || !alarmmodel.IsUUIDv7(claims.ActingOrganizationID) || len(claims.Actions) != 1 || claims.Actions[0] != action {
 		return identitycontext.DelegationClaims{}, false
@@ -151,11 +186,85 @@ func (handler *httpHandler) get(writer http.ResponseWriter, request *http.Reques
 		handler.writeStoreFailure(writer, err)
 		return
 	}
-	if err := alarm.Validate(); err != nil || alarm.OrganizationID != organizationID || alarm.SiteID != siteID || alarm.AlarmID != alarmID {
+	if !validAlarmResponse(alarm, organizationID, siteID, alarmID) {
 		handler.writeProblem(writer, http.StatusBadGateway, "ALARM_RESPONSE_INVALID", "Alarm response invalid", "Alarm Store returned a projection outside the requested scope.", true)
 		return
 	}
 	writeJSON(writer, http.StatusOK, alarm)
+}
+
+func (handler *httpHandler) mutate(writer http.ResponseWriter, request *http.Request, route alarmRoute) {
+	action, ok := mutationAction(route.operation)
+	if !ok {
+		handler.writeProblem(writer, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested Alarm route does not exist.", false)
+		return
+	}
+	claims, authorized := handler.authorize(request, AlarmWriteContextHeader, action, []string{"site:" + route.siteID, "alarm:" + route.alarmID})
+	if !authorized {
+		handler.writeProblem(writer, http.StatusForbidden, "ALARM_ACCESS_DENIED", "Alarm access denied", "The requested Alarm resource is outside the authorized lifecycle scope.", false)
+		return
+	}
+	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
+		handler.writeProblem(writer, http.StatusUnsupportedMediaType, "ALARM_REQUEST_INVALID", "Alarm request invalid", "The Alarm lifecycle request must use application/json.", false)
+		return
+	}
+	idempotencyKey := strings.TrimSpace(request.Header.Get("Idempotency-Key"))
+	if !idempotencyKeyPattern.MatchString(idempotencyKey) {
+		handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", "A stable Idempotency-Key is required.", false)
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumMutationBody)
+	var input mutationRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil || input.ExpectedVersion == 0 || strings.TrimSpace(input.Reason) == "" || len(strings.TrimSpace(input.Reason)) > 256 {
+		handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", "The Alarm lifecycle request is invalid.", false)
+		return
+	}
+	actorID := strings.TrimSpace(claims.PrincipalID)
+	if actorID == "" {
+		actorID = strings.TrimSpace(claims.SubjectIssuer) + "#" + strings.TrimSpace(claims.Subject)
+	}
+	result, err := handler.store.Apply(request.Context(), claims.ActingOrganizationID, route.siteID, route.alarmID, Mutation{
+		Operation: route.operation, ExpectedVersion: input.ExpectedVersion, Reason: input.Reason,
+		AssigneeID: input.AssigneeID, SuppressedUntil: input.SuppressedUntil,
+		ActorType: "PRINCIPAL", ActorID: actorID, PolicyRevision: claims.PolicyRevision,
+		CorrelationID: idempotencyKey, IdempotencyKey: idempotencyKey,
+		OccurredAt: handler.now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		handler.writeMutationFailure(writer, err)
+		return
+	}
+	if !validAlarmResponse(result.Alarm, claims.ActingOrganizationID, route.siteID, route.alarmID) {
+		handler.writeProblem(writer, http.StatusBadGateway, "ALARM_RESPONSE_INVALID", "Alarm response invalid", "Alarm Store returned a projection outside the requested scope.", true)
+		return
+	}
+	if result.Replayed {
+		writer.Header().Set("Idempotent-Replay", "true")
+	}
+	writeJSON(writer, http.StatusOK, result.Alarm)
+}
+
+func mutationAction(operation alarmmodel.Operation) (string, bool) {
+	switch operation {
+	case alarmmodel.OperationAcknowledge:
+		return AlarmAcknowledgeAction, true
+	case alarmmodel.OperationAssign:
+		return AlarmAssignAction, true
+	case alarmmodel.OperationUnassign:
+		return AlarmUnassignAction, true
+	case alarmmodel.OperationSuppress:
+		return AlarmSuppressAction, true
+	case alarmmodel.OperationUnsuppress:
+		return AlarmUnsuppressAction, true
+	case alarmmodel.OperationClose:
+		return AlarmCloseAction, true
+	case alarmmodel.OperationReopen:
+		return AlarmReopenAction, true
+	default:
+		return "", false
+	}
 }
 
 func (handler *httpHandler) parseFilter(request *http.Request) (Filter, bool) {
@@ -195,6 +304,21 @@ func (handler *httpHandler) writeStoreFailure(writer http.ResponseWriter, err er
 	handler.writeProblem(writer, http.StatusServiceUnavailable, "ALARM_UNAVAILABLE", "Alarm unavailable", "Alarm Service cannot read its authoritative store.", true)
 }
 
+func (handler *httpHandler) writeMutationFailure(writer http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Alarm resource is not visible.", false)
+	case errors.Is(err, alarmmodel.ErrVersionConflict):
+		handler.writeProblem(writer, http.StatusConflict, "ALARM_VERSION_CONFLICT", "Alarm version conflict", "The Alarm changed before this lifecycle transition was committed.", false)
+	case errors.Is(err, ErrIdempotencyConflict):
+		handler.writeProblem(writer, http.StatusConflict, "ALARM_IDEMPOTENCY_CONFLICT", "Alarm idempotency conflict", "The Idempotency-Key is already bound to another Alarm lifecycle payload.", false)
+	case errors.Is(err, alarmmodel.ErrInvalidOperation), errors.Is(err, alarmmodel.ErrInvalidTransition):
+		handler.writeProblem(writer, http.StatusUnprocessableEntity, "ALARM_TRANSITION_INVALID", "Alarm transition invalid", "The requested Alarm lifecycle transition is not valid from the current authoritative state.", false)
+	default:
+		handler.writeProblem(writer, http.StatusServiceUnavailable, "ALARM_UNAVAILABLE", "Alarm unavailable", "Alarm Service cannot update its authoritative store.", true)
+	}
+}
+
 func (handler *httpHandler) writeProblem(writer http.ResponseWriter, status int, code, title, detail string, retryable bool) {
 	writer.Header().Set("Content-Type", "application/problem+json")
 	writer.WriteHeader(status)
@@ -207,18 +331,53 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(writer).Encode(value)
 }
 
-func matchAlarmPath(path string) (string, string, bool) {
+func matchAlarmPath(path string) (alarmRoute, bool) {
 	if !strings.HasPrefix(path, InternalSiteAlarmsPrefix) {
-		return "", "", false
+		return alarmRoute{}, false
 	}
 	segments := strings.Split(strings.Trim(path, "/"), "/")
 	if len(segments) == 5 && segments[0] == "internal" && segments[1] == "v1" && segments[2] == "sites" && segments[4] == "alarms" {
-		return segments[3], "", true
+		return alarmRoute{siteID: segments[3]}, true
 	}
-	if len(segments) == 6 && segments[0] == "internal" && segments[1] == "v1" && segments[2] == "sites" && segments[4] == "alarms" {
-		return segments[3], segments[5], true
+	if len(segments) != 6 || segments[0] != "internal" || segments[1] != "v1" || segments[2] != "sites" || segments[4] != "alarms" {
+		return alarmRoute{}, false
 	}
-	return "", "", false
+	alarmID, suffix, hasSuffix := strings.Cut(segments[5], ":")
+	route := alarmRoute{siteID: segments[3], alarmID: alarmID}
+	if !hasSuffix {
+		return route, true
+	}
+	switch suffix {
+	case "acknowledge":
+		route.operation = alarmmodel.OperationAcknowledge
+	case "assign":
+		route.operation = alarmmodel.OperationAssign
+	case "unassign":
+		route.operation = alarmmodel.OperationUnassign
+	case "suppress":
+		route.operation = alarmmodel.OperationSuppress
+	case "unsuppress":
+		route.operation = alarmmodel.OperationUnsuppress
+	case "close":
+		route.operation = alarmmodel.OperationClose
+	case "reopen":
+		route.operation = alarmmodel.OperationReopen
+	default:
+		return alarmRoute{}, false
+	}
+	return route, true
+}
+
+func validAlarmResponse(alarm alarmmodel.Alarm, organizationID, siteID, alarmID string) bool {
+	return alarm.Validate() == nil && alarm.OrganizationID == organizationID && alarm.SiteID == siteID && alarm.AlarmID == alarmID
+}
+
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("request body contains trailing data")
+	}
+	return nil
 }
 
 func sameStringSet(left, right []string) bool {
