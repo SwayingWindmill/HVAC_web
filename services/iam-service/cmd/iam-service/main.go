@@ -58,6 +58,8 @@ func main() {
 	policyRevision := envOr("IAM_POLICY_REVISION", "policy-unconfigured")
 	authorizationStore := iam.NewDenyAllAuthorizationStore(policyRevision)
 	var telemetryAuthorizationStore iam.TelemetryAuthorizationStore
+	var alarmAuthorizationStore iam.AlarmAuthorizationStore
+	var alarmAuditSink iam.AlarmDecisionAuditSink
 	var telemetryGrantStore iam.TelemetryGrantStore
 	var grantStatusStore iam.RegistryGrantStatusStore = iam.StaticRegistryGrantStatusStore{PolicyRevision: policyRevision}
 	databaseURL := strings.TrimSpace(os.Getenv("IAM_DATABASE_URL"))
@@ -78,6 +80,8 @@ func main() {
 		defer postgresStore.Close()
 		authorizationStore = postgresStore
 		telemetryAuthorizationStore = postgresStore
+		alarmAuthorizationStore = postgresStore
+		alarmAuditSink = postgresStore
 		grantStatusStore = postgresStore
 		policyRevision = "database-managed"
 		logger.Info("iam_postgres_authorization_store_enabled")
@@ -125,6 +129,8 @@ func main() {
 			},
 			RegistryGrantStatus:         grantStatusStore,
 			TelemetryAuthorizationStore: telemetryAuthorizationStore,
+			AlarmAuthorizationStore:     alarmAuthorizationStore,
+			AlarmAuditSink:              alarmAuditSink,
 			TelemetryGrantSigner:        registryGrantSigner,
 			TelemetryGrantIssuer:        iamSPIFFEID,
 			TelemetryGrantAudience:      envOr("IAM_TELEMETRY_GRANT_AUDIENCE", "telemetry-runtime-service"),

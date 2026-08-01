@@ -41,7 +41,7 @@ export type {
   AlarmTransition,
 } from './alarm-contract';
 
-export const ALARM_PUBLIC_ROUTES_ENABLED = false as const;
+export const ALARM_PUBLIC_ROUTES_ENABLED = API_MODE === 'real';
 export const ALARM_LOCAL_ROUTES_ENABLED = API_MODE === 'real'
   && import.meta.env.DEV
   && (import.meta.env.VITE_S4_LOCAL_ALARMS as string | undefined) === 'true';
@@ -192,8 +192,8 @@ async function mutateScopedAlarm(
   input: AlarmLifecycleInput | AlarmAssignInput | AlarmSuppressInput,
   options: ScopedAlarmRequestOptions,
 ): Promise<Alarm> {
-  if (!ALARM_ROUTES_AVAILABLE) {
-    throw new AlarmApiError(503, 'ALARM_ROUTE_DISABLED', 'Alarm 生命周期路由已登记，但尚未启用生产流量。');
+  if (!ALARM_LOCAL_ROUTES_ENABLED) {
+    throw new AlarmApiError(503, 'ALARM_LIFECYCLE_DISABLED', 'Alarm 生命周期写入仅在本地认证工作台启用，生产流量保持 0%。');
   }
   const { organizationId, siteId } = validatedScope(options);
   const validatedAlarmId = alarmUUIDV7(alarmId);

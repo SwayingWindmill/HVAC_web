@@ -10,17 +10,22 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/services/iam-service/internal/iam"
 )
 
-const principalCapabilityTelemetryPolicy = "telemetry-access:2"
+const (
+	principalCapabilityTelemetryPolicy = "telemetry-access:2"
+	principalCapabilityAlarmPolicy     = "alarm-access:1"
+)
 
 func TestIAMPublishesEffectiveCapabilitiesFromAuthorizationFacts(t *testing.T) {
 	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
 		config.TelemetryAuthorizationStore = fixedTelemetryStore{facts: principalTelemetryFacts(nil)}
+		config.AlarmAuthorizationStore = fixedAlarmStore{facts: principalAlarmFacts()}
 	})
 	claims := validIAMClaims(harness.now, "fixture-user", "principal:read")
 	claims.ActingOrganizationID = iam.S1FixtureOwnerAOrganizationID
@@ -40,7 +45,7 @@ func TestIAMPublishesEffectiveCapabilitiesFromAuthorizationFacts(t *testing.T) {
 	if response.Authorization.CapabilitySetVersion != identitycontext.CapabilitySetVersion {
 		t.Fatalf("capability set version = %d", response.Authorization.CapabilitySetVersion)
 	}
-	if response.Authorization.PolicyRevision != capabilityPolicyRevision(iam.S1FixturePolicyRevision, principalCapabilityTelemetryPolicy) {
+	if response.Authorization.PolicyRevision != capabilityPolicyRevision(iam.S1FixturePolicyRevision, principalCapabilityTelemetryPolicy, principalCapabilityAlarmPolicy) {
 		t.Fatalf("policy revision = %q", response.Authorization.PolicyRevision)
 	}
 	assertCapabilitiesEqual(t, response.Authorization.Capabilities, identitycontext.SupportedCapabilities())
@@ -106,7 +111,7 @@ func TestIAMPublishesExplicitEmptyCapabilities(t *testing.T) {
 	if response.Authorization.Capabilities == nil || len(response.Authorization.Capabilities) != 0 {
 		t.Fatalf("empty capability set must be an explicit array: %#v", response.Authorization.Capabilities)
 	}
-	if response.Authorization.PolicyRevision != capabilityPolicyRevision(iam.S1FixturePolicyRevision, "telemetry-policy-unconfigured") {
+	if response.Authorization.PolicyRevision != capabilityPolicyRevision(iam.S1FixturePolicyRevision, "telemetry-policy-unconfigured", "alarm-policy-unconfigured") {
 		t.Fatalf("policy revision = %q", response.Authorization.PolicyRevision)
 	}
 }
@@ -189,9 +194,36 @@ func principalTelemetryFacts(denies []iam.ExplicitDeny) iam.TelemetryAuthorizati
 	}
 }
 
-func capabilityPolicyRevision(registryRevision, telemetryRevision string) string {
-	digest := sha256.Sum256([]byte(registryRevision + "\x00" + telemetryRevision))
-	return "capability-v2:" + hex.EncodeToString(digest[:])
+func principalAlarmFacts() iam.AlarmAuthorizationFacts {
+	return iam.AlarmAuthorizationFacts{
+		Found:          true,
+		PolicyRevision: principalCapabilityAlarmPolicy,
+		Principal: iam.PrincipalRecord{
+			ID:            iam.S1FixtureOwnerAPrincipalID,
+			SubjectIssuer: fixtureSubjectIssuer,
+			Subject:       "fixture-user",
+			Status:        iam.FactStatusActive,
+		},
+		Memberships: []iam.OrganizationMembership{{OrganizationID: iam.S1FixtureOwnerAOrganizationID, Status: iam.FactStatusActive}},
+		Permissions: []iam.AlarmPermission{
+			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionList, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
+			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionRead, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
+		},
+	}
+}
+
+type fixedAlarmStore struct {
+	facts iam.AlarmAuthorizationFacts
+	err   error
+}
+
+func (store fixedAlarmStore) LookupAlarmAuthorization(context.Context, iam.AuthorizationLookup) (iam.AlarmAuthorizationFacts, error) {
+	return store.facts, store.err
+}
+
+func capabilityPolicyRevision(registryRevision, telemetryRevision, alarmRevision string) string {
+	digest := sha256.Sum256([]byte(registryRevision + "\x00" + telemetryRevision + "\x00" + alarmRevision))
+	return "capability-v3:" + hex.EncodeToString(digest[:])
 }
 
 func containsCapability(capabilities []identitycontext.Capability, expected identitycontext.Capability) bool {

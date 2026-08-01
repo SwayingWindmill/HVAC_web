@@ -38,6 +38,7 @@ const (
 	PhaseS2LegacyRetired             = "R8-legacy-current-state-retired"
 	PhaseS3ContractOnly              = "S3-R0-contract-only"
 	PhaseS4ContractOnly              = "S4-R0-contract-only"
+	PhaseS4InternalReadOnly          = "S4-R1-internal-read-only"
 )
 
 var (
@@ -203,7 +204,11 @@ func validateEntry(entry RouteEntry) error {
 		if entry.Rollout.Percentage < 0 || entry.Rollout.Percentage > 100 {
 			return errors.New("rollout percentage is outside 0..100")
 		}
-		if entry.Rollout.FallbackOwner == "" || entry.Rollout.FallbackOwner == entry.Owner || !isCandidateOwner(entry.Rollout.FallbackOwner) {
+		if entry.Rollout.FallbackOwner == "" {
+			if entry.Owner != OwnerAlarm || entry.Method != http.MethodGet || !isS4Phase(entry.MigrationPhase) {
+				return errors.New("no-fallback percentage rollout is only supported for S4 Alarm reads")
+			}
+		} else if entry.Rollout.FallbackOwner == entry.Owner || !isCandidateOwner(entry.Rollout.FallbackOwner) {
 			return errors.New("fallback owner is invalid")
 		}
 		if len(entry.Rollout.CohortSalt) < 8 || !seenScopes["organization"] || !seenScopes["principal"] {
@@ -348,6 +353,19 @@ func validateS4Phase(entry RouteEntry, seenScopes map[string]bool) error {
 		if entry.CohortGroup != "s4-alarm-read-v1" {
 			return errors.New("S4 read route requires the Alarm read cohort group")
 		}
+		switch entry.MigrationPhase {
+		case PhaseS4ContractOnly:
+			if entry.Owner != OwnerAlarm || entry.ActivationStatus != "expand-baseline" || entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" {
+				return errors.New("S4 contract-only read policy is invalid")
+			}
+		case PhaseS4InternalReadOnly:
+			if entry.Owner != OwnerAlarm || entry.ActivationStatus != "internal-canary" || entry.Rollout.Mode != "percentage" ||
+				entry.Rollout.Percentage != 1 || entry.Rollout.FallbackOwner != "" || len(entry.Rollout.CohortSalt) < 8 || entry.CompatibilityMode != "native" {
+				return errors.New("S4 internal read-only canary policy is invalid")
+			}
+		default:
+			return errors.New("S4 read migration phase is unsupported")
+		}
 	case http.MethodPost:
 		if entry.ShadowSideEffectPolicy != "SYNTHETIC_ONLY" || !isS4LifecyclePath(entry.Path) {
 			return errors.New("S4 lifecycle route must be a declared synthetic-only Alarm operation")
@@ -365,11 +383,11 @@ func validateS4Phase(entry RouteEntry, seenScopes map[string]bool) error {
 		if entry.CohortGroup != "s4-alarm-lifecycle-v1" {
 			return errors.New("S4 lifecycle route requires the Alarm lifecycle cohort group")
 		}
+		if entry.MigrationPhase != PhaseS4ContractOnly || entry.Owner != OwnerAlarm || entry.ActivationStatus != "expand-baseline" || entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" {
+			return errors.New("S4 lifecycle contract-only policy is invalid")
+		}
 	default:
 		return errors.New("S4 route method is unsupported")
-	}
-	if entry.MigrationPhase != PhaseS4ContractOnly || entry.Owner != OwnerAlarm || entry.ActivationStatus != "expand-baseline" || entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" {
-		return errors.New("S4 contract-only policy is invalid")
 	}
 	return nil
 }
@@ -415,7 +433,8 @@ func isS3Phase(phase string) bool {
 }
 
 func isS4Phase(phase string) bool {
-	return phase == PhaseS4ContractOnly
+	_, ok := s4PhaseRank(phase)
+	return ok
 }
 
 func validateMigrationPhase(entry RouteEntry) error {
@@ -572,6 +591,10 @@ func validatePhaseTransition(old, next string) error {
 		oldRank, oldOK = s2PhaseRank(old)
 		nextRank, nextOK = s2PhaseRank(next)
 	}
+	if !oldOK || !nextOK {
+		oldRank, oldOK = s4PhaseRank(old)
+		nextRank, nextOK = s4PhaseRank(next)
+	}
 	if !oldOK || !nextOK || nextRank-oldRank > 1 || oldRank-nextRank > 1 {
 		return errors.New("migration phase skipped a required adjacent state")
 	}
@@ -613,6 +636,17 @@ func s2PhaseRank(phase string) (int, bool) {
 		return 7, true
 	case PhaseS2LegacyRetired:
 		return 8, true
+	default:
+		return 0, false
+	}
+}
+
+func s4PhaseRank(phase string) (int, bool) {
+	switch phase {
+	case PhaseS4ContractOnly:
+		return 0, true
+	case PhaseS4InternalReadOnly:
+		return 1, true
 	default:
 		return 0, false
 	}
@@ -665,6 +699,9 @@ func (snapshot *Snapshot) Resolve(method, requestPath, businessKey string) (Deci
 		bucket := int(binary.BigEndian.Uint64(digest[:8]) % 100)
 		decision.CohortBucket = &bucket
 		if bucket >= entry.Rollout.Percentage {
+			if entry.Rollout.FallbackOwner == "" {
+				return Decision{}, ErrRouteMissing
+			}
 			decision.SelectedOwner = entry.Rollout.FallbackOwner
 		}
 	}

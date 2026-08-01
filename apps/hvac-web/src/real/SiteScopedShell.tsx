@@ -533,15 +533,20 @@ export function buildSiteNavigation(
   effectiveCapabilities: readonly Capability[],
 ): RealNavigationItem[] {
   if (!effectiveCapabilities.includes('site.read')) return [];
-  return [
+  const navigation: RealNavigationItem[] = [
     { id: 'site-dashboard', label: 'Dashboard', path: siteRoute(site, 'dashboard'), kind: 'link', degraded: false },
     { id: 'site-assets', label: 'Assets', path: siteRoute(site, 'assets'), kind: 'link', degraded: false },
     { id: 'site-energy', label: 'Energy', path: siteRoute(site, 'energy'), kind: 'link', degraded: false },
-    { id: 'site-alarms', label: 'Alarm', path: siteRoute(site, 'alarms'), kind: 'link', degraded: false },
+  ];
+  if (effectiveCapabilities.includes('alarm.list')) {
+    navigation.push({ id: 'site-alarms', label: 'Alarm', path: siteRoute(site, 'alarms'), kind: 'link', degraded: false });
+  }
+  navigation.push(
     { id: 'site-operations', label: 'Operations', path: siteRoute(site, 'operations'), kind: 'link', degraded: false },
     { id: 'site-commands', label: 'Commands', path: siteRoute(site, 'commands'), kind: 'link', degraded: false },
     { id: 'site-bigscreen', label: 'BigScreen', path: siteRoute(site, 'bigscreen'), kind: 'link', degraded: false },
-  ];
+  );
+  return navigation;
 }
 
 export function SiteScopedShell({

@@ -1,6 +1,6 @@
 # HVAC Web Real Product Roadmap
 
-Status date: 2026-07-31
+Status date: 2026-08-01
 
 Tracking map: GitHub issue #166
 
@@ -10,13 +10,13 @@ Deliver an authoritative, Site-scoped HVAC operations product in which every vis
 
 ## Current delivery state
 
-| Sequence | Product area | Status on 2026-07-31 | Current evidence |
+| Sequence | Product area | Status on 2026-08-01 | Current evidence |
 | --- | --- | --- | --- |
 | 1 | Real Assets | In progress | Site list, device detail, capability, history, and trend pull requests are active. |
 | 2 | Real Dashboard | In review | PR #165 provides the first authoritative Site overview. |
 | 3 | Complete Energy | Merged | PR #167 delivered calendar workspaces, comparisons, drill-down, and protected query lifecycle. |
 | 4 | Real Commands | Merged | PR #169 delivered authoritative Site scope, local-only governed Command evidence, and a production-disabled control boundary. |
-| 5 | Alarm | P1 merged; P2 certifying | PR #171 merged the independent read owner. P2 adds authoritative acknowledgement, assignment, suppression, closure, optimistic concurrency, idempotent retry, PostgreSQL authority evidence, protected local lifecycle UI, and browser certification while every public Alarm route remains disabled at 0%. |
+| 5 | Alarm | P1/P2 merged; P3 certifying | PR #171 established the independent read owner and PR #179 merged authoritative lifecycle operations. Issue #181 activates only exact IAM/Gateway list and detail reads through a 1% internal no-fallback canary; every lifecycle POST remains disabled at 0%. |
 | 6 | Work Order | Planned | Must be a separate durable domain linked to, but not collapsed into, Alarm. |
 | 7 | FDD | Planned | Requires governed evidence from Assets, Telemetry, Energy, Alarm, and Work Order. |
 | 8 | Optimization | Planned | Requires FDD and Energy evidence plus explicit safety and approval boundaries. |
@@ -98,10 +98,18 @@ Delivered P1/P2 baseline:
 - Site list, detail, filtering, acknowledgement, assignment, suppression, closure, conflict recovery, and audit evidence are browser-certified locally.
 - PostgreSQL certification proves FORCE RLS, explicit runtime-role activation, cross-Organization isolation, restricted column updates, atomic lifecycle persistence, and idempotent replay.
 
+P3 read activation in certification:
+
+- IAM owns `alarm:list` and `alarm:read` decisions with exact Organization/Site/Alarm scope, explicit-deny precedence, policy revision, request ID, trace ID, and durable allow/deny evidence.
+- Platform Gateway derives scope from the authenticated Session, calls IAM, signs a short-lived Alarm read context, proxies bounded GET requests over mTLS, and revalidates response scope.
+- List and detail routes use a stable 1% internal cohort with no fallback owner; a non-selected Session receives no Alarm route instead of another source of truth.
+- Production Web renders only authorized list/detail reads. Local lifecycle mutations are isolated in a development-only lazy component and every public lifecycle POST remains at 0%.
+- Browser certification proves public Gateway GET-only traffic, no local seam, no lifecycle controls, no Telemetry inference, Site cache purge, and generic capability denial.
+
 Remaining activation work:
 
-- Public Gateway/IAM lifecycle authorization and operational rollout require a separate certification; all public read and write routes remain at 0% production traffic.
-- Automated suppression expiry, notification delivery, correlation policy, and Work Order linkage remain later independent slices.
+- Operational review may advance Alarm reads beyond the 1% internal cohort only through a separately reviewed adjacent route phase.
+- Public lifecycle authorization and rollout, automated suppression expiry, notification delivery, correlation policy, and Work Order linkage remain later independent slices.
 
 ### 6. Work Order
 
