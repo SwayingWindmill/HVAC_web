@@ -48,6 +48,9 @@ export const createGatewayToolAuthorizationReader = (
           ...(context.authorization.traceparent === undefined
             ? {}
             : { traceparent: context.authorization.traceparent }),
+          ...(context.authorization.tracestate === undefined
+            ? {}
+            : { tracestate: context.authorization.tracestate }),
         },
         body: JSON.stringify({
           investigationId: context.investigationId,

@@ -31,6 +31,7 @@ import {
   type OwnerReadResult,
   type ParallelReadRequest,
   type RunResourceBudgetCost,
+  type RunResourceBudgetDimension,
   type RunResourceBudgetOutcome,
   type RuntimePlanningContext,
   type RuntimePlanningResult,
@@ -44,10 +45,19 @@ import {
   runResourceEffectOperationId,
   runResourceOwnerResultBatchCost,
   runResourceOwnerResultBatchOperationId,
+  runResourceOwnerResultCost,
   runResourceReadBatchCost,
   runResourceReadBatchOperationId,
   toRunResourceBudgetOutcome,
 } from './run-resource-budget.js';
+import {
+  safeAddOperationsTelemetryCounter,
+  safeObserveOperationsTelemetryHistogram,
+  safeStartOperationsTelemetrySpan,
+  type OperationsTelemetryCorrelation,
+  type OperationsTelemetryOutcome,
+  type OperationsTelemetryOwner,
+} from './operations-telemetry.js';
 import { sha256Hex } from './sha256.js';
 
 export type InvestigationCoordinatorErrorCode =
@@ -548,6 +558,38 @@ export const createInvestigationCoordinator = (
     ports.resourceBudgetPolicy ?? DEFAULT_RUN_RESOURCE_BUDGET_POLICY,
   );
 
+  const telemetryCorrelationFor = (input: {
+    readonly investigationId?: string;
+    readonly runId?: string;
+    readonly stepId?: string;
+    readonly traceparent?: string;
+    readonly tracestate?: string;
+  } = {}): OperationsTelemetryCorrelation => ({
+    ...(ports.telemetryContext ?? {}),
+    ...(input.investigationId === undefined ? {} : { investigationId: input.investigationId }),
+    ...(input.runId === undefined ? {} : { runId: input.runId }),
+    ...(input.stepId === undefined ? {} : { stepId: input.stepId }),
+    ...(input.traceparent === undefined ? {} : { traceparent: input.traceparent }),
+    ...(input.tracestate === undefined ? {} : { tracestate: input.tracestate }),
+  });
+
+  const telemetryOwnerFor = (request: ParallelReadRequest): OperationsTelemetryOwner => {
+    if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteEquipment') {
+      return 'registry';
+    }
+    if (request.tool === 'analytics.getEnergySeries') return 'telemetry-query-service';
+    if (request.tool === 'commands.getCapabilities') return 'command-service';
+    return 'operations-agent-service';
+  };
+
+  const telemetryOutcomeForOwnerError = (error: unknown): OperationsTelemetryOutcome => {
+    if (!(error instanceof OwnerReadError)) return 'ERROR';
+    if (error.code === 'OWNER_RESOURCE_NOT_FOUND') return 'NOT_FOUND';
+    if (error.code === 'OWNER_READ_TIMEOUT') return 'TIMEOUT';
+    if (error.code === 'OWNER_READ_UNAVAILABLE') return 'UNAVAILABLE';
+    return 'INVALID';
+  };
+
   const checkRunResourceBudget = async (input: {
     readonly investigationId: string;
     readonly run: AgentRunView;
@@ -555,24 +597,99 @@ export const createInvestigationCoordinator = (
     readonly operationId: string;
     readonly cost: RunResourceBudgetCost;
   }): Promise<RunResourceBudgetOutcome | null> => {
-    const decision = await ports.budgetGuard.check({
-      investigationId: input.investigationId,
-      runId: input.run.id,
-      startedAt: input.run.startedAt,
-      at: input.at,
-      operationId: input.operationId,
-      policy: resourceBudgetPolicy,
-      cost: input.cost,
+    const startedAt = ports.clock.now();
+    const span = safeStartOperationsTelemetrySpan(ports.telemetry, {
+      name: 'operations.budget.check',
+      kind: 'INTERNAL',
+      correlation: telemetryCorrelationFor({
+        investigationId: input.investigationId,
+        runId: input.run.id,
+      }),
+      attributes: { operation: 'CHECK_BUDGET' },
     });
-    if (decision.decision === 'ALLOW') return null;
-    const outcome = toRunResourceBudgetOutcome(decision.snapshot);
-    if (outcome === null) {
-      throw new InvestigationCoordinatorError(
-        'INVALID_INVESTIGATION_STATE',
-        'Budget Guard denied work without a typed exhaustion outcome.',
-      );
+    try {
+      const decision = await ports.budgetGuard.check({
+        investigationId: input.investigationId,
+        runId: input.run.id,
+        startedAt: input.run.startedAt,
+        at: input.at,
+        operationId: input.operationId,
+        policy: resourceBudgetPolicy,
+        cost: input.cost,
+      });
+      span.setAttributes({ duplicate: decision.duplicate });
+      if (decision.duplicate) {
+        safeAddOperationsTelemetryCounter(ports.telemetry, {
+          name: 'operations_agent_retries_total',
+          labels: { operation: 'CHECK_BUDGET', outcome: 'DUPLICATE' },
+        });
+      }
+      const costs: readonly [RunResourceBudgetDimension, number][] = [
+        ['MODEL_INVOCATIONS', input.cost.modelInvocations],
+        ['TOOL_REQUESTS', input.cost.toolRequests],
+        ['QUERY_RANGE_MS', input.cost.queryRangeMs],
+        ['QUERY_BUCKETS', input.cost.queryBuckets],
+        ['OWNER_RECORDS', input.cost.ownerRecords],
+        ['PAYLOAD_BYTES', input.cost.payloadBytes],
+      ];
+      if (!decision.duplicate) {
+        for (const [budgetDimension, value] of costs) {
+          if (value <= 0) continue;
+          safeAddOperationsTelemetryCounter(ports.telemetry, {
+            name: 'operations_agent_budget_consumed',
+            value,
+            labels: { budgetDimension },
+          });
+        }
+      }
+      if (decision.decision === 'ALLOW') {
+        span.setStatus('SUCCESS');
+        return null;
+      }
+      const outcome = toRunResourceBudgetOutcome(decision.snapshot);
+      if (outcome === null) {
+        span.setStatus('ERROR');
+        throw new InvestigationCoordinatorError(
+          'INVALID_INVESTIGATION_STATE',
+          'Budget Guard denied work without a typed exhaustion outcome.',
+        );
+      }
+      span.setAttributes({
+        outcome: outcome.outcome === 'PARTIAL' ? 'PARTIAL' : 'UNABLE_TO_CONCLUDE',
+        budgetDimension: outcome.exhaustedDimension,
+        budgetConsumed: outcome.consumed,
+        budgetLimit: outcome.limit,
+        partial: outcome.outcome === 'PARTIAL',
+      });
+      span.setStatus('EXHAUSTED');
+      safeAddOperationsTelemetryCounter(ports.telemetry, {
+        name: 'operations_agent_budget_exhaustions_total',
+        labels: {
+          budgetDimension: outcome.exhaustedDimension,
+          outcome: outcome.outcome === 'PARTIAL' ? 'PARTIAL' : 'UNABLE_TO_CONCLUDE',
+        },
+      });
+      safeAddOperationsTelemetryCounter(ports.telemetry, {
+        name: 'operations_agent_terminal_outcomes_total',
+        labels: {
+          operation: 'ADVANCE',
+          outcome: outcome.outcome === 'PARTIAL' ? 'PARTIAL' : 'UNABLE_TO_CONCLUDE',
+        },
+      });
+      return outcome;
+    } catch (error) {
+      span.setStatus('ERROR');
+      throw error;
+    } finally {
+      const durationMs = Math.max(0, ports.clock.now() - startedAt);
+      span.setAttributes({ durationMs });
+      span.end();
+      safeObserveOperationsTelemetryHistogram(ports.telemetry, {
+        name: 'operations_agent_operation_duration_ms',
+        value: durationMs,
+        labels: { operation: 'CHECK_BUDGET' },
+      });
     }
-    return outcome;
   };
 
   const load = async (investigationId: string): Promise<OperationsInvestigation> => {
@@ -633,66 +750,248 @@ export const createInvestigationCoordinator = (
     readonly runId: string | null;
   }): Promise<OperationsInvestigationView> => {
     const view = input.investigation.view();
-    await ports.investigationTransaction.save({
-      investigation: input.investigation,
-      expectedRevision: input.expectedRevision,
-      ...(input.expectedAuthority === undefined
-        ? {}
-        : { expectedAuthority: input.expectedAuthority }),
-      ...(input.effect === undefined ? {} : { effect: input.effect }),
-      ...(input.record === undefined ? {} : { record: input.record }),
-      event: {
-        type: input.eventType,
+    const commitStartedAt = ports.clock.now();
+    const commitSpan = safeStartOperationsTelemetrySpan(ports.telemetry, {
+      name: 'operations.business.commit',
+      kind: 'INTERNAL',
+      correlation: telemetryCorrelationFor({
         investigationId: view.id,
-        revision: view.revision,
-        occurredAt: input.occurredAt,
-      },
-      audit: {
-        action: input.auditAction,
-        investigationId: view.id,
-        runId: input.runId,
-        revision: view.revision,
-        occurredAt: input.occurredAt,
-      },
+        ...(input.runId === null ? {} : { runId: input.runId }),
+        ...(input.effect === undefined ? {} : { stepId: input.effect.stepId }),
+      }),
+      attributes: { operation: 'COMMIT_EFFECT' },
     });
-    return view;
+    try {
+      await ports.investigationTransaction.save({
+        investigation: input.investigation,
+        expectedRevision: input.expectedRevision,
+        ...(input.expectedAuthority === undefined
+          ? {}
+          : { expectedAuthority: input.expectedAuthority }),
+        ...(input.effect === undefined ? {} : { effect: input.effect }),
+        ...(input.record === undefined ? {} : { record: input.record }),
+        event: {
+          type: input.eventType,
+          investigationId: view.id,
+          revision: view.revision,
+          occurredAt: input.occurredAt,
+        },
+        audit: {
+          action: input.auditAction,
+          investigationId: view.id,
+          runId: input.runId,
+          revision: view.revision,
+          occurredAt: input.occurredAt,
+        },
+      });
+      commitSpan.setStatus('SUCCESS');
+      safeAddOperationsTelemetryCounter(ports.telemetry, {
+        name: 'operations_agent_business_commits_total',
+        labels: { operation: 'COMMIT_EFFECT', outcome: 'SUCCESS' },
+      });
+      return view;
+    } catch (error) {
+      commitSpan.setStatus('ERROR');
+      safeAddOperationsTelemetryCounter(ports.telemetry, {
+        name: 'operations_agent_business_commits_total',
+        labels: { operation: 'COMMIT_EFFECT', outcome: 'ERROR' },
+      });
+      throw error;
+    } finally {
+      const commitDurationMs = Math.max(0, ports.clock.now() - commitStartedAt);
+      commitSpan.setAttributes({ durationMs: commitDurationMs });
+      commitSpan.end();
+      safeObserveOperationsTelemetryHistogram(ports.telemetry, {
+        name: 'operations_agent_operation_duration_ms',
+        value: commitDurationMs,
+        labels: { operation: 'COMMIT_EFFECT' },
+      });
+    }
+  };
+
+  const recordTerminalOutcome = (input: {
+    readonly investigationId: string;
+    readonly runId?: string | null;
+    readonly operation: 'COMPLETE_RUN' | 'FAIL_RUN' | 'CANCEL' | 'ADVANCE';
+    readonly outcome: OperationsTelemetryOutcome;
+  }): void => {
+    const span = safeStartOperationsTelemetrySpan(ports.telemetry, {
+      name: 'operations.run.terminal',
+      kind: 'INTERNAL',
+      correlation: telemetryCorrelationFor({
+        investigationId: input.investigationId,
+        ...(input.runId === undefined || input.runId === null ? {} : { runId: input.runId }),
+      }),
+      attributes: { operation: input.operation, outcome: input.outcome, terminal: true },
+    });
+    span.setStatus(input.outcome);
+    span.end();
+    safeAddOperationsTelemetryCounter(ports.telemetry, {
+      name: 'operations_agent_terminal_outcomes_total',
+      labels: { operation: input.operation, outcome: input.outcome },
+    });
   };
 
   const executeRead = async (
     request: ParallelReadRequest,
     context: OwnerReadContext,
   ): Promise<OwnerReadResult> => {
-    const toolGrant = ports.toolAuthorizationReader === undefined
-      ? undefined
-      : await ports.toolAuthorizationReader.authorize({ request, context });
-    const authorizedContext: OwnerReadContext = toolGrant === undefined
-      ? context
-      : {
-        ...context,
-        authorization: {
-          ...context.authorization,
-          delegationGrant: toolGrant.delegationGrant,
-          toolDelegationGrants: {
-            ...context.authorization.toolDelegationGrants,
-            [request.tool]: toolGrant.delegationGrant,
+    const owner = telemetryOwnerFor(request);
+    const toolStartedAt = ports.clock.now();
+    const toolSpan = safeStartOperationsTelemetrySpan(ports.telemetry, {
+      name: 'operations.tool.call',
+      kind: 'INTERNAL',
+      correlation: telemetryCorrelationFor({
+        investigationId: context.investigationId,
+        runId: context.runId,
+        ...(context.stepId === undefined ? {} : { stepId: context.stepId }),
+        ...(context.authorization.traceparent === undefined
+          ? {} : { traceparent: context.authorization.traceparent }),
+        ...(context.authorization.tracestate === undefined
+          ? {} : { tracestate: context.authorization.tracestate }),
+      }),
+      attributes: {
+        operation: 'READ_OWNER',
+        logicalTool: request.tool,
+        owner,
+      },
+    });
+    let toolOutcome: OperationsTelemetryOutcome = 'ERROR';
+    try {
+      let authorizedContext: OwnerReadContext = context;
+      if (ports.toolAuthorizationReader !== undefined) {
+        const authorizationStartedAt = ports.clock.now();
+        const authorizationSpan = safeStartOperationsTelemetrySpan(ports.telemetry, {
+          name: 'operations.authorization',
+          kind: 'CLIENT',
+          correlation: telemetryCorrelationFor({
+            investigationId: context.investigationId,
+            runId: context.runId,
+            ...(context.stepId === undefined ? {} : { stepId: context.stepId }),
+            ...(toolSpan.traceparent === undefined ? {} : { traceparent: toolSpan.traceparent }),
+            ...(toolSpan.tracestate === undefined ? {} : { tracestate: toolSpan.tracestate }),
+          }),
+          attributes: {
+            operation: 'AUTHORIZE_TOOL',
+            owner: 'platform-gateway',
+            logicalTool: request.tool,
           },
-          ...(toolGrant.policyRevision === undefined
-            ? {}
-            : { policyRevision: toolGrant.policyRevision }),
-        },
-      };
-    let result: OwnerReadResult;
-    if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteEquipment') {
-      result = await ports.ownerReaders.registry.read({ request, context: authorizedContext });
-    } else if (request.tool === 'telemetry.getCurrentSnapshot') {
-      result = await ports.ownerReaders.currentTelemetry.read({ request, context: authorizedContext });
-    } else if (request.tool === 'analytics.getEnergySeries') {
-      result = await ports.ownerReaders.energyAnalytics.read({ request, context: authorizedContext });
-    } else {
-      result = await ports.ownerReaders.commandCapabilities.read({ request, context: authorizedContext });
+        });
+        try {
+          const authorizationContext: OwnerReadContext = {
+            ...context,
+            authorization: {
+              ...context.authorization,
+              ...(authorizationSpan.traceparent === undefined
+                ? {} : { traceparent: authorizationSpan.traceparent }),
+              ...(authorizationSpan.tracestate === undefined
+                ? {} : { tracestate: authorizationSpan.tracestate }),
+            },
+          };
+          const toolGrant = await ports.toolAuthorizationReader.authorize({
+            request,
+            context: authorizationContext,
+          });
+          authorizedContext = {
+            ...context,
+            authorization: {
+              ...context.authorization,
+              delegationGrant: toolGrant.delegationGrant,
+              toolDelegationGrants: {
+                ...context.authorization.toolDelegationGrants,
+                [request.tool]: toolGrant.delegationGrant,
+              },
+              ...(toolGrant.policyRevision === undefined
+                ? {}
+                : { policyRevision: toolGrant.policyRevision }),
+            },
+          };
+          authorizationSpan.setStatus('SUCCESS');
+        } catch (error) {
+          authorizationSpan.setStatus('ERROR');
+          throw error;
+        } finally {
+          const authorizationDurationMs = Math.max(0, ports.clock.now() - authorizationStartedAt);
+          authorizationSpan.setAttributes({ durationMs: authorizationDurationMs });
+          authorizationSpan.end();
+          safeObserveOperationsTelemetryHistogram(ports.telemetry, {
+            name: 'operations_agent_operation_duration_ms',
+            value: authorizationDurationMs,
+            labels: { operation: 'AUTHORIZE_TOOL', owner: 'platform-gateway' },
+          });
+        }
+      }
+
+      const ownerStartedAt = ports.clock.now();
+      const ownerSpan = safeStartOperationsTelemetrySpan(ports.telemetry, {
+        name: 'operations.owner.request',
+        kind: 'CLIENT',
+        correlation: telemetryCorrelationFor({
+          investigationId: context.investigationId,
+          runId: context.runId,
+          ...(context.stepId === undefined ? {} : { stepId: context.stepId }),
+          ...(toolSpan.traceparent === undefined ? {} : { traceparent: toolSpan.traceparent }),
+          ...(toolSpan.tracestate === undefined ? {} : { tracestate: toolSpan.tracestate }),
+        }),
+        attributes: { operation: 'READ_OWNER', logicalTool: request.tool, owner },
+      });
+      try {
+        const ownerContext: OwnerReadContext = {
+          ...authorizedContext,
+          authorization: {
+            ...authorizedContext.authorization,
+            ...(ownerSpan.traceparent === undefined ? {} : { traceparent: ownerSpan.traceparent }),
+            ...(ownerSpan.tracestate === undefined ? {} : { tracestate: ownerSpan.tracestate }),
+          },
+        };
+        let result: OwnerReadResult;
+        if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteEquipment') {
+          result = await ports.ownerReaders.registry.read({ request, context: ownerContext });
+        } else if (request.tool === 'telemetry.getCurrentSnapshot') {
+          result = await ports.ownerReaders.currentTelemetry.read({ request, context: ownerContext });
+        } else if (request.tool === 'analytics.getEnergySeries') {
+          result = await ports.ownerReaders.energyAnalytics.read({ request, context: ownerContext });
+        } else {
+          result = await ports.ownerReaders.commandCapabilities.read({ request, context: ownerContext });
+        }
+        const validated = validateOwnerResult(request, result, ownerContext.scope);
+        const resultCost = runResourceOwnerResultCost(validated);
+        ownerSpan.setAttributes({
+          outcome: 'SUCCESS',
+          ownerRecords: resultCost.ownerRecords,
+          payloadBytes: resultCost.payloadBytes,
+        });
+        ownerSpan.setStatus('SUCCESS');
+        toolOutcome = 'SUCCESS';
+        return validated;
+      } catch (error) {
+        const outcome = telemetryOutcomeForOwnerError(error);
+        ownerSpan.setAttributes({ outcome });
+        ownerSpan.setStatus(outcome);
+        toolOutcome = outcome;
+        throw error;
+      } finally {
+        const ownerDurationMs = Math.max(0, ports.clock.now() - ownerStartedAt);
+        ownerSpan.setAttributes({ durationMs: ownerDurationMs });
+        ownerSpan.end();
+      }
+    } finally {
+      const toolDurationMs = Math.max(0, ports.clock.now() - toolStartedAt);
+      toolSpan.setAttributes({ outcome: toolOutcome, durationMs: toolDurationMs });
+      toolSpan.setStatus(toolOutcome);
+      toolSpan.end();
+      safeAddOperationsTelemetryCounter(ports.telemetry, {
+        name: 'operations_agent_tool_calls_total',
+        labels: { logicalTool: request.tool, owner, outcome: toolOutcome },
+      });
+      safeObserveOperationsTelemetryHistogram(ports.telemetry, {
+        name: 'operations_agent_tool_duration_ms',
+        value: toolDurationMs,
+        labels: { logicalTool: request.tool, owner, outcome: toolOutcome },
+      });
     }
-    return validateOwnerResult(request, result, authorizedContext.scope);
   };
+
 
   return {
     async create(command) {
@@ -812,21 +1111,65 @@ export const createInvestigationCoordinator = (
             budget: modelBudget,
           };
         }
+        const runtimeStartedAt = ports.clock.now();
+        const runtimeSpan = safeStartOperationsTelemetrySpan(ports.telemetry, {
+          name: 'operations.runtime.plan',
+          kind: 'INTERNAL',
+          correlation: telemetryCorrelationFor({
+            investigationId: command.investigationId,
+            runId: run.id,
+            ...(authorization.traceparent === undefined
+              ? {} : { traceparent: authorization.traceparent }),
+            ...(authorization.tracestate === undefined
+              ? {} : { tracestate: authorization.tracestate }),
+          }),
+          attributes: {
+            operation: 'PLAN_READS',
+            restarted: checkpoint !== null,
+            retryCount: checkpoint === null ? 0 : 1,
+          },
+        });
+        if (checkpoint !== null) {
+          safeAddOperationsTelemetryCounter(ports.telemetry, {
+            name: 'operations_agent_retries_total',
+            labels: { operation: 'PLAN_READS', outcome: 'SUCCESS' },
+          });
+        }
         let runtimePlanning: RuntimePlanningResult;
         try {
           runtimePlanning = await ports.agentExecutionRuntime.planReads({
             context: runtimeContext,
             checkpoint,
           });
+          const planning = validateRuntimePlanningResult(runtimePlanning);
+          if (planning.status === 'UNABLE_TO_CONCLUDE') {
+            runtimeSpan.setStatus('UNABLE_TO_CONCLUDE');
+            throw new InvestigationCoordinatorError(
+              'UNABLE_TO_CONCLUDE',
+              'The Runtime has no remaining authorized bounded READ Step.',
+            );
+          }
+          runtimeSpan.setStatus('SUCCESS');
         } catch (cause) {
+          if (cause instanceof InvestigationCoordinatorError) throw cause;
+          runtimeSpan.setStatus('INVALID');
           throw new InvestigationCoordinatorError(
             'INVALID_INVESTIGATION_STATE',
             'The Agent execution Runtime rejected the active Run or Checkpoint.',
             { cause },
           );
+        } finally {
+          const runtimeDurationMs = Math.max(0, ports.clock.now() - runtimeStartedAt);
+          runtimeSpan.setAttributes({ durationMs: runtimeDurationMs });
+          runtimeSpan.end();
+          safeObserveOperationsTelemetryHistogram(ports.telemetry, {
+            name: 'operations_agent_operation_duration_ms',
+            value: runtimeDurationMs,
+            labels: { operation: 'PLAN_READS' },
+          });
         }
         const planning = validateRuntimePlanningResult(runtimePlanning);
-        if (planning.status === 'UNABLE_TO_CONCLUDE') {
+        if (planning.status !== 'PLANNED') {
           throw new InvestigationCoordinatorError(
             'UNABLE_TO_CONCLUDE',
             'The Runtime has no remaining authorized bounded READ Step.',
@@ -843,38 +1186,83 @@ export const createInvestigationCoordinator = (
         };
         const results: OwnerReadResult[] = [];
         for (const batch of planning.plan.batches) {
-          const readBudget = await checkRunResourceBudget({
-            investigationId: command.investigationId,
-            run,
-            at: ports.clock.now(),
-            operationId: runResourceReadBatchOperationId(batch.requests),
-            cost: runResourceReadBatchCost(batch.requests),
+          const stepStartedAt = ports.clock.now();
+          const stepSpan = safeStartOperationsTelemetrySpan(ports.telemetry, {
+            name: 'operations.runtime.step',
+            kind: 'INTERNAL',
+            correlation: telemetryCorrelationFor({
+              investigationId: command.investigationId,
+              runId: run.id,
+              stepId: batch.batchId,
+              ...(authorization.traceparent === undefined
+                ? {} : { traceparent: authorization.traceparent }),
+              ...(authorization.tracestate === undefined
+                ? {} : { tracestate: authorization.tracestate }),
+            }),
+            attributes: { operation: 'EXECUTE_STEP' },
           });
-          if (readBudget !== null) {
-            return {
-              outcome: 'BUDGET_EXHAUSTED',
-              investigation: investigation.view(),
-              budget: readBudget,
+          let stepOutcome: OperationsTelemetryOutcome = 'ERROR';
+          try {
+            const readBudget = await checkRunResourceBudget({
+              investigationId: command.investigationId,
+              run,
+              at: ports.clock.now(),
+              operationId: runResourceReadBatchOperationId(batch.requests),
+              cost: runResourceReadBatchCost(batch.requests),
+            });
+            if (readBudget !== null) {
+              stepOutcome = 'EXHAUSTED';
+              return {
+                outcome: 'BUDGET_EXHAUSTED',
+                investigation: investigation.view(),
+                budget: readBudget,
+              };
+            }
+            const stepContext: OwnerReadContext = {
+              ...ownerReadContext,
+              stepId: batch.batchId,
+              authorization: {
+                ...ownerReadContext.authorization,
+                ...(stepSpan.traceparent === undefined
+                  ? {} : { traceparent: stepSpan.traceparent }),
+                ...(stepSpan.tracestate === undefined
+                  ? {} : { tracestate: stepSpan.tracestate }),
+              },
             };
+            const batchResults = await Promise.all(batch.requests.map((request) => (
+              executeRead(request, stepContext)
+            )));
+            const resultBudget = await checkRunResourceBudget({
+              investigationId: command.investigationId,
+              run,
+              at: ports.clock.now(),
+              operationId: runResourceOwnerResultBatchOperationId(batch.requests),
+              cost: runResourceOwnerResultBatchCost(batchResults),
+            });
+            if (resultBudget !== null) {
+              stepOutcome = 'EXHAUSTED';
+              return {
+                outcome: 'BUDGET_EXHAUSTED',
+                investigation: investigation.view(),
+                budget: resultBudget,
+              };
+            }
+            results.push(...batchResults);
+            stepOutcome = 'SUCCESS';
+          } catch (error) {
+            stepOutcome = telemetryOutcomeForOwnerError(error);
+            throw error;
+          } finally {
+            const stepDurationMs = Math.max(0, ports.clock.now() - stepStartedAt);
+            stepSpan.setAttributes({ outcome: stepOutcome, durationMs: stepDurationMs });
+            stepSpan.setStatus(stepOutcome);
+            stepSpan.end();
+            safeObserveOperationsTelemetryHistogram(ports.telemetry, {
+              name: 'operations_agent_operation_duration_ms',
+              value: stepDurationMs,
+              labels: { operation: 'EXECUTE_STEP', outcome: stepOutcome },
+            });
           }
-          const batchResults = await Promise.all(batch.requests.map((request) => (
-            executeRead(request, ownerReadContext)
-          )));
-          const resultBudget = await checkRunResourceBudget({
-            investigationId: command.investigationId,
-            run,
-            at: ports.clock.now(),
-            operationId: runResourceOwnerResultBatchOperationId(batch.requests),
-            cost: runResourceOwnerResultBatchCost(batchResults),
-          });
-          if (resultBudget !== null) {
-            return {
-              outcome: 'BUDGET_EXHAUSTED',
-              investigation: investigation.view(),
-              budget: resultBudget,
-            };
-          }
-          results.push(...batchResults);
         }
 
         const checkpointId = ports.idGenerator.next('checkpoint');
@@ -1255,7 +1643,7 @@ export const createInvestigationCoordinator = (
           at: now,
           expectedRevision: command.expectedRevision,
         });
-        return await persistMutation({
+        const view = await persistMutation({
           investigation: next,
           expectedRevision: command.expectedRevision,
           occurredAt: now,
@@ -1263,6 +1651,13 @@ export const createInvestigationCoordinator = (
           auditAction: 'CANCEL_INVESTIGATION',
           runId: activeRunId,
         });
+        recordTerminalOutcome({
+          investigationId: command.investigationId,
+          runId: activeRunId,
+          operation: 'CANCEL',
+          outcome: 'CANCELLED',
+        });
+        return view;
       } catch (error) {
         return mapApplicationError(error);
       }
@@ -1278,7 +1673,7 @@ export const createInvestigationCoordinator = (
           at: now,
           expectedRevision: command.expectedRevision,
         });
-        return await persistMutation({
+        const view = await persistMutation({
           investigation: next,
           expectedRevision: command.expectedRevision,
           expectedAuthority: {
@@ -1291,6 +1686,13 @@ export const createInvestigationCoordinator = (
           auditAction: 'COMPLETE_AGENT_RUN',
           runId: command.runId,
         });
+        recordTerminalOutcome({
+          investigationId: command.investigationId,
+          runId: command.runId,
+          operation: 'COMPLETE_RUN',
+          outcome: 'SUCCESS',
+        });
+        return view;
       } catch (error) {
         return mapApplicationError(error);
       }
@@ -1306,7 +1708,7 @@ export const createInvestigationCoordinator = (
           at: now,
           expectedRevision: command.expectedRevision,
         });
-        return await persistMutation({
+        const view = await persistMutation({
           investigation: next,
           expectedRevision: command.expectedRevision,
           expectedAuthority: {
@@ -1319,6 +1721,13 @@ export const createInvestigationCoordinator = (
           auditAction: 'FAIL_AGENT_RUN',
           runId: command.runId,
         });
+        recordTerminalOutcome({
+          investigationId: command.investigationId,
+          runId: command.runId,
+          operation: 'FAIL_RUN',
+          outcome: 'ERROR',
+        });
+        return view;
       } catch (error) {
         return mapApplicationError(error);
       }

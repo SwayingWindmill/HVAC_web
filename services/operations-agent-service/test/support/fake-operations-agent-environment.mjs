@@ -253,6 +253,8 @@ export const createFakeOperationsAgentEnvironment = ({
   leaseDurationMs = 10_000,
   ownerDelayMs = 15,
   ownerResultFactory,
+  telemetry,
+  telemetryContext,
 }) => {
   let currentTime = initialTime;
   const businessStore = new FakeBusinessStore();
@@ -295,6 +297,8 @@ export const createFakeOperationsAgentEnvironment = ({
     clock: { now: () => currentTime },
     idGenerator: createIdentityGenerator(),
     leaseDurationMs,
+    ...(telemetry === undefined ? {} : { telemetry }),
+    ...(telemetryContext === undefined ? {} : { telemetryContext }),
   };
   const coordinator = createInvestigationCoordinator({
     ...ports,

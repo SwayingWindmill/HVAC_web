@@ -36,6 +36,7 @@ import {
   type FindingSynthesisDecision,
   type FindingSynthesizer,
 } from './finding-synthesis.js';
+import { OwnerReadError } from './ports.js';
 import type {
   AgentExecutionRuntime,
   AuthorizationDecision,
@@ -44,6 +45,7 @@ import type {
   OwnerReadResult,
   ParallelReadRequest,
   RunResourceBudgetCost,
+  RunResourceBudgetDimension,
   RunResourceBudgetOutcome,
 } from './ports.js';
 import {
@@ -52,10 +54,19 @@ import {
   normalizeRunResourceBudgetPolicy,
   runResourceOwnerResultBatchCost,
   runResourceOwnerResultBatchOperationId,
+  runResourceOwnerResultCost,
   runResourceReadBatchCost,
   runResourceReadBatchOperationId,
   toRunResourceBudgetOutcome,
 } from './run-resource-budget.js';
+import {
+  safeAddOperationsTelemetryCounter,
+  safeObserveOperationsTelemetryHistogram,
+  safeStartOperationsTelemetrySpan,
+  type OperationsTelemetryCorrelation,
+  type OperationsTelemetryOutcome,
+  type OperationsTelemetryOwner,
+} from './operations-telemetry.js';
 import { sha256Hex } from './sha256.js';
 
 export interface SiteNightEnergyInvestigationPolicy {
@@ -435,6 +446,33 @@ export const createSiteNightEnergyInvestigationCoordinator = (
     ports.resourceBudgetPolicy ?? DEFAULT_RUN_RESOURCE_BUDGET_POLICY,
   );
 
+  const telemetryCorrelationFor = (input: {
+    readonly investigationId?: string;
+    readonly runId?: string;
+    readonly stepId?: string;
+    readonly traceparent?: string;
+    readonly tracestate?: string;
+  } = {}): OperationsTelemetryCorrelation => ({
+    ...(ports.telemetryContext ?? {}),
+    ...(input.investigationId === undefined ? {} : { investigationId: input.investigationId }),
+    ...(input.runId === undefined ? {} : { runId: input.runId }),
+    ...(input.stepId === undefined ? {} : { stepId: input.stepId }),
+    ...(input.traceparent === undefined ? {} : { traceparent: input.traceparent }),
+    ...(input.tracestate === undefined ? {} : { tracestate: input.tracestate }),
+  });
+
+  const telemetryOwnerFor = (request: ParallelReadRequest): OperationsTelemetryOwner => (
+    request.tool === 'analytics.getEnergySeries' ? 'telemetry-query-service' : 'registry'
+  );
+
+  const telemetryOutcomeForOwnerError = (error: unknown): OperationsTelemetryOutcome => {
+    if (!(error instanceof OwnerReadError)) return 'ERROR';
+    if (error.code === 'OWNER_RESOURCE_NOT_FOUND') return 'NOT_FOUND';
+    if (error.code === 'OWNER_READ_TIMEOUT') return 'TIMEOUT';
+    if (error.code === 'OWNER_READ_UNAVAILABLE') return 'UNAVAILABLE';
+    return 'INVALID';
+  };
+
   const genericFor = (
     scope: InvestigationScope,
     fixedNow?: number,
@@ -459,25 +497,87 @@ export const createSiteNightEnergyInvestigationCoordinator = (
         'The Night-energy Investigation has no active Agent Run for resource accounting.',
       );
     }
-    const decision = await ports.budgetGuard.check({
-      investigationId: input.view.id,
-      runId: run.id,
-      startedAt: run.startedAt,
-      at: input.at,
-      operationId: input.operationId,
-      policy: runResourcePolicy,
-      cost: input.cost,
+    const startedAt = ports.clock.now();
+    const span = safeStartOperationsTelemetrySpan(ports.telemetry, {
+      name: 'operations.budget.check',
+      kind: 'INTERNAL',
+      correlation: telemetryCorrelationFor({
+        investigationId: input.view.id,
+        runId: run.id,
+      }),
+      attributes: { operation: 'CHECK_BUDGET' },
     });
-    if (decision.decision === 'ALLOW') return null;
-    const outcome = toRunResourceBudgetOutcome(decision.snapshot);
-    if (outcome === null) {
-      throw new InvestigationCoordinatorError(
-        'INVALID_INVESTIGATION_STATE',
-        'Budget Guard denied Night-energy work without a typed exhaustion outcome.',
-      );
+    try {
+      const decision = await ports.budgetGuard.check({
+        investigationId: input.view.id,
+        runId: run.id,
+        startedAt: run.startedAt,
+        at: input.at,
+        operationId: input.operationId,
+        policy: runResourcePolicy,
+        cost: input.cost,
+      });
+      span.setAttributes({ duplicate: decision.duplicate });
+      if (decision.duplicate) {
+        safeAddOperationsTelemetryCounter(ports.telemetry, {
+          name: 'operations_agent_retries_total',
+          labels: { operation: 'CHECK_BUDGET', outcome: 'DUPLICATE' },
+        });
+      }
+      const costs: readonly [RunResourceBudgetDimension, number][] = [
+        ['MODEL_INVOCATIONS', input.cost.modelInvocations],
+        ['TOOL_REQUESTS', input.cost.toolRequests],
+        ['QUERY_RANGE_MS', input.cost.queryRangeMs],
+        ['QUERY_BUCKETS', input.cost.queryBuckets],
+        ['OWNER_RECORDS', input.cost.ownerRecords],
+        ['PAYLOAD_BYTES', input.cost.payloadBytes],
+      ];
+      if (!decision.duplicate) {
+        for (const [budgetDimension, value] of costs) {
+          if (value <= 0) continue;
+          safeAddOperationsTelemetryCounter(ports.telemetry, {
+            name: 'operations_agent_budget_consumed',
+            value,
+            labels: { budgetDimension },
+          });
+        }
+      }
+      if (decision.decision === 'ALLOW') {
+        span.setStatus('SUCCESS');
+        return null;
+      }
+      const outcome = toRunResourceBudgetOutcome(decision.snapshot);
+      if (outcome === null) {
+        span.setStatus('ERROR');
+        throw new InvestigationCoordinatorError(
+          'INVALID_INVESTIGATION_STATE',
+          'Budget Guard denied Night-energy work without a typed exhaustion outcome.',
+        );
+      }
+      const publicOutcome = outcome.outcome === 'PARTIAL' ? 'PARTIAL' : 'UNABLE_TO_CONCLUDE';
+      span.setAttributes({
+        outcome: publicOutcome,
+        budgetDimension: outcome.exhaustedDimension,
+        budgetConsumed: outcome.consumed,
+        budgetLimit: outcome.limit,
+        partial: outcome.outcome === 'PARTIAL',
+      });
+      span.setStatus('EXHAUSTED');
+      safeAddOperationsTelemetryCounter(ports.telemetry, {
+        name: 'operations_agent_budget_exhaustions_total',
+        labels: { budgetDimension: outcome.exhaustedDimension, outcome: publicOutcome },
+      });
+      return outcome;
+    } catch (error) {
+      span.setStatus('ERROR');
+      throw error;
+    } finally {
+      const durationMs = Math.max(0, ports.clock.now() - startedAt);
+      span.setAttributes({ durationMs });
+      span.end();
     }
-    return outcome;
   };
+
 
   const loadAuthorizedView = async (
     investigationId: string,
@@ -573,65 +673,231 @@ export const createSiteNightEnergyInvestigationCoordinator = (
     request: ParallelReadRequest,
     context: OwnerReadContext,
   ): Promise<OwnerReadResult> => {
-    const toolGrant = ports.toolAuthorizationReader === undefined
-      ? undefined
-      : await ports.toolAuthorizationReader.authorize({ request, context });
-    const authorizedContext: OwnerReadContext = toolGrant === undefined
-      ? context
-      : {
-        ...context,
-        authorization: {
-          ...context.authorization,
-          delegationGrant: toolGrant.delegationGrant,
-          toolDelegationGrants: {
-            ...context.authorization.toolDelegationGrants,
-            [request.tool]: toolGrant.delegationGrant,
+    const owner = telemetryOwnerFor(request);
+    const toolStartedAt = ports.clock.now();
+    const toolSpan = safeStartOperationsTelemetrySpan(ports.telemetry, {
+      name: 'operations.tool.call',
+      kind: 'INTERNAL',
+      correlation: telemetryCorrelationFor({
+        investigationId: context.investigationId,
+        runId: context.runId,
+        ...(context.stepId === undefined ? {} : { stepId: context.stepId }),
+        ...(context.authorization.traceparent === undefined
+          ? {} : { traceparent: context.authorization.traceparent }),
+        ...(context.authorization.tracestate === undefined
+          ? {} : { tracestate: context.authorization.tracestate }),
+      }),
+      attributes: { operation: 'READ_OWNER', logicalTool: request.tool, owner },
+    });
+    let toolOutcome: OperationsTelemetryOutcome = 'ERROR';
+    try {
+      let authorizedContext: OwnerReadContext = context;
+      if (ports.toolAuthorizationReader !== undefined) {
+        const authorizationStartedAt = ports.clock.now();
+        const authorizationSpan = safeStartOperationsTelemetrySpan(ports.telemetry, {
+          name: 'operations.authorization',
+          kind: 'CLIENT',
+          correlation: telemetryCorrelationFor({
+            investigationId: context.investigationId,
+            runId: context.runId,
+            ...(context.stepId === undefined ? {} : { stepId: context.stepId }),
+            ...(toolSpan.traceparent === undefined ? {} : { traceparent: toolSpan.traceparent }),
+            ...(toolSpan.tracestate === undefined ? {} : { tracestate: toolSpan.tracestate }),
+          }),
+          attributes: {
+            operation: 'AUTHORIZE_TOOL',
+            owner: 'platform-gateway',
+            logicalTool: request.tool,
           },
-          ...(toolGrant.policyRevision === undefined
-            ? {}
-            : { policyRevision: toolGrant.policyRevision }),
-        },
-      };
-    if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteEquipment') {
-      return ports.ownerReaders.registry.read({ request, context: authorizedContext });
+        });
+        try {
+          const authorizationContext: OwnerReadContext = {
+            ...context,
+            authorization: {
+              ...context.authorization,
+              ...(authorizationSpan.traceparent === undefined
+                ? {} : { traceparent: authorizationSpan.traceparent }),
+              ...(authorizationSpan.tracestate === undefined
+                ? {} : { tracestate: authorizationSpan.tracestate }),
+            },
+          };
+          const toolGrant = await ports.toolAuthorizationReader.authorize({
+            request,
+            context: authorizationContext,
+          });
+          authorizedContext = {
+            ...context,
+            authorization: {
+              ...context.authorization,
+              delegationGrant: toolGrant.delegationGrant,
+              toolDelegationGrants: {
+                ...context.authorization.toolDelegationGrants,
+                [request.tool]: toolGrant.delegationGrant,
+              },
+              ...(toolGrant.policyRevision === undefined
+                ? {}
+                : { policyRevision: toolGrant.policyRevision }),
+            },
+          };
+          authorizationSpan.setStatus('SUCCESS');
+        } catch (error) {
+          authorizationSpan.setStatus('ERROR');
+          throw error;
+        } finally {
+          const authorizationDurationMs = Math.max(0, ports.clock.now() - authorizationStartedAt);
+          authorizationSpan.setAttributes({ durationMs: authorizationDurationMs });
+          authorizationSpan.end();
+        }
+      }
+
+      const ownerStartedAt = ports.clock.now();
+      const ownerSpan = safeStartOperationsTelemetrySpan(ports.telemetry, {
+        name: 'operations.owner.request',
+        kind: 'CLIENT',
+        correlation: telemetryCorrelationFor({
+          investigationId: context.investigationId,
+          runId: context.runId,
+          ...(context.stepId === undefined ? {} : { stepId: context.stepId }),
+          ...(toolSpan.traceparent === undefined ? {} : { traceparent: toolSpan.traceparent }),
+          ...(toolSpan.tracestate === undefined ? {} : { tracestate: toolSpan.tracestate }),
+        }),
+        attributes: { operation: 'READ_OWNER', logicalTool: request.tool, owner },
+      });
+      try {
+        const ownerContext: OwnerReadContext = {
+          ...authorizedContext,
+          authorization: {
+            ...authorizedContext.authorization,
+            ...(ownerSpan.traceparent === undefined ? {} : { traceparent: ownerSpan.traceparent }),
+            ...(ownerSpan.tracestate === undefined ? {} : { tracestate: ownerSpan.tracestate }),
+          },
+        };
+        let result: OwnerReadResult;
+        if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteEquipment') {
+          result = await ports.ownerReaders.registry.read({ request, context: ownerContext });
+        } else if (request.tool === 'analytics.getEnergySeries') {
+          result = await ports.ownerReaders.energyAnalytics.read({ request, context: ownerContext });
+        } else {
+          throw new InvestigationCoordinatorError(
+            'OWNER_REQUEST_INVALID',
+            'The Night-energy Investigation requested an unsupported logical Tool.',
+          );
+        }
+        const resultCost = runResourceOwnerResultCost(result);
+        ownerSpan.setAttributes({
+          outcome: 'SUCCESS',
+          ownerRecords: resultCost.ownerRecords,
+          payloadBytes: resultCost.payloadBytes,
+        });
+        ownerSpan.setStatus('SUCCESS');
+        toolOutcome = 'SUCCESS';
+        return result;
+      } catch (error) {
+        const outcome = telemetryOutcomeForOwnerError(error);
+        ownerSpan.setAttributes({ outcome });
+        ownerSpan.setStatus(outcome);
+        toolOutcome = outcome;
+        throw error;
+      } finally {
+        const ownerDurationMs = Math.max(0, ports.clock.now() - ownerStartedAt);
+        ownerSpan.setAttributes({ durationMs: ownerDurationMs });
+        ownerSpan.end();
+      }
+    } finally {
+      const toolDurationMs = Math.max(0, ports.clock.now() - toolStartedAt);
+      toolSpan.setAttributes({ outcome: toolOutcome, durationMs: toolDurationMs });
+      toolSpan.setStatus(toolOutcome);
+      toolSpan.end();
+      safeAddOperationsTelemetryCounter(ports.telemetry, {
+        name: 'operations_agent_tool_calls_total',
+        labels: { logicalTool: request.tool, owner, outcome: toolOutcome },
+      });
+      safeObserveOperationsTelemetryHistogram(ports.telemetry, {
+        name: 'operations_agent_tool_duration_ms',
+        value: toolDurationMs,
+        labels: { logicalTool: request.tool, owner, outcome: toolOutcome },
+      });
     }
-    if (request.tool === 'analytics.getEnergySeries') {
-      return ports.ownerReaders.energyAnalytics.read({ request, context: authorizedContext });
-    }
-    throw new InvestigationCoordinatorError(
-      'OWNER_REQUEST_INVALID',
-      'The Night-energy Investigation requested an unsupported logical Tool.',
-    );
   };
+
 
   const readBudgetedBatch = async (input: {
     readonly view: OperationsInvestigationView;
     readonly requests: readonly ParallelReadRequest[];
     readonly context: OwnerReadContext;
     readonly operationTime: number;
+    readonly stepId: string;
   }): Promise<
     | { readonly outcome: 'READS_COMPLETED'; readonly results: readonly OwnerReadResult[] }
     | { readonly outcome: 'BUDGET_EXHAUSTED'; readonly budget: RunResourceBudgetOutcome }
   > => {
-    const readBudget = await checkResourceBudget({
-      view: input.view,
-      at: input.operationTime,
-      operationId: runResourceReadBatchOperationId(input.requests),
-      cost: runResourceReadBatchCost(input.requests),
+    const stepStartedAt = ports.clock.now();
+    const stepSpan = safeStartOperationsTelemetrySpan(ports.telemetry, {
+      name: 'operations.runtime.step',
+      kind: 'INTERNAL',
+      correlation: telemetryCorrelationFor({
+        investigationId: input.context.investigationId,
+        runId: input.context.runId,
+        stepId: input.stepId,
+        ...(input.context.authorization.traceparent === undefined
+          ? {} : { traceparent: input.context.authorization.traceparent }),
+        ...(input.context.authorization.tracestate === undefined
+          ? {} : { tracestate: input.context.authorization.tracestate }),
+      }),
+      attributes: { operation: 'EXECUTE_STEP' },
     });
-    if (readBudget !== null) return { outcome: 'BUDGET_EXHAUSTED', budget: readBudget };
-    const results = await Promise.all(input.requests.map((request) => (
-      readDirect(request, input.context)
-    )));
-    const resultBudget = await checkResourceBudget({
-      view: input.view,
-      at: ports.clock.now(),
-      operationId: runResourceOwnerResultBatchOperationId(input.requests),
-      cost: runResourceOwnerResultBatchCost(results),
-    });
-    if (resultBudget !== null) return { outcome: 'BUDGET_EXHAUSTED', budget: resultBudget };
-    return { outcome: 'READS_COMPLETED', results };
+    let stepOutcome: OperationsTelemetryOutcome = 'ERROR';
+    try {
+      const readBudget = await checkResourceBudget({
+        view: input.view,
+        at: input.operationTime,
+        operationId: runResourceReadBatchOperationId(input.requests),
+        cost: runResourceReadBatchCost(input.requests),
+      });
+      if (readBudget !== null) {
+        stepOutcome = 'EXHAUSTED';
+        return { outcome: 'BUDGET_EXHAUSTED', budget: readBudget };
+      }
+      const stepContext: OwnerReadContext = {
+        ...input.context,
+        stepId: input.stepId,
+        authorization: {
+          ...input.context.authorization,
+          ...(stepSpan.traceparent === undefined ? {} : { traceparent: stepSpan.traceparent }),
+          ...(stepSpan.tracestate === undefined ? {} : { tracestate: stepSpan.tracestate }),
+        },
+      };
+      const results = await Promise.all(input.requests.map((request) => (
+        readDirect(request, stepContext)
+      )));
+      const resultBudget = await checkResourceBudget({
+        view: input.view,
+        at: ports.clock.now(),
+        operationId: runResourceOwnerResultBatchOperationId(input.requests),
+        cost: runResourceOwnerResultBatchCost(results),
+      });
+      if (resultBudget !== null) {
+        stepOutcome = 'EXHAUSTED';
+        return { outcome: 'BUDGET_EXHAUSTED', budget: resultBudget };
+      }
+      stepOutcome = 'SUCCESS';
+      return { outcome: 'READS_COMPLETED', results };
+    } catch (error) {
+      stepOutcome = telemetryOutcomeForOwnerError(error);
+      throw error;
+    } finally {
+      const stepDurationMs = Math.max(0, ports.clock.now() - stepStartedAt);
+      stepSpan.setAttributes({ outcome: stepOutcome, durationMs: stepDurationMs });
+      stepSpan.setStatus(stepOutcome);
+      stepSpan.end();
+      safeObserveOperationsTelemetryHistogram(ports.telemetry, {
+        name: 'operations_agent_operation_duration_ms',
+        value: stepDurationMs,
+        labels: { operation: 'EXECUTE_STEP', outcome: stepOutcome },
+      });
+    }
   };
+
 
   const snapshot = async (
     view: OperationsInvestigationView,
@@ -902,6 +1168,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
           requests: registry,
           context,
           operationTime,
+          stepId: 'collect-registry-context',
         });
         if (directRegistry.outcome === 'BUDGET_EXHAUSTED') return snapshot(view);
         registryResults = directRegistry.results;
@@ -995,6 +1262,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
         requests: energyRequests,
         context,
         operationTime,
+        stepId: 'collect-energy-periods',
       });
       if (energyRead.outcome === 'BUDGET_EXHAUSTED') return snapshot(view);
       const energyResults = energyRead.results;
@@ -1109,22 +1377,72 @@ export const createSiteNightEnergyInvestigationCoordinator = (
       const deterministicStatement = analysis.status === 'SUPPORTED_SITE_FINDING'
         ? analysis.siteFinding.statement
         : 'The Site night-energy Investigation cannot produce a supported conclusion.';
-      const synthesis = existingFinding === null
-        ? await synthesizeFinding({
-          ...(ports.findingSynthesizer === undefined
-            ? {}
-            : { synthesizer: ports.findingSynthesizer }),
-          timeoutMs: policy.findingSynthesisTimeoutMs,
-          investigationId: view.id,
-          scope,
-          expectedClassification: analysis.status === 'SUPPORTED_SITE_FINDING'
-            ? 'INFERENCE'
-            : 'UNABLE_TO_CONCLUDE',
-          deterministicStatement,
-          evidence: evidenceRecords,
-          analysisReferences: [analysisRecord],
-        })
-        : null;
+      let synthesis: FindingSynthesisDecision | null = null;
+      if (existingFinding === null) {
+        const modelStartedAt = ports.clock.now();
+        const modelSpan = safeStartOperationsTelemetrySpan(ports.telemetry, {
+          name: 'operations.model.call',
+          kind: 'CLIENT',
+          correlation: telemetryCorrelationFor({
+            investigationId: view.id,
+            runId: authority.runId,
+            stepId: 'record-night-energy-finding',
+            ...(context.authorization.traceparent === undefined
+              ? {} : { traceparent: context.authorization.traceparent }),
+            ...(context.authorization.tracestate === undefined
+              ? {} : { tracestate: context.authorization.tracestate }),
+          }),
+          attributes: { operation: 'SYNTHESIZE_FINDING' },
+        });
+        try {
+          synthesis = await synthesizeFinding({
+            ...(ports.findingSynthesizer === undefined
+              ? {}
+              : { synthesizer: ports.findingSynthesizer }),
+            timeoutMs: policy.findingSynthesisTimeoutMs,
+            investigationId: view.id,
+            scope,
+            expectedClassification: analysis.status === 'SUPPORTED_SITE_FINDING'
+              ? 'INFERENCE'
+              : 'UNABLE_TO_CONCLUDE',
+            deterministicStatement,
+            evidence: evidenceRecords,
+            analysisReferences: [analysisRecord],
+          });
+          const tokenUsage = synthesis.invocation?.tokenUsage ?? null;
+          const modelOutcome: OperationsTelemetryOutcome = synthesis.source === 'MODEL'
+            ? 'SUCCESS'
+            : 'PARTIAL';
+          modelSpan.setAttributes({
+            outcome: modelOutcome,
+            partial: synthesis.source !== 'MODEL',
+            ...(tokenUsage === null ? {} : {
+              modelInputTokens: tokenUsage.inputTokens,
+              modelOutputTokens: tokenUsage.outputTokens,
+            }),
+          });
+          modelSpan.setStatus(modelOutcome);
+          if (tokenUsage !== null) {
+            safeAddOperationsTelemetryCounter(ports.telemetry, {
+              name: 'operations_agent_model_tokens',
+              value: tokenUsage.inputTokens + tokenUsage.outputTokens,
+              labels: { operation: 'SYNTHESIZE_FINDING', outcome: modelOutcome },
+            });
+          }
+        } catch (error) {
+          modelSpan.setStatus('ERROR');
+          throw error;
+        } finally {
+          const modelDurationMs = Math.max(0, ports.clock.now() - modelStartedAt);
+          modelSpan.setAttributes({ durationMs: modelDurationMs });
+          modelSpan.end();
+          safeObserveOperationsTelemetryHistogram(ports.telemetry, {
+            name: 'operations_agent_operation_duration_ms',
+            value: modelDurationMs,
+            labels: { operation: 'SYNTHESIZE_FINDING' },
+          });
+        }
+      }
       const synthesisProvenance = synthesis === null ? undefined : synthesisProvenanceFor(synthesis);
       const finding = existingFinding ?? await ensureRecord(
         view.id,

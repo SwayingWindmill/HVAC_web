@@ -7,6 +7,10 @@ import type {
   OperationsInvestigation,
 } from '../../domain/index.js';
 import { OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY } from './generated-runtime-control-contract.js';
+import type {
+  OperationsAgentTelemetry,
+  OperationsTelemetryCorrelation,
+} from './operations-telemetry.js';
 
 export type InvestigationRepositoryConflictCode =
   | 'IDENTITY_CONFLICT'
@@ -50,6 +54,7 @@ export interface AuthorizationDecision {
   readonly toolDelegationGrants?: Readonly<Partial<Record<ParallelReadRequest['tool'], string>>>;
   readonly policyRevision?: string;
   readonly traceparent?: string;
+  readonly tracestate?: string;
 }
 
 export type InvestigationAuthorizationAction =
@@ -384,6 +389,7 @@ export interface OwnerReadContext {
   readonly scope: InvestigationScope;
   readonly authorization: AuthorizationDecision;
   readonly correlationId: string;
+  readonly stepId?: string;
 }
 
 export interface OwnerReadInput<TRequest extends ParallelReadRequest> {
@@ -450,6 +456,8 @@ export interface InvestigationCoordinatorPorts {
   readonly auditRecorder: AuditRecorder;
   readonly budgetGuard: BudgetGuard;
   readonly resourceBudgetPolicy?: RunResourceBudgetPolicy;
+  readonly telemetry?: OperationsAgentTelemetry;
+  readonly telemetryContext?: OperationsTelemetryCorrelation;
   readonly toolAuthorizationReader?: ToolAuthorizationReader;
   readonly ownerReaders: OwnerReaders;
   readonly clock: Clock;

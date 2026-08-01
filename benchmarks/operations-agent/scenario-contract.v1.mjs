@@ -153,6 +153,9 @@ const forbiddenPathSchema = z.enum([
   'UNAUTHORIZED_RESOURCE_DISCLOSURE',
   'UNTRUSTED_CONTENT_AS_CONTROL',
   'RUN_RESOURCE_BUDGET_BYPASS',
+  'TELEMETRY_CONTENT_LEAK',
+  'TELEMETRY_HIGH_CARDINALITY',
+  'TELEMETRY_AUTHORITY_COUPLING',
 ]);
 
 const actionLifecycleSchema = z.object({
@@ -211,6 +214,26 @@ const runResourceBudgetSchema = z.object({
   callerLimitOverride: z.enum(['FORBIDDEN', 'ALLOWED']),
 }).strict();
 
+const telemetryBoundarySchema = z.object({
+  traceContext: z.enum(['W3C', 'NONE']),
+  gatewayToAgent: z.enum(['CHILD_SPAN', 'PARENT_REUSE']),
+  runtimeToOwner: z.enum(['CHILD_SPAN', 'PARENT_REUSE']),
+  stableCorrelation: z.enum(['HASHED_DURABLE_IDS', 'RAW_IDS']),
+  restartCorrelation: z.enum(['PRESERVED', 'RESET']),
+  reconnectCorrelation: z.enum(['PRESERVED', 'RESET']),
+  rawPromptExport: z.enum(['FORBIDDEN', 'ALLOWED']),
+  completionExport: z.enum(['FORBIDDEN', 'ALLOWED']),
+  operatorTextExport: z.enum(['FORBIDDEN', 'ALLOWED']),
+  ownerPayloadExport: z.enum(['FORBIDDEN', 'ALLOWED']),
+  secretExport: z.enum(['FORBIDDEN', 'ALLOWED']),
+  metricIdentityLabels: z.enum(['FORBIDDEN', 'ALLOWED']),
+  metricCardinality: z.enum(['BOUNDED', 'UNBOUNDED']),
+  exporterFailureAffectsBusiness: z.enum(['FORBIDDEN', 'ALLOWED']),
+  queueBackpressureAffectsBusiness: z.enum(['FORBIDDEN', 'ALLOWED']),
+  telemetryInBusinessRecords: z.enum(['FORBIDDEN', 'ALLOWED']),
+  telemetryInAuditRecords: z.enum(['FORBIDDEN', 'ALLOWED']),
+}).strict();
+
 const operationsAgentScenarioSchemaV1 = z.object({
   contractVersion: z.literal(OPERATIONS_AGENT_SCENARIO_CONTRACT_VERSION),
   toolCatalogVersion: z.literal(OPERATIONS_AGENT_TOOL_CATALOG_VERSION),
@@ -244,6 +267,7 @@ const operationsAgentScenarioSchemaV1 = z.object({
   actionLifecycle: actionLifecycleSchema.optional(),
   trustBoundary: trustBoundarySchema.optional(),
   resourceBudget: runResourceBudgetSchema.optional(),
+  telemetryBoundary: telemetryBoundarySchema.optional(),
   acceptance: z.object({
     blockers: z.array(blockerCriterionSchema).min(1),
     scored: z.array(scoredCriterionSchema),

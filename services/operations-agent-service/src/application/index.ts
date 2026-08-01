@@ -135,6 +135,27 @@ export {
 } from './internal/run-resource-budget.js';
 
 export {
+  NOOP_OPERATIONS_AGENT_TELEMETRY,
+  safeAddOperationsTelemetryCounter,
+  safeObserveOperationsTelemetryHistogram,
+  safeStartOperationsTelemetrySpan,
+  type OperationsAgentTelemetry,
+  type OperationsTelemetryAttributes,
+  type OperationsTelemetryBudgetDimension,
+  type OperationsTelemetryCorrelation,
+  type OperationsTelemetryMetricLabels,
+  type OperationsTelemetryMetricName,
+  type OperationsTelemetryOperation,
+  type OperationsTelemetryOutcome,
+  type OperationsTelemetryOwner,
+  type OperationsTelemetryRecoveryMode,
+  type OperationsTelemetryRecoveryReason,
+  type OperationsTelemetrySpan,
+  type OperationsTelemetrySpanKind,
+  type OperationsTelemetrySpanName,
+} from './internal/operations-telemetry.js';
+
+export {
   InvestigationRepositoryConflictError,
   OwnerReadError,
   type AgentExecutionRuntime,

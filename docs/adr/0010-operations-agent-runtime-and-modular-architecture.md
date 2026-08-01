@@ -99,7 +99,7 @@ Internal platform tools use typed service clients rather than MCP. MCP is reserv
 
 Temporal is not introduced in the first version. LangGraph checkpointing handles one Investigation's resumable execution. A small PostgreSQL-backed scheduler or queue may decide when to start or resume a run, but it cannot own Investigation steps, Findings, approvals or command state.
 
-Tracing and Audit remain separate. OpenTelemetry and model traces diagnose execution and record bounded, redacted metadata. Audit Ledger records governed business events and authorization references.
+Tracing and Audit remain separate. OpenTelemetry diagnoses execution through W3C child spans and stable hashed Investigation, Run and Step correlations. It records only fixed categories, bounded counts and timings; raw prompts, completions, operator text, Owner payloads, identities, cursors, grants and secrets are rejected. Export is asynchronous and failure-isolated, and telemetry never enters business records, Checkpoints, Outbox or Audit. Audit Ledger records governed business events and authorization references.
 
 All retrieved text and tool output is untrusted data, not instruction. The implementation must enforce allowlisted tools, structured-output validation, exact resource Scope, secret redaction, prompt-injection isolation and per-run budgets for model calls, tool calls, elapsed time, concurrent reads, query range, result size and output size. Budget exhaustion returns a typed partial or unable-to-conclude outcome.
 

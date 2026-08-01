@@ -442,8 +442,11 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), h.operations.timeout)
 	defer cancel()
+	ctx, upstreamTelemetry := h.startOperationsUpstreamTelemetry(ctx, route)
+	defer upstreamTelemetry.finish()
 	upstream, err := http.NewRequestWithContext(ctx, route.method, h.operations.baseURL+route.internalPath, bytes.NewReader(body))
 	if err != nil {
+		upstreamTelemetry.setResult("request_error", http.StatusBadGateway)
 		writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_BAD_GATEWAY", "Operations Agent gateway failed", "The Operations Agent request could not be created.", true, nil)
 		return
 	}
@@ -473,12 +476,15 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 		formatRevision(routeDecisionFromContext(request.Context()).RegistryRevision),
 	)
 	upstream.Header.Set("X-Request-ID", requestIDFromContext(request.Context()))
-	upstream.Header.Set("traceparent", traceparentFromContext(request.Context()))
+	injectOperationsTrace(ctx, upstream.Header)
 	response, err := h.operations.httpClient.Do(upstream)
 	if err != nil {
 		status, code := http.StatusBadGateway, "OPERATIONS_AGENT_BAD_GATEWAY"
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			status, code = http.StatusGatewayTimeout, "OPERATIONS_AGENT_TIMEOUT"
+			upstreamTelemetry.setResult("timeout", status)
+		} else {
+			upstreamTelemetry.setResult("unavailable", status)
 		}
 		writeProblem(writer, request, status, code, "Operations Agent unavailable", "The Operations Agent did not complete the request.", true, nil)
 		return
@@ -486,6 +492,7 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 	defer response.Body.Close()
 	raw, err := readBoundedBody(response.Body, h.operations.maxResponseBytes)
 	if err != nil {
+		upstreamTelemetry.setResult("invalid_response", http.StatusBadGateway)
 		writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_BAD_GATEWAY", "Operations Agent gateway failed", "The Operations Agent response was unreadable or oversized.", true, nil)
 		return
 	}
@@ -494,6 +501,7 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 		if route.kind == "STREAM" {
 			recovery, recoveryErr := validateOperationsEventStream(raw, response.Header, requestedPosition)
 			if !strings.HasPrefix(contentType, "text/event-stream") || recoveryErr != nil {
+				upstreamTelemetry.setResult("contract_error", http.StatusBadGateway)
 				writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_CONTRACT_FAILED", "Operations Agent contract failed", "The Operations Agent returned an invalid event stream.", true, nil)
 				return
 			}
@@ -502,11 +510,13 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 			writer.Header().Set("X-Accel-Buffering", "no")
 			writer.Header().Set("X-Operations-Recovery-Mode", recovery.mode)
 			writer.Header().Set("X-Operations-Recovery-Reason", recovery.reason)
+			h.recordOperationsRecovery(ctx, route.kind, recovery.mode, recovery.reason)
 			writer.Header().Set("X-Operations-Snapshot-Position", recovery.snapshotPosition)
 			writer.Header().Set("X-Operations-Latest-Position", recovery.latestPosition)
 			if recovery.replayFromPosition != "" {
 				writer.Header().Set("X-Operations-Replay-From", recovery.replayFromPosition)
 			}
+			upstreamTelemetry.setResult("success", response.StatusCode)
 			writer.WriteHeader(response.StatusCode)
 			_, _ = writer.Write(raw)
 			return
@@ -518,9 +528,11 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 			contractErr = validateOperationsOperatorInputSubmission(raw)
 		}
 		if !strings.HasPrefix(contentType, "application/json") || contractErr != nil {
+			upstreamTelemetry.setResult("contract_error", http.StatusBadGateway)
 			writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_CONTRACT_FAILED", "Operations Agent contract failed", "The Operations Agent returned an invalid authoritative projection.", true, nil)
 			return
 		}
+		upstreamTelemetry.setResult("success", response.StatusCode)
 		writer.Header().Set("Content-Type", "application/json")
 		writer.Header().Set("Cache-Control", "no-store")
 		writer.WriteHeader(response.StatusCode)
@@ -528,16 +540,19 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 		return
 	}
 	if response.StatusCode == http.StatusNotFound {
+		upstreamTelemetry.setResult("not_found", response.StatusCode)
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Operations Investigation was not found.", false, nil)
 		return
 	}
 	if strings.HasPrefix(contentType, "application/problem+json") && response.StatusCode >= 400 && response.StatusCode < 500 {
+		upstreamTelemetry.setResult("rejected", response.StatusCode)
 		writer.Header().Set("Content-Type", "application/problem+json")
 		writer.Header().Set("Cache-Control", "no-store")
 		writer.WriteHeader(response.StatusCode)
 		_, _ = writer.Write(raw)
 		return
 	}
+	upstreamTelemetry.setResult("invalid_response", http.StatusBadGateway)
 	writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_BAD_GATEWAY", "Operations Agent gateway failed", "The Operations Agent returned an invalid upstream response.", true, nil)
 }
 

@@ -1,7 +1,20 @@
 import { applicationModule } from '../application/index.js';
 import { domainModule } from '../domain/index.js';
 import { modelModule } from '../model/index.js';
-import { observabilityModule } from '../observability/index.js';
+import {
+  createMemoryOperationsTelemetryExporter,
+  createOperationsOtlpHttpExporter,
+  createOperationsTelemetryRuntime,
+  hashOperationsTelemetryIdentity,
+  observabilityModule,
+  type OperationsOtlpHttpExporterOptions,
+  type OperationsTelemetryExporter,
+  type OperationsTelemetryMetricPoint,
+  type OperationsTelemetryRuntime,
+  type OperationsTelemetryRuntimeDiagnostics,
+  type OperationsTelemetryRuntimeOptions,
+  type OperationsTelemetrySpanData,
+} from '../observability/index.js';
 import { persistenceModule } from '../persistence/index.js';
 import { runtimeLanggraphModule } from '../runtime-langgraph/index.js';
 import { schedulingModule } from '../scheduling/index.js';
@@ -19,6 +32,23 @@ import {
   type OperationsAgentHttpHandler,
   type OperationsAgentHttpOptions,
 } from '../transport-http/index.js';
+
+export {
+  createMemoryOperationsTelemetryExporter,
+  createOperationsOtlpHttpExporter,
+  createOperationsTelemetryRuntime,
+  hashOperationsTelemetryIdentity,
+};
+
+export type {
+  OperationsOtlpHttpExporterOptions,
+  OperationsTelemetryExporter,
+  OperationsTelemetryMetricPoint,
+  OperationsTelemetryRuntime,
+  OperationsTelemetryRuntimeDiagnostics,
+  OperationsTelemetryRuntimeOptions,
+  OperationsTelemetrySpanData,
+};
 
 export type {
   OperationsAgentHttpAuthorizationInput,
