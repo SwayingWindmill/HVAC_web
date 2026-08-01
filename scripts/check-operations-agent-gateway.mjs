@@ -38,6 +38,7 @@ const ownership = JSON.parse(ownershipSource);
 const failures = [];
 
 const publicRoutes = [
+  ['GET', '/api/v1/sites/{siteId}/operations/investigations'],
   ['POST', '/api/v1/sites/{siteId}/operations/investigations'],
   ['GET', '/api/v1/sites/{siteId}/operations/investigations/{investigationId}'],
   ['GET', '/api/v1/sites/{siteId}/operations/investigations/{investigationId}/events'],
@@ -64,9 +65,15 @@ for (const path of internalRoutes) {
 }
 for (const required of [
   'X-CSRF-Token',
+  'SiteNightEnergyInvestigationList',
   'SiteNightEnergyInvestigationView',
+  'EvidenceSource',
+  'DETERMINISTIC_ALGORITHM',
   'SUPPORTED_SITE_FINDING',
   'UNABLE_TO_CONCLUDE',
+  'REQUIRED_NEXT',
+  'registry.getEquipmentEnergyBindings',
+  'analytics.energy.getEquipmentSeries',
   'TOOL_EXECUTION_RECEIPT',
   'text/event-stream',
   'RUN_STARTED',

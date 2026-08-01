@@ -1,12 +1,26 @@
 openapi: 3.0.3
 info:
   title: HVAC Operations Investigations Public API
-  version: 1.1.0
-  description: Platform Gateway contract for Site night-energy Operations Investigations and reconnect-safe AG-UI recovery batches.
+  version: 1.2.0
+  description: Platform Gateway contract for Site-scoped Investigation lists, typed provenance views and reconnect-safe AG-UI recovery batches.
 servers:
   - url: https://api.example.invalid
 paths:
   /api/v1/sites/{siteId}/operations/investigations:
+    get:
+      operationId: listSiteNightEnergyInvestigations
+      description: Returns at most 50 authorized Investigation summaries for the exact Site, ordered by createdAt and id descending.
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+      responses:
+        '200':
+          description: Bounded authoritative Site Investigation list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteNightEnergyInvestigationList'
+        '404':
+          $ref: '#/components/responses/Nondiscoverable'
     post:
       operationId: startSiteNightEnergyInvestigation
       parameters:
@@ -35,7 +49,7 @@ paths:
         - $ref: '#/components/parameters/InvestigationId'
       responses:
         '200':
-          description: Authoritative Investigation snapshot.
+          description: Authoritative typed Investigation snapshot.
           content:
             application/json:
               schema:
@@ -52,7 +66,7 @@ paths:
         - $ref: '#/components/parameters/LastEventId'
       responses:
         '200':
-          description: Committed Operations Investigation AG-UI recovery batch.
+          description: Committed Operations Investigation AG-UI recovery batch containing RUN_STARTED, STATE_SNAPSHOT and RUN_FINISHED.
           headers:
             Cache-Control:
               schema: { type: string, example: no-store, no-transform }
@@ -123,17 +137,12 @@ components:
       name: siteId
       in: path
       required: true
-      schema:
-        type: string
-        format: uuid
+      schema: { type: string, format: uuid }
     InvestigationId:
       name: investigationId
       in: path
       required: true
-      schema:
-        type: string
-        minLength: 1
-        maxLength: 256
+      schema: { type: string, minLength: 1, maxLength: 256 }
     LastEventId:
       name: Last-Event-ID
       in: header
@@ -147,8 +156,7 @@ components:
       name: X-CSRF-Token
       in: header
       required: true
-      schema:
-        type: string
+      schema: { type: string }
   responses:
     Nondiscoverable:
       description: Resource is absent or not visible to the caller.
@@ -165,56 +173,280 @@ components:
       additionalProperties: false
       required: [organizationId, siteId, equipmentId, deviceId]
       properties:
-        organizationId: { type: string }
-        siteId: { type: string }
+        organizationId: { type: string, minLength: 1, maxLength: 256 }
+        siteId: { type: string, minLength: 1, maxLength: 256 }
         equipmentId: { type: string, nullable: true }
         deviceId: { type: string, nullable: true }
-    BusinessRecord:
+    ActiveRun:
       type: object
-      required: [schemaVersion, recordType, id, investigationId, recordedAt]
+      additionalProperties: false
+      required: [id, status, startedAt]
       properties:
-        schemaVersion: { type: integer, enum: [1] }
-        recordType:
-          type: string
-          enum: [EVIDENCE, ANALYSIS_REFERENCE, FINDING, TOOL_EXECUTION_RECEIPT]
-        id: { type: string }
-        investigationId: { type: string }
-        recordedAt: { type: integer, format: int64 }
-      additionalProperties: true
-    SiteNightEnergyInvestigationView:
+        id: { type: string, minLength: 1, maxLength: 256 }
+        status: { type: string, enum: [ACTIVE, PAUSED] }
+        startedAt: { type: integer, format: int64, minimum: 0 }
+    EvidenceQuality:
+      type: object
+      additionalProperties: false
+      required: [classification, valid, suspect, invalid]
+      properties:
+        classification: { type: string, enum: [GOOD, UNCERTAIN, BAD, STALE] }
+        valid: { type: integer, minimum: 0 }
+        suspect: { type: integer, minimum: 0 }
+        invalid: { type: integer, minimum: 0 }
+    EvidenceWatermark:
+      type: object
+      additionalProperties: false
+      required: [data, aggregate]
+      properties:
+        data: { type: string, nullable: true, maxLength: 256 }
+        aggregate: { type: string, nullable: true, maxLength: 256 }
+    EvidenceSource:
+      type: object
+      additionalProperties: false
+      required:
+        - owner
+        - scope
+        - requestId
+        - registryRevision
+        - datasetRevision
+        - watermark
+        - partial
+        - quality
+        - capturedAt
+        - evaluatedAt
+        - provenanceDigest
+      properties:
+        owner: { type: string, enum: [registry, telemetry-query-service] }
+        scope: { $ref: '#/components/schemas/InvestigationScope' }
+        requestId: { type: string, minLength: 1, maxLength: 256 }
+        registryRevision: { type: string, nullable: true, maxLength: 256 }
+        datasetRevision: { type: string, nullable: true, maxLength: 256 }
+        watermark: { $ref: '#/components/schemas/EvidenceWatermark' }
+        partial: { type: boolean }
+        quality: { $ref: '#/components/schemas/EvidenceQuality' }
+        capturedAt: { type: integer, format: int64, minimum: 0 }
+        evaluatedAt: { type: integer, format: int64, minimum: 0 }
+        provenanceDigest: { type: string, pattern: '^sha256:[0-9a-f]{64}$' }
+    EvidenceRecord:
       type: object
       additionalProperties: false
       required:
         - schemaVersion
+        - recordType
         - id
-        - scope
-        - status
-        - revision
-        - createdAt
-        - activeRun
-        - outcome
-        - evidence
-        - analysisReferences
-        - findings
-        - toolReceipts
+        - investigationId
+        - recordedAt
+        - evidenceKind
+        - classification
+        - statement
+        - analysisReferenceDigest
+        - sources
       properties:
         schemaVersion: { type: integer, enum: [1] }
-        id: { type: string }
-        scope: { $ref: '#/components/schemas/InvestigationScope' }
-        status:
+        recordType: { type: string, enum: [EVIDENCE] }
+        id: { type: string, minLength: 1, maxLength: 256 }
+        investigationId: { type: string, minLength: 1, maxLength: 256 }
+        recordedAt: { type: integer, format: int64, minimum: 0 }
+        evidenceKind:
           type: string
-          enum: [DRAFT, RUNNING, PAUSED, COMPLETED, FAILED, CANCELLED]
+          enum: [SITE_ENERGY_SERIES_READY, SITE_ENERGY_SERIES_READINESS_ASSESSED, SITE_ENERGY_PERIOD_COMPARISON]
+        classification: { type: string, enum: [FACT, ALGORITHM_RESULT] }
+        statement: { type: string, minLength: 1, maxLength: 4000 }
+        analysisReferenceDigest:
+          type: string
+          nullable: true
+          pattern: '^sha256:[0-9a-f]{64}$'
+        sources:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items: { $ref: '#/components/schemas/EvidenceSource' }
+    AnalysisReferenceRecord:
+      type: object
+      additionalProperties: false
+      required:
+        - schemaVersion
+        - recordType
+        - id
+        - investigationId
+        - recordedAt
+        - analysisKind
+        - authority
+        - algorithmVersion
+        - policyVersion
+        - inputEvidenceIds
+        - parameterDigest
+        - resultDigest
+        - executedAt
+        - outcome
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        recordType: { type: string, enum: [ANALYSIS_REFERENCE] }
+        id: { type: string, minLength: 1, maxLength: 256 }
+        investigationId: { type: string, minLength: 1, maxLength: 256 }
+        recordedAt: { type: integer, format: int64, minimum: 0 }
+        analysisKind: { type: string, enum: [SITE_NIGHT_ENERGY_COMPARISON] }
+        authority: { type: string, enum: [DETERMINISTIC_ALGORITHM] }
+        algorithmVersion: { type: string, minLength: 1, maxLength: 128 }
+        policyVersion: { type: string, minLength: 1, maxLength: 128 }
+        inputEvidenceIds:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items: { type: string, minLength: 1, maxLength: 256 }
+        parameterDigest: { type: string, pattern: '^sha256:[0-9a-f]{64}$' }
+        resultDigest: { type: string, pattern: '^sha256:[0-9a-f]{64}$' }
+        executedAt: { type: integer, format: int64, minimum: 0 }
+        outcome: { type: string, enum: [SUPPORTED_SITE_FINDING, UNABLE_TO_CONCLUDE] }
+    RequiredNextPeriod:
+      type: object
+      additionalProperties: false
+      required: [localDate, from, to, expectedBuckets]
+      properties:
+        localDate: { type: string, minLength: 1, maxLength: 32 }
+        from: { type: string, minLength: 1, maxLength: 64 }
+        to: { type: string, minLength: 1, maxLength: 64 }
+        expectedBuckets: { type: integer, minimum: 1, maximum: 48 }
+    EquipmentEnergyBindingsRequiredNext:
+      type: object
+      additionalProperties: false
+      required: [status, kind, owner, capability, organizationId, siteId, equipmentIds, targetPeriod, baselinePeriod, requiredMetadata]
+      properties:
+        status: { type: string, enum: [REQUIRED_NEXT] }
+        kind: { type: string, enum: [EQUIPMENT_ENERGY_BINDINGS] }
+        owner: { type: string, enum: [registry] }
+        capability: { type: string, enum: [registry.getEquipmentEnergyBindings] }
+        organizationId: { type: string }
+        siteId: { type: string }
+        equipmentIds:
+          type: array
+          maxItems: 32
+          items: { type: string }
+        targetPeriod: { $ref: '#/components/schemas/RequiredNextPeriod' }
+        baselinePeriod: { $ref: '#/components/schemas/RequiredNextPeriod' }
+        requiredMetadata:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items: { type: string, enum: [BUSINESS_REVISION, QUALITY, CAPTURED_AT, PAYLOAD_DIGEST] }
+    EquipmentEnergySeriesRequiredNext:
+      type: object
+      additionalProperties: false
+      required: [status, kind, owner, capability, organizationId, siteId, equipmentIds, targetPeriod, baselinePeriod, requiredMetadata]
+      properties:
+        status: { type: string, enum: [REQUIRED_NEXT] }
+        kind: { type: string, enum: [EQUIPMENT_ENERGY_PERIOD_COMPARISON] }
+        owner: { type: string, enum: [telemetry-query-service] }
+        capability: { type: string, enum: [analytics.energy.getEquipmentSeries] }
+        organizationId: { type: string }
+        siteId: { type: string }
+        equipmentIds:
+          type: array
+          maxItems: 32
+          items: { type: string }
+        targetPeriod: { $ref: '#/components/schemas/RequiredNextPeriod' }
+        baselinePeriod: { $ref: '#/components/schemas/RequiredNextPeriod' }
+        requiredMetadata:
+          type: array
+          minItems: 6
+          maxItems: 6
+          items: { type: string, enum: [DATASET_REVISION, WATERMARK, PARTIAL, QUALITY, CAPTURED_AT, PAYLOAD_DIGEST] }
+    FindingConclusionSupported:
+      type: object
+      additionalProperties: false
+      required: [status, scope, organizationId, siteId]
+      properties:
+        status: { type: string, enum: [SUPPORTED] }
+        scope: { type: string, enum: [SITE] }
+        organizationId: { type: string }
+        siteId: { type: string }
+    FindingConclusionUnable:
+      type: object
+      additionalProperties: false
+      required: [status, scope, reasonCode, detail]
+      properties:
+        status: { type: string, enum: [UNABLE_TO_CONCLUDE] }
+        scope: { type: string, enum: [SITE, EQUIPMENT] }
+        reasonCode: { type: string, minLength: 1, maxLength: 128 }
+        detail: { type: string, minLength: 1, maxLength: 4000 }
+        requiredNext:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/EquipmentEnergyBindingsRequiredNext'
+              - $ref: '#/components/schemas/EquipmentEnergySeriesRequiredNext'
+    FindingRecord:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, recordType, id, investigationId, recordedAt, findingKind, classification, statement, evidenceIds, analysisReferenceIds, conclusion]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        recordType: { type: string, enum: [FINDING] }
+        id: { type: string, minLength: 1, maxLength: 256 }
+        investigationId: { type: string, minLength: 1, maxLength: 256 }
+        recordedAt: { type: integer, format: int64, minimum: 0 }
+        findingKind: { type: string, enum: [SITE_NIGHT_ENERGY_INCREASE, SITE_NIGHT_ENERGY_WITHIN_THRESHOLD, UNABLE_TO_CONCLUDE] }
+        classification: { type: string, enum: [INFERENCE] }
+        statement: { type: string, minLength: 1, maxLength: 4000 }
+        evidenceIds:
+          type: array
+          maxItems: 32
+          items: { type: string }
+        analysisReferenceIds:
+          type: array
+          maxItems: 32
+          items: { type: string }
+        conclusion:
+          oneOf:
+            - $ref: '#/components/schemas/FindingConclusionSupported'
+            - $ref: '#/components/schemas/FindingConclusionUnable'
+    ToolReceiptMetadataValue:
+      nullable: true
+      oneOf:
+        - { type: string, maxLength: 512 }
+        - { type: number }
+        - { type: boolean }
+    ToolExecutionReceiptRecord:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, recordType, id, investigationId, recordedAt, logicalTool, owner, requestId, attemptId, runId, stepId, startedAt, completedAt, resultCategory, metadata]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        recordType: { type: string, enum: [TOOL_EXECUTION_RECEIPT] }
+        id: { type: string }
+        investigationId: { type: string }
+        recordedAt: { type: integer, format: int64, minimum: 0 }
+        logicalTool: { type: string, enum: [registry.getSite, registry.listSiteEquipment, telemetry.getCurrentSnapshot, analytics.getEnergySeries, commands.getCapabilities] }
+        owner: { type: string, enum: [registry, telemetry-query-service, command-service] }
+        requestId: { type: string }
+        attemptId: { type: string }
+        runId: { type: string }
+        stepId: { type: string, maxLength: 128 }
+        startedAt: { type: integer, format: int64, minimum: 0 }
+        completedAt: { type: integer, format: int64, minimum: 0 }
+        resultCategory: { type: string, enum: [SUCCEEDED, REJECTED, TIMED_OUT, FAILED] }
+        metadata:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolReceiptMetadataValue'
+    SiteNightEnergyInvestigationView:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, id, scope, status, revision, createdAt, activeRun, outcome, evidence, analysisReferences, findings, toolReceipts]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        id: { type: string, minLength: 1, maxLength: 256 }
+        scope: { $ref: '#/components/schemas/InvestigationScope' }
+        status: { type: string, enum: [DRAFT, RUNNING, PAUSED, COMPLETED, FAILED, CANCELLED] }
         revision: { type: integer, minimum: 0 }
-        createdAt: { type: integer, format: int64 }
+        createdAt: { type: integer, format: int64, minimum: 0 }
         activeRun:
           nullable: true
-          type: object
-          additionalProperties: false
-          required: [id, status, startedAt]
-          properties:
-            id: { type: string }
-            status: { type: string, enum: [ACTIVE, PAUSED] }
-            startedAt: { type: integer, format: int64 }
+          allOf:
+            - $ref: '#/components/schemas/ActiveRun'
         outcome:
           type: string
           nullable: true
@@ -222,19 +454,48 @@ components:
         evidence:
           type: array
           maxItems: 32
-          items: { $ref: '#/components/schemas/BusinessRecord' }
+          items: { $ref: '#/components/schemas/EvidenceRecord' }
         analysisReferences:
           type: array
           maxItems: 32
-          items: { $ref: '#/components/schemas/BusinessRecord' }
+          items: { $ref: '#/components/schemas/AnalysisReferenceRecord' }
         findings:
           type: array
           maxItems: 32
-          items: { $ref: '#/components/schemas/BusinessRecord' }
+          items: { $ref: '#/components/schemas/FindingRecord' }
         toolReceipts:
           type: array
           maxItems: 64
-          items: { $ref: '#/components/schemas/BusinessRecord' }
+          items: { $ref: '#/components/schemas/ToolExecutionReceiptRecord' }
+    SiteNightEnergyInvestigationSummary:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, id, scope, status, revision, createdAt, outcome, evidenceCount, analysisReferenceCount, findingCount, toolReceiptCount]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        id: { type: string, minLength: 1, maxLength: 256 }
+        scope: { $ref: '#/components/schemas/InvestigationScope' }
+        status: { type: string, enum: [DRAFT, RUNNING, PAUSED, COMPLETED, FAILED, CANCELLED] }
+        revision: { type: integer, minimum: 0 }
+        createdAt: { type: integer, format: int64, minimum: 0 }
+        outcome:
+          type: string
+          nullable: true
+          enum: [SUPPORTED_SITE_FINDING, UNABLE_TO_CONCLUDE]
+        evidenceCount: { type: integer, minimum: 0, maximum: 32 }
+        analysisReferenceCount: { type: integer, minimum: 0, maximum: 32 }
+        findingCount: { type: integer, minimum: 0, maximum: 32 }
+        toolReceiptCount: { type: integer, minimum: 0, maximum: 64 }
+    SiteNightEnergyInvestigationList:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, investigations]
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
+        investigations:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/SiteNightEnergyInvestigationSummary' }
     Problem:
       type: object
       required: [type, title, status, code, detail]

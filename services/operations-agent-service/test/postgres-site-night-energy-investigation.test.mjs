@@ -239,5 +239,21 @@ test('PostgreSQL resumes a checkpointed night-energy Run without duplicate busin
 
   await persistence.checkpointRepository.delete(started.id, run.id);
   assert.deepEqual(await restarted.get({ investigationId: started.id }), completed);
+  assert.deepEqual(await restarted.list({ organizationId, siteId }), {
+    schemaVersion: 1,
+    investigations: [{
+      schemaVersion: 1,
+      id: completed.id,
+      scope: completed.scope,
+      status: completed.status,
+      revision: completed.revision,
+      createdAt: completed.createdAt,
+      outcome: completed.outcome,
+      evidenceCount: completed.evidence.length,
+      analysisReferenceCount: completed.analysisReferences.length,
+      findingCount: completed.findings.length,
+      toolReceiptCount: completed.toolReceipts.length,
+    }],
+  });
   assert.deepEqual(await journalCounts(operationsPool), committedCounts);
 });

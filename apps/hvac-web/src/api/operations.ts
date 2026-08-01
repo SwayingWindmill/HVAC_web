@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import { createPlatformGatewayClient } from './generated/platformGateway.gen';
 import {
+  operationsInvestigationListSchema,
   operationsInvestigationViewSchema,
   parseOperationsAgUiEventStream,
   type OperationsAgUiStreamBatch,
   type OperationsAgUiStreamRecovery,
+  type OperationsInvestigationList,
   type OperationsInvestigationView,
   type ParsedOperationsAgUiEvent,
 } from './operations-contract';
@@ -99,6 +101,31 @@ async function investigationRequest(
   if (!response.ok) throw await problemFrom(response);
   const payload: unknown = await response.json();
   return ensureScope(operationsInvestigationViewSchema.parse(payload), options);
+}
+
+export async function listSiteNightEnergyInvestigations(
+  options: ScopedOperationsRequestOptions,
+): Promise<OperationsInvestigationList> {
+  const fetchImplementation = options.fetchImplementation ?? globalThis.fetch.bind(globalThis);
+  const response = await fetchImplementation(`${options.baseUrl ?? ''}${pathFor(options.trustedSiteId)}`, {
+    method: 'GET',
+    credentials: 'same-origin',
+    signal: options.signal,
+    headers: { Accept: 'application/json, application/problem+json' },
+  });
+  if (!response.ok) throw await problemFrom(response);
+  const parsed = operationsInvestigationListSchema.parse(await response.json());
+  if (parsed.investigations.some((investigation) => (
+    investigation.scope.organizationId !== options.trustedOrganizationId
+    || investigation.scope.siteId !== options.trustedSiteId
+  ))) {
+    throw new OperationsApiError(
+      503,
+      'OPERATIONS_SCOPE_INVALID',
+      'Operations Investigation 列表超出当前已验证 Site Scope。',
+    );
+  }
+  return parsed;
 }
 
 export async function startSiteNightEnergyInvestigation(
@@ -235,9 +262,16 @@ export type {
   OperationsAgUiEvent,
   OperationsAgUiStreamBatch,
   OperationsAgUiStreamRecovery,
+  OperationsAnalysisReference,
+  OperationsEvidence,
+  OperationsFinding,
+  OperationsInvestigationList,
   OperationsInvestigationStateSnapshot,
+  OperationsInvestigationSummary,
   OperationsInvestigationView,
+  OperationsRequiredNext,
   OperationsStreamRecoveryMode,
   OperationsStreamRecoveryReason,
+  OperationsToolReceipt,
   ParsedOperationsAgUiEvent,
 } from './operations-contract';

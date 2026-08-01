@@ -17,13 +17,173 @@ const activeRunSchema = z.object({
   startedAt: timestampSchema,
 }).strict();
 
-const businessRecordSchema = z.object({
+const evidenceQualitySchema = z.object({
+  classification: z.enum(['GOOD', 'UNCERTAIN', 'BAD', 'STALE']),
+  valid: z.number().int().nonnegative(),
+  suspect: z.number().int().nonnegative(),
+  invalid: z.number().int().nonnegative(),
+}).strict();
+
+const evidenceSourceSchema = z.object({
+  owner: z.enum(['registry', 'telemetry-query-service']),
+  scope: operationsScopeSchema,
+  requestId: identitySchema,
+  registryRevision: z.string().min(1).max(256).nullable(),
+  datasetRevision: z.string().min(1).max(256).nullable(),
+  watermark: z.object({
+    data: z.string().min(1).max(256).nullable(),
+    aggregate: z.string().min(1).max(256).nullable(),
+  }).strict(),
+  partial: z.boolean(),
+  quality: evidenceQualitySchema,
+  capturedAt: timestampSchema,
+  evaluatedAt: timestampSchema,
+  provenanceDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/u),
+}).strict();
+
+export const operationsEvidenceSchema = z.object({
   schemaVersion: z.literal(1),
-  recordType: z.enum(['EVIDENCE', 'ANALYSIS_REFERENCE', 'FINDING', 'TOOL_EXECUTION_RECEIPT']),
+  recordType: z.literal('EVIDENCE'),
   id: identitySchema,
   investigationId: identitySchema,
   recordedAt: timestampSchema,
-}).passthrough();
+  evidenceKind: z.enum([
+    'SITE_ENERGY_SERIES_READY',
+    'SITE_ENERGY_SERIES_READINESS_ASSESSED',
+    'SITE_ENERGY_PERIOD_COMPARISON',
+  ]),
+  classification: z.enum(['FACT', 'ALGORITHM_RESULT']),
+  statement: z.string().min(1).max(4_000),
+  analysisReferenceDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/u).nullable(),
+  sources: z.array(evidenceSourceSchema).min(1).max(8),
+}).strict();
+
+export const operationsAnalysisReferenceSchema = z.object({
+  schemaVersion: z.literal(1),
+  recordType: z.literal('ANALYSIS_REFERENCE'),
+  id: identitySchema,
+  investigationId: identitySchema,
+  recordedAt: timestampSchema,
+  analysisKind: z.literal('SITE_NIGHT_ENERGY_COMPARISON'),
+  authority: z.literal('DETERMINISTIC_ALGORITHM'),
+  algorithmVersion: z.string().min(1).max(128),
+  policyVersion: z.string().min(1).max(128),
+  inputEvidenceIds: z.array(identitySchema).min(1).max(32),
+  parameterDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/u),
+  resultDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/u),
+  executedAt: timestampSchema,
+  outcome: z.enum(['SUPPORTED_SITE_FINDING', 'UNABLE_TO_CONCLUDE']),
+}).strict();
+
+const requiredNextPeriodSchema = z.object({
+  localDate: z.string().min(1).max(32),
+  from: z.string().min(1).max(64),
+  to: z.string().min(1).max(64),
+  expectedBuckets: z.number().int().min(1).max(48),
+}).strict();
+
+const requiredNextCommon = {
+  status: z.literal('REQUIRED_NEXT'),
+  organizationId: identitySchema,
+  siteId: identitySchema,
+  equipmentIds: z.array(identitySchema).max(32),
+  targetPeriod: requiredNextPeriodSchema,
+  baselinePeriod: requiredNextPeriodSchema,
+} as const;
+
+export const operationsRequiredNextSchema = z.discriminatedUnion('kind', [
+  z.object({
+    ...requiredNextCommon,
+    kind: z.literal('EQUIPMENT_ENERGY_BINDINGS'),
+    owner: z.literal('registry'),
+    capability: z.literal('registry.getEquipmentEnergyBindings'),
+    requiredMetadata: z.tuple([
+      z.literal('BUSINESS_REVISION'),
+      z.literal('QUALITY'),
+      z.literal('CAPTURED_AT'),
+      z.literal('PAYLOAD_DIGEST'),
+    ]),
+  }).strict(),
+  z.object({
+    ...requiredNextCommon,
+    kind: z.literal('EQUIPMENT_ENERGY_PERIOD_COMPARISON'),
+    owner: z.literal('telemetry-query-service'),
+    capability: z.literal('analytics.energy.getEquipmentSeries'),
+    requiredMetadata: z.tuple([
+      z.literal('DATASET_REVISION'),
+      z.literal('WATERMARK'),
+      z.literal('PARTIAL'),
+      z.literal('QUALITY'),
+      z.literal('CAPTURED_AT'),
+      z.literal('PAYLOAD_DIGEST'),
+    ]),
+  }).strict(),
+]);
+
+const findingConclusionSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('SUPPORTED'),
+    scope: z.literal('SITE'),
+    organizationId: identitySchema,
+    siteId: identitySchema,
+  }).strict(),
+  z.object({
+    status: z.literal('UNABLE_TO_CONCLUDE'),
+    scope: z.enum(['SITE', 'EQUIPMENT']),
+    reasonCode: z.string().min(1).max(128),
+    detail: z.string().min(1).max(4_000),
+    requiredNext: z.array(operationsRequiredNextSchema).min(1).max(8).optional(),
+  }).strict(),
+]);
+
+export const operationsFindingSchema = z.object({
+  schemaVersion: z.literal(1),
+  recordType: z.literal('FINDING'),
+  id: identitySchema,
+  investigationId: identitySchema,
+  recordedAt: timestampSchema,
+  findingKind: z.enum([
+    'SITE_NIGHT_ENERGY_INCREASE',
+    'SITE_NIGHT_ENERGY_WITHIN_THRESHOLD',
+    'UNABLE_TO_CONCLUDE',
+  ]),
+  classification: z.literal('INFERENCE'),
+  statement: z.string().min(1).max(4_000),
+  evidenceIds: z.array(identitySchema).max(32),
+  analysisReferenceIds: z.array(identitySchema).max(32),
+  conclusion: findingConclusionSchema,
+}).strict();
+
+const toolReceiptMetadataValueSchema = z.union([
+  z.string().max(512),
+  z.number(),
+  z.boolean(),
+  z.null(),
+]);
+
+export const operationsToolReceiptSchema = z.object({
+  schemaVersion: z.literal(1),
+  recordType: z.literal('TOOL_EXECUTION_RECEIPT'),
+  id: identitySchema,
+  investigationId: identitySchema,
+  recordedAt: timestampSchema,
+  logicalTool: z.enum([
+    'registry.getSite',
+    'registry.listSiteEquipment',
+    'telemetry.getCurrentSnapshot',
+    'analytics.getEnergySeries',
+    'commands.getCapabilities',
+  ]),
+  owner: z.enum(['registry', 'telemetry-query-service', 'command-service']),
+  requestId: identitySchema,
+  attemptId: identitySchema,
+  runId: identitySchema,
+  stepId: z.string().min(1).max(128),
+  startedAt: timestampSchema,
+  completedAt: timestampSchema,
+  resultCategory: z.enum(['SUCCEEDED', 'REJECTED', 'TIMED_OUT', 'FAILED']),
+  metadata: z.record(z.string(), toolReceiptMetadataValueSchema),
+}).strict();
 
 export const operationsInvestigationViewSchema = z.object({
   schemaVersion: z.literal(1),
@@ -34,10 +194,29 @@ export const operationsInvestigationViewSchema = z.object({
   createdAt: timestampSchema,
   activeRun: activeRunSchema.nullable(),
   outcome: z.enum(['SUPPORTED_SITE_FINDING', 'UNABLE_TO_CONCLUDE']).nullable(),
-  evidence: z.array(businessRecordSchema).max(32),
-  analysisReferences: z.array(businessRecordSchema).max(32),
-  findings: z.array(businessRecordSchema).max(32),
-  toolReceipts: z.array(businessRecordSchema).max(64),
+  evidence: z.array(operationsEvidenceSchema).max(32),
+  analysisReferences: z.array(operationsAnalysisReferenceSchema).max(32),
+  findings: z.array(operationsFindingSchema).max(32),
+  toolReceipts: z.array(operationsToolReceiptSchema).max(64),
+}).strict();
+
+export const operationsInvestigationSummarySchema = z.object({
+  schemaVersion: z.literal(1),
+  id: identitySchema,
+  scope: operationsScopeSchema,
+  status: operationsInvestigationViewSchema.shape.status,
+  revision: z.number().int().nonnegative(),
+  createdAt: timestampSchema,
+  outcome: operationsInvestigationViewSchema.shape.outcome,
+  evidenceCount: z.number().int().nonnegative().max(32),
+  analysisReferenceCount: z.number().int().nonnegative().max(32),
+  findingCount: z.number().int().nonnegative().max(32),
+  toolReceiptCount: z.number().int().nonnegative().max(64),
+}).strict();
+
+export const operationsInvestigationListSchema = z.object({
+  schemaVersion: z.literal(1),
+  investigations: z.array(operationsInvestigationSummarySchema).max(50),
 }).strict();
 
 const investigationProjectionSchema = operationsInvestigationViewSchema.omit({ toolReceipts: true });
@@ -119,7 +298,14 @@ export const operationsAgUiEventSchema = z.discriminatedUnion('type', [
   runFinishedSchema,
 ]);
 
+export type OperationsEvidence = z.infer<typeof operationsEvidenceSchema>;
+export type OperationsAnalysisReference = z.infer<typeof operationsAnalysisReferenceSchema>;
+export type OperationsFinding = z.infer<typeof operationsFindingSchema>;
+export type OperationsRequiredNext = z.infer<typeof operationsRequiredNextSchema>;
+export type OperationsToolReceipt = z.infer<typeof operationsToolReceiptSchema>;
 export type OperationsInvestigationView = z.infer<typeof operationsInvestigationViewSchema>;
+export type OperationsInvestigationSummary = z.infer<typeof operationsInvestigationSummarySchema>;
+export type OperationsInvestigationList = z.infer<typeof operationsInvestigationListSchema>;
 export type OperationsInvestigationStateSnapshot = z.infer<typeof operationsInvestigationStateSnapshotSchema>;
 export type OperationsAgUiEvent = z.infer<typeof operationsAgUiEventSchema>;
 

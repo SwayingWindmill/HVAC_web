@@ -58,6 +58,12 @@ export interface SiteNightEnergyInvestigationQuery {
   readonly investigationId: string;
 }
 
+export interface ListSiteNightEnergyInvestigationsQuery {
+  readonly organizationId: string;
+  readonly siteId: string;
+  readonly limit?: number;
+}
+
 export interface SiteNightEnergyActiveRunView {
   readonly id: string;
   readonly status: 'ACTIVE' | 'PAUSED';
@@ -79,8 +85,28 @@ export interface SiteNightEnergyInvestigationView {
   readonly toolReceipts: readonly ToolExecutionReceiptRecord[];
 }
 
+export interface SiteNightEnergyInvestigationSummary {
+  readonly schemaVersion: 1;
+  readonly id: string;
+  readonly scope: InvestigationScope;
+  readonly status: InvestigationStatus;
+  readonly revision: number;
+  readonly createdAt: number;
+  readonly outcome: 'SUPPORTED_SITE_FINDING' | 'UNABLE_TO_CONCLUDE' | null;
+  readonly evidenceCount: number;
+  readonly analysisReferenceCount: number;
+  readonly findingCount: number;
+  readonly toolReceiptCount: number;
+}
+
+export interface SiteNightEnergyInvestigationList {
+  readonly schemaVersion: 1;
+  readonly investigations: readonly SiteNightEnergyInvestigationSummary[];
+}
+
 export interface SiteNightEnergyInvestigationCoordinator {
   start(command: StartSiteNightEnergyInvestigationCommand): Promise<SiteNightEnergyInvestigationView>;
+  list(query: ListSiteNightEnergyInvestigationsQuery): Promise<SiteNightEnergyInvestigationList>;
   get(query: SiteNightEnergyInvestigationQuery): Promise<SiteNightEnergyInvestigationView>;
   advance(query: SiteNightEnergyInvestigationQuery): Promise<SiteNightEnergyInvestigationView>;
   cancel(query: SiteNightEnergyInvestigationQuery): Promise<SiteNightEnergyInvestigationView>;
@@ -525,6 +551,20 @@ export const createSiteNightEnergyInvestigationCoordinator = (
     input: { siteId },
   }];
 
+  const summary = (view: SiteNightEnergyInvestigationView): SiteNightEnergyInvestigationSummary => ({
+    schemaVersion: 1,
+    id: view.id,
+    scope: view.scope,
+    status: view.status,
+    revision: view.revision,
+    createdAt: view.createdAt,
+    outcome: view.outcome,
+    evidenceCount: view.evidence.length,
+    analysisReferenceCount: view.analysisReferences.length,
+    findingCount: view.findings.length,
+    toolReceiptCount: view.toolReceipts.length,
+  });
+
   return Object.freeze({
     async start(command: StartSiteNightEnergyInvestigationCommand) {
       const scope = requireSiteScope({
@@ -541,6 +581,50 @@ export const createSiteNightEnergyInvestigationCoordinator = (
         expectedRevision: created.revision,
       });
       return snapshot(started);
+    },
+
+    async list(query: ListSiteNightEnergyInvestigationsQuery) {
+      const scope = requireSiteScope({
+        organizationId: requireIdentity(query.organizationId, 'Organization identity'),
+        siteId: requireIdentity(query.siteId, 'Site identity'),
+        equipmentId: null,
+        deviceId: null,
+      });
+      requireAllowed(await ports.authorizationDecisionReader.authorizeScope({
+        scope,
+        action: 'LIST_INVESTIGATIONS',
+      }));
+      const limit = query.limit ?? 50;
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
+        throw new InvestigationCoordinatorError(
+          'INVALID_INVESTIGATION_STATE',
+          'Investigation list limit must be between 1 and 50.',
+        );
+      }
+      if (ports.investigationRepository.listByScope === undefined) {
+        throw new InvestigationCoordinatorError(
+          'INVALID_INVESTIGATION_STATE',
+          'The Investigation repository does not support Site listing.',
+        );
+      }
+      const persisted = await ports.investigationRepository.listByScope({
+        organizationId: scope.organizationId,
+        siteId: scope.siteId as string,
+        limit,
+      });
+      const projected = await Promise.all(
+        persisted.map((investigation) => snapshot(investigation.view())),
+      );
+      const investigations = projected
+        .filter((view) => view.scope.organizationId === scope.organizationId
+          && view.scope.siteId === scope.siteId)
+        .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))
+        .slice(0, limit)
+        .map(summary);
+      return Object.freeze({
+        schemaVersion: 1,
+        investigations: Object.freeze(investigations),
+      });
     },
 
     async get(query: SiteNightEnergyInvestigationQuery) {
@@ -819,6 +903,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
               scope: 'SITE',
               reasonCode: analysis.blockers[0]?.code ?? 'ENERGY_READINESS_FAILED',
               detail: analysis.blockers.map(({ detail }) => detail).join(' '),
+              requiredNext: analysis.equipmentAttribution.requiredNext,
             },
           }
       ), operationTime);

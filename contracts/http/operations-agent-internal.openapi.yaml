@@ -1,12 +1,22 @@
 openapi: 3.0.3
 info:
   title: Operations Agent Internal HTTP API
-  version: 1.1.0
-  description: Workload-authenticated Coordinator use cases for Site night-energy Investigations and reconnect-safe AG-UI recovery batches.
+  version: 1.2.0
+  description: Workload-authenticated Coordinator use cases for Site Investigation lists, typed provenance views and reconnect-safe AG-UI recovery batches.
 servers:
   - url: https://operations-agent.internal.invalid
 paths:
   /internal/v1/sites/{siteId}/operations/investigations:
+    get:
+      operationId: internalListSiteNightEnergyInvestigations
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+        - $ref: '#/components/parameters/ActingOrganization'
+        - $ref: '#/components/parameters/DelegationGrant'
+        - $ref: '#/components/parameters/PolicyRevision'
+      responses:
+        '200': { $ref: '#/components/responses/InvestigationList' }
+        '404': { $ref: '#/components/responses/Nondiscoverable' }
     post:
       operationId: internalStartSiteNightEnergyInvestigation
       parameters:
@@ -136,6 +146,15 @@ components:
         maxLength: 128
         pattern: '^(0|[1-9][0-9]*):(0|[1-9][0-9]*)$'
   responses:
+    InvestigationList:
+      description: Bounded authoritative Site Investigation list.
+      headers:
+        Cache-Control:
+          schema: { type: string, enum: [no-store] }
+      content:
+        application/json:
+          schema:
+            $ref: './operations-investigations-public.openapi.yaml#/components/schemas/SiteNightEnergyInvestigationList'
     Investigation:
       description: Authoritative safe Investigation snapshot.
       headers:

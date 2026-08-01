@@ -4,7 +4,7 @@ Status: accepted plan
 
 Date: 2026-07-31
 
-Tracking: GitHub Map #118; Maps 0–2 are merged through PR #149. Map 3 Runtime recovery (#151), authoritative Owner READ adapters (#152), deterministic night-energy comparison/readiness validation (#153), typed business-record persistence (#154) and Platform Gateway exposure (#155) are complete. Map 4 Operations Workspace delivery is the current frontier.
+Tracking: GitHub Map #118; Maps 0–2 are merged through PR #149. Map 3 Runtime recovery (#151), authoritative Owner READ adapters (#152), deterministic night-energy comparison/readiness validation (#153), typed business-record persistence (#154) and Platform Gateway exposure (#155) are complete. Map 4.1 AG-UI projection (#174) and Map 4.2 reconnect recovery (#175) are complete; Map 4.3 Plan, Evidence and Findings Workspace (#176) is implemented on the current branch.
 
 This plan turns ADR 0009, ADR 0010 and the accepted modular architecture into an implementation sequence. It deliberately starts with deletion of the retired Python Agent, then establishes an executable benchmark before introducing the TypeScript runtime.
 
@@ -259,6 +259,10 @@ Map 4.1 established the first bounded vertical slice: each authorized connection
 Map 4.2 adds reconnect-safe recovery without introducing a second state owner or a long-lived in-process stream. Every connection is independently reauthorized through Session, Site visibility, IAM and delegated Operations scope, then begins with the current authoritative snapshot. Stable positions use `revision:sequence`; only the current-revision snapshot, complete Tool-call end boundaries and batch end are resumable. A valid `Last-Event-ID` receives only the missing committed Tool-event suffix. Unknown, expired, future, out-of-range or partial-Tool positions fail closed to a complete snapshot batch. The Headless agent automatically reconnects non-terminal Investigations, exponentially backs off retryable failures, replaces local state from each snapshot and deduplicates durable Tool records by record identity and event type. Site switch, logout, route teardown and component unmount continue to abort the protected request and purge in-memory projection state.
 
 Map 4.2 status: implemented by Ticket #175. Long-lived push publication is not required for recovery correctness; later workspace work may replace bounded polling with a publication transport while retaining the same authoritative snapshot and stable-position contract.
+
+Map 4.3 implements the project-owned Operations Investigation Workspace. Platform Gateway now exposes a bounded, Site-scoped Investigation index in stable descending order and validates exact typed Evidence, Analysis Reference, Finding, Tool Receipt and REQUIRED_NEXT contracts before forwarding them. The Vite Real Shell renders URL-addressable list/detail navigation, authoritative Plan progress, Owner provenance, Dataset/Registry revisions, Watermarks, Partial and Quality state, deterministic-analysis identities, Site-only Finding boundaries and explicit unable-to-conclude blockers. Full Tool Receipts are loaded only when their detail Revision exactly matches the AG-UI snapshot Revision, and reconnect/browser tests prove durable record identities are not duplicated. Supported Site Findings are explicitly prevented from being presented as Equipment root cause; Equipment attribution insufficiency remains a typed REQUIRED_NEXT path.
+
+Map 4.3 status: implemented by Ticket #176.
 
 Completion gate:
 
