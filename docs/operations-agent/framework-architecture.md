@@ -528,6 +528,8 @@ The adapter must not emit a committed Evidence, Finding or Proposed Action befor
 
 AG-UI payloads expose only authorized, presentation-safe fields. Internal authorization decisions, raw prompts, secrets and unrestricted tool payloads are not streamed.
 
+The first implemented transport slice returns a finite, revision-addressed SSE batch rather than a long-lived stream. It starts with `RUN_STARTED`, publishes one committed `STATE_SNAPSHOT`, maps committed Tool Receipts into bounded `TOOL_CALL_*` activity and ends with `RUN_FINISHED`. Platform Gateway applies the same Session, Site visibility, delegation, timeout, response-bound and nondiscoverability controls as the Investigation HTTP API, then independently validates the event lifecycle and field whitelist. Long-lived deltas, reconnect cursors and missed-event replay are deliberately deferred to the next Map 4 slice.
+
 ## 11. Frontend module
 
 The existing React/Vite app owns the Operations Workspace.
@@ -548,6 +550,8 @@ apps/hvac-web/src/features/operations-agent/
 ```
 
 CopilotKit hooks and primitives provide conversation and Agent interaction. Project components own domain presentation and accessibility. The main surface is the Investigation workspace, not a popup-only chatbot.
+
+The first Site-scoped Real Shell surface is available at `/sites/{siteId}/operations`. It creates or opens one authorized Investigation, runs a self-managed CopilotKit Headless agent against the Gateway event endpoint and renders Plan progress, committed Evidence, committed Findings and bounded read-only Tool activity with project-owned components. The stream is registered as protected Site state so Site change, logout or policy-driven purge aborts the Agent run and clears the projection.
 
 Frontend state is a projection. Reload and reconnect must recover from the authoritative Investigation API rather than relying only on local CopilotKit state.
 

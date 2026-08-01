@@ -5,8 +5,10 @@ It contains the accepted modular-monolith boundary, Domain lifecycle model, publ
 Investigation Coordinator application seam, deterministic night-energy analysis, typed
 business-record contracts, PostgreSQL persistence adapter, the first explicit LangGraph.js
 `AgentExecutionRuntime` adapter, authoritative Registry/Energy READ adapters and the
-Site night-energy application/HTTP contract exposed through Platform Gateway. It does not
-yet connect the Operations Workspace UI, a live model provider or scheduler.
+Site night-energy application/HTTP contract and committed AG-UI event projection exposed through
+Platform Gateway. The existing React/Vite Real Shell now consumes the first bounded Operations
+Workspace slice through CopilotKit Headless; a live model provider, reconnect cursor and scheduler
+remain out of this slice.
 
 The module direction is:
 
@@ -76,6 +78,13 @@ keeps them non-transitive; Gateway signs Energy grants with Operations Agent as 
 executingService and the normalized query digest as Scope. This exchange also applies during
 Checkpoint recovery replay. Browser headers, raw Energy points, Leases, Checkpoints and
 LangGraph state never cross the public Investigation contract.
+
+The internal and public Investigation APIs also expose a GET `/events` route. It does not stream
+Runtime state: it reads the current authorized Investigation View and returns a finite SSE batch
+with one committed `STATE_SNAPSHOT`, bounded read-only Tool activity and lifecycle events. Both
+service and Gateway validate the whitelist; the Gateway adds `no-store, no-transform`, disables
+proxy buffering and rejects malformed or unsafe events before they reach the browser. Cursor-based
+reconnect and missed-event replay are intentionally left to the following Map 4 slice.
 
 `analyzeSiteNightEnergy` consumes that shared versioned Energy Series contract plus a typed
 Registry Site Scope. It deterministically resolves local target and baseline night windows,

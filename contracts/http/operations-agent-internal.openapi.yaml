@@ -34,6 +34,25 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Investigation' }
         '404': { $ref: '#/components/responses/Nondiscoverable' }
+  /internal/v1/sites/{siteId}/operations/investigations/{investigationId}/events:
+    get:
+      operationId: internalStreamSiteNightEnergyInvestigationEvents
+      parameters:
+        - $ref: '#/components/parameters/SiteId'
+        - $ref: '#/components/parameters/InvestigationId'
+        - $ref: '#/components/parameters/ActingOrganization'
+        - $ref: '#/components/parameters/DelegationGrant'
+        - $ref: '#/components/parameters/PolicyRevision'
+      responses:
+        '200':
+          description: Finite AG-UI event batch projected from the committed Investigation view.
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store, no-transform }
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '404': { $ref: '#/components/responses/Nondiscoverable' }
   /internal/v1/sites/{siteId}/operations/investigations/{investigationId}:advance:
     post:
       operationId: internalAdvanceSiteNightEnergyInvestigation

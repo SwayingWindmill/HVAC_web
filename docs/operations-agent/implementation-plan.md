@@ -254,6 +254,8 @@ Planned tracer bullets:
 4. Add bounded operator input and interrupt resume.
 5. Remove popup-only assumptions from the primary Operations Agent experience.
 
+Map 4.1 establishes the first bounded vertical slice: each authorized connection receives a finite SSE batch containing `RUN_STARTED`, one authoritative committed `STATE_SNAPSHOT`, bounded read-only Tool activity and `RUN_FINISHED`. The Operations Agent projects only the current committed Investigation View; Platform Gateway validates the event whitelist and the existing React/Vite Real Shell consumes it through a Site-scoped CopilotKit Headless agent. Cursor-based reconnect, missed-event replay and long-lived deltas remain Map 4.2 work.
+
 Completion gate:
 
 - reload and reconnect recover from the authoritative Investigation view;
