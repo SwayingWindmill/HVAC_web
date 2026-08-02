@@ -1,0 +1,75 @@
+name: One-shot certify title edit absence
+
+on:
+  push:
+    branches:
+      - feat/real-work-order-task-checklist
+
+permissions:
+  contents: write
+
+jobs:
+  strengthen-browser-evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/real-work-order-task-checklist
+          fetch-depth: 0
+
+      - name: Add explicit title-edit absence evidence
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          browser_path = Path('scripts/run-s5-work-order-task-browser-audit.mjs')
+          browser = browser_path.read_text(encoding='utf-8')
+
+          replacements = [
+              (
+                  "    unreviewedDelete:async()=>{setSubject(selected);return call('POST',base()+'/tasks/'+taskOneId+':delete',{expectedWorkOrderVersion:6},'task-browser-delete-1');},\n",
+                  "    unreviewedDelete:async()=>{setSubject(selected);return call('POST',base()+'/tasks/'+taskOneId+':delete',{expectedWorkOrderVersion:6},'task-browser-delete-1');},\n    unreviewedTitleEdit:async()=>{setSubject(selected);return call('POST',base()+'/tasks/'+taskOneId+':title',{expectedWorkOrderVersion:6,title:'Retitled task'},'task-browser-title-1');},\n",
+              ),
+              (
+                  "const match = url.pathname.match(/^\\/api\\/v1\\/sites\\/([^/]+)\\/work-orders\\/([^/]+)\\/(tasks(?::reorder)?|tasks\\/([^/:]+):(status|delete))$/);",
+                  "const match = url.pathname.match(/^\\/api\\/v1\\/sites\\/([^/]+)\\/work-orders\\/([^/]+)\\/(tasks(?::reorder)?|tasks\\/([^/:]+):(status|delete|title))$/);",
+              ),
+              (
+                  "  if (route.endsWith(':delete')) { problem(response, 404, 'ROUTE_NOT_FOUND', 'Task deletion is not reviewed.'); return; }",
+                  "  if (route.endsWith(':delete') || route.endsWith(':title')) { problem(response, 404, 'ROUTE_NOT_FOUND', 'Task deletion and title editing are not reviewed.'); return; }",
+              ),
+              (
+                  "  const unreviewed=await evaluate(client,`globalThis.__WORK_ORDER_TASK_AUDIT__.unreviewedDelete()`); assert(unreviewed.status===404&&unreviewed.body.code==='ROUTE_NOT_FOUND','unreviewed task delete was exposed'); assertions.push('delete-and-title-edit-absence');",
+                  "  const unreviewedDelete=await evaluate(client,`globalThis.__WORK_ORDER_TASK_AUDIT__.unreviewedDelete()`); assert(unreviewedDelete.status===404&&unreviewedDelete.body.code==='ROUTE_NOT_FOUND','unreviewed task delete was exposed');\n  const unreviewedTitleEdit=await evaluate(client,`globalThis.__WORK_ORDER_TASK_AUDIT__.unreviewedTitleEdit()`); assert(unreviewedTitleEdit.status===404&&unreviewedTitleEdit.body.code==='ROUTE_NOT_FOUND','unreviewed task title edit was exposed'); assertions.push('delete-and-title-edit-absence');",
+              ),
+          ]
+
+          for old, new in replacements:
+              count = browser.count(old)
+              if count != 1:
+                  raise SystemExit(f'browser replacement matched {count} times: {old[:80]}')
+              browser = browser.replace(old, new)
+          browser_path.write_text(browser, encoding='utf-8')
+
+          check_path = Path('scripts/check-s5-work-order-tasks.mjs')
+          check = check_path.read_text(encoding='utf-8')
+          old = "'non-selected-route-absence', 'delete-and-title-edit-absence']"
+          new = "'non-selected-route-absence', 'unreviewedTitleEdit', 'delete-and-title-edit-absence']"
+          count = check.count(old)
+          if count != 1:
+              raise SystemExit(f'gate replacement matched {count} times')
+          check_path.write_text(check.replace(old, new), encoding='utf-8')
+          PY
+
+      - name: Commit evidence strengthening and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/one-shot-certify-title-edit-absence.yml
+          git add scripts/run-s5-work-order-task-browser-audit.mjs scripts/check-s5-work-order-tasks.mjs
+          git diff --cached --check
+          git commit -m "test(work-order): certify title edit route absence"
+          git push origin HEAD:feat/real-work-order-task-checklist
