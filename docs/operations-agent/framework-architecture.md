@@ -550,7 +550,7 @@ The adapter must not emit a committed Evidence, Finding or Proposed Action befor
 
 AG-UI payloads expose only authorized, presentation-safe fields. Internal authorization decisions, raw prompts, secrets and unrestricted tool payloads are not streamed.
 
-The first implemented transport slice returns a finite, revision-addressed SSE batch rather than a long-lived stream. It starts with `RUN_STARTED`, publishes one committed `STATE_SNAPSHOT`, maps committed Tool Receipts into bounded `TOOL_CALL_*` activity and ends with `RUN_FINISHED`. Platform Gateway applies the same Session, Site visibility, delegation, timeout, response-bound and nondiscoverability controls as the Investigation HTTP API, then independently validates the event lifecycle and field whitelist. Long-lived deltas, reconnect cursors and missed-event replay are deliberately deferred to the next Map 4 slice.
+The implemented transport returns a finite, revision-addressed SSE batch rather than a long-lived stream. It starts with `RUN_STARTED`, publishes one committed `STATE_SNAPSHOT`, maps committed Tool Receipts into bounded `TOOL_CALL_*` activity and ends with `RUN_FINISHED`. Platform Gateway applies the same Session, Site visibility, delegation, timeout, response-bound and nondiscoverability controls as the Investigation HTTP API, then independently validates the event lifecycle and field whitelist. `Last-Event-ID` uses stable `revision:sequence` positions: valid current positions receive the missing committed suffix, while unknown, expired or conflicting positions receive a complete authoritative snapshot. The browser persists only that opaque position in session storage under exact Organization, Site and Investigation identity; terminal and protected-Site purge paths remove it, and no business projection is stored client-side.
 
 ## 11. Frontend module
 
@@ -719,6 +719,28 @@ idempotent retry and resume
 ```
 
 LLM-as-judge may assess operational usefulness only after deterministic blockers pass.
+
+### 16.1 Negative authorization and recovery certification
+
+The Map 5.5 certification composes seven existing authoritative seams rather than creating a second
+simulation state model. It executes Gateway contract checks; verbose grant, IAM, Owner and Gateway
+negative tests; the complete Operations Agent service suite; Operations and Audit PostgreSQL
+integration; Workspace unit tests; and the real-browser reconnect audit.
+
+Five versioned scenarios require exact evidence markers for authorization denial, duplicate delivery,
+process and Checkpoint recovery, concurrent mutation and stream recovery. Each scenario records
+bounded evidence for tenant isolation, idempotency, restart safety and failure outcomes. Wrong
+Organization or Site, wrong presenter, expired delegation, stale policy, revoked grant and Owner Scope
+drift remain nondiscoverable. Stale Revision or Lease and concurrent writes return typed conflicts.
+Valid event positions replay only a committed suffix; unknown, future, expired, out-of-range and
+partial-Tool positions rebuild from a complete authoritative snapshot.
+
+The browser may retain only the opaque `revision:sequence` position, scoped by Organization, Site and
+Investigation. It never retains the snapshot or business records and clears the position on terminal
+or protected-Site purge. The certification output contains one
+`operations-agent-safety-certification/v1` report, captured gate logs, supporting browser and
+PostgreSQL evidence and a SHA-256 manifest. An offline verifier rejects missing markers, failed gates,
+incomplete invariant coverage or any claim that this repository check enables production traffic.
 
 ## 17. Initial proof and rollout
 
