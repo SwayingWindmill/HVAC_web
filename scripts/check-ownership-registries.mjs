@@ -102,7 +102,14 @@ const s5WorkOrderLifecycleRoutes = new Set([
 const expectedS5ReadPhases = ['S5-R0-contract-only', 'S5-R1-internal-read-only', 'S5-R2-site-canary', 'S5-R3-operationally-certified'];
 const expectedS5WritePhases = ['S5-R0-contract-only', 'S5-R1-internal-read-only', 'S5-R1-internal-create-assign', 'S5-R2-site-canary', 'S5-R3-operationally-certified'];
 const expectedS5LifecyclePhases = ['S5-R0-contract-only', 'S5-R1-internal-read-only', 'S5-R1-internal-create-assign', 'S5-R1-internal-lifecycle', 'S5-R2-site-canary', 'S5-R3-operationally-certified'];
-const allowedScopes = new Set(['organization', 'principal', 'site', 'device', 'key', 'alarm', 'work-order']);
+const s5WorkOrderTaskRoutes = new Set([
+  'GET /api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks',
+  'POST /api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks',
+  'POST /api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks/{taskId}:status',
+  'POST /api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks:reorder',
+]);
+const expectedS5TaskPhases = ['S5-R0-contract-only', 'S5-R1-internal-read-only', 'S5-R1-internal-create-assign', 'S5-R1-internal-lifecycle', 'S5-R1-internal-task-checklist', 'S5-R2-site-canary', 'S5-R3-operationally-certified'];
+const allowedScopes = new Set(['organization', 'principal', 'site', 'device', 'key', 'alarm', 'work-order', 'task']);
 const allowedCompatibility = new Set(['native', 'legacy-read']);
 const allowedMethods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -135,7 +142,7 @@ for (const route of routeRegistry.routes ?? []) {
     }
   } else if (rollout.mode === 'percentage') {
     if (!Number.isInteger(rollout.percentage) || rollout.percentage < 0 || rollout.percentage > 100) errors.push(`${key}: rollout percentage must be 0..100`);
-    const noFallbackReviewedCanary = rollout.fallbackOwner === undefined && ((route.method === 'GET' && ((route.owner === 'alarm-service' && route.migrationPhase === 'S4-R1-internal-read-only') || (route.owner === 'work-order-service' && route.migrationPhase === 'S5-R1-internal-read-only'))) || (route.method === 'POST' && route.owner === 'work-order-service' && (route.migrationPhase === 'S5-R1-internal-create-assign' || route.migrationPhase === 'S5-R1-internal-lifecycle')));
+    const noFallbackReviewedCanary = rollout.fallbackOwner === undefined && ((route.method === 'GET' && ((route.owner === 'alarm-service' && route.migrationPhase === 'S4-R1-internal-read-only') || (route.owner === 'work-order-service' && (route.migrationPhase === 'S5-R1-internal-read-only' || route.migrationPhase === 'S5-R1-internal-task-checklist')))) || (route.method === 'POST' && route.owner === 'work-order-service' && (route.migrationPhase === 'S5-R1-internal-create-assign' || route.migrationPhase === 'S5-R1-internal-lifecycle' || route.migrationPhase === 'S5-R1-internal-task-checklist')));
     if (!noFallbackReviewedCanary && (!allowedOwners.has(rollout.fallbackOwner) || rollout.fallbackOwner === route.owner)) errors.push(`${key}: invalid fallback owner`);
     if (typeof rollout.cohortSalt !== 'string' || rollout.cohortSalt.length < 8) errors.push(`${key}: cohort salt is required`);
     if (!(route.allowedScopeDimensions ?? []).includes('organization') || !(route.allowedScopeDimensions ?? []).includes('principal')) {
@@ -266,6 +273,23 @@ for (const route of routeRegistry.routes ?? []) {
       if (!forbiddenResults.includes(result)) errors.push(`${key}: S5 Work Order lifecycle fallback is not forbidden for ${result}`);
     }
   }
+  if (s5WorkOrderTaskRoutes.has(key)) {
+    if (route.owner !== 'work-order-service' || route.publicIngress !== 'platform-gateway') errors.push(`${key}: S5 Work Order task route must remain behind Gateway ingress`);
+    if (route.activationStatus !== 'internal-canary' || rollout.mode !== 'percentage' || rollout.percentage !== 1 || rollout.fallbackOwner !== undefined || typeof rollout.cohortSalt !== 'string' || route.migrationPhase !== 'S5-R1-internal-task-checklist') errors.push(`${key}: S5 Work Order task route must use the no-fallback 1% internal canary`);
+    if (route.readOnlyFallback !== false || route.readFallbackOwner !== undefined || rollout.fallbackOwner !== undefined) errors.push(`${key}: S5 Work Order task fallback is forbidden`);
+    if (route.cohortGroup !== 's5-work-order-task-v1') errors.push(`${key}: S5 Work Order task cohort group drifted`);
+    if (!Array.isArray(route.migrationPhases) || route.migrationPhases.join('|') !== expectedS5TaskPhases.join('|')) errors.push(`${key}: S5 Work Order task phases are incomplete or reordered`);
+    if (route.shadowSideEffectPolicy !== 'NONE') errors.push(`${key}: S5 Work Order task shadow must be disabled`);
+    for (const scope of ['organization', 'site', 'principal', 'work-order']) {
+      if (!(route.allowedScopeDimensions ?? []).includes(scope)) errors.push(`${key}: missing S5 Work Order task scope ${scope}`);
+    }
+    if (route.method === 'POST' && !(route.allowedScopeDimensions ?? []).includes('key')) errors.push(`${key}: missing S5 Work Order task idempotency scope`);
+    if (route.path.includes('{taskId}') && !(route.allowedScopeDimensions ?? []).includes('task')) errors.push(`${key}: missing S5 Work Order task identity scope`);
+    const forbiddenResults = route.fallbackForbiddenResults ?? [];
+    for (const result of route.method === 'GET' ? ['AUTHORIZATION_DENIED', 'RESOURCE_NOT_FOUND'] : ['AUTHORIZATION_DENIED', 'RESOURCE_NOT_FOUND', 'VERSION_CONFLICT', 'IDEMPOTENCY_CONFLICT']) {
+      if (!forbiddenResults.includes(result)) errors.push(`${key}: S5 Work Order task fallback is not forbidden for ${result}`);
+    }
+  }
   if (s5WorkOrderReadRoutes.has(key)) {
     if (route.owner !== 'work-order-service' || route.publicIngress !== 'platform-gateway') errors.push(`${key}: S5 Work Order route must remain behind Gateway ingress`);
     if (route.activationStatus !== 'internal-canary' || rollout.mode !== 'percentage' || rollout.percentage !== 1 || rollout.fallbackOwner !== undefined || typeof rollout.cohortSalt !== 'string' || route.migrationPhase !== 'S5-R1-internal-read-only') errors.push(`${key}: S5 Work Order read must use the no-fallback 1% internal canary`);
@@ -313,6 +337,9 @@ for (const key of s5WorkOrderWriteRoutes) {
 }
 for (const key of s5WorkOrderLifecycleRoutes) {
   if (!routeKeys.has(key)) errors.push(`${key}: required S5 Work Order lifecycle route is missing`);
+}
+for (const key of s5WorkOrderTaskRoutes) {
+  if (!routeKeys.has(key)) errors.push(`${key}: required S5 Work Order task route is missing`);
 }
 
 const phaseExpectations = [
@@ -413,8 +440,8 @@ const requiredIdentities = new Map([
   ['alarm_runtime:s4_alarm_service', { migrationRole: 's4_alarm_migrator', activationRole: 's4_alarm_runtime', accessMode: 'write' }],
   ['work_order_runtime:s5_work_order_runtime', { migrationRole: 's5_work_order_migrator', accessMode: 'read' }],
   ['work_order_runtime:s5_work_order_service', { migrationRole: 's5_work_order_migrator', activationRole: 's5_work_order_runtime', accessMode: 'read' }],
-  ['work_order_runtime:s5_work_order_writer', { migrationRole: 's5_work_order_migrator', accessMode: 'write', restrictedTo: ['work_order_current', 'work_order_source_reference', 'work_order_timeline', 'work_order_idempotency', 'work_order_mutation_audit', 'work_order_completion_evidence'] }],
-  ['work_order_runtime:s5_work_order_mutation_service', { migrationRole: 's5_work_order_migrator', activationRole: 's5_work_order_writer', accessMode: 'write', restrictedTo: ['work_order_current', 'work_order_source_reference', 'work_order_timeline', 'work_order_idempotency', 'work_order_mutation_audit', 'work_order_completion_evidence'] }],
+  ['work_order_runtime:s5_work_order_writer', { migrationRole: 's5_work_order_migrator', accessMode: 'write', restrictedTo: ['work_order_current', 'work_order_source_reference', 'work_order_timeline', 'work_order_idempotency', 'work_order_mutation_audit', 'work_order_completion_evidence', 'work_order_task'] }],
+  ['work_order_runtime:s5_work_order_mutation_service', { migrationRole: 's5_work_order_migrator', activationRole: 's5_work_order_writer', accessMode: 'write', restrictedTo: ['work_order_current', 'work_order_source_reference', 'work_order_timeline', 'work_order_idempotency', 'work_order_mutation_audit', 'work_order_completion_evidence', 'work_order_task'] }],
 ]);
 for (const identity of dataRegistry.databaseIdentities ?? []) {
   const key = `${identity.schema}:${identity.runtimeRole}`;

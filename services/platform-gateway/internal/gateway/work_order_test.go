@@ -26,6 +26,8 @@ const (
 	gatewayWorkOrderOtherSiteID    = "01910000-0002-7000-8000-000000000001"
 	gatewayWorkOrderID             = "01910000-1000-7000-8000-000000000001"
 	gatewayWorkOrderAlarmID        = "01910000-2000-7000-8000-000000000001"
+	gatewayWorkOrderTaskOneID      = "01910000-4000-7000-8000-000000000001"
+	gatewayWorkOrderTaskTwoID      = "01910000-4000-7000-8000-000000000002"
 	gatewayWorkOrderCSRF           = "work-order-csrf-fixture"
 	gatewayWorkOrderOrigin         = "https://web.example.test"
 )
@@ -156,7 +158,7 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 		decision := workorderauth.Decision{
 			Allowed: !fixture.deny.Load(), PrincipalID: "principal-work-order-1",
 			SubjectIssuer: fixture.session.Principal.Issuer, Subject: fixture.session.Principal.Subject,
-			ActingOrganizationID: gatewayWorkOrderOrganizationID, SiteID: input.SiteID, WorkOrderID: input.WorkOrderID,
+			ActingOrganizationID: gatewayWorkOrderOrganizationID, SiteID: input.SiteID, WorkOrderID: input.WorkOrderID, TaskID: input.TaskID,
 			AssigneeID: input.AssigneeID, TeamID: input.TeamID, Action: input.Action,
 			PolicyRevision: "work-order-policy-1", ReasonCode: workorderauth.ReasonAllowExactScope, DecidedAt: now.Format(time.RFC3339Nano),
 		}
@@ -179,6 +181,9 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 		action := string(workorderauth.ActionList)
 		scopes := []string{"organization:" + gatewayWorkOrderOrganizationID, "site:" + gatewayWorkOrderSiteID}
 		precondition := strings.HasSuffix(request.URL.Path, "/"+gatewayWorkOrderID+":lifecycle-precondition")
+		taskCollection := strings.HasSuffix(request.URL.Path, "/"+gatewayWorkOrderID+"/tasks")
+		taskReorder := strings.HasSuffix(request.URL.Path, "/"+gatewayWorkOrderID+"/tasks:reorder")
+		taskStatus := strings.HasSuffix(request.URL.Path, "/tasks/"+gatewayWorkOrderTaskOneID+":status")
 		if precondition {
 			header = workOrderWriteContextHeader
 			scopes = append(scopes, "work-order:"+gatewayWorkOrderID, workOrderMutationKeyScope(request.Header.Get("Idempotency-Key")))
@@ -208,6 +213,24 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 				scopes = append(scopes, "work-order:"+gatewayWorkOrderID)
 			}
 		}
+		if taskCollection {
+			action = string(workorderauth.ActionTaskList)
+			scopes = append(scopes, "work-order:"+gatewayWorkOrderID)
+			if request.Method == http.MethodPost {
+				header = workOrderWriteContextHeader
+				action = string(workorderauth.ActionTaskAppend)
+			}
+		}
+		if taskStatus {
+			header = workOrderWriteContextHeader
+			action = string(workorderauth.ActionTaskStatus)
+			scopes = append(scopes, "work-order:"+gatewayWorkOrderID, "task:"+gatewayWorkOrderTaskOneID)
+		}
+		if taskReorder {
+			header = workOrderWriteContextHeader
+			action = string(workorderauth.ActionTaskReorder)
+			scopes = append(scopes, "work-order:"+gatewayWorkOrderID)
+		}
 		claims, verifyErr := identitycontext.VerifyDelegation(signer.Public(), request.Header.Get(header))
 		preconditionActionOK := !precondition
 		if precondition && verifyErr == nil && len(claims.Actions) == 1 {
@@ -221,6 +244,47 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 			writer.Header().Set("Content-Type", "application/problem+json")
 			writer.WriteHeader(http.StatusForbidden)
 			_ = json.NewEncoder(writer).Encode(upstreamWorkOrderProblem{Type: "https://example.test/problems/work-order-access-denied", Title: "denied", Status: http.StatusForbidden, Detail: "denied", Code: "WORK_ORDER_ACCESS_DENIED"})
+			return
+		}
+		if taskCollection || taskStatus || taskReorder {
+			siteID := gatewayWorkOrderSiteID
+			if fixture.crossSite.Load() {
+				siteID = gatewayWorkOrderOtherSiteID
+			}
+			tasks := []workordermodel.Task{{
+				TaskID: gatewayWorkOrderTaskOneID, Position: 0, Title: "Inspect fan bearings", Status: workordermodel.TaskStatusOpen, Version: 1,
+				CreatedAt: "2026-08-01T10:01:00Z", UpdatedAt: "2026-08-01T10:01:00Z",
+			}}
+			checklist := workordermodel.TaskChecklist{
+				SchemaVersion: workordermodel.SchemaVersion, OrganizationID: gatewayWorkOrderOrganizationID, SiteID: siteID,
+				WorkOrderID: gatewayWorkOrderID, WorkOrderVersion: 2, Summary: workordermodel.TaskSummary{Total: 1}, Tasks: tasks,
+			}
+			if taskStatus {
+				checklist.Tasks[0].Status = workordermodel.TaskStatusCompleted
+				checklist.Tasks[0].Version = 2
+				checklist.Tasks[0].UpdatedAt = "2026-08-01T10:02:00Z"
+				checklist.Summary.Completed = 1
+			}
+			if taskReorder {
+				var input publicReorderTasksRequest
+				_ = json.Unmarshal(body, &input)
+				byID := map[string]workordermodel.Task{
+					gatewayWorkOrderTaskOneID: {TaskID: gatewayWorkOrderTaskOneID, Title: "Inspect fan bearings", Status: workordermodel.TaskStatusCompleted, Version: 2, CreatedAt: "2026-08-01T10:01:00Z", UpdatedAt: "2026-08-01T10:03:00Z"},
+					gatewayWorkOrderTaskTwoID: {TaskID: gatewayWorkOrderTaskTwoID, Title: "Record vibration", Status: workordermodel.TaskStatusOpen, Version: 2, CreatedAt: "2026-08-01T10:01:30Z", UpdatedAt: "2026-08-01T10:03:00Z"},
+				}
+				checklist.Tasks = make([]workordermodel.Task, len(input.TaskIDs))
+				for index, taskID := range input.TaskIDs {
+					task := byID[taskID]
+					task.Position = uint64(index)
+					checklist.Tasks[index] = task
+				}
+				checklist.Summary = workordermodel.TaskSummary{Total: 2, Completed: 1}
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			if action == string(workorderauth.ActionTaskAppend) {
+				writer.WriteHeader(http.StatusCreated)
+			}
+			_ = json.NewEncoder(writer).Encode(checklist)
 			return
 		}
 		workOrder := validGatewayWorkOrder(gatewayWorkOrderSiteID)

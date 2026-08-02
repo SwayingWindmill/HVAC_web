@@ -1,5 +1,5 @@
 {
-  "routeRegistryRevision": 18,
+  "routeRegistryRevision": 19,
   "routes": {
     "GET /api/v1/health": {
       "revision": 1,
@@ -214,6 +214,22 @@
       "owner": "work-order-service"
     },
     "POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:reopen": {
+      "revision": 1,
+      "owner": "work-order-service"
+    },
+    "GET /api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks": {
+      "revision": 1,
+      "owner": "work-order-service"
+    },
+    "POST /api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks": {
+      "revision": 1,
+      "owner": "work-order-service"
+    },
+    "POST /api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks/{taskId}:status": {
+      "revision": 1,
+      "owner": "work-order-service"
+    },
+    "POST /api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks:reorder": {
       "revision": 1,
       "owner": "work-order-service"
     }

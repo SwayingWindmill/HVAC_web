@@ -288,7 +288,10 @@
     "s5:work-order:create-assign": "node scripts/run-capability-task.mjs --task=s5:work-order:create-assign",
     "s5:work-order:lifecycle:check": "node scripts/check-s5-work-order-lifecycle.mjs",
     "s5:work-order:lifecycle:browser": "node scripts/run-s5-work-order-lifecycle-browser-audit.mjs",
-    "s5:work-order:lifecycle": "node scripts/run-capability-task.mjs --task=s5:work-order:lifecycle"
+    "s5:work-order:lifecycle": "node scripts/run-capability-task.mjs --task=s5:work-order:lifecycle",
+    "s5:work-order:tasks:check": "node scripts/check-s5-work-order-tasks.mjs",
+    "s5:work-order:tasks:browser": "node scripts/run-s5-work-order-task-browser-audit.mjs",
+    "s5:work-order:tasks": "node scripts/run-capability-task.mjs --task=s5:work-order:tasks"
   },
   "engines": {
     "node": ">=22.22.0"

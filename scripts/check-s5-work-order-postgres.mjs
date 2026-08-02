@@ -6,28 +6,34 @@ const readText = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await readText(path));
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
-const [routes, data, storeRead, storeMutation, cursor, http, main, migration001, migration002, migration003, roles, seed, compose, runner, workflow] = await Promise.all([
+const [routes, data, storeRead, storeMutation, storeTasks, cursor, http, httpTasks, main, migration001, migration002, migration003, migration004, roles, seed, compose, runner, workflow] = await Promise.all([
   readJSON('contracts/ownership/route-ownership.v1.json'),
   readJSON('contracts/ownership/data-ownership.v1.json'),
   readText('services/work-order-service/pkg/workorderservice/postgres.go'),
   readText('services/work-order-service/pkg/workorderservice/postgres_mutation.go'),
+  readText('services/work-order-service/pkg/workorderservice/postgres_tasks.go'),
   readText('services/work-order-service/pkg/workorderservice/cursor.go'),
   readText('services/work-order-service/pkg/workorderservice/http.go'),
+  readText('services/work-order-service/pkg/workorderservice/http_tasks.go'),
   readText('services/work-order-service/cmd/work-order-service/main.go'),
   readText('services/work-order-service/migrations/001_s5_work_order_runtime.sql'),
   readText('services/work-order-service/migrations/002_s5_work_order_create_assignment.sql'),
   readText('services/work-order-service/migrations/003_s5_work_order_lifecycle.sql'),
+  readText('services/work-order-service/migrations/004_s5_work_order_task_checklist.sql'),
   readText('services/work-order-service/testdata/postgres/000_roles.sql'),
   readText('services/work-order-service/testdata/postgres/010_seed.sql'),
   readText('infra/s5-work-order/compose.yaml'),
   readText('scripts/run-s5-work-order-postgres-tests.mjs'),
   readText('.github/workflows/s5-work-order-postgres.yml'),
 ]);
-const store = storeRead + '\n' + storeMutation;
-const migration = migration001 + '\n' + migration002 + '\n' + migration003;
+const store = storeRead + '\n' + storeMutation + '\n' + storeTasks;
+const migration = migration001 + '\n' + migration002 + '\n' + migration003 + '\n' + migration004;
 
-const workOrderRoutes = routes.routes.filter((route) => route.method === 'GET' && route.path.includes('/work-orders'));
-assert(workOrderRoutes.length === 2, 'S5 Work Order must expose exactly list and detail GET ownership entries');
+const baseReadPaths = new Set(['/api/v1/sites/{siteId}/work-orders', '/api/v1/sites/{siteId}/work-orders/{workOrderId}']);
+const workOrderRoutes = routes.routes.filter((route) => route.method === 'GET' && baseReadPaths.has(route.path));
+assert(workOrderRoutes.length === 2, 'S5 Work Order must preserve exactly list and detail base GET ownership entries');
+const taskReadRoute = routes.routes.find((route) => route.method === 'GET' && route.path === '/api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks');
+assert(taskReadRoute?.owner === 'work-order-service' && taskReadRoute?.publicIngress === 'platform-gateway' && taskReadRoute?.migrationPhase === 'S5-R1-internal-task-checklist' && taskReadRoute?.rollout?.percentage === 1 && taskReadRoute?.readOnlyFallback === false, 'S5 Work Order task GET ownership is missing or not no-fallback 1%');
 for (const route of workOrderRoutes) {
   assert(route.method === 'GET', `S5 Work Order mutation route leaked: ${route.method} ${route.path}`);
   assert(route.owner === 'work-order-service' && route.publicIngress === 'platform-gateway', `S5 Work Order owner or ingress drifted: ${route.path}`);
@@ -62,6 +68,8 @@ assert(http.includes('WorkOrderListAction') && http.includes('WorkOrderReadActio
 assert(http.includes('sameStringSet(claims.Scopes, expectedScopes)'), 'Work Order internal read context is not exact-scope');
 assert(http.includes('WorkOrderWriteContextHeader') && http.includes('WorkOrderCreateAction') && http.includes('WorkOrderAssignAction'), 'Work Order reviewed mutation boundary is missing');
 assert(http.includes('Idempotency-Key') && http.includes('ExpectedVersion'), 'Work Order mutation idempotency or optimistic concurrency is missing');
+for (const action of ['work-order:task:list', 'work-order:task:append', 'work-order:task:status', 'work-order:task:reorder']) assert(http.includes(action) || httpTasks.includes(action), 'Work Order internal task boundary lacks ' + action);
+assert(httpTasks.includes('ExpectedWorkOrderVersion') && httpTasks.includes('ExpectedTaskVersion') && httpTasks.includes('sameTaskOrder'), 'Work Order task HTTP boundary lacks dual-version or exact-order enforcement');
 for (const action of ['plan', 'start', 'block', 'resume', 'complete', 'cancel', 'reopen']) assert(http.includes('work-order:' + action), 'Work Order internal lifecycle boundary lacks ' + action);
 assert(main.includes('workloadtls.NewServerTLSConfig') && main.includes('peerSPIFFE(request) != gatewaySPIFFE'), 'Work Order service does not enforce Gateway mTLS identity');
 assert(main.includes('WORK_ORDER_CURSOR_SECRET_FILE') && main.includes('WORK_ORDER_DATABASE_URL_FILE') && main.includes('WORK_ORDER_MUTATION_DATABASE_URL_FILE'), 'Work Order service does not load protected read/write runtime references from files');
@@ -72,6 +80,7 @@ for (const table of ['work_order_current', 'work_order_source_reference', 'work_
 assert(migration001.includes('FORCE ROW LEVEL SECURITY') && migration001.includes('GRANT SELECT ON ALL TABLES'), 'Work Order read migration lacks FORCE RLS or read-only grants');
 assert(migration002.includes('FORCE ROW LEVEL SECURITY') && migration002.includes('GRANT UPDATE (assignee_id, team_id, version, updated_at)'), 'Work Order mutation migration lacks FORCE RLS or bounded assignment grants');
 assert(migration003.includes('GRANT UPDATE (status, scheduled_start, due_at, version, updated_at)') && migration003.includes('GRANT INSERT ON work_order_runtime.work_order_completion_evidence'), 'Work Order lifecycle migration lacks bounded current or evidence grants');
+assert(migration004.includes('GRANT UPDATE (task_total, task_completed, task_blocked, version, updated_at)') && migration004.includes('GRANT INSERT ON work_order_runtime.work_order_task') && migration004.includes('GRANT UPDATE (position, status, version, updated_at)'), 'Work Order task migration lacks bounded task grants');
 const readRuntimeGrants = migration.split(/\r?\n/).filter((line) => line.includes('TO s5_work_order_runtime'));
 assert(!readRuntimeGrants.some((line) => /GRANT (INSERT|UPDATE|DELETE|ALL)/.test(line)), 'Work Order read runtime was granted mutation authority');
 assert(migration.includes('s5_work_order_writer') && migration.includes('work_order_idempotency') && migration.includes('work_order_mutation_audit'), 'Work Order writer authority or durable mutation evidence is missing');
@@ -79,7 +88,7 @@ assert(!migration.includes('GRANT DELETE') && !migration.includes('GRANT ALL'), 
 assert(roles.includes('s5_work_order_service LOGIN') && roles.includes('GRANT s5_work_order_runtime TO s5_work_order_service'), 'Work Order fixture lacks explicit read role activation');
 assert(roles.includes('s5_work_order_mutation_service LOGIN') && roles.includes('GRANT s5_work_order_writer TO s5_work_order_mutation_service'), 'Work Order fixture lacks isolated writer role activation');
 assert(seed.includes("'01920000-0000-7000-8000-000000000002'") && seed.includes('work_order_completion_evidence'), 'Work Order fixture lacks cross-Organization or completion evidence coverage');
-assert(compose.includes('postgres:16.4-bookworm@sha256:') && compose.includes('S5_POSTGRES_HOST_PORT'), 'Work Order PostgreSQL fixture is not pinned or isolated');
+assert(compose.includes('postgres:16.4-bookworm@sha256:') && compose.includes('S5_POSTGRES_HOST_PORT') && compose.includes('004_s5_work_order_task_checklist.sql'), 'Work Order PostgreSQL fixture is not pinned, isolated or task-aware');
 const goWorkTriggers = (workflow.match(/^\s+- 'go\.work'$/gm) ?? []).length;
 const goWorkSumTriggers = (workflow.match(/^\s+- 'go\.work\.sum'$/gm) ?? []).length;
 assert(goWorkTriggers === 2 && goWorkSumTriggers === 2, 'Work Order PostgreSQL workflow must run when the root Go workspace changes');

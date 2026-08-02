@@ -288,7 +288,7 @@ func hydrateProjection(ctx context.Context, tx pgx.Tx, record currentRecord) (wo
 
 	timelineRows, err := tx.Query(ctx, `
 		SELECT operation, from_status, to_status, reason, actor_type, actor_id,
-		       assignee_id, team_id, policy_revision, correlation_id, occurred_at, version
+		       assignee_id, team_id, task_id, policy_revision, correlation_id, occurred_at, version
 		FROM work_order_runtime.work_order_timeline
 		WHERE organization_id = $1 AND site_id = $2 AND work_order_id = $3
 		ORDER BY version ASC
@@ -298,11 +298,11 @@ func hydrateProjection(ctx context.Context, tx pgx.Tx, record currentRecord) (wo
 	}
 	for timelineRows.Next() {
 		var event workordermodel.TimelineEvent
-		var fromStatus, assigneeID, teamID, policyRevision, correlationID sql.NullString
+		var fromStatus, assigneeID, teamID, taskID, policyRevision, correlationID sql.NullString
 		var occurredAt time.Time
 		if err := timelineRows.Scan(
 			&event.Operation, &fromStatus, &event.ToStatus, &event.Reason, &event.ActorType, &event.ActorID,
-			&assigneeID, &teamID, &policyRevision, &correlationID, &occurredAt, &event.Version,
+			&assigneeID, &teamID, &taskID, &policyRevision, &correlationID, &occurredAt, &event.Version,
 		); err != nil {
 			timelineRows.Close()
 			return workordermodel.WorkOrder{}, fmt.Errorf("scan Work Order timeline: %w", err)
@@ -313,6 +313,7 @@ func hydrateProjection(ctx context.Context, tx pgx.Tx, record currentRecord) (wo
 		}
 		event.AssigneeID = nullableStringPointer(assigneeID)
 		event.TeamID = nullableStringPointer(teamID)
+		event.TaskID = nullableStringPointer(taskID)
 		event.PolicyRevision = nullableStringPointer(policyRevision)
 		event.CorrelationID = nullableStringPointer(correlationID)
 		event.OccurredAt = occurredAt.UTC().Format(time.RFC3339Nano)

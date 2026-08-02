@@ -118,7 +118,9 @@ ORDER BY site_id, action, effect
 			permission.Action != workorderauth.ActionPlan && permission.Action != workorderauth.ActionStart &&
 			permission.Action != workorderauth.ActionBlock && permission.Action != workorderauth.ActionResume &&
 			permission.Action != workorderauth.ActionComplete && permission.Action != workorderauth.ActionCancel &&
-			permission.Action != workorderauth.ActionReopen {
+			permission.Action != workorderauth.ActionReopen && permission.Action != workorderauth.ActionTaskList &&
+			permission.Action != workorderauth.ActionTaskAppend && permission.Action != workorderauth.ActionTaskStatus &&
+			permission.Action != workorderauth.ActionTaskReorder {
 			return nil, fmt.Errorf("validate IAM Work Order permission action: unsupported action %q", action)
 		}
 		permissions = append(permissions, permission)
@@ -182,7 +184,10 @@ func (store *PostgresAuthorizationStore) RecordWorkOrderDecision(ctx context.Con
 	if event.WorkOrderID != "" {
 		workOrderID = event.WorkOrderID
 	}
-	var assigneeID, teamID any
+	var taskID, assigneeID, teamID any
+	if event.TaskID != "" {
+		taskID = event.TaskID
+	}
 	if event.AssigneeID != nil {
 		assigneeID = *event.AssigneeID
 	}
@@ -191,10 +196,10 @@ func (store *PostgresAuthorizationStore) RecordWorkOrderDecision(ctx context.Con
 	}
 	if _, err := transaction.Exec(ctx, `
 INSERT INTO iam.work_order_authorization_decisions
-  (principal_id, acting_organization_id, site_id, work_order_id, assignee_id, team_id, action, allowed, policy_revision, reason_code, request_id, trace_id, occurred_at)
+  (principal_id, acting_organization_id, site_id, work_order_id, task_id, assignee_id, team_id, action, allowed, policy_revision, reason_code, request_id, trace_id, occurred_at)
 VALUES
-  ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13::timestamptz)
-`, principalID, event.ActingOrganizationID, event.SiteID, workOrderID, assigneeID, teamID, string(event.Action), event.Allowed,
+  ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, $10, $11, $12, $13, $14::timestamptz)
+`, principalID, event.ActingOrganizationID, event.SiteID, workOrderID, taskID, assigneeID, teamID, string(event.Action), event.Allowed,
 		event.PolicyRevision, string(event.ReasonCode), event.RequestID, event.TraceID, event.OccurredAt); err != nil {
 		return fmt.Errorf("insert IAM Work Order decision audit: %w", err)
 	}

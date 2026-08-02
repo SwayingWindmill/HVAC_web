@@ -38,7 +38,7 @@ func (h *handler) handleWorkOrderDecision(writer http.ResponseWriter, request *h
 	}
 	if h.workOrderAuditSink.RecordWorkOrderDecision(request.Context(), WorkOrderDecisionAudit{
 		PrincipalID: decision.PrincipalID, ActingOrganizationID: decision.ActingOrganizationID,
-		SiteID: decision.SiteID, WorkOrderID: decision.WorkOrderID, AssigneeID: decision.AssigneeID, TeamID: decision.TeamID,
+		SiteID: decision.SiteID, WorkOrderID: decision.WorkOrderID, TaskID: decision.TaskID, AssigneeID: decision.AssigneeID, TeamID: decision.TeamID,
 		Action: decision.Action, Allowed: decision.Allowed,
 		PolicyRevision: decision.PolicyRevision, ReasonCode: decision.ReasonCode,
 		RequestID: requestID, TraceID: traceID, OccurredAt: formatInstant(h.now()),

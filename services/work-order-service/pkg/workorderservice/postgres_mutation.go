@@ -305,10 +305,10 @@ func insertPostgresTimeline(ctx context.Context, tx pgx.Tx, workOrder workorderm
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO work_order_runtime.work_order_timeline (
 			organization_id, site_id, work_order_id, version, operation, from_status, to_status,
-			reason, actor_type, actor_id, assignee_id, team_id, policy_revision, correlation_id, occurred_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+			reason, actor_type, actor_id, assignee_id, team_id, task_id, policy_revision, correlation_id, occurred_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 	`, workOrder.OrganizationID, workOrder.SiteID, workOrder.WorkOrderID, event.Version, string(event.Operation), nullableStatus(event.FromStatus), string(event.ToStatus),
-		event.Reason, event.ActorType, event.ActorID, event.AssigneeID, event.TeamID, event.PolicyRevision, event.CorrelationID, event.OccurredAt); err != nil {
+		event.Reason, event.ActorType, event.ActorID, event.AssigneeID, event.TeamID, event.TaskID, event.PolicyRevision, event.CorrelationID, event.OccurredAt); err != nil {
 		return fmt.Errorf("insert Work Order timeline event: %w", err)
 	}
 	return nil

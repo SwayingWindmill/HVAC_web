@@ -98,6 +98,8 @@ func dispatchWorkOrderRoute(h *handler, writer http.ResponseWriter, request *htt
 			return
 		}
 		dispatchWorkOrderLifecycleRoute(h, writer, request, route)
+	case publicWorkOrderTaskCollection, publicWorkOrderTaskStatus, publicWorkOrderTaskReorder:
+		dispatchWorkOrderTaskRoute(h, writer, request, route)
 	default:
 		writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested public API route does not exist.", false, nil)
 	}
@@ -315,6 +317,9 @@ func (h *handler) signWorkOrderWriteContext(session bffSession, route publicWork
 	if route.workOrderID != "" {
 		scopes = append(scopes, "work-order:"+route.workOrderID)
 	}
+	if route.taskID != "" {
+		scopes = append(scopes, "task:"+route.taskID)
+	}
 	if idempotencyKey != "" {
 		scopes = append(scopes, workOrderMutationKeyScope(idempotencyKey))
 	}
@@ -406,7 +411,7 @@ func mapWorkOrderMutationProblem(status int, body []byte) workOrderFailure {
 			return workOrderUnavailable("Work Order Service returned an unsupported conflict response.")
 		}
 	case http.StatusUnprocessableEntity:
-		if upstream.Code != "WORK_ORDER_CREATE_INVALID" && upstream.Code != "WORK_ORDER_ASSIGNMENT_INVALID" && upstream.Code != "WORK_ORDER_LIFECYCLE_INVALID" {
+		if upstream.Code != "WORK_ORDER_CREATE_INVALID" && upstream.Code != "WORK_ORDER_ASSIGNMENT_INVALID" && upstream.Code != "WORK_ORDER_LIFECYCLE_INVALID" && upstream.Code != "WORK_ORDER_TASK_INVALID" {
 			return workOrderUnavailable("Work Order Service returned an unsupported validation response.")
 		}
 		return workOrderFailure{status: status, code: upstream.Code, title: "Work Order mutation invalid", detail: "The Work Order mutation violates the authoritative contract."}

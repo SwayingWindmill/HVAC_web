@@ -77,7 +77,7 @@ func evaluateWorkOrderAuthorization(ctx context.Context, store WorkOrderAuthoriz
 	}
 	decision := workorderauth.Decision{
 		SubjectIssuer: subjectIssuer, Subject: subject,
-		ActingOrganizationID: request.ActingOrganizationID, SiteID: request.SiteID, WorkOrderID: request.WorkOrderID,
+		ActingOrganizationID: request.ActingOrganizationID, SiteID: request.SiteID, WorkOrderID: request.WorkOrderID, TaskID: request.TaskID,
 		AssigneeID: request.AssigneeID, TeamID: request.TeamID,
 		Action: request.Action, PolicyRevision: facts.PolicyRevision, ReasonCode: workorderauth.ReasonDenyPrincipal,
 		DecidedAt: now.UTC().Format(time.RFC3339Nano),

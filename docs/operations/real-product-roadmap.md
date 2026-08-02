@@ -1,6 +1,6 @@
 # HVAC Web Real Product Roadmap
 
-Status date: 2026-08-01
+Status date: 2026-08-02
 
 Tracking map: GitHub issue #166
 
@@ -10,14 +10,14 @@ Deliver an authoritative, Site-scoped HVAC operations product in which every vis
 
 ## Current delivery state
 
-| Sequence | Product area | Status on 2026-08-01 | Current evidence |
+| Sequence | Product area | Status on 2026-08-02 | Current evidence |
 | --- | --- | --- | --- |
 | 1 | Real Assets | Merged and certified | PR #182 completed the authoritative Site asset workspace and 200-Device browser certification. |
 | 2 | Real Dashboard | Merged | PR #165 delivered the authoritative default Site overview with full release gates. |
 | 3 | Complete Energy | Merged | PR #167 delivered calendar workspaces, comparisons, drill-down, and protected query lifecycle. |
 | 4 | Real Commands | Merged | PR #169 delivered authoritative Site scope, local-only governed Command evidence, and a production-disabled control boundary. |
 | 5 | Alarm | P1–P4 merged | PR #188 added the formal read-promotion evidence gate without changing the exact 1% internal no-fallback read canary; every lifecycle POST remains disabled at 0%. |
-| 6 | Work Order | P1–P4 merged; P5 certifying | PR #217 delivered governed create and assignment. Issue #220 adds only the fixed plan/start/block/resume/complete/cancel/reopen graph under a third independent 1% internal cohort, with exact idempotency, optimistic concurrency, typed completion evidence, and all collaboration/link writes absent. |
+| 6 | Work Order | P1–P5 merged; P6 certifying | PR #217 delivered governed create and assignment, and Issue #220 delivered the fixed lifecycle graph. Issue #226 adds only the ordered task checklist under a fourth independent 1% internal cohort, with exact replay, Work Order and Task version checks, exact full reordering, and task deletion/title editing absent. |
 | 7 | FDD | Planned | Requires governed evidence from Assets, Telemetry, Energy, Alarm, and Work Order. |
 | 8 | Optimization | Planned | Requires FDD and Energy evidence plus explicit safety and approval boundaries. |
 | 9 | Cost & Carbon | Planned | Requires stable Energy intervals and versioned tariff and emission-factor authority. |
@@ -146,7 +146,7 @@ P4 governed creation and assignment merged:
 - Gateway exposes only collection create and `:assign`, requires CSRF and idempotency, signs exact short-lived write context, and rejects browser authority headers.
 - Work Order Service owns ID, initial state, timestamps, version, actor, and timeline; assignment preserves status and increments version once.
 
-P5 governed lifecycle graph in certification:
+P5 governed lifecycle graph merged:
 
 - IAM authorizes exact plan, start, block, resume, complete, cancel, or reopen action scope; explicit deny wins.
 - Gateway exposes exactly seven action POST routes, binds Origin CSRF and hashed idempotency-key scope into the server-to-server write context, and rejects downstream transition drift.
@@ -154,8 +154,17 @@ P5 governed lifecycle graph in certification:
 - The isolated writer commits current status or plan, timeline, completion evidence with completion version, idempotency snapshot, and mutation audit atomically under FORCE RLS.
 - Lifecycle routes use a separate stable 1% no-fallback/no-shadow cohort. Read and create/assign cohorts remain independently governed.
 - Browser certification covers the legal graph, exact replay, illegal and stale transitions, missing evidence, denial cleanup, cross-Site and Session boundaries, and collaboration-route absence.
-- A separate mutation login activates a least-privilege writer role. Projection, source, timeline, idempotency, and audit evidence commit atomically under FORCE RLS.
-- Both writes share one stable 1% no-fallback/no-shadow cohort. Browser evidence proves exact retry, stale conflict, denial cleanup, cross-Site nondiscovery, Session purge, and absence of every other lifecycle route.
+
+P6 governed ordered task checklist in certification:
+
+- IAM authorizes exact task list, append, status, and reorder actions. Task status decisions bind the exact Task identity; explicit deny wins.
+- Gateway exposes only task list/append, `tasks/{taskId}:status`, and `tasks:reorder`, requires CSRF and a bounded idempotency key for writes, and validates the complete returned checklist.
+- Work Order Service owns UUIDv7 Task identity, append-only title, exact position, `OPEN | BLOCKED | COMPLETED` status, Task version, Work Order version, timestamps, and task-summary convergence.
+- Append, status, and reorder share one `TASK` idempotency domain. Exact retries return the original checklist after restart; cross-action or changed-payload key reuse conflicts.
+- Status writes require both expected Work Order and Task versions. Reorder requires one exact full permutation with no duplicates, omissions, additions, or no-op ordering.
+- Task rows, Work Order summary/version, timeline, idempotency snapshot, and mutation audit commit atomically under FORCE RLS with no delete or title-update privilege.
+- Task routes use a fourth independent stable 1% no-fallback/no-shadow cohort. Browser certification covers exact replay, dual-version conflict, full permutation, denial cleanup, cross-Site and Session boundaries, and absence of delete/title-edit routes.
+
 
 Exit criteria:
 
@@ -229,4 +238,4 @@ The Operations Agent and Platform/System Management are parallel programs rather
 
 ## Immediate next action
 
-Complete and merge Work Order P5 governed lifecycle while keeping tasks, notes, attachments, collaboration, notifications, SLA automation, title/source/priority/assignment changes, and Alarm link/unlink absent. The next Work Order slice must be separately reviewed; Alarm lifecycle rollout remains independently governed.
+Complete and merge Work Order P6 governed ordered task checklist while keeping task deletion and title editing, notes, attachments, collaboration, notifications, SLA automation, title/source/priority/assignment changes, and Alarm link/unlink absent. Every later Work Order write slice remains separately reviewed; Alarm lifecycle rollout remains independently governed.

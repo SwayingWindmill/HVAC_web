@@ -265,13 +265,14 @@ func TestPostgresWorkOrderAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !facts.Found || facts.Principal.ID != postgresOwnerAPrincipalID || facts.PolicyRevision != "work-order-access:1" || len(facts.Permissions) != 11 || len(facts.Targets) != 2 {
+	if !facts.Found || facts.Principal.ID != postgresOwnerAPrincipalID || facts.PolicyRevision != "work-order-access:2" || len(facts.Permissions) != 15 || len(facts.Targets) != 2 {
 		t.Fatalf("Work Order facts = %#v", facts)
 	}
 	expectedActions := map[workorderauth.Action]bool{
 		workorderauth.ActionList: false, workorderauth.ActionRead: false, workorderauth.ActionCreate: false, workorderauth.ActionAssign: false,
 		workorderauth.ActionPlan: false, workorderauth.ActionStart: false, workorderauth.ActionBlock: false, workorderauth.ActionResume: false,
 		workorderauth.ActionComplete: false, workorderauth.ActionCancel: false, workorderauth.ActionReopen: false,
+		workorderauth.ActionTaskList: false, workorderauth.ActionTaskAppend: false, workorderauth.ActionTaskStatus: false, workorderauth.ActionTaskReorder: false,
 	}
 	for _, permission := range facts.Permissions {
 		if permission.OrganizationID != postgresOwnerAOrganizationID || permission.SiteID != postgresOwnerASite1ID || permission.Effect != iam.BindingEffectAllow || permission.Status != iam.FactStatusActive {
@@ -321,6 +322,25 @@ func TestPostgresWorkOrderAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *te
 	}
 	if !allowed || policyRevision != "work-order-access:1" || reasonCode != string(workorderauth.ReasonAllowExactScope) || workOrderID != "01910000-1000-7000-8000-000000000001" {
 		t.Fatalf("durable Work Order decision = allowed=%v policy=%q reason=%q workOrder=%q", allowed, policyRevision, reasonCode, workOrderID)
+	}
+
+	taskRequestID := "work-order-postgres-task-decision-1"
+	taskID := "01910000-4000-7000-8000-000000000001"
+	if err := store.RecordWorkOrderDecision(ctx, iam.WorkOrderDecisionAudit{
+		PrincipalID: postgresOwnerAPrincipalID, ActingOrganizationID: postgresOwnerAOrganizationID,
+		SiteID: postgresOwnerASite1ID, WorkOrderID: "01910000-1000-7000-8000-000000000001", TaskID: taskID,
+		Action: workorderauth.ActionTaskStatus, Allowed: true, PolicyRevision: "work-order-access:2", ReasonCode: workorderauth.ReasonAllowExactScope,
+		RequestID: taskRequestID, TraceID: "trace-work-order-task-postgres-1", OccurredAt: "2026-08-02T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Exec(context.Background(), `DELETE FROM iam.work_order_authorization_decisions WHERE request_id = $1`, taskRequestID)
+	var durableTaskID string
+	if err := admin.QueryRow(ctx, `SELECT task_id::text FROM iam.work_order_authorization_decisions WHERE request_id = $1`, taskRequestID).Scan(&durableTaskID); err != nil {
+		t.Fatal(err)
+	}
+	if durableTaskID != taskID {
+		t.Fatalf("durable Work Order task decision task=%q", durableTaskID)
 	}
 }
 

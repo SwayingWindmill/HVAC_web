@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "S5 Work Order Public Read API",
-    "version": "0.2.0-internal-read-only",
-    "description": "Authoritative Site-scoped Work Order contract. Public list and detail routes are active for the no-fallback 1% internal read canary; lifecycle writes are intentionally excluded until separately governed."
+    "title": "S5 Work Order Public API",
+    "version": "0.3.0-governed-task-checklist",
+    "description": "Authoritative Site-scoped Work Order contract. Read, create/assignment, lifecycle and ordered task checklist routes use independent no-fallback 1% internal canaries."
   },
   "paths": {
     "/api/v1/sites/{siteId}/work-orders": {
@@ -126,9 +126,15 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Authoritative Work Order creation.",
+          "200": {
+            "description": "Exact idempotent retry of an already committed Work Order creation.",
             "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              },
               "Cache-Control": {
                 "schema": {
                   "type": "string",
@@ -144,15 +150,9 @@
               }
             }
           },
-          "200": {
-            "description": "Exact idempotent retry of an already committed Work Order creation.",
+          "201": {
+            "description": "Authoritative Work Order creation.",
             "headers": {
-              "Idempotency-Replayed": {
-                "schema": {
-                  "type": "string",
-                  "const": "true"
-                }
-              },
               "Cache-Control": {
                 "schema": {
                   "type": "string",
@@ -938,6 +938,331 @@
           }
         }
       }
+    },
+    "/api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks": {
+      "get": {
+        "operationId": "listWorkOrderTasks",
+        "x-owner": "work-order-service",
+        "x-public-ingress": "platform-gateway",
+        "x-production-traffic-percent": 1,
+        "x-migration-phase": "S5-R1-internal-task-checklist",
+        "x-iam-action": "work-order:task:list",
+        "x-no-fallback": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SiteId"
+          },
+          {
+            "$ref": "#/components/parameters/WorkOrderId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authoritative ordered Work Order task checklist.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkOrderTaskChecklist"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "appendWorkOrderTask",
+        "x-owner": "work-order-service",
+        "x-public-ingress": "platform-gateway",
+        "x-production-traffic-percent": 1,
+        "x-migration-phase": "S5-R1-internal-task-checklist",
+        "x-iam-action": "work-order:task:append",
+        "x-no-fallback": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SiteId"
+          },
+          {
+            "$ref": "#/components/parameters/WorkOrderId"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppendWorkOrderTaskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Exact idempotent replay of the original task append checklist.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkOrderTaskChecklist"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Authoritative task append.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkOrderTaskChecklist"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks/{taskId}:status": {
+      "post": {
+        "operationId": "setWorkOrderTaskStatus",
+        "x-owner": "work-order-service",
+        "x-public-ingress": "platform-gateway",
+        "x-production-traffic-percent": 1,
+        "x-migration-phase": "S5-R1-internal-task-checklist",
+        "x-iam-action": "work-order:task:status",
+        "x-no-fallback": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SiteId"
+          },
+          {
+            "$ref": "#/components/parameters/WorkOrderId"
+          },
+          {
+            "$ref": "#/components/parameters/TaskId"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetWorkOrderTaskStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authoritative task status change or exact idempotent replay.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkOrderTaskChecklist"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks:reorder": {
+      "post": {
+        "operationId": "reorderWorkOrderTasks",
+        "x-owner": "work-order-service",
+        "x-public-ingress": "platform-gateway",
+        "x-production-traffic-percent": 1,
+        "x-migration-phase": "S5-R1-internal-task-checklist",
+        "x-iam-action": "work-order:task:reorder",
+        "x-no-fallback": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SiteId"
+          },
+          {
+            "$ref": "#/components/parameters/WorkOrderId"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReorderWorkOrderTasksRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authoritative exact full task permutation or exact idempotent replay.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkOrderTaskChecklist"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -952,6 +1277,14 @@
       },
       "WorkOrderId": {
         "name": "workOrderId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/UUIDv7"
+        }
+      },
+      "TaskId": {
+        "name": "taskId",
         "in": "path",
         "required": true,
         "schema": {
@@ -1014,7 +1347,10 @@
           "RESUME",
           "COMPLETE",
           "CANCEL",
-          "REOPEN"
+          "REOPEN",
+          "TASK_APPEND",
+          "TASK_STATUS",
+          "TASK_REORDER"
         ]
       },
       "WorkOrderSourceDomain": {
@@ -1169,6 +1505,9 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 256
+          },
+          "taskId": {
+            "$ref": "#/components/schemas/UUIDv7"
           }
         }
       },
@@ -1551,6 +1890,180 @@
             "maxItems": 256,
             "items": {
               "$ref": "#/components/schemas/WorkOrderEvidenceReference"
+            }
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        }
+      },
+      "WorkOrderTaskStatus": {
+        "type": "string",
+        "enum": [
+          "OPEN",
+          "BLOCKED",
+          "COMPLETED"
+        ]
+      },
+      "WorkOrderTask": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "taskId",
+          "position",
+          "title",
+          "status",
+          "version",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "taskId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 511
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkOrderTaskStatus"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "WorkOrderTaskChecklist": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "organizationId",
+          "siteId",
+          "workOrderId",
+          "workOrderVersion",
+          "summary",
+          "tasks"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "type": "integer",
+            "const": 1
+          },
+          "organizationId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "workOrderId": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "workOrderVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "summary": {
+            "$ref": "#/components/schemas/WorkOrderTaskSummary"
+          },
+          "tasks": {
+            "type": "array",
+            "maxItems": 512,
+            "items": {
+              "$ref": "#/components/schemas/WorkOrderTask"
+            }
+          }
+        }
+      },
+      "AppendWorkOrderTaskRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedWorkOrderVersion",
+          "title",
+          "reason"
+        ],
+        "properties": {
+          "expectedWorkOrderVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        }
+      },
+      "SetWorkOrderTaskStatusRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedWorkOrderVersion",
+          "expectedTaskVersion",
+          "status",
+          "reason"
+        ],
+        "properties": {
+          "expectedWorkOrderVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expectedTaskVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkOrderTaskStatus"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        }
+      },
+      "ReorderWorkOrderTasksRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedWorkOrderVersion",
+          "taskIds",
+          "reason"
+        ],
+        "properties": {
+          "expectedWorkOrderVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "taskIds": {
+            "type": "array",
+            "maxItems": 512,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/UUIDv7"
             }
           },
           "reason": {

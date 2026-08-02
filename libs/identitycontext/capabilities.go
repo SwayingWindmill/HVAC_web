@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const CapabilitySetVersion = 6
+const CapabilitySetVersion = 7
 
 type Capability string
 
@@ -30,6 +30,7 @@ const (
 	CapabilityWorkOrderCreate       Capability = "work-order.create"
 	CapabilityWorkOrderAssign       Capability = "work-order.assign"
 	CapabilityWorkOrderLifecycle    Capability = "work-order.lifecycle"
+	CapabilityWorkOrderTask         Capability = "work-order.task"
 )
 
 var supportedCapabilities = [...]Capability{
@@ -52,6 +53,7 @@ var supportedCapabilities = [...]Capability{
 	CapabilityWorkOrderCreate,
 	CapabilityWorkOrderAssign,
 	CapabilityWorkOrderLifecycle,
+	CapabilityWorkOrderTask,
 }
 
 func SupportedCapabilities() []Capability {
@@ -78,7 +80,8 @@ func (capability Capability) Valid() bool {
 		CapabilityWorkOrderRead,
 		CapabilityWorkOrderCreate,
 		CapabilityWorkOrderAssign,
-		CapabilityWorkOrderLifecycle:
+		CapabilityWorkOrderLifecycle,
+		CapabilityWorkOrderTask:
 		return true
 	default:
 		return false

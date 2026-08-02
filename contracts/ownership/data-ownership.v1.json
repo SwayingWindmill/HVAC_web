@@ -559,7 +559,8 @@
         "work_order_timeline",
         "work_order_idempotency",
         "work_order_mutation_audit",
-        "work_order_completion_evidence"
+        "work_order_completion_evidence",
+        "work_order_task"
       ]
     },
     {
@@ -787,7 +788,8 @@
         "work_order_timeline",
         "work_order_idempotency",
         "work_order_mutation_audit",
-        "work_order_completion_evidence"
+        "work_order_completion_evidence",
+        "work_order_task"
       ]
     },
     {
@@ -803,7 +805,8 @@
         "work_order_timeline",
         "work_order_idempotency",
         "work_order_mutation_audit",
-        "work_order_completion_evidence"
+        "work_order_completion_evidence",
+        "work_order_task"
       ]
     }
   ]

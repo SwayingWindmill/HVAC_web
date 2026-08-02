@@ -100,10 +100,12 @@ type idempotencyRecord struct {
 }
 
 type MemoryStore struct {
-	mu          sync.RWMutex
-	items       map[string]workordermodel.WorkOrder
-	cursor      *cursorCodec
-	idempotency map[string]idempotencyRecord
+	mu              sync.RWMutex
+	items           map[string]workordermodel.WorkOrder
+	tasks           map[string][]workordermodel.Task
+	cursor          *cursorCodec
+	idempotency     map[string]idempotencyRecord
+	taskIdempotency map[string]taskIdempotencyRecord
 }
 
 func NewMemoryStore(items []workordermodel.WorkOrder) (*MemoryStore, error) {
@@ -112,9 +114,11 @@ func NewMemoryStore(items []workordermodel.WorkOrder) (*MemoryStore, error) {
 		return nil, err
 	}
 	store := &MemoryStore{
-		items:       make(map[string]workordermodel.WorkOrder, len(items)),
-		cursor:      codec,
-		idempotency: make(map[string]idempotencyRecord),
+		items:           make(map[string]workordermodel.WorkOrder, len(items)),
+		tasks:           make(map[string][]workordermodel.Task, len(items)),
+		cursor:          codec,
+		idempotency:     make(map[string]idempotencyRecord),
+		taskIdempotency: make(map[string]taskIdempotencyRecord),
 	}
 	for _, item := range items {
 		if err := item.Validate(); err != nil {
@@ -464,6 +468,7 @@ func cloneStoredWorkOrder(item workordermodel.WorkOrder) workordermodel.WorkOrde
 		result.Timeline[index].FromStatus = cloneStatus(result.Timeline[index].FromStatus)
 		result.Timeline[index].AssigneeID = cloneString(result.Timeline[index].AssigneeID)
 		result.Timeline[index].TeamID = cloneString(result.Timeline[index].TeamID)
+		result.Timeline[index].TaskID = cloneString(result.Timeline[index].TaskID)
 		result.Timeline[index].PolicyRevision = cloneString(result.Timeline[index].PolicyRevision)
 		result.Timeline[index].CorrelationID = cloneString(result.Timeline[index].CorrelationID)
 	}

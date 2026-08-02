@@ -28,9 +28,15 @@ for (const action of actions) {
   const path = '/api/v1/sites/{siteId}/work-orders/{workOrderId}:' + action;
   assert(openapi.paths?.[path]?.post?.['x-iam-action'] === 'work-order:' + action, 'public lifecycle contract lacks ' + action);
 }
-for (const forbidden of ['/tasks', '/notes', '/attachments', ':link-alarm', ':unlink-alarm', ':add-note', ':attach', ':open', ':draft']) {
+for (const forbidden of ['/notes', '/attachments', ':link-alarm', ':unlink-alarm', ':add-note', ':attach', ':open', ':draft']) {
   assert(!Object.keys(openapi.paths ?? {}).some((path) => path.includes(forbidden)), 'unreviewed Work Order route leaked: ' + forbidden);
 }
+const reviewedTaskPaths = new Set([
+  '/api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks',
+  '/api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks/{taskId}:status',
+  '/api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks:reorder',
+]);
+assert(Object.keys(openapi.paths ?? {}).filter((path) => path.includes('/tasks')).every((path) => reviewedTaskPaths.has(path)), 'unreviewed Work Order task route leaked');
 const lifecycleRoutes = routes.routes.filter((route) => route.owner === 'work-order-service' && route.migrationPhase === 'S5-R1-internal-lifecycle');
 assert(lifecycleRoutes.length === 7, 'expected exactly seven lifecycle routes');
 assert(lifecycleRoutes.every((route) => route.method === 'POST' && route.rollout?.mode === 'percentage' && route.rollout?.percentage === 1 && route.rollout?.fallbackOwner === undefined && route.shadowSideEffectPolicy === 'NONE' && route.cohortGroup === 's5-work-order-lifecycle-v1'), 'lifecycle cohort is not stable no-fallback/no-shadow 1%');
@@ -48,7 +54,7 @@ assert(gatewayMutation.includes('X-CSRF-Token'), 'Gateway mutation session bound
 for (const marker of ['workOrderMutationKeyScope', 'executeWorkOrderLifecyclePrecondition', 'validPublicLifecycleProjection', 'validPublicLifecycleChange', 'last.Reason != mutation.reason', 'last.PolicyRevision', 'last.CorrelationID', 'evidenceSuffixMatches', 'Idempotency-Key']) assert(gatewayLifecycle.includes(marker), 'Gateway lifecycle boundary lacks ' + marker);
 assert(auth.includes('func MutationKeyScope') && auth.includes('return "key:"'), 'shared Work Order key scope contract is missing');
 for (const action of actions) assert(auth.includes('Action' + action[0].toUpperCase() + action.slice(1)), 'authorization contract lacks ' + action);
-assert(capabilities.includes('CapabilitySetVersion = 6') && capabilities.includes('CapabilityWorkOrderLifecycle'), 'capability v6 lifecycle contract is missing');
+assert(capabilities.includes('CapabilitySetVersion = 7') && capabilities.includes('CapabilityWorkOrderLifecycle'), 'capability v7 lifecycle/task contract is missing');
 assert(migration.includes("'LIFECYCLE'") && migration.includes('completion_version') && migration.includes('GRANT UPDATE (status, scheduled_start, due_at, version, updated_at)') && migration.includes('GRANT INSERT ON work_order_runtime.work_order_completion_evidence') && !migration.includes('GRANT DELETE') && !migration.includes('GRANT ALL'), 'lifecycle SQL authority is incomplete or broad');
 for (const marker of ['legal-lifecycle-graph', 'exact-idempotent-retry', 'cross-action-idempotency-conflict', 'illegal-transition', 'stale-version-conflict', 'missing-completion-evidence', 'authorization-denial-no-data', 'non-selected-session-route-absence', 'cross-site-nondiscovery', 'session-loss-purge', 'unreviewed-collaboration-absence', 'public-gateway-lifecycle-only']) assert(browser.includes(marker), 'browser audit lacks ' + marker);
 assert(workflow.includes('npm run s5:work-order:lifecycle') && workflow.includes('npm run contracts:check'), 'lifecycle workflow omits required gates');
