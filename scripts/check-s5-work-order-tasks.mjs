@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 
 const readText = (path) => readFile(path, 'utf8');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
-const [openapi, routes, data, model, tasks, store, postgres, http, gatewayBase, gatewayMutation, gatewayTasks, auth, capabilities, iamSQL, migration, browser, workflow, packageJSON, matrix] = await Promise.all([
+const [openapi, routes, data, model, tasks, store, postgres, http, gatewayBase, gatewayMutation, gatewayTasks, auth, capabilities, webPrincipalTemplate, webPrincipalGenerated, iamSQL, migration, browser, workflow, packageJSON, matrix] = await Promise.all([
   readText('contracts/http/s5-work-order-public.openapi.json'),
   readText('contracts/ownership/route-ownership.v1.json'),
   readText('contracts/ownership/data-ownership.v1.json'),
@@ -16,6 +16,8 @@ const [openapi, routes, data, model, tasks, store, postgres, http, gatewayBase, 
   readText('services/platform-gateway/internal/gateway/work_order_tasks.go'),
   readText('libs/workorderauth/authorization.go'),
   readText('libs/identitycontext/capabilities.go'),
+  readText('contracts/http/templates/platformGateway.ts.tmpl'),
+  readText('apps/hvac-web/src/api/generated/platformGateway.gen.ts'),
   readText('infra/s1-registry/postgres/init/009-s5-work-order-task-authorization.sql'),
   readText('services/work-order-service/migrations/004_s5_work_order_task_checklist.sql'),
   readText('scripts/run-s5-work-order-task-browser-audit.mjs'),
@@ -65,6 +67,9 @@ for (const marker of ['WorkOrderTaskListAction', 'WorkOrderTaskAppendAction', 'W
 for (const marker of ['matchPublicWorkOrderTaskRoute', 'dispatchWorkOrderTaskRoute', 'publicWorkOrderTaskStatus', 'gatewayTaskOrderMatches', '"task:"+route.taskID']) assert(gateway.includes(marker), `P6 Gateway marker missing: ${marker}`);
 for (const marker of ['ActionTaskList', 'ActionTaskAppend', 'ActionTaskStatus', 'ActionTaskReorder', 'TaskID']) assert(auth.includes(marker), `P6 authorization marker missing: ${marker}`);
 assert(capabilities.includes('CapabilitySetVersion = 7') && capabilities.includes('CapabilityWorkOrderTask'), 'P6 capability v7 contract is missing');
+for (const webPrincipal of [webPrincipalTemplate, webPrincipalGenerated]) {
+  assert(webPrincipal.includes("'work-order.task'") && webPrincipal.includes('capabilitySetVersion: z.literal(7)') && webPrincipal.includes('z.array(capabilitySchema).max(20)'), 'P6 Web Principal contract is not aligned to capability set v7');
+}
 
 for (const marker of ['task_id uuid', 'work-order:task:list', 'work-order:task:append', 'work-order:task:status', 'work-order:task:reorder']) assert(iamSQL.includes(marker), `P6 IAM migration marker missing: ${marker}`);
 for (const marker of ['GRANT INSERT ON work_order_runtime.work_order_task', 'GRANT UPDATE (position, status, version, updated_at)', 'DROP POLICY IF EXISTS work_order_task_writer_insert_org', 'DROP POLICY IF EXISTS work_order_task_writer_update_org']) assert(migration.includes(marker), `P6 task migration marker missing: ${marker}`);
