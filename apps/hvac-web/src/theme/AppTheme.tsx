@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BRAND } from './tokens';
 import { useUi } from '@/store/ui';
 
-const queryClient = new QueryClient({
+const defaultQueryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
 });
 
@@ -28,6 +28,7 @@ function buildTheme(mode: 'light' | 'dark'): ThemeConfig {
   const algorithm = mode === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm;
   return {
     algorithm,
+    cssVar: { prefix: 'ant' },
     token: {
       colorPrimary: BRAND.teal,
       borderRadius: 10,
@@ -42,7 +43,13 @@ function buildTheme(mode: 'light' | 'dark'): ThemeConfig {
   };
 }
 
-export function ThemeGate({ children }: { children: ReactNode }) {
+export function ThemeGate({
+  children,
+  queryClient = defaultQueryClient,
+}: {
+  children: ReactNode;
+  queryClient?: QueryClient;
+}) {
   const mode = useResolvedMode();
   const cfg = useMemo(() => buildTheme(mode), [mode]);
 

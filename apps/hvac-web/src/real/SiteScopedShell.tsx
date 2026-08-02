@@ -534,24 +534,24 @@ export function buildSiteNavigation(
 ): RealNavigationItem[] {
   if (!effectiveCapabilities.includes('site.read')) return [];
   const navigation: RealNavigationItem[] = [
-    { id: 'site-dashboard', label: 'Dashboard', path: siteRoute(site, 'dashboard'), kind: 'link', degraded: false },
+    { id: 'site-dashboard', label: '总览驾驶舱', path: siteRoute(site, 'dashboard'), kind: 'link', degraded: false },
     {
       id: 'site-operations',
-      label: 'Operations Workspace',
+      label: 'AI 运维调查',
       path: siteRoute(site, 'operations'),
       kind: 'link',
       degraded: false,
       primary: true,
     },
-    { id: 'site-assets', label: 'Assets', path: siteRoute(site, 'assets'), kind: 'link', degraded: false },
-    { id: 'site-energy', label: 'Energy', path: siteRoute(site, 'energy'), kind: 'link', degraded: false },
+    { id: 'site-assets', label: '设备与建筑', path: siteRoute(site, 'assets'), kind: 'link', degraded: false },
+    { id: 'site-energy', label: '能耗分析', path: siteRoute(site, 'energy'), kind: 'link', degraded: false },
   ];
   if (effectiveCapabilities.includes('alarm.list')) {
-    navigation.push({ id: 'site-alarms', label: 'Alarm', path: siteRoute(site, 'alarms'), kind: 'link', degraded: false });
+    navigation.push({ id: 'site-alarms', label: '告警工单', path: siteRoute(site, 'alarms'), kind: 'link', degraded: false });
   }
   navigation.push(
-    { id: 'site-commands', label: 'Commands', path: siteRoute(site, 'commands'), kind: 'link', degraded: false },
-    { id: 'site-bigscreen', label: 'BigScreen', path: siteRoute(site, 'bigscreen'), kind: 'link', degraded: false },
+    { id: 'site-commands', label: '设备控制', path: siteRoute(site, 'commands'), kind: 'link', degraded: false },
+    { id: 'site-bigscreen', label: '运行大屏', path: siteRoute(site, 'bigscreen'), kind: 'link', degraded: false },
   );
   return navigation;
 }

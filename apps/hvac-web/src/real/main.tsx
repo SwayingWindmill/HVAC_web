@@ -1,5 +1,6 @@
 import ReactDOM from 'react-dom/client';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient } from '@tanstack/react-query';
+import { ThemeGate } from '@/theme/AppTheme';
 import RealApp, { RealConfigurationBlocked } from './RealApp';
 import { validateRealRuntimeConfig } from './runtime-config';
 import '@/global.css';
@@ -10,11 +11,11 @@ const queryClient = new QueryClient({
 });
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <QueryClientProvider client={queryClient}>
+  <ThemeGate queryClient={queryClient}>
     {runtimeConfig.ok ? (
       <RealApp config={runtimeConfig.config} />
     ) : (
       <RealConfigurationBlocked failures={runtimeConfig.failures} />
     )}
-  </QueryClientProvider>,
+  </ThemeGate>,
 );

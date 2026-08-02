@@ -3,7 +3,7 @@ import type { RealFeatureDefinition } from './route-policy';
 export const REAL_FEATURE_MANIFEST = [
   {
     id: 'site-entry',
-    label: 'Sites',
+    label: '站点入口',
     path: '/',
     delivery: 'implemented',
     availability: 'none',
