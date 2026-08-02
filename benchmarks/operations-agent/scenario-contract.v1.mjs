@@ -156,6 +156,10 @@ const forbiddenPathSchema = z.enum([
   'TELEMETRY_CONTENT_LEAK',
   'TELEMETRY_HIGH_CARDINALITY',
   'TELEMETRY_AUTHORITY_COUPLING',
+  'AUDIT_CONTENT_LEAK',
+  'AUDIT_NON_ATOMIC',
+  'AUDIT_DELIVERY_AUTHORITY',
+  'AUDIT_TENANT_BYPASS',
 ]);
 
 const actionLifecycleSchema = z.object({
@@ -234,6 +238,26 @@ const telemetryBoundarySchema = z.object({
   telemetryInAuditRecords: z.enum(['FORBIDDEN', 'ALLOWED']),
 }).strict();
 
+const auditBoundarySchema = z.object({
+  successfulMutationAtomic: z.enum(['ATOMIC', 'NON_ATOMIC']),
+  denialAudit: z.enum(['REQUIRED', 'MISSING']),
+  budgetExhaustionAudit: z.enum(['REQUIRED', 'MISSING']),
+  eventIdempotency: z.enum(['EXACT', 'DUPLICATES']),
+  actorScopeAuthorization: z.enum(['BOUNDED', 'INCOMPLETE']),
+  recordReferences: z.enum(['BOUNDED', 'UNBOUNDED']),
+  rawPromptExport: z.enum(['FORBIDDEN', 'ALLOWED']),
+  operatorTextExport: z.enum(['FORBIDDEN', 'ALLOWED']),
+  ownerPayloadExport: z.enum(['FORBIDDEN', 'ALLOWED']),
+  modelTextExport: z.enum(['FORBIDDEN', 'ALLOWED']),
+  secretExport: z.enum(['FORBIDDEN', 'ALLOWED']),
+  checkpointExport: z.enum(['FORBIDDEN', 'ALLOWED']),
+  leaseExport: z.enum(['FORBIDDEN', 'ALLOWED']),
+  deliveryFailureAffectsBusiness: z.enum(['FORBIDDEN', 'ALLOWED']),
+  appendOnly: z.enum(['ENFORCED', 'MUTABLE']),
+  tenantIsolation: z.enum(['ENFORCED', 'BYPASS']),
+  traceFieldsInAudit: z.enum(['FORBIDDEN', 'ALLOWED']),
+}).strict();
+
 const operationsAgentScenarioSchemaV1 = z.object({
   contractVersion: z.literal(OPERATIONS_AGENT_SCENARIO_CONTRACT_VERSION),
   toolCatalogVersion: z.literal(OPERATIONS_AGENT_TOOL_CATALOG_VERSION),
@@ -268,6 +292,7 @@ const operationsAgentScenarioSchemaV1 = z.object({
   trustBoundary: trustBoundarySchema.optional(),
   resourceBudget: runResourceBudgetSchema.optional(),
   telemetryBoundary: telemetryBoundarySchema.optional(),
+  auditBoundary: auditBoundarySchema.optional(),
   acceptance: z.object({
     blockers: z.array(blockerCriterionSchema).min(1),
     scored: z.array(scoredCriterionSchema),

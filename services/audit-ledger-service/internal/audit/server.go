@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -11,30 +12,42 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/operationsauditevent"
 )
 
 const SessionAuditPathPrefix = "/internal/v1/audit/session-events/"
+const OperationsAuditPath = "/internal/v1/audit/operations-events"
 
 type RecordReader interface {
 	GetRecord(context.Context, string, string) (Record, error)
 }
 
+type OperationsEventWriter interface {
+	ConsumeOperations(context.Context, []byte, MessageMetadata) (bool, error)
+}
+
 type ServerConfig struct {
-	Store                 RecordReader
-	AllowedWorkloadSPIFFE string
-	Audience              string
-	Logger                *slog.Logger
-	Observability         *observability.Runtime
-	Now                   func() time.Time
+	Store                           RecordReader
+	OperationsWriter                OperationsEventWriter
+	AllowedWorkloadSPIFFE           string
+	AllowedOperationsProducerSPIFFE string
+	MaximumOperationsEventBytes     int64
+	Audience                        string
+	Logger                          *slog.Logger
+	Observability                   *observability.Runtime
+	Now                             func() time.Time
 }
 
 type server struct {
-	store                 RecordReader
-	allowedWorkloadSPIFFE string
-	audience              string
-	logger                *slog.Logger
-	observability         *observability.Runtime
-	now                   func() time.Time
+	store                           RecordReader
+	operationsWriter                OperationsEventWriter
+	allowedWorkloadSPIFFE           string
+	allowedOperationsProducerSPIFFE string
+	maximumOperationsEventBytes     int64
+	audience                        string
+	logger                          *slog.Logger
+	observability                   *observability.Runtime
+	now                             func() time.Time
 }
 
 func NewHandler(config ServerConfig) http.Handler {
@@ -57,13 +70,23 @@ func NewHandler(config ServerConfig) http.Handler {
 	if telemetry == nil {
 		telemetry = observability.NewRuntime(observability.RuntimeConfig{Service: "audit-ledger-service"})
 	}
+	maximumOperationsEventBytes := config.MaximumOperationsEventBytes
+	if maximumOperationsEventBytes == 0 {
+		maximumOperationsEventBytes = 64 * 1024
+	}
+	if maximumOperationsEventBytes < 1 || maximumOperationsEventBytes > 1024*1024 {
+		panic("audit operations event size limit is invalid")
+	}
 	return &server{
-		store:                 config.Store,
-		allowedWorkloadSPIFFE: config.AllowedWorkloadSPIFFE,
-		audience:              audience,
-		logger:                logger,
-		observability:         telemetry,
-		now:                   now,
+		store:                           config.Store,
+		operationsWriter:                config.OperationsWriter,
+		allowedWorkloadSPIFFE:           config.AllowedWorkloadSPIFFE,
+		allowedOperationsProducerSPIFFE: config.AllowedOperationsProducerSPIFFE,
+		maximumOperationsEventBytes:     maximumOperationsEventBytes,
+		audience:                        audience,
+		logger:                          logger,
+		observability:                   telemetry,
+		now:                             now,
 	}
 }
 
@@ -96,6 +119,10 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		)
 	}()
 
+	if request.Method == http.MethodPost && request.URL.Path == OperationsAuditPath {
+		status = server.serveOperationsIngest(writer, request)
+		return
+	}
 	if request.Method != http.MethodGet || !strings.HasPrefix(request.URL.Path, SessionAuditPathPrefix) {
 		status = http.StatusNotFound
 		writeAuditProblem(writer, status, "AUDIT_ROUTE_NOT_FOUND", "Audit route not found")
@@ -154,6 +181,60 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	_ = json.NewEncoder(writer).Encode(record)
 }
 
+func (server *server) serveOperationsIngest(writer http.ResponseWriter, request *http.Request) int {
+	if server.operationsWriter == nil || server.allowedOperationsProducerSPIFFE == "" {
+		writeAuditProblem(writer, http.StatusNotFound, "AUDIT_ROUTE_NOT_FOUND", "Audit route not found")
+		return http.StatusNotFound
+	}
+	for _, header := range []string{
+		"Authorization", "Cookie", "X-Delegation-Grant", "X-Principal", "X-Roles",
+		"X-Organization-ID", "X-Site-ID", "X-Admin",
+	} {
+		if request.Header.Get(header) != "" {
+			writeAuditProblem(writer, http.StatusBadRequest, "AUDIT_FORGED_IDENTITY_HEADER", "Caller identity headers are not accepted")
+			return http.StatusBadRequest
+		}
+	}
+	_, peerSPIFFE, ok := verifiedPeer(request)
+	if !ok || peerSPIFFE != server.allowedOperationsProducerSPIFFE {
+		writeAuditProblem(writer, http.StatusUnauthorized, "AUDIT_WORKLOAD_IDENTITY_INVALID", "Workload identity is invalid")
+		return http.StatusUnauthorized
+	}
+	if !strings.HasPrefix(strings.ToLower(request.Header.Get("Content-Type")), "application/json") {
+		writeAuditProblem(writer, http.StatusUnsupportedMediaType, "AUDIT_CONTENT_TYPE_INVALID", "Operations Audit events require JSON")
+		return http.StatusUnsupportedMediaType
+	}
+	idempotencyKey := strings.TrimSpace(request.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" || len(idempotencyKey) > 768 || strings.ContainsAny(idempotencyKey, "\r\n") {
+		writeAuditProblem(writer, http.StatusBadRequest, "AUDIT_IDEMPOTENCY_KEY_INVALID", "Operations Audit Idempotency Key is invalid")
+		return http.StatusBadRequest
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, server.maximumOperationsEventBytes)
+	payload, err := io.ReadAll(request.Body)
+	if err != nil {
+		writeAuditProblem(writer, http.StatusRequestEntityTooLarge, "AUDIT_EVENT_TOO_LARGE", "Operations Audit event is too large")
+		return http.StatusRequestEntityTooLarge
+	}
+	event, err := operationsauditevent.Decode(payload)
+	if err != nil || event.EventID != idempotencyKey || event.Actor.ExecutingSPIFFEID != peerSPIFFE {
+		writeAuditProblem(writer, http.StatusBadRequest, "AUDIT_EVENT_INVALID", "Operations Audit event is invalid")
+		return http.StatusBadRequest
+	}
+	_, err = server.operationsWriter.ConsumeOperations(request.Context(), payload, MessageMetadata{
+		Topic: "operations-http", Partition: 0, Offset: 0, ReceivedAt: server.now().UTC(),
+	})
+	if errors.Is(err, ErrEnvelopeConflict) {
+		writeAuditProblem(writer, http.StatusConflict, "AUDIT_EVENT_CONFLICT", "Operations Audit event identity conflicts with existing content")
+		return http.StatusConflict
+	}
+	if err != nil {
+		writeAuditProblem(writer, http.StatusServiceUnavailable, "AUDIT_INGEST_UNAVAILABLE", "Audit Ledger is temporarily unavailable")
+		return http.StatusServiceUnavailable
+	}
+	writer.WriteHeader(http.StatusNoContent)
+	return http.StatusNoContent
+}
+
 func verifiedPeer(request *http.Request) (*x509CertificateView, string, bool) {
 	if request.TLS == nil || len(request.TLS.PeerCertificates) == 0 || len(request.TLS.VerifiedChains) == 0 {
 		return nil, "", false
@@ -179,6 +260,9 @@ func containsAuditRole(roles []string) bool {
 }
 
 func safeAuditPath(path string) string {
+	if path == OperationsAuditPath {
+		return OperationsAuditPath
+	}
 	if strings.HasPrefix(path, SessionAuditPathPrefix) {
 		return SessionAuditPathPrefix + "{messageId}"
 	}

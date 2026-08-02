@@ -37,6 +37,13 @@ import {
   type RuntimePlanningResult,
   type RuntimeReadPlan,
 } from './ports.js';
+import {
+  createOperationsAuditEvent,
+  operationsAuditEventId,
+  type OperationsAuditOperation,
+  type OperationsAuditOutcome,
+  type OperationsAuditRecordReference,
+} from './operations-audit.js';
 import { OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY } from './generated-runtime-control-contract.js';
 import {
   DEFAULT_RUN_RESOURCE_BUDGET_POLICY,
@@ -590,8 +597,65 @@ export const createInvestigationCoordinator = (
     return 'INVALID';
   };
 
+  const defaultAuditActor = Object.freeze({
+    actorType: 'SERVICE' as const,
+    actorId: 'operations-agent-service',
+    actorIssuer: 'spiffe://hvac.local',
+    executingService: 'operations-agent-service' as const,
+    executingSpiffeId: 'spiffe://hvac.local/operations-agent-service',
+  });
+
+  const createAuditRecord = (input: {
+    readonly scope: InvestigationScope;
+    readonly investigationId: string | null;
+    readonly runId: string | null;
+    readonly revision: InvestigationRevision | null;
+    readonly authorization: AuthorizationDecision;
+    readonly operation: OperationsAuditOperation;
+    readonly outcome: OperationsAuditOutcome;
+    readonly occurredAt: number;
+    readonly discriminator?: string;
+    readonly recordReferences?: readonly OperationsAuditRecordReference[];
+  }): AuditRecord => createOperationsAuditEvent({
+    eventId: operationsAuditEventId({
+      organizationId: input.scope.organizationId,
+      siteId: input.scope.siteId ?? 'organization-scope',
+      investigationId: input.investigationId,
+      runId: input.runId,
+      revision: input.revision,
+      operation: input.operation,
+      outcome: input.outcome,
+      ...(input.discriminator === undefined ? {} : { discriminator: input.discriminator }),
+    }),
+    scope: {
+      ...input.scope,
+      siteId: input.scope.siteId ?? 'organization-scope',
+    },
+    investigationId: input.investigationId,
+    runId: input.runId,
+    investigationRevision: input.revision,
+    actor: input.authorization.auditActor ?? defaultAuditActor,
+    authorizationDecisionId: input.authorization.decisionId,
+    policyRevision: input.authorization.policyRevision?.trim() || 'unversioned',
+    operation: input.operation,
+    outcome: input.outcome,
+    occurredAt: input.occurredAt,
+    recordReferences: input.recordReferences ?? [],
+  });
+
+  const auditRecordReferences = (
+    record: InvestigationBusinessRecord | undefined,
+  ): readonly OperationsAuditRecordReference[] => (
+    record === undefined
+      ? []
+      : [{ recordType: record.recordType, recordId: record.id }]
+  );
+
   const checkRunResourceBudget = async (input: {
     readonly investigationId: string;
+    readonly scope: InvestigationScope;
+    readonly revision: InvestigationRevision;
+    readonly authorization: AuthorizationDecision;
     readonly run: AgentRunView;
     readonly at: number;
     readonly operationId: string;
@@ -676,6 +740,21 @@ export const createInvestigationCoordinator = (
           outcome: outcome.outcome === 'PARTIAL' ? 'PARTIAL' : 'UNABLE_TO_CONCLUDE',
         },
       });
+      try {
+        await ports.auditRecorder.record(createAuditRecord({
+          scope: input.scope,
+          investigationId: input.investigationId,
+          runId: input.run.id,
+          revision: input.revision,
+          authorization: input.authorization,
+          operation: 'ADVANCE_AGENT_RUN',
+          outcome: outcome.outcome,
+          occurredAt: input.at,
+          discriminator: input.operationId,
+        }));
+      } catch {
+        // Budget denial remains authoritative when Audit delivery intent storage is unavailable.
+      }
       return outcome;
     } catch (error) {
       span.setStatus('ERROR');
@@ -706,9 +785,29 @@ export const createInvestigationCoordinator = (
   const authorize = async (
     scope: InvestigationScope,
     action: InvestigationAuthorizationAction,
+    correlation: {
+      readonly investigationId?: string;
+      readonly runId?: string;
+      readonly revision?: InvestigationRevision;
+    } = {},
   ): Promise<AuthorizationDecision> => {
     const authorization = await ports.authorizationDecisionReader.authorizeScope({ scope, action });
     if (authorization.decision === 'DENY') {
+      try {
+        await ports.auditRecorder.record(createAuditRecord({
+          scope,
+          investigationId: correlation.investigationId ?? null,
+          runId: correlation.runId ?? null,
+          revision: correlation.revision ?? null,
+          authorization,
+          operation: action,
+          outcome: 'DENIED',
+          occurredAt: ports.clock.now(),
+          discriminator: authorization.decisionId,
+        }));
+      } catch {
+        // Authorization remains denied even when durable Audit intent storage is unavailable.
+      }
       throw new InvestigationCoordinatorError(
         'AUTHORIZATION_DENIED',
         authorization.reason ?? 'The requested Investigation Scope is not authorized.',
@@ -717,14 +816,29 @@ export const createInvestigationCoordinator = (
     return authorization;
   };
 
+  const loadAuthorizedWithDecision = async (
+    investigationId: string,
+    action: InvestigationAuthorizationAction,
+  ): Promise<{
+    readonly investigation: OperationsInvestigation;
+    readonly authorization: AuthorizationDecision;
+  }> => {
+    const investigation = await load(investigationId);
+    const view = investigation.view();
+    const authorization = await authorize(view.scope, action, {
+      investigationId: view.id,
+      ...(view.activeRunId === null ? {} : { runId: view.activeRunId }),
+      revision: view.revision,
+    });
+    return { investigation, authorization };
+  };
+
   const loadAuthorized = async (
     investigationId: string,
     action: InvestigationAuthorizationAction,
-  ): Promise<OperationsInvestigation> => {
-    const investigation = await load(investigationId);
-    await authorize(investigation.view().scope, action);
-    return investigation;
-  };
+  ): Promise<OperationsInvestigation> => (
+    await loadAuthorizedWithDecision(investigationId, action)
+  ).investigation;
 
   const recordMutation = async (
     event: ApplicationEvent,
@@ -746,7 +860,9 @@ export const createInvestigationCoordinator = (
     readonly record?: InvestigationBusinessRecord;
     readonly occurredAt: number;
     readonly eventType: ApplicationEvent['type'];
-    readonly auditAction: AuditRecord['action'];
+    readonly auditAction: OperationsAuditOperation;
+    readonly auditOutcome?: OperationsAuditOutcome;
+    readonly authorization: AuthorizationDecision;
     readonly runId: string | null;
   }): Promise<OperationsInvestigationView> => {
     const view = input.investigation.view();
@@ -776,13 +892,17 @@ export const createInvestigationCoordinator = (
           revision: view.revision,
           occurredAt: input.occurredAt,
         },
-        audit: {
-          action: input.auditAction,
+        audit: createAuditRecord({
+          scope: view.scope,
           investigationId: view.id,
           runId: input.runId,
           revision: view.revision,
+          authorization: input.authorization,
+          operation: input.auditAction,
+          outcome: input.auditOutcome ?? 'SUCCEEDED',
           occurredAt: input.occurredAt,
-        },
+          recordReferences: auditRecordReferences(input.record),
+        }),
       });
       commitSpan.setStatus('SUCCESS');
       safeAddOperationsTelemetryCounter(ports.telemetry, {
@@ -996,7 +1116,7 @@ export const createInvestigationCoordinator = (
   return {
     async create(command) {
       try {
-        await authorize(command.scope, 'CREATE_INVESTIGATION');
+        const authorization = await authorize(command.scope, 'CREATE_INVESTIGATION');
 
         const now = ports.clock.now();
         const investigation = OperationsInvestigation.create({
@@ -1013,13 +1133,16 @@ export const createInvestigationCoordinator = (
             revision: view.revision,
             occurredAt: now,
           },
-          audit: {
-            action: 'CREATE_INVESTIGATION',
+          audit: createAuditRecord({
+            scope: view.scope,
             investigationId: view.id,
             runId: null,
             revision: view.revision,
+            authorization,
+            operation: 'CREATE_INVESTIGATION',
+            outcome: 'SUCCEEDED',
             occurredAt: now,
-          },
+          }),
         });
         return view;
       } catch (error) {
@@ -1029,7 +1152,10 @@ export const createInvestigationCoordinator = (
 
     async start(command) {
       try {
-        const investigation = await loadAuthorized(command.investigationId, 'START_AGENT_RUN');
+        const { investigation, authorization } = await loadAuthorizedWithDecision(
+          command.investigationId,
+          'START_AGENT_RUN',
+        );
         const now = ports.clock.now();
         const next = investigation.startRun({
           runId: ports.idGenerator.next('run'),
@@ -1045,6 +1171,7 @@ export const createInvestigationCoordinator = (
           occurredAt: now,
           eventType: 'AGENT_RUN_STARTED',
           auditAction: 'START_AGENT_RUN',
+          authorization,
           runId: next.view().activeRunId,
         });
       } catch (error) {
@@ -1054,7 +1181,10 @@ export const createInvestigationCoordinator = (
 
     async reopen(command) {
       try {
-        const investigation = await loadAuthorized(command.investigationId, 'REOPEN_INVESTIGATION');
+        const { investigation, authorization } = await loadAuthorizedWithDecision(
+          command.investigationId,
+          'REOPEN_INVESTIGATION',
+        );
         const now = ports.clock.now();
         const next = investigation.reopenCompleted({
           runId: ports.idGenerator.next('run'),
@@ -1070,6 +1200,7 @@ export const createInvestigationCoordinator = (
           occurredAt: now,
           eventType: 'AGENT_RUN_STARTED',
           auditAction: 'START_AGENT_RUN',
+          authorization,
           runId: next.view().activeRunId,
         });
       } catch (error) {
@@ -1099,6 +1230,9 @@ export const createInvestigationCoordinator = (
         const runtimeContext = createRuntimePlanningContext(investigation.view(), run);
         const modelBudget = await checkRunResourceBudget({
           investigationId: command.investigationId,
+          scope: investigationScope,
+          revision: investigation.view().revision,
+          authorization,
           run,
           at: now,
           operationId: `runtime-plan:${checkpoint?.position ?? 'start'}`,
@@ -1205,6 +1339,9 @@ export const createInvestigationCoordinator = (
           try {
             const readBudget = await checkRunResourceBudget({
               investigationId: command.investigationId,
+              scope: investigationScope,
+              revision: investigation.view().revision,
+              authorization,
               run,
               at: ports.clock.now(),
               operationId: runResourceReadBatchOperationId(batch.requests),
@@ -1234,6 +1371,9 @@ export const createInvestigationCoordinator = (
             )));
             const resultBudget = await checkRunResourceBudget({
               investigationId: command.investigationId,
+              scope: investigationScope,
+              revision: investigation.view().revision,
+              authorization,
               run,
               at: ports.clock.now(),
               operationId: runResourceOwnerResultBatchOperationId(batch.requests),
@@ -1293,13 +1433,16 @@ export const createInvestigationCoordinator = (
             revision: view.revision,
             occurredAt: now,
           },
-          {
-            action: 'PLAN_READS',
+          createAuditRecord({
+            scope: view.scope,
             investigationId: view.id,
             runId: run.id,
             revision: view.revision,
+            authorization,
+            operation: 'PLAN_READS',
+            outcome: 'SUCCEEDED',
             occurredAt: now,
-          },
+          }),
         );
         return {
           outcome: 'READ_PLAN_COMPLETED',
@@ -1315,7 +1458,10 @@ export const createInvestigationCoordinator = (
 
     async commitEffect(command) {
       try {
-        const investigation = await loadAuthorized(command.investigationId, 'COMMIT_EFFECT');
+        const { investigation, authorization } = await loadAuthorizedWithDecision(
+          command.investigationId,
+          'COMMIT_EFFECT',
+        );
         const record = command.record === undefined
           ? undefined
           : createInvestigationBusinessRecord(command.record);
@@ -1363,6 +1509,9 @@ export const createInvestigationCoordinator = (
           }
           const budget = await checkRunResourceBudget({
             investigationId: command.investigationId,
+            scope: investigation.view().scope,
+            revision: investigation.view().revision,
+            authorization,
             run,
             at: now,
             operationId: runResourceEffectOperationId(command.idempotencyKey),
@@ -1395,6 +1544,7 @@ export const createInvestigationCoordinator = (
             occurredAt: now,
             eventType: 'INVESTIGATION_EFFECT_COMMITTED',
             auditAction: 'COMMIT_EFFECT',
+            authorization,
             runId: command.runId,
           })
           : result.investigation.view();
@@ -1431,7 +1581,10 @@ export const createInvestigationCoordinator = (
 
     async pause(command) {
       try {
-        const investigation = await loadAuthorized(command.investigationId, 'PAUSE_AGENT_RUN');
+        const { investigation, authorization } = await loadAuthorizedWithDecision(
+          command.investigationId,
+          'PAUSE_AGENT_RUN',
+        );
         const now = ports.clock.now();
         const next = investigation.pauseRun({
           runId: command.runId,
@@ -1450,6 +1603,7 @@ export const createInvestigationCoordinator = (
           occurredAt: now,
           eventType: 'AGENT_RUN_PAUSED',
           auditAction: 'PAUSE_AGENT_RUN',
+          authorization,
           runId: command.runId,
         });
       } catch (error) {
@@ -1459,7 +1613,10 @@ export const createInvestigationCoordinator = (
 
     async resume(command) {
       try {
-        const investigation = await loadAuthorized(command.investigationId, 'RESUME_AGENT_RUN');
+        const { investigation, authorization } = await loadAuthorizedWithDecision(
+          command.investigationId,
+          'RESUME_AGENT_RUN',
+        );
         const now = ports.clock.now();
         const next = investigation.resumeRun({
           runId: command.runId,
@@ -1474,6 +1631,7 @@ export const createInvestigationCoordinator = (
           occurredAt: now,
           eventType: 'AGENT_RUN_RESUMED',
           auditAction: 'RESUME_AGENT_RUN',
+          authorization,
           runId: command.runId,
         });
       } catch (error) {
@@ -1483,7 +1641,7 @@ export const createInvestigationCoordinator = (
 
     async requestOperatorInput(command) {
       try {
-        const investigation = await loadAuthorized(
+        const { investigation, authorization } = await loadAuthorizedWithDecision(
           command.investigationId,
           'REQUEST_OPERATOR_INPUT',
         );
@@ -1507,6 +1665,7 @@ export const createInvestigationCoordinator = (
           occurredAt: now,
           eventType: 'OPERATOR_INPUT_REQUESTED',
           auditAction: 'REQUEST_OPERATOR_INPUT',
+          authorization,
           runId: command.runId,
         });
       } catch (error) {
@@ -1622,6 +1781,7 @@ export const createInvestigationCoordinator = (
           occurredAt: result.acceptance.acceptedAt,
           eventType: 'OPERATOR_INPUT_ACCEPTED',
           auditAction: 'ACCEPT_OPERATOR_INPUT',
+          authorization,
           runId: result.acceptance.runId,
         });
         return {
@@ -1636,7 +1796,10 @@ export const createInvestigationCoordinator = (
 
     async cancel(command) {
       try {
-        const investigation = await loadAuthorized(command.investigationId, 'CANCEL_INVESTIGATION');
+        const { investigation, authorization } = await loadAuthorizedWithDecision(
+          command.investigationId,
+          'CANCEL_INVESTIGATION',
+        );
         const activeRunId = investigation.view().activeRunId;
         const now = ports.clock.now();
         const next = investigation.cancel({
@@ -1649,6 +1812,7 @@ export const createInvestigationCoordinator = (
           occurredAt: now,
           eventType: 'INVESTIGATION_CANCELLED',
           auditAction: 'CANCEL_INVESTIGATION',
+          authorization,
           runId: activeRunId,
         });
         recordTerminalOutcome({
@@ -1665,7 +1829,10 @@ export const createInvestigationCoordinator = (
 
     async complete(command) {
       try {
-        const investigation = await loadAuthorized(command.investigationId, 'COMPLETE_AGENT_RUN');
+        const { investigation, authorization } = await loadAuthorizedWithDecision(
+          command.investigationId,
+          'COMPLETE_AGENT_RUN',
+        );
         const now = ports.clock.now();
         const next = investigation.completeRun({
           runId: command.runId,
@@ -1684,6 +1851,7 @@ export const createInvestigationCoordinator = (
           occurredAt: now,
           eventType: 'AGENT_RUN_COMPLETED',
           auditAction: 'COMPLETE_AGENT_RUN',
+          authorization,
           runId: command.runId,
         });
         recordTerminalOutcome({
@@ -1700,7 +1868,10 @@ export const createInvestigationCoordinator = (
 
     async fail(command) {
       try {
-        const investigation = await loadAuthorized(command.investigationId, 'FAIL_AGENT_RUN');
+        const { investigation, authorization } = await loadAuthorizedWithDecision(
+          command.investigationId,
+          'FAIL_AGENT_RUN',
+        );
         const now = ports.clock.now();
         const next = investigation.failRun({
           runId: command.runId,
@@ -1719,6 +1890,7 @@ export const createInvestigationCoordinator = (
           occurredAt: now,
           eventType: 'AGENT_RUN_FAILED',
           auditAction: 'FAIL_AGENT_RUN',
+          authorization,
           runId: command.runId,
         });
         recordTerminalOutcome({

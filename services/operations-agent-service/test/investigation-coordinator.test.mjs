@@ -246,7 +246,7 @@ test('authorized callers create, start, and query an Investigation through the C
 });
 
 test('authorization denial is a typed error and creates no Investigation', async () => {
-  const { coordinator, repository } = createHarness({ authorized: false });
+  const { coordinator, repository, auditRecords } = createHarness({ authorized: false });
 
   await assertCoordinatorError(() => coordinator.create({
     scope: {
@@ -258,6 +258,12 @@ test('authorization denial is a typed error and creates no Investigation', async
   }), 'AUTHORIZATION_DENIED');
 
   assert.equal(repository.records.size, 0);
+  assert.equal(auditRecords.length, 1);
+  assert.equal(auditRecords[0].operation, 'CREATE_INVESTIGATION');
+  assert.equal(auditRecords[0].outcome, 'DENIED');
+  assert.equal(auditRecords[0].investigationId, null);
+  assert.equal(auditRecords[0].authorizationDecisionId, 'decision-001');
+  assert.equal(JSON.stringify(auditRecords[0]).includes('reason'), false);
 });
 
 test('every query and mutation reauthorizes the authoritative Investigation Scope', async () => {
@@ -629,6 +635,11 @@ test('advance reports budget exhaustion and inability to conclude as distinct ty
   assert.equal(exhausted.checkpoints.length, 0);
   assert.equal(exhausted.outboxEvents.filter(({ type }) => type === 'READ_PLAN_COMPLETED').length, 0);
   assert.equal(exhausted.auditRecords.filter(({ action }) => action === 'PLAN_READS').length, 0);
+  const exhaustionAudit = exhausted.auditRecords.filter(({ operation }) => operation === 'ADVANCE_AGENT_RUN');
+  assert.equal(exhaustionAudit.length, 1);
+  assert.equal(exhaustionAudit[0].outcome, 'UNABLE_TO_CONCLUDE');
+  assert.equal(exhaustionAudit[0].runId, exhaustedStarted.activeRunId);
+  assert.equal(JSON.stringify(exhaustionAudit[0]).includes('checkpoint'), false);
 
   const unable = createHarness({
     planningResult: {

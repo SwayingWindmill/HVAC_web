@@ -39,9 +39,26 @@ through Step Identity and Idempotency Key. Evidence, Analysis Reference, Finding
 Receipt effects require a validated typed record; exact replay returns the persisted content
 without advancing Revision or duplicating journals. Runtime, persistence, Owner readers,
 Outbox, Audit, durable per-Run resource budget, clock and identity capabilities remain narrow Application ports with
-no framework or transport types. Business aggregate writes, typed record insert, Outbox
-append and Audit append are represented by one `InvestigationTransaction` port so a concrete
-persistence adapter cannot commit only part of the business mutation.
+no framework or transport types. Business aggregate writes, typed record insert, Outbox append and
+one strict `hvac.operations.audit.v1` intent are represented by one `InvestigationTransaction` port
+so a concrete persistence adapter cannot commit only part of a successful business mutation.
+Authorization denial and resource-budget exhaustion use deterministic standalone Audit identities
+because no successful mutation exists; inability to persist or deliver those diagnostics never
+weakens the denial or exhaustion result.
+
+The Operations `audit_records` table is a durable delivery outbox rather than the final Ledger owner.
+It enforces exact event-identity deduplication, content conflict detection, bounded delivery leases,
+retry classification and a terminal delivered state. The scheduling adapter posts events to the Audit
+Ledger private mTLS route with the event identity as the Idempotency Key. Remote timeout, rejection or
+unavailability only updates the delivery state and cannot roll back Investigation records, trigger
+business retry or authorize further work. Runtime database privileges can update only delivery
+columns; the immutable event payload and authority fields cannot be modified.
+
+Audit events contain bounded actor, Scope, authorization, operation, outcome, occurrence time and
+typed record references. Raw prompts, operator notes, model text, Owner payloads, credentials,
+Checkpoints, Leases, cursors and arbitrary attributes are rejected. The Audit owner hashes the
+Investigation aggregate identity and appends an Organization-scoped hash-chain record. Trace context
+is intentionally excluded from committed Audit records.
 
 The LangGraph adapter compiles a project-owned `StateGraph` with explicit validation,
 selection, READ-plan emission and terminal transitions. Its versioned `runtime-state/v1`

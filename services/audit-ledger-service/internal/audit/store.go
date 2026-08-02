@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/operationsauditevent"
 	"github.com/quanlaihe/hvac-web/libs/sessionevent"
 )
 
@@ -158,6 +159,102 @@ func (store *Store) Consume(ctx context.Context, payload []byte, metadata Messag
 		event.Actor.ExecutingSPIFFEID, event.Actor.ActingOrganizationID, event.Action,
 		event.Result, event.PolicyRevision, event.CorrelationID, event.CausationID,
 		event.TraceID, event.Traceparent, event.PayloadSHA256, previousHash, recordHash, recordedAt)
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE audit_ledger.organization_heads
+		SET last_record_hash = $2, updated_at = $3
+		WHERE organization_id = $1
+	`, event.OrganizationID, recordHash, recordedAt); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (store *Store) ConsumeOperations(
+	ctx context.Context,
+	payload []byte,
+	metadata MessageMetadata,
+) (bool, error) {
+	ctx, span := observability.Start(ctx, "postgres.audit.consume", observability.SpanKindClient, map[string]any{
+		"db.system": "postgresql", "db.operation": "audit.consume.operations",
+	})
+	defer span.End()
+	event, err := operationsauditevent.Decode(payload)
+	if err != nil {
+		return false, err
+	}
+	envelopeDigest := sha256.Sum256(payload)
+	envelopeSHA := hex.EncodeToString(envelopeDigest[:])
+	tx, err := store.consumer.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, event.OrganizationID); err != nil {
+		return false, err
+	}
+
+	var insertedMessageID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO audit_ledger.inbox (
+			message_id, organization_id, topic, partition_id, offset_value, envelope_sha256, received_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (message_id) DO NOTHING
+		RETURNING message_id
+	`, event.EventID, event.OrganizationID, metadata.Topic, metadata.Partition,
+		metadata.Offset, envelopeSHA, metadata.ReceivedAt.UTC()).Scan(&insertedMessageID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var existingSHA string
+		if err := tx.QueryRow(ctx, `SELECT envelope_sha256 FROM audit_ledger.inbox WHERE message_id = $1`, event.EventID).Scan(&existingSHA); err != nil {
+			return false, err
+		}
+		if existingSHA != envelopeSHA {
+			return false, ErrEnvelopeConflict
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	recordedAt := metadata.ReceivedAt.UTC()
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_ledger.organization_heads (organization_id, last_record_hash, updated_at)
+		VALUES ($1,$2,$3)
+		ON CONFLICT (organization_id) DO NOTHING
+	`, event.OrganizationID, zeroRecordHash, recordedAt); err != nil {
+		return false, err
+	}
+	var previousHash string
+	if err := tx.QueryRow(ctx, `
+		SELECT last_record_hash FROM audit_ledger.organization_heads
+		WHERE organization_id = $1 FOR UPDATE
+	`, event.OrganizationID).Scan(&previousHash); err != nil {
+		return false, err
+	}
+	recordHash := hashRecord(previousHash, payload)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO audit_ledger.records (
+			message_id, schema_version, organization_id, aggregate_type, aggregate_id,
+			aggregate_version, occurred_at, initiating_subject, initiating_issuer,
+			executing_service, executing_spiffe_id, acting_organization_id, action, result,
+			policy_revision, correlation_id, causation_id, trace_id, traceparent,
+			payload_sha256, previous_record_hash, record_hash, recorded_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+	`, event.EventID, event.SchemaVersion, event.OrganizationID, "operations-investigation",
+		event.AggregateID(), event.AggregateVersion(), time.UnixMilli(event.OccurredAt).UTC(),
+		event.Actor.ActorID, event.Actor.ActorIssuer, event.Actor.ExecutingService,
+		event.Actor.ExecutingSPIFFEID, event.OrganizationID, event.Operation, event.Outcome,
+		event.PolicyRevision, event.CorrelationID(), event.AuthorizationDecisionID,
+		"", "", event.PayloadSHA256(payload), previousHash, recordHash, recordedAt)
 	if err != nil {
 		return false, err
 	}

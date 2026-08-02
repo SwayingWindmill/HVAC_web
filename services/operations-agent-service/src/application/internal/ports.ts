@@ -8,6 +8,10 @@ import type {
 } from '../../domain/index.js';
 import { OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY } from './generated-runtime-control-contract.js';
 import type {
+  OperationsAuditActor,
+  OperationsAuditEventV1,
+} from './operations-audit.js';
+import type {
   OperationsAgentTelemetry,
   OperationsTelemetryCorrelation,
 } from './operations-telemetry.js';
@@ -53,6 +57,7 @@ export interface AuthorizationDecision {
   readonly delegationGrant?: string;
   readonly toolDelegationGrants?: Readonly<Partial<Record<ParallelReadRequest['tool'], string>>>;
   readonly policyRevision?: string;
+  readonly auditActor?: OperationsAuditActor;
   readonly traceparent?: string;
   readonly tracestate?: string;
 }
@@ -220,27 +225,31 @@ export interface ApplicationOutbox {
   append(event: ApplicationEvent): Promise<void>;
 }
 
-export interface AuditRecord {
-  readonly action:
-    | 'CREATE_INVESTIGATION'
-    | 'START_AGENT_RUN'
-    | 'PLAN_READS'
-    | 'COMMIT_EFFECT'
-    | 'PAUSE_AGENT_RUN'
-    | 'RESUME_AGENT_RUN'
-    | 'REQUEST_OPERATOR_INPUT'
-    | 'ACCEPT_OPERATOR_INPUT'
-    | 'CANCEL_INVESTIGATION'
-    | 'COMPLETE_AGENT_RUN'
-    | 'FAIL_AGENT_RUN';
-  readonly investigationId: string;
-  readonly runId: string | null;
-  readonly revision: InvestigationRevision;
-  readonly occurredAt: number;
-}
+export type AuditRecord = OperationsAuditEventV1;
 
 export interface AuditRecorder {
   record(record: AuditRecord): Promise<void>;
+}
+
+export interface OperationsAuditDeliveryRecord {
+  readonly event: OperationsAuditEventV1;
+  readonly attemptCount: number;
+  readonly nextAttemptAt: number;
+}
+
+export interface OperationsAuditDeliveryRepository {
+  claim(input: {
+    readonly at: number;
+    readonly limit: number;
+    readonly leaseDurationMs: number;
+  }): Promise<readonly OperationsAuditDeliveryRecord[]>;
+  markDelivered(eventId: string, deliveredAt: number): Promise<void>;
+  markFailed(input: {
+    readonly eventId: string;
+    readonly failedAt: number;
+    readonly retryAt: number;
+    readonly failureClass: 'TIMEOUT' | 'UNAVAILABLE' | 'REJECTED' | 'INVALID_RESPONSE';
+  }): Promise<void>;
 }
 
 export interface InvestigationWriteAuthority {

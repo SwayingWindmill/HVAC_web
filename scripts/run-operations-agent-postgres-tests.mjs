@@ -158,6 +158,11 @@ try {
     '/migrations/operations/004_run_resource_budgets.sql',
   );
   applyMigration(
+    'operations_agent_operations_migrator',
+    'operations-migrator-local-only',
+    '/migrations/operations/005_operations_audit_outbox.sql',
+  );
+  applyMigration(
     'operations_agent_checkpoints_migrator',
     'checkpoints-migrator-local-only',
     '/migrations/checkpoints/001_agent_checkpoints.sql',
@@ -228,6 +233,7 @@ try {
     '--test-concurrency=1',
     'services/operations-agent-service/test/postgres-persistence.test.mjs',
     'services/operations-agent-service/test/postgres-run-resource-budget.test.mjs',
+    'services/operations-agent-service/test/postgres-operations-audit.test.mjs',
     'services/operations-agent-service/test/postgres-langgraph-runtime.test.mjs',
     'services/operations-agent-service/test/postgres-site-night-energy-investigation.test.mjs',
   ], {

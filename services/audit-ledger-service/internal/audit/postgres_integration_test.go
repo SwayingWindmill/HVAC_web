@@ -2,6 +2,7 @@ package audit_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -83,6 +84,89 @@ func TestDuplicateMessageWithDifferentProtobufIsRejected(t *testing.T) {
 	changed.Action = "SESSION_REVOKED"
 	if _, err := store.Consume(context.Background(), marshalEvent(t, changed), audit.MessageMetadata{Topic: sessionevent.ControlTopic, Partition: 1, Offset: 21, ReceivedAt: now.Add(time.Second)}); !errors.Is(err, audit.ErrEnvelopeConflict) {
 		t.Fatalf("different protobuf under same message ID was accepted: %v", err)
+	}
+}
+
+func TestOperationsAuditPersistsExactlyOnceAndAdvancesOrganizationHashChain(t *testing.T) {
+	harness := newLedgerHarness(t)
+	harness.reset(t)
+	now := time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)
+	store, err := audit.OpenStore(context.Background(), harness.consumerDSN, harness.queryDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	firstEvent := operationsEvent("spiffe://hvac.local/operations-agent-service", now)
+	firstPayload, err := json.Marshal(firstEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inserted, err := store.ConsumeOperations(context.Background(), firstPayload, audit.MessageMetadata{
+		Topic: "operations-http", Partition: 0, Offset: 0, ReceivedAt: now.Add(time.Second),
+	})
+	if err != nil || !inserted {
+		t.Fatalf("first operations consume inserted=%v err=%v", inserted, err)
+	}
+	inserted, err = store.ConsumeOperations(context.Background(), firstPayload, audit.MessageMetadata{
+		Topic: "operations-http", Partition: 0, Offset: 1, ReceivedAt: now.Add(2 * time.Second),
+	})
+	if err != nil || inserted {
+		t.Fatalf("duplicate operations consume inserted=%v err=%v", inserted, err)
+	}
+	firstRecord, err := store.GetRecord(context.Background(), firstEvent.OrganizationID, firstEvent.EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstRecord.AggregateType != "operations-investigation" || firstRecord.Result != firstEvent.Outcome {
+		t.Fatalf("unexpected operations record: %#v", firstRecord)
+	}
+	if strings.Contains(firstRecord.AggregateID, "investigation-001") || len(firstRecord.AggregateID) != 64 {
+		t.Fatalf("operations aggregate identity was not hashed: %q", firstRecord.AggregateID)
+	}
+	if firstRecord.CausationID != firstEvent.AuthorizationDecisionID || firstRecord.TraceID != "" || firstRecord.Traceparent != "" {
+		t.Fatalf("operations Audit and Trace boundaries were not separated: %#v", firstRecord)
+	}
+
+	changed := firstEvent
+	changed.Outcome = "FAILED"
+	changedPayload, err := json.Marshal(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ConsumeOperations(context.Background(), changedPayload, audit.MessageMetadata{
+		Topic: "operations-http", Partition: 0, Offset: 2, ReceivedAt: now.Add(3 * time.Second),
+	}); !errors.Is(err, audit.ErrEnvelopeConflict) {
+		t.Fatalf("different Operations event under same event ID was accepted: %v", err)
+	}
+
+	secondEvent := firstEvent
+	secondEvent.EventID += ":plan"
+	secondEvent.Action = "PLAN_READS"
+	secondEvent.Operation = "PLAN_READS"
+	secondEvent.RecordReferences = nil
+	secondPayload, err := json.Marshal(secondEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inserted, err = store.ConsumeOperations(context.Background(), secondPayload, audit.MessageMetadata{
+		Topic: "operations-http", Partition: 0, Offset: 3, ReceivedAt: now.Add(4 * time.Second),
+	})
+	if err != nil || !inserted {
+		t.Fatalf("second same-revision Operations event inserted=%v err=%v", inserted, err)
+	}
+	secondRecord, err := store.GetRecord(context.Background(), secondEvent.OrganizationID, secondEvent.EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondRecord.PreviousRecordHash != firstRecord.RecordHash || secondRecord.RecordHash == firstRecord.RecordHash {
+		t.Fatalf("operations hash chain did not advance: first=%#v second=%#v", firstRecord, secondRecord)
+	}
+	if _, err := store.GetRecord(context.Background(), "org-other", firstEvent.EventID); !errors.Is(err, audit.ErrRecordNotFound) {
+		t.Fatalf("cross-Organization operations query disclosed existence: %v", err)
+	}
+	if _, err := harness.admin.Exec(context.Background(), `UPDATE audit_ledger.records SET result='FORGED' WHERE message_id=$1`, firstEvent.EventID); err == nil {
+		t.Fatal("append-only Audit Ledger allowed Operations record UPDATE")
 	}
 }
 

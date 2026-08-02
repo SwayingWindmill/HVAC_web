@@ -135,6 +135,23 @@ export {
 } from './internal/run-resource-budget.js';
 
 export {
+  OPERATIONS_AUDIT_MESSAGE_TYPE,
+  OPERATIONS_AUDIT_PRODUCER,
+  OPERATIONS_AUDIT_SCHEMA_VERSION,
+  createOperationsAuditEvent,
+  operationsAuditEventId,
+  parseOperationsAuditEvent,
+  type CreateOperationsAuditEventInput,
+  type OperationsAuditActor,
+  type OperationsAuditActorType,
+  type OperationsAuditEventV1,
+  type OperationsAuditOperation,
+  type OperationsAuditOutcome,
+  type OperationsAuditRecordReference,
+  type OperationsAuditRecordType,
+} from './internal/operations-audit.js';
+
+export {
   NOOP_OPERATIONS_AGENT_TELEMETRY,
   safeAddOperationsTelemetryCounter,
   safeObserveOperationsTelemetryHistogram,
@@ -163,6 +180,8 @@ export {
   type ApplicationOutbox,
   type AuditRecord,
   type AuditRecorder,
+  type OperationsAuditDeliveryRecord,
+  type OperationsAuditDeliveryRepository,
   type AuthorizationDecision,
   type AuthorizationDecisionReader,
   type BudgetDecision,

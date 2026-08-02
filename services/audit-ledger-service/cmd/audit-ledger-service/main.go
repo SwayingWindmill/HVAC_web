@@ -57,11 +57,13 @@ func main() {
 	server := &http.Server{
 		Addr: envOr("AUDIT_SERVICE_ADDR", "127.0.0.1:18445"),
 		Handler: audit.NewHandler(audit.ServerConfig{
-			Store:                 store,
-			AllowedWorkloadSPIFFE: envOr("AUDIT_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
-			Audience:              envOr("AUDIT_AUDIENCE", "audit-ledger-service"),
-			Logger:                logger,
-			Observability:         telemetry,
+			Store:                           store,
+			OperationsWriter:                store,
+			AllowedWorkloadSPIFFE:           envOr("AUDIT_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
+			AllowedOperationsProducerSPIFFE: envOr("AUDIT_OPERATIONS_PRODUCER_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
+			Audience:                        envOr("AUDIT_AUDIENCE", "audit-ledger-service"),
+			Logger:                          logger,
+			Observability:                   telemetry,
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS13,

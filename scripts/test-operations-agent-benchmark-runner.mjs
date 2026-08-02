@@ -36,13 +36,14 @@ test('runner discovers and passes all repository Operations Agent scenarios', as
 
   assert.equal(report.reportVersion, OPERATIONS_AGENT_BENCHMARK_REPORT_VERSION);
   assert.equal(report.status, 'PASSED');
-  assert.equal(report.summary.discoveredScenarios, 10);
+  assert.equal(report.summary.discoveredScenarios, 11);
   assert.equal(report.summary.structureFailures, 0);
   assert.equal(report.summary.blockerFailures, 0);
   assert.deepEqual(
     report.scenarios.map(({ scenarioId }) => scenarioId),
     [
       'site-night-energy-insufficient-equipment-attribution',
+      'operations-audit-ledger-boundary',
       'operations-telemetry-boundary',
       'run-resource-payload-exhaustion',
       'run-resource-query-range-exhaustion',
@@ -60,7 +61,7 @@ test('runner discovers and passes all repository Operations Agent scenarios', as
     assert.equal(scenario.phases.scoring.status, 'NOT_EVALUATED');
     assert.equal(scenario.contractVersion, 'operations-agent-scenario/v1');
   }
-  assert.match(formatOperationsAgentBenchmarkSummary(report), /10 scenarios passed/);
+  assert.match(formatOperationsAgentBenchmarkSummary(report), /11 scenarios passed/);
 });
 
 test('structure failure prevents blocker and scoring phases', async () => {
@@ -149,6 +150,70 @@ test('registered blocker profiles reject trust, night-energy, stale-state, and a
         scenario.actionLifecycle.formalApproval = 'ALLOWED';
       },
       code: 'ACTION_LIFECYCLE_EXPECTATION_MISMATCH',
+    },
+    {
+      file: 'operations-audit-ledger-boundary.v1.json',
+      mutate: (scenario) => {
+        delete scenario.auditBoundary;
+      },
+      code: 'OPERATIONS_AUDIT_POLICY_MISSING',
+    },
+    {
+      file: 'operations-audit-ledger-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.auditBoundary.successfulMutationAtomic = 'NON_ATOMIC';
+      },
+      code: 'OPERATIONS_AUDIT_ATOMICITY_BROKEN',
+    },
+    {
+      file: 'operations-audit-ledger-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.auditBoundary.eventIdempotency = 'DUPLICATES';
+      },
+      code: 'OPERATIONS_AUDIT_IDEMPOTENCY_BROKEN',
+    },
+    {
+      file: 'operations-audit-ledger-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.auditBoundary.rawPromptExport = 'ALLOWED';
+      },
+      code: 'OPERATIONS_AUDIT_CONTENT_LEAK',
+    },
+    {
+      file: 'operations-audit-ledger-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.auditBoundary.deliveryFailureAffectsBusiness = 'ALLOWED';
+      },
+      code: 'OPERATIONS_AUDIT_DELIVERY_AFFECTS_BUSINESS',
+    },
+    {
+      file: 'operations-audit-ledger-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.auditBoundary.appendOnly = 'MUTABLE';
+      },
+      code: 'OPERATIONS_AUDIT_LEDGER_MUTABLE',
+    },
+    {
+      file: 'operations-audit-ledger-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.auditBoundary.tenantIsolation = 'BYPASS';
+      },
+      code: 'OPERATIONS_AUDIT_TENANT_BYPASS',
+    },
+    {
+      file: 'operations-audit-ledger-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.auditBoundary.traceFieldsInAudit = 'ALLOWED';
+      },
+      code: 'OPERATIONS_AUDIT_TRACE_COUPLING',
+    },
+    {
+      file: 'operations-audit-ledger-boundary.v1.json',
+      mutate: (scenario) => {
+        scenario.tools.forbiddenPaths = scenario.tools.forbiddenPaths
+          .filter((path) => path !== 'AUDIT_CONTENT_LEAK');
+      },
+      code: 'OPERATIONS_AUDIT_CONTENT_LEAK',
     },
     {
       file: 'operations-telemetry-boundary.v1.json',
@@ -301,7 +366,7 @@ test('CLI prints a human summary and writes the versioned machine report', async
 
     assert.equal(execution.status, 0, execution.stderr);
     assert.match(execution.stdout, /Operations Agent Benchmark: PASSED/);
-    assert.match(execution.stdout, /10 scenarios passed/);
+    assert.match(execution.stdout, /11 scenarios passed/);
 
     const report = JSON.parse(await readFile(reportPath, 'utf8'));
     assert.equal(report.reportVersion, OPERATIONS_AGENT_BENCHMARK_REPORT_VERSION);
