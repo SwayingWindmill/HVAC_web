@@ -114,6 +114,7 @@ function html() {
     switchSite:async()=>{setSubject(selected);return call('GET',base(otherSiteId)+'/tasks');},
     loseSession:async()=>{document.cookie='subject=; Max-Age=0; path=/';return call('GET',base()+'/tasks');},
     unreviewedDelete:async()=>{setSubject(selected);return call('POST',base()+'/tasks/'+taskOneId+':delete',{expectedWorkOrderVersion:6},'task-browser-delete-1');},
+    unreviewedTitleEdit:async()=>{setSubject(selected);return call('POST',base()+'/tasks/'+taskOneId+':title',{expectedWorkOrderVersion:6,title:'Retitled task'},'task-browser-title-1');},
   };
   setSubject(selected);
   </script>`;
@@ -161,10 +162,10 @@ const server = createServer(async (request, response) => {
   if (!subject) { problem(response, 401, 'SESSION_REQUIRED', 'The authenticated Session is required.'); return; }
   if (bucket >= 1) { problem(response, 404, 'ROUTE_NOT_FOUND', 'The requested route is not available.'); return; }
   if (subject === authorizationDeniedSubject) { problem(response, 403, 'WORK_ORDER_ACCESS_DENIED', 'The Work Order task action is not authorized.'); return; }
-  const match = url.pathname.match(/^\/api\/v1\/sites\/([^/]+)\/work-orders\/([^/]+)\/(tasks(?::reorder)?|tasks\/([^/:]+):(status|delete))$/);
+  const match = url.pathname.match(/^\/api\/v1\/sites\/([^/]+)\/work-orders\/([^/]+)\/(tasks(?::reorder)?|tasks\/([^/:]+):(status|delete|title))$/);
   if (!match || match[1] !== siteId || match[2] !== workOrderId) { problem(response, 404, 'RESOURCE_NOT_FOUND', 'The Work Order resource is not visible.'); return; }
   const route = match[3];
-  if (route.endsWith(':delete')) { problem(response, 404, 'ROUTE_NOT_FOUND', 'Task deletion is not reviewed.'); return; }
+  if (route.endsWith(':delete') || route.endsWith(':title')) { problem(response, 404, 'ROUTE_NOT_FOUND', 'Task deletion and title editing are not reviewed.'); return; }
   if (request.method === 'GET') {
     if (route !== 'tasks') { problem(response, 405, 'METHOD_NOT_ALLOWED', 'The route is not readable.'); return; }
     json(response, 200, checklist()); return;
@@ -219,7 +220,8 @@ try {
   const denied=await evaluate(client,`globalThis.__WORK_ORDER_TASK_AUDIT__.switchDenied()`); assert(denied.status===404&&denied.body.code==='ROUTE_NOT_FOUND','non-selected Session saw task route'); assertions.push('non-selected-route-absence');
   const crossSite=await evaluate(client,`globalThis.__WORK_ORDER_TASK_AUDIT__.switchSite()`); assert(crossSite.status===404&&crossSite.body.code==='RESOURCE_NOT_FOUND','cross-Site task list did not fail generically'); assertions.push('cross-site-nondiscovery');
   const lost=await evaluate(client,`globalThis.__WORK_ORDER_TASK_AUDIT__.loseSession()`); assert(lost.status===401&&lost.body.code==='SESSION_REQUIRED','Session loss did not fail closed'); assert(!(await evaluate(client,`document.body.innerText.includes(${JSON.stringify(taskTwoId)})`)),'Session loss retained task data'); assertions.push('session-loss-purge');
-  const unreviewed=await evaluate(client,`globalThis.__WORK_ORDER_TASK_AUDIT__.unreviewedDelete()`); assert(unreviewed.status===404&&unreviewed.body.code==='ROUTE_NOT_FOUND','unreviewed task delete was exposed'); assertions.push('delete-and-title-edit-absence');
+  const unreviewedDelete=await evaluate(client,`globalThis.__WORK_ORDER_TASK_AUDIT__.unreviewedDelete()`); assert(unreviewedDelete.status===404&&unreviewedDelete.body.code==='ROUTE_NOT_FOUND','unreviewed task delete was exposed');
+  const unreviewedTitleEdit=await evaluate(client,`globalThis.__WORK_ORDER_TASK_AUDIT__.unreviewedTitleEdit()`); assert(unreviewedTitleEdit.status===404&&unreviewedTitleEdit.body.code==='ROUTE_NOT_FOUND','unreviewed task title edit was exposed'); assertions.push('delete-and-title-edit-absence');
   const apiRequests=requests.filter((entry)=>entry.path.includes('/work-orders/')); assert(apiRequests.length>=15,'browser audit did not exercise task boundaries'); assert(apiRequests.every((entry)=>entry.path.startsWith('/api/v1/sites/')),'browser bypassed public Gateway paths'); assert(apiRequests.filter((entry)=>entry.method==='POST').every((entry)=>entry.headers['x-csrf-token']===browserProof&&typeof entry.headers['idempotency-key']==='string'),'browser omitted mutation proofs'); assert(apiRequests.every((entry)=>!Object.keys(entry.headers).some((name)=>forbiddenAuthorityHeaders.has(name))),'browser supplied authority headers'); assertions.push('public-gateway-task-only');
   passed=true;
   await writeFile(join(outputRoot,'browser-evidence.json'),JSON.stringify({schemaVersion:1,passed:true,generatedAt:new Date().toISOString(),assertions,cohort:{percentage:1,salt,group,revision,selectedSubject,selectedBucket:cohortBucket(selectedSubject),authorizationDeniedSubject,authorizationDeniedBucket:cohortBucket(authorizationDeniedSubject),deniedSubject,deniedBucket:cohortBucket(deniedSubject)},network:{requests},finalChecklist:checklist(),safety:{publicGatewayOnly:true,csrfOriginBound:true,unifiedIdempotencyDomain:true,dualVersionConcurrency:true,exactFullPermutation:true,deleteAbsent:true,titleEditAbsent:true,fallbackOwner:false,shadowOwner:false}},null,2));
