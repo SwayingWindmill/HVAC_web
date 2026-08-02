@@ -35,9 +35,9 @@ export const capabilitySchema = z.enum([
   'alarm.list', 'alarm.read', 'work-order.list', 'work-order.read', 'work-order.create', 'work-order.assign', 'work-order.lifecycle', 'work-order.task',
 ]);
 export const effectiveAuthorizationSchema = z.object({
-  capabilitySetVersion: z.literal(6),
+  capabilitySetVersion: z.literal(7),
   policyRevision: z.string().min(1).max(128),
-  capabilities: z.array(capabilitySchema).max(19).refine((values) => new Set(values).size === values.length, {
+  capabilities: z.array(capabilitySchema).max(20).refine((values) => new Set(values).size === values.length, {
     message: 'effective capabilities must be unique',
   }),
 }).strict();
