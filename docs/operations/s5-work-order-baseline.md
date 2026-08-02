@@ -60,11 +60,25 @@ Lifecycle persistence uses the isolated `s5_work_order_mutation_service` login a
 
 The seven lifecycle routes share `S5-R1-internal-lifecycle`, cohort `s5-work-order-lifecycle-v1`, and salt `s5-work-order-lifecycle-canary-v1`, with no fallback and no shadow owner. Browser certification proves the legal graph, exact retry, illegal transition, stale version, missing evidence, authorization cleanup, non-selected route absence, cross-Site nondiscovery, Session-loss purge, public Gateway-only POST traffic, and absence of collaboration routes.
 
+## P6 governed ordered task checklist
+
+IAM owns exact `work-order:task:list`, `work-order:task:append`, `work-order:task:status`, and `work-order:task:reorder` decisions. List, append, and reorder bind Organization, Site, Principal, and Work Order; status additionally binds the exact Task identity. Explicit deny wins, and durable decision evidence records the Task identity when one is present.
+
+Platform Gateway exposes only the reviewed collection GET/POST, `tasks/{taskId}:status` POST, and `tasks:reorder` POST routes. It derives all authority from Session and route, requires Origin-bound CSRF and a bounded `Idempotency-Key` for writes, signs exact read or write context, and validates the complete returned checklist, summary, Work Order version, Task version, requested status, and exact reordered identity sequence.
+
+Work Order Service owns UUIDv7 Task identity, append-only title, zero-based position, `OPEN | BLOCKED | COMPLETED` state, Task version, timestamps, and Work Order task-summary convergence. Task writes are allowed only while the Work Order is `OPEN`, `IN_PROGRESS`, or `BLOCKED`. Status changes require both expected Work Order and Task versions. Reorder accepts exactly one full changed permutation: duplicates, omissions, additions, invalid identities, and no-op orderings fail closed.
+
+Append, status, and reorder share one durable `TASK` idempotency domain. An exact retry returns the original committed checklist after restart. Reuse across task actions or with another payload returns `IDEMPOTENCY_CONFLICT`. Task rows, Work Order summary and version, timeline evidence, idempotency snapshot, and mutation audit commit in one FORCE RLS transaction.
+
+The writer role receives INSERT on `work_order_task` and UPDATE only for position, status, version, and updated time. It receives no DELETE privilege and no title-update privilege. Reorder uses a collision-free intermediate position range inside the transaction before applying the exact requested order.
+
+The four task operations use `S5-R1-internal-task-checklist`, cohort `s5-work-order-task-v1`, and salt `s5-work-order-task-canary-v1` at 1%, with no fallback and no shadow owner. Browser certification proves ordered list and append, exact snapshot replay, dual-version conflict, unified task idempotency, exact full permutation, summary convergence, authorization cleanup, non-selected route absence, cross-Site nondiscovery, Session-loss purge, public Gateway-only traffic, and absence of delete and title-edit routes.
+
 ## Explicit exclusions
 
-P5 does not expose task/checklist mutation, note, attachment, collaboration, notification, escalation, SLA automation, Alarm link/unlink, title, description, priority, source, assignment, or Site changes through lifecycle endpoints. It does not infer Work Orders from Telemetry or browser state, change Alarm status, run FDD, execute Commands, or admit arbitrary JSON evidence. Historical timeline and completion evidence cannot be purged or rewritten.
+P6 does not expose Task deletion or title editing, note, attachment, collaboration, notification, escalation, SLA automation, Alarm link/unlink, Work Order title, description, priority, source, assignment, or Site changes through task endpoints. It does not infer Work Orders from Telemetry or browser state, change Alarm status, run FDD, execute Commands, or admit arbitrary JSON evidence. Historical timeline, Task history, and completion evidence cannot be purged or rewritten.
 
 ## Next slices
 
-1. Governed lifecycle transitions with explicit legal graph, reason, version, idempotency, actor, policy, and completion-evidence requirements.
-2. Ordered tasks, notes, attachment metadata, and explicit Alarm link/unlink as separately reviewed write slices.
+1. Notes and attachment metadata as separate append-only write slices with their own authority, versioning, idempotency, and evidence rules.
+2. Explicit Alarm link/unlink, Task title editing or deletion, collaboration, notifications, and SLA automation only through separately reviewed slices.

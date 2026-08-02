@@ -102,6 +102,9 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 	if workOrderLifecycleCapabilityAllowed(workOrderFacts, decidedAt, lookup.ActingOrganizationID) {
 		capabilities = append(capabilities, identitycontext.CapabilityWorkOrderLifecycle)
 	}
+	if workOrderTaskCapabilityAllowed(workOrderFacts, decidedAt, lookup.ActingOrganizationID) {
+		capabilities = append(capabilities, identitycontext.CapabilityWorkOrderTask)
+	}
 
 	return identitycontext.EffectiveAuthorization{
 		CapabilitySetVersion: identitycontext.CapabilitySetVersion,
@@ -112,7 +115,7 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 
 func combinedCapabilityPolicyRevision(registryRevision, telemetryRevision, alarmRevision, workOrderRevision string) string {
 	digest := sha256.Sum256([]byte(registryRevision + "\x00" + telemetryRevision + "\x00" + alarmRevision + "\x00" + workOrderRevision))
-	return "capability-v6:" + hex.EncodeToString(digest[:])
+	return "capability-v7:" + hex.EncodeToString(digest[:])
 }
 
 func telemetryCapabilityAllowed(facts TelemetryAuthorizationFacts, now time.Time, actingOrganizationID string, action telemetryauth.Action) bool {
@@ -188,8 +191,24 @@ var principalWorkOrderLifecycleActions = [...]workorderauth.Action{
 	workorderauth.ActionReopen,
 }
 
+var principalWorkOrderTaskActions = [...]workorderauth.Action{
+	workorderauth.ActionTaskList,
+	workorderauth.ActionTaskAppend,
+	workorderauth.ActionTaskStatus,
+	workorderauth.ActionTaskReorder,
+}
+
 func workOrderLifecycleCapabilityAllowed(facts WorkOrderAuthorizationFacts, now time.Time, actingOrganizationID string) bool {
 	for _, action := range principalWorkOrderLifecycleActions {
+		if workOrderCapabilityAllowed(facts, now, actingOrganizationID, action) {
+			return true
+		}
+	}
+	return false
+}
+
+func workOrderTaskCapabilityAllowed(facts WorkOrderAuthorizationFacts, now time.Time, actingOrganizationID string) bool {
+	for _, action := range principalWorkOrderTaskActions {
 		if workOrderCapabilityAllowed(facts, now, actingOrganizationID, action) {
 			return true
 		}

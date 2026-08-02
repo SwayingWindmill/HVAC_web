@@ -51,6 +51,9 @@ const (
 	publicWorkOrderDetail
 	publicWorkOrderAssignment
 	publicWorkOrderLifecycle
+	publicWorkOrderTaskCollection
+	publicWorkOrderTaskStatus
+	publicWorkOrderTaskReorder
 )
 
 type publicWorkOrderRoute struct {
@@ -58,6 +61,7 @@ type publicWorkOrderRoute struct {
 	template    string
 	siteID      string
 	workOrderID string
+	taskID      string
 	action      workorderauth.Action
 	operation   workordermodel.Operation
 }
@@ -95,6 +99,9 @@ func newWorkOrderController(config *WorkOrderConfig) *workOrderController {
 }
 
 func matchPublicWorkOrderRoute(path string) (publicWorkOrderRoute, bool) {
+	if route, ok := matchPublicWorkOrderTaskRoute(path); ok {
+		return route, true
+	}
 	prefix := "/api/v1/sites/"
 	if !strings.HasPrefix(path, prefix) || strings.HasSuffix(path, "/") {
 		return publicWorkOrderRoute{}, false
@@ -332,6 +339,7 @@ func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, 
 		ActingOrganizationID: session.ActingOrganizationID,
 		SiteID:               route.siteID,
 		WorkOrderID:          route.workOrderID,
+		TaskID:               route.taskID,
 		AssigneeID:           assigneeID,
 		TeamID:               teamID,
 		Action:               route.action,
@@ -375,7 +383,7 @@ func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, 
 	}
 	decision := output.Decision
 	if decision.Subject != session.Principal.Subject || decision.SubjectIssuer != session.Principal.Issuer ||
-		decision.ActingOrganizationID != session.ActingOrganizationID || decision.SiteID != route.siteID || decision.WorkOrderID != route.workOrderID ||
+		decision.ActingOrganizationID != session.ActingOrganizationID || decision.SiteID != route.siteID || decision.WorkOrderID != route.workOrderID || decision.TaskID != route.taskID ||
 		!sameOptionalWorkOrderTarget(decision.AssigneeID, assigneeID) || !sameOptionalWorkOrderTarget(decision.TeamID, teamID) || decision.Action != route.action {
 		failure := workOrderUnavailable("IAM returned a Work Order decision outside the authenticated boundary.")
 		return workorderauth.Decision{}, &failure
@@ -400,6 +408,9 @@ func (h *handler) signWorkOrderReadContext(session bffSession, route publicWorkO
 	scopes := []string{"organization:" + session.ActingOrganizationID, "site:" + route.siteID}
 	if route.workOrderID != "" {
 		scopes = append(scopes, "work-order:"+route.workOrderID)
+	}
+	if route.taskID != "" {
+		scopes = append(scopes, "task:"+route.taskID)
 	}
 	claims := identitycontext.DelegationClaims{
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,

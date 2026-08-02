@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 18,
+  "registryRevision": 19,
   "routes": [
     {
       "method": "GET",
@@ -1527,6 +1527,164 @@
       ],
       "migrationPhase": "S5-R1-internal-lifecycle",
       "cohortGroup": "s5-work-order-lifecycle-v1"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks",
+      "owner": "work-order-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "internal-canary",
+      "rollout": {
+        "mode": "percentage",
+        "percentage": 1,
+        "cohortSalt": "s5-work-order-task-canary-v1"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal",
+        "work-order"
+      ],
+      "migrationPhases": [
+        "S5-R0-contract-only",
+        "S5-R1-internal-read-only",
+        "S5-R1-internal-create-assign",
+        "S5-R1-internal-lifecycle",
+        "S5-R1-internal-task-checklist",
+        "S5-R2-site-canary",
+        "S5-R3-operationally-certified"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false,
+      "fallbackForbiddenResults": [
+        "AUTHORIZATION_DENIED",
+        "RESOURCE_NOT_FOUND"
+      ],
+      "migrationPhase": "S5-R1-internal-task-checklist",
+      "cohortGroup": "s5-work-order-task-v1"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks",
+      "owner": "work-order-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "internal-canary",
+      "rollout": {
+        "mode": "percentage",
+        "percentage": 1,
+        "cohortSalt": "s5-work-order-task-canary-v1"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal",
+        "work-order",
+        "key"
+      ],
+      "migrationPhases": [
+        "S5-R0-contract-only",
+        "S5-R1-internal-read-only",
+        "S5-R1-internal-create-assign",
+        "S5-R1-internal-lifecycle",
+        "S5-R1-internal-task-checklist",
+        "S5-R2-site-canary",
+        "S5-R3-operationally-certified"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false,
+      "fallbackForbiddenResults": [
+        "AUTHORIZATION_DENIED",
+        "RESOURCE_NOT_FOUND",
+        "VERSION_CONFLICT",
+        "IDEMPOTENCY_CONFLICT"
+      ],
+      "migrationPhase": "S5-R1-internal-task-checklist",
+      "cohortGroup": "s5-work-order-task-v1"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks/{taskId}:status",
+      "owner": "work-order-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "internal-canary",
+      "rollout": {
+        "mode": "percentage",
+        "percentage": 1,
+        "cohortSalt": "s5-work-order-task-canary-v1"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal",
+        "work-order",
+        "task",
+        "key"
+      ],
+      "migrationPhases": [
+        "S5-R0-contract-only",
+        "S5-R1-internal-read-only",
+        "S5-R1-internal-create-assign",
+        "S5-R1-internal-lifecycle",
+        "S5-R1-internal-task-checklist",
+        "S5-R2-site-canary",
+        "S5-R3-operationally-certified"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false,
+      "fallbackForbiddenResults": [
+        "AUTHORIZATION_DENIED",
+        "RESOURCE_NOT_FOUND",
+        "VERSION_CONFLICT",
+        "IDEMPOTENCY_CONFLICT"
+      ],
+      "migrationPhase": "S5-R1-internal-task-checklist",
+      "cohortGroup": "s5-work-order-task-v1"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks:reorder",
+      "owner": "work-order-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "activationStatus": "internal-canary",
+      "rollout": {
+        "mode": "percentage",
+        "percentage": 1,
+        "cohortSalt": "s5-work-order-task-canary-v1"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal",
+        "work-order",
+        "key"
+      ],
+      "migrationPhases": [
+        "S5-R0-contract-only",
+        "S5-R1-internal-read-only",
+        "S5-R1-internal-create-assign",
+        "S5-R1-internal-lifecycle",
+        "S5-R1-internal-task-checklist",
+        "S5-R2-site-canary",
+        "S5-R3-operationally-certified"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false,
+      "fallbackForbiddenResults": [
+        "AUTHORIZATION_DENIED",
+        "RESOURCE_NOT_FOUND",
+        "VERSION_CONFLICT",
+        "IDEMPOTENCY_CONFLICT"
+      ],
+      "migrationPhase": "S5-R1-internal-task-checklist",
+      "cohortGroup": "s5-work-order-task-v1"
     }
   ]
 }

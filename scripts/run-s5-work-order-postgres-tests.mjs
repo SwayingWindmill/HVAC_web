@@ -147,7 +147,8 @@ try {
 
   for (const [operation, sql] of [
     ['delete current', `DELETE FROM work_order_runtime.work_order_current`],
-    ['insert task', `INSERT INTO work_order_runtime.work_order_task (organization_id, site_id, work_order_id, task_id, position, title, status, version, created_at, updated_at) VALUES ('01920000-0000-7000-8000-000000000001','01920000-0001-7000-8000-000000000001','01920000-1000-7000-8000-000000000001','01930000-4000-7000-8000-000000000099',99,'forbidden','OPEN',1,now(),now())`],
+    ['delete task', `DELETE FROM work_order_runtime.work_order_task`],
+    ['edit task title', `UPDATE work_order_runtime.work_order_task SET title = 'forbidden'`],
   ]) {
     const denied = psql(`
       SET SESSION AUTHORIZATION s5_work_order_mutation_service;

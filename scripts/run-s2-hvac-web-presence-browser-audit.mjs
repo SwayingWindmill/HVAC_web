@@ -109,7 +109,7 @@ function principal() {
       audience: 'iam-service', policyRevision: 'policy-09', delegationExpiresAt: '2026-07-25T06:00:00.000Z',
     },
     authorization: {
-      capabilitySetVersion: 6,
+      capabilitySetVersion: 7,
       policyRevision: 'telemetry-access:1',
       capabilities: ['site.read', 'device.list', 'device.read'],
     },

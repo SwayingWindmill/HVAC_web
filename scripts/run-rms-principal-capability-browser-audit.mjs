@@ -79,7 +79,7 @@ function principalResponse() {
       delegationExpiresAt: instant,
     },
     authorization: {
-      capabilitySetVersion: 6,
+      capabilitySetVersion: 7,
       policyRevision,
       capabilities,
     },

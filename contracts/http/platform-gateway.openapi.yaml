@@ -1316,12 +1316,13 @@
           "work-order.read",
           "work-order.create",
           "work-order.assign",
-          "work-order.lifecycle"
+          "work-order.lifecycle",
+          "work-order.task"
         ]
       },
       "EffectiveAuthorization": {
         "type": "object",
-        "description": "IAM-authored effective authorization for the current Principal and acting Organization. Platform Gateway transports this value without deriving permissions from roles. Version 6 adds a high-level governed Work Order lifecycle capability; every exact Site, Work Order, action and transition remains server-authorized.",
+        "description": "IAM-authored effective authorization for the current Principal and acting Organization. Platform Gateway transports this value without deriving permissions from roles. Version 7 adds a high-level governed Work Order task capability; every exact Site, Work Order, task, action and transition remains server-authorized.",
         "additionalProperties": false,
         "required": [
           "capabilitySetVersion",
@@ -1331,7 +1332,7 @@
         "properties": {
           "capabilitySetVersion": {
             "type": "integer",
-            "const": 6
+            "const": 7
           },
           "policyRevision": {
             "type": "string",
@@ -1340,7 +1341,7 @@
           },
           "capabilities": {
             "type": "array",
-            "maxItems": 19,
+            "maxItems": 20,
             "uniqueItems": true,
             "items": {
               "$ref": "#/components/schemas/Capability"

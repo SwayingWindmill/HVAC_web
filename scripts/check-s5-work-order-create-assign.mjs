@@ -28,7 +28,13 @@ const paths = openapi.paths ?? {};
 assert(!JSON.stringify(openapi).includes('"":'), 'public Work Order OpenAPI contains an empty schema key');
 assert(paths['/api/v1/sites/{siteId}/work-orders']?.post?.['x-iam-action'] === 'work-order:create', 'public Work Order create contract is missing');
 assert(paths['/api/v1/sites/{siteId}/work-orders/{workOrderId}:assign']?.post?.['x-iam-action'] === 'work-order:assign', 'public Work Order assignment contract is missing');
-for (const forbidden of ['/tasks', '/notes', '/attachments', ':link-alarm', ':add-note', ':attach']) assert(!Object.keys(paths).some((path) => path.includes(forbidden)), `unreviewed public Work Order route exists: ${forbidden}`);
+for (const forbidden of ['/notes', '/attachments', ':link-alarm', ':add-note', ':attach']) assert(!Object.keys(paths).some((path) => path.includes(forbidden)), `unreviewed public Work Order route exists: ${forbidden}`);
+const reviewedTaskPaths = new Set([
+  '/api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks',
+  '/api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks/{taskId}:status',
+  '/api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks:reorder',
+]);
+assert(Object.keys(paths).filter((path) => path.includes('/tasks')).every((path) => reviewedTaskPaths.has(path)), 'unreviewed public Work Order task route exists');
 const writes = routes.routes.filter((route) => route.owner === 'work-order-service' && route.method === 'POST' && route.migrationPhase === 'S5-R1-internal-create-assign');
 assert(writes.length === 2, 'Work Order must expose exactly create and assign POST routes');
 assert(writes.every((route) => route.activationStatus === 'internal-canary' && route.rollout?.mode === 'percentage' && route.rollout?.percentage === 1 && route.rollout?.fallbackOwner === undefined && route.shadowSideEffectPolicy === 'NONE' && route.migrationPhase === 'S5-R1-internal-create-assign'), 'Work Order write cohort is not a no-fallback/no-shadow 1% canary');

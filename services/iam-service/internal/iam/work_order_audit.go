@@ -12,6 +12,7 @@ type WorkOrderDecisionAudit struct {
 	ActingOrganizationID string
 	SiteID               string
 	WorkOrderID          string
+	TaskID               string
 	AssigneeID           *string
 	TeamID               *string
 	Action               workorderauth.Action
@@ -43,6 +44,7 @@ func (sink *loggerWorkOrderDecisionAuditSink) RecordWorkOrderDecision(ctx contex
 		"acting_organization_id", event.ActingOrganizationID,
 		"site_id", event.SiteID,
 		"work_order_id", event.WorkOrderID,
+		"task_id", event.TaskID,
 		"assignee_id", event.AssigneeID,
 		"team_id", event.TeamID,
 		"action", event.Action,

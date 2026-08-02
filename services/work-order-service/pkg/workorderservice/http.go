@@ -30,6 +30,10 @@ const (
 	WorkOrderCompleteAction      = "work-order:complete"
 	WorkOrderCancelAction        = "work-order:cancel"
 	WorkOrderReopenAction        = "work-order:reopen"
+	WorkOrderTaskListAction      = "work-order:task:list"
+	WorkOrderTaskAppendAction    = "work-order:task:append"
+	WorkOrderTaskStatusAction    = "work-order:task:status"
+	WorkOrderTaskReorderAction   = "work-order:task:reorder"
 	DefaultGatewaySPIFFEID       = "spiffe://hvac.local/platform-gateway"
 	DefaultAudience              = "work-order-service"
 	maximumMutationBodyBytes     = 32 * 1024
@@ -40,6 +44,7 @@ type HTTPConfig struct {
 	GatewayPublicKey crypto.PublicKey
 	Now              func() time.Time
 	NewWorkOrderID   func(time.Time) (string, error)
+	NewTaskID        func(time.Time) (string, error)
 	GatewaySPIFFEID  string
 	Audience         string
 	MaxListLimit     int
@@ -47,9 +52,11 @@ type HTTPConfig struct {
 
 type httpHandler struct {
 	store            Store
+	taskStore        TaskStore
 	gatewayPublicKey crypto.PublicKey
 	now              func() time.Time
 	newWorkOrderID   func(time.Time) (string, error)
+	newTaskID        func(time.Time) (string, error)
 	gatewaySPIFFEID  string
 	audience         string
 	maxListLimit     int
@@ -72,12 +79,16 @@ const (
 	workOrderAssignmentRoute
 	workOrderLifecycleRoute
 	workOrderLifecyclePreconditionRoute
+	workOrderTaskCollectionRoute
+	workOrderTaskStatusRoute
+	workOrderTaskReorderRoute
 )
 
 type workOrderRoute struct {
 	kind        workOrderRouteKind
 	siteID      string
 	workOrderID string
+	taskID      string
 	action      string
 	operation   workordermodel.Operation
 }
@@ -118,6 +129,9 @@ func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 	if config.NewWorkOrderID == nil {
 		config.NewWorkOrderID = newUUIDv7
 	}
+	if config.NewTaskID == nil {
+		config.NewTaskID = newUUIDv7
+	}
 	if strings.TrimSpace(config.GatewaySPIFFEID) == "" {
 		config.GatewaySPIFFEID = DefaultGatewaySPIFFEID
 	}
@@ -127,8 +141,10 @@ func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 	if config.MaxListLimit <= 0 || config.MaxListLimit > 100 {
 		config.MaxListLimit = 100
 	}
+	taskStore, _ := config.Store.(TaskStore)
 	return &httpHandler{
-		store: config.Store, gatewayPublicKey: config.GatewayPublicKey, now: config.Now, newWorkOrderID: config.NewWorkOrderID,
+		store: config.Store, taskStore: taskStore, gatewayPublicKey: config.GatewayPublicKey, now: config.Now,
+		newWorkOrderID: config.NewWorkOrderID, newTaskID: config.NewTaskID,
 		gatewaySPIFFEID: config.GatewaySPIFFEID, audience: config.Audience, maxListLimit: config.MaxListLimit,
 	}, nil
 }
@@ -146,7 +162,7 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 		handler.writeProblem(writer, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested Work Order route does not exist.", false)
 		return
 	}
-	if !workordermodel.IsUUIDv7(route.siteID) || (route.workOrderID != "" && !workordermodel.IsUUIDv7(route.workOrderID)) {
+	if !workordermodel.IsUUIDv7(route.siteID) || (route.workOrderID != "" && !workordermodel.IsUUIDv7(route.workOrderID)) || (route.taskID != "" && !workordermodel.IsUUIDv7(route.taskID)) {
 		handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Work Order resource is not visible.", false)
 		return
 	}
@@ -189,6 +205,30 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 			return
 		}
 		handler.handleLifecyclePrecondition(writer, request, route)
+	case workOrderTaskCollectionRoute:
+		switch request.Method {
+		case http.MethodGet:
+			handler.handleTaskList(writer, request, route)
+		case http.MethodPost:
+			handler.handleTaskAppend(writer, request, route)
+		default:
+			writer.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+			handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Work Order tasks only support GET and reviewed POST append.", false)
+		}
+	case workOrderTaskStatusRoute:
+		if request.Method != http.MethodPost {
+			writer.Header().Set("Allow", http.MethodPost)
+			handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Work Order task status only supports POST.", false)
+			return
+		}
+		handler.handleTaskStatus(writer, request, route)
+	case workOrderTaskReorderRoute:
+		if request.Method != http.MethodPost {
+			writer.Header().Set("Allow", http.MethodPost)
+			handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Work Order task reorder only supports POST.", false)
+			return
+		}
+		handler.handleTaskReorder(writer, request, route)
 	}
 }
 
@@ -569,7 +609,7 @@ func (handler *httpHandler) writeAccessDenied(writer http.ResponseWriter) {
 
 func (handler *httpHandler) writeStoreFailure(writer http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, ErrNotFound):
+	case errors.Is(err, ErrNotFound), errors.Is(err, workordermodel.ErrTaskNotFound):
 		handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Work Order resource is not visible.", false)
 	case errors.Is(err, ErrInvalidCursor):
 		handler.writeProblem(writer, http.StatusBadRequest, "WORK_ORDER_CURSOR_INVALID", "Work Order cursor invalid", "The Work Order cursor is invalid for this scope or filter.", false)
@@ -585,6 +625,8 @@ func (handler *httpHandler) writeStoreFailure(writer http.ResponseWriter, err er
 		handler.writeProblem(writer, http.StatusUnprocessableEntity, "WORK_ORDER_ASSIGNMENT_INVALID", "Work Order assignment invalid", "The assignment request violates the authoritative Work Order contract.", false)
 	case errors.Is(err, workordermodel.ErrInvalidLifecycle):
 		handler.writeProblem(writer, http.StatusUnprocessableEntity, "WORK_ORDER_LIFECYCLE_INVALID", "Work Order lifecycle invalid", "The lifecycle request violates the authoritative Work Order transition graph.", false)
+	case errors.Is(err, workordermodel.ErrInvalidTask):
+		handler.writeProblem(writer, http.StatusUnprocessableEntity, "WORK_ORDER_TASK_INVALID", "Work Order task invalid", "The task request violates the authoritative ordered checklist contract.", false)
 	default:
 		handler.writeProblem(writer, http.StatusServiceUnavailable, "WORK_ORDER_UNAVAILABLE", "Work Order unavailable", "Work Order Service cannot access its authoritative store.", true)
 	}
@@ -610,6 +652,20 @@ func matchWorkOrderPath(path string) (workOrderRoute, bool) {
 		return workOrderRoute{}, false
 	}
 	segments := strings.Split(strings.TrimPrefix(path, InternalSiteWorkOrdersPrefix), "/")
+	if len(segments) == 4 && segments[0] != "" && segments[1] == "work-orders" && segments[2] != "" {
+		switch segments[3] {
+		case "tasks":
+			return workOrderRoute{kind: workOrderTaskCollectionRoute, siteID: segments[0], workOrderID: segments[2]}, true
+		case "tasks:reorder":
+			return workOrderRoute{kind: workOrderTaskReorderRoute, siteID: segments[0], workOrderID: segments[2]}, true
+		}
+	}
+	if len(segments) == 5 && segments[0] != "" && segments[1] == "work-orders" && segments[2] != "" && segments[3] == "tasks" && strings.HasSuffix(segments[4], ":status") {
+		taskID := strings.TrimSuffix(segments[4], ":status")
+		if taskID != "" && !strings.Contains(taskID, ":") {
+			return workOrderRoute{kind: workOrderTaskStatusRoute, siteID: segments[0], workOrderID: segments[2], taskID: taskID}, true
+		}
+	}
 	if len(segments) == 2 && segments[0] != "" && segments[1] == "work-orders" {
 		return workOrderRoute{kind: workOrderCollectionRoute, siteID: segments[0]}, true
 	}

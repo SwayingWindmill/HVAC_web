@@ -20,8 +20,11 @@ const dataRegistry = JSON.parse(dataRaw);
 assert(typeof packageJSON.scripts?.['s5:work-order:read-canary:check'] === 'string', 'package.json is missing s5:work-order:read-canary:check');
 assert(typeof packageJSON.scripts?.['s5:work-order:read-canary:browser'] === 'string', 'package.json is missing s5:work-order:read-canary:browser');
 assert(typeof packageJSON.scripts?.['s5:work-order:read-canary'] === 'string', 'package.json is missing s5:work-order:read-canary');
-const routes = registry.routes.filter((route) => route.owner === 'work-order-service' && route.method === 'GET');
-assert(routes.length === 2, 'Work Order must expose exactly the list/detail GET pair');
+const baseReadPaths = new Set(['/api/v1/sites/{siteId}/work-orders', '/api/v1/sites/{siteId}/work-orders/{workOrderId}']);
+const routes = registry.routes.filter((route) => route.owner === 'work-order-service' && route.method === 'GET' && baseReadPaths.has(route.path));
+assert(routes.length === 2, 'Work Order must preserve exactly the list/detail base GET pair');
+const taskRead = registry.routes.find((route) => route.owner === 'work-order-service' && route.method === 'GET' && route.path === '/api/v1/sites/{siteId}/work-orders/{workOrderId}/tasks');
+assert(taskRead?.migrationPhase === 'S5-R1-internal-task-checklist' && taskRead?.cohortGroup === 's5-work-order-task-v1' && taskRead?.rollout?.percentage === 1 && taskRead?.readOnlyFallback === false, 'Work Order task read route is missing its independent no-fallback 1% cohort');
 for (const route of routes) {
   assert(route.method === 'GET', `${route.path} is not GET-only`);
   assert(route.publicIngress === 'platform-gateway', `${route.path} bypasses Gateway`);
@@ -37,8 +40,8 @@ assert(mutations.every((route) => route.migrationPhase === 'S5-R1-internal-creat
 for (const name of ['iam-work-order-permission', 'iam-work-order-authorization-decision']) {
   assert(dataRegistry.resources.some((resource) => resource.kind === 'projection' && resource.name === name && resource.writer === 'iam-service' && resource.revision === 1), 'IAM ownership projection is missing: ' + name);
 }
-assert(openapi.includes('"const": 6') && openapi.includes('"work-order.list"') && openapi.includes('"work-order.read"') && openapi.includes('"work-order.create"') && openapi.includes('"work-order.assign"') && openapi.includes('"maxItems": 19'), 'public capability v6 contract is incomplete');
-for (const marker of ['CapabilitySetVersion = 6', 'CapabilityWorkOrderList', 'CapabilityWorkOrderRead', 'CapabilityWorkOrderCreate', 'CapabilityWorkOrderAssign', 'CapabilityWorkOrderLifecycle']) assert(capabilities.includes(marker), `identity capability contract is missing ${marker}`);
+assert(openapi.includes('"const": 7') && openapi.includes('"work-order.list"') && openapi.includes('"work-order.read"') && openapi.includes('"work-order.create"') && openapi.includes('"work-order.assign"') && openapi.includes('"maxItems": 20'), 'public capability v7 contract is incomplete');
+for (const marker of ['CapabilitySetVersion = 7', 'CapabilityWorkOrderList', 'CapabilityWorkOrderRead', 'CapabilityWorkOrderCreate', 'CapabilityWorkOrderAssign', 'CapabilityWorkOrderLifecycle', 'CapabilityWorkOrderTask']) assert(capabilities.includes(marker), `identity capability contract is missing ${marker}`);
 for (const marker of ['PhaseS5InternalReadOnly', 's5-work-order-read-v1', 'Percentage != 1']) assert(ownership.includes(marker), `ownership validator is missing ${marker}`);
 for (const marker of ['ActionList', 'ActionRead', 'ReasonDenyExplicit', 'ALLOW_EXACT_SCOPE']) assert(workOrderAuth.includes(marker), `Work Order authorization contract is missing ${marker}`);
 for (const marker of ['WorkOrderDecisionPath', 'work-order:authorize', 'handleWorkOrderDecision']) assert(iamMainServer.includes(marker), 'IAM Work Order route is missing ' + marker);

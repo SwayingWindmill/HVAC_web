@@ -17,6 +17,8 @@ var (
 	ErrInvalidCreate     = errors.New("work order create request is invalid")
 	ErrInvalidAssignment = errors.New("work order assignment request is invalid")
 	ErrInvalidLifecycle  = errors.New("work order lifecycle request is invalid")
+	ErrInvalidTask       = errors.New("work order task request is invalid")
+	ErrTaskNotFound      = errors.New("work order task not found")
 )
 
 type Priority string
@@ -42,17 +44,20 @@ const (
 type Operation string
 
 const (
-	OperationCreate   Operation = "CREATE"
-	OperationOpen     Operation = "OPEN"
-	OperationAssign   Operation = "ASSIGN"
-	OperationUnassign Operation = "UNASSIGN"
-	OperationSchedule Operation = "SCHEDULE"
-	OperationStart    Operation = "START"
-	OperationBlock    Operation = "BLOCK"
-	OperationResume   Operation = "RESUME"
-	OperationComplete Operation = "COMPLETE"
-	OperationCancel   Operation = "CANCEL"
-	OperationReopen   Operation = "REOPEN"
+	OperationCreate      Operation = "CREATE"
+	OperationOpen        Operation = "OPEN"
+	OperationAssign      Operation = "ASSIGN"
+	OperationUnassign    Operation = "UNASSIGN"
+	OperationSchedule    Operation = "SCHEDULE"
+	OperationStart       Operation = "START"
+	OperationBlock       Operation = "BLOCK"
+	OperationResume      Operation = "RESUME"
+	OperationComplete    Operation = "COMPLETE"
+	OperationCancel      Operation = "CANCEL"
+	OperationReopen      Operation = "REOPEN"
+	OperationTaskAppend  Operation = "TASK_APPEND"
+	OperationTaskStatus  Operation = "TASK_STATUS"
+	OperationTaskReorder Operation = "TASK_REORDER"
 )
 
 type SourceDomain string
@@ -100,6 +105,7 @@ type TimelineEvent struct {
 	ActorID        string    `json:"actorId"`
 	AssigneeID     *string   `json:"assigneeId,omitempty"`
 	TeamID         *string   `json:"teamId,omitempty"`
+	TaskID         *string   `json:"taskId,omitempty"`
 	PolicyRevision *string   `json:"policyRevision,omitempty"`
 	CorrelationID  *string   `json:"correlationId,omitempty"`
 	OccurredAt     string    `json:"occurredAt"`
@@ -532,6 +538,9 @@ func validateTimeline(events []TimelineEvent, currentStatus Status, version uint
 		if event.TeamID != nil && !bounded(*event.TeamID, 256) {
 			return errors.New("work order timeline team is invalid")
 		}
+		if event.TaskID != nil && !IsUUIDv7(*event.TaskID) {
+			return errors.New("work order timeline task is invalid")
+		}
 		if event.PolicyRevision != nil && !bounded(*event.PolicyRevision, 128) {
 			return errors.New("work order timeline policy revision is invalid")
 		}
@@ -543,7 +552,7 @@ func validateTimeline(events []TimelineEvent, currentStatus Status, version uint
 			return errors.New("work order timeline instant is invalid")
 		}
 		if index == 0 {
-			if event.Operation != OperationCreate || event.FromStatus != nil || event.ToStatus != StatusOpen {
+			if event.Operation != OperationCreate || event.FromStatus != nil || event.ToStatus != StatusOpen || event.TaskID != nil {
 				return errors.New("work order timeline origin is invalid")
 			}
 			projectedAssigneeID = cloneOptional(event.AssigneeID)
@@ -554,19 +563,19 @@ func validateTimeline(events []TimelineEvent, currentStatus Status, version uint
 			}
 			switch event.Operation {
 			case OperationAssign:
-				if event.ToStatus != *event.FromStatus || event.ToStatus == StatusCompleted || event.ToStatus == StatusCancelled || (event.AssigneeID == nil && event.TeamID == nil) {
+				if event.ToStatus != *event.FromStatus || event.ToStatus == StatusCompleted || event.ToStatus == StatusCancelled || (event.AssigneeID == nil && event.TeamID == nil) || event.TaskID != nil {
 					return errors.New("work order assignment timeline is invalid")
 				}
 				projectedAssigneeID = cloneOptional(event.AssigneeID)
 				projectedTeamID = cloneOptional(event.TeamID)
 			case OperationUnassign:
-				if event.ToStatus != *event.FromStatus || event.ToStatus == StatusCompleted || event.ToStatus == StatusCancelled || event.AssigneeID != nil || event.TeamID != nil {
+				if event.ToStatus != *event.FromStatus || event.ToStatus == StatusCompleted || event.ToStatus == StatusCancelled || event.AssigneeID != nil || event.TeamID != nil || event.TaskID != nil {
 					return errors.New("work order unassignment timeline is invalid")
 				}
 				projectedAssigneeID = nil
 				projectedTeamID = nil
 			default:
-				if event.AssigneeID != nil || event.TeamID != nil || !validLifecycleTransition(event.Operation, *event.FromStatus, event.ToStatus) {
+				if event.AssigneeID != nil || event.TeamID != nil || !validNonAssignmentTimelineEvent(event, *event.FromStatus) {
 					return errors.New("work order lifecycle timeline is invalid")
 				}
 			}
@@ -578,6 +587,17 @@ func validateTimeline(events []TimelineEvent, currentStatus Status, version uint
 		return errors.New("work order timeline does not converge with projection")
 	}
 	return nil
+}
+
+func validNonAssignmentTimelineEvent(event TimelineEvent, fromStatus Status) bool {
+	switch event.Operation {
+	case OperationTaskAppend, OperationTaskStatus:
+		return event.ToStatus == fromStatus && event.TaskID != nil && IsUUIDv7(*event.TaskID)
+	case OperationTaskReorder:
+		return event.ToStatus == fromStatus && event.TaskID == nil
+	default:
+		return event.TaskID == nil && validLifecycleTransition(event.Operation, fromStatus, event.ToStatus)
+	}
 }
 
 func validLifecycleTransition(operation Operation, fromStatus, toStatus Status) bool {
@@ -695,6 +715,7 @@ func cloneWorkOrder(workOrder WorkOrder) WorkOrder {
 		result.Timeline[index].FromStatus = cloneStatus(result.Timeline[index].FromStatus)
 		result.Timeline[index].AssigneeID = cloneOptional(result.Timeline[index].AssigneeID)
 		result.Timeline[index].TeamID = cloneOptional(result.Timeline[index].TeamID)
+		result.Timeline[index].TaskID = cloneOptional(result.Timeline[index].TaskID)
 		result.Timeline[index].PolicyRevision = cloneOptional(result.Timeline[index].PolicyRevision)
 		result.Timeline[index].CorrelationID = cloneOptional(result.Timeline[index].CorrelationID)
 	}
@@ -736,7 +757,7 @@ func validStatus(value Status) bool {
 
 func validOperation(value Operation) bool {
 	switch value {
-	case OperationCreate, OperationOpen, OperationAssign, OperationUnassign, OperationSchedule, OperationStart, OperationBlock, OperationResume, OperationComplete, OperationCancel, OperationReopen:
+	case OperationCreate, OperationOpen, OperationAssign, OperationUnassign, OperationSchedule, OperationStart, OperationBlock, OperationResume, OperationComplete, OperationCancel, OperationReopen, OperationTaskAppend, OperationTaskStatus, OperationTaskReorder:
 		return true
 	default:
 		return false
