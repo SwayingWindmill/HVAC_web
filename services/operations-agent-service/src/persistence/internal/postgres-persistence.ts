@@ -10,6 +10,7 @@ import type {
   AuditRecord,
   AuditRecorder,
   BudgetGuard,
+  OperationsAuditDeliveryRepository,
   CheckpointRepository,
   InvestigationBusinessRecordRepository,
   InvestigationRepository,
@@ -31,6 +32,7 @@ import {
   createRunResourceBudgetSnapshot,
   evaluateRunResourceBudgetCheck,
   normalizeRunResourceBudgetPolicy,
+  parseOperationsAuditEvent,
 } from '../../application/index.js';
 
 export interface PostgresOperationsAgentPersistenceOptions {
@@ -53,6 +55,7 @@ export interface PostgresOperationsAgentPersistence {
   readonly budgetGuard: BudgetGuard;
   readonly applicationOutbox: ApplicationOutbox;
   readonly auditRecorder: AuditRecorder;
+  readonly auditDeliveryRepository: OperationsAuditDeliveryRepository;
   close(): Promise<void>;
 }
 
@@ -84,6 +87,12 @@ interface CheckpointRow extends QueryResultRow {
 
 interface BooleanRow extends QueryResultRow {
   readonly value: boolean;
+}
+
+interface AuditDeliveryRow extends QueryResultRow {
+  readonly audit_payload: unknown;
+  readonly attempt_count: number;
+  readonly next_attempt_at_ms: string;
 }
 
 interface RunResourceBudgetRow extends QueryResultRow {
@@ -465,22 +474,51 @@ const insertEvent = async (client: PoolClient, event: ApplicationEvent): Promise
 };
 
 const insertAudit = async (client: PoolClient, audit: AuditRecord): Promise<void> => {
-  await client.query(
+  const event = parseOperationsAuditEvent(audit);
+  const inserted = await client.query<BusinessRecordRow>(
     `INSERT INTO agent_operations.audit_records (
+      event_id,
       investigation_id,
+      organization_id,
+      site_id,
+      run_id,
       action,
       investigation_revision,
       audit_payload,
-      occurred_at_ms
-    ) VALUES ($1, $2, $3, $4::jsonb, $5)`,
+      occurred_at_ms,
+      delivery_status,
+      attempt_count,
+      next_attempt_at_ms
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, 'PENDING', 0, $9)
+    ON CONFLICT (event_id) DO NOTHING
+    RETURNING audit_payload AS record_payload`,
     [
-      audit.investigationId,
-      audit.action,
-      audit.revision,
-      JSON.stringify(audit),
-      audit.occurredAt,
+      event.eventId,
+      event.investigationId,
+      event.organizationId,
+      event.siteId,
+      event.runId,
+      event.operation,
+      event.investigationRevision,
+      JSON.stringify(event),
+      event.occurredAt,
     ],
   );
+  if (inserted.rowCount === 1) return;
+  const existing = await client.query<BusinessRecordRow>(
+    `SELECT audit_payload AS record_payload
+     FROM agent_operations.audit_records
+     WHERE event_id = $1`,
+    [event.eventId],
+  );
+  const row = existing.rows[0];
+  if (row === undefined
+    || JSON.stringify(parseOperationsAuditEvent(row.record_payload)) !== JSON.stringify(event)) {
+    throw new InvestigationRepositoryConflictError(
+      'RECORD_REFERENCE_CONFLICT',
+      'Operations Audit event identity was reused with different content.',
+    );
+  }
 };
 
 const insertEffect = async (
@@ -980,6 +1018,96 @@ export const createPostgresOperationsAgentPersistence = (
     },
   };
 
+  const auditDeliveryRepository: OperationsAuditDeliveryRepository = {
+    async claim(input) {
+      const at = requirePositiveSafeInteger(input.at, 'Audit claim time');
+      const limit = requirePositiveSafeInteger(input.limit, 'Audit claim limit');
+      const leaseDurationMs = requirePositiveSafeInteger(
+        input.leaseDurationMs,
+        'Audit delivery lease duration',
+      );
+      if (limit > 100) throw new Error('Audit claim limit must not exceed 100.');
+      const leaseUntil = at + leaseDurationMs;
+      if (!Number.isSafeInteger(leaseUntil)) {
+        throw new Error('Audit delivery lease expiry is outside the safe integer range.');
+      }
+      return withTransaction(operationsPool, async (client) => {
+        const claimed = await client.query<AuditDeliveryRow>(
+          `WITH candidates AS (
+             SELECT audit_id
+             FROM agent_operations.audit_records
+             WHERE delivery_status IN ('PENDING', 'FAILED', 'IN_FLIGHT')
+               AND next_attempt_at_ms <= $1
+               AND (lease_until_ms IS NULL OR lease_until_ms <= $1)
+             ORDER BY next_attempt_at_ms, audit_id
+             FOR UPDATE SKIP LOCKED
+             LIMIT $2
+           )
+           UPDATE agent_operations.audit_records AS audit
+           SET delivery_status = 'IN_FLIGHT',
+               attempt_count = audit.attempt_count + 1,
+               lease_until_ms = $3,
+               last_failure_class = NULL
+           FROM candidates
+           WHERE audit.audit_id = candidates.audit_id
+           RETURNING audit.audit_payload,
+                     audit.attempt_count,
+                     audit.next_attempt_at_ms::text`,
+          [at, limit, leaseUntil],
+        );
+        return Object.freeze(claimed.rows.map((row) => Object.freeze({
+          event: parseOperationsAuditEvent(row.audit_payload),
+          attemptCount: row.attempt_count,
+          nextAttemptAt: toSafeInteger(row.next_attempt_at_ms, 'Audit next attempt time'),
+        })));
+      });
+    },
+
+    async markDelivered(eventId, deliveredAt) {
+      requireIdentity(eventId, 'Operations Audit event identity');
+      const at = requirePositiveSafeInteger(deliveredAt, 'Audit delivery time');
+      const result = await operationsPool.query(
+        `UPDATE agent_operations.audit_records
+         SET delivery_status = 'DELIVERED',
+             delivered_at_ms = COALESCE(delivered_at_ms, $2),
+             lease_until_ms = NULL,
+             last_failure_class = NULL
+         WHERE event_id = $1`,
+        [eventId, at],
+      );
+      if (result.rowCount !== 1) throw new Error('Operations Audit event was not found.');
+    },
+
+    async markFailed(input) {
+      requireIdentity(input.eventId, 'Operations Audit event identity');
+      const failedAt = requirePositiveSafeInteger(input.failedAt, 'Audit failure time');
+      const retryAt = requirePositiveSafeInteger(input.retryAt, 'Audit retry time');
+      if (retryAt < failedAt) throw new Error('Audit retry time cannot precede failure time.');
+      const result = await operationsPool.query(
+        `UPDATE agent_operations.audit_records
+         SET delivery_status = 'FAILED',
+             next_attempt_at_ms = $2,
+             lease_until_ms = NULL,
+             last_failure_class = $3
+         WHERE event_id = $1
+           AND delivery_status <> 'DELIVERED'`,
+        [input.eventId, retryAt, input.failureClass],
+      );
+      if (result.rowCount !== 1) {
+        const existing = await operationsPool.query<BooleanRow>(
+          `SELECT EXISTS (
+             SELECT 1 FROM agent_operations.audit_records
+             WHERE event_id = $1 AND delivery_status = 'DELIVERED'
+           ) AS value`,
+          [input.eventId],
+        );
+        if (existing.rows[0]?.value !== true) {
+          throw new Error('Operations Audit event was not found.');
+        }
+      }
+    },
+  };
+
   return Object.freeze({
     investigationRepository,
     businessRecordRepository,
@@ -988,6 +1116,7 @@ export const createPostgresOperationsAgentPersistence = (
     budgetGuard,
     applicationOutbox,
     auditRecorder,
+    auditDeliveryRepository,
     async close() {
       await Promise.all([operationsPool.end(), checkpointsPool.end()]);
     },

@@ -10,6 +10,7 @@ use (
 	./libs/commandmodel
 	./libs/identitycontext
 	./libs/observability
+	./libs/operationsauditevent
 	./libs/oidctest
 	./libs/ownershipregistry
 	./libs/registryauth

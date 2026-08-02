@@ -627,18 +627,41 @@ The deterministic telemetry-boundary benchmark hard-fails when W3C child propaga
 
 ### 13.2 Audit
 
-Audit Ledger records governed business facts such as:
+Operations Audit uses the existing Audit Ledger as the final append-only owner. The Operations
+Agent first writes one versioned `hvac.operations.audit.v1` delivery intent. A successful mutation
+writes that intent inside the same PostgreSQL transaction as the Investigation aggregate, typed
+business record and Application Outbox entry. Authorization denial and resource-budget exhaustion
+cannot share a successful business transaction, so they write a deterministic standalone Audit
+intent whose failure never weakens the denial or exhaustion result.
 
-```text
-Investigation creation and cancellation
-accepted operator-provided information
-Proposed Action creation
-formal approval reference
-DOMAIN_ACTION submission reference
-authorization decision reference
-```
+Each event contains only the bounded actor type and identity, actor issuer, executing service and
+SPIFFE identity, Organization and Site Scope, optional Investigation and Run identity, Investigation
+Revision, authorization decision identity, policy revision, fixed operation and outcome, occurrence
+time and bounded typed business-record references. Exact retries reuse the same event identity;
+reusing that identity with different content fails closed.
 
-Tracing does not replace Audit, and Audit does not need unrestricted model traces.
+The Operations PostgreSQL `audit_records` table is a delivery outbox, not the final Audit authority.
+A lease-based worker claims pending events, posts them to the Audit Ledger private mTLS endpoint with
+`Idempotency-Key` equal to the event identity, and records delivery or a bounded retry classification.
+Exporter or delivery failure cannot roll back committed business state, trigger business retries,
+change authorization or permit additional Agent work.
+
+The Audit Ledger validates the same strict schema, rejects browser identity headers, requires the
+Operations Agent workload identity, deduplicates by message identity and appends an Organization-
+scoped hash-chain record. Investigation aggregate identities are hashed before storage. Multiple
+Operations events may be appended at the same Investigation Revision, while Session aggregate
+version uniqueness remains unchanged. Cross-Organization reads are nondiscoverable and the Ledger
+remains append-only.
+
+Prompts, model completions or statements, operator notes or raw text, raw Owner payloads, arbitrary
+attributes, cookies, grants, tokens, secrets, Checkpoint state, Lease identities, event-stream cursors
+and unrestricted errors are rejected. Trace IDs and `traceparent` are intentionally absent from the
+committed Operations Audit record: Trace remains diagnostic, while Audit records governed business
+facts and authorization references.
+
+The deterministic Audit-boundary benchmark hard-fails if atomic intent creation, denial or budget
+coverage, exact idempotency, bounded actor/Scope context, redaction, delivery isolation, append-only
+storage, tenant isolation or Trace separation is removed.
 
 ## 14. Security model
 

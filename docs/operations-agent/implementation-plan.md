@@ -310,6 +310,22 @@ Stable SHA-256 correlations for Investigation, Run and Step identities survive p
 
 Map 5.3 status: implemented by Ticket #208.
 
+Map 5.4 persists governed Operations Audit events without making delivery part of business
+authority. Successful mutations commit one strict Audit intent atomically with the Investigation,
+typed record and Application Outbox. Authorization denials and resource-budget exhaustion create a
+deterministic standalone intent because no successful business mutation exists. Exact retries reuse
+one event identity, while conflicting content under that identity fails closed.
+
+The Operations Audit event contains bounded actor, Organization/Site Scope, Investigation/Run,
+authorization decision, policy revision, fixed operation/outcome, occurrence time and typed record
+references only. Prompts, operator text, model text, raw Owner payloads, secrets, Checkpoints, Leases,
+cursors and arbitrary attributes are rejected. A PostgreSQL lease worker retries delivery through a
+private mTLS Audit Ledger endpoint without changing Investigation state or authorization. The Audit
+owner deduplicates by event identity, hashes the aggregate identity, appends to the Organization hash
+chain, keeps tenants nondiscoverable and stores no Trace context.
+
+Map 5.4 status: implemented by Ticket #209.
+
 Completion gate:
 
 - benchmark authorization and safety blockers pass;

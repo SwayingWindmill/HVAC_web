@@ -83,6 +83,30 @@ const operationsTelemetryBoundarySampleSchema = z.object({
   authorityCouplingPathDeclared: z.boolean(),
 }).strict();
 
+const operationsAuditBoundarySampleSchema = z.object({
+  successfulMutationAtomic: z.string().min(1),
+  denialAudit: z.string().min(1),
+  budgetExhaustionAudit: z.string().min(1),
+  eventIdempotency: z.string().min(1),
+  actorScopeAuthorization: z.string().min(1),
+  recordReferences: z.string().min(1),
+  rawPromptExport: z.string().min(1),
+  operatorTextExport: z.string().min(1),
+  ownerPayloadExport: z.string().min(1),
+  modelTextExport: z.string().min(1),
+  secretExport: z.string().min(1),
+  checkpointExport: z.string().min(1),
+  leaseExport: z.string().min(1),
+  deliveryFailureAffectsBusiness: z.string().min(1),
+  appendOnly: z.string().min(1),
+  tenantIsolation: z.string().min(1),
+  traceFieldsInAudit: z.string().min(1),
+  contentLeakPathDeclared: z.boolean(),
+  nonAtomicPathDeclared: z.boolean(),
+  deliveryAuthorityPathDeclared: z.boolean(),
+  tenantBypassPathDeclared: z.boolean(),
+}).strict();
+
 const evaluateValidated = (schema, value, evaluate) => {
   const parsed = schema.safeParse(value);
   if (!parsed.success) {
@@ -336,6 +360,75 @@ export const evaluateOperationsTelemetryBoundarySample = (value) => evaluateVali
       failures.push(failure(
         'OPERATIONS_TELEMETRY_AUTHORITY_LEAK',
         'Telemetry is diagnostic only and must not enter authoritative business or Audit records.',
+      ));
+    }
+    return result(failures);
+  },
+);
+
+
+export const evaluateOperationsAuditBoundarySample = (value) => evaluateValidated(
+  operationsAuditBoundarySampleSchema,
+  value,
+  (sample) => {
+    const failures = [];
+    if (sample.successfulMutationAtomic !== 'ATOMIC'
+      || sample.denialAudit !== 'REQUIRED'
+      || sample.budgetExhaustionAudit !== 'REQUIRED'
+      || !sample.nonAtomicPathDeclared) {
+      failures.push(failure(
+        'OPERATIONS_AUDIT_ATOMICITY_BROKEN',
+        'Successful mutations require atomic Audit intent, while denials and budget exhaustion require durable deterministic Audit events.',
+      ));
+    }
+    if (sample.eventIdempotency !== 'EXACT') {
+      failures.push(failure(
+        'OPERATIONS_AUDIT_IDEMPOTENCY_BROKEN',
+        'Exact retries must reuse one Audit event identity and conflicting reuse must fail closed.',
+      ));
+    }
+    if (sample.actorScopeAuthorization !== 'BOUNDED' || sample.recordReferences !== 'BOUNDED') {
+      failures.push(failure(
+        'OPERATIONS_AUDIT_CONTEXT_INCOMPLETE',
+        'Audit events require bounded actor, Scope, authorization, operation, outcome, time, and record references.',
+      ));
+    }
+    if (sample.rawPromptExport !== 'FORBIDDEN'
+      || sample.operatorTextExport !== 'FORBIDDEN'
+      || sample.ownerPayloadExport !== 'FORBIDDEN'
+      || sample.modelTextExport !== 'FORBIDDEN'
+      || sample.secretExport !== 'FORBIDDEN'
+      || sample.checkpointExport !== 'FORBIDDEN'
+      || sample.leaseExport !== 'FORBIDDEN'
+      || !sample.contentLeakPathDeclared) {
+      failures.push(failure(
+        'OPERATIONS_AUDIT_CONTENT_LEAK',
+        'Prompts, operator text, Owner payloads, model text, secrets, Checkpoints, and Leases must be rejected from Audit events.',
+      ));
+    }
+    if (sample.deliveryFailureAffectsBusiness !== 'FORBIDDEN'
+      || !sample.deliveryAuthorityPathDeclared) {
+      failures.push(failure(
+        'OPERATIONS_AUDIT_DELIVERY_AFFECTS_BUSINESS',
+        'Audit delivery failure and retry cannot change committed business state or authorize additional work.',
+      ));
+    }
+    if (sample.appendOnly !== 'ENFORCED') {
+      failures.push(failure(
+        'OPERATIONS_AUDIT_LEDGER_MUTABLE',
+        'The Audit owner must preserve an append-only Organization hash chain.',
+      ));
+    }
+    if (sample.tenantIsolation !== 'ENFORCED' || !sample.tenantBypassPathDeclared) {
+      failures.push(failure(
+        'OPERATIONS_AUDIT_TENANT_BYPASS',
+        'Operations Audit storage and queries must remain Organization-isolated and nondiscoverable.',
+      ));
+    }
+    if (sample.traceFieldsInAudit !== 'FORBIDDEN') {
+      failures.push(failure(
+        'OPERATIONS_AUDIT_TRACE_COUPLING',
+        'Trace context is diagnostic and must not become committed Audit authority.',
       ));
     }
     return result(failures);

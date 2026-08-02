@@ -36,6 +36,10 @@ import {
   type FindingSynthesisDecision,
   type FindingSynthesizer,
 } from './finding-synthesis.js';
+import {
+  createOperationsAuditEvent,
+  operationsAuditEventId,
+} from './operations-audit.js';
 import { OwnerReadError } from './ports.js';
 import type {
   AgentExecutionRuntime,
@@ -486,6 +490,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
 
   const checkResourceBudget = async (input: {
     readonly view: OperationsInvestigationView;
+    readonly authorization: AuthorizationDecision;
     readonly at: number;
     readonly operationId: string;
     readonly cost: RunResourceBudgetCost;
@@ -567,6 +572,41 @@ export const createSiteNightEnergyInvestigationCoordinator = (
         name: 'operations_agent_budget_exhaustions_total',
         labels: { budgetDimension: outcome.exhaustedDimension, outcome: publicOutcome },
       });
+      const siteId = input.view.scope.siteId;
+      if (siteId !== null) {
+        try {
+          await ports.auditRecorder.record(createOperationsAuditEvent({
+            eventId: operationsAuditEventId({
+              organizationId: input.view.scope.organizationId,
+              siteId,
+              investigationId: input.view.id,
+              runId: run.id,
+              revision: input.view.revision,
+              operation: 'ADVANCE_AGENT_RUN',
+              outcome: outcome.outcome,
+              discriminator: input.operationId,
+            }),
+            scope: input.view.scope,
+            investigationId: input.view.id,
+            runId: run.id,
+            investigationRevision: input.view.revision,
+            actor: input.authorization.auditActor ?? {
+              actorType: 'SERVICE',
+              actorId: 'operations-agent-service',
+              actorIssuer: 'spiffe://hvac.local',
+              executingService: 'operations-agent-service',
+              executingSpiffeId: 'spiffe://hvac.local/operations-agent-service',
+            },
+            authorizationDecisionId: input.authorization.decisionId,
+            policyRevision: input.authorization.policyRevision?.trim() || 'unversioned',
+            operation: 'ADVANCE_AGENT_RUN',
+            outcome: outcome.outcome,
+            occurredAt: input.at,
+          }));
+        } catch {
+          // Budget denial remains authoritative when Audit intent storage is unavailable.
+        }
+      }
       return outcome;
     } catch (error) {
       span.setStatus('ERROR');
@@ -850,6 +890,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
     try {
       const readBudget = await checkResourceBudget({
         view: input.view,
+        authorization: input.context.authorization,
         at: input.operationTime,
         operationId: runResourceReadBatchOperationId(input.requests),
         cost: runResourceReadBatchCost(input.requests),
@@ -872,6 +913,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
       )));
       const resultBudget = await checkResourceBudget({
         view: input.view,
+        authorization: input.context.authorization,
         at: ports.clock.now(),
         operationId: runResourceOwnerResultBatchOperationId(input.requests),
         cost: runResourceOwnerResultBatchCost(results),
@@ -1368,6 +1410,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
       if (existingFinding === null && ports.findingSynthesizer !== undefined) {
         const modelBudget = await checkResourceBudget({
           view,
+          authorization,
           at: operationTime,
           operationId: `finding-synthesis:${findingIdentity}`,
           cost: { ...ZERO_RUN_RESOURCE_BUDGET_COST, modelInvocations: 1 },

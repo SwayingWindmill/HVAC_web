@@ -119,7 +119,7 @@
     "test:analytics-gateway": "node scripts/run-go.mjs test ./libs/analyticsmodel/... ./libs/identitycontext/... ./libs/ownershipregistry/... ./services/iam-service/... ./services/platform-gateway/... ./services/telemetry-query-service/...",
     "analytics:gateway": "npm run analytics:gateway:check && npm run test:analytics-gateway",
     "test:identity": "node scripts/run-go.mjs test ./libs/identitycontext/... ./libs/oidctest/... ./libs/registryauth/... ./libs/telemetryauth/... ./libs/testpki/... ./services/iam-service/... ./services/platform-core-service/... ./services/telemetry-runtime-service/... ./services/platform-gateway/...",
-    "test:durable-unit": "node scripts/run-go.mjs test ./libs/observability/... ./libs/sessionevent/... ./libs/sessionstore/... ./services/audit-ledger-service/... ./services/outbox-relay/... ./services/platform-gateway/...",
+    "test:durable-unit": "node scripts/run-go.mjs test ./libs/observability/... ./libs/operationsauditevent/... ./libs/sessionevent/... ./libs/sessionstore/... ./services/audit-ledger-service/... ./services/outbox-relay/... ./services/platform-gateway/...",
     "test:observability": "node scripts/check-observability-assets.mjs && node scripts/run-go.mjs test ./libs/observability/... ./libs/sessionevent/... ./libs/sessionstore/... ./services/iam-service/... ./services/platform-core-service/... ./services/platform-gateway/... ./services/outbox-relay/... ./services/audit-ledger-service/...",
     "test:ownership": "node scripts/run-go.mjs test ./libs/ownershipregistry/... ./services/platform-gateway/...",
     "test:registry-routing": "node scripts/run-go.mjs test ./libs/identitycontext/... ./libs/ownershipregistry/... ./services/platform-gateway/...",
