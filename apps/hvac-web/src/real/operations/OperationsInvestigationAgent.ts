@@ -11,6 +11,11 @@ import {
   type OperationsAgUiStreamRecovery,
   type OperationsInvestigationStateSnapshot,
 } from '@/api/operations';
+import {
+  createOperationsInvestigationRecoveryPositionStore,
+  type OperationsInvestigationRecoveryPositionStore,
+  type OperationsInvestigationRecoveryScope,
+} from './operations-recovery-position';
 
 export type OperationsInvestigationConnectionStatus =
   | 'CONNECTING'
@@ -35,6 +40,7 @@ export interface OperationsInvestigationAgentOptions {
   readonly baseUrl?: string;
   readonly reconnectDelayMs?: number;
   readonly maximumRetryDelayMs?: number;
+  readonly recoveryPositionStore?: OperationsInvestigationRecoveryPositionStore;
 }
 
 const terminalStatuses = new Set(['PAUSED', 'COMPLETED', 'FAILED', 'CANCELLED']);
@@ -75,6 +81,8 @@ const isRetryableStreamError = (error: unknown): boolean => (
 
 export class OperationsInvestigationAgent extends AbstractAgent {
   private readonly options: OperationsInvestigationAgentOptions;
+  private readonly recoveryScope: OperationsInvestigationRecoveryScope;
+  private readonly recoveryPositionStore: OperationsInvestigationRecoveryPositionStore;
   private recoveryPosition: string | undefined;
   private readonly deliveredDurableEvents = new Set<string>();
 
@@ -85,6 +93,30 @@ export class OperationsInvestigationAgent extends AbstractAgent {
       initialState: {},
     });
     this.options = options;
+    this.recoveryScope = Object.freeze({
+      organizationId: options.organizationId,
+      siteId: options.siteId,
+      investigationId: options.investigationId,
+    });
+    this.recoveryPositionStore = options.recoveryPositionStore
+      ?? createOperationsInvestigationRecoveryPositionStore();
+    this.recoveryPosition = this.recoveryPositionStore.load(this.recoveryScope);
+  }
+
+  purgeRecoveryPosition(): void {
+    this.recoveryPosition = undefined;
+    this.recoveryPositionStore.clear(this.recoveryScope);
+    this.deliveredDurableEvents.clear();
+  }
+
+  purgeSiteRecoveryPositions(): void {
+    this.recoveryPosition = undefined;
+    if (this.recoveryPositionStore.clearSite) {
+      this.recoveryPositionStore.clearSite(this.recoveryScope);
+    } else {
+      this.recoveryPositionStore.clear(this.recoveryScope);
+    }
+    this.deliveredDurableEvents.clear();
   }
 
   run(input: RunAgentInput): Observable<BaseEvent> {
@@ -149,6 +181,7 @@ export class OperationsInvestigationAgent extends AbstractAgent {
               retryDelay = reconnectDelay;
 
               if (terminalStatuses.has(snapshot.investigation.status)) {
+                this.purgeRecoveryPosition();
                 const finishEvent = batch.events.at(-1)?.event;
                 if (finishEvent?.type === 'RUN_FINISHED') {
                   subscriber.next({ ...finishEvent, threadId: input.threadId, runId: input.runId } as BaseEvent);
@@ -161,6 +194,7 @@ export class OperationsInvestigationAgent extends AbstractAgent {
                 subscriber.complete();
                 return;
               }
+              this.recoveryPositionStore.save(this.recoveryScope, this.recoveryPosition);
               await delayUntil(reconnectDelay, controller.signal);
             } catch (error) {
               if (controller.signal.aborted) return;

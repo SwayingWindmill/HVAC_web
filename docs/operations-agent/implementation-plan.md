@@ -256,7 +256,7 @@ Planned tracer bullets:
 
 Map 4.1 established the first bounded vertical slice: each authorized connection receives a finite SSE batch containing `RUN_STARTED`, one authoritative committed `STATE_SNAPSHOT`, bounded read-only Tool activity and `RUN_FINISHED`. The Operations Agent projects only the current committed Investigation View; Platform Gateway validates the event whitelist and the existing React/Vite Real Shell consumes it through a Site-scoped CopilotKit Headless agent.
 
-Map 4.2 adds reconnect-safe recovery without introducing a second state owner or a long-lived in-process stream. Every connection is independently reauthorized through Session, Site visibility, IAM and delegated Operations scope, then begins with the current authoritative snapshot. Stable positions use `revision:sequence`; only the current-revision snapshot, complete Tool-call end boundaries and batch end are resumable. A valid `Last-Event-ID` receives only the missing committed Tool-event suffix. Unknown, expired, future, out-of-range or partial-Tool positions fail closed to a complete snapshot batch. The Headless agent automatically reconnects non-terminal Investigations, exponentially backs off retryable failures, replaces local state from each snapshot and deduplicates durable Tool records by record identity and event type. Site switch, logout, route teardown and component unmount continue to abort the protected request and purge in-memory projection state.
+Map 4.2 adds reconnect-safe recovery without introducing a second state owner or a long-lived in-process stream. Every connection is independently reauthorized through Session, Site visibility, IAM and delegated Operations scope, then begins with the current authoritative snapshot. Stable positions use `revision:sequence`; only the current-revision snapshot, complete Tool-call end boundaries and batch end are resumable. A valid `Last-Event-ID` receives only the missing committed Tool-event suffix. Unknown, expired, future, out-of-range or partial-Tool positions fail closed to a complete snapshot batch. The Headless agent automatically reconnects non-terminal Investigations, exponentially backs off retryable failures, replaces local state from each snapshot and deduplicates durable Tool records by record identity and event type. The browser may retain only the opaque `revision:sequence` position in `sessionStorage`, partitioned by exact Organization, Site and Investigation identity. It never stores snapshots, Evidence, Findings or Tool payloads. Terminal Investigations clear their exact position; route teardown, Site switch and logout clear all positions for the protected Site while the authoritative snapshot remains the sole state owner.
 
 Map 4.2 status: implemented by Ticket #175. Long-lived push publication is not required for recovery correctness; later workspace work may replace bounded polling with a publication transport while retaining the same authoritative snapshot and stable-position contract.
 
@@ -325,6 +325,21 @@ owner deduplicates by event identity, hashes the aggregate identity, appends to 
 chain, keeps tenants nondiscoverable and stores no Trace context.
 
 Map 5.4 status: implemented by Ticket #209.
+
+Map 5.5 adds one versioned, fail-closed safety certification across public, service, persistence,
+Audit and browser seams. The suite requires explicit evidence for wrong Organization/Site,
+wrong presenter, expired delegation, stale policy, revoked grant and Owner-grant mismatch; exact
+retry and duplicate delivery; Checkpoint recovery and loss; restart before and after commit;
+stale Revision and Lease, repository conflict and simultaneous input acceptance; and valid,
+unknown, future, expired, out-of-range and partial-Tool stream positions.
+
+The browser retains only an opaque `revision:sequence` position in Site-scoped session storage and
+purges it on terminal, route leave, Site switch and logout. Seven real gates produce the versioned
+`operations-agent-safety-certification/v1` report, per-gate logs, browser/PostgreSQL supporting
+artifacts and `SHA256SUMS`. The offline verifier fails on any missing gate, required test marker,
+scenario evidence, invariant coverage or production-traffic claim.
+
+Map 5.5 status: implemented by Ticket #210.
 
 Completion gate:
 

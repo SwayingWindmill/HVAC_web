@@ -1037,6 +1037,51 @@ test('Operator Input interrupt commits one typed record and resumes the same Run
   assert.equal(harness.repository.saveCalls.length, saveCount);
 });
 
+test('simultaneous Operator Input acceptance commits one authoritative outcome', async () => {
+  const harness = createHarness();
+  const started = await createAndStart(harness);
+  harness.setTime(1_100);
+  const waiting = await harness.coordinator.requestOperatorInput({
+    investigationId: started.id,
+    runId: started.activeRunId,
+    leaseId: started.runs[0].lease.id,
+    expectedRevision: started.revision,
+    kind: 'SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION',
+  });
+  harness.setTime(1_200);
+  const command = {
+    investigationId: started.id,
+    requestId: waiting.activeOperatorInputRequest.id,
+    expectedRevision: waiting.revision,
+    idempotencyKey: 'operator-input-concurrent-001',
+    values: {
+      analysisScope: 'SITE_ONLY',
+      operatorNote: 'Accept this bounded input once.',
+    },
+  };
+
+  const results = await Promise.allSettled([
+    harness.coordinator.acceptOperatorInput(command),
+    harness.coordinator.acceptOperatorInput(command),
+  ]);
+  const committed = results.find(({ status }) => status === 'fulfilled')?.value;
+  const conflict = results.find(({ status }) => status === 'rejected')?.reason;
+  assert.equal(committed?.outcome, 'COMMITTED');
+  assert(conflict instanceof InvestigationCoordinatorError);
+  assert.equal(conflict.code, 'REVISION_CONFLICT');
+
+  const retry = await harness.coordinator.acceptOperatorInput(command);
+  assert.equal(retry.outcome, 'DUPLICATE');
+  assert.equal(retry.record.id, committed.record.id);
+  assert.equal(retry.investigation.revision, committed.investigation.revision);
+  assert.equal(harness.outboxEvents.filter(({ type }) => type === 'OPERATOR_INPUT_ACCEPTED').length, 1);
+  assert.equal(harness.auditRecords.filter(({ action }) => action === 'ACCEPT_OPERATOR_INPUT').length, 1);
+
+  const authoritative = await harness.coordinator.get({ investigationId: started.id });
+  assert.equal(authoritative.status, 'RUNNING');
+  assert.deepEqual(authoritative.acceptedOperatorInputIds, [committed.record.id]);
+});
+
 test('Operator Input rejects unknown fields and an unmatched Request without resuming', async () => {
   const harness = createHarness();
   const started = await createAndStart(harness);

@@ -392,6 +392,16 @@ function stream(id, revision, status, outcome, activities, resourceBudget = null
   return { body: frames.join(''), latest: `${revision}:${latest}` };
 }
 
+function recoveryMetadata(requestedPosition, revision) {
+  if (!requestedPosition) {
+    return { mode: 'FULL_SNAPSHOT', reason: 'INITIAL', replayFrom: null };
+  }
+  if (String(requestedPosition).startsWith(`${revision}:`)) {
+    return { mode: 'RESUME', reason: 'VALID', replayFrom: String(requestedPosition) };
+  }
+  return { mode: 'FULL_SNAPSHOT', reason: 'EXPIRED', replayFrom: null };
+}
+
 function problem(response, status, code, detail, retryable) {
   response.writeHead(status, {
     'content-type': 'application/problem+json',
@@ -594,6 +604,8 @@ function createGatewayFixture() {
 
     if (requestedId === cancelInvestigationId) {
       const view = currentCancel();
+      const recoveryPosition = request.headers['last-event-id'] ?? null;
+      const recovery = recoveryMetadata(recoveryPosition, view.revision);
       const current = stream(
         cancelInvestigationId,
         view.revision,
@@ -611,10 +623,11 @@ function createGatewayFixture() {
       response.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
         'cache-control': 'no-store, no-transform',
-        'x-operations-recovery-mode': 'FULL_SNAPSHOT',
-        'x-operations-recovery-reason': 'INITIAL',
+        'x-operations-recovery-mode': recovery.mode,
+        'x-operations-recovery-reason': recovery.reason,
         'x-operations-snapshot-position': `${view.revision}:1`,
         'x-operations-latest-position': current.latest,
+        ...(recovery.replayFrom ? { 'x-operations-replay-from': recovery.replayFrom } : {}),
       });
       response.end(current.body);
       return;
@@ -622,6 +635,8 @@ function createGatewayFixture() {
 
     if (requestedId === operatorInputInvestigationId) {
       const view = currentOperatorInput();
+      const recoveryPosition = request.headers['last-event-id'] ?? null;
+      const recovery = recoveryMetadata(recoveryPosition, view.revision);
       const current = stream(
         operatorInputInvestigationId,
         view.revision,
@@ -643,16 +658,19 @@ function createGatewayFixture() {
       response.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
         'cache-control': 'no-store, no-transform',
-        'x-operations-recovery-mode': 'FULL_SNAPSHOT',
-        'x-operations-recovery-reason': 'INITIAL',
+        'x-operations-recovery-mode': recovery.mode,
+        'x-operations-recovery-reason': recovery.reason,
         'x-operations-snapshot-position': `${view.revision}:1`,
         'x-operations-latest-position': current.latest,
+        ...(recovery.replayFrom ? { 'x-operations-replay-from': recovery.replayFrom } : {}),
       });
       response.end(projected);
       return;
     }
 
     if (requestedId === budgetInvestigationId) {
+      const recoveryPosition = request.headers['last-event-id'] ?? null;
+      const recovery = recoveryMetadata(recoveryPosition, 6);
       const current = stream(
         budgetInvestigationId,
         6,
@@ -664,24 +682,28 @@ function createGatewayFixture() {
       response.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
         'cache-control': 'no-store, no-transform',
-        'x-operations-recovery-mode': 'FULL_SNAPSHOT',
-        'x-operations-recovery-reason': 'INITIAL',
+        'x-operations-recovery-mode': recovery.mode,
+        'x-operations-recovery-reason': recovery.reason,
         'x-operations-snapshot-position': '6:1',
         'x-operations-latest-position': current.latest,
+        ...(recovery.replayFrom ? { 'x-operations-replay-from': recovery.replayFrom } : {}),
       });
       response.end(current.body);
       return;
     }
 
     if (requestedId === unableInvestigationId) {
+      const recoveryPosition = request.headers['last-event-id'] ?? null;
+      const recovery = recoveryMetadata(recoveryPosition, 5);
       const current = stream(unableInvestigationId, 5, 'COMPLETED', 'UNABLE_TO_CONCLUDE', [stableActivity]);
       response.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
         'cache-control': 'no-store, no-transform',
-        'x-operations-recovery-mode': 'FULL_SNAPSHOT',
-        'x-operations-recovery-reason': 'INITIAL',
+        'x-operations-recovery-mode': recovery.mode,
+        'x-operations-recovery-reason': recovery.reason,
         'x-operations-snapshot-position': '5:1',
         'x-operations-latest-position': current.latest,
+        ...(recovery.replayFrom ? { 'x-operations-replay-from': recovery.replayFrom } : {}),
       });
       response.end(current.body);
       return;
@@ -849,6 +871,7 @@ try {
   await cdpClient.send('Page.navigate', { url: webURL });
 
   let sawRetrying = false;
+  let reloadedFromStoredCursor = false;
   let terminal = false;
   let lastState = null;
   for (let attempt = 0; attempt < 200; attempt += 1) {
@@ -858,9 +881,21 @@ try {
       connection: document.querySelector('.operations-connection')?.getAttribute('data-connection-status') ?? null,
       investigation: document.querySelector('.operations-workspace')?.getAttribute('data-investigation-status') ?? null,
       outcome: document.querySelector('.operations-workspace')?.getAttribute('data-investigation-outcome') ?? null,
+      recoveryPosition: Array.from({ length: sessionStorage.length }, (_value, index) => sessionStorage.key(index))
+        .filter((key) => key?.startsWith('hvac.operations.recovery-position.v1:'))
+        .map((key) => sessionStorage.getItem(key))[0] ?? null,
       text: document.body?.innerText ?? '',
     })`).catch((error) => ({ error: String(error) }));
     lastState = state;
+    if (!reloadedFromStoredCursor
+      && state?.connection === 'LIVE'
+      && state?.investigation === 'RUNNING'
+      && state?.recoveryPosition === '1:5') {
+      reloadedFromStoredCursor = true;
+      await cdpClient.send('Page.reload', { ignoreCache: true });
+      await pause(100);
+      continue;
+    }
     if (state?.connection === 'RETRYING') sawRetrying = true;
     if (state?.connection === 'TERMINAL'
       && state?.investigation === 'COMPLETED'
@@ -876,6 +911,7 @@ try {
     terminal,
     `Operations reconnect browser audit did not reach the committed terminal snapshot; last=${JSON.stringify(lastState)} requests=${JSON.stringify(fixture.requests)} events=${JSON.stringify(cdpClient.events.slice(-20))}`,
   );
+  assert(reloadedFromStoredCursor, 'Operations reconnect browser audit did not reload from the stored cursor');
   assert(sawRetrying, 'Operations reconnect browser audit did not expose a stable retrying state');
   assertions.push('retryable-interruption-visible-and-recovered');
 
@@ -889,6 +925,9 @@ try {
       evidenceCount: document.querySelectorAll('[data-record-type="EVIDENCE"]').length,
       analysisCount: document.querySelectorAll('[data-record-type="ANALYSIS_REFERENCE"]').length,
       findingCount: document.querySelectorAll('[data-record-type="FINDING"]').length,
+      recoveryPositionCount: Array.from({ length: sessionStorage.length }, (_value, index) => sessionStorage.key(index))
+        .filter((key) => key?.startsWith('hvac.operations.recovery-position.v1:'))
+        .length,
       listCount: document.querySelectorAll('.operations-list-item').length,
       text: document.body.textContent ?? '',
       protectedResourceId: globalThis.__OPERATIONS_RECONNECT_AUDIT__?.protectedResourceId(),
@@ -900,6 +939,7 @@ try {
   assert(supportedState.toolCount === 2, 'committed Tool receipts were duplicated or lost');
   assert(supportedState.evidenceCount === 1 && supportedState.analysisCount === 1 && supportedState.findingCount === 1, 'typed committed records were duplicated or lost');
   assert(supportedState.listCount === 3, 'Site Investigation list did not expose all authorized records');
+  assert(supportedState.recoveryPositionCount === 0, 'terminal Investigation retained a stale recovery cursor');
   for (const requiredText of [
     'dataset-r42',
     'Data watermark',
@@ -916,8 +956,8 @@ try {
 
   assert(fixture.requests.length === 3, `expected exactly three authorized event requests, got ${fixture.requests.length}`);
   assert(fixture.requests[0].recoveryPosition === null, 'initial connection unexpectedly supplied a recovery position');
-  assert(fixture.requests[1].recoveryPosition === '1:5' && fixture.requests[2].recoveryPosition === '1:5', 'reconnect did not retain the stable last position');
-  assertions.push('stable-last-event-id-across-retry');
+  assert(fixture.requests[1].recoveryPosition === '1:5' && fixture.requests[2].recoveryPosition === '1:5', 'reload and retry did not retain the stable last position');
+  assertions.push('stored-last-event-id-survives-page-reload-and-retry');
 
   await evaluate(cdpClient, `(() => {
     history.pushState(null, '', '?investigation=${operatorInputInvestigationId}');
@@ -991,13 +1031,18 @@ try {
   );
   assertions.push('operator-input-exact-retry-same-run');
 
-  const openedUnable = await evaluate(cdpClient, `(() => {
-    const button = [...document.querySelectorAll('.operations-list-item')]
-      .find((candidate) => candidate.textContent.includes(${JSON.stringify(unableInvestigationId)}));
-    if (!button) return false;
-    button.click();
-    return true;
-  })()`);
+  let openedUnable = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    openedUnable = await evaluate(cdpClient, `(() => {
+      const button = [...document.querySelectorAll('.operations-list-item')]
+        .find((candidate) => candidate.textContent.includes(${JSON.stringify(unableInvestigationId)}));
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`);
+    if (openedUnable) break;
+    await pause(100);
+  }
   assert(openedUnable, 'unable-to-conclude Investigation was not navigable from the Site list');
 
   let unableVisible = false;
@@ -1119,11 +1164,14 @@ try {
       left: Boolean(document.querySelector('[data-testid="operations-route-left"]')),
       workspace: Boolean(document.querySelector('.operations-workspace')),
       protectedResourceId: globalThis.__OPERATIONS_RECONNECT_AUDIT__?.protectedResourceId(),
+      recoveryPositionCount: Array.from({ length: sessionStorage.length }, (_value, index) => sessionStorage.key(index))
+        .filter((key) => key?.startsWith('hvac.operations.recovery-position.v1:'))
+        .length,
     })`);
-    if (routeLeft.left && !routeLeft.workspace && routeLeft.protectedResourceId === null) break;
+    if (routeLeft.left && !routeLeft.workspace && routeLeft.protectedResourceId === null && routeLeft.recoveryPositionCount === 0) break;
     await pause(50);
   }
-  assert(routeLeft?.left && !routeLeft.workspace && routeLeft.protectedResourceId === null, `route leave did not purge protected Operations state: ${JSON.stringify(routeLeft)}`);
+  assert(routeLeft?.left && !routeLeft.workspace && routeLeft.protectedResourceId === null && routeLeft.recoveryPositionCount === 0, `route leave did not purge protected Operations state: ${JSON.stringify(routeLeft)}`);
 
   await evaluate(cdpClient, `globalThis.__OPERATIONS_RECONNECT_AUDIT__.navigate('/operations?investigation=${cancelInvestigationId}')`);
   let returnedTerminal = null;

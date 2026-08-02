@@ -443,6 +443,78 @@ test('scoped Operations API submits Operator Input and preserves exact-retry ide
   );
 });
 
+test('Operations recovery positions persist only opaque scoped cursors in session storage', async () => {
+  const {
+    createOperationsInvestigationRecoveryPositionStore,
+    normalizeOperationsRecoveryPosition,
+  } = await loadBundledModule(
+    'apps/hvac-web/src/real/operations/operations-recovery-position.ts',
+  );
+  const values = new Map();
+  const removed = [];
+  const storage = {
+    get length() {
+      return values.size;
+    },
+    key(index) {
+      return [...values.keys()][index] ?? null;
+    },
+    getItem(key) {
+      return values.get(key) ?? null;
+    },
+    setItem(key, value) {
+      values.set(key, value);
+    },
+    removeItem(key) {
+      removed.push(key);
+      values.delete(key);
+    },
+  };
+  const store = createOperationsInvestigationRecoveryPositionStore(storage);
+  const firstScope = {
+    organizationId: 'organization-001',
+    siteId: 'site-001',
+    investigationId: 'investigation-001',
+  };
+  const secondScope = {
+    ...firstScope,
+    investigationId: 'investigation-002',
+  };
+  const thirdScope = {
+    ...firstScope,
+    siteId: 'site-002',
+    investigationId: 'investigation-003',
+  };
+
+  store.save(firstScope, '9:2');
+  assert.equal(store.load(firstScope), '9:2');
+  assert.equal(store.load(secondScope), undefined);
+  assert.equal(values.size, 1);
+  assert.equal([...values.values()][0], '9:2');
+  assert.equal(JSON.stringify([...values.entries()]).includes('findings'), false);
+
+  const [firstKey] = values.keys();
+  values.set(firstKey, 'invalid-cursor');
+  assert.equal(store.load(firstScope), undefined);
+  assert.equal(values.has(firstKey), false);
+  assert.equal(removed.includes(firstKey), true);
+
+  assert.equal(normalizeOperationsRecoveryPosition(' 12:4 '), '12:4');
+  assert.equal(normalizeOperationsRecoveryPosition('12:04'), undefined);
+  assert.equal(normalizeOperationsRecoveryPosition('snapshot-payload'), undefined);
+
+  store.save(firstScope, '10:5');
+  store.clear(firstScope);
+  assert.equal(store.load(firstScope), undefined);
+  store.save(firstScope, '11:1');
+  store.save(secondScope, '11:2');
+  store.save(thirdScope, '11:3');
+  store.clearSite(firstScope);
+  assert.equal(store.load(firstScope), undefined);
+  assert.equal(store.load(secondScope), undefined);
+  assert.equal(store.load(thirdScope), '11:3');
+});
+
 test('Headless Operations agent reconnects after interruption without duplicating durable Tool records', async () => {
   const { OperationsInvestigationAgent } = await loadBundledModule(
     'apps/hvac-web/src/real/operations/OperationsInvestigationAgent.ts',
@@ -518,6 +590,19 @@ test('Headless Operations agent reconnects after interruption without duplicatin
   const requests = [];
   const snapshots = [];
   const connectionStates = [];
+  const recoveryOperations = [];
+  const recoveryPositionStore = {
+    load(scope) {
+      recoveryOperations.push({ operation: 'load', scope });
+      return undefined;
+    },
+    save(scope, position) {
+      recoveryOperations.push({ operation: 'save', scope, position });
+    },
+    clear(scope) {
+      recoveryOperations.push({ operation: 'clear', scope });
+    },
+  };
   const fetchImplementation = async (_input, init) => {
     requests.push(init);
     const next = responses.shift();
@@ -530,6 +615,7 @@ test('Headless Operations agent reconnects after interruption without duplicatin
     investigationId: investigation.id,
     reconnectDelayMs: 25,
     maximumRetryDelayMs: 25,
+    recoveryPositionStore,
     fetchImplementation,
     onSnapshot: (snapshot) => snapshots.push(snapshot),
     onConnectionState: (state) => connectionStates.push(state.status),
@@ -553,6 +639,59 @@ test('Headless Operations agent reconnects after interruption without duplicatin
   assert.equal(delivered.filter((nextEvent) => nextEvent.type === 'TOOL_CALL_ARGS').length, 1);
   assert.equal(delivered.filter((nextEvent) => nextEvent.type === 'TOOL_CALL_END').length, 1);
   assert.equal(delivered.filter((nextEvent) => nextEvent.type === 'RUN_FINISHED').length, 1);
+  assert.deepEqual(recoveryOperations.map(({ operation, position }) => (
+    position === undefined ? operation : `${operation}:${position}`
+  )), ['load', 'save:1:5', 'clear']);
+  assert.deepEqual(recoveryOperations[0].scope, {
+    organizationId: investigation.scope.organizationId,
+    siteId: investigation.scope.siteId,
+    investigationId: investigation.id,
+  });
+});
+
+test('Headless Operations agent restores a scoped cursor on the first request after reload', async () => {
+  const { OperationsInvestigationAgent } = await loadBundledModule(
+    'apps/hvac-web/src/real/operations/OperationsInvestigationAgent.ts',
+    { stubCopilot: true },
+  );
+  const requests = [];
+  const recoveryOperations = [];
+  const recoveryPositionStore = {
+    load(scope) {
+      recoveryOperations.push({ operation: 'load', scope });
+      return '9:2';
+    },
+    save() {
+      assert.fail('terminal reload must not save another cursor');
+    },
+    clear(scope) {
+      recoveryOperations.push({ operation: 'clear', scope });
+    },
+  };
+  const agent = new OperationsInvestigationAgent({
+    organizationId: investigation.scope.organizationId,
+    siteId: investigation.scope.siteId,
+    investigationId: investigation.id,
+    recoveryPositionStore,
+    fetchImplementation: async (_input, init) => {
+      requests.push(init);
+      return new Response(validStream, {
+        status: 200,
+        headers: recoveryHeaders({ mode: 'RESUME', reason: 'VALID', replayFrom: '9:2' }),
+      });
+    },
+    onSnapshot: () => undefined,
+  });
+
+  await new Promise((resolve, reject) => {
+    agent.run({ threadId: 'reload-thread', runId: 'reload-run' }).subscribe({
+      error: reject,
+      complete: resolve,
+    });
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].headers['Last-Event-ID'], '9:2');
+  assert.deepEqual(recoveryOperations.map(({ operation }) => operation), ['load', 'clear']);
 });
 
 test('Headless Operations agent does not retry a nondiscoverable Investigation', async () => {

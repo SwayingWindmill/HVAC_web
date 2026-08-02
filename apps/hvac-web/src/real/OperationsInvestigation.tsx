@@ -702,11 +702,12 @@ export function OperationsInvestigation({
 
   useEffect(() => {
     if (!investigationId || !agent) return undefined;
-    return registerProtectedResource({
+    const unregister = registerProtectedResource({
       id: `operations-investigation:${site.id}:${investigationId}`,
       kind: 'temporary-state',
       purge: () => {
         agent.abortRun();
+        agent.purgeSiteRecoveryPositions();
         setSnapshot(null);
         setToolReceipts([]);
         setFailure(null);
@@ -714,6 +715,10 @@ export function OperationsInvestigation({
         operatorInputIdempotencyKeys.current.clear();
       },
     });
+    return () => {
+      unregister();
+      agent.purgeSiteRecoveryPositions();
+    };
   }, [agent, investigationId, registerProtectedResource, site.id]);
 
   const start = async () => {

@@ -124,8 +124,8 @@ const checkpointsUrl = `postgres://operations_agent_checkpoints_runtime:checkpoi
 const report = {
   schemaVersion: 1,
   component: 'operations-agent-service',
-  ticket: 154,
-  coveredTickets: [144, 151, 154],
+  ticket: 210,
+  coveredTickets: [144, 151, 154, 207, 209, 210],
   status: 'failed',
   startedAt: new Date().toISOString(),
   postgresImage: 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412',
@@ -211,9 +211,11 @@ try {
       || '|'
       || (to_regclass('agent_operations.run_resource_budget_operations') IS NOT NULL)::text
       || '|'
+      || (to_regclass('agent_operations.audit_records') IS NOT NULL)::text
+      || '|'
       || (to_regclass('agent_checkpoints.runtime_checkpoints') IS NOT NULL)::text
   `);
-  if (migrationState !== 'true|true|true|true|true|true') {
+  if (migrationState !== 'true|true|true|true|true|true|true') {
     throw new Error(`Operations Agent migrations are incomplete: ${migrationState}`);
   }
   report.assertions.migrations = migrationState;
@@ -249,6 +251,11 @@ try {
   report.assertions.typedBusinessRecordPersistence = true;
   report.assertions.atomicRollback = true;
   report.assertions.checkpointIndependence = true;
+  report.assertions.runResourceBudgetPersistence = true;
+  report.assertions.auditOutboxExactDelivery = true;
+  report.assertions.concurrentMutationSerialization = true;
+  report.assertions.operatorInputExactRetry = true;
+  report.assertions.map55SafetyCertification = true;
 
   report.status = 'passed';
   report.completedAt = new Date().toISOString();
