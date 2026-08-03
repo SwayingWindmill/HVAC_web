@@ -933,7 +933,12 @@ try {
 
   fixture.state.platformMode = 'unavailable';
   await navigate(cdpClient, `${webURL}/system`);
-  await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'UNAVAILABLE'`, 'unavailable implemented route');
+  await waitForCondition(
+    cdpClient,
+    `document.querySelector('main')?.getAttribute('data-route-state') === 'UNAVAILABLE'
+      && document.querySelector('[data-testid="real-route-unavailable"] [role="alert"]')?.getAttribute('data-retryable') === 'true'`,
+    'unavailable implemented route',
+  );
   const unavailableRoute = await evaluate(cdpClient, `({
     systemNavigation: Boolean(document.querySelector('[data-feature-id="system"]')),
     retryable: document.querySelector('[data-testid="real-route-unavailable"] [role="alert"]')?.getAttribute('data-retryable'),
@@ -1273,11 +1278,19 @@ try {
   assert(dashboard.text.includes('不会在浏览器中推导或补造'), 'Dashboard did not disclose its authority boundary');
   recordScenario('site-dashboard');
 
-  await navigate(cdpClient, `${webURL}/sites/${siteBId}/energy`);
+  const sameSiteDocumentMarker = `same-site-${Date.now()}`;
+  assert(await evaluate(cdpClient, `(() => {
+    window.__sameSiteDocumentMarker = ${JSON.stringify(sameSiteDocumentMarker)};
+    const anchor = document.querySelector('[data-feature-id="site-energy"]');
+    if (!(anchor instanceof HTMLAnchorElement)) return false;
+    anchor.click();
+    return true;
+  })()`), 'Energy navigation item was unavailable');
   await waitForCondition(
     cdpClient,
-    `document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-site-id') === '${siteBId}'`,
-    'validated explicit Site Energy route',
+    `document.querySelector('[data-testid="real-energy-dashboard"]')?.getAttribute('data-site-id') === '${siteBId}'
+      && window.__sameSiteDocumentMarker === ${JSON.stringify(sameSiteDocumentMarker)}`,
+    'validated same-document Site Energy route',
   );
   const energy = await evaluate(cdpClient, `({
     pathname: location.pathname,

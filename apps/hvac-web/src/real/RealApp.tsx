@@ -110,6 +110,11 @@ function isSiteShellPath(pathname: string): boolean {
   return pathname === '/' || pathname === '/sites' || pathname.startsWith('/sites/');
 }
 
+function siteIdFromPathname(pathname: string): string | undefined {
+  const segments = pathname.split('/').filter(Boolean);
+  return segments[0] === 'sites' ? segments[1] : undefined;
+}
+
 function resolveSiteShellDecision(snapshot: ShellSnapshot, pathname: string): SiteShellDecision | undefined {
   if (!snapshot.principal || !isSiteShellPath(pathname)) return undefined;
   if (!snapshot.sites || snapshot.sites.state === 'checking') return { state: 'SITE_DISCOVERY_CHECKING' };
@@ -145,17 +150,48 @@ export default function RealApp({ config }: RealAppProps) {
   const client = useMemo(() => createPlatformGatewayClient(), []);
   const runtime = useMemo(() => createShellRuntime(client), [client]);
   const [snapshot, setSnapshot] = useState<ShellSnapshot>(() => runtime.current());
+  const [pathname, setPathname] = useState(() => window.location.pathname);
 
   useEffect(() => {
     const unsubscribe = runtime.subscribe(setSnapshot);
+    const handlePopState = () => {
+      const activeSiteId = runtime.current().protectedScope?.siteId;
+      const nextSiteId = siteIdFromPathname(window.location.pathname);
+      if (!activeSiteId || nextSiteId === activeSiteId) {
+        setPathname(window.location.pathname);
+        return;
+      }
+      window.location.reload();
+    };
+    window.addEventListener('popstate', handlePopState);
     void runtime.bootstrap(window.location.href);
     return () => {
+      window.removeEventListener('popstate', handlePopState);
       unsubscribe();
       runtime.dispose();
     };
   }, [runtime]);
 
   const navigate = useCallback((target: string) => {
+    try {
+      const resolved = new URL(target, window.location.origin);
+      const activeSiteId = runtime.current().protectedScope?.siteId;
+      if (
+        resolved.origin === window.location.origin
+        && !resolved.search
+        && !resolved.hash
+        && activeSiteId
+        && siteIdFromPathname(resolved.pathname) === activeSiteId
+      ) {
+        if (resolved.pathname !== window.location.pathname) {
+          window.history.pushState(null, '', resolved.pathname);
+          setPathname(resolved.pathname);
+        }
+        return;
+      }
+    } catch {
+      // The runtime owns validation and fail-closed handling for malformed targets.
+    }
     void runtime.requestSiteNavigation(target);
   }, [runtime]);
   const confirmSiteNavigation = useCallback(() => {
@@ -174,7 +210,6 @@ export default function RealApp({ config }: RealAppProps) {
   );
   const protectedRequestToken = useCallback(() => runtime.protectedRequestToken(), [runtime]);
 
-  const pathname = window.location.pathname;
   const platformAvailability = snapshot.platform?.state ?? 'checking';
   const platformNavigation = snapshot.principal
     ? resolveNavigation(

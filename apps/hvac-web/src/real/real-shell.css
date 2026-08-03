@@ -45,9 +45,11 @@
 }
 
 .real-shell-card h1:focus-visible,
-.real-route-surface h1:focus-visible {
-  border-radius: 4px;
-  box-shadow: 0 0 0 4px rgb(15 181 174 / 20%);
+.real-route-surface h1:focus-visible,
+.real-focus-heading:focus,
+.real-focus-heading:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
 }
 
 .real-shell-eyebrow {

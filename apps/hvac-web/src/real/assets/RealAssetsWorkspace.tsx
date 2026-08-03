@@ -165,7 +165,7 @@ export function RealAssetsWorkspace({
   const compactTable = !screens.xl;
   const platformClient = useMemo(() => providedPlatformClient ?? createPlatformGatewayClient(), [providedPlatformClient]);
   const telemetryRuntime = useMemo(() => providedTelemetryRuntime ?? createRealAssetsTelemetryRuntime(), [providedTelemetryRuntime]);
-  const [listMode, setListMode] = useState<ListMode>('attention');
+  const [listMode, setListMode] = useState<ListMode>('all');
   const [search, setSearch] = useState('');
   const [hierarchySelection, setHierarchySelection] = useState<HierarchySelection>('all');
   const [telemetryPolicyRevision, setTelemetryPolicyRevision] = useState<string | null>(
@@ -240,7 +240,7 @@ export function RealAssetsWorkspace({
     id: `real-assets-selection:${protectedGeneration}:${site.id}`,
     kind: 'selection',
     purge: () => {
-      setListMode('attention');
+      setListMode('all');
       setSearch('');
       setHierarchySelection('all');
       selectedDeviceIdRef.current = null;

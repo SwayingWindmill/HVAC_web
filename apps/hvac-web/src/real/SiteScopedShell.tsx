@@ -1,67 +1,25 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import type { Capability, Site } from '@/api/generated/platformGateway.gen';
 import { FocusHeading } from './FocusHeading';
+import { EnergyAnalytics } from './EnergyAnalytics';
+import { OperationsInvestigationPage } from './OperationsInvestigationPage';
+import { RealAlarms } from './RealAlarms';
+import { RealCommands } from './RealCommands';
+import { RealDashboard } from './RealDashboard';
+import {
+  RealAiLanding,
+  RealBigScreenPage,
+  RealCostPage,
+  RealFddPage,
+  RealOptimizePage,
+} from './RealProductPages';
 import { RealShellChrome } from './RealShellChrome';
+import { RealAssetsWorkspace } from './assets/RealAssetsWorkspace';
 import type { RealNavigationItem } from './route-policy';
 import type { ProtectedScopeDraft, ProtectedScopeRequestToken, ProtectedScopeResource } from './protected-scope';
 import type { RealRuntimeConfig } from './runtime-config';
 import type { ShellFailureView, ShellSnapshot } from './shell-runtime';
 import { siteRoute, type SiteContext, type SiteRoutingDecision } from './site-routing';
-
-const RealDashboard = lazy(async () => {
-  const module = await import('./RealDashboard');
-  return { default: module.RealDashboard };
-});
-
-const RealAssetsWorkspace = lazy(async () => {
-  const module = await import('./assets/RealAssetsWorkspace');
-  return { default: module.RealAssetsWorkspace };
-});
-
-const EnergyAnalytics = lazy(async () => {
-  const module = await import('./EnergyAnalytics');
-  return { default: module.EnergyAnalytics };
-});
-
-const RealCommands = lazy(async () => {
-  const module = await import('./RealCommands');
-  return { default: module.RealCommands };
-});
-
-const RealAlarms = lazy(async () => {
-  const module = await import('./RealAlarms');
-  return { default: module.RealAlarms };
-});
-
-const OperationsInvestigationPage = lazy(async () => {
-  const module = await import('./OperationsInvestigationPage');
-  return { default: module.OperationsInvestigationPage };
-});
-
-const RealFddPage = lazy(async () => {
-  const module = await import('./RealProductPages');
-  return { default: module.RealFddPage };
-});
-
-const RealOptimizePage = lazy(async () => {
-  const module = await import('./RealProductPages');
-  return { default: module.RealOptimizePage };
-});
-
-const RealCostPage = lazy(async () => {
-  const module = await import('./RealProductPages');
-  return { default: module.RealCostPage };
-});
-
-const RealAiLanding = lazy(async () => {
-  const module = await import('./RealProductPages');
-  return { default: module.RealAiLanding };
-});
-
-const RealBigScreenPage = lazy(async () => {
-  const module = await import('./RealProductPages');
-  return { default: module.RealBigScreenPage };
-});
 
 const OPERATIONS_ROUTE_CONTRACT = {
   label: 'Operations Workspace',

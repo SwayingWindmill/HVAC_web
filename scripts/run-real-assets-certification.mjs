@@ -477,10 +477,10 @@ try {
       text: document.body.innerText,
     };
   })()`);
-  assert(initialState.total === 200 && initialState.listMode === 'attention' && initialState.filtered === 150, `default attention projection drifted: ${JSON.stringify(initialState)}`);
-  assert(initialState.text.includes('尚无已接受观测') && initialState.text.includes('可疑'), 'missing or quality evidence was not visible in the attention view');
-  assertions.push('deterministic-200-device-attention-default');
-  assertions.push('missing-quality-visible');
+  assert(initialState.total === 200 && initialState.listMode === 'all' && initialState.filtered === 200, `default all-Device projection drifted: ${JSON.stringify(initialState)}`);
+  assert(initialState.text.includes('0 kW'), 'valid zero was not visible in the default all-Device view');
+  assertions.push('deterministic-200-device-all-default');
+  assertions.push('valid-zero-visible-by-default');
 
   const initialRegistry = fixture.state.registryRequests.slice();
   const initialBatches = fixture.state.snapshotBatches.slice();
@@ -492,6 +492,15 @@ try {
   assertions.push('bounded-registry-and-two-snapshot-batches');
 
   let started = Date.now();
+  await click(cdpClient, '[data-testid="real-assets-list-attention"]');
+  await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-filtered-device-count') === '150'`, 'attention Device projection');
+  timings.showAttentionMs = Date.now() - started;
+  assert(timings.showAttentionMs < 3000, `show-attention interaction exceeded the certification bound: ${timings.showAttentionMs}ms`);
+  const attentionText = await evaluate(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.innerText ?? ''`);
+  assert(attentionText.includes('尚无已接受观测') && attentionText.includes('可疑'), 'missing or quality evidence was not visible in the attention view');
+  assertions.push('missing-quality-visible');
+
+  started = Date.now();
   await click(cdpClient, '[data-testid="real-assets-list-all"]');
   await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-filtered-device-count') === '200' && document.querySelectorAll('.real-assets__table tbody tr').length === 200`, 'all Device projection');
   timings.showAllMs = Date.now() - started;

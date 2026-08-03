@@ -21,30 +21,18 @@
   color: var(--real-muted, #65758b);
 }
 
-.real-assets button,
 .real-assets input {
   font: inherit;
 }
 
-.real-assets button {
-  min-height: 38px;
-  border: 1px solid #b8c4d3;
-  border-radius: 8px;
-  background: #fff;
-  color: #19324d;
+.real-assets__problem > button {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid var(--ant-color-error-border, #ffccc7);
+  border-radius: var(--ops-radius-control, 8px);
+  background: var(--ant-color-bg-container, #fff);
+  color: var(--ant-color-error-text, #a8071a);
   cursor: pointer;
-}
-
-.real-assets button:hover:not(:disabled),
-.real-assets button:focus-visible {
-  border-color: #315f91;
-  outline: 2px solid transparent;
-  box-shadow: 0 0 0 3px rgb(49 95 145 / 18%);
-}
-
-.real-assets button:disabled {
-  cursor: wait;
-  opacity: 0.65;
 }
 
 .real-assets__metrics {
@@ -112,10 +100,11 @@
 }
 
 .real-assets__workspace {
-  display: grid;
-  grid-template-columns: minmax(190px, 240px) minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
+  display: flex;
+  flex-flow: row wrap;
+  width: 100%;
+  min-width: 0;
+  align-items: stretch;
 }
 
 .real-assets__hierarchy,
@@ -440,8 +429,13 @@
 }
 
 .real-assets__device-link[aria-expanded="true"] {
-  outline: 2px solid #315f91;
-  outline-offset: 4px;
+  outline: none;
+  background: rgb(15 181 174 / 7%);
+}
+
+.real-assets__device-link:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgb(15 181 174 / 24%);
 }
 
 .real-assets-detail {
@@ -815,7 +809,9 @@
 /* Real Assets bridges authoritative Registry/Telemetry markup into the same
    PageScaffold, metric strip, Card, table and control language as Demo. */
 .real-assets {
-  display: contents;
+  display: block;
+  width: 100%;
+  min-width: 0;
 }
 
 .assets-hierarchy-card,
@@ -908,9 +904,6 @@
   background: rgb(15 181 174 / 4%);
 }
 
-.real-assets__device-link[aria-expanded='true'] {
-  outline-color: #0fb5ae;
-}
 
 .real-assets__notice,
 .real-assets__problem,
@@ -987,4 +980,43 @@ table.real-assets__table.real-shell-sr-only td {
   height: 1px;
   padding: 0;
   overflow: hidden;
+}
+
+/* Keep the authoritative tree and ledger in a stable two-column workspace.
+   Ant Row/Col responsive flex rules previously collapsed the tree column to a
+   few pixels after route transitions and produced vertical character wrapping. */
+.real-assets__workspace.ant-row {
+  display: grid !important;
+  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+  gap: 16px;
+  width: 100%;
+  margin: 0 !important;
+}
+
+.real-assets__workspace.ant-row > .ant-col {
+  display: flex;
+  flex: none !important;
+  width: auto !important;
+  max-width: none !important;
+  min-width: 0;
+  padding: 0 !important;
+}
+
+.real-assets__workspace .assets-hierarchy-card,
+.real-assets__workspace .assets-ledger-card {
+  min-width: 0;
+  height: 100%;
+}
+
+.real-assets__workspace .ant-tree-title,
+.real-assets__workspace .ant-card-head-title {
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+@media (max-width: 1023px) {
+  .real-assets__workspace.ant-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
