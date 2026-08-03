@@ -1,4 +1,5 @@
 import {
+  analyticsActions,
   centralPlantDevices,
   centralPlantIdentity,
   localUUID,
@@ -9,6 +10,7 @@ import {
 export function buildS1SeedSQL({ oidcIssuer, pointKeysByDevice }) {
   const { organizationId, siteId, principalId } = centralPlantIdentity;
   const actions = `ARRAY[${telemetryActions.map(sqlLiteral).join(',')}]`;
+  const analytics = `ARRAY[${analyticsActions.map(sqlLiteral).join(',')}]`;
   let sequence = 1;
   const nextID = () => localUUID(sequence++);
   const deviceRows = centralPlantDevices.map((device) => `(${sqlLiteral(device.platformDeviceId)},${sqlLiteral(organizationId)},${sqlLiteral(siteId)},${sqlLiteral(device.slug)},${sqlLiteral(device.name)},${sqlLiteral(device.type)},'ACTIVE',1,clock_timestamp(),clock_timestamp())`).join(',\n  ');
@@ -34,7 +36,7 @@ INSERT INTO iam.role_bindings (id, organization_id, principal_id, role_key, acti
   (${sqlLiteral(nextID())}, ${sqlLiteral(organizationId)}, ${sqlLiteral(principalId)}, 'registry-reader', ARRAY['registry.read'], 'ALLOW', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()),
   (${sqlLiteral(nextID())}, ${sqlLiteral(organizationId)}, ${sqlLiteral(principalId)}, 'telemetry-reader', ${actions}, 'ALLOW', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()) ON CONFLICT DO NOTHING;
 INSERT INTO iam.site_bindings (id, acting_organization_id, owning_organization_id, site_id, principal_id, actions, effect, valid_from, valid_to, revision, created_at, updated_at)
-VALUES (${sqlLiteral(nextID())}, ${sqlLiteral(organizationId)}, ${sqlLiteral(organizationId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(principalId)}, ARRAY['registry.read'] || ${actions}, 'ALLOW', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()) ON CONFLICT DO NOTHING;
+VALUES (${sqlLiteral(nextID())}, ${sqlLiteral(organizationId)}, ${sqlLiteral(organizationId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(principalId)}, ${analytics}, 'ALLOW', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()) ON CONFLICT DO NOTHING;
 INSERT INTO iam.policies (id, organization_id, policy_key, policy_revision, status, document, created_at, updated_at) VALUES
   (${sqlLiteral(nextID())}, ${sqlLiteral(organizationId)}, 'registry-read', 1, 'ACTIVE', '{"denyPrecedence":true,"action":"registry.read"}', clock_timestamp(), clock_timestamp()),
   (${sqlLiteral(nextID())}, ${sqlLiteral(organizationId)}, 'telemetry-access', 1, 'ACTIVE', '{"denyPrecedence":true,"exactDeviceKeyScope":true}', clock_timestamp(), clock_timestamp()) ON CONFLICT DO NOTHING;

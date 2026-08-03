@@ -72,6 +72,7 @@ func generate(directory string, now time.Time) error {
 		{name: "iam", commonName: "localhost", spiffeID: "spiffe://hvac.local/iam-service", dnsNames: []string{"localhost", "iam"}, server: true},
 		{name: "core", commonName: "localhost", spiffeID: "spiffe://hvac.local/platform-core-service", dnsNames: []string{"localhost", "platform-core"}, server: true, client: true},
 		{name: "telemetry", commonName: "localhost", spiffeID: "spiffe://hvac.local/telemetry-runtime-service", dnsNames: []string{"localhost", "telemetry-runtime"}, server: true, client: true},
+		{name: "query", commonName: "localhost", spiffeID: "spiffe://hvac.local/telemetry-query-service", dnsNames: []string{"localhost", "telemetry-query"}, server: true},
 		{name: "gateway", commonName: "platform-gateway", spiffeID: "spiffe://hvac.local/platform-gateway", client: true},
 		{name: "adapter", commonName: "thingsboard-telemetry-adapter", spiffeID: "spiffe://hvac.local/thingsboard-telemetry-adapter", client: true},
 		{name: "centrifugo", commonName: "centrifugo", spiffeID: "spiffe://hvac.local/centrifugo", client: true},

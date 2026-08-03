@@ -317,6 +317,7 @@ function buildGoBinaries(paths, goCache, quiet) {
     [paths.coreBinary, './services/platform-core-service/cmd/platform-core-service'],
     [paths.telemetryBinary, './services/telemetry-runtime-service/cmd/telemetry-runtime-service'],
     [paths.historyProjectorBinary, './services/telemetry-runtime-service/cmd/telemetry-history-projector'],
+    [paths.queryBinary, './services/telemetry-query-service/cmd/telemetry-query-service'],
     [paths.gatewayBinary, './services/platform-gateway/cmd/platform-gateway'],
     [paths.simulatorBinary, './tools/eg8200-simulator/cmd/eg8200-simulator'],
     [paths.adapterBinary, './services/thingsboard-telemetry-adapter/cmd/thingsboard-telemetry-adapter'],
@@ -332,15 +333,16 @@ function buildGoBinaries(paths, goCache, quiet) {
 export async function startCentralPlantLocalTopology(options = {}) {
   const quiet = Boolean(options.quiet);
   const portNames = [
-    'thingsBoard', 's1Postgres', 's2Postgres', 'clickHouse', 'oidc', 'iam', 'core', 'telemetry', 'gateway', 'web',
+    'thingsBoard', 's1Postgres', 's2Postgres', 'clickHouse', 'cube', 'oidc', 'iam', 'core', 'telemetry', 'query', 'gateway', 'web',
     'simulatorDiagnostics', 'adapterDiagnostics', 'centrifugo', 'centrifugoWSS', 'subscribeProxy',
-    'oidcDiagnostics', 'iamDiagnostics', 'coreDiagnostics', 'telemetryDiagnostics', 'historyDiagnostics', 'gatewayDiagnostics',
+    'oidcDiagnostics', 'iamDiagnostics', 'coreDiagnostics', 'telemetryDiagnostics', 'historyDiagnostics', 'queryDiagnostics', 'gatewayDiagnostics',
   ];
   const ports = Object.fromEntries(await Promise.all(portNames.map(async (name) => [name, await findAvailablePort()])));
   const projectBase = `hvac-central-plant-${process.pid}-${randomBytes(3).toString('hex')}`;
   const projects = {
     s1: `${projectBase}-s1`,
     s2: `${projectBase}-s2`,
+    cube: `${projectBase}-cube`,
     thingsBoard: `${projectBase}-tb`,
     realtime: `${projectBase}-rt`,
   };
@@ -369,6 +371,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
     iamCert: join(pkiDirectory, 'iam-cert.pem'), iamKey: join(pkiDirectory, 'iam-key.pem'),
     coreCert: join(pkiDirectory, 'core-cert.pem'), coreKey: join(pkiDirectory, 'core-key.pem'),
     telemetryCert: join(pkiDirectory, 'telemetry-cert.pem'), telemetryKey: join(pkiDirectory, 'telemetry-key.pem'),
+    queryCert: join(pkiDirectory, 'query-cert.pem'), queryKey: join(pkiDirectory, 'query-key.pem'),
     gatewayCert: join(pkiDirectory, 'gateway-cert.pem'), gatewayKey: join(pkiDirectory, 'gateway-key.pem'),
     adapterCert: join(pkiDirectory, 'adapter-cert.pem'), adapterKey: join(pkiDirectory, 'adapter-key.pem'),
     centrifugoCert: join(pkiDirectory, 'centrifugo-cert.pem'), centrifugoKey: join(pkiDirectory, 'centrifugo-key.pem'),
@@ -379,6 +382,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
     coreBinary: join(binaryDirectory, 'platform-core-service.exe'),
     telemetryBinary: join(binaryDirectory, 'telemetry-runtime-service.exe'),
     historyProjectorBinary: join(binaryDirectory, 'telemetry-history-projector.exe'),
+    queryBinary: join(binaryDirectory, 'telemetry-query-service.exe'),
     gatewayBinary: join(binaryDirectory, 'platform-gateway.exe'),
     simulatorBinary: join(binaryDirectory, 'eg8200-simulator.exe'),
     adapterBinary: join(binaryDirectory, 'thingsboard-telemetry-adapter.exe'),
@@ -392,12 +396,13 @@ export async function startCentralPlantLocalTopology(options = {}) {
     checkpoint: join(stateDirectory, 'adapter-checkpoint.json'),
     report: join(outRoot, 'stack-report.json'),
   };
-  const services = { oidc: null, iam: null, core: null, telemetry: null, history: null, gateway: null, web: null, simulator: null, adapter: null };
+  const services = { oidc: null, iam: null, core: null, telemetry: null, history: null, query: null, gateway: null, web: null, simulator: null, adapter: null };
   let subscribeProxy;
   let webSocketProxy;
 
   const s1Compose = resolve(root, 'infra/s1-registry/compose.yaml');
   const s2Compose = resolve(root, 'infra/s2-telemetry/compose.yaml');
+  const cubeCompose = resolve(root, 'semantic/cube/compose.yaml');
   const thingsBoardCompose = resolve(root, 'infra/central-plant-local/thingsboard.compose.yaml');
   const realtimeCompose = resolve(root, 'infra/central-plant-local/realtime.compose.yaml');
   const s1Environment = { S1_POSTGRES_HOST_PORT: String(ports.s1Postgres) };
@@ -410,6 +415,16 @@ export async function startCentralPlantLocalTopology(options = {}) {
     api: randomBytes(32).toString('base64url'),
     connection: randomBytes(32).toString('base64url'),
     proxy: randomBytes(32).toString('base64url'),
+    cube: randomBytes(32).toString('base64url'),
+  };
+  const cubeEnvironment = {
+    CUBE_HOST_PORT: String(ports.cube),
+    CUBEJS_DB_HOST: 'host.docker.internal',
+    CUBEJS_DB_PORT: String(ports.clickHouse),
+    CUBEJS_DB_NAME: 'analytics',
+    CUBEJS_DB_USER: 'cube_analytics_reader',
+    CUBEJS_DB_PASS: '',
+    CUBEJS_API_SECRET: runtimeValues.cube,
   };
   const realtimeEnvironment = {
     CENTRAL_PLANT_CENTRIFUGO_PORT: String(ports.centrifugo),
@@ -423,6 +438,8 @@ export async function startCentralPlantLocalTopology(options = {}) {
   const coreURL = `https://127.0.0.1:${ports.core}`;
   const telemetryURL = `https://127.0.0.1:${ports.telemetry}`;
   const clickHouseURL = `http://127.0.0.1:${ports.clickHouse}`;
+  const cubeURL = `http://127.0.0.1:${ports.cube}`;
+  const queryURL = `https://127.0.0.1:${ports.query}`;
   const gatewayURL = `http://127.0.0.1:${ports.gateway}`;
   const webURL = `https://127.0.0.1:${ports.web}`;
   const thingsBoardURL = `http://127.0.0.1:${ports.thingsBoard}`;
@@ -437,7 +454,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       process.off('SIGINT', signalHandler);
       process.off('SIGTERM', signalHandler);
     }
-    for (const child of [services.adapter, services.simulator, services.web, services.gateway, services.history, services.telemetry, services.core, services.iam, services.oidc]) {
+    for (const child of [services.adapter, services.simulator, services.web, services.gateway, services.query, services.history, services.telemetry, services.core, services.iam, services.oidc]) {
       await stopProcess(child);
     }
     await closeServer(webSocketProxy);
@@ -445,6 +462,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
     for (const [project, file, environment] of [
       [projects.realtime, realtimeCompose, realtimeEnvironment],
       [projects.thingsBoard, thingsBoardCompose, thingsBoardEnvironment],
+      [projects.cube, cubeCompose, cubeEnvironment],
       [projects.s2, s2Compose, s2Environment],
       [projects.s1, s1Compose, s1Environment],
     ]) {
@@ -462,6 +480,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
     for (const [project, file, environment] of [
       [projects.realtime, realtimeCompose, realtimeEnvironment],
       [projects.thingsBoard, thingsBoardCompose, thingsBoardEnvironment],
+      [projects.cube, cubeCompose, cubeEnvironment],
       [projects.s2, s2Compose, s2Environment],
       [projects.s1, s1Compose, s1Environment],
     ]) {
@@ -481,6 +500,8 @@ export async function startCentralPlantLocalTopology(options = {}) {
     await waitForContainer(() => dockerExec(s1Container, ['pg_isready', '-U', 'postgres', '-d', 'hvac_s1'], { capture: true }), 'S1 PostgreSQL');
     await waitForContainer(() => dockerExec(s2Container, ['pg_isready', '-U', 'postgres', '-d', 'hvac_s2'], { capture: true }), 'S2 PostgreSQL');
     await waitForContainer(() => dockerExec(clickHouseContainer, ['clickhouse-client', '--user', 'telemetry_history', '--query', 'SELECT 1'], { capture: true }), 'S2 ClickHouse');
+    compose(projects.cube, cubeCompose, ['up', '-d', 'cube'], cubeEnvironment);
+    await waitForHTTP(cubeURL, 'Cube Core', { attempts: 600, interval: 500 });
     await waitForHTTP(thingsBoardURL, 'ThingsBoard', { attempts: 900, interval: 500 });
 
     const adapterTemplate = JSON.parse(await readFile(resolve(root, 'services/thingsboard-telemetry-adapter/configs/central-plant.local.example.json'), 'utf8'));
@@ -689,6 +710,32 @@ export async function startCentralPlantLocalTopology(options = {}) {
       attempts: 600,
     });
 
+    services.query = spawnService('Telemetry Query Service', paths.queryBinary, [], {
+      GOCACHE: goCache,
+      QUERY_SERVICE_ADDR: `127.0.0.1:${ports.query}`,
+      QUERY_DIAGNOSTICS_ADDR: `127.0.0.1:${ports.queryDiagnostics}`,
+      QUERY_TLS_CERT: paths.queryCert,
+      QUERY_TLS_KEY: paths.queryKey,
+      QUERY_CLIENT_CA: paths.ca,
+      QUERY_GATEWAY_DELEGATION_CERT: paths.gatewayCert,
+      QUERY_CUBE_ENDPOINT: cubeURL,
+      QUERY_CUBE_API_SECRET: runtimeValues.cube,
+      QUERY_DATASET_REVISION: 'central-plant-energy:v1',
+      QUERY_HISTORY_CLICKHOUSE_ENDPOINT: clickHouseURL,
+      QUERY_HISTORY_DATASET_REVISION: 'central-plant-history:v1',
+      QUERY_HISTORY_CLICKHOUSE_DATABASE: 'telemetry_history',
+      QUERY_HISTORY_CLICKHOUSE_TABLE: 'observations',
+      QUERY_HISTORY_CLICKHOUSE_USERNAME: 'telemetry_query_history_reader',
+      QUERY_HISTORY_CLICKHOUSE_PASSWORD: '',
+    }, quiet);
+    await waitForTLS(ports.query, 'Telemetry Query Service', services.query, {
+      cert: gatewayCertificate,
+      key: gatewayKey,
+      ca,
+      servername: 'localhost',
+      rejectUnauthorized: true,
+    });
+
     const gatewayEnvironment = {
       GOCACHE: goCache,
       PLATFORM_GATEWAY_ADDR: `127.0.0.1:${ports.gateway}`,
@@ -710,6 +757,9 @@ export async function startCentralPlantLocalTopology(options = {}) {
       TELEMETRY_RUNTIME_URL: telemetryURL,
       TELEMETRY_RUNTIME_SERVER_CA: paths.ca,
       TELEMETRY_RUNTIME_SERVER_NAME: 'localhost',
+      TELEMETRY_QUERY_URL: queryURL,
+      TELEMETRY_QUERY_SERVER_CA: paths.ca,
+      TELEMETRY_QUERY_SERVER_NAME: 'localhost',
       ROUTE_OWNERSHIP_REGISTRY: paths.routeOwnership,
       GATEWAY_WORKLOAD_SPIFFE: 'spiffe://hvac.local/platform-gateway',
       IDENTITY_POLICY_REVISION: 'registry-read:1',
@@ -774,6 +824,8 @@ export async function startCentralPlantLocalTopology(options = {}) {
       webURL,
       thingsBoardURL,
       clickHouseURL,
+      cubeURL,
+      queryURL,
       gatewayURL,
       organizationId: centralPlantIdentity.organizationId,
       siteId: centralPlantIdentity.siteId,

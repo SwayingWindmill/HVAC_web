@@ -14,6 +14,10 @@ export const centralPlantDevices = Object.freeze([
   { slug: 'btu-meter', name: 'BTU-METER-01', type: 'BTU_METER', platformDeviceId: '018f3e00-4000-7000-8000-000000000006' },
 ]);
 
+export const analyticsActions = Object.freeze([
+  'analytics.energy-series.read',
+]);
+
 export const telemetryActions = Object.freeze([
   'telemetry.snapshot.read',
   'telemetry.batch.read',

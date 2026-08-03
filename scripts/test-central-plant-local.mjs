@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { resolve } from 'node:path';
 import {
+  analyticsActions,
   centralPlantDevices,
   centralPlantIdentity,
   localUUID,
@@ -60,6 +61,11 @@ test('database seeds cover every adapter point with exact-key authorization and 
     }
   }
   for (const action of telemetryActions) assert.ok(s1.includes(action));
+  for (const action of analyticsActions) {
+    assert.equal(s1.match(new RegExp(action.replaceAll('.', '\\.')), 'g')?.length, 1);
+  }
+  assert.ok(!s1.includes("'analytics-reader'"));
+  assert.ok(!s1.includes("ARRAY['registry.read'] ||"));
   assert.ok(s2.includes('DELETE FROM telemetry_runtime.telemetry_publication_outbox;'));
   assert.ok(!s1.includes('ACCESS_TOKEN'));
   assert.ok(!s2.includes('ACCESS_TOKEN'));
@@ -103,6 +109,9 @@ test('local topology stays isolated and fails closed around realtime and workloa
     "['down', '--volumes', '--remove-orphans']",
     'ThingsBoard Telemetry Adapter',
     'Telemetry History Projector',
+    'Telemetry Query Service',
+    'QUERY_CUBE_ENDPOINT',
+    'TELEMETRY_QUERY_URL',
     'TELEMETRY_CLICKHOUSE_HTTP_URL',
     'HVAC Web Real',
   ]) assert.ok(topology.includes(marker), `topology is missing ${marker}`);
