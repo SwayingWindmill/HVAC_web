@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Alert, Button, Card, Col, Descriptions, Input, Row, Select, Space, Tag, Timeline, Typography } from 'antd';
+import { CheckCircleOutlined, ControlOutlined, SearchOutlined } from '@ant-design/icons';
+import PageScaffold from '@/components/PageScaffold';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import {
   COMMAND_LOCAL_ROUTES_ENABLED,
@@ -19,6 +22,7 @@ import './real-commands.css';
 interface RealCommandsProps {
   site: Readonly<Site>;
   principal: CurrentPrincipalResponse;
+  initialCommandId?: string;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
 }
@@ -27,7 +31,11 @@ const COMMAND_QUERY_PARAMETER = 'command';
 const DEFAULT_SETPOINT_C = 24;
 
 function commandFromLocation(): string {
-  return new URLSearchParams(globalThis.location.search).get(COMMAND_QUERY_PARAMETER) ?? '';
+  const queryCommandId = new URLSearchParams(globalThis.location.search).get(COMMAND_QUERY_PARAMETER);
+  if (queryCommandId) return queryCommandId;
+  const segments = globalThis.location.pathname.split('/').filter(Boolean);
+  const commandsIndex = segments.indexOf('commands');
+  return commandsIndex >= 0 ? decodeURIComponent(segments[commandsIndex + 1] ?? '') : '';
 }
 
 function commandQueryPrefix(organizationId: string, siteId: string) {
@@ -75,21 +83,30 @@ function DisabledCommandSurface({ site, principal }: Pick<RealCommandsProps, 'si
       data-business-state="DISABLED"
       data-site-id={site.id}
     >
-      <p className="real-shell-eyebrow">REAL MODE · SITE COMMANDS</p>
-      <FocusHeading>设备命令</FocusHeading>
-      <div className="real-commands__boundary" role="status">
-        <strong>生产控制保持禁用</strong>
-        <p>Command 公共路由已登记，但 Route Ownership Registry 仍为 disabled，生产流量为 0%。此页面不会向设备发送控制指令。</p>
-      </div>
-      <dl className="real-commands__facts" aria-label="Command authority boundary">
-        <div><dt>Site</dt><dd>{site.displayName}</dd></div>
-        <div><dt>Registry Site ID</dt><dd>{site.id}</dd></div>
-        <div><dt>Acting Organization</dt><dd>{principal.context.actingOrganizationId}</dd></div>
-        <div><dt>权威领域</dt><dd>Platform Gateway → Command Service</dd></div>
-        <div><dt>生产流量</dt><dd>0%</dd></div>
-        <div><dt>设备控制</dt><dd>未启用</dd></div>
-      </dl>
-      <p className="real-commands__honesty">此状态不是权限拒绝、设备离线或命令失败；它表示生产命令能力尚未完成激活和认证。</p>
+      <PageScaffold
+        title="设备控制"
+        heading={<FocusHeading className="ops-page-title ant-typography"><Space><ControlOutlined />设备控制</Space></FocusHeading>}
+        extra={<Tag>PRODUCTION DISABLED</Tag>}
+        className="commands-page"
+      >
+        <Alert
+          type="warning"
+          showIcon
+          message="生产控制保持禁用"
+          description="Command 公共路由已登记，但 Route Ownership Registry 仍为 disabled，生产流量为 0%。此页面不会向设备发送控制指令。"
+        />
+        <Card title="Command 权威边界" variant="borderless">
+          <Descriptions column={{ xs: 1, sm: 2, xl: 3 }} bordered size="small">
+            <Descriptions.Item label="Site">{site.displayName}</Descriptions.Item>
+            <Descriptions.Item label="Registry Site ID"><Typography.Text copyable>{site.id}</Typography.Text></Descriptions.Item>
+            <Descriptions.Item label="Acting Organization"><Typography.Text copyable>{principal.context.actingOrganizationId}</Typography.Text></Descriptions.Item>
+            <Descriptions.Item label="权威领域">Platform Gateway → Command Service</Descriptions.Item>
+            <Descriptions.Item label="生产流量">0%</Descriptions.Item>
+            <Descriptions.Item label="设备控制">未启用</Descriptions.Item>
+          </Descriptions>
+        </Card>
+        <Typography.Text type="secondary">此状态不是权限拒绝、设备离线或命令失败；它表示生产命令能力尚未完成激活和认证。</Typography.Text>
+      </PageScaffold>
     </section>
   );
 }
@@ -104,6 +121,7 @@ export function RealCommands(props: RealCommandsProps) {
 function LocalCommandWorkbench({
   site,
   principal,
+  initialCommandId,
   registerUnsavedDraft,
   registerProtectedResource,
 }: RealCommandsProps) {
@@ -112,7 +130,8 @@ function LocalCommandWorkbench({
   const queryPrefix = useMemo(() => commandQueryPrefix(organizationId, site.id), [organizationId, site.id]);
   const [selectedDeviceId, setSelectedDeviceId] = useState('');
   const [setpointC, setSetpointC] = useState(DEFAULT_SETPOINT_C);
-  const [commandId, setCommandId] = useState(commandFromLocation);
+  const [commandId, setCommandId] = useState(() => initialCommandId ?? commandFromLocation());
+  const [lookupCommandId, setLookupCommandId] = useState(() => initialCommandId ?? commandFromLocation());
   const draftRef = useRef({ deviceId: '', setpointC: DEFAULT_SETPOINT_C });
   const baselineRef = useRef({ deviceId: '', setpointC: DEFAULT_SETPOINT_C });
   const idempotencyKeyRef = useRef(crypto.randomUUID());
@@ -174,9 +193,14 @@ function LocalCommandWorkbench({
   });
 
   const publishCommandId = useCallback((nextCommandId: string) => {
+    const segments = globalThis.location.pathname.split('/').filter(Boolean);
+    const commandsIndex = segments.indexOf('commands');
+    const baseSegments = commandsIndex >= 0 ? segments.slice(0, commandsIndex + 1) : segments;
+    const pathname = `/${baseSegments.join('/')}`;
     const parameters = new URLSearchParams(globalThis.location.search);
     parameters.set(COMMAND_QUERY_PARAMETER, nextCommandId);
-    globalThis.history.pushState(null, '', `${globalThis.location.pathname}?${parameters.toString()}${globalThis.location.hash}`);
+    globalThis.history.pushState(null, '', `${pathname}?${parameters.toString()}${globalThis.location.hash}`);
+    setLookupCommandId(nextCommandId);
     setCommandId(nextCommandId);
   }, []);
 
@@ -231,19 +255,20 @@ function LocalCommandWorkbench({
       data-site-id={site.id}
       data-command-id={command?.commandId ?? ''}
     >
-      <header className="real-commands__header">
-        <div>
-          <p className="real-shell-eyebrow">REAL MODE · SITE COMMANDS</p>
-          <FocusHeading>设备命令</FocusHeading>
-          <p>{site.displayName} · {site.code} · {site.timezone}</p>
-        </div>
-        <span className="real-commands__local-marker">LOCAL / NON-FORMAL / PRODUCTION DISABLED</span>
-      </header>
-
-      <div className="real-commands__boundary" role="status">
-        <strong>本地 S3 集成环境</strong>
-        <p>此工作台只连接本机受控 Gateway 和虚拟设备。提交表示 Command Intent 被服务器接收，不表示设备已经成功执行。</p>
-      </div>
+      <PageScaffold
+        title="设备控制"
+        heading={<FocusHeading className="ops-page-title ant-typography"><Space><ControlOutlined />设备控制</Space></FocusHeading>}
+        extra={<Tag color="green">LOCAL / NON-FORMAL / PRODUCTION DISABLED</Tag>}
+        className="commands-page"
+      >
+        <Space direction="vertical" size={16} className="commands-page-stack">
+          <Typography.Text type="secondary">{site.displayName} · {site.code} · {site.timezone}</Typography.Text>
+          <Alert
+            type="success"
+            showIcon
+            message="本地 S3 集成环境"
+            description="此工作台只连接本机受控 Gateway 和虚拟设备。提交表示 Command Intent 被服务器接收，不表示设备已经成功执行。"
+          />
 
       {deviceQuery.isPending ? <div className="real-shell-progress" role="status">正在读取当前 Site 的受控设备目录…</div> : null}
       {deviceQuery.isError ? (
@@ -254,62 +279,94 @@ function LocalCommandWorkbench({
       ) : null}
 
       {deviceQuery.data ? (
-        <form
-          className="real-commands__composer"
-          data-testid="real-command-draft"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (selectedDeviceId) createMutation.mutate();
-          }}
-        >
-          <h2>提交温度设定 Command</h2>
-          <label>
-            受控设备
-            <select
-              data-testid="real-command-device"
-              value={selectedDeviceId}
-              onChange={(event) => {
-                const deviceId = event.currentTarget.value;
-                setSelectedDeviceId(deviceId);
-                draftRef.current = { ...draftRef.current, deviceId };
-                idempotencyKeyRef.current = crypto.randomUUID();
-              }}
-            >
-              {deviceQuery.data.map((device) => (
-                <option key={device.deviceId} value={device.deviceId}>{device.name} · {device.type}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            目标设定值
-            <span className="real-commands__number-field">
-              <input
-                data-testid="real-command-setpoint"
-                type="number"
-                min={16}
-                max={30}
-                step={0.5}
-                value={setpointC}
-                onChange={(event) => {
-                  const value = event.currentTarget.valueAsNumber;
-                  if (!Number.isFinite(value)) return;
-                  setSetpointC(value);
-                  draftRef.current = { ...draftRef.current, setpointC: value };
-                  idempotencyKeyRef.current = crypto.randomUUID();
+        <Row gutter={[16, 16]}>
+          <Col xs={24} xl={10}>
+            <Card title="提交温度设定 Command" className="command-workbench-card">
+              <form
+                className="real-commands__composer"
+                data-testid="real-command-draft"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (selectedDeviceId) createMutation.mutate();
                 }}
-              />
-              <span>°C</span>
-            </span>
-          </label>
-          <button
-            data-testid="real-command-submit"
-            type="submit"
-            disabled={!selectedDeviceId || createMutation.isPending || setpointC < 16 || setpointC > 30}
-          >
-            {createMutation.isPending ? '提交中…' : '提交 Command Intent'}
-          </button>
-          <p>Organization、Site、Principal、风险和执行约束均由服务器推导；浏览器不发送这些授权字段。</p>
-        </form>
+              >
+                <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                    <Typography.Text strong>受控设备</Typography.Text>
+                    <Select
+                      data-testid="real-command-device"
+                      value={selectedDeviceId}
+                      options={deviceQuery.data.map((device) => ({
+                        value: device.deviceId,
+                        label: `${device.name} · ${device.type}`,
+                      }))}
+                      onChange={(deviceId) => {
+                        setSelectedDeviceId(deviceId);
+                        draftRef.current = { ...draftRef.current, deviceId };
+                        idempotencyKeyRef.current = crypto.randomUUID();
+                      }}
+                      style={{ width: '100%' }}
+                    />
+                  </Space>
+                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                    <Typography.Text strong>目标设定值</Typography.Text>
+                    <Input
+                      data-testid="real-command-setpoint"
+                      type="number"
+                      min={16}
+                      max={30}
+                      step={0.5}
+                      value={setpointC}
+                      addonAfter="°C"
+                      onChange={(event) => {
+                        const value = event.currentTarget.valueAsNumber;
+                        if (!Number.isFinite(value)) return;
+                        setSetpointC(value);
+                        draftRef.current = { ...draftRef.current, setpointC: value };
+                        idempotencyKeyRef.current = crypto.randomUUID();
+                      }}
+                    />
+                  </Space>
+                  <Button
+                    data-testid="real-command-submit"
+                    htmlType="submit"
+                    type="primary"
+                    block
+                    loading={createMutation.isPending}
+                    disabled={!selectedDeviceId || setpointC < 16 || setpointC > 30}
+                  >
+                    提交 Command Intent
+                  </Button>
+                  <Typography.Text type="secondary">Organization、Site、Principal、风险和执行约束均由服务器推导；浏览器不发送这些授权字段。</Typography.Text>
+                </Space>
+              </form>
+            </Card>
+          </Col>
+          <Col xs={24} xl={14}>
+            <Card title="查询 Command" className="command-workbench-card">
+              <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                <Typography.Text type="secondary">输入 Command ID 可恢复 Demo 相同的详情与状态时间线工作区。</Typography.Text>
+                <Input
+                  value={lookupCommandId}
+                  placeholder="输入 Command ID"
+                  prefix={<SearchOutlined />}
+                  onChange={(event) => setLookupCommandId(event.currentTarget.value)}
+                  onPressEnter={() => {
+                    const value = lookupCommandId.trim();
+                    if (value) publishCommandId(value);
+                  }}
+                />
+                <Button
+                  icon={<SearchOutlined />}
+                  disabled={!lookupCommandId.trim()}
+                  onClick={() => publishCommandId(lookupCommandId.trim())}
+                >
+                  查询权威状态
+                </Button>
+              </Space>
+            </Card>
+          </Col>
+        </Row>
       ) : null}
 
       {createMutation.isError ? (
@@ -330,50 +387,60 @@ function LocalCommandWorkbench({
 
       {command && projection ? (
         <article className="real-commands__detail" data-testid="real-command-detail" data-command-status={command.status}>
-          <div className="real-commands__detail-heading">
-            <div>
-              <h2>Command 状态</h2>
-              <p>{statusDescription(command)}</p>
-            </div>
-            <strong>{projection.statusLabel}</strong>
-          </div>
-          {projection.outcomeWarning ? <div className="real-commands__warning" role="alert">{projection.outcomeWarning}</div> : null}
-          <dl className="real-commands__facts" aria-label="Command authoritative projection">
-            <div><dt>Command ID</dt><dd><code>{command.commandId}</code></dd></div>
-            <div><dt>Site ID</dt><dd><code>{command.siteId}</code></dd></div>
-            <div><dt>Device ID</dt><dd><code>{command.deviceId}</code></dd></div>
-            <div><dt>目标设定值</dt><dd>{command.setpointC.toFixed(1)} °C</dd></div>
-            <div><dt>风险</dt><dd>{command.risk}</dd></div>
-            <div><dt>审批</dt><dd>{command.approvalCount} / {command.requiredApprovalCount} · {command.approvalPolicy}</dd></div>
-            <div><dt>S2 Snapshot Revision</dt><dd>{command.snapshotRevision}</dd></div>
-            <div><dt>Command Version</dt><dd>{command.version}</dd></div>
-          </dl>
-          {projection.canApprove ? (
-            <button
-              data-testid="real-command-approve"
-              type="button"
-              disabled={approveMutation.isPending}
-              onClick={() => approveMutation.mutate(command.commandId)}
+          <Space direction="vertical" size={16} className="command-detail-stack">
+            {projection.outcomeWarning ? (
+              <Alert type="warning" showIcon message="设备结果待确认" description={projection.outcomeWarning} />
+            ) : null}
+            <Card
+              title="Command 权威状态"
+              extra={projection.canApprove ? (
+                <Button
+                  data-testid="real-command-approve"
+                  type="primary"
+                  icon={<CheckCircleOutlined />}
+                  loading={approveMutation.isPending}
+                  onClick={() => approveMutation.mutate(command.commandId)}
+                >
+                  批准 Command
+                </Button>
+              ) : <Tag>{projection.statusLabel}</Tag>}
             >
-              {approveMutation.isPending ? '审批中…' : '批准 Command'}
-            </button>
-          ) : null}
-          {approveMutation.isError ? <div className="real-shell-problem" role="alert">{commandErrorMessage(approveMutation.error)}</div> : null}
-
-          <section className="real-commands__timeline" aria-labelledby="real-command-timeline-title">
-            <h3 id="real-command-timeline-title">状态时间线</h3>
-            <ol>
-              {command.transitions.map((transition) => (
-                <li key={transition.version}>
-                  <strong>{commandStatusLabel(transition.toStatus)}</strong>
-                  <span>{transition.reason}</span>
-                  <small>{transition.actorType} · v{transition.version} · {formatInstant(transition.occurredAt, site.timezone)}</small>
-                </li>
-              ))}
-            </ol>
-          </section>
+              <Typography.Paragraph type="secondary">{statusDescription(command)}</Typography.Paragraph>
+              <Descriptions column={{ xs: 1, sm: 2, xl: 3 }} bordered size="small" aria-label="Command authoritative projection">
+                <Descriptions.Item label="Command ID" span={2}><Typography.Text copyable>{command.commandId}</Typography.Text></Descriptions.Item>
+                <Descriptions.Item label="状态"><Tag>{projection.statusLabel}</Tag></Descriptions.Item>
+                <Descriptions.Item label="Site ID"><Typography.Text copyable>{command.siteId}</Typography.Text></Descriptions.Item>
+                <Descriptions.Item label="Device ID"><Typography.Text copyable>{command.deviceId}</Typography.Text></Descriptions.Item>
+                <Descriptions.Item label="目标设定值">{command.setpointC.toFixed(1)} °C</Descriptions.Item>
+                <Descriptions.Item label="风险"><Tag color={command.risk === 'HIGH' ? 'red' : command.risk === 'MEDIUM' ? 'gold' : 'green'}>{command.risk}</Tag></Descriptions.Item>
+                <Descriptions.Item label="审批">{command.approvalCount} / {command.requiredApprovalCount} · {command.approvalPolicy}</Descriptions.Item>
+                <Descriptions.Item label="S2 Snapshot Revision">{command.snapshotRevision}</Descriptions.Item>
+                <Descriptions.Item label="Command Version">{command.version}</Descriptions.Item>
+              </Descriptions>
+            </Card>
+            {approveMutation.isError ? <Alert type="error" showIcon message={commandErrorMessage(approveMutation.error)} /> : null}
+            <Card title={<span id="real-command-timeline-title">状态时间线</span>} className="command-timeline-card">
+              <Timeline
+                items={command.transitions.map((transition) => ({
+                  color: transition.toStatus === 'SUCCEEDED' ? 'green' : transition.toStatus === 'OUTCOME_UNKNOWN' ? 'orange' : 'blue',
+                  children: (
+                    <div className="command-timeline-item">
+                      <Space wrap>
+                        <Tag>{commandStatusLabel(transition.toStatus)}</Tag>
+                        <Typography.Text strong>{transition.reason}</Typography.Text>
+                        <Tag>{transition.actorType}</Tag>
+                      </Space>
+                      <Typography.Text type="secondary">v{transition.version} · {formatInstant(transition.occurredAt, site.timezone)}</Typography.Text>
+                    </div>
+                  ),
+                }))}
+              />
+            </Card>
+          </Space>
         </article>
       ) : null}
+        </Space>
+      </PageScaffold>
     </section>
   );
 }

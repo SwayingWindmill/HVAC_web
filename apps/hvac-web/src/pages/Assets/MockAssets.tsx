@@ -90,12 +90,12 @@ export default function Assets() {
   const { role } = useUi();
   const canManageAssets = can(role, 'manage', 'asset');
   const [selectedTreeKey, setSelectedTreeKey] = useState<Key>('b1');
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const detailFocus = useOperationsDetailFocus();
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [keyword, setKeyword] = useState('');
   const deviceParam = searchParams.get('device');
+  const selectedDeviceId = deviceParam && deviceParam in DEVICE_META ? deviceParam : null;
 
   useEffect(() => {
     if (!deviceParam) return;
@@ -106,28 +106,23 @@ export default function Assets() {
       message.warning(`未找到设备 ${deviceParam}`);
       return;
     }
-    if (selectedDeviceId !== deviceParam) {
-      setSelectedTreeKey(deviceParam);
-      setTypeFilter('all');
-      setStatusFilter('all');
-      setKeyword('');
-      setSelectedDeviceId(deviceParam);
-    }
-  }, [deviceParam, searchParams, selectedDeviceId, setSearchParams]);
+    setSelectedTreeKey(deviceParam);
+    setTypeFilter('all');
+    setStatusFilter('all');
+    setKeyword('');
+  }, [deviceParam, searchParams, setSearchParams]);
 
   const openDevice = (id: string, trigger?: HTMLElement) => {
     if (trigger) detailFocus.captureTrigger(trigger, id);
     const next = new URLSearchParams(searchParams);
     next.set('device', id);
     setSearchParams(next, { replace: true });
-    setSelectedDeviceId(id);
   };
 
   const closeDevice = () => {
     const next = new URLSearchParams(searchParams);
     next.delete('device');
     setSearchParams(next, { replace: true });
-    setSelectedDeviceId(null);
     detailFocus.restoreFocus();
   };
 

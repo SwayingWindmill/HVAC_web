@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
-import { Badge, Button, Divider, Grid, Layout, List, Popover, Select, Segmented, Space, Switch, Tooltip, Avatar } from 'antd';
+import { Badge, Button, Divider, Grid, List, Popover, Select, Segmented, Space, Switch, Tooltip, Avatar } from 'antd';
 import {
-  BellOutlined, SunOutlined, MoonOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
+  BellOutlined, SunOutlined, MoonOutlined,
   ExperimentOutlined, UserOutlined, DesktopOutlined, ApiOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router';
@@ -11,8 +11,8 @@ import { useAuthorizedRegistrySites } from '@/api/registry';
 import { mockAlarms, SEVERITY_LABEL } from '@/mock/data';
 import { SEVERITY_COLOR } from '@/theme/tokens';
 import { canViewPath } from '@/auth/permissions';
+import AppHeaderFrame from './AppHeaderFrame';
 
-const { Header } = Layout;
 const { useBreakpoint } = Grid;
 
 // S2 live sessions are device-scoped. The header must not claim a global Socket.IO connection.
@@ -133,13 +133,7 @@ export default function TopHeader() {
   );
 
   return (
-    <Header
-      style={{
-        display: 'flex', alignItems: 'center', gap: compact ? 8 : 16, padding: '0 16px',
-        borderBottom: '1px solid rgba(128,128,128,0.15)', height: 56, minWidth: 0,
-      }}
-    >
-      <Button type="text" icon={sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} onClick={toggleSidebar} />
+    <AppHeaderFrame sidebarCollapsed={sidebarCollapsed} onToggleSidebar={toggleSidebar} compact={compact}>
       {narrow ? (
         <Popover
           trigger="click"
@@ -165,6 +159,6 @@ export default function TopHeader() {
         />
       </Tooltip>
       {!narrow && <Avatar style={{ background: '#0FB5AE' }} icon={<UserOutlined />} />}
-    </Header>
+    </AppHeaderFrame>
   );
 }

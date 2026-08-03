@@ -1015,6 +1015,18 @@
   }
 }
 
+.copilotKitPopup.copilotKitPopup .copilotKitInput.copilotKitInput:focus-within,
+.ai-copilot-chat.ai-copilot-chat .copilotKitInput.copilotKitInput:focus-within {
+  border-color: var(--hvac-ai-accent) !important;
+  box-shadow: 0 0 0 3px rgba(15, 181, 174, 0.1), 0 5px 16px rgba(15, 23, 42, 0.1) !important;
+}
+
+[data-theme='dark'] .copilotKitPopup.copilotKitPopup .copilotKitInput.copilotKitInput:focus-within,
+[data-theme='dark'] .ai-copilot-chat.ai-copilot-chat .copilotKitInput.copilotKitInput:focus-within {
+  border-color: var(--hvac-ai-accent) !important;
+  box-shadow: 0 0 0 3px rgba(57, 197, 190, 0.12), 0 6px 18px rgba(0, 0, 0, 0.32) !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .hvac-copilot-toggle,
   .hvac-copilot-icon-button,

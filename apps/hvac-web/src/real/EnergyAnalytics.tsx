@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import ReactECharts from 'echarts-for-react';
+import { Alert, Button, Card, Descriptions, Input, Segmented, Select, Space, Tag, Typography } from 'antd';
+import { FundOutlined, LeftOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
+import PageScaffold from '@/components/PageScaffold';
+import { OperationsMetrics } from '@/components/OperationsUI';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import {
   buildEnergyTrendData,
@@ -27,11 +31,13 @@ import {
   type EnergyWorkspaceState,
 } from './energy-workspace';
 import { FocusHeading } from './FocusHeading';
+import type { EnergyRoutePeriod } from './site-routing';
 import './energy-analytics.css';
 
 interface EnergyAnalyticsProps {
   site: Readonly<Site>;
   principal: CurrentPrincipalResponse;
+  initialPeriod?: EnergyRoutePeriod;
 }
 
 const PERIOD_LABELS: Record<EnergyWorkspacePeriod, string> = {
@@ -41,6 +47,21 @@ const QUALITY_LABELS: Record<EnergyQualityPolicy, string> = {
   VALID_ONLY: '仅有效数据',
   VALID_AND_SUSPECT: '包含可疑数据',
 };
+
+function energyPeriodPath(period: EnergyWorkspacePeriod): string {
+  const segments = globalThis.location.pathname.split('/').filter(Boolean);
+  const energyIndex = segments.indexOf('energy');
+  if (energyIndex < 0) return globalThis.location.pathname;
+  if (segments.length === energyIndex + 1) return `/${segments.join('/')}`;
+  return `/${[...segments.slice(0, energyIndex + 1), period].join('/')}`;
+}
+
+function energyPeriodFromLocation(fallback: EnergyWorkspacePeriod): EnergyWorkspacePeriod {
+  const segments = globalThis.location.pathname.split('/').filter(Boolean);
+  const energyIndex = segments.indexOf('energy');
+  const candidate = segments[energyIndex + 1];
+  return candidate && candidate in PERIOD_LABELS ? candidate as EnergyWorkspacePeriod : fallback;
+}
 
 function formatInstant(value: string | undefined, timezone: string): string {
   if (!value) return '未提供';
@@ -99,11 +120,12 @@ function buildQuery(
   };
 }
 
-export function EnergyAnalytics({ site, principal }: EnergyAnalyticsProps) {
+export function EnergyAnalytics({ site, principal, initialPeriod }: EnergyAnalyticsProps) {
   const queryClient = useQueryClient();
-  const [workspaceState, setWorkspaceState] = useState<EnergyWorkspaceState>(() => (
-    parseEnergyWorkspaceSearch(globalThis.location.search, site.timezone)
-  ));
+  const [workspaceState, setWorkspaceState] = useState<EnergyWorkspaceState>(() => {
+    const parsed = parseEnergyWorkspaceSearch(globalThis.location.search, site.timezone);
+    return initialPeriod ? { ...parsed, period: initialPeriod } : parsed;
+  });
   const workspaceWindow = useMemo(
     () => buildEnergyWorkspaceWindow(workspaceState, site.timezone),
     [site.timezone, workspaceState],
@@ -115,20 +137,24 @@ export function EnergyAnalytics({ site, principal }: EnergyAnalyticsProps) {
 
   const commitWorkspaceState = useCallback((next: EnergyWorkspaceState) => {
     const canonical = buildEnergyWorkspaceWindow(next, site.timezone).state;
-    const target = `${globalThis.location.pathname}${energyWorkspaceSearch(canonical)}${globalThis.location.hash}`;
+    const target = `${energyPeriodPath(canonical.period)}${energyWorkspaceSearch(canonical)}${globalThis.location.hash}`;
     globalThis.history.pushState(null, '', target);
     setWorkspaceState(canonical);
   }, [site.timezone]);
 
   useEffect(() => {
     const canonicalSearch = energyWorkspaceSearch(workspaceWindow.state);
-    if (globalThis.location.search !== canonicalSearch) {
-      globalThis.history.replaceState(null, '', `${globalThis.location.pathname}${canonicalSearch}${globalThis.location.hash}`);
+    const canonicalPath = energyPeriodPath(workspaceWindow.state.period);
+    if (globalThis.location.search !== canonicalSearch || globalThis.location.pathname !== canonicalPath) {
+      globalThis.history.replaceState(null, '', `${canonicalPath}${canonicalSearch}${globalThis.location.hash}`);
     }
   }, [workspaceWindow.state]);
 
   useEffect(() => {
-    const onPopState = () => setWorkspaceState(parseEnergyWorkspaceSearch(globalThis.location.search, site.timezone));
+    const onPopState = () => {
+      const parsed = parseEnergyWorkspaceSearch(globalThis.location.search, site.timezone);
+      setWorkspaceState({ ...parsed, period: energyPeriodFromLocation(parsed.period) });
+    };
     globalThis.addEventListener('popstate', onPopState);
     return () => globalThis.removeEventListener('popstate', onPopState);
   }, [site.timezone]);
@@ -238,9 +264,14 @@ export function EnergyAnalytics({ site, principal }: EnergyAnalyticsProps) {
   if (currentResult.isPending) {
     return (
       <section className="real-energy" data-testid="real-energy-loading" data-business-state="LOADING">
-        <p className="real-shell-eyebrow">REAL MODE · SITE ENERGY</p>
-        <FocusHeading>能源分析</FocusHeading>
-        <div className="real-shell-progress" role="status" aria-live="polite">正在读取权威能源数据…</div>
+        <PageScaffold
+          title="能耗分析"
+          heading={<FocusHeading className="ops-page-title ant-typography"><Space><FundOutlined />能耗分析</Space></FocusHeading>}
+          extra={<Tag color="processing">LOADING</Tag>}
+          className="energy-page"
+        >
+          <Card variant="borderless"><div className="real-shell-progress" role="status" aria-live="polite">正在读取权威能源数据…</div></Card>
+        </PageScaffold>
       </section>
     );
   }
@@ -249,17 +280,21 @@ export function EnergyAnalytics({ site, principal }: EnergyAnalyticsProps) {
     const failure = classifyEnergyAnalyticsFailure(currentResult.error);
     return (
       <section className="real-energy" data-testid="real-energy-error" data-business-state={failure.kind.toUpperCase()}>
-        <p className="real-shell-eyebrow">REAL MODE · SITE ENERGY</p>
-        <FocusHeading>{failure.title}</FocusHeading>
-        <div className="real-shell-problem" role="alert" data-retryable={String(failure.retryable)}>
-          <span>{failure.detail}</span>
-          {failure.traceId ? <code>traceId {failure.traceId}</code> : null}
-        </div>
-        {failure.retryable ? (
-          <div className="real-shell-actions">
-            <button type="button" onClick={() => { void currentResult.refetch(); }}>重试能源查询</button>
-          </div>
-        ) : null}
+        <PageScaffold
+          title={failure.title}
+          heading={<FocusHeading className="ops-page-title ant-typography"><Space><FundOutlined />{failure.title}</Space></FocusHeading>}
+          extra={<Tag color="error">{failure.kind.toUpperCase()}</Tag>}
+          className="energy-page"
+        >
+          <Alert
+            type="error"
+            showIcon
+            message={failure.title}
+            description={<Space direction="vertical"><span>{failure.detail}</span>{failure.traceId ? <code>traceId {failure.traceId}</code> : null}</Space>}
+            action={failure.retryable ? <Button icon={<ReloadOutlined />} onClick={() => { void currentResult.refetch(); }}>重试能源查询</Button> : undefined}
+            data-retryable={String(failure.retryable)}
+          />
+        </PageScaffold>
       </section>
     );
   }
@@ -267,11 +302,14 @@ export function EnergyAnalytics({ site, principal }: EnergyAnalyticsProps) {
   if (!response) {
     return (
       <section className="real-energy" data-testid="real-energy-error" data-business-state="INVALID_RESPONSE">
-        <p className="real-shell-eyebrow">REAL MODE · SITE ENERGY</p>
-        <FocusHeading>数据响应无效</FocusHeading>
-        <div className="real-shell-problem" role="alert">
-          Gateway 未提供可验证的能源结果，页面未采用任何缓存或推断值。
-        </div>
+        <PageScaffold
+          title="数据响应无效"
+          heading={<FocusHeading className="ops-page-title ant-typography"><Space><FundOutlined />数据响应无效</Space></FocusHeading>}
+          extra={<Tag color="error">INVALID RESPONSE</Tag>}
+          className="energy-page"
+        >
+          <Alert type="error" showIcon message="数据响应无效" description="Gateway 未提供可验证的能源结果，页面未采用任何缓存或推断值。" />
+        </PageScaffold>
       </section>
     );
   }
@@ -286,6 +324,12 @@ export function EnergyAnalytics({ site, principal }: EnergyAnalyticsProps) {
           ? 'SUSPECT'
           : 'READY';
   const nextDisabled = workspaceState.anchor >= currentState.anchor;
+  const metrics = [
+    { key: 'total', label: '周期总电能', value: formatEnergy(total), detail: `${response.points.length} 个已返回时段`, tone: 'accent' as const },
+    { key: 'comparison', label: '环比上一周期', value: previousResult.isPending || previousResult.isError ? '不可用' : comparison.value, detail: previousResult.isPending ? '正在读取比较基期' : previousResult.isError ? '比较基期查询失败' : comparison.detail, tone: 'positive' as const },
+    { key: 'quality', label: '有效 / 可疑 / 无效', value: `${quality.valid} / ${quality.suspect} / ${quality.invalid}`, detail: `质量策略：${QUALITY_LABELS[workspaceState.qualityPolicy]}`, tone: hasSuspectData ? 'warning' as const : 'default' as const },
+    { key: 'revision', label: '数据集修订', value: response.metadata.datasetRevision, detail: '用于识别聚合重建或修订', tone: 'default' as const },
+  ];
 
   return (
     <section
@@ -297,75 +341,70 @@ export function EnergyAnalytics({ site, principal }: EnergyAnalyticsProps) {
       data-workspace-period={workspaceState.period}
       data-workspace-anchor={workspaceState.anchor}
     >
-      <header className="real-energy__header">
-        <div>
-          <p className="real-shell-eyebrow">REAL MODE · SITE ENERGY</p>
-          <FocusHeading>能源分析</FocusHeading>
-          <p>{site.displayName} · {site.code} · {site.timezone}</p>
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            void currentResult.refetch();
-            void previousResult.refetch();
-          }}
-          disabled={currentResult.isFetching || previousResult.isFetching}
-        >
-          {currentResult.isFetching || previousResult.isFetching ? '刷新中…' : '刷新当前与基期'}
-        </button>
-      </header>
+      <PageScaffold
+        title="能耗分析"
+        heading={<FocusHeading className="ops-page-title ant-typography"><Space><FundOutlined />能耗分析</Space></FocusHeading>}
+        extra={(
+          <Space wrap>
+            <Tag color={businessState === 'READY' ? 'green' : businessState === 'EMPTY' ? 'default' : 'orange'}>{businessState}</Tag>
+            <Button
+              icon={<ReloadOutlined />}
+              loading={currentResult.isFetching || previousResult.isFetching}
+              onClick={() => {
+                void currentResult.refetch();
+                void previousResult.refetch();
+              }}
+            >
+              刷新当前与基期
+            </Button>
+          </Space>
+        )}
+        className="energy-page"
+      >
+        <Typography.Text type="secondary">{site.displayName} · {site.code} · {site.timezone}</Typography.Text>
 
-      <form className="real-energy__controls" aria-label="能源分析工作区" onSubmit={(event) => event.preventDefault()}>
-        <fieldset>
-          <legend>分析周期</legend>
-          {(Object.entries(PERIOD_LABELS) as [EnergyWorkspacePeriod, string][]).map(([value, label]) => (
-            <label key={value}>
-              <input
-                type="radio"
-                name="energy-period"
-                value={value}
-                checked={workspaceState.period === value}
-                onChange={() => commitWorkspaceState(currentEnergyWorkspaceState(
-                  value,
-                  workspaceState.qualityPolicy,
-                  site.timezone,
-                ))}
+      <Card title="分析条件" variant="borderless" className="energy-controls-card">
+        <div className="ops-toolbar" aria-label="能源分析工作区">
+          <Space direction="vertical" size={4}>
+            <Typography.Text type="secondary">分析周期</Typography.Text>
+            <Segmented<EnergyWorkspacePeriod>
+              value={workspaceState.period}
+              options={(Object.entries(PERIOD_LABELS) as [EnergyWorkspacePeriod, string][]).map(([value, label]) => ({ value, label: `${label}度` }))}
+              onChange={(value) => commitWorkspaceState(currentEnergyWorkspaceState(
+                value,
+                workspaceState.qualityPolicy,
+                site.timezone,
+              ))}
+            />
+          </Space>
+          <Space wrap align="end">
+            <Space direction="vertical" size={4}>
+              <Typography.Text type="secondary">锚点日期</Typography.Text>
+              <Input
+                type="date"
+                value={workspaceState.anchor}
+                onChange={(event) => commitWorkspaceState(parseEnergyWorkspaceSearch(energyWorkspaceSearch({
+                  ...workspaceState,
+                  anchor: event.currentTarget.value,
+                }), site.timezone))}
+                style={{ width: 160 }}
               />
-              {label}
-            </label>
-          ))}
-        </fieldset>
-        <label>
-          锚点日期
-          <input
-            type="date"
-            value={workspaceState.anchor}
-            onChange={(event) => commitWorkspaceState(parseEnergyWorkspaceSearch(energyWorkspaceSearch({
-              ...workspaceState,
-              anchor: event.currentTarget.value,
-            }), site.timezone))}
-          />
-        </label>
-        <label>
-          数据质量口径
-          <select
-            value={workspaceState.qualityPolicy}
-            onChange={(event) => commitWorkspaceState({
-              ...workspaceState,
-              qualityPolicy: event.currentTarget.value as EnergyQualityPolicy,
-            })}
-          >
-            {(Object.entries(QUALITY_LABELS) as [EnergyQualityPolicy, string][]).map(([value, label]) => (
-              <option key={value} value={value}>{label}</option>
-            ))}
-          </select>
-        </label>
-        <div className="real-energy__period-navigation" aria-label="切换分析周期">
-          <button type="button" onClick={() => commitWorkspaceState(shiftEnergyWorkspaceState(workspaceState, -1, site.timezone))}>上一周期</button>
-          <button type="button" onClick={() => commitWorkspaceState(currentState)} disabled={workspaceState.anchor === currentState.anchor}>当前周期</button>
-          <button type="button" onClick={() => commitWorkspaceState(shiftEnergyWorkspaceState(workspaceState, 1, site.timezone))} disabled={nextDisabled}>下一周期</button>
+            </Space>
+            <Space direction="vertical" size={4}>
+              <Typography.Text type="secondary">数据质量口径</Typography.Text>
+              <Select<EnergyQualityPolicy>
+                value={workspaceState.qualityPolicy}
+                options={(Object.entries(QUALITY_LABELS) as [EnergyQualityPolicy, string][]).map(([value, label]) => ({ value, label }))}
+                onChange={(qualityPolicy) => commitWorkspaceState({ ...workspaceState, qualityPolicy })}
+                style={{ width: 170 }}
+              />
+            </Space>
+            <Button icon={<LeftOutlined />} onClick={() => commitWorkspaceState(shiftEnergyWorkspaceState(workspaceState, -1, site.timezone))}>上一周期</Button>
+            <Button onClick={() => commitWorkspaceState(currentState)} disabled={workspaceState.anchor === currentState.anchor}>当前周期</Button>
+            <Button onClick={() => commitWorkspaceState(shiftEnergyWorkspaceState(workspaceState, 1, site.timezone))} disabled={nextDisabled}>下一周期 <RightOutlined /></Button>
+          </Space>
         </div>
-      </form>
+      </Card>
 
       <section className="real-energy__period-summary" aria-label="当前分析上下文">
         <div><span>当前周期</span><strong>{workspaceWindow.label}</strong></div>
@@ -384,21 +423,14 @@ export function EnergyAnalytics({ site, principal }: EnergyAnalyticsProps) {
         {previousResult.data?.metadata.partial ? <p role="status">比较基期为部分数据，变化幅度不能视为完整周期对比。</p> : null}
       </div>
 
-      <dl className="real-energy__metrics" aria-label="能源分析关键指标">
-        <div><dt>周期总电能</dt><dd>{formatEnergy(total)}</dd><small>{response.points.length} 个已返回时段</small></div>
-        <div><dt>环比上一周期</dt><dd>{previousResult.isPending || previousResult.isError ? '不可用' : comparison.value}</dd><small>{previousResult.isPending ? '正在读取比较基期' : previousResult.isError ? '比较基期查询失败' : comparison.detail}</small></div>
-        <div><dt>有效 / 可疑 / 无效</dt><dd>{quality.valid} / {quality.suspect} / {quality.invalid}</dd><small>质量策略：{QUALITY_LABELS[workspaceState.qualityPolicy]}</small></div>
-        <div><dt>数据集修订</dt><dd className="real-energy__revision">{response.metadata.datasetRevision}</dd><small>用于识别聚合重建或修订</small></div>
-      </dl>
+      <OperationsMetrics items={metrics} ariaLabel="能源分析关键指标" />
 
-      <article className="real-energy__chart" aria-labelledby="energy-trend-title">
-        <div className="real-energy__panel-heading">
-          <div>
-            <h2 id="energy-trend-title">电能趋势</h2>
-            <p>断点代表未知或缺失数据，不代表 0 kWh。{workspaceWindow.drillDownPeriod ? `选择数据柱可下钻到${PERIOD_LABELS[workspaceWindow.drillDownPeriod]}视图。` : ''}</p>
-          </div>
-          <span>{workspaceWindow.label}</span>
-        </div>
+      <Card
+        className="energy-chart-card"
+        title={<div><Typography.Text strong id="energy-trend-title">电能趋势</Typography.Text><Typography.Paragraph type="secondary">断点代表未知或缺失数据，不代表 0 kWh。{workspaceWindow.drillDownPeriod ? `选择数据柱可下钻到${PERIOD_LABELS[workspaceWindow.drillDownPeriod]}视图。` : ''}</Typography.Paragraph></div>}
+        extra={<Tag>{workspaceWindow.label}</Tag>}
+        aria-labelledby="energy-trend-title"
+      >
         {response.points.length === 0 ? (
           <div className="real-energy__empty" role="status">
             当前授权范围内没有返回能源时段。此状态不代表 0 kWh，也不代表权限拒绝。
@@ -406,16 +438,14 @@ export function EnergyAnalytics({ site, principal }: EnergyAnalyticsProps) {
         ) : (
           <ReactECharts option={chartOption} onEvents={chartEvents} style={{ height: 360 }} notMerge lazyUpdate />
         )}
-      </article>
+      </Card>
 
-      <article className="real-energy__table" aria-labelledby="energy-period-table-title">
-        <div className="real-energy__panel-heading">
-          <div>
-            <h2 id="energy-period-table-title">返回时段</h2>
-            <p>表格只列出服务实际返回的桶；未返回的时段不会补零。</p>
-          </div>
-          <span>{sortedPoints.length} 条</span>
-        </div>
+      <Card
+        className="energy-table-card"
+        title={<div><Typography.Text strong id="energy-period-table-title">返回时段</Typography.Text><Typography.Paragraph type="secondary">表格只列出服务实际返回的桶；未返回的时段不会补零。</Typography.Paragraph></div>}
+        extra={<Tag>{sortedPoints.length} 条</Tag>}
+        aria-labelledby="energy-period-table-title"
+      >
         {sortedPoints.length === 0 ? (
           <div className="real-energy__empty real-energy__empty--compact" role="status">没有可列出的返回时段。</div>
         ) : (
@@ -435,9 +465,9 @@ export function EnergyAnalytics({ site, principal }: EnergyAnalyticsProps) {
                     <td>{formatEnergy(point.energyKWh)}</td>
                     {workspaceWindow.drillDownPeriod ? (
                       <td>
-                        <button type="button" onClick={() => drillDown(point.periodStart)}>
+                        <Button size="small" onClick={() => drillDown(point.periodStart)}>
                           查看{PERIOD_LABELS[workspaceWindow.drillDownPeriod]}
-                        </button>
+                        </Button>
                       </td>
                     ) : null}
                   </tr>
@@ -446,16 +476,19 @@ export function EnergyAnalytics({ site, principal }: EnergyAnalyticsProps) {
             </table>
           </div>
         )}
-      </article>
+      </Card>
 
-      <dl className="real-energy__provenance" aria-label="能源数据新鲜度与修订信息">
-        <div><dt>数据水位</dt><dd>{formatInstant(response.metadata.dataWatermark, site.timezone)}</dd></div>
-        <div><dt>聚合水位</dt><dd>{formatInstant(response.metadata.aggregateWatermark, site.timezone)}</dd></div>
-        <div><dt>请求范围</dt><dd>{formatInstant(currentQuery.from, site.timezone)} — {formatInstant(currentQuery.to, site.timezone)}</dd></div>
-        <div><dt>返回粒度</dt><dd>{response.metadata.actualGranularity}</dd></div>
-        <div><dt>比较基期修订</dt><dd>{previousResult.data?.metadata.datasetRevision ?? '不可用'}</dd></div>
-        <div><dt>权威边界</dt><dd>Platform Gateway · Site 级 Energy Read Model</dd></div>
-      </dl>
+      <Card title="数据新鲜度与权威边界" variant="borderless" className="energy-provenance-card">
+        <Descriptions column={{ xs: 1, sm: 2, xl: 3 }} bordered size="small" aria-label="能源数据新鲜度与修订信息">
+          <Descriptions.Item label="数据水位">{formatInstant(response.metadata.dataWatermark, site.timezone)}</Descriptions.Item>
+          <Descriptions.Item label="聚合水位">{formatInstant(response.metadata.aggregateWatermark, site.timezone)}</Descriptions.Item>
+          <Descriptions.Item label="请求范围">{formatInstant(currentQuery.from, site.timezone)} — {formatInstant(currentQuery.to, site.timezone)}</Descriptions.Item>
+          <Descriptions.Item label="返回粒度">{response.metadata.actualGranularity}</Descriptions.Item>
+          <Descriptions.Item label="比较基期修订">{previousResult.data?.metadata.datasetRevision ?? '不可用'}</Descriptions.Item>
+          <Descriptions.Item label="权威边界">Platform Gateway · Site 级 Energy Read Model</Descriptions.Item>
+        </Descriptions>
+      </Card>
+      </PageScaffold>
     </section>
   );
 }

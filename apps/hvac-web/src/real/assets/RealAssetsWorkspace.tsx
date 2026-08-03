@@ -1,5 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes, type Key } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Alert, Badge, Button, Card, Col, Empty, Grid, Input, Row, Select, Space, Table, Tag, Tree, Typography } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import {
+  ApartmentOutlined,
+  ApiOutlined,
+  ClusterOutlined,
+  EyeOutlined,
+  NodeIndexOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons';
+import PageScaffold from '@/components/PageScaffold';
+import { OperationsMetrics, OperationsPanelHeading } from '@/components/OperationsUI';
 import {
   createPlatformGatewayClient,
   type CurrentPrincipalResponse,
@@ -31,7 +43,6 @@ import {
 import {
   buildRealAssetsRows,
   isRealAssetsAttentionState,
-  type RealAssetsAttentionReason,
   type RealAssetsDeviceRow,
   type RealAssetsOperatingState,
 } from './model';
@@ -72,19 +83,6 @@ const S2_DISPLAY_LABELS = {
   UNAVAILABLE: '不可用',
 } as const;
 
-const ATTENTION_REASON_LABELS: Record<RealAssetsAttentionReason, string> = {
-  CURRENT_STATE_UNAVAILABLE: '当前状态不可用',
-  CURRENT_STATE_NOT_VISIBLE: '当前状态不可见',
-  POINT_CATALOG_CONTRACT_DRIFT: '关键点位目录与公共契约不一致',
-  POINT_CATALOG_UNCONFIGURED: '关键点位目录未配置',
-  PRESENCE_UNKNOWN: 'Presence 未确定',
-  PRESENCE_OFFLINE: 'Presence 离线',
-  TELEMETRY_STALE: '存在陈旧数据',
-  TELEMETRY_SUSPECT: '存在可疑数据',
-  CRITICAL_POINT_MISSING: '关键点位缺失',
-  TELEMETRY_INCOMPLETE: '当前状态不完整',
-};
-
 function matchesHierarchy(row: RealAssetsDeviceRow, selection: HierarchySelection): boolean {
   if (selection === 'all') return true;
   if (selection === 'unbound') return row.binding.state === 'unbound';
@@ -115,27 +113,6 @@ function telemetryFailure(error: unknown): { title: string; detail: string; retr
   };
 }
 
-function OperatingState({ row, pending, unavailable }: { row: RealAssetsDeviceRow; pending: boolean; unavailable: boolean }) {
-  if (pending) return <span className="real-assets__state real-assets__state--loading">读取中</span>;
-  if (unavailable) return <span className="real-assets__state real-assets__state--unavailable">状态服务不可用</span>;
-  const ownerDisplayState = row.snapshotResult?.status === 'ok' ? row.snapshotResult.snapshot.displayState : null;
-  return (
-    <div className="real-assets__operating-state">
-      <span className={`real-assets__state real-assets__state--${row.operatingState.toLowerCase()}`}>
-        {OPERATING_LABELS[row.operatingState]}
-      </span>
-      <small className="real-assets__owner-display">
-        S2 display: {ownerDisplayState ? S2_DISPLAY_LABELS[ownerDisplayState] : '不适用'}
-      </small>
-      {row.attentionReasons.length > 0 ? (
-        <ul aria-label="关注原因">
-          {row.attentionReasons.map((reason) => <li key={reason}>{ATTENTION_REASON_LABELS[reason]}</li>)}
-        </ul>
-      ) : null}
-    </div>
-  );
-}
-
 function formatSampledAt(value: string, timeZone: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return '采样时间不可用';
@@ -158,40 +135,6 @@ function pointEvidence(point: RealAssetsDeviceRow['points'][number], timeZone: s
   const quality = point.quality === 'SUSPECT' ? '可疑' : '良好';
   const sampledAt = point.sampledAt ? formatSampledAt(point.sampledAt, timeZone) : '采样时间不可用';
   return `${freshness} · ${quality} · ${sampledAt}`;
-}
-
-function PointSummary({
-  row,
-  pending,
-  unavailable,
-  timeZone,
-}: {
-  row: RealAssetsDeviceRow;
-  pending: boolean;
-  unavailable: boolean;
-  timeZone: string;
-}) {
-  if (pending) return <span className="real-assets__muted">正在读取关键点位…</span>;
-  if (unavailable) return <span className="real-assets__muted">当前点位状态不可用</span>;
-  if (row.profile.state === 'unconfigured') {
-    return <span className="real-assets__profile-unconfigured">未配置此 Device 类型的关键点位目录</span>;
-  }
-  return (
-    <ul className="real-assets__points" aria-label={`${row.device.displayName} 关键点位`}>
-      {row.points.map((point) => (
-        <li
-          key={point.key}
-          data-point-state={point.state}
-          data-point-freshness={point.freshness}
-          data-point-quality={point.quality ?? 'NONE'}
-        >
-          <span>{point.label}</span>
-          <strong>{point.displayValue}{point.unit ? ` ${point.unit}` : ''}</strong>
-          <small>{pointEvidence(point, timeZone)}</small>
-        </li>
-      ))}
-    </ul>
-  );
 }
 
 function BindingLabel({ row }: { row: RealAssetsDeviceRow }) {
@@ -218,6 +161,8 @@ export function RealAssetsWorkspace({
   telemetryRuntime: providedTelemetryRuntime,
 }: RealAssetsWorkspaceProps) {
   const queryClient = useQueryClient();
+  const screens = Grid.useBreakpoint();
+  const compactTable = !screens.xl;
   const platformClient = useMemo(() => providedPlatformClient ?? createPlatformGatewayClient(), [providedPlatformClient]);
   const telemetryRuntime = useMemo(() => providedTelemetryRuntime ?? createRealAssetsTelemetryRuntime(), [providedTelemetryRuntime]);
   const [listMode, setListMode] = useState<ListMode>('attention');
@@ -231,7 +176,7 @@ export function RealAssetsWorkspace({
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const selectedDeviceIdRef = useRef<string | null>(selectedDeviceId);
   const pendingFocusDeviceIdRef = useRef<string | null>(null);
-  const deviceTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
+  const deviceTriggerRefs = useRef(new Map<string, HTMLElement>());
   const organizationId = principal.context.actingOrganizationId;
   const sessionCapability = principal.session.csrfToken;
   const capabilities = principal.authorization.capabilities;
@@ -386,6 +331,173 @@ export function RealAssetsWorkspace({
     item.id,
     rows.filter((row) => row.binding.state === 'bound' && row.binding.equipment.id === item.id).length,
   ])), [registry.data?.equipment, rows]);
+  const hierarchyTree = useMemo(() => [{
+    key: 'all',
+    title: (
+      <span data-testid="real-assets-hierarchy-all">
+        {site.displayName} · {rows.length}
+      </span>
+    ),
+    children: [
+      ...(registry.data?.equipment ?? []).map((item) => ({
+        key: `equipment:${item.id}`,
+        title: (
+          <span data-testid="real-assets-hierarchy-equipment" data-equipment-id={item.id}>
+            {item.displayName} · {equipmentCounts.get(item.id) ?? 0}
+          </span>
+        ),
+      })),
+      {
+        key: 'unbound',
+        title: (
+          <span data-testid="real-assets-hierarchy-unbound">
+            未绑定 Equipment · {rows.filter((row) => row.binding.state === 'unbound').length}
+          </span>
+        ),
+      },
+      {
+        key: 'ambiguous',
+        title: (
+          <span data-testid="real-assets-hierarchy-ambiguous">
+            绑定关系冲突 · {rows.filter((row) => row.binding.state === 'ambiguous').length}
+          </span>
+        ),
+      },
+    ],
+  }], [equipmentCounts, registry.data?.equipment, rows, site.displayName]);
+  const assetColumns = useMemo<ColumnsType<RealAssetsDeviceRow>>(() => {
+    const columns: ColumnsType<RealAssetsDeviceRow> = [
+      {
+        title: '设备',
+        key: 'device',
+        fixed: 'left',
+        width: 250,
+        render: (_, row) => (
+          <Button
+            type="link"
+            className="real-assets__device-link"
+            data-testid="real-assets-open-device"
+            aria-haspopup="dialog"
+            aria-expanded={selectedDeviceId === row.device.id}
+            ref={(node) => {
+              if (node) deviceTriggerRefs.current.set(row.device.id, node);
+              else deviceTriggerRefs.current.delete(row.device.id);
+            }}
+            onClick={() => openDeviceDetail(row.device.id)}
+          >
+            <Space direction="vertical" size={0} align="start">
+              <Space size={6} wrap>
+                <Typography.Text strong>{row.device.displayName}</Typography.Text>
+                <Tag>{row.device.deviceType}</Tag>
+              </Space>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>{row.device.code}</Typography.Text>
+            </Space>
+          </Button>
+        ),
+      },
+      {
+        title: '位置 / Equipment',
+        key: 'equipment',
+        width: 210,
+        render: (_, row) => <BindingLabel row={row} />,
+      },
+      {
+        title: '状态',
+        key: 'state',
+        width: 150,
+        render: (_, row) => {
+          if (currentPending) return <Badge status="processing" text="读取中" />;
+          if (currentUnavailable) return <Badge status="error" text="状态不可用" />;
+          const status = row.operatingState === 'NORMAL'
+            ? 'success'
+            : row.operatingState === 'OFFLINE'
+              ? 'error'
+              : row.operatingState === 'ATTENTION'
+                ? 'warning'
+                : 'default';
+          return <Badge status={status} text={OPERATING_LABELS[row.operatingState]} />;
+        },
+      },
+      {
+        title: '通讯',
+        key: 'communication',
+        width: 190,
+        render: (_, row) => {
+          const snapshot = row.snapshotResult?.status === 'ok' ? row.snapshotResult.snapshot : null;
+          return (
+            <Space direction="vertical" size={0}>
+              <Tag icon={<ApiOutlined />} color={snapshot?.displayState === 'ONLINE' ? 'processing' : undefined}>
+                {snapshot?.displayState ? S2_DISPLAY_LABELS[snapshot.displayState] : '未提供'}
+              </Tag>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {snapshot?.presence.lastSeenAt ? formatSampledAt(snapshot.presence.lastSeenAt, site.timezone) : '最后通讯未提供'}
+              </Typography.Text>
+            </Space>
+          );
+        },
+      },
+      {
+        title: '关键点位',
+        key: 'points',
+        width: 180,
+        render: (_, row) => {
+          const available = row.points.filter((point) => point.state === 'PRESENT').length;
+          const total = row.points.length;
+          const rate = total > 0 ? Math.round((available / total) * 100) : null;
+          return (
+            <Space direction="vertical" size={0}>
+              <Typography.Text>{total > 0 ? `${available} / ${total}` : '未配置'}</Typography.Text>
+              <Typography.Text type={rate !== null && rate < 100 ? 'warning' : 'secondary'} style={{ fontSize: 12 }}>
+                {rate === null ? '关键点位目录待配置' : `${rate}% 可用`}
+              </Typography.Text>
+              <ul className="real-assets__point-preview" aria-label={`${row.device.displayName} 关键点位证据`}>
+                {row.points.map((point) => (
+                  <li key={point.key}>
+                    <span>{point.label} {point.displayValue}{point.unit ? ` ${point.unit}` : ''}</span>
+                    <small>{pointEvidence(point, site.timezone)}</small>
+                  </li>
+                ))}
+              </ul>
+            </Space>
+          );
+        },
+      },
+      {
+        title: 'Registry',
+        key: 'registry',
+        width: 150,
+        render: (_, row) => (
+          <Space direction="vertical" size={0}>
+            <Tag color={row.device.status === 'ACTIVE' ? 'green' : 'default'}>{row.device.status}</Tag>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>Revision {row.device.revision}</Typography.Text>
+          </Space>
+        ),
+      },
+      {
+        title: '操作',
+        key: 'action',
+        fixed: 'right',
+        width: 110,
+        render: (_, row) => (
+          <Button
+            size="small"
+            type="primary"
+            ghost
+            icon={<EyeOutlined />}
+            data-testid="real-assets-open-device"
+            aria-haspopup="dialog"
+            aria-expanded={selectedDeviceId === row.device.id}
+            onClick={() => openDeviceDetail(row.device.id)}
+          >
+            详情
+          </Button>
+        ),
+      },
+    ];
+    return compactTable
+      ? columns.filter((column) => ['device', 'equipment', 'state', 'points', 'action'].includes(String(column.key)))
+      : columns;
+  }, [compactTable, currentPending, currentUnavailable, selectedDeviceId, site.timezone]);
   const detailResolution = useMemo(() => resolveRealAssetsDetail(rows, selectedDeviceId), [rows, selectedDeviceId]);
   const detailRow = detailResolution.state === 'visible' ? detailResolution.row : null;
   const onRealtimeRevoked = useCallback(() => {
@@ -476,11 +588,20 @@ export function RealAssetsWorkspace({
   if (!registryAllowed || !telemetryAllowed) {
     return (
       <section className="real-assets" data-testid="real-site-route-assets" data-business-state="FORBIDDEN" data-site-id={site.id}>
-        <p className="real-shell-eyebrow">REAL MODE · SITE ASSETS</p>
-        <FocusHeading>资产运行工作台不可用</FocusHeading>
-        <div className="real-shell-problem" role="alert" data-retryable="false">
-          <span>当前 Principal 缺少 Equipment、Device 或 Telemetry batch read 的服务器能力投影。此状态不会尝试调用受保护数据接口。</span>
-        </div>
+        <PageScaffold
+          title="设备与建筑"
+          heading={<FocusHeading className="ops-page-title ant-typography"><Space><ApartmentOutlined />设备与建筑</Space></FocusHeading>}
+          extra={<Tag color="error">FORBIDDEN</Tag>}
+          className="assets-page"
+        >
+          <Alert
+            type="error"
+            showIcon
+            message="资产运行工作台不可用"
+            description="当前 Principal 缺少 Equipment、Device 或 Telemetry batch read 的服务器能力投影。此状态不会尝试调用受保护数据接口。"
+            data-retryable="false"
+          />
+        </PageScaffold>
       </section>
     );
   }
@@ -488,9 +609,14 @@ export function RealAssetsWorkspace({
   if (registry.isPending) {
     return (
       <section className="real-assets" data-testid="real-site-route-assets" data-business-state="LOADING" data-site-id={site.id}>
-        <p className="real-shell-eyebrow">REAL MODE · SITE ASSETS</p>
-        <FocusHeading>资产运行工作台</FocusHeading>
-        <div className="real-shell-progress" role="status" aria-live="polite">正在读取授权 Equipment、Device 与 DeviceBinding…</div>
+        <PageScaffold
+          title="设备与建筑"
+          heading={<FocusHeading className="ops-page-title ant-typography"><Space><ApartmentOutlined />设备与建筑</Space></FocusHeading>}
+          extra={<Tag color="processing">LOADING</Tag>}
+          className="assets-page"
+        >
+          <Card variant="borderless"><div className="real-shell-progress" role="status" aria-live="polite">正在读取授权 Equipment、Device 与 DeviceBinding…</div></Card>
+        </PageScaffold>
       </section>
     );
   }
@@ -499,13 +625,24 @@ export function RealAssetsWorkspace({
     const failure = presentRegistryError(registry.error);
     return (
       <section className="real-assets" data-testid="real-site-route-assets" data-business-state="REGISTRY_UNAVAILABLE" data-site-id={site.id}>
-        <p className="real-shell-eyebrow">REAL MODE · SITE ASSETS</p>
-        <FocusHeading>{failure.title}</FocusHeading>
-        <div className="real-shell-problem" role="alert" data-retryable={String(failure.retryable)}>
-          <span>{failure.description}</span>
-          {failure.traceId ? <code>traceId {failure.traceId}</code> : null}
-        </div>
-        {failure.retryable ? <button type="button" onClick={() => { void registry.refetch(); }}>重试 Registry</button> : null}
+        {failure.retryable ? (
+          <button type="button" className="real-shell-sr-only" onClick={() => { void registry.refetch(); }}>重试 Registry</button>
+        ) : null}
+        <PageScaffold
+          title={failure.title}
+          heading={<FocusHeading className="ops-page-title ant-typography"><Space><ApartmentOutlined />{failure.title}</Space></FocusHeading>}
+          extra={<Tag color="error">REGISTRY UNAVAILABLE</Tag>}
+          className="assets-page"
+        >
+          <Alert
+            type="error"
+            showIcon
+            message={failure.title}
+            description={<Space direction="vertical"><span>{failure.description}</span>{failure.traceId ? <code>traceId {failure.traceId}</code> : null}</Space>}
+            action={failure.retryable ? <Button icon={<ReloadOutlined />} onClick={() => { void registry.refetch(); }}>重试 Registry</Button> : undefined}
+            data-retryable={String(failure.retryable)}
+          />
+        </PageScaffold>
       </section>
     );
   }
@@ -526,31 +663,38 @@ export function RealAssetsWorkspace({
       data-list-mode={listMode}
       data-hierarchy-selection={hierarchySelection}
     >
-      <header className="real-assets__header">
-        <div>
-          <p className="real-shell-eyebrow">REAL MODE · SITE ASSETS</p>
-          <FocusHeading id="real-assets-title">资产运行工作台</FocusHeading>
-          <p>{site.displayName} · 仅展示当前授权 Site 的 Registry 与 S2 当前状态。</p>
-          <small>Acting Organization: {organizationId}</small>
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            void registry.refetch();
-            if (devices.length > 0) void current.refetch();
-          }}
-          disabled={registry.isFetching || current.isFetching}
-        >
-          {registry.isFetching || current.isFetching ? '刷新中…' : '刷新'}
-        </button>
-      </header>
-
-      <dl className="real-assets__metrics" aria-label="Site 设备运行摘要">
-        <div><dt>可见 Device</dt><dd>{counts.total}</dd></div>
-        <div><dt>需关注</dt><dd>{counts.attention ?? '—'}</dd></div>
-        <div><dt>离线</dt><dd>{counts.offline ?? '—'}</dd></div>
-        <div><dt>正常</dt><dd>{counts.normal ?? '—'}</dd></div>
-      </dl>
+      <PageScaffold
+        title="设备与建筑"
+        heading={<FocusHeading id="real-assets-title" className="ops-page-title ant-typography"><Space><ApartmentOutlined />设备与建筑</Space></FocusHeading>}
+        extra={(
+          <Space wrap>
+            <Tag color={businessState === 'READY' ? 'green' : businessState === 'EMPTY' ? 'default' : 'orange'}>{businessState}</Tag>
+            <div className="real-assets__header">
+              <Button
+                icon={<ReloadOutlined />}
+                loading={registry.isFetching || current.isFetching}
+                onClick={() => {
+                  void registry.refetch();
+                  if (devices.length > 0) void current.refetch();
+                }}
+              >
+                刷新
+              </Button>
+            </div>
+          </Space>
+        )}
+        className="assets-page"
+      >
+        <Typography.Text type="secondary">{site.displayName} · 仅展示当前授权 Site 的 Registry 与 S2 当前状态。 · Acting Organization: {organizationId}</Typography.Text>
+        <OperationsMetrics
+          ariaLabel="Site 设备运行摘要"
+          items={[
+            { key: 'total', label: '可见 Device', value: counts.total, detail: 'Registry 授权集合', tone: 'accent' },
+            { key: 'attention', label: '需关注', value: counts.attention ?? '—', detail: '离线、未知或关键点异常', tone: counts.attention ? 'warning' : 'positive' },
+            { key: 'offline', label: '离线', value: counts.offline ?? '—', detail: '权威 Presence OFFLINE', tone: counts.offline ? 'critical' : 'default' },
+            { key: 'normal', label: '正常', value: counts.normal ?? '—', detail: '当前状态正常', tone: 'positive' },
+          ]}
+        />
 
       {devices.length === 0 ? (
         <div className="real-assets__empty" role="status">
@@ -577,99 +721,118 @@ export function RealAssetsWorkspace({
       ) : null}
 
       {devices.length > 0 ? (
-        <div className="real-assets__workspace">
-          <aside className="real-assets__hierarchy" aria-label="Site Equipment hierarchy">
-            <h2>资产层级</h2>
-            <button type="button" data-testid="real-assets-hierarchy-all" aria-pressed={hierarchySelection === 'all'} className={hierarchySelection === 'all' ? 'is-active' : ''} onClick={() => setHierarchySelection('all')}>
-              {site.displayName}<span>{rows.length}</span>
-            </button>
-            {(registry.data?.equipment ?? []).map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                data-testid="real-assets-hierarchy-equipment"
-                data-equipment-id={item.id}
-                aria-pressed={hierarchySelection === `equipment:${item.id}`}
-                className={hierarchySelection === `equipment:${item.id}` ? 'is-active' : ''}
-                onClick={() => setHierarchySelection(`equipment:${item.id}`)}
-              >
-                {item.displayName}<span>{equipmentCounts.get(item.id) ?? 0}</span>
-              </button>
-            ))}
-            <button type="button" data-testid="real-assets-hierarchy-unbound" aria-pressed={hierarchySelection === 'unbound'} className={hierarchySelection === 'unbound' ? 'is-active' : ''} onClick={() => setHierarchySelection('unbound')}>
-              未绑定 Equipment<span>{rows.filter((row) => row.binding.state === 'unbound').length}</span>
-            </button>
-            <button type="button" data-testid="real-assets-hierarchy-ambiguous" aria-pressed={hierarchySelection === 'ambiguous'} className={hierarchySelection === 'ambiguous' ? 'is-active' : ''} onClick={() => setHierarchySelection('ambiguous')}>
-              绑定关系冲突<span>{rows.filter((row) => row.binding.state === 'ambiguous').length}</span>
-            </button>
-          </aside>
+        <Row gutter={[16, 16]} className="real-assets__workspace">
+          <Col xs={24} lg={7} xl={6}>
+            <Card
+              variant="borderless"
+              title={<OperationsPanelHeading icon={<ClusterOutlined />} title="建筑设备树" />}
+              className="assets-hierarchy-card"
+              styles={{ body: { padding: 12 } }}
+            >
+              <Tree
+                defaultExpandAll
+                blockNode
+                treeData={hierarchyTree}
+                selectedKeys={[hierarchySelection]}
+                onSelect={(keys: Key[]) => {
+                  const selected = String(keys[0] ?? 'all') as HierarchySelection;
+                  setHierarchySelection(selected);
+                }}
+              />
+            </Card>
+          </Col>
+          <Col xs={24} lg={17} xl={18}>
+            <Card variant="borderless" className="assets-ledger-card" styles={{ body: { padding: 16 } }}>
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <div className="ops-toolbar">
+                  <OperationsPanelHeading icon={<NodeIndexOutlined />} title="设备台账" meta={`${filteredRows.length} 台`} />
+                  <Space wrap>
+                    <Input
+                      allowClear
+                      type="search"
+                      data-testid="real-assets-search"
+                      placeholder="搜索设备或 Equipment"
+                      value={search}
+                      onChange={(event) => setSearch(event.currentTarget.value)}
+                      style={{ width: 260 }}
+                    />
+                    <Select
+                      value={listMode}
+                      onChange={setListMode}
+                      options={[
+                        { label: '需关注', value: 'attention' },
+                        { label: '全部 Device', value: 'all' },
+                      ]}
+                      style={{ width: 130 }}
+                    />
+                    <Button
+                      data-testid="real-assets-list-attention"
+                      type={listMode === 'attention' ? 'primary' : 'default'}
+                      onClick={() => setListMode('attention')}
+                    >
+                      需关注
+                    </Button>
+                    <Button
+                      data-testid="real-assets-list-all"
+                      type={listMode === 'all' ? 'primary' : 'default'}
+                      onClick={() => setListMode('all')}
+                    >
+                      全部 Device
+                    </Button>
+                  </Space>
+                </div>
 
-          <div className="real-assets__ledger">
-            <form className="real-assets__filters" aria-label="Device 筛选" onSubmit={(event) => event.preventDefault()}>
-              <fieldset>
-                <legend>列表范围</legend>
-                <label><input type="radio" data-testid="real-assets-list-attention" name="assets-list-mode" checked={listMode === 'attention'} onChange={() => setListMode('attention')} />需关注</label>
-                <label><input type="radio" data-testid="real-assets-list-all" name="assets-list-mode" checked={listMode === 'all'} onChange={() => setListMode('all')} />全部 Device</label>
-              </fieldset>
-              <label>
-                搜索 Device 或 Equipment
-                <input type="search" data-testid="real-assets-search" value={search} onChange={(event) => setSearch(event.currentTarget.value)} />
-              </label>
-            </form>
-
-            {filteredRows.length === 0 ? (
-              <div className="real-assets__empty" role="status">
-                {listMode === 'attention' && !currentPending && !currentUnavailable && rows.every((row) => row.operatingState === 'NORMAL')
-                  ? '当前筛选范围内所有 Device 均为正常。切换到“全部 Device”可查看完整列表。'
-                  : '当前筛选条件没有匹配的 Device。'}
-              </div>
-            ) : (
-              <div className="real-assets__table-wrap" data-testid="real-assets-table-wrap">
-                <table className="real-assets__table">
-                  <caption>授权 Device 运行列表</caption>
-                  <thead>
-                    <tr><th scope="col">Device</th><th scope="col">Equipment</th><th scope="col">运行状态</th><th scope="col">关键点位</th><th scope="col">Registry</th></tr>
-                  </thead>
-                  <tbody>
-                    {filteredRows.map((row) => (
-                      <tr
-                        key={row.device.id}
-                        data-device-id={row.device.id}
-                        data-operating-state={currentUnavailable ? 'UNAVAILABLE' : currentPending ? 'LOADING' : row.operatingState}
-                      >
-                        <th scope="row">
-                          <button
-                            type="button"
-                            className="real-assets__device-link"
-                            data-testid="real-assets-open-device"
-                            aria-haspopup="dialog"
-                            aria-expanded={selectedDeviceId === row.device.id}
-                            ref={(node) => {
-                              if (node) deviceTriggerRefs.current.set(row.device.id, node);
-                              else deviceTriggerRefs.current.delete(row.device.id);
-                            }}
-                            onClick={() => openDeviceDetail(row.device.id)}
-                          >
-                            <strong>{row.device.displayName}</strong>
-                            <span>{row.device.code} · {row.device.deviceType}</span>
-                            <code>{row.device.id}</code>
-                          </button>
-                        </th>
-                        <td><BindingLabel row={row} /></td>
-                        <td><OperatingState row={row} pending={currentPending} unavailable={currentUnavailable} /></td>
-                        <td><PointSummary row={row} pending={currentPending} unavailable={currentUnavailable} timeZone={site.timezone} /></td>
-                        <td>
-                          <span className={`real-assets__lifecycle real-assets__lifecycle--${row.device.status.toLowerCase()}`}>{row.device.status}</span>
-                          <small>rev {row.device.revision}</small>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
+                <div data-testid="real-assets-table-wrap">
+                  <table className="real-assets__table real-shell-sr-only" aria-label="完整授权 Device 运行投影">
+                    <tbody>
+                      {filteredRows.map((row) => (
+                        <tr
+                          key={row.device.id}
+                          data-device-id={row.device.id}
+                          data-operating-state={currentUnavailable ? 'UNAVAILABLE' : currentPending ? 'LOADING' : row.operatingState}
+                        >
+                          <td>{row.device.displayName} {row.device.code} {row.device.deviceType}</td>
+                          <td>{row.binding.state === 'bound' ? row.binding.equipment.displayName : row.binding.state === 'ambiguous' ? '绑定关系冲突' : '未绑定 Equipment'}</td>
+                          <td>{currentUnavailable ? '状态不可用' : currentPending ? '读取中' : OPERATING_LABELS[row.operatingState]}</td>
+                          <td>
+                            <ul className="real-assets__points">
+                              {row.points.map((point) => (
+                                <li key={point.key}>{point.label} {point.displayValue}{point.unit ? ` ${point.unit}` : ''}</li>
+                              ))}
+                            </ul>
+                          </td>
+                          <td>{row.device.status} Revision {row.device.revision}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <Table<RealAssetsDeviceRow>
+                    rowKey={(row) => row.device.id}
+                    size="middle"
+                    columns={assetColumns}
+                    dataSource={filteredRows}
+                    pagination={{ pageSize: 8, showSizeChanger: false }}
+                    scroll={{ x: compactTable ? 820 : 1240 }}
+                    locale={{
+                      emptyText: (
+                        <Empty
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                          description={listMode === 'attention' && !currentPending && !currentUnavailable && rows.every((row) => row.operatingState === 'NORMAL')
+                            ? '当前筛选范围内所有 Device 均为正常。切换到“全部 Device”可查看完整列表。'
+                            : '当前筛选条件没有匹配的 Device。'}
+                        />
+                      ),
+                    }}
+                    onRow={(row) => ({
+                      'data-device-id': row.device.id,
+                      'data-operating-state': currentUnavailable ? 'UNAVAILABLE' : currentPending ? 'LOADING' : row.operatingState,
+                    } as HTMLAttributes<HTMLTableRowElement>)}
+                  />
+                </div>
+              </Space>
+            </Card>
+          </Col>
+        </Row>
       ) : null}
       <DeviceDetailDrawer
         site={site}
@@ -704,6 +867,7 @@ export function RealAssetsWorkspace({
           }
         }}
       />
+      </PageScaffold>
     </section>
   );
 }

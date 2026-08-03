@@ -4,6 +4,8 @@ import './OperationsUI.css';
 
 interface PageScaffoldProps {
   title: ReactNode;
+  /** Optional authoritative heading node, used when the route owns focus restoration. */
+  heading?: ReactNode;
   /** Right-side slot for context, filters, and primary actions. */
   extra?: ReactNode;
   /** Optional root class for fixed or specialized operational workspaces. */
@@ -14,6 +16,7 @@ interface PageScaffoldProps {
 /** Shared application page shell for all operational workspaces outside BigScreen. */
 export default function PageScaffold({
   title,
+  heading,
   extra,
   className,
   children,
@@ -22,9 +25,11 @@ export default function PageScaffold({
     <div className={['ops-page', className].filter(Boolean).join(' ')}>
       <header className="ops-page-header">
         <div className="ops-page-heading">
-          <Typography.Title level={2} className="ops-page-title">
-            {title}
-          </Typography.Title>
+          {heading ?? (
+            <Typography.Title level={2} className="ops-page-title">
+              {title}
+            </Typography.Title>
+          )}
         </div>
         {extra ? <div className="ops-page-actions">{extra}</div> : null}
       </header>

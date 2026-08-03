@@ -6,19 +6,19 @@ import { MODULES } from '@/store/ui';
 import RequirePermission from '@/auth/RequirePermission';
 import { LoadingState } from '@/components/PageState';
 import { routeSubjectFromModuleKey } from '@/auth/permissions';
+import Assets from '@/pages/Assets';
+import Energy from '@/pages/Energy';
+import EnergyYear from '@/pages/Energy/Year';
+import EnergyMonth from '@/pages/Energy/Month';
+import EnergyWeek from '@/pages/Energy/Week';
+import EnergyDay from '@/pages/Energy/Day';
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
 const Optimize = lazy(() => import('@/pages/Optimize'));
 const Fdd = lazy(() => import('@/pages/Fdd'));
 const Alarms = lazy(() => import('@/pages/Alarms'));
 const BigScreen = lazy(() => import('@/pages/BigScreen'));
-const Assets = lazy(() => import('@/pages/Assets'));
 const Commands = lazy(() => import('@/pages/Commands'));
-const Energy = lazy(() => import('@/pages/Energy'));
-const EnergyYear = lazy(() => import('@/pages/Energy/Year'));
-const EnergyMonth = lazy(() => import('@/pages/Energy/Month'));
-const EnergyWeek = lazy(() => import('@/pages/Energy/Week'));
-const EnergyDay = lazy(() => import('@/pages/Energy/Day'));
 const Cost = lazy(() => import('@/pages/Cost'));
 const Ai = lazy(() => import('@/pages/Ai'));
 const System = lazy(() => import('@/pages/System'));
@@ -74,7 +74,7 @@ export default function App() {
           path="/energy"
           element={energySubject ? <RequirePermission subject={energySubject}>{energyElement}</RequirePermission> : energyElement}
         >
-          <Route index element={<Navigate to="month" replace />} />
+          <Route index element={<EnergyMonth />} />
           <Route path="year" element={withSuspense(<EnergyYear />)} />
           <Route path="month" element={withSuspense(<EnergyMonth />)} />
           <Route path="week" element={withSuspense(<EnergyWeek />)} />

@@ -33,6 +33,7 @@ interface OperationsInvestigationProps {
   readonly site: Readonly<Site>;
   readonly principal: CurrentPrincipalResponse;
   readonly registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  readonly embedded?: boolean;
 }
 
 function investigationFromLocation(): string {
@@ -590,6 +591,7 @@ export function OperationsInvestigation({
   site,
   principal,
   registerProtectedResource,
+  embedded = false,
 }: OperationsInvestigationProps) {
   const [investigationId, setInvestigationId] = useState(investigationFromLocation);
   const [openValue, setOpenValue] = useState(investigationFromLocation);
@@ -816,12 +818,14 @@ export function OperationsInvestigation({
       data-testid="real-site-route-operations"
       data-primary-agent-experience="true"
     >
-      <header className="operations-header">
-        <div>
-          <p className="real-shell-eyebrow">REAL MODE · PRIMARY AGENT EXPERIENCE</p>
-          <h1>Operations Workspace</h1>
-          <p>Site {site.displayName} · Investigation 列表、Plan 和领域记录均来自已提交权威 projection。</p>
-        </div>
+      <header className={embedded ? 'operations-header operations-header--embedded' : 'operations-header'}>
+        {!embedded ? (
+          <div>
+            <p className="real-shell-eyebrow">REAL MODE · PRIMARY AGENT EXPERIENCE</p>
+            <h1>Operations Workspace</h1>
+            <p>Site {site.displayName} · Investigation 列表、Plan 和领域记录均来自已提交权威 projection。</p>
+          </div>
+        ) : <span />}
         <button type="button" onClick={() => { void start(); }} disabled={busy}>
           {busy ? '处理中…' : '新建夜间能耗调查'}
         </button>

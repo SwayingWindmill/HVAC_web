@@ -1,31 +1,36 @@
-import { useEffect, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
   AlertOutlined,
   ApartmentOutlined,
+  ApiOutlined,
   ControlOutlined,
   DashboardOutlined,
   DesktopOutlined,
+  DollarOutlined,
   FundOutlined,
+  BugOutlined,
   InfoCircleOutlined,
   LogoutOutlined,
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
   MoonOutlined,
   RobotOutlined,
-  SafetyCertificateOutlined,
   SettingOutlined,
   SunOutlined,
+  ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { Avatar, Badge, Button, Drawer, Grid, Popover, Tag, Tooltip } from 'antd';
-import { useUi } from '@/store/ui';
+import { Avatar, Badge, Button, Divider, Grid, Layout, Popover, Select, Space, Tooltip } from 'antd';
+import AppHeaderFrame from '@/layout/AppHeaderFrame';
+import { ProductSidebar, type ProductMenuItem } from '@/layout/ProductSidebar';
 import { FocusHeading } from './FocusHeading';
 import { createIdleRealtimeStatus, realtimeStatusLabel } from './realtime-status';
 import { RealRuntimeFacts } from './RealRuntimeFacts';
+import { useRealTheme } from './RealTheme';
 import type { RealNavigationItem } from './route-policy';
 import type { RealRuntimeConfig } from './runtime-config';
 import type { ShellSnapshot } from './shell-runtime';
+import { siteRoute } from './site-routing';
 
+const { Content } = Layout;
 const { useBreakpoint } = Grid;
 
 const NAVIGATION_ICONS: Record<string, ReactNode> = {
@@ -33,9 +38,13 @@ const NAVIGATION_ICONS: Record<string, ReactNode> = {
   'site-dashboard': <DashboardOutlined />,
   'site-operations': <RobotOutlined />,
   'site-assets': <ApartmentOutlined />,
-  'site-energy': <FundOutlined />,
-  'site-alarms': <AlertOutlined />,
   'site-commands': <ControlOutlined />,
+  'site-energy': <FundOutlined />,
+  'site-optimize': <ThunderboltOutlined />,
+  'site-fdd': <BugOutlined />,
+  'site-alarms': <AlertOutlined />,
+  'site-ai': <RobotOutlined />,
+  'site-cost': <DollarOutlined />,
   'site-bigscreen': <DesktopOutlined />,
   system: <SettingOutlined />,
   alarms: <AlertOutlined />,
@@ -43,89 +52,88 @@ const NAVIGATION_ICONS: Record<string, ReactNode> = {
   'ai-investigation': <RobotOutlined />,
 };
 
-function ShellNavigation({
-  items,
-  pathname,
-  collapsed,
-  onNavigate,
-}: {
-  items: RealNavigationItem[];
-  pathname: string;
-  collapsed: boolean;
-  onNavigate?: (target: string) => void;
-}) {
-  const navigate = (event: MouseEvent<HTMLAnchorElement>, path: string) => {
-    if (!onNavigate) return;
-    event.preventDefault();
-    onNavigate(path);
-  };
+const NAVIGATION_GROUPS = [
+  {
+    key: 'operations',
+    label: '运营管理',
+    ids: ['site-assets', 'site-commands', 'site-fdd', 'site-alarms', 'site-optimize', 'alarms', 'work-orders'],
+  },
+  {
+    key: 'analytics',
+    label: '分析中心',
+    ids: ['site-energy', 'site-cost', 'site-ai', 'ai-investigation'],
+  },
+  {
+    key: 'presentation',
+    label: '展示',
+    ids: ['site-bigscreen'],
+  },
+] as const;
 
-  return (
-    <nav className="real-shell-navigation" aria-label="Real navigation" data-testid="real-navigation">
-      {!collapsed ? <div className="real-shell-navigation-label">产品导航</div> : null}
-      {items.map((item) => {
-        const active = pathname === item.path || (item.path !== '/' && pathname.startsWith(`${item.path}/`));
-        const link = (
-          <a
-            key={item.id}
-            href={item.path}
-            className={active ? 'real-shell-navigation-item real-shell-navigation-item--active' : 'real-shell-navigation-item'}
-            data-feature-id={item.id}
-            data-feature-kind={item.kind}
-            data-feature-degraded={String(item.degraded)}
-            data-feature-primary={String(item.primary === true)}
-            aria-current={active ? 'page' : undefined}
-            onClick={(event) => navigate(event, item.path)}
-          >
-            <span className="real-shell-navigation-icon" aria-hidden="true">
-              {NAVIGATION_ICONS[item.id] ?? <DashboardOutlined />}
-            </span>
-            {!collapsed ? <span className="real-shell-navigation-copy">{item.label}</span> : null}
-            {!collapsed && item.primary ? <span className="real-shell-navigation-badge">AI</span> : null}
-            {!collapsed && item.kind === 'not-integrated' ? <small>规划中</small> : null}
-            {!collapsed && item.degraded ? <small>降级</small> : null}
-          </a>
-        );
-        return collapsed ? <Tooltip key={item.id} title={item.label} placement="right">{link}</Tooltip> : link;
-      })}
-    </nav>
-  );
+function navigationItem(item: RealNavigationItem, active: boolean): ProductMenuItem {
+  return {
+    key: item.path,
+    icon: NAVIGATION_ICONS[item.id] ?? <DashboardOutlined />,
+    label: (
+      <a
+        href={item.path}
+        data-feature-id={item.id}
+        data-feature-kind={item.kind}
+        data-feature-degraded={String(item.degraded)}
+        data-feature-primary={String(item.primary === true)}
+        aria-current={active ? 'page' : undefined}
+        onClick={(event) => event.preventDefault()}
+      >
+        {item.label}
+      </a>
+    ),
+  };
 }
 
-function ShellSidebar({
-  navigation,
-  pathname,
-  collapsed,
-  onNavigate,
-}: {
-  navigation: RealNavigationItem[];
-  pathname: string;
-  collapsed: boolean;
-  onNavigate?: (target: string) => void;
-}) {
-  return (
-    <div className={collapsed ? 'real-shell-sidebar-inner real-shell-sidebar-inner--collapsed' : 'real-shell-sidebar-inner'}>
-      <div className="real-shell-brand">
-        <img src="/quanlaihe-mark.svg" alt="" />
-        {!collapsed ? (
-          <div>
-            <strong>泉来禾智慧能源</strong>
-            <span>QUANLAIHE ENERGY</span>
-          </div>
-        ) : null}
-      </div>
-      <ShellNavigation items={navigation} pathname={pathname} collapsed={collapsed} onNavigate={onNavigate} />
-      <div className="real-shell-sidebar-footer">
-        <SafetyCertificateOutlined aria-hidden="true" />
-        {!collapsed ? (
-          <div>
-            <strong>真实数据模式</strong>
-            <span>权威身份与站点边界</span>
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
+function navigationMatches(item: RealNavigationItem, pathname: string): boolean {
+  if (item.id === 'site-energy') {
+    const basePath = item.path.replace(/\/month$/, '');
+    return pathname === basePath || pathname.startsWith(`${basePath}/`);
+  }
+  return pathname === item.path || (item.path !== '/' && pathname.startsWith(`${item.path}/`));
+}
+
+function buildRealSidebarItems(
+  navigation: RealNavigationItem[],
+  pathname: string,
+  collapsed: boolean,
+): { primaryItems: ProductMenuItem[]; systemItems: ProductMenuItem[]; selectedKey: string } {
+  const selected = navigation.find((item) => navigationMatches(item, pathname));
+  const selectedKey = selected?.path ?? pathname;
+  const systemItems = navigation
+    .filter((item) => item.id === 'system')
+    .map((item) => navigationItem(item, navigationMatches(item, pathname)));
+  const productItems = navigation.filter((item) => item.id !== 'system');
+  const dashboardItems = productItems
+    .filter((item) => item.id === 'site-dashboard' || item.id === 'site-entry')
+    .map((item) => navigationItem(item, navigationMatches(item, pathname)));
+  const groupedIds = new Set<string>(NAVIGATION_GROUPS.flatMap((group) => [...group.ids]));
+  const ungrouped = productItems
+    .filter((item) => item.id !== 'site-dashboard' && item.id !== 'site-entry' && !groupedIds.has(item.id))
+    .map((item) => navigationItem(item, navigationMatches(item, pathname)));
+  const groups = NAVIGATION_GROUPS.map((group) => ({
+    type: 'group' as const,
+    key: group.key,
+    label: group.label,
+    children: group.ids
+      .map((id) => productItems.find((item) => item.id === id))
+      .filter((item): item is RealNavigationItem => Boolean(item))
+      .map((item) => navigationItem(item, navigationMatches(item, pathname))),
+  })).filter((group) => group.children.length > 0);
+  const flatGrouped = groups.flatMap((group) => group.children);
+
+  return {
+    primaryItems: collapsed
+      ? [...dashboardItems, ...ungrouped, ...flatGrouped]
+      : [...dashboardItems, ...ungrouped, ...groups],
+    systemItems,
+    selectedKey,
+  };
 }
 
 function DraftConfirmation({
@@ -252,11 +260,11 @@ export function RealShellChrome({
   const siteLabel = activeSite?.displayName ?? (transitionBlocksContent ? 'No active Site' : 'Platform scope');
   const screens = useBreakpoint();
   const mobile = screens.md === false;
-  const sidebarCollapsed = useUi((state) => state.sidebarCollapsed);
-  const setSidebarCollapsed = useUi((state) => state.setSidebarCollapsed);
-  const toggleSidebar = useUi((state) => state.toggleSidebar);
-  const themeMode = useUi((state) => state.themeMode);
-  const setThemeMode = useUi((state) => state.setThemeMode);
+  const compact = !screens.xl;
+  const narrow = !screens.xl;
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const { resolvedMode: themeMode, setMode: setThemeMode } = useRealTheme();
+  const toggleSidebar = () => setSidebarCollapsed((collapsed) => !collapsed);
 
   useEffect(() => {
     if (mobile) setSidebarCollapsed(true);
@@ -266,27 +274,27 @@ export function RealShellChrome({
     if (mobile) setSidebarCollapsed(true);
     onNavigate?.(target);
   };
-  const sidebar = (
-    <ShellSidebar
-      navigation={navigation}
-      pathname={pathname}
-      collapsed={!mobile && sidebarCollapsed}
-      onNavigate={navigate}
-    />
+  const menuCollapsed = mobile ? false : sidebarCollapsed;
+  const sidebar = useMemo(
+    () => buildRealSidebarItems(navigation, pathname, menuCollapsed),
+    [menuCollapsed, navigation, pathname],
   );
-  const realtimeBadgeStatus = realtime.state === 'live'
+  const sites = snapshot.sites?.items ?? [];
+  const siteOptions = sites.map((site) => ({ value: site.id, label: site.displayName }));
+  const bigscreen = navigation.find((item) => item.id === 'site-bigscreen');
+  const realtimeStatus = realtime.state === 'live'
     ? 'success'
     : realtime.state === 'unavailable'
       ? 'error'
       : realtime.state === 'idle'
         ? 'default'
         : 'processing';
+  const realtimeColor = realtime.state === 'unavailable' ? '#DC2626' : '#0FB5AE';
   const diagnostics = (
     <div className="real-shell-diagnostics">
-      <div className="real-shell-diagnostics-title">
-        <SafetyCertificateOutlined />
-        <div><strong>可信运行信息</strong><span>仅用于诊断与审计</span></div>
-      </div>
+      <strong>可信运行信息</strong>
+      <span>Principal、Policy、Capability 和 Runtime 仅用于诊断与审计。</span>
+      <Divider style={{ margin: '10px 0' }} />
       <dl>
         <div><dt>Principal</dt><dd>{principal.principal.subject}</dd></div>
         <div><dt>Policy</dt><dd>{principal.authorization.policyRevision}</dd></div>
@@ -296,10 +304,31 @@ export function RealShellChrome({
       <RealRuntimeFacts config={config} />
     </div>
   );
+  const siteControl = (
+    <Space size={10}>
+      <span data-testid="real-shell-site-control">
+        <Select
+          aria-label="选择授权 Site"
+          value={activeSite?.id}
+          options={siteOptions}
+          onChange={(siteId) => {
+            const site = sites.find((candidate) => candidate.id === siteId);
+            if (site) navigate(siteRoute(site, 'dashboard'));
+          }}
+          disabled={transitionBlocksContent || siteOptions.length === 0}
+          placeholder={siteLabel}
+          style={{ width: 210 }}
+          variant="filled"
+        />
+      </span>
+      {!compact ? <Badge status="success" text="真实数据" /> : null}
+    </Space>
+  );
 
   return (
-    <section
-      className={sidebarCollapsed && !mobile ? 'real-shell-layout real-shell-layout--collapsed' : 'real-shell-layout'}
+    <Layout
+      className="real-shell-layout"
+      style={{ minHeight: '100vh', height: '100vh', overflow: 'hidden' }}
       data-testid="real-protected-shell"
       data-protected-route-mounted="true"
       data-policy-revision={principal.authorization.policyRevision}
@@ -312,88 +341,101 @@ export function RealShellChrome({
       data-realtime-state={realtime.state}
       data-realtime-site={realtime.siteId}
     >
-      {mobile ? (
-        <Drawer
-          placement="left"
-          open={!sidebarCollapsed}
-          onClose={() => setSidebarCollapsed(true)}
-          width={224}
-          closable={false}
-          forceRender
-          rootClassName="real-shell-drawer"
-          styles={{ body: { padding: 0 } }}
-        >
-          {sidebar}
-        </Drawer>
-      ) : <aside className="real-shell-sidebar">{sidebar}</aside>}
+      <ProductSidebar
+        collapsed={sidebarCollapsed}
+        mobile={mobile}
+        primaryItems={sidebar.primaryItems}
+        systemItems={sidebar.systemItems}
+        selectedKey={sidebar.selectedKey}
+        onNavigate={navigate}
+        onClose={() => setSidebarCollapsed(true)}
+        navigationTestId="real-navigation"
+      />
 
-      <div className="real-shell-workspace">
-        <header className="real-shell-header">
-          <Button
-            type="text"
-            aria-label={sidebarCollapsed ? '展开导航' : '收起导航'}
-            icon={sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-            onClick={mobile ? () => setSidebarCollapsed(false) : toggleSidebar}
-          />
-          <div className="real-shell-identity-context">
-            <div className="real-shell-breadcrumb">运行中心 <span>/</span> {siteLabel}</div>
-            <div className="real-shell-title-row">
-              <strong data-testid="real-shell-site">{siteLabel}</strong>
-              <Tag bordered={false}>真实数据</Tag>
-              <span className="real-shell-state-copy" data-testid="real-shell-state">READY</span>
-            </div>
-          </div>
-          <div className="real-shell-header-actions">
-            <div
+      <Layout style={{ minWidth: 0, minHeight: 0 }}>
+        <AppHeaderFrame
+          className="real-shell-header"
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={mobile ? () => setSidebarCollapsed(false) : toggleSidebar}
+          compact={compact}
+        >
+          {narrow ? (
+            <Popover trigger="click" placement="bottomLeft" content={<div style={{ width: 240 }}>{siteControl}</div>}>
+              <Button size="small" icon={<ApartmentOutlined />}>{activeSite?.displayName ?? '选择站点'}</Button>
+            </Popover>
+          ) : siteControl}
+
+          <div style={{ flex: 1, minWidth: 8 }} />
+
+          <Tooltip title={realtime.siteId ? `当前订阅：${siteLabel}` : '当前没有活动 Site 订阅'}>
+            <span
               className="real-shell-realtime"
               role="status"
               aria-live="polite"
               data-testid="real-realtime-status"
               data-realtime-state={realtime.state}
               data-realtime-site={realtime.siteId}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, opacity: 0.85 }}
             >
-              <Badge status={realtimeBadgeStatus} />
-              <div><strong>{realtimeLabel}</strong><small>{activeSite ? activeSite.displayName : '未订阅站点'}</small></div>
-            </div>
-            <Popover content={diagnostics} trigger="click" placement="bottomRight">
-              <Tooltip title="可信运行信息">
-                <Button type="text" aria-label="可信运行信息" icon={<InfoCircleOutlined />} />
-              </Tooltip>
-            </Popover>
-            <Tooltip title={themeMode === 'dark' ? '切换浅色模式' : '切换深色模式'}>
-              <Button
-                type="text"
-                aria-label="切换主题"
-                icon={themeMode === 'dark' ? <SunOutlined /> : <MoonOutlined />}
-                onClick={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
-              />
+              <ApiOutlined style={{ color: realtimeColor }} />
+              <Badge status={realtimeStatus} />
+              <span className={compact ? 'real-shell-sr-only' : undefined}>{realtimeLabel}</span>
+            </span>
+          </Tooltip>
+          {bigscreen ? (
+            <Tooltip title="进入运行大屏（全屏）">
+              <Button type="text" icon={<DesktopOutlined />} onClick={() => navigate(bigscreen.path)} />
             </Tooltip>
-            <div className="real-shell-account">
-              <Avatar icon={<UserOutlined />} />
-              <div>
-                <strong data-testid="real-shell-principal">{principal.principal.displayName}</strong>
-                <span className="real-shell-principal-roles" data-testid="real-principal-roles">
-                  {principal.principal.roles.join(', ') || '授权用户'}
-                </span>
-              </div>
-            </div>
-            <Tooltip title="退出登录">
-              <Button
-                type="text"
-                danger
-                icon={<LogoutOutlined />}
-                onClick={logout}
-                disabled={submitting}
-                data-testid="real-logout-button"
-                aria-label="退出登录"
-              >
-                {screens.xl ? (submitting ? '正在退出…' : '退出') : null}
-              </Button>
+          ) : null}
+          <Popover content={diagnostics} trigger="click" placement="bottomRight">
+            <Tooltip title="可信运行信息">
+              <Button type="text" aria-label="可信运行信息" icon={<InfoCircleOutlined />} />
             </Tooltip>
-          </div>
-        </header>
+          </Popover>
+          <Tooltip title={themeMode === 'dark' ? '切浅色' : '切深色'}>
+            <Button
+              type="text"
+              aria-label="切换主题"
+              icon={themeMode === 'dark' ? <SunOutlined /> : <MoonOutlined />}
+              onClick={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
+            />
+          </Tooltip>
+          {!narrow ? (
+            <Tooltip title={`${principal.principal.displayName} · ${principal.principal.roles.join(', ') || '授权用户'}`}>
+              <Avatar style={{ background: '#0FB5AE' }} icon={<UserOutlined />} />
+            </Tooltip>
+          ) : null}
+          <Tooltip title="退出登录">
+            <Button
+              type="text"
+              danger
+              icon={<LogoutOutlined />}
+              onClick={logout}
+              disabled={submitting}
+              data-testid="real-logout-button"
+              aria-label="退出登录"
+            />
+          </Tooltip>
+          <span className="real-shell-sr-only" data-testid="real-shell-principal">{principal.principal.displayName}</span>
+          <span className="real-shell-sr-only real-shell-principal-roles" data-testid="real-principal-roles">
+            {principal.principal.roles.join(', ') || '授权用户'}
+          </span>
+          <span className="real-shell-sr-only" data-testid="real-shell-site">{siteLabel}</span>
+          <span className="real-shell-sr-only" data-testid="real-shell-state">READY</span>
+        </AppHeaderFrame>
 
-        <div className="real-shell-content">
+        <Content
+          className="app-content real-shell-content"
+          style={{
+            minWidth: 0,
+            minHeight: 0,
+            height: 'auto',
+            flex: '1 1 auto',
+            boxSizing: 'border-box',
+            padding: '20px 20px 88px',
+            overflow: 'auto',
+          }}
+        >
           {snapshot.logout?.status === 'failed' ? (
             <div className="real-shell-problem" role="alert" data-testid="real-logout-failure" data-retryable={String(snapshot.logout.retryable)}>
               <strong>{snapshot.logout.code}</strong>
@@ -407,8 +449,8 @@ export function RealShellChrome({
           {transition?.status === 'purging' ? <PurgingSurface /> : null}
           {transition?.status === 'failed' ? <PurgeFailedSurface snapshot={snapshot} /> : null}
           {!transitionBlocksContent ? children : null}
-        </div>
-      </div>
-    </section>
+        </Content>
+      </Layout>
+    </Layout>
   );
 }

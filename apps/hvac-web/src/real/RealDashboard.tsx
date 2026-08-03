@@ -1,5 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Button, Card, Col, Empty, Row, Space, Tag, Tooltip, Typography } from 'antd';
+import {
+  CheckCircleOutlined,
+  FullscreenOutlined,
+  RightOutlined,
+  RobotOutlined,
+  SafetyCertificateOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import {
   classifyEnergyAnalyticsFailure,
@@ -13,6 +22,7 @@ import { presentTelemetryError, useVisibleDevicePresence } from '@/api/telemetry
 import { FocusHeading } from './FocusHeading';
 import { projectDashboardDevices, projectDashboardEnergy, type DashboardDeviceState } from './dashboard-projection';
 import { siteRoute } from './site-routing';
+import '@/styles/dashboard-product.css';
 import './real-dashboard.css';
 
 interface RealDashboardProps {
@@ -31,6 +41,21 @@ const STATE_LABEL: Record<DashboardDeviceState, string> = {
   NOT_APPLICABLE: '不适用',
 };
 
+type FocusItem = {
+  key: string;
+  type: 'warning' | 'success' | 'info';
+  text: string;
+  path: string;
+};
+
+type HealthItem = {
+  key: string;
+  label: string;
+  value: string;
+  detail: string;
+  path?: string;
+};
+
 function formatInstant(value: string | null | undefined, timezone: string): string {
   if (!value) return '未提供';
   return new Intl.DateTimeFormat('zh-CN', {
@@ -41,8 +66,8 @@ function formatInstant(value: string | null | undefined, timezone: string): stri
 }
 
 function formatEnergy(value: number | null): string {
-  if (value === null) return '无数据';
-  return `${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(value)} kWh`;
+  if (value === null) return '—';
+  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(value);
 }
 
 function energyRequestOptions(principal: CurrentPrincipalResponse, signal: AbortSignal): EnergyAnalyticsRequestOptions {
@@ -55,10 +80,54 @@ function energyRequestOptions(principal: CurrentPrincipalResponse, signal: Abort
   return options;
 }
 
+function DashboardMetric({
+  title,
+  value,
+  unit,
+  foot,
+  primary = false,
+  good = true,
+}: {
+  title: string;
+  value: ReactNode;
+  unit?: string;
+  foot: string;
+  primary?: boolean;
+  good?: boolean;
+}) {
+  return (
+    <div className={`dashboard-kpi-item${primary ? ' is-primary' : ''}`}>
+      <div className="dashboard-kpi-head"><span>{title}</span></div>
+      <div className="dashboard-kpi-value">
+        {value}
+        {unit ? <span className="dashboard-kpi-unit">{unit}</span> : null}
+      </div>
+      <div className="dashboard-kpi-foot">
+        <span className={good ? 'is-good' : 'is-bad'}>{foot}</span>
+      </div>
+    </div>
+  );
+}
+
+function SectionHeading({ title }: { title: string }) {
+  return (
+    <div className="dashboard-section-heading">
+      <Typography.Title level={5} className="dashboard-section-title">{title}</Typography.Title>
+    </div>
+  );
+}
+
+function focusIcon(type: FocusItem['type']) {
+  if (type === 'success') return <CheckCircleOutlined />;
+  if (type === 'info') return <ThunderboltOutlined />;
+  return <SafetyCertificateOutlined />;
+}
+
 export function RealDashboard({ site, principal }: RealDashboardProps) {
   const queryClient = useQueryClient();
   const [asOf, setAsOf] = useState(() => Date.now());
   const canListDevices = principal.authorization.capabilities.includes('device.list');
+  const canListAlarms = principal.authorization.capabilities.includes('alarm.list');
   const protectedScope = `${principal.session.id}:${principal.authorization.policyRevision}:${principal.context.actingOrganizationId}:${site.id}`;
   const devicesQuery = useRegistryDevices(site.id, canListDevices);
   const pageCount = devicesQuery.data?.pages.length ?? 0;
@@ -115,8 +184,6 @@ export function RealDashboard({ site, principal }: RealDashboardProps) {
   const energyProjection = energyQuery.data
     ? projectDashboardEnergy(energyQuery.data, energyQueryInput.to)
     : null;
-  const recentEnergyPoints = energyQuery.data?.points.slice(-6) ?? [];
-  const maxRecentEnergy = Math.max(...recentEnergyPoints.map((point) => point.energyKWh), 1);
 
   const registryFailure = devicesQuery.isError ? presentRegistryError(devicesQuery.error) : null;
   const telemetryFailure = presenceQuery.isError ? presentTelemetryError(presenceQuery.error) : null;
@@ -136,6 +203,10 @@ export function RealDashboard({ site, principal }: RealDashboardProps) {
             ? 'EMPTY'
             : 'READY';
   const refreshing = devicesQuery.isFetching || presenceQuery.isFetching || energyQuery.isFetching;
+  const lastUpdated = new Date(asOf).toLocaleTimeString('zh-CN', { hour12: false });
+  const availability = deviceProjection.counts.total > 0
+    ? Math.round((deviceProjection.counts.online / deviceProjection.counts.total) * 100)
+    : null;
 
   const refresh = () => {
     setAsOf(Date.now());
@@ -145,162 +216,275 @@ export function RealDashboard({ site, principal }: RealDashboardProps) {
     }
   };
 
+  const focusItems: FocusItem[] = [
+    registryFailure
+      ? { key: 'registry', type: 'warning', text: '设备台账当前不可用', path: siteRoute(site, 'assets') }
+      : deviceProjection.counts.attention > 0
+        ? { key: 'attention', type: 'warning', text: `${deviceProjection.counts.attention} 台设备需要关注`, path: siteRoute(site, 'assets') }
+        : { key: 'attention', type: 'success', text: '设备在线状态稳定', path: siteRoute(site, 'assets') },
+    canListAlarms
+      ? { key: 'alarms', type: 'info', text: '进入报警工单查看当前闭环状态', path: siteRoute(site, 'alarms') }
+      : { key: 'alarms', type: 'info', text: '当前账号未获得报警列表能力', path: siteRoute(site, 'dashboard') },
+    { key: 'optimization', type: 'info', text: '节能优化建议服务尚未接入', path: siteRoute(site, 'optimize') },
+  ];
+  const attentionCount = focusItems.filter((item) => item.type === 'warning').length;
+  const healthItems: HealthItem[] = [
+    {
+      key: 'availability',
+      label: '系统可用率',
+      value: availability === null ? '—' : `${availability}%`,
+      detail: availability === null ? '当前没有可统计的权威在线状态' : `${deviceProjection.counts.online} / ${deviceProjection.counts.total} 台设备在线`,
+      path: siteRoute(site, 'assets'),
+    },
+    {
+      key: 'diagnosis',
+      label: '活跃诊断',
+      value: '—',
+      detail: 'FDD 权威 Read Model 尚未接入',
+      path: siteRoute(site, 'fdd'),
+    },
+    {
+      key: 'tickets',
+      label: '待处理工单',
+      value: canListAlarms ? '查看' : '—',
+      detail: canListAlarms ? '进入报警工单查看权威生命周期' : '当前账号没有 alarm.list',
+      path: canListAlarms ? siteRoute(site, 'alarms') : undefined,
+    },
+    {
+      key: 'optimization',
+      label: '优化决策',
+      value: '—',
+      detail: 'Optimization Read Model 尚未接入',
+      path: siteRoute(site, 'optimize'),
+    },
+    {
+      key: 'comfort',
+      label: '舒适度达标率',
+      value: '—',
+      detail: '当前真实接口未提供区域舒适度聚合',
+    },
+  ];
+  const deviceTypeGroups = useMemo(() => {
+    const counts = new Map<string, number>();
+    devices.forEach((device) => counts.set(device.deviceType, (counts.get(device.deviceType) ?? 0) + 1));
+    return [...counts.entries()].slice(0, 4);
+  }, [devices]);
+
   return (
-    <section
-      className="real-dashboard"
+    <div
+      className="dashboard-page real-dashboard"
       data-testid="real-site-route-dashboard"
       data-business-state={businessState}
       data-site-id={site.id}
     >
-      <header className="real-dashboard__header">
-        <div>
-          <p className="real-shell-eyebrow">REAL MODE · SITE DASHBOARD</p>
-          <FocusHeading>运行总览</FocusHeading>
-          <p>{site.displayName} · {site.code} · {site.timezone}</p>
-        </div>
-        <button type="button" onClick={refresh} disabled={refreshing}>
-          {refreshing ? '刷新中…' : '刷新权威数据'}
-        </button>
-      </header>
-
-      <p className="real-dashboard__scope-note">
-        本页只汇总 Registry、Device Presence、当前遥测状态和 Energy Analytics。告警、工单、FDD 与优化尚未接入时不会在浏览器中推导或补造。
-      </p>
-
-      <article className="real-dashboard__operations-entry" data-testid="real-dashboard-operations-entry">
-        <div>
-          <p className="real-shell-eyebrow">PRIMARY AGENT EXPERIENCE</p>
-          <h2>Operations Workspace</h2>
-          <p>创建、恢复和审阅 Site Investigation。Plan、Evidence、Finding、Tool activity 与 Operator Input 只来自 Gateway 的权威 projection。</p>
-        </div>
-        <a href={siteRoute(site, 'operations')} data-testid="real-dashboard-open-operations">
-          进入 Operations Workspace
-        </a>
-      </article>
-
-      <div className="real-dashboard__metrics" aria-label="Site 运行关键指标">
-        <article>
-          <span>已加载设备</span>
-          <strong>{registryFailure ? '不可用' : canListDevices ? devices.length : '无权限'}</strong>
-          <small>{!canListDevices ? '当前授权不包含 Device 列表' : inventoryPartial ? `仅展示前 ${MAX_DASHBOARD_DEVICES} 台授权设备` : 'Registry 授权集合'}</small>
-        </article>
-        <article>
-          <span>需要关注</span>
-          <strong>{!canListDevices || presenceQuery.isPending || telemetryFailure ? '—' : deviceProjection.counts.attention}</strong>
-          <small>离线、陈旧、未知或状态不可用</small>
-        </article>
-        <article>
-          <span>当前在线</span>
-          <strong>{!canListDevices || presenceQuery.isPending || telemetryFailure ? '—' : deviceProjection.counts.online}</strong>
-          <small>不把未知和不可用算作在线</small>
-        </article>
-        <article>
-          <span>最近 24 小时电能</span>
-          <strong>{energyProjection ? formatEnergy(energyProjection.totalKWh) : '—'}</strong>
-          <small>{energyProjection ? `数据状态：${energyProjection.state}` : energyFailure ? '权威分析不可用' : '正在读取'}</small>
-        </article>
-      </div>
-
-      <div className="real-dashboard__source-status" aria-live="polite">
-        {!canListDevices ? <p>当前授权不允许读取 Device 集合；Dashboard 不会尝试请求或推断设备状态。</p> : null}
-        {inventoryPartial ? <p>Registry 设备集合超过 Dashboard 的 100 台读取预算，当前摘要明确为部分覆盖。</p> : null}
-        {presenceQuery.data?.partial ? <p>部分 Device Snapshot 请求失败；失败项显示为状态不可用，不会显示为离线。</p> : null}
-        {energyProjection?.state === 'PARTIAL' ? <p>能源结果为部分数据，周期总量不能视为完整。</p> : null}
-        {energyProjection?.state === 'STALE' ? <p>能源聚合水位尚未覆盖查询结束时间。</p> : null}
-        {energyProjection?.state === 'SUSPECT' ? <p>能源结果包含可疑或无效质量记录。</p> : null}
-      </div>
-
-      <div className="real-dashboard__grid">
-        <article className="real-dashboard__panel" aria-labelledby="dashboard-attention-title">
-          <div className="real-dashboard__panel-heading">
-            <div>
-              <h2 id="dashboard-attention-title">当前需要关注的设备</h2>
-              <p>只依据 Presence 和公共 Device Display State 排序，不生成业务阈值告警。</p>
+      <Row gutter={[18, 18]} align="stretch">
+        <Col xs={24} xl={17}>
+          <section className="dashboard-hero">
+            <div className="dashboard-hero-header">
+              <div className="dashboard-hero-copy">
+                <FocusHeading className="dashboard-hero-title ant-typography">{site.displayName}智慧能源运营总览</FocusHeading>
+                <Space className="dashboard-context-chips" size={[7, 7]} wrap>
+                  <span className="dashboard-context-chip is-live">实时连接 · {lastUpdated} 更新</span>
+                  <span className="dashboard-context-chip is-secondary">只读监控</span>
+                  <span className="dashboard-context-chip is-secondary">室外湿球 未接入</span>
+                </Space>
+                <Typography.Text type="secondary" className="real-dashboard__authority-note">
+                  页面只显示当前 Site 的权威服务结果；缺失能力不会在浏览器中推导或补造。
+                </Typography.Text>
+              </div>
+              <div className="dashboard-hero-actions">
+                <Space size={8} wrap>
+                  <Button data-testid="real-dashboard-open-operations" icon={<RobotOutlined />} href={siteRoute(site, 'ai')}>AI 工作台</Button>
+                  <Button icon={<FullscreenOutlined />} type="primary" href={siteRoute(site, 'bigscreen')}>进入大屏</Button>
+                  <Button onClick={refresh} loading={refreshing}>刷新</Button>
+                </Space>
+              </div>
             </div>
-            <a href={siteRoute(site, 'assets')}>进入 Assets</a>
-          </div>
+            <div className="dashboard-kpi-grid">
+              <DashboardMetric title="实时功率" value="—" unit="kW" foot="功率聚合接口尚未接入" primary good={false} />
+              <DashboardMetric title="综合 COP" value="—" foot="COP 聚合接口尚未接入" good={false} />
+              <DashboardMetric
+                title="今日能耗"
+                value={energyProjection?.totalKWh === null || !energyProjection ? '—' : `${formatEnergy(energyProjection.totalKWh)} kWh`}
+                foot={energyFailure ? '能源查询不可用' : energyProjection ? `数据状态 ${energyProjection.state}` : '正在读取'}
+                good={energyProjection?.state === 'READY'}
+              />
+              <DashboardMetric title="今日节能率" value="—" unit="%" foot="节能基线尚未接入" good={false} />
+              <DashboardMetric title="电费节省" value="—" foot="成本模型尚未接入" good={false} />
+            </div>
+          </section>
+        </Col>
 
-          {!canListDevices ? (
-            <div className="real-dashboard__empty" role="status">当前授权不允许读取 Device 集合。</div>
-          ) : null}
-          {canListDevices && devicesQuery.isPending ? <div className="real-dashboard__loading" role="status">正在读取 Registry 设备…</div> : null}
-          {registryFailure ? (
-            <div className="real-dashboard__problem" role="alert">
-              <strong>{registryFailure.title}</strong>
-              <span>{registryFailure.description}</span>
+        <Col xs={24} xl={7}>
+          <Card
+            variant="borderless"
+            className="dashboard-focus-card"
+            title={<Typography.Text strong>今日运维重点</Typography.Text>}
+            extra={<Tag color={attentionCount > 0 ? 'orange' : 'green'}>{attentionCount > 0 ? '需要关注' : '运行平稳'}</Tag>}
+          >
+            <div className="dashboard-focus-score">
+              <div>
+                <Typography.Text>待优先处理</Typography.Text>
+                <div className="dashboard-focus-number">{attentionCount}</div>
+              </div>
             </div>
-          ) : null}
-          {canListDevices && !registryFailure && loadedDevices.length === 0 && !devicesQuery.isPending ? (
-            <div className="real-dashboard__empty" role="status">当前授权 Site 没有 Registry Device。</div>
-          ) : null}
-          {canListDevices && !registryFailure && loadedDevices.length > 0 && presenceQuery.isPending ? (
-            <div className="real-dashboard__loading" role="status">正在批量读取 Device Presence…</div>
-          ) : null}
-          {telemetryFailure ? (
-            <div className="real-dashboard__problem" role="alert">
-              <strong>{telemetryFailure.title}</strong>
-              <span>{telemetryFailure.description}</span>
-            </div>
-          ) : null}
-          {!telemetryFailure && !presenceQuery.isPending && deviceProjection.attentionDevices.length === 0 && loadedDevices.length > 0 ? (
-            <div className="real-dashboard__empty" role="status">当前已覆盖设备没有需要关注的 Presence 或 Freshness 状态。</div>
-          ) : null}
-          {!telemetryFailure && !presenceQuery.isPending && deviceProjection.attentionDevices.length > 0 ? (
-            <ol className="real-dashboard__attention-list">
-              {deviceProjection.attentionDevices.slice(0, 8).map((device) => (
-                <li key={device.deviceId} data-device-state={device.state}>
-                  <div>
-                    <strong>{device.displayName}</strong>
-                    <span>{device.deviceType}</span>
-                  </div>
-                  <div>
-                    <b>{STATE_LABEL[device.state]}</b>
-                    <small>最后可见：{formatInstant(device.lastSeenAt, site.timezone)}</small>
-                  </div>
-                </li>
+            <div className="dashboard-focus-list">
+              {focusItems.map((item) => (
+                <a key={item.key} className={`dashboard-focus-item is-${item.type}`} href={item.path}>
+                  <span className="dashboard-focus-icon">{focusIcon(item.type)}</span>
+                  <span className="dashboard-focus-text">{item.text}</span>
+                  <RightOutlined style={{ fontSize: 11, opacity: 0.5 }} />
+                </a>
               ))}
-            </ol>
-          ) : null}
-        </article>
+            </div>
+          </Card>
+        </Col>
+      </Row>
 
-        <article className="real-dashboard__panel" aria-labelledby="dashboard-energy-title">
-          <div className="real-dashboard__panel-heading">
-            <div>
-              <h2 id="dashboard-energy-title">最近 24 小时电能</h2>
-              <p>只展示 Site 电能权威序列；缺失时段不按零补齐。</p>
+      <Card variant="borderless" className="dashboard-health-card">
+        <div className="dashboard-health-head">
+          <Typography.Text strong>运营健康</Typography.Text>
+          <Tag color={businessState === 'READY' || businessState === 'EMPTY' ? 'green' : 'orange'}>
+            {businessState === 'READY' || businessState === 'EMPTY' ? '整体健康' : '存在待处理项'}
+          </Tag>
+        </div>
+        <div className="dashboard-health-grid">
+          {healthItems.map((item) => (
+            <Tooltip key={item.key} title={item.detail} placement="top">
+              <a className={`dashboard-health-item${item.path ? '' : ' is-static'}`} href={item.path}>
+                <span className="dashboard-health-content">
+                  <span className="dashboard-health-label">{item.label}</span>
+                  <span className="dashboard-health-value">{item.value}</span>
+                </span>
+              </a>
+            </Tooltip>
+          ))}
+        </div>
+      </Card>
+
+      <SectionHeading title="核心运行分析" />
+      <Row gutter={[18, 18]} align="stretch" className="dashboard-card-row dashboard-analysis-row">
+        <Col xs={24} xl={16}>
+          <Card
+            variant="borderless"
+            className="dashboard-section-card dashboard-performance-card"
+            title={<Space size={9}><Typography.Text strong>负荷趋势与预测</Typography.Text><Tag>真实功率时序待接入</Tag></Space>}
+          >
+            <div className="dashboard-performance-summary">
+              <div><span>当前负荷</span><strong>— <small>kW</small></strong></div>
+              <div><span>预测峰值</span><strong>— <small>kW</small></strong></div>
+              <div><span>峰值时刻</span><strong>--:--</strong></div>
+              <div><span>剩余容量</span><strong>— <small>kW</small></strong></div>
             </div>
-            <a href={siteRoute(site, 'energy')}>进入 Energy</a>
-          </div>
-          {energyQuery.isPending ? <div className="real-dashboard__loading" role="status">正在读取 Energy Analytics…</div> : null}
-          {energyFailure ? (
-            <div className="real-dashboard__problem" role="alert">
-              <strong>{energyFailure.title}</strong>
-              <span>{energyFailure.detail}</span>
+            <div className="dashboard-chart-state" style={{ minHeight: 260 }}>
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前真实接口未提供功率时序；未使用能源数据冒充负荷趋势" />
             </div>
-          ) : null}
-          {energyQuery.data && recentEnergyPoints.length === 0 ? (
-            <div className="real-dashboard__empty" role="status">当前周期没有可用电能时段。</div>
-          ) : null}
-          {recentEnergyPoints.length > 0 ? (
-            <ol className="real-dashboard__energy-bars" aria-label="最近六个电能时段">
-              {recentEnergyPoints.map((point) => (
-                <li key={point.periodStart}>
-                  <time dateTime={point.periodStart}>{formatInstant(point.periodStart, site.timezone)}</time>
-                  <span><i style={{ width: `${Math.max(2, (point.energyKWh / maxRecentEnergy) * 100)}%` }} /></span>
-                  <strong>{formatEnergy(point.energyKWh)}</strong>
-                </li>
-              ))}
-            </ol>
-          ) : null}
-          {energyQuery.data ? (
-            <dl className="real-dashboard__energy-facts">
-              <div><dt>数据集修订</dt><dd>{energyQuery.data.metadata.datasetRevision}</dd></div>
-              <div><dt>聚合水位</dt><dd>{formatInstant(energyQuery.data.metadata.aggregateWatermark ?? energyQuery.data.metadata.dataWatermark, site.timezone)}</dd></div>
-              <div><dt>有效 / 可疑 / 无效</dt><dd>{energyQuery.data.metadata.qualitySummary.valid} / {energyQuery.data.metadata.qualitySummary.suspect} / {energyQuery.data.metadata.qualitySummary.invalid}</dd></div>
-            </dl>
-          ) : null}
-        </article>
-      </div>
-    </section>
+          </Card>
+        </Col>
+        <Col xs={24} xl={8}>
+          <Card
+            variant="borderless"
+            className="dashboard-section-card dashboard-plant-card dashboard-plant-overview"
+            title={<Typography.Text strong>冷源设备运行矩阵</Typography.Text>}
+            extra={<span className={`dashboard-card-state${deviceProjection.counts.attention > 0 ? ' is-warning' : ''}`}>{deviceProjection.counts.attention} 台需关注</span>}
+          >
+            {deviceTypeGroups.length > 0 ? (
+              <div className="dashboard-plant-overview-rows">
+                {deviceTypeGroups.map(([deviceType, count]) => (
+                  <div className="dashboard-plant-overview-row is-neutral" key={deviceType}>
+                    <div className="dashboard-plant-overview-row-head">
+                      <span className="dashboard-plant-overview-system"><strong>{deviceType}</strong><span>{count} 台已登记</span></span>
+                      <span className="dashboard-plant-overview-judgement">权威状态</span>
+                    </div>
+                    <span className="dashboard-plant-overview-primary">进入设备台账查看实时状态</span>
+                  </div>
+                ))}
+              </div>
+            ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前站点没有已登记设备" />}
+            <a className="dashboard-plant-link" href={siteRoute(site, 'assets')}>查看完整设备状态 <RightOutlined /></a>
+          </Card>
+        </Col>
+      </Row>
+
+      <SectionHeading title="行动中心" />
+      <Row gutter={[18, 18]} align="stretch" className="dashboard-card-row dashboard-action-row">
+        <Col xs={24} xl={14}>
+          <Card
+            variant="borderless"
+            className="dashboard-section-card dashboard-list-card"
+            title={<Typography.Text strong>诊断与工单</Typography.Text>}
+            extra={canListAlarms ? <Typography.Link href={siteRoute(site, 'alarms')}>进入闭环 <RightOutlined /></Typography.Link> : null}
+          >
+            <div className="dashboard-list-rows">
+              <a className="dashboard-data-row" href={siteRoute(site, 'fdd')}>
+                <span className="dashboard-row-content"><span className="dashboard-row-title">故障检测与诊断</span><span className="dashboard-row-meta">FDD 权威 Read Model 尚未接入</span></span>
+                <span className="dashboard-row-side"><strong className="dashboard-side-value">—</strong><span className="dashboard-side-label">待接入</span></span>
+              </a>
+              <a className="dashboard-data-row" href={canListAlarms ? siteRoute(site, 'alarms') : siteRoute(site, 'dashboard')}>
+                <span className="dashboard-row-content"><span className="dashboard-row-title">报警工单闭环</span><span className="dashboard-row-meta">{canListAlarms ? '使用 Alarm Service 权威生命周期' : '当前账号未获得 alarm.list'}</span></span>
+                <span className="dashboard-row-side"><strong className="dashboard-side-value">{canListAlarms ? '查看' : '—'}</strong></span>
+              </a>
+              <a className="dashboard-data-row" href={siteRoute(site, 'ai')}>
+                <span className="dashboard-row-content"><span className="dashboard-row-title">AI 运维助手</span><span className="dashboard-row-meta">使用当前 Site 的调查、证据和工具活动</span></span>
+                <span className="dashboard-row-side"><strong className="dashboard-side-value">可用</strong></span>
+              </a>
+            </div>
+          </Card>
+        </Col>
+        <Col xs={24} xl={10}>
+          <Card
+            variant="borderless"
+            className="dashboard-section-card dashboard-list-card dashboard-opportunity-card"
+            title={<Typography.Text strong>优化机会</Typography.Text>}
+            extra={<Typography.Link href={siteRoute(site, 'optimize')}>进入评审 <RightOutlined /></Typography.Link>}
+          >
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Optimization Read Model 尚未接入；未使用 Demo 建议替代" />
+          </Card>
+        </Col>
+      </Row>
+
+      <SectionHeading title="设备与控制异常" />
+      <Row gutter={[18, 18]} align="stretch" className="dashboard-card-row dashboard-device-row">
+        <Col xs={24} xl={14}>
+          <Card
+            variant="borderless"
+            className="dashboard-section-card dashboard-list-card dashboard-attention-card"
+            title={<Typography.Text strong>需关注设备</Typography.Text>}
+            extra={<Typography.Link href={siteRoute(site, 'assets')}>查看台账 <RightOutlined /></Typography.Link>}
+          >
+            {registryFailure ? (
+              <div className="real-dashboard__problem" role="alert"><strong>{registryFailure.title}</strong><span>{registryFailure.description}</span></div>
+            ) : telemetryFailure ? (
+              <div className="real-dashboard__problem" role="alert"><strong>{telemetryFailure.title}</strong><span>{telemetryFailure.description}</span></div>
+            ) : deviceProjection.attentionDevices.length > 0 ? (
+              <div className="dashboard-list-rows">
+                {deviceProjection.attentionDevices.slice(0, 4).map((device) => (
+                  <a className="dashboard-data-row dashboard-device-row-item" href={siteRoute(site, 'assets')} key={device.deviceId}>
+                    <span className={`dashboard-row-indicator is-${device.state === 'OFFLINE' ? 'critical' : 'warning'}`} />
+                    <span className="dashboard-row-content">
+                      <span className="dashboard-row-title">{device.displayName}</span>
+                      <span className="dashboard-row-reason">{STATE_LABEL[device.state]}</span>
+                      <span className="dashboard-row-meta">{device.deviceType}<span>·</span>最后可见 {formatInstant(device.lastSeenAt, site.timezone)}</span>
+                    </span>
+                    <span className="dashboard-row-side"><strong className="dashboard-side-value is-warning">{STATE_LABEL[device.state]}</strong></span>
+                  </a>
+                ))}
+              </div>
+            ) : (
+              <div className="dashboard-list-empty">暂无需要关注的设备</div>
+            )}
+          </Card>
+        </Col>
+        <Col xs={24} xl={10}>
+          <Card
+            variant="borderless"
+            className="dashboard-section-card dashboard-setpoint-card"
+            title={<Typography.Text strong>设定值与实际值</Typography.Text>}
+          >
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前接口未提供统一设定值与实际值聚合" />
+          </Card>
+        </Col>
+      </Row>
+    </div>
   );
 }

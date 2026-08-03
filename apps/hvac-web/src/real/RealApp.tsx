@@ -200,7 +200,7 @@ export default function RealApp({ config }: RealAppProps) {
     ? siteDecision.context.site
     : undefined;
   const scopedPlatformNavigation = selectedSite
-    ? platformNavigation.filter((item) => item.id !== 'alarms')
+    ? platformNavigation.filter((item) => item.id === 'system')
     : platformNavigation;
   const navigation = selectedSite && snapshot.principal
     ? [

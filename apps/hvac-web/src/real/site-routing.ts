@@ -1,6 +1,19 @@
 import type { Capability, Site } from '@/api/generated/platformGateway.gen';
 
-export type SiteRouteLeaf = 'dashboard' | 'assets' | 'energy' | 'alarms' | 'operations' | 'commands' | 'bigscreen';
+export type EnergyRoutePeriod = 'year' | 'month' | 'week' | 'day';
+
+export type SiteRouteLeaf =
+  | 'dashboard'
+  | 'assets'
+  | 'commands'
+  | 'energy'
+  | 'optimize'
+  | 'fdd'
+  | 'alarms'
+  | 'ai'
+  | 'cost'
+  | 'bigscreen'
+  | 'operations';
 
 export interface SiteContext {
   readonly site: Readonly<Site>;
@@ -15,13 +28,33 @@ export type SiteEntryDecision =
 export type SiteRoutingDecision =
   | { state: 'PLATFORM_ROUTE' }
   | SiteEntryDecision
-  | { state: 'READY'; route: SiteRouteLeaf; context: SiteContext; deviceId?: string }
+  | {
+    state: 'READY';
+    route: SiteRouteLeaf;
+    context: SiteContext;
+    deviceId?: string;
+    commandId?: string;
+    energyPeriod?: EnergyRoutePeriod;
+  }
   | { state: 'FORBIDDEN' }
   | { state: 'SITE_NOT_VISIBLE' }
   | { state: 'SITE_ROUTE_NOT_FOUND'; context: SiteContext };
 
 const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const SITE_ROUTE_LEAVES = new Set<SiteRouteLeaf>(['dashboard', 'assets', 'energy', 'alarms', 'operations', 'commands', 'bigscreen']);
+const SITE_ROUTE_LEAVES = new Set<SiteRouteLeaf>([
+  'dashboard',
+  'assets',
+  'commands',
+  'energy',
+  'optimize',
+  'fdd',
+  'alarms',
+  'ai',
+  'cost',
+  'bigscreen',
+  'operations',
+]);
+const ENERGY_PERIODS = new Set<EnergyRoutePeriod>(['year', 'month', 'week', 'day']);
 
 export function isUUIDv7(value: string): boolean {
   return UUID_V7_PATTERN.test(value);
@@ -42,6 +75,14 @@ function siteContext(site: Site): SiteContext {
 export function siteRoute(site: Pick<Site, 'id'>, leaf: SiteRouteLeaf): string {
   if (!isUUIDv7(site.id)) throw new Error('Site identity must be a Registry UUIDv7.');
   return `/sites/${site.id}/${leaf}`;
+}
+
+export function siteEnergyRoute(site: Pick<Site, 'id'>, period: EnergyRoutePeriod = 'month'): string {
+  return `${siteRoute(site, 'energy')}/${period}`;
+}
+
+export function siteCommandRoute(site: Pick<Site, 'id'>, commandId: string): string {
+  return `${siteRoute(site, 'commands')}/${encodeURIComponent(commandId)}`;
 }
 
 export function resolveSiteEntry(
@@ -87,6 +128,21 @@ export function resolveSiteRouting(
 
   if (leaf === 'assets' && segments.length === 4) {
     return { state: 'READY', route: leaf, context, deviceId: segments[3] };
+  }
+
+  if (leaf === 'commands' && segments.length === 4) {
+    return { state: 'READY', route: leaf, context, commandId: segments[3] };
+  }
+
+  if (leaf === 'energy') {
+    if (segments.length === 3) {
+      return { state: 'READY', route: leaf, context, energyPeriod: 'month' };
+    }
+    const period = segments[3] as EnergyRoutePeriod | undefined;
+    if (segments.length === 4 && period && ENERGY_PERIODS.has(period)) {
+      return { state: 'READY', route: leaf, context, energyPeriod: period };
+    }
+    return { state: 'SITE_ROUTE_NOT_FOUND', context };
   }
 
   if (segments.length !== 3) return { state: 'SITE_ROUTE_NOT_FOUND', context };

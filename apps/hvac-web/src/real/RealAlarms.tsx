@@ -1,5 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Alert, Button, Card, Col, Descriptions, Row, Space, Tag, Typography } from 'antd';
+import { AlertOutlined } from '@ant-design/icons';
+import PageScaffold from '@/components/PageScaffold';
+import { OperationsMetrics } from '@/components/OperationsUI';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import {
   ALARM_LOCAL_ROUTES_ENABLED,
@@ -60,22 +64,31 @@ function DisabledAlarmSurface({
   const capabilityDenied = reason === 'CAPABILITY_DENIED';
   return (
     <section className="real-alarms" data-testid="real-alarms-disabled" data-business-state="DISABLED" data-site-id={site.id}>
-      <p className="real-shell-eyebrow">REAL MODE · SITE ALARMS</p>
-      <FocusHeading>Alarm</FocusHeading>
-      <div className="real-alarms__boundary" role="status">
-        <strong>{capabilityDenied ? '当前会话没有 Alarm 列表能力' : 'Alarm 读取路由未启用'}</strong>
-        <p>{capabilityDenied
-          ? 'IAM 未向当前 Principal 与 acting Organization 发布 alarm.list。浏览器不会根据角色标签或 Site 访问权自行推导 Alarm 权限。'
-          : 'S4 Alarm 读取尚未对当前构建开放。此页面不会从 Telemetry、Presence 或 Device 状态补造 Alarm。'}</p>
-      </div>
-      <dl className="real-alarms__facts" aria-label="Alarm authority boundary">
-        <div><dt>Site</dt><dd>{site.displayName}</dd></div>
-        <div><dt>Registry Site ID</dt><dd>{site.id}</dd></div>
-        <div><dt>Acting Organization</dt><dd>{principal.context.actingOrganizationId}</dd></div>
-        <div><dt>权威读取</dt><dd>Platform Gateway → IAM → Alarm Service</dd></div>
-        <div><dt>生命周期写入</dt><dd>生产禁用</dd></div>
-      </dl>
-      <p className="real-alarms__honesty">没有 Alarm 数据不等于设备健康；只有 Alarm Service 发布并持久化的 lifecycle 才能显示为 Alarm。</p>
+      <PageScaffold
+        title="告警工单"
+        heading={<FocusHeading className="ops-page-title ant-typography"><Space><AlertOutlined />告警工单</Space></FocusHeading>}
+        extra={<Tag>{capabilityDenied ? 'CAPABILITY DENIED' : 'ROUTE DISABLED'}</Tag>}
+        className="alarms-page"
+      >
+        <Alert
+          type="warning"
+          showIcon
+          message={capabilityDenied ? '当前会话没有 Alarm 列表能力' : 'Alarm 读取路由未启用'}
+          description={capabilityDenied
+            ? 'IAM 未向当前 Principal 与 acting Organization 发布 alarm.list。浏览器不会根据角色标签或 Site 访问权自行推导 Alarm 权限。'
+            : 'S4 Alarm 读取尚未对当前构建开放。此页面不会从 Telemetry、Presence 或 Device 状态补造 Alarm。'}
+        />
+        <Card title="Alarm 权威边界" variant="borderless">
+          <Descriptions column={{ xs: 1, sm: 2, xl: 3 }} bordered size="small">
+            <Descriptions.Item label="Site">{site.displayName}</Descriptions.Item>
+            <Descriptions.Item label="Registry Site ID"><Typography.Text copyable>{site.id}</Typography.Text></Descriptions.Item>
+            <Descriptions.Item label="Acting Organization"><Typography.Text copyable>{principal.context.actingOrganizationId}</Typography.Text></Descriptions.Item>
+            <Descriptions.Item label="权威读取">Platform Gateway → IAM → Alarm Service</Descriptions.Item>
+            <Descriptions.Item label="生命周期写入">生产禁用</Descriptions.Item>
+          </Descriptions>
+        </Card>
+        <Typography.Text type="secondary">没有 Alarm 数据不等于设备健康；只有 Alarm Service 发布并持久化的 lifecycle 才能显示为 Alarm。</Typography.Text>
+      </PageScaffold>
     </section>
   );
 }
@@ -174,6 +187,12 @@ function AlarmWorkbench({
           : 'READY';
   const detail = detailQuery.data;
   const detailProjection = detail ? projectRealAlarm(detail) : null;
+  const metrics = [
+    { key: 'total', label: '当前结果', value: alarms.length, detail: 'Alarm Service 权威集合', tone: 'accent' as const },
+    { key: 'open', label: '未处理', value: alarms.filter((alarm) => alarm.status === 'OPEN').length, detail: 'OPEN lifecycle', tone: 'warning' as const },
+    { key: 'critical', label: '严重告警', value: alarms.filter((alarm) => alarm.severity === 'CRITICAL').length, detail: 'CRITICAL severity', tone: 'critical' as const },
+    { key: 'closed', label: '已关闭', value: alarms.filter((alarm) => alarm.status === 'CLOSED').length, detail: 'CLOSED lifecycle', tone: 'positive' as const },
+  ];
 
   return (
     <section
@@ -183,25 +202,27 @@ function AlarmWorkbench({
       data-site-id={site.id}
       data-alarm-id={detail?.alarmId ?? ''}
     >
-      <header className="real-alarms__header">
-        <div>
-          <p className="real-shell-eyebrow">REAL MODE · SITE ALARMS</p>
-          <FocusHeading>Alarm</FocusHeading>
-          <p>{site.displayName} · {site.code} · {site.timezone}</p>
-        </div>
-        <span className="real-alarms__local-marker">{ALARM_LOCAL_ROUTES_ENABLED
-          ? 'LOCAL / LIFECYCLE / PRODUCTION WRITES DISABLED'
-          : 'GATEWAY / IAM AUTHORIZED / 1% INTERNAL CANARY'}</span>
-      </header>
+      <PageScaffold
+        title="告警工单"
+        heading={<FocusHeading className="ops-page-title ant-typography"><Space><AlertOutlined />告警工单</Space></FocusHeading>}
+        extra={<Tag className="real-alarms__local-marker" color={ALARM_LOCAL_ROUTES_ENABLED ? 'green' : 'blue'}>{ALARM_LOCAL_ROUTES_ENABLED
+          ? 'LOCAL / LIFECYCLE'
+          : '1% INTERNAL CANARY'}</Tag>}
+        className="alarms-page"
+      >
+        <Typography.Text type="secondary">{site.displayName} · {site.code} · {site.timezone}</Typography.Text>
+        <Alert
+          type={ALARM_LOCAL_ROUTES_ENABLED ? 'success' : 'info'}
+          showIcon
+          message={ALARM_LOCAL_ROUTES_ENABLED ? '本地 S4 权威生命周期' : '生产 Alarm 权威只读 canary'}
+          description={ALARM_LOCAL_ROUTES_ENABLED
+            ? '页面只读取和更新 Alarm Service 发布的 durable Alarm。每次写入都带 expected version、CSRF 和稳定 Idempotency-Key；公共生产 POST 路由保持 0%。'
+            : '列表与详情经 Platform Gateway 和 IAM 精确授权后读取 Alarm Service。生命周期写入仍为 0%，Telemetry、Presence 和 Device 状态不会在浏览器中转译为 Alarm。'}
+        />
+        <OperationsMetrics items={metrics} ariaLabel="Alarm 关键指标" />
 
-      <div className="real-alarms__boundary" role="status">
-        <strong>{ALARM_LOCAL_ROUTES_ENABLED ? '本地 S4 权威生命周期' : '生产 Alarm 权威只读 canary'}</strong>
-        <p>{ALARM_LOCAL_ROUTES_ENABLED
-          ? '页面只读取和更新 Alarm Service 发布的 durable Alarm。每次写入都带 expected version、CSRF 和稳定 Idempotency-Key；公共生产 POST 路由保持 0%。'
-          : '列表与详情经 Platform Gateway 和 IAM 精确授权后读取 Alarm Service。生命周期写入仍为 0%，Telemetry、Presence 和 Device 状态不会在浏览器中转译为 Alarm。'}</p>
-      </div>
-
-      <section className="real-alarms__filters" aria-label="Alarm filters">
+      <Card title="筛选条件" variant="borderless" className="alarms-filter-card">
+        <section className="real-alarms__filters" aria-label="Alarm filters">
         <label>
           生命周期
           <select data-testid="real-alarm-status-filter" value={status} onChange={(event) => setStatus(event.currentTarget.value as AlarmStatus | '')}>
@@ -222,7 +243,8 @@ function AlarmWorkbench({
             <option value="INFO">提示</option>
           </select>
         </label>
-      </section>
+        </section>
+      </Card>
 
       {listQuery.isPending ? <div className="real-shell-progress" role="status">正在读取当前 Site 的权威 Alarm…</div> : null}
       {listQuery.isError && alarms.length === 0 ? (
@@ -239,8 +261,10 @@ function AlarmWorkbench({
       ) : null}
 
       {alarms.length > 0 ? (
-        <div className="real-alarms__workspace">
-          <ol className="real-alarms__list" aria-label="Authoritative Alarm list">
+        <Row gutter={[16, 16]} className="real-alarms__workspace">
+          <Col xs={24} xl={9}>
+            <Card title="Alarm 列表" variant="borderless" className="alarms-list-card">
+              <ol className="real-alarms__list" aria-label="Authoritative Alarm list">
             {alarms.map((alarm) => {
               const projection = projectRealAlarm(alarm);
               return (
@@ -253,9 +277,12 @@ function AlarmWorkbench({
                 </li>
               );
             })}
-          </ol>
-
-          <section className="real-alarms__detail-shell" aria-label="Alarm detail">
+              </ol>
+            </Card>
+          </Col>
+          <Col xs={24} xl={15}>
+            <Card title="Alarm 详情" variant="borderless" className="alarms-detail-card">
+              <section className="real-alarms__detail-shell" aria-label="Alarm detail">
             {!canReadDetail ? (
               <div className="real-alarms__empty" data-testid="real-alarm-detail-denied">
                 <strong>当前会话没有 Alarm 详情能力</strong>
@@ -322,16 +349,19 @@ function AlarmWorkbench({
                 </section>
               </article>
             ) : null}
-          </section>
-        </div>
+              </section>
+            </Card>
+          </Col>
+        </Row>
       ) : null}
 
       {listQuery.hasNextPage ? (
-        <button className="real-alarms__load-more" type="button" disabled={listQuery.isFetchingNextPage} onClick={() => void listQuery.fetchNextPage()}>
-          {listQuery.isFetchingNextPage ? '正在读取…' : '加载更多 Alarm'}
-        </button>
+        <Button className="real-alarms__load-more" loading={listQuery.isFetchingNextPage} onClick={() => void listQuery.fetchNextPage()}>
+          加载更多 Alarm
+        </Button>
       ) : null}
-      {listQuery.isFetchNextPageError ? <div className="real-shell-problem" role="alert">已保留当前结果；下一页暂时不可用。</div> : null}
+      {listQuery.isFetchNextPageError ? <Alert type="warning" showIcon message="已保留当前结果；下一页暂时不可用。" /> : null}
+      </PageScaffold>
     </section>
   );
 }

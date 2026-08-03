@@ -117,7 +117,8 @@ function normalizeRoute(pathname: string) {
 }
 
 function getEnergyPeriodLabel(pathname: string, params: URLSearchParams) {
-  const level = pathname.split('/')[2];
+  const requestedLevel = pathname.split('/')[2];
+  const level = requestedLevel ?? 'month';
   const levelLabel = level === 'year'
     ? '年度'
     : level === 'month'
@@ -127,8 +128,9 @@ function getEnergyPeriodLabel(pathname: string, params: URLSearchParams) {
         : level === 'day'
           ? '日度'
           : undefined;
-  const year = params.get('year');
-  const month = params.get('month');
+  const now = new Date();
+  const year = params.get('year') ?? String(now.getFullYear());
+  const month = params.get('month') ?? (level === 'month' ? String(now.getMonth() + 1) : null);
   const day = params.get('day');
   const week = params.get('week');
   const parts = [levelLabel];

@@ -11,7 +11,7 @@ export const REAL_FEATURE_MANIFEST = [
   },
   {
     id: 'system',
-    label: '系统状态',
+    label: '系统管理',
     path: '/system',
     delivery: 'implemented',
     availability: 'platform',
