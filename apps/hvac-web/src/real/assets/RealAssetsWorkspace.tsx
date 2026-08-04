@@ -12,6 +12,7 @@ import {
   EyeOutlined,
   NodeIndexOutlined,
   ReloadOutlined,
+  RightOutlined,
   TabletOutlined,
 } from '@ant-design/icons';
 import PageScaffold from '@/components/PageScaffold';
@@ -163,8 +164,7 @@ function hierarchyDataNode(node: RealAssetsHierarchyNode): DataNode {
     icon: HIERARCHY_ICONS[node.kind],
     title: (
       <span className="real-assets-tree-node" data-asset-kind={node.kind} title={`${node.label}｜${node.meta}`}>
-        <span className="real-assets-tree-node__label">{node.label}</span>
-        <span className="real-assets-tree-node__meta">{node.meta}</span>
+        {node.label}
       </span>
     ),
     children: node.children.map(hierarchyDataNode),
@@ -421,9 +421,12 @@ export function RealAssetsWorkspace({
     () => hierarchyRoot ? [hierarchyDataNode(hierarchyRoot)] : [],
     [hierarchyRoot],
   );
-  const hierarchyExpandedKeys = useMemo(() => (
-    [...hierarchyIndex.values()].filter((node) => node.kind === 'site' || node.kind === 'area').map((node) => node.key)
-  ), [hierarchyIndex]);
+  const hierarchyExpandedKeys = useMemo(() => hierarchyRoot
+    ? [
+      hierarchyRoot.key,
+      ...hierarchyRoot.children.filter((node) => node.kind === 'area').map((node) => node.key),
+    ]
+    : [], [hierarchyRoot]);
   const currentPending = telemetryAllowed && devices.length > 0 && current.isPending;
   const currentUnavailable = current.isError;
   const attentionDeviceIds = useMemo(() => new Set(rows
@@ -931,27 +934,29 @@ export function RealAssetsWorkspace({
           <Col xs={24} lg={7} xl={6}>
             <Card
               variant="borderless"
-              title={<OperationsPanelHeading icon={<ClusterOutlined />} title="资产层级" meta="区域 → 设备 → 通讯端点 → 传感器 → 点位" />}
+              title={<OperationsPanelHeading icon={<ClusterOutlined />} title="资产导航" />}
               className="assets-hierarchy-card"
-              styles={{ body: { padding: 12 } }}
             >
-              <Tree
-                key={site.id}
-                showIcon
-                showLine={{ showLeafIcon: false }}
-                defaultExpandedKeys={hierarchyExpandedKeys}
-                blockNode
-                treeData={hierarchyTree}
-                selectedKeys={[hierarchySelection]}
-                onSelect={(keys: Key[]) => {
-                  const selected = String(keys[0] ?? `site:${site.id}`) as HierarchySelection;
-                  setHierarchySelection(selected);
-                  const node = hierarchyIndex.get(selected);
-                  if (node?.kind === 'point' || node?.kind === 'sensor' || node?.kind === 'virtual-sensor') {
-                    setLedgerMode('points');
-                  }
-                }}
-              />
+              <div className="assets-hierarchy-card__scroll" role="navigation" aria-label="资产层级导航">
+                <Tree
+                  key={site.id}
+                  className="real-assets-navigation-tree"
+                  showIcon
+                  blockNode
+                  defaultExpandedKeys={hierarchyExpandedKeys}
+                  switcherIcon={({ isLeaf }) => isLeaf ? null : <RightOutlined className="real-assets-tree-switcher" />}
+                  treeData={hierarchyTree}
+                  selectedKeys={[hierarchySelection]}
+                  onSelect={(keys: Key[]) => {
+                    const selected = String(keys[0] ?? `site:${site.id}`) as HierarchySelection;
+                    setHierarchySelection(selected);
+                    const node = hierarchyIndex.get(selected);
+                    if (node?.kind === 'point' || node?.kind === 'sensor' || node?.kind === 'virtual-sensor') {
+                      setLedgerMode('points');
+                    }
+                  }}
+                />
+              </div>
             </Card>
           </Col>
           <Col xs={24} lg={17} xl={18}>

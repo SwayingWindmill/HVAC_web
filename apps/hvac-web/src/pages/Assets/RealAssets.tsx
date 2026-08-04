@@ -27,6 +27,7 @@ import {
   DatabaseOutlined,
   EyeOutlined,
   NodeIndexOutlined,
+  RightOutlined,
   SafetyCertificateOutlined,
   TabletOutlined,
 } from '@ant-design/icons';
@@ -98,18 +99,21 @@ const hierarchyDataNode = (node: RealAssetsHierarchyNode): DataNode => ({
   key: node.key,
   title: (
     <span className="real-assets-tree-node" data-asset-kind={node.kind} title={`${node.label}｜${node.meta}`}>
-      <span className="real-assets-tree-node__label">{node.label}</span>
-      <span className="real-assets-tree-node__meta">{node.meta}</span>
+      {node.label}
     </span>
   ),
   icon: hierarchyIcon(node.kind),
   children: node.children.map(hierarchyDataNode),
 });
 
-const defaultExpandedTreeKeys = (nodes: readonly DataNode[]): Key[] => nodes.flatMap((node) => [
-  ...(String(node.key).startsWith('site:') || String(node.key).startsWith('area:') ? [node.key] : []),
-  ...defaultExpandedTreeKeys(node.children ?? []),
-]);
+const defaultExpandedTreeKeys = (nodes: readonly DataNode[]): Key[] => {
+  const root = nodes[0];
+  if (!root) return [];
+  return [
+    root.key,
+    ...(root.children ?? []).filter((node) => String(node.key).startsWith('area:')).map((node) => node.key),
+  ];
+};
 
 export interface RealAssetsProps {
   telemetryRuntime?: TelemetryCurrentRuntime;
@@ -451,7 +455,15 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
                 ) : treeData.length === 0 ? (
                   <RegistryEmptyState description="当前 Site 暂无 Registry 资源。" />
                 ) : (
-                  <Tree showIcon showLine={{ showLeafIcon: false }} defaultExpandedKeys={defaultExpandedTreeKeys(treeData)} treeData={treeData} onSelect={selectTreeNode} />
+                  <Tree
+                    className="real-assets-navigation-tree"
+                    showIcon
+                    blockNode
+                    defaultExpandedKeys={defaultExpandedTreeKeys(treeData)}
+                    switcherIcon={({ isLeaf }) => isLeaf ? null : <RightOutlined className="real-assets-tree-switcher" />}
+                    treeData={treeData}
+                    onSelect={selectTreeNode}
+                  />
                 )}
                 <RegistryLoadMore
                   hasMore={Boolean(organizationsQuery.hasNextPage)}

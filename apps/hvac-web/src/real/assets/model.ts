@@ -572,17 +572,20 @@ export function buildRealAssetsHierarchy(model: SiteAssetModel, siteLabel: strin
   };
 
   const equipmentNode = (equipment: Equipment): RealAssetsHierarchyNode => {
-    const devices = model.devices
+    const boundDevices = model.devices
       .filter((device) => deviceEquipment.get(device.id)?.includes(equipment.id))
-      .sort(compareRegistryIdentity)
-      .map((device) => deviceNode(device, `equipment:${equipment.id}`));
+      .sort(compareRegistryIdentity);
+    const endpointNodes = boundDevices.map((device) => deviceNode(device, `equipment:${equipment.id}`));
+    const collapseSingleEndpoint = boundDevices.length === 1
+      && deviceEquipment.get(boundDevices[0].id)?.length === 1;
+    const children = collapseSingleEndpoint ? endpointNodes[0].children : endpointNodes;
     return hierarchyNode(
       'equipment',
       equipment.id,
       realAssetsEquipmentTypeLabel(equipment.equipmentType),
       `设备 · ${equipment.code || equipment.displayName}`,
-      devices.flatMap((node) => node.deviceIds),
-      devices,
+      endpointNodes.flatMap((node) => node.deviceIds),
+      children,
     );
   };
 

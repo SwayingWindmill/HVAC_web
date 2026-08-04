@@ -149,6 +149,12 @@ async function browserAudit(topology) {
     client = await createCDPClient(page.webSocketDebuggerUrl);
     await client.send('Runtime.enable');
     await client.send('Page.enable');
+    await client.send('Emulation.setDeviceMetricsOverride', {
+      width: 1600,
+      height: 1000,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
     const sitePath = `/sites/${centralPlantIdentity.siteId}/assets`;
     const expectedAssetCounts = {
       areas: centralPlantAreas.length,
@@ -177,9 +183,33 @@ async function browserAudit(topology) {
         && root?.dataset.ledgerMode === 'points'
         && document.querySelectorAll('[data-testid="real-assets-table-wrap"] [data-point-id]').length >= ${JSON.stringify(expectedAssetCounts.telemetryPoints)}
         && document.body.innerText.includes('中央机房')
-        && document.body.innerText.includes('资产层级')
+        && document.body.innerText.includes('资产导航')
         && document.body.innerText.includes('点位');
     })()`, 'authenticated central plant atomic Asset Model shell');
+
+    const navigation = await waitForCondition(client, `(() => {
+      const hierarchyCard = document.querySelector('.assets-hierarchy-card');
+      const ledgerCard = document.querySelector('.assets-ledger-card');
+      const hierarchyScroll = document.querySelector('.assets-hierarchy-card__scroll');
+      if (!hierarchyCard || !ledgerCard || !hierarchyScroll) return false;
+      const hierarchyRect = hierarchyCard.getBoundingClientRect();
+      const ledgerRect = ledgerCard.getBoundingClientRect();
+      return {
+        hasSwitcher: Boolean(document.querySelector('.real-assets-tree-switcher')),
+        hasMeta: Boolean(document.querySelector('.real-assets-tree-node__meta')),
+        overflowY: getComputedStyle(hierarchyScroll).overflowY,
+        topDelta: Math.abs(hierarchyRect.top - ledgerRect.top),
+        heightDelta: Math.abs(hierarchyRect.height - ledgerRect.height),
+        hierarchyHeight: hierarchyRect.height,
+        ledgerHeight: ledgerRect.height,
+      };
+    })()`, 'compact Asset navigation layout');
+    const navigationEvidence = JSON.stringify(navigation);
+    assert.equal(navigation.hasSwitcher, true, navigationEvidence);
+    assert.equal(navigation.hasMeta, false, navigationEvidence);
+    assert.ok(navigation.overflowY === 'auto' || navigation.overflowY === 'scroll', navigationEvidence);
+    assert.ok(navigation.topDelta < 2, navigationEvidence);
+    assert.ok(navigation.heightDelta < 2, navigationEvidence);
 
     const chiller = centralPlantDevices.find((device) => device.name === 'CHILLER-01');
     assert(chiller, 'CHILLER-01 contract is unavailable');
@@ -247,7 +277,7 @@ async function browserAudit(topology) {
     assert.ok(authority.assetModel.relationshipCount > 0);
     assert.equal(authority.snapshot.deviceId, chiller.platformDeviceId);
     assert.equal(authority.snapshot.values.length, requestedKeys.length);
-    return { browser: browserPath, ...authority };
+    return { browser: browserPath, navigation, ...authority };
   } finally {
     client?.close();
     if (browser.exitCode === null) {

@@ -317,7 +317,7 @@ test('rows sort by Area, Equipment and Device identity while preserving unbound 
   assert.equal(rows[2].registeredPointCount, 0);
 });
 
-test('hierarchy projects Area to Equipment to Device Endpoint to Sensor to Telemetry Point', () => {
+test('hierarchy collapses a one-to-one Device Endpoint while preserving Sensor and Telemetry Point selection', () => {
   const plantArea = area();
   const equipmentA = equipment(equipmentAId, 'Alpha Chiller');
   const endpoint = device();
@@ -339,22 +339,21 @@ test('hierarchy projects Area to Equipment to Device Endpoint to Sensor to Telem
   const hierarchy = buildRealAssetsHierarchy(model, 'Test Site', now);
   const areaNode = hierarchy.children[0];
   const equipmentNode = areaNode.children[0];
-  const deviceNode = equipmentNode.children[0];
-  const sensorNode = deviceNode.children.find((node) => node.kind === 'sensor');
-  const virtualSensorNode = deviceNode.children.find((node) => node.kind === 'virtual-sensor');
+  const sensorNode = equipmentNode.children.find((node) => node.kind === 'sensor');
+  const virtualSensorNode = equipmentNode.children.find((node) => node.kind === 'virtual-sensor');
 
   assert.equal(hierarchy.kind, 'site');
   assert.equal(areaNode.kind, 'area');
   assert.equal(equipmentNode.kind, 'equipment');
   assert.equal(equipmentNode.label, '冷水机组');
   assert.equal(equipmentNode.meta, '设备 · ALPHA-CHILLER');
-  assert.equal(deviceNode.kind, 'device');
-  assert.equal(deviceNode.label, '通讯端点');
-  assert.match(deviceNode.meta, /Chiller 01/);
+  assert.equal(equipmentNode.children.some((node) => node.kind === 'device'), false);
+  assert.deepEqual(equipmentNode.deviceIds, [endpoint.id]);
   assert.equal(sensorNode.children[0].kind, 'point');
   assert.equal(sensorNode.children[0].label, '温度');
   assert.equal(sensorNode.children[0].meta, '实测 · °C');
   assert.equal(virtualSensorNode.children[0].label, '温差');
+  assert.deepEqual(equipmentNode.pointIds.sort(), [measured.id, calculated.id].sort());
   assert.deepEqual(areaNode.deviceIds, [endpoint.id]);
 });
 
@@ -429,4 +428,27 @@ test('hierarchy projects one Device Endpoint under every active Equipment bindin
   assert.deepEqual(equipmentNodes.map((node) => node.children[0].deviceIds), [[endpoint.id], [endpoint.id]]);
   assert.notEqual(equipmentNodes[0].children[0].key, equipmentNodes[1].children[0].key);
   assert.deepEqual(areaNode.deviceIds, [endpoint.id]);
+});
+
+test('hierarchy keeps the Device Endpoint layer when one Equipment has several communication endpoints', () => {
+  const plantArea = area();
+  const equipmentA = equipment(equipmentAId, 'Alpha Chiller');
+  const endpointA = device({ id: deviceId, displayName: 'Primary Controller' });
+  const endpointB = device({ id: '01900000-0003-7000-8000-000000000002', displayName: 'Meter Gateway' });
+  const model = siteAssetModel({
+    areas: [plantArea],
+    equipment: [equipmentA],
+    devices: [endpointA, endpointB],
+    relationships: [
+      relationship('01900000-0004-7000-8000-000000000050', 'EQUIPMENT', equipmentA.id, 'AREA', plantArea.id),
+      relationship('01900000-0004-7000-8000-000000000051', 'DEVICE', endpointA.id, 'EQUIPMENT', equipmentA.id),
+      relationship('01900000-0004-7000-8000-000000000052', 'DEVICE', endpointB.id, 'EQUIPMENT', equipmentA.id),
+    ],
+  });
+
+  const hierarchy = buildRealAssetsHierarchy(model, 'Test Site', now);
+  const equipmentNode = hierarchy.children[0].children[0];
+  assert.deepEqual(equipmentNode.children.map((node) => node.kind), ['device', 'device']);
+  assert.deepEqual(equipmentNode.children.map((node) => node.deviceIds), [[endpointB.id], [endpointA.id]]);
+  assert.notEqual(equipmentNode.children[0].key, equipmentNode.children[1].key);
 });
