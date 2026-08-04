@@ -172,8 +172,13 @@ async function browserAudit(topology) {
         && root?.dataset.telemetryPointCount === ${JSON.stringify(String(expectedAssetCounts.telemetryPoints))}
         && root?.dataset.independentSensorDeviceCount === ${JSON.stringify(String(expectedAssetCounts.independentSensorDevices))}
         && root?.dataset.calculatedPointCount === ${JSON.stringify(String(expectedAssetCounts.calculatedPoints))}
+        && root?.dataset.pointLedgerCount === ${JSON.stringify(String(expectedAssetCounts.telemetryPoints))}
+        && root?.dataset.filteredPointCount === ${JSON.stringify(String(expectedAssetCounts.telemetryPoints))}
+        && root?.dataset.ledgerMode === 'points'
+        && document.querySelectorAll('[data-testid="real-assets-table-wrap"] [data-point-id]').length >= ${JSON.stringify(expectedAssetCounts.telemetryPoints)}
         && document.body.innerText.includes('中央机房')
-        && document.body.innerText.includes('Telemetry Point');
+        && document.body.innerText.includes('资产层级')
+        && document.body.innerText.includes('点位');
     })()`, 'authenticated central plant atomic Asset Model shell');
 
     const chiller = centralPlantDevices.find((device) => device.name === 'CHILLER-01');

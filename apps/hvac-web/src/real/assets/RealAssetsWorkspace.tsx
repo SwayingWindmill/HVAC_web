@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes, type Key } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Badge, Button, Card, Col, Empty, Grid, Input, Row, Select, Space, Table, Tag, Tree, Typography } from 'antd';
+import { Alert, Badge, Button, Card, Col, Empty, Grid, Input, Row, Segmented, Select, Space, Table, Tag, Tree, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { DataNode } from 'antd/es/tree';
 import {
@@ -46,11 +46,17 @@ import {
 } from './data';
 import {
   buildRealAssetsHierarchy,
+  buildRealAssetsPointRows,
   buildRealAssetsRows,
   isRealAssetsAttentionState,
+  realAssetsDeviceTypeLabel,
+  realAssetsPointKindLabel,
+  realAssetsSensorTypeLabel,
+  realAssetsTelemetryPointMeta,
   type RealAssetsDeviceRow,
   type RealAssetsHierarchyNode,
   type RealAssetsOperatingState,
+  type RealAssetsTelemetryPointRow,
 } from './model';
 import { projectRealAssetsRealtimeRow } from './realtime';
 import {
@@ -72,6 +78,7 @@ interface RealAssetsWorkspaceProps {
 }
 
 type ListMode = 'attention' | 'all';
+type LedgerMode = 'devices' | 'points';
 type HierarchySelection = string;
 
 const OPERATING_LABELS: Record<RealAssetsOperatingState, string> = {
@@ -121,6 +128,25 @@ function matchesSearch(row: RealAssetsDeviceRow, value: string): boolean {
   ].some((candidate) => candidate?.toLocaleLowerCase('zh-CN').includes(query));
 }
 
+function matchesPointSearch(row: RealAssetsTelemetryPointRow, value: string): boolean {
+  const query = value.trim().toLocaleLowerCase('zh-CN');
+  if (!query) return true;
+  const area = row.area.state === 'bound' ? row.area.area : undefined;
+  const equipment = equipmentBindings(row.binding).map((item) => item.equipment);
+  return [
+    row.label,
+    row.point.id,
+    row.point.pointKey,
+    row.point.sourceKey,
+    row.device.code,
+    row.device.displayName,
+    row.sensor?.code,
+    row.sensor?.displayName,
+    area?.displayName,
+    ...equipment.flatMap((item) => [item.code, item.displayName]),
+  ].some((candidate) => candidate?.toLocaleLowerCase('zh-CN').includes(query));
+}
+
 const HIERARCHY_ICONS = {
   site: <ApartmentOutlined />,
   area: <ClusterOutlined />,
@@ -136,8 +162,9 @@ function hierarchyDataNode(node: RealAssetsHierarchyNode): DataNode {
     key: node.key,
     icon: HIERARCHY_ICONS[node.kind],
     title: (
-      <span data-asset-kind={node.kind}>
-        {node.label} · {node.meta}
+      <span className="real-assets-tree-node" data-asset-kind={node.kind} title={`${node.label}｜${node.meta}`}>
+        <span className="real-assets-tree-node__label">{node.label}</span>
+        <span className="real-assets-tree-node__meta">{node.meta}</span>
       </span>
     ),
     children: node.children.map(hierarchyDataNode),
@@ -220,6 +247,7 @@ export function RealAssetsWorkspace({
   const platformClient = useMemo(() => providedPlatformClient ?? createPlatformGatewayClient(), [providedPlatformClient]);
   const telemetryRuntime = useMemo(() => providedTelemetryRuntime ?? createRealAssetsTelemetryRuntime(), [providedTelemetryRuntime]);
   const [listMode, setListMode] = useState<ListMode>('all');
+  const [ledgerMode, setLedgerMode] = useState<LedgerMode>('points');
   const [search, setSearch] = useState('');
   const [hierarchySelection, setHierarchySelection] = useState<HierarchySelection>(`site:${site.id}`);
   const [telemetryPolicyRevision, setTelemetryPolicyRevision] = useState<string | null>(
@@ -295,6 +323,7 @@ export function RealAssetsWorkspace({
     kind: 'selection',
     purge: () => {
       setListMode('all');
+      setLedgerMode('points');
       setSearch('');
       setHierarchySelection(`site:${site.id}`);
       selectedDeviceIdRef.current = null;
@@ -340,8 +369,9 @@ export function RealAssetsWorkspace({
   });
   const assetModel = registry.data?.assetModel;
   const devices = assetModel?.devices ?? [];
+  const telemetryPoints = assetModel?.telemetryPoints ?? [];
   const current = useQuery({
-    queryKey: realAssetsCurrentStateQueryKey(protectedGeneration, organizationId, site.id, devices, routePolicyEpoch),
+    queryKey: realAssetsCurrentStateQueryKey(protectedGeneration, organizationId, site.id, devices, telemetryPoints, routePolicyEpoch),
     queryFn: ({ signal }) => {
       const scopeGuard = protectedRequestToken();
       if (scopeGuard.siteId !== site.id || scopeGuard.generation !== protectedGeneration) {
@@ -350,6 +380,7 @@ export function RealAssetsWorkspace({
       return runRealAssetsProtectedRequest(scopeGuard, signal, (protectedSignal) => loadRealAssetsCurrentState({
         client: telemetryRuntime.client,
         devices,
+        telemetryPoints,
         organizationId,
         siteId: site.id,
         csrfToken: sessionCapability,
@@ -366,31 +397,48 @@ export function RealAssetsWorkspace({
     assetModel,
     snapshots: current.data?.byDeviceId,
   }) : [], [assetModel, current.data?.byDeviceId]);
+  const pointRows = useMemo(() => assetModel ? buildRealAssetsPointRows({
+    assetModel,
+    deviceRows: rows,
+  }) : [], [assetModel, rows]);
   const hierarchyRoot = useMemo(
     () => assetModel ? buildRealAssetsHierarchy(assetModel, site.displayName) : null,
     [assetModel, site.displayName],
   );
   const hierarchyIndex = useMemo(() => {
-    const index = new Map<string, ReadonlySet<string>>();
+    const index = new Map<string, RealAssetsHierarchyNode>();
     const visit = (node: RealAssetsHierarchyNode) => {
-      index.set(node.key, new Set(node.deviceIds));
+      index.set(node.key, node);
       node.children.forEach(visit);
     };
     if (hierarchyRoot) visit(hierarchyRoot);
     return index;
   }, [hierarchyRoot]);
-  const selectedDeviceIds = hierarchyIndex.get(hierarchySelection);
+  const selectedHierarchy = hierarchyIndex.get(hierarchySelection);
+  const selectedDeviceIds = selectedHierarchy ? new Set(selectedHierarchy.deviceIds) : undefined;
+  const selectedPointIds = selectedHierarchy ? new Set(selectedHierarchy.pointIds) : undefined;
   const hierarchyTree = useMemo<DataNode[]>(
     () => hierarchyRoot ? [hierarchyDataNode(hierarchyRoot)] : [],
     [hierarchyRoot],
   );
+  const hierarchyExpandedKeys = useMemo(() => (
+    [...hierarchyIndex.values()].filter((node) => node.kind === 'site' || node.kind === 'area').map((node) => node.key)
+  ), [hierarchyIndex]);
   const currentPending = telemetryAllowed && devices.length > 0 && current.isPending;
   const currentUnavailable = current.isError;
+  const attentionDeviceIds = useMemo(() => new Set(rows
+    .filter((row) => isRealAssetsAttentionState(row.operatingState))
+    .map((row) => row.device.id)), [rows]);
   const filteredRows = useMemo(() => rows.filter((row) => (
     matchesSearch(row, search)
     && matchesHierarchy(row, selectedDeviceIds)
-    && (listMode === 'all' || currentPending || currentUnavailable || isRealAssetsAttentionState(row.operatingState))
-  )), [currentPending, currentUnavailable, listMode, rows, search, selectedDeviceIds]);
+    && (listMode === 'all' || currentPending || currentUnavailable || attentionDeviceIds.has(row.device.id))
+  )), [attentionDeviceIds, currentPending, currentUnavailable, listMode, rows, search, selectedDeviceIds]);
+  const filteredPointRows = useMemo(() => pointRows.filter((row) => (
+    matchesPointSearch(row, search)
+    && (selectedPointIds === undefined || selectedPointIds.has(row.point.id))
+    && (listMode === 'all' || currentPending || currentUnavailable || attentionDeviceIds.has(row.device.id))
+  )), [attentionDeviceIds, currentPending, currentUnavailable, listMode, pointRows, search, selectedPointIds]);
 
   const counts = useMemo(() => ({
     total: rows.length,
@@ -401,7 +449,7 @@ export function RealAssetsWorkspace({
   const assetColumns = useMemo<ColumnsType<RealAssetsDeviceRow>>(() => {
     const columns: ColumnsType<RealAssetsDeviceRow> = [
       {
-        title: 'Device Endpoint',
+        title: '通讯端点',
         key: 'device',
         fixed: 'left',
         width: 250,
@@ -421,7 +469,7 @@ export function RealAssetsWorkspace({
             <Space direction="vertical" size={0} align="start">
               <Space size={6} wrap>
                 <Typography.Text strong>{row.device.displayName}</Typography.Text>
-                <Tag>{row.device.deviceType}</Tag>
+                <Tag>{realAssetsDeviceTypeLabel(row.device.deviceType)}</Tag>
               </Space>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>{row.device.code}</Typography.Text>
             </Space>
@@ -429,7 +477,7 @@ export function RealAssetsWorkspace({
         ),
       },
       {
-        title: 'Area / Equipment',
+        title: '区域 / 设备',
         key: 'equipment',
         width: 210,
         render: (_, row) => <BindingLabel row={row} />,
@@ -530,6 +578,108 @@ export function RealAssetsWorkspace({
     ];
     return compactTable
       ? columns.filter((column) => ['device', 'equipment', 'state', 'points', 'action'].includes(String(column.key)))
+      : columns;
+  }, [compactTable, currentPending, currentUnavailable, selectedDeviceId, site.timezone]);
+  const pointColumns = useMemo<ColumnsType<RealAssetsTelemetryPointRow>>(() => {
+    const columns: ColumnsType<RealAssetsTelemetryPointRow> = [
+      {
+        title: '点位',
+        key: 'point',
+        fixed: 'left',
+        width: 260,
+        render: (_, row) => (
+          <Space direction="vertical" size={0} align="start">
+            <Space size={6} wrap>
+              <Typography.Text strong>{row.label}</Typography.Text>
+              <Tag>{realAssetsPointKindLabel(row.point.pointKind)}</Tag>
+            </Space>
+            <Typography.Text type="secondary" className="real-assets__technical-key">{row.point.pointKey}</Typography.Text>
+          </Space>
+        ),
+      },
+      {
+        title: '通讯端点 / 传感器',
+        key: 'source',
+        width: 240,
+        render: (_, row) => (
+          <Space direction="vertical" size={0} align="start">
+            <Button type="link" className="real-assets__inline-device-link" onClick={() => openDeviceDetail(row.device.id)}>
+              {row.device.displayName}
+            </Button>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {row.sensor
+                ? `${row.sensor.displayName} · ${realAssetsSensorTypeLabel(row.sensor.sensorType)}`
+                : '设备直连或计算点'}
+            </Typography.Text>
+          </Space>
+        ),
+      },
+      {
+        title: '当前值',
+        key: 'current',
+        width: 190,
+        render: (_, row) => {
+          if (currentPending) return <Badge status="processing" text="读取中" />;
+          if (currentUnavailable || !row.current) return <Badge status="error" text="状态不可用" />;
+          if (row.current.state === 'MISSING') return <Badge status="warning" text={row.current.displayValue} />;
+          return (
+            <Space direction="vertical" size={0} align="start">
+              <Typography.Text strong>
+                {row.current.displayValue}{row.current.unit ? ` ${row.current.unit}` : ''}
+              </Typography.Text>
+              <Typography.Text type={row.current.quality === 'SUSPECT' || row.current.freshness === 'STALE' ? 'warning' : 'secondary'} style={{ fontSize: 12 }}>
+                {pointEvidence(row.current, site.timezone)}
+              </Typography.Text>
+            </Space>
+          );
+        },
+      },
+      {
+        title: '区域 / 设备',
+        key: 'location',
+        width: 220,
+        render: (_, row) => (
+          <Space direction="vertical" size={0} align="start">
+            <Typography.Text>{row.area.state === 'bound' ? row.area.area.displayName : '区域未建立'}</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{equipmentBindingLabel(row.binding)}</Typography.Text>
+          </Space>
+        ),
+      },
+      {
+        title: '采集配置',
+        key: 'configuration',
+        width: 170,
+        render: (_, row) => (
+          <Space direction="vertical" size={0} align="start">
+            <Typography.Text>{realAssetsTelemetryPointMeta(row.point)}</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              采样 {Math.round(row.point.sampleIntervalMs / 100) / 10}s · 发布 {Math.round(row.point.publishIntervalMs / 100) / 10}s
+            </Typography.Text>
+          </Space>
+        ),
+      },
+      {
+        title: '操作',
+        key: 'action',
+        fixed: 'right',
+        width: 110,
+        render: (_, row) => (
+          <Button
+            size="small"
+            type="primary"
+            ghost
+            icon={<EyeOutlined />}
+            aria-haspopup="dialog"
+            aria-expanded={selectedDeviceId === row.device.id}
+            onClick={() => openDeviceDetail(row.device.id)}
+          >
+            设备详情
+          </Button>
+        ),
+      },
+    ];
+    return compactTable
+      ? columns.filter((column) => ['point', 'source', 'current', 'action'].includes(String(column.key)))
       : columns;
   }, [compactTable, currentPending, currentUnavailable, selectedDeviceId, site.timezone]);
   const detailResolution = useMemo(() => resolveRealAssetsDetail(rows, selectedDeviceId), [rows, selectedDeviceId]);
@@ -701,6 +851,9 @@ export function RealAssetsWorkspace({
       data-calculated-point-count={String(assetModel?.counts.calculatedPoints ?? 0)}
       data-total-device-count={String(rows.length)}
       data-filtered-device-count={String(filteredRows.length)}
+      data-point-ledger-count={String(pointRows.length)}
+      data-filtered-point-count={String(filteredPointRows.length)}
+      data-ledger-mode={ledgerMode}
       data-list-mode={listMode}
       data-hierarchy-selection={hierarchySelection}
     >
@@ -755,7 +908,7 @@ export function RealAssetsWorkspace({
         </div>
       ) : null}
       {currentPending ? (
-        <div className="real-assets__notice" role="status">已建立原子 Asset Model，正在按最多 100 个 Device Endpoint 的批次读取关键点位 Snapshot。</div>
+        <div className="real-assets__notice" role="status">已建立原子资产模型，正在按通讯端点批量读取全部已登记点位的当前状态。</div>
       ) : null}
       {currentUnavailable ? (() => {
         const failure = telemetryFailure(current.error);
@@ -778,19 +931,25 @@ export function RealAssetsWorkspace({
           <Col xs={24} lg={7} xl={6}>
             <Card
               variant="borderless"
-              title={<OperationsPanelHeading icon={<ClusterOutlined />} title="Asset Model 完整拓扑" />}
+              title={<OperationsPanelHeading icon={<ClusterOutlined />} title="资产层级" meta="区域 → 设备 → 通讯端点 → 传感器 → 点位" />}
               className="assets-hierarchy-card"
               styles={{ body: { padding: 12 } }}
             >
               <Tree
+                key={site.id}
                 showIcon
-                defaultExpandAll
+                showLine={{ showLeafIcon: false }}
+                defaultExpandedKeys={hierarchyExpandedKeys}
                 blockNode
                 treeData={hierarchyTree}
                 selectedKeys={[hierarchySelection]}
                 onSelect={(keys: Key[]) => {
                   const selected = String(keys[0] ?? `site:${site.id}`) as HierarchySelection;
                   setHierarchySelection(selected);
+                  const node = hierarchyIndex.get(selected);
+                  if (node?.kind === 'point' || node?.kind === 'sensor' || node?.kind === 'virtual-sensor') {
+                    setLedgerMode('points');
+                  }
                 }}
               />
             </Card>
@@ -799,89 +958,115 @@ export function RealAssetsWorkspace({
             <Card variant="borderless" className="assets-ledger-card" styles={{ body: { padding: 16 } }}>
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                 <div className="ops-toolbar">
-                  <OperationsPanelHeading icon={<NodeIndexOutlined />} title="设备台账" meta={`${filteredRows.length} 台`} />
+                  <OperationsPanelHeading
+                    icon={<NodeIndexOutlined />}
+                    title="资产台账"
+                    meta={ledgerMode === 'points' ? `${filteredPointRows.length} 个点位` : `${filteredRows.length} 个通讯端点`}
+                  />
                   <Space wrap>
+                    <Segmented<LedgerMode>
+                      value={ledgerMode}
+                      onChange={setLedgerMode}
+                      options={[
+                        { label: `点位 ${pointRows.length}`, value: 'points' },
+                        { label: `通讯端点 ${rows.length}`, value: 'devices' },
+                      ]}
+                    />
                     <Input
                       allowClear
                       type="search"
                       data-testid="real-assets-search"
-                      placeholder="搜索设备或 Equipment"
+                      placeholder={ledgerMode === 'points' ? '搜索点位、传感器或通讯端点' : '搜索通讯端点或设备'}
                       value={search}
                       onChange={(event) => setSearch(event.currentTarget.value)}
-                      style={{ width: 260 }}
+                      style={{ width: 280 }}
                     />
                     <Select
                       value={listMode}
                       onChange={setListMode}
                       options={[
-                        { label: '需关注', value: 'attention' },
-                        { label: '全部 Device', value: 'all' },
+                        { label: '需关注资产', value: 'attention' },
+                        { label: '全部资产', value: 'all' },
                       ]}
                       style={{ width: 130 }}
                     />
-                    <Button
-                      data-testid="real-assets-list-attention"
-                      type={listMode === 'attention' ? 'primary' : 'default'}
-                      onClick={() => setListMode('attention')}
-                    >
-                      需关注
-                    </Button>
-                    <Button
-                      data-testid="real-assets-list-all"
-                      type={listMode === 'all' ? 'primary' : 'default'}
-                      onClick={() => setListMode('all')}
-                    >
-                      全部 Device
-                    </Button>
                   </Space>
                 </div>
 
-                <div data-testid="real-assets-table-wrap">
-                  <table className="real-assets__table real-shell-sr-only" aria-label="完整授权 Device 运行投影">
-                    <tbody>
-                      {filteredRows.map((row) => (
-                        <tr
-                          key={row.device.id}
-                          data-device-id={row.device.id}
-                          data-operating-state={currentUnavailable ? 'UNAVAILABLE' : currentPending ? 'LOADING' : row.operatingState}
-                        >
-                          <td>{row.device.displayName} {row.device.code} {row.device.deviceType}</td>
-                          <td>{equipmentBindingLabel(row.binding)}</td>
-                          <td>{currentUnavailable ? '状态不可用' : currentPending ? '读取中' : OPERATING_LABELS[row.operatingState]}</td>
-                          <td>
-                            <ul className="real-assets__points">
-                              {row.points.map((point) => (
-                                <li key={point.key}>{point.label} {point.displayValue}{point.unit ? ` ${point.unit}` : ''}</li>
-                              ))}
-                            </ul>
-                          </td>
-                          <td>{row.device.status} Revision {row.device.revision}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  <Table<RealAssetsDeviceRow>
-                    rowKey={(row) => row.device.id}
-                    size="middle"
-                    columns={assetColumns}
-                    dataSource={filteredRows}
-                    pagination={{ pageSize: 8, showSizeChanger: false }}
-                    scroll={{ x: compactTable ? 820 : 1240 }}
-                    locale={{
-                      emptyText: (
-                        <Empty
-                          image={Empty.PRESENTED_IMAGE_SIMPLE}
-                          description={listMode === 'attention' && !currentPending && !currentUnavailable && rows.every((row) => row.operatingState === 'NORMAL')
-                            ? '当前筛选范围内所有 Device 均为正常。切换到“全部 Device”可查看完整列表。'
-                            : '当前筛选条件没有匹配的 Device。'}
-                        />
-                      ),
-                    }}
-                    onRow={(row) => ({
-                      'data-device-id': row.device.id,
-                      'data-operating-state': currentUnavailable ? 'UNAVAILABLE' : currentPending ? 'LOADING' : row.operatingState,
-                    } as HTMLAttributes<HTMLTableRowElement>)}
-                  />
+                <div data-testid="real-assets-table-wrap" data-ledger-mode={ledgerMode}>
+                  {ledgerMode === 'points' ? (
+                    <>
+                      <table className="real-assets__table real-shell-sr-only" aria-label="完整授权点位台账">
+                        <tbody>
+                          {filteredPointRows.map((row) => (
+                            <tr key={row.point.id} data-point-id={row.point.id} data-device-id={row.device.id}>
+                              <td>{row.label}</td>
+                              <td>{row.point.pointKey}</td>
+                              <td>{row.device.displayName}</td>
+                              <td>{row.sensor?.displayName ?? '设备直连或计算点'}</td>
+                              <td>{row.current?.displayValue ?? '状态不可用'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <Table<RealAssetsTelemetryPointRow>
+                        rowKey={(row) => row.point.id}
+                        size="middle"
+                        columns={pointColumns}
+                        dataSource={filteredPointRows}
+                        pagination={{ pageSize: 15, showSizeChanger: false, showTotal: (total) => `共 ${total} 个点位` }}
+                        scroll={{ x: compactTable ? 820 : 1180 }}
+                        locale={{
+                          emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前层级或筛选条件没有匹配的点位。" />,
+                        }}
+                        onRow={(row) => ({
+                          'data-point-id': row.point.id,
+                          'data-device-id': row.device.id,
+                        } as HTMLAttributes<HTMLTableRowElement>)}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <table className="real-assets__table real-shell-sr-only" aria-label="完整授权通讯端点运行投影">
+                        <tbody>
+                          {filteredRows.map((row) => (
+                            <tr
+                              key={row.device.id}
+                              data-device-id={row.device.id}
+                              data-operating-state={currentUnavailable ? 'UNAVAILABLE' : currentPending ? 'LOADING' : row.operatingState}
+                            >
+                              <td>{row.device.displayName} {row.device.code}</td>
+                              <td>{equipmentBindingLabel(row.binding)}</td>
+                              <td>{currentUnavailable ? '状态不可用' : currentPending ? '读取中' : OPERATING_LABELS[row.operatingState]}</td>
+                              <td>{row.registeredPointCount} 个点位</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <Table<RealAssetsDeviceRow>
+                        rowKey={(row) => row.device.id}
+                        size="middle"
+                        columns={assetColumns}
+                        dataSource={filteredRows}
+                        pagination={{ pageSize: 8, showSizeChanger: false }}
+                        scroll={{ x: compactTable ? 820 : 1240 }}
+                        locale={{
+                          emptyText: (
+                            <Empty
+                              image={Empty.PRESENTED_IMAGE_SIMPLE}
+                              description={listMode === 'attention' && !currentPending && !currentUnavailable && rows.every((row) => row.operatingState === 'NORMAL')
+                                ? '当前筛选范围内所有通讯端点均为正常。切换到“全部资产”可查看完整列表。'
+                                : '当前筛选条件没有匹配的通讯端点。'}
+                            />
+                          ),
+                        }}
+                        onRow={(row) => ({
+                          'data-device-id': row.device.id,
+                          'data-operating-state': currentUnavailable ? 'UNAVAILABLE' : currentPending ? 'LOADING' : row.operatingState,
+                        } as HTMLAttributes<HTMLTableRowElement>)}
+                      />
+                    </>
+                  )}
                 </div>
               </Space>
             </Card>

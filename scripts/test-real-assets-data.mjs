@@ -210,7 +210,7 @@ test('Current-state loader splits 200 Devices into two exact bounded batches', a
     },
   };
   const result = await loadRealAssetsCurrentState({
-    client, devices, organizationId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal,
+    client, devices, telemetryPoints: [], organizationId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal,
   });
   assert.equal(result.requestCount, 2);
   assert.equal(result.byDeviceId.size, 200);
@@ -220,7 +220,47 @@ test('Current-state loader splits 200 Devices into two exact bounded batches', a
     && options.signal === signal
     && options.csrfToken === csrfCapability));
   assert.equal(calls[0].request.requests[0].keys.length, 0);
-  assert.equal(calls[0].request.requests[1].keys.length, 4);
+  assert.equal(calls[0].request.requests[1].keys.length, 0);
+});
+
+test('Current-state loader selects every registered Telemetry Point key for each Device Endpoint', async () => {
+  const devices = [device(1), device(2)];
+  const telemetryPoints = [
+    point(measuredPointId, 'MEASURED', { reportingDeviceId: devices[0].id, pointKey: 'chiller.power' }),
+    point(calculatedPointId, 'CALCULATED', { reportingDeviceId: devices[0].id, pointKey: 'chiller.cop' }),
+    point(id(7, 3), 'MEASURED', { reportingDeviceId: devices[1].id, pointKey: 'weather.relative_humidity' }),
+  ];
+  let capturedRequest;
+  const client = {
+    batchGetDeviceObservationSnapshots: async (request) => {
+      capturedRequest = request;
+      return {
+        schemaVersion: 1,
+        items: request.requests.map((target) => ({
+          requestId: target.requestId,
+          deviceId: target.deviceId,
+          status: 'OK',
+          snapshot: snapshot(target),
+        })),
+      };
+    },
+  };
+
+  await loadRealAssetsCurrentState({
+    client,
+    devices,
+    telemetryPoints,
+    organizationId,
+    siteId,
+    csrfToken: csrfCapability,
+    currentRoutePolicyRevision: () => '12',
+    signal: new AbortController().signal,
+  });
+
+  assert.deepEqual(capturedRequest.requests.map((target) => target.keys), [
+    ['chiller.cop', 'chiller.power'],
+    ['weather.relative_humidity'],
+  ]);
 });
 
 test('Current-state loader preserves per-item failures but rejects response order or scope drift', async () => {
@@ -240,7 +280,7 @@ test('Current-state loader preserves per-item failures but rejects response orde
     }),
   };
   const partial = await loadRealAssetsCurrentState({
-    client: partialClient, devices, organizationId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
+    client: partialClient, devices, telemetryPoints: [], organizationId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
   });
   assert.equal(partial.partial, true);
   assert.equal(partial.byDeviceId.get(devices[0].id).status, 'error');
@@ -256,7 +296,7 @@ test('Current-state loader preserves per-item failures but rejects response orde
   };
   await assert.rejects(
     loadRealAssetsCurrentState({
-      client: driftClient, devices, organizationId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
+      client: driftClient, devices, telemetryPoints: [], organizationId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
     }),
     /scope or selected-key order drifted/,
   );
@@ -272,7 +312,7 @@ test('Current-state loader preserves per-item failures but rejects response orde
   };
   await assert.rejects(
     loadRealAssetsCurrentState({
-      client: displayDriftClient, devices, organizationId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
+      client: displayDriftClient, devices, telemetryPoints: [], organizationId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
     }),
     /display-state evidence drifted/,
   );
@@ -301,6 +341,7 @@ test('Current-state loader rejects route-policy revision drift across bounded ba
     loadRealAssetsCurrentState({
       client,
       devices,
+      telemetryPoints: [],
       organizationId,
       siteId,
       csrfToken: csrfCapability,
@@ -336,13 +377,15 @@ test('S2 runtime retains route-policy evidence and publishes material changes on
   assert.deepEqual(changes, [['12', '13']]);
 });
 
-test('current-state query keys isolate generation, Site, policy epoch and catalog-selected keys', () => {
+test('current-state query keys isolate generation, Site, policy epoch and exact registered Point selection', () => {
   const devices = [device(1), device(2)];
-  const base = realAssetsCurrentStateQueryKey(4, organizationId, siteId, devices, 0);
-  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(5, organizationId, siteId, devices, 0));
-  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, organizationId, id(1, 99), devices, 0));
-  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, organizationId, siteId, devices, 1));
-  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, organizationId, siteId, [device(1, { revision: 99 }), device(2)], 0));
+  const points = [point(measuredPointId, 'MEASURED', { reportingDeviceId: devices[0].id, pointKey: 'chiller.power' })];
+  const base = realAssetsCurrentStateQueryKey(4, organizationId, siteId, devices, points, 0);
+  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(5, organizationId, siteId, devices, points, 0));
+  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, organizationId, id(1, 99), devices, points, 0));
+  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, organizationId, siteId, devices, points, 1));
+  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, organizationId, siteId, [device(1, { revision: 99 }), device(2)], points, 0));
+  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, organizationId, siteId, devices, [{ ...points[0], revision: 99 }], 0));
 });
 
 test('protected request returns only through the active Site generation commit guard', async () => {

@@ -6,6 +6,7 @@ import {
 } from '../apps/hvac-web/src/real/assets/catalog.ts';
 import {
   buildRealAssetsHierarchy,
+  buildRealAssetsPointRows,
   buildRealAssetsRows,
   projectRealAssetsOperatingState,
   resolveDeviceBinding,
@@ -345,11 +346,59 @@ test('hierarchy projects Area to Equipment to Device Endpoint to Sensor to Telem
   assert.equal(hierarchy.kind, 'site');
   assert.equal(areaNode.kind, 'area');
   assert.equal(equipmentNode.kind, 'equipment');
+  assert.equal(equipmentNode.label, '冷水机组');
+  assert.equal(equipmentNode.meta, '设备 · ALPHA-CHILLER');
   assert.equal(deviceNode.kind, 'device');
+  assert.equal(deviceNode.label, '通讯端点');
+  assert.match(deviceNode.meta, /Chiller 01/);
   assert.equal(sensorNode.children[0].kind, 'point');
-  assert.equal(sensorNode.children[0].label, 'Temperature');
-  assert.equal(virtualSensorNode.children[0].label, 'Delta T');
+  assert.equal(sensorNode.children[0].label, '温度');
+  assert.equal(sensorNode.children[0].meta, '实测 · °C');
+  assert.equal(virtualSensorNode.children[0].label, '温差');
   assert.deepEqual(areaNode.deviceIds, [endpoint.id]);
+});
+
+test('point ledger projects every registered Telemetry Point as an independent row', () => {
+  const plantArea = area();
+  const equipmentA = equipment(equipmentAId, 'Alpha Chiller');
+  const endpoint = device();
+  const measurementSensor = sensor();
+  const points = [
+    telemetryPoint('01900000-0007-7000-8000-000000000010', endpoint.id, measurementSensor.id, 'MEASURED'),
+    telemetryPoint('01900000-0007-7000-8000-000000000011', endpoint.id, null, 'MEASURED'),
+    telemetryPoint('01900000-0007-7000-8000-000000000012', endpoint.id, null, 'CALCULATED'),
+    telemetryPoint('01900000-0007-7000-8000-000000000013', endpoint.id, null, 'STATE'),
+  ].map((point, index) => ({
+    ...point,
+    pointKey: ['chiller.power', 'chiller.cooling_capacity', 'chiller.cop', 'chiller.run_state'][index],
+    displayName: ['chiller power', 'chiller cooling capacity', 'chiller cop', 'chiller run state'][index],
+    unit: index === 3 ? null : index === 2 ? null : 'kW',
+  }));
+  const model = siteAssetModel({
+    areas: [plantArea],
+    equipment: [equipmentA],
+    devices: [endpoint],
+    sensors: [measurementSensor],
+    telemetryPoints: points,
+    relationships: [
+      relationship('01900000-0004-7000-8000-000000000040', 'EQUIPMENT', equipmentA.id, 'AREA', plantArea.id),
+      relationship('01900000-0004-7000-8000-000000000041', 'DEVICE', endpoint.id, 'EQUIPMENT', equipmentA.id),
+      relationship('01900000-0004-7000-8000-000000000042', 'SENSOR', measurementSensor.id, 'DEVICE', endpoint.id),
+    ],
+  });
+  const currentValues = points.map((point, index) => present(point.pointKey, index + 1, { unit: point.unit }));
+  const rows = buildRealAssetsRows({
+    assetModel: model,
+    snapshots: new Map([[endpoint.id, { status: 'ok', snapshot: snapshot(currentValues) }]]),
+    now,
+  });
+  const pointRows = buildRealAssetsPointRows({ assetModel: model, deviceRows: rows });
+
+  assert.equal(pointRows.length, 4);
+  assert.deepEqual(pointRows.map((row) => row.label), ['运行状态', '制冷量', '主机 COP', '主机功率']);
+  assert.deepEqual(pointRows.map((row) => row.point.id).sort(), points.map((point) => point.id).sort());
+  assert.ok(pointRows.every((row) => row.device.id === endpoint.id));
+  assert.equal(pointRows.find((row) => row.point.pointKey === 'chiller.power').current?.displayValue, '1');
 });
 
 test('hierarchy projects one Device Endpoint under every active Equipment binding with unique tree keys', () => {

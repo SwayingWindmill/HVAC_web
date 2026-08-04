@@ -3,15 +3,20 @@ import type {
   AssetRelationship,
   Device,
   Equipment,
+  Sensor,
   SiteAssetModel,
   TelemetryPoint,
 } from '../../api/generated/platformGateway.gen.ts';
 import type { DeviceObservationSnapshot, ProblemDetails, TelemetryKeyState } from '../../api/generated/s2Telemetry.gen.ts';
-import { formatTelemetryDisplayValue, formatTelemetryUnit } from '../../domain/centralPlantTelemetry.ts';
+import {
+  formatTelemetryDisplayValue,
+  formatTelemetryUnit,
+  getDeviceTelemetryProfile,
+  telemetryPointDefinition,
+} from '../../domain/centralPlantTelemetry.ts';
 import {
   listPointDefinitions,
   resolveRealAssetsProfile,
-  type RealAssetsPointDefinition,
   type RealAssetsProfileResolution,
 } from './catalog.ts';
 
@@ -85,7 +90,23 @@ export interface RealAssetsHierarchyNode {
   readonly label: string;
   readonly meta: string;
   readonly deviceIds: readonly string[];
+  readonly pointIds: readonly string[];
   readonly children: readonly RealAssetsHierarchyNode[];
+}
+
+export interface RealAssetsTelemetryPointRow {
+  readonly point: TelemetryPoint;
+  readonly device: Device;
+  readonly sensor: Sensor | null;
+  readonly binding: RealAssetsBindingState;
+  readonly area: RealAssetsAreaState;
+  readonly label: string;
+  readonly current: RealAssetsPointView | null;
+}
+
+export interface BuildRealAssetsPointRowsInput {
+  readonly assetModel: SiteAssetModel;
+  readonly deviceRows: readonly RealAssetsDeviceRow[];
 }
 
 function compareText(left: string, right: string): number {
@@ -103,6 +124,92 @@ function compareRegistryIdentity(left: RegistryIdentity, right: RegistryIdentity
   return compareText(left.displayName, right.displayName)
     || compareText(left.code ?? left.pointKey ?? '', right.code ?? right.pointKey ?? '')
     || left.id.localeCompare(right.id);
+}
+
+const AREA_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  BUILDING: '建筑',
+  PLANT_ROOM: '机房',
+  ROOFTOP: '屋面',
+  OUTDOOR: '室外',
+});
+
+const EQUIPMENT_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  CHILLER: '冷水机组',
+  CHILLED_WATER_PUMP: '冷冻水泵',
+  COOLING_WATER_PUMP: '冷却水泵',
+  COOLING_TOWER: '冷却塔',
+  HVAC_POWER_METER: '中央空调总电表',
+  BTU_METER: '中央空调总冷量表',
+  WEATHER_STATION: '室外气象站',
+});
+
+const DEVICE_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  CHILLER: '冷水机组控制器',
+  WATER_COOLED_CHILLER: '冷水机组控制器',
+  CHILLER_CONTROLLER: '冷水机组控制器',
+  CHILLED_WATER_PUMP: '冷冻水泵控制器',
+  COOLING_WATER_PUMP: '冷却水泵控制器',
+  PUMP_CONTROLLER: '水泵控制器',
+  COOLING_TOWER: '冷却塔控制器',
+  COOLING_TOWER_CONTROLLER: '冷却塔控制器',
+  HVAC_POWER_METER: '电表通信端点',
+  POWER_METER: '电表通信端点',
+  BTU_METER: '冷量表通信端点',
+  WEATHER_STATION: '气象站通信端点',
+});
+
+const SENSOR_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  TEMPERATURE: '温度',
+  POWER: '功率',
+  FLOW: '流量',
+  ELECTRICAL_METER: '电能计量',
+  THERMAL_METER: '冷量计量',
+  WEATHER: '气象',
+});
+
+const POINT_KIND_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  MEASURED: '实测',
+  CALCULATED: '计算',
+  STATE: '状态',
+  FEEDBACK: '反馈',
+});
+
+function normalizedType(value: string): string {
+  return value.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function localizedType(value: string, labels: Readonly<Record<string, string>>, fallback: string): string {
+  return labels[normalizedType(value)] ?? fallback;
+}
+
+export function realAssetsAreaTypeLabel(value: string): string {
+  return localizedType(value, AREA_TYPE_LABELS, '区域');
+}
+
+export function realAssetsEquipmentTypeLabel(value: string): string {
+  return localizedType(value, EQUIPMENT_TYPE_LABELS, getDeviceTelemetryProfile(value).title);
+}
+
+export function realAssetsDeviceTypeLabel(value: string): string {
+  return localizedType(value, DEVICE_TYPE_LABELS, '通信设备');
+}
+
+export function realAssetsSensorTypeLabel(value: string): string {
+  return localizedType(value, SENSOR_TYPE_LABELS, '传感器');
+}
+
+export function realAssetsPointKindLabel(value: string): string {
+  return localizedType(value, POINT_KIND_LABELS, '点位');
+}
+
+export function realAssetsTelemetryPointLabel(point: TelemetryPoint): string {
+  const definition = telemetryPointDefinition(point.pointKey);
+  return definition.label === point.pointKey ? point.displayName : definition.label;
+}
+
+export function realAssetsTelemetryPointMeta(point: TelemetryPoint): string {
+  const unit = formatTelemetryUnit(point.unit);
+  return unit ? `${realAssetsPointKindLabel(point.pointKind)} · ${unit}` : realAssetsPointKindLabel(point.pointKind);
 }
 
 function isCurrentRelationship(relationship: AssetRelationship, now: Date): boolean {
@@ -175,7 +282,14 @@ export function resolveDeviceArea(
   return { state: 'bound', relationship, area };
 }
 
-function pointView(definition: RealAssetsPointDefinition, state: TelemetryKeyState | undefined): RealAssetsPointView {
+interface PointDisplayDefinition {
+  readonly key: string;
+  readonly label: string;
+  readonly defaultUnit?: string;
+  readonly precision?: number;
+}
+
+function pointView(definition: PointDisplayDefinition, state: TelemetryKeyState | undefined): RealAssetsPointView {
   if (!state || state.state === 'MISSING') {
     return {
       key: definition.key,
@@ -302,6 +416,39 @@ export function buildRealAssetsRows(input: BuildRealAssetsRowsInput): RealAssets
   });
 }
 
+export function buildRealAssetsPointRows(input: BuildRealAssetsPointRowsInput): RealAssetsTelemetryPointRow[] {
+  const deviceRowById = new Map(input.deviceRows.map((row) => [row.device.id, row]));
+  const deviceOrder = new Map(input.deviceRows.map((row, index) => [row.device.id, index]));
+  const sensorById = new Map(input.assetModel.sensors.map((sensor) => [sensor.id, sensor]));
+  const rows = input.assetModel.telemetryPoints.map((point): RealAssetsTelemetryPointRow => {
+    const deviceRow = deviceRowById.get(point.reportingDeviceId);
+    if (!deviceRow) throw new Error(`Telemetry Point ${point.id} has no visible Device Endpoint row`);
+    const definition = telemetryPointDefinition(point.pointKey);
+    const snapshot = deviceRow.snapshotResult?.status === 'ok' ? deviceRow.snapshotResult.snapshot : null;
+    const currentState = snapshot?.values.find((value) => value.key === point.pointKey);
+    return {
+      point,
+      device: deviceRow.device,
+      sensor: point.sensorId ? sensorById.get(point.sensorId) ?? null : null,
+      binding: deviceRow.binding,
+      area: deviceRow.area,
+      label: realAssetsTelemetryPointLabel(point),
+      current: snapshot ? pointView({
+        key: point.pointKey,
+        label: realAssetsTelemetryPointLabel(point),
+        defaultUnit: point.unit ?? definition.defaultUnit,
+        precision: definition.precision,
+      }, currentState) : null,
+    };
+  });
+  return rows.sort((left, right) => (
+    (deviceOrder.get(left.device.id) ?? Number.MAX_SAFE_INTEGER) - (deviceOrder.get(right.device.id) ?? Number.MAX_SAFE_INTEGER)
+    || compareText(left.label, right.label)
+    || compareText(left.point.pointKey, right.point.pointKey)
+    || left.point.id.localeCompare(right.point.id)
+  ));
+}
+
 function oneCurrentTargetId(
   relationships: readonly AssetRelationship[],
   fromType: AssetRelationship['fromType'],
@@ -330,8 +477,17 @@ function hierarchyNode(
   meta: string,
   deviceIds: readonly string[],
   children: readonly RealAssetsHierarchyNode[] = [],
+  pointIds: readonly string[] = [],
 ): RealAssetsHierarchyNode {
-  return { key: `${kind}:${id}`, kind, label, meta, deviceIds: [...new Set(deviceIds)], children };
+  return {
+    key: `${kind}:${id}`,
+    kind,
+    label,
+    meta,
+    deviceIds: [...new Set(deviceIds)],
+    pointIds: [...new Set([...pointIds, ...children.flatMap((child) => child.pointIds)])],
+    children,
+  };
 }
 
 export function buildRealAssetsHierarchy(model: SiteAssetModel, siteLabel: string, now = new Date()): RealAssetsHierarchyNode {
@@ -374,10 +530,16 @@ export function buildRealAssetsHierarchy(model: SiteAssetModel, siteLabel: strin
         'sensor',
         `${branchKey}:${sensor.id}`,
         sensor.displayName,
-        sensor.sensorType,
+        `传感器 · ${realAssetsSensorTypeLabel(sensor.sensorType)}`,
         [device.id],
         (pointsBySensor.get(sensor.id) ?? []).sort(compareRegistryIdentity).map((point) => hierarchyNode(
-          'point', `${branchKey}:${sensor.id}:${point.id}`, point.displayName, `${point.pointKind} · ${point.unit ?? point.valueType}`, [device.id],
+          'point',
+          `${branchKey}:${sensor.id}:${point.id}`,
+          realAssetsTelemetryPointLabel(point),
+          realAssetsTelemetryPointMeta(point),
+          [device.id],
+          [],
+          [point.id],
         )),
       ));
     const directPoints = (directPointsByDevice.get(device.id) ?? []).sort(compareRegistryIdentity);
@@ -385,15 +547,28 @@ export function buildRealAssetsHierarchy(model: SiteAssetModel, siteLabel: strin
       ? [...sensors, hierarchyNode(
         'virtual-sensor',
         branchKey,
-        'Device Endpoint 内建与计算点',
-        '非 Sensor 输出',
+        '设备直连点位',
+        '状态、反馈与计算点',
         [device.id],
         directPoints.map((point) => hierarchyNode(
-          'point', `${branchKey}:direct:${point.id}`, point.displayName, `${point.pointKind} · ${point.unit ?? point.valueType}`, [device.id],
+          'point',
+          `${branchKey}:direct:${point.id}`,
+          realAssetsTelemetryPointLabel(point),
+          realAssetsTelemetryPointMeta(point),
+          [device.id],
+          [],
+          [point.id],
         )),
       )]
       : sensors;
-    return hierarchyNode('device', branchKey, device.displayName, device.deviceType, [device.id], children);
+    return hierarchyNode(
+      'device',
+      branchKey,
+      '通讯端点',
+      `${device.displayName} · ${realAssetsDeviceTypeLabel(device.deviceType)}`,
+      [device.id],
+      children,
+    );
   };
 
   const equipmentNode = (equipment: Equipment): RealAssetsHierarchyNode => {
@@ -401,7 +576,14 @@ export function buildRealAssetsHierarchy(model: SiteAssetModel, siteLabel: strin
       .filter((device) => deviceEquipment.get(device.id)?.includes(equipment.id))
       .sort(compareRegistryIdentity)
       .map((device) => deviceNode(device, `equipment:${equipment.id}`));
-    return hierarchyNode('equipment', equipment.id, equipment.displayName, equipment.equipmentType, devices.flatMap((node) => node.deviceIds), devices);
+    return hierarchyNode(
+      'equipment',
+      equipment.id,
+      realAssetsEquipmentTypeLabel(equipment.equipmentType),
+      `设备 · ${equipment.code || equipment.displayName}`,
+      devices.flatMap((node) => node.deviceIds),
+      devices,
+    );
   };
 
   const areaChildren = new Map<string | null, Area[]>();
@@ -421,10 +603,17 @@ export function buildRealAssetsHierarchy(model: SiteAssetModel, siteLabel: strin
       .sort(compareRegistryIdentity)
       .map((device) => deviceNode(device, `area:${area.id}`));
     const directDeviceGroup = directDevices.length > 0
-      ? [hierarchyNode('equipment', `unbound:${area.id}`, '未绑定 Equipment', '关系待治理', directDevices.flatMap((node) => node.deviceIds), directDevices)]
+      ? [hierarchyNode('equipment', `unbound:${area.id}`, '未绑定设备', '关系待治理', directDevices.flatMap((node) => node.deviceIds), directDevices)]
       : [];
     const children = [...nestedAreas, ...equipment, ...directDeviceGroup];
-    return hierarchyNode('area', area.id, area.displayName, area.areaType, children.flatMap((node) => node.deviceIds), children);
+    return hierarchyNode(
+      'area',
+      area.id,
+      area.displayName,
+      `区域 · ${realAssetsAreaTypeLabel(area.areaType)}`,
+      children.flatMap((node) => node.deviceIds),
+      children,
+    );
   };
 
   const roots = (areaChildren.get(null) ?? []).sort(compareRegistryIdentity).map(areaNode);
@@ -436,13 +625,13 @@ export function buildRealAssetsHierarchy(model: SiteAssetModel, siteLabel: strin
   const orphanChildren = [
     ...unassignedEquipment,
     ...(unassignedDevices.length > 0
-      ? [hierarchyNode('equipment', 'unbound:site', '未绑定 Equipment', '关系待治理', unassignedDevices.flatMap((node) => node.deviceIds), unassignedDevices)]
+      ? [hierarchyNode('equipment', 'unbound:site', '未绑定设备', '关系待治理', unassignedDevices.flatMap((node) => node.deviceIds), unassignedDevices)]
       : []),
   ];
   const children = orphanChildren.length > 0
-    ? [...roots, hierarchyNode('area', 'unbound:site', '未绑定 Area', '关系待治理', orphanChildren.flatMap((node) => node.deviceIds), orphanChildren)]
+    ? [...roots, hierarchyNode('area', 'unbound:site', '未分配区域', '关系待治理', orphanChildren.flatMap((node) => node.deviceIds), orphanChildren)]
     : roots;
-  return hierarchyNode('site', model.siteId, siteLabel, 'Site Asset Model', model.devices.map((device) => device.id), children);
+  return hierarchyNode('site', model.siteId, siteLabel, '站点资产', model.devices.map((device) => device.id), children);
 }
 
 export function isRealAssetsAttentionState(state: RealAssetsOperatingState): boolean {

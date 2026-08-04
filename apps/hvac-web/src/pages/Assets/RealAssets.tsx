@@ -43,6 +43,7 @@ import {
 } from '@/api/registry';
 import type { Device, Equipment } from '@/api/generated/platformGateway.gen';
 import { buildRealAssetsHierarchy, type RealAssetsHierarchyNode } from '@/real/assets/model';
+import '@/real/assets/real-assets.css';
 import {
   purgeTelemetryCurrentState,
   useDeviceTelemetryLive,
@@ -95,10 +96,20 @@ const hierarchyIcon = (kind: RealAssetsHierarchyNode['kind']) => {
 
 const hierarchyDataNode = (node: RealAssetsHierarchyNode): DataNode => ({
   key: node.key,
-  title: <span data-asset-kind={node.kind}>{node.label} · {node.meta}</span>,
+  title: (
+    <span className="real-assets-tree-node" data-asset-kind={node.kind} title={`${node.label}｜${node.meta}`}>
+      <span className="real-assets-tree-node__label">{node.label}</span>
+      <span className="real-assets-tree-node__meta">{node.meta}</span>
+    </span>
+  ),
   icon: hierarchyIcon(node.kind),
   children: node.children.map(hierarchyDataNode),
 });
+
+const defaultExpandedTreeKeys = (nodes: readonly DataNode[]): Key[] => nodes.flatMap((node) => [
+  ...(String(node.key).startsWith('site:') || String(node.key).startsWith('area:') ? [node.key] : []),
+  ...defaultExpandedTreeKeys(node.children ?? []),
+]);
 
 export interface RealAssetsProps {
   telemetryRuntime?: TelemetryCurrentRuntime;
@@ -440,7 +451,7 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
                 ) : treeData.length === 0 ? (
                   <RegistryEmptyState description="当前 Site 暂无 Registry 资源。" />
                 ) : (
-                  <Tree showIcon defaultExpandAll treeData={treeData} onSelect={selectTreeNode} />
+                  <Tree showIcon showLine={{ showLeafIcon: false }} defaultExpandedKeys={defaultExpandedTreeKeys(treeData)} treeData={treeData} onSelect={selectTreeNode} />
                 )}
                 <RegistryLoadMore
                   hasMore={Boolean(organizationsQuery.hasNextPage)}

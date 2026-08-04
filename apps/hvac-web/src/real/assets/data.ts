@@ -2,6 +2,7 @@ import type {
   Device,
   PlatformGatewayClient,
   SiteAssetModel,
+  TelemetryPoint,
 } from '../../api/generated/platformGateway.gen.ts';
 import type {
   BatchObservationFailure,
@@ -9,7 +10,7 @@ import type {
   S2TelemetryClient,
 } from '../../api/generated/s2Telemetry.gen.ts';
 import { parseSnapshot } from '../../platform/telemetry-live/contract.ts';
-import { REAL_ASSETS_CATALOG_REVISION, listTelemetryKeys, resolveRealAssetsProfile } from './catalog.ts';
+import { REAL_ASSETS_CATALOG_REVISION } from './catalog.ts';
 import type { RealAssetsSnapshotResult } from './model.ts';
 
 const MAX_BATCH_DEVICES = 100;
@@ -34,6 +35,7 @@ export interface LoadRealAssetsRegistryInput {
 export interface LoadRealAssetsCurrentStateInput {
   readonly client: S2TelemetryClient;
   readonly devices: readonly Device[];
+  readonly telemetryPoints: readonly TelemetryPoint[];
   readonly organizationId: string;
   readonly siteId: string;
   readonly csrfToken: string;
@@ -134,8 +136,27 @@ export async function loadRealAssetsRegistry(input: LoadRealAssetsRegistryInput)
   return { assetModel: response.data, routePolicyRevision: response.routePolicyRevision };
 }
 
-function requestedKeys(device: Device): string[] {
-  return [...listTelemetryKeys(resolveRealAssetsProfile(device.deviceType))];
+function pointKeysByDevice(
+  devices: readonly Device[],
+  telemetryPoints: readonly TelemetryPoint[],
+): ReadonlyMap<string, readonly string[]> {
+  const visibleDeviceIds = new Set(devices.map((device) => device.id));
+  const keysByDevice = new Map<string, string[]>();
+  for (const point of telemetryPoints) {
+    if (!visibleDeviceIds.has(point.reportingDeviceId)) {
+      throw new Error('Current-state Telemetry Point selection referenced an invisible Device Endpoint');
+    }
+    const keys = keysByDevice.get(point.reportingDeviceId) ?? [];
+    if (keys.includes(point.pointKey)) {
+      throw new Error(`Current-state Telemetry Point selection duplicated ${point.pointKey} for ${point.reportingDeviceId}`);
+    }
+    keys.push(point.pointKey);
+    keysByDevice.set(point.reportingDeviceId, keys);
+  }
+  return new Map(devices.map((device) => [
+    device.id,
+    Object.freeze([...(keysByDevice.get(device.id) ?? [])].sort((left, right) => left.localeCompare(right))),
+  ]));
 }
 
 function expectedDisplayState(snapshot: DeviceObservationSnapshot): DeviceObservationSnapshot['displayState'] {
@@ -162,33 +183,52 @@ function validateSnapshot(snapshot: DeviceObservationSnapshot, device: Device, k
   return parsed;
 }
 
-function chunkDevices(devices: readonly Device[]): Device[][] {
-  const chunks: Device[][] = [];
-  for (let index = 0; index < devices.length; index += MAX_BATCH_DEVICES) {
-    chunks.push(devices.slice(index, index + MAX_BATCH_DEVICES));
+interface CurrentStateSelection {
+  readonly device: Device;
+  readonly keys: readonly string[];
+}
+
+function chunkSelections(selections: readonly CurrentStateSelection[]): CurrentStateSelection[][] {
+  const chunks: CurrentStateSelection[][] = [];
+  let current: CurrentStateSelection[] = [];
+  let keyCount = 0;
+  for (const selection of selections) {
+    if (selection.keys.length > MAX_BATCH_KEY_SELECTIONS) {
+      throw new Error(`Current-state Device ${selection.device.id} exceeded the key selection limit`);
+    }
+    if (current.length > 0
+      && (current.length >= MAX_BATCH_DEVICES || keyCount + selection.keys.length > MAX_BATCH_KEY_SELECTIONS)) {
+      chunks.push(current);
+      current = [];
+      keyCount = 0;
+    }
+    current.push(selection);
+    keyCount += selection.keys.length;
   }
+  if (current.length > 0) chunks.push(current);
   return chunks;
 }
 
 export async function loadRealAssetsCurrentState(input: LoadRealAssetsCurrentStateInput): Promise<RealAssetsCurrentStateData> {
   validateRegistryScope(input.devices, input.organizationId, input.siteId, 'Current-state Device selection');
+  validateRegistryScope(input.telemetryPoints, input.organizationId, input.siteId, 'Current-state Telemetry Point selection');
   if (!input.csrfToken) throw new Error('Current-state batch requires the authenticated Session CSRF capability');
   const byDeviceId = new Map<string, RealAssetsSnapshotResult>();
-  const chunks = chunkDevices(input.devices);
+  const keysByDevice = pointKeysByDevice(input.devices, input.telemetryPoints);
+  const chunks = chunkSelections(input.devices.map((device) => ({
+    device,
+    keys: keysByDevice.get(device.id) ?? [],
+  })));
   let routePolicyRevision: string | null | undefined;
 
   for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
-    const chunk = chunks[chunkIndex];
-    const expected = chunk.map((device, index) => ({
-      device,
-      requestId: `assets-${chunkIndex}-${index}-${device.id}`,
-      keys: requestedKeys(device),
+    const expected = chunks[chunkIndex].map((selection, index) => ({
+      ...selection,
+      requestId: `assets-${chunkIndex}-${index}-${selection.device.id}`,
     }));
-    const selectionCount = expected.reduce((total, item) => total + item.keys.length, 0);
-    if (selectionCount > MAX_BATCH_KEY_SELECTIONS) throw new Error('Current-state batch exceeded the total key selection limit');
 
     const response = await input.client.batchGetDeviceObservationSnapshots({
-      requests: expected.map((item) => ({ requestId: item.requestId, deviceId: item.device.id, keys: item.keys })),
+      requests: expected.map((item) => ({ requestId: item.requestId, deviceId: item.device.id, keys: [...item.keys] })),
     }, {
       csrfToken: input.csrfToken,
       signal: input.signal,
@@ -238,8 +278,10 @@ export function realAssetsCurrentStateQueryKey(
   organizationId: string,
   siteId: string,
   devices: readonly Device[],
+  telemetryPoints: readonly TelemetryPoint[],
   routePolicyEpoch = 0,
 ): readonly unknown[] {
+  const keysByDevice = pointKeysByDevice(devices, telemetryPoints);
   return [
     'real-assets',
     generation,
@@ -248,6 +290,7 @@ export function realAssetsCurrentStateQueryKey(
     'current-state',
     REAL_ASSETS_CATALOG_REVISION,
     routePolicyEpoch,
-    devices.map((device) => `${device.id}:${device.revision}:${requestedKeys(device).join(',')}`).join('|'),
+    devices.map((device) => `${device.id}:${device.revision}:${(keysByDevice.get(device.id) ?? []).join(',')}`).join('|'),
+    telemetryPoints.map((point) => `${point.id}:${point.revision}:${point.reportingDeviceId}:${point.pointKey}`).sort().join('|'),
   ] as const;
 }
