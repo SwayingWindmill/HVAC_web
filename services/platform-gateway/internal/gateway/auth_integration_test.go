@@ -94,9 +94,25 @@ func TestAuthenticatedPrincipalLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	logoutResponse.Body.Close()
+	defer logoutResponse.Body.Close()
 	if logoutResponse.StatusCode != http.StatusNoContent {
 		t.Fatalf("logout status = %d", logoutResponse.StatusCode)
+	}
+	providerLogoutURL, err := url.Parse(logoutResponse.Header.Get("Location"))
+	if err != nil || providerLogoutURL.Scheme == "" || providerLogoutURL.Host == "" {
+		t.Fatalf("logout did not return a valid provider redirect: %q (%v)", logoutResponse.Header.Get("Location"), err)
+	}
+	if providerLogoutURL.Scheme+"://"+providerLogoutURL.Host != harness.oidcServer.URL || providerLogoutURL.Path != "/session/end" {
+		t.Fatalf("logout provider endpoint = %s", providerLogoutURL)
+	}
+	if providerLogoutURL.Query().Get("client_id") != "hvac-web-s0" {
+		t.Fatalf("logout client_id = %q", providerLogoutURL.Query().Get("client_id"))
+	}
+	if providerLogoutURL.Query().Get("post_logout_redirect_uri") != harness.gatewayURL+"/?logged_out=1" {
+		t.Fatalf("logout post_logout_redirect_uri = %q", providerLogoutURL.Query().Get("post_logout_redirect_uri"))
+	}
+	if providerLogoutURL.Query().Has("id_token_hint") || strings.Contains(providerLogoutURL.RawQuery, "token") {
+		t.Fatalf("logout URL leaked token material: %s", providerLogoutURL)
 	}
 
 	afterLogout, err := client.Get(harness.gatewayURL + platformapi.GetCurrentPrincipalPath)

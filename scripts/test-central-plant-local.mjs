@@ -147,6 +147,9 @@ test('central plant smoke verifies the atomic Asset Model and exact Real UI coun
     'auditLogtoExperience',
     'hasRegistrationAction',
     'hasApprovalNotice',
+    'provider-backed logged-out landing',
+    'fresh Logto credentials after logout',
+    "params.get('logged_out') !== '1'",
     'submitLogtoSignIn',
     'topology.logto',
     'authority.assetModel.counts',
@@ -168,6 +171,7 @@ test('Logto provisioning enables branded registration without granting platform 
     "fallbackLanguage: 'zh-CN'",
     '管理员审核后分配组织与站点权限',
     'unknownSessionRedirectUrl: loginURL',
+    'postLogoutRedirectUris: [webURL, `${webURL}/?logged_out=1`]',
   ]) assert.ok(logtoProvisioner.includes(marker), `Logto provisioner is missing ${marker}`);
   assert.ok(!logtoProvisioner.includes("roles: ['operator']"));
   assert.ok(!logtoProvisioner.includes('automatic platform authorization'));

@@ -75,6 +75,7 @@ type oidcDiscovery struct {
 	AuthorizationEndpoint string `json:"authorization_endpoint"`
 	TokenEndpoint         string `json:"token_endpoint"`
 	JWKSURI               string `json:"jwks_uri"`
+	EndSessionEndpoint    string `json:"end_session_endpoint"`
 }
 
 type oidcTokenResponse struct {
@@ -299,12 +300,18 @@ func (h *handler) Logout(writer http.ResponseWriter, request *http.Request, para
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
+	providerLogoutURL, failure := h.identity.providerLogoutURL(request.Context())
+	if failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
 	revoked, err := h.identity.store.RevokeSession(request.Context(), session.ID, h.identity.mutationContext(request, "SESSION_LOGGED_OUT"))
 	if err != nil {
 		h.identity.writeSessionMutationError(writer, request, err)
 		return
 	}
 	writer.Header().Set("X-Audit-Message-ID", revoked.LastAuditMessageID)
+	writer.Header().Set("Location", providerLogoutURL)
 	http.SetCookie(writer, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0)})
 	writer.WriteHeader(http.StatusNoContent)
 }
@@ -409,6 +416,27 @@ func (controller *identityController) discover(ctx context.Context) (oidcDiscove
 		return oidcDiscovery{}, &failure
 	}
 	return discovery, nil
+}
+
+func (controller *identityController) providerLogoutURL(ctx context.Context) (string, *identityFailure) {
+	discovery, failure := controller.discover(ctx)
+	if failure != nil {
+		return "", failure
+	}
+	if discovery.EndSessionEndpoint == "" {
+		failure := identityFailure{503, "OIDC_DISCOVERY_INVALID", "OIDC logout unavailable", "The identity provider discovery document does not publish an end-session endpoint.", true}
+		return "", &failure
+	}
+	postLogoutRedirectURI := strings.TrimRight(controller.config.PublicOrigin, "/") + "/?logged_out=1"
+	logoutURL, err := controller.protocol.SignOutURL(discovery, oidcSignOutRequest{
+		ClientID:              controller.config.OIDCClientID,
+		PostLogoutRedirectURI: postLogoutRedirectURI,
+	})
+	if err != nil {
+		failure := identityFailure{503, "OIDC_DISCOVERY_INVALID", "OIDC logout unavailable", "The Gateway could not construct the identity provider logout request.", true}
+		return "", &failure
+	}
+	return logoutURL, nil
 }
 
 func (controller *identityController) exchangeCode(ctx context.Context, code, verifier string) (oidcTokenResponse, *identityFailure) {

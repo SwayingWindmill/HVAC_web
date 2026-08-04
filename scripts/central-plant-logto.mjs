@@ -290,7 +290,7 @@ export async function provisionCentralPlantLogto({
     type: 'SPA',
     oidcClientMetadata: {
       redirectUris: [redirectURI],
-      postLogoutRedirectUris: [webURL],
+      postLogoutRedirectUris: [webURL, `${webURL}/?logged_out=1`],
     },
   };
   const applications = await request('/api/applications');

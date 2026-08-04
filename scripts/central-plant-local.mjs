@@ -377,7 +377,57 @@ async function browserAudit(topology) {
     assert.ok(authority.assetModel.relationshipCount > 0);
     assert.equal(authority.snapshot.deviceId, chiller.platformDeviceId);
     assert.equal(authority.snapshot.values.length, requestedKeys.length);
-    return { browser: browserPath, logtoExperience, navigation, ...authority };
+
+    const logoutStarted = await evaluate(client, `(() => {
+      const button = document.querySelector('[data-testid="real-logout-button"]');
+      button?.click();
+      return Boolean(button);
+    })()`);
+    assert.equal(logoutStarted, true, 'authenticated shell did not expose the logout action');
+    const loggedOut = await waitForCondition(client, `(() => {
+      if (location.origin !== ${JSON.stringify(new URL(topology.webURL).origin)}) return false;
+      const params = new URLSearchParams(location.search);
+      const card = document.querySelector('[data-testid="real-shell-login-required"]');
+      if (params.get('logged_out') !== '1' || !card) return false;
+      return {
+        path: location.pathname + location.search,
+        title: card.querySelector('h1, h2')?.textContent?.trim() ?? '',
+        hasReauthenticationAction: Boolean(card.querySelector('button')),
+        assetMounted: Boolean(document.querySelector('[data-testid="real-site-route-assets"]')),
+      };
+    })()`, 'provider-backed logged-out landing');
+    const loggedOutEvidence = JSON.stringify(loggedOut);
+    assert.equal(loggedOut.title, '已退出登录', loggedOutEvidence);
+    assert.equal(loggedOut.hasReauthenticationAction, true, loggedOutEvidence);
+    assert.equal(loggedOut.assetMounted, false, loggedOutEvidence);
+
+    const reauthenticationStarted = await evaluate(client, `(() => {
+      const button = document.querySelector('[data-testid="real-shell-login-required"] button');
+      button?.click();
+      return Boolean(button);
+    })()`);
+    assert.equal(reauthenticationStarted, true, 'logged-out landing did not expose reauthentication');
+    const reauthentication = await waitForCondition(client, `(() => {
+      if (location.origin !== ${JSON.stringify(new URL(topology.logto.coreURL).origin)}) return false;
+      const input = document.querySelector('input[name="identifier"], input[name="username"], input[type="password"], input[type="text"]');
+      if (!input) return false;
+      return {
+        path: location.pathname,
+        hasCredentialInput: true,
+        assetMounted: Boolean(document.querySelector('[data-testid="real-site-route-assets"]')),
+      };
+    })()`, 'fresh Logto credentials after logout');
+    const reauthenticationEvidence = JSON.stringify(reauthentication);
+    assert.equal(reauthentication.hasCredentialInput, true, reauthenticationEvidence);
+    assert.equal(reauthentication.assetMounted, false, reauthenticationEvidence);
+
+    return {
+      browser: browserPath,
+      logtoExperience,
+      logout: { loggedOut, reauthentication },
+      navigation,
+      ...authority,
+    };
   } finally {
     client?.close();
     if (browser.exitCode === null) {

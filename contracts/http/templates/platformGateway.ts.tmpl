@@ -291,7 +291,7 @@ export type DeviceBindingCollection = z.infer<typeof deviceBindingCollectionSche
 export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
 export type RegistryListParams = { limit?: number; cursor?: string };
 
-export type PlatformResponse<T> = { data: T; requestId: string | null; traceparent: string | null; auditMessageId: string | null; routePolicyRevision: string | null };
+export type PlatformResponse<T> = { data: T; requestId: string | null; traceparent: string | null; auditMessageId: string | null; routePolicyRevision: string | null; location: string | null };
 
 export class PlatformApiError extends Error {
   readonly problem: ProblemDetails;
@@ -305,10 +305,10 @@ export function createPlatformGatewayClient(baseUrl = '') {
     const headers = new Headers(init?.headers);
     if (!headers.has('Accept')) headers.set('Accept', 'application/json, application/problem+json');
     const response = await fetch(`${baseUrl}${path}`, { ...init, headers, credentials: 'same-origin' });
-    if (response.status === 204) return { data: undefined as T, requestId: response.headers.get('x-request-id'), traceparent: response.headers.get('traceparent'), auditMessageId: response.headers.get('x-audit-message-id'), routePolicyRevision: response.headers.get('x-route-policy-revision') };
+    if (response.status === 204) return { data: undefined as T, requestId: response.headers.get('x-request-id'), traceparent: response.headers.get('traceparent'), auditMessageId: response.headers.get('x-audit-message-id'), routePolicyRevision: response.headers.get('x-route-policy-revision'), location: response.headers.get('location') };
     const payload: unknown = await response.json();
     if (!response.ok) throw new PlatformApiError(problemDetailsSchema.parse(payload));
-    return { data: schema.parse(payload), requestId: response.headers.get('x-request-id'), traceparent: response.headers.get('traceparent'), auditMessageId: response.headers.get('x-audit-message-id'), routePolicyRevision: response.headers.get('x-route-policy-revision') };
+    return { data: schema.parse(payload), requestId: response.headers.get('x-request-id'), traceparent: response.headers.get('traceparent'), auditMessageId: response.headers.get('x-audit-message-id'), routePolicyRevision: response.headers.get('x-route-policy-revision'), location: response.headers.get('location') };
   };
 
   const listPath = (path: string, params: RegistryListParams = {}) => {

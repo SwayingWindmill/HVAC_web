@@ -120,6 +120,8 @@ func (provider *Provider) ServeHTTP(writer http.ResponseWriter, request *http.Re
 		provider.authorize(writer, request)
 	case "/token":
 		provider.token(writer, request)
+	case "/session/end":
+		provider.endSession(writer, request)
 	default:
 		http.NotFound(writer, request)
 	}
@@ -134,6 +136,7 @@ func (provider *Provider) discovery(writer http.ResponseWriter) {
 		"authorization_endpoint":                issuer + "/authorize",
 		"token_endpoint":                        issuer + "/token",
 		"jwks_uri":                              issuer + "/jwks",
+		"end_session_endpoint":                  issuer + "/session/end",
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code"},
 		"code_challenge_methods_supported":      []string{"S256"},
@@ -324,6 +327,26 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 		response["refresh_token"] = randomToken(32)
 	}
 	writeJSON(writer, http.StatusOK, response)
+}
+
+func (provider *Provider) endSession(writer http.ResponseWriter, request *http.Request) {
+	query := request.URL.Query()
+	if query.Get("client_id") != provider.clientID {
+		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "logout client is invalid")
+		return
+	}
+	redirectURI := query.Get("post_logout_redirect_uri")
+	redirect, err := url.Parse(redirectURI)
+	if err != nil || redirect.Scheme == "" || redirect.Host == "" {
+		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "post logout redirect is invalid")
+		return
+	}
+	callback, err := url.Parse(provider.redirectURI)
+	if err != nil || callback.Scheme != redirect.Scheme || callback.Host != redirect.Host {
+		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "post logout redirect is not registered")
+		return
+	}
+	http.Redirect(writer, request, redirect.String(), http.StatusFound)
 }
 
 func (provider *Provider) signJWT(claims tokenClaims, rogue, unknownKeyID, modern bool) (string, error) {

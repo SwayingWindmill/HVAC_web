@@ -120,6 +120,7 @@ for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) 
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
 }
 invariant(operations.logout.operation.responses?.['204'], 'logout must return 204');
+invariant(operations.logout.operation.responses?.['204']?.headers?.Location?.schema?.format === 'uri', 'logout must publish the provider end-session Location header');
 
 const schemas = spec.components?.schemas ?? {};
 const schemaRequirements = {

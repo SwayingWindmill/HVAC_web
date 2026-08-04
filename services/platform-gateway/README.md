@@ -14,7 +14,7 @@ The checked-in authority is `contracts/http/platform-gateway.openapi.yaml`.
 | `GET` | `/api/v1/auth/login` | Begin OIDC Authorization Code Flow with PKCE. |
 | `GET` | `/api/v1/auth/callback` | Complete the OIDC callback and create a BFF Session. |
 | `GET` | `/api/v1/principal` | Read the authenticated principal and actor chain through IAM. |
-| `POST` | `/api/v1/auth/logout` | Revoke the current session with Origin and CSRF protection. |
+| `POST` | `/api/v1/auth/logout` | Revoke the current BFF Session with Origin and CSRF protection, then return the trusted OIDC end-session URL in `Location` so the browser can clear the provider SSO session. |
 | `POST` | `/api/v1/auth/sessions/{sessionId}/revoke` | Administratively revoke a session and commit its Audit message. |
 | `GET` | `/api/v1/audit/session-events/{messageId}` | Read one Organization-scoped append-only Session Audit record. |
 

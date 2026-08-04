@@ -310,7 +310,16 @@
         ],
         "responses": {
           "204": {
-            "description": "Current session revoked."
+            "description": "Current session revoked; continue at the identity provider logout URL.",
+            "headers": {
+              "Location": {
+                "description": "Trusted OIDC end-session URL. The browser must navigate to this URL to clear the provider SSO session.",
+                "schema": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/Problem"
