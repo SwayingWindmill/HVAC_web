@@ -114,8 +114,51 @@ async function waitForCondition(client, expression, label) {
     } catch {}
     await pause(100);
   }
-  const diagnostic = await evaluate(client, `({ url: location.href, text: document.body?.innerText?.slice(0, 5000) ?? '' })`).catch((error) => ({ error: String(error) }));
+  const diagnostic = await evaluate(client, `(async () => {
+    let principal = null;
+    try {
+      const response = await fetch('/api/v1/principal', { credentials: 'include', headers: { Accept: 'application/json, application/problem+json' } });
+      principal = { status: response.status, body: (await response.text()).slice(0, 5000) };
+    } catch (error) {
+      principal = { error: String(error) };
+    }
+    return { url: location.href, text: document.body?.innerText?.slice(0, 5000) ?? '', principal };
+  })()`).catch((error) => ({ error: String(error) }));
   throw new Error(`${label} did not become ready: ${JSON.stringify({ last, diagnostic })}`);
+}
+
+async function submitLogtoSignIn(client, logto) {
+  const origin = new URL(logto.coreURL).origin;
+  await waitForCondition(client, `location.origin === ${JSON.stringify(origin)} && Boolean(document.querySelector('input'))`, 'Logto sign-in page');
+  const firstStep = await evaluate(client, `(() => {
+    const setValue = (input, value) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      setter?.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    const identifier = document.querySelector('input[name="identifier"], input[name="username"], input[type="text"]');
+    const credential = document.querySelector('input[type="password"]');
+    if (identifier) setValue(identifier, ${JSON.stringify(logto.username)});
+    if (credential) setValue(credential, ${JSON.stringify(logto.credential)});
+    const submit = document.querySelector('button[type="submit"]') ?? [...document.querySelectorAll('button')].find((button) => !button.disabled);
+    submit?.click();
+    return { hadCredentialField: Boolean(credential), submitted: Boolean(submit) };
+  })()`);
+  assert.equal(firstStep.submitted, true, `Logto first sign-in step was not submitted: ${JSON.stringify(firstStep)}`);
+  if (firstStep.hadCredentialField) return;
+  await waitForCondition(client, `location.origin === ${JSON.stringify(origin)} && Boolean(document.querySelector('input[type="password"]'))`, 'Logto credential step');
+  const secondStep = await evaluate(client, `(() => {
+    const input = document.querySelector('input[type="password"]');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    setter?.call(input, ${JSON.stringify(logto.credential)});
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    const submit = document.querySelector('button[type="submit"]') ?? [...document.querySelectorAll('button')].find((button) => !button.disabled);
+    submit?.click();
+    return Boolean(submit);
+  })()`);
+  assert.equal(secondStep, true, 'Logto credential step was not submitted');
 }
 
 async function browserAudit(topology) {
@@ -168,6 +211,7 @@ async function browserAudit(topology) {
     await client.send('Page.navigate', {
       url: `${topology.webURL}/api/v1/auth/login?returnTo=${encodeURIComponent(sitePath)}`,
     });
+    await submitLogtoSignIn(client, topology.logto);
     await waitForCondition(client, `(() => {
       const root = document.querySelector('[data-testid="real-site-route-assets"]');
       return location.pathname === ${JSON.stringify(sitePath)}
@@ -289,6 +333,7 @@ async function browserAudit(topology) {
 }
 
 async function runSmoke() {
+  await rm(durableSmokeReportPath, { force: true });
   const topology = await startCentralPlantLocalTopology({ quiet: true });
   try {
     const persisted = await waitForPersistedLoop(topology);
@@ -299,6 +344,12 @@ async function runSmoke() {
       topology: 'EG8200 -> ThingsBoard -> Adapter -> S2 -> Gateway -> HVAC Web Real',
       webURL: topology.webURL,
       thingsBoardURL: topology.thingsBoardURL,
+      logto: {
+        issuer: topology.logto.issuer,
+        clientId: topology.logto.clientId,
+        subject: topology.logto.subject,
+        username: topology.logto.username,
+      },
       persisted,
       browser,
       verifiedAt: new Date().toISOString(),
@@ -307,6 +358,22 @@ async function runSmoke() {
     await writeFile(resolve(root, 'out/central-plant-local/smoke-report.json'), serialized, 'utf8');
     await writeFile(durableSmokeReportPath, serialized, 'utf8');
     console.log(JSON.stringify(report, null, 2));
+  } catch (error) {
+    const report = {
+      schemaVersion: 1,
+      status: 'failed',
+      webURL: topology.webURL,
+      logto: {
+        issuer: topology.logto.issuer,
+        clientId: topology.logto.clientId,
+        subject: topology.logto.subject,
+        username: topology.logto.username,
+      },
+      error: error instanceof Error ? error.message : String(error),
+      failedAt: new Date().toISOString(),
+    };
+    await writeFile(durableSmokeReportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    throw error;
   } finally {
     await topology.stop();
   }

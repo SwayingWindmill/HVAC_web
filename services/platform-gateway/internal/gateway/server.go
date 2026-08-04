@@ -598,7 +598,7 @@ func parseCompleteLoginParams(writer http.ResponseWriter, request *http.Request)
 		return platformapi.CompleteLoginParams{}, false
 	}
 	for key := range query {
-		if key != "code" && key != "state" {
+		if key != "code" && key != "state" && key != "iss" {
 			writeProblem(writer, request, http.StatusBadRequest, "INVALID_QUERY_PARAMETER", "Invalid query parameter", "One or more query parameters are not supported.", false, []platformapi.FieldError{{Field: key, Message: "unsupported query parameter"}})
 			return platformapi.CompleteLoginParams{}, false
 		}
@@ -608,7 +608,7 @@ func parseCompleteLoginParams(writer http.ResponseWriter, request *http.Request)
 		writeProblem(writer, request, http.StatusBadRequest, "OIDC_CALLBACK_INVALID", "OIDC callback invalid", "The callback code and state are required.", false, nil)
 		return platformapi.CompleteLoginParams{}, false
 	}
-	return platformapi.CompleteLoginParams{Code: code, State: state}, true
+	return platformapi.CompleteLoginParams{Code: code, State: state, Issuer: query.Get("iss")}, true
 }
 
 func writeMethodNotAllowedFor(writer http.ResponseWriter, request *http.Request, allowed string) {

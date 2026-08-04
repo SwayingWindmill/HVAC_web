@@ -24,6 +24,7 @@ const root = resolve(process.cwd());
 const adapterTemplate = JSON.parse(await readFile(resolve(root, 'services/thingsboard-telemetry-adapter/configs/central-plant.local.example.json'), 'utf8'));
 const simulatorConfig = buildCentralPlantSimulatorConfig(adapterTemplate);
 const thingsBoardCompose = await readFile(resolve(root, 'infra/central-plant-local/thingsboard.compose.yaml'), 'utf8');
+const logtoCompose = await readFile(resolve(root, 'infra/central-plant-local/logto.compose.yaml'), 'utf8');
 const realtimeCompose = await readFile(resolve(root, 'infra/central-plant-local/realtime.compose.yaml'), 'utf8');
 const s2Compose = await readFile(resolve(root, 'infra/s2-telemetry/compose.yaml'), 'utf8');
 const topology = await readFile(resolve(root, 'scripts/central-plant-local-topology.mjs'), 'utf8');
@@ -71,7 +72,8 @@ test('database seeds cover the complete Registry graph and every adapter point',
   const { pointsByDevice, pointKeysByDevice } = pointMaps();
   assert.equal([...pointsByDevice.values()].reduce((total, points) => total + points.length, 0), 47);
   const s1 = buildS1SeedSQL({
-    oidcIssuer: 'https://127.0.0.1:18443',
+    oidcIssuer: 'https://127.0.0.1:18443/oidc',
+    principalSubject: 'logto-central-plant-user',
     pointKeysByDevice,
     spatialPoints: simulatorConfig.points,
   });
@@ -103,6 +105,7 @@ test('database seeds cover the complete Registry graph and every adapter point',
   for (const action of analyticsActions) {
     assert.equal(s1.match(new RegExp(action.replaceAll('.', '\\.')), 'g')?.length, 1);
   }
+  assert.ok(s1.includes("'logto-central-plant-user'"));
   assert.ok(!s1.includes("'analytics-reader'"));
   assert.ok(!s1.includes("ARRAY['registry.read'] ||"));
   assert.ok(s2.includes('DELETE FROM telemetry_runtime.telemetry_publication_outbox;'));
@@ -140,6 +143,8 @@ test('central plant smoke verifies the atomic Asset Model and exact Real UI coun
     "document.querySelector('.real-assets-tree-switcher')",
     "document.body.innerText.includes('资产导航')",
     'Emulation.setDeviceMetricsOverride',
+    'submitLogtoSignIn',
+    'topology.logto',
     'authority.assetModel.counts',
     'durableSmokeReportPath',
     '{up|smoke}',
@@ -153,6 +158,14 @@ test('local topology stays isolated and derives simulator credentials from the v
     '127.0.0.1:${CENTRAL_PLANT_THINGSBOARD_PORT}:8080',
     'thingsboard/tb-node:4.3.1.3',
   ]) assert.ok(thingsBoardCompose.includes(marker));
+  for (const marker of [
+    'ghcr.io/logto-io/logto:1.42.0@sha256:aac94e24ab7bef59be5d1809b1481b179495aaa75bb9dc2895ceae46e4117854',
+    'postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94',
+    'npm run cli db seed -- --skip-when-exists --disable-admin-pwned-password-check',
+    'CENTRAL_PLANT_LOGTO_ENDPOINT',
+    'CENTRAL_PLANT_LOGTO_ADMIN_ENDPOINT',
+    'TRUST_PROXY_HEADER',
+  ]) assert.ok(logtoCompose.includes(marker));
   for (const marker of [
     '127.0.0.1:${CENTRAL_PLANT_CENTRIFUGO_PORT}:8000',
     'host.docker.internal:host-gateway',
@@ -175,6 +188,11 @@ test('local topology stays isolated and derives simulator credentials from the v
     'TELEMETRY_QUERY_URL',
     'TELEMETRY_CLICKHOUSE_HTTP_URL',
     'HVAC Web Real',
+    'provisionCentralPlantLogto',
+    'createHTTPSTLSProxy',
+    'OIDC_DEFAULT_ACTING_ORGANIZATION_ID',
+    'principalSubject: logto.subject',
+    '[projects.logto, logtoCompose, logtoEnvironment]',
     'buildCentralPlantSimulatorConfig',
     'simulatorConfig.credentialEnvByDeviceId',
   ]) assert.ok(topology.includes(marker), `topology is missing ${marker}`);

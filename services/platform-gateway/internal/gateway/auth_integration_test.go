@@ -107,6 +107,22 @@ func TestAuthenticatedPrincipalLoop(t *testing.T) {
 	assertProblemCode(t, afterLogout, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED")
 }
 
+func TestModernLogtoIDTokenIsAccepted(t *testing.T) {
+	harness := newAuthHarness(t)
+	client := harness.browserClient(t)
+	principal, _ := loginAndReadPrincipal(t, client, harness.gatewayURL, "logto-modern")
+
+	if principal.Principal.Subject != "fixture-user" {
+		t.Fatalf("modern Logto principal was not accepted: %#v", principal.Principal)
+	}
+	if principal.Context.ActingOrganizationID != "org-fixture-01" {
+		t.Fatalf("deployment-owned Organization fallback was not applied: %#v", principal.Context)
+	}
+	if principal.Principal.Roles == nil || len(principal.Principal.Roles) != 0 {
+		t.Fatalf("role-free Logto principal must publish an empty roles array: %#v", principal.Principal.Roles)
+	}
+}
+
 func TestGatewayRejectsMalformedIAMCapabilityResponse(t *testing.T) {
 	harness := newAuthHarnessWithIAMFactory(t, func(_ string) http.Handler {
 		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -156,6 +172,7 @@ func TestOIDCRejectedIdentityPaths(t *testing.T) {
 	harness := newAuthHarness(t)
 	cases := []struct{ hint, code string }{
 		{"invalid-issuer", "OIDC_ISSUER_INVALID"},
+		{"callback-issuer-mismatch", "OIDC_ISSUER_INVALID"},
 		{"invalid-audience", "OIDC_AUDIENCE_INVALID"},
 		{"invalid-token-type", "OIDC_TOKEN_TYPE_INVALID"},
 		{"invalid-signature", "OIDC_SIGNATURE_INVALID"},
@@ -373,7 +390,8 @@ func newAuthHarnessWithIAMFactory(t *testing.T, factory func(clientSPIFFEID stri
 		Build:  platformapi.BuildInfo{Service: "platform-gateway", Version: "test", Commit: "test", BuiltAt: "test"},
 		Identity: &gateway.IdentityConfig{
 			OIDCIssuer: oidcServer.URL, OIDCClientID: "hvac-web-s0", OIDCRedirectURI: redirectURI, PublicOrigin: gatewayURL,
-			IAMURL: iamServer.URL, IAMAudience: "iam-service", ExecutingWorkloadSPIFFE: bundle.ClientSPIFFEID, PolicyRevision: "policy-v1",
+			DefaultActingOrganizationID: "org-fixture-01",
+			IAMURL:                      iamServer.URL, IAMAudience: "iam-service", ExecutingWorkloadSPIFFE: bundle.ClientSPIFFEID, PolicyRevision: "policy-v1",
 			OIDCHTTPClient: oidcServer.Client(), IAMHTTPClient: &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: clientTLS}},
 			DelegationSigner: signer, TokenEncryptionKey: bytes.Repeat([]byte{0x42}, 32), SessionTTL: 10 * time.Minute, StateTTL: time.Minute, DelegationTTL: 30 * time.Second, RevocationObjective: time.Second,
 		},

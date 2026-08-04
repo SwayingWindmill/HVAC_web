@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${CENTRAL_PLANT_LOGTO_DB_PASSWORD}
+      POSTGRES_DB: logto
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d logto"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+    volumes:
+      - logto-postgres:/var/lib/postgresql/data
+
+  seed:
+    image: ghcr.io/logto-io/logto:1.42.0@sha256:aac94e24ab7bef59be5d1809b1481b179495aaa75bb9dc2895ceae46e4117854
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: postgres://postgres:${CENTRAL_PLANT_LOGTO_DB_PASSWORD}@postgres:5432/logto
+    entrypoint: ["sh", "-c"]
+    command: ["npm run cli db seed -- --skip-when-exists --disable-admin-pwned-password-check"]
+    restart: "no"
+
+  logto:
+    image: ghcr.io/logto-io/logto:1.42.0@sha256:aac94e24ab7bef59be5d1809b1481b179495aaa75bb9dc2895ceae46e4117854
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    environment:
+      DB_URL: postgres://postgres:${CENTRAL_PLANT_LOGTO_DB_PASSWORD}@postgres:5432/logto
+      ENDPOINT: ${CENTRAL_PLANT_LOGTO_ENDPOINT}
+      ADMIN_ENDPOINT: ${CENTRAL_PLANT_LOGTO_ADMIN_ENDPOINT}
+      TRUST_PROXY_HEADER: "1"
+    ports:
+      - "127.0.0.1:${CENTRAL_PLANT_LOGTO_CORE_PORT}:3001"
+      - "127.0.0.1:${CENTRAL_PLANT_LOGTO_ADMIN_PORT}:3002"
+    restart: unless-stopped
+
+volumes:
+  logto-postgres:

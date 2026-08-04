@@ -29,7 +29,7 @@ function bindingRoleForDeviceType(deviceType) {
   return 'CONTROLLER';
 }
 
-export function buildS1SeedSQL({ oidcIssuer, pointKeysByDevice, spatialPoints = [] }) {
+export function buildS1SeedSQL({ oidcIssuer, principalSubject = 'fixture-user', pointKeysByDevice, spatialPoints = [] }) {
   const { organizationId, siteId, principalId } = centralPlantIdentity;
   const actions = `ARRAY[${telemetryActions.map(sqlLiteral).join(',')}]`;
   const analytics = `ARRAY[${analyticsActions.map(sqlLiteral).join(',')}]`;
@@ -111,7 +111,7 @@ INSERT INTO core_registry.point_subject_bindings (id, organization_id, site_id, 
 INSERT INTO core_registry.calculated_point_inputs (organization_id, site_id, calculated_point_id, input_point_id, input_role, ordinal, formula_revision) VALUES
   ${calculatedInputRows} ON CONFLICT DO NOTHING;
 INSERT INTO iam.principals (id, external_issuer, external_subject, display_name, email, status, revision, created_at, updated_at)
-VALUES (${sqlLiteral(principalId)}, ${sqlLiteral(oidcIssuer)}, 'fixture-user', 'Central Plant Operator', 'operator@example.test', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
+VALUES (${sqlLiteral(principalId)}, ${sqlLiteral(oidcIssuer)}, ${sqlLiteral(principalSubject)}, 'Central Plant Operator', 'operator@example.test', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO UPDATE SET external_issuer=EXCLUDED.external_issuer, external_subject=EXCLUDED.external_subject, status='ACTIVE', updated_at=clock_timestamp();
 INSERT INTO iam.organization_memberships (id, organization_id, principal_id, status, valid_from, valid_to, revision, created_at, updated_at)
 VALUES (${sqlLiteral(nextID())}, ${sqlLiteral(organizationId)}, ${sqlLiteral(principalId)}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp()) ON CONFLICT DO NOTHING;

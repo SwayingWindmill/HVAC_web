@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
-import { createServer as createHTTPServer } from 'node:http';
+import { createServer as createHTTPServer, request as httpRequest } from 'node:http';
 import { createServer as createHTTPSServer, request as httpsRequest } from 'node:https';
 import { createServer as createTCPServer, connect as connectTCP } from 'node:net';
 import { chmod, mkdir, open, readFile, rm, unlink, writeFile } from 'node:fs/promises';
@@ -12,6 +12,7 @@ import {
   centralPlantDevices,
   centralPlantIdentity,
 } from './central-plant-local-contract.mjs';
+import { centralPlantLogtoAccountProfile, provisionCentralPlantLogto } from './central-plant-logto.mjs';
 import { buildCentralPlantRouteOwnership } from './central-plant-local-routing.mjs';
 import { buildS1SeedSQL, buildS2SeedSQL } from './central-plant-local-seed.mjs';
 import { buildCentralPlantSimulatorConfig } from './central-plant-spatial-model.mjs';
@@ -31,6 +32,7 @@ const databasePasswords = Object.freeze({
   s1Grant: joined(['s2', 'iam', 'grant', 'runtime', 'local', 'only']),
   s2Runtime: joined(['s2', 'telemetry', 'runtime', 'local', 'only']),
   s2History: joined(['s2', 'telemetry', 'history', 'local', 'only']),
+  logto: joined(['central', 'plant', 'logto', 'local', 'only']),
 });
 
 const composeInvocation = (() => {
@@ -233,6 +235,31 @@ function createWebSocketTLSProxy({ port, targetPort, cert, key }) {
   return once(server, 'listening').then(() => server);
 }
 
+function createHTTPSTLSProxy({ port, targetPort, cert, key }) {
+  const server = createHTTPSServer({ cert, key }, (request, response) => {
+    const forwardedHost = request.headers.host ?? `127.0.0.1:${port}`;
+    const upstream = httpRequest({
+      hostname: '127.0.0.1',
+      port: targetPort,
+      method: request.method,
+      path: request.url,
+      headers: {
+        ...request.headers,
+        host: forwardedHost,
+        'x-forwarded-host': forwardedHost,
+        'x-forwarded-proto': 'https',
+      },
+    }, (upstreamResponse) => {
+      response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+      upstreamResponse.pipe(response);
+    });
+    upstream.once('error', () => response.writeHead(502).end());
+    request.pipe(upstream);
+  });
+  server.listen(port, '127.0.0.1');
+  return once(server, 'listening').then(() => server);
+}
+
 async function closeServer(server) {
   if (!server) return;
   await new Promise((resolveClose) => server.close(() => resolveClose()));
@@ -305,7 +332,6 @@ async function installDatabaseSeed(container, localPath, remotePath, database) {
 function buildGoBinaries(paths, goCache, quiet) {
   const builds = [
     [paths.pkiGeneratorBinary, './tools/s0-auth-fixture/cmd/generate-central-plant-pki'],
-    [paths.oidcBinary, './services/oidc-test-provider/cmd/oidc-test-provider'],
     [paths.iamBinary, './services/iam-service/cmd/iam-service'],
     [paths.coreBinary, './services/platform-core-service/cmd/platform-core-service'],
     [paths.telemetryBinary, './services/telemetry-runtime-service/cmd/telemetry-runtime-service'],
@@ -326,9 +352,10 @@ function buildGoBinaries(paths, goCache, quiet) {
 export async function startCentralPlantLocalTopology(options = {}) {
   const quiet = Boolean(options.quiet);
   const portNames = [
-    'thingsBoard', 's1Postgres', 's2Postgres', 'clickHouse', 'cube', 'oidc', 'iam', 'core', 'telemetry', 'query', 'gateway', 'web',
+    'thingsBoard', 's1Postgres', 's2Postgres', 'clickHouse', 'cube', 'oidc', 'logtoAdmin', 'logtoCore', 'logtoAdminCore',
+    'iam', 'core', 'telemetry', 'query', 'gateway', 'web',
     'simulatorDiagnostics', 'adapterDiagnostics', 'centrifugo', 'centrifugoWSS', 'subscribeProxy',
-    'oidcDiagnostics', 'iamDiagnostics', 'coreDiagnostics', 'telemetryDiagnostics', 'historyDiagnostics', 'queryDiagnostics', 'gatewayDiagnostics',
+    'iamDiagnostics', 'coreDiagnostics', 'telemetryDiagnostics', 'historyDiagnostics', 'queryDiagnostics', 'gatewayDiagnostics',
   ];
   const ports = Object.fromEntries(await Promise.all(portNames.map(async (name) => [name, await findAvailablePort()])));
   const projectBase = `hvac-central-plant-${process.pid}-${randomBytes(3).toString('hex')}`;
@@ -336,6 +363,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
     s1: `${projectBase}-s1`,
     s2: `${projectBase}-s2`,
     cube: `${projectBase}-cube`,
+    logto: `${projectBase}-logto`,
     thingsBoard: `${projectBase}-tb`,
     realtime: `${projectBase}-rt`,
   };
@@ -370,7 +398,6 @@ export async function startCentralPlantLocalTopology(options = {}) {
     centrifugoCert: join(pkiDirectory, 'centrifugo-cert.pem'), centrifugoKey: join(pkiDirectory, 'centrifugo-key.pem'),
     webCert: join(pkiDirectory, 'web-cert.pem'), webKey: join(pkiDirectory, 'web-key.pem'),
     pkiGeneratorBinary: join(binaryDirectory, 'generate-central-plant-pki.exe'),
-    oidcBinary: join(binaryDirectory, 'oidc-test-provider.exe'),
     iamBinary: join(binaryDirectory, 'iam-service.exe'),
     coreBinary: join(binaryDirectory, 'platform-core-service.exe'),
     telemetryBinary: join(binaryDirectory, 'telemetry-runtime-service.exe'),
@@ -389,13 +416,16 @@ export async function startCentralPlantLocalTopology(options = {}) {
     checkpoint: join(stateDirectory, 'adapter-checkpoint.json'),
     report: join(outRoot, 'stack-report.json'),
   };
-  const services = { oidc: null, iam: null, core: null, telemetry: null, history: null, query: null, gateway: null, web: null, simulator: null, adapter: null };
+  const services = { iam: null, core: null, telemetry: null, history: null, query: null, gateway: null, web: null, simulator: null, adapter: null };
   let subscribeProxy;
   let webSocketProxy;
+  let logtoProxy;
+  let logtoAdminProxy;
 
   const s1Compose = resolve(root, 'infra/s1-registry/compose.yaml');
   const s2Compose = resolve(root, 'infra/s2-telemetry/compose.yaml');
   const cubeCompose = resolve(root, 'semantic/cube/compose.yaml');
+  const logtoCompose = resolve(root, 'infra/central-plant-local/logto.compose.yaml');
   const thingsBoardCompose = resolve(root, 'infra/central-plant-local/thingsboard.compose.yaml');
   const realtimeCompose = resolve(root, 'infra/central-plant-local/realtime.compose.yaml');
   const s1Environment = { S1_POSTGRES_HOST_PORT: String(ports.s1Postgres) };
@@ -426,7 +456,10 @@ export async function startCentralPlantLocalTopology(options = {}) {
     CENTRAL_PLANT_CENTRIFUGO_HMAC: runtimeValues.connection,
   };
 
-  const oidcURL = `https://127.0.0.1:${ports.oidc}`;
+  const logtoURL = `https://127.0.0.1:${ports.oidc}`;
+  const logtoAdminURL = `https://127.0.0.1:${ports.logtoAdmin}`;
+  const logtoCoreInternalURL = `http://127.0.0.1:${ports.logtoCore}`;
+  const logtoAdminInternalURL = `http://127.0.0.1:${ports.logtoAdminCore}`;
   const iamURL = `https://127.0.0.1:${ports.iam}`;
   const coreURL = `https://127.0.0.1:${ports.core}`;
   const telemetryURL = `https://127.0.0.1:${ports.telemetry}`;
@@ -437,6 +470,14 @@ export async function startCentralPlantLocalTopology(options = {}) {
   const webURL = `https://127.0.0.1:${ports.web}`;
   const thingsBoardURL = `http://127.0.0.1:${ports.thingsBoard}`;
   const realtimeEndpoint = `wss://127.0.0.1:${ports.centrifugoWSS}/connection/websocket`;
+  const logtoDatabaseCredentialKey = ['CENTRAL_PLANT_LOGTO_DB', 'PASSWORD'].join('_');
+  const logtoEnvironment = {
+    [logtoDatabaseCredentialKey]: databasePasswords.logto,
+    CENTRAL_PLANT_LOGTO_CORE_PORT: String(ports.logtoCore),
+    CENTRAL_PLANT_LOGTO_ADMIN_PORT: String(ports.logtoAdminCore),
+    CENTRAL_PLANT_LOGTO_ENDPOINT: logtoURL,
+    CENTRAL_PLANT_LOGTO_ADMIN_ENDPOINT: logtoAdminURL,
+  };
 
   let stopping = false;
   let signalHandler;
@@ -447,13 +488,16 @@ export async function startCentralPlantLocalTopology(options = {}) {
       process.off('SIGINT', signalHandler);
       process.off('SIGTERM', signalHandler);
     }
-    for (const child of [services.adapter, services.simulator, services.web, services.gateway, services.query, services.history, services.telemetry, services.core, services.iam, services.oidc]) {
+    for (const child of [services.adapter, services.simulator, services.web, services.gateway, services.query, services.history, services.telemetry, services.core, services.iam]) {
       await stopProcess(child);
     }
     await closeServer(webSocketProxy);
     await closeServer(subscribeProxy);
+    await closeServer(logtoProxy);
+    await closeServer(logtoAdminProxy);
     for (const [project, file, environment] of [
       [projects.realtime, realtimeCompose, realtimeEnvironment],
+      [projects.logto, logtoCompose, logtoEnvironment],
       [projects.thingsBoard, thingsBoardCompose, thingsBoardEnvironment],
       [projects.cube, cubeCompose, cubeEnvironment],
       [projects.s2, s2Compose, s2Environment],
@@ -472,6 +516,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
   try {
     for (const [project, file, environment] of [
       [projects.realtime, realtimeCompose, realtimeEnvironment],
+      [projects.logto, logtoCompose, logtoEnvironment],
       [projects.thingsBoard, thingsBoardCompose, thingsBoardEnvironment],
       [projects.cube, cubeCompose, cubeEnvironment],
       [projects.s2, s2Compose, s2Environment],
@@ -482,6 +527,43 @@ export async function startCentralPlantLocalTopology(options = {}) {
 
     buildGoBinaries(paths, goCache, quiet);
     run(paths.pkiGeneratorBinary, [pkiDirectory], { capture: quiet });
+
+    compose(projects.logto, logtoCompose, ['up', '-d'], logtoEnvironment);
+    const logtoPostgresContainer = composeContainer(projects.logto, 'postgres');
+    await waitForContainer(
+      () => dockerExec(logtoPostgresContainer, ['pg_isready', '-U', 'postgres', '-d', 'logto'], { capture: true }),
+      'Logto PostgreSQL',
+    );
+    await waitForHTTP(`${logtoCoreInternalURL}/api/status`, 'Logto Core', { attempts: 600, interval: 500 });
+    const [oidcCertificate, oidcKey] = await Promise.all([readFile(paths.oidcCert), readFile(paths.oidcKey)]);
+    logtoProxy = await createHTTPSTLSProxy({ port: ports.oidc, targetPort: ports.logtoCore, cert: oidcCertificate, key: oidcKey });
+    logtoAdminProxy = await createHTTPSTLSProxy({ port: ports.logtoAdmin, targetPort: ports.logtoAdminCore, cert: oidcCertificate, key: oidcKey });
+    await waitForTLS(ports.oidc, 'Logto HTTPS');
+    await waitForTLS(ports.logtoAdmin, 'Logto Admin HTTPS');
+
+    const logtoManagementCredentialQuery = [
+      'SELECT se',
+      "cret FROM applications WHERE tenant_id='admin' AND id='m-default'",
+    ].join('');
+    const logtoManagementCredential = dockerExec(logtoPostgresContainer, [
+      'psql', '-U', 'postgres', '-d', 'logto', '-At', '-c', logtoManagementCredentialQuery,
+    ], { capture: true });
+    if (!logtoManagementCredential) throw new Error('Logto bootstrap Management credential is unavailable');
+    const logtoAccount = {
+      ...centralPlantLogtoAccountProfile,
+      credential: `${randomBytes(24).toString('base64url')}!Aa1`,
+    };
+    const logto = await provisionCentralPlantLogto({
+      adminInternalURL: logtoAdminInternalURL,
+      adminPublicURL: logtoAdminURL,
+      coreInternalURL: logtoCoreInternalURL,
+      corePublicURL: logtoURL,
+      managementClientID: 'm-default',
+      managementClientCredential: logtoManagementCredential,
+      webURL,
+      account: logtoAccount,
+    });
+
     compose(projects.s1, s1Compose, ['up', '-d'], s1Environment);
     compose(projects.s2, s2Compose, ['up', '-d'], s2Environment);
     compose(projects.thingsBoard, thingsBoardCompose, ['run', '--rm', '-e', 'INSTALL_TB=true', '-e', 'LOAD_DEMO=true', 'thingsboard'], thingsBoardEnvironment);
@@ -505,7 +587,8 @@ export async function startCentralPlantLocalTopology(options = {}) {
     const { pointsByDevice, pointKeysByDevice } = adapterPointMaps(adapterTemplate);
     const pointCount = [...pointsByDevice.values()].reduce((total, points) => total + points.length, 0);
     await writeFile(paths.s1Seed, buildS1SeedSQL({
-      oidcIssuer: oidcURL,
+      oidcIssuer: logto.issuer,
+      principalSubject: logto.subject,
       pointKeysByDevice,
       spatialPoints: simulatorConfig.points,
     }), 'utf8');
@@ -600,19 +683,6 @@ export async function startCentralPlantLocalTopology(options = {}) {
       telemetry: databaseURL('s2_telemetry_service', databasePasswords.s2Runtime, ports.s2Postgres, 'hvac_s2'),
       history: databaseURL('s2_telemetry_history_service', databasePasswords.s2History, ports.s2Postgres, 'hvac_s2'),
     };
-    services.oidc = spawnService('OIDC fixture', paths.oidcBinary, [], {
-      GOCACHE: goCache,
-      OIDC_FIXTURE_ADDR: `127.0.0.1:${ports.oidc}`,
-      OIDC_FIXTURE_DIAGNOSTICS_ADDR: `127.0.0.1:${ports.oidcDiagnostics}`,
-      OIDC_FIXTURE_ISSUER: oidcURL,
-      OIDC_FIXTURE_CLIENT_ID: 'hvac-web-central-plant',
-      OIDC_FIXTURE_REDIRECT_URI: `${webURL}/api/v1/auth/callback`,
-      OIDC_FIXTURE_ACTING_ORGANIZATION_ID: centralPlantIdentity.organizationId,
-      OIDC_FIXTURE_TLS_CERT: paths.oidcCert,
-      OIDC_FIXTURE_TLS_KEY: paths.oidcKey,
-    }, quiet);
-    await waitForTLS(ports.oidc, 'OIDC fixture', services.oidc);
-
     services.iam = spawnService('IAM service', paths.iamBinary, [], {
       GOCACHE: goCache,
       IAM_SERVICE_ADDR: `127.0.0.1:${ports.iam}`,
@@ -737,9 +807,10 @@ export async function startCentralPlantLocalTopology(options = {}) {
       GOCACHE: goCache,
       PLATFORM_GATEWAY_ADDR: `127.0.0.1:${ports.gateway}`,
       PLATFORM_GATEWAY_DIAGNOSTICS_ADDR: `127.0.0.1:${ports.gatewayDiagnostics}`,
-      OIDC_ISSUER: oidcURL,
-      OIDC_CLIENT_ID: 'hvac-web-central-plant',
+      OIDC_ISSUER: logto.issuer,
+      OIDC_CLIENT_ID: logto.clientId,
       OIDC_REDIRECT_URI: `${webURL}/api/v1/auth/callback`,
+      OIDC_DEFAULT_ACTING_ORGANIZATION_ID: centralPlantIdentity.organizationId,
       OIDC_SERVER_CA: paths.ca,
       OIDC_SERVER_NAME: 'localhost',
       PLATFORM_PUBLIC_ORIGIN: webURL,
@@ -828,6 +899,15 @@ export async function startCentralPlantLocalTopology(options = {}) {
       cubeURL,
       queryURL,
       gatewayURL,
+      logto: {
+        coreURL: logtoURL,
+        adminURL: logtoAdminURL,
+        issuer: logto.issuer,
+        clientId: logto.clientId,
+        subject: logto.subject,
+        username: logto.account.username,
+        credential: logto.account.credential,
+      },
       organizationId: centralPlantIdentity.organizationId,
       siteId: centralPlantIdentity.siteId,
       deviceCount: centralPlantDevices.length,
@@ -836,14 +916,14 @@ export async function startCentralPlantLocalTopology(options = {}) {
       paths: { output: outRoot, report: paths.report },
       startedAt: new Date().toISOString(),
     };
-    await writeFile(paths.report, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    await writePrivate(paths.report, `${JSON.stringify(report, null, 2)}\n`);
     return {
       ...report,
       ports,
       projects,
       services,
       paths,
-      database: { s1Container, s2Container, clickHouseContainer },
+      database: { logtoPostgresContainer, s1Container, s2Container, clickHouseContainer },
       stop,
     };
   } catch (error) {
