@@ -5,6 +5,7 @@
 export const BRAND = {
   teal: '#0FB5AE', // single brand accent
   tealStrong: '#0E9C96',
+  deepTeal: '#0B4A4C',
   tealSoft: '#E6FAF9',
 } as const;
 

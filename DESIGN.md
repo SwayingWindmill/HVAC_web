@@ -1,3 +1,51 @@
+---
+schema: design.md/v1
+version: 1.0.0
+name: 泉来禾智慧能源平台设计系统
+sourceOfTruth: true
+designDirection: Industrial Calm
+systems:
+  components: Ant Design
+  charts: ECharts
+  icons: Ant Design Icons
+implementation:
+  palette: apps/hvac-web/src/theme/tokens.ts
+  theme: apps/hvac-web/src/theme/AppTheme.tsx
+  sharedComponents: apps/hvac-web/src/components/OperationsUI.tsx
+previews:
+  light: docs/design-system/preview.html
+  dark: docs/design-system/preview-dark.html
+  styles: docs/design-system/preview.css
+references:
+  linear:
+    path: docs/design-references/linear/DESIGN.md
+    policy: reference-only
+colors:
+  brandPrimaryRgb: [15, 181, 174]
+  brandStrongRgb: [14, 156, 150]
+  brandDeepRgb: [11, 74, 76]
+  semanticSuccessRgb: [22, 163, 74]
+  semanticWarningRgb: [245, 158, 11]
+  semanticErrorRgb: [220, 38, 38]
+  semanticInformationRgb: [37, 99, 235]
+radii:
+  feature: 20px
+  card: 16px
+  control: 8px
+  pill: 999px
+spacing:
+  base: 4px
+  scale: [4px, 8px, 12px, 16px, 20px, 24px]
+breakpoints:
+  mobileMax: 767px
+  tabletMax: 1199px
+  desktopMin: 1200px
+governance:
+  check: npm run design:check
+  test: npm run design:test
+  updateRadiusBaseline: node scripts/check-design-system.mjs --update-radius-baseline
+---
+
 # 泉来禾智慧能源平台设计系统
 
 ## 1. Design Read

@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "policy": "Existing non-standard radii may be reduced but not increased. New files and values fail design:check.",
+  "allowed": [
+    "0",
+    "0px",
+    "8px",
+    "16px",
+    "20px",
+    "999px"
+  ],
+  "exceptions": {
+    "apps/hvac-web/src/ai/AssistantConversation.css": {
+      "12px": 1
+    },
+    "apps/hvac-web/src/ai/GlobalAiAssistant.css": {
+      "12px": 1,
+      "18px": 1,
+      "11px": 1
+    },
+    "apps/hvac-web/src/components/OperationsUI.css": {
+      "12px": 5,
+      "6px": 1,
+      "9px": 1,
+      "10px": 1
+    },
+    "apps/hvac-web/src/layout/Sidebar.css": {
+      "3px": 2
+    },
+    "apps/hvac-web/src/pages/Ai/Ai.css": {
+      "18px": 1
+    },
+    "apps/hvac-web/src/pages/BigScreen/BigScreen.css": {
+      "10px": 2,
+      "7px": 2,
+      "5px": 2
+    },
+    "apps/hvac-web/src/pages/Dashboard/Dashboard.css": {
+      "50%": 5,
+      "2px": 1,
+      "7px": 1,
+      "3px": 2
+    },
+    "apps/hvac-web/src/pages/Energy/Energy.css": {
+      "50%": 1,
+      "14px": 2,
+      "10px": 1,
+      "12px": 1
+    },
+    "apps/hvac-web/src/pages/System/System.css": {
+      "10px": 1
+    },
+    "apps/hvac-web/src/real/assets/real-assets.css": {
+      "10px": 2,
+      "9px": 3,
+      "12px": 2,
+      "7px": 2,
+      "6px": 1,
+      "4px": 1,
+      "14px": 1
+    },
+    "apps/hvac-web/src/real/energy-analytics.css": {
+      "7px": 1
+    },
+    "apps/hvac-web/src/real/operations-investigation-page.css": {
+      "10px": 1
+    },
+    "apps/hvac-web/src/real/operations-investigation.css": {
+      "0.75rem": 2,
+      "0.5rem": 2,
+      "0.65rem": 4
+    },
+    "apps/hvac-web/src/real/real-alarms.css": {
+      "10px": 2
+    },
+    "apps/hvac-web/src/real/real-shell.css": {
+      "12px": 1,
+      "10px": 4,
+      "6px": 1
+    },
+    "apps/hvac-web/src/styles/dashboard-product.css": {
+      "50%": 1
+    },
+    "apps/hvac-web/src/styles/real-product-pages.css": {
+      "50%": 3
+    }
+  }
+}

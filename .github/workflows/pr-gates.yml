@@ -65,6 +65,8 @@ jobs:
       - run: npm ci
       - run: npm run --silent repo:check
       - run: npm run --silent repo:governance:test
+      - run: npm run --silent design:test
+      - run: npm run --silent design:check
       - run: node scripts/run-pr-gate.mjs --gate=static
       - run: npm run --silent pr:gates:test
 

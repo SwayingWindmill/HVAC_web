@@ -212,6 +212,8 @@
     "test:rms-real-build-audit": "node --test scripts/test-rms-real-build-audit.mjs scripts/test-rms-real-runtime-config.mjs scripts/test-rms-vite-config.mjs",
     "rms:web-build": "npm run test:rms-real-build-audit && npm run rms:real:graph && npm run build:real && npm run build:demo && npm run rms:real:bundle",
     "lint": "tsc -p apps/hvac-web/tsconfig.json --noEmit",
+    "design:test": "node --test scripts/test-design-system.mjs",
+    "design:check": "node scripts/check-design-system.mjs",
     "audit:ui": "node scripts/run-browser-audit.mjs scripts/ui-audit.mjs",
     "audit:bigscreen": "node scripts/run-browser-audit.mjs scripts/bigscreen-layout-audit.mjs",
     "audit:ops-loop": "node scripts/run-browser-audit.mjs scripts/ops-loop-audit.mjs",
