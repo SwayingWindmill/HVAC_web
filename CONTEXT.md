@@ -8,13 +8,41 @@ The top-level business and authorization boundary that owns Sites.
 
 An operational location within one Organization. A Site is the scope in which Devices, Equipment, telemetry and operating decisions are observed.
 
+## Area
+
+A recursive spatial scope below one Site, such as a Building, Floor, Zone, Room, Plant Room or Rooftop. Area expresses where something is installed or observed; it is not Equipment and it does not own Device identity.
+
 ## Equipment
 
-A maintainable business asset. Equipment is not interchangeable with a Device.
+A maintainable physical business asset. Equipment is not interchangeable with a Device. Equipment placement in an Area is a versioned binding so relocation does not erase installation history.
+
+## Device Endpoint
+
+The preferred domain term for a Registry Device when discussing physical integration. A Device Endpoint is an addressable controller, gateway, meter or independently communicating sensor with an immutable platform identity. External-system identifiers are mappings, not Device identity.
 
 ## Device
 
-An addressable IoT endpoint with an immutable platform identity. External-system identifiers are mappings, not Device identity.
+The Registry identity used for a Device Endpoint. Existing APIs retain the shorter name `Device`.
+
+## Sensor
+
+A first-class measurement identity with installation, calibration, replacement and quality lifecycle. A Sensor may report through a controller Device Endpoint or may itself be an independently communicating Device Endpoint.
+
+## Telemetry Point
+
+A typed data channel owned by a reporting Device Endpoint and optionally a Sensor. A Sensor may expose multiple Telemetry Points, and controller-internal points may exist without a separately managed Sensor.
+
+## Measured Subject
+
+The Site, Area or Equipment that a Sensor or Telemetry Point describes. Measured Subject is independent of mounting location and reporting Device Endpoint.
+
+## Calculated Point
+
+A Telemetry Point derived from ordered input point references and a versioned formula. Its value and quality preserve input provenance; it is not a direct sensor observation.
+
+## Independent Point Observation
+
+One point value sampled at its own observed time and published according to its own schedule. Independent reporting does not require the Sensor to be a separate Device Endpoint.
 
 ## Registry Lifecycle
 

@@ -1,8 +1,15 @@
+import { lazy, Suspense } from 'react';
 import { API_MODE } from '@/api/config';
+import { LoadingState } from '@/components/PageState';
 import RealAssets from './RealAssets';
-import MockAssets from './MockAssets';
+
+const MockAssets = lazy(() => import('./MockAssets'));
 
 export default function Assets() {
   if (API_MODE === 'real') return <RealAssets />;
-  return <MockAssets />;
+  return (
+    <Suspense fallback={<LoadingState tip="加载演示资产" />}>
+      <MockAssets />
+    </Suspense>
+  );
 }

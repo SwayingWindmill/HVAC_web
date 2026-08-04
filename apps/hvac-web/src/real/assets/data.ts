@@ -1,12 +1,7 @@
 import type {
   Device,
-  DeviceBinding,
-  DeviceBindingCollection,
-  DeviceCollection,
-  Equipment,
-  EquipmentCollection,
   PlatformGatewayClient,
-  RegistryListParams,
+  SiteAssetModel,
 } from '../../api/generated/platformGateway.gen.ts';
 import type {
   BatchObservationFailure,
@@ -17,21 +12,15 @@ import { parseSnapshot } from '../../platform/telemetry-live/contract.ts';
 import { REAL_ASSETS_CATALOG_REVISION, listTelemetryKeys, resolveRealAssetsProfile } from './catalog.ts';
 import type { RealAssetsSnapshotResult } from './model.ts';
 
-const REGISTRY_PAGE_SIZE = 200;
-const MAX_REGISTRY_PAGES = 12;
 const MAX_BATCH_DEVICES = 100;
 const MAX_BATCH_KEY_SELECTIONS = 2048;
 
 export interface RealAssetsRegistryClient {
-  listSiteEquipment: PlatformGatewayClient['listSiteEquipment'];
-  listSiteDevices: PlatformGatewayClient['listSiteDevices'];
-  listSiteDeviceBindings: PlatformGatewayClient['listSiteDeviceBindings'];
+  getSiteAssetModel: PlatformGatewayClient['getSiteAssetModel'];
 }
 
 export interface RealAssetsRegistryData {
-  readonly equipment: readonly Equipment[];
-  readonly devices: readonly Device[];
-  readonly bindings: readonly DeviceBinding[];
+  readonly assetModel: SiteAssetModel;
   readonly routePolicyRevision: string | null;
 }
 
@@ -59,16 +48,6 @@ export interface RealAssetsCurrentStateData {
   readonly routePolicyRevision: string | null;
 }
 
-type RegistryCollection = EquipmentCollection | DeviceCollection | DeviceBindingCollection;
-type RegistryPageResponse = {
-  readonly data: RegistryCollection;
-  readonly routePolicyRevision: string | null;
-};
-type CollectedRegistryCollection<T> = {
-  readonly items: T[];
-  readonly routePolicyRevision: string | null;
-};
-
 function assertUnique(values: readonly string[], label: string): void {
   if (new Set(values).size !== values.length) throw new Error(`${label} contains duplicate identities`);
 }
@@ -85,56 +64,74 @@ function validateRegistryScope<T extends { id: string; owningOrganizationId: str
   }
 }
 
-async function collectRegistryCollection<T>(
-  fetchPage: (params: RegistryListParams, init: RequestInit) => Promise<RegistryPageResponse>,
-  signal: AbortSignal,
-): Promise<CollectedRegistryCollection<T>> {
-  const items: T[] = [];
-  let cursor: string | undefined;
-  let routePolicyRevision: string | null | undefined;
-  for (let page = 0; page < MAX_REGISTRY_PAGES; page += 1) {
-    const response = await fetchPage({ limit: REGISTRY_PAGE_SIZE, cursor }, { signal });
-    if (routePolicyRevision === undefined) {
-      routePolicyRevision = response.routePolicyRevision;
-    } else if (response.routePolicyRevision !== routePolicyRevision) {
-      throw new Error('Registry route-policy revision changed during pagination');
-    }
-    items.push(...response.data.items as T[]);
-    if (!response.data.hasMore) return { items, routePolicyRevision: routePolicyRevision ?? null };
-    if (!response.data.nextCursor) throw new Error('Registry collection omitted the next cursor');
-    cursor = response.data.nextCursor;
+function validateAssetModel(model: SiteAssetModel, organizationId: string, siteId: string): void {
+  if (model.schemaVersion !== 1 || model.siteId !== siteId) throw new Error('Asset Model envelope escaped the requested Site scope');
+  validateRegistryScope(model.areas, organizationId, siteId, 'Area collection');
+  validateRegistryScope(model.equipment, organizationId, siteId, 'Equipment collection');
+  validateRegistryScope(model.devices, organizationId, siteId, 'Device Endpoint collection');
+  validateRegistryScope(model.sensors, organizationId, siteId, 'Sensor collection');
+  validateRegistryScope(model.telemetryPoints, organizationId, siteId, 'Telemetry Point collection');
+  validateRegistryScope(model.relationships, organizationId, siteId, 'Asset relationship collection');
+  assertUnique(model.calculatedPointInputs.map((input) => `${input.calculatedPointId}:${input.ordinal}`), 'Calculated Point input collection');
+  if (model.calculatedPointInputs.some((input) => input.owningOrganizationId !== organizationId || input.siteId !== siteId)) {
+    throw new Error('Calculated Point input collection crossed the authenticated Organization or Site scope');
   }
-  throw new Error('Registry collection exceeded the bounded page budget');
+
+  const ids = {
+    SITE: new Set([siteId]),
+    AREA: new Set(model.areas.map((item) => item.id)),
+    EQUIPMENT: new Set(model.equipment.map((item) => item.id)),
+    DEVICE: new Set(model.devices.map((item) => item.id)),
+    SENSOR: new Set(model.sensors.map((item) => item.id)),
+    POINT: new Set(model.telemetryPoints.map((item) => item.id)),
+  } as const;
+  for (const area of model.areas) {
+    if (area.parentAreaId && !ids.AREA.has(area.parentAreaId)) throw new Error('Area collection referenced an invisible parent Area');
+  }
+  for (const relationship of model.relationships) {
+    if (!ids[relationship.fromType].has(relationship.fromId) || !ids[relationship.toType].has(relationship.toId)) {
+      throw new Error('Asset relationship collection referenced a resource outside the visible Site model');
+    }
+  }
+  for (const point of model.telemetryPoints) {
+    if (!ids.DEVICE.has(point.reportingDeviceId) || (point.sensorId && !ids.SENSOR.has(point.sensorId))) {
+      throw new Error('Telemetry Point collection referenced an invisible Device Endpoint or Sensor');
+    }
+  }
+  for (const input of model.calculatedPointInputs) {
+    const calculatedPoint = model.telemetryPoints.find((point) => point.id === input.calculatedPointId);
+    if (calculatedPoint?.pointKind !== 'CALCULATED'
+      || !ids.POINT.has(input.inputPointId)
+      || input.formulaRevision !== calculatedPoint.formulaRevision) {
+      throw new Error('Calculated Point input collection referenced an invalid Point or formula revision');
+    }
+  }
+
+  const independentSensorDevices = new Set(model.relationships
+    .filter((relationship) => relationship.fromType === 'SENSOR'
+      && relationship.toType === 'DEVICE'
+      && relationship.role === 'INDEPENDENT_DEVICE'
+      && relationship.status === 'ACTIVE'
+      && relationship.validTo === null)
+    .map((relationship) => relationship.toId)).size;
+  const expectedCounts = {
+    areas: model.areas.length,
+    equipment: model.equipment.length,
+    deviceEndpoints: model.devices.length,
+    sensors: model.sensors.length,
+    telemetryPoints: model.telemetryPoints.length,
+    calculatedPoints: model.telemetryPoints.filter((point) => point.pointKind === 'CALCULATED').length,
+    independentSensorDevices,
+  };
+  if (Object.entries(expectedCounts).some(([key, value]) => model.counts[key as keyof typeof expectedCounts] !== value)) {
+    throw new Error('Asset Model counts do not match the returned relationship graph');
+  }
 }
 
 export async function loadRealAssetsRegistry(input: LoadRealAssetsRegistryInput): Promise<RealAssetsRegistryData> {
-  const [equipmentCollection, deviceCollection, bindingCollection] = await Promise.all([
-    collectRegistryCollection<Equipment>((params, init) => input.client.listSiteEquipment(input.siteId, params, init), input.signal),
-    collectRegistryCollection<Device>((params, init) => input.client.listSiteDevices(input.siteId, params, init), input.signal),
-    collectRegistryCollection<DeviceBinding>((params, init) => input.client.listSiteDeviceBindings(input.siteId, params, init), input.signal),
-  ]);
-  const equipment = equipmentCollection.items;
-  const devices = deviceCollection.items;
-  const bindings = bindingCollection.items;
-  validateRegistryScope(equipment, input.organizationId, input.siteId, 'Equipment collection');
-  validateRegistryScope(devices, input.organizationId, input.siteId, 'Device collection');
-  validateRegistryScope(bindings, input.organizationId, input.siteId, 'DeviceBinding collection');
-
-  const routePolicyRevisions = [
-    equipmentCollection.routePolicyRevision,
-    deviceCollection.routePolicyRevision,
-    bindingCollection.routePolicyRevision,
-  ];
-  if (new Set(routePolicyRevisions).size > 1) {
-    throw new Error('Registry collections were read under different route-policy revisions');
-  }
-
-  const equipmentIds = new Set(equipment.map((item) => item.id));
-  const deviceIds = new Set(devices.map((item) => item.id));
-  if (bindings.some((binding) => !equipmentIds.has(binding.equipmentId) || !deviceIds.has(binding.deviceId))) {
-    throw new Error('DeviceBinding collection referenced a resource outside the visible Site inventory');
-  }
-  return { equipment, devices, bindings, routePolicyRevision: routePolicyRevisions[0] ?? null };
+  const response = await input.client.getSiteAssetModel(input.siteId, { signal: input.signal });
+  validateAssetModel(response.data, input.organizationId, input.siteId);
+  return { assetModel: response.data, routePolicyRevision: response.routePolicyRevision };
 }
 
 function requestedKeys(device: Device): string[] {
@@ -233,7 +230,7 @@ export function realAssetsRegistryQueryKey(
   siteId: string,
   routePolicyEpoch = 0,
 ): readonly unknown[] {
-  return ['real-assets', generation, organizationId, siteId, 'registry', routePolicyEpoch] as const;
+  return ['real-assets', generation, organizationId, siteId, 'asset-model', routePolicyEpoch] as const;
 }
 
 export function realAssetsCurrentStateQueryKey(

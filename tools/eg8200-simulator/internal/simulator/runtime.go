@@ -16,13 +16,16 @@ const (
 type Runtime struct {
 	plant        *Plant
 	client       *ThingsBoardClient
+	scheduler    *MeasurementScheduler
 	interval     time.Duration
 	controllable []string
 	logger       *slog.Logger
 
-	mu            sync.RWMutex
-	lastPublished time.Time
-	lastError     string
+	mu                        sync.RWMutex
+	lastPublished             time.Time
+	lastError                 string
+	publishedDeviceIDs        map[string]struct{}
+	expectedPublishingDevices int
 
 	rpcMu           sync.Mutex
 	lastRPCByDevice map[string]cachedRPCResult
@@ -37,21 +40,32 @@ func NewRuntime(config Config, plant *Plant, client *ThingsBoardClient, logger *
 	if plant == nil || client == nil {
 		return nil, errors.New("simulator runtime dependencies are incomplete")
 	}
+	scheduler, err := NewMeasurementScheduler(config)
+	if err != nil {
+		return nil, err
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
+	publishingDevices := make(map[string]struct{}, len(config.Points))
+	for _, point := range config.Points {
+		publishingDevices[point.DeviceID] = struct{}{}
+	}
 	return &Runtime{
-		plant:    plant,
-		client:   client,
-		interval: config.Interval(),
+		plant:     plant,
+		client:    client,
+		scheduler: scheduler,
+		interval:  config.Interval(),
 		controllable: []string{
 			config.Plant.Chiller.ID,
 			config.Plant.ChilledWaterPump.ID,
 			config.Plant.CoolingWaterPump.ID,
 			config.Plant.CoolingTower.ID,
 		},
-		logger:          logger,
-		lastRPCByDevice: make(map[string]cachedRPCResult, len(config.Plant.DeviceIDs())),
+		logger:                    logger,
+		publishedDeviceIDs:        make(map[string]struct{}, len(publishingDevices)),
+		expectedPublishingDevices: len(publishingDevices),
+		lastRPCByDevice:           make(map[string]cachedRPCResult, len(config.Plant.DeviceIDs())),
 	}, nil
 }
 
@@ -87,22 +101,42 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 func (runtime *Runtime) Ready() bool {
 	runtime.mu.RLock()
 	defer runtime.mu.RUnlock()
-	return !runtime.lastPublished.IsZero() && runtime.lastError == ""
+	return !runtime.lastPublished.IsZero() &&
+		runtime.lastError == "" &&
+		len(runtime.publishedDeviceIDs) == runtime.expectedPublishingDevices
 }
 
 func (runtime *Runtime) publish(ctx context.Context, snapshot Snapshot) error {
-	publishContext, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	err := runtime.client.PublishSnapshot(publishContext, snapshot)
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
+	measurements, err := runtime.scheduler.Observe(snapshot)
 	if err != nil {
-		runtime.lastError = err.Error()
+		runtime.recordPublishFailure(err)
 		return err
 	}
-	runtime.lastPublished = snapshot.ObservedAt
+	if len(measurements) == 0 {
+		return nil
+	}
+	publishContext, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if err := runtime.client.PublishMeasurements(publishContext, measurements); err != nil {
+		runtime.recordPublishFailure(err)
+		return err
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	for _, measurement := range measurements {
+		runtime.publishedDeviceIDs[measurement.DeviceID] = struct{}{}
+		if measurement.ObservedAt.After(runtime.lastPublished) {
+			runtime.lastPublished = measurement.ObservedAt
+		}
+	}
 	runtime.lastError = ""
 	return nil
+}
+
+func (runtime *Runtime) recordPublishFailure(err error) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	runtime.lastError = err.Error()
 }
 
 func (runtime *Runtime) pollCommands(ctx context.Context, deviceID string) {

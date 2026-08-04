@@ -14,19 +14,12 @@ import {
 } from './central-plant-local-contract.mjs';
 import { buildCentralPlantRouteOwnership } from './central-plant-local-routing.mjs';
 import { buildS1SeedSQL, buildS2SeedSQL } from './central-plant-local-seed.mjs';
+import { buildCentralPlantSimulatorConfig } from './central-plant-spatial-model.mjs';
 
 const root = resolve(process.cwd());
 const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
 const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-const tokenEnvironmentNames = Object.freeze([
-  ['TB', 'TOKEN', 'CHILLER', '01'].join('_'),
-  ['TB', 'TOKEN', 'CHWP', '01'].join('_'),
-  ['TB', 'TOKEN', 'CWP', '01'].join('_'),
-  ['TB', 'TOKEN', 'CT', '01'].join('_'),
-  ['TB', 'TOKEN', 'HVAC', 'METER'].join('_'),
-  ['TB', 'TOKEN', 'BTU', 'METER', '01'].join('_'),
-]);
 
 function joined(parts) {
   return parts.join('-');
@@ -505,19 +498,23 @@ export async function startCentralPlantLocalTopology(options = {}) {
     await waitForHTTP(thingsBoardURL, 'ThingsBoard', { attempts: 900, interval: 500 });
 
     const adapterTemplate = JSON.parse(await readFile(resolve(root, 'services/thingsboard-telemetry-adapter/configs/central-plant.local.example.json'), 'utf8'));
+    const simulatorConfig = buildCentralPlantSimulatorConfig(adapterTemplate, {
+      thingsBoardBaseUrl: thingsBoardURL,
+      publishInterval: '2s',
+    });
     const { pointsByDevice, pointKeysByDevice } = adapterPointMaps(adapterTemplate);
     const pointCount = [...pointsByDevice.values()].reduce((total, points) => total + points.length, 0);
-    await writeFile(paths.s1Seed, buildS1SeedSQL({ oidcIssuer: oidcURL, pointKeysByDevice }), 'utf8');
+    await writeFile(paths.s1Seed, buildS1SeedSQL({
+      oidcIssuer: oidcURL,
+      pointKeysByDevice,
+      spatialPoints: simulatorConfig.points,
+    }), 'utf8');
     await writeFile(paths.s2Seed, buildS2SeedSQL({ pointsByDevice }), 'utf8');
     await installDatabaseSeed(s1Container, paths.s1Seed, '/tmp/central-plant-s1.sql', 'hvac_s1');
     await installDatabaseSeed(s2Container, paths.s2Seed, '/tmp/central-plant-s2.sql', 'hvac_s2');
 
     const provisioned = await provisionThingsBoard(thingsBoardURL);
     await writePrivate(paths.providerFile, `${provisioned.authorization}\n`);
-
-    const simulatorConfig = JSON.parse(await readFile(resolve(root, 'tools/eg8200-simulator/configs/central-plant.local.json'), 'utf8'));
-    simulatorConfig.thingsBoardBaseUrl = thingsBoardURL;
-    simulatorConfig.publishInterval = '2s';
     await writeFile(paths.simulatorConfig, `${JSON.stringify(simulatorConfig, null, 2)}\n`, 'utf8');
 
     adapterTemplate.pollInterval = '2s';
@@ -798,8 +795,12 @@ export async function startCentralPlantLocalTopology(options = {}) {
       GOCACHE: goCache,
       EG8200_SIMULATOR_DIAGNOSTICS_ADDR: `127.0.0.1:${ports.simulatorDiagnostics}`,
     };
+    const simulatorCredentialEnvironmentNames = Object.values(simulatorConfig.credentialEnvByDeviceId ?? {});
+    if (simulatorCredentialEnvironmentNames.length !== provisioned.devices.length) {
+      throw new Error('simulator credential bindings do not cover all provisioned ThingsBoard Devices');
+    }
     provisioned.devices.forEach((device, index) => {
-      simulatorEnvironment[tokenEnvironmentNames[index]] = device.access;
+      simulatorEnvironment[simulatorCredentialEnvironmentNames[index]] = device.access;
     });
     services.simulator = spawnService('EG8200 simulator', paths.simulatorBinary, [
       '-config', paths.simulatorConfig,

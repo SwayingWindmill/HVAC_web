@@ -68,7 +68,16 @@ func main() {
 		}
 	}()
 	go func() {
-		logger.Info("eg8200_simulator_started", "gateway_id", config.GatewayID, "device_count", len(config.Plant.DeviceIDs()), "publish_interval", config.PublishInterval)
+		logger.Info(
+			"eg8200_simulator_started",
+			"gateway_id", config.GatewayID,
+			"area_count", len(config.Areas),
+			"equipment_count", len(config.Equipment),
+			"device_endpoint_count", len(config.Devices),
+			"sensor_count", len(config.Sensors),
+			"telemetry_point_count", len(config.Points),
+			"scheduler_interval", config.Interval().String(),
+		)
 		errCh <- runtime.Run(ctx)
 	}()
 

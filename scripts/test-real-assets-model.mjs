@@ -5,6 +5,7 @@ import {
   resolveRealAssetsProfile,
 } from '../apps/hvac-web/src/real/assets/catalog.ts';
 import {
+  buildRealAssetsHierarchy,
   buildRealAssetsRows,
   projectRealAssetsOperatingState,
   resolveDeviceBinding,
@@ -48,20 +49,108 @@ function equipment(id, displayName) {
   };
 }
 
-function binding(id, equipmentId, revision = 1) {
+function relationship(id, fromType, fromId, toType, toId, revision = 1, overrides = {}) {
   return {
     id,
     owningOrganizationId: organizationId,
     siteId,
-    deviceId,
-    equipmentId,
-    bindingRole: 'PRIMARY_CONTROLLER',
+    fromType,
+    fromId,
+    toType,
+    toId,
+    role: fromType === 'DEVICE' ? 'PRIMARY_CONTROLLER' : 'INSTALLED_IN',
     status: 'ACTIVE',
     validFrom: '2026-07-01T00:00:00.000Z',
     validTo: null,
     revision,
     createdAt: '2026-07-01T00:00:00.000Z',
     updatedAt: '2026-07-30T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function area(id = '01900000-0005-7000-8000-000000000001', displayName = 'Central Plant') {
+  return {
+    id,
+    owningOrganizationId: organizationId,
+    siteId,
+    parentAreaId: null,
+    code: displayName.replaceAll(' ', '-').toUpperCase(),
+    displayName,
+    areaType: 'PLANT_ROOM',
+    status: 'ACTIVE',
+    revision: 1,
+    createdAt: '2026-07-01T00:00:00.000Z',
+    updatedAt: '2026-07-30T00:00:00.000Z',
+  };
+}
+
+function sensor(id = '01900000-0006-7000-8000-000000000001') {
+  return {
+    id,
+    owningOrganizationId: organizationId,
+    siteId,
+    code: 'SENSOR-1',
+    displayName: 'Temperature Sensor',
+    sensorType: 'TEMPERATURE',
+    manufacturer: null,
+    model: null,
+    serialNumber: null,
+    calibrationDueAt: null,
+    metadata: {},
+    status: 'ACTIVE',
+    revision: 1,
+    createdAt: '2026-07-01T00:00:00.000Z',
+    updatedAt: '2026-07-30T00:00:00.000Z',
+  };
+}
+
+function telemetryPoint(id, reportingDeviceId, sensorId, pointKind = 'MEASURED') {
+  return {
+    id,
+    owningOrganizationId: organizationId,
+    siteId,
+    reportingDeviceId,
+    sensorId,
+    pointKey: pointKind === 'CALCULATED' ? 'plant.delta_t' : 'plant.temperature',
+    sourceKey: pointKind === 'CALCULATED' ? 'calculated.delta_t' : 'sensor.temperature',
+    displayName: pointKind === 'CALCULATED' ? 'Delta T' : 'Temperature',
+    pointKind,
+    valueType: 'NUMBER',
+    unit: 'Cel',
+    writable: false,
+    sampleIntervalMs: 1000,
+    publishIntervalMs: 1000,
+    staleAfterMs: 5000,
+    formulaRevision: pointKind === 'CALCULATED' ? 'formula-v1' : null,
+    sourceMetadata: {},
+    status: 'ACTIVE',
+    revision: 1,
+    createdAt: '2026-07-01T00:00:00.000Z',
+    updatedAt: '2026-07-30T00:00:00.000Z',
+  };
+}
+
+function siteAssetModel({ areas = [], equipment: equipmentItems = [], devices = [], sensors = [], telemetryPoints = [], relationships = [] }) {
+  return {
+    schemaVersion: 1,
+    siteId,
+    areas,
+    equipment: equipmentItems,
+    devices,
+    sensors,
+    telemetryPoints,
+    relationships,
+    calculatedPointInputs: [],
+    counts: {
+      areas: areas.length,
+      equipment: equipmentItems.length,
+      deviceEndpoints: devices.length,
+      sensors: sensors.length,
+      telemetryPoints: telemetryPoints.length,
+      calculatedPoints: telemetryPoints.filter((point) => point.pointKind === 'CALCULATED').length,
+      independentSensorDevices: 0,
+    },
   };
 }
 
@@ -189,35 +278,106 @@ test('per-Device current-state failures preserve not-visible and catalog-drift e
   assert.deepEqual(drift.reasons, ['POINT_CATALOG_CONTRACT_DRIFT']);
 });
 
-test('DeviceBinding resolves one current Equipment and exposes ambiguous or unbound states', () => {
+test('Asset relationships resolve one or several current Equipment bindings and expose unbound states', () => {
   const equipmentA = equipment(equipmentAId, 'Alpha Chiller');
   const equipmentB = equipment(equipmentBId, 'Beta Chiller');
   const equipmentById = new Map([[equipmentA.id, equipmentA], [equipmentB.id, equipmentB]]);
-  const bindingA = binding('01900000-0004-7000-8000-000000000001', equipmentAId);
-  const bindingB = binding('01900000-0004-7000-8000-000000000002', equipmentBId, 2);
+  const relationshipA = relationship('01900000-0004-7000-8000-000000000001', 'DEVICE', deviceId, 'EQUIPMENT', equipmentAId);
+  const relationshipB = relationship('01900000-0004-7000-8000-000000000002', 'DEVICE', deviceId, 'EQUIPMENT', equipmentBId, 2);
 
-  assert.equal(resolveDeviceBinding(device(), [bindingA], equipmentById, now).state, 'bound');
+  assert.equal(resolveDeviceBinding(device(), [relationshipA], equipmentById, now).state, 'bound');
   assert.equal(resolveDeviceBinding(device(), [], equipmentById, now).state, 'unbound');
-  const ambiguous = resolveDeviceBinding(device(), [bindingA, bindingB], equipmentById, now);
-  assert.equal(ambiguous.state, 'ambiguous');
-  assert.equal(ambiguous.bindingIds.length, 2);
+  const multiple = resolveDeviceBinding(device(), [relationshipA, relationshipB], equipmentById, now);
+  assert.equal(multiple.state, 'multi-bound');
+  assert.deepEqual(multiple.bindings.map((binding) => binding.equipment.id), [equipmentBId, equipmentAId]);
 });
 
-test('rows sort by Equipment then Device identity while preserving unbound Devices', () => {
+test('rows sort by Area, Equipment and Device identity while preserving unbound Device Endpoints', () => {
+  const plantArea = area();
   const equipmentA = equipment(equipmentAId, 'Alpha Chiller');
   const equipmentB = equipment(equipmentBId, 'Beta Chiller');
   const deviceA = device({ id: deviceId, displayName: 'Device B' });
   const deviceB = device({ id: '01900000-0003-7000-8000-000000000002', displayName: 'Device A' });
   const deviceC = device({ id: '01900000-0003-7000-8000-000000000003', displayName: 'Unbound' });
-  const rows = buildRealAssetsRows({
-    devices: [deviceC, deviceA, deviceB],
+  const model = siteAssetModel({
+    areas: [plantArea],
     equipment: [equipmentB, equipmentA],
-    bindings: [
-      binding('01900000-0004-7000-8000-000000000010', equipmentBId),
-      { ...binding('01900000-0004-7000-8000-000000000011', equipmentAId), deviceId: deviceB.id },
+    devices: [deviceC, deviceA, deviceB],
+    relationships: [
+      relationship('01900000-0004-7000-8000-000000000001', 'EQUIPMENT', equipmentAId, 'AREA', plantArea.id),
+      relationship('01900000-0004-7000-8000-000000000002', 'EQUIPMENT', equipmentBId, 'AREA', plantArea.id),
+      relationship('01900000-0004-7000-8000-000000000010', 'DEVICE', deviceA.id, 'EQUIPMENT', equipmentBId),
+      relationship('01900000-0004-7000-8000-000000000011', 'DEVICE', deviceB.id, 'EQUIPMENT', equipmentAId),
     ],
-    snapshots: new Map(),
-    now,
   });
+  const rows = buildRealAssetsRows({ assetModel: model, snapshots: new Map(), now });
   assert.deepEqual(rows.map((row) => row.device.displayName), ['Device A', 'Device B', 'Unbound']);
+  assert.equal(rows[0].area.state, 'bound');
+  assert.equal(rows[2].registeredPointCount, 0);
+});
+
+test('hierarchy projects Area to Equipment to Device Endpoint to Sensor to Telemetry Point', () => {
+  const plantArea = area();
+  const equipmentA = equipment(equipmentAId, 'Alpha Chiller');
+  const endpoint = device();
+  const measurementSensor = sensor();
+  const measured = telemetryPoint('01900000-0007-7000-8000-000000000001', endpoint.id, measurementSensor.id);
+  const calculated = telemetryPoint('01900000-0007-7000-8000-000000000002', endpoint.id, null, 'CALCULATED');
+  const model = siteAssetModel({
+    areas: [plantArea],
+    equipment: [equipmentA],
+    devices: [endpoint],
+    sensors: [measurementSensor],
+    telemetryPoints: [measured, calculated],
+    relationships: [
+      relationship('01900000-0004-7000-8000-000000000020', 'EQUIPMENT', equipmentA.id, 'AREA', plantArea.id),
+      relationship('01900000-0004-7000-8000-000000000021', 'DEVICE', endpoint.id, 'EQUIPMENT', equipmentA.id),
+      relationship('01900000-0004-7000-8000-000000000022', 'SENSOR', measurementSensor.id, 'DEVICE', endpoint.id),
+    ],
+  });
+  const hierarchy = buildRealAssetsHierarchy(model, 'Test Site', now);
+  const areaNode = hierarchy.children[0];
+  const equipmentNode = areaNode.children[0];
+  const deviceNode = equipmentNode.children[0];
+  const sensorNode = deviceNode.children.find((node) => node.kind === 'sensor');
+  const virtualSensorNode = deviceNode.children.find((node) => node.kind === 'virtual-sensor');
+
+  assert.equal(hierarchy.kind, 'site');
+  assert.equal(areaNode.kind, 'area');
+  assert.equal(equipmentNode.kind, 'equipment');
+  assert.equal(deviceNode.kind, 'device');
+  assert.equal(sensorNode.children[0].kind, 'point');
+  assert.equal(sensorNode.children[0].label, 'Temperature');
+  assert.equal(virtualSensorNode.children[0].label, 'Delta T');
+  assert.deepEqual(areaNode.deviceIds, [endpoint.id]);
+});
+
+test('hierarchy projects one Device Endpoint under every active Equipment binding with unique tree keys', () => {
+  const plantArea = area();
+  const equipmentA = equipment(equipmentAId, 'Alpha Chiller');
+  const equipmentB = equipment(equipmentBId, 'Beta Chiller');
+  const endpoint = device();
+  const model = siteAssetModel({
+    areas: [plantArea],
+    equipment: [equipmentA, equipmentB],
+    devices: [endpoint],
+    relationships: [
+      relationship('01900000-0004-7000-8000-000000000030', 'EQUIPMENT', equipmentA.id, 'AREA', plantArea.id),
+      relationship('01900000-0004-7000-8000-000000000031', 'EQUIPMENT', equipmentB.id, 'AREA', plantArea.id),
+      relationship('01900000-0004-7000-8000-000000000032', 'DEVICE', endpoint.id, 'EQUIPMENT', equipmentA.id),
+      relationship('01900000-0004-7000-8000-000000000033', 'DEVICE', endpoint.id, 'EQUIPMENT', equipmentB.id, 2),
+    ],
+  });
+
+  const rows = buildRealAssetsRows({ assetModel: model, snapshots: new Map(), now });
+  assert.equal(rows[0].binding.state, 'multi-bound');
+  assert.equal(rows[0].area.state, 'bound');
+
+  const hierarchy = buildRealAssetsHierarchy(model, 'Test Site', now);
+  const areaNode = hierarchy.children[0];
+  const equipmentNodes = areaNode.children.filter((node) => node.kind === 'equipment');
+  assert.equal(equipmentNodes.length, 2);
+  assert.deepEqual(equipmentNodes.map((node) => node.children[0].deviceIds), [[endpoint.id], [endpoint.id]]);
+  assert.notEqual(equipmentNodes[0].children[0].key, equipmentNodes[1].children[0].key);
+  assert.deepEqual(areaNode.deviceIds, [endpoint.id]);
 });

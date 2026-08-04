@@ -88,6 +88,7 @@ const expectedOperations = {
   getEquipment: ['get', '/api/v1/equipment/{equipmentId}'],
   listSiteDevices: ['get', '/api/v1/sites/{siteId}/devices'],
   listSiteDeviceBindings: ['get', '/api/v1/sites/{siteId}/device-bindings'],
+  getSiteAssetModel: ['get', '/api/v1/sites/{siteId}/asset-model'],
   getDevice: ['get', '/api/v1/devices/{deviceId}'],
 };
 const operations = {};
@@ -112,6 +113,7 @@ const expectedSuccessSchemas = {
   getEquipment: 'Equipment',
   listSiteDevices: 'DeviceCollection',
   listSiteDeviceBindings: 'DeviceBindingCollection',
+  getSiteAssetModel: 'SiteAssetModel',
   getDevice: 'Device',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
@@ -153,6 +155,13 @@ const schemaRequirements = {
   EquipmentCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   DeviceCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   DeviceBindingCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
+  Area: [['id', 'owningOrganizationId', 'siteId', 'parentAreaId', 'code', 'displayName', 'areaType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'owningOrganizationId', 'siteId', 'parentAreaId', 'code', 'displayName', 'areaType', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Sensor: [['id', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'sensorType', 'manufacturer', 'model', 'serialNumber', 'calibrationDueAt', 'metadata', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'sensorType', 'manufacturer', 'model', 'serialNumber', 'calibrationDueAt', 'metadata', 'status', 'revision', 'createdAt', 'updatedAt']],
+  TelemetryPoint: [['id', 'owningOrganizationId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointKey', 'sourceKey', 'displayName', 'pointKind', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'formulaRevision', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'owningOrganizationId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointKey', 'sourceKey', 'displayName', 'pointKind', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'formulaRevision', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt']],
+  AssetRelationship: [['id', 'owningOrganizationId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt'], ['id', 'owningOrganizationId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
+  CalculatedPointInput: [['owningOrganizationId', 'siteId', 'calculatedPointId', 'inputPointId', 'inputRole', 'ordinal', 'formulaRevision'], ['owningOrganizationId', 'siteId', 'calculatedPointId', 'inputPointId', 'inputRole', 'ordinal', 'formulaRevision']],
+  AssetModelCounts: [['areas', 'equipment', 'deviceEndpoints', 'sensors', 'telemetryPoints', 'calculatedPoints', 'independentSensorDevices'], ['areas', 'equipment', 'deviceEndpoints', 'sensors', 'telemetryPoints', 'calculatedPoints', 'independentSensorDevices']],
+  SiteAssetModel: [['schemaVersion', 'siteId', 'areas', 'equipment', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'calculatedPointInputs', 'counts'], ['schemaVersion', 'siteId', 'areas', 'equipment', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'calculatedPointInputs', 'counts']],
   FieldError: [['field', 'message'], ['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'fieldErrors']],
 };
@@ -234,6 +243,7 @@ const replacements = {
   __EQUIPMENT_PATH__: operations.getEquipment.path,
   __SITE_DEVICES_PATH__: operations.listSiteDevices.path,
   __SITE_DEVICE_BINDINGS_PATH__: operations.listSiteDeviceBindings.path,
+  __SITE_ASSET_MODEL_PATH__: operations.getSiteAssetModel.path,
   __DEVICE_PATH__: operations.getDevice.path,
 };
 

@@ -8,10 +8,18 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import WebSocket from 'ws';
 import { centralPlantDevices, centralPlantIdentity } from './central-plant-local-contract.mjs';
+import {
+  centralPlantAreas,
+  centralPlantCalculatedPointCount,
+  centralPlantDeviceEndpoints,
+  centralPlantEquipment,
+  centralPlantSensors,
+} from './central-plant-spatial-model.mjs';
 import { startCentralPlantLocalTopology } from './central-plant-local-topology.mjs';
 
 const root = resolve(process.cwd());
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
+const durableSmokeReportPath = resolve(root, 'out/central-plant-local-smoke-report.json');
 
 async function findAvailablePort() {
   const server = createTCPServer();
@@ -142,28 +150,58 @@ async function browserAudit(topology) {
     await client.send('Runtime.enable');
     await client.send('Page.enable');
     const sitePath = `/sites/${centralPlantIdentity.siteId}/assets`;
+    const expectedAssetCounts = {
+      areas: centralPlantAreas.length,
+      equipment: centralPlantEquipment.length,
+      deviceEndpoints: centralPlantDeviceEndpoints.length,
+      sensors: centralPlantSensors.length,
+      telemetryPoints: topology.pointCount,
+      calculatedPoints: centralPlantCalculatedPointCount,
+      independentSensorDevices: centralPlantSensors.filter((sensor) => sensor.mode === 'INDEPENDENT_DEVICE').length,
+    };
     await client.send('Page.navigate', {
       url: `${topology.webURL}/api/v1/auth/login?returnTo=${encodeURIComponent(sitePath)}`,
     });
-    await waitForCondition(client, `
-      location.pathname === ${JSON.stringify(sitePath)}
-      && Boolean(document.querySelector('[data-testid="real-site-route-assets"]'))
-      && document.body.innerText.includes('中央机房')
-    `, 'authenticated central plant Site Assets shell');
+    await waitForCondition(client, `(() => {
+      const root = document.querySelector('[data-testid="real-site-route-assets"]');
+      return location.pathname === ${JSON.stringify(sitePath)}
+        && root?.dataset.areaCount === ${JSON.stringify(String(expectedAssetCounts.areas))}
+        && root?.dataset.equipmentCount === ${JSON.stringify(String(expectedAssetCounts.equipment))}
+        && root?.dataset.deviceEndpointCount === ${JSON.stringify(String(expectedAssetCounts.deviceEndpoints))}
+        && root?.dataset.sensorCount === ${JSON.stringify(String(expectedAssetCounts.sensors))}
+        && root?.dataset.telemetryPointCount === ${JSON.stringify(String(expectedAssetCounts.telemetryPoints))}
+        && root?.dataset.independentSensorDeviceCount === ${JSON.stringify(String(expectedAssetCounts.independentSensorDevices))}
+        && root?.dataset.calculatedPointCount === ${JSON.stringify(String(expectedAssetCounts.calculatedPoints))}
+        && document.body.innerText.includes('中央机房')
+        && document.body.innerText.includes('Telemetry Point');
+    })()`, 'authenticated central plant atomic Asset Model shell');
 
     const chiller = centralPlantDevices.find((device) => device.name === 'CHILLER-01');
     assert(chiller, 'CHILLER-01 contract is unavailable');
     const requestedKeys = ['chiller.cop', 'chiller.power', 'chiller.cooling_capacity'];
     const authority = await waitForCondition(client, `(async () => {
       try {
-        const devicesResponse = await fetch(
-          ${JSON.stringify(`/api/v1/sites/${centralPlantIdentity.siteId}/devices?limit=100`)},
+        const assetModelResponse = await fetch(
+          ${JSON.stringify(`/api/v1/sites/${centralPlantIdentity.siteId}/asset-model`)},
           { credentials: 'include', headers: { Accept: 'application/json, application/problem+json' } },
         );
-        const devicesBody = await devicesResponse.json();
-        const devices = Array.isArray(devicesBody?.items) ? devicesBody.items : [];
-        if (!devicesResponse.ok || devices.length !== 6) return false;
-        const chiller = devices.find((device) => device.id === ${JSON.stringify(chiller.platformDeviceId)} && device.displayName === 'CHILLER-01');
+        const assetModel = await assetModelResponse.json();
+        const expectedCounts = ${JSON.stringify(expectedAssetCounts)};
+        if (!assetModelResponse.ok || assetModel?.schemaVersion !== 1 || assetModel?.siteId !== ${JSON.stringify(centralPlantIdentity.siteId)}) return false;
+        if (!assetModel?.counts || Object.entries(expectedCounts).some(([key, value]) => assetModel.counts[key] !== value)) return false;
+        const areas = Array.isArray(assetModel.areas) ? assetModel.areas : [];
+        const equipment = Array.isArray(assetModel.equipment) ? assetModel.equipment : [];
+        const devices = Array.isArray(assetModel.devices) ? assetModel.devices : [];
+        const sensors = Array.isArray(assetModel.sensors) ? assetModel.sensors : [];
+        const telemetryPoints = Array.isArray(assetModel.telemetryPoints) ? assetModel.telemetryPoints : [];
+        const relationships = Array.isArray(assetModel.relationships) ? assetModel.relationships : [];
+        if (areas.length !== expectedCounts.areas
+          || equipment.length !== expectedCounts.equipment
+          || devices.length !== expectedCounts.deviceEndpoints
+          || sensors.length !== expectedCounts.sensors
+          || telemetryPoints.length !== expectedCounts.telemetryPoints
+          || relationships.length === 0) return false;
+        const chiller = devices.find((device) => device.id === ${JSON.stringify(chiller.platformDeviceId)} && device.displayName.includes('CHILLER-01'));
         if (!chiller) return false;
         const query = new URLSearchParams({ keys: ${JSON.stringify(requestedKeys.join(','))} });
         const snapshotResponse = await fetch(
@@ -176,8 +214,11 @@ async function browserAudit(topology) {
         if (!${JSON.stringify(requestedKeys)}.every((key) => values[key]?.state === 'PRESENT')) return false;
         return {
           sitePath: location.pathname,
-          deviceCount: devices.length,
-          deviceNames: devices.map((device) => device.displayName).sort(),
+          assetModel: {
+            counts: assetModel.counts,
+            deviceNames: devices.map((device) => device.displayName).sort(),
+            relationshipCount: relationships.length,
+          },
           snapshot: {
             deviceId: snapshot.deviceId,
             businessRevision: snapshot.businessRevision,
@@ -196,8 +237,9 @@ async function browserAudit(topology) {
         return false;
       }
     })()`, 'Gateway Registry and S2 authority');
-    assert.equal(authority.deviceCount, 6);
-    assert.deepEqual(authority.deviceNames, centralPlantDevices.map((device) => device.name).sort());
+    assert.deepEqual(authority.assetModel.counts, expectedAssetCounts);
+    assert.deepEqual(authority.assetModel.deviceNames, centralPlantDevices.map((device) => device.name).sort());
+    assert.ok(authority.assetModel.relationshipCount > 0);
     assert.equal(authority.snapshot.deviceId, chiller.platformDeviceId);
     assert.equal(authority.snapshot.values.length, requestedKeys.length);
     return { browser: browserPath, ...authority };
@@ -226,7 +268,9 @@ async function runSmoke() {
       browser,
       verifiedAt: new Date().toISOString(),
     };
-    await writeFile(resolve(root, 'out/central-plant-local/smoke-report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    const serialized = `${JSON.stringify(report, null, 2)}\n`;
+    await writeFile(resolve(root, 'out/central-plant-local/smoke-report.json'), serialized, 'utf8');
+    await writeFile(durableSmokeReportPath, serialized, 'utf8');
     console.log(JSON.stringify(report, null, 2));
   } finally {
     await topology.stop();

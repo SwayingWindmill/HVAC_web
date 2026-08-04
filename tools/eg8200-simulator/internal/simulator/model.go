@@ -243,6 +243,11 @@ func (plant *Plant) snapshotLocked() Snapshot {
 				"instantCoolingCapacityKw":    round(plant.chiller.coolingCapacityKW, 3),
 				"accumulatedCoolingEnergyKwh": round(plant.totalCoolingEnergyKWh, 6),
 			},
+			plant.config.WeatherStationID: {
+				"ambientDryBulbTemperatureC": round(plant.config.AmbientDryBulbC, 3),
+				"ambientWetBulbTemperatureC": round(plant.config.AmbientWetBulbC, 3),
+				"relativeHumidityPct":        round(clamp(100-5*(plant.config.AmbientDryBulbC-plant.config.AmbientWetBulbC), 5, 100), 3),
+			},
 		},
 	}
 }

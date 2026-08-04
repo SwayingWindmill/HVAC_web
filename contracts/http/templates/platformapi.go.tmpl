@@ -33,6 +33,7 @@ const (
 	GetEquipmentPathTemplate              = "__EQUIPMENT_PATH__"
 	ListSiteDevicesPathTemplate           = "__SITE_DEVICES_PATH__"
 	ListSiteDeviceBindingsPathTemplate    = "__SITE_DEVICE_BINDINGS_PATH__"
+	GetSiteAssetModelPathTemplate         = "__SITE_ASSET_MODEL_PATH__"
 	GetDevicePathTemplate                 = "__DEVICE_PATH__"
 )
 
@@ -270,6 +271,112 @@ type DeviceBindingCollection struct {
 	HasMore    bool            `json:"hasMore"`
 }
 
+type Area struct {
+	ID                   string  `json:"id"`
+	OwningOrganizationID string  `json:"owningOrganizationId"`
+	SiteID               string  `json:"siteId"`
+	ParentAreaID         *string `json:"parentAreaId"`
+	Code                 string  `json:"code"`
+	DisplayName          string  `json:"displayName"`
+	AreaType             string  `json:"areaType"`
+	Status               string  `json:"status"`
+	Revision             int64   `json:"revision"`
+	CreatedAt            string  `json:"createdAt"`
+	UpdatedAt            string  `json:"updatedAt"`
+}
+
+type Sensor struct {
+	ID                   string         `json:"id"`
+	OwningOrganizationID string         `json:"owningOrganizationId"`
+	SiteID               string         `json:"siteId"`
+	Code                 string         `json:"code"`
+	DisplayName          string         `json:"displayName"`
+	SensorType           string         `json:"sensorType"`
+	Manufacturer         *string        `json:"manufacturer"`
+	Model                *string        `json:"model"`
+	SerialNumber         *string        `json:"serialNumber"`
+	CalibrationDueAt     *string        `json:"calibrationDueAt"`
+	Metadata             map[string]any `json:"metadata"`
+	Status               string         `json:"status"`
+	Revision             int64          `json:"revision"`
+	CreatedAt            string         `json:"createdAt"`
+	UpdatedAt            string         `json:"updatedAt"`
+}
+
+type TelemetryPoint struct {
+	ID                   string         `json:"id"`
+	OwningOrganizationID string         `json:"owningOrganizationId"`
+	SiteID               string         `json:"siteId"`
+	ReportingDeviceID    string         `json:"reportingDeviceId"`
+	SensorID             *string        `json:"sensorId"`
+	PointKey             string         `json:"pointKey"`
+	SourceKey            string         `json:"sourceKey"`
+	DisplayName          string         `json:"displayName"`
+	PointKind            string         `json:"pointKind"`
+	ValueType            string         `json:"valueType"`
+	Unit                 *string        `json:"unit"`
+	Writable             bool           `json:"writable"`
+	SampleIntervalMS     int            `json:"sampleIntervalMs"`
+	PublishIntervalMS    int            `json:"publishIntervalMs"`
+	StaleAfterMS         int            `json:"staleAfterMs"`
+	FormulaRevision      *string        `json:"formulaRevision"`
+	SourceMetadata       map[string]any `json:"sourceMetadata"`
+	Status               string         `json:"status"`
+	Revision             int64          `json:"revision"`
+	CreatedAt            string         `json:"createdAt"`
+	UpdatedAt            string         `json:"updatedAt"`
+}
+
+type AssetRelationship struct {
+	ID                   string  `json:"id"`
+	OwningOrganizationID string  `json:"owningOrganizationId"`
+	SiteID               string  `json:"siteId"`
+	FromType             string  `json:"fromType"`
+	FromID               string  `json:"fromId"`
+	ToType               string  `json:"toType"`
+	ToID                 string  `json:"toId"`
+	Role                 string  `json:"role"`
+	Status               string  `json:"status"`
+	ValidFrom            string  `json:"validFrom"`
+	ValidTo              *string `json:"validTo"`
+	Revision             int64   `json:"revision"`
+	CreatedAt            string  `json:"createdAt"`
+	UpdatedAt            string  `json:"updatedAt"`
+}
+
+type CalculatedPointInput struct {
+	OwningOrganizationID string `json:"owningOrganizationId"`
+	SiteID               string `json:"siteId"`
+	CalculatedPointID    string `json:"calculatedPointId"`
+	InputPointID         string `json:"inputPointId"`
+	InputRole            string `json:"inputRole"`
+	Ordinal              int    `json:"ordinal"`
+	FormulaRevision      string `json:"formulaRevision"`
+}
+
+type AssetModelCounts struct {
+	Areas                    int `json:"areas"`
+	Equipment                int `json:"equipment"`
+	DeviceEndpoints          int `json:"deviceEndpoints"`
+	Sensors                  int `json:"sensors"`
+	TelemetryPoints          int `json:"telemetryPoints"`
+	CalculatedPoints         int `json:"calculatedPoints"`
+	IndependentSensorDevices int `json:"independentSensorDevices"`
+}
+
+type SiteAssetModel struct {
+	SchemaVersion         int                    `json:"schemaVersion"`
+	SiteID                string                 `json:"siteId"`
+	Areas                 []Area                 `json:"areas"`
+	Equipment             []Equipment            `json:"equipment"`
+	Devices               []Device               `json:"devices"`
+	Sensors               []Sensor               `json:"sensors"`
+	TelemetryPoints       []TelemetryPoint       `json:"telemetryPoints"`
+	Relationships         []AssetRelationship    `json:"relationships"`
+	CalculatedPointInputs []CalculatedPointInput `json:"calculatedPointInputs"`
+	Counts                AssetModelCounts       `json:"counts"`
+}
+
 type FieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
@@ -321,6 +428,7 @@ type RegistryServerInterface interface {
 	GetEquipment(http.ResponseWriter, *http.Request, string)
 	ListSiteDevices(http.ResponseWriter, *http.Request, string, ListRegistryParams)
 	ListSiteDeviceBindings(http.ResponseWriter, *http.Request, string, ListRegistryParams)
+	GetSiteAssetModel(http.ResponseWriter, *http.Request, string)
 	GetDevice(http.ResponseWriter, *http.Request, string)
 }
 
@@ -448,6 +556,11 @@ func (c *Client) ListSiteDeviceBindings(ctx context.Context, siteID string, para
 		return nil, err
 	}
 	return doJSON[DeviceBindingCollection](ctx, c.httpClient, http.MethodGet, endpoint, "", nil)
+}
+
+func (c *Client) GetSiteAssetModel(ctx context.Context, siteID string) (*Response[SiteAssetModel], error) {
+	path := strings.Replace(GetSiteAssetModelPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	return doJSON[SiteAssetModel](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
 }
 
 func (c *Client) GetDevice(ctx context.Context, deviceID string) (*Response[Device], error) {

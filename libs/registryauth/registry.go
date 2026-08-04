@@ -56,6 +56,7 @@ const (
 	ActionDeviceList        Action = "device.list"
 	ActionDeviceRead        Action = "device.read"
 	ActionDeviceBindingList Action = "device-binding.list"
+	ActionAssetModelRead    Action = "asset-model.read"
 )
 
 func (action Action) Valid() bool {
@@ -69,7 +70,8 @@ func (action Action) Valid() bool {
 		ActionEquipmentRead,
 		ActionDeviceList,
 		ActionDeviceRead,
-		ActionDeviceBindingList:
+		ActionDeviceBindingList,
+		ActionAssetModelRead:
 		return true
 	default:
 		return false
@@ -78,7 +80,7 @@ func (action Action) Valid() bool {
 
 func (action Action) SiteScoped() bool {
 	switch action {
-	case ActionSiteList, ActionSiteRead, ActionEquipmentList, ActionEquipmentRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList:
+	case ActionSiteList, ActionSiteRead, ActionEquipmentList, ActionEquipmentRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList, ActionAssetModelRead:
 		return true
 	default:
 		return false

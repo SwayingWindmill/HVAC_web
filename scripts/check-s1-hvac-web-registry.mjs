@@ -36,6 +36,7 @@ for (const method of [
   'getEquipment',
   'listSiteDevices',
   'listSiteDeviceBindings',
+  'getSiteAssetModel',
   'getDevice',
 ]) {
   assert(generated.includes(`${method}:`), `generated Registry client is missing ${method}`);
@@ -45,6 +46,7 @@ for (const hook of [
   'useRegistryOrganizations',
   'useRegistrySites',
   'useRegistrySite',
+  'useRegistryAssetModel',
   'useRegistryEquipment',
   'useRegistryEquipmentDetail',
   'useRegistryDevices',
@@ -59,6 +61,9 @@ for (const forbidden of ["@/mock/", "./meta", 'mockSites', 'mockAssetTree', 'DEV
   assert(!realAssets.includes(forbidden), `Real Assets view imports or references ${forbidden}`);
   assert(!realSystem.includes(forbidden), `Real System Registry view imports or references ${forbidden}`);
 }
+for (const forbidden of ['useRegistryEquipment(', 'useRegistryDevices(', 'useRegistryDeviceBindings(']) {
+  assert(!realAssets.includes(forbidden), `Real Assets view still reads the legacy ${forbidden} collection`);
+}
 assert(!systemPage.includes('mockSites'), 'System page still imports or uses mockSites directly');
 assert(!systemPage.includes('mockAssetTree'), 'System page still imports or uses mockAssetTree directly');
 
@@ -72,6 +77,11 @@ for (const marker of [
   'Registry 生命周期',
   'DeviceTelemetryPanel',
   'RegistryLoadMore',
+  'useRegistryAssetModel',
+  'buildRealAssetsHierarchy',
+  'Telemetry Point',
+  '独立 Sensor Device',
+  '计算点',
   'useRegistryEquipmentDetail',
   'useRegistryDeviceDetail',
   'data-testid="real-registry-assets-page"',

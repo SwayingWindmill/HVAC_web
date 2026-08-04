@@ -67,6 +67,20 @@ func (client *ThingsBoardClient) PublishSnapshot(ctx context.Context, snapshot S
 	return nil
 }
 
+func (client *ThingsBoardClient) PublishMeasurements(ctx context.Context, measurements []Measurement) error {
+	for _, measurement := range measurements {
+		if err := client.PublishTelemetry(
+			ctx,
+			measurement.DeviceID,
+			measurement.ObservedAt,
+			DeviceTelemetry{measurement.SourceKey: measurement.Value},
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (client *ThingsBoardClient) PublishTelemetry(ctx context.Context, deviceID string, observedAt time.Time, telemetry DeviceTelemetry) error {
 	token, ok := client.accessToken[deviceID]
 	if !ok {

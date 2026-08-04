@@ -78,23 +78,29 @@ function pointStatus(point: RealAssetsPointView, timeZone: string): string {
 }
 
 function BindingFacts({ row }: { row: RealAssetsDeviceRow }) {
-  if (row.binding.state === 'bound') {
-    return (
-      <dl className="real-assets-detail__facts">
-        <div><dt>Equipment</dt><dd>{row.binding.equipment.displayName}</dd></div>
-        <div><dt>Equipment code</dt><dd>{row.binding.equipment.code}</dd></div>
-        <div><dt>Equipment ID</dt><dd><code>{row.binding.equipment.id}</code></dd></div>
-        <div><dt>Binding role</dt><dd>{row.binding.binding.bindingRole}</dd></div>
-        <div><dt>Binding revision</dt><dd>{row.binding.binding.revision}</dd></div>
-      </dl>
-    );
-  }
+  const bindings = row.binding.state === 'bound'
+    ? [row.binding]
+    : row.binding.state === 'multi-bound'
+      ? row.binding.bindings
+      : [];
+  const bindingInvalid = row.binding.state === 'unbound' || row.binding.state === 'ambiguous';
   return (
-    <div className="real-assets-detail__notice" role="status">
-      {row.binding.state === 'ambiguous'
-        ? '当前 Device 存在多个有效 Equipment 绑定；详情不会猜测层级归属。'
-        : '当前 Device 没有有效 Equipment 绑定。'}
-    </div>
+    <>
+      <dl className="real-assets-detail__facts">
+        <div><dt>Area</dt><dd>{row.area.state === 'bound' ? row.area.area.displayName : row.area.state === 'ambiguous' ? 'Area 关系冲突' : '未绑定 Area'}</dd></div>
+        <div><dt>Area code</dt><dd>{row.area.state === 'bound' ? row.area.area.code : '—'}</dd></div>
+        <div><dt>Equipment</dt><dd>{bindings.length > 0 ? bindings.map((item) => item.equipment.displayName).join('、') : row.binding.state === 'ambiguous' ? 'Equipment 关系冲突' : '未绑定 Equipment'}</dd></div>
+        <div><dt>Equipment code</dt><dd>{bindings.length > 0 ? bindings.map((item) => item.equipment.code).join('、') : '—'}</dd></div>
+        <div><dt>Binding role</dt><dd>{bindings.length > 0 ? bindings.map((item) => item.relationship.role).join('、') : '—'}</dd></div>
+        <div><dt>Binding revision</dt><dd>{bindings.length > 0 ? bindings.map((item) => item.relationship.revision).join('、') : '—'}</dd></div>
+        <div><dt>Registered Points</dt><dd>{row.registeredPointCount}</dd></div>
+      </dl>
+      {bindingInvalid || row.area.state !== 'bound' ? (
+        <div className="real-assets-detail__notice" role="status">
+          原子 Asset Model 未能建立唯一的 Area / Equipment 层级；详情不会猜测归属。
+        </div>
+      ) : null}
+    </>
   );
 }
 

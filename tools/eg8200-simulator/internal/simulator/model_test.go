@@ -17,6 +17,7 @@ func testPlantConfig() PlantConfig {
 		CoolingTower:     CoolingTowerConfig{ID: "CT-01", RatedFanPowerKW: 18.5, InitialFanSpeedPct: 80, InitiallyRunning: true},
 		PowerMeterID:     "METER-HVAC-TOTAL",
 		BTUMeterID:       "BTU-METER-01",
+		WeatherStationID: "WEATHER-STATION-01",
 	}
 }
 

@@ -24,6 +24,7 @@ type RegistryStore interface {
 	ListDevices(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[Device], error)
 	GetDevice(context.Context, registryauth.GrantClaims, string) (Device, error)
 	ListDeviceBindings(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[DeviceBinding], error)
+	GetSiteAssetModel(context.Context, registryauth.GrantClaims, string) (SiteAssetModel, error)
 }
 
 type PostgresStore struct {

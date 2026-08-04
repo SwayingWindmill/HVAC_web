@@ -296,6 +296,13 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		}
 		writeJSON(writer, http.StatusOK, collection)
 		return http.StatusOK
+	case "asset-model":
+		model, err := server.store.GetSiteAssetModel(request.Context(), claims, route.parentID)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, model)
+		return http.StatusOK
 	default:
 		writeProblem(writer, request, http.StatusNotFound, "CORE_ROUTE_NOT_FOUND", "The requested Core Registry route does not exist.", false)
 		return http.StatusNotFound
@@ -445,6 +452,8 @@ func parseRegistryRoute(path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices", resource: "devices", parentID: segments[1], action: registryauth.ActionDeviceList, list: true}, true
 	case len(segments) == 3 && segments[0] == "sites" && segments[2] == "device-bindings":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/device-bindings", resource: "device-bindings", parentID: segments[1], action: registryauth.ActionDeviceBindingList, list: true}, true
+	case len(segments) == 3 && segments[0] == "sites" && segments[2] == "asset-model":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/asset-model", resource: "asset-model", parentID: segments[1], action: registryauth.ActionAssetModelRead}, true
 	case len(segments) == 2 && segments[0] == "devices":
 		return registryRoute{template: RegistryPathPrefix + "devices/{deviceId}", resource: "devices", id: segments[1], action: registryauth.ActionDeviceRead}, true
 	default:
