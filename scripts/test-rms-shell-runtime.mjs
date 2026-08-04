@@ -169,6 +169,34 @@ function client(overrides = {}) {
   };
 }
 
+test('transient Real UI states converge on quiet reusable loading surfaces', () => {
+  const appSource = fs.readFileSync('apps/hvac-web/src/real/RealApp.tsx', 'utf8');
+  const siteShellSource = fs.readFileSync('apps/hvac-web/src/real/SiteScopedShell.tsx', 'utf8');
+  const assetsSource = fs.readFileSync('apps/hvac-web/src/real/assets/RealAssetsWorkspace.tsx', 'utf8');
+
+  assert.equal(fs.existsSync('apps/hvac-web/src/real/RealRouteLoading.tsx'), true);
+  assert.equal(fs.existsSync('apps/hvac-web/src/real/assets/RealAssetsLoadingSurface.tsx'), true);
+  const loginStateSource = appSource.match(/function LoginRequiredState[\s\S]*?function PrincipalUnavailableState/)?.[0];
+  assert.ok(loginStateSource);
+  assert.ok(appSource.includes('RealRouteLoading'));
+  assert.equal(loginStateSource.includes('服务器 Session 已撤销'), false);
+  assert.equal(loginStateSource.includes('RealRuntimeFacts'), false);
+
+  assert.ok(siteShellSource.includes('RealRouteLoading'));
+  assert.ok(siteShellSource.includes('RealAssetsLoadingSurface'));
+  for (const obsoleteHeading of [
+    '正在读取授权 Site',
+    '正在激活受保护 Site scope',
+    '正在进入唯一授权 Site',
+  ]) {
+    assert.equal(siteShellSource.includes(obsoleteHeading), false, obsoleteHeading);
+  }
+
+  assert.ok(assetsSource.includes('RealAssetsLoadingSurface'));
+  assert.equal(assetsSource.includes('正在读取授权 Site 原子 Asset Model'), false);
+  assert.equal(assetsSource.includes('<Tag color="processing">LOADING</Tag>'), false);
+});
+
 test('holds the shell in BOOTSTRAPPING until Principal bootstrap completes', async () => {
   const pending = deferred();
   const env = environment();

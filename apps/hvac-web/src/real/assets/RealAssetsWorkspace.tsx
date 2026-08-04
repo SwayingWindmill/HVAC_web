@@ -29,6 +29,7 @@ import { FocusHeading } from '../FocusHeading';
 import type { ProtectedScopeRequestToken, ProtectedScopeResource } from '../protected-scope';
 import { REAL_ASSETS_CATALOG_REVISION } from './catalog';
 import { DeviceDetailDrawer } from './DeviceDetailDrawer';
+import { RealAssetsLoadingSurface } from './RealAssetsLoadingSurface';
 import {
   REAL_ASSETS_DETAIL_HISTORY_MARKER,
   isRealAssetsDetailHistoryState,
@@ -794,18 +795,7 @@ export function RealAssetsWorkspace({
   }
 
   if (registry.isPending) {
-    return (
-      <section className="real-assets" data-testid="real-site-route-assets" data-business-state="LOADING" data-site-id={site.id}>
-        <PageScaffold
-          title="设备与建筑"
-          heading={<FocusHeading className="ops-page-title ant-typography"><Space><ApartmentOutlined />设备与建筑</Space></FocusHeading>}
-          extra={<Tag color="processing">LOADING</Tag>}
-          className="assets-page"
-        >
-          <Card variant="borderless"><div className="real-shell-progress" role="status" aria-live="polite">正在读取授权 Site 原子 Asset Model…</div></Card>
-        </PageScaffold>
-      </section>
-    );
+    return <RealAssetsLoadingSurface siteId={site.id} />;
   }
 
   if (registry.isError) {

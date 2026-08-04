@@ -2,6 +2,7 @@ import { Suspense, useEffect } from 'react';
 import type { Capability, Site } from '@/api/generated/platformGateway.gen';
 import { FocusHeading } from './FocusHeading';
 import { EnergyAnalytics } from './EnergyAnalytics';
+import { RealRouteLoading } from './RealRouteLoading';
 import { OperationsInvestigationPage } from './OperationsInvestigationPage';
 import { RealAlarms } from './RealAlarms';
 import { RealCommands } from './RealCommands';
@@ -14,6 +15,7 @@ import {
   RealOptimizePage,
 } from './RealProductPages';
 import { RealShellChrome } from './RealShellChrome';
+import { RealAssetsLoadingSurface } from './assets/RealAssetsLoadingSurface';
 import { RealAssetsWorkspace } from './assets/RealAssetsWorkspace';
 import type { RealNavigationItem } from './route-policy';
 import type { ProtectedScopeDraft, ProtectedScopeRequestToken, ProtectedScopeResource } from './protected-scope';
@@ -82,27 +84,21 @@ function SiteScopeSwitcher({
 
 function SiteDiscoveryCheckingSurface() {
   return (
-    <section className="real-route-surface" data-testid="real-site-discovery-checking" data-route-state="SITE_DISCOVERY_CHECKING">
-      <p className="real-shell-eyebrow">REAL MODE · SITE DISCOVERY</p>
-      <FocusHeading>正在读取授权 Site</FocusHeading>
-      <p>Shell 正在从当前 Acting Organization 的 Registry 边界读取授权 Site。完成前不会挂载 Site 页面。</p>
-      <div className="real-shell-progress" role="status" aria-live="polite">正在验证 Site scope…</div>
-    </section>
+    <RealRouteLoading
+      label="正在加载工作台"
+      testId="real-site-discovery-checking"
+      routeState="SITE_DISCOVERY_CHECKING"
+    />
   );
 }
 
-function SiteScopeActivatingSurface({ context }: { context: SiteContext }) {
+function SiteScopeActivatingSurface() {
   return (
-    <section className="real-route-surface" data-testid="real-site-scope-activating" data-route-state="SITE_SCOPE_ACTIVATING">
-      <p className="real-shell-eyebrow">REAL MODE · SITE SCOPE</p>
-      <FocusHeading>正在激活受保护 Site scope</FocusHeading>
-      <p>URL 与 Registry Site 已验证。Shell 正在建立新的 request generation 和受保护资源所有权，完成前不会渲染 Site 业务表面。</p>
-      <dl className="real-shell-facts">
-        <div><dt>Site</dt><dd>{context.site.displayName}</dd></div>
-        <div><dt>Registry Site ID</dt><dd>{context.site.id}</dd></div>
-      </dl>
-      <div className="real-shell-progress" role="status" aria-live="polite">正在建立 Site lifecycle boundary…</div>
-    </section>
+    <RealRouteLoading
+      label="正在加载工作台"
+      testId="real-site-scope-activating"
+      routeState="SITE_SCOPE_ACTIVATING"
+    />
   );
 }
 
@@ -190,11 +186,11 @@ function GenericForbiddenSurface() {
 
 function RedirectSurface() {
   return (
-    <section className="real-route-surface" data-testid="real-site-redirect" data-route-state="REDIRECT">
-      <p className="real-shell-eyebrow">REAL MODE · SITE REDIRECT</p>
-      <FocusHeading>正在进入唯一授权 Site</FocusHeading>
-      <div className="real-shell-progress" role="status" aria-live="polite">正在建立显式 Site URL…</div>
-    </section>
+    <RealRouteLoading
+      label="正在加载工作台"
+      testId="real-site-redirect"
+      routeState="REDIRECT"
+    />
   );
 }
 
@@ -230,11 +226,7 @@ function ReadySiteSurface({
         data-site-id={decision.context.site.id}
         data-site-route="dashboard"
       >
-        <Suspense fallback={(
-          <div className="real-shell-progress" role="status" aria-live="polite">
-            正在加载运行总览…
-          </div>
-        )}>
+        <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
           <RealDashboard site={decision.context.site} principal={snapshot.principal!} />
         </Suspense>
       </section>
@@ -243,17 +235,7 @@ function ReadySiteSurface({
 
   if (decision.route === 'assets') {
     return (
-      <Suspense fallback={(
-        <section
-          className="real-route-surface"
-          data-testid="real-site-route-assets"
-          data-route-state="READY"
-          data-business-state="LOADING"
-          data-site-id={decision.context.site.id}
-        >
-          <div className="real-shell-progress" role="status" aria-live="polite">正在加载资产运行工作台…</div>
-        </section>
-      )}>
+      <Suspense fallback={<RealAssetsLoadingSurface siteId={decision.context.site.id} />}>
         <RealAssetsWorkspace
           site={decision.context.site}
           principal={snapshot.principal!}
@@ -275,11 +257,7 @@ function ReadySiteSurface({
         data-site-id={decision.context.site.id}
         data-site-route="energy"
       >
-        <Suspense fallback={(
-          <div className="real-shell-progress" role="status" aria-live="polite">
-            正在加载能源分析界面…
-          </div>
-        )}>
+        <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
           <EnergyAnalytics
             site={decision.context.site}
             principal={snapshot.principal!}
@@ -292,7 +270,7 @@ function ReadySiteSurface({
 
   if (decision.route === 'optimize') {
     return (
-      <Suspense fallback={<div className="real-shell-progress" role="status">正在加载节能优化工作台…</div>}>
+      <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
         <RealOptimizePage site={decision.context.site} principal={snapshot.principal!} />
       </Suspense>
     );
@@ -300,7 +278,7 @@ function ReadySiteSurface({
 
   if (decision.route === 'cost') {
     return (
-      <Suspense fallback={<div className="real-shell-progress" role="status">正在加载成本绩效工作台…</div>}>
+      <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
         <RealCostPage site={decision.context.site} principal={snapshot.principal!} />
       </Suspense>
     );
@@ -309,7 +287,7 @@ function ReadySiteSurface({
   if (decision.route === 'ai') {
     const site = decision.context.site;
     return (
-      <Suspense fallback={<div className="real-shell-progress" role="status">正在加载 AI 运维助手…</div>}>
+      <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
         <RealAiLanding
           site={site}
           principal={snapshot.principal!}
@@ -321,7 +299,7 @@ function ReadySiteSurface({
 
   if (decision.route === 'bigscreen') {
     return (
-      <Suspense fallback={<div className="real-shell-progress" role="status">正在加载运行大屏…</div>}>
+      <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
         <RealBigScreenPage site={decision.context.site} principal={snapshot.principal!} />
       </Suspense>
     );
@@ -329,7 +307,7 @@ function ReadySiteSurface({
 
   if (decision.route === 'fdd') {
     return (
-      <Suspense fallback={<div className="real-shell-progress" role="status">正在加载故障检测工作台…</div>}>
+      <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
         <RealFddPage site={decision.context.site} principal={snapshot.principal!} />
       </Suspense>
     );
@@ -344,11 +322,7 @@ function ReadySiteSurface({
         data-site-id={decision.context.site.id}
         data-site-route="alarms"
       >
-        <Suspense fallback={(
-          <div className="real-shell-progress" role="status" aria-live="polite">
-            正在加载 Alarm 界面…
-          </div>
-        )}>
+        <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
           <RealAlarms
             site={decision.context.site}
             principal={snapshot.principal!}
@@ -369,11 +343,7 @@ function ReadySiteSurface({
         data-site-route="operations"
         aria-label={OPERATIONS_ROUTE_CONTRACT.label}
       >
-        <Suspense fallback={(
-          <div className="real-shell-progress" role="status" aria-live="polite">
-            正在加载 Operations Investigation…
-          </div>
-        )}>
+        <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
           <OperationsInvestigationPage
             site={decision.context.site}
             principal={snapshot.principal!}
@@ -393,11 +363,7 @@ function ReadySiteSurface({
         data-site-id={decision.context.site.id}
         data-site-route="commands"
       >
-        <Suspense fallback={(
-          <div className="real-shell-progress" role="status" aria-live="polite">
-            正在加载 Command 工作台…
-          </div>
-        )}>
+        <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
           <RealCommands
             site={decision.context.site}
             principal={snapshot.principal!}
@@ -478,7 +444,7 @@ function SiteSurface({
     case 'SITE_DISCOVERY_CHECKING':
       return <SiteDiscoveryCheckingSurface />;
     case 'SITE_SCOPE_ACTIVATING':
-      return <SiteScopeActivatingSurface context={decision.context} />;
+      return <SiteScopeActivatingSurface />;
     case 'SITE_DISCOVERY_UNAVAILABLE':
       return <SiteDiscoveryUnavailableSurface failure={decision.failure} retry={retry} />;
     case 'NO_AUTHORIZED_SITE':
