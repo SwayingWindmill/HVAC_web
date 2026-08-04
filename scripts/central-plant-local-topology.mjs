@@ -235,8 +235,19 @@ function createWebSocketTLSProxy({ port, targetPort, cert, key }) {
   return once(server, 'listening').then(() => server);
 }
 
-function createHTTPSTLSProxy({ port, targetPort, cert, key }) {
+function createHTTPSTLSProxy({ port, targetPort, cert, key, rootRedirect }) {
   const server = createHTTPSServer({ cert, key }, (request, response) => {
+    if (
+      rootRedirect
+      && (request.method === 'GET' || request.method === 'HEAD')
+      && request.url === '/'
+    ) {
+      response.writeHead(302, {
+        location: rootRedirect,
+        'cache-control': 'no-store',
+      }).end();
+      return;
+    }
     const forwardedHost = request.headers.host ?? `127.0.0.1:${port}`;
     const upstream = httpRequest({
       hostname: '127.0.0.1',
@@ -468,6 +479,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
   const queryURL = `https://127.0.0.1:${ports.query}`;
   const gatewayURL = `http://127.0.0.1:${ports.gateway}`;
   const webURL = `https://127.0.0.1:${ports.web}`;
+  const logtoLoginURL = `${webURL}/api/v1/auth/login?returnTo=${encodeURIComponent(`/sites/${centralPlantIdentity.siteId}/assets`)}`;
   const thingsBoardURL = `http://127.0.0.1:${ports.thingsBoard}`;
   const realtimeEndpoint = `wss://127.0.0.1:${ports.centrifugoWSS}/connection/websocket`;
   const logtoDatabaseCredentialKey = ['CENTRAL_PLANT_LOGTO_DB', 'PASSWORD'].join('_');
@@ -536,7 +548,13 @@ export async function startCentralPlantLocalTopology(options = {}) {
     );
     await waitForHTTP(`${logtoCoreInternalURL}/api/status`, 'Logto Core', { attempts: 600, interval: 500 });
     const [oidcCertificate, oidcKey] = await Promise.all([readFile(paths.oidcCert), readFile(paths.oidcKey)]);
-    logtoProxy = await createHTTPSTLSProxy({ port: ports.oidc, targetPort: ports.logtoCore, cert: oidcCertificate, key: oidcKey });
+    logtoProxy = await createHTTPSTLSProxy({
+      port: ports.oidc,
+      targetPort: ports.logtoCore,
+      cert: oidcCertificate,
+      key: oidcKey,
+      rootRedirect: logtoLoginURL,
+    });
     logtoAdminProxy = await createHTTPSTLSProxy({ port: ports.logtoAdmin, targetPort: ports.logtoAdminCore, cert: oidcCertificate, key: oidcKey });
     await waitForTLS(ports.oidc, 'Logto HTTPS');
     await waitForTLS(ports.logtoAdmin, 'Logto Admin HTTPS');
@@ -900,6 +918,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       queryURL,
       gatewayURL,
       logto: {
+        loginURL: logtoLoginURL,
         coreURL: logtoURL,
         adminURL: logtoAdminURL,
         issuer: logto.issuer,

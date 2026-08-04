@@ -190,6 +190,8 @@ test('local topology stays isolated and derives simulator credentials from the v
     'HVAC Web Real',
     'provisionCentralPlantLogto',
     'createHTTPSTLSProxy',
+    'rootRedirect: logtoLoginURL',
+    'loginURL: logtoLoginURL',
     'OIDC_DEFAULT_ACTING_ORGANIZATION_ID',
     'principalSubject: logto.subject',
     '[projects.logto, logtoCompose, logtoEnvironment]',
