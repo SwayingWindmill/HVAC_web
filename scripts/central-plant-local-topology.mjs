@@ -579,6 +579,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       managementClientID: 'm-default',
       managementClientCredential: logtoManagementCredential,
       webURL,
+      loginURL: logtoLoginURL,
       account: logtoAccount,
     });
 
@@ -926,6 +927,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
         subject: logto.subject,
         username: logto.account.username,
         credential: logto.account.credential,
+        registrationEnabled: logto.registrationEnabled,
       },
       organizationId: centralPlantIdentity.organizationId,
       siteId: centralPlantIdentity.siteId,

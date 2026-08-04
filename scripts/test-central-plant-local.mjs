@@ -28,6 +28,7 @@ const logtoCompose = await readFile(resolve(root, 'infra/central-plant-local/log
 const realtimeCompose = await readFile(resolve(root, 'infra/central-plant-local/realtime.compose.yaml'), 'utf8');
 const s2Compose = await readFile(resolve(root, 'infra/s2-telemetry/compose.yaml'), 'utf8');
 const topology = await readFile(resolve(root, 'scripts/central-plant-local-topology.mjs'), 'utf8');
+const logtoProvisioner = await readFile(resolve(root, 'scripts/central-plant-logto.mjs'), 'utf8');
 const smoke = await readFile(resolve(root, 'scripts/central-plant-local.mjs'), 'utf8');
 const routeOwnershipSource = JSON.parse(await readFile(resolve(root, 'contracts/ownership/route-ownership.v1.json'), 'utf8'));
 
@@ -143,6 +144,9 @@ test('central plant smoke verifies the atomic Asset Model and exact Real UI coun
     "document.querySelector('.real-assets-tree-switcher')",
     "document.body.innerText.includes('资产导航')",
     'Emulation.setDeviceMetricsOverride',
+    'auditLogtoExperience',
+    'hasRegistrationAction',
+    'hasApprovalNotice',
     'submitLogtoSignIn',
     'topology.logto',
     'authority.assetModel.counts',
@@ -151,6 +155,22 @@ test('central plant smoke verifies the atomic Asset Model and exact Real UI coun
   ]) assert.ok(smoke.includes(marker), `central plant smoke is missing ${marker}`);
   assert.ok(!smoke.includes('/devices?limit=100'));
   assert.ok(!smoke.includes('devices.length !== 6'));
+});
+
+test('Logto provisioning enables branded registration without granting platform authorization', () => {
+  for (const marker of [
+    "request('/api/sign-in-exp'",
+    "signInMode: 'SignInAndRegister'",
+    "identifiers: ['username']",
+    "primaryColor: '#087F76'",
+    'quanlaihe-mark.svg',
+    'hideLogtoBranding: false',
+    "fallbackLanguage: 'zh-CN'",
+    '管理员审核后分配组织与站点权限',
+    'unknownSessionRedirectUrl: loginURL',
+  ]) assert.ok(logtoProvisioner.includes(marker), `Logto provisioner is missing ${marker}`);
+  assert.ok(!logtoProvisioner.includes("roles: ['operator']"));
+  assert.ok(!logtoProvisioner.includes('automatic platform authorization'));
 });
 
 test('local topology stays isolated and derives simulator credentials from the v2 Device graph', () => {

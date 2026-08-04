@@ -113,7 +113,7 @@
     "build:thingsboard-telemetry-adapter-image": "docker build -f services/thingsboard-telemetry-adapter/Dockerfile -t hvac/thingsboard-telemetry-adapter:local .",
     "test:thingsboard-telemetry-adapter": "node scripts/run-go.mjs test ./services/thingsboard-telemetry-adapter/...",
     "test:central-plant-telemetry": "node --test scripts/test-central-plant-telemetry.mjs",
-    "test:central-plant-local": "node --test scripts/test-central-plant-local.mjs",
+    "test:central-plant-local": "node --test scripts/test-central-plant-local.mjs scripts/test-central-plant-logto.mjs",
     "central-plant:local": "node scripts/central-plant-local.mjs up",
     "central-plant:local:smoke": "node scripts/central-plant-local.mjs smoke",
     "test:gateway": "node scripts/run-go.mjs test ./services/platform-gateway/...",

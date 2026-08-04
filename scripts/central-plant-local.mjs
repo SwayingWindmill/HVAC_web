@@ -127,9 +127,64 @@ async function waitForCondition(client, expression, label) {
   throw new Error(`${label} did not become ready: ${JSON.stringify({ last, diagnostic })}`);
 }
 
-async function submitLogtoSignIn(client, logto) {
+async function auditLogtoExperience(client, logto) {
   const origin = new URL(logto.coreURL).origin;
   await waitForCondition(client, `location.origin === ${JSON.stringify(origin)} && Boolean(document.querySelector('input'))`, 'Logto sign-in page');
+  const signIn = await evaluate(client, `(() => {
+    const controls = [...document.querySelectorAll('a, button')];
+    const register = controls.find((control) => {
+      const text = control.textContent?.trim() ?? '';
+      const href = control instanceof HTMLAnchorElement ? control.getAttribute('href') ?? '' : '';
+      return text.includes('注册') || href.includes('/register');
+    });
+    const submit = document.querySelector('button[type="submit"]');
+    const wrapper = document.querySelector("main[class*='main'] > div[class*='wrapper']");
+    const logo = [...document.querySelectorAll('img')].find((image) => image.src.includes('quanlaihe-mark.svg'));
+    return {
+      hasRegistrationAction: Boolean(register),
+      registrationLabel: register?.textContent?.trim() ?? '',
+      hasBrandIntro: document.body.innerText.includes('泉来禾智慧能源'),
+      logoSrc: logo?.src ?? '',
+      primaryButtonBackground: submit ? getComputedStyle(submit).backgroundColor : '',
+      wrapperRadius: wrapper ? getComputedStyle(wrapper).borderRadius : '',
+      bodyBackground: getComputedStyle(document.body).backgroundImage,
+      clickedRegistration: Boolean(register && (register.click(), true)),
+    };
+  })()`);
+  const signInEvidence = JSON.stringify(signIn);
+  assert.equal(signIn.hasRegistrationAction, true, signInEvidence);
+  assert.equal(signIn.clickedRegistration, true, signInEvidence);
+  assert.equal(signIn.hasBrandIntro, true, signInEvidence);
+  assert.ok(signIn.logoSrc.includes('quanlaihe-mark.svg'), signInEvidence);
+  assert.equal(signIn.primaryButtonBackground, 'rgb(8, 127, 118)', signInEvidence);
+  assert.equal(signIn.wrapperRadius, '20px', signInEvidence);
+  assert.ok(signIn.bodyBackground.includes('gradient'), signInEvidence);
+
+  const registration = await waitForCondition(client, `(() => {
+    if (location.origin !== ${JSON.stringify(origin)}) return false;
+    const text = document.body.innerText;
+    const identifier = document.querySelector('input[name="identifier"], input[name="username"], input[type="text"]');
+    if (!identifier || !text.includes('注册')) return false;
+    return {
+      path: location.pathname,
+      hasIdentifierField: Boolean(identifier),
+      hasApprovalNotice: text.includes('管理员审核后分配组织与站点权限'),
+      hasBrandIntro: text.includes('泉来禾智慧能源') || text.includes('创建平台账号'),
+    };
+  })()`, 'Logto registration page');
+  const registrationEvidence = JSON.stringify(registration);
+  assert.equal(registration.hasIdentifierField, true, registrationEvidence);
+  assert.equal(registration.hasApprovalNotice, true, registrationEvidence);
+  assert.equal(registration.hasBrandIntro, true, registrationEvidence);
+
+  await client.send('Page.navigate', { url: logto.loginURL });
+  await waitForCondition(client, `location.origin === ${JSON.stringify(origin)} && Boolean(document.querySelector('input'))`, 'fresh Logto sign-in page');
+  return { signIn, registration };
+}
+
+async function submitLogtoSignIn(client, logto) {
+  const experience = await auditLogtoExperience(client, logto);
+  const origin = new URL(logto.coreURL).origin;
   const firstStep = await evaluate(client, `(() => {
     const setValue = (input, value) => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
@@ -146,7 +201,7 @@ async function submitLogtoSignIn(client, logto) {
     return { hadCredentialField: Boolean(credential), submitted: Boolean(submit) };
   })()`);
   assert.equal(firstStep.submitted, true, `Logto first sign-in step was not submitted: ${JSON.stringify(firstStep)}`);
-  if (firstStep.hadCredentialField) return;
+  if (firstStep.hadCredentialField) return experience;
   await waitForCondition(client, `location.origin === ${JSON.stringify(origin)} && Boolean(document.querySelector('input[type="password"]'))`, 'Logto credential step');
   const secondStep = await evaluate(client, `(() => {
     const input = document.querySelector('input[type="password"]');
@@ -159,6 +214,7 @@ async function submitLogtoSignIn(client, logto) {
     return Boolean(submit);
   })()`);
   assert.equal(secondStep, true, 'Logto credential step was not submitted');
+  return experience;
 }
 
 async function browserAudit(topology) {
@@ -211,7 +267,7 @@ async function browserAudit(topology) {
     await client.send('Page.navigate', {
       url: `${topology.webURL}/api/v1/auth/login?returnTo=${encodeURIComponent(sitePath)}`,
     });
-    await submitLogtoSignIn(client, topology.logto);
+    const logtoExperience = await submitLogtoSignIn(client, topology.logto);
     await waitForCondition(client, `(() => {
       const root = document.querySelector('[data-testid="real-site-route-assets"]');
       return location.pathname === ${JSON.stringify(sitePath)}
@@ -321,7 +377,7 @@ async function browserAudit(topology) {
     assert.ok(authority.assetModel.relationshipCount > 0);
     assert.equal(authority.snapshot.deviceId, chiller.platformDeviceId);
     assert.equal(authority.snapshot.values.length, requestedKeys.length);
-    return { browser: browserPath, navigation, ...authority };
+    return { browser: browserPath, logtoExperience, navigation, ...authority };
   } finally {
     client?.close();
     if (browser.exitCode === null) {
@@ -349,6 +405,7 @@ async function runSmoke() {
         clientId: topology.logto.clientId,
         subject: topology.logto.subject,
         username: topology.logto.username,
+        registrationEnabled: topology.logto.registrationEnabled,
       },
       persisted,
       browser,
@@ -368,6 +425,7 @@ async function runSmoke() {
         clientId: topology.logto.clientId,
         subject: topology.logto.subject,
         username: topology.logto.username,
+        registrationEnabled: topology.logto.registrationEnabled,
       },
       error: error instanceof Error ? error.message : String(error),
       failedAt: new Date().toISOString(),
