@@ -140,42 +140,60 @@ async function auditLogtoExperience(client, logto) {
     const submit = document.querySelector('button[type="submit"]');
     const wrapper = document.querySelector("main[class*='main'] > div[class*='wrapper']");
     const logo = [...document.querySelectorAll('img')].find((image) => image.src.includes('quanlaihe-mark.svg'));
+    const bodyText = document.body.innerText;
+    const promotionalFragments = ['实时设备与点位', '能源绩效与异常', '告警、工单与闭环', '建筑 → 区域 → 设备 → 点位', '设备、能耗与运维协同平台'];
+    const wrapperStyle = wrapper ? getComputedStyle(wrapper) : null;
+    const logoStyle = logo ? getComputedStyle(logo) : null;
+    const bodyStyle = getComputedStyle(document.body);
     return {
       hasRegistrationAction: Boolean(register),
       registrationLabel: register?.textContent?.trim() ?? '',
-      hasBrandIntro: document.body.innerText.includes('泉来禾智慧能源'),
+      hasBrandName: bodyText.includes('泉来禾智慧能源'),
+      hasPromotionalCopy: promotionalFragments.some((fragment) => bodyText.includes(fragment)),
       logoSrc: logo?.src ?? '',
+      logoWidth: logoStyle?.width ?? '',
       primaryButtonBackground: submit ? getComputedStyle(submit).backgroundColor : '',
-      wrapperRadius: wrapper ? getComputedStyle(wrapper).borderRadius : '',
-      bodyBackground: getComputedStyle(document.body).backgroundImage,
+      wrapperRadius: wrapperStyle?.borderRadius ?? '',
+      wrapperBoxShadow: wrapperStyle?.boxShadow ?? '',
+      wrapperWidth: wrapper?.getBoundingClientRect().width ?? 0,
+      bodyBackgroundImage: bodyStyle.backgroundImage,
+      bodyBackgroundColor: bodyStyle.backgroundColor,
       clickedRegistration: Boolean(register && (register.click(), true)),
     };
   })()`);
   const signInEvidence = JSON.stringify(signIn);
   assert.equal(signIn.hasRegistrationAction, true, signInEvidence);
   assert.equal(signIn.clickedRegistration, true, signInEvidence);
-  assert.equal(signIn.hasBrandIntro, true, signInEvidence);
+  assert.equal(signIn.hasBrandName, true, signInEvidence);
+  assert.equal(signIn.hasPromotionalCopy, false, signInEvidence);
   assert.ok(signIn.logoSrc.includes('quanlaihe-mark.svg'), signInEvidence);
-  assert.equal(signIn.primaryButtonBackground, 'rgb(8, 127, 118)', signInEvidence);
-  assert.equal(signIn.wrapperRadius, '20px', signInEvidence);
-  assert.ok(signIn.bodyBackground.includes('gradient'), signInEvidence);
+  assert.equal(signIn.logoWidth, '36px', signInEvidence);
+  assert.equal(signIn.primaryButtonBackground, 'rgb(11, 74, 76)', signInEvidence);
+  assert.equal(signIn.wrapperRadius, '16px', signInEvidence);
+  assert.equal(signIn.wrapperBoxShadow, 'none', signInEvidence);
+  assert.ok(signIn.wrapperWidth <= 400, signInEvidence);
+  assert.equal(signIn.bodyBackgroundImage, 'none', signInEvidence);
+  assert.equal(signIn.bodyBackgroundColor, 'rgb(244, 246, 247)', signInEvidence);
 
   const registration = await waitForCondition(client, `(() => {
     if (location.origin !== ${JSON.stringify(origin)}) return false;
     const text = document.body.innerText;
     const identifier = document.querySelector('input[name="identifier"], input[name="username"], input[type="text"]');
     if (!identifier || !text.includes('注册')) return false;
+    const promotionalFragments = ['实时设备与点位', '能源绩效与异常', '告警、工单与闭环', '建筑 → 区域 → 设备 → 点位', '设备、能耗与运维协同平台'];
     return {
       path: location.pathname,
       hasIdentifierField: Boolean(identifier),
-      hasApprovalNotice: text.includes('管理员审核后分配组织与站点权限'),
-      hasBrandIntro: text.includes('泉来禾智慧能源') || text.includes('创建平台账号'),
+      hasApprovalNotice: text.includes('注册账号需由管理员分配访问权限'),
+      hasBrandName: text.includes('泉来禾智慧能源'),
+      hasPromotionalCopy: promotionalFragments.some((fragment) => text.includes(fragment)),
     };
   })()`, 'Logto registration page');
   const registrationEvidence = JSON.stringify(registration);
   assert.equal(registration.hasIdentifierField, true, registrationEvidence);
   assert.equal(registration.hasApprovalNotice, true, registrationEvidence);
-  assert.equal(registration.hasBrandIntro, true, registrationEvidence);
+  assert.equal(registration.hasBrandName, true, registrationEvidence);
+  assert.equal(registration.hasPromotionalCopy, false, registrationEvidence);
 
   await client.send('Page.navigate', { url: logto.loginURL });
   await waitForCondition(client, `location.origin === ${JSON.stringify(origin)} && Boolean(document.querySelector('input'))`, 'fresh Logto sign-in page');

@@ -5,147 +5,161 @@ const credentialField = ['pass', 'word'].join('');
 const industrialCalmAuthCss = `
 /* Quanlaihe Industrial Calm authentication surface */
 :root {
-  color-scheme: light;
+  color-scheme: light dark;
   font-family: Inter, "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --qlh-auth-canvas: #f4f6f7;
+  --qlh-auth-surface: #ffffff;
+  --qlh-auth-border: #dce4e4;
+  --qlh-auth-text: #17201f;
+  --qlh-auth-muted: #667372;
+  --qlh-auth-primary: #0B4A4C;
+  --qlh-auth-focus: #0FB5AE;
 }
 
 body {
-  background:
-    radial-gradient(circle at 16% 12%, rgba(8, 127, 118, 0.10), transparent 34%),
-    linear-gradient(145deg, #edf4f4 0%, #f7f9fa 48%, #eef3f5 100%) !important;
-  color: #172f49 !important;
+  background: var(--qlh-auth-canvas) !important;
+  color: var(--qlh-auth-text) !important;
 }
 
 #app main[class*='main'] {
   min-height: 100vh;
+  padding: 24px;
   background: transparent !important;
 }
 
 #app main[class*='main'] > div[class*='wrapper'] {
-  width: min(440px, calc(100vw - 32px));
-  padding: 34px 36px 30px;
-  border: 1px solid rgba(23, 47, 73, 0.08);
-  border-radius: 20px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 24px 72px rgba(23, 47, 73, 0.12);
-  backdrop-filter: blur(18px);
+  box-sizing: border-box;
+  width: min(400px, calc(100vw - 32px));
+  padding: 32px;
+  border: 1px solid var(--qlh-auth-border);
+  border-radius: 16px;
+  background: var(--qlh-auth-surface);
+  box-shadow: none;
 }
 
 #app img[class*='logo'],
 #app img[alt*='logo' i] {
-  width: 52px;
-  height: 52px;
+  width: 36px;
+  height: 36px;
   object-fit: contain;
 }
 
 #app h1,
 #app h2,
 #app [class*='title'] {
-  color: #172f49;
+  color: var(--qlh-auth-text);
+  font-weight: 650;
   letter-spacing: -0.02em;
 }
 
+#app p,
+#app [class*='description'] {
+  color: var(--qlh-auth-muted);
+}
+
 #app input {
-  min-height: 46px;
-  border-color: #d6e0e4 !important;
+  min-height: 48px;
+  border-color: var(--qlh-auth-border) !important;
   border-radius: 8px !important;
-  background: #fbfcfd !important;
-  color: #172f49 !important;
+  background: #ffffff !important;
+  color: var(--qlh-auth-text) !important;
   box-shadow: none !important;
 }
 
 #app input:hover,
 #app input:focus {
-  border-color: #087F76 !important;
-  box-shadow: 0 0 0 3px rgba(8, 127, 118, 0.12) !important;
+  border-color: var(--qlh-auth-focus) !important;
+  box-shadow: 0 0 0 3px rgba(15, 181, 174, 0.14) !important;
 }
 
 #app button,
 #app a[class*='button'] {
-  min-height: 44px;
+  min-height: 48px;
   border-radius: 8px !important;
   font-weight: 650;
 }
 
 #app button[type='submit'] {
-  border-color: #087F76 !important;
-  background: #087F76 !important;
+  border-color: var(--qlh-auth-primary) !important;
+  background: var(--qlh-auth-primary) !important;
   color: #ffffff !important;
-  box-shadow: 0 8px 18px rgba(8, 127, 118, 0.20);
+  box-shadow: none !important;
 }
 
 #app button[type='submit']:hover {
-  border-color: #066b64 !important;
-  background: #066b64 !important;
+  border-color: #083b3d !important;
+  background: #083b3d !important;
 }
 
 #app a {
-  color: #087F76;
+  color: var(--qlh-auth-primary);
   font-weight: 600;
 }
 
 #app [class*='divider'] {
-  color: #7a8997;
+  color: #879291;
 }
 
-.qlh-auth-intro {
-  display: grid;
-  gap: 4px;
-  margin: 0 0 22px;
-  padding: 14px 16px;
-  border-left: 3px solid #087F76;
-  border-radius: 0 8px 8px 0;
-  background: #eef8f6;
-  color: #40556d;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.qlh-auth-intro strong {
-  color: #087F76;
+.qlh-auth-brand {
+  margin: 0 0 24px;
+  color: var(--qlh-auth-primary);
   font-size: 15px;
-  letter-spacing: 0.02em;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  text-align: center;
+}
+
+.qlh-auth-note {
+  margin: 16px 0 0;
+  color: var(--qlh-auth-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+#app footer,
+#app [class*='footer'] {
+  color: #879291;
+  font-size: 12px;
 }
 
 @media (max-width: 640px) {
+  #app main[class*='main'] {
+    padding: 16px;
+  }
+
   #app main[class*='main'] > div[class*='wrapper'] {
-    padding: 28px 22px 24px;
-    border-radius: 16px;
+    padding: 28px 24px;
   }
 }
 
 @media (prefers-color-scheme: dark) {
-  body {
-    background:
-      radial-gradient(circle at 18% 12%, rgba(20, 184, 166, 0.14), transparent 34%),
-      linear-gradient(145deg, #111c25 0%, #172530 100%) !important;
-  }
-
-  #app main[class*='main'] > div[class*='wrapper'] {
-    border-color: rgba(255, 255, 255, 0.08);
-    background: rgba(22, 36, 47, 0.96);
-  }
-
-  #app h1,
-  #app h2,
-  #app [class*='title'] {
-    color: #f5f8fa;
+  :root {
+    --qlh-auth-canvas: #101718;
+    --qlh-auth-surface: #152021;
+    --qlh-auth-border: #2a3939;
+    --qlh-auth-text: #f1f5f4;
+    --qlh-auth-muted: #a6b2b1;
+    --qlh-auth-primary: #0FB5AE;
+    --qlh-auth-focus: #0FB5AE;
   }
 
   #app input {
-    border-color: #3a4b57 !important;
-    background: #1c2a35 !important;
-    color: #f5f8fa !important;
+    background: #10191a !important;
   }
 
-  .qlh-auth-intro {
-    background: rgba(20, 184, 166, 0.10);
-    color: #c7d2da;
+  #app button[type='submit'] {
+    color: #071313 !important;
   }
 
-  .qlh-auth-intro strong,
-  #app a {
-    color: #5eead4;
+  #app button[type='submit']:hover {
+    border-color: #45c7c0 !important;
+    background: #45c7c0 !important;
+  }
+
+  #app footer,
+  #app [class*='footer'] {
+    color: #7f8d8b;
   }
 }
 `;
@@ -160,9 +174,9 @@ export function buildCentralPlantLogtoExperience({ webURL, loginURL }) {
   const brandAssetURL = `${webURL}/quanlaihe-mark.svg`;
   return {
     color: {
-      primaryColor: '#087F76',
+      primaryColor: '#0B4A4C',
       isDarkModeEnabled: true,
-      darkPrimaryColor: '#14B8A6',
+      darkPrimaryColor: '#0FB5AE',
     },
     branding: {
       logoUrl: brandAssetURL,
@@ -193,8 +207,8 @@ export function buildCentralPlantLogtoExperience({ webURL, loginURL }) {
     signInMode: 'SignInAndRegister',
     customCss: industrialCalmAuthCss,
     customContent: {
-      '/sign-in': '<section class="qlh-auth-intro"><strong>泉来禾智慧能源</strong><span>设备、能耗与运维协同平台</span></section>',
-      '/register': '<section class="qlh-auth-intro"><strong>创建平台账号</strong><span>注册仅创建身份，管理员审核后分配组织与站点权限。</span></section>',
+      '/sign-in': '<div class="qlh-auth-brand">泉来禾智慧能源</div>',
+      '/register': '<div class="qlh-auth-brand">泉来禾智慧能源</div><p class="qlh-auth-note">注册账号需由管理员分配访问权限</p>',
     },
     unknownSessionRedirectUrl: loginURL,
     supportWebsiteUrl: webURL,

@@ -165,11 +165,11 @@ test('Logto provisioning enables branded registration without granting platform 
     "request('/api/sign-in-exp'",
     "signInMode: 'SignInAndRegister'",
     "identifiers: ['username']",
-    "primaryColor: '#087F76'",
+    "primaryColor: '#0B4A4C'",
     'quanlaihe-mark.svg',
     'hideLogtoBranding: false',
     "fallbackLanguage: 'zh-CN'",
-    '管理员审核后分配组织与站点权限',
+    '注册账号需由管理员分配访问权限',
     'unknownSessionRedirectUrl: loginURL',
     'postLogoutRedirectUris: [webURL, `${webURL}/?logged_out=1`]',
   ]) assert.ok(logtoProvisioner.includes(marker), `Logto provisioner is missing ${marker}`);
