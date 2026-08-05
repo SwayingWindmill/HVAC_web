@@ -69,9 +69,16 @@ function LoginRequiredState({
     );
   }
   return (
-    <section className="real-shell-card real-shell-card--compact" aria-labelledby="real-login-title" data-testid="real-shell-login-required">
+    <section className="real-login-panel" aria-labelledby="real-login-title" data-testid="real-shell-login-required">
+      <div className="real-login-brand">
+        <span className="real-login-mark" aria-hidden="true">泉</span>
+        <div>
+          <strong>泉来禾智慧能源</strong>
+          <small>QUANLAIHE ENERGY</small>
+        </div>
+      </div>
       <FocusHeading id="real-login-title">已退出登录</FocusHeading>
-      <p>重新登录后会返回刚才的页面。</p>
+      <p>身份会话已结束。重新认证后继续进入运维工作台。</p>
       <div className="real-shell-actions">
         <button type="button" onClick={beginLogin}>重新登录</button>
       </div>

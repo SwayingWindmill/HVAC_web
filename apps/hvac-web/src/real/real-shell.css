@@ -362,12 +362,48 @@
   box-shadow: none;
 }
 
-.real-shell-card--compact {
-  width: min(440px, 100%);
-  padding: 28px;
+.real-login-panel {
+  box-sizing: border-box;
+  width: min(420px, 100%);
+  padding: 36px;
+  border: 1px solid rgb(11 74 76 / 12%);
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgb(16 24 40 / 8%);
 }
 
-.real-shell-card--compact h1 {
+.real-login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 32px;
+}
+
+.real-login-mark {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 8px;
+  background: #0b4a4c;
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.real-login-brand strong,
+.real-login-brand small {
+  display: block;
+}
+
+.real-login-brand small {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+}
+
+.real-login-panel h1 {
   margin-top: 0;
   font-size: clamp(26px, 4vw, 34px);
 }
