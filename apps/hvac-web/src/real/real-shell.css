@@ -364,48 +364,36 @@
 
 .real-login-panel {
   box-sizing: border-box;
-  width: min(420px, 100%);
-  padding: 36px;
-  border: 1px solid rgb(11 74 76 / 12%);
-  border-radius: 20px;
+  width: min(400px, 100%);
+  padding: 32px;
+  border: 1px solid #dce4e4;
+  border-radius: 16px;
   background: #fff;
-  box-shadow: 0 18px 48px rgb(16 24 40 / 8%);
+  box-shadow: none;
 }
 
 .real-login-brand {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 32px;
+  margin-bottom: 24px;
+  color: #0b4a4c;
 }
 
-.real-login-mark {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  place-items: center;
-  border-radius: 8px;
-  background: #0b4a4c;
-  color: #fff;
-  font-size: 22px;
-  font-weight: 700;
-}
-
-.real-login-brand strong,
-.real-login-brand small {
+.real-login-brand img {
   display: block;
+  width: 36px;
+  height: 36px;
 }
 
-.real-login-brand small {
-  margin-top: 2px;
-  color: #667085;
-  font-size: 11px;
-  letter-spacing: 0.12em;
+.real-login-brand strong {
+  font-size: 15px;
+  font-weight: 650;
 }
 
 .real-login-panel h1 {
   margin-top: 0;
-  font-size: clamp(26px, 4vw, 34px);
+  font-size: clamp(26px, 4vw, 32px);
 }
 
 .real-route-loading {
@@ -422,7 +410,7 @@
   width: min(1120px, 100%);
   padding: 28px;
   border: 1px solid var(--ant-color-border-secondary, #e4e7ec);
-  border-radius: 14px;
+  border-radius: 16px;
   background: var(--ant-color-bg-container, #fff);
   box-shadow: 0 8px 24px rgb(31 45 61 / 6%);
 }
@@ -489,7 +477,7 @@
   gap: 12px;
   padding: 18px;
   border: 1px solid var(--ant-color-border-secondary, #e4e7ec);
-  border-radius: 12px;
+  border-radius: 16px;
   background: var(--ant-color-bg-container, #fff);
 }
 

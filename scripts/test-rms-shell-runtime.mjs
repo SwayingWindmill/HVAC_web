@@ -158,13 +158,15 @@ function siteCollection(items = [], nextCursor = null, hasMore = false) {
   return { items, nextCursor, hasMore };
 }
 
+const providerLogoutURL = 'https://identity.example/session/end?client_id=hvac-web&post_logout_redirect_uri=https%3A%2F%2Fhvac.example%2F%3Flogged_out%3D1';
+
 function client(overrides = {}) {
   return {
     getCurrentPrincipal: async () => ({ data: principal() }),
     getPlatformStatus: async () => ({ data: platformStatus() }),
     listOrganizationSites: async () => ({ data: siteCollection() }),
     loginUrl: ({ returnTo }) => `/api/v1/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
-    logout: async () => ({ data: undefined }),
+    logout: async () => ({ data: undefined, location: providerLogoutURL }),
     ...overrides,
   };
 }
@@ -243,18 +245,21 @@ test('keeps protected memory mounted and exposes a retryable logout failure', as
 });
 
 test('purges protected memory only after confirmed or already-invalid logout', async () => {
-  for (const logout of [
-    async () => ({ data: undefined }),
-    async () => { throw { problem: { status: 401, code: 'SESSION_INVALID', detail: 'already gone', traceId: '2'.repeat(32), retryable: false } }; },
+  for (const scenario of [
+    { logout: async () => ({ data: undefined, location: providerLogoutURL }), navigations: [providerLogoutURL] },
+    {
+      logout: async () => { throw { problem: { status: 401, code: 'SESSION_INVALID', detail: 'already gone', traceId: '2'.repeat(32), retryable: false } }; },
+      navigations: [],
+    },
   ]) {
     const env = environment();
-    const runtime = runtimeModule.createShellRuntime(client({ logout }), env.value);
+    const runtime = runtimeModule.createShellRuntime(client({ logout: scenario.logout }), env.value);
     await runtime.bootstrap('/system');
     const outcome = await runtime.logout();
     assert.equal(outcome, 'completed');
     assert.equal(runtime.current().state, 'LOGIN_REQUIRED');
     assert.equal(runtime.current().principal, undefined);
-    assert.equal(env.navigations.length, 0);
+    assert.deepEqual(env.navigations, scenario.navigations);
   }
 });
 
@@ -368,7 +373,7 @@ test('late platform availability cannot reset an in-flight logout', async () => 
   assert.equal(runtime.current().platform.state, 'available');
   assert.equal(runtime.current().logout.status, 'submitting');
 
-  pendingLogout.resolve({ data: undefined });
+  pendingLogout.resolve({ data: undefined, location: providerLogoutURL });
   await logout;
   assert.equal(runtime.current().state, 'LOGIN_REQUIRED');
 });
@@ -540,7 +545,7 @@ test('late Site discovery cannot reset an in-flight logout', async () => {
   assert.equal(runtime.current().sites.state, 'available');
   assert.equal(runtime.current().logout.status, 'submitting');
 
-  pendingLogout.resolve({ data: undefined });
+  pendingLogout.resolve({ data: undefined, location: providerLogoutURL });
   await logout;
   assert.equal(runtime.current().state, 'LOGIN_REQUIRED');
 });
