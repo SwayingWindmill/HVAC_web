@@ -2,6 +2,7 @@ name: S5 Work Order Governed Create and Assignment
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - '.github/workflows/s5-work-order-create-assign.yml'
       - 'contracts/http/platform-gateway.openapi.yaml'

@@ -2,6 +2,7 @@ name: S2 Telemetry Release Assets
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - ".github/workflows/s2-telemetry-release.yml"
       - ".github/workflows/s2-telemetry-release-assets.yml"

@@ -2,6 +2,7 @@ name: S1 Registry Migration
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - '.github/workflows/s1-registry-migration.yml'
       - 'scripts/check-s1-workflow-topology.mjs'

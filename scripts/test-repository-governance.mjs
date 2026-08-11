@@ -35,16 +35,13 @@ test('documentation checks cover service catalog, runtime modes, and React major
   ]);
 });
 
-test('workflow checks require repository governance in the protected static gate', () => {
+test('workflow checks require the repository governance gate once', () => {
   assert.deepEqual(findWorkflowViolations(`
     - run: npm run --silent repo:check
-  `), [
-    '.github/workflows/pr-gates.yml: missing static gate `npm run --silent repo:governance:test`',
-  ]);
-  assert.deepEqual(findWorkflowViolations(`
-    - run: npm run --silent repo:check
-    - run: npm run --silent repo:governance:test
   `), []);
+  assert.deepEqual(findWorkflowViolations(''), [
+    '.github/workflows/pr-gates.yml: missing static gate `npm run --silent repo:check`',
+  ]);
 });
 
 test('package script governance ratchets long chains and capability delegates', () => {

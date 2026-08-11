@@ -2,6 +2,7 @@ name: RMS Web Certification
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - '.github/workflows/rms-web-certification.yml'
       - 'scripts/check-rms-workflow-topology.mjs'

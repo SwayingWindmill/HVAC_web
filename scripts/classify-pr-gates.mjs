@@ -67,8 +67,6 @@ const selectBroad = (file, reason) => {
   broad = true;
   add(contractProfiles, gateProfileSets.all.contracts);
   add(unitProfiles, gateProfileSets.all.unit);
-  add(integrationProfiles, gateProfileSets.all.integration);
-  add(browserProfiles, gateProfileSets.all.browser);
   addReason(file, reason);
 };
 

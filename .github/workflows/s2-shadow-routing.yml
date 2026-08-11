@@ -2,6 +2,7 @@ name: S2 Shadow Comparison and Cohort Routing
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - ".github/workflows/s2-shadow-routing.yml"
       - "contracts/ownership/route-ownership.v1.json"

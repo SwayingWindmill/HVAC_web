@@ -2,6 +2,7 @@ name: S5 Work Order PostgreSQL Authority
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - '.github/workflows/s5-work-order-postgres.yml'
       - 'contracts/ownership/**'

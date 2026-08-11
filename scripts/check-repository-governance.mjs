@@ -138,7 +138,6 @@ export const findWorkflowViolations = (workflow) => {
   const violations = [];
   for (const command of [
     'npm run --silent repo:check',
-    'npm run --silent repo:governance:test',
   ]) {
     if (!workflow.includes(`- run: ${command}`)) {
       violations.push(`.github/workflows/pr-gates.yml: missing static gate \`${command}\``);

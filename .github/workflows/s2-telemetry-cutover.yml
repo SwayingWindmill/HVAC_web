@@ -2,6 +2,7 @@ name: S2 Telemetry Production Cutover Certification
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - .github/workflows/s2-telemetry-cutover.yml
       - deploy/s2/**

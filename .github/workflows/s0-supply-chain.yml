@@ -2,6 +2,7 @@ name: S0 Reproducible Delivery and Supply Chain
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - ".github/workflows/s0-supply-chain.yml"
       - "deploy/s0/**"

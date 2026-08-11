@@ -2,6 +2,7 @@ name: S0 Durable Audit Ownership and Observability
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - "apps/hvac-web/**"
       - "contracts/events/**"

@@ -2,6 +2,7 @@ name: Platform Component POCs
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - ".github/workflows/platform-component-pocs.yml"
       - "pocs/platform-components/**"

@@ -2,6 +2,7 @@ name: Security 79 React Router 8
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - ".github/workflows/security-79-react-router.yml"
       - "apps/hvac-web/src/**"

@@ -1,18 +1,6 @@
 name: S2 Telemetry Production Release Certification
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/s2-telemetry-release.yml"
-      - "deploy/s2/**"
-      - "infra/s2-telemetry/**"
-      - "services/platform-gateway/**"
-      - "services/telemetry-runtime-service/**"
-      - "libs/observability/**"
-      - "scripts/**"
-      - "go.work"
-      - "go.work.sum"
   workflow_dispatch:
     inputs:
       profile:

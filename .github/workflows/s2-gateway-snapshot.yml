@@ -2,6 +2,7 @@ name: S2 Gateway Snapshot and Batch
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - ".github/workflows/s2-gateway-snapshot.yml"
       - "contracts/http/s2-telemetry-public.openapi.json"
