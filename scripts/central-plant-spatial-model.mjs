@@ -88,7 +88,7 @@ const sensorByDeviceSource = new Map([
 ]);
 
 const stateSources = new Set(['runState', 'businessRevision', 'faultCode']);
-const feedbackSources = new Set(['chilledWaterTemperatureSetpointC', 'compressorLoadPct', 'frequencyHz', 'fanSpeedPct']);
+const feedbackSources = new Set(['chilledWaterTemperatureSetpointC', 'compressorLoadPct', 'loadLimitPct', 'frequencyHz', 'fanSpeedPct']);
 const calculatedPointMeta = new Map([
   ['CHILLER-01/chiller.cooling_capacity', { formulaRevision: 'chiller-cooling-balance:v1', inputPointRefs: ['CHWP-01/chwp.flow_rate', 'CHILLER-01/chiller.entering_chilled_water_temperature', 'CHILLER-01/chiller.leaving_chilled_water_temperature'] }],
   ['CHILLER-01/chiller.cop', { formulaRevision: 'chiller-cop:v1', inputPointRefs: ['CHILLER-01/chiller.cooling_capacity', 'CHILLER-01/chiller.power'] }],
@@ -100,6 +100,69 @@ const calculatedPointMeta = new Map([
 ]);
 
 export const centralPlantCalculatedPointCount = calculatedPointMeta.size;
+
+const commandPointBase = (deviceId, equipmentSlug, sourceKey, telemetryKey, name, valueType, metadata, unit = '') => ({
+  deviceId,
+  sensorId: '',
+  ...equipmentSubject(equipmentSlug),
+  sourceKey,
+  telemetryKey,
+  name,
+  kind: 'COMMAND',
+  valueType,
+  ...(unit ? { unit } : {}),
+  writable: true,
+  sampleInterval: '1s',
+  publishInterval: '2s',
+  staleAfter: '10s',
+  sourceMetadata: metadata,
+});
+
+const actionCommandPoint = (deviceId, equipmentSlug, sourceKey, telemetryKey, name, capability, revision, feedbackPointKey) => commandPointBase(
+  deviceId,
+  equipmentSlug,
+  sourceKey,
+  telemetryKey,
+  name,
+  'STRING',
+  { controlKind: 'ACTION', capability, capabilityRevision: revision, feedbackPointKey },
+);
+
+const numericCommandPoint = (deviceId, equipmentSlug, sourceKey, telemetryKey, name, capability, revision, parameterKey, minimum, maximum, step, feedbackPointKey, unit) => commandPointBase(
+  deviceId,
+  equipmentSlug,
+  sourceKey,
+  telemetryKey,
+  name,
+  'NUMBER',
+  { controlKind: 'NUMBER', capability, capabilityRevision: revision, parameterKey, minimum, maximum, step, feedbackPointKey },
+  unit,
+);
+
+export function buildCentralPlantControlPoints() {
+  return [
+    actionCommandPoint('CHILLER-01', 'chiller-01', 'start', 'chiller.command.start', '启动冷水机', 'START', 'capability:start:v1', 'chiller.run_state'),
+    actionCommandPoint('CHILLER-01', 'chiller-01', 'stop', 'chiller.command.stop', '停止冷水机', 'STOP', 'capability:stop:v1', 'chiller.run_state'),
+    actionCommandPoint('CHILLER-01', 'chiller-01', 'resetFault', 'chiller.command.reset_fault', '复位冷水机故障', 'RESET_FAULT', 'capability:reset-fault:v1', 'chiller.fault_code'),
+    numericCommandPoint('CHILLER-01', 'chiller-01', 'setChilledWaterTemperatureSetpoint', 'chiller.command.chilled_water_temperature_setpoint', '冷冻水出水设定温度', 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT', 'capability:set-chilled-water-temperature-setpoint:v1', 'setpointC', 5, 12, 0.5, 'chiller.chilled_water_temperature_setpoint', 'Cel'),
+    numericCommandPoint('CHILLER-01', 'chiller-01', 'setLoadLimit', 'chiller.command.load_limit', '冷水机负荷上限', 'SET_LOAD_LIMIT', 'capability:set-load-limit:v1', 'loadLimitPct', 20, 100, 1, 'chiller.load_limit', '%'),
+
+    actionCommandPoint('CHWP-01', 'chwp-01', 'start', 'chwp.command.start', '启动冷冻水泵', 'START', 'capability:start:v1', 'chwp.run_state'),
+    actionCommandPoint('CHWP-01', 'chwp-01', 'stop', 'chwp.command.stop', '停止冷冻水泵', 'STOP', 'capability:stop:v1', 'chwp.run_state'),
+    actionCommandPoint('CHWP-01', 'chwp-01', 'resetFault', 'chwp.command.reset_fault', '复位冷冻水泵故障', 'RESET_FAULT', 'capability:reset-fault:v1', 'chwp.fault_code'),
+    numericCommandPoint('CHWP-01', 'chwp-01', 'setFrequency', 'chwp.command.frequency', '冷冻水泵频率', 'SET_FREQUENCY', 'capability:set-frequency:v1', 'frequencyHz', 20, 50, 0.5, 'chwp.frequency', 'Hz'),
+
+    actionCommandPoint('CWP-01', 'cwp-01', 'start', 'cwp.command.start', '启动冷却水泵', 'START', 'capability:start:v1', 'cwp.run_state'),
+    actionCommandPoint('CWP-01', 'cwp-01', 'stop', 'cwp.command.stop', '停止冷却水泵', 'STOP', 'capability:stop:v1', 'cwp.run_state'),
+    actionCommandPoint('CWP-01', 'cwp-01', 'resetFault', 'cwp.command.reset_fault', '复位冷却水泵故障', 'RESET_FAULT', 'capability:reset-fault:v1', 'cwp.fault_code'),
+    numericCommandPoint('CWP-01', 'cwp-01', 'setFrequency', 'cwp.command.frequency', '冷却水泵频率', 'SET_FREQUENCY', 'capability:set-frequency:v1', 'frequencyHz', 20, 50, 0.5, 'cwp.frequency', 'Hz'),
+
+    actionCommandPoint('CT-01', 'ct-01', 'start', 'cooling_tower.command.start', '启动冷却塔', 'START', 'capability:start:v1', 'cooling_tower.run_state'),
+    actionCommandPoint('CT-01', 'ct-01', 'stop', 'cooling_tower.command.stop', '停止冷却塔', 'STOP', 'capability:stop:v1', 'cooling_tower.run_state'),
+    actionCommandPoint('CT-01', 'ct-01', 'resetFault', 'cooling_tower.command.reset_fault', '复位冷却塔故障', 'RESET_FAULT', 'capability:reset-fault:v1', 'cooling_tower.fault_code'),
+    numericCommandPoint('CT-01', 'ct-01', 'setFanSpeed', 'cooling_tower.command.fan_speed', '冷却塔风机转速', 'SET_FAN_SPEED', 'capability:set-fan-speed:v1', 'fanSpeedPct', 20, 100, 1, 'cooling_tower.fan_speed', '%'),
+  ].map(Object.freeze);
+}
 
 const humanize = (value) => value
   .replaceAll('.', ' ')
@@ -163,6 +226,7 @@ export function buildCentralPlantSimulatorConfig(adapterTemplate, overrides = {}
       ambientDryBulbC: 34,
       ambientWetBulbC: 27,
       loadFraction: 0.72,
+      initialEnergyKwh: overrides.initialEnergyKwh ?? 0,
       chiller: { id: 'CHILLER-01', ratedCoolingCapacityKw: 1200, baseCop: 5.6, initialSetpointC: 7, initialLoadLimitPct: 100, initiallyRunning: true },
       chilledWaterPump: { id: 'CHWP-01', ratedPowerKw: 45, ratedFlowM3h: 220, initialFrequencyHz: 50, initiallyRunning: true },
       coolingWaterPump: { id: 'CWP-01', ratedPowerKw: 37, ratedFlowM3h: 260, initialFrequencyHz: 50, initiallyRunning: true },

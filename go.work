@@ -27,6 +27,7 @@ use (
 	./services/command-service
 	./services/iam-service
 	./services/legacy-migration-service
+	./services/mqtt-telemetry-adapter
 	./services/oidc-test-provider
 	./services/outbox-relay
 	./services/platform-core-service

@@ -1,4 +1,5 @@
 export const centralPlantIdentity = Object.freeze({
+  tenantId: '018f3d00-0000-7000-8000-000000000001',
   organizationId: '018f3e00-0000-7000-8000-000000000001',
   siteId: '018f3e00-1000-7000-8000-000000000001',
   principalId: '018f3e00-2000-7000-8000-000000000001',

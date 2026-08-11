@@ -11,11 +11,12 @@ import tls from 'node:tls';
 import {
   centralPlantDevices,
   centralPlantIdentity,
+  localUUID,
 } from './central-plant-local-contract.mjs';
 import { centralPlantLogtoAccountProfile, provisionCentralPlantLogto } from './central-plant-logto.mjs';
 import { buildCentralPlantRouteOwnership } from './central-plant-local-routing.mjs';
-import { buildS1SeedSQL, buildS2SeedSQL } from './central-plant-local-seed.mjs';
-import { buildCentralPlantSimulatorConfig } from './central-plant-spatial-model.mjs';
+import { buildCentralPlantSpatialIdentities, buildS1SeedSQL, buildS2SeedSQL } from './central-plant-local-seed.mjs';
+import { buildCentralPlantControlPoints, buildCentralPlantSimulatorConfig, buildCentralPlantSimulatorPoints } from './central-plant-spatial-model.mjs';
 
 const root = resolve(process.cwd());
 const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
@@ -314,6 +315,144 @@ async function provisionThingsBoard(baseURL) {
   return { authorization: login.token, devices: provisioned };
 }
 
+const historicalEnergyDailyDays = 730;
+const historicalEnergyRecentDays = 70;
+const historicalEnergyAdapterDays = 6;
+const historicalEnergyBaseKWh = 1250000;
+const millisecondsPerHour = 60 * 60 * 1000;
+const millisecondsPerDay = 24 * millisecondsPerHour;
+const historicalPublishConcurrency = 16;
+
+const seasonalLoadFactorByMonth = Object.freeze([
+  0.62, 0.60, 0.68, 0.78, 0.90, 1.00,
+  1.08, 1.05, 0.94, 0.80, 0.68, 0.62,
+]);
+
+function historicalAveragePowerKW(intervalEnd) {
+  const shanghaiInstant = new Date(intervalEnd.getTime() + 8 * millisecondsPerHour);
+  const weekday = shanghaiInstant.getUTCDay();
+  const hour = shanghaiInstant.getUTCHours();
+  const month = shanghaiInstant.getUTCMonth();
+  const workingDay = weekday >= 1 && weekday <= 5;
+  let basePowerKW = 170;
+  if (workingDay && hour >= 8 && hour < 19) basePowerKW = 320;
+  else if (hour >= 6 && hour < 22) basePowerKW = workingDay ? 230 : 190;
+  else if (!workingDay) basePowerKW = 145;
+  return basePowerKW * seasonalLoadFactorByMonth[month];
+}
+
+function historicalIntervalEnergyKWh(start, end) {
+  let energyKWh = 0;
+  for (let cursor = start.getTime() + millisecondsPerHour; cursor <= end.getTime(); cursor += millisecondsPerHour) {
+    energyKWh += historicalAveragePowerKW(new Date(cursor));
+  }
+  return energyKWh;
+}
+
+export function buildHistoricalEnergyBootstrap(now = new Date(), spatialPoints = []) {
+  const end = new Date(now.getTime() - 2 * 60 * 1000);
+  const recentStart = new Date(end.getTime() - historicalEnergyRecentDays * millisecondsPerDay);
+  const start = new Date(recentStart.getTime() - historicalEnergyDailyDays * millisecondsPerDay);
+  let cumulativeEnergyKWh = historicalEnergyBaseKWh;
+  const readings = [{ timestamp: start.getTime(), energyKwh: cumulativeEnergyKWh }];
+  for (let index = 1; index <= historicalEnergyDailyDays; index += 1) {
+    const intervalStart = new Date(start.getTime() + (index - 1) * millisecondsPerDay);
+    const intervalEnd = new Date(start.getTime() + index * millisecondsPerDay);
+    cumulativeEnergyKWh = Number((cumulativeEnergyKWh + historicalIntervalEnergyKWh(intervalStart, intervalEnd)).toFixed(6));
+    readings.push({ timestamp: intervalEnd.getTime(), energyKwh: cumulativeEnergyKWh });
+  }
+  for (let index = 1; index <= historicalEnergyRecentDays * 24; index += 1) {
+    const intervalStart = new Date(recentStart.getTime() + (index - 1) * millisecondsPerHour);
+    const intervalEnd = new Date(recentStart.getTime() + index * millisecondsPerHour);
+    cumulativeEnergyKWh = Number((cumulativeEnergyKWh + historicalIntervalEnergyKWh(intervalStart, intervalEnd)).toFixed(6));
+    readings.push({ timestamp: intervalEnd.getTime(), energyKwh: cumulativeEnergyKWh });
+  }
+  const adapterIntervalCount = historicalEnergyAdapterDays * 24;
+  const analyticsIntervalCount = readings.length - 1 - adapterIntervalCount;
+  const meter = centralPlantDevices.find((device) => device.name === 'METER-HVAC-TOTAL');
+  if (!meter) throw new Error('central plant HVAC power meter is not defined');
+  const meterPoint = spatialPoints.find((point) => point.deviceId === meter.name && point.telemetryKey === 'hvac_meter.energy');
+  if (!meterPoint) throw new Error('central plant HVAC energy Point is not defined');
+  const identities = buildCentralPlantSpatialIdentities(spatialPoints);
+  const pointID = identities.pointIdByRef.get(`${meterPoint.deviceId}/${meterPoint.telemetryKey}`);
+  const sensorID = meterPoint.sensorId ? identities.sensorIdByKey.get(meterPoint.sensorId) : null;
+  if (!pointID || (meterPoint.sensorId && !sensorID)) throw new Error('central plant HVAC energy Point identity is incomplete');
+  const analyticsFacts = readings.slice(1, analyticsIntervalCount + 1).map((reading, index) => {
+    const previous = readings[index];
+    const ordinal = index + 1;
+    return Object.freeze({
+      fact_id: localUUID(0x700000000000 + ordinal),
+      tenant_id: centralPlantIdentity.tenantId,
+      organization_id: centralPlantIdentity.organizationId,
+      site_id: centralPlantIdentity.siteId,
+      device_id: meter.platformDeviceId,
+      point_id: pointID,
+      sensor_id: sensorID,
+      telemetry_key: 'hvac_meter.energy',
+      energy_type: 'electricity',
+      period_start: new Date(previous.timestamp).toISOString(),
+      period_end: new Date(reading.timestamp).toISOString(),
+      energy_kwh: Number((reading.energyKwh - previous.energyKwh).toFixed(6)),
+      quality: 'VALID',
+      quality_reasons: [],
+      observation_count: 2,
+      source_previous_observation_id: localUUID(0x710000000000 + index),
+      source_current_observation_id: localUUID(0x710000000000 + ordinal),
+      source_offset: reading.timestamp,
+      dataset_revision: reading.timestamp,
+      data_watermark: new Date(reading.timestamp).toISOString(),
+      projected_at: end.toISOString(),
+    });
+  });
+  const adapterReadings = readings.slice(analyticsIntervalCount);
+  return Object.freeze({
+    readings: Object.freeze(readings),
+    analyticsFacts: Object.freeze(analyticsFacts),
+    adapterReadings: Object.freeze(adapterReadings),
+    finalEnergyKwh: cumulativeEnergyKWh,
+    from: start.toISOString(),
+    to: end.toISOString(),
+    coverageDays: historicalEnergyDailyDays + historicalEnergyRecentDays,
+    dailyIntervalCount: historicalEnergyDailyDays,
+    hourlyIntervalCount: historicalEnergyRecentDays * 24,
+    analyticsIntervalCount,
+    adapterIntervalCount,
+  });
+}
+
+async function publishHistoricalEnergyBootstrap(baseURL, provisioned, bootstrap) {
+  const meter = provisioned.devices.find((device) => device.name === 'METER-HVAC-TOTAL');
+  if (!meter) throw new Error('central plant HVAC power meter was not provisioned');
+  const endpoint = `/api/v1/${encodeURIComponent(meter.access)}/telemetry`;
+  for (let index = 0; index < bootstrap.adapterReadings.length; index += historicalPublishConcurrency) {
+    await Promise.all(bootstrap.adapterReadings.slice(index, index + historicalPublishConcurrency).map((reading) => requestJSON(baseURL, endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ts: reading.timestamp, values: { energyKwh: reading.energyKwh } }),
+    })));
+  }
+}
+
+async function publishHistoricalAnalyticsBootstrap(baseURL, bootstrap) {
+  const endpoint = new URL(baseURL);
+  endpoint.searchParams.set('user', 'analytics_projector_writer');
+  endpoint.searchParams.set('date_time_input_format', 'best_effort');
+  endpoint.searchParams.set('query', 'INSERT INTO analytics.energy_interval_facts FORMAT JSONEachRow');
+  const chunkSize = 500;
+  for (let index = 0; index < bootstrap.analyticsFacts.length; index += chunkSize) {
+    const body = `${bootstrap.analyticsFacts.slice(index, index + chunkSize).map((fact) => JSON.stringify(fact)).join('\n')}\n`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-ndjson' },
+      body,
+    });
+    if (!response.ok) {
+      const detail = (await response.text()).trim();
+      throw new Error(`ClickHouse historical Energy bootstrap failed with ${response.status}: ${detail.slice(0, 512)}`);
+    }
+  }
+}
+
 function databaseURL(user, password, port, database) {
   return `postgres://${encodeURIComponent(user)}:${encodeURIComponent(password)}@127.0.0.1:${port}/${database}?sslmode=disable`;
 }
@@ -367,6 +506,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
     'iam', 'core', 'telemetry', 'query', 'gateway', 'web',
     'simulatorDiagnostics', 'adapterDiagnostics', 'centrifugo', 'centrifugoWSS', 'subscribeProxy',
     'iamDiagnostics', 'coreDiagnostics', 'telemetryDiagnostics', 'historyDiagnostics', 'queryDiagnostics', 'gatewayDiagnostics',
+    'analyticsProjectorDiagnostics',
   ];
   const ports = Object.fromEntries(await Promise.all(portNames.map(async (name) => [name, await findAvailablePort()])));
   const projectBase = `hvac-central-plant-${process.pid}-${randomBytes(3).toString('hex')}`;
@@ -443,6 +583,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
   const s2Environment = {
     S2_POSTGRES_HOST_PORT: String(ports.s2Postgres),
     S2_CLICKHOUSE_HTTP_HOST_PORT: String(ports.clickHouse),
+    ANALYTICS_PROJECTOR_DIAGNOSTICS_HOST_PORT: String(ports.analyticsProjectorDiagnostics),
   };
   const thingsBoardEnvironment = { CENTRAL_PLANT_THINGSBOARD_PORT: String(ports.thingsBoard) };
   const runtimeValues = {
@@ -599,9 +740,12 @@ export async function startCentralPlantLocalTopology(options = {}) {
     await waitForHTTP(thingsBoardURL, 'ThingsBoard', { attempts: 900, interval: 500 });
 
     const adapterTemplate = JSON.parse(await readFile(resolve(root, 'services/thingsboard-telemetry-adapter/configs/central-plant.local.example.json'), 'utf8'));
+    const spatialPoints = buildCentralPlantSimulatorPoints(adapterTemplate);
+    const energyHistory = buildHistoricalEnergyBootstrap(new Date(), spatialPoints);
     const simulatorConfig = buildCentralPlantSimulatorConfig(adapterTemplate, {
       thingsBoardBaseUrl: thingsBoardURL,
       publishInterval: '2s',
+      initialEnergyKwh: energyHistory.finalEnergyKwh,
     });
     const { pointsByDevice, pointKeysByDevice } = adapterPointMaps(adapterTemplate);
     const pointCount = [...pointsByDevice.values()].reduce((total, points) => total + points.length, 0);
@@ -609,18 +753,21 @@ export async function startCentralPlantLocalTopology(options = {}) {
       oidcIssuer: logto.issuer,
       principalSubject: logto.subject,
       pointKeysByDevice,
-      spatialPoints: simulatorConfig.points,
+      spatialPoints: [...simulatorConfig.points, ...buildCentralPlantControlPoints()],
     }), 'utf8');
-    await writeFile(paths.s2Seed, buildS2SeedSQL({ pointsByDevice }), 'utf8');
+    await writeFile(paths.s2Seed, buildS2SeedSQL({ pointsByDevice, spatialPoints: simulatorConfig.points }), 'utf8');
     await installDatabaseSeed(s1Container, paths.s1Seed, '/tmp/central-plant-s1.sql', 'hvac_s1');
     await installDatabaseSeed(s2Container, paths.s2Seed, '/tmp/central-plant-s2.sql', 'hvac_s2');
+    await publishHistoricalAnalyticsBootstrap(clickHouseURL, energyHistory);
 
     const provisioned = await provisionThingsBoard(thingsBoardURL);
+    await publishHistoricalEnergyBootstrap(thingsBoardURL, provisioned, energyHistory);
     await writePrivate(paths.providerFile, `${provisioned.authorization}\n`);
     await writeFile(paths.simulatorConfig, `${JSON.stringify(simulatorConfig, null, 2)}\n`, 'utf8');
 
     adapterTemplate.pollInterval = '2s';
-    adapterTemplate.initialLookback = '5m';
+    adapterTemplate.initialLookback = '200h';
+    adapterTemplate.pageLimit = 1000;
     adapterTemplate.checkpointFile = paths.checkpoint;
     adapterTemplate.thingsBoard = { baseUrl: thingsBoardURL, jwtFile: paths.providerFile };
     adapterTemplate.telemetryRuntime = {
@@ -758,6 +905,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       TELEMETRY_DATABASE_URL: databases.telemetry,
       TELEMETRY_SOURCE_BINDINGS_JSON: JSON.stringify({
         'spiffe://hvac.local/thingsboard-telemetry-adapter': [centralPlantIdentity.integrationInstanceId],
+        'spiffe://hvac.local/mqtt-telemetry-adapter': [centralPlantIdentity.integrationInstanceId],
       }),
       TELEMETRY_IAM_ENDPOINT: iamURL,
       TELEMETRY_REALTIME_ENABLED: 'true',
@@ -933,6 +1081,17 @@ export async function startCentralPlantLocalTopology(options = {}) {
       siteId: centralPlantIdentity.siteId,
       deviceCount: centralPlantDevices.length,
       pointCount,
+      energyHistory: {
+        readingCount: energyHistory.readings.length,
+        from: energyHistory.from,
+        to: energyHistory.to,
+        coverageDays: energyHistory.coverageDays,
+        dailyIntervalCount: energyHistory.dailyIntervalCount,
+        hourlyIntervalCount: energyHistory.hourlyIntervalCount,
+        analyticsIntervalCount: energyHistory.analyticsIntervalCount,
+        adapterIntervalCount: energyHistory.adapterIntervalCount,
+        initialEnergyKwh: energyHistory.finalEnergyKwh,
+      },
       devices: centralPlantDevices.map(({ name, type, platformDeviceId }) => ({ name, type, platformDeviceId })),
       paths: { output: outRoot, report: paths.report },
       startedAt: new Date().toISOString(),

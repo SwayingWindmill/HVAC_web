@@ -11,6 +11,7 @@ import {
 } from './central-plant-local-contract.mjs';
 import { buildCentralPlantRouteOwnership } from './central-plant-local-routing.mjs';
 import { buildS1SeedSQL, buildS2SeedSQL } from './central-plant-local-seed.mjs';
+import { buildHistoricalEnergyBootstrap } from './central-plant-local-topology.mjs';
 import {
   buildCentralPlantSimulatorConfig,
   centralPlantAreas,
@@ -43,6 +44,30 @@ function pointMaps() {
   return { pointsByDevice, pointKeysByDevice };
 }
 
+test('central plant historical Energy bootstrap spans two cadences without resets', () => {
+  const hour = 60 * 60 * 1000;
+  const day = 24 * hour;
+  const history = buildHistoricalEnergyBootstrap(new Date('2026-08-06T12:00:00.000Z'), simulatorConfig.points);
+  assert.equal(history.readings.length, 2411);
+  assert.equal(history.readings[1].timestamp - history.readings[0].timestamp, day);
+  assert.equal(history.readings[730].timestamp - history.readings[729].timestamp, day);
+  assert.equal(history.readings[731].timestamp - history.readings[730].timestamp, hour);
+  assert.equal(history.readings.at(-1).timestamp - history.readings[0].timestamp, 800 * day);
+  assert.equal(new Date(history.readings.at(-1).timestamp).toISOString(), history.to);
+  assert.equal(history.analyticsFacts.length, 2266);
+  assert.equal(history.adapterReadings.length, 145);
+  assert.equal(history.analyticsIntervalCount + history.adapterIntervalCount, history.readings.length - 1);
+  assert.equal(history.analyticsFacts.at(-1).period_end, new Date(history.adapterReadings[0].timestamp).toISOString());
+  assert.equal(history.analyticsFacts[0].quality, 'VALID');
+  assert.equal(history.analyticsFacts[0].energy_kwh, history.readings[1].energyKwh - history.readings[0].energyKwh);
+  assert.equal(history.analyticsFacts[0].source_current_observation_id, history.analyticsFacts[1].source_previous_observation_id);
+  for (let index = 1; index < history.readings.length; index += 1) {
+    assert.ok(history.readings[index].timestamp > history.readings[index - 1].timestamp);
+    assert.ok(history.readings[index].energyKwh > history.readings[index - 1].energyKwh);
+  }
+  assert.equal(history.finalEnergyKwh, history.readings.at(-1).energyKwh);
+});
+
 test('central plant contract defines unique spatial, Equipment, Device, Sensor and Point identities', () => {
   assert.equal(centralPlantDevices.length, 7);
   assert.equal(new Set(centralPlantDevices.map((device) => device.platformDeviceId)).size, 7);
@@ -60,7 +85,7 @@ test('central plant contract defines unique spatial, Equipment, Device, Sensor a
   assert.equal(centralPlantEquipment.length, 7);
   assert.equal(centralPlantDeviceEndpoints.length, 7);
   assert.equal(centralPlantSensors.length, 15);
-  assert.equal(simulatorConfig.points.length, 47);
+  assert.equal(simulatorConfig.points.length, 48);
   assert.equal(centralPlantCalculatedPointCount, 7);
   assert.equal(simulatorConfig.schemaVersion, 2);
   assert.equal(simulatorConfig.sensors.filter((sensor) => sensor.mode === 'INDEPENDENT_DEVICE').length, 3);
@@ -71,14 +96,14 @@ test('central plant contract defines unique spatial, Equipment, Device, Sensor a
 
 test('database seeds cover the complete Registry graph and every adapter point', () => {
   const { pointsByDevice, pointKeysByDevice } = pointMaps();
-  assert.equal([...pointsByDevice.values()].reduce((total, points) => total + points.length, 0), 47);
+  assert.equal([...pointsByDevice.values()].reduce((total, points) => total + points.length, 0), 48);
   const s1 = buildS1SeedSQL({
     oidcIssuer: 'https://127.0.0.1:18443/oidc',
     principalSubject: 'logto-central-plant-user',
     pointKeysByDevice,
     spatialPoints: simulatorConfig.points,
   });
-  const s2 = buildS2SeedSQL({ pointsByDevice });
+  const s2 = buildS2SeedSQL({ pointsByDevice, spatialPoints: simulatorConfig.points });
   for (const marker of [
     'core_registry.areas',
     'core_registry.equipment_area_bindings',
@@ -110,6 +135,9 @@ test('database seeds cover the complete Registry graph and every adapter point',
   assert.ok(!s1.includes("'analytics-reader'"));
   assert.ok(!s1.includes("ARRAY['registry.read'] ||"));
   assert.ok(s2.includes('DELETE FROM telemetry_runtime.telemetry_publication_outbox;'));
+  const powerMeter = centralPlantDevices.find((device) => device.name === 'METER-HVAC-TOTAL');
+  assert.ok(powerMeter);
+  assert.ok(s2.includes(`('${powerMeter.platformDeviceId}',1,30,120,true,ARRAY['SOURCE_ACTIVITY']::text[],15,604800`));
   assert.ok(!s1.includes('ACCESS_TOKEN'));
   assert.ok(!s2.includes('ACCESS_TOKEN'));
 });
@@ -153,8 +181,11 @@ test('central plant smoke verifies the atomic Asset Model and exact Real UI coun
     'submitLogtoSignIn',
     'topology.logto',
     'authority.assetModel.counts',
+    'waitForEnergyFacts',
+    'real-energy-dashboard',
+    'topology.energyHistory',
     'durableSmokeReportPath',
-    '{up|smoke}',
+    '{up|smoke|browser}',
   ]) assert.ok(smoke.includes(marker), `central plant smoke is missing ${marker}`);
   assert.ok(!smoke.includes('/devices?limit=100'));
   assert.ok(!smoke.includes('devices.length !== 6'));
@@ -202,6 +233,7 @@ test('local topology stays isolated and derives simulator credentials from the v
   ]) assert.ok(s2Compose.includes(marker));
   for (const marker of [
     "'spiffe://hvac.local/thingsboard-telemetry-adapter'",
+    "'spiffe://hvac.local/mqtt-telemetry-adapter'",
     "'spiffe://hvac.local/centrifugo'",
     'await stop();',
     "['down', '--volumes', '--remove-orphans']",
@@ -211,6 +243,7 @@ test('local topology stays isolated and derives simulator credentials from the v
     'QUERY_CUBE_ENDPOINT',
     'TELEMETRY_QUERY_URL',
     'TELEMETRY_CLICKHOUSE_HTTP_URL',
+    'ANALYTICS_PROJECTOR_DIAGNOSTICS_HOST_PORT',
     'HVAC Web Real',
     'provisionCentralPlantLogto',
     'createHTTPSTLSProxy',
@@ -220,6 +253,16 @@ test('local topology stays isolated and derives simulator credentials from the v
     'principalSubject: logto.subject',
     '[projects.logto, logtoCompose, logtoEnvironment]',
     'buildCentralPlantSimulatorConfig',
+    'buildHistoricalEnergyBootstrap',
+    'publishHistoricalEnergyBootstrap',
+    'historicalEnergyDailyDays = 730',
+    'historicalEnergyRecentDays = 70',
+    'historicalEnergyAdapterDays = 6',
+    'historicalPublishConcurrency = 16',
+    'publishHistoricalAnalyticsBootstrap',
+    "adapterTemplate.initialLookback = '200h'",
+    'adapterTemplate.pageLimit = 1000',
+    'initialEnergyKwh: energyHistory.finalEnergyKwh',
     'simulatorConfig.credentialEnvByDeviceId',
   ]) assert.ok(topology.includes(marker), `topology is missing ${marker}`);
   assert.ok(topology.includes('buildGoBinaries(paths, goCache, quiet);'));

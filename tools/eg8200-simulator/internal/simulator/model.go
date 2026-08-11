@@ -77,8 +77,9 @@ type coolingTowerState struct {
 
 func NewPlant(config PlantConfig, now time.Time) *Plant {
 	return &Plant{
-		config: config,
-		now:    now.UTC(),
+		config:         config,
+		now:            now.UTC(),
+		totalEnergyKWh: config.InitialEnergyKWh,
 		chiller: chillerState{
 			running:               config.Chiller.InitiallyRunning,
 			setpointC:             config.Chiller.InitialSetpointC,

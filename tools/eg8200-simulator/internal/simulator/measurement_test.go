@@ -1,6 +1,8 @@
 package simulator
 
 import (
+	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -66,5 +68,41 @@ func TestMeasurementSchedulerRejectsMissingSourcePoint(t *testing.T) {
 	plant := NewPlant(config.Plant, time.Now().UTC())
 	if _, err := scheduler.Observe(plant.Tick(time.Second)); err == nil {
 		t.Fatal("expected missing source point failure")
+	}
+}
+
+func TestMeasurementSchedulerContinuesPersistedSequences(t *testing.T) {
+	config := testConfig()
+	config.Points = config.Points[:1]
+	pointKey := pointReference(config.Points[0].DeviceID, config.Points[0].TelemetryKey)
+	scheduler, err := NewMeasurementSchedulerWithSequences(config, map[string]uint64{pointKey: 41})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plant := NewPlant(config.Plant, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
+	measurements, err := scheduler.Observe(plant.Tick(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(measurements) != 1 || measurements[0].Sequence != 42 {
+		t.Fatalf("persisted sequence did not continue monotonically: %#v", measurements)
+	}
+	if got := scheduler.Sequences()[pointKey]; got != 42 {
+		t.Fatalf("scheduler sequence snapshot=%d want=42", got)
+	}
+}
+
+func TestMeasurementSequenceStateRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "measurement-sequences.v1.json")
+	want := map[string]uint64{"METER-01/hvac_meter.energy": 128, "CHILLER-01/chiller.power": 77}
+	if err := SaveMeasurementSequences(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadMeasurementSequences(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sequence state round trip=%v want=%v", got, want)
 	}
 }

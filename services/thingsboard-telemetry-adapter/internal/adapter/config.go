@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-const ConfigSchemaVersion = 1
+const (
+	ConfigSchemaVersion    = 1
+	maximumInitialLookback = 240 * time.Hour
+)
 
 var (
 	uuidV7Pattern       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -85,8 +88,8 @@ func (config Config) Validate() error {
 		return errors.New("pollInterval must be between 1s and 1m")
 	}
 	lookback, err := time.ParseDuration(config.InitialLookback)
-	if err != nil || lookback < time.Second || lookback > 24*time.Hour {
-		return errors.New("initialLookback must be between 1s and 24h")
+	if err != nil || lookback < time.Second || lookback > maximumInitialLookback {
+		return errors.New("initialLookback must be between 1s and 240h")
 	}
 	if config.PageLimit < 1 || config.PageLimit > 1000 {
 		return errors.New("pageLimit must be between 1 and 1000")

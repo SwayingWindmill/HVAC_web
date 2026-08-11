@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ type PlantConfig struct {
 	AmbientDryBulbC  float64            `json:"ambientDryBulbC"`
 	AmbientWetBulbC  float64            `json:"ambientWetBulbC"`
 	LoadFraction     float64            `json:"loadFraction"`
+	InitialEnergyKWh float64            `json:"initialEnergyKwh,omitempty"`
 	Chiller          ChillerConfig      `json:"chiller"`
 	ChilledWaterPump PumpConfig         `json:"chilledWaterPump"`
 	CoolingWaterPump PumpConfig         `json:"coolingWaterPump"`
@@ -125,6 +127,9 @@ func (config PlantConfig) Validate() error {
 	}
 	if config.LoadFraction < 0 || config.LoadFraction > 1.2 {
 		return errors.New("plant loadFraction must be between 0 and 1.2")
+	}
+	if config.InitialEnergyKWh < 0 || math.IsNaN(config.InitialEnergyKWh) || math.IsInf(config.InitialEnergyKWh, 0) {
+		return errors.New("plant initialEnergyKwh must be a finite non-negative number")
 	}
 	if config.Chiller.RatedCoolingCapacityKW <= 0 || config.Chiller.BaseCOP < 2 || config.Chiller.BaseCOP > 9 || config.Chiller.InitialSetpointC < 5 || config.Chiller.InitialSetpointC > 12 || config.Chiller.InitialLoadLimitPct < 20 || config.Chiller.InitialLoadLimitPct > 100 {
 		return errors.New("chiller config is invalid")

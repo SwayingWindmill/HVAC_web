@@ -7,6 +7,7 @@
     "ambientDryBulbC": 34,
     "ambientWetBulbC": 27,
     "loadFraction": 0.72,
+    "initialEnergyKwh": 0,
     "chiller": {
       "id": "CHILLER-01",
       "ratedCoolingCapacityKw": 1200,
@@ -432,6 +433,24 @@
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
       "sourceAddress": "CHILLER-01:compressorLoadPct"
+    },
+    {
+      "deviceId": "CHILLER-01",
+      "sensorId": "",
+      "subjectType": "EQUIPMENT",
+      "subjectId": "equipment-chiller-01",
+      "sourceKey": "loadLimitPct",
+      "telemetryKey": "chiller.load_limit",
+      "name": "chiller load limit",
+      "kind": "FEEDBACK",
+      "valueType": "NUMBER",
+      "unit": "%",
+      "writable": false,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceProtocol": "SIMULATED",
+      "sourceAddress": "CHILLER-01:loadLimitPct"
     },
     {
       "deviceId": "CHILLER-01",

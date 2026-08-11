@@ -42,6 +42,20 @@ func TestPlantTickProducesCentralPlantEnergyBalance(t *testing.T) {
 	}
 }
 
+func TestPlantContinuesFromConfiguredCumulativeEnergy(t *testing.T) {
+	config := testPlantConfig()
+	config.InitialEnergyKWh = 1250000
+	plant := NewPlant(config, time.Date(2026, 8, 5, 6, 0, 0, 0, time.UTC))
+	before := plant.Snapshot().Devices[config.PowerMeterID]["energyKwh"].(float64)
+	if before != config.InitialEnergyKWh {
+		t.Fatalf("initial cumulative energy mismatch: got %.6f want %.6f", before, config.InitialEnergyKWh)
+	}
+	after := plant.Tick(time.Hour).Devices[config.PowerMeterID]["energyKwh"].(float64)
+	if after <= before {
+		t.Fatalf("cumulative energy did not continue from configured value: before %.6f after %.6f", before, after)
+	}
+}
+
 func TestPumpAffinityLawReducesPowerAtEightyPercentSpeed(t *testing.T) {
 	plant := NewPlant(testPlantConfig(), time.Now())
 	plant.Tick(time.Second)

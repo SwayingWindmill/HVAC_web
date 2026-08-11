@@ -27,6 +27,7 @@
         { "sourceKey": "chilledWaterTemperatureSetpointC", "telemetryKey": "chiller.chilled_water_temperature_setpoint", "valueType": "NUMBER", "unit": "Cel" },
         { "sourceKey": "enteringCoolingWaterTemperatureC", "telemetryKey": "chiller.entering_cooling_water_temperature", "valueType": "NUMBER", "unit": "Cel" },
         { "sourceKey": "compressorLoadPct", "telemetryKey": "chiller.compressor_load", "valueType": "NUMBER", "unit": "%" },
+        { "sourceKey": "loadLimitPct", "telemetryKey": "chiller.load_limit", "valueType": "NUMBER", "unit": "%" },
         { "sourceKey": "coolingCapacityKw", "telemetryKey": "chiller.cooling_capacity", "valueType": "NUMBER", "unit": "kW" },
         { "sourceKey": "powerKw", "telemetryKey": "chiller.power", "valueType": "NUMBER", "unit": "kW" },
         { "sourceKey": "cop", "telemetryKey": "chiller.cop", "valueType": "NUMBER" },

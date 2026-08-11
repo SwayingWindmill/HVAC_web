@@ -8,14 +8,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 )
 
 const (
-	observationPath                  = "/internal/v1/telemetry/sources/observations:accept"
+	sourceObservationPath            = "/internal/v1/telemetry/sources/observations:accept"
 	maximumTelemetryRuntimeBodyBytes = int64(256 << 10)
 )
 
@@ -51,22 +53,27 @@ type ObservationReceipt struct {
 	PositionAdvanced bool     `json:"positionAdvanced"`
 }
 
+type RuntimeClient interface {
+	AcceptObservation(context.Context, Observation) (ObservationReceipt, error)
+}
+
 type TelemetryRuntimeClient struct {
 	baseURL    string
 	httpClient *http.Client
 }
 
-func NewTelemetryRuntimeClient(baseURL string, httpClient *http.Client) (*TelemetryRuntimeClient, error) {
-	if err := validateProviderURL(baseURL, false); err != nil {
+func NewTelemetryRuntimeClient(config TelemetryRuntimeConfig) (*TelemetryRuntimeClient, error) {
+	if err := validateHTTPSOrigin(config.BaseURL); err != nil {
 		return nil, fmt.Errorf("telemetry runtime base URL: %w", err)
 	}
-	if httpClient == nil {
-		return nil, errors.New("telemetry runtime HTTP client is required")
+	httpClient, err := newMTLSHTTPClient(config)
+	if err != nil {
+		return nil, err
 	}
-	return &TelemetryRuntimeClient{baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"), httpClient: httpClient}, nil
+	return &TelemetryRuntimeClient{baseURL: strings.TrimRight(strings.TrimSpace(config.BaseURL), "/"), httpClient: httpClient}, nil
 }
 
-func NewMTLSHTTPClient(config TelemetryRuntimeConfig) (*http.Client, error) {
+func newMTLSHTTPClient(config TelemetryRuntimeConfig) (*http.Client, error) {
 	certificate, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
 	if err != nil {
 		return nil, errors.New("load telemetry runtime client identity failed")
@@ -104,7 +111,7 @@ func (client *TelemetryRuntimeClient) AcceptObservation(ctx context.Context, obs
 	if err != nil {
 		return ObservationReceipt{}, fmt.Errorf("encode S2 observation: %w", err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+observationPath, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+sourceObservationPath, bytes.NewReader(body))
 	if err != nil {
 		return ObservationReceipt{}, fmt.Errorf("create S2 observation request: %w", err)
 	}
@@ -134,4 +141,31 @@ func (client *TelemetryRuntimeClient) AcceptObservation(ctx context.Context, obs
 		return ObservationReceipt{}, errors.New("S2 observation receipt status is invalid")
 	}
 	return receipt, nil
+}
+
+func validateHTTPSOrigin(raw string) error {
+	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(raw), "/"))
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return errors.New("must be an HTTPS origin")
+	}
+	return nil
+}
+
+func readBounded(reader io.Reader, maximum int64) ([]byte, error) {
+	content, err := io.ReadAll(io.LimitReader(reader, maximum+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(content)) > maximum {
+		return nil, errors.New("response body exceeds limit")
+	}
+	return content, nil
+}
+
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("JSON contains trailing content")
+	}
+	return nil
 }

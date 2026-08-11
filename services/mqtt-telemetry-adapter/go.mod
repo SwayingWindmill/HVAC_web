@@ -1,4 +1,4 @@
-module github.com/quanlaihe/hvac-web/tools/eg8200-simulator
+module github.com/quanlaihe/hvac-web/services/mqtt-telemetry-adapter
 
 go 1.25.12
 

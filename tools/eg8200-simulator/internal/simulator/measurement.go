@@ -34,14 +34,33 @@ type MeasurementScheduler struct {
 }
 
 func NewMeasurementScheduler(config Config) (*MeasurementScheduler, error) {
+	return NewMeasurementSchedulerWithSequences(config, nil)
+}
+
+func NewMeasurementSchedulerWithSequences(config Config, initialSequences map[string]uint64) (*MeasurementScheduler, error) {
 	if len(config.Points) == 0 {
 		return nil, errors.New("measurement scheduler requires telemetry points")
 	}
 	points := make([]scheduledPoint, 0, len(config.Points))
 	for _, point := range config.Points {
-		points = append(points, scheduledPoint{config: point})
+		points = append(points, scheduledPoint{
+			config:   point,
+			sequence: initialSequences[pointReference(point.DeviceID, point.TelemetryKey)],
+		})
 	}
 	return &MeasurementScheduler{points: points}, nil
+}
+
+func (scheduler *MeasurementScheduler) Sequences() map[string]uint64 {
+	if scheduler == nil {
+		return nil
+	}
+	sequences := make(map[string]uint64, len(scheduler.points))
+	for index := range scheduler.points {
+		point := &scheduler.points[index]
+		sequences[pointReference(point.config.DeviceID, point.config.TelemetryKey)] = point.sequence
+	}
+	return sequences
 }
 
 func (scheduler *MeasurementScheduler) Observe(snapshot Snapshot) ([]Measurement, error) {

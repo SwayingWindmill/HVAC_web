@@ -41,6 +41,16 @@ function dockerQuery(container, sql) {
   return String(result.stdout).trim();
 }
 
+function clickHouseQuery(container, sql) {
+  const result = spawnSync('docker', ['exec', container, 'clickhouse-client', '--user', 'telemetry_history', '--query', sql], {
+    cwd: root,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0) throw new Error(result.error?.message ?? result.stderr?.trim() ?? 'ClickHouse query failed');
+  return String(result.stdout).trim();
+}
+
 function queryPersistedSummary(topology) {
   const integration = centralPlantIdentity.integrationInstanceId;
   const sql = `SELECT json_build_object(
@@ -71,6 +81,48 @@ async function waitForPersistedLoop(topology) {
     await pause(1000);
   }
   throw new Error(`central plant telemetry did not converge: ${JSON.stringify(last)}`);
+}
+
+function queryEnergySummary(topology) {
+  const fields = clickHouseQuery(topology.database.clickHouseContainer, `
+SELECT
+  count(),
+  round(sum(energy_kwh), 6),
+  countIf(quality = 'VALID'),
+  countIf(quality = 'SUSPECT'),
+  min(period_start),
+  max(period_end)
+FROM analytics.energy_interval_facts
+WHERE organization_id = '${centralPlantIdentity.organizationId}'
+  AND site_id = '${centralPlantIdentity.siteId}'
+  AND device_id = '${centralPlantDevices.find((device) => device.name === 'METER-HVAC-TOTAL').platformDeviceId}'
+  AND telemetry_key = 'hvac_meter.energy'
+FORMAT TabSeparated
+`).split('\t');
+  return {
+    factCount: Number(fields[0] ?? 0),
+    totalEnergyKwh: Number(fields[1] ?? 0),
+    validFactCount: Number(fields[2] ?? 0),
+    suspectFactCount: Number(fields[3] ?? 0),
+    firstPeriodStart: fields[4] ?? '',
+    lastPeriodEnd: fields[5] ?? '',
+  };
+}
+
+async function waitForEnergyFacts(topology) {
+  const minimumFactCount = Math.max(1, topology.energyHistory.readingCount - 1);
+  let last = null;
+  for (let attempt = 0; attempt < 600; attempt += 1) {
+    last = queryEnergySummary(topology);
+    if (
+      last.factCount >= minimumFactCount
+      && last.totalEnergyKwh > 0
+      && last.validFactCount >= minimumFactCount
+      && last.suspectFactCount === 0
+    ) return last;
+    await pause(500);
+  }
+  throw new Error(`central plant Energy facts did not converge: ${JSON.stringify(last)}`);
 }
 
 function createCDPClient(webSocketURL) {
@@ -125,6 +177,17 @@ async function waitForCondition(client, expression, label) {
     return { url: location.href, text: document.body?.innerText?.slice(0, 5000) ?? '', principal };
   })()`).catch((error) => ({ error: String(error) }));
   throw new Error(`${label} did not become ready: ${JSON.stringify({ last, diagnostic })}`);
+}
+
+function dateOnlyInTimeZone(value, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(value));
+  const fields = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${fields.year}-${fields.month}-${fields.day}`;
 }
 
 async function auditLogtoExperience(client, logto) {
@@ -396,6 +459,62 @@ async function browserAudit(topology) {
     assert.equal(authority.snapshot.deviceId, chiller.platformDeviceId);
     assert.equal(authority.snapshot.values.length, requestedKeys.length);
 
+    const energyAnchor = dateOnlyInTimeZone(topology.energyHistory.to, 'Asia/Shanghai');
+    const energyPath = `/sites/${centralPlantIdentity.siteId}/energy/day?period=day&anchor=${energyAnchor}&quality=VALID_ONLY`;
+    await client.send('Page.navigate', { url: `${topology.webURL}${energyPath}` });
+    const energy = await waitForCondition(client, `(() => {
+      const errorRoot = document.querySelector('[data-testid="real-energy-error"]');
+      if (errorRoot) {
+        const now = Date.now();
+        const lastRetry = Number(globalThis.__centralPlantEnergyRetryAt ?? 0);
+        const retry = errorRoot.querySelector('button');
+        if (retry && now - lastRetry >= 2000) {
+          globalThis.__centralPlantEnergyRetryAt = now;
+          retry.click();
+        }
+        return false;
+      }
+      const root = document.querySelector('[data-testid="real-energy-dashboard"]');
+      if (location.pathname + location.search !== ${JSON.stringify(energyPath)} || !root) return false;
+      const text = root.innerText ?? '';
+      const returnedPeriods = Number(text.match(/(\\d+) 个权威返回桶/)?.[1] ?? 0);
+      const state = root.getAttribute('data-business-state') ?? '';
+      const datasetRevision = root.getAttribute('data-dataset-revision') ?? '';
+      const hourCells = root.querySelectorAll('.real-energy__hour-cell').length;
+      const canvasCount = root.querySelectorAll('canvas').length;
+      if (returnedPeriods < 1
+        || state === 'EMPTY'
+        || !datasetRevision
+        || hourCells !== 24
+        || canvasCount < 1
+        || !text.includes('周期总电能')
+        || !text.includes('日度电能趋势与基期对比')
+        || !text.includes('24 小时电量分布')
+        || !text.includes('导出真实数据')
+        || !text.includes('尚未接入权威模型的 Energy 能力')) return false;
+      return { path: location.pathname + location.search, state, datasetRevision, returnedPeriods, hourCells, canvasCount };
+    })()`, 'converged Energy day workspace with historical meter data');
+    const energyEvidence = JSON.stringify(energy);
+    assert.ok(energy.returnedPeriods > 0, energyEvidence);
+    assert.equal(energy.hourCells, 24, energyEvidence);
+    assert.ok(energy.canvasCount > 0, energyEvidence);
+    assert.notEqual(energy.state, 'EMPTY', energyEvidence);
+    assert.ok(energy.datasetRevision.length > 0, energyEvidence);
+
+    const energyMonthPath = `/sites/${centralPlantIdentity.siteId}/energy/month?period=month&anchor=${energyAnchor.slice(0, 7)}-01&quality=VALID_ONLY`;
+    await client.send('Page.navigate', { url: `${topology.webURL}${energyMonthPath}` });
+    const energyMonth = await waitForCondition(client, `(() => {
+      const root = document.querySelector('[data-testid="real-energy-dashboard"]');
+      if (location.pathname + location.search !== ${JSON.stringify(energyMonthPath)} || !root) return false;
+      const text = root.innerText ?? '';
+      const calendarCells = root.querySelectorAll('.real-energy__calendar-cell').length;
+      const measuredCalendarCells = root.querySelectorAll('.real-energy__calendar-cell:not(:disabled)').length;
+      if (!text.includes('月度能耗日历') || calendarCells !== 42 || measuredCalendarCells < 1) return false;
+      return { path: location.pathname + location.search, calendarCells, measuredCalendarCells };
+    })()`, 'converged Energy month calendar');
+    assert.equal(energyMonth.calendarCells, 42, JSON.stringify(energyMonth));
+    assert.ok(energyMonth.measuredCalendarCells > 0, JSON.stringify(energyMonth));
+
     const logoutStarted = await evaluate(client, `(() => {
       const button = document.querySelector('[data-testid="real-logout-button"]');
       button?.click();
@@ -412,12 +531,14 @@ async function browserAudit(topology) {
         title: card.querySelector('h1, h2')?.textContent?.trim() ?? '',
         hasReauthenticationAction: Boolean(card.querySelector('button')),
         assetMounted: Boolean(document.querySelector('[data-testid="real-site-route-assets"]')),
+        energyMounted: Boolean(document.querySelector('[data-testid="real-energy-dashboard"]')),
       };
     })()`, 'provider-backed logged-out landing');
     const loggedOutEvidence = JSON.stringify(loggedOut);
     assert.equal(loggedOut.title, '已退出登录', loggedOutEvidence);
     assert.equal(loggedOut.hasReauthenticationAction, true, loggedOutEvidence);
     assert.equal(loggedOut.assetMounted, false, loggedOutEvidence);
+    assert.equal(loggedOut.energyMounted, false, loggedOutEvidence);
 
     const reauthenticationStarted = await evaluate(client, `(() => {
       const button = document.querySelector('[data-testid="real-shell-login-required"] button');
@@ -444,6 +565,8 @@ async function browserAudit(topology) {
       logtoExperience,
       logout: { loggedOut, reauthentication },
       navigation,
+      energy,
+      energyMonth,
       ...authority,
     };
   } finally {
@@ -461,6 +584,7 @@ async function runSmoke() {
   const topology = await startCentralPlantLocalTopology({ quiet: true });
   try {
     const persisted = await waitForPersistedLoop(topology);
+    const analytics = await waitForEnergyFacts(topology);
     const browser = await browserAudit(topology);
     const report = {
       schemaVersion: 1,
@@ -476,6 +600,7 @@ async function runSmoke() {
         registrationEnabled: topology.logto.registrationEnabled,
       },
       persisted,
+      analytics,
       browser,
       verifiedAt: new Date().toISOString(),
     };
@@ -516,7 +641,22 @@ async function runUp() {
   await topology.stop();
 }
 
+async function runExistingBrowserAudit() {
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    const topology = JSON.parse(await readFile(resolve(root, 'out/central-plant-local/stack-report.json'), 'utf8'));
+    if (topology?.status !== 'ready' || !topology.webURL || !topology.logto?.credential) {
+      throw new Error('central plant stack report is not ready for browser audit');
+    }
+    const browser = await browserAudit(topology);
+    console.log(JSON.stringify({ schemaVersion: 1, status: 'passed', webURL: topology.webURL, browser }, null, 2));
+  } finally {
+    clearInterval(keepAlive);
+  }
+}
+
 const action = process.argv[2] ?? 'up';
 if (action === 'up') await runUp();
 else if (action === 'smoke') await runSmoke();
-else throw new Error('usage: node scripts/central-plant-local.mjs {up|smoke}');
+else if (action === 'browser') await runExistingBrowserAudit();
+else throw new Error('usage: node scripts/central-plant-local.mjs {up|smoke|browser}');

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "integrationInstanceId": "018f3e00-0000-7000-8000-000000000101",
+  "mqtt": {
+    "brokerUrl": "tls://localhost:18883",
+    "clientId": "mqtt-telemetry-adapter",
+    "topicFilter": "energy/v1/+/+/+/telemetry",
+    "caFile": "/run/secrets/ca.pem",
+    "certFile": "/run/secrets/mqtt-adapter-cert.pem",
+    "keyFile": "/run/secrets/mqtt-adapter-key.pem",
+    "serverName": "localhost",
+    "keepAliveSeconds": 30,
+    "sessionExpirySeconds": 86400,
+    "connectTimeoutSeconds": 10
+  },
+  "telemetryRuntime": {
+    "baseUrl": "https://localhost:18446",
+    "caFile": "/run/secrets/ca.pem",
+    "certFile": "/run/secrets/mqtt-adapter-cert.pem",
+    "keyFile": "/run/secrets/mqtt-adapter-key.pem",
+    "serverName": "localhost"
+  },
+  "gatewayScopes": [
+    {
+      "gatewayId": "EG8200-COMMERCIAL-001",
+      "tenantId": "018f3d00-0000-7000-8000-000000000001",
+      "siteId": "018f3e00-1000-7000-8000-000000000001"
+    }
+  ],
+  "processingQueueCapacity": 1024
+}
