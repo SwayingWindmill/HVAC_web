@@ -141,7 +141,7 @@ test('nightly regression preserves its schedule, manual trigger, and complete pr
   }
 });
 
-test('PR gate workflow always exposes the four stable required checks', async () => {
+test('PR gate workflow always exposes the three stable required checks', async () => {
   const workflow = (await readFile('.github/workflows/pr-gates.yml', 'utf8')).replace(/\r\n?/gu, '\n');
   const pullRequestBlock = workflow.split('  pull_request:')[1]?.split('  workflow_dispatch:')[0] ?? '';
   assert.ok(pullRequestBlock.includes('types:'));
@@ -150,14 +150,12 @@ test('PR gate workflow always exposes the four stable required checks', async ()
     'pr / static',
     'pr / contracts',
     'pr / affected-unit',
-    'pr / affected-integration',
   ]) {
     assert.equal(workflow.split(`name: ${check}`).length - 1, 1, `required check name drifted: ${check}`);
   }
   for (const [job, check] of [
     ['contracts', 'pr / contracts'],
     ['unit', 'pr / affected-unit'],
-    ['integration', 'pr / affected-integration'],
   ]) {
     const marker = `  ${job}:\n    name: ${check}`;
     const start = workflow.indexOf(marker);
@@ -168,6 +166,8 @@ test('PR gate workflow always exposes the four stable required checks', async ()
     const block = workflow.slice(start, end);
     assert.ok(block.includes('if: ${{ always() }}'), `${job} must always report a result`);
   }
+  assert.ok(!workflow.includes('pr / affected-integration'), 'database integration must not be a pull-request required check');
+  assert.ok(!workflow.includes('internal / affected integration'), 'PR workflow must not launch database integration suites');
   assert.ok(!workflow.includes('pr / affected-browser'), 'browser regression must not be a pull-request required check');
   assert.ok(!workflow.includes('internal / affected browser'), 'PR workflow must not launch browser certification');
 });

@@ -24,10 +24,8 @@ jobs:
     outputs:
       contracts: ${{ steps.classify.outputs.contracts }}
       units: ${{ steps.classify.outputs.units }}
-      integrations: ${{ steps.classify.outputs.integrations }}
       contract_profiles: ${{ steps.classify.outputs.contract_profiles }}
       unit_profiles: ${{ steps.classify.outputs.unit_profiles }}
-      integration_profiles: ${{ steps.classify.outputs.integration_profiles }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -126,42 +124,6 @@ jobs:
         env:
           CLASSIFY_RESULT: ${{ needs.classify.result }}
           EXECUTION_RESULT: ${{ needs.unit_run.result }}
-        run: |
-          test "$CLASSIFY_RESULT" = "success"
-          test "$EXECUTION_RESULT" = "success" || test "$EXECUTION_RESULT" = "skipped"
-
-  integration_run:
-    name: internal / affected integration
-    needs: classify
-    if: ${{ needs.classify.result == 'success' && needs.classify.outputs.integrations == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.12"
-          cache-dependency-path: |
-            libs/*/go.mod
-            services/*/go.mod
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22.22.0"
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=integration --profiles="${{ needs.classify.outputs.integration_profiles }}"
-
-  integration:
-    name: pr / affected-integration
-    needs: [classify, integration_run]
-    if: ${{ always() }}
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Aggregate integration result
-        env:
-          CLASSIFY_RESULT: ${{ needs.classify.result }}
-          EXECUTION_RESULT: ${{ needs.integration_run.result }}
         run: |
           test "$CLASSIFY_RESULT" = "success"
           test "$EXECUTION_RESULT" = "success" || test "$EXECUTION_RESULT" = "skipped"

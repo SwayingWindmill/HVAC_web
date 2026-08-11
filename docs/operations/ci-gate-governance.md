@@ -25,7 +25,7 @@ The main sources of excess are broad root-file triggers, permanent Ticket workfl
 | Layer | Purpose | Typical checks | Trigger |
 |---|---|---|---|
 | Ticket/local | Fast implementation feedback | focused unit, contract, compile, one database or browser smoke | developer command |
-| Pull request | Protect the affected production boundary | static checks, affected contracts and units, targeted high-risk integration | central `PR Gates` workflow |
+| Pull request | Protect the affected production boundary | static checks, affected contracts and units | central `PR Gates` workflow |
 | Main/nightly | Detect cross-domain and compatibility regressions | full browser, multi-database, Docker topology, broad security suites | affected `main`, schedule or dispatch |
 | Release | Prove a release candidate | production images, SBOM, signatures, provenance, capacity, Kind, cutover and rollback | explicit release-candidate dispatch or tag |
 
@@ -57,7 +57,7 @@ S2 release-asset validation is owned by the central `pr / contracts` profile. Ch
 
 The full `S2 Telemetry Production Release Certification` workflow is explicit-only. PostgreSQL, ClickHouse, transport, capacity, browser, image, vulnerability, SBOM, provenance, Kind rollout and rollback evidence is produced when a release candidate is intentionally certified, not after every ordinary merge to `main`.
 
-ClickHouse and other durable integrations remain available through the central affected-integration classifier and the nightly full regression. They run on pull requests only when the changed production boundary actually selects that integration profile; broad workflow/package changes no longer launch every database and browser matrix by default.
+ClickHouse, PostgreSQL, Docker-backed, and other durable integrations remain available through local capability commands and the nightly full regression. They do not block ordinary pull requests; the PR layer stops at static, contracts, and affected unit coverage, while durable environment certification runs after merge or by explicit dispatch.
 
 ### Phase 2: trigger precision
 
@@ -118,9 +118,8 @@ Long capability aggregations keep their stable npm names but delegate to `script
 - `pr / static`
 - `pr / contracts`
 - `pr / affected-unit`
-- `pr / affected-integration`
 
-The workflow has no path filter, so all four required check names exist on every pull request. Conditional execution jobs may be skipped when a gate has no affected profiles, but the aggregate result still reports success or propagates the execution failure. Browser automation is not a pull-request merge gate; full Windows/Linux browser regression runs in nightly/manual suites. `scripts/classify-pr-gates.mjs` owns path classification and writes `out/pr-gates/classification.json`; `scripts/domain-task-matrix.mjs` owns the fixed command and domain-profile mapping; `scripts/run-pr-gate.mjs` executes selected contract, unit and targeted integration profiles. Unknown paths, workflow changes, central matrix changes and root `package.json` changes fail closed to broad contract/unit coverage without automatically launching every database or browser suite. A `package-lock.json` change selects compile and unit coverage only.
+The workflow has no path filter, so all three required check names exist on every pull request. Conditional contract and unit execution jobs may be skipped when no affected profiles are selected, but the aggregate result still reports success or propagates the execution failure. Database integration and browser automation are not pull-request merge gates; full integration and Windows/Linux browser regression run in nightly/manual suites. `scripts/classify-pr-gates.mjs` owns path classification and writes `out/pr-gates/classification.json`; `scripts/domain-task-matrix.mjs` owns the fixed command and domain-profile mapping; `scripts/run-pr-gate.mjs` executes selected contract and unit profiles for PRs while retaining integration/browser profiles for nightly and local execution. Unknown paths, workflow changes, central matrix changes and root `package.json` changes fail closed to broad contract/unit coverage without launching database or browser suites. A `package-lock.json` change selects compile and unit coverage only.
 
 Root package manifests and all automatic pull-request execution are owned by `PR Gates`. Legacy capability workflows keep their affected-`main` and manual/scheduled behavior but disable their `pull_request` event with an all-branch ignore, preventing duplicate PR fan-out while retaining the existing workflow definitions for post-merge regression and focused certification. `scripts/test-pr-gate-classifier.mjs` enforces both rules.
 
