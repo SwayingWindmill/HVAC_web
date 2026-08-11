@@ -6,6 +6,7 @@ const root = resolve(process.cwd());
 const output = resolve(root, 'out/s3-local/web-smoke-report.json');
 const origin = process.env.S3_LOCAL_WEB_ORIGIN ?? 'http://127.0.0.1:5173';
 const deviceID = process.env.S3_LOCAL_DEVICE_ID ?? '018f3e00-3000-7000-8000-000000000001';
+const commandPointID = process.env.S3_LOCAL_COMMAND_POINT_ID ?? '018f3e00-4000-7000-8000-000000000001';
 const maximumTerminalMs = Number(process.env.S3_LOCAL_WEB_MAX_TERMINAL_MS ?? 150_000);
 const pollIntervalMs = 500;
 if (!Number.isFinite(maximumTerminalMs) || maximumTerminalMs < 1_000 || maximumTerminalMs > 300_000) {
@@ -49,7 +50,7 @@ const created = await jsonRequest('/api/v1/commands', {
     parameters: { setpointC: 24 },
   }),
 });
-if (typeof created.commandId !== 'string' || created.deviceId !== deviceID) {
+if (typeof created.commandId !== 'string' || created.deviceId !== deviceID || created.pointId !== commandPointID) {
   throw new Error(`local Command create response is invalid: ${JSON.stringify(created)}`);
 }
 
@@ -80,7 +81,8 @@ const report = {
   webOrigin: origin,
   commandId: command.commandId,
   deviceId: command.deviceId,
-  setpointC: command.setpointC,
+  pointId: command.pointId,
+  setpointC: command.parameters?.setpointC,
   commandStatus: command.status,
   verificationReason: finalTransition.reason,
   transitionCount: command.transitions.length,

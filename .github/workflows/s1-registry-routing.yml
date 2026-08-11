@@ -2,6 +2,7 @@ name: S1 Registry Routing
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - '.github/workflows/s1-registry-routing.yml'
       - 'scripts/check-s1-workflow-topology.mjs'

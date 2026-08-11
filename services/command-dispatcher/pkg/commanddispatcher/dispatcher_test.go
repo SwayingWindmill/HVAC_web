@@ -101,7 +101,7 @@ func completeSyntheticVerification(t *testing.T, store *commandservice.Service, 
 		Reported: commandmodel.ReportedStateEvidence{
 			OrganizationID: envelope.OrganizationID, SiteID: envelope.SiteID, DeviceID: envelope.DeviceID,
 			EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
-			BusinessRevision: envelope.BaselineBusinessRevision + 1, ReportedSetpointC: envelope.SetpointC,
+			BusinessRevision: envelope.BaselineBusinessRevision + 1, ReportedValue: commandmodel.NumberScalar(envelope.Parameters[commandmodel.ParameterSetpointC]),
 			ObservedAt: envelope.AcknowledgedAt.Add(time.Second),
 		},
 	}); err != nil {
@@ -111,21 +111,24 @@ func completeSyntheticVerification(t *testing.T, store *commandservice.Service, 
 
 func testRequest() commandmodel.SubmitRequest {
 	return commandmodel.SubmitRequest{
+		TenantID:       "tenant-1",
 		OrganizationID: "org-1",
 		SiteID:         "site-1",
 		DeviceID:       "device-1",
+		PointID:        "point-1",
 		PrincipalID:    "principal-1",
 		IdempotencyKey: "request-1",
-		Capability:     commandmodel.CapabilitySetTemperatureSetpoint,
-		SetpointC:      24,
+		Capability:           commandmodel.CapabilitySetTemperatureSetpoint,
+		Parameters:           commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24},
+		VerificationPointKey: "zone.temperature_setpoint",
 		CurrentState: commandmodel.CurrentStateEvidence{
 			EvaluationAvailability: "AVAILABLE",
 			Presence:               "ONLINE",
 			Readiness:              "CURRENT",
 			Quality:                "GOOD",
-			BusinessRevision:       12,
-			CurrentTemperatureC:    23,
-			ObservedAt:             time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC),
+			BusinessRevision: 12,
+			CurrentValue:     testNumberPointer(23),
+			ObservedAt:       time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC),
 		},
 		Authorization: commandmodel.AuthorizationSnapshot{
 			GrantID: "grant-dispatcher-test", PolicyRevision: "command-policy-1",
@@ -137,6 +140,10 @@ func testRequest() commandmodel.SubmitRequest {
 			ExpiresAt:                   time.Date(2026, 7, 26, 10, 0, 25, 0, time.UTC),
 		},
 	}
+}
+
+func testNumberPointer(value float64) *float64 {
+	return &value
 }
 
 func testClock() func() time.Time {

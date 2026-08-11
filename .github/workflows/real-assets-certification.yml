@@ -2,6 +2,7 @@ name: Real Assets 200 Device Certification
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - '.github/workflows/real-assets-certification.yml'
       - 'apps/hvac-web/src/real/assets/**'

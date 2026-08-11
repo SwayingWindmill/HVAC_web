@@ -2,9 +2,12 @@ package oidctest
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -34,6 +37,8 @@ type Provider struct {
 	activeKey                   *rsa.PrivateKey
 	activeKid                   string
 	rogueKey                    *rsa.PrivateKey
+	modernKey                   *ecdsa.PrivateKey
+	modernKid                   string
 	codes                       map[string]authorizationCode
 }
 
@@ -72,6 +77,10 @@ func New(config Config) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	modern, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
 	now := config.Now
 	if now == nil {
 		now = time.Now
@@ -89,6 +98,8 @@ func New(config Config) (*Provider, error) {
 		activeKey:                   active,
 		activeKid:                   randomToken(8),
 		rogueKey:                    rogue,
+		modernKey:                   modern,
+		modernKid:                   randomToken(8),
 		codes:                       map[string]authorizationCode{},
 	}, nil
 }
@@ -109,6 +120,8 @@ func (provider *Provider) ServeHTTP(writer http.ResponseWriter, request *http.Re
 		provider.authorize(writer, request)
 	case "/token":
 		provider.token(writer, request)
+	case "/session/end":
+		provider.endSession(writer, request)
 	default:
 		http.NotFound(writer, request)
 	}
@@ -123,10 +136,11 @@ func (provider *Provider) discovery(writer http.ResponseWriter) {
 		"authorization_endpoint":                issuer + "/authorize",
 		"token_endpoint":                        issuer + "/token",
 		"jwks_uri":                              issuer + "/jwks",
+		"end_session_endpoint":                  issuer + "/session/end",
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code"},
 		"code_challenge_methods_supported":      []string{"S256"},
-		"id_token_signing_alg_values_supported": []string{"RS256"},
+		"id_token_signing_alg_values_supported": []string{"RS256", "ES384"},
 	})
 }
 
@@ -134,16 +148,29 @@ func (provider *Provider) jwks(writer http.ResponseWriter) {
 	provider.mu.Lock()
 	key := provider.activeKey.PublicKey
 	kid := provider.activeKid
+	modernKey := provider.modernKey.PublicKey
+	modernKid := provider.modernKid
 	provider.mu.Unlock()
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"keys": []map[string]any{{
-			"kty": "RSA",
-			"use": "sig",
-			"alg": "RS256",
-			"kid": kid,
-			"n":   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
-			"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes()),
-		}},
+		"keys": []any{
+			map[string]any{
+				"kty": "RSA",
+				"use": "sig",
+				"alg": "RS256",
+				"kid": kid,
+				"n":   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
+				"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes()),
+			},
+			map[string]any{
+				"kty": "EC",
+				"use": "sig",
+				"alg": "ES384",
+				"kid": modernKid,
+				"crv": "P-384",
+				"x":   base64.RawURLEncoding.EncodeToString(paddedBytes(modernKey.X, 48)),
+				"y":   base64.RawURLEncoding.EncodeToString(paddedBytes(modernKey.Y, 48)),
+			},
+		},
 	})
 }
 
@@ -179,6 +206,12 @@ func (provider *Provider) authorize(writer http.ResponseWriter, request *http.Re
 	values := redirect.Query()
 	values.Set("code", code)
 	values.Set("state", query.Get("state"))
+	if loginHint == "logto-modern" {
+		values.Set("iss", provider.issuer)
+	}
+	if loginHint == "callback-issuer-mismatch" {
+		values.Set("iss", provider.issuer+"/wrong")
+	}
 	redirect.RawQuery = values.Encode()
 	http.Redirect(writer, request, redirect.String(), http.StatusFound)
 }
@@ -260,6 +293,10 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 		expiresAt = now.Add(-time.Minute)
 	case "not-before":
 		notBefore = now.Add(time.Hour)
+	case "logto-modern":
+		tokenUse = ""
+		organizationID = ""
+		roles = nil
 	}
 	claims := tokenClaims{
 		Issuer:               issuer,
@@ -275,24 +312,49 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 		ActingOrganizationID: organizationID,
 		TokenUse:             tokenUse,
 	}
-	idToken, err := provider.signJWT(claims, code.LoginHint == "invalid-signature", code.LoginHint == "unknown-signing-key")
+	idToken, err := provider.signJWT(claims, code.LoginHint == "invalid-signature", code.LoginHint == "unknown-signing-key", code.LoginHint == "logto-modern")
 	if err != nil {
 		writeOAuthError(writer, http.StatusInternalServerError, "server_error", "fixture signing failed")
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"access_token":  randomToken(32),
-		"refresh_token": randomToken(32),
-		"id_token":      idToken,
-		"token_type":    tokenType,
-		"expires_in":    300,
-	})
+	response := map[string]any{
+		"access_token": randomToken(32),
+		"id_token":     idToken,
+		"token_type":   tokenType,
+		"expires_in":   300,
+	}
+	if code.LoginHint != "logto-modern" {
+		response["refresh_token"] = randomToken(32)
+	}
+	writeJSON(writer, http.StatusOK, response)
 }
 
-func (provider *Provider) signJWT(claims tokenClaims, rogue, unknownKeyID bool) (string, error) {
+func (provider *Provider) endSession(writer http.ResponseWriter, request *http.Request) {
+	query := request.URL.Query()
+	if query.Get("client_id") != provider.clientID {
+		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "logout client is invalid")
+		return
+	}
+	redirectURI := query.Get("post_logout_redirect_uri")
+	redirect, err := url.Parse(redirectURI)
+	if err != nil || redirect.Scheme == "" || redirect.Host == "" {
+		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "post logout redirect is invalid")
+		return
+	}
+	callback, err := url.Parse(provider.redirectURI)
+	if err != nil || callback.Scheme != redirect.Scheme || callback.Host != redirect.Host {
+		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "post logout redirect is not registered")
+		return
+	}
+	http.Redirect(writer, request, redirect.String(), http.StatusFound)
+}
+
+func (provider *Provider) signJWT(claims tokenClaims, rogue, unknownKeyID, modern bool) (string, error) {
 	provider.mu.Lock()
 	key := provider.activeKey
 	kid := provider.activeKid
+	modernKey := provider.modernKey
+	modernKid := provider.modernKid
 	if rogue {
 		key = provider.rogueKey
 	}
@@ -300,11 +362,22 @@ func (provider *Provider) signJWT(claims tokenClaims, rogue, unknownKeyID bool) 
 		kid = "fixture-unknown-key"
 	}
 	provider.mu.Unlock()
-	header, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": kid, "typ": "JWT"})
 	payload, err := json.Marshal(claims)
 	if err != nil {
 		return "", err
 	}
+	if modern {
+		header, _ := json.Marshal(map[string]string{"alg": "ES384", "kid": modernKid})
+		unsigned := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
+		digest := sha512.Sum384([]byte(unsigned))
+		r, s, err := ecdsa.Sign(rand.Reader, modernKey, digest[:])
+		if err != nil {
+			return "", err
+		}
+		signature := append(paddedBytes(r, 48), paddedBytes(s, 48)...)
+		return unsigned + "." + base64.RawURLEncoding.EncodeToString(signature), nil
+	}
+	header, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": kid, "typ": "JWT"})
 	unsigned := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
 	digest := sha256.Sum256([]byte(unsigned))
 	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
@@ -323,6 +396,13 @@ func (provider *Provider) rotateKey() {
 	provider.activeKey = key
 	provider.activeKid = randomToken(8)
 	provider.mu.Unlock()
+}
+
+func paddedBytes(value *big.Int, size int) []byte {
+	encoded := value.Bytes()
+	result := make([]byte, size)
+	copy(result[size-len(encoded):], encoded)
+	return result
 }
 
 func randomToken(byteCount int) string {

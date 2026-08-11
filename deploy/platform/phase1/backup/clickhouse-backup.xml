@@ -1,0 +1,10 @@
+<clickhouse>
+  <storage_configuration>
+    <disks>
+      <phase1_backups>
+        <type>local</type>
+        <path>/var/lib/clickhouse/backups/</path>
+      </phase1_backups>
+    </disks>
+  </storage_configuration>
+</clickhouse>

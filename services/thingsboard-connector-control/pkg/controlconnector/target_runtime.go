@@ -15,12 +15,11 @@ import (
 )
 
 const (
-	approvedCohortSchemaVersion        = 1
-	approvedMappingStatus              = "VERIFIED"
-	approvedProviderContract           = "THINGSBOARD_CE_4.3.1.3"
-	approvedSetpointCapabilityRevision = "capability:set-temperature-setpoint:v1"
-	maximumCohortDocumentBytes         = int64(64 << 10)
-	maximumCredentialBytes             = int64(64 << 10)
+	approvedCohortSchemaVersion = 1
+	approvedMappingStatus       = "VERIFIED"
+	approvedProviderContract    = "THINGSBOARD_CE_4.3.1.3"
+	maximumCohortDocumentBytes  = int64(64 << 10)
+	maximumCredentialBytes      = int64(64 << 10)
 )
 
 type ApprovedCohort struct {
@@ -37,10 +36,9 @@ type ApprovedCohort struct {
 	MappingStatus         string                  `json:"mappingStatus"`
 	ProviderContract      string                  `json:"providerContract"`
 	ProviderMethod        string                  `json:"providerMethod"`
-	ReportedStateKey      string                  `json:"reportedStateKey"`
-	TimeoutMilliseconds   int64                   `json:"timeoutMilliseconds"`
-	MaximumSetpointDeltaC float64                 `json:"maximumSetpointDeltaC"`
-	CredentialReference   string                  `json:"credentialReference"`
+	ReportedStateKey    string                  `json:"reportedStateKey"`
+	TimeoutMilliseconds int64                   `json:"timeoutMilliseconds"`
+	CredentialReference string                  `json:"credentialReference"`
 }
 
 func LoadApprovedCohort(path string) (ApprovedCohort, error) {
@@ -70,13 +68,15 @@ func LoadApprovedCohort(path string) (ApprovedCohort, error) {
 }
 
 func (cohort ApprovedCohort) Validate() error {
+	profile, supported := commandmodel.CapabilityProfileFor(cohort.Capability)
+	capabilityVerified := supported && cohort.CapabilityRevision == profile.Revision
 	if cohort.SchemaVersion != approvedCohortSchemaVersion ||
 		!commandmodel.IsUUIDv7(cohort.OrganizationID) || !commandmodel.IsUUIDv7(cohort.SiteID) || !commandmodel.IsUUIDv7(cohort.DeviceID) ||
 		strings.TrimSpace(cohort.IntegrationID) == "" || strings.TrimSpace(cohort.ExternalDeviceID) == "" || strings.TrimSpace(cohort.BindingRevision) == "" ||
-		cohort.Capability != commandmodel.CapabilitySetTemperatureSetpoint || cohort.CapabilityRevision != approvedSetpointCapabilityRevision ||
+		!capabilityVerified ||
 		strings.TrimSpace(cohort.MappingRevision) == "" || cohort.MappingStatus != approvedMappingStatus ||
 		cohort.ProviderContract != approvedProviderContract || strings.TrimSpace(cohort.ProviderMethod) == "" || strings.TrimSpace(cohort.ReportedStateKey) == "" ||
-		cohort.TimeoutMilliseconds < 1000 || cohort.TimeoutMilliseconds > 30000 || cohort.MaximumSetpointDeltaC != 1 ||
+		cohort.TimeoutMilliseconds < 1000 || cohort.TimeoutMilliseconds > 30000 ||
 		!opaqueCredentialReference(cohort.CredentialReference) {
 		return errors.New("approved cohort is incomplete or not production verified")
 	}

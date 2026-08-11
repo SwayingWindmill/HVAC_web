@@ -106,9 +106,9 @@ GRANT USAGE, SELECT ON SEQUENCE iam.work_order_authorization_decisions_sequence_
 REVOKE ALL ON iam.work_order_permissions, iam.work_order_ownership_targets, iam.work_order_authorization_decisions FROM PUBLIC;
 
 INSERT INTO iam.policies
-  (id, organization_id, policy_key, policy_revision, status, document, created_at, updated_at)
+  (id, tenant_id, organization_id, policy_key, policy_revision, status, document, created_at, updated_at)
 VALUES
-  ('018f1e00-1400-7000-8000-000000000031', '018f1e00-0000-7000-8000-000000000001', 'work-order-access', 1, 'ACTIVE',
+  ('018f1e00-1400-7000-8000-000000000031', '018f1d00-0000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', 'work-order-access', 1, 'ACTIVE',
    '{"actions":["work-order:list","work-order:read","work-order:create","work-order:assign","work-order:plan","work-order:start","work-order:block","work-order:resume","work-order:complete","work-order:cancel","work-order:reopen"],"scope":"site-and-resource","denyWins":true}'::jsonb,
    '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')
 ON CONFLICT DO NOTHING;

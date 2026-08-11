@@ -7,9 +7,11 @@ import (
 	"testing"
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
 const (
+	postgresTestTenantID       = "0190f000-0000-7000-8000-000000000001"
 	postgresTestOrganizationID = "01910000-0000-7000-8000-000000000001"
 	postgresTestSiteID         = "01910000-0001-7000-8000-000000000001"
 	postgresTestAlarmID        = "01910000-1000-7000-8000-000000000001"
@@ -20,7 +22,7 @@ func TestPostgresLifecycleWriteIsScopedAtomicAndIdempotent(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("S4_ALARM_TEST_DATABASE_URL is not configured")
 	}
-	ctx := context.Background()
+	ctx := identitycontext.WithTenantID(context.Background(), postgresTestTenantID)
 	store, err := OpenPostgresStore(ctx, databaseURL)
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +95,10 @@ func TestPostgresLifecycleWriteIsScopedAtomicAndIdempotent(t *testing.T) {
 	}
 	if _, err := store.Get(ctx, "01910000-0000-7000-8000-000000000099", postgresTestSiteID, postgresTestAlarmID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected cross-Organization invisibility, got %v", err)
+	}
+	wrongTenantContext := identitycontext.WithTenantID(context.Background(), "0190f000-0000-7000-8000-000000000099")
+	if _, err := store.Get(wrongTenantContext, postgresTestOrganizationID, postgresTestSiteID, postgresTestAlarmID); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("expected Tenant binding mismatch to fail closed, got %v", err)
 	}
 
 	current, err := store.Get(ctx, postgresTestOrganizationID, postgresTestSiteID, postgresTestAlarmID)

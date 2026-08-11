@@ -39,12 +39,14 @@ const createRoute = routes.routes?.find((item) => item.method === 'POST' && item
 const getRoute = routes.routes?.find((item) => item.method === 'GET' && item.path === '/api/v1/commands/{commandId}');
 assert(createRoute?.owner === 'command-service' && getRoute?.owner === 'command-service', 'Command public route ownership is missing');
 
-assert(openapi.info?.version === '0.4.0-disabled-real-site-scope', 'Command OpenAPI is not the implemented disabled Real Site scope baseline');
+assert(openapi.info?.version === '0.5.0-command-point-identity', 'Command OpenAPI is not the implemented canonical Point identity baseline');
 assert(openapi.paths?.['/api/v1/commands']?.post?.['x-production-traffic-percent'] === 0, 'Command POST OpenAPI enabled production traffic');
 assert(openapi.paths?.['/api/v1/commands/{commandId}']?.get?.['x-production-traffic-percent'] === 0, 'Command GET OpenAPI enabled production traffic');
-for (const forbidden of ['organizationId', 'siteId', 'principalId', 'providerMethod', 'providerParams', 'thingsBoardDeviceId', 'executionFence']) {
+for (const forbidden of ['organizationId', 'siteId', 'deviceId', 'pointId', 'principalId', 'providerMethod', 'providerParams', 'thingsBoardDeviceId', 'executionFence']) {
   assert(openapi.paths?.['/api/v1/commands']?.post?.['x-client-forbidden-fields']?.includes(forbidden), `Command OpenAPI no longer forbids ${forbidden}`);
 }
+assert(openapi.components?.schemas?.Command?.required?.includes('pointId'), 'Command projection is missing canonical pointId');
+assert(openapi.components?.schemas?.Command?.properties?.pointId?.format === 'uuid', 'Command pointId is not a UUID contract');
 for (const status of ['AWAITING_APPROVAL', 'APPROVED', 'OUTCOME_UNKNOWN']) {
   assert(openapi.components?.schemas?.Command?.properties?.status?.enum?.includes(status), `Command OpenAPI is missing ${status}`);
 }

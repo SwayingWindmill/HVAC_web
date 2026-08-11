@@ -14,10 +14,14 @@ import (
 )
 
 const (
-	historyOrganizationID = "018f1e00-0000-7000-8000-000000000001"
-	historySiteID         = "018f1e00-1000-7000-8000-000000000001"
-	historyDeviceID       = "018f1e00-4000-7000-8000-000000000001"
-	historyObservationID  = "018f1e00-8000-7000-8000-000000000001"
+	historyOrganizationID       = "018f1e00-0000-7000-8000-000000000001"
+	historySiteID               = "018f1e00-1000-7000-8000-000000000001"
+	historyDeviceID             = "018f1e00-4000-7000-8000-000000000001"
+	historyObservationID        = "018f1e00-8000-7000-8000-000000000001"
+	historyPointID              = "018f1e00-5000-7000-8000-000000000001"
+	historySensorID             = "018f1e00-6000-7000-8000-000000000001"
+	historyReplacementPointID   = "018f1e00-5000-7000-8000-000000000002"
+	historyReplacementSensorID  = "018f1e00-6000-7000-8000-000000000002"
 )
 
 func TestClickHouseHistoryClientUsesFixedScopedQueriesAndBuildsMetadata(t *testing.T) {
@@ -35,8 +39,8 @@ func TestClickHouseHistoryClientUsesFixedScopedQueriesAndBuildsMetadata(t *testi
 		mu.Unlock()
 		writer.Header().Set("Content-Type", "application/x-ndjson")
 		if index == 1 {
-			_, _ = writer.Write([]byte(`{"observation_id":"018f1e00-8000-7000-8000-000000000001","telemetry_key":"zone.temperature","sampled_at":"2026-07-30T01:00:00.000Z","received_at":"2026-07-30T01:00:01.000Z","value":22.5,"unit":"Cel","quality":"GOOD","quality_reasons":[],"revision":7,"total_count":2}
-{"observation_id":"018f1e00-8000-7000-8000-000000000002","telemetry_key":"zone.temperature","sampled_at":"2026-07-30T02:00:00.000Z","received_at":"2026-07-30T02:00:01.000Z","value":23.0,"unit":"Cel","quality":"SUSPECT","quality_reasons":["SENSOR_DRIFT"],"revision":8,"total_count":2}
+			_, _ = writer.Write([]byte(`{"observation_id":"018f1e00-8000-7000-8000-000000000001","point_id":"018f1e00-5000-7000-8000-000000000001","sensor_id":"018f1e00-6000-7000-8000-000000000001","telemetry_key":"zone.temperature","sampled_at":"2026-07-30T01:00:00.000Z","received_at":"2026-07-30T01:00:01.000Z","value":22.5,"unit":"Cel","quality":"GOOD","quality_reasons":[],"revision":7,"total_count":2}
+{"observation_id":"018f1e00-8000-7000-8000-000000000002","point_id":"018f1e00-5000-7000-8000-000000000002","sensor_id":"018f1e00-6000-7000-8000-000000000002","telemetry_key":"zone.temperature","sampled_at":"2026-07-30T02:00:00.000Z","received_at":"2026-07-30T02:00:01.000Z","value":23.0,"unit":"Cel","quality":"SUSPECT","quality_reasons":["SENSOR_DRIFT"],"revision":8,"total_count":2}
 `))
 			return
 		}
@@ -67,6 +71,12 @@ func TestClickHouseHistoryClientUsesFixedScopedQueriesAndBuildsMetadata(t *testi
 	if len(response.Metadata.TruncatedKeys) != 0 {
 		t.Fatalf("truncated keys = %#v", response.Metadata.TruncatedKeys)
 	}
+	if response.Series[0].Points[0].PointID != historyPointID || response.Series[0].Points[0].SensorID == nil || *response.Series[0].Points[0].SensorID != historySensorID {
+		t.Fatalf("first historical identity = %#v", response.Series[0].Points[0])
+	}
+	if response.Series[0].Points[1].PointID != historyReplacementPointID || response.Series[0].Points[1].SensorID == nil || *response.Series[0].Points[1].SensorID != historyReplacementSensorID {
+		t.Fatalf("replacement historical identity = %#v", response.Series[0].Points[1])
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(queries) != 2 {
@@ -92,11 +102,16 @@ func TestClickHouseHistoryClientUsesFixedScopedQueriesAndBuildsMetadata(t *testi
 	if !strings.Contains(queries[0], "row_number() OVER (PARTITION BY telemetry_key") || !strings.Contains(queries[0], "WHERE row_number <= 2") {
 		t.Fatalf("point query is not independently bounded per key:\n%s", queries[0])
 	}
+	for _, marker := range []string{"toString(point_id) AS point_id", "AS sensor_id"} {
+		if !strings.Contains(queries[0], marker) {
+			t.Fatalf("point query omitted historical identity %q:\n%s", marker, queries[0])
+		}
+	}
 }
 
 func TestClickHouseHistoryClientMarksTruncationAndRejectsUnrequestedKeys(t *testing.T) {
 	responses := []string{
-		`{"observation_id":"018f1e00-8000-7000-8000-000000000001","telemetry_key":"zone.temperature","sampled_at":"2026-07-30T01:00:00.000Z","received_at":"2026-07-30T01:00:01.000Z","value":22.5,"unit":"Cel","quality":"GOOD","quality_reasons":[],"revision":7,"total_count":3}
+		`{"observation_id":"018f1e00-8000-7000-8000-000000000001","point_id":"018f1e00-5000-7000-8000-000000000001","sensor_id":null,"telemetry_key":"zone.temperature","sampled_at":"2026-07-30T01:00:00.000Z","received_at":"2026-07-30T01:00:01.000Z","value":22.5,"unit":"Cel","quality":"GOOD","quality_reasons":[],"revision":7,"total_count":3}
 `,
 		`{"data_watermark":"2026-07-30T06:00:00.000Z","maximum_revision":7}
 `,

@@ -5,6 +5,11 @@
 
 # dependencies
 node_modules/
+node_modules
+
+# local toolchain download artifacts
+CodeHVAC_webouttoolsgo*.tar.gz
+CodeHVAC_web*_runnode_modules
 
 # build output
 dist/
@@ -17,6 +22,8 @@ out/
 .env
 .env.local
 .env.*.local
+deploy/platform/phase1/environments/*.runtime.env
+deploy/platform/phase1/runtime/
 
 # logs
 *.log

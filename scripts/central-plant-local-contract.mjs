@@ -1,4 +1,5 @@
 export const centralPlantIdentity = Object.freeze({
+  tenantId: '018f3d00-0000-7000-8000-000000000001',
   organizationId: '018f3e00-0000-7000-8000-000000000001',
   siteId: '018f3e00-1000-7000-8000-000000000001',
   principalId: '018f3e00-2000-7000-8000-000000000001',
@@ -12,6 +13,11 @@ export const centralPlantDevices = Object.freeze([
   { slug: 'ct-01', name: 'CT-01', type: 'COOLING_TOWER', platformDeviceId: '018f3e00-4000-7000-8000-000000000004' },
   { slug: 'hvac-meter', name: 'METER-HVAC-TOTAL', type: 'HVAC_POWER_METER', platformDeviceId: '018f3e00-4000-7000-8000-000000000005' },
   { slug: 'btu-meter', name: 'BTU-METER-01', type: 'BTU_METER', platformDeviceId: '018f3e00-4000-7000-8000-000000000006' },
+  { slug: 'weather-station', name: 'WEATHER-STATION-01', type: 'WEATHER_STATION', platformDeviceId: '018f3e00-4000-7000-8000-000000000007' },
+]);
+
+export const analyticsActions = Object.freeze([
+  'analytics.energy-series.read',
 ]);
 
 export const telemetryActions = Object.freeze([

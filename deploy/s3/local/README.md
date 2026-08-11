@@ -1,5 +1,7 @@
 # S3 Local Integration Profile
 
+> **Scope: LOCAL_FIXTURE.** This Kind-based profile is a local integration fixture for S3 Command behavior. It is not the canonical Phase 1 deployment and must not be used to infer that Kubernetes is required for Development, Staging or Production. Canonical Phase 1 deployment is `deploy/platform/phase1/`.
+
 This profile runs the S3 command runtime and a local-only Web Gateway on a single-node kind cluster.
 
 It is deliberately separate from `deploy/s3/target/` and must never be used as formal S3-09 certification evidence. Successful runtime and browser checks record `formalCertificationClaim: false`.
@@ -28,12 +30,12 @@ bash scripts/s3-local.sh down
 The `up` command:
 
 1. Generates a disposable local CA, workload certificates, signing keys, CSRF value, provider value, database reference and approved test cohort under `out/s3-local/`.
-2. Builds seven local-only images.
+2. Builds eight local-only images.
 3. Creates or reuses the `hvac-s3-local` kind cluster.
 4. Loads images into the kind node.
 5. Deploys PostgreSQL and applies the production-style S3 role/RLS migrations.
 6. Deploys Command Service, Dispatcher, Verifier, the device simulator and the local Web Gateway.
-7. Submits a uniquely idempotent 24°C command and waits for `SUCCEEDED|VERIFIED`.
+7. Uses a local Device Catalog v2 that binds Tenant, Organization, Site, Device, canonical Command Point UUID and verification Point key, then submits a uniquely idempotent 24°C command and waits for `SUCCEEDED|VERIFIED`.
 
 ## Browser commands
 
@@ -52,7 +54,7 @@ Open:
 http://127.0.0.1:5173/commands
 ```
 
-The page runs with `VITE_API_MODE=real` and the explicit development-only flag `VITE_S3_LOCAL_COMMANDS=true`. Production Command routes remain compiled as disabled. Allow up to 150 seconds for the local durable Verifier to move a submitted command from `DISPATCHING` to `SUCCEEDED`.
+The page runs with `VITE_API_MODE=real` and the explicit development-only flag `VITE_S3_LOCAL_COMMANDS=true`. The generic Commands workbench keeps mutation disabled outside Mock mode; `run-s3-local-web-smoke.mjs` submits through the same-origin local API specifically for integration verification. Route Ownership remains disabled for production traffic. Allow up to 150 seconds for the local durable Verifier to move a submitted command from `DISPATCHING` to `SUCCEEDED`.
 
 The Web flow is:
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 )
@@ -165,7 +166,11 @@ func TestTelemetryAuthorizationIsAllOrNothing(t *testing.T) {
 }
 
 func TestPostgresTelemetryActionProjectionRejectsUnknownSchemaDrift(t *testing.T) {
-	actions, err := postgresTelemetryRegistryActions([]string{string(registryauth.ActionRegistryRead), string(telemetryauth.ActionSnapshotRead)})
+	actions, err := postgresTelemetryRegistryActions([]string{
+		string(registryauth.ActionRegistryRead),
+		analyticsmodel.EnergySeriesAction,
+		string(telemetryauth.ActionSnapshotRead),
+	})
 	if err != nil || len(actions) != 1 || string(actions[0]) != string(telemetryauth.ActionSnapshotRead) {
 		t.Fatalf("known cross-domain actions = %#v, err=%v", actions, err)
 	}

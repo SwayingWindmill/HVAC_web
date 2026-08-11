@@ -29,6 +29,7 @@ const (
 	testAudience            = "platform-core-service"
 	testPolicy              = "registry-read:1"
 	testPrincipal           = "018f1e00-2000-7000-8000-000000000002"
+	testTenantA             = "018f1d00-0000-7000-8000-000000000001"
 	testOrganizationA       = "018f1e00-0000-7000-8000-000000000001"
 	testOrganizationB       = "018f1e00-0000-7000-8000-000000000002"
 	testActingOrg           = "018f1e00-0000-7000-8000-000000000003"
@@ -59,6 +60,7 @@ type fakeRegistryStore struct {
 	devices       PageResult[Device]
 	device        Device
 	bindings      PageResult[DeviceBinding]
+	assetModel    SiteAssetModel
 	err           error
 	lastClaims    registryauth.GrantClaims
 	lastPage      PageRequest
@@ -100,6 +102,10 @@ func (store *fakeRegistryStore) GetDevice(_ context.Context, claims registryauth
 func (store *fakeRegistryStore) ListDeviceBindings(_ context.Context, claims registryauth.GrantClaims, id string, page PageRequest) (PageResult[DeviceBinding], error) {
 	store.lastClaims, store.lastID, store.lastPage = claims, id, page
 	return store.bindings, store.err
+}
+func (store *fakeRegistryStore) GetSiteAssetModel(_ context.Context, claims registryauth.GrantClaims, id string) (SiteAssetModel, error) {
+	store.lastClaims, store.lastID = claims, id
+	return store.assetModel, store.err
 }
 
 func TestServerListsOrganizationsAndReturnsBoundCursor(t *testing.T) {
@@ -359,6 +365,7 @@ func testGrantClaims(action registryauth.Action) registryauth.GrantClaims {
 		PrincipalID:            testPrincipal,
 		SubjectIssuer:          "https://identity.example.test/oidc",
 		Subject:                "delegated",
+		TenantID:               testTenantA,
 		ActingOrganizationID:   testActingOrg,
 		AllowedOrganizationIDs: []string{testOrganizationA},
 		AllowedSiteIDs:         []string{testSiteA1},

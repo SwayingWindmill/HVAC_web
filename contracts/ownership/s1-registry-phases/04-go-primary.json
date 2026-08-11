@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 7,
+  "registryRevision": 8,
   "routes": [
     {
       "method": "GET",
@@ -316,6 +316,31 @@
     {
       "method": "GET",
       "path": "/api/v1/sites/{siteId}/device-bindings",
+      "owner": "platform-core-service",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "organization",
+        "site",
+        "principal"
+      ],
+      "migrationPhases": [
+        "GO_PRIMARY"
+      ],
+      "shadowSideEffectPolicy": "NONE",
+      "readOnlyFallback": false,
+      "fallbackForbiddenResults": [
+        "AUTHORIZATION_DENIED",
+        "RESOURCE_NOT_FOUND"
+      ],
+      "migrationPhase": "GO_PRIMARY"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/asset-model",
       "owner": "platform-core-service",
       "revision": 1,
       "rollout": {

@@ -109,6 +109,9 @@ type rpcRequest struct {
 type setpointReply struct {
 	Success          bool     `json:"success"`
 	AppliedSetpointC *float64 `json:"appliedSetpointC,omitempty"`
+	Code             string   `json:"code,omitempty"`
+	AppliedValue     *float64 `json:"appliedValue,omitempty"`
+	BusinessRevision uint64   `json:"businessRevision,omitempty"`
 }
 
 func NewThingsBoard(config ThingsBoardConfig) (*ThingsBoard, error) {
@@ -190,9 +193,13 @@ func (c *ThingsBoard) Execute(ctx context.Context, envelope commandmodel.Dispatc
 		return commandmodel.ConnectorResult{}, ErrTargetUnavailable
 	}
 
+	params := make(map[string]any, len(envelope.Parameters))
+	for key, value := range envelope.Parameters {
+		params[key] = value
+	}
 	body, err := json.Marshal(rpcRequest{
 		Method:  mapping.Method,
-		Params:  map[string]any{"setpointC": envelope.SetpointC},
+		Params:  params,
 		Timeout: mapping.Timeout.Milliseconds(),
 	})
 	if err != nil {

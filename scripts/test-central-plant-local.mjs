@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { resolve } from 'node:path';
 import {
+  analyticsActions,
   centralPlantDevices,
   centralPlantIdentity,
   localUUID,
@@ -10,13 +11,26 @@ import {
 } from './central-plant-local-contract.mjs';
 import { buildCentralPlantRouteOwnership } from './central-plant-local-routing.mjs';
 import { buildS1SeedSQL, buildS2SeedSQL } from './central-plant-local-seed.mjs';
+import { buildHistoricalEnergyBootstrap } from './central-plant-local-topology.mjs';
+import {
+  buildCentralPlantSimulatorConfig,
+  centralPlantAreas,
+  centralPlantCalculatedPointCount,
+  centralPlantDeviceEndpoints,
+  centralPlantEquipment,
+  centralPlantSensors,
+} from './central-plant-spatial-model.mjs';
 
 const root = resolve(process.cwd());
 const adapterTemplate = JSON.parse(await readFile(resolve(root, 'services/thingsboard-telemetry-adapter/configs/central-plant.local.example.json'), 'utf8'));
+const simulatorConfig = buildCentralPlantSimulatorConfig(adapterTemplate);
 const thingsBoardCompose = await readFile(resolve(root, 'infra/central-plant-local/thingsboard.compose.yaml'), 'utf8');
+const logtoCompose = await readFile(resolve(root, 'infra/central-plant-local/logto.compose.yaml'), 'utf8');
 const realtimeCompose = await readFile(resolve(root, 'infra/central-plant-local/realtime.compose.yaml'), 'utf8');
 const s2Compose = await readFile(resolve(root, 'infra/s2-telemetry/compose.yaml'), 'utf8');
 const topology = await readFile(resolve(root, 'scripts/central-plant-local-topology.mjs'), 'utf8');
+const logtoProvisioner = await readFile(resolve(root, 'scripts/central-plant-logto.mjs'), 'utf8');
+const smoke = await readFile(resolve(root, 'scripts/central-plant-local.mjs'), 'utf8');
 const routeOwnershipSource = JSON.parse(await readFile(resolve(root, 'contracts/ownership/route-ownership.v1.json'), 'utf8'));
 
 function pointMaps() {
@@ -30,10 +44,34 @@ function pointMaps() {
   return { pointsByDevice, pointKeysByDevice };
 }
 
-test('central plant contract defines six unique S1/S2 device identities', () => {
-  assert.equal(centralPlantDevices.length, 6);
-  assert.equal(new Set(centralPlantDevices.map((device) => device.platformDeviceId)).size, 6);
-  assert.equal(new Set(centralPlantDevices.map((device) => device.name)).size, 6);
+test('central plant historical Energy bootstrap spans two cadences without resets', () => {
+  const hour = 60 * 60 * 1000;
+  const day = 24 * hour;
+  const history = buildHistoricalEnergyBootstrap(new Date('2026-08-06T12:00:00.000Z'), simulatorConfig.points);
+  assert.equal(history.readings.length, 2411);
+  assert.equal(history.readings[1].timestamp - history.readings[0].timestamp, day);
+  assert.equal(history.readings[730].timestamp - history.readings[729].timestamp, day);
+  assert.equal(history.readings[731].timestamp - history.readings[730].timestamp, hour);
+  assert.equal(history.readings.at(-1).timestamp - history.readings[0].timestamp, 800 * day);
+  assert.equal(new Date(history.readings.at(-1).timestamp).toISOString(), history.to);
+  assert.equal(history.analyticsFacts.length, 2266);
+  assert.equal(history.adapterReadings.length, 145);
+  assert.equal(history.analyticsIntervalCount + history.adapterIntervalCount, history.readings.length - 1);
+  assert.equal(history.analyticsFacts.at(-1).period_end, new Date(history.adapterReadings[0].timestamp).toISOString());
+  assert.equal(history.analyticsFacts[0].quality, 'VALID');
+  assert.equal(history.analyticsFacts[0].energy_kwh, history.readings[1].energyKwh - history.readings[0].energyKwh);
+  assert.equal(history.analyticsFacts[0].source_current_observation_id, history.analyticsFacts[1].source_previous_observation_id);
+  for (let index = 1; index < history.readings.length; index += 1) {
+    assert.ok(history.readings[index].timestamp > history.readings[index - 1].timestamp);
+    assert.ok(history.readings[index].energyKwh > history.readings[index - 1].energyKwh);
+  }
+  assert.equal(history.finalEnergyKwh, history.readings.at(-1).energyKwh);
+});
+
+test('central plant contract defines unique spatial, Equipment, Device, Sensor and Point identities', () => {
+  assert.equal(centralPlantDevices.length, 7);
+  assert.equal(new Set(centralPlantDevices.map((device) => device.platformDeviceId)).size, 7);
+  assert.equal(new Set(centralPlantDevices.map((device) => device.name)).size, 7);
   assert.deepEqual(centralPlantDevices.map((device) => device.type), [
     'CHILLER',
     'CHILLED_WATER_PUMP',
@@ -41,16 +79,46 @@ test('central plant contract defines six unique S1/S2 device identities', () => 
     'COOLING_TOWER',
     'HVAC_POWER_METER',
     'BTU_METER',
+    'WEATHER_STATION',
   ]);
+  assert.equal(centralPlantAreas.length, 4);
+  assert.equal(centralPlantEquipment.length, 7);
+  assert.equal(centralPlantDeviceEndpoints.length, 7);
+  assert.equal(centralPlantSensors.length, 15);
+  assert.equal(simulatorConfig.points.length, 48);
+  assert.equal(centralPlantCalculatedPointCount, 7);
+  assert.equal(simulatorConfig.schemaVersion, 2);
+  assert.equal(simulatorConfig.sensors.filter((sensor) => sensor.mode === 'INDEPENDENT_DEVICE').length, 3);
+  assert.ok(simulatorConfig.points.some((point) => point.kind === 'CALCULATED' && point.inputPointRefs.length > 0));
   assert.match(centralPlantIdentity.organizationId, /^[0-9a-f-]{36}$/);
   assert.match(localUUID(1), /^01910000-0000-7000-8000-[0-9a-f]{12}$/);
 });
 
-test('database seeds cover every adapter point with exact-key authorization and freshness policy', () => {
+test('database seeds cover the complete Registry graph and every adapter point', () => {
   const { pointsByDevice, pointKeysByDevice } = pointMaps();
-  assert.equal([...pointsByDevice.values()].reduce((total, points) => total + points.length, 0), 44);
-  const s1 = buildS1SeedSQL({ oidcIssuer: 'https://127.0.0.1:18443', pointKeysByDevice });
-  const s2 = buildS2SeedSQL({ pointsByDevice });
+  assert.equal([...pointsByDevice.values()].reduce((total, points) => total + points.length, 0), 48);
+  const s1 = buildS1SeedSQL({
+    oidcIssuer: 'https://127.0.0.1:18443/oidc',
+    principalSubject: 'logto-central-plant-user',
+    pointKeysByDevice,
+    spatialPoints: simulatorConfig.points,
+  });
+  const s2 = buildS2SeedSQL({ pointsByDevice, spatialPoints: simulatorConfig.points });
+  for (const marker of [
+    'core_registry.areas',
+    'core_registry.equipment_area_bindings',
+    'core_registry.device_area_bindings',
+    'core_registry.device_bindings',
+    'core_registry.sensors',
+    'core_registry.sensor_device_bindings',
+    'core_registry.sensor_area_bindings',
+    'core_registry.sensor_subject_bindings',
+    'core_registry.telemetry_points',
+    'core_registry.point_subject_bindings',
+    'core_registry.calculated_point_inputs',
+  ]) assert.ok(s1.includes(marker), `S1 seed is missing ${marker}`);
+  for (const area of centralPlantAreas) assert.ok(s1.includes(area.name), `${area.name} is missing from the S1 Area seed`);
+  for (const sensor of centralPlantSensors) assert.ok(s1.includes(sensor.id), `${sensor.id} is missing from the S1 Sensor seed`);
   for (const device of centralPlantDevices) {
     assert.ok(s1.includes(device.platformDeviceId), `${device.name} is missing from the S1 seed`);
     assert.ok(s2.includes(device.platformDeviceId), `${device.name} is missing from the S2 seed`);
@@ -60,7 +128,16 @@ test('database seeds cover every adapter point with exact-key authorization and 
     }
   }
   for (const action of telemetryActions) assert.ok(s1.includes(action));
+  for (const action of analyticsActions) {
+    assert.equal(s1.match(new RegExp(action.replaceAll('.', '\\.')), 'g')?.length, 1);
+  }
+  assert.ok(s1.includes("'logto-central-plant-user'"));
+  assert.ok(!s1.includes("'analytics-reader'"));
+  assert.ok(!s1.includes("ARRAY['registry.read'] ||"));
   assert.ok(s2.includes('DELETE FROM telemetry_runtime.telemetry_publication_outbox;'));
+  const powerMeter = centralPlantDevices.find((device) => device.name === 'METER-HVAC-TOTAL');
+  assert.ok(powerMeter);
+  assert.ok(s2.includes(`('${powerMeter.platformDeviceId}',1,30,120,true,ARRAY['SOURCE_ACTIVITY']::text[],15,604800`));
   assert.ok(!s1.includes('ACCESS_TOKEN'));
   assert.ok(!s2.includes('ACCESS_TOKEN'));
 });
@@ -81,11 +158,69 @@ test('local route ownership enables all S2 Telemetry routes without changing pro
   );
 });
 
-test('local topology stays isolated and fails closed around realtime and workload identity', () => {
+test('central plant smoke verifies the atomic Asset Model and exact Real UI counts', () => {
+  for (const marker of [
+    '/api/v1/sites/${centralPlantIdentity.siteId}/asset-model',
+    'expectedAssetCounts',
+    'root?.dataset.areaCount',
+    'root?.dataset.deviceEndpointCount',
+    'root?.dataset.telemetryPointCount',
+    'root?.dataset.pointLedgerCount',
+    "root?.dataset.ledgerMode === 'points'",
+    "document.querySelectorAll('[data-testid=\"real-assets-table-wrap\"] [data-point-id]')",
+    "document.querySelector('.assets-hierarchy-card__scroll')",
+    "document.querySelector('.real-assets-tree-switcher')",
+    "document.body.innerText.includes('资产导航')",
+    'Emulation.setDeviceMetricsOverride',
+    'auditLogtoExperience',
+    'hasRegistrationAction',
+    'hasApprovalNotice',
+    'provider-backed logged-out landing',
+    'fresh Logto credentials after logout',
+    "params.get('logged_out') !== '1'",
+    'submitLogtoSignIn',
+    'topology.logto',
+    'authority.assetModel.counts',
+    'waitForEnergyFacts',
+    'real-energy-dashboard',
+    'topology.energyHistory',
+    'durableSmokeReportPath',
+    '{up|smoke|browser}',
+  ]) assert.ok(smoke.includes(marker), `central plant smoke is missing ${marker}`);
+  assert.ok(!smoke.includes('/devices?limit=100'));
+  assert.ok(!smoke.includes('devices.length !== 6'));
+});
+
+test('Logto provisioning enables branded registration without granting platform authorization', () => {
+  for (const marker of [
+    "request('/api/sign-in-exp'",
+    "signInMode: 'SignInAndRegister'",
+    "identifiers: ['username']",
+    "primaryColor: '#0B4A4C'",
+    'quanlaihe-mark.svg',
+    'hideLogtoBranding: false',
+    "fallbackLanguage: 'zh-CN'",
+    '注册账号需由管理员分配访问权限',
+    'unknownSessionRedirectUrl: loginURL',
+    'postLogoutRedirectUris: [webURL, `${webURL}/?logged_out=1`]',
+  ]) assert.ok(logtoProvisioner.includes(marker), `Logto provisioner is missing ${marker}`);
+  assert.ok(!logtoProvisioner.includes("roles: ['operator']"));
+  assert.ok(!logtoProvisioner.includes('automatic platform authorization'));
+});
+
+test('local topology stays isolated and derives simulator credentials from the v2 Device graph', () => {
   for (const marker of [
     '127.0.0.1:${CENTRAL_PLANT_THINGSBOARD_PORT}:8080',
     'thingsboard/tb-node:4.3.1.3',
   ]) assert.ok(thingsBoardCompose.includes(marker));
+  for (const marker of [
+    'ghcr.io/logto-io/logto:1.42.0@sha256:aac94e24ab7bef59be5d1809b1481b179495aaa75bb9dc2895ceae46e4117854',
+    'postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94',
+    'npm run cli db seed -- --skip-when-exists --disable-admin-pwned-password-check',
+    'CENTRAL_PLANT_LOGTO_ENDPOINT',
+    'CENTRAL_PLANT_LOGTO_ADMIN_ENDPOINT',
+    'TRUST_PROXY_HEADER',
+  ]) assert.ok(logtoCompose.includes(marker));
   for (const marker of [
     '127.0.0.1:${CENTRAL_PLANT_CENTRIFUGO_PORT}:8000',
     'host.docker.internal:host-gateway',
@@ -98,13 +233,37 @@ test('local topology stays isolated and fails closed around realtime and workloa
   ]) assert.ok(s2Compose.includes(marker));
   for (const marker of [
     "'spiffe://hvac.local/thingsboard-telemetry-adapter'",
+    "'spiffe://hvac.local/mqtt-telemetry-adapter'",
     "'spiffe://hvac.local/centrifugo'",
     'await stop();',
     "['down', '--volumes', '--remove-orphans']",
     'ThingsBoard Telemetry Adapter',
     'Telemetry History Projector',
+    'Telemetry Query Service',
+    'QUERY_CUBE_ENDPOINT',
+    'TELEMETRY_QUERY_URL',
     'TELEMETRY_CLICKHOUSE_HTTP_URL',
+    'ANALYTICS_PROJECTOR_DIAGNOSTICS_HOST_PORT',
     'HVAC Web Real',
+    'provisionCentralPlantLogto',
+    'createHTTPSTLSProxy',
+    'rootRedirect: logtoLoginURL',
+    'loginURL: logtoLoginURL',
+    'OIDC_DEFAULT_ACTING_ORGANIZATION_ID',
+    'principalSubject: logto.subject',
+    '[projects.logto, logtoCompose, logtoEnvironment]',
+    'buildCentralPlantSimulatorConfig',
+    'buildHistoricalEnergyBootstrap',
+    'publishHistoricalEnergyBootstrap',
+    'historicalEnergyDailyDays = 730',
+    'historicalEnergyRecentDays = 70',
+    'historicalEnergyAdapterDays = 6',
+    'historicalPublishConcurrency = 16',
+    'publishHistoricalAnalyticsBootstrap',
+    "adapterTemplate.initialLookback = '200h'",
+    'adapterTemplate.pageLimit = 1000',
+    'initialEnergyKwh: energyHistory.finalEnergyKwh',
+    'simulatorConfig.credentialEnvByDeviceId',
   ]) assert.ok(topology.includes(marker), `topology is missing ${marker}`);
   assert.ok(topology.includes('buildGoBinaries(paths, goCache, quiet);'));
   assert.ok(topology.includes("IDENTITY_POLICY_REVISION: 'registry-read:1'"));

@@ -15,12 +15,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/alarm-service/pkg/alarmservice"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
+	telemetry := observability.NewRuntime(observability.RuntimeConfig{
+		Service: "alarm-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
+	})
 	serverTLSConfig, err := workloadtls.NewServerTLSConfig(workloadtls.ServerConfig{
 		CertificateFiles: workloadtls.CertificateFiles{
 			CertificatePath: requiredEnv("ALARM_TLS_CERT"),
@@ -66,24 +70,70 @@ func main() {
 		}
 		handler.ServeHTTP(writer, request)
 	})
+	instrumentedRouter := observability.InstrumentHTTP(router, telemetry, observability.HTTPInstrumentationConfig{
+		Namespace: "hvac_alarm", Service: "alarm-service", SpanName: "http.alarm.request", Route: alarmObservabilityRoute,
+	})
 	server := &http.Server{
-		Addr: envOr("ALARM_SERVICE_ADDR", ":8448"), Handler: router, TLSConfig: serverTLSConfig,
+		Addr: envOr("ALARM_SERVICE_ADDR", ":8448"), Handler: instrumentedRouter, TLSConfig: serverTLSConfig,
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
 	}
+	diagnostics := &http.Server{
+		Addr: envOr("ALARM_DIAGNOSTICS_ADDR", ":19088"), Handler: telemetry.DiagnosticsHandler(),
+		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+	}
+	go func() {
+		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("alarm_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
+		}
+	}()
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-shutdown
+		telemetry.MarkNotReady()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
+		_ = diagnostics.Shutdown(ctx)
+		_ = telemetry.Shutdown(ctx)
 	}()
-	logger.Info("alarm_service_started", "address", server.Addr, "mode", "read-only-contract-baseline")
+	telemetry.MarkReady()
+	logger.Info("alarm_service_started", "address", server.Addr, "mode", "alarm-lifecycle")
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("alarm_service_stopped_unexpectedly", "error_code", "ALARM_SERVE_FAILED")
 		os.Exit(1)
 	}
 	logger.Info("alarm_service_stopped")
+}
+
+func alarmObservabilityRoute(request *http.Request) string {
+	if request == nil {
+		return "unknown"
+	}
+	path := request.URL.Path
+	if !strings.HasPrefix(path, alarmservice.InternalSiteAlarmsPrefix) {
+		return "unknown"
+	}
+	for suffix, operation := range map[string]string{
+		":acknowledge": "alarms.acknowledge",
+		":assign":      "alarms.assign",
+		":unassign":    "alarms.unassign",
+		":suppress":    "alarms.suppress",
+		":unsuppress":  "alarms.unsuppress",
+		":close":       "alarms.close",
+		":reopen":      "alarms.reopen",
+	} {
+		if strings.HasSuffix(path, suffix) {
+			return operation
+		}
+	}
+	if strings.HasSuffix(path, "/alarms") {
+		return "alarms.list"
+	}
+	if strings.Contains(path, "/alarms/") {
+		return "alarms.get"
+	}
+	return "unknown"
 }
 
 func loadCertificatePublicKey(path string) (crypto.PublicKey, error) {

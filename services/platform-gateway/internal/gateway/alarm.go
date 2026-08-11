@@ -141,7 +141,12 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 		h.writeAlarmFailure(writer, request, *failure)
 		return
 	}
-	readContext, failure := h.signAlarmReadContext(session, route, decision)
+	site, err := h.resolveAuthoritativeSiteForDomain(request, session, route.siteID)
+	if err != nil {
+		h.writeAlarmFailure(writer, request, alarmUnavailable("The authoritative Tenant scope for this Site could not be resolved."))
+		return
+	}
+	readContext, failure := h.signAlarmReadContext(session, route, decision, site.TenantID)
 	if failure != nil {
 		h.writeAlarmFailure(writer, request, *failure)
 		return
@@ -312,8 +317,8 @@ func (h *handler) authorizeAlarm(request *http.Request, session bffSession, rout
 	return decision, nil
 }
 
-func (h *handler) signAlarmReadContext(session bffSession, route publicAlarmRoute, decision alarmauth.Decision) (string, *alarmFailure) {
-	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.alarm == nil {
+func (h *handler) signAlarmReadContext(session bffSession, route publicAlarmRoute, decision alarmauth.Decision, tenantID string) (string, *alarmFailure) {
+	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.alarm == nil || !isLowerUUIDv7(tenantID) {
 		failure := alarmUnavailable("Alarm read context signing is unavailable.")
 		return "", &failure
 	}
@@ -330,7 +335,7 @@ func (h *handler) signAlarmReadContext(session bffSession, route publicAlarmRout
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
 		PrincipalID: decision.PrincipalID, DisplayName: session.Principal.DisplayName, Email: session.Principal.Email,
 		Roles: append([]string(nil), session.Principal.Roles...), ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
-		Audience: h.alarm.backendAudience, ActingOrganizationID: session.ActingOrganizationID,
+		Audience: h.alarm.backendAudience, ActingOrganizationID: session.ActingOrganizationID, TenantID: tenantID,
 		Actions: []string{string(route.action)}, Scopes: scopes, PolicyRevision: decision.PolicyRevision, SessionID: session.ID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	}

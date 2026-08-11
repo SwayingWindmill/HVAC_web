@@ -22,7 +22,7 @@ func TestGatewayWorkOrderCreateUsesCSRFExactIAMAndWriteContext(t *testing.T) {
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if fixture.iamCalls.Load() != 1 || fixture.workOrderCalls.Load() != 1 || fixture.lastUpstreamMethod.Load() != http.MethodPost || fixture.lastUpstreamIdempotency.Load() != "create-gateway-0001" {
+	if fixture.iamCalls.Load() != 2 || fixture.workOrderCalls.Load() != 1 || fixture.lastUpstreamMethod.Load() != http.MethodPost || fixture.lastUpstreamIdempotency.Load() != "create-gateway-0001" {
 		t.Fatalf("calls iam=%d backend=%d method=%q idempotency=%q", fixture.iamCalls.Load(), fixture.workOrderCalls.Load(), fixture.lastUpstreamMethod.Load(), fixture.lastUpstreamIdempotency.Load())
 	}
 	if fixture.lastUpstreamPath.Load() != "/internal/v1/sites/"+gatewayWorkOrderSiteID+"/work-orders" || fixture.lastUpstreamBody.Load() != body {

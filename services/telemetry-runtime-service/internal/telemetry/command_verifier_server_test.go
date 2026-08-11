@@ -44,9 +44,9 @@ func TestCommandReportedStateReturnsExactConfiguredCohort(t *testing.T) {
 	handler := NewHandler(ServerConfig{
 		Store: store, AllowedCommandVerifierSPIFFE: commandVerifierSPIFFE,
 		CommandVerifierOrganizationID: orgA, CommandVerifierSiteID: siteA, CommandVerifierDeviceID: deviceA,
-		CommandReportedStateKey: "zone.temperature_setpoint", Now: func() time.Time { return now },
+		Now: func() time.Time { return now },
 	})
-	request := httptest.NewRequest(http.MethodGet, InternalCommandReportedStatePath, nil)
+	request := httptest.NewRequest(http.MethodGet, InternalCommandReportedStatePath+"?key=zone.temperature_setpoint", nil)
 	request.TLS = verifiedTLSState(commandVerifierSPIFFE)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
@@ -58,7 +58,7 @@ func TestCommandReportedStateReturnsExactConfiguredCohort(t *testing.T) {
 		t.Fatal(err)
 	}
 	if response.OrganizationID != orgA || response.SiteID != siteA || response.DeviceID != deviceA ||
-		response.ReportedStateKey != "zone.temperature_setpoint" || response.ReportedSetpointC != 22.5 ||
+		response.ReportedStateKey != "zone.temperature_setpoint" || response.ReportedValue.Number == nil || *response.ReportedValue.Number != 22.5 ||
 		response.BusinessRevision != 9 || response.Presence != "ONLINE" || response.Freshness != "FRESH" ||
 		response.Quality != "GOOD" || response.EvidenceID == "" || store.calls != 1 {
 		t.Fatalf("response=%#v calls=%d", response, store.calls)
@@ -70,9 +70,9 @@ func TestCommandReportedStateRejectsOtherWorkload(t *testing.T) {
 	handler := NewHandler(ServerConfig{
 		Store: store, AllowedCommandVerifierSPIFFE: commandVerifierSPIFFE,
 		CommandVerifierOrganizationID: orgA, CommandVerifierSiteID: siteA, CommandVerifierDeviceID: deviceA,
-		CommandReportedStateKey: "zone.temperature_setpoint", Now: time.Now,
+		Now: time.Now,
 	})
-	request := httptest.NewRequest(http.MethodGet, InternalCommandReportedStatePath, nil)
+	request := httptest.NewRequest(http.MethodGet, InternalCommandReportedStatePath+"?key=zone.temperature_setpoint", nil)
 	request.TLS = verifiedTLSState(gatewaySPIFFE)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)

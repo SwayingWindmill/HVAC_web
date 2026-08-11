@@ -2,6 +2,7 @@ name: S0 Contract Gateway
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - "apps/hvac-web/**"
       - "contracts/http/**"

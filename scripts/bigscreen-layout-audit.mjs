@@ -27,6 +27,7 @@ await mkdir(profileDir, { recursive: true });
 const edge = spawn(edgePath, [
   '--headless=new',
   '--disable-gpu',
+  '--disable-extensions',
   '--no-first-run',
   '--no-default-browser-check',
   '--hide-scrollbars',
@@ -50,13 +51,17 @@ function createClient(url) {
   const socket = new WebSocket(url);
   let nextId = 0;
   const pending = new Map();
+  const listeners = new Map();
   const ready = new Promise((resolve, reject) => {
     socket.addEventListener('open', resolve, { once: true });
     socket.addEventListener('error', reject, { once: true });
   });
   socket.addEventListener('message', ({ data }) => {
     const message = JSON.parse(String(data));
-    if (!message.id) return;
+    if (!message.id) {
+      for (const listener of listeners.get(message.method) ?? []) listener(message.params ?? {});
+      return;
+    }
     const job = pending.get(message.id);
     if (!job) return;
     pending.delete(message.id);
@@ -74,6 +79,11 @@ function createClient(url) {
     },
     close() {
       socket.close();
+    },
+    on(method, listener) {
+      const current = listeners.get(method) ?? [];
+      current.push(listener);
+      listeners.set(method, current);
     },
   };
 }
@@ -114,6 +124,20 @@ try {
     ?? pages.find((item) => item.type === 'page');
   assert(page, 'No browser page was available for BigScreen audit');
   client = createClient(page.webSocketDebuggerUrl);
+  const browserProblems = [];
+  client.on('Runtime.exceptionThrown', ({ exceptionDetails }) => {
+    browserProblems.push({
+      type: 'exception',
+      detail: exceptionDetails?.exception?.description ?? exceptionDetails?.text ?? 'Unknown exception',
+    });
+  });
+  client.on('Runtime.consoleAPICalled', ({ type, args = [] }) => {
+    if (!['error', 'warning'].includes(type)) return;
+    browserProblems.push({
+      type: `console:${type}`,
+      detail: args.map((item) => item.value ?? item.description ?? '').join(' '),
+    });
+  });
   await client.send('Page.enable');
   await client.send('Runtime.enable');
 
@@ -126,8 +150,19 @@ try {
       mobile: false,
     });
     await client.send('Page.navigate', { url: `${baseUrl}/bigscreen` });
-    await waitFor(client, `document.readyState === 'complete' && location.pathname === '/bigscreen'`, `${viewport.name} route`);
-    await waitFor(client, `Boolean(document.querySelector('.bigscreen-stage') && document.querySelector('[data-testid="bigscreen-system-canvas"]'))`, `${viewport.name} layout`);
+    await waitFor(client, `document.readyState !== 'loading' && location.pathname === '/bigscreen'`, `${viewport.name} route`);
+    try {
+      await waitFor(client, `Boolean(document.querySelector('.bigscreen-stage') && document.querySelector('[data-testid="bigscreen-system-canvas"]'))`, `${viewport.name} layout`);
+    } catch (error) {
+      const diagnostic = await evaluate(client, `({
+        href: location.href,
+        readyState: document.readyState,
+        title: document.title,
+        text: document.body.innerText.slice(0, 1200),
+        root: document.querySelector('#root')?.innerHTML.slice(0, 1600) ?? '',
+      })`);
+      throw new Error(`${error instanceof Error ? error.message : String(error)} diagnostic=${JSON.stringify(diagnostic)} browserProblems=${JSON.stringify(browserProblems)}`);
+    }
     await pause(1800);
 
     const state = await evaluate(client, `(() => {

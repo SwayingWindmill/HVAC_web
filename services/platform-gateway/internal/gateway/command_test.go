@@ -29,7 +29,7 @@ import (
 
 func TestGatewayCreateCommandDerivesAuthorityAndCurrentState(t *testing.T) {
 	fixture := newCommandGatewayFixture(t)
-	body := `{"deviceId":"` + fixture.deviceID + `","capability":"SET_TEMPERATURE_SETPOINT","parameters":{"setpointC":24.5}}`
+	body := `{"equipmentId":"` + fixture.equipmentID + `","commandPointId":"` + fixture.commandPointID + `","parameters":{"setpointC":24.5}}`
 	request := httptest.NewRequest(http.MethodPost, publicCommandsPath, strings.NewReader(body))
 	fixture.authenticate(request, true)
 	request.Header.Set("Content-Type", "application/json")
@@ -42,7 +42,7 @@ func TestGatewayCreateCommandDerivesAuthorityAndCurrentState(t *testing.T) {
 	if recorder.Header().Get("Location") != "/api/v1/commands/"+fixture.commandID {
 		t.Fatalf("location=%s", recorder.Header().Get("Location"))
 	}
-	if fixture.iamCalls.Load() != 3 || fixture.registryCalls.Load() != 1 || fixture.telemetryCalls.Load() != 1 || fixture.commandCalls.Load() != 1 {
+	if fixture.iamCalls.Load() != 4 || fixture.registryCalls.Load() != 2 || fixture.telemetryCalls.Load() != 1 || fixture.commandCalls.Load() != 1 {
 		t.Fatalf("calls iam=%d registry=%d telemetry=%d command=%d", fixture.iamCalls.Load(), fixture.registryCalls.Load(), fixture.telemetryCalls.Load(), fixture.commandCalls.Load())
 	}
 	var view commandView
@@ -54,7 +54,7 @@ func TestGatewayCreateCommandDerivesAuthorityAndCurrentState(t *testing.T) {
 
 func TestGatewayCreateCommandFailsBeforeUpstreamsWithoutCSRF(t *testing.T) {
 	fixture := newCommandGatewayFixture(t)
-	body := `{"deviceId":"` + fixture.deviceID + `","capability":"SET_TEMPERATURE_SETPOINT","parameters":{"setpointC":24.5}}`
+	body := `{"equipmentId":"` + fixture.equipmentID + `","commandPointId":"` + fixture.commandPointID + `","parameters":{"setpointC":24.5}}`
 	request := httptest.NewRequest(http.MethodPost, publicCommandsPath, strings.NewReader(body))
 	fixture.authenticate(request, false)
 	request.Header.Set("Content-Type", "application/json")
@@ -89,7 +89,7 @@ func TestGatewayRejectsBrowserCommandAuthorityHeaders(t *testing.T) {
 func TestGatewayUnsafeCurrentStateStopsBeforeCommandAuthorization(t *testing.T) {
 	fixture := newCommandGatewayFixture(t)
 	fixture.unsafeState.Store(true)
-	body := `{"deviceId":"` + fixture.deviceID + `","capability":"SET_TEMPERATURE_SETPOINT","parameters":{"setpointC":24.5}}`
+	body := `{"equipmentId":"` + fixture.equipmentID + `","commandPointId":"` + fixture.commandPointID + `","parameters":{"setpointC":24.5}}`
 	request := httptest.NewRequest(http.MethodPost, publicCommandsPath, strings.NewReader(body))
 	fixture.authenticate(request, true)
 	request.Header.Set("Content-Type", "application/json")
@@ -99,7 +99,7 @@ func TestGatewayUnsafeCurrentStateStopsBeforeCommandAuthorization(t *testing.T) 
 	if recorder.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if fixture.iamCalls.Load() != 2 || fixture.registryCalls.Load() != 1 || fixture.telemetryCalls.Load() != 1 || fixture.commandCalls.Load() != 0 {
+	if fixture.iamCalls.Load() != 3 || fixture.registryCalls.Load() != 2 || fixture.telemetryCalls.Load() != 1 || fixture.commandCalls.Load() != 0 {
 		t.Fatalf("unsafe calls iam=%d registry=%d telemetry=%d command=%d", fixture.iamCalls.Load(), fixture.registryCalls.Load(), fixture.telemetryCalls.Load(), fixture.commandCalls.Load())
 	}
 }
@@ -225,23 +225,28 @@ func TestCommandRegistryDecisionUsesRegistryRouteOwnership(t *testing.T) {
 }
 
 type commandGatewayFixture struct {
-	handler                 *handler
-	sessionID               string
-	organizationID          string
-	siteID                  string
-	deviceID                string
-	commandID               string
-	principalID             string
-	gatewaySigner           *ecdsa.PrivateKey
-	iamSigner               *ecdsa.PrivateKey
-	iamCalls                atomic.Int32
-	registryCalls           atomic.Int32
-	telemetryCalls          atomic.Int32
-	commandCalls            atomic.Int32
-	unsafeState             atomic.Bool
-	crossOrganizationView   atomic.Bool
-	approvalPending         atomic.Bool
-	approvalCompleted       atomic.Bool
+	handler               *handler
+	sessionID             string
+	tenantID              string
+	organizationID        string
+	siteID                string
+	equipmentID           string
+	deviceID              string
+	commandPointID        string
+	feedbackPointID       string
+	controlRelationshipID string
+	commandID             string
+	principalID           string
+	gatewaySigner         *ecdsa.PrivateKey
+	iamSigner             *ecdsa.PrivateKey
+	iamCalls              atomic.Int32
+	registryCalls         atomic.Int32
+	telemetryCalls        atomic.Int32
+	commandCalls          atomic.Int32
+	unsafeState           atomic.Bool
+	crossOrganizationView atomic.Bool
+	approvalPending       atomic.Bool
+	approvalCompleted     atomic.Bool
 }
 
 func newCommandGatewayFixture(t *testing.T) *commandGatewayFixture {
@@ -250,13 +255,18 @@ func newCommandGatewayFixture(t *testing.T) *commandGatewayFixture {
 	gatewaySigner := commandTestSigner(t)
 	iamSigner := commandTestSigner(t)
 	fixture := &commandGatewayFixture{
-		organizationID: "018f3e00-1000-7000-8000-000000000001",
-		siteID:         "018f3e00-2000-7000-8000-000000000001",
-		deviceID:       "018f3e00-3000-7000-8000-000000000001",
-		commandID:      "018f3e00-4000-7000-8000-000000000001",
-		principalID:    "018f3e00-5000-7000-8000-000000000001",
-		gatewaySigner:  gatewaySigner,
-		iamSigner:      iamSigner,
+		tenantID:              "018f3d00-1000-7000-8000-000000000001",
+		organizationID:        "018f3e00-1000-7000-8000-000000000001",
+		siteID:                "018f3e00-2000-7000-8000-000000000001",
+		deviceID:              "018f3e00-3000-7000-8000-000000000001",
+		commandID:             "018f3e00-4000-7000-8000-000000000001",
+		principalID:           "018f3e00-5000-7000-8000-000000000001",
+		equipmentID:           "018f3e00-6000-7000-8000-000000000001",
+		commandPointID:        "018f3e00-7000-7000-8000-000000000001",
+		feedbackPointID:       "018f3e00-8000-7000-8000-000000000001",
+		controlRelationshipID: "018f3e00-9000-7000-8000-000000000001",
+		gatewaySigner:         gatewaySigner,
+		iamSigner:             iamSigner,
 	}
 	store := sessionstore.NewMemoryStore()
 	configured := NewHandler(Config{
@@ -334,20 +344,21 @@ func (fixture *commandGatewayFixture) commandIAMClient(t *testing.T, now time.Ti
 func (fixture *commandGatewayFixture) registryDecisionResponse(t *testing.T, request *http.Request, parent identitycontext.DelegationClaims, now time.Time) *http.Response {
 	t.Helper()
 	var input registryauth.DecisionRequest
-	if json.NewDecoder(request.Body).Decode(&input) != nil || input.Action != registryauth.ActionDeviceRead {
+	if json.NewDecoder(request.Body).Decode(&input) != nil ||
+		(input.Action != registryauth.ActionEquipmentRead && input.Action != registryauth.ActionAssetModelRead && input.Action != registryauth.ActionDeviceRead) {
 		t.Fatal("invalid Registry decision request")
 	}
 	decision := registryauth.Decision{
 		Allowed: true, PrincipalID: fixture.principalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
 		ActingOrganizationID: fixture.organizationID, AllowedSiteIDs: []string{fixture.siteID},
-		Actions: []registryauth.Action{registryauth.ActionDeviceRead}, PolicyRevision: "identity-policy-1",
+		Actions: []registryauth.Action{input.Action}, PolicyRevision: "identity-policy-1",
 		ReasonCode: registryauth.ReasonAllowSiteRole, DecidedAt: now.Format(time.RFC3339Nano),
 	}
 	claims := registryauth.GrantClaims{
 		Issuer: "spiffe://hvac.local/iam-service", Presenter: "spiffe://hvac.local/platform-gateway", Audience: "platform-core-service",
 		PrincipalID: fixture.principalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
 		ActingOrganizationID: fixture.organizationID, AllowedSiteIDs: []string{fixture.siteID},
-		Actions: []registryauth.Action{registryauth.ActionDeviceRead}, PolicyRevision: "identity-policy-1",
+		Actions: []registryauth.Action{input.Action}, PolicyRevision: "identity-policy-1",
 		DecisionReason: registryauth.ReasonAllowSiteRole, SessionID: parent.SessionID, ParentTokenID: parent.TokenID,
 		IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: randomURLToken(16),
 	}
@@ -393,7 +404,7 @@ func (fixture *commandGatewayFixture) commandDecisionResponse(t *testing.T, requ
 	decision := commandauth.Decision{
 		Allowed: true, PrincipalID: fixture.principalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
 		ActingOrganizationID: fixture.organizationID, SiteID: fixture.siteID, DeviceID: fixture.deviceID,
-		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: commandCapabilityRevision,
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: "capability:set-temperature-setpoint:v1",
 		Purpose: input.Purpose, MaximumRisk: commandmodel.RiskHigh,
 		PolicyRevision: "identity-policy-1", EmergencyRevocationRevision: 3,
 		ReasonCode: commandauth.ReasonAllowExactCapability, DecidedAt: now.Format(time.RFC3339Nano),
@@ -415,17 +426,63 @@ func (fixture *commandGatewayFixture) commandDecisionResponse(t *testing.T, requ
 
 func (fixture *commandGatewayFixture) commandRegistryClient(t *testing.T, now time.Time) *http.Client {
 	t.Helper()
+	createdAt := now.Add(-time.Hour).Format("2006-01-02T15:04:05.000Z")
+	updatedAt := now.Format("2006-01-02T15:04:05.000Z")
+	unit := "Cel"
+	equipment := platformapi.Equipment{
+		ID: fixture.equipmentID, TenantID: fixture.tenantID, OwningOrganizationID: fixture.organizationID, SiteID: fixture.siteID,
+		Code: "AHU-01", DisplayName: "AHU 01", EquipmentType: "AHU", Status: "ACTIVE", Revision: 7,
+		CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}
+	device := platformapi.Device{
+		ID: fixture.deviceID, TenantID: fixture.tenantID, OwningOrganizationID: fixture.organizationID, SiteID: fixture.siteID,
+		Code: "AHU-01-CTRL", DisplayName: "AHU 01 Controller", DeviceType: "AHU_CONTROLLER", Status: "ACTIVE", Revision: 7,
+		CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}
+	commandPoint := platformapi.TelemetryPoint{
+		ID: fixture.commandPointID, TenantID: fixture.tenantID, OwningOrganizationID: fixture.organizationID, SiteID: fixture.siteID, ReportingDeviceID: fixture.deviceID,
+		PointKey: "zone.temperature.setpoint.command", SourceKey: "zone.temperature.setpoint.command", DisplayName: "Zone temperature setpoint command",
+		PointKind: "COMMAND", ValueType: "NUMBER", Unit: &unit, Writable: true, SampleIntervalMS: 1000, PublishIntervalMS: 1000, StaleAfterMS: 3000,
+		SourceMetadata: map[string]any{
+			"capability": commandmodel.CapabilitySetTemperatureSetpoint, "capabilityRevision": "capability:set-temperature-setpoint:v1",
+			"feedbackPointKey": defaultCommandTemperatureKey, "parameterKey": commandmodel.ParameterSetpointC,
+		},
+		Status: "ACTIVE", Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}
+	feedbackPoint := platformapi.TelemetryPoint{
+		ID: fixture.feedbackPointID, TenantID: fixture.tenantID, OwningOrganizationID: fixture.organizationID, SiteID: fixture.siteID, ReportingDeviceID: fixture.deviceID,
+		PointKey: defaultCommandTemperatureKey, SourceKey: defaultCommandTemperatureKey, DisplayName: "Zone temperature",
+		PointKind: "FEEDBACK", ValueType: "NUMBER", Unit: &unit, Writable: false, SampleIntervalMS: 1000, PublishIntervalMS: 1000, StaleAfterMS: 3000,
+		SourceMetadata: map[string]any{}, Status: "ACTIVE", Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}
+	assetModel := platformapi.SiteAssetModel{
+		SchemaVersion: 1, TenantID: fixture.tenantID, SiteID: fixture.siteID, Equipment: []platformapi.Equipment{equipment}, Devices: []platformapi.Device{device},
+		Areas: []platformapi.Area{}, Sensors: []platformapi.Sensor{}, TelemetryPoints: []platformapi.TelemetryPoint{commandPoint, feedbackPoint},
+		Relationships: []platformapi.AssetRelationship{{
+			ID: fixture.controlRelationshipID, TenantID: fixture.tenantID, OwningOrganizationID: fixture.organizationID, SiteID: fixture.siteID,
+			FromType: "POINT", FromID: fixture.commandPointID, ToType: "EQUIPMENT", ToID: fixture.equipmentID, Role: "CONTROLS", Status: "ACTIVE",
+			ValidFrom: createdAt, ValidTo: nil, Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
+		}},
+		CalculatedPointInputs: []platformapi.CalculatedPointInput{},
+		Counts:                platformapi.AssetModelCounts{Equipment: 1, DeviceEndpoints: 1, TelemetryPoints: 2},
+	}
 	return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		fixture.registryCalls.Add(1)
 		assertCommandInternalHeaders(t, request)
-		if request.URL.Path != "/internal/v1/registry/devices/"+fixture.deviceID || request.Header.Get("X-Delegation-Grant") == "" {
-			t.Fatalf("unexpected Registry request %s", request.URL.Path)
+		if request.Header.Get("X-Delegation-Grant") == "" {
+			t.Fatal("missing Registry delegation grant")
 		}
-		return telemetryJSONResponse(http.StatusOK, platformapi.Device{
-			ID: fixture.deviceID, OwningOrganizationID: fixture.organizationID, SiteID: fixture.siteID,
-			Code: "AHU-01", DisplayName: "AHU 01", DeviceType: "AHU", Status: "ACTIVE", Revision: 7,
-			CreatedAt: now.Add(-time.Hour).Format("2006-01-02T15:04:05.000Z"), UpdatedAt: now.Format("2006-01-02T15:04:05.000Z"),
-		}), nil
+		switch request.URL.Path {
+		case "/internal/v1/registry/equipment/" + fixture.equipmentID:
+			return telemetryJSONResponse(http.StatusOK, equipment), nil
+		case "/internal/v1/registry/sites/" + fixture.siteID + "/asset-model":
+			return telemetryJSONResponse(http.StatusOK, assetModel), nil
+		case "/internal/v1/registry/devices/" + fixture.deviceID:
+			return telemetryJSONResponse(http.StatusOK, device), nil
+		default:
+			t.Fatalf("unexpected Registry request %s", request.URL.Path)
+			return nil, io.EOF
+		}
 	})}
 }
 
@@ -490,7 +547,7 @@ func (fixture *commandGatewayFixture) commandBackendClient(t *testing.T, now tim
 				t.Fatalf("invalid backend Command grant claims=%#v err=%v", claims, err)
 			}
 			var input internalCommandCreate
-			if json.NewDecoder(request.Body).Decode(&input) != nil || input.OrganizationID != fixture.organizationID || input.SiteID != fixture.siteID || input.PrincipalID != fixture.principalID || input.CurrentState.BusinessRevision != 17 || input.CurrentState.CurrentTemperatureC != 23 || input.IdempotencyKey == "" {
+			if json.NewDecoder(request.Body).Decode(&input) != nil || input.OrganizationID != fixture.organizationID || input.SiteID != fixture.siteID || input.PrincipalID != fixture.principalID || input.CurrentState.BusinessRevision != 17 || input.CurrentState.CurrentValue == nil || *input.CurrentState.CurrentValue != 23 || input.Capability != commandmodel.CapabilitySetTemperatureSetpoint || input.Parameters[commandmodel.ParameterSetpointC] != 24.5 || input.VerificationPointKey != defaultCommandTemperatureKey || input.IdempotencyKey == "" {
 				t.Fatalf("unexpected internal command input %#v", input)
 			}
 			response := telemetryJSONResponse(http.StatusAccepted, fixture.commandView(now))
@@ -549,10 +606,10 @@ func (fixture *commandGatewayFixture) commandView(now time.Time) commandView {
 	}
 	return commandView{
 		SchemaVersion: 1, CommandID: fixture.commandID, OrganizationID: organizationID,
-		SiteID: fixture.siteID, DeviceID: fixture.deviceID,
-		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: commandCapabilityRevision,
+		SiteID: fixture.siteID, DeviceID: fixture.deviceID, PointID: fixture.commandPointID,
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: "capability:set-temperature-setpoint:v1",
 		Status: status, Risk: risk, ApprovalPolicy: policy, ApprovalCount: approvalCount, RequiredApprovalCount: requiredCount,
-		SetpointC: 24, DeviceCommandSequence: 1, Version: version, SnapshotRevision: 17,
+		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24.5}, DeviceCommandSequence: 1, Version: version, SnapshotRevision: 17,
 		Transitions: transitions, CreatedAt: now.Add(-3 * time.Second), UpdatedAt: now,
 	}
 }

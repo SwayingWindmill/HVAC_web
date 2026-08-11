@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hvac.local/contracts/mqtt/energy-telemetry-envelope.v1.schema.json",
+  "title": "Energy MQTT Telemetry Envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "messageId", "tenantId", "siteId", "gatewayId", "publishedAt", "replay", "devices"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "messageId": { "$ref": "#/$defs/uuidV7" },
+    "tenantId": { "$ref": "#/$defs/uuidV7" },
+    "siteId": { "$ref": "#/$defs/uuidV7" },
+    "gatewayId": { "type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$" },
+    "publishedAt": { "type": "string", "format": "date-time" },
+    "replay": { "type": "boolean" },
+    "devices": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "items": { "$ref": "#/$defs/device" }
+    }
+  },
+  "$defs": {
+    "uuidV7": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["externalDeviceId", "points"],
+      "properties": {
+        "externalDeviceId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "points": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/point" }
+        }
+      }
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["telemetryKey", "value", "valueType", "quality", "sampledAt", "sequence"],
+      "properties": {
+        "telemetryKey": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "value": {},
+        "valueType": { "enum": ["NUMBER", "STRING", "BOOLEAN", "JSON"] },
+        "unit": { "type": ["string", "null"], "minLength": 1, "maxLength": 64 },
+        "quality": {
+          "const": "GOOD",
+          "description": "Envelope v1 accepts GOOD source observations only. Edge fault-quality transport is versioned separately rather than coerced into S2 GOOD semantics."
+        },
+        "sampledAt": { "type": "string", "format": "date-time" },
+        "sequence": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 }
+      }
+    }
+  }
+}

@@ -1,34 +1,12 @@
 import { FocusHeading } from './FocusHeading';
 import { RealShellChrome } from './RealShellChrome';
+import { RealSystemManagement } from './RealSystemManagement';
 import type { RealNavigationItem, RouteDecision } from './route-policy';
 import type { RealRuntimeConfig } from './runtime-config';
 import type { ShellSnapshot } from './shell-runtime';
 
 function SystemSurface({ snapshot }: { snapshot: ShellSnapshot }) {
-  const status = snapshot.platform?.status;
-  return (
-    <section
-      className="real-route-surface"
-      aria-labelledby="real-system-title"
-      data-testid="real-route-system"
-      data-route-state="READY"
-      data-business-state="POPULATED"
-    >
-      <p className="real-shell-eyebrow">REAL MODE · IMPLEMENTED</p>
-      <FocusHeading id="real-system-title">系统状态</FocusHeading>
-      <p>以下内容来自 Platform Gateway 的权威状态响应。</p>
-      {status ? (
-        <dl className="real-shell-facts">
-          <div><dt>Service</dt><dd>{status.service}</dd></div>
-          <div><dt>Status</dt><dd>{status.status}</dd></div>
-          <div><dt>Implementation</dt><dd>{status.implementation}</dd></div>
-          <div><dt>Version</dt><dd>{status.version}</dd></div>
-          <div><dt>Route policy revision</dt><dd>{status.routePolicyRevision}</dd></div>
-          <div><dt>Compatibility</dt><dd>{status.compatibilityMode}</dd></div>
-        </dl>
-      ) : null}
-    </section>
-  );
+  return <RealSystemManagement snapshot={snapshot} />;
 }
 
 function ForbiddenSurface() {

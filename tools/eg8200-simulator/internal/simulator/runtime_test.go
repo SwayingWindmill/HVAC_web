@@ -20,17 +20,16 @@ func TestRuntimeReadinessTracksLatestPublishOutcome(t *testing.T) {
 	}))
 	defer server.Close()
 
-	plantConfig := testPlantConfig()
-	tokens := make(map[string]string, len(plantConfig.DeviceIDs()))
-	for _, deviceID := range plantConfig.DeviceIDs() {
-		tokens[deviceID] = "test-token"
+	config := testConfig()
+	tokens := make(map[string]string, len(config.Devices))
+	for _, device := range config.Devices {
+		tokens[device.ID] = "test-token"
 	}
 	client, err := NewThingsBoardClient(server.URL, tokens, server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := Config{PublishInterval: "5s", Plant: plantConfig}
-	plant := NewPlant(plantConfig, time.Now())
+	plant := NewPlant(config.Plant, time.Now())
 	runtime, err := NewRuntime(config, plant, client, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +42,7 @@ func TestRuntimeReadinessTracksLatestPublishOutcome(t *testing.T) {
 	}
 
 	fail.Store(true)
-	if err := runtime.publish(context.Background(), plant.Tick(time.Second)); err == nil {
+	if err := runtime.publish(context.Background(), plant.Tick(2*time.Second)); err == nil {
 		t.Fatal("expected provider publish failure")
 	}
 	if runtime.Ready() {
@@ -56,17 +55,17 @@ func TestRuntimeDoesNotReapplyRetriedRPC(t *testing.T) {
 		writer.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
-	plantConfig := testPlantConfig()
-	tokens := make(map[string]string, len(plantConfig.DeviceIDs()))
-	for _, deviceID := range plantConfig.DeviceIDs() {
-		tokens[deviceID] = "test-token"
+	config := testConfig()
+	tokens := make(map[string]string, len(config.Devices))
+	for _, device := range config.Devices {
+		tokens[device.ID] = "test-token"
 	}
 	client, err := NewThingsBoardClient(server.URL, tokens, server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
-	plant := NewPlant(plantConfig, time.Now())
-	runtime, err := NewRuntime(Config{PublishInterval: "5s", Plant: plantConfig}, plant, client, nil)
+	plant := NewPlant(config.Plant, time.Now())
+	runtime, err := NewRuntime(config, plant, client, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

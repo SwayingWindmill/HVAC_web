@@ -310,7 +310,16 @@
         ],
         "responses": {
           "204": {
-            "description": "Current session revoked."
+            "description": "Current session revoked; continue at the identity provider logout URL.",
+            "headers": {
+              "Location": {
+                "description": "Trusted OIDC end-session URL. The browser must navigate to this URL to clear the provider SSO session.",
+                "schema": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/Problem"
@@ -894,6 +903,61 @@
           },
           "400": {
             "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "504": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/asset-model": {
+      "get": {
+        "operationId": "getSiteAssetModel",
+        "summary": "Read the complete visible spatial Equipment, Device Endpoint, Sensor and Telemetry Point model for one Site",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SiteId"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized atomic Site asset model.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/Traceparent"
+              },
+              "X-Route-Policy-Revision": {
+                "$ref": "#/components/headers/RoutePolicyRevision"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteAssetModel"
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/Problem"
@@ -1567,6 +1631,7 @@
         "additionalProperties": false,
         "required": [
           "id",
+          "tenantId",
           "code",
           "displayName",
           "status",
@@ -1576,6 +1641,9 @@
         ],
         "properties": {
           "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "tenantId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "code": {
@@ -1612,6 +1680,7 @@
         "additionalProperties": false,
         "required": [
           "id",
+          "tenantId",
           "owningOrganizationId",
           "code",
           "displayName",
@@ -1623,6 +1692,9 @@
         ],
         "properties": {
           "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "tenantId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "owningOrganizationId": {
@@ -1668,6 +1740,7 @@
         "additionalProperties": false,
         "required": [
           "id",
+          "tenantId",
           "owningOrganizationId",
           "siteId",
           "code",
@@ -1680,6 +1753,9 @@
         ],
         "properties": {
           "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "tenantId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "owningOrganizationId": {
@@ -1727,6 +1803,7 @@
         "additionalProperties": false,
         "required": [
           "id",
+          "tenantId",
           "owningOrganizationId",
           "siteId",
           "code",
@@ -1739,6 +1816,9 @@
         ],
         "properties": {
           "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "tenantId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "owningOrganizationId": {
@@ -1786,6 +1866,7 @@
         "additionalProperties": false,
         "required": [
           "id",
+          "tenantId",
           "owningOrganizationId",
           "siteId",
           "deviceId",
@@ -1799,6 +1880,9 @@
         ],
         "properties": {
           "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "tenantId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "owningOrganizationId": {
@@ -1855,6 +1939,7 @@
         "additionalProperties": false,
         "required": [
           "id",
+          "tenantId",
           "owningOrganizationId",
           "siteId",
           "integrationInstanceId",
@@ -1869,6 +1954,9 @@
         ],
         "properties": {
           "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "tenantId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "owningOrganizationId": {
@@ -2075,6 +2163,146 @@
           "hasMore": {
             "type": "boolean"
           }
+        }
+      },
+      "Area": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "tenantId", "owningOrganizationId", "siteId", "parentAreaId", "code", "displayName", "areaType", "status", "revision", "createdAt", "updatedAt"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "parentAreaId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "code": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "areaType": { "type": "string", "enum": ["CAMPUS", "BUILDING", "FLOOR", "ZONE", "ROOM", "PLANT_ROOM", "ROOFTOP", "OUTDOOR", "TENANT_SPACE", "OTHER"] },
+          "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] },
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "createdAt": { "$ref": "#/components/schemas/Instant" },
+          "updatedAt": { "$ref": "#/components/schemas/Instant" }
+        }
+      },
+      "Sensor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "tenantId", "owningOrganizationId", "siteId", "code", "displayName", "sensorType", "manufacturer", "model", "serialNumber", "calibrationDueAt", "metadata", "status", "revision", "createdAt", "updatedAt"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "code": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "sensorType": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "manufacturer": { "oneOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }] },
+          "model": { "oneOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }] },
+          "serialNumber": { "oneOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }] },
+          "calibrationDueAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "metadata": { "type": "object", "additionalProperties": true },
+          "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] },
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "createdAt": { "$ref": "#/components/schemas/Instant" },
+          "updatedAt": { "$ref": "#/components/schemas/Instant" }
+        }
+      },
+      "TelemetryPoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "tenantId", "owningOrganizationId", "siteId", "reportingDeviceId", "sensorId", "pointKey", "sourceKey", "displayName", "pointKind", "valueType", "unit", "writable", "sampleIntervalMs", "publishIntervalMs", "staleAfterMs", "formulaRevision", "sourceMetadata", "status", "revision", "createdAt", "updatedAt"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "reportingDeviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "sensorId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "pointKey": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "sourceKey": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "pointKind": { "type": "string", "enum": ["MEASURED", "CALCULATED", "STATE", "COMMAND", "FEEDBACK"] },
+          "valueType": { "type": "string", "enum": ["BOOLEAN", "NUMBER", "STRING", "JSON"] },
+          "unit": { "oneOf": [{ "type": "string", "maxLength": 64 }, { "type": "null" }] },
+          "writable": { "type": "boolean" },
+          "sampleIntervalMs": { "type": "integer", "minimum": 100, "maximum": 86400000 },
+          "publishIntervalMs": { "type": "integer", "minimum": 100, "maximum": 86400000 },
+          "staleAfterMs": { "type": "integer", "minimum": 100, "maximum": 604800000 },
+          "formulaRevision": { "oneOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }] },
+          "sourceMetadata": { "type": "object", "additionalProperties": true },
+          "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] },
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "createdAt": { "$ref": "#/components/schemas/Instant" },
+          "updatedAt": { "$ref": "#/components/schemas/Instant" }
+        }
+      },
+      "AssetRelationship": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "tenantId", "owningOrganizationId", "siteId", "fromType", "fromId", "toType", "toId", "role", "status", "validFrom", "validTo", "revision", "createdAt", "updatedAt"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "fromType": { "type": "string", "enum": ["EQUIPMENT", "DEVICE", "SENSOR", "POINT"] },
+          "fromId": { "$ref": "#/components/schemas/UUIDv7" },
+          "toType": { "type": "string", "enum": ["SITE", "AREA", "EQUIPMENT", "DEVICE", "SENSOR", "POINT"] },
+          "toId": { "$ref": "#/components/schemas/UUIDv7" },
+          "role": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] },
+          "validFrom": { "$ref": "#/components/schemas/Instant" },
+          "validTo": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "createdAt": { "$ref": "#/components/schemas/Instant" },
+          "updatedAt": { "$ref": "#/components/schemas/Instant" }
+        }
+      },
+      "CalculatedPointInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tenantId", "owningOrganizationId", "siteId", "calculatedPointId", "inputPointId", "inputRole", "ordinal", "formulaRevision"],
+        "properties": {
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "calculatedPointId": { "$ref": "#/components/schemas/UUIDv7" },
+          "inputPointId": { "$ref": "#/components/schemas/UUIDv7" },
+          "inputRole": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "ordinal": { "type": "integer", "minimum": 0 },
+          "formulaRevision": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      },
+      "AssetModelCounts": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["areas", "equipment", "deviceEndpoints", "sensors", "telemetryPoints", "calculatedPoints", "independentSensorDevices"],
+        "properties": {
+          "areas": { "type": "integer", "minimum": 0 },
+          "equipment": { "type": "integer", "minimum": 0 },
+          "deviceEndpoints": { "type": "integer", "minimum": 0 },
+          "sensors": { "type": "integer", "minimum": 0 },
+          "telemetryPoints": { "type": "integer", "minimum": 0 },
+          "calculatedPoints": { "type": "integer", "minimum": 0 },
+          "independentSensorDevices": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "SiteAssetModel": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "tenantId", "siteId", "areas", "equipment", "devices", "sensors", "telemetryPoints", "relationships", "calculatedPointInputs", "counts"],
+        "properties": {
+          "schemaVersion": { "type": "integer", "enum": [1] },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "areas": { "type": "array", "items": { "$ref": "#/components/schemas/Area" } },
+          "equipment": { "type": "array", "items": { "$ref": "#/components/schemas/Equipment" } },
+          "devices": { "type": "array", "items": { "$ref": "#/components/schemas/Device" } },
+          "sensors": { "type": "array", "items": { "$ref": "#/components/schemas/Sensor" } },
+          "telemetryPoints": { "type": "array", "items": { "$ref": "#/components/schemas/TelemetryPoint" } },
+          "relationships": { "type": "array", "items": { "$ref": "#/components/schemas/AssetRelationship" } },
+          "calculatedPointInputs": { "type": "array", "items": { "$ref": "#/components/schemas/CalculatedPointInput" } },
+          "counts": { "$ref": "#/components/schemas/AssetModelCounts" }
         }
       },
       "FieldError": {

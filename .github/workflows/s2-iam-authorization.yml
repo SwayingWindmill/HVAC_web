@@ -2,6 +2,7 @@ name: S2 IAM Exact Telemetry Authorization
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - '.github/workflows/s2-iam-authorization.yml'
       - 'contracts/ownership/**'

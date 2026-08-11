@@ -136,15 +136,28 @@ try {
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'command_runtime' AND c.relkind = 'r'
   `);
-  expectEqual(tableState, '13|12|12', 'table/RLS baseline');
+  expectEqual(tableState, '14|13|13', 'table/RLS baseline');
   report.assertions.tableRlsState = tableState;
 
-  const capability = psql(`
-    SELECT capability_name || '|' || capability_revision || '|' || status || '|' || connector_kind || '|' || retry_policy
+  const capabilityState = psql(`
+    SELECT count(*)::text || '|'
+      || count(*) FILTER (
+        WHERE capability_name = 'SET_TEMPERATURE_SETPOINT'
+          AND capability_revision = 'capability:set-temperature-setpoint:v1'
+          AND status = 'VERIFIED'
+          AND connector_kind = 'THINGSBOARD_CE_4.3.1.3'
+      )::text || '|'
+      || count(*) FILTER (WHERE status = 'DRAFT' AND connector_kind = 'SYNTHETIC_ONLY')::text || '|'
+      || count(*) FILTER (WHERE retry_policy <> 'PRE_SEND_ONLY')::text
     FROM command_runtime.capability_profiles
   `);
-  expectEqual(capability, 'SET_TEMPERATURE_SETPOINT|capability:set-temperature-setpoint:v1|VERIFIED|THINGSBOARD_CE_4.3.1.3|PRE_SEND_ONLY', 'Capability target runtime');
-  report.assertions.capability = capability;
+  expectEqual(capabilityState, '9|1|8|0', 'Capability target runtime');
+  report.assertions.capabilityState = capabilityState;
+  report.assertions.capabilityProfiles = psql(`
+    SELECT capability_name || '|' || capability_revision || '|' || status || '|' || connector_kind || '|' || retry_policy
+    FROM command_runtime.capability_profiles
+    ORDER BY capability_name
+  `);
 
   const serviceDenied = psql(`
     SET SESSION AUTHORIZATION s3_command_service;

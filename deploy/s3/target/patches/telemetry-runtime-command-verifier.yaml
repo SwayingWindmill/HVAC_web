@@ -17,4 +17,3 @@ spec:
             - { name: TELEMETRY_COMMAND_VERIFIER_ORGANIZATION_ID, value: "[APPROVED_ORGANIZATION_UUIDV7]" }
             - { name: TELEMETRY_COMMAND_VERIFIER_SITE_ID, value: "[APPROVED_SITE_UUIDV7]" }
             - { name: TELEMETRY_COMMAND_VERIFIER_DEVICE_ID, value: "[APPROVED_DEVICE_UUIDV7]" }
-            - { name: TELEMETRY_COMMAND_REPORTED_STATE_KEY, value: "zone.temperature_setpoint" }

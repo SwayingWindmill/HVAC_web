@@ -1,5 +1,7 @@
 # S0 security, tenant and failure-injection release gates
 
+> **Scope: CERTIFICATION_REFERENCE.** Kubernetes NetworkPolicy analysis in this document validates retained S0 certification assets; it is not a Phase 1 deployment prerequisite. Redpanda is used only by the S0 compatibility/test path described here and is not the Phase 1 Production broker selection. The canonical deployment is `deploy/platform/phase1/`.
+
 ## Reuse decisions
 
 Ticket 07 follows a reuse-first rule. General-purpose failure injection, Kubernetes connectivity analysis and image secret scanning are delegated to maintained upstream projects rather than implemented as HVAC-specific frameworks.

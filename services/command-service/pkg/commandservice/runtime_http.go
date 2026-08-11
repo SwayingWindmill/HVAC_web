@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const (
@@ -23,9 +24,9 @@ const (
 )
 
 type RuntimeStore interface {
-	ClaimDispatchForCohort(context.Context, string, string, string, string, time.Duration) (commandmodel.DispatchEnvelope, error)
+	ClaimDispatchForCohort(context.Context, string, string, string, commandmodel.Capability, string, time.Duration) (commandmodel.DispatchEnvelope, error)
 	ResolveDispatch(context.Context, commandmodel.DispatchEnvelope, commandmodel.ConnectorResult) error
-	ClaimVerificationForCohort(context.Context, string, string, string, string, time.Duration) (commandmodel.VerificationEnvelope, error)
+	ClaimVerificationForCohort(context.Context, string, string, string, commandmodel.Capability, string, time.Duration) (commandmodel.VerificationEnvelope, error)
 	ResolveVerification(context.Context, commandmodel.VerificationEnvelope, commandmodel.VerificationResult) error
 	PrepareConnectorEvidence(context.Context, commandmodel.PreparedConnectorEvidence) error
 	CompleteConnectorEvidence(context.Context, commandmodel.CompletedConnectorEvidence) error
@@ -33,24 +34,28 @@ type RuntimeStore interface {
 
 type RuntimeHTTPConfig struct {
 	Store            RuntimeStore
+	Metrics          *observability.Registry
 	DispatcherSPIFFE string
 	VerifierSPIFFE   string
 	OrganizationID   string
 	SiteID           string
 	DeviceID         string
+	Capability       commandmodel.Capability
 	Cohorts          []RuntimeCohort
 }
 
 type RuntimeCohort struct {
-	DispatcherSPIFFE string `json:"dispatcherSpiffe"`
-	VerifierSPIFFE   string `json:"verifierSpiffe"`
-	OrganizationID   string `json:"organizationId"`
-	SiteID           string `json:"siteId"`
-	DeviceID         string `json:"deviceId"`
+	DispatcherSPIFFE string                  `json:"dispatcherSpiffe"`
+	VerifierSPIFFE   string                  `json:"verifierSpiffe"`
+	OrganizationID   string                  `json:"organizationId"`
+	SiteID           string                  `json:"siteId"`
+	DeviceID         string                  `json:"deviceId"`
+	Capability       commandmodel.Capability `json:"capability"`
 }
 
 type runtimeHTTPHandler struct {
 	store       RuntimeStore
+	metrics     *observability.Registry
 	dispatchers map[string]RuntimeCohort
 	verifiers   map[string]RuntimeCohort
 }
@@ -92,7 +97,7 @@ func NewRuntimeHTTPHandler(config RuntimeHTTPConfig) (http.Handler, error) {
 		dispatchers[cohort.DispatcherSPIFFE] = cohort
 		verifiers[cohort.VerifierSPIFFE] = cohort
 	}
-	return &runtimeHTTPHandler{store: config.Store, dispatchers: dispatchers, verifiers: verifiers}, nil
+	return &runtimeHTTPHandler{store: config.Store, metrics: config.Metrics, dispatchers: dispatchers, verifiers: verifiers}, nil
 }
 
 func normalizedRuntimeCohorts(config RuntimeHTTPConfig) ([]RuntimeCohort, error) {
@@ -104,6 +109,7 @@ func normalizedRuntimeCohorts(config RuntimeHTTPConfig) ([]RuntimeCohort, error)
 			OrganizationID:   config.OrganizationID,
 			SiteID:           config.SiteID,
 			DeviceID:         config.DeviceID,
+			Capability:       config.Capability,
 		}}
 	}
 	if len(cohorts) == 0 || len(cohorts) > 64 {
@@ -117,13 +123,15 @@ func normalizedRuntimeCohorts(config RuntimeHTTPConfig) ([]RuntimeCohort, error)
 		cohort.OrganizationID = strings.TrimSpace(cohort.OrganizationID)
 		cohort.SiteID = strings.TrimSpace(cohort.SiteID)
 		cohort.DeviceID = strings.TrimSpace(cohort.DeviceID)
+		profile, capabilitySupported := commandmodel.CapabilityProfileFor(cohort.Capability)
 		if !validSPIFFE(cohort.DispatcherSPIFFE) || !validSPIFFE(cohort.VerifierSPIFFE) || cohort.DispatcherSPIFFE == cohort.VerifierSPIFFE ||
-			!commandmodel.IsUUIDv7(cohort.OrganizationID) || !commandmodel.IsUUIDv7(cohort.SiteID) || !commandmodel.IsUUIDv7(cohort.DeviceID) {
+			!commandmodel.IsUUIDv7(cohort.OrganizationID) || !commandmodel.IsUUIDv7(cohort.SiteID) || !commandmodel.IsUUIDv7(cohort.DeviceID) ||
+			!capabilitySupported || strings.TrimSpace(profile.Revision) == "" {
 			return nil, errors.New("runtime cohort is invalid")
 		}
-		deviceKey := cohort.OrganizationID + "\x00" + cohort.SiteID + "\x00" + cohort.DeviceID
+		deviceKey := cohort.OrganizationID + "\x00" + cohort.SiteID + "\x00" + cohort.DeviceID + "\x00" + string(cohort.Capability)
 		if _, duplicate := seenDevices[deviceKey]; duplicate {
-			return nil, errors.New("runtime cohort Device is duplicated")
+			return nil, errors.New("runtime cohort Device capability is duplicated")
 		}
 		seenDevices[deviceKey] = struct{}{}
 	}
@@ -174,7 +182,7 @@ func (handler *runtimeHTTPHandler) claimDispatch(writer http.ResponseWriter, req
 	if !ok {
 		return
 	}
-	envelope, err := handler.store.ClaimDispatchForCohort(request.Context(), cohort.OrganizationID, cohort.SiteID, cohort.DeviceID, input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second)
+	envelope, err := handler.store.ClaimDispatchForCohort(request.Context(), cohort.OrganizationID, cohort.SiteID, cohort.DeviceID, cohort.Capability, input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second)
 	if errors.Is(err, ErrNoDispatchAvailable) {
 		writer.WriteHeader(http.StatusNoContent)
 		return
@@ -191,13 +199,20 @@ func (handler *runtimeHTTPHandler) resolveDispatch(writer http.ResponseWriter, r
 	if !decodeRuntimeJSON(writer, request, &input) {
 		return
 	}
-	if !exactRuntimeCohort(cohort, input.Envelope.OrganizationID, input.Envelope.SiteID, input.Envelope.DeviceID) {
+	if !exactRuntimeCommandCohort(cohort, input.Envelope.OrganizationID, input.Envelope.SiteID, input.Envelope.DeviceID, input.Envelope.Capability) {
 		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
 		return
 	}
 	if err := handler.store.ResolveDispatch(request.Context(), input.Envelope, input.Result); err != nil {
 		writeRuntimeStoreError(writer, err)
 		return
+	}
+	if handler.metrics != nil {
+		outcome := strings.ToLower(strings.TrimSpace(string(input.Result.Phase)))
+		if outcome == "" {
+			outcome = "unknown"
+		}
+		_ = handler.metrics.AddCounter("hvac_command_dispatch_results_total", "Command dispatch results by connector phase.", map[string]string{"outcome": outcome}, 1)
 	}
 	writer.WriteHeader(http.StatusNoContent)
 }
@@ -207,7 +222,7 @@ func (handler *runtimeHTTPHandler) claimVerification(writer http.ResponseWriter,
 	if !ok {
 		return
 	}
-	envelope, err := handler.store.ClaimVerificationForCohort(request.Context(), cohort.OrganizationID, cohort.SiteID, cohort.DeviceID, input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second)
+	envelope, err := handler.store.ClaimVerificationForCohort(request.Context(), cohort.OrganizationID, cohort.SiteID, cohort.DeviceID, cohort.Capability, input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second)
 	if errors.Is(err, ErrVerificationNotAvailable) {
 		writer.WriteHeader(http.StatusNoContent)
 		return
@@ -224,13 +239,27 @@ func (handler *runtimeHTTPHandler) resolveVerification(writer http.ResponseWrite
 	if !decodeRuntimeJSON(writer, request, &input) {
 		return
 	}
-	if !exactRuntimeCohort(cohort, input.Envelope.OrganizationID, input.Envelope.SiteID, input.Envelope.DeviceID) {
+	if !exactRuntimeCommandCohort(cohort, input.Envelope.OrganizationID, input.Envelope.SiteID, input.Envelope.DeviceID, input.Envelope.Capability) {
 		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
 		return
 	}
 	if err := handler.store.ResolveVerification(request.Context(), input.Envelope, input.Result); err != nil {
 		writeRuntimeStoreError(writer, err)
 		return
+	}
+	if handler.metrics != nil {
+		outcome := strings.ToLower(strings.TrimSpace(string(input.Result.Outcome)))
+		if outcome == "" {
+			outcome = "unknown"
+		}
+		_ = handler.metrics.AddCounter("hvac_command_verifications_total", "Command verification results by final outcome.", map[string]string{"outcome": outcome}, 1)
+		if !input.Envelope.AcknowledgedAt.IsZero() {
+			duration := time.Since(input.Envelope.AcknowledgedAt).Seconds()
+			if duration < 0 {
+				duration = 0
+			}
+			_ = handler.metrics.ObserveHistogram("hvac_command_verification_duration_seconds", "Acknowledgement-to-verification completion duration.", map[string]string{"outcome": outcome}, duration, nil)
+		}
 	}
 	writer.WriteHeader(http.StatusNoContent)
 }
@@ -269,6 +298,10 @@ func (handler *runtimeHTTPHandler) completeConnectorEvidence(writer http.Respons
 
 func exactRuntimeCohort(cohort RuntimeCohort, organizationID, siteID, deviceID string) bool {
 	return organizationID == cohort.OrganizationID && siteID == cohort.SiteID && deviceID == cohort.DeviceID
+}
+
+func exactRuntimeCommandCohort(cohort RuntimeCohort, organizationID, siteID, deviceID string, capability commandmodel.Capability) bool {
+	return exactRuntimeCohort(cohort, organizationID, siteID, deviceID) && capability == cohort.Capability
 }
 
 func decodeRuntimeClaim(writer http.ResponseWriter, request *http.Request) (runtimeClaimRequest, bool) {

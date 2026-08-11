@@ -2,6 +2,7 @@ name: S2 Telemetry Contract and PostgreSQL Baseline
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - '.github/workflows/s2-telemetry-baseline.yml'
       - 'apps/hvac-web/src/api/generated/s2Telemetry.gen.ts'

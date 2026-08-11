@@ -21,30 +21,18 @@
   color: var(--real-muted, #65758b);
 }
 
-.real-assets button,
 .real-assets input {
   font: inherit;
 }
 
-.real-assets button {
-  min-height: 38px;
-  border: 1px solid #b8c4d3;
-  border-radius: 8px;
-  background: #fff;
-  color: #19324d;
+.real-assets__problem > button {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid var(--ant-color-error-border, #ffccc7);
+  border-radius: var(--ops-radius-control, 8px);
+  background: var(--ant-color-bg-container, #fff);
+  color: var(--ant-color-error-text, #a8071a);
   cursor: pointer;
-}
-
-.real-assets button:hover:not(:disabled),
-.real-assets button:focus-visible {
-  border-color: #315f91;
-  outline: 2px solid transparent;
-  box-shadow: 0 0 0 3px rgb(49 95 145 / 18%);
-}
-
-.real-assets button:disabled {
-  cursor: wait;
-  opacity: 0.65;
 }
 
 .real-assets__metrics {
@@ -112,10 +100,11 @@
 }
 
 .real-assets__workspace {
-  display: grid;
-  grid-template-columns: minmax(190px, 240px) minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
+  display: flex;
+  flex-flow: row wrap;
+  width: 100%;
+  min-width: 0;
+  align-items: stretch;
 }
 
 .real-assets__hierarchy,
@@ -440,8 +429,13 @@
 }
 
 .real-assets__device-link[aria-expanded="true"] {
-  outline: 2px solid #315f91;
-  outline-offset: 4px;
+  outline: none;
+  background: rgb(15 181 174 / 7%);
+}
+
+.real-assets__device-link:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgb(15 181 174 / 24%);
 }
 
 .real-assets-detail {
@@ -810,4 +804,388 @@
 
 .real-assets-realtime small {
   overflow-wrap: anywhere;
+}
+
+/* Real Assets bridges authoritative Registry/Telemetry markup into the same
+   PageScaffold, metric strip, Card, table and control language as Demo. */
+.real-assets {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+.assets-hierarchy-card,
+.assets-ledger-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--ops-border, rgba(15, 23, 42, 0.08));
+  border-radius: 14px;
+  box-shadow: none;
+}
+
+.assets-hierarchy-card .ant-card-head {
+  flex: none;
+  min-height: 50px;
+  padding-inline: 16px;
+  border-bottom-color: rgba(15, 23, 42, 0.06);
+}
+
+.assets-hierarchy-card .ant-card-head-title {
+  padding-block: 13px;
+}
+
+.assets-hierarchy-card .ant-card-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 8px 8px 10px !important;
+}
+
+.assets-hierarchy-card__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+  scrollbar-color: rgba(100, 116, 139, 0.28) transparent;
+  scrollbar-width: thin;
+}
+
+.assets-hierarchy-card__scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.assets-hierarchy-card__scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.24);
+}
+
+.real-assets-navigation-tree {
+  background: transparent;
+  color: var(--ops-text, var(--ant-color-text));
+  font-size: 14px;
+}
+
+.real-assets-navigation-tree .ant-tree-treenode {
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
+  padding-block: 1px;
+}
+
+.real-assets-navigation-tree .ant-tree-switcher {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 32px;
+  color: #94a3b8;
+}
+
+.real-assets-navigation-tree .real-assets-tree-switcher {
+  font-size: 10px;
+  transition: transform 140ms ease, color 140ms ease;
+}
+
+.real-assets-navigation-tree .ant-tree-switcher_open .real-assets-tree-switcher {
+  transform: rotate(90deg);
+}
+
+.real-assets-navigation-tree .ant-tree-node-content-wrapper {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+  transition: background-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
+}
+
+.real-assets-navigation-tree .ant-tree-node-content-wrapper:hover {
+  background: rgba(15, 23, 42, 0.035);
+}
+
+.real-assets-navigation-tree .ant-tree-node-selected,
+.real-assets-navigation-tree .ant-tree-node-selected:hover {
+  color: #0f766e;
+  background: rgba(15, 181, 174, 0.09) !important;
+  box-shadow: inset 2px 0 0 #0fb5ae;
+}
+
+.real-assets-navigation-tree .ant-tree-iconEle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 32px;
+  margin-inline-end: 6px;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.real-assets-navigation-tree .ant-tree-node-selected .ant-tree-iconEle {
+  color: #0f948d;
+}
+
+.real-assets-navigation-tree .ant-tree-title {
+  display: block;
+  min-width: 0;
+  flex: 1;
+}
+
+.real-assets-tree-node {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-weight: 500;
+  line-height: 32px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.real-assets-tree-node[data-asset-kind='site'],
+.real-assets-tree-node[data-asset-kind='area'],
+.real-assets-tree-node[data-asset-kind='equipment'] {
+  font-weight: 600;
+}
+
+.real-assets-tree-node[data-asset-kind='point'] {
+  font-weight: 450;
+}
+
+.real-assets__technical-key {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+}
+
+.real-assets__inline-device-link {
+  height: auto;
+  padding: 0;
+  font-weight: 600;
+}
+
+.real-assets__workspace {
+  align-items: stretch;
+}
+
+.real-assets__workspace > .ant-col {
+  display: flex;
+  min-width: 0;
+}
+
+.assets-ledger-card .ant-card-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.real-assets__hierarchy,
+.real-assets__ledger {
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.real-assets__hierarchy {
+  position: static;
+  padding: 0;
+}
+
+.real-assets__hierarchy button {
+  border-color: transparent;
+  color: var(--ops-text, var(--ant-color-text));
+  background: transparent;
+}
+
+.real-assets__hierarchy button:hover:not(:disabled) {
+  border-color: rgb(15 181 174 / 18%);
+  background: rgb(15 181 174 / 6%);
+  box-shadow: none;
+}
+
+.real-assets__hierarchy button.is-active {
+  border-color: rgb(15 181 174 / 22%);
+  color: #0e9c96;
+  background: rgb(15 181 174 / 11%);
+}
+
+.real-assets__hierarchy button span {
+  color: var(--ops-text-secondary, #64748b);
+  background: var(--ops-surface-subtle, rgba(15, 23, 42, 0.04));
+}
+
+.real-assets__filters {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--ops-border, rgba(15, 23, 42, 0.08));
+  border-radius: var(--ops-radius-control, 8px);
+  background: var(--ops-surface-subtle, rgba(15, 23, 42, 0.025));
+}
+
+.real-assets__filters label,
+.real-assets__filters legend {
+  color: var(--ops-text, var(--ant-color-text));
+}
+
+.real-assets__filters input[type='search'] {
+  border-color: var(--ant-color-border, #d9d9d9);
+  background: var(--ant-color-bg-container, #fff);
+  color: var(--ant-color-text, #111827);
+}
+
+.real-assets__filters input[type='search']:focus {
+  border-color: #0fb5ae;
+  outline: none;
+  box-shadow: 0 0 0 2px rgb(15 181 174 / 12%);
+}
+
+.real-assets__table thead th {
+  color: var(--ops-text-secondary, #64748b);
+  background: var(--ops-surface-subtle, rgba(15, 23, 42, 0.025));
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.real-assets__table th,
+.real-assets__table td {
+  border-bottom-color: var(--ops-border-soft, rgba(15, 23, 42, 0.055));
+}
+
+.real-assets__table tbody tr:hover {
+  background: rgb(15 181 174 / 4%);
+}
+
+
+.real-assets__notice,
+.real-assets__problem,
+.real-assets__empty {
+  border-color: var(--ops-border, rgba(15, 23, 42, 0.08));
+  border-radius: var(--ops-radius-control, 8px);
+}
+
+.real-assets__notice {
+  color: var(--ant-color-info-text, #0958d9);
+  background: var(--ant-color-info-bg, #e6f4ff);
+}
+
+.real-assets__notice--warning {
+  color: var(--ant-color-warning-text, #ad6800);
+  background: var(--ant-color-warning-bg, #fffbe6);
+}
+
+.real-assets__problem {
+  color: var(--ant-color-error-text, #a8071a);
+  background: var(--ant-color-error-bg, #fff1f0);
+}
+
+.real-assets__empty {
+  color: var(--ops-text-secondary, #64748b);
+  background: var(--ops-surface-subtle, rgba(15, 23, 42, 0.025));
+}
+
+.real-assets__point-preview {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  white-space: normal;
+}
+
+.real-assets__point-preview li {
+  display: grid;
+  gap: 1px;
+}
+
+.real-assets__point-preview span {
+  color: var(--ops-text, var(--ant-color-text));
+  font-size: 12px;
+}
+
+.real-assets__point-preview small {
+  color: var(--ops-text-secondary, #64748b);
+  font-size: 10px;
+}
+
+table.real-assets__table.real-shell-sr-only {
+  display: block;
+  position: fixed;
+  inset: 0 auto auto 0;
+  width: 1px;
+  min-width: 0;
+  max-width: 1px;
+  height: 1px;
+  table-layout: fixed;
+  overflow: hidden;
+  contain: strict;
+  pointer-events: none;
+}
+
+table.real-assets__table.real-shell-sr-only tbody,
+table.real-assets__table.real-shell-sr-only tr,
+table.real-assets__table.real-shell-sr-only td {
+  display: block;
+  width: 1px;
+  min-width: 0;
+  max-width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Keep the authoritative tree and ledger in a stable two-column workspace.
+   Ant Row/Col responsive flex rules previously collapsed the tree column to a
+   few pixels after route transitions and produced vertical character wrapping. */
+.real-assets__workspace.ant-row {
+  display: grid !important;
+  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+  gap: 16px;
+  width: 100%;
+  margin: 0 !important;
+}
+
+.real-assets__workspace.ant-row > .ant-col {
+  display: flex;
+  flex: none !important;
+  width: auto !important;
+  max-width: none !important;
+  min-width: 0;
+  padding: 0 !important;
+}
+
+.real-assets__workspace .assets-hierarchy-card,
+.real-assets__workspace .assets-ledger-card {
+  min-width: 0;
+  height: 100%;
+}
+
+.real-assets__workspace .ant-card-head-title {
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+@media (min-width: 1024px) {
+  .real-assets__workspace.ant-row {
+    height: clamp(520px, calc(100vh - 250px), 720px);
+    min-height: 520px;
+  }
+}
+
+@media (max-width: 1023px) {
+  .real-assets__workspace.ant-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .assets-hierarchy-card__scroll {
+    max-height: 380px;
+  }
 }

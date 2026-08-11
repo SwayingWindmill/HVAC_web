@@ -139,6 +139,7 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 		handler.writeProblem(writer, http.StatusForbidden, "ALARM_ACCESS_DENIED", "Alarm access denied", "The requested Alarm resource is outside the authorized read scope.", false)
 		return
 	}
+	request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
 	if route.alarmID == "" {
 		handler.list(writer, request, claims.ActingOrganizationID, route.siteID)
 		return
@@ -149,7 +150,7 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 func (handler *httpHandler) authorize(request *http.Request, header, action string, resourceScopes []string) (identitycontext.DelegationClaims, bool) {
 	token := strings.TrimSpace(request.Header.Get(header))
 	claims, err := identitycontext.VerifyDelegation(handler.gatewayPublicKey, token)
-	if err != nil || !alarmmodel.IsUUIDv7(claims.ActingOrganizationID) || len(claims.Actions) != 1 || claims.Actions[0] != action {
+	if err != nil || !alarmmodel.IsUUIDv7(claims.TenantID) || !alarmmodel.IsUUIDv7(claims.ActingOrganizationID) || len(claims.Actions) != 1 || claims.Actions[0] != action {
 		return identitycontext.DelegationClaims{}, false
 	}
 	expectedScopes := append([]string{"organization:" + claims.ActingOrganizationID}, resourceScopes...)
@@ -204,6 +205,7 @@ func (handler *httpHandler) mutate(writer http.ResponseWriter, request *http.Req
 		handler.writeProblem(writer, http.StatusForbidden, "ALARM_ACCESS_DENIED", "Alarm access denied", "The requested Alarm resource is outside the authorized lifecycle scope.", false)
 		return
 	}
+	request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
 	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
 		handler.writeProblem(writer, http.StatusUnsupportedMediaType, "ALARM_REQUEST_INVALID", "Alarm request invalid", "The Alarm lifecycle request must use application/json.", false)
 		return

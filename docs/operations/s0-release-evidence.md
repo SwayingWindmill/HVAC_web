@@ -1,5 +1,7 @@
 # S0 integration, rollback and Release Evidence Bundle
 
+> **Scope: CERTIFICATION_REFERENCE.** This document preserves the S0 production-shaped Kubernetes rollout/rollback proof. It does **not** define the canonical Phase 1 deployment. Phase 1 deployment remains Linux Server + Docker Compose under `deploy/platform/phase1/`; Kind/Kubernetes evidence here is retained only as rollout/certification reference for a later scale/HA stage.
+
 ## Purpose
 
 Ticket 08 is the final S0 gate. It does not add a business domain. It integrates the foundation delivered by Tickets 01–07, executes a production-shaped rollout and rollback, and publishes a reproducible evidence bundle that a reviewer can validate without reconstructing the release from console output.

@@ -539,10 +539,11 @@ func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCod
 			t.Fatalf("query scope drifted: %+v", query)
 		}
 		unit := "Cel"
+		sensorID := "018f2e00-6000-7000-8000-000000000001"
 		watermark := query.To
 		response := telemetryhistorymodel.DeviceHistoryResponse{
 			SchemaVersion: 1, OwningOrganizationID: query.OwningOrganizationID, SiteID: query.SiteID, DeviceID: query.DeviceID,
-			Series:   []telemetryhistorymodel.DeviceHistorySeries{{Key: "temperature", Points: []telemetryhistorymodel.DeviceHistoryPoint{{ObservationID: "018f2e00-8000-7000-8000-000000000001", SampledAt: query.From.Add(time.Hour), ReceivedAt: query.From.Add(time.Hour + time.Second), Value: 22.5, Unit: &unit, Quality: telemetryhistorymodel.QualityGood, QualityReasons: []string{}, Revision: 7}}}},
+			Series:   []telemetryhistorymodel.DeviceHistorySeries{{Key: "temperature", Points: []telemetryhistorymodel.DeviceHistoryPoint{{ObservationID: "018f2e00-8000-7000-8000-000000000001", PointID: "018f2e00-5000-7000-8000-000000000001", SensorID: &sensorID, SampledAt: query.From.Add(time.Hour), ReceivedAt: query.From.Add(time.Hour + time.Second), Value: 22.5, Unit: &unit, Quality: telemetryhistorymodel.QualityGood, QualityReasons: []string{}, Revision: 7}}}},
 			Metadata: telemetryhistorymodel.DeviceHistoryMetadata{RequestedFrom: query.From, RequestedTo: query.To, DataWatermark: &watermark, DatasetRevision: "telemetry-history:v1:7", Partial: false, MaxPointsPerKey: query.MaxPointsPerKey, ReturnedPoints: 1, TruncatedKeys: []string{}},
 		}
 		return telemetryJSONResponse(http.StatusOK, response), nil

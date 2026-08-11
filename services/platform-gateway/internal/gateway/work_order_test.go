@@ -15,12 +15,15 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
+	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
 )
 
 const (
+	gatewayWorkOrderTenantID       = "0190f000-0000-7000-8000-000000000001"
 	gatewayWorkOrderOrganizationID = "01910000-0000-7000-8000-000000000001"
 	gatewayWorkOrderSiteID         = "01910000-0001-7000-8000-000000000001"
 	gatewayWorkOrderOtherSiteID    = "01910000-0002-7000-8000-000000000001"
@@ -41,7 +44,7 @@ func TestGatewayWorkOrderListUsesIAMAndExactSignedReadContext(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if fixture.iamCalls.Load() != 1 || fixture.workOrderCalls.Load() != 1 {
+	if fixture.iamCalls.Load() != 2 || fixture.workOrderCalls.Load() != 1 {
 		t.Fatalf("calls iam=%d workOrder=%d", fixture.iamCalls.Load(), fixture.workOrderCalls.Load())
 	}
 	if fixture.lastUpstreamPath.Load() != "/internal/v1/sites/"+gatewayWorkOrderSiteID+"/work-orders" {
@@ -144,6 +147,20 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 	iamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		fixture.iamCalls.Add(1)
 		claims, verifyErr := identitycontext.VerifyDelegation(signer.Public(), request.Header.Get("X-Delegation-Grant"))
+		if request.URL.Path == "/internal/v1/registry-read/decision" {
+			if verifyErr != nil || identitycontext.ValidateDelegation(claims, now, "spiffe://hvac.local/platform-gateway", "iam-service", "registry:authorize", "session:"+fixture.session.ID) != nil {
+				http.Error(writer, "invalid Registry IAM delegation", http.StatusForbidden)
+				return
+			}
+			var input registryauth.DecisionRequest
+			if json.NewDecoder(request.Body).Decode(&input) != nil || input.Validate() != nil || input.Action != registryauth.ActionSiteRead {
+				http.Error(writer, "invalid Registry decision request", http.StatusBadRequest)
+				return
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(writer).Encode(registryauth.DecisionResponse{Decision: registryauth.Decision{Allowed: true, PrincipalID: "principal-work-order-1", SubjectIssuer: fixture.session.Principal.Issuer, Subject: fixture.session.Principal.Subject, ActingOrganizationID: gatewayWorkOrderOrganizationID, AllowedOrganizationIDs: []string{gatewayWorkOrderOrganizationID}, AllowedSiteIDs: []string{gatewayWorkOrderSiteID}, Actions: []registryauth.Action{registryauth.ActionSiteRead}, PolicyRevision: "gateway-policy-1", ReasonCode: registryauth.ReasonAllowOrganizationRole}, DelegationGrant: "e30.c2ln"})
+			return
+		}
 		if verifyErr != nil || identitycontext.ValidateDelegation(claims, now, "spiffe://hvac.local/platform-gateway", "iam-service", "work-order:authorize", "session:"+fixture.session.ID) != nil {
 			http.Error(writer, "invalid IAM delegation", http.StatusForbidden)
 			return
@@ -167,6 +184,16 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 		_ = json.NewEncoder(writer).Encode(workorderauth.DecisionResponse{Decision: decision})
 	}))
 	t.Cleanup(iamServer.Close)
+
+	registryServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/internal/v1/registry/sites/"+gatewayWorkOrderSiteID || request.Header.Get("X-Delegation-Grant") == "" {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(platformapi.Site{ID: gatewayWorkOrderSiteID, TenantID: gatewayWorkOrderTenantID, OwningOrganizationID: gatewayWorkOrderOrganizationID, Code: "work-order-site", DisplayName: "Work Order Site", Timezone: "UTC", Status: "ACTIVE", Revision: 1, CreatedAt: "2026-08-01T00:00:00.000Z", UpdatedAt: "2026-08-01T00:00:00.000Z"})
+	}))
+	t.Cleanup(registryServer.Close)
 
 	workOrderServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		fixture.workOrderCalls.Add(1)
@@ -217,7 +244,7 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 				preconditionActionOK = true
 			}
 		}
-		if verifyErr != nil || !preconditionActionOK || identitycontext.ValidateDelegationAnyScope(claims, now, "spiffe://hvac.local/platform-gateway", "work-order-service", action, scopes) != nil || claims.PrincipalID != "principal-work-order-1" || claims.PolicyRevision != "work-order-policy-1" {
+		if verifyErr != nil || !preconditionActionOK || identitycontext.ValidateDelegationAnyScope(claims, now, "spiffe://hvac.local/platform-gateway", "work-order-service", action, scopes) != nil || claims.TenantID != gatewayWorkOrderTenantID || claims.PrincipalID != "principal-work-order-1" || claims.PolicyRevision != "work-order-policy-1" {
 			writer.Header().Set("Content-Type", "application/problem+json")
 			writer.WriteHeader(http.StatusForbidden)
 			_ = json.NewEncoder(writer).Encode(upstreamWorkOrderProblem{Type: "https://example.test/problems/work-order-access-denied", Title: "denied", Status: http.StatusForbidden, Detail: "denied", Code: "WORK_ORDER_ACCESS_DENIED"})
@@ -285,6 +312,7 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 			ExecutingWorkloadSPIFFE: "spiffe://hvac.local/platform-gateway", PolicyRevision: "gateway-policy-1",
 			DelegationSigner: signer, DelegationTTL: 30 * time.Second,
 		}, now: func() time.Time { return now }},
+		registry:  newRegistryController(&RegistryConfig{CoreBaseURL: registryServer.URL, CoreHTTPClient: registryServer.Client(), CoreTimeout: time.Second}),
 		workOrder: newWorkOrderController(&WorkOrderConfig{BackendBaseURL: workOrderServer.URL, BackendHTTPClient: workOrderServer.Client(), BackendAudience: "work-order-service"}),
 	}
 	return fixture

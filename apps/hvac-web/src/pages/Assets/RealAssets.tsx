@@ -21,10 +21,13 @@ import type { ColumnsType } from 'antd/es/table';
 import type { DataNode } from 'antd/es/tree';
 import {
   ApartmentOutlined,
+  ApiOutlined,
   BlockOutlined,
+  ClusterOutlined,
   DatabaseOutlined,
   EyeOutlined,
   NodeIndexOutlined,
+  RightOutlined,
   SafetyCertificateOutlined,
   TabletOutlined,
 } from '@ant-design/icons';
@@ -32,15 +35,16 @@ import { useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   flattenRegistryPages,
+  useRegistryAssetModel,
   useRegistryDeviceDetail,
-  useRegistryDevices,
-  useRegistryEquipment,
   useRegistryEquipmentDetail,
   useRegistryOrganizations,
   useRegistrySite,
   useRegistrySites,
 } from '@/api/registry';
 import type { Device, Equipment } from '@/api/generated/platformGateway.gen';
+import { buildRealAssetsHierarchy, type RealAssetsHierarchyNode } from '@/real/assets/model';
+import '@/real/assets/real-assets.css';
 import {
   purgeTelemetryCurrentState,
   useDeviceTelemetryLive,
@@ -79,6 +83,38 @@ type LedgerTab = 'equipment' | 'devices';
 const isEquipmentKey = (key: Key): key is string => typeof key === 'string' && key.startsWith('equipment:');
 const isDeviceKey = (key: Key): key is string => typeof key === 'string' && key.startsWith('device:');
 
+const hierarchyIcon = (kind: RealAssetsHierarchyNode['kind']) => {
+  switch (kind) {
+    case 'site': return <ApartmentOutlined style={{ color: STATUS.info }} />;
+    case 'area': return <ClusterOutlined style={{ color: STATUS.info }} />;
+    case 'equipment': return <BlockOutlined style={{ color: STATUS.warn }} />;
+    case 'device': return <TabletOutlined style={{ color: STATUS.info }} />;
+    case 'sensor':
+    case 'virtual-sensor': return <ApiOutlined style={{ color: STATUS.info }} />;
+    case 'point': return <DatabaseOutlined />;
+  }
+};
+
+const hierarchyDataNode = (node: RealAssetsHierarchyNode): DataNode => ({
+  key: node.key,
+  title: (
+    <span className="real-assets-tree-node" data-asset-kind={node.kind} title={`${node.label}｜${node.meta}`}>
+      {node.label}
+    </span>
+  ),
+  icon: hierarchyIcon(node.kind),
+  children: node.children.map(hierarchyDataNode),
+});
+
+const defaultExpandedTreeKeys = (nodes: readonly DataNode[]): Key[] => {
+  const root = nodes[0];
+  if (!root) return [];
+  return [
+    root.key,
+    ...(root.children ?? []).filter((node) => String(node.key).startsWith('area:')).map((node) => node.key),
+  ];
+};
+
 export interface RealAssetsProps {
   telemetryRuntime?: TelemetryCurrentRuntime;
 }
@@ -99,10 +135,10 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
   const sites = flattenRegistryPages(sitesQuery.data);
   const [siteId, setSiteId] = useState<string | null>(null);
   const siteQuery = useRegistrySite(siteId);
-  const equipmentQuery = useRegistryEquipment(siteId);
-  const devicesQuery = useRegistryDevices(siteId);
-  const equipment = flattenRegistryPages(equipmentQuery.data);
-  const devices = flattenRegistryPages(devicesQuery.data);
+  const assetModelQuery = useRegistryAssetModel(siteId);
+  const assetModel = assetModelQuery.data;
+  const equipment = assetModel?.equipment ?? [];
+  const devices = assetModel?.devices ?? [];
 
   const [activeTab, setActiveTab] = useState<LedgerTab>('equipment');
   const [keyword, setKeyword] = useState('');
@@ -198,58 +234,50 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
   const deviceLive = useDeviceTelemetryLive(selectedDevice, telemetryRuntime);
 
   useEffect(() => {
-    if (!deviceParam || devicesQuery.isPending || devicesQuery.isFetching || devicesQuery.hasNextPage) return;
-    if (devices.some((device) => device.id === deviceParam)) return;
+    if (assetModelQuery.isPending || assetModelQuery.isFetching) return;
+    const equipmentVisible = !equipmentParam || equipment.some((item) => item.id === equipmentParam);
+    const deviceVisible = !deviceParam || devices.some((item) => item.id === deviceParam);
+    if (equipmentVisible && deviceVisible) return;
     purgeTelemetryCurrentState(queryClient, telemetryRuntime);
     const next = new URLSearchParams(searchParams);
-    next.delete('device');
+    if (!equipmentVisible) next.delete('equipment');
+    if (!deviceVisible) next.delete('device');
     setSearchParams(next, { replace: true });
-  }, [deviceParam, devices, devicesQuery.hasNextPage, devicesQuery.isFetching, devicesQuery.isPending, queryClient, searchParams, setSearchParams, telemetryRuntime]);
+  }, [
+    assetModelQuery.isFetching,
+    assetModelQuery.isPending,
+    deviceParam,
+    devices,
+    equipment,
+    equipmentParam,
+    queryClient,
+    searchParams,
+    setSearchParams,
+    telemetryRuntime,
+  ]);
 
   const treeData = useMemo<DataNode[]>(() => {
     const site = siteQuery.data;
-    if (!site) return [];
-    return [{
-      key: `site:${site.id}`,
-      title: `${site.displayName} · ${site.timezone}`,
-      icon: <ApartmentOutlined style={{ color: STATUS.info }} />,
-      children: [
-        {
-          key: `equipment-group:${site.id}`,
-          title: `Equipment · 已加载 ${equipment.length}`,
-          icon: <BlockOutlined style={{ color: STATUS.warn }} />,
-          children: equipment.map((item) => ({
-            key: `equipment:${item.id}`,
-            title: item.displayName,
-            icon: <BlockOutlined style={{ color: STATUS.warn }} />,
-            isLeaf: true,
-          })),
-        },
-        {
-          key: `device-group:${site.id}`,
-          title: `Device · 已加载 ${devices.length}`,
-          icon: <TabletOutlined style={{ color: STATUS.info }} />,
-          children: devices.map((item) => ({
-            key: `device:${item.id}`,
-            title: item.displayName,
-            icon: <TabletOutlined style={{ color: STATUS.info }} />,
-            isLeaf: true,
-          })),
-        },
-      ],
-    }];
-  }, [devices, equipment, siteQuery.data]);
+    if (!site || !assetModel) return [];
+    return [hierarchyDataNode(buildRealAssetsHierarchy(assetModel, `${site.displayName} · ${site.timezone}`))];
+  }, [assetModel, siteQuery.data]);
 
   const selectTreeNode = (keys: Key[]) => {
     const key = keys[0];
     if (!key) return;
     if (isEquipmentKey(key)) {
-      setActiveTab('equipment');
-      openEquipment(key.slice('equipment:'.length));
+      const equipmentId = key.slice('equipment:'.length);
+      if (equipment.some((item) => item.id === equipmentId)) {
+        setActiveTab('equipment');
+        openEquipment(equipmentId);
+      }
     }
     if (isDeviceKey(key)) {
-      setActiveTab('devices');
-      openDevice(key.slice('device:'.length));
+      const deviceId = key.slice('device:'.length);
+      if (devices.some((item) => item.id === deviceId)) {
+        setActiveTab('devices');
+        openDevice(deviceId);
+      }
     }
   };
 
@@ -345,9 +373,20 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
     >
       <div data-testid="real-registry-assets-page">
         <OperationsMetrics
+          ariaLabel="Site 原子资产模型摘要"
           items={[
-            { label: '已加载 Equipment', value: equipment.length, icon: <BlockOutlined /> },
-            { label: '可见 Device', value: devices.length, icon: <TabletOutlined /> },
+            { label: 'Area', value: assetModel?.counts.areas ?? 0, icon: <ClusterOutlined />, detail: '空间层级' },
+            { label: 'Equipment', value: assetModel?.counts.equipment ?? 0, icon: <BlockOutlined />, detail: '物理设备' },
+            { label: 'Device Endpoint', value: assetModel?.counts.deviceEndpoints ?? 0, icon: <TabletOutlined />, detail: '通信端点' },
+            { label: 'Sensor', value: assetModel?.counts.sensors ?? 0, icon: <ApiOutlined />, detail: '测量单元' },
+            { label: 'Telemetry Point', value: assetModel?.counts.telemetryPoints ?? 0, icon: <DatabaseOutlined />, detail: '完整点位目录' },
+            { label: '独立 Sensor Device', value: assetModel?.counts.independentSensorDevices ?? 0, icon: <ApiOutlined />, detail: '独立通信测量设备' },
+            { label: '计算点', value: assetModel?.counts.calculatedPoints ?? 0, icon: <DatabaseOutlined />, detail: '版本化公式输出' },
+          ]}
+        />
+        <OperationsMetrics
+          ariaLabel="Device Endpoint 运行摘要"
+          items={[
             { label: '当前 ONLINE', value: onlineCount, detail: '来自 Presence-only Snapshot', tone: 'positive' },
             { label: '状态需关注', value: telemetryAttentionCount, detail: 'OFFLINE / STALE / UNKNOWN / UNAVAILABLE', tone: telemetryAttentionCount ? 'warning' : 'positive' },
             { label: '非 ACTIVE', value: attentionCount, detail: 'Registry 生命周期，非在线状态', tone: attentionCount ? 'warning' : 'accent' },
@@ -407,10 +446,24 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
                 />
                 {sitesQuery.error ? (
                   <RegistryFailureState error={sitesQuery.error} compact onRetry={() => void sitesQuery.refetch()} />
+                ) : !siteId ? (
+                  <RegistryEmptyState description="请选择一个授权 Site。" />
+                ) : assetModelQuery.error ? (
+                  <RegistryFailureState error={assetModelQuery.error} compact onRetry={() => void assetModelQuery.refetch()} />
+                ) : assetModelQuery.isPending ? (
+                  <LoadingState tip="正在读取原子 Asset Model" minHeight={160} />
                 ) : treeData.length === 0 ? (
                   <RegistryEmptyState description="当前 Site 暂无 Registry 资源。" />
                 ) : (
-                  <Tree showIcon defaultExpandAll treeData={treeData} onSelect={selectTreeNode} />
+                  <Tree
+                    className="real-assets-navigation-tree"
+                    showIcon
+                    blockNode
+                    defaultExpandedKeys={defaultExpandedTreeKeys(treeData)}
+                    switcherIcon={({ isLeaf }) => isLeaf ? null : <RightOutlined className="real-assets-tree-switcher" />}
+                    treeData={treeData}
+                    onSelect={selectTreeNode}
+                  />
                 )}
                 <RegistryLoadMore
                   hasMore={Boolean(organizationsQuery.hasNextPage)}
@@ -475,9 +528,9 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
                       {
                         key: 'equipment',
                         label: `Equipment (${equipmentRows.length})`,
-                        children: equipmentQuery.error ? (
-                          <RegistryFailureState error={equipmentQuery.error} onRetry={() => void equipmentQuery.refetch()} />
-                        ) : equipmentQuery.isPending ? (
+                        children: assetModelQuery.error ? (
+                          <RegistryFailureState error={assetModelQuery.error} onRetry={() => void assetModelQuery.refetch()} />
+                        ) : assetModelQuery.isPending ? (
                           <LoadingState tip="正在读取 Equipment" minHeight={220} />
                         ) : (
                           <>
@@ -490,21 +543,16 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
                               scroll={{ x: compactTable ? 620 : 980 }}
                               locale={{ emptyText: <RegistryEmptyState description="没有符合条件的 Equipment。" /> }}
                             />
-                            <RegistryLoadMore
-                              hasMore={Boolean(equipmentQuery.hasNextPage)}
-                              loading={equipmentQuery.isFetchingNextPage}
-                              onLoadMore={() => void equipmentQuery.fetchNextPage()}
-                              label="加载更多 Equipment"
-                            />
+
                           </>
                         ),
                       },
                       {
                         key: 'devices',
                         label: `Device (${deviceRows.length})`,
-                        children: devicesQuery.error ? (
-                          <RegistryFailureState error={devicesQuery.error} onRetry={() => void devicesQuery.refetch()} />
-                        ) : devicesQuery.isPending ? (
+                        children: assetModelQuery.error ? (
+                          <RegistryFailureState error={assetModelQuery.error} onRetry={() => void assetModelQuery.refetch()} />
+                        ) : assetModelQuery.isPending ? (
                           <LoadingState tip="正在读取 Device" minHeight={220} />
                         ) : (
                           <>
@@ -517,12 +565,7 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
                               scroll={{ x: compactTable ? 680 : 900 }}
                               locale={{ emptyText: <RegistryEmptyState description="没有符合条件的 Device。" /> }}
                             />
-                            <RegistryLoadMore
-                              hasMore={Boolean(devicesQuery.hasNextPage)}
-                              loading={devicesQuery.isFetchingNextPage}
-                              onLoadMore={() => void devicesQuery.fetchNextPage()}
-                              label="加载更多 Device"
-                            />
+
                           </>
                         ),
                       },

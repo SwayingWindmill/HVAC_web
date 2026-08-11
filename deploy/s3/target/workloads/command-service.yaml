@@ -55,6 +55,8 @@ spec:
               valueFrom: { configMapKeyRef: { name: s3-approved-cohort, key: siteId } }
             - name: COMMAND_APPROVED_DEVICE_ID
               valueFrom: { configMapKeyRef: { name: s3-approved-cohort, key: deviceId } }
+            - name: COMMAND_APPROVED_CAPABILITY
+              valueFrom: { configMapKeyRef: { name: s3-approved-cohort, key: capability } }
             - { name: COMMAND_GATEWAY_SPIFFE, value: "spiffe://hvac.local/platform-gateway" }
             - { name: COMMAND_DISPATCHER_SPIFFE, value: "spiffe://hvac.local/command-dispatcher" }
             - { name: COMMAND_VERIFIER_SPIFFE, value: "spiffe://hvac.local/command-verifier" }

@@ -4,6 +4,8 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:${CUBE_HOST_PORT:-4000}:4000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       CUBEJS_DB_TYPE: clickhouse
       CUBEJS_DB_HOST: ${CUBEJS_DB_HOST:?set CUBEJS_DB_HOST}

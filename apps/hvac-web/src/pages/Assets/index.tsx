@@ -8,7 +8,7 @@ const MockAssets = lazy(() => import('./MockAssets'));
 export default function Assets() {
   if (API_MODE === 'real') return <RealAssets />;
   return (
-    <Suspense fallback={<LoadingState tip="加载演示设备台账" />}>
+    <Suspense fallback={<LoadingState tip="加载演示资产" />}>
       <MockAssets />
     </Suspense>
   );

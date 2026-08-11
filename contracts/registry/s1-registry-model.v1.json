@@ -15,41 +15,41 @@
     "Organization": {
       "owner": "platform-core-service",
       "scope": "organization",
-      "requiredFields": ["id", "code", "displayName", "status", "revision", "createdAt", "updatedAt"],
+      "requiredFields": ["id", "tenantId", "code", "displayName", "status", "revision", "createdAt", "updatedAt"],
       "statuses": ["ACTIVE", "SUSPENDED", "RETIRED"]
     },
     "Site": {
       "owner": "platform-core-service",
       "scope": "site",
-      "requiredFields": ["id", "owningOrganizationId", "code", "displayName", "timezone", "status", "revision", "createdAt", "updatedAt"],
+      "requiredFields": ["id", "tenantId", "owningOrganizationId", "code", "displayName", "timezone", "status", "revision", "createdAt", "updatedAt"],
       "statuses": ["ACTIVE", "INACTIVE", "RETIRED"],
       "timezoneAuthority": "IANA"
     },
     "Equipment": {
       "owner": "platform-core-service",
       "scope": "site",
-      "requiredFields": ["id", "owningOrganizationId", "siteId", "code", "displayName", "equipmentType", "status", "revision", "createdAt", "updatedAt"],
+      "requiredFields": ["id", "tenantId", "owningOrganizationId", "siteId", "code", "displayName", "equipmentType", "status", "revision", "createdAt", "updatedAt"],
       "statuses": ["ACTIVE", "INACTIVE", "RETIRED"],
       "identityRule": "Equipment is a maintainable business asset and is not interchangeable with Device."
     },
     "Device": {
       "owner": "platform-core-service",
       "scope": "site",
-      "requiredFields": ["id", "owningOrganizationId", "siteId", "code", "displayName", "deviceType", "status", "revision", "createdAt", "updatedAt"],
+      "requiredFields": ["id", "tenantId", "owningOrganizationId", "siteId", "code", "displayName", "deviceType", "status", "revision", "createdAt", "updatedAt"],
       "statuses": ["ACTIVE", "INACTIVE", "RETIRED"],
       "identityRule": "Device is an IoT endpoint and is not interchangeable with Equipment."
     },
     "DeviceBinding": {
       "owner": "platform-core-service",
       "scope": "site",
-      "requiredFields": ["id", "owningOrganizationId", "siteId", "deviceId", "equipmentId", "bindingRole", "status", "validFrom", "revision", "createdAt", "updatedAt"],
+      "requiredFields": ["id", "tenantId", "owningOrganizationId", "siteId", "deviceId", "equipmentId", "bindingRole", "status", "validFrom", "revision", "createdAt", "updatedAt"],
       "statuses": ["ACTIVE", "INACTIVE", "RETIRED"],
       "optionalFields": ["validTo"]
     },
     "ExternalBinding": {
       "owner": "platform-core-service",
       "scope": "site",
-      "requiredFields": ["id", "owningOrganizationId", "siteId", "integrationInstanceId", "provider", "externalEntityType", "externalId", "bindingStatus", "validFrom", "revision", "createdAt", "updatedAt"],
+      "requiredFields": ["id", "tenantId", "owningOrganizationId", "siteId", "integrationInstanceId", "provider", "externalEntityType", "externalId", "bindingStatus", "validFrom", "revision", "createdAt", "updatedAt"],
       "statuses": ["ACTIVE", "INACTIVE", "RETIRED"],
       "optionalFields": ["validTo"],
       "activeUniqueness": ["integrationInstanceId", "externalEntityType", "externalId"]

@@ -22,21 +22,19 @@ const (
 )
 
 type ReportedStateClientConfig struct {
-	BaseURL          string
-	HTTPClient       *http.Client
-	OrganizationID   string
-	SiteID           string
-	DeviceID         string
-	ReportedStateKey string
+	BaseURL        string
+	HTTPClient     *http.Client
+	OrganizationID string
+	SiteID         string
+	DeviceID       string
 }
 
 type ReportedStateClient struct {
-	baseURL          string
-	httpClient       *http.Client
-	organizationID   string
-	siteID           string
-	deviceID         string
-	reportedStateKey string
+	baseURL        string
+	httpClient     *http.Client
+	organizationID string
+	siteID         string
+	deviceID       string
 }
 
 type reportedStateResponse struct {
@@ -51,7 +49,7 @@ type reportedStateResponse struct {
 	Freshness              string    `json:"freshness"`
 	Quality                string    `json:"quality"`
 	BusinessRevision       uint64    `json:"businessRevision"`
-	ReportedSetpointC      float64   `json:"reportedSetpointC"`
+	ReportedValue          commandmodel.ScalarValue `json:"reportedValue"`
 	ObservedAt             time.Time `json:"observedAt"`
 	ReportedStateKey       string    `json:"reportedStateKey"`
 }
@@ -62,7 +60,7 @@ func NewReportedStateClient(config ReportedStateClientConfig) (*ReportedStateCli
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
 		return nil, errors.New("S2 reported-state base URL must be an HTTPS service origin")
 	}
-	if strings.TrimSpace(config.OrganizationID) == "" || strings.TrimSpace(config.SiteID) == "" || strings.TrimSpace(config.DeviceID) == "" || strings.TrimSpace(config.ReportedStateKey) == "" {
+	if strings.TrimSpace(config.OrganizationID) == "" || strings.TrimSpace(config.SiteID) == "" || strings.TrimSpace(config.DeviceID) == "" {
 		return nil, errors.New("S2 reported-state cohort configuration is incomplete")
 	}
 	client := config.HTTPClient
@@ -72,16 +70,18 @@ func NewReportedStateClient(config ReportedStateClientConfig) (*ReportedStateCli
 	return &ReportedStateClient{
 		baseURL: baseURL, httpClient: client,
 		organizationID: strings.TrimSpace(config.OrganizationID), siteID: strings.TrimSpace(config.SiteID),
-		deviceID: strings.TrimSpace(config.DeviceID), reportedStateKey: strings.TrimSpace(config.ReportedStateKey),
+		deviceID: strings.TrimSpace(config.DeviceID),
 	}, nil
 }
 
 func (client *ReportedStateClient) ReadReportedState(ctx context.Context, envelope commandmodel.VerificationEnvelope) (string, commandmodel.ReportedStateEvidence, error) {
 	if client == nil || envelope.OrganizationID != client.organizationID || envelope.SiteID != client.siteID || envelope.DeviceID != client.deviceID ||
-		strings.TrimSpace(envelope.CommandID) == "" || strings.TrimSpace(envelope.AttemptID) == "" || envelope.ExecutionFence == 0 {
+		strings.TrimSpace(envelope.CommandID) == "" || strings.TrimSpace(envelope.AttemptID) == "" || envelope.ExecutionFence == 0 ||
+		strings.TrimSpace(envelope.VerificationPointKey) == "" {
 		return "", commandmodel.ReportedStateEvidence{}, errors.New("verification envelope is outside the approved cohort")
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.baseURL+internalCommandReportedStatePath, nil)
+	endpoint := client.baseURL + internalCommandReportedStatePath + "?key=" + url.QueryEscape(envelope.VerificationPointKey)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", commandmodel.ReportedStateEvidence{}, fmt.Errorf("construct S2 reported-state request: %w", err)
 	}
@@ -105,14 +105,14 @@ func (client *ReportedStateClient) ReadReportedState(ctx context.Context, envelo
 		return "", commandmodel.ReportedStateEvidence{}, errors.New("S2 reported-state response is invalid")
 	}
 	if result.SchemaVersion != 1 || result.OrganizationID != client.organizationID || result.SiteID != client.siteID || result.DeviceID != client.deviceID ||
-		result.ReportedStateKey != client.reportedStateKey || !validS2EvidenceID(result.EvidenceID) || result.ObservedAt.IsZero() {
+		result.ReportedStateKey != envelope.VerificationPointKey || !validS2EvidenceID(result.EvidenceID) || result.ObservedAt.IsZero() {
 		return "", commandmodel.ReportedStateEvidence{}, errors.New("S2 reported-state response is outside the approved cohort")
 	}
 	return result.EvidenceID, commandmodel.ReportedStateEvidence{
 		OrganizationID: result.OrganizationID, SiteID: result.SiteID, DeviceID: result.DeviceID,
 		EvaluationAvailability: result.EvaluationAvailability, Presence: result.Presence, Readiness: result.Readiness,
 		Freshness: result.Freshness, Quality: result.Quality, BusinessRevision: result.BusinessRevision,
-		ReportedSetpointC: result.ReportedSetpointC, ObservedAt: result.ObservedAt.UTC(),
+		ReportedValue: result.ReportedValue, ObservedAt: result.ObservedAt.UTC(),
 	}, nil
 }
 

@@ -62,6 +62,8 @@ const POINTS: Readonly<Record<string, TelemetryPointDefinition>> = Object.freeze
   point('humidity', '湿度', '%RH'),
   point('setpoint', '设定值', '°C'),
   point('power', '功率', 'kW'),
+  point('plant.temperature', '温度', 'Cel'),
+  point('plant.delta_t', '温差', 'Cel'),
 
   point('chiller.run_state', '运行状态'),
   point('chiller.power', '主机功率', 'kW'),
@@ -112,6 +114,10 @@ const POINTS: Readonly<Record<string, TelemetryPointDefinition>> = Object.freeze
   point('btu_meter.flow_rate', '冷冻水流量', 'm3/h'),
   point('btu_meter.instant_cooling_capacity', '瞬时制冷量', 'kW'),
   point('btu_meter.accumulated_cooling_energy', '累计冷量', 'kWh'),
+
+  point('weather.ambient_dry_bulb_temperature', '室外干球温度', 'Cel'),
+  point('weather.ambient_wet_bulb_temperature', '室外湿球温度', 'Cel'),
+  point('weather.relative_humidity', '室外相对湿度', '%RH'),
 ].map((definition) => [definition.key, definition])));
 
 const profile = (

@@ -159,7 +159,7 @@ WHERE status = 'ACTIVE'
 
 func loadOrganizationMemberships(ctx context.Context, transaction pgx.Tx) ([]OrganizationMembership, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT organization_id::text, status, valid_from, valid_to
+SELECT tenant_id::text, organization_id::text, status, valid_from, valid_to
 FROM iam.organization_memberships
 ORDER BY organization_id
 `)
@@ -170,7 +170,7 @@ ORDER BY organization_id
 	memberships := []OrganizationMembership{}
 	for rows.Next() {
 		var membership OrganizationMembership
-		if err := rows.Scan(&membership.OrganizationID, &membership.Status, &membership.ValidFrom, &membership.ValidTo); err != nil {
+		if err := rows.Scan(&membership.TenantID, &membership.OrganizationID, &membership.Status, &membership.ValidFrom, &membership.ValidTo); err != nil {
 			return nil, fmt.Errorf("scan IAM organization membership: %w", err)
 		}
 		memberships = append(memberships, membership)
@@ -183,7 +183,7 @@ ORDER BY organization_id
 
 func loadRoleBindings(ctx context.Context, transaction pgx.Tx) ([]RoleBinding, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT organization_id::text, actions, effect, valid_from, valid_to
+SELECT tenant_id::text, organization_id::text, actions, effect, valid_from, valid_to
 FROM iam.role_bindings
 ORDER BY organization_id, role_key
 `)
@@ -195,7 +195,7 @@ ORDER BY organization_id, role_key
 	for rows.Next() {
 		var binding RoleBinding
 		var actions []string
-		if err := rows.Scan(&binding.OrganizationID, &actions, &binding.Effect, &binding.ValidFrom, &binding.ValidTo); err != nil {
+		if err := rows.Scan(&binding.TenantID, &binding.OrganizationID, &actions, &binding.Effect, &binding.ValidFrom, &binding.ValidTo); err != nil {
 			return nil, fmt.Errorf("scan IAM role binding: %w", err)
 		}
 		binding.Actions, err = postgresRegistryActions(actions)
@@ -216,7 +216,7 @@ ORDER BY organization_id, role_key
 
 func loadSiteBindings(ctx context.Context, transaction pgx.Tx) ([]SiteBinding, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT acting_organization_id::text, owning_organization_id::text, site_id::text,
+SELECT tenant_id::text, acting_organization_id::text, owning_organization_id::text, site_id::text,
        actions, effect, valid_from, valid_to
 FROM iam.site_bindings
 ORDER BY acting_organization_id, site_id
@@ -230,6 +230,7 @@ ORDER BY acting_organization_id, site_id
 		var binding SiteBinding
 		var actions []string
 		if err := rows.Scan(
+			&binding.TenantID,
 			&binding.ActingOrganizationID,
 			&binding.OwningOrganizationID,
 			&binding.SiteID,
@@ -255,7 +256,7 @@ ORDER BY acting_organization_id, site_id
 
 func loadExplicitDenies(ctx context.Context, transaction pgx.Tx) ([]ExplicitDeny, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT acting_organization_id::text, owning_organization_id::text, site_id::text,
+SELECT tenant_id::text, acting_organization_id::text, owning_organization_id::text, site_id::text,
        action, valid_from, valid_to
 FROM iam.explicit_denies
 ORDER BY acting_organization_id, owning_organization_id, site_id, action
@@ -270,6 +271,7 @@ ORDER BY acting_organization_id, owning_organization_id, site_id, action
 		var siteID *string
 		var action string
 		if err := rows.Scan(
+			&deny.TenantID,
 			&deny.ActingOrganizationID,
 			&deny.OrganizationID,
 			&siteID,

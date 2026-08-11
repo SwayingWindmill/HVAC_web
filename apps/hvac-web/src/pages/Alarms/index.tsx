@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Button,
   Card,
-  Descriptions,
   Drawer,
   Empty,
   Grid,
@@ -10,13 +9,12 @@ import {
   Segmented,
   Select,
   Space,
-  Table,
   Tag,
   Tooltip,
   Typography,
   message,
 } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import { ProDescriptions, ProTable, type ProColumns } from '@ant-design/pro-components';
 import {
   ApartmentOutlined,
   BugOutlined,
@@ -199,16 +197,16 @@ export default function Alarms() {
     message.success(`${order.id} 已更新为${TICKET_STATUS_META[next].label}`);
   };
 
-  const columns: ColumnsType<WorkOrder> = [
+  const columns: ProColumns<WorkOrder>[] = [
     {
       title: '工单',
       dataIndex: 'id',
       key: 'id',
       width: 120,
       fixed: 'left',
-      render: (id: string, order) => (
+      render: (_, order) => (
         <Space direction="vertical" size={0}>
-          <Typography.Text copyable={{ text: id }} strong>{id}</Typography.Text>
+          <Typography.Text copyable={{ text: order.id }} strong>{order.id}</Typography.Text>
           <Space size={4}>
             {sourceTag(order.source)}
             <Tag color={isSlaRisk(order) ? 'red' : 'default'}>{priorityLabel(order.severity)}</Tag>
@@ -221,9 +219,9 @@ export default function Alarms() {
       dataIndex: 'device',
       key: 'device',
       width: 200,
-      render: (device: string, order) => (
+      render: (_, order) => (
         <Space direction="vertical" size={0}>
-          <Typography.Text>{device}</Typography.Text>
+          <Typography.Text>{order.device}</Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>{order.location ?? '未绑定位置'}</Typography.Text>
         </Space>
       ),
@@ -240,7 +238,7 @@ export default function Alarms() {
         { text: SEVERITY_LABEL.info, value: 'info' },
       ],
       onFilter: (value, order) => order.severity === value,
-      render: (severity: Severity) => <Tag color={SEVERITY_TONE[severity]}>{SEVERITY_LABEL[severity]}</Tag>,
+      render: (_, order) => <Tag color={SEVERITY_TONE[order.severity]}>{SEVERITY_LABEL[order.severity]}</Tag>,
     },
     {
       title: '标题 / 影响',
@@ -259,16 +257,16 @@ export default function Alarms() {
       dataIndex: 'assignee',
       key: 'assignee',
       width: 110,
-      render: (assignee?: string) => assignee ? <Tag icon={<UserSwitchOutlined />} color="processing">{assignee}</Tag> : <Tag>待分配</Tag>,
+      render: (_, order) => order.assignee ? <Tag icon={<UserSwitchOutlined />} color="processing">{order.assignee}</Tag> : <Tag>待分配</Tag>,
     },
     {
       title: 'SLA',
       dataIndex: 'dueAt',
       key: 'dueAt',
       width: 120,
-      render: (dueAt: string | undefined, order) => (
+      render: (_, order) => (
         <Typography.Text type={isSlaRisk(order) ? 'danger' : 'secondary'} style={{ fontSize: 12 }}>
-          {dueAt ?? '未设置'}
+          {order.dueAt ?? '未设置'}
         </Typography.Text>
       ),
     },
@@ -277,7 +275,7 @@ export default function Alarms() {
       dataIndex: 'status',
       key: 'status',
       width: 100,
-      render: (status: TicketStatus) => <Tag color={TICKET_STATUS_META[status].color}>{TICKET_STATUS_META[status].label}</Tag>,
+      render: (_, order) => <Tag color={TICKET_STATUS_META[order.status].color}>{TICKET_STATUS_META[order.status].label}</Tag>,
     },
     {
       title: '操作',
@@ -356,11 +354,13 @@ export default function Alarms() {
             />
           )}
 
-          <Table<WorkOrder>
+          <ProTable<WorkOrder>
             rowKey="id"
             size="middle"
             columns={tableColumns}
             dataSource={rows}
+            search={false}
+            options={{ density: true, fullScreen: true, setting: true, reload: false }}
             pagination={{ pageSize: 8, showSizeChanger: false }}
             scroll={{ x: compactTable ? 782 : 1080 }}
             locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合条件的工单" /> }}
@@ -439,22 +439,23 @@ export default function Alarms() {
               icon={<ToolOutlined />}
               description="来源、设备、位置与触发规则。"
             >
-              <Descriptions size="small" column={{ xs: 1, sm: 2 }} colon={false}>
-                <Descriptions.Item label="来源">{sourceTag(selected.source)}</Descriptions.Item>
-                <Descriptions.Item label="严重级"><Tag color={SEVERITY_TONE[selected.severity]}>{SEVERITY_LABEL[selected.severity]}</Tag></Descriptions.Item>
-                {selected.sourceFddId ? (
-                  <Descriptions.Item label="来源诊断"><Typography.Text code>{selected.sourceFddId}</Typography.Text></Descriptions.Item>
-                ) : null}
-                {selected.linkedAssetId ? (
-                  <Descriptions.Item label="关联资产"><Typography.Text code>{selected.linkedAssetId}</Typography.Text></Descriptions.Item>
-                ) : null}
-                <Descriptions.Item label="设备">{selected.device}</Descriptions.Item>
-                <Descriptions.Item label="负责人">{selected.assignee ?? '待分配'}</Descriptions.Item>
-                <Descriptions.Item label="位置" span={2}>{selected.location ?? '未绑定'}</Descriptions.Item>
-                <Descriptions.Item label="触发规则" span={2}>{selected.rule ?? '未配置规则说明'}</Descriptions.Item>
-                <Descriptions.Item label="创建时间">{selected.createdAt}</Descriptions.Item>
-                <Descriptions.Item label="SLA 截止">{selected.dueAt ?? '未设置'}</Descriptions.Item>
-              </Descriptions>
+              <ProDescriptions<WorkOrder>
+                size="small"
+                column={{ xs: 1, sm: 2 }}
+                dataSource={selected}
+                columns={[
+                  { title: '来源', key: 'source', render: (_, row) => sourceTag(row.source) },
+                  { title: '严重级', dataIndex: 'severity', render: (_, row) => <Tag color={SEVERITY_TONE[row.severity]}>{SEVERITY_LABEL[row.severity]}</Tag> },
+                  ...(selected.sourceFddId ? [{ title: '来源诊断', dataIndex: 'sourceFddId' as const, render: (_: unknown, row: WorkOrder) => <Typography.Text code>{row.sourceFddId}</Typography.Text> }] : []),
+                  ...(selected.linkedAssetId ? [{ title: '关联资产', dataIndex: 'linkedAssetId' as const, render: (_: unknown, row: WorkOrder) => <Typography.Text code>{row.linkedAssetId}</Typography.Text> }] : []),
+                  { title: '设备', dataIndex: 'device' },
+                  { title: '负责人', dataIndex: 'assignee', renderText: (value) => value ?? '待分配' },
+                  { title: '位置', dataIndex: 'location', span: 2, renderText: (value) => value ?? '未绑定' },
+                  { title: '触发规则', dataIndex: 'rule', span: 2, renderText: (value) => value ?? '未配置规则说明' },
+                  { title: '创建时间', dataIndex: 'createdAt' },
+                  { title: 'SLA 截止', dataIndex: 'dueAt', renderText: (value) => value ?? '未设置' },
+                ]}
+              />
             </OperationsDetailSection>
 
             <OperationsDetailSection

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>泉来禾智慧能源设计预览</title>
+  <link rel="stylesheet" href="./preview.css">
+</head>
+<body>
+  <div class="preview-shell">
+    <aside class="sidebar" aria-label="产品导航">
+      <div class="brand"><span class="brand-mark">QLH</span><span>泉来禾智慧能源</span></div>
+      <div class="nav-label">运营工作区</div>
+      <nav>
+        <a class="nav-item" href="#"><span class="nav-icon">⌂</span>运营总览</a>
+        <a class="nav-item is-active" href="#"><span class="nav-icon">⌘</span>设备与建筑</a>
+        <a class="nav-item" href="#"><span class="nav-icon">⌁</span>综合能耗</a>
+        <a class="nav-item" href="#"><span class="nav-icon">!</span>告警中心</a>
+        <a class="nav-item" href="#"><span class="nav-icon">✓</span>工单管理</a>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <header class="page-header">
+        <div>
+          <h1>泉来禾智慧能源设计预览</h1>
+          <p>Industrial Calm · 数据优先、异常优先、低阴影、高密度。</p>
+        </div>
+        <div class="actions">
+          <a class="button" href="./preview-dark.html">深色预览</a>
+          <button class="button primary" type="button">主要操作</button>
+        </div>
+      </header>
+
+      <section class="metrics" aria-label="核心指标">
+        <article class="metric"><div class="metric-label">当前总功率</div><div class="metric-value">247.2<small>kW</small></div><div class="metric-note">47 个点位实时更新</div></article>
+        <article class="metric"><div class="metric-label">系统 COP</div><div class="metric-value">5.55</div><div class="metric-note">高于目标 0.35</div></article>
+        <article class="metric"><div class="metric-label">在线设备</div><div class="metric-value">7<small>/ 7</small></div><div class="metric-note">全部通讯正常</div></article>
+        <article class="metric"><div class="metric-label">需关注</div><div class="metric-value">2</div><div class="metric-note warning">1 告警 · 1 维护</div></article>
+      </section>
+
+      <div class="grid">
+        <section>
+          <article class="card">
+            <header class="card-head"><h2>冷站总功率趋势</h2><span>今日 · 实际值</span></header>
+            <div class="card-body">
+              <div class="chart-summary"><div><strong>247.2 kW</strong><span>当前总功率</span></div><div><strong>286.4 kW</strong><span>今日峰值</span></div></div>
+              <svg class="chart" viewBox="0 0 760 220" role="img" aria-label="冷站总功率趋势示例">
+                <line class="chart-grid" x1="44" y1="35" x2="740" y2="35"/><line class="chart-grid" x1="44" y1="90" x2="740" y2="90"/><line class="chart-grid" x1="44" y1="145" x2="740" y2="145"/><line class="chart-grid" x1="44" y1="198" x2="740" y2="198"/>
+                <line class="chart-threshold" x1="44" y1="62" x2="740" y2="62"/>
+                <path class="chart-area" d="M44 170 C120 160 160 130 226 138 S338 82 408 96 S510 118 572 84 S668 102 740 70 L740 198 L44 198 Z"/>
+                <path class="chart-line" d="M44 170 C120 160 160 130 226 138 S338 82 408 96 S510 118 572 84 S668 102 740 70"/>
+                <text class="chart-axis" x="44" y="216">00:00</text><text class="chart-axis" x="378" y="216">12:00</text><text class="chart-axis" x="706" y="216">24:00</text>
+              </svg>
+            </div>
+          </article>
+
+          <article class="card">
+            <header class="card-head"><h2>设备与点位</h2><span>业务树紧凑，技术身份下沉</span></header>
+            <div class="asset-workspace">
+              <div class="asset-tree" role="navigation" aria-label="资产导航示例">
+                <div class="tree-row"><span class="chevron">⌄</span><span>▦</span>中央机房</div>
+                <div class="tree-row level-1 is-selected"><span class="chevron">⌄</span><span>▧</span>冷水机组</div>
+                <div class="tree-row level-2"><span class="chevron">›</span><span>◉</span>冷冻水出水温度</div>
+                <div class="tree-row level-2"><span class="chevron">›</span><span>◉</span>主机功率</div>
+                <div class="tree-row level-1"><span class="chevron">›</span><span>▧</span>冷却塔</div>
+                <div class="tree-row level-1"><span class="chevron">›</span><span>▧</span>冷冻水泵</div>
+              </div>
+              <div class="ledger">
+                <table>
+                  <thead><tr><th>点位</th><th>所属设备</th><th>当前值</th><th>状态</th></tr></thead>
+                  <tbody>
+                    <tr><td><div class="point-name">冷冻水出水温度</div><div class="point-key">chiller.leaving_chilled_water_temperature</div></td><td>CHILLER-01</td><td>7.99 °C</td><td><span class="status">新鲜 · 良好</span></td></tr>
+                    <tr><td><div class="point-name">主机功率</div><div class="point-key">chiller.power</div></td><td>CHILLER-01</td><td>155.72 kW</td><td><span class="status">新鲜 · 良好</span></td></tr>
+                    <tr><td><div class="point-name">主机 COP</div><div class="point-key">chiller.cop</div></td><td>CHILLER-01</td><td>5.55</td><td><span class="status">新鲜 · 良好</span></td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <aside>
+          <article class="card">
+            <header class="card-head"><h2>行动队列</h2><span>2 需关注</span></header>
+            <div class="card-body">
+              <div class="queue-item"><span class="risk-line error"></span><div><div class="queue-title">冷却塔出水温度偏高</div><div class="queue-meta">CT-01 · 持续 18 分钟</div></div><div class="queue-value">+2.4 °C</div></div>
+              <div class="queue-item"><span class="risk-line"></span><div><div class="queue-title">冷冻水泵维护到期</div><div class="queue-meta">CHWP-01 · 本周处理</div></div><div class="queue-value">WO-184</div></div>
+              <div class="queue-item"><span class="risk-line" style="background:var(--info)"></span><div><div class="queue-title">峰时负荷可转移</div><div class="queue-meta">预计降低日电费</div></div><div class="queue-value">¥ 428</div></div>
+            </div>
+          </article>
+
+          <article class="card">
+            <header class="card-head"><h2>语义色职责</h2><span>一色一义</span></header>
+            <div class="card-body swatches">
+              <div class="swatch"><div class="swatch-color" style="--swatch:var(--brand)"></div><strong>品牌</strong><br><code>Primary</code></div>
+              <div class="swatch"><div class="swatch-color" style="--swatch:var(--success)"></div><strong>正常</strong><br><code>Success</code></div>
+              <div class="swatch"><div class="swatch-color" style="--swatch:var(--warning)"></div><strong>风险</strong><br><code>Warning</code></div>
+              <div class="swatch"><div class="swatch-color" style="--swatch:var(--error)"></div><strong>严重</strong><br><code>Error</code></div>
+            </div>
+          </article>
+        </aside>
+      </div>
+
+      <p class="preview-note">静态预览仅用于验证设计语言。权威规则见仓库根目录 <code>DESIGN.md</code>；Linear 资料为 reference-only。</p>
+    </main>
+  </div>
+</body>
+</html>

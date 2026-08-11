@@ -25,13 +25,12 @@ import (
 )
 
 const (
-	publicCommandsPath           = "/api/v1/commands"
-	internalCommandsPath         = "/internal/v1/commands"
-	commandDecisionPath          = "/internal/v1/command/decision"
-	commandCapabilityRevision    = "capability:set-temperature-setpoint:v1"
+	publicCommandsPath          = "/api/v1/commands"
+	internalCommandsPath        = "/internal/v1/commands"
+	commandDecisionPath         = "/internal/v1/command/decision"
 	defaultCommandTemperatureKey = "zone.temperature"
-	maximumCommandRequestBody    = int64(16 << 10)
-	defaultCommandResponseLimit  = int64(256 << 10)
+	maximumCommandRequestBody   = int64(16 << 10)
+	defaultCommandResponseLimit = int64(256 << 10)
 )
 
 type CommandConfig struct {
@@ -55,23 +54,33 @@ type commandController struct {
 }
 
 type createCommandRequest struct {
-	DeviceID   string                  `json:"deviceId"`
-	Capability commandmodel.Capability `json:"capability"`
-	Parameters struct {
-		SetpointC float64 `json:"setpointC"`
-	} `json:"parameters"`
+	EquipmentID    string                         `json:"equipmentId"`
+	CommandPointID string                         `json:"commandPointId"`
+	Parameters     commandmodel.CommandParameters `json:"parameters"`
 }
 
 type preparedCommand struct {
+	tenantID       string
 	organizationID string
 	siteID         string
 	deviceID       string
+	pointID        string
 	principalID    string
 	idempotencyKey string
-	capability     commandmodel.Capability
-	setpointC      float64
-	currentState   commandCurrentState
+	capability           commandmodel.Capability
+	parameters           commandmodel.CommandParameters
+	verificationPointKey string
+	currentState         commandCurrentState
 	grant          string
+}
+
+type equipmentCommandTarget struct {
+	equipment     platformapi.Equipment
+	device        platformapi.Device
+	point         platformapi.TelemetryPoint
+	feedbackPoint platformapi.TelemetryPoint
+	capability    commandmodel.Capability
+	profile       commandmodel.CapabilityProfile
 }
 
 type commandCurrentState struct {
@@ -80,19 +89,22 @@ type commandCurrentState struct {
 	Readiness              string    `json:"readiness"`
 	Quality                string    `json:"quality"`
 	BusinessRevision       uint64    `json:"businessRevision"`
-	CurrentTemperatureC    float64   `json:"currentTemperatureC"`
+	CurrentValue           *float64  `json:"currentValue,omitempty"`
 	ObservedAt             time.Time `json:"observedAt"`
 }
 
 type internalCommandCreate struct {
-	OrganizationID string                  `json:"organizationId"`
-	SiteID         string                  `json:"siteId"`
-	DeviceID       string                  `json:"deviceId"`
-	PrincipalID    string                  `json:"principalId"`
-	IdempotencyKey string                  `json:"idempotencyKey"`
-	Capability     commandmodel.Capability `json:"capability"`
-	SetpointC      float64                 `json:"setpointC"`
-	CurrentState   commandCurrentState     `json:"currentState"`
+	TenantID       string                         `json:"tenantId"`
+	OrganizationID string                         `json:"organizationId"`
+	SiteID         string                         `json:"siteId"`
+	DeviceID       string                         `json:"deviceId"`
+	PointID        string                         `json:"pointId"`
+	PrincipalID    string                         `json:"principalId"`
+	IdempotencyKey string                         `json:"idempotencyKey"`
+	Capability           commandmodel.Capability        `json:"capability"`
+	Parameters           commandmodel.CommandParameters `json:"parameters"`
+	VerificationPointKey string                         `json:"verificationPointKey"`
+	CurrentState         commandCurrentState            `json:"currentState"`
 }
 
 type internalCommandApproval struct {
@@ -118,20 +130,25 @@ type commandView struct {
 	OrganizationID        string                      `json:"organizationId"`
 	SiteID                string                      `json:"siteId"`
 	DeviceID              string                      `json:"deviceId"`
+	PointID               string                      `json:"pointId"`
 	Capability            commandmodel.Capability     `json:"capability"`
 	CapabilityRevision    string                      `json:"capabilityRevision"`
 	Status                commandmodel.IntentStatus   `json:"status"`
 	Risk                  commandmodel.RiskLevel      `json:"risk"`
 	ApprovalPolicy        commandmodel.ApprovalPolicy `json:"approvalPolicy"`
-	ApprovalCount         int                         `json:"approvalCount"`
-	RequiredApprovalCount int                         `json:"requiredApprovalCount"`
-	SetpointC             float64                     `json:"setpointC"`
-	DeviceCommandSequence uint64                      `json:"deviceCommandSequence"`
+	ApprovalCount         int                          `json:"approvalCount"`
+	RequiredApprovalCount int                          `json:"requiredApprovalCount"`
+	Parameters            commandmodel.CommandParameters `json:"parameters"`
+	DeviceCommandSequence uint64                       `json:"deviceCommandSequence"`
 	Version               uint64                      `json:"version"`
 	SnapshotRevision      uint64                      `json:"snapshotRevision"`
 	Transitions           []commandTransitionView     `json:"transitions"`
 	CreatedAt             time.Time                   `json:"createdAt"`
 	UpdatedAt             time.Time                   `json:"updatedAt"`
+}
+
+func commandCapabilityProfile(capability commandmodel.Capability) (commandmodel.CapabilityProfile, bool) {
+	return commandmodel.CapabilityProfileFor(capability)
 }
 
 type commandRouteKind int
@@ -245,31 +262,35 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 	var input createCommandRequest
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&input) != nil || ensureCommandJSONEOF(decoder) != nil || !isLowerUUIDv7(input.DeviceID) ||
-		input.Capability != commandmodel.CapabilitySetTemperatureSetpoint || input.Parameters.SetpointC < 16 || input.Parameters.SetpointC > 30 {
+	if decoder.Decode(&input) != nil || ensureCommandJSONEOF(decoder) != nil ||
+		!isLowerUUIDv7(input.EquipmentID) || !isLowerUUIDv7(input.CommandPointID) {
 		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "The Command request is invalid.", false, nil)
 		return
 	}
-
-	device, failure := h.resolveCommandDevice(request, session, input.DeviceID)
+	target, failure := h.resolveEquipmentCommandTarget(request, session, input.EquipmentID, input.CommandPointID)
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
 		return
 	}
-	currentState, failure := h.readCommandCurrentState(request, session, device)
+	if !validCommandParameters(target.profile, target.point.SourceMetadata, input.Parameters) {
+		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "The Equipment capability parameters are invalid.", false, nil)
+		return
+	}
+	currentState, failure := h.readCommandCurrentState(request, session, target.device, target.feedbackPoint.PointKey)
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
 		return
 	}
-	principalID, grant, failure := h.authorizeCommand(request, session, device, commandmodel.AuthorizationCommandSubmit)
+	principalID, grant, failure := h.authorizeCommand(request, session, target.device, target.capability, commandmodel.AuthorizationCommandSubmit)
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
 		return
 	}
 	prepared := preparedCommand{
-		organizationID: session.ActingOrganizationID, siteID: device.SiteID, deviceID: device.ID,
-		principalID: principalID, idempotencyKey: idempotencyKey, capability: input.Capability,
-		setpointC: input.Parameters.SetpointC, currentState: currentState, grant: grant,
+		tenantID: target.device.TenantID, organizationID: session.ActingOrganizationID, siteID: target.device.SiteID, deviceID: target.device.ID, pointID: target.point.ID,
+		principalID: principalID, idempotencyKey: idempotencyKey, capability: target.capability,
+		parameters: cloneCommandParameters(input.Parameters), verificationPointKey: target.feedbackPoint.PointKey,
+		currentState: currentState, grant: grant,
 	}
 	view, status, location, failure := h.executeCommandCreate(request.Context(), prepared)
 	if failure != nil {
@@ -345,7 +366,7 @@ func (h *handler) approveCommand(writer http.ResponseWriter, request *http.Reque
 		writeProblem(writer, request, http.StatusForbidden, "COMMAND_CAPABILITY_DENIED", "Command approval denied", "The authenticated principal has no trusted approval role.", false, nil)
 		return
 	}
-	principalID, grant, failure := h.authorizeCommand(request, session, device, commandmodel.AuthorizationCommandApprove)
+	principalID, grant, failure := h.authorizeCommand(request, session, device, current.Capability, commandmodel.AuthorizationCommandApprove)
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
 		return
@@ -431,14 +452,183 @@ func (h *handler) resolveCommandDevice(request *http.Request, session bffSession
 	var device platformapi.Device
 	decoder := json.NewDecoder(bytes.NewReader(result.body))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&device) != nil || ensureCommandJSONEOF(decoder) != nil || device.ID != deviceID || !isLowerUUIDv7(device.SiteID) || !isLowerUUIDv7(device.OwningOrganizationID) || !strings.EqualFold(device.Status, "ACTIVE") {
+	if decoder.Decode(&device) != nil || ensureCommandJSONEOF(decoder) != nil || device.ID != deviceID || !isLowerUUIDv7(device.TenantID) || !isLowerUUIDv7(device.SiteID) || !isLowerUUIDv7(device.OwningOrganizationID) || !strings.EqualFold(device.Status, "ACTIVE") {
 		failure := commandUnavailable("Registry returned an invalid Command Device projection.")
 		return platformapi.Device{}, &failure
 	}
 	return device, nil
 }
 
+func (h *handler) resolveEquipmentCommandTarget(request *http.Request, session bffSession, equipmentID, commandPointID string) (equipmentCommandTarget, *commandFailure) {
+	equipmentAuthorization, authFailure := h.authorizeRegistry(request.Context(), session, registryauth.ActionEquipmentRead)
+	if authFailure != nil {
+		failure := commandFailure{status: authFailure.status, code: authFailure.code, title: authFailure.title, detail: authFailure.detail, retryable: authFailure.retryable}
+		return equipmentCommandTarget{}, &failure
+	}
+	equipmentPath := strings.Replace(platformapi.GetEquipmentPathTemplate, "{equipmentId}", url.PathEscape(equipmentID), 1)
+	equipmentRoute, _, matches := matchPublicRegistryRoute(equipmentPath)
+	if !matches {
+		failure := commandNotFound()
+		return equipmentCommandTarget{}, &failure
+	}
+	equipmentDecision, decisionFailure := h.commandRegistryDecisionForPath(request, session, equipmentRoute, equipmentPath, "Equipment lookup")
+	if decisionFailure != nil {
+		return equipmentCommandTarget{}, decisionFailure
+	}
+	equipmentResult := h.executeCoreRegistry(request.Context(), equipmentRoute, "", equipmentAuthorization.coreGrant, equipmentDecision)
+	if equipmentResult.status != http.StatusOK {
+		if equipmentResult.status == http.StatusNotFound || equipmentResult.status == http.StatusForbidden {
+			failure := commandNotFound()
+			return equipmentCommandTarget{}, &failure
+		}
+		failure := commandUnavailable("Registry could not resolve the Equipment for this Command.")
+		return equipmentCommandTarget{}, &failure
+	}
+	var equipment platformapi.Equipment
+	decoder := json.NewDecoder(bytes.NewReader(equipmentResult.body))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&equipment) != nil || ensureCommandJSONEOF(decoder) != nil || equipment.ID != equipmentID ||
+		!isLowerUUIDv7(equipment.TenantID) || !isLowerUUIDv7(equipment.SiteID) || equipment.OwningOrganizationID != session.ActingOrganizationID || !strings.EqualFold(equipment.Status, "ACTIVE") {
+		failure := commandUnavailable("Registry returned an invalid Equipment projection for Command execution.")
+		return equipmentCommandTarget{}, &failure
+	}
+
+	assetAuthorization, authFailure := h.authorizeRegistry(request.Context(), session, registryauth.ActionAssetModelRead)
+	if authFailure != nil {
+		failure := commandFailure{status: authFailure.status, code: authFailure.code, title: authFailure.title, detail: authFailure.detail, retryable: authFailure.retryable}
+		return equipmentCommandTarget{}, &failure
+	}
+	assetPath := strings.Replace(platformapi.GetSiteAssetModelPathTemplate, "{siteId}", url.PathEscape(equipment.SiteID), 1)
+	assetRoute, _, matches := matchPublicRegistryRoute(assetPath)
+	if !matches {
+		failure := commandUnavailable("Registry Asset Model route is unavailable for Command execution.")
+		return equipmentCommandTarget{}, &failure
+	}
+	assetDecision, decisionFailure := h.commandRegistryDecisionForPath(request, session, assetRoute, assetPath, "Asset Model lookup")
+	if decisionFailure != nil {
+		return equipmentCommandTarget{}, decisionFailure
+	}
+	assetResult := h.executeCoreRegistry(request.Context(), assetRoute, "", assetAuthorization.coreGrant, assetDecision)
+	if assetResult.status != http.StatusOK {
+		failure := commandUnavailable("Registry could not resolve the authoritative Asset Model for this Command.")
+		return equipmentCommandTarget{}, &failure
+	}
+	var assetModel platformapi.SiteAssetModel
+	decoder = json.NewDecoder(bytes.NewReader(assetResult.body))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&assetModel) != nil || ensureCommandJSONEOF(decoder) != nil || validateSiteAssetModel(assetModel, equipment.SiteID) != nil || assetModel.TenantID != equipment.TenantID {
+		failure := commandUnavailable("Registry returned an invalid Asset Model for Command execution.")
+		return equipmentCommandTarget{}, &failure
+	}
+
+	var point *platformapi.TelemetryPoint
+	for index := range assetModel.TelemetryPoints {
+		candidate := &assetModel.TelemetryPoints[index]
+		if candidate.ID == commandPointID {
+			point = candidate
+			break
+		}
+	}
+	if point == nil || point.SiteID != equipment.SiteID || point.OwningOrganizationID != session.ActingOrganizationID ||
+		!strings.EqualFold(point.Status, "ACTIVE") || point.PointKind != "COMMAND" || !point.Writable {
+		failure := commandNotFound()
+		return equipmentCommandTarget{}, &failure
+	}
+	now := time.Now().UTC()
+	controlsEquipment := false
+	for _, relationship := range assetModel.Relationships {
+		if relationship.FromType == "POINT" && relationship.FromID == point.ID && relationship.ToType == "EQUIPMENT" &&
+			relationship.ToID == equipment.ID && relationship.Role == "CONTROLS" && commandRelationshipCurrent(relationship, now) {
+			controlsEquipment = true
+			break
+		}
+	}
+	if !controlsEquipment {
+		failure := commandNotFound()
+		return equipmentCommandTarget{}, &failure
+	}
+
+	capabilityName, _ := point.SourceMetadata["capability"].(string)
+	capability := commandmodel.Capability(strings.TrimSpace(capabilityName))
+	profile, supported := commandCapabilityProfile(capability)
+	declaredRevision, _ := point.SourceMetadata["capabilityRevision"].(string)
+	feedbackPointKey, _ := point.SourceMetadata["feedbackPointKey"].(string)
+	if !supported || strings.TrimSpace(declaredRevision) != profile.Revision || strings.TrimSpace(feedbackPointKey) == "" {
+		failure := commandUnavailable("The COMMAND Point does not declare a supported authoritative capability contract.")
+		return equipmentCommandTarget{}, &failure
+	}
+
+	var device *platformapi.Device
+	for index := range assetModel.Devices {
+		candidate := &assetModel.Devices[index]
+		if candidate.ID == point.ReportingDeviceID {
+			device = candidate
+			break
+		}
+	}
+	if device == nil || device.SiteID != equipment.SiteID || device.OwningOrganizationID != session.ActingOrganizationID || !strings.EqualFold(device.Status, "ACTIVE") {
+		failure := commandUnavailable("The COMMAND Point has no active reporting Device Endpoint.")
+		return equipmentCommandTarget{}, &failure
+	}
+
+	var feedbackPoint *platformapi.TelemetryPoint
+	for index := range assetModel.TelemetryPoints {
+		candidate := &assetModel.TelemetryPoints[index]
+		if candidate.ReportingDeviceID == device.ID && candidate.PointKey == feedbackPointKey && strings.EqualFold(candidate.Status, "ACTIVE") {
+			feedbackPoint = candidate
+			break
+		}
+	}
+	if feedbackPoint == nil || (feedbackPoint.PointKind != "FEEDBACK" && feedbackPoint.PointKind != "STATE") {
+		failure := commandUnavailable("The COMMAND Point has no active authoritative feedback Point.")
+		return equipmentCommandTarget{}, &failure
+	}
+	return equipmentCommandTarget{
+		equipment: equipment, device: *device, point: *point, feedbackPoint: *feedbackPoint,
+		capability: capability, profile: profile,
+	}, nil
+}
+
+func commandRelationshipCurrent(relationship platformapi.AssetRelationship, now time.Time) bool {
+	if !strings.EqualFold(relationship.Status, "ACTIVE") {
+		return false
+	}
+	validFrom, err := time.Parse(time.RFC3339Nano, relationship.ValidFrom)
+	if err != nil || validFrom.After(now) {
+		return false
+	}
+	if relationship.ValidTo == nil {
+		return true
+	}
+	validTo, err := time.Parse(time.RFC3339Nano, *relationship.ValidTo)
+	return err == nil && validTo.After(now)
+}
+
+func validCommandParameters(profile commandmodel.CapabilityProfile, metadata map[string]any, parameters commandmodel.CommandParameters) bool {
+	if profile.ParameterKey == "" {
+		return len(parameters) == 0
+	}
+	declaredKey, _ := metadata["parameterKey"].(string)
+	if declaredKey != profile.ParameterKey {
+		return false
+	}
+	value, ok := parameters[profile.ParameterKey]
+	return ok && len(parameters) == 1 && value >= profile.Minimum && value <= profile.Maximum
+}
+
+func cloneCommandParameters(parameters commandmodel.CommandParameters) commandmodel.CommandParameters {
+	cloned := make(commandmodel.CommandParameters, len(parameters))
+	for key, value := range parameters {
+		cloned[key] = value
+	}
+	return cloned
+}
+
 func (h *handler) commandRegistryDecision(request *http.Request, session bffSession, route publicRegistryRoute, deviceID string) (ownershipregistry.Decision, *commandFailure) {
+	return h.commandRegistryDecisionForPath(request, session, route, "/api/v1/devices/"+url.PathEscape(deviceID), "Device lookup")
+}
+
+func (h *handler) commandRegistryDecisionForPath(request *http.Request, session bffSession, route publicRegistryRoute, publicPath, purpose string) (ownershipregistry.Decision, *commandFailure) {
 	outer := routeDecisionFromContext(request.Context())
 	decision := ownershipregistry.Decision{
 		RouteKey:          http.MethodGet + " " + route.template,
@@ -452,17 +642,22 @@ func (h *handler) commandRegistryDecision(request *http.Request, session bffSess
 	if h.routeManager == nil {
 		return decision, nil
 	}
-	resolved, err := h.routeManager.Current().Resolve(http.MethodGet, "/api/v1/devices/"+url.PathEscape(deviceID), session.ActingOrganizationID)
+	resolved, err := h.routeManager.Current().Resolve(http.MethodGet, publicPath, session.ActingOrganizationID)
 	if err != nil || resolved.DeclaredOwner != ownershipregistry.OwnerCore || resolved.SelectedOwner != ownershipregistry.OwnerCore || resolved.ReadFallbackOwner != "" || resolved.ShadowOwner != "" {
-		failure := commandUnavailable("Registry route ownership is unavailable for the Command Device lookup.")
+		failure := commandUnavailable("Registry route ownership is unavailable for the Command " + purpose + ".")
 		return ownershipregistry.Decision{}, &failure
 	}
 	return resolved, nil
 }
 
-func (h *handler) readCommandCurrentState(request *http.Request, session bffSession, device platformapi.Device) (commandCurrentState, *commandFailure) {
+func (h *handler) readCommandCurrentState(request *http.Request, session bffSession, device platformapi.Device, feedbackKey string) (commandCurrentState, *commandFailure) {
+	feedbackKey = strings.TrimSpace(feedbackKey)
+	if feedbackKey == "" {
+		failure := commandUnsafe("The requested Equipment capability has no feedback Point.")
+		return commandCurrentState{}, &failure
+	}
 	caller := telemetryCaller{principal: session.Principal, actingOrganizationID: session.ActingOrganizationID, contextID: session.ID, expiresAt: session.ExpiresAt}
-	target := telemetryauth.Target{DeviceID: device.ID, Keys: []string{h.command.temperatureKey}}
+	target := telemetryauth.Target{DeviceID: device.ID, Keys: []string{feedbackKey}}
 	authorization, authFailure := h.authorizeTelemetry(request.Context(), request, caller, telemetryauth.ActionSnapshotRead, []telemetryauth.Target{target})
 	if authFailure != nil {
 		if authFailure.status == http.StatusNotFound || authFailure.status == http.StatusForbidden {
@@ -473,7 +668,7 @@ func (h *handler) readCommandCurrentState(request *http.Request, session bffSess
 		return commandCurrentState{}, &failure
 	}
 	response, telemetryFailure := h.executeTelemetryRuntime(request.Context(), request, http.MethodGet,
-		internalTelemetrySinglePrefix+url.PathEscape(device.ID)+"/observation-snapshot", []string{h.command.temperatureKey}, nil, authorization.grant)
+		internalTelemetrySinglePrefix+url.PathEscape(device.ID)+"/observation-snapshot", []string{feedbackKey}, nil, authorization.grant)
 	if telemetryFailure != nil {
 		failure := commandUnavailable("The current Device state is unavailable for control.")
 		return commandCurrentState{}, &failure
@@ -485,10 +680,14 @@ func (h *handler) readCommandCurrentState(request *http.Request, session bffSess
 		return commandCurrentState{}, &failure
 	}
 	present := snapshot.Values[0].Present
-	var temperature float64
-	if json.Unmarshal(present.Value, &temperature) != nil || present.ValueType != "NUMBER" {
-		failure := commandUnsafe("The required temperature value is not a usable numeric observation.")
-		return commandCurrentState{}, &failure
+	var currentValue *float64
+	if present.ValueType == "NUMBER" {
+		var numeric float64
+		if json.Unmarshal(present.Value, &numeric) != nil {
+			failure := commandUnsafe("The required feedback value is not a usable numeric observation.")
+			return commandCurrentState{}, &failure
+		}
+		currentValue = &numeric
 	}
 	observedAt, err := time.Parse(time.RFC3339Nano, string(present.SampledAt))
 	if err != nil {
@@ -502,7 +701,7 @@ func (h *handler) readCommandCurrentState(request *http.Request, session bffSess
 	state := commandCurrentState{
 		EvaluationAvailability: string(snapshot.EvaluationAvailability), Presence: presence,
 		Readiness: string(snapshot.TelemetryReadiness), Quality: string(present.Quality),
-		BusinessRevision: uint64(snapshot.BusinessRevision), CurrentTemperatureC: temperature, ObservedAt: observedAt.UTC(),
+		BusinessRevision: uint64(snapshot.BusinessRevision), CurrentValue: currentValue, ObservedAt: observedAt.UTC(),
 	}
 	if state.EvaluationAvailability != "AVAILABLE" || state.Presence != "ONLINE" || state.Readiness != "CURRENT" || present.Freshness != "FRESH" || state.Quality != "GOOD" {
 		failure := commandUnsafe("The current Device state does not satisfy the control preconditions.")
@@ -511,7 +710,7 @@ func (h *handler) readCommandCurrentState(request *http.Request, session bffSess
 	return state, nil
 }
 
-func (h *handler) authorizeCommand(request *http.Request, session bffSession, device platformapi.Device, purpose commandmodel.AuthorizationPurpose) (string, string, *commandFailure) {
+func (h *handler) authorizeCommand(request *http.Request, session bffSession, device platformapi.Device, capability commandmodel.Capability, purpose commandmodel.AuthorizationPurpose) (string, string, *commandFailure) {
 	if h.identity == nil || h.command == nil {
 		failure := commandUnavailable("Command authorization is not configured.")
 		return "", "", &failure
@@ -534,9 +733,14 @@ func (h *handler) authorizeCommand(request *http.Request, session bffSession, de
 		failure := commandUnavailable("The Command authorization request could not be signed.")
 		return "", "", &failure
 	}
+	profile, supported := commandCapabilityProfile(capability)
+	if !supported {
+		failure := commandNotFound()
+		return "", "", &failure
+	}
 	input := commandauth.DecisionRequest{
 		ActingOrganizationID: session.ActingOrganizationID, SiteID: device.SiteID, DeviceID: device.ID,
-		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: commandCapabilityRevision, Purpose: purpose,
+		Capability: capability, CapabilityRevision: profile.Revision, Purpose: purpose,
 	}
 	body, _ := json.Marshal(input)
 	upstream, err := http.NewRequestWithContext(request.Context(), http.MethodPost, strings.TrimRight(h.identity.config.IAMURL, "/")+commandDecisionPath, bytes.NewReader(body))
@@ -575,18 +779,22 @@ func (h *handler) authorizeCommand(request *http.Request, session bffSession, de
 		failure := commandNotFound()
 		return "", "", &failure
 	}
-	if !h.validateCommandDecision(decision, session, device, purpose, now) {
+	if !h.validateCommandDecision(decision, session, device, capability, purpose, now) {
 		failure := commandUnavailable("IAM returned a Command decision outside the authenticated boundary.")
 		return "", "", &failure
 	}
 	return decision.Decision.PrincipalID, decision.DelegationGrant, nil
 }
 
-func (h *handler) validateCommandDecision(response commandauth.DecisionResponse, session bffSession, device platformapi.Device, purpose commandmodel.AuthorizationPurpose, now time.Time) bool {
+func (h *handler) validateCommandDecision(response commandauth.DecisionResponse, session bffSession, device platformapi.Device, capability commandmodel.Capability, purpose commandmodel.AuthorizationPurpose, now time.Time) bool {
 	decision := response.Decision
+	profile, supported := commandCapabilityProfile(capability)
+	if !supported {
+		return false
+	}
 	if decision.PrincipalID == "" || decision.Subject != session.Principal.Subject || decision.SubjectIssuer != session.Principal.Issuer ||
 		decision.ActingOrganizationID != session.ActingOrganizationID || decision.SiteID != device.SiteID || decision.DeviceID != device.ID ||
-		decision.Capability != commandmodel.CapabilitySetTemperatureSetpoint || decision.CapabilityRevision != commandCapabilityRevision ||
+		decision.Capability != capability || decision.CapabilityRevision != profile.Revision ||
 		decision.Purpose != purpose || decision.MaximumRisk == "" || decision.PolicyRevision == "" || !commandauth.IsAllowReason(decision.ReasonCode) {
 		return false
 	}
@@ -631,9 +839,10 @@ func (h *handler) executeCommandCreate(ctx context.Context, prepared preparedCom
 		return commandView{}, 0, "", &failure
 	}
 	body, _ := json.Marshal(internalCommandCreate{
-		OrganizationID: prepared.organizationID, SiteID: prepared.siteID, DeviceID: prepared.deviceID,
+		TenantID: prepared.tenantID, OrganizationID: prepared.organizationID, SiteID: prepared.siteID, DeviceID: prepared.deviceID, PointID: prepared.pointID,
 		PrincipalID: prepared.principalID, IdempotencyKey: prepared.idempotencyKey,
-		Capability: prepared.capability, SetpointC: prepared.setpointC, CurrentState: prepared.currentState,
+		Capability: prepared.capability, Parameters: cloneCommandParameters(prepared.parameters), VerificationPointKey: prepared.verificationPointKey,
+		CurrentState: prepared.currentState,
 	})
 	requestContext, cancel := context.WithTimeout(ctx, h.command.timeout)
 	defer cancel()
@@ -659,7 +868,7 @@ func (h *handler) executeCommandCreate(ctx context.Context, prepared preparedCom
 	}
 	view, ok := h.decodeCommandView(response.Body)
 	if !ok || view.OrganizationID != prepared.organizationID || view.SiteID != prepared.siteID ||
-		view.DeviceID != prepared.deviceID || view.Capability != prepared.capability {
+		view.DeviceID != prepared.deviceID || view.PointID != prepared.pointID || view.Capability != prepared.capability {
 		failure := commandUnavailable("Command Service returned an invalid accepted Command.")
 		return commandView{}, 0, "", &failure
 	}
@@ -701,7 +910,7 @@ func (h *handler) executeCommandApproval(ctx context.Context, commandID string, 
 	}
 	view, ok := h.decodeCommandView(response.Body)
 	if !ok || view.CommandID != commandID || view.OrganizationID != input.OrganizationID || view.SiteID != input.SiteID ||
-		view.DeviceID != input.DeviceID || view.Capability != commandmodel.CapabilitySetTemperatureSetpoint {
+		view.DeviceID != input.DeviceID {
 		failure := commandUnavailable("Command Service returned an invalid approved Command.")
 		return commandView{}, &failure
 	}
@@ -770,12 +979,15 @@ func (h *handler) decodeCommandView(reader io.Reader) (commandView, bool) {
 	var view commandView
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&view) != nil || ensureCommandJSONEOF(decoder) != nil || view.SchemaVersion != 1 ||
+	if decoder.Decode(&view) != nil || ensureCommandJSONEOF(decoder) != nil {
+		return commandView{}, false
+	}
+	profile, supported := commandCapabilityProfile(view.Capability)
+	if !supported || view.SchemaVersion != 1 ||
 		!isLowerUUIDv7(view.CommandID) || !isLowerUUIDv7(view.OrganizationID) || !isLowerUUIDv7(view.SiteID) ||
-		!isLowerUUIDv7(view.DeviceID) || view.Capability != commandmodel.CapabilitySetTemperatureSetpoint ||
-		view.CapabilityRevision != commandCapabilityRevision || !validCommandIntentStatus(view.Status) || !validCommandRisk(view.Risk) ||
+		!isLowerUUIDv7(view.DeviceID) || !isLowerUUIDv7(view.PointID) || view.CapabilityRevision != profile.Revision || !validCommandIntentStatus(view.Status) || !validCommandRisk(view.Risk) ||
 		!validCommandApprovalPolicy(view.ApprovalPolicy, view.ApprovalCount, view.RequiredApprovalCount) ||
-		view.SetpointC < 16 || view.SetpointC > 30 || view.DeviceCommandSequence == 0 || view.Version == 0 || view.SnapshotRevision == 0 ||
+		!validCommandParameters(profile, map[string]any{"parameterKey": profile.ParameterKey}, view.Parameters) || view.DeviceCommandSequence == 0 || view.Version == 0 || view.SnapshotRevision == 0 ||
 		view.CreatedAt.IsZero() || view.UpdatedAt.IsZero() || view.UpdatedAt.Before(view.CreatedAt) || !validCommandTimeline(view) {
 		return commandView{}, false
 	}

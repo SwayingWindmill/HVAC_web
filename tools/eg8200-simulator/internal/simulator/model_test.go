@@ -17,6 +17,7 @@ func testPlantConfig() PlantConfig {
 		CoolingTower:     CoolingTowerConfig{ID: "CT-01", RatedFanPowerKW: 18.5, InitialFanSpeedPct: 80, InitiallyRunning: true},
 		PowerMeterID:     "METER-HVAC-TOTAL",
 		BTUMeterID:       "BTU-METER-01",
+		WeatherStationID: "WEATHER-STATION-01",
 	}
 }
 
@@ -38,6 +39,20 @@ func TestPlantTickProducesCentralPlantEnergyBalance(t *testing.T) {
 	}
 	if btuMeter["instantCoolingCapacityKw"] != chiller["coolingCapacityKw"] {
 		t.Fatalf("BTU meter and chiller capacity diverged: %#v %#v", btuMeter, chiller)
+	}
+}
+
+func TestPlantContinuesFromConfiguredCumulativeEnergy(t *testing.T) {
+	config := testPlantConfig()
+	config.InitialEnergyKWh = 1250000
+	plant := NewPlant(config, time.Date(2026, 8, 5, 6, 0, 0, 0, time.UTC))
+	before := plant.Snapshot().Devices[config.PowerMeterID]["energyKwh"].(float64)
+	if before != config.InitialEnergyKWh {
+		t.Fatalf("initial cumulative energy mismatch: got %.6f want %.6f", before, config.InitialEnergyKWh)
+	}
+	after := plant.Tick(time.Hour).Devices[config.PowerMeterID]["energyKwh"].(float64)
+	if after <= before {
+		t.Fatalf("cumulative energy did not continue from configured value: before %.6f after %.6f", before, after)
 	}
 }
 

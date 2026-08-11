@@ -1,4 +1,9 @@
 BEGIN;
+SET LOCAL ROLE s5_work_order_migrator;
+
+INSERT INTO work_order_runtime.organization_tenant_scope (organization_id, tenant_id, created_at, updated_at) VALUES
+('01920000-0000-7000-8000-000000000001', '0191f000-0000-7000-8000-000000000001', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'),
+('01920000-0000-7000-8000-000000000002', '0191f000-0000-7000-8000-000000000002', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z');
 
 INSERT INTO work_order_runtime.work_order_current (
   work_order_id, organization_id, site_id, title, description, priority, status,

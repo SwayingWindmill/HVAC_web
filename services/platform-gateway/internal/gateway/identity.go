@@ -25,26 +25,27 @@ import (
 const sessionCookieName = "__Host-hvac_session"
 
 type IdentityConfig struct {
-	OIDCIssuer              string
-	OIDCClientID            string
-	OIDCRedirectURI         string
-	PublicOrigin            string
-	IAMURL                  string
-	IAMAudience             string
-	AuditURL                string
-	AuditAudience           string
-	ExecutingWorkloadSPIFFE string
-	PolicyRevision          string
-	OIDCHTTPClient          *http.Client
-	IAMHTTPClient           *http.Client
-	AuditHTTPClient         *http.Client
-	DelegationSigner        crypto.Signer
-	TokenEncryptionKey      []byte
-	SessionStore            sessionstore.Store
-	SessionTTL              time.Duration
-	StateTTL                time.Duration
-	DelegationTTL           time.Duration
-	RevocationObjective     time.Duration
+	OIDCIssuer                  string
+	OIDCClientID                string
+	OIDCRedirectURI             string
+	PublicOrigin                string
+	DefaultActingOrganizationID string
+	IAMURL                      string
+	IAMAudience                 string
+	AuditURL                    string
+	AuditAudience               string
+	ExecutingWorkloadSPIFFE     string
+	PolicyRevision              string
+	OIDCHTTPClient              *http.Client
+	IAMHTTPClient               *http.Client
+	AuditHTTPClient             *http.Client
+	DelegationSigner            crypto.Signer
+	TokenEncryptionKey          []byte
+	SessionStore                sessionstore.Store
+	SessionTTL                  time.Duration
+	StateTTL                    time.Duration
+	DelegationTTL               time.Duration
+	RevocationObjective         time.Duration
 }
 
 type identityController struct {
@@ -74,6 +75,7 @@ type oidcDiscovery struct {
 	AuthorizationEndpoint string `json:"authorization_endpoint"`
 	TokenEndpoint         string `json:"token_endpoint"`
 	JWKSURI               string `json:"jwks_uri"`
+	EndSessionEndpoint    string `json:"end_session_endpoint"`
 }
 
 type oidcTokenResponse struct {
@@ -207,6 +209,10 @@ func (h *handler) CompleteLogin(writer http.ResponseWriter, request *http.Reques
 		writeIdentityFailure(writer, request, identityFailure{503, "IDENTITY_NOT_CONFIGURED", "Identity unavailable", "Identity is not configured for this Gateway.", true})
 		return
 	}
+	if params.Issuer != "" && params.Issuer != strings.TrimRight(h.identity.config.OIDCIssuer, "/") {
+		writeIdentityFailure(writer, request, identityFailure{401, "OIDC_ISSUER_INVALID", "OIDC issuer invalid", "The authorization response issuer is not trusted.", false})
+		return
+	}
 	h.identity.mu.Lock()
 	state, exists := h.identity.states[params.State]
 	if exists {
@@ -227,7 +233,7 @@ func (h *handler) CompleteLogin(writer http.ResponseWriter, request *http.Reques
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
-	if tokens.TokenType != "Bearer" || claims.TokenUse != "id" {
+	if tokens.TokenType != "Bearer" || (claims.TokenUse != "" && claims.TokenUse != "id") {
 		writeIdentityFailure(writer, request, identityFailure{401, "OIDC_TOKEN_TYPE_INVALID", "OIDC token type invalid", "The identity provider returned an unsupported token type.", false})
 		return
 	}
@@ -294,12 +300,18 @@ func (h *handler) Logout(writer http.ResponseWriter, request *http.Request, para
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
+	providerLogoutURL, failure := h.identity.providerLogoutURL(request.Context())
+	if failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
 	revoked, err := h.identity.store.RevokeSession(request.Context(), session.ID, h.identity.mutationContext(request, "SESSION_LOGGED_OUT"))
 	if err != nil {
 		h.identity.writeSessionMutationError(writer, request, err)
 		return
 	}
 	writer.Header().Set("X-Audit-Message-ID", revoked.LastAuditMessageID)
+	writer.Header().Set("Location", providerLogoutURL)
 	http.SetCookie(writer, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0)})
 	writer.WriteHeader(http.StatusNoContent)
 }
@@ -406,6 +418,27 @@ func (controller *identityController) discover(ctx context.Context) (oidcDiscove
 	return discovery, nil
 }
 
+func (controller *identityController) providerLogoutURL(ctx context.Context) (string, *identityFailure) {
+	discovery, failure := controller.discover(ctx)
+	if failure != nil {
+		return "", failure
+	}
+	if discovery.EndSessionEndpoint == "" {
+		failure := identityFailure{503, "OIDC_DISCOVERY_INVALID", "OIDC logout unavailable", "The identity provider discovery document does not publish an end-session endpoint.", true}
+		return "", &failure
+	}
+	postLogoutRedirectURI := strings.TrimRight(controller.config.PublicOrigin, "/") + "/?logged_out=1"
+	logoutURL, err := controller.protocol.SignOutURL(discovery, oidcSignOutRequest{
+		ClientID:              controller.config.OIDCClientID,
+		PostLogoutRedirectURI: postLogoutRedirectURI,
+	})
+	if err != nil {
+		failure := identityFailure{503, "OIDC_DISCOVERY_INVALID", "OIDC logout unavailable", "The Gateway could not construct the identity provider logout request.", true}
+		return "", &failure
+	}
+	return logoutURL, nil
+}
+
 func (controller *identityController) exchangeCode(ctx context.Context, code, verifier string) (oidcTokenResponse, *identityFailure) {
 	discovery, failure := controller.discover(ctx)
 	if failure != nil {
@@ -434,7 +467,7 @@ func (controller *identityController) exchangeCode(ctx context.Context, code, ve
 		failure := identityFailure{401, codeValue, "OIDC login rejected", "The identity provider rejected the authorization code exchange.", false}
 		return oidcTokenResponse{}, &failure
 	}
-	if tokens.IDToken == "" || tokens.AccessToken == "" || tokens.RefreshToken == "" {
+	if tokens.IDToken == "" || tokens.AccessToken == "" {
 		failure := identityFailure{401, "OIDC_TOKEN_RESPONSE_INCOMPLETE", "OIDC token response invalid", "The identity provider token response is incomplete.", false}
 		return oidcTokenResponse{}, &failure
 	}
@@ -457,7 +490,9 @@ func (controller *identityController) validateIDToken(ctx context.Context, token
 		KeyID     string `json:"kid"`
 		Type      string `json:"typ"`
 	}
-	if json.Unmarshal(headerBytes, &header) != nil || header.Algorithm != "RS256" || header.Type != "JWT" || header.KeyID == "" {
+	if json.Unmarshal(headerBytes, &header) != nil ||
+		(header.Algorithm != "RS256" && header.Algorithm != "ES384") ||
+		(header.Type != "" && header.Type != "JWT") || header.KeyID == "" {
 		failure := identityFailure{401, "OIDC_TOKEN_TYPE_INVALID", "OIDC token type invalid", "The ID token header is unsupported.", false}
 		return oidcClaims{}, &failure
 	}
@@ -529,6 +564,9 @@ func (controller *identityController) validateIDToken(ctx context.Context, token
 	if subtle.ConstantTimeCompare([]byte(claims.Nonce), []byte(expectedNonce)) != 1 {
 		failure := identityFailure{401, "OIDC_NONCE_INVALID", "OIDC nonce invalid", "The ID token nonce does not match the login request.", false}
 		return oidcClaims{}, &failure
+	}
+	if claims.ActingOrganizationID == "" {
+		claims.ActingOrganizationID = strings.TrimSpace(controller.config.DefaultActingOrganizationID)
 	}
 	if claims.Subject == "" || claims.ActingOrganizationID == "" {
 		failure := identityFailure{401, "OIDC_CLAIMS_INCOMPLETE", "OIDC claims incomplete", "The ID token identity claims are incomplete.", false}
@@ -662,7 +700,7 @@ func containsRole(roles []string, expected string) bool {
 	return false
 }
 func toPublicUser(value identitycontext.UserPrincipal) platformapi.UserPrincipal {
-	return platformapi.UserPrincipal{Subject: value.Subject, Issuer: value.Issuer, DisplayName: value.DisplayName, Email: value.Email, Roles: append([]string(nil), value.Roles...)}
+	return platformapi.UserPrincipal{Subject: value.Subject, Issuer: value.Issuer, DisplayName: value.DisplayName, Email: value.Email, Roles: append([]string{}, value.Roles...)}
 }
 func toPublicContext(value identitycontext.PrincipalContext) platformapi.PrincipalContext {
 	return platformapi.PrincipalContext{InitiatingPrincipal: toPublicUser(value.InitiatingPrincipal), ExecutingServicePrincipal: platformapi.ServicePrincipal{Service: value.ExecutingServicePrincipal.Service, SPIFFEID: value.ExecutingServicePrincipal.SPIFFEID}, ActingOrganizationID: value.ActingOrganizationID, Audience: value.Audience, PolicyRevision: value.PolicyRevision, DelegationExpiresAt: value.DelegationExpiresAt}

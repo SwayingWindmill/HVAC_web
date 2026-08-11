@@ -1,43 +1,32 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import type { Capability, Site } from '@/api/generated/platformGateway.gen';
 import { FocusHeading } from './FocusHeading';
-import { createIdleRealtimeStatus, realtimeStatusLabel } from './realtime-status';
+import { EnergyAnalytics } from './EnergyAnalytics';
+import { RealRouteLoading } from './RealRouteLoading';
+import { OperationsInvestigationPage } from './OperationsInvestigationPage';
+import { RealAlarms } from './RealAlarms';
+
+import { RealDashboard } from './RealDashboard';
+import { RealWorkOrders } from './RealWorkOrders';
+import {
+  RealAiLanding,
+  RealBigScreenPage,
+  RealCostPage,
+  RealFddPage,
+  RealOptimizePage,
+} from './RealProductPages';
 import { RealShellChrome } from './RealShellChrome';
+import { RealAssetsLoadingSurface } from './assets/RealAssetsLoadingSurface';
+import { RealAssetsWorkspace } from './assets/RealAssetsWorkspace';
 import type { RealNavigationItem } from './route-policy';
 import type { ProtectedScopeDraft, ProtectedScopeRequestToken, ProtectedScopeResource } from './protected-scope';
 import type { RealRuntimeConfig } from './runtime-config';
 import type { ShellFailureView, ShellSnapshot } from './shell-runtime';
 import { siteRoute, type SiteContext, type SiteRoutingDecision } from './site-routing';
 
-const RealDashboard = lazy(async () => {
-  const module = await import('./RealDashboard');
-  return { default: module.RealDashboard };
-});
-
-const RealAssetsWorkspace = lazy(async () => {
-  const module = await import('./assets/RealAssetsWorkspace');
-  return { default: module.RealAssetsWorkspace };
-});
-
-const EnergyAnalytics = lazy(async () => {
-  const module = await import('./EnergyAnalytics');
-  return { default: module.EnergyAnalytics };
-});
-
-const RealCommands = lazy(async () => {
-  const module = await import('./RealCommands');
-  return { default: module.RealCommands };
-});
-
-const RealAlarms = lazy(async () => {
-  const module = await import('./RealAlarms');
-  return { default: module.RealAlarms };
-});
-
-const OperationsInvestigation = lazy(async () => {
-  const module = await import('./OperationsInvestigation');
-  return { default: module.OperationsInvestigation };
-});
+const OPERATIONS_ROUTE_CONTRACT = {
+  label: 'Operations Workspace',
+} as const;
 
 type RoutedSiteDecision = Exclude<SiteRoutingDecision, { state: 'PLATFORM_ROUTE' }>;
 
@@ -96,27 +85,21 @@ function SiteScopeSwitcher({
 
 function SiteDiscoveryCheckingSurface() {
   return (
-    <section className="real-route-surface" data-testid="real-site-discovery-checking" data-route-state="SITE_DISCOVERY_CHECKING">
-      <p className="real-shell-eyebrow">REAL MODE · SITE DISCOVERY</p>
-      <FocusHeading>正在读取授权 Site</FocusHeading>
-      <p>Shell 正在从当前 Acting Organization 的 Registry 边界读取授权 Site。完成前不会挂载 Site 页面。</p>
-      <div className="real-shell-progress" role="status" aria-live="polite">正在验证 Site scope…</div>
-    </section>
+    <RealRouteLoading
+      label="正在加载工作台"
+      testId="real-site-discovery-checking"
+      routeState="SITE_DISCOVERY_CHECKING"
+    />
   );
 }
 
-function SiteScopeActivatingSurface({ context }: { context: SiteContext }) {
+function SiteScopeActivatingSurface() {
   return (
-    <section className="real-route-surface" data-testid="real-site-scope-activating" data-route-state="SITE_SCOPE_ACTIVATING">
-      <p className="real-shell-eyebrow">REAL MODE · SITE SCOPE</p>
-      <FocusHeading>正在激活受保护 Site scope</FocusHeading>
-      <p>URL 与 Registry Site 已验证。Shell 正在建立新的 request generation 和受保护资源所有权，完成前不会渲染 Site 业务表面。</p>
-      <dl className="real-shell-facts">
-        <div><dt>Site</dt><dd>{context.site.displayName}</dd></div>
-        <div><dt>Registry Site ID</dt><dd>{context.site.id}</dd></div>
-      </dl>
-      <div className="real-shell-progress" role="status" aria-live="polite">正在建立 Site lifecycle boundary…</div>
-    </section>
+    <RealRouteLoading
+      label="正在加载工作台"
+      testId="real-site-scope-activating"
+      routeState="SITE_SCOPE_ACTIVATING"
+    />
   );
 }
 
@@ -204,11 +187,11 @@ function GenericForbiddenSurface() {
 
 function RedirectSurface() {
   return (
-    <section className="real-route-surface" data-testid="real-site-redirect" data-route-state="REDIRECT">
-      <p className="real-shell-eyebrow">REAL MODE · SITE REDIRECT</p>
-      <FocusHeading>正在进入唯一授权 Site</FocusHeading>
-      <div className="real-shell-progress" role="status" aria-live="polite">正在建立显式 Site URL…</div>
-    </section>
+    <RealRouteLoading
+      label="正在加载工作台"
+      testId="real-site-redirect"
+      routeState="REDIRECT"
+    />
   );
 }
 
@@ -222,34 +205,6 @@ function SiteRouteNotFoundSurface({ decision }: { decision: Extract<SiteRoutingD
     </section>
   );
 }
-
-const SITE_ROUTE_COPY = {
-  assets: {
-    eyebrow: 'REAL MODE · SITE ASSETS',
-    title: 'Assets',
-    detail: 'Assets 路由已绑定到验证后的 SiteContext。资产数据仍由 Registry、设备与遥测域的权威接口负责。',
-  },
-  energy: {
-    eyebrow: 'REAL MODE · SITE ENERGY',
-    title: 'Energy',
-    detail: 'Energy 路由只消费 Platform Gateway 的 Site 级权威分析接口，并保留水位、修订、质量和缺失数据语义。',
-  },
-  alarms: {
-    eyebrow: 'REAL MODE · SITE ALARMS',
-    title: 'Alarm',
-    detail: 'Alarm 路由只消费 Alarm Service 发布的 durable lifecycle，不从 Telemetry 或 Presence 推导业务告警。',
-  },
-  commands: {
-    eyebrow: 'REAL MODE · SITE COMMANDS',
-    title: 'Commands',
-    detail: 'Commands 路由已绑定到验证后的 SiteContext。命令授权、审批与执行仍由服务器端 Command 域负责。',
-  },
-  bigscreen: {
-    eyebrow: 'REAL MODE · SITE BIGSCREEN',
-    title: 'BigScreen',
-    detail: 'BigScreen 已限定到当前验证 Site；后续只能消费与普通 Site UI 相同的权威 Read Model。',
-  },
-} as const;
 
 function ReadySiteSurface({
   decision,
@@ -272,11 +227,7 @@ function ReadySiteSurface({
         data-site-id={decision.context.site.id}
         data-site-route="dashboard"
       >
-        <Suspense fallback={(
-          <div className="real-shell-progress" role="status" aria-live="polite">
-            正在加载运行总览…
-          </div>
-        )}>
+        <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
           <RealDashboard site={decision.context.site} principal={snapshot.principal!} />
         </Suspense>
       </section>
@@ -285,21 +236,11 @@ function ReadySiteSurface({
 
   if (decision.route === 'assets') {
     return (
-      <Suspense fallback={(
-        <section
-          className="real-route-surface"
-          data-testid="real-site-route-assets"
-          data-route-state="READY"
-          data-business-state="LOADING"
-          data-site-id={decision.context.site.id}
-        >
-          <div className="real-shell-progress" role="status" aria-live="polite">正在加载资产运行工作台…</div>
-        </section>
-      )}>
+      <Suspense fallback={<RealAssetsLoadingSurface siteId={decision.context.site.id} />}>
         <RealAssetsWorkspace
           site={decision.context.site}
           principal={snapshot.principal!}
-          requestedDeviceId={decision.deviceId}
+          requestedEquipmentId={decision.equipmentId}
           protectedGeneration={snapshot.protectedScope!.generation}
           protectedRequestToken={protectedRequestToken}
           registerProtectedResource={registerProtectedResource}
@@ -317,14 +258,59 @@ function ReadySiteSurface({
         data-site-id={decision.context.site.id}
         data-site-route="energy"
       >
-        <Suspense fallback={(
-          <div className="real-shell-progress" role="status" aria-live="polite">
-            正在加载能源分析界面…
-          </div>
-        )}>
-          <EnergyAnalytics site={decision.context.site} principal={snapshot.principal!} />
+        <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
+          <EnergyAnalytics
+            site={decision.context.site}
+            principal={snapshot.principal!}
+            initialPeriod={decision.energyPeriod}
+          />
         </Suspense>
       </section>
+    );
+  }
+
+  if (decision.route === 'optimize') {
+    return (
+      <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
+        <RealOptimizePage site={decision.context.site} principal={snapshot.principal!} />
+      </Suspense>
+    );
+  }
+
+  if (decision.route === 'cost') {
+    return (
+      <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
+        <RealCostPage site={decision.context.site} principal={snapshot.principal!} />
+      </Suspense>
+    );
+  }
+
+  if (decision.route === 'ai') {
+    const site = decision.context.site;
+    return (
+      <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
+        <RealAiLanding
+          site={site}
+          principal={snapshot.principal!}
+          operationsPath={siteRoute(site, 'operations')}
+        />
+      </Suspense>
+    );
+  }
+
+  if (decision.route === 'bigscreen') {
+    return (
+      <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
+        <RealBigScreenPage site={decision.context.site} principal={snapshot.principal!} />
+      </Suspense>
+    );
+  }
+
+  if (decision.route === 'fdd') {
+    return (
+      <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
+        <RealFddPage site={decision.context.site} principal={snapshot.principal!} />
+      </Suspense>
     );
   }
 
@@ -337,11 +323,7 @@ function ReadySiteSurface({
         data-site-id={decision.context.site.id}
         data-site-route="alarms"
       >
-        <Suspense fallback={(
-          <div className="real-shell-progress" role="status" aria-live="polite">
-            正在加载 Alarm 界面…
-          </div>
-        )}>
+        <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
           <RealAlarms
             site={decision.context.site}
             principal={snapshot.principal!}
@@ -353,6 +335,18 @@ function ReadySiteSurface({
     );
   }
 
+  if (decision.route === 'work-orders') {
+    return (
+      <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
+        <RealWorkOrders
+          site={decision.context.site}
+          principal={snapshot.principal!}
+          registerProtectedResource={registerProtectedResource}
+        />
+      </Suspense>
+    );
+  }
+
   if (decision.route === 'operations') {
     return (
       <section
@@ -360,13 +354,10 @@ function ReadySiteSurface({
         data-route-state="READY"
         data-site-id={decision.context.site.id}
         data-site-route="operations"
+        aria-label={OPERATIONS_ROUTE_CONTRACT.label}
       >
-        <Suspense fallback={(
-          <div className="real-shell-progress" role="status" aria-live="polite">
-            正在加载 Operations Investigation…
-          </div>
-        )}>
-          <OperationsInvestigation
+        <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
+          <OperationsInvestigationPage
             site={decision.context.site}
             principal={snapshot.principal!}
             registerProtectedResource={registerProtectedResource}
@@ -376,63 +367,9 @@ function ReadySiteSurface({
     );
   }
 
-  if (decision.route === 'commands') {
-    return (
-      <section
-        className="real-route-surface real-route-surface--commands"
-        data-testid="real-site-route-commands"
-        data-route-state="READY"
-        data-site-id={decision.context.site.id}
-        data-site-route="commands"
-      >
-        <Suspense fallback={(
-          <div className="real-shell-progress" role="status" aria-live="polite">
-            正在加载 Command 工作台…
-          </div>
-        )}>
-          <RealCommands
-            site={decision.context.site}
-            principal={snapshot.principal!}
-            registerUnsavedDraft={registerUnsavedDraft}
-            registerProtectedResource={registerProtectedResource}
-          />
-        </Suspense>
-      </section>
-    );
-  }
 
-  const copy = SITE_ROUTE_COPY[decision.route];
-  const realtime = snapshot.realtime ?? createIdleRealtimeStatus();
-  return (
-    <section
-      className="real-route-surface"
-      data-testid={`real-site-route-${decision.route}`}
-      data-route-state="READY"
-      data-business-state="EMPTY"
-      data-site-id={decision.context.site.id}
-      data-site-route={decision.route}
-    >
-      <p className="real-shell-eyebrow">{copy.eyebrow}</p>
-      <FocusHeading>{copy.title}</FocusHeading>
-      <p>{copy.detail}</p>
-      <dl className="real-shell-facts">
-        <div><dt>Site</dt><dd>{decision.context.site.displayName}</dd></div>
-        <div><dt>Registry Site ID</dt><dd>{decision.context.site.id}</dd></div>
-        <div><dt>Site code</dt><dd>{decision.context.site.code}</dd></div>
-        <div><dt>Timezone</dt><dd>{decision.context.site.timezone}</dd></div>
-        <div><dt>Acting Organization</dt><dd>{decision.context.actingOrganizationId}</dd></div>
-      </dl>
-      <div
-        className="real-site-realtime-scope"
-        data-testid="real-site-subscription"
-        data-subscription-site={realtime.siteId}
-        data-subscription-state={realtime.state}
-      >
-        Realtime scope: {realtimeStatusLabel(realtime)} for {decision.context.site.displayName}
-      </div>
-      <p>当前业务数据状态为 EMPTY；这不代表权限拒绝、服务不可用或 Demo 数据。</p>
-    </section>
-  );
+
+  return null;
 }
 
 function waitForSiteRoutePaint(): Promise<void> {
@@ -500,7 +437,7 @@ function SiteSurface({
     case 'SITE_DISCOVERY_CHECKING':
       return <SiteDiscoveryCheckingSurface />;
     case 'SITE_SCOPE_ACTIVATING':
-      return <SiteScopeActivatingSurface context={decision.context} />;
+      return <SiteScopeActivatingSurface />;
     case 'SITE_DISCOVERY_UNAVAILABLE':
       return <SiteDiscoveryUnavailableSurface failure={decision.failure} retry={retry} />;
     case 'NO_AUTHORIZED_SITE':
@@ -534,24 +471,23 @@ export function buildSiteNavigation(
 ): RealNavigationItem[] {
   if (!effectiveCapabilities.includes('site.read')) return [];
   const navigation: RealNavigationItem[] = [
-    { id: 'site-dashboard', label: 'Dashboard', path: siteRoute(site, 'dashboard'), kind: 'link', degraded: false },
-    {
-      id: 'site-operations',
-      label: 'Operations Workspace',
-      path: siteRoute(site, 'operations'),
-      kind: 'link',
-      degraded: false,
-      primary: true,
-    },
-    { id: 'site-assets', label: 'Assets', path: siteRoute(site, 'assets'), kind: 'link', degraded: false },
-    { id: 'site-energy', label: 'Energy', path: siteRoute(site, 'energy'), kind: 'link', degraded: false },
+    { id: 'site-dashboard', label: '总览驾驶舱', path: siteRoute(site, 'dashboard'), kind: 'link', degraded: false },
+    { id: 'site-assets', label: '设备与建筑', path: siteRoute(site, 'assets'), kind: 'link', degraded: false },
+
+    { id: 'site-energy', label: '能耗分析', path: siteRoute(site, 'energy'), kind: 'link', degraded: false },
+    { id: 'site-optimize', label: '节能优化', path: siteRoute(site, 'optimize'), kind: 'link', degraded: false },
+    { id: 'site-fdd', label: '故障检测', path: siteRoute(site, 'fdd'), kind: 'link', degraded: false },
   ];
   if (effectiveCapabilities.includes('alarm.list')) {
-    navigation.push({ id: 'site-alarms', label: 'Alarm', path: siteRoute(site, 'alarms'), kind: 'link', degraded: false });
+    navigation.push({ id: 'site-alarms', label: '报警', path: siteRoute(site, 'alarms'), kind: 'link', degraded: false });
+  }
+  if (effectiveCapabilities.includes('work-order.list')) {
+    navigation.push({ id: 'site-work-orders', label: '工单', path: siteRoute(site, 'work-orders'), kind: 'link', degraded: false });
   }
   navigation.push(
-    { id: 'site-commands', label: 'Commands', path: siteRoute(site, 'commands'), kind: 'link', degraded: false },
-    { id: 'site-bigscreen', label: 'BigScreen', path: siteRoute(site, 'bigscreen'), kind: 'link', degraded: false },
+    { id: 'site-ai', label: 'AI 运维助手', path: siteRoute(site, 'ai'), kind: 'link', degraded: false, primary: true },
+    { id: 'site-cost', label: '成本与绩效', path: siteRoute(site, 'cost'), kind: 'link', degraded: false },
+    { id: 'site-bigscreen', label: '演示大屏', path: siteRoute(site, 'bigscreen'), kind: 'link', degraded: false },
   );
   return navigation;
 }
@@ -583,6 +519,19 @@ export function SiteScopedShell({
   protectedRequestToken: () => ProtectedScopeRequestToken;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
+  if (decision.state === 'READY' && decision.route === 'bigscreen') {
+    return (
+      <SiteSurface
+        decision={decision}
+        snapshot={snapshot}
+        retry={retry}
+        registerProtectedResource={registerProtectedResource}
+        protectedRequestToken={protectedRequestToken}
+        registerUnsavedDraft={registerUnsavedDraft}
+      />
+    );
+  }
+
   return (
     <RealShellChrome
       config={config}

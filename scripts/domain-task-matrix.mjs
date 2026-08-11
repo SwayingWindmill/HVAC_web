@@ -21,7 +21,7 @@ export const gateCommandMatrix = Object.freeze({
     core: Object.freeze([npmRun('contracts:check'), npmRun('ownership:check')]),
     rms: Object.freeze([npmRun('rms:topology:check')]),
     s1: Object.freeze([npmRun('s1:topology:check'), npmRun('s1:registry:check')]),
-    s2: Object.freeze([npmRun('s2:topology:check'), npmRun('s2:contracts:check')]),
+    s2: Object.freeze([npmRun('s2:topology:check'), npmRun('s2:contracts:check'), npmRun('s2:release:check')]),
     s3: Object.freeze([npmRun('s3:topology:check'), npmRun('s3:baseline:check')]),
   }),
   unit: Object.freeze({

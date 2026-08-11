@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "sourceOfTruth": "架构规划/智慧能源系统数据架构设计.md",
+  "corePrinciple": "统一对象模型 + 统一测点模型 + 统一时序模型 + 统一能源模型 + 统一拓扑模型",
+  "coreModels": [
+    "ASSET",
+    "DEVICE",
+    "POINT",
+    "TIME_SERIES",
+    "ENERGY_TOPOLOGY",
+    "METRIC"
+  ],
+  "statuses": ["PASS", "PARTIAL", "MISSING", "DEFER"],
+  "items": [
+    {"id":"TENANT","status":"PASS","evidence":["iam.tenants","core_registry tenant-scoped tables","telemetry_runtime tenant_id","analytics.energy_interval_facts.tenant_id","command_runtime tenant_id + organization_tenant_scope","alarm_runtime tenant_id + organization_tenant_scope","work_order_runtime tenant_id + organization_tenant_scope","Gateway authoritative Site tenant resolution + signed internal tenant context"]},
+    {"id":"SITE","status":"PASS","evidence":["core_registry.sites"]},
+    {"id":"SPACE","status":"PASS","evidence":["core_registry.areas recursive hierarchy","area cycle rejection"]},
+    {"id":"ASSET","status":"PASS","evidence":["core_registry.equipment","parent_equipment_id","rated_capacity","rated_power","manufacturer","model","commission_date"]},
+    {"id":"DEVICE","status":"PASS","evidence":["core_registry.devices","device/equipment bindings","device product binding"]},
+    {"id":"DEVICE_PRODUCT","status":"PASS","evidence":["core_registry.device_products"]},
+    {"id":"POINT_TEMPLATE","status":"PASS","evidence":["core_registry.point_templates","telemetry_points.point_template_id"]},
+    {"id":"POINT","status":"PASS","evidence":["core_registry.telemetry_points","sensor bindings","point subject bindings","calculated point inputs"]},
+    {"id":"UNIT_REGISTRY","status":"PASS","evidence":["core_registry.unit_registry","canonical unit conversion metadata"]},
+    {"id":"TIME_SERIES_CURRENT","status":"PASS","evidence":["telemetry_runtime.latest_accepted_telemetry","telemetry_runtime.device_presence"]},
+    {"id":"TIME_SERIES_HISTORY","status":"PASS","evidence":["telemetry_history.observations"]},
+    {"id":"TIME_SERIES_ROLLUP","status":"PASS","evidence":["telemetry_history.numeric_1min","telemetry_history.numeric_15min","telemetry_history.numeric_hourly","telemetry_history.numeric_daily"]},
+    {"id":"DATA_QUALITY","status":"PASS","evidence":["quality","quality_reasons","ingest_quarantine","freshness policies","duplicate/out-of-order evidence"]},
+    {"id":"ENERGY_TYPE","status":"PASS","evidence":["core_registry.energy_types"]},
+    {"id":"ENERGY_DIRECTION","status":"PASS","evidence":["core_registry.energy_directions"]},
+    {"id":"ENERGY_TOPOLOGY","status":"PASS","evidence":["core_registry.energy_nodes","core_registry.energy_edges"]},
+    {"id":"ENERGY_BALANCE","status":"MISSING","gap":"No canonical energy-balance calculation model is implemented yet."},
+    {"id":"METRIC","status":"PARTIAL","evidence":["core_registry.metric_definitions","analytics.energy_interval_facts"],"gap":"Generic metric-series computation and dependency execution are not implemented yet."},
+    {"id":"TAG","status":"MISSING","gap":"tag and tag_relation are not implemented yet."},
+    {"id":"EVENT","status":"PARTIAL","evidence":["alarm_runtime.events canonical Event fields","Tenant/Organization RLS","device_id + point_id provenance"],"gap":"Canonical Event producers for device/state/control domains are not wired into this model yet."},
+    {"id":"ALARM","status":"PARTIAL","evidence":["alarm_runtime.alarm_current","alarm_current.event_id + point_id + alarm_type provenance","Event -> Alarm scope FK"],"gap":"Rule Engine and canonical alarm rule model are not implemented yet."},
+    {"id":"COMMAND","status":"PASS","evidence":["command_runtime.command_intents","authorization/risk/approval/attempt/transition/audit models","tenant_id + organization_tenant_scope","command_intents.point_id canonical Registry identity","Gateway authoritative Command Point resolution","point identity bound into idempotency payload hash"]},
+    {"id":"TARIFF","status":"MISSING","gap":"tariff and tariff_period are not implemented yet."},
+    {"id":"WEATHER","status":"PARTIAL","evidence":["weather-station Device/Sensor/Point ingestion"],"gap":"No canonical Site weather dataset/model is implemented yet."},
+    {"id":"AI_DATA","status":"MISSING","gap":"Dataset/Feature/Model/Prediction data models are not implemented yet."},
+    {"id":"OPTIMIZATION","status":"MISSING","gap":"optimization_run/input/result/schedule are not implemented yet."},
+    {"id":"OBJECT_STORAGE","status":"DEFER","gap":"Report/raw-file/archive/model/dataset object storage remains deferred until those consumers are implemented."}
+  ],
+  "phase1AcceptanceEligible": false,
+  "acceptanceBlockers": [
+    "METRIC",
+    "ENERGY_BALANCE",
+    "TAG",
+    "EVENT",
+    "ALARM",
+    "TARIFF"
+  ]
+}

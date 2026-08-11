@@ -14,6 +14,7 @@ import {
   type OrganizationCollection,
   type RegistryListParams,
   type Site,
+  type SiteAssetModel,
   type SiteCollection,
   uuidV7Schema,
 } from './generated/platformGateway.gen';
@@ -142,6 +143,15 @@ export function useRegistrySite(siteId: string | null, enabled = true) {
   });
 }
 
+export function useRegistryAssetModel(siteId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: ['registry', 'sites', siteId, 'asset-model'],
+    queryFn: async ({ signal }) => (await client.getSiteAssetModel(registryId(siteId!), { signal })).data,
+    enabled: registryQueryEnabled(enabled && Boolean(siteId)),
+    retry: retryRegistryQuery,
+  });
+}
+
 export function useRegistryEquipment(siteId: string | null, enabled = true) {
   return useInfiniteQuery({
     queryKey: ['registry', 'sites', siteId, 'equipment'],
@@ -245,6 +255,7 @@ export function useAuthorizedRegistrySites(enabled = true) {
 
 export type RegistryOrganizationCollection = OrganizationCollection;
 export type RegistrySiteCollection = SiteCollection;
+export type RegistrySiteAssetModel = SiteAssetModel;
 export type RegistryEquipmentCollection = EquipmentCollection;
 export type RegistryDeviceCollection = DeviceCollection;
 export type RegistryDeviceBindingCollection = DeviceBindingCollection;

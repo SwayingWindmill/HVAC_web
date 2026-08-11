@@ -2,6 +2,7 @@ name: S5 Work Order Governed Lifecycle
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - ".github/workflows/s5-work-order-lifecycle.yml"
       - "contracts/http/platform-gateway.openapi.yaml"

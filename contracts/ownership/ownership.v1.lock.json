@@ -1,5 +1,5 @@
 {
-  "routeRegistryRevision": 18,
+  "routeRegistryRevision": 19,
   "routes": {
     "GET /api/v1/health": {
       "revision": 1,
@@ -66,6 +66,10 @@
       "owner": "platform-core-service"
     },
     "GET /api/v1/sites/{siteId}/device-bindings": {
+      "revision": 1,
+      "owner": "platform-core-service"
+    },
+    "GET /api/v1/sites/{siteId}/asset-model": {
       "revision": 1,
       "owner": "platform-core-service"
     },

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { LoginFormPage } from '@ant-design/pro-components';
 import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';
 import { AuthenticatedShell } from './AuthenticatedShell';
 import { REAL_FEATURE_MANIFEST } from './feature-manifest';
 import { FocusHeading } from './FocusHeading';
+import { RealRouteLoading } from './RealRouteLoading';
 import { RealRuntimeFacts } from './RealRuntimeFacts';
 import { resolveNavigation, resolveRoute, type RouteDecision } from './route-policy';
 import { createShellRuntime, type ShellSnapshot } from './shell-runtime';
@@ -38,41 +40,53 @@ export function RealConfigurationBlocked({ failures }: { failures: RealRuntimeCo
   );
 }
 
-function BootstrappingState({ config }: { config: RealRuntimeConfig }) {
+function BootstrappingState() {
   return (
-    <section className="real-shell-card" aria-labelledby="real-bootstrap-title" data-testid="real-shell-bootstrapping">
-      <p className="real-shell-eyebrow">REAL MODE · BOOTSTRAPPING</p>
-      <FocusHeading id="real-bootstrap-title">正在建立可信会话</FocusHeading>
-      <p>Shell 正在读取服务器 Principal 与 Session。完成前不会挂载业务路由或 realtime 订阅。</p>
-      <div className="real-shell-progress" role="status" aria-live="polite">正在验证身份边界…</div>
-      <RealRuntimeFacts config={config} />
-    </section>
+    <RealRouteLoading
+      label="正在进入工作台"
+      testId="real-shell-bootstrapping"
+      routeState="BOOTSTRAPPING"
+      variant="shell"
+    />
   );
 }
 
 function LoginRequiredState({
-  config,
   snapshot,
   beginLogin,
 }: {
-  config: RealRuntimeConfig;
   snapshot: ShellSnapshot;
   beginLogin: () => void;
 }) {
   const loggedOut = snapshot.reason === 'LOGOUT_COMPLETED' || snapshot.reason === 'SESSION_ALREADY_INVALID';
+  if (!loggedOut) {
+    return (
+      <RealRouteLoading
+        label="正在前往登录"
+        testId="real-shell-auth-redirect"
+        routeState="LOGIN_REQUIRED"
+        variant="shell"
+      />
+    );
+  }
+
   return (
-    <section className="real-shell-card" aria-labelledby="real-login-title" data-testid="real-shell-login-required">
-      <p className="real-shell-eyebrow">REAL MODE · LOGIN REQUIRED</p>
-      <FocusHeading id="real-login-title">{loggedOut ? '服务器 Session 已撤销' : '需要登录'}</FocusHeading>
-      <p>
-        {loggedOut
-          ? '受保护内存已清除。重新进入时将使用 Gateway 发起 OIDC 登录。'
-          : '未发现可用的 BFF Session。应用不会在浏览器中收集用户名、密码或令牌。'}
-      </p>
-      <div className="real-shell-actions">
-        <button type="button" onClick={beginLogin}>通过身份提供方登录</button>
-      </div>
-      <RealRuntimeFacts config={config} />
+    <section className="real-pro-login" data-testid="real-shell-login-required">
+      <LoginFormPage
+        logo="/quanlaihe-mark.svg"
+        title="泉来禾智慧能源"
+        subTitle="企业级实时能源运营平台"
+        backgroundImageUrl="https://images.unsplash.com/photo-1642615835477-d303d7dc9ee9?w=2160&q=80"
+        activityConfig={{
+          title: '中央机房实时运营',
+          subTitle: '设备、能耗、告警与操作统一进入受治理工作台。',
+        }}
+        submitter={{ searchConfig: { submitText: '重新登录' } }}
+        onFinish={async () => {
+          beginLogin();
+          return true;
+        }}
+      />
     </section>
   );
 }
@@ -110,6 +124,11 @@ function isSiteShellPath(pathname: string): boolean {
   return pathname === '/' || pathname === '/sites' || pathname.startsWith('/sites/');
 }
 
+function siteIdFromPathname(pathname: string): string | undefined {
+  const segments = pathname.split('/').filter(Boolean);
+  return segments[0] === 'sites' ? segments[1] : undefined;
+}
+
 function resolveSiteShellDecision(snapshot: ShellSnapshot, pathname: string): SiteShellDecision | undefined {
   if (!snapshot.principal || !isSiteShellPath(pathname)) return undefined;
   if (!snapshot.sites || snapshot.sites.state === 'checking') return { state: 'SITE_DISCOVERY_CHECKING' };
@@ -145,17 +164,48 @@ export default function RealApp({ config }: RealAppProps) {
   const client = useMemo(() => createPlatformGatewayClient(), []);
   const runtime = useMemo(() => createShellRuntime(client), [client]);
   const [snapshot, setSnapshot] = useState<ShellSnapshot>(() => runtime.current());
+  const [pathname, setPathname] = useState(() => window.location.pathname);
 
   useEffect(() => {
     const unsubscribe = runtime.subscribe(setSnapshot);
+    const handlePopState = () => {
+      const activeSiteId = runtime.current().protectedScope?.siteId;
+      const nextSiteId = siteIdFromPathname(window.location.pathname);
+      if (!activeSiteId || nextSiteId === activeSiteId) {
+        setPathname(window.location.pathname);
+        return;
+      }
+      window.location.reload();
+    };
+    window.addEventListener('popstate', handlePopState);
     void runtime.bootstrap(window.location.href);
     return () => {
+      window.removeEventListener('popstate', handlePopState);
       unsubscribe();
       runtime.dispose();
     };
   }, [runtime]);
 
   const navigate = useCallback((target: string) => {
+    try {
+      const resolved = new URL(target, window.location.origin);
+      const activeSiteId = runtime.current().protectedScope?.siteId;
+      if (
+        resolved.origin === window.location.origin
+        && !resolved.search
+        && !resolved.hash
+        && activeSiteId
+        && siteIdFromPathname(resolved.pathname) === activeSiteId
+      ) {
+        if (resolved.pathname !== window.location.pathname) {
+          window.history.pushState(null, '', resolved.pathname);
+          setPathname(resolved.pathname);
+        }
+        return;
+      }
+    } catch {
+      // The runtime owns validation and fail-closed handling for malformed targets.
+    }
     void runtime.requestSiteNavigation(target);
   }, [runtime]);
   const confirmSiteNavigation = useCallback(() => {
@@ -174,7 +224,6 @@ export default function RealApp({ config }: RealAppProps) {
   );
   const protectedRequestToken = useCallback(() => runtime.protectedRequestToken(), [runtime]);
 
-  const pathname = window.location.pathname;
   const platformAvailability = snapshot.platform?.state ?? 'checking';
   const platformNavigation = snapshot.principal
     ? resolveNavigation(
@@ -200,7 +249,7 @@ export default function RealApp({ config }: RealAppProps) {
     ? siteDecision.context.site
     : undefined;
   const scopedPlatformNavigation = selectedSite
-    ? platformNavigation.filter((item) => item.id !== 'alarms')
+    ? platformNavigation.filter((item) => item.id === 'system')
     : platformNavigation;
   const navigation = selectedSite && snapshot.principal
     ? [
@@ -210,6 +259,7 @@ export default function RealApp({ config }: RealAppProps) {
     : platformNavigation;
   const redirectTarget = siteDecision?.state === 'REDIRECT' ? siteDecision.target : undefined;
   const routeState = normalizedRouteState(siteDecision ?? platformDecision);
+  const showSignInPage = pathname === '/sign-in' || snapshot.state === 'LOGIN_REQUIRED';
   const displayedShellState = snapshot.state === 'READY' && routeState && routeState !== 'NOT_FOUND'
     ? routeState
     : snapshot.state;
@@ -233,21 +283,19 @@ export default function RealApp({ config }: RealAppProps) {
 
   return (
     <main
-      className={`real-shell-state${snapshot.state === 'READY' ? ' real-shell-state--authenticated' : ''}`}
+      className={`real-shell-state${snapshot.state === 'READY' && !showSignInPage ? ' real-shell-state--authenticated' : ''}${showSignInPage ? ' real-shell-state--login' : ''}`}
       aria-label={REAL_SHELL_MARKER}
       data-build-graph={REAL_GRAPH_MARKER}
-      data-shell-state={displayedShellState}
-      data-route-state={routeState}
-      data-protected-route-mounted={snapshot.state === 'READY' ? 'true' : 'false'}
+      data-shell-state={showSignInPage ? 'LOGIN_REQUIRED' : displayedShellState}
+      data-route-state={showSignInPage ? 'LOGIN_REQUIRED' : routeState}
+      data-protected-route-mounted={snapshot.state === 'READY' && !showSignInPage ? 'true' : 'false'}
     >
-      {snapshot.state === 'BOOTSTRAPPING' ? <BootstrappingState config={config} /> : null}
-      {snapshot.state === 'LOGIN_REQUIRED' ? (
-        <LoginRequiredState config={config} snapshot={snapshot} beginLogin={() => runtime.beginLogin()} />
-      ) : null}
-      {snapshot.state === 'UNAVAILABLE' ? (
+      {snapshot.state === 'BOOTSTRAPPING' && !showSignInPage ? <BootstrappingState /> : null}
+      {showSignInPage ? <LoginRequiredState snapshot={snapshot} beginLogin={() => runtime.beginLogin()} /> : null}
+      {snapshot.state === 'UNAVAILABLE' && !showSignInPage ? (
         <PrincipalUnavailableState config={config} snapshot={snapshot} retry={() => { void runtime.retry(); }} />
       ) : null}
-      {snapshot.state === 'READY' && siteDecision ? (
+      {snapshot.state === 'READY' && !showSignInPage && siteDecision ? (
         <SiteScopedShell
           config={config}
           snapshot={snapshot}
@@ -263,7 +311,7 @@ export default function RealApp({ config }: RealAppProps) {
           registerUnsavedDraft={registerUnsavedDraft}
         />
       ) : null}
-      {snapshot.state === 'READY' && platformDecision ? (
+      {snapshot.state === 'READY' && !showSignInPage && platformDecision ? (
         <AuthenticatedShell
           config={config}
           snapshot={snapshot}

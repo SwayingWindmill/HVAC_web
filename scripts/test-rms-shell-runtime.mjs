@@ -158,16 +158,46 @@ function siteCollection(items = [], nextCursor = null, hasMore = false) {
   return { items, nextCursor, hasMore };
 }
 
+const providerLogoutURL = 'https://identity.example/session/end?client_id=hvac-web&post_logout_redirect_uri=https%3A%2F%2Fhvac.example%2F%3Flogged_out%3D1';
+
 function client(overrides = {}) {
   return {
     getCurrentPrincipal: async () => ({ data: principal() }),
     getPlatformStatus: async () => ({ data: platformStatus() }),
     listOrganizationSites: async () => ({ data: siteCollection() }),
     loginUrl: ({ returnTo }) => `/api/v1/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
-    logout: async () => ({ data: undefined }),
+    logout: async () => ({ data: undefined, location: providerLogoutURL }),
     ...overrides,
   };
 }
+
+test('transient Real UI states converge on quiet reusable loading surfaces', () => {
+  const appSource = fs.readFileSync('apps/hvac-web/src/real/RealApp.tsx', 'utf8');
+  const siteShellSource = fs.readFileSync('apps/hvac-web/src/real/SiteScopedShell.tsx', 'utf8');
+  const assetsSource = fs.readFileSync('apps/hvac-web/src/real/assets/RealAssetsWorkspace.tsx', 'utf8');
+
+  assert.equal(fs.existsSync('apps/hvac-web/src/real/RealRouteLoading.tsx'), true);
+  assert.equal(fs.existsSync('apps/hvac-web/src/real/assets/RealAssetsLoadingSurface.tsx'), true);
+  const loginStateSource = appSource.match(/function LoginRequiredState[\s\S]*?function PrincipalUnavailableState/)?.[0];
+  assert.ok(loginStateSource);
+  assert.ok(appSource.includes('RealRouteLoading'));
+  assert.equal(loginStateSource.includes('服务器 Session 已撤销'), false);
+  assert.equal(loginStateSource.includes('RealRuntimeFacts'), false);
+
+  assert.ok(siteShellSource.includes('RealRouteLoading'));
+  assert.ok(siteShellSource.includes('RealAssetsLoadingSurface'));
+  for (const obsoleteHeading of [
+    '正在读取授权 Site',
+    '正在激活受保护 Site scope',
+    '正在进入唯一授权 Site',
+  ]) {
+    assert.equal(siteShellSource.includes(obsoleteHeading), false, obsoleteHeading);
+  }
+
+  assert.ok(assetsSource.includes('RealAssetsLoadingSurface'));
+  assert.equal(assetsSource.includes('正在读取授权 Site 原子 Asset Model'), false);
+  assert.equal(assetsSource.includes('<Tag color="processing">LOADING</Tag>'), false);
+});
 
 test('holds the shell in BOOTSTRAPPING until Principal bootstrap completes', async () => {
   const pending = deferred();
@@ -215,18 +245,21 @@ test('keeps protected memory mounted and exposes a retryable logout failure', as
 });
 
 test('purges protected memory only after confirmed or already-invalid logout', async () => {
-  for (const logout of [
-    async () => ({ data: undefined }),
-    async () => { throw { problem: { status: 401, code: 'SESSION_INVALID', detail: 'already gone', traceId: '2'.repeat(32), retryable: false } }; },
+  for (const scenario of [
+    { logout: async () => ({ data: undefined, location: providerLogoutURL }), navigations: [providerLogoutURL] },
+    {
+      logout: async () => { throw { problem: { status: 401, code: 'SESSION_INVALID', detail: 'already gone', traceId: '2'.repeat(32), retryable: false } }; },
+      navigations: [],
+    },
   ]) {
     const env = environment();
-    const runtime = runtimeModule.createShellRuntime(client({ logout }), env.value);
+    const runtime = runtimeModule.createShellRuntime(client({ logout: scenario.logout }), env.value);
     await runtime.bootstrap('/system');
     const outcome = await runtime.logout();
     assert.equal(outcome, 'completed');
     assert.equal(runtime.current().state, 'LOGIN_REQUIRED');
     assert.equal(runtime.current().principal, undefined);
-    assert.equal(env.navigations.length, 0);
+    assert.deepEqual(env.navigations, scenario.navigations);
   }
 });
 
@@ -340,7 +373,7 @@ test('late platform availability cannot reset an in-flight logout', async () => 
   assert.equal(runtime.current().platform.state, 'available');
   assert.equal(runtime.current().logout.status, 'submitting');
 
-  pendingLogout.resolve({ data: undefined });
+  pendingLogout.resolve({ data: undefined, location: providerLogoutURL });
   await logout;
   assert.equal(runtime.current().state, 'LOGIN_REQUIRED');
 });
@@ -512,7 +545,7 @@ test('late Site discovery cannot reset an in-flight logout', async () => {
   assert.equal(runtime.current().sites.state, 'available');
   assert.equal(runtime.current().logout.status, 'submitting');
 
-  pendingLogout.resolve({ data: undefined });
+  pendingLogout.resolve({ data: undefined, location: providerLogoutURL });
   await logout;
   assert.equal(runtime.current().state, 'LOGIN_REQUIRED');
 });

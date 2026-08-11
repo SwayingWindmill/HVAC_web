@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS command_runtime.command_intents (
   approval_policy text NOT NULL,
   retry_policy text NOT NULL,
   canonical_parameters jsonb NOT NULL,
+  verification_point_key text NOT NULL,
   payload_hash text NOT NULL,
   snapshot_revision bigint NOT NULL CHECK (snapshot_revision > 0),
   device_command_sequence bigint NOT NULL CHECK (device_command_sequence > 0),
@@ -218,10 +219,16 @@ INSERT INTO command_runtime.capability_profiles (
   capability_name, capability_revision, status, canonical_unit,
   minimum_value, maximum_value, maximum_delta, risk_level,
   approval_policy, retry_policy, connector_kind
-) VALUES (
-  'SET_TEMPERATURE_SETPOINT', 'capability:set-temperature-setpoint:v1',
-  'DRAFT', 'CELSIUS', 16, 30, 3, 'LOW', 'NONE', 'PRE_SEND_ONLY', 'SYNTHETIC_ONLY'
-)
+) VALUES
+  ('START', 'capability:start:v1', 'DRAFT', 'NONE', 0, 0, 0, 'MEDIUM', 'SINGLE_APPROVER', 'PRE_SEND_ONLY', 'SYNTHETIC_ONLY'),
+  ('STOP', 'capability:stop:v1', 'DRAFT', 'NONE', 0, 0, 0, 'MEDIUM', 'SINGLE_APPROVER', 'PRE_SEND_ONLY', 'SYNTHETIC_ONLY'),
+  ('RESET_FAULT', 'capability:reset-fault:v1', 'DRAFT', 'NONE', 0, 0, 0, 'LOW', 'NONE', 'PRE_SEND_ONLY', 'SYNTHETIC_ONLY'),
+  ('SET_TEMPERATURE_SETPOINT', 'capability:set-temperature-setpoint:v1', 'DRAFT', 'CELSIUS', 16, 30, 3, 'LOW', 'NONE', 'PRE_SEND_ONLY', 'SYNTHETIC_ONLY'),
+  ('SET_CHILLED_WATER_TEMPERATURE_SETPOINT', 'capability:set-chilled-water-temperature-setpoint:v1', 'DRAFT', 'CELSIUS', 5, 12, 3, 'LOW', 'NONE', 'PRE_SEND_ONLY', 'SYNTHETIC_ONLY'),
+  ('SET_FREQUENCY', 'capability:set-frequency:v1', 'DRAFT', 'HERTZ', 20, 50, 10, 'LOW', 'NONE', 'PRE_SEND_ONLY', 'SYNTHETIC_ONLY'),
+  ('SET_FAN_SPEED', 'capability:set-fan-speed:v1', 'DRAFT', 'PERCENT', 20, 100, 30, 'LOW', 'NONE', 'PRE_SEND_ONLY', 'SYNTHETIC_ONLY'),
+  ('SET_LOAD_LIMIT', 'capability:set-load-limit:v1', 'DRAFT', 'PERCENT', 20, 100, 30, 'LOW', 'NONE', 'PRE_SEND_ONLY', 'SYNTHETIC_ONLY'),
+  ('SET_OPENING', 'capability:set-opening:v1', 'DRAFT', 'PERCENT', 0, 100, 30, 'LOW', 'NONE', 'PRE_SEND_ONLY', 'SYNTHETIC_ONLY')
 ON CONFLICT (capability_name, capability_revision) DO NOTHING;
 
 ALTER TABLE command_runtime.device_control_state ENABLE ROW LEVEL SECURITY;

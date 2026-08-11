@@ -41,6 +41,36 @@ paths:
           $ref: '#/components/responses/Problem'
         '503':
           $ref: '#/components/responses/Problem'
+  /internal/v1/telemetry/device-history:
+    post:
+      operationId: queryDeviceHistory
+      summary: Query bounded accepted numeric Device history with sampled-at Point/Sensor identity
+      security:
+        - workloadMTLS: []
+          delegationGrant: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceHistoryQuery'
+      responses:
+        '200':
+          description: Device history whose samples preserve the frozen Registry Point/Sensor binding at sampledAt
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceHistoryResponse'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '405':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
 components:
   securitySchemes:
     workloadMTLS:
@@ -176,6 +206,164 @@ components:
             $ref: '#/components/schemas/EnergySeriesPoint'
         metadata:
           $ref: '#/components/schemas/EnergySeriesMetadata'
+    DeviceHistoryQuery:
+      type: object
+      additionalProperties: false
+      required: [actingOrganizationId, owningOrganizationId, siteId, deviceId, keys, from, to, maxPointsPerKey]
+      properties:
+        actingOrganizationId:
+          type: string
+          format: uuid
+          description: Session Acting Organization bound by the delegation grant.
+        owningOrganizationId:
+          type: string
+          format: uuid
+          description: IAM-authoritative owner of the Device.
+        siteId:
+          type: string
+          format: uuid
+        deviceId:
+          type: string
+          format: uuid
+        keys:
+          type: array
+          minItems: 1
+          maxItems: 8
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        from:
+          type: string
+          format: date-time
+          description: Inclusive UTC range start.
+        to:
+          type: string
+          format: date-time
+          description: Exclusive UTC range end; maximum range is 24 hours.
+        maxPointsPerKey:
+          type: integer
+          minimum: 1
+          maximum: 500
+    DeviceHistoryPoint:
+      type: object
+      additionalProperties: false
+      required: [observationId, pointId, sensorId, sampledAt, receivedAt, value, unit, quality, qualityReasons, revision]
+      properties:
+        observationId:
+          type: string
+          format: uuid
+        pointId:
+          type: string
+          format: uuid
+          description: Registry Telemetry Point identity frozen for this sample at sampledAt.
+        sensorId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+          description: Registry Sensor identity frozen for this sample at sampledAt, or null for points without a Sensor.
+        sampledAt:
+          type: string
+          format: date-time
+        receivedAt:
+          type: string
+          format: date-time
+        value:
+          type: number
+          format: double
+        unit:
+          type: [string, 'null']
+          maxLength: 64
+        quality:
+          type: string
+          enum: [GOOD, SUSPECT]
+        qualityReasons:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^[A-Z][A-Z0-9_]+$'
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+    DeviceHistorySeries:
+      type: object
+      additionalProperties: false
+      required: [key, points]
+      properties:
+        key:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        points:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/DeviceHistoryPoint'
+    DeviceHistoryMetadata:
+      type: object
+      additionalProperties: false
+      required: [requestedFrom, requestedTo, dataWatermark, datasetRevision, partial, maxPointsPerKey, returnedPoints, truncatedKeys]
+      properties:
+        requestedFrom:
+          type: string
+          format: date-time
+        requestedTo:
+          type: string
+          format: date-time
+        dataWatermark:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        datasetRevision:
+          type: string
+          minLength: 1
+          maxLength: 128
+        partial:
+          type: boolean
+        maxPointsPerKey:
+          type: integer
+          minimum: 1
+          maximum: 500
+        returnedPoints:
+          type: integer
+          minimum: 0
+          maximum: 4000
+        truncatedKeys:
+          type: array
+          maxItems: 8
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    DeviceHistoryResponse:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, owningOrganizationId, siteId, deviceId, series, metadata]
+      properties:
+        schemaVersion:
+          type: integer
+          const: 1
+        owningOrganizationId:
+          type: string
+          format: uuid
+        siteId:
+          type: string
+          format: uuid
+        deviceId:
+          type: string
+          format: uuid
+        series:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/DeviceHistorySeries'
+        metadata:
+          $ref: '#/components/schemas/DeviceHistoryMetadata'
     ProblemDetails:
       type: object
       additionalProperties: false

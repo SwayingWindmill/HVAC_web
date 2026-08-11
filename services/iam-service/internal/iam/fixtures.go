@@ -8,6 +8,8 @@ import (
 
 const (
 	S1FixturePolicyRevision = "s1-policy-v1"
+	S1FixtureTenantAID      = "018f1d00-0000-7000-8000-000000000001"
+	S1FixtureTenantBID      = "018f1d00-0000-7000-8000-000000000002"
 
 	S1FixtureOwnerAOrganizationID = "018f1e00-0000-7000-8000-000000000001"
 	S1FixtureOwnerBOrganizationID = "018f1e00-0000-7000-8000-000000000002"
@@ -24,6 +26,7 @@ const (
 	S1FixtureRevokedMemberID   = "018f1e00-2000-7000-8000-000000000005"
 
 	S2FixturePolicyRevision     = "s2-policy-v1"
+	S2FixtureTenantID           = "018f2d00-0000-7000-8000-000000000001"
 	S2FixtureActingOrganization = "018f2e00-1000-7000-8000-000000000003"
 	S2FixtureOwnerOrganization  = "018f2e00-1000-7000-8000-000000000001"
 	S2FixtureSite               = "018f2e00-2000-7000-8000-000000000001"
@@ -40,22 +43,23 @@ func NewS1FixtureAuthorizationStore(subjectIssuer string) AuthorizationStore {
 		{
 			Principal: PrincipalRecord{ID: S1FixtureOwnerAPrincipalID, SubjectIssuer: subjectIssuer, Subject: "fixture-user", Status: FactStatusActive},
 			Memberships: []OrganizationMembership{
-				{OrganizationID: S1FixtureOwnerAOrganizationID, Status: FactStatusActive},
+				{TenantID: S1FixtureTenantAID, OrganizationID: S1FixtureOwnerAOrganizationID, Status: FactStatusActive},
 			},
 			RoleBindings: []RoleBinding{
-				{OrganizationID: S1FixtureOwnerAOrganizationID, Actions: []registryauth.Action{registryauth.ActionRegistryRead}, Status: FactStatusActive},
+				{TenantID: S1FixtureTenantAID, OrganizationID: S1FixtureOwnerAOrganizationID, Actions: []registryauth.Action{registryauth.ActionRegistryRead}, Status: FactStatusActive},
 			},
 			SiteBindings: []SiteBinding{
-				{ActingOrganizationID: S1FixtureOwnerAOrganizationID, OwningOrganizationID: S1FixtureOwnerAOrganizationID, SiteID: S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.Action(analyticsmodel.EnergySeriesAction)}, Status: FactStatusActive},
+				{TenantID: S1FixtureTenantAID, ActingOrganizationID: S1FixtureOwnerAOrganizationID, OwningOrganizationID: S1FixtureOwnerAOrganizationID, SiteID: S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.Action(analyticsmodel.EnergySeriesAction)}, Status: FactStatusActive},
 			},
 		},
 		{
 			Principal: PrincipalRecord{ID: S1FixtureDelegatedID, SubjectIssuer: subjectIssuer, Subject: "fixture-delegated-user", Status: FactStatusActive},
 			Memberships: []OrganizationMembership{
-				{OrganizationID: S1FixtureActingOrganizationID, Status: FactStatusActive},
+				{TenantID: S1FixtureTenantAID, OrganizationID: S1FixtureActingOrganizationID, Status: FactStatusActive},
 			},
 			SiteBindings: []SiteBinding{
 				{
+					TenantID:             S1FixtureTenantAID,
 					ActingOrganizationID: S1FixtureActingOrganizationID,
 					OwningOrganizationID: S1FixtureOwnerAOrganizationID,
 					SiteID:               S1FixtureOwnerASite1ID,
@@ -67,28 +71,29 @@ func NewS1FixtureAuthorizationStore(subjectIssuer string) AuthorizationStore {
 		{
 			Principal: PrincipalRecord{ID: S1FixtureDeniedID, SubjectIssuer: subjectIssuer, Subject: "fixture-denied-user", Status: FactStatusActive},
 			Memberships: []OrganizationMembership{
-				{OrganizationID: S1FixtureOwnerAOrganizationID, Status: FactStatusActive},
+				{TenantID: S1FixtureTenantAID, OrganizationID: S1FixtureOwnerAOrganizationID, Status: FactStatusActive},
 			},
 			RoleBindings: []RoleBinding{
-				{OrganizationID: S1FixtureOwnerAOrganizationID, Actions: []registryauth.Action{registryauth.ActionRegistryRead}, Status: FactStatusActive},
+				{TenantID: S1FixtureTenantAID, OrganizationID: S1FixtureOwnerAOrganizationID, Actions: []registryauth.Action{registryauth.ActionRegistryRead}, Status: FactStatusActive},
 			},
 			ExplicitDenies: []ExplicitDeny{
-				{ActingOrganizationID: S1FixtureOwnerAOrganizationID, OrganizationID: S1FixtureOwnerAOrganizationID, Actions: []registryauth.Action{registryauth.ActionRegistryRead}, Status: FactStatusActive},
+				{TenantID: S1FixtureTenantAID, ActingOrganizationID: S1FixtureOwnerAOrganizationID, OrganizationID: S1FixtureOwnerAOrganizationID, Actions: []registryauth.Action{registryauth.ActionRegistryRead}, Status: FactStatusActive},
 			},
 		},
 		{
 			Principal: PrincipalRecord{ID: S1FixtureNoAccessID, SubjectIssuer: subjectIssuer, Subject: "fixture-no-access-user", Status: FactStatusActive},
 			Memberships: []OrganizationMembership{
-				{OrganizationID: S1FixtureActingOrganizationID, Status: FactStatusActive},
+				{TenantID: S1FixtureTenantAID, OrganizationID: S1FixtureActingOrganizationID, Status: FactStatusActive},
 			},
 		},
 		{
 			Principal: PrincipalRecord{ID: S1FixtureRevokedMemberID, SubjectIssuer: subjectIssuer, Subject: "fixture-revoked-user", Status: FactStatusActive},
 			Memberships: []OrganizationMembership{
-				{OrganizationID: S1FixtureActingOrganizationID, Status: FactStatusRevoked},
+				{TenantID: S1FixtureTenantAID, OrganizationID: S1FixtureActingOrganizationID, Status: FactStatusRevoked},
 			},
 			SiteBindings: []SiteBinding{
 				{
+					TenantID:             S1FixtureTenantAID,
 					ActingOrganizationID: S1FixtureActingOrganizationID,
 					OwningOrganizationID: S1FixtureOwnerAOrganizationID,
 					SiteID:               S1FixtureOwnerASite1ID,
@@ -109,7 +114,7 @@ func NewS2FixtureTelemetryAuthorizationStore(subjectIssuer string) TelemetryAuth
 	return newStaticTelemetryAuthorizationStore(TelemetryAuthorizationFacts{
 		PolicyRevision: S2FixturePolicyRevision,
 		Principal:      PrincipalRecord{ID: S2FixturePrincipal, SubjectIssuer: subjectIssuer, Subject: "fixture-user", Status: FactStatusActive},
-		Memberships:    []OrganizationMembership{{OrganizationID: S2FixtureActingOrganization, Status: FactStatusActive}},
+		Memberships:    []OrganizationMembership{{TenantID: S2FixtureTenantID, OrganizationID: S2FixtureActingOrganization, Status: FactStatusActive}},
 		RoleBindings:   []RoleBinding{{OrganizationID: S2FixtureActingOrganization, Actions: registryActions, Effect: BindingEffectAllow, Status: FactStatusActive}},
 		SiteBindings:   []SiteBinding{{ActingOrganizationID: S2FixtureActingOrganization, OwningOrganizationID: S2FixtureOwnerOrganization, SiteID: S2FixtureSite, Actions: registryActions, Effect: BindingEffectAllow, Status: FactStatusActive}},
 		Devices: []TelemetryDevice{

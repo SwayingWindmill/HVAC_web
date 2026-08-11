@@ -2,6 +2,7 @@ name: S5 Work Order IAM Gateway Read Canary
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - '.github/workflows/s5-work-order-read-canary.yml'
       - 'apps/hvac-web/src/api/generated/platformGateway.gen.ts'

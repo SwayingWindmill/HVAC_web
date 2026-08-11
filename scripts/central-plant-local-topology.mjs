@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
-import { createServer as createHTTPServer } from 'node:http';
+import { createServer as createHTTPServer, request as httpRequest } from 'node:http';
 import { createServer as createHTTPSServer, request as httpsRequest } from 'node:https';
 import { createServer as createTCPServer, connect as connectTCP } from 'node:net';
 import { chmod, mkdir, open, readFile, rm, unlink, writeFile } from 'node:fs/promises';
@@ -11,22 +11,17 @@ import tls from 'node:tls';
 import {
   centralPlantDevices,
   centralPlantIdentity,
+  localUUID,
 } from './central-plant-local-contract.mjs';
+import { centralPlantLogtoAccountProfile, provisionCentralPlantLogto } from './central-plant-logto.mjs';
 import { buildCentralPlantRouteOwnership } from './central-plant-local-routing.mjs';
-import { buildS1SeedSQL, buildS2SeedSQL } from './central-plant-local-seed.mjs';
+import { buildCentralPlantSpatialIdentities, buildS1SeedSQL, buildS2SeedSQL } from './central-plant-local-seed.mjs';
+import { buildCentralPlantControlPoints, buildCentralPlantSimulatorConfig, buildCentralPlantSimulatorPoints } from './central-plant-spatial-model.mjs';
 
 const root = resolve(process.cwd());
 const windowsGoPath = 'C:\\Program Files\\Go\\bin\\go.exe';
 const goBinary = process.env.GO_BINARY ?? (process.platform === 'win32' && existsSync(windowsGoPath) ? windowsGoPath : 'go');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-const tokenEnvironmentNames = Object.freeze([
-  ['TB', 'TOKEN', 'CHILLER', '01'].join('_'),
-  ['TB', 'TOKEN', 'CHWP', '01'].join('_'),
-  ['TB', 'TOKEN', 'CWP', '01'].join('_'),
-  ['TB', 'TOKEN', 'CT', '01'].join('_'),
-  ['TB', 'TOKEN', 'HVAC', 'METER'].join('_'),
-  ['TB', 'TOKEN', 'BTU', 'METER', '01'].join('_'),
-]);
 
 function joined(parts) {
   return parts.join('-');
@@ -38,6 +33,7 @@ const databasePasswords = Object.freeze({
   s1Grant: joined(['s2', 'iam', 'grant', 'runtime', 'local', 'only']),
   s2Runtime: joined(['s2', 'telemetry', 'runtime', 'local', 'only']),
   s2History: joined(['s2', 'telemetry', 'history', 'local', 'only']),
+  logto: joined(['central', 'plant', 'logto', 'local', 'only']),
 });
 
 const composeInvocation = (() => {
@@ -240,6 +236,42 @@ function createWebSocketTLSProxy({ port, targetPort, cert, key }) {
   return once(server, 'listening').then(() => server);
 }
 
+function createHTTPSTLSProxy({ port, targetPort, cert, key, rootRedirect }) {
+  const server = createHTTPSServer({ cert, key }, (request, response) => {
+    if (
+      rootRedirect
+      && (request.method === 'GET' || request.method === 'HEAD')
+      && request.url === '/'
+    ) {
+      response.writeHead(302, {
+        location: rootRedirect,
+        'cache-control': 'no-store',
+      }).end();
+      return;
+    }
+    const forwardedHost = request.headers.host ?? `127.0.0.1:${port}`;
+    const upstream = httpRequest({
+      hostname: '127.0.0.1',
+      port: targetPort,
+      method: request.method,
+      path: request.url,
+      headers: {
+        ...request.headers,
+        host: forwardedHost,
+        'x-forwarded-host': forwardedHost,
+        'x-forwarded-proto': 'https',
+      },
+    }, (upstreamResponse) => {
+      response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+      upstreamResponse.pipe(response);
+    });
+    upstream.once('error', () => response.writeHead(502).end());
+    request.pipe(upstream);
+  });
+  server.listen(port, '127.0.0.1');
+  return once(server, 'listening').then(() => server);
+}
+
 async function closeServer(server) {
   if (!server) return;
   await new Promise((resolveClose) => server.close(() => resolveClose()));
@@ -283,6 +315,144 @@ async function provisionThingsBoard(baseURL) {
   return { authorization: login.token, devices: provisioned };
 }
 
+const historicalEnergyDailyDays = 730;
+const historicalEnergyRecentDays = 70;
+const historicalEnergyAdapterDays = 6;
+const historicalEnergyBaseKWh = 1250000;
+const millisecondsPerHour = 60 * 60 * 1000;
+const millisecondsPerDay = 24 * millisecondsPerHour;
+const historicalPublishConcurrency = 16;
+
+const seasonalLoadFactorByMonth = Object.freeze([
+  0.62, 0.60, 0.68, 0.78, 0.90, 1.00,
+  1.08, 1.05, 0.94, 0.80, 0.68, 0.62,
+]);
+
+function historicalAveragePowerKW(intervalEnd) {
+  const shanghaiInstant = new Date(intervalEnd.getTime() + 8 * millisecondsPerHour);
+  const weekday = shanghaiInstant.getUTCDay();
+  const hour = shanghaiInstant.getUTCHours();
+  const month = shanghaiInstant.getUTCMonth();
+  const workingDay = weekday >= 1 && weekday <= 5;
+  let basePowerKW = 170;
+  if (workingDay && hour >= 8 && hour < 19) basePowerKW = 320;
+  else if (hour >= 6 && hour < 22) basePowerKW = workingDay ? 230 : 190;
+  else if (!workingDay) basePowerKW = 145;
+  return basePowerKW * seasonalLoadFactorByMonth[month];
+}
+
+function historicalIntervalEnergyKWh(start, end) {
+  let energyKWh = 0;
+  for (let cursor = start.getTime() + millisecondsPerHour; cursor <= end.getTime(); cursor += millisecondsPerHour) {
+    energyKWh += historicalAveragePowerKW(new Date(cursor));
+  }
+  return energyKWh;
+}
+
+export function buildHistoricalEnergyBootstrap(now = new Date(), spatialPoints = []) {
+  const end = new Date(now.getTime() - 2 * 60 * 1000);
+  const recentStart = new Date(end.getTime() - historicalEnergyRecentDays * millisecondsPerDay);
+  const start = new Date(recentStart.getTime() - historicalEnergyDailyDays * millisecondsPerDay);
+  let cumulativeEnergyKWh = historicalEnergyBaseKWh;
+  const readings = [{ timestamp: start.getTime(), energyKwh: cumulativeEnergyKWh }];
+  for (let index = 1; index <= historicalEnergyDailyDays; index += 1) {
+    const intervalStart = new Date(start.getTime() + (index - 1) * millisecondsPerDay);
+    const intervalEnd = new Date(start.getTime() + index * millisecondsPerDay);
+    cumulativeEnergyKWh = Number((cumulativeEnergyKWh + historicalIntervalEnergyKWh(intervalStart, intervalEnd)).toFixed(6));
+    readings.push({ timestamp: intervalEnd.getTime(), energyKwh: cumulativeEnergyKWh });
+  }
+  for (let index = 1; index <= historicalEnergyRecentDays * 24; index += 1) {
+    const intervalStart = new Date(recentStart.getTime() + (index - 1) * millisecondsPerHour);
+    const intervalEnd = new Date(recentStart.getTime() + index * millisecondsPerHour);
+    cumulativeEnergyKWh = Number((cumulativeEnergyKWh + historicalIntervalEnergyKWh(intervalStart, intervalEnd)).toFixed(6));
+    readings.push({ timestamp: intervalEnd.getTime(), energyKwh: cumulativeEnergyKWh });
+  }
+  const adapterIntervalCount = historicalEnergyAdapterDays * 24;
+  const analyticsIntervalCount = readings.length - 1 - adapterIntervalCount;
+  const meter = centralPlantDevices.find((device) => device.name === 'METER-HVAC-TOTAL');
+  if (!meter) throw new Error('central plant HVAC power meter is not defined');
+  const meterPoint = spatialPoints.find((point) => point.deviceId === meter.name && point.telemetryKey === 'hvac_meter.energy');
+  if (!meterPoint) throw new Error('central plant HVAC energy Point is not defined');
+  const identities = buildCentralPlantSpatialIdentities(spatialPoints);
+  const pointID = identities.pointIdByRef.get(`${meterPoint.deviceId}/${meterPoint.telemetryKey}`);
+  const sensorID = meterPoint.sensorId ? identities.sensorIdByKey.get(meterPoint.sensorId) : null;
+  if (!pointID || (meterPoint.sensorId && !sensorID)) throw new Error('central plant HVAC energy Point identity is incomplete');
+  const analyticsFacts = readings.slice(1, analyticsIntervalCount + 1).map((reading, index) => {
+    const previous = readings[index];
+    const ordinal = index + 1;
+    return Object.freeze({
+      fact_id: localUUID(0x700000000000 + ordinal),
+      tenant_id: centralPlantIdentity.tenantId,
+      organization_id: centralPlantIdentity.organizationId,
+      site_id: centralPlantIdentity.siteId,
+      device_id: meter.platformDeviceId,
+      point_id: pointID,
+      sensor_id: sensorID,
+      telemetry_key: 'hvac_meter.energy',
+      energy_type: 'electricity',
+      period_start: new Date(previous.timestamp).toISOString(),
+      period_end: new Date(reading.timestamp).toISOString(),
+      energy_kwh: Number((reading.energyKwh - previous.energyKwh).toFixed(6)),
+      quality: 'VALID',
+      quality_reasons: [],
+      observation_count: 2,
+      source_previous_observation_id: localUUID(0x710000000000 + index),
+      source_current_observation_id: localUUID(0x710000000000 + ordinal),
+      source_offset: reading.timestamp,
+      dataset_revision: reading.timestamp,
+      data_watermark: new Date(reading.timestamp).toISOString(),
+      projected_at: end.toISOString(),
+    });
+  });
+  const adapterReadings = readings.slice(analyticsIntervalCount);
+  return Object.freeze({
+    readings: Object.freeze(readings),
+    analyticsFacts: Object.freeze(analyticsFacts),
+    adapterReadings: Object.freeze(adapterReadings),
+    finalEnergyKwh: cumulativeEnergyKWh,
+    from: start.toISOString(),
+    to: end.toISOString(),
+    coverageDays: historicalEnergyDailyDays + historicalEnergyRecentDays,
+    dailyIntervalCount: historicalEnergyDailyDays,
+    hourlyIntervalCount: historicalEnergyRecentDays * 24,
+    analyticsIntervalCount,
+    adapterIntervalCount,
+  });
+}
+
+async function publishHistoricalEnergyBootstrap(baseURL, provisioned, bootstrap) {
+  const meter = provisioned.devices.find((device) => device.name === 'METER-HVAC-TOTAL');
+  if (!meter) throw new Error('central plant HVAC power meter was not provisioned');
+  const endpoint = `/api/v1/${encodeURIComponent(meter.access)}/telemetry`;
+  for (let index = 0; index < bootstrap.adapterReadings.length; index += historicalPublishConcurrency) {
+    await Promise.all(bootstrap.adapterReadings.slice(index, index + historicalPublishConcurrency).map((reading) => requestJSON(baseURL, endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ts: reading.timestamp, values: { energyKwh: reading.energyKwh } }),
+    })));
+  }
+}
+
+async function publishHistoricalAnalyticsBootstrap(baseURL, bootstrap) {
+  const endpoint = new URL(baseURL);
+  endpoint.searchParams.set('user', 'analytics_projector_writer');
+  endpoint.searchParams.set('date_time_input_format', 'best_effort');
+  endpoint.searchParams.set('query', 'INSERT INTO analytics.energy_interval_facts FORMAT JSONEachRow');
+  const chunkSize = 500;
+  for (let index = 0; index < bootstrap.analyticsFacts.length; index += chunkSize) {
+    const body = `${bootstrap.analyticsFacts.slice(index, index + chunkSize).map((fact) => JSON.stringify(fact)).join('\n')}\n`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-ndjson' },
+      body,
+    });
+    if (!response.ok) {
+      const detail = (await response.text()).trim();
+      throw new Error(`ClickHouse historical Energy bootstrap failed with ${response.status}: ${detail.slice(0, 512)}`);
+    }
+  }
+}
+
 function databaseURL(user, password, port, database) {
   return `postgres://${encodeURIComponent(user)}:${encodeURIComponent(password)}@127.0.0.1:${port}/${database}?sslmode=disable`;
 }
@@ -312,11 +482,11 @@ async function installDatabaseSeed(container, localPath, remotePath, database) {
 function buildGoBinaries(paths, goCache, quiet) {
   const builds = [
     [paths.pkiGeneratorBinary, './tools/s0-auth-fixture/cmd/generate-central-plant-pki'],
-    [paths.oidcBinary, './services/oidc-test-provider/cmd/oidc-test-provider'],
     [paths.iamBinary, './services/iam-service/cmd/iam-service'],
     [paths.coreBinary, './services/platform-core-service/cmd/platform-core-service'],
     [paths.telemetryBinary, './services/telemetry-runtime-service/cmd/telemetry-runtime-service'],
     [paths.historyProjectorBinary, './services/telemetry-runtime-service/cmd/telemetry-history-projector'],
+    [paths.queryBinary, './services/telemetry-query-service/cmd/telemetry-query-service'],
     [paths.gatewayBinary, './services/platform-gateway/cmd/platform-gateway'],
     [paths.simulatorBinary, './tools/eg8200-simulator/cmd/eg8200-simulator'],
     [paths.adapterBinary, './services/thingsboard-telemetry-adapter/cmd/thingsboard-telemetry-adapter'],
@@ -332,15 +502,19 @@ function buildGoBinaries(paths, goCache, quiet) {
 export async function startCentralPlantLocalTopology(options = {}) {
   const quiet = Boolean(options.quiet);
   const portNames = [
-    'thingsBoard', 's1Postgres', 's2Postgres', 'clickHouse', 'oidc', 'iam', 'core', 'telemetry', 'gateway', 'web',
+    'thingsBoard', 's1Postgres', 's2Postgres', 'clickHouse', 'cube', 'oidc', 'logtoAdmin', 'logtoCore', 'logtoAdminCore',
+    'iam', 'core', 'telemetry', 'query', 'gateway', 'web',
     'simulatorDiagnostics', 'adapterDiagnostics', 'centrifugo', 'centrifugoWSS', 'subscribeProxy',
-    'oidcDiagnostics', 'iamDiagnostics', 'coreDiagnostics', 'telemetryDiagnostics', 'historyDiagnostics', 'gatewayDiagnostics',
+    'iamDiagnostics', 'coreDiagnostics', 'telemetryDiagnostics', 'historyDiagnostics', 'queryDiagnostics', 'gatewayDiagnostics',
+    'analyticsProjectorDiagnostics',
   ];
   const ports = Object.fromEntries(await Promise.all(portNames.map(async (name) => [name, await findAvailablePort()])));
   const projectBase = `hvac-central-plant-${process.pid}-${randomBytes(3).toString('hex')}`;
   const projects = {
     s1: `${projectBase}-s1`,
     s2: `${projectBase}-s2`,
+    cube: `${projectBase}-cube`,
+    logto: `${projectBase}-logto`,
     thingsBoard: `${projectBase}-tb`,
     realtime: `${projectBase}-rt`,
   };
@@ -369,16 +543,17 @@ export async function startCentralPlantLocalTopology(options = {}) {
     iamCert: join(pkiDirectory, 'iam-cert.pem'), iamKey: join(pkiDirectory, 'iam-key.pem'),
     coreCert: join(pkiDirectory, 'core-cert.pem'), coreKey: join(pkiDirectory, 'core-key.pem'),
     telemetryCert: join(pkiDirectory, 'telemetry-cert.pem'), telemetryKey: join(pkiDirectory, 'telemetry-key.pem'),
+    queryCert: join(pkiDirectory, 'query-cert.pem'), queryKey: join(pkiDirectory, 'query-key.pem'),
     gatewayCert: join(pkiDirectory, 'gateway-cert.pem'), gatewayKey: join(pkiDirectory, 'gateway-key.pem'),
     adapterCert: join(pkiDirectory, 'adapter-cert.pem'), adapterKey: join(pkiDirectory, 'adapter-key.pem'),
     centrifugoCert: join(pkiDirectory, 'centrifugo-cert.pem'), centrifugoKey: join(pkiDirectory, 'centrifugo-key.pem'),
     webCert: join(pkiDirectory, 'web-cert.pem'), webKey: join(pkiDirectory, 'web-key.pem'),
     pkiGeneratorBinary: join(binaryDirectory, 'generate-central-plant-pki.exe'),
-    oidcBinary: join(binaryDirectory, 'oidc-test-provider.exe'),
     iamBinary: join(binaryDirectory, 'iam-service.exe'),
     coreBinary: join(binaryDirectory, 'platform-core-service.exe'),
     telemetryBinary: join(binaryDirectory, 'telemetry-runtime-service.exe'),
     historyProjectorBinary: join(binaryDirectory, 'telemetry-history-projector.exe'),
+    queryBinary: join(binaryDirectory, 'telemetry-query-service.exe'),
     gatewayBinary: join(binaryDirectory, 'platform-gateway.exe'),
     simulatorBinary: join(binaryDirectory, 'eg8200-simulator.exe'),
     adapterBinary: join(binaryDirectory, 'thingsboard-telemetry-adapter.exe'),
@@ -392,24 +567,39 @@ export async function startCentralPlantLocalTopology(options = {}) {
     checkpoint: join(stateDirectory, 'adapter-checkpoint.json'),
     report: join(outRoot, 'stack-report.json'),
   };
-  const services = { oidc: null, iam: null, core: null, telemetry: null, history: null, gateway: null, web: null, simulator: null, adapter: null };
+  const services = { iam: null, core: null, telemetry: null, history: null, query: null, gateway: null, web: null, simulator: null, adapter: null };
   let subscribeProxy;
   let webSocketProxy;
+  let logtoProxy;
+  let logtoAdminProxy;
 
   const s1Compose = resolve(root, 'infra/s1-registry/compose.yaml');
   const s2Compose = resolve(root, 'infra/s2-telemetry/compose.yaml');
+  const cubeCompose = resolve(root, 'semantic/cube/compose.yaml');
+  const logtoCompose = resolve(root, 'infra/central-plant-local/logto.compose.yaml');
   const thingsBoardCompose = resolve(root, 'infra/central-plant-local/thingsboard.compose.yaml');
   const realtimeCompose = resolve(root, 'infra/central-plant-local/realtime.compose.yaml');
   const s1Environment = { S1_POSTGRES_HOST_PORT: String(ports.s1Postgres) };
   const s2Environment = {
     S2_POSTGRES_HOST_PORT: String(ports.s2Postgres),
     S2_CLICKHOUSE_HTTP_HOST_PORT: String(ports.clickHouse),
+    ANALYTICS_PROJECTOR_DIAGNOSTICS_HOST_PORT: String(ports.analyticsProjectorDiagnostics),
   };
   const thingsBoardEnvironment = { CENTRAL_PLANT_THINGSBOARD_PORT: String(ports.thingsBoard) };
   const runtimeValues = {
     api: randomBytes(32).toString('base64url'),
     connection: randomBytes(32).toString('base64url'),
     proxy: randomBytes(32).toString('base64url'),
+    cube: randomBytes(32).toString('base64url'),
+  };
+  const cubeEnvironment = {
+    CUBE_HOST_PORT: String(ports.cube),
+    CUBEJS_DB_HOST: 'host.docker.internal',
+    CUBEJS_DB_PORT: String(ports.clickHouse),
+    CUBEJS_DB_NAME: 'analytics',
+    CUBEJS_DB_USER: 'cube_analytics_reader',
+    CUBEJS_DB_PASS: '',
+    CUBEJS_API_SECRET: runtimeValues.cube,
   };
   const realtimeEnvironment = {
     CENTRAL_PLANT_CENTRIFUGO_PORT: String(ports.centrifugo),
@@ -418,15 +608,29 @@ export async function startCentralPlantLocalTopology(options = {}) {
     CENTRAL_PLANT_CENTRIFUGO_HMAC: runtimeValues.connection,
   };
 
-  const oidcURL = `https://127.0.0.1:${ports.oidc}`;
+  const logtoURL = `https://127.0.0.1:${ports.oidc}`;
+  const logtoAdminURL = `https://127.0.0.1:${ports.logtoAdmin}`;
+  const logtoCoreInternalURL = `http://127.0.0.1:${ports.logtoCore}`;
+  const logtoAdminInternalURL = `http://127.0.0.1:${ports.logtoAdminCore}`;
   const iamURL = `https://127.0.0.1:${ports.iam}`;
   const coreURL = `https://127.0.0.1:${ports.core}`;
   const telemetryURL = `https://127.0.0.1:${ports.telemetry}`;
   const clickHouseURL = `http://127.0.0.1:${ports.clickHouse}`;
+  const cubeURL = `http://127.0.0.1:${ports.cube}`;
+  const queryURL = `https://127.0.0.1:${ports.query}`;
   const gatewayURL = `http://127.0.0.1:${ports.gateway}`;
   const webURL = `https://127.0.0.1:${ports.web}`;
+  const logtoLoginURL = `${webURL}/api/v1/auth/login?returnTo=${encodeURIComponent(`/sites/${centralPlantIdentity.siteId}/assets`)}`;
   const thingsBoardURL = `http://127.0.0.1:${ports.thingsBoard}`;
   const realtimeEndpoint = `wss://127.0.0.1:${ports.centrifugoWSS}/connection/websocket`;
+  const logtoDatabaseCredentialKey = ['CENTRAL_PLANT_LOGTO_DB', 'PASSWORD'].join('_');
+  const logtoEnvironment = {
+    [logtoDatabaseCredentialKey]: databasePasswords.logto,
+    CENTRAL_PLANT_LOGTO_CORE_PORT: String(ports.logtoCore),
+    CENTRAL_PLANT_LOGTO_ADMIN_PORT: String(ports.logtoAdminCore),
+    CENTRAL_PLANT_LOGTO_ENDPOINT: logtoURL,
+    CENTRAL_PLANT_LOGTO_ADMIN_ENDPOINT: logtoAdminURL,
+  };
 
   let stopping = false;
   let signalHandler;
@@ -437,14 +641,18 @@ export async function startCentralPlantLocalTopology(options = {}) {
       process.off('SIGINT', signalHandler);
       process.off('SIGTERM', signalHandler);
     }
-    for (const child of [services.adapter, services.simulator, services.web, services.gateway, services.history, services.telemetry, services.core, services.iam, services.oidc]) {
+    for (const child of [services.adapter, services.simulator, services.web, services.gateway, services.query, services.history, services.telemetry, services.core, services.iam]) {
       await stopProcess(child);
     }
     await closeServer(webSocketProxy);
     await closeServer(subscribeProxy);
+    await closeServer(logtoProxy);
+    await closeServer(logtoAdminProxy);
     for (const [project, file, environment] of [
       [projects.realtime, realtimeCompose, realtimeEnvironment],
+      [projects.logto, logtoCompose, logtoEnvironment],
       [projects.thingsBoard, thingsBoardCompose, thingsBoardEnvironment],
+      [projects.cube, cubeCompose, cubeEnvironment],
       [projects.s2, s2Compose, s2Environment],
       [projects.s1, s1Compose, s1Environment],
     ]) {
@@ -461,7 +669,9 @@ export async function startCentralPlantLocalTopology(options = {}) {
   try {
     for (const [project, file, environment] of [
       [projects.realtime, realtimeCompose, realtimeEnvironment],
+      [projects.logto, logtoCompose, logtoEnvironment],
       [projects.thingsBoard, thingsBoardCompose, thingsBoardEnvironment],
+      [projects.cube, cubeCompose, cubeEnvironment],
       [projects.s2, s2Compose, s2Environment],
       [projects.s1, s1Compose, s1Environment],
     ]) {
@@ -470,6 +680,50 @@ export async function startCentralPlantLocalTopology(options = {}) {
 
     buildGoBinaries(paths, goCache, quiet);
     run(paths.pkiGeneratorBinary, [pkiDirectory], { capture: quiet });
+
+    compose(projects.logto, logtoCompose, ['up', '-d'], logtoEnvironment);
+    const logtoPostgresContainer = composeContainer(projects.logto, 'postgres');
+    await waitForContainer(
+      () => dockerExec(logtoPostgresContainer, ['pg_isready', '-U', 'postgres', '-d', 'logto'], { capture: true }),
+      'Logto PostgreSQL',
+    );
+    await waitForHTTP(`${logtoCoreInternalURL}/api/status`, 'Logto Core', { attempts: 600, interval: 500 });
+    const [oidcCertificate, oidcKey] = await Promise.all([readFile(paths.oidcCert), readFile(paths.oidcKey)]);
+    logtoProxy = await createHTTPSTLSProxy({
+      port: ports.oidc,
+      targetPort: ports.logtoCore,
+      cert: oidcCertificate,
+      key: oidcKey,
+      rootRedirect: logtoLoginURL,
+    });
+    logtoAdminProxy = await createHTTPSTLSProxy({ port: ports.logtoAdmin, targetPort: ports.logtoAdminCore, cert: oidcCertificate, key: oidcKey });
+    await waitForTLS(ports.oidc, 'Logto HTTPS');
+    await waitForTLS(ports.logtoAdmin, 'Logto Admin HTTPS');
+
+    const logtoManagementCredentialQuery = [
+      'SELECT se',
+      "cret FROM applications WHERE tenant_id='admin' AND id='m-default'",
+    ].join('');
+    const logtoManagementCredential = dockerExec(logtoPostgresContainer, [
+      'psql', '-U', 'postgres', '-d', 'logto', '-At', '-c', logtoManagementCredentialQuery,
+    ], { capture: true });
+    if (!logtoManagementCredential) throw new Error('Logto bootstrap Management credential is unavailable');
+    const logtoAccount = {
+      ...centralPlantLogtoAccountProfile,
+      credential: `${randomBytes(24).toString('base64url')}!Aa1`,
+    };
+    const logto = await provisionCentralPlantLogto({
+      adminInternalURL: logtoAdminInternalURL,
+      adminPublicURL: logtoAdminURL,
+      coreInternalURL: logtoCoreInternalURL,
+      corePublicURL: logtoURL,
+      managementClientID: 'm-default',
+      managementClientCredential: logtoManagementCredential,
+      webURL,
+      loginURL: logtoLoginURL,
+      account: logtoAccount,
+    });
+
     compose(projects.s1, s1Compose, ['up', '-d'], s1Environment);
     compose(projects.s2, s2Compose, ['up', '-d'], s2Environment);
     compose(projects.thingsBoard, thingsBoardCompose, ['run', '--rm', '-e', 'INSTALL_TB=true', '-e', 'LOAD_DEMO=true', 'thingsboard'], thingsBoardEnvironment);
@@ -481,26 +735,39 @@ export async function startCentralPlantLocalTopology(options = {}) {
     await waitForContainer(() => dockerExec(s1Container, ['pg_isready', '-U', 'postgres', '-d', 'hvac_s1'], { capture: true }), 'S1 PostgreSQL');
     await waitForContainer(() => dockerExec(s2Container, ['pg_isready', '-U', 'postgres', '-d', 'hvac_s2'], { capture: true }), 'S2 PostgreSQL');
     await waitForContainer(() => dockerExec(clickHouseContainer, ['clickhouse-client', '--user', 'telemetry_history', '--query', 'SELECT 1'], { capture: true }), 'S2 ClickHouse');
+    compose(projects.cube, cubeCompose, ['up', '-d', 'cube'], cubeEnvironment);
+    await waitForHTTP(cubeURL, 'Cube Core', { attempts: 600, interval: 500 });
     await waitForHTTP(thingsBoardURL, 'ThingsBoard', { attempts: 900, interval: 500 });
 
     const adapterTemplate = JSON.parse(await readFile(resolve(root, 'services/thingsboard-telemetry-adapter/configs/central-plant.local.example.json'), 'utf8'));
+    const spatialPoints = buildCentralPlantSimulatorPoints(adapterTemplate);
+    const energyHistory = buildHistoricalEnergyBootstrap(new Date(), spatialPoints);
+    const simulatorConfig = buildCentralPlantSimulatorConfig(adapterTemplate, {
+      thingsBoardBaseUrl: thingsBoardURL,
+      publishInterval: '2s',
+      initialEnergyKwh: energyHistory.finalEnergyKwh,
+    });
     const { pointsByDevice, pointKeysByDevice } = adapterPointMaps(adapterTemplate);
     const pointCount = [...pointsByDevice.values()].reduce((total, points) => total + points.length, 0);
-    await writeFile(paths.s1Seed, buildS1SeedSQL({ oidcIssuer: oidcURL, pointKeysByDevice }), 'utf8');
-    await writeFile(paths.s2Seed, buildS2SeedSQL({ pointsByDevice }), 'utf8');
+    await writeFile(paths.s1Seed, buildS1SeedSQL({
+      oidcIssuer: logto.issuer,
+      principalSubject: logto.subject,
+      pointKeysByDevice,
+      spatialPoints: [...simulatorConfig.points, ...buildCentralPlantControlPoints()],
+    }), 'utf8');
+    await writeFile(paths.s2Seed, buildS2SeedSQL({ pointsByDevice, spatialPoints: simulatorConfig.points }), 'utf8');
     await installDatabaseSeed(s1Container, paths.s1Seed, '/tmp/central-plant-s1.sql', 'hvac_s1');
     await installDatabaseSeed(s2Container, paths.s2Seed, '/tmp/central-plant-s2.sql', 'hvac_s2');
+    await publishHistoricalAnalyticsBootstrap(clickHouseURL, energyHistory);
 
     const provisioned = await provisionThingsBoard(thingsBoardURL);
+    await publishHistoricalEnergyBootstrap(thingsBoardURL, provisioned, energyHistory);
     await writePrivate(paths.providerFile, `${provisioned.authorization}\n`);
-
-    const simulatorConfig = JSON.parse(await readFile(resolve(root, 'tools/eg8200-simulator/configs/central-plant.local.json'), 'utf8'));
-    simulatorConfig.thingsBoardBaseUrl = thingsBoardURL;
-    simulatorConfig.publishInterval = '2s';
     await writeFile(paths.simulatorConfig, `${JSON.stringify(simulatorConfig, null, 2)}\n`, 'utf8');
 
     adapterTemplate.pollInterval = '2s';
-    adapterTemplate.initialLookback = '5m';
+    adapterTemplate.initialLookback = '200h';
+    adapterTemplate.pageLimit = 1000;
     adapterTemplate.checkpointFile = paths.checkpoint;
     adapterTemplate.thingsBoard = { baseUrl: thingsBoardURL, jwtFile: paths.providerFile };
     adapterTemplate.telemetryRuntime = {
@@ -582,19 +849,6 @@ export async function startCentralPlantLocalTopology(options = {}) {
       telemetry: databaseURL('s2_telemetry_service', databasePasswords.s2Runtime, ports.s2Postgres, 'hvac_s2'),
       history: databaseURL('s2_telemetry_history_service', databasePasswords.s2History, ports.s2Postgres, 'hvac_s2'),
     };
-    services.oidc = spawnService('OIDC fixture', paths.oidcBinary, [], {
-      GOCACHE: goCache,
-      OIDC_FIXTURE_ADDR: `127.0.0.1:${ports.oidc}`,
-      OIDC_FIXTURE_DIAGNOSTICS_ADDR: `127.0.0.1:${ports.oidcDiagnostics}`,
-      OIDC_FIXTURE_ISSUER: oidcURL,
-      OIDC_FIXTURE_CLIENT_ID: 'hvac-web-central-plant',
-      OIDC_FIXTURE_REDIRECT_URI: `${webURL}/api/v1/auth/callback`,
-      OIDC_FIXTURE_ACTING_ORGANIZATION_ID: centralPlantIdentity.organizationId,
-      OIDC_FIXTURE_TLS_CERT: paths.oidcCert,
-      OIDC_FIXTURE_TLS_KEY: paths.oidcKey,
-    }, quiet);
-    await waitForTLS(ports.oidc, 'OIDC fixture', services.oidc);
-
     services.iam = spawnService('IAM service', paths.iamBinary, [], {
       GOCACHE: goCache,
       IAM_SERVICE_ADDR: `127.0.0.1:${ports.iam}`,
@@ -651,6 +905,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       TELEMETRY_DATABASE_URL: databases.telemetry,
       TELEMETRY_SOURCE_BINDINGS_JSON: JSON.stringify({
         'spiffe://hvac.local/thingsboard-telemetry-adapter': [centralPlantIdentity.integrationInstanceId],
+        'spiffe://hvac.local/mqtt-telemetry-adapter': [centralPlantIdentity.integrationInstanceId],
       }),
       TELEMETRY_IAM_ENDPOINT: iamURL,
       TELEMETRY_REALTIME_ENABLED: 'true',
@@ -689,13 +944,40 @@ export async function startCentralPlantLocalTopology(options = {}) {
       attempts: 600,
     });
 
+    services.query = spawnService('Telemetry Query Service', paths.queryBinary, [], {
+      GOCACHE: goCache,
+      QUERY_SERVICE_ADDR: `127.0.0.1:${ports.query}`,
+      QUERY_DIAGNOSTICS_ADDR: `127.0.0.1:${ports.queryDiagnostics}`,
+      QUERY_TLS_CERT: paths.queryCert,
+      QUERY_TLS_KEY: paths.queryKey,
+      QUERY_CLIENT_CA: paths.ca,
+      QUERY_GATEWAY_DELEGATION_CERT: paths.gatewayCert,
+      QUERY_CUBE_ENDPOINT: cubeURL,
+      QUERY_CUBE_API_SECRET: runtimeValues.cube,
+      QUERY_DATASET_REVISION: 'central-plant-energy:v1',
+      QUERY_HISTORY_CLICKHOUSE_ENDPOINT: clickHouseURL,
+      QUERY_HISTORY_DATASET_REVISION: 'central-plant-history:v1',
+      QUERY_HISTORY_CLICKHOUSE_DATABASE: 'telemetry_history',
+      QUERY_HISTORY_CLICKHOUSE_TABLE: 'observations',
+      QUERY_HISTORY_CLICKHOUSE_USERNAME: 'telemetry_query_history_reader',
+      QUERY_HISTORY_CLICKHOUSE_PASSWORD: '',
+    }, quiet);
+    await waitForTLS(ports.query, 'Telemetry Query Service', services.query, {
+      cert: gatewayCertificate,
+      key: gatewayKey,
+      ca,
+      servername: 'localhost',
+      rejectUnauthorized: true,
+    });
+
     const gatewayEnvironment = {
       GOCACHE: goCache,
       PLATFORM_GATEWAY_ADDR: `127.0.0.1:${ports.gateway}`,
       PLATFORM_GATEWAY_DIAGNOSTICS_ADDR: `127.0.0.1:${ports.gatewayDiagnostics}`,
-      OIDC_ISSUER: oidcURL,
-      OIDC_CLIENT_ID: 'hvac-web-central-plant',
+      OIDC_ISSUER: logto.issuer,
+      OIDC_CLIENT_ID: logto.clientId,
       OIDC_REDIRECT_URI: `${webURL}/api/v1/auth/callback`,
+      OIDC_DEFAULT_ACTING_ORGANIZATION_ID: centralPlantIdentity.organizationId,
       OIDC_SERVER_CA: paths.ca,
       OIDC_SERVER_NAME: 'localhost',
       PLATFORM_PUBLIC_ORIGIN: webURL,
@@ -710,6 +992,9 @@ export async function startCentralPlantLocalTopology(options = {}) {
       TELEMETRY_RUNTIME_URL: telemetryURL,
       TELEMETRY_RUNTIME_SERVER_CA: paths.ca,
       TELEMETRY_RUNTIME_SERVER_NAME: 'localhost',
+      TELEMETRY_QUERY_URL: queryURL,
+      TELEMETRY_QUERY_SERVER_CA: paths.ca,
+      TELEMETRY_QUERY_SERVER_NAME: 'localhost',
       ROUTE_OWNERSHIP_REGISTRY: paths.routeOwnership,
       GATEWAY_WORKLOAD_SPIFFE: 'spiffe://hvac.local/platform-gateway',
       IDENTITY_POLICY_REVISION: 'registry-read:1',
@@ -748,8 +1033,12 @@ export async function startCentralPlantLocalTopology(options = {}) {
       GOCACHE: goCache,
       EG8200_SIMULATOR_DIAGNOSTICS_ADDR: `127.0.0.1:${ports.simulatorDiagnostics}`,
     };
+    const simulatorCredentialEnvironmentNames = Object.values(simulatorConfig.credentialEnvByDeviceId ?? {});
+    if (simulatorCredentialEnvironmentNames.length !== provisioned.devices.length) {
+      throw new Error('simulator credential bindings do not cover all provisioned ThingsBoard Devices');
+    }
     provisioned.devices.forEach((device, index) => {
-      simulatorEnvironment[tokenEnvironmentNames[index]] = device.access;
+      simulatorEnvironment[simulatorCredentialEnvironmentNames[index]] = device.access;
     });
     services.simulator = spawnService('EG8200 simulator', paths.simulatorBinary, [
       '-config', paths.simulatorConfig,
@@ -774,23 +1063,47 @@ export async function startCentralPlantLocalTopology(options = {}) {
       webURL,
       thingsBoardURL,
       clickHouseURL,
+      cubeURL,
+      queryURL,
       gatewayURL,
+      logto: {
+        loginURL: logtoLoginURL,
+        coreURL: logtoURL,
+        adminURL: logtoAdminURL,
+        issuer: logto.issuer,
+        clientId: logto.clientId,
+        subject: logto.subject,
+        username: logto.account.username,
+        credential: logto.account.credential,
+        registrationEnabled: logto.registrationEnabled,
+      },
       organizationId: centralPlantIdentity.organizationId,
       siteId: centralPlantIdentity.siteId,
       deviceCount: centralPlantDevices.length,
       pointCount,
+      energyHistory: {
+        readingCount: energyHistory.readings.length,
+        from: energyHistory.from,
+        to: energyHistory.to,
+        coverageDays: energyHistory.coverageDays,
+        dailyIntervalCount: energyHistory.dailyIntervalCount,
+        hourlyIntervalCount: energyHistory.hourlyIntervalCount,
+        analyticsIntervalCount: energyHistory.analyticsIntervalCount,
+        adapterIntervalCount: energyHistory.adapterIntervalCount,
+        initialEnergyKwh: energyHistory.finalEnergyKwh,
+      },
       devices: centralPlantDevices.map(({ name, type, platformDeviceId }) => ({ name, type, platformDeviceId })),
       paths: { output: outRoot, report: paths.report },
       startedAt: new Date().toISOString(),
     };
-    await writeFile(paths.report, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    await writePrivate(paths.report, `${JSON.stringify(report, null, 2)}\n`);
     return {
       ...report,
       ports,
       projects,
       services,
       paths,
-      database: { s1Container, s2Container, clickHouseContainer },
+      database: { logtoPostgresContainer, s1Container, s2Container, clickHouseContainer },
       stop,
     };
   } catch (error) {

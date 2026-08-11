@@ -5,32 +5,40 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"strings"
 	"time"
 )
 
-const ConfigSchemaVersion = 1
+const ConfigSchemaVersion = 2
 
 type Config struct {
-	SchemaVersion      int               `json:"schemaVersion"`
-	GatewayID          string            `json:"gatewayId"`
-	ThingsBoardBaseURL string            `json:"thingsBoardBaseUrl"`
-	PublishInterval    string            `json:"publishInterval"`
-	Plant              PlantConfig       `json:"plant"`
-	Credentials        map[string]string `json:"credentialEnvByDeviceId"`
+	SchemaVersion      int                    `json:"schemaVersion"`
+	GatewayID          string                 `json:"gatewayId"`
+	ThingsBoardBaseURL string                 `json:"thingsBoardBaseUrl"`
+	PublishInterval    string                 `json:"publishInterval"`
+	Plant              PlantConfig            `json:"plant"`
+	Areas              []AreaConfig           `json:"areas"`
+	Equipment          []EquipmentAssetConfig `json:"equipment"`
+	Devices            []DeviceEndpointConfig `json:"devices"`
+	Sensors            []SensorConfig         `json:"sensors"`
+	Points             []PointConfig          `json:"points"`
+	Credentials        map[string]string      `json:"credentialEnvByDeviceId"`
 }
 
 type PlantConfig struct {
 	AmbientDryBulbC  float64            `json:"ambientDryBulbC"`
 	AmbientWetBulbC  float64            `json:"ambientWetBulbC"`
 	LoadFraction     float64            `json:"loadFraction"`
+	InitialEnergyKWh float64            `json:"initialEnergyKwh,omitempty"`
 	Chiller          ChillerConfig      `json:"chiller"`
 	ChilledWaterPump PumpConfig         `json:"chilledWaterPump"`
 	CoolingWaterPump PumpConfig         `json:"coolingWaterPump"`
 	CoolingTower     CoolingTowerConfig `json:"coolingTower"`
 	PowerMeterID     string             `json:"powerMeterId"`
 	BTUMeterID       string             `json:"btuMeterId"`
+	WeatherStationID string             `json:"weatherStationId"`
 }
 
 type ChillerConfig struct {
@@ -98,14 +106,16 @@ func (config Config) Validate() error {
 	if err := config.Plant.Validate(); err != nil {
 		return err
 	}
-	deviceIDs := config.Plant.DeviceIDs()
-	if len(config.Credentials) != len(deviceIDs) {
-		return errors.New("credentialEnvByDeviceId must contain every simulated device exactly once")
+	if err := validateAssetModel(config); err != nil {
+		return err
 	}
-	for _, deviceID := range deviceIDs {
-		envName := strings.TrimSpace(config.Credentials[deviceID])
+	if len(config.Credentials) != len(config.Devices) {
+		return errors.New("credentialEnvByDeviceId must contain every simulated Device Endpoint exactly once")
+	}
+	for _, device := range config.Devices {
+		envName := strings.TrimSpace(config.Credentials[device.ID])
 		if envName == "" {
-			return fmt.Errorf("credential environment variable is missing for %s", deviceID)
+			return fmt.Errorf("credential environment variable is missing for %s", device.ID)
 		}
 	}
 	return nil
@@ -118,6 +128,9 @@ func (config PlantConfig) Validate() error {
 	if config.LoadFraction < 0 || config.LoadFraction > 1.2 {
 		return errors.New("plant loadFraction must be between 0 and 1.2")
 	}
+	if config.InitialEnergyKWh < 0 || math.IsNaN(config.InitialEnergyKWh) || math.IsInf(config.InitialEnergyKWh, 0) {
+		return errors.New("plant initialEnergyKwh must be a finite non-negative number")
+	}
 	if config.Chiller.RatedCoolingCapacityKW <= 0 || config.Chiller.BaseCOP < 2 || config.Chiller.BaseCOP > 9 || config.Chiller.InitialSetpointC < 5 || config.Chiller.InitialSetpointC > 12 || config.Chiller.InitialLoadLimitPct < 20 || config.Chiller.InitialLoadLimitPct > 100 {
 		return errors.New("chiller config is invalid")
 	}
@@ -126,7 +139,7 @@ func (config PlantConfig) Validate() error {
 			return fmt.Errorf("%s config is invalid", name)
 		}
 	}
-	if strings.TrimSpace(config.Chiller.ID) == "" || strings.TrimSpace(config.CoolingTower.ID) == "" || strings.TrimSpace(config.PowerMeterID) == "" || strings.TrimSpace(config.BTUMeterID) == "" || config.CoolingTower.RatedFanPowerKW <= 0 || config.CoolingTower.InitialFanSpeedPct < 20 || config.CoolingTower.InitialFanSpeedPct > 100 {
+	if strings.TrimSpace(config.Chiller.ID) == "" || strings.TrimSpace(config.CoolingTower.ID) == "" || strings.TrimSpace(config.PowerMeterID) == "" || strings.TrimSpace(config.BTUMeterID) == "" || strings.TrimSpace(config.WeatherStationID) == "" || config.CoolingTower.RatedFanPowerKW <= 0 || config.CoolingTower.InitialFanSpeedPct < 20 || config.CoolingTower.InitialFanSpeedPct > 100 {
 		return errors.New("plant device config is incomplete")
 	}
 	seen := map[string]struct{}{}
@@ -147,12 +160,37 @@ func (config PlantConfig) DeviceIDs() []string {
 		config.CoolingTower.ID,
 		config.PowerMeterID,
 		config.BTUMeterID,
+		config.WeatherStationID,
 	}
 }
 
 func (config Config) Interval() time.Duration {
 	interval, _ := time.ParseDuration(config.PublishInterval)
+	for _, point := range config.Points {
+		sample, _ := time.ParseDuration(point.SampleInterval)
+		if sample > 0 && sample < interval {
+			interval = sample
+		}
+	}
 	return interval
+}
+
+func (config Config) ReportingDeviceIDs() []string {
+	ids := make([]string, 0, len(config.Devices))
+	for _, device := range config.Devices {
+		ids = append(ids, device.ID)
+	}
+	return ids
+}
+
+func (point PointConfig) SampleEvery() time.Duration {
+	duration, _ := time.ParseDuration(point.SampleInterval)
+	return duration
+}
+
+func (point PointConfig) PublishEvery() time.Duration {
+	duration, _ := time.ParseDuration(point.PublishInterval)
+	return duration
 }
 
 func localThingsBoardHost(host string) bool {

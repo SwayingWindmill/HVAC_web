@@ -52,7 +52,7 @@ for (const token of ['AuthorizationPurpose', 'AuthorizationCommandSubmit', 'Auth
 for (const token of ['MaximumGrantLifetime    = 30 * time.Second', 'Purpose', 'PolicyRevision', 'EmergencyRevocationRevision', 'risk ceiling', 'scope is invalid', 'revoked or replayed']) {
   assert(grant.includes(token), `Command Grant invariant is missing: ${token}`);
 }
-for (const token of ['command-risk:setpoint-delta:v1', 'ApprovalSingleApprover', 'ApprovalTwoPerson', 'approval.ApproverID == intent.PrincipalID', 'AuthorizationCommandApprove', 'approval.ApproverID, intent.OrganizationID', 'validateAuthorizationScope(approval.Authorization']) {
+for (const token of ['command-risk:equipment-capability:v1', 'CapabilityProfileFor(request.Capability)', 'profile.LowRiskDelta', 'profile.MediumRiskDelta', 'profile.MaximumDelta', 'ApprovalSingleApprover', 'ApprovalTwoPerson', 'approval.ApproverID == intent.PrincipalID', 'AuthorizationCommandApprove', 'approval.ApproverID, intent.OrganizationID', 'validateAuthorizationScope(approval.Authorization']) {
   assert(governance.includes(token), `Governance invariant is missing: ${token}`);
 }
 for (const table of ['command_authorization_snapshots', 'command_risk_snapshots', 'command_approval_snapshots']) {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const (
@@ -36,7 +37,7 @@ type runtimeStoreStub struct {
 	completedEvidence    bool
 }
 
-func (stub *runtimeStoreStub) ClaimDispatchForCohort(_ context.Context, organizationID, siteID, deviceID, _ string, _ time.Duration) (commandmodel.DispatchEnvelope, error) {
+func (stub *runtimeStoreStub) ClaimDispatchForCohort(_ context.Context, organizationID, siteID, deviceID string, _ commandmodel.Capability, _ string, _ time.Duration) (commandmodel.DispatchEnvelope, error) {
 	stub.claimedOrganization = organizationID
 	stub.claimedSite = siteID
 	stub.claimedDevice = deviceID
@@ -48,7 +49,7 @@ func (stub *runtimeStoreStub) ResolveDispatch(context.Context, commandmodel.Disp
 	return nil
 }
 
-func (stub *runtimeStoreStub) ClaimVerificationForCohort(_ context.Context, organizationID, siteID, deviceID, _ string, _ time.Duration) (commandmodel.VerificationEnvelope, error) {
+func (stub *runtimeStoreStub) ClaimVerificationForCohort(_ context.Context, organizationID, siteID, deviceID string, _ commandmodel.Capability, _ string, _ time.Duration) (commandmodel.VerificationEnvelope, error) {
 	stub.claimedOrganization = organizationID
 	stub.claimedSite = siteID
 	stub.claimedDevice = deviceID
@@ -74,7 +75,7 @@ func TestRuntimeHTTPDispatcherCanClaimAndResolveExactCohort(t *testing.T) {
 	stub := &runtimeStoreStub{dispatchEnvelope: commandmodel.DispatchEnvelope{
 		CommandID: "command-1", AttemptID: "attempt-1", OrganizationID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: runtimeTestDevice,
 		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: setpointCapabilityRevision,
-		SetpointC: 22, PayloadHash: "hash", ExecutionFence: 1, DeviceCommandSequence: 1,
+		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 22}, PayloadHash: "hash", ExecutionFence: 1, DeviceCommandSequence: 1,
 		LeaseOwner: "dispatcher-a", LeaseUntil: time.Now().UTC().Add(30 * time.Second),
 	}}
 	handler := runtimeTestHandler(t, stub)
@@ -175,6 +176,7 @@ func TestRuntimeHTTPSelectsExactMultiCohortByWorkloadIdentity(t *testing.T) {
 				OrganizationID:   runtimeTestOrganization,
 				SiteID:           runtimeTestSite,
 				DeviceID:         runtimeTestDevice,
+				Capability:       commandmodel.CapabilitySetTemperatureSetpoint,
 			},
 			{
 				DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher/fcu-02",
@@ -182,6 +184,7 @@ func TestRuntimeHTTPSelectsExactMultiCohortByWorkloadIdentity(t *testing.T) {
 				OrganizationID:   runtimeTestOrganization,
 				SiteID:           runtimeTestSite,
 				DeviceID:         secondDevice,
+				Capability:       commandmodel.CapabilitySetTemperatureSetpoint,
 			},
 		},
 	})
@@ -211,11 +214,54 @@ func TestRuntimeHTTPSelectsExactMultiCohortByWorkloadIdentity(t *testing.T) {
 	}
 }
 
+func TestRuntimeHTTPRecordsBoundedVerificationMetrics(t *testing.T) {
+	registry := observability.NewRegistry()
+	stub := &runtimeStoreStub{}
+	handler, err := NewRuntimeHTTPHandler(RuntimeHTTPConfig{
+		Store: stub, Metrics: registry,
+		DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher", VerifierSPIFFE: "spiffe://hvac.local/command-verifier",
+		OrganizationID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: runtimeTestDevice,
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := commandmodel.VerificationEnvelope{
+		OrganizationID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: runtimeTestDevice,
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint, AcknowledgedAt: time.Now().UTC().Add(-2 * time.Second),
+	}
+	body, err := json.Marshal(runtimeVerificationResolveRequest{Envelope: envelope, Result: commandmodel.VerificationResult{Outcome: commandmodel.VerificationSucceeded}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := runtimeRequest(t, http.MethodPost, InternalVerificationResolvePath, string(body), "spiffe://hvac.local/command-verifier")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNoContent || !stub.resolvedVerification {
+		t.Fatalf("status=%d resolved=%v body=%s", recorder.Code, stub.resolvedVerification, recorder.Body.String())
+	}
+	metricsRecorder := httptest.NewRecorder()
+	registry.Handler().ServeHTTP(metricsRecorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metricsBody := metricsRecorder.Body.String()
+	for _, marker := range []string{
+		`hvac_command_verifications_total{outcome="verified"} 1`,
+		`hvac_command_verification_duration_seconds_count{outcome="verified"} 1`,
+	} {
+		if !strings.Contains(metricsBody, marker) {
+			t.Fatalf("missing %q in metrics: %s", marker, metricsBody)
+		}
+	}
+	if strings.Contains(metricsBody, runtimeTestDevice) {
+		t.Fatalf("command metrics leaked device identity: %s", metricsBody)
+	}
+}
+
 func runtimeTestHandler(t *testing.T, stub RuntimeStore) http.Handler {
 	t.Helper()
 	handler, err := NewRuntimeHTTPHandler(RuntimeHTTPConfig{
 		Store: stub, DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher", VerifierSPIFFE: "spiffe://hvac.local/command-verifier",
 		OrganizationID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: runtimeTestDevice,
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)

@@ -1,5 +1,7 @@
 # S0 durable Session and Audit loop
 
+> **Scope: CERTIFICATION_REFERENCE.** This document records the S0 durable-session/audit implementation and its Kafka-compatible compatibility path. It does not make Kafka/Redpanda a Phase 1 Production dependency. The canonical Phase 1 deployment is defined by `deploy/platform/phase1/`, where the compatibility event backbone is optional.
+
 Ticket 03 replaces process-local BFF Session state with a PostgreSQL transaction boundary and proves delivery into a separate append-only Audit Ledger through an at-least-once Kafka-compatible backbone.
 
 ## End-to-end topology

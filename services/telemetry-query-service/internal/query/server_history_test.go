@@ -33,6 +33,7 @@ func TestDeviceHistoryRouteVerifiesExactGrantAndPreservesMetadata(t *testing.T) 
 		MaxPointsPerKey:      100,
 	}
 	unit := "Cel"
+	sensorID := "018f1e00-6000-7000-8000-000000000001"
 	watermark := now
 	historyEngine := &historyEngineStub{response: telemetryhistorymodel.DeviceHistoryResponse{
 		SchemaVersion:        1,
@@ -43,6 +44,8 @@ func TestDeviceHistoryRouteVerifiesExactGrantAndPreservesMetadata(t *testing.T) 
 			Key: query.Keys[0],
 			Points: []telemetryhistorymodel.DeviceHistoryPoint{{
 				ObservationID:  "018f1e00-8000-7000-8000-000000000001",
+				PointID:        "018f1e00-5000-7000-8000-000000000001",
+				SensorID:       &sensorID,
 				SampledAt:      from.Add(time.Hour),
 				ReceivedAt:     from.Add(time.Hour + time.Second),
 				Value:          22.5,

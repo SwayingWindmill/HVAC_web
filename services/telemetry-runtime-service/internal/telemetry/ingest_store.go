@@ -215,6 +215,10 @@ FOR UPDATE
 	if quarantine != "" {
 		return facts, existingID, nil
 	}
+	facts.PointBindings, err = queryRuntimePointBindings(ctx, tx, binding.TenantID, binding.DeviceID, candidate.TelemetryKey, candidate.SampledAt)
+	if err != nil {
+		return ObservationFacts{}, "", err
+	}
 	var policy ObservationPolicy
 	var futureSeconds, lagSeconds int
 	err = tx.QueryRow(ctx, `
@@ -274,18 +278,22 @@ func insertSourceDeliveryEvidence(ctx context.Context, tx pgx.Tx, evidenceID str
 	if len(decision.QualityReasons) > 0 {
 		reason = decision.QualityReasons[0]
 	}
+	var tenantID any
+	if decision.TenantID != "" {
+		tenantID = decision.TenantID
+	}
 	var persistedID string
 	err := tx.QueryRow(ctx, `
 INSERT INTO telemetry_runtime.source_delivery_evidence (
-  evidence_id, integration_instance_id, source_event_id, source_partition,
+  evidence_id, tenant_id, integration_instance_id, source_event_id, source_partition,
   source_offset, source_path, delivery_status, quality_reason, payload_sha256, detected_at
-) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10)
+) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (
   integration_instance_id, source_event_id, source_partition, source_offset,
   delivery_status, quality_reason, payload_sha256
 ) DO UPDATE SET detected_at = LEAST(telemetry_runtime.source_delivery_evidence.detected_at, EXCLUDED.detected_at)
 RETURNING evidence_id::text
-`, evidenceID, candidate.IntegrationInstanceID, candidate.Position.EventID, candidate.Position.Partition,
+`, evidenceID, tenantID, candidate.IntegrationInstanceID, candidate.Position.EventID, candidate.Position.Partition,
 		candidate.Position.Offset, string(candidate.SourcePath), string(decision.Status), string(reason), payloadSHA, candidate.ReceivedAt).Scan(&persistedID)
 	if err != nil {
 		return "", fmt.Errorf("persist telemetry delivery evidence: %w", err)
@@ -294,9 +302,21 @@ RETURNING evidence_id::text
 }
 
 func insertSourceObservation(ctx context.Context, tx pgx.Tx, observationID string, candidate ObservationCandidate, decision ObservationDecision, payloadSHA string) error {
+	var tenantID any
+	if decision.TenantID != "" {
+		tenantID = decision.TenantID
+	}
 	var deviceID any
 	if decision.DeviceID != "" {
 		deviceID = decision.DeviceID
+	}
+	var pointID any
+	if decision.PointID != "" {
+		pointID = decision.PointID
+	}
+	var sensorID any
+	if decision.SensorID != "" {
+		sensorID = decision.SensorID
 	}
 	var value any
 	if decision.Status == ObservationAccepted {
@@ -304,16 +324,16 @@ func insertSourceObservation(ctx context.Context, tx pgx.Tx, observationID strin
 	}
 	_, err := tx.Exec(ctx, `
 INSERT INTO telemetry_runtime.source_observations (
-  observation_id, integration_instance_id, source_event_id, source_partition,
-  source_offset, source_path, device_id, telemetry_key, value, value_type, unit,
+  observation_id, tenant_id, integration_instance_id, source_event_id, source_partition,
+  source_offset, source_path, device_id, point_id, sensor_id, telemetry_key, value, value_type, unit,
   sampled_at, received_at, acceptance_status, quality, quality_reasons,
   payload_sha256, created_at
 ) VALUES (
-  $1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7::uuid, $8, $9::jsonb, $10, $11,
-  $12, $13, $14, $15, $16, $17, $13
+  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8::uuid, $9::uuid, $10::uuid, $11, $12::jsonb, $13, $14,
+  $15, $16, $17, $18, $19, $20, $16
 )
-`, observationID, candidate.IntegrationInstanceID, candidate.Position.EventID, candidate.Position.Partition,
-		candidate.Position.Offset, string(candidate.SourcePath), deviceID, candidate.TelemetryKey, value, candidate.ValueType, candidate.Unit,
+`, observationID, tenantID, candidate.IntegrationInstanceID, candidate.Position.EventID, candidate.Position.Partition,
+		candidate.Position.Offset, string(candidate.SourcePath), deviceID, pointID, sensorID, candidate.TelemetryKey, value, candidate.ValueType, candidate.Unit,
 		candidate.SampledAt, candidate.ReceivedAt, string(decision.Status), string(decision.Quality), qualityReasonStrings(decision.QualityReasons), payloadSHA)
 	if err != nil {
 		return fmt.Errorf("persist telemetry observation evidence: %w", err)
@@ -337,16 +357,20 @@ func (store *PostgresStore) insertQuarantine(ctx context.Context, tx pgx.Tx, can
 	if err != nil {
 		return fmt.Errorf("encode telemetry quarantine evidence: %w", err)
 	}
+	var tenantID any
+	if decision.TenantID != "" {
+		tenantID = decision.TenantID
+	}
 	var deviceID any
 	if decision.DeviceID != "" {
 		deviceID = decision.DeviceID
 	}
 	_, err = tx.Exec(ctx, `
 INSERT INTO telemetry_runtime.ingest_quarantine (
-  quarantine_id, integration_instance_id, external_entity_type, external_id,
+  quarantine_id, tenant_id, integration_instance_id, external_entity_type, external_id,
   device_id, telemetry_key, reason_code, evidence, detected_at, resolved_at, resolution
-) VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid, $6, $7, $8::jsonb, $9, NULL, NULL)
-`, quarantineID, candidate.IntegrationInstanceID, candidate.ExternalEntityType, candidate.ExternalID,
+) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::uuid, $7, $8, $9::jsonb, $10, NULL, NULL)
+`, quarantineID, tenantID, candidate.IntegrationInstanceID, candidate.ExternalEntityType, candidate.ExternalID,
 		deviceID, candidate.TelemetryKey, string(decision.QuarantineReason), evidence, candidate.ReceivedAt)
 	if err != nil {
 		return fmt.Errorf("persist telemetry quarantine evidence: %w", err)

@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	observationPath                  = "/internal/v1/telemetry/thingsboard/observations:accept"
+	observationPath                  = "/internal/v1/telemetry/sources/observations:accept"
 	maximumTelemetryRuntimeBodyBytes = int64(256 << 10)
 )
 

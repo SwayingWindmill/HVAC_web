@@ -18,6 +18,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
 
 const maxBodyBytes = int64(64 << 10)
@@ -63,9 +65,9 @@ type reportedStateResponse struct {
 	Readiness              string    `json:"readiness"`
 	Freshness              string    `json:"freshness"`
 	Quality                string    `json:"quality"`
-	BusinessRevision       uint64    `json:"businessRevision"`
-	ReportedSetpointC      float64   `json:"reportedSetpointC"`
-	ObservedAt             time.Time `json:"observedAt"`
+	BusinessRevision       uint64                   `json:"businessRevision"`
+	ReportedValue          commandmodel.ScalarValue `json:"reportedValue"`
+	ObservedAt             time.Time                `json:"observedAt"`
 	ReportedStateKey       string    `json:"reportedStateKey"`
 }
 
@@ -208,12 +210,16 @@ func (sim *simulator) reportedStateHandler() http.Handler {
 			writeJSON(writer, http.StatusForbidden, map[string]any{"code": "VERIFIER_WORKLOAD_FORBIDDEN"})
 			return
 		}
+		if request.URL.Query().Get("key") != sim.reportedStateKey || len(request.URL.Query()) != 1 {
+			writeJSON(writer, http.StatusBadRequest, map[string]any{"code": "REPORTED_STATE_KEY_INVALID"})
+			return
+		}
 		sim.state.mu.RLock()
 		setpointC := sim.state.setpointC
 		revision := sim.state.revision
 		sim.state.mu.RUnlock()
 		observedAt := sim.now().UTC()
-		evidenceInput := fmt.Sprintf("%s|%s|%s|%d|%.3f|%s", sim.organizationID, sim.siteID, sim.deviceID, revision, setpointC, observedAt.Format(time.RFC3339Nano))
+		evidenceInput := fmt.Sprintf("%s|%s|%s|%s|%d|%.3f|%s", sim.organizationID, sim.siteID, sim.deviceID, sim.reportedStateKey, revision, setpointC, observedAt.Format(time.RFC3339Nano))
 		digest := sha256.Sum256([]byte(evidenceInput))
 		writeJSON(writer, http.StatusOK, reportedStateResponse{
 			SchemaVersion:          1,
@@ -227,7 +233,7 @@ func (sim *simulator) reportedStateHandler() http.Handler {
 			Freshness:              "FRESH",
 			Quality:                "GOOD",
 			BusinessRevision:       revision,
-			ReportedSetpointC:      setpointC,
+			ReportedValue:          commandmodel.NumberScalar(setpointC),
 			ObservedAt:             observedAt,
 			ReportedStateKey:       sim.reportedStateKey,
 		})

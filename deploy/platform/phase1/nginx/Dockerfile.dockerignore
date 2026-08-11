@@ -1,0 +1,11 @@
+**
+!package.json
+!package-lock.json
+!apps/
+!apps/hvac-web/
+!apps/hvac-web/**
+!deploy/
+!deploy/platform/
+!deploy/platform/phase1/
+!deploy/platform/phase1/nginx/
+!deploy/platform/phase1/nginx/nginx.conf

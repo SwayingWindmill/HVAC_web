@@ -88,6 +88,7 @@ const expectedOperations = {
   getEquipment: ['get', '/api/v1/equipment/{equipmentId}'],
   listSiteDevices: ['get', '/api/v1/sites/{siteId}/devices'],
   listSiteDeviceBindings: ['get', '/api/v1/sites/{siteId}/device-bindings'],
+  getSiteAssetModel: ['get', '/api/v1/sites/{siteId}/asset-model'],
   getDevice: ['get', '/api/v1/devices/{deviceId}'],
 };
 const operations = {};
@@ -112,12 +113,14 @@ const expectedSuccessSchemas = {
   getEquipment: 'Equipment',
   listSiteDevices: 'DeviceCollection',
   listSiteDeviceBindings: 'DeviceBindingCollection',
+  getSiteAssetModel: 'SiteAssetModel',
   getDevice: 'Device',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
 }
 invariant(operations.logout.operation.responses?.['204'], 'logout must return 204');
+invariant(operations.logout.operation.responses?.['204']?.headers?.Location?.schema?.format === 'uri', 'logout must publish the provider end-session Location header');
 
 const schemas = spec.components?.schemas ?? {};
 const schemaRequirements = {
@@ -142,17 +145,24 @@ const schemaRequirements = {
     'action', 'result', 'policyRevision', 'correlationId', 'causationId', 'traceId', 'payloadSha256', 'previousRecordHash',
     'recordHash', 'recordedAt',
   ]],
-  Organization: [['id', 'code', 'displayName', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'code', 'displayName', 'status', 'revision', 'createdAt', 'updatedAt']],
-  Site: [['id', 'owningOrganizationId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'owningOrganizationId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt']],
-  Equipment: [['id', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'equipmentType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'equipmentType', 'status', 'revision', 'createdAt', 'updatedAt']],
-  Device: [['id', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt']],
-  DeviceBinding: [['id', 'owningOrganizationId', 'siteId', 'deviceId', 'equipmentId', 'bindingRole', 'status', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'owningOrganizationId', 'siteId', 'deviceId', 'equipmentId', 'bindingRole', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
-  ExternalBinding: [['id', 'owningOrganizationId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'owningOrganizationId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
+  Organization: [['id', 'tenantId', 'code', 'displayName', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'code', 'displayName', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Site: [['id', 'tenantId', 'owningOrganizationId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Equipment: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'equipmentType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'equipmentType', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Device: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt']],
+  DeviceBinding: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'deviceId', 'equipmentId', 'bindingRole', 'status', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'deviceId', 'equipmentId', 'bindingRole', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
+  ExternalBinding: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
   OrganizationCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   SiteCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   EquipmentCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   DeviceCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   DeviceBindingCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
+  Area: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'parentAreaId', 'code', 'displayName', 'areaType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'parentAreaId', 'code', 'displayName', 'areaType', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Sensor: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'sensorType', 'manufacturer', 'model', 'serialNumber', 'calibrationDueAt', 'metadata', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'sensorType', 'manufacturer', 'model', 'serialNumber', 'calibrationDueAt', 'metadata', 'status', 'revision', 'createdAt', 'updatedAt']],
+  TelemetryPoint: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointKey', 'sourceKey', 'displayName', 'pointKind', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'formulaRevision', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointKey', 'sourceKey', 'displayName', 'pointKind', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'formulaRevision', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt']],
+  AssetRelationship: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
+  CalculatedPointInput: [['tenantId', 'owningOrganizationId', 'siteId', 'calculatedPointId', 'inputPointId', 'inputRole', 'ordinal', 'formulaRevision'], ['tenantId', 'owningOrganizationId', 'siteId', 'calculatedPointId', 'inputPointId', 'inputRole', 'ordinal', 'formulaRevision']],
+  AssetModelCounts: [['areas', 'equipment', 'deviceEndpoints', 'sensors', 'telemetryPoints', 'calculatedPoints', 'independentSensorDevices'], ['areas', 'equipment', 'deviceEndpoints', 'sensors', 'telemetryPoints', 'calculatedPoints', 'independentSensorDevices']],
+  SiteAssetModel: [['schemaVersion', 'tenantId', 'siteId', 'areas', 'equipment', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'calculatedPointInputs', 'counts'], ['schemaVersion', 'tenantId', 'siteId', 'areas', 'equipment', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'calculatedPointInputs', 'counts']],
   FieldError: [['field', 'message'], ['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'fieldErrors']],
 };
@@ -234,6 +244,7 @@ const replacements = {
   __EQUIPMENT_PATH__: operations.getEquipment.path,
   __SITE_DEVICES_PATH__: operations.listSiteDevices.path,
   __SITE_DEVICE_BINDINGS_PATH__: operations.listSiteDeviceBindings.path,
+  __SITE_ASSET_MODEL_PATH__: operations.getSiteAssetModel.path,
   __DEVICE_PATH__: operations.getDevice.path,
 };
 

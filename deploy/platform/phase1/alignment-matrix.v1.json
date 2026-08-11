@@ -1,0 +1,295 @@
+{
+  "schemaVersion": 1,
+  "sourceOfTruth": "架构规划/智慧能源系统部署与运维架构设计.md",
+  "statuses": ["KEEP", "MISSING", "SIMPLIFY", "DEFER", "REMOVE", "DOCUMENT_UPDATE"],
+  "items": [
+    {
+      "id": "ARCH-OVERALL-001",
+      "area": "overall",
+      "requirement": "总体架构按 Edge + Central Platform + Data Platform + Monitoring Platform 分层",
+      "status": "KEEP",
+      "current": "README 与 docs/architecture/phase1-overall-architecture.md 已统一到 Phase 1 L1 总体架构",
+      "action": "保持 L1 只表达职责，内部 Adapter/Projector/S0-S4 不上升为总体架构"
+    },
+    {
+      "id": "DEPLOY-PHASE1-001",
+      "area": "orchestration",
+      "requirement": "第一阶段以 Linux Server + Docker Compose 为主部署模型",
+      "status": "SIMPLIFY",
+      "current": "本地大量使用 Compose，但 Staging/Target 已出现 Kubernetes 作为显著部署路径",
+      "action": "Docker Compose 成为 Phase 1 canonical path；Kubernetes 退出 Phase 1 必需条件"
+    },
+    {
+      "id": "DEPLOY-K8S-001",
+      "area": "orchestration",
+      "requirement": "Kubernetes 在多服务器、多实例、高可用、自动扩缩容阶段再引入",
+      "status": "DEFER",
+      "current": "deploy/s0/staging 与 deploy/s3/target 已有 Kustomize/NetworkPolicy/PDB/CSI",
+      "action": "保留为 Phase 3/future reference，不作为 Phase 1 acceptance blocker"
+    },
+    {
+      "id": "ENV-001",
+      "area": "environment",
+      "requirement": "Development/Testing/Staging/Production 四环境独立",
+      "status": "KEEP",
+      "current": "deploy/platform/phase1/environments 已建立四套独立 runtime contract",
+      "action": "保持四环境隔离，并由 deployment:phase1:check 防止 Production fixture/endpoint 泄漏"
+    },
+    {
+      "id": "ENV-002",
+      "area": "environment",
+      "requirement": "Database/Redis/MQTT/Storage/Secrets/Domain/Configuration 环境隔离",
+      "status": "KEEP",
+      "current": "现有 local/test fixture 基本隔离，生产 egress 也有 fail-closed 约束",
+      "action": "将现有隔离原则纳入统一 Phase 1 Gate"
+    },
+    {
+      "id": "PUBLIC-001",
+      "area": "public-zone",
+      "requirement": "Public Zone 只暴露 HTTPS/WSS 与 MQTT TLS",
+      "status": "KEEP",
+      "current": "Phase 1 Compose 只有 Nginx 443 与 Mosquitto 8883 publish host port",
+      "action": "保持 API/WSS 经 Nginx，数据库和内部服务不得增加 host port"
+    },
+    {
+      "id": "FRONTEND-001",
+      "area": "frontend",
+      "requirement": "Production React 使用 build 静态产物并由 Nginx 提供，不运行 dev server",
+      "status": "KEEP",
+      "current": "Phase 1 Nginx multi-stage image 执行 npm run build:real 并只复制静态产物",
+      "action": "保持 Production image 不包含 Vite dev server 启动路径"
+    },
+    {
+      "id": "GATEWAY-001",
+      "area": "application",
+      "requirement": "浏览器通过统一 API Gateway/BFF 访问平台服务",
+      "status": "KEEP",
+      "current": "platform-gateway 已是浏览器唯一业务入口",
+      "action": "保持并纳入 Phase 1 总体架构"
+    },
+    {
+      "id": "STATELESS-001",
+      "area": "application",
+      "requirement": "除数据库、Redis、Broker、Object Storage 外业务服务尽量无状态",
+      "status": "KEEP",
+      "current": "主要 Go runtime 已按外置状态、Outbox/DB authority 设计",
+      "action": "保持；本地状态仅限 Edge Store & Forward 等明确例外"
+    },
+    {
+      "id": "TELEMETRY-001",
+      "area": "telemetry",
+      "requirement": "Gateway → MQTT → IoT/Telemetry → Data Platform 链路持续可用",
+      "status": "KEEP",
+      "current": "MQTT adapter → S2 Runtime → PostgreSQL/ClickHouse 已有真实集成 Gate",
+      "action": "保持当前可靠内部实现，L1/L2 文档按文档职责抽象"
+    },
+    {
+      "id": "TELEMETRY-002",
+      "area": "telemetry",
+      "requirement": "Redis 是可重建加速/实时层，不是唯一数据源",
+      "status": "KEEP",
+      "current": "README 与 Phase 1 总体架构已明确 PostgreSQL authoritative current state、Redis/Centrifugo 非 authority",
+      "action": "保持 Redis 可重建，不允许唯一业务事实只存在 Redis"
+    },
+    {
+      "id": "MQTT-001",
+      "area": "mqtt",
+      "requirement": "MQTT 是 Edge ↔ Cloud 关键基础设施并使用 TLS",
+      "status": "KEEP",
+      "current": "Mosquitto TLS1.3/mTLS/ACL/QoS1/persistence 已有集成验证",
+      "action": "纳入 Phase 1 canonical deployment"
+    },
+    {
+      "id": "MQTT-HA-001",
+      "area": "mqtt",
+      "requirement": "关键生产规模扩大后可演进 MQTT Cluster",
+      "status": "DEFER",
+      "current": "当前 Phase 1 使用单 Mosquitto",
+      "action": "保持单实例 + persistent volume + Edge Store & Forward；Cluster 放 Phase 2+"
+    },
+    {
+      "id": "EDGE-001",
+      "area": "edge",
+      "requirement": "Cloud 不直接访问 PLC/BMS/PCS，必须经 Gateway",
+      "status": "KEEP",
+      "current": "当前设备链路通过 Edge/ThingsBoard/MQTT adapter，不存在浏览器直连 OT",
+      "action": "加入 deployment Gate 静态约束"
+    },
+    {
+      "id": "EDGE-002",
+      "area": "edge",
+      "requirement": "Cloud 故障时 Edge 继续 Collect/Store，恢复后 Replay",
+      "status": "KEEP",
+      "current": "Broker failure + process restart + queue replay + sequence persistence 已动态通过",
+      "action": "保持为 Phase 1 hard evidence"
+    },
+    {
+      "id": "POSTGRES-001",
+      "area": "data",
+      "requirement": "PostgreSQL 承载业务/配置/当前状态，生产不暴露公网",
+      "status": "KEEP",
+      "current": "RLS/角色/迁移/恢复测试成熟，本地端口多为 loopback",
+      "action": "统一 Compose 中不 publish PostgreSQL production port"
+    },
+    {
+      "id": "POSTGRES-HA-001",
+      "area": "data",
+      "requirement": "中大型阶段再使用 Primary + Replica",
+      "status": "DEFER",
+      "current": "Phase 1 尚无 PostgreSQL HA",
+      "action": "不为 Phase 1 增加 Patroni/Operator/Replica 复杂度"
+    },
+    {
+      "id": "POSTGRES-BACKUP-001",
+      "area": "recovery",
+      "requirement": "Full Backup + WAL/Incremental + Restore Test + PITR 能力",
+      "status": "KEEP",
+      "current": "Phase 1 Compose 已启用 continuous WAL archive，并提供 pg_basebackup backup profile；Destroy/Restore Gate 已存在",
+      "action": "保持备份目录与数据卷分离；RPO/RTO 仍需正式演练"
+    },
+    {
+      "id": "CLICKHOUSE-001",
+      "area": "data",
+      "requirement": "ClickHouse 承载历史 Telemetry，并有 Retention/Aggregation",
+      "status": "KEEP",
+      "current": "历史 observation、hourly aggregate、TTL 已实现",
+      "action": "统一 Compose 中以 persistent volume 部署且不公网暴露"
+    },
+    {
+      "id": "CLICKHOUSE-HA-001",
+      "area": "data",
+      "requirement": "规模扩大后再引入 ClickHouse HA/集群",
+      "status": "DEFER",
+      "current": "单节点适合 Phase 1",
+      "action": "不引入 Keeper/Replica 作为 Phase 1 前置"
+    },
+    {
+      "id": "REDIS-001",
+      "area": "data",
+      "requirement": "Redis 数据可重建",
+      "status": "KEEP",
+      "current": "S2 realtime Redis 已标记 data-authority=false",
+      "action": "保持并禁止生产公网 publish"
+    },
+    {
+      "id": "KAFKA-001",
+      "area": "message",
+      "requirement": "Kafka 属于 Phase 3 演进能力而非 Phase 1 必需组件",
+      "status": "SIMPLIFY",
+      "current": "S0 local/staging 使用 Redpanda 作为部分审计/Outbox backbone",
+      "action": "Redpanda 保留为内部认证资产，不进入 Phase 1 总体部署必需清单；后续评估是否有必要保留"
+    },
+    {
+      "id": "SECRETS-001",
+      "area": "security",
+      "requirement": "Phase 1 可使用 Docker Secret 或受保护 Environment Secret，Secret 不进 Git",
+      "status": "SIMPLIFY",
+      "current": "S3 Target 使用 CSI/Workload Identity/cert-manager 等 K8s 设施",
+      "action": "Phase 1 使用外部 runtime env/secret files；K8s CSI 保留未来部署参考"
+    },
+    {
+      "id": "SUPPLY-CHAIN-001",
+      "area": "delivery",
+      "requirement": "版本可追溯到 Git Commit，禁止只依赖 latest",
+      "status": "KEEP",
+      "current": "SBOM/provenance/Cosign/digest evidence 已成熟",
+      "action": "保留，不因简化运行架构而降低供应链安全"
+    },
+    {
+      "id": "MIGRATION-001",
+      "area": "delivery",
+      "requirement": "Migration 可审查、可重复、进入发布流程并在 Staging 验证",
+      "status": "KEEP",
+      "current": "已有独立 migrator、兼容性测试、expand-contract 原则",
+      "action": "Compose 发布流程继续使用独立 migration step"
+    },
+    {
+      "id": "OBS-METRICS-001",
+      "area": "observability",
+      "requirement": "Prometheus 类 Metrics + Dashboard + Alert",
+      "status": "KEEP",
+      "current": "Prometheus、metric catalogs、alerts、dashboard JSON 已存在",
+      "action": "统一 Phase 1 observability compose"
+    },
+    {
+      "id": "OBS-GRAFANA-001",
+      "area": "observability",
+      "requirement": "Grafana 类 Dashboard 平台",
+      "status": "KEEP",
+      "current": "Phase 1 Compose 已加入单实例 Grafana，并 provision Prometheus/Loki/Tempo 与现有 dashboards",
+      "action": "保持单实例形态；多节点 Grafana 不进入 Phase 1"
+    },
+    {
+      "id": "OBS-LOG-001",
+      "area": "observability",
+      "requirement": "Central Logging",
+      "status": "KEEP",
+      "current": "Phase 1 OTel Collector 使用 filelog 收集 Docker JSON logs 并发送到单实例 Loki",
+      "action": "保持单实例、短保留期；日志集群化延后"
+    },
+    {
+      "id": "OBS-TRACE-001",
+      "area": "observability",
+      "requirement": "OpenTelemetry 类 Trace 并可集中查询",
+      "status": "KEEP",
+      "current": "Phase 1 OTel Collector 将 OTLP traces 写入单实例 Tempo，并由 Grafana provision 查询",
+      "action": "保持单实例 local storage；HA trace backend 延后"
+    },
+    {
+      "id": "BACKUP-001",
+      "area": "recovery",
+      "requirement": "备份必须定期 Restore Test",
+      "status": "KEEP",
+      "current": "Phase 1 Simulator 已有 PostgreSQL Destroy + Restore Gate",
+      "action": "保留并扩展到部署级备份流程"
+    },
+    {
+      "id": "DEPLOY-MIGRATION-001",
+      "area": "delivery",
+      "requirement": "统一 Phase 1 PostgreSQL 实例必须通过受控 migration flow 初始化 S0-S5 schema，生产角色凭据不得来自 local/test bootstrap",
+      "status": "KEEP",
+      "current": "Phase 1 migrator 使用 28 个精确 allowlist migration、migration hash/drift tracking、runtime credential SQL；fixture/testdata/bootstrap/legacy seed 不进入执行链，隔离 PostgreSQL 双跑幂等验证已通过",
+      "action": "保持 migration profile 在应用 rollout 前执行；Staging/Production 使用签名 migrator digest 与非版本化 runtime credential file"
+    },
+    {
+      "id": "RPO-RTO-001",
+      "area": "recovery",
+      "requirement": "生产前明确 RPO/RTO",
+      "status": "MISSING",
+      "current": "恢复能力已证明，定量 RPO/RTO 尚未正式演练",
+      "action": "保持为 Formal Acceptance blocker，不伪报已完成"
+    },
+    {
+      "id": "OBJECT-STORAGE-001",
+      "area": "data",
+      "requirement": "报表/模型/导出/OTA/冷数据需要对象存储",
+      "status": "DEFER",
+      "current": "第一阶段当前主链尚无必须对象存储的正式能力",
+      "action": "保留接口规划；等 Report/Export/OTA/Model 成为交付项时引入"
+    },
+    {
+      "id": "OPTIMIZATION-001",
+      "area": "application",
+      "requirement": "第一阶段推荐部署独立 Optimization Service",
+      "status": "MISSING",
+      "current": "仓库没有可部署的 Python Optimization runtime",
+      "action": "保持为明确功能缺口；不得用部署占位容器伪装能力完成"
+    },
+    {
+      "id": "DOC-CONSISTENCY-001",
+      "area": "documentation",
+      "requirement": "局部认证、Local Fixture 和未来阶段文档不得反向定义 Phase 1 总体与正式部署架构",
+      "status": "KEEP",
+      "current": "已建立 document-scope-policy，并为 S0 Kubernetes/Redpanda 与 S3 Kind/Target 文档增加 CERTIFICATION_REFERENCE 或 LOCAL_FIXTURE 标记；自动 Gate 扫描禁用表述",
+      "action": "运行 docs:phase1:consistency:check；新增旧架构或认证文档时必须声明作用域"
+    },
+    {
+      "id": "PRODUCTION-FIXTURE-001",
+      "area": "security",
+      "requirement": "Production 不使用测试设备、Demo 数据或测试 Identity Provider",
+      "status": "KEEP",
+      "current": "deployment:phase1:check 会扫描 Production contract，拒绝 localhost/127.0.0.1/demo/fixture/oidc-test-provider",
+      "action": "继续保持 Production contract fail-closed；真实生产 Secret/endpoint 由部署环境注入"
+    }
+  ]
+}

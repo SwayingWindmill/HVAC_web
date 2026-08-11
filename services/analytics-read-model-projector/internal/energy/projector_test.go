@@ -9,9 +9,12 @@ import (
 )
 
 const (
+	testTenantID            = "018f4d00-0000-7000-8000-000000000001"
 	testOrganizationID      = "018f4e00-0000-7000-8000-000000000001"
 	testSiteID              = "018f4e00-1000-7000-8000-000000000001"
 	testDeviceID            = "018f4e00-2000-7000-8000-000000000001"
+	testPointID             = "018f4e00-2100-7000-8000-000000000001"
+	testSensorID            = "018f4e00-2200-7000-8000-000000000001"
 	testPreviousObservation = "018f4e00-3000-7000-8000-000000000001"
 	testCurrentObservation  = "018f4e00-3000-7000-8000-000000000002"
 )
@@ -78,7 +81,9 @@ func TestBuildFactRejectsInvalidStructuralCandidate(t *testing.T) {
 		name   string
 		mutate func(*Candidate)
 	}{
+		{"missing tenant", func(candidate *Candidate) { candidate.TenantID = "" }},
 		{"missing organization", func(candidate *Candidate) { candidate.OrganizationID = "" }},
+		{"missing point", func(candidate *Candidate) { candidate.PointID = "" }},
 		{"wrong telemetry key", func(candidate *Candidate) { candidate.TelemetryKey = "chiller.power" }},
 		{"non increasing time", func(candidate *Candidate) { candidate.CurrentSampledAt = candidate.PreviousSampledAt }},
 		{"missing source offset", func(candidate *Candidate) { candidate.SourceOffset = 0 }},
@@ -150,12 +155,16 @@ func TestProjectorReturnsSinkFailure(t *testing.T) {
 }
 
 func validCandidate() Candidate {
+	sensorID := testSensorID
 	return Candidate{
 		PreviousObservationID: testPreviousObservation,
 		CurrentObservationID:  testCurrentObservation,
+		TenantID:              testTenantID,
 		OrganizationID:        testOrganizationID,
 		SiteID:                testSiteID,
 		DeviceID:              testDeviceID,
+		PointID:               testPointID,
+		SensorID:              &sensorID,
 		TelemetryKey:          CumulativeElectricityTelemetryKey,
 		PreviousValue:         100.25,
 		CurrentValue:          103,

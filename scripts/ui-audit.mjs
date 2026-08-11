@@ -137,6 +137,7 @@ await mkdir(profileDir, { recursive: true });
 const edge = spawn(edgePath, [
   '--headless=new',
   '--disable-gpu',
+  '--disable-extensions',
   '--no-first-run',
   '--no-default-browser-check',
   '--hide-scrollbars',
@@ -297,15 +298,34 @@ async function waitForRoute(client, route, allowed) {
     await waitFor(client, `document.querySelector('.ant-result-title')?.textContent.trim() === '403'`, `403 ${route.path}`);
     return;
   }
-  await waitFor(
-    client,
-    `(() => {
-      const text = document.body.innerText;
-      const spinning = [...document.querySelectorAll('.ant-spin-spinning')].some((element) => element.offsetParent !== null);
-      return text.includes(${JSON.stringify(route.title)}) && !spinning;
-    })()`,
-    `route ${route.path}`,
-  );
+  try {
+    await waitFor(
+      client,
+      `(() => {
+        const spinning = [...document.querySelectorAll('.ant-spin-spinning')].some((element) => element.offsetParent !== null);
+        const contentRoots = [...document.querySelectorAll([
+          '.ant-layout-content',
+          '.ops-page',
+          '.dashboard-page',
+          '.bigscreen-shell',
+          '.bigscreen-stage',
+          '.ant-result',
+        ].join(','))].filter((element) => element.offsetParent !== null);
+        return contentRoots.some((element) => element.textContent.includes(${JSON.stringify(route.title)})) && !spinning;
+      })()`,
+      `route ${route.path}`,
+    );
+  } catch (error) {
+    const diagnostic = await evaluate(client, `({
+      href: location.href,
+      title: document.title,
+      text: document.body.innerText.slice(0, 1200),
+      content: document.querySelector('.ant-layout-content')?.innerHTML.slice(0, 1200) ?? '',
+      selectedRole: document.querySelector('.ant-segmented-item-selected')?.textContent?.trim() ?? '',
+      spinners: [...document.querySelectorAll('.ant-spin-spinning')].filter((element) => element.offsetParent !== null).length,
+    })`);
+    throw new Error(`${error instanceof Error ? error.message : String(error)} diagnostic=${JSON.stringify(diagnostic)}`);
+  }
 }
 
 async function setViewport(client, viewport) {
@@ -319,10 +339,25 @@ async function setViewport(client, viewport) {
 }
 
 async function setTheme(client, mode) {
-  await client.send('Emulation.setEmulatedMedia', {
-    media: 'screen',
-    features: [{ name: 'prefers-color-scheme', value: mode }],
-  });
+  const current = await evaluate(client, 'document.documentElement.dataset.theme');
+  if (current === mode) return;
+
+  const toggled = await evaluate(client, `(() => {
+    const iconSelector = ${JSON.stringify(mode)} === 'dark' ? '.anticon-moon' : '.anticon-sun';
+    const button = [...document.querySelectorAll('button')].find((element) => (
+      element.offsetParent !== null && Boolean(element.querySelector(iconSelector))
+    ));
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+
+  if (!toggled) {
+    await client.send('Emulation.setEmulatedMedia', {
+      media: 'screen',
+      features: [{ name: 'prefers-color-scheme', value: mode }],
+    });
+  }
   await waitFor(client, `document.documentElement.dataset.theme === ${JSON.stringify(mode)}`, `theme ${mode}`);
 }
 
@@ -550,7 +585,7 @@ try {
     await setTheme(client, 'light');
 
     context = 'interaction:ai-copilot-popup';
-    await spaNavigate(client, '/dashboard');
+    await hardNavigate(client, '/dashboard');
     await waitForRoute(client, ROUTES[0], true);
     await waitFor(client, `Boolean(document.querySelector('.copilotKitPopup') || document.querySelector('.hvac-copilot-toggle'))`, 'CopilotPopup mount');
     await waitFor(client, `(() => {
@@ -694,14 +729,34 @@ try {
         && aiPopupState.togglePointerEvents !== 'none',
       `CopilotPopup HVAC product UI is incomplete: ${JSON.stringify(aiPopupState)}`,
     );
-    await evaluate(client, `document.querySelector('.copilotKitPopup .copilotKitInput textarea')?.focus()`);
+    await evaluate(client, `([...document.querySelectorAll('.copilotKitPopup .copilotKitInput textarea')].find((element) => element.offsetParent !== null))?.focus()`);
     await pause(180);
     const aiPopupFocusState = await evaluate(client, `(() => {
       const composer = document.querySelector('.copilotKitPopup .copilotKitInput');
       const style = composer ? getComputedStyle(composer) : null;
+      const focusRules = [];
+      for (const sheet of [...document.styleSheets]) {
+        let rules;
+        try { rules = sheet.cssRules; } catch { continue; }
+        for (const rule of [...rules]) {
+          const text = rule.cssText ?? '';
+          if (text.includes('copilotKitPopup.copilotKitPopup') && text.includes('focus-within')) focusRules.push(text.slice(0, 500));
+        }
+      }
       return {
         borderColor: style?.borderTopColor ?? '',
         shadow: style?.boxShadow ?? '',
+        focusWithin: composer?.matches(':focus-within') ?? false,
+        focusMarker: composer?.dataset.hvacFocus ?? '',
+        inlineBorder: composer?.style.getPropertyValue('border-color') ?? '',
+        inlineBorderPriority: composer?.style.getPropertyPriority('border-color') ?? '',
+        inlineShadow: composer?.style.getPropertyValue('box-shadow') ?? '',
+        inlineShadowPriority: composer?.style.getPropertyPriority('box-shadow') ?? '',
+        activeTag: document.activeElement?.tagName ?? '',
+        activeClass: document.activeElement?.className ?? '',
+        accent: style?.getPropertyValue('--hvac-ai-accent').trim() ?? '',
+        inRoot: Boolean(composer?.closest('#root')),
+        focusRules,
       };
     })()`);
     assert(
@@ -808,12 +863,13 @@ try {
       return true;
     })()`);
     assert(aiQuestionEntered, 'CopilotPopup input was not available');
-    await pause(100);
+    await waitFor(client, `(() => {
+      const send = document.querySelector('.copilotKitPopup .copilotKitInput [data-testid="copilot-send-button"]');
+      return send instanceof HTMLButtonElement && send.offsetParent !== null && !send.disabled;
+    })()`, 'CopilotPopup send button ready');
     const aiSendClicked = await evaluate(client, `(() => {
-      const input = document.querySelector('.copilotKitInput');
-      const buttons = [...(input?.querySelectorAll('button') ?? [])].filter((element) => element.offsetParent !== null && !element.disabled);
-      const send = buttons.at(-1);
-      if (!send) return false;
+      const send = document.querySelector('.copilotKitPopup .copilotKitInput [data-testid="copilot-send-button"]');
+      if (!(send instanceof HTMLButtonElement) || send.offsetParent === null || send.disabled) return false;
       send.click();
       return true;
     })()`);
@@ -857,17 +913,18 @@ try {
         return true;
       })()`);
       assert(entered, `CopilotPopup input was not available for ${label}`);
-      await pause(100);
+      await waitFor(client, `(() => {
+        const send = document.querySelector('.copilotKitPopup .copilotKitInput [data-testid="copilot-send-button"]');
+        return send instanceof HTMLButtonElement && send.offsetParent !== null && !send.disabled;
+      })()`, `CopilotPopup ${label} send button ready`);
       const sent = await evaluate(client, `(() => {
-        const input = document.querySelector('.copilotKitInput');
-        const buttons = [...(input?.querySelectorAll('button') ?? [])].filter((element) => element.offsetParent !== null && !element.disabled);
-        const send = buttons.at(-1);
-        if (!send) return false;
+        const send = document.querySelector('.copilotKitPopup .copilotKitInput [data-testid="copilot-send-button"]');
+        if (!(send instanceof HTMLButtonElement) || send.offsetParent === null || send.disabled) return false;
         send.click();
         return true;
       })()`);
       assert(sent, `CopilotPopup send button was not available for ${label}`);
-      await waitFor(client, `document.querySelector('.hvac-agent-result-card')?.textContent.includes(${JSON.stringify(expectedCardText)})`, `CopilotPopup ${label} result card`);
+      await waitFor(client, `([...document.querySelectorAll('.copilotKitPopup .hvac-agent-result-card')].some((card) => card.offsetParent !== null && card.textContent.includes(${JSON.stringify(expectedCardText)})))`, `CopilotPopup ${label} result card`);
     };
 
     await startNewCopilotSession('asset card');
@@ -1068,6 +1125,13 @@ try {
     await hardNavigate(client, '/ai');
     await waitForRoute(client, ROUTES.find((route) => route.path === '/ai'), true);
     await waitFor(client, `Boolean(document.querySelector('.ai-copilot-chat .copilotKitChat, .ai-copilot-chat.copilotKitChat'))`, 'CopilotChat workspace mount');
+    await evaluate(client, `(() => {
+      const textarea = [...document.querySelectorAll('.ai-copilot-chat .copilotKitInput textarea')]
+        .find((element) => element.offsetParent !== null);
+      if (textarea === document.activeElement) textarea.blur();
+      return true;
+    })()`);
+    await pause(60);
     const aiWorkspaceInitialState = await evaluate(client, `(() => {
       const workspace = document.querySelector('.ai-copilot-chat-shell');
       const textarea = workspace?.querySelector('textarea');
@@ -1216,22 +1280,30 @@ try {
       `CopilotChat workspace shell is invalid: ${JSON.stringify(aiWorkspaceInitialState)}`,
     );
 
-    await waitFor(client, `(() => {
-      const textarea = document.querySelector('.ai-copilot-chat .copilotKitInput textarea');
-      const composer = document.querySelector('.ai-copilot-chat .copilotKitInput');
-      if (!textarea || !composer) return false;
+    const aiWorkspaceFocused = await evaluate(client, `(() => {
+      const textarea = [...document.querySelectorAll('.ai-copilot-chat .copilotKitInput textarea')]
+        .find((element) => element.offsetParent !== null);
+      if (!textarea) return false;
       textarea.focus();
-      const style = getComputedStyle(composer);
-      return document.activeElement === textarea
-        && style.borderTopColor !== ${JSON.stringify(aiWorkspaceInitialState.composerBorderColor)}
-        && style.boxShadow !== ${JSON.stringify(aiWorkspaceInitialState.composerShadow)};
-    })()`, 'AI workspace composer focus feedback');
+      return document.activeElement === textarea;
+    })()`);
+    assert(aiWorkspaceFocused, 'AI workspace composer was not focusable');
+    await pause(180);
     const aiWorkspaceFocusState = await evaluate(client, `(() => {
-      const composer = document.querySelector('.ai-copilot-chat .copilotKitInput');
+      const composer = [...document.querySelectorAll('.ai-copilot-chat .copilotKitInput')]
+        .find((element) => element.matches(':focus-within'));
       const style = composer ? getComputedStyle(composer) : null;
       return {
         borderColor: style?.borderTopColor ?? '',
         shadow: style?.boxShadow ?? '',
+        focusWithin: composer?.matches(':focus-within') ?? false,
+        focusMarker: composer?.dataset.hvacFocus ?? '',
+        inlineBorder: composer?.style.getPropertyValue('border-color') ?? '',
+        inlineBorderPriority: composer?.style.getPropertyPriority('border-color') ?? '',
+        inlineShadow: composer?.style.getPropertyValue('box-shadow') ?? '',
+        inlineShadowPriority: composer?.style.getPropertyPriority('box-shadow') ?? '',
+        activeTag: document.activeElement?.tagName ?? '',
+        activeInsideShell: Boolean(document.activeElement?.closest?.('.ai-copilot-chat-shell')),
       };
     })()`);
     assert(
@@ -1382,22 +1454,23 @@ try {
       return true;
     })()`);
     assert(aiWorkspaceQuestionEntered, 'CopilotChat workspace input was unavailable');
-    await pause(100);
+    await waitFor(client, `(() => {
+      const send = document.querySelector('.ai-copilot-chat .copilotKitInput [data-testid="copilot-send-button"]');
+      return send instanceof HTMLButtonElement && send.offsetParent !== null && !send.disabled;
+    })()`, 'CopilotChat workspace send button ready');
     const aiWorkspaceSendClicked = await evaluate(client, `(() => {
-      const input = document.querySelector('.ai-copilot-chat .copilotKitInput');
-      const buttons = [...(input?.querySelectorAll('button') ?? [])].filter((element) => element.offsetParent !== null && !element.disabled);
-      const send = buttons.at(-1);
-      if (!send) return false;
+      const send = document.querySelector('.ai-copilot-chat .copilotKitInput [data-testid="copilot-send-button"]');
+      if (!(send instanceof HTMLButtonElement) || send.offsetParent === null || send.disabled) return false;
       send.click();
       return true;
     })()`);
     assert(aiWorkspaceSendClicked, 'CopilotChat workspace send button was unavailable');
     await waitFor(client, `(() => {
       const workspace = document.querySelector('.ai-copilot-chat');
-      const card = workspace?.querySelector('.hvac-agent-result-card');
+      const cards = [...(workspace?.querySelectorAll('.hvac-agent-result-card') ?? [])]
+        .filter((card) => card.offsetParent !== null);
       return workspace?.textContent.includes('总功率约')
-        && card?.textContent.includes('能耗异常调查')
-        && card?.textContent.includes('额外能耗');
+        && cards.some((card) => card.textContent.includes('能耗异常调查') && card.textContent.includes('额外能耗'));
     })()`, 'CopilotChat workspace Agent answer');
     const aiWorkspaceStartedState = await evaluate(client, `(() => {
       const conversation = document.querySelector('.ai-conversation-pane');
@@ -1524,7 +1597,7 @@ try {
     })()`);
     assert(drawerCloseButtonFocused, 'Asset drawer close control could not receive focus');
     await pressEscape(client);
-    await pause(500);
+    await waitFor(client, `!document.querySelector('.ops-detail-drawer.ant-drawer-open') && !new URLSearchParams(location.search).has('device')`, 'asset drawer Escape close');
     const drawerEscapeState = await evaluate(client, `({
       drawerOpen: Boolean(document.querySelector('.ops-detail-drawer.ant-drawer-open')),
       hasDeviceParam: new URLSearchParams(location.search).has('device'),
@@ -1554,7 +1627,7 @@ try {
       window.dispatchEvent(new PopStateEvent('popstate'));
       return true;
     })()`);
-    await waitFor(client, `location.pathname === '/energy/month'`, 'energy index redirect');
+    await waitFor(client, `location.pathname === '/energy' && document.body.innerText.includes('月度能耗分析')`, 'energy index default month view');
     await waitFor(
       client,
       `document.body.innerText.includes('月度能耗分析') && document.querySelectorAll('.ops-chart-card').length >= 4 && document.querySelectorAll('.ops-metric').length >= 4`,
@@ -1567,7 +1640,7 @@ try {
       contentHeight: document.querySelector('.energy-system-root')?.scrollHeight ?? 0,
     })`);
     assert(
-      energyFirstEntryState.pathname === '/energy/month'
+      energyFirstEntryState.pathname === '/energy'
         && energyFirstEntryState.chartCount >= 4
         && energyFirstEntryState.metricCount >= 4
         && energyFirstEntryState.contentHeight > 900,
@@ -1646,7 +1719,13 @@ try {
     })()`);
     assert(energyTypeClicked, 'Energy category drilldown control was not found');
     await waitFor(client, `new URLSearchParams(location.search).get('type') === 'chiller'`, 'energy category URL');
-    const energyFilteredDevices = await evaluate(client, `[...document.querySelectorAll('.energy-device-link')].map((element) => element.dataset.opsDetailTrigger)`);
+    await waitFor(client, `(() => {
+      const ids = [...document.querySelectorAll('.energy-device-link')]
+        .filter((element) => element.offsetParent !== null)
+        .map((element) => element.dataset.opsDetailTrigger);
+      return ids.length === 2 && ids.every((id) => ['b1-z1-u1', 'b1-z1-u2'].includes(id));
+    })()`, 'energy category device filtering');
+    const energyFilteredDevices = await evaluate(client, `[...document.querySelectorAll('.energy-device-link')].filter((element) => element.offsetParent !== null).map((element) => element.dataset.opsDetailTrigger)`);
     assert(energyFilteredDevices.length === 2, `Energy chiller drilldown expected 2 devices, got ${energyFilteredDevices.length}`);
     assert(energyFilteredDevices.every((id) => ['b1-z1-u1', 'b1-z1-u2'].includes(id)), 'Energy category drilldown returned non-chiller devices');
     interactionChecks.push('energy-category-drilldown');
@@ -1708,9 +1787,16 @@ try {
     await spaNavigate(client, '/system?tab=users');
     await waitFor(client, `document.body.innerText.includes('用户权限')`, 'system users tab');
     await clickText(client, '新建用户');
-    await waitFor(client, `[...document.querySelectorAll('.ant-modal')].some((element) => element.offsetParent !== null && element.textContent.includes('新建用户'))`, 'user modal');
+    await waitFor(client, `[...document.querySelectorAll('.system-governance-modal')].some((element) => element.offsetParent !== null && element.textContent.includes('新建用户'))`, 'user modal');
+    const userModalCloseFocused = await evaluate(client, `(() => {
+      const modal = [...document.querySelectorAll('.system-governance-modal')].find((element) => element.offsetParent !== null);
+      const close = modal?.querySelector('.ant-modal-close');
+      close?.focus();
+      return document.activeElement === close;
+    })()`);
+    assert(userModalCloseFocused, 'User modal close control could not receive focus');
     await pressEscape(client);
-    await waitFor(client, `![...document.querySelectorAll('.ant-modal')].some((element) => element.offsetParent !== null)`, 'user modal escape');
+    await waitFor(client, `![...document.querySelectorAll('.system-governance-modal')].some((element) => element.offsetParent !== null)`, 'user modal escape');
     interactionChecks.push('modal-escape');
 
     context = 'interaction:popconfirm';
@@ -1756,12 +1842,19 @@ try {
       && detail.includes('DropdownMenuTrigger2')
       && detail.includes('@copilotkit_react-core_v2')
     );
-    const knownThirdPartyWarnings = browserProblems.filter((problem) => isKnownCopilotKitDevWarning(String(problem.detail)));
+    const isKnownAntdReact19CompatWarning = (detail) => (
+      detail.includes('[antd: compatible]')
+      && detail.includes('antd v5 support React is 16 ~ 18')
+    );
+    const isKnownThirdPartyWarning = (detail) => (
+      isKnownCopilotKitDevWarning(detail) || isKnownAntdReact19CompatWarning(detail)
+    );
+    const knownThirdPartyWarnings = browserProblems.filter((problem) => isKnownThirdPartyWarning(String(problem.detail)));
     const actionableProblems = browserProblems.filter((problem) => {
       const detail = String(problem.detail);
       return !detail.includes('ResizeObserver loop')
         && !detail.includes('favicon.ico')
-        && !isKnownCopilotKitDevWarning(detail);
+        && !isKnownThirdPartyWarning(detail);
     });
     assert(actionableProblems.length === 0, `Browser problems detected: ${JSON.stringify(actionableProblems, null, 2)}`);
 

@@ -60,6 +60,26 @@ cubes:
         sql: site_id
         type: string
 
+      - name: tenant_id
+        sql: tenant_id
+        type: string
+
+      - name: device_id
+        sql: device_id
+        type: string
+
+      - name: point_id
+        sql: point_id
+        type: string
+
+      - name: sensor_id
+        sql: sensor_id
+        type: string
+
+      - name: telemetry_key
+        sql: telemetry_key
+        type: string
+
       - name: energy_type
         sql: energy_type
         type: string

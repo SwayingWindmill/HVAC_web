@@ -70,9 +70,12 @@ type Writer struct {
 type candidateRow struct {
 	PreviousObservationID  string   `json:"previous_observation_id"`
 	CurrentObservationID   string   `json:"current_observation_id"`
+	TenantID               string   `json:"tenant_id"`
 	OrganizationID         string   `json:"organization_id"`
 	SiteID                 string   `json:"site_id"`
 	DeviceID               string   `json:"device_id"`
+	PointID                string   `json:"point_id"`
+	SensorID               *string  `json:"sensor_id"`
 	TelemetryKey           string   `json:"telemetry_key"`
 	PreviousValue          float64  `json:"previous_value"`
 	CurrentValue           float64  `json:"current_value"`
@@ -181,7 +184,8 @@ func (reader *Reader) ListCandidates(ctx context.Context, limit int) ([]energy.C
 		}
 		candidates = append(candidates, energy.Candidate{
 			PreviousObservationID: row.PreviousObservationID, CurrentObservationID: row.CurrentObservationID,
-			OrganizationID: row.OrganizationID, SiteID: row.SiteID, DeviceID: row.DeviceID, TelemetryKey: row.TelemetryKey,
+			TenantID: row.TenantID, OrganizationID: row.OrganizationID, SiteID: row.SiteID, DeviceID: row.DeviceID,
+			PointID: row.PointID, SensorID: row.SensorID, TelemetryKey: row.TelemetryKey,
 			PreviousValue: row.PreviousValue, CurrentValue: row.CurrentValue,
 			PreviousQuality: row.PreviousQuality, CurrentQuality: row.CurrentQuality,
 			PreviousQualityReasons: append([]string(nil), row.PreviousQualityReasons...),
@@ -193,14 +197,17 @@ func (reader *Reader) ListCandidates(ctx context.Context, limit int) ([]energy.C
 }
 
 func (reader *Reader) candidateQuery(limit int) string {
-	window := "PARTITION BY owning_organization_id, site_id, device_id, telemetry_key ORDER BY sampled_at, source_offset, observation_id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
+	window := "PARTITION BY tenant_id, owning_organization_id, site_id, point_id, sensor_id, device_id, telemetry_key ORDER BY sampled_at, source_offset, observation_id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
 	return fmt.Sprintf(`WITH ordered AS (
   SELECT
     observation_id AS current_observation_id,
     lagInFrame(toNullable(observation_id), 1) OVER (%[1]s) AS previous_observation_id,
+    assumeNotNull(tenant_id) AS tenant_id,
     assumeNotNull(owning_organization_id) AS organization_id,
     assumeNotNull(site_id) AS site_id,
     assumeNotNull(device_id) AS device_id,
+    assumeNotNull(point_id) AS point_id,
+    sensor_id,
     telemetry_key,
     lagInFrame(value_number, 1) OVER (%[1]s) AS previous_value,
     assumeNotNull(value_number) AS current_value,
@@ -218,16 +225,21 @@ func (reader *Reader) candidateQuery(limit int) string {
     AND unit = 'kWh'
     AND value_number IS NOT NULL
     AND isFinite(value_number)
+    AND tenant_id IS NOT NULL
     AND owning_organization_id IS NOT NULL
     AND site_id IS NOT NULL
     AND device_id IS NOT NULL
+    AND point_id IS NOT NULL
 )
 SELECT
   toString(candidate.previous_observation_id) AS previous_observation_id,
   toString(candidate.current_observation_id) AS current_observation_id,
+  toString(candidate.tenant_id) AS tenant_id,
   toString(candidate.organization_id) AS organization_id,
   toString(candidate.site_id) AS site_id,
   toString(candidate.device_id) AS device_id,
+  toString(candidate.point_id) AS point_id,
+  toString(candidate.sensor_id) AS sensor_id,
   candidate.telemetry_key,
   assumeNotNull(candidate.previous_value) AS previous_value,
   candidate.current_value,
@@ -313,8 +325,8 @@ func (writer *Writer) InsertFacts(ctx context.Context, facts []energy.Fact) erro
 }
 
 func validateFact(fact energy.Fact) error {
-	if strings.TrimSpace(fact.FactID) == "" || strings.TrimSpace(fact.OrganizationID) == "" || strings.TrimSpace(fact.SiteID) == "" ||
-		strings.TrimSpace(fact.DeviceID) == "" || strings.TrimSpace(fact.SourcePreviousObservationID) == "" || strings.TrimSpace(fact.SourceCurrentObservationID) == "" {
+	if strings.TrimSpace(fact.FactID) == "" || strings.TrimSpace(fact.TenantID) == "" || strings.TrimSpace(fact.OrganizationID) == "" || strings.TrimSpace(fact.SiteID) == "" ||
+		strings.TrimSpace(fact.DeviceID) == "" || strings.TrimSpace(fact.PointID) == "" || strings.TrimSpace(fact.SourcePreviousObservationID) == "" || strings.TrimSpace(fact.SourceCurrentObservationID) == "" {
 		return errors.New("ClickHouse energy interval fact identifiers are required")
 	}
 	if fact.TelemetryKey != energy.CumulativeElectricityTelemetryKey || fact.EnergyType != energy.EnergyTypeElectricity || fact.EnergyKWh < 0 ||

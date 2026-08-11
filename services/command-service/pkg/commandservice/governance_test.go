@@ -26,7 +26,7 @@ func TestMediumRiskRequiresBoundIndependentApproval(t *testing.T) {
 	clock := fixedClock()
 	service := New(clock)
 	request := validRequest()
-	request.SetpointC = 24.5
+	request.Parameters[commandmodel.ParameterSetpointC] = 24.5
 	request.IdempotencyKey = "medium-risk"
 	created, err := service.Submit(request)
 	if err != nil {
@@ -81,7 +81,7 @@ func TestFreshApprovalAuthorizationReplacesExpiredSubmitAuthorization(t *testing
 	clock := func() time.Time { return clockNow }
 	service := New(clock)
 	request := validRequest()
-	request.SetpointC = 24.5
+	request.Parameters[commandmodel.ParameterSetpointC] = 24.5
 	request.IdempotencyKey = "fresh-approval-auth"
 	created, err := service.Submit(request)
 	if err != nil {
@@ -112,7 +112,7 @@ func TestHighRiskRequiresTwoDistinctApprovers(t *testing.T) {
 	clock := fixedClock()
 	service := New(clock)
 	request := validRequest()
-	request.SetpointC = 25.5
+	request.Parameters[commandmodel.ParameterSetpointC] = 25.5
 	request.IdempotencyKey = "high-risk"
 	created, err := service.Submit(request)
 	if err != nil {
@@ -146,7 +146,7 @@ func TestExecutionRejectsExpiredEarlierApprovalAuthorization(t *testing.T) {
 	clock := func() time.Time { return clockNow }
 	service := New(clock)
 	request := validRequest()
-	request.SetpointC = 25.5
+	request.Parameters[commandmodel.ParameterSetpointC] = 25.5
 	request.IdempotencyKey = "expired-earlier-approval"
 	created, err := service.Submit(request)
 	if err != nil {

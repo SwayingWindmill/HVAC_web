@@ -6,26 +6,9 @@ import (
 )
 
 func TestDecodeConfigRejectsMissingCredentials(t *testing.T) {
-	raw := `{
-  "schemaVersion": 1,
-  "gatewayId": "EG8200-VIRTUAL-001",
-  "thingsBoardBaseUrl": "http://localhost:8080",
-  "publishInterval": "5s",
-  "plant": {
-    "ambientDryBulbC": 34,
-    "ambientWetBulbC": 27,
-    "loadFraction": 0.7,
-    "chiller": {"id":"CHILLER-01","ratedCoolingCapacityKw":1200,"baseCop":5.6,"initialSetpointC":7,"initialLoadLimitPct":100,"initiallyRunning":true},
-    "chilledWaterPump": {"id":"CHWP-01","ratedPowerKw":45,"ratedFlowM3h":220,"initialFrequencyHz":50,"initiallyRunning":true},
-    "coolingWaterPump": {"id":"CWP-01","ratedPowerKw":37,"ratedFlowM3h":260,"initialFrequencyHz":50,"initiallyRunning":true},
-    "coolingTower": {"id":"CT-01","ratedFanPowerKw":18.5,"initialFanSpeedPct":80,"initiallyRunning":true},
-    "powerMeterId":"METER-HVAC-TOTAL",
-    "btuMeterId":"BTU-METER-01"
-  },
-  "credentialEnvByDeviceId": {}
-}`
-	_, err := DecodeConfig(strings.NewReader(raw))
-	if err == nil || !strings.Contains(err.Error(), "credentialEnvByDeviceId") {
+	config := testConfig()
+	config.Credentials = map[string]string{}
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "credentialEnvByDeviceId") {
 		t.Fatalf("expected credential validation error, got %v", err)
 	}
 }
@@ -47,20 +30,35 @@ func TestPlantConfigRejectsDuplicateDeviceIDs(t *testing.T) {
 }
 
 func TestConfigRequiresHTTPSForNonLocalThingsBoard(t *testing.T) {
-	plant := testPlantConfig()
-	credentials := make(map[string]string, len(plant.DeviceIDs()))
-	for _, deviceID := range plant.DeviceIDs() {
-		credentials[deviceID] = "TEST_TOKEN_ENV"
-	}
-	config := Config{
-		SchemaVersion:      ConfigSchemaVersion,
-		GatewayID:          "EG8200-VIRTUAL-001",
-		ThingsBoardBaseURL: "http://thingsboard.example.com",
-		PublishInterval:    "5s",
-		Plant:              plant,
-		Credentials:        credentials,
-	}
+	config := testConfig()
+	config.ThingsBoardBaseURL = "http://thingsboard.example.com"
 	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "HTTPS") {
 		t.Fatalf("expected HTTPS validation error, got %v", err)
+	}
+}
+
+func TestConfigRejectsAreaCycles(t *testing.T) {
+	config := testConfig()
+	config.Areas[0].ParentID = "plant-room"
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("expected Area cycle validation error, got %v", err)
+	}
+}
+
+func TestConfigRejectsSensorDeviceMismatch(t *testing.T) {
+	config := testConfig()
+	config.Points[0].DeviceID = "CHWP-01"
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "must report through sensor device") {
+		t.Fatalf("expected Sensor reporting Device validation error, got %v", err)
+	}
+}
+
+func TestConfigRejectsDuplicatePointKeyWithinDevice(t *testing.T) {
+	config := testConfig()
+	duplicate := config.Points[0]
+	duplicate.SourceKey = "enteringChilledWaterTemperatureC"
+	config.Points = append(config.Points, duplicate)
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate point key") {
+		t.Fatalf("expected duplicate point key validation error, got %v", err)
 	}
 }

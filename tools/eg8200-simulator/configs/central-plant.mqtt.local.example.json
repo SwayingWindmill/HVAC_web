@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "tenantId": "018f3d00-0000-7000-8000-000000000001",
+  "siteId": "018f3e00-1000-7000-8000-000000000001",
+  "brokerUrl": "tls://localhost:18883",
+  "clientId": "EG8200-COMMERCIAL-001",
+  "caFile": "/run/secrets/ca.pem",
+  "certFile": "/run/secrets/mqtt-gateway-cert.pem",
+  "keyFile": "/run/secrets/mqtt-gateway-key.pem",
+  "serverName": "localhost",
+  "queueDirectory": "/var/lib/eg8200/mqtt-queue",
+  "maximumQueueBytes": 536870912,
+  "deviceExternalIdByDeviceId": {
+    "CHILLER-01": "018f3e00-4000-7000-8000-000000000001",
+    "CHWP-01": "018f3e00-4000-7000-8000-000000000002",
+    "CWP-01": "018f3e00-4000-7000-8000-000000000003",
+    "CT-01": "018f3e00-4000-7000-8000-000000000004",
+    "METER-HVAC-TOTAL": "018f3e00-4000-7000-8000-000000000005",
+    "BTU-METER-01": "018f3e00-4000-7000-8000-000000000006",
+    "WEATHER-STATION-01": "018f3e00-4000-7000-8000-000000000007"
+  }
+}

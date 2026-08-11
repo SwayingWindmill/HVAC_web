@@ -99,6 +99,7 @@ for (const invariant of [
   'device-history-public-requests-never-accept-organization-or-site-claims',
   'device-history-authorization-binds-exact-device-keys-range-and-point-limit',
   'device-history-is-numeric-accepted-observations-only',
+  'device-history-points-preserve-sampled-at-point-and-sensor-identity',
 ]) {
   assert(invariants.includes(invariant), `public contract invariant missing: ${invariant}`);
 }
@@ -131,6 +132,9 @@ assert(schemas.DeviceHistoryRequest?.properties?.maxPointsPerKey?.maximum === li
 assert(schemas.DeviceHistoryResponse?.properties?.series?.maxItems === limits.maxHistoryKeys, 'history response series limit drifted');
 assert(schemas.DeviceHistorySeries?.properties?.points?.maxItems === limits.maxHistoryPointsPerKey, 'history series point limit drifted');
 assert(schemas.DeviceHistoryMetadata?.properties?.returnedPoints?.maximum === limits.maxHistoryResponsePoints, 'history total response limit drifted');
+assert(schemas.DeviceHistoryPoint?.required?.includes('pointId') && schemas.DeviceHistoryPoint?.required?.includes('sensorId'), 'history samples must require frozen Point/Sensor identity');
+assert(schemas.DeviceHistoryPoint?.properties?.pointId?.$ref === '#/components/schemas/UUIDv7', 'history Point identity must remain UUIDv7');
+assert(Array.isArray(schemas.DeviceHistoryPoint?.properties?.sensorId?.oneOf), 'history Sensor identity must remain explicitly nullable');
 
 const requestSchemaProperties = {
   ObservationSnapshotTarget: ['requestId', 'deviceId', 'keys'],

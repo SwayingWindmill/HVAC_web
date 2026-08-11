@@ -209,7 +209,7 @@ func TestPostgresVerificationLeaseUsesDatabaseTimestampPrecision(t *testing.T) {
 	*now = now.Add(time.Second)
 	if err := store.ResolveVerification(ctx, verification, commandmodel.VerificationResult{
 		Outcome: commandmodel.VerificationSucceeded, EvidenceID: "s2-timestamp-precision",
-		Reported: postgresReportedState(verification, verification.SetpointC),
+		Reported: postgresReportedState(verification, postgresVerificationNumber(t, verification)),
 	}); err != nil {
 		t.Fatalf("verification resolution failed after PostgreSQL timestamp round trip: %v", err)
 	}
@@ -279,17 +279,26 @@ func acknowledgeAndVerifyPostgres(t *testing.T, store *PostgresStore, admin *pgx
 	if err := store.ResolveVerification(ctx, verification, commandmodel.VerificationResult{
 		Outcome:    commandmodel.VerificationSucceeded,
 		EvidenceID: evidencePrefix + "-s2-reported-state",
-		Reported:   postgresReportedState(verification, verification.SetpointC),
+		Reported:   postgresReportedState(verification, postgresVerificationNumber(t, verification)),
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func postgresVerificationNumber(t *testing.T, envelope commandmodel.VerificationEnvelope) float64 {
+	t.Helper()
+	value, ok := commandmodel.ParameterValue(envelope.Capability, envelope.Parameters)
+	if !ok {
+		t.Fatalf("verification envelope has no numeric parameter: %#v", envelope)
+	}
+	return value
 }
 
 func postgresReportedState(envelope commandmodel.VerificationEnvelope, setpointC float64) commandmodel.ReportedStateEvidence {
 	return commandmodel.ReportedStateEvidence{
 		OrganizationID: envelope.OrganizationID, SiteID: envelope.SiteID, DeviceID: envelope.DeviceID,
 		EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
-		BusinessRevision: envelope.BaselineBusinessRevision + 1, ReportedSetpointC: setpointC,
+		BusinessRevision: envelope.BaselineBusinessRevision + 1, ReportedValue: commandmodel.NumberScalar(setpointC),
 		ObservedAt: envelope.AcknowledgedAt.Add(time.Second),
 	}
 }

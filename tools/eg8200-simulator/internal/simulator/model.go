@@ -77,8 +77,9 @@ type coolingTowerState struct {
 
 func NewPlant(config PlantConfig, now time.Time) *Plant {
 	return &Plant{
-		config: config,
-		now:    now.UTC(),
+		config:         config,
+		now:            now.UTC(),
+		totalEnergyKWh: config.InitialEnergyKWh,
 		chiller: chillerState{
 			running:               config.Chiller.InitiallyRunning,
 			setpointC:             config.Chiller.InitialSetpointC,
@@ -242,6 +243,11 @@ func (plant *Plant) snapshotLocked() Snapshot {
 				"flowRateM3h":                 round(plant.chilledWaterPump.flowM3H, 3),
 				"instantCoolingCapacityKw":    round(plant.chiller.coolingCapacityKW, 3),
 				"accumulatedCoolingEnergyKwh": round(plant.totalCoolingEnergyKWh, 6),
+			},
+			plant.config.WeatherStationID: {
+				"ambientDryBulbTemperatureC": round(plant.config.AmbientDryBulbC, 3),
+				"ambientWetBulbTemperatureC": round(plant.config.AmbientWetBulbC, 3),
+				"relativeHumidityPct":        round(clamp(100-5*(plant.config.AmbientDryBulbC-plant.config.AmbientWetBulbC), 5, 100), 3),
 			},
 		},
 	}

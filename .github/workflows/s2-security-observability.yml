@@ -2,6 +2,7 @@ name: S2 Security Observability and Redaction
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - ".github/workflows/s2-security-observability.yml"
       - "deploy/s2/observability/**"

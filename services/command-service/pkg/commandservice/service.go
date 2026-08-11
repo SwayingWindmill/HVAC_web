@@ -26,14 +26,15 @@ var (
 	ErrVerificationNotAvailable = errors.New("no acknowledged command is available for verification")
 )
 
-const (
-	setpointCapabilityRevision = "capability:set-temperature-setpoint:v1"
-	minimumSetpointC           = 16.0
-	maximumSetpointC           = 30.0
-	maximumSetpointDeltaC      = 3.0
-	verificationToleranceC     = 0.1
-	verificationWindow         = 2 * time.Minute
-)
+const verificationWindow = 2 * time.Minute
+
+func commandCapabilityProfile(capability commandmodel.Capability) (revision string, minimum, maximum float64, ok bool) {
+	profile, ok := commandmodel.CapabilityProfileFor(capability)
+	if !ok {
+		return "", 0, 0, false
+	}
+	return profile.Revision, profile.Minimum, profile.Maximum, true
+}
 
 type SubmitResult struct {
 	Intent   commandmodel.CommandIntent
@@ -96,22 +97,26 @@ func (s *Service) Submit(request commandmodel.SubmitRequest) (SubmitResult, erro
 	commandID := fmt.Sprintf("cmd-%08d", s.nextCommandID)
 	s.deviceSequence[request.DeviceID]++
 
+	capabilityRevision, _, _, _ := commandCapabilityProfile(request.Capability)
 	intent := &commandmodel.CommandIntent{
 		ID:                    commandID,
+		TenantID:              request.TenantID,
 		OrganizationID:        request.OrganizationID,
 		SiteID:                request.SiteID,
 		DeviceID:              request.DeviceID,
+		PointID:               request.PointID,
 		PrincipalID:           request.PrincipalID,
 		IdempotencyKey:        request.IdempotencyKey,
 		Capability:            request.Capability,
-		CapabilityRevision:    setpointCapabilityRevision,
+		CapabilityRevision:    capabilityRevision,
 		Risk:                  risk.Level,
 		RiskSnapshot:          risk,
 		ApprovalPolicy:        approvalPolicy,
 		Authorization:         request.Authorization,
 		Authorizations:        []commandmodel.AuthorizationSnapshot{request.Authorization},
 		RetryPolicy:           commandmodel.RetryPreSendOnly,
-		SetpointC:             request.SetpointC,
+		Parameters:            cloneParameters(request.Parameters),
+		VerificationPointKey:  request.VerificationPointKey,
 		PayloadHash:           payloadHash,
 		SnapshotRevision:      request.CurrentState.BusinessRevision,
 		DeviceCommandSequence: s.deviceSequence[request.DeviceID],
@@ -214,9 +219,10 @@ func (s *Service) PrepareDispatch(commandID, leaseOwner string, leaseUntil time.
 		OrganizationID:        intent.OrganizationID,
 		SiteID:                intent.SiteID,
 		DeviceID:              intent.DeviceID,
+		PointID:               intent.PointID,
 		Capability:            intent.Capability,
 		CapabilityRevision:    intent.CapabilityRevision,
-		SetpointC:             intent.SetpointC,
+		Parameters:            cloneParameters(intent.Parameters),
 		PayloadHash:           intent.PayloadHash,
 		ExecutionFence:        fence,
 		DeviceCommandSequence: intent.DeviceCommandSequence,
@@ -245,7 +251,7 @@ func (s *Service) ResolveDispatch(envelope commandmodel.DispatchEnvelope, result
 	if envelope.ExecutionFence != intent.ActiveFence || envelope.ExecutionFence != attempt.ExecutionFence {
 		return ErrStaleFence
 	}
-	if envelope.PayloadHash != intent.PayloadHash || envelope.PayloadHash != attempt.PayloadHash {
+	if envelope.PointID != intent.PointID || envelope.PayloadHash != intent.PayloadHash || envelope.PayloadHash != attempt.PayloadHash {
 		return ErrInvalidRequest
 	}
 
@@ -318,8 +324,8 @@ func (s *Service) PrepareVerification(commandID, leaseOwner string, leaseUntil t
 		attempt.UpdatedAt = now
 		return commandmodel.VerificationEnvelope{
 			CommandID: intent.ID, AttemptID: attempt.ID, OrganizationID: intent.OrganizationID,
-			SiteID: intent.SiteID, DeviceID: intent.DeviceID, Capability: intent.Capability,
-			CapabilityRevision: intent.CapabilityRevision, SetpointC: intent.SetpointC,
+			SiteID: intent.SiteID, DeviceID: intent.DeviceID, PointID: intent.PointID, Capability: intent.Capability,
+			CapabilityRevision: intent.CapabilityRevision, Parameters: cloneParameters(intent.Parameters), VerificationPointKey: intent.VerificationPointKey,
 			PayloadHash: intent.PayloadHash, ExecutionFence: attempt.ExecutionFence,
 			BaselineBusinessRevision: intent.SnapshotRevision, AcknowledgedAt: attempt.AcknowledgedAt,
 			VerificationDeadline: attempt.VerificationDeadline, LeaseOwner: leaseOwner,
@@ -338,7 +344,7 @@ func (s *Service) ResolveVerification(envelope commandmodel.VerificationEnvelope
 		return ErrCommandNotFound
 	}
 	if intent.Status != commandmodel.IntentDispatching || envelope.ExecutionFence != intent.ActiveFence ||
-		envelope.PayloadHash != intent.PayloadHash || strings.TrimSpace(envelope.LeaseOwner) == "" || strings.TrimSpace(result.EvidenceID) == "" {
+		envelope.PointID != intent.PointID || envelope.PayloadHash != intent.PayloadHash || strings.TrimSpace(envelope.LeaseOwner) == "" || strings.TrimSpace(result.EvidenceID) == "" {
 		return ErrStaleFence
 	}
 	switch result.Outcome {
@@ -385,24 +391,39 @@ func (s *Service) ResolveVerification(envelope commandmodel.VerificationEnvelope
 }
 
 func validReportedState(intent commandmodel.CommandIntent, envelope commandmodel.VerificationEnvelope, reported commandmodel.ReportedStateEvidence) bool {
+	expected, ok := commandmodel.ExpectedReportedValue(intent.Capability, intent.Parameters)
+	profile, supported := commandmodel.CapabilityProfileFor(intent.Capability)
+	if !ok || !supported {
+		return false
+	}
 	return reported.OrganizationID == intent.OrganizationID && reported.SiteID == intent.SiteID && reported.DeviceID == intent.DeviceID &&
 		reported.EvaluationAvailability == "AVAILABLE" && reported.Presence == "ONLINE" && reported.Readiness == "CURRENT" &&
 		reported.Freshness == "FRESH" && reported.Quality == "GOOD" &&
 		reported.BusinessRevision > envelope.BaselineBusinessRevision && reported.ObservedAt.After(envelope.AcknowledgedAt) &&
-		absolute(reported.ReportedSetpointC-intent.SetpointC) <= verificationToleranceC
+		commandmodel.ScalarMatches(reported.ReportedValue, expected, profile.VerificationTolerance)
 }
 
 func validateAndHash(request commandmodel.SubmitRequest) (string, error) {
-	if strings.TrimSpace(request.OrganizationID) == "" || strings.TrimSpace(request.SiteID) == "" ||
-		strings.TrimSpace(request.DeviceID) == "" || strings.TrimSpace(request.PrincipalID) == "" ||
-		strings.TrimSpace(request.IdempotencyKey) == "" {
+	if strings.TrimSpace(request.TenantID) == "" || strings.TrimSpace(request.OrganizationID) == "" || strings.TrimSpace(request.SiteID) == "" ||
+		strings.TrimSpace(request.DeviceID) == "" || strings.TrimSpace(request.PointID) == "" || strings.TrimSpace(request.PrincipalID) == "" ||
+		strings.TrimSpace(request.IdempotencyKey) == "" || strings.TrimSpace(request.VerificationPointKey) == "" {
 		return "", ErrInvalidRequest
 	}
-	if request.Capability != commandmodel.CapabilitySetTemperatureSetpoint {
+	profile, ok := commandmodel.CapabilityProfileFor(request.Capability)
+	if !ok {
 		return "", ErrCapabilityDenied
 	}
-	if request.SetpointC < minimumSetpointC || request.SetpointC > maximumSetpointC {
-		return "", ErrCapabilityDenied
+	parameterCanonical := ""
+	if profile.ParameterKey == "" {
+		if len(request.Parameters) != 0 {
+			return "", ErrCapabilityDenied
+		}
+	} else {
+		value, valid := commandmodel.ParameterValue(request.Capability, request.Parameters)
+		if !valid || value < profile.Minimum || value > profile.Maximum {
+			return "", ErrCapabilityDenied
+		}
+		parameterCanonical = profile.ParameterKey + "=" + strconv.FormatFloat(value, 'f', 3, 64)
 	}
 	state := request.CurrentState
 	if state.EvaluationAvailability != "AVAILABLE" || state.Presence != "ONLINE" ||
@@ -410,17 +431,23 @@ func validateAndHash(request commandmodel.SubmitRequest) (string, error) {
 		state.ObservedAt.IsZero() {
 		return "", ErrCurrentStateUnsafe
 	}
-	if absolute(request.SetpointC-state.CurrentTemperatureC) > maximumSetpointDeltaC {
-		return "", ErrCapabilityDenied
+	if profile.ParameterKey != "" {
+		value, _ := commandmodel.ParameterValue(request.Capability, request.Parameters)
+		if state.CurrentValue == nil || absolute(value-*state.CurrentValue) > profile.MaximumDelta {
+			return "", ErrCapabilityDenied
+		}
 	}
 
 	canonical := strings.Join([]string{
+		request.TenantID,
 		request.OrganizationID,
 		request.SiteID,
 		request.DeviceID,
+		request.PointID,
 		string(request.Capability),
-		strconv.FormatFloat(request.SetpointC, 'f', 3, 64),
-		setpointCapabilityRevision,
+		parameterCanonical,
+		request.VerificationPointKey,
+		profile.Revision,
 	}, "|")
 	digest := sha256.Sum256([]byte(canonical))
 	return hex.EncodeToString(digest[:]), nil
@@ -448,12 +475,24 @@ func appendTransition(intent *commandmodel.CommandIntent, from, to commandmodel.
 }
 
 func cloneIntent(intent commandmodel.CommandIntent) commandmodel.CommandIntent {
+	intent.Parameters = cloneParameters(intent.Parameters)
 	intent.Transitions = append([]commandmodel.Transition(nil), intent.Transitions...)
 	intent.Attempts = append([]commandmodel.CommandAttempt(nil), intent.Attempts...)
 	intent.Approvals = append([]commandmodel.ApprovalEvidence(nil), intent.Approvals...)
 	intent.Authorizations = append([]commandmodel.AuthorizationSnapshot(nil), intent.Authorizations...)
 	intent.RiskSnapshot.Reasons = append([]string(nil), intent.RiskSnapshot.Reasons...)
 	return intent
+}
+
+func cloneParameters(parameters commandmodel.CommandParameters) commandmodel.CommandParameters {
+	if len(parameters) == 0 {
+		return commandmodel.CommandParameters{}
+	}
+	cloned := make(commandmodel.CommandParameters, len(parameters))
+	for key, value := range parameters {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func absolute(value float64) float64 {

@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "name": "Phase 1 production migration allowlist",
+  "sourceOfTruth": "架构规划/智慧能源系统部署与运维架构设计.md",
+  "policy": {
+    "fixturesAllowed": false,
+    "testdataAllowed": false,
+    "localPasswordStatementsAllowed": false,
+    "legacyMigrationExecutionRequired": false,
+    "migrationHashRequired": true,
+    "runtimeSecretPasswordsRequired": true
+  },
+  "databases": [
+    {
+      "name": "hvac_s0",
+      "migrations": [
+        "infra/s0-durable/postgres/init/001-s0-durable.sql",
+        "infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql",
+        "infra/s0-durable/postgres/init/003-operations-audit-ledger.sql"
+      ]
+    },
+    {
+      "name": "hvac_s1",
+      "migrations": [
+        "infra/s1-registry/postgres/init/001-s1-registry-baseline.sql",
+        "infra/s1-registry/postgres/init/001a-tenant-foundation.sql",
+        "infra/s1-registry/postgres/init/001b-device-binding-invariants.sql",
+        "infra/s1-registry/postgres/init/003-iam-runtime-identity-resolution.sql",
+        "infra/s1-registry/postgres/init/004-iam-reconciliation.sql",
+        "infra/s1-registry/postgres/init/005-core-read-service.sql",
+        "infra/s1-registry/postgres/init/006-s2-telemetry-authorization.sql",
+        "infra/s1-registry/postgres/init/007-s4-alarm-authorization.sql",
+        "infra/s1-registry/postgres/init/007-spatial-sensor-point-model.sql",
+        "infra/s1-registry/postgres/init/007a-tenant-spatial-scope.sql",
+        "infra/s1-registry/postgres/init/007b-control-point-invariants.sql",
+        "infra/s1-registry/postgres/init/008-s5-work-order-authorization.sql",
+        "infra/s1-registry/postgres/init/009-energy-data-foundation.sql"
+      ]
+    },
+    {
+      "name": "hvac_s2",
+      "migrations": [
+        "infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql",
+        "infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql",
+        "infra/s2-telemetry/postgres/init/003-s2-telemetry-ingest.sql",
+        "infra/s2-telemetry/postgres/init/004-s2-telemetry-history-outbox.sql",
+        "infra/s2-telemetry/postgres/init/004a-s2-tenant-scope.sql",
+        "infra/s2-telemetry/postgres/init/004b-s2-point-identity.sql",
+        "infra/s2-telemetry/postgres/init/005-s2-realtime-backend.sql"
+      ]
+    },
+    {
+      "name": "hvac_s3",
+      "migrations": [
+        "services/command-service/migrations/001_s3_command_runtime.sql",
+        "services/command-service/migrations/003_s3_tenant_scope.sql",
+        "services/command-service/migrations/004_s3_command_point_identity.sql"
+      ]
+    },
+    {
+      "name": "hvac_s4",
+      "migrations": [
+        "services/alarm-service/migrations/001_s4_alarm_runtime.sql",
+        "services/alarm-service/migrations/002_s4_alarm_lifecycle.sql",
+        "services/alarm-service/migrations/003_s4_tenant_scope.sql",
+        "services/alarm-service/migrations/004_s4_event_provenance.sql"
+      ]
+    },
+    {
+      "name": "hvac_s5",
+      "migrations": [
+        "services/work-order-service/migrations/001_s5_work_order_runtime.sql",
+        "services/work-order-service/migrations/002_s5_work_order_create_assignment.sql",
+        "services/work-order-service/migrations/003_s5_work_order_lifecycle.sql",
+        "services/work-order-service/migrations/004_s5_tenant_scope.sql"
+      ]
+    }
+  ],
+  "excludedSources": [
+    "**/*fixture*.sql",
+    "**/testdata/**",
+    "infra/s0-durable/postgres/init/000-bootstrap-identities.sql",
+    "infra/s1-registry/postgres/init/000-bootstrap-identities.sql",
+    "infra/s1-registry/postgres/init/006-legacy-migration-execution.sql",
+    "infra/s2-telemetry/postgres/init/000-bootstrap-identities.sql",
+    "services/alarm-service/testdata/postgres/000_roles.sql",
+    "services/work-order-service/testdata/postgres/000_roles.sql"
+  ],
+  "loginRoles": [
+    "s0_migrator",
+    "gateway_runtime",
+    "gateway_relay_runtime",
+    "audit_consumer_runtime",
+    "audit_query_runtime",
+    "s1_iam_migrator",
+    "s1_iam_runtime",
+    "s1_iam_reconciler",
+    "s1_core_service",
+    "s2_iam_grant_runtime",
+    "s2_telemetry_migrator_service",
+    "s2_telemetry_service",
+    "s2_telemetry_gateway",
+    "s2_telemetry_iam",
+    "s2_telemetry_relay_service",
+    "s2_telemetry_history_service",
+    "s3_command_migrator_service",
+    "s3_command_service",
+    "s4_alarm_service",
+    "s5_work_order_service",
+    "s5_work_order_mutation_service"
+  ]
+}

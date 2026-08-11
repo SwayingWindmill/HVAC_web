@@ -27,6 +27,7 @@
         { "sourceKey": "chilledWaterTemperatureSetpointC", "telemetryKey": "chiller.chilled_water_temperature_setpoint", "valueType": "NUMBER", "unit": "Cel" },
         { "sourceKey": "enteringCoolingWaterTemperatureC", "telemetryKey": "chiller.entering_cooling_water_temperature", "valueType": "NUMBER", "unit": "Cel" },
         { "sourceKey": "compressorLoadPct", "telemetryKey": "chiller.compressor_load", "valueType": "NUMBER", "unit": "%" },
+        { "sourceKey": "loadLimitPct", "telemetryKey": "chiller.load_limit", "valueType": "NUMBER", "unit": "%" },
         { "sourceKey": "coolingCapacityKw", "telemetryKey": "chiller.cooling_capacity", "valueType": "NUMBER", "unit": "kW" },
         { "sourceKey": "powerKw", "telemetryKey": "chiller.power", "valueType": "NUMBER", "unit": "kW" },
         { "sourceKey": "cop", "telemetryKey": "chiller.cop", "valueType": "NUMBER" },
@@ -95,6 +96,15 @@
         { "sourceKey": "flowRateM3h", "telemetryKey": "btu_meter.flow_rate", "valueType": "NUMBER", "unit": "m3/h" },
         { "sourceKey": "instantCoolingCapacityKw", "telemetryKey": "btu_meter.instant_cooling_capacity", "valueType": "NUMBER", "unit": "kW" },
         { "sourceKey": "accumulatedCoolingEnergyKwh", "telemetryKey": "btu_meter.accumulated_cooling_energy", "valueType": "NUMBER", "unit": "kWh" }
+      ]
+    },
+    {
+      "thingsBoardDeviceId": "018f3e00-4000-7000-8000-000000000007",
+      "externalId": "018f3e00-4000-7000-8000-000000000007",
+      "points": [
+        { "sourceKey": "ambientDryBulbTemperatureC", "telemetryKey": "weather.ambient_dry_bulb_temperature", "valueType": "NUMBER", "unit": "Cel" },
+        { "sourceKey": "ambientWetBulbTemperatureC", "telemetryKey": "weather.ambient_wet_bulb_temperature", "valueType": "NUMBER", "unit": "Cel" },
+        { "sourceKey": "relativeHumidityPct", "telemetryKey": "weather.relative_humidity", "valueType": "NUMBER", "unit": "%RH" }
       ]
     }
   ]

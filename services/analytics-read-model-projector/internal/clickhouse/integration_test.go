@@ -112,9 +112,12 @@ FORMAT JSONEachRow`, organizationID, siteID, deviceID)
 func historyObservation(observationID, eventID, organizationID, siteID, deviceID, partition string, offset uint64, value float64, sampledAt string) map[string]any {
 	return map[string]any{
 		"observation_id":          observationID,
+		"tenant_id":               "018f4f00-0100-7000-8000-000000000001",
 		"owning_organization_id":  organizationID,
 		"site_id":                 siteID,
 		"device_id":               deviceID,
+		"point_id":                "018f4f00-2100-7000-8000-000000000001",
+		"sensor_id":               "018f4f00-2200-7000-8000-000000000001",
 		"integration_instance_id": "018f4f00-5000-7000-8000-000000000001",
 		"source_event_id":         eventID,
 		"source_partition":        partition,

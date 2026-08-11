@@ -2,6 +2,7 @@ name: S2 Telemetry Runtime Authoritative Snapshot
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - ".github/workflows/s2-telemetry-runtime-snapshot.yml"
       - "contracts/http/s2-telemetry-public.openapi.json"

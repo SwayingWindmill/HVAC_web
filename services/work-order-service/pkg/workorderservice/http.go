@@ -198,6 +198,7 @@ func (handler *httpHandler) handleList(writer http.ResponseWriter, request *http
 		handler.writeAccessDenied(writer)
 		return
 	}
+	request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
 	handler.list(writer, request, claims.ActingOrganizationID, route.siteID)
 }
 
@@ -211,6 +212,7 @@ func (handler *httpHandler) handleGet(writer http.ResponseWriter, request *http.
 		handler.writeAccessDenied(writer)
 		return
 	}
+	request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
 	handler.get(writer, request, claims.ActingOrganizationID, route.siteID, route.workOrderID)
 }
 
@@ -229,6 +231,7 @@ func (handler *httpHandler) handleCreate(writer http.ResponseWriter, request *ht
 		handler.writeAccessDenied(writer)
 		return
 	}
+	request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
 	var body createWorkOrderRequest
 	if !decodeStrictJSON(request, &body) {
 		handler.writeProblem(writer, http.StatusBadRequest, "WORK_ORDER_CREATE_INVALID", "Work Order create invalid", "The Work Order create request is not a closed bounded JSON object.", false)
@@ -278,6 +281,7 @@ func (handler *httpHandler) handleAssign(writer http.ResponseWriter, request *ht
 		handler.writeAccessDenied(writer)
 		return
 	}
+	request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
 	var body assignWorkOrderRequest
 	if !decodeStrictJSON(request, &body) || len(body.AssigneeID) == 0 || len(body.TeamID) == 0 {
 		handler.writeProblem(writer, http.StatusBadRequest, "WORK_ORDER_ASSIGNMENT_INVALID", "Work Order assignment invalid", "The assignment request must explicitly provide assigneeId and teamId, including null when clearing ownership.", false)
@@ -333,6 +337,7 @@ func (handler *httpHandler) handleLifecyclePrecondition(writer http.ResponseWrit
 		handler.writeAccessDenied(writer)
 		return
 	}
+	request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
 	workOrder, err := handler.store.Get(request.Context(), claims.ActingOrganizationID, route.siteID, route.workOrderID)
 	if err != nil {
 		handler.writeStoreFailure(writer, err)
@@ -369,6 +374,7 @@ func (handler *httpHandler) handleLifecycle(writer http.ResponseWriter, request 
 		handler.writeAccessDenied(writer)
 		return
 	}
+	request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
 	var body lifecycleWorkOrderRequest
 	if !decodeStrictJSON(request, &body) || body.ExpectedVersion == 0 {
 		handler.writeProblem(writer, http.StatusBadRequest, "WORK_ORDER_LIFECYCLE_INVALID", "Work Order lifecycle invalid", "The lifecycle request is not a closed bounded JSON object.", false)
@@ -446,7 +452,7 @@ func (handler *httpHandler) authorize(request *http.Request, action string, reso
 	}
 	token := strings.TrimSpace(request.Header.Get(header))
 	claims, err := identitycontext.VerifyDelegation(handler.gatewayPublicKey, token)
-	if err != nil || !workordermodel.IsUUIDv7(claims.ActingOrganizationID) || len(claims.Actions) != 1 || claims.Actions[0] != action {
+	if err != nil || !workordermodel.IsUUIDv7(claims.TenantID) || !workordermodel.IsUUIDv7(claims.ActingOrganizationID) || len(claims.Actions) != 1 || claims.Actions[0] != action {
 		return identitycontext.DelegationClaims{}, false
 	}
 	expectedScopes := append([]string{"organization:" + claims.ActingOrganizationID}, resourceScopes...)

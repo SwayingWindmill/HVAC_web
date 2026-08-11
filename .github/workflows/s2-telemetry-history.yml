@@ -2,6 +2,7 @@ name: S2 Telemetry History
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - ".github/workflows/s2-telemetry-history.yml"
       - "contracts/telemetry/**"

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import {
   Button,
   Card,
@@ -15,7 +15,7 @@ import {
   DownloadOutlined,
   FundOutlined,
 } from '@ant-design/icons';
-import { Navigate, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router';
+import { Outlet, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useUi } from '@/store/ui';
 import { getAvailableDayCount } from './data';
 import {
@@ -82,7 +82,6 @@ export default function EnergySystem() {
   const now = useMemo(() => new Date(), []);
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
-  const isEnergyIndex = location.pathname === '/energy' || location.pathname === '/energy/';
   const pathSegment = location.pathname.split('/')[2];
   const granularity: EnergyGranularity = isGranularity(pathSegment) ? pathSegment : 'month';
 
@@ -115,23 +114,6 @@ export default function EnergySystem() {
   const requestedCompare = searchParams.get('compare');
   const compareMode: EnergyCompareMode = isCompareMode(requestedCompare) ? requestedCompare : 'year-over-year';
   const energyMeta = ENERGY_TYPE_META[energyType];
-
-  useEffect(() => {
-    if (isEnergyIndex) return;
-    const next = new URLSearchParams(searchParams);
-    next.set('year', String(year));
-    next.set('month', String(month));
-    next.set('day', String(day));
-    next.set('week', String(week));
-    next.set('date', date);
-    next.set('energyType', energyType);
-    next.set('compare', compareMode);
-    if (next.toString() !== searchParams.toString()) setSearchParams(next, { replace: true });
-  }, [compareMode, date, day, energyType, isEnergyIndex, month, searchParams, setSearchParams, week, year]);
-
-  if (isEnergyIndex) {
-    return <Navigate to={{ pathname: '/energy/month', search: location.search }} replace />;
-  }
 
   const updateParams = (patch: Record<string, string | number | null>, replace = false) => {
     const next = new URLSearchParams(searchParams);

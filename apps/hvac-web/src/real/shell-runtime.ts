@@ -143,6 +143,28 @@ function failureFrom(problem: ProblemDetails | undefined, fallbackCode: string, 
   };
 }
 
+function isLoggedOutLanding(candidate: string, origin: string): boolean {
+  try {
+    const base = new URL(origin);
+    const target = new URL(candidate, base);
+    return target.origin === base.origin
+      && target.pathname === '/'
+      && target.searchParams.get('logged_out') === '1';
+  } catch {
+    return false;
+  }
+}
+
+function isSignInLanding(candidate: string, origin: string): boolean {
+  try {
+    const base = new URL(origin);
+    const target = new URL(candidate, base);
+    return target.origin === base.origin && target.pathname === '/sign-in';
+  } catch {
+    return false;
+  }
+}
+
 function browserEnvironment(): ShellRuntimeEnvironment {
   return {
     origin: window.location.origin,
@@ -208,7 +230,9 @@ class BrowserShellRuntime implements ShellRuntime {
   async bootstrap(currentUrl: string): Promise<void> {
     if (this.disposed) return;
     this.currentUrl = currentUrl;
-    this.returnTo = normalizeReturnTo(currentUrl, this.environment.origin);
+    const loggedOutLanding = isLoggedOutLanding(currentUrl, this.environment.origin);
+    const signInLanding = isSignInLanding(currentUrl, this.environment.origin);
+    this.returnTo = loggedOutLanding || signInLanding ? '/' : normalizeReturnTo(currentUrl, this.environment.origin);
     const sequence = this.beginProtectedTransition();
     const controller = new AbortController();
     this.bootstrapController = controller;
@@ -220,7 +244,7 @@ class BrowserShellRuntime implements ShellRuntime {
 
       const expiresAt = Date.parse(response.data.session.expiresAt);
       if (!Number.isFinite(expiresAt) || expiresAt <= this.environment.now()) {
-        this.enterLoginRequired('SESSION_INVALID', true);
+        this.enterLoginRequired('SESSION_INVALID', !signInLanding);
         return;
       }
 
@@ -245,7 +269,10 @@ class BrowserShellRuntime implements ShellRuntime {
       this.bootstrapController = undefined;
       const problem = problemFrom(error);
       if (problem && classifyBootstrapProblem(problem) === 'LOGIN_REQUIRED') {
-        this.enterLoginRequired(problem.code, true);
+        this.enterLoginRequired(
+          loggedOutLanding ? 'LOGOUT_COMPLETED' : problem.code,
+          !loggedOutLanding && !signInLanding,
+        );
         return;
       }
       this.publish({
@@ -404,9 +431,17 @@ class BrowserShellRuntime implements ShellRuntime {
     });
 
     try {
-      await this.client.logout(principal.session.csrfToken);
+      const response = await this.client.logout(principal.session.csrfToken);
       if (!this.isCurrent(sequence) || this.protectedPrincipal !== principal) return 'completed';
+      if (!response.location) {
+        throw new Error('logout response did not include the identity provider redirect');
+      }
+      const providerLogoutURL = new URL(response.location, this.environment.origin);
+      if (providerLogoutURL.protocol !== 'https:' && providerLogoutURL.protocol !== 'http:') {
+        throw new Error('logout response used an unsupported redirect protocol');
+      }
       this.completeLogout('LOGOUT_COMPLETED');
+      this.environment.navigate(providerLogoutURL.toString());
       return 'completed';
     } catch (error: unknown) {
       if (!this.isCurrent(sequence) || this.protectedPrincipal !== principal) return 'completed';

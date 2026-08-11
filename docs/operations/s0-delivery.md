@@ -1,5 +1,7 @@
 # S0 reproducible delivery and signed supply chain
 
+> **Scope: CERTIFICATION_REFERENCE.** This document's Kubernetes staging assets remain a production-shaped certification/reference path for S0. They are not the canonical Phase 1 deployment model. `架构规划/智慧能源系统部署与运维架构设计.md` defines Phase 1 as Linux Server + Docker Compose; the canonical repository entry is `deploy/platform/phase1/`. Kubernetes is deferred until the later scale/HA phase. Redpanda in the local/staging S0 path is a compatibility/test dependency, not a Phase 1 Production service selection.
+
 ## Ownership
 
 Primary Owner: Platform Runtime. Secondary Owner: Developer Experience. Security Platform owns image-signature policy, vulnerability exceptions and staging NetworkPolicy review. Data Platform owns PostgreSQL migration execution and rollback-window approval.

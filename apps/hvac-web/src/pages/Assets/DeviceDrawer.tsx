@@ -1,4 +1,5 @@
-import { Button, Descriptions, Drawer, Empty, Progress, Spin, Tag, Typography } from 'antd';
+import { Button, Drawer, Empty, Progress, Spin, Tag, Typography } from 'antd';
+import { ProDescriptions } from '@ant-design/pro-components';
 import {
   ApiOutlined,
   DashboardOutlined,
@@ -120,14 +121,19 @@ export default function DeviceDrawer({ deviceId, onClose, onAfterClose }: Device
             icon={<InfoCircleOutlined />}
             description="设备身份、安装信息与责任归属。"
           >
-            <Descriptions column={{ xs: 1, sm: 2 }} size="small" colon={false}>
-              <Descriptions.Item label="设备 ID"><Typography.Text code>{deviceId}</Typography.Text></Descriptions.Item>
-              <Descriptions.Item label="类型">{TYPE_LABEL[meta.type]}</Descriptions.Item>
-              <Descriptions.Item label="厂家 / 型号">{meta.manufacturer} · {meta.model}</Descriptions.Item>
-              <Descriptions.Item label="安装日期">{meta.installedAt}</Descriptions.Item>
-              <Descriptions.Item label="维护负责人">{meta.maintainer}</Descriptions.Item>
-              <Descriptions.Item label="位置">{meta.floor} / {meta.zoneName}</Descriptions.Item>
-            </Descriptions>
+            <ProDescriptions
+              column={{ xs: 1, sm: 2 }}
+              size="small"
+              dataSource={meta}
+              columns={[
+                { title: '设备 ID', key: 'deviceId', render: () => <Typography.Text code>{deviceId}</Typography.Text> },
+                { title: '类型', key: 'type', renderText: () => TYPE_LABEL[meta.type] },
+                { title: '厂家 / 型号', key: 'model', renderText: () => `${meta.manufacturer} · ${meta.model}` },
+                { title: '安装日期', dataIndex: 'installedAt' },
+                { title: '维护负责人', dataIndex: 'maintainer' },
+                { title: '位置', key: 'location', renderText: () => `${meta.floor} / ${meta.zoneName}` },
+              ]}
+            />
           </OperationsDetailSection>
 
           <OperationsDetailSection
@@ -136,11 +142,16 @@ export default function DeviceDrawer({ deviceId, onClose, onAfterClose }: Device
             description="网关、协议和最近通讯状态。"
             extra={`${meta.onlinePoints} / ${meta.pointCount} 点在线`}
           >
-            <Descriptions column={{ xs: 1, sm: 2 }} size="small" colon={false}>
-              <Descriptions.Item label="协议">{meta.protocol}</Descriptions.Item>
-              <Descriptions.Item label="网关">{meta.gateway}</Descriptions.Item>
-              <Descriptions.Item label="最后通讯">{meta.lastSeen}</Descriptions.Item>
-            </Descriptions>
+            <ProDescriptions
+              column={{ xs: 1, sm: 2 }}
+              size="small"
+              dataSource={meta}
+              columns={[
+                { title: '协议', dataIndex: 'protocol' },
+                { title: '网关', dataIndex: 'gateway' },
+                { title: '最后通讯', dataIndex: 'lastSeen' },
+              ]}
+            />
             <div style={{ marginTop: 12 }}>
               <Progress percent={pointRate} size="small" status={pointRate < 95 ? 'exception' : 'active'} />
             </div>

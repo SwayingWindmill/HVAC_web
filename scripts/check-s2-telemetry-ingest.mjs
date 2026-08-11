@@ -137,7 +137,7 @@ includesAll(coverageGo, [
 includesAll(snapshotStoreGo, ['func (store *PostgresStore) evaluateAndPersistDevice', 'candidateRevision = previousRevision + 1', 'persistCurrentState', 'insertOutboxIntent'], 'shared Snapshot transaction helper');
 
 includesAll(sourceServerGo, [
-  'InternalThingsBoardObservationPath',
+  'InternalSourceObservationPath',
   'InternalThingsBoardCoveragePath',
   'ParseSourceAuthenticatorJSON',
   'spiffe',
@@ -149,7 +149,7 @@ includesAll(sourceServerGo, [
   'mime.ParseMediaType',
   'mediaType != "application/json"',
   'AllowsSource(peer, candidate.IntegrationInstanceID)',
-  'normalizeThingsBoardObservation',
+  'normalizeSourceObservation',
   'TELEMETRY_SOURCE_IDENTITY_INVALID',
   'TELEMETRY_SOURCE_UNAVAILABLE',
 ], 'internal ThingsBoard source seam');
@@ -182,7 +182,7 @@ includesAll(sourceServerTests, [
 ], 'source HTTP tests');
 includesAll(httpPostgresTests, [
   'acceptObservationViaHTTP',
-  'InternalThingsBoardObservationPath',
+  'InternalSourceObservationPath',
   'verifiedTLSState',
 ], 'source HTTP to PostgreSQL helper');
 includesAll(postgresTests, [

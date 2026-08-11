@@ -65,6 +65,16 @@ groups:
         annotations:
           summary: Source ingest lag is high
           runbook: docs/operations/s2-security-observability.md#ingest-lag
+      - alert: S2DataGoodRateLow
+        expr: sum(rate(hvac_s2_data_quality_records_total{quality="good"}[10m])) / clamp_min(sum(rate(hvac_s2_data_quality_records_total[10m])), 1) < 0.95
+        for: 10m
+        labels:
+          severity: page
+          primary_owner: telemetry-platform
+          secondary_owner: energy-data
+        annotations:
+          summary: Telemetry data good rate is below 95 percent
+          runbook: docs/operations/observability-phase1.md#data-quality
       - alert: S2OutboxLagHigh
         expr: histogram_quantile(0.99, sum by (le) (rate(hvac_s2_outbox_lag_seconds_bucket[5m]))) > 5
         for: 5m

@@ -1,0 +1,3 @@
+# False positives: deterministic test-only idempotency keys in command-service HTTP tests.
+a2e024f5a48c2795f9ccb382213864ea1d6c57c7:services/command-service/pkg/commandservice/http_test.go:generic-api-key:78
+a2e024f5a48c2795f9ccb382213864ea1d6c57c7:services/command-service/pkg/commandservice/http_test.go:generic-api-key:108

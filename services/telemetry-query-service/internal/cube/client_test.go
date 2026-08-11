@@ -46,8 +46,8 @@ func TestClientMapsEnergyProductQueryToFixedCubeMembers(t *testing.T) {
 		}
 		_, _ = writer.Write([]byte(`{
 			"data":[
-				{"energy_usage.period_end.day":"2026-07-01T00:00:00.000","energy_usage.energy_valid_kwh":"123.5","energy_usage.valid_count":"10","energy_usage.suspect_count":"2","energy_usage.invalid_count":"1"},
-				{"energy_usage.period_end.day":"2026-07-02T00:00:00.000","energy_usage.energy_valid_kwh":"98.25","energy_usage.valid_count":"8","energy_usage.suspect_count":"1","energy_usage.invalid_count":"0"}
+				{"energy_usage.period_end.day":"2026-06-30T16:00:00.000","energy_usage.energy_valid_kwh":"123.5","energy_usage.valid_count":"10","energy_usage.suspect_count":"2","energy_usage.invalid_count":"1"},
+				{"energy_usage.period_end.day":"2026-07-01T16:00:00.000","energy_usage.energy_valid_kwh":"98.25","energy_usage.valid_count":"8","energy_usage.suspect_count":"1","energy_usage.invalid_count":"0"}
 			]
 		}`))
 	}))
@@ -92,6 +92,9 @@ func TestClientMapsEnergyProductQueryToFixedCubeMembers(t *testing.T) {
 	}
 	if len(response.Points) != 2 || response.Points[0].EnergyKWh != 123.5 {
 		t.Fatalf("points = %#v", response.Points)
+	}
+	if !response.Points[0].PeriodStart.Equal(productQuery.From) {
+		t.Fatalf("first period start = %s, want %s", response.Points[0].PeriodStart, productQuery.From)
 	}
 	if response.Points[0].PeriodEnd.Sub(response.Points[0].PeriodStart) != 24*time.Hour {
 		t.Fatalf("period = %s to %s", response.Points[0].PeriodStart, response.Points[0].PeriodEnd)

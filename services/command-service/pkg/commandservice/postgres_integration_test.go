@@ -13,10 +13,12 @@ import (
 )
 
 const (
+	commandTenantA    = "018f3d00-0000-7000-8000-000000000001"
 	commandOrgA       = "018f3e00-0000-7000-8000-000000000001"
 	commandOrgB       = "018f3e00-0000-7000-8000-000000000002"
 	commandSiteA      = "018f3e00-1000-7000-8000-000000000001"
 	commandDeviceA    = "018f3e00-3000-7000-8000-000000000001"
+	commandPointA     = "018f3e00-4000-7000-8000-000000000001"
 	commandPrincipalA = "018f3e00-5000-7000-8000-000000000001"
 )
 
@@ -42,7 +44,7 @@ func TestPostgresSubmissionIsAtomicIdempotentAndTenantScoped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit failed: %v", err)
 	}
-	if created.Replayed || created.Intent.Status != commandmodel.IntentQueued || created.Intent.Version != 3 {
+	if created.Replayed || created.Intent.Status != commandmodel.IntentQueued || created.Intent.Version != 3 || created.Intent.PointID != commandPointA {
 		t.Fatalf("created intent=%#v", created)
 	}
 	if created.Intent.DeviceCommandSequence != 1 || len(created.Intent.Transitions) != 3 {
@@ -61,11 +63,17 @@ func TestPostgresSubmissionIsAtomicIdempotentAndTenantScoped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replay failed: %v", err)
 	}
-	if !replayed.Replayed || replayed.Intent.ID != created.Intent.ID {
+	if !replayed.Replayed || replayed.Intent.ID != created.Intent.ID || replayed.Intent.PointID != commandPointA {
 		t.Fatalf("idempotent replay=%#v", replayed)
 	}
 
-	request.SetpointC = 25
+	pointDrift := request
+	pointDrift.PointID = "018f3e00-4000-7000-8000-000000000002"
+	if _, err := store.Submit(ctx, pointDrift); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("expected point identity idempotency conflict, got %v", err)
+	}
+
+	request.Parameters[commandmodel.ParameterSetpointC] = 25
 	if _, err := store.Submit(ctx, request); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("expected idempotency conflict, got %v", err)
 	}
@@ -85,7 +93,7 @@ func TestPostgresSubmissionIsAtomicIdempotentAndTenantScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if readBack.PayloadHash != created.Intent.PayloadHash || len(readBack.Transitions) != 3 {
+	if readBack.PayloadHash != created.Intent.PayloadHash || readBack.PointID != commandPointA || len(readBack.Transitions) != 3 {
 		t.Fatalf("read back drifted: %#v", readBack)
 	}
 }
@@ -230,21 +238,25 @@ func TestPostgresRuntimeIdentityRequiresActivation(t *testing.T) {
 }
 
 func postgresCommandRequest(idempotencyKey string, setpoint float64) commandmodel.SubmitRequest {
+	currentValue := 23.0
 	return commandmodel.SubmitRequest{
+		TenantID:       commandTenantA,
 		OrganizationID: commandOrgA,
 		SiteID:         commandSiteA,
 		DeviceID:       commandDeviceA,
+		PointID:        commandPointA,
 		PrincipalID:    commandPrincipalA,
 		IdempotencyKey: idempotencyKey,
-		Capability:     commandmodel.CapabilitySetTemperatureSetpoint,
-		SetpointC:      setpoint,
+		Capability:           commandmodel.CapabilitySetTemperatureSetpoint,
+		Parameters:           commandmodel.CommandParameters{commandmodel.ParameterSetpointC: setpoint},
+		VerificationPointKey: "zone.temperature_setpoint",
 		CurrentState: commandmodel.CurrentStateEvidence{
 			EvaluationAvailability: "AVAILABLE",
 			Presence:               "ONLINE",
 			Readiness:              "CURRENT",
 			Quality:                "GOOD",
 			BusinessRevision:       21,
-			CurrentTemperatureC:    23,
+			CurrentValue:           &currentValue,
 			ObservedAt:             time.Date(2026, 7, 26, 11, 0, 0, 0, time.UTC),
 		},
 		Authorization: commandmodel.AuthorizationSnapshot{
@@ -275,6 +287,7 @@ func resetCommandFixture(t *testing.T, admin *pgxpool.Pool) {
 		`DELETE FROM command_runtime.command_idempotency`,
 		`DELETE FROM command_runtime.command_intents`,
 		`DELETE FROM command_runtime.device_control_state`,
+		`DELETE FROM command_runtime.organization_tenant_scope`,
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

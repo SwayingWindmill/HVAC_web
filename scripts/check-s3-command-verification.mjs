@@ -55,7 +55,7 @@ for (const token of [
   'PROVIDER_ACKNOWLEDGED_AWAITING_REPORTED_STATE', 'PrepareVerification', 'ResolveVerification',
   'ACKNOWLEDGED_AND_REPORTED_STATE_VERIFIED', 'REPORTED_STATE_VERIFICATION_NOT_PROVEN',
   'reported.BusinessRevision > envelope.BaselineBusinessRevision', 'reported.ObservedAt.After(envelope.AcknowledgedAt)',
-  'verificationToleranceC', 'result.Verified',
+  'CapabilityProfileFor(intent.Capability)', 'profile.VerificationTolerance', 'result.Verified',
 ]) {
   assert(service.includes(token), `In-memory Command verification invariant is missing ${token}`);
 }
@@ -87,9 +87,10 @@ for (const test of [
 }
 
 for (const token of [
-  'DurableVerificationStore', 'ReportedStateReader', 'SetpointReportedStateVerifier',
+  'DurableVerificationStore', 'ReportedStateReader', 'AuthoritativeReportedStateVerifier',
   'DurableVerificationWorker', 'ClaimVerification', 'ResolveVerification',
-  'REPORTED_STATE_INCONCLUSIVE', 'REPORTED_SETPOINT_MISMATCH',
+  'CapabilityProfileFor(envelope.Capability)', 'profile.VerificationTolerance',
+  'REPORTED_STATE_VERIFICATION_TIMED_OUT', 'REPORTED_VALUE_MISMATCH',
 ]) {
   assert(worker.includes(token), `Command Verifier worker invariant is missing ${token}`);
 }

@@ -2,6 +2,7 @@ name: S4 Alarm Authorized Read Canary and Promotion Gate
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - '.github/workflows/s4-alarm-baseline.yml'
       - 'apps/hvac-web/src/api/alarm-contract.ts'

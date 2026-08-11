@@ -4,14 +4,22 @@
 
 ## 系统结构
 
+Phase 1 总体与部署架构以 `架构规划/智慧能源系统部署与运维架构设计.md` 为准，工程基线见 `docs/architecture/phase1-overall-architecture.md`：
+
 ```text
-apps/hvac-web
-  -> platform-gateway
-       -> IAM / Registry / Telemetry / Analytics / Command / Alarm / Work Order
-       -> operations-agent-service
+User
+  -> Nginx / Gateway
+       -> React
+       -> Central Platform
+            -> Business / IoT / Telemetry / Control Services
+                 -> PostgreSQL / ClickHouse / Redis / MQTT
+                      -> Edge Gateway
+                           -> OT Devices
 ```
 
-浏览器只访问 Platform Gateway。服务间通过版本化 HTTP、事件和所有权契约协作；浏览器不直连模型提供方、数据库、ThingsBoard 或内部服务。
+旁路统一建设 Security、Monitoring、Logging、Tracing、Backup、Deployment 和 Audit。浏览器只访问 Nginx/Platform Gateway；服务间通过版本化 HTTP、事件和所有权契约协作，浏览器不直连模型提供方、数据库、ThingsBoard、MQTT 管理面或内部服务。PostgreSQL 保存平台权威业务/当前状态，ClickHouse 保存历史与分析数据，Redis 仅作为可重建缓存和实时传输层。
+
+Phase 1 canonical deployment 是 **Linux Server + Docker Compose**。现有 Kubernetes/Kustomize 资产保留用于后期演进、局部认证和生产形态实验，但不是 Phase 1 运行或验收的必需条件。机器可读基线见 `deploy/platform/phase1/architecture-baseline.v1.json` 和 `deploy/platform/phase1/alignment-matrix.v1.json`。
 
 ## 目录
 
@@ -21,7 +29,7 @@ services/             独立部署的 Go 服务与 TypeScript Operations Agent
 libs/                 窄接口 Go 领域库、授权库和基础设施库
 contracts/            OpenAPI、事件、数据所有权和设备集成契约
 infra/                PostgreSQL、ClickHouse、Centrifugo、ThingsBoard 等本地拓扑
-deploy/               镜像、Kubernetes、发布门禁和切换配置
+deploy/               Phase 1 Compose、镜像、后期编排参考、发布门禁和切换配置
 benchmarks/           Operations Agent 确定性与安全基准
 scripts/              构建、测试、审计、契约生成和发布认证入口
 docs/                 ADR、领域设计、运维方案、安全与研究文档
@@ -56,6 +64,7 @@ npm run build:real
 ### 遥测与分析
 
 - `telemetry-runtime-service/`：当前遥测、摄取和历史投影运行时。
+- `mqtt-telemetry-adapter/`：MQTT TLS/QoS1 遥测进入 Telemetry Runtime 的 Edge/Cloud 适配边界。
 - `telemetry-query-service/`：历史遥测与能源分析产品查询。
 - `analytics-read-model-projector/`：分析读取模型投影。
 - `telemetry-shadow-comparator/`：迁移与切换期间的遥测影子比较。
@@ -89,6 +98,10 @@ Operations Agent 通过 Platform Gateway 暴露受保护的调查接口。现有
 ```bash
 npm run repo:check
 npm run repo:governance:test
+npm run architecture:phase1:check
+npm run docs:phase1:consistency:check
+npm run data:phase1:check
+npm run deployment:phase1:check
 npm run domain:matrix:test
 npm run operations-agent:contracts:check
 npm run contracts:check
@@ -127,4 +140,4 @@ node scripts/run-capability-task.mjs --task=s3:command-ux --dry-run=true
 - `libs/*/go.mod`：共享领域与安全能力的窄模块依赖。
 - 根目录 `go.work`：仅负责本地 Go workspace 编排。
 
-设计规则见 `DESIGN.md`，架构决策见 `docs/adr/`，当前领域上下文见 `CONTEXT.md`。
+设计规则见 `DESIGN.md`，总体架构基线见 `docs/architecture/phase1-overall-architecture.md`，文档作用域与旧认证资产表述规则见 `docs/architecture/document-scope-policy.md`，架构决策见 `docs/adr/`，当前领域上下文见 `CONTEXT.md`。

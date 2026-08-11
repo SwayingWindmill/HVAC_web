@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 )
@@ -222,7 +223,7 @@ func postgresTelemetryRegistryActions(values []string) ([]registryauth.Action, e
 			actions = append(actions, registryauth.Action(action))
 			continue
 		}
-		if registryauth.Action(value).Valid() {
+		if registryauth.Action(value).Valid() || value == analyticsmodel.EnergySeriesAction {
 			continue
 		}
 		return nil, fmt.Errorf("unsupported action %q", value)

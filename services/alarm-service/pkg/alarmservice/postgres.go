@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
 type PostgresStore struct{ pool *pgxpool.Pool }
@@ -221,6 +222,13 @@ func (store *PostgresStore) Apply(ctx context.Context, organizationID, siteID, a
 }
 
 func (store *PostgresStore) beginOrganizationTransaction(ctx context.Context, organizationID string, readOnly bool) (pgx.Tx, error) {
+	tenantID, ok := identitycontext.TenantIDFromContext(ctx)
+	if !ok || !alarmmodel.IsUUIDv7(tenantID) || !alarmmodel.IsUUIDv7(organizationID) {
+		return nil, ErrUnavailable
+	}
+	if err := store.ensureTenantBinding(ctx, tenantID, organizationID); err != nil {
+		return nil, err
+	}
 	options := pgx.TxOptions{}
 	if readOnly {
 		options.AccessMode = pgx.ReadOnly
@@ -229,11 +237,40 @@ func (store *PostgresStore) beginOrganizationTransaction(ctx context.Context, or
 	if err != nil {
 		return nil, fmt.Errorf("begin Alarm transaction: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, organizationID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true), set_config('app.tenant_id', $2, true)`, organizationID, tenantID); err != nil {
 		_ = tx.Rollback(ctx)
-		return nil, fmt.Errorf("activate Alarm Organization scope: %w", err)
+		return nil, fmt.Errorf("activate Alarm Tenant/Organization scope: %w", err)
 	}
 	return tx, nil
+}
+
+func (store *PostgresStore) ensureTenantBinding(ctx context.Context, tenantID, organizationID string) error {
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin Alarm Tenant binding transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true), set_config('app.tenant_id', $2, true)`, organizationID, tenantID); err != nil {
+		return fmt.Errorf("activate Alarm Tenant binding scope: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO alarm_runtime.organization_tenant_scope (organization_id, tenant_id, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, now(), now())
+ON CONFLICT (organization_id) DO NOTHING
+`, organizationID, tenantID); err != nil {
+		return fmt.Errorf("bind Alarm Organization to Tenant: %w", err)
+	}
+	var storedTenantID string
+	if err := tx.QueryRow(ctx, `SELECT tenant_id::text FROM alarm_runtime.organization_tenant_scope WHERE organization_id = $1::uuid`, organizationID).Scan(&storedTenantID); err != nil {
+		return fmt.Errorf("read Alarm Organization Tenant binding: %w", err)
+	}
+	if storedTenantID != tenantID {
+		return ErrUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit Alarm Tenant binding: %w", err)
+	}
+	return nil
 }
 
 func getAlarmRow(ctx context.Context, tx pgx.Tx, organizationID, siteID, alarmID string, lock bool) (alarmmodel.Alarm, error) {

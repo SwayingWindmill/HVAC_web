@@ -30,6 +30,7 @@ var (
 type oidcProtocol interface {
 	Discover(context.Context, *http.Client, string) (oidcDiscovery, error)
 	AuthorizationURL(oidcDiscovery, oidcAuthorizationRequest) (string, error)
+	SignOutURL(oidcDiscovery, oidcSignOutRequest) (string, error)
 	ExchangeCode(context.Context, *http.Client, oidcDiscovery, oidcCodeExchangeRequest) (oidcTokenResponse, error)
 	VerifyIDToken(context.Context, *http.Client, oidcDiscovery, string, string, string) error
 }
@@ -41,6 +42,11 @@ type oidcAuthorizationRequest struct {
 	State        string
 	Nonce        string
 	LoginHint    string
+}
+
+type oidcSignOutRequest struct {
+	ClientID              string
+	PostLogoutRedirectURI string
 }
 
 type oidcCodeExchangeRequest struct {
@@ -62,7 +68,7 @@ func (logtoOIDCProtocol) Discover(ctx context.Context, client *http.Client, issu
 	if err != nil {
 		return oidcDiscovery{}, newOIDCProtocolError(err, capture)
 	}
-	return oidcDiscovery{document.Issuer, document.AuthorizationEndpoint, document.TokenEndpoint, document.JwksUri}, nil
+	return oidcDiscovery{document.Issuer, document.AuthorizationEndpoint, document.TokenEndpoint, document.JwksUri, document.EndSessionEndpoint}, nil
 }
 
 func (logtoOIDCProtocol) AuthorizationURL(discovery oidcDiscovery, request oidcAuthorizationRequest) (string, error) {
@@ -88,6 +94,14 @@ func (logtoOIDCProtocol) AuthorizationURL(discovery oidcDiscovery, request oidcA
 	query.Del(core.QueryKeyPrompt)
 	endpoint.RawQuery = query.Encode()
 	return endpoint.String(), nil
+}
+
+func (logtoOIDCProtocol) SignOutURL(discovery oidcDiscovery, request oidcSignOutRequest) (string, error) {
+	return core.GenerateSignOutUri(&core.SignOutUriGenerationOptions{
+		EndSessionEndpoint:    discovery.EndSessionEndpoint,
+		ClientId:              request.ClientID,
+		PostLogoutRedirectUri: request.PostLogoutRedirectURI,
+	})
 }
 
 func (logtoOIDCProtocol) ExchangeCode(ctx context.Context, client *http.Client, discovery oidcDiscovery, request oidcCodeExchangeRequest) (oidcTokenResponse, error) {

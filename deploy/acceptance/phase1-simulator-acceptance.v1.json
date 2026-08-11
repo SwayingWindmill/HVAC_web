@@ -1,0 +1,345 @@
+{
+  "schemaVersion": 1,
+  "program": "智慧能源系统第一阶段 Simulator Acceptance",
+  "sourceDesign": "智慧能源系统测试与验收体系设计",
+  "scope": "software-and-simulator-first; real field meter and formal endurance remain explicitly deferred",
+  "profiles": {
+    "simulator": {
+      "blockingClasses": ["SOFTWARE_REQUIRED"],
+      "allowedDeferredClasses": ["DEFERRED_HARDWARE", "DEFERRED_FORMAL"]
+    }
+  },
+  "hardGates": {
+    "p0DefectsMaximum": 0,
+    "p1DefectsMaximum": 0,
+    "criticalSecurityIssuesMaximum": 0,
+    "criticalSafetyIssuesMaximum": 0,
+    "unauthorizedControlSuccessesMaximum": 0,
+    "duplicateCommandSideEffectsMaximum": 0,
+    "crossScopeTelemetrySuccessesMaximum": 0,
+    "restoreFailuresMaximum": 0
+  },
+  "gates": [
+    {
+      "id": "GATE-CONTRACTS",
+      "command": "npm run contracts:check",
+      "category": "contract"
+    },
+    {
+      "id": "GATE-DATA-ARCHITECTURE",
+      "command": "npm run data:phase1:check",
+      "category": "data-architecture"
+    },
+    {
+      "id": "GATE-CENTRAL-PLANT",
+      "command": "npm run test:central-plant-local",
+      "category": "simulator"
+    },
+    {
+      "id": "GATE-MQTT-E2E",
+      "command": "npm run s2:mqtt:integration",
+      "category": "iot",
+      "evidence": ["out/s2-mqtt-integration/integration.json"]
+    },
+    {
+      "id": "GATE-S2-POSTGRES",
+      "command": "npm run s2:postgres",
+      "category": "database",
+      "evidence": ["out/s2-telemetry-baseline/postgres-baseline.json"]
+    },
+    {
+      "id": "GATE-S2-INGEST-POSTGRES",
+      "command": "npm run s2:ingest:postgres",
+      "category": "telemetry",
+      "evidence": ["out/s2-telemetry-ingest/telemetry-ingest-postgres.json"]
+    },
+    {
+      "id": "GATE-ENERGY-GOLDEN",
+      "command": "node scripts/run-go.mjs test -count=1 ./services/analytics-read-model-projector/internal/energy/...",
+      "category": "metric"
+    },
+    {
+      "id": "GATE-ANALYTICS-HISTORY",
+      "command": "npm run analytics:history:integration",
+      "category": "metric",
+      "evidence": [
+        "out/analytics-history/clickhouse-integration.json",
+        "out/analytics-history/cube-integration.json"
+      ]
+    },
+    {
+      "id": "GATE-ALARM",
+      "command": "npm run s4:alarm-service",
+      "category": "alarm"
+    },
+    {
+      "id": "GATE-COMMAND-SAFETY",
+      "command": "npm run s3:command-safety",
+      "category": "control"
+    },
+    {
+      "id": "GATE-COMMAND-AUTHORITY",
+      "command": "npm run s3:command-authority",
+      "category": "control"
+    },
+    {
+      "id": "GATE-COMMAND-CERT-PREFLIGHT",
+      "command": "npm run s3:certification:preflight",
+      "category": "control",
+      "formalMeasurement": false,
+      "evidence": ["out/s3-command-certification/certification-preflight-report.json"]
+    },
+    {
+      "id": "GATE-OBSERVABILITY",
+      "command": "npm run observability:phase1:check",
+      "category": "observability"
+    },
+    {
+      "id": "GATE-RESTORE",
+      "command": "node scripts/run-phase1-postgres-restore-test.mjs",
+      "category": "recovery",
+      "evidence": ["out/phase1-acceptance/restore-report.json"]
+    },
+    {
+      "id": "GATE-CAPACITY-PREFLIGHT",
+      "command": "npm run s2:capacity",
+      "category": "performance",
+      "formalMeasurement": false,
+      "evidence": ["out/s2-release-evidence/capacity-report.json"]
+    },
+    {
+      "id": "GATE-LICENSES",
+      "command": "npm run security:licenses",
+      "category": "security"
+    },
+    {
+      "id": "GATE-GO-VULN-1",
+      "command": "node scripts/run-go-vulnerability-scan.mjs --shard=1/4",
+      "category": "security",
+      "evidence": ["out/security/go-vuln-shard-1-of-4.json"]
+    },
+    {
+      "id": "GATE-GO-VULN-2",
+      "command": "node scripts/run-go-vulnerability-scan.mjs --shard=2/4",
+      "category": "security",
+      "evidence": ["out/security/go-vuln-shard-2-of-4.json"]
+    },
+    {
+      "id": "GATE-GO-VULN-3",
+      "command": "node scripts/run-go-vulnerability-scan.mjs --shard=3/4",
+      "category": "security",
+      "evidence": ["out/security/go-vuln-shard-3-of-4.json"]
+    },
+    {
+      "id": "GATE-GO-VULN-4",
+      "command": "node scripts/run-go-vulnerability-scan.mjs --shard=4/4",
+      "category": "security",
+      "evidence": ["out/security/go-vuln-shard-4-of-4.json"]
+    }
+  ],
+  "requirements": [
+    {
+      "id": "REQ-TRACE-001",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "关键需求可追踪到测试和证据",
+      "gateIds": ["GATE-CONTRACTS"],
+      "acceptance": "Requirement -> Test Case -> Result 链路完整且静态校验通过"
+    },
+    {
+      "id": "REQ-DATA-001",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "Phase 1 统一数据模型和跨域 Tenant 隔离不可回退",
+      "gateIds": ["GATE-DATA-ARCHITECTURE"],
+      "acceptance": "Asset/Device/Point/Time Series/Energy Topology/Metric Definition 基线与 Command/Alarm/Work Order Tenant+Organization 双重隔离静态 Gate 通过"
+    },
+    {
+      "id": "REQ-SIM-001",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "中央机房固定 Simulator 数据集可重复运行",
+      "gateIds": ["GATE-CENTRAL-PLANT"],
+      "acceptance": "固定 Site/Gateway/Device/Point fixture 通过自动化回归"
+    },
+    {
+      "id": "REQ-TLM-001",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "Edge Publisher -> MQTT -> Adapter -> S2 完整模拟链路",
+      "gateIds": ["GATE-MQTT-E2E"],
+      "acceptance": "真实 Mosquitto + mTLS + QoS1 + 7 Devices + 当前 central-plant 全部 Point 通过"
+    },
+    {
+      "id": "REQ-TLM-002",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "MQTT 临时下游故障可重试且 poison message 不污染 S2",
+      "gateIds": ["GATE-MQTT-E2E"],
+      "acceptance": "注入 S2 503 后恢复；非法消息丢弃；Adapter 保持 ready"
+    },
+    {
+      "id": "REQ-TLM-003",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "Gateway Topic ACL 和跨 Site 隔离",
+      "gateIds": ["GATE-MQTT-E2E"],
+      "acceptance": "错误 Site publish 返回 MQTT v5 Not authorized"
+    },
+    {
+      "id": "REQ-TLM-004",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "Replay/duplicate/out-of-order 不破坏当前状态语义",
+      "gateIds": ["GATE-MQTT-E2E", "GATE-S2-INGEST-POSTGRES"],
+      "acceptance": "动态验证 REPLAYED/OUT_OF_ORDER delivery evidence、Source Position、Current State 不回退和重启后持久化"
+    },
+    {
+      "id": "REQ-EDGE-001",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "MQTT Broker 故障时 Edge Store & Forward 保持可恢复",
+      "gateIds": ["GATE-MQTT-E2E"],
+      "acceptance": "Broker stop 后 Publisher readiness=503、S2 停止收到实时数据、磁盘队列增长；Broker 恢复后缓存自动补传且队列归零"
+    },
+    {
+      "id": "REQ-EDGE-002",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "Gateway 进程重启后缓存与 Point Sequence 恢复",
+      "gateIds": ["GATE-MQTT-E2E"],
+      "acceptance": "离线 MQTT 队列跨进程保留；当前全部 Point sequence 持久化；重启后新 Source Position offset 严格高于重启前持久最大值"
+    },
+    {
+      "id": "REQ-DB-001",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "PostgreSQL RLS、约束和 Tenant/Site 隔离真实执行",
+      "gateIds": ["GATE-S2-POSTGRES"],
+      "acceptance": "真实 PostgreSQL fixture 验证强制 RLS、唯一约束和跨 Scope 拒绝"
+    },
+    {
+      "id": "REQ-METRIC-001",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "累计电量 Golden Dataset",
+      "gateIds": ["GATE-ENERGY-GOLDEN"],
+      "acceptance": "正常差值、Source SUSPECT、负累计值、Counter Reset 都与人工期望一致"
+    },
+    {
+      "id": "REQ-METRIC-002",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "Counter Reset 不产生负能耗",
+      "gateIds": ["GATE-ENERGY-GOLDEN", "GATE-ANALYTICS-HISTORY"],
+      "acceptance": "Reset/Rollback 输出 0 kWh + SUSPECT + METER_RESET_OR_ROLLBACK"
+    },
+    {
+      "id": "REQ-METRIC-003",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "历史 Telemetry 到 Energy Read Model/Cube 可重复投影",
+      "gateIds": ["GATE-ANALYTICS-HISTORY"],
+      "acceptance": "ClickHouse History 与 Cube integration evidence 均通过"
+    },
+    {
+      "id": "REQ-ALARM-001",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "Alarm 生命周期和读模型回归",
+      "gateIds": ["GATE-ALARM"],
+      "acceptance": "Alarm contract、service、promotion preflight 和 Go tests 通过"
+    },
+    {
+      "id": "REQ-CTRL-001",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "控制安全采用负向验收",
+      "gateIds": ["GATE-COMMAND-SAFETY"],
+      "acceptance": "Command domain/dispatcher/connector 的确定性负向测试与安全边界测试全部通过"
+    },
+    {
+      "id": "REQ-CTRL-002",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "Command 重试、重复投递和并发单写保持单一结果",
+      "gateIds": ["GATE-COMMAND-AUTHORITY"],
+      "acceptance": "真实 PostgreSQL Command authority、idempotency、lease/concurrency 与治理分发测试通过"
+    },
+    {
+      "id": "REQ-CTRL-003",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "Command 必须以 Read Back Verification 判定结果",
+      "gateIds": ["GATE-COMMAND-AUTHORITY"],
+      "acceptance": "Verification contract/PostgreSQL 流程证明 Mismatch/Timeout/Inconclusive 不得成为 VERIFIED"
+    },
+    {
+      "id": "REQ-CTRL-004",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "正式 Command Certification 条件在生产控制前冻结",
+      "gateIds": ["GATE-COMMAND-CERT-PREFLIGHT"],
+      "acceptance": "Preflight 仅证明认证 envelope、零容忍计数器、容量/Crash Point/Canary 条件完整；不得声称真实 Device side effect 已验收"
+    },
+    {
+      "id": "REQ-OBS-001",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "Telemetry/MQTT/Edge/Command/Alarm 可观测性资产一致",
+      "gateIds": ["GATE-OBSERVABILITY"],
+      "acceptance": "Metric catalog、低基数规则、Dashboard、Alert、Runbook 静态 Gate 通过"
+    },
+    {
+      "id": "REQ-REC-001",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "PostgreSQL Backup 必须经过 Destroy + Restore 验证",
+      "gateIds": ["GATE-RESTORE"],
+      "acceptance": "隔离 Test DB 实际备份、删除、恢复后表集合/行数/RLS/fixture 一致"
+    },
+    {
+      "id": "REQ-SEC-001",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "生产依赖许可证和 Go 已知漏洞 Gate",
+      "gateIds": ["GATE-LICENSES", "GATE-GO-VULN-1", "GATE-GO-VULN-2", "GATE-GO-VULN-3", "GATE-GO-VULN-4"],
+      "acceptance": "许可证策略通过且 Go workspace 无已知漏洞"
+    },
+    {
+      "id": "REQ-PERF-001",
+      "class": "SOFTWARE_REQUIRED",
+      "title": "容量目标与 Failure Scenario 在正式压测前被冻结",
+      "gateIds": ["GATE-CAPACITY-PREFLIGHT"],
+      "acceptance": "仅作为配置 Preflight；不得声称完成 60min/15min 正式容量测试"
+    },
+    {
+      "id": "REQ-HW-001",
+      "class": "DEFERRED_HARDWARE",
+      "title": "真实电表 Modbus 接入与 Vendor Template Certification",
+      "gateIds": [],
+      "acceptance": "等待真实电表/协议资料后验证 Address/DataType/Endian/Scale/Unit/Mapping"
+    },
+    {
+      "id": "REQ-HW-002",
+      "class": "DEFERRED_HARDWARE",
+      "title": "现场计量值、方向、单位与平台人工比对",
+      "gateIds": [],
+      "acceptance": "等待真实计量设备后执行 Lab -> Single Device -> Small Site 验收"
+    },
+    {
+      "id": "REQ-FORMAL-001",
+      "class": "DEFERRED_FORMAL",
+      "title": "24-72h Endurance 和正式 values/s 容量验收",
+      "gateIds": [],
+      "acceptance": "需要专用 Staging、硬件资源清单和 wall-clock attestation"
+    },
+    {
+      "id": "REQ-FORMAL-002",
+      "class": "DEFERRED_FORMAL",
+      "title": "浏览器 E2E/UAT 和 Production Acceptance",
+      "gateIds": [],
+      "acceptance": "需要 Linux CDP browser、角色化 UAT 与发布候选环境"
+    },
+    {
+      "id": "REQ-FORMAL-003",
+      "class": "DEFERRED_FORMAL",
+      "title": "Realtime + Historical Replay 混合负载优先级与容量验收",
+      "gateIds": [],
+      "acceptance": "需要 Staging 混合负载证明历史补传不拖垮实时流，并记录 realtime/replay lag、queue 和资源曲线"
+    },
+    {
+      "id": "REQ-FORMAL-004",
+      "class": "DEFERRED_FORMAL",
+      "title": "Gateway 磁盘压力、队列上限与保留策略故障注入",
+      "gateIds": [],
+      "acceptance": "需要受控磁盘压力环境验证高水位告警、queue limit、清理/保留策略与核心采集降级行为"
+    },
+    {
+      "id": "REQ-FORMAL-005",
+      "class": "DEFERRED_FORMAL",
+      "title": "RPO/RTO 定量灾难恢复验收",
+      "gateIds": [],
+      "acceptance": "当前已证明可 Restore；RPO/RTO 仍需带时间戳的正式故障演练和恢复窗口证据"
+    }
+  ]
+}

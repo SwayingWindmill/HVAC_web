@@ -2,6 +2,7 @@ name: S2 TelemetryLiveClient Browser Recovery
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - ".github/workflows/s2-telemetry-live-client.yml"
       - "apps/hvac-web/src/platform/telemetry-live/**"

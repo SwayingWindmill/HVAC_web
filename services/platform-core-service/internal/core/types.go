@@ -19,6 +19,7 @@ const (
 
 type Organization struct {
 	ID          string `json:"id"`
+	TenantID    string `json:"tenantId"`
 	Code        string `json:"code"`
 	DisplayName string `json:"displayName"`
 	Status      string `json:"status"`
@@ -29,6 +30,7 @@ type Organization struct {
 
 type Site struct {
 	ID                   string `json:"id"`
+	TenantID             string `json:"tenantId"`
 	OwningOrganizationID string `json:"owningOrganizationId"`
 	Code                 string `json:"code"`
 	DisplayName          string `json:"displayName"`
@@ -41,6 +43,7 @@ type Site struct {
 
 type Equipment struct {
 	ID                   string `json:"id"`
+	TenantID             string `json:"tenantId"`
 	OwningOrganizationID string `json:"owningOrganizationId"`
 	SiteID               string `json:"siteId"`
 	Code                 string `json:"code"`
@@ -54,6 +57,7 @@ type Equipment struct {
 
 type Device struct {
 	ID                   string `json:"id"`
+	TenantID             string `json:"tenantId"`
 	OwningOrganizationID string `json:"owningOrganizationId"`
 	SiteID               string `json:"siteId"`
 	Code                 string `json:"code"`
@@ -67,6 +71,7 @@ type Device struct {
 
 type DeviceBinding struct {
 	ID                   string  `json:"id"`
+	TenantID             string  `json:"tenantId"`
 	OwningOrganizationID string  `json:"owningOrganizationId"`
 	SiteID               string  `json:"siteId"`
 	DeviceID             string  `json:"deviceId"`

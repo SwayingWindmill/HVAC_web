@@ -3,7 +3,6 @@ import {
   Alert,
   Button,
   Card,
-  Descriptions,
   Drawer,
   Empty,
   Grid,
@@ -11,13 +10,12 @@ import {
   Progress,
   Select,
   Space,
-  Table,
   Tag,
   Tooltip,
   Typography,
   message,
 } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import { ProDescriptions, ProTable, type ProColumns } from '@ant-design/pro-components';
 import {
   ApartmentOutlined,
   BugOutlined,
@@ -167,17 +165,17 @@ export default function Fdd() {
     navigate(`/alarms?workOrder=${encodeURIComponent(workOrderId)}`);
   };
 
-  const columns: ColumnsType<FddEntry> = [
+  const columns: ProColumns<FddEntry>[] = [
     {
       title: '诊断',
       dataIndex: 'id',
       key: 'id',
       fixed: 'left',
       width: 160,
-      render: (id: string, entry) => (
+      render: (_, entry) => (
         <Space direction="vertical" size={0}>
           <Space size={6}>
-            <Typography.Text strong copyable={{ text: id }}>{id}</Typography.Text>
+            <Typography.Text strong copyable={{ text: entry.id }}>{entry.id}</Typography.Text>
             <Tag color={SEVERITY_TONE[entry.severity]}>{SEVERITY_LABEL[entry.severity]}</Tag>
           </Space>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>{entry.ts}</Typography.Text>
@@ -189,9 +187,9 @@ export default function Fdd() {
       dataIndex: 'device',
       key: 'device',
       width: 220,
-      render: (device: string, entry) => (
+      render: (_, entry) => (
         <Space direction="vertical" size={0}>
-          <Typography.Text>{device}</Typography.Text>
+          <Typography.Text>{entry.device}</Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>{entry.scope}</Typography.Text>
         </Space>
       ),
@@ -201,9 +199,9 @@ export default function Fdd() {
       dataIndex: 'phenomenon',
       key: 'phenomenon',
       width: 260,
-      render: (phenomenon: string, entry) => (
+      render: (_, entry) => (
         <Space direction="vertical" size={0}>
-          <Typography.Text>{phenomenon}</Typography.Text>
+          <Typography.Text>{entry.phenomenon}</Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>{entry.impact}</Typography.Text>
         </Space>
       ),
@@ -220,14 +218,14 @@ export default function Fdd() {
       key: 'confidence',
       width: 130,
       sorter: (a, b) => a.confidence - b.confidence,
-      render: (confidence: number) => <Progress percent={Math.round(confidence * 100)} size="small" />,
+      render: (_, entry) => <Progress percent={Math.round(entry.confidence * 100)} size="small" />,
     },
     {
       title: '证据',
       dataIndex: 'evidence',
       key: 'evidence',
       width: 120,
-      render: (evidence: FddEntry['evidence']) => <Tag color="processing">{evidence.length} 项指标</Tag>,
+      render: (_, entry) => <Tag color="processing">{entry.evidence.length} 项指标</Tag>,
     },
     {
       title: '工单状态',
@@ -315,11 +313,13 @@ export default function Fdd() {
             </Space>
           </div>
 
-          <Table<FddEntry>
+          <ProTable<FddEntry>
             rowKey="id"
             size="middle"
             columns={tableColumns}
             dataSource={rows}
+            search={false}
+            options={{ density: true, fullScreen: true, setting: true, reload: false }}
             pagination={{ pageSize: 8, showSizeChanger: false }}
             scroll={{ x: compactTable ? 860 : 1420 }}
             locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合条件的诊断" /> }}
@@ -403,14 +403,19 @@ export default function Fdd() {
               icon={<BugOutlined />}
               description="现象、根因假设与关联业务对象。"
             >
-              <Descriptions size="small" column={{ xs: 1, sm: 2 }} colon={false}>
-                <Descriptions.Item label="设备">{selected.device}</Descriptions.Item>
-                <Descriptions.Item label="范围">{selected.scope}</Descriptions.Item>
-                <Descriptions.Item label="关联资产"><Typography.Text code>{selected.linkedAssetId ?? '未绑定'}</Typography.Text></Descriptions.Item>
-                <Descriptions.Item label="关联优化"><Typography.Text code>{selected.linkedSuggestionId ?? '无'}</Typography.Text></Descriptions.Item>
-                <Descriptions.Item label="故障现象" span={2}>{selected.phenomenon}</Descriptions.Item>
-                <Descriptions.Item label="根因假设" span={2}>{selected.rootCause}</Descriptions.Item>
-              </Descriptions>
+              <ProDescriptions<FddEntry>
+                size="small"
+                column={{ xs: 1, sm: 2 }}
+                dataSource={selected}
+                columns={[
+                  { title: '设备', dataIndex: 'device' },
+                  { title: '范围', dataIndex: 'scope' },
+                  { title: '关联资产', dataIndex: 'linkedAssetId', render: (_, entry) => <Typography.Text code>{entry.linkedAssetId ?? '未绑定'}</Typography.Text> },
+                  { title: '关联优化', dataIndex: 'linkedSuggestionId', render: (_, entry) => <Typography.Text code>{entry.linkedSuggestionId ?? '无'}</Typography.Text> },
+                  { title: '故障现象', dataIndex: 'phenomenon', span: 2 },
+                  { title: '根因假设', dataIndex: 'rootCause', span: 2 },
+                ]}
+              />
             </OperationsDetailSection>
 
             <OperationsDetailSection

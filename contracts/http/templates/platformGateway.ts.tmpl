@@ -68,6 +68,7 @@ const registryStatusSchema = z.enum(['ACTIVE', 'INACTIVE', 'RETIRED']);
 
 export const organizationSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   code: z.string().min(1).max(128),
   displayName: z.string().min(1).max(256),
   status: z.enum(['ACTIVE', 'SUSPENDED', 'RETIRED']),
@@ -77,6 +78,7 @@ export const organizationSchema = z.object({
 }).strict();
 export const siteSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   owningOrganizationId: uuidV7Schema,
   code: z.string().min(1).max(128),
   displayName: z.string().min(1).max(256),
@@ -88,6 +90,7 @@ export const siteSchema = z.object({
 }).strict();
 export const equipmentSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   owningOrganizationId: uuidV7Schema,
   siteId: uuidV7Schema,
   code: z.string().min(1).max(128),
@@ -100,6 +103,7 @@ export const equipmentSchema = z.object({
 }).strict();
 export const deviceSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   owningOrganizationId: uuidV7Schema,
   siteId: uuidV7Schema,
   code: z.string().min(1).max(128),
@@ -112,6 +116,7 @@ export const deviceSchema = z.object({
 }).strict();
 export const deviceBindingSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   owningOrganizationId: uuidV7Schema,
   siteId: uuidV7Schema,
   deviceId: uuidV7Schema,
@@ -124,8 +129,115 @@ export const deviceBindingSchema = z.object({
   createdAt: instantSchema,
   updatedAt: instantSchema,
 }).strict();
+export const areaSchema = z.object({
+  id: uuidV7Schema,
+  tenantId: uuidV7Schema,
+  owningOrganizationId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  parentAreaId: uuidV7Schema.nullable(),
+  code: z.string().min(1).max(64),
+  displayName: z.string().min(1).max(256),
+  areaType: z.enum(['CAMPUS', 'BUILDING', 'FLOOR', 'ZONE', 'ROOM', 'PLANT_ROOM', 'ROOFTOP', 'OUTDOOR', 'TENANT_SPACE', 'OTHER']),
+  status: registryStatusSchema,
+  revision: revisionSchema,
+  createdAt: instantSchema,
+  updatedAt: instantSchema,
+}).strict();
+export const sensorSchema = z.object({
+  id: uuidV7Schema,
+  tenantId: uuidV7Schema,
+  owningOrganizationId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  code: z.string().min(1).max(256),
+  displayName: z.string().min(1).max(256),
+  sensorType: z.string().min(1).max(128),
+  manufacturer: z.string().max(256).nullable(),
+  model: z.string().max(256).nullable(),
+  serialNumber: z.string().max(256).nullable(),
+  calibrationDueAt: instantSchema.nullable(),
+  metadata: z.record(z.unknown()),
+  status: registryStatusSchema,
+  revision: revisionSchema,
+  createdAt: instantSchema,
+  updatedAt: instantSchema,
+}).strict();
+export const telemetryPointSchema = z.object({
+  id: uuidV7Schema,
+  tenantId: uuidV7Schema,
+  owningOrganizationId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  reportingDeviceId: uuidV7Schema,
+  sensorId: uuidV7Schema.nullable(),
+  pointKey: z.string().min(1).max(128),
+  sourceKey: z.string().min(1).max(128),
+  displayName: z.string().min(1).max(256),
+  pointKind: z.enum(['MEASURED', 'CALCULATED', 'STATE', 'COMMAND', 'FEEDBACK']),
+  valueType: z.enum(['BOOLEAN', 'NUMBER', 'STRING', 'JSON']),
+  unit: z.string().max(64).nullable(),
+  writable: z.boolean(),
+  sampleIntervalMs: z.number().int().min(100).max(86_400_000),
+  publishIntervalMs: z.number().int().min(100).max(86_400_000),
+  staleAfterMs: z.number().int().min(100).max(604_800_000),
+  formulaRevision: z.string().max(256).nullable(),
+  sourceMetadata: z.record(z.unknown()),
+  status: registryStatusSchema,
+  revision: revisionSchema,
+  createdAt: instantSchema,
+  updatedAt: instantSchema,
+}).strict();
+export const assetRelationshipSchema = z.object({
+  id: uuidV7Schema,
+  tenantId: uuidV7Schema,
+  owningOrganizationId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  fromType: z.enum(['EQUIPMENT', 'DEVICE', 'SENSOR', 'POINT']),
+  fromId: uuidV7Schema,
+  toType: z.enum(['SITE', 'AREA', 'EQUIPMENT', 'DEVICE', 'SENSOR', 'POINT']),
+  toId: uuidV7Schema,
+  role: z.string().min(1).max(128),
+  status: registryStatusSchema,
+  validFrom: instantSchema,
+  validTo: instantSchema.nullable(),
+  revision: revisionSchema,
+  createdAt: instantSchema,
+  updatedAt: instantSchema,
+}).strict();
+export const calculatedPointInputSchema = z.object({
+  tenantId: uuidV7Schema,
+  owningOrganizationId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  calculatedPointId: uuidV7Schema,
+  inputPointId: uuidV7Schema,
+  inputRole: z.string().min(1).max(128),
+  ordinal: z.number().int().nonnegative(),
+  formulaRevision: z.string().min(1).max(256),
+}).strict();
+export const assetModelCountsSchema = z.object({
+  areas: z.number().int().nonnegative(),
+  equipment: z.number().int().nonnegative(),
+  deviceEndpoints: z.number().int().nonnegative(),
+  sensors: z.number().int().nonnegative(),
+  telemetryPoints: z.number().int().nonnegative(),
+  calculatedPoints: z.number().int().nonnegative(),
+  independentSensorDevices: z.number().int().nonnegative(),
+}).strict();
+export const siteAssetModelSchema = z.object({
+  schemaVersion: z.literal(1),
+  tenantId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  areas: z.array(areaSchema),
+  equipment: z.array(equipmentSchema),
+  devices: z.array(deviceSchema),
+  sensors: z.array(sensorSchema),
+  telemetryPoints: z.array(telemetryPointSchema),
+  relationships: z.array(assetRelationshipSchema),
+  calculatedPointInputs: z.array(calculatedPointInputSchema),
+  counts: assetModelCountsSchema,
+}).strict();
+
 export const externalBindingSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   owningOrganizationId: uuidV7Schema,
   siteId: uuidV7Schema,
   integrationInstanceId: uuidV7Schema,
@@ -175,6 +287,13 @@ export type Site = z.infer<typeof siteSchema>;
 export type Equipment = z.infer<typeof equipmentSchema>;
 export type Device = z.infer<typeof deviceSchema>;
 export type DeviceBinding = z.infer<typeof deviceBindingSchema>;
+export type Area = z.infer<typeof areaSchema>;
+export type Sensor = z.infer<typeof sensorSchema>;
+export type TelemetryPoint = z.infer<typeof telemetryPointSchema>;
+export type AssetRelationship = z.infer<typeof assetRelationshipSchema>;
+export type CalculatedPointInput = z.infer<typeof calculatedPointInputSchema>;
+export type AssetModelCounts = z.infer<typeof assetModelCountsSchema>;
+export type SiteAssetModel = z.infer<typeof siteAssetModelSchema>;
 export type ExternalBinding = z.infer<typeof externalBindingSchema>;
 export type OrganizationCollection = z.infer<typeof organizationCollectionSchema>;
 export type SiteCollection = z.infer<typeof siteCollectionSchema>;
@@ -184,7 +303,7 @@ export type DeviceBindingCollection = z.infer<typeof deviceBindingCollectionSche
 export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
 export type RegistryListParams = { limit?: number; cursor?: string };
 
-export type PlatformResponse<T> = { data: T; requestId: string | null; traceparent: string | null; auditMessageId: string | null; routePolicyRevision: string | null };
+export type PlatformResponse<T> = { data: T; requestId: string | null; traceparent: string | null; auditMessageId: string | null; routePolicyRevision: string | null; location: string | null };
 
 export class PlatformApiError extends Error {
   readonly problem: ProblemDetails;
@@ -198,10 +317,10 @@ export function createPlatformGatewayClient(baseUrl = '') {
     const headers = new Headers(init?.headers);
     if (!headers.has('Accept')) headers.set('Accept', 'application/json, application/problem+json');
     const response = await fetch(`${baseUrl}${path}`, { ...init, headers, credentials: 'same-origin' });
-    if (response.status === 204) return { data: undefined as T, requestId: response.headers.get('x-request-id'), traceparent: response.headers.get('traceparent'), auditMessageId: response.headers.get('x-audit-message-id'), routePolicyRevision: response.headers.get('x-route-policy-revision') };
+    if (response.status === 204) return { data: undefined as T, requestId: response.headers.get('x-request-id'), traceparent: response.headers.get('traceparent'), auditMessageId: response.headers.get('x-audit-message-id'), routePolicyRevision: response.headers.get('x-route-policy-revision'), location: response.headers.get('location') };
     const payload: unknown = await response.json();
     if (!response.ok) throw new PlatformApiError(problemDetailsSchema.parse(payload));
-    return { data: schema.parse(payload), requestId: response.headers.get('x-request-id'), traceparent: response.headers.get('traceparent'), auditMessageId: response.headers.get('x-audit-message-id'), routePolicyRevision: response.headers.get('x-route-policy-revision') };
+    return { data: schema.parse(payload), requestId: response.headers.get('x-request-id'), traceparent: response.headers.get('traceparent'), auditMessageId: response.headers.get('x-audit-message-id'), routePolicyRevision: response.headers.get('x-route-policy-revision'), location: response.headers.get('location') };
   };
 
   const listPath = (path: string, params: RegistryListParams = {}) => {
@@ -263,6 +382,9 @@ export function createPlatformGatewayClient(baseUrl = '') {
     ),
     listSiteDeviceBindings: (siteId: string, params: RegistryListParams = {}, init?: RequestInit) => request(
       listPath('__SITE_DEVICE_BINDINGS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), params), deviceBindingCollectionSchema, { ...init, method: 'GET' },
+    ),
+    getSiteAssetModel: (siteId: string, init?: RequestInit) => request(
+      '__SITE_ASSET_MODEL_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), siteAssetModelSchema, { ...init, method: 'GET' },
     ),
     getDevice: (deviceId: string, init?: RequestInit) => request(
       '__DEVICE_PATH__'.replace('{deviceId}', encodeURIComponent(deviceId)), deviceSchema, { ...init, method: 'GET' },

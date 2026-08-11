@@ -16,10 +16,13 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
+	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
 )
 
 const (
+	gatewayAlarmTenantID       = "0190f000-0000-7000-8000-000000000001"
 	gatewayAlarmOrganizationID = "01910000-0000-7000-8000-000000000001"
 	gatewayAlarmSiteID         = "01910000-0001-7000-8000-000000000001"
 	gatewayAlarmOtherSiteID    = "01910000-0002-7000-8000-000000000001"
@@ -37,7 +40,7 @@ func TestGatewayAlarmListUsesIAMAndExactSignedReadContext(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if fixture.iamCalls.Load() != 1 || fixture.alarmCalls.Load() != 1 {
+	if fixture.iamCalls.Load() != 2 || fixture.alarmCalls.Load() != 1 {
 		t.Fatalf("calls iam=%d alarm=%d", fixture.iamCalls.Load(), fixture.alarmCalls.Load())
 	}
 	if recorder.Header().Get("Cache-Control") != "private, no-store" {
@@ -124,28 +127,69 @@ func newAlarmGatewayFixture(t *testing.T) *alarmGatewayFixture {
 	iamServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		fixture.iamCalls.Add(1)
 		claims, verifyErr := identitycontext.VerifyDelegation(signer.Public(), request.Header.Get("X-Delegation-Grant"))
-		if verifyErr != nil || identitycontext.ValidateDelegation(claims, now, "spiffe://hvac.local/platform-gateway", "iam-service", "alarm:authorize", "session:"+fixture.session.ID) != nil {
+		if verifyErr != nil {
 			http.Error(writer, "invalid IAM delegation", http.StatusForbidden)
 			return
 		}
-		var input alarmauth.DecisionRequest
-		if json.NewDecoder(request.Body).Decode(&input) != nil || input.Validate() != nil {
-			http.Error(writer, "invalid decision request", http.StatusBadRequest)
-			return
-		}
-		decision := alarmauth.Decision{
-			Allowed: !fixture.deny.Load(), PrincipalID: "principal-alarm-1",
-			SubjectIssuer: fixture.session.Principal.Issuer, Subject: fixture.session.Principal.Subject,
-			ActingOrganizationID: gatewayAlarmOrganizationID, SiteID: input.SiteID, AlarmID: input.AlarmID, Action: input.Action,
-			PolicyRevision: "alarm-policy-1", ReasonCode: alarmauth.ReasonAllowExactScope, DecidedAt: now.Format(time.RFC3339Nano),
-		}
-		if fixture.deny.Load() {
-			decision.ReasonCode = alarmauth.ReasonDenyScope
-		}
 		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(alarmauth.DecisionResponse{Decision: decision})
+		switch request.URL.Path {
+		case alarmDecisionPath:
+			if identitycontext.ValidateDelegation(claims, now, "spiffe://hvac.local/platform-gateway", "iam-service", "alarm:authorize", "session:"+fixture.session.ID) != nil {
+				http.Error(writer, "invalid Alarm IAM delegation", http.StatusForbidden)
+				return
+			}
+			var input alarmauth.DecisionRequest
+			if json.NewDecoder(request.Body).Decode(&input) != nil || input.Validate() != nil {
+				http.Error(writer, "invalid decision request", http.StatusBadRequest)
+				return
+			}
+			decision := alarmauth.Decision{
+				Allowed: !fixture.deny.Load(), PrincipalID: "principal-alarm-1",
+				SubjectIssuer: fixture.session.Principal.Issuer, Subject: fixture.session.Principal.Subject,
+				ActingOrganizationID: gatewayAlarmOrganizationID, SiteID: input.SiteID, AlarmID: input.AlarmID, Action: input.Action,
+				PolicyRevision: "alarm-policy-1", ReasonCode: alarmauth.ReasonAllowExactScope, DecidedAt: now.Format(time.RFC3339Nano),
+			}
+			if fixture.deny.Load() {
+				decision.ReasonCode = alarmauth.ReasonDenyScope
+			}
+			_ = json.NewEncoder(writer).Encode(alarmauth.DecisionResponse{Decision: decision})
+		case "/internal/v1/registry-read/decision":
+			if identitycontext.ValidateDelegation(claims, now, "spiffe://hvac.local/platform-gateway", "iam-service", "registry:authorize", "session:"+fixture.session.ID) != nil {
+				http.Error(writer, "invalid Registry IAM delegation", http.StatusForbidden)
+				return
+			}
+			var input registryauth.DecisionRequest
+			if json.NewDecoder(request.Body).Decode(&input) != nil || input.Validate() != nil || input.Action != registryauth.ActionSiteRead {
+				http.Error(writer, "invalid Registry decision request", http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(writer).Encode(registryauth.DecisionResponse{
+				Decision: registryauth.Decision{
+					Allowed: true, PrincipalID: "principal-alarm-1", SubjectIssuer: fixture.session.Principal.Issuer, Subject: fixture.session.Principal.Subject,
+					ActingOrganizationID: gatewayAlarmOrganizationID, AllowedOrganizationIDs: []string{gatewayAlarmOrganizationID}, AllowedSiteIDs: []string{gatewayAlarmSiteID},
+					Actions: []registryauth.Action{registryauth.ActionSiteRead}, PolicyRevision: "gateway-policy-1", ReasonCode: registryauth.ReasonAllowOrganizationRole,
+				},
+				DelegationGrant: "e30.c2ln",
+			})
+		default:
+			http.NotFound(writer, request)
+		}
 	}))
 	t.Cleanup(iamServer.Close)
+
+	registryServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/internal/v1/registry/sites/"+gatewayAlarmSiteID || request.Header.Get("X-Delegation-Grant") == "" {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(platformapi.Site{
+			ID: gatewayAlarmSiteID, TenantID: gatewayAlarmTenantID, OwningOrganizationID: gatewayAlarmOrganizationID,
+			Code: "alarm-site", DisplayName: "Alarm Site", Timezone: "UTC", Status: "ACTIVE", Revision: 1,
+			CreatedAt: "2026-08-01T00:00:00.000Z", UpdatedAt: "2026-08-01T00:00:00.000Z",
+		})
+	}))
+	t.Cleanup(registryServer.Close)
 
 	alarmServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		fixture.alarmCalls.Add(1)
@@ -156,7 +200,7 @@ func newAlarmGatewayFixture(t *testing.T) *alarmGatewayFixture {
 			action = string(alarmauth.ActionRead)
 			scopes = append(scopes, "alarm:"+gatewayAlarmID)
 		}
-		if verifyErr != nil || identitycontext.ValidateDelegationAnyScope(claims, now, "spiffe://hvac.local/platform-gateway", "alarm-service", action, scopes) != nil || claims.PrincipalID != "principal-alarm-1" || claims.PolicyRevision != "alarm-policy-1" {
+		if verifyErr != nil || identitycontext.ValidateDelegationAnyScope(claims, now, "spiffe://hvac.local/platform-gateway", "alarm-service", action, scopes) != nil || claims.TenantID != gatewayAlarmTenantID || claims.PrincipalID != "principal-alarm-1" || claims.PolicyRevision != "alarm-policy-1" {
 			http.Error(writer, `{"code":"ALARM_FORBIDDEN"}`, http.StatusForbidden)
 			return
 		}
@@ -179,7 +223,8 @@ func newAlarmGatewayFixture(t *testing.T) *alarmGatewayFixture {
 			ExecutingWorkloadSPIFFE: "spiffe://hvac.local/platform-gateway", PolicyRevision: "gateway-policy-1",
 			DelegationSigner: signer, DelegationTTL: 30 * time.Second,
 		}, now: func() time.Time { return now }},
-		alarm: newAlarmController(&AlarmConfig{BackendBaseURL: alarmServer.URL, BackendHTTPClient: alarmServer.Client(), BackendAudience: "alarm-service"}),
+		registry: newRegistryController(&RegistryConfig{CoreBaseURL: registryServer.URL, CoreHTTPClient: registryServer.Client(), CoreTimeout: time.Second}),
+		alarm:    newAlarmController(&AlarmConfig{BackendBaseURL: alarmServer.URL, BackendHTTPClient: alarmServer.Client(), BackendAudience: "alarm-service"}),
 	}
 	return fixture
 }

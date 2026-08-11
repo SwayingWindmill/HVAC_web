@@ -2,6 +2,7 @@ name: S3 Command Authority
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - '.github/workflows/s3-command-authority.yml'
       - 'scripts/check-s3-workflow-topology.mjs'

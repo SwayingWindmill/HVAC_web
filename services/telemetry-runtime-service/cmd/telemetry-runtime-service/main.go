@@ -112,7 +112,6 @@ func main() {
 			CommandVerifierOrganizationID: strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_ORGANIZATION_ID")),
 			CommandVerifierSiteID:         strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_SITE_ID")),
 			CommandVerifierDeviceID:       strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_DEVICE_ID")),
-			CommandReportedStateKey:       strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_REPORTED_STATE_KEY")),
 			Metrics:                       observabilityRuntime.Metrics,
 		}),
 		TLSConfig: &tls.Config{

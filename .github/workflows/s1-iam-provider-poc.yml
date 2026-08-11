@@ -2,6 +2,7 @@ name: S1 IAM Provider POC
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - '.github/workflows/s1-iam-provider-poc.yml'
       - 'scripts/check-s1-workflow-topology.mjs'

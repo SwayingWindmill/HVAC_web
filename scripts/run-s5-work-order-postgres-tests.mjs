@@ -105,7 +105,7 @@ try {
     SELECT count(*)::text || '|' || count(*) FILTER (WHERE relrowsecurity)::text || '|' || count(*) FILTER (WHERE relforcerowsecurity)::text
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'work_order_runtime' AND c.relkind = 'r'
-  `), '9|9|9', 'table/RLS baseline');
+  `), '10|10|10', 'table/RLS baseline');
   report.assertions.forceRls = true;
 
   const directLoginDenied = psql(`
@@ -115,19 +115,30 @@ try {
   if (!directLoginDenied.includes('permission denied')) throw new Error(`runtime login bypassed explicit role activation: ${directLoginDenied}`);
   report.assertions.explicitActivationRequired = true;
 
+  expectEqual(psql("SELECT tenant_id::text FROM work_order_runtime.organization_tenant_scope WHERE organization_id = '01920000-0000-7000-8000-000000000001'::uuid"), '0191f000-0000-7000-8000-000000000001', 'Organization Tenant binding');
   expectEqual(psql(`
     SET SESSION AUTHORIZATION s5_work_order_service;
     SET ROLE s5_work_order_runtime;
     SELECT set_config('app.organization_id', '01920000-0000-7000-8000-000000000001', false);
+    SELECT set_config('app.tenant_id', '0191f000-0000-7000-8000-000000000001', false);
     SELECT count(*) FROM work_order_runtime.work_order_current;
-  `).split('\n').at(-1), '3', 'authorized Organization visibility');
+  `).split('\n').at(-1), '3', 'authorized Tenant/Organization visibility');
+  expectEqual(psql(`
+    SET SESSION AUTHORIZATION s5_work_order_service;
+    SET ROLE s5_work_order_runtime;
+    SELECT set_config('app.organization_id', '01920000-0000-7000-8000-000000000001', false);
+    SELECT set_config('app.tenant_id', '0191f000-0000-7000-8000-000000000002', false);
+    SELECT count(*) FROM work_order_runtime.work_order_current;
+  `).split('\n').at(-1), '0', 'cross-Tenant invisibility');
   expectEqual(psql(`
     SET SESSION AUTHORIZATION s5_work_order_service;
     SET ROLE s5_work_order_runtime;
     SELECT set_config('app.organization_id', '01920000-0000-7000-8000-000000000099', false);
+    SELECT set_config('app.tenant_id', '0191f000-0000-7000-8000-000000000001', false);
     SELECT count(*) FROM work_order_runtime.work_order_current;
   `).split('\n').at(-1), '0', 'cross-Organization invisibility');
   report.assertions.organizationRls = true;
+  report.assertions.tenantOrganizationRls = true;
 
   for (const [operation, sql] of [
     ['insert', `INSERT INTO work_order_runtime.work_order_current SELECT * FROM work_order_runtime.work_order_current`],
@@ -138,6 +149,7 @@ try {
       SET SESSION AUTHORIZATION s5_work_order_service;
       SET ROLE s5_work_order_runtime;
       SELECT set_config('app.organization_id', '01920000-0000-7000-8000-000000000001', false);
+      SELECT set_config('app.tenant_id', '0191f000-0000-7000-8000-000000000001', false);
       ${sql};
     `, { expectFailure: true }).toLowerCase();
     if (!denied.includes('permission denied')) throw new Error(`runtime can ${operation} Work Order authority rows: ${denied}`);
@@ -153,6 +165,7 @@ try {
       SET SESSION AUTHORIZATION s5_work_order_mutation_service;
       SET ROLE s5_work_order_writer;
       SELECT set_config('app.organization_id', '01920000-0000-7000-8000-000000000001', false);
+      SELECT set_config('app.tenant_id', '0191f000-0000-7000-8000-000000000001', false);
       ${sql};
     `, { expectFailure: true }).toLowerCase();
     if (!denied.includes('permission denied')) throw new Error(`writer can perform unreviewed ${operation}: ${denied}`);

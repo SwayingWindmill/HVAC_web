@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Button, Card, Col, Descriptions, Form, Input, Modal, Row, Select, Tree, Typography, message } from 'antd';
+import { Button, Card, Col, Form, Modal, Row, Select, Tree, Typography, message } from 'antd';
+import { ProDescriptions, ProForm, ProFormSelect, ProFormText } from '@ant-design/pro-components';
 import type { DataNode } from 'antd/es/tree';
 import {
   ApartmentOutlined,
@@ -22,6 +23,12 @@ import { BRAND, STATUS } from '@/theme/tokens';
 const { Text } = Typography;
 let nodeSequence = 100;
 
+type AssetNodeFormValues = {
+  parent: string;
+  type: AssetNode['type'];
+  name: string;
+};
+
 function insertNode(nodes: AssetNode[], parentKey: string | null, node: AssetNode): AssetNode[] {
   if (parentKey === null) return [...nodes, node];
   return nodes.map((item) => {
@@ -38,7 +45,7 @@ export default function MockRegistrySitePanel() {
   const [tree, setTree] = useState<AssetNode[]>(mockAssetTree);
   const [siteId, setSiteId] = useState(mockSites[0].id);
   const [assetModal, setAssetModal] = useState(false);
-  const [assetForm] = Form.useForm();
+  const [assetForm] = Form.useForm<AssetNodeFormValues>();
   const flatAssetNodes = useMemo(() => flattenAssets(tree), [tree]);
 
   useEffect(() => {
@@ -144,14 +151,19 @@ export default function MockRegistrySitePanel() {
             variant="borderless"
             title={<OperationsPanelHeading title="站点配置摘要" icon={<DatabaseOutlined />} />}
           >
-            <Descriptions column={1} size="small" className="system-descriptions">
-              <Descriptions.Item label="当前站点">{mockSites.find((site) => site.id === siteId)?.name}</Descriptions.Item>
-              <Descriptions.Item label="站点 ID"><Text code>{siteId}</Text></Descriptions.Item>
-              <Descriptions.Item label="资产节点">{flatAssetNodes.length}</Descriptions.Item>
-              <Descriptions.Item label="同步模式">Mock Tree</Descriptions.Item>
-              <Descriptions.Item label="目标接口"><Text code>GET /assets/tree</Text></Descriptions.Item>
-              <Descriptions.Item label="写入策略">二次确认 + 审计日志</Descriptions.Item>
-            </Descriptions>
+            <ProDescriptions
+              column={1}
+              size="small"
+              className="system-descriptions"
+              columns={[
+                { title: '当前站点', key: 'site', renderText: () => mockSites.find((site) => site.id === siteId)?.name ?? '—' },
+                { title: '站点 ID', key: 'siteId', render: () => <Text code>{siteId}</Text> },
+                { title: '资产节点', key: 'assetCount', renderText: () => flatAssetNodes.length },
+                { title: '同步模式', key: 'syncMode', renderText: () => 'Mock Tree' },
+                { title: '目标接口', key: 'endpoint', render: () => <Text code>GET /assets/tree</Text> },
+                { title: '写入策略', key: 'writePolicy', renderText: () => '二次确认 + 审计日志' },
+              ]}
+            />
           </Card>
         </Col>
       </Row>
@@ -181,17 +193,21 @@ export default function MockRegistrySitePanel() {
           <ClusterOutlined />
           <span>资产节点会影响遥测归属、诊断对象和权限范围。提交后还会进行二次确认。</span>
         </div>
-        <Form form={assetForm} layout="vertical">
-          <Form.Item name="parent" label="父节点" rules={[{ required: true }]}>
-            <Select options={[{ value: 'root', label: '根（顶级建筑）' }, ...flatNodes.map((node) => ({ value: node.key, label: node.title }))]} />
-          </Form.Item>
-          <Form.Item name="type" label="节点类型" rules={[{ required: true }]}>
-            <Select options={[{ value: 'building', label: '建筑' }, { value: 'zone', label: '分区' }, { value: 'unit', label: '机组/设备' }]} />
-          </Form.Item>
-          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
-            <Input placeholder="如 冷水机组 #3" />
-          </Form.Item>
-        </Form>
+        <ProForm<AssetNodeFormValues> form={assetForm} layout="vertical" submitter={false}>
+          <ProFormSelect
+            name="parent"
+            label="父节点"
+            rules={[{ required: true }]}
+            options={[{ value: 'root', label: '根（顶级建筑）' }, ...flatNodes.map((node) => ({ value: node.key, label: node.title }))]}
+          />
+          <ProFormSelect
+            name="type"
+            label="节点类型"
+            rules={[{ required: true }]}
+            options={[{ value: 'building', label: '建筑' }, { value: 'zone', label: '分区' }, { value: 'unit', label: '机组/设备' }]}
+          />
+          <ProFormText name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]} placeholder="如 冷水机组 #3" />
+        </ProForm>
       </Modal>
     </div>
   );

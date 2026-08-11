@@ -12,6 +12,7 @@
     {"id":6,"title":"Revocation outcomes","type":"timeseries","targets":[{"expr":"sum by (phase,outcome) (rate(hvac_s2_revocation_events_total[5m]))"}]},
     {"id":7,"title":"Outbox lag","type":"timeseries","targets":[{"expr":"histogram_quantile(0.99, sum by (le) (rate(hvac_s2_outbox_lag_seconds_bucket[5m])))"}]},
     {"id":8,"title":"Dependency failures","type":"timeseries","targets":[{"expr":"sum by (dependency,outcome) (rate(hvac_s2_upstream_requests_total[5m]))"}]},
-    {"id":9,"title":"Exporter drops and failures","type":"timeseries","targets":[{"expr":"sum by (outcome,reason_family) (rate(hvac_s2_exporter_events_total[5m]))"}]}
+    {"id":9,"title":"Exporter drops and failures","type":"timeseries","targets":[{"expr":"sum by (outcome,reason_family) (rate(hvac_s2_exporter_events_total[5m]))"}]},
+    {"id":10,"title":"Telemetry data good rate","type":"timeseries","targets":[{"expr":"sum(rate(hvac_s2_data_quality_records_total{quality=\"good\"}[5m])) / clamp_min(sum(rate(hvac_s2_data_quality_records_total[5m])), 1)"}]}
   ]
 }

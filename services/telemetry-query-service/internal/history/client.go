@@ -49,6 +49,8 @@ type Client struct {
 
 type pointRow struct {
 	ObservationID  string   `json:"observation_id"`
+	PointID        string   `json:"point_id"`
+	SensorID       *string  `json:"sensor_id"`
 	TelemetryKey   string   `json:"telemetry_key"`
 	SampledAt      string   `json:"sampled_at"`
 	ReceivedAt     string   `json:"received_at"`
@@ -162,7 +164,7 @@ func (client *Client) buildResponse(query telemetryhistorymodel.DeviceHistoryQue
 			return telemetryhistorymodel.DeviceHistoryResponse{}, fmt.Errorf("decode ClickHouse history received time: %w", err)
 		}
 		series[row.TelemetryKey] = append(series[row.TelemetryKey], telemetryhistorymodel.DeviceHistoryPoint{
-			ObservationID: row.ObservationID, SampledAt: sampledAt, ReceivedAt: receivedAt,
+			ObservationID: row.ObservationID, PointID: row.PointID, SensorID: row.SensorID, SampledAt: sampledAt, ReceivedAt: receivedAt,
 			Value: row.Value, Unit: row.Unit, Quality: telemetryhistorymodel.Quality(row.Quality),
 			QualityReasons: append([]string{}, row.QualityReasons...), Revision: row.Revision,
 		})
@@ -219,6 +221,8 @@ func (client *Client) pointsQuery(query telemetryhistorymodel.DeviceHistoryQuery
 	return fmt.Sprintf(`WITH scoped AS (
   SELECT
     observation_id,
+    point_id,
+    sensor_id,
     telemetry_key,
     sampled_at,
     received_at,
@@ -242,6 +246,8 @@ func (client *Client) pointsQuery(query telemetryhistorymodel.DeviceHistoryQuery
 )
 SELECT
   toString(observation_id) AS observation_id,
+  toString(point_id) AS point_id,
+  if(sensor_id IS NULL, CAST(NULL, 'Nullable(String)'), toString(sensor_id)) AS sensor_id,
   telemetry_key,
   formatDateTime(sampled_at, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS sampled_at,
   formatDateTime(received_at, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS received_at,

@@ -32,6 +32,7 @@ import {
 } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router';
 import CopilotContextBridge from '@/ai/CopilotContextBridge';
+import { applyComposerFocusStyle, useCopilotComposerFocusBridge } from '@/ai/GlobalAiAssistant';
 import {
   HvacCopilotWorkspaceWelcomeScreen,
 } from '@/ai/HvacCopilotUi';
@@ -373,6 +374,7 @@ function EvidenceRail({
 }
 
 function AiWorkspace() {
+  useCopilotComposerFocusBridge();
   const [searchParams] = useSearchParams();
   const context = useAiApplicationContext();
   const { demoMode } = useUi();
@@ -450,7 +452,30 @@ function AiWorkspace() {
               </div>
             </header>
 
-            <div className="ai-copilot-chat-shell">
+            <div
+              className="ai-copilot-chat-shell"
+              onFocusCapture={(event) => {
+                const composer = event.target instanceof HTMLElement
+                  ? event.target.closest<HTMLElement>('.copilotKitInput')
+                  : null;
+                if (composer) applyComposerFocusStyle(composer, true);
+                window.requestAnimationFrame(() => {
+                  const activeComposer = document.activeElement instanceof HTMLElement
+                    ? document.activeElement.closest<HTMLElement>('.copilotKitInput')
+                    : null;
+                  if (activeComposer) applyComposerFocusStyle(activeComposer, true);
+                });
+              }}
+              onBlurCapture={(event) => {
+                const composer = event.target instanceof HTMLElement
+                  ? event.target.closest<HTMLElement>('.copilotKitInput')
+                  : null;
+                if (!composer) return;
+                window.requestAnimationFrame(() => {
+                  applyComposerFocusStyle(composer, composer.contains(document.activeElement));
+                });
+              }}
+            >
               <CopilotChat
                 className="ai-copilot-chat"
                 welcomeScreen={HvacCopilotWorkspaceWelcomeScreen}

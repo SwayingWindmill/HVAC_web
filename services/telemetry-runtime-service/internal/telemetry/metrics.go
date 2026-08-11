@@ -80,7 +80,7 @@ func (metrics *s2Metrics) observeRequest(path string, status int, elapsed time.D
 	}
 	outcome, reason := metricOutcome(status)
 	switch {
-	case path == InternalThingsBoardObservationPath:
+	case path == InternalSourceObservationPath:
 		if status < http.StatusOK || status >= http.StatusMultipleChoices {
 			metrics.observeIngest(outcome, reason)
 		}
@@ -114,7 +114,7 @@ func (metrics *s2Metrics) observeIngest(outcome, reason string) {
 	_ = metrics.registry.AddCounter("hvac_s2_ingest_records_total", "S2 source observations accepted or rejected.", map[string]string{"outcome": outcome, "reason_family": reason}, 1)
 }
 
-func (metrics *s2Metrics) observeSourceLag(sampledAt, receivedAt time.Time, outcome string) {
+func (metrics *s2Metrics) observeSourceLag(source, outcome string, sampledAt, receivedAt time.Time) {
 	if metrics == nil || metrics.registry == nil || sampledAt.IsZero() || receivedAt.IsZero() {
 		return
 	}
@@ -122,7 +122,7 @@ func (metrics *s2Metrics) observeSourceLag(sampledAt, receivedAt time.Time, outc
 	if lag < 0 {
 		lag = 0
 	}
-	_ = metrics.registry.ObserveHistogram("hvac_s2_source_lag_seconds", "ThingsBoard source-to-runtime lag.", map[string]string{"dependency": "thingsboard", "outcome": outcome}, lag.Seconds(), nil)
+	_ = metrics.registry.ObserveHistogram("hvac_s2_source_lag_seconds", "S2 source-to-runtime lag.", map[string]string{"dependency": source, "outcome": outcome}, lag.Seconds(), nil)
 }
 
 func (metrics *s2Metrics) observeSnapshot(snapshot telemetryapi.DeviceObservationSnapshot) {
@@ -161,6 +161,21 @@ func (metrics *s2Metrics) observeSnapshot(snapshot telemetryapi.DeviceObservatio
 		lateness = 0
 	}
 	_ = metrics.registry.ObserveHistogram("hvac_s2_presence_lateness_seconds", "Age of the latest accepted Presence signal.", map[string]string{"outcome": presenceOutcome, "reason_family": reason}, lateness.Seconds(), nil)
+}
+
+func (metrics *s2Metrics) observeDataQuality(receipt ObservationReceipt) {
+	if metrics == nil || metrics.registry == nil {
+		return
+	}
+	quality := strings.ToLower(strings.TrimSpace(string(receipt.Quality)))
+	if quality == "" {
+		quality = "unknown"
+	}
+	outcome := strings.ToLower(strings.TrimSpace(string(receipt.Status)))
+	if outcome == "" {
+		outcome = "unknown"
+	}
+	_ = metrics.registry.AddCounter("hvac_s2_data_quality_records_total", "S2 observations by bounded quality and acceptance outcome.", map[string]string{"quality": quality, "outcome": outcome}, 1)
 }
 
 func (metrics *s2Metrics) observeQuarantine(reason string) {

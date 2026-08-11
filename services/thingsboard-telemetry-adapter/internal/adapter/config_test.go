@@ -50,6 +50,18 @@ func TestConfigAcceptsLocalThingsBoardAndRequiresHTTPSForS2(t *testing.T) {
 	}
 }
 
+func TestConfigAcceptsDeepHistoricalLookbackWithinBound(t *testing.T) {
+	config := validConfig()
+	config.InitialLookback = "240h"
+	if err := config.Validate(); err != nil {
+		t.Fatalf("deep historical lookback rejected: %v", err)
+	}
+	config.InitialLookback = "241h"
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "240h") {
+		t.Fatalf("expected deep historical lookback bound error, got %v", err)
+	}
+}
+
 func TestDecodeConfigRejectsUnknownFields(t *testing.T) {
 	_, err := DecodeConfig(strings.NewReader(`{"schemaVersion":1,"unexpected":true}`))
 	if err == nil || !strings.Contains(err.Error(), "unknown field") {
@@ -83,7 +95,7 @@ func TestCentralPlantExampleConfigIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(config.Devices) != 6 {
-		t.Fatalf("expected six central-plant devices, got %d", len(config.Devices))
+	if len(config.Devices) != 7 {
+		t.Fatalf("expected seven central-plant devices, got %d", len(config.Devices))
 	}
 }

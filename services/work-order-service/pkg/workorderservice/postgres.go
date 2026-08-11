@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
@@ -193,6 +194,13 @@ func (store *PostgresStore) Get(ctx context.Context, organizationID, siteID, wor
 }
 
 func (store *PostgresStore) beginReadTransaction(ctx context.Context, organizationID string) (pgx.Tx, error) {
+	tenantID, ok := identitycontext.TenantIDFromContext(ctx)
+	if !ok || !workordermodel.IsUUIDv7(tenantID) || !workordermodel.IsUUIDv7(organizationID) {
+		return nil, ErrUnavailable
+	}
+	if err := ensureWorkOrderTenantBinding(ctx, store.readPool, "s5_work_order_runtime", tenantID, organizationID); err != nil {
+		return nil, err
+	}
 	tx, err := store.readPool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return nil, fmt.Errorf("begin Work Order transaction: %w", err)
@@ -201,11 +209,46 @@ func (store *PostgresStore) beginReadTransaction(ctx context.Context, organizati
 		_ = tx.Rollback(ctx)
 		return nil, fmt.Errorf("activate Work Order read role: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, organizationID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true), set_config('app.tenant_id', $2, true)`, organizationID, tenantID); err != nil {
 		_ = tx.Rollback(ctx)
-		return nil, fmt.Errorf("activate Work Order Organization scope: %w", err)
+		return nil, fmt.Errorf("activate Work Order Tenant/Organization scope: %w", err)
 	}
 	return tx, nil
+}
+
+func ensureWorkOrderTenantBinding(ctx context.Context, pool *pgxpool.Pool, role, tenantID, organizationID string) error {
+	if pool == nil || !workordermodel.IsUUIDv7(tenantID) || !workordermodel.IsUUIDv7(organizationID) {
+		return ErrUnavailable
+	}
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadWrite})
+	if err != nil {
+		return fmt.Errorf("begin Work Order Tenant binding transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE `+role); err != nil {
+		return fmt.Errorf("activate Work Order Tenant binding role: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true), set_config('app.tenant_id', $2, true)`, organizationID, tenantID); err != nil {
+		return fmt.Errorf("activate Work Order Tenant binding scope: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO work_order_runtime.organization_tenant_scope (organization_id, tenant_id, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, now(), now())
+ON CONFLICT (organization_id) DO NOTHING
+`, organizationID, tenantID); err != nil {
+		return fmt.Errorf("bind Work Order Organization to Tenant: %w", err)
+	}
+	var storedTenantID string
+	if err := tx.QueryRow(ctx, `SELECT tenant_id::text FROM work_order_runtime.organization_tenant_scope WHERE organization_id = $1::uuid`, organizationID).Scan(&storedTenantID); err != nil {
+		return fmt.Errorf("read Work Order Organization Tenant binding: %w", err)
+	}
+	if storedTenantID != tenantID {
+		return ErrUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit Work Order Tenant binding: %w", err)
+	}
+	return nil
 }
 
 func getCurrentRecord(ctx context.Context, tx pgx.Tx, organizationID, siteID, workOrderID string) (currentRecord, error) {

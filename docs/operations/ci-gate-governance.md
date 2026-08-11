@@ -25,9 +25,9 @@ The main sources of excess are broad root-file triggers, permanent Ticket workfl
 | Layer | Purpose | Typical checks | Trigger |
 |---|---|---|---|
 | Ticket/local | Fast implementation feedback | focused unit, contract, compile, one database or browser smoke | developer command |
-| Pull request | Protect the affected production boundary | static checks, affected unit/integration, narrow browser coverage | path-filtered PR |
+| Pull request | Protect the affected production boundary | static checks, affected contracts and units | central `PR Gates` workflow |
 | Main/nightly | Detect cross-domain and compatibility regressions | full browser, multi-database, Docker topology, broad security suites | affected `main`, schedule or dispatch |
-| Release | Prove a release candidate | production images, SBOM, signatures, provenance, capacity, Kind, cutover and rollback | tag, release candidate or dispatch |
+| Release | Prove a release candidate | production images, SBOM, signatures, provenance, capacity, Kind, cutover and rollback | explicit release-candidate dispatch or tag |
 
 ## Stable capability suites
 
@@ -46,28 +46,18 @@ Ticket identifiers are historical evidence, not permanent CI architecture. Durab
 ### Phase 1: governance and release separation
 
 - Codify the gate rules in `AGENTS.md`.
-- Keep release-specific PR validation lightweight.
-- Run formal evidence, images, capacity and rollout jobs only on affected `main`, a tag or explicit dispatch.
+- Keep one central PR workflow as the only automatic pull-request gate owner.
+- Keep capability workflows for affected `main`, nightly/manual regression and focused developer execution instead of duplicating them on every pull request.
+- Run formal evidence, images, capacity and rollout jobs only for an explicit release candidate or release tag.
 - Keep Realtime PostgreSQL durability evidence inside the stable `realtime-backend` capability: `s2:realtime:postgres` replaces the generic baseline fixture and writes `out/s2-realtime-backend/realtime-postgres.json` without adding a second database job.
 
 ### Initial implementation
 
-The first migration slice separates S2 release-asset validation from full release certification:
+S2 release-asset validation is owned by the central `pr / contracts` profile. Changes classified as S2 run `s2:release:check` together with topology and contract generation checks, so release manifests can drift neither silently nor through a separate PR workflow.
 
-| Field | Value |
-|---|---|
-| Risk prevented | release manifests, evidence builders or capacity-attestation tests drift before merge |
-| Owner | telemetry release |
-| PR gate | `S2 Telemetry Release Assets / verify` |
-| Trigger | S2 release workflows, deployment assets, named release scripts, `package.json` and `package-lock.json` |
-| Execution layer | pull request |
-| Expected runtime | under 5 minutes on a warm cache |
-| Evidence | release-asset, release-evidence and capacity test output |
-| Retirement | merge into the future stable `pr / contracts` or `telemetry-release-assets` aggregate |
+The full `S2 Telemetry Production Release Certification` workflow is explicit-only. PostgreSQL, ClickHouse, transport, capacity, browser, image, vulnerability, SBOM, provenance, Kind rollout and rollback evidence is produced when a release candidate is intentionally certified, not after every ordinary merge to `main`.
 
-The full `S2 Telemetry Production Release Certification` workflow no longer runs on pull requests. It runs after affected changes land on `main` or through explicit dispatch, preserving all existing PostgreSQL, ClickHouse, transport, capacity, browser, image, vulnerability, SBOM, provenance, Kind rollout and rollback assertions.
-
-Because ClickHouse history integration previously existed only inside that release workflow, the migration adds the stable `S2 Telemetry History / verify` PR gate. It runs `npm run s2:history` only when telemetry contracts, S2 deployment assets, the telemetry runtime service or the owned history scripts change. This preserves the transactional outbox, retry deduplication, hourly rollup and projector integration coverage without running the full release matrix.
+ClickHouse, PostgreSQL, Docker-backed, and other durable integrations remain available through local capability commands and the nightly full regression. They do not block ordinary pull requests; the PR layer stops at static, contracts, and affected unit coverage, while durable environment certification runs after merge or by explicit dispatch.
 
 ### Phase 2: trigger precision
 
@@ -128,12 +118,10 @@ Long capability aggregations keep their stable npm names but delegate to `script
 - `pr / static`
 - `pr / contracts`
 - `pr / affected-unit`
-- `pr / affected-integration`
-- `pr / affected-browser`
 
-The workflow has no path filter, so all five check names exist on every pull request. Conditional execution jobs may be skipped when a gate has no affected profiles, but the aggregate result still reports success or propagates the execution failure. Browser profiles retain their required platform boundary: RMS audits run on Windows, while S0, S1 and S2 browser audits run on Linux so Docker-backed fixtures remain available. `scripts/classify-pr-gates.mjs` owns path classification and writes `out/pr-gates/classification.json`; `scripts/domain-task-matrix.mjs` owns the fixed command and domain-profile mapping; `scripts/run-pr-gate.mjs` only executes the selected gate profiles. Unknown paths, workflow changes, central matrix changes and root `package.json` changes fail closed to the broad suite. A `package-lock.json` change selects compile and unit coverage without automatically launching database or browser suites.
+The workflow has no path filter, so all three required check names exist on every pull request. Conditional contract and unit execution jobs may be skipped when no affected profiles are selected, but the aggregate result still reports success or propagates the execution failure. Database integration and browser automation are not pull-request merge gates; full integration and Windows/Linux browser regression run in nightly/manual suites. `scripts/classify-pr-gates.mjs` owns path classification and writes `out/pr-gates/classification.json`; `scripts/domain-task-matrix.mjs` owns the fixed command and domain-profile mapping; `scripts/run-pr-gate.mjs` executes selected contract and unit profiles for PRs while retaining integration/browser profiles for nightly and local execution. Unknown paths, workflow changes, central matrix changes and root `package.json` changes fail closed to broad contract/unit coverage without launching database or browser suites. A `package-lock.json` change selects compile and unit coverage only.
 
-Root package manifests are classified only by `PR Gates`. The 36 legacy domain workflows no longer list `package.json` or `package-lock.json` in their `push.paths` or `pull_request.paths`, eliminating 116 broad trigger entries while preserving each workflow's domain-specific paths and npm cache configuration. `scripts/test-pr-gate-classifier.mjs` scans every legacy workflow trigger block and fails if either root manifest is reintroduced.
+Root package manifests and all automatic pull-request execution are owned by `PR Gates`. Legacy capability workflows keep their affected-`main` and manual/scheduled behavior but disable their `pull_request` event with an all-branch ignore, preventing duplicate PR fan-out while retaining the existing workflow definitions for post-merge regression and focused certification. `scripts/test-pr-gate-classifier.mjs` enforces both rules.
 
 ## Gate acceptance record
 

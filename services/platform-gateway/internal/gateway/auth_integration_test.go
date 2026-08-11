@@ -94,9 +94,25 @@ func TestAuthenticatedPrincipalLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	logoutResponse.Body.Close()
+	defer logoutResponse.Body.Close()
 	if logoutResponse.StatusCode != http.StatusNoContent {
 		t.Fatalf("logout status = %d", logoutResponse.StatusCode)
+	}
+	providerLogoutURL, err := url.Parse(logoutResponse.Header.Get("Location"))
+	if err != nil || providerLogoutURL.Scheme == "" || providerLogoutURL.Host == "" {
+		t.Fatalf("logout did not return a valid provider redirect: %q (%v)", logoutResponse.Header.Get("Location"), err)
+	}
+	if providerLogoutURL.Scheme+"://"+providerLogoutURL.Host != harness.oidcServer.URL || providerLogoutURL.Path != "/session/end" {
+		t.Fatalf("logout provider endpoint = %s", providerLogoutURL)
+	}
+	if providerLogoutURL.Query().Get("client_id") != "hvac-web-s0" {
+		t.Fatalf("logout client_id = %q", providerLogoutURL.Query().Get("client_id"))
+	}
+	if providerLogoutURL.Query().Get("post_logout_redirect_uri") != harness.gatewayURL+"/?logged_out=1" {
+		t.Fatalf("logout post_logout_redirect_uri = %q", providerLogoutURL.Query().Get("post_logout_redirect_uri"))
+	}
+	if providerLogoutURL.Query().Has("id_token_hint") || strings.Contains(providerLogoutURL.RawQuery, "token") {
+		t.Fatalf("logout URL leaked token material: %s", providerLogoutURL)
 	}
 
 	afterLogout, err := client.Get(harness.gatewayURL + platformapi.GetCurrentPrincipalPath)
@@ -105,6 +121,22 @@ func TestAuthenticatedPrincipalLoop(t *testing.T) {
 	}
 	defer afterLogout.Body.Close()
 	assertProblemCode(t, afterLogout, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED")
+}
+
+func TestModernLogtoIDTokenIsAccepted(t *testing.T) {
+	harness := newAuthHarness(t)
+	client := harness.browserClient(t)
+	principal, _ := loginAndReadPrincipal(t, client, harness.gatewayURL, "logto-modern")
+
+	if principal.Principal.Subject != "fixture-user" {
+		t.Fatalf("modern Logto principal was not accepted: %#v", principal.Principal)
+	}
+	if principal.Context.ActingOrganizationID != "org-fixture-01" {
+		t.Fatalf("deployment-owned Organization fallback was not applied: %#v", principal.Context)
+	}
+	if principal.Principal.Roles == nil || len(principal.Principal.Roles) != 0 {
+		t.Fatalf("role-free Logto principal must publish an empty roles array: %#v", principal.Principal.Roles)
+	}
 }
 
 func TestGatewayRejectsMalformedIAMCapabilityResponse(t *testing.T) {
@@ -156,6 +188,7 @@ func TestOIDCRejectedIdentityPaths(t *testing.T) {
 	harness := newAuthHarness(t)
 	cases := []struct{ hint, code string }{
 		{"invalid-issuer", "OIDC_ISSUER_INVALID"},
+		{"callback-issuer-mismatch", "OIDC_ISSUER_INVALID"},
 		{"invalid-audience", "OIDC_AUDIENCE_INVALID"},
 		{"invalid-token-type", "OIDC_TOKEN_TYPE_INVALID"},
 		{"invalid-signature", "OIDC_SIGNATURE_INVALID"},
@@ -373,7 +406,8 @@ func newAuthHarnessWithIAMFactory(t *testing.T, factory func(clientSPIFFEID stri
 		Build:  platformapi.BuildInfo{Service: "platform-gateway", Version: "test", Commit: "test", BuiltAt: "test"},
 		Identity: &gateway.IdentityConfig{
 			OIDCIssuer: oidcServer.URL, OIDCClientID: "hvac-web-s0", OIDCRedirectURI: redirectURI, PublicOrigin: gatewayURL,
-			IAMURL: iamServer.URL, IAMAudience: "iam-service", ExecutingWorkloadSPIFFE: bundle.ClientSPIFFEID, PolicyRevision: "policy-v1",
+			DefaultActingOrganizationID: "org-fixture-01",
+			IAMURL:                      iamServer.URL, IAMAudience: "iam-service", ExecutingWorkloadSPIFFE: bundle.ClientSPIFFEID, PolicyRevision: "policy-v1",
 			OIDCHTTPClient: oidcServer.Client(), IAMHTTPClient: &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: clientTLS}},
 			DelegationSigner: signer, TokenEncryptionKey: bytes.Repeat([]byte{0x42}, 32), SessionTTL: 10 * time.Minute, StateTTL: time.Minute, DelegationTTL: 30 * time.Second, RevocationObjective: time.Second,
 		},

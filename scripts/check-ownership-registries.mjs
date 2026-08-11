@@ -30,6 +30,7 @@ const s1MigratedPaths = new Set([
 ]);
 const s1NativeAdditivePaths = new Set([
   '/api/v1/sites/{siteId}/device-bindings',
+  '/api/v1/sites/{siteId}/asset-model',
 ]);
 const s1RegistryPaths = new Set([...s1MigratedPaths, ...s1NativeAdditivePaths]);
 const expectedMigrationPhases = [
@@ -319,7 +320,7 @@ const phaseExpectations = [
   { revision: 3, routeRevision: 2, phase: 'LEGACY_PRIMARY_GO_SHADOW', owner: 'legacy-hvac-backend', compatibility: 'legacy-read', rolloutMode: 'percentage', percentage: 100, fallbackOwner: 'platform-core-service', readOnlyFallback: true },
   { revision: 4, routeRevision: 3, phase: 'GO_CANARY_LEGACY_SHADOW', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'percentage', percentage: 10, fallbackOwner: 'legacy-hvac-backend', readOnlyFallback: true },
   { revision: 5, routeRevision: 4, phase: 'GO_PRIMARY_LEGACY_READ_FALLBACK', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'all', readFallbackOwner: 'legacy-hvac-backend', readOnlyFallback: true },
-  { revision: 7, routeRevision: 5, phase: 'GO_PRIMARY', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'all', readOnlyFallback: false },
+  { revision: 8, routeRevision: 5, phase: 'GO_PRIMARY', owner: 'platform-core-service', compatibility: 'native', rolloutMode: 'all', readOnlyFallback: false },
 ];
 for (let index = 0; index < phaseRegistries.length; index += 1) {
   const registry = phaseRegistries[index];

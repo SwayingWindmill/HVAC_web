@@ -30,9 +30,12 @@ spec:
           imagePullPolicy: Never
           env:
             - { name: S3_LOCAL_DATABASE_URL_FILE, value: /var/run/s3-local/database/command-service-dsn }
+            - { name: S3_LOCAL_TENANT_ID, value: 018f3d00-0000-7000-8000-000000000001 }
             - { name: S3_LOCAL_ORGANIZATION_ID, value: 018f3e00-0000-7000-8000-000000000001 }
             - { name: S3_LOCAL_SITE_ID, value: 018f3e00-1000-7000-8000-000000000001 }
             - { name: S3_LOCAL_DEVICE_ID, value: 018f3e00-3000-7000-8000-000000000001 }
+            - { name: S3_LOCAL_COMMAND_POINT_ID, value: 018f3e00-4000-7000-8000-000000000001 }
+            - { name: S3_LOCAL_VERIFICATION_POINT_KEY, value: zone.temperature_setpoint }
             - { name: S3_LOCAL_SETPOINT_C, value: "24" }
             - { name: S3_LOCAL_IDEMPOTENCY_KEY, value: s3-local-smoke-v1 }
           resources:

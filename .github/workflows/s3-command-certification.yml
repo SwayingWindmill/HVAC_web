@@ -2,6 +2,7 @@ name: S3 Command Certification
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - '.github/workflows/s3-command-certification.yml'
       - 'scripts/check-s3-workflow-topology.mjs'

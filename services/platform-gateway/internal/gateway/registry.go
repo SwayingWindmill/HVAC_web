@@ -190,6 +190,15 @@ func (h *handler) ListSiteDeviceBindings(writer http.ResponseWriter, request *ht
 	}, params)
 }
 
+func (h *handler) GetSiteAssetModel(writer http.ResponseWriter, request *http.Request, siteID string) {
+	h.serveRegistry(writer, request, publicRegistryRoute{
+		template:     platformapi.GetSiteAssetModelPathTemplate,
+		internalPath: "/internal/v1/registry/sites/" + siteID + "/asset-model",
+		action:       registryauth.ActionAssetModelRead,
+		scopeID:      siteID,
+	}, platformapi.ListRegistryParams{})
+}
+
 func (h *handler) GetDevice(writer http.ResponseWriter, request *http.Request, deviceID string) {
 	h.serveRegistry(writer, request, publicRegistryRoute{
 		template:     platformapi.GetDevicePathTemplate,
@@ -700,6 +709,7 @@ func matchPublicRegistryRoute(path string) (publicRegistryRoute, string, bool) {
 		{platformapi.GetEquipmentPathTemplate, "{equipmentId}", registryauth.ActionEquipmentRead, func(id string) string { return "/internal/v1/registry/equipment/" + id }, false},
 		{platformapi.ListSiteDevicesPathTemplate, "{siteId}", registryauth.ActionDeviceList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/devices" }, true},
 		{platformapi.ListSiteDeviceBindingsPathTemplate, "{siteId}", registryauth.ActionDeviceBindingList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/device-bindings" }, true},
+		{platformapi.GetSiteAssetModelPathTemplate, "{siteId}", registryauth.ActionAssetModelRead, func(id string) string { return "/internal/v1/registry/sites/" + id + "/asset-model" }, false},
 		{platformapi.GetDevicePathTemplate, "{deviceId}", registryauth.ActionDeviceRead, func(id string) string { return "/internal/v1/registry/devices/" + id }, false},
 	}
 	for _, pattern := range patterns {
@@ -749,6 +759,8 @@ func dispatchRegistryRoute(h *handler, writer http.ResponseWriter, request *http
 		h.ListSiteDevices(writer, request, id, params)
 	case registryauth.ActionDeviceBindingList:
 		h.ListSiteDeviceBindings(writer, request, id, params)
+	case registryauth.ActionAssetModelRead:
+		h.GetSiteAssetModel(writer, request, id)
 	case registryauth.ActionDeviceRead:
 		h.GetDevice(writer, request, id)
 	default:
@@ -775,6 +787,10 @@ func canonicalRegistrySuccess(action registryauth.Action, scopeID string, raw []
 	case registryauth.ActionDeviceBindingList:
 		return decodeCanonical[platformapi.DeviceBindingCollection](raw, func(value platformapi.DeviceBindingCollection) error {
 			return validateDeviceBindingCollection(value, scopeID)
+		})
+	case registryauth.ActionAssetModelRead:
+		return decodeCanonical[platformapi.SiteAssetModel](raw, func(value platformapi.SiteAssetModel) error {
+			return validateSiteAssetModel(value, scopeID)
 		})
 	case registryauth.ActionDeviceRead:
 		return decodeCanonical[platformapi.Device](raw, validateDevice)
@@ -847,36 +863,224 @@ func validateDeviceBindingCollection(value platformapi.DeviceBindingCollection, 
 	return validateNextCursor(value.NextCursor)
 }
 
+func (h *handler) resolveAuthoritativeSiteForDomain(request *http.Request, session bffSession, siteID string) (platformapi.Site, error) {
+	if request == nil || h.registry == nil || strings.TrimSpace(h.registry.coreBaseURL) == "" || h.registry.coreHTTPClient == nil || !isLowerUUIDv7(siteID) {
+		return platformapi.Site{}, errors.New("authoritative Registry Site lookup is unavailable")
+	}
+	authorization, failure := h.authorizeRegistry(request.Context(), session, registryauth.ActionSiteRead)
+	if failure != nil {
+		return platformapi.Site{}, errors.New("Registry Site authorization failed")
+	}
+	publicPath := strings.Replace(platformapi.GetSitePathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	route, _, matches := matchPublicRegistryRoute(publicPath)
+	if !matches {
+		return platformapi.Site{}, errors.New("Registry Site route is unavailable")
+	}
+	outer := routeDecisionFromContext(request.Context())
+	decision := ownershipregistry.Decision{
+		RouteKey:          http.MethodGet + " " + route.template,
+		PathTemplate:      route.template,
+		DeclaredOwner:     ownershipregistry.OwnerCore,
+		SelectedOwner:     ownershipregistry.OwnerCore,
+		RegistryRevision:  outer.RegistryRevision,
+		RouteRevision:     1,
+		CompatibilityMode: "native",
+	}
+	if h.routeManager != nil {
+		resolved, err := h.routeManager.Current().Resolve(http.MethodGet, publicPath, session.ActingOrganizationID)
+		if err != nil || resolved.DeclaredOwner != ownershipregistry.OwnerCore || resolved.SelectedOwner != ownershipregistry.OwnerCore || resolved.ReadFallbackOwner != "" || resolved.ShadowOwner != "" {
+			return platformapi.Site{}, errors.New("Registry Site route ownership is unavailable")
+		}
+		decision = resolved
+	}
+	result := h.executeCoreRegistry(request.Context(), route, "", authorization.coreGrant, decision)
+	if result.status != http.StatusOK {
+		return platformapi.Site{}, errors.New("Registry Site lookup failed")
+	}
+	var site platformapi.Site
+	decoder := json.NewDecoder(bytes.NewReader(result.body))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&site) != nil || ensureRegistryJSONEOF(decoder) != nil || validateSite(site) != nil || site.ID != siteID || site.OwningOrganizationID != session.ActingOrganizationID || !isLowerUUIDv7(site.TenantID) {
+		return platformapi.Site{}, errors.New("Registry returned an invalid authoritative Site")
+	}
+	return site, nil
+}
+
+func validateSiteAssetModel(value platformapi.SiteAssetModel, expectedSiteID string) error {
+	if value.SchemaVersion != 1 || !isLowerUUIDv7(value.TenantID) || value.SiteID != expectedSiteID || !isLowerUUIDv7(expectedSiteID) {
+		return errors.New("invalid Site asset model scope")
+	}
+	identities := map[string]string{expectedSiteID: "SITE"}
+	for _, item := range value.Areas {
+		if err := validateArea(item, expectedSiteID); err != nil {
+			return err
+		}
+		if item.TenantID != value.TenantID {
+			return errors.New("Area escaped Site asset model Tenant scope")
+		}
+		if _, duplicate := identities[item.ID]; duplicate {
+			return errors.New("duplicate Site asset model identity")
+		}
+		identities[item.ID] = "AREA"
+	}
+	for _, item := range value.Equipment {
+		if err := validateEquipment(item); err != nil || item.SiteID != expectedSiteID || item.TenantID != value.TenantID {
+			return errors.New("invalid Site asset model Equipment")
+		}
+		if _, duplicate := identities[item.ID]; duplicate {
+			return errors.New("duplicate Site asset model identity")
+		}
+		identities[item.ID] = "EQUIPMENT"
+	}
+	for _, item := range value.Devices {
+		if err := validateDevice(item); err != nil || item.SiteID != expectedSiteID || item.TenantID != value.TenantID {
+			return errors.New("invalid Site asset model Device")
+		}
+		if _, duplicate := identities[item.ID]; duplicate {
+			return errors.New("duplicate Site asset model identity")
+		}
+		identities[item.ID] = "DEVICE"
+	}
+	for _, item := range value.Sensors {
+		if err := validateSensor(item, expectedSiteID); err != nil {
+			return err
+		}
+		if item.TenantID != value.TenantID {
+			return errors.New("Sensor escaped Site asset model Tenant scope")
+		}
+		if _, duplicate := identities[item.ID]; duplicate {
+			return errors.New("duplicate Site asset model identity")
+		}
+		identities[item.ID] = "SENSOR"
+	}
+	pointByID := make(map[string]platformapi.TelemetryPoint, len(value.TelemetryPoints))
+	for _, item := range value.TelemetryPoints {
+		if err := validateTelemetryPoint(item, expectedSiteID); err != nil {
+			return err
+		}
+		if item.TenantID != value.TenantID {
+			return errors.New("Telemetry Point escaped Site asset model Tenant scope")
+		}
+		if _, duplicate := identities[item.ID]; duplicate {
+			return errors.New("duplicate Site asset model identity")
+		}
+		if identities[item.ReportingDeviceID] != "DEVICE" {
+			return errors.New("Telemetry Point references a Device outside the Site asset model")
+		}
+		if item.SensorID != nil && identities[*item.SensorID] != "SENSOR" {
+			return errors.New("Telemetry Point references a Sensor outside the Site asset model")
+		}
+		identities[item.ID] = "POINT"
+		pointByID[item.ID] = item
+	}
+	for _, area := range value.Areas {
+		if area.ParentAreaID != nil && identities[*area.ParentAreaID] != "AREA" {
+			return errors.New("Area parent escaped the Site asset model")
+		}
+	}
+	for _, relationship := range value.Relationships {
+		if err := validateAssetRelationship(relationship, expectedSiteID); err != nil {
+			return err
+		}
+		if relationship.TenantID != value.TenantID {
+			return errors.New("Asset relationship escaped Site asset model Tenant scope")
+		}
+		if identities[relationship.FromID] != relationship.FromType || identities[relationship.ToID] != relationship.ToType {
+			return errors.New("Asset relationship references an unknown or mismatched identity")
+		}
+	}
+	for _, input := range value.CalculatedPointInputs {
+		if input.TenantID != value.TenantID || !isLowerUUIDv7(input.TenantID) || input.SiteID != expectedSiteID || !isLowerUUIDv7(input.OwningOrganizationID) || input.Ordinal < 0 || !validRegistryString(input.InputRole, 128) || !validRegistryString(input.FormulaRevision, 256) {
+			return errors.New("invalid Calculated Point input")
+		}
+		target, targetOK := pointByID[input.CalculatedPointID]
+		_, inputOK := pointByID[input.InputPointID]
+		if !targetOK || !inputOK || target.PointKind != "CALCULATED" || target.FormulaRevision == nil || *target.FormulaRevision != input.FormulaRevision {
+			return errors.New("Calculated Point input provenance is invalid")
+		}
+	}
+	calculated := 0
+	for _, point := range value.TelemetryPoints {
+		if point.PointKind == "CALCULATED" {
+			calculated++
+		}
+	}
+	if value.Counts.Areas != len(value.Areas) || value.Counts.Equipment != len(value.Equipment) || value.Counts.DeviceEndpoints != len(value.Devices) || value.Counts.Sensors != len(value.Sensors) || value.Counts.TelemetryPoints != len(value.TelemetryPoints) || value.Counts.CalculatedPoints != calculated || value.Counts.IndependentSensorDevices < 0 {
+		return errors.New("Site asset model counts do not match the payload")
+	}
+	return nil
+}
+
+func validateArea(value platformapi.Area, expectedSiteID string) error {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || value.SiteID != expectedSiteID || !validRegistryString(value.Code, 64) || !validRegistryString(value.DisplayName, 256) || !oneOf(value.AreaType, "CAMPUS", "BUILDING", "FLOOR", "ZONE", "ROOM", "PLANT_ROOM", "ROOFTOP", "OUTDOOR", "TENANT_SPACE", "OTHER") || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+		return errors.New("invalid Area response")
+	}
+	if value.ParentAreaID != nil && !isLowerUUIDv7(*value.ParentAreaID) {
+		return errors.New("invalid Area parent")
+	}
+	return nil
+}
+
+func validateSensor(value platformapi.Sensor, expectedSiteID string) error {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || value.SiteID != expectedSiteID || !validRegistryString(value.Code, 256) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.SensorType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+		return errors.New("invalid Sensor response")
+	}
+	if value.CalibrationDueAt != nil && !validRegistryInstant(*value.CalibrationDueAt) {
+		return errors.New("invalid Sensor calibration due time")
+	}
+	return nil
+}
+
+func validateTelemetryPoint(value platformapi.TelemetryPoint, expectedSiteID string) error {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || value.SiteID != expectedSiteID || !isLowerUUIDv7(value.ReportingDeviceID) || !validRegistryString(value.PointKey, 128) || !validRegistryString(value.SourceKey, 128) || !validRegistryString(value.DisplayName, 256) || !oneOf(value.PointKind, "MEASURED", "CALCULATED", "STATE", "COMMAND", "FEEDBACK") || !oneOf(value.ValueType, "BOOLEAN", "NUMBER", "STRING", "JSON") || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || value.SampleIntervalMS < 100 || value.PublishIntervalMS < value.SampleIntervalMS || value.StaleAfterMS < value.PublishIntervalMS || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+		return errors.New("invalid Telemetry Point response")
+	}
+	if value.SensorID != nil && !isLowerUUIDv7(*value.SensorID) {
+		return errors.New("invalid Telemetry Point Sensor")
+	}
+	if (value.PointKind == "CALCULATED") != (value.FormulaRevision != nil) || value.Writable != (value.PointKind == "COMMAND") {
+		return errors.New("invalid Telemetry Point authority")
+	}
+	return nil
+}
+
+func validateAssetRelationship(value platformapi.AssetRelationship, expectedSiteID string) error {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || value.SiteID != expectedSiteID || !isLowerUUIDv7(value.FromID) || !isLowerUUIDv7(value.ToID) || !oneOf(value.FromType, "EQUIPMENT", "DEVICE", "SENSOR", "POINT") || !oneOf(value.ToType, "SITE", "AREA", "EQUIPMENT", "DEVICE", "SENSOR", "POINT") || !validRegistryString(value.Role, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || !validRegistryInstant(value.ValidFrom) || (value.ValidTo != nil && !validRegistryInstant(*value.ValidTo)) || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+		return errors.New("invalid Asset relationship")
+	}
+	return nil
+}
+
 func validateOrganization(value platformapi.Organization) error {
-	if !isLowerUUIDv7(value.ID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !oneOf(value.Status, "ACTIVE", "SUSPENDED", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !oneOf(value.Status, "ACTIVE", "SUSPENDED", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
 		return errors.New("invalid Organization response")
 	}
 	return nil
 }
 
 func validateSite(value platformapi.Site) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.OwningOrganizationID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryTimezone(value.Timezone) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryTimezone(value.Timezone) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
 		return errors.New("invalid Site response")
 	}
 	return nil
 }
 
 func validateEquipment(value platformapi.Equipment) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.OwningOrganizationID) || !isLowerUUIDv7(value.SiteID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.EquipmentType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || !isLowerUUIDv7(value.SiteID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.EquipmentType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
 		return errors.New("invalid Equipment response")
 	}
 	return nil
 }
 
 func validateDevice(value platformapi.Device) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.OwningOrganizationID) || !isLowerUUIDv7(value.SiteID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.DeviceType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || !isLowerUUIDv7(value.SiteID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.DeviceType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
 		return errors.New("invalid Device response")
 	}
 	return nil
 }
 
 func validateDeviceBinding(value platformapi.DeviceBinding) error {
-	invalidIdentity := !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.OwningOrganizationID) || !isLowerUUIDv7(value.SiteID) || !isLowerUUIDv7(value.DeviceID) || !isLowerUUIDv7(value.EquipmentID)
+	invalidIdentity := !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || !isLowerUUIDv7(value.SiteID) || !isLowerUUIDv7(value.DeviceID) || !isLowerUUIDv7(value.EquipmentID)
 	invalidLifecycle := !validRegistryString(value.BindingRole, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED")
 	invalidValidity := !validRegistryInstant(value.ValidFrom) || (value.ValidTo != nil && !validRegistryInstant(*value.ValidTo))
 	invalidRevision := value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt)

@@ -8,6 +8,12 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
 
+const setpointCapabilityRevision = "capability:set-temperature-setpoint:v1"
+
+func testFloat64Pointer(value float64) *float64 {
+	return &value
+}
+
 func TestSubmitIsIdempotentForSamePayload(t *testing.T) {
 	service := New(fixedClock())
 	request := validRequest()
@@ -37,7 +43,7 @@ func TestSubmitRejectsIdempotencyPayloadConflict(t *testing.T) {
 	if _, err := service.Submit(request); err != nil {
 		t.Fatalf("first submit failed: %v", err)
 	}
-	request.SetpointC = 25
+	request.Parameters[commandmodel.ParameterSetpointC] = 25
 	_, err := service.Submit(request)
 	if !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("expected idempotency conflict, got %v", err)
@@ -145,7 +151,7 @@ func TestAcknowledgedCommandRequiresReportedStateVerification(t *testing.T) {
 		Reported: commandmodel.ReportedStateEvidence{
 			OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
 			EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
-			BusinessRevision: 18, ReportedSetpointC: 24, ObservedAt: clock().Add(time.Second),
+			BusinessRevision: 18, ReportedValue: commandmodel.NumberScalar(24), ObservedAt: clock().Add(time.Second),
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -172,7 +178,7 @@ func TestReportedStateMismatchBecomesOutcomeUnknown(t *testing.T) {
 	}
 	if err := service.ResolveVerification(verification, commandmodel.VerificationResult{
 		Outcome: commandmodel.VerificationMismatch, EvidenceID: "s2-reported-state-mismatch",
-		Reported: commandmodel.ReportedStateEvidence{OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1", BusinessRevision: 18, ReportedSetpointC: 21, ObservedAt: clock().Add(time.Second)},
+		Reported: commandmodel.ReportedStateEvidence{OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1", BusinessRevision: 18, ReportedValue: commandmodel.NumberScalar(21), ObservedAt: clock().Add(time.Second)},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -204,21 +210,24 @@ func TestConnectorCannotDeclareReportedStateVerified(t *testing.T) {
 
 func validRequest() commandmodel.SubmitRequest {
 	return commandmodel.SubmitRequest{
+		TenantID:       "tenant-1",
 		OrganizationID: "org-1",
 		SiteID:         "site-1",
 		DeviceID:       "device-1",
+		PointID:        "point-1",
 		PrincipalID:    "principal-1",
 		IdempotencyKey: "request-1",
-		Capability:     commandmodel.CapabilitySetTemperatureSetpoint,
-		SetpointC:      24,
+		Capability:           commandmodel.CapabilitySetTemperatureSetpoint,
+		Parameters:           commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24},
+		VerificationPointKey: "zone.temperature_setpoint",
 		CurrentState: commandmodel.CurrentStateEvidence{
 			EvaluationAvailability: "AVAILABLE",
 			Presence:               "ONLINE",
 			Readiness:              "CURRENT",
 			Quality:                "GOOD",
-			BusinessRevision:       17,
-			CurrentTemperatureC:    23,
-			ObservedAt:             time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
+			BusinessRevision: 17,
+			CurrentValue:     testFloat64Pointer(23),
+			ObservedAt:       time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
 		},
 		Authorization: commandmodel.AuthorizationSnapshot{
 			GrantID: "grant-1", PolicyRevision: "command-policy-1", Purpose: commandmodel.AuthorizationCommandSubmit,

@@ -264,11 +264,13 @@ func TestIAMDeviceBindingListRequiresBothConstituentReadActions(t *testing.T) {
 				Status:        iam.FactStatusActive,
 			},
 			Memberships: []iam.OrganizationMembership{{
+				TenantID:       iam.S1FixtureTenantAID,
 				OrganizationID: iam.S1FixtureOwnerAOrganizationID,
 				Status:         iam.FactStatusActive,
 				ValidFrom:      validFrom,
 			}},
 			RoleBindings: []iam.RoleBinding{{
+				TenantID:       iam.S1FixtureTenantAID,
 				OrganizationID: iam.S1FixtureOwnerAOrganizationID,
 				Actions:        actions,
 				Effect:         iam.BindingEffectAllow,
@@ -282,8 +284,8 @@ func TestIAMDeviceBindingListRequiresBothConstituentReadActions(t *testing.T) {
 	t.Run("actions may be aggregated across effective role bindings", func(t *testing.T) {
 		splitFacts := facts(nil, nil)
 		splitFacts.RoleBindings = []iam.RoleBinding{
-			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, Actions: []registryauth.Action{registryauth.ActionEquipmentList}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: validFrom},
-			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, Actions: []registryauth.Action{registryauth.ActionDeviceList}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: validFrom},
+			{TenantID: iam.S1FixtureTenantAID, OrganizationID: iam.S1FixtureOwnerAOrganizationID, Actions: []registryauth.Action{registryauth.ActionEquipmentList}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: validFrom},
+			{TenantID: iam.S1FixtureTenantAID, OrganizationID: iam.S1FixtureOwnerAOrganizationID, Actions: []registryauth.Action{registryauth.ActionDeviceList}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: validFrom},
 		}
 		harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
 			config.AuthorizationStore = fixedAuthorizationStore{facts: splitFacts}
@@ -307,6 +309,7 @@ func TestIAMDeviceBindingListRequiresBothConstituentReadActions(t *testing.T) {
 
 	t.Run("a deny on either constituent action denies relationships", func(t *testing.T) {
 		denies := []iam.ExplicitDeny{{
+			TenantID:             iam.S1FixtureTenantAID,
 			ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID,
 			OrganizationID:       iam.S1FixtureOwnerAOrganizationID,
 			Actions:              []registryauth.Action{registryauth.ActionEquipmentList},
@@ -360,15 +363,17 @@ func TestIAMExplicitSiteDenyDoesNotExpandToOwningOrganization(t *testing.T) {
 				Status:        iam.FactStatusActive,
 			},
 			Memberships: []iam.OrganizationMembership{{
+				TenantID:       iam.S1FixtureTenantAID,
 				OrganizationID: iam.S1FixtureActingOrganizationID,
 				Status:         iam.FactStatusActive,
 				ValidFrom:      validFrom,
 			}},
 			SiteBindings: []iam.SiteBinding{
-				{ActingOrganizationID: iam.S1FixtureActingOrganizationID, OwningOrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: validFrom},
-				{ActingOrganizationID: iam.S1FixtureActingOrganizationID, OwningOrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite2ID, Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: validFrom},
+				{TenantID: iam.S1FixtureTenantAID, ActingOrganizationID: iam.S1FixtureActingOrganizationID, OwningOrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: validFrom},
+				{TenantID: iam.S1FixtureTenantAID, ActingOrganizationID: iam.S1FixtureActingOrganizationID, OwningOrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite2ID, Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: validFrom},
 			},
 			ExplicitDenies: []iam.ExplicitDeny{{
+				TenantID:             iam.S1FixtureTenantAID,
 				ActingOrganizationID: iam.S1FixtureActingOrganizationID,
 				OrganizationID:       iam.S1FixtureOwnerAOrganizationID,
 				SiteID:               iam.S1FixtureOwnerASite1ID,
@@ -397,6 +402,7 @@ func TestIAMExplicitSiteDenyDoesNotExpandToOwningOrganization(t *testing.T) {
 
 func TestIAMBindingDenyEffectsOverrideAllows(t *testing.T) {
 	membership := iam.OrganizationMembership{
+		TenantID:       iam.S1FixtureTenantAID,
 		OrganizationID: iam.S1FixtureActingOrganizationID,
 		Status:         iam.FactStatusActive,
 		ValidFrom:      time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
@@ -419,8 +425,8 @@ func TestIAMBindingDenyEffectsOverrideAllows(t *testing.T) {
 			name:   "organization role deny",
 			action: registryauth.ActionOrganizationRead,
 			role: []iam.RoleBinding{
-				{OrganizationID: iam.S1FixtureActingOrganizationID, Actions: []registryauth.Action{registryauth.ActionOrganizationRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: membership.ValidFrom},
-				{OrganizationID: iam.S1FixtureActingOrganizationID, Actions: []registryauth.Action{registryauth.ActionOrganizationRead}, Effect: iam.BindingEffectDeny, Status: iam.FactStatusActive, ValidFrom: membership.ValidFrom},
+				{TenantID: iam.S1FixtureTenantAID, OrganizationID: iam.S1FixtureActingOrganizationID, Actions: []registryauth.Action{registryauth.ActionOrganizationRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: membership.ValidFrom},
+				{TenantID: iam.S1FixtureTenantAID, OrganizationID: iam.S1FixtureActingOrganizationID, Actions: []registryauth.Action{registryauth.ActionOrganizationRead}, Effect: iam.BindingEffectDeny, Status: iam.FactStatusActive, ValidFrom: membership.ValidFrom},
 			},
 			deniedOrgID: iam.S1FixtureActingOrganizationID,
 		},
@@ -428,8 +434,8 @@ func TestIAMBindingDenyEffectsOverrideAllows(t *testing.T) {
 			name:   "site binding deny",
 			action: registryauth.ActionSiteRead,
 			site: []iam.SiteBinding{
-				{ActingOrganizationID: iam.S1FixtureActingOrganizationID, OwningOrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: membership.ValidFrom},
-				{ActingOrganizationID: iam.S1FixtureActingOrganizationID, OwningOrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectDeny, Status: iam.FactStatusActive, ValidFrom: membership.ValidFrom},
+				{TenantID: iam.S1FixtureTenantAID, ActingOrganizationID: iam.S1FixtureActingOrganizationID, OwningOrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: membership.ValidFrom},
+				{TenantID: iam.S1FixtureTenantAID, ActingOrganizationID: iam.S1FixtureActingOrganizationID, OwningOrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectDeny, Status: iam.FactStatusActive, ValidFrom: membership.ValidFrom},
 			},
 			deniedSite: iam.S1FixtureOwnerASite1ID,
 		},

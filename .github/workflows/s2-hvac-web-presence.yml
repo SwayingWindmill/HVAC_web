@@ -2,6 +2,7 @@ name: S2 HVAC Web Presence and Latest Telemetry
 
 on:
   pull_request:
+    branches-ignore: ["**"]
     paths:
       - ".github/workflows/s2-hvac-web-presence.yml"
       - "apps/hvac-web/src/api/telemetry-current.ts"

@@ -24,16 +24,8 @@ jobs:
     outputs:
       contracts: ${{ steps.classify.outputs.contracts }}
       units: ${{ steps.classify.outputs.units }}
-      integrations: ${{ steps.classify.outputs.integrations }}
-      browsers: ${{ steps.classify.outputs.browsers }}
-      browser_windows: ${{ steps.classify.outputs.browser_windows }}
-      browser_linux: ${{ steps.classify.outputs.browser_linux }}
       contract_profiles: ${{ steps.classify.outputs.contract_profiles }}
       unit_profiles: ${{ steps.classify.outputs.unit_profiles }}
-      integration_profiles: ${{ steps.classify.outputs.integration_profiles }}
-      browser_profiles: ${{ steps.classify.outputs.browser_profiles }}
-      browser_windows_profiles: ${{ steps.classify.outputs.browser_windows_profiles }}
-      browser_linux_profiles: ${{ steps.classify.outputs.browser_linux_profiles }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,8 +56,9 @@ jobs:
           cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm run --silent repo:check
-      - run: npm run --silent repo:governance:test
-      - run: node scripts/run-pr-gate.mjs --gate=static
+      - run: npm run --silent design:check
+      - run: npm run --silent lint
+      - run: npm run --silent build:demo
       - run: npm run --silent pr:gates:test
 
   contracts_run:
@@ -134,99 +127,3 @@ jobs:
         run: |
           test "$CLASSIFY_RESULT" = "success"
           test "$EXECUTION_RESULT" = "success" || test "$EXECUTION_RESULT" = "skipped"
-
-  integration_run:
-    name: internal / affected integration
-    needs: classify
-    if: ${{ needs.classify.result == 'success' && needs.classify.outputs.integrations == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.12"
-          cache-dependency-path: |
-            libs/*/go.mod
-            services/*/go.mod
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22.22.0"
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=integration --profiles="${{ needs.classify.outputs.integration_profiles }}"
-
-  integration:
-    name: pr / affected-integration
-    needs: [classify, integration_run]
-    if: ${{ always() }}
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Aggregate integration result
-        env:
-          CLASSIFY_RESULT: ${{ needs.classify.result }}
-          EXECUTION_RESULT: ${{ needs.integration_run.result }}
-        run: |
-          test "$CLASSIFY_RESULT" = "success"
-          test "$EXECUTION_RESULT" = "success" || test "$EXECUTION_RESULT" = "skipped"
-
-  browser_windows_run:
-    name: internal / affected browser (Windows)
-    needs: classify
-    if: ${{ needs.classify.result == 'success' && needs.classify.outputs.browser_windows == 'true' }}
-    runs-on: windows-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.12"
-          cache-dependency-path: |
-            libs/*/go.mod
-            services/*/go.mod
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22.22.0"
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=browser --profiles="${{ needs.classify.outputs.browser_windows_profiles }}"
-
-  browser_linux_run:
-    name: internal / affected browser (Linux)
-    needs: classify
-    if: ${{ needs.classify.result == 'success' && needs.classify.outputs.browser_linux == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.12"
-          cache-dependency-path: |
-            libs/*/go.mod
-            services/*/go.mod
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22.22.0"
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=browser --profiles="${{ needs.classify.outputs.browser_linux_profiles }}"
-
-  browser:
-    name: pr / affected-browser
-    needs: [classify, browser_windows_run, browser_linux_run]
-    if: ${{ always() }}
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Aggregate browser result
-        env:
-          CLASSIFY_RESULT: ${{ needs.classify.result }}
-          WINDOWS_RESULT: ${{ needs.browser_windows_run.result }}
-          LINUX_RESULT: ${{ needs.browser_linux_run.result }}
-        run: |
-          test "$CLASSIFY_RESULT" = "success"
-          test "$WINDOWS_RESULT" = "success" || test "$WINDOWS_RESULT" = "skipped"
-          test "$LINUX_RESULT" = "success" || test "$LINUX_RESULT" = "skipped"

@@ -1,5 +1,7 @@
 # S3 Target Runtime deployment
 
+> **Scope: CERTIFICATION_REFERENCE.** This Kubernetes target exists to certify the Command/Control boundary in a target-equivalent environment. It is not the canonical Phase 1 platform deployment and does not make Kubernetes, cert-manager CSI, Secrets Store CSI or Workload Identity Phase 1 prerequisites. Canonical Phase 1 deployment is `deploy/platform/phase1/` on Linux Server + Docker Compose.
+
 This directory is the render-before-apply deployment template for the S3 Command target environment.
 
 It deliberately does not create an Ingress, LoadBalancer or NodePort. The Command endpoint is internal only:

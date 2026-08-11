@@ -82,6 +82,14 @@ func (sink *ClickHouseHistorySink) InsertObservations(ctx context.Context, obser
 		if !clickHousePayloadDigestPattern.MatchString(observation.PayloadSHA256) {
 			return errors.New("ClickHouse history payload digest must be lowercase SHA-256 hex")
 		}
+		if observation.AcceptanceStatus == string(ObservationAccepted) {
+			if observation.TenantID == nil || observation.OwningOrganizationID == nil || observation.SiteID == nil || observation.DeviceID == nil || observation.PointID == nil ||
+				!uuidV7Pattern.MatchString(*observation.TenantID) || !uuidV7Pattern.MatchString(*observation.OwningOrganizationID) ||
+				!uuidV7Pattern.MatchString(*observation.SiteID) || !uuidV7Pattern.MatchString(*observation.DeviceID) || !uuidV7Pattern.MatchString(*observation.PointID) ||
+				(observation.SensorID != nil && !uuidV7Pattern.MatchString(*observation.SensorID)) {
+				return errors.New("accepted ClickHouse history observation requires UUIDv7 Tenant, Organization, Site, Device and Point scope")
+			}
+		}
 		body, err := json.Marshal(observation)
 		if err != nil {
 			return fmt.Errorf("encode ClickHouse history observation %s: %w", observation.ObservationID, err)

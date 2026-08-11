@@ -64,7 +64,7 @@ test('no explicit Site resolves zero, one, and many authorized Site states', () 
 });
 
 test('an explicit authorized UUIDv7 Site wins and creates a validated SiteContext', () => {
-  for (const leaf of ['dashboard', 'assets', 'energy', 'commands', 'bigscreen']) {
+  for (const leaf of ['dashboard', 'assets', 'energy', 'work-orders', 'bigscreen']) {
     const decision = routing.resolveSiteRouting(`/sites/${siteBId}/${leaf}`, [siteA, siteB], ['site.read']);
     assert.equal(decision.state, 'READY');
     assert.equal(decision.route, leaf);
@@ -112,17 +112,17 @@ test('an authorized Site without site.read remains generically forbidden', () =>
 });
 
 
-test('Assets accepts one opaque Device selector while other extra segments remain not found', () => {
-  const deviceId = '01900000-0011-7000-8000-000000000011';
-  const detail = routing.resolveSiteRouting('/sites/' + siteAId + '/assets/' + deviceId, [siteA], ['site.read']);
+test('Assets accepts one opaque Equipment selector while other extra segments remain not found', () => {
+  const equipmentId = '01900000-0011-7000-8000-000000000011';
+  const detail = routing.resolveSiteRouting('/sites/' + siteAId + '/assets/' + equipmentId, [siteA], ['site.read']);
   assert.equal(detail.state, 'READY');
   assert.equal(detail.route, 'assets');
-  assert.equal(detail.deviceId, deviceId);
+  assert.equal(detail.equipmentId, equipmentId);
 
-  const invalid = routing.resolveSiteRouting('/sites/' + siteAId + '/assets/not-a-device', [siteA], ['site.read']);
+  const invalid = routing.resolveSiteRouting('/sites/' + siteAId + '/assets/not-an-equipment', [siteA], ['site.read']);
   assert.equal(invalid.state, 'READY');
-  assert.equal(invalid.deviceId, 'not-a-device');
+  assert.equal(invalid.equipmentId, 'not-an-equipment');
 
-  assert.equal(routing.resolveSiteRouting('/sites/' + siteAId + '/assets/' + deviceId + '/extra', [siteA], ['site.read']).state, 'SITE_ROUTE_NOT_FOUND');
-  assert.equal(routing.resolveSiteRouting('/sites/' + siteAId + '/energy/' + deviceId, [siteA], ['site.read']).state, 'SITE_ROUTE_NOT_FOUND');
+  assert.equal(routing.resolveSiteRouting('/sites/' + siteAId + '/assets/' + equipmentId + '/extra', [siteA], ['site.read']).state, 'SITE_ROUTE_NOT_FOUND');
+  assert.equal(routing.resolveSiteRouting('/sites/' + siteAId + '/energy/' + equipmentId, [siteA], ['site.read']).state, 'SITE_ROUTE_NOT_FOUND');
 });
