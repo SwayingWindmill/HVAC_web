@@ -89,10 +89,11 @@ function expectEqual(actual, expected, label) {
   if (actual !== expected) throw new Error(`${label}: expected ${expected}, got ${actual}`);
 }
 
-function scopedCounts(organizationIDs, siteIDs) {
+function scopedCounts(tenantID, organizationIDs, siteIDs) {
   return psql(`
     BEGIN;
     SET LOCAL ROLE s1_core_runtime;
+    SET LOCAL app.tenant_id = '${tenantID}';
     SET LOCAL app.authorized_organization_ids = '${organizationIDs}';
     SET LOCAL app.authorized_site_ids = '${siteIDs}';
     SELECT (SELECT count(*) FROM core_registry.organizations)::text || '|'
@@ -199,18 +200,21 @@ try {
   report.assertions.coreServiceMembership = coreServiceMembership;
   report.assertions.migrationServiceMembership = migrationServiceMembership;
 
-  const ownerA = scopedCounts('{018f1e00-0000-7000-8000-000000000001}', '{}');
-  const delegated = scopedCounts('{}', '{018f1e00-1000-7000-8000-000000000001}');
-  const noAccess = scopedCounts('{}', '{}');
+  const ownerA = scopedCounts('018f1d00-0000-7000-8000-000000000001', '{018f1e00-0000-7000-8000-000000000001}', '{}');
+  const delegated = scopedCounts('018f1d00-0000-7000-8000-000000000001', '{}', '{018f1e00-1000-7000-8000-000000000001}');
+  const noAccess = scopedCounts('018f1d00-0000-7000-8000-000000000001', '{}', '{}');
+  const wrongTenant = scopedCounts('018f1d00-0000-7000-8000-000000000002', '{018f1e00-0000-7000-8000-000000000001}', '{018f1e00-1000-7000-8000-000000000001}');
   expectEqual(ownerA.join('|'), '1|2|2|2', 'owner Organization scope');
   expectEqual(delegated.join('|'), '0|1|1|1', 'cross-organization Site scope');
   expectEqual(noAccess.join('|'), '0|0|0|0', 'empty scope');
-  report.assertions.rlsCounts = { ownerA, delegated, noAccess };
+  expectEqual(wrongTenant.join('|'), '0|0|0|0', 'cross-Tenant scope');
+  report.assertions.rlsCounts = { ownerA, delegated, noAccess, wrongTenant };
 
   const iamDelegated = psql(`
     BEGIN;
     SET LOCAL ROLE s1_iam_runtime;
     SET LOCAL app.principal_id = '018f1e00-2000-7000-8000-000000000002';
+    SET LOCAL app.tenant_id = '018f1d00-0000-7000-8000-000000000001';
     SET LOCAL app.acting_organization_id = '018f1e00-0000-7000-8000-000000000003';
     SELECT (SELECT count(*) FROM iam.organization_memberships)::text || '|'
       || (SELECT count(*) FROM iam.role_bindings)::text || '|'
@@ -222,6 +226,7 @@ try {
     BEGIN;
     SET LOCAL ROLE s1_iam_runtime;
     SET LOCAL app.principal_id = '018f1e00-2000-7000-8000-000000000003';
+    SET LOCAL app.tenant_id = '018f1d00-0000-7000-8000-000000000001';
     SET LOCAL app.acting_organization_id = '018f1e00-0000-7000-8000-000000000003';
     SELECT count(*) FROM iam.explicit_denies;
     ROLLBACK;
@@ -240,15 +245,15 @@ try {
   report.assertions.gatewayRegistryRouting = 'passed';
 
   const invalidTimezone = psql(`
-    INSERT INTO core_registry.sites (id, organization_id, code, display_name, timezone, status, revision, created_at, updated_at)
-    VALUES ('018f1e00-1000-7000-8000-000000000099', '018f1e00-0000-7000-8000-000000000001', 'invalid-timezone', 'Invalid Timezone', 'Mars/Olympus', 'ACTIVE', 1, now(), now())
+    INSERT INTO core_registry.sites (id, tenant_id, organization_id, code, display_name, timezone, status, revision, created_at, updated_at)
+    VALUES ('018f1e00-1000-7000-8000-000000000099', '018f1d00-0000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', 'invalid-timezone', 'Invalid Timezone', 'Mars/Olympus', 'ACTIVE', 1, now(), now())
   `, { expectFailure: true });
   if (!invalidTimezone.includes('invalid IANA timezone')) throw new Error('IANA timezone rejection did not emit the expected evidence');
   report.assertions.invalidTimezoneRejected = true;
 
   const duplicateExternal = psql(`
-    INSERT INTO core_registry.external_bindings (id, organization_id, site_id, integration_instance_id, provider, external_entity_type, external_id, binding_status, valid_from, valid_to, revision, created_at, updated_at)
-    VALUES ('018f1e00-6000-7000-8000-000000000099', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-6100-7000-8000-000000000001', 'thingsboard', 'DEVICE', 'tb-device-owner-a-1', 'ACTIVE', now(), NULL, 1, now(), now())
+    INSERT INTO core_registry.external_bindings (id, tenant_id, organization_id, site_id, integration_instance_id, provider, external_entity_type, external_id, binding_status, valid_from, valid_to, revision, created_at, updated_at)
+    VALUES ('018f1e00-6000-7000-8000-000000000099', '018f1d00-0000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-6100-7000-8000-000000000001', 'thingsboard', 'DEVICE', 'tb-device-owner-a-1', 'ACTIVE', now(), NULL, 1, now(), now())
   `, { expectFailure: true });
   if (!duplicateExternal.includes('external_bindings_active_external_key_uidx')) throw new Error('ExternalBinding active uniqueness was not enforced');
   report.assertions.externalBindingActiveUnique = true;
@@ -269,16 +274,17 @@ try {
   const plan = psql(`
     SET enable_seqscan = off;
     EXPLAIN (FORMAT JSON)
-    SELECT id, organization_id, site_id, code, display_name
+    SELECT id, tenant_id, organization_id, site_id, code, display_name
     FROM core_registry.equipment
-    WHERE organization_id = '018f1e00-0000-7000-8000-000000000001'
+    WHERE tenant_id = '018f1d00-0000-7000-8000-000000000001'
+      AND organization_id = '018f1e00-0000-7000-8000-000000000001'
       AND site_id = '018f1e00-1000-7000-8000-000000000001'
       AND (display_name COLLATE "C", id) > ('', '00000000-0000-0000-0000-000000000000')
     ORDER BY display_name COLLATE "C", id
     LIMIT 51;
   `);
-  if (!plan.includes('equipment_registry_page_idx')) throw new Error('Equipment keyset query did not use the tenant-leading index');
-  report.assertions.queryPlanIndex = 'equipment_registry_page_idx';
+  if (!plan.includes('equipment_tenant_page_idx')) throw new Error('Equipment keyset query did not use the Tenant-leading index');
+  report.assertions.queryPlanIndex = 'equipment_tenant_page_idx';
 
   const schemaOwners = psql("SELECT nspname || ':' || pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname IN ('iam','core_registry') ORDER BY nspname");
   expectEqual(schemaOwners, 'core_registry:s1_core_migrator\niam:s1_iam_migrator', 'schema owners');

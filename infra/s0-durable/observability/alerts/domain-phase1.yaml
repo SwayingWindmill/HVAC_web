@@ -1,0 +1,132 @@
+groups:
+  - name: mqtt-edge-phase1
+    interval: 30s
+    rules:
+      - alert: EdgeMQTTPublisherDisconnected
+        expr: max(hvac_edge_mqtt_connected) == 0
+        for: 2m
+        labels:
+          severity: page
+          primary_owner: edge-platform
+          secondary_owner: connector-platform
+        annotations:
+          summary: Edge MQTT publisher is disconnected from the broker
+          runbook: docs/operations/observability-phase1.md#edge-mqtt-disconnected
+      - alert: EdgeStoreForwardQueueHigh
+        expr: max(hvac_edge_mqtt_queue_utilization_ratio) > 0.8
+        for: 5m
+        labels:
+          severity: page
+          primary_owner: edge-platform
+          secondary_owner: connector-platform
+        annotations:
+          summary: Edge Store and Forward queue is above 80 percent capacity
+          runbook: docs/operations/observability-phase1.md#edge-store-and-forward-queue-high
+      - alert: EdgeStoreForwardQueueRejected
+        expr: sum(rate(hvac_edge_mqtt_queue_limit_rejections_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: page
+          primary_owner: edge-platform
+          secondary_owner: telemetry-platform
+        annotations:
+          summary: Edge MQTT publishes are being rejected because the persistent queue is full
+          runbook: docs/operations/observability-phase1.md#edge-store-and-forward-queue-high
+      - alert: MQTTTelemetryAdapterDisconnected
+        expr: max(hvac_mqtt_connected) == 0
+        for: 2m
+        labels:
+          severity: page
+          primary_owner: connector-platform
+          secondary_owner: telemetry-platform
+        annotations:
+          summary: MQTT telemetry adapter is disconnected from the broker
+          runbook: docs/operations/observability-phase1.md#mqtt-disconnected
+      - alert: MQTTProcessingQueueHigh
+        expr: max(hvac_mqtt_processing_queue_depth) / clamp_min(max(hvac_mqtt_processing_queue_capacity), 1) > 0.8
+        for: 5m
+        labels:
+          severity: page
+          primary_owner: connector-platform
+          secondary_owner: telemetry-platform
+        annotations:
+          summary: MQTT processing queue is above 80 percent capacity
+          runbook: docs/operations/observability-phase1.md#mqtt-queue-high
+      - alert: MQTTTelemetryDropped
+        expr: sum(rate(hvac_mqtt_messages_processed_total{outcome="dropped"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: page
+          primary_owner: connector-platform
+          secondary_owner: telemetry-platform
+        annotations:
+          summary: MQTT telemetry poison messages are being dropped
+          runbook: docs/operations/observability-phase1.md#mqtt-dropped
+      - alert: MQTTDownstreamRetrying
+        expr: sum(rate(hvac_mqtt_message_retries_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: ticket
+          primary_owner: telemetry-platform
+          secondary_owner: connector-platform
+        annotations:
+          summary: MQTT adapter is retrying downstream S2 delivery
+          runbook: docs/operations/observability-phase1.md#mqtt-downstream-retry
+
+  - name: command-control-phase1
+    interval: 30s
+    rules:
+      - alert: CommandVerificationFailureRateHigh
+        expr: sum(rate(hvac_command_verifications_total{outcome!="verified"}[10m])) / clamp_min(sum(rate(hvac_command_verifications_total[10m])), 1) > 0.05
+        for: 10m
+        labels:
+          severity: page
+          primary_owner: control-platform
+          secondary_owner: platform-operations
+        annotations:
+          summary: More than 5 percent of command verifications are not VERIFIED
+          runbook: docs/operations/observability-phase1.md#command-verification-failure
+      - alert: CommandVerificationTimeoutRateHigh
+        expr: sum(rate(hvac_command_verifications_total{outcome="timed_out"}[10m])) / clamp_min(sum(rate(hvac_command_verifications_total[10m])), 1) > 0.02
+        for: 10m
+        labels:
+          severity: page
+          primary_owner: control-platform
+          secondary_owner: connector-platform
+        annotations:
+          summary: Command verification timeout rate is above 2 percent
+          runbook: docs/operations/observability-phase1.md#command-verification-timeout
+      - alert: CommandAPI5xxHigh
+        expr: sum(rate(hvac_command_http_requests_total{status_class="5xx"}[5m])) / clamp_min(sum(rate(hvac_command_http_requests_total[5m])), 1) > 0.01
+        for: 5m
+        labels:
+          severity: page
+          primary_owner: control-platform
+          secondary_owner: platform-operations
+        annotations:
+          summary: Command API 5xx rate is above 1 percent
+          runbook: docs/operations/observability-phase1.md#command-api-5xx
+
+  - name: alarm-phase1
+    interval: 30s
+    rules:
+      - alert: AlarmAPI5xxHigh
+        expr: sum(rate(hvac_alarm_http_requests_total{status_class="5xx"}[5m])) / clamp_min(sum(rate(hvac_alarm_http_requests_total[5m])), 1) > 0.01
+        for: 5m
+        labels:
+          severity: page
+          primary_owner: alarm-platform
+          secondary_owner: platform-operations
+        annotations:
+          summary: Alarm API 5xx rate is above 1 percent
+          runbook: docs/operations/observability-phase1.md#alarm-api-5xx
+      - alert: AlarmMutationRejectionRateHigh
+        expr: sum(rate(hvac_alarm_http_requests_total{method="POST",status_class="4xx"}[10m])) / clamp_min(sum(rate(hvac_alarm_http_requests_total{method="POST"}[10m])), 1) > 0.2
+        for: 10m
+        labels:
+          severity: ticket
+          primary_owner: alarm-platform
+          secondary_owner: platform-security
+        annotations:
+          summary: Alarm lifecycle mutation rejection rate is above 20 percent
+          runbook: docs/operations/observability-phase1.md#alarm-mutation-rejections

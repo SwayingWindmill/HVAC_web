@@ -10,11 +10,20 @@ const composeFile = resolve(root, 'infra/s3-thingsboard/compose.yaml');
 const context = 'kind-hvac-s3-local';
 const namespace = 's3-local';
 const baseURL = 'http://127.0.0.1:18080';
+const tenantID = '018f3d00-0000-7000-8000-000000000001';
+const organizationID = '018f3e00-0000-7000-8000-000000000001';
+const siteID = '018f3e00-1000-7000-8000-000000000001';
 const deviceIDs = {
   'ahu-01': '018f3e00-3000-7000-8000-000000000001',
   'fcu-02': '018f3e00-3000-7000-8000-000000000002',
   'chiller-03': '018f3e00-3000-7000-8000-000000000003',
 };
+const commandPointIDs = {
+  'ahu-01': '018f3e00-4000-7000-8000-000000000001',
+  'fcu-02': '018f3e00-4000-7000-8000-000000000002',
+  'chiller-03': '018f3e00-4000-7000-8000-000000000003',
+};
+const verificationPointKey = 'zone.temperature_setpoint';
 const workloads = [
   's3-local-thingsboard-bridge',
   ...Object.keys(deviceIDs).flatMap((slug) => [`command-dispatcher-${slug}`, `command-verifier-${slug}`]),
@@ -81,6 +90,30 @@ function prepare() {
   run('bash', ['scripts/s3-local.sh', 'cluster']);
 }
 
+function upgradeDeviceCatalog() {
+  const path = resolve(out, 'device-catalog.json');
+  const parsed = JSON.parse(readFileSync(path, 'utf8'));
+  if (parsed?.schemaVersion !== 1 || !Array.isArray(parsed.devices) || parsed.devices.length !== Object.keys(deviceIDs).length) {
+    throw new Error('Provisioned S3 local Device catalog is invalid.');
+  }
+  const devices = parsed.devices.map((device) => {
+    const entry = Object.entries(deviceIDs).find(([, deviceID]) => deviceID === device.deviceId);
+    if (!entry) throw new Error(`Provisioned Device ${device?.deviceId ?? '<missing>'} is not in the local authority map.`);
+    const [slug] = entry;
+    return {
+      tenantId: tenantID,
+      organizationId: organizationID,
+      siteId: siteID,
+      deviceId: device.deviceId,
+      commandPointId: commandPointIDs[slug],
+      verificationPointKey,
+      name: device.name,
+      type: device.type,
+    };
+  });
+  writeFileSync(path, `${JSON.stringify({ schemaVersion: 2, devices }, null, 2)}\n`, { mode: 0o600 });
+}
+
 async function provider() {
   mkdirSync(out, { recursive: true });
   compose(['down', '-v', '--remove-orphans']);
@@ -88,6 +121,7 @@ async function provider() {
   compose(['up', '-d']);
   await waitForURL(`${baseURL}/login`);
   run(process.execPath, ['scripts/provision-s3-local-thingsboard.mjs']);
+  upgradeDeviceCatalog();
   run(process.execPath, ['scripts/render-s3-local-thingsboard-runtime.mjs']);
 }
 

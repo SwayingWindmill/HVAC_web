@@ -45,7 +45,6 @@ data:
       "providerMethod": "setTemperatureSetpoint",
       "reportedStateKey": "zone.temperature_setpoint",
       "timeoutMilliseconds": 7000,
-      "maximumSetpointDeltaC": 1,
       "credentialReference": "workload://[PROVIDER]/[CLUSTER]/s3-certification/command-dispatcher"
     }
 ---

@@ -34,6 +34,9 @@ const [
 
 for (const marker of [
   'analytics.energy_interval_facts',
+  'tenant_id UUID',
+  'point_id UUID',
+  'sensor_id Nullable(UUID)',
   'energy_kwh Float64',
   'source_current_observation_id UUID',
   'dataset_revision UInt64',
@@ -60,7 +63,7 @@ for (const marker of [
 ]) {
   assert(domain.includes(marker), `missing energy-domain marker ${marker}`);
 }
-for (const marker of ['lagInFrame', 'ORDER BY sampled_at, source_offset, observation_id', 'isFinite(value_number)', 'LEFT ANTI JOIN', 'insert_deduplication_token', 'JSONEachRow', 'observability.InjectHTTP']) {
+for (const marker of ['lagInFrame', 'PARTITION BY tenant_id, owning_organization_id, site_id, point_id, sensor_id, device_id, telemetry_key', 'tenant_id IS NOT NULL', 'point_id IS NOT NULL', 'ORDER BY sampled_at, source_offset, observation_id', 'isFinite(value_number)', 'LEFT ANTI JOIN', 'insert_deduplication_token', 'JSONEachRow', 'observability.InjectHTTP']) {
   assert(clickHouseClient.includes(marker), `missing ClickHouse adapter marker ${marker}`);
 }
 for (const marker of [
@@ -74,7 +77,7 @@ for (const marker of [
 assert(!projectorModule.includes('telemetry-runtime-service'), 'analytics projector must not import Telemetry Runtime implementation');
 assert(!queryModule.includes('analytics-read-model-projector'), 'Query Service must not import Analytics Projector implementation');
 
-for (const marker of ['max_data_watermark', 'max_dataset_revision', 'period_end', 'access_policy']) {
+for (const marker of ['max_data_watermark', 'max_dataset_revision', 'tenant_id', 'device_id', 'point_id', 'sensor_id', 'telemetry_key', 'period_end', 'access_policy']) {
   assert(cubeModel.includes(marker), `missing Cube semantic marker ${marker}`);
 }
 for (const marker of ['buildMetadataQuery', 'maximumCubeQueryDuration', 'Add(-time.Millisecond)', 'coversRequestedBuckets', 'energy_usage.max_data_watermark', 'energy_usage.max_dataset_revision', 'partial = watermark.Before']) {
@@ -97,12 +100,16 @@ for (const marker of [
 ]) {
   assert(cubeIntegration.includes(marker), `missing Cube integration marker ${marker}`);
 }
-for (const marker of [
-  '"schema", "name": "telemetry_history", "writer": "telemetry-history-projector"',
-  '"schema", "name": "analytics", "writer": "analytics-read-model-projector"',
-  '"projection", "name": "analytics-energy-interval-fact", "writer": "analytics-read-model-projector"',
+const ownershipRegistry = JSON.parse(ownership);
+for (const expected of [
+  { kind: 'schema', name: 'telemetry_history', writer: 'telemetry-history-projector' },
+  { kind: 'schema', name: 'analytics', writer: 'analytics-read-model-projector' },
+  { kind: 'projection', name: 'analytics-energy-interval-fact', writer: 'analytics-read-model-projector' },
 ]) {
-  assert(ownership.includes(marker), `missing analytics ownership marker ${marker}`);
+  assert(
+    (ownershipRegistry.resources ?? []).some((resource) => resource.kind === expected.kind && resource.name === expected.name && resource.writer === expected.writer),
+    `missing analytics ownership resource ${expected.kind}:${expected.name}`,
+  );
 }
 
 console.log('Analytics history modular architecture check passed.');

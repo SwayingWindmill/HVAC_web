@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "scope": "observability-phase1",
+  "forbiddenLabels": [
+    "tenant_id",
+    "organization_id",
+    "site_id",
+    "gateway_id",
+    "device_id",
+    "point_id",
+    "command_id",
+    "alarm_id",
+    "user_id",
+    "request_id",
+    "trace_id",
+    "message_id",
+    "telemetry_key",
+    "value"
+  ],
+  "families": [
+    {"name":"hvac_command_http_requests_total","type":"counter","labels":["service","method","route","status_class"],"seriesBudget":160},
+    {"name":"hvac_command_http_request_duration_seconds","type":"histogram","labels":["service","method","route","status_class"],"seriesBudget":160},
+    {"name":"hvac_command_http_in_flight","type":"gauge","labels":["service"],"seriesBudget":2},
+    {"name":"hvac_command_dispatch_results_total","type":"counter","labels":["outcome"],"seriesBudget":8},
+    {"name":"hvac_command_verifications_total","type":"counter","labels":["outcome"],"seriesBudget":8},
+    {"name":"hvac_command_verification_duration_seconds","type":"histogram","labels":["outcome"],"seriesBudget":8},
+
+    {"name":"hvac_alarm_http_requests_total","type":"counter","labels":["service","method","route","status_class"],"seriesBudget":128},
+    {"name":"hvac_alarm_http_request_duration_seconds","type":"histogram","labels":["service","method","route","status_class"],"seriesBudget":128},
+    {"name":"hvac_alarm_http_in_flight","type":"gauge","labels":["service"],"seriesBudget":2},
+
+    {"name":"hvac_mqtt_connected","type":"gauge","labels":[],"seriesBudget":1},
+    {"name":"hvac_mqtt_subscribed","type":"gauge","labels":[],"seriesBudget":1},
+    {"name":"hvac_mqtt_connections_total","type":"counter","labels":["outcome"],"seriesBudget":4},
+    {"name":"hvac_mqtt_disconnections_total","type":"counter","labels":["reason_family"],"seriesBudget":4},
+    {"name":"hvac_mqtt_subscriptions_total","type":"counter","labels":["outcome"],"seriesBudget":4},
+    {"name":"hvac_mqtt_messages_received_total","type":"counter","labels":["outcome"],"seriesBudget":4},
+    {"name":"hvac_mqtt_messages_processed_total","type":"counter","labels":["outcome"],"seriesBudget":8},
+    {"name":"hvac_mqtt_message_processing_duration_seconds","type":"histogram","labels":["outcome"],"seriesBudget":8},
+    {"name":"hvac_mqtt_message_retries_total","type":"counter","labels":["reason_family"],"seriesBudget":4},
+    {"name":"hvac_mqtt_replay_messages_total","type":"counter","labels":["outcome"],"seriesBudget":4},
+    {"name":"hvac_mqtt_values_total","type":"counter","labels":["outcome"],"seriesBudget":8},
+    {"name":"hvac_mqtt_processing_queue_depth","type":"gauge","labels":[],"seriesBudget":1},
+    {"name":"hvac_mqtt_processing_queue_capacity","type":"gauge","labels":[],"seriesBudget":1},
+
+    {"name":"hvac_edge_mqtt_connected","type":"gauge","labels":[],"seriesBudget":1},
+    {"name":"hvac_edge_mqtt_connections_total","type":"counter","labels":["outcome"],"seriesBudget":4},
+    {"name":"hvac_edge_mqtt_disconnections_total","type":"counter","labels":["reason_family"],"seriesBudget":4},
+    {"name":"hvac_edge_mqtt_queue_capacity_bytes","type":"gauge","labels":[],"seriesBudget":1},
+    {"name":"hvac_edge_mqtt_queue_bytes","type":"gauge","labels":[],"seriesBudget":1},
+    {"name":"hvac_edge_mqtt_queue_utilization_ratio","type":"gauge","labels":[],"seriesBudget":1},
+    {"name":"hvac_edge_mqtt_queue_limit_rejections_total","type":"counter","labels":[],"seriesBudget":1},
+    {"name":"hvac_edge_mqtt_publishes_total","type":"counter","labels":["outcome"],"seriesBudget":4},
+    {"name":"hvac_edge_mqtt_publish_duration_seconds","type":"histogram","labels":["outcome"],"seriesBudget":4},
+    {"name":"hvac_edge_mqtt_values_total","type":"counter","labels":["outcome"],"seriesBudget":4},
+    {"name":"hvac_edge_mqtt_metric_refresh_failures_total","type":"counter","labels":[],"seriesBudget":1}
+  ],
+  "boundedValues": {
+    "service": ["command-service", "alarm-service"],
+    "method": ["GET", "POST", "PUT", "DELETE", "PATCH", "UNKNOWN"],
+    "status_class": ["1xx", "2xx", "3xx", "4xx", "5xx"],
+    "route": [
+      "commands.create", "commands.approve", "commands.get", "dispatch.claim", "dispatch.resolve", "verification.claim", "verification.resolve", "connector.prepare", "connector.complete",
+      "alarms.list", "alarms.get", "alarms.acknowledge", "alarms.assign", "alarms.unassign", "alarms.suppress", "alarms.unsuppress", "alarms.close", "alarms.reopen", "unknown"
+    ],
+    "outcome": [
+      "success", "failed", "queued", "ack_failed", "dropped", "processed", "accepted", "duplicate", "out_of_order", "quarantined", "rejected",
+      "pre_send_rejected", "request_committed", "acknowledged", "verified", "inconclusive", "mismatch", "timed_out", "unknown"
+    ],
+    "reason_family": ["transport", "dependency", "authorization", "scope", "capacity", "unknown"]
+  }
+}

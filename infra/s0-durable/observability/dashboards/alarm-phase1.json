@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 39,
+  "title": "Alarm Phase 1",
+  "tags": ["alarm", "operations"],
+  "templating": {"list": []},
+  "panels": [
+    {"id":1,"title":"Alarm API requests/s","type":"timeseries","targets":[{"expr":"sum by (route,status_class) (rate(hvac_alarm_http_requests_total[5m]))"}]},
+    {"id":2,"title":"Alarm API p95","type":"timeseries","targets":[{"expr":"histogram_quantile(0.95, sum by (le) (rate(hvac_alarm_http_request_duration_seconds_bucket[5m])))"}]},
+    {"id":3,"title":"Alarm API 5xx rate","type":"timeseries","targets":[{"expr":"sum(rate(hvac_alarm_http_requests_total{status_class=\"5xx\"}[5m])) / clamp_min(sum(rate(hvac_alarm_http_requests_total[5m])), 1)"}]},
+    {"id":4,"title":"Alarm mutation 4xx rate","type":"timeseries","targets":[{"expr":"sum(rate(hvac_alarm_http_requests_total{method=\"POST\",status_class=\"4xx\"}[10m])) / clamp_min(sum(rate(hvac_alarm_http_requests_total{method=\"POST\"}[10m])), 1)"}]},
+    {"id":5,"title":"Alarm lifecycle operation rate","type":"timeseries","targets":[{"expr":"sum by (route,status_class) (rate(hvac_alarm_http_requests_total{method=\"POST\"}[5m]))"}]},
+    {"id":6,"title":"Alarm API in flight","type":"timeseries","targets":[{"expr":"max(hvac_alarm_http_in_flight)"}]}
+  ]
+}

@@ -12,7 +12,8 @@
       "dependency",
       "transport",
       "route_stage",
-      "invariant"
+      "invariant",
+      "quality"
     ],
     "forbidden": [
       "organization",
@@ -69,7 +70,17 @@
         "dependency",
         "outcome"
       ],
-      "seriesBudget": 36
+      "seriesBudget": 48
+    },
+    {
+      "name": "hvac_s2_data_quality_records_total",
+      "type": "counter",
+      "unit": "records",
+      "labels": [
+        "quality",
+        "outcome"
+      ],
+      "seriesBudget": 24
     },
     {
       "name": "hvac_s2_presence_evaluations_total",
@@ -227,7 +238,7 @@
         "operation",
         "outcome"
       ],
-      "seriesBudget": 256
+      "seriesBudget": 320
     },
     {
       "name": "hvac_s2_upstream_duration_seconds",
@@ -238,7 +249,7 @@
         "operation",
         "outcome"
       ],
-      "seriesBudget": 256
+      "seriesBudget": 320
     },
     {
       "name": "hvac_s2_slow_consumer_disconnects_total",
@@ -310,6 +321,7 @@
       "postgres",
       "redis",
       "thingsboard",
+      "mqtt",
       "centrifugo",
       "telemetry-runtime",
       "otel"
@@ -323,6 +335,12 @@
       "R1",
       "R2",
       "R3"
+    ],
+    "quality": [
+      "good",
+      "suspect",
+      "rejected",
+      "unknown"
     ],
     "invariant": [
       "cross_scope",

@@ -122,6 +122,28 @@ try {
   });
   report.assertions.factCount = clickHouse(`SELECT count() FROM analytics.energy_interval_facts`);
   if (report.assertions.factCount !== '2') throw new Error(`unexpected energy interval fact count ${report.assertions.factCount}`);
+
+  const rollupPointId = '01990000-1000-7000-8000-000000000001';
+  clickHouse(`INSERT INTO telemetry_history.observations (
+    observation_id, tenant_id, owning_organization_id, site_id, device_id, point_id,
+    integration_instance_id, source_event_id, source_partition, source_offset, source_path,
+    telemetry_key, value_type, unit, value_number, sampled_at, received_at,
+    acceptance_status, quality, quality_reasons, payload_sha256
+  ) VALUES
+    (toUUID('01990000-2000-7000-8000-000000000001'), toUUID('01990000-3000-7000-8000-000000000001'), toUUID('01990000-4000-7000-8000-000000000001'), toUUID('01990000-5000-7000-8000-000000000001'), toUUID('01990000-6000-7000-8000-000000000001'), toUUID('${rollupPointId}'), toUUID('01990000-7000-7000-8000-000000000001'), toUUID('01990000-8000-7000-8000-000000000001'), 'rollup-fixture', 1, 'PUSH', 'active_power', 'NUMBER', 'kW', 10, toDateTime64('2026-08-11 10:00:05', 3, 'UTC'), toDateTime64('2026-08-11 10:00:05.100', 3, 'UTC'), 'ACCEPTED', 'GOOD', [], repeat('a', 64)),
+    (toUUID('01990000-2000-7000-8000-000000000002'), toUUID('01990000-3000-7000-8000-000000000001'), toUUID('01990000-4000-7000-8000-000000000001'), toUUID('01990000-5000-7000-8000-000000000001'), toUUID('01990000-6000-7000-8000-000000000001'), toUUID('${rollupPointId}'), toUUID('01990000-7000-7000-8000-000000000001'), toUUID('01990000-8000-7000-8000-000000000002'), 'rollup-fixture', 2, 'PUSH', 'active_power', 'NUMBER', 'kW', 20, toDateTime64('2026-08-11 10:00:35', 3, 'UTC'), toDateTime64('2026-08-11 10:00:35.100', 3, 'UTC'), 'ACCEPTED', 'GOOD', [], repeat('b', 64)),
+    (toUUID('01990000-2000-7000-8000-000000000003'), toUUID('01990000-3000-7000-8000-000000000001'), toUUID('01990000-4000-7000-8000-000000000001'), toUUID('01990000-5000-7000-8000-000000000001'), toUUID('01990000-6000-7000-8000-000000000001'), toUUID('${rollupPointId}'), toUUID('01990000-7000-7000-8000-000000000001'), toUUID('01990000-8000-7000-8000-000000000003'), 'rollup-fixture', 3, 'PUSH', 'active_power', 'NUMBER', 'kW', 30, toDateTime64('2026-08-11 10:01:10', 3, 'UTC'), toDateTime64('2026-08-11 10:01:10.100', 3, 'UTC'), 'ACCEPTED', 'GOOD', [], repeat('c', 64)),
+    (toUUID('01990000-2000-7000-8000-000000000004'), toUUID('01990000-3000-7000-8000-000000000001'), toUUID('01990000-4000-7000-8000-000000000001'), toUUID('01990000-5000-7000-8000-000000000001'), toUUID('01990000-6000-7000-8000-000000000001'), toUUID('${rollupPointId}'), toUUID('01990000-7000-7000-8000-000000000001'), toUUID('01990000-8000-7000-8000-000000000004'), 'rollup-fixture', 4, 'PUSH', 'active_power', 'NUMBER', 'kW', 40, toDateTime64('2026-08-11 10:16:00', 3, 'UTC'), toDateTime64('2026-08-11 10:16:00.100', 3, 'UTC'), 'ACCEPTED', 'GOOD', [], repeat('d', 64))`);
+
+  report.assertions.rollup1Min = clickHouse(`SELECT toString(bucket) || '|' || toString(sample_count) || '|' || toString(average_value) || '|' || toString(minimum_value) || '|' || toString(maximum_value) FROM telemetry_history.numeric_1min WHERE point_id = toUUID('${rollupPointId}') ORDER BY bucket FORMAT TSVRaw`);
+  if (report.assertions.rollup1Min !== '2026-08-11 10:00:00|2|15|10|20\n2026-08-11 10:01:00|1|30|30|30\n2026-08-11 10:16:00|1|40|40|40') throw new Error(`unexpected 1 minute rollup ${report.assertions.rollup1Min}`);
+  report.assertions.rollup15Min = clickHouse(`SELECT toString(bucket) || '|' || toString(sample_count) || '|' || toString(average_value) || '|' || toString(minimum_value) || '|' || toString(maximum_value) FROM telemetry_history.numeric_15min WHERE point_id = toUUID('${rollupPointId}') ORDER BY bucket FORMAT TSVRaw`);
+  if (report.assertions.rollup15Min !== '2026-08-11 10:00:00|3|20|10|30\n2026-08-11 10:15:00|1|40|40|40') throw new Error(`unexpected 15 minute rollup ${report.assertions.rollup15Min}`);
+  report.assertions.rollupHourly = clickHouse(`SELECT toString(hour) || '|' || toString(sample_count) || '|' || toString(average_value) || '|' || toString(minimum_value) || '|' || toString(maximum_value) FROM telemetry_history.numeric_hourly WHERE point_id = toUUID('${rollupPointId}') FORMAT TSVRaw`);
+  if (report.assertions.rollupHourly !== '2026-08-11 10:00:00|4|25|10|40') throw new Error(`unexpected hourly rollup ${report.assertions.rollupHourly}`);
+  report.assertions.rollupDaily = clickHouse(`SELECT toString(bucket) || '|' || toString(sample_count) || '|' || toString(average_value) || '|' || toString(minimum_value) || '|' || toString(maximum_value) FROM telemetry_history.numeric_daily WHERE point_id = toUUID('${rollupPointId}') FORMAT TSVRaw`);
+  if (report.assertions.rollupDaily !== '2026-08-11 00:00:00|4|25|10|40') throw new Error(`unexpected daily rollup ${report.assertions.rollupDaily}`);
+
   report.assertions.readerCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'analytics_projector_reader', '--query', 'SELECT count() FROM telemetry_history.observations']);
   report.assertions.historyQueryCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'telemetry_query_history_reader', '--query', 'SELECT count() FROM telemetry_history.observations']);
   report.assertions.cubeCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'cube_analytics_reader', '--query', 'SELECT count() FROM analytics.energy_interval_facts']);

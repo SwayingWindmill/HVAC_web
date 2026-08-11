@@ -62,7 +62,7 @@ Exporter 使用有界异步队列。Collector 不可用、export timeout 或 que
 
 ### ingest-lag / presence-lateness / upstream
 
-检查 ThingsBoard connector、reconciliation、quarantine 和 source lag。原始 Device/key/value 不进入告警 label，详细对象通过 Audit Ledger 与 HMAC reference 定位。
+检查 ThingsBoard / MQTT source adapter、reconciliation、quarantine 和 source lag。原始 Device/key/value 不进入告警 label，详细对象通过 Audit Ledger 与 HMAC reference 定位。
 
 ### outbox-lag / publication-lag / recovery / subscription / revocation / slow-consumers
 

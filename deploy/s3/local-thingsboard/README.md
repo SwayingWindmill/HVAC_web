@@ -1,5 +1,7 @@
 # S3 local ThingsBoard CE profile
 
+> **Scope: LOCAL_FIXTURE.** This profile is a local ThingsBoard/virtual-device fixture for Command integration. It is not a Phase 1 Production topology and must not be used to infer Kubernetes, ThingsBoard CE, virtual devices or local port-forwards as Production requirements. Canonical Phase 1 deployment is `deploy/platform/phase1/`.
+
 This profile replaces the lightweight local device simulator with ThingsBoard CE 4.3.1.3 and three virtual HVAC devices.
 
 Virtual devices:

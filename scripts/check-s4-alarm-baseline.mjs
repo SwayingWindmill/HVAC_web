@@ -189,7 +189,7 @@ assert(localLifecycle.includes('ALARM_VERSION_CONFLICT') && localLifecycle.inclu
 assert(realAlarms.includes('Telemetry、Presence 和 Device 状态不会在浏览器中转译为 Alarm'), 'Real Alarm non-inference boundary is missing');
 assert(siteScopedShell.includes("effectiveCapabilities.includes('alarm.list')"), 'Site Alarm navigation is not capability gated');
 assert(siteScopedShell.includes('registerUnsavedDraft={registerUnsavedDraft}'), 'Site shell does not protect local Alarm lifecycle drafts');
-assert(realApp.includes("platformNavigation.filter((item) => item.id !== 'alarms')"), 'Site navigation still exposes the obsolete global Alarm placeholder');
+assert(realApp.includes("platformNavigation.filter((item) => item.id === 'system')") && realApp.includes('buildSiteNavigation(selectedSite'), 'Site navigation does not isolate platform-global navigation from Site-scoped Alarm navigation');
 
 assert(publicBrowser.includes("delete process.env.VITE_S4_LOCAL_ALARMS") && publicBrowser.includes('public-gateway-get-only-no-local-or-telemetry-inference'), 'Public Alarm browser certification is not Gateway-only');
 assert(publicBrowser.includes('capability-denial-generic-boundary-and-cache-purge') && publicBrowser.includes('lifecycleWrites: false'), 'Public Alarm browser certification does not prove denial and no writes');

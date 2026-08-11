@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 39,
+  "title": "IoT / Edge Phase 1",
+  "tags": ["iot", "edge", "mqtt"],
+  "templating": {"list": []},
+  "panels": [
+    {"id":1,"title":"MQTT connected","type":"stat","targets":[{"expr":"max(hvac_mqtt_connected)"}]},
+    {"id":2,"title":"MQTT subscribed","type":"stat","targets":[{"expr":"max(hvac_mqtt_subscribed)"}]},
+    {"id":3,"title":"MQTT messages/s","type":"timeseries","targets":[{"expr":"sum(rate(hvac_mqtt_messages_received_total[5m]))"}]},
+    {"id":4,"title":"MQTT values/s by outcome","type":"timeseries","targets":[{"expr":"sum by (outcome) (rate(hvac_mqtt_values_total[5m]))"}]},
+    {"id":5,"title":"MQTT processing p95","type":"timeseries","targets":[{"expr":"histogram_quantile(0.95, sum by (le) (rate(hvac_mqtt_message_processing_duration_seconds_bucket[5m])))"}]},
+    {"id":6,"title":"Processing queue utilization","type":"timeseries","targets":[{"expr":"max(hvac_mqtt_processing_queue_depth) / clamp_min(max(hvac_mqtt_processing_queue_capacity), 1)"}]},
+    {"id":7,"title":"Retries","type":"timeseries","targets":[{"expr":"sum(rate(hvac_mqtt_message_retries_total[5m]))"}]},
+    {"id":8,"title":"Dropped messages","type":"timeseries","targets":[{"expr":"sum(rate(hvac_mqtt_messages_processed_total{outcome=\"dropped\"}[5m]))"}]},
+    {"id":9,"title":"Replay messages/s","type":"timeseries","targets":[{"expr":"sum(rate(hvac_mqtt_replay_messages_total[5m]))"}]},
+    {"id":10,"title":"S2 MQTT source lag p95","type":"timeseries","targets":[{"expr":"histogram_quantile(0.95, sum by (le) (rate(hvac_s2_source_lag_seconds_bucket{dependency=\"mqtt\"}[5m])))"}]},
+    {"id":11,"title":"Edge MQTT connected","type":"stat","targets":[{"expr":"max(hvac_edge_mqtt_connected)"}]},
+    {"id":12,"title":"Edge Store & Forward queue bytes","type":"timeseries","targets":[{"expr":"max(hvac_edge_mqtt_queue_bytes)"}]},
+    {"id":13,"title":"Edge Store & Forward utilization","type":"timeseries","targets":[{"expr":"max(hvac_edge_mqtt_queue_utilization_ratio)"}]},
+    {"id":14,"title":"Edge values queued/s","type":"timeseries","targets":[{"expr":"sum(rate(hvac_edge_mqtt_values_total{outcome=\"queued\"}[5m]))"}]},
+    {"id":15,"title":"Edge publish p95","type":"timeseries","targets":[{"expr":"histogram_quantile(0.95, sum by (le) (rate(hvac_edge_mqtt_publish_duration_seconds_bucket[5m])))"}]},
+    {"id":16,"title":"Edge queue limit rejections","type":"timeseries","targets":[{"expr":"sum(rate(hvac_edge_mqtt_queue_limit_rejections_total[5m]))"}]},
+    {"id":17,"title":"Edge MQTT connection outcomes","type":"timeseries","targets":[{"expr":"sum by (outcome) (rate(hvac_edge_mqtt_connections_total[5m]))"}]},
+    {"id":18,"title":"Edge MQTT disconnections","type":"timeseries","targets":[{"expr":"sum by (reason_family) (rate(hvac_edge_mqtt_disconnections_total[5m]))"}]},
+    {"id":19,"title":"Edge publish outcomes","type":"timeseries","targets":[{"expr":"sum by (outcome) (rate(hvac_edge_mqtt_publishes_total[5m]))"}]},
+    {"id":20,"title":"Edge metric refresh failures","type":"timeseries","targets":[{"expr":"sum(rate(hvac_edge_mqtt_metric_refresh_failures_total[5m]))"}]}
+  ]
+}

@@ -20,7 +20,7 @@ const requiredFiles = [
   'scripts/render-s3-local-thingsboard-runtime.mjs',
   'scripts/s3-local-thingsboard.mjs',
   'apps/hvac-web/src/api/commands.ts',
-  'apps/hvac-web/src/real/RealCommands.tsx',
+  'apps/hvac-web/src/api/command-contract.ts',
   'apps/hvac-web/src/pages/Commands/index.tsx',
   'services/command-service/cmd/command-service/main.go',
   'services/command-service/cmd/command-service/main_test.go',
@@ -62,7 +62,7 @@ const commandRuntimeTests = read('services/command-service/pkg/commandservice/ru
 const localGateway = read('services/platform-gateway/cmd/s3-local-web-gateway/main.go');
 const localGatewayTests = read('services/platform-gateway/cmd/s3-local-web-gateway/main_test.go');
 const commandApi = read('apps/hvac-web/src/api/commands.ts');
-const realCommands = read('apps/hvac-web/src/real/RealCommands.tsx');
+const commandContract = read('apps/hvac-web/src/api/command-contract.ts');
 const commandPage = read('apps/hvac-web/src/pages/Commands/index.tsx');
 
 requireMatch(yaml, /name:\s+s3-local\b/, 's3-local namespace');
@@ -113,27 +113,29 @@ requireMatch(thingsBoardBridge, /tls\.RequireAndVerifyClientCert/, 'ThingsBoard 
 requireMatch(thingsBoardBridge, /host\.docker\.internal/, 'ThingsBoard Bridge local host restriction');
 requireMatch(thingsBoardBridge, /setTemperatureSetpoint/, 'ThingsBoard virtual Device RPC method');
 requireMatch(seed, /OpenPostgresStore/, 'production PostgreSQL store reuse');
+requireMatch(seed, /S3_LOCAL_TENANT_ID/, 'local seed Tenant scope');
+requireMatch(seed, /S3_LOCAL_COMMAND_POINT_ID/, 'local seed canonical Command Point');
 requireMatch(seed, /ExpiresAt:\s+now\.Add\(25 \* time\.Second\)/, 'bounded local authorization lifetime');
+requireMatch(launcher, /"schemaVersion": 2[\s\S]*"tenantId"[\s\S]*"commandPointId"[\s\S]*"verificationPointKey"/, 'base local Device catalog v2 authority');
 
-for (const token of ['tls.VersionTLS13', 'X-Command-Grant', 'X-Command-Read-Context', 'X-CSRF-Token', 'spiffe://hvac.local/platform-gateway', 'formal_certification_claim", false']) {
-  requireMatch(localGateway, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `local Gateway invariant ${token}`);
+for (const token of ['tls.VersionTLS13', 'X-Command-Grant', 'X-Command-Read-Context', 'X-CSRF-Token', 'spiffe://hvac.local/platform-gateway', 'formal_certification_claim", false', 'commandPointId', 'verificationPointKey', 'catalog.SchemaVersion != 2']) {
+  if (!localGateway.includes(token)) throw new Error(`local Gateway invariant ${token} is missing`);
 }
-for (const test of ['TestLocalWebGatewayCreatesExactShortLivedCommandGrant', 'TestLocalWebGatewayReadUsesExactDelegation', 'TestLocalWebGatewayRejectsMutationBeforeUpstream']) {
+for (const test of ['TestLocalWebGatewayCreatesExactShortLivedCommandGrant', 'TestLocalWebGatewayReadUsesExactDelegation', 'TestLocalWebGatewayRejectsMutationBeforeUpstream', 'TestLocalDeviceProjectionDoesNotExposeAuthorityMetadata', 'TestLoadDeviceCatalogRequiresV2TenantAndPointAuthority']) {
   requireMatch(localGatewayTests, new RegExp(test), `local Gateway test ${test}`);
 }
 
-requireMatch(commandApi, /COMMAND_PUBLIC_ROUTES_ENABLED = false as const/, 'production Command route denial');
+requireMatch(commandApi, /COMMAND_LOCAL_ROUTES_ENABLED = API_MODE === 'real'/, 'local Command route environment gate');
 requireMatch(commandApi, /import\.meta\.env\.DEV/, 'development-only local Command gate');
 requireMatch(commandApi, /VITE_S3_LOCAL_COMMANDS/, 'explicit local Command flag');
-requireMatch(commandApi, /\/api\/v1\/local\/devices/, 'local Device catalog API');
-requireMatch(commandApi, /listScopedLocalCommandDevices/, 'Site-scoped local Device catalog client');
-requireMatch(localGateway, /OrganizationID string `json:"organizationId"`/, 'local Device Organization projection');
+requireMatch(commandContract, /pointId:\s+commandUUIDv7Schema/, 'public Command canonical Point projection');
+requireMatch(localGateway, /OrganizationID\s+string `json:"organizationId"`/, 'local Device Organization projection');
+requireMatch(localGateway, /TenantID\s+string `json:"tenantId"`/, 'local Device Tenant projection');
+requireMatch(localGateway, /CommandPointID\s+string `json:"commandPointId"`/, 'local Device Command Point projection');
 requireMatch(localGateway, /SiteID\s+string `json:"siteId"`/, 'local Device Site projection');
-requireMatch(realCommands, /LOCAL \/ NON-FORMAL \/ PRODUCTION DISABLED/, 'Real local Command environment label');
-requireMatch(realCommands, /refetchInterval/, 'Real Command status polling');
-requireMatch(realCommands, /\? 1000 : false/, 'Real one-second non-terminal polling');
 requireMatch(commandPage, /LOCAL \/ KIND/, 'local Web environment label');
-requireMatch(commandPage, /选择本地虚拟设备/, 'local virtual Device selector');
+requireMatch(commandPage, /S3 本地集成环境/, 'local Web safety notice');
+requireMatch(commandPage, /const mayCreate = can\(role, 'create', 'command'\) && API_MODE === 'mock'/, 'local UI mutation denial');
 requireMatch(commandPage, /refetchInterval/, 'Command status polling');
 requireMatch(commandPage, /\? 1000 : false/, 'one-second non-terminal polling');
 
@@ -147,6 +149,8 @@ requireMatch(webSmoke, /\/api\/v1\/commands/, 'same-origin Command submission');
 requireMatch(webSmoke, /SUCCEEDED/, 'Web smoke terminal status');
 requireMatch(webSmoke, /S3_LOCAL_WEB_MAX_TERMINAL_MS/, 'configurable Web smoke terminal ceiling');
 requireMatch(webSmoke, /terminalDurationMs/, 'Web smoke terminal latency evidence');
+requireMatch(webSmoke, /commandPointID/, 'Web smoke canonical Command Point assertion');
+requireMatch(webSmoke, /command\.parameters\?\.setpointC/, 'Web smoke canonical parameter projection');
 requireMatch(webSmoke, /formalCertificationClaim:\s*false/, 'Web smoke claim denial');
 
 requireMatch(readme, /http:\/\/127\.0\.0\.1:5173\/commands/, 'local Web URL documentation');
@@ -170,6 +174,8 @@ requireMatch(thingsBoardProvisioner, /formalCertificationClaim:\s*false/, 'Thing
 requireMatch(thingsBoardRenderer, /command-dispatcher-\$\{device\.slug\}/, 'per-Device Dispatcher rendering');
 requireMatch(thingsBoardRenderer, /command-verifier-\$\{device\.slug\}/, 'per-Device Verifier rendering');
 requireMatch(thingsBoardManager, /127\.0\.0\.1:18080/, 'ThingsBoard manager loopback endpoint');
+requireMatch(thingsBoardManager, /upgradeDeviceCatalog/, 'ThingsBoard Device catalog v2 upgrade');
+requireMatch(thingsBoardManager, /commandPointIDs/, 'ThingsBoard canonical Command Point identities');
 requireMatch(thingsBoardManager, /COMMAND_RUNTIME_COHORTS_FILE/, 'multi-Cohort Command Runtime wiring');
 requireMatch(thingsBoardManager, /S3_LOCAL_WEB_MAX_TERMINAL_MS:\s*'15000'/, 'ThingsBoard 15-second terminal latency gate');
 forbidMatch(thingsBoardProvisioner, /formalCertificationClaim:\s*true/, 'ThingsBoard formal certification claim');

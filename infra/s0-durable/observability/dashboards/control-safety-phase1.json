@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 39,
+  "title": "Control / Safety Phase 1",
+  "tags": ["control", "command", "safety"],
+  "templating": {"list": []},
+  "panels": [
+    {"id":1,"title":"Command create rate","type":"timeseries","targets":[{"expr":"sum(rate(hvac_command_http_requests_total{route=\"commands.create\",status_class=\"2xx\"}[5m]))"}]},
+    {"id":2,"title":"Command API p95","type":"timeseries","targets":[{"expr":"histogram_quantile(0.95, sum by (le) (rate(hvac_command_http_request_duration_seconds_bucket[5m])))"}]},
+    {"id":3,"title":"Command API 5xx rate","type":"timeseries","targets":[{"expr":"sum(rate(hvac_command_http_requests_total{status_class=\"5xx\"}[5m])) / clamp_min(sum(rate(hvac_command_http_requests_total[5m])), 1)"}]},
+    {"id":4,"title":"Dispatch results","type":"timeseries","targets":[{"expr":"sum by (outcome) (rate(hvac_command_dispatch_results_total[5m]))"}]},
+    {"id":5,"title":"Verification outcomes","type":"timeseries","targets":[{"expr":"sum by (outcome) (rate(hvac_command_verifications_total[5m]))"}]},
+    {"id":6,"title":"Command success rate","type":"stat","targets":[{"expr":"sum(rate(hvac_command_verifications_total{outcome=\"verified\"}[10m])) / clamp_min(sum(rate(hvac_command_verifications_total[10m])), 1)"}]},
+    {"id":7,"title":"Verification timeout rate","type":"stat","targets":[{"expr":"sum(rate(hvac_command_verifications_total{outcome=\"timed_out\"}[10m])) / clamp_min(sum(rate(hvac_command_verifications_total[10m])), 1)"}]},
+    {"id":8,"title":"Verification p95","type":"timeseries","targets":[{"expr":"histogram_quantile(0.95, sum by (le) (rate(hvac_command_verification_duration_seconds_bucket[5m])))"}]},
+    {"id":9,"title":"Command API in flight","type":"timeseries","targets":[{"expr":"max(hvac_command_http_in_flight)"}]},
+    {"id":10,"title":"S2 security zero invariants","type":"stat","targets":[{"expr":"sum(hvac_s2_security_zero_invariant_total)"}]}
+  ]
+}

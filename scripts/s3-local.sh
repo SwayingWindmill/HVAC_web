@@ -11,9 +11,12 @@ CONTEXT="kind-$CLUSTER"
 NAMESPACE="s3-local"
 KIND_VERSION="v0.32.0"
 KIND_SHA256="50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54"
+TENANT_ID="018f3d00-0000-7000-8000-000000000001"
 ORG_ID="018f3e00-0000-7000-8000-000000000001"
 SITE_ID="018f3e00-1000-7000-8000-000000000001"
 DEVICE_ID="018f3e00-3000-7000-8000-000000000001"
+COMMAND_POINT_ID="018f3e00-4000-7000-8000-000000000001"
+VERIFICATION_POINT_KEY="zone.temperature_setpoint"
 
 IMAGES=(
   "hvac-s3-local/command-service:dev"
@@ -132,9 +135,9 @@ JSON
   chmod 0600 "$OUT/provider-value" "$OUT/web-csrf-token" "$OUT/command-service-dsn"
   cat > "$OUT/device-catalog.json" <<JSON
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "devices": [
-    {"deviceId": "$DEVICE_ID", "name": "Local HVAC Device", "type": "HVAC"}
+    {"tenantId": "$TENANT_ID", "organizationId": "$ORG_ID", "siteId": "$SITE_ID", "deviceId": "$DEVICE_ID", "commandPointId": "$COMMAND_POINT_ID", "verificationPointKey": "$VERIFICATION_POINT_KEY", "name": "Local HVAC Device", "type": "HVAC"}
   ]
 }
 JSON

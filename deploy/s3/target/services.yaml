@@ -13,3 +13,6 @@ spec:
     - name: https
       port: 8447
       targetPort: https
+    - name: diagnostics
+      port: 19087
+      targetPort: diagnostics

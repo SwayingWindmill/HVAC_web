@@ -1,5 +1,7 @@
 # S0 observability operations
 
+> **Scope: CERTIFICATION_REFERENCE.** The Kafka/Redpanda signals and runbooks below apply only to the retained S0 compatibility/certification path. Redpanda is not required by the canonical Phase 1 deployment; the default Phase 1 platform under `deploy/platform/phase1/` keeps Kafka/Redpanda outside the required runtime.
+
 ## Signals and boundaries
 
 The S0 platform emits W3C Trace Context across public HTTP, private mTLS HTTP, PostgreSQL-backed Outbox, Kafka headers, Inbox processing, and Audit Ledger writes. Correlation and causation identifiers are persisted in the event envelope so incident analysis does not depend on trace-backend retention.

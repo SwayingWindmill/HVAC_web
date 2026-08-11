@@ -1,0 +1,419 @@
+name: hvac-phase1
+
+x-go-service: &go-service
+  restart: unless-stopped
+  env_file:
+    - ${PHASE1_ENV_FILE:-./environments/development.runtime.env}
+  security_opt:
+    - no-new-privileges:true
+  read_only: true
+  tmpfs:
+    - /tmp
+
+services:
+  nginx:
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/nginx/Dockerfile
+      args:
+        HVAC_WEB_BUILD_ID: ${HVAC_WEB_BUILD_ID:-phase1-local}
+        HVAC_WEB_GATEWAY_BASE_PATH: ${HVAC_WEB_GATEWAY_BASE_PATH:-}
+        HVAC_WEB_REALTIME_PROTOCOL: ${HVAC_WEB_REALTIME_PROTOCOL:-centrifugo}
+    image: ${HVAC_WEB_IMAGE:-hvac/hvac-web-real:0.1.0-dev}
+    restart: unless-stopped
+    depends_on:
+      - platform-gateway
+      - centrifugo
+    ports:
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ${PUBLIC_TLS_DIR:-./runtime/tls}:/run/hvac/tls:ro
+    networks: [public, application]
+
+  platform-gateway:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/platform-gateway/cmd/platform-gateway }
+    image: ${PLATFORM_GATEWAY_IMAGE:-hvac/platform-gateway:0.1.0-dev}
+    environment:
+      PLATFORM_GATEWAY_ADDR: :8080
+      PLATFORM_GATEWAY_DIAGNOSTICS_ADDR: :19080
+    expose: ["8080", "19080"]
+    networks: [application, data]
+
+  iam-service:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/iam-service/cmd/iam-service }
+    image: ${IAM_SERVICE_IMAGE:-hvac/iam-service:0.1.0-dev}
+    environment:
+      IAM_SERVICE_ADDR: :8444
+      IAM_DIAGNOSTICS_ADDR: :19081
+    expose: ["8444", "19081"]
+    networks: [application, data]
+
+  platform-core-service:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/platform-core-service/cmd/platform-core-service }
+    image: ${PLATFORM_CORE_IMAGE:-hvac/platform-core-service:0.1.0-dev}
+    environment:
+      CORE_SERVICE_ADDR: :18445
+      CORE_DIAGNOSTICS_ADDR: :19085
+    expose: ["18445", "19085"]
+    networks: [application, data]
+
+  audit-ledger-service:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/audit-ledger-service/cmd/audit-ledger-service }
+    image: ${AUDIT_LEDGER_IMAGE:-hvac/audit-ledger-service:0.1.0-dev}
+    expose: ["8446", "19082"]
+    networks: [application, data]
+
+  telemetry-runtime-service:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/telemetry-runtime-service/cmd/telemetry-runtime-service }
+    image: ${TELEMETRY_RUNTIME_IMAGE:-hvac/telemetry-runtime-service:0.1.0-dev}
+    environment:
+      TELEMETRY_SERVICE_ADDR: :8446
+      TELEMETRY_DIAGNOSTICS_ADDR: :19086
+    expose: ["8446", "19086"]
+    networks: [application, data]
+
+  mqtt-telemetry-adapter:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: services/mqtt-telemetry-adapter/Dockerfile
+    image: ${MQTT_ADAPTER_IMAGE:-hvac/mqtt-telemetry-adapter:0.1.0-dev}
+    expose: ["19094"]
+    networks: [application, mqtt]
+
+  telemetry-history-projector:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/telemetry-runtime-service/cmd/telemetry-history-projector }
+    image: ${TELEMETRY_HISTORY_PROJECTOR_IMAGE:-hvac/telemetry-history-projector:0.1.0-dev}
+    networks: [application, data]
+
+  analytics-read-model-projector:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/analytics-read-model-projector/cmd/analytics-read-model-projector }
+    image: ${ANALYTICS_PROJECTOR_IMAGE:-hvac/analytics-read-model-projector:0.1.0-dev}
+    expose: ["19089"]
+    networks: [application, data]
+
+  telemetry-query-service:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/telemetry-query-service/cmd/telemetry-query-service }
+    image: ${TELEMETRY_QUERY_IMAGE:-hvac/telemetry-query-service:0.1.0-dev}
+    environment:
+      QUERY_SERVICE_ADDR: :18447
+      QUERY_DIAGNOSTICS_ADDR: :19088
+    expose: ["18447", "19088"]
+    networks: [application, data]
+
+  alarm-service:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/alarm-service/cmd/alarm-service }
+    image: ${ALARM_SERVICE_IMAGE:-hvac/alarm-service:0.1.0-dev}
+    environment:
+      ALARM_SERVICE_ADDR: :8448
+      ALARM_DIAGNOSTICS_ADDR: :19088
+    expose: ["8448", "19088"]
+    networks: [application, data]
+
+  command-service:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/command-service/cmd/command-service }
+    image: ${COMMAND_SERVICE_IMAGE:-hvac/command-service:0.1.0-dev}
+    environment:
+      COMMAND_SERVICE_ADDR: :8447
+      COMMAND_DIAGNOSTICS_ADDR: :19087
+    expose: ["8447", "19087"]
+    networks: [application, data]
+
+  command-dispatcher:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/command-dispatcher/cmd/command-dispatcher }
+    image: ${COMMAND_DISPATCHER_IMAGE:-hvac/command-dispatcher:0.1.0-dev}
+    expose: ["19088"]
+    networks: [application]
+
+  command-verifier:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/command-dispatcher/cmd/command-verifier }
+    image: ${COMMAND_VERIFIER_IMAGE:-hvac/command-verifier:0.1.0-dev}
+    expose: ["19089"]
+    networks: [application]
+
+  work-order-service:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/work-order-service/cmd/work-order-service }
+    image: ${WORK_ORDER_SERVICE_IMAGE:-hvac/work-order-service:0.1.0-dev}
+    environment:
+      WORK_ORDER_SERVICE_ADDR: :8449
+    expose: ["8449"]
+    networks: [application, data]
+
+  postgres:
+    image: postgres:16.4-bookworm
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_timeout=60s
+      - -c
+      - archive_command=test ! -f /var/lib/postgresql/wal-archive/%f && cp %p /var/lib/postgresql/wal-archive/%f
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hvac_s0}
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ${POSTGRES_WAL_ARCHIVE_DIR:-./runtime/backups/postgres/wal}:/var/lib/postgresql/wal-archive
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER:-postgres} -d ${POSTGRES_DB:-hvac_s0}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [data]
+
+  phase1-migrator:
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/migrations/Dockerfile
+    image: ${PHASE1_MIGRATOR_IMAGE:-hvac/phase1-migrator:0.1.0-dev}
+    profiles: ["migration"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_ADMIN_USER:-postgres}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
+      PHASE1_RELEASE_REVISION: ${PHASE1_RELEASE_REVISION:-unversioned-local-run}
+      PHASE1_DB_ROLE_CREDENTIALS_FILE: /run/hvac/db-role-credentials/roles.sql
+    volumes:
+      - ${PHASE1_DB_ROLE_CREDENTIALS_SQL:-./runtime/db-role-credentials/roles.sql}:/run/hvac/db-role-credentials/roles.sql:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    networks: [data]
+
+  postgres-backup:
+    image: postgres:16.4-bookworm
+    profiles: ["backup"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_ADMIN_USER:-postgres}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
+    volumes:
+      - ./backup/postgres-base-backup.sh:/usr/local/bin/postgres-base-backup:ro
+      - ${POSTGRES_BASE_BACKUP_DIR:-./runtime/backups/postgres/base}:/backup
+    entrypoint: ["/bin/bash", "/usr/local/bin/postgres-base-backup"]
+    networks: [data]
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.3.12.3
+    restart: unless-stopped
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ${CLICKHOUSE_BACKUP_DIR:-./runtime/backups/clickhouse}:/var/lib/clickhouse/backups
+      - ./backup/clickhouse-backup.xml:/etc/clickhouse-server/config.d/backup.xml:ro
+      - ../../../infra/s2-telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks: [data]
+
+  clickhouse-backup:
+    image: clickhouse/clickhouse-server:26.3.12.3
+    profiles: ["backup"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    volumes:
+      - ./backup/clickhouse-backup.sh:/usr/local/bin/clickhouse-backup:ro
+    entrypoint: ["/bin/bash", "/usr/local/bin/clickhouse-backup"]
+    networks: [data]
+
+  redis:
+    image: redis:7.4.2-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+    networks: [data]
+
+  mqtt-broker:
+    image: eclipse-mosquitto:2.1.2-alpine
+    restart: unless-stopped
+    ports:
+      - "${MQTT_TLS_PORT:-8883}:8883"
+    volumes:
+      - ../../../infra/s2-telemetry/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../../../infra/s2-telemetry/mqtt/acl:/mosquitto/config/acl:ro
+      - ${MQTT_PKI_DIR:-./runtime/mqtt-pki}:/mosquitto/config/pki:ro
+      - mqtt-data:/mosquitto/data
+    networks: [public, mqtt]
+
+  centrifugo:
+    image: centrifugo/centrifugo:v6.8.1
+    restart: unless-stopped
+    command: ["/usr/local/bin/centrifugo", "--config", "/centrifugo/centrifugo.json"]
+    env_file:
+      - ${PHASE1_ENV_FILE:-./environments/development.runtime.env}
+    volumes:
+      - ./realtime/centrifugo.json:/centrifugo/centrifugo.json:ro
+      - ${INTERNAL_PKI_DIR:-./runtime/internal-pki}:/run/hvac/pki:ro
+    depends_on: [redis, telemetry-runtime-service]
+    expose: ["8000"]
+    networks: [application, data]
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ${HOST_DOCKER_LOG_DIR:-/var/lib/docker/containers}:/var/lib/docker/containers:ro
+    expose: ["4317", "4318", "9464", "13133"]
+    networks: [application, observability]
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=15d"]
+    volumes:
+      - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ../../../infra/s0-durable/observability/alerts:/etc/prometheus/alerts:ro
+      - prometheus-data:/prometheus
+    expose: ["9090"]
+    networks: [application, observability]
+
+  loki:
+    image: ${LOKI_IMAGE:-grafana/loki:3.2.1}
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./observability/loki.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    expose: ["3100"]
+    networks: [observability]
+
+  tempo:
+    image: ${TEMPO_IMAGE:-grafana/tempo:2.6.1}
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./observability/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    expose: ["3200", "4317"]
+    networks: [observability]
+
+  grafana:
+    image: ${GRAFANA_IMAGE:-grafana/grafana:11.2.2}
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../../../infra/s0-durable/observability/dashboards:/var/lib/grafana/dashboards:ro
+    expose: ["3000"]
+    networks: [observability]
+
+  redpanda-compat:
+    image: redpandadata/redpanda:v24.2.18
+    profiles: ["compat-event-backbone"]
+    command: ["redpanda", "start", "--overprovisioned", "--smp", "1", "--memory", "512M", "--reserve-memory", "0M", "--node-id", "0", "--check=false", "--kafka-addr", "0.0.0.0:9092"]
+    networks: [application]
+
+  outbox-relay-compat:
+    <<: *go-service
+    profiles: ["compat-event-backbone"]
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/outbox-relay/cmd/outbox-relay }
+    image: ${OUTBOX_RELAY_IMAGE:-hvac/outbox-relay:0.1.0-dev}
+    depends_on: [redpanda-compat]
+    networks: [application, data]
+
+networks:
+  public: {}
+  application:
+    internal: true
+  data:
+    internal: true
+  mqtt:
+    internal: true
+  observability:
+    internal: true
+
+volumes:
+  postgres-data: {}
+  clickhouse-data: {}
+  redis-data: {}
+  mqtt-data: {}
+  prometheus-data: {}
+  loki-data: {}
+  tempo-data: {}
+  grafana-data: {}

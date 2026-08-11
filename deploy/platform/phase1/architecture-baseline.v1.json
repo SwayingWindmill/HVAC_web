@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "name": "智慧能源系统 Phase 1 总体与部署架构基线",
+  "sourceOfTruth": "架构规划/智慧能源系统部署与运维架构设计.md",
+  "phase": "phase1",
+  "deploymentModel": {
+    "host": "linux-server",
+    "orchestration": "docker-compose",
+    "kubernetesRequired": false,
+    "singleServerAllowed": true,
+    "fewServersAllowed": true
+  },
+  "environments": [
+    "development",
+    "testing",
+    "staging",
+    "production"
+  ],
+  "environmentIsolation": [
+    "database",
+    "redis",
+    "mqtt",
+    "storage",
+    "secrets",
+    "domain",
+    "configuration"
+  ],
+  "logicalLayers": [
+    "edge",
+    "central-platform",
+    "data-platform",
+    "monitoring-platform"
+  ],
+  "publicZone": {
+    "owner": "nginx",
+    "allowedPorts": [443, 8883],
+    "allowedProtocols": ["HTTPS", "WSS", "MQTT_TLS"],
+    "databasePublicExposureAllowed": false,
+    "internalServicePublicExposureAllowed": false
+  },
+  "applicationZone": {
+    "requiredCapabilities": [
+      "frontend-static-hosting",
+      "platform-api",
+      "identity-and-authorization",
+      "registry-device-management",
+      "telemetry-ingest-and-current-state",
+      "telemetry-history-and-query",
+      "alarm",
+      "control",
+      "work-order",
+      "background-workers"
+    ],
+    "servicePrinciple": "stateless-where-possible"
+  },
+  "dataZone": {
+    "postgresql": "business-config-current-state-control-alarm",
+    "clickhouse": "historical-telemetry-and-analytics",
+    "redis": "rebuildable-cache-and-realtime-transport",
+    "mqtt": "edge-cloud-transport",
+    "objectStorage": "deferred-until-report-export-ota-model-or-cold-archive-requires-it"
+  },
+  "edgeZone": {
+    "cloudDirectOTAccessAllowed": false,
+    "path": ["cloud", "edge-gateway", "ot-protocol", "device"],
+    "requiredProperties": [
+      "local-collection",
+      "store-and-forward",
+      "cloud-failure-isolation",
+      "replay-after-recovery"
+    ]
+  },
+  "observability": {
+    "requiredSignals": ["metrics", "logs", "traces", "events", "audit"],
+    "requiredOperationalViews": ["platform", "iot", "data", "control"],
+    "phase1Topology": "single-instance-compose"
+  },
+  "delivery": {
+    "pipeline": ["git", "ci", "test", "build", "image", "registry", "staging", "approval", "production"],
+    "mutableLatestOnlyAllowed": false,
+    "gitCommitTraceabilityRequired": true,
+    "migrationInReleaseFlowRequired": true,
+    "backwardCompatibleMigrationPreferred": true
+  },
+  "recovery": {
+    "backupRequired": true,
+    "restoreTestRequired": true,
+    "rpoRtoMustBeDefinedBeforeProductionAcceptance": true,
+    "edgeStoreAndForwardCountsTowardTelemetryRecovery": true
+  },
+  "phase1DeferredCapabilities": [
+    "kubernetes-as-primary-orchestrator",
+    "service-mesh",
+    "automatic-horizontal-scaling",
+    "multi-region",
+    "postgresql-replica-ha",
+    "clickhouse-replica-ha",
+    "mqtt-cluster",
+    "kafka-or-redpanda-as-required-platform-backbone",
+    "gitops-controller",
+    "multi-node-observability-cluster"
+  ]
+}

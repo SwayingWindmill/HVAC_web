@@ -146,7 +146,7 @@ try {
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'telemetry_runtime' AND c.relkind = 'r'
   `);
-  expectEqual(tableState, '17|17|17', 'table/RLS baseline');
+  expectEqual(tableState, '18|18|18', 'table/RLS baseline');
   report.assertions.tableRlsState = tableState;
 
   const deliveryEvidenceRls = psql(`
@@ -201,10 +201,11 @@ try {
 
   const duplicateBinding = psql(`
     INSERT INTO telemetry_runtime.registry_device_bindings (
-      device_id, owning_organization_id, site_id, integration_instance_id,
+      tenant_id, device_id, owning_organization_id, site_id, integration_instance_id,
       external_entity_type, external_id, binding_status, binding_revision,
       source_registry_revision, valid_from, valid_to, updated_at
     ) VALUES (
+      '018f2d00-0000-7000-8000-000000000001',
       '018f2e00-3000-7000-8000-000000000099',
       '018f2e00-0000-7000-8000-000000000001',
       '018f2e00-1000-7000-8000-000000000001',

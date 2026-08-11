@@ -12,11 +12,10 @@ const [
   openapi,
   commandApi,
   commandContract,
-  realCommands,
   commandPage,
   permissions,
   app,
-  sidebar,
+  navigation,
   gateway,
   gatewayTests,
   commandHTTP,
@@ -28,11 +27,10 @@ const [
   readJSON('contracts/http/s3-command-public.openapi.json'),
   read('apps/hvac-web/src/api/commands.ts'),
   read('apps/hvac-web/src/api/command-contract.ts'),
-  read('apps/hvac-web/src/real/RealCommands.tsx'),
   read('apps/hvac-web/src/pages/Commands/index.tsx'),
   read('apps/hvac-web/src/auth/permissions.ts'),
   read('apps/hvac-web/src/App.tsx'),
-  read('apps/hvac-web/src/layout/Sidebar.tsx'),
+  read('apps/hvac-web/src/store/ui.ts'),
   read('services/platform-gateway/internal/gateway/command.go'),
   read('services/platform-gateway/internal/gateway/command_test.go'),
   read('services/command-service/pkg/commandservice/http.go'),
@@ -65,33 +63,35 @@ for (const [method, path] of [
   assert(ownership.routes?.some((route) => route.method === method && route.path === path && route.rollout === 'disabled'), `Command ownership is missing: ${method} ${path}`);
 }
 
-assert(openapi.info?.version === '0.4.0-disabled-real-site-scope', 'Command OpenAPI version is not the Real Site scope baseline');
+assert(openapi.info?.version === '0.5.0-command-point-identity', 'Command OpenAPI version is not the canonical Point identity baseline');
 const approvalOperation = openapi.paths?.['/api/v1/commands/{commandId}:approve']?.post;
 assert(approvalOperation?.['x-production-traffic-percent'] === 0, 'Approval OpenAPI enabled production traffic');
 assert(openapi.components?.schemas?.ApproveCommandRequest?.maxProperties === 0, 'Public approval request is not empty by contract');
 for (const forbidden of ['organizationId', 'siteId', 'deviceId', 'principalId', 'approverRole', 'payloadHash', 'risk', 'riskRuleRevision', 'providerMethod', 'providerParams']) {
   assert(approvalOperation?.['x-client-forbidden-fields']?.includes(forbidden), `Approval OpenAPI no longer forbids ${forbidden}`);
 }
-for (const field of ['organizationId', 'siteId', 'requiredApprovalCount', 'setpointC', 'transitions']) {
+for (const field of ['organizationId', 'siteId', 'deviceId', 'pointId', 'requiredApprovalCount', 'parameters', 'transitions']) {
   assert(openapi.components?.schemas?.Command?.required?.includes(field), `Command detail is missing required ${field}`);
 }
+assert(openapi.components?.schemas?.Command?.properties?.pointId?.format === 'uuid', 'Command detail pointId is not canonical UUID identity');
 assert(openapi.components?.schemas?.CommandTransition?.properties?.actorType?.enum?.join('|') === 'PRINCIPAL|WORKLOAD', 'Timeline exposes unsupported actor identity');
 
 for (const token of [
-  'COMMAND_PUBLIC_ROUTES_ENABLED = false as const',
+  "COMMAND_LOCAL_ROUTES_ENABLED = API_MODE === 'real'",
+  'import.meta.env.DEV',
+  'VITE_S3_LOCAL_COMMANDS',
   'createScopedCommand',
   'getScopedCommand',
   'approveScopedCommand',
   'trustedOrganizationId',
   'trustedSiteId',
-  "capability: 'SET_TEMPERATURE_SETPOINT'",
-  'parameters: { setpointC }',
+  'commandPointId',
+  'parameters',
   'body: JSON.stringify({})',
-  'Command 控制路由已登记，但尚未启用生产流量',
 ]) {
   assert(commandApi.includes(token), `HVAC Web Command API invariant is missing: ${token}`);
 }
-for (const token of ['organizationId', 'siteId', 'superRefine', 'Command timeline does not converge', 'validateCommandScope', 'RESOURCE_NOT_FOUND']) {
+for (const token of ['organizationId', 'siteId', 'pointId', 'superRefine', 'Command timeline does not converge', 'validateCommandScope', 'RESOURCE_NOT_FOUND']) {
   assert(commandContract.includes(token), `HVAC Web Command contract invariant is missing: ${token}`);
 }
 for (const forbidden of ['principalId', 'approverRole', 'providerMethod', 'providerParams']) {
@@ -99,32 +99,27 @@ for (const forbidden of ['principalId', 'approverRole', 'providerMethod', 'provi
 }
 
 for (const token of [
-  '生产控制保持禁用',
-  '生产流量为 0%',
-  'LOCAL / NON-FORMAL / PRODUCTION DISABLED',
-  '不表示设备已经成功执行',
-  'S2 Snapshot Revision',
-  '状态时间线',
-  '批准 Command',
-]) {
-  assert(realCommands.includes(token), `Real Command UX invariant is missing: ${token}`);
-}
-for (const token of [
   '设备结果待确认',
   '不会自动重发',
   "can(role, 'create', 'command')",
   "can(role, 'approve', 'command')",
   'PRODUCTION DISABLED',
   'Route Ownership Registry 仍为 disabled',
+  '生产流量为 0%',
+  'S3 本地集成环境',
+  '不会访问生产设备',
+  '不构成正式认证证据',
   'S2 Snapshot Revision',
   '状态时间线',
+  '审批 Command',
 ]) {
-  assert(commandPage.includes(token), `Demo Command UX invariant is missing: ${token}`);
+  assert(commandPage.includes(token), `Command UX invariant is missing: ${token}`);
 }
+assert(commandPage.includes("const mayCreate = can(role, 'create', 'command') && API_MODE === 'mock'"), 'local/production UI must not expose Command mutation from the generic Commands workbench');
 assert(permissions.includes("| 'commands'") && permissions.includes("| 'command'"), 'Command permission subjects are missing');
 assert(permissions.includes("{ actions: ['approve'], subjects: ['command'] }") || permissions.includes("{ actions: ['create', 'approve'], subjects: ['command'] }"), 'Command approval permission is missing');
 assert(app.includes("'/commands': Commands") && app.includes('path="/commands/:commandId"'), 'Command routes are not registered in HVAC Web');
-assert(sidebar.includes("'/commands'") && sidebar.includes('ControlOutlined'), 'Command navigation is not registered');
+assert(navigation.includes("path: '/commands'") && navigation.includes("icon: 'ControlOutlined'"), 'Command navigation is not registered');
 
 for (const token of [
   'commandRouteApproval',

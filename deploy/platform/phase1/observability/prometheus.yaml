@@ -1,0 +1,47 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts/*.yaml
+
+scrape_configs:
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:9464"]
+
+  - job_name: platform-gateway
+    static_configs:
+      - targets: ["platform-gateway:19080"]
+
+  - job_name: telemetry-runtime
+    static_configs:
+      - targets: ["telemetry-runtime-service:19086"]
+
+  - job_name: mqtt-telemetry-adapter
+    static_configs:
+      - targets: ["mqtt-telemetry-adapter:19094"]
+
+  - job_name: telemetry-query
+    static_configs:
+      - targets: ["telemetry-query-service:19088"]
+
+  - job_name: analytics-projector
+    static_configs:
+      - targets: ["analytics-read-model-projector:19089"]
+
+  - job_name: command
+    static_configs:
+      - targets:
+          - command-service:19087
+          - command-dispatcher:19088
+          - command-verifier:19089
+
+  - job_name: alarm
+    static_configs:
+      - targets: ["alarm-service:19088"]
+
+  - job_name: centrifugo
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["centrifugo:8000"]
