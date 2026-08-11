@@ -17,6 +17,7 @@ import {
 } from '@/api/alarms';
 import type { ProtectedScopeDraft, ProtectedScopeResource } from './protected-scope';
 import { FocusHeading } from './FocusHeading';
+import { siteRoute } from './site-routing';
 import { alarmOperationLabel, alarmStatusLabel, projectRealAlarm } from './real-alarms-projection';
 import './real-alarms.css';
 
@@ -296,7 +297,12 @@ function AlarmWorkbench({
               <article className="real-alarms__detail" data-testid="real-alarm-detail" data-alarm-status={detail.status} data-alarm-version={detail.version}>
                 <div className="real-alarms__detail-heading">
                   <div><h2>{detail.title}</h2><p>{detail.summary}</p></div>
-                  <strong>{detailProjection.severityLabel} · {detailProjection.statusLabel}</strong>
+                  <Space wrap>
+                    <strong>{detailProjection.severityLabel} · {detailProjection.statusLabel}</strong>
+                    {principal.authorization.capabilities.includes('work-order.create') ? (
+                      <Button href={`${siteRoute(site, 'work-orders')}?sourceAlarm=${encodeURIComponent(detail.alarmId)}`}>创建工单</Button>
+                    ) : null}
+                  </Space>
                 </div>
                 <dl className="real-alarms__facts" aria-label="Alarm authoritative projection">
                   <div><dt>Alarm ID</dt><dd><code>{detail.alarmId}</code></dd></div>

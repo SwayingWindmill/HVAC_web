@@ -1,22 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import ReactECharts from 'echarts-for-react';
 import { Alert, Button, Card, Descriptions, Input, Segmented, Select, Space, Tag, Typography } from 'antd';
 import { FundOutlined, LeftOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import PageScaffold from '@/components/PageScaffold';
 import { OperationsMetrics } from '@/components/OperationsUI';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import {
-  buildEnergyTrendData,
   classifyEnergyAnalyticsFailure,
   energySeriesQueryKey,
   energySeriesRevisionKey,
-  energyTotal,
   hasStaleWatermark,
   queryEnergySeries,
   type EnergyAnalyticsRequestOptions,
   type EnergyQualityPolicy,
-  type EnergySeriesPoint,
   type EnergySeriesQuery,
 } from '@/api/energy-analytics';
 import {
@@ -31,6 +27,8 @@ import {
   type EnergyWorkspaceState,
 } from './energy-workspace';
 import { FocusHeading } from './FocusHeading';
+import { summarizeEnergyPoints } from './energy-presentation';
+import { RealEnergyWorkspacePanels } from './RealEnergyWorkspacePanels';
 import type { EnergyRoutePeriod } from './site-routing';
 import './energy-analytics.css';
 
@@ -79,13 +77,6 @@ function formatSignedEnergy(value: number): string {
   return `${new Intl.NumberFormat('zh-CN', {
     maximumFractionDigits: 2, signDisplay: 'always',
   }).format(value)} kWh`;
-}
-
-function formatPeriod(point: EnergySeriesPoint, timezone: string): string {
-  const formatter = new Intl.DateTimeFormat('zh-CN', {
-    timeZone: timezone, dateStyle: 'medium', timeStyle: 'short',
-  });
-  return `${formatter.format(new Date(point.periodStart))} — ${formatter.format(new Date(point.periodEnd))}`;
 }
 
 function comparisonText(current: number | null, previous: number | null): { value: string; detail: string } {
@@ -214,52 +205,19 @@ export function EnergyAnalytics({ site, principal, initialPeriod }: EnergyAnalyt
     principal.context.policyRevision, principal.session.id, queryClient, site.id]);
 
   const response = currentResult.data;
-  const trendData = useMemo(
-    () => buildEnergyTrendData(response?.points ?? [], response?.metadata.actualGranularity ?? currentQuery.granularity),
-    [currentQuery.granularity, response],
-  );
-  const total = response ? energyTotal(response.points) : null;
-  const previousTotal = previousResult.data ? energyTotal(previousResult.data.points) : null;
+  const summary = useMemo(() => summarizeEnergyPoints(response?.points ?? []), [response?.points]);
+  const previousSummary = useMemo(() => summarizeEnergyPoints(previousResult.data?.points ?? []), [previousResult.data?.points]);
+  const total = summary.total;
+  const previousTotal = previousSummary.total;
   const comparison = comparisonText(total, previousTotal);
   const staleWatermark = response ? hasStaleWatermark(response, currentQuery) : false;
   const quality = response?.metadata.qualitySummary ?? { valid: 0, suspect: 0, invalid: 0 };
   const hasSuspectData = quality.suspect > 0;
-  const sortedPoints = useMemo(
-    () => [...(response?.points ?? [])].sort((left, right) => Date.parse(left.periodStart) - Date.parse(right.periodStart)),
-    [response?.points],
-  );
 
   const drillDown = useCallback((periodStart: string) => {
     const next = drillDownEnergyWorkspaceState(workspaceState, periodStart, site.timezone);
     if (next) commitWorkspaceState(next);
   }, [commitWorkspaceState, site.timezone, workspaceState]);
-
-  const chartOption = useMemo(() => ({
-    animation: false,
-    grid: { left: 56, right: 24, top: 28, bottom: 48 },
-    tooltip: { trigger: 'axis', valueFormatter: (value: number | null) => value === null ? '数据缺口' : `${value} kWh` },
-    xAxis: { type: 'time', name: site.timezone, nameLocation: 'middle', nameGap: 34, axisLabel: { hideOverlap: true } },
-    yAxis: { type: 'value', name: 'kWh', min: 0 },
-    series: [{
-      name: '电能',
-      type: workspaceState.period === 'day' ? 'line' : 'bar',
-      showSymbol: trendData.length < 80,
-      connectNulls: false,
-      data: trendData,
-      areaStyle: workspaceState.period === 'day' ? { opacity: 0.08 } : undefined,
-      emphasis: { focus: 'series' },
-    }],
-  }), [site.timezone, trendData, workspaceState.period]);
-  const chartEvents = useMemo(() => ({
-    click: (parameters: { data?: unknown }) => {
-      if (!workspaceWindow.drillDownPeriod || !Array.isArray(parameters.data)) return;
-      const timestamp = parameters.data[0];
-      const point = typeof timestamp === 'number'
-        ? sortedPoints.find((candidate) => Date.parse(candidate.periodStart) === timestamp)
-        : undefined;
-      if (point) drillDown(point.periodStart);
-    },
-  }), [drillDown, sortedPoints, workspaceWindow.drillDownPeriod]);
 
   if (currentResult.isPending) {
     return (
@@ -325,10 +283,12 @@ export function EnergyAnalytics({ site, principal, initialPeriod }: EnergyAnalyt
           : 'READY';
   const nextDisabled = workspaceState.anchor >= currentState.anchor;
   const metrics = [
-    { key: 'total', label: '周期总电能', value: formatEnergy(total), detail: `${response.points.length} 个已返回时段`, tone: 'accent' as const },
+    { key: 'total', label: '周期总电能', value: formatEnergy(total), detail: `${summary.measuredCount} 个权威返回桶`, tone: 'accent' as const },
     { key: 'comparison', label: '环比上一周期', value: previousResult.isPending || previousResult.isError ? '不可用' : comparison.value, detail: previousResult.isPending ? '正在读取比较基期' : previousResult.isError ? '比较基期查询失败' : comparison.detail, tone: 'positive' as const },
+    { key: 'average', label: '平均每桶电能', value: formatEnergy(summary.average), detail: `返回粒度：${response.metadata.actualGranularity}`, tone: 'default' as const },
+    { key: 'peak', label: '峰值时段', value: formatEnergy(summary.peak?.energyKWh ?? null), detail: summary.peak ? formatInstant(summary.peak.periodStart, site.timezone) : '没有可计算时段', tone: 'warning' as const },
+    { key: 'valley', label: '低谷时段', value: formatEnergy(summary.valley?.energyKWh ?? null), detail: summary.valley ? formatInstant(summary.valley.periodStart, site.timezone) : '没有可计算时段', tone: 'positive' as const },
     { key: 'quality', label: '有效 / 可疑 / 无效', value: `${quality.valid} / ${quality.suspect} / ${quality.invalid}`, detail: `质量策略：${QUALITY_LABELS[workspaceState.qualityPolicy]}`, tone: hasSuspectData ? 'warning' as const : 'default' as const },
-    { key: 'revision', label: '数据集修订', value: response.metadata.datasetRevision, detail: '用于识别聚合重建或修订', tone: 'default' as const },
   ];
 
   return (
@@ -425,58 +385,18 @@ export function EnergyAnalytics({ site, principal, initialPeriod }: EnergyAnalyt
 
       <OperationsMetrics items={metrics} ariaLabel="能源分析关键指标" />
 
-      <Card
-        className="energy-chart-card"
-        title={<div><Typography.Text strong id="energy-trend-title">电能趋势</Typography.Text><Typography.Paragraph type="secondary">断点代表未知或缺失数据，不代表 0 kWh。{workspaceWindow.drillDownPeriod ? `选择数据柱可下钻到${PERIOD_LABELS[workspaceWindow.drillDownPeriod]}视图。` : ''}</Typography.Paragraph></div>}
-        extra={<Tag>{workspaceWindow.label}</Tag>}
-        aria-labelledby="energy-trend-title"
-      >
-        {response.points.length === 0 ? (
-          <div className="real-energy__empty" role="status">
-            当前授权范围内没有返回能源时段。此状态不代表 0 kWh，也不代表权限拒绝。
-          </div>
-        ) : (
-          <ReactECharts option={chartOption} onEvents={chartEvents} style={{ height: 360 }} notMerge lazyUpdate />
-        )}
-      </Card>
-
-      <Card
-        className="energy-table-card"
-        title={<div><Typography.Text strong id="energy-period-table-title">返回时段</Typography.Text><Typography.Paragraph type="secondary">表格只列出服务实际返回的桶；未返回的时段不会补零。</Typography.Paragraph></div>}
-        extra={<Tag>{sortedPoints.length} 条</Tag>}
-        aria-labelledby="energy-period-table-title"
-      >
-        {sortedPoints.length === 0 ? (
-          <div className="real-energy__empty real-energy__empty--compact" role="status">没有可列出的返回时段。</div>
-        ) : (
-          <div className="real-energy__table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">时段</th>
-                  <th scope="col">电能</th>
-                  {workspaceWindow.drillDownPeriod ? <th scope="col">操作</th> : null}
-                </tr>
-              </thead>
-              <tbody>
-                {sortedPoints.map((point) => (
-                  <tr key={`${point.periodStart}:${point.periodEnd}`}>
-                    <td>{formatPeriod(point, site.timezone)}</td>
-                    <td>{formatEnergy(point.energyKWh)}</td>
-                    {workspaceWindow.drillDownPeriod ? (
-                      <td>
-                        <Button size="small" onClick={() => drillDown(point.periodStart)}>
-                          查看{PERIOD_LABELS[workspaceWindow.drillDownPeriod]}
-                        </Button>
-                      </td>
-                    ) : null}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+      <RealEnergyWorkspacePanels
+        period={workspaceState.period}
+        anchor={workspaceState.anchor}
+        timezone={site.timezone}
+        currentLabel={workspaceWindow.label}
+        previousLabel={workspaceWindow.previousLabel}
+        currentResponse={response}
+        previousResponse={previousResult.data}
+        previousLoading={previousResult.isPending}
+        drillDownPeriod={workspaceWindow.drillDownPeriod}
+        onDrillDown={drillDown}
+      />
 
       <Card title="数据新鲜度与权威边界" variant="borderless" className="energy-provenance-card">
         <Descriptions column={{ xs: 1, sm: 2, xl: 3 }} bordered size="small" aria-label="能源数据新鲜度与修订信息">

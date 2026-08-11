@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { LoginFormPage } from '@ant-design/pro-components';
 import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';
 import { AuthenticatedShell } from './AuthenticatedShell';
 import { REAL_FEATURE_MANIFEST } from './feature-manifest';
@@ -68,17 +69,24 @@ function LoginRequiredState({
       />
     );
   }
+
   return (
-    <section className="real-login-panel" aria-labelledby="real-login-title" data-testid="real-shell-login-required">
-      <div className="real-login-brand">
-        <img src="/quanlaihe-mark.svg" alt="" aria-hidden="true" />
-        <strong>泉来禾智慧能源</strong>
-      </div>
-      <FocusHeading id="real-login-title">已退出登录</FocusHeading>
-      <p>需要继续使用时，请重新登录。</p>
-      <div className="real-shell-actions">
-        <button type="button" onClick={beginLogin}>重新登录</button>
-      </div>
+    <section className="real-pro-login" data-testid="real-shell-login-required">
+      <LoginFormPage
+        logo="/quanlaihe-mark.svg"
+        title="泉来禾智慧能源"
+        subTitle="企业级实时能源运营平台"
+        backgroundImageUrl="https://images.unsplash.com/photo-1642615835477-d303d7dc9ee9?w=2160&q=80"
+        activityConfig={{
+          title: '中央机房实时运营',
+          subTitle: '设备、能耗、告警与操作统一进入受治理工作台。',
+        }}
+        submitter={{ searchConfig: { submitText: '重新登录' } }}
+        onFinish={async () => {
+          beginLogin();
+          return true;
+        }}
+      />
     </section>
   );
 }
@@ -251,6 +259,7 @@ export default function RealApp({ config }: RealAppProps) {
     : platformNavigation;
   const redirectTarget = siteDecision?.state === 'REDIRECT' ? siteDecision.target : undefined;
   const routeState = normalizedRouteState(siteDecision ?? platformDecision);
+  const showSignInPage = pathname === '/sign-in' || snapshot.state === 'LOGIN_REQUIRED';
   const displayedShellState = snapshot.state === 'READY' && routeState && routeState !== 'NOT_FOUND'
     ? routeState
     : snapshot.state;
@@ -274,21 +283,19 @@ export default function RealApp({ config }: RealAppProps) {
 
   return (
     <main
-      className={`real-shell-state${snapshot.state === 'READY' ? ' real-shell-state--authenticated' : ''}`}
+      className={`real-shell-state${snapshot.state === 'READY' && !showSignInPage ? ' real-shell-state--authenticated' : ''}${showSignInPage ? ' real-shell-state--login' : ''}`}
       aria-label={REAL_SHELL_MARKER}
       data-build-graph={REAL_GRAPH_MARKER}
-      data-shell-state={displayedShellState}
-      data-route-state={routeState}
-      data-protected-route-mounted={snapshot.state === 'READY' ? 'true' : 'false'}
+      data-shell-state={showSignInPage ? 'LOGIN_REQUIRED' : displayedShellState}
+      data-route-state={showSignInPage ? 'LOGIN_REQUIRED' : routeState}
+      data-protected-route-mounted={snapshot.state === 'READY' && !showSignInPage ? 'true' : 'false'}
     >
-      {snapshot.state === 'BOOTSTRAPPING' ? <BootstrappingState /> : null}
-      {snapshot.state === 'LOGIN_REQUIRED' ? (
-        <LoginRequiredState snapshot={snapshot} beginLogin={() => runtime.beginLogin()} />
-      ) : null}
-      {snapshot.state === 'UNAVAILABLE' ? (
+      {snapshot.state === 'BOOTSTRAPPING' && !showSignInPage ? <BootstrappingState /> : null}
+      {showSignInPage ? <LoginRequiredState snapshot={snapshot} beginLogin={() => runtime.beginLogin()} /> : null}
+      {snapshot.state === 'UNAVAILABLE' && !showSignInPage ? (
         <PrincipalUnavailableState config={config} snapshot={snapshot} retry={() => { void runtime.retry(); }} />
       ) : null}
-      {snapshot.state === 'READY' && siteDecision ? (
+      {snapshot.state === 'READY' && !showSignInPage && siteDecision ? (
         <SiteScopedShell
           config={config}
           snapshot={snapshot}
@@ -304,7 +311,7 @@ export default function RealApp({ config }: RealAppProps) {
           registerUnsavedDraft={registerUnsavedDraft}
         />
       ) : null}
-      {snapshot.state === 'READY' && platformDecision ? (
+      {snapshot.state === 'READY' && !showSignInPage && platformDecision ? (
         <AuthenticatedShell
           config={config}
           snapshot={snapshot}

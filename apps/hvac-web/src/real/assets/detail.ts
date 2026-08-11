@@ -1,22 +1,22 @@
 import { isUUIDv7 } from '../site-routing.ts';
-import type { RealAssetsDeviceRow } from './model.ts';
+import type { RealAssetsEquipmentRow } from './model.ts';
 
-export const REAL_ASSETS_DETAIL_HISTORY_MARKER = 'real-assets-device-detail:v1';
+export const REAL_ASSETS_DETAIL_HISTORY_MARKER = 'real-assets-equipment-detail:v1';
 
 export type RealAssetsDetailPathState =
   | { readonly state: 'list' }
-  | { readonly state: 'detail'; readonly deviceId: string }
+  | { readonly state: 'detail'; readonly equipmentId: string }
   | { readonly state: 'outside' };
 
 export type RealAssetsDetailResolution =
   | { readonly state: 'closed' }
   | { readonly state: 'not-visible' }
-  | { readonly state: 'visible'; readonly row: RealAssetsDeviceRow };
+  | { readonly state: 'visible'; readonly row: RealAssetsEquipmentRow };
 
 export interface RealAssetsDetailHistoryState {
   readonly marker: typeof REAL_ASSETS_DETAIL_HISTORY_MARKER;
   readonly siteId: string;
-  readonly deviceId: string;
+  readonly equipmentId: string;
 }
 
 export function realAssetsListPath(siteId: string): string {
@@ -24,9 +24,9 @@ export function realAssetsListPath(siteId: string): string {
   return `/sites/${siteId}/assets`;
 }
 
-export function realAssetsDevicePath(siteId: string, deviceId: string): string {
-  if (!isUUIDv7(deviceId)) throw new Error('Real Assets detail path requires a Registry Device UUIDv7.');
-  return `${realAssetsListPath(siteId)}/${deviceId}`;
+export function realAssetsEquipmentPath(siteId: string, equipmentId: string): string {
+  if (!isUUIDv7(equipmentId)) throw new Error('Real Assets detail path requires a Registry Equipment UUIDv7.');
+  return `${realAssetsListPath(siteId)}/${equipmentId}`;
 }
 
 export function parseRealAssetsDetailPath(pathname: string, siteId: string): RealAssetsDetailPathState {
@@ -35,31 +35,31 @@ export function parseRealAssetsDetailPath(pathname: string, siteId: string): Rea
   if (normalized === listPath) return { state: 'list' };
   const prefix = `${listPath}/`;
   if (!normalized.startsWith(prefix)) return { state: 'outside' };
-  const deviceId = normalized.slice(prefix.length);
-  if (!deviceId || deviceId.includes('/')) return { state: 'outside' };
-  return { state: 'detail', deviceId };
+  const equipmentId = normalized.slice(prefix.length);
+  if (!equipmentId || equipmentId.includes('/')) return { state: 'outside' };
+  return { state: 'detail', equipmentId };
 }
 
 export function resolveRealAssetsDetail(
-  rows: readonly RealAssetsDeviceRow[],
-  requestedDeviceId: string | null | undefined,
+  rows: readonly RealAssetsEquipmentRow[],
+  requestedEquipmentId: string | null | undefined,
 ): RealAssetsDetailResolution {
-  if (!requestedDeviceId) return { state: 'closed' };
-  if (!isUUIDv7(requestedDeviceId)) return { state: 'not-visible' };
-  const row = rows.find((candidate) => candidate.device.id === requestedDeviceId);
+  if (!requestedEquipmentId) return { state: 'closed' };
+  if (!isUUIDv7(requestedEquipmentId)) return { state: 'not-visible' };
+  const row = rows.find((candidate) => candidate.equipment.id === requestedEquipmentId);
   return row ? { state: 'visible', row } : { state: 'not-visible' };
 }
 
 export function isRealAssetsDetailHistoryState(
   value: unknown,
   siteId: string,
-  deviceId: string,
+  equipmentId: string,
 ): value is RealAssetsDetailHistoryState {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<RealAssetsDetailHistoryState>;
   return candidate.marker === REAL_ASSETS_DETAIL_HISTORY_MARKER
     && candidate.siteId === siteId
-    && candidate.deviceId === deviceId;
+    && candidate.equipmentId === equipmentId;
 }
 
 export async function writeRealAssetsClipboard(

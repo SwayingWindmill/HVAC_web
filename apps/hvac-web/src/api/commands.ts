@@ -1,11 +1,14 @@
 import { z } from 'zod';
 import {
   CommandApiError,
+  commandCapabilityProfiles,
   commandSchema,
   commandUUIDSchema,
   commandUUIDv7Schema,
+  validateCommandParameters,
   validateCommandScope,
   type Command,
+  type CommandCapability,
   type CommandRisk,
   type CommandStatus,
   type CommandTransition,
@@ -22,33 +25,19 @@ export {
   commandTransitionSchema,
   validateCommandScope,
 } from './command-contract';
-export type { Command, CommandRisk, CommandStatus, CommandTransition } from './command-contract';
+export type { Command, CommandCapability, CommandRisk, CommandStatus, CommandTransition } from './command-contract';
 
-export const COMMAND_PUBLIC_ROUTES_ENABLED = false as const;
+export const COMMAND_PUBLIC_ROUTES_ENABLED = API_MODE === 'real';
 export const COMMAND_LOCAL_ROUTES_ENABLED = API_MODE === 'real'
   && import.meta.env.DEV
   && (import.meta.env.VITE_S3_LOCAL_COMMANDS as string | undefined) === 'true';
 export const COMMAND_ROUTES_AVAILABLE = COMMAND_PUBLIC_ROUTES_ENABLED || COMMAND_LOCAL_ROUTES_ENABLED;
 
 export interface CreateCommandInput {
-  deviceId: string;
-  setpointC: number;
+  equipmentId: string;
+  commandPointId: string;
+  parameters: Record<string, number>;
 }
-
-const localCommandDeviceSchema = z.object({
-  organizationId: commandUUIDv7Schema,
-  siteId: commandUUIDv7Schema,
-  deviceId: commandUUIDv7Schema,
-  name: z.string().min(1).max(128),
-  type: z.string().min(1).max(64),
-}).strict();
-
-const localCommandDeviceCatalogSchema = z.object({
-  schemaVersion: z.literal(1),
-  devices: z.array(localCommandDeviceSchema).min(1).max(16),
-}).strict();
-
-export type LocalCommandDevice = z.infer<typeof localCommandDeviceSchema>;
 
 export interface ScopedCommandRequestOptions {
   trustedOrganizationId: string;
@@ -72,8 +61,11 @@ const mockCommands = new Map<string, Command>();
 let mockSequence = 2;
 const mockPendingCommandId = ['018f3e00', '4000', '7000', '8000', '000000000001'].join('-');
 const mockDeviceId = ['018f3e00', '3000', '7000', '8000', '000000000001'].join('-');
+const mockEquipmentId = ['018f3e00', '3100', '7000', '8000', '000000000001'].join('-');
+const mockCommandPointId = ['018f3e00', '3200', '7000', '8000', '000000000001'].join('-');
 export const MOCK_PENDING_COMMAND_ID = mockPendingCommandId;
-export const MOCK_COMMAND_DEVICE_ID = mockDeviceId;
+export const MOCK_COMMAND_EQUIPMENT_ID = mockEquipmentId;
+export const MOCK_COMMAND_POINT_ID = mockCommandPointId;
 
 function iso(offsetSeconds = 0): string {
   return new Date(Date.now() + offsetSeconds * 1000).toISOString();
@@ -89,6 +81,7 @@ function buildPendingMockCommand(): Command {
     organizationId: ['018f3e00', '1000', '7000', '8000', '000000000001'].join('-'),
     siteId: ['018f3e00', '2000', '7000', '8000', '000000000001'].join('-'),
     deviceId: mockDeviceId,
+    pointId: mockCommandPointId,
     capability: 'SET_TEMPERATURE_SETPOINT',
     capabilityRevision: 'capability:set-temperature-setpoint:v1',
     status: 'AWAITING_APPROVAL',
@@ -96,7 +89,7 @@ function buildPendingMockCommand(): Command {
     approvalPolicy: 'SINGLE_APPROVER',
     approvalCount: 0,
     requiredApprovalCount: 1,
-    setpointC: 27,
+    parameters: { setpointC: 27 },
     deviceCommandSequence: 1,
     version: 3,
     snapshotRevision: 17,
@@ -162,66 +155,6 @@ async function commandRequest(
     : command;
 }
 
-export async function listLocalCommandDevices(signal?: AbortSignal): Promise<LocalCommandDevice[]> {
-  if (API_MODE === 'mock') {
-    return [{
-      organizationId: ['018f3e00', '1000', '7000', '8000', '000000000001'].join('-'),
-      siteId: ['018f3e00', '2000', '7000', '8000', '000000000001'].join('-'),
-      deviceId: mockDeviceId,
-      name: 'Mock HVAC Device',
-      type: 'HVAC',
-    }];
-  }
-  if (!COMMAND_LOCAL_ROUTES_ENABLED) return [];
-  const response = await fetch('/api/v1/local/devices', {
-    method: 'GET',
-    credentials: 'same-origin',
-    signal,
-    headers: { Accept: 'application/json, application/problem+json' },
-  });
-  const payload: unknown = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const problem = problemSchema.parse(payload);
-    throw new CommandApiError(
-      response.status,
-      problem.code ?? 'COMMAND_DEVICE_CATALOG_UNAVAILABLE',
-      problem.detail ?? problem.title ?? '本地设备目录暂时不可用。',
-      problem.retryable ?? false,
-    );
-  }
-  return localCommandDeviceCatalogSchema.parse(payload).devices;
-}
-
-export async function listScopedLocalCommandDevices(
-  options: ScopedCommandRequestOptions,
-): Promise<LocalCommandDevice[]> {
-  if (!COMMAND_LOCAL_ROUTES_ENABLED) return [];
-  const organizationId = commandUUIDv7Schema.parse(options.trustedOrganizationId);
-  const siteId = commandUUIDv7Schema.parse(options.trustedSiteId);
-  const fetchImplementation = options.fetchImplementation ?? globalThis.fetch.bind(globalThis);
-  const response = await fetchImplementation(`${options.baseUrl ?? ''}/api/v1/local/devices`, {
-    method: 'GET',
-    credentials: 'same-origin',
-    signal: options.signal,
-    headers: { Accept: 'application/json, application/problem+json' },
-  });
-  const payload: unknown = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const problem = problemSchema.parse(payload);
-    throw new CommandApiError(
-      response.status,
-      problem.code ?? 'COMMAND_DEVICE_CATALOG_UNAVAILABLE',
-      problem.detail ?? problem.title ?? '本地设备目录暂时不可用。',
-      problem.retryable ?? false,
-    );
-  }
-  const devices = localCommandDeviceCatalogSchema.parse(payload).devices;
-  if (devices.some((device) => device.organizationId !== organizationId || device.siteId !== siteId)) {
-    throw new CommandApiError(503, 'COMMAND_DEVICE_CATALOG_INVALID', '本地设备目录超出当前 Site 范围。');
-  }
-  return devices;
-}
-
 export async function getScopedCommand(
   commandId: string,
   options: ScopedCommandRequestOptions,
@@ -239,8 +172,9 @@ export async function createScopedCommand(
   input: CreateCommandInput,
   options: ScopedCommandRequestOptions,
 ): Promise<Command> {
-  const deviceId = commandUUIDv7Schema.parse(input.deviceId);
-  const setpointC = z.number().min(16).max(30).parse(input.setpointC);
+  const equipmentId = commandUUIDv7Schema.parse(input.equipmentId);
+  const commandPointId = commandUUIDv7Schema.parse(input.commandPointId);
+  const parameters = z.record(z.string(), z.number().finite()).parse(input.parameters);
   if (!COMMAND_ROUTES_AVAILABLE) {
     throw new CommandApiError(503, 'COMMAND_ROUTE_DISABLED', 'Command 控制路由已登记，但尚未启用生产流量。');
   }
@@ -255,11 +189,7 @@ export async function createScopedCommand(
       'X-CSRF-Token': options.csrfToken,
       'Idempotency-Key': idempotencyKey,
     },
-    body: JSON.stringify({
-      deviceId,
-      capability: 'SET_TEMPERATURE_SETPOINT',
-      parameters: { setpointC },
-    }),
+    body: JSON.stringify({ equipmentId, commandPointId, parameters }),
   }, options);
 }
 
@@ -295,9 +225,15 @@ export async function getCommand(commandId: string, signal?: AbortSignal): Promi
 }
 
 export async function createCommand(input: CreateCommandInput): Promise<Command> {
-  const deviceId = commandUUIDv7Schema.parse(input.deviceId);
-  const setpointC = z.number().min(16).max(30).parse(input.setpointC);
+  const equipmentId = commandUUIDv7Schema.parse(input.equipmentId);
+  const commandPointId = commandUUIDv7Schema.parse(input.commandPointId);
+  const parameters = z.record(z.string(), z.number().finite()).parse(input.parameters);
   if (API_MODE === 'mock') {
+    if (equipmentId !== mockEquipmentId || commandPointId !== mockCommandPointId || !validateCommandParameters('SET_TEMPERATURE_SETPOINT', parameters)) {
+      throw new CommandApiError(404, 'RESOURCE_NOT_FOUND', 'Mock Command Point 不存在。');
+    }
+    const capability: CommandCapability = 'SET_TEMPERATURE_SETPOINT';
+    const setpointC = parameters.setpointC;
     const commandId = mockUuidV7();
     const createdAt = iso();
     const risk: CommandRisk = setpointC >= 26 ? 'MEDIUM' : 'LOW';
@@ -313,15 +249,16 @@ export async function createCommand(input: CreateCommandInput): Promise<Command>
       commandId,
       organizationId: ['018f3e00', '1000', '7000', '8000', '000000000001'].join('-'),
       siteId: ['018f3e00', '2000', '7000', '8000', '000000000001'].join('-'),
-      deviceId,
-      capability: 'SET_TEMPERATURE_SETPOINT',
-      capabilityRevision: 'capability:set-temperature-setpoint:v1',
+      deviceId: mockDeviceId,
+      pointId: mockCommandPointId,
+      capability,
+      capabilityRevision: commandCapabilityProfiles[capability].revision,
       status,
       risk,
       approvalPolicy,
       approvalCount: 0,
       requiredApprovalCount: risk === 'LOW' ? 0 : 1,
-      setpointC,
+      parameters,
       deviceCommandSequence: mockSequence++,
       version: 3,
       snapshotRevision: 18,
@@ -343,11 +280,7 @@ export async function createCommand(input: CreateCommandInput): Promise<Command>
       'X-CSRF-Token': csrf,
       'Idempotency-Key': `hvac-web-${crypto.randomUUID()}`,
     },
-    body: JSON.stringify({
-      deviceId,
-      capability: 'SET_TEMPERATURE_SETPOINT',
-      parameters: { setpointC },
-    }),
+    body: JSON.stringify({ equipmentId, commandPointId, parameters }),
   });
 }
 

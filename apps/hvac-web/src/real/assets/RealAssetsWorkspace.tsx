@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes, type Key } from 'react';
+import { useEffect, useMemo, useRef, useState, type HTMLAttributes, type Key } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Badge, Button, Card, Col, Empty, Grid, Input, Row, Segmented, Select, Space, Table, Tag, Tree, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -28,16 +28,15 @@ import { presentRegistryError } from '../../api/registry';
 import { FocusHeading } from '../FocusHeading';
 import type { ProtectedScopeRequestToken, ProtectedScopeResource } from '../protected-scope';
 import { REAL_ASSETS_CATALOG_REVISION } from './catalog';
-import { DeviceDetailDrawer } from './DeviceDetailDrawer';
+import { EquipmentDetailDrawer } from './EquipmentDetailDrawer';
 import { RealAssetsLoadingSurface } from './RealAssetsLoadingSurface';
 import {
   REAL_ASSETS_DETAIL_HISTORY_MARKER,
   isRealAssetsDetailHistoryState,
   parseRealAssetsDetailPath,
-  realAssetsDevicePath,
+  realAssetsEquipmentPath,
   realAssetsListPath,
   resolveRealAssetsDetail,
-  writeRealAssetsClipboard,
 } from './detail';
 import { runRealAssetsProtectedRequest } from './protected-request';
 import {
@@ -47,6 +46,7 @@ import {
   realAssetsRegistryQueryKey,
 } from './data';
 import {
+  buildRealAssetsEquipmentRows,
   buildRealAssetsHierarchy,
   buildRealAssetsPointRows,
   buildRealAssetsRows,
@@ -56,22 +56,21 @@ import {
   realAssetsSensorTypeLabel,
   realAssetsTelemetryPointMeta,
   type RealAssetsDeviceRow,
+  type RealAssetsEquipmentRow,
   type RealAssetsHierarchyNode,
   type RealAssetsOperatingState,
   type RealAssetsTelemetryPointRow,
 } from './model';
-import { projectRealAssetsRealtimeRow } from './realtime';
 import {
   createRealAssetsTelemetryRuntime,
   type RealAssetsTelemetryRuntime,
 } from './telemetry-runtime';
-import { useRealAssetsDeviceRealtime } from './useDeviceRealtime';
 import './real-assets.css';
 
 interface RealAssetsWorkspaceProps {
   site: Readonly<Site>;
   principal: CurrentPrincipalResponse;
-  requestedDeviceId?: string;
+  requestedEquipmentId?: string;
   protectedGeneration: number;
   protectedRequestToken: () => ProtectedScopeRequestToken;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
@@ -80,7 +79,7 @@ interface RealAssetsWorkspaceProps {
 }
 
 type ListMode = 'attention' | 'all';
-type LedgerMode = 'devices' | 'points';
+type LedgerMode = 'equipment' | 'devices' | 'points';
 type HierarchySelection = string;
 
 const OPERATING_LABELS: Record<RealAssetsOperatingState, string> = {
@@ -235,7 +234,7 @@ function BindingLabel({ row }: { row: RealAssetsDeviceRow }) {
 export function RealAssetsWorkspace({
   site,
   principal,
-  requestedDeviceId,
+  requestedEquipmentId,
   protectedGeneration,
   protectedRequestToken,
   registerProtectedResource,
@@ -248,16 +247,15 @@ export function RealAssetsWorkspace({
   const platformClient = useMemo(() => providedPlatformClient ?? createPlatformGatewayClient(), [providedPlatformClient]);
   const telemetryRuntime = useMemo(() => providedTelemetryRuntime ?? createRealAssetsTelemetryRuntime(), [providedTelemetryRuntime]);
   const [listMode, setListMode] = useState<ListMode>('all');
-  const [ledgerMode, setLedgerMode] = useState<LedgerMode>('points');
+  const [ledgerMode, setLedgerMode] = useState<LedgerMode>('equipment');
   const [search, setSearch] = useState('');
   const [hierarchySelection, setHierarchySelection] = useState<HierarchySelection>(`site:${site.id}`);
   const [telemetryPolicyRevision, setTelemetryPolicyRevision] = useState<string | null>(
     () => telemetryRuntime.currentRoutePolicyRevision(),
   );
   const [routePolicyEpoch, setRoutePolicyEpoch] = useState(0);
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(() => requestedDeviceId ?? null);
-  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
-  const selectedDeviceIdRef = useRef<string | null>(selectedDeviceId);
+  const [selectedEquipmentId, setSelectedEquipmentId] = useState<string | null>(() => requestedEquipmentId ?? null);
+  const selectedEquipmentIdRef = useRef<string | null>(selectedEquipmentId);
   const pendingFocusDeviceIdRef = useRef<string | null>(null);
   const deviceTriggerRefs = useRef(new Map<string, HTMLElement>());
   const organizationId = principal.context.actingOrganizationId;
@@ -265,22 +263,19 @@ export function RealAssetsWorkspace({
   const capabilities = principal.authorization.capabilities;
   const registryAllowed = capabilities.includes('equipment.list') && capabilities.includes('device.list');
   const telemetryAllowed = capabilities.includes('telemetry.batch.read');
-  const historyAllowed = capabilities.includes('telemetry.history.read');
-  const realtimeAllowed = capabilities.includes('telemetry.subscribe');
   const queryRoot = useMemo(
     () => ['real-assets', protectedGeneration, organizationId, site.id] as const,
     [organizationId, protectedGeneration, site.id],
   );
 
   useEffect(() => {
-    selectedDeviceIdRef.current = requestedDeviceId ?? null;
-    setSelectedDeviceId(requestedDeviceId ?? null);
-  }, [protectedGeneration, requestedDeviceId, site.id]);
+    selectedEquipmentIdRef.current = requestedEquipmentId ?? null;
+    setSelectedEquipmentId(requestedEquipmentId ?? null);
+  }, [protectedGeneration, requestedEquipmentId, site.id]);
 
   useEffect(() => {
-    selectedDeviceIdRef.current = selectedDeviceId;
-    setActionFeedback(null);
-  }, [selectedDeviceId]);
+    selectedEquipmentIdRef.current = selectedEquipmentId;
+  }, [selectedEquipmentId]);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -289,15 +284,15 @@ export function RealAssetsWorkspace({
         window.location.reload();
         return;
       }
-      const previousDeviceId = selectedDeviceIdRef.current;
+      const previousDeviceId = selectedEquipmentIdRef.current;
       if (parsed.state === 'list') {
         if (previousDeviceId) pendingFocusDeviceIdRef.current = previousDeviceId;
-        selectedDeviceIdRef.current = null;
-        setSelectedDeviceId(null);
+        selectedEquipmentIdRef.current = null;
+        setSelectedEquipmentId(null);
         return;
       }
-      selectedDeviceIdRef.current = parsed.deviceId;
-      setSelectedDeviceId(parsed.deviceId);
+      selectedEquipmentIdRef.current = parsed.equipmentId;
+      setSelectedEquipmentId(parsed.equipmentId);
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -324,13 +319,12 @@ export function RealAssetsWorkspace({
     kind: 'selection',
     purge: () => {
       setListMode('all');
-      setLedgerMode('points');
+      setLedgerMode('equipment');
       setSearch('');
       setHierarchySelection(`site:${site.id}`);
-      selectedDeviceIdRef.current = null;
-      setSelectedDeviceId(null);
-      setActionFeedback(null);
-    },
+      selectedEquipmentIdRef.current = null;
+      setSelectedEquipmentId(null);
+      },
   }), [protectedGeneration, registerProtectedResource, site.id]);
 
   useEffect(() => {
@@ -402,6 +396,11 @@ export function RealAssetsWorkspace({
     assetModel,
     deviceRows: rows,
   }) : [], [assetModel, rows]);
+  const equipmentRows = useMemo(() => assetModel ? buildRealAssetsEquipmentRows({
+    assetModel,
+    deviceRows: rows,
+    pointRows,
+  }) : [], [assetModel, pointRows, rows]);
   const hierarchyRoot = useMemo(
     () => assetModel ? buildRealAssetsHierarchy(assetModel, site.displayName) : null,
     [assetModel, site.displayName],
@@ -443,6 +442,26 @@ export function RealAssetsWorkspace({
     && (selectedPointIds === undefined || selectedPointIds.has(row.point.id))
     && (listMode === 'all' || currentPending || currentUnavailable || attentionDeviceIds.has(row.device.id))
   )), [attentionDeviceIds, currentPending, currentUnavailable, listMode, pointRows, search, selectedPointIds]);
+  const selectedEquipmentTreeId = selectedHierarchy?.kind === 'equipment'
+    ? selectedHierarchy.key.slice('equipment:'.length)
+    : null;
+  const filteredEquipmentRows = useMemo(() => equipmentRows.filter((row) => {
+    const query = search.trim().toLocaleLowerCase('zh-CN');
+    const matchesQuery = !query || [
+      row.equipment.id,
+      row.equipment.code,
+      row.equipment.displayName,
+      row.equipment.equipmentType,
+      row.area.state === 'bound' ? row.area.area.displayName : '',
+      ...row.devices.flatMap((device) => [device.device.code, device.device.displayName]),
+      ...row.sensors.flatMap((sensor) => [sensor.code, sensor.displayName]),
+    ].some((value) => value.toLocaleLowerCase('zh-CN').includes(query));
+    if (!matchesQuery) return false;
+    if (listMode === 'attention' && !currentPending && !currentUnavailable && row.operatingState === 'NORMAL') return false;
+    if (selectedEquipmentTreeId) return row.equipment.id === selectedEquipmentTreeId;
+    if (!selectedHierarchy || selectedHierarchy.kind === 'site') return true;
+    return row.devices.some((device) => selectedDeviceIds?.has(device.device.id));
+  }), [currentPending, currentUnavailable, equipmentRows, listMode, search, selectedDeviceIds, selectedEquipmentTreeId, selectedHierarchy]);
 
   const counts = useMemo(() => ({
     total: rows.length,
@@ -463,7 +482,7 @@ export function RealAssetsWorkspace({
             className="real-assets__device-link"
             data-testid="real-assets-open-device"
             aria-haspopup="dialog"
-            aria-expanded={selectedDeviceId === row.device.id}
+            aria-expanded={selectedEquipmentId === row.device.id}
             ref={(node) => {
               if (node) deviceTriggerRefs.current.set(row.device.id, node);
               else deviceTriggerRefs.current.delete(row.device.id);
@@ -572,7 +591,7 @@ export function RealAssetsWorkspace({
             icon={<EyeOutlined />}
             data-testid="real-assets-open-device"
             aria-haspopup="dialog"
-            aria-expanded={selectedDeviceId === row.device.id}
+            aria-expanded={selectedEquipmentId === row.device.id}
             onClick={() => openDeviceDetail(row.device.id)}
           >
             详情
@@ -583,7 +602,7 @@ export function RealAssetsWorkspace({
     return compactTable
       ? columns.filter((column) => ['device', 'equipment', 'state', 'points', 'action'].includes(String(column.key)))
       : columns;
-  }, [compactTable, currentPending, currentUnavailable, selectedDeviceId, site.timezone]);
+  }, [compactTable, currentPending, currentUnavailable, selectedEquipmentId, site.timezone]);
   const pointColumns = useMemo<ColumnsType<RealAssetsTelemetryPointRow>>(() => {
     const columns: ColumnsType<RealAssetsTelemetryPointRow> = [
       {
@@ -674,7 +693,7 @@ export function RealAssetsWorkspace({
             ghost
             icon={<EyeOutlined />}
             aria-haspopup="dialog"
-            aria-expanded={selectedDeviceId === row.device.id}
+            aria-expanded={selectedEquipmentId === row.device.id}
             onClick={() => openDeviceDetail(row.device.id)}
           >
             设备详情
@@ -685,32 +704,15 @@ export function RealAssetsWorkspace({
     return compactTable
       ? columns.filter((column) => ['point', 'source', 'current', 'action'].includes(String(column.key)))
       : columns;
-  }, [compactTable, currentPending, currentUnavailable, selectedDeviceId, site.timezone]);
-  const detailResolution = useMemo(() => resolveRealAssetsDetail(rows, selectedDeviceId), [rows, selectedDeviceId]);
-  const detailRow = detailResolution.state === 'visible' ? detailResolution.row : null;
-  const onRealtimeRevoked = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: queryRoot });
-  }, [queryClient, queryRoot]);
-  const realtime = useRealAssetsDeviceRealtime({
-    row: detailRow,
-    allowed: realtimeAllowed,
-    protectedGeneration,
-    authorizationEpoch: `${principal.session.id}:${principal.authorization.policyRevision}:${routePolicyEpoch}`,
-    runtime: telemetryRuntime,
-    protectedRequestToken,
-    registerProtectedResource,
-    onRevoked: onRealtimeRevoked,
-  });
-  const realtimeProjection = useMemo(
-    () => detailRow ? projectRealAssetsRealtimeRow(detailRow, realtime.state) : null,
-    [detailRow, realtime.state],
+  }, [compactTable, currentPending, currentUnavailable, selectedEquipmentId, site.timezone]);
+  const detailResolution = useMemo(
+    () => resolveRealAssetsDetail(equipmentRows, selectedEquipmentId),
+    [equipmentRows, selectedEquipmentId],
   );
-  const drawerResolution = detailResolution.state === 'visible' && realtimeProjection
-    ? { state: 'visible' as const, row: realtimeProjection.row }
-    : detailResolution;
+  const detailRow = detailResolution.state === 'visible' ? detailResolution.row : null;
 
   useEffect(() => {
-    if (selectedDeviceId !== null) return;
+    if (selectedEquipmentId !== null) return;
     const deviceId = pendingFocusDeviceIdRef.current;
     if (!deviceId) return;
     pendingFocusDeviceIdRef.current = null;
@@ -722,38 +724,65 @@ export function RealAssetsWorkspace({
       }
       document.getElementById('real-assets-title')?.focus({ preventScroll: true });
     });
-  }, [filteredRows, selectedDeviceId]);
+  }, [filteredRows, selectedEquipmentId]);
 
-  const openDeviceDetail = (deviceId: string) => {
-    const target = realAssetsDevicePath(site.id, deviceId);
-    const historyState = { marker: REAL_ASSETS_DETAIL_HISTORY_MARKER, siteId: site.id, deviceId };
-    if (selectedDeviceIdRef.current) window.history.replaceState(historyState, '', target);
+  const openEquipmentDetail = (equipmentId: string) => {
+    const target = realAssetsEquipmentPath(site.id, equipmentId);
+    const historyState = { marker: REAL_ASSETS_DETAIL_HISTORY_MARKER, siteId: site.id, equipmentId };
+    if (selectedEquipmentIdRef.current) window.history.replaceState(historyState, '', target);
     else window.history.pushState(historyState, '', target);
-    pendingFocusDeviceIdRef.current = deviceId;
-    selectedDeviceIdRef.current = deviceId;
-    setSelectedDeviceId(deviceId);
+    selectedEquipmentIdRef.current = equipmentId;
+    setSelectedEquipmentId(equipmentId);
   };
 
-  const closeDeviceDetail = () => {
-    const deviceId = selectedDeviceIdRef.current;
-    if (!deviceId) return;
-    pendingFocusDeviceIdRef.current = deviceId;
-    if (isRealAssetsDetailHistoryState(window.history.state, site.id, deviceId)) {
+  const openDeviceDetail = (deviceId: string) => {
+    const row = rows.find((candidate) => candidate.device.id === deviceId);
+    const binding = row ? equipmentBindings(row.binding)[0] : undefined;
+    if (binding) openEquipmentDetail(binding.equipment.id);
+  };
+
+  const closeEquipmentDetail = () => {
+    const equipmentId = selectedEquipmentIdRef.current;
+    if (!equipmentId) return;
+    if (isRealAssetsDetailHistoryState(window.history.state, site.id, equipmentId)) {
       window.history.back();
       return;
     }
     window.history.pushState(null, '', realAssetsListPath(site.id));
-    selectedDeviceIdRef.current = null;
-    setSelectedDeviceId(null);
+    selectedEquipmentIdRef.current = null;
+    setSelectedEquipmentId(null);
   };
 
-  const copyDetailValue = async (label: string, value: string) => {
-    const writer = navigator.clipboard?.writeText
-      ? navigator.clipboard.writeText.bind(navigator.clipboard)
-      : undefined;
-    const copied = await writeRealAssetsClipboard(writer, value);
-    setActionFeedback(copied ? `${label}已复制。` : `${label}复制失败；浏览器未授予剪贴板权限。`);
-  };
+  const equipmentColumns: ColumnsType<RealAssetsEquipmentRow> = [
+    {
+      title: 'Equipment',
+      key: 'equipment',
+      fixed: 'left',
+      width: 250,
+      render: (_, row) => (
+        <Button type="link" onClick={() => openEquipmentDetail(row.equipment.id)}>
+          <Space direction="vertical" size={0} align="start">
+            <Typography.Text strong>{row.equipment.displayName}</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{row.equipment.code} · {row.equipment.equipmentType}</Typography.Text>
+          </Space>
+        </Button>
+      ),
+    },
+    { title: '区域', key: 'area', width: 160, render: (_, row) => row.area.state === 'bound' ? row.area.area.displayName : '未绑定 Area' },
+    { title: '运行状态', key: 'state', width: 130, render: (_, row) => <Tag>{OPERATING_LABELS[row.operatingState]}</Tag> },
+    {
+      title: 'Device Endpoints',
+      key: 'devices',
+      width: 230,
+      render: (_, row) => row.devices.length > 0
+        ? <Space direction="vertical" size={0}>{row.devices.map((device) => <Typography.Text key={device.device.id}>{device.device.displayName} · {device.binding.state === 'bound' ? device.binding.relationship.role : device.binding.state}</Typography.Text>)}</Space>
+        : <Typography.Text type="secondary">未绑定通讯端点</Typography.Text>,
+    },
+    { title: 'Sensors', key: 'sensors', width: 100, render: (_, row) => `${row.sensors.length} 个` },
+    { title: '点位', key: 'points', width: 120, render: (_, row) => `${row.points.length} 个` },
+    { title: '设备功能', key: 'controls', width: 120, render: (_, row) => <Tag color={row.controlPoints.length > 0 ? 'blue' : undefined}>{row.controlPoints.length} 项</Tag> },
+    { title: '操作', key: 'action', fixed: 'right', width: 100, render: (_, row) => <Button size="small" type="primary" ghost icon={<EyeOutlined />} onClick={() => openEquipmentDetail(row.equipment.id)}>详情</Button> },
+  ];
 
   const businessState = !registryAllowed || !telemetryAllowed
     ? 'FORBIDDEN'
@@ -941,9 +970,9 @@ export function RealAssetsWorkspace({
                     const selected = String(keys[0] ?? `site:${site.id}`) as HierarchySelection;
                     setHierarchySelection(selected);
                     const node = hierarchyIndex.get(selected);
-                    if (node?.kind === 'point' || node?.kind === 'sensor' || node?.kind === 'virtual-sensor') {
-                      setLedgerMode('points');
-                    }
+                    if (node?.kind === 'point' || node?.kind === 'sensor' || node?.kind === 'virtual-sensor') setLedgerMode('points');
+                    else if (node?.kind === 'device') setLedgerMode('devices');
+                    else setLedgerMode('equipment');
                   }}
                 />
               </div>
@@ -956,22 +985,23 @@ export function RealAssetsWorkspace({
                   <OperationsPanelHeading
                     icon={<NodeIndexOutlined />}
                     title="资产台账"
-                    meta={ledgerMode === 'points' ? `${filteredPointRows.length} 个点位` : `${filteredRows.length} 个通讯端点`}
+                    meta={ledgerMode === 'equipment' ? `${filteredEquipmentRows.length} 个 Equipment` : ledgerMode === 'points' ? `${filteredPointRows.length} 个点位` : `${filteredRows.length} 个通讯端点`}
                   />
                   <Space wrap>
                     <Segmented<LedgerMode>
                       value={ledgerMode}
                       onChange={setLedgerMode}
                       options={[
-                        { label: `点位 ${pointRows.length}`, value: 'points' },
+                        { label: `Equipment ${equipmentRows.length}`, value: 'equipment' },
                         { label: `通讯端点 ${rows.length}`, value: 'devices' },
+                        { label: `点位 ${pointRows.length}`, value: 'points' },
                       ]}
                     />
                     <Input
                       allowClear
                       type="search"
                       data-testid="real-assets-search"
-                      placeholder={ledgerMode === 'points' ? '搜索点位、传感器或通讯端点' : '搜索通讯端点或设备'}
+                      placeholder={ledgerMode === 'equipment' ? '搜索 Equipment、区域或端点' : ledgerMode === 'points' ? '搜索点位、传感器或通讯端点' : '搜索通讯端点或 Equipment'}
                       value={search}
                       onChange={(event) => setSearch(event.currentTarget.value)}
                       style={{ width: 280 }}
@@ -989,7 +1019,18 @@ export function RealAssetsWorkspace({
                 </div>
 
                 <div data-testid="real-assets-table-wrap" data-ledger-mode={ledgerMode}>
-                  {ledgerMode === 'points' ? (
+                  {ledgerMode === 'equipment' ? (
+                    <Table<RealAssetsEquipmentRow>
+                      rowKey={(row) => row.equipment.id}
+                      size="middle"
+                      columns={equipmentColumns}
+                      dataSource={filteredEquipmentRows}
+                      pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (total) => `共 ${total} 个 Equipment` }}
+                      scroll={{ x: 1150 }}
+                      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前层级或筛选条件没有匹配的 Equipment。" /> }}
+                      onRow={(row) => ({ 'data-equipment-id': row.equipment.id } as HTMLAttributes<HTMLTableRowElement>)}
+                    />
+                  ) : ledgerMode === 'points' ? (
                     <>
                       <table className="real-assets__table real-shell-sr-only" aria-label="完整授权点位台账">
                         <tbody>
@@ -1068,37 +1109,19 @@ export function RealAssetsWorkspace({
           </Col>
         </Row>
       ) : null}
-      <DeviceDetailDrawer
+      <EquipmentDetailDrawer
         site={site}
-        resolution={drawerResolution}
-        currentPending={currentPending}
-        currentUnavailable={currentUnavailable}
-        refreshing={registry.isFetching || current.isFetching}
-        routePolicyRevision={current.data?.routePolicyRevision ?? telemetryPolicyRevision}
         principal={principal}
-        client={telemetryRuntime.client}
+        row={detailRow}
+        telemetryClient={telemetryRuntime.client}
         protectedGeneration={protectedGeneration}
         protectedRequestToken={protectedRequestToken}
-        historyAllowed={historyAllowed}
-        sessionCapability={sessionCapability}
-        realtime={realtime}
-        realtimeProjection={realtimeProjection}
-        actionFeedback={actionFeedback}
-        onClose={closeDeviceDetail}
+        routePolicyRevision={telemetryPolicyRevision}
+        refreshing={registry.isFetching || current.isFetching}
+        onClose={closeEquipmentDetail}
         onRefresh={() => {
           void registry.refetch();
           if (devices.length > 0) void current.refetch();
-        }}
-        onCopyDeviceId={() => {
-          if (detailResolution.state === 'visible') {
-            void copyDetailValue('Device ID', detailResolution.row.device.id);
-          }
-        }}
-        onCopyDeepLink={() => {
-          if (detailResolution.state === 'visible') {
-            const deepLink = new URL(realAssetsDevicePath(site.id, detailResolution.row.device.id), window.location.origin).toString();
-            void copyDetailValue('当前深链', deepLink);
-          }
         }}
       />
       </PageScaffold>

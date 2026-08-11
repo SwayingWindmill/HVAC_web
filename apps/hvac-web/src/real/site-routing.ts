@@ -5,11 +5,11 @@ export type EnergyRoutePeriod = 'year' | 'month' | 'week' | 'day';
 export type SiteRouteLeaf =
   | 'dashboard'
   | 'assets'
-  | 'commands'
   | 'energy'
   | 'optimize'
   | 'fdd'
   | 'alarms'
+  | 'work-orders'
   | 'ai'
   | 'cost'
   | 'bigscreen'
@@ -32,8 +32,7 @@ export type SiteRoutingDecision =
     state: 'READY';
     route: SiteRouteLeaf;
     context: SiteContext;
-    deviceId?: string;
-    commandId?: string;
+    equipmentId?: string;
     energyPeriod?: EnergyRoutePeriod;
   }
   | { state: 'FORBIDDEN' }
@@ -44,11 +43,11 @@ const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}
 const SITE_ROUTE_LEAVES = new Set<SiteRouteLeaf>([
   'dashboard',
   'assets',
-  'commands',
   'energy',
   'optimize',
   'fdd',
   'alarms',
+  'work-orders',
   'ai',
   'cost',
   'bigscreen',
@@ -79,10 +78,6 @@ export function siteRoute(site: Pick<Site, 'id'>, leaf: SiteRouteLeaf): string {
 
 export function siteEnergyRoute(site: Pick<Site, 'id'>, period: EnergyRoutePeriod = 'month'): string {
   return `${siteRoute(site, 'energy')}/${period}`;
-}
-
-export function siteCommandRoute(site: Pick<Site, 'id'>, commandId: string): string {
-  return `${siteRoute(site, 'commands')}/${encodeURIComponent(commandId)}`;
 }
 
 export function resolveSiteEntry(
@@ -127,11 +122,7 @@ export function resolveSiteRouting(
   }
 
   if (leaf === 'assets' && segments.length === 4) {
-    return { state: 'READY', route: leaf, context, deviceId: segments[3] };
-  }
-
-  if (leaf === 'commands' && segments.length === 4) {
-    return { state: 'READY', route: leaf, context, commandId: segments[3] };
+    return { state: 'READY', route: leaf, context, equipmentId: segments[3] };
   }
 
   if (leaf === 'energy') {

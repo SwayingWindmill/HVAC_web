@@ -50,6 +50,8 @@ export interface RealAssetsTrendDatum {
   readonly timestamp: number;
   readonly value: number | null;
   readonly quality: 'GOOD' | 'SUSPECT' | null;
+  readonly pointId: string | null;
+  readonly sensorId: string | null;
 }
 
 export interface RealAssetsHistoryFailure {
@@ -76,7 +78,15 @@ function assertExactStringArray(actual: readonly string[], expected: readonly st
   }
 }
 
+const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function validateHistoricalIdentity(point: DeviceHistoryPoint): void {
+  if (!UUID_V7_PATTERN.test(point.pointId)) throw new Error('Device history Point identity is invalid.');
+  if (point.sensorId !== null && !UUID_V7_PATTERN.test(point.sensorId)) throw new Error('Device history Sensor identity is invalid.');
+}
+
 function validatePoint(point: DeviceHistoryPoint, fromMs: number, toMs: number, previousSampledAt: number | null): number {
+  validateHistoricalIdentity(point);
   const sampledAt = parseInstant(point.sampledAt, 'sampledAt');
   parseInstant(point.receivedAt, 'receivedAt');
   if (sampledAt < fromMs || sampledAt >= toMs) throw new Error('Device history point escaped the requested range.');
@@ -215,17 +225,28 @@ export function buildRealAssetsTrendData(
   const gapThreshold = Math.max(60_000, expectedSpacing * 3);
   const result: RealAssetsTrendDatum[] = [];
   let previousTimestamp: number | null = null;
+  let previousIdentity: string | null = null;
   for (const point of points) {
     const timestamp = parseInstant(point.sampledAt, 'sampledAt');
-    if (previousTimestamp !== null && timestamp - previousTimestamp > gapThreshold) {
+    const identity = `${point.pointId}:${point.sensorId ?? 'no-sensor'}`;
+    if (previousTimestamp !== null && (timestamp - previousTimestamp > gapThreshold || identity !== previousIdentity)) {
       result.push(Object.freeze({
         timestamp: previousTimestamp + Math.floor((timestamp - previousTimestamp) / 2),
         value: null,
         quality: null,
+        pointId: null,
+        sensorId: null,
       }));
     }
-    result.push(Object.freeze({ timestamp, value: point.value, quality: point.quality }));
+    result.push(Object.freeze({
+      timestamp,
+      value: point.value,
+      quality: point.quality,
+      pointId: point.pointId,
+      sensorId: point.sensorId,
+    }));
     previousTimestamp = timestamp;
+    previousIdentity = identity;
   }
   return Object.freeze(result);
 }

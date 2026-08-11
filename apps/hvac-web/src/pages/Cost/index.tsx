@@ -8,11 +8,10 @@ import {
   Row,
   Segmented,
   Space,
-  Table,
   Tag,
   Typography,
 } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import { ProTable, type ProColumns } from '@ant-design/pro-components';
 import {
   AlertOutlined,
   CloudOutlined,
@@ -309,15 +308,15 @@ export default function Cost() {
       : { type: 'success' as const, text: `已批准/下发 ${approved.length} 条优化建议，实时贡献 ${formatCurrency(liveSavingCny)}。` },
   ];
 
-  const columns: ColumnsType<SavingRow> = [
+  const columns: ProColumns<SavingRow>[] = [
     {
       title: '建议',
       dataIndex: 'title',
       key: 'title',
       width: 260,
-      render: (title: string, row) => (
+      render: (_, row) => (
         <Space direction="vertical" size={0}>
-          <Typography.Text strong>{title}</Typography.Text>
+          <Typography.Text strong>{row.title}</Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>{row.id} · {row.device}</Typography.Text>
         </Space>
       ),
@@ -327,7 +326,7 @@ export default function Cost() {
       dataIndex: 'status',
       key: 'status',
       width: 100,
-      render: (status: string) => <Tag color={status === 'dispatched' ? 'blue' : 'green'}>{status === 'dispatched' ? '已下发' : '已批准'}</Tag>,
+      render: (_, row) => <Tag color={row.status === 'dispatched' ? 'blue' : 'green'}>{row.status === 'dispatched' ? '已下发' : '已批准'}</Tag>,
     },
     {
       title: '费用收益',
@@ -335,7 +334,7 @@ export default function Cost() {
       key: 'savingCny',
       width: 130,
       sorter: (a, b) => a.savingCny - b.savingCny,
-      render: (value: number) => <Typography.Text strong style={{ color: STATUS.ok }}>{formatCurrency(value)}</Typography.Text>,
+      render: (_, row) => <Typography.Text strong style={{ color: STATUS.ok }}>{formatCurrency(row.savingCny)}</Typography.Text>,
     },
     {
       title: '节电 / 减排',
@@ -348,14 +347,14 @@ export default function Cost() {
       dataIndex: 'confidence',
       key: 'confidence',
       width: 130,
-      render: (confidence: number) => <Progress percent={Math.round(confidence * 100)} size="small" />,
+      render: (_, row) => <Progress percent={Math.round(row.confidence * 100)} size="small" />,
     },
     {
       title: '回收周期',
       dataIndex: 'paybackDays',
       key: 'paybackDays',
       width: 100,
-      render: (days?: number) => days ? `${days} 天` : '-',
+      render: (_, row) => row.paybackDays ? `${row.paybackDays} 天` : '-',
     },
   ];
 
@@ -517,11 +516,13 @@ export default function Cost() {
         {savingRows.length === 0 ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无已批准建议，前往 /optimize 审批后将自动计入节能收益" />
         ) : (
-          <Table<SavingRow>
+          <ProTable<SavingRow>
             rowKey="id"
             size="middle"
             columns={tableColumns}
             dataSource={savingRows}
+            search={false}
+            options={{ density: true, fullScreen: true, setting: true, reload: false }}
             pagination={false}
             scroll={{ x: compactTable ? 620 : 880 }}
           />

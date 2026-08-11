@@ -3,7 +3,6 @@ import {
   Alert,
   Button,
   Card,
-  Descriptions,
   Drawer,
   Empty,
   Grid,
@@ -12,13 +11,12 @@ import {
   Progress,
   Select,
   Space,
-  Table,
   Tag,
   Tooltip,
   Typography,
   message,
 } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import { ProDescriptions, ProTable, type ProColumns } from '@ant-design/pro-components';
 import {
   ApartmentOutlined,
   BugOutlined,
@@ -217,17 +215,17 @@ export default function Optimize() {
     return '已驳回';
   };
 
-  const columns: ColumnsType<Suggestion> = [
+  const columns: ProColumns<Suggestion>[] = [
     {
       title: '建议',
       dataIndex: 'title',
       key: 'title',
       fixed: 'left',
       width: 270,
-      render: (title: string, s) => (
+      render: (_, s) => (
         <Space direction="vertical" size={0}>
           <Space size={6} wrap>
-            <Typography.Text strong>{title}</Typography.Text>
+            <Typography.Text strong>{s.title}</Typography.Text>
             <Tag color={SUGGESTION_TYPE_META[s.type].color}>{SUGGESTION_TYPE_META[s.type].label}</Tag>
           </Space>
           <Typography.Text type="secondary" style={{ fontSize: 12 }} copyable={{ text: s.id }}>{s.id} · {s.device}</Typography.Text>
@@ -267,28 +265,28 @@ export default function Optimize() {
       key: 'confidence',
       width: 130,
       sorter: (a, b) => a.confidence - b.confidence,
-      render: (confidence: number) => <Progress percent={Math.round(confidence * 100)} size="small" />,
+      render: (_, s) => <Progress percent={Math.round(s.confidence * 100)} size="small" />,
     },
     {
       title: '风险',
       dataIndex: 'risk',
       key: 'risk',
       width: 100,
-      render: (risk: SuggestionRisk) => <Tag color={SUGGESTION_RISK_META[risk].color}>{SUGGESTION_RISK_META[risk].label}</Tag>,
+      render: (_, s) => <Tag color={SUGGESTION_RISK_META[s.risk].color}>{SUGGESTION_RISK_META[s.risk].label}</Tag>,
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
       width: 100,
-      render: (status: SuggestionStatus) => <Tag color={SUGGESTION_STATUS_META[status].color}>{SUGGESTION_STATUS_META[status].label}</Tag>,
+      render: (_, s) => <Tag color={SUGGESTION_STATUS_META[s.status].color}>{SUGGESTION_STATUS_META[s.status].label}</Tag>,
     },
     {
       title: '审核人',
       dataIndex: 'reviewer',
       key: 'reviewer',
       width: 120,
-      render: (reviewer?: string) => reviewer ?? '待分配',
+      render: (_, s) => s.reviewer ?? '待分配',
     },
     {
       title: '操作',
@@ -365,11 +363,13 @@ export default function Optimize() {
             </Space>
           </div>
 
-          <Table<Suggestion>
+          <ProTable<Suggestion>
             rowKey="id"
             size="middle"
             columns={tableColumns}
             dataSource={rows}
+            search={false}
+            options={{ density: true, fullScreen: true, setting: true, reload: false }}
             pagination={{ pageSize: 8, showSizeChanger: false }}
             scroll={{ x: compactTable ? 900 : 1320 }}
             locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合条件的优化建议" /> }}
@@ -455,14 +455,19 @@ export default function Optimize() {
               icon={<SafetyCertificateOutlined />}
               description="建议类型、风险、审核责任和收益回收周期。"
             >
-              <Descriptions size="small" column={{ xs: 1, sm: 2 }} colon={false}>
-                <Descriptions.Item label="类型"><Tag color={SUGGESTION_TYPE_META[selected.type].color}>{SUGGESTION_TYPE_META[selected.type].label}</Tag></Descriptions.Item>
-                <Descriptions.Item label="风险"><Tag color={SUGGESTION_RISK_META[selected.risk].color}>{SUGGESTION_RISK_META[selected.risk].label}</Tag></Descriptions.Item>
-                <Descriptions.Item label="设备">{selected.device}</Descriptions.Item>
-                <Descriptions.Item label="范围">{selected.scope}</Descriptions.Item>
-                <Descriptions.Item label="审核人">{selected.reviewer ?? '待分配'}</Descriptions.Item>
-                <Descriptions.Item label="回收周期">{selected.paybackDays} 天</Descriptions.Item>
-              </Descriptions>
+              <ProDescriptions<Suggestion>
+                size="small"
+                column={{ xs: 1, sm: 2 }}
+                dataSource={selected}
+                columns={[
+                  { title: '类型', dataIndex: 'type', render: (_, s) => <Tag color={SUGGESTION_TYPE_META[s.type].color}>{SUGGESTION_TYPE_META[s.type].label}</Tag> },
+                  { title: '风险', dataIndex: 'risk', render: (_, s) => <Tag color={SUGGESTION_RISK_META[s.risk].color}>{SUGGESTION_RISK_META[s.risk].label}</Tag> },
+                  { title: '设备', dataIndex: 'device' },
+                  { title: '范围', dataIndex: 'scope' },
+                  { title: '审核人', dataIndex: 'reviewer', renderText: (value) => value ?? '待分配' },
+                  { title: '回收周期', dataIndex: 'paybackDays', renderText: (value) => `${value} 天` },
+                ]}
+              />
             </OperationsDetailSection>
 
             <OperationsDetailSection

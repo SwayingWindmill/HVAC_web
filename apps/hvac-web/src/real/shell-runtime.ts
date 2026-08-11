@@ -155,6 +155,16 @@ function isLoggedOutLanding(candidate: string, origin: string): boolean {
   }
 }
 
+function isSignInLanding(candidate: string, origin: string): boolean {
+  try {
+    const base = new URL(origin);
+    const target = new URL(candidate, base);
+    return target.origin === base.origin && target.pathname === '/sign-in';
+  } catch {
+    return false;
+  }
+}
+
 function browserEnvironment(): ShellRuntimeEnvironment {
   return {
     origin: window.location.origin,
@@ -221,7 +231,8 @@ class BrowserShellRuntime implements ShellRuntime {
     if (this.disposed) return;
     this.currentUrl = currentUrl;
     const loggedOutLanding = isLoggedOutLanding(currentUrl, this.environment.origin);
-    this.returnTo = loggedOutLanding ? '/' : normalizeReturnTo(currentUrl, this.environment.origin);
+    const signInLanding = isSignInLanding(currentUrl, this.environment.origin);
+    this.returnTo = loggedOutLanding || signInLanding ? '/' : normalizeReturnTo(currentUrl, this.environment.origin);
     const sequence = this.beginProtectedTransition();
     const controller = new AbortController();
     this.bootstrapController = controller;
@@ -233,7 +244,7 @@ class BrowserShellRuntime implements ShellRuntime {
 
       const expiresAt = Date.parse(response.data.session.expiresAt);
       if (!Number.isFinite(expiresAt) || expiresAt <= this.environment.now()) {
-        this.enterLoginRequired('SESSION_INVALID', true);
+        this.enterLoginRequired('SESSION_INVALID', !signInLanding);
         return;
       }
 
@@ -260,7 +271,7 @@ class BrowserShellRuntime implements ShellRuntime {
       if (problem && classifyBootstrapProblem(problem) === 'LOGIN_REQUIRED') {
         this.enterLoginRequired(
           loggedOutLanding ? 'LOGOUT_COMPLETED' : problem.code,
-          !loggedOutLanding,
+          !loggedOutLanding && !signInLanding,
         );
         return;
       }

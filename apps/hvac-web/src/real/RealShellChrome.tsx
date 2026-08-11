@@ -18,9 +18,8 @@ import {
   ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { Avatar, Badge, Button, Divider, Grid, Layout, Popover, Select, Space, Tooltip } from 'antd';
-import AppHeaderFrame from '@/layout/AppHeaderFrame';
-import { ProductSidebar, type ProductMenuItem } from '@/layout/ProductSidebar';
+import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
+import { Avatar, Badge, Button, Divider, Grid, Popover, Select, Space, Tooltip } from 'antd';
 import { FocusHeading } from './FocusHeading';
 import { createIdleRealtimeStatus, realtimeStatusLabel } from './realtime-status';
 import { RealRuntimeFacts } from './RealRuntimeFacts';
@@ -30,7 +29,6 @@ import type { RealRuntimeConfig } from './runtime-config';
 import type { ShellSnapshot } from './shell-runtime';
 import { siteRoute } from './site-routing';
 
-const { Content } = Layout;
 const { useBreakpoint } = Grid;
 
 const NAVIGATION_ICONS: Record<string, ReactNode> = {
@@ -38,11 +36,12 @@ const NAVIGATION_ICONS: Record<string, ReactNode> = {
   'site-dashboard': <DashboardOutlined />,
   'site-operations': <RobotOutlined />,
   'site-assets': <ApartmentOutlined />,
-  'site-commands': <ControlOutlined />,
+
   'site-energy': <FundOutlined />,
   'site-optimize': <ThunderboltOutlined />,
   'site-fdd': <BugOutlined />,
   'site-alarms': <AlertOutlined />,
+  'site-work-orders': <ControlOutlined />,
   'site-ai': <RobotOutlined />,
   'site-cost': <DollarOutlined />,
   'site-bigscreen': <DesktopOutlined />,
@@ -56,7 +55,7 @@ const NAVIGATION_GROUPS = [
   {
     key: 'operations',
     label: '运营管理',
-    ids: ['site-assets', 'site-commands', 'site-fdd', 'site-alarms', 'site-optimize', 'alarms', 'work-orders'],
+    ids: ['site-assets', 'site-fdd', 'site-alarms', 'site-work-orders', 'site-optimize', 'alarms', 'work-orders'],
   },
   {
     key: 'analytics',
@@ -70,70 +69,51 @@ const NAVIGATION_GROUPS = [
   },
 ] as const;
 
-function navigationItem(item: RealNavigationItem, active: boolean): ProductMenuItem {
+type HvacMenuDataItem = MenuDataItem & {
+  featureId?: string;
+  featureKind?: string;
+  featureDegraded?: boolean;
+  featurePrimary?: boolean;
+};
+
+function navigationItem(item: RealNavigationItem): HvacMenuDataItem {
   return {
     key: item.path,
+    path: item.path,
+    name: item.label,
     icon: NAVIGATION_ICONS[item.id] ?? <DashboardOutlined />,
-    label: (
-      <a
-        href={item.path}
-        data-feature-id={item.id}
-        data-feature-kind={item.kind}
-        data-feature-degraded={String(item.degraded)}
-        data-feature-primary={String(item.primary === true)}
-        aria-current={active ? 'page' : undefined}
-        onClick={(event) => event.preventDefault()}
-      >
-        {item.label}
-      </a>
-    ),
+    featureId: item.id,
+    featureKind: item.kind,
+    featureDegraded: item.degraded,
+    featurePrimary: item.primary === true,
   };
 }
 
-function navigationMatches(item: RealNavigationItem, pathname: string): boolean {
-  if (item.id === 'site-energy') {
-    const basePath = item.path.replace(/\/month$/, '');
-    return pathname === basePath || pathname.startsWith(`${basePath}/`);
-  }
-  return pathname === item.path || (item.path !== '/' && pathname.startsWith(`${item.path}/`));
-}
-
-function buildRealSidebarItems(
-  navigation: RealNavigationItem[],
-  pathname: string,
-  collapsed: boolean,
-): { primaryItems: ProductMenuItem[]; systemItems: ProductMenuItem[]; selectedKey: string } {
-  const selected = navigation.find((item) => navigationMatches(item, pathname));
-  const selectedKey = selected?.path ?? pathname;
+function buildRealMenuItems(navigation: RealNavigationItem[]): HvacMenuDataItem[] {
   const systemItems = navigation
     .filter((item) => item.id === 'system')
-    .map((item) => navigationItem(item, navigationMatches(item, pathname)));
+    .map(navigationItem);
   const productItems = navigation.filter((item) => item.id !== 'system');
   const dashboardItems = productItems
     .filter((item) => item.id === 'site-dashboard' || item.id === 'site-entry')
-    .map((item) => navigationItem(item, navigationMatches(item, pathname)));
+    .map(navigationItem);
   const groupedIds = new Set<string>(NAVIGATION_GROUPS.flatMap((group) => [...group.ids]));
   const ungrouped = productItems
     .filter((item) => item.id !== 'site-dashboard' && item.id !== 'site-entry' && !groupedIds.has(item.id))
-    .map((item) => navigationItem(item, navigationMatches(item, pathname)));
-  const groups = NAVIGATION_GROUPS.map((group) => ({
-    type: 'group' as const,
+    .map(navigationItem);
+  const groups: HvacMenuDataItem[] = NAVIGATION_GROUPS.map((group) => ({
     key: group.key,
-    label: group.label,
+    name: group.label,
     children: group.ids
       .map((id) => productItems.find((item) => item.id === id))
       .filter((item): item is RealNavigationItem => Boolean(item))
-      .map((item) => navigationItem(item, navigationMatches(item, pathname))),
-  })).filter((group) => group.children.length > 0);
-  const flatGrouped = groups.flatMap((group) => group.children);
+      .map(navigationItem),
+  })).filter((group) => (group.children?.length ?? 0) > 0);
 
-  return {
-    primaryItems: collapsed
-      ? [...dashboardItems, ...ungrouped, ...flatGrouped]
-      : [...dashboardItems, ...ungrouped, ...groups],
-    systemItems,
-    selectedKey,
-  };
+  if (systemItems.length > 0) {
+    groups.push({ key: 'system-group', name: '系统', children: systemItems });
+  }
+  return [...dashboardItems, ...ungrouped, ...groups];
 }
 
 function DraftConfirmation({
@@ -259,26 +239,13 @@ export function RealShellChrome({
   const transitionBlocksContent = transition?.status === 'purging' || transition?.status === 'failed';
   const siteLabel = activeSite?.displayName ?? (transitionBlocksContent ? 'No active Site' : 'Platform scope');
   const screens = useBreakpoint();
-  const mobile = screens.md === false;
   const compact = !screens.xl;
   const narrow = !screens.xl;
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { resolvedMode: themeMode, setMode: setThemeMode } = useRealTheme();
-  const toggleSidebar = () => setSidebarCollapsed((collapsed) => !collapsed);
 
-  useEffect(() => {
-    if (mobile) setSidebarCollapsed(true);
-  }, [mobile, setSidebarCollapsed]);
-
-  const navigate = (target: string) => {
-    if (mobile) setSidebarCollapsed(true);
-    onNavigate?.(target);
-  };
-  const menuCollapsed = mobile ? false : sidebarCollapsed;
-  const sidebar = useMemo(
-    () => buildRealSidebarItems(navigation, pathname, menuCollapsed),
-    [menuCollapsed, navigation, pathname],
-  );
+  const navigate = (target: string) => onNavigate?.(target);
+  const menuItems = useMemo(() => buildRealMenuItems(navigation), [navigation]);
   const sites = snapshot.sites?.items ?? [];
   const siteOptions = sites.map((site) => ({ value: site.id, label: site.displayName }));
   const bigscreen = navigation.find((item) => item.id === 'site-bigscreen');
@@ -326,7 +293,7 @@ export function RealShellChrome({
   );
 
   return (
-    <Layout
+    <div
       className="real-shell-layout"
       style={{ minHeight: '100vh', height: '100vh', overflow: 'hidden' }}
       data-testid="real-protected-shell"
@@ -341,33 +308,47 @@ export function RealShellChrome({
       data-realtime-state={realtime.state}
       data-realtime-site={realtime.siteId}
     >
-      <ProductSidebar
+      <ProLayout
+        className="real-pro-layout"
+        title="泉来禾智慧能源"
+        logo="/quanlaihe-mark.svg"
+        layout="side"
+        siderWidth={224}
+        fixedHeader
+        fixSiderbar
+        breakpoint="lg"
         collapsed={sidebarCollapsed}
-        mobile={mobile}
-        primaryItems={sidebar.primaryItems}
-        systemItems={sidebar.systemItems}
-        selectedKey={sidebar.selectedKey}
-        onNavigate={navigate}
-        onClose={() => setSidebarCollapsed(true)}
-        navigationTestId="real-navigation"
-      />
-
-      <Layout style={{ minWidth: 0, minHeight: 0 }}>
-        <AppHeaderFrame
-          className="real-shell-header"
-          sidebarCollapsed={sidebarCollapsed}
-          onToggleSidebar={mobile ? () => setSidebarCollapsed(false) : toggleSidebar}
-          compact={compact}
-        >
-          {narrow ? (
+        onCollapse={setSidebarCollapsed}
+        location={{ pathname }}
+        route={{ path: '/', routes: menuItems }}
+        menuItemRender={(item, dom) => {
+          const menuItem = item as HvacMenuDataItem;
+          if (!menuItem.path) return dom;
+          return (
+            <a
+              href={menuItem.path}
+              data-feature-id={menuItem.featureId}
+              data-feature-kind={menuItem.featureKind}
+              data-feature-degraded={String(menuItem.featureDegraded ?? false)}
+              data-feature-primary={String(menuItem.featurePrimary ?? false)}
+              onClick={(event) => {
+                event.preventDefault();
+                navigate(menuItem.path!);
+              }}
+            >
+              {dom}
+            </a>
+          );
+        }}
+        headerContentRender={() => (
+          narrow ? (
             <Popover trigger="click" placement="bottomLeft" content={<div style={{ width: 240 }}>{siteControl}</div>}>
               <Button size="small" icon={<ApartmentOutlined />}>{activeSite?.displayName ?? '选择站点'}</Button>
             </Popover>
-          ) : siteControl}
-
-          <div style={{ flex: 1, minWidth: 8 }} />
-
-          <Tooltip title={realtime.siteId ? `当前订阅：${siteLabel}` : '当前没有活动 Site 订阅'}>
+          ) : siteControl
+        )}
+        actionsRender={() => [
+          <Tooltip key="realtime" title={realtime.siteId ? `当前订阅：${siteLabel}` : '当前没有活动 Site 订阅'}>
             <span
               className="real-shell-realtime"
               role="status"
@@ -381,31 +362,31 @@ export function RealShellChrome({
               <Badge status={realtimeStatus} />
               <span className={compact ? 'real-shell-sr-only' : undefined}>{realtimeLabel}</span>
             </span>
-          </Tooltip>
-          {bigscreen ? (
-            <Tooltip title="进入运行大屏（全屏）">
+          </Tooltip>,
+          bigscreen ? (
+            <Tooltip key="bigscreen" title="进入运行大屏（全屏）">
               <Button type="text" icon={<DesktopOutlined />} onClick={() => navigate(bigscreen.path)} />
             </Tooltip>
-          ) : null}
-          <Popover content={diagnostics} trigger="click" placement="bottomRight">
+          ) : null,
+          <Popover key="diagnostics" content={diagnostics} trigger="click" placement="bottomRight">
             <Tooltip title="可信运行信息">
               <Button type="text" aria-label="可信运行信息" icon={<InfoCircleOutlined />} />
             </Tooltip>
-          </Popover>
-          <Tooltip title={themeMode === 'dark' ? '切浅色' : '切深色'}>
+          </Popover>,
+          <Tooltip key="theme" title={themeMode === 'dark' ? '切浅色' : '切深色'}>
             <Button
               type="text"
               aria-label="切换主题"
               icon={themeMode === 'dark' ? <SunOutlined /> : <MoonOutlined />}
               onClick={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
             />
-          </Tooltip>
-          {!narrow ? (
-            <Tooltip title={`${principal.principal.displayName} · ${principal.principal.roles.join(', ') || '授权用户'}`}>
+          </Tooltip>,
+          !narrow ? (
+            <Tooltip key="principal-avatar" title={`${principal.principal.displayName} · ${principal.principal.roles.join(', ') || '授权用户'}`}>
               <Avatar style={{ background: '#0FB5AE' }} icon={<UserOutlined />} />
             </Tooltip>
-          ) : null}
-          <Tooltip title="退出登录">
+          ) : null,
+          <Tooltip key="logout" title="退出登录">
             <Button
               type="text"
               danger
@@ -415,22 +396,22 @@ export function RealShellChrome({
               data-testid="real-logout-button"
               aria-label="退出登录"
             />
-          </Tooltip>
-          <span className="real-shell-sr-only" data-testid="real-shell-principal">{principal.principal.displayName}</span>
-          <span className="real-shell-sr-only real-shell-principal-roles" data-testid="real-principal-roles">
+          </Tooltip>,
+          <span key="principal" className="real-shell-sr-only" data-testid="real-shell-principal">{principal.principal.displayName}</span>,
+          <span key="roles" className="real-shell-sr-only real-shell-principal-roles" data-testid="real-principal-roles">
             {principal.principal.roles.join(', ') || '授权用户'}
-          </span>
-          <span className="real-shell-sr-only" data-testid="real-shell-site">{siteLabel}</span>
-          <span className="real-shell-sr-only" data-testid="real-shell-state">READY</span>
-        </AppHeaderFrame>
-
-        <Content
+          </span>,
+          <span key="site" className="real-shell-sr-only" data-testid="real-shell-site">{siteLabel}</span>,
+          <span key="state" className="real-shell-sr-only" data-testid="real-shell-state">READY</span>,
+        ]}
+        contentStyle={{ margin: 0, padding: 0, minHeight: 0, overflow: 'hidden' }}
+      >
+        <main
           className="app-content real-shell-content"
           style={{
             minWidth: 0,
             minHeight: 0,
-            height: 'auto',
-            flex: '1 1 auto',
+            height: '100%',
             boxSizing: 'border-box',
             padding: '20px 20px 88px',
             overflow: 'auto',
@@ -449,8 +430,8 @@ export function RealShellChrome({
           {transition?.status === 'purging' ? <PurgingSurface /> : null}
           {transition?.status === 'failed' ? <PurgeFailedSurface snapshot={snapshot} /> : null}
           {!transitionBlocksContent ? children : null}
-        </Content>
-      </Layout>
-    </Layout>
+        </main>
+      </ProLayout>
+    </div>
   );
 }

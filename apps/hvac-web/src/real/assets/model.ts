@@ -76,6 +76,17 @@ export interface RealAssetsDeviceRow {
   readonly points: readonly RealAssetsPointView[];
 }
 
+export interface RealAssetsEquipmentRow {
+  readonly equipment: Equipment;
+  readonly area: RealAssetsAreaState;
+  readonly devices: readonly RealAssetsDeviceRow[];
+  readonly sensors: readonly Sensor[];
+  readonly points: readonly RealAssetsTelemetryPointRow[];
+  readonly controlPoints: readonly RealAssetsTelemetryPointRow[];
+  readonly operatingState: RealAssetsOperatingState;
+  readonly attentionReasons: readonly RealAssetsAttentionReason[];
+}
+
 export interface BuildRealAssetsRowsInput {
   readonly assetModel: SiteAssetModel;
   readonly snapshots?: ReadonlyMap<string, RealAssetsSnapshotResult>;
@@ -107,6 +118,13 @@ export interface RealAssetsTelemetryPointRow {
 export interface BuildRealAssetsPointRowsInput {
   readonly assetModel: SiteAssetModel;
   readonly deviceRows: readonly RealAssetsDeviceRow[];
+}
+
+export interface BuildRealAssetsEquipmentRowsInput {
+  readonly assetModel: SiteAssetModel;
+  readonly deviceRows: readonly RealAssetsDeviceRow[];
+  readonly pointRows: readonly RealAssetsTelemetryPointRow[];
+  readonly now?: Date;
 }
 
 function compareText(left: string, right: string): number {
@@ -282,6 +300,22 @@ export function resolveDeviceArea(
   return { state: 'bound', relationship, area };
 }
 
+export function resolveEquipmentArea(
+  equipment: Equipment,
+  relationships: readonly AssetRelationship[],
+  areaById: ReadonlyMap<string, Area>,
+  now = new Date(),
+): RealAssetsAreaState {
+  const candidates = currentRelationships(relationships, 'EQUIPMENT', equipment.id, 'AREA', now);
+  if (candidates.length === 0) return { state: 'unbound' };
+  const areaIds = new Set(candidates.map((relationship) => relationship.toId));
+  if (areaIds.size !== 1) return { state: 'ambiguous', relationshipIds: candidates.map((relationship) => relationship.id) };
+  const relationship = candidates[0];
+  const area = areaById.get(relationship.toId);
+  if (!area) return { state: 'ambiguous', relationshipIds: candidates.map((candidate) => candidate.id) };
+  return { state: 'bound', relationship, area };
+}
+
 interface PointDisplayDefinition {
   readonly key: string;
   readonly label: string;
@@ -413,6 +447,74 @@ export function buildRealAssetsRows(input: BuildRealAssetsRowsInput): RealAssets
     if (leftEquipment) return -1;
     if (rightEquipment) return 1;
     return compareRegistryIdentity(left.device, right.device);
+  });
+}
+
+export function buildRealAssetsEquipmentRows(input: BuildRealAssetsEquipmentRowsInput): RealAssetsEquipmentRow[] {
+  const now = input.now ?? new Date();
+  const areaById = new Map(input.assetModel.areas.map((area) => [area.id, area]));
+  const sensorById = new Map(input.assetModel.sensors.map((sensor) => [sensor.id, sensor]));
+  const deviceRowsByEquipment = new Map<string, RealAssetsDeviceRow[]>();
+  for (const deviceRow of input.deviceRows) {
+    for (const binding of resolvedEquipmentBindings(deviceRow.binding)) {
+      const rows = deviceRowsByEquipment.get(binding.equipment.id) ?? [];
+      rows.push(deviceRow);
+      deviceRowsByEquipment.set(binding.equipment.id, rows);
+    }
+  }
+
+  return input.assetModel.equipment.map((equipment): RealAssetsEquipmentRow => {
+    const devices = [...(deviceRowsByEquipment.get(equipment.id) ?? [])].sort((left, right) => compareRegistryIdentity(left.device, right.device));
+    const sensorIds = new Set(input.assetModel.relationships
+      .filter((relationship) => relationship.fromType === 'SENSOR'
+        && relationship.toType === 'EQUIPMENT'
+        && relationship.toId === equipment.id
+        && isCurrentRelationship(relationship, now))
+      .map((relationship) => relationship.fromId));
+    const sensors = [...sensorIds]
+      .map((sensorId) => sensorById.get(sensorId))
+      .filter((sensor): sensor is Sensor => Boolean(sensor))
+      .sort(compareRegistryIdentity);
+    const pointRelationships = input.assetModel.relationships.filter((relationship) => relationship.fromType === 'POINT'
+      && relationship.toType === 'EQUIPMENT'
+      && relationship.toId === equipment.id
+      && isCurrentRelationship(relationship, now));
+    const pointRelationshipById = new Map(pointRelationships.map((relationship) => [relationship.fromId, relationship]));
+    const points = input.pointRows
+      .filter((row) => pointRelationshipById.has(row.point.id))
+      .sort((left, right) => compareRegistryIdentity(left.point, right.point));
+    const controlPoints = points.filter((row) => {
+      const relationship = pointRelationshipById.get(row.point.id);
+      return row.point.status === 'ACTIVE'
+        && row.point.pointKind === 'COMMAND'
+        && row.point.writable
+        && relationship?.role === 'CONTROLS';
+    });
+    const attentionReasons = [...new Set(devices.flatMap((row) => row.attentionReasons))];
+    const operatingState: RealAssetsOperatingState = devices.length === 0
+      ? 'UNKNOWN'
+      : devices.every((row) => row.operatingState === 'NORMAL')
+        ? 'NORMAL'
+        : devices.every((row) => row.operatingState === 'OFFLINE')
+          ? 'OFFLINE'
+          : 'ATTENTION';
+    return {
+      equipment,
+      area: resolveEquipmentArea(equipment, input.assetModel.relationships, areaById, now),
+      devices,
+      sensors,
+      points,
+      controlPoints,
+      operatingState,
+      attentionReasons,
+    };
+  }).sort((left, right) => {
+    const leftArea = left.area.state === 'bound' ? left.area.area : undefined;
+    const rightArea = right.area.state === 'bound' ? right.area.area : undefined;
+    if (leftArea && rightArea) return compareRegistryIdentity(leftArea, rightArea) || compareRegistryIdentity(left.equipment, right.equipment);
+    if (leftArea) return -1;
+    if (rightArea) return 1;
+    return compareRegistryIdentity(left.equipment, right.equipment);
   });
 }
 

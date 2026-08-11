@@ -1,22 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   Button,
   Card,
   Col,
-  Descriptions,
   Form,
-  Input,
-  InputNumber,
   Result,
   Row,
-  Select,
   Space,
   Tag,
   Timeline,
   Typography,
 } from 'antd';
+import { ProDescriptions, ProForm, ProFormDigit, ProFormText } from '@ant-design/pro-components';
 import { CheckCircleOutlined, ControlOutlined, SearchOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router';
 import PageScaffold from '@/components/PageScaffold';
@@ -30,8 +27,8 @@ import {
   commandErrorMessage,
   createCommand,
   getCommand,
-  listLocalCommandDevices,
-  MOCK_COMMAND_DEVICE_ID,
+  MOCK_COMMAND_EQUIPMENT_ID,
+  MOCK_COMMAND_POINT_ID,
   MOCK_PENDING_COMMAND_ID,
   type Command,
   type CommandRisk,
@@ -96,7 +93,6 @@ const REASON_LABEL: Record<string, string> = {
 };
 
 interface CreateFormValues {
-  deviceId: string;
   setpointC: number;
 }
 
@@ -138,25 +134,25 @@ function CommandDetail({ command, canApprove, onApprove, approving }: {
           </Button>
         ) : null}
       >
-        <Descriptions column={{ xs: 1, sm: 2, xl: 3 }} bordered size="small">
-          <Descriptions.Item label="Command ID" span={2}>
-            <Typography.Text copyable className="command-monospace">{command.commandId}</Typography.Text>
-          </Descriptions.Item>
-          <Descriptions.Item label="状态">
-            <Tag color={STATUS_COLOR[command.status]}>{STATUS_LABEL[command.status]}</Tag>
-          </Descriptions.Item>
-          <Descriptions.Item label="Device ID" span={2}>
-            <Typography.Text copyable className="command-monospace">{command.deviceId}</Typography.Text>
-          </Descriptions.Item>
-          <Descriptions.Item label="目标设定值">{command.setpointC.toFixed(1)} °C</Descriptions.Item>
-          <Descriptions.Item label="Canonical Capability">SET_TEMPERATURE_SETPOINT</Descriptions.Item>
-          <Descriptions.Item label="风险"><Tag color={RISK_COLOR[command.risk]}>{RISK_LABEL[command.risk]}</Tag></Descriptions.Item>
-          <Descriptions.Item label="审批进度">{command.approvalCount} / {command.requiredApprovalCount}</Descriptions.Item>
-          <Descriptions.Item label="设备命令序号">{command.deviceCommandSequence}</Descriptions.Item>
-          <Descriptions.Item label="S2 Snapshot Revision">{command.snapshotRevision}</Descriptions.Item>
-          <Descriptions.Item label="Command Version">{command.version}</Descriptions.Item>
-          <Descriptions.Item label="更新时间">{new Date(command.updatedAt).toLocaleString('zh-CN')}</Descriptions.Item>
-        </Descriptions>
+        <ProDescriptions<Command>
+          column={{ xs: 1, sm: 2, xl: 3 }}
+          bordered
+          size="small"
+          dataSource={command}
+          columns={[
+            { title: 'Command ID', dataIndex: 'commandId', span: 2, render: (_, row) => <Typography.Text copyable className="command-monospace">{row.commandId}</Typography.Text> },
+            { title: '状态', dataIndex: 'status', render: (_, row) => <Tag color={STATUS_COLOR[row.status]}>{STATUS_LABEL[row.status]}</Tag> },
+            { title: '执行 Device ID', dataIndex: 'deviceId', span: 2, render: (_, row) => <Typography.Text copyable className="command-monospace">{row.deviceId}</Typography.Text> },
+            { title: '参数', dataIndex: 'parameters', renderText: (value) => JSON.stringify(value) },
+            { title: 'Canonical Capability', dataIndex: 'capability' },
+            { title: '风险', dataIndex: 'risk', render: (_, row) => <Tag color={RISK_COLOR[row.risk]}>{RISK_LABEL[row.risk]}</Tag> },
+            { title: '审批进度', key: 'approval', renderText: (_, row) => `${row.approvalCount} / ${row.requiredApprovalCount}` },
+            { title: '设备命令序号', dataIndex: 'deviceCommandSequence' },
+            { title: 'S2 Snapshot Revision', dataIndex: 'snapshotRevision' },
+            { title: 'Command Version', dataIndex: 'version' },
+            { title: '更新时间', dataIndex: 'updatedAt', renderText: (value) => new Date(String(value)).toLocaleString('zh-CN') },
+          ]}
+        />
         {approvalPending && !canApprove ? (
           <Alert
             className="command-inline-alert"
@@ -201,23 +197,8 @@ export default function Commands() {
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const routesAvailable = API_MODE === 'mock' || COMMAND_ROUTES_AVAILABLE;
   const selectedCommandId = commandId ?? (API_MODE === 'mock' ? MOCK_PENDING_COMMAND_ID : '');
-  const mayCreate = can(role, 'create', 'command') && routesAvailable;
+  const mayCreate = can(role, 'create', 'command') && API_MODE === 'mock';
   const mayApprove = can(role, 'approve', 'command') && routesAvailable;
-
-  const localDevicesQuery = useQuery({
-    queryKey: ['command-local-devices'],
-    queryFn: ({ signal }) => listLocalCommandDevices(signal),
-    enabled: API_MODE === 'mock' || COMMAND_LOCAL_ROUTES_ENABLED,
-    retry: false,
-    staleTime: 30_000,
-  });
-
-  useEffect(() => {
-    const firstDevice = localDevicesQuery.data?.[0]?.deviceId;
-    if (firstDevice && !createForm.getFieldValue('deviceId')) {
-      createForm.setFieldValue('deviceId', firstDevice);
-    }
-  }, [createForm, localDevicesQuery.data]);
 
   const commandQuery = useQuery({
     queryKey: ['command', selectedCommandId],
@@ -231,7 +212,11 @@ export default function Commands() {
   });
 
   const createMutation = useMutation({
-    mutationFn: createCommand,
+    mutationFn: (values: CreateFormValues) => createCommand({
+      equipmentId: MOCK_COMMAND_EQUIPMENT_ID,
+      commandPointId: MOCK_COMMAND_POINT_ID,
+      parameters: { setpointC: values.setpointC },
+    }),
     onSuccess: (command) => {
       queryClient.setQueryData(['command', command.commandId], command);
       setActionMessage('Command Intent 已提交。Provider ACK 或请求受理均不代表设备状态已经成功。');
@@ -305,44 +290,36 @@ export default function Commands() {
         <Row gutter={[16, 16]}>
           <Col xs={24} xl={10}>
             <Card title="提交温度设定 Command" className="command-workbench-card">
-              <Form<CreateFormValues>
+              <ProForm<CreateFormValues>
                 form={createForm}
                 layout="vertical"
-                initialValues={{ deviceId: API_MODE === 'mock' ? MOCK_COMMAND_DEVICE_ID : '', setpointC: 24 }}
-                onFinish={(values) => createMutation.mutate(values)}
+                initialValues={{ setpointC: 24 }}
+                onFinish={async (values) => {
+                  createMutation.mutate(values);
+                  return true;
+                }}
+                submitter={false}
               >
-                <Form.Item
-                  name="deviceId"
-                  label="Canonical Device ID"
-                  rules={[{ required: true, message: '请输入 Device UUIDv7' }]}
-                >
-                  {API_MODE === 'mock' || COMMAND_LOCAL_ROUTES_ENABLED ? (
-                    <Select
-                      loading={localDevicesQuery.isLoading}
-                      placeholder="选择本地虚拟设备"
-                      options={(localDevicesQuery.data ?? []).map((device) => ({
-                        value: device.deviceId,
-                        label: `${device.name} · ${device.type}`,
-                      }))}
-                      optionFilterProp="label"
-                      showSearch
-                    />
-                  ) : (
-                    <Input placeholder="Device UUIDv7" autoComplete="off" />
-                  )}
-                </Form.Item>
-                <Form.Item
+                <Alert
+                  type="info"
+                  showIcon
+                  message="Mock Equipment Command Point"
+                  description="真实控制不在此处选择 Device；Real 模式从 Equipment 详情中的 Registry COMMAND Point 发起。"
+                  style={{ marginBottom: 16 }}
+                />
+                <ProFormDigit
                   name="setpointC"
                   label="目标温度"
                   extra="允许范围 16–30°C；浏览器不能选择 Provider Method 或直接构造 RPC 参数。"
                   rules={[{ required: true, message: '请输入目标温度' }]}
-                >
-                  <InputNumber min={16} max={30} step={0.5} precision={1} addonAfter="°C" className="command-number-input" />
-                </Form.Item>
+                  min={16}
+                  max={30}
+                  fieldProps={{ step: 0.5, precision: 1, addonAfter: '°C', className: 'command-number-input' }}
+                />
                 <Button type="primary" htmlType="submit" block disabled={!mayCreate} loading={createMutation.isPending}>
                   提交 Canonical Command
                 </Button>
-              </Form>
+              </ProForm>
               {!can(role, 'create', 'command') ? (
                 <Typography.Paragraph type="secondary" className="command-permission-note">
                   当前角色没有 Command 提交权限。
@@ -351,17 +328,24 @@ export default function Commands() {
             </Card>
 
             <Card title="按 Command ID 查询" className="command-workbench-card command-lookup-card">
-              <Form<LookupFormValues>
+              <ProForm<LookupFormValues>
                 form={lookupForm}
                 layout="vertical"
                 initialValues={{ commandId: selectedCommandId }}
-                onFinish={({ commandId: lookupId }) => navigate(`/commands/${lookupId.trim()}`)}
+                onFinish={async ({ commandId: lookupId }) => {
+                  navigate(`/commands/${lookupId.trim()}`);
+                  return true;
+                }}
+                submitter={false}
               >
-                <Form.Item name="commandId" rules={[{ required: true, message: '请输入 Command ID' }]}>
-                  <Input prefix={<SearchOutlined />} placeholder="Command UUID" autoComplete="off" />
-                </Form.Item>
+                <ProFormText
+                  name="commandId"
+                  rules={[{ required: true, message: '请输入 Command ID' }]}
+                  placeholder="Command UUID"
+                  fieldProps={{ prefix: <SearchOutlined />, autoComplete: 'off' }}
+                />
                 <Button htmlType="submit" block disabled={!routesAvailable}>打开 Command</Button>
-              </Form>
+              </ProForm>
             </Card>
           </Col>
 

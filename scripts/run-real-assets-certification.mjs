@@ -143,16 +143,21 @@ function historyResponse(query) {
   const fromMs = Date.parse(query.from);
   const toMs = Date.parse(query.to);
   const duration = toMs - fromMs;
-  const point = (keyIndex, fraction, value, quality = 'GOOD') => ({
-    observationId: certificationId(0x50 + keyIndex, Math.max(1, Math.floor(fraction * 1000)), '01960000'),
-    sampledAt: new Date(fromMs + Math.floor(duration * fraction)).toISOString(),
-    receivedAt: new Date(fromMs + Math.floor(duration * fraction) + 1000).toISOString(),
-    value,
-    unit: query.keys[keyIndex].endsWith('cop') ? null : 'kW',
-    quality,
-    qualityReasons: quality === 'SUSPECT' ? ['SOURCE_LAG_EXCEEDED'] : [],
-    revision: 17,
-  });
+  const point = (keyIndex, fraction, value, quality = 'GOOD') => {
+    const replacementIdentity = keyIndex === 0 && fraction > 0.8;
+    return {
+      observationId: certificationId(0x50 + keyIndex, Math.max(1, Math.floor(fraction * 1000)), '01960000'),
+      pointId: certificationId((replacementIdentity ? 0x70 : 0x60) + keyIndex, 1, '01960000'),
+      sensorId: certificationId((replacementIdentity ? 0x80 : 0x68) + keyIndex, 1, '01960000'),
+      sampledAt: new Date(fromMs + Math.floor(duration * fraction)).toISOString(),
+      receivedAt: new Date(fromMs + Math.floor(duration * fraction) + 1000).toISOString(),
+      value,
+      unit: query.keys[keyIndex].endsWith('cop') ? null : 'kW',
+      quality,
+      qualityReasons: quality === 'SUSPECT' ? ['SOURCE_LAG_EXCEEDED'] : [],
+      revision: 17,
+    };
+  };
   const series = query.keys.map((key, index) => ({
     key,
     points: index === 0

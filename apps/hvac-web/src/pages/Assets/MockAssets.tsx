@@ -10,13 +10,12 @@ import {
   Row,
   Select,
   Space,
-  Table,
   Tag,
   Tree,
   Typography,
   message,
 } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import { ProTable, type ProColumns } from '@ant-design/pro-components';
 import {
   ApartmentOutlined,
   ApiOutlined,
@@ -150,17 +149,17 @@ export default function Assets() {
     });
   }, [allRows, keyword, selectedTreeKey, statusFilter, typeFilter]);
 
-  const columns: ColumnsType<DeviceRow> = [
+  const columns: ProColumns<DeviceRow>[] = [
     {
       title: '设备',
       dataIndex: 'name',
       key: 'name',
       fixed: 'left',
       width: 220,
-      render: (name: string, row) => (
+      render: (_, row) => (
         <Space direction="vertical" size={0}>
           <Space size={6}>
-            <Typography.Text strong>{name}</Typography.Text>
+            <Typography.Text strong>{row.name}</Typography.Text>
             <Tag>{TYPE_LABEL[row.type]}</Tag>
           </Space>
           <Typography.Text type="secondary" style={{ fontSize: 12 }} copyable={{ text: row.id }}>{row.id}</Typography.Text>
@@ -183,8 +182,8 @@ export default function Assets() {
       dataIndex: 'status',
       key: 'status',
       width: 100,
-      render: (status: DevStatus) => {
-        const info = STATUS_INFO[status];
+      render: (_, row) => {
+        const info = STATUS_INFO[row.status];
         return <Badge color={info.color} text={info.label} />;
       },
     },
@@ -307,11 +306,13 @@ export default function Assets() {
                 </Space>
               </div>
 
-              <Table<DeviceRow>
+              <ProTable<DeviceRow>
                 rowKey="id"
                 size="middle"
                 columns={tableColumns}
                 dataSource={rows}
+                search={false}
+                options={{ density: true, fullScreen: true, setting: true, reload: false }}
                 pagination={{ pageSize: 8, showSizeChanger: false }}
                 scroll={{ x: compactTable ? 740 : 1180 }}
                 locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合条件的设备" /> }}

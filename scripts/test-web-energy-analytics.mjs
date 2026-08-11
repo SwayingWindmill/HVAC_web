@@ -18,6 +18,14 @@ import {
   parseEnergyWorkspaceSearch,
   shiftEnergyWorkspaceState,
 } from '../apps/hvac-web/src/real/energy-workspace.ts';
+import {
+  buildCumulativeEnergy,
+  buildEnergyCsv,
+  buildMonthCalendar,
+  buildWeekSlots,
+  buildYearSlots,
+  summarizeEnergyPoints,
+} from '../apps/hvac-web/src/real/energy-presentation.ts';
 
 const organizationId = '01900000-0000-7000-8000-000000000001';
 const siteAId = '01900000-0001-7000-8000-000000000001';
@@ -239,4 +247,63 @@ test('period comparison keeps missing and zero baselines explicit', () => {
     differenceKWh: -25,
     percentage: -25,
   });
+});
+
+test('real Energy presentation derives summary and cumulative values only from returned buckets', () => {
+  const points = [
+    { periodStart: '2026-07-01T02:00:00.000Z', periodEnd: '2026-07-01T03:00:00.000Z', energyKWh: 30 },
+    { periodStart: '2026-07-01T00:00:00.000Z', periodEnd: '2026-07-01T01:00:00.000Z', energyKWh: 10 },
+    { periodStart: '2026-07-01T01:00:00.000Z', periodEnd: '2026-07-01T02:00:00.000Z', energyKWh: 0 },
+  ];
+  const summary = summarizeEnergyPoints(points);
+  assert.equal(summary.total, 40);
+  assert.equal(summary.average, 40 / 3);
+  assert.equal(summary.peak.energyKWh, 30);
+  assert.equal(summary.valley.energyKWh, 0);
+  assert.deepEqual(buildCumulativeEnergy(points), [
+    [Date.parse('2026-07-01T00:00:00.000Z'), 10],
+    [Date.parse('2026-07-01T01:00:00.000Z'), 10],
+    [Date.parse('2026-07-01T02:00:00.000Z'), 40],
+  ]);
+});
+
+test('real Energy week, month, and year views keep unavailable calendar slots empty', () => {
+  const dayPoints = [
+    { periodStart: '2026-07-26T15:00:00.000Z', periodEnd: '2026-07-27T15:00:00.000Z', energyKWh: 100 },
+    { periodStart: '2026-07-28T15:00:00.000Z', periodEnd: '2026-07-29T15:00:00.000Z', energyKWh: 140 },
+  ];
+  const previousDayPoints = [
+    { periodStart: '2026-07-19T15:00:00.000Z', periodEnd: '2026-07-20T15:00:00.000Z', energyKWh: 90 },
+  ];
+  const week = buildWeekSlots('2026-07-27', dayPoints, previousDayPoints, 'Asia/Tokyo');
+  assert.equal(week.length, 7);
+  assert.equal(week[0].point.energyKWh, 100);
+  assert.equal(week[1].point, null);
+  assert.equal(week[2].point.energyKWh, 140);
+  assert.equal(week[0].previousPoint.energyKWh, 90);
+
+  const calendar = buildMonthCalendar('2026-07-01', dayPoints, previousDayPoints, 'Asia/Tokyo');
+  assert.equal(calendar.length, 42);
+  assert.equal(calendar[2].date, '2026-07-01');
+  assert.equal(calendar[2].point, null);
+  const july27 = calendar.find((cell) => cell.date === '2026-07-27');
+  assert.equal(july27.point.energyKWh, 100);
+
+  const months = buildYearSlots('2026-01-01', [
+    { periodStart: '2026-06-30T15:00:00.000Z', periodEnd: '2026-07-31T15:00:00.000Z', energyKWh: 3100 },
+  ], [], 'Asia/Tokyo');
+  assert.equal(months.length, 12);
+  assert.equal(months[6].point.energyKWh, 3100);
+  assert.equal(months[0].point, null);
+});
+
+test('real Energy CSV export contains only current and comparison API buckets', () => {
+  const current = [{ periodStart: '2026-07-01T00:00:00.000Z', periodEnd: '2026-07-01T01:00:00.000Z', energyKWh: 12.5 }];
+  const previous = [{ periodStart: '2026-06-30T00:00:00.000Z', periodEnd: '2026-06-30T01:00:00.000Z', energyKWh: 10 }];
+  const csv = buildEnergyCsv('当前周期', current, '比较基期', previous);
+  assert.equal(csv.split('\n').length, 3);
+  assert.match(csv, /当前周期,2026-07-01T00:00:00.000Z,2026-07-01T01:00:00.000Z,12.5/);
+  assert.match(csv, /比较基期,2026-06-30T00:00:00.000Z,2026-06-30T01:00:00.000Z,10/);
+  assert.equal(csv.includes('tariff'), false);
+  assert.equal(csv.includes('carbon'), false);
 });

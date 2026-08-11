@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { PageContainer } from '@ant-design/pro-components';
 import { Typography } from 'antd';
 import './OperationsUI.css';
 
@@ -13,7 +14,7 @@ interface PageScaffoldProps {
   children: ReactNode;
 }
 
-/** Shared application page shell for all operational workspaces outside BigScreen. */
+/** Thin HVAC wrapper around Ant Design Pro PageContainer. */
 export default function PageScaffold({
   title,
   heading,
@@ -21,19 +22,22 @@ export default function PageScaffold({
   className,
   children,
 }: PageScaffoldProps) {
+  const titleNode = heading ?? (
+    <Typography.Title level={2} className="ops-page-title">
+      {title}
+    </Typography.Title>
+  );
+
   return (
-    <div className={['ops-page', className].filter(Boolean).join(' ')}>
-      <header className="ops-page-header">
-        <div className="ops-page-heading">
-          {heading ?? (
-            <Typography.Title level={2} className="ops-page-title">
-              {title}
-            </Typography.Title>
-          )}
-        </div>
-        {extra ? <div className="ops-page-actions">{extra}</div> : null}
-      </header>
+    <PageContainer
+      className={['ops-page', className].filter(Boolean).join(' ')}
+      header={{
+        className: 'ops-page-header',
+        title: <div className="ops-page-heading">{titleNode}</div>,
+        extra: extra ? <div className="ops-page-actions">{extra}</div> : undefined,
+      }}
+    >
       <main className="ops-page-content">{children}</main>
-    </div>
+    </PageContainer>
   );
 }

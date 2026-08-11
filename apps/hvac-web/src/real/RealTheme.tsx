@@ -32,7 +32,7 @@ function buildTheme(mode: 'light' | 'dark'): ThemeConfig {
     cssVar: { prefix: 'ant' },
     token: {
       colorPrimary: BRAND.teal,
-      borderRadius: 10,
+      borderRadius: 8,
       fontSize: 14,
       colorBgLayout: mode === 'dark' ? '#0f1419' : '#f5f7f9',
     },
@@ -42,7 +42,7 @@ function buildTheme(mode: 'light' | 'dark'): ThemeConfig {
         siderBg: mode === 'dark' ? '#11161d' : '#ffffff',
       },
       Menu: { itemBorderRadius: 8, itemHeight: 40 },
-      Card: { borderRadiusLG: 12 },
+      Card: { borderRadiusLG: 16 },
     },
   };
 }

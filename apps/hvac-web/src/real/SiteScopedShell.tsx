@@ -5,8 +5,9 @@ import { EnergyAnalytics } from './EnergyAnalytics';
 import { RealRouteLoading } from './RealRouteLoading';
 import { OperationsInvestigationPage } from './OperationsInvestigationPage';
 import { RealAlarms } from './RealAlarms';
-import { RealCommands } from './RealCommands';
+
 import { RealDashboard } from './RealDashboard';
+import { RealWorkOrders } from './RealWorkOrders';
 import {
   RealAiLanding,
   RealBigScreenPage,
@@ -239,7 +240,7 @@ function ReadySiteSurface({
         <RealAssetsWorkspace
           site={decision.context.site}
           principal={snapshot.principal!}
-          requestedDeviceId={decision.deviceId}
+          requestedEquipmentId={decision.equipmentId}
           protectedGeneration={snapshot.protectedScope!.generation}
           protectedRequestToken={protectedRequestToken}
           registerProtectedResource={registerProtectedResource}
@@ -334,6 +335,18 @@ function ReadySiteSurface({
     );
   }
 
+  if (decision.route === 'work-orders') {
+    return (
+      <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
+        <RealWorkOrders
+          site={decision.context.site}
+          principal={snapshot.principal!}
+          registerProtectedResource={registerProtectedResource}
+        />
+      </Suspense>
+    );
+  }
+
   if (decision.route === 'operations') {
     return (
       <section
@@ -354,27 +367,7 @@ function ReadySiteSurface({
     );
   }
 
-  if (decision.route === 'commands') {
-    return (
-      <section
-        className="real-route-surface real-route-surface--commands"
-        data-testid="real-site-route-commands"
-        data-route-state="READY"
-        data-site-id={decision.context.site.id}
-        data-site-route="commands"
-      >
-        <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
-          <RealCommands
-            site={decision.context.site}
-            principal={snapshot.principal!}
-            initialCommandId={decision.commandId}
-            registerUnsavedDraft={registerUnsavedDraft}
-            registerProtectedResource={registerProtectedResource}
-          />
-        </Suspense>
-      </section>
-    );
-  }
+
 
   return null;
 }
@@ -480,13 +473,16 @@ export function buildSiteNavigation(
   const navigation: RealNavigationItem[] = [
     { id: 'site-dashboard', label: '总览驾驶舱', path: siteRoute(site, 'dashboard'), kind: 'link', degraded: false },
     { id: 'site-assets', label: '设备与建筑', path: siteRoute(site, 'assets'), kind: 'link', degraded: false },
-    { id: 'site-commands', label: '设备控制', path: siteRoute(site, 'commands'), kind: 'link', degraded: false },
+
     { id: 'site-energy', label: '能耗分析', path: siteRoute(site, 'energy'), kind: 'link', degraded: false },
     { id: 'site-optimize', label: '节能优化', path: siteRoute(site, 'optimize'), kind: 'link', degraded: false },
     { id: 'site-fdd', label: '故障检测', path: siteRoute(site, 'fdd'), kind: 'link', degraded: false },
   ];
   if (effectiveCapabilities.includes('alarm.list')) {
-    navigation.push({ id: 'site-alarms', label: '报警工单', path: siteRoute(site, 'alarms'), kind: 'link', degraded: false });
+    navigation.push({ id: 'site-alarms', label: '报警', path: siteRoute(site, 'alarms'), kind: 'link', degraded: false });
+  }
+  if (effectiveCapabilities.includes('work-order.list')) {
+    navigation.push({ id: 'site-work-orders', label: '工单', path: siteRoute(site, 'work-orders'), kind: 'link', degraded: false });
   }
   navigation.push(
     { id: 'site-ai', label: 'AI 运维助手', path: siteRoute(site, 'ai'), kind: 'link', degraded: false, primary: true },

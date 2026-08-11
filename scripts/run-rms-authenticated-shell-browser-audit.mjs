@@ -421,8 +421,10 @@ function createGatewayFixture() {
           return;
         }
         const at = (fraction) => new Date(fromMs + Math.floor(duration * fraction)).toISOString();
-        const makePoint = (observationId, fraction, value, unit, quality = 'GOOD') => ({
+        const makePoint = (observationId, pointId, sensorId, fraction, value, unit, quality = 'GOOD') => ({
           observationId,
+          pointId,
+          sensorId,
           sampledAt: at(fraction),
           receivedAt: new Date(Date.parse(at(fraction)) + 1000).toISOString(),
           value,
@@ -440,13 +442,13 @@ function createGatewayFixture() {
             {
               key: 'chiller.power',
               points: [
-                makePoint('01900000-0311-7000-8000-000000000311', 0.12, 0, 'kW'),
-                makePoint('01900000-0312-7000-8000-000000000312', 0.82, 18.5, 'kW', 'SUSPECT'),
+                makePoint('01900000-0311-7000-8000-000000000311', '01900000-0411-7000-8000-000000000411', '01900000-0511-7000-8000-000000000511', 0.12, 0, 'kW'),
+                makePoint('01900000-0312-7000-8000-000000000312', '01900000-0412-7000-8000-000000000412', '01900000-0512-7000-8000-000000000512', 0.82, 18.5, 'kW', 'SUSPECT'),
               ],
             },
             {
               key: 'chiller.cop',
-              points: [makePoint('01900000-0313-7000-8000-000000000313', 0.64, 4.8, null)],
+              points: [makePoint('01900000-0313-7000-8000-000000000313', '01900000-0413-7000-8000-000000000413', '01900000-0513-7000-8000-000000000513', 0.64, 4.8, null)],
             },
             { key: 'chiller.cooling_capacity', points: [] },
           ],

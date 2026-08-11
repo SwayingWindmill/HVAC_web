@@ -50,7 +50,7 @@ function chartOption(
 ) {
   const unit = historySeriesUnit(series.points, definition.defaultUnit);
   const data = buildRealAssetsTrendData(series.points, query.range, query.maxPointsPerKey);
-  const description = `${definition.label}，${REAL_ASSETS_HISTORY_RANGES[query.range].label}，Site 时区 ${timezone}。断点表示缺失，零值表示真实零，可疑点保持可见。`;
+  const description = `${definition.label}，${REAL_ASSETS_HISTORY_RANGES[query.range].label}，Site 时区 ${timezone}。断点表示缺失或 Point/Sensor 历史身份切换，零值表示真实零，可疑点保持可见。`;
   return {
     animation: false,
     aria: { enabled: true, description },
@@ -63,12 +63,17 @@ function chartOption(
         const first = values[0] as { value?: [number, number | null] } | undefined;
         const timestamp = first?.value?.[0];
         const lines = [timestamp === undefined ? '时间不可用' : formatRealAssetsHistoryInstant(timestamp, timezone)];
-        for (const parameter of values as Array<{ value?: [number, number | null]; data?: { quality?: string } }>) {
+        for (const parameter of values as Array<{ value?: [number, number | null]; data?: { quality?: string; pointId?: string | null; sensorId?: string | null } }>) {
           const value = parameter.value?.[1];
           const quality = parameter.data?.quality;
+          const pointId = parameter.data?.pointId;
+          const sensorId = parameter.data?.sensorId;
           lines.push(value === null || value === undefined
-            ? `${definition.label}: 数据缺口`
+            ? `${definition.label}: 数据缺口或历史身份切换`
             : `${definition.label}: ${value} ${unit}${quality === 'SUSPECT' ? ' · 可疑' : ''}`);
+          if (value !== null && value !== undefined && pointId) {
+            lines.push(`Point ${pointId}${sensorId ? ` · Sensor ${sensorId}` : ' · 无独立 Sensor'}`);
+          }
         }
         return lines.join('\n');
       },
@@ -91,10 +96,12 @@ function chartOption(
       showSymbol: data.length < 90,
       symbolSize: 7,
       data: data.map((item) => item.value === null
-        ? { value: [item.timestamp, null], quality: null }
+        ? { value: [item.timestamp, null], quality: null, pointId: null, sensorId: null }
         : {
             value: [item.timestamp, item.value],
             quality: item.quality,
+            pointId: item.pointId,
+            sensorId: item.sensorId,
             symbol: item.quality === 'SUSPECT' ? 'diamond' : 'circle',
             symbolSize: item.quality === 'SUSPECT' ? 10 : 7,
           }),
@@ -128,10 +135,18 @@ function SeriesPanel({
   const last = series.points.at(-1);
   const suspectCount = series.points.filter((point) => point.quality === 'SUSPECT').length;
   const zeroCount = series.points.filter((point) => point.value === 0).length;
+  let previousIdentity: string | null = null;
+  let identitySegmentCount = 0;
+  for (const point of series.points) {
+    const identity = `${point.pointId}:${point.sensorId ?? 'no-sensor'}`;
+    if (identity !== previousIdentity) identitySegmentCount += 1;
+    previousIdentity = identity;
+  }
+  const latestIdentity = last ? `Point ${last.pointId}${last.sensorId ? ` · Sensor ${last.sensorId}` : ' · 无独立 Sensor'}` : '无历史身份';
   const businessState = series.points.length === 0 ? 'EMPTY' : truncated || partial ? 'PARTIAL' : suspectCount > 0 ? 'SUSPECT' : 'READY';
 
   return (
-    <article className="real-assets-history__series" data-history-key={definition.key} data-business-state={businessState} data-unit={unit}>
+    <article className="real-assets-history__series" data-history-key={definition.key} data-business-state={businessState} data-unit={unit} data-history-identity-count={identitySegmentCount}>
       <header>
         <div><h4>{definition.label}</h4><code>{definition.key}</code></div>
         <span>{unit}</span>
@@ -140,6 +155,8 @@ function SeriesPanel({
         <div><dt>返回点数</dt><dd>{series.points.length}</dd></div>
         <div><dt>可疑点</dt><dd>{suspectCount}</dd></div>
         <div><dt>真实零值点</dt><dd>{zeroCount}{zeroCount > 0 ? ` · 0 ${unit}` : ''}</dd></div>
+        <div><dt>历史身份段</dt><dd>{identitySegmentCount}</dd></div>
+        <div><dt>最新历史身份</dt><dd><code>{latestIdentity}</code></dd></div>
         <div><dt>可用范围</dt><dd>{first && last ? `${formatRealAssetsHistoryInstant(first.sampledAt, timezone)} — ${formatRealAssetsHistoryInstant(last.sampledAt, timezone)}` : '无已接受历史点'}</dd></div>
         <div><dt>数据水位</dt><dd>{formatRealAssetsHistoryInstant(dataWatermark, timezone)}</dd></div>
       </dl>

@@ -4,7 +4,6 @@ import {
   Button,
   Card,
   Col,
-  Descriptions,
   Empty,
   Form,
   Grid,
@@ -22,6 +21,7 @@ import {
   message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { ProDescriptions, ProForm, ProFormSelect, ProFormText, ProTable, type ProColumns } from '@ant-design/pro-components';
 import {
   ApiOutlined,
   ApartmentOutlined,
@@ -110,6 +110,14 @@ type MatrixRow = {
   action: PermissionAction;
 };
 
+type UserFormValues = {
+  username?: string;
+  email?: string;
+  password?: string;
+  role: BackendRole;
+  scopes?: string[];
+};
+
 const ROLE_MAP: Record<Role, BackendRole> = {
   demo: 'READONLY',
   ops: 'MAINTENANCE',
@@ -165,7 +173,7 @@ export default function System() {
   const [users, setUsers] = useState<SystemUser[]>(mockUsers);
 
   const [userModal, setUserModal] = useState<null | { mode: 'create' } | { mode: 'edit'; user: SystemUser }>(null);
-  const [userForm] = Form.useForm();
+  const [userForm] = Form.useForm<UserFormValues>();
 
   useEffect(() => {
     const closeUserModalOnEscape = (event: KeyboardEvent) => {
@@ -209,13 +217,13 @@ export default function System() {
         cancelText: '取消',
         onOk: () => {
           if (userModal?.mode === 'edit') {
-            setUsers((list) => list.map((item) => (item.id === userModal.user.id ? { ...item, role: values.role, scopes: values.scopes } : item)));
+            setUsers((list) => list.map((item) => (item.id === userModal.user.id ? { ...item, role: values.role, scopes: values.scopes ?? [] } : item)));
             message.success('角色已更新（mock）');
           } else {
             const newUser: SystemUser = {
               id: `u${++nodeSeq}`,
-              username: values.username,
-              email: values.email,
+              username: values.username!,
+              email: values.email!,
               role: values.role,
               scopes: values.scopes ?? [],
               status: 'active',
@@ -235,18 +243,18 @@ export default function System() {
     message.success(user.status === 'active' ? '已禁用（mock）' : '已启用（mock）');
   };
 
-  const userColumns: ColumnsType<SystemUser> = [
+  const userColumns: ProColumns<SystemUser>[] = [
     { title: '用户名', dataIndex: 'username', width: 130, render: (value) => <Text strong>{value}</Text> },
     { title: '邮箱', dataIndex: 'email', width: 190, render: (value) => <Text type="secondary">{value}</Text> },
     {
       title: '角色', dataIndex: 'role', width: 120,
-      render: (value: BackendRole) => <Tag color={ROLE_COLOR[value]} style={{ fontWeight: 600 }}>{ROLE_LABEL[value]}</Tag>,
+      render: (_, user) => <Tag color={ROLE_COLOR[user.role]} style={{ fontWeight: 600 }}>{ROLE_LABEL[user.role]}</Tag>,
     },
     {
       title: '权限范围', dataIndex: 'scopes',
-      render: (scopes: string[]) => {
-        const shown = scopes.slice(0, 3);
-        const rest = scopes.slice(3);
+      render: (_, user) => {
+        const shown = user.scopes.slice(0, 3);
+        const rest = user.scopes.slice(3);
         return (
           <Space size={4} wrap>
             {shown.map((key) => {
@@ -264,7 +272,7 @@ export default function System() {
     },
     {
       title: '状态', dataIndex: 'status', width: 90,
-      render: (value: SystemUser['status']) => value === 'active' ? <Tag color={STATUS.ok}>启用</Tag> : <Tag color={STATUS.err}>禁用</Tag>,
+      render: (_, user) => user.status === 'active' ? <Tag color={STATUS.ok}>启用</Tag> : <Tag color={STATUS.err}>禁用</Tag>,
     },
     { title: '最近登录', dataIndex: 'lastLogin', width: 170, render: (value) => <Text type="secondary" style={{ fontSize: 12 }}>{value}</Text> },
     {
@@ -300,20 +308,20 @@ export default function System() {
     })),
   ];
 
-  const dataSourceColumns: ColumnsType<DataSource> = [
+  const dataSourceColumns: ProColumns<DataSource>[] = [
     { title: '数据源', dataIndex: 'name', width: 220, render: (value, row) => <Space direction="vertical" size={0}><Text strong>{value}</Text><Text type="secondary" style={{ fontSize: 12 }}>{row.type} · {row.owner}</Text></Space> },
     { title: '端点', dataIndex: 'endpoint', render: (value) => <Text code>{value}</Text> },
-    { title: '状态', dataIndex: 'status', width: 100, render: (value: IntegrationStatus) => <Badge color={statusMeta[value].color} text={statusMeta[value].label} /> },
+    { title: '状态', dataIndex: 'status', width: 100, render: (_, source) => <Badge color={statusMeta[source.status].color} text={statusMeta[source.status].label} /> },
     { title: '延迟', dataIndex: 'latencyMs', width: 90, render: (value) => `${value} ms` },
     { title: '最后同步', dataIndex: 'lastSync', width: 110, render: (value) => <Text type="secondary">{value}</Text> },
   ];
 
-  const ruleColumns: ColumnsType<AlarmRule> = [
+  const ruleColumns: ProColumns<AlarmRule>[] = [
     { title: '规则', dataIndex: 'name', width: 220, render: (value, row) => <Space direction="vertical" size={0}><Text strong>{value}</Text><Text type="secondary" style={{ fontSize: 12 }}>{row.id} · {row.target}</Text></Space> },
     { title: '条件', dataIndex: 'condition', render: (value) => <Text>{value}</Text> },
     { title: '级别', dataIndex: 'severity', width: 100, render: (value) => <Tag color={value === 'critical' ? 'red' : value === 'major' ? 'gold' : 'blue'}>{value}</Tag> },
-    { title: '通知', dataIndex: 'notify', width: 180, render: (value: string[]) => <Space size={4} wrap>{value.map((item) => <Tag key={item}>{item}</Tag>)}</Space> },
-    { title: '状态', dataIndex: 'status', width: 90, render: (value: RuleStatus) => <Tag color={ruleStatusMeta[value].color}>{ruleStatusMeta[value].label}</Tag> },
+    { title: '通知', dataIndex: 'notify', width: 180, render: (_, rule) => <Space size={4} wrap>{rule.notify.map((item) => <Tag key={item}>{item}</Tag>)}</Space> },
+    { title: '状态', dataIndex: 'status', width: 90, render: (_, rule) => <Tag color={ruleStatusMeta[rule.status].color}>{ruleStatusMeta[rule.status].label}</Tag> },
     { title: '更新时间', dataIndex: 'updatedAt', width: 110, render: (value) => <Text type="secondary">{value}</Text> },
   ];
 
@@ -326,11 +334,11 @@ export default function System() {
     });
   }, [evFilter, resFilter, kw]);
 
-  const auditColumns: ColumnsType<AuditLog> = [
-    { title: '时间', dataIndex: 'createdAt', width: 160, render: (value: string) => <Text style={{ fontSize: 12, fontFamily: 'monospace' }}>{new Date(value).toLocaleString('zh-CN')}</Text> },
+  const auditColumns: ProColumns<AuditLog>[] = [
+    { title: '时间', dataIndex: 'createdAt', width: 160, render: (_, log) => <Text style={{ fontSize: 12, fontFamily: 'monospace' }}>{new Date(log.createdAt).toLocaleString('zh-CN')}</Text> },
     { title: '操作人', dataIndex: 'userId', width: 100, render: (value) => <Text strong>{value}</Text> },
-    { title: '事件类型', dataIndex: 'eventType', width: 110, render: (value: string) => <Tag color={BRAND.tealStrong}>{AUDIT_EVENT_LABEL[value] ?? value}</Tag> },
-    { title: '结果', dataIndex: 'result', width: 90, render: (value: AuditResult) => value === 'SUCCESS' ? <Tag color={STATUS.ok}>成功</Tag> : <Tag color={STATUS.err}>失败</Tag> },
+    { title: '事件类型', dataIndex: 'eventType', width: 110, render: (_, log) => <Tag color={BRAND.tealStrong}>{AUDIT_EVENT_LABEL[log.eventType] ?? log.eventType}</Tag> },
+    { title: '结果', dataIndex: 'result', width: 90, render: (_, log) => log.result === 'SUCCESS' ? <Tag color={STATUS.ok}>成功</Tag> : <Tag color={STATUS.err}>失败</Tag> },
     { title: '动作', dataIndex: 'action', render: (value) => <Text>{value}</Text> },
     { title: '目标', width: 160, render: (_, row) => <Text type="secondary" style={{ fontSize: 12 }}>{row.targetEntity}#{row.targetId}</Text> },
     { title: 'IP', dataIndex: 'ipAddress', width: 120, render: (value) => <Text type="secondary" style={{ fontSize: 12, fontFamily: 'monospace' }}>{value}</Text> },
@@ -440,11 +448,13 @@ export default function System() {
             variant="borderless"
             title={<OperationsPanelHeading title="用户账户" meta={`${users.length} 个账户`} />}
           >
-            <Table<SystemUser>
+            <ProTable<SystemUser>
               rowKey="id"
               size="small"
               columns={visibleUserColumns}
               dataSource={users}
+              search={false}
+              options={{ density: true, fullScreen: true, setting: true, reload: false }}
               pagination={{ pageSize: 6, showSizeChanger: false }}
               scroll={{ x: compactTable ? 640 : 980 }}
               locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无用户账户" /> }}
@@ -509,11 +519,13 @@ export default function System() {
         title={<OperationsPanelHeading title="连接清单" meta={`${DATA_SOURCES.length} 个端点`} />}
         variant="borderless"
       >
-        <Table<DataSource>
+        <ProTable<DataSource>
           rowKey="key"
           size="small"
           columns={visibleDataSourceColumns}
           dataSource={DATA_SOURCES}
+          search={false}
+          options={{ density: true, fullScreen: true, setting: true, reload: false }}
           pagination={false}
           scroll={{ x: compactTable ? 520 : 760 }}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据源" /> }}
@@ -557,11 +569,13 @@ export default function System() {
         title={<OperationsPanelHeading title="规则清单" meta={`${ALARM_RULES.length} 条`} />}
         variant="borderless"
       >
-        <Table<AlarmRule>
+        <ProTable<AlarmRule>
           rowKey="id"
           size="small"
           columns={visibleRuleColumns}
           dataSource={ALARM_RULES}
+          search={false}
+          options={{ density: true, fullScreen: true, setting: true, reload: false }}
           pagination={false}
           scroll={{ x: compactTable ? 720 : 980 }}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无告警规则" /> }}
@@ -603,21 +617,29 @@ export default function System() {
           />
         </div>
 
-        <Table<AuditLog>
+        <ProTable<AuditLog>
           rowKey="id"
           size="small"
           columns={visibleAuditColumns}
           dataSource={filteredAudit}
+          search={false}
+          options={{ density: true, fullScreen: true, setting: true, reload: false }}
           pagination={{ pageSize: 8, showSizeChanger: false }}
           scroll={{ x: compactTable ? 760 : 1040 }}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合条件的审计记录" /> }}
           expandable={{
             expandedRowRender: (row) => (
-              <Descriptions size="small" column={1} className="system-audit-detail">
-                <Descriptions.Item label="traceId"><Text code>{row.traceId}</Text></Descriptions.Item>
-                <Descriptions.Item label="userAgent">{row.userAgent}</Descriptions.Item>
-                <Descriptions.Item label="details (jsonb)"><pre>{JSON.stringify(row.details, null, 2)}</pre></Descriptions.Item>
-              </Descriptions>
+              <ProDescriptions<AuditLog>
+                size="small"
+                column={1}
+                className="system-audit-detail"
+                dataSource={row}
+                columns={[
+                  { title: 'traceId', dataIndex: 'traceId', render: (_, record) => <Text code>{record.traceId}</Text> },
+                  { title: 'userAgent', dataIndex: 'userAgent' },
+                  { title: 'details (jsonb)', dataIndex: 'details', render: (_, record) => <pre>{JSON.stringify(record.details, null, 2)}</pre> },
+                ]}
+              />
             ),
             rowExpandable: (row) => Boolean(row.traceId || row.userAgent || Object.keys(row.details).length),
           }}
@@ -678,27 +700,34 @@ export default function System() {
           <SafetyCertificateOutlined />
           <span>{userModal?.mode === 'edit' ? `正在修改 ${userModal.user.username} 的角色与 scope。提交后还会进行二次确认。` : '账户创建会授予登录能力与权限范围，提交后还会进行二次确认。'}</span>
         </div>
-        <Form form={userForm} layout="vertical">
+        <ProForm<UserFormValues> form={userForm} layout="vertical" submitter={false}>
           {userModal?.mode === 'create' && (
             <>
-              <Form.Item name="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
-                <Input placeholder="如 zhaomin" />
-              </Form.Item>
-              <Form.Item name="email" label="邮箱" rules={[{ required: true, type: 'email', message: '请输入合法邮箱' }]}>
-                <Input placeholder="name@corp.io" />
-              </Form.Item>
-              <Form.Item name="password" label="初始密码" rules={[{ required: true, min: 6, message: '至少 6 位' }]}>
-                <Input.Password placeholder="初始密码" />
-              </Form.Item>
+              <ProFormText name="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]} placeholder="如 zhaomin" />
+              <ProFormText name="email" label="邮箱" rules={[{ required: true, type: 'email', message: '请输入合法邮箱' }]} placeholder="name@corp.io" />
+              <ProFormText
+                name="password"
+                label="初始密码"
+                rules={[{ required: true, min: 6, message: '至少 6 位' }]}
+                placeholder="初始密码"
+                fieldProps={{ type: 'password', autoComplete: 'new-password' }}
+              />
             </>
           )}
-          <Form.Item name="role" label="角色" rules={[{ required: true }]}>
-            <Select options={(['ADMIN', 'MAINTENANCE', 'READONLY'] as BackendRole[]).map((item) => ({ value: item, label: ROLE_LABEL[item] }))} />
-          </Form.Item>
-          <Form.Item name="scopes" label="权限范围">
-            <Select mode="multiple" placeholder="选择 scope" options={SCOPE_CATALOG.map((scope) => ({ value: scope.key, label: `${scope.label}（${scope.key}）` }))} />
-          </Form.Item>
-        </Form>
+          <ProFormSelect
+            name="role"
+            label="角色"
+            rules={[{ required: true }]}
+            options={(['ADMIN', 'MAINTENANCE', 'READONLY'] as BackendRole[]).map((item) => ({ value: item, label: ROLE_LABEL[item] }))}
+          />
+          <ProFormSelect
+            name="scopes"
+            label="权限范围"
+            mode="multiple"
+            placeholder="选择 scope"
+            options={SCOPE_CATALOG.map((scope) => ({ value: scope.key, label: `${scope.label}（${scope.key}）` }))}
+          />
+        </ProForm>
       </Modal>
     </PageScaffold>
   );

@@ -20,6 +20,12 @@ const deviceId = '01900000-0004-7000-8000-000000000004';
 const observationA = '01900000-0011-7000-8000-000000000011';
 const observationB = '01900000-0012-7000-8000-000000000012';
 const observationC = '01900000-0013-7000-8000-000000000013';
+const pointA = '01900000-0021-7000-8000-000000000021';
+const pointB = '01900000-0022-7000-8000-000000000022';
+const pointC = '01900000-0023-7000-8000-000000000023';
+const sensorA = '01900000-0031-7000-8000-000000000031';
+const sensorB = '01900000-0032-7000-8000-000000000032';
+const sensorC = '01900000-0033-7000-8000-000000000033';
 const asOf = Date.parse('2026-07-31T04:00:00.000Z');
 
 function makeQuery(overrides = {}) {
@@ -39,9 +45,11 @@ function makeQuery(overrides = {}) {
   });
 }
 
-function point(observationId, sampledAt, value, quality = 'GOOD', unit = 'kW') {
+function point(observationId, sampledAt, value, quality = 'GOOD', unit = 'kW', pointId = pointA, sensorId = sensorA) {
   return {
     observationId,
+    pointId,
+    sensorId,
     sampledAt,
     receivedAt: new Date(Date.parse(sampledAt) + 1000).toISOString(),
     value,
@@ -63,12 +71,12 @@ function makeResponse(query) {
         key: 'chiller.power',
         points: [
           point(observationA, '2026-07-31T03:05:00.000Z', 0),
-          point(observationB, '2026-07-31T03:25:00.000Z', 18.5, 'SUSPECT'),
+          point(observationB, '2026-07-31T03:25:00.000Z', 18.5, 'SUSPECT', 'kW', pointB, sensorB),
         ],
       },
       {
         key: 'chiller.cop',
-        points: [point(observationC, '2026-07-31T03:40:00.000Z', 4.2, 'GOOD', null)],
+        points: [point(observationC, '2026-07-31T03:40:00.000Z', 4.2, 'GOOD', null, pointC, sensorC)],
       },
     ],
     metadata: {
@@ -142,6 +150,11 @@ test('history response rejects scope, order, count and truncation drift', () => 
   const query = makeQuery();
   const response = makeResponse(query);
   assert.equal(validateRealAssetsHistoryResponse(response, query), response);
+  const invalidPointIdentity = {
+    ...response,
+    series: [{ ...response.series[0], points: [{ ...response.series[0].points[0], pointId: 'not-a-point' }, response.series[0].points[1]] }, response.series[1]],
+  };
+  assert.throws(() => validateRealAssetsHistoryResponse(invalidPointIdentity, query), /Point identity/);
   assert.throws(() => validateRealAssetsHistoryResponse({ ...response, siteId: '01900000-0099-7000-8000-000000000099' }, query), /resource scope/);
   assert.throws(() => validateRealAssetsHistoryResponse({ ...response, series: [...response.series].reverse() }, query), /requested order/);
   assert.throws(() => validateRealAssetsHistoryResponse({ ...response, metadata: { ...response.metadata, returnedPoints: 4 } }, query), /point count/);
@@ -154,10 +167,26 @@ test('trend model preserves valid zero, suspect quality and inserts null gaps wi
   const data = buildRealAssetsTrendData(points, '1h', query.maxPointsPerKey);
   assert.equal(data[0].value, 0);
   assert.equal(data[0].quality, 'GOOD');
+  assert.equal(data[0].pointId, pointA);
   assert.equal(data[1].value, null);
   assert.equal(data[1].quality, null);
   assert.equal(data[2].value, 18.5);
   assert.equal(data[2].quality, 'SUSPECT');
+  assert.equal(data[2].pointId, pointB);
+});
+
+test('trend model breaks the line when Point or Sensor identity changes even without a time gap', () => {
+  const points = [
+    point(observationA, '2026-07-31T03:05:00.000Z', 10),
+    point(observationB, '2026-07-31T03:05:10.000Z', 11, 'GOOD', 'kW', pointB, sensorB),
+  ];
+  const data = buildRealAssetsTrendData(points, '1h', 240);
+  assert.equal(data.length, 3);
+  assert.equal(data[0].pointId, pointA);
+  assert.equal(data[1].value, null);
+  assert.equal(data[1].pointId, null);
+  assert.equal(data[2].pointId, pointB);
+  assert.equal(data[2].sensorId, sensorB);
 });
 
 test('revision cache identity includes dataset revision and watermark', () => {

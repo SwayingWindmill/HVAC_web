@@ -9,7 +9,7 @@ Open either static file in a browser:
 - `preview.html` — light theme
 - `preview-dark.html` — dark theme
 
-The previews demonstrate the intended product language: compact navigation, one-line hierarchy, low-shadow surfaces, semantic status colors, tabular operational data, independent Telemetry Point rows, and responsive degradation.
+The previews demonstrate the intended product language: compact navigation, one-line hierarchy, low-shadow surfaces, semantic status colors, tabular operational data, independent Telemetry Point rows, and responsive degradation. Production implementation uses Ant Design as the base component system and Ant Design Pro Components for application-shell and enterprise page patterns.
 
 They are not production components and must not be imported by the application.
 
@@ -24,6 +24,7 @@ npm run design:check
 
 - root `DESIGN.md` frontmatter and source-of-truth policy;
 - the Linear reference remains reference-only;
+- Ant Design + Ant Design Pro Components remain the declared production component system;
 - light and dark previews exist;
 - TypeScript brand/status colors remain present;
 - Ant Design global radii remain aligned to 8px controls and 16px cards;

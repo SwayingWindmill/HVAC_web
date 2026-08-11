@@ -10,6 +10,7 @@ const sourcePath = 'apps/hvac-web/src';
 const allowedRadiusValues = new Set(['0', '0px', '8px', '16px', '20px', '999px']);
 const requiredFiles = [
   'DESIGN.md',
+  'package.json',
   'docs/design-references/README.md',
   'docs/design-references/linear/DESIGN.md',
   'docs/design-system/README.md',
@@ -18,6 +19,18 @@ const requiredFiles = [
   'docs/design-system/preview-dark.html',
   'apps/hvac-web/src/theme/tokens.ts',
   'apps/hvac-web/src/theme/AppTheme.tsx',
+  'apps/hvac-web/src/components/PageScaffold.tsx',
+  'apps/hvac-web/src/layout/AppShell.tsx',
+  'apps/hvac-web/src/pages/Assets/MockAssets.tsx',
+  'apps/hvac-web/src/pages/Assets/DeviceDrawer.tsx',
+  'apps/hvac-web/src/pages/Alarms/index.tsx',
+  'apps/hvac-web/src/pages/Commands/index.tsx',
+  'apps/hvac-web/src/pages/Fdd/index.tsx',
+  'apps/hvac-web/src/pages/Optimize/index.tsx',
+  'apps/hvac-web/src/pages/Cost/index.tsx',
+  'apps/hvac-web/src/pages/System/index.tsx',
+  'apps/hvac-web/src/pages/System/MockRegistrySitePanel.tsx',
+  'apps/hvac-web/src/real/RealShellChrome.tsx',
   baselinePath,
 ];
 
@@ -126,7 +139,9 @@ async function validateDesignSystem(root) {
       'schema: design.md/v1',
       'sourceOfTruth: true',
       'designDirection: Industrial Calm',
-      'components: Ant Design',
+      'components: Ant Design + Ant Design Pro Components',
+      'applicationShell: Ant Design ProLayout',
+      'pageFramework: Ant Design Pro PageContainer',
       'charts: ECharts',
       'icons: Ant Design Icons',
       'light: docs/design-system/preview.html',
@@ -151,6 +166,40 @@ async function validateDesignSystem(root) {
 
   requireText(errors, design, 'DESIGN.md', '# 泉来禾智慧能源平台设计系统');
   requireText(errors, design, 'DESIGN.md', 'Industrial Calm');
+  requireText(errors, design, 'DESIGN.md', 'ProLayout');
+  requireText(errors, design, 'DESIGN.md', 'PageContainer');
+
+  const packageJson = sources['package.json'];
+  requireText(errors, packageJson, 'package.json', '"@ant-design/pro-components"');
+  const pageScaffold = sources['apps/hvac-web/src/components/PageScaffold.tsx'];
+  requireText(errors, pageScaffold, 'PageScaffold', 'PageContainer');
+  const demoShell = sources['apps/hvac-web/src/layout/AppShell.tsx'];
+  requireText(errors, demoShell, 'Demo AppShell', 'ProLayout');
+  if (demoShell.includes("from './Sidebar'") || demoShell.includes('AppHeaderFrame')) {
+    errors.push('Demo AppShell must use ProLayout instead of the legacy custom sidebar/header shell');
+  }
+  requireText(errors, sources['apps/hvac-web/src/pages/Assets/MockAssets.tsx'], 'Demo asset ledger', 'ProTable');
+  requireText(errors, sources['apps/hvac-web/src/pages/Assets/DeviceDrawer.tsx'], 'Demo asset detail', 'ProDescriptions');
+  requireText(errors, sources['apps/hvac-web/src/pages/Alarms/index.tsx'], 'Alarm workbench', 'ProTable');
+  requireText(errors, sources['apps/hvac-web/src/pages/Alarms/index.tsx'], 'Alarm workbench detail', 'ProDescriptions');
+  requireText(errors, sources['apps/hvac-web/src/pages/Commands/index.tsx'], 'Command workbench', 'ProForm');
+  requireText(errors, sources['apps/hvac-web/src/pages/Commands/index.tsx'], 'Command workbench detail', 'ProDescriptions');
+  requireText(errors, sources['apps/hvac-web/src/pages/Fdd/index.tsx'], 'FDD workbench', 'ProTable');
+  requireText(errors, sources['apps/hvac-web/src/pages/Fdd/index.tsx'], 'FDD workbench detail', 'ProDescriptions');
+  requireText(errors, sources['apps/hvac-web/src/pages/Optimize/index.tsx'], 'Optimization workbench', 'ProTable');
+  requireText(errors, sources['apps/hvac-web/src/pages/Optimize/index.tsx'], 'Optimization workbench detail', 'ProDescriptions');
+  requireText(errors, sources['apps/hvac-web/src/pages/Cost/index.tsx'], 'Cost saving ledger', 'ProTable');
+  requireText(errors, sources['apps/hvac-web/src/pages/System/index.tsx'], 'System governance tables', 'ProTable');
+  requireText(errors, sources['apps/hvac-web/src/pages/System/index.tsx'], 'System governance forms', 'ProForm');
+  requireText(errors, sources['apps/hvac-web/src/pages/System/index.tsx'], 'System governance details', 'ProDescriptions');
+  requireText(errors, sources['apps/hvac-web/src/pages/System/MockRegistrySitePanel.tsx'], 'Mock registry governance form', 'ProForm');
+  requireText(errors, sources['apps/hvac-web/src/pages/System/MockRegistrySitePanel.tsx'], 'Mock registry governance detail', 'ProDescriptions');
+  const realShell = sources['apps/hvac-web/src/real/RealShellChrome.tsx'];
+  requireText(errors, realShell, 'RealShellChrome', 'ProLayout');
+  if (realShell.includes('ProductSidebar') || realShell.includes('AppHeaderFrame')) {
+    errors.push('RealShellChrome must use ProLayout instead of the legacy custom sidebar/header shell');
+  }
+
   requireText(errors, sources['docs/design-references/README.md'], 'design reference policy', 'reference-only');
   requireText(errors, sources['docs/design-references/linear/DESIGN.md'], 'Linear reference', 'name: Linear-design-analysis');
   requireText(errors, sources['docs/design-system/preview.css'], 'design preview styles', '--brand: #0fb5ae');
