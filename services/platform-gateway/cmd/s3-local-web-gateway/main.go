@@ -62,6 +62,22 @@ type config struct {
 }
 
 type localDevice struct {
+	TenantID             string `json:"tenantId"`
+	OrganizationID       string `json:"organizationId"`
+	SiteID               string `json:"siteId"`
+	DeviceID             string `json:"deviceId"`
+	CommandPointID       string `json:"commandPointId"`
+	VerificationPointKey string `json:"verificationPointKey"`
+	Name                 string `json:"name"`
+	Type                 string `json:"type"`
+}
+
+type localDeviceCatalog struct {
+	SchemaVersion int           `json:"schemaVersion"`
+	Devices       []localDevice `json:"devices"`
+}
+
+type localDeviceProjection struct {
 	OrganizationID string `json:"organizationId"`
 	SiteID         string `json:"siteId"`
 	DeviceID       string `json:"deviceId"`
@@ -69,9 +85,9 @@ type localDevice struct {
 	Type           string `json:"type"`
 }
 
-type localDeviceCatalog struct {
-	SchemaVersion int           `json:"schemaVersion"`
-	Devices       []localDevice `json:"devices"`
+type localDeviceProjectionCatalog struct {
+	SchemaVersion int                     `json:"schemaVersion"`
+	Devices       []localDeviceProjection `json:"devices"`
 }
 
 type gateway struct {
@@ -87,20 +103,23 @@ type createCommandRequest struct {
 }
 
 type internalCreateCommandRequest struct {
-	OrganizationID string                  `json:"organizationId"`
-	SiteID         string                  `json:"siteId"`
-	DeviceID       string                  `json:"deviceId"`
-	PrincipalID    string                  `json:"principalId"`
-	IdempotencyKey string                  `json:"idempotencyKey"`
-	Capability     commandmodel.Capability `json:"capability"`
-	SetpointC      float64                 `json:"setpointC"`
-	CurrentState   struct {
+	TenantID             string                         `json:"tenantId"`
+	OrganizationID       string                         `json:"organizationId"`
+	SiteID               string                         `json:"siteId"`
+	DeviceID             string                         `json:"deviceId"`
+	PointID              string                         `json:"pointId"`
+	PrincipalID          string                         `json:"principalId"`
+	IdempotencyKey       string                         `json:"idempotencyKey"`
+	Capability           commandmodel.Capability        `json:"capability"`
+	Parameters           commandmodel.CommandParameters `json:"parameters"`
+	VerificationPointKey string                         `json:"verificationPointKey"`
+	CurrentState         struct {
 		EvaluationAvailability string    `json:"evaluationAvailability"`
 		Presence               string    `json:"presence"`
 		Readiness              string    `json:"readiness"`
 		Quality                string    `json:"quality"`
 		BusinessRevision       uint64    `json:"businessRevision"`
-		CurrentTemperatureC    float64   `json:"currentTemperatureC"`
+		CurrentValue           *float64  `json:"currentValue,omitempty"`
 		ObservedAt             time.Time `json:"observedAt"`
 	} `json:"currentState"`
 }
@@ -195,9 +214,12 @@ func loadConfig() (config, error) {
 		ServerName:   serverName,
 		Certificates: []tls.Certificate{certificate},
 	}}
+	organizationID := requiredEnv("S3_LOCAL_ORGANIZATION_ID")
+	siteID := requiredEnv("S3_LOCAL_SITE_ID")
 	deviceCatalog, err := loadDeviceCatalog(
-		strings.TrimSpace(os.Getenv("S3_LOCAL_DEVICE_CATALOG_FILE")),
-		requiredEnv("S3_LOCAL_DEVICE_ID"),
+		requiredEnv("S3_LOCAL_DEVICE_CATALOG_FILE"),
+		organizationID,
+		siteID,
 	)
 	if err != nil {
 		return config{}, fmt.Errorf("load local Device catalog: %w", err)
@@ -207,8 +229,8 @@ func loadConfig() (config, error) {
 		publicOrigin:             requiredEnv("S3_LOCAL_WEB_PUBLIC_ORIGIN"),
 		commandServiceURL:        strings.TrimRight(requiredEnv("S3_LOCAL_COMMAND_SERVICE_URL"), "/"),
 		commandServiceServerName: serverName,
-		organizationID:           requiredEnv("S3_LOCAL_ORGANIZATION_ID"),
-		siteID:                   requiredEnv("S3_LOCAL_SITE_ID"),
+		organizationID:           organizationID,
+		siteID:                   siteID,
 		deviceCatalog:            deviceCatalog,
 		principalID:              envOr("S3_LOCAL_PRINCIPAL_ID", "018f3e00-5000-7000-8000-000000000001"),
 		approverID:               envOr("S3_LOCAL_APPROVER_ID", "018f3e00-5000-7000-8000-000000000002"),
@@ -308,13 +330,17 @@ func (g *gateway) principal(writer http.ResponseWriter, _ *http.Request) {
 }
 
 func (g *gateway) localDevices(writer http.ResponseWriter, _ *http.Request) {
-	devices := make([]localDevice, 0, len(g.config.deviceCatalog))
+	devices := make([]localDeviceProjection, 0, len(g.config.deviceCatalog))
 	for _, device := range g.config.deviceCatalog {
-		device.OrganizationID = g.config.organizationID
-		device.SiteID = g.config.siteID
-		devices = append(devices, device)
+		devices = append(devices, localDeviceProjection{
+			OrganizationID: device.OrganizationID,
+			SiteID:         device.SiteID,
+			DeviceID:       device.DeviceID,
+			Name:           device.Name,
+			Type:           device.Type,
+		})
 	}
-	writeJSON(writer, http.StatusOK, localDeviceCatalog{SchemaVersion: 1, Devices: devices})
+	writeJSON(writer, http.StatusOK, localDeviceProjectionCatalog{SchemaVersion: 1, Devices: devices})
 }
 
 func (g *gateway) createCommand(writer http.ResponseWriter, request *http.Request) {
@@ -335,8 +361,13 @@ func (g *gateway) createCommand(writer http.ResponseWriter, request *http.Reques
 	var input createCommandRequest
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&input) != nil || ensureEOF(decoder) != nil || !g.deviceAllowed(input.DeviceID) ||
+	if decoder.Decode(&input) != nil || ensureEOF(decoder) != nil ||
 		input.Capability != commandmodel.CapabilitySetTemperatureSetpoint || input.Parameters.SetpointC < 16 || input.Parameters.SetpointC > 30 {
+		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "The local Command request is invalid.", false)
+		return
+	}
+	device, ok := g.localDevice(input.DeviceID)
+	if !ok {
 		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "The local Command request is invalid.", false)
 		return
 	}
@@ -347,21 +378,25 @@ func (g *gateway) createCommand(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	now := g.config.now().UTC()
+	currentValue := 23.0
 	upstream := internalCreateCommandRequest{
-		OrganizationID: g.config.organizationID,
-		SiteID:         g.config.siteID,
-		DeviceID:       input.DeviceID,
-		PrincipalID:    g.config.principalID,
-		IdempotencyKey: idempotencyKey,
-		Capability:     input.Capability,
-		SetpointC:      input.Parameters.SetpointC,
+		TenantID:             device.TenantID,
+		OrganizationID:       device.OrganizationID,
+		SiteID:               device.SiteID,
+		DeviceID:             device.DeviceID,
+		PointID:              device.CommandPointID,
+		PrincipalID:          g.config.principalID,
+		IdempotencyKey:       idempotencyKey,
+		Capability:           input.Capability,
+		Parameters:           commandmodel.CommandParameters{commandmodel.ParameterSetpointC: input.Parameters.SetpointC},
+		VerificationPointKey: device.VerificationPointKey,
 	}
 	upstream.CurrentState.EvaluationAvailability = "AVAILABLE"
 	upstream.CurrentState.Presence = "ONLINE"
 	upstream.CurrentState.Readiness = "CURRENT"
 	upstream.CurrentState.Quality = "GOOD"
 	upstream.CurrentState.BusinessRevision = 21
-	upstream.CurrentState.CurrentTemperatureC = 23
+	upstream.CurrentState.CurrentValue = &currentValue
 	upstream.CurrentState.ObservedAt = now.Add(-time.Second)
 	g.proxyJSON(writer, request, http.MethodPost, "/internal/v1/commands", upstream, map[string]string{"X-Command-Grant": grant})
 }
@@ -400,7 +435,11 @@ func (g *gateway) approveCommand(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	projection, err := g.readCommandProjection(request.Context(), commandID)
-	if err != nil || !g.deviceAllowed(projection.DeviceID) {
+	if err != nil {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested Command was not found.", false)
+		return
+	}
+	if _, ok := g.localDevice(projection.DeviceID); !ok {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested Command was not found.", false)
 		return
 	}
@@ -419,13 +458,13 @@ func (g *gateway) approveCommand(writer http.ResponseWriter, request *http.Reque
 	g.proxyJSON(writer, request, http.MethodPost, "/internal/v1/commands/"+url.PathEscape(commandID)+":approve", upstream, map[string]string{"X-Command-Grant": grant})
 }
 
-func (g *gateway) deviceAllowed(deviceID string) bool {
+func (g *gateway) localDevice(deviceID string) (localDevice, bool) {
 	for _, device := range g.config.deviceCatalog {
 		if device.DeviceID == deviceID {
-			return true
+			return device, true
 		}
 	}
-	return false
+	return localDevice{}, false
 }
 
 func (g *gateway) readCommandProjection(ctx context.Context, commandID string) (commandProjection, error) {
@@ -609,13 +648,7 @@ func loadSingleLineFile(path string, maximum int64) (string, error) {
 	return value, nil
 }
 
-func loadDeviceCatalog(path, fallbackDeviceID string) ([]localDevice, error) {
-	if path == "" {
-		if !commandmodel.IsUUIDv7(fallbackDeviceID) {
-			return nil, errors.New("fallback Device ID is invalid")
-		}
-		return []localDevice{{DeviceID: fallbackDeviceID, Name: "Local HVAC Device", Type: "HVAC"}}, nil
-	}
+func loadDeviceCatalog(path, organizationID, siteID string) ([]localDevice, error) {
 	body, err := os.ReadFile(path)
 	if err != nil || len(body) == 0 || len(body) > 64<<10 {
 		return nil, errors.New("Device catalog file is unreadable")
@@ -623,20 +656,44 @@ func loadDeviceCatalog(path, fallbackDeviceID string) ([]localDevice, error) {
 	var catalog localDeviceCatalog
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&catalog) != nil || ensureEOF(decoder) != nil || catalog.SchemaVersion != 1 || len(catalog.Devices) == 0 || len(catalog.Devices) > 16 {
+	if decoder.Decode(&catalog) != nil || ensureEOF(decoder) != nil || catalog.SchemaVersion != 2 || len(catalog.Devices) == 0 || len(catalog.Devices) > 16 {
 		return nil, errors.New("Device catalog document is invalid")
 	}
-	seen := make(map[string]struct{}, len(catalog.Devices))
+	seenDevices := make(map[string]struct{}, len(catalog.Devices))
+	seenPoints := make(map[string]struct{}, len(catalog.Devices))
+	var tenantID string
 	for _, device := range catalog.Devices {
-		if !commandmodel.IsUUIDv7(device.DeviceID) || strings.TrimSpace(device.Name) == "" || strings.TrimSpace(device.Type) == "" {
-			return nil, errors.New("Device catalog entry is invalid")
+		if tenantID == "" {
+			tenantID = device.TenantID
 		}
-		if _, duplicate := seen[device.DeviceID]; duplicate {
+		if err := validateLocalDevice(device, tenantID, organizationID, siteID); err != nil {
+			return nil, fmt.Errorf("Device catalog entry is invalid: %w", err)
+		}
+		if _, duplicate := seenDevices[device.DeviceID]; duplicate {
 			return nil, errors.New("Device catalog contains duplicate Device IDs")
 		}
-		seen[device.DeviceID] = struct{}{}
+		if _, duplicate := seenPoints[device.CommandPointID]; duplicate {
+			return nil, errors.New("Device catalog contains duplicate Command Point IDs")
+		}
+		seenDevices[device.DeviceID] = struct{}{}
+		seenPoints[device.CommandPointID] = struct{}{}
 	}
 	return catalog.Devices, nil
+}
+
+func validateLocalDevice(device localDevice, tenantID, organizationID, siteID string) error {
+	if !commandmodel.IsUUIDv7(device.TenantID) || !commandmodel.IsUUIDv7(device.OrganizationID) || !commandmodel.IsUUIDv7(device.SiteID) ||
+		!commandmodel.IsUUIDv7(device.DeviceID) || !commandmodel.IsUUIDv7(device.CommandPointID) {
+		return errors.New("scope or Point identity is invalid")
+	}
+	if device.TenantID != tenantID || device.OrganizationID != organizationID || device.SiteID != siteID {
+		return errors.New("scope does not match the local runtime")
+	}
+	if strings.TrimSpace(device.VerificationPointKey) == "" || len(device.VerificationPointKey) > 256 ||
+		strings.TrimSpace(device.Name) == "" || strings.TrimSpace(device.Type) == "" {
+		return errors.New("required metadata is missing")
+	}
+	return nil
 }
 
 func randomIdentifier(prefix string) (string, error) {

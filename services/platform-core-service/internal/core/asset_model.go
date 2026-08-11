@@ -2,6 +2,7 @@ package core
 
 type Area struct {
 	ID                   string  `json:"id"`
+	TenantID             string  `json:"tenantId"`
 	OwningOrganizationID string  `json:"owningOrganizationId"`
 	SiteID               string  `json:"siteId"`
 	ParentAreaID         *string `json:"parentAreaId"`
@@ -16,6 +17,7 @@ type Area struct {
 
 type EquipmentAreaBinding struct {
 	ID                   string  `json:"id"`
+	TenantID             string  `json:"tenantId"`
 	OwningOrganizationID string  `json:"owningOrganizationId"`
 	SiteID               string  `json:"siteId"`
 	EquipmentID          string  `json:"equipmentId"`
@@ -31,6 +33,7 @@ type EquipmentAreaBinding struct {
 
 type DeviceAreaBinding struct {
 	ID                   string  `json:"id"`
+	TenantID             string  `json:"tenantId"`
 	OwningOrganizationID string  `json:"owningOrganizationId"`
 	SiteID               string  `json:"siteId"`
 	DeviceID             string  `json:"deviceId"`
@@ -46,6 +49,7 @@ type DeviceAreaBinding struct {
 
 type Sensor struct {
 	ID                   string         `json:"id"`
+	TenantID             string         `json:"tenantId"`
 	OwningOrganizationID string         `json:"owningOrganizationId"`
 	SiteID               string         `json:"siteId"`
 	Code                 string         `json:"code"`
@@ -64,6 +68,7 @@ type Sensor struct {
 
 type SensorDeviceBinding struct {
 	ID                   string  `json:"id"`
+	TenantID             string  `json:"tenantId"`
 	OwningOrganizationID string  `json:"owningOrganizationId"`
 	SiteID               string  `json:"siteId"`
 	SensorID             string  `json:"sensorId"`
@@ -79,6 +84,7 @@ type SensorDeviceBinding struct {
 
 type SensorAreaBinding struct {
 	ID                   string  `json:"id"`
+	TenantID             string  `json:"tenantId"`
 	OwningOrganizationID string  `json:"owningOrganizationId"`
 	SiteID               string  `json:"siteId"`
 	SensorID             string  `json:"sensorId"`
@@ -94,6 +100,7 @@ type SensorAreaBinding struct {
 
 type SensorSubjectBinding struct {
 	ID                   string  `json:"id"`
+	TenantID             string  `json:"tenantId"`
 	OwningOrganizationID string  `json:"owningOrganizationId"`
 	SiteID               string  `json:"siteId"`
 	SensorID             string  `json:"sensorId"`
@@ -111,6 +118,7 @@ type SensorSubjectBinding struct {
 
 type TelemetryPoint struct {
 	ID                   string         `json:"id"`
+	TenantID             string         `json:"tenantId"`
 	OwningOrganizationID string         `json:"owningOrganizationId"`
 	SiteID               string         `json:"siteId"`
 	ReportingDeviceID    string         `json:"reportingDeviceId"`
@@ -135,6 +143,7 @@ type TelemetryPoint struct {
 
 type PointSubjectBinding struct {
 	ID                   string  `json:"id"`
+	TenantID             string  `json:"tenantId"`
 	OwningOrganizationID string  `json:"owningOrganizationId"`
 	SiteID               string  `json:"siteId"`
 	PointID              string  `json:"pointId"`
@@ -152,6 +161,7 @@ type PointSubjectBinding struct {
 
 type AssetRelationship struct {
 	ID                   string  `json:"id"`
+	TenantID             string  `json:"tenantId"`
 	OwningOrganizationID string  `json:"owningOrganizationId"`
 	SiteID               string  `json:"siteId"`
 	FromType             string  `json:"fromType"`
@@ -168,6 +178,7 @@ type AssetRelationship struct {
 }
 
 type CalculatedPointInput struct {
+	TenantID             string `json:"tenantId"`
 	OwningOrganizationID string `json:"owningOrganizationId"`
 	SiteID               string `json:"siteId"`
 	CalculatedPointID    string `json:"calculatedPointId"`
@@ -189,6 +200,7 @@ type AssetModelCounts struct {
 
 type SiteAssetModel struct {
 	SchemaVersion         int                    `json:"schemaVersion"`
+	TenantID              string                 `json:"tenantId"`
 	SiteID                string                 `json:"siteId"`
 	Areas                 []Area                 `json:"areas"`
 	Equipment             []Equipment            `json:"equipment"`

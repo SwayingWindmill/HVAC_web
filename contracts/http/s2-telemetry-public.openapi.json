@@ -27,7 +27,8 @@
     "real-mode-never-falls-back-to-mock-or-thingsboard-read-through",
     "device-history-public-requests-never-accept-organization-or-site-claims",
     "device-history-authorization-binds-exact-device-keys-range-and-point-limit",
-    "device-history-is-numeric-accepted-observations-only"
+    "device-history-is-numeric-accepted-observations-only",
+    "device-history-points-preserve-sampled-at-point-and-sensor-identity"
   ],
   "x-client-forbidden-fields": [
     "organizationId",
@@ -570,9 +571,11 @@
       "DeviceHistoryPoint": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["observationId", "sampledAt", "receivedAt", "value", "unit", "quality", "qualityReasons", "revision"],
+        "required": ["observationId", "pointId", "sensorId", "sampledAt", "receivedAt", "value", "unit", "quality", "qualityReasons", "revision"],
         "properties": {
           "observationId": { "$ref": "#/components/schemas/UUIDv7" },
+          "pointId": { "$ref": "#/components/schemas/UUIDv7" },
+          "sensorId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
           "sampledAt": { "$ref": "#/components/schemas/HistoryInstant" },
           "receivedAt": { "$ref": "#/components/schemas/HistoryInstant" },
           "value": { "type": "number" },

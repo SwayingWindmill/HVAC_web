@@ -49,7 +49,6 @@ type ServerConfig struct {
 	CommandVerifierOrganizationID string
 	CommandVerifierSiteID         string
 	CommandVerifierDeviceID       string
-	CommandReportedStateKey       string
 	Metrics                       *observability.Registry
 	Now                           func() time.Time
 }
@@ -70,7 +69,6 @@ type handler struct {
 	commandVerifierOrganizationID string
 	commandVerifierSiteID         string
 	commandVerifierDeviceID       string
-	commandReportedStateKey       string
 	metrics                       *s2Metrics
 	now                           func() time.Time
 }
@@ -94,7 +92,6 @@ func NewHandler(config ServerConfig) http.Handler {
 		commandVerifierOrganizationID: strings.TrimSpace(config.CommandVerifierOrganizationID),
 		commandVerifierSiteID:         strings.TrimSpace(config.CommandVerifierSiteID),
 		commandVerifierDeviceID:       strings.TrimSpace(config.CommandVerifierDeviceID),
-		commandReportedStateKey:       strings.TrimSpace(config.CommandReportedStateKey),
 		metrics:                       newS2Metrics(config.Metrics, now),
 		now:                           now,
 	}
@@ -111,8 +108,8 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.metrics.observeRequest(request.URL.Path, status, h.now().UTC().Sub(startedAt))
 	}()
 	writer = captured
-	if request.URL.Path == InternalThingsBoardObservationPath {
-		h.handleThingsBoardObservation(writer, request)
+	if request.URL.Path == InternalSourceObservationPath {
+		h.handleSourceObservation(writer, request)
 		return
 	}
 	if request.URL.Path == InternalThingsBoardCoveragePath {

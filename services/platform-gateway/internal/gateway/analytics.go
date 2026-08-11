@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -112,7 +113,29 @@ func (h *handler) QueryEnergySeries(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	var response analyticsmodel.EnergySeriesResponse
-	if decodeStrictAnalyticsJSON(raw, &response) != nil || !validateEnergySeriesResponse(response, query) {
+	decodeErr := decodeStrictAnalyticsJSON(raw, &response)
+	var validationErr error
+	if decodeErr == nil {
+		validationErr = validateEnergySeriesResponse(response, query)
+	}
+	if decodeErr != nil || validationErr != nil {
+		firstStart := ""
+		lastEnd := ""
+		if len(response.Points) > 0 {
+			firstStart = response.Points[0].PeriodStart.UTC().Format(time.RFC3339Nano)
+			lastEnd = response.Points[len(response.Points)-1].PeriodEnd.UTC().Format(time.RFC3339Nano)
+		}
+		h.logger.WarnContext(
+			request.Context(),
+			"analytics_response_contract_rejected",
+			"decode_error", errorText(decodeErr),
+			"validation_error", errorText(validationErr),
+			"point_count", len(response.Points),
+			"requested_granularity", query.Granularity,
+			"actual_granularity", response.Metadata.ActualGranularity,
+			"first_period_start", firstStart,
+			"last_period_end", lastEnd,
+		)
 		h.writeAnalyticsFailure(writer, request, analyticsFailure{http.StatusBadGateway, "ANALYTICS_RESPONSE_INVALID", "Analytics response invalid", "Telemetry Query Service returned a response outside the product contract.", true})
 		return
 	}
@@ -329,21 +352,53 @@ func (h *handler) executeAnalyticsQuery(ctx context.Context, publicRequest *http
 	return nil, &failure
 }
 
-func validateEnergySeriesResponse(response analyticsmodel.EnergySeriesResponse, query analyticsmodel.EnergySeriesQuery) bool {
+func validateEnergySeriesResponse(response analyticsmodel.EnergySeriesResponse, query analyticsmodel.EnergySeriesQuery) error {
 	metadata := response.Metadata
-	if response.SchemaVersion != 1 || response.Points == nil || metadata.RequestedGranularity != query.Granularity || metadata.ActualGranularity != query.Granularity || strings.TrimSpace(metadata.DatasetRevision) == "" || metadata.QualitySummary.Valid < 0 || metadata.QualitySummary.Suspect < 0 || metadata.QualitySummary.Invalid < 0 {
-		return false
+	if response.SchemaVersion != 1 {
+		return fmt.Errorf("schema version %d is unsupported", response.SchemaVersion)
+	}
+	if response.Points == nil {
+		return errors.New("points must be an explicit array")
+	}
+	if metadata.RequestedGranularity != query.Granularity {
+		return fmt.Errorf("requested granularity %q does not match query %q", metadata.RequestedGranularity, query.Granularity)
+	}
+	if metadata.ActualGranularity != query.Granularity {
+		return fmt.Errorf("actual granularity %q does not match query %q", metadata.ActualGranularity, query.Granularity)
+	}
+	if strings.TrimSpace(metadata.DatasetRevision) == "" {
+		return errors.New("dataset revision is empty")
+	}
+	if metadata.QualitySummary.Valid < 0 || metadata.QualitySummary.Suspect < 0 || metadata.QualitySummary.Invalid < 0 {
+		return errors.New("quality summary contains a negative count")
 	}
 	previousEnd := time.Time{}
-	for _, point := range response.Points {
-		if point.PeriodStart.IsZero() || point.PeriodEnd.IsZero() || !point.PeriodStart.Before(point.PeriodEnd) ||
-			!point.PeriodEnd.After(query.From) || !point.PeriodStart.Before(query.To) || point.EnergyKWh < 0 ||
-			math.IsNaN(point.EnergyKWh) || math.IsInf(point.EnergyKWh, 0) || (!previousEnd.IsZero() && point.PeriodStart.Before(previousEnd)) {
-			return false
+	for index, point := range response.Points {
+		if point.PeriodStart.IsZero() || point.PeriodEnd.IsZero() {
+			return fmt.Errorf("point %d has a zero period boundary", index)
+		}
+		if !point.PeriodStart.Before(point.PeriodEnd) {
+			return fmt.Errorf("point %d period is not increasing", index)
+		}
+		if !point.PeriodEnd.After(query.From) || !point.PeriodStart.Before(query.To) {
+			return fmt.Errorf("point %d is outside the requested range", index)
+		}
+		if point.EnergyKWh < 0 || math.IsNaN(point.EnergyKWh) || math.IsInf(point.EnergyKWh, 0) {
+			return fmt.Errorf("point %d energy is not a finite nonnegative value", index)
+		}
+		if !previousEnd.IsZero() && point.PeriodStart.Before(previousEnd) {
+			return fmt.Errorf("point %d overlaps the previous point", index)
 		}
 		previousEnd = point.PeriodEnd
 	}
-	return true
+	return nil
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func decodeStrictAnalyticsJSON(payload []byte, target any) error {

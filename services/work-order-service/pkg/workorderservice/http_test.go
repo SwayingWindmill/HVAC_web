@@ -18,6 +18,7 @@ import (
 )
 
 const (
+	httpTestTenantID       = "0191f000-0000-7000-8000-000000000001"
 	httpTestOrganizationID = "01920000-0000-7000-8000-000000000001"
 	httpTestSiteID         = "01920000-0001-7000-8000-000000000001"
 	httpTestOtherSiteID    = "01920000-0001-7000-8000-000000000002"
@@ -205,7 +206,7 @@ func signContext(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, actions 
 	value, err := identitycontext.SignDelegation(signer, identitycontext.DelegationClaims{
 		Issuer: DefaultGatewaySPIFFEID, Subject: "operator", SubjectIssuer: "https://identity.example.test", PrincipalID: "principal:operator",
 		DisplayName: "Operator", ExecutingService: DefaultGatewaySPIFFEID, Audience: DefaultAudience,
-		ActingOrganizationID: organizationID, Actions: actions, Scopes: scopes,
+		ActingOrganizationID: organizationID, TenantID: httpTestTenantID, Actions: actions, Scopes: scopes,
 		PolicyRevision: "policy-1", SessionID: "session-1", IssuedAt: now.Add(-time.Second).Unix(),
 		ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "id-1",
 	})

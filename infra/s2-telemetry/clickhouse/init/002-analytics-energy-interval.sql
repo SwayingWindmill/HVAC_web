@@ -2,9 +2,12 @@ CREATE DATABASE IF NOT EXISTS analytics;
 
 CREATE TABLE IF NOT EXISTS analytics.energy_interval_facts (
   fact_id UUID,
+  tenant_id UUID,
   organization_id UUID,
   site_id UUID,
   device_id UUID,
+  point_id UUID,
+  sensor_id Nullable(UUID),
   telemetry_key LowCardinality(String),
   energy_type LowCardinality(String),
   period_start DateTime64(3, 'UTC'),
@@ -23,8 +26,10 @@ CREATE TABLE IF NOT EXISTS analytics.energy_interval_facts (
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(period_end)
 ORDER BY (
+  tenant_id,
   organization_id,
   site_id,
+  point_id,
   device_id,
   energy_type,
   period_end,

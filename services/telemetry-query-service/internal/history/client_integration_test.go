@@ -46,10 +46,10 @@ func TestClickHouseHistoryClientQueriesBoundedRealProjection(t *testing.T) {
 		t.Fatalf("series = %#v", response.Series)
 	}
 	points := response.Series[0].Points
-	if points[0].ObservationID != "018f4f00-3000-7000-8000-000000000002" || points[0].Value != 103 || points[0].Quality != telemetryhistorymodel.QualityGood {
+	if points[0].ObservationID != "018f4f00-3000-7000-8000-000000000002" || points[0].PointID != "018f4f00-2100-7000-8000-000000000001" || points[0].SensorID == nil || *points[0].SensorID != "018f4f00-2200-7000-8000-000000000001" || points[0].Value != 103 || points[0].Quality != telemetryhistorymodel.QualityGood {
 		t.Fatalf("first point = %#v", points[0])
 	}
-	if points[1].ObservationID != "018f4f00-3000-7000-8000-000000000003" || points[1].Value != 1 || points[1].Quality != telemetryhistorymodel.QualityGood {
+	if points[1].ObservationID != "018f4f00-3000-7000-8000-000000000003" || points[1].PointID != "018f4f00-2100-7000-8000-000000000001" || points[1].SensorID == nil || *points[1].SensorID != "018f4f00-2200-7000-8000-000000000001" || points[1].Value != 1 || points[1].Quality != telemetryhistorymodel.QualityGood {
 		t.Fatalf("second point = %#v", points[1])
 	}
 	if !response.Metadata.Partial || response.Metadata.ReturnedPoints != 2 || response.Metadata.DatasetRevision != "telemetry-history:v1:1722258300000" || len(response.Metadata.TruncatedKeys) != 1 || response.Metadata.TruncatedKeys[0] != "hvac_meter.energy" {

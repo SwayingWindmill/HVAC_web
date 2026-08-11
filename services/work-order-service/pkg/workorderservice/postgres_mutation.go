@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
@@ -228,6 +229,13 @@ func (store *PostgresStore) Transition(ctx context.Context, organizationID, site
 }
 
 func (store *PostgresStore) beginWriterTransaction(ctx context.Context, organizationID string) (pgx.Tx, error) {
+	tenantID, ok := identitycontext.TenantIDFromContext(ctx)
+	if !ok || !workordermodel.IsUUIDv7(tenantID) || !workordermodel.IsUUIDv7(organizationID) {
+		return nil, ErrUnavailable
+	}
+	if err := ensureWorkOrderTenantBinding(ctx, store.mutationPool, "s5_work_order_writer", tenantID, organizationID); err != nil {
+		return nil, err
+	}
 	tx, err := store.mutationPool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite})
 	if err != nil {
 		return nil, fmt.Errorf("begin Work Order writer transaction: %w", err)
@@ -236,9 +244,9 @@ func (store *PostgresStore) beginWriterTransaction(ctx context.Context, organiza
 		_ = tx.Rollback(ctx)
 		return nil, fmt.Errorf("activate Work Order writer role: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, organizationID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true), set_config('app.tenant_id', $2, true)`, organizationID, tenantID); err != nil {
 		_ = tx.Rollback(ctx)
-		return nil, fmt.Errorf("activate Work Order writer Organization scope: %w", err)
+		return nil, fmt.Errorf("activate Work Order writer Tenant/Organization scope: %w", err)
 	}
 	return tx, nil
 }

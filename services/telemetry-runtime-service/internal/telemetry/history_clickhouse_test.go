@@ -57,7 +57,10 @@ func TestClickHouseHistorySinkUsesObservationIdentityAsDeduplicationToken(t *tes
 	number := 812.5
 	observations := []HistoryObservation{
 		{
-			ObservationID: observationIDs[0], IntegrationInstanceID: "018f2e00-6000-7000-8000-000000000001",
+			ObservationID: observationIDs[0], TenantID: stringPointer("018f2d00-0000-7000-8000-000000000001"),
+			OwningOrganizationID: stringPointer("018f2e00-0000-7000-8000-000000000001"), SiteID: stringPointer("018f2e00-1000-7000-8000-000000000001"), DeviceID: stringPointer("018f2e00-3000-7000-8000-000000000001"),
+			PointID: stringPointer("018f2e00-3100-7000-8000-000000000001"), SensorID: stringPointer("018f2e00-3200-7000-8000-000000000001"),
+			IntegrationInstanceID: "018f2e00-6000-7000-8000-000000000001",
 			SourceEventID: "018f2e00-6200-7000-8000-000000000001", SourcePartition: "tb-a", SourceOffset: 10,
 			SourcePath: "POLL", TelemetryKey: "chiller.power", ValueNumber: &number,
 			SampledAt: time.Date(2026, 7, 29, 7, 59, 58, 0, time.UTC), ReceivedAt: time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC),
@@ -125,6 +128,26 @@ func TestClickHouseHistorySinkValidatesEntireBatchBeforeInsert(t *testing.T) {
 	}
 	if requests.Load() != 0 {
 		t.Fatalf("requests=%d", requests.Load())
+	}
+}
+
+func TestClickHouseHistorySinkRejectsAcceptedObservationWithoutTenantScope(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	sink, err := NewClickHouseHistorySink(ClickHouseHistoryConfig{
+		BaseURL: server.URL, Database: "telemetry_history", Table: "observations", HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = sink.InsertObservations(t.Context(), []HistoryObservation{{
+		ObservationID: "018f2e00-9100-7000-8000-000000000006", AcceptanceStatus: "ACCEPTED",
+		PayloadSHA256: strings.Repeat("e", 64),
+	}})
+	if err == nil || !strings.Contains(err.Error(), "requires UUIDv7 Tenant") {
+		t.Fatalf("err=%v", err)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	tenantA           = "018f1d00-0000-7000-8000-000000000001"
 	ownerA            = "018f1e00-0000-7000-8000-000000000001"
 	ownerB            = "018f1e00-0000-7000-8000-000000000002"
 	ownerASite1       = "018f1e00-1000-7000-8000-000000000001"
@@ -168,6 +169,7 @@ func validClaims(now time.Time) registryauth.GrantClaims {
 		PrincipalID:            "018f1e00-2000-7000-8000-000000000001",
 		SubjectIssuer:          "https://issuer.example.test",
 		Subject:                "fixture-user",
+		TenantID:               tenantA,
 		ActingOrganizationID:   ownerA,
 		AllowedOrganizationIDs: []string{ownerA},
 		DeniedSiteIDs:          []string{ownerASite2},

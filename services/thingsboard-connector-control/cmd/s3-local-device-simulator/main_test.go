@@ -39,7 +39,7 @@ func TestProviderAndReportedStateCloseTheLocalLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reportedRequest := httptest.NewRequest(http.MethodGet, "/internal/v1/commands/reported-state", nil)
+	reportedRequest := httptest.NewRequest(http.MethodGet, "/internal/v1/commands/reported-state?key=temperatureSetpointC", nil)
 	reportedRequest.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{spiffe}}}}
 	reportedResponse := httptest.NewRecorder()
 	sim.reportedStateHandler().ServeHTTP(reportedResponse, reportedRequest)
@@ -50,7 +50,7 @@ func TestProviderAndReportedStateCloseTheLocalLoop(t *testing.T) {
 	if err := json.Unmarshal(reportedResponse.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.ReportedSetpointC != 24 || result.BusinessRevision != 22 || result.EvidenceID[:10] != "s2:sha256:" {
+	if result.ReportedValue.Number == nil || *result.ReportedValue.Number != 24 || result.BusinessRevision != 22 || result.EvidenceID[:10] != "s2:sha256:" {
 		t.Fatalf("reported state=%#v", result)
 	}
 }

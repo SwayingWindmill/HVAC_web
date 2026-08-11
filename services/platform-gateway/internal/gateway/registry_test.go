@@ -25,6 +25,7 @@ import (
 )
 
 const (
+	registryTestTenantID       = "018f1d00-1000-7000-8000-000000000001"
 	registryTestOrganizationID = "018f1e00-1000-7000-8000-000000000001"
 	registryTestSiteID         = "018f1e00-1000-7000-8000-000000000002"
 	registryTestEquipmentID    = "018f1e00-1000-7000-8000-000000000003"
@@ -796,23 +797,23 @@ func registrySuccessResponse(path string) *http.Response {
 }
 
 func registryOrganization(source string) platformapi.Organization {
-	return platformapi.Organization{ID: registryTestOrganizationID, Code: "org", DisplayName: source, Status: "ACTIVE", Revision: 1, CreatedAt: "2026-07-22T12:00:00.000Z", UpdatedAt: "2026-07-22T12:00:00.000Z"}
+	return platformapi.Organization{ID: registryTestOrganizationID, TenantID: registryTestTenantID, Code: "org", DisplayName: source, Status: "ACTIVE", Revision: 1, CreatedAt: "2026-07-22T12:00:00.000Z", UpdatedAt: "2026-07-22T12:00:00.000Z"}
 }
 
 func registrySite() platformapi.Site {
-	return platformapi.Site{ID: registryTestSiteID, OwningOrganizationID: registryTestOrganizationID, Code: "site", DisplayName: "Site", Timezone: "UTC", Status: "ACTIVE", Revision: 1, CreatedAt: "2026-07-22T12:00:00.000Z", UpdatedAt: "2026-07-22T12:00:00.000Z"}
+	return platformapi.Site{ID: registryTestSiteID, TenantID: registryTestTenantID, OwningOrganizationID: registryTestOrganizationID, Code: "site", DisplayName: "Site", Timezone: "UTC", Status: "ACTIVE", Revision: 1, CreatedAt: "2026-07-22T12:00:00.000Z", UpdatedAt: "2026-07-22T12:00:00.000Z"}
 }
 
 func registryEquipment() platformapi.Equipment {
-	return platformapi.Equipment{ID: registryTestEquipmentID, OwningOrganizationID: registryTestOrganizationID, SiteID: registryTestSiteID, Code: "equipment", DisplayName: "Equipment", EquipmentType: "AHU", Status: "ACTIVE", Revision: 1, CreatedAt: "2026-07-22T12:00:00.000Z", UpdatedAt: "2026-07-22T12:00:00.000Z"}
+	return platformapi.Equipment{ID: registryTestEquipmentID, TenantID: registryTestTenantID, OwningOrganizationID: registryTestOrganizationID, SiteID: registryTestSiteID, Code: "equipment", DisplayName: "Equipment", EquipmentType: "AHU", Status: "ACTIVE", Revision: 1, CreatedAt: "2026-07-22T12:00:00.000Z", UpdatedAt: "2026-07-22T12:00:00.000Z"}
 }
 
 func registryDevice() platformapi.Device {
-	return platformapi.Device{ID: registryTestDeviceID, OwningOrganizationID: registryTestOrganizationID, SiteID: registryTestSiteID, Code: "device", DisplayName: "Device", DeviceType: "CONTROLLER", Status: "ACTIVE", Revision: 1, CreatedAt: "2026-07-22T12:00:00.000Z", UpdatedAt: "2026-07-22T12:00:00.000Z"}
+	return platformapi.Device{ID: registryTestDeviceID, TenantID: registryTestTenantID, OwningOrganizationID: registryTestOrganizationID, SiteID: registryTestSiteID, Code: "device", DisplayName: "Device", DeviceType: "CONTROLLER", Status: "ACTIVE", Revision: 1, CreatedAt: "2026-07-22T12:00:00.000Z", UpdatedAt: "2026-07-22T12:00:00.000Z"}
 }
 
 func registryDeviceBinding() platformapi.DeviceBinding {
-	return platformapi.DeviceBinding{ID: registryTestBindingID, OwningOrganizationID: registryTestOrganizationID, SiteID: registryTestSiteID, DeviceID: registryTestDeviceID, EquipmentID: registryTestEquipmentID, BindingRole: "PRIMARY_CONTROLLER", Status: "ACTIVE", ValidFrom: "2026-07-22T12:00:00.000Z", Revision: 1, CreatedAt: "2026-07-22T12:00:00.000Z", UpdatedAt: "2026-07-22T12:00:00.000Z"}
+	return platformapi.DeviceBinding{ID: registryTestBindingID, TenantID: registryTestTenantID, OwningOrganizationID: registryTestOrganizationID, SiteID: registryTestSiteID, DeviceID: registryTestDeviceID, EquipmentID: registryTestEquipmentID, BindingRole: "PRIMARY_CONTROLLER", Status: "ACTIVE", ValidFrom: "2026-07-22T12:00:00.000Z", Revision: 1, CreatedAt: "2026-07-22T12:00:00.000Z", UpdatedAt: "2026-07-22T12:00:00.000Z"}
 }
 
 func jsonHTTPResponse(status int, value any) *http.Response {

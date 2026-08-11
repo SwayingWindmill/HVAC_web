@@ -1631,6 +1631,7 @@
         "additionalProperties": false,
         "required": [
           "id",
+          "tenantId",
           "code",
           "displayName",
           "status",
@@ -1640,6 +1641,9 @@
         ],
         "properties": {
           "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "tenantId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "code": {
@@ -1676,6 +1680,7 @@
         "additionalProperties": false,
         "required": [
           "id",
+          "tenantId",
           "owningOrganizationId",
           "code",
           "displayName",
@@ -1687,6 +1692,9 @@
         ],
         "properties": {
           "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "tenantId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "owningOrganizationId": {
@@ -1732,6 +1740,7 @@
         "additionalProperties": false,
         "required": [
           "id",
+          "tenantId",
           "owningOrganizationId",
           "siteId",
           "code",
@@ -1744,6 +1753,9 @@
         ],
         "properties": {
           "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "tenantId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "owningOrganizationId": {
@@ -1791,6 +1803,7 @@
         "additionalProperties": false,
         "required": [
           "id",
+          "tenantId",
           "owningOrganizationId",
           "siteId",
           "code",
@@ -1803,6 +1816,9 @@
         ],
         "properties": {
           "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "tenantId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "owningOrganizationId": {
@@ -1850,6 +1866,7 @@
         "additionalProperties": false,
         "required": [
           "id",
+          "tenantId",
           "owningOrganizationId",
           "siteId",
           "deviceId",
@@ -1863,6 +1880,9 @@
         ],
         "properties": {
           "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "tenantId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "owningOrganizationId": {
@@ -1919,6 +1939,7 @@
         "additionalProperties": false,
         "required": [
           "id",
+          "tenantId",
           "owningOrganizationId",
           "siteId",
           "integrationInstanceId",
@@ -1933,6 +1954,9 @@
         ],
         "properties": {
           "id": {
+            "$ref": "#/components/schemas/UUIDv7"
+          },
+          "tenantId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "owningOrganizationId": {
@@ -2144,9 +2168,10 @@
       "Area": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "owningOrganizationId", "siteId", "parentAreaId", "code", "displayName", "areaType", "status", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "tenantId", "owningOrganizationId", "siteId", "parentAreaId", "code", "displayName", "areaType", "status", "revision", "createdAt", "updatedAt"],
         "properties": {
           "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
           "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
           "parentAreaId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
@@ -2162,9 +2187,10 @@
       "Sensor": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "owningOrganizationId", "siteId", "code", "displayName", "sensorType", "manufacturer", "model", "serialNumber", "calibrationDueAt", "metadata", "status", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "tenantId", "owningOrganizationId", "siteId", "code", "displayName", "sensorType", "manufacturer", "model", "serialNumber", "calibrationDueAt", "metadata", "status", "revision", "createdAt", "updatedAt"],
         "properties": {
           "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
           "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
           "code": { "type": "string", "minLength": 1, "maxLength": 256 },
@@ -2184,9 +2210,10 @@
       "TelemetryPoint": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "owningOrganizationId", "siteId", "reportingDeviceId", "sensorId", "pointKey", "sourceKey", "displayName", "pointKind", "valueType", "unit", "writable", "sampleIntervalMs", "publishIntervalMs", "staleAfterMs", "formulaRevision", "sourceMetadata", "status", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "tenantId", "owningOrganizationId", "siteId", "reportingDeviceId", "sensorId", "pointKey", "sourceKey", "displayName", "pointKind", "valueType", "unit", "writable", "sampleIntervalMs", "publishIntervalMs", "staleAfterMs", "formulaRevision", "sourceMetadata", "status", "revision", "createdAt", "updatedAt"],
         "properties": {
           "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
           "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
           "reportingDeviceId": { "$ref": "#/components/schemas/UUIDv7" },
@@ -2212,9 +2239,10 @@
       "AssetRelationship": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "owningOrganizationId", "siteId", "fromType", "fromId", "toType", "toId", "role", "status", "validFrom", "validTo", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "tenantId", "owningOrganizationId", "siteId", "fromType", "fromId", "toType", "toId", "role", "status", "validFrom", "validTo", "revision", "createdAt", "updatedAt"],
         "properties": {
           "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
           "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
           "fromType": { "type": "string", "enum": ["EQUIPMENT", "DEVICE", "SENSOR", "POINT"] },
@@ -2233,8 +2261,9 @@
       "CalculatedPointInput": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["owningOrganizationId", "siteId", "calculatedPointId", "inputPointId", "inputRole", "ordinal", "formulaRevision"],
+        "required": ["tenantId", "owningOrganizationId", "siteId", "calculatedPointId", "inputPointId", "inputRole", "ordinal", "formulaRevision"],
         "properties": {
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
           "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
           "calculatedPointId": { "$ref": "#/components/schemas/UUIDv7" },
@@ -2261,9 +2290,10 @@
       "SiteAssetModel": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["schemaVersion", "siteId", "areas", "equipment", "devices", "sensors", "telemetryPoints", "relationships", "calculatedPointInputs", "counts"],
+        "required": ["schemaVersion", "tenantId", "siteId", "areas", "equipment", "devices", "sensors", "telemetryPoints", "relationships", "calculatedPointInputs", "counts"],
         "properties": {
           "schemaVersion": { "type": "integer", "enum": [1] },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
           "areas": { "type": "array", "items": { "$ref": "#/components/schemas/Area" } },
           "equipment": { "type": "array", "items": { "$ref": "#/components/schemas/Equipment" } },

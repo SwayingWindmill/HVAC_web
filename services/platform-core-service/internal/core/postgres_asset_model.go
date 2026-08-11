@@ -15,7 +15,8 @@ func (store *PostgresStore) GetSiteAssetModel(ctx context.Context, claims regist
 		return SiteAssetModel{}, ErrNotFound
 	}
 	result := SiteAssetModel{
-		SchemaVersion:         1,
+		SchemaVersion:         2,
+		TenantID:              claims.TenantID,
 		SiteID:                siteID,
 		Areas:                 []Area{},
 		Equipment:             []Equipment{},
@@ -57,6 +58,7 @@ ORDER BY display_name COLLATE "C", id
 `, siteID, func(row rowScanner) error {
 			item, err := scanArea(row)
 			if err == nil {
+				item.TenantID = claims.TenantID
 				result.Areas = append(result.Areas, item)
 			}
 			return err
@@ -64,7 +66,7 @@ ORDER BY display_name COLLATE "C", id
 			return err
 		}
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, organization_id::text, site_id::text, code, display_name,
+SELECT id::text, tenant_id::text, organization_id::text, site_id::text, code, display_name,
        equipment_type, status, revision, created_at, updated_at
 FROM core_registry.equipment
 WHERE site_id = $1::uuid
@@ -79,7 +81,7 @@ ORDER BY display_name COLLATE "C", id
 			return err
 		}
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, organization_id::text, site_id::text, code, display_name,
+SELECT id::text, tenant_id::text, organization_id::text, site_id::text, code, display_name,
        device_type, status, revision, created_at, updated_at
 FROM core_registry.devices
 WHERE site_id = $1::uuid
@@ -94,7 +96,7 @@ ORDER BY display_name COLLATE "C", id
 			return err
 		}
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, organization_id::text, site_id::text, device_id::text,
+SELECT id::text, tenant_id::text, organization_id::text, site_id::text, device_id::text,
        equipment_id::text, binding_role, status, valid_from, valid_to,
        revision, created_at, updated_at
 FROM core_registry.device_bindings
@@ -119,6 +121,7 @@ ORDER BY binding_role COLLATE "C", id
 `, siteID, func(row rowScanner) error {
 			item, err := scanEquipmentAreaBinding(row)
 			if err == nil {
+				item.TenantID = claims.TenantID
 				result.EquipmentAreaBindings = append(result.EquipmentAreaBindings, item)
 			}
 			return err
@@ -268,7 +271,11 @@ ORDER BY calculated_point_id, ordinal, input_point_id
 	if err != nil {
 		return SiteAssetModel{}, err
 	}
+	stampAssetModelTenant(&result, claims.TenantID)
 	result.Relationships = buildAssetRelationships(result)
+	for index := range result.Relationships {
+		result.Relationships[index].TenantID = claims.TenantID
+	}
 	result.Counts = AssetModelCounts{
 		Areas:                    len(result.Areas),
 		Equipment:                len(result.Equipment),
@@ -279,6 +286,49 @@ ORDER BY calculated_point_id, ordinal, input_point_id
 		IndependentSensorDevices: countIndependentSensorDevices(result.SensorDeviceBindings),
 	}
 	return result, nil
+}
+
+func stampAssetModelTenant(model *SiteAssetModel, tenantID string) {
+	model.TenantID = tenantID
+	for index := range model.Areas {
+		model.Areas[index].TenantID = tenantID
+	}
+	for index := range model.Equipment {
+		model.Equipment[index].TenantID = tenantID
+	}
+	for index := range model.Devices {
+		model.Devices[index].TenantID = tenantID
+	}
+	for index := range model.DeviceBindings {
+		model.DeviceBindings[index].TenantID = tenantID
+	}
+	for index := range model.EquipmentAreaBindings {
+		model.EquipmentAreaBindings[index].TenantID = tenantID
+	}
+	for index := range model.DeviceAreaBindings {
+		model.DeviceAreaBindings[index].TenantID = tenantID
+	}
+	for index := range model.Sensors {
+		model.Sensors[index].TenantID = tenantID
+	}
+	for index := range model.SensorDeviceBindings {
+		model.SensorDeviceBindings[index].TenantID = tenantID
+	}
+	for index := range model.SensorAreaBindings {
+		model.SensorAreaBindings[index].TenantID = tenantID
+	}
+	for index := range model.SensorSubjectBindings {
+		model.SensorSubjectBindings[index].TenantID = tenantID
+	}
+	for index := range model.TelemetryPoints {
+		model.TelemetryPoints[index].TenantID = tenantID
+	}
+	for index := range model.PointSubjectBindings {
+		model.PointSubjectBindings[index].TenantID = tenantID
+	}
+	for index := range model.CalculatedPointInputs {
+		model.CalculatedPointInputs[index].TenantID = tenantID
+	}
 }
 
 func queryAssetRows(

@@ -128,7 +128,12 @@ func dispatchWorkOrderMutationRoute(h *handler, writer http.ResponseWriter, requ
 		h.writeWorkOrderFailure(writer, request, *failure)
 		return
 	}
-	writeContext, failure := h.signWorkOrderWriteContext(session, route, decision, mutation.idempotencyKey)
+	site, err := h.resolveAuthoritativeSiteForDomain(request, session, route.siteID)
+	if err != nil {
+		h.writeWorkOrderFailure(writer, request, workOrderUnavailable("The authoritative Tenant scope for this Site could not be resolved."))
+		return
+	}
+	writeContext, failure := h.signWorkOrderWriteContext(session, route, decision, mutation.idempotencyKey, site.TenantID)
 	if failure != nil {
 		h.writeWorkOrderFailure(writer, request, *failure)
 		return
@@ -301,8 +306,8 @@ func boundedWorkOrderText(value string, maximum int) bool {
 	return trimmed != "" && len(trimmed) <= maximum
 }
 
-func (h *handler) signWorkOrderWriteContext(session bffSession, route publicWorkOrderRoute, decision workorderauth.Decision, idempotencyKey string) (string, *workOrderFailure) {
-	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.workOrder == nil {
+func (h *handler) signWorkOrderWriteContext(session bffSession, route publicWorkOrderRoute, decision workorderauth.Decision, idempotencyKey, tenantID string) (string, *workOrderFailure) {
+	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.workOrder == nil || !isLowerUUIDv7(tenantID) {
 		failure := workOrderUnavailable("Work Order write context signing is unavailable.")
 		return "", &failure
 	}
@@ -322,7 +327,7 @@ func (h *handler) signWorkOrderWriteContext(session bffSession, route publicWork
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
 		PrincipalID: decision.PrincipalID, DisplayName: session.Principal.DisplayName, Email: session.Principal.Email,
 		Roles: append([]string(nil), session.Principal.Roles...), ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
-		Audience: h.workOrder.backendAudience, ActingOrganizationID: session.ActingOrganizationID,
+		Audience: h.workOrder.backendAudience, ActingOrganizationID: session.ActingOrganizationID, TenantID: tenantID,
 		Actions: []string{string(route.action)}, Scopes: scopes, PolicyRevision: decision.PolicyRevision, SessionID: session.ID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	}

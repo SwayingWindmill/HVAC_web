@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
+	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/command-service/pkg/commandservice"
@@ -93,7 +94,7 @@ func main() {
 		logger.Error("command_http_configuration_invalid", "error_code", "COMMAND_HTTP_CONFIGURATION_INVALID")
 		os.Exit(1)
 	}
-	runtimeConfig, err := loadRuntimeHTTPConfig(store)
+	runtimeConfig, err := loadRuntimeHTTPConfig(store, telemetry.Metrics)
 	if err != nil {
 		logger.Error("command_runtime_cohort_load_failed", "error_code", "COMMAND_RUNTIME_COHORT_INVALID")
 		os.Exit(1)
@@ -115,9 +116,12 @@ func main() {
 		}
 		runtimeHandler.ServeHTTP(writer, request)
 	})
+	instrumentedRouter := observability.InstrumentHTTP(router, telemetry, observability.HTTPInstrumentationConfig{
+		Namespace: "hvac_command", Service: "command-service", SpanName: "http.command.request", Route: commandObservabilityRoute,
+	})
 	server := &http.Server{
 		Addr:              envOr("COMMAND_SERVICE_ADDR", ":8447"),
-		Handler:           router,
+		Handler:           instrumentedRouter,
 		TLSConfig:         serverTLSConfig,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
@@ -160,16 +164,18 @@ type runtimeCohortDocument struct {
 	Cohorts       []commandservice.RuntimeCohort `json:"cohorts"`
 }
 
-func loadRuntimeHTTPConfig(store commandservice.RuntimeStore) (commandservice.RuntimeHTTPConfig, error) {
+func loadRuntimeHTTPConfig(store commandservice.RuntimeStore, metrics *observability.Registry) (commandservice.RuntimeHTTPConfig, error) {
 	path := strings.TrimSpace(os.Getenv("COMMAND_RUNTIME_COHORTS_FILE"))
 	if path == "" {
 		return commandservice.RuntimeHTTPConfig{
 			Store:            store,
+			Metrics:          metrics,
 			DispatcherSPIFFE: envOr("COMMAND_DISPATCHER_SPIFFE", "spiffe://hvac.local/command-dispatcher"),
 			VerifierSPIFFE:   envOr("COMMAND_VERIFIER_SPIFFE", "spiffe://hvac.local/command-verifier"),
 			OrganizationID:   requiredEnv("COMMAND_APPROVED_ORGANIZATION_ID"),
 			SiteID:           requiredEnv("COMMAND_APPROVED_SITE_ID"),
 			DeviceID:         requiredEnv("COMMAND_APPROVED_DEVICE_ID"),
+			Capability:       commandmodel.Capability(requiredEnv("COMMAND_APPROVED_CAPABILITY")),
 		}, nil
 	}
 	if !filepath.IsAbs(path) {
@@ -193,7 +199,37 @@ func loadRuntimeHTTPConfig(store commandservice.RuntimeStore) (commandservice.Ru
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) || document.SchemaVersion != 1 || len(document.Cohorts) == 0 {
 		return commandservice.RuntimeHTTPConfig{}, errors.New("runtime cohort document is invalid")
 	}
-	return commandservice.RuntimeHTTPConfig{Store: store, Cohorts: document.Cohorts}, nil
+	return commandservice.RuntimeHTTPConfig{Store: store, Metrics: metrics, Cohorts: document.Cohorts}, nil
+}
+
+func commandObservabilityRoute(request *http.Request) string {
+	if request == nil {
+		return "unknown"
+	}
+	path := request.URL.Path
+	switch path {
+	case commandservice.InternalCommandsPath:
+		return "commands.create"
+	case commandservice.InternalDispatchClaimPath:
+		return "dispatch.claim"
+	case commandservice.InternalDispatchResolvePath:
+		return "dispatch.resolve"
+	case commandservice.InternalVerificationClaimPath:
+		return "verification.claim"
+	case commandservice.InternalVerificationResolvePath:
+		return "verification.resolve"
+	case commandservice.InternalConnectorPreparePath:
+		return "connector.prepare"
+	case commandservice.InternalConnectorCompletePath:
+		return "connector.complete"
+	}
+	if strings.HasPrefix(path, commandservice.InternalCommandsPath+"/") {
+		if strings.HasSuffix(path, ":approve") {
+			return "commands.approve"
+		}
+		return "commands.get"
+	}
+	return "unknown"
 }
 
 func loadRequiredValueFile(path string, maximumBytes int64) (string, error) {

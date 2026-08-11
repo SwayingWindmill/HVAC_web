@@ -35,8 +35,8 @@ func (authority *fakeHTTPAuthority) Submit(_ context.Context, request commandmod
 	intent := authority.intent
 	if intent.ID == "" {
 		intent = commandmodel.CommandIntent{
-			ID: "command-1", DeviceID: request.DeviceID, Capability: request.Capability,
-			CapabilityRevision: setpointCapabilityRevision, Status: commandmodel.IntentQueued,
+			ID: "command-1", DeviceID: request.DeviceID, PointID: request.PointID, Capability: request.Capability,
+			CapabilityRevision: setpointCapabilityRevision, Parameters: cloneParameters(request.Parameters), VerificationPointKey: request.VerificationPointKey, Status: commandmodel.IntentQueued,
 			Risk: commandmodel.RiskLow, ApprovalPolicy: commandmodel.ApprovalNone,
 			DeviceCommandSequence: 1, Version: 3, SnapshotRevision: request.CurrentState.BusinessRevision,
 			CreatedAt: time.Date(2026, 7, 26, 14, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 7, 26, 14, 0, 0, 0, time.UTC),
@@ -74,11 +74,12 @@ func TestCommandHTTPCreateRequiresExactIAMGrant(t *testing.T) {
 	handler := newCommandHTTPTestHandler(t, authority, iamSigner, gatewaySigner, now)
 	grant := signCommandTestGrant(t, iamSigner, now, commandmodel.AuthorizationCommandSubmit, "principal-1", "device-1")
 	body := internalCreateCommandRequest{
-		OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1", PrincipalID: "principal-1",
-		IdempotencyKey: "idempotency-1", Capability: commandmodel.CapabilitySetTemperatureSetpoint, SetpointC: 24,
+		TenantID: "tenant-1", OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1", PointID: "point-1", PrincipalID: "principal-1",
+		IdempotencyKey: "idempotency-1", Capability: commandmodel.CapabilitySetTemperatureSetpoint,
+		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}, VerificationPointKey: "zone.temperature_setpoint",
 		CurrentState: internalCurrentState{
 			EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Quality: "GOOD",
-			BusinessRevision: 17, CurrentTemperatureC: 23, ObservedAt: now.Add(-time.Second),
+			BusinessRevision: 17, CurrentValue: testFloat64Pointer(23), ObservedAt: now.Add(-time.Second),
 		},
 	}
 	encoded, _ := json.Marshal(body)
@@ -103,9 +104,10 @@ func TestCommandHTTPCreateRejectsApprovalGrantAndScopeDrift(t *testing.T) {
 	gatewaySigner := newECDSASigner(t)
 	handler := newCommandHTTPTestHandler(t, &fakeHTTPAuthority{}, iamSigner, gatewaySigner, now)
 	body := internalCreateCommandRequest{
-		OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1", PrincipalID: "principal-1",
-		IdempotencyKey: "idempotency-1", Capability: commandmodel.CapabilitySetTemperatureSetpoint, SetpointC: 24,
-		CurrentState: internalCurrentState{EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Quality: "GOOD", BusinessRevision: 17, CurrentTemperatureC: 23, ObservedAt: now},
+		TenantID: "tenant-1", OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1", PointID: "point-1", PrincipalID: "principal-1",
+		IdempotencyKey: "idempotency-1", Capability: commandmodel.CapabilitySetTemperatureSetpoint,
+		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}, VerificationPointKey: "zone.temperature_setpoint",
+		CurrentState: internalCurrentState{EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Quality: "GOOD", BusinessRevision: 17, CurrentValue: testFloat64Pointer(23), ObservedAt: now},
 	}
 	encoded, _ := json.Marshal(body)
 	for _, testCase := range []struct {
@@ -132,11 +134,11 @@ func TestCommandHTTPApprovalUsesExactGrantAndServerDerivedEvidence(t *testing.T)
 	iamSigner := newECDSASigner(t)
 	gatewaySigner := newECDSASigner(t)
 	authority := &fakeHTTPAuthority{intent: commandmodel.CommandIntent{
-		ID: "command-1", OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1", PrincipalID: "initiator-1",
+		ID: "command-1", OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1", PointID: "point-1", PrincipalID: "initiator-1",
 		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: setpointCapabilityRevision,
 		Status: commandmodel.IntentAwaitingApproval, Risk: commandmodel.RiskMedium,
 		RiskSnapshot:   commandmodel.RiskSnapshot{Level: commandmodel.RiskMedium, RuleRevision: "risk-v1", EvaluatedAt: now},
-		ApprovalPolicy: commandmodel.ApprovalSingleApprover, SetpointC: 24, PayloadHash: "payload-hash",
+		ApprovalPolicy: commandmodel.ApprovalSingleApprover, Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}, VerificationPointKey: "zone.temperature_setpoint", PayloadHash: "payload-hash",
 		DeviceCommandSequence: 2, Version: 3, SnapshotRevision: 18, CreatedAt: now, UpdatedAt: now,
 	}}
 	handler := newCommandHTTPTestHandler(t, authority, iamSigner, gatewaySigner, now)
@@ -174,7 +176,7 @@ func TestCommandHTTPReadRequiresSignedOrganizationAndCommandScopes(t *testing.T)
 	iamSigner := newECDSASigner(t)
 	gatewaySigner := newECDSASigner(t)
 	authority := &fakeHTTPAuthority{intent: commandmodel.CommandIntent{
-		ID: "command-1", DeviceID: "device-1", Capability: commandmodel.CapabilitySetTemperatureSetpoint,
+		ID: "command-1", DeviceID: "device-1", PointID: "point-1", Capability: commandmodel.CapabilitySetTemperatureSetpoint,
 		CapabilityRevision: setpointCapabilityRevision, Status: commandmodel.IntentAwaitingApproval,
 		Risk: commandmodel.RiskMedium, ApprovalPolicy: commandmodel.ApprovalSingleApprover,
 		DeviceCommandSequence: 2, Version: 3, SnapshotRevision: 18, CreatedAt: now, UpdatedAt: now,

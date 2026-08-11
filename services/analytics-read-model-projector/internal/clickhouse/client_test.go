@@ -28,6 +28,7 @@ func TestReaderListsOnlyUnprojectedCumulativeEnergyCandidates(t *testing.T) {
 		for _, required := range []string{
 			"FROM telemetry_history.observations",
 			"LEFT ANTI JOIN analytics.energy_interval_facts",
+			"PARTITION BY tenant_id, owning_organization_id, site_id, point_id, sensor_id, device_id, telemetry_key",
 			"telemetry_key = 'hvac_meter.energy'",
 			"acceptance_status = 'ACCEPTED'",
 			"AND isFinite(value_number)",
@@ -40,7 +41,7 @@ func TestReaderListsOnlyUnprojectedCumulativeEnergyCandidates(t *testing.T) {
 			}
 		}
 		writer.Header().Set("Content-Type", "application/x-ndjson")
-		_, _ = io.WriteString(writer, `{"previous_observation_id":"018f4e00-3000-7000-8000-000000000001","current_observation_id":"018f4e00-3000-7000-8000-000000000002","organization_id":"018f4e00-0000-7000-8000-000000000001","site_id":"018f4e00-1000-7000-8000-000000000001","device_id":"018f4e00-2000-7000-8000-000000000001","telemetry_key":"hvac_meter.energy","previous_value":100.25,"current_value":103,"previous_quality":"GOOD","current_quality":"SUSPECT","previous_quality_reasons":[],"current_quality_reasons":["SOURCE_LAG_EXCEEDED"],"previous_sampled_at":"2026-07-29T12:55:00.000Z","current_sampled_at":"2026-07-29T13:00:00.000Z","source_offset":1722258003000}`+"\n")
+		_, _ = io.WriteString(writer, `{"previous_observation_id":"018f4e00-3000-7000-8000-000000000001","current_observation_id":"018f4e00-3000-7000-8000-000000000002","tenant_id":"018f4d00-0000-7000-8000-000000000001","organization_id":"018f4e00-0000-7000-8000-000000000001","site_id":"018f4e00-1000-7000-8000-000000000001","device_id":"018f4e00-2000-7000-8000-000000000001","point_id":"018f4e00-2100-7000-8000-000000000001","sensor_id":"018f4e00-2200-7000-8000-000000000001","telemetry_key":"hvac_meter.energy","previous_value":100.25,"current_value":103,"previous_quality":"GOOD","current_quality":"SUSPECT","previous_quality_reasons":[],"current_quality_reasons":["SOURCE_LAG_EXCEEDED"],"previous_sampled_at":"2026-07-29T12:55:00.000Z","current_sampled_at":"2026-07-29T13:00:00.000Z","source_offset":1722258003000}`+"\n")
 	}))
 	defer server.Close()
 
@@ -163,12 +164,16 @@ func TestWriterSurfacesClickHouseFailure(t *testing.T) {
 }
 
 func validCandidate() energy.Candidate {
+	sensorID := "018f4e00-2200-7000-8000-000000000001"
 	return energy.Candidate{
 		PreviousObservationID: "018f4e00-3000-7000-8000-000000000001",
 		CurrentObservationID:  "018f4e00-3000-7000-8000-000000000002",
+		TenantID:              "018f4d00-0000-7000-8000-000000000001",
 		OrganizationID:        "018f4e00-0000-7000-8000-000000000001",
 		SiteID:                "018f4e00-1000-7000-8000-000000000001",
 		DeviceID:              "018f4e00-2000-7000-8000-000000000001",
+		PointID:               "018f4e00-2100-7000-8000-000000000001",
+		SensorID:              &sensorID,
 		TelemetryKey:          energy.CumulativeElectricityTelemetryKey,
 		PreviousValue:         100.25,
 		CurrentValue:          103,

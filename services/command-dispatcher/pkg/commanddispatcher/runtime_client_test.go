@@ -23,7 +23,7 @@ func TestRuntimeClientClaimsAndResolvesDispatch(t *testing.T) {
 	envelope := commandmodel.DispatchEnvelope{
 		CommandID: "command-1", AttemptID: "attempt-1", OrganizationID: runtimeClientTestOrganization, SiteID: runtimeClientTestSite, DeviceID: runtimeClientTestDevice,
 		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: "capability:set-temperature-setpoint:v1",
-		SetpointC: 22, PayloadHash: "hash", ExecutionFence: 1, DeviceCommandSequence: 1, LeaseOwner: "dispatcher-a", LeaseUntil: time.Now().UTC().Add(time.Minute),
+		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 22}, PayloadHash: "hash", ExecutionFence: 1, DeviceCommandSequence: 1, LeaseOwner: "dispatcher-a", LeaseUntil: time.Now().UTC().Add(time.Minute),
 	}
 	resolved := false
 	prepared := false

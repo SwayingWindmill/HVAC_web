@@ -20,8 +20,8 @@ func (store *PostgresStore) ClaimDispatch(ctx context.Context, organizationID, l
 	return store.claimDispatch(ctx, organizationID, unrestrictedCommandCohort(), leaseOwner, leaseFor)
 }
 
-func (store *PostgresStore) ClaimDispatchForCohort(ctx context.Context, organizationID, siteID, deviceID, leaseOwner string, leaseFor time.Duration) (commandmodel.DispatchEnvelope, error) {
-	scope, err := exactCommandCohort(siteID, deviceID)
+func (store *PostgresStore) ClaimDispatchForCohort(ctx context.Context, organizationID, siteID, deviceID string, capability commandmodel.Capability, leaseOwner string, leaseFor time.Duration) (commandmodel.DispatchEnvelope, error) {
+	scope, err := exactCommandCohort(siteID, deviceID, capability)
 	if err != nil {
 		return commandmodel.DispatchEnvelope{}, err
 	}
@@ -70,18 +70,19 @@ func (store *PostgresStore) claimDispatchOnce(ctx context.Context, organizationI
 	var outboxID string
 	var intent commandmodel.CommandIntent
 	var capability string
+	var parameters []byte
 	err = tx.QueryRow(ctx, `
 SELECT o.outbox_id::text,
-       i.command_id::text, i.organization_id::text, i.site_id::text, i.device_id::text,
+       i.command_id::text, i.organization_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
        i.capability_name, i.capability_revision,
-       (i.canonical_parameters ->> 'setpointC')::double precision,
+       i.canonical_parameters,
        i.payload_hash, i.device_command_sequence, i.version
 FROM command_runtime.command_dispatch_outbox o
 JOIN command_runtime.command_intents i ON i.command_id = o.command_id
 JOIN command_runtime.device_control_state d
   ON d.organization_id = i.organization_id AND d.device_id = i.device_id
 WHERE o.organization_id = $1::uuid
-  AND (NOT $4 OR (i.site_id = $5::uuid AND i.device_id = $6::uuid))
+  AND (NOT $4 OR (i.site_id = $5::uuid AND i.device_id = $6::uuid AND i.capability_name = $7))
   AND o.delivered_at IS NULL
   AND o.available_at <= $2
   AND (o.lease_until IS NULL OR o.lease_until <= $2)
@@ -117,9 +118,9 @@ WHERE o.organization_id = $1::uuid
 ORDER BY o.created_at, o.outbox_id
 FOR UPDATE OF o SKIP LOCKED
 LIMIT 1
-`, organizationID, now, setpointControlGroup, scope.enforced, scope.querySiteID(), scope.queryDeviceID()).Scan(
-		&outboxID, &intent.ID, &intent.OrganizationID, &intent.SiteID, &intent.DeviceID,
-		&capability, &intent.CapabilityRevision, &intent.SetpointC,
+`, organizationID, now, setpointControlGroup, scope.enforced, scope.querySiteID(), scope.queryDeviceID(), scope.queryCapability()).Scan(
+		&outboxID, &intent.ID, &intent.OrganizationID, &intent.SiteID, &intent.DeviceID, &intent.PointID,
+		&capability, &intent.CapabilityRevision, &parameters,
 		&intent.PayloadHash, &intent.DeviceCommandSequence, &intent.Version,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -130,6 +131,9 @@ LIMIT 1
 	}
 	if err != nil {
 		return commandmodel.DispatchEnvelope{}, fmt.Errorf("select governed dispatch outbox: %w", err)
+	}
+	if err := json.Unmarshal(parameters, &intent.Parameters); err != nil {
+		return commandmodel.DispatchEnvelope{}, fmt.Errorf("decode governed command parameters: %w", err)
 	}
 	intent.Capability = commandmodel.Capability(capability)
 
@@ -215,8 +219,8 @@ WHERE organization_id = $1::uuid AND outbox_id = $2::uuid AND delivered_at IS NU
 	}
 	return commandmodel.DispatchEnvelope{
 		CommandID: intent.ID, AttemptID: attemptID, OrganizationID: intent.OrganizationID,
-		SiteID: intent.SiteID, DeviceID: intent.DeviceID, Capability: intent.Capability,
-		CapabilityRevision: intent.CapabilityRevision, SetpointC: intent.SetpointC,
+		SiteID: intent.SiteID, DeviceID: intent.DeviceID, PointID: intent.PointID, Capability: intent.Capability,
+		CapabilityRevision: intent.CapabilityRevision, Parameters: cloneParameters(intent.Parameters),
 		PayloadHash: intent.PayloadHash, ExecutionFence: executionFence,
 		DeviceCommandSequence: intent.DeviceCommandSequence, LeaseOwner: leaseOwner, LeaseUntil: leaseUntil,
 	}, nil
@@ -270,7 +274,7 @@ func (store *PostgresStore) resolveDispatchOnce(ctx context.Context, envelope co
 	var leaseUntil time.Time
 	var outboxID string
 	err = tx.QueryRow(ctx, `
-SELECT i.command_id::text, i.organization_id::text, i.site_id::text, i.device_id::text,
+SELECT i.command_id::text, i.organization_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
        i.payload_hash, i.version, i.active_execution_fence, i.status,
        a.status, a.version, a.execution_fence, a.payload_hash, a.lease_owner, a.lease_until,
        o.outbox_id::text
@@ -281,7 +285,7 @@ JOIN command_runtime.command_dispatch_outbox o
 WHERE i.organization_id = $1::uuid AND i.command_id = $2::uuid AND a.attempt_id = $3::uuid
 FOR UPDATE OF i, a, o
 `, envelope.OrganizationID, envelope.CommandID, envelope.AttemptID).Scan(
-		&intent.ID, &intent.OrganizationID, &intent.SiteID, &intent.DeviceID,
+		&intent.ID, &intent.OrganizationID, &intent.SiteID, &intent.DeviceID, &intent.PointID,
 		&intent.PayloadHash, &intent.Version, &activeFence, &intent.Status,
 		&attemptStatus, &attemptVersion, &attemptFence, &attemptPayloadHash, &leaseOwner, &leaseUntil,
 		&outboxID,
@@ -303,7 +307,7 @@ FOR UPDATE
 	}
 	if attemptStatus != string(commandmodel.AttemptPrepared) || intent.Status != commandmodel.IntentDispatching ||
 		attemptFence != envelope.ExecutionFence || activeFence != envelope.ExecutionFence || deviceFence != envelope.ExecutionFence ||
-		attemptPayloadHash != envelope.PayloadHash || intent.PayloadHash != envelope.PayloadHash || leaseOwner != envelope.LeaseOwner {
+		intent.PointID != envelope.PointID || attemptPayloadHash != envelope.PayloadHash || intent.PayloadHash != envelope.PayloadHash || leaseOwner != envelope.LeaseOwner {
 		return ErrStaleFence
 	}
 	if result.Phase != commandmodel.ConnectorPreSendRejected && strings.TrimSpace(result.EvidenceID) == "" {

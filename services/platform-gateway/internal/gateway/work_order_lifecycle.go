@@ -52,7 +52,12 @@ func dispatchWorkOrderLifecycleRoute(h *handler, writer http.ResponseWriter, req
 		h.writeWorkOrderFailure(writer, request, *failure)
 		return
 	}
-	writeContext, failure := h.signWorkOrderWriteContext(session, route, decision, mutation.idempotencyKey)
+	site, err := h.resolveAuthoritativeSiteForDomain(request, session, route.siteID)
+	if err != nil {
+		h.writeWorkOrderFailure(writer, request, workOrderUnavailable("The authoritative Tenant scope for this Site could not be resolved."))
+		return
+	}
+	writeContext, failure := h.signWorkOrderWriteContext(session, route, decision, mutation.idempotencyKey, site.TenantID)
 	if failure != nil {
 		h.writeWorkOrderFailure(writer, request, *failure)
 		return

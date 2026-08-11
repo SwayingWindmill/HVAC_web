@@ -2,6 +2,7 @@ package commandservice
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -15,8 +16,8 @@ func (store *PostgresStore) ClaimVerification(ctx context.Context, organizationI
 	return store.claimVerification(ctx, organizationID, unrestrictedCommandCohort(), leaseOwner, leaseFor)
 }
 
-func (store *PostgresStore) ClaimVerificationForCohort(ctx context.Context, organizationID, siteID, deviceID, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
-	scope, err := exactCommandCohort(siteID, deviceID)
+func (store *PostgresStore) ClaimVerificationForCohort(ctx context.Context, organizationID, siteID, deviceID string, capability commandmodel.Capability, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
+	scope, err := exactCommandCohort(siteID, deviceID, capability)
 	if err != nil {
 		return commandmodel.VerificationEnvelope{}, err
 	}
@@ -58,10 +59,11 @@ func (store *PostgresStore) claimVerificationOnce(ctx context.Context, organizat
 
 	var envelope commandmodel.VerificationEnvelope
 	var capability string
+	var parameters []byte
 	var attemptVersion uint64
 	err = tx.QueryRow(ctx, `
-SELECT i.command_id::text, a.attempt_id::text, i.organization_id::text, i.site_id::text, i.device_id::text,
-       i.capability_name, i.capability_revision, (i.canonical_parameters ->> 'setpointC')::double precision,
+SELECT i.command_id::text, a.attempt_id::text, i.organization_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
+       i.capability_name, i.capability_revision, i.canonical_parameters, i.verification_point_key,
        i.payload_hash, a.execution_fence, i.snapshot_revision,
        a.acknowledged_at, a.verification_deadline, a.connector_evidence_id, a.version
 FROM command_runtime.command_intents i
@@ -69,7 +71,7 @@ JOIN command_runtime.command_attempts a ON a.command_id = i.command_id
 JOIN command_runtime.device_control_state d
   ON d.organization_id = i.organization_id AND d.device_id = i.device_id
 WHERE i.organization_id = $1::uuid
-  AND (NOT $4 OR (i.site_id = $5::uuid AND i.device_id = $6::uuid))
+  AND (NOT $4 OR (i.site_id = $5::uuid AND i.device_id = $6::uuid AND i.capability_name = $7))
   AND i.status = 'DISPATCHING'
   AND a.status = 'ACKNOWLEDGED'
   AND a.execution_fence = i.active_execution_fence
@@ -79,9 +81,9 @@ WHERE i.organization_id = $1::uuid
 ORDER BY a.acknowledged_at, a.attempt_id
 FOR UPDATE OF i, a SKIP LOCKED
 LIMIT 1
-`, organizationID, now, setpointControlGroup, scope.enforced, scope.querySiteID(), scope.queryDeviceID()).Scan(
-		&envelope.CommandID, &envelope.AttemptID, &envelope.OrganizationID, &envelope.SiteID, &envelope.DeviceID,
-		&capability, &envelope.CapabilityRevision, &envelope.SetpointC,
+`, organizationID, now, setpointControlGroup, scope.enforced, scope.querySiteID(), scope.queryDeviceID(), scope.queryCapability()).Scan(
+		&envelope.CommandID, &envelope.AttemptID, &envelope.OrganizationID, &envelope.SiteID, &envelope.DeviceID, &envelope.PointID,
+		&capability, &envelope.CapabilityRevision, &parameters, &envelope.VerificationPointKey,
 		&envelope.PayloadHash, &envelope.ExecutionFence, &envelope.BaselineBusinessRevision,
 		&envelope.AcknowledgedAt, &envelope.VerificationDeadline, &envelope.ConnectorEvidenceID, &attemptVersion,
 	)
@@ -93,6 +95,9 @@ LIMIT 1
 	}
 	if err != nil {
 		return commandmodel.VerificationEnvelope{}, fmt.Errorf("select acknowledged verification work: %w", err)
+	}
+	if err := json.Unmarshal(parameters, &envelope.Parameters); err != nil {
+		return commandmodel.VerificationEnvelope{}, fmt.Errorf("decode verification command parameters: %w", err)
 	}
 	envelope.Capability = commandmodel.Capability(capability)
 	leaseUntil := now.Add(leaseFor).UTC().Truncate(time.Microsecond)
@@ -157,12 +162,13 @@ func (store *PostgresStore) resolveVerificationOnce(ctx context.Context, envelop
 
 	var intent commandmodel.CommandIntent
 	var capability, attemptStatus, attemptPayloadHash, connectorEvidenceID string
+	var parameters []byte
 	var activeFence, attemptFence, attemptVersion uint64
 	var acknowledgedAt, verificationDeadline, verificationLeaseUntil time.Time
 	var verificationLeaseOwner string
 	err = tx.QueryRow(ctx, `
-SELECT i.command_id::text, i.organization_id::text, i.site_id::text, i.device_id::text,
-       i.capability_name, i.capability_revision, (i.canonical_parameters ->> 'setpointC')::double precision,
+SELECT i.command_id::text, i.organization_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
+       i.capability_name, i.capability_revision, i.canonical_parameters, i.verification_point_key,
        i.payload_hash, i.snapshot_revision, i.version, i.status, i.active_execution_fence,
        a.status, a.version, a.execution_fence, a.payload_hash, a.connector_evidence_id,
        a.acknowledged_at, a.verification_deadline, a.verification_lease_owner, a.verification_lease_until
@@ -171,8 +177,8 @@ JOIN command_runtime.command_attempts a ON a.command_id = i.command_id
 WHERE i.organization_id = $1::uuid AND i.command_id = $2::uuid AND a.attempt_id = $3::uuid
 FOR UPDATE OF i, a
 `, envelope.OrganizationID, envelope.CommandID, envelope.AttemptID).Scan(
-		&intent.ID, &intent.OrganizationID, &intent.SiteID, &intent.DeviceID,
-		&capability, &intent.CapabilityRevision, &intent.SetpointC,
+		&intent.ID, &intent.OrganizationID, &intent.SiteID, &intent.DeviceID, &intent.PointID,
+		&capability, &intent.CapabilityRevision, &parameters, &intent.VerificationPointKey,
 		&intent.PayloadHash, &intent.SnapshotRevision, &intent.Version, &intent.Status, &activeFence,
 		&attemptStatus, &attemptVersion, &attemptFence, &attemptPayloadHash, &connectorEvidenceID,
 		&acknowledgedAt, &verificationDeadline, &verificationLeaseOwner, &verificationLeaseUntil,
@@ -183,13 +189,17 @@ FOR UPDATE OF i, a
 	if err != nil {
 		return fmt.Errorf("lock verification resolution state: %w", err)
 	}
+	if err := json.Unmarshal(parameters, &intent.Parameters); err != nil {
+		return fmt.Errorf("decode verification resolution parameters: %w", err)
+	}
 	intent.Capability = commandmodel.Capability(capability)
 	if intent.Status != commandmodel.IntentDispatching || attemptStatus != string(commandmodel.AttemptAcknowledged) ||
 		activeFence != envelope.ExecutionFence || attemptFence != envelope.ExecutionFence ||
-		intent.PayloadHash != envelope.PayloadHash || attemptPayloadHash != envelope.PayloadHash ||
+		intent.PointID != envelope.PointID || intent.PayloadHash != envelope.PayloadHash || attemptPayloadHash != envelope.PayloadHash ||
 		verificationLeaseOwner != envelope.LeaseOwner || !verificationLeaseUntil.Equal(envelope.LeaseUntil) ||
 		connectorEvidenceID != envelope.ConnectorEvidenceID || !acknowledgedAt.Equal(envelope.AcknowledgedAt) ||
-		!verificationDeadline.Equal(envelope.VerificationDeadline) || intent.SnapshotRevision != envelope.BaselineBusinessRevision {
+		!verificationDeadline.Equal(envelope.VerificationDeadline) || intent.SnapshotRevision != envelope.BaselineBusinessRevision ||
+		intent.VerificationPointKey != envelope.VerificationPointKey {
 		return ErrStaleFence
 	}
 

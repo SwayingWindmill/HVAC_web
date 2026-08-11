@@ -12,7 +12,7 @@ import (
 func TestSetpointVerifierRequiresNewFreshReportedState(t *testing.T) {
 	envelope := verificationEnvelope()
 	reader := &verificationReader{evidenceID: "s2-evidence-1", reported: validReportedState(envelope)}
-	result, err := NewSetpointReportedStateVerifier(reader).Verify(context.Background(), envelope)
+	result, err := NewAuthoritativeReportedStateVerifier(reader).Verify(context.Background(), envelope)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,24 +21,62 @@ func TestSetpointVerifierRequiresNewFreshReportedState(t *testing.T) {
 	}
 
 	reader.reported.BusinessRevision = envelope.BaselineBusinessRevision
-	result, err = NewSetpointReportedStateVerifier(reader).Verify(context.Background(), envelope)
+	result, err = NewAuthoritativeReportedStateVerifier(reader).Verify(context.Background(), envelope)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Outcome != commandmodel.VerificationInconclusive || result.FailureCode != "REPORTED_STATE_INCONCLUSIVE" {
+	if result.Outcome != commandmodel.VerificationTimedOut || result.FailureCode != "REPORTED_STATE_VERIFICATION_TIMED_OUT" {
 		t.Fatalf("stale business revision was accepted: %#v", result)
+	}
+}
+
+func TestSetpointVerifierWaitsForNewReportedStateWithinDeadline(t *testing.T) {
+	envelope := verificationEnvelope()
+	envelope.AcknowledgedAt = time.Now().UTC().Add(-2 * time.Second)
+	envelope.VerificationDeadline = time.Now().UTC().Add(2 * time.Second)
+	stale := validReportedState(envelope)
+	stale.BusinessRevision = envelope.BaselineBusinessRevision
+	reader := &verificationReader{
+		evidenceID:       "s2-evidence-retry",
+		reportedSequence: []commandmodel.ReportedStateEvidence{stale, validReportedState(envelope)},
+	}
+	result, err := NewAuthoritativeReportedStateVerifier(reader).Verify(context.Background(), envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != commandmodel.VerificationSucceeded || reader.calls < 2 {
+		t.Fatalf("verifier did not wait for authoritative reported state: result=%#v calls=%d", result, reader.calls)
+	}
+}
+
+func TestSetpointVerifierWaitsForSetpointConvergenceWithinDeadline(t *testing.T) {
+	envelope := verificationEnvelope()
+	envelope.AcknowledgedAt = time.Now().UTC().Add(-2 * time.Second)
+	envelope.VerificationDeadline = time.Now().UTC().Add(2 * time.Second)
+	mismatch := validReportedState(envelope)
+	mismatch.ReportedValue = commandmodel.NumberScalar(envelope.Parameters[commandmodel.ParameterSetpointC] - 1)
+	reader := &verificationReader{
+		evidenceID:       "s2-evidence-converge",
+		reportedSequence: []commandmodel.ReportedStateEvidence{mismatch, validReportedState(envelope)},
+	}
+	result, err := NewAuthoritativeReportedStateVerifier(reader).Verify(context.Background(), envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != commandmodel.VerificationSucceeded || reader.calls < 2 {
+		t.Fatalf("verifier did not wait for setpoint convergence: result=%#v calls=%d", result, reader.calls)
 	}
 }
 
 func TestSetpointVerifierClassifiesMismatch(t *testing.T) {
 	envelope := verificationEnvelope()
 	reported := validReportedState(envelope)
-	reported.ReportedSetpointC = envelope.SetpointC - 1
-	result, err := NewSetpointReportedStateVerifier(&verificationReader{evidenceID: "s2-evidence-2", reported: reported}).Verify(context.Background(), envelope)
+	reported.ReportedValue = commandmodel.NumberScalar(envelope.Parameters[commandmodel.ParameterSetpointC] - 1)
+	result, err := NewAuthoritativeReportedStateVerifier(&verificationReader{evidenceID: "s2-evidence-2", reported: reported}).Verify(context.Background(), envelope)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Outcome != commandmodel.VerificationMismatch || result.FailureCode != "REPORTED_SETPOINT_MISMATCH" {
+	if result.Outcome != commandmodel.VerificationMismatch || result.FailureCode != "REPORTED_VALUE_MISMATCH" {
 		t.Fatalf("mismatch classification=%#v", result)
 	}
 }
@@ -74,12 +112,22 @@ func TestDurableVerificationWorkerDoesNotResolveReadFailure(t *testing.T) {
 }
 
 type verificationReader struct {
-	evidenceID string
-	reported   commandmodel.ReportedStateEvidence
-	err        error
+	evidenceID       string
+	reported         commandmodel.ReportedStateEvidence
+	reportedSequence []commandmodel.ReportedStateEvidence
+	calls            int
+	err              error
 }
 
 func (reader *verificationReader) ReadReportedState(context.Context, commandmodel.VerificationEnvelope) (string, commandmodel.ReportedStateEvidence, error) {
+	reader.calls++
+	if len(reader.reportedSequence) > 0 {
+		index := reader.calls - 1
+		if index >= len(reader.reportedSequence) {
+			index = len(reader.reportedSequence) - 1
+		}
+		return reader.evidenceID, reader.reportedSequence[index], reader.err
+	}
 	return reader.evidenceID, reader.reported, reader.err
 }
 
@@ -121,7 +169,8 @@ func verificationEnvelope() commandmodel.VerificationEnvelope {
 	return commandmodel.VerificationEnvelope{
 		CommandID: "command-1", AttemptID: "attempt-1", OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
 		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: "capability:set-temperature-setpoint:v1",
-		SetpointC: 24, PayloadHash: "payload-hash", ExecutionFence: 7, BaselineBusinessRevision: 17,
+		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}, VerificationPointKey: "zone.temperature_setpoint",
+		PayloadHash: "payload-hash", ExecutionFence: 7, BaselineBusinessRevision: 17,
 		AcknowledgedAt: acknowledgedAt, VerificationDeadline: acknowledgedAt.Add(2 * time.Minute),
 		LeaseOwner: "verifier-a", LeaseUntil: acknowledgedAt.Add(10 * time.Second), ConnectorEvidenceID: "provider-ack-1",
 	}
@@ -131,7 +180,7 @@ func validReportedState(envelope commandmodel.VerificationEnvelope) commandmodel
 	return commandmodel.ReportedStateEvidence{
 		OrganizationID: envelope.OrganizationID, SiteID: envelope.SiteID, DeviceID: envelope.DeviceID,
 		EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
-		BusinessRevision: envelope.BaselineBusinessRevision + 1, ReportedSetpointC: envelope.SetpointC,
+		BusinessRevision: envelope.BaselineBusinessRevision + 1, ReportedValue: commandmodel.NumberScalar(envelope.Parameters[commandmodel.ParameterSetpointC]),
 		ObservedAt: envelope.AcknowledgedAt.Add(time.Second),
 	}
 }

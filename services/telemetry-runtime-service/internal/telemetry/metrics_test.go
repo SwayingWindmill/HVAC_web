@@ -30,9 +30,10 @@ func TestS2MetricsUseBoundedLabelsAndBaseUnits(t *testing.T) {
 	registry := observability.NewRegistry()
 	metrics := newS2Metrics(registry, func() time.Time { return now })
 	metrics.observeRequest(InternalBatchSnapshotPath, 200, 250*time.Millisecond)
-	metrics.observeRequest(InternalThingsBoardObservationPath, 200, 5*time.Millisecond)
+	metrics.observeRequest(InternalSourceObservationPath, 200, 5*time.Millisecond)
 	metrics.observeIngest("rejected", "scope")
-	metrics.observeSourceLag(now.Add(-3*time.Second), now, "rejected")
+	metrics.observeSourceLag("thingsboard", "rejected", now.Add(-3*time.Second), now)
+	metrics.observeDataQuality(ObservationReceipt{Status: ObservationAccepted, Quality: QualityGood})
 	metrics.observeQuarantine("scope")
 	metrics.observeRecovery("success", "none", 10*time.Millisecond)
 	metrics.observeInvariant("revision_gap")
@@ -45,6 +46,7 @@ func TestS2MetricsUseBoundedLabelsAndBaseUnits(t *testing.T) {
 		"hvac_s2_snapshot_requests_total",
 		"hvac_s2_snapshot_duration_seconds",
 		"hvac_s2_source_lag_seconds",
+		"hvac_s2_data_quality_records_total",
 		"hvac_s2_quarantine_records_total",
 		"hvac_s2_recovery_attempts_total",
 		"hvac_s2_security_zero_invariant_total",

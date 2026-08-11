@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
@@ -20,7 +21,7 @@ func TestPostgresMutationsAreAtomicIdempotentRestartSafeAndScoped(t *testing.T) 
 	if databaseURL == "" || mutationDatabaseURL == "" || adminURL == "" {
 		t.Skip("S5 Work Order PostgreSQL URLs are not configured")
 	}
-	ctx := context.Background()
+	ctx := identitycontext.WithTenantID(context.Background(), postgresTenantID)
 	admin, err := pgx.Connect(ctx, adminURL)
 	if err != nil {
 		t.Fatal(err)
@@ -98,8 +99,8 @@ func TestPostgresMutationsAreAtomicIdempotentRestartSafeAndScoped(t *testing.T) 
 	if _, err := store.Assign(ctx, postgresOrganizationID, postgresSiteID, postgresMutationWorkOrderID, stale); !errors.Is(err, workordermodel.ErrVersionConflict) {
 		t.Fatalf("stale assignment error=%v", err)
 	}
-	if _, err := store.Assign(ctx, postgresOtherOrganizationID, postgresSiteID, postgresMutationWorkOrderID, assignment); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("cross-Organization assignment disclosed resource: %v", err)
+	if _, err := store.Assign(ctx, postgresOtherOrganizationID, postgresSiteID, postgresMutationWorkOrderID, assignment); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("cross-Tenant Organization assignment did not fail closed: %v", err)
 	}
 	start := LifecycleMutation{
 		Operation: workordermodel.OperationStart, ExpectedVersion: 2, Reason: "begin repair",

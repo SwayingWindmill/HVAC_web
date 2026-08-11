@@ -1,6 +1,7 @@
 package identitycontext
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rand"
@@ -41,6 +42,7 @@ type DelegationClaims struct {
 	ExecutingService     string   `json:"executingService"`
 	Audience             string   `json:"audience"`
 	ActingOrganizationID string   `json:"actingOrganizationId"`
+	TenantID             string   `json:"tenantId,omitempty"`
 	Actions              []string `json:"actions"`
 	Scopes               []string `json:"scopes"`
 	PolicyRevision       string   `json:"policyRevision"`
@@ -63,6 +65,21 @@ type InternalPrincipalResponse struct {
 	Principal     UserPrincipal          `json:"principal"`
 	Context       PrincipalContext       `json:"context"`
 	Authorization EffectiveAuthorization `json:"authorization"`
+}
+
+type tenantContextKey struct{}
+
+func WithTenantID(ctx context.Context, tenantID string) context.Context {
+	return context.WithValue(ctx, tenantContextKey{}, strings.TrimSpace(tenantID))
+}
+
+func TenantIDFromContext(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	tenantID, ok := ctx.Value(tenantContextKey{}).(string)
+	tenantID = strings.TrimSpace(tenantID)
+	return tenantID, ok && tenantID != ""
 }
 
 func (response InternalPrincipalResponse) Validate() error {

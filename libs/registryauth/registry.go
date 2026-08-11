@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	GrantVersion            = 1
+	GrantVersion            = 2
 	MaximumGrantLifetime    = 30 * time.Second
 	MaximumEncodedGrantSize = 64 << 10
 	GrantStatusPath         = "/internal/v1/registry-read/grant-status"
@@ -150,6 +150,7 @@ type Decision struct {
 	PrincipalID            string     `json:"principalId"`
 	SubjectIssuer          string     `json:"subjectIssuer"`
 	Subject                string     `json:"subject"`
+	TenantID               string     `json:"tenantId"`
 	ActingOrganizationID   string     `json:"actingOrganizationId"`
 	AllowedOrganizationIDs []string   `json:"allowedOrganizationIds"`
 	AllowedSiteIDs         []string   `json:"allowedSiteIds"`
@@ -174,6 +175,7 @@ type GrantClaims struct {
 	PrincipalID            string     `json:"principalId"`
 	SubjectIssuer          string     `json:"subjectIssuer"`
 	Subject                string     `json:"subject"`
+	TenantID               string     `json:"tenantId"`
 	ActingOrganizationID   string     `json:"actingOrganizationId"`
 	AllowedOrganizationIDs []string   `json:"allowedOrganizationIds"`
 	AllowedSiteIDs         []string   `json:"allowedSiteIds"`
@@ -281,8 +283,11 @@ func ValidateGrant(claims GrantClaims, validation GrantValidation) error {
 	if claims.ExpiresAt <= validation.Now.Unix() || time.Duration(claims.ExpiresAt-claims.IssuedAt)*time.Second > MaximumGrantLifetime {
 		return errors.New("registry grant is expired or too long-lived")
 	}
-	if claims.PrincipalID == "" || claims.SubjectIssuer == "" || claims.Subject == "" || claims.ActingOrganizationID == "" || claims.SessionID == "" || claims.ParentTokenID == "" || claims.TokenID == "" {
+	if claims.PrincipalID == "" || claims.SubjectIssuer == "" || claims.Subject == "" || claims.TenantID == "" || claims.ActingOrganizationID == "" || claims.SessionID == "" || claims.ParentTokenID == "" || claims.TokenID == "" {
 		return errors.New("registry grant identity fields are incomplete")
+	}
+	if !validUUIDv7(claims.TenantID) {
+		return errors.New("registry grant tenant identifier is invalid")
 	}
 	if len(claims.TokenID) > MaximumGrantTokenIDSize {
 		return errors.New("registry grant token identifier is too large")

@@ -25,7 +25,7 @@ func TestGatewayWorkOrderStartUsesExactLifecycleActionAndKeyBoundWriteContext(t 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if fixture.iamCalls.Load() != 1 || fixture.workOrderCalls.Load() != 2 || fixture.lastUpstreamPath.Load() != "/internal/v1/sites/"+gatewayWorkOrderSiteID+"/work-orders/"+gatewayWorkOrderID+":start" || fixture.lastUpstreamIdempotency.Load() != "start-gateway-0001" {
+	if fixture.iamCalls.Load() != 2 || fixture.workOrderCalls.Load() != 2 || fixture.lastUpstreamPath.Load() != "/internal/v1/sites/"+gatewayWorkOrderSiteID+"/work-orders/"+gatewayWorkOrderID+":start" || fixture.lastUpstreamIdempotency.Load() != "start-gateway-0001" {
 		t.Fatalf("iam=%d backend=%d path=%q key=%q", fixture.iamCalls.Load(), fixture.workOrderCalls.Load(), fixture.lastUpstreamPath.Load(), fixture.lastUpstreamIdempotency.Load())
 	}
 	var started workordermodel.WorkOrder
@@ -46,7 +46,7 @@ func TestGatewayWorkOrderLifecycleRejectsImmutableDownstreamDrift(t *testing.T) 
 	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), "WORK_ORDER_UNAVAILABLE") {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if fixture.iamCalls.Load() != 1 || fixture.workOrderCalls.Load() != 2 {
+	if fixture.iamCalls.Load() != 2 || fixture.workOrderCalls.Load() != 2 {
 		t.Fatalf("iam=%d backend=%d", fixture.iamCalls.Load(), fixture.workOrderCalls.Load())
 	}
 }

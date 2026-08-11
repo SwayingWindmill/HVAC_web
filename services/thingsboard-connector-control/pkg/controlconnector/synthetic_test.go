@@ -58,7 +58,7 @@ func validEnvelope(fence uint64) commandmodel.DispatchEnvelope {
 		DeviceID:              "device-1",
 		Capability:            commandmodel.CapabilitySetTemperatureSetpoint,
 		CapabilityRevision:    "capability:set-temperature-setpoint:v1",
-		SetpointC:             24,
+		Parameters:            commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24},
 		PayloadHash:           "payload-hash",
 		ExecutionFence:        fence,
 		DeviceCommandSequence: 1,

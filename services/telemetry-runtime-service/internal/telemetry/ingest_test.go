@@ -8,8 +8,9 @@ import (
 )
 
 const (
-	integrationA = "018f2e00-6000-7000-8000-000000000001"
-	eventA       = "018f2e00-8000-7000-8000-000000000011"
+	ingestTenantA = "018f2d00-0000-7000-8000-000000000001"
+	integrationA  = "018f2e00-6000-7000-8000-000000000001"
+	eventA        = "018f2e00-8000-7000-8000-000000000011"
 )
 
 func TestEvaluateObservationFailsClosedOnMapping(t *testing.T) {
@@ -162,9 +163,15 @@ func validObservationCandidate(now time.Time) ObservationCandidate {
 
 func validObservationFacts() ObservationFacts {
 	unit := "Cel"
+	sensorID := "018f2e00-3200-7000-8000-000000000001"
 	minimum, maximum := -50.0, 100.0
 	return ObservationFacts{
 		Bindings: []RuntimeBinding{bindingWithStatus("ACTIVE")},
+		PointBindings: []RuntimePointBinding{{
+			TenantID: ingestTenantA, OwningOrganizationID: orgA, SiteID: siteA,
+			PointID: "018f2e00-3100-7000-8000-000000000001", SensorID: &sensorID, DeviceID: deviceA,
+			TelemetryKey: "zone.temperature", PointKind: "MEASURED", ValueType: "NUMBER", Unit: &unit, Status: "ACTIVE", PointRevision: 1,
+		}},
 		Policy: &ObservationPolicy{
 			Revision:           5,
 			ValueType:          "NUMBER",
@@ -183,6 +190,7 @@ func bindingWithStatus(status string) RuntimeBinding {
 
 func bindingValidBetween(status string, validFrom time.Time, validTo *time.Time) RuntimeBinding {
 	return RuntimeBinding{
+		TenantID:              ingestTenantA,
 		DeviceID:              deviceA,
 		OwningOrganizationID:  orgA,
 		SiteID:                siteA,

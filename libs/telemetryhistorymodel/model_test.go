@@ -10,6 +10,8 @@ const (
 	testSiteID         = "018f1e00-1000-7000-8000-000000000001"
 	testDeviceID       = "018f1e00-4000-7000-8000-000000000001"
 	testObservationID  = "018f1e00-8000-7000-8000-000000000001"
+	testPointID        = "018f1e00-5000-7000-8000-000000000001"
+	testSensorID       = "018f1e00-6000-7000-8000-000000000001"
 )
 
 func TestDeviceHistoryQueryCanonicalDigestIsOrderIndependent(t *testing.T) {
@@ -74,7 +76,7 @@ func TestDeviceHistoryResponseValidatesScopeOrderingAndMetadata(t *testing.T) {
 	response := DeviceHistoryResponse{
 		SchemaVersion: 1, OwningOrganizationID: testOrganizationID, SiteID: testSiteID, DeviceID: testDeviceID,
 		Series: []DeviceHistorySeries{{Key: "zone.temperature", Points: []DeviceHistoryPoint{{
-			ObservationID: testObservationID, SampledAt: from.Add(5 * time.Minute), ReceivedAt: from.Add(5*time.Minute + time.Second),
+			ObservationID: testObservationID, PointID: testPointID, SensorID: stringPointer(testSensorID), SampledAt: from.Add(5 * time.Minute), ReceivedAt: from.Add(5*time.Minute + time.Second),
 			Value: 22.5, Unit: &unit, Quality: QualityGood, QualityReasons: []string{}, Revision: 7,
 		}}}},
 		Metadata: DeviceHistoryMetadata{
@@ -85,6 +87,16 @@ func TestDeviceHistoryResponseValidatesScopeOrderingAndMetadata(t *testing.T) {
 	if err := response.ValidateFor(query); err != nil {
 		t.Fatalf("valid response rejected: %v", err)
 	}
+	response.Series[0].Points[0].PointID = "not-a-point"
+	if err := response.ValidateFor(query); err == nil {
+		t.Fatal("invalid point identity was accepted")
+	}
+	response.Series[0].Points[0].PointID = testPointID
+	response.Series[0].Points[0].SensorID = stringPointer("not-a-sensor")
+	if err := response.ValidateFor(query); err == nil {
+		t.Fatal("invalid sensor identity was accepted")
+	}
+	response.Series[0].Points[0].SensorID = stringPointer(testSensorID)
 	response.Series[0].Key = "unrequested.key"
 	if err := response.ValidateFor(query); err == nil {
 		t.Fatal("response scope drift was accepted")
@@ -100,4 +112,8 @@ func TestDeviceHistoryResponseValidatesScopeOrderingAndMetadata(t *testing.T) {
 	if err := response.ValidateFor(query); err == nil {
 		t.Fatal("empty series without partial state was accepted")
 	}
+}
+
+func stringPointer(value string) *string {
+	return &value
 }

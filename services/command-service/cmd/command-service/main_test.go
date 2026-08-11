@@ -39,7 +39,7 @@ func TestLoadRuntimeHTTPConfigFromExplicitCohortFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("COMMAND_RUNTIME_COHORTS_FILE", path)
-	config, err := loadRuntimeHTTPConfig(nil)
+	config, err := loadRuntimeHTTPConfig(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

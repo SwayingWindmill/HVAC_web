@@ -62,7 +62,7 @@ func TestThingsBoardSourceModesReuseOneAcceptancePath(t *testing.T) {
 				Now:                 func() time.Time { return now },
 			})
 			body := `{"integrationInstanceId":"` + integrationA + `","sourcePath":"` + string(sourcePath) + `","externalEntityType":"DEVICE","externalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}`
-			request := httptest.NewRequest(http.MethodPost, InternalThingsBoardObservationPath, strings.NewReader(body))
+			request := httptest.NewRequest(http.MethodPost, InternalSourceObservationPath, strings.NewReader(body))
 			request.Header.Set("Content-Type", "application/json")
 			request.TLS = verifiedTLSState(thingsBoardSPIFFE)
 			recorder := httptest.NewRecorder()
@@ -104,7 +104,7 @@ func TestThingsBoardSourceAuthenticationAndScopeFailClosed(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, InternalThingsBoardObservationPath, strings.NewReader(test.body))
+			request := httptest.NewRequest(http.MethodPost, InternalSourceObservationPath, strings.NewReader(test.body))
 			request.Header.Set("Content-Type", "application/json")
 			if test.header != "" {
 				request.Header.Set(test.header, integrationA)
@@ -142,7 +142,7 @@ func TestThingsBoardSourceFailsClosedOnMalformedAndDependencyFailure(t *testing.
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			handler := NewHandler(ServerConfig{ObservationAcceptor: test.acceptor, SourceAuthenticator: authenticator})
-			request := httptest.NewRequest(http.MethodPost, InternalThingsBoardObservationPath, strings.NewReader(test.body))
+			request := httptest.NewRequest(http.MethodPost, InternalSourceObservationPath, strings.NewReader(test.body))
 			if test.contentType != "" {
 				request.Header.Set("Content-Type", test.contentType)
 			}

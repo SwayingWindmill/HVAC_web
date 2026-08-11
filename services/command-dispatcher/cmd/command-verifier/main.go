@@ -70,14 +70,14 @@ func main() {
 	}
 	reader, err := commanddispatcher.NewReportedStateClient(commanddispatcher.ReportedStateClientConfig{
 		BaseURL: requiredEnv("S2_REPORTED_STATE_URL"), HTTPClient: s2HTTPClient,
-		OrganizationID: cohort.OrganizationID, SiteID: cohort.SiteID, DeviceID: cohort.DeviceID, ReportedStateKey: cohort.ReportedStateKey,
+		OrganizationID: cohort.OrganizationID, SiteID: cohort.SiteID, DeviceID: cohort.DeviceID,
 	})
 	if err != nil {
 		logger.Error("verifier_s2_client_invalid", "error_code", "S2_REPORTED_STATE_CLIENT_INVALID")
 		os.Exit(1)
 	}
 	workerID := envOr("COMMAND_VERIFIER_WORKER_ID", hostnameOr("command-verifier"))
-	verifier := commanddispatcher.NewSetpointReportedStateVerifier(reader)
+	verifier := commanddispatcher.NewAuthoritativeReportedStateVerifier(reader)
 	worker := commanddispatcher.NewDurableVerificationWorker(runtimeClient, verifier, workerID, 15*time.Second)
 
 	diagnostics := &http.Server{

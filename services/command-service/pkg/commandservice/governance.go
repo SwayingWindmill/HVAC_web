@@ -8,7 +8,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
 
-const riskRuleRevision = "command-risk:setpoint-delta:v1"
+const riskRuleRevision = "command-risk:equipment-capability:v1"
 
 var (
 	ErrAuthorizationDenied = errors.New("command authorization snapshot is invalid")
@@ -17,24 +17,35 @@ var (
 )
 
 func evaluateGovernance(request commandmodel.SubmitRequest, now time.Time) (commandmodel.RiskSnapshot, commandmodel.ApprovalPolicy, error) {
+	profile, ok := commandmodel.CapabilityProfileFor(request.Capability)
+	if !ok {
+		return commandmodel.RiskSnapshot{}, "", ErrCapabilityDenied
+	}
 	risk := commandmodel.RiskSnapshot{
-		Level:        commandmodel.RiskLow,
+		Level:        profile.BaseRisk,
 		RuleRevision: riskRuleRevision,
-		Reasons:      []string{"SETPOINT_DELTA_LE_1C"},
+		Reasons:      []string{"CAPABILITY_BASE_RISK"},
 		EvaluatedAt:  now,
 	}
-	delta := absolute(request.SetpointC - request.CurrentState.CurrentTemperatureC)
-	switch {
-	case delta <= 1:
-		risk.Level = commandmodel.RiskLow
-	case delta <= 2:
-		risk.Level = commandmodel.RiskMedium
-		risk.Reasons = []string{"SETPOINT_DELTA_GT_1C_LE_2C"}
-	case delta <= maximumSetpointDeltaC:
-		risk.Level = commandmodel.RiskHigh
-		risk.Reasons = []string{"SETPOINT_DELTA_GT_2C_LE_3C"}
-	default:
-		return commandmodel.RiskSnapshot{}, "", ErrCapabilityDenied
+	if profile.ParameterKey != "" {
+		value, valid := commandmodel.ParameterValue(request.Capability, request.Parameters)
+		if !valid || request.CurrentState.CurrentValue == nil {
+			return commandmodel.RiskSnapshot{}, "", ErrCapabilityDenied
+		}
+		delta := absolute(value - *request.CurrentState.CurrentValue)
+		switch {
+		case delta <= profile.LowRiskDelta:
+			risk.Level = commandmodel.RiskLow
+			risk.Reasons = []string{"CAPABILITY_DELTA_LOW"}
+		case delta <= profile.MediumRiskDelta:
+			risk.Level = commandmodel.RiskMedium
+			risk.Reasons = []string{"CAPABILITY_DELTA_MEDIUM"}
+		case delta <= profile.MaximumDelta:
+			risk.Level = commandmodel.RiskHigh
+			risk.Reasons = []string{"CAPABILITY_DELTA_HIGH"}
+		default:
+			return commandmodel.RiskSnapshot{}, "", ErrCapabilityDenied
+		}
 	}
 
 	if err := validateAuthorizationSnapshot(request, risk.Level, now); err != nil {
@@ -44,9 +55,13 @@ func evaluateGovernance(request commandmodel.SubmitRequest, now time.Time) (comm
 }
 
 func validateAuthorizationSnapshot(request commandmodel.SubmitRequest, risk commandmodel.RiskLevel, now time.Time) error {
+	capabilityRevision, _, _, ok := commandCapabilityProfile(request.Capability)
+	if !ok {
+		return ErrAuthorizationDenied
+	}
 	return validateAuthorizationScope(request.Authorization, commandmodel.AuthorizationCommandSubmit,
 		request.PrincipalID, request.OrganizationID, request.SiteID, request.DeviceID,
-		request.Capability, setpointCapabilityRevision, risk, now)
+		request.Capability, capabilityRevision, risk, now)
 }
 
 func validateAuthorizationScope(auth commandmodel.AuthorizationSnapshot, purpose commandmodel.AuthorizationPurpose, principalID, organizationID, siteID, deviceID string, capability commandmodel.Capability, capabilityRevision string, risk commandmodel.RiskLevel, now time.Time) error {

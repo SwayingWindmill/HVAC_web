@@ -347,12 +347,12 @@ func mapEnergyMetadata(decoded loadResponse) (time.Time, uint64, error) {
 	return watermark.UTC(), revision, nil
 }
 
-func parseCubeTime(value string, location *time.Location) (time.Time, error) {
+func parseCubeTime(value string, _ *time.Location) (time.Time, error) {
 	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
 		return parsed, nil
 	}
 	for _, layout := range []string{"2006-01-02T15:04:05.000", "2006-01-02T15:04:05"} {
-		if parsed, err := time.ParseInLocation(layout, value, location); err == nil {
+		if parsed, err := time.ParseInLocation(layout, value, time.UTC); err == nil {
 			return parsed, nil
 		}
 	}

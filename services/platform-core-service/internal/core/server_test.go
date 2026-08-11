@@ -29,6 +29,7 @@ const (
 	testAudience            = "platform-core-service"
 	testPolicy              = "registry-read:1"
 	testPrincipal           = "018f1e00-2000-7000-8000-000000000002"
+	testTenantA             = "018f1d00-0000-7000-8000-000000000001"
 	testOrganizationA       = "018f1e00-0000-7000-8000-000000000001"
 	testOrganizationB       = "018f1e00-0000-7000-8000-000000000002"
 	testActingOrg           = "018f1e00-0000-7000-8000-000000000003"
@@ -364,6 +365,7 @@ func testGrantClaims(action registryauth.Action) registryauth.GrantClaims {
 		PrincipalID:            testPrincipal,
 		SubjectIssuer:          "https://identity.example.test/oidc",
 		Subject:                "delegated",
+		TenantID:               testTenantA,
 		ActingOrganizationID:   testActingOrg,
 		AllowedOrganizationIDs: []string{testOrganizationA},
 		AllowedSiteIDs:         []string{testSiteA1},

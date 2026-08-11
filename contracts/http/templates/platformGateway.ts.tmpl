@@ -68,6 +68,7 @@ const registryStatusSchema = z.enum(['ACTIVE', 'INACTIVE', 'RETIRED']);
 
 export const organizationSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   code: z.string().min(1).max(128),
   displayName: z.string().min(1).max(256),
   status: z.enum(['ACTIVE', 'SUSPENDED', 'RETIRED']),
@@ -77,6 +78,7 @@ export const organizationSchema = z.object({
 }).strict();
 export const siteSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   owningOrganizationId: uuidV7Schema,
   code: z.string().min(1).max(128),
   displayName: z.string().min(1).max(256),
@@ -88,6 +90,7 @@ export const siteSchema = z.object({
 }).strict();
 export const equipmentSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   owningOrganizationId: uuidV7Schema,
   siteId: uuidV7Schema,
   code: z.string().min(1).max(128),
@@ -100,6 +103,7 @@ export const equipmentSchema = z.object({
 }).strict();
 export const deviceSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   owningOrganizationId: uuidV7Schema,
   siteId: uuidV7Schema,
   code: z.string().min(1).max(128),
@@ -112,6 +116,7 @@ export const deviceSchema = z.object({
 }).strict();
 export const deviceBindingSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   owningOrganizationId: uuidV7Schema,
   siteId: uuidV7Schema,
   deviceId: uuidV7Schema,
@@ -126,6 +131,7 @@ export const deviceBindingSchema = z.object({
 }).strict();
 export const areaSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   owningOrganizationId: uuidV7Schema,
   siteId: uuidV7Schema,
   parentAreaId: uuidV7Schema.nullable(),
@@ -139,6 +145,7 @@ export const areaSchema = z.object({
 }).strict();
 export const sensorSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   owningOrganizationId: uuidV7Schema,
   siteId: uuidV7Schema,
   code: z.string().min(1).max(256),
@@ -156,6 +163,7 @@ export const sensorSchema = z.object({
 }).strict();
 export const telemetryPointSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   owningOrganizationId: uuidV7Schema,
   siteId: uuidV7Schema,
   reportingDeviceId: uuidV7Schema,
@@ -179,6 +187,7 @@ export const telemetryPointSchema = z.object({
 }).strict();
 export const assetRelationshipSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   owningOrganizationId: uuidV7Schema,
   siteId: uuidV7Schema,
   fromType: z.enum(['EQUIPMENT', 'DEVICE', 'SENSOR', 'POINT']),
@@ -194,6 +203,7 @@ export const assetRelationshipSchema = z.object({
   updatedAt: instantSchema,
 }).strict();
 export const calculatedPointInputSchema = z.object({
+  tenantId: uuidV7Schema,
   owningOrganizationId: uuidV7Schema,
   siteId: uuidV7Schema,
   calculatedPointId: uuidV7Schema,
@@ -213,6 +223,7 @@ export const assetModelCountsSchema = z.object({
 }).strict();
 export const siteAssetModelSchema = z.object({
   schemaVersion: z.literal(1),
+  tenantId: uuidV7Schema,
   siteId: uuidV7Schema,
   areas: z.array(areaSchema),
   equipment: z.array(equipmentSchema),
@@ -226,6 +237,7 @@ export const siteAssetModelSchema = z.object({
 
 export const externalBindingSchema = z.object({
   id: uuidV7Schema,
+  tenantId: uuidV7Schema,
   owningOrganizationId: uuidV7Schema,
   siteId: uuidV7Schema,
   integrationInstanceId: uuidV7Schema,

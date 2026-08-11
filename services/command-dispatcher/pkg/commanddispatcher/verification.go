@@ -3,14 +3,13 @@ package commanddispatcher
 import (
 	"context"
 	"errors"
-	"math"
 	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
 
-const reportedSetpointToleranceC = 0.1
+const reportedStateRetryInterval = 100 * time.Millisecond
 
 type DurableVerificationStore interface {
 	ClaimVerification(ctx context.Context, organizationID, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error)
@@ -25,43 +24,71 @@ type ReportedStateVerifier interface {
 	Verify(ctx context.Context, envelope commandmodel.VerificationEnvelope) (commandmodel.VerificationResult, error)
 }
 
-type SetpointReportedStateVerifier struct {
+type AuthoritativeReportedStateVerifier struct {
 	reader ReportedStateReader
 }
 
-func NewSetpointReportedStateVerifier(reader ReportedStateReader) *SetpointReportedStateVerifier {
-	return &SetpointReportedStateVerifier{reader: reader}
+func NewAuthoritativeReportedStateVerifier(reader ReportedStateReader) *AuthoritativeReportedStateVerifier {
+	return &AuthoritativeReportedStateVerifier{reader: reader}
 }
 
-func (verifier *SetpointReportedStateVerifier) Verify(ctx context.Context, envelope commandmodel.VerificationEnvelope) (commandmodel.VerificationResult, error) {
+func (verifier *AuthoritativeReportedStateVerifier) Verify(ctx context.Context, envelope commandmodel.VerificationEnvelope) (commandmodel.VerificationResult, error) {
 	if verifier == nil || verifier.reader == nil {
 		return commandmodel.VerificationResult{}, errors.New("reported-state reader is not configured")
 	}
-	evidenceID, reported, err := verifier.reader.ReadReportedState(ctx, envelope)
-	if err != nil {
-		return commandmodel.VerificationResult{}, err
+	var lastMismatch *commandmodel.VerificationResult
+	for {
+		evidenceID, reported, err := verifier.reader.ReadReportedState(ctx, envelope)
+		if err != nil {
+			return commandmodel.VerificationResult{}, err
+		}
+		if strings.TrimSpace(evidenceID) == "" {
+			return commandmodel.VerificationResult{}, errors.New("reported-state evidence identifier is required")
+		}
+		result := commandmodel.VerificationResult{Outcome: commandmodel.VerificationInconclusive, EvidenceID: evidenceID, Reported: reported}
+		if reported.OrganizationID != envelope.OrganizationID || reported.SiteID != envelope.SiteID || reported.DeviceID != envelope.DeviceID {
+			result.FailureCode = "REPORTED_STATE_SCOPE_MISMATCH"
+			return result, nil
+		}
+		authoritative := reported.EvaluationAvailability == "AVAILABLE" && reported.Presence == "ONLINE" && reported.Readiness == "CURRENT" &&
+			reported.Freshness == "FRESH" && reported.Quality == "GOOD" && reported.BusinessRevision > envelope.BaselineBusinessRevision &&
+			reported.ObservedAt.After(envelope.AcknowledgedAt)
+		if authoritative {
+			expected, expectedOK := commandmodel.ExpectedReportedValue(envelope.Capability, envelope.Parameters)
+			profile, supported := commandmodel.CapabilityProfileFor(envelope.Capability)
+			if !expectedOK || !supported {
+				return commandmodel.VerificationResult{}, errors.New("command capability cannot be verified")
+			}
+			if commandmodel.ScalarMatches(reported.ReportedValue, expected, profile.VerificationTolerance) {
+				result.Outcome = commandmodel.VerificationSucceeded
+				return result, nil
+			}
+			result.Outcome = commandmodel.VerificationMismatch
+			result.FailureCode = "REPORTED_VALUE_MISMATCH"
+			lastMismatch = &result
+		}
+
+		remaining := time.Until(envelope.VerificationDeadline)
+		if envelope.VerificationDeadline.IsZero() || remaining <= 0 {
+			if lastMismatch != nil {
+				return *lastMismatch, nil
+			}
+			result.Outcome = commandmodel.VerificationTimedOut
+			result.FailureCode = "REPORTED_STATE_VERIFICATION_TIMED_OUT"
+			return result, nil
+		}
+		waitFor := reportedStateRetryInterval
+		if remaining < waitFor {
+			waitFor = remaining
+		}
+		timer := time.NewTimer(waitFor)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return commandmodel.VerificationResult{}, ctx.Err()
+		case <-timer.C:
+		}
 	}
-	if strings.TrimSpace(evidenceID) == "" {
-		return commandmodel.VerificationResult{}, errors.New("reported-state evidence identifier is required")
-	}
-	result := commandmodel.VerificationResult{Outcome: commandmodel.VerificationInconclusive, EvidenceID: evidenceID, Reported: reported}
-	if reported.OrganizationID != envelope.OrganizationID || reported.SiteID != envelope.SiteID || reported.DeviceID != envelope.DeviceID {
-		result.FailureCode = "REPORTED_STATE_SCOPE_MISMATCH"
-		return result, nil
-	}
-	if reported.EvaluationAvailability != "AVAILABLE" || reported.Presence != "ONLINE" || reported.Readiness != "CURRENT" ||
-		reported.Freshness != "FRESH" || reported.Quality != "GOOD" || reported.BusinessRevision <= envelope.BaselineBusinessRevision ||
-		!reported.ObservedAt.After(envelope.AcknowledgedAt) {
-		result.FailureCode = "REPORTED_STATE_INCONCLUSIVE"
-		return result, nil
-	}
-	if math.Abs(reported.ReportedSetpointC-envelope.SetpointC) > reportedSetpointToleranceC {
-		result.Outcome = commandmodel.VerificationMismatch
-		result.FailureCode = "REPORTED_SETPOINT_MISMATCH"
-		return result, nil
-	}
-	result.Outcome = commandmodel.VerificationSucceeded
-	return result, nil
 }
 
 type DurableVerificationWorker struct {

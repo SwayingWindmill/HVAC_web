@@ -509,6 +509,7 @@ func (h *handler) handleRegistryReadDecision(writer http.ResponseWriter, request
 			PrincipalID:            decision.PrincipalID,
 			SubjectIssuer:          decision.SubjectIssuer,
 			Subject:                decision.Subject,
+			TenantID:               decision.TenantID,
 			ActingOrganizationID:   decision.ActingOrganizationID,
 			AllowedOrganizationIDs: append([]string(nil), decision.AllowedOrganizationIDs...),
 			AllowedSiteIDs:         append([]string(nil), decision.AllowedSiteIDs...),

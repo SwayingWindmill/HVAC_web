@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "telemetryKey": "hvac_meter.energy",
+  "unit": "kWh",
+  "cases": [
+    {
+      "id": "ENERGY-GOLDEN-001",
+      "description": "normal cumulative energy delta",
+      "previousValue": 1000,
+      "currentValue": 1250,
+      "previousQuality": "GOOD",
+      "currentQuality": "GOOD",
+      "expectedEnergyKWh": 250,
+      "expectedQuality": "VALID",
+      "expectedReasons": []
+    },
+    {
+      "id": "ENERGY-GOLDEN-002",
+      "description": "counter reset or rollback never creates negative energy",
+      "previousValue": 9990,
+      "currentValue": 10,
+      "previousQuality": "GOOD",
+      "currentQuality": "GOOD",
+      "expectedEnergyKWh": 0,
+      "expectedQuality": "SUSPECT",
+      "expectedReasons": ["METER_RESET_OR_ROLLBACK"]
+    },
+    {
+      "id": "ENERGY-GOLDEN-003",
+      "description": "suspect source quality is inherited",
+      "previousValue": 1250,
+      "currentValue": 1300,
+      "previousQuality": "GOOD",
+      "currentQuality": "SUSPECT",
+      "expectedEnergyKWh": 50,
+      "expectedQuality": "SUSPECT",
+      "expectedReasons": []
+    },
+    {
+      "id": "ENERGY-GOLDEN-004",
+      "description": "negative cumulative counter is invalid and contributes zero energy",
+      "previousValue": 100,
+      "currentValue": -1,
+      "previousQuality": "GOOD",
+      "currentQuality": "GOOD",
+      "expectedEnergyKWh": 0,
+      "expectedQuality": "INVALID",
+      "expectedReasons": ["NEGATIVE_CUMULATIVE_VALUE"]
+    }
+  ]
+}

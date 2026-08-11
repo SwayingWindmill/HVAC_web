@@ -74,9 +74,9 @@ GRANT USAGE, SELECT ON SEQUENCE iam.alarm_authorization_decisions_sequence_seq T
 REVOKE ALL ON iam.alarm_permissions, iam.alarm_authorization_decisions FROM PUBLIC;
 
 INSERT INTO iam.policies
-  (id, organization_id, policy_key, policy_revision, status, document, created_at, updated_at)
+  (id, tenant_id, organization_id, policy_key, policy_revision, status, document, created_at, updated_at)
 VALUES
-  ('018f1e00-1400-7000-8000-000000000021', '018f1e00-0000-7000-8000-000000000001', 'alarm-access', 1, 'ACTIVE',
+  ('018f1e00-1400-7000-8000-000000000021', '018f1d00-0000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', 'alarm-access', 1, 'ACTIVE',
    '{"actions":["alarm:list","alarm:read"],"scope":"site","denyWins":true}'::jsonb,
    '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')
 ON CONFLICT DO NOTHING;

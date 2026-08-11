@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	InternalThingsBoardObservationPath = "/internal/v1/telemetry/thingsboard/observations:accept"
-	InternalThingsBoardCoveragePath    = "/internal/v1/telemetry/thingsboard/coverage:report"
-	maximumSourceObservationSize       = 96 << 10
+	InternalSourceObservationPath   = "/internal/v1/telemetry/sources/observations:accept"
+	InternalThingsBoardCoveragePath = "/internal/v1/telemetry/thingsboard/coverage:report"
+	maximumSourceObservationSize    = 96 << 10
 )
 
 type SourceAuthenticator interface {
@@ -95,7 +95,7 @@ type sourcePositionRequest struct {
 	EventID   string `json:"eventId"`
 }
 
-type thingsBoardObservationRequest struct {
+type sourceObservationRequest struct {
 	IntegrationInstanceID string                `json:"integrationInstanceId"`
 	SourcePath            string                `json:"sourcePath"`
 	ExternalEntityType    string                `json:"externalEntityType"`
@@ -108,7 +108,7 @@ type thingsBoardObservationRequest struct {
 	SourcePosition        sourcePositionRequest `json:"sourcePosition"`
 }
 
-func (h *handler) handleThingsBoardObservation(writer http.ResponseWriter, request *http.Request) {
+func (h *handler) handleSourceObservation(writer http.ResponseWriter, request *http.Request) {
 	peer, ok := h.trustedSourcePeer(writer, request)
 	if !ok {
 		return
@@ -117,11 +117,11 @@ func (h *handler) handleThingsBoardObservation(writer http.ResponseWriter, reque
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The telemetry source acceptance path is temporarily unavailable.", true)
 		return
 	}
-	var input thingsBoardObservationRequest
+	var input sourceObservationRequest
 	if !decodeSourceRequest(writer, request, &input) {
 		return
 	}
-	candidate, err := normalizeThingsBoardObservation(input, h.now().UTC())
+	candidate, err := normalizeSourceObservation(input, h.now().UTC())
 	if err != nil {
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The telemetry source request is invalid.", false)
 		return
@@ -140,15 +140,16 @@ func (h *handler) handleThingsBoardObservation(writer http.ResponseWriter, reque
 		sourceOutcome = "rejected"
 		sourceReason = quarantineReasonFamily(receipt.QuarantineReason)
 	}
+	h.metrics.observeDataQuality(receipt)
 	h.metrics.observeIngest(sourceOutcome, sourceReason)
-	h.metrics.observeSourceLag(candidate.SampledAt, candidate.ReceivedAt, sourceOutcome)
+	h.metrics.observeSourceLag(sourceDependency(peer), sourceOutcome, candidate.SampledAt, candidate.ReceivedAt)
 	if receipt.Status == ObservationQuarantined {
 		h.metrics.observeQuarantine(sourceReason)
 	}
 	writeJSON(writer, http.StatusOK, receipt)
 }
 
-func normalizeThingsBoardObservation(input thingsBoardObservationRequest, receivedAt time.Time) (ObservationCandidate, error) {
+func normalizeSourceObservation(input sourceObservationRequest, receivedAt time.Time) (ObservationCandidate, error) {
 	sampledAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.SampledAt))
 	if err != nil || receivedAt.IsZero() {
 		return ObservationCandidate{}, errors.New("telemetry sampledAt is invalid")

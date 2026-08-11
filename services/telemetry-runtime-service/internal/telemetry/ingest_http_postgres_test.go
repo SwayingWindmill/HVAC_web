@@ -11,7 +11,7 @@ import (
 
 func acceptObservationViaHTTP(t *testing.T, store ObservationAcceptor, candidate ObservationCandidate) ObservationReceipt {
 	t.Helper()
-	body, err := json.Marshal(thingsBoardObservationRequest{
+	body, err := json.Marshal(sourceObservationRequest{
 		IntegrationInstanceID: candidate.IntegrationInstanceID,
 		SourcePath:            string(candidate.SourcePath),
 		ExternalEntityType:    candidate.ExternalEntityType,
@@ -37,7 +37,7 @@ func acceptObservationViaHTTP(t *testing.T, store ObservationAcceptor, candidate
 		}),
 		Now: func() time.Time { return candidate.ReceivedAt },
 	})
-	request := httptest.NewRequest(http.MethodPost, InternalThingsBoardObservationPath, bytes.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, InternalSourceObservationPath, bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.TLS = verifiedTLSState(thingsBoardSPIFFE)
 	recorder := httptest.NewRecorder()

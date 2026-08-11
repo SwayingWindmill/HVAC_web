@@ -47,24 +47,27 @@ type HTTPHandler struct {
 }
 
 type internalCreateCommandRequest struct {
-	OrganizationID string                  `json:"organizationId"`
-	SiteID         string                  `json:"siteId"`
-	DeviceID       string                  `json:"deviceId"`
-	PrincipalID    string                  `json:"principalId"`
-	IdempotencyKey string                  `json:"idempotencyKey"`
-	Capability     commandmodel.Capability `json:"capability"`
-	SetpointC      float64                 `json:"setpointC"`
-	CurrentState   internalCurrentState    `json:"currentState"`
+	TenantID       string                         `json:"tenantId"`
+	OrganizationID string                         `json:"organizationId"`
+	SiteID         string                         `json:"siteId"`
+	DeviceID       string                         `json:"deviceId"`
+	PointID        string                         `json:"pointId"`
+	PrincipalID    string                         `json:"principalId"`
+	IdempotencyKey string                         `json:"idempotencyKey"`
+	Capability           commandmodel.Capability        `json:"capability"`
+	Parameters           commandmodel.CommandParameters `json:"parameters"`
+	VerificationPointKey string                         `json:"verificationPointKey"`
+	CurrentState         internalCurrentState           `json:"currentState"`
 }
 
 type internalCurrentState struct {
-	EvaluationAvailability string    `json:"evaluationAvailability"`
-	Presence               string    `json:"presence"`
-	Readiness              string    `json:"readiness"`
-	Quality                string    `json:"quality"`
-	BusinessRevision       uint64    `json:"businessRevision"`
-	CurrentTemperatureC    float64   `json:"currentTemperatureC"`
-	ObservedAt             time.Time `json:"observedAt"`
+	EvaluationAvailability string     `json:"evaluationAvailability"`
+	Presence               string     `json:"presence"`
+	Readiness              string     `json:"readiness"`
+	Quality                string     `json:"quality"`
+	BusinessRevision       uint64     `json:"businessRevision"`
+	CurrentValue           *float64   `json:"currentValue,omitempty"`
+	ObservedAt             time.Time  `json:"observedAt"`
 }
 
 type internalApproveCommandRequest struct {
@@ -90,6 +93,7 @@ type CommandView struct {
 	OrganizationID        string                      `json:"organizationId"`
 	SiteID                string                      `json:"siteId"`
 	DeviceID              string                      `json:"deviceId"`
+	PointID               string                      `json:"pointId"`
 	Capability            commandmodel.Capability     `json:"capability"`
 	CapabilityRevision    string                      `json:"capabilityRevision"`
 	Status                commandmodel.IntentStatus   `json:"status"`
@@ -97,7 +101,7 @@ type CommandView struct {
 	ApprovalPolicy        commandmodel.ApprovalPolicy `json:"approvalPolicy"`
 	ApprovalCount         int                         `json:"approvalCount"`
 	RequiredApprovalCount int                         `json:"requiredApprovalCount"`
-	SetpointC             float64                     `json:"setpointC"`
+	Parameters            commandmodel.CommandParameters `json:"parameters"`
 	DeviceCommandSequence uint64                      `json:"deviceCommandSequence"`
 	Version               uint64                      `json:"version"`
 	SnapshotRevision      uint64                      `json:"snapshotRevision"`
@@ -176,11 +180,16 @@ func (h *HTTPHandler) createCommand(writer http.ResponseWriter, request *http.Re
 		writeCommandProblem(writer, http.StatusUnauthorized, "COMMAND_GRANT_INVALID", false)
 		return
 	}
+	profile, supported := commandmodel.CapabilityProfileFor(input.Capability)
+	if !supported {
+		writeCommandProblem(writer, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", false)
+		return
+	}
 	validation := commandauth.Validation{
 		Now: h.now().UTC(), Issuer: h.config.CommandGrantIssuer, Presenter: h.config.GatewaySPIFFE,
 		Audience: h.config.CommandGrantAudience, Purpose: commandmodel.AuthorizationCommandSubmit,
 		PrincipalID: input.PrincipalID, OrganizationID: input.OrganizationID, SiteID: input.SiteID, DeviceID: input.DeviceID,
-		Capability: input.Capability, CapabilityRevision: setpointCapabilityRevision,
+		Capability: input.Capability, CapabilityRevision: profile.Revision,
 		Risk: commandmodel.RiskLow, UseChecker: h.config.CommandGrantUseChecker,
 	}
 	if commandauth.ValidateGrant(claims, validation) != nil {
@@ -188,14 +197,14 @@ func (h *HTTPHandler) createCommand(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	result, err := h.config.Authority.Submit(request.Context(), commandmodel.SubmitRequest{
-		OrganizationID: input.OrganizationID, SiteID: input.SiteID, DeviceID: input.DeviceID,
+		TenantID: input.TenantID, OrganizationID: input.OrganizationID, SiteID: input.SiteID, DeviceID: input.DeviceID, PointID: input.PointID,
 		PrincipalID: input.PrincipalID, IdempotencyKey: input.IdempotencyKey,
-		Capability: input.Capability, SetpointC: input.SetpointC,
+		Capability: input.Capability, Parameters: cloneParameters(input.Parameters), VerificationPointKey: input.VerificationPointKey,
 		CurrentState: commandmodel.CurrentStateEvidence{
 			EvaluationAvailability: input.CurrentState.EvaluationAvailability,
 			Presence:               input.CurrentState.Presence, Readiness: input.CurrentState.Readiness,
 			Quality: input.CurrentState.Quality, BusinessRevision: input.CurrentState.BusinessRevision,
-			CurrentTemperatureC: input.CurrentState.CurrentTemperatureC, ObservedAt: input.CurrentState.ObservedAt,
+			CurrentValue: input.CurrentState.CurrentValue, ObservedAt: input.CurrentState.ObservedAt,
 		},
 		Authorization: commandauth.Snapshot(claims),
 	})
@@ -226,7 +235,7 @@ func (h *HTTPHandler) approveCommand(writer http.ResponseWriter, request *http.R
 		writeAuthorityError(writer, err)
 		return
 	}
-	if intent.SiteID != input.SiteID || intent.DeviceID != input.DeviceID || intent.Capability != commandmodel.CapabilitySetTemperatureSetpoint {
+	if _, _, _, supported := commandCapabilityProfile(intent.Capability); intent.SiteID != input.SiteID || intent.DeviceID != input.DeviceID || !supported {
 		writeCommandProblem(writer, http.StatusForbidden, "COMMAND_GRANT_REJECTED", false)
 		return
 	}
@@ -301,12 +310,20 @@ func validInternalApproval(commandID string, input internalApproveCommandRequest
 }
 
 func validInternalCreate(input internalCreateCommandRequest) bool {
-	for _, value := range []string{input.OrganizationID, input.SiteID, input.DeviceID, input.PrincipalID, input.IdempotencyKey} {
+	for _, value := range []string{input.TenantID, input.OrganizationID, input.SiteID, input.DeviceID, input.PointID, input.PrincipalID, input.IdempotencyKey, input.VerificationPointKey} {
 		if strings.TrimSpace(value) == "" || len(value) > 256 {
 			return false
 		}
 	}
-	return input.Capability == commandmodel.CapabilitySetTemperatureSetpoint && input.CurrentState.BusinessRevision > 0 && !input.CurrentState.ObservedAt.IsZero()
+	profile, supported := commandmodel.CapabilityProfileFor(input.Capability)
+	if !supported || input.CurrentState.BusinessRevision == 0 || input.CurrentState.ObservedAt.IsZero() {
+		return false
+	}
+	if profile.ParameterKey == "" {
+		return len(input.Parameters) == 0
+	}
+	value, ok := commandmodel.ParameterValue(input.Capability, input.Parameters)
+	return ok && value >= profile.Minimum && value <= profile.Maximum && input.CurrentState.CurrentValue != nil
 }
 
 func commandView(intent commandmodel.CommandIntent) CommandView {
@@ -324,11 +341,11 @@ func commandView(intent commandmodel.CommandIntent) CommandView {
 	}
 	return CommandView{
 		SchemaVersion: 1, CommandID: intent.ID, OrganizationID: intent.OrganizationID,
-		SiteID: intent.SiteID, DeviceID: intent.DeviceID,
+		SiteID: intent.SiteID, DeviceID: intent.DeviceID, PointID: intent.PointID,
 		Capability: intent.Capability, CapabilityRevision: intent.CapabilityRevision,
 		Status: intent.Status, Risk: intent.Risk, ApprovalPolicy: intent.ApprovalPolicy,
 		ApprovalCount: len(intent.Approvals), RequiredApprovalCount: requiredApprovalCount(intent.ApprovalPolicy),
-		SetpointC: intent.SetpointC, DeviceCommandSequence: intent.DeviceCommandSequence,
+		Parameters: cloneParameters(intent.Parameters), DeviceCommandSequence: intent.DeviceCommandSequence,
 		Version: intent.Version, SnapshotRevision: intent.SnapshotRevision, Transitions: transitions,
 		CreatedAt: intent.CreatedAt.UTC(), UpdatedAt: intent.UpdatedAt.UTC(),
 	}

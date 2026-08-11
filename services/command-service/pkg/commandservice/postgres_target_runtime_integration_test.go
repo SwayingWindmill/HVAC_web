@@ -41,7 +41,7 @@ func TestPostgresConnectorEvidenceIsDurableIdempotentAndFenceBound(t *testing.T)
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	envelope, err := store.ClaimDispatchForCohort(ctx, commandOrgA, commandSiteA, commandDeviceA, "dispatcher-a", 30*time.Second)
+	envelope, err := store.ClaimDispatchForCohort(ctx, commandOrgA, commandSiteA, commandDeviceA, commandmodel.CapabilitySetTemperatureSetpoint, "dispatcher-a", 30*time.Second)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -135,6 +135,12 @@ func TestPostgresCommandGrantUseSurvivesReplicaAndRestartBoundaries(t *testing.T
 	}
 	defer admin.Close()
 	resetCommandFixture(t, admin)
+	if _, err := admin.Exec(ctx, `
+INSERT INTO command_runtime.organization_tenant_scope (organization_id, tenant_id, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, now(), now())
+`, commandOrgA, commandTenantA); err != nil {
+		t.Fatal(err)
+	}
 
 	firstStore, err := OpenPostgresStore(ctx, runtimeURL)
 	if err != nil {

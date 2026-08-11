@@ -143,6 +143,8 @@ func (quality Quality) Valid() bool {
 
 type DeviceHistoryPoint struct {
 	ObservationID  string    `json:"observationId"`
+	PointID        string    `json:"pointId"`
+	SensorID       *string   `json:"sensorId"`
 	SampledAt      time.Time `json:"sampledAt"`
 	ReceivedAt     time.Time `json:"receivedAt"`
 	Value          float64   `json:"value"`
@@ -235,6 +237,12 @@ func (response DeviceHistoryResponse) ValidateFor(query DeviceHistoryQuery) erro
 		for _, point := range series.Points {
 			if !validUUIDv7(point.ObservationID) {
 				return errors.New("history response observation ID is invalid")
+			}
+			if !validUUIDv7(point.PointID) {
+				return errors.New("history response point ID is invalid")
+			}
+			if point.SensorID != nil && !validUUIDv7(*point.SensorID) {
+				return errors.New("history response sensor ID is invalid")
 			}
 			if point.SampledAt.Before(canonical.From) || !point.SampledAt.Before(canonical.To) {
 				return errors.New("history response sample is outside the requested range")

@@ -16,6 +16,7 @@ SET LOCAL ROLE s1_iam_migrator;
 
 CREATE TABLE IF NOT EXISTS iam.telemetry_scope_bindings (
   id uuid PRIMARY KEY CHECK (iam.is_uuid_v7(id)),
+  tenant_id uuid NOT NULL REFERENCES iam.tenants(id),
   principal_id uuid NOT NULL REFERENCES iam.principals(id),
   acting_organization_id uuid NOT NULL CHECK (iam.is_uuid_v7(acting_organization_id)),
   owning_organization_id uuid NOT NULL CHECK (iam.is_uuid_v7(owning_organization_id)),
@@ -35,6 +36,7 @@ CREATE TABLE IF NOT EXISTS iam.telemetry_scope_bindings (
 
 CREATE TABLE IF NOT EXISTS iam.telemetry_key_bindings (
   id uuid PRIMARY KEY CHECK (iam.is_uuid_v7(id)),
+  tenant_id uuid NOT NULL REFERENCES iam.tenants(id),
   principal_id uuid NOT NULL REFERENCES iam.principals(id),
   acting_organization_id uuid NOT NULL CHECK (iam.is_uuid_v7(acting_organization_id)),
   device_id uuid NOT NULL CHECK (iam.is_uuid_v7(device_id)),
@@ -54,6 +56,7 @@ CREATE TABLE IF NOT EXISTS iam.telemetry_key_bindings (
 
 CREATE TABLE IF NOT EXISTS iam.telemetry_grant_revocations (
   token_id text PRIMARY KEY CHECK (char_length(token_id) BETWEEN 1 AND 256),
+  tenant_id uuid NOT NULL REFERENCES iam.tenants(id),
   principal_id uuid NOT NULL CHECK (iam.is_uuid_v7(principal_id)),
   acting_organization_id uuid NOT NULL CHECK (iam.is_uuid_v7(acting_organization_id)),
   revoked_at timestamptz NOT NULL,
@@ -64,6 +67,7 @@ CREATE TABLE IF NOT EXISTS iam.telemetry_grant_revocations (
 
 CREATE TABLE IF NOT EXISTS iam.telemetry_grant_uses (
   token_id text PRIMARY KEY CHECK (char_length(token_id) BETWEEN 1 AND 256),
+  tenant_id uuid NOT NULL REFERENCES iam.tenants(id),
   principal_id uuid NOT NULL CHECK (iam.is_uuid_v7(principal_id)),
   acting_organization_id uuid NOT NULL CHECK (iam.is_uuid_v7(acting_organization_id)),
   scope_digest text NOT NULL CHECK (scope_digest ~ '^[a-f0-9]{64}$'),
@@ -74,6 +78,7 @@ CREATE TABLE IF NOT EXISTS iam.telemetry_grant_uses (
 
 CREATE TABLE IF NOT EXISTS iam.telemetry_revocation_facts (
   sequence bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  tenant_id uuid NOT NULL REFERENCES iam.tenants(id),
   principal_id uuid NOT NULL CHECK (iam.is_uuid_v7(principal_id)),
   acting_organization_id uuid NOT NULL CHECK (iam.is_uuid_v7(acting_organization_id)),
   source_type text NOT NULL CHECK (source_type IN ('MEMBERSHIP','ROLE_BINDING','SITE_BINDING','DEVICE_PERMISSION','KEY_PERMISSION','GRANT')),
@@ -209,9 +214,9 @@ BEGIN
      OR NEW.valid_from IS DISTINCT FROM OLD.valid_from
      OR NEW.valid_to IS DISTINCT FROM OLD.valid_to THEN
     INSERT INTO iam.telemetry_revocation_facts
-      (principal_id, acting_organization_id, source_type, source_id, policy_revision, reason_code, occurred_at)
+      (tenant_id, principal_id, acting_organization_id, source_type, source_id, policy_revision, reason_code, occurred_at)
     VALUES
-      (row_value.principal_id, row_value.organization_id, 'MEMBERSHIP', row_value.id,
+      (row_value.tenant_id, row_value.principal_id, row_value.organization_id, 'MEMBERSHIP', row_value.id,
        COALESCE(iam.active_telemetry_policy_revision(row_value.organization_id), 'telemetry-access:unavailable'),
        'MEMBERSHIP_CHANGED', clock_timestamp());
   END IF;
@@ -241,9 +246,9 @@ BEGIN
      OR NEW.valid_from IS DISTINCT FROM OLD.valid_from
      OR NEW.valid_to IS DISTINCT FROM OLD.valid_to THEN
     INSERT INTO iam.telemetry_revocation_facts
-      (principal_id, acting_organization_id, source_type, source_id, device_id, policy_revision, reason_code, occurred_at)
+      (tenant_id, principal_id, acting_organization_id, source_type, source_id, device_id, policy_revision, reason_code, occurred_at)
     VALUES
-      (row_value.principal_id, row_value.acting_organization_id, 'DEVICE_PERMISSION', row_value.id, row_value.device_id,
+      (row_value.tenant_id, row_value.principal_id, row_value.acting_organization_id, 'DEVICE_PERMISSION', row_value.id, row_value.device_id,
        COALESCE(iam.active_telemetry_policy_revision(row_value.acting_organization_id), 'telemetry-access:unavailable'),
        'DEVICE_SCOPE_CHANGED', clock_timestamp());
   END IF;
@@ -272,9 +277,9 @@ BEGIN
      OR NEW.valid_from IS DISTINCT FROM OLD.valid_from
      OR NEW.valid_to IS DISTINCT FROM OLD.valid_to THEN
     INSERT INTO iam.telemetry_revocation_facts
-      (principal_id, acting_organization_id, source_type, source_id, device_id, telemetry_key, policy_revision, reason_code, occurred_at)
+      (tenant_id, principal_id, acting_organization_id, source_type, source_id, device_id, telemetry_key, policy_revision, reason_code, occurred_at)
     VALUES
-      (row_value.principal_id, row_value.acting_organization_id, 'KEY_PERMISSION', row_value.id, row_value.device_id, row_value.telemetry_key,
+      (row_value.tenant_id, row_value.principal_id, row_value.acting_organization_id, 'KEY_PERMISSION', row_value.id, row_value.device_id, row_value.telemetry_key,
        COALESCE(iam.active_telemetry_policy_revision(row_value.acting_organization_id), 'telemetry-access:unavailable'),
        'KEY_SCOPE_CHANGED', clock_timestamp());
   END IF;
@@ -301,9 +306,9 @@ BEGIN
      OR NEW.valid_from IS DISTINCT FROM OLD.valid_from
      OR NEW.valid_to IS DISTINCT FROM OLD.valid_to THEN
     INSERT INTO iam.telemetry_revocation_facts
-      (principal_id, acting_organization_id, source_type, source_id, action, policy_revision, reason_code, occurred_at)
+      (tenant_id, principal_id, acting_organization_id, source_type, source_id, action, policy_revision, reason_code, occurred_at)
     VALUES
-      (row_value.principal_id, row_value.organization_id, 'ROLE_BINDING', row_value.id, 'telemetry.*',
+      (row_value.tenant_id, row_value.principal_id, row_value.organization_id, 'ROLE_BINDING', row_value.id, 'telemetry.*',
        COALESCE(iam.active_telemetry_policy_revision(row_value.organization_id), 'telemetry-access:unavailable'),
        'ROLE_BINDING_CHANGED', clock_timestamp());
   END IF;
@@ -331,9 +336,9 @@ BEGIN
      OR NEW.valid_from IS DISTINCT FROM OLD.valid_from
      OR NEW.valid_to IS DISTINCT FROM OLD.valid_to THEN
     INSERT INTO iam.telemetry_revocation_facts
-      (principal_id, acting_organization_id, source_type, source_id, policy_revision, reason_code, occurred_at)
+      (tenant_id, principal_id, acting_organization_id, source_type, source_id, policy_revision, reason_code, occurred_at)
     VALUES
-      (row_value.principal_id, row_value.acting_organization_id, 'SITE_BINDING', row_value.id,
+      (row_value.tenant_id, row_value.principal_id, row_value.acting_organization_id, 'SITE_BINDING', row_value.id,
        COALESCE(iam.active_telemetry_policy_revision(row_value.acting_organization_id), 'telemetry-access:unavailable'),
        'SITE_BINDING_CHANGED', clock_timestamp());
   END IF;
@@ -342,11 +347,11 @@ END
 $site_revocation$;
 
 INSERT INTO iam.role_bindings
-  (id, organization_id, principal_id, role_key, actions, effect, valid_from, valid_to, revision, created_at, updated_at)
+  (id, tenant_id, organization_id, principal_id, role_key, actions, effect, valid_from, valid_to, revision, created_at, updated_at)
 VALUES
-  ('018f1e00-2200-7000-8000-000000000011', '018f1e00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', 'telemetry-reader', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
-  ('018f1e00-2200-7000-8000-000000000012', '018f1e00-0000-7000-8000-000000000003', '018f1e00-2000-7000-8000-000000000002', 'telemetry-reader', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
-  ('018f1e00-2200-7000-8000-000000000013', '018f1e00-0000-7000-8000-000000000003', '018f1e00-2000-7000-8000-000000000003', 'telemetry-reader', ARRAY['telemetry.snapshot.read'], 'ALLOW', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')
+  ('018f1e00-2200-7000-8000-000000000011', '018f1d00-0000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', 'telemetry-reader', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2200-7000-8000-000000000012', '018f1d00-0000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000003', '018f1e00-2000-7000-8000-000000000002', 'telemetry-reader', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2200-7000-8000-000000000013', '018f1d00-0000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000003', '018f1e00-2000-7000-8000-000000000003', 'telemetry-reader', ARRAY['telemetry.snapshot.read'], 'ALLOW', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')
 ON CONFLICT DO NOTHING;
 
 UPDATE iam.site_bindings
@@ -382,33 +387,33 @@ CREATE TRIGGER site_bindings_telemetry_revocation
 AFTER UPDATE OR DELETE ON iam.site_bindings
 FOR EACH ROW EXECUTE FUNCTION iam.emit_site_binding_telemetry_revocation();
 
-INSERT INTO iam.policies (id, organization_id, policy_key, policy_revision, status, document, created_at, updated_at) VALUES
-  ('018f1e00-2500-7000-8000-000000000011', '018f1e00-0000-7000-8000-000000000001', 'telemetry-access', 2, 'ACTIVE', '{"denyPrecedence":true,"exactDeviceKeyScope":true}', '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
-  ('018f1e00-2500-7000-8000-000000000013', '018f1e00-0000-7000-8000-000000000003', 'telemetry-access', 2, 'ACTIVE', '{"denyPrecedence":true,"exactDeviceKeyScope":true}', '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')
+INSERT INTO iam.policies (id, tenant_id, organization_id, policy_key, policy_revision, status, document, created_at, updated_at) VALUES
+  ('018f1e00-2500-7000-8000-000000000011', '018f1d00-0000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', 'telemetry-access', 2, 'ACTIVE', '{"denyPrecedence":true,"exactDeviceKeyScope":true}', '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2500-7000-8000-000000000013', '018f1d00-0000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000003', 'telemetry-access', 2, 'ACTIVE', '{"denyPrecedence":true,"exactDeviceKeyScope":true}', '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO iam.explicit_denies
-  (id, acting_organization_id, owning_organization_id, site_id, principal_id, action, reason_code, valid_from, valid_to, revision, created_at, updated_at)
+  (id, tenant_id, acting_organization_id, owning_organization_id, site_id, principal_id, action, reason_code, valid_from, valid_to, revision, created_at, updated_at)
 VALUES
-  ('018f1e00-2400-7000-8000-000000000011', '018f1e00-0000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000003', 'telemetry.snapshot.read', 'EXPLICIT_TELEMETRY_DENY', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')
+  ('018f1e00-2400-7000-8000-000000000011', '018f1d00-0000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000003', 'telemetry.snapshot.read', 'EXPLICIT_TELEMETRY_DENY', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO iam.telemetry_scope_bindings
-  (id, principal_id, acting_organization_id, owning_organization_id, site_id, device_id, actions, effect, status, valid_from, valid_to, revision, created_at, updated_at)
+  (id, tenant_id, principal_id, acting_organization_id, owning_organization_id, site_id, device_id, actions, effect, status, valid_from, valid_to, revision, created_at, updated_at)
 VALUES
-  ('018f1e00-2600-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
-  ('018f1e00-2600-7000-8000-000000000002', '018f1e00-2000-7000-8000-000000000002', '018f1e00-0000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
-  ('018f1e00-2600-7000-8000-000000000003', '018f1e00-2000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', ARRAY['telemetry.snapshot.read'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')
+  ('018f1e00-2600-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2600-7000-8000-000000000002', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000002', '018f1e00-0000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2600-7000-8000-000000000003', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', ARRAY['telemetry.snapshot.read'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO iam.telemetry_key_bindings
-  (id, principal_id, acting_organization_id, device_id, telemetry_key, actions, effect, status, valid_from, valid_to, revision, created_at, updated_at)
+  (id, tenant_id, principal_id, acting_organization_id, device_id, telemetry_key, actions, effect, status, valid_from, valid_to, revision, created_at, updated_at)
 VALUES
-  ('018f1e00-2700-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
-  ('018f1e00-2700-7000-8000-000000000002', '018f1e00-2000-7000-8000-000000000002', '018f1e00-0000-7000-8000-000000000003', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
-  ('018f1e00-2700-7000-8000-000000000003', '018f1e00-2000-7000-8000-000000000002', '018f1e00-0000-7000-8000-000000000003', '018f1e00-4000-7000-8000-000000000001', 'fan.speed', ARRAY['telemetry.snapshot.read','telemetry.subscribe'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
-  ('018f1e00-2700-7000-8000-000000000004', '018f1e00-2000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000003', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
-  ('018f1e00-2700-7000-8000-000000000005', '018f1e00-2000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000003', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read'], 'DENY', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')
+  ('018f1e00-2700-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000001', '018f1e00-0000-7000-8000-000000000001', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2700-7000-8000-000000000002', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000002', '018f1e00-0000-7000-8000-000000000003', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read','telemetry.batch.read','telemetry.subscribe','telemetry.history.read','telemetry.resubscribe','telemetry.recovery.use','telemetry.recovery.checkpoint'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2700-7000-8000-000000000003', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000002', '018f1e00-0000-7000-8000-000000000003', '018f1e00-4000-7000-8000-000000000001', 'fan.speed', ARRAY['telemetry.snapshot.read','telemetry.subscribe'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2700-7000-8000-000000000004', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000003', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read'], 'ALLOW', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z'),
+  ('018f1e00-2700-7000-8000-000000000005', '018f1d00-0000-7000-8000-000000000001', '018f1e00-2000-7000-8000-000000000003', '018f1e00-0000-7000-8000-000000000003', '018f1e00-4000-7000-8000-000000000001', 'zone.temperature', ARRAY['telemetry.snapshot.read'], 'DENY', 'ACTIVE', '2026-07-21T00:00:00Z', NULL, 1, '2026-07-21T00:00:00Z', '2026-07-21T00:00:00Z')
 ON CONFLICT DO NOTHING;
 
 RESET ROLE;

@@ -88,6 +88,9 @@ func buildHistoryObservation(observationID string, candidate ObservationCandidat
 		AcceptanceStatus: string(decision.Status), Quality: string(decision.Quality),
 		QualityReasons: qualityReasonStrings(decision.QualityReasons), PayloadSHA256: sourcePayloadSHA,
 	}
+	if decision.TenantID != "" {
+		observation.TenantID = stringPointer(decision.TenantID)
+	}
 	if decision.OwningOrganizationID != "" {
 		observation.OwningOrganizationID = stringPointer(decision.OwningOrganizationID)
 	}
@@ -96,6 +99,12 @@ func buildHistoryObservation(observationID string, candidate ObservationCandidat
 	}
 	if decision.DeviceID != "" {
 		observation.DeviceID = stringPointer(decision.DeviceID)
+	}
+	if decision.PointID != "" {
+		observation.PointID = stringPointer(decision.PointID)
+	}
+	if decision.SensorID != "" {
+		observation.SensorID = stringPointer(decision.SensorID)
 	}
 	if decision.Status != ObservationAccepted {
 		return observation, nil

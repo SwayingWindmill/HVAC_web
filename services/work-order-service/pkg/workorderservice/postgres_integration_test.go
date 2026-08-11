@@ -7,10 +7,12 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
 const (
+	postgresTenantID            = "0191f000-0000-7000-8000-000000000001"
 	postgresOrganizationID      = "01920000-0000-7000-8000-000000000001"
 	postgresOtherOrganizationID = "01920000-0000-7000-8000-000000000002"
 	postgresSiteID              = "01920000-0001-7000-8000-000000000001"
@@ -26,7 +28,7 @@ func TestPostgresReadsAreScopedFilteredPaginatedAndConvergent(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("S5_WORK_ORDER_TEST_DATABASE_URL is not configured")
 	}
-	ctx := context.Background()
+	ctx := identitycontext.WithTenantID(context.Background(), postgresTenantID)
 	store, err := OpenPostgresStore(ctx, databaseURL, []byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)
@@ -76,16 +78,15 @@ func TestPostgresReadsAreScopedFilteredPaginatedAndConvergent(t *testing.T) {
 		t.Fatalf("completed Work Order evidence missing: %#v err=%v", completed, err)
 	}
 
-	crossOrganization, err := store.List(ctx, postgresOtherOrganizationID, postgresSiteID, Filter{Limit: 50})
-	if err != nil || len(crossOrganization.Items) != 0 {
-		t.Fatalf("cross-Organization rows were visible in list: %#v err=%v", crossOrganization, err)
+	if _, err := store.List(ctx, postgresOtherOrganizationID, postgresSiteID, Filter{Limit: 50}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("cross-Tenant Organization list did not fail closed: %v", err)
 	}
 	crossSite, err := store.List(ctx, postgresOrganizationID, postgresForeignSiteID, Filter{Limit: 50})
 	if err != nil || len(crossSite.Items) != 0 {
 		t.Fatalf("cross-Site rows were visible in list: %#v err=%v", crossSite, err)
 	}
-	if _, err := store.Get(ctx, postgresOtherOrganizationID, postgresSiteID, postgresWorkOrderOne); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("cross-Organization detail was visible: %v", err)
+	if _, err := store.Get(ctx, postgresOtherOrganizationID, postgresSiteID, postgresWorkOrderOne); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("cross-Tenant Organization detail did not fail closed: %v", err)
 	}
 	if _, err := store.Get(ctx, postgresOrganizationID, postgresOtherSiteID, postgresWorkOrderOne); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-Site detail was visible: %v", err)
@@ -98,7 +99,7 @@ func TestPostgresMalformedProjectionFailsClosed(t *testing.T) {
 	if databaseURL == "" || adminURL == "" {
 		t.Skip("S5 Work Order PostgreSQL URLs are not configured")
 	}
-	ctx := context.Background()
+	ctx := identitycontext.WithTenantID(context.Background(), postgresTenantID)
 	store, err := OpenPostgresStore(ctx, databaseURL, []byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)

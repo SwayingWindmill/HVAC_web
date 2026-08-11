@@ -28,7 +28,6 @@ func TestLoadApprovedCohortAndResolveExactDevice(t *testing.T) {
   "providerMethod": "setTemperatureSetpoint",
   "reportedStateKey": "zone.temperature_setpoint",
   "timeoutMilliseconds": 7000,
-  "maximumSetpointDeltaC": 1,
   "credentialReference": "workload://eks/hvac-s3/s3-certification/thingsboard-connector-control"
 }`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
@@ -114,9 +113,8 @@ func validApprovedCohort() ApprovedCohort {
 		MappingStatus:         "VERIFIED",
 		ProviderContract:      "THINGSBOARD_CE_4.3.1.3",
 		ProviderMethod:        "setTemperatureSetpoint",
-		ReportedStateKey:      "zone.temperature_setpoint",
-		TimeoutMilliseconds:   7000,
-		MaximumSetpointDeltaC: 1,
-		CredentialReference:   "workload://eks/hvac-s3/s3-certification/thingsboard-connector-control",
+		ReportedStateKey:    "zone.temperature_setpoint",
+		TimeoutMilliseconds: 7000,
+		CredentialReference: "workload://eks/hvac-s3/s3-certification/thingsboard-connector-control",
 	}
 }

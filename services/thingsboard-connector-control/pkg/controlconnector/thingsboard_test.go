@@ -197,7 +197,7 @@ func testEnvelope(fence uint64, setpoint float64) commandmodel.DispatchEnvelope 
 		OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
 		Capability:         commandmodel.CapabilitySetTemperatureSetpoint,
 		CapabilityRevision: "capability:set-temperature-setpoint:v1",
-		SetpointC:          setpoint, PayloadHash: "payload-hash", ExecutionFence: fence,
+		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: setpoint}, PayloadHash: "payload-hash", ExecutionFence: fence,
 		DeviceCommandSequence: 1, LeaseOwner: "dispatcher-a",
 		LeaseUntil: time.Date(2026, 7, 26, 12, 1, 0, 0, time.UTC),
 	}

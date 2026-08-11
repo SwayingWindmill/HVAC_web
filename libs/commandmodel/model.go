@@ -4,7 +4,45 @@ import "time"
 
 type Capability string
 
-const CapabilitySetTemperatureSetpoint Capability = "SET_TEMPERATURE_SETPOINT"
+const (
+	CapabilityStart                              Capability = "START"
+	CapabilityStop                               Capability = "STOP"
+	CapabilityResetFault                         Capability = "RESET_FAULT"
+	CapabilitySetTemperatureSetpoint             Capability = "SET_TEMPERATURE_SETPOINT"
+	CapabilitySetChilledWaterTemperatureSetpoint Capability = "SET_CHILLED_WATER_TEMPERATURE_SETPOINT"
+	CapabilitySetFrequency                        Capability = "SET_FREQUENCY"
+	CapabilitySetFanSpeed                         Capability = "SET_FAN_SPEED"
+	CapabilitySetLoadLimit                        Capability = "SET_LOAD_LIMIT"
+	CapabilitySetOpening                          Capability = "SET_OPENING"
+)
+
+const (
+	ParameterSetpointC    = "setpointC"
+	ParameterFrequencyHz  = "frequencyHz"
+	ParameterFanSpeedPct  = "fanSpeedPct"
+	ParameterLoadLimitPct = "loadLimitPct"
+	ParameterOpeningPct   = "openingPct"
+)
+
+type CommandParameters map[string]float64
+
+type ScalarValue struct {
+	Number  *float64 `json:"number,omitempty"`
+	Text    *string  `json:"text,omitempty"`
+	Boolean *bool    `json:"boolean,omitempty"`
+}
+
+func NumberScalar(value float64) ScalarValue {
+	return ScalarValue{Number: &value}
+}
+
+func TextScalar(value string) ScalarValue {
+	return ScalarValue{Text: &value}
+}
+
+func BooleanScalar(value bool) ScalarValue {
+	return ScalarValue{Boolean: &value}
+}
 
 type RiskLevel string
 
@@ -14,6 +52,95 @@ const (
 	RiskHigh     RiskLevel = "HIGH"
 	RiskCritical RiskLevel = "CRITICAL"
 )
+
+type CapabilityProfile struct {
+	Revision              string
+	ParameterKey          string
+	Minimum               float64
+	Maximum               float64
+	Step                  float64
+	MaximumDelta          float64
+	LowRiskDelta          float64
+	MediumRiskDelta       float64
+	BaseRisk              RiskLevel
+	VerificationTolerance float64
+}
+
+func CapabilityProfileFor(capability Capability) (CapabilityProfile, bool) {
+	switch capability {
+	case CapabilityStart:
+		return CapabilityProfile{Revision: "capability:start:v1", BaseRisk: RiskMedium}, true
+	case CapabilityStop:
+		return CapabilityProfile{Revision: "capability:stop:v1", BaseRisk: RiskMedium}, true
+	case CapabilityResetFault:
+		return CapabilityProfile{Revision: "capability:reset-fault:v1", BaseRisk: RiskLow}, true
+	case CapabilitySetTemperatureSetpoint:
+		return numericCapability("capability:set-temperature-setpoint:v1", ParameterSetpointC, 16, 30, 0.5, 3, 1, 2, 0.1), true
+	case CapabilitySetChilledWaterTemperatureSetpoint:
+		return numericCapability("capability:set-chilled-water-temperature-setpoint:v1", ParameterSetpointC, 5, 12, 0.5, 3, 1, 2, 0.1), true
+	case CapabilitySetFrequency:
+		return numericCapability("capability:set-frequency:v1", ParameterFrequencyHz, 20, 50, 0.5, 10, 2, 5, 0.1), true
+	case CapabilitySetFanSpeed:
+		return numericCapability("capability:set-fan-speed:v1", ParameterFanSpeedPct, 20, 100, 1, 30, 10, 20, 0.5), true
+	case CapabilitySetLoadLimit:
+		return numericCapability("capability:set-load-limit:v1", ParameterLoadLimitPct, 20, 100, 1, 30, 10, 20, 0.5), true
+	case CapabilitySetOpening:
+		return numericCapability("capability:set-opening:v1", ParameterOpeningPct, 0, 100, 1, 30, 10, 20, 0.5), true
+	default:
+		return CapabilityProfile{}, false
+	}
+}
+
+func numericCapability(revision, parameterKey string, minimum, maximum, step, maximumDelta, lowRiskDelta, mediumRiskDelta, tolerance float64) CapabilityProfile {
+	return CapabilityProfile{
+		Revision: revision, ParameterKey: parameterKey, Minimum: minimum, Maximum: maximum, Step: step,
+		MaximumDelta: maximumDelta, LowRiskDelta: lowRiskDelta, MediumRiskDelta: mediumRiskDelta,
+		BaseRisk: RiskLow, VerificationTolerance: tolerance,
+	}
+}
+
+func ParameterValue(capability Capability, parameters CommandParameters) (float64, bool) {
+	profile, ok := CapabilityProfileFor(capability)
+	if !ok || profile.ParameterKey == "" || len(parameters) != 1 {
+		return 0, false
+	}
+	value, ok := parameters[profile.ParameterKey]
+	return value, ok
+}
+
+func ExpectedReportedValue(capability Capability, parameters CommandParameters) (ScalarValue, bool) {
+	switch capability {
+	case CapabilityStart:
+		return TextScalar("RUNNING"), len(parameters) == 0
+	case CapabilityStop:
+		return TextScalar("STOPPED"), len(parameters) == 0
+	case CapabilityResetFault:
+		return TextScalar(""), len(parameters) == 0
+	default:
+		value, ok := ParameterValue(capability, parameters)
+		return NumberScalar(value), ok
+	}
+}
+
+func ScalarMatches(actual, expected ScalarValue, tolerance float64) bool {
+	if expected.Number != nil {
+		if actual.Number == nil {
+			return false
+		}
+		delta := *actual.Number - *expected.Number
+		if delta < 0 {
+			delta = -delta
+		}
+		return delta <= tolerance
+	}
+	if expected.Text != nil {
+		return actual.Text != nil && *actual.Text == *expected.Text
+	}
+	if expected.Boolean != nil {
+		return actual.Boolean != nil && *actual.Boolean == *expected.Boolean
+	}
+	return false
+}
 
 type ApprovalPolicy string
 
@@ -77,7 +204,7 @@ type CurrentStateEvidence struct {
 	Readiness              string
 	Quality                string
 	BusinessRevision       uint64
-	CurrentTemperatureC    float64
+	CurrentValue           *float64
 	ObservedAt             time.Time
 }
 
@@ -119,15 +246,18 @@ type ApprovalEvidence struct {
 }
 
 type SubmitRequest struct {
-	OrganizationID string
-	SiteID         string
-	DeviceID       string
-	PrincipalID    string
-	IdempotencyKey string
-	Capability     Capability
-	SetpointC      float64
-	CurrentState   CurrentStateEvidence
-	Authorization  AuthorizationSnapshot
+	TenantID             string
+	OrganizationID       string
+	SiteID               string
+	DeviceID             string
+	PointID              string
+	PrincipalID          string
+	IdempotencyKey       string
+	Capability           Capability
+	Parameters           CommandParameters
+	VerificationPointKey string
+	CurrentState         CurrentStateEvidence
+	Authorization        AuthorizationSnapshot
 }
 
 type Transition struct {
@@ -162,9 +292,11 @@ type CommandAttempt struct {
 
 type CommandIntent struct {
 	ID                    string
+	TenantID              string
 	OrganizationID        string
 	SiteID                string
 	DeviceID              string
+	PointID               string
 	PrincipalID           string
 	IdempotencyKey        string
 	Capability            Capability
@@ -176,7 +308,8 @@ type CommandIntent struct {
 	Authorizations        []AuthorizationSnapshot
 	Approvals             []ApprovalEvidence
 	RetryPolicy           RetryPolicy
-	SetpointC             float64
+	Parameters            CommandParameters
+	VerificationPointKey  string
 	PayloadHash           string
 	SnapshotRevision      uint64
 	DeviceCommandSequence uint64
@@ -201,9 +334,10 @@ type DispatchEnvelope struct {
 	OrganizationID        string
 	SiteID                string
 	DeviceID              string
+	PointID               string
 	Capability            Capability
 	CapabilityRevision    string
-	SetpointC             float64
+	Parameters            CommandParameters
 	PayloadHash           string
 	ExecutionFence        uint64
 	DeviceCommandSequence uint64
@@ -226,9 +360,11 @@ type VerificationEnvelope struct {
 	OrganizationID           string
 	SiteID                   string
 	DeviceID                 string
+	PointID                  string
 	Capability               Capability
 	CapabilityRevision       string
-	SetpointC                float64
+	Parameters               CommandParameters
+	VerificationPointKey     string
 	PayloadHash              string
 	ExecutionFence           uint64
 	BaselineBusinessRevision uint64
@@ -249,7 +385,7 @@ type ReportedStateEvidence struct {
 	Freshness              string
 	Quality                string
 	BusinessRevision       uint64
-	ReportedSetpointC      float64
+	ReportedValue          ScalarValue
 	ObservedAt             time.Time
 }
 
