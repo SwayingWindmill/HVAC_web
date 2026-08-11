@@ -15,6 +15,9 @@
   capability without checking its documentation and types.
 - Make architectural decisions for the long term. Do not accept a stopgap
   that only works for now and is meant to be replaced later.
+- Reuse-first implementation: before introducing new infrastructure, libraries,
+  or tooling, search GitHub and the existing dependency set for maintained
+  solutions that satisfy the requirement; document the choice and pin the selected version or commit.
 - Execute all project commands from WSL. This includes dependency installation,
   npm/node scripts, builds, tests, lint/typecheck, Go commands, Docker/Compose,
   and local-stack helpers. When the agent itself is running on Windows, invoke
