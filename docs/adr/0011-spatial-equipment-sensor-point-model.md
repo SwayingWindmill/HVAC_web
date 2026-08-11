@@ -53,6 +53,17 @@ Organization
 - Mounting location and measured subject are independent. A Sensor may be mounted in one Area while measuring a Site, Area or Equipment elsewhere.
 - A Device may be bound to an Equipment, an Area, or both with explicit roles such as `CONTROLLER`, `METER`, `SENSOR`, `GATEWAY` or `SUPERVISORY_CONTROLLER`.
 
+### Product interaction hierarchy
+
+The product-facing Asset workspace is Equipment-centered even though Registry keeps Equipment, Device, Sensor and Point identities independently addressable.
+
+- `Equipment` is the primary object operators inspect, maintain and control.
+- `Device Endpoint` is subordinate technical infrastructure that reports or executes on behalf of Equipment. It must not become a parallel operator-facing control workspace.
+- `Sensor` is an observation identity. A Sensor may be embedded, wired, or independently communicating, but measurement values never become editable merely because their value type is numeric.
+- A control is exposed only when an active `COMMAND` Telemetry Point is bound to an Equipment with point-subject role `CONTROLS` and is reported through an active controller-capable Device Endpoint.
+- `STATE` and `FEEDBACK` points describe or verify Equipment behavior. They remain distinct from the `COMMAND` point that expresses the desired value.
+- Command lifecycle, approval, dispatch and verification remain first-class backend records, but the primary product entry point for initiating control is the Equipment Asset detail rather than a standalone Command workspace.
+
 ### Point authority
 
 Telemetry Points are classified as:

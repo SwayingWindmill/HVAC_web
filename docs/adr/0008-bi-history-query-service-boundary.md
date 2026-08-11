@@ -70,7 +70,7 @@ unit          = kWh
 energy_type   = electricity
 ```
 
-For adjacent readings on the same Organization, Site, Device and telemetry key:
+For adjacent readings on the same Tenant, Organization, Site, Point, Sensor, Device and telemetry key:
 
 - a non-negative difference becomes interval `energy_kwh`;
 - source `SUSPECT` quality propagates to the interval;
@@ -164,6 +164,8 @@ Gateway first requests the exact S2 `telemetry.history.read` Device/key decision
 then builds an internal query from the Session Acting Organization and IAM
 Owning Organization/Site facts. A second grant binds the full query, including
 the maximum 24-hour range and point limit, before Query Service reads history.
+Each returned history sample carries the Registry Point ID and nullable Sensor ID
+frozen for that sample at `sampledAt`; Device/key scope remains the authorization boundary.
 
 Gateway validates internal responses before returning them, preserves Dataset
 Revision, Watermark, Partial and Quality metadata, applies `private, no-store`,

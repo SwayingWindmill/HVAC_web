@@ -5,7 +5,9 @@ name: 泉来禾智慧能源平台设计系统
 sourceOfTruth: true
 designDirection: Industrial Calm
 systems:
-  components: Ant Design
+  components: Ant Design + Ant Design Pro Components
+  applicationShell: Ant Design ProLayout
+  pageFramework: Ant Design Pro PageContainer
   charts: ECharts
   icons: Ant Design Icons
 implementation:
@@ -72,10 +74,12 @@ VISUAL_DENSITY: 7
 
 ## 2. 技术与组件系统
 
-- 唯一组件系统：Ant Design。
+- 唯一组件体系：Ant Design + Ant Design Pro Components。Ant Design 提供基础组件，Ant Design Pro Components 提供企业级应用壳、页面、表单、表格和详情等高阶模式。
+- 应用主壳优先使用 `ProLayout`；业务页壳优先使用 `PageContainer`；数据密集表格优先使用 `ProTable`；复杂表单优先使用 `ProForm`；详情与只读属性优先使用 `ProDescriptions`。
+- Ant Design / Ant Design Pro 已提供的能力不得在项目内重复实现。只有当官方组件无法满足明确的 HVAC 领域交互或安全约束时，才允许维护薄封装或领域组件，并应优先组合官方组件而不是重写基础 UI 行为。
 - 图表系统：ECharts。
 - 图标系统：Ant Design Icons，项目内不混用第二套图标风格。
-- 不引入 Carbon、Fluent、Material 或 shadcn 组件与 Ant Design 混用。
+- 不引入 Carbon、Fluent、Material、shadcn 或其他第二套通用组件系统与 Ant Design / Ant Design Pro 混用。
 - IBM Carbon 仅作为企业信息层级、间距和低阴影原则的参考。
 - Cohere 仅作为 AI 助手区域的柔和表面与生成状态参考。
 - ClickHouse 仅作为演示大屏的深色高对比参考。
