@@ -64,10 +64,10 @@ WHERE i.command_id = $1::uuid
 
 	prepared := commandmodel.PreparedConnectorEvidence{
 		AttemptID: envelope.AttemptID, CommandID: envelope.CommandID,
-		OrganizationID: envelope.OrganizationID, SiteID: envelope.SiteID, DeviceID: envelope.DeviceID,
-		ExternalDeviceID: "thingsboard-device-1", ExecutionFence: envelope.ExecutionFence,
+		TenantID: envelope.TenantID, SiteID: envelope.SiteID, DeviceID: envelope.DeviceID,
+		ExternalDeviceID: "eg8200-device-1", ExecutionFence: envelope.ExecutionFence,
 		PayloadHash: envelope.PayloadHash, MappingRevision: "mapping:setpoint:v1", BindingRevision: "binding:device:v1",
-		ProviderEndpoint: "/api/rpc/twoway/thingsboard-device-1", ProviderMethod: "setTemperatureSetpoint",
+		ProviderEndpoint: "hvac/v1/tenant/site/gateway/command", ProviderMethod: "setTemperatureSetpoint",
 		RequestSHA256: strings.Repeat("a", 64),
 		PreparedAt:    time.Date(2026, 7, 26, 11, 0, 1, 0, time.UTC),
 	}
@@ -149,7 +149,7 @@ VALUES ($1::uuid, $2::uuid, now(), now())
 	claims := commandauth.GrantClaims{
 		TokenID:        strings.Join([]string{"grant", "use", "one"}, "-"),
 		GrantID:        strings.Join([]string{"grant", "id", "one"}, "-"),
-		OrganizationID: commandOrgA, PolicyRevision: "command-policy-v2", EmergencyRevocationRevision: 7,
+		TenantID: commandTenantA, PolicyRevision: "command-policy-v2", EmergencyRevocationRevision: 7,
 	}
 	status, err := firstStore.ConsumeCommandGrant(ctx, claims, "command-policy-v2", 7)
 	if err != nil {

@@ -103,7 +103,7 @@ function validateOperationShape(
 export const alarmSchema = z.object({
   schemaVersion: z.literal(1),
   alarmId: alarmUUIDv7Schema,
-  organizationId: alarmUUIDv7Schema,
+  tenantId: alarmUUIDv7Schema,
   siteId: alarmUUIDv7Schema,
   deviceId: alarmUUIDv7Schema.optional(),
   sourceType: alarmSourceTypeSchema,
@@ -221,11 +221,11 @@ export class AlarmApiError extends Error {
 
 export function validateAlarmScope(
   alarm: Alarm,
-  scope: { readonly trustedOrganizationId: string; readonly trustedSiteId: string },
+  scope: { readonly trustedTenantId: string; readonly trustedSiteId: string },
 ): Alarm {
-  const organizationId = alarmUUIDv7Schema.parse(scope.trustedOrganizationId);
+  const tenantId = alarmUUIDv7Schema.parse(scope.trustedTenantId);
   const siteId = alarmUUIDv7Schema.parse(scope.trustedSiteId);
-  if (alarm.organizationId !== organizationId || alarm.siteId !== siteId) {
+  if (alarm.tenantId !== tenantId || alarm.siteId !== siteId) {
     throw new AlarmApiError(404, 'RESOURCE_NOT_FOUND', '未找到该 Alarm。');
   }
   return alarm;
@@ -233,7 +233,7 @@ export function validateAlarmScope(
 
 export function validateAlarmListScope(
   response: AlarmListResponse,
-  scope: { readonly trustedOrganizationId: string; readonly trustedSiteId: string },
+  scope: { readonly trustedTenantId: string; readonly trustedSiteId: string },
 ): AlarmListResponse {
   response.items.forEach((alarm) => validateAlarmScope(alarm, scope));
   return response;

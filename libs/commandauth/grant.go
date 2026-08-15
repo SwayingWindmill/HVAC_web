@@ -30,7 +30,7 @@ type GrantClaims struct {
 	GrantID                     string                            `json:"grantId"`
 	Purpose                     commandmodel.AuthorizationPurpose `json:"purpose"`
 	PrincipalID                 string                            `json:"principalId"`
-	OrganizationID              string                            `json:"organizationId"`
+	TenantID              string                            `json:"tenantId"`
 	SiteID                      string                            `json:"siteId"`
 	DeviceID                    string                            `json:"deviceId"`
 	Capability                  commandmodel.Capability           `json:"capability"`
@@ -58,7 +58,7 @@ type Validation struct {
 	Audience           string
 	Purpose            commandmodel.AuthorizationPurpose
 	PrincipalID        string
-	OrganizationID     string
+	TenantID     string
 	SiteID             string
 	DeviceID           string
 	Capability         commandmodel.Capability
@@ -140,7 +140,7 @@ func ValidateGrant(claims GrantClaims, validation Validation) error {
 	if claims.GrantID == "" || claims.TokenID == "" || claims.PolicyRevision == "" || claims.CapabilityRevision == "" || claims.Purpose == "" {
 		return errors.New("command grant metadata is incomplete")
 	}
-	if claims.Purpose != validation.Purpose || validation.Purpose == "" || claims.PrincipalID != validation.PrincipalID || claims.OrganizationID != validation.OrganizationID || claims.SiteID != validation.SiteID || claims.DeviceID != validation.DeviceID || claims.Capability != validation.Capability || claims.CapabilityRevision != validation.CapabilityRevision {
+	if claims.Purpose != validation.Purpose || validation.Purpose == "" || claims.PrincipalID != validation.PrincipalID || claims.TenantID != validation.TenantID || claims.SiteID != validation.SiteID || claims.DeviceID != validation.DeviceID || claims.Capability != validation.Capability || claims.CapabilityRevision != validation.CapabilityRevision {
 		return errors.New("command grant scope is invalid")
 	}
 	if RiskOrdinal(validation.Risk) > RiskOrdinal(claims.MaximumRisk) {
@@ -171,7 +171,7 @@ func Snapshot(claims GrantClaims) commandmodel.AuthorizationSnapshot {
 		PolicyRevision:              claims.PolicyRevision,
 		Purpose:                     claims.Purpose,
 		PrincipalID:                 claims.PrincipalID,
-		OrganizationID:              claims.OrganizationID,
+		TenantID:              claims.TenantID,
 		SiteID:                      claims.SiteID,
 		DeviceID:                    claims.DeviceID,
 		Capability:                  claims.Capability,

@@ -32,6 +32,7 @@ import (
 )
 
 const (
+	telemetryTestTenant       = "018f2d00-0000-7000-8000-000000000001"
 	telemetryTestOrganization = "018f2e00-1000-7000-8000-000000000001"
 	telemetryTestSite         = "018f2e00-2000-7000-8000-000000000001"
 	telemetryTestDeviceOne    = "018f2e00-3000-7000-8000-000000000001"
@@ -119,7 +120,7 @@ func TestTelemetryGatewayDeviceHistoryBindsExactScopeAndPreservesMetadata(t *tes
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-	if response.OwningOrganizationId != telemetryTestOrganization || response.SiteId != telemetryTestSite || response.DeviceId != telemetryTestDeviceOne || response.Metadata.DatasetRevision != "telemetry-history:v1:7" || response.Metadata.ReturnedPoints != 1 || len(response.Series) != 1 || len(response.Series[0].Points) != 1 {
+	if response.TenantId != telemetryTestTenant || response.SiteId != telemetryTestSite || response.DeviceId != telemetryTestDeviceOne || response.Metadata.DatasetRevision != "telemetry-history:v1:7" || response.Metadata.ReturnedPoints != 1 || len(response.Series) != 1 || len(response.Series[0].Points) != 1 {
 		t.Fatalf("history response drifted: %+v", response)
 	}
 	fixture.mu.Lock()
@@ -253,7 +254,7 @@ func TestTelemetryGatewayWorkloadMTLSUsesExactIAMScopeWithoutCSRF(t *testing.T) 
 
 	request := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
 	request.TLS = verifiedWorkloadTLSState(t, "spiffe://hvac.local/automation-service")
-	request.Header.Set("X-Organization-ID", telemetryTestOrganization)
+	request.Header.Set("X-Tenant-ID", telemetryTestTenant)
 	recorder := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -262,6 +263,14 @@ func TestTelemetryGatewayWorkloadMTLSUsesExactIAMScopeWithoutCSRF(t *testing.T) 
 	if fixture.iamCalls.Load() != 1 || fixture.runtimeCalls.Load() != 1 {
 		t.Fatalf("workload upstream calls IAM=%d runtime=%d", fixture.iamCalls.Load(), fixture.runtimeCalls.Load())
 	}
+
+	legacyOrganization := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
+	legacyOrganization.TLS = verifiedWorkloadTLSState(t, "spiffe://hvac.local/automation-service")
+	legacyOrganization.Header.Set("X-Tenant-ID", telemetryTestTenant)
+	legacyOrganization.Header.Set("X-Organization-ID", telemetryTestOrganization)
+	legacyOrganizationRecorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(legacyOrganizationRecorder, legacyOrganization)
+	assertTelemetryProblem(t, legacyOrganizationRecorder, http.StatusBadRequest, "FORGED_IDENTITY_HEADER")
 
 	unverified := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
 	unverified.TLS = &tls.ConnectionState{PeerCertificates: verifiedWorkloadTLSState(t, "spiffe://hvac.local/automation-service").VerifiedChains[0]}
@@ -272,7 +281,7 @@ func TestTelemetryGatewayWorkloadMTLSUsesExactIAMScopeWithoutCSRF(t *testing.T) 
 
 	forgedRole := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
 	forgedRole.TLS = verifiedWorkloadTLSState(t, "spiffe://hvac.local/automation-service")
-	forgedRole.Header.Set("X-Organization-ID", telemetryTestOrganization)
+	forgedRole.Header.Set("X-Tenant-ID", telemetryTestTenant)
 	forgedRole.Header.Set("X-Roles", "admin")
 	forgedRoleRecorder := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(forgedRoleRecorder, forgedRole)
@@ -507,7 +516,7 @@ func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCod
 		keyCount := 0
 		for _, target := range canonical {
 			keyCount += len(target.Keys)
-			decision.Targets = append(decision.Targets, telemetryauth.AuthorizedTarget{DeviceID: target.DeviceID, OwningOrganizationID: telemetryTestOrganization, SiteID: telemetryTestSite, Keys: target.Keys})
+			decision.Targets = append(decision.Targets, telemetryauth.AuthorizedTarget{TenantID: telemetryTestTenant, SiteID: telemetryTestSite, DeviceID: target.DeviceID, Keys: target.Keys})
 		}
 		claims := telemetryauth.GrantClaims{Issuer: "spiffe://hvac.local/iam-service", Presenter: telemetryTestSPIFFE, Audience: "telemetry-runtime-service", PrincipalID: telemetryTestPrincipal, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, ActingOrganizationID: parent.ActingOrganizationID, ActorChain: []telemetryauth.Actor{{Service: "platform-gateway", SPIFFEID: telemetryTestSPIFFE}}, Action: input.Action, ScopeDigest: decision.ScopeDigest, TargetCount: len(canonical), KeyCount: keyCount, PolicyRevision: telemetryTestPolicy, SessionID: parent.SessionID, ParentTokenID: parent.TokenID, RequestID: request.Header.Get("X-Request-ID"), TraceID: traceIDFromTraceparent(request.Header.Get("Traceparent")), Route: telemetryPublicRoute(input.Action), IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "grant-id"}
 		return telemetryJSONResponse(http.StatusOK, telemetryauth.DecisionResponse{Decision: decision, DelegationGrant: unsignedTelemetryGrant(claims)}), nil
@@ -532,17 +541,17 @@ func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCod
 			t.Fatal(err)
 		}
 		claims, err := identitycontext.VerifyDelegation(&gatewaySigner.PublicKey, request.Header.Get("X-Delegation-Grant"))
-		if err != nil || claims.PrincipalID != telemetryTestPrincipal || claims.PolicyRevision != telemetryTestPolicy || claims.ActingOrganizationID != telemetryTestOrganization || identitycontext.ValidateDelegation(claims, now, telemetryTestSPIFFE, "telemetry-query-service", telemetryhistorymodel.DeviceHistoryAction, scope) != nil {
+		if err != nil || claims.PrincipalID != telemetryTestPrincipal || claims.PolicyRevision != telemetryTestPolicy || claims.ActingOrganizationID != telemetryTestOrganization || claims.TenantID != telemetryTestTenant || identitycontext.ValidateDelegation(claims, now, telemetryTestSPIFFE, "telemetry-query-service", telemetryhistorymodel.DeviceHistoryAction, scope) != nil {
 			t.Fatalf("query delegation invalid: claims=%+v err=%v", claims, err)
 		}
-		if query.ActingOrganizationID != telemetryTestOrganization || query.OwningOrganizationID != telemetryTestOrganization || query.SiteID != telemetryTestSite || query.DeviceID != telemetryTestDeviceOne || len(query.Keys) != 1 || query.Keys[0] != "temperature" || query.MaxPointsPerKey != 100 {
+		if query.ActingOrganizationID != telemetryTestOrganization || query.TenantID != telemetryTestTenant || query.SiteID != telemetryTestSite || query.DeviceID != telemetryTestDeviceOne || len(query.Keys) != 1 || query.Keys[0] != "temperature" || query.MaxPointsPerKey != 100 {
 			t.Fatalf("query scope drifted: %+v", query)
 		}
 		unit := "Cel"
 		sensorID := "018f2e00-6000-7000-8000-000000000001"
 		watermark := query.To
 		response := telemetryhistorymodel.DeviceHistoryResponse{
-			SchemaVersion: 1, OwningOrganizationID: query.OwningOrganizationID, SiteID: query.SiteID, DeviceID: query.DeviceID,
+			SchemaVersion: 1, TenantID: query.TenantID, SiteID: query.SiteID, DeviceID: query.DeviceID,
 			Series:   []telemetryhistorymodel.DeviceHistorySeries{{Key: "temperature", Points: []telemetryhistorymodel.DeviceHistoryPoint{{ObservationID: "018f2e00-8000-7000-8000-000000000001", PointID: "018f2e00-5000-7000-8000-000000000001", SensorID: &sensorID, SampledAt: query.From.Add(time.Hour), ReceivedAt: query.From.Add(time.Hour + time.Second), Value: 22.5, Unit: &unit, Quality: telemetryhistorymodel.QualityGood, QualityReasons: []string{}, Revision: 7}}}},
 			Metadata: telemetryhistorymodel.DeviceHistoryMetadata{RequestedFrom: query.From, RequestedTo: query.To, DataWatermark: &watermark, DatasetRevision: "telemetry-history:v1:7", Partial: false, MaxPointsPerKey: query.MaxPointsPerKey, ReturnedPoints: 1, TruncatedKeys: []string{}},
 		}
@@ -576,7 +585,7 @@ func telemetrySnapshot(deviceID string, keys []string, now time.Time) s2telemetr
 		values = append(values, s2telemetryapi.TelemetryKeyState{Missing: &s2telemetryapi.TelemetryMissingState{Key: s2telemetryapi.TelemetryKey(key), State: "MISSING", Freshness: "MISSING", MissingReason: "NEVER_OBSERVED", PolicyRevision: &policy}})
 	}
 	instant := s2telemetryapi.Instant(now.Format(time.RFC3339Nano))
-	return s2telemetryapi.DeviceObservationSnapshot{SchemaVersion: 1, DeviceId: s2telemetryapi.UUIDv7(deviceID), OwningOrganizationId: telemetryTestOrganization, SiteId: telemetryTestSite, BusinessRevision: 9, EvaluatedAt: instant, EvaluationAvailability: s2telemetryapi.EvaluationAvailabilityAvailable, AvailabilityReasons: []s2telemetryapi.AvailabilityReasonCode{}, Presence: s2telemetryapi.PresenceSnapshot{Applicability: s2telemetryapi.PresenceApplicabilityApplicable, CurrentState: &state, LastSeenAt: &instant, PolicyRevision: &policy}, TelemetryReadiness: s2telemetryapi.TelemetryReadinessIncomplete, DisplayState: &display, Values: values}
+	return s2telemetryapi.DeviceObservationSnapshot{SchemaVersion: 1, DeviceId: s2telemetryapi.UUIDv7(deviceID), TenantId: telemetryTestTenant, SiteId: telemetryTestSite, BusinessRevision: 9, EvaluatedAt: instant, EvaluationAvailability: s2telemetryapi.EvaluationAvailabilityAvailable, AvailabilityReasons: []s2telemetryapi.AvailabilityReasonCode{}, Presence: s2telemetryapi.PresenceSnapshot{Applicability: s2telemetryapi.PresenceApplicabilityApplicable, CurrentState: &state, LastSeenAt: &instant, PolicyRevision: &policy}, TelemetryReadiness: s2telemetryapi.TelemetryReadinessIncomplete, DisplayState: &display, Values: values}
 }
 
 func verifiedWorkloadTLSState(t *testing.T, spiffeID string) *tls.ConnectionState {

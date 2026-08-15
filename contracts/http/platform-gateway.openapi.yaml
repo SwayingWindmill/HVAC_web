@@ -1,10 +1,12 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "HVAC Platform Gateway API",
-    "version": "0.4.0",
-    "description": "The public HTTP contract owned by platform-gateway. Gateway is the only browser-facing platform service."
+    "title": "SE-API-001 Smart Energy Platform Public API",
+    "version": "2.1.2",
+    "description": "The unique OpenAPI 3.1 machine authority for public /api/v1 HTTP routes. Platform Gateway is the only browser-facing ingress; domain OpenAPI files are subordinate implementation contracts."
   },
+  "x-contract-id": "SE-API-001",
+  "x-architecture-source": "SE-ARCH-004 V2.1.2",
   "servers": [
     {
       "url": "/"
@@ -156,9 +158,11 @@
       }
     },
     "/api/v1/auth/login": {
-      "get": {
+      "post": {
         "operationId": "beginLogin",
         "summary": "Begin OIDC Authorization Code Flow with PKCE",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-status": "TO_SYNC_TO_SE_API_001",
         "parameters": [
           {
             "name": "returnTo",
@@ -395,7 +399,7 @@
     "/api/v1/audit/session-events/{messageId}": {
       "get": {
         "operationId": "getSessionAuditEvent",
-        "summary": "Read one Organization-scoped durable Session audit record",
+        "summary": "Read one Tenant-scoped durable Session audit record",
         "parameters": [
           {
             "name": "messageId",
@@ -416,7 +420,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Append-only audit record visible to the authenticated Organization.",
+            "description": "Append-only audit record visible to the authenticated Tenant.",
             "content": {
               "application/json": {
                 "schema": {
@@ -443,127 +447,11 @@
         }
       }
     },
-    "/api/v1/organizations": {
+    "/api/v1/sites": {
       "get": {
-        "operationId": "listOrganizations",
-        "summary": "List Organizations visible to the current Principal",
+        "operationId": "listSites",
+        "summary": "List Sites visible in the current Tenant scope",
         "parameters": [
-          {
-            "$ref": "#/components/parameters/PageLimit"
-          },
-          {
-            "$ref": "#/components/parameters/Cursor"
-          },
-          {
-            "$ref": "#/components/parameters/RequestId"
-          },
-          {
-            "$ref": "#/components/parameters/Traceparent"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Authorized Organization page.",
-            "headers": {
-              "X-Request-ID": {
-                "$ref": "#/components/headers/RequestId"
-              },
-              "traceparent": {
-                "$ref": "#/components/headers/Traceparent"
-              },
-              "X-Route-Policy-Revision": {
-                "$ref": "#/components/headers/RoutePolicyRevision"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationCollection"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "503": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "504": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "default": {
-            "$ref": "#/components/responses/Problem"
-          }
-        }
-      }
-    },
-    "/api/v1/organizations/{organizationId}": {
-      "get": {
-        "operationId": "getOrganization",
-        "summary": "Read one visible Organization",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/OrganizationId"
-          },
-          {
-            "$ref": "#/components/parameters/RequestId"
-          },
-          {
-            "$ref": "#/components/parameters/Traceparent"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Visible Organization.",
-            "headers": {
-              "X-Request-ID": {
-                "$ref": "#/components/headers/RequestId"
-              },
-              "traceparent": {
-                "$ref": "#/components/headers/Traceparent"
-              },
-              "X-Route-Policy-Revision": {
-                "$ref": "#/components/headers/RoutePolicyRevision"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Organization"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "503": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "504": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "default": {
-            "$ref": "#/components/responses/Problem"
-          }
-        }
-      }
-    },
-    "/api/v1/organizations/{organizationId}/sites": {
-      "get": {
-        "operationId": "listOrganizationSites",
-        "summary": "List visible Sites under an Organization target",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/OrganizationId"
-          },
           {
             "$ref": "#/components/parameters/PageLimit"
           },
@@ -605,9 +493,6 @@
           "401": {
             "$ref": "#/components/responses/Problem"
           },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
           "503": {
             "$ref": "#/components/responses/Problem"
           },
@@ -617,6 +502,16 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
+        }
+      },
+      "post": {
+        "operationId": "createSiteV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "responses": {
+          "2XX": { "$ref": "#/components/responses/V212Success" },
+          "4XX": { "$ref": "#/components/responses/V212Error" },
+          "5XX": { "$ref": "#/components/responses/V212Error" }
         }
       }
     },
@@ -675,10 +570,10 @@
         }
       }
     },
-    "/api/v1/sites/{siteId}/equipment": {
+    "/api/v1/sites/{siteId}/assets": {
       "get": {
-        "operationId": "listSiteEquipment",
-        "summary": "List visible Equipment at a Site",
+        "operationId": "listSiteAsset",
+        "summary": "List visible Asset at a Site",
         "parameters": [
           {
             "$ref": "#/components/parameters/SiteId"
@@ -698,7 +593,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Authorized Equipment page.",
+            "description": "Authorized Asset page.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
@@ -713,7 +608,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EquipmentCollection"
+                  "$ref": "#/components/schemas/AssetCollection"
                 }
               }
             }
@@ -739,13 +634,13 @@
         }
       }
     },
-    "/api/v1/equipment/{equipmentId}": {
+    "/api/v1/assets/{assetId}": {
       "get": {
-        "operationId": "getEquipment",
-        "summary": "Read one visible Equipment resource",
+        "operationId": "getAsset",
+        "summary": "Read one visible Asset resource",
         "parameters": [
           {
-            "$ref": "#/components/parameters/EquipmentId"
+            "$ref": "#/components/parameters/AssetId"
           },
           {
             "$ref": "#/components/parameters/RequestId"
@@ -756,7 +651,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Visible Equipment.",
+            "description": "Visible Asset.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/RequestId"
@@ -771,7 +666,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Equipment"
+                  "$ref": "#/components/schemas/Asset"
                 }
               }
             }
@@ -861,7 +756,7 @@
     "/api/v1/sites/{siteId}/device-bindings": {
       "get": {
         "operationId": "listSiteDeviceBindings",
-        "summary": "List visible Device-to-Equipment bindings at a Site",
+        "summary": "List visible Device-to-Asset bindings at a Site",
         "parameters": [
           {
             "$ref": "#/components/parameters/SiteId"
@@ -925,7 +820,7 @@
     "/api/v1/sites/{siteId}/asset-model": {
       "get": {
         "operationId": "getSiteAssetModel",
-        "summary": "Read the complete visible spatial Equipment, Device Endpoint, Sensor and Telemetry Point model for one Site",
+        "summary": "Read the complete visible spatial Asset, Device Endpoint, Sensor and Telemetry Point model for one Site",
         "parameters": [
           {
             "$ref": "#/components/parameters/SiteId"
@@ -981,55 +876,148 @@
       "get": {
         "operationId": "getDevice",
         "summary": "Read one visible Device resource",
+        "x-architecture-status": "CONTRACTED",
         "parameters": [
-          {
-            "$ref": "#/components/parameters/DeviceId"
-          },
-          {
-            "$ref": "#/components/parameters/RequestId"
-          },
-          {
-            "$ref": "#/components/parameters/Traceparent"
-          }
+          { "$ref": "#/components/parameters/DeviceId" },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
         ],
         "responses": {
-          "200": {
-            "description": "Visible Device.",
-            "headers": {
-              "X-Request-ID": {
-                "$ref": "#/components/headers/RequestId"
-              },
-              "traceparent": {
-                "$ref": "#/components/headers/Traceparent"
-              },
-              "X-Route-Policy-Revision": {
-                "$ref": "#/components/headers/RoutePolicyRevision"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Device"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "503": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "504": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "default": {
-            "$ref": "#/components/responses/Problem"
-          }
+          "200": { "description": "Visible Device.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Device" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
         }
+      }
+    },
+    "/api/v1/sites/{siteId}/spaces/tree": {
+      "get": {
+        "operationId": "getSiteSpaceTree",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/devices": {
+      "get": {
+        "operationId": "listDevicesV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/devices/{deviceId}/points": {
+      "get": {
+        "operationId": "listDevicePointsV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "parameters": [{ "$ref": "#/components/parameters/DeviceId" }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/telemetry/latest": {
+      "post": {
+        "operationId": "readTelemetryLatestV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/telemetry/history": {
+      "get": {
+        "operationId": "readTelemetryHistoryV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/alarms": {
+      "get": {
+        "operationId": "listAlarmsV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/alarms/{alarmId}": {
+      "get": {
+        "operationId": "getAlarmV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "parameters": [{ "name": "alarmId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/alarms/{alarmId}/ack": {
+      "post": {
+        "operationId": "ackAlarmV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "parameters": [{ "name": "alarmId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/commands": {
+      "post": {
+        "operationId": "createCommandV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-source": "contracts/http/s3-command-public.openapi.json",
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/commands/{commandId}": {
+      "get": {
+        "operationId": "getCommandV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-source": "contracts/http/s3-command-public.openapi.json",
+        "parameters": [{ "name": "commandId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/commands/{commandId}/approve": {
+      "post": {
+        "operationId": "approveCommandV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-source": "contracts/http/s3-command-public.openapi.json",
+        "parameters": [{ "name": "commandId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/forecast/load": {
+      "get": {
+        "operationId": "getSiteLoadForecastV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/sites/{siteId}/forecast/pv": {
+      "get": {
+        "operationId": "getSitePVForecastV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/optimization/runs": {
+      "post": {
+        "operationId": "createOptimizationRunV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/optimization/runs/{runId}": {
+      "get": {
+        "operationId": "getOptimizationRunV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "parameters": [{ "name": "runId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     }
   },
@@ -1066,14 +1054,6 @@
           "maxLength": 128
         }
       },
-      "OrganizationId": {
-        "name": "organizationId",
-        "in": "path",
-        "required": true,
-        "schema": {
-          "$ref": "#/components/schemas/UUIDv7"
-        }
-      },
       "SiteId": {
         "name": "siteId",
         "in": "path",
@@ -1082,8 +1062,8 @@
           "$ref": "#/components/schemas/UUIDv7"
         }
       },
-      "EquipmentId": {
-        "name": "equipmentId",
+      "AssetId": {
+        "name": "assetId",
         "in": "path",
         "required": true,
         "schema": {
@@ -1147,6 +1127,28 @@
       }
     },
     "responses": {
+      "V212Success": {
+        "description": "SE-API-001 V2.1.2 success envelope. Domain data shape is defined by the operation-specific contract.",
+        "headers": {
+          "X-Request-ID": { "$ref": "#/components/headers/RequestId" }
+        },
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/V212SuccessEnvelope" }
+          }
+        }
+      },
+      "V212Error": {
+        "description": "SE-API-001 V2.1.2 error envelope.",
+        "headers": {
+          "X-Request-ID": { "$ref": "#/components/headers/RequestId" }
+        },
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/V212ErrorEnvelope" }
+          }
+        }
+      },
       "Problem": {
         "description": "Stable public error representation.",
         "headers": {
@@ -1167,6 +1169,41 @@
       }
     },
     "schemas": {
+      "V212Meta": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["requestId"],
+        "properties": {
+          "requestId": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      },
+      "V212SuccessEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": {},
+          "meta": { "$ref": "#/components/schemas/V212Meta" }
+        }
+      },
+      "V212ErrorEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["error", "meta"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "message", "details"],
+            "properties": {
+              "code": { "type": "string", "minLength": 1 },
+              "message": { "type": "string", "minLength": 1 },
+              "details": {}
+            }
+          },
+          "meta": { "$ref": "#/components/schemas/V212Meta" }
+        }
+      },
       "BuildInfo": {
         "type": "object",
         "additionalProperties": false,
@@ -1330,7 +1367,7 @@
         "required": [
           "initiatingPrincipal",
           "executingServicePrincipal",
-          "actingOrganizationId",
+          "tenantId",
           "audience",
           "policyRevision",
           "delegationExpiresAt"
@@ -1342,7 +1379,7 @@
           "executingServicePrincipal": {
             "$ref": "#/components/schemas/ServicePrincipal"
           },
-          "actingOrganizationId": {
+          "tenantId": {
             "type": "string"
           },
           "audience": {
@@ -1360,14 +1397,12 @@
       },
       "Capability": {
         "type": "string",
-        "description": "Version 6 IAM-authored browser capability identifier.",
+        "description": "Version 7 IAM-authored browser capability identifier. Registry capabilities begin at Site.",
         "enum": [
-          "organization.list",
-          "organization.read",
           "site.list",
           "site.read",
-          "equipment.list",
-          "equipment.read",
+          "asset.list",
+          "asset.read",
           "device.list",
           "device.read",
           "telemetry.snapshot.read",
@@ -1385,7 +1420,7 @@
       },
       "EffectiveAuthorization": {
         "type": "object",
-        "description": "IAM-authored effective authorization for the current Principal and acting Organization. Platform Gateway transports this value without deriving permissions from roles. Version 6 adds a high-level governed Work Order lifecycle capability; every exact Site, Work Order, action and transition remains server-authorized.",
+        "description": "IAM-authored effective authorization for the current Principal. Platform Gateway transports this value without deriving permissions from roles. Every exact Site, Work Order, action and transition remains server-authorized.",
         "additionalProperties": false,
         "required": [
           "capabilitySetVersion",
@@ -1395,7 +1430,7 @@
         "properties": {
           "capabilitySetVersion": {
             "type": "integer",
-            "const": 6
+            "const": 7
           },
           "policyRevision": {
             "type": "string",
@@ -1404,7 +1439,7 @@
           },
           "capabilities": {
             "type": "array",
-            "maxItems": 19,
+            "maxItems": 17,
             "uniqueItems": true,
             "items": {
               "$ref": "#/components/schemas/Capability"
@@ -1499,7 +1534,6 @@
           "ledgerSequence",
           "messageId",
           "schemaVersion",
-          "organizationId",
           "aggregateType",
           "aggregateId",
           "aggregateVersion",
@@ -1508,7 +1542,7 @@
           "initiatingIssuer",
           "executingService",
           "executingSpiffeId",
-          "actingOrganizationId",
+          "tenantId",
           "action",
           "result",
           "policyRevision",
@@ -1531,9 +1565,6 @@
           "schemaVersion": {
             "type": "integer",
             "const": 1
-          },
-          "organizationId": {
-            "type": "string"
           },
           "aggregateType": {
             "type": "string",
@@ -1565,7 +1596,7 @@
             "type": "string",
             "pattern": "^spiffe://"
           },
-          "actingOrganizationId": {
+          "tenantId": {
             "type": "string"
           },
           "action": {
@@ -1626,62 +1657,12 @@
         "maxLength": 4096,
         "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
       },
-      "Organization": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "tenantId",
-          "code",
-          "displayName",
-          "status",
-          "revision",
-          "createdAt",
-          "updatedAt"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/components/schemas/UUIDv7"
-          },
-          "tenantId": {
-            "$ref": "#/components/schemas/UUIDv7"
-          },
-          "code": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "displayName": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "ACTIVE",
-              "SUSPENDED",
-              "RETIRED"
-            ]
-          },
-          "revision": {
-            "$ref": "#/components/schemas/Revision"
-          },
-          "createdAt": {
-            "$ref": "#/components/schemas/Instant"
-          },
-          "updatedAt": {
-            "$ref": "#/components/schemas/Instant"
-          }
-        }
-      },
       "Site": {
         "type": "object",
         "additionalProperties": false,
         "required": [
           "id",
           "tenantId",
-          "owningOrganizationId",
           "code",
           "displayName",
           "timezone",
@@ -1695,9 +1676,6 @@
             "$ref": "#/components/schemas/UUIDv7"
           },
           "tenantId": {
-            "$ref": "#/components/schemas/UUIDv7"
-          },
-          "owningOrganizationId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "code": {
@@ -1735,17 +1713,16 @@
           }
         }
       },
-      "Equipment": {
+      "Asset": {
         "type": "object",
         "additionalProperties": false,
         "required": [
           "id",
           "tenantId",
-          "owningOrganizationId",
           "siteId",
           "code",
           "displayName",
-          "equipmentType",
+          "assetType",
           "status",
           "revision",
           "createdAt",
@@ -1756,9 +1733,6 @@
             "$ref": "#/components/schemas/UUIDv7"
           },
           "tenantId": {
-            "$ref": "#/components/schemas/UUIDv7"
-          },
-          "owningOrganizationId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "siteId": {
@@ -1774,7 +1748,7 @@
             "minLength": 1,
             "maxLength": 256
           },
-          "equipmentType": {
+          "assetType": {
             "type": "string",
             "minLength": 1,
             "maxLength": 128
@@ -1804,7 +1778,6 @@
         "required": [
           "id",
           "tenantId",
-          "owningOrganizationId",
           "siteId",
           "code",
           "displayName",
@@ -1819,9 +1792,6 @@
             "$ref": "#/components/schemas/UUIDv7"
           },
           "tenantId": {
-            "$ref": "#/components/schemas/UUIDv7"
-          },
-          "owningOrganizationId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "siteId": {
@@ -1867,10 +1837,9 @@
         "required": [
           "id",
           "tenantId",
-          "owningOrganizationId",
           "siteId",
           "deviceId",
-          "equipmentId",
+          "assetId",
           "bindingRole",
           "status",
           "validFrom",
@@ -1885,16 +1854,13 @@
           "tenantId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
-          "owningOrganizationId": {
-            "$ref": "#/components/schemas/UUIDv7"
-          },
           "siteId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "deviceId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
-          "equipmentId": {
+          "assetId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "bindingRole": {
@@ -1940,7 +1906,6 @@
         "required": [
           "id",
           "tenantId",
-          "owningOrganizationId",
           "siteId",
           "integrationInstanceId",
           "provider",
@@ -1957,9 +1922,6 @@
             "$ref": "#/components/schemas/UUIDv7"
           },
           "tenantId": {
-            "$ref": "#/components/schemas/UUIDv7"
-          },
-          "owningOrganizationId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "siteId": {
@@ -2015,36 +1977,6 @@
           }
         }
       },
-      "OrganizationCollection": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "items",
-          "nextCursor",
-          "hasMore"
-        ],
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Organization"
-            }
-          },
-          "nextCursor": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/OpaqueCursor"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "hasMore": {
-            "type": "boolean"
-          }
-        }
-      },
       "SiteCollection": {
         "type": "object",
         "additionalProperties": false,
@@ -2075,7 +2007,7 @@
           }
         }
       },
-      "EquipmentCollection": {
+      "AssetCollection": {
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -2087,7 +2019,7 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Equipment"
+              "$ref": "#/components/schemas/Asset"
             }
           },
           "nextCursor": {
@@ -2165,19 +2097,18 @@
           }
         }
       },
-      "Area": {
+      "Space": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "tenantId", "owningOrganizationId", "siteId", "parentAreaId", "code", "displayName", "areaType", "status", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "tenantId", "siteId", "parentSpaceId", "code", "displayName", "spaceType", "status", "revision", "createdAt", "updatedAt"],
         "properties": {
           "id": { "$ref": "#/components/schemas/UUIDv7" },
           "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
-          "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
-          "parentAreaId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "parentSpaceId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
           "code": { "type": "string", "minLength": 1, "maxLength": 64 },
           "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
-          "areaType": { "type": "string", "enum": ["CAMPUS", "BUILDING", "FLOOR", "ZONE", "ROOM", "PLANT_ROOM", "ROOFTOP", "OUTDOOR", "TENANT_SPACE", "OTHER"] },
+          "spaceType": { "type": "string", "enum": ["CAMPUS", "BUILDING", "FLOOR", "ZONE", "ROOM", "PLANT_ROOM", "ROOFTOP", "OUTDOOR", "TENANT_SPACE", "OTHER"] },
           "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] },
           "revision": { "$ref": "#/components/schemas/Revision" },
           "createdAt": { "$ref": "#/components/schemas/Instant" },
@@ -2187,11 +2118,10 @@
       "Sensor": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "tenantId", "owningOrganizationId", "siteId", "code", "displayName", "sensorType", "manufacturer", "model", "serialNumber", "calibrationDueAt", "metadata", "status", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "tenantId", "siteId", "code", "displayName", "sensorType", "manufacturer", "model", "serialNumber", "calibrationDueAt", "metadata", "status", "revision", "createdAt", "updatedAt"],
         "properties": {
           "id": { "$ref": "#/components/schemas/UUIDv7" },
           "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
-          "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
           "code": { "type": "string", "minLength": 1, "maxLength": 256 },
           "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
@@ -2210,25 +2140,23 @@
       "TelemetryPoint": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "tenantId", "owningOrganizationId", "siteId", "reportingDeviceId", "sensorId", "pointKey", "sourceKey", "displayName", "pointKind", "valueType", "unit", "writable", "sampleIntervalMs", "publishIntervalMs", "staleAfterMs", "formulaRevision", "sourceMetadata", "status", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "tenantId", "siteId", "reportingDeviceId", "sensorId", "pointCode", "sourceKey", "displayName", "pointType", "valueType", "unit", "writable", "sampleIntervalMs", "publishIntervalMs", "staleAfterMs", "sourceMetadata", "status", "revision", "createdAt", "updatedAt"],
         "properties": {
           "id": { "$ref": "#/components/schemas/UUIDv7" },
           "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
-          "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
           "reportingDeviceId": { "$ref": "#/components/schemas/UUIDv7" },
           "sensorId": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
-          "pointKey": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "pointCode": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9_]{0,127}$" },
           "sourceKey": { "type": "string", "minLength": 1, "maxLength": 128 },
           "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
-          "pointKind": { "type": "string", "enum": ["MEASURED", "CALCULATED", "STATE", "COMMAND", "FEEDBACK"] },
+          "pointType": { "type": "string", "enum": ["TELEMETRY", "COUNTER", "STATE", "SETTING", "COMMAND"] },
           "valueType": { "type": "string", "enum": ["BOOLEAN", "NUMBER", "STRING", "JSON"] },
           "unit": { "oneOf": [{ "type": "string", "maxLength": 64 }, { "type": "null" }] },
           "writable": { "type": "boolean" },
           "sampleIntervalMs": { "type": "integer", "minimum": 100, "maximum": 86400000 },
           "publishIntervalMs": { "type": "integer", "minimum": 100, "maximum": 86400000 },
           "staleAfterMs": { "type": "integer", "minimum": 100, "maximum": 604800000 },
-          "formulaRevision": { "oneOf": [{ "type": "string", "maxLength": 256 }, { "type": "null" }] },
           "sourceMetadata": { "type": "object", "additionalProperties": true },
           "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] },
           "revision": { "$ref": "#/components/schemas/Revision" },
@@ -2239,11 +2167,10 @@
       "AssetRelationship": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "tenantId", "owningOrganizationId", "siteId", "fromType", "fromId", "toType", "toId", "role", "status", "validFrom", "validTo", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "tenantId", "siteId", "fromType", "fromId", "toType", "toId", "role", "status", "validFrom", "validTo", "revision", "createdAt", "updatedAt"],
         "properties": {
           "id": { "$ref": "#/components/schemas/UUIDv7" },
           "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
-          "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
           "fromType": { "type": "string", "enum": ["EQUIPMENT", "DEVICE", "SENSOR", "POINT"] },
           "fromId": { "$ref": "#/components/schemas/UUIDv7" },
@@ -2258,50 +2185,32 @@
           "updatedAt": { "$ref": "#/components/schemas/Instant" }
         }
       },
-      "CalculatedPointInput": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["tenantId", "owningOrganizationId", "siteId", "calculatedPointId", "inputPointId", "inputRole", "ordinal", "formulaRevision"],
-        "properties": {
-          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
-          "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
-          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
-          "calculatedPointId": { "$ref": "#/components/schemas/UUIDv7" },
-          "inputPointId": { "$ref": "#/components/schemas/UUIDv7" },
-          "inputRole": { "type": "string", "minLength": 1, "maxLength": 128 },
-          "ordinal": { "type": "integer", "minimum": 0 },
-          "formulaRevision": { "type": "string", "minLength": 1, "maxLength": 256 }
-        }
-      },
       "AssetModelCounts": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["areas", "equipment", "deviceEndpoints", "sensors", "telemetryPoints", "calculatedPoints", "independentSensorDevices"],
+        "required": ["spaces", "assets", "deviceEndpoints", "physicalSensors", "points"],
         "properties": {
-          "areas": { "type": "integer", "minimum": 0 },
-          "equipment": { "type": "integer", "minimum": 0 },
+          "spaces": { "type": "integer", "minimum": 0 },
+          "assets": { "type": "integer", "minimum": 0 },
           "deviceEndpoints": { "type": "integer", "minimum": 0 },
-          "sensors": { "type": "integer", "minimum": 0 },
-          "telemetryPoints": { "type": "integer", "minimum": 0 },
-          "calculatedPoints": { "type": "integer", "minimum": 0 },
-          "independentSensorDevices": { "type": "integer", "minimum": 0 }
+          "physicalSensors": { "type": "integer", "minimum": 0 },
+          "points": { "type": "integer", "minimum": 0 }
         }
       },
       "SiteAssetModel": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["schemaVersion", "tenantId", "siteId", "areas", "equipment", "devices", "sensors", "telemetryPoints", "relationships", "calculatedPointInputs", "counts"],
+        "required": ["schemaVersion", "tenantId", "siteId", "spaces", "assets", "devices", "sensors", "telemetryPoints", "relationships", "counts"],
         "properties": {
-          "schemaVersion": { "type": "integer", "enum": [1] },
+          "schemaVersion": { "type": "integer", "enum": [2] },
           "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
-          "areas": { "type": "array", "items": { "$ref": "#/components/schemas/Area" } },
-          "equipment": { "type": "array", "items": { "$ref": "#/components/schemas/Equipment" } },
+          "spaces": { "type": "array", "items": { "$ref": "#/components/schemas/Space" } },
+          "assets": { "type": "array", "items": { "$ref": "#/components/schemas/Asset" } },
           "devices": { "type": "array", "items": { "$ref": "#/components/schemas/Device" } },
           "sensors": { "type": "array", "items": { "$ref": "#/components/schemas/Sensor" } },
           "telemetryPoints": { "type": "array", "items": { "$ref": "#/components/schemas/TelemetryPoint" } },
           "relationships": { "type": "array", "items": { "$ref": "#/components/schemas/AssetRelationship" } },
-          "calculatedPointInputs": { "type": "array", "items": { "$ref": "#/components/schemas/CalculatedPointInput" } },
           "counts": { "$ref": "#/components/schemas/AssetModelCounts" }
         }
       },

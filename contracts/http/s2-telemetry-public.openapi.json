@@ -24,14 +24,14 @@
     "stale-missing-and-upstream-unavailable-are-explicit-data-states",
     "publication-revisions-are-contiguous-per-device",
     "recovery-failure-loads-an-authoritative-snapshot",
-    "real-mode-never-falls-back-to-mock-or-thingsboard-read-through",
+    "real-mode-never-falls-back-to-mock-or-provider-read-through",
     "device-history-public-requests-never-accept-organization-or-site-claims",
     "device-history-authorization-binds-exact-device-keys-range-and-point-limit",
     "device-history-is-numeric-accepted-observations-only",
     "device-history-points-preserve-sampled-at-point-and-sensor-identity"
   ],
   "x-client-forbidden-fields": [
-    "organizationId",
+    "tenantId",
     "siteId",
     "principal",
     "roles",
@@ -39,8 +39,7 @@
     "policyRevision",
     "channel",
     "connectionToken",
-    "externalId",
-    "thingsBoardDeviceId"
+    "externalId"
   ],
   "x-limits": {
     "maxKeysPerDevice": 64,
@@ -304,7 +303,7 @@
       "PresenceApplicability": { "type": "string", "enum": ["APPLICABLE", "NOT_APPLICABLE"] },
       "DevicePresenceState": { "type": "string", "enum": ["ONLINE", "OFFLINE", "UNKNOWN"] },
       "TelemetryFreshness": { "type": "string", "enum": ["FRESH", "STALE", "MISSING"] },
-      "TelemetryQuality": { "type": "string", "enum": ["GOOD", "SUSPECT"] },
+      "TelemetryQuality": { "type": "string", "enum": ["GOOD", "PARTIAL", "ESTIMATED", "MANUAL", "STALE", "INVALID"] },
       "TelemetryReadiness": { "type": "string", "enum": ["CURRENT", "DEGRADED", "INCOMPLETE", "NOT_APPLICABLE"] },
       "DeviceDisplayState": { "type": ["string", "null"], "enum": ["ONLINE", "OFFLINE", "STALE", "UNKNOWN", "UNAVAILABLE", null] },
       "QualityReasonCode": {
@@ -383,11 +382,11 @@
       "DeviceObservationSnapshot": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["schemaVersion", "deviceId", "owningOrganizationId", "siteId", "businessRevision", "evaluatedAt", "evaluationAvailability", "availabilityReasons", "presence", "telemetryReadiness", "displayState", "values"],
+        "required": ["schemaVersion", "tenantId", "siteId", "deviceId", "businessRevision", "evaluatedAt", "evaluationAvailability", "availabilityReasons", "presence", "telemetryReadiness", "displayState", "values"],
         "properties": {
           "schemaVersion": { "type": "integer", "const": 1 },
           "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
-          "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
           "businessRevision": { "$ref": "#/components/schemas/BusinessRevision" },
           "evaluatedAt": { "$ref": "#/components/schemas/Instant" },
@@ -555,7 +554,7 @@
         }
       },
       "HistoryInstant": { "type": "string", "format": "date-time", "description": "UTC timestamp emitted with a Z suffix." },
-      "DeviceHistoryQuality": { "type": "string", "enum": ["GOOD", "SUSPECT"] },
+      "DeviceHistoryQuality": { "type": "string", "enum": ["GOOD", "PARTIAL", "ESTIMATED", "MANUAL", "STALE", "INVALID"] },
       "DeviceHistoryRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -612,10 +611,10 @@
       "DeviceHistoryResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["schemaVersion", "owningOrganizationId", "siteId", "deviceId", "series", "metadata"],
+        "required": ["schemaVersion", "tenantId", "siteId", "deviceId", "series", "metadata"],
         "properties": {
           "schemaVersion": { "type": "integer", "const": 1 },
-          "owningOrganizationId": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
           "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
           "series": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/components/schemas/DeviceHistorySeries" } },

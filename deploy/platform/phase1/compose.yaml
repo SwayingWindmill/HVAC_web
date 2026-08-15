@@ -22,7 +22,7 @@ services:
     image: ${HVAC_WEB_IMAGE:-hvac/hvac-web-real:0.1.0-dev}
     restart: unless-stopped
     depends_on:
-      - platform-gateway
+      - energy-api
       - centrifugo
     ports:
       - "${HTTPS_PORT:-443}:443"
@@ -30,166 +30,82 @@ services:
       - ${PUBLIC_TLS_DIR:-./runtime/tls}:/run/hvac/tls:ro
     networks: [public, application]
 
-  platform-gateway:
+  energy-api:
     <<: *go-service
     build:
       context: ../../..
       dockerfile: deploy/s0/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/platform-gateway/cmd/platform-gateway }
-    image: ${PLATFORM_GATEWAY_IMAGE:-hvac/platform-gateway:0.1.0-dev}
+    image: ${ENERGY_API_IMAGE:-hvac/energy-api:0.1.0-dev}
     environment:
+      ENERGY_API_IN_PROCESS_ENABLED: "true"
       PLATFORM_GATEWAY_ADDR: :8080
       PLATFORM_GATEWAY_DIAGNOSTICS_ADDR: :19080
-    expose: ["8080", "19080"]
-    networks: [application, data]
-
-  iam-service:
-    <<: *go-service
-    build:
-      context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/iam-service/cmd/iam-service }
-    image: ${IAM_SERVICE_IMAGE:-hvac/iam-service:0.1.0-dev}
-    environment:
       IAM_SERVICE_ADDR: :8444
-      IAM_DIAGNOSTICS_ADDR: :19081
-    expose: ["8444", "19081"]
-    networks: [application, data]
-
-  platform-core-service:
-    <<: *go-service
-    build:
-      context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/platform-core-service/cmd/platform-core-service }
-    image: ${PLATFORM_CORE_IMAGE:-hvac/platform-core-service:0.1.0-dev}
-    environment:
       CORE_SERVICE_ADDR: :18445
-      CORE_DIAGNOSTICS_ADDR: :19085
-    expose: ["18445", "19085"]
-    networks: [application, data]
+      QUERY_SERVICE_ADDR: :18447
+      AUDIT_SERVICE_ADDR: :8446
+      COMMAND_SERVICE_ADDR: :8447
+      ALARM_SERVICE_ADDR: :8448
+      WORK_ORDER_SERVICE_ADDR: :8449
+      IAM_URL: https://iam-service:8444
+      IAM_SERVER_NAME: iam-service
+      CORE_URL: https://platform-core-service:18445
+      CORE_SERVER_NAME: platform-core-service
+      CORE_IAM_ENDPOINT: https://iam-service:8444
+      CORE_IAM_SERVER_NAME: iam-service
+      TELEMETRY_QUERY_URL: https://telemetry-query-service:18447
+      TELEMETRY_QUERY_SERVER_NAME: telemetry-query-service
+      AUDIT_URL: https://audit-ledger-service:8446
+      AUDIT_SERVER_NAME: audit-ledger-service
+    expose: ["8080", "19080", "8444", "18445", "18447", "8446", "8447", "8448", "8449"]
+    networks:
+      application:
+        aliases: [platform-gateway, iam-service, platform-core-service, telemetry-query-service, audit-ledger-service, command-service, alarm-service, work-order-service]
+      data: {}
 
-  audit-ledger-service:
-    <<: *go-service
-    build:
-      context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/audit-ledger-service/cmd/audit-ledger-service }
-    image: ${AUDIT_LEDGER_IMAGE:-hvac/audit-ledger-service:0.1.0-dev}
-    expose: ["8446", "19082"]
-    networks: [application, data]
-
-  telemetry-runtime-service:
+  telemetry-worker:
     <<: *go-service
     build:
       context: ../../..
       dockerfile: deploy/s0/images/go-service.Dockerfile
       args: { SERVICE_PACKAGE: ./services/telemetry-runtime-service/cmd/telemetry-runtime-service }
-    image: ${TELEMETRY_RUNTIME_IMAGE:-hvac/telemetry-runtime-service:0.1.0-dev}
+    image: ${TELEMETRY_WORKER_IMAGE:-hvac/telemetry-worker:0.1.0-dev}
     environment:
       TELEMETRY_SERVICE_ADDR: :8446
       TELEMETRY_DIAGNOSTICS_ADDR: :19086
+      TELEMETRY_HISTORY_PROJECTION_ENABLED: "true"
+      ANALYTICS_PROJECTION_ENABLED: "true"
     expose: ["8446", "19086"]
-    networks: [application, data]
+    networks:
+      application:
+        aliases: [telemetry-runtime-service]
+      data: {}
 
-  mqtt-telemetry-adapter:
+  metric-worker:
     <<: *go-service
     build:
       context: ../../..
-      dockerfile: services/mqtt-telemetry-adapter/Dockerfile
-    image: ${MQTT_ADAPTER_IMAGE:-hvac/mqtt-telemetry-adapter:0.1.0-dev}
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/metric-engine-service/cmd/metric-engine-service }
+    image: ${METRIC_WORKER_IMAGE:-hvac/metric-worker:0.1.0-dev}
+    environment:
+      METRIC_DIAGNOSTICS_ADDR: :19090
+      METRIC_WORKER_MODE: worker
+    expose: ["19090"]
+    networks: [application, data]
+
+  iot-service:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/mqtt-telemetry-adapter/cmd/mqtt-telemetry-adapter }
+    image: ${IOT_SERVICE_IMAGE:-hvac/iot-service:0.1.0-dev}
+    environment:
+      COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"
     expose: ["19094"]
     networks: [application, mqtt]
-
-  telemetry-history-projector:
-    <<: *go-service
-    build:
-      context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/telemetry-runtime-service/cmd/telemetry-history-projector }
-    image: ${TELEMETRY_HISTORY_PROJECTOR_IMAGE:-hvac/telemetry-history-projector:0.1.0-dev}
-    networks: [application, data]
-
-  analytics-read-model-projector:
-    <<: *go-service
-    build:
-      context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/analytics-read-model-projector/cmd/analytics-read-model-projector }
-    image: ${ANALYTICS_PROJECTOR_IMAGE:-hvac/analytics-read-model-projector:0.1.0-dev}
-    expose: ["19089"]
-    networks: [application, data]
-
-  telemetry-query-service:
-    <<: *go-service
-    build:
-      context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/telemetry-query-service/cmd/telemetry-query-service }
-    image: ${TELEMETRY_QUERY_IMAGE:-hvac/telemetry-query-service:0.1.0-dev}
-    environment:
-      QUERY_SERVICE_ADDR: :18447
-      QUERY_DIAGNOSTICS_ADDR: :19088
-    expose: ["18447", "19088"]
-    networks: [application, data]
-
-  alarm-service:
-    <<: *go-service
-    build:
-      context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/alarm-service/cmd/alarm-service }
-    image: ${ALARM_SERVICE_IMAGE:-hvac/alarm-service:0.1.0-dev}
-    environment:
-      ALARM_SERVICE_ADDR: :8448
-      ALARM_DIAGNOSTICS_ADDR: :19088
-    expose: ["8448", "19088"]
-    networks: [application, data]
-
-  command-service:
-    <<: *go-service
-    build:
-      context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/command-service/cmd/command-service }
-    image: ${COMMAND_SERVICE_IMAGE:-hvac/command-service:0.1.0-dev}
-    environment:
-      COMMAND_SERVICE_ADDR: :8447
-      COMMAND_DIAGNOSTICS_ADDR: :19087
-    expose: ["8447", "19087"]
-    networks: [application, data]
-
-  command-dispatcher:
-    <<: *go-service
-    build:
-      context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/command-dispatcher/cmd/command-dispatcher }
-    image: ${COMMAND_DISPATCHER_IMAGE:-hvac/command-dispatcher:0.1.0-dev}
-    expose: ["19088"]
-    networks: [application]
-
-  command-verifier:
-    <<: *go-service
-    build:
-      context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/command-dispatcher/cmd/command-verifier }
-    image: ${COMMAND_VERIFIER_IMAGE:-hvac/command-verifier:0.1.0-dev}
-    expose: ["19089"]
-    networks: [application]
-
-  work-order-service:
-    <<: *go-service
-    build:
-      context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/work-order-service/cmd/work-order-service }
-    image: ${WORK_ORDER_SERVICE_IMAGE:-hvac/work-order-service:0.1.0-dev}
-    environment:
-      WORK_ORDER_SERVICE_ADDR: :8449
-    expose: ["8449"]
-    networks: [application, data]
 
   postgres:
     image: postgres:16.4-bookworm
@@ -321,7 +237,7 @@ services:
     volumes:
       - ./realtime/centrifugo.json:/centrifugo/centrifugo.json:ro
       - ${INTERNAL_PKI_DIR:-./runtime/internal-pki}:/run/hvac/pki:ro
-    depends_on: [redis, telemetry-runtime-service]
+    depends_on: [redis, telemetry-worker]
     expose: ["8000"]
     networks: [application, data]
 

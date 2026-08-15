@@ -142,7 +142,6 @@ const MATRIX_ROWS: MatrixRow[] = [
 const DATA_SOURCES: DataSource[] = [
   { key: 'rest', name: 'HVAC REST API', type: 'REST', endpoint: '/api/v1', status: 'online', latencyMs: 42, lastSync: '刚刚', owner: 'backend' },
   { key: 'ws', name: 'Telemetry Socket.IO', type: 'WebSocket', endpoint: '/ws/telemetry', status: 'online', latencyMs: 28, lastSync: '刚刚', owner: 'realtime' },
-  { key: 'tb', name: 'ThingsBoard Asset Tree', type: 'Connector', endpoint: 'assets/tree', status: 'degraded', latencyMs: 186, lastSync: '3 分钟前', owner: 'integration' },
   { key: 'ai', name: 'AI Chat Gateway', type: 'SSE', endpoint: '/api/v1/ai/chat', status: 'degraded', latencyMs: 320, lastSync: 'Mock 模式', owner: 'ai' },
 ];
 

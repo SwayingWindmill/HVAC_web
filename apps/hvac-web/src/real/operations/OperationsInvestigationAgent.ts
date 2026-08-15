@@ -31,7 +31,7 @@ export interface OperationsInvestigationConnectionState {
 }
 
 export interface OperationsInvestigationAgentOptions {
-  readonly organizationId: string;
+  readonly tenantId: string;
   readonly siteId: string;
   readonly investigationId: string;
   readonly onSnapshot: (snapshot: OperationsInvestigationStateSnapshot) => void;
@@ -94,7 +94,7 @@ export class OperationsInvestigationAgent extends AbstractAgent {
     });
     this.options = options;
     this.recoveryScope = Object.freeze({
-      organizationId: options.organizationId,
+      tenantId: options.tenantId,
       siteId: options.siteId,
       investigationId: options.investigationId,
     });
@@ -138,7 +138,7 @@ export class OperationsInvestigationAgent extends AbstractAgent {
               const batch = await streamSiteNightEnergyInvestigationEvents(
                 this.options.investigationId,
                 {
-                  trustedOrganizationId: this.options.organizationId,
+                  trustedTenantId: this.options.tenantId,
                   trustedSiteId: this.options.siteId,
                   signal: controller.signal,
                   recoveryPosition: this.recoveryPosition,

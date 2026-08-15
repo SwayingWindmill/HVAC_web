@@ -29,29 +29,29 @@ const (
 	ReasonDenyExplicit          ReasonCode = "DENY_EXPLICIT"
 	ReasonDenyPrincipalNotFound ReasonCode = "DENY_PRINCIPAL_NOT_FOUND"
 	ReasonDenyPrincipalInactive ReasonCode = "DENY_PRINCIPAL_INACTIVE"
-	ReasonDenyMembership        ReasonCode = "DENY_ACTING_ORGANIZATION_MEMBERSHIP_REQUIRED"
+	ReasonDenyMembership        ReasonCode = "DENY_TENANT_MEMBERSHIP_REQUIRED"
 	ReasonDenyActionNotGranted  ReasonCode = "DENY_ACTION_NOT_GRANTED"
 )
 
 type AuthorizedTarget struct {
-	DeviceID             string   `json:"deviceId"`
-	OwningOrganizationID string   `json:"owningOrganizationId"`
-	SiteID               string   `json:"siteId"`
-	Keys                 []string `json:"keys"`
+	TenantID string   `json:"tenantId"`
+	SiteID   string   `json:"siteId"`
+	DeviceID string   `json:"deviceId"`
+	Keys     []string `json:"keys"`
 }
 
 type Decision struct {
-	Allowed              bool               `json:"allowed"`
-	PrincipalID          string             `json:"principalId"`
-	SubjectIssuer        string             `json:"subjectIssuer"`
-	Subject              string             `json:"subject"`
-	ActingOrganizationID string             `json:"actingOrganizationId"`
-	Action               Action             `json:"action"`
-	Targets              []AuthorizedTarget `json:"targets"`
-	ScopeDigest          string             `json:"scopeDigest"`
-	PolicyRevision       string             `json:"policyRevision"`
-	ReasonCode           ReasonCode         `json:"reasonCode"`
-	DecidedAt            string             `json:"decidedAt"`
+	Allowed        bool               `json:"allowed"`
+	PrincipalID    string             `json:"principalId"`
+	SubjectIssuer  string             `json:"subjectIssuer"`
+	Subject        string             `json:"subject"`
+	TenantID       string             `json:"tenantId"`
+	Action         Action             `json:"action"`
+	Targets        []AuthorizedTarget `json:"targets"`
+	ScopeDigest    string             `json:"scopeDigest"`
+	PolicyRevision string             `json:"policyRevision"`
+	ReasonCode     ReasonCode         `json:"reasonCode"`
+	DecidedAt      string             `json:"decidedAt"`
 }
 
 type DecisionResponse struct {
@@ -65,29 +65,29 @@ type Actor struct {
 }
 
 type GrantClaims struct {
-	Version              int     `json:"version"`
-	Issuer               string  `json:"issuer"`
-	Presenter            string  `json:"presenter"`
-	Audience             string  `json:"audience"`
-	PrincipalID          string  `json:"principalId"`
-	SubjectIssuer        string  `json:"subjectIssuer"`
-	Subject              string  `json:"subject"`
-	ActingOrganizationID string  `json:"actingOrganizationId"`
-	ActorChain           []Actor `json:"actorChain"`
-	Action               Action  `json:"action"`
-	ScopeDigest          string  `json:"scopeDigest"`
-	TargetCount          int     `json:"targetCount"`
-	KeyCount             int     `json:"keyCount"`
-	PolicyRevision       string  `json:"policyRevision"`
-	SessionID            string  `json:"sessionId"`
-	ParentTokenID        string  `json:"parentTokenId"`
-	RequestID            string  `json:"requestId"`
-	TraceID              string  `json:"traceId"`
-	Route                string  `json:"route"`
-	IssuedAt             int64   `json:"issuedAt"`
-	ExpiresAt            int64   `json:"expiresAt"`
-	TokenID              string  `json:"tokenId"`
-	Transitive           bool    `json:"transitive"`
+	Version        int     `json:"version"`
+	Issuer         string  `json:"issuer"`
+	Presenter      string  `json:"presenter"`
+	Audience       string  `json:"audience"`
+	TenantID       string  `json:"tenantId"`
+	PrincipalID    string  `json:"principalId"`
+	SubjectIssuer  string  `json:"subjectIssuer"`
+	Subject        string  `json:"subject"`
+	ActorChain     []Actor `json:"actorChain"`
+	Action         Action  `json:"action"`
+	ScopeDigest    string  `json:"scopeDigest"`
+	TargetCount    int     `json:"targetCount"`
+	KeyCount       int     `json:"keyCount"`
+	PolicyRevision string  `json:"policyRevision"`
+	SessionID      string  `json:"sessionId"`
+	ParentTokenID  string  `json:"parentTokenId"`
+	RequestID      string  `json:"requestId"`
+	TraceID        string  `json:"traceId"`
+	Route          string  `json:"route"`
+	IssuedAt       int64   `json:"issuedAt"`
+	ExpiresAt      int64   `json:"expiresAt"`
+	TokenID        string  `json:"tokenId"`
+	Transitive     bool    `json:"transitive"`
 }
 
 type GrantUseStatus struct {
@@ -99,16 +99,16 @@ type GrantUseStatus struct {
 type GrantUseChecker func(GrantClaims) (GrantUseStatus, error)
 
 type GrantValidation struct {
-	Now                  time.Time
-	Issuer               string
-	Presenter            string
-	Audience             string
-	PrincipalID          string
-	SessionID            string
-	Action               Action
-	ActingOrganizationID string
-	Targets              []Target
-	UseChecker           GrantUseChecker
+	Now         time.Time
+	Issuer      string
+	Presenter   string
+	Audience    string
+	PrincipalID string
+	SessionID   string
+	Action      Action
+	TenantID    string
+	Targets     []Target
+	UseChecker  GrantUseChecker
 }
 
 func SignGrant(signer crypto.Signer, claims GrantClaims) (string, error) {
@@ -190,7 +190,7 @@ func ValidateGrant(claims GrantClaims, validation GrantValidation) error {
 	if claims.ExpiresAt <= validation.Now.Unix() || claims.ExpiresAt <= claims.IssuedAt || time.Duration(claims.ExpiresAt-claims.IssuedAt)*time.Second > MaximumGrantLifetime {
 		return errors.New("telemetry grant is expired or too long-lived")
 	}
-	if claims.PrincipalID == "" || claims.SubjectIssuer == "" || claims.Subject == "" || claims.ActingOrganizationID == "" || claims.SessionID == "" || claims.ParentTokenID == "" || claims.TokenID == "" {
+	if claims.TenantID == "" || claims.PrincipalID == "" || claims.SubjectIssuer == "" || claims.Subject == "" || claims.SessionID == "" || claims.ParentTokenID == "" || claims.TokenID == "" {
 		return errors.New("telemetry grant identity fields are incomplete")
 	}
 	if claims.RequestID == "" || claims.TraceID == "" || claims.Route == "" || len(claims.ActorChain) == 0 {
@@ -205,10 +205,10 @@ func ValidateGrant(claims GrantClaims, validation GrantValidation) error {
 	if !validation.Action.Valid() || claims.Action != validation.Action {
 		return errors.New("telemetry grant action is invalid")
 	}
-	if claims.ActingOrganizationID != validation.ActingOrganizationID {
-		return errors.New("telemetry grant acting organization is invalid")
+	if claims.TenantID != validation.TenantID || !validUUIDv7(validation.TenantID) {
+		return errors.New("telemetry grant tenant is invalid")
 	}
-	expectedDigest, err := ScopeDigest(validation.Action, validation.ActingOrganizationID, validation.Targets)
+	expectedDigest, err := ScopeDigest(validation.Action, validation.TenantID, validation.Targets)
 	if err != nil || claims.ScopeDigest != expectedDigest {
 		return errors.New("telemetry grant scope is invalid")
 	}

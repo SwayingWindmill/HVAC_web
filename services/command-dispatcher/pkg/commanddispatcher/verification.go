@@ -12,7 +12,7 @@ import (
 const reportedStateRetryInterval = 100 * time.Millisecond
 
 type DurableVerificationStore interface {
-	ClaimVerification(ctx context.Context, organizationID, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error)
+	ClaimVerification(ctx context.Context, tenantID, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error)
 	ResolveVerification(ctx context.Context, envelope commandmodel.VerificationEnvelope, result commandmodel.VerificationResult) error
 }
 
@@ -46,7 +46,7 @@ func (verifier *AuthoritativeReportedStateVerifier) Verify(ctx context.Context, 
 			return commandmodel.VerificationResult{}, errors.New("reported-state evidence identifier is required")
 		}
 		result := commandmodel.VerificationResult{Outcome: commandmodel.VerificationInconclusive, EvidenceID: evidenceID, Reported: reported}
-		if reported.OrganizationID != envelope.OrganizationID || reported.SiteID != envelope.SiteID || reported.DeviceID != envelope.DeviceID {
+		if reported.TenantID != envelope.TenantID || reported.SiteID != envelope.SiteID || reported.DeviceID != envelope.DeviceID {
 			result.FailureCode = "REPORTED_STATE_SCOPE_MISMATCH"
 			return result, nil
 		}
@@ -105,11 +105,11 @@ func NewDurableVerificationWorker(store DurableVerificationStore, verifier Repor
 	return &DurableVerificationWorker{store: store, verifier: verifier, workerID: workerID, leaseFor: leaseFor}
 }
 
-func (worker *DurableVerificationWorker) RunOnce(ctx context.Context, organizationID string) error {
+func (worker *DurableVerificationWorker) RunOnce(ctx context.Context, tenantID string) error {
 	if worker == nil || worker.store == nil || worker.verifier == nil || strings.TrimSpace(worker.workerID) == "" {
 		return errors.New("verification worker is not configured")
 	}
-	envelope, err := worker.store.ClaimVerification(ctx, organizationID, worker.workerID, worker.leaseFor)
+	envelope, err := worker.store.ClaimVerification(ctx, tenantID, worker.workerID, worker.leaseFor)
 	if err != nil {
 		return err
 	}

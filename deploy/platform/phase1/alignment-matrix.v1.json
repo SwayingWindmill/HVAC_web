@@ -112,7 +112,7 @@
       "area": "edge",
       "requirement": "Cloud 不直接访问 PLC/BMS/PCS，必须经 Gateway",
       "status": "KEEP",
-      "current": "当前设备链路通过 Edge/ThingsBoard/MQTT adapter，不存在浏览器直连 OT",
+      "current": "当前设备链路通过 Edge/MQTT adapter，不存在浏览器直连 OT",
       "action": "加入 deployment Gate 静态约束"
     },
     {
@@ -248,7 +248,7 @@
       "area": "delivery",
       "requirement": "统一 Phase 1 PostgreSQL 实例必须通过受控 migration flow 初始化 S0-S5 schema，生产角色凭据不得来自 local/test bootstrap",
       "status": "KEEP",
-      "current": "Phase 1 migrator 使用 28 个精确 allowlist migration、migration hash/drift tracking、runtime credential SQL；fixture/testdata/bootstrap/legacy seed 不进入执行链，隔离 PostgreSQL 双跑幂等验证已通过",
+      "current": "Phase 1 migrator 使用 39 个精确 allowlist migration、migration hash/drift tracking、runtime credential SQL；已纳入 Audit PostgreSQL-Outbox、Metric V2 runtime/cross-store、Data Governance 与 Object Storage Governance；fixture/testdata/bootstrap/legacy seed 不进入执行链，隔离 PostgreSQL 双跑幂等验证基线保持",
       "action": "保持 migration profile 在应用 rollout 前执行；Staging/Production 使用签名 migrator digest 与非版本化 runtime credential file"
     },
     {

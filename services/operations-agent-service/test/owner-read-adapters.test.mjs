@@ -8,12 +8,12 @@ import {
   createRegistryOwnerReader,
 } from '../dist/tools/index.js';
 
-const organizationId = '0198a36e-4c9d-7b5a-8f2d-4c5e6f708192';
+const tenantId = '0198a36e-4c9d-7b5a-8f2d-4c5e6f708192';
 const siteId = '0198a36e-4c9d-7b5a-8f2d-4c5e6f708193';
 const equipmentId = '0198a36e-4c9d-7b5a-8f2d-4c5e6f708194';
 
 const scope = Object.freeze({
-  organizationId,
+  tenantId,
   siteId,
   equipmentId: null,
   deviceId: null,
@@ -52,7 +52,7 @@ const energyContext = Object.freeze({
 
 const siteDto = Object.freeze({
   id: siteId,
-  owningOrganizationId: organizationId,
+  tenantId: tenantId,
   code: 'TOKYO-HQ',
   displayName: 'Tokyo Headquarters',
   timezone: 'Asia/Tokyo',
@@ -64,7 +64,7 @@ const siteDto = Object.freeze({
 
 const equipmentDto = Object.freeze({
   id: equipmentId,
-  owningOrganizationId: organizationId,
+  tenantId: tenantId,
   siteId,
   code: 'CH-01',
   displayName: 'Chiller 01',
@@ -79,7 +79,7 @@ const energyRequest = Object.freeze({
   requestId: 'read-energy-series-001',
   tool: 'analytics.getEnergySeries',
   input: {
-    organizationId,
+    tenantId,
     siteId,
     energyType: 'electricity',
     granularity: 'hour',
@@ -314,7 +314,7 @@ test('Owner readers reject timeout, malformed JSON, missing authorization and cr
     baseUrl: 'https://platform-core.internal',
     fetchImplementation: async () => jsonResponse({
       ...siteDto,
-      owningOrganizationId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708199',
+      tenantId: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708199',
     }),
   });
   await expectOwnerError(() => registryWrongOrganization.read({

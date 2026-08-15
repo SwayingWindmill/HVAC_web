@@ -16,7 +16,8 @@
       "migrations": [
         "infra/s0-durable/postgres/init/001-s0-durable.sql",
         "infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql",
-        "infra/s0-durable/postgres/init/003-operations-audit-ledger.sql"
+        "infra/s0-durable/postgres/init/003-operations-audit-ledger.sql",
+        "infra/s0-durable/postgres/init/004-audit-postgres-outbox.sql"
       ]
     },
     {
@@ -34,7 +35,11 @@
         "infra/s1-registry/postgres/init/007a-tenant-spatial-scope.sql",
         "infra/s1-registry/postgres/init/007b-control-point-invariants.sql",
         "infra/s1-registry/postgres/init/008-s5-work-order-authorization.sql",
-        "infra/s1-registry/postgres/init/009-energy-data-foundation.sql"
+        "infra/s1-registry/postgres/init/009-energy-data-foundation.sql",
+        "infra/s1-registry/postgres/init/009c-metric-model-v2.sql",
+        "infra/s1-registry/postgres/init/009d-data-governance-v2.sql",
+        "infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql",
+        "infra/s1-registry/postgres/init/009i-backend-integration-v2.sql"
       ]
     },
     {
@@ -96,6 +101,7 @@
     "s1_iam_runtime",
     "s1_iam_reconciler",
     "s1_core_service",
+    "metric_engine_runtime",
     "s2_iam_grant_runtime",
     "s2_telemetry_migrator_service",
     "s2_telemetry_service",

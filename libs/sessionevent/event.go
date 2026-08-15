@@ -24,7 +24,7 @@ type ActorChainV1 struct {
 	InitiatingIssuer     string
 	ExecutingService     string
 	ExecutingSPIFFEID    string
-	ActingOrganizationID string
+	TenantID string
 }
 
 // SessionAuditEventV1 is the repository-owned representation of
@@ -35,7 +35,7 @@ type SessionAuditEventV1 struct {
 	SchemaVersion     uint32
 	MessageType       string
 	Producer          string
-	OrganizationID    string
+	TenantID    string
 	PartitionKey      string
 	AggregateType     string
 	AggregateID       string
@@ -61,7 +61,7 @@ func (event SessionAuditEventV1) Validate() error {
 	if event.MessageType != MessageType || event.Producer != Producer || event.AggregateType != AggregateType {
 		return errors.New("event identity fields are invalid")
 	}
-	if event.MessageID == "" || event.OrganizationID == "" || event.PartitionKey == "" || event.AggregateID == "" || event.AggregateVersion == 0 {
+	if event.MessageID == "" || event.TenantID == "" || event.PartitionKey == "" || event.AggregateID == "" || event.AggregateVersion == 0 {
 		return errors.New("event aggregate fields are incomplete")
 	}
 	if len(event.AggregateID) != sha256.Size*2 || strings.ToLower(event.AggregateID) != event.AggregateID {
@@ -76,7 +76,7 @@ func (event SessionAuditEventV1) Validate() error {
 	if event.OccurredAtUnixMS <= 0 || event.PublishedAtUnixMS <= 0 || event.PublishedAtUnixMS < event.OccurredAtUnixMS {
 		return errors.New("event timestamps are invalid")
 	}
-	if event.Actor.InitiatingSubject == "" || event.Actor.InitiatingIssuer == "" || event.Actor.ExecutingService == "" || event.Actor.ExecutingSPIFFEID == "" || event.Actor.ActingOrganizationID != event.OrganizationID {
+	if event.Actor.InitiatingSubject == "" || event.Actor.InitiatingIssuer == "" || event.Actor.ExecutingService == "" || event.Actor.ExecutingSPIFFEID == "" || event.Actor.TenantID != event.TenantID {
 		return errors.New("event actor chain is invalid")
 	}
 	if event.Action == "" || event.Result == "" || event.PolicyRevision == "" || event.PayloadSHA256 == "" || event.SessionState == "" {
@@ -89,7 +89,7 @@ func (event SessionAuditEventV1) Validate() error {
 		return errors.New("payload hash must be lowercase sha256 hex")
 	}
 	for _, value := range []string{
-		event.MessageID, event.OrganizationID, event.PartitionKey, event.AggregateID,
+		event.MessageID, event.TenantID, event.PartitionKey, event.AggregateID,
 		event.CorrelationID, event.CausationID, event.TraceID, event.Traceparent, event.Action,
 		event.Result, event.PolicyRevision, event.SessionState,
 		event.Actor.InitiatingSubject, event.Actor.InitiatingIssuer,
@@ -111,7 +111,7 @@ func (event SessionAuditEventV1) MarshalBinary() ([]byte, error) {
 	output = appendVarint(output, 2, uint64(event.SchemaVersion))
 	output = appendString(output, 3, event.MessageType)
 	output = appendString(output, 4, event.Producer)
-	output = appendString(output, 5, event.OrganizationID)
+	output = appendString(output, 5, event.TenantID)
 	output = appendString(output, 6, event.PartitionKey)
 	output = appendString(output, 7, event.AggregateType)
 	output = appendString(output, 8, event.AggregateID)
@@ -225,7 +225,7 @@ func marshalActor(actor ActorChainV1) []byte {
 	output = appendString(output, 2, actor.InitiatingIssuer)
 	output = appendString(output, 3, actor.ExecutingService)
 	output = appendString(output, 4, actor.ExecutingSPIFFEID)
-	output = appendString(output, 5, actor.ActingOrganizationID)
+	output = appendString(output, 5, actor.TenantID)
 	return output
 }
 
@@ -259,7 +259,7 @@ func unmarshalActor(input []byte) (ActorChainV1, error) {
 		case 4:
 			actor.ExecutingSPIFFEID = value
 		case 5:
-			actor.ActingOrganizationID = value
+			actor.TenantID = value
 		}
 		input = input[size:]
 	}
@@ -275,7 +275,7 @@ func assignString(event *SessionAuditEventV1, number protowire.Number, value str
 	case 4:
 		event.Producer = value
 	case 5:
-		event.OrganizationID = value
+		event.TenantID = value
 	case 6:
 		event.PartitionKey = value
 	case 7:

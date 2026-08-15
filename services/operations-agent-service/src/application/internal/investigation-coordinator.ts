@@ -331,7 +331,7 @@ const scopeIsWithin = (
   authorized: InvestigationScope,
   returned: InvestigationScope,
 ): boolean => (
-  authorized.organizationId === returned.organizationId
+  authorized.tenantId === returned.tenantId
   && (authorized.siteId === null || authorized.siteId === returned.siteId)
   && (authorized.equipmentId === null || authorized.equipmentId === returned.equipmentId)
   && (authorized.deviceId === null || authorized.deviceId === returned.deviceId)
@@ -396,7 +396,7 @@ const hasValidReadInput = (request: ParallelReadRequest): boolean => {
   }
   if (request.tool === 'analytics.getEnergySeries') {
     return hasExactReadInputKeys(input, [
-      'organizationId',
+      'tenantId',
       'siteId',
       'energyType',
       'granularity',
@@ -405,7 +405,7 @@ const hasValidReadInput = (request: ParallelReadRequest): boolean => {
       'to',
       'qualityPolicy',
     ])
-      && isNonEmptyReadString(input.organizationId)
+      && isNonEmptyReadString(input.tenantId)
       && isNonEmptyReadString(input.siteId)
       && input.energyType === 'electricity'
       && (input.granularity === 'hour'
@@ -430,7 +430,7 @@ const createRuntimePlanningContext = (
   trust: OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTROL_POLICY.trust,
   investigationId: investigation.id,
   scope: Object.freeze({
-    organizationId: investigation.scope.organizationId,
+    tenantId: investigation.scope.tenantId,
     siteId: investigation.scope.siteId,
     equipmentId: investigation.scope.equipmentId,
     deviceId: investigation.scope.deviceId,
@@ -453,7 +453,7 @@ const requestIsWithinPlanningScope = (
     return scope.siteId === null || request.input.siteId === scope.siteId;
   }
   if (request.tool === 'analytics.getEnergySeries') {
-    return request.input.organizationId === scope.organizationId
+    return request.input.tenantId === scope.tenantId
       && (scope.siteId === null || request.input.siteId === scope.siteId);
   }
   return scope.equipmentId === null || request.input.equipmentId === scope.equipmentId;
@@ -618,7 +618,7 @@ export const createInvestigationCoordinator = (
     readonly recordReferences?: readonly OperationsAuditRecordReference[];
   }): AuditRecord => createOperationsAuditEvent({
     eventId: operationsAuditEventId({
-      organizationId: input.scope.organizationId,
+      tenantId: input.scope.tenantId,
       siteId: input.scope.siteId ?? 'organization-scope',
       investigationId: input.investigationId,
       runId: input.runId,

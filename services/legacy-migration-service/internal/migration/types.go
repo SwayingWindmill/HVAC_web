@@ -13,10 +13,9 @@ import (
 )
 
 const (
-	KindOrganization = "ORGANIZATION"
-	KindSite         = "SITE"
-	KindEquipment    = "EQUIPMENT"
-	KindDevice       = "DEVICE"
+	KindSite      = "SITE"
+	KindEquipment = "EQUIPMENT"
+	KindDevice    = "DEVICE"
 
 	maxRecordBytes = 1 << 20
 	maxInputBytes  = 256 << 20
@@ -31,6 +30,7 @@ type SourceRef struct {
 }
 
 type Record struct {
+	TenantID              string         `json:"tenantId"`
 	Kind                  string         `json:"kind"`
 	SourceSystem          string         `json:"sourceSystem"`
 	SourceTable           string         `json:"sourceTable"`
@@ -44,7 +44,6 @@ type Record struct {
 	Status                string         `json:"status"`
 	Timezone              string         `json:"timezone,omitempty"`
 	ResourceType          string         `json:"resourceType,omitempty"`
-	OrganizationRef       *SourceRef     `json:"organizationRef,omitempty"`
 	SiteRef               *SourceRef     `json:"siteRef,omitempty"`
 	RelationEvidence      map[string]any `json:"relationEvidence,omitempty"`
 }
@@ -143,6 +142,7 @@ func ReadRecords(reader io.Reader) ([]Record, error) {
 }
 
 func normalizeRecord(record Record) Record {
+	record.TenantID = strings.TrimSpace(record.TenantID)
 	record.Kind = strings.TrimSpace(record.Kind)
 	record.SourceSystem = strings.TrimSpace(record.SourceSystem)
 	record.SourceTable = strings.TrimSpace(record.SourceTable)
@@ -155,7 +155,6 @@ func normalizeRecord(record Record) Record {
 	record.Status = strings.TrimSpace(record.Status)
 	record.Timezone = strings.TrimSpace(record.Timezone)
 	record.ResourceType = strings.TrimSpace(record.ResourceType)
-	record.OrganizationRef = normalizeRef(record.OrganizationRef)
 	record.SiteRef = normalizeRef(record.SiteRef)
 	if record.RelationEvidence == nil {
 		record.RelationEvidence = map[string]any{}
@@ -167,6 +166,9 @@ func (record Record) ValidateEnvelope() error {
 	record = normalizeRecord(record)
 	if kindRank(record.Kind) == 99 {
 		return fmt.Errorf("unsupported record kind %q", record.Kind)
+	}
+	if !isUUIDv7(record.TenantID) {
+		return errors.New("tenantId must be UUIDv7")
 	}
 	for name, field := range map[string]struct {
 		value string
@@ -191,9 +193,6 @@ func (record Record) ValidateEnvelope() error {
 	if _, err := hex.Decode(decoded, []byte(record.SourceRowHash)); err != nil || record.SourceRowHash != strings.ToLower(record.SourceRowHash) {
 		return errors.New("sourceRowHash must be lowercase SHA-256 hex")
 	}
-	if err := validateRef("organizationRef", record.OrganizationRef); err != nil {
-		return err
-	}
 	if err := validateRef("siteRef", record.SiteRef); err != nil {
 		return err
 	}
@@ -211,7 +210,7 @@ func (record Record) ValidateEnvelope() error {
 }
 
 func (record Record) SourceIdentity() string {
-	return fmt.Sprintf("%d:%s%d:%s%d:%s", len(record.SourceSystem), record.SourceSystem, len(record.SourceTable), record.SourceTable, len(record.SourceKey), record.SourceKey)
+	return fmt.Sprintf("%d:%s%d:%s%d:%s%d:%s", len(record.TenantID), record.TenantID, len(record.SourceSystem), record.SourceSystem, len(record.SourceTable), record.SourceTable, len(record.SourceKey), record.SourceKey)
 }
 
 func (record Record) TargetResourceType() string {
@@ -226,14 +225,7 @@ func (record Record) BusinessReason() string {
 		return "INVALID_DISPLAY_NAME"
 	}
 	switch record.Kind {
-	case KindOrganization:
-		if !oneOf(record.Status, "ACTIVE", "SUSPENDED", "RETIRED") {
-			return "INVALID_STATUS"
-		}
 	case KindSite:
-		if record.OrganizationRef == nil {
-			return "MISSING_ORGANIZATION_PARENT"
-		}
 		if strings.TrimSpace(record.Timezone) == "" || len(record.Timezone) > 128 {
 			return "INVALID_TIMEZONE"
 		}
@@ -241,7 +233,7 @@ func (record Record) BusinessReason() string {
 			return "INVALID_STATUS"
 		}
 	case KindEquipment:
-		if record.OrganizationRef == nil || record.SiteRef == nil {
+		if record.SiteRef == nil {
 			return "MISSING_SITE_PARENT"
 		}
 		if strings.TrimSpace(record.ResourceType) == "" || len(record.ResourceType) > 128 {
@@ -257,7 +249,7 @@ func (record Record) BusinessReason() string {
 			return "INVALID_STATUS"
 		}
 	case KindDevice:
-		if record.OrganizationRef == nil || record.SiteRef == nil {
+		if record.SiteRef == nil {
 			return "MISSING_SITE_PARENT"
 		}
 		if strings.TrimSpace(record.ResourceType) == "" || len(record.ResourceType) > 128 {
@@ -341,14 +333,12 @@ func validateMetadata(value any) error {
 
 func kindRank(kind string) int {
 	switch kind {
-	case KindOrganization:
-		return 0
 	case KindSite:
-		return 1
+		return 0
 	case KindEquipment:
-		return 2
+		return 1
 	case KindDevice:
-		return 3
+		return 2
 	default:
 		return 99
 	}

@@ -300,8 +300,8 @@ ON CONFLICT (id) DO UPDATE SET
 
 func replaceReconciledFacts(ctx context.Context, transaction pgx.Tx, request ReconciliationRequest, now time.Time) error {
 	principalID := request.Principal.ID
-	for _, table := range []string{"explicit_denies", "site_bindings", "role_bindings", "organization_memberships"} {
-		if _, err := transaction.Exec(ctx, `DELETE FROM iam.`+table+` WHERE principal_id = $1::uuid`, principalID); err != nil {
+	for _, table := range []string{"explicit_denies", "site_bindings", "role_bindings", "tenant_memberships"} {
+		if _, err := transaction.Exec(ctx, `DELETE FROM iam.`+table+` WHERE tenant_id = $1::uuid AND principal_id = $2::uuid`, request.TenantID, principalID); err != nil {
 			return fmt.Errorf("clear reconciled IAM %s: %w", table, err)
 		}
 	}
@@ -311,10 +311,10 @@ func replaceReconciledFacts(ctx context.Context, transaction pgx.Tx, request Rec
 			return err
 		}
 		if _, err := transaction.Exec(ctx, `
-INSERT INTO iam.organization_memberships (
-  id, organization_id, principal_id, status, valid_from, valid_to, revision, created_at, updated_at
+INSERT INTO iam.tenant_memberships (
+  id, tenant_id, principal_id, status, valid_from, valid_to, revision, created_at, updated_at
 ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $8)
-`, id, membership.OrganizationID, principalID, membership.Status, membership.ValidFrom, membership.ValidTo, request.SourceVersion, now); err != nil {
+`, id, membership.TenantID, principalID, membership.Status, membership.ValidFrom, membership.ValidTo, request.SourceVersion, now); err != nil {
 			return fmt.Errorf("insert reconciled IAM membership: %w", err)
 		}
 	}
@@ -329,9 +329,9 @@ INSERT INTO iam.organization_memberships (
 		}
 		if _, err := transaction.Exec(ctx, `
 INSERT INTO iam.role_bindings (
-  id, organization_id, principal_id, role_key, actions, effect, valid_from, valid_to, revision, created_at, updated_at
+  id, tenant_id, principal_id, role_key, actions, effect, valid_from, valid_to, revision, created_at, updated_at
 ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $10)
-`, id, binding.OrganizationID, principalID, binding.RoleKey, actions, binding.Effect, binding.ValidFrom, binding.ValidTo, request.SourceVersion, now); err != nil {
+`, id, binding.TenantID, principalID, binding.RoleKey, actions, binding.Effect, binding.ValidFrom, binding.ValidTo, request.SourceVersion, now); err != nil {
 			return fmt.Errorf("insert reconciled IAM role binding: %w", err)
 		}
 	}
@@ -346,10 +346,9 @@ INSERT INTO iam.role_bindings (
 		}
 		if _, err := transaction.Exec(ctx, `
 INSERT INTO iam.site_bindings (
-  id, acting_organization_id, owning_organization_id, site_id, principal_id, actions, effect,
-  valid_from, valid_to, revision, created_at, updated_at
-) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, $10, $11, $11)
-`, id, binding.ActingOrganizationID, binding.OwningOrganizationID, binding.SiteID, principalID, actions, binding.Effect, binding.ValidFrom, binding.ValidTo, request.SourceVersion, now); err != nil {
+  id, tenant_id, site_id, principal_id, actions, effect, valid_from, valid_to, revision, created_at, updated_at
+) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $10)
+`, id, binding.TenantID, binding.SiteID, principalID, actions, binding.Effect, binding.ValidFrom, binding.ValidTo, request.SourceVersion, now); err != nil {
 			return fmt.Errorf("insert reconciled IAM site binding: %w", err)
 		}
 	}
@@ -364,10 +363,10 @@ INSERT INTO iam.site_bindings (
 		}
 		if _, err := transaction.Exec(ctx, `
 INSERT INTO iam.explicit_denies (
-  id, acting_organization_id, owning_organization_id, site_id, principal_id, action,
+  id, tenant_id, site_id, principal_id, action,
   reason_code, valid_from, valid_to, revision, created_at, updated_at
-) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, $10, $11, $11)
-`, id, deny.ActingOrganizationID, deny.OwningOrganizationID, siteID, principalID, deny.Action, deny.ReasonCode, deny.ValidFrom, deny.ValidTo, request.SourceVersion, now); err != nil {
+) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $10)
+`, id, deny.TenantID, siteID, principalID, deny.Action, deny.ReasonCode, deny.ValidFrom, deny.ValidTo, request.SourceVersion, now); err != nil {
 			return fmt.Errorf("insert reconciled IAM explicit deny: %w", err)
 		}
 	}

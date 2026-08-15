@@ -213,7 +213,7 @@ type AuthorizationSnapshot struct {
 	PolicyRevision              string
 	Purpose                     AuthorizationPurpose
 	PrincipalID                 string
-	OrganizationID              string
+	TenantID              string
 	SiteID                      string
 	DeviceID                    string
 	Capability                  Capability
@@ -247,7 +247,6 @@ type ApprovalEvidence struct {
 
 type SubmitRequest struct {
 	TenantID             string
-	OrganizationID       string
 	SiteID               string
 	DeviceID             string
 	PointID              string
@@ -293,7 +292,6 @@ type CommandAttempt struct {
 type CommandIntent struct {
 	ID                    string
 	TenantID              string
-	OrganizationID        string
 	SiteID                string
 	DeviceID              string
 	PointID               string
@@ -323,7 +321,7 @@ type CommandIntent struct {
 }
 
 type ApproveRequest struct {
-	OrganizationID string
+	TenantID string
 	CommandID      string
 	Approval       ApprovalEvidence
 }
@@ -331,7 +329,7 @@ type ApproveRequest struct {
 type DispatchEnvelope struct {
 	CommandID             string
 	AttemptID             string
-	OrganizationID        string
+	TenantID        string
 	SiteID                string
 	DeviceID              string
 	PointID               string
@@ -357,7 +355,7 @@ const (
 type VerificationEnvelope struct {
 	CommandID                string
 	AttemptID                string
-	OrganizationID           string
+	TenantID           string
 	SiteID                   string
 	DeviceID                 string
 	PointID                  string
@@ -376,7 +374,7 @@ type VerificationEnvelope struct {
 }
 
 type ReportedStateEvidence struct {
-	OrganizationID         string
+	TenantID         string
 	SiteID                 string
 	DeviceID               string
 	EvaluationAvailability string
@@ -399,7 +397,7 @@ type VerificationResult struct {
 type PreparedConnectorEvidence struct {
 	AttemptID        string
 	CommandID        string
-	OrganizationID   string
+	TenantID   string
 	SiteID           string
 	DeviceID         string
 	ExternalDeviceID string

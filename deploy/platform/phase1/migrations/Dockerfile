@@ -9,6 +9,7 @@ COPY deploy/platform/phase1/postgres/init/001-create-phase1-databases.sql /opt/h
 COPY infra/s0-durable/postgres/init/001-s0-durable.sql /opt/hvac/repo/infra/s0-durable/postgres/init/001-s0-durable.sql
 COPY infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql /opt/hvac/repo/infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql
 COPY infra/s0-durable/postgres/init/003-operations-audit-ledger.sql /opt/hvac/repo/infra/s0-durable/postgres/init/003-operations-audit-ledger.sql
+COPY infra/s0-durable/postgres/init/004-audit-postgres-outbox.sql /opt/hvac/repo/infra/s0-durable/postgres/init/004-audit-postgres-outbox.sql
 
 COPY infra/s1-registry/postgres/init/001-s1-registry-baseline.sql /opt/hvac/repo/infra/s1-registry/postgres/init/001-s1-registry-baseline.sql
 COPY infra/s1-registry/postgres/init/001a-tenant-foundation.sql /opt/hvac/repo/infra/s1-registry/postgres/init/001a-tenant-foundation.sql
@@ -23,6 +24,10 @@ COPY infra/s1-registry/postgres/init/007a-tenant-spatial-scope.sql /opt/hvac/rep
 COPY infra/s1-registry/postgres/init/007b-control-point-invariants.sql /opt/hvac/repo/infra/s1-registry/postgres/init/007b-control-point-invariants.sql
 COPY infra/s1-registry/postgres/init/008-s5-work-order-authorization.sql /opt/hvac/repo/infra/s1-registry/postgres/init/008-s5-work-order-authorization.sql
 COPY infra/s1-registry/postgres/init/009-energy-data-foundation.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009-energy-data-foundation.sql
+COPY infra/s1-registry/postgres/init/009c-metric-model-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009c-metric-model-v2.sql
+COPY infra/s1-registry/postgres/init/009d-data-governance-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009d-data-governance-v2.sql
+COPY infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql
+COPY infra/s1-registry/postgres/init/009i-backend-integration-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009i-backend-integration-v2.sql
 
 COPY infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql

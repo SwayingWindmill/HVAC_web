@@ -5,7 +5,7 @@ import { InvestigationCoordinatorError } from '../dist/index.js';
 import { createFakeOperationsAgentEnvironment } from './support/fake-operations-agent-environment.mjs';
 
 const scope = Object.freeze({
-  organizationId: 'organization-acceptance',
+  tenantId: 'organization-acceptance',
   siteId: 'site-acceptance',
   equipmentId: null,
   deviceId: null,
@@ -36,7 +36,7 @@ test('the Coordinator owns a complete framework-independent Investigation accept
               requestId: 'read-energy',
               tool: 'analytics.getEnergySeries',
               input: {
-                organizationId: 'organization-acceptance',
+                tenantId: 'organization-acceptance',
                 siteId: 'site-acceptance',
                 energyType: 'electricity',
                 granularity: 'hour',
@@ -112,7 +112,7 @@ test('the Coordinator owns a complete framework-independent Investigation accept
   assert.equal(environment.owners.maxConcurrentReads, 2);
   assert.equal(advanced.results.length, 2);
   for (const result of advanced.results) {
-    assert.equal(result.scope.organizationId, scope.organizationId);
+    assert.equal(result.scope.tenantId, scope.tenantId);
     assert.equal(result.scope.siteId, scope.siteId);
     assert.notEqual(result.owner, '');
     assert.notEqual(result.revision, '');

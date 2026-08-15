@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS command_runtime.connector_evidence (
   attempt_id uuid NOT NULL REFERENCES command_runtime.command_attempts(attempt_id),
   execution_fence bigint NOT NULL CHECK (execution_fence > 0),
   command_id uuid NOT NULL REFERENCES command_runtime.command_intents(command_id),
-  organization_id uuid NOT NULL,
+  tenant_id uuid NOT NULL,
   site_id uuid NOT NULL,
   device_id uuid NOT NULL,
   external_device_id text NOT NULL,
@@ -23,16 +23,16 @@ CREATE TABLE IF NOT EXISTS command_runtime.connector_evidence (
   failure_code text,
   completed_at timestamptz,
   PRIMARY KEY (attempt_id, execution_fence),
-  UNIQUE (organization_id, device_id, execution_fence)
+  UNIQUE (tenant_id, device_id, execution_fence)
 );
 
 CREATE INDEX IF NOT EXISTS connector_evidence_command_idx
-  ON command_runtime.connector_evidence (organization_id, command_id, prepared_at);
+  ON command_runtime.connector_evidence (tenant_id, command_id, prepared_at);
 
 CREATE TABLE IF NOT EXISTS command_runtime.command_grant_uses (
   token_id text PRIMARY KEY,
   grant_id text NOT NULL,
-  organization_id uuid NOT NULL,
+  tenant_id uuid NOT NULL,
   policy_revision text NOT NULL,
   emergency_revocation_revision bigint NOT NULL CHECK (emergency_revocation_revision >= 0),
   used_at timestamptz NOT NULL
@@ -50,8 +50,8 @@ CREATE POLICY connector_evidence_migrator_all ON command_runtime.connector_evide
 DROP POLICY IF EXISTS connector_evidence_runtime_org ON command_runtime.connector_evidence;
 CREATE POLICY connector_evidence_runtime_org ON command_runtime.connector_evidence
   FOR ALL TO s3_command_runtime
-  USING (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid)
-  WITH CHECK (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid);
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 
 DROP POLICY IF EXISTS command_grant_uses_migrator_all ON command_runtime.command_grant_uses;
 CREATE POLICY command_grant_uses_migrator_all ON command_runtime.command_grant_uses
@@ -60,8 +60,8 @@ CREATE POLICY command_grant_uses_migrator_all ON command_runtime.command_grant_u
 DROP POLICY IF EXISTS command_grant_uses_runtime_org ON command_runtime.command_grant_uses;
 CREATE POLICY command_grant_uses_runtime_org ON command_runtime.command_grant_uses
   FOR ALL TO s3_command_runtime
-  USING (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid)
-  WITH CHECK (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid);
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 
 GRANT SELECT, INSERT, UPDATE ON command_runtime.connector_evidence TO s3_command_runtime;
 GRANT SELECT, INSERT ON command_runtime.command_grant_uses TO s3_command_runtime;
@@ -72,7 +72,7 @@ SET status = 'VERIFIED',
     risk_level = 'LOW',
     approval_policy = 'NONE',
     retry_policy = 'PRE_SEND_ONLY',
-    connector_kind = 'THINGSBOARD_CE_4.3.1.3'
+    connector_kind = 'EG8200_MQTT_V1'
 WHERE capability_name = 'SET_TEMPERATURE_SETPOINT'
   AND capability_revision = 'capability:set-temperature-setpoint:v1';
 

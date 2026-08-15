@@ -21,16 +21,16 @@ const (
 )
 
 type DecisionRequest struct {
-	ActingOrganizationID string                            `json:"actingOrganizationId"`
-	SiteID               string                            `json:"siteId"`
-	DeviceID             string                            `json:"deviceId"`
-	Capability           commandmodel.Capability           `json:"capability"`
-	CapabilityRevision   string                            `json:"capabilityRevision"`
-	Purpose              commandmodel.AuthorizationPurpose `json:"purpose"`
+	TenantID           string                            `json:"tenantId"`
+	SiteID             string                            `json:"siteId"`
+	DeviceID           string                            `json:"deviceId"`
+	Capability         commandmodel.Capability           `json:"capability"`
+	CapabilityRevision string                            `json:"capabilityRevision"`
+	Purpose            commandmodel.AuthorizationPurpose `json:"purpose"`
 }
 
 func (request DecisionRequest) Validate() error {
-	for _, value := range []string{request.ActingOrganizationID, request.SiteID, request.DeviceID, request.CapabilityRevision} {
+	for _, value := range []string{request.TenantID, request.SiteID, request.DeviceID, request.CapabilityRevision} {
 		if strings.TrimSpace(value) == "" || len(value) > 256 {
 			return errors.New("command decision scope is invalid")
 		}
@@ -49,7 +49,7 @@ type Decision struct {
 	PrincipalID                 string                            `json:"principalId"`
 	SubjectIssuer               string                            `json:"subjectIssuer"`
 	Subject                     string                            `json:"subject"`
-	ActingOrganizationID        string                            `json:"actingOrganizationId"`
+	TenantID                    string                            `json:"tenantId"`
 	SiteID                      string                            `json:"siteId"`
 	DeviceID                    string                            `json:"deviceId"`
 	Capability                  commandmodel.Capability           `json:"capability"`

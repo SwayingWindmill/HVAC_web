@@ -78,12 +78,12 @@ func NewMemoryStore(items []alarmmodel.Alarm) (*MemoryStore, error) {
 	return store, nil
 }
 
-func (store *MemoryStore) List(_ context.Context, organizationID, siteID string, filter Filter) (alarmmodel.ListResponse, error) {
+func (store *MemoryStore) List(_ context.Context, tenantID, siteID string, filter Filter) (alarmmodel.ListResponse, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 	items := make([]alarmmodel.Alarm, 0, len(store.alarms))
 	for _, alarm := range store.alarms {
-		if alarm.OrganizationID != organizationID || alarm.SiteID != siteID {
+		if alarm.TenantID != tenantID || alarm.SiteID != siteID {
 			continue
 		}
 		if filter.Status != "" && alarm.Status != filter.Status {
@@ -117,28 +117,28 @@ func (store *MemoryStore) List(_ context.Context, organizationID, siteID string,
 	return response, nil
 }
 
-func (store *MemoryStore) Get(_ context.Context, organizationID, siteID, alarmID string) (alarmmodel.Alarm, error) {
+func (store *MemoryStore) Get(_ context.Context, tenantID, siteID, alarmID string) (alarmmodel.Alarm, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 	alarm, ok := store.alarms[alarmID]
-	if !ok || alarm.OrganizationID != organizationID || alarm.SiteID != siteID {
+	if !ok || alarm.TenantID != tenantID || alarm.SiteID != siteID {
 		return alarmmodel.Alarm{}, ErrNotFound
 	}
 	return cloneStoredAlarm(alarm), nil
 }
 
-func (store *MemoryStore) Apply(_ context.Context, organizationID, siteID, alarmID string, mutation Mutation) (MutationResult, error) {
+func (store *MemoryStore) Apply(_ context.Context, tenantID, siteID, alarmID string, mutation Mutation) (MutationResult, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	current, ok := store.alarms[alarmID]
-	if !ok || current.OrganizationID != organizationID || current.SiteID != siteID {
+	if !ok || current.TenantID != tenantID || current.SiteID != siteID {
 		return MutationResult{}, ErrNotFound
 	}
 	digest, err := mutationDigest(mutation)
 	if err != nil {
 		return MutationResult{}, alarmmodel.ErrInvalidOperation
 	}
-	idempotencyKey := organizationID + "|" + siteID + "|" + alarmID + "|" + strings.TrimSpace(mutation.IdempotencyKey)
+	idempotencyKey := tenantID + "|" + siteID + "|" + alarmID + "|" + strings.TrimSpace(mutation.IdempotencyKey)
 	if record, exists := store.idempotency[idempotencyKey]; exists {
 		if record.digest != digest {
 			return MutationResult{}, ErrIdempotencyConflict

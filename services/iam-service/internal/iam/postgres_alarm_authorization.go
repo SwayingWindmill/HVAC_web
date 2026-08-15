@@ -14,7 +14,7 @@ func (store *PostgresAuthorizationStore) LookupAlarmAuthorization(ctx context.Co
 	if store == nil || store.pool == nil {
 		return AlarmAuthorizationFacts{}, errors.New("IAM authorization store is closed")
 	}
-	if strings.TrimSpace(lookup.SubjectIssuer) == "" || strings.TrimSpace(lookup.Subject) == "" || strings.TrimSpace(lookup.ActingOrganizationID) == "" {
+	if strings.TrimSpace(lookup.SubjectIssuer) == "" || strings.TrimSpace(lookup.Subject) == "" || strings.TrimSpace(lookup.TenantID) == "" {
 		return AlarmAuthorizationFacts{}, errors.New("IAM Alarm authorization lookup is incomplete")
 	}
 	transaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
@@ -36,7 +36,7 @@ FROM iam.resolve_principal_identity($1, $2)
 	if errors.Is(err, pgx.ErrNoRows) {
 		principalID = ""
 	}
-	if err := setIAMAuthorizationContext(ctx, transaction, principalID, lookup.ActingOrganizationID); err != nil {
+	if err := setIAMAuthorizationContext(ctx, transaction, principalID, lookup.TenantID); err != nil {
 		return AlarmAuthorizationFacts{}, err
 	}
 	facts.PolicyRevision, err = loadAlarmPolicyRevision(ctx, transaction)
@@ -53,7 +53,7 @@ FROM iam.resolve_principal_identity($1, $2)
 	facts.Found = true
 	facts.Principal.SubjectIssuer = lookup.SubjectIssuer
 	facts.Principal.Subject = lookup.Subject
-	if facts.Memberships, err = loadOrganizationMemberships(ctx, transaction); err != nil {
+	if facts.Memberships, err = loadTenantMemberships(ctx, transaction); err != nil {
 		return AlarmAuthorizationFacts{}, err
 	}
 	if facts.Permissions, err = loadAlarmPermissions(ctx, transaction); err != nil {
@@ -86,7 +86,7 @@ LIMIT 1
 
 func loadAlarmPermissions(ctx context.Context, transaction pgx.Tx) ([]AlarmPermission, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT acting_organization_id::text, site_id::text, action, effect, status, valid_from, valid_to
+SELECT tenant_id::text, site_id::text, action, effect, status, valid_from, valid_to
 FROM iam.alarm_permissions
 ORDER BY site_id, action, effect
 `)
@@ -99,7 +99,7 @@ ORDER BY site_id, action, effect
 		var permission AlarmPermission
 		var action string
 		if err := rows.Scan(
-			&permission.OrganizationID,
+			&permission.TenantID,
 			&permission.SiteID,
 			&action,
 			&permission.Effect,
@@ -125,7 +125,7 @@ func (store *PostgresAuthorizationStore) RecordAlarmDecision(ctx context.Context
 	if store == nil || store.pool == nil {
 		return errors.New("IAM authorization store is closed")
 	}
-	if strings.TrimSpace(event.ActingOrganizationID) == "" || strings.TrimSpace(event.SiteID) == "" ||
+	if strings.TrimSpace(event.TenantID) == "" || strings.TrimSpace(event.SiteID) == "" ||
 		strings.TrimSpace(string(event.Action)) == "" || strings.TrimSpace(event.PolicyRevision) == "" ||
 		strings.TrimSpace(string(event.ReasonCode)) == "" || strings.TrimSpace(event.RequestID) == "" ||
 		strings.TrimSpace(event.TraceID) == "" || strings.TrimSpace(event.OccurredAt) == "" {
@@ -136,7 +136,7 @@ func (store *PostgresAuthorizationStore) RecordAlarmDecision(ctx context.Context
 		return fmt.Errorf("begin IAM Alarm decision audit: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
-	if err := setIAMAuthorizationContext(ctx, transaction, event.PrincipalID, event.ActingOrganizationID); err != nil {
+	if err := setIAMAuthorizationContext(ctx, transaction, event.PrincipalID, event.TenantID); err != nil {
 		return err
 	}
 	var principalID any
@@ -149,10 +149,10 @@ func (store *PostgresAuthorizationStore) RecordAlarmDecision(ctx context.Context
 	}
 	if _, err := transaction.Exec(ctx, `
 INSERT INTO iam.alarm_authorization_decisions
-  (principal_id, acting_organization_id, site_id, alarm_id, action, allowed, policy_revision, reason_code, request_id, trace_id, occurred_at)
+  (principal_id, tenant_id, site_id, alarm_id, action, allowed, policy_revision, reason_code, request_id, trace_id, occurred_at)
 VALUES
   ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11::timestamptz)
-`, principalID, event.ActingOrganizationID, event.SiteID, alarmID, string(event.Action), event.Allowed,
+`, principalID, event.TenantID, event.SiteID, alarmID, string(event.Action), event.Allowed,
 		event.PolicyRevision, string(event.ReasonCode), event.RequestID, event.TraceID, event.OccurredAt); err != nil {
 		return fmt.Errorf("insert IAM Alarm decision audit: %w", err)
 	}

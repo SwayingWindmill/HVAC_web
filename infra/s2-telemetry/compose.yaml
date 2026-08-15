@@ -35,6 +35,21 @@ services:
       retries: 90
     networks: [s2]
 
+  latest-redis:
+    image: redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:${S2_LATEST_REDIS_HOST_PORT:-56379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 60
+    networks: [s2]
+    labels:
+      hvac.data-authority: "false"
+      hvac.cache-scope: "telemetry-latest-rebuildable"
+
   analytics-read-model-projector:
     build:
       context: ../..

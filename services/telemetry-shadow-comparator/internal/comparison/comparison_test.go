@@ -143,7 +143,7 @@ func snapshotFixture(deviceID, key string, value json.RawMessage, sampledAt, pre
 	return telemetryapi.DeviceObservationSnapshot{
 		SchemaVersion:          1,
 		DeviceId:               telemetryapi.UUIDv7(deviceID),
-		OwningOrganizationId:   telemetryapi.UUIDv7("018f2e00-1000-7000-8000-000000000001"),
+		TenantId:               telemetryapi.UUIDv7("018f2e00-1000-7000-8000-000000000001"),
 		SiteId:                 telemetryapi.UUIDv7("018f2e00-4000-7000-8000-000000000001"),
 		BusinessRevision:       telemetryapi.BusinessRevision(1),
 		EvaluatedAt:            telemetryapi.Instant(sampledAt),

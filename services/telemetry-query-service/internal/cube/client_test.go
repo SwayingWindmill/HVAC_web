@@ -83,7 +83,7 @@ func TestClientMapsEnergyProductQueryToFixedCubeMembers(t *testing.T) {
 	if seriesQuery.TimeDimensions[0].DateRange[1] != expectedExclusiveEnd {
 		t.Fatalf("exclusive date range end = %q", seriesQuery.TimeDimensions[0].DateRange[1])
 	}
-	if !hasCubeFilter(seriesQuery.Filters, "energy_usage.organization_id", testCubeOrganizationID) ||
+	if !hasCubeFilter(seriesQuery.Filters, "energy_usage.tenant_id", testCubeTenantID) ||
 		!hasCubeFilter(seriesQuery.Filters, "energy_usage.site_id", testCubeSiteID) {
 		t.Fatalf("filters = %#v", seriesQuery.Filters)
 	}
@@ -214,7 +214,7 @@ func TestHMACTokenFactoryBindsSecurityContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claims["organizationId"] != testCubeOrganizationID || claims["siteId"] != testCubeSiteID || claims["principalId"] != "user-1" || claims["policyRevision"] != "policy-1" {
+	if claims["tenantId"] != testCubeTenantID || claims["siteId"] != testCubeSiteID || claims["principalId"] != "user-1" || claims["policyRevision"] != "policy-1" {
 		t.Fatalf("claims = %#v", claims)
 	}
 	siteIDs, ok := claims["siteIds"].([]any)
@@ -224,8 +224,8 @@ func TestHMACTokenFactoryBindsSecurityContext(t *testing.T) {
 }
 
 const (
-	testCubeOrganizationID = "018f1e00-0000-7000-8000-000000000001"
-	testCubeSiteID         = "018f1e00-1000-7000-8000-000000000001"
+	testCubeTenantID = "018f1d00-0000-7000-8000-000000000001"
+	testCubeSiteID   = "018f1e00-1000-7000-8000-000000000001"
 )
 
 func validCubeEnergyQuery() analyticsmodel.EnergySeriesQuery {
@@ -234,7 +234,7 @@ func validCubeEnergyQuery() analyticsmodel.EnergySeriesQuery {
 		panic(err)
 	}
 	return analyticsmodel.EnergySeriesQuery{
-		OrganizationID: testCubeOrganizationID,
+		TenantID:       testCubeTenantID,
 		SiteID:         testCubeSiteID,
 		EnergyType:     analyticsmodel.EnergyTypeElectricity,
 		Granularity:    analyticsmodel.GranularityDay,

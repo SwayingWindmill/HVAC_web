@@ -44,7 +44,6 @@ func TestPhase1EnergyGoldenDataset(t *testing.T) {
 				PreviousObservationID: "018f3e00-0000-7000-8000-000000000001",
 				CurrentObservationID:  "018f3e00-0000-7000-8000-000000000002",
 				TenantID:              "018f3d00-0000-7000-8000-000000000001",
-				OrganizationID:        "018f3e00-0000-7000-8000-000000000001",
 				SiteID:                "018f3e00-1000-7000-8000-000000000001",
 				DeviceID:              "018f3e00-4000-7000-8000-000000000005",
 				PointID:               "018f3e00-5000-7000-8000-000000000005",

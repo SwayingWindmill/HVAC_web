@@ -149,7 +149,7 @@ func TestAcknowledgedCommandRequiresReportedStateVerification(t *testing.T) {
 	if err := service.ResolveVerification(verification, commandmodel.VerificationResult{
 		Outcome: commandmodel.VerificationSucceeded, EvidenceID: "s2-reported-state-1",
 		Reported: commandmodel.ReportedStateEvidence{
-			OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+			TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
 			EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
 			BusinessRevision: 18, ReportedValue: commandmodel.NumberScalar(24), ObservedAt: clock().Add(time.Second),
 		},
@@ -178,7 +178,7 @@ func TestReportedStateMismatchBecomesOutcomeUnknown(t *testing.T) {
 	}
 	if err := service.ResolveVerification(verification, commandmodel.VerificationResult{
 		Outcome: commandmodel.VerificationMismatch, EvidenceID: "s2-reported-state-mismatch",
-		Reported: commandmodel.ReportedStateEvidence{OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1", BusinessRevision: 18, ReportedValue: commandmodel.NumberScalar(21), ObservedAt: clock().Add(time.Second)},
+		Reported: commandmodel.ReportedStateEvidence{TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1", BusinessRevision: 18, ReportedValue: commandmodel.NumberScalar(21), ObservedAt: clock().Add(time.Second)},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,6 @@ func TestConnectorCannotDeclareReportedStateVerified(t *testing.T) {
 func validRequest() commandmodel.SubmitRequest {
 	return commandmodel.SubmitRequest{
 		TenantID:       "tenant-1",
-		OrganizationID: "org-1",
 		SiteID:         "site-1",
 		DeviceID:       "device-1",
 		PointID:        "point-1",
@@ -232,7 +231,7 @@ func validRequest() commandmodel.SubmitRequest {
 		Authorization: commandmodel.AuthorizationSnapshot{
 			GrantID: "grant-1", PolicyRevision: "command-policy-1", Purpose: commandmodel.AuthorizationCommandSubmit,
 			PrincipalID:    "principal-1",
-			OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+			TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
 			Capability:  commandmodel.CapabilitySetTemperatureSetpoint,
 			MaximumRisk: commandmodel.RiskHigh, CapabilityRevision: setpointCapabilityRevision,
 			EmergencyRevocationRevision: 1,

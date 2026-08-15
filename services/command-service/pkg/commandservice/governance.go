@@ -60,13 +60,13 @@ func validateAuthorizationSnapshot(request commandmodel.SubmitRequest, risk comm
 		return ErrAuthorizationDenied
 	}
 	return validateAuthorizationScope(request.Authorization, commandmodel.AuthorizationCommandSubmit,
-		request.PrincipalID, request.OrganizationID, request.SiteID, request.DeviceID,
+		request.PrincipalID, request.TenantID, request.SiteID, request.DeviceID,
 		request.Capability, capabilityRevision, risk, now)
 }
 
-func validateAuthorizationScope(auth commandmodel.AuthorizationSnapshot, purpose commandmodel.AuthorizationPurpose, principalID, organizationID, siteID, deviceID string, capability commandmodel.Capability, capabilityRevision string, risk commandmodel.RiskLevel, now time.Time) error {
+func validateAuthorizationScope(auth commandmodel.AuthorizationSnapshot, purpose commandmodel.AuthorizationPurpose, principalID, tenantID, siteID, deviceID string, capability commandmodel.Capability, capabilityRevision string, risk commandmodel.RiskLevel, now time.Time) error {
 	if strings.TrimSpace(auth.GrantID) == "" || strings.TrimSpace(auth.PolicyRevision) == "" ||
-		auth.Purpose != purpose || auth.PrincipalID != principalID || auth.OrganizationID != organizationID ||
+		auth.Purpose != purpose || auth.PrincipalID != principalID || auth.TenantID != tenantID ||
 		auth.SiteID != siteID || auth.DeviceID != deviceID ||
 		auth.Capability != capability || auth.CapabilityRevision != capabilityRevision {
 		return ErrAuthorizationDenied
@@ -122,7 +122,7 @@ func validateApproval(intent commandmodel.CommandIntent, approval commandmodel.A
 		return ErrApprovalInvalid
 	}
 	if err := validateAuthorizationScope(approval.Authorization, commandmodel.AuthorizationCommandApprove,
-		approval.ApproverID, intent.OrganizationID, intent.SiteID, intent.DeviceID,
+		approval.ApproverID, intent.TenantID, intent.SiteID, intent.DeviceID,
 		intent.Capability, intent.CapabilityRevision, intent.Risk, now); err != nil {
 		return ErrApprovalInvalid
 	}
@@ -137,7 +137,7 @@ func validateApproval(intent commandmodel.CommandIntent, approval commandmodel.A
 func validateExecutionGovernance(intent commandmodel.CommandIntent, now time.Time) error {
 	if intent.ApprovalPolicy == commandmodel.ApprovalNone {
 		return validateAuthorizationScope(intent.Authorization, commandmodel.AuthorizationCommandSubmit,
-			intent.PrincipalID, intent.OrganizationID, intent.SiteID, intent.DeviceID,
+			intent.PrincipalID, intent.TenantID, intent.SiteID, intent.DeviceID,
 			intent.Capability, intent.CapabilityRevision, intent.Risk, now)
 	}
 	if len(intent.Approvals) < requiredApprovalCount(intent.ApprovalPolicy) {
@@ -150,7 +150,7 @@ func validateExecutionGovernance(intent commandmodel.CommandIntent, now time.Tim
 			return ErrApprovalInvalid
 		}
 		if err := validateAuthorizationScope(approval.Authorization, commandmodel.AuthorizationCommandApprove,
-			approval.ApproverID, intent.OrganizationID, intent.SiteID, intent.DeviceID,
+			approval.ApproverID, intent.TenantID, intent.SiteID, intent.DeviceID,
 			intent.Capability, intent.CapabilityRevision, intent.Risk, now); err != nil {
 			return ErrAuthorizationDenied
 		}

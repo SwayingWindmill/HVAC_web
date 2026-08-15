@@ -302,7 +302,7 @@ const createProviderInput = (input: SynthesizeFindingInput): FindingSynthesisInp
     schemaVersion: 1,
     investigationId: normalizeIdentity(input.investigationId, 'Investigation identity'),
     scope: Object.freeze({
-      organizationId: normalizeIdentity(input.scope.organizationId, 'Organization identity'),
+      tenantId: normalizeIdentity(input.scope.tenantId, 'Organization identity'),
       siteId: input.scope.siteId === null ? null : normalizeIdentity(input.scope.siteId, 'Site identity'),
       equipmentId: input.scope.equipmentId === null
         ? null

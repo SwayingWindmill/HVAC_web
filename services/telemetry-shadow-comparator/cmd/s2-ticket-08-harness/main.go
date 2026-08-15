@@ -73,7 +73,6 @@ type comparatorPolicy struct {
 		Subscribe     bool `json:"subscribe"`
 		CentrifugoAPI bool `json:"centrifugoApi"`
 		Redis         bool `json:"redis"`
-		ThingsBoard   bool `json:"thingsBoard"`
 	} `json:"transportPermissions"`
 	MutationPermissions struct {
 		Authorization        bool `json:"authorization"`
@@ -193,7 +192,7 @@ func main() {
 		!policy.Identity.ServiceAccountToken && !policy.Identity.WorkloadCertificate && !policy.Identity.TokenMintPermission &&
 		policy.Network.Ingress == "deny-all" && policy.Network.Egress == "deny-all" && !policy.Network.DNS &&
 		!policy.DataAccess.DatabaseCredentials && !policy.DataAccess.DatabaseWritePermission && !policy.DataAccess.LegacyWritePermission && !policy.DataAccess.TelemetryRuntimeWritePermission && !policy.DataAccess.SharedCacheAccess &&
-		!policy.TransportPermissions.Publish && !policy.TransportPermissions.Subscribe && !policy.TransportPermissions.CentrifugoAPI && !policy.TransportPermissions.Redis && !policy.TransportPermissions.ThingsBoard &&
+		!policy.TransportPermissions.Publish && !policy.TransportPermissions.Subscribe && !policy.TransportPermissions.CentrifugoAPI && !policy.TransportPermissions.Redis &&
 		!policy.MutationPermissions.Authorization && !policy.MutationPermissions.MappingRepair && !policy.MutationPermissions.RouteOwnership && !policy.MutationPermissions.CurrentStateFeedback
 
 	if !productionR0 || !darkLegacy || !shadowLegacy || !sameOwner || !revisionBound || s2Count == 0 || legacyCount == 0 || !rollbackLegacy || !comparisonReport.PromotionEligible || !sideEffectFree {

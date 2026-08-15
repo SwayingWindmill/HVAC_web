@@ -74,7 +74,7 @@ func TestCommandHTTPCreateRequiresExactIAMGrant(t *testing.T) {
 	handler := newCommandHTTPTestHandler(t, authority, iamSigner, gatewaySigner, now)
 	grant := signCommandTestGrant(t, iamSigner, now, commandmodel.AuthorizationCommandSubmit, "principal-1", "device-1")
 	body := internalCreateCommandRequest{
-		TenantID: "tenant-1", OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1", PointID: "point-1", PrincipalID: "principal-1",
+		TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1", PointID: "point-1", PrincipalID: "principal-1",
 		IdempotencyKey: "idempotency-1", Capability: commandmodel.CapabilitySetTemperatureSetpoint,
 		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}, VerificationPointKey: "zone.temperature_setpoint",
 		CurrentState: internalCurrentState{
@@ -90,7 +90,7 @@ func TestCommandHTTPCreateRequiresExactIAMGrant(t *testing.T) {
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if authority.submitted.OrganizationID != "org-1" || authority.submitted.Authorization.Purpose != commandmodel.AuthorizationCommandSubmit || authority.submitted.Authorization.PrincipalID != "principal-1" {
+	if authority.submitted.TenantID != "tenant-1" || authority.submitted.Authorization.Purpose != commandmodel.AuthorizationCommandSubmit || authority.submitted.Authorization.PrincipalID != "principal-1" {
 		t.Fatalf("unexpected submitted request %#v", authority.submitted)
 	}
 	if recorder.Header().Get("Location") != "/api/v1/commands/command-1" {
@@ -104,7 +104,7 @@ func TestCommandHTTPCreateRejectsApprovalGrantAndScopeDrift(t *testing.T) {
 	gatewaySigner := newECDSASigner(t)
 	handler := newCommandHTTPTestHandler(t, &fakeHTTPAuthority{}, iamSigner, gatewaySigner, now)
 	body := internalCreateCommandRequest{
-		TenantID: "tenant-1", OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1", PointID: "point-1", PrincipalID: "principal-1",
+		TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1", PointID: "point-1", PrincipalID: "principal-1",
 		IdempotencyKey: "idempotency-1", Capability: commandmodel.CapabilitySetTemperatureSetpoint,
 		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}, VerificationPointKey: "zone.temperature_setpoint",
 		CurrentState: internalCurrentState{EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Quality: "GOOD", BusinessRevision: 17, CurrentValue: testFloat64Pointer(23), ObservedAt: now},
@@ -134,7 +134,7 @@ func TestCommandHTTPApprovalUsesExactGrantAndServerDerivedEvidence(t *testing.T)
 	iamSigner := newECDSASigner(t)
 	gatewaySigner := newECDSASigner(t)
 	authority := &fakeHTTPAuthority{intent: commandmodel.CommandIntent{
-		ID: "command-1", OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1", PointID: "point-1", PrincipalID: "initiator-1",
+		ID: "command-1", TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1", PointID: "point-1", PrincipalID: "initiator-1",
 		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: setpointCapabilityRevision,
 		Status: commandmodel.IntentAwaitingApproval, Risk: commandmodel.RiskMedium,
 		RiskSnapshot:   commandmodel.RiskSnapshot{Level: commandmodel.RiskMedium, RuleRevision: "risk-v1", EvaluatedAt: now},
@@ -143,10 +143,10 @@ func TestCommandHTTPApprovalUsesExactGrantAndServerDerivedEvidence(t *testing.T)
 	}}
 	handler := newCommandHTTPTestHandler(t, authority, iamSigner, gatewaySigner, now)
 	body, _ := json.Marshal(internalApproveCommandRequest{
-		OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+		TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
 		PrincipalID: "approver-2", ApproverRole: "operations-approver",
 	})
-	request := httptest.NewRequest(http.MethodPost, InternalCommandsPath+"/command-1:approve", bytes.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, InternalCommandsPath+"/command-1/approve", bytes.NewReader(body))
 	request.Header.Set(commandGrantHeader, signCommandTestGrant(t, iamSigner, now, commandmodel.AuthorizationCommandApprove, "approver-2", "device-1"))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
@@ -154,7 +154,7 @@ func TestCommandHTTPApprovalUsesExactGrantAndServerDerivedEvidence(t *testing.T)
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	approval := authority.approved.Approval
-	if authority.approved.OrganizationID != "org-1" || authority.approved.CommandID != "command-1" ||
+	if authority.approved.TenantID != "tenant-1" || authority.approved.CommandID != "command-1" ||
 		approval.ApproverID != "approver-2" || approval.ApproverRole != "operations-approver" ||
 		approval.Policy != commandmodel.ApprovalSingleApprover || approval.PayloadHash != "payload-hash" ||
 		approval.Risk != commandmodel.RiskMedium || approval.RiskRuleRevision != "risk-v1" ||
@@ -162,7 +162,7 @@ func TestCommandHTTPApprovalUsesExactGrantAndServerDerivedEvidence(t *testing.T)
 		t.Fatalf("approval evidence drifted %#v", authority.approved)
 	}
 
-	wrongPurpose := httptest.NewRequest(http.MethodPost, InternalCommandsPath+"/command-1:approve", bytes.NewReader(body))
+	wrongPurpose := httptest.NewRequest(http.MethodPost, InternalCommandsPath+"/command-1/approve", bytes.NewReader(body))
 	wrongPurpose.Header.Set(commandGrantHeader, signCommandTestGrant(t, iamSigner, now, commandmodel.AuthorizationCommandSubmit, "approver-2", "device-1"))
 	wrongRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(wrongRecorder, wrongPurpose)
@@ -185,15 +185,15 @@ func TestCommandHTTPReadRequiresSignedOrganizationAndCommandScopes(t *testing.T)
 	readContext, err := identitycontext.SignDelegation(gatewaySigner, identitycontext.DelegationClaims{
 		Issuer: "spiffe://hvac.local/platform-gateway", ExecutingService: "spiffe://hvac.local/platform-gateway",
 		Subject: "user-1", SubjectIssuer: "https://issuer.example.test", Audience: "command-service",
-		ActingOrganizationID: "org-1", Actions: []string{"command:read"},
-		Scopes: []string{"organization:org-1", "command:command-1"}, PolicyRevision: "policy-1",
+		TenantID: "org-1", Actions: []string{"command:read"},
+		Scopes: []string{"tenant:org-1", "command:command-1"}, PolicyRevision: "policy-1",
 		SessionID: "session-1", TokenID: "read-1", IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodGet, InternalCommandsPath+"/command-1", nil)
-	request.Header.Set(actingOrganizationHeader, "org-1")
+	request.Header.Set(tenantHeader, "org-1")
 	request.Header.Set(commandReadContextHeader, readContext)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
@@ -205,7 +205,7 @@ func TestCommandHTTPReadRequiresSignedOrganizationAndCommandScopes(t *testing.T)
 	}
 
 	forged := httptest.NewRequest(http.MethodGet, InternalCommandsPath+"/command-1", nil)
-	forged.Header.Set(actingOrganizationHeader, "org-2")
+	forged.Header.Set(tenantHeader, "org-2")
 	forged.Header.Set(commandReadContextHeader, readContext)
 	forgedRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(forgedRecorder, forged)
@@ -235,7 +235,7 @@ func signCommandTestGrant(t *testing.T, signer *ecdsa.PrivateKey, now time.Time,
 	t.Helper()
 	grant, err := commandauth.SignGrant(signer, commandauth.GrantClaims{
 		Issuer: "spiffe://hvac.local/iam-service", Presenter: "spiffe://hvac.local/platform-gateway", Audience: "command-service",
-		GrantID: "grant-1", Purpose: purpose, PrincipalID: principalID, OrganizationID: "org-1", SiteID: "site-1", DeviceID: deviceID,
+		GrantID: "grant-1", Purpose: purpose, PrincipalID: principalID, TenantID: "tenant-1", SiteID: "site-1", DeviceID: deviceID,
 		Capability: commandmodel.CapabilitySetTemperatureSetpoint, MaximumRisk: commandmodel.RiskHigh,
 		CapabilityRevision: setpointCapabilityRevision, PolicyRevision: "command-policy-1", EmergencyRevocationRevision: 2,
 		IssuedAt: now.Unix(), ExpiresAt: now.Add(25 * time.Second).Unix(), TokenID: "grant-1",

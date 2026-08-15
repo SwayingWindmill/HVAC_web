@@ -80,8 +80,8 @@ CREATE POLICY reconciler_principals ON iam.principals
   USING (true)
   WITH CHECK (true);
 
-DROP POLICY IF EXISTS reconciler_memberships ON iam.organization_memberships;
-CREATE POLICY reconciler_memberships ON iam.organization_memberships
+DROP POLICY IF EXISTS reconciler_memberships ON iam.tenant_memberships;
+CREATE POLICY reconciler_memberships ON iam.tenant_memberships
   FOR ALL TO s1_iam_reconciler
   USING (true)
   WITH CHECK (true);
@@ -123,12 +123,12 @@ CREATE POLICY reconciler_quarantine ON iam.reconciliation_quarantine
 GRANT SELECT, INSERT ON iam.principals TO s1_iam_reconciler;
 GRANT UPDATE (display_name, email, status, revision, updated_at)
   ON iam.principals TO s1_iam_reconciler;
-GRANT INSERT, DELETE ON iam.organization_memberships, iam.role_bindings,
+GRANT INSERT, DELETE ON iam.tenant_memberships, iam.role_bindings,
   iam.site_bindings, iam.explicit_denies TO s1_iam_reconciler;
-GRANT SELECT (principal_id) ON iam.organization_memberships TO s1_iam_reconciler;
-GRANT SELECT (principal_id) ON iam.role_bindings TO s1_iam_reconciler;
-GRANT SELECT (principal_id) ON iam.site_bindings TO s1_iam_reconciler;
-GRANT SELECT (principal_id) ON iam.explicit_denies TO s1_iam_reconciler;
+GRANT SELECT (tenant_id, principal_id) ON iam.tenant_memberships TO s1_iam_reconciler;
+GRANT SELECT (tenant_id, principal_id) ON iam.role_bindings TO s1_iam_reconciler;
+GRANT SELECT (tenant_id, principal_id) ON iam.site_bindings TO s1_iam_reconciler;
+GRANT SELECT (tenant_id, principal_id) ON iam.explicit_denies TO s1_iam_reconciler;
 GRANT SELECT, INSERT, UPDATE ON iam.reconciliation_state TO s1_iam_reconciler;
 GRANT INSERT ON iam.reconciliation_events, iam.reconciliation_quarantine TO s1_iam_reconciler;
 

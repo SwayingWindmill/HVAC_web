@@ -1,5 +1,5 @@
 export interface OperationsInvestigationRecoveryScope {
-  readonly organizationId: string;
+  readonly tenantId: string;
   readonly siteId: string;
   readonly investigationId: string;
 }
@@ -8,7 +8,7 @@ export interface OperationsInvestigationRecoveryPositionStore {
   load(scope: OperationsInvestigationRecoveryScope): string | undefined;
   save(scope: OperationsInvestigationRecoveryScope, position: string): void;
   clear(scope: OperationsInvestigationRecoveryScope): void;
-  clearSite?(scope: Pick<OperationsInvestigationRecoveryScope, 'organizationId' | 'siteId'>): void;
+  clearSite?(scope: Pick<OperationsInvestigationRecoveryScope, 'tenantId' | 'siteId'>): void;
 }
 
 interface RecoveryStorage {
@@ -32,14 +32,14 @@ export const normalizeOperationsRecoveryPosition = (value: unknown): string | un
 
 const recoveryStorageKey = (scope: OperationsInvestigationRecoveryScope): string => [
   recoveryStoragePrefix,
-  encodeURIComponent(scope.organizationId),
+  encodeURIComponent(scope.tenantId),
   encodeURIComponent(scope.siteId),
   encodeURIComponent(scope.investigationId),
 ].join(':');
 
 const recoveryStorageSitePrefix = (
-  scope: Pick<OperationsInvestigationRecoveryScope, 'organizationId' | 'siteId'>,
-): string => `${recoveryStoragePrefix}:${encodeURIComponent(scope.organizationId)}:${encodeURIComponent(scope.siteId)}:`;
+  scope: Pick<OperationsInvestigationRecoveryScope, 'tenantId' | 'siteId'>,
+): string => `${recoveryStoragePrefix}:${encodeURIComponent(scope.tenantId)}:${encodeURIComponent(scope.siteId)}:`;
 
 const browserSessionStorage = (): RecoveryStorage | null => {
   try {
@@ -82,7 +82,7 @@ export const createOperationsInvestigationRecoveryPositionStore = (
       // Protected-state purge remains best effort when browser storage is unavailable.
     }
   },
-  clearSite(scope: Pick<OperationsInvestigationRecoveryScope, 'organizationId' | 'siteId'>) {
+  clearSite(scope: Pick<OperationsInvestigationRecoveryScope, 'tenantId' | 'siteId'>) {
     if (storage === null) return;
     const prefix = recoveryStorageSitePrefix(scope);
     try {

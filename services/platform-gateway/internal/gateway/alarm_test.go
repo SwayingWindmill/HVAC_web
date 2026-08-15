@@ -166,8 +166,8 @@ func newAlarmGatewayFixture(t *testing.T) *alarmGatewayFixture {
 			_ = json.NewEncoder(writer).Encode(registryauth.DecisionResponse{
 				Decision: registryauth.Decision{
 					Allowed: true, PrincipalID: "principal-alarm-1", SubjectIssuer: fixture.session.Principal.Issuer, Subject: fixture.session.Principal.Subject,
-					ActingOrganizationID: gatewayAlarmOrganizationID, AllowedOrganizationIDs: []string{gatewayAlarmOrganizationID}, AllowedSiteIDs: []string{gatewayAlarmSiteID},
-					Actions: []registryauth.Action{registryauth.ActionSiteRead}, PolicyRevision: "gateway-policy-1", ReasonCode: registryauth.ReasonAllowOrganizationRole,
+					ActingOrganizationID: gatewayAlarmOrganizationID, AllowedSiteIDs: []string{gatewayAlarmSiteID},
+					Actions: []registryauth.Action{registryauth.ActionSiteRead}, PolicyRevision: "gateway-policy-1", ReasonCode: registryauth.ReasonAllowSiteRole,
 				},
 				DelegationGrant: "e30.c2ln",
 			})
@@ -184,7 +184,7 @@ func newAlarmGatewayFixture(t *testing.T) *alarmGatewayFixture {
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(platformapi.Site{
-			ID: gatewayAlarmSiteID, TenantID: gatewayAlarmTenantID, OwningOrganizationID: gatewayAlarmOrganizationID,
+			ID: gatewayAlarmSiteID, TenantID: gatewayAlarmTenantID,
 			Code: "alarm-site", DisplayName: "Alarm Site", Timezone: "UTC", Status: "ACTIVE", Revision: 1,
 			CreatedAt: "2026-08-01T00:00:00.000Z", UpdatedAt: "2026-08-01T00:00:00.000Z",
 		})

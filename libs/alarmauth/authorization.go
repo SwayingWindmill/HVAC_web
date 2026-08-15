@@ -26,14 +26,14 @@ const (
 )
 
 type DecisionRequest struct {
-	ActingOrganizationID string `json:"actingOrganizationId"`
-	SiteID               string `json:"siteId"`
-	AlarmID              string `json:"alarmId,omitempty"`
-	Action               Action `json:"action"`
+	TenantID string `json:"tenantId"`
+	SiteID   string `json:"siteId"`
+	AlarmID  string `json:"alarmId,omitempty"`
+	Action   Action `json:"action"`
 }
 
 func (request DecisionRequest) Validate() error {
-	if !alarmmodel.IsUUIDv7(request.ActingOrganizationID) || !alarmmodel.IsUUIDv7(request.SiteID) {
+	if !alarmmodel.IsUUIDv7(request.TenantID) || !alarmmodel.IsUUIDv7(request.SiteID) {
 		return errors.New("Alarm authorization scope is invalid")
 	}
 	switch request.Action {
@@ -52,17 +52,17 @@ func (request DecisionRequest) Validate() error {
 }
 
 type Decision struct {
-	Allowed              bool       `json:"allowed"`
-	PrincipalID          string     `json:"principalId,omitempty"`
-	SubjectIssuer        string     `json:"subjectIssuer"`
-	Subject              string     `json:"subject"`
-	ActingOrganizationID string     `json:"actingOrganizationId"`
-	SiteID               string     `json:"siteId"`
-	AlarmID              string     `json:"alarmId,omitempty"`
-	Action               Action     `json:"action"`
-	PolicyRevision       string     `json:"policyRevision"`
-	ReasonCode           ReasonCode `json:"reasonCode"`
-	DecidedAt            string     `json:"decidedAt"`
+	Allowed        bool       `json:"allowed"`
+	PrincipalID    string     `json:"principalId,omitempty"`
+	SubjectIssuer  string     `json:"subjectIssuer"`
+	Subject        string     `json:"subject"`
+	TenantID       string     `json:"tenantId"`
+	SiteID         string     `json:"siteId"`
+	AlarmID        string     `json:"alarmId,omitempty"`
+	Action         Action     `json:"action"`
+	PolicyRevision string     `json:"policyRevision"`
+	ReasonCode     ReasonCode `json:"reasonCode"`
+	DecidedAt      string     `json:"decidedAt"`
 }
 
 func (decision Decision) Validate() error {
@@ -71,10 +71,10 @@ func (decision Decision) Validate() error {
 		return errors.New("Alarm authorization decision evidence is incomplete")
 	}
 	if err := (DecisionRequest{
-		ActingOrganizationID: decision.ActingOrganizationID,
-		SiteID:               decision.SiteID,
-		AlarmID:              decision.AlarmID,
-		Action:               decision.Action,
+		TenantID: decision.TenantID,
+		SiteID:   decision.SiteID,
+		AlarmID:  decision.AlarmID,
+		Action:   decision.Action,
 	}).Validate(); err != nil {
 		return err
 	}

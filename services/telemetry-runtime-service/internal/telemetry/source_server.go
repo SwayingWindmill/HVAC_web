@@ -15,8 +15,11 @@ import (
 
 const (
 	InternalSourceObservationPath   = "/internal/v1/telemetry/sources/observations:accept"
-	InternalThingsBoardCoveragePath = "/internal/v1/telemetry/thingsboard/coverage:report"
-	maximumSourceObservationSize    = 96 << 10
+	InternalSourceCoveragePath      = "/internal/v1/telemetry/sources/coverage:report"
+	InternalMQTTGatewayEvidencePath  = "/internal/v1/telemetry/sources/mqtt/gateway-evidence:accept"
+	InternalMQTTPresenceEvidencePath = "/internal/v1/telemetry/sources/mqtt/presence-evidence:accept"
+	InternalMQTTRuntimeEventPath     = "/internal/v1/telemetry/sources/mqtt/events:accept"
+	maximumSourceObservationSize     = 96 << 10
 )
 
 type SourceAuthenticator interface {
@@ -104,6 +107,7 @@ type sourceObservationRequest struct {
 	Value                 json.RawMessage       `json:"value"`
 	ValueType             string                `json:"valueType"`
 	Unit                  *string               `json:"unit"`
+	WireQuality           uint8                 `json:"wireQuality"`
 	SampledAt             string                `json:"sampledAt"`
 	SourcePosition        sourcePositionRequest `json:"sourcePosition"`
 }
@@ -163,6 +167,7 @@ func normalizeSourceObservation(input sourceObservationRequest, receivedAt time.
 		Value:                 append(json.RawMessage(nil), input.Value...),
 		ValueType:             strings.ToUpper(strings.TrimSpace(input.ValueType)),
 		Unit:                  cloneString(input.Unit),
+		WireQuality:           input.WireQuality,
 		SampledAt:             sampledAt.UTC(),
 		ReceivedAt:            receivedAt.UTC(),
 		Position: SourcePosition{
@@ -177,7 +182,7 @@ func normalizeSourceObservation(input sourceObservationRequest, receivedAt time.
 	return candidate, nil
 }
 
-type thingsBoardCoverageRequest struct {
+type sourceCoverageRequest struct {
 	IntegrationInstanceID string  `json:"integrationInstanceId"`
 	ExternalEntityType    string  `json:"externalEntityType"`
 	ExternalID            string  `json:"externalId"`
@@ -187,7 +192,7 @@ type thingsBoardCoverageRequest struct {
 	SourceRevision        int64   `json:"sourceRevision"`
 }
 
-func (h *handler) handleThingsBoardCoverage(writer http.ResponseWriter, request *http.Request) {
+func (h *handler) handleSourceCoverage(writer http.ResponseWriter, request *http.Request) {
 	peer, ok := h.trustedSourcePeer(writer, request)
 	if !ok {
 		return
@@ -196,11 +201,11 @@ func (h *handler) handleThingsBoardCoverage(writer http.ResponseWriter, request 
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The telemetry source acceptance path is temporarily unavailable.", true)
 		return
 	}
-	var input thingsBoardCoverageRequest
+	var input sourceCoverageRequest
 	if !decodeSourceRequest(writer, request, &input) {
 		return
 	}
-	report, err := normalizeThingsBoardCoverage(input, h.now().UTC())
+	report, err := normalizeSourceCoverage(input, h.now().UTC())
 	if err != nil {
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The telemetry source request is invalid.", false)
 		return
@@ -219,6 +224,146 @@ func (h *handler) handleThingsBoardCoverage(writer http.ResponseWriter, request 
 		h.metrics.observeQuarantine("scope")
 	}
 	writeJSON(writer, http.StatusOK, receipt)
+}
+
+type mqttGatewayEvidenceRequest struct {
+	IntegrationInstanceID string          `json:"integrationInstanceId"`
+	TenantID              string          `json:"tenantId"`
+	SiteID                string          `json:"siteId"`
+	GatewayID             string          `json:"gatewayId"`
+	MessageID             string          `json:"messageId"`
+	EvidenceType          string          `json:"evidenceType"`
+	ObservedAt            string          `json:"observedAt"`
+	Sequence              int64           `json:"sequence"`
+	Payload               json.RawMessage `json:"payload"`
+}
+
+func (h *handler) handleMQTTGatewayEvidence(writer http.ResponseWriter, request *http.Request) {
+	peer, ok := h.trustedSourcePeer(writer, request)
+	if !ok {
+		return
+	}
+	if h.mqttEvidenceAcceptor == nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The MQTT evidence acceptance path is temporarily unavailable.", true)
+		return
+	}
+	var input mqttGatewayEvidenceRequest
+	if !decodeSourceRequest(writer, request, &input) {
+		return
+	}
+	integrationID := strings.TrimSpace(input.IntegrationInstanceID)
+	if !h.sourceAuthenticator.AllowsSource(peer, integrationID) {
+		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_SOURCE_IDENTITY_INVALID", "The calling source workload identity is not trusted.", false)
+		return
+	}
+	observedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.ObservedAt))
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT evidence request is invalid.", false)
+		return
+	}
+	evidence := GatewayEvidence{
+		IntegrationInstanceID: integrationID, TenantID: strings.TrimSpace(input.TenantID), SiteID: strings.TrimSpace(input.SiteID),
+		GatewayID: strings.TrimSpace(input.GatewayID), MessageID: strings.TrimSpace(input.MessageID), EvidenceType: strings.ToUpper(strings.TrimSpace(input.EvidenceType)),
+		ObservedAt: observedAt.UTC(), ReceivedAt: h.now().UTC(), Sequence: input.Sequence, Payload: append(json.RawMessage(nil), input.Payload...),
+	}
+	if err = h.mqttEvidenceAcceptor.AcceptGatewayEvidence(request.Context(), evidence); err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT evidence request was rejected.", false)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"accepted": true, "messageId": evidence.MessageID})
+}
+
+type mqttPresenceEvidenceRequest struct {
+	IntegrationInstanceID string `json:"integrationInstanceId"`
+	ExternalEntityType    string `json:"externalEntityType"`
+	ExternalID            string `json:"externalId"`
+	SignalType            string `json:"signalType"`
+	ObservedAt            string `json:"observedAt"`
+	SourceEventID         string `json:"sourceEventId"`
+}
+
+func (h *handler) handleMQTTPresenceEvidence(writer http.ResponseWriter, request *http.Request) {
+	peer, ok := h.trustedSourcePeer(writer, request)
+	if !ok {
+		return
+	}
+	if h.mqttEvidenceAcceptor == nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The MQTT Presence evidence path is temporarily unavailable.", true)
+		return
+	}
+	var input mqttPresenceEvidenceRequest
+	if !decodeSourceRequest(writer, request, &input) {
+		return
+	}
+	integrationID := strings.TrimSpace(input.IntegrationInstanceID)
+	if !h.sourceAuthenticator.AllowsSource(peer, integrationID) {
+		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_SOURCE_IDENTITY_INVALID", "The calling source workload identity is not trusted.", false)
+		return
+	}
+	observedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.ObservedAt))
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT Presence evidence request is invalid.", false)
+		return
+	}
+	receipt, err := h.mqttEvidenceAcceptor.AcceptPresenceEvidence(request.Context(), DevicePresenceEvidence{
+		IntegrationInstanceID: integrationID, ExternalEntityType: strings.ToUpper(strings.TrimSpace(input.ExternalEntityType)), ExternalID: strings.TrimSpace(input.ExternalID),
+		SignalType: strings.ToUpper(strings.TrimSpace(input.SignalType)), ObservedAt: observedAt.UTC(), ReceivedAt: h.now().UTC(), SourceEventID: strings.TrimSpace(input.SourceEventID),
+	})
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT Presence evidence request was rejected.", false)
+		return
+	}
+	writeJSON(writer, http.StatusOK, receipt)
+}
+
+type mqttRuntimeEventRequest struct {
+	IntegrationInstanceID string          `json:"integrationInstanceId"`
+	TenantID              string          `json:"tenantId"`
+	SiteID                string          `json:"siteId"`
+	GatewayID             string          `json:"gatewayId"`
+	MessageID             string          `json:"messageId"`
+	Sequence              int64           `json:"sequence"`
+	EventType             string          `json:"eventType"`
+	SourceType            string          `json:"sourceType"`
+	SourceID              string          `json:"sourceId"`
+	EventTime             string          `json:"eventTime"`
+	Severity              string          `json:"severity"`
+	Data                  json.RawMessage `json:"data"`
+}
+
+func (h *handler) handleMQTTRuntimeEvent(writer http.ResponseWriter, request *http.Request) {
+	peer, ok := h.trustedSourcePeer(writer, request)
+	if !ok {
+		return
+	}
+	if h.mqttEvidenceAcceptor == nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The MQTT runtime event path is temporarily unavailable.", true)
+		return
+	}
+	var input mqttRuntimeEventRequest
+	if !decodeSourceRequest(writer, request, &input) {
+		return
+	}
+	integrationID := strings.TrimSpace(input.IntegrationInstanceID)
+	if !h.sourceAuthenticator.AllowsSource(peer, integrationID) {
+		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_SOURCE_IDENTITY_INVALID", "The calling source workload identity is not trusted.", false)
+		return
+	}
+	eventTime, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.EventTime))
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT runtime event request is invalid.", false)
+		return
+	}
+	evidence := RuntimeEventEvidence{
+		IntegrationInstanceID: integrationID, TenantID: strings.TrimSpace(input.TenantID), SiteID: strings.TrimSpace(input.SiteID), GatewayID: strings.TrimSpace(input.GatewayID),
+		MessageID: strings.TrimSpace(input.MessageID), Sequence: input.Sequence, EventType: strings.TrimSpace(input.EventType), SourceType: strings.TrimSpace(input.SourceType), SourceID: strings.TrimSpace(input.SourceID),
+		EventTime: eventTime.UTC(), Severity: strings.ToUpper(strings.TrimSpace(input.Severity)), Data: append(json.RawMessage(nil), input.Data...), ReceivedAt: h.now().UTC(),
+	}
+	if err = h.mqttEvidenceAcceptor.AcceptRuntimeEvent(request.Context(), evidence); err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT runtime event request was rejected.", false)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"accepted": true, "messageId": evidence.MessageID})
 }
 
 func (h *handler) trustedSourcePeer(writer http.ResponseWriter, request *http.Request) (string, bool) {
@@ -259,7 +404,7 @@ func decodeSourceRequest(writer http.ResponseWriter, request *http.Request, dest
 	return true
 }
 
-func normalizeThingsBoardCoverage(input thingsBoardCoverageRequest, reportedAt time.Time) (CoverageReport, error) {
+func normalizeSourceCoverage(input sourceCoverageRequest, reportedAt time.Time) (CoverageReport, error) {
 	report := CoverageReport{
 		IntegrationInstanceID: strings.TrimSpace(input.IntegrationInstanceID),
 		ExternalEntityType:    strings.ToUpper(strings.TrimSpace(input.ExternalEntityType)),

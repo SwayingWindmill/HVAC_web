@@ -2,182 +2,90 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
+const text = (path) => readFile(resolve(root, path), 'utf8');
+const json = async (path) => JSON.parse(await text(path));
+const assert = (condition, message) => {
+  if (!condition) throw new Error(`S2 telemetry ownership check failed: ${message}`);
+};
 
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
-}
+const [contract, dataArchitecture, clickhouse, ingest, ingestStore, history, mqttRuntime, context] = await Promise.all([
+  json('contracts/ownership/s2-telemetry-ownership.v1.json'),
+  json('contracts/data/data-architecture.v2.json'),
+  text('infra/s2-telemetry/clickhouse/init/001-telemetry-history.sql'),
+  text('services/telemetry-runtime-service/internal/telemetry/ingest.go'),
+  text('services/telemetry-runtime-service/internal/telemetry/ingest_store.go'),
+  text('services/telemetry-runtime-service/internal/telemetry/history_postgres.go'),
+  text('services/mqtt-telemetry-adapter/internal/adapter/envelope.go'),
+  text('CONTEXT.md'),
+]);
 
-async function text(path) {
-  return readFile(resolve(root, path), 'utf8');
-}
+assert(contract.schemaVersion === 1, 'contract schemaVersion must be 1');
+assert(contract.decisionRevision === 3, 'decisionRevision must be 3 for V2 convergence');
+assert(contract.activationStatus === 'v2-convergence', 'activationStatus must be v2-convergence');
+assert(contract.sourceOfTruth === 'SE-DATA-001 V2.0 CURRENT', 'V2 must be the ownership source of truth');
+assert(contract.ownerService === 'telemetry-runtime-service', 'Telemetry Runtime owner drifted');
 
-const contract = JSON.parse(await text('contracts/ownership/s2-telemetry-ownership.v1.json'));
-const activeDataOwnership = JSON.parse(await text('contracts/ownership/data-ownership.v1.json'));
-const adr = await text('docs/adr/0003-s2-telemetry-runtime-ownership.md');
-const context = await text('CONTEXT.md');
-const packageJSON = JSON.parse(await text('package.json'));
+const stores = contract.storageAuthorities ?? {};
+assert(stores.operationalIngest?.engine === 'postgresql', 'PostgreSQL operational ingest store missing');
+assert(stores.operationalIngest?.authority === 'ingest-transaction-dedup-quarantine-outbox', 'PostgreSQL authority exceeded V2 boundary');
+assert(stores.historicalTelemetry?.engine === 'clickhouse', 'historical telemetry must use ClickHouse');
+assert(stores.historicalTelemetry?.authority === 'historical-telemetry-source-of-truth', 'ClickHouse historical authority drifted');
+assert(stores.latestTelemetry?.engine === 'redis', 'V2 Latest target must be Redis');
+assert(stores.latestTelemetry?.authority === 'rebuildable-latest-cache', 'Redis Latest must be rebuildable cache authority');
+assert(stores.latestTelemetry?.implementationStatus === 'PARTIAL', 'Redis Latest must remain visibly partial until implemented');
+assert(stores.postgresLatestProjection?.mustNotBeFinalV2Authority === true, 'PostgreSQL Latest must not be final V2 authority');
+assert(stores.mqtt?.authority === 'transport-only', 'MQTT must remain transport-only');
+assert(stores.transportHistory?.authority === 'ephemeral-continuity-cache', 'transport history authority drifted');
 
-assert(contract.schemaVersion === 1, 'S2 telemetry ownership schemaVersion must be 1');
-assert(contract.decisionRevision === 2, 'S2 telemetry ownership decisionRevision must be 2 for the expand baseline');
-assert(contract.activationStatus === 'expand-baseline', 'S2 telemetry ownership must be activated only as an expand baseline');
-assert(contract.ownerService === 'telemetry-runtime-service', 'Telemetry Runtime must have one explicit owner');
-assert(contract.boundedContext === 'telemetry-runtime', 'Telemetry Runtime bounded context name drifted');
+assert(dataArchitecture.storageAuthorities?.clickhouse === 'historical-telemetry-and-analytics', 'V2 baseline ClickHouse boundary drifted');
+assert(dataArchitecture.storageAuthorities?.redis === 'rebuildable-latest-cache-and-realtime', 'V2 baseline Redis boundary drifted');
+assert(dataArchitecture.storageAuthorities?.mqtt === 'transport-only', 'V2 baseline MQTT boundary drifted');
 
-const store = contract.authoritativeStore ?? {};
-assert(store.engine === 'postgresql', 'authoritative store must be PostgreSQL');
-assert(store.schema === 'telemetry_runtime', 'authoritative schema must be telemetry_runtime');
-assert(store.writer === contract.ownerService, 'authoritative schema writer must be the owner service');
-assert(store.migrationRole === 's2_telemetry_migrator', 'migration role drifted');
-assert(store.migrationServiceRole === 's2_telemetry_migrator_service', 'migration service role drifted');
-assert(store.runtimeRole === 's2_telemetry_runtime', 'runtime role drifted');
-assert(store.serviceRole === 's2_telemetry_service', 'runtime service role drifted');
-assert(store.relayRole === 's2_telemetry_relay' && store.relayServiceRole === 's2_telemetry_relay_service', 'relay roles drifted');
-assert(store.gatewayRole === 's2_telemetry_gateway' && store.iamRole === 's2_telemetry_iam', 'connect-only Gateway/IAM roles drifted');
-assert(store.runtimeBypassRls === false, 'runtime role must not bypass RLS');
+assert(contract.ingestSources?.length === 1 && contract.ingestSources[0]?.service === 'mqtt-telemetry-adapter', 'MQTT adapter must be the canonical S2 ingest source');
+assert(contract.ingestSources[0]?.unknownMajorVersion === 'REJECT', 'unknown MQTT schema major must reject');
 
-const resourceKeys = new Set();
-for (const resource of contract.ownedResources ?? []) {
-  const key = `${resource.kind}:${resource.name}`;
-  assert(!resourceKeys.has(key), `duplicate owned resource: ${key}`);
-  resourceKeys.add(key);
-  assert(resource.writer === contract.ownerService, `${key} must be written by Telemetry Runtime`);
-}
-for (const key of [
-  'projection:device-runtime-binding',
-  'projection:presence-policy',
-  'projection:freshness-policy',
-  'projection:latest-accepted-telemetry',
-  'projection:device-presence',
-  'projection:device-observation-snapshot',
-  'projection:ingest-deduplication',
-  'projection:ingest-quarantine',
-  'outbox:telemetry-publication-outbox',
-  'event-family:hvac.telemetry.device-snapshot.v1',
+const semantics = contract.telemetrySemantics ?? {};
+assert(semantics.canonicalPoint === true, 'Point must remain canonical');
+assert(semantics.eventTimeField === 'sampled_at' && semantics.ingestTimeField === 'received_at', 'event/ingest dual time drifted');
+assert(semantics.outOfOrder?.history === 'INSERT_FULL_FACT', 'out-of-order history policy must preserve full fact');
+assert(semantics.outOfOrder?.latest === 'NO_UPDATE', 'out-of-order Latest policy must not regress');
+assert(JSON.stringify(semantics.quality) === JSON.stringify(['GOOD', 'PARTIAL', 'ESTIMATED', 'MANUAL', 'STALE', 'INVALID']), 'V2 quality values drifted');
+assert(semantics.qualityIndependentFromAcceptance === true, 'quality must be independent from ingest acceptance');
+assert(semantics.unknownPoint === 'QUARANTINE', 'unknown Point must quarantine');
+
+assert(clickhouse.includes('CREATE TABLE IF NOT EXISTS telemetry_history.observations'), 'ClickHouse historical observations table missing');
+assert(clickhouse.includes('sampled_at') && clickhouse.includes('received_at'), 'ClickHouse dual-time fields missing');
+assert(ingest.includes('ObservationOutOfOrder'), 'runtime out-of-order decision missing');
+assert(ingest.includes('QualityPartial') && ingest.includes('QualityInvalid'), 'runtime V2 quality model incomplete');
+assert(!ingest.includes('QualitySuspect') && !ingest.includes('QualityRejected'), 'legacy principal quality values remain');
+assert(ingestStore.includes('decision.Status == ObservationOutOfOrder && decision.PointID != ""'), 'mapped out-of-order value is not persisted');
+assert(history.includes('decision.Status == ObservationOutOfOrder && decision.PointID != ""'), 'mapped out-of-order fact is not projected to history');
+assert(mqttRuntime.includes('TelemetryEnvelopeSchemaVersion'), 'MQTT adapter schema-version gate missing');
+
+assert(contract.historicalTimeseries?.insideS2Slice === true, 'historical telemetry must be inside current S2 architecture');
+assert(contract.historicalTimeseries?.authority === 'clickhouse.telemetry_history.observations', 'historical authority must be ClickHouse observations');
+assert(contract.historicalTimeseries?.postgresOperationalEvidenceIsAuthority === false, 'PostgreSQL source_observations must not be historical authority');
+assert(contract.currentState?.v2Authority === 'redis-rebuildable-latest-cache', 'current-state target must be Redis');
+assert(contract.currentState?.implementationStatus === 'PARTIAL', 'Redis Latest incomplete work must remain explicit');
+assert(contract.currentState?.temporaryPostgresProjectionExists === true, 'current migration reality must remain explicit until Redis Latest is complete');
+
+const serialized = JSON.stringify(contract).toLowerCase();
+assert(!serialized.includes('thingsboard'), 'ThingsBoard remains in current S2 ownership contract');
+assert(!serialized.includes('legacy-hvac-backend'), 'legacy telemetry compatibility remains in current S2 ownership contract');
+
+for (const forbidden of [
+  'browser-to-mqtt',
+  'mqtt-direct-to-latest-without-ingest-validation',
+  'postgres-operational-ingest-evidence-as-historical-authority',
+  'out-of-order-to-latest-regression',
+  'transport-history-to-latest-authority',
+  'browser-direct-to-clickhouse',
 ]) {
-  assert(resourceKeys.has(key), `required owned resource missing: ${key}`);
-}
-const outbox = contract.ownedResources.find((resource) => resource.kind === 'outbox');
-assert(outbox?.relay === 'outbox-relay', 'publication outbox must use the restricted outbox relay');
-const activeResources = new Map((activeDataOwnership.resources ?? []).map((resource) => [`${resource.kind}:${resource.name}`, resource]));
-for (const key of resourceKeys) {
-  assert(activeResources.get(key)?.writer === contract.ownerService, `active Data Ownership Registry is missing ${key}`);
-}
-assert(activeResources.get('schema:telemetry_runtime')?.writer === contract.ownerService, 'active telemetry_runtime schema owner drifted');
-assert(activeResources.get('transport-store:s2-telemetry-transport-redis')?.authority === false, 'dedicated transport Redis must remain non-authoritative');
-assert(activeResources.get('transport-store:s2-telemetry-transport-redis')?.sharedWithLegacy === false, 'transport Redis must remain isolated from Legacy');
-assert(activeResources.get('compatibility-boundary:legacy-telemetry-timeseries')?.currentStateAuthority === false, 'Legacy historical compatibility cannot become current authority');
-
-const inputEvents = new Map((contract.inputEvents ?? []).map((event) => [event.name, event]));
-assert(inputEvents.get('hvac.registry.external-binding.v1')?.writer === 'platform-core-service', 'Core must own binding change events');
-assert(inputEvents.get('hvac.registry.external-binding.v1')?.consumer === contract.ownerService, 'Telemetry Runtime must consume binding changes');
-assert(inputEvents.get('hvac.iam.authorization-revoked.v1')?.writer === 'iam-service', 'IAM must own revocation events');
-assert(inputEvents.get('hvac.iam.authorization-revoked.v1')?.consumer === contract.ownerService, 'Telemetry Runtime must consume revocation events');
-
-const databaseAccess = contract.databaseAccess ?? [];
-assert(databaseAccess.length === 2, 'only owner write and restricted relay database access are allowed');
-assert(databaseAccess.some((entry) => entry.service === contract.ownerService && entry.schema === store.schema && entry.mode === 'write'), 'owner write access missing');
-const relayAccess = databaseAccess.find((entry) => entry.mode === 'relay');
-assert(relayAccess?.service === 'outbox-relay' && relayAccess.schema === store.schema, 'invalid relay identity or schema');
-assert(JSON.stringify(relayAccess.restrictedTo) === JSON.stringify(['telemetry_publication_outbox']), 'relay must be restricted to the publication outbox');
-
-const positions = contract.positions ?? {};
-assert(positions.businessRevision?.owner === contract.ownerService, 'Business Revision must be owner-authored');
-assert(positions.businessRevision?.scope === 'device', 'Business Revision must be Device-scoped');
-assert(positions.sourcePosition?.owner === 'source-adapter', 'Source Position ownership drifted');
-assert(positions.transportPosition?.owner === 'centrifugo', 'Transport Position ownership drifted');
-assert(positions.transportPosition?.representation === 'epoch plus offset', 'Transport Position representation drifted');
-assert(positions.recoveryCursor?.owner === contract.ownerService, 'Recovery Cursor must be platform-owner authored');
-assert(positions.recoveryCursor?.authority === 'none', 'Recovery Cursor must not become business authority');
-assert(positions.recoveryCursor?.reuseRequires?.includes('current authorization'), 'Recovery Cursor reuse must require current authorization');
-assert(positions.recoveryCursor?.failureBehavior?.includes('authoritative Device Observation Snapshot'), 'Recovery Cursor failure must return to Snapshot');
-for (const noAdvance of ['duplicate source delivery', 'rejected candidate', 'publication retry', 'cache refresh']) {
-  assert(positions.businessRevision?.doesNotAdvanceFor?.includes(noAdvance), `Business Revision no-advance rule missing: ${noAdvance}`);
+  assert(contract.forbiddenFlows?.includes(forbidden), `forbidden flow missing: ${forbidden}`);
 }
 
-const stores = contract.stores ?? {};
-assert(stores.businessAuthority === 'postgresql.telemetry_runtime', 'business authority drifted');
-assert(stores.optionalReadCache?.authority === 'non-authoritative-replica', 'read cache must remain non-authoritative');
-assert(stores.optionalReadCache?.writer === contract.ownerService, 'only owner may populate the optional read cache');
-assert(stores.transportHistory?.authority === 'ephemeral-continuity-cache', 'transport history must remain ephemeral');
-assert(stores.transportHistory?.engine === 'dedicated-redis', 'transport history must use dedicated Redis');
-assert(stores.transportHistory?.writer === 'centrifugo', 'Centrifugo must own transport history writes');
-assert(stores.transportHistory?.sharedWithLegacyRedis === false, 'transport Redis must not be shared with Legacy Redis');
-assert(stores.thingsBoard?.publicReadThrough === false, 'ThingsBoard public read-through is forbidden');
-assert(stores.thingsBoard?.directLatestWrite === false, 'ThingsBoard direct latest writes are forbidden');
-assert(stores.legacyRedis?.authority === 'none' && stores.legacyRedis?.s2Read === false && stores.legacyRedis?.s2Write === false, 'Legacy Redis must have no S2 authority or access');
-
-const responsibilities = new Map((contract.serviceResponsibilities ?? []).map((entry) => [entry.service, entry]));
-for (const service of [
-  'platform-core-service',
-  'iam-service',
-  'platform-gateway',
-  'telemetry-runtime-service',
-  'legacy-hvac-backend',
-  'thingsboard',
-  'centrifugo',
-]) {
-  assert(responsibilities.has(service), `service responsibility missing: ${service}`);
-  assert(responsibilities.get(service).owns?.length > 0, `${service} must declare owned responsibilities`);
-  assert(responsibilities.get(service).mustNot?.length > 0, `${service} must declare forbidden responsibilities`);
-}
-assert(responsibilities.get(contract.ownerService).owns.includes('Business Revision'), 'owner must explicitly own Business Revision');
-assert(responsibilities.get('platform-core-service').mustNot.includes('write Presence or latest telemetry'), 'Core must not own runtime truth');
-assert(responsibilities.get('platform-gateway').mustNot.includes('cache or merge telemetry business state'), 'Gateway must remain an edge seam');
-assert(responsibilities.get('centrifugo').mustNot.includes('own Snapshot'), 'Centrifugo must not own Snapshot');
-
-assert(contract.ingestTransaction?.length === 8, 'ingest transaction steps drifted');
-assert(contract.ingestTransaction.at(-1)?.includes('same Business Revision'), 'publication retry must preserve Business Revision');
-assert(contract.snapshotReadOrder?.some((step) => step.includes('rather than ThingsBoard read-through')), 'Snapshot failure must not use ThingsBoard read-through');
-assert(contract.mappingRules?.publicDeviceIdentity === 'Registry Device UUIDv7', 'public Device identity drifted');
-assert(contract.mappingRules?.observationMayCreateBinding === false, 'observations must not create mappings');
-assert(contract.mappingRules?.zeroActiveBindings?.includes('MAPPING_NOT_FOUND'), 'missing mapping quarantine rule is absent');
-assert(contract.mappingRules?.multipleActiveBindings?.includes('MAPPING_CONFLICT'), 'conflicting mapping quarantine rule is absent');
-
-assert(contract.historicalTimeseries?.insideS2Slice === false, 'historical timeseries must remain outside S2');
-assert(contract.historicalTimeseries?.compatibilityOwner === 'legacy-hvac-backend', 'historical compatibility owner drifted');
-assert(contract.historicalTimeseries?.requirements?.includes('no write into S2 latest projections'), 'historical response must not write S2 latest');
-assert(contract.historicalTimeseries?.requirements?.includes('no fallback from S2 latest or Snapshot routes'), 'S2 current reads must not fall back to historical compatibility');
-
-const requiredForbiddenFlows = [
-  'browser-to-thingsboard',
-  'public-latest-read-to-thingsboard-read-through',
-  'thingsboard-direct-to-latest-projection',
-  'legacy-hvac-backend-to-telemetry-runtime-write',
-  'legacy-redis-to-s2-current-state',
-  'cache-to-subscription-authorization',
-  'centrifugo-history-to-snapshot-authority',
-  's2-latest-to-thingsboard-reverse-sync',
-  'core-and-telemetry-runtime-cross-schema-business-writes',
-  'shadow-or-fallback-path-with-side-effects',
-];
-assert(JSON.stringify(contract.forbiddenFlows) === JSON.stringify(requiredForbiddenFlows), 'forbidden-flow set or order drifted');
-
-for (const phrase of [
-  'Create a dedicated Telemetry Runtime bounded context',
-  'Authoritative persistence is PostgreSQL Schema `telemetry_runtime`',
-  'One business writer, one restricted relay',
-  'Three position concepts remain distinct',
-  'Source readback is reconciliation, not read-through',
-  'Transport persistence uses dedicated Redis',
-  'Historical timeseries remains outside S2',
-  'Forbidden data flows',
-  'Issue #51 defines the public Snapshot',
-]) {
-  assert(adr.includes(phrase), `ADR is missing required decision phrase: ${phrase}`);
-}
-
-for (const term of [
-  '## Telemetry Runtime',
-  '## Device Observation Snapshot',
-  '## Business Revision',
-  '## Source Position',
-  '## Transport Position',
-  '## Recovery Cursor',
-  '## Ingest Quarantine',
-]) {
+for (const term of ['## Telemetry Runtime', '## Device Observation Snapshot', '## Business Revision', '## Source Position', '## Transport Position', '## Recovery Cursor', '## Ingest Quarantine']) {
   assert(context.includes(term), `CONTEXT.md is missing domain term: ${term}`);
 }
 
-assert(packageJSON.scripts?.['s2:ownership:check'] === 'node scripts/check-s2-telemetry-ownership.mjs', 's2:ownership:check is not wired');
-
-console.log('S2 telemetry ownership passed: one runtime owner, PostgreSQL authority, bounded transport and no hidden dual writes.');
+console.log('S2 telemetry ownership checks passed: MQTT is transport-only, ClickHouse owns history, Redis is the explicit V2 Latest target, and PostgreSQL Latest remains a visible migration projection only.');

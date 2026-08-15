@@ -162,10 +162,11 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.ConnectionManager) {
 	subscribeContext, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	_, err := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{{
-		Topic: runtime.config.MQTT.TopicFilter,
-		QoS:   1,
-	}}})
+	subscriptions := make([]paho.SubscribeOptions, 0, len(runtime.config.MQTT.TopicFilters))
+	for _, topic := range runtime.config.MQTT.TopicFilters {
+		subscriptions = append(subscriptions, paho.SubscribeOptions{Topic: topic, QoS: 1})
+	}
+	_, err := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: subscriptions})
 	if err != nil {
 		runtime.recordConnectionState(true, false, err)
 		_ = runtime.metrics.AddCounter("hvac_mqtt_subscriptions_total", "MQTT subscription attempts by outcome.", map[string]string{"outcome": "failed"}, 1)
@@ -174,7 +175,7 @@ func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.Connect
 	}
 	runtime.recordConnectionState(true, true, nil)
 	_ = runtime.metrics.AddCounter("hvac_mqtt_subscriptions_total", "MQTT subscription attempts by outcome.", map[string]string{"outcome": "success"}, 1)
-	runtime.logger.Info("mqtt_telemetry_adapter_subscribed", "topic_filter", runtime.config.MQTT.TopicFilter)
+	runtime.logger.Info("mqtt_telemetry_adapter_subscribed", "topic_filters", runtime.config.MQTT.TopicFilters)
 }
 
 func (runtime *Runtime) processQueue(ctx context.Context, queue <-chan queuedPublish) {

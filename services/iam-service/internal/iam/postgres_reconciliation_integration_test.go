@@ -27,6 +27,7 @@ func TestPostgresReconciliationIsIdempotentVersionedAndQuarantinesConflicts(t *t
 
 	validFrom := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	request := iam.ReconciliationRequest{
+		TenantID:     "018f1d00-0000-7000-8000-000000000001",
 		SourceSystem:  "logto",
 		SourceKey:     "user-reconciliation-fixture",
 		SourceVersion: 1,

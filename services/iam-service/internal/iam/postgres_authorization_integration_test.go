@@ -340,8 +340,8 @@ func TestPostgresAuthorizationRuntimeIsRLSBoundAndRoleChecked(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, `SELECT count(*) FROM core_registry.organizations`); err == nil || !strings.Contains(strings.ToLower(err.Error()), "permission denied") {
-		t.Fatalf("IAM runtime accessed Core Schema: %v", err)
+	if _, err := pool.Exec(ctx, `SELECT count(*) FROM core_registry.equipment`); err == nil || !strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+		t.Fatalf("IAM runtime accessed Core Equipment data: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE iam.principals SET display_name = display_name`); err == nil || !strings.Contains(strings.ToLower(err.Error()), "permission denied") {
 		t.Fatalf("IAM runtime mutated IAM facts: %v", err)

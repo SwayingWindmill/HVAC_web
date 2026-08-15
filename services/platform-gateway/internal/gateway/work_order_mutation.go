@@ -149,7 +149,7 @@ func dispatchWorkOrderMutationRoute(h *handler, writer http.ResponseWriter, requ
 	}
 	var workOrder workordermodel.WorkOrder
 	if decodeStrictWorkOrderJSON(body, &workOrder) != nil || workOrder.Validate() != nil ||
-		workOrder.OrganizationID != session.ActingOrganizationID || workOrder.SiteID != route.siteID {
+		workOrder.TenantID != session.TenantID || workOrder.SiteID != route.siteID {
 		h.writeWorkOrderFailure(writer, request, workOrderUnavailable("Work Order Service returned an invalid mutation projection."))
 		return
 	}
@@ -226,7 +226,7 @@ func (h *handler) parseWorkOrderMutation(request *http.Request, session bffSessi
 			return parsedPublicWorkOrderMutation{}, &failure
 		}
 		expectedCreate, modelErr := workordermodel.Create(workordermodel.CreateInput{
-			WorkOrderID: "01930000-ffff-7000-8000-000000000001", OrganizationID: session.ActingOrganizationID, SiteID: route.siteID,
+			WorkOrderID: "01930000-ffff-7000-8000-000000000001", TenantID: session.TenantID, SiteID: route.siteID,
 			Title: create.Title, Description: create.Description, Priority: create.Priority, SourceReferences: create.SourceReferences,
 			AssigneeID: create.AssigneeID, TeamID: create.TeamID, ScheduledStart: create.ScheduledStart, DueAt: create.DueAt,
 			ActorType: "PRINCIPAL", ActorID: "gateway-validation", PolicyRevision: "gateway-validation", CorrelationID: idempotencyKey,
@@ -307,7 +307,7 @@ func boundedWorkOrderText(value string, maximum int) bool {
 }
 
 func (h *handler) signWorkOrderWriteContext(session bffSession, route publicWorkOrderRoute, decision workorderauth.Decision, idempotencyKey, tenantID string) (string, *workOrderFailure) {
-	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.workOrder == nil || !isLowerUUIDv7(tenantID) {
+	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.workOrder == nil || !isLowerUUIDv7(tenantID) || session.TenantID != tenantID {
 		failure := workOrderUnavailable("Work Order write context signing is unavailable.")
 		return "", &failure
 	}
@@ -316,7 +316,7 @@ func (h *handler) signWorkOrderWriteContext(session bffSession, route publicWork
 	if expiresAt.After(session.ExpiresAt) {
 		expiresAt = session.ExpiresAt
 	}
-	scopes := []string{"organization:" + session.ActingOrganizationID, "site:" + route.siteID}
+	scopes := []string{"tenant:" + session.TenantID, "site:" + route.siteID}
 	if route.workOrderID != "" {
 		scopes = append(scopes, "work-order:"+route.workOrderID)
 	}
@@ -327,7 +327,7 @@ func (h *handler) signWorkOrderWriteContext(session bffSession, route publicWork
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
 		PrincipalID: decision.PrincipalID, DisplayName: session.Principal.DisplayName, Email: session.Principal.Email,
 		Roles: append([]string(nil), session.Principal.Roles...), ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
-		Audience: h.workOrder.backendAudience, ActingOrganizationID: session.ActingOrganizationID, TenantID: tenantID,
+		Audience: h.workOrder.backendAudience, TenantID: tenantID,
 		Actions: []string{string(route.action)}, Scopes: scopes, PolicyRevision: decision.PolicyRevision, SessionID: session.ID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	}

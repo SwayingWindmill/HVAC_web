@@ -24,7 +24,7 @@ func TestDeviceHistoryRouteVerifiesExactGrantAndPreservesMetadata(t *testing.T) 
 	from := now.Add(-6 * time.Hour)
 	query := telemetryhistorymodel.DeviceHistoryQuery{
 		ActingOrganizationID: testOrganizationID,
-		OwningOrganizationID: testOrganizationID,
+		TenantID:             "018f1d00-0000-7000-8000-000000000001",
 		SiteID:               testSiteID,
 		DeviceID:             "018f1e00-4000-7000-8000-000000000001",
 		Keys:                 []string{"zone.temperature"},
@@ -37,7 +37,7 @@ func TestDeviceHistoryRouteVerifiesExactGrantAndPreservesMetadata(t *testing.T) 
 	watermark := now
 	historyEngine := &historyEngineStub{response: telemetryhistorymodel.DeviceHistoryResponse{
 		SchemaVersion:        1,
-		OwningOrganizationID: query.OwningOrganizationID,
+		TenantID:             query.TenantID,
 		SiteID:               query.SiteID,
 		DeviceID:             query.DeviceID,
 		Series: []telemetryhistorymodel.DeviceHistorySeries{{
@@ -134,7 +134,7 @@ func TestDeviceHistoryRouteRejectsGrantForDifferentRange(t *testing.T) {
 	now := time.Date(2026, 7, 30, 6, 0, 0, 0, time.UTC)
 	query := telemetryhistorymodel.DeviceHistoryQuery{
 		ActingOrganizationID: testOrganizationID,
-		OwningOrganizationID: testOrganizationID,
+		TenantID:             "018f1d00-0000-7000-8000-000000000001",
 		SiteID:               testSiteID,
 		DeviceID:             "018f1e00-4000-7000-8000-000000000001",
 		Keys:                 []string{"zone.temperature"},

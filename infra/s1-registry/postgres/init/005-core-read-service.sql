@@ -16,7 +16,7 @@ SET LOCAL ROLE s1_iam_migrator;
 
 CREATE TABLE IF NOT EXISTS iam.registry_grant_revocations (
   token_id text PRIMARY KEY CHECK (char_length(token_id) BETWEEN 1 AND 256),
-  acting_organization_id uuid NOT NULL CHECK (iam.is_uuid_v7(acting_organization_id)),
+  tenant_id uuid NOT NULL CHECK (iam.is_uuid_v7(tenant_id)),
   revoked_at timestamptz NOT NULL,
   expires_at timestamptz NOT NULL,
   reason_code text NOT NULL CHECK (char_length(reason_code) BETWEEN 1 AND 128),
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS iam.registry_grant_revocations (
 );
 
 CREATE INDEX IF NOT EXISTS registry_grant_revocations_expiry_idx
-  ON iam.registry_grant_revocations (expires_at, acting_organization_id);
+  ON iam.registry_grant_revocations (expires_at, tenant_id);
 
 ALTER TABLE iam.registry_grant_revocations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE iam.registry_grant_revocations FORCE ROW LEVEL SECURITY;
@@ -38,7 +38,7 @@ CREATE POLICY registry_grant_revocations_migrator_all ON iam.registry_grant_revo
 DROP POLICY IF EXISTS registry_grant_revocations_runtime_scope ON iam.registry_grant_revocations;
 CREATE POLICY registry_grant_revocations_runtime_scope ON iam.registry_grant_revocations
   FOR SELECT TO s1_iam_runtime
-  USING (acting_organization_id = iam.current_acting_organization_id());
+  USING (tenant_id = iam.current_tenant_id());
 
 GRANT SELECT ON iam.registry_grant_revocations TO s1_iam_runtime;
 REVOKE ALL ON iam.registry_grant_revocations FROM PUBLIC;

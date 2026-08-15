@@ -22,7 +22,7 @@ func (h *handler) handleTelemetryDecision(writer http.ResponseWriter, request *h
 		writeProblem(writer, http.StatusBadRequest, "IAM_TELEMETRY_DECISION_REQUEST_INVALID", "The Telemetry authorization request is invalid.")
 		return http.StatusBadRequest
 	}
-	if input.ActingOrganizationID != inbound.ActingOrganizationID {
+	if input.TenantID != inbound.TenantID {
 		writeProblem(writer, http.StatusForbidden, "IAM_TELEMETRY_CONTEXT_MISMATCH", "The Telemetry authorization context does not match the delegated Session.")
 		return http.StatusForbidden
 	}
@@ -60,7 +60,7 @@ func (h *handler) handleTelemetryDecision(writer http.ResponseWriter, request *h
 		grant, err := telemetryauth.SignGrant(h.telemetryGrantSigner, telemetryauth.GrantClaims{
 			Issuer: h.telemetryGrantIssuer, Presenter: presenter, Audience: h.telemetryGrantAudience,
 			PrincipalID: decision.PrincipalID, SubjectIssuer: decision.SubjectIssuer, Subject: decision.Subject,
-			ActingOrganizationID: decision.ActingOrganizationID,
+			TenantID: decision.TenantID,
 			ActorChain:           []telemetryauth.Actor{{Service: "platform-gateway", SPIFFEID: presenter}},
 			Action:               decision.Action, ScopeDigest: decision.ScopeDigest, TargetCount: targetCount, KeyCount: keyCount,
 			PolicyRevision: decision.PolicyRevision, SessionID: inbound.SessionID, ParentTokenID: inbound.TokenID,
@@ -96,7 +96,7 @@ func (h *handler) handleTelemetryDecision(writer http.ResponseWriter, request *h
 func (h *handler) recordTelemetryDecision(request *http.Request, decision telemetryauth.Decision, grantSigned bool, deliveryCode, requestID string) bool {
 	targetCount, keyCount := telemetryDecisionCounts(decision)
 	return h.telemetryAuditSink.RecordTelemetryDecision(request.Context(), TelemetryDecisionAudit{
-		PrincipalID: decision.PrincipalID, ActingOrganizationID: decision.ActingOrganizationID, Action: decision.Action,
+		PrincipalID: decision.PrincipalID, TenantID: decision.TenantID, Action: decision.Action,
 		Allowed: decision.Allowed, TargetCount: targetCount, KeyCount: keyCount, ScopeDigest: decision.ScopeDigest,
 		PolicyRevision: decision.PolicyRevision, ReasonCode: decision.ReasonCode, GrantSigned: grantSigned,
 		DeliveryCode: deliveryCode, RequestID: requestID, TraceID: observability.TraceID(request.Context()), OccurredAt: formatInstant(h.now()),

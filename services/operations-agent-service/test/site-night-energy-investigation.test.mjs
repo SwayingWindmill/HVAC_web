@@ -5,14 +5,14 @@ import { createSiteNightEnergyInvestigationCoordinator } from '../dist/index.js'
 import { createFakeFindingSynthesizer } from '../dist/model/index.js';
 import { createFakeOperationsAgentEnvironment } from './support/fake-operations-agent-environment.mjs';
 
-const organizationId = '0198f5c0-7c00-7000-8000-000000000001';
+const tenantId = '0198f5c0-7c00-7000-8000-000000000001';
 const siteId = '0198f5c0-7c00-7000-8000-000000000002';
 const equipmentIds = [
   '0198f5c0-7c00-7000-8000-000000000010',
   '0198f5c0-7c00-7000-8000-000000000011',
 ];
 const scope = Object.freeze({
-  organizationId,
+  tenantId,
   siteId,
   equipmentId: null,
   deviceId: null,
@@ -53,7 +53,7 @@ const createOwnerResultFactory = ({ partial = false } = {}) => async (request) =
       provenance: 'platform-core-service:registry-site/v1',
       payload: {
         kind: 'SITE',
-        site: { id: siteId, owningOrganizationId: organizationId, timezone: 'Asia/Tokyo' },
+        site: { id: siteId, tenantId: tenantId, timezone: 'Asia/Tokyo' },
       },
     };
   }
@@ -127,7 +127,7 @@ test('Site night-energy use case commits a supported Investigation and exact rep
     },
   });
 
-  const started = await coordinator.start({ organizationId, siteId });
+  const started = await coordinator.start({ tenantId, siteId });
   assert.equal(started.id, investigationId);
   assert.equal(started.status, 'RUNNING');
   assert.equal(started.activeRun?.status, 'ACTIVE');
@@ -201,7 +201,7 @@ test('model synthesis can refine Finding text without controlling outcome or rep
     findingSynthesizer,
   });
 
-  const started = await coordinator.start({ organizationId, siteId });
+  const started = await coordinator.start({ tenantId, siteId });
   const completed = await coordinator.advance({ investigationId: started.id });
   assert.equal(completed.status, 'COMPLETED');
   assert.equal(completed.outcome, 'SUPPORTED_SITE_FINDING');
@@ -233,7 +233,7 @@ test('model synthesis can refine Finding text without controlling outcome or rep
 test('a saved Runtime Checkpoint without receipts recovers by replaying only the fixed Registry reads', async () => {
   const environment = createEnvironment();
   const coordinator = createSiteNightEnergyInvestigationCoordinator(environment.ports);
-  const started = await coordinator.start({ organizationId, siteId });
+  const started = await coordinator.start({ tenantId, siteId });
   const aggregate = await environment.businessStore.repository.get(started.id);
   const internal = aggregate.view();
   const run = internal.runs.find(({ id }) => id === internal.activeRunId);
@@ -258,7 +258,7 @@ test('a saved Runtime Checkpoint without receipts recovers by replaying only the
 test('readiness blockers persist a stable unable-to-conclude Finding without a comparison claim', async () => {
   const environment = createEnvironment({ partial: true });
   const coordinator = createSiteNightEnergyInvestigationCoordinator(environment.ports);
-  const started = await coordinator.start({ organizationId, siteId });
+  const started = await coordinator.start({ tenantId, siteId });
 
   const completed = await coordinator.advance({ investigationId: started.id });
   assert.equal(completed.status, 'COMPLETED');

@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 2,
+  "document": {
+    "documentId": "SE-DATA-001",
+    "version": "2.0",
+    "status": "CURRENT",
+    "title": "智慧能源系统数据架构设计 V2",
+    "authority": "source-of-truth"
+  },
+  "canonicalChain": [
+    "Tenant",
+    "Site",
+    "Space",
+    "Asset",
+    "Device",
+    "Point",
+    "Telemetry"
+  ],
+  "approvedRemovals": [
+    "Organization",
+    "ThingsBoard"
+  ],
+  "frozenPrinciples": [
+    "Point != Metric",
+    "Asset != Device",
+    "Space Tree != Asset Tree != Energy Topology",
+    "Forecast != Fact",
+    "Plan != Execution",
+    "Correction != Overwrite",
+    "Event Time != Ingest Time",
+    "TTL != Data Governance",
+    "Archive != Backup"
+  ],
+  "storageAuthorities": {
+    "postgresql": "business-master-metadata-and-state-machine",
+    "clickhouse": "historical-telemetry-and-analytics",
+    "redis": "rebuildable-latest-cache-and-realtime",
+    "mqtt": "transport-only",
+    "objectStorage": "archive-backup-evidence-dataset-model-artifacts",
+    "kafka": "optional"
+  },
+  "pointModel": {
+    "canonicalEntity": "Point",
+    "codePattern": "^[a-z][a-z0-9_]{0,127}$",
+    "types": [
+      "TELEMETRY",
+      "COUNTER",
+      "STATE",
+      "SETTING",
+      "COMMAND"
+    ],
+    "physicalSensor": {
+      "canonical": false,
+      "requiredBetweenDeviceAndPoint": false,
+      "allowedOnlyForIndependentPhysicalLifecycle": true,
+      "lifecycleReasons": [
+        "installation",
+        "replacement",
+        "calibration",
+        "traceability"
+      ]
+    }
+  },
+  "telemetryModel": {
+    "eventTime": true,
+    "ingestTime": true,
+    "historicalOutOfOrder": "INSERT",
+    "latestOutOfOrder": "NO_UPDATE",
+    "quality": [
+      "GOOD",
+      "PARTIAL",
+      "ESTIMATED",
+      "MANUAL",
+      "STALE",
+      "INVALID"
+    ],
+    "qualityIndependentFromAcceptance": true
+  },
+  "domains": [
+    { "name": "Object Model", "status": "PARTIAL" },
+    { "name": "Device Model", "status": "PARTIAL" },
+    { "name": "Time Series Model", "status": "PARTIAL" },
+    { "name": "Energy Topology Model", "status": "PARTIAL" },
+    { "name": "Metric Model", "status": "PARTIAL" },
+    { "name": "Metering & Settlement Model", "status": "PARTIAL" },
+    { "name": "Control Model", "status": "PARTIAL" },
+    { "name": "Forecast Model", "status": "PARTIAL" },
+    { "name": "Optimization Model", "status": "PARTIAL" },
+    { "name": "Governance Model", "status": "PARTIAL" }
+  ],
+  "productionGate": [
+    { "id": "SOT_BOUNDARIES", "status": "PASS" },
+    { "id": "TIMESERIES_OLD_BASELINE_REMOVED", "status": "PASS" },
+    { "id": "POINT_STANDARD", "status": "PASS" },
+    { "id": "UNIT_DIRECTION_STANDARD", "status": "PASS" },
+    { "id": "EVENT_INGEST_TIME", "status": "PASS" },
+    { "id": "DUPLICATE", "status": "PASS" },
+    { "id": "OUT_OF_ORDER_HISTORY_LATEST", "status": "PASS" },
+    { "id": "REDIS_LATEST", "status": "PASS" },
+    { "id": "UNKNOWN_POINT_QUARANTINE", "status": "PASS" },
+    { "id": "COUNTER_RESET_ROLLOVER", "status": "PASS" },
+    { "id": "METER_BINDING", "status": "PASS" },
+    { "id": "CT_PT_APPLY_ONCE", "status": "PASS" },
+    { "id": "TOPOLOGY_VERSION", "status": "PASS" },
+    { "id": "PRIMARY_METER_UNIQUENESS", "status": "PASS" },
+    { "id": "VIRTUAL_METER_DAG", "status": "PASS" },
+    { "id": "METRIC_VERSIONING", "status": "PASS" },
+    { "id": "SETTLEMENT_LOCK", "status": "PASS" },
+    { "id": "SETTLEMENT_REVISION", "status": "PASS" },
+    { "id": "CORRECTION_NO_OVERWRITE", "status": "PASS" },
+    { "id": "FORECAST_TRACEABILITY", "status": "PASS" },
+    { "id": "OPTIMIZATION_INPUT_SNAPSHOT", "status": "PASS" },
+    { "id": "LIFECYCLE_POLICY", "status": "PASS" },
+    { "id": "LEGAL_HOLD", "status": "PASS" },
+    { "id": "ARCHIVE_BACKUP_SEPARATION", "status": "PASS" },
+    { "id": "RESTORE_TOMBSTONE", "status": "PASS" },
+    { "id": "TENANT_ISOLATION", "status": "PASS" }
+  ],
+  "acceptanceEligible": false,
+  "currentBlockers": [
+    "Forecast advanced training/artifact/deployment orchestration is incomplete",
+    "Optimization cost/demand/carbon solver and Control execution handoff are incomplete",
+    "Object Storage archive execution, full lineage and lifecycle orchestration are incomplete",
+    "Object Storage production role is not implemented"
+  ]
+}

@@ -78,9 +78,9 @@ const assertEnergyRequest = (
   const { scope } = input.context;
   const from = Date.parse(query.from);
   const to = Date.parse(query.to);
-  if (!isUuidV7(query.organizationId)
+  if (!isUuidV7(query.tenantId)
     || !isUuidV7(query.siteId)
-    || query.organizationId !== scope.organizationId
+    || query.tenantId !== scope.tenantId
     || query.siteId !== scope.siteId
     || scope.equipmentId !== null
     || scope.deviceId !== null

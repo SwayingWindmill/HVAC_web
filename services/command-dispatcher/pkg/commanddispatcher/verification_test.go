@@ -88,10 +88,10 @@ func TestDurableVerificationWorkerPreservesClaimBoundary(t *testing.T) {
 		Outcome: commandmodel.VerificationSucceeded, EvidenceID: "s2-evidence-3", Reported: validReportedState(envelope),
 	}}
 	worker := NewDurableVerificationWorker(store, verifier, "verifier-a", 10*time.Second)
-	if err := worker.RunOnce(context.Background(), envelope.OrganizationID); err != nil {
+	if err := worker.RunOnce(context.Background(), envelope.TenantID); err != nil {
 		t.Fatal(err)
 	}
-	if store.claimOrganization != envelope.OrganizationID || store.claimOwner != "verifier-a" || store.claimLease != 10*time.Second {
+	if store.claimOrganization != envelope.TenantID || store.claimOwner != "verifier-a" || store.claimLease != 10*time.Second {
 		t.Fatalf("claim boundary drifted: org=%s owner=%s lease=%s", store.claimOrganization, store.claimOwner, store.claimLease)
 	}
 	if store.resolvedEnvelope.AttemptID != envelope.AttemptID || store.resolvedResult.EvidenceID != "s2-evidence-3" {
@@ -103,7 +103,7 @@ func TestDurableVerificationWorkerDoesNotResolveReadFailure(t *testing.T) {
 	envelope := verificationEnvelope()
 	store := &verificationStore{envelope: envelope}
 	worker := NewDurableVerificationWorker(store, &verificationResultVerifier{err: errors.New("s2 unavailable")}, "verifier-a", 10*time.Second)
-	if err := worker.RunOnce(context.Background(), envelope.OrganizationID); err == nil {
+	if err := worker.RunOnce(context.Background(), envelope.TenantID); err == nil {
 		t.Fatal("expected S2 read failure")
 	}
 	if store.resolveCalls != 0 {
@@ -167,7 +167,7 @@ func (store *verificationStore) ResolveVerification(_ context.Context, envelope 
 func verificationEnvelope() commandmodel.VerificationEnvelope {
 	acknowledgedAt := time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC)
 	return commandmodel.VerificationEnvelope{
-		CommandID: "command-1", AttemptID: "attempt-1", OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+		CommandID: "command-1", AttemptID: "attempt-1", TenantID: "org-1", SiteID: "site-1", DeviceID: "device-1",
 		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: "capability:set-temperature-setpoint:v1",
 		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}, VerificationPointKey: "zone.temperature_setpoint",
 		PayloadHash: "payload-hash", ExecutionFence: 7, BaselineBusinessRevision: 17,
@@ -178,7 +178,7 @@ func verificationEnvelope() commandmodel.VerificationEnvelope {
 
 func validReportedState(envelope commandmodel.VerificationEnvelope) commandmodel.ReportedStateEvidence {
 	return commandmodel.ReportedStateEvidence{
-		OrganizationID: envelope.OrganizationID, SiteID: envelope.SiteID, DeviceID: envelope.DeviceID,
+		TenantID: envelope.TenantID, SiteID: envelope.SiteID, DeviceID: envelope.DeviceID,
 		EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
 		BusinessRevision: envelope.BaselineBusinessRevision + 1, ReportedValue: commandmodel.NumberScalar(envelope.Parameters[commandmodel.ParameterSetpointC]),
 		ObservedAt: envelope.AcknowledgedAt.Add(time.Second),

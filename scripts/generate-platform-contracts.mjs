@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-const generatorVersion = '6.0.0';
+const generatorVersion = '7.0.0';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const specPath = resolve(root, 'contracts/http/platform-gateway.openapi.yaml');
 const toolingLockPath = resolve(root, 'contracts/http/tooling.lock.json');
@@ -80,9 +80,7 @@ const expectedOperations = {
   logout: ['post', '/api/v1/auth/logout'],
   revokeSession: ['post', '/api/v1/auth/sessions/{sessionId}/revoke'],
   getSessionAuditEvent: ['get', '/api/v1/audit/session-events/{messageId}'],
-  listOrganizations: ['get', '/api/v1/organizations'],
-  getOrganization: ['get', '/api/v1/organizations/{organizationId}'],
-  listOrganizationSites: ['get', '/api/v1/organizations/{organizationId}/sites'],
+  listSites: ['get', '/api/v1/sites'],
   getSite: ['get', '/api/v1/sites/{siteId}'],
   listSiteEquipment: ['get', '/api/v1/sites/{siteId}/equipment'],
   getEquipment: ['get', '/api/v1/equipment/{equipmentId}'],
@@ -105,9 +103,7 @@ const expectedSuccessSchemas = {
   getCurrentPrincipal: 'CurrentPrincipalResponse',
   revokeSession: 'SessionRevocationResponse',
   getSessionAuditEvent: 'AuditRecord',
-  listOrganizations: 'OrganizationCollection',
-  getOrganization: 'Organization',
-  listOrganizationSites: 'SiteCollection',
+  listSites: 'SiteCollection',
   getSite: 'Site',
   listSiteEquipment: 'EquipmentCollection',
   getEquipment: 'Equipment',
@@ -129,40 +125,37 @@ const schemaRequirements = {
   PlatformStatusResponse: [['status', 'service', 'implementation', 'version', 'checkedAt', 'routePolicyRevision', 'routeRevision', 'compatibilityMode'], ['status', 'service', 'implementation', 'version', 'checkedAt', 'routePolicyRevision', 'routeRevision', 'compatibilityMode']],
   UserPrincipal: [['subject', 'issuer', 'displayName', 'email', 'roles'], ['subject', 'issuer', 'displayName', 'email', 'roles']],
   ServicePrincipal: [['service', 'spiffeId'], ['service', 'spiffeId']],
-  PrincipalContext: [['initiatingPrincipal', 'executingServicePrincipal', 'actingOrganizationId', 'audience', 'policyRevision', 'delegationExpiresAt'], ['initiatingPrincipal', 'executingServicePrincipal', 'actingOrganizationId', 'audience', 'policyRevision', 'delegationExpiresAt']],
+  PrincipalContext: [['initiatingPrincipal', 'executingServicePrincipal', 'tenantId', 'audience', 'policyRevision', 'delegationExpiresAt'], ['initiatingPrincipal', 'executingServicePrincipal', 'tenantId', 'audience', 'policyRevision', 'delegationExpiresAt']],
   EffectiveAuthorization: [['capabilitySetVersion', 'policyRevision', 'capabilities'], ['capabilitySetVersion', 'policyRevision', 'capabilities']],
   SessionView: [['id', 'expiresAt', 'csrfToken', 'revocationObjectiveMs', 'lastAuditMessageId'], ['id', 'expiresAt', 'csrfToken', 'revocationObjectiveMs', 'lastAuditMessageId']],
   CurrentPrincipalResponse: [['principal', 'context', 'authorization', 'session'], ['principal', 'context', 'authorization', 'session']],
   SessionRevocationResponse: [['sessionId', 'revokedAt', 'objectiveMs', 'auditMessageId'], ['sessionId', 'revokedAt', 'objectiveMs', 'auditMessageId']],
   AuditRecord: [[
-    'ledgerSequence', 'messageId', 'schemaVersion', 'organizationId', 'aggregateType', 'aggregateId', 'aggregateVersion',
-    'occurredAt', 'initiatingSubject', 'initiatingIssuer', 'executingService', 'executingSpiffeId', 'actingOrganizationId',
+    'ledgerSequence', 'messageId', 'schemaVersion', 'tenantId', 'aggregateType', 'aggregateId', 'aggregateVersion',
+    'occurredAt', 'initiatingSubject', 'initiatingIssuer', 'executingService', 'executingSpiffeId',
     'action', 'result', 'policyRevision', 'correlationId', 'causationId', 'traceId', 'payloadSha256', 'previousRecordHash',
     'recordHash', 'recordedAt',
   ], [
-    'ledgerSequence', 'messageId', 'schemaVersion', 'organizationId', 'aggregateType', 'aggregateId', 'aggregateVersion',
-    'occurredAt', 'initiatingSubject', 'initiatingIssuer', 'executingService', 'executingSpiffeId', 'actingOrganizationId',
+    'ledgerSequence', 'messageId', 'schemaVersion', 'tenantId', 'aggregateType', 'aggregateId', 'aggregateVersion',
+    'occurredAt', 'initiatingSubject', 'initiatingIssuer', 'executingService', 'executingSpiffeId',
     'action', 'result', 'policyRevision', 'correlationId', 'causationId', 'traceId', 'payloadSha256', 'previousRecordHash',
     'recordHash', 'recordedAt',
   ]],
-  Organization: [['id', 'tenantId', 'code', 'displayName', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'code', 'displayName', 'status', 'revision', 'createdAt', 'updatedAt']],
-  Site: [['id', 'tenantId', 'owningOrganizationId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt']],
-  Equipment: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'equipmentType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'equipmentType', 'status', 'revision', 'createdAt', 'updatedAt']],
-  Device: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt']],
-  DeviceBinding: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'deviceId', 'equipmentId', 'bindingRole', 'status', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'deviceId', 'equipmentId', 'bindingRole', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
-  ExternalBinding: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
-  OrganizationCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
+  Site: [['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Equipment: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'equipmentType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'equipmentType', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Device: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt']],
+  DeviceBinding: [['id', 'tenantId', 'siteId', 'deviceId', 'equipmentId', 'bindingRole', 'status', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'deviceId', 'equipmentId', 'bindingRole', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
+  ExternalBinding: [['id', 'tenantId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
   SiteCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   EquipmentCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   DeviceCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   DeviceBindingCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
-  Area: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'parentAreaId', 'code', 'displayName', 'areaType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'parentAreaId', 'code', 'displayName', 'areaType', 'status', 'revision', 'createdAt', 'updatedAt']],
-  Sensor: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'sensorType', 'manufacturer', 'model', 'serialNumber', 'calibrationDueAt', 'metadata', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'code', 'displayName', 'sensorType', 'manufacturer', 'model', 'serialNumber', 'calibrationDueAt', 'metadata', 'status', 'revision', 'createdAt', 'updatedAt']],
-  TelemetryPoint: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointKey', 'sourceKey', 'displayName', 'pointKind', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'formulaRevision', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointKey', 'sourceKey', 'displayName', 'pointKind', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'formulaRevision', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt']],
-  AssetRelationship: [['id', 'tenantId', 'owningOrganizationId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'owningOrganizationId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
-  CalculatedPointInput: [['tenantId', 'owningOrganizationId', 'siteId', 'calculatedPointId', 'inputPointId', 'inputRole', 'ordinal', 'formulaRevision'], ['tenantId', 'owningOrganizationId', 'siteId', 'calculatedPointId', 'inputPointId', 'inputRole', 'ordinal', 'formulaRevision']],
-  AssetModelCounts: [['areas', 'equipment', 'deviceEndpoints', 'sensors', 'telemetryPoints', 'calculatedPoints', 'independentSensorDevices'], ['areas', 'equipment', 'deviceEndpoints', 'sensors', 'telemetryPoints', 'calculatedPoints', 'independentSensorDevices']],
-  SiteAssetModel: [['schemaVersion', 'tenantId', 'siteId', 'areas', 'equipment', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'calculatedPointInputs', 'counts'], ['schemaVersion', 'tenantId', 'siteId', 'areas', 'equipment', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'calculatedPointInputs', 'counts']],
+  Area: [['id', 'tenantId', 'siteId', 'parentAreaId', 'code', 'displayName', 'areaType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'parentAreaId', 'code', 'displayName', 'areaType', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Sensor: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'sensorType', 'manufacturer', 'model', 'serialNumber', 'calibrationDueAt', 'metadata', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'sensorType', 'manufacturer', 'model', 'serialNumber', 'calibrationDueAt', 'metadata', 'status', 'revision', 'createdAt', 'updatedAt']],
+  TelemetryPoint: [['id', 'tenantId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointCode', 'sourceKey', 'displayName', 'pointType', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointCode', 'sourceKey', 'displayName', 'pointType', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt']],
+  AssetRelationship: [['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
+  AssetModelCounts: [['areas', 'equipment', 'deviceEndpoints', 'physicalSensors', 'points'], ['areas', 'equipment', 'deviceEndpoints', 'physicalSensors', 'points']],
+  SiteAssetModel: [['schemaVersion', 'tenantId', 'siteId', 'areas', 'equipment', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts'], ['schemaVersion', 'tenantId', 'siteId', 'areas', 'equipment', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts']],
   FieldError: [['field', 'message'], ['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'fieldErrors']],
 };
@@ -181,8 +174,6 @@ invariant(exactMembers(schemas.PlatformStatusResponse.properties.compatibilityMo
 invariant(schemas.ServicePrincipal.properties.service.const === 'platform-gateway', 'ServicePrincipal.service must be platform-gateway');
 invariant(schemas.PrincipalContext.properties.audience.const === 'iam-service', 'PrincipalContext.audience must be iam-service');
 invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capability.enum, [
-  'organization.list',
-  'organization.read',
   'site.list',
   'site.read',
   'equipment.list',
@@ -201,9 +192,9 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'work-order.assign',
   'work-order.lifecycle',
 ]), 'Capability vocabulary is unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 6, 'EffectiveAuthorization capability set version must be 6');
+invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 7, 'EffectiveAuthorization capability set version must be 7');
 invariant(schemas.EffectiveAuthorization.properties.policyRevision.minLength === 1 && schemas.EffectiveAuthorization.properties.policyRevision.maxLength === 128, 'EffectiveAuthorization policy revision bounds are unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 19, 'EffectiveAuthorization capabilities must be unique and bounded');
+invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 17, 'EffectiveAuthorization capabilities must be unique and bounded');
 invariant(schemas.EffectiveAuthorization.properties.capabilities.items?.$ref === '#/components/schemas/Capability', 'EffectiveAuthorization capabilities must use the public Capability vocabulary');
 invariant(schemas.AuditRecord.properties.schemaVersion.const === 1, 'AuditRecord.schemaVersion must be 1');
 invariant(schemas.AuditRecord.properties.aggregateType.const === 'bff-session', 'AuditRecord.aggregateType must be bff-session');
@@ -236,9 +227,7 @@ const replacements = {
   __LOGOUT_PATH__: operations.logout.path,
   __REVOKE_PATH__: operations.revokeSession.path,
   __AUDIT_PATH__: operations.getSessionAuditEvent.path,
-  __ORGANIZATIONS_PATH__: operations.listOrganizations.path,
-  __ORGANIZATION_PATH__: operations.getOrganization.path,
-  __ORGANIZATION_SITES_PATH__: operations.listOrganizationSites.path,
+  __SITES_PATH__: operations.listSites.path,
   __SITE_PATH__: operations.getSite.path,
   __SITE_EQUIPMENT_PATH__: operations.listSiteEquipment.path,
   __EQUIPMENT_PATH__: operations.getEquipment.path,

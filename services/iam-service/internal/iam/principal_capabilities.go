@@ -16,7 +16,7 @@ import (
 type PrincipalCapabilityLookup struct {
 	SubjectIssuer        string
 	Subject              string
-	ActingOrganizationID string
+	TenantID string
 }
 
 type PrincipalCapabilityResolver interface {
@@ -43,7 +43,7 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 	registryFacts, err := resolver.registryStore.LookupRegistryAuthorization(ctx, AuthorizationLookup{
 		SubjectIssuer:        lookup.SubjectIssuer,
 		Subject:              lookup.Subject,
-		ActingOrganizationID: lookup.ActingOrganizationID,
+		TenantID: lookup.TenantID,
 	})
 	if err != nil {
 		return identitycontext.EffectiveAuthorization{}, err
@@ -55,7 +55,7 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 	alarmFacts, err := resolver.alarmStore.LookupAlarmAuthorization(ctx, AuthorizationLookup{
 		SubjectIssuer:        lookup.SubjectIssuer,
 		Subject:              lookup.Subject,
-		ActingOrganizationID: lookup.ActingOrganizationID,
+		TenantID: lookup.TenantID,
 	})
 	if err != nil {
 		return identitycontext.EffectiveAuthorization{}, err
@@ -63,7 +63,7 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 	workOrderFacts, err := resolver.workOrderStore.LookupWorkOrderAuthorization(ctx, AuthorizationLookup{
 		SubjectIssuer:        lookup.SubjectIssuer,
 		Subject:              lookup.Subject,
-		ActingOrganizationID: lookup.ActingOrganizationID,
+		TenantID: lookup.TenantID,
 	})
 	if err != nil {
 		return identitycontext.EffectiveAuthorization{}, err
@@ -74,7 +74,7 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 	decidedAt := resolver.now()
 	for _, candidate := range principalRegistryCapabilities {
 		decision, err := evaluateRegistryAuthorization(ctx, factStore, decidedAt, lookup.SubjectIssuer, lookup.Subject, registryauth.DecisionRequest{
-			ActingOrganizationID: lookup.ActingOrganizationID,
+			TenantID: lookup.TenantID,
 			Action:               candidate.action,
 		})
 		if err != nil {
@@ -85,21 +85,21 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 		}
 	}
 	for _, candidate := range principalTelemetryCapabilities {
-		if telemetryCapabilityAllowed(telemetryFacts, decidedAt, lookup.ActingOrganizationID, candidate.action) {
+		if telemetryCapabilityAllowed(telemetryFacts, decidedAt, lookup.TenantID, candidate.action) {
 			capabilities = append(capabilities, candidate.capability)
 		}
 	}
 	for _, candidate := range principalAlarmCapabilities {
-		if alarmCapabilityAllowed(alarmFacts, decidedAt, lookup.ActingOrganizationID, candidate.action) {
+		if alarmCapabilityAllowed(alarmFacts, decidedAt, lookup.TenantID, candidate.action) {
 			capabilities = append(capabilities, candidate.capability)
 		}
 	}
 	for _, candidate := range principalWorkOrderCapabilities {
-		if workOrderCapabilityAllowed(workOrderFacts, decidedAt, lookup.ActingOrganizationID, candidate.action) {
+		if workOrderCapabilityAllowed(workOrderFacts, decidedAt, lookup.TenantID, candidate.action) {
 			capabilities = append(capabilities, candidate.capability)
 		}
 	}
-	if workOrderLifecycleCapabilityAllowed(workOrderFacts, decidedAt, lookup.ActingOrganizationID) {
+	if workOrderLifecycleCapabilityAllowed(workOrderFacts, decidedAt, lookup.TenantID) {
 		capabilities = append(capabilities, identitycontext.CapabilityWorkOrderLifecycle)
 	}
 
@@ -115,26 +115,26 @@ func combinedCapabilityPolicyRevision(registryRevision, telemetryRevision, alarm
 	return "capability-v6:" + hex.EncodeToString(digest[:])
 }
 
-func telemetryCapabilityAllowed(facts TelemetryAuthorizationFacts, now time.Time, actingOrganizationID string, action telemetryauth.Action) bool {
+func telemetryCapabilityAllowed(facts TelemetryAuthorizationFacts, now time.Time, tenantID string, action telemetryauth.Action) bool {
 	if !facts.Found || facts.Principal.Status != FactStatusActive {
 		return false
 	}
-	membershipActive, _ := membershipState(facts.Memberships, actingOrganizationID, now)
+	membershipActive, _ := tenantMembershipState(facts.Memberships, tenantID, now)
 	if !membershipActive {
 		return false
 	}
 	for _, binding := range facts.ScopeBindings {
-		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.ActingOrganizationID != actingOrganizationID || binding.Effect != BindingEffectAllow {
+		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != tenantID || binding.Effect != BindingEffectAllow {
 			continue
 		}
 		device := TelemetryDevice{
-			ID:                   binding.DeviceID,
-			OwningOrganizationID: binding.OwningOrganizationID,
-			SiteID:               binding.SiteID,
-			Status:               FactStatusActive,
+			ID:       binding.DeviceID,
+			TenantID: tenantID,
+			SiteID:   binding.SiteID,
+			Status:   FactStatusActive,
 		}
-		actionAllowed, actionDenied := telemetryActionScope(facts.RoleBindings, facts.SiteBindings, facts.ExplicitDenies, now, actingOrganizationID, device, action)
-		scopeAllowed, scopeDenied := telemetryDeviceScope(facts.ScopeBindings, now, actingOrganizationID, device, action)
+		actionAllowed, actionDenied := telemetryActionScope(facts.RoleBindings, facts.SiteBindings, facts.ExplicitDenies, now, tenantID, device, action)
+		scopeAllowed, scopeDenied := telemetryDeviceScope(facts.ScopeBindings, now, tenantID, device, action)
 		if actionAllowed && !actionDenied && scopeAllowed && !scopeDenied {
 			return true
 		}
@@ -150,12 +150,10 @@ var principalRegistryCapabilities = []struct {
 	capability identitycontext.Capability
 	action     registryauth.Action
 }{
-	{identitycontext.CapabilityOrganizationList, registryauth.ActionOrganizationList},
-	{identitycontext.CapabilityOrganizationRead, registryauth.ActionOrganizationRead},
 	{identitycontext.CapabilitySiteList, registryauth.ActionSiteList},
 	{identitycontext.CapabilitySiteRead, registryauth.ActionSiteRead},
-	{identitycontext.CapabilityEquipmentList, registryauth.ActionEquipmentList},
-	{identitycontext.CapabilityEquipmentRead, registryauth.ActionEquipmentRead},
+	{identitycontext.CapabilityEquipmentList, registryauth.ActionAssetList},
+	{identitycontext.CapabilityEquipmentRead, registryauth.ActionAssetRead},
 	{identitycontext.CapabilityDeviceList, registryauth.ActionDeviceList},
 	{identitycontext.CapabilityDeviceRead, registryauth.ActionDeviceRead},
 }
@@ -188,9 +186,9 @@ var principalWorkOrderLifecycleActions = [...]workorderauth.Action{
 	workorderauth.ActionReopen,
 }
 
-func workOrderLifecycleCapabilityAllowed(facts WorkOrderAuthorizationFacts, now time.Time, actingOrganizationID string) bool {
+func workOrderLifecycleCapabilityAllowed(facts WorkOrderAuthorizationFacts, now time.Time, tenantID string) bool {
 	for _, action := range principalWorkOrderLifecycleActions {
-		if workOrderCapabilityAllowed(facts, now, actingOrganizationID, action) {
+		if workOrderCapabilityAllowed(facts, now, tenantID, action) {
 			return true
 		}
 	}

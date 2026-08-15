@@ -113,11 +113,11 @@ func (store *PostgresStore) submitOnce(ctx context.Context, request commandmodel
 		return SubmitResult{}, fmt.Errorf("begin command submission transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := activateTenantOrganization(ctx, tx, request.TenantID, request.OrganizationID); err != nil {
+	if err := activateTenant(ctx, tx, request.TenantID); err != nil {
 		return SubmitResult{}, err
 	}
 
-	existing, found, err := loadIdempotentCommand(ctx, tx, request.OrganizationID, request.DeviceID, request.IdempotencyKey)
+	existing, found, err := loadIdempotentCommand(ctx, tx, request.TenantID, request.DeviceID, request.IdempotencyKey)
 	if err != nil {
 		return SubmitResult{}, err
 	}
@@ -125,7 +125,7 @@ func (store *PostgresStore) submitOnce(ctx context.Context, request commandmodel
 		if existing.PayloadHash != payloadHash {
 			return SubmitResult{}, ErrIdempotencyConflict
 		}
-		intent, err := loadIntent(ctx, tx, request.OrganizationID, existing.CommandID)
+		intent, err := loadIntent(ctx, tx, request.TenantID, existing.CommandID)
 		if err != nil {
 			return SubmitResult{}, err
 		}
@@ -142,10 +142,10 @@ func (store *PostgresStore) submitOnce(ctx context.Context, request commandmodel
 
 	if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.device_control_state (
-  organization_id, site_id, device_id, next_command_sequence, active_execution_fence, frozen_control_groups, updated_at
+  tenant_id, site_id, device_id, next_command_sequence, active_execution_fence, frozen_control_groups, updated_at
 ) VALUES ($1::uuid, $2::uuid, $3::uuid, 1, 0, '[]'::jsonb, $4)
-ON CONFLICT (organization_id, device_id) DO NOTHING
-`, request.OrganizationID, request.SiteID, request.DeviceID, now); err != nil {
+ON CONFLICT (tenant_id, device_id) DO NOTHING
+`, request.TenantID, request.SiteID, request.DeviceID, now); err != nil {
 		return SubmitResult{}, fmt.Errorf("ensure device control state: %w", err)
 	}
 
@@ -153,16 +153,16 @@ ON CONFLICT (organization_id, device_id) DO NOTHING
 	if err := tx.QueryRow(ctx, `
 SELECT next_command_sequence
 FROM command_runtime.device_control_state
-WHERE organization_id = $1::uuid AND device_id = $2::uuid
+WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 FOR UPDATE
-`, request.OrganizationID, request.DeviceID).Scan(&sequence); err != nil {
+`, request.TenantID, request.DeviceID).Scan(&sequence); err != nil {
 		return SubmitResult{}, fmt.Errorf("lock device command sequence: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.device_control_state
 SET next_command_sequence = next_command_sequence + 1, site_id = $3::uuid, updated_at = $4
-WHERE organization_id = $1::uuid AND device_id = $2::uuid
-`, request.OrganizationID, request.DeviceID, request.SiteID, now); err != nil {
+WHERE tenant_id = $1::uuid AND device_id = $2::uuid
+`, request.TenantID, request.DeviceID, request.SiteID, now); err != nil {
 		return SubmitResult{}, fmt.Errorf("advance device command sequence: %w", err)
 	}
 
@@ -173,7 +173,6 @@ WHERE organization_id = $1::uuid AND device_id = $2::uuid
 	intent := commandmodel.CommandIntent{
 		ID:                    ids.commandID,
 		TenantID:              request.TenantID,
-		OrganizationID:        request.OrganizationID,
 		SiteID:                request.SiteID,
 		DeviceID:              request.DeviceID,
 		PointID:               request.PointID,
@@ -199,7 +198,7 @@ WHERE organization_id = $1::uuid AND device_id = $2::uuid
 
 	if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_intents (
-  command_id, organization_id, site_id, device_id, principal_id, idempotency_key,
+  command_id, tenant_id, site_id, device_id, principal_id, idempotency_key,
   capability_name, capability_revision, risk_level, risk_rule_revision, approval_policy,
   retry_policy, canonical_parameters, verification_point_key, payload_hash, snapshot_revision, device_command_sequence,
   status, version, active_execution_fence, created_at, updated_at, point_id
@@ -209,7 +208,7 @@ INSERT INTO command_runtime.command_intents (
   $12, $13::jsonb, $14, $15, $16, $17,
   $18, $19, 0, $20, $20, $21::uuid
 )
-`, intent.ID, intent.OrganizationID, intent.SiteID, intent.DeviceID, intent.PrincipalID,
+`, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID, intent.PrincipalID,
 		intent.IdempotencyKey, intent.Capability, intent.CapabilityRevision, intent.Risk,
 		intent.RiskSnapshot.RuleRevision, intent.ApprovalPolicy, intent.RetryPolicy, parameters,
 		intent.VerificationPointKey, intent.PayloadHash, intent.SnapshotRevision, intent.DeviceCommandSequence,
@@ -218,21 +217,21 @@ INSERT INTO command_runtime.command_intents (
 	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_idempotency (
-  organization_id, device_id, idempotency_key, payload_hash, command_id, created_at
+  tenant_id, device_id, idempotency_key, payload_hash, command_id, created_at
 ) VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid, $6)
-`, intent.OrganizationID, intent.DeviceID, intent.IdempotencyKey, intent.PayloadHash, intent.ID, now); err != nil {
+`, intent.TenantID, intent.DeviceID, intent.IdempotencyKey, intent.PayloadHash, intent.ID, now); err != nil {
 		return SubmitResult{}, classifyCommandWriteError("insert command idempotency", err)
 	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_authorization_snapshots (
-  command_id, organization_id, site_id, device_id, principal_id, grant_id,
+  command_id, tenant_id, site_id, device_id, principal_id, grant_id,
   policy_revision, authorization_purpose, capability_name, capability_revision, maximum_risk,
   emergency_revocation_revision, issued_at, expires_at, created_at
 ) VALUES (
   $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6,
   $7, $8, $9, $10, $11, $12, $13, $14, $15
 )
-`, intent.ID, intent.OrganizationID, intent.SiteID, intent.DeviceID, intent.PrincipalID,
+`, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID, intent.PrincipalID,
 		intent.Authorization.GrantID, intent.Authorization.PolicyRevision, intent.Authorization.Purpose,
 		intent.Authorization.Capability, intent.Authorization.CapabilityRevision, intent.Authorization.MaximumRisk,
 		intent.Authorization.EmergencyRevocationRevision, intent.Authorization.IssuedAt,
@@ -242,9 +241,9 @@ INSERT INTO command_runtime.command_authorization_snapshots (
 	riskReasons, _ := json.Marshal(intent.RiskSnapshot.Reasons)
 	if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_risk_snapshots (
-  command_id, organization_id, site_id, device_id, risk_level, rule_revision, reasons, evaluated_at
+  command_id, tenant_id, site_id, device_id, risk_level, rule_revision, reasons, evaluated_at
 ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7::jsonb, $8)
-`, intent.ID, intent.OrganizationID, intent.SiteID, intent.DeviceID, intent.Risk,
+`, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID, intent.Risk,
 		intent.RiskSnapshot.RuleRevision, riskReasons, intent.RiskSnapshot.EvaluatedAt); err != nil {
 		return SubmitResult{}, classifyCommandWriteError("insert command risk snapshot", err)
 	}
@@ -272,10 +271,10 @@ INSERT INTO command_runtime.command_risk_snapshots (
 		}
 		if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_transitions (
-  transition_id, command_id, organization_id, site_id, device_id, command_version,
+  transition_id, command_id, tenant_id, site_id, device_id, command_version,
   from_status, to_status, reason, actor_type, actor_id, causation_id, evidence_id, occurred_at
 ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, $10, $11, $12, NULL, $13)
-`, row.id, intent.ID, intent.OrganizationID, intent.SiteID, intent.DeviceID, row.version,
+`, row.id, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID, row.version,
 			from, row.to, row.reason, actorType(row.actor, request.PrincipalID), row.actor, "submit", now); err != nil {
 			return SubmitResult{}, classifyCommandWriteError("insert command transition", err)
 		}
@@ -292,10 +291,10 @@ INSERT INTO command_runtime.command_transitions (
 	})
 	if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_audit_intents (
-  audit_intent_id, command_id, organization_id, site_id, device_id,
+  audit_intent_id, command_id, tenant_id, site_id, device_id,
   event_kind, payload_hash, redacted_payload, created_at, relayed_at
 ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'COMMAND_ACCEPTED', $6, $7::jsonb, $8, NULL)
-`, ids.auditID, intent.ID, intent.OrganizationID, intent.SiteID, intent.DeviceID,
+`, ids.auditID, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID,
 		intent.PayloadHash, redactedPayload, now); err != nil {
 		return SubmitResult{}, classifyCommandWriteError("insert command audit intent", err)
 	}
@@ -304,7 +303,7 @@ INSERT INTO command_runtime.command_audit_intents (
 		outboxPayload, _ := json.Marshal(map[string]any{
 			"schemaVersion":         1,
 			"commandId":             intent.ID,
-			"organizationId":        intent.OrganizationID,
+			"tenantId":              intent.TenantID,
 			"siteId":                intent.SiteID,
 			"deviceId":              intent.DeviceID,
 			"capability":            intent.Capability,
@@ -314,10 +313,10 @@ INSERT INTO command_runtime.command_audit_intents (
 		})
 		if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_dispatch_outbox (
-  outbox_id, command_id, organization_id, site_id, device_id, command_version,
+  outbox_id, command_id, tenant_id, site_id, device_id, command_version,
   available_at, lease_owner, lease_until, delivered_at, attempt_count, payload, created_at
 ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, NULL, NULL, NULL, 0, $8::jsonb, $7)
-`, ids.outboxID, intent.ID, intent.OrganizationID, intent.SiteID, intent.DeviceID,
+`, ids.outboxID, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID,
 			intent.Version, now, outboxPayload); err != nil {
 			return SubmitResult{}, classifyCommandWriteError("insert command dispatch outbox", err)
 		}
@@ -329,7 +328,7 @@ INSERT INTO command_runtime.command_dispatch_outbox (
 	return SubmitResult{Intent: intent}, nil
 }
 
-func (store *PostgresStore) Get(ctx context.Context, organizationID, commandID string) (commandmodel.CommandIntent, error) {
+func (store *PostgresStore) Get(ctx context.Context, tenantID, commandID string) (commandmodel.CommandIntent, error) {
 	if store == nil || store.pool == nil {
 		return commandmodel.CommandIntent{}, errors.New("command store is closed")
 	}
@@ -338,13 +337,13 @@ func (store *PostgresStore) Get(ctx context.Context, organizationID, commandID s
 		return commandmodel.CommandIntent{}, fmt.Errorf("begin command read transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := activateOrganization(ctx, tx, organizationID); err != nil {
-		if errors.Is(err, ErrInvalidRequest) && commandmodel.IsUUIDv7(organizationID) {
+	if err := activateTenant(ctx, tx, tenantID); err != nil {
+		if errors.Is(err, ErrInvalidRequest) && commandmodel.IsUUIDv7(tenantID) {
 			return commandmodel.CommandIntent{}, ErrCommandNotFound
 		}
 		return commandmodel.CommandIntent{}, err
 	}
-	intent, err := loadIntent(ctx, tx, organizationID, commandID)
+	intent, err := loadIntent(ctx, tx, tenantID, commandID)
 	if err != nil {
 		return commandmodel.CommandIntent{}, err
 	}
@@ -365,13 +364,13 @@ type SubmissionEvidence struct {
 	OutboxCount        int
 }
 
-func (store *PostgresStore) SubmissionEvidence(ctx context.Context, organizationID, commandID string) (SubmissionEvidence, error) {
+func (store *PostgresStore) SubmissionEvidence(ctx context.Context, tenantID, commandID string) (SubmissionEvidence, error) {
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return SubmissionEvidence{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := activateOrganization(ctx, tx, organizationID); err != nil {
+	if err := activateTenant(ctx, tx, tenantID); err != nil {
 		return SubmissionEvidence{}, err
 	}
 	var evidence SubmissionEvidence
@@ -431,10 +430,10 @@ func (store *PostgresStore) replayIdempotentCommand(ctx context.Context, request
 		return SubmitResult{}, false, fmt.Errorf("begin idempotency replay transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := activateOrganization(ctx, tx, request.OrganizationID); err != nil {
+	if err := activateTenant(ctx, tx, request.TenantID); err != nil {
 		return SubmitResult{}, false, err
 	}
-	existing, found, err := loadIdempotentCommand(ctx, tx, request.OrganizationID, request.DeviceID, request.IdempotencyKey)
+	existing, found, err := loadIdempotentCommand(ctx, tx, request.TenantID, request.DeviceID, request.IdempotencyKey)
 	if err != nil {
 		return SubmitResult{}, false, err
 	}
@@ -444,7 +443,7 @@ func (store *PostgresStore) replayIdempotentCommand(ctx context.Context, request
 	if existing.PayloadHash != payloadHash {
 		return SubmitResult{}, false, ErrIdempotencyConflict
 	}
-	intent, err := loadIntent(ctx, tx, request.OrganizationID, existing.CommandID)
+	intent, err := loadIntent(ctx, tx, request.TenantID, existing.CommandID)
 	if err != nil {
 		return SubmitResult{}, false, err
 	}
@@ -454,13 +453,13 @@ func (store *PostgresStore) replayIdempotentCommand(ctx context.Context, request
 	return SubmitResult{Intent: intent, Replayed: true}, true, nil
 }
 
-func loadIdempotentCommand(ctx context.Context, tx pgx.Tx, organizationID, deviceID, key string) (idempotentCommand, bool, error) {
+func loadIdempotentCommand(ctx context.Context, tx pgx.Tx, tenantID, deviceID, key string) (idempotentCommand, bool, error) {
 	var result idempotentCommand
 	err := tx.QueryRow(ctx, `
 SELECT command_id::text, payload_hash
 FROM command_runtime.command_idempotency
-WHERE organization_id = $1::uuid AND device_id = $2::uuid AND idempotency_key = $3
-`, organizationID, deviceID, key).Scan(&result.CommandID, &result.PayloadHash)
+WHERE tenant_id = $1::uuid AND device_id = $2::uuid AND idempotency_key = $3
+`, tenantID, deviceID, key).Scan(&result.CommandID, &result.PayloadHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return idempotentCommand{}, false, nil
 	}
@@ -470,20 +469,20 @@ WHERE organization_id = $1::uuid AND device_id = $2::uuid AND idempotency_key = 
 	return result, true, nil
 }
 
-func loadIntent(ctx context.Context, tx pgx.Tx, organizationID, commandID string) (commandmodel.CommandIntent, error) {
+func loadIntent(ctx context.Context, tx pgx.Tx, tenantID, commandID string) (commandmodel.CommandIntent, error) {
 	var intent commandmodel.CommandIntent
 	var capability, risk, retry, status, approvalPolicy string
 	var parameters []byte
 	err := tx.QueryRow(ctx, `
-SELECT command_id::text, tenant_id::text, organization_id::text, site_id::text, device_id::text, principal_id::text,
+SELECT command_id::text, tenant_id::text, site_id::text, device_id::text, principal_id::text,
        idempotency_key, capability_name, capability_revision, risk_level, risk_rule_revision,
        approval_policy, retry_policy, canonical_parameters, verification_point_key,
        payload_hash, snapshot_revision, device_command_sequence, status, version,
        active_execution_fence, created_at, updated_at, point_id::text
 FROM command_runtime.command_intents
-WHERE organization_id = $1::uuid AND command_id = $2::uuid
-`, organizationID, commandID).Scan(
-		&intent.ID, &intent.TenantID, &intent.OrganizationID, &intent.SiteID, &intent.DeviceID, &intent.PrincipalID,
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid
+`, tenantID, commandID).Scan(
+		&intent.ID, &intent.TenantID, &intent.SiteID, &intent.DeviceID, &intent.PrincipalID,
 		&intent.IdempotencyKey, &capability, &intent.CapabilityRevision, &risk,
 		&intent.RiskSnapshot.RuleRevision, &approvalPolicy, &retry, &parameters, &intent.VerificationPointKey,
 		&intent.PayloadHash, &intent.SnapshotRevision, &intent.DeviceCommandSequence,
@@ -507,14 +506,14 @@ WHERE organization_id = $1::uuid AND command_id = $2::uuid
 
 	var authorizationCapability, maximumRisk string
 	if err := tx.QueryRow(ctx, `
-SELECT grant_id, policy_revision, authorization_purpose, principal_id::text, organization_id::text, site_id::text,
+SELECT grant_id, policy_revision, authorization_purpose, principal_id::text, tenant_id::text, site_id::text,
        device_id::text, capability_name, maximum_risk, capability_revision,
        emergency_revocation_revision, issued_at, expires_at
 FROM command_runtime.command_authorization_snapshots
-WHERE organization_id = $1::uuid AND command_id = $2::uuid
-`, organizationID, commandID).Scan(
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid
+`, tenantID, commandID).Scan(
 		&intent.Authorization.GrantID, &intent.Authorization.PolicyRevision, &intent.Authorization.Purpose,
-		&intent.Authorization.PrincipalID, &intent.Authorization.OrganizationID,
+		&intent.Authorization.PrincipalID, &intent.Authorization.TenantID,
 		&intent.Authorization.SiteID, &intent.Authorization.DeviceID,
 		&authorizationCapability, &maximumRisk, &intent.Authorization.CapabilityRevision,
 		&intent.Authorization.EmergencyRevocationRevision, &intent.Authorization.IssuedAt,
@@ -530,8 +529,8 @@ WHERE organization_id = $1::uuid AND command_id = $2::uuid
 	if err := tx.QueryRow(ctx, `
 SELECT risk_level, rule_revision, reasons, evaluated_at
 FROM command_runtime.command_risk_snapshots
-WHERE organization_id = $1::uuid AND command_id = $2::uuid
-`, organizationID, commandID).Scan(
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid
+`, tenantID, commandID).Scan(
 		&risk, &intent.RiskSnapshot.RuleRevision, &riskReasons, &intent.RiskSnapshot.EvaluatedAt,
 	); err != nil {
 		return commandmodel.CommandIntent{}, fmt.Errorf("read command risk snapshot: %w", err)
@@ -548,9 +547,9 @@ SELECT approval_id::text, approver_id::text, approver_role, approval_policy,
        authorization_emergency_revocation_revision, authorization_issued_at, authorization_expires_at,
        issued_at, expires_at
 FROM command_runtime.command_approval_snapshots
-WHERE organization_id = $1::uuid AND command_id = $2::uuid
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 ORDER BY created_at, approval_id
-`, organizationID, commandID)
+`, tenantID, commandID)
 	if err != nil {
 		return commandmodel.CommandIntent{}, fmt.Errorf("read command approval snapshots: %w", err)
 	}
@@ -570,7 +569,7 @@ ORDER BY created_at, approval_id
 		approval.Policy = commandmodel.ApprovalPolicy(policy)
 		approval.Risk = commandmodel.RiskLevel(approvalRisk)
 		approval.Authorization.PrincipalID = approval.ApproverID
-		approval.Authorization.OrganizationID = intent.OrganizationID
+		approval.Authorization.TenantID = intent.TenantID
 		approval.Authorization.SiteID = intent.SiteID
 		approval.Authorization.DeviceID = intent.DeviceID
 		approval.Authorization.Capability = intent.Capability
@@ -589,9 +588,9 @@ ORDER BY created_at, approval_id
 	rows, err := tx.Query(ctx, `
 SELECT from_status, to_status, reason, actor_id, occurred_at, command_version, causation_id, COALESCE(evidence_id, '')
 FROM command_runtime.command_transitions
-WHERE organization_id = $1::uuid AND command_id = $2::uuid
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 ORDER BY command_version
-`, organizationID, commandID)
+`, tenantID, commandID)
 	if err != nil {
 		return commandmodel.CommandIntent{}, fmt.Errorf("read command transitions: %w", err)
 	}
@@ -616,52 +615,12 @@ ORDER BY command_version
 	return intent, nil
 }
 
-func activateTenantOrganization(ctx context.Context, tx pgx.Tx, tenantID, organizationID string) error {
-	if !commandmodel.IsUUIDv7(tenantID) || !commandmodel.IsUUIDv7(organizationID) {
-		return ErrInvalidRequest
-	}
-	if _, err := tx.Exec(ctx, `SET LOCAL ROLE s3_command_runtime`); err != nil {
-		return fmt.Errorf("activate command runtime database identity: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true), set_config('app.tenant_id', $2, true)`, organizationID, tenantID); err != nil {
-		return fmt.Errorf("set command Tenant/Organization context: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-INSERT INTO command_runtime.organization_tenant_scope (organization_id, tenant_id, created_at, updated_at)
-VALUES ($1::uuid, $2::uuid, now(), now())
-ON CONFLICT (organization_id) DO NOTHING
-`, organizationID, tenantID); err != nil {
-		return fmt.Errorf("bind command Organization to Tenant: %w", err)
-	}
-	var storedTenantID string
-	if err := tx.QueryRow(ctx, `SELECT tenant_id::text FROM command_runtime.organization_tenant_scope WHERE organization_id = $1::uuid`, organizationID).Scan(&storedTenantID); err != nil {
-		return fmt.Errorf("read command Organization Tenant binding: %w", err)
-	}
-	if storedTenantID != tenantID {
-		return ErrInvalidRequest
-	}
-	return nil
-}
-
-func activateOrganization(ctx context.Context, tx pgx.Tx, organizationID string) error {
-	if !commandmodel.IsUUIDv7(organizationID) {
-		return ErrInvalidRequest
-	}
-	if _, err := tx.Exec(ctx, `SET LOCAL ROLE s3_command_runtime`); err != nil {
-		return fmt.Errorf("activate command runtime database identity: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, organizationID); err != nil {
-		return fmt.Errorf("set command Organization context: %w", err)
-	}
-	var tenantID string
-	if err := tx.QueryRow(ctx, `SELECT tenant_id::text FROM command_runtime.organization_tenant_scope WHERE organization_id = $1::uuid`, organizationID).Scan(&tenantID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrInvalidRequest
-		}
-		return fmt.Errorf("resolve command Tenant context: %w", err)
-	}
+func activateTenant(ctx context.Context, tx pgx.Tx, tenantID string) error {
 	if !commandmodel.IsUUIDv7(tenantID) {
 		return ErrInvalidRequest
+	}
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE s3_command_runtime`); err != nil {
+		return fmt.Errorf("activate command runtime database identity: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, tenantID); err != nil {
 		return fmt.Errorf("set command Tenant context: %w", err)

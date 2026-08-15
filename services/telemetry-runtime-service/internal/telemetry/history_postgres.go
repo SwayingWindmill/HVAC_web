@@ -91,9 +91,6 @@ func buildHistoryObservation(observationID string, candidate ObservationCandidat
 	if decision.TenantID != "" {
 		observation.TenantID = stringPointer(decision.TenantID)
 	}
-	if decision.OwningOrganizationID != "" {
-		observation.OwningOrganizationID = stringPointer(decision.OwningOrganizationID)
-	}
 	if decision.SiteID != "" {
 		observation.SiteID = stringPointer(decision.SiteID)
 	}
@@ -103,15 +100,29 @@ func buildHistoryObservation(observationID string, candidate ObservationCandidat
 	if decision.PointID != "" {
 		observation.PointID = stringPointer(decision.PointID)
 	}
+	if decision.PointType != "" {
+		observation.PointType = stringPointer(decision.PointType)
+	}
+	if decision.PointRevision > 0 {
+		revision := decision.PointRevision
+		observation.PointRevision = &revision
+	}
+	if decision.CounterDecreaseMode != "" {
+		observation.CounterDecreaseMode = stringPointer(decision.CounterDecreaseMode)
+	}
+	if decision.CounterRolloverModulus != nil {
+		modulus := *decision.CounterRolloverModulus
+		observation.CounterRolloverModulus = &modulus
+	}
 	if decision.SensorID != "" {
 		observation.SensorID = stringPointer(decision.SensorID)
 	}
-	if decision.Status != ObservationAccepted {
+	if decision.Status != ObservationAccepted && !(decision.Status == ObservationOutOfOrder && decision.PointID != "") {
 		return observation, nil
 	}
 	compact := json.RawMessage(candidate.Value)
 	if len(compact) == 0 || !json.Valid(compact) {
-		return HistoryObservation{}, errors.New("accepted telemetry history value is invalid JSON")
+		return HistoryObservation{}, errors.New("canonical telemetry history value is invalid JSON")
 	}
 	valueJSON := string(compact)
 	observation.ValueJSON = &valueJSON

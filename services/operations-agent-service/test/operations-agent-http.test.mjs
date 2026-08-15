@@ -9,10 +9,10 @@ import {
 } from '../dist/index.js';
 import { createFakeOperationsAgentEnvironment } from './support/fake-operations-agent-environment.mjs';
 
-const organizationId = '0198f5c0-7c00-7000-8000-000000000001';
+const tenantId = '0198f5c0-7c00-7000-8000-000000000001';
 const siteId = '0198f5c0-7c00-7000-8000-000000000002';
 const investigationId = 'investigation-001';
-const scope = Object.freeze({ organizationId, siteId, equipmentId: null, deviceId: null });
+const scope = Object.freeze({ tenantId, siteId, equipmentId: null, deviceId: null });
 const currentTime = Date.parse('2026-07-31T00:00:00.000Z');
 
 const energySeries = (request, energyPerHour) => {
@@ -49,7 +49,7 @@ const ownerResultFactory = async (request) => {
       provenance: 'platform-core-service:registry-site/v1',
       payload: {
         kind: 'SITE',
-        site: { id: siteId, owningOrganizationId: organizationId, timezone: 'Asia/Tokyo' },
+        site: { id: siteId, tenantId: tenantId, timezone: 'Asia/Tokyo' },
       },
     };
   }
@@ -82,10 +82,10 @@ const ownerResultFactory = async (request) => {
 
 const headers = Object.freeze({
   'Content-Type': 'application/json',
-  'X-Acting-Organization-ID': organizationId,
+  'X-Tenant-ID': tenantId,
   'X-Delegation-Grant': 'gateway-service-grant',
   'X-Operations-Registry-Site-Grant': 'registry-site-grant',
-  'X-Operations-Registry-Equipment-Grant': 'registry-equipment-grant',
+  'X-Operations-Registry-Asset-Grant': 'registry-asset-grant',
   'X-Operations-Energy-Grant': 'energy-grant',
   'X-Route-Policy-Revision': 'policy-v17',
   traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
@@ -134,7 +134,7 @@ const createHarness = ({ deny = false, runtimeSteps, telemetry } = {}) => {
           traceparent: input.traceparent,
           toolDelegationGrants: {
             'registry.getSite': input.registrySiteGrant,
-            'registry.listSiteEquipment': input.registryEquipmentGrant,
+            'registry.listSiteEquipment': input.registryAssetGrant,
             'analytics.getEnergySeries': input.energyGrant,
           },
         };
@@ -255,12 +255,12 @@ test('internal HTTP contract exposes only start, advance and safe authoritative 
   assert.deepEqual(harness.authorizationCalls[2], {
     method: 'GET',
     path: `/internal/v1/sites/${siteId}/operations/investigations`,
-    organizationId,
+    tenantId,
     siteId,
     investigationId: null,
     gatewayDelegationGrant: 'gateway-service-grant',
     registrySiteGrant: 'registry-site-grant',
-    registryEquipmentGrant: 'registry-equipment-grant',
+    registryAssetGrant: 'registry-asset-grant',
     energyGrant: 'energy-grant',
     policyRevision: 'policy-v17',
     traceparent: headers.traceparent,
@@ -268,12 +268,12 @@ test('internal HTTP contract exposes only start, advance and safe authoritative 
   assert.deepEqual(harness.authorizationCalls[1], {
     method: 'POST',
     path: `/internal/v1/sites/${siteId}/operations/investigations/${started.id}:advance`,
-    organizationId,
+    tenantId,
     siteId,
     investigationId: started.id,
     gatewayDelegationGrant: 'gateway-service-grant',
     registrySiteGrant: 'registry-site-grant',
-    registryEquipmentGrant: 'registry-equipment-grant',
+    registryAssetGrant: 'registry-asset-grant',
     energyGrant: 'energy-grant',
     policyRevision: 'policy-v17',
     traceparent: headers.traceparent,

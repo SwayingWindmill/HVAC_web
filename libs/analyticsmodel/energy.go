@@ -60,7 +60,7 @@ func (value QualityPolicy) Valid() bool {
 }
 
 type EnergySeriesQuery struct {
-	OrganizationID string        `json:"organizationId"`
+	TenantID       string        `json:"tenantId"`
 	SiteID         string        `json:"siteId"`
 	EnergyType     EnergyType    `json:"energyType"`
 	Granularity    Granularity   `json:"granularity"`
@@ -71,8 +71,8 @@ type EnergySeriesQuery struct {
 }
 
 func (query EnergySeriesQuery) Validate() error {
-	if !validUUIDv7(query.OrganizationID) || !validUUIDv7(query.SiteID) {
-		return errors.New("analytics organization and site must be UUIDv7")
+	if !validUUIDv7(query.TenantID) || !validUUIDv7(query.SiteID) {
+		return errors.New("analytics tenant and site must be UUIDv7")
 	}
 	if !query.EnergyType.Valid() {
 		return errors.New("analytics energy type is invalid")
@@ -107,7 +107,7 @@ func (query EnergySeriesQuery) ScopeDigest() (string, error) {
 	}
 	payload, err := json.Marshal(struct {
 		Action         string        `json:"action"`
-		OrganizationID string        `json:"organizationId"`
+		TenantID       string        `json:"tenantId"`
 		SiteID         string        `json:"siteId"`
 		EnergyType     EnergyType    `json:"energyType"`
 		Granularity    Granularity   `json:"granularity"`
@@ -116,7 +116,7 @@ func (query EnergySeriesQuery) ScopeDigest() (string, error) {
 		To             string        `json:"to"`
 		QualityPolicy  QualityPolicy `json:"qualityPolicy"`
 	}{
-		Action: EnergySeriesAction, OrganizationID: query.OrganizationID, SiteID: query.SiteID,
+		Action: EnergySeriesAction, TenantID: query.TenantID, SiteID: query.SiteID,
 		EnergyType: query.EnergyType, Granularity: query.Granularity, Timezone: query.Timezone,
 		From: query.From.UTC().Format(time.RFC3339Nano), To: query.To.UTC().Format(time.RFC3339Nano),
 		QualityPolicy: query.QualityPolicy,

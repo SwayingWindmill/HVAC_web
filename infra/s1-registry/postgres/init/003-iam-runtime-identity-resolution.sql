@@ -8,7 +8,7 @@ CREATE POLICY principals_migrator_identity_lookup ON iam.principals
   USING (true);
 
 CREATE UNIQUE INDEX IF NOT EXISTS policies_one_active_key_uidx
-  ON iam.policies (organization_id, policy_key)
+  ON iam.policies (tenant_id, policy_key)
   WHERE status = 'ACTIVE';
 
 CREATE OR REPLACE FUNCTION iam.resolve_principal_identity(

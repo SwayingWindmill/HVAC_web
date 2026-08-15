@@ -134,7 +134,7 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		writeAuditProblem(writer, status, "AUDIT_RECORD_NOT_FOUND", "Audit record not found")
 		return
 	}
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin"} {
+	for _, header := range []string{"X-Principal", "X-Roles", "X-Tenant-ID", "X-Site-ID", "X-Admin"} {
 		if request.Header.Get(header) != "" {
 			status = http.StatusBadRequest
 			writeAuditProblem(writer, status, "AUDIT_FORGED_IDENTITY_HEADER", "Caller identity headers are not accepted")
@@ -154,7 +154,7 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		writeAuditProblem(writer, status, "AUDIT_DELEGATION_INVALID", "Delegation grant is invalid")
 		return
 	}
-	expectedScope := "organization:" + claims.ActingOrganizationID
+	expectedScope := "tenant:" + claims.TenantID
 	if err := identitycontext.ValidateDelegation(claims, server.now(), peerSPIFFE, server.audience, "audit:read", expectedScope); err != nil {
 		status = http.StatusForbidden
 		writeAuditProblem(writer, status, "AUDIT_DELEGATION_REJECTED", "Delegation grant is not authorized for this audit query")
@@ -165,7 +165,7 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		writeAuditProblem(writer, status, "AUDIT_QUERY_FORBIDDEN", "The initiating principal cannot read audit records")
 		return
 	}
-	record, err := server.store.GetRecord(request.Context(), claims.ActingOrganizationID, messageID)
+	record, err := server.store.GetRecord(request.Context(), claims.TenantID, messageID)
 	if errors.Is(err, ErrRecordNotFound) {
 		status = http.StatusNotFound
 		writeAuditProblem(writer, status, "AUDIT_RECORD_NOT_FOUND", "Audit record not found")
@@ -188,7 +188,7 @@ func (server *server) serveOperationsIngest(writer http.ResponseWriter, request 
 	}
 	for _, header := range []string{
 		"Authorization", "Cookie", "X-Delegation-Grant", "X-Principal", "X-Roles",
-		"X-Organization-ID", "X-Site-ID", "X-Admin",
+		"X-Tenant-ID", "X-Site-ID", "X-Admin",
 	} {
 		if request.Header.Get(header) != "" {
 			writeAuditProblem(writer, http.StatusBadRequest, "AUDIT_FORGED_IDENTITY_HEADER", "Caller identity headers are not accepted")

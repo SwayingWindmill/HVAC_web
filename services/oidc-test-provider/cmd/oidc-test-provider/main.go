@@ -25,7 +25,7 @@ func main() {
 		Issuer:                      issuer,
 		ClientID:                    envOr("OIDC_FIXTURE_CLIENT_ID", "hvac-web-s0"),
 		RedirectURI:                 envOr("OIDC_FIXTURE_REDIRECT_URI", "https://127.0.0.1:5179/api/v1/auth/callback"),
-		DefaultActingOrganizationID: envOr("OIDC_FIXTURE_ACTING_ORGANIZATION_ID", "org-fixture-01"),
+		DefaultTenantID:              envOr("OIDC_FIXTURE_TENANT_ID", "018f3d00-0000-7000-8000-000000000001"),
 	})
 	if err != nil {
 		logger.Error("oidc_fixture_config_invalid", "error_code", "OIDC_FIXTURE_CONFIG_INVALID")

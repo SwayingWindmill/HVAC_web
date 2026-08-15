@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	mutationOrganizationID = "01930000-0000-7000-8000-000000000001"
+	mutationTenantID = "01930000-0000-7000-8000-000000000001"
 	mutationSiteID         = "01930000-0001-7000-8000-000000000001"
 	mutationWorkOrderID    = "01930000-1000-7000-8000-000000000001"
 	mutationAlarmID        = "01930000-2000-7000-8000-000000000001"
@@ -19,7 +19,7 @@ func TestCreateBuildsServerOwnedOpenProjection(t *testing.T) {
 	start := "2026-08-02T01:00:00+00:00"
 	due := "2026-08-02T04:00:00Z"
 	created, err := Create(CreateInput{
-		WorkOrderID: mutationWorkOrderID, OrganizationID: mutationOrganizationID, SiteID: mutationSiteID,
+		WorkOrderID: mutationWorkOrderID, TenantID: mutationTenantID, SiteID: mutationSiteID,
 		Title: " Inspect AHU fan ", Description: " Validate the vibration. ", Priority: PriorityHigh,
 		SourceReferences: []SourceReference{{Domain: SourceAlarm, ResourceID: mutationAlarmID, Relationship: RelationshipOrigin}},
 		AssigneeID:       &assignee, TeamID: &team, ScheduledStart: &start, DueAt: &due,
@@ -42,7 +42,7 @@ func TestCreateBuildsServerOwnedOpenProjection(t *testing.T) {
 
 func TestCreateRejectsInvalidDueWindowAndSourceAuthority(t *testing.T) {
 	base := CreateInput{
-		WorkOrderID: mutationWorkOrderID, OrganizationID: mutationOrganizationID, SiteID: mutationSiteID,
+		WorkOrderID: mutationWorkOrderID, TenantID: mutationTenantID, SiteID: mutationSiteID,
 		Title: "Inspect AHU fan", Description: "Validate vibration.", Priority: PriorityHigh,
 		SourceReferences: []SourceReference{{Domain: SourceAlarm, ResourceID: mutationAlarmID, Relationship: RelationshipOrigin}},
 		ActorType:        "PRINCIPAL", ActorID: "principal:creator", PolicyRevision: "policy-7", CorrelationID: "idem-create-0001",
@@ -72,7 +72,7 @@ func TestCreateRejectsInvalidDueWindowAndSourceAuthority(t *testing.T) {
 
 func TestApplyAssignmentUsesExpectedVersionAndExplicitTuple(t *testing.T) {
 	created, err := Create(CreateInput{
-		WorkOrderID: mutationWorkOrderID, OrganizationID: mutationOrganizationID, SiteID: mutationSiteID,
+		WorkOrderID: mutationWorkOrderID, TenantID: mutationTenantID, SiteID: mutationSiteID,
 		Title: "Inspect AHU fan", Description: "Validate vibration.", Priority: PriorityHigh,
 		SourceReferences: []SourceReference{{Domain: SourceAlarm, ResourceID: mutationAlarmID, Relationship: RelationshipOrigin}},
 		ActorType:        "PRINCIPAL", ActorID: "principal:creator", PolicyRevision: "policy-7", CorrelationID: "idem-create-0001",

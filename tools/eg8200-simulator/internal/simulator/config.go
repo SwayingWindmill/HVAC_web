@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net/url"
 	"strings"
 	"time"
 )
@@ -14,17 +13,15 @@ import (
 const ConfigSchemaVersion = 2
 
 type Config struct {
-	SchemaVersion      int                    `json:"schemaVersion"`
-	GatewayID          string                 `json:"gatewayId"`
-	ThingsBoardBaseURL string                 `json:"thingsBoardBaseUrl"`
-	PublishInterval    string                 `json:"publishInterval"`
-	Plant              PlantConfig            `json:"plant"`
-	Areas              []AreaConfig           `json:"areas"`
-	Equipment          []EquipmentAssetConfig `json:"equipment"`
-	Devices            []DeviceEndpointConfig `json:"devices"`
-	Sensors            []SensorConfig         `json:"sensors"`
-	Points             []PointConfig          `json:"points"`
-	Credentials        map[string]string      `json:"credentialEnvByDeviceId"`
+	SchemaVersion   int                    `json:"schemaVersion"`
+	GatewayID       string                 `json:"gatewayId"`
+	PublishInterval string                 `json:"publishInterval"`
+	Plant           PlantConfig            `json:"plant"`
+	Spaces          []SpaceConfig          `json:"spaces"`
+	Assets          []AssetConfig          `json:"assets"`
+	Devices         []DeviceEndpointConfig `json:"devices"`
+	Sensors         []SensorConfig         `json:"sensors"`
+	Points          []PointConfig          `json:"points"`
 }
 
 type PlantConfig struct {
@@ -89,16 +86,6 @@ func (config Config) Validate() error {
 	if strings.TrimSpace(config.GatewayID) == "" {
 		return errors.New("gatewayId is required")
 	}
-	baseURL, err := url.Parse(strings.TrimRight(strings.TrimSpace(config.ThingsBoardBaseURL), "/"))
-	if err != nil || (baseURL.Scheme != "http" && baseURL.Scheme != "https") || baseURL.Host == "" || baseURL.User != nil || baseURL.RawQuery != "" || baseURL.Fragment != "" {
-		return errors.New("thingsBoardBaseUrl must be an HTTP(S) origin")
-	}
-	if baseURL.Path != "" && baseURL.Path != "/" {
-		return errors.New("thingsBoardBaseUrl must not contain a path")
-	}
-	if baseURL.Scheme == "http" && !localThingsBoardHost(baseURL.Hostname()) {
-		return errors.New("thingsBoardBaseUrl must use HTTPS for non-local hosts")
-	}
 	interval, err := time.ParseDuration(config.PublishInterval)
 	if err != nil || interval < time.Second || interval > time.Minute {
 		return errors.New("publishInterval must be between 1s and 1m")
@@ -108,15 +95,6 @@ func (config Config) Validate() error {
 	}
 	if err := validateAssetModel(config); err != nil {
 		return err
-	}
-	if len(config.Credentials) != len(config.Devices) {
-		return errors.New("credentialEnvByDeviceId must contain every simulated Device Endpoint exactly once")
-	}
-	for _, device := range config.Devices {
-		envName := strings.TrimSpace(config.Credentials[device.ID])
-		if envName == "" {
-			return fmt.Errorf("credential environment variable is missing for %s", device.ID)
-		}
 	}
 	return nil
 }
@@ -193,11 +171,3 @@ func (point PointConfig) PublishEvery() time.Duration {
 	return duration
 }
 
-func localThingsBoardHost(host string) bool {
-	switch strings.ToLower(strings.TrimSpace(host)) {
-	case "localhost", "127.0.0.1", "host.docker.internal":
-		return true
-	default:
-		return false
-	}
-}

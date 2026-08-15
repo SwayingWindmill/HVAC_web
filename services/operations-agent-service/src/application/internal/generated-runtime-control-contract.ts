@@ -19,7 +19,7 @@ export const OPERATIONS_AGENT_TRUSTED_RUNTIME_CONTEXT_KEYS = [
 ] as const;
 
 export const OPERATIONS_AGENT_TRUSTED_RUNTIME_SCOPE_KEYS = [
-  "organizationId",
+  "tenantId",
   "siteId",
   "equipmentId",
   "deviceId",

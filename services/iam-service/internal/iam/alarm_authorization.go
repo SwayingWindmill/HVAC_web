@@ -8,8 +8,8 @@ import (
 )
 
 type AlarmPermission struct {
-	OrganizationID string
-	SiteID         string
+	TenantID string
+	SiteID   string
 	Action         alarmauth.Action
 	Effect         BindingEffect
 	Status         FactStatus
@@ -21,7 +21,7 @@ type AlarmAuthorizationFacts struct {
 	Found          bool
 	PolicyRevision string
 	Principal      PrincipalRecord
-	Memberships    []OrganizationMembership
+	Memberships    []TenantMembership
 	Permissions    []AlarmPermission
 }
 
@@ -58,14 +58,14 @@ func (store *staticAlarmAuthorizationStore) LookupAlarmAuthorization(_ context.C
 
 func evaluateAlarmAuthorization(ctx context.Context, store AlarmAuthorizationStore, now time.Time, subjectIssuer, subject string, request alarmauth.DecisionRequest) (alarmauth.Decision, error) {
 	facts, err := store.LookupAlarmAuthorization(ctx, AuthorizationLookup{
-		SubjectIssuer: subjectIssuer, Subject: subject, ActingOrganizationID: request.ActingOrganizationID,
+		SubjectIssuer: subjectIssuer, Subject: subject, TenantID: request.TenantID,
 	})
 	if err != nil {
 		return alarmauth.Decision{}, err
 	}
 	decision := alarmauth.Decision{
 		SubjectIssuer: subjectIssuer, Subject: subject,
-		ActingOrganizationID: request.ActingOrganizationID, SiteID: request.SiteID, AlarmID: request.AlarmID,
+		TenantID: request.TenantID, SiteID: request.SiteID, AlarmID: request.AlarmID,
 		Action: request.Action, PolicyRevision: facts.PolicyRevision, ReasonCode: alarmauth.ReasonDenyPrincipal,
 		DecidedAt: now.UTC().Format(time.RFC3339Nano),
 	}
@@ -73,7 +73,7 @@ func evaluateAlarmAuthorization(ctx context.Context, store AlarmAuthorizationSto
 		return decision, nil
 	}
 	decision.PrincipalID = facts.Principal.ID
-	membershipActive, _ := membershipState(facts.Memberships, request.ActingOrganizationID, now)
+	membershipActive, _ := membershipState(facts.Memberships, request.TenantID, now)
 	if !membershipActive {
 		decision.ReasonCode = alarmauth.ReasonDenyMembership
 		return decision, nil
@@ -81,7 +81,7 @@ func evaluateAlarmAuthorization(ctx context.Context, store AlarmAuthorizationSto
 	allowFound := false
 	for _, permission := range facts.Permissions {
 		if permission.Status != FactStatusActive || !factEffective(permission.ValidFrom, permission.ValidTo, now) ||
-			permission.OrganizationID != request.ActingOrganizationID || permission.SiteID != request.SiteID || permission.Action != request.Action {
+			permission.TenantID != request.TenantID || permission.SiteID != request.SiteID || permission.Action != request.Action {
 			continue
 		}
 		if permission.Effect == BindingEffectDeny {
@@ -101,11 +101,11 @@ func evaluateAlarmAuthorization(ctx context.Context, store AlarmAuthorizationSto
 	return decision, nil
 }
 
-func alarmCapabilityAllowed(facts AlarmAuthorizationFacts, now time.Time, actingOrganizationID string, action alarmauth.Action) bool {
+func alarmCapabilityAllowed(facts AlarmAuthorizationFacts, now time.Time, tenantID string, action alarmauth.Action) bool {
 	if !facts.Found || facts.Principal.Status != FactStatusActive {
 		return false
 	}
-	membershipActive, _ := membershipState(facts.Memberships, actingOrganizationID, now)
+	membershipActive, _ := membershipState(facts.Memberships, tenantID, now)
 	if !membershipActive {
 		return false
 	}
@@ -113,7 +113,7 @@ func alarmCapabilityAllowed(facts AlarmAuthorizationFacts, now time.Time, acting
 	deniedSites := map[string]bool{}
 	for _, permission := range facts.Permissions {
 		if permission.Status != FactStatusActive || !factEffective(permission.ValidFrom, permission.ValidTo, now) ||
-			permission.OrganizationID != actingOrganizationID || permission.Action != action {
+			permission.TenantID != tenantID || permission.Action != action {
 			continue
 		}
 		switch permission.Effect {
@@ -133,7 +133,7 @@ func alarmCapabilityAllowed(facts AlarmAuthorizationFacts, now time.Time, acting
 
 func cloneAlarmAuthorizationFacts(value AlarmAuthorizationFacts) AlarmAuthorizationFacts {
 	cloned := value
-	cloned.Memberships = append([]OrganizationMembership(nil), value.Memberships...)
+	cloned.Memberships = append([]TenantMembership(nil), value.Memberships...)
 	cloned.Permissions = append([]AlarmPermission(nil), value.Permissions...)
 	return cloned
 }

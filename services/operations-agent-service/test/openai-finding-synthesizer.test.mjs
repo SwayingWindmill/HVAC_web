@@ -8,7 +8,7 @@ const input = Object.freeze({
   schemaVersion: 1,
   investigationId: 'investigation-001',
   scope: {
-    organizationId: 'organization-001',
+    tenantId: 'organization-001',
     siteId: 'site-001',
     equipmentId: null,
     deviceId: null,

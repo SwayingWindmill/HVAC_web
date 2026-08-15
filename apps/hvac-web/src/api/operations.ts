@@ -37,7 +37,7 @@ export class OperationsApiError extends Error {
 }
 
 export interface ScopedOperationsRequestOptions {
-  readonly trustedOrganizationId: string;
+  readonly trustedTenantId: string;
   readonly trustedSiteId: string;
   readonly csrfToken?: string;
   readonly signal?: AbortSignal;
@@ -58,7 +58,7 @@ const platformClient = createPlatformGatewayClient();
 async function csrfCapability(options: ScopedOperationsRequestOptions): Promise<string> {
   if (options.csrfToken) return options.csrfToken;
   const principal = await platformClient.getCurrentPrincipal();
-  if (principal.data.context.actingOrganizationId !== options.trustedOrganizationId) {
+  if (principal.data.context.tenantId !== options.trustedTenantId) {
     throw new OperationsApiError(503, 'OPERATIONS_SCOPE_INVALID', 'Session Organization 已改变。');
   }
   return principal.data.session.csrfToken;
@@ -72,7 +72,7 @@ const ensureScope = (
   investigation: OperationsInvestigationView,
   options: ScopedOperationsRequestOptions,
 ): OperationsInvestigationView => {
-  if (investigation.scope.organizationId !== options.trustedOrganizationId
+  if (investigation.scope.tenantId !== options.trustedTenantId
     || investigation.scope.siteId !== options.trustedSiteId) {
     throw new OperationsApiError(
       503,
@@ -127,7 +127,7 @@ export async function listSiteNightEnergyInvestigations(
   if (!response.ok) throw await problemFrom(response);
   const parsed = operationsInvestigationListSchema.parse(await response.json());
   if (parsed.investigations.some((investigation) => (
-    investigation.scope.organizationId !== options.trustedOrganizationId
+    investigation.scope.tenantId !== options.trustedTenantId
     || investigation.scope.siteId !== options.trustedSiteId
   ))) {
     throw new OperationsApiError(
@@ -328,7 +328,7 @@ export async function streamSiteNightEnergyInvestigationEvents(
   const events = parseOperationsAgUiEventStream(await response.text());
   const snapshot = events.find((item) => item.event.type === 'STATE_SNAPSHOT');
   if (snapshot?.event.type !== 'STATE_SNAPSHOT'
-    || snapshot.event.snapshot.investigation.scope.organizationId !== options.trustedOrganizationId
+    || snapshot.event.snapshot.investigation.scope.tenantId !== options.trustedTenantId
     || snapshot.event.snapshot.investigation.scope.siteId !== options.trustedSiteId) {
     throw new OperationsApiError(503, 'OPERATIONS_SCOPE_INVALID', 'Operations 事件流超出当前已验证 Site Scope。');
   }

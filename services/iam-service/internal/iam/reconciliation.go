@@ -40,6 +40,7 @@ const (
 )
 
 type ReconciliationRequest struct {
+	TenantID       string                   `json:"tenantId"`
 	SourceSystem   string                   `json:"sourceSystem"`
 	SourceKey      string                   `json:"sourceKey"`
 	SourceVersion  int64                    `json:"sourceVersion"`
@@ -60,39 +61,37 @@ type ReconciledPrincipal struct {
 }
 
 type ReconciledMembership struct {
-	OrganizationID string     `json:"organizationId"`
-	Status         FactStatus `json:"status"`
-	ValidFrom      time.Time  `json:"validFrom"`
-	ValidTo        *time.Time `json:"validTo,omitempty"`
+	TenantID  string     `json:"tenantId"`
+	Status    FactStatus `json:"status"`
+	ValidFrom time.Time  `json:"validFrom"`
+	ValidTo   *time.Time `json:"validTo,omitempty"`
 }
 
 type ReconciledRoleBinding struct {
-	OrganizationID string                `json:"organizationId"`
-	RoleKey        string                `json:"roleKey"`
-	Actions        []registryauth.Action `json:"actions"`
-	Effect         BindingEffect         `json:"effect"`
-	ValidFrom      time.Time             `json:"validFrom"`
-	ValidTo        *time.Time            `json:"validTo,omitempty"`
+	TenantID  string                `json:"tenantId"`
+	RoleKey   string                `json:"roleKey"`
+	Actions   []registryauth.Action `json:"actions"`
+	Effect    BindingEffect         `json:"effect"`
+	ValidFrom time.Time             `json:"validFrom"`
+	ValidTo   *time.Time            `json:"validTo,omitempty"`
 }
 
 type ReconciledSiteBinding struct {
-	ActingOrganizationID string                `json:"actingOrganizationId"`
-	OwningOrganizationID string                `json:"owningOrganizationId"`
-	SiteID               string                `json:"siteId"`
-	Actions              []registryauth.Action `json:"actions"`
-	Effect               BindingEffect         `json:"effect"`
-	ValidFrom            time.Time             `json:"validFrom"`
-	ValidTo              *time.Time            `json:"validTo,omitempty"`
+	TenantID  string                `json:"tenantId"`
+	SiteID    string                `json:"siteId"`
+	Actions   []registryauth.Action `json:"actions"`
+	Effect    BindingEffect         `json:"effect"`
+	ValidFrom time.Time             `json:"validFrom"`
+	ValidTo   *time.Time            `json:"validTo,omitempty"`
 }
 
 type ReconciledExplicitDeny struct {
-	ActingOrganizationID string              `json:"actingOrganizationId"`
-	OwningOrganizationID string              `json:"owningOrganizationId"`
-	SiteID               string              `json:"siteId,omitempty"`
-	Action               registryauth.Action `json:"action"`
-	ReasonCode           string              `json:"reasonCode"`
-	ValidFrom            time.Time           `json:"validFrom"`
-	ValidTo              *time.Time          `json:"validTo,omitempty"`
+	TenantID   string              `json:"tenantId"`
+	SiteID     string              `json:"siteId,omitempty"`
+	Action     registryauth.Action `json:"action"`
+	ReasonCode string              `json:"reasonCode"`
+	ValidFrom  time.Time           `json:"validFrom"`
+	ValidTo    *time.Time          `json:"validTo,omitempty"`
 }
 
 type ReconciliationResult struct {
@@ -110,6 +109,7 @@ type ReconciliationStore interface {
 
 func prepareReconciliationRequest(request ReconciliationRequest) (ReconciliationRequest, string, error) {
 	request = cloneReconciliationRequest(request)
+	request.TenantID = strings.TrimSpace(request.TenantID)
 	request.SourceSystem = strings.TrimSpace(request.SourceSystem)
 	request.SourceKey = strings.TrimSpace(request.SourceKey)
 	request.Principal.ID = strings.TrimSpace(request.Principal.ID)
@@ -117,6 +117,9 @@ func prepareReconciliationRequest(request ReconciliationRequest) (Reconciliation
 	request.Principal.Subject = strings.TrimSpace(request.Principal.Subject)
 	request.Principal.DisplayName = strings.TrimSpace(request.Principal.DisplayName)
 	request.Principal.Email = strings.TrimSpace(request.Principal.Email)
+	if !isUUIDv7(request.TenantID) {
+		return ReconciliationRequest{}, "", errors.New("reconciliation Tenant requires UUIDv7 id")
+	}
 	if request.SourceSystem == "" || request.SourceKey == "" || request.SourceVersion <= 0 {
 		return ReconciliationRequest{}, "", errors.New("reconciliation source identity and positive version are required")
 	}
@@ -137,22 +140,22 @@ func prepareReconciliationRequest(request ReconciliationRequest) (Reconciliation
 
 	for index := range request.Memberships {
 		membership := &request.Memberships[index]
-		if !isUUIDv7(membership.OrganizationID) || !validFactStatus(membership.Status) || !validEffectiveRange(membership.ValidFrom, membership.ValidTo) {
+		if membership.TenantID != request.TenantID || !validFactStatus(membership.Status) || !validEffectiveRange(membership.ValidFrom, membership.ValidTo) {
 			return ReconciliationRequest{}, "", fmt.Errorf("invalid membership at index %d", index)
 		}
-		if _, duplicate := seenMemberships[membership.OrganizationID]; duplicate {
-			return ReconciliationRequest{}, "", fmt.Errorf("duplicate membership for organization %q", membership.OrganizationID)
+		if _, duplicate := seenMemberships[membership.TenantID]; duplicate {
+			return ReconciliationRequest{}, "", fmt.Errorf("duplicate membership for organization %q", membership.TenantID)
 		}
-		seenMemberships[membership.OrganizationID] = struct{}{}
+		seenMemberships[membership.TenantID] = struct{}{}
 		normalizeTimes(&membership.ValidFrom, &membership.ValidTo)
 	}
 	for index := range request.RoleBindings {
 		binding := &request.RoleBindings[index]
 		binding.RoleKey = strings.TrimSpace(binding.RoleKey)
-		if !isUUIDv7(binding.OrganizationID) || binding.RoleKey == "" || !validBindingEffect(binding.Effect) || !validEffectiveRange(binding.ValidFrom, binding.ValidTo) {
+		if binding.TenantID != request.TenantID || binding.RoleKey == "" || !validBindingEffect(binding.Effect) || !validEffectiveRange(binding.ValidFrom, binding.ValidTo) {
 			return ReconciliationRequest{}, "", fmt.Errorf("invalid role binding at index %d", index)
 		}
-		roleIdentity := binding.OrganizationID + "\x00" + binding.RoleKey
+		roleIdentity := binding.TenantID + "\x00" + binding.RoleKey
 		if _, duplicate := seenRoleBindings[roleIdentity]; duplicate {
 			return ReconciliationRequest{}, "", fmt.Errorf("duplicate role binding %q", binding.RoleKey)
 		}
@@ -164,10 +167,10 @@ func prepareReconciliationRequest(request ReconciliationRequest) (Reconciliation
 	}
 	for index := range request.SiteBindings {
 		binding := &request.SiteBindings[index]
-		if !isUUIDv7(binding.ActingOrganizationID) || !isUUIDv7(binding.OwningOrganizationID) || !isUUIDv7(binding.SiteID) || !validBindingEffect(binding.Effect) || !validEffectiveRange(binding.ValidFrom, binding.ValidTo) {
+		if binding.TenantID != request.TenantID || !isUUIDv7(binding.SiteID) || !validBindingEffect(binding.Effect) || !validEffectiveRange(binding.ValidFrom, binding.ValidTo) {
 			return ReconciliationRequest{}, "", fmt.Errorf("invalid site binding at index %d", index)
 		}
-		siteIdentity := binding.ActingOrganizationID + "\x00" + binding.SiteID
+		siteIdentity := binding.TenantID + "\x00" + binding.SiteID
 		if _, duplicate := seenSiteBindings[siteIdentity]; duplicate {
 			return ReconciliationRequest{}, "", fmt.Errorf("duplicate site binding for site %q", binding.SiteID)
 		}
@@ -180,10 +183,10 @@ func prepareReconciliationRequest(request ReconciliationRequest) (Reconciliation
 	for index := range request.ExplicitDenies {
 		deny := &request.ExplicitDenies[index]
 		deny.ReasonCode = strings.TrimSpace(deny.ReasonCode)
-		if !isUUIDv7(deny.ActingOrganizationID) || !isUUIDv7(deny.OwningOrganizationID) || (deny.SiteID != "" && !isUUIDv7(deny.SiteID)) || !deny.Action.Valid() || deny.ReasonCode == "" || !validEffectiveRange(deny.ValidFrom, deny.ValidTo) {
+		if deny.TenantID != request.TenantID || (deny.SiteID != "" && !isUUIDv7(deny.SiteID)) || !deny.Action.Valid() || deny.ReasonCode == "" || !validEffectiveRange(deny.ValidFrom, deny.ValidTo) {
 			return ReconciliationRequest{}, "", fmt.Errorf("invalid explicit deny at index %d", index)
 		}
-		denyIdentity := deny.ActingOrganizationID + "\x00" + deny.OwningOrganizationID + "\x00" + deny.SiteID + "\x00" + string(deny.Action)
+		denyIdentity := deny.TenantID + "\x00" + deny.SiteID + "\x00" + string(deny.Action)
 		if _, duplicate := seenExplicitDenies[denyIdentity]; duplicate {
 			return ReconciliationRequest{}, "", fmt.Errorf("duplicate explicit deny for action %q", deny.Action)
 		}
@@ -192,19 +195,19 @@ func prepareReconciliationRequest(request ReconciliationRequest) (Reconciliation
 	}
 
 	sort.Slice(request.Memberships, func(i, j int) bool {
-		return request.Memberships[i].OrganizationID < request.Memberships[j].OrganizationID
+		return request.Memberships[i].TenantID < request.Memberships[j].TenantID
 	})
 	sort.Slice(request.RoleBindings, func(i, j int) bool {
 		left, right := request.RoleBindings[i], request.RoleBindings[j]
-		return left.OrganizationID+"\x00"+left.RoleKey < right.OrganizationID+"\x00"+right.RoleKey
+		return left.TenantID+"\x00"+left.RoleKey < right.TenantID+"\x00"+right.RoleKey
 	})
 	sort.Slice(request.SiteBindings, func(i, j int) bool {
 		left, right := request.SiteBindings[i], request.SiteBindings[j]
-		return left.ActingOrganizationID+"\x00"+left.SiteID < right.ActingOrganizationID+"\x00"+right.SiteID
+		return left.TenantID+"\x00"+left.SiteID < right.TenantID+"\x00"+right.SiteID
 	})
 	sort.Slice(request.ExplicitDenies, func(i, j int) bool {
 		left, right := request.ExplicitDenies[i], request.ExplicitDenies[j]
-		return left.ActingOrganizationID+"\x00"+left.OwningOrganizationID+"\x00"+left.SiteID+"\x00"+string(left.Action) < right.ActingOrganizationID+"\x00"+right.OwningOrganizationID+"\x00"+right.SiteID+"\x00"+string(right.Action)
+		return left.TenantID+"\x00"+left.SiteID+"\x00"+string(left.Action) < right.TenantID+"\x00"+right.SiteID+"\x00"+string(right.Action)
 	})
 
 	encoded, err := json.Marshal(request)

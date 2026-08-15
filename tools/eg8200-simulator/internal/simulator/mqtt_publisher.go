@@ -25,32 +25,34 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
-const mqttTelemetryEnvelopeSchemaVersion = 1
+const mqttTelemetryEnvelopeSchemaVersion = "1.0"
 
 type mqttTelemetryEnvelope struct {
-	SchemaVersion int                  `json:"schemaVersion"`
+	SchemaVersion string               `json:"schemaVersion"`
 	MessageID     string               `json:"messageId"`
-	TenantID      string               `json:"tenantId"`
-	SiteID        string               `json:"siteId"`
 	GatewayID     string               `json:"gatewayId"`
-	PublishedAt   string               `json:"publishedAt"`
+	Timestamp     int64                `json:"timestamp"`
+	Sequence      uint64               `json:"sequence"`
+	TraceID       string               `json:"traceId,omitempty"`
 	Replay        bool                 `json:"replay"`
-	Devices       []mqttEnvelopeDevice `json:"devices"`
+	Payload       mqttTelemetryPayload `json:"payload"`
+}
+
+type mqttTelemetryPayload struct {
+	Devices []mqttEnvelopeDevice `json:"devices"`
 }
 
 type mqttEnvelopeDevice struct {
-	ExternalDeviceID string              `json:"externalDeviceId"`
-	Points           []mqttEnvelopePoint `json:"points"`
+	DeviceID        string              `json:"deviceId"`
+	DeviceTimestamp int64               `json:"deviceTimestamp"`
+	Points          []mqttEnvelopePoint `json:"points"`
 }
 
 type mqttEnvelopePoint struct {
-	TelemetryKey string  `json:"telemetryKey"`
-	Value        any     `json:"value"`
-	ValueType    string  `json:"valueType"`
-	Unit         *string `json:"unit"`
-	Quality      string  `json:"quality"`
-	SampledAt    string  `json:"sampledAt"`
-	Sequence     uint64  `json:"sequence"`
+	Code    string  `json:"code"`
+	Value   any     `json:"value"`
+	Quality uint8   `json:"quality"`
+	Unit    *string `json:"unit,omitempty"`
 }
 
 type MQTTPublisher struct {
@@ -58,12 +60,14 @@ type MQTTPublisher struct {
 	config         MQTTGatewayConfig
 	pointByKey     map[string]PointConfig
 	manager        *autopaho.ConnectionManager
+	commandHandler *edgeCommandHandler
+	commandTopic   string
 	queueDirectory string
 	metrics        *observability.Registry
 	connected      *atomic.Bool
 }
 
-func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewayConfig, metrics *observability.Registry) (*MQTTPublisher, error) {
+func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewayConfig, plant *Plant, metrics *observability.Registry) (*MQTTPublisher, error) {
 	if err := plantConfig.Validate(); err != nil {
 		return nil, fmt.Errorf("plant config: %w", err)
 	}
@@ -87,6 +91,10 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 		return nil, fmt.Errorf("parse MQTT broker URL: %w", err)
 	}
 	tlsConfig, err := mqttPublisherTLSConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	commandHandler, err := newEdgeCommandHandler(plant, config, plantConfig.GatewayID)
 	if err != nil {
 		return nil, err
 	}
@@ -116,13 +124,20 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 			_ = metrics.AddCounter("hvac_edge_mqtt_disconnections_total", "Edge MQTT disconnections.", map[string]string{"reason_family": "transport"}, 1)
 			return true
 		},
-		OnConnectionUp: func(*autopaho.ConnectionManager, *paho.Connack) {
+		OnConnectionUp: func(manager *autopaho.ConnectionManager, _ *paho.Connack) {
 			connected.Store(true)
 			_ = metrics.SetGauge("hvac_edge_mqtt_connected", "Whether the Edge publisher is connected to the MQTT broker.", nil, 1)
 			_ = metrics.AddCounter("hvac_edge_mqtt_connections_total", "Edge MQTT connection attempts by outcome.", map[string]string{"outcome": "success"}, 1)
+			commandTopic := "energy/v1/" + config.TenantID + "/" + config.SiteID + "/" + plantConfig.GatewayID + "/command"
+			go func() {
+				subscribeContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				_, _ = manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{{Topic: commandTopic, QoS: 1}}})
+			}()
 		},
 		ClientConfig: paho.ClientConfig{
 			ClientID: strings.TrimSpace(config.ClientID),
+			OnPublishReceived: []func(paho.PublishReceived) (bool, error){commandHandler.Handle},
 		},
 	})
 	if err != nil {
@@ -137,6 +152,8 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 		config:         config,
 		pointByKey:     pointByKey,
 		manager:        manager,
+		commandHandler: commandHandler,
+		commandTopic:   "energy/v1/" + config.TenantID + "/" + config.SiteID + "/" + plantConfig.GatewayID + "/command",
 		queueDirectory: config.QueueDirectory,
 		metrics:        metrics,
 		connected:      connected,
@@ -239,12 +256,17 @@ func (publisher *MQTTPublisher) Disconnect(ctx context.Context) error {
 }
 
 func (publisher *MQTTPublisher) buildEnvelope(measurements []Measurement) (mqttTelemetryEnvelope, error) {
-	byDevice := make(map[string][]mqttEnvelopePoint)
+	type deviceBatch struct {
+		timestamp time.Time
+		points    []mqttEnvelopePoint
+	}
+	byDevice := make(map[string]deviceBatch)
 	publishedAt := time.Time{}
+	var gatewaySequence uint64
 	for _, measurement := range measurements {
-		externalID := strings.TrimSpace(publisher.config.DeviceExternalIDByDeviceID[measurement.DeviceID])
-		if externalID == "" {
-			return mqttTelemetryEnvelope{}, fmt.Errorf("MQTT externalId is missing for device %s", measurement.DeviceID)
+		deviceID := strings.TrimSpace(publisher.config.DeviceExternalIDByDeviceID[measurement.DeviceID])
+		if deviceID == "" {
+			return mqttTelemetryEnvelope{}, fmt.Errorf("MQTT deviceId is missing for device %s", measurement.DeviceID)
 		}
 		point, ok := publisher.pointByKey[pointReference(measurement.DeviceID, measurement.TelemetryKey)]
 		if !ok {
@@ -255,29 +277,42 @@ func (publisher *MQTTPublisher) buildEnvelope(measurements []Measurement) (mqttT
 			value := strings.TrimSpace(point.Unit)
 			unit = &value
 		}
-		byDevice[externalID] = append(byDevice[externalID], mqttEnvelopePoint{
-			TelemetryKey: measurement.TelemetryKey,
-			Value:        measurement.Value,
-			ValueType:    point.ValueType,
-			Unit:         unit,
-			Quality:      measurement.Quality,
-			SampledAt:    measurement.ObservedAt.UTC().Format(time.RFC3339Nano),
-			Sequence:     measurement.Sequence,
+		quality := uint8(0)
+		if !strings.EqualFold(strings.TrimSpace(measurement.Quality), "GOOD") {
+			quality = 1
+		}
+		batch := byDevice[deviceID]
+		batch.points = append(batch.points, mqttEnvelopePoint{
+			Code:    strings.TrimSpace(point.PointCode),
+			Value:   measurement.Value,
+			Quality: quality,
+			Unit:    unit,
 		})
+		if measurement.ObservedAt.After(batch.timestamp) {
+			batch.timestamp = measurement.ObservedAt
+		}
+		byDevice[deviceID] = batch
 		if measurement.ObservedAt.After(publishedAt) {
 			publishedAt = measurement.ObservedAt
 		}
+		if measurement.Sequence > gatewaySequence {
+			gatewaySequence = measurement.Sequence
+		}
 	}
-	externalIDs := make([]string, 0, len(byDevice))
-	for externalID := range byDevice {
-		externalIDs = append(externalIDs, externalID)
+	deviceIDs := make([]string, 0, len(byDevice))
+	for deviceID := range byDevice {
+		deviceIDs = append(deviceIDs, deviceID)
 	}
-	sort.Strings(externalIDs)
-	devices := make([]mqttEnvelopeDevice, 0, len(externalIDs))
-	for _, externalID := range externalIDs {
-		points := byDevice[externalID]
-		sort.Slice(points, func(left, right int) bool { return points[left].TelemetryKey < points[right].TelemetryKey })
-		devices = append(devices, mqttEnvelopeDevice{ExternalDeviceID: externalID, Points: points})
+	sort.Strings(deviceIDs)
+	devices := make([]mqttEnvelopeDevice, 0, len(deviceIDs))
+	for _, deviceID := range deviceIDs {
+		batch := byDevice[deviceID]
+		sort.Slice(batch.points, func(left, right int) bool { return batch.points[left].Code < batch.points[right].Code })
+		devices = append(devices, mqttEnvelopeDevice{
+			DeviceID:        deviceID,
+			DeviceTimestamp: batch.timestamp.UTC().UnixMilli(),
+			Points:          batch.points,
+		})
 	}
 	messageID, err := newUUIDV7(publishedAt)
 	if err != nil {
@@ -286,12 +321,11 @@ func (publisher *MQTTPublisher) buildEnvelope(measurements []Measurement) (mqttT
 	return mqttTelemetryEnvelope{
 		SchemaVersion: mqttTelemetryEnvelopeSchemaVersion,
 		MessageID:     messageID,
-		TenantID:      publisher.config.TenantID,
-		SiteID:        publisher.config.SiteID,
 		GatewayID:     publisher.gatewayID,
-		PublishedAt:   publishedAt.UTC().Format(time.RFC3339Nano),
+		Timestamp:     publishedAt.UTC().UnixMilli(),
+		Sequence:      gatewaySequence,
 		Replay:        false,
-		Devices:       devices,
+		Payload:       mqttTelemetryPayload{Devices: devices},
 	}, nil
 }
 

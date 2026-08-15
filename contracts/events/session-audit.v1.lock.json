@@ -8,14 +8,14 @@
       "initiating_issuer": { "type": "string", "number": 2 },
       "executing_service": { "type": "string", "number": 3 },
       "executing_spiffe_id": { "type": "string", "number": 4 },
-      "acting_organization_id": { "type": "string", "number": 5 }
+      "tenant_id": { "type": "string", "number": 5 }
     },
     "SessionAuditEventV1": {
       "message_id": { "type": "string", "number": 1 },
       "schema_version": { "type": "uint32", "number": 2 },
       "message_type": { "type": "string", "number": 3 },
       "producer": { "type": "string", "number": 4 },
-      "organization_id": { "type": "string", "number": 5 },
+      "tenant_id": { "type": "string", "number": 5 },
       "partition_key": { "type": "string", "number": 6 },
       "aggregate_type": { "type": "string", "number": 7 },
       "aggregate_id": { "type": "string", "number": 8 },

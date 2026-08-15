@@ -82,12 +82,35 @@ func (sink *ClickHouseHistorySink) InsertObservations(ctx context.Context, obser
 		if !clickHousePayloadDigestPattern.MatchString(observation.PayloadSHA256) {
 			return errors.New("ClickHouse history payload digest must be lowercase SHA-256 hex")
 		}
-		if observation.AcceptanceStatus == string(ObservationAccepted) {
-			if observation.TenantID == nil || observation.OwningOrganizationID == nil || observation.SiteID == nil || observation.DeviceID == nil || observation.PointID == nil ||
-				!uuidV7Pattern.MatchString(*observation.TenantID) || !uuidV7Pattern.MatchString(*observation.OwningOrganizationID) ||
-				!uuidV7Pattern.MatchString(*observation.SiteID) || !uuidV7Pattern.MatchString(*observation.DeviceID) || !uuidV7Pattern.MatchString(*observation.PointID) ||
+		if observation.AcceptanceStatus == string(ObservationAccepted) ||
+			(observation.AcceptanceStatus == string(ObservationOutOfOrder) && observation.PointID != nil) {
+			if observation.TenantID == nil || observation.SiteID == nil || observation.DeviceID == nil || observation.PointID == nil ||
+				!uuidV7Pattern.MatchString(*observation.TenantID) || !uuidV7Pattern.MatchString(*observation.SiteID) ||
+				!uuidV7Pattern.MatchString(*observation.DeviceID) || !uuidV7Pattern.MatchString(*observation.PointID) ||
 				(observation.SensorID != nil && !uuidV7Pattern.MatchString(*observation.SensorID)) {
-				return errors.New("accepted ClickHouse history observation requires UUIDv7 Tenant, Organization, Site, Device and Point scope")
+				return errors.New("resolved ClickHouse history observation requires UUIDv7 Tenant, Site, Device and Point scope")
+			}
+			if observation.PointType == nil || observation.PointRevision == nil || *observation.PointRevision < 1 {
+				return errors.New("resolved ClickHouse history observation requires Point type and revision semantics")
+			}
+			if *observation.PointType == "COUNTER" {
+				if observation.ValueType == nil || *observation.ValueType != "NUMBER" || observation.CounterDecreaseMode == nil {
+					return errors.New("Counter history observation requires numeric value type and decrease semantics")
+				}
+				switch *observation.CounterDecreaseMode {
+				case "RESET_TO_ZERO", "INVALID":
+					if observation.CounterRolloverModulus != nil {
+						return errors.New("non-rollover Counter history observation cannot define a rollover modulus")
+					}
+				case "ROLLOVER":
+					if observation.CounterRolloverModulus == nil || *observation.CounterRolloverModulus <= 0 {
+						return errors.New("rollover Counter history observation requires a positive modulus")
+					}
+				default:
+					return errors.New("Counter history observation decrease semantics are invalid")
+				}
+			} else if observation.CounterDecreaseMode != nil || observation.CounterRolloverModulus != nil {
+				return errors.New("non-Counter history observation cannot define Counter semantics")
 			}
 		}
 		body, err := json.Marshal(observation)

@@ -29,7 +29,7 @@ func TestLoadRuntimeHTTPConfigFromExplicitCohortFile(t *testing.T) {
     {
       "dispatcherSpiffe": "spiffe://hvac.local/command-dispatcher/ahu-01",
       "verifierSpiffe": "spiffe://hvac.local/command-verifier/ahu-01",
-      "organizationId": "018f3e00-0000-7000-8000-000000000001",
+      "tenantId": "018f3e00-0000-7000-8000-000000000001",
       "siteId": "018f3e00-1000-7000-8000-000000000001",
       "deviceId": "018f3e00-3000-7000-8000-000000000001"
     }

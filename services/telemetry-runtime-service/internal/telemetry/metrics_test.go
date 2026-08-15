@@ -32,7 +32,7 @@ func TestS2MetricsUseBoundedLabelsAndBaseUnits(t *testing.T) {
 	metrics.observeRequest(InternalBatchSnapshotPath, 200, 250*time.Millisecond)
 	metrics.observeRequest(InternalSourceObservationPath, 200, 5*time.Millisecond)
 	metrics.observeIngest("rejected", "scope")
-	metrics.observeSourceLag("thingsboard", "rejected", now.Add(-3*time.Second), now)
+	metrics.observeSourceLag("other", "rejected", now.Add(-3*time.Second), now)
 	metrics.observeDataQuality(ObservationReceipt{Status: ObservationAccepted, Quality: QualityGood})
 	metrics.observeQuarantine("scope")
 	metrics.observeRecovery("success", "none", 10*time.Millisecond)

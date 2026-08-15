@@ -9,7 +9,7 @@ import (
 )
 
 type CommandPermission struct {
-	OrganizationID     string
+	TenantID           string
 	SiteID             string
 	DeviceID           string
 	Capability         commandmodel.Capability
@@ -27,7 +27,7 @@ type CommandAuthorizationFacts struct {
 	PolicyRevision              string
 	EmergencyRevocationRevision uint64
 	Principal                   PrincipalRecord
-	Memberships                 []OrganizationMembership
+	Memberships                 []TenantMembership
 	Permissions                 []CommandPermission
 }
 
@@ -68,14 +68,14 @@ func (store *staticCommandAuthorizationStore) LookupCommandAuthorization(_ conte
 
 func evaluateCommandAuthorization(ctx context.Context, store CommandAuthorizationStore, now time.Time, subjectIssuer, subject string, request commandauth.DecisionRequest) (commandauth.Decision, error) {
 	facts, err := store.LookupCommandAuthorization(ctx, AuthorizationLookup{
-		SubjectIssuer: subjectIssuer, Subject: subject, ActingOrganizationID: request.ActingOrganizationID,
+		SubjectIssuer: subjectIssuer, Subject: subject, TenantID: request.TenantID,
 	})
 	if err != nil {
 		return commandauth.Decision{}, err
 	}
 	decision := commandauth.Decision{
 		SubjectIssuer: subjectIssuer, Subject: subject,
-		ActingOrganizationID: request.ActingOrganizationID, SiteID: request.SiteID, DeviceID: request.DeviceID,
+		TenantID: request.TenantID, SiteID: request.SiteID, DeviceID: request.DeviceID,
 		Capability: request.Capability, CapabilityRevision: request.CapabilityRevision, Purpose: request.Purpose,
 		PolicyRevision: facts.PolicyRevision, EmergencyRevocationRevision: facts.EmergencyRevocationRevision,
 		ReasonCode: commandauth.ReasonDenyPrincipal, DecidedAt: commandauth.FormatInstant(now),
@@ -84,7 +84,7 @@ func evaluateCommandAuthorization(ctx context.Context, store CommandAuthorizatio
 		return decision, nil
 	}
 	decision.PrincipalID = facts.Principal.ID
-	membershipActive, _ := membershipState(facts.Memberships, request.ActingOrganizationID, now)
+	membershipActive, _ := membershipState(facts.Memberships, request.TenantID, now)
 	if !membershipActive {
 		decision.ReasonCode = commandauth.ReasonDenyMembership
 		return decision, nil
@@ -96,7 +96,7 @@ func evaluateCommandAuthorization(ctx context.Context, store CommandAuthorizatio
 		if permission.Status != FactStatusActive || !factEffective(permission.ValidFrom, permission.ValidTo, now) {
 			continue
 		}
-		if permission.OrganizationID != request.ActingOrganizationID || permission.SiteID != request.SiteID || permission.DeviceID != request.DeviceID {
+		if permission.TenantID != request.TenantID || permission.SiteID != request.SiteID || permission.DeviceID != request.DeviceID {
 			continue
 		}
 		if permission.Capability != request.Capability || permission.CapabilityRevision != request.CapabilityRevision {
@@ -144,7 +144,7 @@ func commandRiskOrdinal(value commandmodel.RiskLevel) int {
 
 func cloneCommandAuthorizationFacts(value CommandAuthorizationFacts) CommandAuthorizationFacts {
 	cloned := value
-	cloned.Memberships = append([]OrganizationMembership(nil), value.Memberships...)
+	cloned.Memberships = append([]TenantMembership(nil), value.Memberships...)
 	cloned.Permissions = append([]CommandPermission(nil), value.Permissions...)
 	return cloned
 }

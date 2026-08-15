@@ -46,7 +46,6 @@ func main() {
 	}
 	now := time.Now().UTC()
 	tenantID := requiredEnv("S3_LOCAL_TENANT_ID")
-	organizationID := requiredEnv("S3_LOCAL_ORGANIZATION_ID")
 	siteID := requiredEnv("S3_LOCAL_SITE_ID")
 	deviceID := requiredEnv("S3_LOCAL_DEVICE_ID")
 	pointID := requiredEnv("S3_LOCAL_COMMAND_POINT_ID")
@@ -62,7 +61,6 @@ func main() {
 
 	result, err := store.Submit(ctx, commandmodel.SubmitRequest{
 		TenantID:             tenantID,
-		OrganizationID:       organizationID,
 		SiteID:               siteID,
 		DeviceID:             deviceID,
 		PointID:              pointID,
@@ -85,7 +83,7 @@ func main() {
 			PolicyRevision:              "s3-local-policy-v1",
 			Purpose:                     commandmodel.AuthorizationCommandSubmit,
 			PrincipalID:                 principalID,
-			OrganizationID:              organizationID,
+			TenantID:                    tenantID,
 			SiteID:                      siteID,
 			DeviceID:                    deviceID,
 			Capability:                  capability,

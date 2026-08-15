@@ -22,7 +22,7 @@ const presenceStates = new Set(['ONLINE', 'OFFLINE', 'UNKNOWN']);
 const readinessStates = new Set(['CURRENT', 'DEGRADED', 'INCOMPLETE', 'NOT_APPLICABLE']);
 const displayStates = new Set(['ONLINE', 'OFFLINE', 'STALE', 'UNKNOWN', 'UNAVAILABLE']);
 const freshnessStates = new Set(['FRESH', 'STALE']);
-const qualityStates = new Set(['GOOD', 'SUSPECT']);
+const qualityStates = new Set(['GOOD', 'PARTIAL', 'ESTIMATED', 'MANUAL', 'STALE', 'INVALID']);
 const qualityReasons = new Set([
   'SOURCE_UNTRUSTED',
   'TYPE_MISMATCH',
@@ -178,7 +178,9 @@ function parseTelemetryKeyState(value: unknown, label: string): TelemetryKeyStat
       sampledAt: instant(input.sampledAt, `${label}.sampledAt`),
       receivedAt: instant(input.receivedAt, `${label}.receivedAt`),
       freshness: enumeration(input.freshness, freshnessStates, `${label}.freshness`) as 'FRESH' | 'STALE',
-      quality: enumeration(input.quality, qualityStates, `${label}.quality`) as 'GOOD' | 'SUSPECT',
+      quality: enumeration(input.quality, qualityStates, `${label}.quality`) as TelemetryKeyState extends infer T
+        ? T extends { state: 'PRESENT'; quality: infer Q } ? Q : never
+        : never,
       qualityReasons: stringArray(input.qualityReasons, qualityReasons, `${label}.qualityReasons`) as TelemetryKeyState extends infer T
         ? T extends { state: 'PRESENT'; qualityReasons: infer Q } ? Q : never
         : never,
@@ -228,15 +230,15 @@ export function normalizeTarget(target: { clientSubscriptionId: string; deviceId
 export function parseSnapshot(value: unknown, expectedDeviceId: string, expectedKeys: ReadonlyArray<string>): DeviceObservationSnapshot {
   const input = record(value, 'snapshot');
   exactKeys(input, [
-    'schemaVersion', 'deviceId', 'owningOrganizationId', 'siteId', 'businessRevision', 'evaluatedAt',
+    'schemaVersion', 'deviceId', 'tenantId', 'siteId', 'businessRevision', 'evaluatedAt',
     'evaluationAvailability', 'availabilityReasons', 'presence', 'telemetryReadiness', 'displayState', 'values',
   ], 'snapshot');
   if (input.schemaVersion !== 1) fail('schema', 'snapshot schemaVersion is not supported');
   const deviceId = string(input.deviceId, 'snapshot.deviceId');
   if (deviceId !== expectedDeviceId) fail('scope', 'snapshot Device does not match the subscription scope');
-  const owningOrganizationId = string(input.owningOrganizationId, 'snapshot.owningOrganizationId');
+  const tenantId = string(input.tenantId, 'snapshot.tenantId');
   const siteId = string(input.siteId, 'snapshot.siteId');
-  if (!uuidV7Pattern.test(owningOrganizationId) || !uuidV7Pattern.test(siteId)) fail('shape', 'snapshot owner/site identifiers are invalid');
+  if (!uuidV7Pattern.test(tenantId) || !uuidV7Pattern.test(siteId)) fail('shape', 'snapshot tenant/site identifiers are invalid');
   const values = parseKeyStates(input.values, 'snapshot.values');
   if (values.length !== expectedKeys.length || values.some((item, index) => item.key !== expectedKeys[index])) {
     fail('scope', 'snapshot keys do not exactly match the subscription scope');
@@ -245,7 +247,7 @@ export function parseSnapshot(value: unknown, expectedDeviceId: string, expected
   return {
     schemaVersion: 1,
     deviceId,
-    owningOrganizationId,
+    tenantId,
     siteId,
     businessRevision: integer(input.businessRevision, 'snapshot.businessRevision', 1),
     evaluatedAt: instant(input.evaluatedAt, 'snapshot.evaluatedAt'),

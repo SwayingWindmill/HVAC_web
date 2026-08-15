@@ -43,63 +43,53 @@ export const centralPlantDeviceEndpoints = Object.freeze(centralPlantDevices.map
 const equipmentSubject = (slug) => ({ subjectType: 'EQUIPMENT', subjectId: `equipment-${slug}` });
 const siteSubject = () => ({ subjectType: 'SITE', subjectId: '' });
 
+// Sensor is optional physical traceability only. Device-native measurement
+// channels, meters and weather stations are modeled directly as Device -> Point.
 export const centralPlantSensors = Object.freeze([
-  { id: 'sensor-ch01-chws-temp', deviceId: 'CHILLER-01', mountedAreaId: 'plant-room', ...equipmentSubject('chiller-01'), name: 'CH-01 冷冻水出水温度传感器', type: 'TEMPERATURE', mode: 'WIRED' },
-  { id: 'sensor-ch01-chwr-temp', deviceId: 'CHILLER-01', mountedAreaId: 'plant-room', ...equipmentSubject('chiller-01'), name: 'CH-01 冷冻水回水温度传感器', type: 'TEMPERATURE', mode: 'WIRED' },
-  { id: 'sensor-ch01-cw-entering-temp', deviceId: 'CHILLER-01', mountedAreaId: 'plant-room', ...equipmentSubject('chiller-01'), name: 'CH-01 冷却水进水温度传感器', type: 'TEMPERATURE', mode: 'WIRED' },
-  { id: 'sensor-ch01-power', deviceId: 'CHILLER-01', mountedAreaId: 'plant-room', ...equipmentSubject('chiller-01'), name: 'CH-01 功率测量', type: 'POWER', mode: 'EMBEDDED' },
-  { id: 'sensor-chwp01-flow', deviceId: 'CHWP-01', mountedAreaId: 'plant-room', ...equipmentSubject('chwp-01'), name: 'CHWP-01 流量传感器', type: 'FLOW', mode: 'WIRED' },
-  { id: 'sensor-chwp01-power', deviceId: 'CHWP-01', mountedAreaId: 'plant-room', ...equipmentSubject('chwp-01'), name: 'CHWP-01 功率测量', type: 'POWER', mode: 'EMBEDDED' },
-  { id: 'sensor-cwp01-flow', deviceId: 'CWP-01', mountedAreaId: 'plant-room', ...equipmentSubject('cwp-01'), name: 'CWP-01 流量传感器', type: 'FLOW', mode: 'WIRED' },
-  { id: 'sensor-cwp01-power', deviceId: 'CWP-01', mountedAreaId: 'plant-room', ...equipmentSubject('cwp-01'), name: 'CWP-01 功率测量', type: 'POWER', mode: 'EMBEDDED' },
-  { id: 'sensor-ct01-entering-temp', deviceId: 'CT-01', mountedAreaId: 'rooftop', ...equipmentSubject('ct-01'), name: 'CT-01 进水温度传感器', type: 'TEMPERATURE', mode: 'WIRED' },
-  { id: 'sensor-ct01-leaving-temp', deviceId: 'CT-01', mountedAreaId: 'rooftop', ...equipmentSubject('ct-01'), name: 'CT-01 出水温度传感器', type: 'TEMPERATURE', mode: 'WIRED' },
-  { id: 'sensor-ct01-wet-bulb', deviceId: 'CT-01', mountedAreaId: 'rooftop', ...siteSubject(), name: 'CT-01 本地湿球温度传感器', type: 'TEMPERATURE', mode: 'WIRED' },
-  { id: 'sensor-ct01-power', deviceId: 'CT-01', mountedAreaId: 'rooftop', ...equipmentSubject('ct-01'), name: 'CT-01 功率测量', type: 'POWER', mode: 'EMBEDDED' },
-  { id: 'sensor-hvac-meter', deviceId: 'METER-HVAC-TOTAL', mountedAreaId: 'plant-room', ...siteSubject(), name: '中央空调总电表测量单元', type: 'ELECTRICAL_METER', mode: 'INDEPENDENT_DEVICE' },
-  { id: 'sensor-btu-meter', deviceId: 'BTU-METER-01', mountedAreaId: 'plant-room', ...siteSubject(), name: '中央空调总冷量表测量单元', type: 'THERMAL_METER', mode: 'INDEPENDENT_DEVICE' },
-  { id: 'sensor-weather-station', deviceId: 'WEATHER-STATION-01', mountedAreaId: 'outdoor', ...siteSubject(), name: '室外气象站', type: 'WEATHER', mode: 'INDEPENDENT_DEVICE' },
+  { id: 'sensor-ch01-chws-temp', deviceId: 'CHILLER-01', mountedAreaId: 'plant-room', name: 'CH-01 冷冻水出水温度探头', type: 'TEMPERATURE', serialNumber: 'SIM-PT1000-CH01-CHWS', calibrationDueAt: '2027-08-01T00:00:00Z' },
+  { id: 'sensor-ch01-chwr-temp', deviceId: 'CHILLER-01', mountedAreaId: 'plant-room', name: 'CH-01 冷冻水回水温度探头', type: 'TEMPERATURE', serialNumber: 'SIM-PT1000-CH01-CHWR', calibrationDueAt: '2027-08-01T00:00:00Z' },
+  { id: 'sensor-ch01-cw-entering-temp', deviceId: 'CHILLER-01', mountedAreaId: 'plant-room', name: 'CH-01 冷却水进水温度探头', type: 'TEMPERATURE', serialNumber: 'SIM-PT1000-CH01-CWE', calibrationDueAt: '2027-08-01T00:00:00Z' },
+  { id: 'sensor-chwp01-flow', deviceId: 'CHWP-01', mountedAreaId: 'plant-room', name: 'CHWP-01 流量探头', type: 'FLOW', serialNumber: 'SIM-FLOW-CHWP01', calibrationDueAt: '2027-08-01T00:00:00Z' },
+  { id: 'sensor-cwp01-flow', deviceId: 'CWP-01', mountedAreaId: 'plant-room', name: 'CWP-01 流量探头', type: 'FLOW', serialNumber: 'SIM-FLOW-CWP01', calibrationDueAt: '2027-08-01T00:00:00Z' },
+  { id: 'sensor-ct01-entering-temp', deviceId: 'CT-01', mountedAreaId: 'rooftop', name: 'CT-01 进水温度探头', type: 'TEMPERATURE', serialNumber: 'SIM-PT1000-CT01-E', calibrationDueAt: '2027-08-01T00:00:00Z' },
+  { id: 'sensor-ct01-leaving-temp', deviceId: 'CT-01', mountedAreaId: 'rooftop', name: 'CT-01 出水温度探头', type: 'TEMPERATURE', serialNumber: 'SIM-PT1000-CT01-L', calibrationDueAt: '2027-08-01T00:00:00Z' },
+  { id: 'sensor-ct01-wet-bulb', deviceId: 'CT-01', mountedAreaId: 'rooftop', name: 'CT-01 本地湿球温度探头', type: 'TEMPERATURE', serialNumber: 'SIM-WB-CT01', calibrationDueAt: '2027-08-01T00:00:00Z' },
 ].map(Object.freeze));
 
 const sensorByDeviceSource = new Map([
   ['CHILLER-01/leavingChilledWaterTemperatureC', 'sensor-ch01-chws-temp'],
   ['CHILLER-01/enteringChilledWaterTemperatureC', 'sensor-ch01-chwr-temp'],
   ['CHILLER-01/enteringCoolingWaterTemperatureC', 'sensor-ch01-cw-entering-temp'],
-  ['CHILLER-01/powerKw', 'sensor-ch01-power'],
   ['CHWP-01/flowRateM3h', 'sensor-chwp01-flow'],
-  ['CHWP-01/powerKw', 'sensor-chwp01-power'],
   ['CWP-01/flowRateM3h', 'sensor-cwp01-flow'],
-  ['CWP-01/powerKw', 'sensor-cwp01-power'],
   ['CT-01/enteringWaterTemperatureC', 'sensor-ct01-entering-temp'],
   ['CT-01/leavingWaterTemperatureC', 'sensor-ct01-leaving-temp'],
   ['CT-01/ambientWetBulbTemperatureC', 'sensor-ct01-wet-bulb'],
-  ['CT-01/powerKw', 'sensor-ct01-power'],
-  ['METER-HVAC-TOTAL/activePowerKw', 'sensor-hvac-meter'],
-  ['METER-HVAC-TOTAL/energyKwh', 'sensor-hvac-meter'],
-  ['METER-HVAC-TOTAL/powerFactor', 'sensor-hvac-meter'],
-  ['METER-HVAC-TOTAL/frequencyHz', 'sensor-hvac-meter'],
-  ['BTU-METER-01/supplyWaterTemperatureC', 'sensor-btu-meter'],
-  ['BTU-METER-01/returnWaterTemperatureC', 'sensor-btu-meter'],
-  ['BTU-METER-01/flowRateM3h', 'sensor-btu-meter'],
-  ['BTU-METER-01/accumulatedCoolingEnergyKwh', 'sensor-btu-meter'],
-  ['WEATHER-STATION-01/ambientDryBulbTemperatureC', 'sensor-weather-station'],
-  ['WEATHER-STATION-01/ambientWetBulbTemperatureC', 'sensor-weather-station'],
-  ['WEATHER-STATION-01/relativeHumidityPct', 'sensor-weather-station'],
 ]);
 
 const stateSources = new Set(['runState', 'businessRevision', 'faultCode']);
-const feedbackSources = new Set(['chilledWaterTemperatureSetpointC', 'compressorLoadPct', 'loadLimitPct', 'frequencyHz', 'fanSpeedPct']);
-const calculatedPointMeta = new Map([
-  ['CHILLER-01/chiller.cooling_capacity', { formulaRevision: 'chiller-cooling-balance:v1', inputPointRefs: ['CHWP-01/chwp.flow_rate', 'CHILLER-01/chiller.entering_chilled_water_temperature', 'CHILLER-01/chiller.leaving_chilled_water_temperature'] }],
-  ['CHILLER-01/chiller.cop', { formulaRevision: 'chiller-cop:v1', inputPointRefs: ['CHILLER-01/chiller.cooling_capacity', 'CHILLER-01/chiller.power'] }],
-  ['CHWP-01/chwp.speed', { formulaRevision: 'pump-speed-from-frequency:v1', inputPointRefs: ['CHWP-01/chwp.frequency'] }],
-  ['CWP-01/cwp.speed', { formulaRevision: 'pump-speed-from-frequency:v1', inputPointRefs: ['CWP-01/cwp.frequency'] }],
-  ['CT-01/cooling_tower.approach_temperature', { formulaRevision: 'cooling-tower-approach:v1', inputPointRefs: ['CT-01/cooling_tower.leaving_water_temperature', 'CT-01/cooling_tower.ambient_wet_bulb_temperature'] }],
-  ['BTU-METER-01/btu_meter.temperature_difference', { formulaRevision: 'water-temperature-difference:v1', inputPointRefs: ['BTU-METER-01/btu_meter.return_water_temperature', 'BTU-METER-01/btu_meter.supply_water_temperature'] }],
-  ['BTU-METER-01/btu_meter.instant_cooling_capacity', { formulaRevision: 'water-cooling-capacity:v1', inputPointRefs: ['BTU-METER-01/btu_meter.flow_rate', 'BTU-METER-01/btu_meter.temperature_difference'] }],
-]);
+const settingSources = new Set(['chilledWaterTemperatureSetpointC', 'compressorLoadPct', 'loadLimitPct', 'frequencyHz', 'fanSpeedPct']);
+const counterSources = new Set(['energyKwh', 'accumulatedCoolingEnergyKwh']);
 
-export const centralPlantCalculatedPointCount = calculatedPointMeta.size;
+const camelToSnake = (value) => value
+  .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+  .replace(/[^A-Za-z0-9]+/g, '_')
+  .replace(/^_+|_+$/g, '')
+  .toLowerCase();
+
+const telemetryPointCode = (telemetryKey, sourceKey) => {
+  const segment = telemetryKey.split('.').at(-1) ?? sourceKey;
+  return camelToSnake(segment);
+};
+
+const commandPointCode = (sourceKey) => camelToSnake(sourceKey);
+
+const pointTypeFor = (sourceKey) => {
+  if (stateSources.has(sourceKey)) return 'STATE';
+  if (settingSources.has(sourceKey)) return 'SETTING';
+  if (counterSources.has(sourceKey)) return 'COUNTER';
+  return 'TELEMETRY';
+};
 
 const commandPointBase = (deviceId, equipmentSlug, sourceKey, telemetryKey, name, valueType, metadata, unit = '') => ({
   deviceId,
@@ -107,8 +97,9 @@ const commandPointBase = (deviceId, equipmentSlug, sourceKey, telemetryKey, name
   ...equipmentSubject(equipmentSlug),
   sourceKey,
   telemetryKey,
+  pointCode: commandPointCode(sourceKey),
   name,
-  kind: 'COMMAND',
+  pointType: 'COMMAND',
   valueType,
   ...(unit ? { unit } : {}),
   writable: true,
@@ -171,12 +162,7 @@ const humanize = (value) => value
   .replace(/\s+/g, ' ')
   .trim();
 
-const subjectForDevice = (deviceId, sourceKey) => {
-  const sensorId = sensorByDeviceSource.get(`${deviceId}/${sourceKey}`);
-  if (sensorId) {
-    const sensor = centralPlantSensors.find((candidate) => candidate.id === sensorId);
-    return { subjectType: sensor.subjectType, subjectId: sensor.subjectId };
-  }
+const subjectForDevice = (deviceId) => {
   if (deviceId === 'METER-HVAC-TOTAL' || deviceId === 'BTU-METER-01' || deviceId === 'WEATHER-STATION-01') return siteSubject();
   const endpoint = centralPlantDeviceEndpoints.find((candidate) => candidate.id === deviceId);
   return equipmentSubject(endpoint.equipmentIds[0].replace(/^equipment-/, ''));
@@ -184,33 +170,33 @@ const subjectForDevice = (deviceId, sourceKey) => {
 
 export function buildCentralPlantSimulatorPoints(adapterTemplate) {
   if (!Array.isArray(adapterTemplate?.devices) || adapterTemplate.devices.length !== centralPlantDeviceEndpoints.length) {
-    throw new Error('adapter template and central plant Device Endpoint contract differ');
+    throw new Error('adapter template and central plant Device contract differ');
   }
   return adapterTemplate.devices.flatMap((device, deviceIndex) => {
     const endpoint = centralPlantDeviceEndpoints[deviceIndex];
     return device.points.map((point) => {
-      const identity = `${endpoint.id}/${point.telemetryKey}`;
-      const calculated = calculatedPointMeta.get(identity);
       const sensorId = sensorByDeviceSource.get(`${endpoint.id}/${point.sourceKey}`) ?? '';
-      const subject = subjectForDevice(endpoint.id, point.sourceKey);
-      const kind = calculated ? 'CALCULATED' : stateSources.has(point.sourceKey) ? 'STATE' : feedbackSources.has(point.sourceKey) ? 'FEEDBACK' : 'MEASURED';
-      const sampleInterval = kind === 'STATE' ? '2s' : '1s';
-      const publishInterval = kind === 'STATE' ? '5s' : '2s';
+      const subject = subjectForDevice(endpoint.id);
+      const pointType = pointTypeFor(point.sourceKey);
+      const sampleInterval = pointType === 'STATE' ? '2s' : '1s';
+      const publishInterval = pointType === 'STATE' ? '5s' : '2s';
       return Object.freeze({
         deviceId: endpoint.id,
         sensorId,
         ...subject,
         sourceKey: point.sourceKey,
         telemetryKey: point.telemetryKey,
+        pointCode: telemetryPointCode(point.telemetryKey, point.sourceKey),
         name: humanize(point.telemetryKey),
-        kind,
+        pointType,
         valueType: point.valueType,
         ...(point.unit ? { unit: point.unit } : {}),
         writable: false,
         sampleInterval,
         publishInterval,
-        staleAfter: kind === 'STATE' ? '15s' : '10s',
-        ...(calculated ? calculated : { sourceProtocol: 'SIMULATED', sourceAddress: `${endpoint.id}:${point.sourceKey}` }),
+        staleAfter: pointType === 'STATE' ? '15s' : '10s',
+        sourceProtocol: 'SIMULATED',
+        sourceAddress: `${endpoint.id}:${point.sourceKey}`,
       });
     });
   });
@@ -220,7 +206,6 @@ export function buildCentralPlantSimulatorConfig(adapterTemplate, overrides = {}
   return {
     schemaVersion: 2,
     gatewayId: 'EG8200-COMMERCIAL-001',
-    thingsBoardBaseUrl: overrides.thingsBoardBaseUrl ?? 'http://localhost:8080',
     publishInterval: overrides.publishInterval ?? '5s',
     plant: {
       ambientDryBulbC: 34,
@@ -240,6 +225,5 @@ export function buildCentralPlantSimulatorConfig(adapterTemplate, overrides = {}
     devices: centralPlantDeviceEndpoints.map(({ id, areaId, name, type, equipmentIds }) => ({ id, areaId, name, type, equipmentIds: [...equipmentIds] })),
     sensors: centralPlantSensors.map((sensor) => ({ ...sensor })),
     points: buildCentralPlantSimulatorPoints(adapterTemplate).map((point) => ({ ...point })),
-    credentialEnvByDeviceId: Object.fromEntries(centralPlantDeviceEndpoints.map((endpoint) => [endpoint.id, `TB_TOKEN_${endpoint.id.replace(/[^A-Za-z0-9]+/g, '_')}`])),
   };
 }

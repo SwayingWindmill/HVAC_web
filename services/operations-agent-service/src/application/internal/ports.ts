@@ -37,7 +37,7 @@ export class InvestigationRepositoryConflictError extends Error {
 export interface InvestigationRepository {
   get(investigationId: string): Promise<OperationsInvestigation | null>;
   listByScope?(input: {
-    readonly organizationId: string;
+    readonly tenantId: string;
     readonly siteId: string;
     readonly limit: number;
   }): Promise<readonly OperationsInvestigation[]>;
@@ -114,7 +114,7 @@ export interface EnergyAnalyticsReadRequest {
   readonly requestId: string;
   readonly tool: 'analytics.getEnergySeries';
   readonly input: {
-    readonly organizationId: string;
+    readonly tenantId: string;
     readonly siteId: string;
     readonly energyType: 'electricity';
     readonly granularity: 'hour' | 'day' | 'month';

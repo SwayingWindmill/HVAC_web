@@ -25,10 +25,10 @@ const enabledEnvironment = (overrides = {}) => ({
   ...overrides,
 });
 
-const organizationId = '0198f5c0-7c00-7000-8000-000000000001';
+const tenantId = '0198f5c0-7c00-7000-8000-000000000001';
 const siteId = '0198f5c0-7c00-7000-8000-000000000002';
 const investigationId = 'investigation-001';
-const scope = Object.freeze({ organizationId, siteId, equipmentId: null, deviceId: null });
+const scope = Object.freeze({ tenantId, siteId, equipmentId: null, deviceId: null });
 
 const energySeries = (request, energyPerHour) => {
   const from = Date.parse(request.input.from);
@@ -64,7 +64,7 @@ const ownerResultFactory = async (request) => {
       provenance: 'platform-core-service:registry-site/v1',
       payload: {
         kind: 'SITE',
-        site: { id: siteId, owningOrganizationId: organizationId, timezone: 'Asia/Tokyo' },
+        site: { id: siteId, tenantId: tenantId, timezone: 'Asia/Tokyo' },
       },
     };
   }
@@ -249,7 +249,7 @@ test('environment composition injects one bounded Synthesizer into the real Inve
   );
 
   const started = await coordinator.start({
-    organizationId: '0198f5c0-7c00-7000-8000-000000000001',
+    tenantId: '0198f5c0-7c00-7000-8000-000000000001',
     siteId: '0198f5c0-7c00-7000-8000-000000000002',
   });
   const completed = await coordinator.advance({ investigationId: started.id });
@@ -281,7 +281,7 @@ test('Finding Provider is blocked before invocation when the Run model budget is
     },
   );
 
-  const started = await coordinator.start({ organizationId, siteId });
+  const started = await coordinator.start({ tenantId, siteId });
   const blocked = await coordinator.advance({ investigationId: started.id });
   assert.equal(synthesizer.calls.length, 0);
   assert.equal(blocked.findings.length, 0);

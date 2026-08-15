@@ -8,7 +8,7 @@ import {
 import { runRealAssetsProtectedRequest } from '../apps/hvac-web/src/real/assets/protected-request.ts';
 import { createRealAssetsTelemetryRuntime } from '../apps/hvac-web/src/real/assets/telemetry-runtime.ts';
 
-const organizationId = '01900000-0000-7000-8000-000000000001';
+const tenantId = '01900000-0000-7000-8000-000000000001';
 const siteId = '01900000-0001-7000-8000-000000000001';
 const equipmentId = '01900000-0002-7000-8000-000000000001';
 const areaId = '01900000-0005-7000-8000-000000000001';
@@ -23,7 +23,7 @@ function id(kind, index) {
 
 function device(index, overrides = {}) {
   return {
-    id: id(3, index), owningOrganizationId: organizationId, siteId,
+    id: id(3, index), tenantId: tenantId, siteId,
     code: `DEV-${index}`, displayName: `Device ${index}`,
     deviceType: index % 2 === 0 ? 'CHILLER' : 'vendor-special-controller',
     status: 'ACTIVE', revision: index + 1,
@@ -34,7 +34,7 @@ function device(index, overrides = {}) {
 
 function equipment(overrides = {}) {
   return {
-    id: equipmentId, owningOrganizationId: organizationId, siteId,
+    id: equipmentId, tenantId: tenantId, siteId,
     code: 'CHILLER-A', displayName: 'Chiller A', equipmentType: 'CHILLER', status: 'ACTIVE', revision: 1,
     createdAt: '2026-07-01T00:00:00.000Z', updatedAt: '2026-07-30T00:00:00.000Z',
     ...overrides,
@@ -43,7 +43,7 @@ function equipment(overrides = {}) {
 
 function area(overrides = {}) {
   return {
-    id: areaId, owningOrganizationId: organizationId, siteId, parentAreaId: null,
+    id: areaId, tenantId: tenantId, siteId, parentAreaId: null,
     code: 'CENTRAL-PLANT', displayName: 'Central Plant', areaType: 'PLANT_ROOM', status: 'ACTIVE', revision: 1,
     createdAt: '2026-07-01T00:00:00.000Z', updatedAt: '2026-07-30T00:00:00.000Z',
     ...overrides,
@@ -52,7 +52,7 @@ function area(overrides = {}) {
 
 function sensor(overrides = {}) {
   return {
-    id: sensorId, owningOrganizationId: organizationId, siteId,
+    id: sensorId, tenantId: tenantId, siteId,
     code: 'SENSOR-1', displayName: 'Sensor 1', sensorType: 'TEMPERATURE',
     manufacturer: null, model: null, serialNumber: null, calibrationDueAt: null, metadata: {},
     status: 'ACTIVE', revision: 1,
@@ -61,16 +61,16 @@ function sensor(overrides = {}) {
   };
 }
 
-function point(pointId, pointKind, overrides = {}) {
+function point(pointId, pointType = 'TELEMETRY', overrides = {}) {
+  const pointCode = pointType === 'STATE' ? 'run_state' : 'temperature';
   return {
-    id: pointId, owningOrganizationId: organizationId, siteId,
-    reportingDeviceId: device(1).id, sensorId: pointKind === 'CALCULATED' ? null : sensorId,
-    pointKey: pointKind === 'CALCULATED' ? 'plant.delta_t' : 'plant.temperature',
-    sourceKey: pointKind === 'CALCULATED' ? 'calculated.delta_t' : 'sensor.temperature',
-    displayName: pointKind === 'CALCULATED' ? 'Delta T' : 'Temperature',
-    pointKind, valueType: 'NUMBER', unit: 'Cel', writable: false,
+    id: pointId, tenantId, siteId,
+    reportingDeviceId: device(1).id, sensorId,
+    pointCode,
+    sourceKey: `sensor.${pointCode}`,
+    displayName: pointType === 'STATE' ? 'Run State' : 'Temperature',
+    pointType, valueType: pointType === 'STATE' ? 'BOOLEAN' : 'NUMBER', unit: pointType === 'STATE' ? null : 'Cel', writable: false,
     sampleIntervalMs: 1000, publishIntervalMs: 1000, staleAfterMs: 5000,
-    formulaRevision: pointKind === 'CALCULATED' ? 'formula-v1' : null,
     sourceMetadata: {}, status: 'ACTIVE', revision: 1,
     createdAt: '2026-07-01T00:00:00.000Z', updatedAt: '2026-07-30T00:00:00.000Z',
     ...overrides,
@@ -79,7 +79,7 @@ function point(pointId, pointKind, overrides = {}) {
 
 function relationship(index, fromType, fromId, toType, toId, role, overrides = {}) {
   return {
-    id: id(8, index), owningOrganizationId: organizationId, siteId,
+    id: id(8, index), tenantId, siteId,
     fromType, fromId, toType, toId, role, status: 'ACTIVE',
     validFrom: '2026-07-01T00:00:00.000Z', validTo: null, revision: 1,
     createdAt: '2026-07-01T00:00:00.000Z', updatedAt: '2026-07-30T00:00:00.000Z',
@@ -90,25 +90,21 @@ function relationship(index, fromType, fromId, toType, toId, role, overrides = {
 function assetModel(overrides = {}) {
   const visibleDevice = device(1);
   const model = {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    tenantId,
     siteId,
     areas: [area()],
     equipment: [equipment()],
     devices: [visibleDevice],
     sensors: [sensor()],
-    telemetryPoints: [point(measuredPointId, 'MEASURED'), point(calculatedPointId, 'CALCULATED')],
+    telemetryPoints: [point(measuredPointId), point(calculatedPointId, 'STATE')],
     relationships: [
       relationship(1, 'EQUIPMENT', equipmentId, 'AREA', areaId, 'INSTALLED_IN'),
       relationship(2, 'DEVICE', visibleDevice.id, 'EQUIPMENT', equipmentId, 'PRIMARY_CONTROLLER'),
       relationship(3, 'SENSOR', sensorId, 'DEVICE', visibleDevice.id, 'INDEPENDENT_DEVICE'),
     ],
-    calculatedPointInputs: [{
-      owningOrganizationId: organizationId, siteId, calculatedPointId, inputPointId: measuredPointId,
-      inputRole: 'TEMPERATURE', ordinal: 0, formulaRevision: 'formula-v1',
-    }],
     counts: {
-      areas: 1, equipment: 1, deviceEndpoints: 1, sensors: 1,
-      telemetryPoints: 2, calculatedPoints: 1, independentSensorDevices: 1,
+      areas: 1, equipment: 1, deviceEndpoints: 1, physicalSensors: 1, points: 2,
     },
   };
   return { ...model, ...overrides };
@@ -120,7 +116,7 @@ function platformResponse(data, routePolicyRevision = '12') {
 
 function snapshot(target) {
   return {
-    schemaVersion: 1, deviceId: target.deviceId, owningOrganizationId: organizationId, siteId, businessRevision: 10,
+    schemaVersion: 1, deviceId: target.deviceId, tenantId: tenantId, siteId, businessRevision: 10,
     evaluatedAt: '2026-07-30T10:00:00.000Z', evaluationAvailability: 'AVAILABLE', availabilityReasons: [],
     presence: {
       applicability: 'APPLICABLE', currentState: 'ONLINE', lastSeenAt: '2026-07-30T09:59:01.000Z', policyRevision: 2, lastKnown: null,
@@ -144,10 +140,10 @@ test('Registry loader reads one atomic Site Asset Model and preserves route-poli
       return platformResponse(model);
     },
   };
-  const result = await loadRealAssetsRegistry({ client, organizationId, siteId, signal });
+  const result = await loadRealAssetsRegistry({ client, tenantId, siteId, signal });
   assert.equal(result.assetModel.devices.length, 1);
   assert.equal(result.assetModel.telemetryPoints.length, 2);
-  assert.equal(result.assetModel.counts.independentSensorDevices, 1);
+  assert.equal(result.assetModel.counts.physicalSensors, 1);
   assert.equal(result.routePolicyRevision, '12');
   assert.deepEqual(calls, [[siteId, signal]]);
 });
@@ -159,38 +155,36 @@ test('Registry loader rejects scope drift and invisible relationship targets', a
     })),
   };
   await assert.rejects(
-    loadRealAssetsRegistry({ client, organizationId, siteId, signal: new AbortController().signal }),
+    loadRealAssetsRegistry({ client, tenantId, siteId, signal: new AbortController().signal }),
     /outside the visible Site model/,
   );
   client.getSiteAssetModel = async () => platformResponse(assetModel({ devices: [device(1, { siteId: id(1, 99) })] }));
   await assert.rejects(
-    loadRealAssetsRegistry({ client, organizationId, siteId, signal: new AbortController().signal }),
-    /crossed the authenticated Organization or Site scope/,
+    loadRealAssetsRegistry({ client, tenantId, siteId, signal: new AbortController().signal }),
+    /crossed the Tenant or Site scope/,
   );
 });
 
-test('Registry loader rejects count and calculated-input drift in the atomic graph', async () => {
+test('Registry loader rejects count drift and Point references outside the atomic graph', async () => {
   const countDriftClient = {
     getSiteAssetModel: async () => platformResponse(assetModel({
-      counts: { ...assetModel().counts, telemetryPoints: 3 },
+      counts: { ...assetModel().counts, points: 3 },
     })),
   };
   await assert.rejects(
-    loadRealAssetsRegistry({ client: countDriftClient, organizationId, siteId, signal: new AbortController().signal }),
+    loadRealAssetsRegistry({ client: countDriftClient, tenantId, siteId, signal: new AbortController().signal }),
     /counts do not match/,
   );
 
-  const inputDriftClient = {
+  const pointDriftClient = {
     getSiteAssetModel: async () => platformResponse(assetModel({
-      calculatedPointInputs: [{
-        owningOrganizationId: organizationId, siteId, calculatedPointId: measuredPointId, inputPointId: calculatedPointId,
-        inputRole: 'INVALID', ordinal: 0, formulaRevision: 'formula-v1',
-      }],
+      telemetryPoints: [point(measuredPointId, 'TELEMETRY', { reportingDeviceId: id(3, 99) })],
+      counts: { ...assetModel().counts, points: 1 },
     })),
   };
   await assert.rejects(
-    loadRealAssetsRegistry({ client: inputDriftClient, organizationId, siteId, signal: new AbortController().signal }),
-    /referenced an invalid Point/,
+    loadRealAssetsRegistry({ client: pointDriftClient, tenantId, siteId, signal: new AbortController().signal }),
+    /invisible Device Endpoint or Sensor/,
   );
 });
 
@@ -210,7 +204,7 @@ test('Current-state loader splits 200 Devices into two exact bounded batches', a
     },
   };
   const result = await loadRealAssetsCurrentState({
-    client, devices, telemetryPoints: [], organizationId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal,
+    client, devices, telemetryPoints: [], tenantId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal,
   });
   assert.equal(result.requestCount, 2);
   assert.equal(result.byDeviceId.size, 200);
@@ -226,9 +220,9 @@ test('Current-state loader splits 200 Devices into two exact bounded batches', a
 test('Current-state loader selects every registered Telemetry Point key for each Device Endpoint', async () => {
   const devices = [device(1), device(2)];
   const telemetryPoints = [
-    point(measuredPointId, 'MEASURED', { reportingDeviceId: devices[0].id, pointKey: 'chiller.power' }),
-    point(calculatedPointId, 'CALCULATED', { reportingDeviceId: devices[0].id, pointKey: 'chiller.cop' }),
-    point(id(7, 3), 'MEASURED', { reportingDeviceId: devices[1].id, pointKey: 'weather.relative_humidity' }),
+    point(measuredPointId, 'TELEMETRY', { reportingDeviceId: devices[0].id, pointCode: 'chiller_power' }),
+    point(calculatedPointId, 'TELEMETRY', { reportingDeviceId: devices[0].id, pointCode: 'chiller_cop' }),
+    point(id(7, 3), 'TELEMETRY', { reportingDeviceId: devices[1].id, pointCode: 'weather_relative_humidity' }),
   ];
   let capturedRequest;
   const client = {
@@ -250,7 +244,7 @@ test('Current-state loader selects every registered Telemetry Point key for each
     client,
     devices,
     telemetryPoints,
-    organizationId,
+    tenantId,
     siteId,
     csrfToken: csrfCapability,
     currentRoutePolicyRevision: () => '12',
@@ -258,8 +252,8 @@ test('Current-state loader selects every registered Telemetry Point key for each
   });
 
   assert.deepEqual(capturedRequest.requests.map((target) => target.keys), [
-    ['chiller.cop', 'chiller.power'],
-    ['weather.relative_humidity'],
+    ['chiller_cop', 'chiller_power'],
+    ['weather_relative_humidity'],
   ]);
 });
 
@@ -280,7 +274,7 @@ test('Current-state loader preserves per-item failures but rejects response orde
     }),
   };
   const partial = await loadRealAssetsCurrentState({
-    client: partialClient, devices, telemetryPoints: [], organizationId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
+    client: partialClient, devices, telemetryPoints: [], tenantId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
   });
   assert.equal(partial.partial, true);
   assert.equal(partial.byDeviceId.get(devices[0].id).status, 'error');
@@ -296,7 +290,7 @@ test('Current-state loader preserves per-item failures but rejects response orde
   };
   await assert.rejects(
     loadRealAssetsCurrentState({
-      client: driftClient, devices, telemetryPoints: [], organizationId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
+      client: driftClient, devices, telemetryPoints: [], tenantId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
     }),
     /scope or selected-key order drifted/,
   );
@@ -312,7 +306,7 @@ test('Current-state loader preserves per-item failures but rejects response orde
   };
   await assert.rejects(
     loadRealAssetsCurrentState({
-      client: displayDriftClient, devices, telemetryPoints: [], organizationId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
+      client: displayDriftClient, devices, telemetryPoints: [], tenantId, siteId, csrfToken: csrfCapability, currentRoutePolicyRevision: () => '12', signal: new AbortController().signal,
     }),
     /display-state evidence drifted/,
   );
@@ -342,7 +336,7 @@ test('Current-state loader rejects route-policy revision drift across bounded ba
       client,
       devices,
       telemetryPoints: [],
-      organizationId,
+      tenantId,
       siteId,
       csrfToken: csrfCapability,
       currentRoutePolicyRevision: () => revision,
@@ -379,13 +373,13 @@ test('S2 runtime retains route-policy evidence and publishes material changes on
 
 test('current-state query keys isolate generation, Site, policy epoch and exact registered Point selection', () => {
   const devices = [device(1), device(2)];
-  const points = [point(measuredPointId, 'MEASURED', { reportingDeviceId: devices[0].id, pointKey: 'chiller.power' })];
-  const base = realAssetsCurrentStateQueryKey(4, organizationId, siteId, devices, points, 0);
-  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(5, organizationId, siteId, devices, points, 0));
-  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, organizationId, id(1, 99), devices, points, 0));
-  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, organizationId, siteId, devices, points, 1));
-  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, organizationId, siteId, [device(1, { revision: 99 }), device(2)], points, 0));
-  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, organizationId, siteId, devices, [{ ...points[0], revision: 99 }], 0));
+  const points = [point(measuredPointId, 'TELEMETRY', { reportingDeviceId: devices[0].id, pointCode: 'chiller_power' })];
+  const base = realAssetsCurrentStateQueryKey(4, tenantId, siteId, devices, points, 0);
+  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(5, tenantId, siteId, devices, points, 0));
+  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, tenantId, id(1, 99), devices, points, 0));
+  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, tenantId, siteId, devices, points, 1));
+  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, tenantId, siteId, [device(1, { revision: 99 }), device(2)], points, 0));
+  assert.notDeepEqual(base, realAssetsCurrentStateQueryKey(4, tenantId, siteId, devices, [{ ...points[0], revision: 99 }], 0));
 });
 
 test('protected request returns only through the active Site generation commit guard', async () => {

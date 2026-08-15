@@ -3,7 +3,7 @@ SET LOCAL ROLE s4_alarm_migrator;
 
 CREATE TABLE IF NOT EXISTS alarm_runtime.alarm_current (
   alarm_id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL,
+  tenant_id uuid NOT NULL,
   site_id uuid NOT NULL,
   device_id uuid,
   source_type text NOT NULL CHECK (source_type IN ('DEVICE_RULE', 'SITE_RULE', 'EXTERNAL')),
@@ -20,25 +20,25 @@ CREATE TABLE IF NOT EXISTS alarm_runtime.alarm_current (
   version bigint NOT NULL CHECK (version > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL CHECK (updated_at >= created_at AND updated_at >= last_occurred_at),
-  UNIQUE (organization_id, site_id, alarm_id)
+  UNIQUE (tenant_id, site_id, alarm_id)
 );
 
 CREATE INDEX IF NOT EXISTS alarm_current_site_activity_idx
-  ON alarm_runtime.alarm_current (organization_id, site_id, last_occurred_at DESC, alarm_id ASC);
+  ON alarm_runtime.alarm_current (tenant_id, site_id, last_occurred_at DESC, alarm_id ASC);
 CREATE INDEX IF NOT EXISTS alarm_current_site_status_idx
-  ON alarm_runtime.alarm_current (organization_id, site_id, status, last_occurred_at DESC);
+  ON alarm_runtime.alarm_current (tenant_id, site_id, status, last_occurred_at DESC);
 CREATE INDEX IF NOT EXISTS alarm_current_site_severity_idx
-  ON alarm_runtime.alarm_current (organization_id, site_id, severity, last_occurred_at DESC);
+  ON alarm_runtime.alarm_current (tenant_id, site_id, severity, last_occurred_at DESC);
 CREATE INDEX IF NOT EXISTS alarm_current_device_idx
-  ON alarm_runtime.alarm_current (organization_id, site_id, device_id, last_occurred_at DESC)
+  ON alarm_runtime.alarm_current (tenant_id, site_id, device_id, last_occurred_at DESC)
   WHERE device_id IS NOT NULL;
 
 ALTER TABLE alarm_runtime.alarm_current ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alarm_runtime.alarm_current FORCE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS alarm_current_runtime_org ON alarm_runtime.alarm_current;
-CREATE POLICY alarm_current_runtime_org ON alarm_runtime.alarm_current
+DROP POLICY IF EXISTS alarm_current_runtime_tenant ON alarm_runtime.alarm_current;
+CREATE POLICY alarm_current_runtime_tenant ON alarm_runtime.alarm_current
   FOR SELECT TO s4_alarm_runtime
-  USING (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid);
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 
 REVOKE ALL ON SCHEMA alarm_runtime FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA alarm_runtime FROM PUBLIC;

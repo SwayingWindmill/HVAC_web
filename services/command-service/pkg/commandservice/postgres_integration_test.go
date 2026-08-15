@@ -241,7 +241,6 @@ func postgresCommandRequest(idempotencyKey string, setpoint float64) commandmode
 	currentValue := 23.0
 	return commandmodel.SubmitRequest{
 		TenantID:       commandTenantA,
-		OrganizationID: commandOrgA,
 		SiteID:         commandSiteA,
 		DeviceID:       commandDeviceA,
 		PointID:        commandPointA,
@@ -261,7 +260,7 @@ func postgresCommandRequest(idempotencyKey string, setpoint float64) commandmode
 		},
 		Authorization: commandmodel.AuthorizationSnapshot{
 			GrantID: "018f3e00-9000-7000-8000-000000000001", PolicyRevision: "command-policy-1",
-			Purpose: commandmodel.AuthorizationCommandSubmit, PrincipalID: commandPrincipalA, OrganizationID: commandOrgA, SiteID: commandSiteA, DeviceID: commandDeviceA,
+			Purpose: commandmodel.AuthorizationCommandSubmit, PrincipalID: commandPrincipalA, TenantID: commandTenantA, SiteID: commandSiteA, DeviceID: commandDeviceA,
 			Capability:  commandmodel.CapabilitySetTemperatureSetpoint,
 			MaximumRisk: commandmodel.RiskHigh, CapabilityRevision: setpointCapabilityRevision,
 			EmergencyRevocationRevision: 1,

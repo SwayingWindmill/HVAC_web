@@ -61,7 +61,7 @@ func (fake *fakeSnapshotStore) EvaluateAndRead(_ context.Context, target telemet
 		readiness = telemetryapi.TelemetryReadinessNotApplicable
 	}
 	return SnapshotCommit{Snapshot: telemetryapi.DeviceObservationSnapshot{
-		SchemaVersion: 1, DeviceId: telemetryapi.UUIDv7(target.DeviceID), OwningOrganizationId: telemetryapi.UUIDv7(orgA), SiteId: telemetryapi.UUIDv7(siteA),
+		SchemaVersion: 1, TenantId: telemetryapi.UUIDv7(tenantA), SiteId: telemetryapi.UUIDv7(siteA), DeviceId: telemetryapi.UUIDv7(target.DeviceID),
 		BusinessRevision: 3, EvaluatedAt: instant(evaluatedAt), EvaluationAvailability: telemetryapi.EvaluationAvailabilityAvailable,
 		AvailabilityReasons: []telemetryapi.AvailabilityReasonCode{}, Presence: telemetryapi.PresenceSnapshot{Applicability: telemetryapi.PresenceApplicabilityApplicable, CurrentState: &state},
 		TelemetryReadiness: readiness, DisplayState: &display, Values: values,

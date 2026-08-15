@@ -97,7 +97,7 @@ test('PostgreSQL keeps Operations facts authoritative and Checkpoints independen
 
   const created = await coordinator.create({
     scope: {
-      organizationId: 'organization-postgres',
+      tenantId: 'organization-postgres',
       siteId: 'site-postgres',
       equipmentId: null,
       deviceId: null,
@@ -340,7 +340,7 @@ test('PostgreSQL atomically persists typed records across restart, retry, and ro
   });
 
   const scope = {
-    organizationId: 'organization-records-postgres',
+    tenantId: 'organization-records-postgres',
     siteId: 'site-records-postgres',
     equipmentId: null,
     deviceId: null,
@@ -518,7 +518,7 @@ test('PostgreSQL atomically persists typed records across restart, retry, and ro
     conclusion: {
       status: 'SUPPORTED',
       scope: 'SITE',
-      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
       siteId: scope.siteId,
     },
   };

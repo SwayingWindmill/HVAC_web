@@ -20,7 +20,7 @@ import {
 
 export interface RegistrySiteDto {
   readonly id: string;
-  readonly owningOrganizationId: string;
+  readonly tenantId: string;
   readonly code: string;
   readonly displayName: string;
   readonly timezone: string;
@@ -32,7 +32,7 @@ export interface RegistrySiteDto {
 
 export interface RegistryEquipmentDto {
   readonly id: string;
-  readonly owningOrganizationId: string;
+  readonly tenantId: string;
   readonly siteId: string;
   readonly code: string;
   readonly displayName: string;
@@ -55,7 +55,7 @@ export type RegistryOwnerReaderConfig = OwnerReaderHttpConfig;
 
 const siteKeys = [
   'id',
-  'owningOrganizationId',
+  'tenantId',
   'code',
   'displayName',
   'timezone',
@@ -67,7 +67,7 @@ const siteKeys = [
 
 const equipmentKeys = [
   'id',
-  'owningOrganizationId',
+  'tenantId',
   'siteId',
   'code',
   'displayName',
@@ -105,7 +105,7 @@ const decodeSite = (value: unknown): RegistrySiteDto => {
   if (!isRecord(value)
     || !hasExactKeys(value, siteKeys)
     || !isUuidV7(value.id)
-    || !isUuidV7(value.owningOrganizationId)
+    || !isUuidV7(value.tenantId)
     || !isNonEmptyString(value.code)
     || !isNonEmptyString(value.displayName)
     || !isTimezone(value.timezone)
@@ -126,7 +126,7 @@ const decodeEquipment = (value: unknown): RegistryEquipmentDto => {
   if (!isRecord(value)
     || !hasExactKeys(value, equipmentKeys)
     || !isUuidV7(value.id)
-    || !isUuidV7(value.owningOrganizationId)
+    || !isUuidV7(value.tenantId)
     || !isUuidV7(value.siteId)
     || !isNonEmptyString(value.code)
     || !isNonEmptyString(value.displayName)
@@ -146,10 +146,10 @@ const decodeEquipment = (value: unknown): RegistryEquipmentDto => {
 
 const assertSiteScope = (
   input: OwnerReadInput<RegistryReadRequest>,
-): { readonly organizationId: string; readonly siteId: string } => {
+): { readonly tenantId: string; readonly siteId: string } => {
   const { scope } = input.context;
   const requestedSiteId = input.request.input.siteId;
-  if (!isNonEmptyString(scope.organizationId)
+  if (!isNonEmptyString(scope.tenantId)
     || !isNonEmptyString(scope.siteId)
     || scope.siteId !== requestedSiteId
     || scope.equipmentId !== null
@@ -159,7 +159,7 @@ const assertSiteScope = (
       'The Registry READ request is outside the authorized Site Scope.',
     );
   }
-  return { organizationId: scope.organizationId, siteId: scope.siteId };
+  return { tenantId: scope.tenantId, siteId: scope.siteId };
 };
 
 const siteResult = (
@@ -191,7 +191,7 @@ const readSite = async (
   });
   const site = decodeSite(payload);
   if (site.id !== requestedScope.siteId
-    || site.owningOrganizationId !== requestedScope.organizationId) {
+    || site.tenantId !== requestedScope.tenantId) {
     throw new OwnerReadError(
       'OWNER_RESPONSE_INVALID',
       'The Registry Site identity does not match the authorized request.',
@@ -255,7 +255,7 @@ const readSiteEquipment = async (
     const collection = decodeCollection(payload);
     for (const item of collection.items) {
       const decoded = decodeEquipment(item);
-      if (decoded.owningOrganizationId !== requestedScope.organizationId
+      if (decoded.tenantId !== requestedScope.tenantId
         || decoded.siteId !== requestedScope.siteId
         || identities.has(decoded.id)) {
         throw new OwnerReadError(

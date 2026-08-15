@@ -43,14 +43,14 @@ type Target struct {
 }
 
 type DecisionRequest struct {
-	ActingOrganizationID string   `json:"actingOrganizationId"`
-	Action               Action   `json:"action"`
-	Targets              []Target `json:"targets"`
+	TenantID string   `json:"tenantId"`
+	Action   Action   `json:"action"`
+	Targets  []Target `json:"targets"`
 }
 
 func (request DecisionRequest) Validate() error {
-	if !validUUIDv7(request.ActingOrganizationID) {
-		return errors.New("acting organization must be a UUIDv7")
+	if !validUUIDv7(request.TenantID) {
+		return errors.New("tenant must be a UUIDv7")
 	}
 	if !request.Action.Valid() {
 		return errors.New("telemetry action is invalid")
@@ -101,8 +101,8 @@ func CanonicalTargets(targets []Target) ([]Target, error) {
 	return canonical, nil
 }
 
-func ScopeDigest(action Action, actingOrganizationID string, targets []Target) (string, error) {
-	if !action.Valid() || !validUUIDv7(actingOrganizationID) {
+func ScopeDigest(action Action, tenantID string, targets []Target) (string, error) {
+	if !action.Valid() || !validUUIDv7(tenantID) {
 		return "", errors.New("telemetry scope context is invalid")
 	}
 	canonical, err := CanonicalTargets(targets)
@@ -110,10 +110,10 @@ func ScopeDigest(action Action, actingOrganizationID string, targets []Target) (
 		return "", err
 	}
 	payload, err := json.Marshal(struct {
-		Action               Action   `json:"action"`
-		ActingOrganizationID string   `json:"actingOrganizationId"`
-		Targets              []Target `json:"targets"`
-	}{Action: action, ActingOrganizationID: actingOrganizationID, Targets: canonical})
+		Action   Action   `json:"action"`
+		TenantID string   `json:"tenantId"`
+		Targets  []Target `json:"targets"`
+	}{Action: action, TenantID: tenantID, Targets: canonical})
 	if err != nil {
 		return "", err
 	}

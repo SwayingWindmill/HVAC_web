@@ -194,7 +194,7 @@ func buildMetadataQuery(productQuery analyticsmodel.EnergySeriesQuery) cubeQuery
 
 func energyFilters(productQuery analyticsmodel.EnergySeriesQuery) []cubeFilter {
 	return []cubeFilter{
-		{Member: "energy_usage.organization_id", Operator: "equals", Values: []string{productQuery.OrganizationID}},
+		{Member: "energy_usage.tenant_id", Operator: "equals", Values: []string{productQuery.TenantID}},
 		{Member: "energy_usage.site_id", Operator: "equals", Values: []string{productQuery.SiteID}},
 		{Member: "energy_usage.energy_type", Operator: "equals", Values: []string{string(productQuery.EnergyType)}},
 	}

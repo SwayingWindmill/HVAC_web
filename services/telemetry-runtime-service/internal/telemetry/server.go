@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -34,43 +35,49 @@ var (
 )
 
 type ServerConfig struct {
-	Store                         SnapshotStore
-	Authorizer                    GrantAuthorizer
-	AllowedGatewaySPIFFE          string
-	RuntimeAudience               string
-	ObservationAcceptor           ObservationAcceptor
-	CoverageReporter              CoverageReporter
-	SourceAuthenticator           SourceAuthenticator
-	Realtime                      *RealtimeService
-	AllowedCentrifugoSPIFFE       string
-	CentrifugoProxySecret         string
-	AllowedIAMSPIFFE              string
-	AllowedCommandVerifierSPIFFE  string
-	CommandVerifierOrganizationID string
-	CommandVerifierSiteID         string
-	CommandVerifierDeviceID       string
-	Metrics                       *observability.Registry
-	Now                           func() time.Time
+	Store                        SnapshotStore
+	Authorizer                   GrantAuthorizer
+	AllowedGatewaySPIFFE         string
+	RuntimeAudience              string
+	ObservationAcceptor          ObservationAcceptor
+	CoverageReporter             CoverageReporter
+	MQTTEvidenceAcceptor         MQTTEvidenceAcceptor
+	SourceAuthenticator          SourceAuthenticator
+	Realtime                     *RealtimeService
+	LatestCache                  LatestCache
+	AllowedCentrifugoSPIFFE      string
+	CentrifugoProxySecret        string
+	AllowedIAMSPIFFE             string
+	AllowedCommandVerifierSPIFFE string
+	AllowedCommandDispatcherSPIFFE string
+	CommandVerifierTenantID      string
+	CommandVerifierSiteID        string
+	CommandVerifierDeviceID      string
+	Metrics                      *observability.Registry
+	Now                          func() time.Time
 }
 
 type handler struct {
-	store                         SnapshotStore
-	authorizer                    GrantAuthorizer
-	allowedGatewaySPIFFE          string
-	runtimeAudience               string
-	observationAcceptor           ObservationAcceptor
-	coverageReporter              CoverageReporter
-	sourceAuthenticator           SourceAuthenticator
-	realtime                      *RealtimeService
-	allowedCentrifugoSPIFFE       string
-	centrifugoProxySecret         string
-	allowedIAMSPIFFE              string
-	allowedCommandVerifierSPIFFE  string
-	commandVerifierOrganizationID string
-	commandVerifierSiteID         string
-	commandVerifierDeviceID       string
-	metrics                       *s2Metrics
-	now                           func() time.Time
+	store                        SnapshotStore
+	authorizer                   GrantAuthorizer
+	allowedGatewaySPIFFE         string
+	runtimeAudience              string
+	observationAcceptor          ObservationAcceptor
+	coverageReporter             CoverageReporter
+	mqttEvidenceAcceptor         MQTTEvidenceAcceptor
+	sourceAuthenticator          SourceAuthenticator
+	realtime                     *RealtimeService
+	latestCache                  LatestCache
+	allowedCentrifugoSPIFFE      string
+	centrifugoProxySecret        string
+	allowedIAMSPIFFE             string
+	allowedCommandVerifierSPIFFE   string
+	allowedCommandDispatcherSPIFFE string
+	commandVerifierTenantID        string
+	commandVerifierSiteID        string
+	commandVerifierDeviceID      string
+	metrics                      *s2Metrics
+	now                          func() time.Time
 }
 
 func NewHandler(config ServerConfig) http.Handler {
@@ -83,17 +90,20 @@ func NewHandler(config ServerConfig) http.Handler {
 		allowedGatewaySPIFFE: strings.TrimSpace(config.AllowedGatewaySPIFFE),
 		runtimeAudience:      strings.TrimSpace(config.RuntimeAudience),
 		observationAcceptor:  config.ObservationAcceptor, coverageReporter: config.CoverageReporter,
-		sourceAuthenticator:           config.SourceAuthenticator,
-		realtime:                      config.Realtime,
-		allowedCentrifugoSPIFFE:       strings.TrimSpace(config.AllowedCentrifugoSPIFFE),
-		centrifugoProxySecret:         strings.TrimSpace(config.CentrifugoProxySecret),
-		allowedIAMSPIFFE:              strings.TrimSpace(config.AllowedIAMSPIFFE),
-		allowedCommandVerifierSPIFFE:  strings.TrimSpace(config.AllowedCommandVerifierSPIFFE),
-		commandVerifierOrganizationID: strings.TrimSpace(config.CommandVerifierOrganizationID),
-		commandVerifierSiteID:         strings.TrimSpace(config.CommandVerifierSiteID),
-		commandVerifierDeviceID:       strings.TrimSpace(config.CommandVerifierDeviceID),
-		metrics:                       newS2Metrics(config.Metrics, now),
-		now:                           now,
+		mqttEvidenceAcceptor: config.MQTTEvidenceAcceptor,
+		sourceAuthenticator:          config.SourceAuthenticator,
+		realtime:                     config.Realtime,
+		latestCache:                  config.LatestCache,
+		allowedCentrifugoSPIFFE:      strings.TrimSpace(config.AllowedCentrifugoSPIFFE),
+		centrifugoProxySecret:        strings.TrimSpace(config.CentrifugoProxySecret),
+		allowedIAMSPIFFE:             strings.TrimSpace(config.AllowedIAMSPIFFE),
+		allowedCommandVerifierSPIFFE:   strings.TrimSpace(config.AllowedCommandVerifierSPIFFE),
+		allowedCommandDispatcherSPIFFE: strings.TrimSpace(config.AllowedCommandDispatcherSPIFFE),
+		commandVerifierTenantID:        strings.TrimSpace(config.CommandVerifierTenantID),
+		commandVerifierSiteID:        strings.TrimSpace(config.CommandVerifierSiteID),
+		commandVerifierDeviceID:      strings.TrimSpace(config.CommandVerifierDeviceID),
+		metrics:                      newS2Metrics(config.Metrics, now),
+		now:                          now,
 	}
 }
 
@@ -112,8 +122,20 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.handleSourceObservation(writer, request)
 		return
 	}
-	if request.URL.Path == InternalThingsBoardCoveragePath {
-		h.handleThingsBoardCoverage(writer, request)
+	if request.URL.Path == InternalSourceCoveragePath {
+		h.handleSourceCoverage(writer, request)
+		return
+	}
+	if request.URL.Path == InternalMQTTGatewayEvidencePath {
+		h.handleMQTTGatewayEvidence(writer, request)
+		return
+	}
+	if request.URL.Path == InternalMQTTPresenceEvidencePath {
+		h.handleMQTTPresenceEvidence(writer, request)
+		return
+	}
+	if request.URL.Path == InternalMQTTRuntimeEventPath {
+		h.handleMQTTRuntimeEvent(writer, request)
 		return
 	}
 	if request.URL.Path == InternalSubscriptionBootstrapPath {
@@ -190,8 +212,13 @@ func (h *handler) handleSingle(writer http.ResponseWriter, request *http.Request
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
 		return
 	}
-	h.metrics.observeSnapshot(commit.Snapshot)
-	writeJSON(writer, http.StatusOK, commit.Snapshot)
+	snapshot, err := h.readLatestSnapshot(request.Context(), commit, target.Keys)
+	if err != nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_LATEST_UNAVAILABLE", "The rebuildable telemetry Latest cache is temporarily unavailable.", true)
+		return
+	}
+	h.metrics.observeSnapshot(snapshot)
+	writeJSON(writer, http.StatusOK, snapshot)
 }
 
 func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request) {
@@ -252,12 +279,37 @@ func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request)
 			writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
 			return
 		}
-		h.metrics.observeSnapshot(commit.Snapshot)
+		snapshot, err := h.readLatestSnapshot(request.Context(), commit, targets[index].Keys)
+		if err != nil {
+			writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_LATEST_UNAVAILABLE", "The rebuildable telemetry Latest cache is temporarily unavailable.", true)
+			return
+		}
+		h.metrics.observeSnapshot(snapshot)
 		response.Items = append(response.Items, telemetryapi.BatchObservationResult{Success: &telemetryapi.BatchObservationSuccess{
-			RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "OK", Snapshot: commit.Snapshot,
+			RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "OK", Snapshot: snapshot,
 		}})
 	}
 	writeJSON(writer, http.StatusOK, response)
+}
+
+func (h *handler) readLatestSnapshot(ctx context.Context, commit SnapshotCommit, requestedKeys []string) (telemetryapi.DeviceObservationSnapshot, error) {
+	if h.latestCache == nil {
+		return commit.Snapshot, nil
+	}
+	if err := validateLatestCacheSnapshot(commit.FullSnapshot); err != nil {
+		return telemetryapi.DeviceObservationSnapshot{}, err
+	}
+	if _, err := h.latestCache.PutIfNewer(ctx, commit.FullSnapshot); err != nil {
+		return telemetryapi.DeviceObservationSnapshot{}, err
+	}
+	cached, err := h.latestCache.Get(ctx, string(commit.FullSnapshot.TenantId), string(commit.FullSnapshot.SiteId), string(commit.FullSnapshot.DeviceId))
+	if err != nil {
+		return telemetryapi.DeviceObservationSnapshot{}, err
+	}
+	if cached.BusinessRevision < commit.FullSnapshot.BusinessRevision {
+		return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheUnavailable
+	}
+	return ProjectSnapshot(cached, requestedKeys), nil
 }
 
 func (h *handler) handleSubscriptionBootstrap(writer http.ResponseWriter, request *http.Request) {
@@ -393,7 +445,7 @@ func (h *handler) handleRecoveryCheckpoint(writer http.ResponseWriter, request *
 	if !ok {
 		return
 	}
-	if access.Subject != identity.Subject || access.SubjectIssuer != identity.SubjectIssuer || access.SessionID != identity.SessionID || access.ActingOrganizationID != identity.ActingOrganizationID {
+	if access.Subject != identity.Subject || access.SubjectIssuer != identity.SubjectIssuer || access.SessionID != identity.SessionID || access.TenantID != identity.TenantID {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested telemetry resource was not found.", false)
 		return
 	}
@@ -438,7 +490,7 @@ func (h *handler) checkpointIdentity(writer http.ResponseWriter, request *http.R
 		return CheckpointIdentity{}, false
 	}
 	claims, err := identitycontext.VerifyDelegation(request.TLS.PeerCertificates[0].PublicKey, strings.TrimSpace(values[0]))
-	if err != nil || !uuidV7Pattern.MatchString(claims.ActingOrganizationID) {
+	if err != nil || !uuidV7Pattern.MatchString(claims.TenantID) {
 		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_CONTEXT_GRANT_INVALID", "The Telemetry context grant is invalid.", false)
 		return CheckpointIdentity{}, false
 	}
@@ -452,7 +504,7 @@ func (h *handler) checkpointIdentity(writer http.ResponseWriter, request *http.R
 	}
 	return CheckpointIdentity{
 		Subject: claims.Subject, SubjectIssuer: claims.SubjectIssuer,
-		SessionID: claims.SessionID, ActingOrganizationID: claims.ActingOrganizationID,
+		SessionID: claims.SessionID, TenantID: claims.TenantID,
 	}, true
 }
 

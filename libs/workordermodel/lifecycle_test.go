@@ -98,7 +98,7 @@ func lifecycleFixture(t *testing.T) WorkOrder {
 	t.Helper()
 	assignee := "principal:operator-a"
 	workOrder, err := Create(CreateInput{
-		WorkOrderID: mutationWorkOrderID, OrganizationID: mutationOrganizationID, SiteID: mutationSiteID,
+		WorkOrderID: mutationWorkOrderID, TenantID: mutationTenantID, SiteID: mutationSiteID,
 		Title: "Inspect AHU fan", Description: "Validate vibration.", Priority: PriorityHigh,
 		SourceReferences: []SourceReference{{Domain: SourceAlarm, ResourceID: mutationAlarmID, Relationship: RelationshipOrigin}},
 		AssigneeID:       &assignee, ActorType: "PRINCIPAL", ActorID: "principal:creator", PolicyRevision: "policy-7", CorrelationID: "idem-create-lifecycle",

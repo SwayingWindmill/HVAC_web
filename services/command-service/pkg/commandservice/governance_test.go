@@ -49,25 +49,25 @@ func TestMediumRiskRequiresBoundIndependentApproval(t *testing.T) {
 	}
 	selfApproval := approval
 	selfApproval.ApproverID = created.Intent.PrincipalID
-	if _, err := service.Approve(commandmodel.ApproveRequest{OrganizationID: created.Intent.OrganizationID, CommandID: created.Intent.ID, Approval: selfApproval}); !errors.Is(err, ErrApprovalInvalid) {
+	if _, err := service.Approve(commandmodel.ApproveRequest{TenantID: created.Intent.TenantID, CommandID: created.Intent.ID, Approval: selfApproval}); !errors.Is(err, ErrApprovalInvalid) {
 		t.Fatalf("self approval err=%v", err)
 	}
 	wrongBinding := approval
 	wrongBinding.PayloadHash = "wrong"
-	if _, err := service.Approve(commandmodel.ApproveRequest{OrganizationID: created.Intent.OrganizationID, CommandID: created.Intent.ID, Approval: wrongBinding}); !errors.Is(err, ErrApprovalInvalid) {
+	if _, err := service.Approve(commandmodel.ApproveRequest{TenantID: created.Intent.TenantID, CommandID: created.Intent.ID, Approval: wrongBinding}); !errors.Is(err, ErrApprovalInvalid) {
 		t.Fatalf("wrong binding approval err=%v", err)
 	}
 	wrongPurpose := approval
 	wrongPurpose.Authorization.Purpose = commandmodel.AuthorizationCommandSubmit
-	if _, err := service.Approve(commandmodel.ApproveRequest{OrganizationID: created.Intent.OrganizationID, CommandID: created.Intent.ID, Approval: wrongPurpose}); !errors.Is(err, ErrApprovalInvalid) {
+	if _, err := service.Approve(commandmodel.ApproveRequest{TenantID: created.Intent.TenantID, CommandID: created.Intent.ID, Approval: wrongPurpose}); !errors.Is(err, ErrApprovalInvalid) {
 		t.Fatalf("submit-purpose approval err=%v", err)
 	}
 	wrongPrincipal := approval
 	wrongPrincipal.Authorization.PrincipalID = "principal-other"
-	if _, err := service.Approve(commandmodel.ApproveRequest{OrganizationID: created.Intent.OrganizationID, CommandID: created.Intent.ID, Approval: wrongPrincipal}); !errors.Is(err, ErrApprovalInvalid) {
+	if _, err := service.Approve(commandmodel.ApproveRequest{TenantID: created.Intent.TenantID, CommandID: created.Intent.ID, Approval: wrongPrincipal}); !errors.Is(err, ErrApprovalInvalid) {
 		t.Fatalf("approver principal mismatch err=%v", err)
 	}
-	approved, err := service.Approve(commandmodel.ApproveRequest{OrganizationID: created.Intent.OrganizationID, CommandID: created.Intent.ID, Approval: approval})
+	approved, err := service.Approve(commandmodel.ApproveRequest{TenantID: created.Intent.TenantID, CommandID: created.Intent.ID, Approval: approval})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestFreshApprovalAuthorizationReplacesExpiredSubmitAuthorization(t *testing
 		Authorization:    freshApprovalAuthorization(created.Intent, "principal-2", clockNow, "approval-grant-fresh"),
 		IssuedAt:         clockNow, ExpiresAt: clockNow.Add(10 * time.Minute),
 	}
-	approved, err := service.Approve(commandmodel.ApproveRequest{OrganizationID: created.Intent.OrganizationID, CommandID: created.Intent.ID, Approval: approval})
+	approved, err := service.Approve(commandmodel.ApproveRequest{TenantID: created.Intent.TenantID, CommandID: created.Intent.ID, Approval: approval})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,11 +131,11 @@ func TestHighRiskRequiresTwoDistinctApprovers(t *testing.T) {
 			IssuedAt:         clock(), ExpiresAt: clock().Add(10 * time.Minute),
 		}
 	}
-	partial, err := service.Approve(commandmodel.ApproveRequest{OrganizationID: created.Intent.OrganizationID, CommandID: created.Intent.ID, Approval: approval("approval-a", "principal-2")})
+	partial, err := service.Approve(commandmodel.ApproveRequest{TenantID: created.Intent.TenantID, CommandID: created.Intent.ID, Approval: approval("approval-a", "principal-2")})
 	if !errors.Is(err, ErrApprovalRequired) || partial.Status != commandmodel.IntentAwaitingApproval || len(partial.Approvals) != 1 {
 		t.Fatalf("first approval result=%#v err=%v", partial, err)
 	}
-	approved, err := service.Approve(commandmodel.ApproveRequest{OrganizationID: created.Intent.OrganizationID, CommandID: created.Intent.ID, Approval: approval("approval-b", "principal-3")})
+	approved, err := service.Approve(commandmodel.ApproveRequest{TenantID: created.Intent.TenantID, CommandID: created.Intent.ID, Approval: approval("approval-b", "principal-3")})
 	if err != nil || approved.Status != commandmodel.IntentQueued || len(approved.Approvals) != 2 {
 		t.Fatalf("two-person approval result=%#v err=%v", approved, err)
 	}
@@ -164,12 +164,12 @@ func TestExecutionRejectsExpiredEarlierApprovalAuthorization(t *testing.T) {
 	}
 	first := approval("approval-expiring", "principal-2")
 	first.Authorization.ExpiresAt = clockNow.Add(5 * time.Second)
-	if _, err := service.Approve(commandmodel.ApproveRequest{OrganizationID: created.Intent.OrganizationID, CommandID: created.Intent.ID, Approval: first}); !errors.Is(err, ErrApprovalRequired) {
+	if _, err := service.Approve(commandmodel.ApproveRequest{TenantID: created.Intent.TenantID, CommandID: created.Intent.ID, Approval: first}); !errors.Is(err, ErrApprovalRequired) {
 		t.Fatalf("first approval err=%v", err)
 	}
 	clockNow = clockNow.Add(2 * time.Second)
 	second := approval("approval-current", "principal-3")
-	approved, err := service.Approve(commandmodel.ApproveRequest{OrganizationID: created.Intent.OrganizationID, CommandID: created.Intent.ID, Approval: second})
+	approved, err := service.Approve(commandmodel.ApproveRequest{TenantID: created.Intent.TenantID, CommandID: created.Intent.ID, Approval: second})
 	if err != nil || approved.Status != commandmodel.IntentQueued {
 		t.Fatalf("second approval result=%#v err=%v", approved, err)
 	}
@@ -182,7 +182,7 @@ func TestExecutionRejectsExpiredEarlierApprovalAuthorization(t *testing.T) {
 func freshApprovalAuthorization(intent commandmodel.CommandIntent, approverID string, now time.Time, grantID string) commandmodel.AuthorizationSnapshot {
 	return commandmodel.AuthorizationSnapshot{
 		GrantID: grantID, PolicyRevision: "command-policy-approval-1", Purpose: commandmodel.AuthorizationCommandApprove,
-		PrincipalID: approverID, OrganizationID: intent.OrganizationID, SiteID: intent.SiteID, DeviceID: intent.DeviceID,
+		PrincipalID: approverID, TenantID: intent.TenantID, SiteID: intent.SiteID, DeviceID: intent.DeviceID,
 		Capability: intent.Capability, MaximumRisk: intent.Risk, CapabilityRevision: intent.CapabilityRevision,
 		EmergencyRevocationRevision: 2, IssuedAt: now.Add(-time.Second), ExpiresAt: now.Add(25 * time.Second),
 	}

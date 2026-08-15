@@ -39,14 +39,14 @@ func TestRegistryGrantIsBoundToCorePolicyRevocationAndScope(t *testing.T) {
 	if err := registryauth.ValidateGrant(claims, validValidation(now)); err != nil {
 		t.Fatalf("valid registry grant rejected: %v", err)
 	}
-	if !registryauth.ScopeAllows(claims, ownerA, ownerASite1) {
-		t.Fatal("allowed owner Site was rejected")
+	if !registryauth.ScopeAllows(claims, ownerASite1) {
+		t.Fatal("allowed Site was rejected")
 	}
-	if registryauth.ScopeAllows(claims, ownerA, ownerASite2) {
+	if registryauth.ScopeAllows(claims, ownerASite2) {
 		t.Fatal("explicitly denied sibling Site was allowed")
 	}
-	if registryauth.ScopeAllows(claims, ownerB, "") {
-		t.Fatal("ungranted Organization was allowed")
+	if registryauth.ScopeAllows(claims, "") {
+		t.Fatal("empty Site scope was allowed")
 	}
 }
 
@@ -102,15 +102,15 @@ func TestRegistryGrantRejectsOversizedEncoding(t *testing.T) {
 }
 
 func TestGrantStatusRequestRequiresUUIDv7AndBoundedTokenIdentifier(t *testing.T) {
-	valid := registryauth.GrantStatusRequest{ActingOrganizationID: ownerA, TokenID: fixtureIdentifier}
+	valid := registryauth.GrantStatusRequest{TenantID: tenantA, TokenID: fixtureIdentifier}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid status request was rejected: %v", err)
 	}
 	for name, request := range map[string]registryauth.GrantStatusRequest{
-		"missing organization": {TokenID: fixtureIdentifier},
-		"invalid organization": {ActingOrganizationID: "not-an-organization", TokenID: fixtureIdentifier},
-		"missing identifier":   {ActingOrganizationID: ownerA},
-		"oversized identifier": {ActingOrganizationID: ownerA, TokenID: strings.Repeat("x", registryauth.MaximumGrantTokenIDSize+1)},
+		"missing tenant":       {TokenID: fixtureIdentifier},
+		"invalid tenant":       {TenantID: "not-a-tenant", TokenID: fixtureIdentifier},
+		"missing identifier":   {TenantID: tenantA},
+		"oversized identifier": {TenantID: tenantA, TokenID: strings.Repeat("x", registryauth.MaximumGrantTokenIDSize+1)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := request.Validate(); err == nil {
@@ -120,17 +120,17 @@ func TestGrantStatusRequestRequiresUUIDv7AndBoundedTokenIdentifier(t *testing.T)
 	}
 }
 
-func TestDecisionRequestRequiresConcreteActionAndActingOrganization(t *testing.T) {
+func TestDecisionRequestRequiresConcreteActionAndTenant(t *testing.T) {
 	cases := []registryauth.DecisionRequest{
 		{},
-		{ActingOrganizationID: "not-an-organization", Action: registryauth.ActionSiteRead},
-		{ActingOrganizationID: "550e8400-e29b-41d4-a716-446655440000", Action: registryauth.ActionSiteRead},
-		{ActingOrganizationID: "018f1e00-0000-7000-0000-000000000001", Action: registryauth.ActionSiteRead},
-		{ActingOrganizationID: ownerA},
-		{ActingOrganizationID: ownerA, Action: registryauth.ActionRegistryRead},
-		{ActingOrganizationID: ownerA, Action: registryauth.Action("registry.delete")},
-		{ActingOrganizationID: ownerA, Action: registryauth.ActionSiteRead, GrantPresenter: "not-a-spiffe-id"},
-		{ActingOrganizationID: ownerA, Action: registryauth.ActionSiteRead, GrantPresenter: "spiffe://" + strings.Repeat("x", 513)},
+		{TenantID: "not-a-tenant", Action: registryauth.ActionSiteRead},
+		{TenantID: "550e8400-e29b-41d4-a716-446655440000", Action: registryauth.ActionSiteRead},
+		{TenantID: "018f1d00-0000-7000-0000-000000000001", Action: registryauth.ActionSiteRead},
+		{TenantID: tenantA},
+		{TenantID: tenantA, Action: registryauth.ActionRegistryRead},
+		{TenantID: tenantA, Action: registryauth.Action("registry.delete")},
+		{TenantID: tenantA, Action: registryauth.ActionSiteRead, GrantPresenter: "not-a-spiffe-id"},
+		{TenantID: tenantA, Action: registryauth.ActionSiteRead, GrantPresenter: "spiffe://" + strings.Repeat("x", 513)},
 	}
 	for _, request := range cases {
 		if err := request.Validate(); err == nil {
@@ -138,18 +138,18 @@ func TestDecisionRequestRequiresConcreteActionAndActingOrganization(t *testing.T
 		}
 	}
 	for _, request := range []registryauth.DecisionRequest{
-		{ActingOrganizationID: ownerA, Action: registryauth.ActionSiteRead},
+		{TenantID: tenantA, Action: registryauth.ActionSiteRead},
 		{
-			ActingOrganizationID: ownerA,
-			Action:               registryauth.ActionSiteRead,
-			GrantPresenter:       "spiffe://hvac.local/operations-agent-service",
+			TenantID:       tenantA,
+			Action:         registryauth.ActionSiteRead,
+			GrantPresenter: "spiffe://hvac.local/operations-agent-service",
 		},
 	} {
 		if err := request.Validate(); err != nil {
 			t.Fatalf("valid request was rejected: %v", err)
 		}
 	}
-	if err := (registryauth.DecisionRequest{ActingOrganizationID: ownerA, Action: registryauth.ActionDeviceBindingList}).Validate(); err != nil {
+	if err := (registryauth.DecisionRequest{TenantID: tenantA, Action: registryauth.ActionDeviceBindingList}).Validate(); err != nil {
 		t.Fatalf("valid DeviceBinding request was rejected: %v", err)
 	}
 	if !registryauth.ActionDeviceBindingList.SiteScoped() {
@@ -163,25 +163,24 @@ func (errRevocationUnavailable) Error() string { return "revocation unavailable"
 
 func validClaims(now time.Time) registryauth.GrantClaims {
 	return registryauth.GrantClaims{
-		Issuer:                 "spiffe://hvac.local/iam-service",
-		Presenter:              "spiffe://hvac.local/platform-gateway",
-		Audience:               "platform-core-service",
-		PrincipalID:            "018f1e00-2000-7000-8000-000000000001",
-		SubjectIssuer:          "https://issuer.example.test",
-		Subject:                "fixture-user",
-		TenantID:               tenantA,
-		ActingOrganizationID:   ownerA,
-		AllowedOrganizationIDs: []string{ownerA},
-		DeniedSiteIDs:          []string{ownerASite2},
-		Actions:                []registryauth.Action{registryauth.ActionSiteRead},
-		PolicyRevision:         "s1-policy-v1",
-		DecisionReason:         registryauth.ReasonAllowOrganizationRole,
-		SessionID:              fixtureSession,
-		ParentTokenID:          fixtureParent,
-		IssuedAt:               now.Unix(),
-		ExpiresAt:              now.Add(30 * time.Second).Unix(),
-		TokenID:                fixtureIdentifier,
-		Transitive:             false,
+		Issuer:         "spiffe://hvac.local/iam-service",
+		Presenter:      "spiffe://hvac.local/platform-gateway",
+		Audience:       "platform-core-service",
+		PrincipalID:    "018f1e00-2000-7000-8000-000000000001",
+		SubjectIssuer:  "https://issuer.example.test",
+		Subject:        "fixture-user",
+		TenantID:       tenantA,
+		AllowedSiteIDs: []string{ownerASite1},
+		DeniedSiteIDs:  []string{ownerASite2},
+		Actions:        []registryauth.Action{registryauth.ActionSiteRead},
+		PolicyRevision: "s1-policy-v1",
+		DecisionReason: registryauth.ReasonAllowTenantRole,
+		SessionID:      fixtureSession,
+		ParentTokenID:  fixtureParent,
+		IssuedAt:       now.Unix(),
+		ExpiresAt:      now.Add(30 * time.Second).Unix(),
+		TokenID:        fixtureIdentifier,
+		Transitive:     false,
 	}
 }
 

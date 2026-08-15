@@ -38,10 +38,9 @@ func (request DeviceHistoryRequest) Validate() error {
 	return validateHistorySelection(request.DeviceID, request.Keys, request.From, request.To, request.MaxPointsPerKey)
 }
 
-func (request DeviceHistoryRequest) Complete(actingOrganizationID, owningOrganizationID, siteID string) (DeviceHistoryQuery, error) {
+func (request DeviceHistoryRequest) Complete(tenantID, siteID string) (DeviceHistoryQuery, error) {
 	query := DeviceHistoryQuery{
-		ActingOrganizationID: actingOrganizationID,
-		OwningOrganizationID: owningOrganizationID,
+		TenantID:             tenantID,
 		SiteID:               siteID,
 		DeviceID:             request.DeviceID,
 		Keys:                 append([]string(nil), request.Keys...),
@@ -53,8 +52,7 @@ func (request DeviceHistoryRequest) Complete(actingOrganizationID, owningOrganiz
 }
 
 type DeviceHistoryQuery struct {
-	ActingOrganizationID string    `json:"actingOrganizationId"`
-	OwningOrganizationID string    `json:"owningOrganizationId"`
+	TenantID             string    `json:"tenantId"`
 	SiteID               string    `json:"siteId"`
 	DeviceID             string    `json:"deviceId"`
 	Keys                 []string  `json:"keys"`
@@ -64,7 +62,7 @@ type DeviceHistoryQuery struct {
 }
 
 func (query DeviceHistoryQuery) Validate() error {
-	if !validUUIDv7(query.ActingOrganizationID) || !validUUIDv7(query.OwningOrganizationID) || !validUUIDv7(query.SiteID) {
+	if !validUUIDv7(query.TenantID) || !validUUIDv7(query.SiteID) {
 		return errors.New("history scope identifiers must be UUIDv7 values")
 	}
 	return validateHistorySelection(query.DeviceID, query.Keys, query.From, query.To, query.MaxPointsPerKey)
@@ -133,12 +131,21 @@ func (query DeviceHistoryQuery) ScopeDigest() (string, error) {
 type Quality string
 
 const (
-	QualityGood    Quality = "GOOD"
-	QualitySuspect Quality = "SUSPECT"
+	QualityGood      Quality = "GOOD"
+	QualityPartial   Quality = "PARTIAL"
+	QualityEstimated Quality = "ESTIMATED"
+	QualityManual    Quality = "MANUAL"
+	QualityStale     Quality = "STALE"
+	QualityInvalid   Quality = "INVALID"
 )
 
 func (quality Quality) Valid() bool {
-	return quality == QualityGood || quality == QualitySuspect
+	switch quality {
+	case QualityGood, QualityPartial, QualityEstimated, QualityManual, QualityStale, QualityInvalid:
+		return true
+	default:
+		return false
+	}
 }
 
 type DeviceHistoryPoint struct {
@@ -171,12 +178,12 @@ type DeviceHistoryMetadata struct {
 }
 
 type DeviceHistoryResponse struct {
-	SchemaVersion        int                   `json:"schemaVersion"`
-	OwningOrganizationID string                `json:"owningOrganizationId"`
-	SiteID               string                `json:"siteId"`
-	DeviceID             string                `json:"deviceId"`
-	Series               []DeviceHistorySeries `json:"series"`
-	Metadata             DeviceHistoryMetadata `json:"metadata"`
+	SchemaVersion int                   `json:"schemaVersion"`
+	TenantID      string                `json:"tenantId"`
+	SiteID        string                `json:"siteId"`
+	DeviceID      string                `json:"deviceId"`
+	Series        []DeviceHistorySeries `json:"series"`
+	Metadata      DeviceHistoryMetadata `json:"metadata"`
 }
 
 func (response DeviceHistoryResponse) ValidateFor(query DeviceHistoryQuery) error {
@@ -184,7 +191,7 @@ func (response DeviceHistoryResponse) ValidateFor(query DeviceHistoryQuery) erro
 	if err != nil {
 		return err
 	}
-	if response.SchemaVersion != 1 || response.OwningOrganizationID != canonical.OwningOrganizationID || response.SiteID != canonical.SiteID || response.DeviceID != canonical.DeviceID {
+	if response.SchemaVersion != 1 || response.TenantID != canonical.TenantID || response.SiteID != canonical.SiteID || response.DeviceID != canonical.DeviceID {
 		return errors.New("history response scope is invalid")
 	}
 	metadata := response.Metadata

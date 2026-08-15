@@ -56,7 +56,7 @@ export interface OperationsAuditEventV1 {
   readonly schemaVersion: typeof OPERATIONS_AUDIT_SCHEMA_VERSION;
   readonly messageType: typeof OPERATIONS_AUDIT_MESSAGE_TYPE;
   readonly producer: typeof OPERATIONS_AUDIT_PRODUCER;
-  readonly organizationId: string;
+  readonly tenantId: string;
   readonly siteId: string;
   readonly investigationId: string | null;
   readonly runId: string | null;
@@ -218,7 +218,7 @@ export const createOperationsAuditEvent = (
     schemaVersion: OPERATIONS_AUDIT_SCHEMA_VERSION,
     messageType: OPERATIONS_AUDIT_MESSAGE_TYPE,
     producer: OPERATIONS_AUDIT_PRODUCER,
-    organizationId: input.scope.organizationId,
+    tenantId: input.scope.tenantId,
     siteId: input.scope.siteId,
     investigationId: input.investigationId,
     runId: input.runId,
@@ -244,7 +244,7 @@ export const parseOperationsAuditEvent = (value: unknown): OperationsAuditEventV
     'schemaVersion',
     'messageType',
     'producer',
-    'organizationId',
+    'tenantId',
     'siteId',
     'investigationId',
     'runId',
@@ -262,7 +262,7 @@ export const parseOperationsAuditEvent = (value: unknown): OperationsAuditEventV
     || candidate.schemaVersion !== OPERATIONS_AUDIT_SCHEMA_VERSION
     || candidate.messageType !== OPERATIONS_AUDIT_MESSAGE_TYPE
     || candidate.producer !== OPERATIONS_AUDIT_PRODUCER
-    || !boundedText(candidate.organizationId)
+    || !boundedText(candidate.tenantId)
     || !boundedText(candidate.siteId)
     || !nullableIdentity(candidate.investigationId)
     || !nullableIdentity(candidate.runId)
@@ -290,7 +290,7 @@ export const parseOperationsAuditEvent = (value: unknown): OperationsAuditEventV
     schemaVersion: OPERATIONS_AUDIT_SCHEMA_VERSION,
     messageType: OPERATIONS_AUDIT_MESSAGE_TYPE,
     producer: OPERATIONS_AUDIT_PRODUCER,
-    organizationId: candidate.organizationId,
+    tenantId: candidate.tenantId,
     siteId: candidate.siteId,
     investigationId: candidate.investigationId,
     runId: candidate.runId,
@@ -307,7 +307,7 @@ export const parseOperationsAuditEvent = (value: unknown): OperationsAuditEventV
 };
 
 export const operationsAuditEventId = (input: {
-  readonly organizationId: string;
+  readonly tenantId: string;
   readonly siteId: string;
   readonly investigationId: string | null;
   readonly runId: string | null;
@@ -318,7 +318,7 @@ export const operationsAuditEventId = (input: {
 }): string => {
   const parts = [
     'operations-audit-v1',
-    input.organizationId,
+    input.tenantId,
     input.siteId,
     input.investigationId ?? 'none',
     input.runId ?? 'none',

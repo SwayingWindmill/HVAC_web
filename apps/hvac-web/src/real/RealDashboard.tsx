@@ -70,10 +70,10 @@ function formatEnergy(value: number | null): string {
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(value);
 }
 
-function energyRequestOptions(principal: CurrentPrincipalResponse, signal: AbortSignal): EnergyAnalyticsRequestOptions {
+function energyRequestOptions(principal: CurrentPrincipalResponse, trustedTenantId: string, signal: AbortSignal): EnergyAnalyticsRequestOptions {
   const capabilityKey = ['csrf', 'Token'].join('') as keyof CurrentPrincipalResponse['session'];
   const options = {
-    trustedOrganizationId: principal.context.actingOrganizationId,
+    trustedTenantId,
     signal,
   } as unknown as EnergyAnalyticsRequestOptions;
   Reflect.set(options, capabilityKey, String(principal.session[capabilityKey]));
@@ -128,7 +128,7 @@ export function RealDashboard({ site, principal }: RealDashboardProps) {
   const [asOf, setAsOf] = useState(() => Date.now());
   const canListDevices = principal.authorization.capabilities.includes('device.list');
   const canListAlarms = principal.authorization.capabilities.includes('alarm.list');
-  const protectedScope = `${principal.session.id}:${principal.authorization.policyRevision}:${principal.context.actingOrganizationId}:${site.id}`;
+  const protectedScope = `${principal.session.id}:${principal.authorization.policyRevision}:${principal.context.tenantId}:${site.id}`;
   const devicesQuery = useRegistryDevices(site.id, canListDevices);
   const pageCount = devicesQuery.data?.pages.length ?? 0;
 
@@ -146,7 +146,7 @@ export function RealDashboard({ site, principal }: RealDashboardProps) {
   );
   const presenceQuery = useVisibleDevicePresence(
     devices,
-    principal.context.actingOrganizationId,
+    site.tenantId,
     site.id,
   );
   const deviceProjection = useMemo(
@@ -155,7 +155,7 @@ export function RealDashboard({ site, principal }: RealDashboardProps) {
   );
 
   const energyQueryInput = useMemo<EnergySeriesQuery>(() => ({
-    organizationId: principal.context.actingOrganizationId,
+    tenantId: site.tenantId,
     siteId: site.id,
     energyType: 'electricity',
     granularity: 'hour',
@@ -163,7 +163,7 @@ export function RealDashboard({ site, principal }: RealDashboardProps) {
     from: new Date(asOf - 24 * 60 * 60 * 1000).toISOString(),
     to: new Date(asOf).toISOString(),
     qualityPolicy: 'VALID_ONLY',
-  }), [asOf, principal.context.actingOrganizationId, site.id, site.timezone]);
+  }), [asOf, site.id, site.tenantId, site.timezone]);
   const registryDevicesQueryKey = useMemo(() => ['registry', 'sites', site.id, 'devices'] as const, [site.id]);
   const dashboardEnergyQueryKey = useMemo(() => energySeriesQueryKey(energyQueryInput), [energyQueryInput]);
 
@@ -177,7 +177,7 @@ export function RealDashboard({ site, principal }: RealDashboardProps) {
 
   const energyQuery = useQuery({
     queryKey: dashboardEnergyQueryKey,
-    queryFn: ({ signal }) => queryEnergySeries(energyQueryInput, energyRequestOptions(principal, signal)),
+    queryFn: ({ signal }) => queryEnergySeries(energyQueryInput, energyRequestOptions(principal, site.tenantId, signal)),
     staleTime: 60_000,
     retry: (failureCount, error) => failureCount < 1 && classifyEnergyAnalyticsFailure(error).retryable,
   });

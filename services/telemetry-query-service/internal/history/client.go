@@ -203,7 +203,7 @@ func (client *Client) buildResponse(query telemetryhistorymodel.DeviceHistoryQue
 		revisionSuffix = strconv.FormatUint(metadata.MaximumRevision, 10)
 	}
 	response := telemetryhistorymodel.DeviceHistoryResponse{
-		SchemaVersion: 1, OwningOrganizationID: query.OwningOrganizationID, SiteID: query.SiteID, DeviceID: query.DeviceID,
+		SchemaVersion: 1, TenantID: query.TenantID, SiteID: query.SiteID, DeviceID: query.DeviceID,
 		Series: responseSeries,
 		Metadata: telemetryhistorymodel.DeviceHistoryMetadata{
 			RequestedFrom: query.From, RequestedTo: query.To, DataWatermark: watermark,
@@ -234,7 +234,7 @@ func (client *Client) pointsQuery(query telemetryhistorymodel.DeviceHistoryQuery
     row_number() OVER (PARTITION BY telemetry_key ORDER BY sampled_at DESC, source_offset DESC, observation_id DESC) AS row_number,
     count() OVER (PARTITION BY telemetry_key) AS total_count
   FROM %s.%s
-  WHERE owning_organization_id = toUUID('%s')
+  WHERE tenant_id = toUUID('%s')
     AND site_id = toUUID('%s')
     AND device_id = toUUID('%s')
     AND telemetry_key IN (%s)
@@ -260,7 +260,7 @@ SELECT
 FROM scoped
 WHERE row_number <= %d
 ORDER BY telemetry_key, sampled_at, source_offset, observation_id
-FORMAT JSONEachRow`, client.database, client.table, query.OwningOrganizationID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.From), formatClickHouseTime(query.To), query.MaxPointsPerKey)
+FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.From), formatClickHouseTime(query.To), query.MaxPointsPerKey)
 }
 
 func (client *Client) metadataQuery(query telemetryhistorymodel.DeviceHistoryQuery) string {
@@ -268,14 +268,14 @@ func (client *Client) metadataQuery(query telemetryhistorymodel.DeviceHistoryQue
   if(count() = 0, CAST(NULL, 'Nullable(String)'), formatDateTime(max(sampled_at), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC')) AS data_watermark,
   maxOrDefault(source_offset) AS maximum_revision
 FROM %s.%s
-WHERE owning_organization_id = toUUID('%s')
+WHERE tenant_id = toUUID('%s')
   AND site_id = toUUID('%s')
   AND device_id = toUUID('%s')
   AND telemetry_key IN (%s)
   AND acceptance_status = 'ACCEPTED'
   AND value_number IS NOT NULL
   AND isFinite(value_number)
-FORMAT JSONEachRow`, client.database, client.table, query.OwningOrganizationID, query.SiteID, query.DeviceID, quotedKeys(query.Keys))
+FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys))
 }
 
 func quotedKeys(keys []string) string {

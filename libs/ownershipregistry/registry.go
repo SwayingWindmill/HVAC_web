@@ -195,7 +195,7 @@ func validateEntry(entry RouteEntry) error {
 	if entry.Owner == OwnerLegacy && entry.CompatibilityMode != "legacy-read" {
 		return errors.New("Legacy ownership requires legacy-read compatibility")
 	}
-	allowed := map[string]bool{"organization": true, "principal": true, "site": true, "device": true, "key": true, "alarm": true, "work-order": true}
+	allowed := map[string]bool{"tenant": true, "principal": true, "site": true, "device": true, "key": true, "alarm": true, "work-order": true}
 	seenScopes := map[string]bool{}
 	for _, scope := range entry.AllowedScopeDimensions {
 		if !allowed[scope] || seenScopes[scope] {
@@ -222,8 +222,8 @@ func validateEntry(entry RouteEntry) error {
 		} else if entry.Rollout.FallbackOwner == entry.Owner || !isCandidateOwner(entry.Rollout.FallbackOwner) {
 			return errors.New("fallback owner is invalid")
 		}
-		if len(entry.Rollout.CohortSalt) < 8 || !seenScopes["organization"] || !seenScopes["principal"] {
-			return errors.New("percentage rollout requires salt, organization and principal")
+		if len(entry.Rollout.CohortSalt) < 8 || !seenScopes["tenant"] || !seenScopes["principal"] {
+			return errors.New("percentage rollout requires salt, tenant and principal")
 		}
 	case "disabled":
 		if entry.Rollout.Percentage != 0 || entry.Rollout.FallbackOwner != "" || entry.Rollout.CohortSalt != "" {
@@ -268,7 +268,7 @@ func validateS2Phase(entry RouteEntry, seenScopes map[string]bool) error {
 	if entry.PublicIngress != OwnerGateway || entry.ShadowSideEffectPolicy != "NONE" || entry.ReadOnlyFallback || entry.ReadFallbackOwner != "" {
 		return errors.New("S2 route must use Gateway ingress, side-effect-free shadowing and no request fallback")
 	}
-	for _, required := range []string{"organization", "site", "device", "principal", "key"} {
+	for _, required := range []string{"tenant", "site", "device", "principal", "key"} {
 		if !seenScopes[required] {
 			return errors.New("S2 scope dimensions are incomplete")
 		}
@@ -328,7 +328,7 @@ func validateS3Phase(entry RouteEntry, seenScopes map[string]bool) error {
 	if entry.PublicIngress != OwnerGateway || entry.ShadowSideEffectPolicy != "SYNTHETIC_ONLY" || entry.ReadOnlyFallback || entry.ReadFallbackOwner != "" {
 		return errors.New("S3 route must use Gateway ingress, Synthetic-only shadowing and no request fallback")
 	}
-	for _, required := range []string{"organization", "site", "device", "principal"} {
+	for _, required := range []string{"tenant", "site", "device", "principal"} {
 		if !seenScopes[required] {
 			return errors.New("S3 scope dimensions are incomplete")
 		}
@@ -356,7 +356,7 @@ func validateS4Phase(entry RouteEntry, seenScopes map[string]bool) error {
 		if entry.ShadowSideEffectPolicy != "NONE" {
 			return errors.New("S4 read route must be side-effect-free")
 		}
-		for _, required := range []string{"organization", "site", "principal"} {
+		for _, required := range []string{"tenant", "site", "principal"} {
 			if !seenScopes[required] {
 				return errors.New("S4 read scope dimensions are incomplete")
 			}
@@ -391,7 +391,7 @@ func validateS4Phase(entry RouteEntry, seenScopes map[string]bool) error {
 		if entry.ShadowSideEffectPolicy != "SYNTHETIC_ONLY" || !isS4LifecyclePath(entry.Path) {
 			return errors.New("S4 lifecycle route must be a declared synthetic-only Alarm operation")
 		}
-		for _, required := range []string{"organization", "site", "alarm", "principal", "key"} {
+		for _, required := range []string{"tenant", "site", "alarm", "principal", "key"} {
 			if !seenScopes[required] {
 				return errors.New("S4 lifecycle scope dimensions are incomplete")
 			}
@@ -417,7 +417,7 @@ func validateS5Phase(entry RouteEntry, seenScopes map[string]bool) error {
 	if entry.PublicIngress != OwnerGateway || entry.ShadowSideEffectPolicy != "NONE" || entry.ReadOnlyFallback || entry.ReadFallbackOwner != "" {
 		return errors.New("S5 Work Order route must use Gateway ingress and no request fallback")
 	}
-	for _, required := range []string{"organization", "site", "principal"} {
+	for _, required := range []string{"tenant", "site", "principal"} {
 		if !seenScopes[required] {
 			return errors.New("S5 Work Order scope dimensions are incomplete")
 		}
@@ -500,7 +500,7 @@ func isS5LifecyclePath(path string) bool {
 
 func isS4LifecyclePath(path string) bool {
 	switch path {
-	case "/api/v1/sites/{siteId}/alarms/{alarmId}:acknowledge",
+	case "/api/v1/alarms/{alarmId}/ack",
 		"/api/v1/sites/{siteId}/alarms/{alarmId}:assign",
 		"/api/v1/sites/{siteId}/alarms/{alarmId}:unassign",
 		"/api/v1/sites/{siteId}/alarms/{alarmId}:suppress",

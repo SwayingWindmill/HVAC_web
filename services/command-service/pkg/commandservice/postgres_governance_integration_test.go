@@ -50,21 +50,21 @@ func TestPostgresApprovalUsesFreshAuthorizationAndCreatesOutboxOnlyAfterThreshol
 		"approval-grant-medium")
 	bad := approval
 	bad.PayloadHash = "wrong"
-	if _, err := store.Approve(ctx, commandmodel.ApproveRequest{OrganizationID: commandOrgA, CommandID: created.Intent.ID, Approval: bad}); !errors.Is(err, ErrApprovalInvalid) {
+	if _, err := store.Approve(ctx, commandmodel.ApproveRequest{TenantID: commandOrgA, CommandID: created.Intent.ID, Approval: bad}); !errors.Is(err, ErrApprovalInvalid) {
 		t.Fatalf("wrong binding approval err=%v", err)
 	}
 	wrongPurpose := approval
 	wrongPurpose.Authorization.Purpose = commandmodel.AuthorizationCommandSubmit
-	if _, err := store.Approve(ctx, commandmodel.ApproveRequest{OrganizationID: commandOrgA, CommandID: created.Intent.ID, Approval: wrongPurpose}); !errors.Is(err, ErrApprovalInvalid) {
+	if _, err := store.Approve(ctx, commandmodel.ApproveRequest{TenantID: commandOrgA, CommandID: created.Intent.ID, Approval: wrongPurpose}); !errors.Is(err, ErrApprovalInvalid) {
 		t.Fatalf("submit-purpose approval err=%v", err)
 	}
 	wrongPrincipal := approval
 	wrongPrincipal.Authorization.PrincipalID = commandPrincipalA
-	if _, err := store.Approve(ctx, commandmodel.ApproveRequest{OrganizationID: commandOrgA, CommandID: created.Intent.ID, Approval: wrongPrincipal}); !errors.Is(err, ErrApprovalInvalid) {
+	if _, err := store.Approve(ctx, commandmodel.ApproveRequest{TenantID: commandOrgA, CommandID: created.Intent.ID, Approval: wrongPrincipal}); !errors.Is(err, ErrApprovalInvalid) {
 		t.Fatalf("approver principal mismatch err=%v", err)
 	}
 
-	approved, err := store.Approve(ctx, commandmodel.ApproveRequest{OrganizationID: commandOrgA, CommandID: created.Intent.ID, Approval: approval})
+	approved, err := store.Approve(ctx, commandmodel.ApproveRequest{TenantID: commandOrgA, CommandID: created.Intent.ID, Approval: approval})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestPostgresHighRiskRequiresTwoDistinctApprovals(t *testing.T) {
 		"018f3e00-a000-7000-8000-000000000011",
 		"018f3e00-5000-7000-8000-000000000011",
 		"approval-grant-high-1")
-	partial, err := store.Approve(ctx, commandmodel.ApproveRequest{OrganizationID: commandOrgA, CommandID: created.Intent.ID, Approval: first})
+	partial, err := store.Approve(ctx, commandmodel.ApproveRequest{TenantID: commandOrgA, CommandID: created.Intent.ID, Approval: first})
 	if !errors.Is(err, ErrApprovalRequired) || partial.Status != commandmodel.IntentAwaitingApproval || len(partial.Approvals) != 1 {
 		t.Fatalf("first approval result=%#v err=%v", partial, err)
 	}
@@ -131,7 +131,7 @@ func TestPostgresHighRiskRequiresTwoDistinctApprovals(t *testing.T) {
 		"018f3e00-a000-7000-8000-000000000012",
 		"018f3e00-5000-7000-8000-000000000012",
 		"approval-grant-high-2")
-	approved, err := store.Approve(ctx, commandmodel.ApproveRequest{OrganizationID: commandOrgA, CommandID: created.Intent.ID, Approval: second})
+	approved, err := store.Approve(ctx, commandmodel.ApproveRequest{TenantID: commandOrgA, CommandID: created.Intent.ID, Approval: second})
 	if err != nil || approved.Status != commandmodel.IntentQueued || len(approved.Approvals) != 2 {
 		t.Fatalf("second approval result=%#v err=%v", approved, err)
 	}
@@ -171,7 +171,7 @@ func TestPostgresExecutionExpiresWhenAnyApprovalAuthorizationExpires(t *testing.
 		"018f3e00-5000-7000-8000-000000000021",
 		"approval-grant-expiring")
 	first.Authorization.ExpiresAt = now.Add(5 * time.Second)
-	partial, err := store.Approve(ctx, commandmodel.ApproveRequest{OrganizationID: commandOrgA, CommandID: created.Intent.ID, Approval: first})
+	partial, err := store.Approve(ctx, commandmodel.ApproveRequest{TenantID: commandOrgA, CommandID: created.Intent.ID, Approval: first})
 	if !errors.Is(err, ErrApprovalRequired) {
 		t.Fatalf("first approval result=%#v err=%v", partial, err)
 	}
@@ -180,7 +180,7 @@ func TestPostgresExecutionExpiresWhenAnyApprovalAuthorizationExpires(t *testing.
 		"018f3e00-a000-7000-8000-000000000022",
 		"018f3e00-5000-7000-8000-000000000022",
 		"approval-grant-current")
-	approved, err := store.Approve(ctx, commandmodel.ApproveRequest{OrganizationID: commandOrgA, CommandID: created.Intent.ID, Approval: second})
+	approved, err := store.Approve(ctx, commandmodel.ApproveRequest{TenantID: commandOrgA, CommandID: created.Intent.ID, Approval: second})
 	if err != nil || approved.Status != commandmodel.IntentQueued {
 		t.Fatalf("second approval result=%#v err=%v", approved, err)
 	}
@@ -212,7 +212,7 @@ func postgresApproval(intent commandmodel.CommandIntent, now time.Time, approval
 			PolicyRevision:              "command-policy-approval-1",
 			Purpose:                     commandmodel.AuthorizationCommandApprove,
 			PrincipalID:                 approverID,
-			OrganizationID:              intent.OrganizationID,
+			TenantID:                    intent.TenantID,
 			SiteID:                      intent.SiteID,
 			DeviceID:                    intent.DeviceID,
 			Capability:                  intent.Capability,

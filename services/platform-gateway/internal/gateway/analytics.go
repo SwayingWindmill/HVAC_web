@@ -93,10 +93,6 @@ func (h *handler) QueryEnergySeries(writer http.ResponseWriter, request *http.Re
 		h.writeAnalyticsFailure(writer, request, analyticsFailure{http.StatusUnprocessableEntity, "ANALYTICS_QUERY_INVALID", "Analytics query invalid", "The Energy Series query exceeds the supported product boundary.", false})
 		return
 	}
-	if query.OrganizationID != session.ActingOrganizationID {
-		h.writeAnalyticsFailure(writer, request, analyticsFailure{http.StatusForbidden, "ANALYTICS_ACCESS_DENIED", "Analytics access denied", "The requested Organization is outside the authenticated context.", false})
-		return
-	}
 	grant, failure := h.authorizeAnalytics(request.Context(), request, session, query)
 	if failure != nil {
 		h.writeAnalyticsFailure(writer, request, *failure)
@@ -206,7 +202,7 @@ func (h *handler) authorizeAnalyticsForPresenter(
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
 		DisplayName: session.Principal.DisplayName, Email: session.Principal.Email, Roles: append([]string(nil), session.Principal.Roles...),
 		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE, Audience: h.identity.config.IAMAudience,
-		ActingOrganizationID: session.ActingOrganizationID, Actions: []string{analyticsAuthorizeAction}, Scopes: []string{"session:" + session.ID},
+		TenantID: session.TenantID, Actions: []string{analyticsAuthorizeAction}, Scopes: []string{"session:" + session.ID},
 		PolicyRevision: h.identity.config.PolicyRevision, SessionID: session.ID, IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	}
 	delegation, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, parent)
@@ -215,7 +211,7 @@ func (h *handler) authorizeAnalyticsForPresenter(
 		return "", &failure
 	}
 	decisionBody, err := json.Marshal(analyticsmodel.AuthorizationDecisionRequest{
-		ActingOrganizationID: session.ActingOrganizationID, SiteID: query.SiteID, Action: analyticsmodel.EnergySeriesAction,
+		TenantID: session.TenantID, SiteID: query.SiteID, Action: analyticsmodel.EnergySeriesAction,
 	})
 	if err != nil {
 		failure := analyticsUnavailable("The Gateway could not encode the Analytics authorization request.")
@@ -271,7 +267,7 @@ func (h *handler) authorizeAnalyticsForPresenter(
 		PrincipalID: result.Decision.PrincipalID,
 		DisplayName: session.Principal.DisplayName, Email: session.Principal.Email, Roles: append([]string(nil), session.Principal.Roles...),
 		ExecutingService: presenterSPIFFE, Audience: h.analytics.queryAudience,
-		ActingOrganizationID: session.ActingOrganizationID, Actions: []string{analyticsmodel.EnergySeriesAction}, Scopes: []string{scope},
+		TenantID: query.TenantID, Actions: []string{analyticsmodel.EnergySeriesAction}, Scopes: []string{scope},
 		PolicyRevision: result.Decision.PolicyRevision, SessionID: session.ID, IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	}
 	grant, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
@@ -284,7 +280,7 @@ func (h *handler) authorizeAnalyticsForPresenter(
 
 func validateAnalyticsDecision(decision analyticsmodel.AuthorizationDecision, session bffSession, query analyticsmodel.EnergySeriesQuery) bool {
 	if decision.PrincipalID == "" || decision.Subject != session.Principal.Subject || decision.SubjectIssuer != session.Principal.Issuer ||
-		decision.ActingOrganizationID != session.ActingOrganizationID || decision.SiteID != query.SiteID || decision.Action != analyticsmodel.EnergySeriesAction ||
+		decision.TenantID != session.TenantID || decision.TenantID != query.TenantID || decision.SiteID != query.SiteID || decision.Action != analyticsmodel.EnergySeriesAction ||
 		strings.TrimSpace(decision.PolicyRevision) == "" {
 		return false
 	}

@@ -64,7 +64,7 @@ acceptance-summary.md
 
 The acceptance report also references evidence produced by existing domain gates, including the Phase 1 data-architecture baseline, MQTT/S2 integration, S2 PostgreSQL, Analytics/ClickHouse/Cube, Command certification, and S2 capacity preflight.
 
-`GATE-DATA-ARCHITECTURE` runs `npm run data:phase1:check`. It prevents regression of the implemented Asset/Device/Point/Time Series/Energy Topology/Metric Definition foundation and requires Command, Alarm, and Work Order tenant-scoped persistence to retain both `tenant_id` and Organization→Tenant binding/RLS invariants. This gate does not mark the entire data architecture complete; remaining `PARTIAL`/`MISSING` items stay visible in `contracts/data/phase1-data-architecture.v1.json`.
+`GATE-DATA-ARCHITECTURE` runs `npm run data:architecture:check`. It validates the CURRENT SE-DATA-001 V2 baseline, including the ten-domain model, frozen SoT boundaries, Point-as-canonical semantics, optional Physical Sensor rule, V2 quality model, and Production Gate inventory. The gate must not use Organization or ThingsBoard as architectural dependencies. Remaining `PARTIAL`/`MISSING` items stay visible in `contracts/data/data-architecture.v2.json` and keep V2 acceptance ineligible.
 
 ## Hard rules
 

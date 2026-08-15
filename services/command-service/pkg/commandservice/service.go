@@ -80,7 +80,7 @@ func (s *Service) Submit(request commandmodel.SubmitRequest) (SubmitResult, erro
 		return SubmitResult{}, err
 	}
 
-	idempotencyScope := strings.Join([]string{request.OrganizationID, request.DeviceID, request.IdempotencyKey}, "\x00")
+	idempotencyScope := strings.Join([]string{request.TenantID, request.DeviceID, request.IdempotencyKey}, "\x00")
 	if existing, ok := s.idempotency[idempotencyScope]; ok {
 		if existing.PayloadHash != payloadHash {
 			return SubmitResult{}, ErrIdempotencyConflict
@@ -101,7 +101,6 @@ func (s *Service) Submit(request commandmodel.SubmitRequest) (SubmitResult, erro
 	intent := &commandmodel.CommandIntent{
 		ID:                    commandID,
 		TenantID:              request.TenantID,
-		OrganizationID:        request.OrganizationID,
 		SiteID:                request.SiteID,
 		DeviceID:              request.DeviceID,
 		PointID:               request.PointID,
@@ -144,7 +143,7 @@ func (s *Service) Approve(request commandmodel.ApproveRequest) (commandmodel.Com
 	defer s.mu.Unlock()
 
 	intent, ok := s.intents[request.CommandID]
-	if !ok || intent.OrganizationID != request.OrganizationID {
+	if !ok || intent.TenantID != request.TenantID {
 		return commandmodel.CommandIntent{}, ErrCommandNotFound
 	}
 	if intent.Status != commandmodel.IntentAwaitingApproval {
@@ -216,7 +215,7 @@ func (s *Service) PrepareDispatch(commandID, leaseOwner string, leaseUntil time.
 	return commandmodel.DispatchEnvelope{
 		CommandID:             intent.ID,
 		AttemptID:             attemptID,
-		OrganizationID:        intent.OrganizationID,
+		TenantID:              intent.TenantID,
 		SiteID:                intent.SiteID,
 		DeviceID:              intent.DeviceID,
 		PointID:               intent.PointID,
@@ -323,7 +322,7 @@ func (s *Service) PrepareVerification(commandID, leaseOwner string, leaseUntil t
 		attempt.Version++
 		attempt.UpdatedAt = now
 		return commandmodel.VerificationEnvelope{
-			CommandID: intent.ID, AttemptID: attempt.ID, OrganizationID: intent.OrganizationID,
+			CommandID: intent.ID, AttemptID: attempt.ID, TenantID: intent.TenantID,
 			SiteID: intent.SiteID, DeviceID: intent.DeviceID, PointID: intent.PointID, Capability: intent.Capability,
 			CapabilityRevision: intent.CapabilityRevision, Parameters: cloneParameters(intent.Parameters), VerificationPointKey: intent.VerificationPointKey,
 			PayloadHash: intent.PayloadHash, ExecutionFence: attempt.ExecutionFence,
@@ -396,7 +395,7 @@ func validReportedState(intent commandmodel.CommandIntent, envelope commandmodel
 	if !ok || !supported {
 		return false
 	}
-	return reported.OrganizationID == intent.OrganizationID && reported.SiteID == intent.SiteID && reported.DeviceID == intent.DeviceID &&
+	return reported.TenantID == intent.TenantID && reported.SiteID == intent.SiteID && reported.DeviceID == intent.DeviceID &&
 		reported.EvaluationAvailability == "AVAILABLE" && reported.Presence == "ONLINE" && reported.Readiness == "CURRENT" &&
 		reported.Freshness == "FRESH" && reported.Quality == "GOOD" &&
 		reported.BusinessRevision > envelope.BaselineBusinessRevision && reported.ObservedAt.After(envelope.AcknowledgedAt) &&
@@ -404,7 +403,7 @@ func validReportedState(intent commandmodel.CommandIntent, envelope commandmodel
 }
 
 func validateAndHash(request commandmodel.SubmitRequest) (string, error) {
-	if strings.TrimSpace(request.TenantID) == "" || strings.TrimSpace(request.OrganizationID) == "" || strings.TrimSpace(request.SiteID) == "" ||
+	if strings.TrimSpace(request.TenantID) == "" || strings.TrimSpace(request.SiteID) == "" ||
 		strings.TrimSpace(request.DeviceID) == "" || strings.TrimSpace(request.PointID) == "" || strings.TrimSpace(request.PrincipalID) == "" ||
 		strings.TrimSpace(request.IdempotencyKey) == "" || strings.TrimSpace(request.VerificationPointKey) == "" {
 		return "", ErrInvalidRequest
@@ -440,7 +439,6 @@ func validateAndHash(request commandmodel.SubmitRequest) (string, error) {
 
 	canonical := strings.Join([]string{
 		request.TenantID,
-		request.OrganizationID,
 		request.SiteID,
 		request.DeviceID,
 		request.PointID,

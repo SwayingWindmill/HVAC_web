@@ -589,9 +589,9 @@ async function runSmoke() {
     const report = {
       schemaVersion: 1,
       status: 'passed',
-      topology: 'EG8200 -> ThingsBoard -> Adapter -> S2 -> Gateway -> HVAC Web Real',
+      topology: 'EG8200 -> MQTT -> MQTT Adapter -> S2 -> Gateway -> HVAC Web Real',
       webURL: topology.webURL,
-      thingsBoardURL: topology.thingsBoardURL,
+      mqttBrokerURL: topology.mqttBrokerURL,
       logto: {
         issuer: topology.logto.issuer,
         clientId: topology.logto.clientId,
@@ -632,7 +632,7 @@ async function runSmoke() {
 
 async function runUp() {
   const topology = await startCentralPlantLocalTopology({ quiet: false });
-  console.log(JSON.stringify({ status: 'ready', webURL: topology.webURL, thingsBoardURL: topology.thingsBoardURL }, null, 2));
+  console.log(JSON.stringify({ status: 'ready', webURL: topology.webURL, mqttBrokerURL: topology.mqttBrokerURL }, null, 2));
   await new Promise((resolveSignal) => {
     const shutdown = () => resolveSignal();
     process.once('SIGINT', shutdown);

@@ -6,13 +6,11 @@ import (
 	"strings"
 )
 
-const CapabilitySetVersion = 6
+const CapabilitySetVersion = 7
 
 type Capability string
 
 const (
-	CapabilityOrganizationList      Capability = "organization.list"
-	CapabilityOrganizationRead      Capability = "organization.read"
 	CapabilitySiteList              Capability = "site.list"
 	CapabilitySiteRead              Capability = "site.read"
 	CapabilityEquipmentList         Capability = "equipment.list"
@@ -33,8 +31,6 @@ const (
 )
 
 var supportedCapabilities = [...]Capability{
-	CapabilityOrganizationList,
-	CapabilityOrganizationRead,
 	CapabilitySiteList,
 	CapabilitySiteRead,
 	CapabilityEquipmentList,
@@ -60,9 +56,7 @@ func SupportedCapabilities() []Capability {
 
 func (capability Capability) Valid() bool {
 	switch capability {
-	case CapabilityOrganizationList,
-		CapabilityOrganizationRead,
-		CapabilitySiteList,
+	case CapabilitySiteList,
 		CapabilitySiteRead,
 		CapabilityEquipmentList,
 		CapabilityEquipmentRead,

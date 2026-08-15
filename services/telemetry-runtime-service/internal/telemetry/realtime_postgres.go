@@ -35,7 +35,7 @@ func (store *PostgresStore) SaveSubscriptions(ctx context.Context, subscriptions
 		command, err := tx.Exec(ctx, `
 INSERT INTO telemetry_runtime.telemetry_subscriptions (
   subscription_id, client_subscription_id, principal_id, subject, subject_issuer,
-  session_id, acting_organization_id, device_id, keys, scope_sha256,
+  session_id, tenant_id, device_id, keys, scope_sha256,
   policy_revision, policy_revision_ref, channel, status, expires_at,
   revoked_at, created_at, updated_at
 ) VALUES (
@@ -53,14 +53,14 @@ WHERE telemetry_runtime.telemetry_subscriptions.principal_id = EXCLUDED.principa
   AND telemetry_runtime.telemetry_subscriptions.subject = EXCLUDED.subject
   AND telemetry_runtime.telemetry_subscriptions.subject_issuer = EXCLUDED.subject_issuer
   AND telemetry_runtime.telemetry_subscriptions.session_id = EXCLUDED.session_id
-  AND telemetry_runtime.telemetry_subscriptions.acting_organization_id = EXCLUDED.acting_organization_id
+  AND telemetry_runtime.telemetry_subscriptions.tenant_id = EXCLUDED.tenant_id
   AND telemetry_runtime.telemetry_subscriptions.device_id = EXCLUDED.device_id
   AND telemetry_runtime.telemetry_subscriptions.keys = EXCLUDED.keys
   AND telemetry_runtime.telemetry_subscriptions.scope_sha256 = EXCLUDED.scope_sha256
   AND telemetry_runtime.telemetry_subscriptions.channel = EXCLUDED.channel
 `, subscription.SubscriptionID, subscription.ClientSubscriptionID, subscription.PrincipalID,
 			subscription.Subject, subscription.SubjectIssuer, subscription.SessionID,
-			subscription.ActingOrganizationID, subscription.DeviceID, keys, subscription.ScopeDigest,
+			subscription.TenantID, subscription.DeviceID, keys, subscription.ScopeDigest,
 			policyRevisionOrdinal(subscription.PolicyRevision), subscription.PolicyRevision, subscription.Channel,
 			subscription.ExpiresAt, subscription.CreatedAt)
 		if err != nil {
@@ -86,7 +86,7 @@ func (store *PostgresStore) ActiveSubscription(ctx context.Context, subscription
 	}
 	row := store.pool.QueryRow(ctx, `
 SELECT subscription_id, client_subscription_id, principal_id::text, subject, subject_issuer,
-       session_id, acting_organization_id::text, device_id::text, keys,
+       session_id, tenant_id::text, device_id::text, keys,
        scope_sha256, policy_revision_ref, channel, status,
        expires_at, revoked_at, created_at, updated_at
 FROM telemetry_runtime.telemetry_subscriptions
@@ -101,7 +101,7 @@ func (store *PostgresStore) ActiveSubscriptionByChannel(ctx context.Context, pri
 	}
 	row := store.pool.QueryRow(ctx, `
 SELECT subscription_id, client_subscription_id, principal_id::text, subject, subject_issuer,
-       session_id, acting_organization_id::text, device_id::text, keys,
+       session_id, tenant_id::text, device_id::text, keys,
        scope_sha256, policy_revision_ref, channel, status,
        expires_at, revoked_at, created_at, updated_at
 FROM telemetry_runtime.telemetry_subscriptions
@@ -109,7 +109,7 @@ WHERE principal_id = $1::uuid AND channel = $2 AND status = 'ACTIVE' AND expires
   AND EXISTS (
     SELECT 1 FROM telemetry_runtime.registry_device_bindings binding
     WHERE binding.device_id = telemetry_subscriptions.device_id
-      AND binding.owning_organization_id = telemetry_subscriptions.acting_organization_id
+      AND binding.tenant_id = telemetry_subscriptions.tenant_id
       AND binding.binding_status = 'ACTIVE' AND binding.valid_to IS NULL
   )
   AND NOT EXISTS (
@@ -121,7 +121,7 @@ WHERE principal_id = $1::uuid AND channel = $2 AND status = 'ACTIVE' AND expires
     WHERE NOT EXISTS (
       SELECT 1 FROM telemetry_runtime.iam_scope_projections projection
       WHERE projection.principal_id = telemetry_subscriptions.principal_id
-        AND projection.acting_organization_id = telemetry_subscriptions.acting_organization_id
+        AND projection.tenant_id = telemetry_subscriptions.tenant_id
         AND projection.device_id = telemetry_subscriptions.device_id
         AND projection.action = 'SUBSCRIBE' AND projection.decision = 'ALLOW'
         AND projection.revoked_at IS NULL AND projection.valid_until > $3
@@ -131,7 +131,7 @@ WHERE principal_id = $1::uuid AND channel = $2 AND status = 'ACTIVE' AND expires
   AND NOT EXISTS (
     SELECT 1 FROM telemetry_runtime.iam_scope_projections denial
     WHERE denial.principal_id = telemetry_subscriptions.principal_id
-      AND denial.acting_organization_id = telemetry_subscriptions.acting_organization_id
+      AND denial.tenant_id = telemetry_subscriptions.tenant_id
       AND denial.device_id = telemetry_subscriptions.device_id
       AND denial.action = 'SUBSCRIBE' AND denial.decision = 'DENY'
       AND denial.revoked_at IS NULL AND denial.valid_until > $3
@@ -147,7 +147,7 @@ func (store *PostgresStore) ActiveSubscriptionsForDevice(ctx context.Context, de
 	}
 	rows, err := store.pool.Query(ctx, `
 SELECT subscription_id, client_subscription_id, principal_id::text, subject, subject_issuer,
-       session_id, acting_organization_id::text, device_id::text, keys,
+       session_id, tenant_id::text, device_id::text, keys,
        scope_sha256, policy_revision_ref, channel, status,
        expires_at, revoked_at, created_at, updated_at
 FROM telemetry_runtime.telemetry_subscriptions
@@ -155,7 +155,7 @@ WHERE device_id = $1::uuid AND status = 'ACTIVE' AND expires_at > $2
   AND EXISTS (
     SELECT 1 FROM telemetry_runtime.registry_device_bindings binding
     WHERE binding.device_id = telemetry_subscriptions.device_id
-      AND binding.owning_organization_id = telemetry_subscriptions.acting_organization_id
+      AND binding.tenant_id = telemetry_subscriptions.tenant_id
       AND binding.binding_status = 'ACTIVE' AND binding.valid_to IS NULL
   )
   AND NOT EXISTS (
@@ -167,7 +167,7 @@ WHERE device_id = $1::uuid AND status = 'ACTIVE' AND expires_at > $2
     WHERE NOT EXISTS (
       SELECT 1 FROM telemetry_runtime.iam_scope_projections projection
       WHERE projection.principal_id = telemetry_subscriptions.principal_id
-        AND projection.acting_organization_id = telemetry_subscriptions.acting_organization_id
+        AND projection.tenant_id = telemetry_subscriptions.tenant_id
         AND projection.device_id = telemetry_subscriptions.device_id
         AND projection.action = 'SUBSCRIBE' AND projection.decision = 'ALLOW'
         AND projection.revoked_at IS NULL AND projection.valid_until > $2
@@ -177,7 +177,7 @@ WHERE device_id = $1::uuid AND status = 'ACTIVE' AND expires_at > $2
   AND NOT EXISTS (
     SELECT 1 FROM telemetry_runtime.iam_scope_projections denial
     WHERE denial.principal_id = telemetry_subscriptions.principal_id
-      AND denial.acting_organization_id = telemetry_subscriptions.acting_organization_id
+      AND denial.tenant_id = telemetry_subscriptions.tenant_id
       AND denial.device_id = telemetry_subscriptions.device_id
       AND denial.action = 'SUBSCRIBE' AND denial.decision = 'DENY'
       AND denial.revoked_at IS NULL AND denial.valid_until > $2
@@ -214,7 +214,7 @@ func scanRealtimeSubscription(scanner subscriptionScanner) (RealtimeSubscription
 	if err := scanner.Scan(
 		&subscription.SubscriptionID, &subscription.ClientSubscriptionID,
 		&subscription.PrincipalID, &subscription.Subject, &subscription.SubjectIssuer,
-		&subscription.SessionID, &subscription.ActingOrganizationID, &subscription.DeviceID,
+		&subscription.SessionID, &subscription.TenantID, &subscription.DeviceID,
 		&keysJSON, &subscription.ScopeDigest, &subscription.PolicyRevision, &subscription.Channel,
 		&status, &subscription.ExpiresAt, &subscription.RevokedAt, &subscription.CreatedAt, &subscription.UpdatedAt,
 	); err != nil {
@@ -415,7 +415,7 @@ WHERE status = 'ACTIVE'
   AND ($1::uuid IS NULL OR principal_id = $1::uuid)
   AND ($2::uuid IS NULL OR device_id = $2::uuid)
 RETURNING subscription_id, client_subscription_id, principal_id::text, subject, subject_issuer,
-          session_id, acting_organization_id::text, device_id::text, keys,
+          session_id, tenant_id::text, device_id::text, keys,
           scope_sha256, policy_revision_ref, channel, status,
           expires_at, revoked_at, created_at, updated_at
 `, principalArgument, deviceArgument, now)

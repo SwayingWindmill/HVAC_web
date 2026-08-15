@@ -8,8 +8,8 @@ import (
 )
 
 type WorkOrderPermission struct {
-	OrganizationID string
-	SiteID         string
+	TenantID string
+	SiteID   string
 	Action         workorderauth.Action
 	Effect         BindingEffect
 	Status         FactStatus
@@ -18,8 +18,8 @@ type WorkOrderPermission struct {
 }
 
 type WorkOrderOwnershipTarget struct {
-	OrganizationID string
-	SiteID         string
+	TenantID string
+	SiteID   string
 	TargetType     string
 	TargetID       string
 	Effect         BindingEffect
@@ -32,7 +32,7 @@ type WorkOrderAuthorizationFacts struct {
 	Found          bool
 	PolicyRevision string
 	Principal      PrincipalRecord
-	Memberships    []OrganizationMembership
+	Memberships    []TenantMembership
 	Permissions    []WorkOrderPermission
 	Targets        []WorkOrderOwnershipTarget
 }
@@ -70,14 +70,14 @@ func (store *staticWorkOrderAuthorizationStore) LookupWorkOrderAuthorization(_ c
 
 func evaluateWorkOrderAuthorization(ctx context.Context, store WorkOrderAuthorizationStore, now time.Time, subjectIssuer, subject string, request workorderauth.DecisionRequest) (workorderauth.Decision, error) {
 	facts, err := store.LookupWorkOrderAuthorization(ctx, AuthorizationLookup{
-		SubjectIssuer: subjectIssuer, Subject: subject, ActingOrganizationID: request.ActingOrganizationID,
+		SubjectIssuer: subjectIssuer, Subject: subject, TenantID: request.TenantID,
 	})
 	if err != nil {
 		return workorderauth.Decision{}, err
 	}
 	decision := workorderauth.Decision{
 		SubjectIssuer: subjectIssuer, Subject: subject,
-		ActingOrganizationID: request.ActingOrganizationID, SiteID: request.SiteID, WorkOrderID: request.WorkOrderID,
+		TenantID: request.TenantID, SiteID: request.SiteID, WorkOrderID: request.WorkOrderID,
 		AssigneeID: request.AssigneeID, TeamID: request.TeamID,
 		Action: request.Action, PolicyRevision: facts.PolicyRevision, ReasonCode: workorderauth.ReasonDenyPrincipal,
 		DecidedAt: now.UTC().Format(time.RFC3339Nano),
@@ -86,7 +86,7 @@ func evaluateWorkOrderAuthorization(ctx context.Context, store WorkOrderAuthoriz
 		return decision, nil
 	}
 	decision.PrincipalID = facts.Principal.ID
-	membershipActive, _ := membershipState(facts.Memberships, request.ActingOrganizationID, now)
+	membershipActive, _ := membershipState(facts.Memberships, request.TenantID, now)
 	if !membershipActive {
 		decision.ReasonCode = workorderauth.ReasonDenyMembership
 		return decision, nil
@@ -94,7 +94,7 @@ func evaluateWorkOrderAuthorization(ctx context.Context, store WorkOrderAuthoriz
 	allowFound := false
 	for _, permission := range facts.Permissions {
 		if permission.Status != FactStatusActive || !factEffective(permission.ValidFrom, permission.ValidTo, now) ||
-			permission.OrganizationID != request.ActingOrganizationID || permission.SiteID != request.SiteID || permission.Action != request.Action {
+			permission.TenantID != request.TenantID || permission.SiteID != request.SiteID || permission.Action != request.Action {
 			continue
 		}
 		if permission.Effect == BindingEffectDeny {
@@ -117,7 +117,7 @@ func evaluateWorkOrderAuthorization(ctx context.Context, store WorkOrderAuthoriz
 			targetAllowed := false
 			for _, target := range facts.Targets {
 				if target.Status != FactStatusActive || !factEffective(target.ValidFrom, target.ValidTo, now) ||
-					target.OrganizationID != request.ActingOrganizationID || target.SiteID != request.SiteID ||
+					target.TenantID != request.TenantID || target.SiteID != request.SiteID ||
 					target.TargetType != targetType || target.TargetID != *targetID {
 					continue
 				}
@@ -140,11 +140,11 @@ func evaluateWorkOrderAuthorization(ctx context.Context, store WorkOrderAuthoriz
 	return decision, nil
 }
 
-func workOrderCapabilityAllowed(facts WorkOrderAuthorizationFacts, now time.Time, actingOrganizationID string, action workorderauth.Action) bool {
+func workOrderCapabilityAllowed(facts WorkOrderAuthorizationFacts, now time.Time, tenantID string, action workorderauth.Action) bool {
 	if !facts.Found || facts.Principal.Status != FactStatusActive {
 		return false
 	}
-	membershipActive, _ := membershipState(facts.Memberships, actingOrganizationID, now)
+	membershipActive, _ := membershipState(facts.Memberships, tenantID, now)
 	if !membershipActive {
 		return false
 	}
@@ -152,7 +152,7 @@ func workOrderCapabilityAllowed(facts WorkOrderAuthorizationFacts, now time.Time
 	deniedSites := map[string]bool{}
 	for _, permission := range facts.Permissions {
 		if permission.Status != FactStatusActive || !factEffective(permission.ValidFrom, permission.ValidTo, now) ||
-			permission.OrganizationID != actingOrganizationID || permission.Action != action {
+			permission.TenantID != tenantID || permission.Action != action {
 			continue
 		}
 		switch permission.Effect {
@@ -172,7 +172,7 @@ func workOrderCapabilityAllowed(facts WorkOrderAuthorizationFacts, now time.Time
 
 func cloneWorkOrderAuthorizationFacts(value WorkOrderAuthorizationFacts) WorkOrderAuthorizationFacts {
 	cloned := value
-	cloned.Memberships = append([]OrganizationMembership(nil), value.Memberships...)
+	cloned.Memberships = append([]TenantMembership(nil), value.Memberships...)
 	cloned.Permissions = append([]WorkOrderPermission(nil), value.Permissions...)
 	cloned.Targets = append([]WorkOrderOwnershipTarget(nil), value.Targets...)
 	return cloned

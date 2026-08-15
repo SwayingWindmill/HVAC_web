@@ -22,6 +22,7 @@ import (
 
 type operationsGatewayFixture struct {
 	handler          http.Handler
+	tenantID         string
 	organizationID   string
 	siteID           string
 	sessionID        string
@@ -40,6 +41,7 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 	t.Helper()
 	now := time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC)
 	fixture := &operationsGatewayFixture{
+		tenantID:       "018f3d00-0000-7000-8000-000000000001",
 		organizationID: "018f3e00-1000-7000-8000-000000000001",
 		siteID:         "018f3e00-2000-7000-8000-000000000001",
 		gatewaySigner:  commandTestSigner(t),
@@ -162,7 +164,7 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 				Decision: analyticsmodel.AuthorizationDecision{
 					Allowed: allowed, PrincipalID: "018f3e00-5000-7000-8000-000000000001",
 					SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
-					ActingOrganizationID: fixture.organizationID, SiteID: input.SiteID, Action: input.Action,
+					ActingOrganizationID: fixture.organizationID, TenantID: fixture.tenantID, SiteID: input.SiteID, Action: input.Action,
 					PolicyRevision: "analytics-policy-7", ReasonCode: reason, DecidedAt: now.Format(time.RFC3339Nano),
 				},
 			}), nil
@@ -219,7 +221,7 @@ func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, now time
 				unsafe := "id: 9:0\nevent: RUN_STARTED\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"investigation-001\",\"runId\":\"run-001\",\"checkpoint\":{}}\n\n"
 				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(unsafe))}, nil
 			}
-			investigation := `{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","resourceBudget":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[]}`
+			investigation := `{"schemaVersion":1,"id":"investigation-001","scope":{"tenantId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","resourceBudget":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[]}`
 			plan := `{"schemaVersion":1,"id":"site-night-energy-investigation","label":"Site night-energy investigation","completedSteps":4,"totalSteps":4,"progressPercent":100,"steps":[{"id":"READ_SITE_CONTEXT","label":"Read authoritative Site context","status":"COMPLETED"},{"id":"READ_ENERGY_SERIES","label":"Read authoritative night-energy periods","status":"COMPLETED"},{"id":"ANALYZE","label":"Run deterministic night-energy analysis","status":"COMPLETED"},{"id":"COMMIT_RESULT","label":"Commit Evidence, Analysis and Finding","status":"COMPLETED"}]}`
 			stream := "id: 9:0\nevent: RUN_STARTED\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"investigation-001\",\"runId\":\"run-001\"}\n\n" +
 				"id: 9:1\nevent: STATE_SNAPSHOT\ndata: {\"type\":\"STATE_SNAPSHOT\",\"snapshot\":{\"schemaVersion\":\"operations-investigation-ui/v1\",\"investigation\":" + investigation + ",\"plan\":" + plan + ",\"toolActivities\":[]}}\n\n" +
@@ -244,16 +246,16 @@ func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, now time
 			}
 			return &http.Response{StatusCode: http.StatusOK, Header: recoveryHeaders, Body: io.NopCloser(strings.NewReader(stream))}, nil
 		}
-		body := `{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","resourceBudget":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[],"toolReceipts":[]}`
+		body := `{"schemaVersion":1,"id":"investigation-001","scope":{"tenantId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","resourceBudget":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[],"toolReceipts":[]}`
 		status := http.StatusOK
 		if strings.HasSuffix(request.URL.Path, "/operations/investigations") {
 			if request.Method == http.MethodGet {
-				body = `{"schemaVersion":1,"investigations":[{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"outcome":"SUPPORTED_SITE_FINDING","resourceBudget":null,"evidenceCount":2,"analysisReferenceCount":1,"findingCount":1,"toolReceiptCount":4,"acceptedOperatorInputCount":0}]}`
+				body = `{"schemaVersion":1,"investigations":[{"schemaVersion":1,"id":"investigation-001","scope":{"tenantId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"outcome":"SUPPORTED_SITE_FINDING","resourceBudget":null,"evidenceCount":2,"analysisReferenceCount":1,"findingCount":1,"toolReceiptCount":4,"acceptedOperatorInputCount":0}]}`
 			} else {
 				status = http.StatusCreated
 			}
 		} else if strings.HasSuffix(request.URL.Path, ":submit-operator-input") {
-			body = `{"outcome":"COMMITTED","investigation":{"schemaVersion":1,"id":"investigation-001","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"RUNNING","revision":10,"createdAt":1,"activeRun":{"id":"run-001","status":"ACTIVE","startedAt":1},"outcome":null,"resourceBudget":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[{"schemaVersion":1,"recordType":"OPERATOR_INPUT_ACCEPTED","id":"operator-input-record-001","investigationId":"investigation-001","recordedAt":2,"requestId":"operator-input-request-001","runId":"run-001","idempotencyKey":"operator-input-idempotency-001","inputKind":"SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION","inputDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","scope":{"organizationId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"values":{"analysisScope":"SITE_ONLY","operatorNote":"Proceed with Site-only authority."},"provenance":{"actorType":"OPERATOR","source":"PLATFORM_GATEWAY","authorizationDecisionId":"allow-site","policyRevision":"identity-policy-1","submittedAt":2}}],"toolReceipts":[]}}`
+			body = `{"outcome":"COMMITTED","investigation":{"schemaVersion":1,"id":"investigation-001","scope":{"tenantId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"RUNNING","revision":10,"createdAt":1,"activeRun":{"id":"run-001","status":"ACTIVE","startedAt":1},"outcome":null,"resourceBudget":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[{"schemaVersion":1,"recordType":"OPERATOR_INPUT_ACCEPTED","id":"operator-input-record-001","investigationId":"investigation-001","recordedAt":2,"requestId":"operator-input-request-001","runId":"run-001","idempotencyKey":"operator-input-idempotency-001","inputKind":"SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION","inputDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","scope":{"tenantId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"values":{"analysisScope":"SITE_ONLY","operatorNote":"Proceed with Site-only authority."},"provenance":{"actorType":"OPERATOR","source":"PLATFORM_GATEWAY","authorizationDecisionId":"allow-site","policyRevision":"identity-policy-1","submittedAt":2}}],"toolReceipts":[]}}`
 		}
 		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})}
@@ -604,7 +606,7 @@ func TestOperationsGatewayTypedSnapshotValidatorRejectsForgedAuthority(t *testin
 	siteID := "site-001"
 	investigationID := "investigation-001"
 	scope := map[string]any{
-		"organizationId": organizationID,
+		"tenantId": organizationID,
 		"siteId":         siteID,
 		"equipmentId":    nil,
 		"deviceId":       nil,
@@ -696,7 +698,7 @@ func TestOperationsGatewayTypedSnapshotValidatorRejectsForgedAuthority(t *testin
 					"kind":             "EQUIPMENT_ENERGY_PERIOD_COMPARISON",
 					"owner":            "telemetry-query-service",
 					"capability":       "analytics.energy.getEquipmentSeries",
-					"organizationId":   organizationID,
+					"tenantId":   organizationID,
 					"siteId":           siteID,
 					"equipmentIds":     []any{"equipment-001"},
 					"targetPeriod":     period,
@@ -794,7 +796,7 @@ func TestOperationsGatewayTypedSnapshotValidatorRejectsForgedAuthority(t *testin
 	finding["conclusion"] = map[string]any{
 		"status":         "SUPPORTED",
 		"scope":          "EQUIPMENT",
-		"organizationId": organizationID,
+		"tenantId": organizationID,
 		"siteId":         siteID,
 	}
 	if err := validateOperationsSnapshot(encode(equipmentAuthority)); err == nil {
@@ -908,7 +910,7 @@ func TestOperationsToolAuthorizationIssuesExactOwnerGrants(t *testing.T) {
 	}
 
 	query := analyticsmodel.EnergySeriesQuery{
-		OrganizationID: fixture.organizationID,
+		TenantID:       fixture.tenantID,
 		SiteID:         fixture.siteID,
 		EnergyType:     analyticsmodel.EnergyTypeElectricity,
 		Granularity:    analyticsmodel.GranularityHour,
@@ -950,7 +952,7 @@ func TestOperationsToolAuthorizationIssuesExactOwnerGrants(t *testing.T) {
 	}
 	if claims.Issuer != "spiffe://hvac.local/platform-gateway" ||
 		claims.ExecutingService != "spiffe://hvac.local/operations-agent-service" ||
-		claims.Audience != "telemetry-query-service" || claims.ActingOrganizationID != fixture.organizationID ||
+		claims.Audience != "telemetry-query-service" || claims.ActingOrganizationID != fixture.organizationID || claims.TenantID != fixture.tenantID ||
 		len(claims.Actions) != 1 || claims.Actions[0] != analyticsmodel.EnergySeriesAction ||
 		len(claims.Scopes) != 1 || claims.Scopes[0] != digest || claims.PolicyRevision != "analytics-policy-7" {
 		t.Fatalf("Energy grant is not exact: %+v digest=%s", claims, digest)

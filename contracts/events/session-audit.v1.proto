@@ -9,7 +9,7 @@ message ActorChainV1 {
   string initiating_issuer = 2;
   string executing_service = 3;
   string executing_spiffe_id = 4;
-  string acting_organization_id = 5;
+  string tenant_id = 5;
 }
 
 message SessionAuditEventV1 {
@@ -17,7 +17,7 @@ message SessionAuditEventV1 {
   uint32 schema_version = 2;
   string message_type = 3;
   string producer = 4;
-  string organization_id = 5;
+  string tenant_id = 5;
   string partition_key = 6;
   string aggregate_type = 7;
   string aggregate_id = 8;

@@ -5,7 +5,7 @@ import { synthesizeFinding } from '../dist/index.js';
 import { createFakeFindingSynthesizer } from '../dist/model/index.js';
 
 const scope = Object.freeze({
-  organizationId: 'organization-001',
+  tenantId: 'organization-001',
   siteId: 'site-001',
   equipmentId: null,
   deviceId: null,

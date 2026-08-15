@@ -30,7 +30,7 @@ func TestClickHouseHistoryClientQueriesBoundedRealProjection(t *testing.T) {
 	}
 	query := telemetryhistorymodel.DeviceHistoryQuery{
 		ActingOrganizationID: "018f4f00-0000-7000-8000-000000000001",
-		OwningOrganizationID: "018f4f00-0000-7000-8000-000000000001",
+		TenantID:             "018f4f00-0100-7000-8000-000000000001",
 		SiteID:               "018f4f00-1000-7000-8000-000000000001",
 		DeviceID:             "018f4f00-2000-7000-8000-000000000001",
 		Keys:                 []string{"hvac_meter.energy"},

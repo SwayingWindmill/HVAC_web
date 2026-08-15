@@ -53,7 +53,7 @@ func (store *PostgresStore) Create(ctx context.Context, organizationID, siteID s
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO work_order_runtime.work_order_current (
-			work_order_id, organization_id, site_id, title, description, priority, status,
+			work_order_id, tenant_id, site_id, title, description, priority, status,
 			assignee_id, team_id, scheduled_start, due_at,
 			task_total, task_completed, task_blocked, note_count, attachment_count,
 			version, created_at, updated_at
@@ -65,7 +65,7 @@ func (store *PostgresStore) Create(ctx context.Context, organizationID, siteID s
 	for _, reference := range created.SourceReferences {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO work_order_runtime.work_order_source_reference (
-				organization_id, site_id, work_order_id, source_domain, source_resource_id, relationship, created_at
+				tenant_id, site_id, work_order_id, source_domain, source_resource_id, relationship, created_at
 			) VALUES ($1,$2,$3,$4,$5,$6,$7)
 		`, organizationID, siteID, created.WorkOrderID, string(reference.Domain), reference.ResourceID, string(reference.Relationship), created.CreatedAt); err != nil {
 			return MutationResult{}, fmt.Errorf("insert Work Order source reference: %w", err)
@@ -128,7 +128,7 @@ func (store *PostgresStore) Assign(ctx context.Context, organizationID, siteID, 
 	command, err := tx.Exec(ctx, `
 		UPDATE work_order_runtime.work_order_current
 		SET assignee_id = $5, team_id = $6, version = $7, updated_at = $8
-		WHERE organization_id = $1 AND site_id = $2 AND work_order_id = $3 AND version = $4
+		WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3 AND version = $4
 	`, organizationID, siteID, workOrderID, mutation.ExpectedVersion, updated.AssigneeID, updated.TeamID, updated.Version, updated.UpdatedAt)
 	if err != nil {
 		return MutationResult{}, fmt.Errorf("update Work Order assignment: %w", err)
@@ -195,7 +195,7 @@ func (store *PostgresStore) Transition(ctx context.Context, organizationID, site
 	command, err := tx.Exec(ctx, `
 		UPDATE work_order_runtime.work_order_current
 		SET status = $5, scheduled_start = $6, due_at = $7, version = $8, updated_at = $9
-		WHERE organization_id = $1 AND site_id = $2 AND work_order_id = $3 AND version = $4
+		WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3 AND version = $4
 	`, organizationID, siteID, workOrderID, mutation.ExpectedVersion, string(updated.Status), updated.ScheduledStart, updated.DueAt, updated.Version, updated.UpdatedAt)
 	if err != nil {
 		return MutationResult{}, fmt.Errorf("update Work Order lifecycle: %w", err)
@@ -208,7 +208,7 @@ func (store *PostgresStore) Transition(ctx context.Context, organizationID, site
 		for _, reference := range added {
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO work_order_runtime.work_order_completion_evidence (
-					organization_id, site_id, work_order_id, kind, reference, captured_at, completion_version
+					tenant_id, site_id, work_order_id, kind, reference, captured_at, completion_version
 				) VALUES ($1,$2,$3,$4,$5,$6,$7)
 			`, organizationID, siteID, workOrderID, reference.Kind, reference.Reference, reference.CapturedAt, updated.Version); err != nil {
 				return MutationResult{}, fmt.Errorf("insert Work Order completion evidence: %w", err)
@@ -228,13 +228,10 @@ func (store *PostgresStore) Transition(ctx context.Context, organizationID, site
 	return MutationResult{WorkOrder: updated}, nil
 }
 
-func (store *PostgresStore) beginWriterTransaction(ctx context.Context, organizationID string) (pgx.Tx, error) {
-	tenantID, ok := identitycontext.TenantIDFromContext(ctx)
-	if !ok || !workordermodel.IsUUIDv7(tenantID) || !workordermodel.IsUUIDv7(organizationID) {
+func (store *PostgresStore) beginWriterTransaction(ctx context.Context, tenantID string) (pgx.Tx, error) {
+	contextTenantID, ok := identitycontext.TenantIDFromContext(ctx)
+	if !ok || !workordermodel.IsUUIDv7(tenantID) || contextTenantID != tenantID {
 		return nil, ErrUnavailable
-	}
-	if err := ensureWorkOrderTenantBinding(ctx, store.mutationPool, "s5_work_order_writer", tenantID, organizationID); err != nil {
-		return nil, err
 	}
 	tx, err := store.mutationPool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite})
 	if err != nil {
@@ -244,7 +241,7 @@ func (store *PostgresStore) beginWriterTransaction(ctx context.Context, organiza
 		_ = tx.Rollback(ctx)
 		return nil, fmt.Errorf("activate Work Order writer role: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true), set_config('app.tenant_id', $2, true)`, organizationID, tenantID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, tenantID); err != nil {
 		_ = tx.Rollback(ctx)
 		return nil, fmt.Errorf("activate Work Order writer Tenant/Organization scope: %w", err)
 	}
@@ -265,7 +262,7 @@ func readPostgresReplay(ctx context.Context, tx pgx.Tx, organizationID, siteID, 
 	err := tx.QueryRow(ctx, `
 		SELECT request_digest, response_payload
 		FROM work_order_runtime.work_order_idempotency
-		WHERE organization_id = $1 AND site_id = $2 AND operation = $3 AND resource_key = $4 AND idempotency_key = $5
+		WHERE tenant_id = $1 AND site_id = $2 AND operation = $3 AND resource_key = $4 AND idempotency_key = $5
 	`, organizationID, siteID, operation, resourceKey, idempotencyKey).Scan(&storedDigest, &payload)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return workordermodel.WorkOrder{}, false, nil
@@ -277,7 +274,7 @@ func readPostgresReplay(ctx context.Context, tx pgx.Tx, organizationID, siteID, 
 		return workordermodel.WorkOrder{}, false, ErrIdempotencyConflict
 	}
 	var replay workordermodel.WorkOrder
-	if json.Unmarshal(payload, &replay) != nil || replay.Validate() != nil || replay.OrganizationID != organizationID || replay.SiteID != siteID ||
+	if json.Unmarshal(payload, &replay) != nil || replay.Validate() != nil || replay.TenantID != organizationID || replay.SiteID != siteID ||
 		(expectedWorkOrderID != "" && replay.WorkOrderID != expectedWorkOrderID) {
 		return workordermodel.WorkOrder{}, false, ErrUnavailable
 	}
@@ -292,14 +289,14 @@ func insertPostgresMutationEvidence(ctx context.Context, tx pgx.Tx, organization
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO work_order_runtime.work_order_idempotency (
-			organization_id, site_id, operation, resource_key, idempotency_key, request_digest, response_payload, committed_at
+			tenant_id, site_id, operation, resource_key, idempotency_key, request_digest, response_payload, committed_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 	`, organizationID, siteID, idempotencyOperation, resourceKey, idempotencyKey, digest, string(payload), occurredAt); err != nil {
 		return fmt.Errorf("insert Work Order idempotency record: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO work_order_runtime.work_order_mutation_audit (
-			organization_id, site_id, work_order_id, operation, idempotency_key, request_digest,
+			tenant_id, site_id, work_order_id, operation, idempotency_key, request_digest,
 			actor_type, actor_id, policy_revision, correlation_id, committed_version, committed_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 	`, organizationID, siteID, workOrder.WorkOrderID, auditOperation, idempotencyKey, digest,
@@ -312,10 +309,10 @@ func insertPostgresMutationEvidence(ctx context.Context, tx pgx.Tx, organization
 func insertPostgresTimeline(ctx context.Context, tx pgx.Tx, workOrder workordermodel.WorkOrder, event workordermodel.TimelineEvent) error {
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO work_order_runtime.work_order_timeline (
-			organization_id, site_id, work_order_id, version, operation, from_status, to_status,
+			tenant_id, site_id, work_order_id, version, operation, from_status, to_status,
 			reason, actor_type, actor_id, assignee_id, team_id, policy_revision, correlation_id, occurred_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-	`, workOrder.OrganizationID, workOrder.SiteID, workOrder.WorkOrderID, event.Version, string(event.Operation), nullableStatus(event.FromStatus), string(event.ToStatus),
+	`, workOrder.TenantID, workOrder.SiteID, workOrder.WorkOrderID, event.Version, string(event.Operation), nullableStatus(event.FromStatus), string(event.ToStatus),
 		event.Reason, event.ActorType, event.ActorID, event.AssigneeID, event.TeamID, event.PolicyRevision, event.CorrelationID, event.OccurredAt); err != nil {
 		return fmt.Errorf("insert Work Order timeline event: %w", err)
 	}
@@ -324,12 +321,12 @@ func insertPostgresTimeline(ctx context.Context, tx pgx.Tx, workOrder workorderm
 
 func getCurrentRecordForMutation(ctx context.Context, tx pgx.Tx, organizationID, siteID, workOrderID string) (currentRecord, error) {
 	record, err := scanCurrentRecord(tx.QueryRow(ctx, `
-		SELECT work_order_id, organization_id, site_id, title, description, priority, status,
+		SELECT work_order_id, tenant_id, site_id, title, description, priority, status,
 		       assignee_id, team_id, scheduled_start, due_at,
 		       task_total, task_completed, task_blocked, note_count, attachment_count,
 		       version, created_at, updated_at
 		FROM work_order_runtime.work_order_current
-		WHERE organization_id = $1 AND site_id = $2 AND work_order_id = $3
+		WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3
 		FOR UPDATE
 	`, organizationID, siteID, workOrderID))
 	if errors.Is(err, pgx.ErrNoRows) {

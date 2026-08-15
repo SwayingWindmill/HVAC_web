@@ -393,7 +393,7 @@ func (h *handler) handleRegistryGrantStatusRoute(writer http.ResponseWriter, req
 		writeProblem(writer, http.StatusBadRequest, "IAM_GRANT_STATUS_REQUEST_INVALID", "The Registry grant status request is invalid.")
 		return http.StatusBadRequest
 	}
-	status, err := h.registryGrantStatus.LookupRegistryGrantStatus(request.Context(), input.ActingOrganizationID, input.TokenID)
+	status, err := h.registryGrantStatus.LookupRegistryGrantStatus(request.Context(), input.TenantID, input.TokenID)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "IAM_GRANT_STATUS_UNAVAILABLE", "Registry grant status is unavailable.")
 		return http.StatusServiceUnavailable
@@ -404,9 +404,9 @@ func (h *handler) handleRegistryGrantStatusRoute(writer http.ResponseWriter, req
 
 func (h *handler) handleCurrentPrincipal(ctx context.Context, writer http.ResponseWriter, claims identitycontext.DelegationClaims, spiffeID string) int {
 	authorization, err := h.principalCapabilityResolver.ResolvePrincipalCapabilities(ctx, PrincipalCapabilityLookup{
-		SubjectIssuer:        claims.SubjectIssuer,
-		Subject:              claims.Subject,
-		ActingOrganizationID: claims.ActingOrganizationID,
+		SubjectIssuer: claims.SubjectIssuer,
+		Subject:       claims.Subject,
+		TenantID:      claims.TenantID,
 	})
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "IAM_PRINCIPAL_CAPABILITIES_UNAVAILABLE", "The effective capability decision is unavailable.")
@@ -436,7 +436,7 @@ func (h *handler) handleCurrentPrincipal(ctx context.Context, writer http.Respon
 				Service:  "platform-gateway",
 				SPIFFEID: spiffeID,
 			},
-			ActingOrganizationID: claims.ActingOrganizationID,
+			TenantID:             claims.TenantID,
 			Audience:             claims.Audience,
 			PolicyRevision:       claims.PolicyRevision,
 			DelegationExpiresAt:  time.Unix(claims.ExpiresAt, 0).UTC().Format(time.RFC3339),
@@ -509,12 +509,9 @@ func (h *handler) handleRegistryReadDecision(writer http.ResponseWriter, request
 			PrincipalID:            decision.PrincipalID,
 			SubjectIssuer:          decision.SubjectIssuer,
 			Subject:                decision.Subject,
-			TenantID:               decision.TenantID,
-			ActingOrganizationID:   decision.ActingOrganizationID,
-			AllowedOrganizationIDs: append([]string(nil), decision.AllowedOrganizationIDs...),
-			AllowedSiteIDs:         append([]string(nil), decision.AllowedSiteIDs...),
-			DeniedOrganizationIDs:  append([]string(nil), decision.DeniedOrganizationIDs...),
-			DeniedSiteIDs:          append([]string(nil), decision.DeniedSiteIDs...),
+			TenantID:        decision.TenantID,
+			AllowedSiteIDs:  append([]string(nil), decision.AllowedSiteIDs...),
+			DeniedSiteIDs:        append([]string(nil), decision.DeniedSiteIDs...),
 			Actions:                append([]registryauth.Action(nil), decision.Actions...),
 			PolicyRevision:         decision.PolicyRevision,
 			DecisionReason:         decision.ReasonCode,
@@ -558,13 +555,11 @@ func (h *handler) recordRegistryDecision(request *http.Request, decision registr
 	}
 	err := h.registryAuditSink.RecordRegistryDecision(request.Context(), RegistryDecisionAudit{
 		PrincipalID:            decision.PrincipalID,
-		ActingOrganizationID:   decision.ActingOrganizationID,
+		TenantID: decision.TenantID,
 		Action:                 action,
-		Allowed:                decision.Allowed,
-		AllowedOrganizationIDs: append([]string(nil), decision.AllowedOrganizationIDs...),
-		AllowedSiteIDs:         append([]string(nil), decision.AllowedSiteIDs...),
-		DeniedOrganizationIDs:  append([]string(nil), decision.DeniedOrganizationIDs...),
-		DeniedSiteIDs:          append([]string(nil), decision.DeniedSiteIDs...),
+		Allowed:        decision.Allowed,
+		AllowedSiteIDs: append([]string(nil), decision.AllowedSiteIDs...),
+		DeniedSiteIDs:  append([]string(nil), decision.DeniedSiteIDs...),
 		PolicyRevision:         decision.PolicyRevision,
 		ReasonCode:             decision.ReasonCode,
 		GrantSigned:            grantSigned,

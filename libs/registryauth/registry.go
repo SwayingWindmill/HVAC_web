@@ -24,13 +24,13 @@ const (
 )
 
 type GrantStatusRequest struct {
-	ActingOrganizationID string `json:"actingOrganizationId"`
-	TokenID              string `json:"tokenId"`
+	TenantID string `json:"tenantId"`
+	TokenID  string `json:"tokenId"`
 }
 
 func (request GrantStatusRequest) Validate() error {
-	if !validUUIDv7(request.ActingOrganizationID) {
-		return errors.New("acting organization must be a UUIDv7")
+	if !validUUIDv7(request.TenantID) {
+		return errors.New("tenant must be a UUIDv7")
 	}
 	if len(request.TokenID) == 0 || len(request.TokenID) > MaximumGrantTokenIDSize {
 		return errors.New("grant token identifier is invalid")
@@ -47,12 +47,10 @@ type Action string
 
 const (
 	ActionRegistryRead      Action = "registry.read"
-	ActionOrganizationList  Action = "organization.list"
-	ActionOrganizationRead  Action = "organization.read"
 	ActionSiteList          Action = "site.list"
 	ActionSiteRead          Action = "site.read"
-	ActionEquipmentList     Action = "equipment.list"
-	ActionEquipmentRead     Action = "equipment.read"
+	ActionAssetList     Action = "asset.list"
+	ActionAssetRead     Action = "asset.read"
 	ActionDeviceList        Action = "device.list"
 	ActionDeviceRead        Action = "device.read"
 	ActionDeviceBindingList Action = "device-binding.list"
@@ -62,12 +60,10 @@ const (
 func (action Action) Valid() bool {
 	switch action {
 	case ActionRegistryRead,
-		ActionOrganizationList,
-		ActionOrganizationRead,
 		ActionSiteList,
 		ActionSiteRead,
-		ActionEquipmentList,
-		ActionEquipmentRead,
+		ActionAssetList,
+		ActionAssetRead,
 		ActionDeviceList,
 		ActionDeviceRead,
 		ActionDeviceBindingList,
@@ -80,7 +76,7 @@ func (action Action) Valid() bool {
 
 func (action Action) SiteScoped() bool {
 	switch action {
-	case ActionSiteList, ActionSiteRead, ActionEquipmentList, ActionEquipmentRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList, ActionAssetModelRead:
+	case ActionSiteList, ActionSiteRead, ActionAssetList, ActionAssetRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList, ActionAssetModelRead:
 		return true
 	default:
 		return false
@@ -92,14 +88,14 @@ func ActionAllows(granted, requested Action) bool {
 }
 
 type DecisionRequest struct {
-	ActingOrganizationID string `json:"actingOrganizationId"`
-	Action               Action `json:"action"`
-	GrantPresenter       string `json:"grantPresenter,omitempty"`
+	TenantID       string `json:"tenantId"`
+	Action         Action `json:"action"`
+	GrantPresenter string `json:"grantPresenter,omitempty"`
 }
 
 func (request DecisionRequest) Validate() error {
-	if !validUUIDv7(request.ActingOrganizationID) {
-		return errors.New("acting organization must be a UUIDv7")
+	if !validUUIDv7(request.TenantID) {
+		return errors.New("tenant must be a UUIDv7")
 	}
 	if !request.Action.Valid() || request.Action == ActionRegistryRead {
 		return errors.New("a concrete registry read action is required")
@@ -125,20 +121,20 @@ func validUUIDv7(value string) bool {
 type ReasonCode string
 
 const (
-	ReasonAllowOrganizationRole  ReasonCode = "ALLOW_ORGANIZATION_ROLE"
+	ReasonAllowTenantRole        ReasonCode = "ALLOW_TENANT_ROLE"
 	ReasonAllowSiteRole          ReasonCode = "ALLOW_SITE_ROLE"
 	ReasonAllowSiteBinding       ReasonCode = "ALLOW_SITE_BINDING"
 	ReasonDenyExplicit           ReasonCode = "DENY_EXPLICIT"
 	ReasonDenyPrincipalNotFound  ReasonCode = "DENY_PRINCIPAL_NOT_FOUND"
 	ReasonDenyPrincipalInactive  ReasonCode = "DENY_PRINCIPAL_INACTIVE"
-	ReasonDenyMembershipRequired ReasonCode = "DENY_ACTING_ORGANIZATION_MEMBERSHIP_REQUIRED"
-	ReasonDenyMembershipRevoked  ReasonCode = "DENY_ACTING_ORGANIZATION_MEMBERSHIP_REVOKED"
+	ReasonDenyMembershipRequired ReasonCode = "DENY_TENANT_MEMBERSHIP_REQUIRED"
+	ReasonDenyMembershipRevoked  ReasonCode = "DENY_TENANT_MEMBERSHIP_REVOKED"
 	ReasonDenyActionNotGranted   ReasonCode = "DENY_ACTION_NOT_GRANTED"
 )
 
 func IsAllowReason(reason ReasonCode) bool {
 	switch reason {
-	case ReasonAllowOrganizationRole, ReasonAllowSiteRole, ReasonAllowSiteBinding:
+	case ReasonAllowTenantRole, ReasonAllowSiteRole, ReasonAllowSiteBinding:
 		return true
 	default:
 		return false
@@ -146,20 +142,17 @@ func IsAllowReason(reason ReasonCode) bool {
 }
 
 type Decision struct {
-	Allowed                bool       `json:"allowed"`
-	PrincipalID            string     `json:"principalId"`
-	SubjectIssuer          string     `json:"subjectIssuer"`
-	Subject                string     `json:"subject"`
-	TenantID               string     `json:"tenantId"`
-	ActingOrganizationID   string     `json:"actingOrganizationId"`
-	AllowedOrganizationIDs []string   `json:"allowedOrganizationIds"`
-	AllowedSiteIDs         []string   `json:"allowedSiteIds"`
-	DeniedOrganizationIDs  []string   `json:"deniedOrganizationIds"`
-	DeniedSiteIDs          []string   `json:"deniedSiteIds"`
-	Actions                []Action   `json:"actions"`
-	PolicyRevision         string     `json:"policyRevision"`
-	ReasonCode             ReasonCode `json:"reasonCode"`
-	DecidedAt              string     `json:"decidedAt"`
+	Allowed        bool       `json:"allowed"`
+	PrincipalID    string     `json:"principalId"`
+	SubjectIssuer  string     `json:"subjectIssuer"`
+	Subject        string     `json:"subject"`
+	TenantID       string     `json:"tenantId"`
+	AllowedSiteIDs []string   `json:"allowedSiteIds"`
+	DeniedSiteIDs  []string   `json:"deniedSiteIds"`
+	Actions        []Action   `json:"actions"`
+	PolicyRevision string     `json:"policyRevision"`
+	ReasonCode     ReasonCode `json:"reasonCode"`
+	DecidedAt      string     `json:"decidedAt"`
 }
 
 type DecisionResponse struct {
@@ -168,28 +161,25 @@ type DecisionResponse struct {
 }
 
 type GrantClaims struct {
-	Version                int        `json:"version"`
-	Issuer                 string     `json:"issuer"`
-	Presenter              string     `json:"presenter"`
-	Audience               string     `json:"audience"`
-	PrincipalID            string     `json:"principalId"`
-	SubjectIssuer          string     `json:"subjectIssuer"`
-	Subject                string     `json:"subject"`
-	TenantID               string     `json:"tenantId"`
-	ActingOrganizationID   string     `json:"actingOrganizationId"`
-	AllowedOrganizationIDs []string   `json:"allowedOrganizationIds"`
-	AllowedSiteIDs         []string   `json:"allowedSiteIds"`
-	DeniedOrganizationIDs  []string   `json:"deniedOrganizationIds"`
-	DeniedSiteIDs          []string   `json:"deniedSiteIds"`
-	Actions                []Action   `json:"actions"`
-	PolicyRevision         string     `json:"policyRevision"`
-	DecisionReason         ReasonCode `json:"decisionReason"`
-	SessionID              string     `json:"sessionId"`
-	ParentTokenID          string     `json:"parentTokenId"`
-	IssuedAt               int64      `json:"issuedAt"`
-	ExpiresAt              int64      `json:"expiresAt"`
-	TokenID                string     `json:"tokenId"`
-	Transitive             bool       `json:"transitive"`
+	Version        int        `json:"version"`
+	Issuer         string     `json:"issuer"`
+	Presenter      string     `json:"presenter"`
+	Audience       string     `json:"audience"`
+	PrincipalID    string     `json:"principalId"`
+	SubjectIssuer  string     `json:"subjectIssuer"`
+	Subject        string     `json:"subject"`
+	TenantID       string     `json:"tenantId"`
+	AllowedSiteIDs []string   `json:"allowedSiteIds"`
+	DeniedSiteIDs  []string   `json:"deniedSiteIds"`
+	Actions        []Action   `json:"actions"`
+	PolicyRevision string     `json:"policyRevision"`
+	DecisionReason ReasonCode `json:"decisionReason"`
+	SessionID      string     `json:"sessionId"`
+	ParentTokenID  string     `json:"parentTokenId"`
+	IssuedAt       int64      `json:"issuedAt"`
+	ExpiresAt      int64      `json:"expiresAt"`
+	TokenID        string     `json:"tokenId"`
+	Transitive     bool       `json:"transitive"`
 }
 
 type RevocationChecker func(tokenID string) (bool, error)
@@ -283,7 +273,7 @@ func ValidateGrant(claims GrantClaims, validation GrantValidation) error {
 	if claims.ExpiresAt <= validation.Now.Unix() || time.Duration(claims.ExpiresAt-claims.IssuedAt)*time.Second > MaximumGrantLifetime {
 		return errors.New("registry grant is expired or too long-lived")
 	}
-	if claims.PrincipalID == "" || claims.SubjectIssuer == "" || claims.Subject == "" || claims.TenantID == "" || claims.ActingOrganizationID == "" || claims.SessionID == "" || claims.ParentTokenID == "" || claims.TokenID == "" {
+	if claims.PrincipalID == "" || claims.SubjectIssuer == "" || claims.Subject == "" || claims.TenantID == "" || claims.SessionID == "" || claims.ParentTokenID == "" || claims.TokenID == "" {
 		return errors.New("registry grant identity fields are incomplete")
 	}
 	if !validUUIDv7(claims.TenantID) {
@@ -317,47 +307,33 @@ func ValidateGrant(claims GrantClaims, validation GrantValidation) error {
 	return nil
 }
 
-func ScopeAllows(claims GrantClaims, owningOrganizationID, siteID string) bool {
-	if owningOrganizationID == "" {
+func ScopeAllows(claims GrantClaims, siteID string) bool {
+	if siteID == "" || contains(claims.DeniedSiteIDs, siteID) {
 		return false
 	}
-	if contains(claims.DeniedOrganizationIDs, owningOrganizationID) {
-		return false
-	}
-	if siteID != "" && contains(claims.DeniedSiteIDs, siteID) {
-		return false
-	}
-	if contains(claims.AllowedOrganizationIDs, owningOrganizationID) {
-		return true
-	}
-	return siteID != "" && contains(claims.AllowedSiteIDs, siteID)
+	return contains(claims.AllowedSiteIDs, siteID)
 }
 
 func validateScope(claims GrantClaims) error {
-	for _, values := range [][]string{claims.AllowedOrganizationIDs, claims.AllowedSiteIDs, claims.DeniedOrganizationIDs, claims.DeniedSiteIDs} {
+	for _, values := range [][]string{claims.AllowedSiteIDs, claims.DeniedSiteIDs} {
 		seen := make(map[string]struct{}, len(values))
 		for _, value := range values {
-			if strings.TrimSpace(value) == "" {
-				return errors.New("registry grant scope contains an empty identifier")
+			if strings.TrimSpace(value) == "" || !validUUIDv7(value) {
+				return errors.New("registry grant Site scope contains an invalid identifier")
 			}
 			if _, exists := seen[value]; exists {
-				return errors.New("registry grant scope contains duplicate identifiers")
+				return errors.New("registry grant Site scope contains duplicate identifiers")
 			}
 			seen[value] = struct{}{}
 		}
 	}
-	for _, value := range claims.AllowedOrganizationIDs {
-		if contains(claims.DeniedOrganizationIDs, value) {
-			return errors.New("registry grant organization scope is contradictory")
-		}
-	}
 	for _, value := range claims.AllowedSiteIDs {
 		if contains(claims.DeniedSiteIDs, value) {
-			return errors.New("registry grant site scope is contradictory")
+			return errors.New("registry grant Site scope is contradictory")
 		}
 	}
-	if len(claims.AllowedOrganizationIDs) == 0 && len(claims.AllowedSiteIDs) == 0 {
-		return errors.New("registry grant contains no allowed scope")
+	if len(claims.AllowedSiteIDs) == 0 {
+		return errors.New("registry grant contains no allowed Site scope")
 	}
 	return nil
 }

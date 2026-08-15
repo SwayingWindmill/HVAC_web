@@ -93,7 +93,7 @@ components:
       type: object
       additionalProperties: false
       required:
-        - organizationId
+        - tenantId
         - siteId
         - energyType
         - granularity
@@ -102,10 +102,10 @@ components:
         - to
         - qualityPolicy
       properties:
-        organizationId:
+        tenantId:
           type: string
           format: uuid
-          description: UUIDv7 organization identifier bound by the delegation grant.
+          description: UUIDv7 tenant identifier bound by the delegation grant.
         siteId:
           type: string
           format: uuid
@@ -209,16 +209,12 @@ components:
     DeviceHistoryQuery:
       type: object
       additionalProperties: false
-      required: [actingOrganizationId, owningOrganizationId, siteId, deviceId, keys, from, to, maxPointsPerKey]
+      required: [tenantId, siteId, deviceId, keys, from, to, maxPointsPerKey]
       properties:
-        actingOrganizationId:
+        tenantId:
           type: string
           format: uuid
-          description: Session Acting Organization bound by the delegation grant.
-        owningOrganizationId:
-          type: string
-          format: uuid
-          description: IAM-authoritative owner of the Device.
+          description: IAM-authoritative Tenant that contains the Device Site and is bound by the delegation grant.
         siteId:
           type: string
           format: uuid
@@ -342,12 +338,12 @@ components:
     DeviceHistoryResponse:
       type: object
       additionalProperties: false
-      required: [schemaVersion, owningOrganizationId, siteId, deviceId, series, metadata]
+      required: [schemaVersion, tenantId, siteId, deviceId, series, metadata]
       properties:
         schemaVersion:
           type: integer
           const: 1
-        owningOrganizationId:
+        tenantId:
           type: string
           format: uuid
         siteId:

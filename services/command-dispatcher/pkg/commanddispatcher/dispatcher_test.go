@@ -7,7 +7,6 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/services/command-service/pkg/commandservice"
-	"github.com/quanlaihe/hvac-web/services/thingsboard-connector-control/pkg/controlconnector"
 )
 
 func TestSyntheticAcknowledgementCompletesOnlyAfterReportedState(t *testing.T) {
@@ -17,7 +16,7 @@ func TestSyntheticAcknowledgementCompletesOnlyAfterReportedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit failed: %v", err)
 	}
-	dispatcher := New(store, controlconnector.NewSynthetic(controlconnector.ModeVerifiedSuccess), "dispatcher-a", clock)
+	dispatcher := New(store, syntheticConnector{mode: syntheticVerifiedSuccess}, "dispatcher-a", clock)
 	if err := dispatcher.Dispatch(context.Background(), submitted.Intent.ID); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
@@ -48,7 +47,7 @@ func TestCommittedTimeoutBecomesOutcomeUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit failed: %v", err)
 	}
-	dispatcher := New(store, controlconnector.NewSynthetic(controlconnector.ModeCommittedThenTimeout), "dispatcher-a", clock)
+	dispatcher := New(store, syntheticConnector{mode: syntheticCommittedThenTimeout}, "dispatcher-a", clock)
 	if err := dispatcher.Dispatch(context.Background(), submitted.Intent.ID); err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
@@ -68,11 +67,11 @@ func TestPreSendFailureCanBeRetriedByAnotherDispatcher(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit failed: %v", err)
 	}
-	first := New(store, controlconnector.NewSynthetic(controlconnector.ModePreSendRejected), "dispatcher-a", clock)
+	first := New(store, syntheticConnector{mode: syntheticPreSendRejected}, "dispatcher-a", clock)
 	if err := first.Dispatch(context.Background(), submitted.Intent.ID); err != nil {
 		t.Fatalf("first dispatch failed: %v", err)
 	}
-	second := New(store, controlconnector.NewSynthetic(controlconnector.ModeVerifiedSuccess), "dispatcher-b", clock)
+	second := New(store, syntheticConnector{mode: syntheticVerifiedSuccess}, "dispatcher-b", clock)
 	if err := second.Dispatch(context.Background(), submitted.Intent.ID); err != nil {
 		t.Fatalf("second dispatch failed: %v", err)
 	}
@@ -99,7 +98,7 @@ func completeSyntheticVerification(t *testing.T, store *commandservice.Service, 
 		Outcome:    commandmodel.VerificationSucceeded,
 		EvidenceID: "synthetic:s2-reported-state",
 		Reported: commandmodel.ReportedStateEvidence{
-			OrganizationID: envelope.OrganizationID, SiteID: envelope.SiteID, DeviceID: envelope.DeviceID,
+			TenantID: envelope.TenantID, SiteID: envelope.SiteID, DeviceID: envelope.DeviceID,
 			EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
 			BusinessRevision: envelope.BaselineBusinessRevision + 1, ReportedValue: commandmodel.NumberScalar(envelope.Parameters[commandmodel.ParameterSetpointC]),
 			ObservedAt: envelope.AcknowledgedAt.Add(time.Second),
@@ -111,8 +110,7 @@ func completeSyntheticVerification(t *testing.T, store *commandservice.Service, 
 
 func testRequest() commandmodel.SubmitRequest {
 	return commandmodel.SubmitRequest{
-		TenantID:       "tenant-1",
-		OrganizationID: "org-1",
+		TenantID:       "org-1",
 		SiteID:         "site-1",
 		DeviceID:       "device-1",
 		PointID:        "point-1",
@@ -132,13 +130,38 @@ func testRequest() commandmodel.SubmitRequest {
 		},
 		Authorization: commandmodel.AuthorizationSnapshot{
 			GrantID: "grant-dispatcher-test", PolicyRevision: "command-policy-1",
-			Purpose: commandmodel.AuthorizationCommandSubmit, PrincipalID: "principal-1", OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+			Purpose: commandmodel.AuthorizationCommandSubmit, PrincipalID: "principal-1", TenantID: "org-1", SiteID: "site-1", DeviceID: "device-1",
 			Capability:  commandmodel.CapabilitySetTemperatureSetpoint,
 			MaximumRisk: commandmodel.RiskLow, CapabilityRevision: "capability:set-temperature-setpoint:v1",
 			EmergencyRevocationRevision: 1,
 			IssuedAt:                    time.Date(2026, 7, 26, 9, 59, 55, 0, time.UTC),
 			ExpiresAt:                   time.Date(2026, 7, 26, 10, 0, 25, 0, time.UTC),
 		},
+	}
+}
+
+type syntheticMode string
+
+const (
+	syntheticVerifiedSuccess      syntheticMode = "VERIFIED_SUCCESS"
+	syntheticPreSendRejected      syntheticMode = "PRE_SEND_REJECTED"
+	syntheticCommittedThenTimeout syntheticMode = "COMMITTED_THEN_TIMEOUT"
+)
+
+type syntheticConnector struct {
+	mode syntheticMode
+}
+
+func (connector syntheticConnector) Execute(_ context.Context, _ commandmodel.DispatchEnvelope) (commandmodel.ConnectorResult, error) {
+	switch connector.mode {
+	case syntheticVerifiedSuccess:
+		return commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "synthetic:provider-acknowledged"}, nil
+	case syntheticPreSendRejected:
+		return commandmodel.ConnectorResult{Phase: commandmodel.ConnectorPreSendRejected, FailureCode: "SYNTHETIC_PRE_SEND_REJECTION", EvidenceID: "synthetic:pre-send-rejected"}, nil
+	case syntheticCommittedThenTimeout:
+		return commandmodel.ConnectorResult{Phase: commandmodel.ConnectorRequestCommitted, FailureCode: "SYNTHETIC_ACK_TIMEOUT", EvidenceID: "synthetic:request-committed-timeout"}, nil
+	default:
+		return commandmodel.ConnectorResult{}, nil
 	}
 }
 

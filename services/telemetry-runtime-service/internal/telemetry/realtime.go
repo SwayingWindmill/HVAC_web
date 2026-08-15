@@ -61,7 +61,7 @@ type RealtimeSubscription struct {
 	Subject              string
 	SubjectIssuer        string
 	SessionID            string
-	ActingOrganizationID string
+	TenantID             string
 	DeviceID             string
 	Keys                 []string
 	ScopeDigest          string
@@ -78,7 +78,7 @@ type CheckpointIdentity struct {
 	Subject              string
 	SubjectIssuer        string
 	SessionID            string
-	ActingOrganizationID string
+	TenantID             string
 }
 
 type RecoveryCursorRecord struct {
@@ -157,7 +157,7 @@ type recoveryCursorClaims struct {
 	Subject              string   `json:"sub"`
 	SubjectIssuer        string   `json:"iss"`
 	SessionID            string   `json:"session"`
-	ActingOrganizationID string   `json:"org"`
+	TenantID             string   `json:"tenant"`
 	DeviceID             string   `json:"did"`
 	Keys                 []string `json:"keys"`
 	ScopeDigest          string   `json:"scope"`
@@ -169,7 +169,7 @@ type recoveryCursorClaims struct {
 
 type connectionClaims struct {
 	Subject              string `json:"sub"`
-	ActingOrganizationID string `json:"org"`
+	TenantID             string `json:"tenant"`
 	SessionID            string `json:"session"`
 	IssuedAt             int64  `json:"iat"`
 	ExpiresAt            int64  `json:"exp"`
@@ -246,7 +246,7 @@ func (service *RealtimeService) Bootstrap(ctx context.Context, access AccessCont
 	if service == nil || service.repository == nil {
 		return telemetryapi.SubscriptionBootstrapResponse{}, ErrRealtimeUnavailable
 	}
-	if strings.TrimSpace(access.PrincipalID) == "" || strings.TrimSpace(access.ActingOrganizationID) == "" || strings.TrimSpace(access.SessionID) == "" {
+	if strings.TrimSpace(access.PrincipalID) == "" || strings.TrimSpace(access.TenantID) == "" || strings.TrimSpace(access.SessionID) == "" {
 		return telemetryapi.SubscriptionBootstrapResponse{}, ErrRecoveryCursorRejected
 	}
 	if len(input.Subscriptions) == 0 || len(input.Subscriptions) > MaximumRealtimeSubscriptions {
@@ -278,7 +278,7 @@ func (service *RealtimeService) Bootstrap(ctx context.Context, access AccessCont
 			return telemetryapi.SubscriptionBootstrapResponse{}, ErrSubscriptionConflict
 		}
 		target = canonical[0]
-		scopeDigest, err := telemetryauth.ScopeDigest(telemetryauth.ActionSubscribe, access.ActingOrganizationID, []telemetryauth.Target{target})
+		scopeDigest, err := telemetryauth.ScopeDigest(telemetryauth.ActionSubscribe, access.TenantID, []telemetryauth.Target{target})
 		if err != nil {
 			return telemetryapi.SubscriptionBootstrapResponse{}, ErrSubscriptionConflict
 		}
@@ -322,7 +322,7 @@ func (service *RealtimeService) Bootstrap(ctx context.Context, access AccessCont
 			Subject:              access.Subject,
 			SubjectIssuer:        access.SubjectIssuer,
 			SessionID:            access.SessionID,
-			ActingOrganizationID: access.ActingOrganizationID,
+			TenantID:             access.TenantID,
 			DeviceID:             target.DeviceID,
 			Keys:                 append([]string(nil), target.Keys...),
 			ScopeDigest:          scopeDigest,
@@ -373,7 +373,7 @@ func (service *RealtimeService) CheckpointTargets(ctx context.Context, input tel
 }
 
 func (service *RealtimeService) CheckpointTargetsForIdentity(ctx context.Context, identity CheckpointIdentity, input telemetryapi.RecoveryCursorCheckpointRequest) ([]telemetryauth.Target, error) {
-	if identity.Subject == "" || identity.SubjectIssuer == "" || identity.SessionID == "" || identity.ActingOrganizationID == "" {
+	if identity.Subject == "" || identity.SubjectIssuer == "" || identity.SessionID == "" || identity.TenantID == "" {
 		return nil, ErrRecoveryCursorRejected
 	}
 	return service.checkpointTargets(ctx, identity, input, true)
@@ -397,7 +397,7 @@ func (service *RealtimeService) checkpointTargets(ctx context.Context, identity 
 			return nil, ErrRecoveryCursorRejected
 		}
 		if requireIdentity && (subscription.Subject != identity.Subject || subscription.SubjectIssuer != identity.SubjectIssuer ||
-			subscription.SessionID != identity.SessionID || subscription.ActingOrganizationID != identity.ActingOrganizationID) {
+			subscription.SessionID != identity.SessionID || subscription.TenantID != identity.TenantID) {
 			return nil, ErrRecoveryCursorRejected
 		}
 		if _, ok := byDevice[subscription.DeviceID]; !ok {
@@ -442,7 +442,7 @@ func (service *RealtimeService) Checkpoint(ctx context.Context, access AccessCon
 		subscription, err := service.repository.ActiveSubscription(ctx, subscriptionID, now)
 		if err != nil || subscription.PrincipalID != access.PrincipalID || subscription.Subject != access.Subject ||
 			subscription.SubjectIssuer != access.SubjectIssuer || subscription.SessionID != access.SessionID ||
-			subscription.ActingOrganizationID != access.ActingOrganizationID {
+			subscription.TenantID != access.TenantID {
 			return telemetryapi.RecoveryCursorCheckpointResponse{}, ErrRecoveryCursorRejected
 		}
 		currentRevision, err := service.repository.CurrentBusinessRevision(ctx, subscription.DeviceID)
@@ -462,7 +462,7 @@ func (service *RealtimeService) Checkpoint(ctx context.Context, access AccessCon
 			Subject:              subscription.Subject,
 			SubjectIssuer:        subscription.SubjectIssuer,
 			SessionID:            subscription.SessionID,
-			ActingOrganizationID: subscription.ActingOrganizationID,
+			TenantID:             subscription.TenantID,
 			DeviceID:             subscription.DeviceID,
 			Keys:                 append([]string(nil), subscription.Keys...),
 			ScopeDigest:          subscription.ScopeDigest,
@@ -667,7 +667,7 @@ func telemetryKeysToStrings(keys []telemetryapi.TelemetryKey) []string {
 func sameSubscriptionScope(subscription RealtimeSubscription, access AccessContext, target telemetryauth.Target) bool {
 	return subscription.Status == SubscriptionActive && subscription.PrincipalID == access.PrincipalID &&
 		subscription.Subject == access.Subject && subscription.SubjectIssuer == access.SubjectIssuer &&
-		subscription.SessionID == access.SessionID && subscription.ActingOrganizationID == access.ActingOrganizationID &&
+		subscription.SessionID == access.SessionID && subscription.TenantID == access.TenantID &&
 		subscription.DeviceID == target.DeviceID && slices.Equal(subscription.Keys, target.Keys)
 }
 
@@ -680,10 +680,10 @@ func (service *RealtimeService) verifyRecoveryCursor(cursor string, access Acces
 	if err := service.verifyCapability(cursor, &claims); err != nil {
 		return recoveryCursorClaims{}, ErrRecoveryCursorRejected
 	}
-	digest, err := telemetryauth.ScopeDigest(telemetryauth.ActionSubscribe, access.ActingOrganizationID, []telemetryauth.Target{target})
+	digest, err := telemetryauth.ScopeDigest(telemetryauth.ActionSubscribe, access.TenantID, []telemetryauth.Target{target})
 	if err != nil || claims.Version != 1 || claims.ExpiresAt <= now.Unix() || claims.SubscriptionID == "" || claims.CursorID == "" ||
 		claims.PrincipalID != access.PrincipalID || claims.Subject != access.Subject || claims.SubjectIssuer != access.SubjectIssuer ||
-		claims.SessionID != access.SessionID || claims.ActingOrganizationID != access.ActingOrganizationID || claims.DeviceID != target.DeviceID ||
+		claims.SessionID != access.SessionID || claims.TenantID != access.TenantID || claims.DeviceID != target.DeviceID ||
 		!slices.Equal(claims.Keys, target.Keys) || claims.ScopeDigest != digest || claims.BusinessRevision < 1 ||
 		!validTransportPosition(telemetryapi.TransportPosition{Epoch: claims.TransportEpoch, Offset: claims.TransportOffset}) {
 		return recoveryCursorClaims{}, ErrRecoveryCursorRejected
@@ -707,7 +707,7 @@ func (service *RealtimeService) connectionToken(access AccessContext, issuedAt, 
 		return "", err
 	}
 	claims, err := json.Marshal(connectionClaims{
-		Subject: access.PrincipalID, ActingOrganizationID: access.ActingOrganizationID,
+		Subject: access.PrincipalID, TenantID: access.TenantID,
 		SessionID: access.SessionID, IssuedAt: issuedAt.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: tokenID,
 	})
 	if err != nil {

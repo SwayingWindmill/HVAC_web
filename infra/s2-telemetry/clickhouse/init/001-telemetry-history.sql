@@ -3,7 +3,6 @@ CREATE DATABASE IF NOT EXISTS telemetry_history;
 CREATE TABLE IF NOT EXISTS telemetry_history.observations (
   observation_id UUID,
   tenant_id Nullable(UUID),
-  owning_organization_id Nullable(UUID),
   site_id Nullable(UUID),
   device_id Nullable(UUID),
   point_id Nullable(UUID),
@@ -14,6 +13,10 @@ CREATE TABLE IF NOT EXISTS telemetry_history.observations (
   source_offset UInt64,
   source_path LowCardinality(String),
   telemetry_key LowCardinality(String),
+  point_type LowCardinality(Nullable(String)),
+  point_revision Nullable(UInt64),
+  counter_decrease_mode LowCardinality(Nullable(String)),
+  counter_rollover_modulus Nullable(Float64),
   value_type Nullable(String),
   unit Nullable(String),
   value_json Nullable(String),
@@ -27,13 +30,12 @@ CREATE TABLE IF NOT EXISTS telemetry_history.observations (
   quality_reasons Array(String),
   payload_sha256 FixedString(64),
   projected_at DateTime64(3, 'UTC') DEFAULT now64(3),
-  CONSTRAINT accepted_tenant_scope CHECK acceptance_status != 'ACCEPTED' OR (tenant_id IS NOT NULL AND owning_organization_id IS NOT NULL AND site_id IS NOT NULL AND device_id IS NOT NULL AND point_id IS NOT NULL)
+  CONSTRAINT accepted_tenant_scope CHECK acceptance_status != 'ACCEPTED' OR (tenant_id IS NOT NULL AND site_id IS NOT NULL AND device_id IS NOT NULL AND point_id IS NOT NULL)
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(sampled_at)
 ORDER BY (
   ifNull(tenant_id, toUUID('00000000-0000-0000-0000-000000000000')),
-  ifNull(owning_organization_id, toUUID('00000000-0000-0000-0000-000000000000')),
   ifNull(site_id, toUUID('00000000-0000-0000-0000-000000000000')),
   ifNull(point_id, toUUID('00000000-0000-0000-0000-000000000000')),
   ifNull(sensor_id, toUUID('00000000-0000-0000-0000-000000000000')),
@@ -42,14 +44,12 @@ ORDER BY (
   sampled_at,
   observation_id
 )
-TTL sampled_at + INTERVAL 36 MONTH DELETE
 SETTINGS index_granularity = 8192,
          non_replicated_deduplication_window = 100000;
 
 CREATE TABLE IF NOT EXISTS telemetry_history.numeric_hourly_states (
   hour DateTime('UTC'),
   tenant_id UUID,
-  owning_organization_id UUID,
   site_id UUID,
   device_id UUID,
   point_id UUID,
@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS telemetry_history.numeric_hourly_states (
 )
 ENGINE = AggregatingMergeTree
 PARTITION BY toYYYYMM(hour)
-ORDER BY (tenant_id, owning_organization_id, site_id, point_id, sensor_id, device_id, telemetry_key, unit, hour)
+ORDER BY (tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key, unit, hour)
 SETTINGS non_replicated_deduplication_window = 100000;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS telemetry_history.observations_to_numeric_hourly
@@ -72,7 +72,6 @@ AS
 SELECT
   hour,
   resolved_tenant_id AS tenant_id,
-  organization_id AS owning_organization_id,
   resolved_site_id AS site_id,
   resolved_device_id AS device_id,
   resolved_point_id AS point_id,
@@ -87,7 +86,6 @@ FROM (
   SELECT
     toStartOfHour(sampled_at) AS hour,
     assumeNotNull(tenant_id) AS resolved_tenant_id,
-    assumeNotNull(owning_organization_id) AS organization_id,
     assumeNotNull(site_id) AS resolved_site_id,
     assumeNotNull(device_id) AS resolved_device_id,
     assumeNotNull(point_id) AS resolved_point_id,
@@ -96,10 +94,10 @@ FROM (
     ifNull(unit, '') AS resolved_unit,
     assumeNotNull(value_number) AS value_number
   FROM telemetry_history.observations
-  WHERE acceptance_status = 'ACCEPTED'
+  WHERE acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
+    AND point_type <> 'COUNTER'
     AND value_number IS NOT NULL
     AND tenant_id IS NOT NULL
-    AND owning_organization_id IS NOT NULL
     AND site_id IS NOT NULL
     AND device_id IS NOT NULL
     AND point_id IS NOT NULL
@@ -107,7 +105,6 @@ FROM (
 GROUP BY
   hour,
   resolved_tenant_id,
-  organization_id,
   resolved_site_id,
   resolved_device_id,
   resolved_point_id,
@@ -119,7 +116,6 @@ CREATE VIEW IF NOT EXISTS telemetry_history.numeric_hourly AS
 SELECT
   hour,
   tenant_id,
-  owning_organization_id,
   site_id,
   device_id,
   point_id,
@@ -131,4 +127,4 @@ SELECT
   minMerge(minimum_value) AS minimum_value,
   maxMerge(maximum_value) AS maximum_value
 FROM telemetry_history.numeric_hourly_states
-GROUP BY hour, tenant_id, owning_organization_id, site_id, point_id, sensor_id, device_id, telemetry_key, unit;
+GROUP BY hour, tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key, unit;

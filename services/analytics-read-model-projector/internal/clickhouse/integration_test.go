@@ -24,15 +24,15 @@ func TestCumulativeMeterProjectsAdditiveEnergyFactsIdempotently(t *testing.T) {
 	adminUsername := envOr("ANALYTICS_CLICKHOUSE_TEST_ADMIN_USERNAME", "telemetry_history")
 	adminPassword := os.Getenv("ANALYTICS_CLICKHOUSE_TEST_ADMIN_PASSWORD")
 	client := &http.Client{Timeout: 15 * time.Second}
-	organizationID := "018f4f00-0000-7000-8000-000000000001"
+	tenantID := "018f4f00-0100-7000-8000-000000000001"
 	siteID := "018f4f00-1000-7000-8000-000000000001"
 	deviceID := "018f4f00-2000-7000-8000-000000000001"
 	partition := "analytics-integration-" + strings.ReplaceAll(t.Name(), "/", "-")
 
 	observations := []map[string]any{
-		historyObservation("018f4f00-3000-7000-8000-000000000001", "018f4f00-4000-7000-8000-000000000001", organizationID, siteID, deviceID, partition, 1722257700000, 100.0, "2026-07-29T12:55:00.000Z"),
-		historyObservation("018f4f00-3000-7000-8000-000000000002", "018f4f00-4000-7000-8000-000000000002", organizationID, siteID, deviceID, partition, 1722258000000, 103.0, "2026-07-29T13:00:00.000Z"),
-		historyObservation("018f4f00-3000-7000-8000-000000000003", "018f4f00-4000-7000-8000-000000000003", organizationID, siteID, deviceID, partition, 1722258300000, 1.0, "2026-07-29T13:05:00.000Z"),
+		historyObservation("018f4f00-3000-7000-8000-000000000001", "018f4f00-4000-7000-8000-000000000001", tenantID, siteID, deviceID, partition, 1722257700000, 100.0, "2026-07-29T12:55:00.000Z"),
+		historyObservation("018f4f00-3000-7000-8000-000000000002", "018f4f00-4000-7000-8000-000000000002", tenantID, siteID, deviceID, partition, 1722258000000, 103.0, "2026-07-29T13:00:00.000Z"),
+		historyObservation("018f4f00-3000-7000-8000-000000000003", "018f4f00-4000-7000-8000-000000000003", tenantID, siteID, deviceID, partition, 1722258300000, 1.0, "2026-07-29T13:05:00.000Z"),
 	}
 	insertJSONEachRow(t, client, baseURL, adminUsername, adminPassword, "telemetry_history.observations", observations)
 
@@ -74,11 +74,11 @@ func TestCumulativeMeterProjectsAdditiveEnergyFactsIdempotently(t *testing.T) {
 
 	query := fmt.Sprintf(`SELECT energy_kwh, quality, quality_reasons, dataset_revision
 FROM analytics.energy_interval_facts
-WHERE organization_id = toUUID('%s')
+WHERE tenant_id = toUUID('%s')
   AND site_id = toUUID('%s')
   AND device_id = toUUID('%s')
 ORDER BY period_end
-FORMAT JSONEachRow`, organizationID, siteID, deviceID)
+FORMAT JSONEachRow`, tenantID, siteID, deviceID)
 	payload := executeClickHouse(t, client, baseURL, adminUsername, adminPassword, query)
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	var rows []struct {
@@ -109,11 +109,10 @@ FORMAT JSONEachRow`, organizationID, siteID, deviceID)
 	}
 }
 
-func historyObservation(observationID, eventID, organizationID, siteID, deviceID, partition string, offset uint64, value float64, sampledAt string) map[string]any {
+func historyObservation(observationID, eventID, tenantID, siteID, deviceID, partition string, offset uint64, value float64, sampledAt string) map[string]any {
 	return map[string]any{
 		"observation_id":          observationID,
-		"tenant_id":               "018f4f00-0100-7000-8000-000000000001",
-		"owning_organization_id":  organizationID,
+		"tenant_id":               tenantID,
 		"site_id":                 siteID,
 		"device_id":               deviceID,
 		"point_id":                "018f4f00-2100-7000-8000-000000000001",
@@ -122,7 +121,7 @@ func historyObservation(observationID, eventID, organizationID, siteID, deviceID
 		"source_event_id":         eventID,
 		"source_partition":        partition,
 		"source_offset":           offset,
-		"source_path":             "thingsboard/hvac-meter",
+		"source_path":             "mqtt/hvac-meter",
 		"telemetry_key":           energy.CumulativeElectricityTelemetryKey,
 		"value_type":              "NUMBER",
 		"unit":                    "kWh",

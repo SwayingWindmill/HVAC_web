@@ -27,14 +27,14 @@ import {
   summarizeEnergyPoints,
 } from '../apps/hvac-web/src/real/energy-presentation.ts';
 
-const organizationId = '01900000-0000-7000-8000-000000000001';
+const tenantId = '01900000-0000-7000-8000-000000000001';
 const siteAId = '01900000-0001-7000-8000-000000000001';
 const siteBId = '01900000-0002-7000-8000-000000000002';
 const sessionCapability = '[TEST_CSRF_CAPABILITY]';
 
 function query(overrides = {}) {
   return {
-    organizationId,
+    tenantId,
     siteId: siteAId,
     energyType: 'electricity',
     granularity: 'hour',
@@ -72,7 +72,7 @@ test('energy request uses same-origin BFF session, CSRF capability, and public G
   let observed;
   const result = await queryEnergySeries(query(), {
     csrfToken: sessionCapability,
-    trustedOrganizationId: organizationId,
+    trustedTenantId: tenantId,
     signal: controller.signal,
     fetchImplementation: async (url, init) => {
       observed = { url, init };
@@ -92,18 +92,18 @@ test('energy request uses same-origin BFF session, CSRF capability, and public G
   assert.deepEqual(JSON.parse(observed.init.body), query());
 });
 
-test('browser-supplied Organization cannot override the authenticated Principal scope', async () => {
+test('browser-supplied Tenant cannot override the trusted Site context', async () => {
   let called = false;
   await assert.rejects(
-    queryEnergySeries(query({ organizationId: siteBId }), {
+    queryEnergySeries(query({ tenantId: siteBId }), {
       csrfToken: sessionCapability,
-      trustedOrganizationId: organizationId,
+      trustedTenantId: tenantId,
       fetchImplementation: async () => {
         called = true;
         throw new Error('must not call');
       },
     }),
-    /does not match the authenticated Principal/,
+    /does not match the trusted Site context/,
   );
   assert.equal(called, false);
 });
@@ -135,7 +135,7 @@ test('invalid success envelopes fail closed', async () => {
   await assert.rejects(
     queryEnergySeries(query(), {
       csrfToken: sessionCapability,
-      trustedOrganizationId: organizationId,
+      trustedTenantId: tenantId,
       fetchImplementation: async () => new Response(JSON.stringify({ schemaVersion: 1, points: [] }), { status: 200 }),
     }),
     EnergyAnalyticsInvalidResponseError,

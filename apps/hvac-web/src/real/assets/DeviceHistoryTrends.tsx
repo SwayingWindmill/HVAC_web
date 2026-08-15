@@ -50,7 +50,7 @@ function chartOption(
 ) {
   const unit = historySeriesUnit(series.points, definition.defaultUnit);
   const data = buildRealAssetsTrendData(series.points, query.range, query.maxPointsPerKey);
-  const description = `${definition.label}，${REAL_ASSETS_HISTORY_RANGES[query.range].label}，Site 时区 ${timezone}。断点表示缺失或 Point/Sensor 历史身份切换，零值表示真实零，可疑点保持可见。`;
+  const description = `${definition.label}，${REAL_ASSETS_HISTORY_RANGES[query.range].label}，Site 时区 ${timezone}。断点表示缺失或 Point/Sensor 历史身份切换，零值表示真实零，非 GOOD 质量点保持可见。`;
   return {
     animation: false,
     aria: { enabled: true, description },
@@ -70,7 +70,7 @@ function chartOption(
           const sensorId = parameter.data?.sensorId;
           lines.push(value === null || value === undefined
             ? `${definition.label}: 数据缺口或历史身份切换`
-            : `${definition.label}: ${value} ${unit}${quality === 'SUSPECT' ? ' · 可疑' : ''}`);
+            : `${definition.label}: ${value} ${unit}${quality && quality !== 'GOOD' ? ` · ${quality}` : ''}`);
           if (value !== null && value !== undefined && pointId) {
             lines.push(`Point ${pointId}${sensorId ? ` · Sensor ${sensorId}` : ' · 无独立 Sensor'}`);
           }
@@ -102,8 +102,8 @@ function chartOption(
             quality: item.quality,
             pointId: item.pointId,
             sensorId: item.sensorId,
-            symbol: item.quality === 'SUSPECT' ? 'diamond' : 'circle',
-            symbolSize: item.quality === 'SUSPECT' ? 10 : 7,
+            symbol: item.quality && item.quality !== 'GOOD' ? 'diamond' : 'circle',
+            symbolSize: item.quality && item.quality !== 'GOOD' ? 10 : 7,
           }),
       emphasis: { focus: 'series' },
     }],
@@ -133,7 +133,7 @@ function SeriesPanel({
   const unit = historySeriesUnit(series.points, definition.defaultUnit);
   const first = series.points.at(0);
   const last = series.points.at(-1);
-  const suspectCount = series.points.filter((point) => point.quality === 'SUSPECT').length;
+  const degradedQualityCount = series.points.filter((point) => point.quality !== 'GOOD').length;
   const zeroCount = series.points.filter((point) => point.value === 0).length;
   let previousIdentity: string | null = null;
   let identitySegmentCount = 0;
@@ -143,7 +143,7 @@ function SeriesPanel({
     previousIdentity = identity;
   }
   const latestIdentity = last ? `Point ${last.pointId}${last.sensorId ? ` · Sensor ${last.sensorId}` : ' · 无独立 Sensor'}` : '无历史身份';
-  const businessState = series.points.length === 0 ? 'EMPTY' : truncated || partial ? 'PARTIAL' : suspectCount > 0 ? 'SUSPECT' : 'READY';
+  const businessState = series.points.length === 0 ? 'EMPTY' : truncated || partial ? 'PARTIAL' : degradedQualityCount > 0 ? 'QUALITY_DEGRADED' : 'READY';
 
   return (
     <article className="real-assets-history__series" data-history-key={definition.key} data-business-state={businessState} data-unit={unit} data-history-identity-count={identitySegmentCount}>
@@ -153,7 +153,7 @@ function SeriesPanel({
       </header>
       <dl className="real-assets-history__series-facts">
         <div><dt>返回点数</dt><dd>{series.points.length}</dd></div>
-        <div><dt>可疑点</dt><dd>{suspectCount}</dd></div>
+        <div><dt>非 GOOD 质量点</dt><dd>{degradedQualityCount}</dd></div>
         <div><dt>真实零值点</dt><dd>{zeroCount}{zeroCount > 0 ? ` · 0 ${unit}` : ''}</dd></div>
         <div><dt>历史身份段</dt><dd>{identitySegmentCount}</dd></div>
         <div><dt>最新历史身份</dt><dd><code>{latestIdentity}</code></dd></div>
@@ -209,8 +209,7 @@ export function DeviceHistoryTrends({
     return createRealAssetsHistoryQuery({
       protectedGeneration,
       sessionId: principal.session.id,
-      actingOrganizationId: principal.context.actingOrganizationId,
-      owningOrganizationId: row.device.owningOrganizationId,
+      tenantId: row.device.tenantId,
       siteId: site.id,
       deviceId: row.device.id,
       keys: definitions.map((definition) => definition.key),
@@ -219,12 +218,12 @@ export function DeviceHistoryTrends({
       routePolicyRevision,
       asOf: selection.asOf,
     });
-  }, [definitions, principal.context.actingOrganizationId, principal.session.id, protectedGeneration, routePolicyRevision, row.device.id, row.device.owningOrganizationId, selection.asOf, selection.range, selectionCurrent, site.id, site.timezone]);
+  }, [definitions, principal.session.id, protectedGeneration, routePolicyRevision, row.device.id, row.device.tenantId, selection.asOf, selection.range, selectionCurrent, site.id, site.timezone]);
 
   const result = useQuery({
     queryKey: query
       ? realAssetsHistoryQueryKey(query)
-      : ['real-assets', protectedGeneration, principal.context.actingOrganizationId, site.id, 'history', 'disabled', row.device.id],
+      : ['real-assets', protectedGeneration, row.device.tenantId, site.id, 'history', 'disabled', row.device.id],
     queryFn: ({ signal }) => {
       if (!query) throw new Error('Device history query is not ready.');
       const scopeGuard = protectedRequestToken();

@@ -19,6 +19,6 @@ npm run build:demo
 npm run build:real
 ```
 
-Demo 模式使用演示数据和本地只读能力。Real 模式通过受保护 Shell 和 Platform Gateway 获取身份、站点范围、Registry、遥测、能源、命令、告警及 Operations Agent 数据。浏览器不得直连内部服务、模型提供方、数据库或 ThingsBoard。
+Demo 模式使用演示数据和本地只读能力。Real 模式通过受保护 Shell 和 Platform Gateway 获取身份、站点范围、Registry、遥测、能源、命令、告警及 Operations Agent 数据。浏览器不得直连内部服务、模型提供方、数据库或设备 Provider。
 
 页面不得直接发起无边界请求。数据访问应依次经过生成或版本化 API 契约、领域适配器、React Query/实时状态层，再投影到 UI。

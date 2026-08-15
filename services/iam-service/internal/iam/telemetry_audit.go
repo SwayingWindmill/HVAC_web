@@ -9,7 +9,7 @@ import (
 
 type TelemetryDecisionAudit struct {
 	PrincipalID          string
-	ActingOrganizationID string
+	TenantID string
 	Action               telemetryauth.Action
 	Allowed              bool
 	TargetCount          int
@@ -41,7 +41,7 @@ func (sink *loggerTelemetryDecisionAuditSink) RecordTelemetryDecision(ctx contex
 		"trace_id", event.TraceID,
 		"request_id", event.RequestID,
 		"principal_id", event.PrincipalID,
-		"acting_organization_id", event.ActingOrganizationID,
+		"tenant_id", event.TenantID,
 		"action", event.Action,
 		"allowed", event.Allowed,
 		"target_count", event.TargetCount,

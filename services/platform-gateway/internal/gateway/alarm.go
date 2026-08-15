@@ -163,7 +163,7 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 	writer.Header().Set("Cache-Control", "private, no-store")
 	if route.alarmID == "" {
 		var response alarmmodel.ListResponse
-		if decodeStrictAlarmJSON(body, &response) != nil || response.Validate(session.ActingOrganizationID, route.siteID, limit) != nil {
+		if decodeStrictAlarmJSON(body, &response) != nil || response.Validate(session.TenantID, route.siteID, limit) != nil {
 			h.writeAlarmFailure(writer, request, alarmUnavailable("Alarm Service returned an invalid list projection."))
 			return
 		}
@@ -171,7 +171,7 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 		return
 	}
 	var alarm alarmmodel.Alarm
-	if decodeStrictAlarmJSON(body, &alarm) != nil || alarm.Validate() != nil || alarm.OrganizationID != session.ActingOrganizationID || alarm.SiteID != route.siteID || alarm.AlarmID != route.alarmID {
+	if decodeStrictAlarmJSON(body, &alarm) != nil || alarm.Validate() != nil || alarm.TenantID != session.TenantID || alarm.SiteID != route.siteID || alarm.AlarmID != route.alarmID {
 		h.writeAlarmFailure(writer, request, alarmUnavailable("Alarm Service returned an invalid detail projection."))
 		return
 	}
@@ -252,7 +252,7 @@ func (h *handler) authorizeAlarm(request *http.Request, session bffSession, rout
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
 		DisplayName: session.Principal.DisplayName, Email: session.Principal.Email, Roles: append([]string(nil), session.Principal.Roles...),
 		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE, Audience: h.identity.config.IAMAudience,
-		ActingOrganizationID: session.ActingOrganizationID, Actions: []string{"alarm:authorize"}, Scopes: []string{"session:" + session.ID},
+		TenantID: session.TenantID, Actions: []string{"alarm:authorize"}, Scopes: []string{"session:" + session.ID},
 		PolicyRevision: h.identity.config.PolicyRevision, SessionID: session.ID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	}
@@ -262,8 +262,8 @@ func (h *handler) authorizeAlarm(request *http.Request, session bffSession, rout
 		return alarmauth.Decision{}, &failure
 	}
 	input := alarmauth.DecisionRequest{
-		ActingOrganizationID: session.ActingOrganizationID,
-		SiteID:               route.siteID,
+		TenantID: session.TenantID,
+		SiteID:   route.siteID,
 		AlarmID:              route.alarmID,
 		Action:               route.action,
 	}
@@ -306,7 +306,7 @@ func (h *handler) authorizeAlarm(request *http.Request, session bffSession, rout
 	}
 	decision := output.Decision
 	if decision.Subject != session.Principal.Subject || decision.SubjectIssuer != session.Principal.Issuer ||
-		decision.ActingOrganizationID != session.ActingOrganizationID || decision.SiteID != route.siteID || decision.AlarmID != route.alarmID || decision.Action != route.action {
+		decision.TenantID != session.TenantID || decision.SiteID != route.siteID || decision.AlarmID != route.alarmID || decision.Action != route.action {
 		failure := alarmUnavailable("IAM returned an Alarm decision outside the authenticated boundary.")
 		return alarmauth.Decision{}, &failure
 	}
@@ -318,7 +318,7 @@ func (h *handler) authorizeAlarm(request *http.Request, session bffSession, rout
 }
 
 func (h *handler) signAlarmReadContext(session bffSession, route publicAlarmRoute, decision alarmauth.Decision, tenantID string) (string, *alarmFailure) {
-	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.alarm == nil || !isLowerUUIDv7(tenantID) {
+	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.alarm == nil || !isLowerUUIDv7(tenantID) || session.TenantID != tenantID {
 		failure := alarmUnavailable("Alarm read context signing is unavailable.")
 		return "", &failure
 	}
@@ -327,7 +327,7 @@ func (h *handler) signAlarmReadContext(session bffSession, route publicAlarmRout
 	if expiresAt.After(session.ExpiresAt) {
 		expiresAt = session.ExpiresAt
 	}
-	scopes := []string{"organization:" + session.ActingOrganizationID, "site:" + route.siteID}
+	scopes := []string{"tenant:" + session.TenantID, "site:" + route.siteID}
 	if route.alarmID != "" {
 		scopes = append(scopes, "alarm:"+route.alarmID)
 	}
@@ -335,7 +335,7 @@ func (h *handler) signAlarmReadContext(session bffSession, route publicAlarmRout
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
 		PrincipalID: decision.PrincipalID, DisplayName: session.Principal.DisplayName, Email: session.Principal.Email,
 		Roles: append([]string(nil), session.Principal.Roles...), ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
-		Audience: h.alarm.backendAudience, ActingOrganizationID: session.ActingOrganizationID, TenantID: tenantID,
+		Audience: h.alarm.backendAudience, TenantID: tenantID,
 		Actions: []string{string(route.action)}, Scopes: scopes, PolicyRevision: decision.PolicyRevision, SessionID: session.ID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	}

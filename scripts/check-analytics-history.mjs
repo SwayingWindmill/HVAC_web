@@ -6,6 +6,8 @@ const root = resolve(process.cwd());
 const read = (path) => readFile(resolve(root, path), 'utf8');
 const [
   ddl,
+  historyDDL,
+  rollupDDL,
   domain,
   clickHouseClient,
   projector,
@@ -19,6 +21,8 @@ const [
   ownership,
 ] = await Promise.all([
   read('infra/s2-telemetry/clickhouse/init/002-analytics-energy-interval.sql'),
+  read('infra/s2-telemetry/clickhouse/init/001-telemetry-history.sql'),
+  read('infra/s2-telemetry/clickhouse/init/003-telemetry-rollups.sql'),
   read('services/analytics-read-model-projector/internal/energy/projector.go'),
   read('services/analytics-read-model-projector/internal/clickhouse/client.go'),
   read('services/analytics-read-model-projector/cmd/analytics-read-model-projector/main.go'),
@@ -40,7 +44,6 @@ for (const marker of [
   'energy_kwh Float64',
   'source_current_observation_id UUID',
   'dataset_revision UInt64',
-  "TTL period_end + INTERVAL 36 MONTH DELETE",
   'analytics_projector_reader',
   'analytics_projector_writer',
   'cube_analytics_reader',
@@ -48,6 +51,12 @@ for (const marker of [
 ]) {
   assert(ddl.includes(marker), `missing analytics DDL marker ${marker}`);
 }
+for (const source of [ddl, historyDDL, rollupDDL]) {
+  assert(!source.includes('owning_organization_id') && !source.includes('organization_id'), 'Organization remains a ClickHouse telemetry fact dimension');
+  assert(!/\bTTL\b/u.test(source), 'ClickHouse DDL hard-codes retention TTL instead of using Governance policy');
+}
+assert(!rollupDDL.includes('numeric_daily') && !rollupDDL.includes('toStartOfDay(sampled_at)'), 'UTC daily rollup is incorrectly treated as a Site business day');
+assert(historyDDL.includes('tenant_id Nullable(UUID)') && historyDDL.includes('site_id Nullable(UUID)'), 'raw history Tenant/Site fact scope is missing');
 assert(ddl.includes('GRANT SELECT ON telemetry_history.observations TO analytics_projector_reader'), 'analytics reader must have raw-history read access');
 assert(ddl.includes('GRANT INSERT ON analytics.energy_interval_facts TO analytics_projector_writer'), 'analytics writer must only insert facts');
 assert(ddl.includes('GRANT SELECT ON analytics.energy_interval_facts TO cube_analytics_reader'), 'Cube must use a read-only analytics identity');
@@ -63,7 +72,7 @@ for (const marker of [
 ]) {
   assert(domain.includes(marker), `missing energy-domain marker ${marker}`);
 }
-for (const marker of ['lagInFrame', 'PARTITION BY tenant_id, owning_organization_id, site_id, point_id, sensor_id, device_id, telemetry_key', 'tenant_id IS NOT NULL', 'point_id IS NOT NULL', 'ORDER BY sampled_at, source_offset, observation_id', 'isFinite(value_number)', 'LEFT ANTI JOIN', 'insert_deduplication_token', 'JSONEachRow', 'observability.InjectHTTP']) {
+for (const marker of ['lagInFrame', 'PARTITION BY tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key', 'tenant_id IS NOT NULL', 'point_id IS NOT NULL', 'ORDER BY sampled_at, source_offset, observation_id', 'isFinite(value_number)', 'LEFT ANTI JOIN', 'insert_deduplication_token', 'JSONEachRow', 'observability.InjectHTTP']) {
   assert(clickHouseClient.includes(marker), `missing ClickHouse adapter marker ${marker}`);
 }
 for (const marker of [

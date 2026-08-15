@@ -29,7 +29,7 @@ func (store *PostgresStore) Approve(ctx context.Context, request commandmodel.Ap
 }
 
 func (store *PostgresStore) approveOnce(ctx context.Context, request commandmodel.ApproveRequest) (commandmodel.CommandIntent, error) {
-	if request.OrganizationID == "" || request.CommandID == "" {
+	if request.TenantID == "" || request.CommandID == "" {
 		return commandmodel.CommandIntent{}, ErrApprovalInvalid
 	}
 	now := store.now().UTC()
@@ -38,22 +38,22 @@ func (store *PostgresStore) approveOnce(ctx context.Context, request commandmode
 		return commandmodel.CommandIntent{}, fmt.Errorf("begin command approval transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := activateOrganization(ctx, tx, request.OrganizationID); err != nil {
+	if err := activateTenant(ctx, tx, request.TenantID); err != nil {
 		return commandmodel.CommandIntent{}, err
 	}
 	var lockedCommandID string
 	if err := tx.QueryRow(ctx, `
 SELECT command_id::text
 FROM command_runtime.command_intents
-WHERE organization_id = $1::uuid AND command_id = $2::uuid
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 FOR UPDATE
-`, request.OrganizationID, request.CommandID).Scan(&lockedCommandID); errors.Is(err, pgx.ErrNoRows) {
+`, request.TenantID, request.CommandID).Scan(&lockedCommandID); errors.Is(err, pgx.ErrNoRows) {
 		return commandmodel.CommandIntent{}, ErrCommandNotFound
 	} else if err != nil {
 		return commandmodel.CommandIntent{}, fmt.Errorf("lock command for approval: %w", err)
 	}
 
-	intent, err := loadIntent(ctx, tx, request.OrganizationID, request.CommandID)
+	intent, err := loadIntent(ctx, tx, request.TenantID, request.CommandID)
 	if err != nil {
 		return commandmodel.CommandIntent{}, err
 	}
@@ -66,7 +66,7 @@ FOR UPDATE
 
 	if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_approval_snapshots (
-  approval_id, command_id, organization_id, site_id, device_id, approver_id,
+  approval_id, command_id, tenant_id, site_id, device_id, approver_id,
   approver_role, approval_policy, payload_hash, capability_revision,
   risk_level, risk_rule_revision, authorization_grant_id,
   authorization_policy_revision, authorization_purpose, authorization_maximum_risk,
@@ -80,7 +80,7 @@ INSERT INTO command_runtime.command_approval_snapshots (
   $17, $18,
   $19, $20, $21, $22
 )
-`, request.Approval.ApprovalID, intent.ID, intent.OrganizationID, intent.SiteID, intent.DeviceID,
+`, request.Approval.ApprovalID, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID,
 		request.Approval.ApproverID, request.Approval.ApproverRole, request.Approval.Policy,
 		request.Approval.PayloadHash, request.Approval.CapabilityRevision, request.Approval.Risk,
 		request.Approval.RiskRuleRevision, request.Approval.Authorization.GrantID,
@@ -140,8 +140,8 @@ INSERT INTO command_runtime.command_approval_snapshots (
 	if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.command_intents
 SET status = $3, version = $4, updated_at = $5
-WHERE organization_id = $1::uuid AND command_id = $2::uuid
-`, intent.OrganizationID, intent.ID, finalStatus, version, now); err != nil {
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid
+`, intent.TenantID, intent.ID, finalStatus, version, now); err != nil {
 		return commandmodel.CommandIntent{}, fmt.Errorf("update approved command intent: %w", err)
 	}
 
@@ -154,10 +154,10 @@ WHERE organization_id = $1::uuid AND command_id = $2::uuid
 	})
 	if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_audit_intents (
-  audit_intent_id, command_id, organization_id, site_id, device_id,
+  audit_intent_id, command_id, tenant_id, site_id, device_id,
   event_kind, payload_hash, redacted_payload, created_at, relayed_at
 ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'COMMAND_APPROVAL_CAPTURED', $6, $7::jsonb, $8, NULL)
-`, auditID, intent.ID, intent.OrganizationID, intent.SiteID, intent.DeviceID,
+`, auditID, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID,
 		intent.PayloadHash, redactedPayload, now); err != nil {
 		return commandmodel.CommandIntent{}, fmt.Errorf("insert approval audit intent: %w", err)
 	}
@@ -170,7 +170,7 @@ INSERT INTO command_runtime.command_audit_intents (
 		outboxPayload, _ := json.Marshal(map[string]any{
 			"schemaVersion":         1,
 			"commandId":             intent.ID,
-			"organizationId":        intent.OrganizationID,
+			"tenantId":              intent.TenantID,
 			"siteId":                intent.SiteID,
 			"deviceId":              intent.DeviceID,
 			"capability":            intent.Capability,
@@ -181,16 +181,16 @@ INSERT INTO command_runtime.command_audit_intents (
 		})
 		if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_dispatch_outbox (
-  outbox_id, command_id, organization_id, site_id, device_id, command_version,
+  outbox_id, command_id, tenant_id, site_id, device_id, command_version,
   available_at, lease_owner, lease_until, delivered_at, attempt_count, payload, created_at
 ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, NULL, NULL, NULL, 0, $8::jsonb, $7)
-`, outboxID, intent.ID, intent.OrganizationID, intent.SiteID, intent.DeviceID,
+`, outboxID, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID,
 			version, now, outboxPayload); err != nil {
 			return commandmodel.CommandIntent{}, fmt.Errorf("insert approved dispatch outbox: %w", err)
 		}
 	}
 
-	updated, err := loadIntent(ctx, tx, request.OrganizationID, request.CommandID)
+	updated, err := loadIntent(ctx, tx, request.TenantID, request.CommandID)
 	if err != nil {
 		return commandmodel.CommandIntent{}, err
 	}
@@ -206,10 +206,10 @@ INSERT INTO command_runtime.command_dispatch_outbox (
 func insertApprovalTransition(ctx context.Context, tx pgx.Tx, transitionID string, intent commandmodel.CommandIntent, version uint64, from, to commandmodel.IntentStatus, reason string, approval commandmodel.ApprovalEvidence, now time.Time) error {
 	if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_transitions (
-  transition_id, command_id, organization_id, site_id, device_id, command_version,
+  transition_id, command_id, tenant_id, site_id, device_id, command_version,
   from_status, to_status, reason, actor_type, actor_id, causation_id, evidence_id, occurred_at
 ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, 'PRINCIPAL', $10, $11, $11, $12)
-`, transitionID, intent.ID, intent.OrganizationID, intent.SiteID, intent.DeviceID,
+`, transitionID, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID,
 		version, from, to, reason, approval.ApproverID, approval.ApprovalID, now); err != nil {
 		return fmt.Errorf("insert approval transition: %w", err)
 	}

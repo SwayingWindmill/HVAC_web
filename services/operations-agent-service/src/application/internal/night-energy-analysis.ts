@@ -32,7 +32,7 @@ export interface NightEnergySeries {
 }
 
 export interface SiteNightEnergyScope {
-  readonly organizationId: string;
+  readonly tenantId: string;
   readonly siteId: string;
   readonly timezone: string;
   readonly equipmentIds: readonly string[];
@@ -143,7 +143,7 @@ export interface SiteNightEnergyFindingDraft {
 
 interface EquipmentAttributionRequiredNextBase {
   readonly status: 'REQUIRED_NEXT';
-  readonly organizationId: string;
+  readonly tenantId: string;
   readonly siteId: string;
   readonly equipmentIds: readonly string[];
   readonly targetPeriod: SiteNightEnergyPeriodReference;
@@ -690,7 +690,7 @@ const createEquipmentAttribution = (
         'CAPTURED_AT',
         'PAYLOAD_DIGEST',
       ],
-      organizationId: input.site.organizationId,
+      tenantId: input.site.tenantId,
       siteId: input.site.siteId,
       equipmentIds: [...input.site.equipmentIds].sort(),
       targetPeriod,
@@ -709,7 +709,7 @@ const createEquipmentAttribution = (
         'CAPTURED_AT',
         'PAYLOAD_DIGEST',
       ],
-      organizationId: input.site.organizationId,
+      tenantId: input.site.tenantId,
       siteId: input.site.siteId,
       equipmentIds: [...input.site.equipmentIds].sort(),
       targetPeriod,
@@ -737,12 +737,12 @@ const validateInput = (value: unknown): SiteNightEnergyAnalysisInput => {
   const input = value;
   if (!isRecord(input.site)
     || !hasExactKeys(input.site, [
-      'organizationId',
+      'tenantId',
       'siteId',
       'timezone',
       'equipmentIds',
     ])
-    || typeof input.site.organizationId !== 'string'
+    || typeof input.site.tenantId !== 'string'
     || typeof input.site.siteId !== 'string'
     || typeof input.site.timezone !== 'string'
     || !Array.isArray(input.site.equipmentIds)
@@ -769,7 +769,7 @@ const validateInput = (value: unknown): SiteNightEnergyAnalysisInput => {
   const baselineSeries = validateSeriesContract(input.baselineSeries, 'baselineSeries');
   const validated = {
     site: {
-      organizationId: site.organizationId,
+      tenantId: site.tenantId,
       siteId: site.siteId,
       timezone: site.timezone,
       equipmentIds: [...equipmentIds],
@@ -785,7 +785,7 @@ const validateInput = (value: unknown): SiteNightEnergyAnalysisInput => {
     targetSeries,
     baselineSeries,
   } as SiteNightEnergyAnalysisInput;
-  if (!uuidV7Pattern.test(validated.site.organizationId)
+  if (!uuidV7Pattern.test(validated.site.tenantId)
     || !uuidV7Pattern.test(validated.site.siteId)
     || validated.site.equipmentIds.some((identity) => !uuidV7Pattern.test(identity))) {
     failInput('Night-energy analysis Scope identities must be UUIDv7 values.');
@@ -865,7 +865,7 @@ export const analyzeSiteNightEnergy = (
   const digestSource = {
     algorithmVersion,
     site: {
-      organizationId: input.site.organizationId,
+      tenantId: input.site.tenantId,
       siteId: input.site.siteId,
       timezone: input.site.timezone,
       equipmentIds: [...input.site.equipmentIds].sort(),

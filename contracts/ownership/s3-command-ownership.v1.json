@@ -5,6 +5,14 @@
   "productionTrafficPercent": 0,
   "businessOwner": "command-service",
   "publicIngress": "platform-gateway",
+  "transport": {
+    "type": "MQTT",
+    "authority": "transport-only",
+    "commandTopic": "energy/v1/{tenant}/{site}/{gateway}/command",
+    "replyTopic": "energy/v1/{tenant}/{site}/{gateway}/command/reply",
+    "qos": 1,
+    "edgeOwner": "EG8200"
+  },
   "gatewayBaseline": {
     "activationStatus": "implemented-routes-disabled",
     "sessionRequired": true,
@@ -23,17 +31,19 @@
   "restrictedWorkers": [
     {
       "service": "command-dispatcher",
-      "activationStatus": "active-S3-05-synthetic-only",
+      "activationStatus": "active-native-mqtt",
       "directDatabaseAccess": false,
       "operations": [
         "claim a governed Attempt and monotonic Fence from command-service",
-        "execute a leased DispatchEnvelope",
+        "prepare connector evidence before send",
+        "publish a leased command through MQTT",
+        "accept only the exact command reply",
         "resolve connector evidence through command-service"
       ]
     },
     {
       "service": "command-verifier",
-      "activationStatus": "active-S3-07-internal-test-only",
+      "activationStatus": "active-internal-test-only",
       "directDatabaseAccess": false,
       "operations": [
         "claim an acknowledged Attempt verification lease from command-service",
@@ -57,24 +67,9 @@
     "command-audit-intent"
   ],
   "routes": [
-    {
-      "method": "POST",
-      "path": "/api/v1/commands",
-      "owner": "command-service",
-      "rollout": "disabled"
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/commands/{commandId}",
-      "owner": "command-service",
-      "rollout": "disabled"
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/commands/{commandId}:approve",
-      "owner": "command-service",
-      "rollout": "disabled"
-    }
+    { "method": "POST", "path": "/api/v1/commands", "owner": "command-service", "rollout": "disabled" },
+    { "method": "GET", "path": "/api/v1/commands/{commandId}", "owner": "command-service", "rollout": "disabled" },
+    { "method": "POST", "path": "/api/v1/commands/{commandId}:approve", "owner": "command-service", "rollout": "disabled" }
   ],
   "firstCapability": {
     "name": "SET_TEMPERATURE_SETPOINT",
@@ -86,15 +81,17 @@
     "risk": "LOW",
     "approval": "NONE",
     "retryPolicy": "PRE_SEND_ONLY",
-    "connector": "SYNTHETIC_ONLY"
+    "connector": "NATIVE_MQTT"
   },
-  "localProviderContract": {
-    "provider": "THINGSBOARD_CE",
-    "providerVersion": "4.3.1.3",
-    "verificationStatus": "LOCAL_VERIFIED",
-    "productionEligible": false,
-    "mappingRevision": "thingsboard-ce-4.3.1.3:setTemperatureSetpoint:v1",
-    "reportedStateVerificationRequired": true
+  "nativeEdgeContract": {
+    "provider": "EG8200_MQTT",
+    "schemaVersion": 1,
+    "mappingRevision": "mqtt-command-v1",
+    "reportedStateVerificationRequired": true,
+    "connectorMayDeclareVerified": false,
+    "commandIdDedupRequired": true,
+    "executionFenceRequired": true,
+    "expiryRequired": true
   },
   "currentStateRequirements": {
     "owner": "telemetry-runtime-service",
@@ -108,18 +105,18 @@
   },
   "forbiddenOwners": [
     "platform-gateway",
-    "thingsboard-connector-control",
     "automation-service",
     "ai-platform-service",
     "agent-worker",
     "hvac-backend"
   ],
   "forbiddenFlows": [
-    "browser-to-thingsboard",
+    "browser-to-edge-mqtt",
     "arbitrary-method-and-params",
     "old-fence-send",
     "request-committed-auto-retry",
     "historical-telemetry-control-validation",
+    "connector-self-verification",
     "synthetic-production-attestation"
   ]
 }

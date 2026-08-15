@@ -13,6 +13,7 @@ import (
 
 const (
 	realtimeTestPrincipal = "018f2e00-2000-7000-8000-000000000001"
+	realtimeTestTenant    = "018f2d00-0000-7000-8000-000000000001"
 	realtimeTestOrg       = "018f2e00-1000-7000-8000-000000000003"
 	realtimeTestDevice1   = "018f2e00-3000-7000-8000-000000000001"
 	realtimeTestDevice2   = "018f2e00-3000-7000-8000-000000000002"
@@ -248,7 +249,7 @@ func realtimeTestSnapshot(now time.Time, revision int64) telemetryapi.DeviceObse
 	unitPercent := "%"
 	return telemetryapi.DeviceObservationSnapshot{
 		SchemaVersion: 1, DeviceId: realtimeTestDevice1,
-		OwningOrganizationId: realtimeTestOrg, SiteId: "018f2e00-4000-7000-8000-000000000001",
+		TenantId: realtimeTestTenant, SiteId: "018f2e00-4000-7000-8000-000000000001",
 		BusinessRevision: telemetryapi.BusinessRevision(revision), EvaluatedAt: instant(now),
 		EvaluationAvailability: telemetryapi.EvaluationAvailabilityAvailable,
 		AvailabilityReasons:    []telemetryapi.AvailabilityReasonCode{},

@@ -13,7 +13,7 @@ func (h *handler) handleCommandDecision(writer http.ResponseWriter, request *htt
 	var input commandauth.DecisionRequest
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil || input.Validate() != nil || input.ActingOrganizationID != inbound.ActingOrganizationID {
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil || input.Validate() != nil || input.TenantID != inbound.TenantID {
 		writeProblem(writer, http.StatusBadRequest, "IAM_COMMAND_DECISION_REQUEST_INVALID", "The Command authorization request is invalid.")
 		return http.StatusBadRequest
 	}
@@ -39,7 +39,7 @@ func (h *handler) handleCommandDecision(writer http.ResponseWriter, request *htt
 		grant, signErr := commandauth.SignGrant(h.commandGrantSigner, commandauth.GrantClaims{
 			Issuer: h.commandGrantIssuer, Presenter: presenter, Audience: h.commandGrantAudience,
 			GrantID: grantID, Purpose: decision.Purpose, PrincipalID: decision.PrincipalID,
-			OrganizationID: decision.ActingOrganizationID, SiteID: decision.SiteID, DeviceID: decision.DeviceID,
+			TenantID: decision.TenantID, SiteID: decision.SiteID, DeviceID: decision.DeviceID,
 			Capability: decision.Capability, MaximumRisk: decision.MaximumRisk,
 			CapabilityRevision: decision.CapabilityRevision, PolicyRevision: decision.PolicyRevision,
 			EmergencyRevocationRevision: decision.EmergencyRevocationRevision,
@@ -64,7 +64,7 @@ func (h *handler) handleCommandDecision(writer http.ResponseWriter, request *htt
 	)
 	h.logger.InfoContext(request.Context(), "command_authorization_decision",
 		"principal_id", decision.PrincipalID,
-		"organization_id", decision.ActingOrganizationID,
+		"tenant_id", decision.TenantID,
 		"site_id", decision.SiteID,
 		"device_id", decision.DeviceID,
 		"capability", decision.Capability,

@@ -61,7 +61,7 @@ export default function AuthenticatedPrincipalStatus() {
   const authenticated = snapshot.state === 'authenticated';
   const checking = snapshot.state === 'checking';
   const detail = authenticated
-    ? `${snapshot.principal.principal.displayName} · roles ${snapshot.principal.principal.roles.join(', ') || 'none'} · org ${snapshot.principal.context.actingOrganizationId} · IAM policy ${snapshot.principal.authorization.policyRevision} · capabilities ${snapshot.principal.authorization.capabilities.length}: ${snapshot.principal.authorization.capabilities.join(', ') || 'none'}`
+    ? `${snapshot.principal.principal.displayName} · roles ${snapshot.principal.principal.roles.join(', ') || 'none'} · org ${snapshot.principal.context.tenantId} · IAM policy ${snapshot.principal.authorization.policyRevision} · capabilities ${snapshot.principal.authorization.capabilities.length}: ${snapshot.principal.authorization.capabilities.join(', ') || 'none'}`
     : snapshot.state === 'anonymous'
       ? '浏览器仅持有 HttpOnly Secure BFF Session Cookie'
       : snapshot.state === 'error'

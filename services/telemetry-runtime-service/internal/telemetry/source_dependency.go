@@ -7,8 +7,6 @@ func sourceDependency(peerSPIFFE string) string {
 	switch {
 	case strings.Contains(peer, "mqtt-telemetry-adapter"):
 		return "mqtt"
-	case strings.Contains(peer, "thingsboard-telemetry-adapter"):
-		return "thingsboard"
 	default:
 		return "other"
 	}

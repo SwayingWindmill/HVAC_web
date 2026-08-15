@@ -2,22 +2,22 @@ package oidctest
 
 import "testing"
 
-func TestConfiguredDefaultActingOrganizationID(t *testing.T) {
+func TestConfiguredDefaultTenantID(t *testing.T) {
 	provider, err := New(Config{
-		Issuer:                      "https://identity.example.test",
-		ClientID:                    "hvac-web-test",
-		RedirectURI:                 "https://web.example.test/api/v1/auth/callback",
-		DefaultActingOrganizationID: "018f3e00-0000-7000-8000-000000000001",
+		Issuer:          "https://identity.example.test",
+		ClientID:        "hvac-web-test",
+		RedirectURI:     "https://web.example.test/api/v1/auth/callback",
+		DefaultTenantID: "018f3e00-0000-7000-8000-000000000001",
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if provider.defaultActingOrganizationID != "018f3e00-0000-7000-8000-000000000001" {
-		t.Fatalf("default acting organization = %q", provider.defaultActingOrganizationID)
+	if provider.defaultTenantID != "018f3e00-0000-7000-8000-000000000001" {
+		t.Fatalf("default tenant = %q", provider.defaultTenantID)
 	}
 }
 
-func TestDefaultActingOrganizationIDRemainsBackwardCompatible(t *testing.T) {
+func TestDefaultTenantID(t *testing.T) {
 	provider, err := New(Config{
 		Issuer:      "https://identity.example.test",
 		ClientID:    "hvac-web-test",
@@ -26,7 +26,7 @@ func TestDefaultActingOrganizationIDRemainsBackwardCompatible(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if provider.defaultActingOrganizationID != "org-fixture-01" {
-		t.Fatalf("default acting organization = %q", provider.defaultActingOrganizationID)
+	if provider.defaultTenantID != "018f3d00-0000-7000-8000-000000000001" {
+		t.Fatalf("default tenant = %q", provider.defaultTenantID)
 	}
 }

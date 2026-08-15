@@ -16,13 +16,13 @@ if (!operationsConnectionString || !checkpointsConnectionString) {
   throw new Error('Operations Agent PostgreSQL integration database URLs are required.');
 }
 
-const organizationId = '0198f5c0-7c00-7000-8000-000000000101';
+const tenantId = '0198f5c0-7c00-7000-8000-000000000101';
 const siteId = '0198f5c0-7c00-7000-8000-000000000102';
 const investigationId = 'investigation-postgres-night-energy-001';
 const runId = 'run-postgres-night-energy-001';
 const leaseId = 'lease-postgres-night-energy-001';
 const checkpointId = 'checkpoint-postgres-night-energy-001';
-const scope = Object.freeze({ organizationId, siteId, equipmentId: null, deviceId: null });
+const scope = Object.freeze({ tenantId, siteId, equipmentId: null, deviceId: null });
 const currentTime = Date.parse('2026-07-31T00:00:00.000Z');
 
 const energySeries = (request, energyPerHour) => {
@@ -59,7 +59,7 @@ const ownerRead = async ({ request }) => {
       provenance: 'platform-core-service:registry-site/v1',
       payload: {
         kind: 'SITE',
-        site: { id: siteId, owningOrganizationId: organizationId, timezone: 'Asia/Tokyo' },
+        site: { id: siteId, tenantId: tenantId, timezone: 'Asia/Tokyo' },
       },
     };
   }
@@ -189,7 +189,7 @@ test('PostgreSQL resumes a checkpointed night-energy Run without duplicate busin
     checkpoint: [checkpointId],
   });
   const application = createSiteNightEnergyInvestigationCoordinator(firstPorts);
-  const started = await application.start({ organizationId, siteId });
+  const started = await application.start({ tenantId, siteId });
   const aggregate = await persistence.investigationRepository.get(started.id);
   const internal = aggregate.view();
   const run = internal.runs.find(({ id }) => id === internal.activeRunId);
@@ -251,7 +251,7 @@ test('PostgreSQL resumes a checkpointed night-energy Run without duplicate busin
 
   await persistence.checkpointRepository.delete(started.id, run.id);
   assert.deepEqual(await restarted.get({ investigationId: started.id }), completed);
-  assert.deepEqual(await restarted.list({ organizationId, siteId }), {
+  assert.deepEqual(await restarted.list({ tenantId, siteId }), {
     schemaVersion: 1,
     investigations: [{
       schemaVersion: 1,
@@ -300,7 +300,7 @@ test('PostgreSQL commits Operator Input atomically and exact retry survives rest
     'operator-input-record': [recordId],
   });
   const application = createSiteNightEnergyInvestigationCoordinator(ports);
-  const started = await application.start({ organizationId, siteId });
+  const started = await application.start({ tenantId, siteId });
   const waiting = await application.requestOperatorInput({ investigationId: started.id });
   assert.equal(waiting.status, 'WAITING_FOR_OPERATOR_INPUT');
   assert.equal(waiting.activeRun.id, started.activeRun.id);

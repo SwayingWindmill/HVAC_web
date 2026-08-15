@@ -1,14 +1,12 @@
 # platform-core-service
 
-`platform-core-service` is the private S1 Registry read boundary. It reads the platform-owned `core_registry` PostgreSQL Schema and returns frozen Organization, Site, Equipment and Device representations to `platform-gateway`. Public route ownership remains with the Legacy service until Ticket 05; this service is not browser-facing and does not perform migration or business double writes.
+`platform-core-service` is the private S1 Registry read boundary. It reads the platform-owned `core_registry` PostgreSQL Schema and returns frozen Tenant-scoped Site, Equipment and Device representations to `platform-gateway`. This service is not browser-facing and does not perform migration or business double writes.
 
 ## Internal routes
 
 All routes are `GET` under `/internal/v1/registry`:
 
-- `/organizations`
-- `/organizations/{organizationId}`
-- `/organizations/{organizationId}/sites`
+- `/sites`
 - `/sites/{siteId}`
 - `/sites/{siteId}/equipment`
 - `/equipment/{equipmentId}`
@@ -24,13 +22,13 @@ Before a database query, Core calls IAM's mTLS-only `/internal/v1/registry-read/
 `CORE_DATABASE_URL` must authenticate exactly as `s1_core_service`. That login can only activate the `s1_core_runtime` group role. Every Registry query runs in one repeatable-read, read-only transaction:
 
 1. `SET LOCAL ROLE s1_core_runtime`.
-2. Set transaction-local `app.authorized_organization_ids` and `app.authorized_site_ids` from the verified grant.
+2. Set transaction-local `app.tenant_id` and `app.authorized_site_ids` from the verified grant.
 3. Query a forced-RLS Core table.
 4. Commit the read snapshot.
 
-Organization and explicit Site scope are independent. A cross-Organization Site grant exposes only that Site and its Equipment/Devices; it does not expose the owning Organization or sibling Sites. Every query also applies the signed denied-Organization and denied-Site arrays as mandatory predicates, so an Organization-level allow cannot recover an explicitly denied Site and a denied Organization suppresses any Site-level allow beneath it. Missing and unauthorized detail records both return `RESOURCE_NOT_FOUND`. The runtime cannot read IAM facts, migration provenance or migration quarantine.
+Tenant is the root isolation boundary and explicit Site scope narrows access within that Tenant. Missing and unauthorized detail records both return `RESOURCE_NOT_FOUND`. The runtime cannot read IAM facts, migration provenance or migration quarantine.
 
-Collections use bounded `(display_name COLLATE "C", id)` keyset pagination. Cursors are HMAC-SHA256 protected and bound to route resource, parent, concrete action, policy revision and effective Organization/Site scope. Authorization is rechecked on every page.
+Collections use bounded `(display_name COLLATE "C", id)` keyset pagination. Cursors are HMAC-SHA256 protected and bound to route resource, parent, concrete action, policy revision and effective Tenant/Site scope. Authorization is rechecked on every page.
 
 ## Environment
 

@@ -109,7 +109,7 @@ type TimelineEvent struct {
 type WorkOrder struct {
 	SchemaVersion      int                 `json:"schemaVersion"`
 	WorkOrderID        string              `json:"workOrderId"`
-	OrganizationID     string              `json:"organizationId"`
+	TenantID     string              `json:"tenantId"`
 	SiteID             string              `json:"siteId"`
 	Title              string              `json:"title"`
 	Description        string              `json:"description"`
@@ -139,7 +139,7 @@ type ListResponse struct {
 
 type CreateInput struct {
 	WorkOrderID      string
-	OrganizationID   string
+	TenantID   string
 	SiteID           string
 	Title            string
 	Description      string
@@ -186,7 +186,7 @@ func IsUUIDv7(value string) bool { return uuidV7Pattern.MatchString(value) }
 
 func Create(input CreateInput) (WorkOrder, error) {
 	occurredAt, err := parseInstant(input.OccurredAt)
-	if err != nil || !IsUUIDv7(input.WorkOrderID) || !IsUUIDv7(input.OrganizationID) || !IsUUIDv7(input.SiteID) {
+	if err != nil || !IsUUIDv7(input.WorkOrderID) || !IsUUIDv7(input.TenantID) || !IsUUIDv7(input.SiteID) {
 		return WorkOrder{}, ErrInvalidCreate
 	}
 	assigneeID, ok := normalizeOptional(input.AssigneeID, 256)
@@ -221,7 +221,7 @@ func Create(input CreateInput) (WorkOrder, error) {
 	correlationID := strings.TrimSpace(input.CorrelationID)
 	workOrder := WorkOrder{
 		SchemaVersion: SchemaVersion,
-		WorkOrderID:   strings.TrimSpace(input.WorkOrderID), OrganizationID: strings.TrimSpace(input.OrganizationID), SiteID: strings.TrimSpace(input.SiteID),
+		WorkOrderID:   strings.TrimSpace(input.WorkOrderID), TenantID: strings.TrimSpace(input.TenantID), SiteID: strings.TrimSpace(input.SiteID),
 		Title: strings.TrimSpace(input.Title), Description: strings.TrimSpace(input.Description), Priority: input.Priority, Status: StatusOpen,
 		SourceReferences: references, AssigneeID: assigneeID, TeamID: teamID, ScheduledStart: scheduledStart, DueAt: dueAt,
 		Tasks: TaskSummary{}, CompletionEvidence: []EvidenceReference{},
@@ -404,7 +404,7 @@ func normalizeLifecycleEvidence(existing, added []EvidenceReference, occurredAt 
 }
 
 func (workOrder WorkOrder) Validate() error {
-	if workOrder.SchemaVersion != SchemaVersion || !IsUUIDv7(workOrder.WorkOrderID) || !IsUUIDv7(workOrder.OrganizationID) || !IsUUIDv7(workOrder.SiteID) {
+	if workOrder.SchemaVersion != SchemaVersion || !IsUUIDv7(workOrder.WorkOrderID) || !IsUUIDv7(workOrder.TenantID) || !IsUUIDv7(workOrder.SiteID) {
 		return errors.New("work order identity is invalid")
 	}
 	if !bounded(workOrder.Title, 256) || !bounded(workOrder.Description, 4096) || !validPriority(workOrder.Priority) || !validStatus(workOrder.Status) || workOrder.Version == 0 {
@@ -445,13 +445,13 @@ func (workOrder WorkOrder) Validate() error {
 	return nil
 }
 
-func (response ListResponse) Validate(organizationID, siteID string, limit int) error {
-	if response.SchemaVersion != SchemaVersion || !IsUUIDv7(organizationID) || !IsUUIDv7(siteID) || limit < 1 || limit > 100 || len(response.Items) > limit {
+func (response ListResponse) Validate(tenantID, siteID string, limit int) error {
+	if response.SchemaVersion != SchemaVersion || !IsUUIDv7(tenantID) || !IsUUIDv7(siteID) || limit < 1 || limit > 100 || len(response.Items) > limit {
 		return errors.New("work order list envelope is invalid")
 	}
 	seen := make(map[string]struct{}, len(response.Items))
 	for _, workOrder := range response.Items {
-		if err := workOrder.Validate(); err != nil || workOrder.OrganizationID != organizationID || workOrder.SiteID != siteID {
+		if err := workOrder.Validate(); err != nil || workOrder.TenantID != tenantID || workOrder.SiteID != siteID {
 			return errors.New("work order list contains an invalid or cross-scope item")
 		}
 		if _, exists := seen[workOrder.WorkOrderID]; exists {

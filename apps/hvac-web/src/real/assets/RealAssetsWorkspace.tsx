@@ -52,7 +52,7 @@ import {
   buildRealAssetsRows,
   isRealAssetsAttentionState,
   realAssetsDeviceTypeLabel,
-  realAssetsPointKindLabel,
+  realAssetsPointTypeLabel,
   realAssetsSensorTypeLabel,
   realAssetsTelemetryPointMeta,
   type RealAssetsDeviceRow,
@@ -137,7 +137,7 @@ function matchesPointSearch(row: RealAssetsTelemetryPointRow, value: string): bo
   return [
     row.label,
     row.point.id,
-    row.point.pointKey,
+    row.point.pointCode,
     row.point.sourceKey,
     row.device.code,
     row.device.displayName,
@@ -181,7 +181,7 @@ function telemetryFailure(error: unknown): { title: string; detail: string; retr
   }
   return {
     title: '当前设备状态连接失败',
-    detail: 'Registry 设备身份仍然可见，但当前状态服务无法确认。系统不会把服务故障转换为 Device UNKNOWN，也不会回退到 Demo、Legacy 或 ThingsBoard。',
+    detail: 'Registry 设备身份仍然可见，但当前状态服务无法确认。系统不会把服务故障转换为 Device UNKNOWN，也不会回退到 Demo、Legacy 或 Provider 直读。',
     retryable: true,
   };
 }
@@ -205,7 +205,7 @@ function pointEvidence(point: RealAssetsDeviceRow['points'][number], timeZone: s
     return '尚无已接受观测';
   }
   const freshness = point.freshness === 'STALE' ? '陈旧' : '新鲜';
-  const quality = point.quality === 'SUSPECT' ? '可疑' : '良好';
+  const quality = point.quality === 'GOOD' ? '良好' : point.quality ?? '未知';
   const sampledAt = point.sampledAt ? formatSampledAt(point.sampledAt, timeZone) : '采样时间不可用';
   return `${freshness} · ${quality} · ${sampledAt}`;
 }
@@ -258,14 +258,14 @@ export function RealAssetsWorkspace({
   const selectedEquipmentIdRef = useRef<string | null>(selectedEquipmentId);
   const pendingFocusDeviceIdRef = useRef<string | null>(null);
   const deviceTriggerRefs = useRef(new Map<string, HTMLElement>());
-  const organizationId = principal.context.actingOrganizationId;
+  const tenantId = site.tenantId;
   const sessionCapability = principal.session.csrfToken;
   const capabilities = principal.authorization.capabilities;
   const registryAllowed = capabilities.includes('equipment.list') && capabilities.includes('device.list');
   const telemetryAllowed = capabilities.includes('telemetry.batch.read');
   const queryRoot = useMemo(
-    () => ['real-assets', protectedGeneration, organizationId, site.id] as const,
-    [organizationId, protectedGeneration, site.id],
+    () => ['real-assets', protectedGeneration, tenantId, site.id] as const,
+    [tenantId, protectedGeneration, site.id],
   );
 
   useEffect(() => {
@@ -345,7 +345,7 @@ export function RealAssetsWorkspace({
   }, [queryClient, queryRoot, telemetryRuntime]);
 
   const registry = useQuery({
-    queryKey: realAssetsRegistryQueryKey(protectedGeneration, organizationId, site.id, routePolicyEpoch),
+    queryKey: realAssetsRegistryQueryKey(protectedGeneration, tenantId, site.id, routePolicyEpoch),
     queryFn: ({ signal }) => {
       const scopeGuard = protectedRequestToken();
       if (scopeGuard.siteId !== site.id || scopeGuard.generation !== protectedGeneration) {
@@ -353,7 +353,7 @@ export function RealAssetsWorkspace({
       }
       return runRealAssetsProtectedRequest(scopeGuard, signal, (protectedSignal) => loadRealAssetsRegistry({
         client: platformClient,
-        organizationId,
+        tenantId,
         siteId: site.id,
         signal: protectedSignal,
       }));
@@ -366,7 +366,7 @@ export function RealAssetsWorkspace({
   const devices = assetModel?.devices ?? [];
   const telemetryPoints = assetModel?.telemetryPoints ?? [];
   const current = useQuery({
-    queryKey: realAssetsCurrentStateQueryKey(protectedGeneration, organizationId, site.id, devices, telemetryPoints, routePolicyEpoch),
+    queryKey: realAssetsCurrentStateQueryKey(protectedGeneration, tenantId, site.id, devices, telemetryPoints, routePolicyEpoch),
     queryFn: ({ signal }) => {
       const scopeGuard = protectedRequestToken();
       if (scopeGuard.siteId !== site.id || scopeGuard.generation !== protectedGeneration) {
@@ -376,7 +376,7 @@ export function RealAssetsWorkspace({
         client: telemetryRuntime.client,
         devices,
         telemetryPoints,
-        organizationId,
+        tenantId,
         siteId: site.id,
         csrfToken: sessionCapability,
         currentRoutePolicyRevision: telemetryRuntime.currentRoutePolicyRevision,
@@ -614,9 +614,9 @@ export function RealAssetsWorkspace({
           <Space direction="vertical" size={0} align="start">
             <Space size={6} wrap>
               <Typography.Text strong>{row.label}</Typography.Text>
-              <Tag>{realAssetsPointKindLabel(row.point.pointKind)}</Tag>
+              <Tag>{realAssetsPointTypeLabel(row.point.pointType)}</Tag>
             </Space>
-            <Typography.Text type="secondary" className="real-assets__technical-key">{row.point.pointKey}</Typography.Text>
+            <Typography.Text type="secondary" className="real-assets__technical-key">{row.point.pointCode}</Typography.Text>
           </Space>
         ),
       },
@@ -632,7 +632,7 @@ export function RealAssetsWorkspace({
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {row.sensor
                 ? `${row.sensor.displayName} · ${realAssetsSensorTypeLabel(row.sensor.sensorType)}`
-                : '设备直连或计算点'}
+                : '设备直连 Point'}
             </Typography.Text>
           </Space>
         ),
@@ -650,7 +650,7 @@ export function RealAssetsWorkspace({
               <Typography.Text strong>
                 {row.current.displayValue}{row.current.unit ? ` ${row.current.unit}` : ''}
               </Typography.Text>
-              <Typography.Text type={row.current.quality === 'SUSPECT' || row.current.freshness === 'STALE' ? 'warning' : 'secondary'} style={{ fontSize: 12 }}>
+              <Typography.Text type={(row.current.quality !== null && row.current.quality !== 'GOOD') || row.current.freshness === 'STALE' ? 'warning' : 'secondary'} style={{ fontSize: 12 }}>
                 {pointEvidence(row.current, site.timezone)}
               </Typography.Text>
             </Space>
@@ -867,10 +867,8 @@ export function RealAssetsWorkspace({
       data-area-count={String(assetModel?.counts.areas ?? 0)}
       data-equipment-count={String(assetModel?.counts.equipment ?? 0)}
       data-device-endpoint-count={String(assetModel?.counts.deviceEndpoints ?? 0)}
-      data-sensor-count={String(assetModel?.counts.sensors ?? 0)}
-      data-telemetry-point-count={String(assetModel?.counts.telemetryPoints ?? 0)}
-      data-independent-sensor-device-count={String(assetModel?.counts.independentSensorDevices ?? 0)}
-      data-calculated-point-count={String(assetModel?.counts.calculatedPoints ?? 0)}
+      data-sensor-count={String(assetModel?.counts.physicalSensors ?? 0)}
+      data-telemetry-point-count={String(assetModel?.counts.points ?? 0)}
       data-total-device-count={String(rows.length)}
       data-filtered-device-count={String(filteredRows.length)}
       data-point-ledger-count={String(pointRows.length)}
@@ -901,17 +899,15 @@ export function RealAssetsWorkspace({
         )}
         className="assets-page"
       >
-        <Typography.Text type="secondary">{site.displayName} · 原子 Asset Model 与 S2 当前状态均限定在当前授权 Site。 · Acting Organization: {organizationId}</Typography.Text>
+        <Typography.Text type="secondary">{site.displayName} · 原子 Asset Model 与 S2 当前状态均限定在当前 Tenant / Site。 · Tenant: {tenantId}</Typography.Text>
         <OperationsMetrics
           ariaLabel="Site 原子资产模型摘要"
           items={[
             { key: 'areas', label: 'Area', value: assetModel?.counts.areas ?? 0, detail: '空间层级', tone: 'accent' },
             { key: 'equipment', label: 'Equipment', value: assetModel?.counts.equipment ?? 0, detail: '物理设备', tone: 'default' },
             { key: 'device-endpoints', label: 'Device Endpoint', value: assetModel?.counts.deviceEndpoints ?? 0, detail: '通信端点', tone: 'default' },
-            { key: 'sensors', label: 'Sensor', value: assetModel?.counts.sensors ?? 0, detail: '测量单元', tone: 'default' },
-            { key: 'telemetry-points', label: 'Telemetry Point', value: assetModel?.counts.telemetryPoints ?? 0, detail: '完整点位目录', tone: 'accent' },
-            { key: 'independent-sensors', label: '独立 Sensor Device', value: assetModel?.counts.independentSensorDevices ?? 0, detail: '独立通信测量设备', tone: 'default' },
-            { key: 'calculated-points', label: '计算点', value: assetModel?.counts.calculatedPoints ?? 0, detail: '版本化公式输出', tone: 'positive' },
+            { key: 'sensors', label: 'Sensor', value: assetModel?.counts.physicalSensors ?? 0, detail: '物理测量单元', tone: 'default' },
+            { key: 'points', label: 'Point', value: assetModel?.counts.points ?? 0, detail: '标准点位目录', tone: 'accent' },
           ]}
         />
         <OperationsMetrics
@@ -1037,7 +1033,7 @@ export function RealAssetsWorkspace({
                           {filteredPointRows.map((row) => (
                             <tr key={row.point.id} data-point-id={row.point.id} data-device-id={row.device.id}>
                               <td>{row.label}</td>
-                              <td>{row.point.pointKey}</td>
+                              <td>{row.point.pointCode}</td>
                               <td>{row.device.displayName}</td>
                               <td>{row.sensor?.displayName ?? '设备直连或计算点'}</td>
                               <td>{row.current?.displayValue ?? '状态不可用'}</td>

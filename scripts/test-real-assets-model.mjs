@@ -12,7 +12,7 @@ import {
   resolveDeviceBinding,
 } from '../apps/hvac-web/src/real/assets/model.ts';
 
-const organizationId = '01900000-0000-7000-8000-000000000001';
+const tenantId = '01900000-0000-7000-8000-000000000001';
 const siteId = '01900000-0001-7000-8000-000000000001';
 const equipmentAId = '01900000-0002-7000-8000-000000000001';
 const equipmentBId = '01900000-0002-7000-8000-000000000002';
@@ -22,7 +22,7 @@ const now = new Date('2026-07-30T10:00:00.000Z');
 function device(overrides = {}) {
   return {
     id: deviceId,
-    owningOrganizationId: organizationId,
+    tenantId: tenantId,
     siteId,
     code: 'CH-01',
     displayName: 'Chiller 01',
@@ -38,7 +38,7 @@ function device(overrides = {}) {
 function equipment(id, displayName) {
   return {
     id,
-    owningOrganizationId: organizationId,
+    tenantId: tenantId,
     siteId,
     code: displayName.replaceAll(' ', '-').toUpperCase(),
     displayName,
@@ -53,7 +53,7 @@ function equipment(id, displayName) {
 function relationship(id, fromType, fromId, toType, toId, revision = 1, overrides = {}) {
   return {
     id,
-    owningOrganizationId: organizationId,
+    tenantId: tenantId,
     siteId,
     fromType,
     fromId,
@@ -73,7 +73,7 @@ function relationship(id, fromType, fromId, toType, toId, revision = 1, override
 function area(id = '01900000-0005-7000-8000-000000000001', displayName = 'Central Plant') {
   return {
     id,
-    owningOrganizationId: organizationId,
+    tenantId: tenantId,
     siteId,
     parentAreaId: null,
     code: displayName.replaceAll(' ', '-').toUpperCase(),
@@ -89,7 +89,7 @@ function area(id = '01900000-0005-7000-8000-000000000001', displayName = 'Centra
 function sensor(id = '01900000-0006-7000-8000-000000000001') {
   return {
     id,
-    owningOrganizationId: organizationId,
+    tenantId: tenantId,
     siteId,
     code: 'SENSOR-1',
     displayName: 'Temperature Sensor',
@@ -106,24 +106,23 @@ function sensor(id = '01900000-0006-7000-8000-000000000001') {
   };
 }
 
-function telemetryPoint(id, reportingDeviceId, sensorId, pointKind = 'MEASURED') {
+function telemetryPoint(id, reportingDeviceId, sensorId, pointType = 'TELEMETRY') {
   return {
     id,
-    owningOrganizationId: organizationId,
+    tenantId,
     siteId,
     reportingDeviceId,
     sensorId,
-    pointKey: pointKind === 'CALCULATED' ? 'plant.delta_t' : 'plant.temperature',
-    sourceKey: pointKind === 'CALCULATED' ? 'calculated.delta_t' : 'sensor.temperature',
-    displayName: pointKind === 'CALCULATED' ? 'Delta T' : 'Temperature',
-    pointKind,
-    valueType: 'NUMBER',
-    unit: 'Cel',
+    pointCode: pointType === 'STATE' ? 'run_state' : 'temperature',
+    sourceKey: pointType === 'STATE' ? 'device.run_state' : 'sensor.temperature',
+    displayName: pointType === 'STATE' ? 'Run State' : 'Temperature',
+    pointType,
+    valueType: pointType === 'STATE' ? 'BOOLEAN' : 'NUMBER',
+    unit: pointType === 'STATE' ? null : 'Cel',
     writable: false,
     sampleIntervalMs: 1000,
     publishIntervalMs: 1000,
     staleAfterMs: 5000,
-    formulaRevision: pointKind === 'CALCULATED' ? 'formula-v1' : null,
     sourceMetadata: {},
     status: 'ACTIVE',
     revision: 1,
@@ -134,7 +133,8 @@ function telemetryPoint(id, reportingDeviceId, sensorId, pointKind = 'MEASURED')
 
 function siteAssetModel({ areas = [], equipment: equipmentItems = [], devices = [], sensors = [], telemetryPoints = [], relationships = [] }) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    tenantId,
     siteId,
     areas,
     equipment: equipmentItems,
@@ -142,15 +142,12 @@ function siteAssetModel({ areas = [], equipment: equipmentItems = [], devices = 
     sensors,
     telemetryPoints,
     relationships,
-    calculatedPointInputs: [],
     counts: {
       areas: areas.length,
       equipment: equipmentItems.length,
       deviceEndpoints: devices.length,
-      sensors: sensors.length,
-      telemetryPoints: telemetryPoints.length,
-      calculatedPoints: telemetryPoints.filter((point) => point.pointKind === 'CALCULATED').length,
-      independentSensorDevices: 0,
+      physicalSensors: sensors.length,
+      points: telemetryPoints.length,
     },
   };
 }
@@ -176,7 +173,7 @@ function snapshot(values, overrides = {}) {
   return {
     schemaVersion: 1,
     deviceId,
-    owningOrganizationId: organizationId,
+    tenantId: tenantId,
     siteId,
     businessRevision: 11,
     evaluatedAt: '2026-07-30T10:00:00.000Z',
@@ -203,10 +200,10 @@ const goodValues = chillerKeys.map((key, index) => present(key, index === 1 ? 0 
 test('catalog resolves aliases but does not silently fallback unknown Device types', () => {
   assert.equal(chillerProfile.state, 'configured');
   assert.deepEqual(chillerKeys, [
-    'chiller.run_state',
-    'chiller.power',
-    'chiller.cop',
-    'chiller.cooling_capacity',
+    'chiller_run_state',
+    'chiller_power',
+    'chiller_cop',
+    'chiller_cooling_capacity',
   ]);
   const unknown = resolveRealAssetsProfile('vendor-special-controller');
   assert.equal(unknown.state, 'unconfigured');
@@ -216,9 +213,9 @@ test('catalog resolves aliases but does not silently fallback unknown Device typ
 test('operating projection preserves zero and follows UNKNOWN/OFFLINE/ATTENTION/NORMAL precedence', () => {
   const normal = projectRealAssetsOperatingState({ status: 'ok', snapshot: snapshot(goodValues) }, chillerProfile);
   assert.equal(normal.state, 'NORMAL');
-  assert.equal(normal.points.find((point) => point.key === 'chiller.power').displayValue, '0');
+  assert.equal(normal.points.find((point) => point.key === 'chiller_power').displayValue, '0');
 
-  const staleValues = goodValues.map((value) => value.key === 'chiller.power' ? { ...value, freshness: 'STALE' } : value);
+  const staleValues = goodValues.map((value) => value.key === 'chiller_power' ? { ...value, freshness: 'STALE' } : value);
   const stale = projectRealAssetsOperatingState({ status: 'ok', snapshot: snapshot(staleValues) }, chillerProfile);
   assert.equal(stale.state, 'ATTENTION');
   assert.ok(stale.reasons.includes('TELEMETRY_STALE'));
@@ -237,21 +234,21 @@ test('operating projection preserves zero and follows UNKNOWN/OFFLINE/ATTENTION/
   assert.equal(unavailable.state, 'UNKNOWN');
 });
 
-test('missing and suspect critical points require attention without turning valid values into missing', () => {
+test('missing and degraded-quality critical points require attention without turning valid values into missing', () => {
   const missing = {
-    key: 'chiller.cop',
+    key: 'chiller_cop',
     state: 'MISSING',
     freshness: 'MISSING',
     missingReason: 'ONLY_REJECTED_CANDIDATES',
     policyRevision: 5,
   };
-  const values = goodValues.map((value) => value.key === 'chiller.cop' ? missing : value);
-  values[0] = { ...values[0], quality: 'SUSPECT', qualityReasons: ['SOURCE_UNTRUSTED'] };
+  const values = goodValues.map((value) => value.key === 'chiller_cop' ? missing : value);
+  values[0] = { ...values[0], quality: 'PARTIAL', qualityReasons: ['SOURCE_UNTRUSTED'] };
   const projection = projectRealAssetsOperatingState({ status: 'ok', snapshot: snapshot(values) }, chillerProfile);
   assert.equal(projection.state, 'ATTENTION');
   assert.ok(projection.reasons.includes('CRITICAL_POINT_MISSING'));
-  assert.ok(projection.reasons.includes('TELEMETRY_SUSPECT'));
-  assert.equal(projection.points.find((point) => point.key === 'chiller.cop').displayValue, '当前值不可用');
+  assert.ok(projection.reasons.includes('TELEMETRY_QUALITY_DEGRADED'));
+  assert.equal(projection.points.find((point) => point.key === 'chiller_cop').displayValue, '当前值不可用');
 });
 
 test('unknown configured profile absence remains visible and cannot be classified as normal', () => {
@@ -323,13 +320,17 @@ test('hierarchy collapses a one-to-one Device Endpoint while preserving Sensor a
   const endpoint = device();
   const measurementSensor = sensor();
   const measured = telemetryPoint('01900000-0007-7000-8000-000000000001', endpoint.id, measurementSensor.id);
-  const calculated = telemetryPoint('01900000-0007-7000-8000-000000000002', endpoint.id, null, 'CALCULATED');
+  const directPoint = {
+    ...telemetryPoint('01900000-0007-7000-8000-000000000002', endpoint.id, null, 'TELEMETRY'),
+    pointCode: 'plant_delta_t',
+    displayName: 'Delta T',
+  };
   const model = siteAssetModel({
     areas: [plantArea],
     equipment: [equipmentA],
     devices: [endpoint],
     sensors: [measurementSensor],
-    telemetryPoints: [measured, calculated],
+    telemetryPoints: [measured, directPoint],
     relationships: [
       relationship('01900000-0004-7000-8000-000000000020', 'EQUIPMENT', equipmentA.id, 'AREA', plantArea.id),
       relationship('01900000-0004-7000-8000-000000000021', 'DEVICE', endpoint.id, 'EQUIPMENT', equipmentA.id),
@@ -351,9 +352,9 @@ test('hierarchy collapses a one-to-one Device Endpoint while preserving Sensor a
   assert.deepEqual(equipmentNode.deviceIds, [endpoint.id]);
   assert.equal(sensorNode.children[0].kind, 'point');
   assert.equal(sensorNode.children[0].label, '温度');
-  assert.equal(sensorNode.children[0].meta, '实测 · °C');
+  assert.equal(sensorNode.children[0].meta, '遥测 · °C');
   assert.equal(virtualSensorNode.children[0].label, '温差');
-  assert.deepEqual(equipmentNode.pointIds.sort(), [measured.id, calculated.id].sort());
+  assert.deepEqual(equipmentNode.pointIds.sort(), [measured.id, directPoint.id].sort());
   assert.deepEqual(areaNode.deviceIds, [endpoint.id]);
 });
 
@@ -363,13 +364,13 @@ test('point ledger projects every registered Telemetry Point as an independent r
   const endpoint = device();
   const measurementSensor = sensor();
   const points = [
-    telemetryPoint('01900000-0007-7000-8000-000000000010', endpoint.id, measurementSensor.id, 'MEASURED'),
-    telemetryPoint('01900000-0007-7000-8000-000000000011', endpoint.id, null, 'MEASURED'),
-    telemetryPoint('01900000-0007-7000-8000-000000000012', endpoint.id, null, 'CALCULATED'),
+    telemetryPoint('01900000-0007-7000-8000-000000000010', endpoint.id, measurementSensor.id, 'TELEMETRY'),
+    telemetryPoint('01900000-0007-7000-8000-000000000011', endpoint.id, null, 'TELEMETRY'),
+    telemetryPoint('01900000-0007-7000-8000-000000000012', endpoint.id, null, 'TELEMETRY'),
     telemetryPoint('01900000-0007-7000-8000-000000000013', endpoint.id, null, 'STATE'),
   ].map((point, index) => ({
     ...point,
-    pointKey: ['chiller.power', 'chiller.cooling_capacity', 'chiller.cop', 'chiller.run_state'][index],
+    pointCode: ['chiller_power', 'chiller_cooling_capacity', 'chiller_cop', 'chiller_run_state'][index],
     displayName: ['chiller power', 'chiller cooling capacity', 'chiller cop', 'chiller run state'][index],
     unit: index === 3 ? null : index === 2 ? null : 'kW',
   }));
@@ -385,7 +386,7 @@ test('point ledger projects every registered Telemetry Point as an independent r
       relationship('01900000-0004-7000-8000-000000000042', 'SENSOR', measurementSensor.id, 'DEVICE', endpoint.id),
     ],
   });
-  const currentValues = points.map((point, index) => present(point.pointKey, index + 1, { unit: point.unit }));
+  const currentValues = points.map((point, index) => present(point.pointCode, index + 1, { unit: point.unit }));
   const rows = buildRealAssetsRows({
     assetModel: model,
     snapshots: new Map([[endpoint.id, { status: 'ok', snapshot: snapshot(currentValues) }]]),
@@ -397,7 +398,7 @@ test('point ledger projects every registered Telemetry Point as an independent r
   assert.deepEqual(pointRows.map((row) => row.label), ['运行状态', '制冷量', '主机 COP', '主机功率']);
   assert.deepEqual(pointRows.map((row) => row.point.id).sort(), points.map((point) => point.id).sort());
   assert.ok(pointRows.every((row) => row.device.id === endpoint.id));
-  assert.equal(pointRows.find((row) => row.point.pointKey === 'chiller.power').current?.displayValue, '1');
+  assert.equal(pointRows.find((row) => row.point.pointCode === 'chiller_power').current?.displayValue, '1');
 });
 
 test('hierarchy projects one Device Endpoint under every active Equipment binding with unique tree keys', () => {

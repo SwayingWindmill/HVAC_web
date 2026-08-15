@@ -47,9 +47,9 @@ type LatestObservation struct {
 }
 
 type DeviceFacts struct {
-	DeviceID             string
-	OwningOrganizationID string
-	SiteID               string
+	DeviceID      string
+	TenantID      string
+	SiteID        string
 	Applicability        telemetryapi.PresenceApplicability
 	PresencePolicy       *PresencePolicy
 	Coverage             Coverage
@@ -66,7 +66,7 @@ type CanonicalEvaluation struct {
 }
 
 func EvaluateCanonical(facts DeviceFacts, revision int64, evaluatedAt time.Time) (CanonicalEvaluation, error) {
-	if facts.DeviceID == "" || facts.OwningOrganizationID == "" || facts.SiteID == "" || revision < 1 || evaluatedAt.IsZero() {
+	if facts.DeviceID == "" || facts.TenantID == "" || facts.SiteID == "" || revision < 1 || evaluatedAt.IsZero() {
 		return CanonicalEvaluation{}, errors.New("telemetry evaluation context is incomplete")
 	}
 	if facts.Applicability != telemetryapi.PresenceApplicabilityApplicable && facts.Applicability != telemetryapi.PresenceApplicabilityNotApplicable {
@@ -93,9 +93,9 @@ func EvaluateCanonical(facts DeviceFacts, revision int64, evaluatedAt time.Time)
 	display := deriveDisplay(facts.Applicability, availability, presence.CurrentState, readiness)
 	snapshot := telemetryapi.DeviceObservationSnapshot{
 		SchemaVersion:          1,
-		DeviceId:               telemetryapi.UUIDv7(facts.DeviceID),
-		OwningOrganizationId:   telemetryapi.UUIDv7(facts.OwningOrganizationID),
+		TenantId:               telemetryapi.UUIDv7(facts.TenantID),
 		SiteId:                 telemetryapi.UUIDv7(facts.SiteID),
+		DeviceId:               telemetryapi.UUIDv7(facts.DeviceID),
 		BusinessRevision:       telemetryapi.BusinessRevision(revision),
 		EvaluatedAt:            instant(evaluatedAt),
 		EvaluationAvailability: availability,
@@ -214,7 +214,14 @@ func evaluateKey(key string, policy FreshnessPolicy, latest LatestObservation, r
 		return telemetryapi.TelemetryKeyState{}, err
 	}
 	quality := latest.Quality
-	if quality != telemetryapi.TelemetryQualityGood && quality != telemetryapi.TelemetryQualitySuspect {
+	switch quality {
+	case telemetryapi.TelemetryQualityGood,
+		telemetryapi.TelemetryQualityPartial,
+		telemetryapi.TelemetryQualityEstimated,
+		telemetryapi.TelemetryQualityManual,
+		telemetryapi.TelemetryQualityStale,
+		telemetryapi.TelemetryQualityInvalid:
+	default:
 		return telemetryapi.TelemetryKeyState{}, errors.New("telemetry quality is invalid")
 	}
 	qualityReasons, err := canonicalQualityReasons(latest.QualityReasons)
@@ -361,9 +368,9 @@ func stateDigest(snapshot telemetryapi.DeviceObservationSnapshot) (string, error
 		lastKnown = &lastKnownState{State: snapshot.Presence.LastKnown.State, LastSeenAt: snapshot.Presence.LastKnown.LastSeenAt, PolicyRevision: snapshot.Presence.LastKnown.PolicyRevision}
 	}
 	payload := struct {
-		DeviceId               telemetryapi.UUIDv7                   `json:"deviceId"`
-		OwningOrganizationId   telemetryapi.UUIDv7                   `json:"owningOrganizationId"`
+		TenantId               telemetryapi.UUIDv7                   `json:"tenantId"`
 		SiteId                 telemetryapi.UUIDv7                   `json:"siteId"`
+		DeviceId               telemetryapi.UUIDv7                   `json:"deviceId"`
 		EvaluationAvailability telemetryapi.EvaluationAvailability   `json:"evaluationAvailability"`
 		AvailabilityReasons    []telemetryapi.AvailabilityReasonCode `json:"availabilityReasons"`
 		Applicability          telemetryapi.PresenceApplicability    `json:"applicability"`
@@ -375,7 +382,7 @@ func stateDigest(snapshot telemetryapi.DeviceObservationSnapshot) (string, error
 		DisplayState           *telemetryapi.DeviceDisplayState      `json:"displayState"`
 		Values                 []telemetryapi.TelemetryKeyState      `json:"values"`
 	}{
-		DeviceId: snapshot.DeviceId, OwningOrganizationId: snapshot.OwningOrganizationId, SiteId: snapshot.SiteId,
+		TenantId: snapshot.TenantId, SiteId: snapshot.SiteId, DeviceId: snapshot.DeviceId,
 		EvaluationAvailability: snapshot.EvaluationAvailability, AvailabilityReasons: snapshot.AvailabilityReasons,
 		Applicability: snapshot.Presence.Applicability, CurrentState: snapshot.Presence.CurrentState,
 		LastSeenAt: snapshot.Presence.LastSeenAt, PresencePolicyRevision: snapshot.Presence.PolicyRevision, LastKnown: lastKnown,

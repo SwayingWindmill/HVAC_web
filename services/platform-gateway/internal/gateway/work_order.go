@@ -214,7 +214,7 @@ func dispatchWorkOrderReadRoute(h *handler, writer http.ResponseWriter, request 
 	writer.Header().Set("Cache-Control", "private, no-store")
 	if route.workOrderID == "" {
 		var response workordermodel.ListResponse
-		if decodeStrictWorkOrderJSON(body, &response) != nil || response.Validate(session.ActingOrganizationID, route.siteID, limit) != nil {
+		if decodeStrictWorkOrderJSON(body, &response) != nil || response.Validate(session.TenantID, route.siteID, limit) != nil {
 			h.writeWorkOrderFailure(writer, request, workOrderUnavailable("Work Order Service returned an invalid list projection."))
 			return
 		}
@@ -228,7 +228,7 @@ func dispatchWorkOrderReadRoute(h *handler, writer http.ResponseWriter, request 
 		return
 	}
 	var workOrder workordermodel.WorkOrder
-	if decodeStrictWorkOrderJSON(body, &workOrder) != nil || workOrder.Validate() != nil || workOrder.OrganizationID != session.ActingOrganizationID || workOrder.SiteID != route.siteID || workOrder.WorkOrderID != route.workOrderID {
+	if decodeStrictWorkOrderJSON(body, &workOrder) != nil || workOrder.Validate() != nil || workOrder.TenantID != session.TenantID || workOrder.SiteID != route.siteID || workOrder.WorkOrderID != route.workOrderID {
 		h.writeWorkOrderFailure(writer, request, workOrderUnavailable("Work Order Service returned an invalid detail projection."))
 		return
 	}
@@ -324,7 +324,7 @@ func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, 
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
 		DisplayName: session.Principal.DisplayName, Email: session.Principal.Email, Roles: append([]string(nil), session.Principal.Roles...),
 		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE, Audience: h.identity.config.IAMAudience,
-		ActingOrganizationID: session.ActingOrganizationID, Actions: []string{"work-order:authorize"}, Scopes: []string{"session:" + session.ID},
+		TenantID: session.TenantID, Actions: []string{"work-order:authorize"}, Scopes: []string{"session:" + session.ID},
 		PolicyRevision: h.identity.config.PolicyRevision, SessionID: session.ID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	}
@@ -334,7 +334,7 @@ func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, 
 		return workorderauth.Decision{}, &failure
 	}
 	input := workorderauth.DecisionRequest{
-		ActingOrganizationID: session.ActingOrganizationID,
+		TenantID: session.TenantID,
 		SiteID:               route.siteID,
 		WorkOrderID:          route.workOrderID,
 		AssigneeID:           assigneeID,
@@ -380,7 +380,7 @@ func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, 
 	}
 	decision := output.Decision
 	if decision.Subject != session.Principal.Subject || decision.SubjectIssuer != session.Principal.Issuer ||
-		decision.ActingOrganizationID != session.ActingOrganizationID || decision.SiteID != route.siteID || decision.WorkOrderID != route.workOrderID ||
+		decision.TenantID != session.TenantID || decision.SiteID != route.siteID || decision.WorkOrderID != route.workOrderID ||
 		!sameOptionalWorkOrderTarget(decision.AssigneeID, assigneeID) || !sameOptionalWorkOrderTarget(decision.TeamID, teamID) || decision.Action != route.action {
 		failure := workOrderUnavailable("IAM returned a Work Order decision outside the authenticated boundary.")
 		return workorderauth.Decision{}, &failure
@@ -393,7 +393,7 @@ func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, 
 }
 
 func (h *handler) signWorkOrderReadContext(session bffSession, route publicWorkOrderRoute, decision workorderauth.Decision, tenantID string) (string, *workOrderFailure) {
-	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.workOrder == nil || !isLowerUUIDv7(tenantID) {
+	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.workOrder == nil || !isLowerUUIDv7(tenantID) || session.TenantID != tenantID {
 		failure := workOrderUnavailable("Work Order read context signing is unavailable.")
 		return "", &failure
 	}
@@ -402,7 +402,7 @@ func (h *handler) signWorkOrderReadContext(session bffSession, route publicWorkO
 	if expiresAt.After(session.ExpiresAt) {
 		expiresAt = session.ExpiresAt
 	}
-	scopes := []string{"organization:" + session.ActingOrganizationID, "site:" + route.siteID}
+	scopes := []string{"tenant:" + session.TenantID, "site:" + route.siteID}
 	if route.workOrderID != "" {
 		scopes = append(scopes, "work-order:"+route.workOrderID)
 	}
@@ -410,7 +410,7 @@ func (h *handler) signWorkOrderReadContext(session bffSession, route publicWorkO
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
 		PrincipalID: decision.PrincipalID, DisplayName: session.Principal.DisplayName, Email: session.Principal.Email,
 		Roles: append([]string(nil), session.Principal.Roles...), ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
-		Audience: h.workOrder.backendAudience, ActingOrganizationID: session.ActingOrganizationID, TenantID: tenantID,
+		Audience: h.workOrder.backendAudience, TenantID: tenantID,
 		Actions: []string{string(route.action)}, Scopes: scopes, PolicyRevision: decision.PolicyRevision, SessionID: session.ID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	}

@@ -76,7 +76,7 @@ export function RealWorkOrders({ site, principal, registerProtectedResource }: R
   const canCreate = caps.includes('work-order.create');
   const canAssign = caps.includes('work-order.assign');
   const canLifecycle = caps.includes('work-order.lifecycle');
-  const prefix = useMemo(() => ['real-work-orders', principal.context.actingOrganizationId, site.id] as const, [principal.context.actingOrganizationId, site.id]);
+  const prefix = useMemo(() => ['real-work-orders', principal.context.tenantId, site.id] as const, [principal.context.tenantId, site.id]);
   const [status, setStatus] = useState<WorkOrderStatus | ''>('');
   const [priority, setPriority] = useState<WorkOrderPriority | ''>('');
   const [selectedId, setSelectedId] = useState(() => queryParam('workOrder'));
@@ -117,7 +117,7 @@ export function RealWorkOrders({ site, principal, registerProtectedResource }: R
   const originAlarmQuery = useQuery({
     queryKey: [...prefix, 'origin-alarm', originAlarmId],
     queryFn: ({ signal }) => getScopedAlarm(originAlarmId, {
-      trustedOrganizationId: principal.context.actingOrganizationId,
+      trustedTenantId: principal.context.tenantId,
       trustedSiteId: site.id,
       signal,
     }),

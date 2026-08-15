@@ -96,7 +96,7 @@ export type FindingRequiredNext =
     readonly kind: 'EQUIPMENT_ENERGY_BINDINGS';
     readonly owner: 'registry';
     readonly capability: 'registry.getEquipmentEnergyBindings';
-    readonly organizationId: string;
+    readonly tenantId: string;
     readonly siteId: string;
     readonly equipmentIds: readonly string[];
     readonly targetPeriod: FindingRequiredNextPeriod;
@@ -113,7 +113,7 @@ export type FindingRequiredNext =
     readonly kind: 'EQUIPMENT_ENERGY_PERIOD_COMPARISON';
     readonly owner: 'telemetry-query-service';
     readonly capability: 'analytics.energy.getEquipmentSeries';
-    readonly organizationId: string;
+    readonly tenantId: string;
     readonly siteId: string;
     readonly equipmentIds: readonly string[];
     readonly targetPeriod: FindingRequiredNextPeriod;
@@ -132,7 +132,7 @@ export type FindingConclusion =
   | {
     readonly status: 'SUPPORTED';
     readonly scope: 'SITE';
-    readonly organizationId: string;
+    readonly tenantId: string;
     readonly siteId: string;
   }
   | {
@@ -318,11 +318,11 @@ const requireNullableDigest = (value: unknown, label: string): string | null => 
 
 const normalizeScope = (value: unknown, label: string): InvestigationScope => {
   const scope = requireRecord(value, label);
-  if (!hasExactKeys(scope, ['organizationId', 'siteId', 'equipmentId', 'deviceId'])) {
+  if (!hasExactKeys(scope, ['tenantId', 'siteId', 'equipmentId', 'deviceId'])) {
     fail(`${label} has unsupported fields.`);
   }
   return {
-    organizationId: requireString(scope.organizationId, `${label}.organizationId`),
+    tenantId: requireString(scope.tenantId, `${label}.tenantId`),
     siteId: requireNullableString(scope.siteId, `${label}.siteId`),
     equipmentId: requireNullableString(scope.equipmentId, `${label}.equipmentId`),
     deviceId: requireNullableString(scope.deviceId, `${label}.deviceId`),
@@ -573,7 +573,7 @@ const normalizeFindingRequiredNext = (value: unknown, index: number): FindingReq
     'kind',
     'owner',
     'capability',
-    'organizationId',
+    'tenantId',
     'siteId',
     'equipmentIds',
     'targetPeriod',
@@ -612,7 +612,7 @@ const normalizeFindingRequiredNext = (value: unknown, index: number): FindingReq
   }
   const common = {
     status: 'REQUIRED_NEXT' as const,
-    organizationId: requireString(required.organizationId, `${label}.organizationId`),
+    tenantId: requireString(required.tenantId, `${label}.tenantId`),
     siteId: requireString(required.siteId, `${label}.siteId`),
     equipmentIds: normalizeStringIds(required.equipmentIds, `${label}.equipmentIds`, 0),
     targetPeriod: normalizeFindingRequiredNextPeriod(required.targetPeriod, `${label}.targetPeriod`),
@@ -651,14 +651,14 @@ const normalizeFindingRequiredNext = (value: unknown, index: number): FindingReq
 const normalizeFindingConclusion = (value: unknown): FindingConclusion => {
   const conclusion = requireRecord(value, 'conclusion');
   if (conclusion.status === 'SUPPORTED') {
-    if (!hasExactKeys(conclusion, ['status', 'scope', 'organizationId', 'siteId'])
+    if (!hasExactKeys(conclusion, ['status', 'scope', 'tenantId', 'siteId'])
       || conclusion.scope !== 'SITE') {
       fail('Supported Findings are limited to Site Scope in schema version 1.');
     }
     return {
       status: 'SUPPORTED',
       scope: 'SITE',
-      organizationId: requireString(conclusion.organizationId, 'conclusion.organizationId'),
+      tenantId: requireString(conclusion.tenantId, 'conclusion.tenantId'),
       siteId: requireString(conclusion.siteId, 'conclusion.siteId'),
     };
   }

@@ -27,7 +27,7 @@ type AccessContext struct {
 	Subject              string
 	SubjectIssuer        string
 	SessionID            string
-	ActingOrganizationID string
+	TenantID string
 	PolicyRevision       string
 }
 
@@ -48,7 +48,7 @@ type grantConsumeRequest struct {
 	DelegationGrant      string                 `json:"delegationGrant"`
 	PrincipalID          string                 `json:"principalId"`
 	SessionID            string                 `json:"sessionId"`
-	ActingOrganizationID string                 `json:"actingOrganizationId"`
+	TenantID string                 `json:"tenantId"`
 	Action               telemetryauth.Action   `json:"action"`
 	Targets              []telemetryauth.Target `json:"targets"`
 }
@@ -57,7 +57,7 @@ type grantAcceptance struct {
 	TokenID              string               `json:"tokenId"`
 	PrincipalID          string               `json:"principalId"`
 	SessionID            string               `json:"sessionId"`
-	ActingOrganizationID string               `json:"actingOrganizationId"`
+	TenantID string               `json:"tenantId"`
 	Action               telemetryauth.Action `json:"action"`
 	ScopeDigest          string               `json:"scopeDigest"`
 	PolicyRevision       string               `json:"policyRevision"`
@@ -88,7 +88,7 @@ func (authorizer *HTTPGrantAuthorizer) Authorize(ctx context.Context, peerSPIFFE
 	}
 	payload, err := json.Marshal(grantConsumeRequest{
 		DelegationGrant: grant, PrincipalID: claims.PrincipalID, SessionID: claims.SessionID,
-		ActingOrganizationID: claims.ActingOrganizationID, Action: action, Targets: targets,
+		TenantID: claims.TenantID, Action: action, Targets: targets,
 	})
 	if err != nil {
 		return AccessContext{}, ErrGrantRejected
@@ -120,14 +120,14 @@ func (authorizer *HTTPGrantAuthorizer) Authorize(ctx context.Context, peerSPIFFE
 		return AccessContext{}, ErrAuthorizationUnavailable
 	}
 	if accepted.TokenID != claims.TokenID || accepted.PrincipalID != claims.PrincipalID || accepted.SessionID != claims.SessionID ||
-		accepted.ActingOrganizationID != claims.ActingOrganizationID || accepted.Action != claims.Action || accepted.ScopeDigest != claims.ScopeDigest ||
+		accepted.TenantID != claims.TenantID || accepted.Action != claims.Action || accepted.ScopeDigest != claims.ScopeDigest ||
 		accepted.PolicyRevision != claims.PolicyRevision || accepted.ExpiresAt != claims.ExpiresAt {
 		return AccessContext{}, ErrAuthorizationUnavailable
 	}
 	return AccessContext{
 		TokenID: accepted.TokenID, PrincipalID: accepted.PrincipalID,
 		Subject: claims.Subject, SubjectIssuer: claims.SubjectIssuer, SessionID: accepted.SessionID,
-		ActingOrganizationID: accepted.ActingOrganizationID, PolicyRevision: accepted.PolicyRevision,
+		TenantID: accepted.TenantID, PolicyRevision: accepted.PolicyRevision,
 	}, nil
 }
 
@@ -136,13 +136,13 @@ func (authorizer *HTTPGrantAuthorizer) preflight(claims telemetryauth.GrantClaim
 	if strings.TrimSpace(peerSPIFFE) == "" || claims.Presenter != peerSPIFFE || claims.Issuer != authorizer.issuer || claims.Audience != authorizer.audience || claims.Transitive {
 		return false
 	}
-	if claims.Action != action || !action.Valid() || claims.PrincipalID == "" || claims.SessionID == "" || claims.ActingOrganizationID == "" || claims.TokenID == "" {
+	if claims.Action != action || !action.Valid() || claims.PrincipalID == "" || claims.SessionID == "" || claims.TenantID == "" || claims.TokenID == "" {
 		return false
 	}
 	if claims.IssuedAt > now.Add(5*time.Second).Unix() || claims.ExpiresAt <= now.Unix() || claims.ExpiresAt <= claims.IssuedAt || time.Duration(claims.ExpiresAt-claims.IssuedAt)*time.Second > telemetryauth.MaximumGrantLifetime {
 		return false
 	}
-	digest, err := telemetryauth.ScopeDigest(action, claims.ActingOrganizationID, targets)
+	digest, err := telemetryauth.ScopeDigest(action, claims.TenantID, targets)
 	if err != nil || digest != claims.ScopeDigest {
 		return false
 	}

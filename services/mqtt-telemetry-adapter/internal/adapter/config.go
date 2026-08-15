@@ -33,7 +33,7 @@ type GatewayScopeConfig struct {
 type MQTTConfig struct {
 	BrokerURL             string `json:"brokerUrl"`
 	ClientID              string `json:"clientId"`
-	TopicFilter           string `json:"topicFilter"`
+	TopicFilters          []string `json:"topicFilters"`
 	CAFile                string `json:"caFile"`
 	CertFile              string `json:"certFile"`
 	KeyFile               string `json:"keyFile"`
@@ -82,8 +82,25 @@ func (config Config) Validate() error {
 	if strings.TrimSpace(config.MQTT.ClientID) == "" || len(config.MQTT.ClientID) > 128 {
 		return errors.New("mqtt.clientId is invalid")
 	}
-	if strings.TrimSpace(config.MQTT.TopicFilter) != "energy/v1/+/+/+/telemetry" {
-		return errors.New("mqtt.topicFilter must be energy/v1/+/+/+/telemetry")
+	requiredTopicFilters := map[string]struct{}{
+		"energy/v1/+/+/+/telemetry": {},
+		"energy/v1/+/+/+/state": {},
+		"energy/v1/+/+/+/event": {},
+		"energy/v1/+/+/+/heartbeat": {},
+	}
+	if len(config.MQTT.TopicFilters) != len(requiredTopicFilters) {
+		return errors.New("mqtt.topicFilters must contain exactly the four V2.1.2 uplink message topics")
+	}
+	seenTopicFilters := make(map[string]struct{}, len(config.MQTT.TopicFilters))
+	for _, filter := range config.MQTT.TopicFilters {
+		filter = strings.TrimSpace(filter)
+		if _, required := requiredTopicFilters[filter]; !required {
+			return errors.New("mqtt.topicFilters contains a non-uplink or non-canonical topic")
+		}
+		if _, duplicate := seenTopicFilters[filter]; duplicate {
+			return errors.New("mqtt.topicFilters contains a duplicate topic")
+		}
+		seenTopicFilters[filter] = struct{}{}
 	}
 	for name, value := range map[string]string{
 		"mqtt.caFile":                 config.MQTT.CAFile,

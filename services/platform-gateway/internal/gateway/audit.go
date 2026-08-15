@@ -24,7 +24,7 @@ func (h *handler) GetSessionAuditEvent(writer http.ResponseWriter, request *http
 		return
 	}
 	if !containsAuditReaderRole(principal.Principal.Roles) {
-		writeIdentityFailure(writer, request, identityFailure{403, "AUDIT_QUERY_FORBIDDEN", "Audit query forbidden", "The authenticated principal cannot read Organization audit records.", false})
+		writeIdentityFailure(writer, request, identityFailure{403, "AUDIT_QUERY_FORBIDDEN", "Audit query forbidden", "The authenticated principal cannot read Tenant audit records.", false})
 		return
 	}
 	if h.identity.config.AuditURL == "" || h.identity.config.AuditHTTPClient == nil {
@@ -45,9 +45,9 @@ func (h *handler) GetSessionAuditEvent(writer http.ResponseWriter, request *http
 		Roles:                append([]string(nil), principal.Principal.Roles...),
 		ExecutingService:     h.identity.config.ExecutingWorkloadSPIFFE,
 		Audience:             h.identity.config.AuditAudience,
-		ActingOrganizationID: principal.Context.ActingOrganizationID,
+		TenantID:             principal.Context.TenantID,
 		Actions:              []string{"audit:read"},
-		Scopes:               []string{"organization:" + principal.Context.ActingOrganizationID},
+		Scopes:               []string{"tenant:" + principal.Context.TenantID},
 		PolicyRevision:       principal.Context.PolicyRevision,
 		SessionID:            session.ID,
 		IssuedAt:             now.Unix(),
@@ -75,7 +75,7 @@ func (h *handler) GetSessionAuditEvent(writer http.ResponseWriter, request *http
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotFound {
-		writeIdentityFailure(writer, request, identityFailure{404, "AUDIT_RECORD_NOT_FOUND", "Audit record not found", "No audit record is visible for this Organization and message ID.", false})
+		writeIdentityFailure(writer, request, identityFailure{404, "AUDIT_RECORD_NOT_FOUND", "Audit record not found", "No audit record is visible for this Tenant and message ID.", false})
 		return
 	}
 	if response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusUnauthorized {
@@ -91,8 +91,8 @@ func (h *handler) GetSessionAuditEvent(writer http.ResponseWriter, request *http
 		writeIdentityFailure(writer, request, identityFailure{503, "AUDIT_RESPONSE_INVALID", "Audit response invalid", "The private Audit Ledger returned an invalid response.", true})
 		return
 	}
-	if record.MessageID != params.MessageID || record.OrganizationID != session.ActingOrganizationID || record.ActingOrganizationID != session.ActingOrganizationID {
-		writeIdentityFailure(writer, request, identityFailure{503, "AUDIT_RESPONSE_INVALID", "Audit response invalid", "The private Audit Ledger response violated the Organization boundary.", true})
+	if record.MessageID != params.MessageID || record.TenantID != session.TenantID {
+		writeIdentityFailure(writer, request, identityFailure{503, "AUDIT_RESPONSE_INVALID", "Audit response invalid", "The private Audit Ledger response violated the Tenant boundary.", true})
 		return
 	}
 	writeJSON(writer, http.StatusOK, record)

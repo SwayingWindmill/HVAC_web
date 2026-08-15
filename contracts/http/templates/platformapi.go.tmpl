@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	CapabilitySetVersion                 = 6
+	CapabilitySetVersion                 = 7
 	GetHealthPath                         = "__HEALTH_PATH__"
 	GetVersionPath                        = "__VERSION_PATH__"
 	GetPlatformStatusPath                 = "__PLATFORM_STATUS_PATH__"
@@ -25,9 +25,7 @@ const (
 	LogoutPath                            = "__LOGOUT_PATH__"
 	RevokeSessionPathTemplate             = "__REVOKE_PATH__"
 	GetSessionAuditEventPathTemplate      = "__AUDIT_PATH__"
-	ListOrganizationsPath                 = "__ORGANIZATIONS_PATH__"
-	GetOrganizationPathTemplate           = "__ORGANIZATION_PATH__"
-	ListOrganizationSitesPathTemplate     = "__ORGANIZATION_SITES_PATH__"
+	ListSitesPath                         = "__SITES_PATH__"
 	GetSitePathTemplate                   = "__SITE_PATH__"
 	ListSiteEquipmentPathTemplate         = "__SITE_EQUIPMENT_PATH__"
 	GetEquipmentPathTemplate              = "__EQUIPMENT_PATH__"
@@ -78,7 +76,7 @@ type ServicePrincipal struct {
 type PrincipalContext struct {
 	InitiatingPrincipal       UserPrincipal     `json:"initiatingPrincipal"`
 	ExecutingServicePrincipal ServicePrincipal `json:"executingServicePrincipal"`
-	ActingOrganizationID      string           `json:"actingOrganizationId"`
+	TenantID                  string           `json:"tenantId"`
 	Audience                  string           `json:"audience"`
 	PolicyRevision            string           `json:"policyRevision"`
 	DelegationExpiresAt       string           `json:"delegationExpiresAt"`
@@ -87,8 +85,6 @@ type PrincipalContext struct {
 type Capability string
 
 const (
-	CapabilityOrganizationList Capability = "organization.list"
-	CapabilityOrganizationRead Capability = "organization.read"
 	CapabilitySiteList         Capability = "site.list"
 	CapabilitySiteRead         Capability = "site.read"
 	CapabilityEquipmentList    Capability = "equipment.list"
@@ -140,7 +136,7 @@ type AuditRecord struct {
 	LedgerSequence       int64  `json:"ledgerSequence"`
 	MessageID            string `json:"messageId"`
 	SchemaVersion        uint32 `json:"schemaVersion"`
-	OrganizationID       string `json:"organizationId"`
+	TenantID             string `json:"tenantId"`
 	AggregateType        string `json:"aggregateType"`
 	AggregateID          string `json:"aggregateId"`
 	AggregateVersion     uint64 `json:"aggregateVersion"`
@@ -149,7 +145,6 @@ type AuditRecord struct {
 	InitiatingIssuer     string `json:"initiatingIssuer"`
 	ExecutingService     string `json:"executingService"`
 	ExecutingSPIFFEID    string `json:"executingSpiffeId"`
-	ActingOrganizationID string `json:"actingOrganizationId"`
 	Action                string `json:"action"`
 	Result                string `json:"result"`
 	PolicyRevision        string `json:"policyRevision"`
@@ -162,78 +157,62 @@ type AuditRecord struct {
 	RecordedAt            string `json:"recordedAt"`
 }
 
-type Organization struct {
+type Site struct {
 	ID          string `json:"id"`
 	TenantID    string `json:"tenantId"`
 	Code        string `json:"code"`
 	DisplayName string `json:"displayName"`
+	Timezone    string `json:"timezone"`
 	Status      string `json:"status"`
 	Revision    int64  `json:"revision"`
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
 }
 
-type Site struct {
-	ID                   string `json:"id"`
-	TenantID             string `json:"tenantId"`
-	OwningOrganizationID string `json:"owningOrganizationId"`
-	Code                 string `json:"code"`
-	DisplayName          string `json:"displayName"`
-	Timezone             string `json:"timezone"`
-	Status               string `json:"status"`
-	Revision             int64  `json:"revision"`
-	CreatedAt            string `json:"createdAt"`
-	UpdatedAt            string `json:"updatedAt"`
-}
-
 type Equipment struct {
-	ID                   string `json:"id"`
-	TenantID             string `json:"tenantId"`
-	OwningOrganizationID string `json:"owningOrganizationId"`
-	SiteID               string `json:"siteId"`
-	Code                 string `json:"code"`
-	DisplayName          string `json:"displayName"`
-	EquipmentType        string `json:"equipmentType"`
-	Status               string `json:"status"`
-	Revision             int64  `json:"revision"`
-	CreatedAt            string `json:"createdAt"`
-	UpdatedAt            string `json:"updatedAt"`
+	ID            string `json:"id"`
+	TenantID      string `json:"tenantId"`
+	SiteID        string `json:"siteId"`
+	Code          string `json:"code"`
+	DisplayName   string `json:"displayName"`
+	EquipmentType string `json:"equipmentType"`
+	Status        string `json:"status"`
+	Revision      int64  `json:"revision"`
+	CreatedAt     string `json:"createdAt"`
+	UpdatedAt     string `json:"updatedAt"`
 }
 
 type Device struct {
-	ID                   string `json:"id"`
-	TenantID             string `json:"tenantId"`
-	OwningOrganizationID string `json:"owningOrganizationId"`
-	SiteID               string `json:"siteId"`
-	Code                 string `json:"code"`
-	DisplayName          string `json:"displayName"`
-	DeviceType           string `json:"deviceType"`
-	Status               string `json:"status"`
-	Revision             int64  `json:"revision"`
-	CreatedAt            string `json:"createdAt"`
-	UpdatedAt            string `json:"updatedAt"`
+	ID          string `json:"id"`
+	TenantID    string `json:"tenantId"`
+	SiteID      string `json:"siteId"`
+	Code        string `json:"code"`
+	DisplayName string `json:"displayName"`
+	DeviceType  string `json:"deviceType"`
+	Status      string `json:"status"`
+	Revision    int64  `json:"revision"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
 }
 
 type DeviceBinding struct {
-	ID                   string  `json:"id"`
-	TenantID             string  `json:"tenantId"`
-	OwningOrganizationID string  `json:"owningOrganizationId"`
-	SiteID               string  `json:"siteId"`
-	DeviceID             string  `json:"deviceId"`
-	EquipmentID          string  `json:"equipmentId"`
-	BindingRole          string  `json:"bindingRole"`
-	Status               string  `json:"status"`
-	ValidFrom            string  `json:"validFrom"`
-	ValidTo              *string `json:"validTo,omitempty"`
-	Revision             int64   `json:"revision"`
-	CreatedAt            string  `json:"createdAt"`
-	UpdatedAt            string  `json:"updatedAt"`
+	ID          string  `json:"id"`
+	TenantID    string  `json:"tenantId"`
+	SiteID      string  `json:"siteId"`
+	DeviceID    string  `json:"deviceId"`
+	EquipmentID string  `json:"equipmentId"`
+	BindingRole string  `json:"bindingRole"`
+	Status      string  `json:"status"`
+	ValidFrom   string  `json:"validFrom"`
+	ValidTo     *string `json:"validTo,omitempty"`
+	Revision    int64   `json:"revision"`
+	CreatedAt   string  `json:"createdAt"`
+	UpdatedAt   string  `json:"updatedAt"`
 }
 
 type ExternalBinding struct {
 	ID                    string  `json:"id"`
 	TenantID              string  `json:"tenantId"`
-	OwningOrganizationID  string  `json:"owningOrganizationId"`
 	SiteID                string  `json:"siteId"`
 	IntegrationInstanceID string  `json:"integrationInstanceId"`
 	Provider              string  `json:"provider"`
@@ -245,12 +224,6 @@ type ExternalBinding struct {
 	Revision              int64   `json:"revision"`
 	CreatedAt             string  `json:"createdAt"`
 	UpdatedAt             string  `json:"updatedAt"`
-}
-
-type OrganizationCollection struct {
-	Items      []Organization `json:"items"`
-	NextCursor *string        `json:"nextCursor"`
-	HasMore    bool           `json:"hasMore"`
 }
 
 type SiteCollection struct {
@@ -278,115 +251,96 @@ type DeviceBindingCollection struct {
 }
 
 type Area struct {
-	ID                   string  `json:"id"`
-	TenantID             string  `json:"tenantId"`
-	OwningOrganizationID string  `json:"owningOrganizationId"`
-	SiteID               string  `json:"siteId"`
-	ParentAreaID         *string `json:"parentAreaId"`
-	Code                 string  `json:"code"`
-	DisplayName          string  `json:"displayName"`
-	AreaType             string  `json:"areaType"`
-	Status               string  `json:"status"`
-	Revision             int64   `json:"revision"`
-	CreatedAt            string  `json:"createdAt"`
-	UpdatedAt            string  `json:"updatedAt"`
+	ID           string  `json:"id"`
+	TenantID     string  `json:"tenantId"`
+	SiteID       string  `json:"siteId"`
+	ParentAreaID *string `json:"parentAreaId"`
+	Code         string  `json:"code"`
+	DisplayName  string  `json:"displayName"`
+	AreaType     string  `json:"areaType"`
+	Status       string  `json:"status"`
+	Revision     int64   `json:"revision"`
+	CreatedAt    string  `json:"createdAt"`
+	UpdatedAt    string  `json:"updatedAt"`
 }
 
 type Sensor struct {
-	ID                   string         `json:"id"`
-	TenantID             string         `json:"tenantId"`
-	OwningOrganizationID string         `json:"owningOrganizationId"`
-	SiteID               string         `json:"siteId"`
-	Code                 string         `json:"code"`
-	DisplayName          string         `json:"displayName"`
-	SensorType           string         `json:"sensorType"`
-	Manufacturer         *string        `json:"manufacturer"`
-	Model                *string        `json:"model"`
-	SerialNumber         *string        `json:"serialNumber"`
-	CalibrationDueAt     *string        `json:"calibrationDueAt"`
-	Metadata             map[string]any `json:"metadata"`
-	Status               string         `json:"status"`
-	Revision             int64          `json:"revision"`
-	CreatedAt            string         `json:"createdAt"`
-	UpdatedAt            string         `json:"updatedAt"`
+	ID               string         `json:"id"`
+	TenantID         string         `json:"tenantId"`
+	SiteID           string         `json:"siteId"`
+	Code             string         `json:"code"`
+	DisplayName      string         `json:"displayName"`
+	SensorType       string         `json:"sensorType"`
+	Manufacturer     *string        `json:"manufacturer"`
+	Model            *string        `json:"model"`
+	SerialNumber     *string        `json:"serialNumber"`
+	CalibrationDueAt *string        `json:"calibrationDueAt"`
+	Metadata         map[string]any `json:"metadata"`
+	Status           string         `json:"status"`
+	Revision         int64          `json:"revision"`
+	CreatedAt        string         `json:"createdAt"`
+	UpdatedAt        string         `json:"updatedAt"`
 }
 
 type TelemetryPoint struct {
-	ID                   string         `json:"id"`
-	TenantID             string         `json:"tenantId"`
-	OwningOrganizationID string         `json:"owningOrganizationId"`
-	SiteID               string         `json:"siteId"`
-	ReportingDeviceID    string         `json:"reportingDeviceId"`
-	SensorID             *string        `json:"sensorId"`
-	PointKey             string         `json:"pointKey"`
-	SourceKey            string         `json:"sourceKey"`
-	DisplayName          string         `json:"displayName"`
-	PointKind            string         `json:"pointKind"`
-	ValueType            string         `json:"valueType"`
-	Unit                 *string        `json:"unit"`
-	Writable             bool           `json:"writable"`
-	SampleIntervalMS     int            `json:"sampleIntervalMs"`
-	PublishIntervalMS    int            `json:"publishIntervalMs"`
-	StaleAfterMS         int            `json:"staleAfterMs"`
-	FormulaRevision      *string        `json:"formulaRevision"`
-	SourceMetadata       map[string]any `json:"sourceMetadata"`
-	Status               string         `json:"status"`
-	Revision             int64          `json:"revision"`
-	CreatedAt            string         `json:"createdAt"`
-	UpdatedAt            string         `json:"updatedAt"`
+	ID                string         `json:"id"`
+	TenantID          string         `json:"tenantId"`
+	SiteID            string         `json:"siteId"`
+	ReportingDeviceID string         `json:"reportingDeviceId"`
+	SensorID          *string        `json:"sensorId"`
+	PointCode         string         `json:"pointCode"`
+	SourceKey         string         `json:"sourceKey"`
+	DisplayName       string         `json:"displayName"`
+	PointType         string         `json:"pointType"`
+	ValueType         string         `json:"valueType"`
+	Unit              *string        `json:"unit"`
+	Writable          bool           `json:"writable"`
+	SampleIntervalMS  int            `json:"sampleIntervalMs"`
+	PublishIntervalMS int            `json:"publishIntervalMs"`
+	StaleAfterMS      int            `json:"staleAfterMs"`
+	SourceMetadata    map[string]any `json:"sourceMetadata"`
+	Status            string         `json:"status"`
+	Revision          int64          `json:"revision"`
+	CreatedAt         string         `json:"createdAt"`
+	UpdatedAt         string         `json:"updatedAt"`
 }
 
 type AssetRelationship struct {
-	ID                   string  `json:"id"`
-	TenantID             string  `json:"tenantId"`
-	OwningOrganizationID string  `json:"owningOrganizationId"`
-	SiteID               string  `json:"siteId"`
-	FromType             string  `json:"fromType"`
-	FromID               string  `json:"fromId"`
-	ToType               string  `json:"toType"`
-	ToID                 string  `json:"toId"`
-	Role                 string  `json:"role"`
-	Status               string  `json:"status"`
-	ValidFrom            string  `json:"validFrom"`
-	ValidTo              *string `json:"validTo"`
-	Revision             int64   `json:"revision"`
-	CreatedAt            string  `json:"createdAt"`
-	UpdatedAt            string  `json:"updatedAt"`
-}
-
-type CalculatedPointInput struct {
-	TenantID             string `json:"tenantId"`
-	OwningOrganizationID string `json:"owningOrganizationId"`
-	SiteID               string `json:"siteId"`
-	CalculatedPointID    string `json:"calculatedPointId"`
-	InputPointID         string `json:"inputPointId"`
-	InputRole            string `json:"inputRole"`
-	Ordinal              int    `json:"ordinal"`
-	FormulaRevision      string `json:"formulaRevision"`
+	ID        string  `json:"id"`
+	TenantID  string  `json:"tenantId"`
+	SiteID    string  `json:"siteId"`
+	FromType  string  `json:"fromType"`
+	FromID    string  `json:"fromId"`
+	ToType    string  `json:"toType"`
+	ToID      string  `json:"toId"`
+	Role      string  `json:"role"`
+	Status    string  `json:"status"`
+	ValidFrom string  `json:"validFrom"`
+	ValidTo   *string `json:"validTo"`
+	Revision  int64   `json:"revision"`
+	CreatedAt string  `json:"createdAt"`
+	UpdatedAt string  `json:"updatedAt"`
 }
 
 type AssetModelCounts struct {
-	Areas                    int `json:"areas"`
-	Equipment                int `json:"equipment"`
-	DeviceEndpoints          int `json:"deviceEndpoints"`
-	Sensors                  int `json:"sensors"`
-	TelemetryPoints          int `json:"telemetryPoints"`
-	CalculatedPoints         int `json:"calculatedPoints"`
-	IndependentSensorDevices int `json:"independentSensorDevices"`
+	Areas           int `json:"areas"`
+	Equipment       int `json:"equipment"`
+	DeviceEndpoints int `json:"deviceEndpoints"`
+	PhysicalSensors int `json:"physicalSensors"`
+	Points          int `json:"points"`
 }
 
 type SiteAssetModel struct {
-	SchemaVersion         int                    `json:"schemaVersion"`
-	TenantID              string                 `json:"tenantId"`
-	SiteID                string                 `json:"siteId"`
-	Areas                 []Area                 `json:"areas"`
-	Equipment             []Equipment            `json:"equipment"`
-	Devices               []Device               `json:"devices"`
-	Sensors               []Sensor               `json:"sensors"`
-	TelemetryPoints       []TelemetryPoint       `json:"telemetryPoints"`
-	Relationships         []AssetRelationship    `json:"relationships"`
-	CalculatedPointInputs []CalculatedPointInput `json:"calculatedPointInputs"`
-	Counts                AssetModelCounts       `json:"counts"`
+	SchemaVersion   int                 `json:"schemaVersion"`
+	TenantID        string              `json:"tenantId"`
+	SiteID          string              `json:"siteId"`
+	Areas           []Area              `json:"areas"`
+	Equipment       []Equipment         `json:"equipment"`
+	Devices         []Device            `json:"devices"`
+	Sensors         []Sensor            `json:"sensors"`
+	TelemetryPoints []TelemetryPoint    `json:"telemetryPoints"`
+	Relationships   []AssetRelationship `json:"relationships"`
+	Counts          AssetModelCounts    `json:"counts"`
 }
 
 type FieldError struct {
@@ -432,9 +386,7 @@ type ServerInterface interface {
 
 // RegistryServerInterface freezes the S1 contract without requiring Ticket 05 runtime handlers yet.
 type RegistryServerInterface interface {
-	ListOrganizations(http.ResponseWriter, *http.Request, ListRegistryParams)
-	GetOrganization(http.ResponseWriter, *http.Request, string)
-	ListOrganizationSites(http.ResponseWriter, *http.Request, string, ListRegistryParams)
+	ListSites(http.ResponseWriter, *http.Request, ListRegistryParams)
 	GetSite(http.ResponseWriter, *http.Request, string)
 	ListSiteEquipment(http.ResponseWriter, *http.Request, string, ListRegistryParams)
 	GetEquipment(http.ResponseWriter, *http.Request, string)
@@ -511,22 +463,8 @@ func (c *Client) GetSessionAuditEvent(ctx context.Context, messageID string) (*R
 	return doJSON[AuditRecord](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
 }
 
-func (c *Client) ListOrganizations(ctx context.Context, params *ListRegistryParams) (*Response[OrganizationCollection], error) {
-	endpoint, err := withListQuery(c.baseURL+ListOrganizationsPath, params)
-	if err != nil {
-		return nil, err
-	}
-	return doJSON[OrganizationCollection](ctx, c.httpClient, http.MethodGet, endpoint, "", nil)
-}
-
-func (c *Client) GetOrganization(ctx context.Context, organizationID string) (*Response[Organization], error) {
-	path := strings.Replace(GetOrganizationPathTemplate, "{organizationId}", url.PathEscape(organizationID), 1)
-	return doJSON[Organization](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
-}
-
-func (c *Client) ListOrganizationSites(ctx context.Context, organizationID string, params *ListRegistryParams) (*Response[SiteCollection], error) {
-	path := strings.Replace(ListOrganizationSitesPathTemplate, "{organizationId}", url.PathEscape(organizationID), 1)
-	endpoint, err := withListQuery(c.baseURL+path, params)
+func (c *Client) ListSites(ctx context.Context, params *ListRegistryParams) (*Response[SiteCollection], error) {
+	endpoint, err := withListQuery(c.baseURL+ListSitesPath, params)
 	if err != nil {
 		return nil, err
 	}

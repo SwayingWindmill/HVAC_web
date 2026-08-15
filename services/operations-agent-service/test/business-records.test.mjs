@@ -8,7 +8,7 @@ import {
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const scope = {
-  organizationId: 'organization-001',
+  tenantId: 'organization-001',
   siteId: 'site-001',
   equipmentId: null,
   deviceId: null,
@@ -80,7 +80,7 @@ const finding = {
   conclusion: {
     status: 'SUPPORTED',
     scope: 'SITE',
-    organizationId: 'organization-001',
+    tenantId: 'organization-001',
     siteId: 'site-001',
   },
 };
@@ -192,7 +192,7 @@ test('Findings allow typed insufficiency but never supported Equipment attributi
     kind: 'EQUIPMENT_ENERGY_BINDINGS',
     owner: 'registry',
     capability: 'registry.getEquipmentEnergyBindings',
-    organizationId: 'organization-001',
+    tenantId: 'organization-001',
     siteId: 'site-001',
     equipmentIds: ['equipment-001'],
     targetPeriod: {
@@ -213,7 +213,7 @@ test('Findings allow typed insufficiency but never supported Equipment attributi
     kind: 'EQUIPMENT_ENERGY_PERIOD_COMPARISON',
     owner: 'telemetry-query-service',
     capability: 'analytics.energy.getEquipmentSeries',
-    organizationId: 'organization-001',
+    tenantId: 'organization-001',
     siteId: 'site-001',
     equipmentIds: ['equipment-001'],
     targetPeriod: {
@@ -277,7 +277,7 @@ test('Findings allow typed insufficiency but never supported Equipment attributi
     conclusion: {
       status: 'SUPPORTED',
       scope: 'EQUIPMENT',
-      organizationId: 'organization-001',
+      tenantId: 'organization-001',
       siteId: 'site-001',
       equipmentId: 'equipment-001',
     },

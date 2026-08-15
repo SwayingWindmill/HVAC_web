@@ -335,8 +335,7 @@
 }
 
 .real-assets__points li[data-point-state='MISSING'],
-.real-assets__points li[data-point-freshness='STALE'],
-.real-assets__points li[data-point-quality='SUSPECT'] {
+.real-assets__points li[data-point-freshness='STALE'] {
   border-color: #e5c77a;
   background: #fff9e8;
 }
@@ -584,8 +583,7 @@
 }
 
 .real-assets-detail__points li[data-point-state="MISSING"],
-.real-assets-detail__points li[data-point-freshness="STALE"],
-.real-assets-detail__points li[data-point-quality="SUSPECT"] {
+.real-assets-detail__points li[data-point-freshness="STALE"] {
   border-color: #e5c77a;
   background: #fff9e8;
 }

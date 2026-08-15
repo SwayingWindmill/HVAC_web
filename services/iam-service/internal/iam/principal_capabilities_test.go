@@ -177,7 +177,7 @@ func principalTelemetryFacts(denies []iam.ExplicitDeny) iam.TelemetryAuthorizati
 			Subject:       "fixture-user",
 			Status:        iam.FactStatusActive,
 		},
-		Memberships: []iam.OrganizationMembership{{OrganizationID: iam.S1FixtureOwnerAOrganizationID, Status: iam.FactStatusActive}},
+		Memberships: []iam.OrganizationMembership{{TenantID: iam.S1FixtureTenantAID, OrganizationID: iam.S1FixtureOwnerAOrganizationID, Status: iam.FactStatusActive}},
 		RoleBindings: []iam.RoleBinding{{
 			OrganizationID: iam.S1FixtureOwnerAOrganizationID,
 			Actions:        registryActions,
@@ -207,7 +207,7 @@ func principalAlarmFacts() iam.AlarmAuthorizationFacts {
 			Subject:       "fixture-user",
 			Status:        iam.FactStatusActive,
 		},
-		Memberships: []iam.OrganizationMembership{{OrganizationID: iam.S1FixtureOwnerAOrganizationID, Status: iam.FactStatusActive}},
+		Memberships: []iam.OrganizationMembership{{TenantID: iam.S1FixtureTenantAID, OrganizationID: iam.S1FixtureOwnerAOrganizationID, Status: iam.FactStatusActive}},
 		Permissions: []iam.AlarmPermission{
 			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionList, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
 			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionRead, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
@@ -234,7 +234,7 @@ func principalWorkOrderFacts() iam.WorkOrderAuthorizationFacts {
 			Subject:       "fixture-user",
 			Status:        iam.FactStatusActive,
 		},
-		Memberships: []iam.OrganizationMembership{{OrganizationID: iam.S1FixtureOwnerAOrganizationID, Status: iam.FactStatusActive}},
+		Memberships: []iam.OrganizationMembership{{TenantID: iam.S1FixtureTenantAID, OrganizationID: iam.S1FixtureOwnerAOrganizationID, Status: iam.FactStatusActive}},
 		Permissions: []iam.WorkOrderPermission{
 			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionList, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
 			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionRead, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},

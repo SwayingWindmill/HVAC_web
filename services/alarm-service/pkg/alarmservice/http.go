@@ -99,7 +99,7 @@ func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 
 func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "private, no-store")
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant"} {
+	for _, header := range []string{"X-Principal", "X-Roles", "X-Tenant-ID", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant"} {
 		if request.Header.Get(header) != "" {
 			handler.writeProblem(writer, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Caller-supplied identity headers are not accepted by Alarm Service.", false)
 			return
@@ -141,19 +141,19 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 	}
 	request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
 	if route.alarmID == "" {
-		handler.list(writer, request, claims.ActingOrganizationID, route.siteID)
+		handler.list(writer, request, claims.TenantID, route.siteID)
 		return
 	}
-	handler.get(writer, request, claims.ActingOrganizationID, route.siteID, route.alarmID)
+	handler.get(writer, request, claims.TenantID, route.siteID, route.alarmID)
 }
 
 func (handler *httpHandler) authorize(request *http.Request, header, action string, resourceScopes []string) (identitycontext.DelegationClaims, bool) {
 	token := strings.TrimSpace(request.Header.Get(header))
 	claims, err := identitycontext.VerifyDelegation(handler.gatewayPublicKey, token)
-	if err != nil || !alarmmodel.IsUUIDv7(claims.TenantID) || !alarmmodel.IsUUIDv7(claims.ActingOrganizationID) || len(claims.Actions) != 1 || claims.Actions[0] != action {
+	if err != nil || !alarmmodel.IsUUIDv7(claims.TenantID) || len(claims.Actions) != 1 || claims.Actions[0] != action {
 		return identitycontext.DelegationClaims{}, false
 	}
-	expectedScopes := append([]string{"organization:" + claims.ActingOrganizationID}, resourceScopes...)
+	expectedScopes := append([]string{"tenant:" + claims.TenantID}, resourceScopes...)
 	if err := identitycontext.ValidateDelegationAnyScope(claims, handler.now().UTC(), handler.gatewaySPIFFEID, handler.audience, action, expectedScopes); err != nil {
 		return identitycontext.DelegationClaims{}, false
 	}
@@ -227,7 +227,7 @@ func (handler *httpHandler) mutate(writer http.ResponseWriter, request *http.Req
 	if actorID == "" {
 		actorID = strings.TrimSpace(claims.SubjectIssuer) + "#" + strings.TrimSpace(claims.Subject)
 	}
-	result, err := handler.store.Apply(request.Context(), claims.ActingOrganizationID, route.siteID, route.alarmID, Mutation{
+	result, err := handler.store.Apply(request.Context(), claims.TenantID, route.siteID, route.alarmID, Mutation{
 		Operation: route.operation, ExpectedVersion: input.ExpectedVersion, Reason: input.Reason,
 		AssigneeID: input.AssigneeID, SuppressedUntil: input.SuppressedUntil,
 		ActorType: "PRINCIPAL", ActorID: actorID, PolicyRevision: claims.PolicyRevision,
@@ -238,7 +238,7 @@ func (handler *httpHandler) mutate(writer http.ResponseWriter, request *http.Req
 		handler.writeMutationFailure(writer, err)
 		return
 	}
-	if !validAlarmResponse(result.Alarm, claims.ActingOrganizationID, route.siteID, route.alarmID) {
+	if !validAlarmResponse(result.Alarm, claims.TenantID, route.siteID, route.alarmID) {
 		handler.writeProblem(writer, http.StatusBadGateway, "ALARM_RESPONSE_INVALID", "Alarm response invalid", "Alarm Store returned a projection outside the requested scope.", true)
 		return
 	}
@@ -371,7 +371,7 @@ func matchAlarmPath(path string) (alarmRoute, bool) {
 }
 
 func validAlarmResponse(alarm alarmmodel.Alarm, organizationID, siteID, alarmID string) bool {
-	return alarm.Validate() == nil && alarm.OrganizationID == organizationID && alarm.SiteID == siteID && alarm.AlarmID == alarmID
+	return alarm.Validate() == nil && alarm.TenantID == organizationID && alarm.SiteID == siteID && alarm.AlarmID == alarmID
 }
 
 func ensureJSONEOF(decoder *json.Decoder) error {

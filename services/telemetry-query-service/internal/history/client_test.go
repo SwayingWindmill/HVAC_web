@@ -14,6 +14,7 @@ import (
 )
 
 const (
+	historyTenantID             = "018f1d00-0000-7000-8000-000000000001"
 	historyOrganizationID       = "018f1e00-0000-7000-8000-000000000001"
 	historySiteID               = "018f1e00-1000-7000-8000-000000000001"
 	historyDeviceID             = "018f1e00-4000-7000-8000-000000000001"
@@ -40,7 +41,7 @@ func TestClickHouseHistoryClientUsesFixedScopedQueriesAndBuildsMetadata(t *testi
 		writer.Header().Set("Content-Type", "application/x-ndjson")
 		if index == 1 {
 			_, _ = writer.Write([]byte(`{"observation_id":"018f1e00-8000-7000-8000-000000000001","point_id":"018f1e00-5000-7000-8000-000000000001","sensor_id":"018f1e00-6000-7000-8000-000000000001","telemetry_key":"zone.temperature","sampled_at":"2026-07-30T01:00:00.000Z","received_at":"2026-07-30T01:00:01.000Z","value":22.5,"unit":"Cel","quality":"GOOD","quality_reasons":[],"revision":7,"total_count":2}
-{"observation_id":"018f1e00-8000-7000-8000-000000000002","point_id":"018f1e00-5000-7000-8000-000000000002","sensor_id":"018f1e00-6000-7000-8000-000000000002","telemetry_key":"zone.temperature","sampled_at":"2026-07-30T02:00:00.000Z","received_at":"2026-07-30T02:00:01.000Z","value":23.0,"unit":"Cel","quality":"SUSPECT","quality_reasons":["SENSOR_DRIFT"],"revision":8,"total_count":2}
+{"observation_id":"018f1e00-8000-7000-8000-000000000002","point_id":"018f1e00-5000-7000-8000-000000000002","sensor_id":"018f1e00-6000-7000-8000-000000000002","telemetry_key":"zone.temperature","sampled_at":"2026-07-30T02:00:00.000Z","received_at":"2026-07-30T02:00:01.000Z","value":23.0,"unit":"Cel","quality":"PARTIAL","quality_reasons":["SENSOR_DRIFT"],"revision":8,"total_count":2}
 `))
 			return
 		}
@@ -58,7 +59,7 @@ func TestClickHouseHistoryClientUsesFixedScopedQueriesAndBuildsMetadata(t *testi
 	}
 	from := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
 	query := telemetryhistorymodel.DeviceHistoryQuery{
-		ActingOrganizationID: historyOrganizationID, OwningOrganizationID: historyOrganizationID, SiteID: historySiteID, DeviceID: historyDeviceID,
+		ActingOrganizationID: historyOrganizationID, TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
 		Keys: []string{"zone.temperature"}, From: from, To: from.Add(6 * time.Hour), MaxPointsPerKey: 2,
 	}
 	response, err := client.QueryDeviceHistory(context.Background(), query)
@@ -84,7 +85,7 @@ func TestClickHouseHistoryClientUsesFixedScopedQueriesAndBuildsMetadata(t *testi
 	}
 	for _, queryText := range queries {
 		for _, marker := range []string{
-			"owning_organization_id = toUUID('" + historyOrganizationID + "')",
+			"tenant_id = toUUID('" + historyTenantID + "')",
 			"site_id = toUUID('" + historySiteID + "')",
 			"device_id = toUUID('" + historyDeviceID + "')",
 			"telemetry_key IN ('zone.temperature')",
@@ -127,7 +128,7 @@ func TestClickHouseHistoryClientMarksTruncationAndRejectsUnrequestedKeys(t *test
 		t.Fatal(err)
 	}
 	from := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
-	query := telemetryhistorymodel.DeviceHistoryQuery{ActingOrganizationID: historyOrganizationID, OwningOrganizationID: historyOrganizationID, SiteID: historySiteID, DeviceID: historyDeviceID, Keys: []string{"zone.temperature"}, From: from, To: from.Add(6 * time.Hour), MaxPointsPerKey: 1}
+	query := telemetryhistorymodel.DeviceHistoryQuery{ActingOrganizationID: historyOrganizationID, TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID, Keys: []string{"zone.temperature"}, From: from, To: from.Add(6 * time.Hour), MaxPointsPerKey: 1}
 	response, err := client.QueryDeviceHistory(context.Background(), query)
 	if err != nil {
 		t.Fatal(err)

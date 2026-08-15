@@ -2,66 +2,73 @@ BEGIN;
 
 SET LOCAL ROLE s1_core_migrator;
 
-CREATE TABLE IF NOT EXISTS core_registry.areas (
+-- V2 spatial and Point models are scoped directly by Tenant + Site.
+-- Organization is intentionally absent from all new canonical data tables.
+CREATE TABLE IF NOT EXISTS core_registry.spaces (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
+  tenant_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(tenant_id)),
   site_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(site_id)),
-  parent_area_id uuid,
+  parent_space_id uuid,
   code text NOT NULL CHECK (code ~ '^[a-z0-9][a-z0-9-]{0,63}$'),
   display_name text NOT NULL,
-  area_type text NOT NULL CHECK (area_type IN ('CAMPUS', 'BUILDING', 'FLOOR', 'ZONE', 'ROOM', 'PLANT_ROOM', 'ROOFTOP', 'OUTDOOR', 'TENANT_SPACE', 'OTHER')),
+  space_type text NOT NULL CHECK (space_type IN ('CAMPUS', 'BUILDING', 'FLOOR', 'ZONE', 'ROOM', 'PLANT_ROOM', 'ROOFTOP', 'OUTDOOR', 'TENANT_SPACE', 'OTHER')),
   status text NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE', 'RETIRED')),
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  UNIQUE (organization_id, site_id, code),
-  UNIQUE (organization_id, site_id, id),
-  FOREIGN KEY (organization_id, site_id) REFERENCES core_registry.sites(organization_id, id),
-  FOREIGN KEY (organization_id, site_id, parent_area_id) REFERENCES core_registry.areas(organization_id, site_id, id),
-  CHECK (parent_area_id IS NULL OR parent_area_id <> id),
+  UNIQUE (tenant_id, site_id, code),
+  UNIQUE (tenant_id, site_id, id),
+  FOREIGN KEY (tenant_id) REFERENCES iam.tenants(id),
+  FOREIGN KEY (tenant_id, site_id) REFERENCES core_registry.sites(tenant_id, id),
+  FOREIGN KEY (tenant_id, site_id, parent_space_id) REFERENCES core_registry.spaces(tenant_id, site_id, id),
+  CHECK (parent_space_id IS NULL OR parent_space_id <> id),
   CHECK (updated_at >= created_at)
 );
 
-CREATE OR REPLACE FUNCTION core_registry.reject_area_cycle()
+CREATE OR REPLACE FUNCTION core_registry.reject_space_cycle()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  IF NEW.parent_area_id IS NULL THEN
+  IF NEW.parent_space_id IS NULL THEN
     RETURN NEW;
   END IF;
-  IF NEW.parent_area_id = NEW.id THEN
-    RAISE EXCEPTION 'area cannot be its own parent' USING ERRCODE = '23514';
+  IF NEW.parent_space_id = NEW.id THEN
+    RAISE EXCEPTION 'space cannot be its own parent' USING ERRCODE = '23514';
   END IF;
   IF EXISTS (
     WITH RECURSIVE descendants AS (
-      SELECT area.id
-      FROM core_registry.areas AS area
-      WHERE area.parent_area_id = NEW.id
+      SELECT space.id
+      FROM core_registry.spaces AS space
+      WHERE space.tenant_id = NEW.tenant_id
+        AND space.site_id = NEW.site_id
+        AND space.parent_space_id = NEW.id
       UNION ALL
       SELECT child.id
-      FROM core_registry.areas AS child
-      JOIN descendants AS parent ON child.parent_area_id = parent.id
+      FROM core_registry.spaces AS child
+      JOIN descendants AS parent ON child.parent_space_id = parent.id
+      WHERE child.tenant_id = NEW.tenant_id
+        AND child.site_id = NEW.site_id
     )
-    SELECT 1 FROM descendants WHERE id = NEW.parent_area_id
+    SELECT 1 FROM descendants WHERE id = NEW.parent_space_id
   ) THEN
-    RAISE EXCEPTION 'area hierarchy cycle is not allowed' USING ERRCODE = '23514';
+    RAISE EXCEPTION 'space hierarchy cycle is not allowed' USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
 END
 $$;
 
-DROP TRIGGER IF EXISTS areas_reject_cycle ON core_registry.areas;
-CREATE TRIGGER areas_reject_cycle
-BEFORE INSERT OR UPDATE OF parent_area_id ON core_registry.areas
-FOR EACH ROW EXECUTE FUNCTION core_registry.reject_area_cycle();
+DROP TRIGGER IF EXISTS spaces_reject_cycle ON core_registry.spaces;
+CREATE TRIGGER spaces_reject_cycle
+BEFORE INSERT OR UPDATE OF tenant_id, site_id, parent_space_id ON core_registry.spaces
+FOR EACH ROW EXECUTE FUNCTION core_registry.reject_space_cycle();
 
-CREATE TABLE IF NOT EXISTS core_registry.equipment_area_bindings (
+CREATE TABLE IF NOT EXISTS core_registry.asset_space_bindings (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
+  tenant_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(tenant_id)),
   site_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(site_id)),
-  equipment_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(equipment_id)),
-  area_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(area_id)),
+  asset_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(asset_id)),
+  space_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(space_id)),
   binding_role text NOT NULL CHECK (binding_role IN ('INSTALLED_IN', 'SERVES')),
   status text NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE', 'RETIRED')),
   valid_from timestamptz NOT NULL,
@@ -69,22 +76,23 @@ CREATE TABLE IF NOT EXISTS core_registry.equipment_area_bindings (
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  FOREIGN KEY (organization_id, site_id, equipment_id) REFERENCES core_registry.equipment(organization_id, site_id, id),
-  FOREIGN KEY (organization_id, site_id, area_id) REFERENCES core_registry.areas(organization_id, site_id, id),
+  FOREIGN KEY (tenant_id) REFERENCES iam.tenants(id),
+  FOREIGN KEY (tenant_id, site_id, asset_id) REFERENCES core_registry.assets(tenant_id, site_id, id),
+  FOREIGN KEY (tenant_id, site_id, space_id) REFERENCES core_registry.spaces(tenant_id, site_id, id),
   CHECK (valid_to IS NULL OR valid_to > valid_from),
   CHECK (updated_at >= created_at)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS equipment_area_current_installation_uidx
-  ON core_registry.equipment_area_bindings (organization_id, site_id, equipment_id)
+CREATE UNIQUE INDEX IF NOT EXISTS asset_space_current_installation_uidx
+  ON core_registry.asset_space_bindings (tenant_id, site_id, asset_id)
   WHERE binding_role = 'INSTALLED_IN' AND status = 'ACTIVE' AND valid_to IS NULL;
 
-CREATE TABLE IF NOT EXISTS core_registry.device_area_bindings (
+CREATE TABLE IF NOT EXISTS core_registry.device_space_bindings (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
+  tenant_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(tenant_id)),
   site_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(site_id)),
   device_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(device_id)),
-  area_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(area_id)),
+  space_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(space_id)),
   binding_role text NOT NULL CHECK (binding_role IN ('INSTALLED_IN', 'SERVES', 'GATEWAY_FOR', 'SUPERVISES')),
   status text NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE', 'RETIRED')),
   valid_from timestamptz NOT NULL,
@@ -92,21 +100,25 @@ CREATE TABLE IF NOT EXISTS core_registry.device_area_bindings (
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  FOREIGN KEY (organization_id, site_id, device_id) REFERENCES core_registry.devices(organization_id, site_id, id),
-  FOREIGN KEY (organization_id, site_id, area_id) REFERENCES core_registry.areas(organization_id, site_id, id),
+  FOREIGN KEY (tenant_id) REFERENCES iam.tenants(id),
+  FOREIGN KEY (tenant_id, site_id, device_id) REFERENCES core_registry.devices(tenant_id, site_id, id),
+  FOREIGN KEY (tenant_id, site_id, space_id) REFERENCES core_registry.spaces(tenant_id, site_id, id),
   CHECK (valid_to IS NULL OR valid_to > valid_from),
   CHECK (updated_at >= created_at)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS device_area_current_installation_uidx
-  ON core_registry.device_area_bindings (organization_id, site_id, device_id)
+CREATE UNIQUE INDEX IF NOT EXISTS device_space_current_installation_uidx
+  ON core_registry.device_space_bindings (tenant_id, site_id, device_id)
   WHERE binding_role = 'INSTALLED_IN' AND status = 'ACTIVE' AND valid_to IS NULL;
 
+-- Optional physical probes only. Point remains the canonical data identity.
+-- A Sensor row exists only when the real probe needs an independent installation,
+-- replacement, calibration, or traceability lifecycle.
 CREATE TABLE IF NOT EXISTS core_registry.sensors (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
+  tenant_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(tenant_id)),
   site_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(site_id)),
-  code text NOT NULL,
+  code text NOT NULL CHECK (code ~ '^[a-z0-9][a-z0-9-]{0,63}$'),
   display_name text NOT NULL,
   sensor_type text NOT NULL,
   manufacturer text,
@@ -118,111 +130,91 @@ CREATE TABLE IF NOT EXISTS core_registry.sensors (
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  UNIQUE (organization_id, site_id, code),
-  UNIQUE (organization_id, site_id, id),
-  FOREIGN KEY (organization_id, site_id) REFERENCES core_registry.sites(organization_id, id),
+  UNIQUE (tenant_id, site_id, code),
+  UNIQUE (tenant_id, site_id, id),
+  FOREIGN KEY (tenant_id) REFERENCES iam.tenants(id),
+  FOREIGN KEY (tenant_id, site_id) REFERENCES core_registry.sites(tenant_id, id),
   CHECK (updated_at >= created_at)
 );
 
+-- A physical Sensor may report through one Device. It is never required for a Point.
 CREATE TABLE IF NOT EXISTS core_registry.sensor_device_bindings (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
+  tenant_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(tenant_id)),
   site_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(site_id)),
   sensor_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(sensor_id)),
   device_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(device_id)),
-  binding_role text NOT NULL CHECK (binding_role IN ('REPORTS_THROUGH', 'INDEPENDENT_DEVICE')),
+  binding_role text NOT NULL CHECK (binding_role = 'REPORTS_THROUGH'),
   status text NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE', 'RETIRED')),
   valid_from timestamptz NOT NULL,
   valid_to timestamptz,
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  FOREIGN KEY (organization_id, site_id, sensor_id) REFERENCES core_registry.sensors(organization_id, site_id, id),
-  FOREIGN KEY (organization_id, site_id, device_id) REFERENCES core_registry.devices(organization_id, site_id, id),
+  FOREIGN KEY (tenant_id) REFERENCES iam.tenants(id),
+  FOREIGN KEY (tenant_id, site_id, sensor_id) REFERENCES core_registry.sensors(tenant_id, site_id, id),
+  FOREIGN KEY (tenant_id, site_id, device_id) REFERENCES core_registry.devices(tenant_id, site_id, id),
   CHECK (valid_to IS NULL OR valid_to > valid_from),
   CHECK (updated_at >= created_at)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS sensor_device_current_reporting_uidx
-  ON core_registry.sensor_device_bindings (organization_id, site_id, sensor_id)
+  ON core_registry.sensor_device_bindings (tenant_id, site_id, sensor_id)
   WHERE status = 'ACTIVE' AND valid_to IS NULL;
 
-CREATE TABLE IF NOT EXISTS core_registry.sensor_area_bindings (
+-- Mounting history is physical traceability only. Measurement subject belongs to Point.
+CREATE TABLE IF NOT EXISTS core_registry.sensor_space_bindings (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
+  tenant_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(tenant_id)),
   site_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(site_id)),
   sensor_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(sensor_id)),
-  area_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(area_id)),
-  binding_role text NOT NULL CHECK (binding_role IN ('MOUNTED_IN', 'SERVES')),
+  space_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(space_id)),
+  binding_role text NOT NULL CHECK (binding_role = 'MOUNTED_IN'),
   status text NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE', 'RETIRED')),
   valid_from timestamptz NOT NULL,
   valid_to timestamptz,
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  FOREIGN KEY (organization_id, site_id, sensor_id) REFERENCES core_registry.sensors(organization_id, site_id, id),
-  FOREIGN KEY (organization_id, site_id, area_id) REFERENCES core_registry.areas(organization_id, site_id, id),
+  FOREIGN KEY (tenant_id) REFERENCES iam.tenants(id),
+  FOREIGN KEY (tenant_id, site_id, sensor_id) REFERENCES core_registry.sensors(tenant_id, site_id, id),
+  FOREIGN KEY (tenant_id, site_id, space_id) REFERENCES core_registry.spaces(tenant_id, site_id, id),
   CHECK (valid_to IS NULL OR valid_to > valid_from),
   CHECK (updated_at >= created_at)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS sensor_area_current_mount_uidx
-  ON core_registry.sensor_area_bindings (organization_id, site_id, sensor_id)
-  WHERE binding_role = 'MOUNTED_IN' AND status = 'ACTIVE' AND valid_to IS NULL;
-
-CREATE TABLE IF NOT EXISTS core_registry.sensor_subject_bindings (
-  id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
-  site_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(site_id)),
-  sensor_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(sensor_id)),
-  subject_type text NOT NULL CHECK (subject_type IN ('SITE', 'AREA', 'EQUIPMENT')),
-  area_id uuid,
-  equipment_id uuid,
-  binding_role text NOT NULL CHECK (binding_role IN ('MEASURES', 'VALIDATES', 'CONTRIBUTES_TO')),
-  status text NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE', 'RETIRED')),
-  valid_from timestamptz NOT NULL,
-  valid_to timestamptz,
-  revision bigint NOT NULL CHECK (revision > 0),
-  created_at timestamptz NOT NULL,
-  updated_at timestamptz NOT NULL,
-  FOREIGN KEY (organization_id, site_id, sensor_id) REFERENCES core_registry.sensors(organization_id, site_id, id),
-  FOREIGN KEY (organization_id, site_id, area_id) REFERENCES core_registry.areas(organization_id, site_id, id),
-  FOREIGN KEY (organization_id, site_id, equipment_id) REFERENCES core_registry.equipment(organization_id, site_id, id),
-  CHECK ((subject_type = 'SITE' AND area_id IS NULL AND equipment_id IS NULL)
-      OR (subject_type = 'AREA' AND area_id IS NOT NULL AND equipment_id IS NULL)
-      OR (subject_type = 'EQUIPMENT' AND area_id IS NULL AND equipment_id IS NOT NULL)),
-  CHECK (valid_to IS NULL OR valid_to > valid_from),
-  CHECK (updated_at >= created_at)
-);
+CREATE UNIQUE INDEX IF NOT EXISTS sensor_space_current_mount_uidx
+  ON core_registry.sensor_space_bindings (tenant_id, site_id, sensor_id)
+  WHERE status = 'ACTIVE' AND valid_to IS NULL;
 
 CREATE TABLE IF NOT EXISTS core_registry.telemetry_points (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
+  tenant_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(tenant_id)),
   site_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(site_id)),
   reporting_device_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(reporting_device_id)),
   sensor_id uuid,
-  point_key text NOT NULL CHECK (point_key ~ '^[A-Za-z][A-Za-z0-9_.:-]{0,127}$'),
+  point_code text NOT NULL CHECK (point_code ~ '^[a-z][a-z0-9_]{0,127}$'),
   source_key text NOT NULL CHECK (source_key ~ '^[A-Za-z][A-Za-z0-9_.:-]{0,127}$'),
   display_name text NOT NULL,
-  point_kind text NOT NULL CHECK (point_kind IN ('MEASURED', 'CALCULATED', 'STATE', 'COMMAND', 'FEEDBACK')),
+  point_type text NOT NULL CHECK (point_type IN ('TELEMETRY', 'COUNTER', 'STATE', 'SETTING', 'COMMAND')),
   value_type text NOT NULL CHECK (value_type IN ('BOOLEAN', 'NUMBER', 'STRING', 'JSON')),
   unit text,
   writable boolean NOT NULL DEFAULT false,
   sample_interval_ms integer NOT NULL CHECK (sample_interval_ms BETWEEN 100 AND 86400000),
   publish_interval_ms integer NOT NULL CHECK (publish_interval_ms BETWEEN 100 AND 86400000),
   stale_after_ms integer NOT NULL CHECK (stale_after_ms BETWEEN 100 AND 604800000),
-  formula_revision text,
   source_metadata jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(source_metadata) = 'object'),
   status text NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE', 'RETIRED')),
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  UNIQUE (organization_id, site_id, id),
-  UNIQUE (organization_id, site_id, reporting_device_id, point_key),
-  FOREIGN KEY (organization_id, site_id, reporting_device_id) REFERENCES core_registry.devices(organization_id, site_id, id),
-  FOREIGN KEY (organization_id, site_id, sensor_id) REFERENCES core_registry.sensors(organization_id, site_id, id),
-  CHECK ((point_kind = 'CALCULATED') = (formula_revision IS NOT NULL)),
-  CHECK (writable = (point_kind = 'COMMAND')),
+  UNIQUE (tenant_id, site_id, id),
+  UNIQUE (tenant_id, site_id, reporting_device_id, point_code),
+  FOREIGN KEY (tenant_id) REFERENCES iam.tenants(id),
+  FOREIGN KEY (tenant_id, site_id, reporting_device_id) REFERENCES core_registry.devices(tenant_id, site_id, id),
+  FOREIGN KEY (tenant_id, site_id, sensor_id) REFERENCES core_registry.sensors(tenant_id, site_id, id),
+  CHECK (point_type <> 'COMMAND' OR writable),
+  CHECK (point_type IN ('COMMAND', 'SETTING') OR NOT writable),
   CHECK (publish_interval_ms >= sample_interval_ms),
   CHECK (stale_after_ms >= publish_interval_ms),
   CHECK (updated_at >= created_at)
@@ -230,188 +222,94 @@ CREATE TABLE IF NOT EXISTS core_registry.telemetry_points (
 
 CREATE TABLE IF NOT EXISTS core_registry.point_subject_bindings (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
+  tenant_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(tenant_id)),
   site_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(site_id)),
   point_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(point_id)),
-  subject_type text NOT NULL CHECK (subject_type IN ('SITE', 'AREA', 'EQUIPMENT')),
-  area_id uuid,
-  equipment_id uuid,
-  binding_role text NOT NULL CHECK (binding_role IN ('DESCRIBES', 'CONTROLS', 'AGGREGATES')),
+  subject_type text NOT NULL CHECK (subject_type IN ('SITE', 'SPACE', 'ASSET')),
+  space_id uuid,
+  asset_id uuid,
+  binding_role text NOT NULL CHECK (binding_role IN ('DESCRIBES', 'CONTROLS')),
   status text NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE', 'RETIRED')),
   valid_from timestamptz NOT NULL,
   valid_to timestamptz,
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  FOREIGN KEY (organization_id, site_id, point_id) REFERENCES core_registry.telemetry_points(organization_id, site_id, id),
-  FOREIGN KEY (organization_id, site_id, area_id) REFERENCES core_registry.areas(organization_id, site_id, id),
-  FOREIGN KEY (organization_id, site_id, equipment_id) REFERENCES core_registry.equipment(organization_id, site_id, id),
-  CHECK ((subject_type = 'SITE' AND area_id IS NULL AND equipment_id IS NULL)
-      OR (subject_type = 'AREA' AND area_id IS NOT NULL AND equipment_id IS NULL)
-      OR (subject_type = 'EQUIPMENT' AND area_id IS NULL AND equipment_id IS NOT NULL)),
+  FOREIGN KEY (tenant_id) REFERENCES iam.tenants(id),
+  FOREIGN KEY (tenant_id, site_id, point_id) REFERENCES core_registry.telemetry_points(tenant_id, site_id, id),
+  FOREIGN KEY (tenant_id, site_id, space_id) REFERENCES core_registry.spaces(tenant_id, site_id, id),
+  FOREIGN KEY (tenant_id, site_id, asset_id) REFERENCES core_registry.assets(tenant_id, site_id, id),
+  CHECK ((subject_type = 'SITE' AND space_id IS NULL AND asset_id IS NULL)
+      OR (subject_type = 'SPACE' AND space_id IS NOT NULL AND asset_id IS NULL)
+      OR (subject_type = 'ASSET' AND space_id IS NULL AND asset_id IS NOT NULL)),
   CHECK (valid_to IS NULL OR valid_to > valid_from),
   CHECK (updated_at >= created_at)
 );
 
-CREATE TABLE IF NOT EXISTS core_registry.calculated_point_inputs (
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
-  site_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(site_id)),
-  calculated_point_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(calculated_point_id)),
-  input_point_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(input_point_id)),
-  input_role text NOT NULL,
-  ordinal integer NOT NULL CHECK (ordinal >= 0),
-  formula_revision text NOT NULL,
-  PRIMARY KEY (calculated_point_id, input_point_id, input_role),
-  UNIQUE (calculated_point_id, ordinal),
-  FOREIGN KEY (organization_id, site_id, calculated_point_id) REFERENCES core_registry.telemetry_points(organization_id, site_id, id),
-  FOREIGN KEY (organization_id, site_id, input_point_id) REFERENCES core_registry.telemetry_points(organization_id, site_id, id),
-  CHECK (calculated_point_id <> input_point_id)
-);
-
-CREATE OR REPLACE FUNCTION core_registry.assert_calculated_point_inputs(target_id uuid)
-RETURNS void
-LANGUAGE plpgsql
-AS $function$
-DECLARE
-  target_kind text;
-  target_formula text;
-  input_count integer;
-  mismatched_count integer;
-BEGIN
-  SELECT point_kind, formula_revision INTO target_kind, target_formula
-  FROM core_registry.telemetry_points
-  WHERE id = target_id;
-  IF NOT FOUND THEN
-    RETURN;
-  END IF;
-  SELECT count(*), count(*) FILTER (WHERE formula_revision <> target_formula)
-    INTO input_count, mismatched_count
-  FROM core_registry.calculated_point_inputs
-  WHERE calculated_point_id = target_id;
-  IF target_kind = 'CALCULATED' AND input_count = 0 THEN
-    RAISE EXCEPTION 'calculated point requires at least one input' USING ERRCODE = '23514';
-  END IF;
-  IF target_kind <> 'CALCULATED' AND input_count > 0 THEN
-    RAISE EXCEPTION 'only calculated points may reference inputs' USING ERRCODE = '23514';
-  END IF;
-  IF mismatched_count > 0 THEN
-    RAISE EXCEPTION 'calculated point input formula revision mismatch' USING ERRCODE = '23514';
-  END IF;
-END
-$function$;
-
-CREATE OR REPLACE FUNCTION core_registry.validate_calculated_point_row()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $function$
-BEGIN
-  PERFORM core_registry.assert_calculated_point_inputs(NEW.id);
-  RETURN NULL;
-END
-$function$;
-
-CREATE OR REPLACE FUNCTION core_registry.validate_calculated_input_target()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $function$
-BEGIN
-  PERFORM core_registry.assert_calculated_point_inputs(
-    CASE WHEN TG_OP = 'DELETE' THEN OLD.calculated_point_id ELSE NEW.calculated_point_id END
-  );
-  RETURN NULL;
-END
-$function$;
-
-DROP TRIGGER IF EXISTS calculated_points_validate_inputs ON core_registry.telemetry_points;
-CREATE CONSTRAINT TRIGGER calculated_points_validate_inputs
-AFTER INSERT OR UPDATE OF point_kind, formula_revision ON core_registry.telemetry_points
-DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION core_registry.validate_calculated_point_row();
-
-DROP TRIGGER IF EXISTS calculated_inputs_validate_target ON core_registry.calculated_point_inputs;
-CREATE CONSTRAINT TRIGGER calculated_inputs_validate_target
-AFTER INSERT OR UPDATE OR DELETE ON core_registry.calculated_point_inputs
-DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION core_registry.validate_calculated_input_target();
-
-CREATE INDEX IF NOT EXISTS areas_registry_page_idx
-  ON core_registry.areas (organization_id, site_id, parent_area_id, display_name COLLATE "C", id);
-CREATE INDEX IF NOT EXISTS equipment_area_bindings_scope_idx
-  ON core_registry.equipment_area_bindings (organization_id, site_id, area_id, equipment_id);
-CREATE INDEX IF NOT EXISTS device_area_bindings_scope_idx
-  ON core_registry.device_area_bindings (organization_id, site_id, area_id, device_id);
+CREATE INDEX IF NOT EXISTS spaces_registry_page_idx
+  ON core_registry.spaces (tenant_id, site_id, parent_space_id, display_name COLLATE "C", id);
+CREATE INDEX IF NOT EXISTS asset_space_bindings_scope_idx
+  ON core_registry.asset_space_bindings (tenant_id, site_id, space_id, asset_id);
+CREATE INDEX IF NOT EXISTS device_space_bindings_scope_idx
+  ON core_registry.device_space_bindings (tenant_id, site_id, space_id, device_id);
 CREATE INDEX IF NOT EXISTS sensors_registry_page_idx
-  ON core_registry.sensors (organization_id, site_id, display_name COLLATE "C", id);
-CREATE INDEX IF NOT EXISTS sensor_subject_bindings_scope_idx
-  ON core_registry.sensor_subject_bindings (organization_id, site_id, subject_type, area_id, equipment_id, sensor_id);
+  ON core_registry.sensors (tenant_id, site_id, display_name COLLATE "C", id);
 CREATE INDEX IF NOT EXISTS telemetry_points_device_key_idx
-  ON core_registry.telemetry_points (organization_id, site_id, reporting_device_id, point_key COLLATE "C", id);
+  ON core_registry.telemetry_points (tenant_id, site_id, reporting_device_id, point_code COLLATE "C", id);
 CREATE INDEX IF NOT EXISTS point_subject_bindings_scope_idx
-  ON core_registry.point_subject_bindings (organization_id, site_id, subject_type, area_id, equipment_id, point_id);
+  ON core_registry.point_subject_bindings (tenant_id, site_id, subject_type, space_id, asset_id, point_id);
 
-ALTER TABLE core_registry.areas ENABLE ROW LEVEL SECURITY;
-ALTER TABLE core_registry.equipment_area_bindings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE core_registry.device_area_bindings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE core_registry.spaces ENABLE ROW LEVEL SECURITY;
+ALTER TABLE core_registry.asset_space_bindings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE core_registry.device_space_bindings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.sensors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.sensor_device_bindings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE core_registry.sensor_area_bindings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE core_registry.sensor_subject_bindings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE core_registry.sensor_space_bindings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.telemetry_points ENABLE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.point_subject_bindings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE core_registry.calculated_point_inputs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE core_registry.areas FORCE ROW LEVEL SECURITY;
-ALTER TABLE core_registry.equipment_area_bindings FORCE ROW LEVEL SECURITY;
-ALTER TABLE core_registry.device_area_bindings FORCE ROW LEVEL SECURITY;
+ALTER TABLE core_registry.spaces FORCE ROW LEVEL SECURITY;
+ALTER TABLE core_registry.asset_space_bindings FORCE ROW LEVEL SECURITY;
+ALTER TABLE core_registry.device_space_bindings FORCE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.sensors FORCE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.sensor_device_bindings FORCE ROW LEVEL SECURITY;
-ALTER TABLE core_registry.sensor_area_bindings FORCE ROW LEVEL SECURITY;
-ALTER TABLE core_registry.sensor_subject_bindings FORCE ROW LEVEL SECURITY;
+ALTER TABLE core_registry.sensor_space_bindings FORCE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.telemetry_points FORCE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.point_subject_bindings FORCE ROW LEVEL SECURITY;
-ALTER TABLE core_registry.calculated_point_inputs FORCE ROW LEVEL SECURITY;
 
-CREATE POLICY areas_runtime_scope ON core_registry.areas
+CREATE POLICY spaces_runtime_scope ON core_registry.spaces
   FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_site(organization_id, site_id));
-CREATE POLICY equipment_area_bindings_runtime_scope ON core_registry.equipment_area_bindings
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY asset_space_bindings_runtime_scope ON core_registry.asset_space_bindings
   FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_site(organization_id, site_id));
-CREATE POLICY device_area_bindings_runtime_scope ON core_registry.device_area_bindings
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY device_space_bindings_runtime_scope ON core_registry.device_space_bindings
   FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_site(organization_id, site_id));
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
 CREATE POLICY sensors_runtime_scope ON core_registry.sensors
   FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_site(organization_id, site_id));
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
 CREATE POLICY sensor_device_bindings_runtime_scope ON core_registry.sensor_device_bindings
   FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_site(organization_id, site_id));
-CREATE POLICY sensor_area_bindings_runtime_scope ON core_registry.sensor_area_bindings
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
+CREATE POLICY sensor_space_bindings_runtime_scope ON core_registry.sensor_space_bindings
   FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_site(organization_id, site_id));
-CREATE POLICY sensor_subject_bindings_runtime_scope ON core_registry.sensor_subject_bindings
-  FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_site(organization_id, site_id));
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
 CREATE POLICY telemetry_points_runtime_scope ON core_registry.telemetry_points
   FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_site(organization_id, site_id));
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
 CREATE POLICY point_subject_bindings_runtime_scope ON core_registry.point_subject_bindings
   FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_site(organization_id, site_id));
-CREATE POLICY calculated_point_inputs_runtime_scope ON core_registry.calculated_point_inputs
-  FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_site(organization_id, site_id));
+  USING (tenant_id = core_registry.current_tenant_id() AND core_registry.is_authorized_site(site_id));
 
-GRANT SELECT ON core_registry.areas, core_registry.equipment_area_bindings,
-  core_registry.device_area_bindings, core_registry.sensors,
-  core_registry.sensor_device_bindings, core_registry.sensor_area_bindings,
-  core_registry.sensor_subject_bindings, core_registry.telemetry_points,
-  core_registry.point_subject_bindings, core_registry.calculated_point_inputs TO s1_core_runtime;
+GRANT SELECT ON core_registry.spaces, core_registry.asset_space_bindings,
+  core_registry.device_space_bindings, core_registry.sensors,
+  core_registry.sensor_device_bindings, core_registry.sensor_space_bindings,
+  core_registry.telemetry_points, core_registry.point_subject_bindings TO s1_core_runtime;
 
-REVOKE ALL ON core_registry.areas, core_registry.equipment_area_bindings,
-  core_registry.device_area_bindings, core_registry.sensors,
-  core_registry.sensor_device_bindings, core_registry.sensor_area_bindings,
-  core_registry.sensor_subject_bindings, core_registry.telemetry_points,
-  core_registry.point_subject_bindings, core_registry.calculated_point_inputs FROM PUBLIC;
+REVOKE ALL ON core_registry.spaces, core_registry.asset_space_bindings,
+  core_registry.device_space_bindings, core_registry.sensors,
+  core_registry.sensor_device_bindings, core_registry.sensor_space_bindings,
+  core_registry.telemetry_points, core_registry.point_subject_bindings FROM PUBLIC;
 
 RESET ROLE;
 COMMIT;

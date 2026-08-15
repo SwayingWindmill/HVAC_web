@@ -48,7 +48,7 @@ func (factory *HMACTokenFactory) Token(_ context.Context, caller analytics.Calle
 		Subject        string   `json:"sub"`
 		IssuedAt       int64    `json:"iat"`
 		ExpiresAt      int64    `json:"exp"`
-		OrganizationID string   `json:"organizationId"`
+		TenantID       string   `json:"tenantId"`
 		SiteID         string   `json:"siteId"`
 		SiteIDs        []string `json:"siteIds"`
 		Groups         []string `json:"groups"`
@@ -58,7 +58,7 @@ func (factory *HMACTokenFactory) Token(_ context.Context, caller analytics.Calle
 		Subject:        caller.PrincipalID,
 		IssuedAt:       now.Unix(),
 		ExpiresAt:      now.Add(30 * time.Second).Unix(),
-		OrganizationID: productQuery.OrganizationID,
+		TenantID:       productQuery.TenantID,
 		SiteID:         productQuery.SiteID,
 		SiteIDs:        []string{productQuery.SiteID},
 		Groups:         []string{"analytics_reader"},

@@ -9,7 +9,7 @@ import (
 
 type AlarmDecisionAudit struct {
 	PrincipalID          string
-	ActingOrganizationID string
+	TenantID string
 	SiteID               string
 	AlarmID              string
 	Action               alarmauth.Action
@@ -38,7 +38,7 @@ func (sink *loggerAlarmDecisionAuditSink) RecordAlarmDecision(ctx context.Contex
 		"trace_id", event.TraceID,
 		"request_id", event.RequestID,
 		"principal_id", event.PrincipalID,
-		"acting_organization_id", event.ActingOrganizationID,
+		"tenant_id", event.TenantID,
 		"site_id", event.SiteID,
 		"alarm_id", event.AlarmID,
 		"action", event.Action,

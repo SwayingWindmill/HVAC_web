@@ -8,10 +8,10 @@ import {
   projectOperationsInvestigationToAgUiEvents,
 } from '../dist/transport-ag-ui/index.js';
 
-const organizationId = '0198f5c0-7c00-7000-8000-000000000001';
+const tenantId = '0198f5c0-7c00-7000-8000-000000000001';
 const siteId = '0198f5c0-7c00-7000-8000-000000000002';
 const investigationId = 'investigation-ag-ui-001';
-const scope = Object.freeze({ organizationId, siteId, equipmentId: null, deviceId: null });
+const scope = Object.freeze({ tenantId, siteId, equipmentId: null, deviceId: null });
 
 const receipt = (overrides) => ({
   schemaVersion: 1,
@@ -79,7 +79,7 @@ const completedView = Object.freeze({
     statement: 'Site night energy increased by 24%.',
     evidenceIds: ['evidence-001'],
     analysisReferenceIds: ['analysis-001'],
-    conclusion: { status: 'SUPPORTED', scope: 'SITE', organizationId, siteId },
+    conclusion: { status: 'SUPPORTED', scope: 'SITE', tenantId, siteId },
   }],
   toolReceipts: [
     receipt({

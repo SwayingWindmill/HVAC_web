@@ -24,7 +24,7 @@ type AuditRecord struct {
 	RouteRevision       int64
 	CompatibilityMode   string
 	CohortBucket        *int
-	OrganizationID      string
+	TenantID      string
 	InitiatingSubject   string
 	InitiatingIssuer    string
 	ExecutingService    string
@@ -125,7 +125,7 @@ func (sink *PostgresAuditSink) Record(ctx context.Context, record AuditRecord) e
 		INSERT INTO gateway.route_audit_records (
 			message_id, event_type, route_key, method, path_template, selected_owner,
 			previous_owner, registry_revision, previous_revision, route_revision,
-			compatibility_mode, cohort_bucket, organization_id, initiating_subject,
+			compatibility_mode, cohort_bucket, tenant_id, initiating_subject,
 			initiating_issuer, executing_service, executing_spiffe_id, policy_revision,
 			correlation_id, trace_id, outcome_code, primary_status, secondary_status,
 			primary_body_sha256, secondary_body_sha256, semantic_equal, occurred_at
@@ -133,7 +133,7 @@ func (sink *PostgresAuditSink) Record(ctx context.Context, record AuditRecord) e
 	`, record.MessageID, record.EventType, record.RouteKey, record.Method, record.PathTemplate,
 		record.SelectedOwner, record.PreviousOwner, record.RegistryRevision,
 		record.PreviousRevision, record.RouteRevision, record.CompatibilityMode,
-		record.CohortBucket, record.OrganizationID, record.InitiatingSubject,
+		record.CohortBucket, record.TenantID, record.InitiatingSubject,
 		record.InitiatingIssuer, record.ExecutingService, record.ExecutingSPIFFEID,
 		record.PolicyRevision, record.CorrelationID, record.TraceID, record.OutcomeCode,
 		nullableStatus(record.PrimaryStatus), nullableStatus(record.SecondaryStatus),

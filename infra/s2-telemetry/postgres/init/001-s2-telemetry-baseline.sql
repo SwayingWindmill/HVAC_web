@@ -16,7 +16,7 @@ GRANT EXECUTE ON FUNCTION telemetry_runtime.is_uuid_v7(uuid) TO s2_telemetry_run
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.registry_device_bindings (
   device_id uuid PRIMARY KEY CHECK (telemetry_runtime.is_uuid_v7(device_id)),
-  owning_organization_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(owning_organization_id)),
+  tenant_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(tenant_id)),
   site_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(site_id)),
   integration_instance_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(integration_instance_id)),
   external_entity_type text NOT NULL CHECK (external_entity_type IN ('DEVICE', 'ASSET')),
@@ -34,13 +34,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS registry_device_bindings_active_external_key_u
   ON telemetry_runtime.registry_device_bindings (integration_instance_id, external_entity_type, external_id)
   WHERE binding_status = 'ACTIVE' AND valid_to IS NULL;
 CREATE INDEX IF NOT EXISTS registry_device_bindings_tenant_idx
-  ON telemetry_runtime.registry_device_bindings (owning_organization_id, site_id, device_id);
+  ON telemetry_runtime.registry_device_bindings (tenant_id, site_id, device_id);
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.iam_scope_projections (
   projection_id uuid PRIMARY KEY CHECK (telemetry_runtime.is_uuid_v7(projection_id)),
+  tenant_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(tenant_id)),
   principal_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(principal_id)),
-  acting_organization_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(acting_organization_id)),
-  owning_organization_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(owning_organization_id)),
   site_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(site_id)),
   device_id uuid NOT NULL REFERENCES telemetry_runtime.registry_device_bindings(device_id),
   telemetry_key text CHECK (telemetry_key IS NULL OR telemetry_key ~ '^[A-Za-z][A-Za-z0-9_.:-]{0,127}$'),
@@ -56,10 +55,10 @@ CREATE TABLE IF NOT EXISTS telemetry_runtime.iam_scope_projections (
 
 CREATE UNIQUE INDEX IF NOT EXISTS iam_scope_projections_identity_uidx
   ON telemetry_runtime.iam_scope_projections
-  (principal_id, acting_organization_id, device_id, telemetry_key, action, policy_revision) NULLS NOT DISTINCT;
+  (tenant_id, principal_id, device_id, telemetry_key, action, policy_revision) NULLS NOT DISTINCT;
 CREATE INDEX IF NOT EXISTS iam_scope_projections_lookup_idx
   ON telemetry_runtime.iam_scope_projections
-  (principal_id, acting_organization_id, device_id, action, valid_until)
+  (tenant_id, principal_id, device_id, action, valid_until)
   WHERE revoked_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS telemetry_runtime.presence_policies (
@@ -147,7 +146,7 @@ CREATE TABLE IF NOT EXISTS telemetry_runtime.latest_accepted_telemetry (
   sampled_at timestamptz NOT NULL,
   received_at timestamptz NOT NULL,
   freshness text NOT NULL CHECK (freshness IN ('FRESH', 'STALE')),
-  quality text NOT NULL CHECK (quality IN ('GOOD', 'SUSPECT')),
+  quality text NOT NULL CHECK (quality IN ('GOOD', 'PARTIAL', 'ESTIMATED', 'MANUAL', 'STALE', 'INVALID')),
   quality_reasons text[] NOT NULL DEFAULT '{}',
   policy_revision bigint NOT NULL CHECK (policy_revision >= 1),
   updated_at timestamptz NOT NULL,
@@ -186,7 +185,7 @@ CREATE TABLE IF NOT EXISTS telemetry_runtime.telemetry_subscriptions (
   subscription_id text PRIMARY KEY CHECK (char_length(subscription_id) BETWEEN 16 AND 256 AND subscription_id ~ '^[A-Za-z0-9_-]+$'),
   client_subscription_id text NOT NULL CHECK (char_length(client_subscription_id) BETWEEN 1 AND 128 AND client_subscription_id ~ '^[A-Za-z0-9_.:-]+$'),
   principal_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(principal_id)),
-  acting_organization_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(acting_organization_id)),
+  tenant_id uuid NOT NULL CHECK (telemetry_runtime.is_uuid_v7(tenant_id)),
   device_id uuid NOT NULL REFERENCES telemetry_runtime.registry_device_bindings(device_id),
   keys jsonb NOT NULL CHECK (jsonb_typeof(keys) = 'array'),
   scope_sha256 text NOT NULL CHECK (scope_sha256 ~ '^[a-f0-9]{64}$'),

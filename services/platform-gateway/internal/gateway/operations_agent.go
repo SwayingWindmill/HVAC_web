@@ -233,14 +233,13 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		"X-CSRF-Token",
 		"X-Principal",
 		"X-Roles",
-		"X-Organization-ID",
+		"X-Tenant-ID",
 		"X-Site-ID",
 		"X-Admin",
-		"X-Acting-Organization-ID",
 		"X-Command-Grant",
 		"X-Command-Read-Context",
 		"X-Operations-Registry-Site-Grant",
-		"X-Operations-Registry-Equipment-Grant",
+		"X-Operations-Registry-Asset-Grant",
 		"X-Operations-Energy-Grant",
 	} {
 		if request.Header.Get(header) != "" {
@@ -293,15 +292,15 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 			return
 		}
 		siteID, registryAction = registryInput.SiteID, registryauth.ActionSiteRead
-	case "registry.listSiteEquipment":
+	case "registry.listSiteAsset":
 		var registryInput struct {
 			SiteID string `json:"siteId"`
 		}
 		if decodeStrictOperationsJSON(input.Request.Input, &registryInput) != nil {
-			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Registry Equipment request is invalid.", false, nil)
+			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Registry Asset request is invalid.", false, nil)
 			return
 		}
-		siteID, registryAction = registryInput.SiteID, registryauth.ActionEquipmentList
+		siteID, registryAction = registryInput.SiteID, registryauth.ActionAssetList
 	case "analytics.getEnergySeries":
 		if decodeStrictOperationsJSON(input.Request.Input, &energyQuery) != nil || energyQuery.Validate() != nil {
 			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Energy Series request is invalid.", false, nil)
@@ -317,7 +316,7 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		return
 	}
 	claims, err := identitycontext.VerifyDelegation(h.identity.config.DelegationSigner.Public(), request.Header.Get("X-Delegation-Grant"))
-	if err != nil || claims.ActingOrganizationID == "" || claims.PolicyRevision != h.identity.config.PolicyRevision {
+	if err != nil || claims.TenantID == "" || claims.PolicyRevision != h.identity.config.PolicyRevision {
 		writeProblem(writer, request, http.StatusUnauthorized, "OPERATIONS_DELEGATION_INVALID", "Operations delegation invalid", "The Operations service delegation is invalid.", false, nil)
 		return
 	}
@@ -327,13 +326,13 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		return
 	}
 	stored, err := h.identity.store.GetSession(request.Context(), claims.SessionID)
-	if err != nil || stored.RevokedAt != nil || !h.identity.now().Before(stored.ExpiresAt) || stored.ActingOrganizationID != claims.ActingOrganizationID || stored.Principal.Subject != claims.Subject || stored.Principal.Issuer != claims.SubjectIssuer {
+	if err != nil || stored.RevokedAt != nil || !h.identity.now().Before(stored.ExpiresAt) || stored.TenantID != claims.TenantID || stored.Principal.Subject != claims.Subject || stored.Principal.Issuer != claims.SubjectIssuer {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
 		return
 	}
 	session := bffSession{Session: stored}
 	if input.Request.Tool == "analytics.getEnergySeries" {
-		if energyQuery.OrganizationID != stored.ActingOrganizationID || energyQuery.SiteID != siteID {
+		if energyQuery.SiteID != siteID {
 			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
 			return
 		}
@@ -372,7 +371,7 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		registryAction,
 		h.operations.workloadSPIFFEID,
 	)
-	if failure != nil || !operationsScopeAllows(authorization.legacyScopes, stored.ActingOrganizationID, siteID) {
+	if failure != nil || !registryAuthorizationAllowsSite(authorization, siteID) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
 		return
 	}
@@ -431,7 +430,7 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 		return
 	}
 	siteAuthorization, failure := h.authorizeRegistry(request.Context(), session, registryauth.ActionSiteRead)
-	if failure != nil || !operationsScopeAllows(siteAuthorization.legacyScopes, session.ActingOrganizationID, route.siteID) {
+	if failure != nil || !registryAuthorizationAllowsSite(siteAuthorization, route.siteID) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
 		return
 	}
@@ -469,7 +468,7 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 	} else {
 		upstream.Header.Set("Accept", "application/json, application/problem+json")
 	}
-	upstream.Header.Set("X-Acting-Organization-ID", session.ActingOrganizationID)
+	upstream.Header.Set("X-Tenant-ID", session.TenantID)
 	upstream.Header.Set("X-Delegation-Grant", serviceDelegation)
 	upstream.Header.Set(
 		"X-Route-Policy-Revision",
@@ -572,13 +571,9 @@ func (c *operationsAgentController) allow(sessionID string, now time.Time) bool 
 	return true
 }
 
-func operationsScopeAllows(scopes []string, organizationID, siteID string) bool {
-	for _, scope := range scopes {
-		if scope == "site:"+siteID || scope == "organization:"+organizationID {
-			return true
-		}
-	}
-	return false
+func registryAuthorizationAllowsSite(authorization registryAuthorization, siteID string) bool {
+	_, allowed := authorization.allowedSiteIDs[siteID]
+	return allowed
 }
 
 func (h *handler) operationsServiceDelegation(session bffSession, siteID string) (string, error) {
@@ -592,7 +587,7 @@ func (h *handler) operationsServiceDelegation(session bffSession, siteID string)
 		SubjectIssuer: session.Principal.Issuer, DisplayName: session.Principal.DisplayName,
 		Email: session.Principal.Email, Roles: append([]string(nil), session.Principal.Roles...),
 		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE, Audience: h.operations.audience,
-		ActingOrganizationID: session.ActingOrganizationID, Actions: []string{"operations:investigate"},
+		TenantID: session.TenantID, Actions: []string{"operations:investigate"},
 		Scopes: []string{"site:" + siteID, "session:" + session.ID}, PolicyRevision: h.identity.config.PolicyRevision,
 		SessionID: session.ID, IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	})
@@ -702,23 +697,23 @@ func operationsStringArray(value any, minimum, maximum int) ([]string, bool) {
 
 func validateOperationsScopeValue(value any, siteOnly bool) error {
 	scope, ok := value.(map[string]any)
-	if !ok || !operationsExactKeys(scope, "organizationId", "siteId", "equipmentId", "deviceId") {
+	if !ok || !operationsExactKeys(scope, "tenantId", "siteId", "assetId", "deviceId") {
 		return errors.New("invalid Operations Scope")
 	}
-	if _, ok := operationsBoundedString(scope["organizationId"], 256); !ok {
-		return errors.New("invalid Operations Organization Scope")
+	if _, ok := operationsBoundedString(scope["tenantId"], 256); !ok {
+		return errors.New("invalid Operations Tenant Scope")
 	}
 	if _, ok := operationsBoundedString(scope["siteId"], 256); !ok {
 		return errors.New("invalid Operations Site Scope")
 	}
 	if siteOnly {
-		if scope["equipmentId"] != nil || scope["deviceId"] != nil {
+		if scope["assetId"] != nil || scope["deviceId"] != nil {
 			return errors.New("Operations Investigation Scope must remain Site-only")
 		}
 		return nil
 	}
-	if _, ok := operationsNullableBoundedString(scope["equipmentId"], 256); !ok {
-		return errors.New("invalid Operations Equipment Scope")
+	if _, ok := operationsNullableBoundedString(scope["assetId"], 256); !ok {
+		return errors.New("invalid Operations Asset Scope")
 	}
 	if _, ok := operationsNullableBoundedString(scope["deviceId"], 256); !ok {
 		return errors.New("invalid Operations Device Scope")
@@ -727,9 +722,9 @@ func validateOperationsScopeValue(value any, siteOnly bool) error {
 }
 
 func operationsScopesEqual(left, right map[string]any) bool {
-	return left["organizationId"] == right["organizationId"] &&
+	return left["tenantId"] == right["tenantId"] &&
 		left["siteId"] == right["siteId"] &&
-		left["equipmentId"] == right["equipmentId"] &&
+		left["assetId"] == right["assetId"] &&
 		left["deviceId"] == right["deviceId"]
 }
 
@@ -760,7 +755,7 @@ func validateOperationsEvidenceQuality(value any) error {
 	return nil
 }
 
-func validateOperationsEvidenceSource(value any, organizationID, siteID string) (string, error) {
+func validateOperationsEvidenceSource(value any, tenantID, siteID string) (string, error) {
 	source, ok := value.(map[string]any)
 	if !ok || !operationsExactKeys(source,
 		"owner", "scope", "requestId", "registryRevision", "datasetRevision", "watermark",
@@ -773,7 +768,7 @@ func validateOperationsEvidenceSource(value any, organizationID, siteID string) 
 		return "", errors.New("invalid Operations Evidence source Owner or Scope")
 	}
 	sourceScope := source["scope"].(map[string]any)
-	if sourceScope["organizationId"] != organizationID || sourceScope["siteId"] != siteID {
+	if sourceScope["tenantId"] != tenantID || sourceScope["siteId"] != siteID {
 		return "", errors.New("Operations Evidence source exceeds Investigation Scope")
 	}
 	requestID, ok := operationsBoundedString(source["requestId"], 256)
@@ -805,7 +800,7 @@ func validateOperationsEvidenceSource(value any, organizationID, siteID string) 
 	return owner + ":" + requestID, nil
 }
 
-func validateOperationsEvidenceRecord(value any, investigationID, organizationID, siteID string) (string, error) {
+func validateOperationsEvidenceRecord(value any, investigationID, tenantID, siteID string) (string, error) {
 	record, ok := value.(map[string]any)
 	if !ok || !operationsExactKeys(record,
 		"schemaVersion", "recordType", "id", "investigationId", "recordedAt", "evidenceKind",
@@ -829,7 +824,7 @@ func validateOperationsEvidenceRecord(value any, investigationID, organizationID
 	}
 	seen := make(map[string]struct{}, len(sources))
 	for _, candidate := range sources {
-		identity, err := validateOperationsEvidenceSource(candidate, organizationID, siteID)
+		identity, err := validateOperationsEvidenceSource(candidate, tenantID, siteID)
 		if err != nil {
 			return "", err
 		}
@@ -892,15 +887,15 @@ func validateOperationsRequiredNextPeriod(value any) error {
 	return nil
 }
 
-func validateOperationsRequiredNext(value any, organizationID, siteID string) error {
+func validateOperationsRequiredNext(value any, tenantID, siteID string) error {
 	requirement, ok := value.(map[string]any)
 	if !ok || !operationsExactKeys(requirement,
-		"status", "kind", "owner", "capability", "organizationId", "siteId", "equipmentIds",
+		"status", "kind", "owner", "capability", "tenantId", "siteId", "assetIds",
 		"targetPeriod", "baselinePeriod", "requiredMetadata",
-	) || requirement["status"] != "REQUIRED_NEXT" || requirement["organizationId"] != organizationID || requirement["siteId"] != siteID {
+	) || requirement["status"] != "REQUIRED_NEXT" || requirement["tenantId"] != tenantID || requirement["siteId"] != siteID {
 		return errors.New("invalid Operations required-next Scope")
 	}
-	if _, ok := operationsStringArray(requirement["equipmentIds"], 0, 32); !ok ||
+	if _, ok := operationsStringArray(requirement["assetIds"], 0, 32); !ok ||
 		validateOperationsRequiredNextPeriod(requirement["targetPeriod"]) != nil ||
 		validateOperationsRequiredNextPeriod(requirement["baselinePeriod"]) != nil {
 		return errors.New("invalid Operations required-next Evidence period")
@@ -912,12 +907,12 @@ func validateOperationsRequiredNext(value any, organizationID, siteID string) er
 	var expected []string
 	switch requirement["kind"] {
 	case "EQUIPMENT_ENERGY_BINDINGS":
-		if requirement["owner"] != "registry" || requirement["capability"] != "registry.getEquipmentEnergyBindings" {
+		if requirement["owner"] != "registry" || requirement["capability"] != "registry.getAssetEnergyBindings" {
 			return errors.New("invalid Operations Registry required-next capability")
 		}
 		expected = []string{"BUSINESS_REVISION", "QUALITY", "CAPTURED_AT", "PAYLOAD_DIGEST"}
 	case "EQUIPMENT_ENERGY_PERIOD_COMPARISON":
-		if requirement["owner"] != "telemetry-query-service" || requirement["capability"] != "analytics.energy.getEquipmentSeries" {
+		if requirement["owner"] != "telemetry-query-service" || requirement["capability"] != "analytics.energy.getAssetSeries" {
 			return errors.New("invalid Operations telemetry required-next capability")
 		}
 		expected = []string{"DATASET_REVISION", "WATERMARK", "PARTIAL", "QUALITY", "CAPTURED_AT", "PAYLOAD_DIGEST"}
@@ -935,7 +930,7 @@ func validateOperationsRequiredNext(value any, organizationID, siteID string) er
 	return nil
 }
 
-func validateOperationsFindingRecord(value any, investigationID, organizationID, siteID string) (string, error) {
+func validateOperationsFindingRecord(value any, investigationID, tenantID, siteID string) (string, error) {
 	record, ok := value.(map[string]any)
 	if !ok || !operationsExactKeys(record,
 		"schemaVersion", "recordType", "id", "investigationId", "recordedAt", "findingKind",
@@ -961,8 +956,8 @@ func validateOperationsFindingRecord(value any, investigationID, organizationID,
 	}
 	switch conclusion["status"] {
 	case "SUPPORTED":
-		if !operationsExactKeys(conclusion, "status", "scope", "organizationId", "siteId") || conclusion["scope"] != "SITE" ||
-			conclusion["organizationId"] != organizationID || conclusion["siteId"] != siteID || record["findingKind"] == "UNABLE_TO_CONCLUDE" {
+		if !operationsExactKeys(conclusion, "status", "scope", "tenantId", "siteId") || conclusion["scope"] != "SITE" ||
+			conclusion["tenantId"] != tenantID || conclusion["siteId"] != siteID || record["findingKind"] == "UNABLE_TO_CONCLUDE" {
 			return "", errors.New("Operations supported Finding exceeds Site authority")
 		}
 	case "UNABLE_TO_CONCLUDE":
@@ -984,7 +979,7 @@ func validateOperationsFindingRecord(value any, investigationID, organizationID,
 			}
 			seen := make(map[string]struct{}, len(requirements))
 			for _, candidate := range requirements {
-				if err := validateOperationsRequiredNext(candidate, organizationID, siteID); err != nil {
+				if err := validateOperationsRequiredNext(candidate, tenantID, siteID); err != nil {
 					return "", err
 				}
 				requirement := candidate.(map[string]any)
@@ -1125,7 +1120,7 @@ func validateOperationsToolReceiptRecord(value any, investigationID string) (str
 	tool, toolOK := record["logicalTool"].(string)
 	owner, ownerOK := record["owner"].(string)
 	expectedOwner := map[string]string{
-		"registry.getSite": "registry", "registry.listSiteEquipment": "registry",
+		"registry.getSite": "registry", "registry.listSiteAsset": "registry",
 		"telemetry.getCurrentSnapshot": "telemetry-query-service", "analytics.getEnergySeries": "telemetry-query-service",
 		"commands.getCapabilities": "command-service",
 	}[tool]
@@ -1276,7 +1271,7 @@ func validateOperationsInvestigationValue(root map[string]any, includeToolReceip
 		return errors.New("Operations resource exhaustion requires an unable-to-conclude Investigation outcome")
 	}
 	scope := root["scope"].(map[string]any)
-	organizationID := scope["organizationId"].(string)
+	tenantID := scope["tenantId"].(string)
 	siteID := scope["siteId"].(string)
 	activeRequestID := ""
 	if root["operatorInputRequest"] != nil {
@@ -1324,7 +1319,7 @@ func validateOperationsInvestigationValue(root map[string]any, includeToolReceip
 		}
 	}
 	if err := validateOperationsRecordArray(root["evidence"], 32, func(candidate any) (string, error) {
-		return validateOperationsEvidenceRecord(candidate, investigationID, organizationID, siteID)
+		return validateOperationsEvidenceRecord(candidate, investigationID, tenantID, siteID)
 	}); err != nil {
 		return err
 	}
@@ -1334,7 +1329,7 @@ func validateOperationsInvestigationValue(root map[string]any, includeToolReceip
 		return err
 	}
 	if err := validateOperationsRecordArray(root["findings"], 32, func(candidate any) (string, error) {
-		return validateOperationsFindingRecord(candidate, investigationID, organizationID, siteID)
+		return validateOperationsFindingRecord(candidate, investigationID, tenantID, siteID)
 	}); err != nil {
 		return err
 	}
@@ -1466,13 +1461,13 @@ func validateOperationsInvestigationList(raw []byte) error {
 		}
 		id, idOK := operationsBoundedString(item["id"], 256)
 		scope, scopeOK := item["scope"].(map[string]any)
-		if !idOK || !scopeOK || !operationsExactKeys(scope, "organizationId", "siteId", "equipmentId", "deviceId") {
+		if !idOK || !scopeOK || !operationsExactKeys(scope, "tenantId", "siteId", "assetId", "deviceId") {
 			return errors.New("invalid Operations Investigation summary Scope")
 		}
-		if _, ok := operationsBoundedString(scope["organizationId"], 256); !ok {
-			return errors.New("invalid Operations Investigation Organization")
+		if _, ok := operationsBoundedString(scope["tenantId"], 256); !ok {
+			return errors.New("invalid Operations Investigation Tenant")
 		}
-		if _, ok := operationsBoundedString(scope["siteId"], 256); !ok || scope["equipmentId"] != nil || scope["deviceId"] != nil {
+		if _, ok := operationsBoundedString(scope["siteId"], 256); !ok || scope["assetId"] != nil || scope["deviceId"] != nil {
 			return errors.New("invalid Operations Investigation Site Scope")
 		}
 		if !operationsAllowedString(item["status"], "DRAFT", "RUNNING", "PAUSED", "WAITING_FOR_OPERATOR_INPUT", "COMPLETED", "FAILED", "CANCELLED") {
@@ -1554,7 +1549,7 @@ func validateOperationsToolActivity(activity map[string]any) error {
 		return errors.New("invalid Operations Tool activity shape")
 	}
 	if _, ok := operationsBoundedString(activity["recordId"], 256); !ok ||
-		!operationsAllowedString(activity["logicalTool"], "registry.getSite", "registry.listSiteEquipment", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities") ||
+		!operationsAllowedString(activity["logicalTool"], "registry.getSite", "registry.listSiteAsset", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities") ||
 		!operationsAllowedString(activity["owner"], "registry", "telemetry-query-service", "command-service") ||
 		!operationsAllowedString(activity["resultCategory"], "SUCCEEDED", "REJECTED", "TIMED_OUT", "FAILED") {
 		return errors.New("invalid Operations Tool activity identity")
@@ -1722,7 +1717,7 @@ func validateOperationsEvent(name string, value map[string]any) error {
 			return errors.New("invalid Operations Tool start event")
 		}
 		if _, ok := operationsBoundedString(value["toolCallId"], 256); !ok ||
-			!operationsAllowedString(value["toolCallName"], "registry.getSite", "registry.listSiteEquipment", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities") {
+			!operationsAllowedString(value["toolCallName"], "registry.getSite", "registry.listSiteAsset", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities") {
 			return errors.New("invalid Operations Tool start value")
 		}
 	case "TOOL_CALL_ARGS":

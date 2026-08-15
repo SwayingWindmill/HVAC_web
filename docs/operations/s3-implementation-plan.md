@@ -93,23 +93,17 @@ S3-08 adds the disabled Command operations experience without new execution auth
 - Command Detail returns setpoint, approval threshold, S2 Snapshot Revision and a strictly versioned Timeline with only `PRINCIPAL` or `WORKLOAD` actor classes;
 - public approval accepts an empty JSON object; Gateway derives Principal and Approver Role from the authenticated Session, resolves the Device through Registry and requests an exact `COMMAND_APPROVE` Grant;
 - Command Service independently reconstructs approval evidence from its authoritative Intent, Payload Hash, Capability Revision and risk snapshot;
-- Mock mode supports UX audit with zero ThingsBoard or Device side effects;
+- Mock mode supports UX audit with zero provider or Device side effects;
 - real mode shows an explicit production-disabled state and does not attempt to bypass the disabled Route Ownership Registry.
 
-S3-09 now defines and automates the certification boundary without claiming that the real internal Device canary has occurred:
+S3-09 is now a small runtime-validation slice rather than an automated certification system:
 
-- the frozen capacity envelope is 100 commands/s for a 60-minute steady-state certification and 1,000 commands/s for a one-minute burst, with at least 30% measured headroom;
-- Command acceptance, governance, ready-to-send and status-propagation percentiles are checked against the accepted SLOs;
-- the required crash matrix covers PostgreSQL rollback, idempotency races, Dispatcher loss after claim, Consumer Rebalance, PRE_SEND retry, REQUEST_COMMITTED uncertainty, Connector crash, old Fence results, reported-state mismatch/deadline, Audit Intent failure and single-AZ loss;
-- deterministic Go and PostgreSQL tests remain the authority for Attempt, Fence, control-lane and request-write classification semantics;
-- `deploy/s3/certification-envelope.v1.json` defines all zero-tolerance counters, recovery objectives, bounded canary scope and required evidence;
-- `scripts/run-s3-command-certification.mjs --profile=preflight` validates repository configuration only and is never formal release evidence;
-- the formal profile requires a repository-SHA-bound target-environment attestation, a `VERIFIED` mapping, S2 current-state production certification, two distinct manual approvers, six to twelve operator-confirmed LOW-risk commands on exactly one internal Device, a four-hour hold and a future-command-only rollback drill;
-- even after formal S3-09 certification, the three browser Command routes remain disabled and production traffic remains 0% until a separate rollout decision changes Route Ownership.
+- exercise one Tenant, one Site and one LOW-risk Device over the native MQTT command path;
+- keep only focused regression checks for execution Fence handling, `PRE_SEND` retry and `REQUEST_COMMITTED` unknown-outcome semantics;
+- verify rollback affects future commands only and never rewrites existing command evidence;
+- keep public Command routes disabled until an explicit product rollout decision changes Route Ownership.
 
-Reuse evaluation for certification tooling considered `tsenart/vegeta` and `fortio/fortio` for target-environment load generation and `Shopify/toxiproxy` for transport fault injection. They are suitable optional runners for an approved environment, but none is added as a runtime dependency: exact Command safety semantics depend on project-specific Attempt, Fence, PostgreSQL and Connector evidence and therefore remain implemented as deterministic domain/integration tests. Formal attestations may record those tools in the environment evidence.
-
-The public routes, production Connector credentials and real production Device control remain blocked by formal S3-09 certification and explicit rollout approval. S3-09 remains `formal-certification-pending`; a configuration preflight or validator fixture must not add it to `completedTickets`.
+There is no S3 certification envelope, preflight gate, formal evidence bundle or automated release blocker. Target-environment load/failure testing can be run explicitly when needed without becoming part of the normal implementation path.
 
 ## Delivery order
 
@@ -120,54 +114,36 @@ The public routes, production Connector credentials and real production Device c
 | S3-03 | IAM Capability authorization, risk and approval snapshots | Forbidden |
 | S3-04 | Gateway create/query routes with Session and CSRF | Routes remain canary-disabled |
 | S3-05 | Durable device lane, lease, fence and takeover recovery | Synthetic only |
-| S3-06 | ThingsBoard control Connector and verified mappings | Internal test integration only |
+| S3-06 | Native MQTT control Connector and verified Edge mappings | Internal test integration only |
 | S3-07 | ACK, reported-state verification and unknown-outcome resolution | Internal test Devices only |
 | S3-08 | HVAC Web command timeline and approval experience | No new execution authority |
 | S3-09 | Capacity, crash-point tests and internal low-risk canary | Explicit approved cohort only |
 
 ## Verification commands
 
-```bash
-npm run s3:command-safety
-npm run s3:command-authority
-npm run s3:command-api
-npm run s3:thingsboard-contract
-npm run s3:command-ux
-npm run s3:certification:pr
-```
-
-`npm run s3:certification:pr` runs the deterministic target-runtime and certification preflight gate only. PostgreSQL command authority, TypeScript linting and the product build remain owned by their stable capability workflows instead of being repeated here. Formal target-environment certification is invoked explicitly with an approved attestation:
+Keep verification focused on the changed command path:
 
 ```bash
-node scripts/run-s3-command-certification.mjs \
-  --profile=formal \
-  --attestation=path/to/s3-command-attestation.json \
-  --output-dir=out/s3-formal-certification
-
-node scripts/verify-s3-command-certification.mjs \
-  --directory=out/s3-formal-certification
+npm run s3:baseline:check
+npm run s3:verification:check
+node scripts/run-go.mjs test ./services/command-dispatcher/...
 ```
 
-The commands check the machine plan and ownership baseline, run PostgreSQL container certification, then run tests and static analysis for:
+Run PostgreSQL or target-runtime integration checks only when those layers are changed. There is no aggregate certification or release-gate command.
 
-- `libs/commandmodel`;
-- `services/command-service`;
-- `services/command-dispatcher`;
-- `services/thingsboard-connector-control`.
+## Entry conditions for production MQTT activation
 
-## Entry conditions for production provider activation
+The native MQTT Edge mapping cannot become production eligible until:
 
-The `LOCAL_VERIFIED` ThingsBoard mapping cannot become production eligible until:
-
-1. S2 current-state reads are production-certified for the intended internal Device cohort;
-2. Command PostgreSQL transactions and RLS pass multi-Organization tests;
-3. IAM authorizes exact Organization, Site, Device, Capability and risk;
-4. execution lease and fence recovery pass crash-point and stale-worker tests;
+1. S2 current-state reads are authoritative for the intended internal Device cohort;
+2. Command PostgreSQL transactions and RLS preserve Tenant isolation;
+3. IAM authorizes exact Tenant, Site, Device, Capability and risk;
+4. execution lease and Fence recovery are covered by focused regression checks;
 5. the Capability mapping is versioned and marked `VERIFIED`;
-6. provider credentials exist only in the Connector workload;
-7. `REQUEST_COMMITTED` timeout tests prove zero automatic reissue;
-8. reported-state verification uses a newer S2 Business Revision and passes deadline, mismatch and unavailable-state failure injection;
-9. Audit Intent persistence is fail-closed.
+6. MQTT workload credentials remain isolated to the Connector/Edge workloads;
+7. `REQUEST_COMMITTED` timeout handling proves zero automatic reissue;
+8. reported-state verification uses a newer S2 Business Revision;
+9. Audit Intent persistence remains fail-closed.
 
 ## Explicitly deferred
 

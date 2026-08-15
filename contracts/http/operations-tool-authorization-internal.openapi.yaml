@@ -115,7 +115,7 @@ components:
           type: object
           additionalProperties: false
           required:
-            - organizationId
+            - tenantId
             - siteId
             - energyType
             - granularity
@@ -124,7 +124,7 @@ components:
             - to
             - qualityPolicy
           properties:
-            organizationId: { type: string, format: uuid }
+            tenantId: { type: string, format: uuid }
             siteId: { type: string, format: uuid }
             energyType: { const: electricity }
             granularity: { enum: [hour, day, month] }

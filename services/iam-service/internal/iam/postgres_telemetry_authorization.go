@@ -16,7 +16,7 @@ func (store *PostgresAuthorizationStore) LookupTelemetryAuthorization(ctx contex
 	if store == nil || store.pool == nil {
 		return TelemetryAuthorizationFacts{}, errors.New("IAM authorization store is closed")
 	}
-	if strings.TrimSpace(lookup.SubjectIssuer) == "" || strings.TrimSpace(lookup.Subject) == "" || strings.TrimSpace(lookup.ActingOrganizationID) == "" {
+	if strings.TrimSpace(lookup.SubjectIssuer) == "" || strings.TrimSpace(lookup.Subject) == "" || strings.TrimSpace(lookup.TenantID) == "" {
 		return TelemetryAuthorizationFacts{}, errors.New("IAM telemetry authorization lookup is incomplete")
 	}
 	canonicalTargets, err := telemetryauth.CanonicalTargets(lookup.Targets)
@@ -47,7 +47,7 @@ FROM iam.resolve_principal_identity($1, $2)
 	if errors.Is(err, pgx.ErrNoRows) {
 		principalID = ""
 	}
-	if err := setIAMTelemetryAuthorizationContext(ctx, transaction, principalID, lookup.ActingOrganizationID, deviceIDs); err != nil {
+	if err := setIAMTelemetryAuthorizationContext(ctx, transaction, principalID, lookup.TenantID, deviceIDs); err != nil {
 		return TelemetryAuthorizationFacts{}, err
 	}
 	facts.PolicyRevision, err = loadTelemetryPolicyRevision(ctx, transaction)
@@ -64,7 +64,7 @@ FROM iam.resolve_principal_identity($1, $2)
 	facts.Found = true
 	facts.Principal.SubjectIssuer = lookup.SubjectIssuer
 	facts.Principal.Subject = lookup.Subject
-	if facts.Memberships, err = loadOrganizationMemberships(ctx, transaction); err != nil {
+	if facts.Memberships, err = loadTenantMemberships(ctx, transaction); err != nil {
 		return TelemetryAuthorizationFacts{}, err
 	}
 	if facts.RoleBindings, err = loadTelemetryRoleBindings(ctx, transaction); err != nil {
@@ -91,14 +91,14 @@ FROM iam.resolve_principal_identity($1, $2)
 	return facts, nil
 }
 
-func setIAMTelemetryAuthorizationContext(ctx context.Context, transaction pgx.Tx, principalID, actingOrganizationID string, deviceIDs []string) error {
+func setIAMTelemetryAuthorizationContext(ctx context.Context, transaction pgx.Tx, principalID, tenantID string, deviceIDs []string) error {
 	arrayLiteral := "{" + strings.Join(deviceIDs, ",") + "}"
-	var configuredPrincipal, configuredOrganization, configuredDevices string
+	var configuredPrincipal, configuredTenant, configuredDevices string
 	if err := transaction.QueryRow(ctx, `
 SELECT set_config('app.principal_id', $1, true),
-       set_config('app.acting_organization_id', $2, true),
+       set_config('app.tenant_id', $2, true),
        set_config('app.requested_device_ids', $3, true)
-`, principalID, actingOrganizationID, arrayLiteral).Scan(&configuredPrincipal, &configuredOrganization, &configuredDevices); err != nil {
+`, principalID, tenantID, arrayLiteral).Scan(&configuredPrincipal, &configuredTenant, &configuredDevices); err != nil {
 		return fmt.Errorf("set IAM telemetry authorization RLS context: %w", err)
 	}
 	return nil
@@ -124,7 +124,7 @@ LIMIT 1
 }
 
 func loadTelemetryRoleBindings(ctx context.Context, transaction pgx.Tx) ([]RoleBinding, error) {
-	rows, err := transaction.Query(ctx, `SELECT organization_id::text, actions, effect, valid_from, valid_to FROM iam.role_bindings ORDER BY organization_id, role_key`)
+	rows, err := transaction.Query(ctx, `SELECT tenant_id::text, actions, effect, valid_from, valid_to FROM iam.role_bindings ORDER BY tenant_id, role_key`)
 	if err != nil {
 		return nil, fmt.Errorf("query IAM Telemetry role bindings: %w", err)
 	}
@@ -133,7 +133,7 @@ func loadTelemetryRoleBindings(ctx context.Context, transaction pgx.Tx) ([]RoleB
 	for rows.Next() {
 		var binding RoleBinding
 		var actionValues []string
-		if err := rows.Scan(&binding.OrganizationID, &actionValues, &binding.Effect, &binding.ValidFrom, &binding.ValidTo); err != nil {
+		if err := rows.Scan(&binding.TenantID, &actionValues, &binding.Effect, &binding.ValidFrom, &binding.ValidTo); err != nil {
 			return nil, fmt.Errorf("scan IAM Telemetry role binding: %w", err)
 		}
 		binding.Actions, err = postgresTelemetryRegistryActions(actionValues)
@@ -153,7 +153,7 @@ func loadTelemetryRoleBindings(ctx context.Context, transaction pgx.Tx) ([]RoleB
 }
 
 func loadTelemetrySiteBindings(ctx context.Context, transaction pgx.Tx) ([]SiteBinding, error) {
-	rows, err := transaction.Query(ctx, `SELECT acting_organization_id::text, owning_organization_id::text, site_id::text, actions, effect, valid_from, valid_to FROM iam.site_bindings ORDER BY acting_organization_id, site_id`)
+	rows, err := transaction.Query(ctx, `SELECT tenant_id::text, site_id::text, actions, effect, valid_from, valid_to FROM iam.site_bindings ORDER BY tenant_id, site_id`)
 	if err != nil {
 		return nil, fmt.Errorf("query IAM Telemetry site bindings: %w", err)
 	}
@@ -162,7 +162,7 @@ func loadTelemetrySiteBindings(ctx context.Context, transaction pgx.Tx) ([]SiteB
 	for rows.Next() {
 		var binding SiteBinding
 		var actionValues []string
-		if err := rows.Scan(&binding.ActingOrganizationID, &binding.OwningOrganizationID, &binding.SiteID, &actionValues, &binding.Effect, &binding.ValidFrom, &binding.ValidTo); err != nil {
+		if err := rows.Scan(&binding.TenantID, &binding.SiteID, &actionValues, &binding.Effect, &binding.ValidFrom, &binding.ValidTo); err != nil {
 			return nil, fmt.Errorf("scan IAM Telemetry site binding: %w", err)
 		}
 		binding.Actions, err = postgresTelemetryRegistryActions(actionValues)
@@ -182,7 +182,7 @@ func loadTelemetrySiteBindings(ctx context.Context, transaction pgx.Tx) ([]SiteB
 }
 
 func loadTelemetryExplicitDenies(ctx context.Context, transaction pgx.Tx) ([]ExplicitDeny, error) {
-	rows, err := transaction.Query(ctx, `SELECT acting_organization_id::text, owning_organization_id::text, site_id::text, action, valid_from, valid_to FROM iam.explicit_denies ORDER BY acting_organization_id, owning_organization_id, site_id, action`)
+	rows, err := transaction.Query(ctx, `SELECT tenant_id::text, site_id::text, action, valid_from, valid_to FROM iam.explicit_denies ORDER BY tenant_id, site_id, action`)
 	if err != nil {
 		return nil, fmt.Errorf("query IAM Telemetry explicit denies: %w", err)
 	}
@@ -192,7 +192,7 @@ func loadTelemetryExplicitDenies(ctx context.Context, transaction pgx.Tx) ([]Exp
 		var deny ExplicitDeny
 		var siteID *string
 		var actionValue string
-		if err := rows.Scan(&deny.ActingOrganizationID, &deny.OrganizationID, &siteID, &actionValue, &deny.ValidFrom, &deny.ValidTo); err != nil {
+		if err := rows.Scan(&deny.TenantID, &siteID, &actionValue, &deny.ValidFrom, &deny.ValidTo); err != nil {
 			return nil, fmt.Errorf("scan IAM Telemetry explicit deny: %w", err)
 		}
 		action := telemetryauth.Action(actionValue)
@@ -233,7 +233,7 @@ func postgresTelemetryRegistryActions(values []string) ([]registryauth.Action, e
 
 func loadTelemetryDevices(ctx context.Context, transaction pgx.Tx) ([]TelemetryDevice, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT id::text, organization_id::text, site_id::text, status
+SELECT id::text, tenant_id::text, site_id::text, status
 FROM core_registry.devices
 ORDER BY id
 `)
@@ -244,7 +244,7 @@ ORDER BY id
 	devices := []TelemetryDevice{}
 	for rows.Next() {
 		var device TelemetryDevice
-		if err := rows.Scan(&device.ID, &device.OwningOrganizationID, &device.SiteID, &device.Status); err != nil {
+		if err := rows.Scan(&device.ID, &device.TenantID, &device.SiteID, &device.Status); err != nil {
 			return nil, fmt.Errorf("scan IAM telemetry device: %w", err)
 		}
 		devices = append(devices, device)
@@ -257,8 +257,8 @@ ORDER BY id
 
 func loadTelemetryScopeBindings(ctx context.Context, transaction pgx.Tx) ([]TelemetryScopeBinding, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT acting_organization_id::text, owning_organization_id::text, site_id::text,
-       device_id::text, actions, effect, status, valid_from, valid_to
+SELECT tenant_id::text, site_id::text, device_id::text,
+       actions, effect, status, valid_from, valid_to
 FROM iam.telemetry_scope_bindings
 ORDER BY site_id, device_id, effect
 `)
@@ -271,7 +271,7 @@ ORDER BY site_id, device_id, effect
 		var binding TelemetryScopeBinding
 		var deviceID *string
 		var actions []string
-		if err := rows.Scan(&binding.ActingOrganizationID, &binding.OwningOrganizationID, &binding.SiteID, &deviceID, &actions, &binding.Effect, &binding.Status, &binding.ValidFrom, &binding.ValidTo); err != nil {
+		if err := rows.Scan(&binding.TenantID, &binding.SiteID, &deviceID, &actions, &binding.Effect, &binding.Status, &binding.ValidFrom, &binding.ValidTo); err != nil {
 			return nil, fmt.Errorf("scan IAM telemetry scope binding: %w", err)
 		}
 		if deviceID != nil {
@@ -291,7 +291,7 @@ ORDER BY site_id, device_id, effect
 
 func loadTelemetryKeyBindings(ctx context.Context, transaction pgx.Tx) ([]TelemetryKeyBinding, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT acting_organization_id::text, device_id::text, telemetry_key,
+SELECT tenant_id::text, device_id::text, telemetry_key,
        actions, effect, status, valid_from, valid_to
 FROM iam.telemetry_key_bindings
 ORDER BY device_id, telemetry_key, effect
@@ -304,7 +304,7 @@ ORDER BY device_id, telemetry_key, effect
 	for rows.Next() {
 		var binding TelemetryKeyBinding
 		var actions []string
-		if err := rows.Scan(&binding.ActingOrganizationID, &binding.DeviceID, &binding.Key, &actions, &binding.Effect, &binding.Status, &binding.ValidFrom, &binding.ValidTo); err != nil {
+		if err := rows.Scan(&binding.TenantID, &binding.DeviceID, &binding.Key, &actions, &binding.Effect, &binding.Status, &binding.ValidFrom, &binding.ValidTo); err != nil {
 			return nil, fmt.Errorf("scan IAM telemetry key binding: %w", err)
 		}
 		binding.Actions, err = postgresTelemetryActions(actions)

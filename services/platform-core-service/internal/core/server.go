@@ -209,28 +209,9 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 	}
 
 	switch route.resource {
-	case "organizations":
-		if route.list {
-			result, err := server.store.ListOrganizations(request.Context(), claims, page)
-			if err != nil {
-				return server.writeStoreError(writer, request, err)
-			}
-			collection, err := server.organizationCollection(route, claims, result)
-			if err != nil {
-				return server.writeStoreError(writer, request, err)
-			}
-			writeJSON(writer, http.StatusOK, collection)
-			return http.StatusOK
-		}
-		item, err := server.store.GetOrganization(request.Context(), claims, route.id)
-		if err != nil {
-			return server.writeStoreError(writer, request, err)
-		}
-		writeJSON(writer, http.StatusOK, item)
-		return http.StatusOK
 	case "sites":
 		if route.list {
-			result, err := server.store.ListSites(request.Context(), claims, route.parentID, page)
+			result, err := server.store.ListSites(request.Context(), claims, page)
 			if err != nil {
 				return server.writeStoreError(writer, request, err)
 			}
@@ -247,20 +228,20 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		}
 		writeJSON(writer, http.StatusOK, item)
 		return http.StatusOK
-	case "equipment":
+	case "assets":
 		if route.list {
-			result, err := server.store.ListEquipment(request.Context(), claims, route.parentID, page)
+			result, err := server.store.ListAssets(request.Context(), claims, route.parentID, page)
 			if err != nil {
 				return server.writeStoreError(writer, request, err)
 			}
-			collection, err := server.equipmentCollection(route, claims, result)
+			collection, err := server.assetCollection(route, claims, result)
 			if err != nil {
 				return server.writeStoreError(writer, request, err)
 			}
 			writeJSON(writer, http.StatusOK, collection)
 			return http.StatusOK
 		}
-		item, err := server.store.GetEquipment(request.Context(), claims, route.id)
+		item, err := server.store.GetAsset(request.Context(), claims, route.id)
 		if err != nil {
 			return server.writeStoreError(writer, request, err)
 		}
@@ -342,19 +323,6 @@ func (server *server) pageRequest(request *http.Request, route registryRoute, cl
 	return page, nil
 }
 
-func (server *server) organizationCollection(route registryRoute, claims registryauth.GrantClaims, result PageResult[Organization]) (Collection[Organization], error) {
-	collection := Collection[Organization]{Items: result.Items, HasMore: result.HasMore}
-	if result.HasMore && len(result.Items) > 0 {
-		last := result.Items[len(result.Items)-1]
-		cursor, err := server.cursorCodec.Encode(route.resource, route.parentID, route.action, claims, last.DisplayName, last.ID)
-		if err != nil {
-			return Collection[Organization]{}, err
-		}
-		collection.NextCursor = &cursor
-	}
-	return collection, nil
-}
-
 func (server *server) siteCollection(route registryRoute, claims registryauth.GrantClaims, result PageResult[Site]) (Collection[Site], error) {
 	collection := Collection[Site]{Items: result.Items, HasMore: result.HasMore}
 	if result.HasMore && len(result.Items) > 0 {
@@ -368,13 +336,13 @@ func (server *server) siteCollection(route registryRoute, claims registryauth.Gr
 	return collection, nil
 }
 
-func (server *server) equipmentCollection(route registryRoute, claims registryauth.GrantClaims, result PageResult[Equipment]) (Collection[Equipment], error) {
-	collection := Collection[Equipment]{Items: result.Items, HasMore: result.HasMore}
+func (server *server) assetCollection(route registryRoute, claims registryauth.GrantClaims, result PageResult[Asset]) (Collection[Asset], error) {
+	collection := Collection[Asset]{Items: result.Items, HasMore: result.HasMore}
 	if result.HasMore && len(result.Items) > 0 {
 		last := result.Items[len(result.Items)-1]
 		cursor, err := server.cursorCodec.Encode(route.resource, route.parentID, route.action, claims, last.DisplayName, last.ID)
 		if err != nil {
-			return Collection[Equipment]{}, err
+			return Collection[Asset]{}, err
 		}
 		collection.NextCursor = &cursor
 	}
@@ -436,18 +404,14 @@ func parseRegistryRoute(path string) (registryRoute, bool) {
 		}
 	}
 	switch {
-	case len(segments) == 1 && segments[0] == "organizations":
-		return registryRoute{template: RegistryPathPrefix + "organizations", resource: "organizations", action: registryauth.ActionOrganizationList, list: true}, true
-	case len(segments) == 2 && segments[0] == "organizations":
-		return registryRoute{template: RegistryPathPrefix + "organizations/{organizationId}", resource: "organizations", id: segments[1], action: registryauth.ActionOrganizationRead}, true
-	case len(segments) == 3 && segments[0] == "organizations" && segments[2] == "sites":
-		return registryRoute{template: RegistryPathPrefix + "organizations/{organizationId}/sites", resource: "sites", parentID: segments[1], action: registryauth.ActionSiteList, list: true}, true
+	case len(segments) == 1 && segments[0] == "sites":
+		return registryRoute{template: RegistryPathPrefix + "sites", resource: "sites", action: registryauth.ActionSiteList, list: true}, true
 	case len(segments) == 2 && segments[0] == "sites":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}", resource: "sites", id: segments[1], action: registryauth.ActionSiteRead}, true
-	case len(segments) == 3 && segments[0] == "sites" && segments[2] == "equipment":
-		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/equipment", resource: "equipment", parentID: segments[1], action: registryauth.ActionEquipmentList, list: true}, true
-	case len(segments) == 2 && segments[0] == "equipment":
-		return registryRoute{template: RegistryPathPrefix + "equipment/{equipmentId}", resource: "equipment", id: segments[1], action: registryauth.ActionEquipmentRead}, true
+	case len(segments) == 3 && segments[0] == "sites" && segments[2] == "assets":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/assets", resource: "assets", parentID: segments[1], action: registryauth.ActionAssetList, list: true}, true
+	case len(segments) == 2 && segments[0] == "assets":
+		return registryRoute{template: RegistryPathPrefix + "assets/{assetId}", resource: "assets", id: segments[1], action: registryauth.ActionAssetRead}, true
 	case len(segments) == 3 && segments[0] == "sites" && segments[2] == "devices":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices", resource: "devices", parentID: segments[1], action: registryauth.ActionDeviceList, list: true}, true
 	case len(segments) == 3 && segments[0] == "sites" && segments[2] == "device-bindings":

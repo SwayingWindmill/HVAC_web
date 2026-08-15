@@ -44,7 +44,7 @@ type PrincipalRow = {
   subject: string;
   displayName: string;
   roles: readonly string[];
-  organizationId: string;
+  tenantId: string;
   policyRevision: string;
 };
 
@@ -81,7 +81,7 @@ export function RealSystemManagement({ snapshot }: RealSystemManagementProps) {
     subject: principal.principal.subject,
     displayName: principal.principal.displayName,
     roles: principal.principal.roles,
-    organizationId: principal.context.actingOrganizationId,
+    tenantId: principal.context.tenantId,
     policyRevision: principal.authorization.policyRevision,
   }], [principal]);
   const siteRows = useMemo<SiteRow[]>(() => sites.map((site) => ({
@@ -105,7 +105,7 @@ export function RealSystemManagement({ snapshot }: RealSystemManagementProps) {
       ),
     },
     { title: '角色', dataIndex: 'roles', width: 180, render: (roles: readonly string[]) => <Space wrap>{roles.map((role) => <Tag key={role}>{role}</Tag>)}</Space> },
-    { title: 'Acting Organization', dataIndex: 'organizationId', render: (value: string) => <Typography.Text code copyable>{value}</Typography.Text> },
+    { title: 'Acting Organization', dataIndex: 'tenantId', render: (value: string) => <Typography.Text code copyable>{value}</Typography.Text> },
     { title: 'Policy Revision', dataIndex: 'policyRevision', width: 180, render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
     { title: '状态', width: 100, render: () => <Badge status="success" text="当前会话" /> },
   ];
@@ -144,7 +144,7 @@ export function RealSystemManagement({ snapshot }: RealSystemManagementProps) {
               <Descriptions.Item label="Display Name">{principal.principal.displayName}</Descriptions.Item>
               <Descriptions.Item label="Subject"><Typography.Text copyable>{principal.principal.subject}</Typography.Text></Descriptions.Item>
               <Descriptions.Item label="Roles">{principal.principal.roles.join('、') || '无'}</Descriptions.Item>
-              <Descriptions.Item label="Acting Organization"><Typography.Text copyable>{principal.context.actingOrganizationId}</Typography.Text></Descriptions.Item>
+              <Descriptions.Item label="Acting Organization"><Typography.Text copyable>{principal.context.tenantId}</Typography.Text></Descriptions.Item>
             </Descriptions>
           </Card>
         </Col>
@@ -179,7 +179,7 @@ export function RealSystemManagement({ snapshot }: RealSystemManagementProps) {
 
   const integrations = (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Alert type="info" showIcon message="数据接入状态来自当前部署" description="不会加载 Demo 中预设的 REST、WebSocket、ThingsBoard 或 AI 数据源状态。" />
+      <Alert type="info" showIcon message="数据接入状态来自当前部署" description="不会加载 Demo 中预设的 REST、WebSocket、Provider 或 AI 数据源状态。" />
       <Card variant="borderless" title={<OperationsPanelHeading icon={<ApiOutlined />} title="数据接入" meta="当前可验证端点" />}>
         <Descriptions column={{ xs: 1, sm: 2, xl: 3 }} bordered size="small">
           <Descriptions.Item label="Platform Gateway"><Badge status={platform ? 'success' : 'processing'} text={platform?.status ?? 'checking'} /></Descriptions.Item>

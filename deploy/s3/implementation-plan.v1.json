@@ -6,11 +6,10 @@
   "productionTrafficPercent": 0,
   "completedTickets": ["S3-01", "S3-02", "S3-03", "S3-04", "S3-05", "S3-06", "S3-07", "S3-08"],
   "currentFrontier": ["S3-09"],
-  "certificationEnvelope": "deploy/s3/certification-envelope.v1.json",
   "firstTracerBullet": {
     "capability": "SET_TEMPERATURE_SETPOINT",
-    "connector": "SYNTHETIC_ONLY",
-    "localProviderContract": "THINGSBOARD_CE_4.3.1.3_LOCAL_VERIFIED",
+    "connector": "NATIVE_MQTT",
+    "edgeProviderContract": "EG8200_MQTT_V1",
     "productionProviderEnabled": false,
     "risk": "LOW",
     "approval": "NONE",
@@ -66,7 +65,7 @@
     {
       "sequence": 6,
       "id": "S3-06",
-      "name": "ThingsBoard control connector and provider evidence",
+      "name": "Native MQTT control connector and Edge evidence",
       "blockedBy": ["S3-03", "S3-05"]
     },
     {
@@ -84,23 +83,13 @@
     {
       "sequence": 9,
       "id": "S3-09",
-      "name": "Capacity, failure injection and internal Device canary",
-      "status": "formal-certification-pending",
+      "name": "Internal MQTT Device canary and runtime validation",
+      "status": "implementation-pending",
       "blockedBy": ["S3-07", "S3-08"],
       "deliverables": [
-        "100 commands/s 60-minute steady and 1000 commands/s one-minute burst certification envelope",
-        "deterministic crash-point and command-fence regression suite",
-        "offline-verifiable formal attestation validator and evidence bundle",
-        "one-Organization one-Site one-Device LOW-risk canary policy",
-        "future-command-only rollback drill contract"
-      ],
-      "formalCompletionRequires": [
-        "target-environment capacity attestation bound to the repository SHA",
-        "complete crash-point matrix with all zero-tolerance counters at zero",
-        "S2 current-state production certification for the selected internal cohort",
-        "VERIFIED ThingsBoard mapping without enabling public Command routes",
-        "four-hour approved internal Device canary with two distinct owners",
-        "formal evidence bundle and offline checksum verification"
+        "one-Tenant one-Site one-Device LOW-risk MQTT canary",
+        "command fence and unknown-outcome focused regression checks",
+        "future-command-only rollback behavior"
       ]
     }
   ],

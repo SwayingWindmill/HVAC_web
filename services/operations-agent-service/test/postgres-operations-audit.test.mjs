@@ -18,7 +18,7 @@ if (!operationsConnectionString || !checkpointsConnectionString) {
 }
 
 const scope = Object.freeze({
-  organizationId: 'organization-audit-postgres',
+  tenantId: 'organization-audit-postgres',
   siteId: 'site-audit-postgres',
   equipmentId: null,
   deviceId: null,
@@ -26,7 +26,7 @@ const scope = Object.freeze({
 
 const createEvent = () => createOperationsAuditEvent({
   eventId: operationsAuditEventId({
-    organizationId: scope.organizationId,
+    tenantId: scope.tenantId,
     siteId: scope.siteId,
     investigationId: null,
     runId: null,

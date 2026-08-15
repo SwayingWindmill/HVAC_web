@@ -39,6 +39,12 @@ func main() {
 	address := envOr("PLATFORM_GATEWAY_ADDR", ":8080")
 	runContext, cancelRun := context.WithCancel(context.Background())
 	defer cancelRun()
+	embeddedServices, err := startEmbeddedEnergyServices(runContext, logger)
+	if err != nil {
+		logger.Error("energy_api_embedded_services_invalid", "error_code", "ENERGY_API_EMBEDDED_SERVICES_INVALID")
+		os.Exit(1)
+	}
+	defer embeddedServices.Close()
 	identity, workloadCertificate, closeIdentity, err := loadIdentityConfig(runContext)
 	if err != nil {
 		logger.Error("gateway_identity_config_invalid", "error_code", "IDENTITY_CONFIG_INVALID")
@@ -139,6 +145,7 @@ func main() {
 		if err := server.Shutdown(ctx); err != nil {
 			logger.Error("gateway_shutdown_failed", "error_code", "GATEWAY_SHUTDOWN_FAILED")
 		}
+		embeddedServices.Shutdown(ctx)
 		_ = diagnostics.Shutdown(ctx)
 		_ = telemetry.Shutdown(ctx)
 	}()
@@ -229,24 +236,24 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 		return nil, nil, func() {}, err
 	}
 	return &gateway.IdentityConfig{
-		OIDCIssuer:                  issuer,
-		OIDCClientID:                required["OIDC_CLIENT_ID"],
-		OIDCRedirectURI:             required["OIDC_REDIRECT_URI"],
-		PublicOrigin:                required["PLATFORM_PUBLIC_ORIGIN"],
-		DefaultActingOrganizationID: os.Getenv("OIDC_DEFAULT_ACTING_ORGANIZATION_ID"),
-		IAMURL:                      required["IAM_URL"],
-		IAMAudience:                 envOr("IAM_AUDIENCE", "iam-service"),
-		AuditURL:                    auditURL,
-		AuditAudience:               envOr("AUDIT_AUDIENCE", "audit-ledger-service"),
-		ExecutingWorkloadSPIFFE:     envOr("GATEWAY_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
-		PolicyRevision:              envOr("IDENTITY_POLICY_REVISION", "policy-v1"),
-		DelegationSigner:            signer,
-		TokenEncryptionKey:          key,
-		SessionStore:                store,
-		SessionTTL:                  30 * time.Minute,
-		StateTTL:                    2 * time.Minute,
-		DelegationTTL:               30 * time.Second,
-		RevocationObjective:         time.Second,
+		OIDCIssuer:              issuer,
+		OIDCClientID:            required["OIDC_CLIENT_ID"],
+		OIDCRedirectURI:         required["OIDC_REDIRECT_URI"],
+		PublicOrigin:            required["PLATFORM_PUBLIC_ORIGIN"],
+		DefaultTenantID:         os.Getenv("OIDC_DEFAULT_TENANT_ID"),
+		IAMURL:                  required["IAM_URL"],
+		IAMAudience:             envOr("IAM_AUDIENCE", "iam-service"),
+		AuditURL:                auditURL,
+		AuditAudience:           envOr("AUDIT_AUDIENCE", "audit-ledger-service"),
+		ExecutingWorkloadSPIFFE: envOr("GATEWAY_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
+		PolicyRevision:          envOr("IDENTITY_POLICY_REVISION", "policy-v1"),
+		DelegationSigner:        signer,
+		TokenEncryptionKey:      key,
+		SessionStore:            store,
+		SessionTTL:              30 * time.Minute,
+		StateTTL:                2 * time.Minute,
+		DelegationTTL:           30 * time.Second,
+		RevocationObjective:     time.Second,
 		IAMHTTPClient: &http.Client{
 			Timeout:   5 * time.Second,
 			Transport: workloadTransport(iamRoots, &certificate, envOr("IAM_SERVER_NAME", "localhost")),

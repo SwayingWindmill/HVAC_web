@@ -14,7 +14,7 @@ func (store *PostgresAuthorizationStore) LookupWorkOrderAuthorization(ctx contex
 	if store == nil || store.pool == nil {
 		return WorkOrderAuthorizationFacts{}, errors.New("IAM authorization store is closed")
 	}
-	if strings.TrimSpace(lookup.SubjectIssuer) == "" || strings.TrimSpace(lookup.Subject) == "" || strings.TrimSpace(lookup.ActingOrganizationID) == "" {
+	if strings.TrimSpace(lookup.SubjectIssuer) == "" || strings.TrimSpace(lookup.Subject) == "" || strings.TrimSpace(lookup.TenantID) == "" {
 		return WorkOrderAuthorizationFacts{}, errors.New("IAM Work Order authorization lookup is incomplete")
 	}
 	transaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
@@ -36,7 +36,7 @@ FROM iam.resolve_principal_identity($1, $2)
 	if errors.Is(err, pgx.ErrNoRows) {
 		principalID = ""
 	}
-	if err := setIAMAuthorizationContext(ctx, transaction, principalID, lookup.ActingOrganizationID); err != nil {
+	if err := setIAMAuthorizationContext(ctx, transaction, principalID, lookup.TenantID); err != nil {
 		return WorkOrderAuthorizationFacts{}, err
 	}
 	facts.PolicyRevision, err = loadWorkOrderPolicyRevision(ctx, transaction)
@@ -53,7 +53,7 @@ FROM iam.resolve_principal_identity($1, $2)
 	facts.Found = true
 	facts.Principal.SubjectIssuer = lookup.SubjectIssuer
 	facts.Principal.Subject = lookup.Subject
-	if facts.Memberships, err = loadOrganizationMemberships(ctx, transaction); err != nil {
+	if facts.Memberships, err = loadTenantMemberships(ctx, transaction); err != nil {
 		return WorkOrderAuthorizationFacts{}, err
 	}
 	if facts.Permissions, err = loadWorkOrderPermissions(ctx, transaction); err != nil {
@@ -89,7 +89,7 @@ LIMIT 1
 
 func loadWorkOrderPermissions(ctx context.Context, transaction pgx.Tx) ([]WorkOrderPermission, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT acting_organization_id::text, site_id::text, action, effect, status, valid_from, valid_to
+SELECT tenant_id::text, site_id::text, action, effect, status, valid_from, valid_to
 FROM iam.work_order_permissions
 ORDER BY site_id, action, effect
 `)
@@ -102,7 +102,7 @@ ORDER BY site_id, action, effect
 		var permission WorkOrderPermission
 		var action string
 		if err := rows.Scan(
-			&permission.OrganizationID,
+			&permission.TenantID,
 			&permission.SiteID,
 			&action,
 			&permission.Effect,
@@ -131,7 +131,7 @@ ORDER BY site_id, action, effect
 
 func loadWorkOrderOwnershipTargets(ctx context.Context, transaction pgx.Tx) ([]WorkOrderOwnershipTarget, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT acting_organization_id::text, site_id::text, target_type, target_id, effect, status, valid_from, valid_to
+SELECT tenant_id::text, site_id::text, target_type, target_id, effect, status, valid_from, valid_to
 FROM iam.work_order_ownership_targets
 ORDER BY site_id, target_type, target_id, effect
 `)
@@ -142,7 +142,7 @@ ORDER BY site_id, target_type, target_id, effect
 	targets := []WorkOrderOwnershipTarget{}
 	for rows.Next() {
 		var target WorkOrderOwnershipTarget
-		if err := rows.Scan(&target.OrganizationID, &target.SiteID, &target.TargetType, &target.TargetID, &target.Effect, &target.Status, &target.ValidFrom, &target.ValidTo); err != nil {
+		if err := rows.Scan(&target.TenantID, &target.SiteID, &target.TargetType, &target.TargetID, &target.Effect, &target.Status, &target.ValidFrom, &target.ValidTo); err != nil {
 			return nil, fmt.Errorf("scan IAM Work Order ownership target: %w", err)
 		}
 		if (target.TargetType != "PRINCIPAL" && target.TargetType != "TEAM") || strings.TrimSpace(target.TargetID) == "" {
@@ -160,7 +160,7 @@ func (store *PostgresAuthorizationStore) RecordWorkOrderDecision(ctx context.Con
 	if store == nil || store.pool == nil {
 		return errors.New("IAM authorization store is closed")
 	}
-	if strings.TrimSpace(event.ActingOrganizationID) == "" || strings.TrimSpace(event.SiteID) == "" ||
+	if strings.TrimSpace(event.TenantID) == "" || strings.TrimSpace(event.SiteID) == "" ||
 		strings.TrimSpace(string(event.Action)) == "" || strings.TrimSpace(event.PolicyRevision) == "" ||
 		strings.TrimSpace(string(event.ReasonCode)) == "" || strings.TrimSpace(event.RequestID) == "" ||
 		strings.TrimSpace(event.TraceID) == "" || strings.TrimSpace(event.OccurredAt) == "" {
@@ -171,7 +171,7 @@ func (store *PostgresAuthorizationStore) RecordWorkOrderDecision(ctx context.Con
 		return fmt.Errorf("begin IAM Work Order decision audit: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
-	if err := setIAMAuthorizationContext(ctx, transaction, event.PrincipalID, event.ActingOrganizationID); err != nil {
+	if err := setIAMAuthorizationContext(ctx, transaction, event.PrincipalID, event.TenantID); err != nil {
 		return err
 	}
 	var principalID any
@@ -191,10 +191,10 @@ func (store *PostgresAuthorizationStore) RecordWorkOrderDecision(ctx context.Con
 	}
 	if _, err := transaction.Exec(ctx, `
 INSERT INTO iam.work_order_authorization_decisions
-  (principal_id, acting_organization_id, site_id, work_order_id, assignee_id, team_id, action, allowed, policy_revision, reason_code, request_id, trace_id, occurred_at)
+  (principal_id, tenant_id, site_id, work_order_id, assignee_id, team_id, action, allowed, policy_revision, reason_code, request_id, trace_id, occurred_at)
 VALUES
   ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13::timestamptz)
-`, principalID, event.ActingOrganizationID, event.SiteID, workOrderID, assigneeID, teamID, string(event.Action), event.Allowed,
+`, principalID, event.TenantID, event.SiteID, workOrderID, assigneeID, teamID, string(event.Action), event.Allowed,
 		event.PolicyRevision, string(event.ReasonCode), event.RequestID, event.TraceID, event.OccurredAt); err != nil {
 		return fmt.Errorf("insert IAM Work Order decision audit: %w", err)
 	}

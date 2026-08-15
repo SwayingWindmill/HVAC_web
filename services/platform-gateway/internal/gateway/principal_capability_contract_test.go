@@ -13,8 +13,6 @@ func TestIAMCapabilityVocabularyMatchesPublicGoContract(t *testing.T) {
 	}
 
 	publicCapabilities := []platformapi.Capability{
-		platformapi.CapabilityOrganizationList,
-		platformapi.CapabilityOrganizationRead,
 		platformapi.CapabilitySiteList,
 		platformapi.CapabilitySiteRead,
 		platformapi.CapabilityEquipmentList,

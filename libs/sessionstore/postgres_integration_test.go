@@ -145,7 +145,7 @@ func TestAuditIntentInsertFailureFailsClosed(t *testing.T) {
 
 func TestRuntimeRolesCannotWriteOtherServiceSchemas(t *testing.T) {
 	harness := newPostgresHarness(t)
-	if _, err := harness.gateway.Exec(context.Background(), `INSERT INTO audit_ledger.organization_heads (organization_id,last_record_hash,updated_at) VALUES ('org-forged',$1,clock_timestamp())`, stringOf('0', 64)); err == nil {
+	if _, err := harness.gateway.Exec(context.Background(), `INSERT INTO audit_ledger.tenant_heads (tenant_id,last_record_hash,updated_at) VALUES ('tenant-forged',$1,clock_timestamp())`, stringOf('0', 64)); err == nil {
 		t.Fatal("gateway_runtime wrote audit_ledger schema")
 	}
 	relay, err := pgxpool.New(context.Background(), requiredEnv(t, "S0_RELAY_DATABASE_URL"))
@@ -210,7 +210,7 @@ func fixtureSession(now time.Time) sessionstore.Session {
 	return sessionstore.Session{
 		ID:                       "session-01",
 		Principal:                identitycontext.UserPrincipal{Subject: "fixture-user", Issuer: "https://issuer.example.test", DisplayName: "Fixture User", Email: "fixture@example.test", Roles: []string{"operator", "audit-reader"}},
-		ActingOrganizationID:     "org-01",
+		TenantID:                 "tenant-01",
 		CSRFTokenCiphertext:      []byte("encrypted-csrf"),
 		ProviderTokensCiphertext: []byte("seeded-provider-secret-that-must-not-enter-audit"),
 		ExpiresAt:                now.Add(time.Hour),

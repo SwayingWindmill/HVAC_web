@@ -609,9 +609,9 @@ export function OperationsInvestigation({
   const [connection, setConnection] = useState<OperationsInvestigationConnectionState | null>(null);
 
   const requestOptions = useMemo(() => ({
-    trustedOrganizationId: principal.context.actingOrganizationId,
+    trustedTenantId: principal.context.tenantId,
     trustedSiteId: site.id,
-  }), [principal.context.actingOrganizationId, site.id]);
+  }), [principal.context.tenantId, site.id]);
 
   const openInvestigation = useCallback((nextId: string) => {
     const next = nextId.trim();
@@ -663,7 +663,7 @@ export function OperationsInvestigation({
   }, [listRevision, requestOptions]);
 
   const agent = useMemo(() => investigationId ? new OperationsInvestigationAgent({
-    organizationId: requestOptions.trustedOrganizationId,
+    tenantId: requestOptions.trustedTenantId,
     siteId: requestOptions.trustedSiteId,
     investigationId,
     onSnapshot: (next) => {
@@ -671,7 +671,7 @@ export function OperationsInvestigation({
       setFailure(null);
     },
     onConnectionState: setConnection,
-  }) : null, [investigationId, requestOptions.trustedOrganizationId, requestOptions.trustedSiteId, runRevision]);
+  }) : null, [investigationId, requestOptions.trustedTenantId, requestOptions.trustedSiteId, runRevision]);
 
   const snapshotInvestigationId = snapshot?.investigation.id ?? '';
   const snapshotRevision = snapshot?.investigation.revision ?? -1;

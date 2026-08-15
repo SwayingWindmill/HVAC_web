@@ -271,7 +271,7 @@ func acknowledgeAndVerifyPostgres(t *testing.T, store *PostgresStore, admin *pgx
 		t.Fatal(err)
 	}
 	assertDispatchDatabaseState(t, admin, dispatch.CommandID, "DISPATCHING", "ACKNOWLEDGED", attempts, false)
-	verification, err := store.ClaimVerification(ctx, dispatch.OrganizationID, "verifier-a", 15*time.Second)
+	verification, err := store.ClaimVerification(ctx, dispatch.TenantID, "verifier-a", 15*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func postgresVerificationNumber(t *testing.T, envelope commandmodel.Verification
 
 func postgresReportedState(envelope commandmodel.VerificationEnvelope, setpointC float64) commandmodel.ReportedStateEvidence {
 	return commandmodel.ReportedStateEvidence{
-		OrganizationID: envelope.OrganizationID, SiteID: envelope.SiteID, DeviceID: envelope.DeviceID,
+		TenantID: envelope.TenantID, SiteID: envelope.SiteID, DeviceID: envelope.DeviceID,
 		EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
 		BusinessRevision: envelope.BaselineBusinessRevision + 1, ReportedValue: commandmodel.NumberScalar(setpointC),
 		ObservedAt: envelope.AcknowledgedAt.Add(time.Second),

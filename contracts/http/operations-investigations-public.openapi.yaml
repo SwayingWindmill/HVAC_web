@@ -212,9 +212,9 @@ components:
     InvestigationScope:
       type: object
       additionalProperties: false
-      required: [organizationId, siteId, equipmentId, deviceId]
+      required: [tenantId, siteId, equipmentId, deviceId]
       properties:
-        organizationId: { type: string, minLength: 1, maxLength: 256 }
+        tenantId: { type: string, minLength: 1, maxLength: 256 }
         siteId: { type: string, minLength: 1, maxLength: 256 }
         equipmentId: { type: string, nullable: true }
         deviceId: { type: string, nullable: true }
@@ -447,13 +447,13 @@ components:
     EquipmentEnergyBindingsRequiredNext:
       type: object
       additionalProperties: false
-      required: [status, kind, owner, capability, organizationId, siteId, equipmentIds, targetPeriod, baselinePeriod, requiredMetadata]
+      required: [status, kind, owner, capability, tenantId, siteId, equipmentIds, targetPeriod, baselinePeriod, requiredMetadata]
       properties:
         status: { type: string, enum: [REQUIRED_NEXT] }
         kind: { type: string, enum: [EQUIPMENT_ENERGY_BINDINGS] }
         owner: { type: string, enum: [registry] }
         capability: { type: string, enum: [registry.getEquipmentEnergyBindings] }
-        organizationId: { type: string }
+        tenantId: { type: string }
         siteId: { type: string }
         equipmentIds:
           type: array
@@ -469,13 +469,13 @@ components:
     EquipmentEnergySeriesRequiredNext:
       type: object
       additionalProperties: false
-      required: [status, kind, owner, capability, organizationId, siteId, equipmentIds, targetPeriod, baselinePeriod, requiredMetadata]
+      required: [status, kind, owner, capability, tenantId, siteId, equipmentIds, targetPeriod, baselinePeriod, requiredMetadata]
       properties:
         status: { type: string, enum: [REQUIRED_NEXT] }
         kind: { type: string, enum: [EQUIPMENT_ENERGY_PERIOD_COMPARISON] }
         owner: { type: string, enum: [telemetry-query-service] }
         capability: { type: string, enum: [analytics.energy.getEquipmentSeries] }
-        organizationId: { type: string }
+        tenantId: { type: string }
         siteId: { type: string }
         equipmentIds:
           type: array
@@ -491,11 +491,11 @@ components:
     FindingConclusionSupported:
       type: object
       additionalProperties: false
-      required: [status, scope, organizationId, siteId]
+      required: [status, scope, tenantId, siteId]
       properties:
         status: { type: string, enum: [SUPPORTED] }
         scope: { type: string, enum: [SITE] }
-        organizationId: { type: string }
+        tenantId: { type: string }
         siteId: { type: string }
     FindingConclusionUnable:
       type: object

@@ -82,7 +82,7 @@ type Transition struct {
 type Alarm struct {
 	SchemaVersion   int                 `json:"schemaVersion"`
 	AlarmID         string              `json:"alarmId"`
-	OrganizationID  string              `json:"organizationId"`
+	TenantID        string              `json:"tenantId"`
 	SiteID          string              `json:"siteId"`
 	DeviceID        *string             `json:"deviceId,omitempty"`
 	SourceType      SourceType          `json:"sourceType"`
@@ -126,7 +126,7 @@ type OperationInput struct {
 func IsUUIDv7(value string) bool { return uuidV7Pattern.MatchString(value) }
 
 func (alarm Alarm) Validate() error {
-	if alarm.SchemaVersion != SchemaVersion || !IsUUIDv7(alarm.AlarmID) || !IsUUIDv7(alarm.OrganizationID) || !IsUUIDv7(alarm.SiteID) {
+	if alarm.SchemaVersion != SchemaVersion || !IsUUIDv7(alarm.AlarmID) || !IsUUIDv7(alarm.TenantID) || !IsUUIDv7(alarm.SiteID) {
 		return errors.New("alarm identity is invalid")
 	}
 	if alarm.DeviceID != nil && !IsUUIDv7(*alarm.DeviceID) {
@@ -171,13 +171,13 @@ func (alarm Alarm) Validate() error {
 	return nil
 }
 
-func (response ListResponse) Validate(organizationID, siteID string, limit int) error {
-	if response.SchemaVersion != SchemaVersion || !IsUUIDv7(organizationID) || !IsUUIDv7(siteID) || limit < 1 || limit > 100 || len(response.Items) > limit {
+func (response ListResponse) Validate(tenantID, siteID string, limit int) error {
+	if response.SchemaVersion != SchemaVersion || !IsUUIDv7(tenantID) || !IsUUIDv7(siteID) || limit < 1 || limit > 100 || len(response.Items) > limit {
 		return errors.New("alarm list envelope is invalid")
 	}
 	seen := map[string]struct{}{}
 	for _, alarm := range response.Items {
-		if err := alarm.Validate(); err != nil || alarm.OrganizationID != organizationID || alarm.SiteID != siteID {
+		if err := alarm.Validate(); err != nil || alarm.TenantID != tenantID || alarm.SiteID != siteID {
 			return errors.New("alarm list contains an invalid or cross-scope item")
 		}
 		if _, exists := seen[alarm.AlarmID]; exists {

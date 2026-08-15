@@ -124,10 +124,10 @@ WHERE device_id = $1::uuid AND telemetry_key = 'zone.temperature'
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rejectedReceipt.Status != ObservationRejected || rejectedReceipt.Quality != QualityRejected || rejectedReceipt.BusinessRevision != 3 || !rejectedReceipt.StateChanged {
+	if rejectedReceipt.Status != ObservationRejected || rejectedReceipt.Quality != QualityInvalid || rejectedReceipt.BusinessRevision != 3 || !rejectedReceipt.StateChanged {
 		t.Fatalf("rejected=%#v", rejectedReceipt)
 	}
-	assertObservationRow(t, admin, rejected.Position.EventID, "REJECTED", "REJECTED", "PUSH", false)
+	assertObservationRow(t, admin, rejected.Position.EventID, "REJECTED", "INVALID", "PUSH", false)
 	assertHistoryOutbox(t, admin, rejected.Position.EventID, "REJECTED", orgA, siteA, deviceA, false)
 	assertIngestRevision(t, admin, deviceA, 3, 3)
 	var missingReason string
@@ -174,10 +174,10 @@ WHERE s.device_id = $1::uuid AND value ->> 'key' = 'zone.humidity'
 	if err != nil {
 		t.Fatal(err)
 	}
-	if suspectReceipt.Status != ObservationAccepted || suspectReceipt.Quality != QualitySuspect || len(suspectReceipt.QualityReasons) != 1 || suspectReceipt.QualityReasons[0] != QualityReasonSourceLagExceeded || suspectReceipt.BusinessRevision != 4 {
+	if suspectReceipt.Status != ObservationAccepted || suspectReceipt.Quality != QualityStale || len(suspectReceipt.QualityReasons) != 1 || suspectReceipt.QualityReasons[0] != QualityReasonSourceLagExceeded || suspectReceipt.BusinessRevision != 4 {
 		t.Fatalf("suspect=%#v", suspectReceipt)
 	}
-	assertObservationRow(t, admin, suspect.Position.EventID, "ACCEPTED", "SUSPECT", "RECONCILIATION", true)
+	assertObservationRow(t, admin, suspect.Position.EventID, "ACCEPTED", "STALE", "RECONCILIATION", true)
 	assertIngestRevision(t, admin, deviceA, 4, 4)
 
 	outageAt := suspectReceivedAt.Add(time.Minute)
@@ -301,7 +301,7 @@ WHERE quarantine_id = $1::uuid
 	if err != nil {
 		t.Fatal(err)
 	}
-	if extremeFutureReceipt.Status != ObservationRejected || extremeFutureReceipt.Quality != QualityRejected ||
+	if extremeFutureReceipt.Status != ObservationRejected || extremeFutureReceipt.Quality != QualityInvalid ||
 		len(extremeFutureReceipt.QualityReasons) != 1 || extremeFutureReceipt.QualityReasons[0] != QualityReasonClockAhead ||
 		!extremeFutureReceipt.PositionAdvanced {
 		t.Fatalf("extreme future-clock receipt=%#v", extremeFutureReceipt)

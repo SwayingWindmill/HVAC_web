@@ -136,7 +136,7 @@ func TestGatewayGetCommandRejectsCrossOrganizationProjection(t *testing.T) {
 func TestGatewayApproveCommandDerivesIdentityRoleAndExactGrant(t *testing.T) {
 	fixture := newCommandGatewayFixture(t)
 	fixture.approvalPending.Store(true)
-	request := httptest.NewRequest(http.MethodPost, publicCommandsPath+"/"+fixture.commandID+":approve", strings.NewReader(`{}`))
+	request := httptest.NewRequest(http.MethodPost, publicCommandsPath+"/"+fixture.commandID+"/approve", strings.NewReader(`{}`))
 	fixture.authenticate(request, true)
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
@@ -155,7 +155,7 @@ func TestGatewayApproveCommandDerivesIdentityRoleAndExactGrant(t *testing.T) {
 
 func TestGatewayApprovalRejectsBrowserAuthorityBeforeUpstreams(t *testing.T) {
 	fixture := newCommandGatewayFixture(t)
-	request := httptest.NewRequest(http.MethodPost, publicCommandsPath+"/"+fixture.commandID+":approve", strings.NewReader(`{"principalId":"caller-supplied"}`))
+	request := httptest.NewRequest(http.MethodPost, publicCommandsPath+"/"+fixture.commandID+"/approve", strings.NewReader(`{"principalId":"caller-supplied"}`))
 	fixture.authenticate(request, true)
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
@@ -170,7 +170,7 @@ func TestGatewayApprovalRejectsBrowserAuthorityBeforeUpstreams(t *testing.T) {
 
 func TestGatewayApprovalRequiresCSRFBeforeCommandRead(t *testing.T) {
 	fixture := newCommandGatewayFixture(t)
-	request := httptest.NewRequest(http.MethodPost, publicCommandsPath+"/"+fixture.commandID+":approve", strings.NewReader(`{}`))
+	request := httptest.NewRequest(http.MethodPost, publicCommandsPath+"/"+fixture.commandID+"/approve", strings.NewReader(`{}`))
 	fixture.authenticate(request, false)
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
@@ -378,7 +378,7 @@ func (fixture *commandGatewayFixture) telemetryDecisionResponse(t *testing.T, re
 		ActingOrganizationID: fixture.organizationID, Action: input.Action, ScopeDigest: digest,
 		PolicyRevision: "identity-policy-1", ReasonCode: telemetryauth.ReasonAllowExactScope,
 		DecidedAt: now.Format(time.RFC3339Nano), Targets: []telemetryauth.AuthorizedTarget{{
-			DeviceID: fixture.deviceID, OwningOrganizationID: fixture.organizationID, SiteID: fixture.siteID, Keys: []string{defaultCommandTemperatureKey},
+			TenantID: fixture.tenantID, SiteID: fixture.siteID, DeviceID: fixture.deviceID, Keys: []string{defaultCommandTemperatureKey},
 		}},
 	}
 	claims := telemetryauth.GrantClaims{
@@ -430,41 +430,40 @@ func (fixture *commandGatewayFixture) commandRegistryClient(t *testing.T, now ti
 	updatedAt := now.Format("2006-01-02T15:04:05.000Z")
 	unit := "Cel"
 	equipment := platformapi.Equipment{
-		ID: fixture.equipmentID, TenantID: fixture.tenantID, OwningOrganizationID: fixture.organizationID, SiteID: fixture.siteID,
+		ID: fixture.equipmentID, TenantID: fixture.tenantID, SiteID: fixture.siteID,
 		Code: "AHU-01", DisplayName: "AHU 01", EquipmentType: "AHU", Status: "ACTIVE", Revision: 7,
 		CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 	device := platformapi.Device{
-		ID: fixture.deviceID, TenantID: fixture.tenantID, OwningOrganizationID: fixture.organizationID, SiteID: fixture.siteID,
+		ID: fixture.deviceID, TenantID: fixture.tenantID, SiteID: fixture.siteID,
 		Code: "AHU-01-CTRL", DisplayName: "AHU 01 Controller", DeviceType: "AHU_CONTROLLER", Status: "ACTIVE", Revision: 7,
 		CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 	commandPoint := platformapi.TelemetryPoint{
-		ID: fixture.commandPointID, TenantID: fixture.tenantID, OwningOrganizationID: fixture.organizationID, SiteID: fixture.siteID, ReportingDeviceID: fixture.deviceID,
-		PointKey: "zone.temperature.setpoint.command", SourceKey: "zone.temperature.setpoint.command", DisplayName: "Zone temperature setpoint command",
-		PointKind: "COMMAND", ValueType: "NUMBER", Unit: &unit, Writable: true, SampleIntervalMS: 1000, PublishIntervalMS: 1000, StaleAfterMS: 3000,
+		ID: fixture.commandPointID, TenantID: fixture.tenantID, SiteID: fixture.siteID, ReportingDeviceID: fixture.deviceID,
+		PointCode: "zone_temperature_setpoint_command", SourceKey: "zone.temperature.setpoint.command", DisplayName: "Zone temperature setpoint command",
+		PointType: "COMMAND", ValueType: "NUMBER", Unit: &unit, Writable: true, SampleIntervalMS: 1000, PublishIntervalMS: 1000, StaleAfterMS: 3000,
 		SourceMetadata: map[string]any{
 			"capability": commandmodel.CapabilitySetTemperatureSetpoint, "capabilityRevision": "capability:set-temperature-setpoint:v1",
-			"feedbackPointKey": defaultCommandTemperatureKey, "parameterKey": commandmodel.ParameterSetpointC,
+			"feedbackSourceKey": defaultCommandTemperatureKey, "parameterKey": commandmodel.ParameterSetpointC,
 		},
 		Status: "ACTIVE", Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 	feedbackPoint := platformapi.TelemetryPoint{
-		ID: fixture.feedbackPointID, TenantID: fixture.tenantID, OwningOrganizationID: fixture.organizationID, SiteID: fixture.siteID, ReportingDeviceID: fixture.deviceID,
-		PointKey: defaultCommandTemperatureKey, SourceKey: defaultCommandTemperatureKey, DisplayName: "Zone temperature",
-		PointKind: "FEEDBACK", ValueType: "NUMBER", Unit: &unit, Writable: false, SampleIntervalMS: 1000, PublishIntervalMS: 1000, StaleAfterMS: 3000,
+		ID: fixture.feedbackPointID, TenantID: fixture.tenantID, SiteID: fixture.siteID, ReportingDeviceID: fixture.deviceID,
+		PointCode: "zone_temperature", SourceKey: defaultCommandTemperatureKey, DisplayName: "Zone temperature",
+		PointType: "TELEMETRY", ValueType: "NUMBER", Unit: &unit, Writable: false, SampleIntervalMS: 1000, PublishIntervalMS: 1000, StaleAfterMS: 3000,
 		SourceMetadata: map[string]any{}, Status: "ACTIVE", Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 	assetModel := platformapi.SiteAssetModel{
-		SchemaVersion: 1, TenantID: fixture.tenantID, SiteID: fixture.siteID, Equipment: []platformapi.Equipment{equipment}, Devices: []platformapi.Device{device},
+		SchemaVersion: 2, TenantID: fixture.tenantID, SiteID: fixture.siteID, Equipment: []platformapi.Equipment{equipment}, Devices: []platformapi.Device{device},
 		Areas: []platformapi.Area{}, Sensors: []platformapi.Sensor{}, TelemetryPoints: []platformapi.TelemetryPoint{commandPoint, feedbackPoint},
 		Relationships: []platformapi.AssetRelationship{{
-			ID: fixture.controlRelationshipID, TenantID: fixture.tenantID, OwningOrganizationID: fixture.organizationID, SiteID: fixture.siteID,
+			ID: fixture.controlRelationshipID, TenantID: fixture.tenantID, SiteID: fixture.siteID,
 			FromType: "POINT", FromID: fixture.commandPointID, ToType: "EQUIPMENT", ToID: fixture.equipmentID, Role: "CONTROLS", Status: "ACTIVE",
 			ValidFrom: createdAt, ValidTo: nil, Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
 		}},
-		CalculatedPointInputs: []platformapi.CalculatedPointInput{},
-		Counts:                platformapi.AssetModelCounts{Equipment: 1, DeviceEndpoints: 1, TelemetryPoints: 2},
+		Counts: platformapi.AssetModelCounts{Equipment: 1, DeviceEndpoints: 1, PhysicalSensors: 0, Points: 2},
 	}
 	return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		fixture.registryCalls.Add(1)
@@ -506,7 +505,7 @@ func (fixture *commandGatewayFixture) commandTelemetryClient(t *testing.T, now t
 		instant := s2telemetryapi.Instant(now.Add(-time.Second).Format(time.RFC3339Nano))
 		policy := s2telemetryapi.PolicyRevision(5)
 		snapshot := s2telemetryapi.DeviceObservationSnapshot{
-			SchemaVersion: 1, DeviceId: s2telemetryapi.UUIDv7(fixture.deviceID), OwningOrganizationId: s2telemetryapi.UUIDv7(fixture.organizationID), SiteId: s2telemetryapi.UUIDv7(fixture.siteID),
+			SchemaVersion: 1, TenantId: s2telemetryapi.UUIDv7(fixture.tenantID), SiteId: s2telemetryapi.UUIDv7(fixture.siteID), DeviceId: s2telemetryapi.UUIDv7(fixture.deviceID),
 			BusinessRevision: 17, EvaluatedAt: s2telemetryapi.Instant(now.Format(time.RFC3339Nano)),
 			EvaluationAvailability: s2telemetryapi.EvaluationAvailabilityAvailable, AvailabilityReasons: []s2telemetryapi.AvailabilityReasonCode{},
 			Presence:           s2telemetryapi.PresenceSnapshot{Applicability: s2telemetryapi.PresenceApplicabilityApplicable, CurrentState: &state, LastSeenAt: &instant, PolicyRevision: &policy},
@@ -530,7 +529,7 @@ func (fixture *commandGatewayFixture) commandBackendClient(t *testing.T, now tim
 		switch request.Method {
 		case http.MethodPost:
 			claims, err := commandauth.VerifyGrant(&fixture.iamSigner.PublicKey, request.Header.Get("X-Command-Grant"))
-			if strings.HasSuffix(request.URL.Path, ":approve") {
+			if strings.HasSuffix(request.URL.Path, "/approve") {
 				if err != nil || claims.Purpose != commandmodel.AuthorizationCommandApprove || claims.DeviceID != fixture.deviceID {
 					t.Fatalf("invalid backend approval grant claims=%#v err=%v", claims, err)
 				}

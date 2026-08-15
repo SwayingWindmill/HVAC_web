@@ -7,41 +7,46 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 )
 
 const (
-	TelemetryEnvelopeSchemaVersion = 1
+	TelemetryEnvelopeSchemaVersion = "1.0"
 	maximumEnvelopeBytes           = 1 << 20
 	maximumDevicesPerEnvelope      = 1024
 	maximumPointsPerDevice         = 4096
 )
 
+var wirePointCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,127}$`)
+
 type TelemetryEnvelope struct {
-	SchemaVersion int              `json:"schemaVersion"`
+	SchemaVersion string           `json:"schemaVersion"`
 	MessageID     string           `json:"messageId"`
-	TenantID      string           `json:"tenantId"`
-	SiteID        string           `json:"siteId"`
 	GatewayID     string           `json:"gatewayId"`
-	PublishedAt   string           `json:"publishedAt"`
+	Timestamp     int64            `json:"timestamp"`
+	Sequence      uint64           `json:"sequence"`
+	TraceID       string           `json:"traceId,omitempty"`
 	Replay        bool             `json:"replay"`
-	Devices       []EnvelopeDevice `json:"devices"`
+	Payload       TelemetryPayload `json:"payload"`
+}
+
+type TelemetryPayload struct {
+	Devices []EnvelopeDevice `json:"devices"`
 }
 
 type EnvelopeDevice struct {
-	ExternalDeviceID string          `json:"externalDeviceId"`
-	Points           []EnvelopePoint `json:"points"`
+	DeviceID        string          `json:"deviceId"`
+	DeviceTimestamp int64           `json:"deviceTimestamp"`
+	Points          []EnvelopePoint `json:"points"`
 }
 
 type EnvelopePoint struct {
-	TelemetryKey string  `json:"telemetryKey"`
-	Value        any     `json:"value"`
-	ValueType    string  `json:"valueType"`
-	Unit         *string `json:"unit"`
-	Quality      string  `json:"quality"`
-	SampledAt    string  `json:"sampledAt"`
-	Sequence     uint64  `json:"sequence"`
+	Code    string  `json:"code"`
+	Value   any     `json:"value"`
+	Quality uint8   `json:"quality"`
+	Unit    *string `json:"unit,omitempty"`
 }
 
 type TopicScope struct {
@@ -88,26 +93,35 @@ func DecodeTelemetryEnvelope(payload []byte, scope TopicScope) (TelemetryEnvelop
 }
 
 func (envelope TelemetryEnvelope) Validate(scope TopicScope) error {
-	if envelope.SchemaVersion != TelemetryEnvelopeSchemaVersion {
-		return fmt.Errorf("unsupported MQTT telemetry envelope schemaVersion %d", envelope.SchemaVersion)
+	if strings.TrimSpace(envelope.SchemaVersion) != TelemetryEnvelopeSchemaVersion {
+		return fmt.Errorf("unsupported MQTT telemetry envelope schemaVersion %s", envelope.SchemaVersion)
 	}
 	if !uuidV7Pattern.MatchString(strings.TrimSpace(envelope.MessageID)) {
 		return errors.New("MQTT telemetry messageId must be UUIDv7")
 	}
-	if strings.TrimSpace(envelope.TenantID) != scope.TenantID || strings.TrimSpace(envelope.SiteID) != scope.SiteID || strings.TrimSpace(envelope.GatewayID) != scope.GatewayID {
-		return errors.New("MQTT telemetry topic and envelope scope differ")
+	if strings.TrimSpace(envelope.GatewayID) != scope.GatewayID {
+		return errors.New("MQTT telemetry topic and envelope gateway differ")
 	}
-	if _, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(envelope.PublishedAt)); err != nil {
-		return errors.New("MQTT telemetry publishedAt is invalid")
+	if envelope.Timestamp < 0 || envelope.Timestamp >= 1<<48 {
+		return errors.New("MQTT telemetry timestamp must be Unix epoch milliseconds")
 	}
-	if len(envelope.Devices) == 0 || len(envelope.Devices) > maximumDevicesPerEnvelope {
+	if envelope.Sequence > math.MaxInt64 {
+		return errors.New("MQTT telemetry sequence exceeds source-position range")
+	}
+	if len(envelope.TraceID) > 256 || strings.ContainsAny(envelope.TraceID, "\r\n") {
+		return errors.New("MQTT telemetry traceId is invalid")
+	}
+	if len(envelope.Payload.Devices) == 0 || len(envelope.Payload.Devices) > maximumDevicesPerEnvelope {
 		return errors.New("MQTT telemetry device count is invalid")
 	}
-	seenDevices := make(map[string]struct{}, len(envelope.Devices))
-	for _, device := range envelope.Devices {
-		deviceID := strings.TrimSpace(device.ExternalDeviceID)
+	seenDevices := make(map[string]struct{}, len(envelope.Payload.Devices))
+	for _, device := range envelope.Payload.Devices {
+		deviceID := strings.TrimSpace(device.DeviceID)
 		if deviceID == "" || len(deviceID) > 256 {
-			return errors.New("MQTT telemetry externalDeviceId is invalid")
+			return errors.New("MQTT telemetry deviceId is invalid")
+		}
+		if device.DeviceTimestamp < 0 || device.DeviceTimestamp >= 1<<48 {
+			return fmt.Errorf("MQTT telemetry device %s deviceTimestamp is invalid", deviceID)
 		}
 		if _, duplicate := seenDevices[deviceID]; duplicate {
 			return fmt.Errorf("MQTT telemetry device %s is duplicated", deviceID)
@@ -121,64 +135,57 @@ func (envelope TelemetryEnvelope) Validate(scope TopicScope) error {
 			if err := validateEnvelopePoint(point); err != nil {
 				return fmt.Errorf("MQTT telemetry device %s: %w", deviceID, err)
 			}
-			key := strings.TrimSpace(point.TelemetryKey)
-			if _, duplicate := seenPoints[key]; duplicate {
-				return fmt.Errorf("MQTT telemetry point %s is duplicated for device %s", key, deviceID)
+			code := strings.TrimSpace(point.Code)
+			if _, duplicate := seenPoints[code]; duplicate {
+				return fmt.Errorf("MQTT telemetry point %s is duplicated for device %s", code, deviceID)
 			}
-			seenPoints[key] = struct{}{}
+			seenPoints[code] = struct{}{}
 		}
 	}
 	return nil
 }
 
 func validateEnvelopePoint(point EnvelopePoint) error {
-	key := strings.TrimSpace(point.TelemetryKey)
-	if key == "" || len(key) > 128 {
-		return errors.New("telemetryKey is invalid")
+	code := strings.TrimSpace(point.Code)
+	if !wirePointCodePattern.MatchString(code) {
+		return errors.New("point code is invalid")
 	}
-	if point.Sequence > math.MaxInt64 {
-		return fmt.Errorf("point %s sequence exceeds S2 source-position range", key)
-	}
-	sampledAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(point.SampledAt))
-	if err != nil || sampledAt.UnixMilli() < 0 || sampledAt.UnixMilli() >= 1<<48 {
-		return fmt.Errorf("point %s sampledAt is invalid", key)
-	}
-	if strings.ToUpper(strings.TrimSpace(point.Quality)) != "GOOD" {
-		return fmt.Errorf("point %s quality must be GOOD in MQTT envelope schema v1", key)
-	}
-	valueType := strings.ToUpper(strings.TrimSpace(point.ValueType))
-	switch valueType {
-	case "NUMBER":
-		number, ok := point.Value.(json.Number)
-		if !ok {
-			return fmt.Errorf("point %s NUMBER value is invalid", key)
-		}
-		value, err := number.Float64()
-		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
-			return fmt.Errorf("point %s NUMBER value is invalid", key)
-		}
-	case "STRING":
-		if _, ok := point.Value.(string); !ok {
-			return fmt.Errorf("point %s STRING value is invalid", key)
-		}
-	case "BOOLEAN":
-		if _, ok := point.Value.(bool); !ok {
-			return fmt.Errorf("point %s BOOLEAN value is invalid", key)
-		}
-	case "JSON":
-		if point.Value == nil {
-			return fmt.Errorf("point %s JSON value is invalid", key)
-		}
-	default:
-		return fmt.Errorf("point %s valueType is invalid", key)
+	if _, err := wireValueType(point.Value); err != nil {
+		return fmt.Errorf("point %s value is invalid: %w", code, err)
 	}
 	if point.Unit != nil {
 		unit := strings.TrimSpace(*point.Unit)
 		if unit == "" || len(unit) > 64 {
-			return fmt.Errorf("point %s unit is invalid", key)
+			return fmt.Errorf("point %s unit is invalid", code)
 		}
 	}
 	return nil
+}
+
+func wireValueType(value any) (string, error) {
+	switch typed := value.(type) {
+	case json.Number:
+		number, err := typed.Float64()
+		if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
+			return "", errors.New("numeric value is not finite")
+		}
+		return "NUMBER", nil
+	case string:
+		return "STRING", nil
+	case bool:
+		return "BOOLEAN", nil
+	case nil:
+		return "", errors.New("null is not a telemetry value")
+	default:
+		if _, err := json.Marshal(typed); err != nil {
+			return "", err
+		}
+		return "JSON", nil
+	}
+}
+
+func unixMillisRFC3339(milliseconds int64) string {
+	return time.UnixMilli(milliseconds).UTC().Format(time.RFC3339Nano)
 }
 
 func validGatewayID(value string) bool {

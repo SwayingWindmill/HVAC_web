@@ -53,23 +53,23 @@ func TestEvaluateObservationFreezesPositionSemantics(t *testing.T) {
 
 	facts.EventAlreadySeen = true
 	decision := EvaluateObservation(candidate, facts, now)
-	assertObservationDecision(t, decision, ObservationDuplicate, QualityRejected, []QualityReason{QualityReasonDuplicate}, false, false)
+	assertObservationDecision(t, decision, ObservationDuplicate, QualityInvalid, []QualityReason{QualityReasonDuplicate}, false, false)
 
 	facts.EventAlreadySeen = false
 	facts.CurrentPosition = &SourcePositionHead{Offset: candidate.Position.Offset, EventID: "018f2e00-8000-7000-8000-000000000099"}
 	decision = EvaluateObservation(candidate, facts, now)
-	assertObservationDecision(t, decision, ObservationDuplicate, QualityRejected, []QualityReason{QualityReasonReplayed}, false, false)
+	assertObservationDecision(t, decision, ObservationDuplicate, QualityInvalid, []QualityReason{QualityReasonReplayed}, false, false)
 
 	facts.CurrentPosition = &SourcePositionHead{Offset: candidate.Position.Offset + 1, EventID: "018f2e00-8000-7000-8000-000000000099"}
 	decision = EvaluateObservation(candidate, facts, now)
-	assertObservationDecision(t, decision, ObservationOutOfOrder, QualityRejected, []QualityReason{QualityReasonOutOfOrder}, false, false)
+	assertObservationDecision(t, decision, ObservationOutOfOrder, QualityInvalid, []QualityReason{QualityReasonOutOfOrder}, false, false)
 
 	facts.CurrentPosition = &SourcePositionHead{Offset: candidate.Position.Offset - 1, EventID: "018f2e00-8000-7000-8000-000000000099"}
 	latest := now.Add(-30 * time.Second)
 	facts.LatestSampledAt = &latest
 	candidate.SampledAt = latest.Add(-time.Second)
 	decision = EvaluateObservation(candidate, facts, now)
-	assertObservationDecision(t, decision, ObservationOutOfOrder, QualityRejected, []QualityReason{QualityReasonOutOfOrder}, true, false)
+	assertObservationDecision(t, decision, ObservationOutOfOrder, QualityGood, []QualityReason{QualityReasonOutOfOrder}, true, false)
 }
 
 func TestEvaluateObservationValidationAndQuality(t *testing.T) {
@@ -85,19 +85,19 @@ func TestEvaluateObservationValidationAndQuality(t *testing.T) {
 		reason  QualityReason
 		replace bool
 	}{
-		{name: "declared type mismatch", mutate: func(c *ObservationCandidate, _ *ObservationFacts) { c.ValueType = "STRING" }, status: ObservationRejected, quality: QualityRejected, reason: QualityReasonTypeMismatch},
-		{name: "payload type mismatch", mutate: func(c *ObservationCandidate, _ *ObservationFacts) { c.Value = json.RawMessage(`"hot"`) }, status: ObservationRejected, quality: QualityRejected, reason: QualityReasonTypeMismatch},
+		{name: "declared type mismatch", mutate: func(c *ObservationCandidate, _ *ObservationFacts) { c.ValueType = "STRING" }, status: ObservationRejected, quality: QualityInvalid, reason: QualityReasonTypeMismatch},
+		{name: "payload type mismatch", mutate: func(c *ObservationCandidate, _ *ObservationFacts) { c.Value = json.RawMessage(`"hot"`) }, status: ObservationRejected, quality: QualityInvalid, reason: QualityReasonTypeMismatch},
 		{name: "public value limit", mutate: func(c *ObservationCandidate, f *ObservationFacts) {
 			value, _ := json.Marshal(strings.Repeat("x", 4097))
 			c.Value, c.ValueType = value, "STRING"
 			f.Policy.ValueType = "STRING"
 			f.Policy.Unit = nil
 			c.Unit = nil
-		}, status: ObservationRejected, quality: QualityRejected, reason: QualityReasonTypeMismatch},
-		{name: "unit mismatch", mutate: func(c *ObservationCandidate, _ *ObservationFacts) { unit := "degF"; c.Unit = &unit }, status: ObservationRejected, quality: QualityRejected, reason: QualityReasonUnitMismatch},
-		{name: "below range", mutate: func(c *ObservationCandidate, _ *ObservationFacts) { c.Value = json.RawMessage(`-80`) }, status: ObservationRejected, quality: QualityRejected, reason: QualityReasonOutOfRange},
-		{name: "future clock", mutate: func(c *ObservationCandidate, _ *ObservationFacts) { c.SampledAt = now.Add(31 * time.Second) }, status: ObservationRejected, quality: QualityRejected, reason: QualityReasonClockAhead},
-		{name: "source lag suspect", mutate: func(c *ObservationCandidate, _ *ObservationFacts) { c.SampledAt = now.Add(-11 * time.Minute) }, status: ObservationAccepted, quality: QualitySuspect, reason: QualityReasonSourceLagExceeded, replace: true},
+		}, status: ObservationRejected, quality: QualityInvalid, reason: QualityReasonTypeMismatch},
+		{name: "unit mismatch", mutate: func(c *ObservationCandidate, _ *ObservationFacts) { unit := "degF"; c.Unit = &unit }, status: ObservationRejected, quality: QualityInvalid, reason: QualityReasonUnitMismatch},
+		{name: "below range", mutate: func(c *ObservationCandidate, _ *ObservationFacts) { c.Value = json.RawMessage(`-80`) }, status: ObservationRejected, quality: QualityInvalid, reason: QualityReasonOutOfRange},
+		{name: "future clock", mutate: func(c *ObservationCandidate, _ *ObservationFacts) { c.SampledAt = now.Add(31 * time.Second) }, status: ObservationRejected, quality: QualityInvalid, reason: QualityReasonClockAhead},
+		{name: "source lag stale", mutate: func(c *ObservationCandidate, _ *ObservationFacts) { c.SampledAt = now.Add(-11 * time.Minute) }, status: ObservationAccepted, quality: QualityStale, reason: QualityReasonSourceLagExceeded, replace: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -168,9 +168,9 @@ func validObservationFacts() ObservationFacts {
 	return ObservationFacts{
 		Bindings: []RuntimeBinding{bindingWithStatus("ACTIVE")},
 		PointBindings: []RuntimePointBinding{{
-			TenantID: ingestTenantA, OwningOrganizationID: orgA, SiteID: siteA,
+			TenantID: ingestTenantA, SiteID: siteA,
 			PointID: "018f2e00-3100-7000-8000-000000000001", SensorID: &sensorID, DeviceID: deviceA,
-			TelemetryKey: "zone.temperature", PointKind: "MEASURED", ValueType: "NUMBER", Unit: &unit, Status: "ACTIVE", PointRevision: 1,
+			TelemetryKey: "zone.temperature", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: &unit, Status: "ACTIVE", PointRevision: 1,
 		}},
 		Policy: &ObservationPolicy{
 			Revision:           5,
@@ -184,6 +184,42 @@ func validObservationFacts() ObservationFacts {
 	}
 }
 
+func TestCounterSemanticsAreSnapshottedIntoHistory(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	candidate := validObservationCandidate(now)
+	facts := validObservationFacts()
+	mode := "ROLLOVER"
+	modulus := 10000.0
+	facts.PointBindings[0].PointType = "COUNTER"
+	facts.PointBindings[0].CounterDecreaseMode = &mode
+	facts.PointBindings[0].CounterRolloverModulus = &modulus
+	facts.PointBindings[0].PointRevision = 7
+
+	decision := EvaluateObservation(candidate, facts, now)
+	if decision.Status != ObservationAccepted || decision.PointType != "COUNTER" || decision.PointRevision != 7 {
+		t.Fatalf("decision=%#v", decision)
+	}
+	if decision.CounterDecreaseMode != mode || decision.CounterRolloverModulus == nil || *decision.CounterRolloverModulus != modulus {
+		t.Fatalf("counter decision semantics=%#v", decision)
+	}
+
+	observation, err := buildHistoryObservation(
+		"018f2e00-9100-7000-8000-000000000010",
+		candidate,
+		decision,
+		strings.Repeat("a", 64),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation.PointType == nil || *observation.PointType != "COUNTER" || observation.PointRevision == nil || *observation.PointRevision != 7 {
+		t.Fatalf("history point semantics=%#v", observation)
+	}
+	if observation.CounterDecreaseMode == nil || *observation.CounterDecreaseMode != mode || observation.CounterRolloverModulus == nil || *observation.CounterRolloverModulus != modulus {
+		t.Fatalf("history counter semantics=%#v", observation)
+	}
+}
+
 func bindingWithStatus(status string) RuntimeBinding {
 	return bindingValidBetween(status, time.Time{}, nil)
 }
@@ -192,7 +228,6 @@ func bindingValidBetween(status string, validFrom time.Time, validTo *time.Time)
 	return RuntimeBinding{
 		TenantID:              ingestTenantA,
 		DeviceID:              deviceA,
-		OwningOrganizationID:  orgA,
 		SiteID:                siteA,
 		IntegrationInstanceID: integrationA,
 		ExternalEntityType:    "DEVICE",

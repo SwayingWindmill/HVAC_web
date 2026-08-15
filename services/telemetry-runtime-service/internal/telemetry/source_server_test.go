@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const thingsBoardSPIFFE = "spiffe://hvac.local/thingsboard-adapter"
+const mqttSourceSPIFFE = "spiffe://hvac.local/mqtt-telemetry-adapter"
 
 type fakeObservationAcceptor struct {
 	candidates []ObservationCandidate
@@ -24,23 +24,23 @@ func (fake *fakeObservationAcceptor) AcceptObservation(_ context.Context, candid
 }
 
 func TestParseSourceAuthenticatorJSONRequiresExactSPIFFEAndIntegrationBindings(t *testing.T) {
-	authenticator, err := ParseSourceAuthenticatorJSON(`{"` + thingsBoardSPIFFE + `":["` + integrationA + `"]}`)
+	authenticator, err := ParseSourceAuthenticatorJSON(`{"` + mqttSourceSPIFFE + `":["` + integrationA + `"]}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !authenticator.AllowsSource(thingsBoardSPIFFE, integrationA) || authenticator.AllowsSource(thingsBoardSPIFFE, "018f2e00-6000-7000-8000-000000000099") {
+	if !authenticator.AllowsSource(mqttSourceSPIFFE, integrationA) || authenticator.AllowsSource(mqttSourceSPIFFE, "018f2e00-6000-7000-8000-000000000099") {
 		t.Fatal("source authenticator scope is not exact")
 	}
 	for _, raw := range []string{
 		`{}`,
-		`{"https://thingsboard.invalid":["` + integrationA + `"]}`,
+		`{"https://source.invalid":["` + integrationA + `"]}`,
 		`{"spiffe://hvac.local":["` + integrationA + `"]}`,
 		`{"spiffe://hvac.local/?scope=all":["` + integrationA + `"]}`,
-		`{"spiffe://hvac.local/thingsboard-adapter#shadow":["` + integrationA + `"]}`,
-		`{"spiffe://user@hvac.local/thingsboard-adapter":["` + integrationA + `"]}`,
-		`{"` + thingsBoardSPIFFE + `":["not-a-uuid"]}`,
-		`{"` + thingsBoardSPIFFE + `":["` + integrationA + `","` + integrationA + `"]}`,
-		`{"` + thingsBoardSPIFFE + `":["` + integrationA + `"]}{}`,
+		`{"spiffe://hvac.local/mqtt-telemetry-adapter#shadow":["` + integrationA + `"]}`,
+		`{"spiffe://user@hvac.local/mqtt-telemetry-adapter":["` + integrationA + `"]}`,
+		`{"` + mqttSourceSPIFFE + `":["not-a-uuid"]}`,
+		`{"` + mqttSourceSPIFFE + `":["` + integrationA + `","` + integrationA + `"]}`,
+		`{"` + mqttSourceSPIFFE + `":["` + integrationA + `"]}{}`,
 	} {
 		if _, err := ParseSourceAuthenticatorJSON(raw); err == nil {
 			t.Fatalf("invalid source bindings accepted: %s", raw)
@@ -48,7 +48,7 @@ func TestParseSourceAuthenticatorJSONRequiresExactSPIFFEAndIntegrationBindings(t
 	}
 }
 
-func TestThingsBoardSourceModesReuseOneAcceptancePath(t *testing.T) {
+func TestSourceModesReuseOneAcceptancePath(t *testing.T) {
 	now := time.Date(2026, 7, 24, 2, 0, 5, 0, time.UTC)
 	for _, sourcePath := range []SourcePath{SourcePathWebhook, SourcePathPush, SourcePathPoll, SourcePathReconciliation} {
 		t.Run(string(sourcePath), func(t *testing.T) {
@@ -58,13 +58,13 @@ func TestThingsBoardSourceModesReuseOneAcceptancePath(t *testing.T) {
 			}}
 			handler := NewHandler(ServerConfig{
 				ObservationAcceptor: acceptor,
-				SourceAuthenticator: NewStaticSourceAuthenticator(map[string][]string{thingsBoardSPIFFE: {integrationA}}),
+				SourceAuthenticator: NewStaticSourceAuthenticator(map[string][]string{mqttSourceSPIFFE: {integrationA}}),
 				Now:                 func() time.Time { return now },
 			})
 			body := `{"integrationInstanceId":"` + integrationA + `","sourcePath":"` + string(sourcePath) + `","externalEntityType":"DEVICE","externalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}`
 			request := httptest.NewRequest(http.MethodPost, InternalSourceObservationPath, strings.NewReader(body))
 			request.Header.Set("Content-Type", "application/json")
-			request.TLS = verifiedTLSState(thingsBoardSPIFFE)
+			request.TLS = verifiedTLSState(mqttSourceSPIFFE)
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, request)
 			if recorder.Code != http.StatusOK {
@@ -81,11 +81,11 @@ func TestThingsBoardSourceModesReuseOneAcceptancePath(t *testing.T) {
 	}
 }
 
-func TestThingsBoardSourceAuthenticationAndScopeFailClosed(t *testing.T) {
+func TestSourceAuthenticationAndScopeFailClosed(t *testing.T) {
 	acceptor := &fakeObservationAcceptor{}
 	handler := NewHandler(ServerConfig{
 		ObservationAcceptor: acceptor,
-		SourceAuthenticator: NewStaticSourceAuthenticator(map[string][]string{thingsBoardSPIFFE: {integrationA}}),
+		SourceAuthenticator: NewStaticSourceAuthenticator(map[string][]string{mqttSourceSPIFFE: {integrationA}}),
 	})
 	validBody := `{"integrationInstanceId":"` + integrationA + `","sourcePath":"WEBHOOK","externalEntityType":"DEVICE","externalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}`
 
@@ -99,8 +99,8 @@ func TestThingsBoardSourceAuthenticationAndScopeFailClosed(t *testing.T) {
 	}{
 		{name: "missing workload", body: validBody, status: http.StatusUnauthorized, code: "TELEMETRY_SOURCE_IDENTITY_INVALID"},
 		{name: "wrong workload", peer: "spiffe://hvac.local/legacy-backend", body: validBody, status: http.StatusUnauthorized, code: "TELEMETRY_SOURCE_IDENTITY_INVALID"},
-		{name: "wrong integration scope", peer: thingsBoardSPIFFE, body: strings.Replace(validBody, integrationA, "018f2e00-6000-7000-8000-000000000099", 1), status: http.StatusUnauthorized, code: "TELEMETRY_SOURCE_IDENTITY_INVALID"},
-		{name: "forged integration header", peer: thingsBoardSPIFFE, body: validBody, header: "X-Integration-Instance-ID", status: http.StatusBadRequest, code: "TELEMETRY_FORGED_IDENTITY_HEADER"},
+		{name: "wrong integration scope", peer: mqttSourceSPIFFE, body: strings.Replace(validBody, integrationA, "018f2e00-6000-7000-8000-000000000099", 1), status: http.StatusUnauthorized, code: "TELEMETRY_SOURCE_IDENTITY_INVALID"},
+		{name: "forged integration header", peer: mqttSourceSPIFFE, body: validBody, header: "X-Integration-Instance-ID", status: http.StatusBadRequest, code: "TELEMETRY_FORGED_IDENTITY_HEADER"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -124,8 +124,8 @@ func TestThingsBoardSourceAuthenticationAndScopeFailClosed(t *testing.T) {
 	}
 }
 
-func TestThingsBoardSourceFailsClosedOnMalformedAndDependencyFailure(t *testing.T) {
-	authenticator := NewStaticSourceAuthenticator(map[string][]string{thingsBoardSPIFFE: {integrationA}})
+func TestSourceFailsClosedOnMalformedAndDependencyFailure(t *testing.T) {
+	authenticator := NewStaticSourceAuthenticator(map[string][]string{mqttSourceSPIFFE: {integrationA}})
 	validBody := `{"integrationInstanceId":"` + integrationA + `","sourcePath":"WEBHOOK","externalEntityType":"DEVICE","externalId":"tb-device-org-a-site-1","telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}`
 	for _, test := range []struct {
 		name        string
@@ -146,7 +146,7 @@ func TestThingsBoardSourceFailsClosedOnMalformedAndDependencyFailure(t *testing.
 			if test.contentType != "" {
 				request.Header.Set("Content-Type", test.contentType)
 			}
-			request.TLS = verifiedTLSState(thingsBoardSPIFFE)
+			request.TLS = verifiedTLSState(mqttSourceSPIFFE)
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, request)
 			if recorder.Code != test.status || !strings.Contains(recorder.Body.String(), test.code) {
@@ -167,9 +167,9 @@ func (fake *fakeCoverageReporter) ReportCoverage(_ context.Context, report Cover
 	return fake.receipt, fake.err
 }
 
-func TestThingsBoardCoverageReportsOutageAndRecovery(t *testing.T) {
+func TestSourceCoverageReportsOutageAndRecovery(t *testing.T) {
 	now := time.Date(2026, 7, 24, 2, 10, 0, 0, time.UTC)
-	authenticator := NewStaticSourceAuthenticator(map[string][]string{thingsBoardSPIFFE: {integrationA}})
+	authenticator := NewStaticSourceAuthenticator(map[string][]string{mqttSourceSPIFFE: {integrationA}})
 	for _, test := range []struct {
 		name      string
 		body      string
@@ -182,9 +182,9 @@ func TestThingsBoardCoverageReportsOutageAndRecovery(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			reporter := &fakeCoverageReporter{receipt: CoverageReceipt{Status: "APPLIED", DeviceID: deviceA, BusinessRevision: 3, StateChanged: true}}
 			handler := NewHandler(ServerConfig{CoverageReporter: reporter, SourceAuthenticator: authenticator, Now: func() time.Time { return now }})
-			request := httptest.NewRequest(http.MethodPost, InternalThingsBoardCoveragePath, strings.NewReader(test.body))
+			request := httptest.NewRequest(http.MethodPost, InternalSourceCoveragePath, strings.NewReader(test.body))
 			request.Header.Set("Content-Type", "application/json")
-			request.TLS = verifiedTLSState(thingsBoardSPIFFE)
+			request.TLS = verifiedTLSState(mqttSourceSPIFFE)
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, request)
 			if recorder.Code != http.StatusOK {

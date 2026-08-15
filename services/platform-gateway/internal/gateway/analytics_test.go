@@ -22,8 +22,9 @@ import (
 )
 
 const (
+	analyticsGatewayTenant       = "018f1d00-0000-7000-8000-000000000001"
+	analyticsGatewayOtherTenant  = "018f1d00-0000-7000-8000-000000000002"
 	analyticsGatewayOrganization = "018f1e00-0000-7000-8000-000000000001"
-	analyticsGatewayOtherOrg     = "018f1e00-0000-7000-8000-000000000002"
 	analyticsGatewaySite         = "018f1e00-1000-7000-8000-000000000001"
 	analyticsGatewayOtherSite    = "018f1e00-1000-7000-8000-000000000002"
 	analyticsGatewayPrincipal    = "018f1e00-2000-7000-8000-000000000001"
@@ -74,13 +75,13 @@ func TestGatewayEnergySeriesRunsThroughQueryServiceRouteOwnership(t *testing.T) 
 	}
 }
 
-func TestGatewayEnergySeriesRejectsCrossOrganizationBeforeIAM(t *testing.T) {
+func TestGatewayEnergySeriesRejectsTenantMismatchFromIAM(t *testing.T) {
 	fixture := newAnalyticsGatewayFixture(t, analyticsFixtureOptions{})
 	query := validGatewayEnergyQuery(fixture.now)
-	query.OrganizationID = analyticsGatewayOtherOrg
+	query.TenantID = analyticsGatewayOtherTenant
 	recorder := fixture.request(t, query, true)
-	assertAnalyticsProblem(t, recorder, http.StatusForbidden, "ANALYTICS_ACCESS_DENIED")
-	if fixture.iamCalls.Load() != 0 || fixture.queryCalls.Load() != 0 {
+	assertAnalyticsProblem(t, recorder, http.StatusServiceUnavailable, "ANALYTICS_UNAVAILABLE")
+	if fixture.iamCalls.Load() != 1 || fixture.queryCalls.Load() != 0 {
 		t.Fatalf("unexpected upstream calls iam=%d query=%d", fixture.iamCalls.Load(), fixture.queryCalls.Load())
 	}
 }
@@ -186,7 +187,7 @@ func newAnalyticsGatewayFixture(t *testing.T, options analyticsFixtureOptions) *
 		}
 		return analyticsHTTPResponse(http.StatusOK, analyticsmodel.AuthorizationDecisionResponse{Decision: analyticsmodel.AuthorizationDecision{
 			Allowed: allowed, PrincipalID: analyticsGatewayPrincipal, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
-			ActingOrganizationID: parent.ActingOrganizationID, SiteID: input.SiteID, Action: input.Action,
+			ActingOrganizationID: parent.ActingOrganizationID, TenantID: analyticsGatewayTenant, SiteID: input.SiteID, Action: input.Action,
 			PolicyRevision: "analytics-policy-7", ReasonCode: reason, DecidedAt: now.Format(time.RFC3339Nano),
 		}}), nil
 	})}
@@ -215,7 +216,7 @@ func newAnalyticsGatewayFixture(t *testing.T, options analyticsFixtureOptions) *
 		if err != nil {
 			t.Fatal(err)
 		}
-		if grant.Audience != "telemetry-query-service" || grant.PrincipalID != analyticsGatewayPrincipal || len(grant.Actions) != 1 || grant.Actions[0] != analyticsmodel.EnergySeriesAction || len(grant.Scopes) != 1 || grant.Scopes[0] != digest || grant.ActingOrganizationID != query.OrganizationID || grant.PolicyRevision != "analytics-policy-7" {
+		if grant.Audience != "telemetry-query-service" || grant.PrincipalID != analyticsGatewayPrincipal || len(grant.Actions) != 1 || grant.Actions[0] != analyticsmodel.EnergySeriesAction || len(grant.Scopes) != 1 || grant.Scopes[0] != digest || grant.ActingOrganizationID != analyticsGatewayOrganization || grant.TenantID != query.TenantID || grant.PolicyRevision != "analytics-policy-7" {
 			t.Fatalf("query grant=%#v digest=%s", grant, digest)
 		}
 		switch options.queryMode {
@@ -303,7 +304,7 @@ func (fixture *analyticsGatewayFixture) request(t *testing.T, query analyticsmod
 
 func validGatewayEnergyQuery(now time.Time) analyticsmodel.EnergySeriesQuery {
 	return analyticsmodel.EnergySeriesQuery{
-		OrganizationID: analyticsGatewayOrganization, SiteID: analyticsGatewaySite, EnergyType: analyticsmodel.EnergyTypeElectricity,
+		TenantID: analyticsGatewayTenant, SiteID: analyticsGatewaySite, EnergyType: analyticsmodel.EnergyTypeElectricity,
 		Granularity: analyticsmodel.GranularityDay, Timezone: "Asia/Shanghai", From: now.Add(-48 * time.Hour), To: now,
 		QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
 	}

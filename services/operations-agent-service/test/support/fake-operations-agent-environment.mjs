@@ -18,10 +18,10 @@ class FakeBusinessStore {
 
   repository = {
     get: async (investigationId) => this.records.get(investigationId) ?? null,
-    listByScope: async ({ organizationId, siteId, limit }) => [...this.records.values()]
+    listByScope: async ({ tenantId, siteId, limit }) => [...this.records.values()]
       .filter((investigation) => {
         const view = investigation.view();
-        return view.scope.organizationId === organizationId && view.scope.siteId === siteId;
+        return view.scope.tenantId === tenantId && view.scope.siteId === siteId;
       })
       .sort((left, right) => {
         const leftView = left.view();

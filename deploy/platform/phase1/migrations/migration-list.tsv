@@ -1,6 +1,7 @@
 hvac_s0|infra/s0-durable/postgres/init/001-s0-durable.sql
 hvac_s0|infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql
 hvac_s0|infra/s0-durable/postgres/init/003-operations-audit-ledger.sql
+hvac_s0|infra/s0-durable/postgres/init/004-audit-postgres-outbox.sql
 hvac_s1|infra/s1-registry/postgres/init/001-s1-registry-baseline.sql
 hvac_s1|infra/s1-registry/postgres/init/001a-tenant-foundation.sql
 hvac_s1|infra/s1-registry/postgres/init/001b-device-binding-invariants.sql
@@ -14,6 +15,10 @@ hvac_s1|infra/s1-registry/postgres/init/007a-tenant-spatial-scope.sql
 hvac_s1|infra/s1-registry/postgres/init/007b-control-point-invariants.sql
 hvac_s1|infra/s1-registry/postgres/init/008-s5-work-order-authorization.sql
 hvac_s1|infra/s1-registry/postgres/init/009-energy-data-foundation.sql
+hvac_s1|infra/s1-registry/postgres/init/009c-metric-model-v2.sql
+hvac_s1|infra/s1-registry/postgres/init/009d-data-governance-v2.sql
+hvac_s1|infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql
+hvac_s1|infra/s1-registry/postgres/init/009i-backend-integration-v2.sql
 hvac_s2|infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 hvac_s2|infra/s2-telemetry/postgres/init/003-s2-telemetry-ingest.sql

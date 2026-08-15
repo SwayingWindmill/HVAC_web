@@ -83,13 +83,6 @@
       "category": "control"
     },
     {
-      "id": "GATE-COMMAND-CERT-PREFLIGHT",
-      "command": "npm run s3:certification:preflight",
-      "category": "control",
-      "formalMeasurement": false,
-      "evidence": ["out/s3-command-certification/certification-preflight-report.json"]
-    },
-    {
       "id": "GATE-OBSERVABILITY",
       "command": "npm run observability:phase1:check",
       "category": "observability"

@@ -230,7 +230,7 @@ test('Coordinator telemetry correlates Runtime, Tool, Owner, budget, commit and 
   const exporter = createMemoryOperationsTelemetryExporter();
   const telemetry = createOperationsTelemetryRuntime({ exporter });
   const scope = Object.freeze({
-    organizationId: 'organization-observability',
+    tenantId: 'organization-observability',
     siteId: 'site-observability',
     equipmentId: null,
     deviceId: null,
