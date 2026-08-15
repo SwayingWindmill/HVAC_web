@@ -38,7 +38,6 @@ import {
   useRegistryAssetModel,
   useRegistryDeviceDetail,
   useRegistryEquipmentDetail,
-  useRegistryOrganizations,
   useRegistrySite,
   useRegistrySites,
 } from '@/api/registry';
@@ -128,10 +127,7 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
   const setBuilding = useUi((state) => state.setBuilding);
   const detailFocus = useOperationsDetailFocus();
 
-  const organizationsQuery = useRegistryOrganizations();
-  const organizations = flattenRegistryPages(organizationsQuery.data);
-  const [organizationId, setOrganizationId] = useState<string | null>(null);
-  const sitesQuery = useRegistrySites(organizationId);
+  const sitesQuery = useRegistrySites();
   const sites = flattenRegistryPages(sitesQuery.data);
   const [siteId, setSiteId] = useState<string | null>(null);
   const siteQuery = useRegistrySite(siteId);
@@ -150,12 +146,6 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
   const deviceDetail = useRegistryDeviceDetail(deviceParam);
 
   useEffect(() => {
-    if (organizationId && organizations.some((organization) => organization.id === organizationId)) return;
-    const nextOrganizationId = organizations[0]?.id ?? null;
-    if (organizationId !== nextOrganizationId) setOrganizationId(nextOrganizationId);
-  }, [organizationId, organizations]);
-
-  useEffect(() => {
     if (siteId && sites.some((site) => site.id === siteId)) return;
     const nextSiteId = sites[0]?.id ?? null;
     if (siteId !== nextSiteId) setSiteId(nextSiteId);
@@ -167,14 +157,6 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
     next.delete('equipment');
     next.delete('device');
     setSearchParams(next, { replace: true });
-  };
-
-  const selectOrganization = (value: string) => {
-    purgeTelemetryCurrentState(queryClient, telemetryRuntime);
-    clearDetailParams();
-    setOrganizationId(value);
-    setSiteId(null);
-    setKeyword('');
   };
 
   const selectSite = (value: string) => {
@@ -227,7 +209,8 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
     });
   }, [devices, keyword, lifecycle]);
 
-  const presenceQuery = useVisibleDevicePresence(deviceRows, organizationId, siteId, telemetryRuntime);
+  const selectedSite = siteQuery.data ?? sites.find((site) => site.id === siteId);
+  const presenceQuery = useVisibleDevicePresence(deviceRows, selectedSite?.tenantId ?? null, siteId, telemetryRuntime);
   const selectedDevice = deviceParam
     ? deviceDetail.data ?? devices.find((device) => device.id === deviceParam) ?? null
     : null;
@@ -345,16 +328,14 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
     },
   ];
 
-  if (organizationsQuery.isPending) return <PageScaffold title="设备与建筑"><LoadingState tip="正在读取授权 Organization" /></PageScaffold>;
-  if (organizationsQuery.error) {
-    return <PageScaffold title="设备与建筑"><RegistryFailureState error={organizationsQuery.error} onRetry={() => void organizationsQuery.refetch()} /></PageScaffold>;
+  if (sitesQuery.isPending) return <PageScaffold title="设备与建筑"><LoadingState tip="正在读取授权 Site" /></PageScaffold>;
+  if (sitesQuery.error) {
+    return <PageScaffold title="设备与建筑"><RegistryFailureState error={sitesQuery.error} onRetry={() => void sitesQuery.refetch()} /></PageScaffold>;
   }
-  if (organizations.length === 0) {
-    return <PageScaffold title="设备与建筑"><RegistryEmptyState description="当前账号没有可见的 Organization。" /></PageScaffold>;
+  if (sites.length === 0) {
+    return <PageScaffold title="设备与建筑"><RegistryEmptyState description="当前账号没有可见的 Site。" /></PageScaffold>;
   }
 
-  const selectedSite = siteQuery.data ?? sites.find((site) => site.id === siteId);
-  const selectedOrganization = organizations.find((organization) => organization.id === organizationId);
   const attentionCount = [...equipment, ...devices].filter((item) => item.status !== 'ACTIVE').length;
   const visiblePresence = presenceQuery.data?.items ?? [];
   const onlineCount = visiblePresence.filter((item) => item.status === 'ok' && item.snapshot.displayState === 'ONLINE').length;
@@ -378,10 +359,8 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
             { label: 'Area', value: assetModel?.counts.areas ?? 0, icon: <ClusterOutlined />, detail: '空间层级' },
             { label: 'Equipment', value: assetModel?.counts.equipment ?? 0, icon: <BlockOutlined />, detail: '物理设备' },
             { label: 'Device Endpoint', value: assetModel?.counts.deviceEndpoints ?? 0, icon: <TabletOutlined />, detail: '通信端点' },
-            { label: 'Sensor', value: assetModel?.counts.sensors ?? 0, icon: <ApiOutlined />, detail: '测量单元' },
-            { label: 'Telemetry Point', value: assetModel?.counts.telemetryPoints ?? 0, icon: <DatabaseOutlined />, detail: '完整点位目录' },
-            { label: '独立 Sensor Device', value: assetModel?.counts.independentSensorDevices ?? 0, icon: <ApiOutlined />, detail: '独立通信测量设备' },
-            { label: '计算点', value: assetModel?.counts.calculatedPoints ?? 0, icon: <DatabaseOutlined />, detail: '版本化公式输出' },
+            { label: 'Sensor', value: assetModel?.counts.physicalSensors ?? 0, icon: <ApiOutlined />, detail: '测量单元' },
+            { label: 'Point', value: assetModel?.counts.points ?? 0, icon: <DatabaseOutlined />, detail: '标准点位目录' },
           ]}
         />
         <OperationsMetrics
@@ -397,7 +376,7 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
             type="error"
             showIcon
             message="可见 Device 的 Presence batch 暂不可用"
-            description="真实模式保持 Registry 列表可见，但不会回退到 Legacy、ThingsBoard、Socket.IO 或 Mock 状态。"
+            description="真实模式保持 Registry 列表可见，但不会回退到 Legacy、Provider 直读、Socket.IO 或 Mock 状态。"
             action={<Button size="small" onClick={() => void presenceQuery.refetch()}>重试</Button>}
             data-presence-batch-state="error"
           />
@@ -428,25 +407,16 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
             >
               <Space direction="vertical" size={10} style={{ width: '100%' }}>
                 <Select
-                  aria-label="选择 Organization"
-                  value={organizationId ?? undefined}
-                  onChange={selectOrganization}
-                  options={organizations.map((organization) => ({ value: organization.id, label: organization.displayName }))}
-                  style={{ width: '100%' }}
-                />
-                <Select
                   aria-label="选择 Site"
                   value={siteId ?? undefined}
                   onChange={selectSite}
                   loading={sitesQuery.isPending}
-                  disabled={sitesQuery.isError || sites.length === 0}
+                  disabled={sites.length === 0}
                   placeholder={sites.length === 0 ? '暂无授权 Site' : '选择 Site'}
                   options={sites.map((site) => ({ value: site.id, label: site.displayName }))}
                   style={{ width: '100%' }}
                 />
-                {sitesQuery.error ? (
-                  <RegistryFailureState error={sitesQuery.error} compact onRetry={() => void sitesQuery.refetch()} />
-                ) : !siteId ? (
+                {!siteId ? (
                   <RegistryEmptyState description="请选择一个授权 Site。" />
                 ) : assetModelQuery.error ? (
                   <RegistryFailureState error={assetModelQuery.error} compact onRetry={() => void assetModelQuery.refetch()} />
@@ -465,12 +435,6 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
                     onSelect={selectTreeNode}
                   />
                 )}
-                <RegistryLoadMore
-                  hasMore={Boolean(organizationsQuery.hasNextPage)}
-                  loading={organizationsQuery.isFetchingNextPage}
-                  onLoadMore={() => void organizationsQuery.fetchNextPage()}
-                  label="更多 Organization"
-                />
                 <RegistryLoadMore
                   hasMore={Boolean(sitesQuery.hasNextPage)}
                   loading={sitesQuery.isFetchingNextPage}
@@ -588,7 +552,7 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
           <OperationsDetailHeader
             eyebrow={`Registry ${detailKind}`}
             title={detailResource.displayName}
-            subtitle={`${selectedOrganization?.displayName ?? 'Organization'} · ${selectedSite?.displayName ?? 'Site'}`}
+            subtitle={selectedSite ? `${selectedSite.displayName} · Tenant ${selectedSite.tenantId}` : 'Site'}
             status={<Tag color={lifecycleColor[detailResource.status]}>{lifecycleLabel[detailResource.status] ?? detailResource.status}</Tag>}
             meta={<Typography.Text code>{detailResource.id}</Typography.Text>}
           />
@@ -616,7 +580,7 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
               <Descriptions column={{ xs: 1, sm: 2 }} size="small" colon={false}>
                 <Descriptions.Item label="Platform ID"><Typography.Text code copyable>{detailResource.id}</Typography.Text></Descriptions.Item>
                 <Descriptions.Item label="Code">{detailResource.code}</Descriptions.Item>
-                <Descriptions.Item label="Owning Organization ID"><Typography.Text code copyable>{detailResource.owningOrganizationId}</Typography.Text></Descriptions.Item>
+                <Descriptions.Item label="Tenant ID"><Typography.Text code copyable>{detailResource.tenantId}</Typography.Text></Descriptions.Item>
                 <Descriptions.Item label="Site ID"><Typography.Text code copyable>{detailResource.siteId}</Typography.Text></Descriptions.Item>
                 <Descriptions.Item label="类型">{'equipmentType' in detailResource ? detailResource.equipmentType : detailResource.deviceType}</Descriptions.Item>
                 <Descriptions.Item label="Lifecycle">{detailResource.status}</Descriptions.Item>

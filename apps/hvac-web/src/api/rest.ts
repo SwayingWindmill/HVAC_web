@@ -117,7 +117,7 @@ function useMockTelemetryPush() {
 
 /**
  * Legacy-shaped hook retained for mock-only pages. Real mode fails closed and
- * never calls Legacy latest, batch, ThingsBoard or Socket.IO current-state paths.
+ * never calls Legacy latest, provider read-through or Socket.IO current-state paths.
  */
 export function useLatest(deviceId: string, keys: string[], enabled = true) {
   return useQuery({

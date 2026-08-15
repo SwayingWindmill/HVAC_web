@@ -73,7 +73,7 @@ export function useRealAssetsDeviceRealtime({
   const sessionRef = useRef<RealAssetsTelemetryLiveSession | null>(null);
   const scope = useMemo(
     () => createScope(row, protectedGeneration),
-    [protectedGeneration, row?.device.id, row?.device.owningOrganizationId, row?.device.siteId, row?.device.deviceType],
+    [protectedGeneration, row?.device.id, row?.device.tenantId, row?.device.siteId, row?.device.deviceType],
   );
   const keySignature = scope?.keys.join('|') ?? '';
 

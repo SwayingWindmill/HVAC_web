@@ -18,7 +18,7 @@ ALTER TABLE work_order_runtime.work_order_completion_evidence
 UPDATE work_order_runtime.work_order_completion_evidence AS evidence
 SET completion_version = current.version
 FROM work_order_runtime.work_order_current AS current
-WHERE evidence.organization_id = current.organization_id
+WHERE evidence.tenant_id = current.tenant_id
   AND evidence.site_id = current.site_id
   AND evidence.work_order_id = current.work_order_id
   AND evidence.completion_version IS NULL;
@@ -32,7 +32,7 @@ ALTER TABLE work_order_runtime.work_order_completion_evidence
 DROP POLICY IF EXISTS work_order_completion_evidence_writer_insert_org ON work_order_runtime.work_order_completion_evidence;
 CREATE POLICY work_order_completion_evidence_writer_insert_org ON work_order_runtime.work_order_completion_evidence
   FOR INSERT TO s5_work_order_writer
-  WITH CHECK (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid);
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 
 GRANT UPDATE (status, scheduled_start, due_at, version, updated_at)
   ON work_order_runtime.work_order_current TO s5_work_order_writer;

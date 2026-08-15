@@ -85,11 +85,11 @@ func (store *PostgresStore) CreateSession(ctx context.Context, session Session, 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO gateway.sessions (
 			session_id, principal_subject, principal_issuer, display_name, email, roles,
-			acting_organization_id, csrf_token_ciphertext, provider_tokens_ciphertext,
+			tenant_id, csrf_token_ciphertext, provider_tokens_ciphertext,
 			expires_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULL,$11,$12,$13,$13)
 	`, session.ID, session.Principal.Subject, session.Principal.Issuer, session.Principal.DisplayName,
-		session.Principal.Email, roles, session.ActingOrganizationID, session.CSRFTokenCiphertext,
+		session.Principal.Email, roles, session.TenantID, session.CSRFTokenCiphertext,
 		session.ProviderTokensCiphertext, session.ExpiresAt.UTC(), session.AggregateVersion,
 		session.LastAuditMessageID, session.CreatedAt)
 	if err != nil {
@@ -194,12 +194,12 @@ func (store *PostgresStore) inject(point FailurePoint) error {
 func insertAuditIntent(ctx context.Context, tx pgx.Tx, session Session, mutation MutationContext, event sessionevent.SessionAuditEventV1) error {
 	_, err := tx.Exec(ctx, `
 		INSERT INTO gateway.audit_intents (
-			message_id, session_aggregate_id, organization_id, aggregate_version,
+			message_id, session_aggregate_id, tenant_id, aggregate_version,
 			initiating_subject, initiating_issuer, executing_service, executing_spiffe_id,
 			action, result, policy_revision, correlation_id, causation_id, trace_id,
 			traceparent, payload_sha256, occurred_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-	`, event.MessageID, event.AggregateID, session.ActingOrganizationID, session.AggregateVersion,
+	`, event.MessageID, event.AggregateID, session.TenantID, session.AggregateVersion,
 		session.Principal.Subject, session.Principal.Issuer, mutation.ExecutingService,
 		mutation.ExecutingSPIFFEID, mutation.Action, event.Result, mutation.PolicyRevision,
 		mutation.CorrelationID, event.CausationID, mutation.TraceID, event.Traceparent,
@@ -212,11 +212,11 @@ func insertOutbox(ctx context.Context, tx pgx.Tx, event sessionevent.SessionAudi
 	_, err := tx.Exec(ctx, `
 		INSERT INTO gateway.outbox (
 			message_id, topic, partition_key, schema_version, aggregate_type, aggregate_id,
-			aggregate_version, organization_id, correlation_id, causation_id, trace_id,
+			aggregate_version, tenant_id, correlation_id, causation_id, trace_id,
 			traceparent, payload, envelope_sha256, created_at, available_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)
 	`, event.MessageID, sessionevent.ControlTopic, event.PartitionKey, event.SchemaVersion,
-		event.AggregateType, event.AggregateID, event.AggregateVersion, event.OrganizationID,
+		event.AggregateType, event.AggregateID, event.AggregateVersion, event.TenantID,
 		event.CorrelationID, event.CausationID, event.TraceID, event.Traceparent,
 		payload, hex.EncodeToString(digest[:]), time.UnixMilli(event.OccurredAtUnixMS).UTC())
 	return err
@@ -224,7 +224,7 @@ func insertOutbox(ctx context.Context, tx pgx.Tx, event sessionevent.SessionAudi
 
 const sessionSelect = `
 	SELECT session_id, principal_subject, principal_issuer, display_name, email, roles,
-	       acting_organization_id, csrf_token_ciphertext, provider_tokens_ciphertext,
+	       tenant_id, csrf_token_ciphertext, provider_tokens_ciphertext,
 	       expires_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at
 	FROM gateway.sessions`
 
@@ -239,7 +239,7 @@ func scanSession(row rowScanner) (Session, error) {
 	err := row.Scan(
 		&session.ID, &session.Principal.Subject, &session.Principal.Issuer,
 		&session.Principal.DisplayName, &session.Principal.Email, &roles,
-		&session.ActingOrganizationID, &session.CSRFTokenCiphertext,
+		&session.TenantID, &session.CSRFTokenCiphertext,
 		&session.ProviderTokensCiphertext, &session.ExpiresAt, &revokedAt,
 		&session.AggregateVersion, &session.LastAuditMessageID, &session.CreatedAt,
 		&session.UpdatedAt,

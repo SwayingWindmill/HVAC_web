@@ -249,7 +249,7 @@ const validateImmutableFields = (
 ): void => {
   if (current.id !== next.id
     || current.createdAt !== next.createdAt
-    || current.scope.organizationId !== next.scope.organizationId
+    || current.scope.tenantId !== next.scope.tenantId
     || current.scope.siteId !== next.scope.siteId
     || current.scope.equipmentId !== next.scope.equipmentId
     || current.scope.deviceId !== next.scope.deviceId) {
@@ -299,7 +299,7 @@ const validateEffectTransition = (
 const scopeContains = (
   investigation: OperationsInvestigationSnapshot['scope'],
   candidate: OperationsInvestigationSnapshot['scope'],
-): boolean => investigation.organizationId === candidate.organizationId
+): boolean => investigation.tenantId === candidate.tenantId
   && (investigation.siteId === null || investigation.siteId === candidate.siteId)
   && (investigation.equipmentId === null || investigation.equipmentId === candidate.equipmentId)
   && (investigation.deviceId === null || investigation.deviceId === candidate.deviceId);
@@ -340,7 +340,7 @@ const validateBusinessRecord = (
       || record.inputKind !== request.kind
       || record.inputKind !== appended.kind
       || record.inputDigest !== appended.inputDigest
-      || record.scope.organizationId !== current.scope.organizationId
+      || record.scope.tenantId !== current.scope.tenantId
       || record.scope.siteId !== current.scope.siteId
       || record.scope.equipmentId !== current.scope.equipmentId
       || record.scope.deviceId !== current.scope.deviceId) {
@@ -390,7 +390,7 @@ const validateBusinessRecord = (
       );
     }
     if (record.conclusion.status === 'SUPPORTED'
-      && (record.conclusion.organizationId !== current.scope.organizationId
+      && (record.conclusion.tenantId !== current.scope.tenantId
         || record.conclusion.siteId !== current.scope.siteId)) {
       throw new InvestigationRepositoryConflictError(
         'RECORD_REFERENCE_CONFLICT',
@@ -479,7 +479,7 @@ const insertAudit = async (client: PoolClient, audit: AuditRecord): Promise<void
     `INSERT INTO agent_operations.audit_records (
       event_id,
       investigation_id,
-      organization_id,
+      tenant_id,
       site_id,
       run_id,
       action,
@@ -495,7 +495,7 @@ const insertAudit = async (client: PoolClient, audit: AuditRecord): Promise<void
     [
       event.eventId,
       event.investigationId,
-      event.organizationId,
+      event.tenantId,
       event.siteId,
       event.runId,
       event.operation,
@@ -597,11 +597,11 @@ export const createPostgresOperationsAgentPersistence = (
       const result = await operationsPool.query<SnapshotRow>(
         `SELECT snapshot
          FROM agent_operations.investigations
-         WHERE snapshot->'scope'->>'organizationId' = $1
+         WHERE snapshot->'scope'->>'tenantId' = $1
            AND snapshot->'scope'->>'siteId' = $2
          ORDER BY created_at_ms DESC, investigation_id DESC
          LIMIT $3`,
-        [input.organizationId, input.siteId, input.limit],
+        [input.tenantId, input.siteId, input.limit],
       );
       return result.rows.map((row) => restoreSnapshot(row.snapshot));
     },

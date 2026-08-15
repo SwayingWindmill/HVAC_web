@@ -25,6 +25,7 @@ func TestBuildLogtoReconciliationRequestRequiresExplicitMappings(t *testing.T) {
 		},
 		{ID: "unapproved-logto-org", OrganizationRoles: []LogtoOrganizationRole{{ID: "other-role", Name: "owner"}}},
 	}, LogtoReconciliationSeed{
+		TenantID:      "018f1d00-0000-7000-8000-000000000001",
 		SourceVersion: 4,
 		PrincipalID:   testPlatformPrincipalID,
 		EffectiveAt:   effectiveAt,
@@ -63,6 +64,7 @@ func TestBuildLogtoReconciliationRequestProjectsSuspensionAndDeparture(t *testin
 	request, err := BuildLogtoReconciliationRequest(LogtoUser{
 		ID: "user-123", PrimaryEmail: "provider@example.test", Username: "provider-user", IsSuspended: true,
 	}, testLogtoIssuer, nil, LogtoReconciliationSeed{
+		TenantID:      "018f1d00-0000-7000-8000-000000000001",
 		SourceVersion: 5,
 		PrincipalID:   testPlatformPrincipalID,
 		EffectiveAt:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
@@ -84,6 +86,7 @@ func TestBuildLogtoReconciliationRequestProjectsSuspensionAndDeparture(t *testin
 
 func TestBuildLogtoReconciliationRequestRejectsMissingProviderEmail(t *testing.T) {
 	_, err := BuildLogtoReconciliationRequest(LogtoUser{ID: "user-123"}, testLogtoIssuer, nil, LogtoReconciliationSeed{
+		TenantID:      "018f1d00-0000-7000-8000-000000000001",
 		SourceVersion: 1,
 		PrincipalID:   testPlatformPrincipalID,
 		EffectiveAt:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
@@ -130,6 +133,7 @@ func TestLogtoReconcilerValidatesBeforeCallingManagementAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = reconciler.ReconcileUser(context.Background(), "user-123", LogtoReconciliationSeed{
+		TenantID:      "018f1d00-0000-7000-8000-000000000001",
 		SourceVersion: 1,
 		EffectiveAt:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),
 	})
@@ -154,6 +158,7 @@ func TestLogtoReconcilerReadsUserAndOrganizationsThenAppliesApprovedProjection(t
 		t.Fatal(err)
 	}
 	result, err := reconciler.ReconcileUser(context.Background(), "user-123", LogtoReconciliationSeed{
+		TenantID:      "018f1d00-0000-7000-8000-000000000001",
 		SourceVersion: 6,
 		PrincipalID:   testPlatformPrincipalID,
 		EffectiveAt:   time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC),

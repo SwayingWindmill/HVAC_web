@@ -17,7 +17,7 @@ const telemetryGrantRuntimeDatabaseRole = "s2_iam_grant_runtime"
 type TelemetryRevocationFact struct {
 	Sequence             int64  `json:"sequence"`
 	PrincipalID          string `json:"principalId"`
-	ActingOrganizationID string `json:"actingOrganizationId"`
+	TenantID string `json:"tenantId"`
 	SourceType           string `json:"sourceType"`
 	SourceID             string `json:"sourceId,omitempty"`
 	DeviceID             string `json:"deviceId,omitempty"`
@@ -79,11 +79,11 @@ func (store *PostgresTelemetryGrantStore) ConsumeGrant(ctx context.Context, clai
 		return telemetryauth.GrantUseStatus{}, fmt.Errorf("begin Telemetry grant consumption: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
-	if err := setTelemetryGrantContext(ctx, transaction, claims.ActingOrganizationID); err != nil {
+	if err := setTelemetryGrantContext(ctx, transaction, claims.TenantID); err != nil {
 		return telemetryauth.GrantUseStatus{}, err
 	}
 	var currentPolicy string
-	if err := transaction.QueryRow(ctx, `SELECT iam.active_telemetry_policy_revision($1::uuid)`, claims.ActingOrganizationID).Scan(&currentPolicy); err != nil {
+	if err := transaction.QueryRow(ctx, `SELECT iam.active_telemetry_policy_revision($1::uuid)`, claims.TenantID).Scan(&currentPolicy); err != nil {
 		return telemetryauth.GrantUseStatus{}, fmt.Errorf("read current Telemetry policy revision: %w", err)
 	}
 	var revoked bool
@@ -103,10 +103,10 @@ SELECT EXISTS (
 	}
 	command, err := transaction.Exec(ctx, `
 INSERT INTO iam.telemetry_grant_uses
-  (token_id, principal_id, acting_organization_id, scope_digest, consumed_at, expires_at)
+  (token_id, tenant_id, principal_id, scope_digest, consumed_at, expires_at)
 VALUES ($1, $2::uuid, $3::uuid, $4, $5, to_timestamp($6))
 ON CONFLICT (token_id) DO NOTHING
-`, claims.TokenID, claims.PrincipalID, claims.ActingOrganizationID, claims.ScopeDigest, now, claims.ExpiresAt)
+`, claims.TokenID, claims.TenantID, claims.PrincipalID, claims.ScopeDigest, now, claims.ExpiresAt)
 	if err != nil {
 		return telemetryauth.GrantUseStatus{}, fmt.Errorf("consume Telemetry grant: %w", err)
 	}
@@ -117,7 +117,7 @@ ON CONFLICT (token_id) DO NOTHING
 	return status, nil
 }
 
-func (store *PostgresTelemetryGrantStore) PollRevocations(ctx context.Context, actingOrganizationID string, afterSequence int64, limit int) ([]TelemetryRevocationFact, error) {
+func (store *PostgresTelemetryGrantStore) PollRevocations(ctx context.Context, tenantID string, afterSequence int64, limit int) ([]TelemetryRevocationFact, error) {
 	if store == nil || store.pool == nil {
 		return nil, errors.New("Telemetry grant store is closed")
 	}
@@ -129,11 +129,11 @@ func (store *PostgresTelemetryGrantStore) PollRevocations(ctx context.Context, a
 		return nil, fmt.Errorf("begin Telemetry revocation poll: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
-	if err := setTelemetryGrantContext(ctx, transaction, actingOrganizationID); err != nil {
+	if err := setTelemetryGrantContext(ctx, transaction, tenantID); err != nil {
 		return nil, err
 	}
 	rows, err := transaction.Query(ctx, `
-SELECT sequence, principal_id::text, acting_organization_id::text, source_type,
+SELECT sequence, principal_id::text, tenant_id::text, source_type,
        source_id::text, device_id::text, telemetry_key, action, policy_revision, reason_code, occurred_at
 FROM iam.telemetry_revocation_facts
 WHERE sequence > $1
@@ -149,7 +149,7 @@ LIMIT $2
 		var fact TelemetryRevocationFact
 		var sourceID, deviceID, key, action *string
 		var occurredAt time.Time
-		if err := rows.Scan(&fact.Sequence, &fact.PrincipalID, &fact.ActingOrganizationID, &fact.SourceType, &sourceID, &deviceID, &key, &action, &fact.PolicyRevision, &fact.ReasonCode, &occurredAt); err != nil {
+		if err := rows.Scan(&fact.Sequence, &fact.PrincipalID, &fact.TenantID, &fact.SourceType, &sourceID, &deviceID, &key, &action, &fact.PolicyRevision, &fact.ReasonCode, &occurredAt); err != nil {
 			return nil, fmt.Errorf("scan Telemetry revocation fact: %w", err)
 		}
 		if sourceID != nil {
@@ -176,9 +176,9 @@ LIMIT $2
 	return facts, nil
 }
 
-func setTelemetryGrantContext(ctx context.Context, transaction pgx.Tx, actingOrganizationID string) error {
+func setTelemetryGrantContext(ctx context.Context, transaction pgx.Tx, tenantID string) error {
 	var configured string
-	if err := transaction.QueryRow(ctx, `SELECT set_config('app.acting_organization_id', $1, true)`, actingOrganizationID).Scan(&configured); err != nil {
+	if err := transaction.QueryRow(ctx, `SELECT set_config('app.tenant_id', $1, true)`, tenantID).Scan(&configured); err != nil {
 		return fmt.Errorf("set Telemetry grant RLS context: %w", err)
 	}
 	return nil

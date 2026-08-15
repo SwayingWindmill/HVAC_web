@@ -7,7 +7,7 @@ import type {
   SiteAssetModel,
   TelemetryPoint,
 } from '../../api/generated/platformGateway.gen.ts';
-import type { DeviceObservationSnapshot, ProblemDetails, TelemetryKeyState } from '../../api/generated/s2Telemetry.gen.ts';
+import type { DeviceObservationSnapshot, ProblemDetails, TelemetryKeyState, TelemetryQuality } from '../../api/generated/s2Telemetry.gen.ts';
 import {
   formatTelemetryDisplayValue,
   formatTelemetryUnit,
@@ -30,7 +30,7 @@ export type RealAssetsAttentionReason =
   | 'PRESENCE_UNKNOWN'
   | 'PRESENCE_OFFLINE'
   | 'TELEMETRY_STALE'
-  | 'TELEMETRY_SUSPECT'
+  | 'TELEMETRY_QUALITY_DEGRADED'
   | 'CRITICAL_POINT_MISSING'
   | 'TELEMETRY_INCOMPLETE';
 
@@ -45,7 +45,7 @@ export interface RealAssetsPointView {
   readonly displayValue: string;
   readonly unit: string | null;
   readonly freshness: 'FRESH' | 'STALE' | 'MISSING';
-  readonly quality: 'GOOD' | 'SUSPECT' | null;
+  readonly quality: TelemetryQuality | null;
   readonly qualityReasons: readonly string[];
   readonly sampledAt: string | null;
   readonly receivedAt: string | null;
@@ -135,12 +135,12 @@ interface RegistryIdentity {
   readonly id: string;
   readonly displayName: string;
   readonly code?: string;
-  readonly pointKey?: string;
+  readonly pointCode?: string;
 }
 
 function compareRegistryIdentity(left: RegistryIdentity, right: RegistryIdentity): number {
   return compareText(left.displayName, right.displayName)
-    || compareText(left.code ?? left.pointKey ?? '', right.code ?? right.pointKey ?? '')
+    || compareText(left.code ?? left.pointCode ?? '', right.code ?? right.pointCode ?? '')
     || left.id.localeCompare(right.id);
 }
 
@@ -185,11 +185,12 @@ const SENSOR_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
   WEATHER: '气象',
 });
 
-const POINT_KIND_LABELS: Readonly<Record<string, string>> = Object.freeze({
-  MEASURED: '实测',
-  CALCULATED: '计算',
+const POINT_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  TELEMETRY: '遥测',
+  COUNTER: '累计量',
   STATE: '状态',
-  FEEDBACK: '反馈',
+  SETTING: '设定',
+  COMMAND: '命令',
 });
 
 function normalizedType(value: string): string {
@@ -216,18 +217,18 @@ export function realAssetsSensorTypeLabel(value: string): string {
   return localizedType(value, SENSOR_TYPE_LABELS, '传感器');
 }
 
-export function realAssetsPointKindLabel(value: string): string {
-  return localizedType(value, POINT_KIND_LABELS, '点位');
+export function realAssetsPointTypeLabel(value: string): string {
+  return localizedType(value, POINT_TYPE_LABELS, '点位');
 }
 
 export function realAssetsTelemetryPointLabel(point: TelemetryPoint): string {
-  const definition = telemetryPointDefinition(point.pointKey);
-  return definition.label === point.pointKey ? point.displayName : definition.label;
+  const definition = telemetryPointDefinition(point.pointCode);
+  return definition.label === point.pointCode ? point.displayName : definition.label;
 }
 
 export function realAssetsTelemetryPointMeta(point: TelemetryPoint): string {
   const unit = formatTelemetryUnit(point.unit);
-  return unit ? `${realAssetsPointKindLabel(point.pointKind)} · ${unit}` : realAssetsPointKindLabel(point.pointKind);
+  return unit ? `${realAssetsPointTypeLabel(point.pointType)} · ${unit}` : realAssetsPointTypeLabel(point.pointType);
 }
 
 function isCurrentRelationship(relationship: AssetRelationship, now: Date): boolean {
@@ -398,7 +399,7 @@ export function projectRealAssetsOperatingState(
       continue;
     }
     if (value.freshness === 'STALE') reasons.add('TELEMETRY_STALE');
-    if (value.quality === 'SUSPECT') reasons.add('TELEMETRY_SUSPECT');
+    if (value.quality !== 'GOOD') reasons.add('TELEMETRY_QUALITY_DEGRADED');
   }
   if (snapshot.telemetryReadiness === 'DEGRADED' || snapshot.telemetryReadiness === 'INCOMPLETE') {
     reasons.add('TELEMETRY_INCOMPLETE');
@@ -486,7 +487,7 @@ export function buildRealAssetsEquipmentRows(input: BuildRealAssetsEquipmentRows
     const controlPoints = points.filter((row) => {
       const relationship = pointRelationshipById.get(row.point.id);
       return row.point.status === 'ACTIVE'
-        && row.point.pointKind === 'COMMAND'
+        && row.point.pointType === 'COMMAND'
         && row.point.writable
         && relationship?.role === 'CONTROLS';
     });
@@ -525,9 +526,9 @@ export function buildRealAssetsPointRows(input: BuildRealAssetsPointRowsInput): 
   const rows = input.assetModel.telemetryPoints.map((point): RealAssetsTelemetryPointRow => {
     const deviceRow = deviceRowById.get(point.reportingDeviceId);
     if (!deviceRow) throw new Error(`Telemetry Point ${point.id} has no visible Device Endpoint row`);
-    const definition = telemetryPointDefinition(point.pointKey);
+    const definition = telemetryPointDefinition(point.pointCode);
     const snapshot = deviceRow.snapshotResult?.status === 'ok' ? deviceRow.snapshotResult.snapshot : null;
-    const currentState = snapshot?.values.find((value) => value.key === point.pointKey);
+    const currentState = snapshot?.values.find((value) => value.key === point.pointCode);
     return {
       point,
       device: deviceRow.device,
@@ -536,7 +537,7 @@ export function buildRealAssetsPointRows(input: BuildRealAssetsPointRowsInput): 
       area: deviceRow.area,
       label: realAssetsTelemetryPointLabel(point),
       current: snapshot ? pointView({
-        key: point.pointKey,
+        key: point.pointCode,
         label: realAssetsTelemetryPointLabel(point),
         defaultUnit: point.unit ?? definition.defaultUnit,
         precision: definition.precision,
@@ -546,7 +547,7 @@ export function buildRealAssetsPointRows(input: BuildRealAssetsPointRowsInput): 
   return rows.sort((left, right) => (
     (deviceOrder.get(left.device.id) ?? Number.MAX_SAFE_INTEGER) - (deviceOrder.get(right.device.id) ?? Number.MAX_SAFE_INTEGER)
     || compareText(left.label, right.label)
-    || compareText(left.point.pointKey, right.point.pointKey)
+    || compareText(left.point.pointCode, right.point.pointCode)
     || left.point.id.localeCompare(right.point.id)
   ));
 }
@@ -650,7 +651,7 @@ export function buildRealAssetsHierarchy(model: SiteAssetModel, siteLabel: strin
         'virtual-sensor',
         branchKey,
         '设备直连点位',
-        '状态、反馈与计算点',
+        '设备直连标准 Point',
         [device.id],
         directPoints.map((point) => hierarchyNode(
           'point',

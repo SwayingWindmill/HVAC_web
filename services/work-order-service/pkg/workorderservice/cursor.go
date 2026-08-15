@@ -19,7 +19,7 @@ type cursorCodec struct{ secret []byte }
 
 type cursorPayload struct {
 	Version        int                     `json:"version"`
-	OrganizationID string                  `json:"organizationId"`
+	TenantID string                  `json:"tenantId"`
 	SiteID         string                  `json:"siteId"`
 	Status         workordermodel.Status   `json:"status,omitempty"`
 	Priority       workordermodel.Priority `json:"priority,omitempty"`
@@ -41,10 +41,10 @@ func newCursorCodec(secret []byte) (*cursorCodec, error) {
 	return &cursorCodec{secret: copySecret}, nil
 }
 
-func (codec *cursorCodec) Encode(organizationID, siteID string, filter Filter, updatedAt time.Time, workOrderID string) (string, error) {
+func (codec *cursorCodec) Encode(tenantID, siteID string, filter Filter, updatedAt time.Time, workOrderID string) (string, error) {
 	filter = normalizeFilter(filter)
 	payload := cursorPayload{
-		Version: cursorVersion, OrganizationID: organizationID, SiteID: siteID,
+		Version: cursorVersion, TenantID: tenantID, SiteID: siteID,
 		Status: filter.Status, Priority: filter.Priority, AssigneeID: filter.AssigneeID,
 		UpdatedAt: updatedAt.UTC().Format(time.RFC3339Nano), WorkOrderID: workOrderID,
 	}
@@ -56,7 +56,7 @@ func (codec *cursorCodec) Encode(organizationID, siteID string, filter Filter, u
 	return base64.RawURLEncoding.EncodeToString(encoded) + "." + base64.RawURLEncoding.EncodeToString(signature), nil
 }
 
-func (codec *cursorCodec) Decode(token, organizationID, siteID string, filter Filter) (cursorPosition, error) {
+func (codec *cursorCodec) Decode(token, tenantID, siteID string, filter Filter) (cursorPosition, error) {
 	filter = normalizeFilter(filter)
 	token = strings.TrimSpace(token)
 	if token == "" || len(token) > 512 {
@@ -78,7 +78,7 @@ func (codec *cursorCodec) Decode(token, organizationID, siteID string, filter Fi
 	decoder := json.NewDecoder(strings.NewReader(string(payloadBytes)))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&payload) != nil || decoder.Decode(&struct{}{}) != io.EOF || payload.Version != cursorVersion ||
-		payload.OrganizationID != organizationID || payload.SiteID != siteID ||
+		payload.TenantID != tenantID || payload.SiteID != siteID ||
 		payload.Status != filter.Status || payload.Priority != filter.Priority || payload.AssigneeID != filter.AssigneeID ||
 		!workordermodel.IsUUIDv7(payload.WorkOrderID) {
 		return cursorPosition{}, ErrInvalidCursor

@@ -10,8 +10,6 @@ import {
   type DeviceCollection,
   type Equipment,
   type EquipmentCollection,
-  type Organization,
-  type OrganizationCollection,
   type RegistryListParams,
   type Site,
   type SiteAssetModel,
@@ -40,10 +38,7 @@ export interface RegistryErrorPresentation {
   traceId?: string;
 }
 
-export interface AuthorizedRegistrySite {
-  organization: Organization;
-  site: Site;
-}
+export type AuthorizedRegistrySite = Site;
 
 const registryQueryEnabled = (enabled: boolean) => API_MODE === 'real' && enabled;
 const registryId = (value: string) => uuidV7Schema.parse(value);
@@ -95,41 +90,17 @@ export function presentRegistryError(error: unknown): RegistryErrorPresentation 
   };
 }
 
-export function useRegistryOrganizations(enabled = true) {
+export function useRegistrySites(enabled = true) {
   return useInfiniteQuery({
-    queryKey: ['registry', 'organizations'],
+    queryKey: ['registry', 'sites'],
     queryFn: async ({ pageParam, signal }) => {
       const params: RegistryListParams = { limit: DEFAULT_PAGE_SIZE };
       if (typeof pageParam === 'string') params.cursor = pageParam;
-      return (await client.listOrganizations(params, { signal })).data;
+      return (await client.listSites(params, { signal })).data;
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: nextCursor,
     enabled: registryQueryEnabled(enabled),
-    retry: retryRegistryQuery,
-  });
-}
-
-export function useRegistryOrganization(organizationId: string | null, enabled = true) {
-  return useQuery({
-    queryKey: ['registry', 'organization', organizationId],
-    queryFn: async ({ signal }) => (await client.getOrganization(registryId(organizationId!), { signal })).data,
-    enabled: registryQueryEnabled(enabled && Boolean(organizationId)),
-    retry: retryRegistryQuery,
-  });
-}
-
-export function useRegistrySites(organizationId: string | null, enabled = true) {
-  return useInfiniteQuery({
-    queryKey: ['registry', 'organizations', organizationId, 'sites'],
-    queryFn: async ({ pageParam, signal }) => {
-      const params: RegistryListParams = { limit: DEFAULT_PAGE_SIZE };
-      if (typeof pageParam === 'string') params.cursor = pageParam;
-      return (await client.listOrganizationSites(registryId(organizationId!), params, { signal })).data;
-    },
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: nextCursor,
-    enabled: registryQueryEnabled(enabled && Boolean(organizationId)),
     retry: retryRegistryQuery,
   });
 }
@@ -233,27 +204,15 @@ async function collectCollection<T>(
 export function useAuthorizedRegistrySites(enabled = true) {
   return useQuery({
     queryKey: ['registry', 'authorized-sites'],
-    queryFn: async ({ signal }) => {
-      const organizations = await collectCollection<Organization>(
-        (params, requestSignal) => client.listOrganizations(params, { signal: requestSignal }),
-        signal,
-      );
-      const sites: AuthorizedRegistrySite[] = [];
-      for (const organization of organizations) {
-        const organizationSites = await collectCollection<Site>(
-          (params, requestSignal) => client.listOrganizationSites(registryId(organization.id), params, { signal: requestSignal }),
-          signal,
-        );
-        for (const site of organizationSites) sites.push({ organization, site });
-      }
-      return sites;
-    },
+    queryFn: async ({ signal }) => collectCollection<Site>(
+      (params, requestSignal) => client.listSites(params, { signal: requestSignal }),
+      signal,
+    ),
     enabled: registryQueryEnabled(enabled),
     retry: retryRegistryQuery,
   });
 }
 
-export type RegistryOrganizationCollection = OrganizationCollection;
 export type RegistrySiteCollection = SiteCollection;
 export type RegistrySiteAssetModel = SiteAssetModel;
 export type RegistryEquipmentCollection = EquipmentCollection;

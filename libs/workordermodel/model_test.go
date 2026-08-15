@@ -128,7 +128,7 @@ func validWorkOrder() workordermodel.WorkOrder {
 	return workordermodel.WorkOrder{
 		SchemaVersion:      1,
 		WorkOrderID:        workOrderID,
-		OrganizationID:     organizationID,
+		TenantID:     organizationID,
 		SiteID:             siteID,
 		Title:              "Inspect AHU-1 fan vibration",
 		Description:        "Verify the reported vibration and record the maintenance outcome.",

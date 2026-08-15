@@ -4,10 +4,10 @@ import { buildCentralPlantSimulatorConfig } from './central-plant-spatial-model.
 
 const root = process.cwd();
 const check = process.argv.includes('--check');
-const adapterPath = resolve(root, 'services/thingsboard-telemetry-adapter/configs/central-plant.local.example.json');
+const pointContractPath = resolve(root, 'contracts/registry/central-plant-device-points.v2.json');
 const outputPath = resolve(root, 'tools/eg8200-simulator/configs/central-plant.local.json');
-const adapter = JSON.parse(await readFile(adapterPath, 'utf8'));
-const expected = `${JSON.stringify(buildCentralPlantSimulatorConfig(adapter), null, 2)}\n`;
+const pointContract = JSON.parse(await readFile(pointContractPath, 'utf8'));
+const expected = `${JSON.stringify(buildCentralPlantSimulatorConfig(pointContract), null, 2)}\n`;
 
 if (check) {
   const actual = await readFile(outputPath, 'utf8');

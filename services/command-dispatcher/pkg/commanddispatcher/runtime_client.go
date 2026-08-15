@@ -19,19 +19,19 @@ import (
 const maximumRuntimeResponseBytes = int64(512 << 10)
 
 type RuntimeClientConfig struct {
-	BaseURL        string
-	HTTPClient     *http.Client
-	OrganizationID string
-	SiteID         string
-	DeviceID       string
+	BaseURL    string
+	HTTPClient *http.Client
+	TenantID   string
+	SiteID     string
+	DeviceID   string
 }
 
 type RuntimeClient struct {
-	baseURL        string
-	httpClient     *http.Client
-	organizationID string
-	siteID         string
-	deviceID       string
+	baseURL    string
+	httpClient *http.Client
+	tenantID   string
+	siteID     string
+	deviceID   string
 }
 
 type runtimeClaimRequest struct {
@@ -60,10 +60,10 @@ func NewRuntimeClient(config RuntimeClientConfig) (*RuntimeClient, error) {
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
 		return nil, errors.New("command runtime base URL must be an HTTPS service origin")
 	}
-	organizationID := strings.TrimSpace(config.OrganizationID)
+	tenantID := strings.TrimSpace(config.TenantID)
 	siteID := strings.TrimSpace(config.SiteID)
 	deviceID := strings.TrimSpace(config.DeviceID)
-	if !commandmodel.IsUUIDv7(organizationID) || !commandmodel.IsUUIDv7(siteID) || !commandmodel.IsUUIDv7(deviceID) {
+	if !commandmodel.IsUUIDv7(tenantID) || !commandmodel.IsUUIDv7(siteID) || !commandmodel.IsUUIDv7(deviceID) {
 		return nil, errors.New("command runtime approved cohort is incomplete")
 	}
 	client := config.HTTPClient
@@ -72,12 +72,12 @@ func NewRuntimeClient(config RuntimeClientConfig) (*RuntimeClient, error) {
 	}
 	return &RuntimeClient{
 		baseURL: baseURL, httpClient: client,
-		organizationID: organizationID, siteID: siteID, deviceID: deviceID,
+		tenantID: tenantID, siteID: siteID, deviceID: deviceID,
 	}, nil
 }
 
-func (client *RuntimeClient) ClaimDispatch(ctx context.Context, organizationID, leaseOwner string, leaseFor time.Duration) (commandmodel.DispatchEnvelope, error) {
-	if client == nil || organizationID != client.organizationID {
+func (client *RuntimeClient) ClaimDispatch(ctx context.Context, tenantID, leaseOwner string, leaseFor time.Duration) (commandmodel.DispatchEnvelope, error) {
+	if client == nil || tenantID != client.tenantID {
 		return commandmodel.DispatchEnvelope{}, commandservice.ErrInvalidRequest
 	}
 	var envelope commandmodel.DispatchEnvelope
@@ -95,8 +95,8 @@ func (client *RuntimeClient) ResolveDispatch(ctx context.Context, envelope comma
 	return err
 }
 
-func (client *RuntimeClient) ClaimVerification(ctx context.Context, organizationID, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
-	if client == nil || organizationID != client.organizationID {
+func (client *RuntimeClient) ClaimVerification(ctx context.Context, tenantID, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
+	if client == nil || tenantID != client.tenantID {
 		return commandmodel.VerificationEnvelope{}, commandservice.ErrInvalidRequest
 	}
 	var envelope commandmodel.VerificationEnvelope

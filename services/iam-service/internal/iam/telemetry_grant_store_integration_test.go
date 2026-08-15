@@ -61,7 +61,7 @@ func TestPostgresTelemetryGrantSingleUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	identifier := "use-" + strconv.FormatInt(now.UnixNano(), 10)
-	claims := telemetryauth.GrantClaims{TokenID: identifier, PrincipalID: postgresDelegatedPrincipalID, ActingOrganizationID: postgresActingOrganizationID, ScopeDigest: digest, PolicyRevision: "telemetry-access:2", ExpiresAt: now.Add(30 * time.Second).Unix()}
+	claims := telemetryauth.GrantClaims{TokenID: identifier, TenantID: "018f1d00-0000-7000-8000-000000000001", PrincipalID: postgresDelegatedPrincipalID, ActingOrganizationID: postgresActingOrganizationID, ScopeDigest: digest, PolicyRevision: "telemetry-access:2", ExpiresAt: now.Add(30 * time.Second).Unix()}
 	defer admin.Exec(context.Background(), `DELETE FROM iam.telemetry_grant_uses WHERE token_id = $1`, identifier)
 	first, err := store.ConsumeGrant(ctx, claims, now)
 	if err != nil || first.Replayed || first.Revoked {

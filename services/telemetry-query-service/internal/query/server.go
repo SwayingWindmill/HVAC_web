@@ -178,7 +178,7 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		writeProblem(writer, http.StatusUnauthorized, "ANALYTICS_DELEGATION_INVALID", "The analytics delegation grant is invalid.", false)
 		return
 	}
-	if claims.PrincipalID == "" || claims.ActingOrganizationID != query.OrganizationID || identitycontext.ValidateDelegationFromIssuer(
+	if claims.PrincipalID == "" || claims.TenantID != query.TenantID || identitycontext.ValidateDelegationFromIssuer(
 		claims,
 		server.now(),
 		server.delegationIssuerSPIFFE,
@@ -224,7 +224,7 @@ func (server *handler) serveDeviceHistory(writer http.ResponseWriter, request *h
 		writeProblem(writer, http.StatusUnauthorized, "TELEMETRY_HISTORY_DELEGATION_INVALID", "The Device History delegation grant is invalid.", false)
 		return
 	}
-	if claims.PrincipalID == "" || claims.ActingOrganizationID != canonical.ActingOrganizationID || identitycontext.ValidateDelegationFromIssuer(
+	if claims.PrincipalID == "" || claims.TenantID != canonical.TenantID || identitycontext.ValidateDelegationFromIssuer(
 		claims,
 		server.now(),
 		server.delegationIssuerSPIFFE,

@@ -19,7 +19,7 @@ func TestGrantScopeRiskAndRevisionValidation(t *testing.T) {
 	claims := GrantClaims{
 		Issuer: "iam-service", Presenter: "platform-gateway", Audience: "command-service",
 		GrantID: "grant-1", Purpose: commandmodel.AuthorizationCommandSubmit,
-		PrincipalID: "principal-1", OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+		PrincipalID: "principal-1", TenantID: "org-1", SiteID: "site-1", DeviceID: "device-1",
 		Capability: commandmodel.CapabilitySetTemperatureSetpoint, MaximumRisk: commandmodel.RiskMedium,
 		CapabilityRevision: "capability:set-temperature-setpoint:v1", PolicyRevision: "policy-7",
 		EmergencyRevocationRevision: 3, IssuedAt: now.Unix(), ExpiresAt: now.Add(20 * time.Second).Unix(), TokenID: "token-1",
@@ -35,7 +35,7 @@ func TestGrantScopeRiskAndRevisionValidation(t *testing.T) {
 	validation := Validation{
 		Now: now, Issuer: "iam-service", Presenter: "platform-gateway", Audience: "command-service",
 		Purpose:     commandmodel.AuthorizationCommandSubmit,
-		PrincipalID: "principal-1", OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+		PrincipalID: "principal-1", TenantID: "org-1", SiteID: "site-1", DeviceID: "device-1",
 		Capability:         commandmodel.CapabilitySetTemperatureSetpoint,
 		CapabilityRevision: "capability:set-temperature-setpoint:v1", Risk: commandmodel.RiskMedium,
 		UseChecker: func(GrantClaims) (UseStatus, error) {

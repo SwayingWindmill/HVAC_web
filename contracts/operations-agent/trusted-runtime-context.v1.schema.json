@@ -13,9 +13,9 @@
     "scope": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["organizationId", "siteId", "equipmentId", "deviceId"],
+      "required": ["tenantId", "siteId", "equipmentId", "deviceId"],
       "properties": {
-        "organizationId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "tenantId": {"type": "string", "minLength": 1, "maxLength": 256},
         "siteId": {"type": ["string", "null"], "minLength": 1, "maxLength": 256},
         "equipmentId": {"type": ["string", "null"], "minLength": 1, "maxLength": 256},
         "deviceId": {"type": ["string", "null"], "minLength": 1, "maxLength": 256}

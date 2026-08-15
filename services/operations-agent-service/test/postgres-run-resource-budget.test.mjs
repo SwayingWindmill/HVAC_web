@@ -94,7 +94,7 @@ test('PostgreSQL Run budget survives restart, ignores Checkpoint deletion, and s
   });
   const created = await coordinator.create({
     scope: {
-      organizationId: 'organization-postgres-budget',
+      tenantId: 'organization-postgres-budget',
       siteId: 'site-postgres-budget',
       equipmentId: null,
       deviceId: null,

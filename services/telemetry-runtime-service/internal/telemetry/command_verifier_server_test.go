@@ -26,7 +26,7 @@ func (store *commandReportedStateStore) EvaluateAndRead(_ context.Context, targe
 	sampledAt := telemetryapi.Instant(evaluatedAt.Add(time.Second).Format(time.RFC3339Nano))
 	return SnapshotCommit{Snapshot: telemetryapi.DeviceObservationSnapshot{
 		SchemaVersion: 1,
-		DeviceId:      telemetryapi.UUIDv7(deviceA), OwningOrganizationId: telemetryapi.UUIDv7(orgA), SiteId: telemetryapi.UUIDv7(siteA),
+		TenantId: telemetryapi.UUIDv7(tenantA), SiteId: telemetryapi.UUIDv7(siteA), DeviceId: telemetryapi.UUIDv7(deviceA),
 		BusinessRevision: 9, EvaluatedAt: telemetryapi.Instant(evaluatedAt.Format(time.RFC3339Nano)),
 		EvaluationAvailability: telemetryapi.EvaluationAvailabilityAvailable,
 		Presence:               telemetryapi.PresenceSnapshot{Applicability: telemetryapi.PresenceApplicabilityApplicable, CurrentState: &state},
@@ -43,7 +43,7 @@ func TestCommandReportedStateReturnsExactConfiguredCohort(t *testing.T) {
 	store := &commandReportedStateStore{}
 	handler := NewHandler(ServerConfig{
 		Store: store, AllowedCommandVerifierSPIFFE: commandVerifierSPIFFE,
-		CommandVerifierOrganizationID: orgA, CommandVerifierSiteID: siteA, CommandVerifierDeviceID: deviceA,
+		CommandVerifierTenantID: tenantA, CommandVerifierSiteID: siteA, CommandVerifierDeviceID: deviceA,
 		Now: func() time.Time { return now },
 	})
 	request := httptest.NewRequest(http.MethodGet, InternalCommandReportedStatePath+"?key=zone.temperature_setpoint", nil)
@@ -57,7 +57,7 @@ func TestCommandReportedStateReturnsExactConfiguredCohort(t *testing.T) {
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-	if response.OrganizationID != orgA || response.SiteID != siteA || response.DeviceID != deviceA ||
+	if response.TenantID != tenantA || response.SiteID != siteA || response.DeviceID != deviceA ||
 		response.ReportedStateKey != "zone.temperature_setpoint" || response.ReportedValue.Number == nil || *response.ReportedValue.Number != 22.5 ||
 		response.BusinessRevision != 9 || response.Presence != "ONLINE" || response.Freshness != "FRESH" ||
 		response.Quality != "GOOD" || response.EvidenceID == "" || store.calls != 1 {
@@ -69,7 +69,7 @@ func TestCommandReportedStateRejectsOtherWorkload(t *testing.T) {
 	store := &commandReportedStateStore{}
 	handler := NewHandler(ServerConfig{
 		Store: store, AllowedCommandVerifierSPIFFE: commandVerifierSPIFFE,
-		CommandVerifierOrganizationID: orgA, CommandVerifierSiteID: siteA, CommandVerifierDeviceID: deviceA,
+		CommandVerifierTenantID: tenantA, CommandVerifierSiteID: siteA, CommandVerifierDeviceID: deviceA,
 		Now: time.Now,
 	})
 	request := httptest.NewRequest(http.MethodGet, InternalCommandReportedStatePath+"?key=zone.temperature_setpoint", nil)

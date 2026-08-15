@@ -31,7 +31,6 @@ type PostgresMigrator struct {
 
 type mapRecord struct {
 	ID                 string
-	OrganizationID     string
 	SiteID             string
 	TargetResourceType string
 	TargetResourceID   string
@@ -41,7 +40,6 @@ type mapRecord struct {
 
 type quarantineRecord struct {
 	ID               string
-	OrganizationID   string
 	SourceSystem     string
 	SourceTable      string
 	SourceKey        string
@@ -119,14 +117,14 @@ func (migrator *PostgresMigrator) ApplyRecord(ctx context.Context, record Record
 			switch existing.MappingState {
 			case "VERIFIED":
 				if existing.SourceRowHash == record.SourceRowHash {
-					if err := migrator.insertProvenance(ctx, tx, now, record, existing.ID, existing.OrganizationID, existing.TargetResourceID, "SKIPPED"); err != nil {
+					if err := migrator.insertProvenance(ctx, tx, now, record, existing.ID, existing.TargetResourceID, "SKIPPED"); err != nil {
 						return err
 					}
 					result.Outcome = OutcomeSkipped
 					result.TargetID = existing.TargetResourceID
 					return nil
 				}
-				quarantined, err := migrator.quarantine(ctx, tx, now, record, existing, "SOURCE_HASH_CONFLICT", existing.OrganizationID, existing.SiteID)
+				quarantined, err := migrator.quarantine(ctx, tx, now, record, existing, "SOURCE_HASH_CONFLICT", existing.SiteID)
 				if err != nil {
 					return err
 				}
@@ -135,7 +133,7 @@ func (migrator *PostgresMigrator) ApplyRecord(ctx context.Context, record Record
 			case "QUARANTINED":
 				openQuarantine, err := loadOpenQuarantine(ctx, tx, record)
 				if err == nil {
-					if err := migrator.insertProvenance(ctx, tx, now, record, existing.ID, existing.OrganizationID, "", "QUARANTINED"); err != nil {
+					if err := migrator.insertProvenance(ctx, tx, now, record, existing.ID, "", "QUARANTINED"); err != nil {
 						return err
 					}
 					result.Outcome = OutcomeQuarantined
@@ -145,21 +143,21 @@ func (migrator *PostgresMigrator) ApplyRecord(ctx context.Context, record Record
 				if !errors.Is(err, pgx.ErrNoRows) {
 					return err
 				}
-				quarantined, err := migrator.quarantine(ctx, tx, now, record, existing, "INCOMPLETE_QUARANTINE", existing.OrganizationID, existing.SiteID)
+				quarantined, err := migrator.quarantine(ctx, tx, now, record, existing, "INCOMPLETE_QUARANTINE", existing.SiteID)
 				if err != nil {
 					return err
 				}
 				result = quarantined
 				return nil
 			case "DISCOVERED", "MAPPED":
-				quarantined, err := migrator.quarantine(ctx, tx, now, record, existing, "INCOMPLETE_MAPPING_STATE", existing.OrganizationID, existing.SiteID)
+				quarantined, err := migrator.quarantine(ctx, tx, now, record, existing, "INCOMPLETE_MAPPING_STATE", existing.SiteID)
 				if err != nil {
 					return err
 				}
 				result = quarantined
 				return nil
 			case "RETIRED":
-				if err := migrator.insertProvenance(ctx, tx, now, record, existing.ID, existing.OrganizationID, existing.TargetResourceID, "SKIPPED"); err != nil {
+				if err := migrator.insertProvenance(ctx, tx, now, record, existing.ID, existing.TargetResourceID, "SKIPPED"); err != nil {
 					return err
 				}
 				result.Outcome = OutcomeSkipped
@@ -170,7 +168,7 @@ func (migrator *PostgresMigrator) ApplyRecord(ctx context.Context, record Record
 			}
 		}
 
-		organizationID, siteID, parentReason, err := resolveParents(ctx, tx, record)
+		siteID, parentReason, err := resolveParents(ctx, tx, record)
 		if err != nil {
 			return err
 		}
@@ -179,7 +177,7 @@ func (migrator *PostgresMigrator) ApplyRecord(ctx context.Context, record Record
 			reason = parentReason
 		}
 		if reason != "" {
-			quarantined, err := migrator.quarantine(ctx, tx, now, record, nil, reason, organizationID, siteID)
+			quarantined, err := migrator.quarantine(ctx, tx, now, record, nil, reason, siteID)
 			if err != nil {
 				return err
 			}
@@ -190,9 +188,6 @@ func (migrator *PostgresMigrator) ApplyRecord(ctx context.Context, record Record
 		targetID, err := migrator.newID(now)
 		if err != nil {
 			return err
-		}
-		if record.Kind == KindOrganization {
-			organizationID = targetID
 		}
 		if record.Kind == KindSite {
 			siteID = targetID
@@ -207,23 +202,23 @@ func (migrator *PostgresMigrator) ApplyRecord(ctx context.Context, record Record
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO core_registry.legacy_resource_maps
-			  (id, organization_id, site_id, source_system, source_table, source_key, target_resource_type,
+			  (id, tenant_id, site_id, source_system, source_table, source_key, target_resource_type,
 			   target_resource_id, mapping_state, transformation_version, batch_id, source_watermark,
 			   source_row_hash, relation_evidence, created_at, updated_at)
-			VALUES ($1,$2,NULLIF($3,'')::uuid,$4,$5,$6,$7,NULL,'DISCOVERED',$8,$9,$10,$11,$12::jsonb,$13,$13)`,
-			mappingID, organizationID, siteID, record.SourceSystem, record.SourceTable, record.SourceKey,
+			VALUES ($1,$2::uuid,NULLIF($3,'')::uuid,$4,$5,$6,$7,NULL,'DISCOVERED',$8,$9,$10,$11,$12::jsonb,$13,$13)`,
+			mappingID, record.TenantID, siteID, record.SourceSystem, record.SourceTable, record.SourceKey,
 			record.TargetResourceType(), record.TransformationVersion, record.BatchID, record.SourceWatermark,
 			record.SourceRowHash, string(metadata), now); err != nil {
 			return fmt.Errorf("insert discovered legacy mapping: %w", err)
 		}
 
-		reason, err = insertBusinessWithSavepoint(ctx, tx, now, targetID, organizationID, siteID, record)
+		reason, err = insertBusinessWithSavepoint(ctx, tx, now, targetID, siteID, record)
 		if err != nil {
 			return err
 		}
 		if reason != "" {
-			existing = &mapRecord{ID: mappingID, OrganizationID: organizationID, SiteID: siteID, TargetResourceType: record.Kind, MappingState: "DISCOVERED", SourceRowHash: record.SourceRowHash}
-			quarantined, err := migrator.quarantine(ctx, tx, now, record, existing, reason, organizationID, siteID)
+			existing = &mapRecord{ID: mappingID, SiteID: siteID, TargetResourceType: record.Kind, MappingState: "DISCOVERED", SourceRowHash: record.SourceRowHash}
+			quarantined, err := migrator.quarantine(ctx, tx, now, record, existing, reason, siteID)
 			if err != nil {
 				return err
 			}
@@ -236,7 +231,7 @@ func (migrator *PostgresMigrator) ApplyRecord(ctx context.Context, record Record
 		if _, err := tx.Exec(ctx, `UPDATE core_registry.legacy_resource_maps SET mapping_state='VERIFIED', updated_at=$2 WHERE id=$1`, mappingID, now); err != nil {
 			return fmt.Errorf("verify legacy mapping: %w", err)
 		}
-		if err := migrator.insertProvenance(ctx, tx, now, record, mappingID, organizationID, targetID, "IMPORTED"); err != nil {
+		if err := migrator.insertProvenance(ctx, tx, now, record, mappingID, targetID, "IMPORTED"); err != nil {
 			return err
 		}
 		result.Outcome = OutcomeImported
@@ -280,14 +275,14 @@ func (migrator *PostgresMigrator) Resolve(ctx context.Context, quarantineID, act
 			return err
 		}
 		if quarantine.Resolved {
-			if err := migrator.insertProvenance(ctx, tx, now, record, existing.ID, existing.OrganizationID, existing.TargetResourceID, "SKIPPED"); err != nil {
+			if err := migrator.insertProvenance(ctx, tx, now, record, existing.ID, existing.TargetResourceID, "SKIPPED"); err != nil {
 				return err
 			}
 			result.Outcome = OutcomeSkipped
 			result.TargetID = existing.TargetResourceID
 			return nil
 		}
-		organizationID, siteID, parentReason, err := resolveParents(ctx, tx, record)
+		siteID, parentReason, err := resolveParents(ctx, tx, record)
 		if err != nil {
 			return err
 		}
@@ -304,21 +299,18 @@ func (migrator *PostgresMigrator) Resolve(ctx context.Context, quarantineID, act
 		}
 		targetID := quarantine.PreviousTargetID
 		if targetID != "" {
-			if record.Kind == KindOrganization {
-				organizationID = targetID
-			}
 			if record.Kind == KindSite {
 				siteID = targetID
 			}
 			if action == ResolutionApply {
-				matches, err := businessTargetMatches(ctx, tx, targetID, organizationID, siteID, resolvedRecord)
+				matches, err := businessTargetMatches(ctx, tx, targetID, siteID, resolvedRecord)
 				if err != nil {
 					return err
 				}
 				if !matches {
 					return errors.New("corrected record does not match the quarantined target")
 				}
-			} else if err := retireBusinessTarget(ctx, tx, now, targetID, organizationID, siteID, record.Kind); err != nil {
+			} else if err := retireBusinessTarget(ctx, tx, now, targetID, siteID, record.Kind); err != nil {
 				return err
 			}
 		} else {
@@ -326,13 +318,10 @@ func (migrator *PostgresMigrator) Resolve(ctx context.Context, quarantineID, act
 			if err != nil {
 				return err
 			}
-			if record.Kind == KindOrganization {
-				organizationID = targetID
-			}
 			if record.Kind == KindSite {
 				siteID = targetID
 			}
-			if reason, err := insertBusinessWithSavepoint(ctx, tx, now, targetID, organizationID, siteID, resolvedRecord); err != nil {
+			if reason, err := insertBusinessWithSavepoint(ctx, tx, now, targetID, siteID, resolvedRecord); err != nil {
 				return err
 			} else if reason != "" {
 				return fmt.Errorf("corrected record could not be imported: %s", reason)
@@ -353,17 +342,17 @@ func (migrator *PostgresMigrator) Resolve(ctx context.Context, quarantineID, act
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE core_registry.legacy_resource_maps
-			SET organization_id=$2, site_id=NULLIF($3,'')::uuid, target_resource_type=$4,
-			    target_resource_id=$5, mapping_state=$6, transformation_version=$7, batch_id=$8,
-			    source_watermark=$9, source_row_hash=$10, relation_evidence=$11::jsonb, updated_at=$12
-			WHERE id=$1`, mappingID, organizationID, siteID, record.Kind, targetID, finalState,
+			SET site_id=NULLIF($2,'')::uuid, target_resource_type=$3,
+			    target_resource_id=$4, mapping_state=$5, transformation_version=$6, batch_id=$7,
+			    source_watermark=$8, source_row_hash=$9, relation_evidence=$10::jsonb, updated_at=$11
+			WHERE id=$1`, mappingID, siteID, record.Kind, targetID, finalState,
 			record.TransformationVersion, record.BatchID, record.SourceWatermark, record.SourceRowHash, string(metadata), now); err != nil {
 			return fmt.Errorf("finalize resolved legacy mapping: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `UPDATE core_registry.migration_quarantine SET resolved_at=$2, resolution=$3 WHERE id=$1 AND resolved_at IS NULL`, quarantineID, now, resolution); err != nil {
 			return fmt.Errorf("resolve migration quarantine: %w", err)
 		}
-		if err := migrator.insertProvenance(ctx, tx, now, record, mappingID, organizationID, targetID, "VERIFIED"); err != nil {
+		if err := migrator.insertProvenance(ctx, tx, now, record, mappingID, targetID, "VERIFIED"); err != nil {
 			return err
 		}
 		result.TargetID = targetID
@@ -404,12 +393,12 @@ func (migrator *PostgresMigrator) withOperatorTx(ctx context.Context, body func(
 func loadMap(ctx context.Context, tx pgx.Tx, record Record) (*mapRecord, error) {
 	var stored mapRecord
 	err := tx.QueryRow(ctx, `
-		SELECT id::text, organization_id::text, COALESCE(site_id::text,''), target_resource_type,
+		SELECT id::text, COALESCE(site_id::text,''), target_resource_type,
 		       COALESCE(target_resource_id::text,''), mapping_state, source_row_hash
 		FROM core_registry.legacy_resource_maps
-		WHERE source_system=$1 AND source_table=$2 AND source_key=$3
-		FOR UPDATE`, record.SourceSystem, record.SourceTable, record.SourceKey).Scan(
-		&stored.ID, &stored.OrganizationID, &stored.SiteID, &stored.TargetResourceType,
+		WHERE tenant_id=$1::uuid AND source_system=$2 AND source_table=$3 AND source_key=$4
+		FOR UPDATE`, record.TenantID, record.SourceSystem, record.SourceTable, record.SourceKey).Scan(
+		&stored.ID, &stored.SiteID, &stored.TargetResourceType,
 		&stored.TargetResourceID, &stored.MappingState, &stored.SourceRowHash,
 	)
 	if err != nil {
@@ -422,12 +411,11 @@ func loadQuarantine(ctx context.Context, tx pgx.Tx, id string) (quarantineRecord
 	var quarantine quarantineRecord
 	var resolvedAt *time.Time
 	err := tx.QueryRow(ctx, `
-		SELECT id::text, COALESCE(organization_id::text,''), source_system, source_table, source_key,
+		SELECT id::text, source_system, source_table, source_key,
 		       reason_code, COALESCE(payload_metadata->>'previousTargetResourceId',''), resolved_at
 		FROM core_registry.migration_quarantine WHERE id=$1 FOR UPDATE`, id).Scan(
-		&quarantine.ID, &quarantine.OrganizationID, &quarantine.SourceSystem,
-		&quarantine.SourceTable, &quarantine.SourceKey, &quarantine.ReasonCode,
-		&quarantine.PreviousTargetID, &resolvedAt,
+		&quarantine.ID, &quarantine.SourceSystem, &quarantine.SourceTable, &quarantine.SourceKey,
+		&quarantine.ReasonCode, &quarantine.PreviousTargetID, &resolvedAt,
 	)
 	quarantine.Resolved = resolvedAt != nil
 	return quarantine, err
@@ -436,46 +424,32 @@ func loadQuarantine(ctx context.Context, tx pgx.Tx, id string) (quarantineRecord
 func loadOpenQuarantine(ctx context.Context, tx pgx.Tx, record Record) (quarantineRecord, error) {
 	var quarantine quarantineRecord
 	err := tx.QueryRow(ctx, `
-		SELECT id::text, COALESCE(organization_id::text,''), source_system, source_table, source_key,
+		SELECT id::text, source_system, source_table, source_key,
 		       reason_code, COALESCE(payload_metadata->>'previousTargetResourceId','')
 		FROM core_registry.migration_quarantine
-		WHERE source_system=$1 AND source_table=$2 AND source_key=$3 AND resolved_at IS NULL
-		FOR UPDATE`, record.SourceSystem, record.SourceTable, record.SourceKey).Scan(
-		&quarantine.ID, &quarantine.OrganizationID, &quarantine.SourceSystem,
-		&quarantine.SourceTable, &quarantine.SourceKey, &quarantine.ReasonCode,
-		&quarantine.PreviousTargetID,
+		WHERE tenant_id=$1::uuid AND source_system=$2 AND source_table=$3 AND source_key=$4 AND resolved_at IS NULL
+		FOR UPDATE`, record.TenantID, record.SourceSystem, record.SourceTable, record.SourceKey).Scan(
+		&quarantine.ID, &quarantine.SourceSystem, &quarantine.SourceTable, &quarantine.SourceKey,
+		&quarantine.ReasonCode, &quarantine.PreviousTargetID,
 	)
 	return quarantine, err
 }
 
-func resolveParents(ctx context.Context, tx pgx.Tx, record Record) (string, string, string, error) {
-	if record.Kind == KindOrganization {
-		return "", "", "", nil
-	}
-	organizationID, err := resolveReference(ctx, tx, record.OrganizationRef, KindOrganization)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", "", "MISSING_ORGANIZATION_PARENT", nil
-	}
-	if err != nil {
-		return "", "", "", err
-	}
+func resolveParents(ctx context.Context, tx pgx.Tx, record Record) (string, string, error) {
 	if record.Kind == KindSite {
-		return organizationID, "", "", nil
+		return "", "", nil
 	}
-	siteID, siteOrganizationID, err := resolveSiteReference(ctx, tx, record.SiteRef)
+	siteID, err := resolveReference(ctx, tx, record.TenantID, record.SiteRef, KindSite)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return organizationID, "", "MISSING_SITE_PARENT", nil
+		return "", "MISSING_SITE_PARENT", nil
 	}
 	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
-	if siteOrganizationID != organizationID {
-		return organizationID, siteID, "PARENT_SCOPE_MISMATCH", nil
-	}
-	return organizationID, siteID, "", nil
+	return siteID, "", nil
 }
 
-func resolveReference(ctx context.Context, tx pgx.Tx, ref *SourceRef, expectedType string) (string, error) {
+func resolveReference(ctx context.Context, tx pgx.Tx, tenantID string, ref *SourceRef, expectedType string) (string, error) {
 	if ref == nil {
 		return "", pgx.ErrNoRows
 	}
@@ -483,38 +457,22 @@ func resolveReference(ctx context.Context, tx pgx.Tx, ref *SourceRef, expectedTy
 	err := tx.QueryRow(ctx, `
 		SELECT target_resource_id::text
 		FROM core_registry.legacy_resource_maps
-		WHERE source_system=$1 AND source_table=$2 AND source_key=$3
-		  AND target_resource_type=$4 AND mapping_state='VERIFIED'`,
-		ref.SourceSystem, ref.SourceTable, ref.SourceKey, expectedType).Scan(&targetID)
+		WHERE tenant_id=$1::uuid AND source_system=$2 AND source_table=$3 AND source_key=$4
+		  AND target_resource_type=$5 AND mapping_state='VERIFIED'`,
+		tenantID, ref.SourceSystem, ref.SourceTable, ref.SourceKey, expectedType).Scan(&targetID)
 	return targetID, err
 }
 
-func resolveSiteReference(ctx context.Context, tx pgx.Tx, ref *SourceRef) (string, string, error) {
-	if ref == nil {
-		return "", "", pgx.ErrNoRows
-	}
-	var targetID, organizationID string
-	err := tx.QueryRow(ctx, `
-		SELECT target_resource_id::text, organization_id::text
-		FROM core_registry.legacy_resource_maps
-		WHERE source_system=$1 AND source_table=$2 AND source_key=$3
-		  AND target_resource_type='SITE' AND mapping_state='VERIFIED'`,
-		ref.SourceSystem, ref.SourceTable, ref.SourceKey).Scan(&targetID, &organizationID)
-	return targetID, organizationID, err
-}
-
-func businessTargetMatches(ctx context.Context, tx pgx.Tx, targetID, organizationID, siteID string, record Record) (bool, error) {
+func businessTargetMatches(ctx context.Context, tx pgx.Tx, targetID, siteID string, record Record) (bool, error) {
 	var matches bool
 	var err error
 	switch record.Kind {
-	case KindOrganization:
-		err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM core_registry.organizations WHERE id=$1 AND code=$2 AND display_name=$3 AND status=$4)`, targetID, record.Code, record.DisplayName, record.Status).Scan(&matches)
 	case KindSite:
-		err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM core_registry.sites WHERE id=$1 AND organization_id=$2 AND code=$3 AND display_name=$4 AND timezone=$5 AND status=$6)`, targetID, organizationID, record.Code, record.DisplayName, record.Timezone, record.Status).Scan(&matches)
+		err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM core_registry.sites WHERE id=$1 AND tenant_id=$2::uuid AND code=$3 AND display_name=$4 AND timezone=$5 AND status=$6)`, targetID, record.TenantID, record.Code, record.DisplayName, record.Timezone, record.Status).Scan(&matches)
 	case KindEquipment:
-		err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM core_registry.equipment WHERE id=$1 AND organization_id=$2 AND site_id=$3 AND code=$4 AND display_name=$5 AND equipment_type=$6 AND status=$7)`, targetID, organizationID, siteID, record.Code, record.DisplayName, record.ResourceType, record.Status).Scan(&matches)
+		err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM core_registry.equipment WHERE id=$1 AND tenant_id=$2::uuid AND site_id=$3 AND code=$4 AND display_name=$5 AND equipment_type=$6 AND status=$7)`, targetID, record.TenantID, siteID, record.Code, record.DisplayName, record.ResourceType, record.Status).Scan(&matches)
 	case KindDevice:
-		err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM core_registry.devices WHERE id=$1 AND organization_id=$2 AND site_id=$3 AND code=$4 AND display_name=$5 AND device_type=$6 AND status=$7)`, targetID, organizationID, siteID, record.Code, record.DisplayName, record.ResourceType, record.Status).Scan(&matches)
+		err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM core_registry.devices WHERE id=$1 AND tenant_id=$2::uuid AND site_id=$3 AND code=$4 AND display_name=$5 AND device_type=$6 AND status=$7)`, targetID, record.TenantID, siteID, record.Code, record.DisplayName, record.ResourceType, record.Status).Scan(&matches)
 	default:
 		return false, fmt.Errorf("unsupported record kind %q", record.Kind)
 	}
@@ -524,22 +482,19 @@ func businessTargetMatches(ctx context.Context, tx pgx.Tx, targetID, organizatio
 	return matches, nil
 }
 
-func retireBusinessTarget(ctx context.Context, tx pgx.Tx, now time.Time, targetID, organizationID, siteID, kind string) error {
+func retireBusinessTarget(ctx context.Context, tx pgx.Tx, now time.Time, targetID, siteID, kind string) error {
 	var command string
 	var arguments []any
 	switch kind {
-	case KindOrganization:
-		command = `UPDATE core_registry.organizations SET status='RETIRED', revision=revision+1, updated_at=$2 WHERE id=$1`
-		arguments = []any{targetID, now}
 	case KindSite:
-		command = `UPDATE core_registry.sites SET status='RETIRED', revision=revision+1, updated_at=$3 WHERE id=$1 AND organization_id=$2`
-		arguments = []any{targetID, organizationID, now}
+		command = `UPDATE core_registry.sites SET status='RETIRED', revision=revision+1, updated_at=$2 WHERE id=$1`
+		arguments = []any{targetID, now}
 	case KindEquipment:
-		command = `UPDATE core_registry.equipment SET status='RETIRED', revision=revision+1, updated_at=$4 WHERE id=$1 AND organization_id=$2 AND site_id=$3`
-		arguments = []any{targetID, organizationID, siteID, now}
+		command = `UPDATE core_registry.equipment SET status='RETIRED', revision=revision+1, updated_at=$3 WHERE id=$1 AND site_id=$2`
+		arguments = []any{targetID, siteID, now}
 	case KindDevice:
-		command = `UPDATE core_registry.devices SET status='RETIRED', revision=revision+1, updated_at=$4 WHERE id=$1 AND organization_id=$2 AND site_id=$3`
-		arguments = []any{targetID, organizationID, siteID, now}
+		command = `UPDATE core_registry.devices SET status='RETIRED', revision=revision+1, updated_at=$3 WHERE id=$1 AND site_id=$2`
+		arguments = []any{targetID, siteID, now}
 	default:
 		return fmt.Errorf("unsupported record kind %q", kind)
 	}
@@ -553,20 +508,18 @@ func retireBusinessTarget(ctx context.Context, tx pgx.Tx, now time.Time, targetI
 	return nil
 }
 
-func insertBusinessWithSavepoint(ctx context.Context, tx pgx.Tx, now time.Time, targetID, organizationID, siteID string, record Record) (string, error) {
+func insertBusinessWithSavepoint(ctx context.Context, tx pgx.Tx, now time.Time, targetID, siteID string, record Record) (string, error) {
 	if _, err := tx.Exec(ctx, `SAVEPOINT legacy_business_insert`); err != nil {
 		return "", err
 	}
 	var err error
 	switch record.Kind {
-	case KindOrganization:
-		_, err = tx.Exec(ctx, `INSERT INTO core_registry.organizations (id,code,display_name,status,revision,created_at,updated_at) VALUES ($1,$2,$3,$4,1,$5,$5)`, targetID, strings.TrimSpace(record.Code), strings.TrimSpace(record.DisplayName), record.Status, now)
 	case KindSite:
-		_, err = tx.Exec(ctx, `INSERT INTO core_registry.sites (id,organization_id,code,display_name,timezone,status,revision,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7,$7)`, targetID, organizationID, strings.TrimSpace(record.Code), strings.TrimSpace(record.DisplayName), record.Timezone, record.Status, now)
+		_, err = tx.Exec(ctx, `INSERT INTO core_registry.sites (id,tenant_id,code,display_name,timezone,status,revision,created_at,updated_at) VALUES ($1,$2::uuid,$3,$4,$5,$6,1,$7,$7)`, targetID, record.TenantID, strings.TrimSpace(record.Code), strings.TrimSpace(record.DisplayName), record.Timezone, record.Status, now)
 	case KindEquipment:
-		_, err = tx.Exec(ctx, `INSERT INTO core_registry.equipment (id,organization_id,site_id,code,display_name,equipment_type,status,revision,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,$8)`, targetID, organizationID, siteID, strings.TrimSpace(record.Code), strings.TrimSpace(record.DisplayName), record.ResourceType, record.Status, now)
+		_, err = tx.Exec(ctx, `INSERT INTO core_registry.equipment (id,tenant_id,site_id,code,display_name,equipment_type,status,revision,created_at,updated_at) VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,1,$8,$8)`, targetID, record.TenantID, siteID, strings.TrimSpace(record.Code), strings.TrimSpace(record.DisplayName), record.ResourceType, record.Status, now)
 	case KindDevice:
-		_, err = tx.Exec(ctx, `INSERT INTO core_registry.devices (id,organization_id,site_id,code,display_name,device_type,status,revision,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,$8)`, targetID, organizationID, siteID, strings.TrimSpace(record.Code), strings.TrimSpace(record.DisplayName), record.ResourceType, record.Status, now)
+		_, err = tx.Exec(ctx, `INSERT INTO core_registry.devices (id,tenant_id,site_id,code,display_name,device_type,status,revision,created_at,updated_at) VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,1,$8,$8)`, targetID, record.TenantID, siteID, strings.TrimSpace(record.Code), strings.TrimSpace(record.DisplayName), record.ResourceType, record.Status, now)
 	default:
 		err = fmt.Errorf("unsupported record kind %q", record.Kind)
 	}
@@ -593,14 +546,7 @@ func insertBusinessWithSavepoint(ctx context.Context, tx pgx.Tx, now time.Time, 
 	return "", fmt.Errorf("insert migrated business resource: %w", err)
 }
 
-func (migrator *PostgresMigrator) quarantine(ctx context.Context, tx pgx.Tx, now time.Time, record Record, existing *mapRecord, reason, organizationID, siteID string) (RecordResult, error) {
-	if organizationID == "" {
-		var err error
-		organizationID, err = migrator.newID(now)
-		if err != nil {
-			return RecordResult{}, err
-		}
-	}
+func (migrator *PostgresMigrator) quarantine(ctx context.Context, tx pgx.Tx, now time.Time, record Record, existing *mapRecord, reason, siteID string) (RecordResult, error) {
 	mappingID := ""
 	if existing != nil {
 		mappingID = existing.ID
@@ -608,9 +554,6 @@ func (migrator *PostgresMigrator) quarantine(ctx context.Context, tx pgx.Tx, now
 	metadata := map[string]any{
 		"recordKind":       record.Kind,
 		"relationEvidence": record.RelationEvidence,
-	}
-	if record.OrganizationRef != nil {
-		metadata["organizationRef"] = record.OrganizationRef
 	}
 	if record.SiteRef != nil {
 		metadata["siteRef"] = record.SiteRef
@@ -633,11 +576,11 @@ func (migrator *PostgresMigrator) quarantine(ctx context.Context, tx pgx.Tx, now
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO core_registry.legacy_resource_maps
-			  (id, organization_id, site_id, source_system, source_table, source_key, target_resource_type,
+			  (id, tenant_id, site_id, source_system, source_table, source_key, target_resource_type,
 			   target_resource_id, mapping_state, transformation_version, batch_id, source_watermark,
 			   source_row_hash, relation_evidence, created_at, updated_at)
-			VALUES ($1,$2,NULLIF($3,'')::uuid,$4,$5,$6,$7,NULL,'DISCOVERED',$8,$9,$10,$11,$12::jsonb,$13,$13)`,
-			mappingID, organizationID, siteID, record.SourceSystem, record.SourceTable, record.SourceKey,
+			VALUES ($1,$2::uuid,NULLIF($3,'')::uuid,$4,$5,$6,$7,NULL,'DISCOVERED',$8,$9,$10,$11,$12::jsonb,$13,$13)`,
+			mappingID, record.TenantID, siteID, record.SourceSystem, record.SourceTable, record.SourceKey,
 			record.Kind, record.TransformationVersion, record.BatchID, record.SourceWatermark,
 			record.SourceRowHash, string(relationJSON), now); err != nil {
 			return RecordResult{}, fmt.Errorf("insert quarantined legacy map: %w", err)
@@ -645,10 +588,10 @@ func (migrator *PostgresMigrator) quarantine(ctx context.Context, tx pgx.Tx, now
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE core_registry.legacy_resource_maps
-		SET organization_id=$2, site_id=NULLIF($3,'')::uuid, target_resource_type=$4, target_resource_id=NULL,
-		    mapping_state='QUARANTINED', transformation_version=$5, batch_id=$6, source_watermark=$7,
-		    source_row_hash=$8, relation_evidence=$9::jsonb, updated_at=$10
-		WHERE id=$1`, mappingID, organizationID, siteID, record.Kind, record.TransformationVersion,
+		SET site_id=NULLIF($2,'')::uuid, target_resource_type=$3, target_resource_id=NULL,
+		    mapping_state='QUARANTINED', transformation_version=$4, batch_id=$5, source_watermark=$6,
+		    source_row_hash=$7, relation_evidence=$8::jsonb, updated_at=$9
+		WHERE id=$1`, mappingID, siteID, record.Kind, record.TransformationVersion,
 		record.BatchID, record.SourceWatermark, record.SourceRowHash, string(relationJSON), now); err != nil {
 		return RecordResult{}, fmt.Errorf("mark legacy map quarantined: %w", err)
 	}
@@ -658,32 +601,32 @@ func (migrator *PostgresMigrator) quarantine(ctx context.Context, tx pgx.Tx, now
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO core_registry.migration_quarantine
-		  (id,organization_id,source_system,source_table,source_key,reason_code,source_row_hash,payload_metadata,detected_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)
+		  (id,tenant_id,source_system,source_table,source_key,reason_code,source_row_hash,payload_metadata,detected_at)
+		VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,$8::jsonb,$9)
 		ON CONFLICT (source_system,source_table,source_key) WHERE resolved_at IS NULL
-		DO UPDATE SET organization_id=EXCLUDED.organization_id, reason_code=EXCLUDED.reason_code,
+		DO UPDATE SET tenant_id=EXCLUDED.tenant_id, reason_code=EXCLUDED.reason_code,
 		              source_row_hash=EXCLUDED.source_row_hash, payload_metadata=EXCLUDED.payload_metadata,
-		              detected_at=EXCLUDED.detected_at`, quarantineID, organizationID, record.SourceSystem,
+		              detected_at=EXCLUDED.detected_at`, quarantineID, record.TenantID, record.SourceSystem,
 		record.SourceTable, record.SourceKey, reason, record.SourceRowHash, string(metadataJSON), now); err != nil {
 		return RecordResult{}, fmt.Errorf("upsert migration quarantine: %w", err)
 	}
-	if err := migrator.insertProvenance(ctx, tx, now, record, mappingID, organizationID, "", "QUARANTINED"); err != nil {
+	if err := migrator.insertProvenance(ctx, tx, now, record, mappingID, "", "QUARANTINED"); err != nil {
 		return RecordResult{}, err
 	}
 	return RecordResult{SourceSystem: record.SourceSystem, SourceTable: record.SourceTable, SourceKey: record.SourceKey, Outcome: OutcomeQuarantined, ReasonCode: reason}, nil
 }
 
-func (migrator *PostgresMigrator) insertProvenance(ctx context.Context, tx pgx.Tx, now time.Time, record Record, mappingID, organizationID, targetID, result string) error {
+func (migrator *PostgresMigrator) insertProvenance(ctx context.Context, tx pgx.Tx, now time.Time, record Record, mappingID, targetID, result string) error {
 	provenanceID, err := migrator.newID(now)
 	if err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO core_registry.migration_provenance
-		  (id,organization_id,legacy_resource_map_id,source_system,source_table,source_key,target_resource_type,
+		  (id,tenant_id,legacy_resource_map_id,source_system,source_table,source_key,target_resource_type,
 		   target_resource_id,transformation_version,batch_id,source_watermark,source_row_hash,result,created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,'')::uuid,$9,$10,$11,$12,$13,$14)`,
-		provenanceID, organizationID, mappingID, record.SourceSystem, record.SourceTable, record.SourceKey,
+		VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,NULLIF($8,'')::uuid,$9,$10,$11,$12,$13,$14)`,
+		provenanceID, record.TenantID, mappingID, record.SourceSystem, record.SourceTable, record.SourceKey,
 		record.Kind, targetID, record.TransformationVersion, record.BatchID, record.SourceWatermark,
 		record.SourceRowHash, result, now); err != nil {
 		return fmt.Errorf("insert migration provenance: %w", err)

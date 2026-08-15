@@ -10,6 +10,7 @@ import (
 
 const (
 	deviceA = "018f2e00-3000-7000-8000-000000000001"
+	tenantA = "018f2d00-0000-7000-8000-000000000001"
 	orgA    = "018f2e00-0000-7000-8000-000000000001"
 	siteA   = "018f2e00-1000-7000-8000-000000000001"
 )
@@ -18,7 +19,7 @@ func TestEvaluateCanonicalPresenceFreshnessAndQuality(t *testing.T) {
 	now := time.Date(2026, 7, 24, 1, 0, 0, 0, time.UTC)
 	base := DeviceFacts{
 		DeviceID:             deviceA,
-		OwningOrganizationID: orgA,
+		TenantID: tenantA,
 		SiteID:               siteA,
 		Applicability:        telemetryapi.PresenceApplicabilityApplicable,
 		PresencePolicy: &PresencePolicy{
@@ -39,7 +40,7 @@ func TestEvaluateCanonicalPresenceFreshnessAndQuality(t *testing.T) {
 			"zone.humidity": {
 				Value: json.RawMessage(`61`), ValueType: "NUMBER", Unit: ptrString("%RH"),
 				SampledAt: now.Add(-10 * time.Minute), ReceivedAt: now.Add(-9 * time.Minute),
-				Quality:        telemetryapi.TelemetryQualitySuspect,
+				Quality:        telemetryapi.TelemetryQualityStale,
 				QualityReasons: []telemetryapi.QualityReasonCode{telemetryapi.QualityReasonCodeSourceLagExceeded},
 			},
 		},
@@ -122,7 +123,7 @@ func TestEvaluateCanonicalPresenceFreshnessAndQuality(t *testing.T) {
 			if got := result.Snapshot.Values[0].Missing; got == nil || got.Key != "duct.pressure" || got.MissingReason != "ONLY_REJECTED_CANDIDATES" {
 				t.Fatalf("rejected=%#v", got)
 			}
-			if got := result.Snapshot.Values[1].Present; got == nil || got.Key != "zone.humidity" || got.Freshness != "STALE" || got.Quality != telemetryapi.TelemetryQualitySuspect {
+			if got := result.Snapshot.Values[1].Present; got == nil || got.Key != "zone.humidity" || got.Freshness != "STALE" || got.Quality != telemetryapi.TelemetryQualityStale {
 				t.Fatalf("humidity=%#v", got)
 			}
 			if got := result.Snapshot.Values[2].Present; got == nil || got.Key != "zone.temperature" || got.Freshness != "FRESH" {
@@ -135,7 +136,7 @@ func TestEvaluateCanonicalPresenceFreshnessAndQuality(t *testing.T) {
 func TestEvaluateCanonicalDigestIgnoresRefreshTimeButIncludesPolicyChange(t *testing.T) {
 	now := time.Date(2026, 7, 24, 1, 0, 0, 0, time.UTC)
 	facts := DeviceFacts{
-		DeviceID: deviceA, OwningOrganizationID: orgA, SiteID: siteA,
+		DeviceID: deviceA, TenantID: tenantA, SiteID: siteA,
 		Applicability:     telemetryapi.PresenceApplicabilityApplicable,
 		PresencePolicy:    &PresencePolicy{Revision: 2, OnlineWithin: time.Minute, OfflineAfter: 3 * time.Minute},
 		Coverage:          Coverage{Available: true, ContinuousSince: ptrTime(now.Add(-time.Hour))},
@@ -167,7 +168,7 @@ func TestEvaluateCanonicalDigestIgnoresRefreshTimeButIncludesPolicyChange(t *tes
 func TestProjectSnapshotPreservesExactRequestedKeyOrderAndPresenceOnly(t *testing.T) {
 	now := time.Date(2026, 7, 24, 1, 0, 0, 0, time.UTC)
 	facts := DeviceFacts{
-		DeviceID: deviceA, OwningOrganizationID: orgA, SiteID: siteA,
+		DeviceID: deviceA, TenantID: tenantA, SiteID: siteA,
 		Applicability:   telemetryapi.PresenceApplicabilityApplicable,
 		PresencePolicy:  &PresencePolicy{Revision: 2, OnlineWithin: time.Minute, OfflineAfter: 3 * time.Minute},
 		Coverage:        Coverage{Available: true, ContinuousSince: ptrTime(now.Add(-time.Hour))},
@@ -204,7 +205,7 @@ func TestProjectSnapshotPreservesExactRequestedKeyOrderAndPresenceOnly(t *testin
 func TestEvaluateCanonicalRejectsNonContractQualityReasons(t *testing.T) {
 	now := time.Date(2026, 7, 24, 1, 0, 0, 0, time.UTC)
 	facts := DeviceFacts{
-		DeviceID: deviceA, OwningOrganizationID: orgA, SiteID: siteA,
+		DeviceID: deviceA, TenantID: tenantA, SiteID: siteA,
 		Applicability:     telemetryapi.PresenceApplicabilityApplicable,
 		PresencePolicy:    &PresencePolicy{Revision: 2, OnlineWithin: time.Minute, OfflineAfter: 3 * time.Minute},
 		Coverage:          Coverage{Available: true, ContinuousSince: ptrTime(now.Add(-time.Hour))},
@@ -212,7 +213,7 @@ func TestEvaluateCanonicalRejectsNonContractQualityReasons(t *testing.T) {
 		FreshnessPolicies: map[string]FreshnessPolicy{"zone.temperature": {Revision: 5, FreshFor: 5 * time.Minute, Configured: true}},
 		Latest: map[string]LatestObservation{"zone.temperature": {
 			Value: json.RawMessage(`23.5`), ValueType: "NUMBER", SampledAt: now.Add(-10 * time.Second), ReceivedAt: now.Add(-9 * time.Second),
-			Quality:        telemetryapi.TelemetryQualitySuspect,
+			Quality:        telemetryapi.TelemetryQualityStale,
 			QualityReasons: []telemetryapi.QualityReasonCode{telemetryapi.QualityReasonCodeSourceLagExceeded, telemetryapi.QualityReasonCodeSourceLagExceeded},
 		}},
 	}
@@ -221,7 +222,7 @@ func TestEvaluateCanonicalRejectsNonContractQualityReasons(t *testing.T) {
 	}
 	facts.Latest["zone.temperature"] = LatestObservation{
 		Value: json.RawMessage(`23.5`), ValueType: "NUMBER", SampledAt: now.Add(-10 * time.Second), ReceivedAt: now.Add(-9 * time.Second),
-		Quality: telemetryapi.TelemetryQualitySuspect, QualityReasons: []telemetryapi.QualityReasonCode{"UNKNOWN_REASON"},
+		Quality: telemetryapi.TelemetryQualityStale, QualityReasons: []telemetryapi.QualityReasonCode{"UNKNOWN_REASON"},
 	}
 	if _, err := EvaluateCanonical(facts, 1, now); err == nil {
 		t.Fatal("unknown quality reason was accepted")
@@ -243,7 +244,7 @@ func TestEvaluatePresencePreservesLastKnownAndRequiresNamedDisconnect(t *testing
 		EvaluatedAt: telemetryapi.Instant(now.Add(-time.Minute).Format("2006-01-02T15:04:05.000Z")), PolicyRevision: 1,
 	}
 	facts := DeviceFacts{
-		DeviceID: deviceA, OwningOrganizationID: orgA, SiteID: siteA,
+		DeviceID: deviceA, TenantID: tenantA, SiteID: siteA,
 		Applicability: telemetryapi.PresenceApplicabilityApplicable,
 		PresencePolicy: &PresencePolicy{
 			Revision: 2, OnlineWithin: time.Minute, OfflineAfter: 3 * time.Minute,

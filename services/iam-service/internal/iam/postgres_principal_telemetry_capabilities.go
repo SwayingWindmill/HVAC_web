@@ -13,7 +13,7 @@ func (store *PostgresAuthorizationStore) LookupPrincipalTelemetryCapabilities(ct
 	if store == nil || store.pool == nil {
 		return TelemetryAuthorizationFacts{}, errors.New("IAM authorization store is closed")
 	}
-	if strings.TrimSpace(lookup.SubjectIssuer) == "" || strings.TrimSpace(lookup.Subject) == "" || strings.TrimSpace(lookup.ActingOrganizationID) == "" {
+	if strings.TrimSpace(lookup.SubjectIssuer) == "" || strings.TrimSpace(lookup.Subject) == "" || strings.TrimSpace(lookup.TenantID) == "" {
 		return TelemetryAuthorizationFacts{}, errors.New("IAM principal telemetry capability lookup is incomplete")
 	}
 
@@ -36,7 +36,7 @@ FROM iam.resolve_principal_identity($1, $2)
 	if errors.Is(err, pgx.ErrNoRows) {
 		principalID = ""
 	}
-	if err := setIAMTelemetryAuthorizationContext(ctx, transaction, principalID, lookup.ActingOrganizationID, []string{}); err != nil {
+	if err := setIAMTelemetryAuthorizationContext(ctx, transaction, principalID, lookup.TenantID, []string{}); err != nil {
 		return TelemetryAuthorizationFacts{}, err
 	}
 	facts.PolicyRevision, err = loadTelemetryPolicyRevision(ctx, transaction)
@@ -53,7 +53,7 @@ FROM iam.resolve_principal_identity($1, $2)
 	facts.Found = true
 	facts.Principal.SubjectIssuer = lookup.SubjectIssuer
 	facts.Principal.Subject = lookup.Subject
-	if facts.Memberships, err = loadOrganizationMemberships(ctx, transaction); err != nil {
+	if facts.Memberships, err = loadTenantMemberships(ctx, transaction); err != nil {
 		return TelemetryAuthorizationFacts{}, err
 	}
 	if facts.RoleBindings, err = loadTelemetryRoleBindings(ctx, transaction); err != nil {

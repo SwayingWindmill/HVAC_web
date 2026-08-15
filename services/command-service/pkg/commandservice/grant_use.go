@@ -14,7 +14,7 @@ func (store *PostgresStore) ConsumeCommandGrant(ctx context.Context, claims comm
 	if store == nil || store.pool == nil {
 		return commandauth.UseStatus{}, errors.New("command store is closed")
 	}
-	if strings.TrimSpace(claims.TokenID) == "" || strings.TrimSpace(claims.GrantID) == "" || strings.TrimSpace(claims.OrganizationID) == "" ||
+	if strings.TrimSpace(claims.TokenID) == "" || strings.TrimSpace(claims.GrantID) == "" || strings.TrimSpace(claims.TenantID) == "" ||
 		strings.TrimSpace(currentPolicyRevision) == "" {
 		return commandauth.UseStatus{}, ErrInvalidRequest
 	}
@@ -23,15 +23,15 @@ func (store *PostgresStore) ConsumeCommandGrant(ctx context.Context, claims comm
 		return commandauth.UseStatus{}, fmt.Errorf("begin command grant consumption: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := activateOrganization(ctx, tx, claims.OrganizationID); err != nil {
+	if err := activateTenant(ctx, tx, claims.TenantID); err != nil {
 		return commandauth.UseStatus{}, err
 	}
 	tag, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_grant_uses (
-  token_id, grant_id, organization_id, policy_revision, emergency_revocation_revision, used_at
+  token_id, grant_id, tenant_id, policy_revision, emergency_revocation_revision, used_at
 ) VALUES ($1, $2, $3::uuid, $4, $5, $6)
 ON CONFLICT (token_id) DO NOTHING
-`, claims.TokenID, claims.GrantID, claims.OrganizationID, claims.PolicyRevision, claims.EmergencyRevocationRevision, store.now().UTC())
+`, claims.TokenID, claims.GrantID, claims.TenantID, claims.PolicyRevision, claims.EmergencyRevocationRevision, store.now().UTC())
 	if err != nil {
 		return commandauth.UseStatus{}, fmt.Errorf("consume command grant: %w", err)
 	}

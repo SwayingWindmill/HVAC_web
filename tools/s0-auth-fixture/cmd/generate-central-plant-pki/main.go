@@ -74,7 +74,6 @@ func generate(directory string, now time.Time) error {
 		{name: "telemetry", commonName: "localhost", spiffeID: "spiffe://hvac.local/telemetry-runtime-service", dnsNames: []string{"localhost", "telemetry-runtime"}, server: true, client: true},
 		{name: "query", commonName: "localhost", spiffeID: "spiffe://hvac.local/telemetry-query-service", dnsNames: []string{"localhost", "telemetry-query"}, server: true},
 		{name: "gateway", commonName: "platform-gateway", spiffeID: "spiffe://hvac.local/platform-gateway", client: true},
-		{name: "adapter", commonName: "thingsboard-telemetry-adapter", spiffeID: "spiffe://hvac.local/thingsboard-telemetry-adapter", client: true},
 		{name: "mqtt-broker", commonName: "mqtt-broker", spiffeID: "spiffe://hvac.local/mqtt-broker", dnsNames: []string{"localhost", "mqtt-broker"}, server: true},
 		{name: "mqtt-adapter", commonName: "mqtt-telemetry-adapter", spiffeID: "spiffe://hvac.local/mqtt-telemetry-adapter", client: true},
 		{name: "mqtt-gateway", commonName: "EG8200-COMMERCIAL-001", spiffeID: "spiffe://hvac.local/eg8200-gateway", client: true},

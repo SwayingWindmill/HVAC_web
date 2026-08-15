@@ -199,7 +199,7 @@ func (handler *httpHandler) handleList(writer http.ResponseWriter, request *http
 		return
 	}
 	request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
-	handler.list(writer, request, claims.ActingOrganizationID, route.siteID)
+	handler.list(writer, request, claims.TenantID, route.siteID)
 }
 
 func (handler *httpHandler) handleGet(writer http.ResponseWriter, request *http.Request, route workOrderRoute) {
@@ -213,7 +213,7 @@ func (handler *httpHandler) handleGet(writer http.ResponseWriter, request *http.
 		return
 	}
 	request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
-	handler.get(writer, request, claims.ActingOrganizationID, route.siteID, route.workOrderID)
+	handler.get(writer, request, claims.TenantID, route.siteID, route.workOrderID)
 }
 
 func (handler *httpHandler) handleCreate(writer http.ResponseWriter, request *http.Request, route workOrderRoute) {
@@ -243,7 +243,7 @@ func (handler *httpHandler) handleCreate(writer http.ResponseWriter, request *ht
 		handler.writeProblem(writer, http.StatusServiceUnavailable, "WORK_ORDER_UNAVAILABLE", "Work Order unavailable", "Work Order Service cannot allocate an authoritative identity.", true)
 		return
 	}
-	result, err := handler.store.Create(request.Context(), claims.ActingOrganizationID, route.siteID, CreateMutation{
+	result, err := handler.store.Create(request.Context(), claims.TenantID, route.siteID, CreateMutation{
 		WorkOrderID: workOrderID, Title: body.Title, Description: body.Description, Priority: body.Priority,
 		SourceReferences: body.SourceReferences, AssigneeID: body.AssigneeID, TeamID: body.TeamID,
 		ScheduledStart: body.ScheduledStart, DueAt: body.DueAt,
@@ -254,7 +254,7 @@ func (handler *httpHandler) handleCreate(writer http.ResponseWriter, request *ht
 		handler.writeStoreFailure(writer, err)
 		return
 	}
-	if result.WorkOrder.Validate() != nil || result.WorkOrder.OrganizationID != claims.ActingOrganizationID || result.WorkOrder.SiteID != route.siteID {
+	if result.WorkOrder.Validate() != nil || result.WorkOrder.TenantID != claims.TenantID || result.WorkOrder.SiteID != route.siteID {
 		handler.writeProblem(writer, http.StatusBadGateway, "WORK_ORDER_RESPONSE_INVALID", "Work Order response invalid", "Work Order Store returned a create projection outside the requested scope.", true)
 		return
 	}
@@ -298,7 +298,7 @@ func (handler *httpHandler) handleAssign(writer http.ResponseWriter, request *ht
 		return
 	}
 	now := handler.now().UTC()
-	result, err := handler.store.Assign(request.Context(), claims.ActingOrganizationID, route.siteID, route.workOrderID, AssignmentMutation{
+	result, err := handler.store.Assign(request.Context(), claims.TenantID, route.siteID, route.workOrderID, AssignmentMutation{
 		ExpectedVersion: body.ExpectedVersion, AssigneeID: assigneeID, TeamID: teamID, Reason: body.Reason,
 		ActorType: "PRINCIPAL", ActorID: initiatingActorID(claims), PolicyRevision: claims.PolicyRevision,
 		CorrelationID: idempotencyKey, IdempotencyKey: idempotencyKey, OccurredAt: now.Format(time.RFC3339Nano),
@@ -307,7 +307,7 @@ func (handler *httpHandler) handleAssign(writer http.ResponseWriter, request *ht
 		handler.writeStoreFailure(writer, err)
 		return
 	}
-	if result.WorkOrder.Validate() != nil || result.WorkOrder.OrganizationID != claims.ActingOrganizationID || result.WorkOrder.SiteID != route.siteID || result.WorkOrder.WorkOrderID != route.workOrderID {
+	if result.WorkOrder.Validate() != nil || result.WorkOrder.TenantID != claims.TenantID || result.WorkOrder.SiteID != route.siteID || result.WorkOrder.WorkOrderID != route.workOrderID {
 		handler.writeProblem(writer, http.StatusBadGateway, "WORK_ORDER_RESPONSE_INVALID", "Work Order response invalid", "Work Order Store returned an assignment projection outside the requested scope.", true)
 		return
 	}
@@ -338,12 +338,12 @@ func (handler *httpHandler) handleLifecyclePrecondition(writer http.ResponseWrit
 		return
 	}
 	request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
-	workOrder, err := handler.store.Get(request.Context(), claims.ActingOrganizationID, route.siteID, route.workOrderID)
+	workOrder, err := handler.store.Get(request.Context(), claims.TenantID, route.siteID, route.workOrderID)
 	if err != nil {
 		handler.writeStoreFailure(writer, err)
 		return
 	}
-	if workOrder.Validate() != nil || workOrder.OrganizationID != claims.ActingOrganizationID || workOrder.SiteID != route.siteID || workOrder.WorkOrderID != route.workOrderID {
+	if workOrder.Validate() != nil || workOrder.TenantID != claims.TenantID || workOrder.SiteID != route.siteID || workOrder.WorkOrderID != route.workOrderID {
 		handler.writeProblem(writer, http.StatusBadGateway, "WORK_ORDER_RESPONSE_INVALID", "Work Order response invalid", "Work Order Store returned a precondition projection outside the requested scope.", true)
 		return
 	}
@@ -408,7 +408,7 @@ func (handler *httpHandler) handleLifecycle(writer http.ResponseWriter, request 
 	now := handler.now().UTC()
 	actorID := initiatingActorID(claims)
 	reason := strings.TrimSpace(body.Reason)
-	result, err := handler.store.Transition(request.Context(), claims.ActingOrganizationID, route.siteID, route.workOrderID, LifecycleMutation{
+	result, err := handler.store.Transition(request.Context(), claims.TenantID, route.siteID, route.workOrderID, LifecycleMutation{
 		Operation: route.operation, ExpectedVersion: body.ExpectedVersion, ScheduledStart: scheduledStart, DueAt: dueAt,
 		CompletionEvidence: body.CompletionEvidence, Reason: reason,
 		ActorType: "PRINCIPAL", ActorID: actorID, PolicyRevision: claims.PolicyRevision,
@@ -423,7 +423,7 @@ func (handler *httpHandler) handleLifecycle(writer http.ResponseWriter, request 
 	if len(workOrder.Timeline) > 0 {
 		last = workOrder.Timeline[len(workOrder.Timeline)-1]
 	}
-	if workOrder.Validate() != nil || workOrder.OrganizationID != claims.ActingOrganizationID || workOrder.SiteID != route.siteID || workOrder.WorkOrderID != route.workOrderID ||
+	if workOrder.Validate() != nil || workOrder.TenantID != claims.TenantID || workOrder.SiteID != route.siteID || workOrder.WorkOrderID != route.workOrderID ||
 		workOrder.Version != body.ExpectedVersion+1 || len(workOrder.Timeline) != int(workOrder.Version) || last.Operation != route.operation ||
 		last.Reason != reason || last.ActorType != "PRINCIPAL" || last.ActorID != actorID || last.OccurredAt != workOrder.UpdatedAt ||
 		last.PolicyRevision == nil || *last.PolicyRevision != claims.PolicyRevision || last.CorrelationID == nil || *last.CorrelationID != idempotencyKey ||
@@ -452,10 +452,10 @@ func (handler *httpHandler) authorize(request *http.Request, action string, reso
 	}
 	token := strings.TrimSpace(request.Header.Get(header))
 	claims, err := identitycontext.VerifyDelegation(handler.gatewayPublicKey, token)
-	if err != nil || !workordermodel.IsUUIDv7(claims.TenantID) || !workordermodel.IsUUIDv7(claims.ActingOrganizationID) || len(claims.Actions) != 1 || claims.Actions[0] != action {
+	if err != nil || !workordermodel.IsUUIDv7(claims.TenantID) || len(claims.Actions) != 1 || claims.Actions[0] != action {
 		return identitycontext.DelegationClaims{}, false
 	}
-	expectedScopes := append([]string{"organization:" + claims.ActingOrganizationID}, resourceScopes...)
+	expectedScopes := append([]string{"tenant:" + claims.TenantID}, resourceScopes...)
 	if err := identitycontext.ValidateDelegationAnyScope(claims, handler.now().UTC(), handler.gatewaySPIFFEID, handler.audience, action, expectedScopes); err != nil {
 		return identitycontext.DelegationClaims{}, false
 	}
@@ -495,7 +495,7 @@ func (handler *httpHandler) get(writer http.ResponseWriter, request *http.Reques
 		handler.writeStoreFailure(writer, err)
 		return
 	}
-	if workOrder.Validate() != nil || workOrder.OrganizationID != organizationID || workOrder.SiteID != siteID || workOrder.WorkOrderID != workOrderID {
+	if workOrder.Validate() != nil || workOrder.TenantID != organizationID || workOrder.SiteID != siteID || workOrder.WorkOrderID != workOrderID {
 		handler.writeProblem(writer, http.StatusBadGateway, "WORK_ORDER_RESPONSE_INVALID", "Work Order response invalid", "Work Order Store returned a projection outside the requested scope.", true)
 		return
 	}

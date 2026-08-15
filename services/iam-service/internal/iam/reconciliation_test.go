@@ -10,6 +10,7 @@ import (
 func TestPrepareReconciliationRequestProducesStableHashForEquivalentOrdering(t *testing.T) {
 	validFrom := time.Date(2026, 7, 22, 3, 0, 0, 0, time.FixedZone("offset", 8*60*60))
 	base := ReconciliationRequest{
+		TenantID:     "018f1d00-0000-7000-8000-000000000001",
 		SourceSystem:  " logto ",
 		SourceKey:     " user-123 ",
 		SourceVersion: 3,
@@ -65,6 +66,7 @@ func TestPrepareReconciliationRequestProducesStableHashForEquivalentOrdering(t *
 
 func TestPrepareReconciliationRequestRejectsMutableIdentityAsIdentifier(t *testing.T) {
 	_, _, err := prepareReconciliationRequest(ReconciliationRequest{
+		TenantID:     "018f1d00-0000-7000-8000-000000000001",
 		SourceSystem:  "logto",
 		SourceKey:     "user@example.test",
 		SourceVersion: 1,
@@ -93,6 +95,7 @@ func TestPrepareReconciliationRequestRejectsDuplicateExplicitDeny(t *testing.T) 
 		ValidFrom:            validFrom,
 	}
 	_, _, err := prepareReconciliationRequest(ReconciliationRequest{
+		TenantID:     "018f1d00-0000-7000-8000-000000000001",
 		SourceSystem:  "logto",
 		SourceKey:     "user-123",
 		SourceVersion: 1,
@@ -113,6 +116,7 @@ func TestPrepareReconciliationRequestRejectsDuplicateExplicitDeny(t *testing.T) 
 
 func TestPrepareReconciliationRequestNormalizesNilAndEmptyCollections(t *testing.T) {
 	request := ReconciliationRequest{
+		TenantID:     "018f1d00-0000-7000-8000-000000000001",
 		SourceSystem:  "logto",
 		SourceKey:     "user-123",
 		SourceVersion: 1,

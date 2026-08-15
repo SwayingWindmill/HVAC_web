@@ -73,7 +73,7 @@ export const commandTransitionSchema = z.object({
 export const commandSchema = z.object({
   schemaVersion: z.literal(1),
   commandId: commandUUIDSchema,
-  organizationId: commandUUIDv7Schema,
+  tenantId: commandUUIDv7Schema,
   siteId: commandUUIDv7Schema,
   deviceId: commandUUIDv7Schema,
   pointId: commandUUIDv7Schema,
@@ -130,11 +130,11 @@ export class CommandApiError extends Error {
 
 export function validateCommandScope(
   command: Command,
-  scope: { readonly trustedOrganizationId: string; readonly trustedSiteId: string },
+  scope: { readonly trustedTenantId: string; readonly trustedSiteId: string },
 ): Command {
-  const organizationId = commandUUIDv7Schema.parse(scope.trustedOrganizationId);
+  const tenantId = commandUUIDv7Schema.parse(scope.trustedTenantId);
   const siteId = commandUUIDv7Schema.parse(scope.trustedSiteId);
-  if (command.organizationId !== organizationId || command.siteId !== siteId) {
+  if (command.tenantId !== tenantId || command.siteId !== siteId) {
     throw new CommandApiError(404, 'RESOURCE_NOT_FOUND', '未找到该 Command。');
   }
   return command;

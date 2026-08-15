@@ -20,6 +20,7 @@ var ErrDeviceNotFound = errors.New("telemetry device not found")
 
 type SnapshotCommit struct {
 	Snapshot         telemetryapi.DeviceObservationSnapshot
+	FullSnapshot     telemetryapi.DeviceObservationSnapshot
 	StateChanged     bool
 	PreviousRevision int64
 }
@@ -142,7 +143,8 @@ func (store *PostgresStore) evaluateAndPersistDevice(ctx context.Context, tx pgx
 		}
 	}
 	return SnapshotCommit{
-		Snapshot: ProjectSnapshot(evaluation.Snapshot, requestedKeys), StateChanged: stateChanged, PreviousRevision: previousRevision,
+		Snapshot: ProjectSnapshot(evaluation.Snapshot, requestedKeys), FullSnapshot: evaluation.Snapshot,
+		StateChanged: stateChanged, PreviousRevision: previousRevision,
 	}, nil
 }
 
@@ -173,10 +175,10 @@ func loadDeviceFacts(ctx context.Context, tx pgx.Tx, deviceID string) (DeviceFac
 	facts := DeviceFacts{FreshnessPolicies: map[string]FreshnessPolicy{}, Latest: map[string]LatestObservation{}, RejectedKeys: map[string]bool{}}
 	var applicability string
 	err := tx.QueryRow(ctx, `
-SELECT device_id::text, owning_organization_id::text, site_id::text, presence_applicability
+SELECT device_id::text, tenant_id::text, site_id::text, presence_applicability
 FROM telemetry_runtime.registry_device_bindings
 WHERE device_id = $1::uuid AND binding_status = 'ACTIVE' AND valid_to IS NULL
-`, deviceID).Scan(&facts.DeviceID, &facts.OwningOrganizationID, &facts.SiteID, &applicability)
+`, deviceID).Scan(&facts.DeviceID, &facts.TenantID, &facts.SiteID, &applicability)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DeviceFacts{}, ErrDeviceNotFound
 	}

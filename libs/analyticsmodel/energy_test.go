@@ -6,13 +6,13 @@ import (
 )
 
 const (
-	testOrganizationID = "018f1e00-0000-7000-8000-000000000001"
-	testSiteID         = "018f1e00-1000-7000-8000-000000000001"
+	testTenantID = "018f1d00-0000-7000-8000-000000000001"
+	testSiteID   = "018f1e00-1000-7000-8000-000000000001"
 )
 
 func TestEnergySeriesQueryValidatesProductBoundary(t *testing.T) {
 	query := EnergySeriesQuery{
-		OrganizationID: testOrganizationID,
+		TenantID:       testTenantID,
 		SiteID:         testSiteID,
 		EnergyType:     EnergyTypeElectricity,
 		Granularity:    GranularityDay,
@@ -28,7 +28,7 @@ func TestEnergySeriesQueryValidatesProductBoundary(t *testing.T) {
 
 func TestEnergySeriesQueryRejectsUnsafeOrAmbiguousRequests(t *testing.T) {
 	valid := EnergySeriesQuery{
-		OrganizationID: testOrganizationID,
+		TenantID:       testTenantID,
 		SiteID:         testSiteID,
 		EnergyType:     EnergyTypeElectricity,
 		Granularity:    GranularityDay,
@@ -41,7 +41,7 @@ func TestEnergySeriesQueryRejectsUnsafeOrAmbiguousRequests(t *testing.T) {
 		name   string
 		mutate func(*EnergySeriesQuery)
 	}{
-		{"organization is not UUIDv7", func(query *EnergySeriesQuery) { query.OrganizationID = "org-1" }},
+		{"tenant is not UUIDv7", func(query *EnergySeriesQuery) { query.TenantID = "tenant-1" }},
 		{"site is not UUIDv7", func(query *EnergySeriesQuery) { query.SiteID = "site-1" }},
 		{"unsupported energy type", func(query *EnergySeriesQuery) { query.EnergyType = "steam" }},
 		{"unsupported granularity", func(query *EnergySeriesQuery) { query.Granularity = "minute" }},
@@ -62,9 +62,9 @@ func TestEnergySeriesQueryRejectsUnsafeOrAmbiguousRequests(t *testing.T) {
 	}
 }
 
-func TestEnergySeriesScopeDigestBindsOrganizationSiteAndQueryKind(t *testing.T) {
+func TestEnergySeriesScopeDigestBindsTenantSiteAndQueryKind(t *testing.T) {
 	query := EnergySeriesQuery{
-		OrganizationID: testOrganizationID,
+		TenantID:       testTenantID,
 		SiteID:         testSiteID,
 		EnergyType:     EnergyTypeElectricity,
 		Granularity:    GranularityHour,

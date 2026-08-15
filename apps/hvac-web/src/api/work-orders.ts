@@ -36,7 +36,7 @@ const timelineEventSchema = z.object({
 export const workOrderSchema = z.object({
   schemaVersion: z.literal(1),
   workOrderId: z.string(),
-  organizationId: z.string(),
+  tenantId: z.string(),
   siteId: z.string(),
   title: z.string(),
   description: z.string(),

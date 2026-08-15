@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "contractId": "SE-OBJECT-STORAGE-PHASE1",
+  "architectureAuthority": "SE-ARCH-004 V2.1.2",
+  "deploymentMode": "EXTERNAL",
+  "providerSelection": "DEPLOYMENT_TIME",
+  "allowedProviderFamilies": [
+    "S3_COMPATIBLE",
+    "AWS_S3",
+    "AZURE_BLOB",
+    "GCS"
+  ],
+  "requiredPurposes": [
+    "BACKUP",
+    "ARCHIVE",
+    "EVIDENCE",
+    "DATASET",
+    "MODEL_ARTIFACT"
+  ],
+  "runtimeBindings": {
+    "provider": "OBJECT_STORAGE_PROVIDER",
+    "endpointReference": "OBJECT_STORAGE_ENDPOINT_REFERENCE",
+    "credentialReference": "OBJECT_STORAGE_CREDENTIAL_REFERENCE",
+    "bucketCatalogReference": "OBJECT_STORAGE_BUCKET_CATALOG_REFERENCE"
+  },
+  "governance": {
+    "metadataAuthority": "core_registry.object_storage_buckets",
+    "archiveAuthority": "core_registry.archive_manifests",
+    "backupAuthority": "core_registry.backup_manifests",
+    "backupRequiresVersioning": true,
+    "backupRequiresImmutability": true,
+    "archiveRequiresVersioning": true
+  },
+  "repositoryPolicy": {
+    "embedProviderCredentials": false,
+    "hardcodeProviderProduct": false,
+    "postgresBlobFallback": false,
+    "productionProvisioningRequiredForPass": true
+  }
+}

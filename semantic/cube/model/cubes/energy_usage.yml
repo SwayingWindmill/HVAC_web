@@ -52,10 +52,6 @@ cubes:
         type: max
 
     dimensions:
-      - name: organization_id
-        sql: organization_id
-        type: string
-
       - name: site_id
         sql: site_id
         type: string
@@ -102,9 +98,9 @@ cubes:
           includes: "*"
         row_level:
           filters:
-            - member: organization_id
+            - member: tenant_id
               operator: equals
-              values: ["{ securityContext.organizationId }"]
+              values: ["{ securityContext.tenantId }"]
             - member: site_id
               operator: equals
               values: ["{ securityContext.siteId }"]

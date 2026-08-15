@@ -134,7 +134,7 @@ func validClaims(now time.Time) identitycontext.DelegationClaims {
 	return identitycontext.DelegationClaims{
 		Issuer: "spiffe://hvac.local/platform-gateway", Subject: "fixture-user", SubjectIssuer: "https://issuer.example.test",
 		DisplayName: "Fixture User", Email: "fixture@example.test", Roles: []string{"operator"},
-		ExecutingService: "spiffe://hvac.local/platform-gateway", Audience: "iam-service", ActingOrganizationID: "org-01",
+		ExecutingService: "spiffe://hvac.local/platform-gateway", Audience: "iam-service", TenantID: "018f3d00-0000-7000-8000-000000000001",
 		Actions: []string{"principal:read"}, Scopes: []string{"session:session-01"}, PolicyRevision: "policy-v1",
 		SessionID: "session-01", IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "grant-01",
 	}

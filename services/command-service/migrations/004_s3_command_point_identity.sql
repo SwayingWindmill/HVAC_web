@@ -18,7 +18,6 @@ ALTER TABLE command_runtime.command_intents
 CREATE INDEX command_intents_tenant_point_sequence_idx
   ON command_runtime.command_intents (
     tenant_id,
-    organization_id,
     site_id,
     point_id,
     device_command_sequence

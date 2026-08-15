@@ -5,16 +5,8 @@ import (
 	"testing"
 )
 
-func TestDecodeConfigRejectsMissingCredentials(t *testing.T) {
-	config := testConfig()
-	config.Credentials = map[string]string{}
-	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "credentialEnvByDeviceId") {
-		t.Fatalf("expected credential validation error, got %v", err)
-	}
-}
-
 func TestDecodeConfigRejectsUnknownFields(t *testing.T) {
-	raw := `{"schemaVersion":1,"unexpected":true}`
+	raw := `{"schemaVersion":2,"unexpected":true}`
 	_, err := DecodeConfig(strings.NewReader(raw))
 	if err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("expected unknown field error, got %v", err)
@@ -29,14 +21,6 @@ func TestPlantConfigRejectsDuplicateDeviceIDs(t *testing.T) {
 	}
 }
 
-func TestConfigRequiresHTTPSForNonLocalThingsBoard(t *testing.T) {
-	config := testConfig()
-	config.ThingsBoardBaseURL = "http://thingsboard.example.com"
-	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "HTTPS") {
-		t.Fatalf("expected HTTPS validation error, got %v", err)
-	}
-}
-
 func TestConfigRejectsAreaCycles(t *testing.T) {
 	config := testConfig()
 	config.Areas[0].ParentID = "plant-room"
@@ -45,11 +29,27 @@ func TestConfigRejectsAreaCycles(t *testing.T) {
 	}
 }
 
+func TestConfigRequiresPhysicalSensorIdentity(t *testing.T) {
+	config := testConfig()
+	config.Sensors[0].SerialNumber = ""
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "serialNumber") {
+		t.Fatalf("expected physical Sensor identity validation error, got %v", err)
+	}
+}
+
 func TestConfigRejectsSensorDeviceMismatch(t *testing.T) {
 	config := testConfig()
 	config.Points[0].DeviceID = "CHWP-01"
-	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "must report through sensor device") {
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "physical sensor device") {
 		t.Fatalf("expected Sensor reporting Device validation error, got %v", err)
+	}
+}
+
+func TestConfigRejectsNonCanonicalPointCode(t *testing.T) {
+	config := testConfig()
+	config.Points[0].PointCode = "Leaving.Temp"
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "point 0 config is invalid") {
+		t.Fatalf("expected lower_snake_case Point Code validation error, got %v", err)
 	}
 }
 

@@ -13,8 +13,7 @@ import {
 } from '../apps/hvac-web/src/real/assets/history.ts';
 import { resolveRealAssetsProfile } from '../apps/hvac-web/src/real/assets/catalog.ts';
 
-const actingOrganizationId = '01900000-0001-7000-8000-000000000001';
-const owningOrganizationId = '01900000-0002-7000-8000-000000000002';
+const tenantId = '01900000-0002-7000-8000-000000000002';
 const siteId = '01900000-0003-7000-8000-000000000003';
 const deviceId = '01900000-0004-7000-8000-000000000004';
 const observationA = '01900000-0011-7000-8000-000000000011';
@@ -32,11 +31,10 @@ function makeQuery(overrides = {}) {
   return createRealAssetsHistoryQuery({
     protectedGeneration: 7,
     sessionId: 'session-test-01',
-    actingOrganizationId,
-    owningOrganizationId,
+    tenantId,
     siteId,
     deviceId,
-    keys: ['chiller.power', 'chiller.cop'],
+    keys: ['chiller_power', 'chiller_cop'],
     range: '1h',
     timezone: 'Asia/Tokyo',
     routePolicyRevision: 'registry:9|telemetry:2',
@@ -55,7 +53,7 @@ function point(observationId, sampledAt, value, quality = 'GOOD', unit = 'kW', p
     value,
     unit,
     quality,
-    qualityReasons: quality === 'SUSPECT' ? ['SOURCE_LAG_EXCEEDED'] : [],
+    qualityReasons: quality === 'GOOD' ? [] : ['SOURCE_LAG_EXCEEDED'],
     revision: 3,
   };
 }
@@ -63,19 +61,19 @@ function point(observationId, sampledAt, value, quality = 'GOOD', unit = 'kW', p
 function makeResponse(query) {
   return {
     schemaVersion: 1,
-    owningOrganizationId,
+    tenantId,
     siteId,
     deviceId,
     series: [
       {
-        key: 'chiller.power',
+        key: 'chiller_power',
         points: [
           point(observationA, '2026-07-31T03:05:00.000Z', 0),
-          point(observationB, '2026-07-31T03:25:00.000Z', 18.5, 'SUSPECT', 'kW', pointB, sensorB),
+          point(observationB, '2026-07-31T03:25:00.000Z', 18.5, 'PARTIAL', 'kW', pointB, sensorB),
         ],
       },
       {
-        key: 'chiller.cop',
+        key: 'chiller_cop',
         points: [point(observationC, '2026-07-31T03:40:00.000Z', 4.2, 'GOOD', null, pointC, sensorC)],
       },
     ],
@@ -87,7 +85,7 @@ function makeResponse(query) {
       partial: true,
       maxPointsPerKey: query.maxPointsPerKey,
       returnedPoints: 3,
-      truncatedKeys: ['chiller.power'],
+      truncatedKeys: ['chiller_power'],
     },
   };
 }
@@ -96,9 +94,9 @@ test('history ranges and profile selection stay fixed and trendEligible-only', (
   assert.deepEqual(Object.keys(REAL_ASSETS_HISTORY_RANGES), ['1h', '6h', '24h']);
   const profile = resolveRealAssetsProfile('CHILLER');
   assert.deepEqual(listRealAssetsTrendDefinitions(profile).map((definition) => definition.key), [
-    'chiller.power',
-    'chiller.cop',
-    'chiller.cooling_capacity',
+    'chiller_power',
+    'chiller_cop',
+    'chiller_cooling_capacity',
   ]);
   assert.deepEqual(listRealAssetsTrendDefinitions(resolveRealAssetsProfile('UNKNOWN_DEVICE')), []);
 });
@@ -109,7 +107,7 @@ test('history query and cache key isolate protected scope, session, device, keys
   assert.equal(query.to, '2026-07-31T04:00:00.000Z');
   assert.equal(query.maxPointsPerKey, 240);
   const key = realAssetsHistoryQueryKey(query);
-  for (const expected of [7, 'session-test-01', actingOrganizationId, owningOrganizationId, siteId, deviceId, '1h', 'RAW', 'Asia/Tokyo', 'real-assets-critical-points:v1', 'registry:9|telemetry:2']) {
+  for (const expected of [7, 'session-test-01', tenantId, siteId, deviceId, '1h', 'RAW', 'Asia/Tokyo', 'real-assets-critical-points:v1', 'registry:9|telemetry:2']) {
     assert(key.includes(expected), `query key omitted ${expected}`);
   }
   assert.notDeepEqual(key, realAssetsHistoryQueryKey(makeQuery({ sessionId: 'session-test-02' })));
@@ -137,7 +135,7 @@ test('history loader sends only exact Device and profile keys and validates publ
   assert.equal(loaded, response);
   assert.deepEqual(requests[0].request, {
     deviceId,
-    keys: ['chiller.power', 'chiller.cop'],
+    keys: ['chiller_power', 'chiller_cop'],
     from: query.from,
     to: query.to,
     maxPointsPerKey: 240,
@@ -161,7 +159,7 @@ test('history response rejects scope, order, count and truncation drift', () => 
   assert.throws(() => validateRealAssetsHistoryResponse({ ...response, metadata: { ...response.metadata, partial: false } }, query), /marked partial/);
 });
 
-test('trend model preserves valid zero, suspect quality and inserts null gaps without interpolation', () => {
+test('trend model preserves valid zero, degraded quality and inserts null gaps without interpolation', () => {
   const query = makeQuery();
   const points = makeResponse(query).series[0].points;
   const data = buildRealAssetsTrendData(points, '1h', query.maxPointsPerKey);
@@ -171,7 +169,7 @@ test('trend model preserves valid zero, suspect quality and inserts null gaps wi
   assert.equal(data[1].value, null);
   assert.equal(data[1].quality, null);
   assert.equal(data[2].value, 18.5);
-  assert.equal(data[2].quality, 'SUSPECT');
+  assert.equal(data[2].quality, 'PARTIAL');
   assert.equal(data[2].pointId, pointB);
 });
 

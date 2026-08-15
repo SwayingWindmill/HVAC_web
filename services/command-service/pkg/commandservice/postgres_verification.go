@@ -12,27 +12,27 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
 
-func (store *PostgresStore) ClaimVerification(ctx context.Context, organizationID, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
-	return store.claimVerification(ctx, organizationID, unrestrictedCommandCohort(), leaseOwner, leaseFor)
+func (store *PostgresStore) ClaimVerification(ctx context.Context, tenantID, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
+	return store.claimVerification(ctx, tenantID, unrestrictedCommandCohort(), leaseOwner, leaseFor)
 }
 
-func (store *PostgresStore) ClaimVerificationForCohort(ctx context.Context, organizationID, siteID, deviceID string, capability commandmodel.Capability, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
+func (store *PostgresStore) ClaimVerificationForCohort(ctx context.Context, tenantID, siteID, deviceID string, capability commandmodel.Capability, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
 	scope, err := exactCommandCohort(siteID, deviceID, capability)
 	if err != nil {
 		return commandmodel.VerificationEnvelope{}, err
 	}
-	return store.claimVerification(ctx, organizationID, scope, leaseOwner, leaseFor)
+	return store.claimVerification(ctx, tenantID, scope, leaseOwner, leaseFor)
 }
 
-func (store *PostgresStore) claimVerification(ctx context.Context, organizationID string, scope commandCohortScope, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
+func (store *PostgresStore) claimVerification(ctx context.Context, tenantID string, scope commandCohortScope, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
 	if store == nil || store.pool == nil {
 		return commandmodel.VerificationEnvelope{}, errors.New("command store is closed")
 	}
-	if !commandmodel.IsUUIDv7(organizationID) || strings.TrimSpace(leaseOwner) == "" || leaseFor < time.Second || leaseFor > time.Minute {
+	if !commandmodel.IsUUIDv7(tenantID) || strings.TrimSpace(leaseOwner) == "" || leaseFor < time.Second || leaseFor > time.Minute {
 		return commandmodel.VerificationEnvelope{}, ErrInvalidRequest
 	}
 	for attempt := 0; attempt < 4; attempt++ {
-		envelope, err := store.claimVerificationOnce(ctx, organizationID, scope, leaseOwner, leaseFor)
+		envelope, err := store.claimVerificationOnce(ctx, tenantID, scope, leaseOwner, leaseFor)
 		if err == nil || errors.Is(err, ErrVerificationNotAvailable) {
 			return envelope, err
 		}
@@ -43,17 +43,17 @@ func (store *PostgresStore) claimVerification(ctx context.Context, organizationI
 	return commandmodel.VerificationEnvelope{}, errors.New("verification claim transaction retry limit exceeded")
 }
 
-func (store *PostgresStore) claimVerificationOnce(ctx context.Context, organizationID string, scope commandCohortScope, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
+func (store *PostgresStore) claimVerificationOnce(ctx context.Context, tenantID string, scope commandCohortScope, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
 	now := store.now().UTC()
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return commandmodel.VerificationEnvelope{}, fmt.Errorf("begin verification claim transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := activateOrganization(ctx, tx, organizationID); err != nil {
+	if err := activateTenant(ctx, tx, tenantID); err != nil {
 		return commandmodel.VerificationEnvelope{}, err
 	}
-	if err := store.reconcileExpiredAcknowledgedAttempts(ctx, tx, organizationID, scope, now); err != nil {
+	if err := store.reconcileExpiredAcknowledgedAttempts(ctx, tx, tenantID, scope, now); err != nil {
 		return commandmodel.VerificationEnvelope{}, err
 	}
 
@@ -62,15 +62,15 @@ func (store *PostgresStore) claimVerificationOnce(ctx context.Context, organizat
 	var parameters []byte
 	var attemptVersion uint64
 	err = tx.QueryRow(ctx, `
-SELECT i.command_id::text, a.attempt_id::text, i.organization_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
+SELECT i.command_id::text, a.attempt_id::text, i.tenant_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
        i.capability_name, i.capability_revision, i.canonical_parameters, i.verification_point_key,
        i.payload_hash, a.execution_fence, i.snapshot_revision,
        a.acknowledged_at, a.verification_deadline, a.connector_evidence_id, a.version
 FROM command_runtime.command_intents i
 JOIN command_runtime.command_attempts a ON a.command_id = i.command_id
 JOIN command_runtime.device_control_state d
-  ON d.organization_id = i.organization_id AND d.device_id = i.device_id
-WHERE i.organization_id = $1::uuid
+  ON d.tenant_id = i.tenant_id AND d.device_id = i.device_id
+WHERE i.tenant_id = $1::uuid
   AND (NOT $4 OR (i.site_id = $5::uuid AND i.device_id = $6::uuid AND i.capability_name = $7))
   AND i.status = 'DISPATCHING'
   AND a.status = 'ACKNOWLEDGED'
@@ -81,8 +81,8 @@ WHERE i.organization_id = $1::uuid
 ORDER BY a.acknowledged_at, a.attempt_id
 FOR UPDATE OF i, a SKIP LOCKED
 LIMIT 1
-`, organizationID, now, setpointControlGroup, scope.enforced, scope.querySiteID(), scope.queryDeviceID(), scope.queryCapability()).Scan(
-		&envelope.CommandID, &envelope.AttemptID, &envelope.OrganizationID, &envelope.SiteID, &envelope.DeviceID, &envelope.PointID,
+`, tenantID, now, setpointControlGroup, scope.enforced, scope.querySiteID(), scope.queryDeviceID(), scope.queryCapability()).Scan(
+		&envelope.CommandID, &envelope.AttemptID, &envelope.TenantID, &envelope.SiteID, &envelope.DeviceID, &envelope.PointID,
 		&capability, &envelope.CapabilityRevision, &parameters, &envelope.VerificationPointKey,
 		&envelope.PayloadHash, &envelope.ExecutionFence, &envelope.BaselineBusinessRevision,
 		&envelope.AcknowledgedAt, &envelope.VerificationDeadline, &envelope.ConnectorEvidenceID, &attemptVersion,
@@ -111,9 +111,9 @@ LIMIT 1
 UPDATE command_runtime.command_attempts
 SET verification_lease_owner = $4, verification_lease_until = $5,
     version = $6, updated_at = $7
-WHERE organization_id = $1::uuid AND command_id = $2::uuid AND attempt_id = $3::uuid
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND attempt_id = $3::uuid
   AND status = 'ACKNOWLEDGED'
-`, organizationID, envelope.CommandID, envelope.AttemptID, leaseOwner, leaseUntil, attemptVersion+1, now); err != nil {
+`, tenantID, envelope.CommandID, envelope.AttemptID, leaseOwner, leaseUntil, attemptVersion+1, now); err != nil {
 		return commandmodel.VerificationEnvelope{}, fmt.Errorf("lease reported-state verification: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -128,7 +128,7 @@ func (store *PostgresStore) ResolveVerification(ctx context.Context, envelope co
 	if store == nil || store.pool == nil {
 		return errors.New("command store is closed")
 	}
-	if envelope.OrganizationID == "" || envelope.CommandID == "" || envelope.AttemptID == "" ||
+	if envelope.TenantID == "" || envelope.CommandID == "" || envelope.AttemptID == "" ||
 		strings.TrimSpace(envelope.LeaseOwner) == "" || envelope.ExecutionFence == 0 || strings.TrimSpace(result.EvidenceID) == "" {
 		return ErrInvalidRequest
 	}
@@ -156,7 +156,7 @@ func (store *PostgresStore) resolveVerificationOnce(ctx context.Context, envelop
 		return fmt.Errorf("begin verification resolution transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := activateOrganization(ctx, tx, envelope.OrganizationID); err != nil {
+	if err := activateTenant(ctx, tx, envelope.TenantID); err != nil {
 		return err
 	}
 
@@ -167,17 +167,17 @@ func (store *PostgresStore) resolveVerificationOnce(ctx context.Context, envelop
 	var acknowledgedAt, verificationDeadline, verificationLeaseUntil time.Time
 	var verificationLeaseOwner string
 	err = tx.QueryRow(ctx, `
-SELECT i.command_id::text, i.organization_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
+SELECT i.command_id::text, i.tenant_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
        i.capability_name, i.capability_revision, i.canonical_parameters, i.verification_point_key,
        i.payload_hash, i.snapshot_revision, i.version, i.status, i.active_execution_fence,
        a.status, a.version, a.execution_fence, a.payload_hash, a.connector_evidence_id,
        a.acknowledged_at, a.verification_deadline, a.verification_lease_owner, a.verification_lease_until
 FROM command_runtime.command_intents i
 JOIN command_runtime.command_attempts a ON a.command_id = i.command_id
-WHERE i.organization_id = $1::uuid AND i.command_id = $2::uuid AND a.attempt_id = $3::uuid
+WHERE i.tenant_id = $1::uuid AND i.command_id = $2::uuid AND a.attempt_id = $3::uuid
 FOR UPDATE OF i, a
-`, envelope.OrganizationID, envelope.CommandID, envelope.AttemptID).Scan(
-		&intent.ID, &intent.OrganizationID, &intent.SiteID, &intent.DeviceID, &intent.PointID,
+`, envelope.TenantID, envelope.CommandID, envelope.AttemptID).Scan(
+		&intent.ID, &intent.TenantID, &intent.SiteID, &intent.DeviceID, &intent.PointID,
 		&capability, &intent.CapabilityRevision, &parameters, &intent.VerificationPointKey,
 		&intent.PayloadHash, &intent.SnapshotRevision, &intent.Version, &intent.Status, &activeFence,
 		&attemptStatus, &attemptVersion, &attemptFence, &attemptPayloadHash, &connectorEvidenceID,
@@ -230,15 +230,15 @@ FOR UPDATE OF i, a
 UPDATE command_runtime.command_attempts
 SET status = $4, version = $5, verification_evidence_id = $6,
     verification_lease_owner = NULL, verification_lease_until = NULL, updated_at = $7
-WHERE organization_id = $1::uuid AND command_id = $2::uuid AND attempt_id = $3::uuid
-`, envelope.OrganizationID, envelope.CommandID, envelope.AttemptID, attemptFinal, attemptVersion+1, result.EvidenceID, now); err != nil {
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND attempt_id = $3::uuid
+`, envelope.TenantID, envelope.CommandID, envelope.AttemptID, attemptFinal, attemptVersion+1, result.EvidenceID, now); err != nil {
 		return fmt.Errorf("resolve reported-state verification attempt: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.command_intents
 SET status = $3, version = $4, updated_at = $5
-WHERE organization_id = $1::uuid AND command_id = $2::uuid
-`, envelope.OrganizationID, envelope.CommandID, intentFinal, newVersion, now); err != nil {
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid
+`, envelope.TenantID, envelope.CommandID, intentFinal, newVersion, now); err != nil {
 		return fmt.Errorf("resolve reported-state verification intent: %w", err)
 	}
 	if freeze {
@@ -249,8 +249,8 @@ SET frozen_control_groups = CASE
       ELSE frozen_control_groups || to_jsonb($3::text)
     END,
     updated_at = $4
-WHERE organization_id = $1::uuid AND device_id = $2::uuid
-`, envelope.OrganizationID, intent.DeviceID, setpointControlGroup, now); err != nil {
+WHERE tenant_id = $1::uuid AND device_id = $2::uuid
+`, envelope.TenantID, intent.DeviceID, setpointControlGroup, now); err != nil {
 			return fmt.Errorf("freeze unverified command control group: %w", err)
 		}
 	}
@@ -273,7 +273,7 @@ WHERE organization_id = $1::uuid AND device_id = $2::uuid
 	return nil
 }
 
-func (store *PostgresStore) reconcileExpiredAcknowledgedAttempts(ctx context.Context, tx pgx.Tx, organizationID string, scope commandCohortScope, now time.Time) error {
+func (store *PostgresStore) reconcileExpiredAcknowledgedAttempts(ctx context.Context, tx pgx.Tx, tenantID string, scope commandCohortScope, now time.Time) error {
 	type expiredVerification struct {
 		AttemptID, CommandID, SiteID, DeviceID, PayloadHash, ConnectorEvidenceID string
 		Fence, IntentVersion, AttemptVersion                                     uint64
@@ -283,14 +283,14 @@ SELECT a.attempt_id::text, a.command_id::text, a.site_id::text, a.device_id::tex
        a.payload_hash, a.connector_evidence_id, a.execution_fence, i.version, a.version
 FROM command_runtime.command_attempts a
 JOIN command_runtime.command_intents i ON i.command_id = a.command_id
-WHERE a.organization_id = $1::uuid
+WHERE a.tenant_id = $1::uuid
   AND (NOT $3 OR (a.site_id = $4::uuid AND a.device_id = $5::uuid))
   AND a.status = 'ACKNOWLEDGED'
   AND a.verification_deadline <= $2
   AND i.status = 'DISPATCHING'
 FOR UPDATE OF a, i SKIP LOCKED
 LIMIT 50
-`, organizationID, now, scope.enforced, scope.querySiteID(), scope.queryDeviceID())
+`, tenantID, now, scope.enforced, scope.querySiteID(), scope.queryDeviceID())
 	if err != nil {
 		return fmt.Errorf("select expired reported-state verifications: %w", err)
 	}
@@ -323,15 +323,15 @@ UPDATE command_runtime.command_attempts
 SET status = 'OUTCOME_UNKNOWN', version = $4,
     verification_evidence_id = 'REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED',
     verification_lease_owner = NULL, verification_lease_until = NULL, updated_at = $5
-WHERE organization_id = $1::uuid AND command_id = $2::uuid AND attempt_id = $3::uuid
-`, organizationID, item.CommandID, item.AttemptID, item.AttemptVersion+1, now); err != nil {
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND attempt_id = $3::uuid
+`, tenantID, item.CommandID, item.AttemptID, item.AttemptVersion+1, now); err != nil {
 			return fmt.Errorf("expire reported-state verification attempt: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.command_intents
 SET status = 'OUTCOME_UNKNOWN', version = $3, updated_at = $4
-WHERE organization_id = $1::uuid AND command_id = $2::uuid
-`, organizationID, item.CommandID, item.IntentVersion+1, now); err != nil {
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid
+`, tenantID, item.CommandID, item.IntentVersion+1, now); err != nil {
 			return fmt.Errorf("expire reported-state verification intent: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
@@ -341,11 +341,11 @@ SET frozen_control_groups = CASE
       ELSE frozen_control_groups || to_jsonb($3::text)
     END,
     updated_at = $4
-WHERE organization_id = $1::uuid AND device_id = $2::uuid
-`, organizationID, item.DeviceID, setpointControlGroup, now); err != nil {
+WHERE tenant_id = $1::uuid AND device_id = $2::uuid
+`, tenantID, item.DeviceID, setpointControlGroup, now); err != nil {
 			return fmt.Errorf("freeze expired verification control group: %w", err)
 		}
-		intent := commandmodel.CommandIntent{ID: item.CommandID, OrganizationID: organizationID, SiteID: item.SiteID, DeviceID: item.DeviceID, PayloadHash: item.PayloadHash, Version: item.IntentVersion}
+		intent := commandmodel.CommandIntent{ID: item.CommandID, TenantID: tenantID, SiteID: item.SiteID, DeviceID: item.DeviceID, PayloadHash: item.PayloadHash, Version: item.IntentVersion}
 		if err := insertDispatchTransition(ctx, tx, transitionID, intent, item.IntentVersion+1,
 			commandmodel.IntentDispatching, commandmodel.IntentOutcomeUnknown,
 			"REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED", "command-verifier", item.AttemptID,

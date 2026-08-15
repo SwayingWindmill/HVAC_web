@@ -12,7 +12,7 @@ ALTER TABLE core_registry.device_bindings
 
 CREATE UNIQUE INDEX device_bindings_active_relation_uidx
   ON core_registry.device_bindings
-  (tenant_id, organization_id, site_id, device_id, equipment_id, binding_role)
+  (tenant_id, site_id, device_id, asset_id, binding_role)
   WHERE status = 'ACTIVE' AND valid_to IS NULL;
 
 RESET ROLE;

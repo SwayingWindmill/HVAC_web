@@ -15,7 +15,7 @@ const benchmarkComparison = benchmarkScenario.inputFacts.find(
   ({ kind }) => kind === 'SITE_ENERGY_PERIOD_COMPARISON',
 ).payload;
 
-const organizationId = '0198f5c0-7c00-7000-8000-000000000001';
+const tenantId = '0198f5c0-7c00-7000-8000-000000000001';
 const siteId = '0198f5c0-7c00-7000-8000-000000000002';
 const equipmentIds = [
   '0198f5c0-7c00-7000-8000-000000000010',
@@ -47,7 +47,7 @@ const hourlySeries = ({ from, hours, energyPerHour, datasetRevision }) => ({
 
 const baseInput = {
   site: {
-    organizationId,
+    tenantId,
     siteId,
     timezone: 'Asia/Shanghai',
     equipmentIds,

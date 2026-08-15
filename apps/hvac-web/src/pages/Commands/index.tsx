@@ -241,7 +241,7 @@ export default function Commands() {
           type="info"
           showIcon
           message="S3-08 Mock UX 审计模式"
-          description="当前页面只模拟 Command Intent、审批和 Timeline，不连接 ThingsBoard，也不会产生真实设备副作用。26°C 及以上的演示提交会进入中风险审批。"
+          description="当前页面只模拟 Command Intent、审批和 Timeline，不连接真实设备 Provider，也不会产生设备副作用。26°C 及以上的演示提交会进入中风险审批。"
         />
       );
     }

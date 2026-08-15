@@ -15,7 +15,7 @@ const reportPath = resolve(root, process.env.ANALYTICS_CUBE_REPORT_PATH ?? 'out/
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 const cubeImage = 'cubejs/cube:v1.6.51@sha256:bc8c3f27aa588e0bf9c9937ca5bbb37192bc14d78bd18241299c94b9d2ca20e5';
 const cubeKey = randomBytes(32).toString('base64url');
-const organizationId = '018f4f00-0000-7000-8000-000000000001';
+const tenantId = '018f4f00-0100-7000-8000-000000000001';
 const siteId = '018f4f00-1000-7000-8000-000000000001';
 const composeInvocation = (() => {
   const plugin = spawnSync('docker', ['compose', 'version'], { stdio: 'ignore', windowsHide: true });
@@ -100,7 +100,7 @@ function cubeToken(overrides = {}) {
     sub: 'analytics-integration-user',
     iat: now,
     exp: now + 300,
-    organizationId,
+    tenantId,
     siteId,
     siteIds: [siteId],
     groups: ['analytics_reader'],
@@ -124,7 +124,7 @@ function energyQuery() {
       'energy_usage.max_dataset_revision',
     ],
     filters: [
-      { member: 'energy_usage.organization_id', operator: 'equals', values: [organizationId] },
+      { member: 'energy_usage.tenant_id', operator: 'equals', values: [tenantId] },
       { member: 'energy_usage.site_id', operator: 'equals', values: [siteId] },
       { member: 'energy_usage.energy_type', operator: 'equals', values: ['electricity'] },
     ],

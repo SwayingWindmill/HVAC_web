@@ -68,7 +68,7 @@ func TestTelemetryAuthorizationRequiresExactDeviceAndKeyScope(t *testing.T) {
 	if !decision.Allowed || decision.ReasonCode != telemetryauth.ReasonAllowExactScope || len(decision.Targets) != 1 {
 		t.Fatalf("allow decision = %#v", decision)
 	}
-	if decision.Targets[0].OwningOrganizationID != telemetryTestOwningOrgID || decision.Targets[0].SiteID != telemetryTestSiteID {
+	if decision.Targets[0].TenantID != S1FixtureTenantAID || decision.Targets[0].SiteID != telemetryTestSiteID {
 		t.Fatalf("resolved target = %#v", decision.Targets[0])
 	}
 }
@@ -76,7 +76,7 @@ func TestTelemetryAuthorizationRequiresExactDeviceAndKeyScope(t *testing.T) {
 func TestTelemetryAuthorizationDoesNotTreatMembershipAsAllSites(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	facts := telemetryFixtureFacts(now)
-	facts.Devices = append(facts.Devices, TelemetryDevice{ID: telemetryTestSiblingDevice, OwningOrganizationID: telemetryTestOwningOrgID, SiteID: telemetryTestSiblingSite, Status: FactStatusActive})
+	facts.Devices = append(facts.Devices, TelemetryDevice{ID: telemetryTestSiblingDevice, TenantID: S1FixtureTenantAID, SiteID: telemetryTestSiblingSite, Status: FactStatusActive})
 	request := telemetryauth.DecisionRequest{
 		ActingOrganizationID: telemetryTestActingOrgID,
 		Action:               telemetryauth.ActionSnapshotRead,
@@ -94,7 +94,7 @@ func TestTelemetryAuthorizationDoesNotTreatMembershipAsAllSites(t *testing.T) {
 func TestTelemetryAuthorizationRequiresExactCrossOrganizationSiteBinding(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	facts := telemetryFixtureFacts(now)
-	facts.Devices = append(facts.Devices, TelemetryDevice{ID: telemetryTestOtherDevice, OwningOrganizationID: telemetryTestOtherOrgID, SiteID: telemetryTestOtherSite, Status: FactStatusActive})
+	facts.Devices = append(facts.Devices, TelemetryDevice{ID: telemetryTestOtherDevice, TenantID: S1FixtureTenantBID, SiteID: telemetryTestOtherSite, Status: FactStatusActive})
 	facts.ScopeBindings = append(facts.ScopeBindings, TelemetryScopeBinding{
 		ActingOrganizationID: telemetryTestActingOrgID, OwningOrganizationID: telemetryTestOtherOrgID, SiteID: telemetryTestOtherSite, DeviceID: telemetryTestOtherDevice,
 		Actions: []telemetryauth.Action{telemetryauth.ActionSnapshotRead}, Effect: BindingEffectAllow, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour),
@@ -150,7 +150,7 @@ func TestTelemetryAuthorizationDenyPrecedenceAndStableKeyFailure(t *testing.T) {
 func TestTelemetryAuthorizationIsAllOrNothing(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	facts := telemetryFixtureFacts(now)
-	facts.Devices = append(facts.Devices, TelemetryDevice{ID: telemetryTestSiblingDevice, OwningOrganizationID: telemetryTestOwningOrgID, SiteID: telemetryTestSiblingSite, Status: FactStatusActive})
+	facts.Devices = append(facts.Devices, TelemetryDevice{ID: telemetryTestSiblingDevice, TenantID: S1FixtureTenantAID, SiteID: telemetryTestSiblingSite, Status: FactStatusActive})
 	request := telemetryauth.DecisionRequest{
 		ActingOrganizationID: telemetryTestActingOrgID,
 		Action:               telemetryauth.ActionSnapshotRead,
@@ -183,7 +183,7 @@ func telemetryFixtureFacts(now time.Time) TelemetryAuthorizationFacts {
 	return TelemetryAuthorizationFacts{
 		PolicyRevision: "telemetry-access:1",
 		Principal:      PrincipalRecord{ID: telemetryTestPrincipalID, SubjectIssuer: telemetryTestIssuer, Subject: telemetryTestSubject, Status: FactStatusActive},
-		Memberships:    []OrganizationMembership{{OrganizationID: telemetryTestActingOrgID, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
+		Memberships:    []OrganizationMembership{{TenantID: S1FixtureTenantAID, OrganizationID: telemetryTestActingOrgID, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
 		RoleBindings: []RoleBinding{{
 			OrganizationID: telemetryTestActingOrgID,
 			Actions:        []registryauth.Action{registryauth.Action(telemetryauth.ActionSnapshotRead), registryauth.Action(telemetryauth.ActionSubscribe)},
@@ -194,7 +194,7 @@ func telemetryFixtureFacts(now time.Time) TelemetryAuthorizationFacts {
 			Actions: []registryauth.Action{registryauth.Action(telemetryauth.ActionSnapshotRead), registryauth.Action(telemetryauth.ActionSubscribe)},
 			Effect:  BindingEffectAllow, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour),
 		}},
-		Devices: []TelemetryDevice{{ID: telemetryTestDeviceID, OwningOrganizationID: telemetryTestOwningOrgID, SiteID: telemetryTestSiteID, Status: FactStatusActive}},
+		Devices: []TelemetryDevice{{ID: telemetryTestDeviceID, TenantID: S1FixtureTenantAID, SiteID: telemetryTestSiteID, Status: FactStatusActive}},
 		ScopeBindings: []TelemetryScopeBinding{{
 			ActingOrganizationID: telemetryTestActingOrgID, OwningOrganizationID: telemetryTestOwningOrgID, SiteID: telemetryTestSiteID, DeviceID: telemetryTestDeviceID,
 			Actions: []telemetryauth.Action{telemetryauth.ActionSnapshotRead, telemetryauth.ActionSubscribe}, Effect: BindingEffectAllow, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour),

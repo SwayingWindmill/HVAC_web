@@ -76,7 +76,7 @@
     "EvaluationAvailability": { "type": "string", "enum": ["AVAILABLE", "UNAVAILABLE"] },
     "PresenceApplicability": { "type": "string", "enum": ["APPLICABLE", "NOT_APPLICABLE"] },
     "DevicePresenceState": { "type": "string", "enum": ["ONLINE", "OFFLINE", "UNKNOWN"] },
-    "TelemetryQuality": { "type": "string", "enum": ["GOOD", "SUSPECT"] },
+    "TelemetryQuality": { "type": "string", "enum": ["GOOD", "PARTIAL", "ESTIMATED", "MANUAL", "STALE", "INVALID"] },
     "TelemetryReadiness": { "type": "string", "enum": ["CURRENT", "DEGRADED", "INCOMPLETE", "NOT_APPLICABLE"] },
     "DeviceDisplayState": { "type": ["string", "null"], "enum": ["ONLINE", "OFFLINE", "STALE", "UNKNOWN", "UNAVAILABLE", null] },
     "QualityReasonCode": {

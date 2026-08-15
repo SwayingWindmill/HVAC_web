@@ -29,7 +29,7 @@ type IdentityConfig struct {
 	OIDCClientID                string
 	OIDCRedirectURI             string
 	PublicOrigin                string
-	DefaultActingOrganizationID string
+	DefaultTenantID string
 	IAMURL                      string
 	IAMAudience                 string
 	AuditURL                    string
@@ -99,7 +99,7 @@ type oidcClaims struct {
 	Name                 string   `json:"name"`
 	Email                string   `json:"email"`
 	Roles                []string `json:"roles"`
-	ActingOrganizationID string   `json:"actingOrganizationId"`
+	TenantID             string   `json:"tenantId"`
 	TokenUse             string   `json:"token_use"`
 }
 
@@ -252,7 +252,7 @@ func (h *handler) CompleteLogin(writer http.ResponseWriter, request *http.Reques
 	pending := bffSession{Session: sessionstore.Session{
 		ID:                       randomURLToken(32),
 		Principal:                identitycontext.UserPrincipal{Subject: claims.Subject, Issuer: claims.Issuer, DisplayName: claims.Name, Email: claims.Email, Roles: append([]string(nil), claims.Roles...)},
-		ActingOrganizationID:     claims.ActingOrganizationID,
+		TenantID:     claims.TenantID,
 		CSRFTokenCiphertext:      encryptedCSRF,
 		ProviderTokensCiphertext: encryptedTokens,
 		ExpiresAt:                now.Add(h.identity.config.SessionTTL),
@@ -262,7 +262,7 @@ func (h *handler) CompleteLogin(writer http.ResponseWriter, request *http.Reques
 		writeIdentityFailure(writer, request, *validationFailure)
 		return
 	}
-	if validated.Principal.Subject != pending.Principal.Subject || validated.Principal.Issuer != pending.Principal.Issuer || validated.Context.ActingOrganizationID != pending.ActingOrganizationID {
+	if validated.Principal.Subject != pending.Principal.Subject || validated.Principal.Issuer != pending.Principal.Issuer || validated.Context.TenantID != pending.TenantID {
 		writeIdentityFailure(writer, request, identityFailure{503, "IAM_IDENTITY_MISMATCH", "Identity validation failed", "IAM returned a principal outside the authenticated Session boundary.", false})
 		return
 	}
@@ -336,7 +336,7 @@ func (h *handler) RevokeSession(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	targetSession, err := h.identity.store.GetSession(request.Context(), params.SessionID)
-	if errors.Is(err, sessionstore.ErrSessionNotFound) || (err == nil && targetSession.ActingOrganizationID != adminSession.ActingOrganizationID) {
+	if errors.Is(err, sessionstore.ErrSessionNotFound) || (err == nil && targetSession.TenantID != adminSession.TenantID) {
 		writeIdentityFailure(writer, request, identityFailure{404, "SESSION_NOT_FOUND", "Session not found", "The requested session does not exist.", false})
 		return
 	}
@@ -565,10 +565,10 @@ func (controller *identityController) validateIDToken(ctx context.Context, token
 		failure := identityFailure{401, "OIDC_NONCE_INVALID", "OIDC nonce invalid", "The ID token nonce does not match the login request.", false}
 		return oidcClaims{}, &failure
 	}
-	if claims.ActingOrganizationID == "" {
-		claims.ActingOrganizationID = strings.TrimSpace(controller.config.DefaultActingOrganizationID)
+	if claims.TenantID == "" {
+		claims.TenantID = strings.TrimSpace(controller.config.DefaultTenantID)
 	}
-	if claims.Subject == "" || claims.ActingOrganizationID == "" {
+	if claims.Subject == "" || claims.TenantID == "" {
 		failure := identityFailure{401, "OIDC_CLAIMS_INCOMPLETE", "OIDC claims incomplete", "The ID token identity claims are incomplete.", false}
 		return oidcClaims{}, &failure
 	}
@@ -609,7 +609,7 @@ func (controller *identityController) fetchPrincipal(ctx context.Context, sessio
 	if expiry.After(session.ExpiresAt) {
 		expiry = session.ExpiresAt
 	}
-	claims := identitycontext.DelegationClaims{Issuer: controller.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer, DisplayName: session.Principal.DisplayName, Email: session.Principal.Email, Roles: append([]string(nil), session.Principal.Roles...), ExecutingService: controller.config.ExecutingWorkloadSPIFFE, Audience: controller.config.IAMAudience, ActingOrganizationID: session.ActingOrganizationID, Actions: []string{"principal:read"}, Scopes: []string{"session:" + session.ID}, PolicyRevision: controller.config.PolicyRevision, SessionID: session.ID, IssuedAt: now.Unix(), ExpiresAt: expiry.Unix(), TokenID: randomURLToken(16)}
+	claims := identitycontext.DelegationClaims{Issuer: controller.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer, DisplayName: session.Principal.DisplayName, Email: session.Principal.Email, Roles: append([]string(nil), session.Principal.Roles...), ExecutingService: controller.config.ExecutingWorkloadSPIFFE, Audience: controller.config.IAMAudience, TenantID: session.TenantID, Actions: []string{"principal:read"}, Scopes: []string{"session:" + session.ID}, PolicyRevision: controller.config.PolicyRevision, SessionID: session.ID, IssuedAt: now.Unix(), ExpiresAt: expiry.Unix(), TokenID: randomURLToken(16)}
 	grant, err := identitycontext.SignDelegation(controller.config.DelegationSigner, claims)
 	if err != nil {
 		failure := identityFailure{503, "DELEGATION_SIGNING_FAILED", "Identity delegation unavailable", "The Gateway could not create a delegated identity context.", true}
@@ -703,7 +703,7 @@ func toPublicUser(value identitycontext.UserPrincipal) platformapi.UserPrincipal
 	return platformapi.UserPrincipal{Subject: value.Subject, Issuer: value.Issuer, DisplayName: value.DisplayName, Email: value.Email, Roles: append([]string{}, value.Roles...)}
 }
 func toPublicContext(value identitycontext.PrincipalContext) platformapi.PrincipalContext {
-	return platformapi.PrincipalContext{InitiatingPrincipal: toPublicUser(value.InitiatingPrincipal), ExecutingServicePrincipal: platformapi.ServicePrincipal{Service: value.ExecutingServicePrincipal.Service, SPIFFEID: value.ExecutingServicePrincipal.SPIFFEID}, ActingOrganizationID: value.ActingOrganizationID, Audience: value.Audience, PolicyRevision: value.PolicyRevision, DelegationExpiresAt: value.DelegationExpiresAt}
+	return platformapi.PrincipalContext{InitiatingPrincipal: toPublicUser(value.InitiatingPrincipal), ExecutingServicePrincipal: platformapi.ServicePrincipal{Service: value.ExecutingServicePrincipal.Service, SPIFFEID: value.ExecutingServicePrincipal.SPIFFEID}, TenantID: value.TenantID, Audience: value.Audience, PolicyRevision: value.PolicyRevision, DelegationExpiresAt: value.DelegationExpiresAt}
 }
 func toPublicAuthorization(value identitycontext.EffectiveAuthorization) platformapi.EffectiveAuthorization {
 	capabilities := make([]platformapi.Capability, len(value.Capabilities))

@@ -84,11 +84,11 @@ spec:
         - { protocol: TCP, port: 8447 }
     - to:
         - namespaceSelector:
-            matchLabels: { s3.hvac/thingsboard-control: "true" }
+            matchLabels: { s2.hvac/runtime: "true" }
           podSelector:
-            matchLabels: { app: thingsboard }
+            matchLabels: { app: mqtt-broker }
       ports:
-        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 8883 }
     - to:
         - namespaceSelector:
             matchLabels: { observability.hvac/collector: "true" }

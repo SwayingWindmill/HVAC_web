@@ -30,7 +30,6 @@ type Candidate struct {
 	PreviousObservationID  string
 	CurrentObservationID   string
 	TenantID               string
-	OrganizationID         string
 	SiteID                 string
 	DeviceID               string
 	PointID                string
@@ -50,7 +49,6 @@ type Candidate struct {
 type Fact struct {
 	FactID                      string    `json:"fact_id"`
 	TenantID                    string    `json:"tenant_id"`
-	OrganizationID              string    `json:"organization_id"`
 	SiteID                      string    `json:"site_id"`
 	DeviceID                    string    `json:"device_id"`
 	PointID                     string    `json:"point_id"`
@@ -73,7 +71,7 @@ type Fact struct {
 
 func BuildFact(candidate Candidate, projectedAt time.Time) (Fact, error) {
 	if strings.TrimSpace(candidate.PreviousObservationID) == "" || strings.TrimSpace(candidate.CurrentObservationID) == "" ||
-		strings.TrimSpace(candidate.TenantID) == "" || strings.TrimSpace(candidate.OrganizationID) == "" || strings.TrimSpace(candidate.SiteID) == "" ||
+		strings.TrimSpace(candidate.TenantID) == "" || strings.TrimSpace(candidate.SiteID) == "" ||
 		strings.TrimSpace(candidate.DeviceID) == "" || strings.TrimSpace(candidate.PointID) == "" {
 		return Fact{}, errors.New("energy interval candidate identifiers are required")
 	}
@@ -111,7 +109,6 @@ func BuildFact(candidate Candidate, projectedAt time.Time) (Fact, error) {
 	return Fact{
 		FactID:                      candidate.CurrentObservationID,
 		TenantID:                    candidate.TenantID,
-		OrganizationID:              candidate.OrganizationID,
 		SiteID:                      candidate.SiteID,
 		DeviceID:                    candidate.DeviceID,
 		PointID:                     candidate.PointID,

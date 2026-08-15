@@ -12,7 +12,7 @@ import {
 } from '../dist/scheduling/index.js';
 
 const scope = Object.freeze({
-  organizationId: 'organization-001',
+  tenantId: 'organization-001',
   siteId: 'site-001',
   equipmentId: null,
   deviceId: null,
@@ -28,7 +28,7 @@ const actor = Object.freeze({
 
 const event = () => createOperationsAuditEvent({
   eventId: operationsAuditEventId({
-    organizationId: scope.organizationId,
+    tenantId: scope.tenantId,
     siteId: scope.siteId,
     investigationId: 'investigation-001',
     runId: 'run-001',
@@ -83,7 +83,7 @@ test('Operations Audit event is strict, versioned, idempotent and content-free',
 test('Operations Audit denial may precede Investigation creation but cannot reference records', () => {
   const denied = createOperationsAuditEvent({
     eventId: operationsAuditEventId({
-      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
       siteId: scope.siteId,
       investigationId: null,
       runId: null,

@@ -43,7 +43,7 @@
     "DeviceObservationSnapshot": [
       "schemaVersion",
       "deviceId",
-      "owningOrganizationId",
+      "tenantId",
       "siteId",
       "businessRevision",
       "evaluatedAt",
@@ -88,7 +88,7 @@
     ],
     "DeviceHistoryResponse": [
       "schemaVersion",
-      "owningOrganizationId",
+      "tenantId",
       "siteId",
       "deviceId",
       "series",

@@ -40,7 +40,7 @@ type EventV1 struct {
 	SchemaVersion           int               `json:"schemaVersion"`
 	MessageType             string            `json:"messageType"`
 	Producer                string            `json:"producer"`
-	OrganizationID          string            `json:"organizationId"`
+	TenantID                 string            `json:"tenantId"`
 	SiteID                  string            `json:"siteId"`
 	InvestigationID         *string           `json:"investigationId"`
 	RunID                   *string           `json:"runId"`
@@ -94,7 +94,7 @@ func (event EventV1) Validate() error {
 		return errors.New("operations audit version or producer is invalid")
 	}
 	for name, value := range map[string]string{
-		"eventId": event.EventID, "organizationId": event.OrganizationID, "siteId": event.SiteID,
+		"eventId": event.EventID, "tenantId": event.TenantID, "siteId": event.SiteID,
 		"authorizationDecisionId": event.AuthorizationDecisionID, "policyRevision": event.PolicyRevision,
 		"actorId": event.Actor.ActorID, "actorIssuer": event.Actor.ActorIssuer,
 		"executingSpiffeId": event.Actor.ExecutingSPIFFEID,
@@ -147,7 +147,7 @@ func (event EventV1) Validate() error {
 func (event EventV1) AggregateID() string {
 	identity := event.EventID
 	if event.InvestigationID != nil {
-		identity = event.OrganizationID + ":" + event.SiteID + ":" + *event.InvestigationID
+		identity = event.TenantID + ":" + event.SiteID + ":" + *event.InvestigationID
 	}
 	digest := sha256.Sum256([]byte("operations-investigation:" + identity))
 	return hex.EncodeToString(digest[:])
@@ -161,7 +161,7 @@ func (event EventV1) AggregateVersion() uint64 {
 }
 
 func (event EventV1) CorrelationID() string {
-	identity := event.OrganizationID + ":" + event.SiteID
+	identity := event.TenantID + ":" + event.SiteID
 	if event.InvestigationID != nil {
 		identity += ":" + *event.InvestigationID
 	}

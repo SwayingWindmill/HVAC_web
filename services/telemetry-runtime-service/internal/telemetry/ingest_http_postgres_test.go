@@ -33,13 +33,13 @@ func acceptObservationViaHTTP(t *testing.T, store ObservationAcceptor, candidate
 	handler := NewHandler(ServerConfig{
 		ObservationAcceptor: store,
 		SourceAuthenticator: NewStaticSourceAuthenticator(map[string][]string{
-			thingsBoardSPIFFE: {candidate.IntegrationInstanceID},
+			mqttSourceSPIFFE: {candidate.IntegrationInstanceID},
 		}),
 		Now: func() time.Time { return candidate.ReceivedAt },
 	})
 	request := httptest.NewRequest(http.MethodPost, InternalSourceObservationPath, bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
-	request.TLS = verifiedTLSState(thingsBoardSPIFFE)
+	request.TLS = verifiedTLSState(mqttSourceSPIFFE)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {

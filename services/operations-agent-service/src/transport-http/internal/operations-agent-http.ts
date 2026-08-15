@@ -15,12 +15,12 @@ import {
 export interface OperationsAgentHttpAuthorizationInput {
   readonly method: string;
   readonly path: string;
-  readonly organizationId: string;
+  readonly tenantId: string;
   readonly siteId: string;
   readonly investigationId: string | null;
   readonly gatewayDelegationGrant: string;
   readonly registrySiteGrant?: string;
-  readonly registryEquipmentGrant?: string;
+  readonly registryAssetGrant?: string;
   readonly energyGrant?: string;
   readonly policyRevision: string;
   readonly traceparent?: string;
@@ -32,7 +32,7 @@ export interface OperationsAgentHttpAuthorizer {
 }
 
 export interface OperationsAgentHttpCoordinatorContext {
-  readonly organizationId: string;
+  readonly tenantId: string;
   readonly siteId: string;
   readonly authorization: AuthorizationDecision;
   readonly telemetryContext: OperationsTelemetryCorrelation;
@@ -393,17 +393,17 @@ export const createOperationsAgentHttpHandler = (
           }
         }
 
-        const organizationId = requiredHeader(request, 'X-Acting-Organization-ID');
+        const tenantId = requiredHeader(request, 'X-Tenant-ID');
         const gatewayDelegationGrant = requiredHeader(request, 'X-Delegation-Grant');
         const registrySiteGrant = requiredHeader(request, 'X-Operations-Registry-Site-Grant');
-        const registryEquipmentGrant = requiredHeader(
+        const registryAssetGrant = requiredHeader(
           request,
-          'X-Operations-Registry-Equipment-Grant',
+          'X-Operations-Registry-Asset-Grant',
         );
         const energyGrant = requiredHeader(request, 'X-Operations-Energy-Grant');
         const policyRevision = requiredHeader(request, 'X-Route-Policy-Revision');
         const requestId = telemetryContext.requestId ?? telemetryContext.traceparent ?? 'operations-request';
-        if (organizationId === null
+        if (tenantId === null
           || gatewayDelegationGrant === null
           || policyRevision === null) {
           return problem(
@@ -431,12 +431,12 @@ export const createOperationsAgentHttpHandler = (
           authorization = await options.authorizer.authorize({
             method: request.method,
             path: url.pathname,
-            organizationId,
+            tenantId,
             siteId: route.siteId,
             investigationId: route.investigationId,
             gatewayDelegationGrant,
             ...(registrySiteGrant === null ? {} : { registrySiteGrant }),
-            ...(registryEquipmentGrant === null ? {} : { registryEquipmentGrant }),
+            ...(registryAssetGrant === null ? {} : { registryAssetGrant }),
             ...(energyGrant === null ? {} : { energyGrant }),
             policyRevision,
             ...((authorizationSpan.traceparent ?? telemetryContext.traceparent) === undefined
@@ -476,7 +476,7 @@ export const createOperationsAgentHttpHandler = (
             ? {} : { tracestate: telemetryContext.tracestate }),
         };
         const coordinator = options.createCoordinator({
-          organizationId,
+          tenantId,
           siteId: route.siteId,
           authorization: coordinatorAuthorization,
           telemetryContext: {
@@ -489,13 +489,13 @@ export const createOperationsAgentHttpHandler = (
         });
         if (route.kind === 'LIST') {
           return jsonResponse(200, await coordinator.list({
-            organizationId,
+            tenantId,
             siteId: route.siteId,
           }));
         }
         if (route.kind === 'START') {
           return jsonResponse(201, await coordinator.start({
-            organizationId,
+            tenantId,
             siteId: route.siteId,
           }));
         }

@@ -40,7 +40,7 @@ export interface CreateCommandInput {
 }
 
 export interface ScopedCommandRequestOptions {
-  trustedOrganizationId: string;
+  trustedTenantId: string;
   trustedSiteId: string;
   csrfToken?: string;
   signal?: AbortSignal;
@@ -78,7 +78,7 @@ function buildPendingMockCommand(): Command {
   return commandSchema.parse({
     schemaVersion: 1,
     commandId: mockPendingCommandId,
-    organizationId: ['018f3e00', '1000', '7000', '8000', '000000000001'].join('-'),
+    tenantId: ['018f3e00', '1000', '7000', '8000', '000000000001'].join('-'),
     siteId: ['018f3e00', '2000', '7000', '8000', '000000000001'].join('-'),
     deviceId: mockDeviceId,
     pointId: mockCommandPointId,
@@ -150,7 +150,7 @@ async function commandRequest(
     );
   }
   const command = commandSchema.parse(payload);
-  return options?.trustedOrganizationId && options.trustedSiteId
+  return options?.trustedTenantId && options.trustedSiteId
     ? validateCommandScope(command, options as ScopedCommandRequestOptions)
     : command;
 }
@@ -247,7 +247,7 @@ export async function createCommand(input: CreateCommandInput): Promise<Command>
     const command = commandSchema.parse({
       schemaVersion: 1,
       commandId,
-      organizationId: ['018f3e00', '1000', '7000', '8000', '000000000001'].join('-'),
+      tenantId: ['018f3e00', '1000', '7000', '8000', '000000000001'].join('-'),
       siteId: ['018f3e00', '2000', '7000', '8000', '000000000001'].join('-'),
       deviceId: mockDeviceId,
       pointId: mockCommandPointId,

@@ -54,14 +54,13 @@ type commandController struct {
 }
 
 type createCommandRequest struct {
-	EquipmentID    string                         `json:"equipmentId"`
+	AssetID    string                         `json:"assetId"`
 	CommandPointID string                         `json:"commandPointId"`
 	Parameters     commandmodel.CommandParameters `json:"parameters"`
 }
 
 type preparedCommand struct {
 	tenantID       string
-	organizationID string
 	siteID         string
 	deviceID       string
 	pointID        string
@@ -74,8 +73,8 @@ type preparedCommand struct {
 	grant          string
 }
 
-type equipmentCommandTarget struct {
-	equipment     platformapi.Equipment
+type assetCommandTarget struct {
+	asset     platformapi.Asset
 	device        platformapi.Device
 	point         platformapi.TelemetryPoint
 	feedbackPoint platformapi.TelemetryPoint
@@ -95,7 +94,6 @@ type commandCurrentState struct {
 
 type internalCommandCreate struct {
 	TenantID       string                         `json:"tenantId"`
-	OrganizationID string                         `json:"organizationId"`
 	SiteID         string                         `json:"siteId"`
 	DeviceID       string                         `json:"deviceId"`
 	PointID        string                         `json:"pointId"`
@@ -108,7 +106,7 @@ type internalCommandCreate struct {
 }
 
 type internalCommandApproval struct {
-	OrganizationID string `json:"organizationId"`
+	TenantID       string `json:"tenantId"`
 	SiteID         string `json:"siteId"`
 	DeviceID       string `json:"deviceId"`
 	PrincipalID    string `json:"principalId"`
@@ -127,7 +125,7 @@ type commandTransitionView struct {
 type commandView struct {
 	SchemaVersion         int                         `json:"schemaVersion"`
 	CommandID             string                      `json:"commandId"`
-	OrganizationID        string                      `json:"organizationId"`
+	TenantID              string                      `json:"tenantId"`
 	SiteID                string                      `json:"siteId"`
 	DeviceID              string                      `json:"deviceId"`
 	PointID               string                      `json:"pointId"`
@@ -200,13 +198,16 @@ func matchPublicCommandRoute(path string) (commandRouteKind, string, bool) {
 		return 0, "", false
 	}
 	raw := strings.TrimPrefix(path, prefix)
-	if raw == "" || strings.Contains(raw, "/") {
+	if raw == "" {
 		return 0, "", false
 	}
 	kind := commandRouteItem
-	if strings.HasSuffix(raw, ":approve") {
+	if strings.HasSuffix(raw, "/approve") {
 		kind = commandRouteApproval
-		raw = strings.TrimSuffix(raw, ":approve")
+		raw = strings.TrimSuffix(raw, "/approve")
+	}
+	if raw == "" || strings.Contains(raw, "/") {
+		return 0, "", false
 	}
 	decoded, err := url.PathUnescape(raw)
 	if err != nil || decoded == "" || strings.Contains(decoded, "/") || strings.Contains(decoded, ":") {
@@ -263,20 +264,20 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&input) != nil || ensureCommandJSONEOF(decoder) != nil ||
-		!isLowerUUIDv7(input.EquipmentID) || !isLowerUUIDv7(input.CommandPointID) {
+		!isLowerUUIDv7(input.AssetID) || !isLowerUUIDv7(input.CommandPointID) {
 		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "The Command request is invalid.", false, nil)
 		return
 	}
-	target, failure := h.resolveEquipmentCommandTarget(request, session, input.EquipmentID, input.CommandPointID)
+	target, failure := h.resolveAssetCommandTarget(request, session, input.AssetID, input.CommandPointID)
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
 		return
 	}
 	if !validCommandParameters(target.profile, target.point.SourceMetadata, input.Parameters) {
-		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "The Equipment capability parameters are invalid.", false, nil)
+		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "The Asset capability parameters are invalid.", false, nil)
 		return
 	}
-	currentState, failure := h.readCommandCurrentState(request, session, target.device, target.feedbackPoint.PointKey)
+	currentState, failure := h.readCommandCurrentState(request, session, target.device, target.feedbackPoint.SourceKey)
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
 		return
@@ -287,9 +288,9 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	prepared := preparedCommand{
-		tenantID: target.device.TenantID, organizationID: session.ActingOrganizationID, siteID: target.device.SiteID, deviceID: target.device.ID, pointID: target.point.ID,
+		tenantID: target.device.TenantID, siteID: target.device.SiteID, deviceID: target.device.ID, pointID: target.point.ID,
 		principalID: principalID, idempotencyKey: idempotencyKey, capability: target.capability,
-		parameters: cloneCommandParameters(input.Parameters), verificationPointKey: target.feedbackPoint.PointKey,
+		parameters: cloneCommandParameters(input.Parameters), verificationPointKey: target.feedbackPoint.SourceKey,
 		currentState: currentState, grant: grant,
 	}
 	view, status, location, failure := h.executeCommandCreate(request.Context(), prepared)
@@ -372,7 +373,7 @@ func (h *handler) approveCommand(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	approved, failure := h.executeCommandApproval(request.Context(), commandID, internalCommandApproval{
-		OrganizationID: session.ActingOrganizationID, SiteID: device.SiteID, DeviceID: device.ID,
+		TenantID: session.TenantID, SiteID: device.SiteID, DeviceID: device.ID,
 		PrincipalID: principalID, ApproverRole: approverRole,
 	}, grant)
 	if failure != nil {
@@ -452,73 +453,73 @@ func (h *handler) resolveCommandDevice(request *http.Request, session bffSession
 	var device platformapi.Device
 	decoder := json.NewDecoder(bytes.NewReader(result.body))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&device) != nil || ensureCommandJSONEOF(decoder) != nil || device.ID != deviceID || !isLowerUUIDv7(device.TenantID) || !isLowerUUIDv7(device.SiteID) || !isLowerUUIDv7(device.OwningOrganizationID) || !strings.EqualFold(device.Status, "ACTIVE") {
+	if decoder.Decode(&device) != nil || ensureCommandJSONEOF(decoder) != nil || device.ID != deviceID || !isLowerUUIDv7(device.TenantID) || !isLowerUUIDv7(device.SiteID) || !strings.EqualFold(device.Status, "ACTIVE") {
 		failure := commandUnavailable("Registry returned an invalid Command Device projection.")
 		return platformapi.Device{}, &failure
 	}
 	return device, nil
 }
 
-func (h *handler) resolveEquipmentCommandTarget(request *http.Request, session bffSession, equipmentID, commandPointID string) (equipmentCommandTarget, *commandFailure) {
-	equipmentAuthorization, authFailure := h.authorizeRegistry(request.Context(), session, registryauth.ActionEquipmentRead)
+func (h *handler) resolveAssetCommandTarget(request *http.Request, session bffSession, assetID, commandPointID string) (assetCommandTarget, *commandFailure) {
+	assetAuthorization, authFailure := h.authorizeRegistry(request.Context(), session, registryauth.ActionAssetRead)
 	if authFailure != nil {
 		failure := commandFailure{status: authFailure.status, code: authFailure.code, title: authFailure.title, detail: authFailure.detail, retryable: authFailure.retryable}
-		return equipmentCommandTarget{}, &failure
+		return assetCommandTarget{}, &failure
 	}
-	equipmentPath := strings.Replace(platformapi.GetEquipmentPathTemplate, "{equipmentId}", url.PathEscape(equipmentID), 1)
-	equipmentRoute, _, matches := matchPublicRegistryRoute(equipmentPath)
-	if !matches {
-		failure := commandNotFound()
-		return equipmentCommandTarget{}, &failure
-	}
-	equipmentDecision, decisionFailure := h.commandRegistryDecisionForPath(request, session, equipmentRoute, equipmentPath, "Equipment lookup")
-	if decisionFailure != nil {
-		return equipmentCommandTarget{}, decisionFailure
-	}
-	equipmentResult := h.executeCoreRegistry(request.Context(), equipmentRoute, "", equipmentAuthorization.coreGrant, equipmentDecision)
-	if equipmentResult.status != http.StatusOK {
-		if equipmentResult.status == http.StatusNotFound || equipmentResult.status == http.StatusForbidden {
-			failure := commandNotFound()
-			return equipmentCommandTarget{}, &failure
-		}
-		failure := commandUnavailable("Registry could not resolve the Equipment for this Command.")
-		return equipmentCommandTarget{}, &failure
-	}
-	var equipment platformapi.Equipment
-	decoder := json.NewDecoder(bytes.NewReader(equipmentResult.body))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&equipment) != nil || ensureCommandJSONEOF(decoder) != nil || equipment.ID != equipmentID ||
-		!isLowerUUIDv7(equipment.TenantID) || !isLowerUUIDv7(equipment.SiteID) || equipment.OwningOrganizationID != session.ActingOrganizationID || !strings.EqualFold(equipment.Status, "ACTIVE") {
-		failure := commandUnavailable("Registry returned an invalid Equipment projection for Command execution.")
-		return equipmentCommandTarget{}, &failure
-	}
-
-	assetAuthorization, authFailure := h.authorizeRegistry(request.Context(), session, registryauth.ActionAssetModelRead)
-	if authFailure != nil {
-		failure := commandFailure{status: authFailure.status, code: authFailure.code, title: authFailure.title, detail: authFailure.detail, retryable: authFailure.retryable}
-		return equipmentCommandTarget{}, &failure
-	}
-	assetPath := strings.Replace(platformapi.GetSiteAssetModelPathTemplate, "{siteId}", url.PathEscape(equipment.SiteID), 1)
+	assetPath := strings.Replace(platformapi.GetAssetPathTemplate, "{assetId}", url.PathEscape(assetID), 1)
 	assetRoute, _, matches := matchPublicRegistryRoute(assetPath)
 	if !matches {
-		failure := commandUnavailable("Registry Asset Model route is unavailable for Command execution.")
-		return equipmentCommandTarget{}, &failure
+		failure := commandNotFound()
+		return assetCommandTarget{}, &failure
 	}
-	assetDecision, decisionFailure := h.commandRegistryDecisionForPath(request, session, assetRoute, assetPath, "Asset Model lookup")
+	assetDecision, decisionFailure := h.commandRegistryDecisionForPath(request, session, assetRoute, assetPath, "Asset lookup")
 	if decisionFailure != nil {
-		return equipmentCommandTarget{}, decisionFailure
+		return assetCommandTarget{}, decisionFailure
 	}
 	assetResult := h.executeCoreRegistry(request.Context(), assetRoute, "", assetAuthorization.coreGrant, assetDecision)
 	if assetResult.status != http.StatusOK {
+		if assetResult.status == http.StatusNotFound || assetResult.status == http.StatusForbidden {
+			failure := commandNotFound()
+			return assetCommandTarget{}, &failure
+		}
+		failure := commandUnavailable("Registry could not resolve the Asset for this Command.")
+		return assetCommandTarget{}, &failure
+	}
+	var asset platformapi.Asset
+	decoder := json.NewDecoder(bytes.NewReader(assetResult.body))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&asset) != nil || ensureCommandJSONEOF(decoder) != nil || asset.ID != assetID ||
+		!isLowerUUIDv7(asset.TenantID) || !isLowerUUIDv7(asset.SiteID) || !strings.EqualFold(asset.Status, "ACTIVE") {
+		failure := commandUnavailable("Registry returned an invalid Asset projection for Command execution.")
+		return assetCommandTarget{}, &failure
+	}
+
+	assetModelAuthorization, authFailure := h.authorizeRegistry(request.Context(), session, registryauth.ActionAssetModelRead)
+	if authFailure != nil {
+		failure := commandFailure{status: authFailure.status, code: authFailure.code, title: authFailure.title, detail: authFailure.detail, retryable: authFailure.retryable}
+		return assetCommandTarget{}, &failure
+	}
+	assetModelPath := strings.Replace(platformapi.GetSiteAssetModelPathTemplate, "{siteId}", url.PathEscape(asset.SiteID), 1)
+	assetModelRoute, _, matches := matchPublicRegistryRoute(assetModelPath)
+	if !matches {
+		failure := commandUnavailable("Registry Asset Model route is unavailable for Command execution.")
+		return assetCommandTarget{}, &failure
+	}
+	assetModelDecision, decisionFailure := h.commandRegistryDecisionForPath(request, session, assetModelRoute, assetModelPath, "Asset Model lookup")
+	if decisionFailure != nil {
+		return assetCommandTarget{}, decisionFailure
+	}
+	assetModelResult := h.executeCoreRegistry(request.Context(), assetModelRoute, "", assetModelAuthorization.coreGrant, assetModelDecision)
+	if assetModelResult.status != http.StatusOK {
 		failure := commandUnavailable("Registry could not resolve the authoritative Asset Model for this Command.")
-		return equipmentCommandTarget{}, &failure
+		return assetCommandTarget{}, &failure
 	}
 	var assetModel platformapi.SiteAssetModel
-	decoder = json.NewDecoder(bytes.NewReader(assetResult.body))
+	decoder = json.NewDecoder(bytes.NewReader(assetModelResult.body))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&assetModel) != nil || ensureCommandJSONEOF(decoder) != nil || validateSiteAssetModel(assetModel, equipment.SiteID) != nil || assetModel.TenantID != equipment.TenantID {
+	if decoder.Decode(&assetModel) != nil || ensureCommandJSONEOF(decoder) != nil || validateSiteAssetModel(assetModel, asset.SiteID) != nil || assetModel.TenantID != asset.TenantID {
 		failure := commandUnavailable("Registry returned an invalid Asset Model for Command execution.")
-		return equipmentCommandTarget{}, &failure
+		return assetCommandTarget{}, &failure
 	}
 
 	var point *platformapi.TelemetryPoint
@@ -529,33 +530,33 @@ func (h *handler) resolveEquipmentCommandTarget(request *http.Request, session b
 			break
 		}
 	}
-	if point == nil || point.SiteID != equipment.SiteID || point.OwningOrganizationID != session.ActingOrganizationID ||
-		!strings.EqualFold(point.Status, "ACTIVE") || point.PointKind != "COMMAND" || !point.Writable {
+	if point == nil || point.TenantID != asset.TenantID || point.SiteID != asset.SiteID ||
+		!strings.EqualFold(point.Status, "ACTIVE") || point.PointType != "COMMAND" || !point.Writable {
 		failure := commandNotFound()
-		return equipmentCommandTarget{}, &failure
+		return assetCommandTarget{}, &failure
 	}
 	now := time.Now().UTC()
-	controlsEquipment := false
+	controlsAsset := false
 	for _, relationship := range assetModel.Relationships {
-		if relationship.FromType == "POINT" && relationship.FromID == point.ID && relationship.ToType == "EQUIPMENT" &&
-			relationship.ToID == equipment.ID && relationship.Role == "CONTROLS" && commandRelationshipCurrent(relationship, now) {
-			controlsEquipment = true
+		if relationship.FromType == "POINT" && relationship.FromID == point.ID && relationship.ToType == "ASSET" &&
+			relationship.ToID == asset.ID && relationship.Role == "CONTROLS" && commandRelationshipCurrent(relationship, now) {
+			controlsAsset = true
 			break
 		}
 	}
-	if !controlsEquipment {
+	if !controlsAsset {
 		failure := commandNotFound()
-		return equipmentCommandTarget{}, &failure
+		return assetCommandTarget{}, &failure
 	}
 
 	capabilityName, _ := point.SourceMetadata["capability"].(string)
 	capability := commandmodel.Capability(strings.TrimSpace(capabilityName))
 	profile, supported := commandCapabilityProfile(capability)
 	declaredRevision, _ := point.SourceMetadata["capabilityRevision"].(string)
-	feedbackPointKey, _ := point.SourceMetadata["feedbackPointKey"].(string)
+	feedbackPointKey, _ := point.SourceMetadata["feedbackSourceKey"].(string)
 	if !supported || strings.TrimSpace(declaredRevision) != profile.Revision || strings.TrimSpace(feedbackPointKey) == "" {
 		failure := commandUnavailable("The COMMAND Point does not declare a supported authoritative capability contract.")
-		return equipmentCommandTarget{}, &failure
+		return assetCommandTarget{}, &failure
 	}
 
 	var device *platformapi.Device
@@ -566,25 +567,25 @@ func (h *handler) resolveEquipmentCommandTarget(request *http.Request, session b
 			break
 		}
 	}
-	if device == nil || device.SiteID != equipment.SiteID || device.OwningOrganizationID != session.ActingOrganizationID || !strings.EqualFold(device.Status, "ACTIVE") {
+	if device == nil || device.TenantID != asset.TenantID || device.SiteID != asset.SiteID || !strings.EqualFold(device.Status, "ACTIVE") {
 		failure := commandUnavailable("The COMMAND Point has no active reporting Device Endpoint.")
-		return equipmentCommandTarget{}, &failure
+		return assetCommandTarget{}, &failure
 	}
 
 	var feedbackPoint *platformapi.TelemetryPoint
 	for index := range assetModel.TelemetryPoints {
 		candidate := &assetModel.TelemetryPoints[index]
-		if candidate.ReportingDeviceID == device.ID && candidate.PointKey == feedbackPointKey && strings.EqualFold(candidate.Status, "ACTIVE") {
+		if candidate.ReportingDeviceID == device.ID && candidate.SourceKey == feedbackPointKey && strings.EqualFold(candidate.Status, "ACTIVE") {
 			feedbackPoint = candidate
 			break
 		}
 	}
-	if feedbackPoint == nil || (feedbackPoint.PointKind != "FEEDBACK" && feedbackPoint.PointKind != "STATE") {
+	if feedbackPoint == nil || (feedbackPoint.PointType != "STATE" && feedbackPoint.PointType != "TELEMETRY") {
 		failure := commandUnavailable("The COMMAND Point has no active authoritative feedback Point.")
-		return equipmentCommandTarget{}, &failure
+		return assetCommandTarget{}, &failure
 	}
-	return equipmentCommandTarget{
-		equipment: equipment, device: *device, point: *point, feedbackPoint: *feedbackPoint,
+	return assetCommandTarget{
+		asset: asset, device: *device, point: *point, feedbackPoint: *feedbackPoint,
 		capability: capability, profile: profile,
 	}, nil
 }
@@ -642,7 +643,7 @@ func (h *handler) commandRegistryDecisionForPath(request *http.Request, session 
 	if h.routeManager == nil {
 		return decision, nil
 	}
-	resolved, err := h.routeManager.Current().Resolve(http.MethodGet, publicPath, session.ActingOrganizationID)
+	resolved, err := h.routeManager.Current().Resolve(http.MethodGet, publicPath, session.TenantID)
 	if err != nil || resolved.DeclaredOwner != ownershipregistry.OwnerCore || resolved.SelectedOwner != ownershipregistry.OwnerCore || resolved.ReadFallbackOwner != "" || resolved.ShadowOwner != "" {
 		failure := commandUnavailable("Registry route ownership is unavailable for the Command " + purpose + ".")
 		return ownershipregistry.Decision{}, &failure
@@ -653,10 +654,10 @@ func (h *handler) commandRegistryDecisionForPath(request *http.Request, session 
 func (h *handler) readCommandCurrentState(request *http.Request, session bffSession, device platformapi.Device, feedbackKey string) (commandCurrentState, *commandFailure) {
 	feedbackKey = strings.TrimSpace(feedbackKey)
 	if feedbackKey == "" {
-		failure := commandUnsafe("The requested Equipment capability has no feedback Point.")
+		failure := commandUnsafe("The requested Asset capability has no feedback Point.")
 		return commandCurrentState{}, &failure
 	}
-	caller := telemetryCaller{principal: session.Principal, actingOrganizationID: session.ActingOrganizationID, contextID: session.ID, expiresAt: session.ExpiresAt}
+	caller := telemetryCaller{principal: session.Principal, tenantID: session.TenantID, contextID: session.ID, expiresAt: session.ExpiresAt}
 	target := telemetryauth.Target{DeviceID: device.ID, Keys: []string{feedbackKey}}
 	authorization, authFailure := h.authorizeTelemetry(request.Context(), request, caller, telemetryauth.ActionSnapshotRead, []telemetryauth.Target{target})
 	if authFailure != nil {
@@ -674,8 +675,8 @@ func (h *handler) readCommandCurrentState(request *http.Request, session bffSess
 		return commandCurrentState{}, &failure
 	}
 	var snapshot s2telemetryapi.DeviceObservationSnapshot
-	if decodeStrictTelemetryJSON(response, &snapshot) != nil || !validateTelemetrySnapshot(snapshot, target) ||
-		string(snapshot.SiteId) != device.SiteID || string(snapshot.OwningOrganizationId) != device.OwningOrganizationID || len(snapshot.Values) != 1 || snapshot.Values[0].Present == nil {
+	if len(authorization.targets) != 1 || decodeStrictTelemetryJSON(response, &snapshot) != nil || !validateTelemetrySnapshot(snapshot, authorization.targets[0]) ||
+		string(snapshot.TenantId) != device.TenantID || string(snapshot.SiteId) != device.SiteID || len(snapshot.Values) != 1 || snapshot.Values[0].Present == nil {
 		failure := commandUnavailable("Telemetry Runtime returned an invalid current-state projection.")
 		return commandCurrentState{}, &failure
 	}
@@ -724,7 +725,7 @@ func (h *handler) authorizeCommand(request *http.Request, session bffSession, de
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
 		DisplayName: session.Principal.DisplayName, Email: session.Principal.Email, Roles: append([]string(nil), session.Principal.Roles...),
 		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE, Audience: h.identity.config.IAMAudience,
-		ActingOrganizationID: session.ActingOrganizationID, Actions: []string{"command:authorize"}, Scopes: []string{"session:" + session.ID},
+		TenantID: session.TenantID, Actions: []string{"command:authorize"}, Scopes: []string{"session:" + session.ID},
 		PolicyRevision: h.identity.config.PolicyRevision, SessionID: session.ID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	}
@@ -739,7 +740,7 @@ func (h *handler) authorizeCommand(request *http.Request, session bffSession, de
 		return "", "", &failure
 	}
 	input := commandauth.DecisionRequest{
-		ActingOrganizationID: session.ActingOrganizationID, SiteID: device.SiteID, DeviceID: device.ID,
+		TenantID: session.TenantID, SiteID: device.SiteID, DeviceID: device.ID,
 		Capability: capability, CapabilityRevision: profile.Revision, Purpose: purpose,
 	}
 	body, _ := json.Marshal(input)
@@ -793,7 +794,7 @@ func (h *handler) validateCommandDecision(response commandauth.DecisionResponse,
 		return false
 	}
 	if decision.PrincipalID == "" || decision.Subject != session.Principal.Subject || decision.SubjectIssuer != session.Principal.Issuer ||
-		decision.ActingOrganizationID != session.ActingOrganizationID || decision.SiteID != device.SiteID || decision.DeviceID != device.ID ||
+		decision.TenantID != session.TenantID || decision.SiteID != device.SiteID || decision.DeviceID != device.ID ||
 		decision.Capability != capability || decision.CapabilityRevision != profile.Revision ||
 		decision.Purpose != purpose || decision.MaximumRisk == "" || decision.PolicyRevision == "" || !commandauth.IsAllowReason(decision.ReasonCode) {
 		return false
@@ -826,7 +827,7 @@ func structurallyValidCommandGrant(grant, issuer, presenter, audience string, de
 	return decoder.Decode(&claims) == nil && ensureCommandJSONEOF(decoder) == nil &&
 		claims.Version == commandauth.GrantVersion && claims.Issuer == issuer && claims.Presenter == presenter && claims.Audience == audience &&
 		claims.GrantID != "" && claims.TokenID != "" && claims.Purpose == decision.Purpose && claims.PrincipalID == decision.PrincipalID &&
-		claims.OrganizationID == decision.ActingOrganizationID && claims.SiteID == decision.SiteID && claims.DeviceID == decision.DeviceID &&
+		claims.TenantID == decision.TenantID && claims.SiteID == decision.SiteID && claims.DeviceID == decision.DeviceID &&
 		claims.Capability == decision.Capability && claims.CapabilityRevision == decision.CapabilityRevision && claims.MaximumRisk == decision.MaximumRisk &&
 		claims.PolicyRevision == decision.PolicyRevision && claims.EmergencyRevocationRevision == decision.EmergencyRevocationRevision && !claims.Transitive &&
 		claims.IssuedAt <= now.Add(5*time.Second).Unix() && claims.ExpiresAt > now.Unix() && claims.ExpiresAt > claims.IssuedAt &&
@@ -839,7 +840,7 @@ func (h *handler) executeCommandCreate(ctx context.Context, prepared preparedCom
 		return commandView{}, 0, "", &failure
 	}
 	body, _ := json.Marshal(internalCommandCreate{
-		TenantID: prepared.tenantID, OrganizationID: prepared.organizationID, SiteID: prepared.siteID, DeviceID: prepared.deviceID, PointID: prepared.pointID,
+		TenantID: prepared.tenantID, SiteID: prepared.siteID, DeviceID: prepared.deviceID, PointID: prepared.pointID,
 		PrincipalID: prepared.principalID, IdempotencyKey: prepared.idempotencyKey,
 		Capability: prepared.capability, Parameters: cloneCommandParameters(prepared.parameters), VerificationPointKey: prepared.verificationPointKey,
 		CurrentState: prepared.currentState,
@@ -867,7 +868,7 @@ func (h *handler) executeCommandCreate(ctx context.Context, prepared preparedCom
 		return commandView{}, 0, "", &failure
 	}
 	view, ok := h.decodeCommandView(response.Body)
-	if !ok || view.OrganizationID != prepared.organizationID || view.SiteID != prepared.siteID ||
+	if !ok || view.TenantID != prepared.tenantID || view.SiteID != prepared.siteID ||
 		view.DeviceID != prepared.deviceID || view.PointID != prepared.pointID || view.Capability != prepared.capability {
 		failure := commandUnavailable("Command Service returned an invalid accepted Command.")
 		return commandView{}, 0, "", &failure
@@ -888,7 +889,7 @@ func (h *handler) executeCommandApproval(ctx context.Context, commandID string, 
 	requestContext, cancel := context.WithTimeout(ctx, h.command.timeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestContext, http.MethodPost,
-		h.command.baseURL+internalCommandsPath+"/"+url.PathEscape(commandID)+":approve", bytes.NewReader(body))
+		h.command.baseURL+internalCommandsPath+"/"+url.PathEscape(commandID)+"/approve", bytes.NewReader(body))
 	if err != nil {
 		failure := commandUnavailable("The Command approval request could not be constructed.")
 		return commandView{}, &failure
@@ -909,7 +910,7 @@ func (h *handler) executeCommandApproval(ctx context.Context, commandID string, 
 		return commandView{}, &failure
 	}
 	view, ok := h.decodeCommandView(response.Body)
-	if !ok || view.CommandID != commandID || view.OrganizationID != input.OrganizationID || view.SiteID != input.SiteID ||
+	if !ok || view.CommandID != commandID || view.TenantID != input.TenantID || view.SiteID != input.SiteID ||
 		view.DeviceID != input.DeviceID {
 		failure := commandUnavailable("Command Service returned an invalid approved Command.")
 		return commandView{}, &failure
@@ -931,8 +932,8 @@ func (h *handler) executeCommandRead(publicRequest *http.Request, session bffSes
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
 		DisplayName: session.Principal.DisplayName, Email: session.Principal.Email, Roles: append([]string(nil), session.Principal.Roles...),
 		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE, Audience: h.command.backendAudience,
-		ActingOrganizationID: session.ActingOrganizationID, Actions: []string{"command:read"},
-		Scopes:         []string{"organization:" + session.ActingOrganizationID, "command:" + commandID},
+		TenantID: session.TenantID, Actions: []string{"command:read"},
+		Scopes:   []string{"tenant:" + session.TenantID, "command:" + commandID},
 		PolicyRevision: h.identity.config.PolicyRevision, SessionID: session.ID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	}
@@ -949,7 +950,7 @@ func (h *handler) executeCommandRead(publicRequest *http.Request, session bffSes
 		return commandView{}, &failure
 	}
 	request.Header.Set("Accept", "application/json, application/problem+json")
-	request.Header.Set("X-Acting-Organization-ID", session.ActingOrganizationID)
+	request.Header.Set("X-Tenant-ID", session.TenantID)
 	request.Header.Set("X-Command-Read-Context", readContext)
 	request.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
 	observability.InjectHTTP(publicRequest.Context(), request.Header)
@@ -964,7 +965,7 @@ func (h *handler) executeCommandRead(publicRequest *http.Request, session bffSes
 		return commandView{}, &failure
 	}
 	view, ok := h.decodeCommandView(response.Body)
-	if !ok || view.CommandID != commandID || view.OrganizationID != session.ActingOrganizationID {
+	if !ok || view.CommandID != commandID || view.TenantID != session.TenantID {
 		failure := commandUnavailable("Command Service returned an invalid Command projection.")
 		return commandView{}, &failure
 	}
@@ -984,7 +985,7 @@ func (h *handler) decodeCommandView(reader io.Reader) (commandView, bool) {
 	}
 	profile, supported := commandCapabilityProfile(view.Capability)
 	if !supported || view.SchemaVersion != 1 ||
-		!isLowerUUIDv7(view.CommandID) || !isLowerUUIDv7(view.OrganizationID) || !isLowerUUIDv7(view.SiteID) ||
+		!isLowerUUIDv7(view.CommandID) || !isLowerUUIDv7(view.TenantID) || !isLowerUUIDv7(view.SiteID) ||
 		!isLowerUUIDv7(view.DeviceID) || !isLowerUUIDv7(view.PointID) || view.CapabilityRevision != profile.Revision || !validCommandIntentStatus(view.Status) || !validCommandRisk(view.Risk) ||
 		!validCommandApprovalPolicy(view.ApprovalPolicy, view.ApprovalCount, view.RequiredApprovalCount) ||
 		!validCommandParameters(profile, map[string]any{"parameterKey": profile.ParameterKey}, view.Parameters) || view.DeviceCommandSequence == 0 || view.Version == 0 || view.SnapshotRevision == 0 ||

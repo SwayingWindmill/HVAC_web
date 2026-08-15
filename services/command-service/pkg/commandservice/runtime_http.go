@@ -37,7 +37,7 @@ type RuntimeHTTPConfig struct {
 	Metrics          *observability.Registry
 	DispatcherSPIFFE string
 	VerifierSPIFFE   string
-	OrganizationID   string
+	TenantID   string
 	SiteID           string
 	DeviceID         string
 	Capability       commandmodel.Capability
@@ -47,7 +47,7 @@ type RuntimeHTTPConfig struct {
 type RuntimeCohort struct {
 	DispatcherSPIFFE string                  `json:"dispatcherSpiffe"`
 	VerifierSPIFFE   string                  `json:"verifierSpiffe"`
-	OrganizationID   string                  `json:"organizationId"`
+	TenantID   string                  `json:"tenantId"`
 	SiteID           string                  `json:"siteId"`
 	DeviceID         string                  `json:"deviceId"`
 	Capability       commandmodel.Capability `json:"capability"`
@@ -106,7 +106,7 @@ func normalizedRuntimeCohorts(config RuntimeHTTPConfig) ([]RuntimeCohort, error)
 		cohorts = []RuntimeCohort{{
 			DispatcherSPIFFE: config.DispatcherSPIFFE,
 			VerifierSPIFFE:   config.VerifierSPIFFE,
-			OrganizationID:   config.OrganizationID,
+			TenantID:   config.TenantID,
 			SiteID:           config.SiteID,
 			DeviceID:         config.DeviceID,
 			Capability:       config.Capability,
@@ -120,16 +120,16 @@ func normalizedRuntimeCohorts(config RuntimeHTTPConfig) ([]RuntimeCohort, error)
 		cohort := &cohorts[index]
 		cohort.DispatcherSPIFFE = strings.TrimSpace(cohort.DispatcherSPIFFE)
 		cohort.VerifierSPIFFE = strings.TrimSpace(cohort.VerifierSPIFFE)
-		cohort.OrganizationID = strings.TrimSpace(cohort.OrganizationID)
+		cohort.TenantID = strings.TrimSpace(cohort.TenantID)
 		cohort.SiteID = strings.TrimSpace(cohort.SiteID)
 		cohort.DeviceID = strings.TrimSpace(cohort.DeviceID)
 		profile, capabilitySupported := commandmodel.CapabilityProfileFor(cohort.Capability)
 		if !validSPIFFE(cohort.DispatcherSPIFFE) || !validSPIFFE(cohort.VerifierSPIFFE) || cohort.DispatcherSPIFFE == cohort.VerifierSPIFFE ||
-			!commandmodel.IsUUIDv7(cohort.OrganizationID) || !commandmodel.IsUUIDv7(cohort.SiteID) || !commandmodel.IsUUIDv7(cohort.DeviceID) ||
+			!commandmodel.IsUUIDv7(cohort.TenantID) || !commandmodel.IsUUIDv7(cohort.SiteID) || !commandmodel.IsUUIDv7(cohort.DeviceID) ||
 			!capabilitySupported || strings.TrimSpace(profile.Revision) == "" {
 			return nil, errors.New("runtime cohort is invalid")
 		}
-		deviceKey := cohort.OrganizationID + "\x00" + cohort.SiteID + "\x00" + cohort.DeviceID + "\x00" + string(cohort.Capability)
+		deviceKey := cohort.TenantID + "\x00" + cohort.SiteID + "\x00" + cohort.DeviceID + "\x00" + string(cohort.Capability)
 		if _, duplicate := seenDevices[deviceKey]; duplicate {
 			return nil, errors.New("runtime cohort Device capability is duplicated")
 		}
@@ -182,7 +182,7 @@ func (handler *runtimeHTTPHandler) claimDispatch(writer http.ResponseWriter, req
 	if !ok {
 		return
 	}
-	envelope, err := handler.store.ClaimDispatchForCohort(request.Context(), cohort.OrganizationID, cohort.SiteID, cohort.DeviceID, cohort.Capability, input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second)
+	envelope, err := handler.store.ClaimDispatchForCohort(request.Context(), cohort.TenantID, cohort.SiteID, cohort.DeviceID, cohort.Capability, input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second)
 	if errors.Is(err, ErrNoDispatchAvailable) {
 		writer.WriteHeader(http.StatusNoContent)
 		return
@@ -199,7 +199,7 @@ func (handler *runtimeHTTPHandler) resolveDispatch(writer http.ResponseWriter, r
 	if !decodeRuntimeJSON(writer, request, &input) {
 		return
 	}
-	if !exactRuntimeCommandCohort(cohort, input.Envelope.OrganizationID, input.Envelope.SiteID, input.Envelope.DeviceID, input.Envelope.Capability) {
+	if !exactRuntimeCommandCohort(cohort, input.Envelope.TenantID, input.Envelope.SiteID, input.Envelope.DeviceID, input.Envelope.Capability) {
 		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
 		return
 	}
@@ -222,7 +222,7 @@ func (handler *runtimeHTTPHandler) claimVerification(writer http.ResponseWriter,
 	if !ok {
 		return
 	}
-	envelope, err := handler.store.ClaimVerificationForCohort(request.Context(), cohort.OrganizationID, cohort.SiteID, cohort.DeviceID, cohort.Capability, input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second)
+	envelope, err := handler.store.ClaimVerificationForCohort(request.Context(), cohort.TenantID, cohort.SiteID, cohort.DeviceID, cohort.Capability, input.LeaseOwner, time.Duration(input.LeaseSeconds)*time.Second)
 	if errors.Is(err, ErrVerificationNotAvailable) {
 		writer.WriteHeader(http.StatusNoContent)
 		return
@@ -239,7 +239,7 @@ func (handler *runtimeHTTPHandler) resolveVerification(writer http.ResponseWrite
 	if !decodeRuntimeJSON(writer, request, &input) {
 		return
 	}
-	if !exactRuntimeCommandCohort(cohort, input.Envelope.OrganizationID, input.Envelope.SiteID, input.Envelope.DeviceID, input.Envelope.Capability) {
+	if !exactRuntimeCommandCohort(cohort, input.Envelope.TenantID, input.Envelope.SiteID, input.Envelope.DeviceID, input.Envelope.Capability) {
 		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
 		return
 	}
@@ -269,7 +269,7 @@ func (handler *runtimeHTTPHandler) prepareConnectorEvidence(writer http.Response
 	if !decodeRuntimeJSON(writer, request, &evidence) {
 		return
 	}
-	if !exactRuntimeCohort(cohort, evidence.OrganizationID, evidence.SiteID, evidence.DeviceID) {
+	if !exactRuntimeCohort(cohort, evidence.TenantID, evidence.SiteID, evidence.DeviceID) {
 		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
 		return
 	}
@@ -285,7 +285,7 @@ func (handler *runtimeHTTPHandler) completeConnectorEvidence(writer http.Respons
 	if !decodeRuntimeJSON(writer, request, &evidence) {
 		return
 	}
-	if !exactRuntimeCohort(cohort, evidence.OrganizationID, evidence.SiteID, evidence.DeviceID) {
+	if !exactRuntimeCohort(cohort, evidence.TenantID, evidence.SiteID, evidence.DeviceID) {
 		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
 		return
 	}
@@ -296,12 +296,12 @@ func (handler *runtimeHTTPHandler) completeConnectorEvidence(writer http.Respons
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-func exactRuntimeCohort(cohort RuntimeCohort, organizationID, siteID, deviceID string) bool {
-	return organizationID == cohort.OrganizationID && siteID == cohort.SiteID && deviceID == cohort.DeviceID
+func exactRuntimeCohort(cohort RuntimeCohort, tenantID, siteID, deviceID string) bool {
+	return tenantID == cohort.TenantID && siteID == cohort.SiteID && deviceID == cohort.DeviceID
 }
 
-func exactRuntimeCommandCohort(cohort RuntimeCohort, organizationID, siteID, deviceID string, capability commandmodel.Capability) bool {
-	return exactRuntimeCohort(cohort, organizationID, siteID, deviceID) && capability == cohort.Capability
+func exactRuntimeCommandCohort(cohort RuntimeCohort, tenantID, siteID, deviceID string, capability commandmodel.Capability) bool {
+	return exactRuntimeCohort(cohort, tenantID, siteID, deviceID) && capability == cohort.Capability
 }
 
 func decodeRuntimeClaim(writer http.ResponseWriter, request *http.Request) (runtimeClaimRequest, bool) {

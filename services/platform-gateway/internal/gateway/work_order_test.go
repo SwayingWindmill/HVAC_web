@@ -158,7 +158,7 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 				return
 			}
 			writer.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(writer).Encode(registryauth.DecisionResponse{Decision: registryauth.Decision{Allowed: true, PrincipalID: "principal-work-order-1", SubjectIssuer: fixture.session.Principal.Issuer, Subject: fixture.session.Principal.Subject, ActingOrganizationID: gatewayWorkOrderOrganizationID, AllowedOrganizationIDs: []string{gatewayWorkOrderOrganizationID}, AllowedSiteIDs: []string{gatewayWorkOrderSiteID}, Actions: []registryauth.Action{registryauth.ActionSiteRead}, PolicyRevision: "gateway-policy-1", ReasonCode: registryauth.ReasonAllowOrganizationRole}, DelegationGrant: "e30.c2ln"})
+			_ = json.NewEncoder(writer).Encode(registryauth.DecisionResponse{Decision: registryauth.Decision{Allowed: true, PrincipalID: "principal-work-order-1", SubjectIssuer: fixture.session.Principal.Issuer, Subject: fixture.session.Principal.Subject, ActingOrganizationID: gatewayWorkOrderOrganizationID, AllowedSiteIDs: []string{gatewayWorkOrderSiteID}, Actions: []registryauth.Action{registryauth.ActionSiteRead}, PolicyRevision: "gateway-policy-1", ReasonCode: registryauth.ReasonAllowSiteRole}, DelegationGrant: "e30.c2ln"})
 			return
 		}
 		if verifyErr != nil || identitycontext.ValidateDelegation(claims, now, "spiffe://hvac.local/platform-gateway", "iam-service", "work-order:authorize", "session:"+fixture.session.ID) != nil {
@@ -191,7 +191,7 @@ func newWorkOrderGatewayFixture(t *testing.T) *workOrderGatewayFixture {
 			return
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(platformapi.Site{ID: gatewayWorkOrderSiteID, TenantID: gatewayWorkOrderTenantID, OwningOrganizationID: gatewayWorkOrderOrganizationID, Code: "work-order-site", DisplayName: "Work Order Site", Timezone: "UTC", Status: "ACTIVE", Revision: 1, CreatedAt: "2026-08-01T00:00:00.000Z", UpdatedAt: "2026-08-01T00:00:00.000Z"})
+		_ = json.NewEncoder(writer).Encode(platformapi.Site{ID: gatewayWorkOrderSiteID, TenantID: gatewayWorkOrderTenantID, Code: "work-order-site", DisplayName: "Work Order Site", Timezone: "UTC", Status: "ACTIVE", Revision: 1, CreatedAt: "2026-08-01T00:00:00.000Z", UpdatedAt: "2026-08-01T00:00:00.000Z"})
 	}))
 	t.Cleanup(registryServer.Close)
 

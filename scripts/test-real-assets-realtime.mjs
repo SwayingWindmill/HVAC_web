@@ -12,7 +12,7 @@ import {
 } from '../apps/hvac-web/src/real/assets/realtime.ts';
 import { projectRealAssetsOperatingState } from '../apps/hvac-web/src/real/assets/model.ts';
 
-const organizationId = '01900000-0001-7000-8000-000000000001';
+const tenantId = '01900000-0001-7000-8000-000000000001';
 const siteId = '01900000-0002-7000-8000-000000000002';
 const deviceId = '01900000-0011-7000-8000-000000000011';
 const otherDeviceId = '01900000-0012-7000-8000-000000000012';
@@ -20,23 +20,23 @@ const otherDeviceId = '01900000-0012-7000-8000-000000000012';
 function values(revision, power = 0) {
   return [
     {
-      key: 'chiller.run_state', state: 'PRESENT', value: 'RUNNING', valueType: 'STRING', unit: null,
+      key: 'chiller_run_state', state: 'PRESENT', value: 'RUNNING', valueType: 'STRING', unit: null,
       sampledAt: `2026-07-31T04:0${revision}:00.000Z`, receivedAt: `2026-07-31T04:0${revision}:01.000Z`,
       freshness: 'FRESH', quality: 'GOOD', qualityReasons: [], policyRevision: revision,
     },
     {
-      key: 'chiller.power', state: 'PRESENT', value: power, valueType: 'NUMBER', unit: 'kW',
+      key: 'chiller_power', state: 'PRESENT', value: power, valueType: 'NUMBER', unit: 'kW',
       sampledAt: `2026-07-31T04:0${revision}:00.000Z`, receivedAt: `2026-07-31T04:0${revision}:01.000Z`,
       freshness: 'FRESH', quality: 'GOOD', qualityReasons: [], policyRevision: revision,
     },
     {
-      key: 'chiller.cop', state: 'PRESENT', value: 4.8, valueType: 'NUMBER', unit: null,
+      key: 'chiller_cop', state: 'PRESENT', value: 4.8, valueType: 'NUMBER', unit: null,
       sampledAt: `2026-07-31T04:0${revision}:00.000Z`, receivedAt: `2026-07-31T04:0${revision}:01.000Z`,
-      freshness: 'FRESH', quality: revision > 2 ? 'SUSPECT' : 'GOOD',
+      freshness: 'FRESH', quality: revision > 2 ? 'PARTIAL' : 'GOOD',
       qualityReasons: revision > 2 ? ['SOURCE_LAG_EXCEEDED'] : [], policyRevision: revision,
     },
     {
-      key: 'chiller.cooling_capacity', state: 'PRESENT', value: 520, valueType: 'NUMBER', unit: 'kW',
+      key: 'chiller_cooling_capacity', state: 'PRESENT', value: 520, valueType: 'NUMBER', unit: 'kW',
       sampledAt: `2026-07-31T04:0${revision}:00.000Z`, receivedAt: `2026-07-31T04:0${revision}:01.000Z`,
       freshness: 'FRESH', quality: 'GOOD', qualityReasons: [], policyRevision: revision,
     },
@@ -47,7 +47,7 @@ function snapshot(revision, overrides = {}) {
   return {
     schemaVersion: 1,
     deviceId,
-    owningOrganizationId: organizationId,
+    tenantId: tenantId,
     siteId,
     businessRevision: revision,
     evaluatedAt: `2026-07-31T04:0${revision}:02.000Z`,
@@ -70,7 +70,7 @@ function row(revision = 2) {
   const projection = projectRealAssetsOperatingState(snapshotResult, profile);
   return {
     device: {
-      id: deviceId, owningOrganizationId: organizationId, siteId, code: 'CH-01', displayName: 'Chiller 01',
+      id: deviceId, tenantId: tenantId, siteId, code: 'CH-01', displayName: 'Chiller 01',
       deviceType: 'CHILLER', status: 'ACTIVE', revision: 5,
     },
     profile,
@@ -101,7 +101,7 @@ function liveState(status, revision = 3, overrides = {}) {
 test('realtime scope selects only versioned critical detail keys and one exact Device target', () => {
   const visible = row();
   assert.deepEqual(listRealAssetsRealtimeKeys(visible), [
-    'chiller.run_state', 'chiller.power', 'chiller.cop', 'chiller.cooling_capacity',
+    'chiller_run_state', 'chiller_power', 'chiller_cop', 'chiller_cooling_capacity',
   ]);
   const scope = createRealAssetsRealtimeScope(visible, 7);
   assert.equal(scope.clientSubscriptionId, `real-assets-detail:7:${deviceId}`);
@@ -113,25 +113,25 @@ test('realtime scope selects only versioned critical detail keys and one exact D
   assert.deepEqual(listRealAssetsRealtimeKeys({ profile: resolveRealAssetsProfile('UNKNOWN_DEVICE') }), []);
 });
 
-test('realtime state validation rejects Device, owner, Site and exact-key drift', () => {
+test('realtime state validation rejects Tenant, Site, Device and exact-key drift', () => {
   const visible = row();
   const scope = createRealAssetsRealtimeScope(visible, 7);
   const state = liveState('live');
   assert.equal(validateRealAssetsRealtimeState(state, scope), state);
   assert.throws(() => validateRealAssetsRealtimeState({ ...state, deviceId: otherDeviceId }, scope), /exact subscription scope/);
   assert.throws(() => validateRealAssetsRealtimeState({ ...state, keys: [...state.keys].reverse() }, scope), /exact subscription scope/);
-  assert.throws(() => validateRealAssetsRealtimeState({ ...state, snapshot: snapshot(3, { siteId: otherDeviceId }) }, scope), /authorized Device/);
-  assert.throws(() => validateRealAssetsRealtimeState({ ...state, snapshot: snapshot(3, { owningOrganizationId: otherDeviceId }) }, scope), /authorized Device/);
+  assert.throws(() => validateRealAssetsRealtimeState({ ...state, snapshot: snapshot(3, { siteId: otherDeviceId }) }, scope), /authorized Tenant/);
+  assert.throws(() => validateRealAssetsRealtimeState({ ...state, snapshot: snapshot(3, { tenantId: otherDeviceId }) }, scope), /authorized Tenant/);
 });
 
-test('newer realtime Snapshot reprojects detail while valid zero and suspect quality remain explicit', () => {
+test('newer realtime Snapshot reprojects detail while valid zero and degraded quality remain explicit', () => {
   const projection = projectRealAssetsRealtimeRow(row(2), liveState('live', 3));
   assert.equal(projection.source, 'realtime');
   assert.equal(projection.realtimeRevision, 3);
   assert.equal(projection.row.snapshotResult.snapshot.businessRevision, 3);
-  assert.equal(projection.row.points.find((point) => point.key === 'chiller.cop').quality, 'SUSPECT');
+  assert.equal(projection.row.points.find((point) => point.key === 'chiller_cop').quality, 'PARTIAL');
   const zeroProjection = projectRealAssetsRealtimeRow(row(1), liveState('live', 2));
-  assert.equal(zeroProjection.row.points.find((point) => point.key === 'chiller.power').displayValue, '0');
+  assert.equal(zeroProjection.row.points.find((point) => point.key === 'chiller_power').displayValue, '0');
 });
 
 test('older realtime Snapshot never overwrites a newer current-query baseline', () => {

@@ -24,7 +24,7 @@ export type IdempotencyKey = string & { readonly [idempotencyKeyBrand]: true };
 export type InvestigationRevision = number & { readonly [investigationRevisionBrand]: true };
 
 export interface InvestigationScope {
-  readonly organizationId: string;
+  readonly tenantId: string;
   readonly siteId: string | null;
   readonly equipmentId: string | null;
   readonly deviceId: string | null;
@@ -299,7 +299,7 @@ const requireLeaseWindow = (
 };
 
 const cloneScope = (scope: InvestigationScope): InvestigationScope => ({
-  organizationId: scope.organizationId,
+  tenantId: scope.tenantId,
   siteId: scope.siteId,
   equipmentId: scope.equipmentId,
   deviceId: scope.deviceId,
@@ -417,7 +417,7 @@ const requireNullableIdentity = (value: string | null, label: string): string | 
 );
 
 const scopesEqual = (left: InvestigationScope, right: InvestigationScope): boolean => (
-  left.organizationId === right.organizationId
+  left.tenantId === right.tenantId
   && left.siteId === right.siteId
   && left.equipmentId === right.equipmentId
   && left.deviceId === right.deviceId
@@ -472,7 +472,7 @@ const validateOperatorInputRequest = (
 const validateSnapshot = (snapshot: OperationsInvestigationSnapshot): InternalState => {
   const id = requireIdentity(snapshot.id, 'Investigation identity');
   const scope: InvestigationScope = {
-    organizationId: requireIdentity(snapshot.scope.organizationId, 'Organization identity'),
+    tenantId: requireIdentity(snapshot.scope.tenantId, 'Organization identity'),
     siteId: requireNullableIdentity(snapshot.scope.siteId, 'Site identity'),
     equipmentId: requireNullableIdentity(snapshot.scope.equipmentId, 'Equipment identity'),
     deviceId: requireNullableIdentity(snapshot.scope.deviceId, 'Device identity'),
@@ -816,7 +816,7 @@ export class OperationsInvestigation {
 
   static create(command: CreateOperationsInvestigation): OperationsInvestigation {
     const id = requireIdentity(command.id, 'Investigation identity');
-    requireIdentity(command.scope.organizationId, 'Organization identity');
+    requireIdentity(command.scope.tenantId, 'Organization identity');
     requireTimestamp(command.createdAt, 'createdAt');
 
     return new OperationsInvestigation({

@@ -14,6 +14,7 @@ import (
 
 const (
 	deviceB = "018f2e00-3000-7000-8000-000000000003"
+	tenantB = "018f2d00-0000-7000-8000-000000000002"
 	orgB    = "018f2e00-0000-7000-8000-000000000002"
 )
 
@@ -129,7 +130,7 @@ func TestPostgresSnapshotTwoOrganizationIsolationAndRuntimeRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(commit.Snapshot.OwningOrganizationId) != orgB || string(commit.Snapshot.DeviceId) != deviceB || commit.Snapshot.EvaluationAvailability != telemetryapi.EvaluationAvailabilityUnavailable || len(commit.Snapshot.Values) != 1 || commit.Snapshot.Values[0].Missing == nil {
+	if string(commit.Snapshot.TenantId) != tenantB || string(commit.Snapshot.DeviceId) != deviceB || commit.Snapshot.EvaluationAvailability != telemetryapi.EvaluationAvailabilityUnavailable || len(commit.Snapshot.Values) != 1 || commit.Snapshot.Values[0].Missing == nil {
 		t.Fatalf("Organization B snapshot=%#v", commit.Snapshot)
 	}
 	encoded, err := jsonString(commit.Snapshot)

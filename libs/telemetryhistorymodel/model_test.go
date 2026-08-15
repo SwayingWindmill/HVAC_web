@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	testOrganizationID = "018f1e00-0000-7000-8000-000000000001"
+	testTenantID       = "018f1d00-0000-7000-8000-000000000001"
 	testSiteID         = "018f1e00-1000-7000-8000-000000000001"
 	testDeviceID       = "018f1e00-4000-7000-8000-000000000001"
 	testObservationID  = "018f1e00-8000-7000-8000-000000000001"
@@ -17,7 +17,7 @@ const (
 func TestDeviceHistoryQueryCanonicalDigestIsOrderIndependent(t *testing.T) {
 	from := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
 	left := DeviceHistoryQuery{
-		ActingOrganizationID: testOrganizationID, OwningOrganizationID: testOrganizationID, SiteID: testSiteID, DeviceID: testDeviceID,
+		TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
 		Keys: []string{"zone.humidity", "zone.temperature"}, From: from, To: from.Add(6 * time.Hour), MaxPointsPerKey: 200,
 	}
 	right := left
@@ -38,14 +38,14 @@ func TestDeviceHistoryQueryCanonicalDigestIsOrderIndependent(t *testing.T) {
 func TestDeviceHistoryQueryRejectsUnsupportedProductBounds(t *testing.T) {
 	from := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
 	valid := DeviceHistoryQuery{
-		ActingOrganizationID: testOrganizationID, OwningOrganizationID: testOrganizationID, SiteID: testSiteID, DeviceID: testDeviceID,
+		TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
 		Keys: []string{"zone.temperature"}, From: from, To: from.Add(time.Hour), MaxPointsPerKey: 100,
 	}
 	tests := []struct {
 		name   string
 		mutate func(*DeviceHistoryQuery)
 	}{
-		{"invalid organization", func(query *DeviceHistoryQuery) { query.ActingOrganizationID = "not-a-uuid" }},
+		{"invalid tenant", func(query *DeviceHistoryQuery) { query.TenantID = "not-a-uuid" }},
 		{"no keys", func(query *DeviceHistoryQuery) { query.Keys = nil }},
 		{"duplicate key", func(query *DeviceHistoryQuery) { query.Keys = []string{"zone.temperature", "zone.temperature"} }},
 		{"invalid key", func(query *DeviceHistoryQuery) { query.Keys = []string{"zone temperature"} }},
@@ -68,13 +68,13 @@ func TestDeviceHistoryQueryRejectsUnsupportedProductBounds(t *testing.T) {
 func TestDeviceHistoryResponseValidatesScopeOrderingAndMetadata(t *testing.T) {
 	from := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
 	query := DeviceHistoryQuery{
-		ActingOrganizationID: testOrganizationID, OwningOrganizationID: testOrganizationID, SiteID: testSiteID, DeviceID: testDeviceID,
+		TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
 		Keys: []string{"zone.temperature"}, From: from, To: from.Add(time.Hour), MaxPointsPerKey: 100,
 	}
 	unit := "Cel"
 	watermark := from.Add(55 * time.Minute)
 	response := DeviceHistoryResponse{
-		SchemaVersion: 1, OwningOrganizationID: testOrganizationID, SiteID: testSiteID, DeviceID: testDeviceID,
+		SchemaVersion: 1, TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
 		Series: []DeviceHistorySeries{{Key: "zone.temperature", Points: []DeviceHistoryPoint{{
 			ObservationID: testObservationID, PointID: testPointID, SensorID: stringPointer(testSensorID), SampledAt: from.Add(5 * time.Minute), ReceivedAt: from.Add(5*time.Minute + time.Second),
 			Value: 22.5, Unit: &unit, Quality: QualityGood, QualityReasons: []string{}, Revision: 7,

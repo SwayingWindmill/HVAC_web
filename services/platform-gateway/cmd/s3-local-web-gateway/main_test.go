@@ -142,7 +142,7 @@ func TestLocalDeviceProjectionDoesNotExposeAuthorityMetadata(t *testing.T) {
 
 func TestLoadDeviceCatalogRequiresV2TenantAndPointAuthority(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "device-catalog.json")
-	body := `{"schemaVersion":2,"devices":[{"tenantId":"` + testTenantID + `","organizationId":"` + testOrganizationID + `","siteId":"` + testSiteID + `","deviceId":"` + testDeviceID + `","commandPointId":"` + testCommandPointID + `","verificationPointKey":"zone.temperature_setpoint","name":"AHU-01","type":"AHU"}]}`
+	body := `{"schemaVersion":2,"devices":[{"tenantId":"` + testTenantID + `","siteId":"` + testSiteID + `","deviceId":"` + testDeviceID + `","commandPointId":"` + testCommandPointID + `","verificationPointKey":"zone.temperature_setpoint","name":"AHU-01","type":"AHU"}]}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

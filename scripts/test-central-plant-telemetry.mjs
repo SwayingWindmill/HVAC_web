@@ -22,8 +22,8 @@ const {
   formatTelemetryUnit,
   getDeviceTelemetryProfile,
 } = compiledModule;
-const adapterConfig = JSON.parse(await readFile(
-  resolve('services/thingsboard-telemetry-adapter/configs/central-plant.local.example.json'),
+const pointContract = JSON.parse(await readFile(
+  resolve('contracts/registry/central-plant-device-points.v2.json'),
   'utf8',
 ));
 
@@ -37,6 +37,7 @@ test('chiller profile requests the exact central-plant energy keys', () => {
     'chiller.cop',
     'chiller.cooling_capacity',
     'chiller.compressor_load',
+    'chiller.load_limit',
     'chiller.leaving_chilled_water_temperature',
     'chiller.entering_chilled_water_temperature',
     'chiller.chilled_water_temperature_setpoint',
@@ -46,8 +47,8 @@ test('chiller profile requests the exact central-plant energy keys', () => {
   ]);
 });
 
-test('all central-plant profiles match the ThingsBoard-to-S2 adapter point contract', () => {
-  const adapterKeys = adapterConfig.devices.flatMap((device) => device.points.map((point) => point.telemetryKey));
+test('all central-plant profiles match the canonical V2 Device/Point contract', () => {
+  const adapterKeys = pointContract.devices.flatMap((device) => device.points.map((point) => point.telemetryKey));
   const prefixes = {
     CHILLER: 'chiller.',
     CHILLED_WATER_PUMP: 'chwp.',

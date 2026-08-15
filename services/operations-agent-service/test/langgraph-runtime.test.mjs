@@ -12,7 +12,7 @@ const runtimeContext = ({ runtimeRevision = 'night-energy-runtime/v1', ...overri
   trust: 'TRUSTED_CONTROL',
   investigationId: 'investigation-runtime-001',
   scope: {
-    organizationId: 'organization-runtime-001',
+    tenantId: 'organization-runtime-001',
     siteId: 'site-runtime-001',
     equipmentId: null,
     deviceId: null,

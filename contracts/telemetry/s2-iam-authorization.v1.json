@@ -21,9 +21,9 @@
     "inboundDelegationAction": "telemetry:authorize",
     "evaluationOrder": [
       "immutable-principal",
-      "acting-organization-membership",
+      "tenant-membership",
       "role-action",
-      "exact-cross-organization-site-binding",
+      "exact-tenant-site-binding",
       "exact-device-permission",
       "exact-key-permission"
     ],
@@ -45,12 +45,12 @@
     "maximumLifetimeSeconds": 30,
     "singleUse": true,
     "transitive": false,
-    "scope": "sha256(canonical action + actingOrganizationId + sorted exact Device/key targets)",
+    "scope": "sha256(canonical action + tenantId + sorted exact Device/key targets)",
     "requiredBindings": [
       "initiatingPrincipal",
       "subjectIssuer",
       "subject",
-      "actingOrganizationId",
+      "tenantId",
       "actorChain",
       "action",
       "scopeDigest",
@@ -75,7 +75,7 @@
       "wrong-principal",
       "wrong-session",
       "wrong-action",
-      "wrong-acting-organization",
+      "wrong-tenant",
       "scope-mismatch",
       "count-mismatch",
       "expired",
@@ -95,7 +95,7 @@
     "revocations": {
       "path": "/internal/v1/telemetry/revocations:poll",
       "callerSpiffeId": "spiffe://hvac.local/telemetry-runtime-service",
-      "organizationScoped": true,
+      "tenantScoped": true,
       "orderedCursor": "sequence",
       "maximumBatchSize": 500,
       "deliveryBudgetSeconds": 10
@@ -125,7 +125,7 @@
     "registryReadBoundary": {
       "schema": "core_registry",
       "table": "devices",
-      "columns": ["id", "organization_id", "site_id", "status", "revision"],
+      "columns": ["id", "tenant_id", "site_id", "status", "revision"],
       "rows": "exact app.requested_device_ids only"
     }
   },
@@ -139,7 +139,7 @@
     ],
     "allowedEvidence": [
       "principalId",
-      "actingOrganizationId",
+      "tenantId",
       "action",
       "targetCount",
       "keyCount",

@@ -3,7 +3,7 @@ package workorderauth
 import "testing"
 
 const (
-	testOrganizationID = "01910000-0000-7000-8000-000000000001"
+	testTenantID = "01910000-0000-7000-8000-000000000001"
 	testSiteID         = "01910000-0001-7000-8000-000000000001"
 	testWorkOrderID    = "01910000-5000-7000-8000-000000000001"
 )
@@ -13,13 +13,13 @@ func TestDecisionRequestRequiresExactScopeForAction(t *testing.T) {
 		request DecisionRequest
 		valid   bool
 	}{
-		"list exact Site":           {DecisionRequest{ActingOrganizationID: testOrganizationID, SiteID: testSiteID, Action: ActionList}, true},
-		"detail exact Work Order":   {DecisionRequest{ActingOrganizationID: testOrganizationID, SiteID: testSiteID, WorkOrderID: testWorkOrderID, Action: ActionRead}, true},
-		"list with Work Order":      {DecisionRequest{ActingOrganizationID: testOrganizationID, SiteID: testSiteID, WorkOrderID: testWorkOrderID, Action: ActionList}, false},
-		"detail without Work Order": {DecisionRequest{ActingOrganizationID: testOrganizationID, SiteID: testSiteID, Action: ActionRead}, false},
-		"unsupported action":        {DecisionRequest{ActingOrganizationID: testOrganizationID, SiteID: testSiteID, Action: "work-order:write"}, false},
-		"invalid Organization":      {DecisionRequest{ActingOrganizationID: "organization", SiteID: testSiteID, Action: ActionList}, false},
-		"invalid Site":              {DecisionRequest{ActingOrganizationID: testOrganizationID, SiteID: "site", Action: ActionList}, false},
+		"list exact Site":           {DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, Action: ActionList}, true},
+		"detail exact Work Order":   {DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, WorkOrderID: testWorkOrderID, Action: ActionRead}, true},
+		"list with Work Order":      {DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, WorkOrderID: testWorkOrderID, Action: ActionList}, false},
+		"detail without Work Order": {DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, Action: ActionRead}, false},
+		"unsupported action":        {DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, Action: "work-order:write"}, false},
+		"invalid Tenant":      {DecisionRequest{TenantID: "organization", SiteID: testSiteID, Action: ActionList}, false},
+		"invalid Site":              {DecisionRequest{TenantID: testTenantID, SiteID: "site", Action: ActionList}, false},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -38,7 +38,7 @@ func TestDecisionValidationPreservesAllowAndDenyEvidence(t *testing.T) {
 	allowed := Decision{
 		Allowed: true, PrincipalID: "01910000-7000-7000-8000-000000000001",
 		SubjectIssuer: "https://identity.example.test", Subject: "operator",
-		ActingOrganizationID: testOrganizationID, SiteID: testSiteID,
+		TenantID: testTenantID, SiteID: testSiteID,
 		WorkOrderID: testWorkOrderID, Action: ActionRead,
 		PolicyRevision: "work-order-access:1", ReasonCode: ReasonAllowExactScope,
 		DecidedAt: "2026-08-01T10:00:00Z",

@@ -10,15 +10,14 @@ import (
 )
 
 type TelemetryDevice struct {
-	ID                   string
-	OwningOrganizationID string
-	SiteID               string
-	Status               FactStatus
+	ID       string
+	TenantID string
+	SiteID   string
+	Status   FactStatus
 }
 
 type TelemetryScopeBinding struct {
-	ActingOrganizationID string
-	OwningOrganizationID string
+	TenantID string
 	SiteID               string
 	DeviceID             string
 	Actions              []telemetryauth.Action
@@ -29,7 +28,7 @@ type TelemetryScopeBinding struct {
 }
 
 type TelemetryKeyBinding struct {
-	ActingOrganizationID string
+	TenantID string
 	DeviceID             string
 	Key                  string
 	Actions              []telemetryauth.Action
@@ -43,7 +42,7 @@ type TelemetryAuthorizationFacts struct {
 	Found          bool
 	PolicyRevision string
 	Principal      PrincipalRecord
-	Memberships    []OrganizationMembership
+	Memberships    []TenantMembership
 	RoleBindings   []RoleBinding
 	SiteBindings   []SiteBinding
 	ExplicitDenies []ExplicitDeny
@@ -55,7 +54,7 @@ type TelemetryAuthorizationFacts struct {
 type TelemetryAuthorizationLookup struct {
 	SubjectIssuer        string
 	Subject              string
-	ActingOrganizationID string
+	TenantID string
 	Targets              []telemetryauth.Target
 }
 
@@ -99,13 +98,13 @@ func evaluateTelemetryAuthorization(ctx context.Context, store TelemetryAuthoriz
 		return telemetryauth.Decision{}, err
 	}
 	facts, err := store.LookupTelemetryAuthorization(ctx, TelemetryAuthorizationLookup{
-		SubjectIssuer: subjectIssuer, Subject: subject, ActingOrganizationID: request.ActingOrganizationID, Targets: canonicalTargets,
+		SubjectIssuer: subjectIssuer, Subject: subject, TenantID: request.TenantID, Targets: canonicalTargets,
 	})
 	if err != nil {
 		return telemetryauth.Decision{}, err
 	}
 	decision := telemetryauth.Decision{
-		SubjectIssuer: subjectIssuer, Subject: subject, ActingOrganizationID: request.ActingOrganizationID,
+		SubjectIssuer: subjectIssuer, Subject: subject, TenantID: request.TenantID,
 		Action: request.Action, Targets: []telemetryauth.AuthorizedTarget{}, PolicyRevision: facts.PolicyRevision, DecidedAt: formatInstant(now),
 	}
 	if !facts.Found {
@@ -117,7 +116,7 @@ func evaluateTelemetryAuthorization(ctx context.Context, store TelemetryAuthoriz
 		decision.ReasonCode = telemetryauth.ReasonDenyPrincipalInactive
 		return decision, nil
 	}
-	membershipActive, _ := membershipState(facts.Memberships, request.ActingOrganizationID, now)
+	membershipActive, _ := tenantMembershipState(facts.Memberships, request.TenantID, now)
 	if !membershipActive {
 		decision.ReasonCode = telemetryauth.ReasonDenyMembership
 		return decision, nil
@@ -129,28 +128,28 @@ func evaluateTelemetryAuthorization(ctx context.Context, store TelemetryAuthoriz
 	}
 	for _, target := range canonicalTargets {
 		device, visible := devices[target.DeviceID]
-		if !visible || device.Status != FactStatusActive {
+		if !visible || device.TenantID != request.TenantID || device.Status != FactStatusActive {
 			return denyTelemetryDecision(decision, telemetryauth.ReasonResourceNotFound), nil
 		}
-		actionAllowed, actionDenied := telemetryActionScope(facts.RoleBindings, facts.SiteBindings, facts.ExplicitDenies, now, request.ActingOrganizationID, device, request.Action)
+		actionAllowed, actionDenied := telemetryActionScope(facts.RoleBindings, facts.SiteBindings, facts.ExplicitDenies, now, request.TenantID, device, request.Action)
 		if actionDenied || !actionAllowed {
 			return denyTelemetryDecision(decision, telemetryauth.ReasonResourceNotFound), nil
 		}
-		allowed, denied := telemetryDeviceScope(facts.ScopeBindings, now, request.ActingOrganizationID, device, request.Action)
+		allowed, denied := telemetryDeviceScope(facts.ScopeBindings, now, request.TenantID, device, request.Action)
 		if denied || !allowed {
 			return denyTelemetryDecision(decision, telemetryauth.ReasonResourceNotFound), nil
 		}
 		for _, key := range target.Keys {
-			keyAllowed, keyDenied := telemetryKeyScope(facts.KeyBindings, now, request.ActingOrganizationID, device.ID, key, request.Action)
+			keyAllowed, keyDenied := telemetryKeyScope(facts.KeyBindings, now, request.TenantID, device.ID, key, request.Action)
 			if keyDenied || !keyAllowed {
 				return denyTelemetryDecision(decision, telemetryauth.ReasonTelemetryKeyInvalid), nil
 			}
 		}
 		decision.Targets = append(decision.Targets, telemetryauth.AuthorizedTarget{
-			DeviceID: device.ID, OwningOrganizationID: device.OwningOrganizationID, SiteID: device.SiteID, Keys: append([]string(nil), target.Keys...),
+			TenantID: device.TenantID, SiteID: device.SiteID, DeviceID: device.ID, Keys: append([]string(nil), target.Keys...),
 		})
 	}
-	digest, err := telemetryauth.ScopeDigest(request.Action, request.ActingOrganizationID, canonicalTargets)
+	digest, err := telemetryauth.ScopeDigest(request.Action, request.TenantID, canonicalTargets)
 	if err != nil {
 		return telemetryauth.Decision{}, err
 	}
@@ -160,11 +159,12 @@ func evaluateTelemetryAuthorization(ctx context.Context, store TelemetryAuthoriz
 	return decision, nil
 }
 
-func telemetryActionScope(roleBindings []RoleBinding, siteBindings []SiteBinding, explicitDenies []ExplicitDeny, now time.Time, actingOrganizationID string, device TelemetryDevice, action telemetryauth.Action) (bool, bool) {
+func telemetryActionScope(roleBindings []RoleBinding, siteBindings []SiteBinding, explicitDenies []ExplicitDeny, now time.Time, tenantID string, device TelemetryDevice, action telemetryauth.Action) (bool, bool) {
 	roleAllowed := false
 	roleDenied := false
+	siteAllowed := false
 	for _, binding := range roleBindings {
-		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.OrganizationID != actingOrganizationID || !telemetryRegistryActionsAllow(binding.Actions, action) {
+		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != tenantID || !telemetryRegistryActionsAllow(binding.Actions, action) {
 			continue
 		}
 		if binding.SiteID != "" && binding.SiteID != device.SiteID {
@@ -174,13 +174,15 @@ func telemetryActionScope(roleBindings []RoleBinding, siteBindings []SiteBinding
 			roleDenied = true
 		} else if binding.Effect == BindingEffectAllow {
 			roleAllowed = true
+			if binding.SiteID == device.SiteID {
+				siteAllowed = true
+			}
 		}
 	}
 
-	siteAllowed := device.OwningOrganizationID == actingOrganizationID
 	siteDenied := false
 	for _, binding := range siteBindings {
-		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.ActingOrganizationID != actingOrganizationID || binding.OwningOrganizationID != device.OwningOrganizationID || binding.SiteID != device.SiteID || !telemetryRegistryActionsAllow(binding.Actions, action) {
+		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != tenantID || binding.SiteID != device.SiteID || !telemetryRegistryActionsAllow(binding.Actions, action) {
 			continue
 		}
 		if binding.Effect == BindingEffectDeny {
@@ -195,10 +197,7 @@ func telemetryActionScope(roleBindings []RoleBinding, siteBindings []SiteBinding
 		if deny.Status != FactStatusActive || !factEffective(deny.ValidFrom, deny.ValidTo, now) || !telemetryRegistryActionsAllow(deny.Actions, action) {
 			continue
 		}
-		if deny.ActingOrganizationID != "" && deny.ActingOrganizationID != actingOrganizationID {
-			continue
-		}
-		if deny.OrganizationID != "" && deny.OrganizationID != device.OwningOrganizationID {
+		if deny.TenantID != "" && deny.TenantID != tenantID {
 			continue
 		}
 		if deny.SiteID != "" && deny.SiteID != device.SiteID {
@@ -207,7 +206,7 @@ func telemetryActionScope(roleBindings []RoleBinding, siteBindings []SiteBinding
 		explicitDenied = true
 	}
 
-	return roleAllowed && siteAllowed, roleDenied || siteDenied || explicitDenied
+	return roleAllowed || siteAllowed, roleDenied || siteDenied || explicitDenied
 }
 
 func telemetryRegistryActionsAllow(actions []registryauth.Action, requested telemetryauth.Action) bool {
@@ -227,14 +226,14 @@ func denyTelemetryDecision(decision telemetryauth.Decision, reason telemetryauth
 	return decision
 }
 
-func telemetryDeviceScope(bindings []TelemetryScopeBinding, now time.Time, actingOrganizationID string, device TelemetryDevice, action telemetryauth.Action) (bool, bool) {
+func telemetryDeviceScope(bindings []TelemetryScopeBinding, now time.Time, tenantID string, device TelemetryDevice, action telemetryauth.Action) (bool, bool) {
 	allowed := false
 	denied := false
 	for _, binding := range bindings {
-		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.ActingOrganizationID != actingOrganizationID || !telemetryActionsAllow(binding.Actions, action) {
+		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != tenantID || !telemetryActionsAllow(binding.Actions, action) {
 			continue
 		}
-		if binding.OwningOrganizationID != device.OwningOrganizationID || binding.SiteID != device.SiteID || binding.DeviceID != "" && binding.DeviceID != device.ID {
+		if binding.SiteID != device.SiteID || binding.DeviceID != "" && binding.DeviceID != device.ID {
 			continue
 		}
 		if binding.Effect == BindingEffectDeny {
@@ -246,11 +245,11 @@ func telemetryDeviceScope(bindings []TelemetryScopeBinding, now time.Time, actin
 	return allowed, denied
 }
 
-func telemetryKeyScope(bindings []TelemetryKeyBinding, now time.Time, actingOrganizationID, deviceID, key string, action telemetryauth.Action) (bool, bool) {
+func telemetryKeyScope(bindings []TelemetryKeyBinding, now time.Time, tenantID, deviceID, key string, action telemetryauth.Action) (bool, bool) {
 	allowed := false
 	denied := false
 	for _, binding := range bindings {
-		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.ActingOrganizationID != actingOrganizationID || binding.DeviceID != deviceID || binding.Key != key || !telemetryActionsAllow(binding.Actions, action) {
+		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != tenantID || binding.DeviceID != deviceID || binding.Key != key || !telemetryActionsAllow(binding.Actions, action) {
 			continue
 		}
 		if binding.Effect == BindingEffectDeny {
@@ -273,7 +272,7 @@ func telemetryActionsAllow(actions []telemetryauth.Action, requested telemetryau
 
 func cloneTelemetryAuthorizationFacts(value TelemetryAuthorizationFacts) TelemetryAuthorizationFacts {
 	copyValue := value
-	copyValue.Memberships = append([]OrganizationMembership(nil), value.Memberships...)
+	copyValue.Memberships = append([]TenantMembership(nil), value.Memberships...)
 	copyValue.RoleBindings = append([]RoleBinding(nil), value.RoleBindings...)
 	copyValue.SiteBindings = append([]SiteBinding(nil), value.SiteBindings...)
 	copyValue.ExplicitDenies = append([]ExplicitDeny(nil), value.ExplicitDenies...)

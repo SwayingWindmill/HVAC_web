@@ -18,7 +18,7 @@ func (h *handler) handleWorkOrderDecision(writer http.ResponseWriter, request *h
 		writeProblem(writer, http.StatusBadRequest, "IAM_WORK_ORDER_DECISION_REQUEST_INVALID", "The Work Order authorization request is invalid.")
 		return http.StatusBadRequest
 	}
-	if input.ActingOrganizationID != inbound.ActingOrganizationID {
+	if input.TenantID != inbound.TenantID {
 		writeProblem(writer, http.StatusForbidden, "IAM_WORK_ORDER_CONTEXT_MISMATCH", "The Work Order authorization context does not match the delegated Session.")
 		return http.StatusForbidden
 	}
@@ -37,7 +37,7 @@ func (h *handler) handleWorkOrderDecision(writer http.ResponseWriter, request *h
 		traceID = requestID
 	}
 	if h.workOrderAuditSink.RecordWorkOrderDecision(request.Context(), WorkOrderDecisionAudit{
-		PrincipalID: decision.PrincipalID, ActingOrganizationID: decision.ActingOrganizationID,
+		PrincipalID: decision.PrincipalID, TenantID: decision.TenantID,
 		SiteID: decision.SiteID, WorkOrderID: decision.WorkOrderID, AssigneeID: decision.AssigneeID, TeamID: decision.TeamID,
 		Action: decision.Action, Allowed: decision.Allowed,
 		PolicyRevision: decision.PolicyRevision, ReasonCode: decision.ReasonCode,

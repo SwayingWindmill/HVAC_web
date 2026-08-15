@@ -6,7 +6,32 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres-local-only
     volumes:
-      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      # Mount migrations with deterministic numeric names. Relying on the host
+      # directory/glob collation made 001a execute before 001 on some locales.
+      - ./postgres/init/000-bootstrap-identities.sql:/docker-entrypoint-initdb.d/000.sql:ro
+      - ./postgres/init/001-s1-registry-baseline.sql:/docker-entrypoint-initdb.d/010.sql:ro
+      - ./postgres/init/001a-tenant-foundation.sql:/docker-entrypoint-initdb.d/020.sql:ro
+      - ./postgres/init/001b-device-binding-invariants.sql:/docker-entrypoint-initdb.d/030.sql:ro
+      - ./postgres/init/002-s1-registry-fixtures.sql:/docker-entrypoint-initdb.d/040.sql:ro
+      - ./postgres/init/003-iam-runtime-identity-resolution.sql:/docker-entrypoint-initdb.d/050.sql:ro
+      - ./postgres/init/004-iam-reconciliation.sql:/docker-entrypoint-initdb.d/060.sql:ro
+      - ./postgres/init/005-core-read-service.sql:/docker-entrypoint-initdb.d/070.sql:ro
+      - ./postgres/init/006-legacy-migration-execution.sql:/docker-entrypoint-initdb.d/080.sql:ro
+      - ./postgres/init/006-s2-telemetry-authorization.sql:/docker-entrypoint-initdb.d/090.sql:ro
+      - ./postgres/init/007-s4-alarm-authorization.sql:/docker-entrypoint-initdb.d/100.sql:ro
+      - ./postgres/init/007-spatial-sensor-point-model.sql:/docker-entrypoint-initdb.d/110.sql:ro
+      - ./postgres/init/007a-tenant-spatial-scope.sql:/docker-entrypoint-initdb.d/120.sql:ro
+      - ./postgres/init/007b-control-point-invariants.sql:/docker-entrypoint-initdb.d/130.sql:ro
+      - ./postgres/init/007c-counter-semantics.sql:/docker-entrypoint-initdb.d/135.sql:ro
+      - ./postgres/init/008-s5-work-order-authorization.sql:/docker-entrypoint-initdb.d/140.sql:ro
+      - ./postgres/init/009-energy-data-foundation.sql:/docker-entrypoint-initdb.d/150.sql:ro
+      - ./postgres/init/009a-energy-topology-metering-v2.sql:/docker-entrypoint-initdb.d/160.sql:ro
+      - ./postgres/init/009b-settlement-foundation-v2.sql:/docker-entrypoint-initdb.d/170.sql:ro
+      - ./postgres/init/009c-metric-model-v2.sql:/docker-entrypoint-initdb.d/180.sql:ro
+      - ./postgres/init/009d-data-governance-v2.sql:/docker-entrypoint-initdb.d/190.sql:ro
+      - ./postgres/init/009e-forecast-model-v2.sql:/docker-entrypoint-initdb.d/200.sql:ro
+      - ./postgres/init/009f-optimization-model-v2.sql:/docker-entrypoint-initdb.d/210.sql:ro
+      - ./postgres/init/009g-object-storage-governance-v2.sql:/docker-entrypoint-initdb.d/220.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

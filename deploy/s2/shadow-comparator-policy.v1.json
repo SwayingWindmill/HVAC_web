@@ -26,8 +26,7 @@
     "publish": false,
     "subscribe": false,
     "centrifugoApi": false,
-    "redis": false,
-    "thingsBoard": false
+    "redis": false
   },
   "mutationPermissions": {
     "authorization": false,

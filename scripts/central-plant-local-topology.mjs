@@ -287,41 +287,11 @@ async function requestJSON(baseURL, path, options = {}) {
   return body;
 }
 
-async function provisionThingsBoard(baseURL) {
-  const username = ['tenant', '@thingsboard.org'].join('');
-  const password = ['ten', 'ant'].join('');
-  const login = await requestJSON(baseURL, '/api/auth/login', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }),
-  });
-  if (typeof login.token !== 'string' || login.token.length < 32) throw new Error('ThingsBoard login response is invalid');
-  const provisioned = [];
-  for (const definition of centralPlantDevices) {
-    const query = new URLSearchParams({ pageSize: '100', page: '0', textSearch: definition.name });
-    const page = await requestJSON(baseURL, `/api/tenant/devices?${query}`, { headers: { 'x-authorization': `Bearer ${login.token}` } });
-    let entity = (Array.isArray(page.data) ? page.data : []).find((candidate) => candidate?.name === definition.name);
-    if (!entity) {
-      entity = await requestJSON(baseURL, '/api/device', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-authorization': `Bearer ${login.token}` },
-        body: JSON.stringify({ name: definition.name, type: definition.type, label: `Central plant local ${definition.name}` }),
-      });
-    }
-    const thingsBoardDeviceId = entity?.id?.id;
-    if (typeof thingsBoardDeviceId !== 'string') throw new Error(`ThingsBoard device ${definition.name} has no entity ID`);
-    const credential = await requestJSON(baseURL, `/api/device/${encodeURIComponent(thingsBoardDeviceId)}/credentials`, { headers: { 'x-authorization': `Bearer ${login.token}` } });
-    if (credential.credentialsType !== 'ACCESS_TOKEN' || typeof credential.credentialsId !== 'string') throw new Error(`ThingsBoard device ${definition.name} has no access credential`);
-    provisioned.push({ ...definition, thingsBoardDeviceId, access: credential.credentialsId });
-  }
-  return { authorization: login.token, devices: provisioned };
-}
-
 const historicalEnergyDailyDays = 730;
 const historicalEnergyRecentDays = 70;
-const historicalEnergyAdapterDays = 6;
 const historicalEnergyBaseKWh = 1250000;
 const millisecondsPerHour = 60 * 60 * 1000;
 const millisecondsPerDay = 24 * millisecondsPerHour;
-const historicalPublishConcurrency = 16;
 
 const seasonalLoadFactorByMonth = Object.freeze([
   0.62, 0.60, 0.68, 0.78, 0.90, 1.00,
@@ -367,8 +337,7 @@ export function buildHistoricalEnergyBootstrap(now = new Date(), spatialPoints =
     cumulativeEnergyKWh = Number((cumulativeEnergyKWh + historicalIntervalEnergyKWh(intervalStart, intervalEnd)).toFixed(6));
     readings.push({ timestamp: intervalEnd.getTime(), energyKwh: cumulativeEnergyKWh });
   }
-  const adapterIntervalCount = historicalEnergyAdapterDays * 24;
-  const analyticsIntervalCount = readings.length - 1 - adapterIntervalCount;
+  const analyticsIntervalCount = readings.length - 1;
   const meter = centralPlantDevices.find((device) => device.name === 'METER-HVAC-TOTAL');
   if (!meter) throw new Error('central plant HVAC power meter is not defined');
   const meterPoint = spatialPoints.find((point) => point.deviceId === meter.name && point.telemetryKey === 'hvac_meter.energy');
@@ -404,11 +373,9 @@ export function buildHistoricalEnergyBootstrap(now = new Date(), spatialPoints =
       projected_at: end.toISOString(),
     });
   });
-  const adapterReadings = readings.slice(analyticsIntervalCount);
   return Object.freeze({
     readings: Object.freeze(readings),
     analyticsFacts: Object.freeze(analyticsFacts),
-    adapterReadings: Object.freeze(adapterReadings),
     finalEnergyKwh: cumulativeEnergyKWh,
     from: start.toISOString(),
     to: end.toISOString(),
@@ -416,21 +383,7 @@ export function buildHistoricalEnergyBootstrap(now = new Date(), spatialPoints =
     dailyIntervalCount: historicalEnergyDailyDays,
     hourlyIntervalCount: historicalEnergyRecentDays * 24,
     analyticsIntervalCount,
-    adapterIntervalCount,
   });
-}
-
-async function publishHistoricalEnergyBootstrap(baseURL, provisioned, bootstrap) {
-  const meter = provisioned.devices.find((device) => device.name === 'METER-HVAC-TOTAL');
-  if (!meter) throw new Error('central plant HVAC power meter was not provisioned');
-  const endpoint = `/api/v1/${encodeURIComponent(meter.access)}/telemetry`;
-  for (let index = 0; index < bootstrap.adapterReadings.length; index += historicalPublishConcurrency) {
-    await Promise.all(bootstrap.adapterReadings.slice(index, index + historicalPublishConcurrency).map((reading) => requestJSON(baseURL, endpoint, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ts: reading.timestamp, values: { energyKwh: reading.energyKwh } }),
-    })));
-  }
 }
 
 async function publishHistoricalAnalyticsBootstrap(baseURL, bootstrap) {
@@ -488,8 +441,8 @@ function buildGoBinaries(paths, goCache, quiet) {
     [paths.historyProjectorBinary, './services/telemetry-runtime-service/cmd/telemetry-history-projector'],
     [paths.queryBinary, './services/telemetry-query-service/cmd/telemetry-query-service'],
     [paths.gatewayBinary, './services/platform-gateway/cmd/platform-gateway'],
-    [paths.simulatorBinary, './tools/eg8200-simulator/cmd/eg8200-simulator'],
-    [paths.adapterBinary, './services/thingsboard-telemetry-adapter/cmd/thingsboard-telemetry-adapter'],
+    [paths.publisherBinary, './tools/eg8200-simulator/cmd/eg8200-mqtt-publisher'],
+    [paths.mqttAdapterBinary, './services/mqtt-telemetry-adapter/cmd/mqtt-telemetry-adapter'],
   ];
   for (const [output, source] of builds) {
     run(goBinary, ['build', '-trimpath', '-buildvcs=false', '-o', output, source], {
@@ -502,7 +455,7 @@ function buildGoBinaries(paths, goCache, quiet) {
 export async function startCentralPlantLocalTopology(options = {}) {
   const quiet = Boolean(options.quiet);
   const portNames = [
-    'thingsBoard', 's1Postgres', 's2Postgres', 'clickHouse', 'cube', 'oidc', 'logtoAdmin', 'logtoCore', 'logtoAdminCore',
+    'mqtt', 's1Postgres', 's2Postgres', 'clickHouse', 'cube', 'oidc', 'logtoAdmin', 'logtoCore', 'logtoAdminCore',
     'iam', 'core', 'telemetry', 'query', 'gateway', 'web',
     'simulatorDiagnostics', 'adapterDiagnostics', 'centrifugo', 'centrifugoWSS', 'subscribeProxy',
     'iamDiagnostics', 'coreDiagnostics', 'telemetryDiagnostics', 'historyDiagnostics', 'queryDiagnostics', 'gatewayDiagnostics',
@@ -515,7 +468,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
     s2: `${projectBase}-s2`,
     cube: `${projectBase}-cube`,
     logto: `${projectBase}-logto`,
-    thingsBoard: `${projectBase}-tb`,
+    mqtt: `${projectBase}-mqtt`,
     realtime: `${projectBase}-rt`,
   };
   const outRoot = resolve(root, 'out/central-plant-local');
@@ -545,7 +498,8 @@ export async function startCentralPlantLocalTopology(options = {}) {
     telemetryCert: join(pkiDirectory, 'telemetry-cert.pem'), telemetryKey: join(pkiDirectory, 'telemetry-key.pem'),
     queryCert: join(pkiDirectory, 'query-cert.pem'), queryKey: join(pkiDirectory, 'query-key.pem'),
     gatewayCert: join(pkiDirectory, 'gateway-cert.pem'), gatewayKey: join(pkiDirectory, 'gateway-key.pem'),
-    adapterCert: join(pkiDirectory, 'adapter-cert.pem'), adapterKey: join(pkiDirectory, 'adapter-key.pem'),
+    mqttAdapterCert: join(pkiDirectory, 'mqtt-adapter-cert.pem'), mqttAdapterKey: join(pkiDirectory, 'mqtt-adapter-key.pem'),
+    mqttGatewayCert: join(pkiDirectory, 'mqtt-gateway-cert.pem'), mqttGatewayKey: join(pkiDirectory, 'mqtt-gateway-key.pem'),
     centrifugoCert: join(pkiDirectory, 'centrifugo-cert.pem'), centrifugoKey: join(pkiDirectory, 'centrifugo-key.pem'),
     webCert: join(pkiDirectory, 'web-cert.pem'), webKey: join(pkiDirectory, 'web-key.pem'),
     pkiGeneratorBinary: join(binaryDirectory, 'generate-central-plant-pki.exe'),
@@ -555,19 +509,19 @@ export async function startCentralPlantLocalTopology(options = {}) {
     historyProjectorBinary: join(binaryDirectory, 'telemetry-history-projector.exe'),
     queryBinary: join(binaryDirectory, 'telemetry-query-service.exe'),
     gatewayBinary: join(binaryDirectory, 'platform-gateway.exe'),
-    simulatorBinary: join(binaryDirectory, 'eg8200-simulator.exe'),
-    adapterBinary: join(binaryDirectory, 'thingsboard-telemetry-adapter.exe'),
-    providerFile: join(stateDirectory, 'provider-authorization'),
+    publisherBinary: join(binaryDirectory, 'eg8200-mqtt-publisher.exe'),
+    mqttAdapterBinary: join(binaryDirectory, 'mqtt-telemetry-adapter.exe'),
     simulatorConfig: join(configDirectory, 'simulator.json'),
-    adapterConfig: join(configDirectory, 'adapter.json'),
+    mqttAdapterConfig: join(configDirectory, 'mqtt-adapter.json'),
+    mqttGatewayConfig: join(configDirectory, 'mqtt-gateway.json'),
+    mqttQueueDirectory: join(stateDirectory, 'mqtt-queue'),
     centrifugoConfig: join(configDirectory, 'centrifugo.json'),
     s1Seed: join(configDirectory, 's1-seed.sql'),
     s2Seed: join(configDirectory, 's2-seed.sql'),
     routeOwnership: join(configDirectory, 'route-ownership.local.json'),
-    checkpoint: join(stateDirectory, 'adapter-checkpoint.json'),
     report: join(outRoot, 'stack-report.json'),
   };
-  const services = { iam: null, core: null, telemetry: null, history: null, query: null, gateway: null, web: null, simulator: null, adapter: null };
+  const services = { iam: null, core: null, telemetry: null, history: null, query: null, gateway: null, web: null, publisher: null, mqttAdapter: null };
   let subscribeProxy;
   let webSocketProxy;
   let logtoProxy;
@@ -577,7 +531,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
   const s2Compose = resolve(root, 'infra/s2-telemetry/compose.yaml');
   const cubeCompose = resolve(root, 'semantic/cube/compose.yaml');
   const logtoCompose = resolve(root, 'infra/central-plant-local/logto.compose.yaml');
-  const thingsBoardCompose = resolve(root, 'infra/central-plant-local/thingsboard.compose.yaml');
+  const mqttCompose = resolve(root, 'infra/s2-telemetry/mqtt/compose.yaml');
   const realtimeCompose = resolve(root, 'infra/central-plant-local/realtime.compose.yaml');
   const s1Environment = { S1_POSTGRES_HOST_PORT: String(ports.s1Postgres) };
   const s2Environment = {
@@ -585,7 +539,10 @@ export async function startCentralPlantLocalTopology(options = {}) {
     S2_CLICKHOUSE_HTTP_HOST_PORT: String(ports.clickHouse),
     ANALYTICS_PROJECTOR_DIAGNOSTICS_HOST_PORT: String(ports.analyticsProjectorDiagnostics),
   };
-  const thingsBoardEnvironment = { CENTRAL_PLANT_THINGSBOARD_PORT: String(ports.thingsBoard) };
+  const mqttEnvironment = {
+    MQTT_PKI_DIR: pkiDirectory,
+    MQTT_HOST_PORT: String(ports.mqtt),
+  };
   const runtimeValues = {
     api: randomBytes(32).toString('base64url'),
     connection: randomBytes(32).toString('base64url'),
@@ -621,7 +578,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
   const gatewayURL = `http://127.0.0.1:${ports.gateway}`;
   const webURL = `https://127.0.0.1:${ports.web}`;
   const logtoLoginURL = `${webURL}/api/v1/auth/login?returnTo=${encodeURIComponent(`/sites/${centralPlantIdentity.siteId}/assets`)}`;
-  const thingsBoardURL = `http://127.0.0.1:${ports.thingsBoard}`;
+  const mqttBrokerURL = `tls://127.0.0.1:${ports.mqtt}`;
   const realtimeEndpoint = `wss://127.0.0.1:${ports.centrifugoWSS}/connection/websocket`;
   const logtoDatabaseCredentialKey = ['CENTRAL_PLANT_LOGTO_DB', 'PASSWORD'].join('_');
   const logtoEnvironment = {
@@ -641,7 +598,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       process.off('SIGINT', signalHandler);
       process.off('SIGTERM', signalHandler);
     }
-    for (const child of [services.adapter, services.simulator, services.web, services.gateway, services.query, services.history, services.telemetry, services.core, services.iam]) {
+    for (const child of [services.mqttAdapter, services.publisher, services.web, services.gateway, services.query, services.history, services.telemetry, services.core, services.iam]) {
       await stopProcess(child);
     }
     await closeServer(webSocketProxy);
@@ -651,7 +608,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
     for (const [project, file, environment] of [
       [projects.realtime, realtimeCompose, realtimeEnvironment],
       [projects.logto, logtoCompose, logtoEnvironment],
-      [projects.thingsBoard, thingsBoardCompose, thingsBoardEnvironment],
+      [projects.mqtt, mqttCompose, mqttEnvironment],
       [projects.cube, cubeCompose, cubeEnvironment],
       [projects.s2, s2Compose, s2Environment],
       [projects.s1, s1Compose, s1Environment],
@@ -670,7 +627,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
     for (const [project, file, environment] of [
       [projects.realtime, realtimeCompose, realtimeEnvironment],
       [projects.logto, logtoCompose, logtoEnvironment],
-      [projects.thingsBoard, thingsBoardCompose, thingsBoardEnvironment],
+      [projects.mqtt, mqttCompose, mqttEnvironment],
       [projects.cube, cubeCompose, cubeEnvironment],
       [projects.s2, s2Compose, s2Environment],
       [projects.s1, s1Compose, s1Environment],
@@ -726,8 +683,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
 
     compose(projects.s1, s1Compose, ['up', '-d'], s1Environment);
     compose(projects.s2, s2Compose, ['up', '-d'], s2Environment);
-    compose(projects.thingsBoard, thingsBoardCompose, ['run', '--rm', '-e', 'INSTALL_TB=true', '-e', 'LOAD_DEMO=true', 'thingsboard'], thingsBoardEnvironment);
-    compose(projects.thingsBoard, thingsBoardCompose, ['up', '-d'], thingsBoardEnvironment);
+    compose(projects.mqtt, mqttCompose, ['up', '-d', 'mqtt-broker'], mqttEnvironment);
 
     const s1Container = composeContainer(projects.s1, 'postgres');
     const s2Container = composeContainer(projects.s2, 'postgres');
@@ -737,17 +693,15 @@ export async function startCentralPlantLocalTopology(options = {}) {
     await waitForContainer(() => dockerExec(clickHouseContainer, ['clickhouse-client', '--user', 'telemetry_history', '--query', 'SELECT 1'], { capture: true }), 'S2 ClickHouse');
     compose(projects.cube, cubeCompose, ['up', '-d', 'cube'], cubeEnvironment);
     await waitForHTTP(cubeURL, 'Cube Core', { attempts: 600, interval: 500 });
-    await waitForHTTP(thingsBoardURL, 'ThingsBoard', { attempts: 900, interval: 500 });
 
-    const adapterTemplate = JSON.parse(await readFile(resolve(root, 'services/thingsboard-telemetry-adapter/configs/central-plant.local.example.json'), 'utf8'));
-    const spatialPoints = buildCentralPlantSimulatorPoints(adapterTemplate);
+    const pointContract = JSON.parse(await readFile(resolve(root, 'contracts/registry/central-plant-device-points.v2.json'), 'utf8'));
+    const spatialPoints = buildCentralPlantSimulatorPoints(pointContract);
     const energyHistory = buildHistoricalEnergyBootstrap(new Date(), spatialPoints);
-    const simulatorConfig = buildCentralPlantSimulatorConfig(adapterTemplate, {
-      thingsBoardBaseUrl: thingsBoardURL,
+    const simulatorConfig = buildCentralPlantSimulatorConfig(pointContract, {
       publishInterval: '2s',
       initialEnergyKwh: energyHistory.finalEnergyKwh,
     });
-    const { pointsByDevice, pointKeysByDevice } = adapterPointMaps(adapterTemplate);
+    const { pointsByDevice, pointKeysByDevice } = adapterPointMaps(pointContract);
     const pointCount = [...pointsByDevice.values()].reduce((total, points) => total + points.length, 0);
     await writeFile(paths.s1Seed, buildS1SeedSQL({
       oidcIssuer: logto.issuer,
@@ -759,30 +713,54 @@ export async function startCentralPlantLocalTopology(options = {}) {
     await installDatabaseSeed(s1Container, paths.s1Seed, '/tmp/central-plant-s1.sql', 'hvac_s1');
     await installDatabaseSeed(s2Container, paths.s2Seed, '/tmp/central-plant-s2.sql', 'hvac_s2');
     await publishHistoricalAnalyticsBootstrap(clickHouseURL, energyHistory);
-
-    const provisioned = await provisionThingsBoard(thingsBoardURL);
-    await publishHistoricalEnergyBootstrap(thingsBoardURL, provisioned, energyHistory);
-    await writePrivate(paths.providerFile, `${provisioned.authorization}\n`);
     await writeFile(paths.simulatorConfig, `${JSON.stringify(simulatorConfig, null, 2)}\n`, 'utf8');
+    await mkdir(paths.mqttQueueDirectory, { recursive: true });
 
-    adapterTemplate.pollInterval = '2s';
-    adapterTemplate.initialLookback = '200h';
-    adapterTemplate.pageLimit = 1000;
-    adapterTemplate.checkpointFile = paths.checkpoint;
-    adapterTemplate.thingsBoard = { baseUrl: thingsBoardURL, jwtFile: paths.providerFile };
-    adapterTemplate.telemetryRuntime = {
-      baseUrl: telemetryURL,
-      caFile: paths.ca,
-      certFile: paths.adapterCert,
-      keyFile: paths.adapterKey,
-      serverName: 'localhost',
+    const mqttAdapterConfig = {
+      schemaVersion: 1,
+      integrationInstanceId: centralPlantIdentity.integrationInstanceId,
+      mqtt: {
+        brokerUrl: mqttBrokerURL,
+        clientId: 'mqtt-telemetry-adapter',
+        topicFilter: 'energy/v1/+/+/+/telemetry',
+        caFile: paths.ca,
+        certFile: paths.mqttAdapterCert,
+        keyFile: paths.mqttAdapterKey,
+        serverName: 'localhost',
+        keepAliveSeconds: 30,
+        sessionExpirySeconds: 86400,
+        connectTimeoutSeconds: 10,
+      },
+      telemetryRuntime: {
+        baseUrl: telemetryURL,
+        caFile: paths.ca,
+        certFile: paths.mqttAdapterCert,
+        keyFile: paths.mqttAdapterKey,
+        serverName: 'localhost',
+      },
+      gatewayScopes: [{
+        gatewayId: simulatorConfig.gatewayId,
+        tenantId: centralPlantIdentity.tenantId,
+        siteId: centralPlantIdentity.siteId,
+      }],
+      processingQueueCapacity: 1024,
     };
-    adapterTemplate.devices = adapterTemplate.devices.map((device, index) => ({
-      ...device,
-      thingsBoardDeviceId: provisioned.devices[index].thingsBoardDeviceId,
-      externalId: centralPlantDevices[index].platformDeviceId,
-    }));
-    await writeFile(paths.adapterConfig, `${JSON.stringify(adapterTemplate, null, 2)}\n`, 'utf8');
+    const mqttGatewayConfig = {
+      schemaVersion: 1,
+      tenantId: centralPlantIdentity.tenantId,
+      siteId: centralPlantIdentity.siteId,
+      brokerUrl: mqttBrokerURL,
+      clientId: simulatorConfig.gatewayId,
+      caFile: paths.ca,
+      certFile: paths.mqttGatewayCert,
+      keyFile: paths.mqttGatewayKey,
+      serverName: 'localhost',
+      queueDirectory: paths.mqttQueueDirectory,
+      maximumQueueBytes: 536870912,
+      deviceExternalIdByDeviceId: Object.fromEntries(centralPlantDevices.map((device) => [device.name, device.platformDeviceId])),
+    };
+    await writeFile(paths.mqttAdapterConfig, `${JSON.stringify(mqttAdapterConfig, null, 2)}\n`, 'utf8');
+    await writeFile(paths.mqttGatewayConfig, `${JSON.stringify(mqttGatewayConfig, null, 2)}\n`, 'utf8');
 
     const routeOwnershipSource = JSON.parse(await readFile(resolve(root, 'contracts/ownership/route-ownership.v1.json'), 'utf8'));
     const routeOwnership = buildCentralPlantRouteOwnership(routeOwnershipSource);
@@ -904,7 +882,6 @@ export async function startCentralPlantLocalTopology(options = {}) {
       TELEMETRY_IAM_GRANT_CERT: paths.iamCert,
       TELEMETRY_DATABASE_URL: databases.telemetry,
       TELEMETRY_SOURCE_BINDINGS_JSON: JSON.stringify({
-        'spiffe://hvac.local/thingsboard-telemetry-adapter': [centralPlantIdentity.integrationInstanceId],
         'spiffe://hvac.local/mqtt-telemetry-adapter': [centralPlantIdentity.integrationInstanceId],
       }),
       TELEMETRY_IAM_ENDPOINT: iamURL,
@@ -1029,31 +1006,22 @@ export async function startCentralPlantLocalTopology(options = {}) {
     }, quiet);
     await waitForTLS(ports.web, 'HVAC Web Real', services.web);
 
-    const simulatorEnvironment = {
-      GOCACHE: goCache,
-      EG8200_SIMULATOR_DIAGNOSTICS_ADDR: `127.0.0.1:${ports.simulatorDiagnostics}`,
-    };
-    const simulatorCredentialEnvironmentNames = Object.values(simulatorConfig.credentialEnvByDeviceId ?? {});
-    if (simulatorCredentialEnvironmentNames.length !== provisioned.devices.length) {
-      throw new Error('simulator credential bindings do not cover all provisioned ThingsBoard Devices');
-    }
-    provisioned.devices.forEach((device, index) => {
-      simulatorEnvironment[simulatorCredentialEnvironmentNames[index]] = device.access;
-    });
-    services.simulator = spawnService('EG8200 simulator', paths.simulatorBinary, [
-      '-config', paths.simulatorConfig,
-    ], simulatorEnvironment, quiet);
-    await waitForHTTP(`http://127.0.0.1:${ports.simulatorDiagnostics}/health/ready`, 'EG8200 simulator', {
-      child: services.simulator,
+    services.mqttAdapter = spawnService('MQTT Telemetry Adapter', paths.mqttAdapterBinary, [
+      '-config', paths.mqttAdapterConfig,
+      '-diagnostics-addr', `127.0.0.1:${ports.adapterDiagnostics}`,
+    ], {}, quiet);
+    await waitForHTTP(`http://127.0.0.1:${ports.adapterDiagnostics}/health/ready`, 'MQTT Telemetry Adapter', {
+      child: services.mqttAdapter,
       attempts: 600,
     });
 
-    services.adapter = spawnService('ThingsBoard Telemetry Adapter', paths.adapterBinary, [
-      '-config', paths.adapterConfig,
-      '-diagnostics-addr', `127.0.0.1:${ports.adapterDiagnostics}`,
-    ], {}, quiet);
-    await waitForHTTP(`http://127.0.0.1:${ports.adapterDiagnostics}/health/ready`, 'ThingsBoard Telemetry Adapter', {
-      child: services.adapter,
+    services.publisher = spawnService('EG8200 MQTT Publisher', paths.publisherBinary, [
+      '-plant-config', paths.simulatorConfig,
+      '-mqtt-config', paths.mqttGatewayConfig,
+      '-diagnostics-addr', `127.0.0.1:${ports.simulatorDiagnostics}`,
+    ], { GOCACHE: goCache }, quiet);
+    await waitForHTTP(`http://127.0.0.1:${ports.simulatorDiagnostics}/health/ready`, 'EG8200 MQTT Publisher', {
+      child: services.publisher,
       attempts: 600,
     });
 
@@ -1061,7 +1029,7 @@ export async function startCentralPlantLocalTopology(options = {}) {
       schemaVersion: 1,
       status: 'ready',
       webURL,
-      thingsBoardURL,
+      mqttBrokerURL,
       clickHouseURL,
       cubeURL,
       queryURL,
@@ -1089,7 +1057,6 @@ export async function startCentralPlantLocalTopology(options = {}) {
         dailyIntervalCount: energyHistory.dailyIntervalCount,
         hourlyIntervalCount: energyHistory.hourlyIntervalCount,
         analyticsIntervalCount: energyHistory.analyticsIntervalCount,
-        adapterIntervalCount: energyHistory.adapterIntervalCount,
         initialEnergyKwh: energyHistory.finalEnergyKwh,
       },
       devices: centralPlantDevices.map(({ name, type, platformDeviceId }) => ({ name, type, platformDeviceId })),

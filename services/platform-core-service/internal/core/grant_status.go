@@ -66,7 +66,7 @@ func (provider *HTTPGrantStatusProvider) Lookup(ctx context.Context, claims regi
 	if provider == nil || provider.client == nil {
 		return GrantStatus{}, ErrStatusFailed
 	}
-	statusRequest := registryauth.GrantStatusRequest{ActingOrganizationID: claims.ActingOrganizationID, TokenID: claims.TokenID}
+	statusRequest := registryauth.GrantStatusRequest{TenantID: claims.TenantID, TokenID: claims.TokenID}
 	if err := statusRequest.Validate(); err != nil {
 		return GrantStatus{}, ErrStatusFailed
 	}

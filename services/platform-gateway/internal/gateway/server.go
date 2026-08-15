@@ -178,15 +178,22 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		h.authorizeOperationsTool(writer, request)
 		return
 	}
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Work-Order-Read-Context", "X-Work-Order-Write-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant"} {
+	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Work-Order-Read-Context", "X-Work-Order-Write-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Asset-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant"} {
 		if request.Header.Get(header) == "" {
-			continue
-		}
-		if header == "X-Organization-ID" && isVerifiedTelemetryWorkloadRequest(request) {
 			continue
 		}
 		writeProblem(writer, request, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Caller-supplied identity headers are not accepted at the public edge.", false, nil)
 		return
+	}
+
+	if contractOnlyRoute, matches := matchV212ContractOnlyRoute(request.URL.Path); matches {
+		// /api/v1/sites is shared by the active GET and shape-pending POST.
+		// Only the POST belongs to the contract-only boundary; GET must continue
+		// through the normal Registry owner path.
+		if contractOnlyRoute.template != "/api/v1/sites" || request.Method == contractOnlyRoute.method {
+			writeV212ContractOnly(writer, request, contractOnlyRoute)
+			return
+		}
 	}
 
 	if h.routeManager != nil {
@@ -277,8 +284,8 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		}
 		h.GetPlatformStatus(writer, request)
 	case platformapi.BeginLoginPath:
-		if request.Method != http.MethodGet {
-			writeMethodNotAllowedFor(writer, request, http.MethodGet)
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
 			return
 		}
 		params, ok := parseBeginLoginParams(writer, request)
@@ -352,7 +359,7 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 				return request, false
 			}
 			workloadCaller = resolved
-			businessKey := workloadCaller.actingOrganizationID + "\x00" + workloadCaller.principal.Subject
+			businessKey := workloadCaller.tenantID + "\x00" + workloadCaller.principal.Subject
 			decision, err = snapshot.Resolve(request.Method, request.URL.Path, businessKey)
 		} else {
 			resolved, failure := h.identitySession(request)
@@ -361,7 +368,7 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 				return request, false
 			}
 			session = resolved
-			businessKey := session.ActingOrganizationID + "\x00" + session.Principal.Subject
+			businessKey := session.TenantID + "\x00" + session.Principal.Subject
 			decision, err = snapshot.Resolve(request.Method, request.URL.Path, businessKey)
 		}
 	}
@@ -433,11 +440,11 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 		auditRecord.PolicyRevision = h.identity.config.PolicyRevision
 	}
 	if session.ID != "" {
-		auditRecord.OrganizationID = session.ActingOrganizationID
+		auditRecord.TenantID = session.TenantID
 		auditRecord.InitiatingSubject = session.Principal.Subject
 		auditRecord.InitiatingIssuer = session.Principal.Issuer
 	} else if workloadCaller.contextID != "" {
-		auditRecord.OrganizationID = workloadCaller.actingOrganizationID
+		auditRecord.TenantID = workloadCaller.tenantID
 		auditRecord.InitiatingSubject = workloadCaller.principal.Subject
 		auditRecord.InitiatingIssuer = workloadCaller.principal.Issuer
 	}
@@ -653,6 +660,9 @@ func safeLogPath(path string) string {
 	case platformapi.GetHealthPath, platformapi.GetVersionPath, platformapi.GetPlatformStatusPath, platformapi.BeginLoginPath, platformapi.CompleteLoginPath, platformapi.GetCurrentPrincipalPath, platformapi.LogoutPath, InternalOperationsToolAuthorizationPath:
 		return path
 	default:
+		if contractOnlyRoute, matches := matchV212ContractOnlyRoute(path); matches {
+			return contractOnlyRoute.template
+		}
 		if registryRoute, _, matches := matchPublicRegistryRoute(path); matches {
 			return registryRoute.template
 		}

@@ -17,72 +17,59 @@ const (
 	MaximumPageLimit = 200
 )
 
-type Organization struct {
+// V2 public Registry hierarchy starts at Tenant -> Site.
+// Organization is intentionally absent from the canonical API model.
+type Site struct {
 	ID          string `json:"id"`
 	TenantID    string `json:"tenantId"`
 	Code        string `json:"code"`
 	DisplayName string `json:"displayName"`
+	Timezone    string `json:"timezone"`
 	Status      string `json:"status"`
 	Revision    int64  `json:"revision"`
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
 }
 
-type Site struct {
-	ID                   string `json:"id"`
-	TenantID             string `json:"tenantId"`
-	OwningOrganizationID string `json:"owningOrganizationId"`
-	Code                 string `json:"code"`
-	DisplayName          string `json:"displayName"`
-	Timezone             string `json:"timezone"`
-	Status               string `json:"status"`
-	Revision             int64  `json:"revision"`
-	CreatedAt            string `json:"createdAt"`
-	UpdatedAt            string `json:"updatedAt"`
-}
-
-type Equipment struct {
-	ID                   string `json:"id"`
-	TenantID             string `json:"tenantId"`
-	OwningOrganizationID string `json:"owningOrganizationId"`
-	SiteID               string `json:"siteId"`
-	Code                 string `json:"code"`
-	DisplayName          string `json:"displayName"`
-	EquipmentType        string `json:"equipmentType"`
-	Status               string `json:"status"`
-	Revision             int64  `json:"revision"`
-	CreatedAt            string `json:"createdAt"`
-	UpdatedAt            string `json:"updatedAt"`
+type Asset struct {
+	ID            string `json:"id"`
+	TenantID      string `json:"tenantId"`
+	SiteID        string `json:"siteId"`
+	Code          string `json:"code"`
+	DisplayName   string `json:"displayName"`
+	AssetType string `json:"assetType"`
+	Status        string `json:"status"`
+	Revision      int64  `json:"revision"`
+	CreatedAt     string `json:"createdAt"`
+	UpdatedAt     string `json:"updatedAt"`
 }
 
 type Device struct {
-	ID                   string `json:"id"`
-	TenantID             string `json:"tenantId"`
-	OwningOrganizationID string `json:"owningOrganizationId"`
-	SiteID               string `json:"siteId"`
-	Code                 string `json:"code"`
-	DisplayName          string `json:"displayName"`
-	DeviceType           string `json:"deviceType"`
-	Status               string `json:"status"`
-	Revision             int64  `json:"revision"`
-	CreatedAt            string `json:"createdAt"`
-	UpdatedAt            string `json:"updatedAt"`
+	ID          string `json:"id"`
+	TenantID    string `json:"tenantId"`
+	SiteID      string `json:"siteId"`
+	Code        string `json:"code"`
+	DisplayName string `json:"displayName"`
+	DeviceType  string `json:"deviceType"`
+	Status      string `json:"status"`
+	Revision    int64  `json:"revision"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
 }
 
 type DeviceBinding struct {
-	ID                   string  `json:"id"`
-	TenantID             string  `json:"tenantId"`
-	OwningOrganizationID string  `json:"owningOrganizationId"`
-	SiteID               string  `json:"siteId"`
-	DeviceID             string  `json:"deviceId"`
-	EquipmentID          string  `json:"equipmentId"`
-	BindingRole          string  `json:"bindingRole"`
-	Status               string  `json:"status"`
-	ValidFrom            string  `json:"validFrom"`
-	ValidTo              *string `json:"validTo,omitempty"`
-	Revision             int64   `json:"revision"`
-	CreatedAt            string  `json:"createdAt"`
-	UpdatedAt            string  `json:"updatedAt"`
+	ID          string  `json:"id"`
+	TenantID    string  `json:"tenantId"`
+	SiteID      string  `json:"siteId"`
+	DeviceID    string  `json:"deviceId"`
+	AssetID string  `json:"assetId"`
+	BindingRole string  `json:"bindingRole"`
+	Status      string  `json:"status"`
+	ValidFrom   string  `json:"validFrom"`
+	ValidTo     *string `json:"validTo,omitempty"`
+	Revision    int64   `json:"revision"`
+	CreatedAt   string  `json:"createdAt"`
+	UpdatedAt   string  `json:"updatedAt"`
 }
 
 type Collection[T any] struct {

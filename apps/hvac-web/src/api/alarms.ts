@@ -55,7 +55,7 @@ export interface AlarmListFilter {
 }
 
 export interface ScopedAlarmRequestOptions {
-  trustedOrganizationId: string;
+  trustedTenantId: string;
   trustedSiteId: string;
   csrfToken?: string;
   idempotencyKey?: string;
@@ -135,9 +135,9 @@ async function alarmRequest<T>(
   return schema.parse(payload);
 }
 
-function validatedScope(options: ScopedAlarmRequestOptions): { organizationId: string; siteId: string } {
+function validatedScope(options: ScopedAlarmRequestOptions): { tenantId: string; siteId: string } {
   return {
-    organizationId: alarmUUIDv7Schema.parse(options.trustedOrganizationId),
+    tenantId: alarmUUIDv7Schema.parse(options.trustedTenantId),
     siteId: alarmUUIDv7Schema.parse(options.trustedSiteId),
   };
 }
@@ -149,7 +149,7 @@ export async function listScopedAlarms(
   if (!ALARM_ROUTES_AVAILABLE) {
     throw new AlarmApiError(503, 'ALARM_ROUTE_DISABLED', 'Alarm 读取路由已登记，但尚未启用生产流量。');
   }
-  const { organizationId, siteId } = validatedScope(options);
+  const { tenantId, siteId } = validatedScope(options);
   const parameters = new URLSearchParams();
   if (filter.status) parameters.set('status', alarmStatusSchema.parse(filter.status));
   if (filter.severity) parameters.set('severity', alarmSeveritySchema.parse(filter.severity));
@@ -165,7 +165,7 @@ export async function listScopedAlarms(
     { method: 'GET' },
     options,
   );
-  return validateAlarmListScope(payload, { trustedOrganizationId: organizationId, trustedSiteId: siteId });
+  return validateAlarmListScope(payload, { trustedTenantId: tenantId, trustedSiteId: siteId });
 }
 
 export async function getScopedAlarm(
@@ -175,7 +175,7 @@ export async function getScopedAlarm(
   if (!ALARM_ROUTES_AVAILABLE) {
     throw new AlarmApiError(503, 'ALARM_ROUTE_DISABLED', 'Alarm 读取路由已登记，但尚未启用生产流量。');
   }
-  const { organizationId, siteId } = validatedScope(options);
+  const { tenantId, siteId } = validatedScope(options);
   const validatedAlarmId = alarmUUIDv7Schema.parse(alarmId);
   const payload = await alarmRequest(
     `${alarmPrefix()}/${encodeURIComponent(siteId)}/alarms/${encodeURIComponent(validatedAlarmId)}`,
@@ -183,7 +183,7 @@ export async function getScopedAlarm(
     { method: 'GET' },
     options,
   );
-  return validateAlarmScope(payload, { trustedOrganizationId: organizationId, trustedSiteId: siteId });
+  return validateAlarmScope(payload, { trustedTenantId: tenantId, trustedSiteId: siteId });
 }
 
 async function mutateScopedAlarm(
@@ -195,7 +195,7 @@ async function mutateScopedAlarm(
   if (!ALARM_LOCAL_ROUTES_ENABLED) {
     throw new AlarmApiError(503, 'ALARM_LIFECYCLE_DISABLED', 'Alarm 生命周期写入仅在本地认证工作台启用，生产流量保持 0%。');
   }
-  const { organizationId, siteId } = validatedScope(options);
+  const { tenantId, siteId } = validatedScope(options);
   const validatedAlarmId = alarmUUIDV7(alarmId);
   const validatedOperation = alarmOperationSchema.exclude(['PUBLISH']).parse(operation);
   if (!options.csrfToken) {
@@ -216,7 +216,7 @@ async function mutateScopedAlarm(
     },
     options,
   );
-  return validateAlarmScope(payload, { trustedOrganizationId: organizationId, trustedSiteId: siteId });
+  return validateAlarmScope(payload, { trustedTenantId: tenantId, trustedSiteId: siteId });
 }
 
 function alarmUUIDV7(value: string): string {

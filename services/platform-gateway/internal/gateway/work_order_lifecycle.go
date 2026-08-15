@@ -67,8 +67,8 @@ func dispatchWorkOrderLifecycleRoute(h *handler, writer http.ResponseWriter, req
 		h.writeWorkOrderFailure(writer, request, *failure)
 		return
 	}
-	if before.OrganizationID != session.ActingOrganizationID {
-		h.writeWorkOrderFailure(writer, request, workOrderUnavailable("Work Order Service returned a lifecycle precondition projection outside the authenticated Organization."))
+	if before.TenantID != session.TenantID {
+		h.writeWorkOrderFailure(writer, request, workOrderUnavailable("Work Order Service returned a lifecycle precondition projection outside the authenticated Tenant."))
 		return
 	}
 	body, status, replayed, failure := h.executeWorkOrderLifecycle(request, route, mutation, writeContext)
@@ -81,7 +81,7 @@ func dispatchWorkOrderLifecycleRoute(h *handler, writer http.ResponseWriter, req
 		return
 	}
 	var workOrder workordermodel.WorkOrder
-	if decodeStrictWorkOrderJSON(body, &workOrder) != nil || workOrder.Validate() != nil || workOrder.OrganizationID != session.ActingOrganizationID ||
+	if decodeStrictWorkOrderJSON(body, &workOrder) != nil || workOrder.Validate() != nil || workOrder.TenantID != session.TenantID ||
 		workOrder.SiteID != route.siteID || workOrder.WorkOrderID != route.workOrderID ||
 		!validPublicLifecycleProjection(workOrder, route, mutation, decision) || (!replayed && !validPublicLifecycleChange(before, workOrder, route, mutation)) {
 		h.writeWorkOrderFailure(writer, request, workOrderUnavailable("Work Order Service returned a lifecycle projection outside the requested transition."))
@@ -178,7 +178,7 @@ func (h *handler) executeWorkOrderLifecyclePrecondition(publicRequest *http.Requ
 		return workordermodel.WorkOrder{}, &failure
 	}
 	var workOrder workordermodel.WorkOrder
-	if decodeStrictWorkOrderJSON(body, &workOrder) != nil || workOrder.Validate() != nil || workOrder.OrganizationID == "" || workOrder.SiteID != route.siteID || workOrder.WorkOrderID != route.workOrderID {
+	if decodeStrictWorkOrderJSON(body, &workOrder) != nil || workOrder.Validate() != nil || workOrder.TenantID == "" || workOrder.SiteID != route.siteID || workOrder.WorkOrderID != route.workOrderID {
 		failure := workOrderUnavailable("Work Order Service returned an invalid lifecycle precondition projection.")
 		return workordermodel.WorkOrder{}, &failure
 	}
@@ -335,7 +335,7 @@ func validPublicLifecycleProjection(workOrder workordermodel.WorkOrder, route pu
 }
 
 func validPublicLifecycleChange(before, after workordermodel.WorkOrder, route publicWorkOrderRoute, mutation parsedPublicWorkOrderLifecycle) bool {
-	if before.OrganizationID != after.OrganizationID || before.SiteID != after.SiteID || before.WorkOrderID != after.WorkOrderID ||
+	if before.TenantID != after.TenantID || before.SiteID != after.SiteID || before.WorkOrderID != after.WorkOrderID ||
 		before.SchemaVersion != after.SchemaVersion || before.Title != after.Title || before.Description != after.Description || before.Priority != after.Priority ||
 		!reflect.DeepEqual(before.SourceReferences, after.SourceReferences) || !reflect.DeepEqual(before.AssigneeID, after.AssigneeID) || !reflect.DeepEqual(before.TeamID, after.TeamID) ||
 		before.Tasks != after.Tasks || before.NoteCount != after.NoteCount || before.AttachmentCount != after.AttachmentCount || before.CreatedAt != after.CreatedAt ||

@@ -3,7 +3,7 @@
   "info": {
     "title": "S3 Command Public API",
     "version": "0.5.0-command-point-identity",
-    "description": "Adds authoritative Organization, Site and canonical Registry Point identity to Command projections for Real UI validation. Routes remain registered disabled and permit no production Device control."
+    "description": "Authoritative Tenant/Site-scoped Control Command contract. Command creation is durable and governed; 202 Accepted does not imply Device success."
   },
   "servers": [
     { "url": "/" }
@@ -16,7 +16,7 @@
         "x-activation-status": "expand-baseline",
         "x-production-traffic-percent": 0,
         "x-client-forbidden-fields": [
-          "organizationId",
+          "tenantId",
           "siteId",
           "deviceId",
           "pointId",
@@ -24,7 +24,6 @@
           "principalId",
           "providerMethod",
           "providerParams",
-          "thingsBoardDeviceId",
           "executionFence"
         ],
         "parameters": [
@@ -97,14 +96,14 @@
         }
       }
     },
-    "/api/v1/commands/{commandId}:approve": {
+    "/api/v1/commands/{commandId}/approve": {
       "post": {
         "operationId": "approveCommand",
         "summary": "Approve a governed Command with Session-derived identity and role",
         "x-activation-status": "expand-baseline",
         "x-production-traffic-percent": 0,
         "x-client-forbidden-fields": [
-          "organizationId",
+          "tenantId",
           "siteId",
           "deviceId",
           "principalId",
@@ -184,7 +183,7 @@
         "required": [
           "schemaVersion",
           "commandId",
-          "organizationId",
+          "tenantId",
           "siteId",
           "deviceId",
           "pointId",
@@ -206,7 +205,7 @@
         "properties": {
           "schemaVersion": { "type": "integer", "const": 1 },
           "commandId": { "type": "string" },
-          "organizationId": { "type": "string", "format": "uuid" },
+          "tenantId": { "type": "string", "format": "uuid" },
           "siteId": { "type": "string", "format": "uuid" },
           "deviceId": { "type": "string", "format": "uuid" },
           "pointId": { "type": "string", "format": "uuid" },

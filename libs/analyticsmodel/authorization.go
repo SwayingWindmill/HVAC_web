@@ -16,14 +16,14 @@ const (
 )
 
 type AuthorizationDecisionRequest struct {
-	ActingOrganizationID string `json:"actingOrganizationId"`
-	SiteID               string `json:"siteId"`
-	Action               string `json:"action"`
+	TenantID string `json:"tenantId"`
+	SiteID   string `json:"siteId"`
+	Action   string `json:"action"`
 }
 
 func (request AuthorizationDecisionRequest) Validate() error {
-	if !validUUIDv7(request.ActingOrganizationID) || !validUUIDv7(request.SiteID) {
-		return errors.New("analytics authorization organization and site must be UUIDv7")
+	if !validUUIDv7(request.TenantID) || !validUUIDv7(request.SiteID) {
+		return errors.New("analytics authorization tenant and site must be UUIDv7")
 	}
 	if strings.TrimSpace(request.Action) != EnergySeriesAction {
 		return errors.New("analytics authorization action is invalid")
@@ -32,16 +32,16 @@ func (request AuthorizationDecisionRequest) Validate() error {
 }
 
 type AuthorizationDecision struct {
-	Allowed              bool                `json:"allowed"`
-	PrincipalID          string              `json:"principalId"`
-	SubjectIssuer        string              `json:"subjectIssuer"`
-	Subject              string              `json:"subject"`
-	ActingOrganizationID string              `json:"actingOrganizationId"`
-	SiteID               string              `json:"siteId"`
-	Action               string              `json:"action"`
-	PolicyRevision       string              `json:"policyRevision"`
-	ReasonCode           AuthorizationReason `json:"reasonCode"`
-	DecidedAt            string              `json:"decidedAt"`
+	Allowed        bool                `json:"allowed"`
+	PrincipalID    string              `json:"principalId"`
+	SubjectIssuer  string              `json:"subjectIssuer"`
+	Subject        string              `json:"subject"`
+	TenantID       string              `json:"tenantId"`
+	SiteID         string              `json:"siteId"`
+	Action         string              `json:"action"`
+	PolicyRevision string              `json:"policyRevision"`
+	ReasonCode     AuthorizationReason `json:"reasonCode"`
+	DecidedAt      string              `json:"decidedAt"`
 }
 
 type AuthorizationDecisionResponse struct {

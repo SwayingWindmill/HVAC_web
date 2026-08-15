@@ -91,7 +91,7 @@ export type SiteNightEnergyInvestigationCoordinatorPorts = Omit<
 };
 
 export interface StartSiteNightEnergyInvestigationCommand {
-  readonly organizationId: string;
+  readonly tenantId: string;
   readonly siteId: string;
 }
 
@@ -100,7 +100,7 @@ export interface SiteNightEnergyInvestigationQuery {
 }
 
 export interface ListSiteNightEnergyInvestigationsQuery {
-  readonly organizationId: string;
+  readonly tenantId: string;
   readonly siteId: string;
   readonly limit?: number;
 }
@@ -181,7 +181,7 @@ interface RegistrySitePayload {
   readonly kind: 'SITE';
   readonly site: {
     readonly id: string;
-    readonly owningOrganizationId: string;
+    readonly tenantId: string;
     readonly timezone: string;
   };
 }
@@ -251,7 +251,7 @@ const requireIdentity = (value: string, label: string): string => {
 };
 
 const requireSiteScope = (scope: InvestigationScope): InvestigationScope => {
-  if (scope.organizationId.trim().length === 0
+  if (scope.tenantId.trim().length === 0
     || scope.siteId === null
     || scope.siteId.trim().length === 0
     || scope.equipmentId !== null
@@ -307,7 +307,7 @@ const decodeSite = (result: OwnerReadResult, scope: InvestigationScope): Registr
     || payload.kind !== 'SITE'
     || !isRecord(payload.site)
     || payload.site.id !== scope.siteId
-    || payload.site.owningOrganizationId !== scope.organizationId
+    || payload.site.tenantId !== scope.tenantId
     || typeof payload.site.timezone !== 'string'
     || payload.site.timezone.trim().length === 0) {
     throw new InvestigationCoordinatorError(
@@ -577,7 +577,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
         try {
           await ports.auditRecorder.record(createOperationsAuditEvent({
             eventId: operationsAuditEventId({
-              organizationId: input.view.scope.organizationId,
+              tenantId: input.view.scope.tenantId,
               siteId,
               investigationId: input.view.id,
               runId: run.id,
@@ -1050,7 +1050,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
   return Object.freeze({
     async start(command: StartSiteNightEnergyInvestigationCommand) {
       const scope = requireSiteScope({
-        organizationId: requireIdentity(command.organizationId, 'Organization identity'),
+        tenantId: requireIdentity(command.tenantId, 'Tenant identity'),
         siteId: requireIdentity(command.siteId, 'Site identity'),
         equipmentId: null,
         deviceId: null,
@@ -1067,7 +1067,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
 
     async list(query: ListSiteNightEnergyInvestigationsQuery) {
       const scope = requireSiteScope({
-        organizationId: requireIdentity(query.organizationId, 'Organization identity'),
+        tenantId: requireIdentity(query.tenantId, 'Tenant identity'),
         siteId: requireIdentity(query.siteId, 'Site identity'),
         equipmentId: null,
         deviceId: null,
@@ -1090,7 +1090,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
         );
       }
       const persisted = await ports.investigationRepository.listByScope({
-        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
         siteId: scope.siteId as string,
         limit,
       });
@@ -1098,7 +1098,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
         persisted.map((investigation) => snapshot(investigation.view())),
       );
       const investigations = projected
-        .filter((view) => view.scope.organizationId === scope.organizationId
+        .filter((view) => view.scope.tenantId === scope.tenantId
           && view.scope.siteId === scope.siteId)
         .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))
         .slice(0, limit)
@@ -1276,7 +1276,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
         requestId: requestId(view.id, 'energy-target'),
         tool: 'analytics.getEnergySeries',
         input: {
-          organizationId: scope.organizationId,
+          tenantId: scope.tenantId,
           siteId,
           energyType: 'electricity',
           granularity: 'hour',
@@ -1289,7 +1289,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
         requestId: requestId(view.id, 'energy-baseline'),
         tool: 'analytics.getEnergySeries',
         input: {
-          organizationId: scope.organizationId,
+          tenantId: scope.tenantId,
           siteId,
           energyType: 'electricity',
           granularity: 'hour',
@@ -1322,7 +1322,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
 
       const analysis = analyzeSiteNightEnergy({
         site: {
-          organizationId: scope.organizationId,
+          tenantId: scope.tenantId,
           siteId,
           timezone: site.site.timezone,
           equipmentIds: equipment.equipment.map(({ id }) => id),
@@ -1507,7 +1507,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
               conclusion: {
                 status: 'SUPPORTED',
                 scope: 'SITE',
-                organizationId: scope.organizationId,
+                tenantId: scope.tenantId,
                 siteId,
               },
             }

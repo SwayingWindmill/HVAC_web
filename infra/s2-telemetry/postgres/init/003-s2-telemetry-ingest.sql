@@ -57,23 +57,18 @@ ALTER TABLE telemetry_runtime.source_observations
 ALTER TABLE telemetry_runtime.source_observations
   ADD COLUMN IF NOT EXISTS quality text;
 UPDATE telemetry_runtime.source_observations
-SET quality = CASE WHEN acceptance_status = 'ACCEPTED' THEN 'GOOD' ELSE 'REJECTED' END
+SET quality = CASE WHEN acceptance_status = 'ACCEPTED' THEN 'GOOD' ELSE 'INVALID' END
 WHERE quality IS NULL;
 ALTER TABLE telemetry_runtime.source_observations
   ALTER COLUMN quality SET NOT NULL;
 ALTER TABLE telemetry_runtime.source_observations
   ADD CONSTRAINT source_observations_quality_check
-  CHECK (quality IN ('GOOD', 'SUSPECT', 'REJECTED')) NOT VALID;
+  CHECK (quality IN ('GOOD', 'PARTIAL', 'ESTIMATED', 'MANUAL', 'STALE', 'INVALID')) NOT VALID;
 ALTER TABLE telemetry_runtime.source_observations
   VALIDATE CONSTRAINT source_observations_quality_check;
-ALTER TABLE telemetry_runtime.source_observations
-  ADD CONSTRAINT source_observations_status_quality_check
-  CHECK (
-    (acceptance_status = 'ACCEPTED' AND quality IN ('GOOD', 'SUSPECT'))
-    OR (acceptance_status <> 'ACCEPTED' AND quality = 'REJECTED')
-  ) NOT VALID;
-ALTER TABLE telemetry_runtime.source_observations
-  VALIDATE CONSTRAINT source_observations_status_quality_check;
+-- Ingest acceptance and telemetry quality are independent V2 dimensions.
+-- A duplicate/out-of-order delivery decision must not redefine the quality
+-- classification of an otherwise valid historical fact.
 
 -- Ticket 01's coarse clock guard predates acceptance evidence. Future-clock
 -- candidates must now be persisted as bounded REJECTED evidence regardless of

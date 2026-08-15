@@ -34,7 +34,7 @@ type IDGenerator func() string
 type Session struct {
 	ID                       string
 	Principal                identitycontext.UserPrincipal
-	ActingOrganizationID     string
+	TenantID     string
 	CSRFTokenCiphertext      []byte
 	ProviderTokensCiphertext []byte
 	ExpiresAt                time.Time
@@ -160,7 +160,7 @@ func buildEvent(session Session, mutation MutationContext, messageID, state stri
 		SchemaVersion:     sessionevent.SchemaVersion,
 		MessageType:       sessionevent.MessageType,
 		Producer:          sessionevent.Producer,
-		OrganizationID:    session.ActingOrganizationID,
+		TenantID:          session.TenantID,
 		PartitionKey:      sessionevent.AggregateType + ":" + auditAggregateID,
 		AggregateType:     sessionevent.AggregateType,
 		AggregateID:       auditAggregateID,
@@ -176,7 +176,7 @@ func buildEvent(session Session, mutation MutationContext, messageID, state stri
 			InitiatingIssuer:     session.Principal.Issuer,
 			ExecutingService:     mutation.ExecutingService,
 			ExecutingSPIFFEID:    mutation.ExecutingSPIFFEID,
-			ActingOrganizationID: session.ActingOrganizationID,
+			TenantID: session.TenantID,
 		},
 		Action:         mutation.Action,
 		Result:         mutation.Result,

@@ -40,18 +40,31 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - { name: COMMAND_DISPATCHER_DIAGNOSTICS_ADDR, value: ":19088" }
-            - { name: S3_APPROVED_COHORT_FILE, value: /var/run/hvac/cohort/approved-cohort.json }
             - { name: COMMAND_RUNTIME_URL, value: "https://command-service.s3-certification.svc.cluster.local:8447" }
             - { name: COMMAND_RUNTIME_SERVER_NAME, value: "command-service.s3-certification.svc.cluster.local" }
             - { name: COMMAND_RUNTIME_CLIENT_CERT, value: /var/run/hvac/identity/tls.crt }
             - { name: COMMAND_RUNTIME_CLIENT_KEY, value: /var/run/hvac/identity/tls.key }
             - { name: COMMAND_RUNTIME_SERVER_CA, value: /var/run/hvac/trust/command-service-ca.pem }
-            - name: THINGSBOARD_BASE_URL
-              valueFrom: { configMapKeyRef: { name: s3-target-runtime-config, key: thingsBoardBaseURL } }
-            - name: THINGSBOARD_SERVER_NAME
-              valueFrom: { configMapKeyRef: { name: s3-target-runtime-config, key: thingsBoardServerName } }
-            - { name: THINGSBOARD_SERVER_CA, value: /var/run/hvac/trust/thingsboard-ca.pem }
-            - { name: THINGSBOARD_CREDENTIAL_FILE, value: /var/run/hvac/provider/credential }
+            - name: COMMAND_RUNTIME_ORGANIZATION_ID
+              valueFrom: { configMapKeyRef: { name: s3-approved-cohort, key: organizationId } }
+            - name: COMMAND_RUNTIME_SITE_ID
+              valueFrom: { configMapKeyRef: { name: s3-approved-cohort, key: siteId } }
+            - name: COMMAND_RUNTIME_DEVICE_ID
+              valueFrom: { configMapKeyRef: { name: s3-approved-cohort, key: deviceId } }
+            - name: MQTT_COMMAND_TENANT_ID
+              valueFrom: { configMapKeyRef: { name: s3-approved-cohort, key: tenantId } }
+            - name: MQTT_COMMAND_GATEWAY_ID
+              valueFrom: { configMapKeyRef: { name: s3-target-runtime-config, key: mqttCommandGatewayId } }
+            - name: MQTT_COMMAND_EXTERNAL_DEVICE_ID
+              valueFrom: { configMapKeyRef: { name: s3-approved-cohort, key: externalDeviceId } }
+            - name: MQTT_COMMAND_BROKER_URL
+              valueFrom: { configMapKeyRef: { name: s3-target-runtime-config, key: mqttCommandBrokerURL } }
+            - name: MQTT_COMMAND_SERVER_NAME
+              valueFrom: { configMapKeyRef: { name: s3-target-runtime-config, key: mqttCommandServerName } }
+            - { name: MQTT_COMMAND_CA, value: /var/run/hvac/trust/mqtt-broker-ca.pem }
+            - { name: MQTT_COMMAND_CERT, value: /var/run/hvac/identity/tls.crt }
+            - { name: MQTT_COMMAND_KEY, value: /var/run/hvac/identity/tls.key }
+            - { name: MQTT_COMMAND_CLIENT_ID, value: command-dispatcher }
             - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4318" }
           ports:
             - { name: diagnostics, containerPort: 19088 }
@@ -69,14 +82,9 @@ spec:
             runAsGroup: 65532
             capabilities: { drop: ["ALL"] }
           volumeMounts:
-            - { name: approved-cohort, mountPath: /var/run/hvac/cohort, readOnly: true }
             - { name: workload-identity, mountPath: /var/run/hvac/identity, readOnly: true }
             - { name: trust-bundle, mountPath: /var/run/hvac/trust, readOnly: true }
-            - { name: provider-credential, mountPath: /var/run/hvac/provider, readOnly: true }
       volumes:
-        - name: approved-cohort
-          configMap:
-            name: s3-approved-cohort
         - name: workload-identity
           csi:
             driver: csi.cert-manager.io
@@ -97,9 +105,3 @@ spec:
         - name: trust-bundle
           configMap:
             name: s3-command-trust-bundle
-        - name: provider-credential
-          csi:
-            driver: "[SECRETS_STORE_CSI_DRIVER]"
-            readOnly: true
-            volumeAttributes:
-              "[SECRETS_STORE_CLASS_ATTRIBUTE]": thingsboard-connector-credential

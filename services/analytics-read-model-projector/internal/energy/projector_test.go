@@ -10,7 +10,6 @@ import (
 
 const (
 	testTenantID            = "018f4d00-0000-7000-8000-000000000001"
-	testOrganizationID      = "018f4e00-0000-7000-8000-000000000001"
 	testSiteID              = "018f4e00-1000-7000-8000-000000000001"
 	testDeviceID            = "018f4e00-2000-7000-8000-000000000001"
 	testPointID             = "018f4e00-2100-7000-8000-000000000001"
@@ -82,7 +81,7 @@ func TestBuildFactRejectsInvalidStructuralCandidate(t *testing.T) {
 		mutate func(*Candidate)
 	}{
 		{"missing tenant", func(candidate *Candidate) { candidate.TenantID = "" }},
-		{"missing organization", func(candidate *Candidate) { candidate.OrganizationID = "" }},
+		{"missing site", func(candidate *Candidate) { candidate.SiteID = "" }},
 		{"missing point", func(candidate *Candidate) { candidate.PointID = "" }},
 		{"wrong telemetry key", func(candidate *Candidate) { candidate.TelemetryKey = "chiller.power" }},
 		{"non increasing time", func(candidate *Candidate) { candidate.CurrentSampledAt = candidate.PreviousSampledAt }},
@@ -160,7 +159,6 @@ func validCandidate() Candidate {
 		PreviousObservationID: testPreviousObservation,
 		CurrentObservationID:  testCurrentObservation,
 		TenantID:              testTenantID,
-		OrganizationID:        testOrganizationID,
 		SiteID:                testSiteID,
 		DeviceID:              testDeviceID,
 		PointID:               testPointID,

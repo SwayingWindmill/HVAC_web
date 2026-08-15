@@ -110,13 +110,14 @@ export interface ShellRuntimeEnvironment {
   origin: string;
   now(): number;
   navigate(target: string): void;
+  postNavigate(target: string): void;
   setTimer(handler: () => void, delayMs: number): unknown;
   clearTimer(handle: unknown): void;
 }
 
 type ShellRuntimeClient = Pick<
   PlatformGatewayClient,
-  'getCurrentPrincipal' | 'getPlatformStatus' | 'listOrganizationSites' | 'loginUrl' | 'logout'
+  'getCurrentPrincipal' | 'getPlatformStatus' | 'listSites' | 'loginUrl' | 'logout'
 >;
 
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
@@ -170,6 +171,14 @@ function browserEnvironment(): ShellRuntimeEnvironment {
     origin: window.location.origin,
     now: () => Date.now(),
     navigate: (target) => window.location.assign(target),
+    postNavigate: (target) => {
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = target;
+      form.style.display = 'none';
+      document.body.appendChild(form);
+      form.submit();
+    },
     setTimer: (handler, delayMs) => window.setTimeout(handler, delayMs),
     clearTimer: (handle) => window.clearTimeout(handle as number),
   };
@@ -292,7 +301,7 @@ class BrowserShellRuntime implements ShellRuntime {
 
   beginLogin(): void {
     const loginUrl = this.snapshot.loginUrl ?? this.client.loginUrl({ returnTo: this.returnTo });
-    this.environment.navigate(loginUrl);
+    this.environment.postNavigate(loginUrl);
   }
 
   activateSiteScope(siteId: string): void {
@@ -647,7 +656,6 @@ class BrowserShellRuntime implements ShellRuntime {
     principal: CurrentPrincipalResponse,
     controller: AbortController,
   ): Promise<void> {
-    const actingOrganizationId = principal.context.actingOrganizationId;
     try {
       const sites: Readonly<Site>[] = [];
       const seenSiteIDs = new Set<string>();
@@ -657,8 +665,7 @@ class BrowserShellRuntime implements ShellRuntime {
 
       for (let page = 0; page < MAX_SITE_PAGES; page += 1) {
         const params = cursor ? { limit: SITE_PAGE_LIMIT, cursor } : { limit: SITE_PAGE_LIMIT };
-        const response = await this.client.listOrganizationSites(
-          actingOrganizationId,
+        const response = await this.client.listSites(
           params,
           { signal: controller.signal },
         );
@@ -667,7 +674,7 @@ class BrowserShellRuntime implements ShellRuntime {
         for (const site of response.data.items) {
           if (
             !isUUIDv7(site.id)
-            || site.owningOrganizationId !== actingOrganizationId
+            || !isUUIDv7(site.tenantId)
             || seenSiteIDs.has(site.id)
           ) {
             throw new SiteDiscoveryValidationError('Registry returned an invalid authorized Site collection.');

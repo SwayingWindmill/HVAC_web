@@ -11,7 +11,6 @@ func TestCanonicalRegistrySuccessAcceptsCentralPlantSite(t *testing.T) {
 		"items":[{
 			"id":"018f3e00-1000-7000-8000-000000000001",
 			"tenantId":"018f3d00-0000-7000-8000-000000000001",
-			"owningOrganizationId":"018f3e00-0000-7000-8000-000000000001",
 			"code":"central-plant",
 			"displayName":"中央机房",
 			"timezone":"Asia/Shanghai",

@@ -41,8 +41,7 @@ type DelegationClaims struct {
 	Roles                []string `json:"roles"`
 	ExecutingService     string   `json:"executingService"`
 	Audience             string   `json:"audience"`
-	ActingOrganizationID string   `json:"actingOrganizationId"`
-	TenantID             string   `json:"tenantId,omitempty"`
+	TenantID             string   `json:"tenantId"`
 	Actions              []string `json:"actions"`
 	Scopes               []string `json:"scopes"`
 	PolicyRevision       string   `json:"policyRevision"`
@@ -55,7 +54,7 @@ type DelegationClaims struct {
 type PrincipalContext struct {
 	InitiatingPrincipal       UserPrincipal    `json:"initiatingPrincipal"`
 	ExecutingServicePrincipal ServicePrincipal `json:"executingServicePrincipal"`
-	ActingOrganizationID      string           `json:"actingOrganizationId"`
+	TenantID                  string           `json:"tenantId"`
 	Audience                  string           `json:"audience"`
 	PolicyRevision            string           `json:"policyRevision"`
 	DelegationExpiresAt       string           `json:"delegationExpiresAt"`
@@ -86,7 +85,7 @@ func (response InternalPrincipalResponse) Validate() error {
 	if strings.TrimSpace(response.Principal.Subject) == "" || strings.TrimSpace(response.Principal.Issuer) == "" {
 		return errors.New("principal identity is required")
 	}
-	if strings.TrimSpace(response.Context.ActingOrganizationID) == "" || strings.TrimSpace(response.Context.PolicyRevision) == "" {
+	if strings.TrimSpace(response.Context.TenantID) == "" || strings.TrimSpace(response.Context.PolicyRevision) == "" {
 		return errors.New("principal context is incomplete")
 	}
 	return response.Authorization.Validate()
@@ -217,7 +216,7 @@ func ValidateDelegationFromIssuerAnyScope(
 	if claims.ExpiresAt <= now.Unix() || claims.ExpiresAt-claims.IssuedAt > 60 {
 		return errors.New("delegation is expired or too long-lived")
 	}
-	if claims.Subject == "" || claims.SubjectIssuer == "" || claims.SessionID == "" || claims.TokenID == "" || claims.PolicyRevision == "" {
+	if claims.Subject == "" || claims.SubjectIssuer == "" || claims.TenantID == "" || claims.SessionID == "" || claims.TokenID == "" || claims.PolicyRevision == "" {
 		return errors.New("delegation identity fields are incomplete")
 	}
 	if !containsExact(claims.Actions, action) || len(claims.Actions) != 1 {

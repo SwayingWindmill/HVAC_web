@@ -37,16 +37,16 @@ const (
 )
 
 type DecisionRequest struct {
-	ActingOrganizationID string  `json:"actingOrganizationId"`
-	SiteID               string  `json:"siteId"`
-	WorkOrderID          string  `json:"workOrderId,omitempty"`
-	AssigneeID           *string `json:"assigneeId,omitempty"`
-	TeamID               *string `json:"teamId,omitempty"`
-	Action               Action  `json:"action"`
+	TenantID    string  `json:"tenantId"`
+	SiteID      string  `json:"siteId"`
+	WorkOrderID string  `json:"workOrderId,omitempty"`
+	AssigneeID  *string `json:"assigneeId,omitempty"`
+	TeamID      *string `json:"teamId,omitempty"`
+	Action      Action  `json:"action"`
 }
 
 func (request DecisionRequest) Validate() error {
-	if !workordermodel.IsUUIDv7(request.ActingOrganizationID) || !workordermodel.IsUUIDv7(request.SiteID) {
+	if !workordermodel.IsUUIDv7(request.TenantID) || !workordermodel.IsUUIDv7(request.SiteID) {
 		return errors.New("Work Order authorization scope is invalid")
 	}
 	switch request.Action {
@@ -77,19 +77,19 @@ func (request DecisionRequest) Validate() error {
 }
 
 type Decision struct {
-	Allowed              bool       `json:"allowed"`
-	PrincipalID          string     `json:"principalId,omitempty"`
-	SubjectIssuer        string     `json:"subjectIssuer"`
-	Subject              string     `json:"subject"`
-	ActingOrganizationID string     `json:"actingOrganizationId"`
-	SiteID               string     `json:"siteId"`
-	WorkOrderID          string     `json:"workOrderId,omitempty"`
-	AssigneeID           *string    `json:"assigneeId,omitempty"`
-	TeamID               *string    `json:"teamId,omitempty"`
-	Action               Action     `json:"action"`
-	PolicyRevision       string     `json:"policyRevision"`
-	ReasonCode           ReasonCode `json:"reasonCode"`
-	DecidedAt            string     `json:"decidedAt"`
+	Allowed        bool       `json:"allowed"`
+	PrincipalID    string     `json:"principalId,omitempty"`
+	SubjectIssuer  string     `json:"subjectIssuer"`
+	Subject        string     `json:"subject"`
+	TenantID       string     `json:"tenantId"`
+	SiteID         string     `json:"siteId"`
+	WorkOrderID    string     `json:"workOrderId,omitempty"`
+	AssigneeID     *string    `json:"assigneeId,omitempty"`
+	TeamID         *string    `json:"teamId,omitempty"`
+	Action         Action     `json:"action"`
+	PolicyRevision string     `json:"policyRevision"`
+	ReasonCode     ReasonCode `json:"reasonCode"`
+	DecidedAt      string     `json:"decidedAt"`
 }
 
 func (decision Decision) Validate() error {
@@ -98,12 +98,12 @@ func (decision Decision) Validate() error {
 		return errors.New("Work Order authorization decision evidence is incomplete")
 	}
 	if err := (DecisionRequest{
-		ActingOrganizationID: decision.ActingOrganizationID,
-		SiteID:               decision.SiteID,
-		WorkOrderID:          decision.WorkOrderID,
-		AssigneeID:           decision.AssigneeID,
-		TeamID:               decision.TeamID,
-		Action:               decision.Action,
+		TenantID:    decision.TenantID,
+		SiteID:      decision.SiteID,
+		WorkOrderID: decision.WorkOrderID,
+		AssigneeID:  decision.AssigneeID,
+		TeamID:      decision.TeamID,
+		Action:      decision.Action,
 	}).Validate(); err != nil {
 		return err
 	}

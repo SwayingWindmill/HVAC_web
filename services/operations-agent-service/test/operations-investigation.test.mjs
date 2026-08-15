@@ -11,7 +11,7 @@ import {
 const createInvestigation = () => OperationsInvestigation.create({
   id: 'investigation-001',
   scope: {
-    organizationId: 'organization-001',
+    tenantId: 'organization-001',
     siteId: 'site-001',
     equipmentId: null,
     deviceId: null,
@@ -69,7 +69,7 @@ test('an Investigation starts, pauses, and resumes the same Agent Run with a new
   assert.deepEqual(created.view(), {
     id: 'investigation-001',
     scope: {
-      organizationId: 'organization-001',
+      tenantId: 'organization-001',
       siteId: 'site-001',
       equipmentId: null,
       deviceId: null,

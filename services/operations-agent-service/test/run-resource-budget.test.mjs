@@ -123,7 +123,7 @@ test('one historical query wider than policy is rejected before it can consume T
     requestId: 'energy-wide',
     tool: 'analytics.getEnergySeries',
     input: {
-      organizationId: 'organization-001',
+      tenantId: 'organization-001',
       siteId: 'site-001',
       energyType: 'electricity',
       granularity: 'hour',
@@ -150,7 +150,7 @@ test('parallel Owner results use one stable batch identity and aggregate every c
     requestId: 'owner-result-a',
     owner: 'registry',
     scope: {
-      organizationId: 'organization-001',
+      tenantId: 'organization-001',
       siteId: 'site-001',
       equipmentId: null,
       deviceId: null,
@@ -207,7 +207,7 @@ test('payload exhaustion after accepted Evidence is a bounded partial outcome', 
     requestId: 'owner-small',
     owner: 'registry',
     scope: {
-      organizationId: 'organization-001',
+      tenantId: 'organization-001',
       siteId: 'site-001',
       equipmentId: null,
       deviceId: null,

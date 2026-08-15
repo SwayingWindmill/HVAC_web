@@ -23,7 +23,7 @@ type Config struct {
 	Issuer                      string
 	ClientID                    string
 	RedirectURI                 string
-	DefaultActingOrganizationID string
+	DefaultTenantID string
 	Now                         func() time.Time
 }
 
@@ -32,7 +32,7 @@ type Provider struct {
 	issuer                      string
 	clientID                    string
 	redirectURI                 string
-	defaultActingOrganizationID string
+	defaultTenantID string
 	now                         func() time.Time
 	activeKey                   *rsa.PrivateKey
 	activeKid                   string
@@ -61,7 +61,7 @@ type tokenClaims struct {
 	Name                 string   `json:"name"`
 	Email                string   `json:"email"`
 	Roles                []string `json:"roles"`
-	ActingOrganizationID string   `json:"actingOrganizationId"`
+	TenantID string   `json:"tenantId"`
 	TokenUse             string   `json:"token_use"`
 }
 
@@ -85,15 +85,15 @@ func New(config Config) (*Provider, error) {
 	if now == nil {
 		now = time.Now
 	}
-	defaultActingOrganizationID := strings.TrimSpace(config.DefaultActingOrganizationID)
-	if defaultActingOrganizationID == "" {
-		defaultActingOrganizationID = "org-fixture-01"
+	defaultTenantID := strings.TrimSpace(config.DefaultTenantID)
+	if defaultTenantID == "" {
+		defaultTenantID = "018f3d00-0000-7000-8000-000000000001"
 	}
 	return &Provider{
 		issuer:                      strings.TrimRight(config.Issuer, "/"),
 		clientID:                    config.ClientID,
 		redirectURI:                 config.RedirectURI,
-		defaultActingOrganizationID: defaultActingOrganizationID,
+		defaultTenantID: defaultTenantID,
 		now:                         now,
 		activeKey:                   active,
 		activeKid:                   randomToken(8),
@@ -259,27 +259,27 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 	subject := "fixture-user"
 	name := "Fixture User"
 	email := "fixture.user@example.test"
-	organizationID := provider.defaultActingOrganizationID
+	tenantID := provider.defaultTenantID
 
 	switch code.LoginHint {
 	case "s2-telemetry":
-		organizationID = "018f2e00-1000-7000-8000-000000000003"
+		tenantID = "018f2d00-0000-7000-8000-000000000001"
 	case "admin":
 		subject = "fixture-admin"
 		name = "Fixture Admin"
 		email = "fixture.admin@example.test"
 		roles = []string{"platform-admin"}
-	case "admin-other-organization":
+	case "admin-other-tenant":
 		subject = "fixture-other-admin"
 		name = "Fixture Other Admin"
 		email = "fixture.other.admin@example.test"
 		roles = []string{"platform-admin"}
-		organizationID = "org-fixture-02"
-	case "other-organization":
+		tenantID = "018f3d00-0000-7000-8000-000000000002"
+	case "other-tenant":
 		subject = "fixture-other-user"
 		name = "Fixture Other User"
 		email = "fixture.other@example.test"
-		organizationID = "org-fixture-02"
+		tenantID = "018f3d00-0000-7000-8000-000000000002"
 	case "invalid-issuer":
 		issuer = issuer + "/wrong"
 	case "invalid-audience":
@@ -295,7 +295,7 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 		notBefore = now.Add(time.Hour)
 	case "logto-modern":
 		tokenUse = ""
-		organizationID = ""
+		tenantID = ""
 		roles = nil
 	}
 	claims := tokenClaims{
@@ -309,7 +309,7 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 		Name:                 name,
 		Email:                email,
 		Roles:                roles,
-		ActingOrganizationID: organizationID,
+		TenantID: tenantID,
 		TokenUse:             tokenUse,
 	}
 	idToken, err := provider.signJWT(claims, code.LoginHint == "invalid-signature", code.LoginHint == "unknown-signing-key", code.LoginHint == "logto-modern")

@@ -9,7 +9,6 @@ import (
 )
 
 type FactStatus string
-
 type BindingEffect string
 
 const (
@@ -28,62 +27,58 @@ type PrincipalRecord struct {
 	Status        FactStatus
 }
 
-type OrganizationMembership struct {
-	TenantID       string
-	OrganizationID string
-	Status         FactStatus
-	ValidFrom      time.Time
-	ValidTo        *time.Time
+type TenantMembership struct {
+	TenantID  string
+	Status    FactStatus
+	ValidFrom time.Time
+	ValidTo   *time.Time
 }
 
 type RoleBinding struct {
-	TenantID       string
-	OrganizationID string
-	SiteID         string
-	Actions        []registryauth.Action
-	Effect         BindingEffect
-	Status         FactStatus
-	ValidFrom      time.Time
-	ValidTo        *time.Time
+	TenantID  string
+	SiteID    string
+	Actions   []registryauth.Action
+	Effect    BindingEffect
+	Status    FactStatus
+	ValidFrom time.Time
+	ValidTo   *time.Time
 }
 
 type SiteBinding struct {
-	TenantID             string
-	ActingOrganizationID string
-	OwningOrganizationID string
-	SiteID               string
-	Actions              []registryauth.Action
-	Effect               BindingEffect
-	Status               FactStatus
-	ValidFrom            time.Time
-	ValidTo              *time.Time
+	TenantID  string
+	SiteID    string
+	Actions   []registryauth.Action
+	Effect    BindingEffect
+	Status    FactStatus
+	ValidFrom time.Time
+	ValidTo   *time.Time
 }
 
 type ExplicitDeny struct {
-	TenantID             string
-	ActingOrganizationID string
-	OrganizationID       string
-	SiteID               string
-	Actions              []registryauth.Action
-	Status               FactStatus
-	ValidFrom            time.Time
-	ValidTo              *time.Time
+	TenantID  string
+	SiteID    string
+	Actions   []registryauth.Action
+	Status    FactStatus
+	ValidFrom time.Time
+	ValidTo   *time.Time
 }
 
 type AuthorizationFacts struct {
 	Found          bool
 	PolicyRevision string
 	Principal      PrincipalRecord
-	Memberships    []OrganizationMembership
+	TenantSiteIDs  []string
+	Memberships    []TenantMembership
 	RoleBindings   []RoleBinding
 	SiteBindings   []SiteBinding
 	ExplicitDenies []ExplicitDeny
 }
 
 type AuthorizationLookup struct {
-	SubjectIssuer        string
-	Subject              string
-	ActingOrganizationID string
+	SubjectIssuer string
+	Subject       string
+	TenantID      string
+	At            time.Time
 }
 
 type AuthorizationStore interface {
@@ -119,24 +114,23 @@ func (store *staticAuthorizationStore) LookupRegistryAuthorization(_ context.Con
 
 func evaluateRegistryAuthorization(ctx context.Context, store AuthorizationStore, now time.Time, subjectIssuer, subject string, request registryauth.DecisionRequest) (registryauth.Decision, error) {
 	facts, err := store.LookupRegistryAuthorization(ctx, AuthorizationLookup{
-		SubjectIssuer:        subjectIssuer,
-		Subject:              subject,
-		ActingOrganizationID: request.ActingOrganizationID,
+		SubjectIssuer: subjectIssuer,
+		Subject:       subject,
+		TenantID:      request.TenantID,
+		At:            now,
 	})
 	if err != nil {
 		return registryauth.Decision{}, err
 	}
 	decision := registryauth.Decision{
-		AllowedOrganizationIDs: []string{},
-		AllowedSiteIDs:         []string{},
-		DeniedOrganizationIDs:  []string{},
-		DeniedSiteIDs:          []string{},
-		Actions:                []registryauth.Action{request.Action},
-		PolicyRevision:         facts.PolicyRevision,
-		SubjectIssuer:          subjectIssuer,
-		Subject:                subject,
-		ActingOrganizationID:   request.ActingOrganizationID,
-		DecidedAt:              formatInstant(now),
+		TenantID:       request.TenantID,
+		AllowedSiteIDs: []string{},
+		DeniedSiteIDs:  []string{},
+		Actions:        []registryauth.Action{request.Action},
+		PolicyRevision: facts.PolicyRevision,
+		SubjectIssuer:  subjectIssuer,
+		Subject:        subject,
+		DecidedAt:      formatInstant(now),
 	}
 	if !facts.Found {
 		decision.ReasonCode = registryauth.ReasonDenyPrincipalNotFound
@@ -147,8 +141,8 @@ func evaluateRegistryAuthorization(ctx context.Context, store AuthorizationStore
 		decision.ReasonCode = registryauth.ReasonDenyPrincipalInactive
 		return decision, nil
 	}
-	tenantID, membershipActive, membershipRevoked := tenantMembershipState(facts.Memberships, request.ActingOrganizationID, now)
-	if !membershipActive || tenantID == "" {
+	membershipActive, membershipRevoked := tenantMembershipState(facts.Memberships, request.TenantID, now)
+	if !membershipActive {
 		if membershipRevoked {
 			decision.ReasonCode = registryauth.ReasonDenyMembershipRevoked
 		} else {
@@ -156,110 +150,105 @@ func evaluateRegistryAuthorization(ctx context.Context, store AuthorizationStore
 		}
 		return decision, nil
 	}
-	decision.TenantID = tenantID
 
-	allowedOrganizations := map[string]struct{}{}
+	tenantSites := make(map[string]struct{}, len(facts.TenantSiteIDs))
+	for _, siteID := range facts.TenantSiteIDs {
+		if siteID != "" {
+			tenantSites[siteID] = struct{}{}
+		}
+	}
+	for _, binding := range facts.RoleBindings {
+		if binding.TenantID == request.TenantID && binding.SiteID != "" {
+			tenantSites[binding.SiteID] = struct{}{}
+		}
+	}
+	for _, binding := range facts.SiteBindings {
+		if binding.TenantID == request.TenantID && binding.SiteID != "" {
+			tenantSites[binding.SiteID] = struct{}{}
+		}
+	}
+	for _, deny := range facts.ExplicitDenies {
+		if deny.TenantID == request.TenantID && deny.SiteID != "" {
+			tenantSites[deny.SiteID] = struct{}{}
+		}
+	}
+
 	allowedSites := map[string]struct{}{}
-	allowedSiteOwners := map[string]string{}
-	deniedOrganizations := map[string]struct{}{}
 	deniedSites := map[string]struct{}{}
 	allowReason := registryauth.ReasonCode("")
 
-	if request.Action == registryauth.ActionDeviceBindingList {
-		organizationActions := []registryauth.Action{}
-		roleSiteActions := map[string][]registryauth.Action{}
-		roleSiteOwners := map[string]string{}
-		for _, binding := range facts.RoleBindings {
-			if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != tenantID || binding.OrganizationID != request.ActingOrganizationID || !bindingEffectAllows(binding.Effect) {
-				continue
-			}
-			if binding.SiteID == "" {
-				organizationActions = append(organizationActions, binding.Actions...)
-				continue
-			}
+	tenantRoleActions := []registryauth.Action{}
+	roleSiteActions := map[string][]registryauth.Action{}
+	for _, binding := range facts.RoleBindings {
+		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != request.TenantID || !bindingEffectAllows(binding.Effect) {
+			continue
+		}
+		if binding.SiteID == "" {
+			tenantRoleActions = append(tenantRoleActions, binding.Actions...)
+			continue
+		}
+		if _, known := tenantSites[binding.SiteID]; known {
 			roleSiteActions[binding.SiteID] = append(roleSiteActions[binding.SiteID], binding.Actions...)
-			roleSiteOwners[binding.SiteID] = binding.OrganizationID
 		}
-		if actionsAllow(organizationActions, request.Action) {
-			allowedOrganizations[request.ActingOrganizationID] = struct{}{}
-			allowReason = registryauth.ReasonAllowOrganizationRole
-		}
-		for siteID, siteActions := range roleSiteActions {
-			if !actionsAllow(combineRegistryActions(organizationActions, siteActions), request.Action) {
-				continue
-			}
+	}
+	if actionsAllow(tenantRoleActions, request.Action) {
+		for siteID := range tenantSites {
 			allowedSites[siteID] = struct{}{}
-			allowedSiteOwners[siteID] = roleSiteOwners[siteID]
+		}
+		if len(allowedSites) > 0 {
+			allowReason = registryauth.ReasonAllowTenantRole
+		}
+	}
+	for siteID, siteActions := range roleSiteActions {
+		if actionsAllow(combineRegistryActions(tenantRoleActions, siteActions), request.Action) {
+			allowedSites[siteID] = struct{}{}
 			if allowReason == "" {
 				allowReason = registryauth.ReasonAllowSiteRole
 			}
 		}
+	}
 
-		siteBindingActions := map[string][]registryauth.Action{}
-		siteBindingOwners := map[string]string{}
-		for _, binding := range facts.SiteBindings {
-			if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != tenantID || binding.ActingOrganizationID != request.ActingOrganizationID || !bindingEffectAllows(binding.Effect) {
-				continue
-			}
-			siteBindingActions[binding.SiteID] = append(siteBindingActions[binding.SiteID], binding.Actions...)
-			siteBindingOwners[binding.SiteID] = binding.OwningOrganizationID
+	siteBindingActions := map[string][]registryauth.Action{}
+	for _, binding := range facts.SiteBindings {
+		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != request.TenantID || !bindingEffectAllows(binding.Effect) {
+			continue
 		}
-		for siteID, siteActions := range siteBindingActions {
-			combined := combineRegistryActions(organizationActions, roleSiteActions[siteID], siteActions)
-			if !actionsAllow(combined, request.Action) {
-				continue
-			}
+		if _, known := tenantSites[binding.SiteID]; known {
+			siteBindingActions[binding.SiteID] = append(siteBindingActions[binding.SiteID], binding.Actions...)
+		}
+	}
+	for siteID, siteActions := range siteBindingActions {
+		if actionsAllow(combineRegistryActions(tenantRoleActions, roleSiteActions[siteID], siteActions), request.Action) {
 			allowedSites[siteID] = struct{}{}
-			allowedSiteOwners[siteID] = siteBindingOwners[siteID]
 			if allowReason == "" {
 				allowReason = registryauth.ReasonAllowSiteBinding
-			}
-		}
-	} else {
-		for _, binding := range facts.RoleBindings {
-			if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != tenantID || binding.OrganizationID != request.ActingOrganizationID || !actionsAllow(binding.Actions, request.Action) || !bindingEffectAllows(binding.Effect) {
-				continue
-			}
-			if binding.SiteID == "" {
-				allowedOrganizations[binding.OrganizationID] = struct{}{}
-				allowReason = registryauth.ReasonAllowOrganizationRole
-				continue
-			}
-			if request.Action.SiteScoped() {
-				allowedSites[binding.SiteID] = struct{}{}
-				allowedSiteOwners[binding.SiteID] = binding.OrganizationID
-				if allowReason == "" {
-					allowReason = registryauth.ReasonAllowSiteRole
-				}
-			}
-		}
-
-		if request.Action.SiteScoped() {
-			for _, binding := range facts.SiteBindings {
-				if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != tenantID || binding.ActingOrganizationID != request.ActingOrganizationID || !actionsAllow(binding.Actions, request.Action) || !bindingEffectAllows(binding.Effect) {
-					continue
-				}
-				allowedSites[binding.SiteID] = struct{}{}
-				allowedSiteOwners[binding.SiteID] = binding.OwningOrganizationID
-				if allowReason == "" {
-					allowReason = registryauth.ReasonAllowSiteBinding
-				}
 			}
 		}
 	}
 
 	explicitDenyMatched := false
 	for _, binding := range facts.RoleBindings {
-		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != tenantID || binding.OrganizationID != request.ActingOrganizationID || !actionsDeny(binding.Actions, request.Action) || binding.Effect != BindingEffectDeny {
+		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != request.TenantID || !actionsDeny(binding.Actions, request.Action) || binding.Effect != BindingEffectDeny {
 			continue
 		}
 		explicitDenyMatched = true
-		clear(allowedOrganizations)
-		clear(allowedSites)
-		deniedOrganizations[request.ActingOrganizationID] = struct{}{}
+		if binding.SiteID == "" {
+			clear(allowedSites)
+			for siteID := range tenantSites {
+				deniedSites[siteID] = struct{}{}
+			}
+			continue
+		}
+		if _, known := tenantSites[binding.SiteID]; known {
+			delete(allowedSites, binding.SiteID)
+			deniedSites[binding.SiteID] = struct{}{}
+		}
 	}
 	for _, binding := range facts.SiteBindings {
-		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != tenantID || binding.ActingOrganizationID != request.ActingOrganizationID || !actionsDeny(binding.Actions, request.Action) || binding.Effect != BindingEffectDeny {
+		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != request.TenantID || !actionsDeny(binding.Actions, request.Action) || binding.Effect != BindingEffectDeny {
+			continue
+		}
+		if _, known := tenantSites[binding.SiteID]; !known {
 			continue
 		}
 		explicitDenyMatched = true
@@ -267,34 +256,26 @@ func evaluateRegistryAuthorization(ctx context.Context, store AuthorizationStore
 		deniedSites[binding.SiteID] = struct{}{}
 	}
 	for _, deny := range facts.ExplicitDenies {
-		if deny.Status != FactStatusActive || !factEffective(deny.ValidFrom, deny.ValidTo, now) || deny.TenantID != tenantID || !actionsDeny(deny.Actions, request.Action) {
-			continue
-		}
-		if deny.ActingOrganizationID != "" && deny.ActingOrganizationID != request.ActingOrganizationID {
+		if deny.Status != FactStatusActive || !factEffective(deny.ValidFrom, deny.ValidTo, now) || deny.TenantID != request.TenantID || !actionsDeny(deny.Actions, request.Action) {
 			continue
 		}
 		explicitDenyMatched = true
 		if deny.SiteID != "" {
-			delete(allowedSites, deny.SiteID)
-			deniedSites[deny.SiteID] = struct{}{}
+			if _, known := tenantSites[deny.SiteID]; known {
+				delete(allowedSites, deny.SiteID)
+				deniedSites[deny.SiteID] = struct{}{}
+			}
 			continue
 		}
-		if deny.OrganizationID != "" {
-			delete(allowedOrganizations, deny.OrganizationID)
-			deniedOrganizations[deny.OrganizationID] = struct{}{}
-			for siteID, ownerID := range allowedSiteOwners {
-				if ownerID == deny.OrganizationID {
-					delete(allowedSites, siteID)
-				}
-			}
+		clear(allowedSites)
+		for siteID := range tenantSites {
+			deniedSites[siteID] = struct{}{}
 		}
 	}
 
-	decision.AllowedOrganizationIDs = sortedKeys(allowedOrganizations)
 	decision.AllowedSiteIDs = sortedKeys(allowedSites)
-	decision.DeniedOrganizationIDs = sortedKeys(deniedOrganizations)
 	decision.DeniedSiteIDs = sortedKeys(deniedSites)
-	decision.Allowed = len(decision.AllowedOrganizationIDs) > 0 || len(decision.AllowedSiteIDs) > 0
+	decision.Allowed = len(decision.AllowedSiteIDs) > 0
 	if decision.Allowed {
 		decision.ReasonCode = allowReason
 		return decision, nil
@@ -307,25 +288,24 @@ func evaluateRegistryAuthorization(ctx context.Context, store AuthorizationStore
 	return decision, nil
 }
 
-func membershipState(memberships []OrganizationMembership, organizationID string, now time.Time) (bool, bool) {
-	_, active, revoked := tenantMembershipState(memberships, organizationID, now)
-	return active, revoked
+func membershipState(memberships []TenantMembership, tenantID string, now time.Time) (bool, bool) {
+	return tenantMembershipState(memberships, tenantID, now)
 }
 
-func tenantMembershipState(memberships []OrganizationMembership, organizationID string, now time.Time) (string, bool, bool) {
+func tenantMembershipState(memberships []TenantMembership, tenantID string, now time.Time) (bool, bool) {
 	revoked := false
 	for _, membership := range memberships {
-		if membership.OrganizationID != organizationID {
+		if membership.TenantID != tenantID {
 			continue
 		}
 		if membership.Status == FactStatusRevoked {
 			revoked = true
 		}
 		if membership.Status == FactStatusActive && factEffective(membership.ValidFrom, membership.ValidTo, now) {
-			return membership.TenantID, true, revoked
+			return true, revoked
 		}
 	}
-	return "", false, revoked
+	return false, revoked
 }
 
 func factEffective(validFrom time.Time, validTo *time.Time, now time.Time) bool {
@@ -351,7 +331,7 @@ func actionsAllow(actions []registryauth.Action, requested registryauth.Action) 
 	if requested == registryauth.ActionDeviceBindingList {
 		broadRead := hasRegistryAction(actions, registryauth.ActionRegistryRead)
 		explicitRead := hasRegistryAction(actions, registryauth.ActionDeviceBindingList)
-		constituentReads := hasRegistryAction(actions, registryauth.ActionEquipmentList) && hasRegistryAction(actions, registryauth.ActionDeviceList)
+		constituentReads := hasRegistryAction(actions, registryauth.ActionAssetList) && hasRegistryAction(actions, registryauth.ActionDeviceList)
 		return broadRead || explicitRead || constituentReads
 	}
 	for _, action := range actions {
@@ -365,7 +345,7 @@ func actionsAllow(actions []registryauth.Action, requested registryauth.Action) 
 func actionsDeny(actions []registryauth.Action, requested registryauth.Action) bool {
 	if requested == registryauth.ActionDeviceBindingList {
 		broadDeny := hasRegistryAction(actions, registryauth.ActionRegistryRead) || hasRegistryAction(actions, registryauth.ActionDeviceBindingList)
-		constituentDeny := hasRegistryAction(actions, registryauth.ActionEquipmentList) || hasRegistryAction(actions, registryauth.ActionDeviceList)
+		constituentDeny := hasRegistryAction(actions, registryauth.ActionAssetList) || hasRegistryAction(actions, registryauth.ActionDeviceList)
 		return broadDeny || constituentDeny
 	}
 	return actionsAllow(actions, requested)
@@ -398,7 +378,8 @@ func authorizationIdentityKey(subjectIssuer, subject string) string {
 }
 
 func cloneAuthorizationFacts(value AuthorizationFacts) AuthorizationFacts {
-	value.Memberships = append([]OrganizationMembership(nil), value.Memberships...)
+	value.TenantSiteIDs = append([]string(nil), value.TenantSiteIDs...)
+	value.Memberships = append([]TenantMembership(nil), value.Memberships...)
 	value.RoleBindings = append([]RoleBinding(nil), value.RoleBindings...)
 	for index := range value.RoleBindings {
 		value.RoleBindings[index].Actions = append([]registryauth.Action(nil), value.RoleBindings[index].Actions...)

@@ -49,7 +49,7 @@ export function DeviceRealtimeStatus({
     degraded = true;
   } else if (realtime.phase === 'error') {
     label = '实时连接暂不可用';
-    detail = realtime.error?.message ?? '精确实时订阅无法建立；不会回退到 Legacy、ThingsBoard 或 Socket.IO。';
+    detail = realtime.error?.message ?? '精确实时订阅无法建立；不会回退到 Legacy、Provider 直读或 Socket.IO。';
     degraded = true;
   } else if (state) {
     const description = describeRealAssetsRealtimeState(state);

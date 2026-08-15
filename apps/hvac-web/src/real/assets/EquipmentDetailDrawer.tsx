@@ -61,7 +61,7 @@ type ControlDefinition = ActionControlDefinition | NumericControlDefinition;
 
 function scopedOptions(principal: CurrentPrincipalResponse, site: Readonly<Site>, signal?: AbortSignal, idempotencyKey?: string): ScopedCommandRequestOptions {
   const options = {
-    trustedOrganizationId: principal.context.actingOrganizationId,
+    trustedTenantId: principal.context.tenantId,
     trustedSiteId: site.id,
     signal,
     idempotencyKey,
@@ -117,7 +117,7 @@ function formatInstant(value: string, timeZone: string): string {
 }
 
 function feedbackValue(control: ControlDefinition, equipment: RealAssetsEquipmentRow): string {
-  const feedback = equipment.points.find((candidate) => candidate.point.pointKey === control.feedbackPointKey);
+  const feedback = equipment.points.find((candidate) => candidate.point.pointCode === control.feedbackPointKey);
   if (!feedback?.current) return '未登记反馈点';
   return `${feedback.current.displayValue}${feedback.point.unit ? ` ${formatTelemetryUnit(feedback.point.unit)}` : ''}`;
 }
@@ -136,7 +136,7 @@ function EquipmentControlCard({ site, principal, equipment, control }: {
     enabled: Boolean(sourceWorkOrderId) && principal.authorization.capabilities.includes('work-order.read'),
     staleTime: 10_000,
   });
-  const feedback = equipment.points.find((candidate) => candidate.point.pointKey === control.feedbackPointKey);
+  const feedback = equipment.points.find((candidate) => candidate.point.pointCode === control.feedbackPointKey);
   const feedbackNumber = feedback?.current?.state === 'PRESENT' ? Number(feedback.current.displayValue) : Number.NaN;
   const defaultValue = control.kind === 'NUMBER'
     ? (Number.isFinite(feedbackNumber) ? Math.min(control.maximum, Math.max(control.minimum, feedbackNumber)) : control.minimum)
@@ -331,13 +331,13 @@ export function EquipmentDetailDrawer({
             rowKey={(item) => item.point.id}
             size="small"
             pagination={false}
-            dataSource={row.points.filter((item) => item.point.pointKind === 'STATE' || item.point.pointKind === 'FEEDBACK')}
+            dataSource={row.points.filter((item) => item.point.pointType === 'STATE')}
             columns={[
               { title: '点位', render: (_, item) => item.label },
-              { title: '类型', render: (_, item) => <Tag>{item.point.pointKind}</Tag> },
+              { title: '类型', render: (_, item) => <Tag>{item.point.pointType}</Tag> },
               { title: '当前值', render: (_, item) => item.current ? `${item.current.displayValue}${item.point.unit ? ` ${formatTelemetryUnit(item.point.unit)}` : ''}` : '—' },
             ]}
-            locale={{ emptyText: '没有状态/反馈点位' }}
+            locale={{ emptyText: '没有状态点位' }}
           />
 
           <Typography.Title level={5}>Sensors</Typography.Title>
@@ -400,10 +400,10 @@ export function EquipmentDetailDrawer({
             rowKey={(item) => item.point.id}
             size="small"
             pagination={{ pageSize: 8, showSizeChanger: false }}
-            dataSource={row.points.filter((item) => item.point.pointKind !== 'COMMAND')}
+            dataSource={row.points.filter((item) => item.point.pointType !== 'COMMAND')}
             columns={[
               { title: '点位', render: (_, item) => item.label },
-              { title: '类型', render: (_, item) => <Tag>{item.point.pointKind}</Tag> },
+              { title: '类型', render: (_, item) => <Tag>{item.point.pointType}</Tag> },
               { title: 'Sensor', render: (_, item) => item.sensor?.displayName ?? '设备内部/计算' },
               { title: '当前值', render: (_, item) => item.current ? `${item.current.displayValue}${item.point.unit ? ` ${formatTelemetryUnit(item.point.unit)}` : ''}` : '—' },
             ]}

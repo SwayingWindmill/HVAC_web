@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/services/analytics-read-model-projector/pkg/analyticsprojector"
 	"github.com/quanlaihe/hvac-web/services/telemetry-runtime-service/internal/telemetry"
 )
 
@@ -58,6 +60,42 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+
+	latestCache, latestRelay, latestContext, latestCancel, err := loadLatestCache(store)
+	if err != nil {
+		logger.Error("telemetry_latest_cache_configuration_invalid", "error_code", "TELEMETRY_LATEST_CACHE_CONFIGURATION_INVALID")
+		os.Exit(1)
+	}
+	if latestCache != nil {
+		defer func() { _ = latestCache.Close() }()
+	}
+	if latestCancel != nil {
+		defer latestCancel()
+		go runLatestCacheRelay(latestContext, latestRelay, logger)
+	}
+
+	historyRepository, historyRelay, historyContext, historyCancel, err := loadHistoryProjection()
+	if err != nil {
+		logger.Error("telemetry_history_projection_configuration_invalid", "error_code", "TELEMETRY_HISTORY_PROJECTION_CONFIGURATION_INVALID")
+		os.Exit(1)
+	}
+	if historyRepository != nil {
+		defer historyRepository.Close()
+	}
+	if historyCancel != nil {
+		defer historyCancel()
+		go runHistoryProjection(historyContext, historyRelay, logger)
+	}
+
+	analyticsProjector, analyticsContext, analyticsCancel, err := loadAnalyticsProjection()
+	if err != nil {
+		logger.Error("analytics_projection_configuration_invalid", "error_code", "ANALYTICS_PROJECTION_CONFIGURATION_INVALID")
+		os.Exit(1)
+	}
+	if analyticsCancel != nil {
+		defer analyticsCancel()
+		go runAnalyticsProjection(analyticsContext, analyticsProjector, observabilityRuntime, logger)
+	}
 
 	sourceAuthenticator, err := telemetry.ParseSourceAuthenticatorJSON(requiredEnv("TELEMETRY_SOURCE_BINDINGS_JSON"))
 	if err != nil {
@@ -103,16 +141,18 @@ func main() {
 			Store: store, Authorizer: authorizer,
 			AllowedGatewaySPIFFE: envOr("TELEMETRY_ALLOWED_GATEWAY_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 			RuntimeAudience:      envOr("TELEMETRY_GRANT_AUDIENCE", "telemetry-runtime-service"),
-			ObservationAcceptor:  store, CoverageReporter: store, SourceAuthenticator: sourceAuthenticator,
-			Realtime:                      realtimeService,
-			AllowedCentrifugoSPIFFE:       envOr("TELEMETRY_ALLOWED_CENTRIFUGO_SPIFFE", "spiffe://hvac.local/centrifugo"),
-			CentrifugoProxySecret:         strings.TrimSpace(os.Getenv("TELEMETRY_CENTRIFUGO_PROXY_SECRET")),
-			AllowedIAMSPIFFE:              envOr("TELEMETRY_ALLOWED_IAM_SPIFFE", "spiffe://hvac.local/iam-service"),
-			AllowedCommandVerifierSPIFFE:  strings.TrimSpace(os.Getenv("TELEMETRY_ALLOWED_COMMAND_VERIFIER_SPIFFE")),
-			CommandVerifierOrganizationID: strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_ORGANIZATION_ID")),
-			CommandVerifierSiteID:         strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_SITE_ID")),
-			CommandVerifierDeviceID:       strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_DEVICE_ID")),
-			Metrics:                       observabilityRuntime.Metrics,
+			ObservationAcceptor:  store, CoverageReporter: store, MQTTEvidenceAcceptor: store, SourceAuthenticator: sourceAuthenticator,
+			Realtime:                       realtimeService,
+			LatestCache:                    latestCache,
+			AllowedCentrifugoSPIFFE:        envOr("TELEMETRY_ALLOWED_CENTRIFUGO_SPIFFE", "spiffe://hvac.local/centrifugo"),
+			CentrifugoProxySecret:          strings.TrimSpace(os.Getenv("TELEMETRY_CENTRIFUGO_PROXY_SECRET")),
+			AllowedIAMSPIFFE:               envOr("TELEMETRY_ALLOWED_IAM_SPIFFE", "spiffe://hvac.local/iam-service"),
+			AllowedCommandVerifierSPIFFE:   strings.TrimSpace(os.Getenv("TELEMETRY_ALLOWED_COMMAND_VERIFIER_SPIFFE")),
+			AllowedCommandDispatcherSPIFFE: strings.TrimSpace(os.Getenv("TELEMETRY_ALLOWED_COMMAND_DISPATCHER_SPIFFE")),
+			CommandVerifierTenantID:        strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_TENANT_ID")),
+			CommandVerifierSiteID:          strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_SITE_ID")),
+			CommandVerifierDeviceID:        strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_DEVICE_ID")),
+			Metrics:                        observabilityRuntime.Metrics,
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate},
@@ -153,6 +193,225 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("telemetry_runtime_stopped", "service", "telemetry-runtime-service")
+}
+
+func loadLatestCache(store *telemetry.PostgresStore) (telemetry.LatestCache, *telemetry.LatestCacheRelay, context.Context, context.CancelFunc, error) {
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_LATEST_CACHE_ENABLED")), "true") {
+		return nil, nil, context.Background(), nil, nil
+	}
+	openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
+	cache, err := telemetry.OpenRedisLatestCache(openContext, telemetry.RedisLatestCacheConfig{
+		URL:       requiredEnv("TELEMETRY_LATEST_CACHE_REDIS_URL"),
+		KeyPrefix: strings.TrimSpace(os.Getenv("TELEMETRY_LATEST_CACHE_KEY_PREFIX")),
+	})
+	cancelOpen()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	rebuildContext, cancelRebuild := context.WithTimeout(context.Background(), 30*time.Second)
+	_, err = telemetry.RebuildLatestCache(rebuildContext, store, cache)
+	cancelRebuild()
+	if err != nil {
+		_ = cache.Close()
+		return nil, nil, nil, nil, err
+	}
+	relay, err := telemetry.NewLatestCacheRelay(store, cache, time.Now)
+	if err != nil {
+		_ = cache.Close()
+		return nil, nil, nil, nil, err
+	}
+	relayContext, relayCancel := context.WithCancel(context.Background())
+	return cache, relay, relayContext, relayCancel, nil
+}
+
+func runLatestCacheRelay(ctx context.Context, relay *telemetry.LatestCacheRelay, logger *slog.Logger) {
+	if relay == nil {
+		return
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	lastFailureLog := time.Time{}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			materialized, err := relay.RelayOnce(ctx, 64)
+			if err != nil {
+				if time.Since(lastFailureLog) >= time.Second {
+					logger.Warn("telemetry_latest_cache_relay_failed", "error_code", "TELEMETRY_LATEST_CACHE_RELAY_FAILED")
+					lastFailureLog = time.Now()
+				}
+				continue
+			}
+			if materialized > 0 {
+				logger.Info("telemetry_latest_cache_relay_batch_materialized", "materialized_count", materialized)
+			}
+		}
+	}
+}
+
+func loadHistoryProjection() (*telemetry.HistoryPostgresRepository, *telemetry.HistoryRelay, context.Context, context.CancelFunc, error) {
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_HISTORY_PROJECTION_ENABLED")), "true") {
+		return nil, nil, context.Background(), nil, nil
+	}
+	openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
+	repository, err := telemetry.OpenHistoryPostgresRepository(openContext, requiredEnv("TELEMETRY_HISTORY_DATABASE_URL"))
+	cancelOpen()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	sink, err := telemetry.NewClickHouseHistorySink(telemetry.ClickHouseHistoryConfig{
+		BaseURL:  requiredEnv("TELEMETRY_CLICKHOUSE_HTTP_URL"),
+		Database: envOr("TELEMETRY_CLICKHOUSE_DATABASE", "telemetry_history"),
+		Table:    envOr("TELEMETRY_CLICKHOUSE_TABLE", "observations"),
+		Username: strings.TrimSpace(os.Getenv("TELEMETRY_CLICKHOUSE_USERNAME")),
+		Password: os.Getenv("TELEMETRY_CLICKHOUSE_PASSWORD"),
+	})
+	if err != nil {
+		repository.Close()
+		return nil, nil, nil, nil, err
+	}
+	relay, err := telemetry.NewHistoryRelay(telemetry.HistoryRelayConfig{
+		Repository:  repository,
+		Sink:        sink,
+		BatchSize:   integerEnv("TELEMETRY_HISTORY_BATCH_SIZE", 256, 1, 4096),
+		LeaseFor:    durationEnv("TELEMETRY_HISTORY_LEASE_DURATION", 30*time.Second, time.Second, 10*time.Minute),
+		RetryAfter:  durationEnv("TELEMETRY_HISTORY_RETRY_DELAY", 5*time.Second, time.Second, time.Hour),
+		MaxAttempts: integerEnv("TELEMETRY_HISTORY_MAX_ATTEMPTS", 12, 1, 100),
+	})
+	if err != nil {
+		repository.Close()
+		return nil, nil, nil, nil, err
+	}
+	relayContext, relayCancel := context.WithCancel(context.Background())
+	return repository, relay, relayContext, relayCancel, nil
+}
+
+func runHistoryProjection(ctx context.Context, relay *telemetry.HistoryRelay, logger *slog.Logger) {
+	if relay == nil {
+		return
+	}
+	pollInterval := durationEnv("TELEMETRY_HISTORY_POLL_INTERVAL", 250*time.Millisecond, 25*time.Millisecond, time.Minute)
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	lastFailureLog := time.Time{}
+	logger.Info("telemetry_history_projection_started", "poll_interval", pollInterval.String())
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			relayContext, relayCancel := context.WithTimeout(ctx, 15*time.Second)
+			published, err := relay.RelayOnce(relayContext)
+			relayCancel()
+			if err != nil {
+				if time.Since(lastFailureLog) >= time.Second {
+					logger.Warn("telemetry_history_projection_failed", "error_code", "TELEMETRY_HISTORY_PROJECTION_FAILED")
+					lastFailureLog = time.Now()
+				}
+				continue
+			}
+			if published > 0 {
+				logger.Info("telemetry_history_batch_projected", "observation_count", published)
+			}
+		}
+	}
+}
+
+func loadAnalyticsProjection() (*analyticsprojector.Projector, context.Context, context.CancelFunc, error) {
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("ANALYTICS_PROJECTION_ENABLED")), "true") {
+		return nil, context.Background(), nil, nil
+	}
+	httpClient, err := newAnalyticsHTTPClient(strings.TrimSpace(os.Getenv("ANALYTICS_CLICKHOUSE_CA")))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	baseURL := requiredEnv("ANALYTICS_CLICKHOUSE_HTTP_URL")
+	reader, err := analyticsprojector.NewReader(analyticsprojector.ReaderConfig{
+		BaseURL:           baseURL,
+		SourceDatabase:    envOr("ANALYTICS_SOURCE_DATABASE", "telemetry_history"),
+		SourceTable:       envOr("ANALYTICS_SOURCE_TABLE", "observations"),
+		AnalyticsDatabase: envOr("ANALYTICS_DATABASE", "analytics"),
+		AnalyticsTable:    envOr("ANALYTICS_ENERGY_TABLE", "energy_interval_facts"),
+		Username:          strings.TrimSpace(os.Getenv("ANALYTICS_CLICKHOUSE_READER_USERNAME")),
+		Password:          os.Getenv("ANALYTICS_CLICKHOUSE_READER_PASSWORD"),
+		HTTPClient:        httpClient,
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	writer, err := analyticsprojector.NewWriter(analyticsprojector.WriterConfig{
+		BaseURL:    baseURL,
+		Database:   envOr("ANALYTICS_DATABASE", "analytics"),
+		Table:      envOr("ANALYTICS_ENERGY_TABLE", "energy_interval_facts"),
+		Username:   strings.TrimSpace(os.Getenv("ANALYTICS_CLICKHOUSE_WRITER_USERNAME")),
+		Password:   os.Getenv("ANALYTICS_CLICKHOUSE_WRITER_PASSWORD"),
+		HTTPClient: httpClient,
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	projector, err := analyticsprojector.NewProjector(analyticsprojector.ProjectorConfig{
+		Source: reader, Sink: writer, BatchSize: integerEnv("ANALYTICS_PROJECTOR_BATCH_SIZE", 256, 1, 4096),
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	projectionContext, projectionCancel := context.WithCancel(context.Background())
+	return projector, projectionContext, projectionCancel, nil
+}
+
+func runAnalyticsProjection(ctx context.Context, projector *analyticsprojector.Projector, runtime *observability.Runtime, logger *slog.Logger) {
+	if projector == nil {
+		return
+	}
+	pollInterval := durationEnv("ANALYTICS_PROJECTOR_POLL_INTERVAL", 500*time.Millisecond, 25*time.Millisecond, time.Minute)
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	lastFailureLog := time.Time{}
+	logger.Info("analytics_read_model_projection_started", "poll_interval", pollInterval.String(), "deployment", "telemetry-runtime-in-process")
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			projectionContext, span := runtime.Tracer.Start(ctx, "analytics.energy_interval.project", observability.SpanKindInternal, map[string]any{
+				"db.system": "clickhouse", "analytics.model": "energy_interval_facts",
+			})
+			projectContext, projectCancel := context.WithTimeout(projectionContext, 20*time.Second)
+			projected, err := projector.ProjectOnce(projectContext)
+			projectCancel()
+			if err != nil {
+				span.SetStatus("error", "projection failed")
+				span.End()
+				_ = runtime.Metrics.AddCounter("hvac_analytics_projection_failures_total", "Failed analytics read-model projection batches.", map[string]string{"model": "energy_interval_facts"}, 1)
+				if time.Since(lastFailureLog) >= time.Second {
+					logger.Warn("analytics_energy_projection_failed", "error_code", "ANALYTICS_ENERGY_PROJECTION_FAILED")
+					lastFailureLog = time.Now()
+				}
+				continue
+			}
+			span.SetStatus("ok", "")
+			span.End()
+			if projected > 0 {
+				_ = runtime.Metrics.AddCounter("hvac_analytics_energy_intervals_projected_total", "Projected additive energy intervals.", map[string]string{"energy_type": analyticsprojector.EnergyTypeElectricity}, float64(projected))
+				logger.Info("analytics_energy_intervals_projected", "interval_count", projected)
+			}
+		}
+	}
+}
+
+func newAnalyticsHTTPClient(caPath string) (*http.Client, error) {
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS13}
+	if caPath != "" {
+		roots, err := loadCertPool(caPath)
+		if err != nil {
+			return nil, err
+		}
+		tlsConfig.RootCAs = roots
+	}
+	return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsConfig}}, nil
 }
 
 func loadRealtimeService(store *telemetry.PostgresStore, certificate tls.Certificate, metrics *observability.Registry) (*telemetry.RealtimeService, context.Context, context.CancelFunc, error) {
@@ -269,4 +528,30 @@ func requiredEnv(name string) string {
 		os.Exit(1)
 	}
 	return value
+}
+
+func integerEnv(name string, fallback, minimum, maximum int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < minimum || parsed > maximum {
+		_, _ = os.Stderr.WriteString(name + " is invalid\n")
+		os.Exit(1)
+	}
+	return parsed
+}
+
+func durationEnv(name string, fallback, minimum, maximum time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed < minimum || parsed > maximum {
+		_, _ = os.Stderr.WriteString(name + " is invalid\n")
+		os.Exit(1)
+	}
+	return parsed
 }

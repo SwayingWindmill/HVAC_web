@@ -12,7 +12,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
-func TestPostgresStoreAppliesOrganizationAndSiteRLSWithStablePagination(t *testing.T) {
+func TestPostgresStoreAppliesTenantAndExactSiteRLSWithStablePagination(t *testing.T) {
 	databaseURL := os.Getenv("S1_CORE_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("S1_CORE_DATABASE_URL is not configured")
@@ -25,39 +25,37 @@ func TestPostgresStoreAppliesOrganizationAndSiteRLSWithStablePagination(t *testi
 	}
 	defer store.Close()
 
-	organizationClaims := integrationClaims(registryauth.ActionOrganizationList)
-	organizationClaims.AllowedOrganizationIDs = []string{testOrganizationA, testOrganizationB}
-	first, err := store.ListOrganizations(ctx, organizationClaims, PageRequest{Limit: 1})
+	siteClaims := integrationClaims(registryauth.ActionSiteList)
+	siteClaims.AllowedSiteIDs = []string{testSiteA1, testSiteA2}
+	first, err := store.ListSites(ctx, siteClaims, PageRequest{Limit: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Items) != 1 || !first.HasMore || first.Items[0].ID != testOrganizationA {
-		t.Fatalf("first page = %#v", first)
+	if len(first.Items) != 1 || !first.HasMore || first.Items[0].ID != testSiteA1 {
+		t.Fatalf("first Site page = %#v", first)
 	}
-	second, err := store.ListOrganizations(ctx, organizationClaims, PageRequest{Limit: 1, DisplayName: first.Items[0].DisplayName, ID: first.Items[0].ID})
+	second, err := store.ListSites(ctx, siteClaims, PageRequest{Limit: 1, DisplayName: first.Items[0].DisplayName, ID: first.Items[0].ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(second.Items) != 1 || second.HasMore || second.Items[0].ID != testOrganizationB {
-		t.Fatalf("second page = %#v", second)
+	if len(second.Items) != 1 || second.HasMore || second.Items[0].ID != testSiteA2 {
+		t.Fatalf("second Site page = %#v", second)
 	}
 
-	siteClaims := integrationClaims(registryauth.ActionSiteList)
-	siteClaims.AllowedOrganizationIDs = nil
-	siteClaims.AllowedSiteIDs = []string{testSiteA1}
-	sites, err := store.ListSites(ctx, siteClaims, testOrganizationA, PageRequest{Limit: 10})
+	exactSiteClaims := integrationClaims(registryauth.ActionSiteList)
+	exactSiteClaims.AllowedSiteIDs = []string{testSiteA1}
+	sites, err := store.ListSites(ctx, exactSiteClaims, PageRequest{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(sites.Items) != 1 || sites.Items[0].ID != testSiteA1 {
-		t.Fatalf("site-scoped list = %#v", sites)
+		t.Fatalf("exact Site list = %#v", sites)
 	}
 
 	deniedSiteClaims := integrationClaims(registryauth.ActionSiteList)
-	deniedSiteClaims.AllowedOrganizationIDs = []string{testOrganizationA}
-	deniedSiteClaims.AllowedSiteIDs = nil
+	deniedSiteClaims.AllowedSiteIDs = []string{testSiteA1, testSiteA2}
 	deniedSiteClaims.DeniedSiteIDs = []string{testSiteA2}
-	allowedSites, err := store.ListSites(ctx, deniedSiteClaims, testOrganizationA, PageRequest{Limit: 10})
+	allowedSites, err := store.ListSites(ctx, deniedSiteClaims, PageRequest{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,21 +67,13 @@ func TestPostgresStoreAppliesOrganizationAndSiteRLSWithStablePagination(t *testi
 		t.Fatalf("explicitly denied Site error = %v", err)
 	}
 
-	deniedOrganizationClaims := integrationClaims(registryauth.ActionSiteRead)
-	deniedOrganizationClaims.AllowedOrganizationIDs = nil
-	deniedOrganizationClaims.AllowedSiteIDs = []string{testSiteA1}
-	deniedOrganizationClaims.DeniedOrganizationIDs = []string{testOrganizationA}
-	if _, err := store.GetSite(ctx, deniedOrganizationClaims, testSiteA1); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("organization-denied Site error = %v", err)
-	}
-
-	detailClaims := siteClaims
+	detailClaims := exactSiteClaims
 	detailClaims.Actions = []registryauth.Action{registryauth.ActionSiteRead}
 	if _, err := store.GetSite(ctx, detailClaims, testSiteA2); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("sibling Site error = %v", err)
 	}
 
-	equipmentClaims := siteClaims
+	equipmentClaims := exactSiteClaims
 	equipmentClaims.Actions = []registryauth.Action{registryauth.ActionEquipmentList}
 	equipment, err := store.ListEquipment(ctx, equipmentClaims, testSiteA1, PageRequest{Limit: 10})
 	if err != nil {
@@ -93,7 +83,7 @@ func TestPostgresStoreAppliesOrganizationAndSiteRLSWithStablePagination(t *testi
 		t.Fatalf("site-scoped equipment = %#v", equipment)
 	}
 	deniedEquipmentClaims := integrationClaims(registryauth.ActionEquipmentList)
-	deniedEquipmentClaims.AllowedOrganizationIDs = []string{testOrganizationA}
+	deniedEquipmentClaims.AllowedSiteIDs = []string{testSiteA1}
 	deniedEquipmentClaims.DeniedSiteIDs = []string{testSiteA1}
 	deniedEquipment, err := store.ListEquipment(ctx, deniedEquipmentClaims, testSiteA1, PageRequest{Limit: 10})
 	if err != nil {
@@ -103,7 +93,7 @@ func TestPostgresStoreAppliesOrganizationAndSiteRLSWithStablePagination(t *testi
 		t.Fatalf("denied equipment = %#v", deniedEquipment)
 	}
 
-	deviceClaims := siteClaims
+	deviceClaims := exactSiteClaims
 	deviceClaims.Actions = []registryauth.Action{registryauth.ActionDeviceList}
 	devices, err := store.ListDevices(ctx, deviceClaims, testSiteA1, PageRequest{Limit: 10})
 	if err != nil {
@@ -113,7 +103,7 @@ func TestPostgresStoreAppliesOrganizationAndSiteRLSWithStablePagination(t *testi
 		t.Fatalf("site-scoped devices = %#v", devices)
 	}
 	deniedDeviceClaims := integrationClaims(registryauth.ActionDeviceList)
-	deniedDeviceClaims.AllowedOrganizationIDs = []string{testOrganizationA}
+	deniedDeviceClaims.AllowedSiteIDs = []string{testSiteA1}
 	deniedDeviceClaims.DeniedSiteIDs = []string{testSiteA1}
 	deniedDevices, err := store.ListDevices(ctx, deniedDeviceClaims, testSiteA1, PageRequest{Limit: 10})
 	if err != nil {
@@ -123,7 +113,7 @@ func TestPostgresStoreAppliesOrganizationAndSiteRLSWithStablePagination(t *testi
 		t.Fatalf("denied devices = %#v", deniedDevices)
 	}
 
-	bindingClaims := siteClaims
+	bindingClaims := exactSiteClaims
 	bindingClaims.Actions = []registryauth.Action{registryauth.ActionDeviceBindingList}
 	bindings, err := store.ListDeviceBindings(ctx, bindingClaims, testSiteA1, PageRequest{Limit: 10})
 	if err != nil {
@@ -133,7 +123,7 @@ func TestPostgresStoreAppliesOrganizationAndSiteRLSWithStablePagination(t *testi
 		t.Fatalf("site-scoped DeviceBindings = %#v", bindings)
 	}
 	deniedBindingClaims := integrationClaims(registryauth.ActionDeviceBindingList)
-	deniedBindingClaims.AllowedOrganizationIDs = []string{testOrganizationA}
+	deniedBindingClaims.AllowedSiteIDs = []string{testSiteA1}
 	deniedBindingClaims.DeniedSiteIDs = []string{testSiteA1}
 	deniedBindings, err := store.ListDeviceBindings(ctx, deniedBindingClaims, testSiteA1, PageRequest{Limit: 10})
 	if err != nil {
@@ -162,14 +152,14 @@ func TestPostgresBackedServerRejectsWrongActionStaleAndRevokedGrants(t *testing.
 		claims registryauth.GrantClaims
 		status GrantStatusProvider
 	}{
-		{"wrong action", integrationClaims(registryauth.ActionOrganizationRead), StaticGrantStatusProvider{PolicyRevision: testPolicy}},
-		{"stale policy", integrationClaims(registryauth.ActionOrganizationList), StaticGrantStatusProvider{PolicyRevision: "registry-read:2"}},
-		{"revoked", integrationClaims(registryauth.ActionOrganizationList), StaticGrantStatusProvider{PolicyRevision: testPolicy, RevokedTokenIDs: map[string]struct{}{"grant-1": {}}}},
+		{"wrong action", integrationClaims(registryauth.ActionDeviceRead), StaticGrantStatusProvider{PolicyRevision: testPolicy}},
+		{"stale policy", integrationClaims(registryauth.ActionSiteList), StaticGrantStatusProvider{PolicyRevision: "registry-read:2"}},
+		{"revoked", integrationClaims(registryauth.ActionSiteList), StaticGrantStatusProvider{PolicyRevision: testPolicy, RevokedTokenIDs: map[string]struct{}{"grant-1": {}}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			harness := newCoreHarness(t, now, store, test.status)
-			response := harness.serve(t, http.MethodGet, RegistryPathPrefix+"organizations", test.claims, nil)
+			response := harness.serve(t, http.MethodGet, RegistryPathPrefix+"sites", test.claims, nil)
 			if response.Code != http.StatusForbidden {
 				t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
 			}

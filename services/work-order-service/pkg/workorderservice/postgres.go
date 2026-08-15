@@ -108,12 +108,12 @@ func (store *PostgresStore) List(ctx context.Context, organizationID, siteID str
 		cursorID = position.WorkOrderID
 	}
 	rows, err := tx.Query(ctx, `
-		SELECT work_order_id, organization_id, site_id, title, description, priority, status,
+		SELECT work_order_id, tenant_id, site_id, title, description, priority, status,
 		       assignee_id, team_id, scheduled_start, due_at,
 		       task_total, task_completed, task_blocked, note_count, attachment_count,
 		       version, created_at, updated_at
 		FROM work_order_runtime.work_order_current
-		WHERE organization_id = $1
+		WHERE tenant_id = $1
 		  AND site_id = $2
 		  AND ($3 = '' OR status = $3)
 		  AND ($4 = '' OR priority = $4)
@@ -193,13 +193,10 @@ func (store *PostgresStore) Get(ctx context.Context, organizationID, siteID, wor
 	return workOrder, nil
 }
 
-func (store *PostgresStore) beginReadTransaction(ctx context.Context, organizationID string) (pgx.Tx, error) {
-	tenantID, ok := identitycontext.TenantIDFromContext(ctx)
-	if !ok || !workordermodel.IsUUIDv7(tenantID) || !workordermodel.IsUUIDv7(organizationID) {
+func (store *PostgresStore) beginReadTransaction(ctx context.Context, tenantID string) (pgx.Tx, error) {
+	contextTenantID, ok := identitycontext.TenantIDFromContext(ctx)
+	if !ok || !workordermodel.IsUUIDv7(tenantID) || contextTenantID != tenantID {
 		return nil, ErrUnavailable
-	}
-	if err := ensureWorkOrderTenantBinding(ctx, store.readPool, "s5_work_order_runtime", tenantID, organizationID); err != nil {
-		return nil, err
 	}
 	tx, err := store.readPool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
@@ -209,56 +206,21 @@ func (store *PostgresStore) beginReadTransaction(ctx context.Context, organizati
 		_ = tx.Rollback(ctx)
 		return nil, fmt.Errorf("activate Work Order read role: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true), set_config('app.tenant_id', $2, true)`, organizationID, tenantID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, tenantID); err != nil {
 		_ = tx.Rollback(ctx)
 		return nil, fmt.Errorf("activate Work Order Tenant/Organization scope: %w", err)
 	}
 	return tx, nil
 }
 
-func ensureWorkOrderTenantBinding(ctx context.Context, pool *pgxpool.Pool, role, tenantID, organizationID string) error {
-	if pool == nil || !workordermodel.IsUUIDv7(tenantID) || !workordermodel.IsUUIDv7(organizationID) {
-		return ErrUnavailable
-	}
-	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadWrite})
-	if err != nil {
-		return fmt.Errorf("begin Work Order Tenant binding transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SET LOCAL ROLE `+role); err != nil {
-		return fmt.Errorf("activate Work Order Tenant binding role: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true), set_config('app.tenant_id', $2, true)`, organizationID, tenantID); err != nil {
-		return fmt.Errorf("activate Work Order Tenant binding scope: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-INSERT INTO work_order_runtime.organization_tenant_scope (organization_id, tenant_id, created_at, updated_at)
-VALUES ($1::uuid, $2::uuid, now(), now())
-ON CONFLICT (organization_id) DO NOTHING
-`, organizationID, tenantID); err != nil {
-		return fmt.Errorf("bind Work Order Organization to Tenant: %w", err)
-	}
-	var storedTenantID string
-	if err := tx.QueryRow(ctx, `SELECT tenant_id::text FROM work_order_runtime.organization_tenant_scope WHERE organization_id = $1::uuid`, organizationID).Scan(&storedTenantID); err != nil {
-		return fmt.Errorf("read Work Order Organization Tenant binding: %w", err)
-	}
-	if storedTenantID != tenantID {
-		return ErrUnavailable
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit Work Order Tenant binding: %w", err)
-	}
-	return nil
-}
-
 func getCurrentRecord(ctx context.Context, tx pgx.Tx, organizationID, siteID, workOrderID string) (currentRecord, error) {
 	record, err := scanCurrentRecord(tx.QueryRow(ctx, `
-		SELECT work_order_id, organization_id, site_id, title, description, priority, status,
+		SELECT work_order_id, tenant_id, site_id, title, description, priority, status,
 		       assignee_id, team_id, scheduled_start, due_at,
 		       task_total, task_completed, task_blocked, note_count, attachment_count,
 		       version, created_at, updated_at
 		FROM work_order_runtime.work_order_current
-		WHERE organization_id = $1 AND site_id = $2 AND work_order_id = $3
+		WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3
 	`, organizationID, siteID, workOrderID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return currentRecord{}, ErrNotFound
@@ -278,7 +240,7 @@ func scanCurrentRecord(scanner rowScanner) (currentRecord, error) {
 	var taskTotal, taskCompleted, taskBlocked, noteCount, attachmentCount int64
 	var createdAt, updatedAt time.Time
 	if err := scanner.Scan(
-		&record.workOrder.WorkOrderID, &record.workOrder.OrganizationID, &record.workOrder.SiteID,
+		&record.workOrder.WorkOrderID, &record.workOrder.TenantID, &record.workOrder.SiteID,
 		&record.workOrder.Title, &record.workOrder.Description, &record.workOrder.Priority, &record.workOrder.Status,
 		&assigneeID, &teamID, &scheduledStart, &dueAt,
 		&taskTotal, &taskCompleted, &taskBlocked, &noteCount, &attachmentCount,
@@ -309,9 +271,9 @@ func hydrateProjection(ctx context.Context, tx pgx.Tx, record currentRecord) (wo
 	sourceRows, err := tx.Query(ctx, `
 		SELECT source_domain, source_resource_id, relationship
 		FROM work_order_runtime.work_order_source_reference
-		WHERE organization_id = $1 AND site_id = $2 AND work_order_id = $3
+		WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3
 		ORDER BY relationship ASC, source_domain ASC, source_resource_id ASC
-	`, workOrder.OrganizationID, workOrder.SiteID, workOrder.WorkOrderID)
+	`, workOrder.TenantID, workOrder.SiteID, workOrder.WorkOrderID)
 	if err != nil {
 		return workordermodel.WorkOrder{}, fmt.Errorf("read Work Order sources: %w", err)
 	}
@@ -333,9 +295,9 @@ func hydrateProjection(ctx context.Context, tx pgx.Tx, record currentRecord) (wo
 		SELECT operation, from_status, to_status, reason, actor_type, actor_id,
 		       assignee_id, team_id, policy_revision, correlation_id, occurred_at, version
 		FROM work_order_runtime.work_order_timeline
-		WHERE organization_id = $1 AND site_id = $2 AND work_order_id = $3
+		WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3
 		ORDER BY version ASC
-	`, workOrder.OrganizationID, workOrder.SiteID, workOrder.WorkOrderID)
+	`, workOrder.TenantID, workOrder.SiteID, workOrder.WorkOrderID)
 	if err != nil {
 		return workordermodel.WorkOrder{}, fmt.Errorf("read Work Order timeline: %w", err)
 	}
@@ -370,9 +332,9 @@ func hydrateProjection(ctx context.Context, tx pgx.Tx, record currentRecord) (wo
 	evidenceRows, err := tx.Query(ctx, `
 		SELECT kind, reference, captured_at
 		FROM work_order_runtime.work_order_completion_evidence
-		WHERE organization_id = $1 AND site_id = $2 AND work_order_id = $3
+		WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3
 		ORDER BY captured_at ASC, kind ASC, reference ASC
-	`, workOrder.OrganizationID, workOrder.SiteID, workOrder.WorkOrderID)
+	`, workOrder.TenantID, workOrder.SiteID, workOrder.WorkOrderID)
 	if err != nil {
 		return workordermodel.WorkOrder{}, fmt.Errorf("read Work Order completion evidence: %w", err)
 	}
@@ -395,12 +357,12 @@ func hydrateProjection(ctx context.Context, tx pgx.Tx, record currentRecord) (wo
 	var taskTotal, taskCompleted, taskBlocked, noteCount, attachmentCount int64
 	if err := tx.QueryRow(ctx, `
 		SELECT
-		  (SELECT count(*) FROM work_order_runtime.work_order_task WHERE organization_id = $1 AND site_id = $2 AND work_order_id = $3),
-		  (SELECT count(*) FROM work_order_runtime.work_order_task WHERE organization_id = $1 AND site_id = $2 AND work_order_id = $3 AND status = 'COMPLETED'),
-		  (SELECT count(*) FROM work_order_runtime.work_order_task WHERE organization_id = $1 AND site_id = $2 AND work_order_id = $3 AND status = 'BLOCKED'),
-		  (SELECT count(*) FROM work_order_runtime.work_order_note WHERE organization_id = $1 AND site_id = $2 AND work_order_id = $3),
-		  (SELECT count(*) FROM work_order_runtime.work_order_attachment_metadata WHERE organization_id = $1 AND site_id = $2 AND work_order_id = $3)
-	`, workOrder.OrganizationID, workOrder.SiteID, workOrder.WorkOrderID).Scan(&taskTotal, &taskCompleted, &taskBlocked, &noteCount, &attachmentCount); err != nil {
+		  (SELECT count(*) FROM work_order_runtime.work_order_task WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3),
+		  (SELECT count(*) FROM work_order_runtime.work_order_task WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3 AND status = 'COMPLETED'),
+		  (SELECT count(*) FROM work_order_runtime.work_order_task WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3 AND status = 'BLOCKED'),
+		  (SELECT count(*) FROM work_order_runtime.work_order_note WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3),
+		  (SELECT count(*) FROM work_order_runtime.work_order_attachment_metadata WHERE tenant_id = $1 AND site_id = $2 AND work_order_id = $3)
+	`, workOrder.TenantID, workOrder.SiteID, workOrder.WorkOrderID).Scan(&taskTotal, &taskCompleted, &taskBlocked, &noteCount, &attachmentCount); err != nil {
 		return workordermodel.WorkOrder{}, fmt.Errorf("read Work Order projection counts: %w", err)
 	}
 	if uint64(taskTotal) != workOrder.Tasks.Total || uint64(taskCompleted) != workOrder.Tasks.Completed || uint64(taskBlocked) != workOrder.Tasks.Blocked ||

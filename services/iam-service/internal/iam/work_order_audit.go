@@ -9,7 +9,7 @@ import (
 
 type WorkOrderDecisionAudit struct {
 	PrincipalID          string
-	ActingOrganizationID string
+	TenantID string
 	SiteID               string
 	WorkOrderID          string
 	AssigneeID           *string
@@ -40,7 +40,7 @@ func (sink *loggerWorkOrderDecisionAuditSink) RecordWorkOrderDecision(ctx contex
 		"trace_id", event.TraceID,
 		"request_id", event.RequestID,
 		"principal_id", event.PrincipalID,
-		"acting_organization_id", event.ActingOrganizationID,
+		"tenant_id", event.TenantID,
 		"site_id", event.SiteID,
 		"work_order_id", event.WorkOrderID,
 		"assignee_id", event.AssigneeID,

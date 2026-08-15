@@ -17,7 +17,6 @@ export type SiteRouteLeaf =
 
 export interface SiteContext {
   readonly site: Readonly<Site>;
-  readonly actingOrganizationId: string;
 }
 
 export type SiteEntryDecision =
@@ -67,7 +66,6 @@ function siteContext(site: Site): SiteContext {
   const validatedSite = readonlySite(site);
   return Object.freeze({
     site: validatedSite,
-    actingOrganizationId: validatedSite.owningOrganizationId,
   });
 }
 

@@ -172,7 +172,7 @@ func loadRuntimeHTTPConfig(store commandservice.RuntimeStore, metrics *observabi
 			Metrics:          metrics,
 			DispatcherSPIFFE: envOr("COMMAND_DISPATCHER_SPIFFE", "spiffe://hvac.local/command-dispatcher"),
 			VerifierSPIFFE:   envOr("COMMAND_VERIFIER_SPIFFE", "spiffe://hvac.local/command-verifier"),
-			OrganizationID:   requiredEnv("COMMAND_APPROVED_ORGANIZATION_ID"),
+			TenantID:         requiredEnv("COMMAND_APPROVED_TENANT_ID"),
 			SiteID:           requiredEnv("COMMAND_APPROVED_SITE_ID"),
 			DeviceID:         requiredEnv("COMMAND_APPROVED_DEVICE_ID"),
 			Capability:       commandmodel.Capability(requiredEnv("COMMAND_APPROVED_CAPABILITY")),
@@ -224,7 +224,7 @@ func commandObservabilityRoute(request *http.Request) string {
 		return "connector.complete"
 	}
 	if strings.HasPrefix(path, commandservice.InternalCommandsPath+"/") {
-		if strings.HasSuffix(path, ":approve") {
+		if strings.HasSuffix(path, "/approve") {
 			return "commands.approve"
 		}
 		return "commands.get"

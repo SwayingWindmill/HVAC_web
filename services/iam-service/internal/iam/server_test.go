@@ -148,14 +148,13 @@ func TestIAMRejectsExpandedForwardedAndInvalidDelegation(t *testing.T) {
 	assertIAMProblem(t, recorder, http.StatusUnauthorized, "IAM_DELEGATION_INVALID")
 }
 
-func TestIAMIssuesOwnerOrganizationRegistryGrant(t *testing.T) {
+func TestIAMIssuesTenantRoleAsExactSiteRegistryGrant(t *testing.T) {
 	harness := newIAMHarness(t)
 	response := harness.registryDecision(t, "fixture-user", iam.S1FixtureOwnerAOrganizationID, registryauth.ActionSiteRead)
-	if !response.Decision.Allowed || response.Decision.ReasonCode != registryauth.ReasonAllowOrganizationRole {
-		t.Fatalf("unexpected owner decision: %#v", response.Decision)
+	if !response.Decision.Allowed || response.Decision.ReasonCode != registryauth.ReasonAllowTenantRole {
+		t.Fatalf("unexpected Tenant decision: %#v", response.Decision)
 	}
-	assertStringsEqual(t, response.Decision.AllowedOrganizationIDs, []string{iam.S1FixtureOwnerAOrganizationID})
-	assertStringsEqual(t, response.Decision.AllowedSiteIDs, []string{})
+	assertStringsEqual(t, response.Decision.AllowedSiteIDs, []string{iam.S1FixtureOwnerASite1ID, iam.S1FixtureOwnerASite2ID})
 	if response.DelegationGrant == "" {
 		t.Fatal("allowed decision did not include a Core delegation")
 	}
@@ -164,11 +163,11 @@ func TestIAMIssuesOwnerOrganizationRegistryGrant(t *testing.T) {
 	if claims.PrincipalID != iam.S1FixtureOwnerAPrincipalID || claims.ParentTokenID != fixtureInboundID || claims.TokenID != fixtureRegistryID {
 		t.Fatalf("unexpected registry actor chain: %#v", claims)
 	}
-	if !registryauth.ScopeAllows(claims, iam.S1FixtureOwnerAOrganizationID, iam.S1FixtureOwnerASite1ID) {
-		t.Fatal("owner grant did not allow an Owner A Site")
+	if !registryauth.ScopeAllows(claims, iam.S1FixtureOwnerASite1ID) {
+		t.Fatal("Tenant grant did not allow an exact Site")
 	}
-	if registryauth.ScopeAllows(claims, iam.S1FixtureOwnerBOrganizationID, iam.S1FixtureOwnerBSite1ID) {
-		t.Fatal("owner grant expanded into Owner B")
+	if registryauth.ScopeAllows(claims, iam.S1FixtureOwnerBSite1ID) {
+		t.Fatal("Tenant grant expanded outside its exact Site set")
 	}
 }
 
@@ -232,22 +231,16 @@ func TestIAMCrossOrganizationBindingIsSiteOnly(t *testing.T) {
 	if !response.Decision.Allowed || response.Decision.ReasonCode != registryauth.ReasonAllowSiteBinding {
 		t.Fatalf("unexpected delegated decision: %#v", response.Decision)
 	}
-	assertStringsEqual(t, response.Decision.AllowedOrganizationIDs, []string{})
 	assertStringsEqual(t, response.Decision.AllowedSiteIDs, []string{iam.S1FixtureOwnerASite1ID})
 	claims := harness.verifyRegistryGrant(t, response.DelegationGrant, registryauth.ActionDeviceRead)
-	if !registryauth.ScopeAllows(claims, iam.S1FixtureOwnerAOrganizationID, iam.S1FixtureOwnerASite1ID) {
+	if !registryauth.ScopeAllows(claims, iam.S1FixtureOwnerASite1ID) {
 		t.Fatal("delegated Site was rejected")
 	}
-	if registryauth.ScopeAllows(claims, iam.S1FixtureOwnerAOrganizationID, iam.S1FixtureOwnerASite2ID) {
+	if registryauth.ScopeAllows(claims, iam.S1FixtureOwnerASite2ID) {
 		t.Fatal("delegated grant exposed a sibling Site")
 	}
-	if registryauth.ScopeAllows(claims, iam.S1FixtureOwnerAOrganizationID, "") {
-		t.Fatal("delegated grant exposed the owning Organization collection")
-	}
-
-	organization := harness.registryDecision(t, "fixture-delegated-user", iam.S1FixtureActingOrganizationID, registryauth.ActionOrganizationRead)
-	if organization.Decision.Allowed || organization.DelegationGrant != "" || organization.Decision.ReasonCode != registryauth.ReasonDenyActionNotGranted {
-		t.Fatalf("SiteBinding expanded into Organization access: %#v", organization)
+	if registryauth.ScopeAllows(claims, "") {
+		t.Fatal("delegated grant accepted an empty Site scope")
 	}
 }
 
@@ -257,6 +250,7 @@ func TestIAMDeviceBindingListRequiresBothConstituentReadActions(t *testing.T) {
 		return iam.AuthorizationFacts{
 			Found:          true,
 			PolicyRevision: iam.S1FixturePolicyRevision,
+			TenantSiteIDs:  []string{iam.S1FixtureOwnerASite1ID, iam.S1FixtureOwnerASite2ID},
 			Principal: iam.PrincipalRecord{
 				ID:            iam.S1FixtureOwnerAPrincipalID,
 				SubjectIssuer: fixtureSubjectIssuer,
@@ -291,7 +285,7 @@ func TestIAMDeviceBindingListRequiresBothConstituentReadActions(t *testing.T) {
 			config.AuthorizationStore = fixedAuthorizationStore{facts: splitFacts}
 		})
 		response := harness.registryDecision(t, "fixture-user", iam.S1FixtureOwnerAOrganizationID, registryauth.ActionDeviceBindingList)
-		if !response.Decision.Allowed || response.Decision.ReasonCode != registryauth.ReasonAllowOrganizationRole {
+		if !response.Decision.Allowed || response.Decision.ReasonCode != registryauth.ReasonAllowTenantRole {
 			t.Fatalf("unexpected DeviceBinding decision: %#v", response.Decision)
 		}
 		harness.verifyRegistryGrant(t, response.DelegationGrant, registryauth.ActionDeviceBindingList)
@@ -390,17 +384,16 @@ func TestIAMExplicitSiteDenyDoesNotExpandToOwningOrganization(t *testing.T) {
 	}
 	assertStringsEqual(t, response.Decision.AllowedSiteIDs, []string{iam.S1FixtureOwnerASite2ID})
 	assertStringsEqual(t, response.Decision.DeniedSiteIDs, []string{iam.S1FixtureOwnerASite1ID})
-	assertStringsEqual(t, response.Decision.DeniedOrganizationIDs, []string{})
 	claims := harness.verifyRegistryGrant(t, response.DelegationGrant, registryauth.ActionSiteRead)
-	if registryauth.ScopeAllows(claims, iam.S1FixtureOwnerAOrganizationID, iam.S1FixtureOwnerASite1ID) {
+	if registryauth.ScopeAllows(claims, iam.S1FixtureOwnerASite1ID) {
 		t.Fatal("site-specific deny allowed the denied Site")
 	}
-	if !registryauth.ScopeAllows(claims, iam.S1FixtureOwnerAOrganizationID, iam.S1FixtureOwnerASite2ID) {
+	if !registryauth.ScopeAllows(claims, iam.S1FixtureOwnerASite2ID) {
 		t.Fatal("site-specific deny removed the sibling Site")
 	}
 }
 
-func TestIAMBindingDenyEffectsOverrideAllows(t *testing.T) {
+func TestIAMSiteBindingDenyOverridesAllow(t *testing.T) {
 	membership := iam.OrganizationMembership{
 		TenantID:       iam.S1FixtureTenantAID,
 		OrganizationID: iam.S1FixtureActingOrganizationID,
@@ -413,57 +406,23 @@ func TestIAMBindingDenyEffectsOverrideAllows(t *testing.T) {
 		Subject:       "fixture-user",
 		Status:        iam.FactStatusActive,
 	}
-	cases := []struct {
-		name        string
-		action      registryauth.Action
-		role        []iam.RoleBinding
-		site        []iam.SiteBinding
-		deniedOrgID string
-		deniedSite  string
-	}{
-		{
-			name:   "organization role deny",
-			action: registryauth.ActionOrganizationRead,
-			role: []iam.RoleBinding{
-				{TenantID: iam.S1FixtureTenantAID, OrganizationID: iam.S1FixtureActingOrganizationID, Actions: []registryauth.Action{registryauth.ActionOrganizationRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: membership.ValidFrom},
-				{TenantID: iam.S1FixtureTenantAID, OrganizationID: iam.S1FixtureActingOrganizationID, Actions: []registryauth.Action{registryauth.ActionOrganizationRead}, Effect: iam.BindingEffectDeny, Status: iam.FactStatusActive, ValidFrom: membership.ValidFrom},
-			},
-			deniedOrgID: iam.S1FixtureActingOrganizationID,
-		},
-		{
-			name:   "site binding deny",
-			action: registryauth.ActionSiteRead,
-			site: []iam.SiteBinding{
+	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
+		config.AuthorizationStore = fixedAuthorizationStore{facts: iam.AuthorizationFacts{
+			Found:          true,
+			PolicyRevision: "registry-read:7",
+			Principal:      principal,
+			Memberships:    []iam.OrganizationMembership{membership},
+			SiteBindings: []iam.SiteBinding{
 				{TenantID: iam.S1FixtureTenantAID, ActingOrganizationID: iam.S1FixtureActingOrganizationID, OwningOrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: membership.ValidFrom},
 				{TenantID: iam.S1FixtureTenantAID, ActingOrganizationID: iam.S1FixtureActingOrganizationID, OwningOrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectDeny, Status: iam.FactStatusActive, ValidFrom: membership.ValidFrom},
 			},
-			deniedSite: iam.S1FixtureOwnerASite1ID,
-		},
+		}}
+	})
+	response := harness.registryDecision(t, "fixture-user", iam.S1FixtureActingOrganizationID, registryauth.ActionSiteRead)
+	if response.Decision.Allowed || response.DelegationGrant != "" || response.Decision.ReasonCode != registryauth.ReasonDenyExplicit {
+		t.Fatalf("Site binding deny did not override allow: %#v", response)
 	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
-				config.AuthorizationStore = fixedAuthorizationStore{facts: iam.AuthorizationFacts{
-					Found:          true,
-					PolicyRevision: "registry-read:7",
-					Principal:      principal,
-					Memberships:    []iam.OrganizationMembership{membership},
-					RoleBindings:   testCase.role,
-					SiteBindings:   testCase.site,
-				}}
-			})
-			response := harness.registryDecision(t, "fixture-user", iam.S1FixtureActingOrganizationID, testCase.action)
-			if response.Decision.Allowed || response.DelegationGrant != "" || response.Decision.ReasonCode != registryauth.ReasonDenyExplicit {
-				t.Fatalf("binding deny did not override allow: %#v", response)
-			}
-			if testCase.deniedOrgID != "" {
-				assertStringsEqual(t, response.Decision.DeniedOrganizationIDs, []string{testCase.deniedOrgID})
-			}
-			if testCase.deniedSite != "" {
-				assertStringsEqual(t, response.Decision.DeniedSiteIDs, []string{testCase.deniedSite})
-			}
-		})
-	}
+	assertStringsEqual(t, response.Decision.DeniedSiteIDs, []string{iam.S1FixtureOwnerASite1ID})
 }
 
 func TestIAMRegistryDecisionRejectsBodyExpansionAndWrongInboundAction(t *testing.T) {
@@ -565,7 +524,7 @@ func TestIAMAuthorizationLogsExcludeDelegationMaterial(t *testing.T) {
 			t.Fatalf("authorization logs leaked %q: %s", forbidden, logs)
 		}
 	}
-	for _, required := range []string{"iam_registry_authorization_decision", string(registryauth.ReasonAllowOrganizationRole), iam.S1FixtureOwnerAPrincipalID, iam.S1FixtureOwnerAOrganizationID} {
+	for _, required := range []string{"iam_registry_authorization_decision", string(registryauth.ReasonAllowTenantRole), iam.S1FixtureOwnerAPrincipalID, iam.S1FixtureOwnerAOrganizationID} {
 		if !strings.Contains(logs, required) {
 			t.Fatalf("authorization logs omitted %q: %s", required, logs)
 		}

@@ -32,9 +32,12 @@ const (
 type ObservationQuality string
 
 const (
-	QualityGood     ObservationQuality = "GOOD"
-	QualitySuspect  ObservationQuality = "SUSPECT"
-	QualityRejected ObservationQuality = "REJECTED"
+	QualityGood      ObservationQuality = "GOOD"
+	QualityPartial   ObservationQuality = "PARTIAL"
+	QualityEstimated ObservationQuality = "ESTIMATED"
+	QualityManual    ObservationQuality = "MANUAL"
+	QualityStale     ObservationQuality = "STALE"
+	QualityInvalid   ObservationQuality = "INVALID"
 )
 
 type QualityReason string
@@ -85,6 +88,7 @@ type ObservationCandidate struct {
 	Value                 json.RawMessage
 	ValueType             string
 	Unit                  *string
+	WireQuality           uint8
 	SampledAt             time.Time
 	ReceivedAt            time.Time
 	Position              SourcePosition
@@ -93,7 +97,6 @@ type ObservationCandidate struct {
 type RuntimeBinding struct {
 	TenantID              string
 	DeviceID              string
-	OwningOrganizationID  string
 	SiteID                string
 	IntegrationInstanceID string
 	ExternalEntityType    string
@@ -104,20 +107,21 @@ type RuntimeBinding struct {
 }
 
 type RuntimePointBinding struct {
-	TenantID             string
-	OwningOrganizationID string
-	SiteID               string
-	PointID              string
-	SensorID             *string
-	DeviceID             string
-	TelemetryKey         string
-	PointKind            string
-	ValueType            string
-	Unit                 *string
-	Status               string
-	PointRevision        int64
-	ValidFrom            time.Time
-	ValidTo              *time.Time
+	TenantID                string
+	SiteID                  string
+	PointID                 string
+	SensorID                *string
+	DeviceID                string
+	TelemetryKey            string
+	PointType               string
+	ValueType               string
+	Unit                    *string
+	CounterDecreaseMode     *string
+	CounterRolloverModulus  *float64
+	Status                  string
+	PointRevision           int64
+	ValidFrom               time.Time
+	ValidTo                 *time.Time
 }
 
 type ObservationPolicy struct {
@@ -144,12 +148,15 @@ type ObservationDecision struct {
 	TenantID               string
 	PointID                string
 	SensorID               string
+	PointType              string
+	PointRevision          int64
+	CounterDecreaseMode    string
+	CounterRolloverModulus *float64
 	Status                 ObservationStatus
 	Quality                ObservationQuality
 	QualityReasons         []QualityReason
 	QuarantineReason       QuarantineReason
 	DeviceID               string
-	OwningOrganizationID   string
 	SiteID                 string
 	PolicyRevision         int64
 	PresencePolicyRevision int64
@@ -161,26 +168,26 @@ type ObservationDecision struct {
 
 func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts, evaluatedAt time.Time) ObservationDecision {
 	if facts.EventAlreadySeen {
-		return terminalObservation(ObservationDuplicate, QualityRejected, QualityReasonDuplicate, false)
+		return terminalObservation(ObservationDuplicate, QualityInvalid, QualityReasonDuplicate, false)
 	}
 	if facts.CurrentPosition != nil {
 		switch {
 		case candidate.Position.Offset < facts.CurrentPosition.Offset:
-			return terminalObservation(ObservationOutOfOrder, QualityRejected, QualityReasonOutOfOrder, false)
+			return terminalObservation(ObservationOutOfOrder, QualityInvalid, QualityReasonOutOfOrder, false)
 		case candidate.Position.Offset == facts.CurrentPosition.Offset:
-			return terminalObservation(ObservationDuplicate, QualityRejected, QualityReasonReplayed, false)
+			return terminalObservation(ObservationDuplicate, QualityInvalid, QualityReasonReplayed, false)
 		}
 	}
 
 	binding, quarantine := resolveRuntimeBinding(candidate, facts.Bindings)
 	if quarantine != "" {
 		return ObservationDecision{
-			Status: ObservationQuarantined, Quality: QualityRejected, QuarantineReason: quarantine, AdvancePosition: true,
+			Status: ObservationQuarantined, Quality: QualityInvalid, QuarantineReason: quarantine, AdvancePosition: true,
 		}
 	}
 	decision := ObservationDecision{
-		TenantID: binding.TenantID, DeviceID: binding.DeviceID, OwningOrganizationID: binding.OwningOrganizationID, SiteID: binding.SiteID,
-		Status: ObservationQuarantined, Quality: QualityRejected, AdvancePosition: true,
+		TenantID: binding.TenantID, DeviceID: binding.DeviceID, SiteID: binding.SiteID,
+		Status: ObservationQuarantined, Quality: QualityInvalid, AdvancePosition: true,
 	}
 	pointBinding, pointQuarantine := resolveRuntimePointBinding(candidate, binding, facts.PointBindings)
 	if pointQuarantine != "" {
@@ -188,6 +195,15 @@ func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts,
 		return decision
 	}
 	decision.PointID = pointBinding.PointID
+	decision.PointType = pointBinding.PointType
+	decision.PointRevision = pointBinding.PointRevision
+	if pointBinding.CounterDecreaseMode != nil {
+		decision.CounterDecreaseMode = *pointBinding.CounterDecreaseMode
+	}
+	if pointBinding.CounterRolloverModulus != nil {
+		modulus := *pointBinding.CounterRolloverModulus
+		decision.CounterRolloverModulus = &modulus
+	}
 	if pointBinding.SensorID != nil {
 		decision.SensorID = *pointBinding.SensorID
 	}
@@ -198,27 +214,31 @@ func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts,
 	decision.PolicyRevision = facts.Policy.Revision
 	decision.PresencePolicyRevision = facts.Policy.PresencePolicyRevision
 
-	if facts.LatestSampledAt != nil && !candidate.SampledAt.After(facts.LatestSampledAt.UTC()) {
-		decision.Status = ObservationOutOfOrder
-		decision.QualityReasons = []QualityReason{QualityReasonOutOfOrder}
-		decision.QuarantineReason = ""
-		return decision
-	}
-
 	reasons, rejected := validateObservation(candidate, *facts.Policy, evaluatedAt)
 	decision.QualityReasons = reasons
 	decision.QuarantineReason = ""
-	decision.ReevaluateSnapshot = true
 	if rejected {
 		decision.Status = ObservationRejected
-		decision.Quality = QualityRejected
+		decision.Quality = QualityInvalid
+		decision.ReevaluateSnapshot = true
 		return decision
 	}
-	decision.Status = ObservationAccepted
+
 	decision.Quality = QualityGood
-	if slices.Contains(reasons, QualityReasonSourceLagExceeded) || slices.Contains(reasons, QualityReasonClockBehind) {
-		decision.Quality = QualitySuspect
+	if slices.Contains(reasons, QualityReasonSourceUntrusted) {
+		decision.Quality = QualityPartial
 	}
+	if slices.Contains(reasons, QualityReasonSourceLagExceeded) || slices.Contains(reasons, QualityReasonClockBehind) {
+		decision.Quality = QualityStale
+	}
+	if facts.LatestSampledAt != nil && !candidate.SampledAt.After(facts.LatestSampledAt.UTC()) {
+		decision.Status = ObservationOutOfOrder
+		decision.QualityReasons = append(decision.QualityReasons, QualityReasonOutOfOrder)
+		return decision
+	}
+
+	decision.Status = ObservationAccepted
+	decision.ReevaluateSnapshot = true
 	decision.ReplaceLatest = true
 	decision.EmitPresenceSignal = true
 	return decision
@@ -273,8 +293,8 @@ func resolveRuntimePointBinding(candidate ObservationCandidate, deviceBinding Ru
 	hasQuarantined := false
 	sampledAt := candidate.SampledAt.UTC()
 	for _, binding := range bindings {
-		if binding.TenantID != deviceBinding.TenantID || binding.OwningOrganizationID != deviceBinding.OwningOrganizationID ||
-			binding.SiteID != deviceBinding.SiteID || binding.DeviceID != deviceBinding.DeviceID || binding.TelemetryKey != candidate.TelemetryKey {
+		if binding.TenantID != deviceBinding.TenantID || binding.SiteID != deviceBinding.SiteID ||
+			binding.DeviceID != deviceBinding.DeviceID || binding.TelemetryKey != candidate.TelemetryKey {
 			continue
 		}
 		if !binding.ValidFrom.IsZero() && sampledAt.Before(binding.ValidFrom.UTC()) {
@@ -303,8 +323,11 @@ func resolveRuntimePointBinding(candidate ObservationCandidate, deviceBinding Ru
 }
 
 func validateObservation(candidate ObservationCandidate, policy ObservationPolicy, evaluatedAt time.Time) ([]QualityReason, bool) {
-	reasons := make([]QualityReason, 0, 4)
+	reasons := make([]QualityReason, 0, 5)
 	rejected := false
+	if candidate.WireQuality != 0 {
+		reasons = append(reasons, QualityReasonSourceUntrusted)
+	}
 
 	actualType, number, validValue := observationValueType(candidate.Value)
 	_, contractValueError := contractTelemetryValue(candidate.Value, candidate.ValueType)

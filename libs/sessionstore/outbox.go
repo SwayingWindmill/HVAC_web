@@ -22,7 +22,7 @@ type OutboxRecord struct {
 	AggregateType    string
 	AggregateID      string
 	AggregateVersion uint64
-	OrganizationID   string
+	TenantID   string
 	CorrelationID    string
 	CausationID      string
 	TraceID          string
@@ -82,7 +82,7 @@ func (store *OutboxStore) ClaimPending(ctx context.Context, owner string, now ti
 		WHERE outbox.message_id = candidate.message_id
 		RETURNING outbox.message_id, outbox.topic, outbox.partition_key,
 		          outbox.schema_version, outbox.aggregate_type, outbox.aggregate_id,
-		          outbox.aggregate_version, outbox.organization_id, outbox.correlation_id,
+		          outbox.aggregate_version, outbox.tenant_id, outbox.correlation_id,
 		          outbox.causation_id, outbox.trace_id, outbox.traceparent, outbox.payload,
 		          outbox.envelope_sha256, outbox.created_at, outbox.publish_attempts
 	`, owner, now.UTC(), now.UTC().Add(lease))
@@ -157,7 +157,7 @@ func (store *OutboxStore) OldestPendingAge(ctx context.Context, now time.Time) (
 func (store *OutboxStore) Get(ctx context.Context, messageID string) (OutboxRecord, error) {
 	record, err := scanOutbox(store.pool.QueryRow(ctx, `
 		SELECT message_id, topic, partition_key, schema_version, aggregate_type,
-		       aggregate_id, aggregate_version, organization_id, correlation_id,
+		       aggregate_id, aggregate_version, tenant_id, correlation_id,
 		       causation_id, trace_id, traceparent, payload, envelope_sha256,
 		       created_at, publish_attempts
 		FROM gateway.outbox WHERE message_id = $1
@@ -178,7 +178,7 @@ func scanOutbox(row rowScanner) (OutboxRecord, error) {
 	err := row.Scan(
 		&record.MessageID, &record.Topic, &record.PartitionKey, &record.SchemaVersion,
 		&record.AggregateType, &record.AggregateID, &record.AggregateVersion,
-		&record.OrganizationID, &record.CorrelationID, &record.CausationID,
+		&record.TenantID, &record.CorrelationID, &record.CausationID,
 		&record.TraceID, &record.Traceparent, &record.Payload, &record.EnvelopeSHA256,
 		&record.CreatedAt, &record.PublishAttempts,
 	)

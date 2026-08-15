@@ -20,7 +20,7 @@ The platform team must provide all of the following before rendering:
 - Namespace labels used by `networkpolicies.yaml`:
   - Gateway namespace: `s3.hvac/gateway-client=true`
   - PostgreSQL namespace: `data.hvac/postgres=true`
-  - ThingsBoard namespace: `s3.hvac/thingsboard-control=true`
+  - MQTT command namespace: `s3.hvac/mqtt-control=true`
   - S2 runtime namespace: `s2.hvac/runtime=true`
   - OTEL namespace: `observability.hvac/collector=true` and `observability.hvac/scraper=true`
 - cert-manager CSI and a private Issuer/ClusterIssuer that can issue short-lived X.509 certificates with these URI SANs:
@@ -31,11 +31,11 @@ The platform team must provide all of the following before rendering:
 - The command-service certificate must also contain the DNS SAN `command-service.s3-certification.svc.cluster.local`.
 - The S2 Telemetry Runtime client CA bundle must trust the Issuer used by `command-verifier`; no unrelated public or tenant CA may be added to that trust bundle.
 - Cloud Workload Identity for access to the external provider credential store; this is separate from the mTLS certificate identity.
-- A Secrets Store CSI provider capable of mounting one ThingsBoard provider credential as a file. The credential value must not appear in Git, ConfigMaps, environment-variable literals, logs or certification attestations.
+- MQTT client credentials are provided through workload identity/PKI files. Credential values must not appear in Git, ConfigMaps, environment-variable literals or logs.
 - If SPIRE Workload API is selected instead of cert-manager CSI, the Go binaries must first be changed to consume the Workload API socket, or a trusted materializer must expose compatible certificate files. The checked-in templates intentionally match the current file-based TLS loaders.
 - A target PostgreSQL database with separate migration and runtime principals.
 - One approved Organization, Site and internal Device, all represented by canonical UUIDv7 identifiers.
-- Immutable S2 production-certification evidence and ThingsBoard mapping/binding evidence for the exact Device.
+- Authoritative S2 current-state evidence and verified native MQTT Edge mapping for the exact Device.
 
 ## Build immutable images
 
@@ -81,9 +81,9 @@ Required rendering inputs include:
 - Cloud Workload Identity annotations.
 - `[SECRETS_STORE_CSI_DRIVER]` rendered to the installed standard Secrets Store CSI driver.
 - `[SECRETS_STORE_CLASS_ATTRIBUTE]` rendered to the standard Secrets Store CSI class-reference attribute.
-- Provider-specific object rendering that creates exactly these files: ThingsBoard `credential`, Command Service `command-service-dsn`, and migrator `pg_service.conf`. Projected files must be readable by only the declared workload group (`65532` for runtime Pods and `999` for the migrator); do not rely on world-readable modes.
+- Provider-specific object rendering creates the Command Service `command-service-dsn` and migrator `pg_service.conf`. Projected files must be readable by only the declared workload group (`65532` for runtime Pods and `999` for the migrator); do not rely on world-readable modes.
 - Exact approved Cohort UUIDv7 identifiers.
-- ThingsBoard Integration ID, external Device ID, Binding Revision and Mapping Revision.
+- MQTT Gateway ID, external Device ID, Binding Revision and Mapping Revision.
 - Approval ticket and immutable evidence references.
 - Current Command Policy and emergency revocation revisions.
 
@@ -118,7 +118,7 @@ The operator identity must be able to inspect Deployments, Services, EndpointSli
 
 1. Create and label all dependency namespaces.
 2. Install cert-manager CSI and configure the approved private Issuer/ClusterIssuer used by the three mTLS identities.
-3. Configure cloud Workload Identity, install Secrets Store CSI and render all three classes in `secret-provider-class.yaml`: ThingsBoard credential, Command Service runtime database and migration database.
+3. Configure cloud Workload Identity and render the Command Service runtime and migration database classes in `secret-provider-class.yaml`; MQTT client identity is provided by workload PKI.
 4. Render and apply the Namespace, ServiceAccounts, immutable ConfigMaps, Service, PDBs and NetworkPolicies.
 5. Build and run `s3-command-migration`; retain Job logs and image digest.
 6. Deploy Command Service and wait for all three replicas to become Ready.
@@ -131,14 +131,14 @@ The operator identity must be able to inspect Deployments, Services, EndpointSli
 
 - Command Service is the only long-running S3 workload with PostgreSQL access.
 - Dispatcher and Verifier have no PostgreSQL connection string and no PostgreSQL network egress.
-- Only Dispatcher can reach ThingsBoard.
+- Only Dispatcher can publish native MQTT Command requests.
 - Only Verifier can reach the S2 reported-state endpoint.
-- The Cohort file contains exactly one Organization, one Site and one Device.
+- The internal canary scope contains exactly one Tenant, one Site and one Device.
 - Mapping status must be `VERIFIED`; `LOCAL_VERIFIED` is rejected.
-- Provider credentials are read from a mounted file. Logs and attestations contain only `workload://` or `secret://` references.
-- A ThingsBoard RPC acknowledgement is not business success. A Command becomes verified only after S2 reports a newer authoritative Business Revision with the requested setpoint.
-- Public Command routes remain disabled and production traffic remains 0% until the formal certification policy authorizes a later rollout.
+- MQTT credentials are provided through workload PKI and are never written to ConfigMaps or logs.
+- An MQTT ACK/reply is not business success. A Command becomes verified only after S2 reports a newer authoritative Business Revision with the requested setpoint.
+- Public Command routes remain disabled and production traffic remains 0% until an explicit rollout decision changes Route Ownership.
 
-## Certification boundary
+## Runtime validation
 
-Deployment readiness is not formal S3-09 completion. Formal certification still requires target load evidence, all required crash points, ten zero counters, 6–12 operator-confirmed real Device commands, at least 240 real elapsed minutes, rollback evidence and two distinct post-canary approvals.
+S3-09 uses focused Fence, unknown-outcome and one-Device MQTT canary checks. There is no formal certification bundle or automated release gate.

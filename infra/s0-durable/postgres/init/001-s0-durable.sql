@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS gateway.sessions (
   display_name text NOT NULL,
   email text NOT NULL,
   roles jsonb NOT NULL CHECK (jsonb_typeof(roles) = 'array'),
-  acting_organization_id text NOT NULL,
+  tenant_id text NOT NULL,
   csrf_token_ciphertext bytea NOT NULL,
   provider_tokens_ciphertext bytea NOT NULL,
   expires_at timestamptz NOT NULL,
@@ -27,7 +27,7 @@ CREATE INDEX IF NOT EXISTS sessions_active_idx
 CREATE TABLE IF NOT EXISTS gateway.audit_intents (
   message_id text PRIMARY KEY,
   session_aggregate_id text NOT NULL CHECK (session_aggregate_id ~ '^[a-f0-9]{64}$'),
-  organization_id text NOT NULL,
+  tenant_id text NOT NULL,
   aggregate_version bigint NOT NULL CHECK (aggregate_version > 0),
   initiating_subject text NOT NULL,
   initiating_issuer text NOT NULL,
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS gateway.outbox (
   aggregate_type text NOT NULL CHECK (aggregate_type = 'bff-session'),
   aggregate_id text NOT NULL CHECK (length(aggregate_id) = 64 AND aggregate_id !~ '[^a-f0-9]'),
   aggregate_version bigint NOT NULL CHECK (aggregate_version > 0),
-  organization_id text NOT NULL,
+  tenant_id text NOT NULL,
   correlation_id text NOT NULL,
   causation_id text NOT NULL DEFAULT '',
   trace_id text NOT NULL,
@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS gateway.route_audit_records (
   route_revision bigint NOT NULL CHECK (route_revision > 0),
   compatibility_mode text NOT NULL,
   cohort_bucket integer CHECK (cohort_bucket BETWEEN 0 AND 99),
-  organization_id text NOT NULL DEFAULT '',
+  tenant_id text NOT NULL DEFAULT '',
   initiating_subject text NOT NULL DEFAULT '',
   initiating_issuer text NOT NULL DEFAULT '',
   executing_service text NOT NULL,
@@ -117,17 +117,19 @@ FOR EACH ROW EXECUTE FUNCTION gateway.reject_route_audit_mutation();
 
 CREATE TABLE IF NOT EXISTS audit_ledger.inbox (
   message_id text PRIMARY KEY,
-  organization_id text NOT NULL,
+  tenant_id text NOT NULL,
   topic text NOT NULL,
   partition_id integer NOT NULL,
   offset_value bigint NOT NULL,
   envelope_sha256 text NOT NULL CHECK (envelope_sha256 ~ '^[a-f0-9]{64}$'),
-  received_at timestamptz NOT NULL,
-  UNIQUE (topic, partition_id, offset_value)
+  received_at timestamptz NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS audit_ledger.organization_heads (
-  organization_id text PRIMARY KEY,
+CREATE INDEX IF NOT EXISTS audit_inbox_transport_metadata_idx
+  ON audit_ledger.inbox (topic, partition_id, offset_value);
+
+CREATE TABLE IF NOT EXISTS audit_ledger.tenant_heads (
+  tenant_id text PRIMARY KEY,
   last_record_hash text NOT NULL CHECK (last_record_hash ~ '^[a-f0-9]{64}$'),
   updated_at timestamptz NOT NULL
 );
@@ -136,7 +138,7 @@ CREATE TABLE IF NOT EXISTS audit_ledger.records (
   ledger_sequence bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   message_id text NOT NULL UNIQUE REFERENCES audit_ledger.inbox(message_id),
   schema_version integer NOT NULL CHECK (schema_version = 1),
-  organization_id text NOT NULL,
+  tenant_id text NOT NULL,
   aggregate_type text NOT NULL CHECK (aggregate_type = 'bff-session'),
   aggregate_id text NOT NULL CHECK (length(aggregate_id) = 64 AND aggregate_id !~ '[^a-f0-9]'),
   aggregate_version bigint NOT NULL CHECK (aggregate_version > 0),
@@ -145,7 +147,6 @@ CREATE TABLE IF NOT EXISTS audit_ledger.records (
   initiating_issuer text NOT NULL,
   executing_service text NOT NULL,
   executing_spiffe_id text NOT NULL,
-  acting_organization_id text NOT NULL,
   action text NOT NULL,
   result text NOT NULL,
   policy_revision text NOT NULL,
@@ -157,12 +158,11 @@ CREATE TABLE IF NOT EXISTS audit_ledger.records (
   previous_record_hash text NOT NULL CHECK (previous_record_hash ~ '^[a-f0-9]{64}$'),
   record_hash text NOT NULL UNIQUE CHECK (record_hash ~ '^[a-f0-9]{64}$'),
   recorded_at timestamptz NOT NULL,
-  UNIQUE (aggregate_type, aggregate_id, aggregate_version),
-  CHECK (organization_id = acting_organization_id)
+  UNIQUE (aggregate_type, aggregate_id, aggregate_version)
 );
 
-CREATE INDEX IF NOT EXISTS audit_records_org_time_idx
-  ON audit_ledger.records (organization_id, occurred_at DESC, ledger_sequence DESC);
+CREATE INDEX IF NOT EXISTS audit_records_tenant_time_idx
+  ON audit_ledger.records (tenant_id, occurred_at DESC, ledger_sequence DESC);
 
 CREATE OR REPLACE FUNCTION audit_ledger.reject_record_mutation()
 RETURNS trigger
@@ -179,34 +179,34 @@ BEFORE UPDATE OR DELETE ON audit_ledger.records
 FOR EACH ROW EXECUTE FUNCTION audit_ledger.reject_record_mutation();
 
 ALTER TABLE audit_ledger.inbox ENABLE ROW LEVEL SECURITY;
-ALTER TABLE audit_ledger.organization_heads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_ledger.tenant_heads ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_ledger.records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_ledger.inbox FORCE ROW LEVEL SECURITY;
-ALTER TABLE audit_ledger.organization_heads FORCE ROW LEVEL SECURITY;
+ALTER TABLE audit_ledger.tenant_heads FORCE ROW LEVEL SECURITY;
 ALTER TABLE audit_ledger.records FORCE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS inbox_consumer_scope ON audit_ledger.inbox;
 CREATE POLICY inbox_consumer_scope ON audit_ledger.inbox
   FOR ALL TO audit_consumer_runtime
-  USING (organization_id = current_setting('app.organization_id', true))
-  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 
-DROP POLICY IF EXISTS heads_consumer_scope ON audit_ledger.organization_heads;
-CREATE POLICY heads_consumer_scope ON audit_ledger.organization_heads
+DROP POLICY IF EXISTS heads_consumer_scope ON audit_ledger.tenant_heads;
+CREATE POLICY heads_consumer_scope ON audit_ledger.tenant_heads
   FOR ALL TO audit_consumer_runtime
-  USING (organization_id = current_setting('app.organization_id', true))
-  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 
 DROP POLICY IF EXISTS records_consumer_scope ON audit_ledger.records;
 CREATE POLICY records_consumer_scope ON audit_ledger.records
   FOR ALL TO audit_consumer_runtime
-  USING (organization_id = current_setting('app.organization_id', true))
-  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 
 DROP POLICY IF EXISTS records_query_scope ON audit_ledger.records;
 CREATE POLICY records_query_scope ON audit_ledger.records
   FOR SELECT TO audit_query_runtime
-  USING (organization_id = current_setting('app.organization_id', true));
+  USING (tenant_id = current_setting('app.tenant_id', true));
 
 GRANT USAGE ON SCHEMA gateway TO gateway_runtime, gateway_relay_runtime;
 GRANT SELECT, INSERT, UPDATE ON gateway.sessions TO gateway_runtime;
@@ -217,7 +217,7 @@ GRANT SELECT, UPDATE ON gateway.outbox TO gateway_relay_runtime;
 
 GRANT USAGE ON SCHEMA audit_ledger TO audit_consumer_runtime, audit_query_runtime;
 GRANT SELECT, INSERT ON audit_ledger.inbox TO audit_consumer_runtime;
-GRANT SELECT, INSERT, UPDATE ON audit_ledger.organization_heads TO audit_consumer_runtime;
+GRANT SELECT, INSERT, UPDATE ON audit_ledger.tenant_heads TO audit_consumer_runtime;
 GRANT SELECT, INSERT ON audit_ledger.records TO audit_consumer_runtime;
 GRANT USAGE, SELECT ON SEQUENCE audit_ledger.records_ledger_sequence_seq TO audit_consumer_runtime;
 GRANT SELECT ON audit_ledger.records TO audit_query_runtime;

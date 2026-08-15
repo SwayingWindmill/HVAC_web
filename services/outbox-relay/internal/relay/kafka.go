@@ -45,7 +45,7 @@ func (publisher *KafkaPublisher) Publish(ctx context.Context, record sessionstor
 			{Key: "message-id", Value: []byte(record.MessageID)},
 			{Key: "schema-version", Value: []byte(strconv.FormatUint(uint64(record.SchemaVersion), 10))},
 			{Key: "aggregate-version", Value: []byte(strconv.FormatUint(record.AggregateVersion, 10))},
-			{Key: "organization-id", Value: []byte(record.OrganizationID)},
+			{Key: "tenant-id", Value: []byte(record.TenantID)},
 			{Key: "content-type", Value: []byte("application/x-protobuf")},
 		},
 	})

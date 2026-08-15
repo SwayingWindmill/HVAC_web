@@ -55,14 +55,15 @@ func TestClickHouseHistorySinkUsesObservationIdentityAsDeduplicationToken(t *tes
 		t.Fatal(err)
 	}
 	number := 812.5
+	pointRevision := int64(1)
 	observations := []HistoryObservation{
 		{
 			ObservationID: observationIDs[0], TenantID: stringPointer("018f2d00-0000-7000-8000-000000000001"),
-			OwningOrganizationID: stringPointer("018f2e00-0000-7000-8000-000000000001"), SiteID: stringPointer("018f2e00-1000-7000-8000-000000000001"), DeviceID: stringPointer("018f2e00-3000-7000-8000-000000000001"),
+			SiteID: stringPointer("018f2e00-1000-7000-8000-000000000001"), DeviceID: stringPointer("018f2e00-3000-7000-8000-000000000001"),
 			PointID: stringPointer("018f2e00-3100-7000-8000-000000000001"), SensorID: stringPointer("018f2e00-3200-7000-8000-000000000001"),
 			IntegrationInstanceID: "018f2e00-6000-7000-8000-000000000001",
 			SourceEventID: "018f2e00-6200-7000-8000-000000000001", SourcePartition: "tb-a", SourceOffset: 10,
-			SourcePath: "POLL", TelemetryKey: "chiller.power", ValueNumber: &number,
+			SourcePath: "POLL", TelemetryKey: "chiller.power", PointType: stringPointer("TELEMETRY"), PointRevision: &pointRevision, ValueNumber: &number,
 			SampledAt: time.Date(2026, 7, 29, 7, 59, 58, 0, time.UTC), ReceivedAt: time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC),
 			AcceptanceStatus: "ACCEPTED", Quality: "GOOD", QualityReasons: []string{}, PayloadSHA256: strings.Repeat("a", 64),
 		},

@@ -214,7 +214,7 @@ func validateCoverageReport(report CoverageReport) error {
 
 func queryRuntimeBindings(ctx context.Context, tx pgx.Tx, integrationInstanceID, externalEntityType, externalID string) ([]RuntimeBinding, error) {
 	rows, err := tx.Query(ctx, `
-SELECT tenant_id::text, device_id::text, owning_organization_id::text, site_id::text,
+SELECT tenant_id::text, device_id::text, site_id::text,
        integration_instance_id::text, external_entity_type, external_id, binding_status,
        valid_from, valid_to
 FROM telemetry_runtime.registry_device_bindings
@@ -232,7 +232,7 @@ LIMIT 4
 	for rows.Next() {
 		var binding RuntimeBinding
 		if err := rows.Scan(
-			&binding.TenantID, &binding.DeviceID, &binding.OwningOrganizationID, &binding.SiteID,
+			&binding.TenantID, &binding.DeviceID, &binding.SiteID,
 			&binding.IntegrationInstanceID, &binding.ExternalEntityType, &binding.ExternalID, &binding.Status,
 			&binding.ValidFrom, &binding.ValidTo,
 		); err != nil {
@@ -248,10 +248,10 @@ LIMIT 4
 
 func queryRuntimePointBindings(ctx context.Context, tx pgx.Tx, tenantID, deviceID, telemetryKey string, sampledAt time.Time) ([]RuntimePointBinding, error) {
 	rows, err := tx.Query(ctx, `
-SELECT tenant_id::text, owning_organization_id::text, site_id::text,
+SELECT tenant_id::text, site_id::text,
        point_id::text, sensor_id::text, device_id::text, telemetry_key,
-       point_kind, value_type, unit, binding_status, point_revision,
-       valid_from, valid_to
+       point_type, value_type, unit, counter_decrease_mode, counter_rollover_modulus,
+       binding_status, point_revision, valid_from, valid_to
 FROM telemetry_runtime.registry_point_bindings
 WHERE tenant_id = $1::uuid
   AND device_id = $2::uuid
@@ -269,10 +269,10 @@ LIMIT 4
 	for rows.Next() {
 		var binding RuntimePointBinding
 		if err := rows.Scan(
-			&binding.TenantID, &binding.OwningOrganizationID, &binding.SiteID,
+			&binding.TenantID, &binding.SiteID,
 			&binding.PointID, &binding.SensorID, &binding.DeviceID, &binding.TelemetryKey,
-			&binding.PointKind, &binding.ValueType, &binding.Unit, &binding.Status, &binding.PointRevision,
-			&binding.ValidFrom, &binding.ValidTo,
+			&binding.PointType, &binding.ValueType, &binding.Unit, &binding.CounterDecreaseMode, &binding.CounterRolloverModulus,
+			&binding.Status, &binding.PointRevision, &binding.ValidFrom, &binding.ValidTo,
 		); err != nil {
 			return nil, fmt.Errorf("scan telemetry runtime Point binding: %w", err)
 		}

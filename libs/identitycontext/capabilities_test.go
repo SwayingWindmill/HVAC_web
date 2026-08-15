@@ -12,7 +12,7 @@ func TestEffectiveAuthorizationAcceptsCanonicalCapabilitySet(t *testing.T) {
 		CapabilitySetVersion: identitycontext.CapabilitySetVersion,
 		PolicyRevision:       "cap-v2:registry-and-telemetry",
 		Capabilities: []identitycontext.Capability{
-			identitycontext.CapabilityOrganizationList,
+			identitycontext.CapabilitySiteList,
 			identitycontext.CapabilitySiteRead,
 			identitycontext.CapabilityTelemetryBatchRead,
 		},

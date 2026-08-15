@@ -16,7 +16,7 @@ if (!operationsConnectionString || !checkpointsConnectionString) {
 }
 
 const scope = {
-  organizationId: 'organization-langgraph-postgres',
+  tenantId: 'organization-langgraph-postgres',
   siteId: 'site-langgraph-postgres',
   equipmentId: null,
   deviceId: null,

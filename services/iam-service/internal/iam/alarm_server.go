@@ -18,7 +18,7 @@ func (h *handler) handleAlarmDecision(writer http.ResponseWriter, request *http.
 		writeProblem(writer, http.StatusBadRequest, "IAM_ALARM_DECISION_REQUEST_INVALID", "The Alarm authorization request is invalid.")
 		return http.StatusBadRequest
 	}
-	if input.ActingOrganizationID != inbound.ActingOrganizationID {
+	if input.TenantID != inbound.TenantID {
 		writeProblem(writer, http.StatusForbidden, "IAM_ALARM_CONTEXT_MISMATCH", "The Alarm authorization context does not match the delegated Session.")
 		return http.StatusForbidden
 	}
@@ -37,7 +37,7 @@ func (h *handler) handleAlarmDecision(writer http.ResponseWriter, request *http.
 		traceID = requestID
 	}
 	if h.alarmAuditSink.RecordAlarmDecision(request.Context(), AlarmDecisionAudit{
-		PrincipalID: decision.PrincipalID, ActingOrganizationID: decision.ActingOrganizationID,
+		PrincipalID: decision.PrincipalID, TenantID: decision.TenantID,
 		SiteID: decision.SiteID, AlarmID: decision.AlarmID, Action: decision.Action, Allowed: decision.Allowed,
 		PolicyRevision: decision.PolicyRevision, ReasonCode: decision.ReasonCode,
 		RequestID: requestID, TraceID: traceID, OccurredAt: formatInstant(h.now()),

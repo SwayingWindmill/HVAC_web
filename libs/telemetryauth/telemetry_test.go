@@ -11,24 +11,24 @@ import (
 )
 
 const (
-	actingOrganizationID = "018f1e00-0000-7000-8000-000000000003"
+	tenantID             = "018f1d00-0000-7000-8000-000000000001"
 	deviceID             = "018f1e00-4000-7000-8000-000000000001"
 	siblingDeviceID      = "018f1e00-4000-7000-8000-000000000003"
 )
 
 func TestScopeDigestIsOrderIndependentButExact(t *testing.T) {
-	left, err := telemetryauth.ScopeDigest(telemetryauth.ActionSubscribe, actingOrganizationID, []telemetryauth.Target{{DeviceID: deviceID, Keys: []string{"zone.temperature", "fan.speed"}}})
+	left, err := telemetryauth.ScopeDigest(telemetryauth.ActionSubscribe, tenantID, []telemetryauth.Target{{DeviceID: deviceID, Keys: []string{"zone.temperature", "fan.speed"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	right, err := telemetryauth.ScopeDigest(telemetryauth.ActionSubscribe, actingOrganizationID, []telemetryauth.Target{{DeviceID: deviceID, Keys: []string{"fan.speed", "zone.temperature"}}})
+	right, err := telemetryauth.ScopeDigest(telemetryauth.ActionSubscribe, tenantID, []telemetryauth.Target{{DeviceID: deviceID, Keys: []string{"fan.speed", "zone.temperature"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if left != right {
 		t.Fatalf("equivalent exact scopes produced different digests: %q != %q", left, right)
 	}
-	different, err := telemetryauth.ScopeDigest(telemetryauth.ActionSubscribe, actingOrganizationID, []telemetryauth.Target{{DeviceID: deviceID, Keys: []string{"zone.temperature"}}})
+	different, err := telemetryauth.ScopeDigest(telemetryauth.ActionSubscribe, tenantID, []telemetryauth.Target{{DeviceID: deviceID, Keys: []string{"zone.temperature"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,14 +44,14 @@ func TestRecoveryGrantValidationFailsClosedForEveryBoundFieldAndReplay(t *testin
 	}
 	now := time.Unix(1_800_000_000, 0).UTC()
 	targets := []telemetryauth.Target{{DeviceID: deviceID, Keys: []string{"zone.temperature"}}}
-	digest, err := telemetryauth.ScopeDigest(telemetryauth.ActionRecoveryUse, actingOrganizationID, targets)
+	digest, err := telemetryauth.ScopeDigest(telemetryauth.ActionRecoveryUse, tenantID, targets)
 	if err != nil {
 		t.Fatal(err)
 	}
 	claims := telemetryauth.GrantClaims{
 		Issuer: "spiffe://hvac.local/iam-service", Presenter: "spiffe://hvac.local/platform-gateway", Audience: "telemetry-runtime-service",
 		PrincipalID: "018f1e00-2000-7000-8000-000000000002", SubjectIssuer: "https://identity.example.test/oidc", Subject: "delegated",
-		ActingOrganizationID: actingOrganizationID, ActorChain: []telemetryauth.Actor{{Service: "platform-gateway", SPIFFEID: "spiffe://hvac.local/platform-gateway"}},
+		TenantID: tenantID, ActorChain: []telemetryauth.Actor{{Service: "platform-gateway", SPIFFEID: "spiffe://hvac.local/platform-gateway"}},
 		Action: telemetryauth.ActionRecoveryUse, ScopeDigest: digest, TargetCount: 1, KeyCount: 1, PolicyRevision: "telemetry-access:7",
 		SessionID: "session-1", ParentTokenID: "parent-1", RequestID: "request-1", TraceID: "0123456789abcdef0123456789abcdef", Route: "/api/v1/telemetry/subscriptions:bootstrap",
 		IssuedAt: now.Unix(), ExpiresAt: now.Add(20 * time.Second).Unix(), TokenID: "grant-1",
@@ -67,7 +67,7 @@ func TestRecoveryGrantValidationFailsClosedForEveryBoundFieldAndReplay(t *testin
 	base := telemetryauth.GrantValidation{
 		Now: now, Issuer: claims.Issuer, Presenter: claims.Presenter, Audience: claims.Audience,
 		PrincipalID: claims.PrincipalID, SessionID: claims.SessionID, Action: claims.Action,
-		ActingOrganizationID: actingOrganizationID, Targets: targets,
+		TenantID: tenantID, Targets: targets,
 		UseChecker: func(telemetryauth.GrantClaims) (telemetryauth.GrantUseStatus, error) {
 			return telemetryauth.GrantUseStatus{CurrentPolicyRevision: claims.PolicyRevision}, nil
 		},

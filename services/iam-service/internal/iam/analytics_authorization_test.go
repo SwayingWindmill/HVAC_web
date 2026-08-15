@@ -26,7 +26,7 @@ func TestEvaluateAnalyticsAuthorizationRequiresExactSiteScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !allowed.Allowed || allowed.ReasonCode != analyticsmodel.AuthorizationReasonAllowSiteBinding || allowed.PolicyRevision != "analytics-policy-1" {
+	if !allowed.Allowed || allowed.TenantID != S1FixtureTenantAID || allowed.ReasonCode != analyticsmodel.AuthorizationReasonAllowSiteBinding || allowed.PolicyRevision != "analytics-policy-1" {
 		t.Fatalf("allowed decision = %#v", allowed)
 	}
 
@@ -99,7 +99,7 @@ func TestPostgresRegistryActionsPreservesAnalyticsAction(t *testing.T) {
 func analyticsAuthorizationFacts(now time.Time) AuthorizationFacts {
 	return AuthorizationFacts{
 		Principal:   PrincipalRecord{ID: "018f1e00-2000-7000-8000-000000000001", SubjectIssuer: "https://issuer.example.test", Subject: "energy-user", Status: FactStatusActive},
-		Memberships: []OrganizationMembership{{OrganizationID: analyticsTestOrganization, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
+		Memberships: []OrganizationMembership{{TenantID: S1FixtureTenantAID, OrganizationID: analyticsTestOrganization, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
 		SiteBindings: []SiteBinding{{
 			ActingOrganizationID: analyticsTestOrganization,
 			OwningOrganizationID: analyticsTestOrganization,

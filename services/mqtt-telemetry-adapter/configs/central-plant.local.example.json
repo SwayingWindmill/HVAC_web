@@ -4,7 +4,12 @@
   "mqtt": {
     "brokerUrl": "tls://localhost:18883",
     "clientId": "mqtt-telemetry-adapter",
-    "topicFilter": "energy/v1/+/+/+/telemetry",
+    "topicFilters": [
+      "energy/v1/+/+/+/telemetry",
+      "energy/v1/+/+/+/state",
+      "energy/v1/+/+/+/event",
+      "energy/v1/+/+/+/heartbeat"
+    ],
     "caFile": "/run/secrets/ca.pem",
     "certFile": "/run/secrets/mqtt-adapter-cert.pem",
     "keyFile": "/run/secrets/mqtt-adapter-key.pem",

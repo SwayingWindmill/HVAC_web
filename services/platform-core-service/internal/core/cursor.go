@@ -119,13 +119,11 @@ func cursorRoute(resource, parentID string) string {
 func scopeHash(claims registryauth.GrantClaims) string {
 	parts := []string{
 		"principal=" + claims.PrincipalID,
-		"acting=" + claims.ActingOrganizationID,
+		"tenant=" + claims.TenantID,
 		"policy=" + claims.PolicyRevision,
 	}
 	for label, values := range map[string][]string{
-		"allow-org":  claims.AllowedOrganizationIDs,
 		"allow-site": claims.AllowedSiteIDs,
-		"deny-org":   claims.DeniedOrganizationIDs,
 		"deny-site":  claims.DeniedSiteIDs,
 	} {
 		copyValues := append([]string(nil), values...)

@@ -66,9 +66,9 @@ components:
     EnergySeriesQuery:
       type: object
       additionalProperties: false
-      required: [organizationId, siteId, energyType, granularity, timezone, from, to, qualityPolicy]
+      required: [tenantId, siteId, energyType, granularity, timezone, from, to, qualityPolicy]
       properties:
-        organizationId:
+        tenantId:
           type: string
           format: uuid
         siteId:

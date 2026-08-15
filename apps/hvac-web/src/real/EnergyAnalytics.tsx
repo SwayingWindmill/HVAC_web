@@ -94,13 +94,12 @@ function comparisonText(current: number | null, previous: number | null): { valu
 }
 
 function buildQuery(
-  principal: CurrentPrincipalResponse,
   site: Readonly<Site>,
   range: { from: string; to: string; granularity: EnergySeriesQuery['granularity'] },
   qualityPolicy: EnergyQualityPolicy,
 ): EnergySeriesQuery {
   return {
-    organizationId: principal.context.actingOrganizationId,
+    tenantId: site.tenantId,
     siteId: site.id,
     energyType: 'electricity',
     granularity: range.granularity,
@@ -150,26 +149,26 @@ export function EnergyAnalytics({ site, principal, initialPeriod }: EnergyAnalyt
     return () => globalThis.removeEventListener('popstate', onPopState);
   }, [site.timezone]);
 
-  const currentQuery = useMemo(() => buildQuery(principal, site, {
+  const currentQuery = useMemo(() => buildQuery(site, {
     from: workspaceWindow.from,
     to: workspaceWindow.to,
     granularity: workspaceWindow.granularity,
-  }, workspaceState.qualityPolicy), [principal, site, workspaceState.qualityPolicy, workspaceWindow]);
-  const previousQuery = useMemo(() => buildQuery(principal, site, {
+  }, workspaceState.qualityPolicy), [site, workspaceState.qualityPolicy, workspaceWindow]);
+  const previousQuery = useMemo(() => buildQuery(site, {
     from: workspaceWindow.previousFrom,
     to: workspaceWindow.previousTo,
     granularity: workspaceWindow.granularity,
-  }, workspaceState.qualityPolicy), [principal, site, workspaceState.qualityPolicy, workspaceWindow]);
+  }, workspaceState.qualityPolicy), [site, workspaceState.qualityPolicy, workspaceWindow]);
 
   const sessionCapability = Reflect.get(principal.session, ['csrf', 'Token'].join('')) as string;
   const requestEnergy = useCallback((query: EnergySeriesQuery, signal: AbortSignal) => {
     const options = {
-      trustedOrganizationId: principal.context.actingOrganizationId,
+      trustedTenantId: site.tenantId,
       signal,
     } as unknown as EnergyAnalyticsRequestOptions;
     Reflect.set(options, ['csrf', 'Token'].join(''), sessionCapability);
     return queryEnergySeries(query, options);
-  }, [principal.context.actingOrganizationId, sessionCapability]);
+  }, [sessionCapability, site.tenantId]);
 
   const currentResult = useQuery({
     queryKey: energySeriesQueryKey(currentQuery),
@@ -198,11 +197,11 @@ export function EnergyAnalytics({ site, principal, initialPeriod }: EnergyAnalyt
   }, [previousQuery, previousResult.data, queryClient]);
 
   useEffect(() => () => {
-    const protectedPrefix = ['energy-series', principal.context.actingOrganizationId, site.id] as const;
+    const protectedPrefix = ['energy-series', site.tenantId, site.id] as const;
     void queryClient.cancelQueries({ queryKey: protectedPrefix });
     queryClient.removeQueries({ queryKey: protectedPrefix });
-  }, [principal.authorization.policyRevision, principal.context.actingOrganizationId,
-    principal.context.policyRevision, principal.session.id, queryClient, site.id]);
+  }, [principal.authorization.policyRevision, principal.context.policyRevision,
+    principal.session.id, queryClient, site.id, site.tenantId]);
 
   const response = currentResult.data;
   const summary = useMemo(() => summarizeEnergyPoints(response?.points ?? []), [response?.points]);

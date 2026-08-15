@@ -73,7 +73,7 @@ func (stub *runtimeStoreStub) CompleteConnectorEvidence(context.Context, command
 
 func TestRuntimeHTTPDispatcherCanClaimAndResolveExactCohort(t *testing.T) {
 	stub := &runtimeStoreStub{dispatchEnvelope: commandmodel.DispatchEnvelope{
-		CommandID: "command-1", AttemptID: "attempt-1", OrganizationID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: runtimeTestDevice,
+		CommandID: "command-1", AttemptID: "attempt-1", TenantID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: runtimeTestDevice,
 		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: setpointCapabilityRevision,
 		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 22}, PayloadHash: "hash", ExecutionFence: 1, DeviceCommandSequence: 1,
 		LeaseOwner: "dispatcher-a", LeaseUntil: time.Now().UTC().Add(30 * time.Second),
@@ -139,7 +139,7 @@ func TestRuntimeHTTPRejectsClientSelectedCohortAndCrossCohortResolution(t *testi
 	}
 
 	body, err := json.Marshal(runtimeDispatchResolveRequest{
-		Envelope: commandmodel.DispatchEnvelope{OrganizationID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: "other-device"},
+		Envelope: commandmodel.DispatchEnvelope{TenantID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: "other-device"},
 		Result:   commandmodel.ConnectorResult{Phase: commandmodel.ConnectorPreSendRejected},
 	})
 	if err != nil {
@@ -173,7 +173,7 @@ func TestRuntimeHTTPSelectsExactMultiCohortByWorkloadIdentity(t *testing.T) {
 			{
 				DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher/ahu-01",
 				VerifierSPIFFE:   "spiffe://hvac.local/command-verifier/ahu-01",
-				OrganizationID:   runtimeTestOrganization,
+				TenantID:         runtimeTestOrganization,
 				SiteID:           runtimeTestSite,
 				DeviceID:         runtimeTestDevice,
 				Capability:       commandmodel.CapabilitySetTemperatureSetpoint,
@@ -181,7 +181,7 @@ func TestRuntimeHTTPSelectsExactMultiCohortByWorkloadIdentity(t *testing.T) {
 			{
 				DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher/fcu-02",
 				VerifierSPIFFE:   "spiffe://hvac.local/command-verifier/fcu-02",
-				OrganizationID:   runtimeTestOrganization,
+				TenantID:         runtimeTestOrganization,
 				SiteID:           runtimeTestSite,
 				DeviceID:         secondDevice,
 				Capability:       commandmodel.CapabilitySetTemperatureSetpoint,
@@ -220,14 +220,14 @@ func TestRuntimeHTTPRecordsBoundedVerificationMetrics(t *testing.T) {
 	handler, err := NewRuntimeHTTPHandler(RuntimeHTTPConfig{
 		Store: stub, Metrics: registry,
 		DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher", VerifierSPIFFE: "spiffe://hvac.local/command-verifier",
-		OrganizationID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: runtimeTestDevice,
+		TenantID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: runtimeTestDevice,
 		Capability: commandmodel.CapabilitySetTemperatureSetpoint,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	envelope := commandmodel.VerificationEnvelope{
-		OrganizationID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: runtimeTestDevice,
+		TenantID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: runtimeTestDevice,
 		Capability: commandmodel.CapabilitySetTemperatureSetpoint, AcknowledgedAt: time.Now().UTC().Add(-2 * time.Second),
 	}
 	body, err := json.Marshal(runtimeVerificationResolveRequest{Envelope: envelope, Result: commandmodel.VerificationResult{Outcome: commandmodel.VerificationSucceeded}})
@@ -260,7 +260,7 @@ func runtimeTestHandler(t *testing.T, stub RuntimeStore) http.Handler {
 	t.Helper()
 	handler, err := NewRuntimeHTTPHandler(RuntimeHTTPConfig{
 		Store: stub, DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher", VerifierSPIFFE: "spiffe://hvac.local/command-verifier",
-		OrganizationID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: runtimeTestDevice,
+		TenantID: runtimeTestOrganization, SiteID: runtimeTestSite, DeviceID: runtimeTestDevice,
 		Capability: commandmodel.CapabilitySetTemperatureSetpoint,
 	})
 	if err != nil {

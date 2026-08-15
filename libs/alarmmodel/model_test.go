@@ -11,7 +11,7 @@ func TestAlarmValidationPreservesOwnedLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := ListResponse{SchemaVersion: SchemaVersion, Items: []Alarm{alarm}}
-	if err := response.Validate(alarm.OrganizationID, alarm.SiteID, 50); err != nil {
+	if err := response.Validate(alarm.TenantID, alarm.SiteID, 50); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -19,7 +19,7 @@ func TestAlarmValidationPreservesOwnedLifecycle(t *testing.T) {
 func TestAlarmListRejectsCrossSiteProjection(t *testing.T) {
 	alarm := validAlarm()
 	response := ListResponse{SchemaVersion: SchemaVersion, Items: []Alarm{alarm}}
-	if err := response.Validate(alarm.OrganizationID, "018f3e00-2000-7000-8000-000000000002", 50); err == nil {
+	if err := response.Validate(alarm.TenantID, "018f3e00-2000-7000-8000-000000000002", 50); err == nil {
 		t.Fatal("cross-Site Alarm projection was accepted")
 	}
 }
@@ -223,7 +223,7 @@ func validAlarm() Alarm {
 	return Alarm{
 		SchemaVersion:   SchemaVersion,
 		AlarmID:         "018f3e00-4000-7000-8000-000000000001",
-		OrganizationID:  "018f3e00-1000-7000-8000-000000000001",
+		TenantID:  "018f3e00-1000-7000-8000-000000000001",
 		SiteID:          "018f3e00-2000-7000-8000-000000000001",
 		SourceType:      SourceSiteRule,
 		SourceReference: "rule:central-plant-temperature-drift:v3",

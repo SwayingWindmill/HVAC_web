@@ -21,7 +21,7 @@ func TestReportedStateClientReadsExactCohort(t *testing.T) {
 		_ = json.NewEncoder(writer).Encode(map[string]any{
 			"schemaVersion":  1,
 			"evidenceId":     "s2:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			"organizationId": "org-1", "siteId": "site-1", "deviceId": "device-1",
+			"tenantId": "org-1", "siteId": "site-1", "deviceId": "device-1",
 			"evaluationAvailability": "AVAILABLE", "presence": "ONLINE", "readiness": "CURRENT",
 			"freshness": "FRESH", "quality": "GOOD", "businessRevision": 19,
 			"reportedValue": map[string]any{"number": 22.5}, "observedAt": observedAt, "reportedStateKey": "zone.temperature_setpoint",
@@ -29,13 +29,13 @@ func TestReportedStateClientReadsExactCohort(t *testing.T) {
 	}))
 	defer server.Close()
 	client, err := NewReportedStateClient(ReportedStateClientConfig{
-		BaseURL: server.URL, HTTPClient: server.Client(), OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+		BaseURL: server.URL, HTTPClient: server.Client(), TenantID: "org-1", SiteID: "site-1", DeviceID: "device-1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	evidenceID, reported, err := client.ReadReportedState(context.Background(), commandmodel.VerificationEnvelope{
-		OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1", CommandID: "command-1", AttemptID: "attempt-1", ExecutionFence: 1,
+		TenantID: "org-1", SiteID: "site-1", DeviceID: "device-1", CommandID: "command-1", AttemptID: "attempt-1", ExecutionFence: 1,
 		VerificationPointKey: "zone.temperature_setpoint",
 	})
 	if err != nil {
@@ -48,13 +48,13 @@ func TestReportedStateClientReadsExactCohort(t *testing.T) {
 
 func TestReportedStateClientRejectsEnvelopeOutsideCohort(t *testing.T) {
 	client, err := NewReportedStateClient(ReportedStateClientConfig{
-		BaseURL: "https://s2.example.test", HTTPClient: http.DefaultClient, OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+		BaseURL: "https://s2.example.test", HTTPClient: http.DefaultClient, TenantID: "org-1", SiteID: "site-1", DeviceID: "device-1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := client.ReadReportedState(context.Background(), commandmodel.VerificationEnvelope{
-		OrganizationID: "org-1", SiteID: "site-1", DeviceID: "other-device", CommandID: "command-1", AttemptID: "attempt-1", ExecutionFence: 1,
+		TenantID: "org-1", SiteID: "site-1", DeviceID: "other-device", CommandID: "command-1", AttemptID: "attempt-1", ExecutionFence: 1,
 	}); err == nil {
 		t.Fatal("expected out-of-cohort envelope to fail closed")
 	}

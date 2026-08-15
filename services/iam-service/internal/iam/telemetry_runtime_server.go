@@ -17,14 +17,14 @@ const (
 
 type TelemetryGrantStore interface {
 	ConsumeGrant(ctx context.Context, claims telemetryauth.GrantClaims, now time.Time) (telemetryauth.GrantUseStatus, error)
-	PollRevocations(ctx context.Context, actingOrganizationID string, afterSequence int64, limit int) ([]TelemetryRevocationFact, error)
+	PollRevocations(ctx context.Context, tenantID string, afterSequence int64, limit int) ([]TelemetryRevocationFact, error)
 }
 
 type telemetryGrantConsumeRequest struct {
 	DelegationGrant      string                 `json:"delegationGrant"`
 	PrincipalID          string                 `json:"principalId"`
 	SessionID            string                 `json:"sessionId"`
-	ActingOrganizationID string                 `json:"actingOrganizationId"`
+	TenantID string                 `json:"tenantId"`
 	Action               telemetryauth.Action   `json:"action"`
 	Targets              []telemetryauth.Target `json:"targets"`
 }
@@ -33,7 +33,7 @@ type telemetryGrantAcceptance struct {
 	TokenID              string               `json:"tokenId"`
 	PrincipalID          string               `json:"principalId"`
 	SessionID            string               `json:"sessionId"`
-	ActingOrganizationID string               `json:"actingOrganizationId"`
+	TenantID string               `json:"tenantId"`
 	Action               telemetryauth.Action `json:"action"`
 	ScopeDigest          string               `json:"scopeDigest"`
 	PolicyRevision       string               `json:"policyRevision"`
@@ -41,7 +41,7 @@ type telemetryGrantAcceptance struct {
 }
 
 type telemetryRevocationPollRequest struct {
-	ActingOrganizationID string `json:"actingOrganizationId"`
+	TenantID string `json:"tenantId"`
 	AfterSequence        int64  `json:"afterSequence"`
 	Limit                int    `json:"limit"`
 }
@@ -85,7 +85,7 @@ func (h *handler) handleTelemetryGrantConsume(writer http.ResponseWriter, reques
 		writeProblem(writer, http.StatusBadRequest, "IAM_TELEMETRY_GRANT_REQUEST_INVALID", "The Telemetry grant request is invalid.")
 		return http.StatusBadRequest
 	}
-	requestScope := telemetryauth.DecisionRequest{ActingOrganizationID: input.ActingOrganizationID, Action: input.Action, Targets: input.Targets}
+	requestScope := telemetryauth.DecisionRequest{TenantID: input.TenantID, Action: input.Action, Targets: input.Targets}
 	if requestScope.Validate() != nil {
 		writeProblem(writer, http.StatusBadRequest, "IAM_TELEMETRY_GRANT_REQUEST_INVALID", "The Telemetry grant request is invalid.")
 		return http.StatusBadRequest
@@ -101,7 +101,7 @@ func (h *handler) handleTelemetryGrantConsume(writer http.ResponseWriter, reques
 		err = telemetryauth.ValidateGrant(claims, telemetryauth.GrantValidation{
 			Now: now, Issuer: h.telemetryGrantIssuer, Presenter: h.allowedWorkloadSPIFFE, Audience: h.telemetryGrantAudience,
 			PrincipalID: input.PrincipalID, SessionID: input.SessionID, Action: input.Action,
-			ActingOrganizationID: input.ActingOrganizationID, Targets: input.Targets,
+			TenantID: input.TenantID, Targets: input.Targets,
 			UseChecker: func(claims telemetryauth.GrantClaims) (telemetryauth.GrantUseStatus, error) {
 				status, err := h.telemetryGrantStore.ConsumeGrant(request.Context(), claims, now)
 				useErr = err
@@ -119,7 +119,7 @@ func (h *handler) handleTelemetryGrantConsume(writer http.ResponseWriter, reques
 	}
 	writeJSON(writer, http.StatusOK, telemetryGrantAcceptance{
 		TokenID: claims.TokenID, PrincipalID: claims.PrincipalID, SessionID: claims.SessionID,
-		ActingOrganizationID: claims.ActingOrganizationID, Action: claims.Action, ScopeDigest: claims.ScopeDigest,
+		TenantID: claims.TenantID, Action: claims.Action, ScopeDigest: claims.ScopeDigest,
 		PolicyRevision: claims.PolicyRevision, ExpiresAt: claims.ExpiresAt,
 	})
 	return http.StatusOK
@@ -130,11 +130,11 @@ func (h *handler) handleTelemetryRevocationPoll(writer http.ResponseWriter, requ
 	var input telemetryRevocationPollRequest
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil || strings.TrimSpace(input.ActingOrganizationID) == "" || input.AfterSequence < 0 || input.Limit <= 0 || input.Limit > 500 {
+	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil || strings.TrimSpace(input.TenantID) == "" || input.AfterSequence < 0 || input.Limit <= 0 || input.Limit > 500 {
 		writeProblem(writer, http.StatusBadRequest, "IAM_TELEMETRY_REVOCATION_REQUEST_INVALID", "The Telemetry revocation request is invalid.")
 		return http.StatusBadRequest
 	}
-	facts, err := h.telemetryGrantStore.PollRevocations(request.Context(), input.ActingOrganizationID, input.AfterSequence, input.Limit)
+	facts, err := h.telemetryGrantStore.PollRevocations(request.Context(), input.TenantID, input.AfterSequence, input.Limit)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "IAM_TELEMETRY_REVOCATION_UNAVAILABLE", "Telemetry revocation facts are unavailable.")
 		return http.StatusServiceUnavailable

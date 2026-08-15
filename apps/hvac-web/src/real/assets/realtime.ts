@@ -39,7 +39,7 @@ export interface RealAssetsRealtimeScope {
   readonly protectedGeneration: number;
   readonly clientSubscriptionId: string;
   readonly deviceId: string;
-  readonly owningOrganizationId: string;
+  readonly tenantId: string;
   readonly siteId: string;
   readonly keys: readonly string[];
 }
@@ -87,7 +87,7 @@ export function createRealAssetsRealtimeScope(
     protectedGeneration,
     clientSubscriptionId: realAssetsRealtimeSubscriptionId(protectedGeneration, row.device.id),
     deviceId: row.device.id,
-    owningOrganizationId: row.device.owningOrganizationId,
+    tenantId: row.device.tenantId,
     siteId: row.device.siteId,
     keys: Object.freeze([...keys]),
   });
@@ -104,12 +104,12 @@ export function createRealAssetsRealtimeTarget(scope: RealAssetsRealtimeScope): 
 function validateSnapshot(snapshot: DeviceObservationSnapshot, scope: RealAssetsRealtimeScope): void {
   if (snapshot.schemaVersion !== 1
     || snapshot.deviceId !== scope.deviceId
-    || snapshot.owningOrganizationId !== scope.owningOrganizationId
+    || snapshot.tenantId !== scope.tenantId
     || snapshot.siteId !== scope.siteId
     || snapshot.businessRevision < 1
     || snapshot.values.length !== scope.keys.length
     || snapshot.values.some((value, index) => value.key !== scope.keys[index])) {
-    throw new Error('Realtime Snapshot escaped the authorized Device, owner, Site or exact-key scope');
+    throw new Error('Realtime Snapshot escaped the authorized Tenant, Site, Device or exact-key scope');
   }
 }
 

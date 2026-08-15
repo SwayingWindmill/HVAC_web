@@ -198,7 +198,7 @@ const assertCoordinatorError = async (run, expectedCode) => {
 const createAndStart = async (harness) => {
   const created = await harness.coordinator.create({
     scope: {
-      organizationId: 'organization-001',
+      tenantId: 'organization-001',
       siteId: 'site-001',
       equipmentId: null,
       deviceId: null,
@@ -216,7 +216,7 @@ test('authorized callers create, start, and query an Investigation through the C
 
   const created = await coordinator.create({
     scope: {
-      organizationId: 'organization-001',
+      tenantId: 'organization-001',
       siteId: 'site-001',
       equipmentId: null,
       deviceId: null,
@@ -250,7 +250,7 @@ test('authorization denial is a typed error and creates no Investigation', async
 
   await assertCoordinatorError(() => coordinator.create({
     scope: {
-      organizationId: 'organization-001',
+      tenantId: 'organization-001',
       siteId: 'site-denied',
       equipmentId: null,
       deviceId: null,
@@ -270,7 +270,7 @@ test('every query and mutation reauthorizes the authoritative Investigation Scop
   const harness = createHarness();
   const created = await harness.coordinator.create({
     scope: {
-      organizationId: 'organization-001',
+      tenantId: 'organization-001',
       siteId: 'site-001',
       equipmentId: null,
       deviceId: null,
@@ -298,7 +298,7 @@ test('advance executes independent READ requests in parallel and saves only Runt
   const startedRequests = [];
   const readContexts = [];
   const scope = {
-    organizationId: 'organization-001',
+    tenantId: 'organization-001',
     siteId: 'site-001',
     equipmentId: null,
     deviceId: null,
@@ -413,7 +413,7 @@ test('advance resumes from a matching Checkpoint and rejects a mismatched Runtim
     requestId: request.requestId,
     owner: 'registry',
     scope: {
-      organizationId: 'organization-001',
+      tenantId: 'organization-001',
       siteId: 'site-001',
       equipmentId: null,
       deviceId: null,
@@ -491,7 +491,7 @@ test('advance rejects Owner results whose identity, Owner, Scope, or provenance 
         requestId: 'read-other',
         owner: 'analytics-service',
         scope: {
-          organizationId: 'organization-other',
+          tenantId: 'organization-other',
           siteId: 'site-other',
           equipmentId: null,
           deviceId: null,

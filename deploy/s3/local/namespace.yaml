@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: s3-local
-  labels:
-    s3.hvac/environment: local-integration
-    s3.hvac/formal-certification: "false"

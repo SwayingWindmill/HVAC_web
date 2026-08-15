@@ -129,7 +129,7 @@ function validatePresenceSnapshot(
 ): DeviceObservationSnapshot {
   if (snapshot.schemaVersion !== 1
     || snapshot.deviceId !== device.id
-    || snapshot.owningOrganizationId !== device.owningOrganizationId
+    || snapshot.tenantId !== device.tenantId
     || snapshot.siteId !== device.siteId
     || snapshot.values.length !== 0) {
     throw new Error(`Presence-only Snapshot scope drifted for Device ${device.id}`);
@@ -139,12 +139,12 @@ function validatePresenceSnapshot(
 
 async function csrf(
   runtime: TelemetryCurrentRuntime,
-  organizationId: string,
+  tenantId: string,
   signal?: AbortSignal,
 ): Promise<string> {
   const principal = await runtime.platform.getCurrentPrincipal({ signal });
-  if (principal.data.context.actingOrganizationId !== organizationId) {
-    throw new Error('Authenticated Organization changed during telemetry request');
+  if (!tenantId) {
+    throw new Error('Trusted Tenant context is required for telemetry request');
   }
   const value = principal.data.session.csrfToken;
   if (!value) throw new Error('Authenticated Session omitted CSRF capability');
@@ -153,21 +153,21 @@ async function csrf(
 
 export async function readVisibleDevicePresence(
   devices: ReadonlyArray<Device>,
-  organizationId: string,
+  tenantId: string,
   siteId: string,
   runtime: TelemetryCurrentRuntime = defaultRuntime,
   signal?: AbortSignal,
 ): Promise<PresenceBatchResult> {
   if (devices.length > MAX_BATCH_DEVICES) throw new Error('Visible Device batch exceeds 100');
-  if (devices.some((device) => device.owningOrganizationId !== organizationId || device.siteId !== siteId)) {
-    throw new Error('Visible Device batch crosses Organization or Site scope');
+  if (devices.some((device) => device.tenantId !== tenantId || device.siteId !== siteId)) {
+    throw new Error('Visible Device batch crosses Tenant or Site scope');
   }
   if (new Set(devices.map((device) => device.id)).size !== devices.length) {
     throw new Error('Visible Device batch contains duplicate Device IDs');
   }
   if (devices.length === 0) return { items: [], byDeviceId: new Map(), partial: false };
 
-  const csrfToken = await csrf(runtime, organizationId, signal);
+  const csrfToken = await csrf(runtime, tenantId, signal);
   const expected = devices.map((device, index) => ({
     requestId: requestId(device.id, index),
     device,
@@ -198,7 +198,7 @@ export async function readVisibleDevicePresence(
 
 export function useVisibleDevicePresence(
   devices: ReadonlyArray<Device>,
-  organizationId: string | null,
+  tenantId: string | null,
   siteId: string | null,
   runtime: TelemetryCurrentRuntime = defaultRuntime,
 ) {
@@ -213,9 +213,9 @@ export function useVisibleDevicePresence(
   );
   const deviceIds = stableDevices.map((device) => device.id).join('|');
   return useQuery({
-    queryKey: [...PRESENCE_QUERY_ROOT, organizationId, siteId, deviceIds],
-    queryFn: ({ signal }) => readVisibleDevicePresence(stableDevices, organizationId!, siteId!, runtime, signal),
-    enabled: API_MODE === 'real' && Boolean(organizationId && siteId && stableDevices.length > 0),
+    queryKey: [...PRESENCE_QUERY_ROOT, tenantId, siteId, deviceIds],
+    queryFn: ({ signal }) => readVisibleDevicePresence(stableDevices, tenantId!, siteId!, runtime, signal),
+    enabled: API_MODE === 'real' && Boolean(tenantId && siteId && stableDevices.length > 0),
     staleTime: 10_000,
     refetchInterval: 30_000,
     retry: (failureCount, error) => failureCount < 1 && !(error instanceof S2TelemetryClientError && !error.problem.retryable),
@@ -274,7 +274,7 @@ export function useDeviceTelemetryLive(
       unsubscribe?.();
       session?.close();
     };
-  }, [device?.id, device?.owningOrganizationId, device?.siteId, device?.deviceType, keySignature, queryClient, runtime]);
+  }, [device?.id, device?.tenantId, device?.siteId, device?.deviceType, keySignature, queryClient, runtime]);
 
   return result;
 }
@@ -294,7 +294,7 @@ export function presentTelemetryError(error: unknown): { title: string; descript
   }
   return {
     title: '设备状态连接失败',
-    description: '真实模式不会回退到 Legacy、ThingsBoard、Socket.IO 或 Mock 状态。',
+    description: '真实模式不会回退到 Legacy、Provider 直读、Socket.IO 或 Mock 状态。',
     retryable: true,
   };
 }

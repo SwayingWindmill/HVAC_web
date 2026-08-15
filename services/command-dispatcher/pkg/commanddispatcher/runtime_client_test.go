@@ -21,7 +21,7 @@ const (
 
 func TestRuntimeClientClaimsAndResolvesDispatch(t *testing.T) {
 	envelope := commandmodel.DispatchEnvelope{
-		CommandID: "command-1", AttemptID: "attempt-1", OrganizationID: runtimeClientTestOrganization, SiteID: runtimeClientTestSite, DeviceID: runtimeClientTestDevice,
+		CommandID: "command-1", AttemptID: "attempt-1", TenantID: runtimeClientTestOrganization, SiteID: runtimeClientTestSite, DeviceID: runtimeClientTestDevice,
 		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: "capability:set-temperature-setpoint:v1",
 		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 22}, PayloadHash: "hash", ExecutionFence: 1, DeviceCommandSequence: 1, LeaseOwner: "dispatcher-a", LeaseUntil: time.Now().UTC().Add(time.Minute),
 	}
@@ -65,7 +65,7 @@ func TestRuntimeClientClaimsAndResolvesDispatch(t *testing.T) {
 
 	client, err := NewRuntimeClient(RuntimeClientConfig{
 		BaseURL: server.URL, HTTPClient: server.Client(),
-		OrganizationID: runtimeClientTestOrganization, SiteID: runtimeClientTestSite, DeviceID: runtimeClientTestDevice,
+		TenantID: runtimeClientTestOrganization, SiteID: runtimeClientTestSite, DeviceID: runtimeClientTestDevice,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func TestRuntimeClientClaimsAndResolvesDispatch(t *testing.T) {
 		t.Fatal("resolve request was not observed")
 	}
 	preparedEvidence := commandmodel.PreparedConnectorEvidence{
-		AttemptID: "attempt-1", CommandID: "command-1", OrganizationID: runtimeClientTestOrganization, SiteID: runtimeClientTestSite, DeviceID: runtimeClientTestDevice,
+		AttemptID: "attempt-1", CommandID: "command-1", TenantID: runtimeClientTestOrganization, SiteID: runtimeClientTestSite, DeviceID: runtimeClientTestDevice,
 		ExternalDeviceID: "tb-device-1", ExecutionFence: 1, PayloadHash: "hash", MappingRevision: "mapping-1",
 		BindingRevision: "binding-1", ProviderEndpoint: "/api/rpc/twoway/{deviceId}", ProviderMethod: "setTemperatureSetpoint",
 		RequestSHA256: "request-hash", PreparedAt: time.Now().UTC(),
@@ -116,7 +116,7 @@ func TestRuntimeClientMapsNoWorkAndStaleFence(t *testing.T) {
 	defer server.Close()
 	client, err := NewRuntimeClient(RuntimeClientConfig{
 		BaseURL: server.URL, HTTPClient: server.Client(),
-		OrganizationID: runtimeClientTestOrganization, SiteID: runtimeClientTestSite, DeviceID: runtimeClientTestDevice,
+		TenantID: runtimeClientTestOrganization, SiteID: runtimeClientTestSite, DeviceID: runtimeClientTestDevice,
 	})
 	if err != nil {
 		t.Fatal(err)

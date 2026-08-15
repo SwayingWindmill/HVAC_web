@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -77,7 +76,7 @@ type registryBackendResult struct {
 
 type registryAuthorization struct {
 	coreGrant      string
-	legacyScopes   []string
+	allowedSiteIDs map[string]struct{}
 	policyRevision string
 }
 
@@ -120,27 +119,10 @@ func newRegistryController(config *RegistryConfig) *registryController {
 	}
 }
 
-func (h *handler) ListOrganizations(writer http.ResponseWriter, request *http.Request, params platformapi.ListRegistryParams) {
+func (h *handler) ListSites(writer http.ResponseWriter, request *http.Request, params platformapi.ListRegistryParams) {
 	h.serveRegistry(writer, request, publicRegistryRoute{
-		template:     platformapi.ListOrganizationsPath,
-		internalPath: "/internal/v1/registry/organizations",
-		action:       registryauth.ActionOrganizationList,
-		list:         true,
-	}, params)
-}
-
-func (h *handler) GetOrganization(writer http.ResponseWriter, request *http.Request, organizationID string) {
-	h.serveRegistry(writer, request, publicRegistryRoute{
-		template:     platformapi.GetOrganizationPathTemplate,
-		internalPath: "/internal/v1/registry/organizations/" + organizationID,
-		action:       registryauth.ActionOrganizationRead,
-	}, platformapi.ListRegistryParams{})
-}
-
-func (h *handler) ListOrganizationSites(writer http.ResponseWriter, request *http.Request, organizationID string, params platformapi.ListRegistryParams) {
-	h.serveRegistry(writer, request, publicRegistryRoute{
-		template:     platformapi.ListOrganizationSitesPathTemplate,
-		internalPath: "/internal/v1/registry/organizations/" + organizationID + "/sites",
+		template:     platformapi.ListSitesPath,
+		internalPath: "/internal/v1/registry/sites",
 		action:       registryauth.ActionSiteList,
 		list:         true,
 	}, params)
@@ -154,20 +136,20 @@ func (h *handler) GetSite(writer http.ResponseWriter, request *http.Request, sit
 	}, platformapi.ListRegistryParams{})
 }
 
-func (h *handler) ListSiteEquipment(writer http.ResponseWriter, request *http.Request, siteID string, params platformapi.ListRegistryParams) {
+func (h *handler) ListSiteAsset(writer http.ResponseWriter, request *http.Request, siteID string, params platformapi.ListRegistryParams) {
 	h.serveRegistry(writer, request, publicRegistryRoute{
-		template:     platformapi.ListSiteEquipmentPathTemplate,
-		internalPath: "/internal/v1/registry/sites/" + siteID + "/equipment",
-		action:       registryauth.ActionEquipmentList,
+		template:     platformapi.ListSiteAssetPathTemplate,
+		internalPath: "/internal/v1/registry/sites/" + siteID + "/assets",
+		action:       registryauth.ActionAssetList,
 		list:         true,
 	}, params)
 }
 
-func (h *handler) GetEquipment(writer http.ResponseWriter, request *http.Request, equipmentID string) {
+func (h *handler) GetAsset(writer http.ResponseWriter, request *http.Request, assetID string) {
 	h.serveRegistry(writer, request, publicRegistryRoute{
-		template:     platformapi.GetEquipmentPathTemplate,
-		internalPath: "/internal/v1/registry/equipment/" + equipmentID,
-		action:       registryauth.ActionEquipmentRead,
+		template:     platformapi.GetAssetPathTemplate,
+		internalPath: "/internal/v1/registry/assets/" + assetID,
+		action:       registryauth.ActionAssetRead,
 	}, platformapi.ListRegistryParams{})
 }
 
@@ -233,19 +215,13 @@ func (h *handler) serveRegistry(writer http.ResponseWriter, request *http.Reques
 	}
 
 	query := encodeRegistryQuery(params)
-	primary := h.executeRegistryBackend(request.Context(), decision.SelectedOwner, route, query, authorization, session, decision, true)
-	selected := primary
-	if decision.ReadFallbackOwner != "" && registryFallbackAllowed(primary, decision) {
-		secondary := h.executeRegistryBackend(request.Context(), decision.ReadFallbackOwner, route, query, authorization, session, decision, true)
-		if err := h.recordRegistryComparison(request.Context(), session, decision, "ROUTE_FALLBACK_EXECUTED", primary, secondary, false); err == nil && registryFallbackResultUsable(secondary) {
-			selected = secondary
-		}
+	if decision.SelectedOwner != ownershipregistry.OwnerCore || decision.ReadFallbackOwner != "" || decision.ShadowOwner != "" {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Registry route decision is outside the V2 Core-only boundary.", true, nil)
+		return
 	}
-	if decision.ShadowOwner != "" {
-		h.launchRegistryShadow(request.Context(), session, decision, route, query, authorization, primary)
-	}
+	result := h.executeCoreRegistry(request.Context(), route, query, authorization.coreGrant, decision)
 	writer.Header().Set("X-Route-Policy-Revision", formatRevision(decision.RegistryRevision))
-	h.writeRegistryBackendResult(writer, request, selected)
+	h.writeRegistryBackendResult(writer, request, result)
 }
 
 func (h *handler) authorizeRegistry(ctx context.Context, session bffSession, action registryauth.Action) (registryAuthorization, *registryAuthorizationFailure) {
@@ -279,7 +255,7 @@ func (h *handler) authorizeRegistryForPresenter(
 		Roles:                append([]string(nil), session.Principal.Roles...),
 		ExecutingService:     h.identity.config.ExecutingWorkloadSPIFFE,
 		Audience:             h.identity.config.IAMAudience,
-		ActingOrganizationID: session.ActingOrganizationID,
+		TenantID:             session.TenantID,
 		Actions:              []string{"registry:authorize"},
 		Scopes:               []string{"session:" + session.ID},
 		PolicyRevision:       h.identity.config.PolicyRevision,
@@ -293,8 +269,8 @@ func (h *handler) authorizeRegistryForPresenter(
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Registry authorization request could not be signed.", true}
 	}
 	body, err := json.Marshal(registryauth.DecisionRequest{
-		ActingOrganizationID: session.ActingOrganizationID,
-		Action:               action,
+		TenantID:       session.TenantID,
+		Action:         action,
 		GrantPresenter:       presenterSPIFFE,
 	})
 	if err != nil {
@@ -335,29 +311,21 @@ func (h *handler) authorizeRegistryForPresenter(
 	if !decision.Decision.Allowed {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusForbidden, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Registry resource was not found.", false}
 	}
-	if decision.Decision.ActingOrganizationID != session.ActingOrganizationID || decision.Decision.Subject != session.Principal.Subject || decision.Decision.SubjectIssuer != session.Principal.Issuer || decision.Decision.PrincipalID == "" || decision.Decision.PolicyRevision != h.identity.config.PolicyRevision || !registryauth.IsAllowReason(decision.Decision.ReasonCode) || len(decision.Decision.Actions) != 1 || decision.Decision.Actions[0] != action || decision.DelegationGrant == "" || len(decision.DelegationGrant) > registryauth.MaximumEncodedGrantSize {
+	if decision.Decision.TenantID != session.TenantID || decision.Decision.Subject != session.Principal.Subject || decision.Decision.SubjectIssuer != session.Principal.Issuer || decision.Decision.PrincipalID == "" || decision.Decision.PolicyRevision != h.identity.config.PolicyRevision || !registryauth.IsAllowReason(decision.Decision.ReasonCode) || len(decision.Decision.Actions) != 1 || decision.Decision.Actions[0] != action || decision.DelegationGrant == "" || len(decision.DelegationGrant) > registryauth.MaximumEncodedGrantSize {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "IAM returned a Registry decision outside the authenticated boundary.", true}
 	}
 	if !structurallyValidRegistryGrant(decision.DelegationGrant) {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "IAM returned a malformed Registry grant.", true}
 	}
-	scopes, err := legacyRegistryScopes(decision.Decision, action)
+	allowedSites, err := validateExactSiteRegistryScope(decision.Decision)
 	if err != nil {
-		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "IAM returned an invalid Registry scope projection.", true}
+		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "IAM returned an invalid exact-Site Registry scope.", true}
 	}
-	return registryAuthorization{coreGrant: decision.DelegationGrant, legacyScopes: scopes, policyRevision: decision.Decision.PolicyRevision}, nil
+	return registryAuthorization{coreGrant: decision.DelegationGrant, allowedSiteIDs: allowedSites, policyRevision: decision.Decision.PolicyRevision}, nil
 }
 
-func legacyRegistryScopes(decision registryauth.Decision, action registryauth.Action) ([]string, error) {
-	allowedOrganizations, err := validatedRegistryIDs(decision.AllowedOrganizationIDs)
-	if err != nil {
-		return nil, err
-	}
+func validateExactSiteRegistryScope(decision registryauth.Decision) (map[string]struct{}, error) {
 	allowedSites, err := validatedRegistryIDs(decision.AllowedSiteIDs)
-	if err != nil {
-		return nil, err
-	}
-	deniedOrganizations, err := validatedRegistryIDs(decision.DeniedOrganizationIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -365,28 +333,13 @@ func legacyRegistryScopes(decision registryauth.Decision, action registryauth.Ac
 	if err != nil {
 		return nil, err
 	}
-	if setsOverlap(allowedOrganizations, deniedOrganizations) || setsOverlap(allowedSites, deniedSites) {
-		return nil, errors.New("Registry decision allowed and denied scopes overlap")
+	if len(allowedSites) == 0 || len(allowedSites) > 256 {
+		return nil, errors.New("Registry decision must contain an exact non-empty Site set")
 	}
-	if !action.SiteScoped() {
-		if _, allowed := allowedOrganizations[decision.ActingOrganizationID]; !allowed {
-			return nil, errors.New("Registry organization action is outside the acting organization scope")
-		}
-	} else if len(allowedOrganizations) == 0 && len(allowedSites) == 0 {
-		return nil, errors.New("Registry site action has no allowed resource scope")
+	if setsOverlap(allowedSites, deniedSites) {
+		return nil, errors.New("Registry decision allowed and denied Site scopes overlap")
 	}
-	scopes := make([]string, 0, len(allowedOrganizations)+len(allowedSites))
-	for organizationID := range allowedOrganizations {
-		scopes = append(scopes, "organization:"+organizationID)
-	}
-	for siteID := range allowedSites {
-		scopes = append(scopes, "site:"+siteID)
-	}
-	if len(scopes) == 0 || len(scopes) > 256 {
-		return nil, errors.New("Registry decision scope count is invalid")
-	}
-	sort.Strings(scopes)
-	return scopes, nil
+	return allowedSites, nil
 }
 
 func validatedRegistryIDs(values []string) (map[string]struct{}, error) {
@@ -410,17 +363,6 @@ func setsOverlap(left, right map[string]struct{}) bool {
 		}
 	}
 	return false
-}
-
-func (h *handler) executeRegistryBackend(ctx context.Context, owner string, route publicRegistryRoute, query string, authorization registryAuthorization, session bffSession, decision ownershipregistry.Decision, updateAvailability bool) registryBackendResult {
-	switch owner {
-	case ownershipregistry.OwnerCore:
-		return h.executeCoreRegistry(ctx, route, query, authorization.coreGrant, decision)
-	case ownershipregistry.OwnerLegacy:
-		return h.executeLegacyRegistry(ctx, route, query, authorization.legacyScopes, authorization.policyRevision, session, decision, updateAvailability)
-	default:
-		return unavailableRegistryResult(owner, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE")
-	}
 }
 
 func (h *handler) executeCoreRegistry(ctx context.Context, route publicRegistryRoute, query, grant string, decision ownershipregistry.Decision) registryBackendResult {
@@ -451,75 +393,6 @@ func (h *handler) executeCoreRegistry(ctx context.Context, route publicRegistryR
 	}
 	defer response.Body.Close()
 	return h.decodeRegistryBackendResponse(ownershipregistry.OwnerCore, response, route)
-}
-
-func (h *handler) executeLegacyRegistry(ctx context.Context, route publicRegistryRoute, query string, scopes []string, policyRevision string, session bffSession, decision ownershipregistry.Decision, updateAvailability bool) registryBackendResult {
-	if h.legacy == nil || h.identity == nil {
-		return unavailableRegistryResult(ownershipregistry.OwnerLegacy, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE")
-	}
-	if h.legacy.isOpen(h.identity.now()) {
-		return unavailableRegistryResult(ownershipregistry.OwnerLegacy, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE")
-	}
-	now := h.identity.now().UTC()
-	expiresAt := now.Add(h.identity.config.DelegationTTL)
-	if expiresAt.After(session.ExpiresAt) {
-		expiresAt = session.ExpiresAt
-	}
-	claims := identitycontext.DelegationClaims{
-		Issuer:               h.identity.config.ExecutingWorkloadSPIFFE,
-		Subject:              session.Principal.Subject,
-		SubjectIssuer:        session.Principal.Issuer,
-		Roles:                []string{},
-		ExecutingService:     h.identity.config.ExecutingWorkloadSPIFFE,
-		Audience:             h.legacy.config.Audience,
-		ActingOrganizationID: session.ActingOrganizationID,
-		Actions:              []string{"legacy:registry:" + string(route.action)},
-		Scopes:               append([]string(nil), scopes...),
-		PolicyRevision:       policyRevision,
-		SessionID:            session.ID,
-		IssuedAt:             now.Unix(),
-		ExpiresAt:            expiresAt.Unix(),
-		TokenID:              randomURLToken(16),
-	}
-	delegation, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
-	if err != nil {
-		return unavailableRegistryResult(ownershipregistry.OwnerLegacy, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE")
-	}
-	requestContext, cancel := context.WithTimeout(ctx, h.legacy.config.Timeout)
-	defer cancel()
-	endpoint := h.legacy.config.BaseURL + routePublicPath(route)
-	if query != "" {
-		endpoint += "?" + query
-	}
-	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return unavailableRegistryResult(ownershipregistry.OwnerLegacy, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE")
-	}
-	request.Header.Set("Accept", "application/json, application/problem+json")
-	request.Header.Set("X-Delegation-Grant", delegation)
-	request.Header.Set("X-Route-Policy-Revision", formatRevision(decision.RegistryRevision))
-	request.Header.Set("X-Request-ID", requestIDFromContext(ctx))
-	observability.InjectHTTP(ctx, request.Header)
-	response, err := h.legacy.config.HTTPClient.Do(request)
-	if err != nil {
-		if updateAvailability {
-			h.legacy.recordFailure(h.identity.now())
-		}
-		if errors.Is(requestContext.Err(), context.DeadlineExceeded) {
-			return unavailableRegistryResult(ownershipregistry.OwnerLegacy, http.StatusGatewayTimeout, "REGISTRY_TIMEOUT")
-		}
-		return unavailableRegistryResult(ownershipregistry.OwnerLegacy, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE")
-	}
-	defer response.Body.Close()
-	result := h.decodeRegistryBackendResponse(ownershipregistry.OwnerLegacy, response, route)
-	if updateAvailability {
-		if result.retryable {
-			h.legacy.recordFailure(h.identity.now())
-		} else {
-			h.legacy.recordSuccess()
-		}
-	}
-	return result
 }
 
 func (h *handler) decodeRegistryBackendResponse(owner string, response *http.Response, route publicRegistryRoute) registryBackendResult {
@@ -569,77 +442,6 @@ func (h *handler) decodeRegistryBackendResponse(owner string, response *http.Res
 	}
 	result.semanticHash = sha256Hex([]byte(fmt.Sprintf("%d:%s", result.status, result.code)))
 	return result
-}
-
-func (h *handler) launchRegistryShadow(parent context.Context, session bffSession, decision ownershipregistry.Decision, route publicRegistryRoute, query string, authorization registryAuthorization, primary registryBackendResult) {
-	shadowOwner := decision.ShadowOwner
-	if shadowOwner == "" {
-		return
-	}
-	select {
-	case h.registry.shadowSlots <- struct{}{}:
-	default:
-		h.logger.WarnContext(parent, "registry_shadow_capacity_exhausted", "route", decision.PathTemplate)
-		_ = h.observability.Metrics.AddCounter("s1_gateway_registry_shadow_skipped_total", "Gateway Registry shadows skipped at the concurrency boundary.", map[string]string{"route": decision.PathTemplate}, 1)
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), h.registry.shadowTimeout)
-	go func() {
-		defer cancel()
-		defer func() { <-h.registry.shadowSlots }()
-		shadow := h.executeRegistryBackend(ctx, shadowOwner, route, query, authorization, session, decision, false)
-		auditContext, auditCancel := context.WithTimeout(context.WithoutCancel(parent), defaultRegistryAuditTimeout)
-		defer auditCancel()
-		_ = h.recordRegistryComparison(auditContext, session, decision, "ROUTE_SHADOW_COMPARED", primary, shadow, registrySemanticEqual(primary, shadow))
-	}()
-}
-
-func (h *handler) recordRegistryComparison(ctx context.Context, session bffSession, decision ownershipregistry.Decision, eventType string, primary, secondary registryBackendResult, semanticEqual bool) error {
-	outcome := "MATCH"
-	if eventType == "ROUTE_FALLBACK_EXECUTED" {
-		outcome = "FALLBACK_EXECUTED"
-	} else if !semanticEqual {
-		outcome = "MISMATCH"
-	}
-	semantic := &semanticEqual
-	if eventType != "ROUTE_SHADOW_COMPARED" {
-		semantic = nil
-	}
-	record := ownershipregistry.AuditRecord{
-		EventType:           eventType,
-		RouteKey:            decision.RouteKey,
-		Method:              http.MethodGet,
-		PathTemplate:        decision.PathTemplate,
-		SelectedOwner:       primary.owner,
-		PreviousOwner:       secondary.owner,
-		RegistryRevision:    decision.RegistryRevision,
-		RouteRevision:       decision.RouteRevision,
-		CompatibilityMode:   decision.CompatibilityMode,
-		CohortBucket:        decision.CohortBucket,
-		OrganizationID:      session.ActingOrganizationID,
-		InitiatingSubject:   session.Principal.Subject,
-		InitiatingIssuer:    session.Principal.Issuer,
-		ExecutingService:    serviceName,
-		PolicyRevision:      h.identity.config.PolicyRevision,
-		CorrelationID:       requestIDFromContext(ctx),
-		TraceID:             traceIDFromContext(ctx),
-		OutcomeCode:         outcome,
-		PrimaryStatus:       primary.status,
-		SecondaryStatus:     secondary.status,
-		PrimaryBodySHA256:   primary.bodySHA256,
-		SecondaryBodySHA256: secondary.bodySHA256,
-		SemanticEqual:       semantic,
-		OccurredAt:          h.now().UTC(),
-	}
-	if h.identity != nil {
-		record.ExecutingSPIFFEID = h.identity.config.ExecutingWorkloadSPIFFE
-	}
-	if err := h.routeAudit.Record(ctx, record); err != nil {
-		h.logger.WarnContext(ctx, "registry_comparison_audit_failed", "route", decision.PathTemplate, "event_type", eventType)
-		return err
-	}
-	_ = h.observability.Metrics.AddCounter("s1_gateway_registry_comparisons_total", "Gateway Registry shadow and fallback comparisons.", map[string]string{"route": decision.PathTemplate, "event": eventType, "outcome": outcome}, 1)
-	return nil
 }
 
 func (h *handler) writeRegistryBackendResult(writer http.ResponseWriter, request *http.Request, result registryBackendResult) {
@@ -692,8 +494,8 @@ func parseRegistryListParams(writer http.ResponseWriter, request *http.Request) 
 }
 
 func matchPublicRegistryRoute(path string) (publicRegistryRoute, string, bool) {
-	if path == platformapi.ListOrganizationsPath {
-		return publicRegistryRoute{template: platformapi.ListOrganizationsPath, internalPath: "/internal/v1/registry/organizations", action: registryauth.ActionOrganizationList, list: true}, "", true
+	if path == platformapi.ListSitesPath {
+		return publicRegistryRoute{template: platformapi.ListSitesPath, internalPath: "/internal/v1/registry/sites", action: registryauth.ActionSiteList, list: true}, "", true
 	}
 	patterns := []struct {
 		template string
@@ -702,11 +504,9 @@ func matchPublicRegistryRoute(path string) (publicRegistryRoute, string, bool) {
 		internal func(string) string
 		list     bool
 	}{
-		{platformapi.GetOrganizationPathTemplate, "{organizationId}", registryauth.ActionOrganizationRead, func(id string) string { return "/internal/v1/registry/organizations/" + id }, false},
-		{platformapi.ListOrganizationSitesPathTemplate, "{organizationId}", registryauth.ActionSiteList, func(id string) string { return "/internal/v1/registry/organizations/" + id + "/sites" }, true},
 		{platformapi.GetSitePathTemplate, "{siteId}", registryauth.ActionSiteRead, func(id string) string { return "/internal/v1/registry/sites/" + id }, false},
-		{platformapi.ListSiteEquipmentPathTemplate, "{siteId}", registryauth.ActionEquipmentList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/equipment" }, true},
-		{platformapi.GetEquipmentPathTemplate, "{equipmentId}", registryauth.ActionEquipmentRead, func(id string) string { return "/internal/v1/registry/equipment/" + id }, false},
+		{platformapi.ListSiteAssetPathTemplate, "{siteId}", registryauth.ActionAssetList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/assets" }, true},
+		{platformapi.GetAssetPathTemplate, "{assetId}", registryauth.ActionAssetRead, func(id string) string { return "/internal/v1/registry/assets/" + id }, false},
 		{platformapi.ListSiteDevicesPathTemplate, "{siteId}", registryauth.ActionDeviceList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/devices" }, true},
 		{platformapi.ListSiteDeviceBindingsPathTemplate, "{siteId}", registryauth.ActionDeviceBindingList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/device-bindings" }, true},
 		{platformapi.GetSiteAssetModelPathTemplate, "{siteId}", registryauth.ActionAssetModelRead, func(id string) string { return "/internal/v1/registry/sites/" + id + "/asset-model" }, false},
@@ -743,18 +543,14 @@ func dispatchRegistryRoute(h *handler, writer http.ResponseWriter, request *http
 		return
 	}
 	switch route.action {
-	case registryauth.ActionOrganizationList:
-		h.ListOrganizations(writer, request, params)
-	case registryauth.ActionOrganizationRead:
-		h.GetOrganization(writer, request, id)
 	case registryauth.ActionSiteList:
-		h.ListOrganizationSites(writer, request, id, params)
+		h.ListSites(writer, request, params)
 	case registryauth.ActionSiteRead:
 		h.GetSite(writer, request, id)
-	case registryauth.ActionEquipmentList:
-		h.ListSiteEquipment(writer, request, id, params)
-	case registryauth.ActionEquipmentRead:
-		h.GetEquipment(writer, request, id)
+	case registryauth.ActionAssetList:
+		h.ListSiteAsset(writer, request, id, params)
+	case registryauth.ActionAssetRead:
+		h.GetAsset(writer, request, id)
 	case registryauth.ActionDeviceList:
 		h.ListSiteDevices(writer, request, id, params)
 	case registryauth.ActionDeviceBindingList:
@@ -770,18 +566,14 @@ func dispatchRegistryRoute(h *handler, writer http.ResponseWriter, request *http
 
 func canonicalRegistrySuccess(action registryauth.Action, scopeID string, raw []byte) ([]byte, error) {
 	switch action {
-	case registryauth.ActionOrganizationList:
-		return decodeCanonical[platformapi.OrganizationCollection](raw, validateOrganizationCollection)
-	case registryauth.ActionOrganizationRead:
-		return decodeCanonical[platformapi.Organization](raw, validateOrganization)
 	case registryauth.ActionSiteList:
 		return decodeCanonical[platformapi.SiteCollection](raw, validateSiteCollection)
 	case registryauth.ActionSiteRead:
 		return decodeCanonical[platformapi.Site](raw, validateSite)
-	case registryauth.ActionEquipmentList:
-		return decodeCanonical[platformapi.EquipmentCollection](raw, validateEquipmentCollection)
-	case registryauth.ActionEquipmentRead:
-		return decodeCanonical[platformapi.Equipment](raw, validateEquipment)
+	case registryauth.ActionAssetList:
+		return decodeCanonical[platformapi.AssetCollection](raw, validateAssetCollection)
+	case registryauth.ActionAssetRead:
+		return decodeCanonical[platformapi.Asset](raw, validateAsset)
 	case registryauth.ActionDeviceList:
 		return decodeCanonical[platformapi.DeviceCollection](raw, validateDeviceCollection)
 	case registryauth.ActionDeviceBindingList:
@@ -812,15 +604,6 @@ func decodeCanonical[T any](raw []byte, validate func(T) error) ([]byte, error) 
 	return json.Marshal(value)
 }
 
-func validateOrganizationCollection(value platformapi.OrganizationCollection) error {
-	for _, item := range value.Items {
-		if err := validateOrganization(item); err != nil {
-			return err
-		}
-	}
-	return validateNextCursor(value.NextCursor)
-}
-
 func validateSiteCollection(value platformapi.SiteCollection) error {
 	for _, item := range value.Items {
 		if err := validateSite(item); err != nil {
@@ -830,9 +613,9 @@ func validateSiteCollection(value platformapi.SiteCollection) error {
 	return validateNextCursor(value.NextCursor)
 }
 
-func validateEquipmentCollection(value platformapi.EquipmentCollection) error {
+func validateAssetCollection(value platformapi.AssetCollection) error {
 	for _, item := range value.Items {
-		if err := validateEquipment(item); err != nil {
+		if err := validateAsset(item); err != nil {
 			return err
 		}
 	}
@@ -887,7 +670,7 @@ func (h *handler) resolveAuthoritativeSiteForDomain(request *http.Request, sessi
 		CompatibilityMode: "native",
 	}
 	if h.routeManager != nil {
-		resolved, err := h.routeManager.Current().Resolve(http.MethodGet, publicPath, session.ActingOrganizationID)
+		resolved, err := h.routeManager.Current().Resolve(http.MethodGet, publicPath, session.TenantID)
 		if err != nil || resolved.DeclaredOwner != ownershipregistry.OwnerCore || resolved.SelectedOwner != ownershipregistry.OwnerCore || resolved.ReadFallbackOwner != "" || resolved.ShadowOwner != "" {
 			return platformapi.Site{}, errors.New("Registry Site route ownership is unavailable")
 		}
@@ -900,37 +683,37 @@ func (h *handler) resolveAuthoritativeSiteForDomain(request *http.Request, sessi
 	var site platformapi.Site
 	decoder := json.NewDecoder(bytes.NewReader(result.body))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&site) != nil || ensureRegistryJSONEOF(decoder) != nil || validateSite(site) != nil || site.ID != siteID || site.OwningOrganizationID != session.ActingOrganizationID || !isLowerUUIDv7(site.TenantID) {
+	if decoder.Decode(&site) != nil || ensureRegistryJSONEOF(decoder) != nil || validateSite(site) != nil || site.ID != siteID || !isLowerUUIDv7(site.TenantID) {
 		return platformapi.Site{}, errors.New("Registry returned an invalid authoritative Site")
 	}
 	return site, nil
 }
 
 func validateSiteAssetModel(value platformapi.SiteAssetModel, expectedSiteID string) error {
-	if value.SchemaVersion != 1 || !isLowerUUIDv7(value.TenantID) || value.SiteID != expectedSiteID || !isLowerUUIDv7(expectedSiteID) {
+	if value.SchemaVersion != 2 || !isLowerUUIDv7(value.TenantID) || value.SiteID != expectedSiteID || !isLowerUUIDv7(expectedSiteID) {
 		return errors.New("invalid Site asset model scope")
 	}
 	identities := map[string]string{expectedSiteID: "SITE"}
-	for _, item := range value.Areas {
-		if err := validateArea(item, expectedSiteID); err != nil {
+	for _, item := range value.Spaces {
+		if err := validateSpace(item, expectedSiteID); err != nil {
 			return err
 		}
 		if item.TenantID != value.TenantID {
-			return errors.New("Area escaped Site asset model Tenant scope")
+			return errors.New("Space escaped Site asset model Tenant scope")
 		}
 		if _, duplicate := identities[item.ID]; duplicate {
 			return errors.New("duplicate Site asset model identity")
 		}
-		identities[item.ID] = "AREA"
+		identities[item.ID] = "SPACE"
 	}
-	for _, item := range value.Equipment {
-		if err := validateEquipment(item); err != nil || item.SiteID != expectedSiteID || item.TenantID != value.TenantID {
-			return errors.New("invalid Site asset model Equipment")
+	for _, item := range value.Assets {
+		if err := validateAsset(item); err != nil || item.SiteID != expectedSiteID || item.TenantID != value.TenantID {
+			return errors.New("invalid Site asset model Asset")
 		}
 		if _, duplicate := identities[item.ID]; duplicate {
 			return errors.New("duplicate Site asset model identity")
 		}
-		identities[item.ID] = "EQUIPMENT"
+		identities[item.ID] = "ASSET"
 	}
 	for _, item := range value.Devices {
 		if err := validateDevice(item); err != nil || item.SiteID != expectedSiteID || item.TenantID != value.TenantID {
@@ -953,7 +736,6 @@ func validateSiteAssetModel(value platformapi.SiteAssetModel, expectedSiteID str
 		}
 		identities[item.ID] = "SENSOR"
 	}
-	pointByID := make(map[string]platformapi.TelemetryPoint, len(value.TelemetryPoints))
 	for _, item := range value.TelemetryPoints {
 		if err := validateTelemetryPoint(item, expectedSiteID); err != nil {
 			return err
@@ -971,11 +753,10 @@ func validateSiteAssetModel(value platformapi.SiteAssetModel, expectedSiteID str
 			return errors.New("Telemetry Point references a Sensor outside the Site asset model")
 		}
 		identities[item.ID] = "POINT"
-		pointByID[item.ID] = item
 	}
-	for _, area := range value.Areas {
-		if area.ParentAreaID != nil && identities[*area.ParentAreaID] != "AREA" {
-			return errors.New("Area parent escaped the Site asset model")
+	for _, area := range value.Spaces {
+		if area.ParentSpaceID != nil && identities[*area.ParentSpaceID] != "SPACE" {
+			return errors.New("Space parent escaped the Site asset model")
 		}
 	}
 	for _, relationship := range value.Relationships {
@@ -989,40 +770,24 @@ func validateSiteAssetModel(value platformapi.SiteAssetModel, expectedSiteID str
 			return errors.New("Asset relationship references an unknown or mismatched identity")
 		}
 	}
-	for _, input := range value.CalculatedPointInputs {
-		if input.TenantID != value.TenantID || !isLowerUUIDv7(input.TenantID) || input.SiteID != expectedSiteID || !isLowerUUIDv7(input.OwningOrganizationID) || input.Ordinal < 0 || !validRegistryString(input.InputRole, 128) || !validRegistryString(input.FormulaRevision, 256) {
-			return errors.New("invalid Calculated Point input")
-		}
-		target, targetOK := pointByID[input.CalculatedPointID]
-		_, inputOK := pointByID[input.InputPointID]
-		if !targetOK || !inputOK || target.PointKind != "CALCULATED" || target.FormulaRevision == nil || *target.FormulaRevision != input.FormulaRevision {
-			return errors.New("Calculated Point input provenance is invalid")
-		}
-	}
-	calculated := 0
-	for _, point := range value.TelemetryPoints {
-		if point.PointKind == "CALCULATED" {
-			calculated++
-		}
-	}
-	if value.Counts.Areas != len(value.Areas) || value.Counts.Equipment != len(value.Equipment) || value.Counts.DeviceEndpoints != len(value.Devices) || value.Counts.Sensors != len(value.Sensors) || value.Counts.TelemetryPoints != len(value.TelemetryPoints) || value.Counts.CalculatedPoints != calculated || value.Counts.IndependentSensorDevices < 0 {
+	if value.Counts.Spaces != len(value.Spaces) || value.Counts.Assets != len(value.Assets) || value.Counts.DeviceEndpoints != len(value.Devices) || value.Counts.PhysicalSensors != len(value.Sensors) || value.Counts.Points != len(value.TelemetryPoints) {
 		return errors.New("Site asset model counts do not match the payload")
 	}
 	return nil
 }
 
-func validateArea(value platformapi.Area, expectedSiteID string) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || value.SiteID != expectedSiteID || !validRegistryString(value.Code, 64) || !validRegistryString(value.DisplayName, 256) || !oneOf(value.AreaType, "CAMPUS", "BUILDING", "FLOOR", "ZONE", "ROOM", "PLANT_ROOM", "ROOFTOP", "OUTDOOR", "TENANT_SPACE", "OTHER") || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
-		return errors.New("invalid Area response")
+func validateSpace(value platformapi.Space, expectedSiteID string) error {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || value.SiteID != expectedSiteID || !validRegistryString(value.Code, 64) || !validRegistryString(value.DisplayName, 256) || !oneOf(value.SpaceType, "CAMPUS", "BUILDING", "FLOOR", "ZONE", "ROOM", "PLANT_ROOM", "ROOFTOP", "OUTDOOR", "TENANT_SPACE", "OTHER") || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+		return errors.New("invalid Space response")
 	}
-	if value.ParentAreaID != nil && !isLowerUUIDv7(*value.ParentAreaID) {
-		return errors.New("invalid Area parent")
+	if value.ParentSpaceID != nil && !isLowerUUIDv7(*value.ParentSpaceID) {
+		return errors.New("invalid Space parent")
 	}
 	return nil
 }
 
 func validateSensor(value platformapi.Sensor, expectedSiteID string) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || value.SiteID != expectedSiteID || !validRegistryString(value.Code, 256) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.SensorType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || value.SiteID != expectedSiteID || !validRegistryString(value.Code, 256) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.SensorType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
 		return errors.New("invalid Sensor response")
 	}
 	if value.CalibrationDueAt != nil && !validRegistryInstant(*value.CalibrationDueAt) {
@@ -1032,55 +797,51 @@ func validateSensor(value platformapi.Sensor, expectedSiteID string) error {
 }
 
 func validateTelemetryPoint(value platformapi.TelemetryPoint, expectedSiteID string) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || value.SiteID != expectedSiteID || !isLowerUUIDv7(value.ReportingDeviceID) || !validRegistryString(value.PointKey, 128) || !validRegistryString(value.SourceKey, 128) || !validRegistryString(value.DisplayName, 256) || !oneOf(value.PointKind, "MEASURED", "CALCULATED", "STATE", "COMMAND", "FEEDBACK") || !oneOf(value.ValueType, "BOOLEAN", "NUMBER", "STRING", "JSON") || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || value.SampleIntervalMS < 100 || value.PublishIntervalMS < value.SampleIntervalMS || value.StaleAfterMS < value.PublishIntervalMS || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || value.SiteID != expectedSiteID || !isLowerUUIDv7(value.ReportingDeviceID) || !validPointCode(value.PointCode) || !validRegistryString(value.SourceKey, 128) || !validRegistryString(value.DisplayName, 256) || !oneOf(value.PointType, "TELEMETRY", "COUNTER", "STATE", "SETTING", "COMMAND") || !oneOf(value.ValueType, "BOOLEAN", "NUMBER", "STRING", "JSON") || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || value.SampleIntervalMS < 100 || value.PublishIntervalMS < value.SampleIntervalMS || value.StaleAfterMS < value.PublishIntervalMS || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
 		return errors.New("invalid Telemetry Point response")
 	}
 	if value.SensorID != nil && !isLowerUUIDv7(*value.SensorID) {
 		return errors.New("invalid Telemetry Point Sensor")
 	}
-	if (value.PointKind == "CALCULATED") != (value.FormulaRevision != nil) || value.Writable != (value.PointKind == "COMMAND") {
+	if value.PointType == "COMMAND" && !value.Writable {
+		return errors.New("invalid Telemetry Point authority")
+	}
+	if value.PointType != "COMMAND" && value.PointType != "SETTING" && value.Writable {
 		return errors.New("invalid Telemetry Point authority")
 	}
 	return nil
 }
 
 func validateAssetRelationship(value platformapi.AssetRelationship, expectedSiteID string) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || value.SiteID != expectedSiteID || !isLowerUUIDv7(value.FromID) || !isLowerUUIDv7(value.ToID) || !oneOf(value.FromType, "EQUIPMENT", "DEVICE", "SENSOR", "POINT") || !oneOf(value.ToType, "SITE", "AREA", "EQUIPMENT", "DEVICE", "SENSOR", "POINT") || !validRegistryString(value.Role, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || !validRegistryInstant(value.ValidFrom) || (value.ValidTo != nil && !validRegistryInstant(*value.ValidTo)) || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || value.SiteID != expectedSiteID || !isLowerUUIDv7(value.FromID) || !isLowerUUIDv7(value.ToID) || !oneOf(value.FromType, "ASSET", "DEVICE", "SENSOR", "POINT") || !oneOf(value.ToType, "SITE", "SPACE", "ASSET", "DEVICE", "SENSOR", "POINT") || !validRegistryString(value.Role, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || !validRegistryInstant(value.ValidFrom) || (value.ValidTo != nil && !validRegistryInstant(*value.ValidTo)) || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
 		return errors.New("invalid Asset relationship")
 	}
 	return nil
 }
 
-func validateOrganization(value platformapi.Organization) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !oneOf(value.Status, "ACTIVE", "SUSPENDED", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
-		return errors.New("invalid Organization response")
-	}
-	return nil
-}
-
 func validateSite(value platformapi.Site) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryTimezone(value.Timezone) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryTimezone(value.Timezone) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
 		return errors.New("invalid Site response")
 	}
 	return nil
 }
 
-func validateEquipment(value platformapi.Equipment) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || !isLowerUUIDv7(value.SiteID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.EquipmentType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
-		return errors.New("invalid Equipment response")
+func validateAsset(value platformapi.Asset) error {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.SiteID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.AssetType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+		return errors.New("invalid Asset response")
 	}
 	return nil
 }
 
 func validateDevice(value platformapi.Device) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || !isLowerUUIDv7(value.SiteID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.DeviceType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.SiteID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.DeviceType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
 		return errors.New("invalid Device response")
 	}
 	return nil
 }
 
 func validateDeviceBinding(value platformapi.DeviceBinding) error {
-	invalidIdentity := !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.OwningOrganizationID) || !isLowerUUIDv7(value.SiteID) || !isLowerUUIDv7(value.DeviceID) || !isLowerUUIDv7(value.EquipmentID)
+	invalidIdentity := !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.SiteID) || !isLowerUUIDv7(value.DeviceID) || !isLowerUUIDv7(value.AssetID)
 	invalidLifecycle := !validRegistryString(value.BindingRole, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED")
 	invalidValidity := !validRegistryInstant(value.ValidFrom) || (value.ValidTo != nil && !validRegistryInstant(*value.ValidTo))
 	invalidRevision := value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt)
@@ -1092,6 +853,18 @@ func validateDeviceBinding(value platformapi.DeviceBinding) error {
 
 func validRegistryString(value string, maximum int) bool {
 	return len(value) >= 1 && len(value) <= maximum
+}
+
+func validPointCode(value string) bool {
+	if len(value) < 1 || len(value) > 128 || value[0] < 'a' || value[0] > 'z' {
+		return false
+	}
+	for _, char := range value[1:] {
+		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func validRegistryInstant(value string) bool {
@@ -1145,26 +918,6 @@ func readBoundedBody(reader io.Reader, limit int64) ([]byte, error) {
 		return nil, errRegistryBodyTooLarge
 	}
 	return body, nil
-}
-
-func registryFallbackAllowed(result registryBackendResult, decision ownershipregistry.Decision) bool {
-	if !result.retryable {
-		return false
-	}
-	for _, forbidden := range decision.FallbackForbiddenResults {
-		if result.code == forbidden {
-			return false
-		}
-	}
-	return result.code != "CURSOR_INVALID"
-}
-
-func registryFallbackResultUsable(result registryBackendResult) bool {
-	return !result.retryable && result.code != "REGISTRY_UNAVAILABLE" && result.code != "REGISTRY_TIMEOUT"
-}
-
-func registrySemanticEqual(left, right registryBackendResult) bool {
-	return left.status == right.status && left.code == right.code && left.semanticHash == right.semanticHash
 }
 
 func unavailableRegistryResult(owner string, status int, code string) registryBackendResult {

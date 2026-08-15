@@ -1,327 +1,171 @@
 {
   "schemaVersion": 1,
-  "decisionRevision": 2,
-  "activationStatus": "expand-baseline",
+  "decisionRevision": 4,
+  "activationStatus": "v2-active",
   "ownerService": "telemetry-runtime-service",
   "boundedContext": "telemetry-runtime",
-  "authoritativeStore": {
-    "engine": "postgresql",
-    "schema": "telemetry_runtime",
-    "writer": "telemetry-runtime-service",
-    "migrationRole": "s2_telemetry_migrator",
-    "migrationServiceRole": "s2_telemetry_migrator_service",
-    "runtimeRole": "s2_telemetry_runtime",
-    "serviceRole": "s2_telemetry_service",
-    "relayRole": "s2_telemetry_relay",
-    "relayServiceRole": "s2_telemetry_relay_service",
-    "gatewayRole": "s2_telemetry_gateway",
-    "iamRole": "s2_telemetry_iam",
-    "runtimeBypassRls": false
+  "sourceOfTruth": "SE-DATA-001 V2.0 CURRENT",
+  "storageAuthorities": {
+    "operationalIngest": {
+      "engine": "postgresql",
+      "schema": "telemetry_runtime",
+      "authority": "ingest-transaction-dedup-quarantine-outbox",
+      "writer": "telemetry-runtime-service",
+      "runtimeBypassRls": false
+    },
+    "historicalTelemetry": {
+      "engine": "clickhouse",
+      "database": "telemetry_history",
+      "table": "observations",
+      "authority": "historical-telemetry-source-of-truth",
+      "writer": "telemetry-runtime-service-history-relay",
+      "queryOwner": "telemetry-query-service"
+    },
+    "latestTelemetry": {
+      "engine": "redis",
+      "authority": "rebuildable-latest-cache",
+      "writer": "telemetry-runtime-service",
+      "readOwner": "telemetry-runtime-service",
+      "implementationStatus": "PASS",
+      "mustNotRegressOnOutOfOrder": true,
+      "writeSemantics": "business-revision-cas",
+      "materialization": "committed-device-snapshot-outbox",
+      "rebuildFrom": "postgresql-business-state-machine-snapshot",
+      "historicalFactAuthority": "clickhouse-historical-telemetry"
+    },
+    "postgresLatestProjection": {
+      "engine": "postgresql",
+      "schema": "telemetry_runtime",
+      "table": "latest_accepted_telemetry",
+      "authority": "internal-ingest-evaluator-working-projection",
+      "implementationStatus": "INTERNAL_ONLY",
+      "publicRead": false,
+      "historicalAuthority": false,
+      "mustNotBeFinalV2Authority": true
+    },
+    "transportHistory": {
+      "engine": "dedicated-redis",
+      "authority": "ephemeral-continuity-cache",
+      "writer": "centrifugo",
+      "sharedWithLatestCache": false
+    },
+    "mqtt": {
+      "authority": "transport-only",
+      "telemetryTopic": "energy/v1/{tenant}/{site}/{gateway}/telemetry"
+    }
   },
   "ownedResources": [
-    {
-      "kind": "projection",
-      "name": "device-runtime-binding",
-      "writer": "telemetry-runtime-service",
-      "sourceOwner": "platform-core-service"
-    },
-    {
-      "kind": "projection",
-      "name": "presence-policy",
-      "writer": "telemetry-runtime-service"
-    },
-    {
-      "kind": "projection",
-      "name": "freshness-policy",
-      "writer": "telemetry-runtime-service"
-    },
-    {
-      "kind": "projection",
-      "name": "latest-accepted-telemetry",
-      "writer": "telemetry-runtime-service"
-    },
-    {
-      "kind": "projection",
-      "name": "device-presence",
-      "writer": "telemetry-runtime-service"
-    },
-    {
-      "kind": "projection",
-      "name": "device-observation-snapshot",
-      "writer": "telemetry-runtime-service"
-    },
-    {
-      "kind": "projection",
-      "name": "ingest-deduplication",
-      "writer": "telemetry-runtime-service"
-    },
-    {
-      "kind": "projection",
-      "name": "ingest-quarantine",
-      "writer": "telemetry-runtime-service"
-    },
-    {
-      "kind": "outbox",
-      "name": "telemetry-publication-outbox",
-      "writer": "telemetry-runtime-service",
-      "relay": "outbox-relay"
-    },
-    {
-      "kind": "event-family",
-      "name": "hvac.telemetry.device-snapshot.v1",
-      "writer": "telemetry-runtime-service"
-    }
+    { "kind": "projection", "name": "device-runtime-binding", "writer": "telemetry-runtime-service", "sourceOwner": "platform-core-service" },
+    { "kind": "projection", "name": "presence-policy", "writer": "telemetry-runtime-service" },
+    { "kind": "projection", "name": "freshness-policy", "writer": "telemetry-runtime-service" },
+    { "kind": "internal-working-projection", "name": "latest-accepted-telemetry", "writer": "telemetry-runtime-service", "authority": false, "publicRead": false },
+    { "kind": "projection", "name": "device-presence", "writer": "telemetry-runtime-service" },
+    { "kind": "projection", "name": "device-observation-snapshot", "writer": "telemetry-runtime-service" },
+    { "kind": "ingest-evidence", "name": "source-observation", "writer": "telemetry-runtime-service", "historicalAuthority": false },
+    { "kind": "projection", "name": "ingest-deduplication", "writer": "telemetry-runtime-service" },
+    { "kind": "projection", "name": "ingest-quarantine", "writer": "telemetry-runtime-service" },
+    { "kind": "outbox", "name": "telemetry-history-outbox", "writer": "telemetry-runtime-service", "relay": "telemetry-runtime-service-history-relay" },
+    { "kind": "outbox", "name": "telemetry-publication-outbox", "writer": "telemetry-runtime-service", "relay": "outbox-relay" },
+    { "kind": "event-family", "name": "hvac.telemetry.device-snapshot.v1", "writer": "telemetry-runtime-service" }
   ],
-  "inputEvents": [
+  "ingestSources": [
     {
-      "name": "hvac.registry.external-binding.v1",
-      "writer": "platform-core-service",
-      "consumer": "telemetry-runtime-service",
-      "reconciliation": "platform-core-service internal read interface"
-    },
-    {
-      "name": "hvac.iam.authorization-revoked.v1",
-      "writer": "iam-service",
-      "consumer": "telemetry-runtime-service",
-      "effect": "record revocation watermark and remove affected live subscriptions"
-    }
-  ],
-  "databaseAccess": [
-    {
-      "service": "telemetry-runtime-service",
-      "schema": "telemetry_runtime",
-      "mode": "write"
-    },
-    {
-      "service": "outbox-relay",
-      "schema": "telemetry_runtime",
-      "mode": "relay",
-      "restrictedTo": [
-        "telemetry_publication_outbox"
-      ]
+      "service": "mqtt-telemetry-adapter",
+      "transport": "MQTT",
+      "schema": "energy-telemetry-envelope/v1",
+      "unknownMajorVersion": "REJECT"
     }
   ],
   "positions": {
-    "businessRevision": {
-      "owner": "telemetry-runtime-service",
-      "scope": "device",
-      "advancesWhen": "a committed current Device Observation Snapshot changes",
-      "doesNotAdvanceFor": [
-        "duplicate source delivery",
-        "rejected candidate",
-        "out-of-order candidate",
-        "publication retry",
-        "cache refresh"
-      ]
-    },
     "sourcePosition": {
       "owner": "source-adapter",
-      "purpose": "source deduplication and replay evidence",
-      "examples": [
-        "integration instance plus source event id",
-        "source partition plus source offset"
-      ]
+      "purpose": "deduplication-and-replay-evidence",
+      "examples": ["source partition plus source offset", "source event id"]
+    },
+    "businessRevision": {
+      "owner": "telemetry-runtime-service",
+      "scope": "device-current-snapshot",
+      "doesNotAdvanceFor": ["duplicate source delivery", "rejected candidate", "out-of-order historical fact", "publication retry", "cache refresh"]
     },
     "transportPosition": {
       "owner": "centrifugo",
-      "purpose": "bounded reconnect recovery",
-      "representation": "epoch plus offset"
+      "purpose": "bounded-reconnect-recovery",
+      "authority": "none"
     },
     "recoveryCursor": {
       "owner": "telemetry-runtime-service",
-      "purpose": "scope-bound request to attempt incremental recovery",
-      "containsOrReferences": [
-        "contract version",
-        "scope hash",
-        "Business Revision",
-        "Transport Position"
-      ],
       "authority": "none",
-      "reuseRequires": [
-        "current authorization",
-        "exact route and scope match"
-      ],
-      "failureBehavior": "load an authoritative Device Observation Snapshot"
+      "reuseRequires": ["current authorization", "exact route and scope match"]
     }
   },
-  "stores": {
-    "businessAuthority": "postgresql.telemetry_runtime",
-    "optionalReadCache": {
-      "authority": "non-authoritative-replica",
-      "writer": "telemetry-runtime-service",
-      "requiredFields": [
-        "businessRevision",
-        "evaluatedAt",
-        "sampledAt",
-        "receivedAt"
-      ],
-      "databaseUnavailableBehavior": "may return last-known context only with Evaluation Availability UNAVAILABLE and never as current"
+  "telemetrySemantics": {
+    "canonicalPoint": true,
+    "eventTimeField": "sampled_at",
+    "ingestTimeField": "received_at",
+    "outOfOrder": {
+      "history": "INSERT_FULL_FACT",
+      "latest": "NO_UPDATE"
     },
-    "transportHistory": {
-      "authority": "ephemeral-continuity-cache",
-      "engine": "dedicated-redis",
-      "writer": "centrifugo",
-      "sharedWithLegacyRedis": false
-    },
-    "thingsBoard": {
-      "authority": "upstream-source-and-historical-compatibility",
-      "publicReadThrough": false,
-      "directLatestWrite": false
-    },
-    "legacyRedis": {
-      "authority": "none",
-      "s2Read": false,
-      "s2Write": false
-    }
+    "quality": ["GOOD", "PARTIAL", "ESTIMATED", "MANUAL", "STALE", "INVALID"],
+    "qualityIndependentFromAcceptance": true,
+    "unknownPoint": "QUARANTINE"
   },
   "serviceResponsibilities": [
     {
       "service": "platform-core-service",
-      "owns": [
-        "Device identity and Registry Lifecycle",
-        "ExternalBinding identity and active uniqueness",
-        "mapping quarantine and retirement"
-      ],
-      "mustNot": [
-        "write Presence or latest telemetry",
-        "accept telemetry observations",
-        "derive Business Revision"
-      ]
+      "owns": ["Device identity", "Point identity", "external source bindings"],
+      "mustNot": ["write latest telemetry", "write historical telemetry facts"]
     },
     {
-      "service": "iam-service",
-      "owns": [
-        "authorization facts",
-        "explicit denies",
-        "authorization Policy Revision",
-        "permission revocation facts"
-      ],
-      "mustNot": [
-        "store telemetry values",
-        "derive Device Presence",
-        "publish Device snapshots"
-      ]
-    },
-    {
-      "service": "platform-gateway",
-      "owns": [
-        "public Session boundary",
-        "public request admission",
-        "delegation to IAM and route forwarding"
-      ],
-      "mustNot": [
-        "cache or merge telemetry business state",
-        "authorize from client-supplied identity headers",
-        "publish telemetry independently"
-      ]
+      "service": "mqtt-telemetry-adapter",
+      "owns": ["MQTT envelope decoding", "schema-version rejection", "source position mapping"],
+      "mustNot": ["own Device or Point identity", "write Latest directly", "write browser state"]
     },
     {
       "service": "telemetry-runtime-service",
-      "owns": [
-        "source authentication and observation acceptance",
-        "runtime mapping projection",
-        "Presence and Freshness policies",
-        "latest accepted telemetry",
-        "Device Presence",
-        "Device Observation Snapshot",
-        "Business Revision",
-        "subscription authorization decision at the resource and key seam",
-        "publication outbox and Snapshot fallback decision"
-      ],
-      "mustNot": [
-        "create or mutate Registry Devices",
-        "write IAM authorization facts",
-        "treat transport history as business authority",
-        "serve ThingsBoard identifiers publicly"
-      ]
+      "owns": ["ingest validation", "deduplication", "quarantine", "historical relay intent", "Latest projection update decision", "Presence", "Freshness", "Business Revision"],
+      "mustNot": ["create Registry Device or Point identity", "overwrite Historical facts", "regress Latest on out-of-order"]
     },
     {
-      "service": "legacy-hvac-backend",
-      "owns": [
-        "Legacy telemetry compatibility routes during migration",
-        "historical timeseries compatibility boundary"
-      ],
-      "mustNot": [
-        "write telemetry_runtime schema",
-        "repair S2 latest state",
-        "provide real-to-Mock fallback"
-      ]
-    },
-    {
-      "service": "thingsboard",
-      "owns": [
-        "source-system telemetry and historical storage under its integration contract"
-      ],
-      "mustNot": [
-        "define platform Device identity",
-        "define platform Presence",
-        "assign Business Revision",
-        "authorize browser subscriptions"
-      ]
+      "service": "telemetry-query-service",
+      "owns": ["bounded historical telemetry API", "bounded analytics API"],
+      "mustNot": ["serve historical data from PostgreSQL operational ingest evidence", "expose ClickHouse directly to browser"]
     },
     {
       "service": "centrifugo",
-      "owns": [
-        "client connection transport",
-        "channel fan-out",
-        "bounded epoch-offset recovery",
-        "transport queue enforcement and metrics"
-      ],
-      "mustNot": [
-        "own Snapshot",
-        "own Business Revision",
-        "own current authorization facts",
-        "be queried as Presence or latest truth"
-      ]
+      "owns": ["client realtime fan-out", "bounded transport recovery"],
+      "mustNot": ["own historical telemetry", "own Latest authority", "authorize from transport history"]
     }
   ],
   "ingestTransaction": [
-    "authenticate the source adapter and validate its integration instance",
-    "resolve exactly one active Core-owned ExternalBinding from the local runtime projection",
-    "quarantine missing, conflicting, retired or quarantined mappings without creating a Device",
-    "deduplicate by Source Position and validate timestamp, key, type, unit and range",
-    "lock the Device runtime row and evaluate candidate replacement and Presence effects",
-    "increment Business Revision exactly once when the current Device Observation Snapshot changes",
-    "commit observation evidence, latest projections, Presence, Snapshot and publication outbox atomically",
-    "publish after commit; retries preserve the same Business Revision"
+    "authenticate source adapter and validate integration instance",
+    "resolve one active Device and Point binding",
+    "quarantine unknown or conflicting mapping without creating identity",
+    "deduplicate by source position",
+    "validate type unit range event time and source quality",
+    "persist operational ingest evidence and a historical outbox intent",
+    "preserve valid out-of-order values for ClickHouse history while refusing Latest regression",
+    "publish historical fact to ClickHouse and current/realtime projections after commit"
   ],
-  "snapshotReadOrder": [
-    "authorize the Principal, Organization, Site, Device and requested keys using current IAM facts",
-    "read the authoritative PostgreSQL Device Observation Snapshot",
-    "use a cache only as a revisioned replica and never as an authorization source",
-    "when authority is unavailable, return explicit unavailability or typed failure rather than ThingsBoard read-through",
-    "never let a historical compatibility response overwrite current S2 state"
-  ],
-  "mappingRules": {
-    "publicDeviceIdentity": "Registry Device UUIDv7",
-    "externalIdentity": "Core-owned ExternalBinding",
-    "projectionInput": "Core binding changes plus reconciliation",
-    "zeroActiveBindings": "quarantine candidate as MAPPING_NOT_FOUND",
-    "multipleActiveBindings": "quarantine candidate as MAPPING_CONFLICT and alert because Core uniqueness should prevent it",
-    "retiredOrQuarantinedBinding": "quarantine candidate and do not disclose a Device",
-    "observationMayCreateBinding": false
-  },
   "historicalTimeseries": {
-    "insideS2Slice": false,
-    "compatibilityOwner": "legacy-hvac-backend",
-    "source": "thingsboard",
-    "requirements": [
-      "current IAM and Site-scoped authorization",
-      "separate public route ownership",
-      "no write into S2 latest projections",
-      "no fallback from S2 latest or Snapshot routes"
-    ]
+    "insideS2Slice": true,
+    "authority": "clickhouse.telemetry_history.observations",
+    "publicOwner": "telemetry-query-service",
+    "postgresOperationalEvidenceIsAuthority": false
+  },
+  "currentState": {
+    "v2Authority": "redis-rebuildable-latest-cache",
+    "implementationStatus": "PARTIAL",
+    "temporaryPostgresProjectionExists": true,
+    "migrationBlocker": "Redis Latest writer/read path and rebuild contract are not yet complete"
   },
   "forbiddenFlows": [
-    "browser-to-thingsboard",
-    "public-latest-read-to-thingsboard-read-through",
-    "thingsboard-direct-to-latest-projection",
-    "legacy-hvac-backend-to-telemetry-runtime-write",
-    "legacy-redis-to-s2-current-state",
-    "cache-to-subscription-authorization",
-    "centrifugo-history-to-snapshot-authority",
-    "s2-latest-to-thingsboard-reverse-sync",
-    "core-and-telemetry-runtime-cross-schema-business-writes",
+    "browser-to-mqtt",
+    "mqtt-direct-to-latest-without-ingest-validation",
+    "postgres-operational-ingest-evidence-as-historical-authority",
+    "out-of-order-to-latest-regression",
+    "transport-history-to-latest-authority",
+    "browser-direct-to-clickhouse",
     "shadow-or-fallback-path-with-side-effects"
   ]
 }

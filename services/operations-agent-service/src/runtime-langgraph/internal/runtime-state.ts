@@ -120,9 +120,9 @@ export const normalizeRuntimePlanningContext = (
     || value.revision < 0
     || !isRecord(value.scope)
     || !hasExactKeys(value.scope, runtimeScopeKeys)
-    || typeof value.scope.organizationId !== 'string'
-    || value.scope.organizationId.trim().length === 0
-    || value.scope.organizationId.length > maximumIdentityCharacters
+    || typeof value.scope.tenantId !== 'string'
+    || value.scope.tenantId.trim().length === 0
+    || value.scope.tenantId.length > maximumIdentityCharacters
     || !Array.isArray(value.allowedReadTools)
     || value.allowedReadTools.length === 0) {
     throw new LangGraphRuntimeError(
@@ -149,7 +149,7 @@ export const normalizeRuntimePlanningContext = (
     trust: runtimeControlPolicy.trust,
     investigationId: value.investigationId,
     scope: Object.freeze({
-      organizationId: value.scope.organizationId,
+      tenantId: value.scope.tenantId,
       siteId: requireNullableIdentity(value.scope.siteId, 'Site identity'),
       equipmentId: requireNullableIdentity(value.scope.equipmentId, 'Equipment identity'),
       deviceId: requireNullableIdentity(value.scope.deviceId, 'Device identity'),

@@ -18,31 +18,29 @@ func (store *PostgresStore) GetSiteAssetModel(ctx context.Context, claims regist
 		SchemaVersion:         2,
 		TenantID:              claims.TenantID,
 		SiteID:                siteID,
-		Areas:                 []Area{},
-		Equipment:             []Equipment{},
+		Spaces:                 []Space{},
+		Assets:                []Asset{},
 		Devices:               []Device{},
 		DeviceBindings:        []DeviceBinding{},
-		EquipmentAreaBindings: []EquipmentAreaBinding{},
-		DeviceAreaBindings:    []DeviceAreaBinding{},
+		AssetSpaceBindings: []AssetSpaceBinding{},
+		DeviceSpaceBindings:    []DeviceSpaceBinding{},
 		Sensors:               []Sensor{},
 		SensorDeviceBindings:  []SensorDeviceBinding{},
-		SensorAreaBindings:    []SensorAreaBinding{},
-		SensorSubjectBindings: []SensorSubjectBinding{},
+		SensorSpaceBindings:    []SensorSpaceBinding{},
 		TelemetryPoints:       []TelemetryPoint{},
 		Relationships:         []AssetRelationship{},
 		PointSubjectBindings:  []PointSubjectBinding{},
-		CalculatedPointInputs: []CalculatedPointInput{},
 	}
+
 	err := store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
 		var visible bool
 		if err := transaction.QueryRow(ctx, `
 SELECT EXISTS (
   SELECT 1 FROM core_registry.sites
   WHERE id = $1::uuid
-    AND NOT (organization_id = ANY($2::uuid[]))
-    AND NOT (id = ANY($3::uuid[]))
+    AND NOT (id = ANY($2::uuid[]))
 )
-`, siteID, postgresUUIDArray(claims.DeniedOrganizationIDs), postgresUUIDArray(claims.DeniedSiteIDs)).Scan(&visible); err != nil {
+`, siteID, postgresUUIDArray(claims.DeniedSiteIDs)).Scan(&visible); err != nil {
 			return fmt.Errorf("query Registry Site asset-model visibility: %w", err)
 		}
 		if !visible {
@@ -50,38 +48,39 @@ SELECT EXISTS (
 		}
 
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, organization_id::text, site_id::text, parent_area_id::text,
-       code, display_name, area_type, status, revision, created_at, updated_at
-FROM core_registry.areas
+SELECT id::text, tenant_id::text, site_id::text, parent_space_id::text,
+       code, display_name, space_type, status, revision, created_at, updated_at
+FROM core_registry.spaces
 WHERE site_id = $1::uuid
 ORDER BY display_name COLLATE "C", id
 `, siteID, func(row rowScanner) error {
-			item, err := scanArea(row)
+			item, err := scanSpace(row)
 			if err == nil {
-				item.TenantID = claims.TenantID
-				result.Areas = append(result.Areas, item)
+				result.Spaces = append(result.Spaces, item)
 			}
 			return err
 		}); err != nil {
 			return err
 		}
+
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, tenant_id::text, organization_id::text, site_id::text, code, display_name,
-       equipment_type, status, revision, created_at, updated_at
-FROM core_registry.equipment
+SELECT id::text, tenant_id::text, site_id::text, code, display_name,
+       asset_type, status, revision, created_at, updated_at
+FROM core_registry.assets
 WHERE site_id = $1::uuid
 ORDER BY display_name COLLATE "C", id
 `, siteID, func(row rowScanner) error {
-			item, err := scanEquipment(row)
+			item, err := scanAsset(row)
 			if err == nil {
-				result.Equipment = append(result.Equipment, item)
+				result.Assets = append(result.Assets, item)
 			}
 			return err
 		}); err != nil {
 			return err
 		}
+
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, tenant_id::text, organization_id::text, site_id::text, code, display_name,
+SELECT id::text, tenant_id::text, site_id::text, code, display_name,
        device_type, status, revision, created_at, updated_at
 FROM core_registry.devices
 WHERE site_id = $1::uuid
@@ -95,9 +94,10 @@ ORDER BY display_name COLLATE "C", id
 		}); err != nil {
 			return err
 		}
+
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, tenant_id::text, organization_id::text, site_id::text, device_id::text,
-       equipment_id::text, binding_role, status, valid_from, valid_to,
+SELECT id::text, tenant_id::text, site_id::text, device_id::text,
+       asset_id::text, binding_role, status, valid_from, valid_to,
        revision, created_at, updated_at
 FROM core_registry.device_bindings
 WHERE site_id = $1::uuid
@@ -111,41 +111,43 @@ ORDER BY binding_role COLLATE "C", id
 		}); err != nil {
 			return err
 		}
+
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, organization_id::text, site_id::text, equipment_id::text,
-       area_id::text, binding_role, status, valid_from, valid_to,
+SELECT id::text, tenant_id::text, site_id::text, asset_id::text,
+       space_id::text, binding_role, status, valid_from, valid_to,
        revision, created_at, updated_at
-FROM core_registry.equipment_area_bindings
+FROM core_registry.asset_space_bindings
 WHERE site_id = $1::uuid
 ORDER BY binding_role COLLATE "C", id
 `, siteID, func(row rowScanner) error {
-			item, err := scanEquipmentAreaBinding(row)
+			item, err := scanAssetSpaceBinding(row)
 			if err == nil {
-				item.TenantID = claims.TenantID
-				result.EquipmentAreaBindings = append(result.EquipmentAreaBindings, item)
+				result.AssetSpaceBindings = append(result.AssetSpaceBindings, item)
 			}
 			return err
 		}); err != nil {
 			return err
 		}
+
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, organization_id::text, site_id::text, device_id::text,
-       area_id::text, binding_role, status, valid_from, valid_to,
+SELECT id::text, tenant_id::text, site_id::text, device_id::text,
+       space_id::text, binding_role, status, valid_from, valid_to,
        revision, created_at, updated_at
-FROM core_registry.device_area_bindings
+FROM core_registry.device_space_bindings
 WHERE site_id = $1::uuid
 ORDER BY binding_role COLLATE "C", id
 `, siteID, func(row rowScanner) error {
-			item, err := scanDeviceAreaBinding(row)
+			item, err := scanDeviceSpaceBinding(row)
 			if err == nil {
-				result.DeviceAreaBindings = append(result.DeviceAreaBindings, item)
+				result.DeviceSpaceBindings = append(result.DeviceSpaceBindings, item)
 			}
 			return err
 		}); err != nil {
 			return err
 		}
+
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, organization_id::text, site_id::text, code, display_name,
+SELECT id::text, tenant_id::text, site_id::text, code, display_name,
        sensor_type, manufacturer, model, serial_number, calibration_due_at,
        metadata, status, revision, created_at, updated_at
 FROM core_registry.sensors
@@ -160,8 +162,9 @@ ORDER BY display_name COLLATE "C", id
 		}); err != nil {
 			return err
 		}
+
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, organization_id::text, site_id::text, sensor_id::text,
+SELECT id::text, tenant_id::text, site_id::text, sensor_id::text,
        device_id::text, binding_role, status, valid_from, valid_to,
        revision, created_at, updated_at
 FROM core_registry.sensor_device_bindings
@@ -176,47 +179,32 @@ ORDER BY binding_role COLLATE "C", id
 		}); err != nil {
 			return err
 		}
+
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, organization_id::text, site_id::text, sensor_id::text,
-       area_id::text, binding_role, status, valid_from, valid_to,
+SELECT id::text, tenant_id::text, site_id::text, sensor_id::text,
+       space_id::text, binding_role, status, valid_from, valid_to,
        revision, created_at, updated_at
-FROM core_registry.sensor_area_bindings
+FROM core_registry.sensor_space_bindings
 WHERE site_id = $1::uuid
 ORDER BY binding_role COLLATE "C", id
 `, siteID, func(row rowScanner) error {
-			item, err := scanSensorAreaBinding(row)
+			item, err := scanSensorSpaceBinding(row)
 			if err == nil {
-				result.SensorAreaBindings = append(result.SensorAreaBindings, item)
+				result.SensorSpaceBindings = append(result.SensorSpaceBindings, item)
 			}
 			return err
 		}); err != nil {
 			return err
 		}
+
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, organization_id::text, site_id::text, sensor_id::text,
-       subject_type, area_id::text, equipment_id::text, binding_role,
-       status, valid_from, valid_to, revision, created_at, updated_at
-FROM core_registry.sensor_subject_bindings
-WHERE site_id = $1::uuid
-ORDER BY binding_role COLLATE "C", id
-`, siteID, func(row rowScanner) error {
-			item, err := scanSensorSubjectBinding(row)
-			if err == nil {
-				result.SensorSubjectBindings = append(result.SensorSubjectBindings, item)
-			}
-			return err
-		}); err != nil {
-			return err
-		}
-		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, organization_id::text, site_id::text, reporting_device_id::text,
-       sensor_id::text, point_key, source_key, display_name, point_kind,
+SELECT id::text, tenant_id::text, site_id::text, reporting_device_id::text,
+       sensor_id::text, point_code, source_key, display_name, point_type,
        value_type, unit, writable, sample_interval_ms, publish_interval_ms,
-       stale_after_ms, formula_revision, source_metadata, status, revision,
-       created_at, updated_at
+       stale_after_ms, source_metadata, status, revision, created_at, updated_at
 FROM core_registry.telemetry_points
 WHERE site_id = $1::uuid
-ORDER BY reporting_device_id, point_key COLLATE "C", id
+ORDER BY reporting_device_id, point_code COLLATE "C", id
 `, siteID, func(row rowScanner) error {
 			item, err := scanTelemetryPoint(row)
 			if err == nil {
@@ -226,9 +214,10 @@ ORDER BY reporting_device_id, point_key COLLATE "C", id
 		}); err != nil {
 			return err
 		}
+
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, organization_id::text, site_id::text, point_id::text,
-       subject_type, area_id::text, equipment_id::text, binding_role,
+SELECT id::text, tenant_id::text, site_id::text, point_id::text,
+       subject_type, space_id::text, asset_id::text, binding_role,
        status, valid_from, valid_to, revision, created_at, updated_at
 FROM core_registry.point_subject_bindings
 WHERE site_id = $1::uuid
@@ -242,93 +231,21 @@ ORDER BY binding_role COLLATE "C", id
 		}); err != nil {
 			return err
 		}
-		if err := queryAssetRows(ctx, transaction, `
-SELECT organization_id::text, site_id::text, calculated_point_id::text,
-       input_point_id::text, input_role, ordinal, formula_revision
-FROM core_registry.calculated_point_inputs
-WHERE site_id = $1::uuid
-ORDER BY calculated_point_id, ordinal, input_point_id
-`, siteID, func(row rowScanner) error {
-			var item CalculatedPointInput
-			if err := row.Scan(
-				&item.OwningOrganizationID,
-				&item.SiteID,
-				&item.CalculatedPointID,
-				&item.InputPointID,
-				&item.InputRole,
-				&item.Ordinal,
-				&item.FormulaRevision,
-			); err != nil {
-				return err
-			}
-			result.CalculatedPointInputs = append(result.CalculatedPointInputs, item)
-			return nil
-		}); err != nil {
-			return err
-		}
 		return nil
 	})
 	if err != nil {
 		return SiteAssetModel{}, err
 	}
-	stampAssetModelTenant(&result, claims.TenantID)
+
 	result.Relationships = buildAssetRelationships(result)
-	for index := range result.Relationships {
-		result.Relationships[index].TenantID = claims.TenantID
-	}
 	result.Counts = AssetModelCounts{
-		Areas:                    len(result.Areas),
-		Equipment:                len(result.Equipment),
-		DeviceEndpoints:          len(result.Devices),
-		Sensors:                  len(result.Sensors),
-		TelemetryPoints:          len(result.TelemetryPoints),
-		CalculatedPoints:         countCalculatedPoints(result.TelemetryPoints),
-		IndependentSensorDevices: countIndependentSensorDevices(result.SensorDeviceBindings),
+		Spaces:           len(result.Spaces),
+		Assets:          len(result.Assets),
+		DeviceEndpoints: len(result.Devices),
+		PhysicalSensors: len(result.Sensors),
+		Points:          len(result.TelemetryPoints),
 	}
 	return result, nil
-}
-
-func stampAssetModelTenant(model *SiteAssetModel, tenantID string) {
-	model.TenantID = tenantID
-	for index := range model.Areas {
-		model.Areas[index].TenantID = tenantID
-	}
-	for index := range model.Equipment {
-		model.Equipment[index].TenantID = tenantID
-	}
-	for index := range model.Devices {
-		model.Devices[index].TenantID = tenantID
-	}
-	for index := range model.DeviceBindings {
-		model.DeviceBindings[index].TenantID = tenantID
-	}
-	for index := range model.EquipmentAreaBindings {
-		model.EquipmentAreaBindings[index].TenantID = tenantID
-	}
-	for index := range model.DeviceAreaBindings {
-		model.DeviceAreaBindings[index].TenantID = tenantID
-	}
-	for index := range model.Sensors {
-		model.Sensors[index].TenantID = tenantID
-	}
-	for index := range model.SensorDeviceBindings {
-		model.SensorDeviceBindings[index].TenantID = tenantID
-	}
-	for index := range model.SensorAreaBindings {
-		model.SensorAreaBindings[index].TenantID = tenantID
-	}
-	for index := range model.SensorSubjectBindings {
-		model.SensorSubjectBindings[index].TenantID = tenantID
-	}
-	for index := range model.TelemetryPoints {
-		model.TelemetryPoints[index].TenantID = tenantID
-	}
-	for index := range model.PointSubjectBindings {
-		model.PointSubjectBindings[index].TenantID = tenantID
-	}
-	for index := range model.CalculatedPointInputs {
-		model.CalculatedPointInputs[index].TenantID = tenantID
-	}
 }
 
 func queryAssetRows(
@@ -356,149 +273,128 @@ func queryAssetRows(
 
 func buildAssetRelationships(model SiteAssetModel) []AssetRelationship {
 	relationships := make([]AssetRelationship, 0,
-		len(model.DeviceBindings)+len(model.EquipmentAreaBindings)+len(model.DeviceAreaBindings)+
-			len(model.SensorDeviceBindings)+len(model.SensorAreaBindings)+len(model.SensorSubjectBindings)+len(model.PointSubjectBindings),
+		len(model.DeviceBindings)+len(model.AssetSpaceBindings)+len(model.DeviceSpaceBindings)+
+			len(model.SensorDeviceBindings)+len(model.SensorSpaceBindings)+len(model.PointSubjectBindings),
 	)
-	for _, binding := range model.EquipmentAreaBindings {
-		relationships = append(relationships, AssetRelationship{
-			ID: binding.ID, OwningOrganizationID: binding.OwningOrganizationID, SiteID: binding.SiteID,
-			FromType: "EQUIPMENT", FromID: binding.EquipmentID, ToType: "AREA", ToID: binding.AreaID,
-			Role: binding.BindingRole, Status: binding.Status, ValidFrom: binding.ValidFrom,
-			ValidTo: binding.ValidTo, Revision: binding.Revision, CreatedAt: binding.CreatedAt, UpdatedAt: binding.UpdatedAt,
-		})
+	for _, binding := range model.AssetSpaceBindings {
+		relationships = append(relationships, relationshipFromBinding(
+			binding.ID, binding.TenantID, binding.SiteID,
+			"ASSET", binding.AssetID, "SPACE", binding.SpaceID,
+			binding.BindingRole, binding.Status, binding.ValidFrom, binding.ValidTo,
+			binding.Revision, binding.CreatedAt, binding.UpdatedAt,
+		))
 	}
-	for _, binding := range model.DeviceAreaBindings {
-		relationships = append(relationships, AssetRelationship{
-			ID: binding.ID, OwningOrganizationID: binding.OwningOrganizationID, SiteID: binding.SiteID,
-			FromType: "DEVICE", FromID: binding.DeviceID, ToType: "AREA", ToID: binding.AreaID,
-			Role: binding.BindingRole, Status: binding.Status, ValidFrom: binding.ValidFrom,
-			ValidTo: binding.ValidTo, Revision: binding.Revision, CreatedAt: binding.CreatedAt, UpdatedAt: binding.UpdatedAt,
-		})
+	for _, binding := range model.DeviceSpaceBindings {
+		relationships = append(relationships, relationshipFromBinding(
+			binding.ID, binding.TenantID, binding.SiteID,
+			"DEVICE", binding.DeviceID, "SPACE", binding.SpaceID,
+			binding.BindingRole, binding.Status, binding.ValidFrom, binding.ValidTo,
+			binding.Revision, binding.CreatedAt, binding.UpdatedAt,
+		))
 	}
 	for _, binding := range model.DeviceBindings {
-		relationships = append(relationships, AssetRelationship{
-			ID: binding.ID, OwningOrganizationID: binding.OwningOrganizationID, SiteID: binding.SiteID,
-			FromType: "DEVICE", FromID: binding.DeviceID, ToType: "EQUIPMENT", ToID: binding.EquipmentID,
-			Role: binding.BindingRole, Status: binding.Status, ValidFrom: binding.ValidFrom,
-			ValidTo: binding.ValidTo, Revision: binding.Revision, CreatedAt: binding.CreatedAt, UpdatedAt: binding.UpdatedAt,
-		})
+		relationships = append(relationships, relationshipFromBinding(
+			binding.ID, binding.TenantID, binding.SiteID,
+			"DEVICE", binding.DeviceID, "ASSET", binding.AssetID,
+			binding.BindingRole, binding.Status, binding.ValidFrom, binding.ValidTo,
+			binding.Revision, binding.CreatedAt, binding.UpdatedAt,
+		))
 	}
 	for _, binding := range model.SensorDeviceBindings {
-		relationships = append(relationships, AssetRelationship{
-			ID: binding.ID, OwningOrganizationID: binding.OwningOrganizationID, SiteID: binding.SiteID,
-			FromType: "SENSOR", FromID: binding.SensorID, ToType: "DEVICE", ToID: binding.DeviceID,
-			Role: binding.BindingRole, Status: binding.Status, ValidFrom: binding.ValidFrom,
-			ValidTo: binding.ValidTo, Revision: binding.Revision, CreatedAt: binding.CreatedAt, UpdatedAt: binding.UpdatedAt,
-		})
+		relationships = append(relationships, relationshipFromBinding(
+			binding.ID, binding.TenantID, binding.SiteID,
+			"SENSOR", binding.SensorID, "DEVICE", binding.DeviceID,
+			binding.BindingRole, binding.Status, binding.ValidFrom, binding.ValidTo,
+			binding.Revision, binding.CreatedAt, binding.UpdatedAt,
+		))
 	}
-	for _, binding := range model.SensorAreaBindings {
-		relationships = append(relationships, AssetRelationship{
-			ID: binding.ID, OwningOrganizationID: binding.OwningOrganizationID, SiteID: binding.SiteID,
-			FromType: "SENSOR", FromID: binding.SensorID, ToType: "AREA", ToID: binding.AreaID,
-			Role: binding.BindingRole, Status: binding.Status, ValidFrom: binding.ValidFrom,
-			ValidTo: binding.ValidTo, Revision: binding.Revision, CreatedAt: binding.CreatedAt, UpdatedAt: binding.UpdatedAt,
-		})
-	}
-	for _, binding := range model.SensorSubjectBindings {
-		toID := binding.SiteID
-		if binding.AreaID != nil {
-			toID = *binding.AreaID
-		}
-		if binding.EquipmentID != nil {
-			toID = *binding.EquipmentID
-		}
-		relationships = append(relationships, AssetRelationship{
-			ID: binding.ID, OwningOrganizationID: binding.OwningOrganizationID, SiteID: binding.SiteID,
-			FromType: "SENSOR", FromID: binding.SensorID, ToType: binding.SubjectType, ToID: toID,
-			Role: binding.BindingRole, Status: binding.Status, ValidFrom: binding.ValidFrom,
-			ValidTo: binding.ValidTo, Revision: binding.Revision, CreatedAt: binding.CreatedAt, UpdatedAt: binding.UpdatedAt,
-		})
+	for _, binding := range model.SensorSpaceBindings {
+		relationships = append(relationships, relationshipFromBinding(
+			binding.ID, binding.TenantID, binding.SiteID,
+			"SENSOR", binding.SensorID, "SPACE", binding.SpaceID,
+			binding.BindingRole, binding.Status, binding.ValidFrom, binding.ValidTo,
+			binding.Revision, binding.CreatedAt, binding.UpdatedAt,
+		))
 	}
 	for _, binding := range model.PointSubjectBindings {
 		toID := binding.SiteID
-		if binding.AreaID != nil {
-			toID = *binding.AreaID
+		if binding.SpaceID != nil {
+			toID = *binding.SpaceID
 		}
-		if binding.EquipmentID != nil {
-			toID = *binding.EquipmentID
+		if binding.AssetID != nil {
+			toID = *binding.AssetID
 		}
-		relationships = append(relationships, AssetRelationship{
-			ID: binding.ID, OwningOrganizationID: binding.OwningOrganizationID, SiteID: binding.SiteID,
-			FromType: "POINT", FromID: binding.PointID, ToType: binding.SubjectType, ToID: toID,
-			Role: binding.BindingRole, Status: binding.Status, ValidFrom: binding.ValidFrom,
-			ValidTo: binding.ValidTo, Revision: binding.Revision, CreatedAt: binding.CreatedAt, UpdatedAt: binding.UpdatedAt,
-		})
+		relationships = append(relationships, relationshipFromBinding(
+			binding.ID, binding.TenantID, binding.SiteID,
+			"POINT", binding.PointID, binding.SubjectType, toID,
+			binding.BindingRole, binding.Status, binding.ValidFrom, binding.ValidTo,
+			binding.Revision, binding.CreatedAt, binding.UpdatedAt,
+		))
 	}
 	return relationships
 }
 
-func countCalculatedPoints(points []TelemetryPoint) int {
-	count := 0
-	for _, point := range points {
-		if point.PointKind == "CALCULATED" {
-			count++
-		}
+func relationshipFromBinding(
+	id, tenantID, siteID, fromType, fromID, toType, toID, role, status, validFrom string,
+	validTo *string,
+	revision int64,
+	createdAt, updatedAt string,
+) AssetRelationship {
+	return AssetRelationship{
+		ID: id, TenantID: tenantID, SiteID: siteID,
+		FromType: fromType, FromID: fromID, ToType: toType, ToID: toID,
+		Role: role, Status: status, ValidFrom: validFrom, ValidTo: validTo,
+		Revision: revision, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
-	return count
 }
 
-func countIndependentSensorDevices(bindings []SensorDeviceBinding) int {
-	devices := map[string]struct{}{}
-	for _, binding := range bindings {
-		if binding.BindingRole == "INDEPENDENT_DEVICE" && binding.Status == "ACTIVE" && binding.ValidTo == nil {
-			devices[binding.DeviceID] = struct{}{}
-		}
-	}
-	return len(devices)
-}
-
-func scanArea(row rowScanner) (Area, error) {
-	var item Area
+func scanSpace(row rowScanner) (Space, error) {
+	var item Space
 	var parentID *string
 	var createdAt time.Time
 	var updatedAt time.Time
 	if err := row.Scan(
-		&item.ID, &item.OwningOrganizationID, &item.SiteID, &parentID,
-		&item.Code, &item.DisplayName, &item.AreaType, &item.Status,
+		&item.ID, &item.TenantID, &item.SiteID, &parentID,
+		&item.Code, &item.DisplayName, &item.SpaceType, &item.Status,
 		&item.Revision, &createdAt, &updatedAt,
 	); err != nil {
-		return Area{}, err
+		return Space{}, err
 	}
-	item.ParentAreaID = parentID
+	item.ParentSpaceID = parentID
 	item.CreatedAt = formatInstant(createdAt)
 	item.UpdatedAt = formatInstant(updatedAt)
 	return item, nil
 }
 
-func scanEquipmentAreaBinding(row rowScanner) (EquipmentAreaBinding, error) {
-	var item EquipmentAreaBinding
+func scanAssetSpaceBinding(row rowScanner) (AssetSpaceBinding, error) {
+	var item AssetSpaceBinding
 	var validFrom time.Time
 	var validTo *time.Time
 	var createdAt time.Time
 	var updatedAt time.Time
 	if err := row.Scan(
-		&item.ID, &item.OwningOrganizationID, &item.SiteID,
-		&item.EquipmentID, &item.AreaID, &item.BindingRole, &item.Status,
+		&item.ID, &item.TenantID, &item.SiteID,
+		&item.AssetID, &item.SpaceID, &item.BindingRole, &item.Status,
 		&validFrom, &validTo, &item.Revision, &createdAt, &updatedAt,
 	); err != nil {
-		return EquipmentAreaBinding{}, err
+		return AssetSpaceBinding{}, err
 	}
 	assignBindingTimes(validFrom, validTo, createdAt, updatedAt, &item.ValidFrom, &item.ValidTo, &item.CreatedAt, &item.UpdatedAt)
 	return item, nil
 }
 
-func scanDeviceAreaBinding(row rowScanner) (DeviceAreaBinding, error) {
-	var item DeviceAreaBinding
+func scanDeviceSpaceBinding(row rowScanner) (DeviceSpaceBinding, error) {
+	var item DeviceSpaceBinding
 	var validFrom time.Time
 	var validTo *time.Time
 	var createdAt time.Time
 	var updatedAt time.Time
 	if err := row.Scan(
-		&item.ID, &item.OwningOrganizationID, &item.SiteID,
-		&item.DeviceID, &item.AreaID, &item.BindingRole, &item.Status,
+		&item.ID, &item.TenantID, &item.SiteID,
+		&item.DeviceID, &item.SpaceID, &item.BindingRole, &item.Status,
 		&validFrom, &validTo, &item.Revision, &createdAt, &updatedAt,
 	); err != nil {
-		return DeviceAreaBinding{}, err
+		return DeviceSpaceBinding{}, err
 	}
 	assignBindingTimes(validFrom, validTo, createdAt, updatedAt, &item.ValidFrom, &item.ValidTo, &item.CreatedAt, &item.UpdatedAt)
 	return item, nil
@@ -511,7 +407,7 @@ func scanSensor(row rowScanner) (Sensor, error) {
 	var createdAt time.Time
 	var updatedAt time.Time
 	if err := row.Scan(
-		&item.ID, &item.OwningOrganizationID, &item.SiteID,
+		&item.ID, &item.TenantID, &item.SiteID,
 		&item.Code, &item.DisplayName, &item.SensorType,
 		&item.Manufacturer, &item.Model, &item.SerialNumber, &calibrationDueAt,
 		&metadata, &item.Status, &item.Revision, &createdAt, &updatedAt,
@@ -540,7 +436,7 @@ func scanSensorDeviceBinding(row rowScanner) (SensorDeviceBinding, error) {
 	var createdAt time.Time
 	var updatedAt time.Time
 	if err := row.Scan(
-		&item.ID, &item.OwningOrganizationID, &item.SiteID,
+		&item.ID, &item.TenantID, &item.SiteID,
 		&item.SensorID, &item.DeviceID, &item.BindingRole, &item.Status,
 		&validFrom, &validTo, &item.Revision, &createdAt, &updatedAt,
 	); err != nil {
@@ -550,36 +446,18 @@ func scanSensorDeviceBinding(row rowScanner) (SensorDeviceBinding, error) {
 	return item, nil
 }
 
-func scanSensorAreaBinding(row rowScanner) (SensorAreaBinding, error) {
-	var item SensorAreaBinding
+func scanSensorSpaceBinding(row rowScanner) (SensorSpaceBinding, error) {
+	var item SensorSpaceBinding
 	var validFrom time.Time
 	var validTo *time.Time
 	var createdAt time.Time
 	var updatedAt time.Time
 	if err := row.Scan(
-		&item.ID, &item.OwningOrganizationID, &item.SiteID,
-		&item.SensorID, &item.AreaID, &item.BindingRole, &item.Status,
+		&item.ID, &item.TenantID, &item.SiteID,
+		&item.SensorID, &item.SpaceID, &item.BindingRole, &item.Status,
 		&validFrom, &validTo, &item.Revision, &createdAt, &updatedAt,
 	); err != nil {
-		return SensorAreaBinding{}, err
-	}
-	assignBindingTimes(validFrom, validTo, createdAt, updatedAt, &item.ValidFrom, &item.ValidTo, &item.CreatedAt, &item.UpdatedAt)
-	return item, nil
-}
-
-func scanSensorSubjectBinding(row rowScanner) (SensorSubjectBinding, error) {
-	var item SensorSubjectBinding
-	var validFrom time.Time
-	var validTo *time.Time
-	var createdAt time.Time
-	var updatedAt time.Time
-	if err := row.Scan(
-		&item.ID, &item.OwningOrganizationID, &item.SiteID,
-		&item.SensorID, &item.SubjectType, &item.AreaID, &item.EquipmentID,
-		&item.BindingRole, &item.Status, &validFrom, &validTo,
-		&item.Revision, &createdAt, &updatedAt,
-	); err != nil {
-		return SensorSubjectBinding{}, err
+		return SensorSpaceBinding{}, err
 	}
 	assignBindingTimes(validFrom, validTo, createdAt, updatedAt, &item.ValidFrom, &item.ValidTo, &item.CreatedAt, &item.UpdatedAt)
 	return item, nil
@@ -591,12 +469,12 @@ func scanTelemetryPoint(row rowScanner) (TelemetryPoint, error) {
 	var createdAt time.Time
 	var updatedAt time.Time
 	if err := row.Scan(
-		&item.ID, &item.OwningOrganizationID, &item.SiteID,
-		&item.ReportingDeviceID, &item.SensorID, &item.PointKey, &item.SourceKey,
-		&item.DisplayName, &item.PointKind, &item.ValueType, &item.Unit,
+		&item.ID, &item.TenantID, &item.SiteID,
+		&item.ReportingDeviceID, &item.SensorID, &item.PointCode, &item.SourceKey,
+		&item.DisplayName, &item.PointType, &item.ValueType, &item.Unit,
 		&item.Writable, &item.SampleIntervalMS, &item.PublishIntervalMS,
-		&item.StaleAfterMS, &item.FormulaRevision, &metadata,
-		&item.Status, &item.Revision, &createdAt, &updatedAt,
+		&item.StaleAfterMS, &metadata, &item.Status, &item.Revision,
+		&createdAt, &updatedAt,
 	); err != nil {
 		return TelemetryPoint{}, err
 	}
@@ -618,8 +496,8 @@ func scanPointSubjectBinding(row rowScanner) (PointSubjectBinding, error) {
 	var createdAt time.Time
 	var updatedAt time.Time
 	if err := row.Scan(
-		&item.ID, &item.OwningOrganizationID, &item.SiteID,
-		&item.PointID, &item.SubjectType, &item.AreaID, &item.EquipmentID,
+		&item.ID, &item.TenantID, &item.SiteID,
+		&item.PointID, &item.SubjectType, &item.SpaceID, &item.AssetID,
 		&item.BindingRole, &item.Status, &validFrom, &validTo,
 		&item.Revision, &createdAt, &updatedAt,
 	); err != nil {

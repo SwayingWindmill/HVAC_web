@@ -13,9 +13,9 @@ import (
 
 const maximumLogtoUserIDBytes = 512
 
-type ApprovedLogtoOrganizationMapping struct {
+type ApprovedLogtoTenantMapping struct {
 	LogtoOrganizationID    string                     `json:"logtoOrganizationId"`
-	PlatformOrganizationID string                     `json:"platformOrganizationId"`
+	PlatformTenantID       string                     `json:"platformTenantId"`
 	Roles                  []ApprovedLogtoRoleMapping `json:"roles"`
 }
 
@@ -27,12 +27,13 @@ type ApprovedLogtoRoleMapping struct {
 }
 
 type LogtoReconciliationSeed struct {
-	SourceVersion        int64                              `json:"sourceVersion"`
-	PrincipalID          string                             `json:"principalId"`
-	EffectiveAt          time.Time                          `json:"effectiveAt"`
-	OrganizationMappings []ApprovedLogtoOrganizationMapping `json:"organizationMappings"`
-	SiteBindings         []ReconciledSiteBinding            `json:"siteBindings"`
-	ExplicitDenies       []ReconciledExplicitDeny           `json:"explicitDenies"`
+	TenantID       string                       `json:"tenantId"`
+	SourceVersion  int64                        `json:"sourceVersion"`
+	PrincipalID    string                       `json:"principalId"`
+	EffectiveAt    time.Time                    `json:"effectiveAt"`
+	TenantMappings []ApprovedLogtoTenantMapping `json:"tenantMappings"`
+	SiteBindings   []ReconciledSiteBinding      `json:"siteBindings"`
+	ExplicitDenies []ReconciledExplicitDeny     `json:"explicitDenies"`
 }
 
 type LogtoManagementReader interface {
@@ -94,6 +95,10 @@ func validateLogtoReconciliationSeed(userID string, seed LogtoReconciliationSeed
 	if userID == "" || len(userID) > maximumLogtoUserIDBytes {
 		return "", errors.New("Logto user id is missing or too large")
 	}
+	seed.TenantID = strings.TrimSpace(seed.TenantID)
+	if !isUUIDv7(seed.TenantID) {
+		return "", errors.New("Logto reconciliation requires an approved Tenant UUIDv7")
+	}
 	if seed.SourceVersion <= 0 || seed.EffectiveAt.IsZero() {
 		return "", errors.New("Logto reconciliation requires a positive source version and effective time")
 	}
@@ -145,6 +150,7 @@ func BuildLogtoReconciliationRequest(user LogtoUser, issuer string, organization
 	}
 
 	request := ReconciliationRequest{
+		TenantID:       strings.TrimSpace(seed.TenantID),
 		SourceSystem:   "logto",
 		SourceKey:      userID,
 		SourceVersion:  seed.SourceVersion,
@@ -155,23 +161,23 @@ func BuildLogtoReconciliationRequest(user LogtoUser, issuer string, organization
 		ExplicitDenies: append([]ReconciledExplicitDeny(nil), seed.ExplicitDenies...),
 	}
 	seenLogtoOrganizations := map[string]struct{}{}
-	seenPlatformOrganizations := map[string]struct{}{}
+	seenPlatformTenants := map[string]struct{}{}
 	seenMappedRoleKeys := map[string]struct{}{}
 	seenProjectedRoleBindings := map[string]struct{}{}
-	for mappingIndex, mapping := range seed.OrganizationMappings {
+	for mappingIndex, mapping := range seed.TenantMappings {
 		logtoOrganizationID := strings.TrimSpace(mapping.LogtoOrganizationID)
-		platformOrganizationID := strings.TrimSpace(mapping.PlatformOrganizationID)
-		if logtoOrganizationID == "" || !isUUIDv7(platformOrganizationID) {
+		platformTenantID := strings.TrimSpace(mapping.PlatformTenantID)
+		if logtoOrganizationID == "" || !isUUIDv7(platformTenantID) {
 			return ReconciliationRequest{}, fmt.Errorf("invalid approved Logto organization mapping at index %d", mappingIndex)
 		}
 		if _, duplicate := seenLogtoOrganizations[logtoOrganizationID]; duplicate {
 			return ReconciliationRequest{}, fmt.Errorf("duplicate Logto organization mapping %q", logtoOrganizationID)
 		}
-		if _, duplicate := seenPlatformOrganizations[platformOrganizationID]; duplicate {
-			return ReconciliationRequest{}, fmt.Errorf("duplicate platform organization mapping %q", platformOrganizationID)
+		if _, duplicate := seenPlatformTenants[platformTenantID]; duplicate {
+			return ReconciliationRequest{}, fmt.Errorf("duplicate platform organization mapping %q", platformTenantID)
 		}
 		seenLogtoOrganizations[logtoOrganizationID] = struct{}{}
-		seenPlatformOrganizations[platformOrganizationID] = struct{}{}
+		seenPlatformTenants[platformTenantID] = struct{}{}
 		approvedRoles := make(map[string]ApprovedLogtoRoleMapping, len(mapping.Roles))
 		for roleIndex, roleMapping := range mapping.Roles {
 			roleID := strings.TrimSpace(roleMapping.LogtoRoleID)
@@ -189,7 +195,7 @@ func BuildLogtoReconciliationRequest(user LogtoUser, issuer string, organization
 			if _, duplicate := approvedRoles[roleID]; duplicate {
 				return ReconciliationRequest{}, fmt.Errorf("duplicate Logto role mapping %q", roleID)
 			}
-			mappedRoleKey := platformOrganizationID + "\x00" + roleKey
+			mappedRoleKey := platformTenantID + "\x00" + roleKey
 			if _, duplicate := seenMappedRoleKeys[mappedRoleKey]; duplicate {
 				return ReconciliationRequest{}, fmt.Errorf("multiple Logto roles map to platform role %q", roleKey)
 			}
@@ -202,23 +208,23 @@ func BuildLogtoReconciliationRequest(user LogtoUser, issuer string, organization
 			continue
 		}
 		request.Memberships = append(request.Memberships, ReconciledMembership{
-			OrganizationID: platformOrganizationID,
-			Status:         FactStatusActive,
-			ValidFrom:      seed.EffectiveAt,
+			TenantID:  platformTenantID,
+			Status:    FactStatusActive,
+			ValidFrom: seed.EffectiveAt,
 		})
 		for _, logtoRole := range organization.OrganizationRoles {
 			roleMapping, approved := approvedRoles[strings.TrimSpace(logtoRole.ID)]
 			if !approved {
 				continue
 			}
-			roleKeyIdentity := platformOrganizationID + "\x00" + roleMapping.RoleKey
+			roleKeyIdentity := platformTenantID + "\x00" + roleMapping.RoleKey
 			if _, duplicate := seenProjectedRoleBindings[roleKeyIdentity]; duplicate {
 				return ReconciliationRequest{}, fmt.Errorf("duplicate projected platform role %q", roleMapping.RoleKey)
 			}
 			seenProjectedRoleBindings[roleKeyIdentity] = struct{}{}
 			request.RoleBindings = append(request.RoleBindings, ReconciledRoleBinding{
-				OrganizationID: platformOrganizationID,
-				RoleKey:        roleMapping.RoleKey,
+				TenantID: platformTenantID,
+				RoleKey:  roleMapping.RoleKey,
 				Actions:        append([]registryauth.Action{}, roleMapping.Actions...),
 				Effect:         roleMapping.Effect,
 				ValidFrom:      seed.EffectiveAt,
@@ -227,11 +233,11 @@ func BuildLogtoReconciliationRequest(user LogtoUser, issuer string, organization
 	}
 
 	sort.Slice(request.Memberships, func(i, j int) bool {
-		return request.Memberships[i].OrganizationID < request.Memberships[j].OrganizationID
+		return request.Memberships[i].TenantID < request.Memberships[j].TenantID
 	})
 	sort.Slice(request.RoleBindings, func(i, j int) bool {
 		left, right := request.RoleBindings[i], request.RoleBindings[j]
-		return left.OrganizationID+"\x00"+left.RoleKey < right.OrganizationID+"\x00"+right.RoleKey
+		return left.TenantID+"\x00"+left.RoleKey < right.TenantID+"\x00"+right.RoleKey
 	})
 	return request, nil
 }

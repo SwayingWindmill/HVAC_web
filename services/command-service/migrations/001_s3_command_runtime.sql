@@ -21,19 +21,19 @@ CREATE TABLE IF NOT EXISTS command_runtime.capability_profiles (
 );
 
 CREATE TABLE IF NOT EXISTS command_runtime.device_control_state (
-  organization_id uuid NOT NULL,
+  tenant_id uuid NOT NULL,
   site_id uuid NOT NULL,
   device_id uuid NOT NULL,
   next_command_sequence bigint NOT NULL DEFAULT 1 CHECK (next_command_sequence > 0),
   active_execution_fence bigint NOT NULL DEFAULT 0 CHECK (active_execution_fence >= 0),
   frozen_control_groups jsonb NOT NULL DEFAULT '[]'::jsonb,
   updated_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (organization_id, device_id)
+  PRIMARY KEY (tenant_id, device_id)
 );
 
 CREATE TABLE IF NOT EXISTS command_runtime.command_intents (
   command_id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL,
+  tenant_id uuid NOT NULL,
   site_id uuid NOT NULL,
   device_id uuid NOT NULL,
   principal_id uuid NOT NULL,
@@ -54,24 +54,24 @@ CREATE TABLE IF NOT EXISTS command_runtime.command_intents (
   active_execution_fence bigint NOT NULL DEFAULT 0 CHECK (active_execution_fence >= 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  UNIQUE (organization_id, device_id, device_command_sequence),
+  UNIQUE (tenant_id, device_id, device_command_sequence),
   FOREIGN KEY (capability_name, capability_revision)
     REFERENCES command_runtime.capability_profiles (capability_name, capability_revision)
 );
 
 CREATE TABLE IF NOT EXISTS command_runtime.command_idempotency (
-  organization_id uuid NOT NULL,
+  tenant_id uuid NOT NULL,
   device_id uuid NOT NULL,
   idempotency_key text NOT NULL,
   payload_hash text NOT NULL,
   command_id uuid NOT NULL REFERENCES command_runtime.command_intents(command_id),
   created_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (organization_id, device_id, idempotency_key)
+  PRIMARY KEY (tenant_id, device_id, idempotency_key)
 );
 
 CREATE TABLE IF NOT EXISTS command_runtime.command_authorization_snapshots (
   command_id uuid PRIMARY KEY REFERENCES command_runtime.command_intents(command_id),
-  organization_id uuid NOT NULL,
+  tenant_id uuid NOT NULL,
   site_id uuid NOT NULL,
   device_id uuid NOT NULL,
   principal_id uuid NOT NULL,
@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS command_runtime.command_authorization_snapshots (
 
 CREATE TABLE IF NOT EXISTS command_runtime.command_risk_snapshots (
   command_id uuid PRIMARY KEY REFERENCES command_runtime.command_intents(command_id),
-  organization_id uuid NOT NULL,
+  tenant_id uuid NOT NULL,
   site_id uuid NOT NULL,
   device_id uuid NOT NULL,
   risk_level text NOT NULL,
@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS command_runtime.command_risk_snapshots (
 CREATE TABLE IF NOT EXISTS command_runtime.command_approval_snapshots (
   approval_id uuid PRIMARY KEY,
   command_id uuid NOT NULL REFERENCES command_runtime.command_intents(command_id),
-  organization_id uuid NOT NULL,
+  tenant_id uuid NOT NULL,
   site_id uuid NOT NULL,
   device_id uuid NOT NULL,
   approver_id uuid NOT NULL,
@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS command_runtime.command_approval_snapshots (
 CREATE TABLE IF NOT EXISTS command_runtime.command_attempts (
   attempt_id uuid PRIMARY KEY,
   command_id uuid NOT NULL REFERENCES command_runtime.command_intents(command_id),
-  organization_id uuid NOT NULL,
+  tenant_id uuid NOT NULL,
   site_id uuid NOT NULL,
   device_id uuid NOT NULL,
   attempt_number integer NOT NULL CHECK (attempt_number > 0),
@@ -146,7 +146,7 @@ CREATE TABLE IF NOT EXISTS command_runtime.command_attempts (
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
   UNIQUE (command_id, attempt_number),
-  UNIQUE (organization_id, device_id, execution_fence)
+  UNIQUE (tenant_id, device_id, execution_fence)
 );
 
 ALTER TABLE command_runtime.command_attempts ADD COLUMN IF NOT EXISTS acknowledged_at timestamptz;
@@ -158,7 +158,7 @@ ALTER TABLE command_runtime.command_attempts ADD COLUMN IF NOT EXISTS verificati
 CREATE TABLE IF NOT EXISTS command_runtime.command_transitions (
   transition_id uuid PRIMARY KEY,
   command_id uuid NOT NULL REFERENCES command_runtime.command_intents(command_id),
-  organization_id uuid NOT NULL,
+  tenant_id uuid NOT NULL,
   site_id uuid NOT NULL,
   device_id uuid NOT NULL,
   command_version bigint NOT NULL CHECK (command_version > 0),
@@ -176,7 +176,7 @@ CREATE TABLE IF NOT EXISTS command_runtime.command_transitions (
 CREATE TABLE IF NOT EXISTS command_runtime.command_dispatch_outbox (
   outbox_id uuid PRIMARY KEY,
   command_id uuid NOT NULL REFERENCES command_runtime.command_intents(command_id),
-  organization_id uuid NOT NULL,
+  tenant_id uuid NOT NULL,
   site_id uuid NOT NULL,
   device_id uuid NOT NULL,
   command_version bigint NOT NULL,
@@ -193,7 +193,7 @@ CREATE TABLE IF NOT EXISTS command_runtime.command_dispatch_outbox (
 CREATE TABLE IF NOT EXISTS command_runtime.command_audit_intents (
   audit_intent_id uuid PRIMARY KEY,
   command_id uuid NOT NULL REFERENCES command_runtime.command_intents(command_id),
-  organization_id uuid NOT NULL,
+  tenant_id uuid NOT NULL,
   site_id uuid NOT NULL,
   device_id uuid NOT NULL,
   event_kind text NOT NULL,
@@ -204,15 +204,15 @@ CREATE TABLE IF NOT EXISTS command_runtime.command_audit_intents (
 );
 
 CREATE INDEX IF NOT EXISTS command_dispatch_outbox_ready_idx
-  ON command_runtime.command_dispatch_outbox (organization_id, available_at, created_at)
+  ON command_runtime.command_dispatch_outbox (tenant_id, available_at, created_at)
   WHERE delivered_at IS NULL;
 CREATE INDEX IF NOT EXISTS command_attempts_prepared_lease_idx
-  ON command_runtime.command_attempts (organization_id, lease_until, command_id)
+  ON command_runtime.command_attempts (tenant_id, lease_until, command_id)
   WHERE status = 'PREPARED';
 CREATE INDEX IF NOT EXISTS command_intents_device_lane_idx
-  ON command_runtime.command_intents (organization_id, device_id, device_command_sequence, status);
+  ON command_runtime.command_intents (tenant_id, device_id, device_command_sequence, status);
 CREATE INDEX IF NOT EXISTS command_attempts_verification_ready_idx
-  ON command_runtime.command_attempts (organization_id, verification_deadline, verification_lease_until, command_id)
+  ON command_runtime.command_attempts (tenant_id, verification_deadline, verification_lease_until, command_id)
   WHERE status = 'ACKNOWLEDGED';
 
 INSERT INTO command_runtime.capability_profiles (
@@ -275,44 +275,44 @@ CREATE POLICY command_audit_intents_migrator_all ON command_runtime.command_audi
 
 CREATE POLICY device_control_state_runtime_org ON command_runtime.device_control_state
   FOR ALL TO s3_command_runtime
-  USING (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid)
-  WITH CHECK (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid);
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 CREATE POLICY command_intents_runtime_org ON command_runtime.command_intents
   FOR ALL TO s3_command_runtime
-  USING (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid)
-  WITH CHECK (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid);
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 CREATE POLICY command_idempotency_runtime_org ON command_runtime.command_idempotency
   FOR ALL TO s3_command_runtime
-  USING (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid)
-  WITH CHECK (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid);
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 CREATE POLICY command_authorization_snapshots_runtime_org ON command_runtime.command_authorization_snapshots
   FOR ALL TO s3_command_runtime
-  USING (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid)
-  WITH CHECK (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid);
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 CREATE POLICY command_risk_snapshots_runtime_org ON command_runtime.command_risk_snapshots
   FOR ALL TO s3_command_runtime
-  USING (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid)
-  WITH CHECK (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid);
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 CREATE POLICY command_approval_snapshots_runtime_org ON command_runtime.command_approval_snapshots
   FOR ALL TO s3_command_runtime
-  USING (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid)
-  WITH CHECK (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid);
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 CREATE POLICY command_attempts_runtime_org ON command_runtime.command_attempts
   FOR ALL TO s3_command_runtime
-  USING (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid)
-  WITH CHECK (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid);
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 CREATE POLICY command_transitions_runtime_org ON command_runtime.command_transitions
   FOR ALL TO s3_command_runtime
-  USING (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid)
-  WITH CHECK (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid);
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 CREATE POLICY command_dispatch_outbox_runtime_org ON command_runtime.command_dispatch_outbox
   FOR ALL TO s3_command_runtime
-  USING (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid)
-  WITH CHECK (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid);
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 CREATE POLICY command_audit_intents_runtime_org ON command_runtime.command_audit_intents
   FOR ALL TO s3_command_runtime
-  USING (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid)
-  WITH CHECK (organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid);
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 
 REVOKE ALL ON SCHEMA command_runtime FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA command_runtime FROM PUBLIC;

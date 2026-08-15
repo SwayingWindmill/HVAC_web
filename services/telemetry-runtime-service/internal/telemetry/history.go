@@ -12,7 +12,6 @@ const historyInsertFailureCode = "CLICKHOUSE_INSERT_FAILED"
 type HistoryObservation struct {
 	ObservationID         string    `json:"observation_id"`
 	TenantID              *string   `json:"tenant_id"`
-	OwningOrganizationID  *string   `json:"owning_organization_id"`
 	SiteID                *string   `json:"site_id"`
 	DeviceID              *string   `json:"device_id"`
 	PointID               *string   `json:"point_id"`
@@ -23,6 +22,10 @@ type HistoryObservation struct {
 	SourceOffset          int64     `json:"source_offset"`
 	SourcePath            string    `json:"source_path"`
 	TelemetryKey          string    `json:"telemetry_key"`
+	PointType             *string   `json:"point_type"`
+	PointRevision         *int64    `json:"point_revision"`
+	CounterDecreaseMode   *string   `json:"counter_decrease_mode"`
+	CounterRolloverModulus *float64 `json:"counter_rollover_modulus"`
 	ValueType             *string   `json:"value_type"`
 	Unit                  *string   `json:"unit"`
 	ValueJSON             *string   `json:"value_json"`

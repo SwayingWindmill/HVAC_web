@@ -1178,7 +1178,7 @@
         "required": [
           "schemaVersion",
           "workOrderId",
-          "organizationId",
+          "tenantId",
           "siteId",
           "title",
           "description",
@@ -1202,7 +1202,7 @@
           "workOrderId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
-          "organizationId": {
+          "tenantId": {
             "$ref": "#/components/schemas/UUIDv7"
           },
           "siteId": {

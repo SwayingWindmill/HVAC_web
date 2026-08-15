@@ -20,13 +20,11 @@ AS $$
   SELECT NULLIF(current_setting('app.principal_id', true), '')::uuid
 $$;
 
-CREATE OR REPLACE FUNCTION iam.current_acting_organization_id()
+CREATE OR REPLACE FUNCTION iam.current_tenant_id()
 RETURNS uuid
 LANGUAGE sql
 STABLE
-AS $$
-  SELECT NULLIF(current_setting('app.acting_organization_id', true), '')::uuid
-$$;
+AS 'SELECT NULLIF(current_setting(''app.tenant_id'', true), '''')::uuid';
 
 CREATE TABLE IF NOT EXISTS iam.principals (
   id uuid PRIMARY KEY CHECK (iam.is_uuid_v7(id)),
@@ -42,9 +40,9 @@ CREATE TABLE IF NOT EXISTS iam.principals (
   CHECK (updated_at >= created_at)
 );
 
-CREATE TABLE IF NOT EXISTS iam.organization_memberships (
+CREATE TABLE IF NOT EXISTS iam.tenant_memberships (
   id uuid PRIMARY KEY CHECK (iam.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (iam.is_uuid_v7(organization_id)),
+  tenant_id uuid NOT NULL CHECK (iam.is_uuid_v7(tenant_id)),
   principal_id uuid NOT NULL REFERENCES iam.principals(id),
   status text NOT NULL CHECK (status IN ('ACTIVE', 'SUSPENDED', 'REVOKED')),
   valid_from timestamptz NOT NULL,
@@ -52,14 +50,14 @@ CREATE TABLE IF NOT EXISTS iam.organization_memberships (
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  UNIQUE (organization_id, principal_id),
+  UNIQUE (tenant_id, principal_id),
   CHECK (valid_to IS NULL OR valid_to > valid_from),
   CHECK (updated_at >= created_at)
 );
 
 CREATE TABLE IF NOT EXISTS iam.role_bindings (
   id uuid PRIMARY KEY CHECK (iam.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (iam.is_uuid_v7(organization_id)),
+  tenant_id uuid NOT NULL CHECK (iam.is_uuid_v7(tenant_id)),
   principal_id uuid NOT NULL REFERENCES iam.principals(id),
   role_key text NOT NULL,
   actions text[] NOT NULL CHECK (cardinality(actions) > 0),
@@ -69,15 +67,14 @@ CREATE TABLE IF NOT EXISTS iam.role_bindings (
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  UNIQUE (organization_id, principal_id, role_key),
+  UNIQUE (tenant_id, principal_id, role_key),
   CHECK (valid_to IS NULL OR valid_to > valid_from),
   CHECK (updated_at >= created_at)
 );
 
 CREATE TABLE IF NOT EXISTS iam.site_bindings (
   id uuid PRIMARY KEY CHECK (iam.is_uuid_v7(id)),
-  acting_organization_id uuid NOT NULL CHECK (iam.is_uuid_v7(acting_organization_id)),
-  owning_organization_id uuid NOT NULL CHECK (iam.is_uuid_v7(owning_organization_id)),
+  tenant_id uuid NOT NULL CHECK (iam.is_uuid_v7(tenant_id)),
   site_id uuid NOT NULL CHECK (iam.is_uuid_v7(site_id)),
   principal_id uuid NOT NULL REFERENCES iam.principals(id),
   actions text[] NOT NULL CHECK (cardinality(actions) > 0),
@@ -87,15 +84,14 @@ CREATE TABLE IF NOT EXISTS iam.site_bindings (
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  UNIQUE (acting_organization_id, site_id, principal_id),
+  UNIQUE (tenant_id, site_id, principal_id),
   CHECK (valid_to IS NULL OR valid_to > valid_from),
   CHECK (updated_at >= created_at)
 );
 
 CREATE TABLE IF NOT EXISTS iam.explicit_denies (
   id uuid PRIMARY KEY CHECK (iam.is_uuid_v7(id)),
-  acting_organization_id uuid NOT NULL CHECK (iam.is_uuid_v7(acting_organization_id)),
-  owning_organization_id uuid NOT NULL CHECK (iam.is_uuid_v7(owning_organization_id)),
+  tenant_id uuid NOT NULL CHECK (iam.is_uuid_v7(tenant_id)),
   site_id uuid CHECK (site_id IS NULL OR iam.is_uuid_v7(site_id)),
   principal_id uuid NOT NULL REFERENCES iam.principals(id),
   action text NOT NULL,
@@ -111,34 +107,34 @@ CREATE TABLE IF NOT EXISTS iam.explicit_denies (
 
 CREATE TABLE IF NOT EXISTS iam.policies (
   id uuid PRIMARY KEY CHECK (iam.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (iam.is_uuid_v7(organization_id)),
+  tenant_id uuid NOT NULL CHECK (iam.is_uuid_v7(tenant_id)),
   policy_key text NOT NULL,
   policy_revision bigint NOT NULL CHECK (policy_revision > 0),
   status text NOT NULL CHECK (status IN ('ACTIVE', 'RETIRED')),
   document jsonb NOT NULL CHECK (jsonb_typeof(document) = 'object'),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  UNIQUE (organization_id, policy_key, policy_revision),
+  UNIQUE (tenant_id, policy_key, policy_revision),
   CHECK (updated_at >= created_at)
 );
 
-CREATE INDEX IF NOT EXISTS organization_memberships_principal_org_idx
-  ON iam.organization_memberships (principal_id, organization_id, status);
-CREATE INDEX IF NOT EXISTS role_bindings_principal_org_idx
-  ON iam.role_bindings (principal_id, organization_id, effect);
+CREATE INDEX IF NOT EXISTS tenant_memberships_principal_tenant_idx
+  ON iam.tenant_memberships (principal_id, tenant_id, status);
+CREATE INDEX IF NOT EXISTS role_bindings_principal_tenant_idx
+  ON iam.role_bindings (principal_id, tenant_id, effect);
 CREATE INDEX IF NOT EXISTS site_bindings_principal_site_idx
   ON iam.site_bindings (principal_id, site_id, effect);
 CREATE INDEX IF NOT EXISTS explicit_denies_principal_scope_idx
-  ON iam.explicit_denies (principal_id, acting_organization_id, site_id, action);
+  ON iam.explicit_denies (principal_id, tenant_id, site_id, action);
 
 ALTER TABLE iam.principals ENABLE ROW LEVEL SECURITY;
-ALTER TABLE iam.organization_memberships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE iam.tenant_memberships ENABLE ROW LEVEL SECURITY;
 ALTER TABLE iam.role_bindings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE iam.site_bindings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE iam.explicit_denies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE iam.policies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE iam.principals FORCE ROW LEVEL SECURITY;
-ALTER TABLE iam.organization_memberships FORCE ROW LEVEL SECURITY;
+ALTER TABLE iam.tenant_memberships FORCE ROW LEVEL SECURITY;
 ALTER TABLE iam.role_bindings FORCE ROW LEVEL SECURITY;
 ALTER TABLE iam.site_bindings FORCE ROW LEVEL SECURITY;
 ALTER TABLE iam.explicit_denies FORCE ROW LEVEL SECURITY;
@@ -149,8 +145,8 @@ CREATE POLICY principal_self_scope ON iam.principals
   FOR SELECT TO s1_iam_runtime
   USING (id = iam.current_principal_id());
 
-DROP POLICY IF EXISTS memberships_principal_scope ON iam.organization_memberships;
-CREATE POLICY memberships_principal_scope ON iam.organization_memberships
+DROP POLICY IF EXISTS memberships_principal_scope ON iam.tenant_memberships;
+CREATE POLICY memberships_principal_scope ON iam.tenant_memberships
   FOR SELECT TO s1_iam_runtime
   USING (principal_id = iam.current_principal_id());
 
@@ -169,12 +165,12 @@ CREATE POLICY explicit_denies_principal_scope ON iam.explicit_denies
   FOR SELECT TO s1_iam_runtime
   USING (principal_id = iam.current_principal_id());
 
-DROP POLICY IF EXISTS policies_acting_organization_scope ON iam.policies;
-CREATE POLICY policies_acting_organization_scope ON iam.policies
+DROP POLICY IF EXISTS policies_tenant_scope ON iam.policies;
+CREATE POLICY policies_tenant_scope ON iam.policies
   FOR SELECT TO s1_iam_runtime
-  USING (organization_id = iam.current_acting_organization_id());
+  USING (tenant_id = iam.current_tenant_id());
 
-GRANT SELECT ON iam.principals, iam.organization_memberships, iam.role_bindings,
+GRANT SELECT ON iam.principals, iam.tenant_memberships, iam.role_bindings,
   iam.site_bindings, iam.explicit_denies, iam.policies TO s1_iam_runtime;
 REVOKE ALL ON ALL TABLES IN SCHEMA iam FROM PUBLIC;
 
@@ -191,40 +187,22 @@ AS $$
      AND (get_byte(uuid_send(value), 8) >> 6) = 2
 $$;
 
-CREATE OR REPLACE FUNCTION core_registry.current_authorized_organization_ids()
-RETURNS uuid[]
-LANGUAGE sql
-STABLE
-AS $$
-  SELECT COALESCE(NULLIF(current_setting('app.authorized_organization_ids', true), ''), '{}')::uuid[]
-$$;
-
 CREATE OR REPLACE FUNCTION core_registry.current_authorized_site_ids()
 RETURNS uuid[]
 LANGUAGE sql
 STABLE
-AS $$
+AS $body$
   SELECT COALESCE(NULLIF(current_setting('app.authorized_site_ids', true), ''), '{}')::uuid[]
-$$;
+$body$;
 
-CREATE OR REPLACE FUNCTION core_registry.is_authorized_organization(value uuid)
+CREATE OR REPLACE FUNCTION core_registry.is_authorized_site(site_value uuid)
 RETURNS boolean
 LANGUAGE sql
 STABLE
 STRICT
-AS $$
-  SELECT value = ANY (core_registry.current_authorized_organization_ids())
-$$;
-
-CREATE OR REPLACE FUNCTION core_registry.is_authorized_site(organization_value uuid, site_value uuid)
-RETURNS boolean
-LANGUAGE sql
-STABLE
-STRICT
-AS $$
-  SELECT core_registry.is_authorized_organization(organization_value)
-      OR site_value = ANY (core_registry.current_authorized_site_ids())
-$$;
+AS $body$
+  SELECT site_value = ANY (core_registry.current_authorized_site_ids())
+$body$;
 
 CREATE OR REPLACE FUNCTION core_registry.enforce_iana_timezone()
 RETURNS trigger
@@ -238,21 +216,8 @@ BEGIN
 END
 $$;
 
-CREATE TABLE IF NOT EXISTS core_registry.organizations (
-  id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  code text NOT NULL,
-  display_name text NOT NULL,
-  status text NOT NULL CHECK (status IN ('ACTIVE', 'SUSPENDED', 'RETIRED')),
-  revision bigint NOT NULL CHECK (revision > 0),
-  created_at timestamptz NOT NULL,
-  updated_at timestamptz NOT NULL,
-  UNIQUE (code),
-  CHECK (updated_at >= created_at)
-);
-
 CREATE TABLE IF NOT EXISTS core_registry.sites (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
   code text NOT NULL,
   display_name text NOT NULL,
   timezone text NOT NULL,
@@ -260,9 +225,7 @@ CREATE TABLE IF NOT EXISTS core_registry.sites (
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  UNIQUE (organization_id, code),
-  UNIQUE (organization_id, id),
-  FOREIGN KEY (organization_id) REFERENCES core_registry.organizations(id),
+  UNIQUE (code),
   CHECK (updated_at >= created_at)
 );
 
@@ -271,26 +234,24 @@ CREATE TRIGGER sites_iana_timezone
 BEFORE INSERT OR UPDATE OF timezone ON core_registry.sites
 FOR EACH ROW EXECUTE FUNCTION core_registry.enforce_iana_timezone();
 
-CREATE TABLE IF NOT EXISTS core_registry.equipment (
+CREATE TABLE IF NOT EXISTS core_registry.assets (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
   site_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(site_id)),
   code text NOT NULL,
   display_name text NOT NULL,
-  equipment_type text NOT NULL,
+  asset_type text NOT NULL,
   status text NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE', 'RETIRED')),
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  UNIQUE (organization_id, site_id, code),
-  UNIQUE (organization_id, site_id, id),
-  FOREIGN KEY (organization_id, site_id) REFERENCES core_registry.sites(organization_id, id),
+  UNIQUE (site_id, code),
+  UNIQUE (site_id, id),
+  FOREIGN KEY (site_id) REFERENCES core_registry.sites(id),
   CHECK (updated_at >= created_at)
 );
 
 CREATE TABLE IF NOT EXISTS core_registry.devices (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
   site_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(site_id)),
   code text NOT NULL,
   display_name text NOT NULL,
@@ -299,18 +260,17 @@ CREATE TABLE IF NOT EXISTS core_registry.devices (
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  UNIQUE (organization_id, site_id, code),
-  UNIQUE (organization_id, site_id, id),
-  FOREIGN KEY (organization_id, site_id) REFERENCES core_registry.sites(organization_id, id),
+  UNIQUE (site_id, code),
+  UNIQUE (site_id, id),
+  FOREIGN KEY (site_id) REFERENCES core_registry.sites(id),
   CHECK (updated_at >= created_at)
 );
 
 CREATE TABLE IF NOT EXISTS core_registry.device_bindings (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
   site_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(site_id)),
   device_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(device_id)),
-  equipment_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(equipment_id)),
+  asset_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(asset_id)),
   binding_role text NOT NULL,
   status text NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE', 'RETIRED')),
   valid_from timestamptz NOT NULL,
@@ -318,20 +278,19 @@ CREATE TABLE IF NOT EXISTS core_registry.device_bindings (
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  FOREIGN KEY (organization_id, site_id, device_id) REFERENCES core_registry.devices(organization_id, site_id, id),
-  FOREIGN KEY (organization_id, site_id, equipment_id) REFERENCES core_registry.equipment(organization_id, site_id, id),
-  CHECK (device_id <> equipment_id),
+  FOREIGN KEY (site_id, device_id) REFERENCES core_registry.devices(site_id, id),
+  FOREIGN KEY (site_id, asset_id) REFERENCES core_registry.assets(site_id, id),
+  CHECK (device_id <> asset_id),
   CHECK (valid_to IS NULL OR valid_to > valid_from),
   CHECK (updated_at >= created_at)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS device_bindings_active_device_role_uidx
-  ON core_registry.device_bindings (organization_id, site_id, device_id, binding_role)
+  ON core_registry.device_bindings (site_id, device_id, binding_role)
   WHERE status = 'ACTIVE' AND valid_to IS NULL;
 
 CREATE TABLE IF NOT EXISTS core_registry.external_bindings (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
   site_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(site_id)),
   integration_instance_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(integration_instance_id)),
   provider text NOT NULL,
@@ -343,7 +302,7 @@ CREATE TABLE IF NOT EXISTS core_registry.external_bindings (
   revision bigint NOT NULL CHECK (revision > 0),
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL,
-  FOREIGN KEY (organization_id, site_id) REFERENCES core_registry.sites(organization_id, id),
+  FOREIGN KEY (site_id) REFERENCES core_registry.sites(id),
   CHECK (valid_to IS NULL OR valid_to > valid_from),
   CHECK (updated_at >= created_at)
 );
@@ -354,12 +313,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS external_bindings_active_external_key_uidx
 
 CREATE TABLE IF NOT EXISTS core_registry.legacy_resource_maps (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
   site_id uuid CHECK (site_id IS NULL OR core_registry.is_uuid_v7(site_id)),
   source_system text NOT NULL,
   source_table text NOT NULL,
   source_key text NOT NULL,
-  target_resource_type text NOT NULL CHECK (target_resource_type IN ('ORGANIZATION', 'SITE', 'EQUIPMENT', 'DEVICE', 'DEVICE_BINDING', 'EXTERNAL_BINDING')),
+  target_resource_type text NOT NULL CHECK (target_resource_type IN ('SITE', 'ASSET', 'DEVICE', 'DEVICE_BINDING', 'EXTERNAL_BINDING')),
   target_resource_id uuid CHECK (target_resource_id IS NULL OR core_registry.is_uuid_v7(target_resource_id)),
   mapping_state text NOT NULL CHECK (mapping_state IN ('DISCOVERED', 'MAPPED', 'VERIFIED', 'QUARANTINED', 'RETIRED')),
   transformation_version text NOT NULL,
@@ -377,7 +335,6 @@ CREATE TABLE IF NOT EXISTS core_registry.legacy_resource_maps (
 
 CREATE TABLE IF NOT EXISTS core_registry.migration_provenance (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid NOT NULL CHECK (core_registry.is_uuid_v7(organization_id)),
   legacy_resource_map_id uuid NOT NULL REFERENCES core_registry.legacy_resource_maps(id),
   source_system text NOT NULL,
   source_table text NOT NULL,
@@ -394,7 +351,6 @@ CREATE TABLE IF NOT EXISTS core_registry.migration_provenance (
 
 CREATE TABLE IF NOT EXISTS core_registry.migration_quarantine (
   id uuid PRIMARY KEY CHECK (core_registry.is_uuid_v7(id)),
-  organization_id uuid CHECK (organization_id IS NULL OR core_registry.is_uuid_v7(organization_id)),
   source_system text NOT NULL,
   source_table text NOT NULL,
   source_key text NOT NULL,
@@ -407,34 +363,30 @@ CREATE TABLE IF NOT EXISTS core_registry.migration_quarantine (
   CHECK ((resolved_at IS NULL AND resolution IS NULL) OR (resolved_at IS NOT NULL AND resolution IS NOT NULL))
 );
 
-CREATE INDEX IF NOT EXISTS organizations_registry_page_idx
-  ON core_registry.organizations (display_name COLLATE "C", id);
 CREATE INDEX IF NOT EXISTS sites_registry_page_idx
-  ON core_registry.sites (organization_id, display_name COLLATE "C", id);
-CREATE INDEX IF NOT EXISTS equipment_registry_page_idx
-  ON core_registry.equipment (organization_id, site_id, display_name COLLATE "C", id);
+  ON core_registry.sites (display_name COLLATE "C", id);
+CREATE INDEX IF NOT EXISTS asset_registry_page_idx
+  ON core_registry.assets (site_id, display_name COLLATE "C", id);
 CREATE INDEX IF NOT EXISTS devices_registry_page_idx
-  ON core_registry.devices (organization_id, site_id, display_name COLLATE "C", id);
+  ON core_registry.devices (site_id, display_name COLLATE "C", id);
 CREATE INDEX IF NOT EXISTS device_bindings_registry_page_idx
-  ON core_registry.device_bindings (organization_id, site_id, binding_role COLLATE "C", id);
+  ON core_registry.device_bindings (site_id, binding_role COLLATE "C", id);
 CREATE INDEX IF NOT EXISTS legacy_resource_maps_scope_state_idx
-  ON core_registry.legacy_resource_maps (organization_id, site_id, mapping_state, source_system, source_table, source_key);
+  ON core_registry.legacy_resource_maps (site_id, mapping_state, source_system, source_table, source_key);
 CREATE INDEX IF NOT EXISTS migration_quarantine_open_idx
   ON core_registry.migration_quarantine (detected_at, source_system, source_table)
   WHERE resolved_at IS NULL;
 
-ALTER TABLE core_registry.organizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.sites ENABLE ROW LEVEL SECURITY;
-ALTER TABLE core_registry.equipment ENABLE ROW LEVEL SECURITY;
+ALTER TABLE core_registry.assets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.devices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.device_bindings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.external_bindings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.legacy_resource_maps ENABLE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.migration_provenance ENABLE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.migration_quarantine ENABLE ROW LEVEL SECURITY;
-ALTER TABLE core_registry.organizations FORCE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.sites FORCE ROW LEVEL SECURITY;
-ALTER TABLE core_registry.equipment FORCE ROW LEVEL SECURITY;
+ALTER TABLE core_registry.assets FORCE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.devices FORCE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.device_bindings FORCE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.external_bindings FORCE ROW LEVEL SECURITY;
@@ -442,42 +394,37 @@ ALTER TABLE core_registry.legacy_resource_maps FORCE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.migration_provenance FORCE ROW LEVEL SECURITY;
 ALTER TABLE core_registry.migration_quarantine FORCE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS organizations_runtime_scope ON core_registry.organizations;
-CREATE POLICY organizations_runtime_scope ON core_registry.organizations
-  FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_organization(id));
-
 DROP POLICY IF EXISTS sites_runtime_scope ON core_registry.sites;
 CREATE POLICY sites_runtime_scope ON core_registry.sites
   FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_site(organization_id, id));
+  USING (core_registry.is_authorized_site(id));
 
-DROP POLICY IF EXISTS equipment_runtime_scope ON core_registry.equipment;
-CREATE POLICY equipment_runtime_scope ON core_registry.equipment
+DROP POLICY IF EXISTS asset_runtime_scope ON core_registry.assets;
+CREATE POLICY asset_runtime_scope ON core_registry.assets
   FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_site(organization_id, site_id));
+  USING (core_registry.is_authorized_site(site_id));
 
 DROP POLICY IF EXISTS devices_runtime_scope ON core_registry.devices;
 CREATE POLICY devices_runtime_scope ON core_registry.devices
   FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_site(organization_id, site_id));
+  USING (core_registry.is_authorized_site(site_id));
 
 DROP POLICY IF EXISTS device_bindings_runtime_scope ON core_registry.device_bindings;
 CREATE POLICY device_bindings_runtime_scope ON core_registry.device_bindings
   FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_site(organization_id, site_id));
+  USING (core_registry.is_authorized_site(site_id));
 
 DROP POLICY IF EXISTS external_bindings_runtime_scope ON core_registry.external_bindings;
 CREATE POLICY external_bindings_runtime_scope ON core_registry.external_bindings
   FOR SELECT TO s1_core_runtime
-  USING (core_registry.is_authorized_site(organization_id, site_id));
+  USING (core_registry.is_authorized_site(site_id));
 
 DROP POLICY IF EXISTS verified_legacy_maps_runtime_scope ON core_registry.legacy_resource_maps;
 CREATE POLICY verified_legacy_maps_runtime_scope ON core_registry.legacy_resource_maps
   FOR SELECT TO s1_core_runtime
   USING (mapping_state = 'VERIFIED'
-     AND (core_registry.is_authorized_organization(organization_id)
-       OR (site_id IS NOT NULL AND core_registry.is_authorized_site(organization_id, site_id))));
+     AND site_id IS NOT NULL
+     AND core_registry.is_authorized_site(site_id));
 
 DROP POLICY IF EXISTS legacy_maps_operator_scope ON core_registry.legacy_resource_maps;
 CREATE POLICY legacy_maps_operator_scope ON core_registry.legacy_resource_maps
@@ -497,7 +444,7 @@ CREATE POLICY quarantine_operator_scope ON core_registry.migration_quarantine
   USING (true)
   WITH CHECK (true);
 
-GRANT SELECT ON core_registry.organizations, core_registry.sites, core_registry.equipment,
+GRANT SELECT ON core_registry.sites, core_registry.assets,
   core_registry.devices, core_registry.device_bindings, core_registry.external_bindings,
   core_registry.legacy_resource_maps TO s1_core_runtime;
 GRANT SELECT, INSERT, UPDATE ON core_registry.legacy_resource_maps,

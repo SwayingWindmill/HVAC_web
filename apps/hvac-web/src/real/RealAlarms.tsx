@@ -43,7 +43,7 @@ function buildOptions(
   signal?: AbortSignal,
 ): ScopedAlarmRequestOptions {
   return {
-    trustedOrganizationId: principal.context.actingOrganizationId,
+    trustedTenantId: principal.context.tenantId,
     trustedSiteId: site.id,
     signal,
   };
@@ -83,7 +83,7 @@ function DisabledAlarmSurface({
           <Descriptions column={{ xs: 1, sm: 2, xl: 3 }} bordered size="small">
             <Descriptions.Item label="Site">{site.displayName}</Descriptions.Item>
             <Descriptions.Item label="Registry Site ID"><Typography.Text copyable>{site.id}</Typography.Text></Descriptions.Item>
-            <Descriptions.Item label="Acting Organization"><Typography.Text copyable>{principal.context.actingOrganizationId}</Typography.Text></Descriptions.Item>
+            <Descriptions.Item label="Acting Organization"><Typography.Text copyable>{principal.context.tenantId}</Typography.Text></Descriptions.Item>
             <Descriptions.Item label="权威读取">Platform Gateway → IAM → Alarm Service</Descriptions.Item>
             <Descriptions.Item label="生命周期写入">生产禁用</Descriptions.Item>
           </Descriptions>
@@ -111,8 +111,8 @@ function AlarmWorkbench({
   registerProtectedResource,
 }: RealAlarmsProps) {
   const queryClient = useQueryClient();
-  const organizationId = principal.context.actingOrganizationId;
-  const queryPrefix = useMemo(() => ['real-alarms', organizationId, site.id] as const, [organizationId, site.id]);
+  const tenantId = principal.context.tenantId;
+  const queryPrefix = useMemo(() => ['real-alarms', tenantId, site.id] as const, [tenantId, site.id]);
   const [status, setStatus] = useState<AlarmStatus | ''>('');
   const [severity, setSeverity] = useState<AlarmSeverity | ''>('');
   const [selectedAlarmId, setSelectedAlarmId] = useState(alarmFromLocation);
@@ -125,10 +125,10 @@ function AlarmWorkbench({
   }, [queryClient, queryPrefix]);
 
   useEffect(() => registerProtectedResource({
-    id: `real-alarms-cache:${organizationId}:${site.id}`,
+    id: `real-alarms-cache:${tenantId}:${site.id}`,
     kind: 'query-cache',
     purge: purgeAlarmState,
-  }), [organizationId, purgeAlarmState, registerProtectedResource, site.id]);
+  }), [tenantId, purgeAlarmState, registerProtectedResource, site.id]);
 
   useEffect(() => () => {
     void purgeAlarmState();

@@ -11,7 +11,7 @@ paths:
       operationId: internalListSiteNightEnergyInvestigations
       parameters:
         - $ref: '#/components/parameters/SiteId'
-        - $ref: '#/components/parameters/ActingOrganization'
+        - $ref: '#/components/parameters/Tenant'
         - $ref: '#/components/parameters/DelegationGrant'
         - $ref: '#/components/parameters/PolicyRevision'
       responses:
@@ -21,7 +21,7 @@ paths:
       operationId: internalStartSiteNightEnergyInvestigation
       parameters:
         - $ref: '#/components/parameters/SiteId'
-        - $ref: '#/components/parameters/ActingOrganization'
+        - $ref: '#/components/parameters/Tenant'
         - $ref: '#/components/parameters/DelegationGrant'
         - $ref: '#/components/parameters/PolicyRevision'
       requestBody:
@@ -38,7 +38,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/SiteId'
         - $ref: '#/components/parameters/InvestigationId'
-        - $ref: '#/components/parameters/ActingOrganization'
+        - $ref: '#/components/parameters/Tenant'
         - $ref: '#/components/parameters/DelegationGrant'
         - $ref: '#/components/parameters/PolicyRevision'
       responses:
@@ -51,7 +51,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/SiteId'
         - $ref: '#/components/parameters/InvestigationId'
-        - $ref: '#/components/parameters/ActingOrganization'
+        - $ref: '#/components/parameters/Tenant'
         - $ref: '#/components/parameters/DelegationGrant'
         - $ref: '#/components/parameters/PolicyRevision'
         - $ref: '#/components/parameters/LastEventId'
@@ -81,7 +81,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/SiteId'
         - $ref: '#/components/parameters/InvestigationId'
-        - $ref: '#/components/parameters/ActingOrganization'
+        - $ref: '#/components/parameters/Tenant'
         - $ref: '#/components/parameters/DelegationGrant'
         - $ref: '#/components/parameters/PolicyRevision'
       requestBody:
@@ -103,7 +103,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/SiteId'
         - $ref: '#/components/parameters/InvestigationId'
-        - $ref: '#/components/parameters/ActingOrganization'
+        - $ref: '#/components/parameters/Tenant'
         - $ref: '#/components/parameters/DelegationGrant'
         - $ref: '#/components/parameters/PolicyRevision'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -126,7 +126,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/SiteId'
         - $ref: '#/components/parameters/InvestigationId'
-        - $ref: '#/components/parameters/ActingOrganization'
+        - $ref: '#/components/parameters/Tenant'
         - $ref: '#/components/parameters/DelegationGrant'
         - $ref: '#/components/parameters/PolicyRevision'
       requestBody:
@@ -149,8 +149,8 @@ components:
       in: path
       required: true
       schema: { type: string, minLength: 1, maxLength: 256 }
-    ActingOrganization:
-      name: X-Acting-Organization-ID
+    Tenant:
+      name: X-Tenant-ID
       in: header
       required: true
       schema: { type: string }

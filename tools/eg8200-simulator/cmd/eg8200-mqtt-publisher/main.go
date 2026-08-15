@@ -56,7 +56,8 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	publisher, err := simulator.NewMQTTPublisher(ctx, plantConfig, mqttConfig, telemetry.Metrics)
+	plant := simulator.NewPlant(plantConfig.Plant, time.Now().UTC())
+	publisher, err := simulator.NewMQTTPublisher(ctx, plantConfig, mqttConfig, plant, telemetry.Metrics)
 	if err != nil {
 		logger.Error("eg8200_mqtt_publisher_invalid", "error", err.Error())
 		os.Exit(1)
@@ -75,7 +76,6 @@ func main() {
 	}
 	connectionCancel()
 
-	plant := simulator.NewPlant(plantConfig.Plant, time.Now().UTC())
 	sequenceStatePath := filepath.Join(mqttConfig.QueueDirectory, "measurement-sequences.v1.json")
 	initialSequences, err := simulator.LoadMeasurementSequences(sequenceStatePath)
 	if err != nil {

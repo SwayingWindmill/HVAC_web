@@ -8,6 +8,7 @@ use (
 	./libs/workordermodel
 	./libs/commandauth
 	./libs/commandmodel
+	./libs/domainoutbox
 	./libs/identitycontext
 	./libs/observability
 	./libs/operationsauditevent
@@ -25,9 +26,13 @@ use (
 	./services/audit-ledger-service
 	./services/command-dispatcher
 	./services/command-service
+	./services/forecast-service
 	./services/iam-service
+	./services/optimization-service
 	./services/legacy-migration-service
 	./services/mqtt-telemetry-adapter
+	./services/metric-engine-service
+	./services/settlement-service
 	./services/oidc-test-provider
 	./services/outbox-relay
 	./services/platform-core-service
@@ -35,8 +40,6 @@ use (
 	./services/telemetry-query-service
 	./services/telemetry-runtime-service
 	./services/telemetry-shadow-comparator
-	./services/thingsboard-connector-control
-	./services/thingsboard-telemetry-adapter
 	./services/work-order-service
 	./tools/eg8200-simulator
 	./tools/s0-auth-fixture

@@ -19,7 +19,7 @@ const (
 	InternalCommandsPath       = "/internal/v1/commands"
 	commandGrantHeader         = "X-Command-Grant"
 	commandReadContextHeader   = "X-Command-Read-Context"
-	actingOrganizationHeader   = "X-Acting-Organization-ID"
+	tenantHeader               = "X-Tenant-ID"
 	maximumInternalRequestBody = int64(64 << 10)
 )
 
@@ -48,7 +48,6 @@ type HTTPHandler struct {
 
 type internalCreateCommandRequest struct {
 	TenantID       string                         `json:"tenantId"`
-	OrganizationID string                         `json:"organizationId"`
 	SiteID         string                         `json:"siteId"`
 	DeviceID       string                         `json:"deviceId"`
 	PointID        string                         `json:"pointId"`
@@ -71,16 +70,34 @@ type internalCurrentState struct {
 }
 
 type internalApproveCommandRequest struct {
-	OrganizationID string `json:"organizationId"`
-	SiteID         string `json:"siteId"`
+	TenantID string `json:"tenantId"`
+	SiteID   string `json:"siteId"`
 	DeviceID       string `json:"deviceId"`
 	PrincipalID    string `json:"principalId"`
 	ApproverRole   string `json:"approverRole"`
 }
 
+type ControlStatus string
+
+const (
+	ControlCreated         ControlStatus = "CREATED"
+	ControlValidating      ControlStatus = "VALIDATING"
+	ControlApprovalPending ControlStatus = "APPROVAL_PENDING"
+	ControlApproved        ControlStatus = "APPROVED"
+	ControlSent            ControlStatus = "SENT"
+	ControlAcked           ControlStatus = "ACKED"
+	ControlExecuting       ControlStatus = "EXECUTING"
+	ControlVerified        ControlStatus = "VERIFIED"
+	ControlFailed          ControlStatus = "FAILED"
+	ControlRejected        ControlStatus = "REJECTED"
+	ControlExpired         ControlStatus = "EXPIRED"
+	ControlUnknown         ControlStatus = "UNKNOWN"
+	ControlCancelled       ControlStatus = "CANCELLED"
+)
+
 type CommandTransitionView struct {
-	FromStatus *commandmodel.IntentStatus `json:"fromStatus,omitempty"`
-	ToStatus   commandmodel.IntentStatus  `json:"toStatus"`
+	FromStatus *ControlStatus `json:"fromStatus,omitempty"`
+	ToStatus   ControlStatus  `json:"toStatus"`
 	Reason     string                     `json:"reason"`
 	ActorType  string                     `json:"actorType"`
 	OccurredAt time.Time                  `json:"occurredAt"`
@@ -90,13 +107,13 @@ type CommandTransitionView struct {
 type CommandView struct {
 	SchemaVersion         int                         `json:"schemaVersion"`
 	CommandID             string                      `json:"commandId"`
-	OrganizationID        string                      `json:"organizationId"`
+	TenantID              string                      `json:"tenantId"`
 	SiteID                string                      `json:"siteId"`
 	DeviceID              string                      `json:"deviceId"`
 	PointID               string                      `json:"pointId"`
 	Capability            commandmodel.Capability     `json:"capability"`
 	CapabilityRevision    string                      `json:"capabilityRevision"`
-	Status                commandmodel.IntentStatus   `json:"status"`
+	Status                ControlStatus               `json:"status"`
 	Risk                  commandmodel.RiskLevel      `json:"risk"`
 	ApprovalPolicy        commandmodel.ApprovalPolicy `json:"approvalPolicy"`
 	ApprovalCount         int                         `json:"approvalCount"`
@@ -144,14 +161,17 @@ func (h *HTTPHandler) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	prefix := InternalCommandsPath + "/"
 	if strings.HasPrefix(request.URL.Path, prefix) {
 		raw := strings.TrimPrefix(request.URL.Path, prefix)
-		if strings.HasSuffix(raw, ":approve") && !strings.Contains(strings.TrimSuffix(raw, ":approve"), "/") {
-			if request.Method != http.MethodPost {
-				writer.Header().Set("Allow", http.MethodPost)
-				writeCommandProblem(writer, http.StatusMethodNotAllowed, "COMMAND_METHOD_NOT_ALLOWED", false)
+		if strings.HasSuffix(raw, "/approve") {
+			commandID := strings.TrimSuffix(raw, "/approve")
+			if commandID != "" && !strings.Contains(commandID, "/") {
+				if request.Method != http.MethodPost {
+					writer.Header().Set("Allow", http.MethodPost)
+					writeCommandProblem(writer, http.StatusMethodNotAllowed, "COMMAND_METHOD_NOT_ALLOWED", false)
+					return
+				}
+				h.approveCommand(writer, request, commandID)
 				return
 			}
-			h.approveCommand(writer, request, strings.TrimSuffix(raw, ":approve"))
-			return
 		}
 	}
 	if strings.HasPrefix(request.URL.Path, prefix) && !strings.Contains(strings.TrimPrefix(request.URL.Path, prefix), "/") {
@@ -188,7 +208,7 @@ func (h *HTTPHandler) createCommand(writer http.ResponseWriter, request *http.Re
 	validation := commandauth.Validation{
 		Now: h.now().UTC(), Issuer: h.config.CommandGrantIssuer, Presenter: h.config.GatewaySPIFFE,
 		Audience: h.config.CommandGrantAudience, Purpose: commandmodel.AuthorizationCommandSubmit,
-		PrincipalID: input.PrincipalID, OrganizationID: input.OrganizationID, SiteID: input.SiteID, DeviceID: input.DeviceID,
+		PrincipalID: input.PrincipalID, TenantID: input.TenantID, SiteID: input.SiteID, DeviceID: input.DeviceID,
 		Capability: input.Capability, CapabilityRevision: profile.Revision,
 		Risk: commandmodel.RiskLow, UseChecker: h.config.CommandGrantUseChecker,
 	}
@@ -197,7 +217,7 @@ func (h *HTTPHandler) createCommand(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	result, err := h.config.Authority.Submit(request.Context(), commandmodel.SubmitRequest{
-		TenantID: input.TenantID, OrganizationID: input.OrganizationID, SiteID: input.SiteID, DeviceID: input.DeviceID, PointID: input.PointID,
+		TenantID: input.TenantID, SiteID: input.SiteID, DeviceID: input.DeviceID, PointID: input.PointID,
 		PrincipalID: input.PrincipalID, IdempotencyKey: input.IdempotencyKey,
 		Capability: input.Capability, Parameters: cloneParameters(input.Parameters), VerificationPointKey: input.VerificationPointKey,
 		CurrentState: commandmodel.CurrentStateEvidence{
@@ -230,7 +250,7 @@ func (h *HTTPHandler) approveCommand(writer http.ResponseWriter, request *http.R
 		writeCommandProblem(writer, http.StatusUnauthorized, "COMMAND_GRANT_INVALID", false)
 		return
 	}
-	intent, err := h.config.Authority.Get(request.Context(), input.OrganizationID, commandID)
+	intent, err := h.config.Authority.Get(request.Context(), input.TenantID, commandID)
 	if err != nil {
 		writeAuthorityError(writer, err)
 		return
@@ -242,7 +262,7 @@ func (h *HTTPHandler) approveCommand(writer http.ResponseWriter, request *http.R
 	validation := commandauth.Validation{
 		Now: h.now().UTC(), Issuer: h.config.CommandGrantIssuer, Presenter: h.config.GatewaySPIFFE,
 		Audience: h.config.CommandGrantAudience, Purpose: commandmodel.AuthorizationCommandApprove,
-		PrincipalID: input.PrincipalID, OrganizationID: input.OrganizationID, SiteID: input.SiteID, DeviceID: input.DeviceID,
+		PrincipalID: input.PrincipalID, TenantID: input.TenantID, SiteID: input.SiteID, DeviceID: input.DeviceID,
 		Capability: intent.Capability, CapabilityRevision: intent.CapabilityRevision,
 		Risk: intent.Risk, UseChecker: h.config.CommandGrantUseChecker,
 	}
@@ -258,8 +278,8 @@ func (h *HTTPHandler) approveCommand(writer http.ResponseWriter, request *http.R
 	}
 	authorization := commandauth.Snapshot(claims)
 	approved, err := h.config.Authority.Approve(request.Context(), commandmodel.ApproveRequest{
-		OrganizationID: input.OrganizationID,
-		CommandID:      commandID,
+		TenantID:  input.TenantID,
+		CommandID: commandID,
 		Approval: commandmodel.ApprovalEvidence{
 			ApprovalID: approvalID, ApproverID: input.PrincipalID, ApproverRole: input.ApproverRole,
 			Policy: intent.ApprovalPolicy, PayloadHash: intent.PayloadHash,
@@ -276,20 +296,20 @@ func (h *HTTPHandler) approveCommand(writer http.ResponseWriter, request *http.R
 }
 
 func (h *HTTPHandler) getCommand(writer http.ResponseWriter, request *http.Request, commandID string) {
-	organizationID := strings.TrimSpace(request.Header.Get(actingOrganizationHeader))
-	if organizationID == "" || commandID == "" || len(commandID) > 256 {
+	tenantID := strings.TrimSpace(request.Header.Get(tenantHeader))
+	if tenantID == "" || commandID == "" || len(commandID) > 256 {
 		writeCommandProblem(writer, http.StatusBadRequest, "COMMAND_READ_CONTEXT_INVALID", false)
 		return
 	}
 	claims, err := identitycontext.VerifyDelegation(h.config.GatewayDelegationPublicKey, request.Header.Get(commandReadContextHeader))
-	if err != nil || claims.ActingOrganizationID != organizationID || len(claims.Scopes) != 2 ||
+	if err != nil || claims.TenantID != tenantID || len(claims.Scopes) != 2 ||
 		identitycontext.ValidateDelegationAnyScope(claims, h.now().UTC(), h.config.GatewaySPIFFE, h.config.GatewayReadAudience,
-			"command:read", []string{"organization:" + organizationID, "command:" + commandID}) != nil ||
-		!containsCommandScope(claims.Scopes, "organization:"+organizationID) || !containsCommandScope(claims.Scopes, "command:"+commandID) {
+			"command:read", []string{"tenant:" + tenantID, "command:" + commandID}) != nil ||
+		!containsCommandScope(claims.Scopes, "tenant:"+tenantID) || !containsCommandScope(claims.Scopes, "command:"+commandID) {
 		writeCommandProblem(writer, http.StatusForbidden, "COMMAND_READ_CONTEXT_REJECTED", false)
 		return
 	}
-	intent, err := h.config.Authority.Get(request.Context(), organizationID, commandID)
+	intent, err := h.config.Authority.Get(request.Context(), tenantID, commandID)
 	if err != nil {
 		writeAuthorityError(writer, err)
 		return
@@ -301,7 +321,7 @@ func validInternalApproval(commandID string, input internalApproveCommandRequest
 	if strings.TrimSpace(commandID) == "" || len(commandID) > 256 {
 		return false
 	}
-	for _, value := range []string{input.OrganizationID, input.SiteID, input.DeviceID, input.PrincipalID, input.ApproverRole} {
+	for _, value := range []string{input.TenantID, input.SiteID, input.DeviceID, input.PrincipalID, input.ApproverRole} {
 		if strings.TrimSpace(value) == "" || len(value) > 256 {
 			return false
 		}
@@ -310,7 +330,7 @@ func validInternalApproval(commandID string, input internalApproveCommandRequest
 }
 
 func validInternalCreate(input internalCreateCommandRequest) bool {
-	for _, value := range []string{input.TenantID, input.OrganizationID, input.SiteID, input.DeviceID, input.PointID, input.PrincipalID, input.IdempotencyKey, input.VerificationPointKey} {
+	for _, value := range []string{input.TenantID, input.SiteID, input.DeviceID, input.PointID, input.PrincipalID, input.IdempotencyKey, input.VerificationPointKey} {
 		if strings.TrimSpace(value) == "" || len(value) > 256 {
 			return false
 		}
@@ -329,25 +349,61 @@ func validInternalCreate(input internalCreateCommandRequest) bool {
 func commandView(intent commandmodel.CommandIntent) CommandView {
 	transitions := make([]CommandTransitionView, 0, len(intent.Transitions))
 	for _, transition := range intent.Transitions {
-		var from *commandmodel.IntentStatus
+		var from *ControlStatus
 		if transition.From != "" {
-			value := transition.From
+			value := controlStatus(transition.From, "")
 			from = &value
 		}
 		transitions = append(transitions, CommandTransitionView{
-			FromStatus: from, ToStatus: transition.To, Reason: transition.Reason,
+			FromStatus: from, ToStatus: controlStatus(transition.To, transition.Reason), Reason: transition.Reason,
 			ActorType: actorType(transition.Actor, intent.PrincipalID), OccurredAt: transition.At.UTC(), Version: transition.Version,
 		})
 	}
+	lastReason := ""
+	if len(intent.Transitions) > 0 {
+		lastReason = intent.Transitions[len(intent.Transitions)-1].Reason
+	}
 	return CommandView{
-		SchemaVersion: 1, CommandID: intent.ID, OrganizationID: intent.OrganizationID,
+		SchemaVersion: 1, CommandID: intent.ID, TenantID: intent.TenantID,
 		SiteID: intent.SiteID, DeviceID: intent.DeviceID, PointID: intent.PointID,
 		Capability: intent.Capability, CapabilityRevision: intent.CapabilityRevision,
-		Status: intent.Status, Risk: intent.Risk, ApprovalPolicy: intent.ApprovalPolicy,
+		Status: controlStatus(intent.Status, lastReason), Risk: intent.Risk, ApprovalPolicy: intent.ApprovalPolicy,
 		ApprovalCount: len(intent.Approvals), RequiredApprovalCount: requiredApprovalCount(intent.ApprovalPolicy),
 		Parameters: cloneParameters(intent.Parameters), DeviceCommandSequence: intent.DeviceCommandSequence,
 		Version: intent.Version, SnapshotRevision: intent.SnapshotRevision, Transitions: transitions,
 		CreatedAt: intent.CreatedAt.UTC(), UpdatedAt: intent.UpdatedAt.UTC(),
+	}
+}
+
+func controlStatus(status commandmodel.IntentStatus, reason string) ControlStatus {
+	switch status {
+	case commandmodel.IntentSubmitted:
+		return ControlCreated
+	case commandmodel.IntentValidating:
+		return ControlValidating
+	case commandmodel.IntentAwaitingApproval:
+		return ControlApprovalPending
+	case commandmodel.IntentApproved, commandmodel.IntentQueued:
+		return ControlApproved
+	case commandmodel.IntentDispatching:
+		if reason == "PROVIDER_ACKNOWLEDGED_AWAITING_REPORTED_STATE" {
+			return ControlAcked
+		}
+		return ControlSent
+	case commandmodel.IntentSucceeded:
+		return ControlVerified
+	case commandmodel.IntentFailed:
+		return ControlFailed
+	case commandmodel.IntentRejected:
+		return ControlRejected
+	case commandmodel.IntentExpired:
+		return ControlExpired
+	case commandmodel.IntentOutcomeUnknown:
+		return ControlUnknown
+	case commandmodel.IntentCancelled:
+		return ControlCancelled
+	default:
+		return ControlUnknown
 	}
 }
 

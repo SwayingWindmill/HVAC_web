@@ -215,7 +215,7 @@ func telemetryHTTPFacts(now time.Time) iam.TelemetryAuthorizationFacts {
 	return iam.TelemetryAuthorizationFacts{
 		Found: true, PolicyRevision: "telemetry-access:1",
 		Principal:   iam.PrincipalRecord{ID: "018f1e00-2000-7000-8000-000000000001", SubjectIssuer: fixtureSubjectIssuer, Subject: "fixture-user", Status: iam.FactStatusActive},
-		Memberships: []iam.OrganizationMembership{{OrganizationID: iam.S1FixtureActingOrganizationID, Status: iam.FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
+		Memberships: []iam.OrganizationMembership{{TenantID: iam.S1FixtureTenantAID, OrganizationID: iam.S1FixtureActingOrganizationID, Status: iam.FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
 		RoleBindings: []iam.RoleBinding{{
 			OrganizationID: iam.S1FixtureActingOrganizationID, Actions: []registryauth.Action{registryauth.Action(telemetryauth.ActionSnapshotRead)},
 			Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: now.Add(-time.Hour),
@@ -224,7 +224,7 @@ func telemetryHTTPFacts(now time.Time) iam.TelemetryAuthorizationFacts {
 			ActingOrganizationID: iam.S1FixtureActingOrganizationID, OwningOrganizationID: telemetryOwnerID, SiteID: telemetrySiteID,
 			Actions: []registryauth.Action{registryauth.Action(telemetryauth.ActionSnapshotRead)}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: now.Add(-time.Hour),
 		}},
-		Devices:       []iam.TelemetryDevice{{ID: telemetryDeviceID, OwningOrganizationID: telemetryOwnerID, SiteID: telemetrySiteID, Status: iam.FactStatusActive}},
+		Devices:       []iam.TelemetryDevice{{ID: telemetryDeviceID, TenantID: iam.S1FixtureTenantAID, SiteID: telemetrySiteID, Status: iam.FactStatusActive}},
 		ScopeBindings: []iam.TelemetryScopeBinding{{ActingOrganizationID: iam.S1FixtureActingOrganizationID, OwningOrganizationID: telemetryOwnerID, SiteID: telemetrySiteID, DeviceID: telemetryDeviceID, Actions: []telemetryauth.Action{telemetryauth.ActionSnapshotRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
 		KeyBindings:   []iam.TelemetryKeyBinding{{ActingOrganizationID: iam.S1FixtureActingOrganizationID, DeviceID: telemetryDeviceID, Key: "zone.temperature", Actions: []telemetryauth.Action{telemetryauth.ActionSnapshotRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
 	}

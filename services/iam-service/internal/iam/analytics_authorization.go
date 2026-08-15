@@ -21,7 +21,7 @@ func (h *handler) handleAnalyticsDecision(writer http.ResponseWriter, request *h
 		writeProblem(writer, http.StatusBadRequest, "IAM_ANALYTICS_DECISION_REQUEST_INVALID", "The Analytics authorization request is invalid.")
 		return http.StatusBadRequest
 	}
-	if input.ActingOrganizationID != inbound.ActingOrganizationID {
+	if input.TenantID != inbound.TenantID {
 		writeProblem(writer, http.StatusForbidden, "IAM_ANALYTICS_CONTEXT_MISMATCH", "The Analytics authorization context does not match the delegated Session.")
 		return http.StatusForbidden
 	}
@@ -38,7 +38,7 @@ func (h *handler) handleAnalyticsDecision(writer http.ResponseWriter, request *h
 	)
 	h.logger.Info("iam_analytics_authorization_decided",
 		"principal_id", decision.PrincipalID,
-		"acting_organization_id", decision.ActingOrganizationID,
+		"tenant_id", decision.TenantID,
 		"site_id", decision.SiteID,
 		"allowed", decision.Allowed,
 		"reason_code", decision.ReasonCode,
@@ -52,13 +52,13 @@ func (h *handler) handleAnalyticsDecision(writer http.ResponseWriter, request *h
 
 func evaluateAnalyticsAuthorization(ctx context.Context, store AuthorizationStore, now time.Time, subjectIssuer, subject string, request analyticsmodel.AuthorizationDecisionRequest) (analyticsmodel.AuthorizationDecision, error) {
 	facts, err := store.LookupRegistryAuthorization(ctx, AuthorizationLookup{
-		SubjectIssuer: subjectIssuer, Subject: subject, ActingOrganizationID: request.ActingOrganizationID,
+		SubjectIssuer: subjectIssuer, Subject: subject, TenantID: request.TenantID,
 	})
 	if err != nil {
 		return analyticsmodel.AuthorizationDecision{}, err
 	}
 	decision := analyticsmodel.AuthorizationDecision{
-		SubjectIssuer: subjectIssuer, Subject: subject, ActingOrganizationID: request.ActingOrganizationID,
+		SubjectIssuer: subjectIssuer, Subject: subject, TenantID: request.TenantID,
 		SiteID: request.SiteID, Action: request.Action, PolicyRevision: facts.PolicyRevision, DecidedAt: formatInstant(now),
 	}
 	if !facts.Found || facts.Principal.Status != FactStatusActive {
@@ -66,7 +66,7 @@ func evaluateAnalyticsAuthorization(ctx context.Context, store AuthorizationStor
 		return decision, nil
 	}
 	decision.PrincipalID = facts.Principal.ID
-	active, _ := membershipState(facts.Memberships, request.ActingOrganizationID, now)
+	active, _ := tenantMembershipState(facts.Memberships, request.TenantID, now)
 	if !active {
 		decision.ReasonCode = analyticsmodel.AuthorizationReasonDenyMembership
 		return decision, nil
@@ -76,7 +76,7 @@ func evaluateAnalyticsAuthorization(ctx context.Context, store AuthorizationStor
 	reason := analyticsmodel.AuthorizationReasonDenyAction
 	denied := false
 	for _, binding := range facts.RoleBindings {
-		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.OrganizationID != request.ActingOrganizationID || !analyticsActionAllowed(binding.Actions, request.Action) {
+		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != request.TenantID || !analyticsActionAllowed(binding.Actions, request.Action) {
 			continue
 		}
 		if binding.Effect == BindingEffectDeny {
@@ -84,7 +84,7 @@ func evaluateAnalyticsAuthorization(ctx context.Context, store AuthorizationStor
 		}
 	}
 	for _, binding := range facts.SiteBindings {
-		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.ActingOrganizationID != request.ActingOrganizationID || binding.OwningOrganizationID != request.ActingOrganizationID || binding.SiteID != request.SiteID || !analyticsActionAllowed(binding.Actions, request.Action) {
+		if binding.Status != FactStatusActive || !factEffective(binding.ValidFrom, binding.ValidTo, now) || binding.TenantID != request.TenantID || binding.SiteID != request.SiteID || !analyticsActionAllowed(binding.Actions, request.Action) {
 			continue
 		}
 		if binding.Effect == BindingEffectDeny {
@@ -100,10 +100,10 @@ func evaluateAnalyticsAuthorization(ctx context.Context, store AuthorizationStor
 		if deny.Status != FactStatusActive || !factEffective(deny.ValidFrom, deny.ValidTo, now) || !analyticsActionAllowed(deny.Actions, request.Action) {
 			continue
 		}
-		if deny.ActingOrganizationID != "" && deny.ActingOrganizationID != request.ActingOrganizationID {
+		if deny.TenantID != "" && deny.TenantID != request.TenantID {
 			continue
 		}
-		if (deny.OrganizationID == "" || deny.OrganizationID == request.ActingOrganizationID) && (deny.SiteID == "" || deny.SiteID == request.SiteID) {
+		if deny.SiteID == "" || deny.SiteID == request.SiteID {
 			denied = true
 		}
 	}

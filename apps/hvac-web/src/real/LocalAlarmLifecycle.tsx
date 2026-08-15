@@ -54,7 +54,7 @@ function buildMutationOptions(
   idempotencyKey: string,
 ): ScopedAlarmRequestOptions {
   const options: ScopedAlarmRequestOptions = {
-    trustedOrganizationId: principal.context.actingOrganizationId,
+    trustedTenantId: principal.context.tenantId,
     trustedSiteId: site.id,
     signal,
     idempotencyKey,

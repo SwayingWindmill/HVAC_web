@@ -5,7 +5,7 @@ const root = resolve(process.cwd());
 const read = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await read(path));
 
-const [plan, ownership, model, service, serviceTests, postgres, postgresTests, migration, worker, workerTests, synthetic, routes] = await Promise.all([
+const [plan, ownership, model, service, serviceTests, postgres, postgresTests, migration, worker, workerTests, mqttConnector, mqttEdge, routes] = await Promise.all([
   readJSON('deploy/s3/implementation-plan.v1.json'),
   readJSON('contracts/ownership/s3-command-ownership.v1.json'),
   read('libs/commandmodel/model.go'),
@@ -16,7 +16,8 @@ const [plan, ownership, model, service, serviceTests, postgres, postgresTests, m
   read('services/command-service/migrations/001_s3_command_runtime.sql'),
   read('services/command-dispatcher/pkg/commanddispatcher/verification.go'),
   read('services/command-dispatcher/pkg/commanddispatcher/verification_test.go'),
-  read('services/thingsboard-connector-control/pkg/controlconnector/synthetic.go'),
+  read('services/command-dispatcher/pkg/mqttconnector/connector.go'),
+  read('tools/eg8200-simulator/internal/simulator/mqtt_command.go'),
   readJSON('contracts/ownership/route-ownership.v1.json'),
 ]);
 
@@ -27,16 +28,21 @@ const assert = (condition, message) => {
 
 assert(plan.completedTickets?.includes('S3-07'), 'S3-07 is not marked complete');
 assert((plan.currentFrontier ?? []).some((ticket) => ['S3-08', 'S3-09'].includes(ticket)), 'S3 frontier regressed before S3-08');
-assert(plan.productionTrafficPercent === 0, 'S3-07 enabled production traffic');
-assert(plan.firstTracerBullet?.publicRoutesEnabled === false, 'Command public routes enabled during S3-07');
-assert(plan.firstTracerBullet?.productionProviderEnabled === false, 'Production provider enabled during S3-07');
+assert(plan.productionTrafficPercent === 0, 'S3 enabled production traffic');
+assert(plan.firstTracerBullet?.publicRoutesEnabled === false, 'Command public routes enabled');
+assert(plan.firstTracerBullet?.productionProviderEnabled === false, 'Production provider enabled before certification');
 
+const dispatcherOwner = ownership.restrictedWorkers?.find((workerItem) => workerItem.service === 'command-dispatcher');
 const verifierOwner = ownership.restrictedWorkers?.find((workerItem) => workerItem.service === 'command-verifier');
-assert(verifierOwner?.activationStatus === 'active-S3-07-internal-test-only', 'Command Verifier activation is not internal-test-only');
+assert(dispatcherOwner?.activationStatus === 'active-native-mqtt', 'Command Dispatcher is not on native MQTT');
+assert(dispatcherOwner?.directDatabaseAccess === false, 'Command Dispatcher received command_runtime credentials');
 assert(verifierOwner?.directDatabaseAccess === false, 'Command Verifier received command_runtime credentials');
 assert(ownership.businessOwner === 'command-service', 'Command Service lost verification business ownership');
 assert(ownership.ownedResources?.includes('command-reported-state-verification'), 'Verification authority resource is not registered');
-assert(ownership.localProviderContract?.productionEligible === false, 'Local ThingsBoard contract became production eligible');
+assert(ownership.transport?.type === 'MQTT' && ownership.transport?.authority === 'transport-only', 'Command transport is not native MQTT transport-only');
+assert(ownership.firstCapability?.connector === 'NATIVE_MQTT', 'First capability is not routed through native MQTT');
+assert(ownership.nativeEdgeContract?.provider === 'EG8200_MQTT', 'Native Edge command contract is missing');
+assert(ownership.nativeEdgeContract?.connectorMayDeclareVerified === false, 'MQTT connector may not declare VERIFIED');
 
 for (const route of (routes.routes ?? []).filter((route) => route.owner === 'command-service')) {
   assert(route.rollout?.mode === 'disabled', `${route.method} ${route.path} is not disabled`);
@@ -104,12 +110,21 @@ for (const test of [
   assert(workerTests.includes(test), `Command Verifier worker test is missing ${test}`);
 }
 
-assert(synthetic.includes('Verified:     false'), 'Synthetic Connector still declares reported state verified');
-assert(!synthetic.includes('Verified:     true'), 'Synthetic Connector can bypass S2 verification');
+for (const token of [
+  'command/reply', 'QoS: 1', 'ExecutionFence', 'PayloadHash', 'Prepare(ctx',
+  'ConnectorAcknowledged', 'Verified: false', 'MQTT_COMMAND_REPLY_TIMEOUT',
+]) {
+  assert(mqttConnector.includes(token), `Cloud MQTT command connector is missing ${token}`);
+}
+for (const token of [
+  'commandId', 'STALE_FENCE', 'EXPIRED', 'COMMAND_MAPPING_INVALID', 'ApplyCommand', 'command/reply',
+]) {
+  assert(mqttEdge.includes(token), `Edge MQTT command handler is missing ${token}`);
+}
 
 if (failures.length > 0) {
   console.error(failures.map((failure) => `- ${failure}`).join('\n'));
   process.exit(1);
 }
 
-console.log('S3 reported-state verification checks passed: ACK is non-terminal, S2 evidence is independently revalidated, uncertainty freezes SETPOINT, and production remains disabled.');
+console.log('S3 command verification checks passed: native MQTT transport is bounded, ACK remains non-terminal, and S2 reported-state evidence independently determines VERIFIED.');

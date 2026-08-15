@@ -133,7 +133,7 @@ function NoAuthorizedSiteSurface({ snapshot, retry }: { snapshot: ShellSnapshot;
       <dl className="real-shell-facts">
         <div><dt>Account</dt><dd>{principal.principal.displayName}</dd></div>
         <div><dt>Subject</dt><dd>{principal.principal.subject}</dd></div>
-        <div><dt>Acting Organization</dt><dd>{principal.context.actingOrganizationId}</dd></div>
+        <div><dt>Acting Organization</dt><dd>{principal.context.tenantId}</dd></div>
       </dl>
       <div className="real-shell-actions">
         <button type="button" onClick={retry}>刷新授权 Site</button>

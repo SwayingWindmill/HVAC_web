@@ -44,7 +44,7 @@ type config struct {
 	publicOrigin             string
 	commandServiceURL        string
 	commandServiceServerName string
-	organizationID           string
+	tenantID                 string
 	siteID                   string
 	deviceCatalog            []localDevice
 	principalID              string
@@ -63,7 +63,6 @@ type config struct {
 
 type localDevice struct {
 	TenantID             string `json:"tenantId"`
-	OrganizationID       string `json:"organizationId"`
 	SiteID               string `json:"siteId"`
 	DeviceID             string `json:"deviceId"`
 	CommandPointID       string `json:"commandPointId"`
@@ -78,8 +77,8 @@ type localDeviceCatalog struct {
 }
 
 type localDeviceProjection struct {
-	OrganizationID string `json:"organizationId"`
-	SiteID         string `json:"siteId"`
+	TenantID string `json:"tenantId"`
+	SiteID   string `json:"siteId"`
 	DeviceID       string `json:"deviceId"`
 	Name           string `json:"name"`
 	Type           string `json:"type"`
@@ -104,7 +103,6 @@ type createCommandRequest struct {
 
 type internalCreateCommandRequest struct {
 	TenantID             string                         `json:"tenantId"`
-	OrganizationID       string                         `json:"organizationId"`
 	SiteID               string                         `json:"siteId"`
 	DeviceID             string                         `json:"deviceId"`
 	PointID              string                         `json:"pointId"`
@@ -125,8 +123,8 @@ type internalCreateCommandRequest struct {
 }
 
 type internalApproveCommandRequest struct {
-	OrganizationID string `json:"organizationId"`
-	SiteID         string `json:"siteId"`
+	TenantID string `json:"tenantId"`
+	SiteID   string `json:"siteId"`
 	DeviceID       string `json:"deviceId"`
 	PrincipalID    string `json:"principalId"`
 	ApproverRole   string `json:"approverRole"`
@@ -214,11 +212,11 @@ func loadConfig() (config, error) {
 		ServerName:   serverName,
 		Certificates: []tls.Certificate{certificate},
 	}}
-	organizationID := requiredEnv("S3_LOCAL_ORGANIZATION_ID")
+	tenantID := requiredEnv("S3_LOCAL_TENANT_ID")
 	siteID := requiredEnv("S3_LOCAL_SITE_ID")
 	deviceCatalog, err := loadDeviceCatalog(
 		requiredEnv("S3_LOCAL_DEVICE_CATALOG_FILE"),
-		organizationID,
+		tenantID,
 		siteID,
 	)
 	if err != nil {
@@ -229,7 +227,7 @@ func loadConfig() (config, error) {
 		publicOrigin:             requiredEnv("S3_LOCAL_WEB_PUBLIC_ORIGIN"),
 		commandServiceURL:        strings.TrimRight(requiredEnv("S3_LOCAL_COMMAND_SERVICE_URL"), "/"),
 		commandServiceServerName: serverName,
-		organizationID:           organizationID,
+		tenantID:                 tenantID,
 		siteID:                   siteID,
 		deviceCatalog:            deviceCatalog,
 		principalID:              envOr("S3_LOCAL_PRINCIPAL_ID", "018f3e00-5000-7000-8000-000000000001"),
@@ -268,17 +266,22 @@ func (g *gateway) handler() http.Handler {
 
 func (g *gateway) commandItem(writer http.ResponseWriter, request *http.Request) {
 	raw := strings.TrimPrefix(request.URL.Path, "/api/v1/commands/")
-	if raw == "" || strings.Contains(raw, "/") {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested Command was not found.", false)
-		return
-	}
-	if strings.HasSuffix(raw, ":approve") {
+	if strings.HasSuffix(raw, "/approve") {
+		commandID := strings.TrimSuffix(raw, "/approve")
+		if commandID == "" || strings.Contains(commandID, "/") {
+			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested Command was not found.", false)
+			return
+		}
 		if request.Method != http.MethodPost {
 			writer.Header().Set("Allow", http.MethodPost)
 			writeProblem(writer, request, http.StatusMethodNotAllowed, "COMMAND_METHOD_NOT_ALLOWED", "The local approval route only accepts POST.", false)
 			return
 		}
-		g.approveCommand(writer, request, strings.TrimSuffix(raw, ":approve"))
+		g.approveCommand(writer, request, commandID)
+		return
+	}
+	if raw == "" || strings.Contains(raw, "/") {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested Command was not found.", false)
 		return
 	}
 	if request.Method != http.MethodGet {
@@ -319,7 +322,7 @@ func (g *gateway) principal(writer http.ResponseWriter, _ *http.Request) {
 		"context": map[string]any{
 			"initiatingPrincipal":       principal,
 			"executingServicePrincipal": map[string]string{"service": "platform-gateway", "spiffeId": g.config.gatewaySPIFFE},
-			"actingOrganizationId":      g.config.organizationID, "audience": "iam-service", "policyRevision": g.config.policyRevision,
+			"tenantId":                   g.config.tenantID, "audience": "iam-service", "policyRevision": g.config.policyRevision,
 			"delegationExpiresAt": expires.Format(time.RFC3339Nano),
 		},
 		"session": map[string]any{
@@ -333,8 +336,8 @@ func (g *gateway) localDevices(writer http.ResponseWriter, _ *http.Request) {
 	devices := make([]localDeviceProjection, 0, len(g.config.deviceCatalog))
 	for _, device := range g.config.deviceCatalog {
 		devices = append(devices, localDeviceProjection{
-			OrganizationID: device.OrganizationID,
-			SiteID:         device.SiteID,
+			TenantID: device.TenantID,
+			SiteID:   device.SiteID,
 			DeviceID:       device.DeviceID,
 			Name:           device.Name,
 			Type:           device.Type,
@@ -381,7 +384,6 @@ func (g *gateway) createCommand(writer http.ResponseWriter, request *http.Reques
 	currentValue := 23.0
 	upstream := internalCreateCommandRequest{
 		TenantID:             device.TenantID,
-		OrganizationID:       device.OrganizationID,
 		SiteID:               device.SiteID,
 		DeviceID:             device.DeviceID,
 		PointID:              device.CommandPointID,
@@ -413,7 +415,7 @@ func (g *gateway) getCommand(writer http.ResponseWriter, request *http.Request, 
 	}
 	g.proxyJSON(writer, request, http.MethodGet, "/internal/v1/commands/"+url.PathEscape(commandID), nil, map[string]string{
 		"X-Command-Read-Context":   delegation,
-		"X-Acting-Organization-ID": g.config.organizationID,
+		"X-Tenant-ID": g.config.tenantID,
 	})
 }
 
@@ -449,13 +451,13 @@ func (g *gateway) approveCommand(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	upstream := internalApproveCommandRequest{
-		OrganizationID: g.config.organizationID,
-		SiteID:         g.config.siteID,
+		TenantID: g.config.tenantID,
+		SiteID:   g.config.siteID,
 		DeviceID:       projection.DeviceID,
 		PrincipalID:    g.config.approverID,
 		ApproverRole:   "s3-local-independent-approver",
 	}
-	g.proxyJSON(writer, request, http.MethodPost, "/internal/v1/commands/"+url.PathEscape(commandID)+":approve", upstream, map[string]string{"X-Command-Grant": grant})
+	g.proxyJSON(writer, request, http.MethodPost, "/internal/v1/commands/"+url.PathEscape(commandID)+"/approve", upstream, map[string]string{"X-Command-Grant": grant})
 }
 
 func (g *gateway) localDevice(deviceID string) (localDevice, bool) {
@@ -480,7 +482,7 @@ func (g *gateway) readCommandProjection(ctx context.Context, commandID string) (
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("X-Command-Read-Context", delegation)
-	request.Header.Set("X-Acting-Organization-ID", g.config.organizationID)
+	request.Header.Set("X-Tenant-ID", g.config.tenantID)
 	response, err := g.config.client.Do(request)
 	if err != nil {
 		return commandProjection{}, err
@@ -523,7 +525,7 @@ func (g *gateway) signGrant(purpose commandmodel.AuthorizationPurpose, principal
 		GrantID:                     grantID,
 		Purpose:                     purpose,
 		PrincipalID:                 principalID,
-		OrganizationID:              g.config.organizationID,
+		TenantID:                    g.config.tenantID,
 		SiteID:                      g.config.siteID,
 		DeviceID:                    deviceID,
 		Capability:                  commandmodel.CapabilitySetTemperatureSetpoint,
@@ -553,9 +555,9 @@ func (g *gateway) signReadDelegation(commandID string) (string, error) {
 		Roles:                []string{"ops"},
 		ExecutingService:     g.config.gatewaySPIFFE,
 		Audience:             g.config.commandAudience,
-		ActingOrganizationID: g.config.organizationID,
+		TenantID:             g.config.tenantID,
 		Actions:              []string{"command:read"},
-		Scopes:               []string{"organization:" + g.config.organizationID, "command:" + commandID},
+		Scopes:               []string{"tenant:" + g.config.tenantID, "command:" + commandID},
 		PolicyRevision:       g.config.policyRevision,
 		SessionID:            "s3-local-session",
 		IssuedAt:             now.Unix(),
@@ -648,7 +650,7 @@ func loadSingleLineFile(path string, maximum int64) (string, error) {
 	return value, nil
 }
 
-func loadDeviceCatalog(path, organizationID, siteID string) ([]localDevice, error) {
+func loadDeviceCatalog(path, tenantID, siteID string) ([]localDevice, error) {
 	body, err := os.ReadFile(path)
 	if err != nil || len(body) == 0 || len(body) > 64<<10 {
 		return nil, errors.New("Device catalog file is unreadable")
@@ -661,12 +663,8 @@ func loadDeviceCatalog(path, organizationID, siteID string) ([]localDevice, erro
 	}
 	seenDevices := make(map[string]struct{}, len(catalog.Devices))
 	seenPoints := make(map[string]struct{}, len(catalog.Devices))
-	var tenantID string
 	for _, device := range catalog.Devices {
-		if tenantID == "" {
-			tenantID = device.TenantID
-		}
-		if err := validateLocalDevice(device, tenantID, organizationID, siteID); err != nil {
+		if err := validateLocalDevice(device, tenantID, siteID); err != nil {
 			return nil, fmt.Errorf("Device catalog entry is invalid: %w", err)
 		}
 		if _, duplicate := seenDevices[device.DeviceID]; duplicate {
@@ -681,12 +679,12 @@ func loadDeviceCatalog(path, organizationID, siteID string) ([]localDevice, erro
 	return catalog.Devices, nil
 }
 
-func validateLocalDevice(device localDevice, tenantID, organizationID, siteID string) error {
-	if !commandmodel.IsUUIDv7(device.TenantID) || !commandmodel.IsUUIDv7(device.OrganizationID) || !commandmodel.IsUUIDv7(device.SiteID) ||
+func validateLocalDevice(device localDevice, tenantID, siteID string) error {
+	if !commandmodel.IsUUIDv7(device.TenantID) || !commandmodel.IsUUIDv7(device.SiteID) ||
 		!commandmodel.IsUUIDv7(device.DeviceID) || !commandmodel.IsUUIDv7(device.CommandPointID) {
 		return errors.New("scope or Point identity is invalid")
 	}
-	if device.TenantID != tenantID || device.OrganizationID != organizationID || device.SiteID != siteID {
+	if device.TenantID != tenantID || device.SiteID != siteID {
 		return errors.New("scope does not match the local runtime")
 	}
 	if strings.TrimSpace(device.VerificationPointKey) == "" || len(device.VerificationPointKey) > 256 ||

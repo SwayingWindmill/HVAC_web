@@ -13,7 +13,7 @@
     "GET /telemetry/devices/:id/latest",
     "POST /telemetry/latest/batch",
     "Socket.IO /ws/telemetry",
-    "public ThingsBoard current-state ingest",
+    "public provider current-state ingest",
     "Redis latest telemetry cache",
     "Legacy current-state subscription manager"
   ],

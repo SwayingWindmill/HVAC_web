@@ -22,13 +22,11 @@ func validUUIDv7(value string) bool {
 }
 
 func validateGrantScopeIDs(claims registryauth.GrantClaims) error {
-	if !validUUIDv7(claims.PrincipalID) || !validUUIDv7(claims.TenantID) || !validUUIDv7(claims.ActingOrganizationID) {
+	if !validUUIDv7(claims.PrincipalID) || !validUUIDv7(claims.TenantID) {
 		return errors.New("registry grant identity identifiers are invalid")
 	}
 	for _, values := range [][]string{
-		claims.AllowedOrganizationIDs,
 		claims.AllowedSiteIDs,
-		claims.DeniedOrganizationIDs,
 		claims.DeniedSiteIDs,
 	} {
 		for _, value := range values {

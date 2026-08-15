@@ -62,7 +62,7 @@ type telemetryController struct {
 
 type telemetryCaller struct {
 	principal            identitycontext.UserPrincipal
-	actingOrganizationID string
+	tenantID string
 	contextID            string
 	expiresAt            time.Time
 	workloadSPIFFE       string
@@ -85,8 +85,7 @@ type telemetryAuthorization struct {
 	grant                string
 	principalID          string
 	policyRevision       string
-	owningOrganizationID string
-	siteID               string
+	targets              []telemetryauth.AuthorizedTarget
 }
 
 type telemetryFailure struct {
@@ -142,7 +141,7 @@ func (h *handler) GetDeviceObservationSnapshot(writer http.ResponseWriter, reque
 		return
 	}
 	var snapshot s2telemetryapi.DeviceObservationSnapshot
-	if decodeStrictTelemetryJSON(response, &snapshot) != nil || !validateTelemetrySnapshot(snapshot, target) {
+	if len(authorization.targets) != 1 || decodeStrictTelemetryJSON(response, &snapshot) != nil || !validateTelemetrySnapshot(snapshot, authorization.targets[0]) {
 		h.writeTelemetryFailure(writer, request, telemetryUnavailable("Telemetry Runtime returned an invalid Snapshot response."))
 		return
 	}
@@ -179,7 +178,7 @@ func (h *handler) BatchGetDeviceObservationSnapshots(writer http.ResponseWriter,
 		return
 	}
 	var output s2telemetryapi.BatchGetObservationSnapshotsResponse
-	if decodeStrictTelemetryJSON(response, &output) != nil || !validateTelemetryBatchResponse(output, input, targets) {
+	if decodeStrictTelemetryJSON(response, &output) != nil || !validateTelemetryBatchResponse(output, input, authorization.targets) {
 		h.writeTelemetryFailure(writer, request, telemetryUnavailable("Telemetry Runtime returned an invalid batch response."))
 		return
 	}
@@ -315,7 +314,7 @@ func (h *handler) telemetrySessionCaller(writer http.ResponseWriter, request *ht
 		}
 	}
 	return telemetryCaller{
-		principal: session.Principal, actingOrganizationID: session.ActingOrganizationID,
+		principal: session.Principal, tenantID: session.TenantID,
 		contextID: session.ID, expiresAt: session.ExpiresAt,
 	}, true
 }
@@ -326,9 +325,9 @@ func (h *handler) telemetryWorkloadCaller(request *http.Request) (telemetryCalle
 		failure := telemetryFailure{http.StatusUnauthorized, "AUTHENTICATION_REQUIRED", "Authentication required", "A valid BFF Session or verified workload identity is required.", false}
 		return telemetryCaller{}, &failure
 	}
-	organizationID := request.Header.Get("X-Organization-ID")
-	if !isLowerUUIDv7(organizationID) {
-		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "A verified workload caller must provide one valid acting Organization.", false}
+	tenantID := request.Header.Get("X-Tenant-ID")
+	if !isLowerUUIDv7(tenantID) {
+		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "A verified workload caller must provide one valid Tenant.", false}
 		return telemetryCaller{}, &failure
 	}
 	if h.identity == nil {
@@ -338,7 +337,7 @@ func (h *handler) telemetryWorkloadCaller(request *http.Request) (telemetryCalle
 	now := h.identity.now().UTC()
 	return telemetryCaller{
 		principal:            identitycontext.UserPrincipal{Subject: spiffeID, Issuer: subjectIssuer, DisplayName: spiffeID},
-		actingOrganizationID: organizationID,
+		tenantID: tenantID,
 		contextID:            "workload:" + requestIDFromContext(request.Context()),
 		expiresAt:            now.Add(h.identity.config.DelegationTTL),
 		workloadSPIFFE:       spiffeID,
@@ -393,7 +392,7 @@ func (h *handler) signTelemetryContextGrant(caller telemetryCaller) (string, *te
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: caller.principal.Subject, SubjectIssuer: caller.principal.Issuer,
 		DisplayName: caller.principal.DisplayName, Email: caller.principal.Email, Roles: append([]string(nil), caller.principal.Roles...),
 		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE, Audience: h.telemetry.runtimeAudience,
-		ActingOrganizationID: caller.actingOrganizationID, Actions: []string{telemetryCheckpointResolveAction}, Scopes: []string{callerScope},
+		TenantID: caller.tenantID, Actions: []string{telemetryCheckpointResolveAction}, Scopes: []string{callerScope},
 		PolicyRevision: h.identity.config.PolicyRevision, SessionID: caller.contextID, IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	}
 	grant, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
@@ -432,7 +431,7 @@ func (h *handler) authorizeTelemetry(ctx context.Context, publicRequest *http.Re
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: caller.principal.Subject, SubjectIssuer: caller.principal.Issuer,
 		DisplayName: caller.principal.DisplayName, Email: caller.principal.Email, Roles: append([]string(nil), caller.principal.Roles...),
 		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE, Audience: h.identity.config.IAMAudience,
-		ActingOrganizationID: caller.actingOrganizationID, Actions: []string{"telemetry:authorize"}, Scopes: []string{callerScope},
+		TenantID: caller.tenantID, Actions: []string{"telemetry:authorize"}, Scopes: []string{callerScope},
 		PolicyRevision: h.identity.config.PolicyRevision, SessionID: caller.contextID, IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: parentTokenID,
 	}
 	delegation, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
@@ -440,7 +439,7 @@ func (h *handler) authorizeTelemetry(ctx context.Context, publicRequest *http.Re
 		failure := telemetryAuthorizationUnavailable("The Gateway could not sign the Telemetry authorization request.")
 		return telemetryAuthorization{}, &failure
 	}
-	decisionBody, err := json.Marshal(telemetryauth.DecisionRequest{ActingOrganizationID: caller.actingOrganizationID, Action: action, Targets: targets})
+	decisionBody, err := json.Marshal(telemetryauth.DecisionRequest{TenantID: caller.tenantID, Action: action, Targets: targets})
 	if err != nil {
 		failure := telemetryAuthorizationUnavailable("The Gateway could not encode the Telemetry authorization request.")
 		return telemetryAuthorization{}, &failure
@@ -483,22 +482,21 @@ func (h *handler) authorizeTelemetry(ctx context.Context, publicRequest *http.Re
 		failure := telemetryFailure{http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested telemetry resource was not found.", false}
 		return telemetryAuthorization{}, &failure
 	}
-	expectedDigest, _ := telemetryauth.ScopeDigest(action, caller.actingOrganizationID, canonicalTargets)
+	expectedDigest, _ := telemetryauth.ScopeDigest(action, caller.tenantID, canonicalTargets)
 	if !validateTelemetryDecision(decision.Decision, caller, action, canonicalTargets, expectedDigest) ||
 		!validateTelemetryGrantStructure(decision.DelegationGrant, h, publicRequest, caller, action, canonicalTargets, expectedDigest, parentTokenID, decision.Decision.PrincipalID, decision.Decision.PolicyRevision) {
 		failure := telemetryAuthorizationUnavailable("IAM returned a Telemetry decision outside the authenticated request boundary.")
 		return telemetryAuthorization{}, &failure
 	}
-	authorizedTarget := decision.Decision.Targets[0]
 	return telemetryAuthorization{
 		grant: decision.DelegationGrant, principalID: decision.Decision.PrincipalID, policyRevision: decision.Decision.PolicyRevision,
-		owningOrganizationID: authorizedTarget.OwningOrganizationID, siteID: authorizedTarget.SiteID,
+		targets: append([]telemetryauth.AuthorizedTarget(nil), decision.Decision.Targets...),
 	}, nil
 }
 
 func validateTelemetryDecision(decision telemetryauth.Decision, caller telemetryCaller, action telemetryauth.Action, expected []telemetryauth.Target, expectedDigest string) bool {
 	if decision.PrincipalID == "" || decision.Subject != caller.principal.Subject || decision.SubjectIssuer != caller.principal.Issuer ||
-		decision.ActingOrganizationID != caller.actingOrganizationID || decision.Action != action || decision.ScopeDigest != expectedDigest ||
+		decision.TenantID != caller.tenantID || decision.Action != action || decision.ScopeDigest != expectedDigest ||
 		decision.PolicyRevision == "" || decision.ReasonCode != telemetryauth.ReasonAllowExactScope || len(decision.Targets) != len(expected) {
 		return false
 	}
@@ -507,7 +505,7 @@ func validateTelemetryDecision(decision telemetryauth.Decision, caller telemetry
 	}
 	for index, target := range expected {
 		authorized := decision.Targets[index]
-		if authorized.DeviceID != target.DeviceID || !isLowerUUIDv7(authorized.OwningOrganizationID) || !isLowerUUIDv7(authorized.SiteID) || !slices.Equal(authorized.Keys, target.Keys) {
+		if authorized.DeviceID != target.DeviceID || !isLowerUUIDv7(authorized.TenantID) || !isLowerUUIDv7(authorized.SiteID) || !slices.Equal(authorized.Keys, target.Keys) {
 			return false
 		}
 	}
@@ -543,7 +541,7 @@ func validateTelemetryGrantStructure(grant string, h *handler, publicRequest *ht
 	return claims.Version == telemetryauth.GrantVersion && claims.Issuer != "" &&
 		claims.Presenter == h.identity.config.ExecutingWorkloadSPIFFE && claims.Audience == h.telemetry.runtimeAudience &&
 		claims.PrincipalID == principalID && claims.Subject == caller.principal.Subject && claims.SubjectIssuer == caller.principal.Issuer &&
-		claims.ActingOrganizationID == caller.actingOrganizationID && claims.Action == action && claims.ScopeDigest == digest &&
+		claims.TenantID == caller.tenantID && claims.Action == action && claims.ScopeDigest == digest &&
 		claims.TargetCount == len(targets) && claims.KeyCount == keyCount && claims.PolicyRevision == policyRevision &&
 		claims.SessionID == caller.contextID && claims.ParentTokenID == parentTokenID && claims.RequestID == requestIDFromContext(publicRequest.Context()) &&
 		claims.TraceID == traceIDFromContext(publicRequest.Context()) && claims.Route == telemetryPublicRoute(action) &&
@@ -679,8 +677,8 @@ func (h *handler) resolveTelemetryCheckpointTargets(ctx context.Context, publicR
 	return canonical, nil
 }
 
-func validateTelemetrySnapshot(snapshot s2telemetryapi.DeviceObservationSnapshot, target telemetryauth.Target) bool {
-	if snapshot.SchemaVersion != 1 || string(snapshot.DeviceId) != target.DeviceID || !isLowerUUIDv7(string(snapshot.OwningOrganizationId)) || !isLowerUUIDv7(string(snapshot.SiteId)) || snapshot.BusinessRevision < 1 {
+func validateTelemetrySnapshot(snapshot s2telemetryapi.DeviceObservationSnapshot, target telemetryauth.AuthorizedTarget) bool {
+	if snapshot.SchemaVersion != 1 || string(snapshot.TenantId) != target.TenantID || string(snapshot.SiteId) != target.SiteID || string(snapshot.DeviceId) != target.DeviceID || snapshot.BusinessRevision < 1 {
 		return false
 	}
 	if _, err := time.Parse(time.RFC3339Nano, string(snapshot.EvaluatedAt)); err != nil {
@@ -766,9 +764,23 @@ func validPresenceSnapshot(value s2telemetryapi.PresenceSnapshot) bool {
 	return true
 }
 
+func validTelemetryQuality(value s2telemetryapi.TelemetryQuality) bool {
+	switch value {
+	case s2telemetryapi.TelemetryQualityGood,
+		s2telemetryapi.TelemetryQualityPartial,
+		s2telemetryapi.TelemetryQualityEstimated,
+		s2telemetryapi.TelemetryQualityManual,
+		s2telemetryapi.TelemetryQualityStale,
+		s2telemetryapi.TelemetryQualityInvalid:
+		return true
+	default:
+		return false
+	}
+}
+
 func validPresentState(value s2telemetryapi.TelemetryPresentState) bool {
 	if value.State != "PRESENT" || (value.Freshness != "FRESH" && value.Freshness != "STALE") ||
-		(value.Quality != s2telemetryapi.TelemetryQualityGood && value.Quality != s2telemetryapi.TelemetryQualitySuspect) || value.PolicyRevision < 1 ||
+		!validTelemetryQuality(value.Quality) || value.PolicyRevision < 1 ||
 		len(value.QualityReasons) > 16 || !uniqueQualityReasons(value.QualityReasons) || !json.Valid(value.Value) {
 		return false
 	}
@@ -830,15 +842,19 @@ func uniqueQualityReasons(values []s2telemetryapi.QualityReasonCode) bool {
 	return true
 }
 
-func validateTelemetryBatchResponse(response s2telemetryapi.BatchGetObservationSnapshotsResponse, request s2telemetryapi.BatchGetObservationSnapshotsRequest, targets []telemetryauth.Target) bool {
+func validateTelemetryBatchResponse(response s2telemetryapi.BatchGetObservationSnapshotsResponse, request s2telemetryapi.BatchGetObservationSnapshotsRequest, targets []telemetryauth.AuthorizedTarget) bool {
 	if response.SchemaVersion != 1 || len(response.Items) != len(request.Requests) || len(targets) != len(request.Requests) {
 		return false
 	}
 	for index, result := range response.Items {
 		expected := request.Requests[index]
+		authorized, ok := authorizedTargetForDevice(targets, string(expected.DeviceId))
+		if !ok {
+			return false
+		}
 		switch {
 		case result.Success != nil && result.Failure == nil:
-			if result.Success.Status != "OK" || result.Success.RequestId != expected.RequestId || result.Success.DeviceId != expected.DeviceId || !validateTelemetrySnapshot(result.Success.Snapshot, targets[index]) {
+			if result.Success.Status != "OK" || result.Success.RequestId != expected.RequestId || result.Success.DeviceId != expected.DeviceId || !validateTelemetrySnapshot(result.Success.Snapshot, authorized) {
 				return false
 			}
 		case result.Failure != nil && result.Success == nil:
@@ -851,6 +867,15 @@ func validateTelemetryBatchResponse(response s2telemetryapi.BatchGetObservationS
 		}
 	}
 	return true
+}
+
+func authorizedTargetForDevice(targets []telemetryauth.AuthorizedTarget, deviceID string) (telemetryauth.AuthorizedTarget, bool) {
+	for _, target := range targets {
+		if target.DeviceID == deviceID {
+			return target, true
+		}
+	}
+	return telemetryauth.AuthorizedTarget{}, false
 }
 
 func validateSubscriptionBootstrapResponse(response s2telemetryapi.SubscriptionBootstrapResponse, request s2telemetryapi.SubscriptionBootstrapRequest, now time.Time) bool {

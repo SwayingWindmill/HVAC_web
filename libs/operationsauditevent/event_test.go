@@ -15,7 +15,7 @@ func validEvent() EventV1 {
 		SchemaVersion:         SchemaVersion,
 		MessageType:           MessageType,
 		Producer:              Producer,
-		OrganizationID:        "org-001",
+		TenantID:        "org-001",
 		SiteID:                "site-001",
 		InvestigationID:       &investigationID,
 		RunID:                 &runID,

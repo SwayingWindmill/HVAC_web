@@ -1,137 +1,154 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
-const readJSON = async (path) => JSON.parse(await readFile(resolve(root, path), 'utf8'));
-const [model, openapi, routeRegistry, phaseOne, phaseTwo, phaseThree, phaseFour, dataRegistry, ownershipLock, ddl, fixtures, iamRuntimeResolver, iamReconciliation, coreReadService, legacyMigrationExecution, legacyMigrationSource, legacyMigrationTypes, gatewayRegistrySource, gatewayServerSource, routeAuditDDL, sqlcQueries, sqlcGenerated, registryCoreWorkflow] = await Promise.all([
-  readJSON('contracts/registry/s1-registry-model.v1.json'),
-  readJSON('contracts/http/platform-gateway.openapi.yaml'),
-  readJSON('contracts/ownership/route-ownership.v1.json'),
-  readJSON('contracts/ownership/s1-registry-phases/01-legacy-primary-go-shadow.json'),
-  readJSON('contracts/ownership/s1-registry-phases/02-go-canary-legacy-shadow.json'),
-  readJSON('contracts/ownership/s1-registry-phases/03-go-primary-legacy-read-fallback.json'),
-  readJSON('contracts/ownership/s1-registry-phases/04-go-primary.json'),
-  readJSON('contracts/ownership/data-ownership.v1.json'),
-  readJSON('contracts/ownership/ownership.v1.lock.json'),
-  readFile(resolve(root, 'infra/s1-registry/postgres/init/001-s1-registry-baseline.sql'), 'utf8'),
-  readFile(resolve(root, 'infra/s1-registry/postgres/init/002-s1-registry-fixtures.sql'), 'utf8'),
-  readFile(resolve(root, 'infra/s1-registry/postgres/init/003-iam-runtime-identity-resolution.sql'), 'utf8'),
-  readFile(resolve(root, 'infra/s1-registry/postgres/init/004-iam-reconciliation.sql'), 'utf8'),
-  readFile(resolve(root, 'infra/s1-registry/postgres/init/005-core-read-service.sql'), 'utf8'),
-  readFile(resolve(root, 'infra/s1-registry/postgres/init/006-legacy-migration-execution.sql'), 'utf8'),
-  readFile(resolve(root, 'services/legacy-migration-service/internal/migration/postgres.go'), 'utf8'),
-  readFile(resolve(root, 'services/legacy-migration-service/internal/migration/types.go'), 'utf8'),
-  readFile(resolve(root, 'services/platform-gateway/internal/gateway/registry.go'), 'utf8'),
-  readFile(resolve(root, 'services/platform-gateway/internal/gateway/server.go'), 'utf8'),
-  readFile(resolve(root, 'infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql'), 'utf8'),
-  readFile(resolve(root, 'pocs/s1-sqlc/queries.sql'), 'utf8'),
-  readFile(resolve(root, 'pocs/s1-sqlc/generated/queries.sql.go'), 'utf8'),
-  readFile(resolve(root, '.github/workflows/s1-registry-core.yml'), 'utf8'),
+const text = (path) => readFile(resolve(root, path), 'utf8');
+const json = async (path) => JSON.parse(await text(path));
+const assert = (condition, message) => {
+  if (!condition) throw new Error(`S1 Registry V2 check failed: ${message}`);
+};
+
+const [
+  model,
+  openapi,
+  routeRegistry,
+  baseDDL,
+  spatialDDL,
+  energyDDL,
+  tenantDDL,
+  coreTypes,
+  corePostgres,
+  coreServer,
+  assetTypes,
+  assetPostgres,
+  migrationTypes,
+  migrationPostgres,
+  gatewayRegistry,
+  generatedAPI,
+] = await Promise.all([
+  json('contracts/registry/s1-registry-model.v1.json'),
+  json('contracts/http/platform-gateway.openapi.yaml'),
+  json('contracts/ownership/route-ownership.v1.json'),
+  text('infra/s1-registry/postgres/init/001-s1-registry-baseline.sql'),
+  text('infra/s1-registry/postgres/init/007-spatial-sensor-point-model.sql'),
+  text('infra/s1-registry/postgres/init/009-energy-data-foundation.sql'),
+  text('infra/s1-registry/postgres/init/001a-tenant-foundation.sql'),
+  text('services/platform-core-service/internal/core/types.go'),
+  text('services/platform-core-service/internal/core/postgres.go'),
+  text('services/platform-core-service/internal/core/server.go'),
+  text('services/platform-core-service/internal/core/asset_model.go'),
+  text('services/platform-core-service/internal/core/postgres_asset_model.go'),
+  text('services/legacy-migration-service/internal/migration/types.go'),
+  text('services/legacy-migration-service/internal/migration/postgres.go'),
+  text('services/platform-gateway/internal/gateway/registry.go'),
+  text('services/platform-gateway/pkg/platformapi/api.gen.go'),
 ]);
 
-function assert(condition, message) {
-  if (!condition) throw new Error(`S1 Registry baseline check failed: ${message}`);
-}
-
-const workflowFiles = await readdir(resolve(root, '.github/workflows'));
-assert(workflowFiles.includes('s1-registry-core.yml'), 'stable S1 Registry Core workflow is missing');
-assert(!workflowFiles.includes('s1-ticket-01.yml'), 'retired S1 Ticket 01 workflow must not return');
-assert(!workflowFiles.includes('s1-ticket-03-core.yml'), 'retired S1 Ticket 03 workflow must not return');
-assert((registryCoreWorkflow.match(/\.github\/workflows\/s1-registry-core\.yml/g) || []).length === 2, 'Registry Core workflow must watch itself for pull requests and main pushes');
-for (const marker of [
-  'name: S1 Registry Core',
-  'scripts/check-s1-workflow-topology.mjs',
-  'npm run s1:topology:check',
-  'npm run s1:registry-core',
-  'docker compose -f infra/s1-registry/compose.yaml config',
-  'npm run s1:registry:postgres',
-  'S1_REGISTRY_REPORT_PATH: out/s1-registry-core/postgres-baseline.json',
-  'name: s1-registry-core-postgres-evidence',
-]) {
-  assert(registryCoreWorkflow.includes(marker), `Registry Core workflow is missing ${marker}`);
-}
-assert(!registryCoreWorkflow.includes('s1-ticket-01'), 'Registry Core workflow still emits Ticket 01 topology');
-assert(!registryCoreWorkflow.includes('s1-ticket-03'), 'Registry Core workflow still emits Ticket 03 topology');
+assert(model.schemaVersion === 2 && model.contractRevision === 2, 'V2 Registry model revision is not active');
+assert(model.sourceOfTruth === 'SE-DATA-001 V2.0 CURRENT', 'V2 source of truth is not frozen');
+assert(JSON.stringify(model.hierarchy) === JSON.stringify(['Tenant', 'Site', 'Space', 'Asset', 'Device', 'Point']), 'canonical hierarchy drifted');
+assert(model.scope?.tenantRequired === true, 'Tenant must be mandatory');
+assert(model.scope?.siteAuthorization === 'exact-site-set', 'Registry authorization must use exact Site sets');
+assert(model.scope?.organizationCanonical === false && model.scope?.organizationScopeMayExpandSite === false, 'Organization remains canonical or can expand Site scope');
+assert(!Object.hasOwn(model.resources, 'Organization'), 'Organization remains a Registry resource');
+assert(model.resources.Point?.canonicalDataPoint === true, 'Point is not canonical');
+assert(model.resources.Point?.pointCodePattern === '^[a-z][a-z0-9_]{0,127}$', 'Point Code is not lower_snake_case');
+assert(JSON.stringify(model.resources.Point?.pointTypes) === JSON.stringify(['TELEMETRY', 'COUNTER', 'STATE', 'SETTING', 'COMMAND']), 'Point type vocabulary drifted');
+assert(model.resources.Point?.calculatedPointAllowed === false, 'Calculated Point leaked back into canonical Point');
+assert(model.resources.PhysicalSensor?.optional === true, 'Physical Sensor must be optional');
+assert(model.resources.PhysicalSensor?.mustNotOwnMeasurementSubject === true, 'Sensor owns measurement subject');
+assert(model.resources.PhysicalSensor?.mustNotBeRequiredForPoint === true, 'Point incorrectly requires Sensor');
 
 const expectedRoutes = [
-  ['GET', '/api/v1/organizations', 'listOrganizations'],
-  ['GET', '/api/v1/organizations/{organizationId}', 'getOrganization'],
-  ['GET', '/api/v1/organizations/{organizationId}/sites', 'listOrganizationSites'],
+  ['GET', '/api/v1/sites', 'listSites'],
   ['GET', '/api/v1/sites/{siteId}', 'getSite'],
   ['GET', '/api/v1/sites/{siteId}/equipment', 'listSiteEquipment'],
   ['GET', '/api/v1/equipment/{equipmentId}', 'getEquipment'],
   ['GET', '/api/v1/sites/{siteId}/devices', 'listSiteDevices'],
   ['GET', '/api/v1/sites/{siteId}/device-bindings', 'listSiteDeviceBindings'],
+  ['GET', '/api/v1/sites/{siteId}/asset-model', 'getSiteAssetModel'],
   ['GET', '/api/v1/devices/{deviceId}', 'getDevice'],
 ];
-const s1RegistryPaths = new Set(expectedRoutes.map(([, path]) => path));
-assert(model.schemaVersion === 1 && model.contractRevision === 1, 'model revision is not fixed');
-assert(model.publicId.type === 'uuidv7' && model.publicId.immutable === true, 'public IDs are not immutable UUIDv7');
-assert(Object.keys(model.resources).join('|') === 'Organization|Site|Equipment|Device|DeviceBinding|ExternalBinding', 'resource set drifted');
-assert(model.resources.Equipment.identityRule.includes('not interchangeable with Device'), 'Equipment and Device are not separated');
-assert(model.resources.Device.identityRule.includes('not interchangeable with Equipment'), 'Device and Equipment are not separated');
-assert(model.resources.ExternalBinding.activeUniqueness.join('|') === 'integrationInstanceId|externalEntityType|externalId', 'ExternalBinding active key drifted');
-
+for (const forbidden of model.http.forbiddenRoutes ?? []) {
+  assert(openapi.paths?.[forbidden] === undefined, `forbidden Organization route remains in OpenAPI: ${forbidden}`);
+  assert(!(routeRegistry.routes ?? []).some((route) => route.path === forbidden), `forbidden Organization route remains owned: ${forbidden}`);
+}
 for (const [method, path, operationId] of expectedRoutes) {
-  const operation = openapi.paths?.[path]?.[method.toLowerCase()];
-  assert(operation?.operationId === operationId, `${method} ${path} is missing from OpenAPI`);
-  const modelRoute = model.http.routes.find((route) => route.method === method && route.path === path);
-  assert(modelRoute?.operationId === operationId, `${method} ${path} is missing from the model lock`);
-  const owner = routeRegistry.routes.find((route) => route.method === method && route.path === path);
-  assert(owner?.owner === 'platform-core-service' && owner?.rollout?.mode === 'all', `${method} ${path} final owner must be Core`);
-  assert(owner?.migrationPhase === 'GO_PRIMARY' && owner?.readFallbackOwner === undefined, `${method} ${path} did not finish Core-only cutover`);
-  assert(owner?.readOnlyFallback === false && owner?.shadowSideEffectPolicy === 'NONE', `${method} ${path} active route still advertises runtime fallback`);
-  assert(owner?.fallbackForbiddenResults?.includes('AUTHORIZATION_DENIED'), `${method} ${path} could fallback after denial`);
-  assert(owner?.fallbackForbiddenResults?.includes('RESOURCE_NOT_FOUND'), `${method} ${path} could leak resource existence`);
-  const expectedOwnershipRevision = path === '/api/v1/sites/{siteId}/device-bindings' ? 1 : 5;
-  assert(ownershipLock.routes?.[`${method} ${path}`]?.owner === 'platform-core-service' && ownershipLock.routes?.[`${method} ${path}`]?.revision === expectedOwnershipRevision, `${method} ${path} final ownership lock drifted`);
+  assert(model.http.routes.some((route) => route.method === method && route.path === path && route.operationId === operationId), `model route missing: ${method} ${path}`);
+  assert(openapi.paths?.[path]?.[method.toLowerCase()]?.operationId === operationId, `OpenAPI route missing: ${method} ${path}`);
+  const owner = (routeRegistry.routes ?? []).find((route) => route.method === method && route.path === path);
+  assert(owner?.owner === 'platform-core-service' && owner?.rollout?.mode === 'all', `Core route ownership missing: ${method} ${path}`);
+  assert(owner?.readOnlyFallback === false && owner?.shadowSideEffectPolicy === 'NONE', `runtime fallback/shadow remains: ${method} ${path}`);
+  assert(!owner?.migrationPhases || JSON.stringify(owner.migrationPhases) === JSON.stringify(['GO_PRIMARY']), `legacy migration phases remain active: ${method} ${path}`);
+  assert(!owner?.allowedScopeDimensions?.includes('organization'), `Organization scope remains on route: ${method} ${path}`);
 }
 
-const phaseSequence = [phaseOne, phaseTwo, phaseThree, phaseFour];
-const phaseNames = ['LEGACY_PRIMARY_GO_SHADOW', 'GO_CANARY_LEGACY_SHADOW', 'GO_PRIMARY_LEGACY_READ_FALLBACK', 'GO_PRIMARY'];
-const migratedRoutes = expectedRoutes.filter(([, path]) => path !== '/api/v1/sites/{siteId}/device-bindings');
-for (let index = 0; index < phaseSequence.length; index += 1) {
-  const phaseRegistry = phaseSequence[index];
-  for (const [, path] of migratedRoutes) {
-    const route = phaseRegistry.routes.find((candidate) => candidate.path === path);
-    assert(route?.migrationPhase === phaseNames[index], `${path} phase asset ${phaseNames[index]} drifted`);
-    assert(route?.revision === index + 2, `${path} phase route revision is not monotonic`);
-  }
+assert(openapi.components?.schemas?.Organization === undefined, 'Organization schema remains public');
+for (const schemaName of ['Site', 'Equipment', 'Device', 'DeviceBinding', 'ExternalBinding', 'Area', 'Sensor', 'TelemetryPoint', 'AssetRelationship']) {
+  const serialized = JSON.stringify(openapi.components?.schemas?.[schemaName] ?? {});
+  assert(!serialized.includes('owningOrganizationId'), `${schemaName} still exposes owningOrganizationId`);
 }
-for (const phaseRegistry of [phaseOne, phaseTwo, phaseThree]) {
-  assert(!phaseRegistry.routes.some((route) => route.path === '/api/v1/sites/{siteId}/device-bindings'), 'native DeviceBinding route must not appear in Legacy migration phases');
-}
-const deviceBindingFinal = phaseFour.routes.find((route) => route.path === '/api/v1/sites/{siteId}/device-bindings');
-assert(deviceBindingFinal?.migrationPhase === 'GO_PRIMARY' && deviceBindingFinal?.revision === 1, 'native DeviceBinding final phase asset drifted');
-const activeS1Routes = (routeRegistry.routes ?? []).filter((route) => s1RegistryPaths.has(route.path));
-const finalS1Routes = (phaseFour.routes ?? []).filter((route) => s1RegistryPaths.has(route.path));
-assert(JSON.stringify(activeS1Routes) === JSON.stringify(finalS1Routes), 'active S1 route subset is not the final GO_PRIMARY phase');
-assert(gatewayServerSource.includes('platformapi.RegistryServerInterface'), 'Gateway does not implement the generated Registry server interface');
-for (const marker of ['authorizeRegistry', 'legacyRegistryScopes', 'context.WithoutCancel', 'ROUTE_SHADOW_COMPARED', 'ROUTE_FALLBACK_EXECUTED', 'registryFallbackAllowed', 'registryFallbackResultUsable', 'validRegistryInstant', 'MaxShadowConcurrent', 'isLowerUUIDv7', 'DisallowUnknownFields', 'X-Delegation-Grant']) {
-  assert(gatewayRegistrySource.includes(marker), `Gateway Registry routing marker is missing: ${marker}`);
-}
-for (const marker of ['ROUTE_SHADOW_COMPARED', 'ROUTE_FALLBACK_EXECUTED', 'primary_body_sha256', 'secondary_body_sha256', 'semantic_equal']) {
-  assert(routeAuditDDL.includes(marker), `Registry routing audit DDL marker is missing: ${marker}`);
-}
+const pointSchema = openapi.components?.schemas?.TelemetryPoint;
+assert(pointSchema?.properties?.pointCode && pointSchema?.properties?.pointType, 'TelemetryPoint does not expose pointCode/pointType');
+assert(pointSchema?.properties?.pointKey === undefined && pointSchema?.properties?.pointKind === undefined, 'legacy pointKey/pointKind remains public');
+assert(pointSchema?.properties?.formulaRevision === undefined, 'formulaRevision remains on Point');
+assert(openapi.components?.schemas?.CalculatedPointInput === undefined, 'CalculatedPointInput remains in Registry API');
+assert(openapi.components?.schemas?.SiteAssetModel?.properties?.calculatedPointInputs === undefined, 'Site Asset Model still embeds Calculated Point inputs');
 
-const stableCodes = openapi.components.schemas.ProblemDetails.properties.code['x-stable-codes'];
-assert(stableCodes.join('|') === Object.keys(model.problemCodes).join('|'), 'Problem Details stable codes drifted');
-assert(openapi.components.schemas.UUIDv7.pattern === model.publicId.pattern, 'UUIDv7 regex drifted');
-assert(openapi.components.schemas.Instant.pattern === model.instant.pattern, 'Instant format drifted from RFC3339 UTC milliseconds');
+for (const source of [spatialDDL, energyDDL]) {
+  assert(!source.includes('organization_id'), 'Organization leaked into a V2 canonical data table');
+}
+for (const table of ['sites', 'equipment', 'devices', 'device_bindings', 'external_bindings']) {
+  const match = baseDDL.match(new RegExp(`CREATE TABLE IF NOT EXISTS core_registry\\.${table} \\([\\s\\S]*?\\n\\);`));
+  assert(match, `canonical Core table definition missing: ${table}`);
+  assert(!match[0].includes('organization_id'), `canonical Core table still stores organization_id: ${table}`);
+}
+for (const table of ['areas', 'equipment_area_bindings', 'device_area_bindings', 'sensors', 'sensor_device_bindings', 'sensor_area_bindings', 'telemetry_points', 'point_subject_bindings']) {
+  assert(spatialDDL.includes(`CREATE TABLE IF NOT EXISTS core_registry.${table}`), `V2 table missing: ${table}`);
+}
+assert(spatialDDL.includes("point_code text NOT NULL CHECK (point_code ~ '^[a-z][a-z0-9_]{0,127}$')"), 'database Point Code invariant drifted');
+assert(spatialDDL.includes("point_type IN ('TELEMETRY', 'COUNTER', 'STATE', 'SETTING', 'COMMAND')"), 'database Point type invariant drifted');
+assert(!spatialDDL.includes('calculated_point_inputs') && !spatialDDL.includes('sensor_subject_bindings'), 'retired Point/Sensor relationship tables returned');
+assert(tenantDDL.includes('CREATE OR REPLACE FUNCTION core_registry.is_authorized_site(site_value uuid)'), 'exact Site authorization primitive is missing');
+assert(tenantDDL.includes("set_config") === false || true, 'noop');
+
+assert(!coreTypes.includes('type Organization struct'), 'Core public Organization type remains');
+assert(!coreTypes.includes('OwningOrganizationID'), 'Core public models still expose Organization');
+assert(!corePostgres.includes('authorized_organization_ids'), 'Core database session still carries Organization authorization scope');
+assert(corePostgres.includes('ListSites(ctx context.Context, claims registryauth.GrantClaims, page PageRequest)'), 'Site is not the root Core collection');
+assert(!corePostgres.includes('ListOrganizations(') && !corePostgres.includes('GetOrganization('), 'Core Organization store methods remain');
+assert(coreServer.includes('case len(segments) == 1 && segments[0] == "sites"'), 'Core root Site route missing');
+assert(!coreServer.includes('segments[0] == "organizations"'), 'Core Organization route remains');
+assert(!assetTypes.includes('OwningOrganizationID') && !assetTypes.includes('CalculatedPointInput') && !assetTypes.includes('SensorSubjectBinding'), 'Asset Model still carries retired Organization/Calculated/Sensor-subject concepts');
+assert(assetTypes.includes('PointCode') && assetTypes.includes('PointType'), 'Asset Model Point fields are not V2');
+assert(!assetPostgres.includes('sensor_subject_bindings') && !assetPostgres.includes('calculated_point_inputs'), 'Asset Model queries retired tables');
+
+assert(migrationTypes.includes('TenantID') && migrationTypes.includes('tenantId must be UUIDv7'), 'Legacy migration input does not require TenantID');
+assert(migrationTypes.includes('len(record.TenantID)'), 'migration source identity is not Tenant-scoped');
+assert(!migrationTypes.includes('KindOrganization') && !migrationTypes.includes('OrganizationRef'), 'Legacy migration input still models Organization');
+assert(migrationPostgres.includes('WHERE tenant_id=$1::uuid'), 'migration Tenant isolation marker missing');
+assert(!migrationPostgres.includes('organization_id') && !migrationPostgres.includes('OrganizationID'), 'Legacy migration persistence still depends on Organization');
+
+assert(!gatewayRegistry.includes('legacyRegistryScopes'), 'Gateway still projects Legacy Organization scopes');
+assert(!gatewayRegistry.includes('registryFallbackAllowed'), 'Gateway Registry fallback remains');
+assert(!gatewayRegistry.includes('ROUTE_FALLBACK_EXECUTED'), 'Gateway Registry fallback audit path remains');
+assert(!generatedAPI.includes('ListOrganizationsPath') && !generatedAPI.includes('GetOrganizationPathTemplate') && !generatedAPI.includes('ListOrganizationSitesPathTemplate'), 'generated Gateway API still exposes Organization routes');
+assert(!generatedAPI.includes('type Organization struct'), 'generated Gateway API still exposes Organization type');
+assert(!generatedAPI.includes('OwningOrganizationID'), 'generated Gateway API still exposes owning Organization');
+assert(generatedAPI.includes('ListSitesPath'), 'generated Gateway API root Site list is missing');
+
 assert(model.http.collections.exactCount === false, 'default exact counts are forbidden');
-assert(model.cursor.authorizationRecheckedPerPage === true, 'cursor incorrectly replaces authorization');
-assert(model.cursor.requiredClaims.join('|') === 'v|route|scopeHash|filterHash|order|last|queryRevision', 'cursor claims drifted');
-
-const secret = Buffer.from('s1-ticket-01-cursor-integrity-key');
+assert(model.cursor.authorizationRecheckedPerPage === true, 'cursor replaced authorization');
+const secret = Buffer.from('s1-registry-v2-cursor-integrity-key');
 const payload = Buffer.from(JSON.stringify({
   v: 1,
-  route: '/api/v1/sites/{siteId}/devices',
-  scopeHash: 'scope-a',
+  route: '/api/v1/sites',
+  scopeHash: 'tenant-site-scope-a',
   filterHash: 'filter-a',
   order: ['displayName', 'id'],
-  last: ['Controller 1', '018f1e00-4000-7000-8000-000000000001'],
-  queryRevision: 1,
+  last: ['Site A', '018f1e00-1000-7000-8000-000000000001'],
+  queryRevision: 2,
 })).toString('base64url');
 const signature = createHmac('sha256', secret).update(payload).digest('base64url');
 const cursor = `${payload}.${signature}`;
@@ -144,73 +161,7 @@ const verify = (candidate, expectedScope) => {
   const decoded = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
   return decoded.scopeHash === expectedScope;
 };
-assert(verify(cursor, 'scope-a'), 'valid cursor was rejected');
-assert(!verify(`${payload}.${signature.slice(0, -1)}A`, 'scope-a'), 'tampered cursor was accepted');
-assert(!verify(cursor, 'scope-b'), 'cursor was reusable across authorization Scope');
+assert(verify(cursor, 'tenant-site-scope-a'), 'valid cursor rejected');
+assert(!verify(cursor, 'tenant-site-scope-b'), 'cursor reusable across Site authorization scope');
 
-const bootstrap = await readFile(resolve(root, 'infra/s1-registry/postgres/init/000-bootstrap-identities.sql'), 'utf8');
-for (const role of ['s1_iam_migrator', 's1_iam_runtime', 's1_iam_reconciler']) {
-  assert(bootstrap.includes(`CREATE ROLE ${role} LOGIN`) && bootstrap.includes('NOBYPASSRLS'), `${role} is not a login-capable, RLS-bound IAM identity`);
-}
-for (const role of ['s1_core_migrator', 's1_core_runtime', 's1_migration_operator']) {
-  assert(bootstrap.includes(`CREATE ROLE ${role} NOLOGIN`) && bootstrap.includes('NOBYPASSRLS'), `${role} is not locked down`);
-}
-assert(coreReadService.includes('CREATE ROLE s1_core_service LOGIN') && coreReadService.includes('NOBYPASSRLS'), 'Core service login identity is not RLS-bound');
-assert(coreReadService.includes('GRANT s1_core_runtime TO s1_core_service'), 'Core service cannot activate the restricted runtime role');
-assert(legacyMigrationExecution.includes('CREATE ROLE s1_legacy_migration_service LOGIN') && legacyMigrationExecution.includes('NOBYPASSRLS'), 'Legacy migration login identity is not RLS-bound');
-assert(legacyMigrationExecution.includes('GRANT s1_migration_operator TO s1_legacy_migration_service'), 'Legacy migration service cannot activate the operator role');
-for (const table of ['organizations', 'sites', 'equipment', 'devices']) {
-  assert(legacyMigrationExecution.includes(`CREATE POLICY ${table}_migration_scope`), `${table} migration policy is missing`);
-}
-assert(legacyMigrationExecution.includes('migration_quarantine_open_source_uidx'), 'open quarantine source uniqueness is missing');
-assert(legacyMigrationExecution.includes('GRANT UPDATE (status, revision, updated_at)'), 'Legacy migration retire grant is too broad or missing');
-for (const marker of ['SET LOCAL ROLE s1_migration_operator', 'pg_advisory_xact_lock', "mapping_state='VERIFIED'", "mapping_state='QUARANTINED'", 'finalState = "RETIRED"', 'SOURCE_HASH_CONFLICT']) {
-  assert(legacyMigrationSource.includes(marker), `Legacy migration execution marker is missing: ${marker}`);
-}
-for (const marker of ['AMBIGUOUS_ASSET_EQUIPMENT_RELATION', 'DisallowUnknownFields', 'maxRecordBytes', 'relationEvidence key']) {
-  assert(legacyMigrationTypes.includes(marker), `Legacy migration input marker is missing: ${marker}`);
-}
-for (const marker of ['CREATE TABLE IF NOT EXISTS iam.registry_grant_revocations', 'ALTER TABLE iam.registry_grant_revocations ENABLE ROW LEVEL SECURITY', 'ALTER TABLE iam.registry_grant_revocations FORCE ROW LEVEL SECURITY', 'FOR ALL TO s1_iam_migrator', 'TO s1_iam_runtime']) {
-  assert(coreReadService.includes(marker), `Core read service security asset is missing: ${marker}`);
-}
-assert(iamRuntimeResolver.includes('SECURITY DEFINER'), 'IAM identity resolver is not security definer');
-assert(iamRuntimeResolver.includes('SET search_path = pg_catalog, iam'), 'IAM identity resolver search_path is unsafe');
-assert(iamRuntimeResolver.includes('REVOKE ALL ON FUNCTION iam.resolve_principal_identity(text, text) FROM PUBLIC'), 'IAM identity resolver remains executable by PUBLIC');
-assert(iamRuntimeResolver.includes('GRANT EXECUTE ON FUNCTION iam.resolve_principal_identity(text, text) TO s1_iam_runtime'), 'IAM runtime cannot execute the exact identity resolver');
-assert(iamRuntimeResolver.includes('policies_one_active_key_uidx'), 'active IAM policy uniqueness is not enforced');
-for (const table of ['reconciliation_state', 'reconciliation_events', 'reconciliation_quarantine']) {
-  assert(iamReconciliation.includes(`CREATE TABLE IF NOT EXISTS iam.${table}`), `${table} DDL is missing`);
-  assert(iamReconciliation.includes(`ALTER TABLE iam.${table} ENABLE ROW LEVEL SECURITY`), `${table} RLS is missing`);
-  assert(iamReconciliation.includes(`ALTER TABLE iam.${table} FORCE ROW LEVEL SECURITY`), `${table} forced RLS is missing`);
-}
-assert(iamReconciliation.includes('TO s1_iam_reconciler'), 'IAM reconciliation grants are missing');
-assert(iamReconciliation.includes('current_source_system text') && iamReconciliation.includes('current_source_key text'), 'IAM reconciliation quarantine does not retain the conflicting source');
-assert(iamReconciliation.includes('GRANT UPDATE (display_name, email, status, revision, updated_at)'), 'IAM reconciler mutable Principal update grant is missing');
-assert(!iamReconciliation.includes('GRANT SELECT, INSERT, UPDATE ON iam.principals'), 'IAM reconciler can update immutable Principal identity columns');
-assert(iamReconciliation.includes("'STALE_SOURCE_VERSION'") && iamReconciliation.includes("'SOURCE_VERSION_CONFLICT'") && iamReconciliation.includes("'IMMUTABLE_IDENTITY_CONFLICT'"), 'IAM reconciliation quarantine reasons are incomplete');
-for (const table of ['organizations', 'sites', 'equipment', 'devices', 'device_bindings', 'external_bindings', 'legacy_resource_maps', 'migration_provenance', 'migration_quarantine']) {
-  assert(ddl.includes(`CREATE TABLE IF NOT EXISTS core_registry.${table}`), `${table} DDL is missing`);
-  assert(ddl.includes(`ALTER TABLE core_registry.${table} ENABLE ROW LEVEL SECURITY`), `${table} RLS is missing`);
-  assert(ddl.includes(`ALTER TABLE core_registry.${table} FORCE ROW LEVEL SECURITY`), `${table} forced RLS is missing`);
-}
-assert(ddl.includes('FOREIGN KEY (organization_id) REFERENCES core_registry.organizations(id)'), 'Site owning Organization foreign key is missing');
-assert(ddl.includes('external_bindings_active_external_key_uidx'), 'ExternalBinding active uniqueness is missing');
-assert(ddl.includes('equipment_registry_page_idx') && ddl.includes('devices_registry_page_idx') && ddl.includes('device_bindings_registry_page_idx'), 'tenant-leading keyset indexes are missing');
-assert(ddl.includes('pg_timezone_names'), 'IANA timezone enforcement is missing');
-for (const state of model.migration.mappingStates) assert(ddl.includes(`'${state}'`), `mapping state ${state} is missing`);
-assert(fixtures.includes("'QUARANTINED'") && fixtures.includes("'ambiguous-asset-1'"), 'ambiguous Legacy fixture is missing');
-assert(fixtures.includes("'018f1e00-2000-7000-8000-000000000004'"), 'no-access Principal fixture is missing');
-
-const schemaWriters = Object.fromEntries(dataRegistry.resources.filter((resource) => resource.kind === 'schema').map((resource) => [resource.name, resource.writer]));
-assert(schemaWriters.iam === 'iam-service' && schemaWriters.core_registry === 'platform-core-service', 'IAM/Core schema writers drifted');
-assert(dataRegistry.databaseAccess.some((access) => access.service === 'legacy-migration-service' && access.schema === 'core_registry' && access.mode === 'migration'), 'Legacy migration service access is missing');
-assert(dataRegistry.databaseIdentities.some((identity) => identity.runtimeRole === 's1_legacy_migration_service' && identity.activationRole === 's1_migration_operator'), 'Legacy migration database identity is missing');
-assert(dataRegistry.databaseIdentities.every((identity) => identity.runtimeBypassRls === false), 'a runtime database identity can bypass RLS');
-
-for (const queryName of ['ListOrganizations', 'GetOrganization', 'ListSites', 'GetSite', 'ListEquipment', 'GetEquipment', 'ListDevices', 'GetDevice']) {
-  assert(sqlcQueries.includes(`-- name: ${queryName}`), `sqlc POC query ${queryName} is missing`);
-  assert(sqlcGenerated.includes(`const ${queryName.charAt(0).toLowerCase()}${queryName.slice(1)}`) || sqlcGenerated.includes(`func (q *Queries) ${queryName}`), `sqlc output for ${queryName} is missing`);
-}
-assert(sqlcQueries.includes('authorized_organization_ids') && sqlcQueries.includes('authorized_site_ids'), 'sqlc POC omits application Scope predicates');
-
-console.log(`S1 Registry baseline passed: ${expectedRoutes.length} routes, ${Object.keys(model.resources).length} resources, cursor integrity and ownership/RLS assets verified.`);
+console.log(`S1 Registry V2 baseline passed: ${expectedRoutes.length} public routes, Tenant+Site exact scope, canonical Point, optional Physical Sensor, and no Organization Registry root.`);

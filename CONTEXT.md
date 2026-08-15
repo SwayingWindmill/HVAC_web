@@ -1,44 +1,36 @@
 # Platform Domain Glossary
 
-## Organization
+## Tenant
 
-The top-level business and authorization boundary that owns Sites.
+The top-level data-isolation and ownership boundary. Sites belong directly to one Tenant.
 
 ## Site
 
-An operational location within one Organization. A Site is the scope in which Devices, Equipment, telemetry and operating decisions are observed.
+An operational location within one Tenant. A Site is the primary business scope in which Spaces, Assets, Devices, Points, telemetry and operating decisions are observed.
 
-## Area
+## Space
 
-A recursive spatial scope below one Site, such as a Building, Floor, Zone, Room, Plant Room or Rooftop. Area expresses where something is installed or observed; it is not Equipment and it does not own Device identity.
+A recursive spatial scope below one Site, such as a Building, Floor, Zone, Room, Plant Room or Rooftop. Space expresses where something is installed or observed; it is not an Asset and it does not own Device identity.
 
-## Equipment
+## Asset
 
-A maintainable physical business asset. Equipment is not interchangeable with a Device. Equipment placement in an Area is a versioned binding so relocation does not erase installation history.
-
-## Device Endpoint
-
-The preferred domain term for a Registry Device when discussing physical integration. A Device Endpoint is an addressable controller, gateway, meter or independently communicating sensor with an immutable platform identity. External-system identifiers are mappings, not Device identity.
+A maintainable physical business asset. Asset is not interchangeable with a Device. Asset placement in a Space is an effective-dated binding so relocation does not erase installation history.
 
 ## Device
 
-The Registry identity used for a Device Endpoint. Existing APIs retain the shorter name `Device`.
+An addressable controller, gateway, meter or other independently communicating endpoint with an immutable platform identity. External-system identifiers are mappings, not Device identity.
 
-## Sensor
+## Physical Sensor
 
-A first-class measurement identity with installation, calibration, replacement and quality lifecycle. A Sensor may report through a controller Device Endpoint or may itself be an independently communicating Device Endpoint.
+An optional, independently identifiable physical probe or sensing element that exists only when its own installation, replacement, calibration or traceability lifecycle must be managed. A Physical Sensor is not a canonical data point and is not required between Device and Point.
 
-## Telemetry Point
+## Point
 
-A typed data channel owned by a reporting Device Endpoint and optionally a Sensor. A Sensor may expose multiple Telemetry Points, and controller-internal points may exist without a separately managed Sensor.
+The canonical typed data or control point owned by a Device. Device-to-Point is the canonical data-model relationship. A Point may optionally reference a Physical Sensor when a real probe requires independent lifecycle traceability; most Points do not require one.
 
 ## Measured Subject
 
-The Site, Area or Equipment that a Sensor or Telemetry Point describes. Measured Subject is independent of mounting location and reporting Device Endpoint.
-
-## Calculated Point
-
-A Telemetry Point derived from ordered input point references and a versioned formula. Its value and quality preserve input provenance; it is not a direct sensor observation.
+The Site, Space or Asset that a Point describes. A Physical Sensor may carry installation or traceability context, but Point remains the canonical measurement identity used by telemetry and downstream data products.
 
 ## Independent Point Observation
 
@@ -94,7 +86,7 @@ The age classification of the latest accepted Telemetry Observation under a vers
 
 ## Telemetry Quality
 
-The trust classification of a Telemetry Observation after type, unit, range, timestamp and source validation. It is `GOOD`, `SUSPECT` or `REJECTED`.
+The V2 quality classification of a Telemetry Observation after validation and governance. It is `GOOD`, `PARTIAL`, `ESTIMATED`, `MANUAL`, `STALE` or `INVALID`. Quality is independent of ingest acceptance; rejection, quarantine, duplicate and out-of-order handling are ingest decisions or evidence, not quality values.
 
 ## Required Telemetry Set
 

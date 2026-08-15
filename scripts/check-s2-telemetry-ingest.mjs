@@ -118,7 +118,7 @@ includesAll(ingestStoreGo, [
   '57P01',
 ], 'PostgreSQL source acceptance transaction');
 assert(!ingestStoreGo.includes('legacy'), 'source acceptance must not write Legacy state');
-assert(!ingestStoreGo.includes('thingsboard_ts'), 'source acceptance must not write ThingsBoard current-state storage');
+assert(!ingestStoreGo.includes('provider_ts'), 'source acceptance must not write provider-specific current-state storage');
 const rawEvidenceBlock = ingestStoreGo.slice(ingestStoreGo.indexOf('func insertSourceObservation'), ingestStoreGo.indexOf('func (store *PostgresStore) insertQuarantine'));
 assert(rawEvidenceBlock.indexOf('if decision.Status == ObservationAccepted') < rawEvidenceBlock.indexOf('INSERT INTO telemetry_runtime.source_observations'), 'only accepted observations may retain raw values');
 
@@ -138,7 +138,7 @@ includesAll(snapshotStoreGo, ['func (store *PostgresStore) evaluateAndPersistDev
 
 includesAll(sourceServerGo, [
   'InternalSourceObservationPath',
-  'InternalThingsBoardCoveragePath',
+  'InternalSourceCoveragePath',
   'ParseSourceAuthenticatorJSON',
   'spiffe',
   'uuidV7Pattern',
@@ -152,7 +152,7 @@ includesAll(sourceServerGo, [
   'normalizeSourceObservation',
   'TELEMETRY_SOURCE_IDENTITY_INVALID',
   'TELEMETRY_SOURCE_UNAVAILABLE',
-], 'internal ThingsBoard source seam');
+], 'internal source seam');
 assert(!sourceServerGo.includes('/api/v1/'), 'source seam must not activate public Gateway routes');
 assert(!sourceServerGo.includes('/api/telemetry/ingest'), 'source seam must not expose Legacy ingest');
 includesAll(mainGo, [
@@ -173,10 +173,10 @@ includesAll(decisionTests, [
 ], 'source acceptance conformance tests');
 includesAll(sourceServerTests, [
   'TestParseSourceAuthenticatorJSONRequiresExactSPIFFEAndIntegrationBindings',
-  'TestThingsBoardSourceModesReuseOneAcceptancePath',
-  'TestThingsBoardSourceAuthenticationAndScopeFailClosed',
-  'TestThingsBoardSourceFailsClosedOnMalformedAndDependencyFailure',
-  'TestThingsBoardCoverageReportsOutageAndRecovery',
+  'TestSourceModesReuseOneAcceptancePath',
+  'TestSourceAuthenticationAndScopeFailClosed',
+  'TestSourceFailsClosedOnMalformedAndDependencyFailure',
+  'TestSourceCoverageReportsOutageAndRecovery',
   'TestLegacyIngestPathDoesNotExist',
   'JSON prefix bypass',
 ], 'source HTTP tests');
@@ -227,8 +227,8 @@ for (const forbidden of ['DROP TABLE', 'DROP COLUMN', 'ALTER COLUMN TYPE', 'TRUN
 includesAll(fixtureSQL, [
   'max_future_clock_skew_seconds',
   'expected_sample_interval_seconds',
-  "'RECONCILIATION'",
-  "'REJECTED', 'REJECTED'",
+  "'PUSH'",
+  "'REJECTED', 'INVALID'",
 ], 'deterministic ingest fixtures');
 assert(!fixtureSQL.includes('"invalid"'), 'rejected fixture must not retain raw telemetry');
 

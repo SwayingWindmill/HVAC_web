@@ -1,5 +1,5 @@
 import { S2TelemetryClientError } from '../../api/generated/s2Telemetry.gen.ts';
-import type { DeviceHistoryPoint, S2TelemetryClient } from '../../api/generated/s2Telemetry.gen.ts';
+import type { DeviceHistoryPoint, DeviceHistoryQuality, S2TelemetryClient } from '../../api/generated/s2Telemetry.gen.ts';
 import type * as S2TelemetryContract from '../../api/generated/s2Telemetry.gen.ts';
 import {
   REAL_ASSETS_CATALOG_REVISION,
@@ -24,8 +24,7 @@ export const REAL_ASSETS_HISTORY_RANGES: Readonly<Record<RealAssetsHistoryRange,
 export interface RealAssetsHistoryQuery {
   readonly protectedGeneration: number;
   readonly sessionId: string;
-  readonly actingOrganizationId: string;
-  readonly owningOrganizationId: string;
+  readonly tenantId: string;
   readonly siteId: string;
   readonly deviceId: string;
   readonly keys: readonly string[];
@@ -49,7 +48,7 @@ export interface LoadRealAssetsHistoryInput {
 export interface RealAssetsTrendDatum {
   readonly timestamp: number;
   readonly value: number | null;
-  readonly quality: 'GOOD' | 'SUSPECT' | null;
+  readonly quality: DeviceHistoryQuality | null;
   readonly pointId: string | null;
   readonly sensorId: string | null;
 }
@@ -92,7 +91,6 @@ function validatePoint(point: DeviceHistoryPoint, fromMs: number, toMs: number, 
   if (sampledAt < fromMs || sampledAt >= toMs) throw new Error('Device history point escaped the requested range.');
   if (previousSampledAt !== null && sampledAt < previousSampledAt) throw new Error('Device history points are not ordered.');
   if (!Number.isFinite(point.value)) throw new Error('Device history point value must be finite.');
-  if (point.quality !== 'GOOD' && point.quality !== 'SUSPECT') throw new Error('Device history point quality is unsupported.');
   if (!Number.isInteger(point.revision) || point.revision <= 0) throw new Error('Device history point revision is invalid.');
   if (!Array.isArray(point.qualityReasons)) throw new Error('Device history quality reasons are invalid.');
   return sampledAt;
@@ -106,8 +104,7 @@ export function listRealAssetsTrendDefinitions(profile: RealAssetsProfileResolut
 export function createRealAssetsHistoryQuery(input: {
   readonly protectedGeneration: number;
   readonly sessionId: string;
-  readonly actingOrganizationId: string;
-  readonly owningOrganizationId: string;
+  readonly tenantId: string;
   readonly siteId: string;
   readonly deviceId: string;
   readonly keys: readonly string[];
@@ -125,8 +122,7 @@ export function createRealAssetsHistoryQuery(input: {
   return Object.freeze({
     protectedGeneration: input.protectedGeneration,
     sessionId: input.sessionId,
-    actingOrganizationId: input.actingOrganizationId,
-    owningOrganizationId: input.owningOrganizationId,
+    tenantId: input.tenantId,
     siteId: input.siteId,
     deviceId: input.deviceId,
     keys: Object.freeze([...input.keys]),
@@ -143,7 +139,7 @@ export function createRealAssetsHistoryQuery(input: {
 
 export function realAssetsHistoryQueryKey(query: RealAssetsHistoryQuery): readonly unknown[] {
   return [
-    'real-assets', query.protectedGeneration, query.actingOrganizationId, query.owningOrganizationId, query.siteId, 'history',
+    'real-assets', query.protectedGeneration, query.tenantId, query.siteId, 'history',
     query.sessionId, query.deviceId, [...query.keys], query.range, query.aggregation, query.timezone,
     query.catalogRevision, query.routePolicyRevision, query.from, query.to, query.maxPointsPerKey,
   ] as const;
@@ -158,7 +154,7 @@ export function realAssetsHistoryRevisionKey(query: RealAssetsHistoryQuery, resp
 
 export function validateRealAssetsHistoryResponse(response: S2TelemetryContract.DeviceHistoryResponse, query: RealAssetsHistoryQuery): S2TelemetryContract.DeviceHistoryResponse {
   if (response.schemaVersion !== 1) throw new Error('Device history schema version is unsupported.');
-  if (response.owningOrganizationId !== query.owningOrganizationId
+  if (response.tenantId !== query.tenantId
     || response.siteId !== query.siteId
     || response.deviceId !== query.deviceId) {
     throw new Error('Device history response escaped the authorized resource scope.');

@@ -57,6 +57,11 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	commandRuntime, err := loadInProcessCommandRuntime(ctx)
+	if err != nil {
+		logger.Error("iot_command_runtime_invalid", "error", err.Error())
+		os.Exit(1)
+	}
 	diagnostics := diagnosticsServer(*diagnosticsAddress, runtime, telemetry)
 	errCh := make(chan error, 2)
 	go func() {
@@ -66,9 +71,12 @@ func main() {
 		}
 	}()
 	go func() {
-		logger.Info("mqtt_telemetry_adapter_started", "integration_instance_id", config.IntegrationInstanceID, "topic_filter", config.MQTT.TopicFilter)
+		logger.Info("mqtt_telemetry_adapter_started", "integration_instance_id", config.IntegrationInstanceID, "topic_filters", config.MQTT.TopicFilters)
 		errCh <- runtime.Run(ctx)
 	}()
+	if commandRuntime != nil {
+		go commandRuntime.Run(ctx, logger)
+	}
 
 	select {
 	case <-ctx.Done():
@@ -81,6 +89,7 @@ func main() {
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	_ = diagnostics.Shutdown(shutdownContext)
+	_ = commandRuntime.Close(shutdownContext)
 	_ = telemetry.Shutdown(shutdownContext)
 	logger.Info("mqtt_telemetry_adapter_stopped")
 }

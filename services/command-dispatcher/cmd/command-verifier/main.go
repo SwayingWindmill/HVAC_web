@@ -15,7 +15,6 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/command-dispatcher/pkg/commanddispatcher"
 	"github.com/quanlaihe/hvac-web/services/command-service/pkg/commandservice"
-	"github.com/quanlaihe/hvac-web/services/thingsboard-connector-control/pkg/controlconnector"
 )
 
 func main() {
@@ -23,11 +22,10 @@ func main() {
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "command-verifier", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 2048, ExportTimeout: 500 * time.Millisecond,
 	})
-	cohort, err := controlconnector.LoadApprovedCohort(requiredEnv("S3_APPROVED_COHORT_FILE"))
-	if err != nil {
-		logger.Error("verifier_cohort_load_failed", "error_code", "S3_APPROVED_COHORT_INVALID")
-		os.Exit(1)
-	}
+	tenantID := requiredEnv("COMMAND_RUNTIME_TENANT_ID")
+	siteID := requiredEnv("COMMAND_RUNTIME_SITE_ID")
+	deviceID := requiredEnv("COMMAND_RUNTIME_DEVICE_ID")
+	reportedStateKey := requiredEnv("COMMAND_VERIFICATION_REPORTED_STATE_KEY")
 
 	workloadIdentity := workloadtls.CertificateFiles{
 		CertificatePath: requiredEnv("COMMAND_RUNTIME_CLIENT_CERT"),
@@ -46,9 +44,9 @@ func main() {
 	runtimeClient, err := commanddispatcher.NewRuntimeClient(commanddispatcher.RuntimeClientConfig{
 		BaseURL:        requiredEnv("COMMAND_RUNTIME_URL"),
 		HTTPClient:     runtimeHTTPClient,
-		OrganizationID: cohort.OrganizationID,
-		SiteID:         cohort.SiteID,
-		DeviceID:       cohort.DeviceID,
+		TenantID:       tenantID,
+		SiteID:         siteID,
+		DeviceID:       deviceID,
 	})
 	if err != nil {
 		logger.Error("verifier_runtime_client_invalid", "error_code", "COMMAND_RUNTIME_CLIENT_INVALID")
@@ -70,7 +68,7 @@ func main() {
 	}
 	reader, err := commanddispatcher.NewReportedStateClient(commanddispatcher.ReportedStateClientConfig{
 		BaseURL: requiredEnv("S2_REPORTED_STATE_URL"), HTTPClient: s2HTTPClient,
-		OrganizationID: cohort.OrganizationID, SiteID: cohort.SiteID, DeviceID: cohort.DeviceID,
+		TenantID: tenantID, SiteID: siteID, DeviceID: deviceID,
 	})
 	if err != nil {
 		logger.Error("verifier_s2_client_invalid", "error_code", "S2_REPORTED_STATE_CLIENT_INVALID")
@@ -93,8 +91,8 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	telemetry.MarkReady()
-	logger.Info("command_verifier_started", "worker_id", workerID, "organization_id", cohort.OrganizationID, "reported_state_key", cohort.ReportedStateKey)
-	runVerifier(ctx, logger, worker, cohort.OrganizationID)
+	logger.Info("command_verifier_started", "worker_id", workerID, "tenant_id", tenantID, "reported_state_key", reportedStateKey)
+	runVerifier(ctx, logger, worker, tenantID)
 	telemetry.MarkNotReady()
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
@@ -103,11 +101,11 @@ func main() {
 	logger.Info("command_verifier_stopped", "worker_id", workerID)
 }
 
-func runVerifier(ctx context.Context, logger *slog.Logger, worker *commanddispatcher.DurableVerificationWorker, organizationID string) {
+func runVerifier(ctx context.Context, logger *slog.Logger, worker *commanddispatcher.DurableVerificationWorker, tenantID string) {
 	backoff := 100 * time.Millisecond
 	for ctx.Err() == nil {
 		runContext, cancel := context.WithTimeout(ctx, 12*time.Second)
-		err := worker.RunOnce(runContext, organizationID)
+		err := worker.RunOnce(runContext, tenantID)
 		cancel()
 		switch {
 		case err == nil:

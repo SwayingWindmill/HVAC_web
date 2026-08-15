@@ -149,7 +149,7 @@ func (store *MemoryStore) List(_ context.Context, organizationID, siteID string,
 	}
 	records := make([]memoryRecord, 0, len(store.items))
 	for _, workOrder := range store.items {
-		if workOrder.OrganizationID != organizationID || workOrder.SiteID != siteID || !matchesFilter(workOrder, filter) {
+		if workOrder.TenantID != organizationID || workOrder.SiteID != siteID || !matchesFilter(workOrder, filter) {
 			continue
 		}
 		updatedAt, err := time.Parse(time.RFC3339Nano, workOrder.UpdatedAt)
@@ -194,7 +194,7 @@ func (store *MemoryStore) Get(_ context.Context, organizationID, siteID, workOrd
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 	item, ok := store.items[workOrderID]
-	if !ok || item.OrganizationID != organizationID || item.SiteID != siteID {
+	if !ok || item.TenantID != organizationID || item.SiteID != siteID {
 		return workordermodel.WorkOrder{}, ErrNotFound
 	}
 	return cloneStoredWorkOrder(item), nil
@@ -240,7 +240,7 @@ func (store *MemoryStore) Assign(_ context.Context, organizationID, siteID, work
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	current, ok := store.items[workOrderID]
-	if !ok || current.OrganizationID != organizationID || current.SiteID != siteID {
+	if !ok || current.TenantID != organizationID || current.SiteID != siteID {
 		return MutationResult{}, ErrNotFound
 	}
 	key := organizationID + "|" + siteID + "|" + workOrderID + "|ASSIGN|" + strings.TrimSpace(mutation.IdempotencyKey)
@@ -270,7 +270,7 @@ func (store *MemoryStore) Transition(_ context.Context, organizationID, siteID, 
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	current, ok := store.items[workOrderID]
-	if !ok || current.OrganizationID != organizationID || current.SiteID != siteID {
+	if !ok || current.TenantID != organizationID || current.SiteID != siteID {
 		return MutationResult{}, ErrNotFound
 	}
 	key := organizationID + "|" + siteID + "|" + workOrderID + "|" + lifecycleIdempotencyOperation + "|" + strings.TrimSpace(mutation.IdempotencyKey)
@@ -291,7 +291,7 @@ func (store *MemoryStore) Transition(_ context.Context, organizationID, siteID, 
 
 func (mutation CreateMutation) createInput(organizationID, siteID string) workordermodel.CreateInput {
 	return workordermodel.CreateInput{
-		WorkOrderID: mutation.WorkOrderID, OrganizationID: organizationID, SiteID: siteID,
+		WorkOrderID: mutation.WorkOrderID, TenantID: organizationID, SiteID: siteID,
 		Title: mutation.Title, Description: mutation.Description, Priority: mutation.Priority,
 		SourceReferences: mutation.SourceReferences, AssigneeID: mutation.AssigneeID, TeamID: mutation.TeamID,
 		ScheduledStart: mutation.ScheduledStart, DueAt: mutation.DueAt,

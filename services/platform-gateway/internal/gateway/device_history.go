@@ -33,7 +33,12 @@ func (h *handler) QueryDeviceHistory(writer http.ResponseWriter, request *http.R
 		h.writeTelemetryFailure(writer, request, *failure)
 		return
 	}
-	canonical, err := selection.Complete(caller.actingOrganizationID, authorization.owningOrganizationID, authorization.siteID)
+	if len(authorization.targets) != 1 {
+		h.writeTelemetryFailure(writer, request, historyUnavailable("IAM returned an incomplete Device History resource scope."))
+		return
+	}
+	authorizedTarget := authorization.targets[0]
+	canonical, err := selection.Complete(authorizedTarget.TenantID, authorizedTarget.SiteID)
 	if err != nil {
 		h.writeTelemetryFailure(writer, request, historyUnavailable("IAM returned an incomplete Device History resource scope."))
 		return
@@ -116,7 +121,7 @@ func (h *handler) signDeviceHistoryQueryGrant(caller telemetryCaller, authorizat
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: caller.principal.Subject, SubjectIssuer: caller.principal.Issuer,
 		PrincipalID: authorization.principalID, DisplayName: caller.principal.DisplayName, Email: caller.principal.Email,
 		Roles: append([]string(nil), caller.principal.Roles...), ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
-		Audience: h.analytics.queryAudience, ActingOrganizationID: caller.actingOrganizationID,
+		Audience: h.analytics.queryAudience, TenantID: query.TenantID,
 		Actions: []string{telemetryhistorymodel.DeviceHistoryAction}, Scopes: []string{scope},
 		PolicyRevision: authorization.policyRevision, SessionID: caller.contextID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),

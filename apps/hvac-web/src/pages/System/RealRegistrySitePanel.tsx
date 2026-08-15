@@ -13,7 +13,6 @@ import {
   flattenRegistryPages,
   useRegistryDevices,
   useRegistryEquipment,
-  useRegistryOrganizations,
   useRegistrySite,
   useRegistrySites,
 } from '@/api/registry';
@@ -39,10 +38,7 @@ const lifecycleColor: Record<string, string> = {
 export default function RealRegistrySitePanel() {
   const buildingId = useUi((state) => state.buildingId);
   const setBuilding = useUi((state) => state.setBuilding);
-  const organizationsQuery = useRegistryOrganizations();
-  const organizations = flattenRegistryPages(organizationsQuery.data);
-  const [organizationId, setOrganizationId] = useState<string | null>(null);
-  const sitesQuery = useRegistrySites(organizationId);
+  const sitesQuery = useRegistrySites();
   const sites = flattenRegistryPages(sitesQuery.data);
   const [siteId, setSiteId] = useState<string | null>(null);
   const siteQuery = useRegistrySite(siteId);
@@ -52,22 +48,11 @@ export default function RealRegistrySitePanel() {
   const devices = flattenRegistryPages(devicesQuery.data);
 
   useEffect(() => {
-    if (organizationId && organizations.some((organization) => organization.id === organizationId)) return;
-    const nextOrganizationId = organizations[0]?.id ?? null;
-    if (organizationId !== nextOrganizationId) setOrganizationId(nextOrganizationId);
-  }, [organizationId, organizations]);
-
-  useEffect(() => {
     if (siteId && sites.some((site) => site.id === siteId)) return;
     const nextSiteId = sites[0]?.id ?? null;
     if (siteId !== nextSiteId) setSiteId(nextSiteId);
     if (nextSiteId && buildingId !== nextSiteId) setBuilding(nextSiteId);
   }, [buildingId, setBuilding, siteId, sites]);
-
-  const selectOrganization = (value: string) => {
-    setOrganizationId(value);
-    setSiteId(null);
-  };
 
   const selectSite = (value: string) => {
     setSiteId(value);
@@ -122,15 +107,14 @@ export default function RealRegistrySitePanel() {
     }];
   }, [devices, equipment, siteQuery.data]);
 
-  if (organizationsQuery.isPending) return <LoadingState tip="正在读取授权 Organization" />;
-  if (organizationsQuery.error) {
-    return <RegistryFailureState error={organizationsQuery.error} onRetry={() => void organizationsQuery.refetch()} />;
+  if (sitesQuery.isPending) return <LoadingState tip="正在读取授权 Site" />;
+  if (sitesQuery.error) {
+    return <RegistryFailureState error={sitesQuery.error} onRetry={() => void sitesQuery.refetch()} />;
   }
-  if (organizations.length === 0) {
-    return <RegistryEmptyState description="当前账号没有可见的 Organization。" />;
+  if (sites.length === 0) {
+    return <RegistryEmptyState description="当前账号没有可见的 Site。" />;
   }
 
-  const selectedOrganization = organizations.find((organization) => organization.id === organizationId);
   const selectedSite = siteQuery.data ?? sites.find((site) => site.id === siteId);
   const childLoading = Boolean(siteId) && (siteQuery.isPending || equipmentQuery.isPending || devicesQuery.isPending);
 
@@ -143,18 +127,11 @@ export default function RealRegistrySitePanel() {
         actions={(
           <Space wrap>
             <Select
-              value={organizationId ?? undefined}
-              aria-label="选择 Organization"
-              onChange={selectOrganization}
-              options={organizations.map((organization) => ({ value: organization.id, label: organization.displayName }))}
-              style={{ minWidth: 190 }}
-            />
-            <Select
               value={siteId ?? undefined}
               aria-label="选择 Site"
               onChange={selectSite}
               loading={sitesQuery.isPending}
-              disabled={!organizationId || sitesQuery.isError || sites.length === 0}
+              disabled={sitesQuery.isError || sites.length === 0}
               placeholder={sites.length === 0 ? '暂无授权 Site' : '选择 Site'}
               options={sites.map((site) => ({ value: site.id, label: site.displayName }))}
               style={{ minWidth: 190 }}
@@ -170,19 +147,13 @@ export default function RealRegistrySitePanel() {
         title="权威数据边界"
         icon={<ClusterOutlined />}
         items={[
-          { text: 'Organization 与 Site 导航来自当前授权的 Gateway Registry API。', tone: 'positive' },
+          { text: 'Tenant 与 Site 身份来自当前授权的 Gateway Registry API；Site 直接携带 tenantId。', tone: 'positive' },
           { text: 'Equipment 与 Device 保持独立身份；当前状态仅表示 Registry 生命周期。', tone: 'info' },
           { text: '真实模式请求失败时会显式降级，不会替换成本地 Mock 资产。', tone: 'warning' },
         ]}
       />
 
-      {sitesQuery.error ? (
-        <RegistryFailureState error={sitesQuery.error} onRetry={() => void sitesQuery.refetch()} />
-      ) : sitesQuery.isPending ? (
-        <LoadingState tip="正在读取授权 Site" minHeight={180} />
-      ) : sites.length === 0 ? (
-        <RegistryEmptyState description="所选 Organization 下没有当前可见的 Site。" />
-      ) : childLoading ? (
+      {childLoading ? (
         <LoadingState tip="正在读取 Site Registry 结构" minHeight={240} />
       ) : siteQuery.error ? (
         <RegistryFailureState error={siteQuery.error} onRetry={() => void siteQuery.refetch()} />
@@ -224,11 +195,9 @@ export default function RealRegistrySitePanel() {
               title={<OperationsPanelHeading title="Site 权威摘要" icon={<DatabaseOutlined />} />}
             >
               <Descriptions column={1} size="small" className="system-descriptions">
-                <Descriptions.Item label="Organization">{selectedOrganization?.displayName ?? '—'}</Descriptions.Item>
-                <Descriptions.Item label="Organization ID"><Text code copyable>{selectedOrganization?.id ?? '—'}</Text></Descriptions.Item>
+                <Descriptions.Item label="Tenant ID"><Text code copyable>{selectedSite?.tenantId ?? '—'}</Text></Descriptions.Item>
                 <Descriptions.Item label="Site">{selectedSite?.displayName ?? '—'}</Descriptions.Item>
                 <Descriptions.Item label="Site ID"><Text code copyable>{selectedSite?.id ?? '—'}</Text></Descriptions.Item>
-                <Descriptions.Item label="Owning Organization ID"><Text code copyable>{selectedSite?.owningOrganizationId ?? '—'}</Text></Descriptions.Item>
                 <Descriptions.Item label="IANA 时区"><Tag color="blue">{selectedSite?.timezone ?? '—'}</Tag></Descriptions.Item>
                 <Descriptions.Item label="生命周期"><Tag color={lifecycleColor[selectedSite?.status ?? '']}>{selectedSite?.status ?? '—'}</Tag></Descriptions.Item>
                 <Descriptions.Item label="Revision">{selectedSite?.revision ?? '—'}</Descriptions.Item>
@@ -239,12 +208,6 @@ export default function RealRegistrySitePanel() {
         </Row>
       )}
 
-      <RegistryLoadMore
-        hasMore={Boolean(organizationsQuery.hasNextPage)}
-        loading={organizationsQuery.isFetchingNextPage}
-        onLoadMore={() => void organizationsQuery.fetchNextPage()}
-        label="加载更多 Organization"
-      />
       <RegistryLoadMore
         hasMore={Boolean(sitesQuery.hasNextPage)}
         loading={sitesQuery.isFetchingNextPage}

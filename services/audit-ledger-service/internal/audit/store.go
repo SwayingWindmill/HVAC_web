@@ -33,7 +33,7 @@ type Record struct {
 	LedgerSequence       int64     `json:"ledgerSequence"`
 	MessageID            string    `json:"messageId"`
 	SchemaVersion        uint32    `json:"schemaVersion"`
-	OrganizationID       string    `json:"organizationId"`
+	TenantID              string    `json:"tenantId"`
 	AggregateType        string    `json:"aggregateType"`
 	AggregateID          string    `json:"aggregateId"`
 	AggregateVersion     uint64    `json:"aggregateVersion"`
@@ -42,7 +42,6 @@ type Record struct {
 	InitiatingIssuer     string    `json:"initiatingIssuer"`
 	ExecutingService     string    `json:"executingService"`
 	ExecutingSPIFFEID    string    `json:"executingSpiffeId"`
-	ActingOrganizationID string    `json:"actingOrganizationId"`
 	Action               string    `json:"action"`
 	Result               string    `json:"result"`
 	PolicyRevision       string    `json:"policyRevision"`
@@ -99,18 +98,18 @@ func (store *Store) Consume(ctx context.Context, payload []byte, metadata Messag
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, event.OrganizationID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, event.TenantID); err != nil {
 		return false, err
 	}
 
 	var insertedMessageID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO audit_ledger.inbox (
-			message_id, organization_id, topic, partition_id, offset_value, envelope_sha256, received_at
+			message_id, tenant_id, topic, partition_id, offset_value, envelope_sha256, received_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7)
 		ON CONFLICT (message_id) DO NOTHING
 		RETURNING message_id
-	`, event.MessageID, event.OrganizationID, metadata.Topic, metadata.Partition,
+	`, event.MessageID, event.TenantID, metadata.Topic, metadata.Partition,
 		metadata.Offset, envelopeSHA, metadata.ReceivedAt.UTC()).Scan(&insertedMessageID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var existingSHA string
@@ -131,42 +130,42 @@ func (store *Store) Consume(ctx context.Context, payload []byte, metadata Messag
 
 	recordedAt := metadata.ReceivedAt.UTC()
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO audit_ledger.organization_heads (organization_id, last_record_hash, updated_at)
+		INSERT INTO audit_ledger.tenant_heads (tenant_id, last_record_hash, updated_at)
 		VALUES ($1,$2,$3)
-		ON CONFLICT (organization_id) DO NOTHING
-	`, event.OrganizationID, zeroRecordHash, recordedAt); err != nil {
+		ON CONFLICT (tenant_id) DO NOTHING
+	`, event.TenantID, zeroRecordHash, recordedAt); err != nil {
 		return false, err
 	}
 	var previousHash string
 	if err := tx.QueryRow(ctx, `
-		SELECT last_record_hash FROM audit_ledger.organization_heads
-		WHERE organization_id = $1 FOR UPDATE
-	`, event.OrganizationID).Scan(&previousHash); err != nil {
+		SELECT last_record_hash FROM audit_ledger.tenant_heads
+		WHERE tenant_id = $1 FOR UPDATE
+	`, event.TenantID).Scan(&previousHash); err != nil {
 		return false, err
 	}
 	recordHash := hashRecord(previousHash, payload)
 	_, err = tx.Exec(ctx, `
 		INSERT INTO audit_ledger.records (
-			message_id, schema_version, organization_id, aggregate_type, aggregate_id,
+			message_id, schema_version, tenant_id, aggregate_type, aggregate_id,
 			aggregate_version, occurred_at, initiating_subject, initiating_issuer,
-			executing_service, executing_spiffe_id, acting_organization_id, action, result,
+			executing_service, executing_spiffe_id, action, result,
 			policy_revision, correlation_id, causation_id, trace_id, traceparent,
 			payload_sha256, previous_record_hash, record_hash, recorded_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
-	`, event.MessageID, event.SchemaVersion, event.OrganizationID, event.AggregateType,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+	`, event.MessageID, event.SchemaVersion, event.TenantID, event.AggregateType,
 		event.AggregateID, event.AggregateVersion, time.UnixMilli(event.OccurredAtUnixMS).UTC(),
 		event.Actor.InitiatingSubject, event.Actor.InitiatingIssuer, event.Actor.ExecutingService,
-		event.Actor.ExecutingSPIFFEID, event.Actor.ActingOrganizationID, event.Action,
-		event.Result, event.PolicyRevision, event.CorrelationID, event.CausationID,
-		event.TraceID, event.Traceparent, event.PayloadSHA256, previousHash, recordHash, recordedAt)
+		event.Actor.ExecutingSPIFFEID, event.Action, event.Result, event.PolicyRevision,
+		event.CorrelationID, event.CausationID, event.TraceID, event.Traceparent,
+		event.PayloadSHA256, previousHash, recordHash, recordedAt)
 	if err != nil {
 		return false, err
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE audit_ledger.organization_heads
+		UPDATE audit_ledger.tenant_heads
 		SET last_record_hash = $2, updated_at = $3
-		WHERE organization_id = $1
-	`, event.OrganizationID, recordHash, recordedAt); err != nil {
+		WHERE tenant_id = $1
+	`, event.TenantID, recordHash, recordedAt); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -195,18 +194,18 @@ func (store *Store) ConsumeOperations(
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, event.OrganizationID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, event.TenantID); err != nil {
 		return false, err
 	}
 
 	var insertedMessageID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO audit_ledger.inbox (
-			message_id, organization_id, topic, partition_id, offset_value, envelope_sha256, received_at
+			message_id, tenant_id, topic, partition_id, offset_value, envelope_sha256, received_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7)
 		ON CONFLICT (message_id) DO NOTHING
 		RETURNING message_id
-	`, event.EventID, event.OrganizationID, metadata.Topic, metadata.Partition,
+	`, event.EventID, event.TenantID, metadata.Topic, metadata.Partition,
 		metadata.Offset, envelopeSHA, metadata.ReceivedAt.UTC()).Scan(&insertedMessageID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var existingSHA string
@@ -227,42 +226,42 @@ func (store *Store) ConsumeOperations(
 
 	recordedAt := metadata.ReceivedAt.UTC()
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO audit_ledger.organization_heads (organization_id, last_record_hash, updated_at)
+		INSERT INTO audit_ledger.tenant_heads (tenant_id, last_record_hash, updated_at)
 		VALUES ($1,$2,$3)
-		ON CONFLICT (organization_id) DO NOTHING
-	`, event.OrganizationID, zeroRecordHash, recordedAt); err != nil {
+		ON CONFLICT (tenant_id) DO NOTHING
+	`, event.TenantID, zeroRecordHash, recordedAt); err != nil {
 		return false, err
 	}
 	var previousHash string
 	if err := tx.QueryRow(ctx, `
-		SELECT last_record_hash FROM audit_ledger.organization_heads
-		WHERE organization_id = $1 FOR UPDATE
-	`, event.OrganizationID).Scan(&previousHash); err != nil {
+		SELECT last_record_hash FROM audit_ledger.tenant_heads
+		WHERE tenant_id = $1 FOR UPDATE
+	`, event.TenantID).Scan(&previousHash); err != nil {
 		return false, err
 	}
 	recordHash := hashRecord(previousHash, payload)
 	_, err = tx.Exec(ctx, `
 		INSERT INTO audit_ledger.records (
-			message_id, schema_version, organization_id, aggregate_type, aggregate_id,
+			message_id, schema_version, tenant_id, aggregate_type, aggregate_id,
 			aggregate_version, occurred_at, initiating_subject, initiating_issuer,
-			executing_service, executing_spiffe_id, acting_organization_id, action, result,
+			executing_service, executing_spiffe_id, action, result,
 			policy_revision, correlation_id, causation_id, trace_id, traceparent,
 			payload_sha256, previous_record_hash, record_hash, recorded_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
-	`, event.EventID, event.SchemaVersion, event.OrganizationID, "operations-investigation",
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+	`, event.EventID, event.SchemaVersion, event.TenantID, "operations-investigation",
 		event.AggregateID(), event.AggregateVersion(), time.UnixMilli(event.OccurredAt).UTC(),
 		event.Actor.ActorID, event.Actor.ActorIssuer, event.Actor.ExecutingService,
-		event.Actor.ExecutingSPIFFEID, event.OrganizationID, event.Operation, event.Outcome,
-		event.PolicyRevision, event.CorrelationID(), event.AuthorizationDecisionID,
-		"", "", event.PayloadSHA256(payload), previousHash, recordHash, recordedAt)
+		event.Actor.ExecutingSPIFFEID, event.Operation, event.Outcome, event.PolicyRevision,
+		event.CorrelationID(), event.AuthorizationDecisionID, "", "",
+		event.PayloadSHA256(payload), previousHash, recordHash, recordedAt)
 	if err != nil {
 		return false, err
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE audit_ledger.organization_heads
+		UPDATE audit_ledger.tenant_heads
 		SET last_record_hash = $2, updated_at = $3
-		WHERE organization_id = $1
-	`, event.OrganizationID, recordHash, recordedAt); err != nil {
+		WHERE tenant_id = $1
+	`, event.TenantID, recordHash, recordedAt); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -271,13 +270,13 @@ func (store *Store) ConsumeOperations(
 	return true, nil
 }
 
-func (store *Store) GetRecord(ctx context.Context, organizationID, messageID string) (Record, error) {
+func (store *Store) GetRecord(ctx context.Context, tenantID, messageID string) (Record, error) {
 	tx, err := store.query.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return Record{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, organizationID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, tenantID); err != nil {
 		return Record{}, err
 	}
 	record, err := scanRecord(tx.QueryRow(ctx, recordSelect+` WHERE message_id = $1`, messageID))
@@ -290,13 +289,13 @@ func (store *Store) GetRecord(ctx context.Context, organizationID, messageID str
 	return record, nil
 }
 
-func (store *Store) CountRecords(ctx context.Context, organizationID, messageID string) (int, error) {
+func (store *Store) CountRecords(ctx context.Context, tenantID, messageID string) (int, error) {
 	tx, err := store.query.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, organizationID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, tenantID); err != nil {
 		return 0, err
 	}
 	var count int
@@ -310,10 +309,10 @@ func (store *Store) CountRecords(ctx context.Context, organizationID, messageID 
 }
 
 const recordSelect = `
-	SELECT ledger_sequence, message_id, schema_version, organization_id, aggregate_type,
+	SELECT ledger_sequence, message_id, schema_version, tenant_id, aggregate_type,
 	       aggregate_id, aggregate_version, occurred_at, initiating_subject,
 	       initiating_issuer, executing_service, executing_spiffe_id,
-	       acting_organization_id, action, result, policy_revision, correlation_id,
+	       action, result, policy_revision, correlation_id,
 	       causation_id, trace_id, traceparent, payload_sha256, previous_record_hash,
 	       record_hash, recorded_at
 	FROM audit_ledger.records`
@@ -326,10 +325,10 @@ func scanRecord(row rowScanner) (Record, error) {
 	var record Record
 	err := row.Scan(
 		&record.LedgerSequence, &record.MessageID, &record.SchemaVersion,
-		&record.OrganizationID, &record.AggregateType, &record.AggregateID,
+		&record.TenantID, &record.AggregateType, &record.AggregateID,
 		&record.AggregateVersion, &record.OccurredAt, &record.InitiatingSubject,
 		&record.InitiatingIssuer, &record.ExecutingService, &record.ExecutingSPIFFEID,
-		&record.ActingOrganizationID, &record.Action, &record.Result,
+		&record.Action, &record.Result,
 		&record.PolicyRevision, &record.CorrelationID, &record.CausationID,
 		&record.TraceID, &record.Traceparent, &record.PayloadSHA256, &record.PreviousRecordHash,
 		&record.RecordHash, &record.RecordedAt,

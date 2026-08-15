@@ -15,12 +15,10 @@ import (
 const coreServiceDatabaseRole = "s1_core_service"
 
 type RegistryStore interface {
-	ListOrganizations(context.Context, registryauth.GrantClaims, PageRequest) (PageResult[Organization], error)
-	GetOrganization(context.Context, registryauth.GrantClaims, string) (Organization, error)
-	ListSites(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[Site], error)
+	ListSites(context.Context, registryauth.GrantClaims, PageRequest) (PageResult[Site], error)
 	GetSite(context.Context, registryauth.GrantClaims, string) (Site, error)
-	ListEquipment(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[Equipment], error)
-	GetEquipment(context.Context, registryauth.GrantClaims, string) (Equipment, error)
+	ListAssets(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[Asset], error)
+	GetAsset(context.Context, registryauth.GrantClaims, string) (Asset, error)
 	ListDevices(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[Device], error)
 	GetDevice(context.Context, registryauth.GrantClaims, string) (Device, error)
 	ListDeviceBindings(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[DeviceBinding], error)
@@ -88,13 +86,11 @@ func (store *PostgresStore) withReadTransaction(ctx context.Context, claims regi
 		return fmt.Errorf("activate Core runtime role: %w", err)
 	}
 	var configuredTenant string
-	var configuredOrganizations string
 	var configuredSites string
 	if err := transaction.QueryRow(ctx, `
 SELECT set_config('app.tenant_id', $1, true),
-       set_config('app.authorized_organization_ids', $2, true),
-       set_config('app.authorized_site_ids', $3, true)
-`, claims.TenantID, postgresUUIDArray(claims.AllowedOrganizationIDs), postgresUUIDArray(claims.AllowedSiteIDs)).Scan(&configuredTenant, &configuredOrganizations, &configuredSites); err != nil {
+       set_config('app.authorized_site_ids', $2, true)
+`, claims.TenantID, postgresUUIDArray(claims.AllowedSiteIDs)).Scan(&configuredTenant, &configuredSites); err != nil {
 		return fmt.Errorf("set Core Registry RLS context: %w", err)
 	}
 	if err := query(transaction); err != nil {
@@ -106,74 +102,7 @@ SELECT set_config('app.tenant_id', $1, true),
 	return nil
 }
 
-func (store *PostgresStore) ListOrganizations(ctx context.Context, claims registryauth.GrantClaims, page PageRequest) (PageResult[Organization], error) {
-	page, err := normalizedPageRequest(page)
-	if err != nil {
-		return PageResult[Organization]{}, err
-	}
-	limit := page.Limit
-	result := PageResult[Organization]{Items: []Organization{}}
-	err = store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
-		rows, err := transaction.Query(ctx, `
-SELECT id::text, tenant_id::text, code, display_name, status, revision, created_at, updated_at
-FROM core_registry.organizations
-WHERE NOT (id = ANY($1::uuid[]))
-  AND ($2 = '' OR (display_name COLLATE "C", id) > ($2 COLLATE "C", $3::uuid))
-ORDER BY display_name COLLATE "C", id
-LIMIT $4
-`, postgresUUIDArray(claims.DeniedOrganizationIDs), page.DisplayName, nullableCursorID(page.ID), limit+1)
-		if err != nil {
-			return fmt.Errorf("query Registry organizations: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			item, err := scanOrganization(rows)
-			if err != nil {
-				return err
-			}
-			result.Items = append(result.Items, item)
-		}
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("iterate Registry organizations: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
-		return PageResult[Organization]{}, err
-	}
-	result.Items, result.HasMore = trimPage(result.Items, limit)
-	return result, nil
-}
-
-func (store *PostgresStore) GetOrganization(ctx context.Context, claims registryauth.GrantClaims, id string) (Organization, error) {
-	if !validUUIDv7(id) {
-		return Organization{}, ErrNotFound
-	}
-	var result Organization
-	err := store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
-		row := transaction.QueryRow(ctx, `
-SELECT id::text, tenant_id::text, code, display_name, status, revision, created_at, updated_at
-FROM core_registry.organizations
-WHERE id = $1::uuid
-  AND NOT (id = ANY($2::uuid[]))
-`, id, postgresUUIDArray(claims.DeniedOrganizationIDs))
-		item, err := scanOrganization(row)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		if err != nil {
-			return err
-		}
-		result = item
-		return nil
-	})
-	return result, err
-}
-
-func (store *PostgresStore) ListSites(ctx context.Context, claims registryauth.GrantClaims, organizationID string, page PageRequest) (PageResult[Site], error) {
-	if !validUUIDv7(organizationID) {
-		return PageResult[Site]{}, ErrNotFound
-	}
+func (store *PostgresStore) ListSites(ctx context.Context, claims registryauth.GrantClaims, page PageRequest) (PageResult[Site], error) {
 	page, err := normalizedPageRequest(page)
 	if err != nil {
 		return PageResult[Site]{}, err
@@ -182,15 +111,13 @@ func (store *PostgresStore) ListSites(ctx context.Context, claims registryauth.G
 	result := PageResult[Site]{Items: []Site{}}
 	err = store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
 		rows, err := transaction.Query(ctx, `
-SELECT id::text, tenant_id::text, organization_id::text, code, display_name, timezone, status, revision, created_at, updated_at
+SELECT id::text, tenant_id::text, code, display_name, timezone, status, revision, created_at, updated_at
 FROM core_registry.sites
-WHERE organization_id = $1::uuid
-  AND NOT (organization_id = ANY($2::uuid[]))
-  AND NOT (id = ANY($3::uuid[]))
-  AND ($4 = '' OR (display_name COLLATE "C", id) > ($4 COLLATE "C", $5::uuid))
+WHERE NOT (id = ANY($1::uuid[]))
+  AND ($2 = '' OR (display_name COLLATE "C", id) > ($2 COLLATE "C", $3::uuid))
 ORDER BY display_name COLLATE "C", id
-LIMIT $6
-`, organizationID, postgresUUIDArray(claims.DeniedOrganizationIDs), postgresUUIDArray(claims.DeniedSiteIDs), page.DisplayName, nullableCursorID(page.ID), limit+1)
+LIMIT $4
+`, postgresUUIDArray(claims.DeniedSiteIDs), page.DisplayName, nullableCursorID(page.ID), limit+1)
 		if err != nil {
 			return fmt.Errorf("query Registry sites: %w", err)
 		}
@@ -221,12 +148,11 @@ func (store *PostgresStore) GetSite(ctx context.Context, claims registryauth.Gra
 	var result Site
 	err := store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
 		item, err := scanSite(transaction.QueryRow(ctx, `
-SELECT id::text, tenant_id::text, organization_id::text, code, display_name, timezone, status, revision, created_at, updated_at
+SELECT id::text, tenant_id::text, code, display_name, timezone, status, revision, created_at, updated_at
 FROM core_registry.sites
 WHERE id = $1::uuid
-  AND NOT (organization_id = ANY($2::uuid[]))
-  AND NOT (id = ANY($3::uuid[]))
-`, id, postgresUUIDArray(claims.DeniedOrganizationIDs), postgresUUIDArray(claims.DeniedSiteIDs)))
+  AND NOT (id = ANY($2::uuid[]))
+`, id, postgresUUIDArray(claims.DeniedSiteIDs)))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -239,63 +165,61 @@ WHERE id = $1::uuid
 	return result, err
 }
 
-func (store *PostgresStore) ListEquipment(ctx context.Context, claims registryauth.GrantClaims, siteID string, page PageRequest) (PageResult[Equipment], error) {
+func (store *PostgresStore) ListAssets(ctx context.Context, claims registryauth.GrantClaims, siteID string, page PageRequest) (PageResult[Asset], error) {
 	if !validUUIDv7(siteID) {
-		return PageResult[Equipment]{}, ErrNotFound
+		return PageResult[Asset]{}, ErrNotFound
 	}
 	page, err := normalizedPageRequest(page)
 	if err != nil {
-		return PageResult[Equipment]{}, err
+		return PageResult[Asset]{}, err
 	}
 	limit := page.Limit
-	result := PageResult[Equipment]{Items: []Equipment{}}
+	result := PageResult[Asset]{Items: []Asset{}}
 	err = store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
 		rows, err := transaction.Query(ctx, `
-SELECT id::text, tenant_id::text, organization_id::text, site_id::text, code, display_name, equipment_type, status, revision, created_at, updated_at
-FROM core_registry.equipment
+SELECT id::text, tenant_id::text, site_id::text, code, display_name, asset_type, status, revision, created_at, updated_at
+FROM core_registry.assets
 WHERE site_id = $1::uuid
-  AND NOT (organization_id = ANY($2::uuid[]))
-  AND NOT (site_id = ANY($3::uuid[]))
-  AND ($4 = '' OR (display_name COLLATE "C", id) > ($4 COLLATE "C", $5::uuid))
+  AND NOT (site_id = ANY($2::uuid[]))
+  AND ($3 = '' OR (display_name COLLATE "C", id) > ($3 COLLATE "C", $4::uuid))
 ORDER BY display_name COLLATE "C", id
-LIMIT $6
-`, siteID, postgresUUIDArray(claims.DeniedOrganizationIDs), postgresUUIDArray(claims.DeniedSiteIDs), page.DisplayName, nullableCursorID(page.ID), limit+1)
+LIMIT $5
+`, siteID, postgresUUIDArray(claims.DeniedSiteIDs), page.DisplayName, nullableCursorID(page.ID), limit+1)
 		if err != nil {
-			return fmt.Errorf("query Registry equipment: %w", err)
+			return fmt.Errorf("query Registry asset: %w", err)
 		}
 		defer rows.Close()
 		for rows.Next() {
-			item, err := scanEquipment(rows)
+			item, err := scanAsset(rows)
 			if err != nil {
 				return err
 			}
 			result.Items = append(result.Items, item)
 		}
 		if err := rows.Err(); err != nil {
-			return fmt.Errorf("iterate Registry equipment: %w", err)
+			return fmt.Errorf("iterate Registry asset: %w", err)
 		}
 		return nil
 	})
 	if err != nil {
-		return PageResult[Equipment]{}, err
+		return PageResult[Asset]{}, err
 	}
 	result.Items, result.HasMore = trimPage(result.Items, limit)
 	return result, nil
 }
 
-func (store *PostgresStore) GetEquipment(ctx context.Context, claims registryauth.GrantClaims, id string) (Equipment, error) {
+func (store *PostgresStore) GetAsset(ctx context.Context, claims registryauth.GrantClaims, id string) (Asset, error) {
 	if !validUUIDv7(id) {
-		return Equipment{}, ErrNotFound
+		return Asset{}, ErrNotFound
 	}
-	var result Equipment
+	var result Asset
 	err := store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
-		item, err := scanEquipment(transaction.QueryRow(ctx, `
-SELECT id::text, tenant_id::text, organization_id::text, site_id::text, code, display_name, equipment_type, status, revision, created_at, updated_at
-FROM core_registry.equipment
+		item, err := scanAsset(transaction.QueryRow(ctx, `
+SELECT id::text, tenant_id::text, site_id::text, code, display_name, asset_type, status, revision, created_at, updated_at
+FROM core_registry.assets
 WHERE id = $1::uuid
-  AND NOT (organization_id = ANY($2::uuid[]))
-  AND NOT (site_id = ANY($3::uuid[]))
-`, id, postgresUUIDArray(claims.DeniedOrganizationIDs), postgresUUIDArray(claims.DeniedSiteIDs)))
+  AND NOT (site_id = ANY($2::uuid[]))
+`, id, postgresUUIDArray(claims.DeniedSiteIDs)))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -320,15 +244,14 @@ func (store *PostgresStore) ListDevices(ctx context.Context, claims registryauth
 	result := PageResult[Device]{Items: []Device{}}
 	err = store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
 		rows, err := transaction.Query(ctx, `
-SELECT id::text, tenant_id::text, organization_id::text, site_id::text, code, display_name, device_type, status, revision, created_at, updated_at
+SELECT id::text, tenant_id::text, site_id::text, code, display_name, device_type, status, revision, created_at, updated_at
 FROM core_registry.devices
 WHERE site_id = $1::uuid
-  AND NOT (organization_id = ANY($2::uuid[]))
-  AND NOT (site_id = ANY($3::uuid[]))
-  AND ($4 = '' OR (display_name COLLATE "C", id) > ($4 COLLATE "C", $5::uuid))
+  AND NOT (site_id = ANY($2::uuid[]))
+  AND ($3 = '' OR (display_name COLLATE "C", id) > ($3 COLLATE "C", $4::uuid))
 ORDER BY display_name COLLATE "C", id
-LIMIT $6
-`, siteID, postgresUUIDArray(claims.DeniedOrganizationIDs), postgresUUIDArray(claims.DeniedSiteIDs), page.DisplayName, nullableCursorID(page.ID), limit+1)
+LIMIT $5
+`, siteID, postgresUUIDArray(claims.DeniedSiteIDs), page.DisplayName, nullableCursorID(page.ID), limit+1)
 		if err != nil {
 			return fmt.Errorf("query Registry devices: %w", err)
 		}
@@ -359,12 +282,11 @@ func (store *PostgresStore) GetDevice(ctx context.Context, claims registryauth.G
 	var result Device
 	err := store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
 		item, err := scanDevice(transaction.QueryRow(ctx, `
-SELECT id::text, tenant_id::text, organization_id::text, site_id::text, code, display_name, device_type, status, revision, created_at, updated_at
+SELECT id::text, tenant_id::text, site_id::text, code, display_name, device_type, status, revision, created_at, updated_at
 FROM core_registry.devices
 WHERE id = $1::uuid
-  AND NOT (organization_id = ANY($2::uuid[]))
-  AND NOT (site_id = ANY($3::uuid[]))
-`, id, postgresUUIDArray(claims.DeniedOrganizationIDs), postgresUUIDArray(claims.DeniedSiteIDs)))
+  AND NOT (site_id = ANY($2::uuid[]))
+`, id, postgresUUIDArray(claims.DeniedSiteIDs)))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -391,10 +313,9 @@ func (store *PostgresStore) ListDeviceBindings(ctx context.Context, claims regis
 		rows, err := transaction.Query(ctx, `
 SELECT binding.id::text,
        binding.tenant_id::text,
-       binding.organization_id::text,
        binding.site_id::text,
        binding.device_id::text,
-       binding.equipment_id::text,
+       binding.asset_id::text,
        binding.binding_role,
        binding.status,
        binding.valid_from,
@@ -404,20 +325,19 @@ SELECT binding.id::text,
        binding.updated_at
 FROM core_registry.device_bindings AS binding
 JOIN core_registry.devices AS device
-  ON device.organization_id = binding.organization_id
+  ON device.tenant_id = binding.tenant_id
  AND device.site_id = binding.site_id
  AND device.id = binding.device_id
-JOIN core_registry.equipment AS equipment
-  ON equipment.organization_id = binding.organization_id
- AND equipment.site_id = binding.site_id
- AND equipment.id = binding.equipment_id
+JOIN core_registry.assets AS asset
+  ON asset.tenant_id = binding.tenant_id
+ AND asset.site_id = binding.site_id
+ AND asset.id = binding.asset_id
 WHERE binding.site_id = $1::uuid
-  AND NOT (binding.organization_id = ANY($2::uuid[]))
-  AND NOT (binding.site_id = ANY($3::uuid[]))
-  AND ($4 = '' OR (binding.binding_role COLLATE "C", binding.id) > ($4 COLLATE "C", $5::uuid))
+  AND NOT (binding.site_id = ANY($2::uuid[]))
+  AND ($3 = '' OR (binding.binding_role COLLATE "C", binding.id) > ($3 COLLATE "C", $4::uuid))
 ORDER BY binding.binding_role COLLATE "C", binding.id
-LIMIT $6
-`, siteID, postgresUUIDArray(claims.DeniedOrganizationIDs), postgresUUIDArray(claims.DeniedSiteIDs), page.DisplayName, nullableCursorID(page.ID), limit+1)
+LIMIT $5
+`, siteID, postgresUUIDArray(claims.DeniedSiteIDs), page.DisplayName, nullableCursorID(page.ID), limit+1)
 		if err != nil {
 			return fmt.Errorf("query Registry DeviceBindings: %w", err)
 		}
@@ -445,23 +365,11 @@ type rowScanner interface {
 	Scan(...any) error
 }
 
-func scanOrganization(row rowScanner) (Organization, error) {
-	var item Organization
-	var createdAt time.Time
-	var updatedAt time.Time
-	if err := row.Scan(&item.ID, &item.TenantID, &item.Code, &item.DisplayName, &item.Status, &item.Revision, &createdAt, &updatedAt); err != nil {
-		return Organization{}, err
-	}
-	item.CreatedAt = formatInstant(createdAt)
-	item.UpdatedAt = formatInstant(updatedAt)
-	return item, nil
-}
-
 func scanSite(row rowScanner) (Site, error) {
 	var item Site
 	var createdAt time.Time
 	var updatedAt time.Time
-	if err := row.Scan(&item.ID, &item.TenantID, &item.OwningOrganizationID, &item.Code, &item.DisplayName, &item.Timezone, &item.Status, &item.Revision, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&item.ID, &item.TenantID, &item.Code, &item.DisplayName, &item.Timezone, &item.Status, &item.Revision, &createdAt, &updatedAt); err != nil {
 		return Site{}, err
 	}
 	item.CreatedAt = formatInstant(createdAt)
@@ -469,12 +377,12 @@ func scanSite(row rowScanner) (Site, error) {
 	return item, nil
 }
 
-func scanEquipment(row rowScanner) (Equipment, error) {
-	var item Equipment
+func scanAsset(row rowScanner) (Asset, error) {
+	var item Asset
 	var createdAt time.Time
 	var updatedAt time.Time
-	if err := row.Scan(&item.ID, &item.TenantID, &item.OwningOrganizationID, &item.SiteID, &item.Code, &item.DisplayName, &item.EquipmentType, &item.Status, &item.Revision, &createdAt, &updatedAt); err != nil {
-		return Equipment{}, err
+	if err := row.Scan(&item.ID, &item.TenantID, &item.SiteID, &item.Code, &item.DisplayName, &item.AssetType, &item.Status, &item.Revision, &createdAt, &updatedAt); err != nil {
+		return Asset{}, err
 	}
 	item.CreatedAt = formatInstant(createdAt)
 	item.UpdatedAt = formatInstant(updatedAt)
@@ -485,7 +393,7 @@ func scanDevice(row rowScanner) (Device, error) {
 	var item Device
 	var createdAt time.Time
 	var updatedAt time.Time
-	if err := row.Scan(&item.ID, &item.TenantID, &item.OwningOrganizationID, &item.SiteID, &item.Code, &item.DisplayName, &item.DeviceType, &item.Status, &item.Revision, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&item.ID, &item.TenantID, &item.SiteID, &item.Code, &item.DisplayName, &item.DeviceType, &item.Status, &item.Revision, &createdAt, &updatedAt); err != nil {
 		return Device{}, err
 	}
 	item.CreatedAt = formatInstant(createdAt)
@@ -502,10 +410,9 @@ func scanDeviceBinding(row rowScanner) (DeviceBinding, error) {
 	if err := row.Scan(
 		&item.ID,
 		&item.TenantID,
-		&item.OwningOrganizationID,
 		&item.SiteID,
 		&item.DeviceID,
-		&item.EquipmentID,
+		&item.AssetID,
 		&item.BindingRole,
 		&item.Status,
 		&validFrom,

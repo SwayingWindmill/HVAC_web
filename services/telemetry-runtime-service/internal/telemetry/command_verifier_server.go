@@ -22,7 +22,7 @@ type commandReportedScalar struct {
 type commandReportedStateResponse struct {
 	SchemaVersion          int       `json:"schemaVersion"`
 	EvidenceID             string    `json:"evidenceId"`
-	OrganizationID         string    `json:"organizationId"`
+	TenantID               string    `json:"tenantId"`
 	SiteID                 string    `json:"siteId"`
 	DeviceID               string    `json:"deviceId"`
 	EvaluationAvailability string    `json:"evaluationAvailability"`
@@ -38,7 +38,7 @@ type commandReportedStateResponse struct {
 
 type commandReportedStateEvidencePayload struct {
 	SchemaVersion          int       `json:"schemaVersion"`
-	OrganizationID         string    `json:"organizationId"`
+	TenantID               string    `json:"tenantId"`
 	SiteID                 string    `json:"siteId"`
 	DeviceID               string    `json:"deviceId"`
 	EvaluationAvailability string    `json:"evaluationAvailability"`
@@ -63,11 +63,12 @@ func (h *handler) handleCommandReportedState(writer http.ResponseWriter, request
 		return
 	}
 	peer, verified := verifiedPeerSPIFFE(request)
-	if !verified || h.allowedCommandVerifierSPIFFE == "" || peer != h.allowedCommandVerifierSPIFFE {
-		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.", false)
+	allowedWorkload := peer == h.allowedCommandVerifierSPIFFE || peer == h.allowedCommandDispatcherSPIFFE
+	if !verified || peer == "" || !allowedWorkload {
+		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted for authoritative command state.", false)
 		return
 	}
-	if h.store == nil || !uuidV7Pattern.MatchString(h.commandVerifierOrganizationID) || !uuidV7Pattern.MatchString(h.commandVerifierSiteID) ||
+	if h.store == nil || !uuidV7Pattern.MatchString(h.commandVerifierTenantID) || !uuidV7Pattern.MatchString(h.commandVerifierSiteID) ||
 		!uuidV7Pattern.MatchString(h.commandVerifierDeviceID) {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_COMMAND_REPORTED_STATE_UNAVAILABLE", "Command reported state is not configured.", true)
 		return
@@ -99,7 +100,7 @@ func (h *handler) handleCommandReportedState(writer http.ResponseWriter, request
 }
 
 func (h *handler) commandReportedStateResponse(snapshot telemetryapi.DeviceObservationSnapshot, reportedStateKey string) (commandReportedStateResponse, error) {
-	if string(snapshot.OwningOrganizationId) != h.commandVerifierOrganizationID || string(snapshot.SiteId) != h.commandVerifierSiteID ||
+	if string(snapshot.TenantId) != h.commandVerifierTenantID || string(snapshot.SiteId) != h.commandVerifierSiteID ||
 		string(snapshot.DeviceId) != h.commandVerifierDeviceID || snapshot.BusinessRevision < 0 {
 		return commandReportedStateResponse{}, errors.New("command reported-state scope mismatch")
 	}
@@ -112,7 +113,7 @@ func (h *handler) commandReportedStateResponse(snapshot telemetryapi.DeviceObser
 		presence = string(*snapshot.Presence.CurrentState)
 	}
 	freshness := string(telemetryapi.TelemetryFreshnessMissing)
-	quality := string(telemetryapi.TelemetryQualitySuspect)
+	quality := string(telemetryapi.TelemetryQualityInvalid)
 	reportedValue := commandReportedScalar{}
 	matched := 0
 	for _, value := range snapshot.Values {
@@ -156,7 +157,7 @@ func (h *handler) commandReportedStateResponse(snapshot telemetryapi.DeviceObser
 		return commandReportedStateResponse{}, errors.New("command reported-state key is missing or duplicated")
 	}
 	payload := commandReportedStateEvidencePayload{
-		SchemaVersion: 1, OrganizationID: h.commandVerifierOrganizationID, SiteID: h.commandVerifierSiteID, DeviceID: h.commandVerifierDeviceID,
+		SchemaVersion: 1, TenantID: h.commandVerifierTenantID, SiteID: h.commandVerifierSiteID, DeviceID: h.commandVerifierDeviceID,
 		EvaluationAvailability: string(snapshot.EvaluationAvailability), Presence: presence, Readiness: string(snapshot.TelemetryReadiness),
 		Freshness: freshness, Quality: quality, BusinessRevision: uint64(snapshot.BusinessRevision), ReportedValue: reportedValue,
 		ObservedAt: observedAt.UTC(), ReportedStateKey: reportedStateKey,
@@ -168,7 +169,7 @@ func (h *handler) commandReportedStateResponse(snapshot telemetryapi.DeviceObser
 	digest := sha256.Sum256(canonical)
 	return commandReportedStateResponse{
 		SchemaVersion: payload.SchemaVersion, EvidenceID: "s2:sha256:" + hex.EncodeToString(digest[:]),
-		OrganizationID: payload.OrganizationID, SiteID: payload.SiteID, DeviceID: payload.DeviceID,
+		TenantID: payload.TenantID, SiteID: payload.SiteID, DeviceID: payload.DeviceID,
 		EvaluationAvailability: payload.EvaluationAvailability, Presence: payload.Presence, Readiness: payload.Readiness,
 		Freshness: payload.Freshness, Quality: payload.Quality, BusinessRevision: payload.BusinessRevision,
 		ReportedValue: payload.ReportedValue, ObservedAt: payload.ObservedAt, ReportedStateKey: payload.ReportedStateKey,

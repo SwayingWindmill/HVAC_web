@@ -4,7 +4,7 @@ export const energyGranularitySchema = z.enum(['hour', 'day', 'month']);
 export const energyQualityPolicySchema = z.enum(['VALID_ONLY', 'VALID_AND_SUSPECT']);
 
 export const energySeriesQuerySchema = z.object({
-  organizationId: z.string().uuid(),
+  tenantId: z.string().uuid(),
   siteId: z.string().uuid(),
   energyType: z.literal('electricity'),
   granularity: energyGranularitySchema,
@@ -87,7 +87,7 @@ export class EnergyAnalyticsInvalidResponseError extends Error {
 
 export interface EnergyAnalyticsRequestOptions {
   csrfToken: string;
-  trustedOrganizationId: string;
+  trustedTenantId: string;
   signal?: AbortSignal;
   fetchImplementation?: typeof fetch;
   baseUrl?: string;
@@ -98,8 +98,8 @@ export async function queryEnergySeries(
   options: EnergyAnalyticsRequestOptions,
 ): Promise<EnergySeriesResponse> {
   const query = energySeriesQuerySchema.parse(input);
-  if (query.organizationId !== options.trustedOrganizationId) {
-    throw new Error('Energy query Organization does not match the authenticated Principal.');
+  if (query.tenantId !== options.trustedTenantId) {
+    throw new Error('Energy query Tenant does not match the trusted Site context.');
   }
   if (!options.csrfToken) throw new Error('Authenticated Session omitted CSRF capability.');
 
@@ -135,7 +135,7 @@ export async function queryEnergySeries(
 export function energySeriesQueryKey(query: EnergySeriesQuery) {
   return [
     'energy-series',
-    query.organizationId,
+    query.tenantId,
     query.siteId,
     query.energyType,
     query.from,

@@ -26,6 +26,7 @@ const (
 	testPresenter           = "spiffe://hvac.local/platform-gateway"
 	testOperationsPresenter = "spiffe://hvac.local/operations-agent-service"
 	testAudience            = "telemetry-query-service"
+	testTenantID            = "018f1d00-0000-7000-8000-000000000001"
 	testOrganizationID      = "018f1e00-0000-7000-8000-000000000001"
 	testSiteID              = "018f1e00-1000-7000-8000-000000000001"
 	testPrincipalID         = "018f1e00-2000-7000-8000-000000000001"
@@ -275,6 +276,7 @@ func (harness serverHarness) serveWithGrant(
 		ExecutingService:     presenterSPIFFE,
 		Audience:             testAudience,
 		ActingOrganizationID: testOrganizationID,
+		TenantID:             testTenantID,
 		Actions:              []string{action},
 		Scopes:               []string{scope},
 		PolicyRevision:       "analytics-policy:1",
@@ -304,7 +306,7 @@ func (harness serverHarness) serveWithGrant(
 
 func validEnergyQuery() analyticsmodel.EnergySeriesQuery {
 	return analyticsmodel.EnergySeriesQuery{
-		OrganizationID: testOrganizationID,
+		TenantID:       testTenantID,
 		SiteID:         testSiteID,
 		EnergyType:     analyticsmodel.EnergyTypeElectricity,
 		Granularity:    analyticsmodel.GranularityDay,

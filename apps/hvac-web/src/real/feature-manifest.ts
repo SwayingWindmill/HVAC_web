@@ -15,7 +15,7 @@ export const REAL_FEATURE_MANIFEST = [
     path: '/system',
     delivery: 'implemented',
     availability: 'platform',
-    requiredCapabilities: ['organization.read'],
+    requiredCapabilities: ['site.list'],
   },
   {
     id: 'alarms',

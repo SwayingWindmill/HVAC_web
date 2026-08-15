@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -63,7 +64,7 @@ func (store *PostgresAuthorizationStore) LookupRegistryAuthorization(ctx context
 	if store == nil || store.pool == nil {
 		return AuthorizationFacts{}, errors.New("IAM authorization store is closed")
 	}
-	if strings.TrimSpace(lookup.SubjectIssuer) == "" || strings.TrimSpace(lookup.Subject) == "" || strings.TrimSpace(lookup.ActingOrganizationID) == "" {
+	if strings.TrimSpace(lookup.SubjectIssuer) == "" || strings.TrimSpace(lookup.Subject) == "" || strings.TrimSpace(lookup.TenantID) == "" {
 		return AuthorizationFacts{}, errors.New("IAM authorization lookup is incomplete")
 	}
 
@@ -84,7 +85,7 @@ FROM iam.resolve_principal_identity($1, $2)
 	}
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		if err := setIAMAuthorizationContext(ctx, transaction, "", lookup.ActingOrganizationID); err != nil {
+		if err := setIAMAuthorizationContext(ctx, transaction, "", lookup.TenantID); err != nil {
 			return AuthorizationFacts{}, err
 		}
 		facts.PolicyRevision, err = loadPolicyRevision(ctx, transaction)
@@ -100,15 +101,24 @@ FROM iam.resolve_principal_identity($1, $2)
 	facts.Found = true
 	facts.Principal.SubjectIssuer = lookup.SubjectIssuer
 	facts.Principal.Subject = lookup.Subject
-	if err := setIAMAuthorizationContext(ctx, transaction, facts.Principal.ID, lookup.ActingOrganizationID); err != nil {
+	if err := setIAMAuthorizationContext(ctx, transaction, facts.Principal.ID, lookup.TenantID); err != nil {
 		return AuthorizationFacts{}, err
 	}
 	facts.PolicyRevision, err = loadPolicyRevision(ctx, transaction)
 	if err != nil {
 		return AuthorizationFacts{}, err
 	}
-	if facts.Memberships, err = loadOrganizationMemberships(ctx, transaction); err != nil {
+	if facts.Memberships, err = loadTenantMemberships(ctx, transaction); err != nil {
 		return AuthorizationFacts{}, err
+	}
+	lookupTime := lookup.At.UTC()
+	if lookupTime.IsZero() {
+		lookupTime = time.Now().UTC()
+	}
+	if active, _ := tenantMembershipState(facts.Memberships, lookup.TenantID, lookupTime); active {
+		if facts.TenantSiteIDs, err = loadTenantSiteIDs(ctx, transaction, lookup.TenantID); err != nil {
+			return AuthorizationFacts{}, err
+		}
 	}
 	if facts.RoleBindings, err = loadRoleBindings(ctx, transaction); err != nil {
 		return AuthorizationFacts{}, err
@@ -125,19 +135,53 @@ FROM iam.resolve_principal_identity($1, $2)
 	return facts, nil
 }
 
-func setIAMAuthorizationContext(ctx context.Context, transaction pgx.Tx, principalID, actingOrganizationID string) error {
+func setIAMAuthorizationContext(ctx context.Context, transaction pgx.Tx, principalID, tenantID string) error {
 	if _, err := transaction.Exec(ctx, "SET LOCAL ROLE s1_iam_runtime"); err != nil {
 		return fmt.Errorf("activate IAM runtime role: %w", err)
 	}
 	var configuredPrincipal string
-	var configuredOrganization string
+	var configuredTenant string
 	if err := transaction.QueryRow(ctx, `
 SELECT set_config('app.principal_id', $1, true),
-       set_config('app.acting_organization_id', $2, true)
-`, principalID, actingOrganizationID).Scan(&configuredPrincipal, &configuredOrganization); err != nil {
+       set_config('app.tenant_id', $2, true)
+`, principalID, tenantID).Scan(&configuredPrincipal, &configuredTenant); err != nil {
 		return fmt.Errorf("set IAM authorization RLS context: %w", err)
 	}
 	return nil
+}
+
+func setIAMTenantContext(ctx context.Context, transaction pgx.Tx, tenantID string) error {
+	var configuredTenant string
+	if err := transaction.QueryRow(ctx, `SELECT set_config('app.tenant_id', $1, true)`, tenantID).Scan(&configuredTenant); err != nil {
+		return fmt.Errorf("set IAM tenant RLS context: %w", err)
+	}
+	return nil
+}
+
+func loadTenantSiteIDs(ctx context.Context, transaction pgx.Tx, tenantID string) ([]string, error) {
+	rows, err := transaction.Query(ctx, `
+SELECT id::text
+FROM core_registry.sites
+WHERE tenant_id = $1
+  AND status <> 'RETIRED'
+ORDER BY id
+`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("query IAM tenant Site catalog: %w", err)
+	}
+	defer rows.Close()
+	siteIDs := []string{}
+	for rows.Next() {
+		var siteID string
+		if err := rows.Scan(&siteID); err != nil {
+			return nil, fmt.Errorf("scan IAM tenant Site catalog: %w", err)
+		}
+		siteIDs = append(siteIDs, siteID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate IAM tenant Site catalog: %w", err)
+	}
+	return siteIDs, nil
 }
 
 func loadPolicyRevision(ctx context.Context, transaction pgx.Tx) (string, error) {
@@ -157,20 +201,20 @@ WHERE status = 'ACTIVE'
 	return fmt.Sprintf("%s:%d", policyKey, policyRevision), nil
 }
 
-func loadOrganizationMemberships(ctx context.Context, transaction pgx.Tx) ([]OrganizationMembership, error) {
+func loadTenantMemberships(ctx context.Context, transaction pgx.Tx) ([]TenantMembership, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT tenant_id::text, organization_id::text, status, valid_from, valid_to
-FROM iam.organization_memberships
-ORDER BY organization_id
+SELECT tenant_id::text, status, valid_from, valid_to
+FROM iam.tenant_memberships
+ORDER BY tenant_id
 `)
 	if err != nil {
 		return nil, fmt.Errorf("query IAM organization memberships: %w", err)
 	}
 	defer rows.Close()
-	memberships := []OrganizationMembership{}
+	memberships := []TenantMembership{}
 	for rows.Next() {
-		var membership OrganizationMembership
-		if err := rows.Scan(&membership.TenantID, &membership.OrganizationID, &membership.Status, &membership.ValidFrom, &membership.ValidTo); err != nil {
+		var membership TenantMembership
+		if err := rows.Scan(&membership.TenantID, &membership.Status, &membership.ValidFrom, &membership.ValidTo); err != nil {
 			return nil, fmt.Errorf("scan IAM organization membership: %w", err)
 		}
 		memberships = append(memberships, membership)
@@ -183,9 +227,9 @@ ORDER BY organization_id
 
 func loadRoleBindings(ctx context.Context, transaction pgx.Tx) ([]RoleBinding, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT tenant_id::text, organization_id::text, actions, effect, valid_from, valid_to
+SELECT tenant_id::text, actions, effect, valid_from, valid_to
 FROM iam.role_bindings
-ORDER BY organization_id, role_key
+ORDER BY tenant_id, role_key
 `)
 	if err != nil {
 		return nil, fmt.Errorf("query IAM role bindings: %w", err)
@@ -195,7 +239,7 @@ ORDER BY organization_id, role_key
 	for rows.Next() {
 		var binding RoleBinding
 		var actions []string
-		if err := rows.Scan(&binding.TenantID, &binding.OrganizationID, &actions, &binding.Effect, &binding.ValidFrom, &binding.ValidTo); err != nil {
+		if err := rows.Scan(&binding.TenantID, &actions, &binding.Effect, &binding.ValidFrom, &binding.ValidTo); err != nil {
 			return nil, fmt.Errorf("scan IAM role binding: %w", err)
 		}
 		binding.Actions, err = postgresRegistryActions(actions)
@@ -216,10 +260,9 @@ ORDER BY organization_id, role_key
 
 func loadSiteBindings(ctx context.Context, transaction pgx.Tx) ([]SiteBinding, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT tenant_id::text, acting_organization_id::text, owning_organization_id::text, site_id::text,
-       actions, effect, valid_from, valid_to
+SELECT tenant_id::text, site_id::text, actions, effect, valid_from, valid_to
 FROM iam.site_bindings
-ORDER BY acting_organization_id, site_id
+ORDER BY tenant_id, site_id
 `)
 	if err != nil {
 		return nil, fmt.Errorf("query IAM site bindings: %w", err)
@@ -231,8 +274,6 @@ ORDER BY acting_organization_id, site_id
 		var actions []string
 		if err := rows.Scan(
 			&binding.TenantID,
-			&binding.ActingOrganizationID,
-			&binding.OwningOrganizationID,
 			&binding.SiteID,
 			&actions,
 			&binding.Effect,
@@ -256,10 +297,9 @@ ORDER BY acting_organization_id, site_id
 
 func loadExplicitDenies(ctx context.Context, transaction pgx.Tx) ([]ExplicitDeny, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT tenant_id::text, acting_organization_id::text, owning_organization_id::text, site_id::text,
-       action, valid_from, valid_to
+SELECT tenant_id::text, site_id::text, action, valid_from, valid_to
 FROM iam.explicit_denies
-ORDER BY acting_organization_id, owning_organization_id, site_id, action
+ORDER BY tenant_id, site_id, action
 `)
 	if err != nil {
 		return nil, fmt.Errorf("query IAM explicit denies: %w", err)
@@ -272,8 +312,6 @@ ORDER BY acting_organization_id, owning_organization_id, site_id, action
 		var action string
 		if err := rows.Scan(
 			&deny.TenantID,
-			&deny.ActingOrganizationID,
-			&deny.OrganizationID,
 			&siteID,
 			&action,
 			&deny.ValidFrom,
@@ -317,11 +355,11 @@ func postgresRegistryActions(values []string) ([]registryauth.Action, error) {
 	return actions, nil
 }
 
-func (store *PostgresAuthorizationStore) LookupRegistryGrantStatus(ctx context.Context, actingOrganizationID, tokenID string) (RegistryGrantStatus, error) {
+func (store *PostgresAuthorizationStore) LookupRegistryGrantStatus(ctx context.Context, tenantID, tokenID string) (RegistryGrantStatus, error) {
 	if store == nil || store.pool == nil {
 		return RegistryGrantStatus{}, errors.New("IAM authorization store is closed")
 	}
-	statusRequest := registryauth.GrantStatusRequest{ActingOrganizationID: actingOrganizationID, TokenID: tokenID}
+	statusRequest := registryauth.GrantStatusRequest{TenantID: tenantID, TokenID: tokenID}
 	if err := statusRequest.Validate(); err != nil {
 		return RegistryGrantStatus{}, fmt.Errorf("validate IAM Registry grant status lookup: %w", err)
 	}
@@ -330,7 +368,7 @@ func (store *PostgresAuthorizationStore) LookupRegistryGrantStatus(ctx context.C
 		return RegistryGrantStatus{}, fmt.Errorf("begin IAM Registry grant status lookup: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
-	if err := setIAMAuthorizationContext(ctx, transaction, "", actingOrganizationID); err != nil {
+	if err := setIAMAuthorizationContext(ctx, transaction, "", tenantID); err != nil {
 		return RegistryGrantStatus{}, err
 	}
 	policyRevision, err := loadPolicyRevision(ctx, transaction)

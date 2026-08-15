@@ -10,7 +10,7 @@ const projectionRunIdentitySchema = z.string().min(1).max(512);
 const timestampSchema = z.number().int().nonnegative();
 
 export const operationsScopeSchema = z.object({
-  organizationId: identitySchema,
+  tenantId: identitySchema,
   siteId: identitySchema,
   equipmentId: identitySchema.nullable(),
   deviceId: identitySchema.nullable(),
@@ -89,7 +89,7 @@ const requiredNextPeriodSchema = z.object({
 
 const requiredNextCommon = {
   status: z.literal('REQUIRED_NEXT'),
-  organizationId: identitySchema,
+  tenantId: identitySchema,
   siteId: identitySchema,
   equipmentIds: z.array(identitySchema).max(32),
   targetPeriod: requiredNextPeriodSchema,
@@ -129,7 +129,7 @@ const findingConclusionSchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('SUPPORTED'),
     scope: z.literal('SITE'),
-    organizationId: identitySchema,
+    tenantId: identitySchema,
     siteId: identitySchema,
   }).strict(),
   z.object({

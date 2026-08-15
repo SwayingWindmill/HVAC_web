@@ -319,7 +319,7 @@ func insertSourceObservation(ctx context.Context, tx pgx.Tx, observationID strin
 		sensorID = decision.SensorID
 	}
 	var value any
-	if decision.Status == ObservationAccepted {
+	if decision.Status == ObservationAccepted || (decision.Status == ObservationOutOfOrder && decision.PointID != "") {
 		value = []byte(candidate.Value)
 	}
 	_, err := tx.Exec(ctx, `

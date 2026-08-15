@@ -87,7 +87,7 @@ const expectedTickets = [
   {
     issue: 63,
     key: 'T04',
-    title: 'S2 Ticket 04: ThingsBoard ingest、reconciliation、quarantine 与 outbox',
+    title: 'S2 Ticket 04: trusted source ingest、quarantine 与 outbox',
     owner: 'Telemetry integrations + Telemetry Runtime',
     stage: 'trusted-ingest',
     blockedBy: [62],
