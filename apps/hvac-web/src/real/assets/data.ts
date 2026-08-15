@@ -70,8 +70,8 @@ function validateAssetModel(model: SiteAssetModel, tenantId: string, siteId: str
   if (model.schemaVersion !== 2 || model.tenantId !== tenantId || model.siteId !== siteId) {
     throw new Error('Asset Model envelope escaped the requested Tenant or Site scope');
   }
-  validateRegistryScope(model.areas, tenantId, siteId, 'Area collection');
-  validateRegistryScope(model.equipment, tenantId, siteId, 'Equipment collection');
+  validateRegistryScope(model.spaces, tenantId, siteId, 'Space collection');
+  validateRegistryScope(model.assets, tenantId, siteId, 'Asset collection');
   validateRegistryScope(model.devices, tenantId, siteId, 'Device Endpoint collection');
   validateRegistryScope(model.sensors, tenantId, siteId, 'Sensor collection');
   validateRegistryScope(model.telemetryPoints, tenantId, siteId, 'Telemetry Point collection');
@@ -79,14 +79,14 @@ function validateAssetModel(model: SiteAssetModel, tenantId: string, siteId: str
 
   const ids = {
     SITE: new Set([siteId]),
-    AREA: new Set(model.areas.map((item) => item.id)),
-    EQUIPMENT: new Set(model.equipment.map((item) => item.id)),
+    SPACE: new Set(model.spaces.map((item) => item.id)),
+    ASSET: new Set(model.assets.map((item) => item.id)),
     DEVICE: new Set(model.devices.map((item) => item.id)),
     SENSOR: new Set(model.sensors.map((item) => item.id)),
     POINT: new Set(model.telemetryPoints.map((item) => item.id)),
   } as const;
-  for (const area of model.areas) {
-    if (area.parentAreaId && !ids.AREA.has(area.parentAreaId)) throw new Error('Area collection referenced an invisible parent Area');
+  for (const space of model.spaces) {
+    if (space.parentSpaceId && !ids.SPACE.has(space.parentSpaceId)) throw new Error('Space collection referenced an invisible parent Space');
   }
   for (const relationship of model.relationships) {
     if (!ids[relationship.fromType].has(relationship.fromId) || !ids[relationship.toType].has(relationship.toId)) {
@@ -100,8 +100,8 @@ function validateAssetModel(model: SiteAssetModel, tenantId: string, siteId: str
   }
 
   const expectedCounts = {
-    areas: model.areas.length,
-    equipment: model.equipment.length,
+    spaces: model.spaces.length,
+    assets: model.assets.length,
     deviceEndpoints: model.devices.length,
     physicalSensors: model.sensors.length,
     points: model.telemetryPoints.length,

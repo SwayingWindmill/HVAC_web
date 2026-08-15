@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 19,
+  "registryRevision": 20,
   "routes": [
     {
       "method": "GET",
@@ -586,10 +586,10 @@
       "path": "/api/v1/alarms",
       "owner": "alarm-service",
       "publicIngress": "platform-gateway",
-      "revision": 3,
-      "activationStatus": "expand-baseline",
+      "revision": 4,
+      "activationStatus": "primary",
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -609,7 +609,7 @@
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
       ],
-      "migrationPhase": "S4-R0-contract-only",
+      "migrationPhase": "S4-R3-operationally-certified",
       "cohortGroup": "s4-alarm-read-v1"
     },
     {
@@ -617,10 +617,10 @@
       "path": "/api/v1/alarms/{alarmId}",
       "owner": "alarm-service",
       "publicIngress": "platform-gateway",
-      "revision": 3,
-      "activationStatus": "expand-baseline",
+      "revision": 4,
+      "activationStatus": "primary",
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -641,7 +641,7 @@
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND"
       ],
-      "migrationPhase": "S4-R0-contract-only",
+      "migrationPhase": "S4-R3-operationally-certified",
       "cohortGroup": "s4-alarm-read-v1"
     },
     {
@@ -649,10 +649,10 @@
       "path": "/api/v1/alarms/{alarmId}/ack",
       "owner": "alarm-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
+      "revision": 2,
+      "activationStatus": "primary",
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -673,11 +673,10 @@
       "fallbackForbiddenResults": [
         "AUTHORIZATION_DENIED",
         "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
         "IDEMPOTENCY_CONFLICT"
       ],
-      "migrationPhase": "S4-R0-contract-only",
-      "cohortGroup": "s4-alarm-lifecycle-v1"
+      "migrationPhase": "S4-R3-operationally-certified",
+      "cohortGroup": "s4-alarm-ack-v1"
     },
     {
       "method": "POST",

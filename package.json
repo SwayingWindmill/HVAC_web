@@ -23,6 +23,7 @@
     "data:architecture:check": "node scripts/check-data-architecture-v2.mjs",
     "backend:architecture:check": "node scripts/check-backend-architecture-v2.mjs",
     "deployment:phase1:check": "node scripts/check-phase1-deployment.mjs",
+    "deployment:phase1:recovery:verify": "node scripts/verify-phase1-recovery-drill.mjs",
     "deployment:phase1:migration:test": "node scripts/run-phase1-migration-integration.mjs",
     "delivery:validate": "node scripts/validate-s0-delivery-config.mjs --file=deploy/s0/local.env.example && node scripts/validate-s0-delivery-config.mjs --file=deploy/s0/staging.env.example",
     "delivery:check": "node scripts/check-s0-delivery-assets.mjs && node scripts/test-render-s0-staging.mjs",

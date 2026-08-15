@@ -20,7 +20,7 @@ import {
 } from '@/api/work-orders';
 import type { ProtectedScopeResource } from './protected-scope';
 import { FocusHeading } from './FocusHeading';
-import { realAssetsEquipmentPath } from './assets/detail';
+import { realAssetsAssetPath } from './assets/detail';
 
 interface RealWorkOrdersProps {
   site: Readonly<Site>;
@@ -131,13 +131,13 @@ export function RealWorkOrders({ site, principal, registerProtectedResource }: R
     enabled: Boolean(commandDeviceId),
     staleTime: 60_000,
   });
-  const commandEquipmentId = useMemo(() => {
+  const commandAssetId = useMemo(() => {
     if (!commandDeviceId) return '';
     const relationships = assetModelQuery.data?.data.relationships ?? [];
     const now = Date.now();
     return relationships.find((relationship) => relationship.fromType === 'DEVICE'
       && relationship.fromId === commandDeviceId
-      && relationship.toType === 'EQUIPMENT'
+      && relationship.toType === 'ASSET'
       && Date.parse(relationship.validFrom) <= now
       && (!relationship.validTo || Date.parse(relationship.validTo) > now))?.toId ?? '';
   }, [assetModelQuery.data, commandDeviceId]);
@@ -243,9 +243,9 @@ export function RealWorkOrders({ site, principal, registerProtectedResource }: R
               ]} />
               <Space wrap>
                 {canAssign && !['COMPLETED', 'CANCELLED'].includes(detail.status) ? <Button icon={<UserSwitchOutlined />} onClick={() => { assignForm.setFieldsValue({ assigneeId: detail.assigneeId, teamId: detail.teamId, reason: 'OPERATOR_ASSIGNMENT' }); setAssignOpen(true); }}>指派</Button> : null}
-                {commandEquipmentId ? (
+                {commandAssetId ? (
                   <Button
-                    href={`${realAssetsEquipmentPath(site.id, commandEquipmentId)}?sourceWorkOrder=${encodeURIComponent(detail.workOrderId)}`}
+                    href={`${realAssetsAssetPath(site.id, commandAssetId)}?sourceWorkOrder=${encodeURIComponent(detail.workOrderId)}`}
                     disabled={detail.status !== 'IN_PROGRESS'}
                   >
                     处理设备功能

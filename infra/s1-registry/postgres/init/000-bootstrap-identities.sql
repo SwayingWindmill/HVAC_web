@@ -23,6 +23,9 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'metric_engine_runtime') THEN
     CREATE ROLE metric_engine_runtime LOGIN PASSWORD 'metric-engine-local-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'scheduler_runtime') THEN
+    CREATE ROLE scheduler_runtime LOGIN PASSWORD 'scheduler-local-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'settlement_runtime') THEN
     CREATE ROLE settlement_runtime LOGIN PASSWORD 'settlement-runtime-local-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
   END IF;
@@ -43,10 +46,10 @@ REVOKE ALL ON SCHEMA iam FROM PUBLIC;
 REVOKE ALL ON SCHEMA core_registry FROM PUBLIC;
 
 GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_reconciler,
-  s1_core_migrator, s1_core_runtime, s1_migration_operator, metric_engine_runtime, settlement_runtime,
+  s1_core_migrator, s1_core_runtime, s1_migration_operator, metric_engine_runtime, scheduler_runtime, settlement_runtime,
   forecast_runtime, optimization_runtime;
 GRANT USAGE ON SCHEMA iam TO s1_iam_runtime, s1_iam_reconciler;
-GRANT USAGE ON SCHEMA core_registry TO s1_core_runtime, s1_migration_operator, metric_engine_runtime, settlement_runtime,
+GRANT USAGE ON SCHEMA core_registry TO s1_core_runtime, s1_migration_operator, metric_engine_runtime, scheduler_runtime, settlement_runtime,
   forecast_runtime, optimization_runtime;
 
 COMMIT;

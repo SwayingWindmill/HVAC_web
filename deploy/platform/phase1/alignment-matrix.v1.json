@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sourceOfTruth": "架构规划/智慧能源系统部署与运维架构设计.md",
+  "sourceOfTruth": "SE-ARCH-DEPLOY-001 V1.0 CURRENT",
   "statuses": ["KEEP", "MISSING", "SIMPLIFY", "DEFER", "REMOVE", "DOCUMENT_UPDATE"],
   "items": [
     {
@@ -14,10 +14,10 @@
     {
       "id": "DEPLOY-PHASE1-001",
       "area": "orchestration",
-      "requirement": "第一阶段以 Linux Server + Docker Compose 为主部署模型",
-      "status": "SIMPLIFY",
-      "current": "本地大量使用 Compose，但 Staging/Target 已出现 Kubernetes 作为显著部署路径",
-      "action": "Docker Compose 成为 Phase 1 canonical path；Kubernetes 退出 Phase 1 必需条件"
+      "requirement": "第一阶段正式部署模型固定为 1 Linux Server + Docker Compose",
+      "status": "KEEP",
+      "current": "Phase 1 canonical path 已冻结为 1 Linux Server + Docker Compose；其他 Kubernetes/Target 资产不属于当前部署模式",
+      "action": "保持单服务器 canonical path；多服务器与 Kubernetes 仅作为未来拆分/演进参考"
     },
     {
       "id": "DEPLOY-K8S-001",
@@ -144,8 +144,8 @@
       "area": "recovery",
       "requirement": "Full Backup + WAL/Incremental + Restore Test + PITR 能力",
       "status": "KEEP",
-      "current": "Phase 1 Compose 已启用 continuous WAL archive，并提供 pg_basebackup backup profile；Destroy/Restore Gate 已存在",
-      "action": "保持备份目录与数据卷分离；RPO/RTO 仍需正式演练"
+      "current": "Phase 1 Compose 已启用 archive_timeout=60s 的 continuous WAL archive，并提供 pg_basebackup backup profile；SE-OPS-009 将 PostgreSQL 目标冻结为 RPO≤5min/RTO≤2h，新增每日 WAL age + base-backup checksum readiness 检查",
+      "action": "生产 WAL/Base Backup 必须落到服务器外保护存储；显式运行 Restore Drill 记录真实恢复点与时间，不把同机备份或容器启动当灾备证明"
     },
     {
       "id": "CLICKHOUSE-001",
@@ -175,9 +175,9 @@
       "id": "KAFKA-001",
       "area": "message",
       "requirement": "Kafka 属于 Phase 3 演进能力而非 Phase 1 必需组件",
-      "status": "SIMPLIFY",
-      "current": "S0 local/staging 使用 Redpanda 作为部分审计/Outbox backbone",
-      "action": "Redpanda 保留为内部认证资产，不进入 Phase 1 总体部署必需清单；后续评估是否有必要保留"
+      "status": "REMOVE",
+      "current": "canonical Phase 1 Compose 已删除 Redpanda 与兼容 Outbox Relay；正式主链使用 PostgreSQL Outbox",
+      "action": "Kafka/Redpanda 不得重新进入当前 Phase 1 Compose；历史资产只作为非 canonical 参考"
     },
     {
       "id": "SECRETS-001",
@@ -248,16 +248,16 @@
       "area": "delivery",
       "requirement": "统一 Phase 1 PostgreSQL 实例必须通过受控 migration flow 初始化 S0-S5 schema，生产角色凭据不得来自 local/test bootstrap",
       "status": "KEEP",
-      "current": "Phase 1 migrator 使用 39 个精确 allowlist migration、migration hash/drift tracking、runtime credential SQL；已纳入 Audit PostgreSQL-Outbox、Metric V2 runtime/cross-store、Data Governance 与 Object Storage Governance；fixture/testdata/bootstrap/legacy seed 不进入执行链，隔离 PostgreSQL 双跑幂等验证基线保持",
+      "current": "Phase 1 migrator 使用 40 个精确 allowlist migration、migration hash/drift tracking、runtime credential SQL；已纳入 Audit PostgreSQL-Outbox、Metric V2 runtime/cross-store、Data Governance、Object Storage Governance 与 Scheduler/Job durable queue；fixture/testdata/bootstrap/legacy seed 不进入执行链，隔离 PostgreSQL 双跑幂等验证基线保持",
       "action": "保持 migration profile 在应用 rollout 前执行；Staging/Production 使用签名 migrator digest 与非版本化 runtime credential file"
     },
     {
       "id": "RPO-RTO-001",
       "area": "recovery",
-      "requirement": "生产前明确 RPO/RTO",
-      "status": "MISSING",
-      "current": "恢复能力已证明，定量 RPO/RTO 尚未正式演练",
-      "action": "保持为 Formal Acceptance blocker，不伪报已完成"
+      "requirement": "生产前明确 RPO/RTO，并保留可执行恢复与真实演练证据机制",
+      "status": "KEEP",
+      "current": "SE-OPS-009 V1 已冻结分层 RPO/RTO：PostgreSQL≤5min/≤2h、Control≤5min/≤1h、Telemetry Cloud RTO≤4h、Metric≤30min/≤4h、Whole Server Replacement≤4h（有 Cold Standby + External Backup 等前提）；仓库已加入机器 target contract、Whole Server Runbook、备份 readiness 检查和 timestamped drill verifier",
+      "action": "目标定义已完成；每个生产部署仍必须使用真实备份和实际恢复主机运行季度 Restore Drill，并保存 Actual RPO/RTO。未达目标属于现场/生产验收不通过，不再是架构目标未定义"
     },
     {
       "id": "OBJECT-STORAGE-001",
@@ -268,12 +268,60 @@
       "action": "保留接口规划；等 Report/Export/OTA/Model 成为交付项时引入"
     },
     {
+      "id": "REALTIME-001",
+      "area": "application",
+      "requirement": "浏览器 Realtime 必须经 Nginx → energy-api Realtime Module，不直接暴露独立 Realtime Gateway",
+      "status": "KEEP",
+      "current": "Nginx /realtime/ 只代理 energy-api；energy-api 再转发到内部 Centrifugo transport，Centrifugo 不发布 host port",
+      "action": "保持 Centrifugo 仅为内部实现细节，公共 WSS 边界始终属于 energy-api"
+    },
+    {
+      "id": "HEALTH-001",
+      "area": "operations",
+      "requirement": "核心 Go 进程提供 /health/live 与 /health/ready，并由 Compose healthcheck 消费 readiness",
+      "status": "KEEP",
+      "current": "energy-api、scheduler、iot-service、telemetry-worker、metric-worker 均已接入容器 healthcheck；关键数据依赖使用 service_healthy",
+      "action": "保持 readiness 与真实依赖一致，不用容器启动状态替代服务可用状态"
+    },
+    {
+      "id": "RESOURCE-001",
+      "area": "operations",
+      "requirement": "单服务器容器必须配置 CPU/Memory 边界与 Docker 日志轮转",
+      "status": "KEEP",
+      "current": "canonical Compose 已为长期运行容器设置可覆盖的 CPU/Memory limit/reservation，并统一 json-file max-size/max-file",
+      "action": "现场按服务器容量覆盖默认资源值，但不得取消 P0/P1 服务资源边界与日志轮转"
+    },
+    {
+      "id": "HOST-MONITOR-001",
+      "area": "observability",
+      "requirement": "监控 Host CPU/Memory/Disk/Load/Network，并设置 Disk 80% Warning / 90% Critical",
+      "status": "KEEP",
+      "current": "node-exporter 已进入单机 Compose，Prometheus 抓取 host metrics，并新增 80%/90% 磁盘告警",
+      "action": "保持 host metrics 默认启用；磁盘告警不得依赖数据库自身告警替代"
+    },
+    {
+      "id": "DATA-DIR-001",
+      "area": "data",
+      "requirement": "PostgreSQL/ClickHouse/Redis/MQTT 使用可规划的宿主机持久目录，避免 opaque named volume 隐藏磁盘布局",
+      "status": "KEEP",
+      "current": "canonical Compose 使用 POSTGRES_DATA_DIR/CLICKHOUSE_DATA_DIR/REDIS_DATA_DIR/MQTT_DATA_DIR bind mount contract",
+      "action": "Production 将这些变量绑定到规划的数据盘；ClickHouse 与 PostgreSQL WAL/Backup 按现场磁盘能力进一步隔离"
+    },
+    {
+      "id": "SCHEDULER-001",
+      "area": "application",
+      "requirement": "Scheduler 只负责统一 Coordination，Domain Worker 负责 Execution；Application Scheduler 不替代 Infrastructure Scheduler",
+      "status": "KEEP",
+      "current": "已按 SE-PLATFORM-006 V1 建立 PostgreSQL schedule_definitions/job_instances/job_attempts durable queue、独立 scheduler runtime、SKIP LOCKED/dedup/misfire/retry/lease recovery；metric-worker 已移除自调度 authority，只 Claim/Lease/Attempt/Execute METRIC_* Job。数据库备份仍由 infrastructure scheduler/systemd timer 独立负责",
+      "action": "保持 Scheduler 只协调应用 Job；Forecast/Optimization/Settlement/Lifecycle 等后续按各自交付需求接入同一 Job contract，不引入通用 DAG Workflow Engine"
+    },
+    {
       "id": "OPTIMIZATION-001",
       "area": "application",
       "requirement": "第一阶段推荐部署独立 Optimization Service",
-      "status": "MISSING",
-      "current": "仓库没有可部署的 Python Optimization runtime",
-      "action": "保持为明确功能缺口；不得用部署占位容器伪装能力完成"
+      "status": "DEFER",
+      "current": "Optimization 属于按需智能服务，不进入当前单服务器基础运行清单；仓库已有实现资产但未作为默认 Compose 常驻服务",
+      "action": "只有现场阶段需要 Optimization 时才加入 Compose；不得让其影响 Telemetry 或 Control Safety"
     },
     {
       "id": "DOC-CONSISTENCY-001",

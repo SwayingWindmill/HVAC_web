@@ -1,0 +1,264 @@
+{
+  "schemaVersion": 1,
+  "authority": {
+    "documentId": "SE-API-001",
+    "version": "1.2",
+    "status": "CURRENT CANDIDATE",
+    "machineContract": "contracts/http/platform-gateway.openapi.yaml",
+    "rule": "OpenAPI remains the final endpoint machine contract; prose examples do not authorize inventing missing request/query/success schemas."
+  },
+  "reviewedContract": {
+    "openapiVersion": "3.1.0",
+    "contractVersion": "2.1.2",
+    "backendArchitecture": "SE-ARCH-004 V2.1.2",
+    "dataArchitecture": "SE-DATA-001 V2.0 CURRENT",
+    "forecastDomain": "SE-AI-001 V1.0 CURRENT",
+    "optimizationDomain": "SE-AI-002 V1.0 CURRENT",
+    "alarmDomain": "SE-DOMAIN-ALARM-001 V1.0 CURRENT CANDIDATE"
+  },
+  "summary": {
+    "routesReviewed": 13,
+    "classificationAReadyToActivate": 3,
+    "classificationBReusableSubordinateShapeButRuntimeBlocked": 0,
+    "classificationCSchemaOrSemanticDecisionStillRequired": 10,
+    "runtimeContractOnlyRoutes": 10
+  },
+  "classifications": {
+    "A": "SE-API-001 V1.2 and the current machine contracts fully freeze the operation-specific request/query/success shape and current runtime has enough authoritative domain behavior to activate without inventing semantics.",
+    "B": "An existing subordinate V2.1.2 contract supplies the missing domain response shape, but a separate frozen runtime authorization/resource-resolution rule is still missing, so the public route remains contract-only.",
+    "C": "At least one operation-specific request/query/success or behavior decision is still not frozen by SE-API-001 V1.2 or a current subordinate machine contract."
+  },
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/api/v1/sites",
+      "classification": "C",
+      "sourceCoverage": [
+        "SE-API-001 V1.2 section 36 provides a request example and generic 201 envelope guidance.",
+        "SE-DATA-001 V2.0 freezes Site as the canonical Tenant -> Site -> Space -> Asset -> Device -> Point chain member.",
+        "The active Registry machine contract freezes the canonical Site projection as id/tenantId/code/displayName/timezone/status/revision/createdAt/updatedAt."
+      ],
+      "runtimeEvidence": [
+        "platform-core-service Registry runtime is read-only for Site list/detail; it has no Create Site handler, write action or persistence command boundary."
+      ],
+      "blockingGaps": [
+        "The SE-API-001 example uses siteCode/name/siteType/latitude/longitude while the canonical Site projection uses code/displayName/timezone/status/revision; the write DTO mapping is not frozen.",
+        "Required/optional/null semantics, create authorization, uniqueness/conflict behavior and the exact created Site response are not frozen."
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/spaces/tree",
+      "classification": "C",
+      "sourceCoverage": [
+        "SE-API-001 V1.2 section 39 freezes the URI and Campus -> Building -> Floor -> Room purpose.",
+        "SE-DATA-001 V2.0 explicitly freezes Space Tree != Asset Tree != Energy Topology.",
+        "The current SiteAssetModel machine contract contains canonical Space records with parentSpaceId but is not a Space Tree public projection contract."
+      ],
+      "runtimeEvidence": [
+        "platform-core-service can read the canonical Site Asset Model, but does not expose a distinct Space Tree public/internal projection."
+      ],
+      "blockingGaps": [
+        "Tree node schema, node type/code/name fields, child representation, ordering, empty-tree semantics and success data shape are not frozen.",
+        "Deriving a tree from SiteAssetModel would invent a public projection and would violate the frozen separation between Space Tree and Asset Tree."
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/devices",
+      "classification": "C",
+      "sourceCoverage": [
+        "SE-API-001 V1.2 section 48 lists page/pageSize/siteId/gatewayId/deviceType/onlineStatus filters and the generic list envelope.",
+        "The current Registry machine contract freezes Device and DeviceCollection, while the active public Registry route is Site-scoped GET /api/v1/sites/{siteId}/devices using limit/cursor."
+      ],
+      "runtimeEvidence": [
+        "platform-core-service supports Site-scoped Device list reads but not the unscoped/filter-rich GET /api/v1/devices contract."
+      ],
+      "blockingGaps": [
+        "The endpoint-specific Device summary projection is not frozen.",
+        "SE-API-001 page/pageSize conflicts with the active Registry limit/cursor contract, and gatewayId/onlineStatus filtering semantics are not frozen for Registry Device metadata."
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/devices/{deviceId}/points",
+      "classification": "C",
+      "sourceCoverage": [
+        "SE-API-001 V1.2 section 50 freezes the URI and Standard Point consumption rule.",
+        "SE-DATA-001 V2.0 freezes Point as the canonical data point and Sensor as optional physical lifecycle metadata.",
+        "The current SiteAssetModel machine contract freezes the canonical TelemetryPoint schema."
+      ],
+      "runtimeEvidence": [
+        "Registry runtime can return TelemetryPoint records inside SiteAssetModel, but does not expose a Device Point list projection with its own ordering/filter/envelope contract."
+      ],
+      "blockingGaps": [
+        "The endpoint-specific list envelope, Point summary/detail projection, ordering and filter behavior are not frozen.",
+        "Reusing the whole SiteAssetModel or silently filtering it in Gateway would create an undocumented public contract."
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/telemetry/latest",
+      "classification": "C",
+      "sourceCoverage": [
+        "SE-API-001 V1.2 sections 52-54 provide pointIds request shape and require value/unit/quality/event timestamp in results.",
+        "SE-DATA-001 V2.0 freezes quality values GOOD/PARTIAL/ESTIMATED/MANUAL/STALE/INVALID and the latest out-of-order NO_UPDATE rule.",
+        "S2 current subordinate contract freezes Device Observation Snapshots and explicitly retires the older POST /api/v1/telemetry/latest/batch route."
+      ],
+      "runtimeEvidence": [
+        "Current S2 Gateway/runtime reads are Device-centric Observation Snapshot operations, not Point-centric latest batch reads."
+      ],
+      "blockingGaps": [
+        "The exact value union/nullability and missing/stale/unauthorized per-point semantics are not frozen.",
+        "The <=1000 point limit is a recommendation rather than a frozen contract limit.",
+        "The Device Observation Snapshot contract cannot be silently reused as the Point-centric SE-API-001 contract."
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/telemetry/history",
+      "classification": "C",
+      "sourceCoverage": [
+        "SE-API-001 V1.2 sections 55-58 freeze pointId/from/to/interval/aggregation and avg/min/max/last/delta.",
+        "SE-DATA-001 V2.0 freezes Point identity, event time/ingest time and telemetry quality semantics.",
+        "telemetryhistorymodel and the S2 subordinate contract freeze a different DeviceHistory query: deviceId + keys + from/to + maxPointsPerKey with a DeviceHistoryResponse series model."
+      ],
+      "runtimeEvidence": [
+        "Current telemetry-query runtime implements bounded Device history and does not implement the Point-centric interval/aggregation GET contract."
+      ],
+      "blockingGaps": [
+        "The exact Point history series/item success schema, quality/timestamp representation, empty-series semantics and concrete interval/aggregation guardrails are not frozen.",
+        "The existing DeviceHistory model cannot be exposed under this URI because its selector and result semantics materially differ."
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/alarms",
+      "classification": "A",
+      "shapeSource": "contracts/http/s4-alarm-public.openapi.json",
+      "sourceCoverage": [
+        "SE-DOMAIN-ALARM-001 V1.0 freezes siteId as required public scope, limit/cursor pagination, severity/status filters, default limit 50 and maximum 200.",
+        "The S4 subordinate machine contract freezes CursorAlarmListResponse and opaque cursor semantics bound to Site and filters."
+      ],
+      "blockingGaps": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/alarms/{alarmId}",
+      "classification": "A",
+      "shapeSource": "contracts/http/s4-alarm-public.openapi.json",
+      "sourceCoverage": [
+        "SE-DOMAIN-ALARM-001 V1.0 freezes the BOLA-safe rule: resolve alarmId inside Tenant first, then authorize the authoritative Site; missing/cross-Tenant/out-of-Site-scope resources converge to 404 ALARM_NOT_FOUND.",
+        "S4 subordinate V2.1.2 freezes AlarmEnvelope/Alarm response shape."
+      ],
+      "blockingGaps": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/alarms/{alarmId}/ack",
+      "classification": "A",
+      "shapeSource": "contracts/http/s4-alarm-public.openapi.json",
+      "sourceCoverage": [
+        "SE-DOMAIN-ALARM-001 V1.0 freezes ACK as an acknowledgement fact independent from lifecycle state, with optional comment and optional Idempotency-Key.",
+        "The same document freezes natural idempotency, no expectedVersion requirement, first-ack preservation and the BOLA-safe alarmId -> Site resolution rule."
+      ],
+      "blockingGaps": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/forecast/load",
+      "classification": "C",
+      "sourceCoverage": [
+        "SE-API-001 V1.2 section 109 freezes the URI and section 113 requires target/subject/forecastOrigin/forecastFor/granularity/modelVersion/featureSetVersion/quality.",
+        "SE-AI-001 V1.0 CURRENT freezes Forecast Result core fields including forecast_id/tenant_id/site_id/subject_type/subject_id/target/forecast_origin/forecast_for/horizon_minutes/value/unit/bounds/model_version/feature_set_version/input_snapshot_id/quality/generated_at.",
+        "SE-AI-001 Forecast API sections are explicitly recommendation/example material and propose GET /api/v1/forecasts and GET /api/v1/sites/{siteId}/forecasts/day-ahead rather than this exact route."
+      ],
+      "runtimeEvidence": [
+        "forecast-service currently exposes internal POST /v1/forecast for inference and returns internal Point records; it has no public Load Forecast GET projection."
+      ],
+      "blockingGaps": [
+        "Exact query parameters, public series/value item schema, time horizon selection and fallback representation for this URI are not frozen.",
+        "The internal inference Request includes deployment/model/input-snapshot fields and cannot be exposed as the public read contract."
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/forecast/pv",
+      "classification": "C",
+      "sourceCoverage": [
+        "SE-API-001 V1.2 section 110 freezes the URI and section 113 requires target/subject/forecastOrigin/forecastFor/granularity/modelVersion/featureSetVersion/quality.",
+        "SE-AI-001 V1.0 CURRENT freezes PV_GENERATION as a P0 forecast target and the common Forecast Result core fields.",
+        "SE-AI-001 public API sections remain recommendation/example material and do not freeze this exact PV route's query or envelope."
+      ],
+      "runtimeEvidence": [
+        "forecast-service internal POST /v1/forecast accepts PV_GENERATION but no public PV Forecast GET projection exists."
+      ],
+      "blockingGaps": [
+        "Exact query parameters, public series/value item schema, time horizon selection and fallback representation for this URI are not frozen.",
+        "The internal inference model is not a public read resource contract."
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/optimization/runs",
+      "classification": "C",
+      "sourceCoverage": [
+        "SE-API-001 V1.2 section 116 freezes the URI and recommends 202 Accepted.",
+        "SE-AI-002 V1.0 CURRENT freezes Optimization Run core fields and the run states CREATED/VALIDATING/SOLVING/FEASIBLE/INFEASIBLE/FAILED/PUBLISHED/EXPIRED.",
+        "SE-AI-002 API section explicitly labels POST /api/v1/optimization/runs as a recommendation rather than an exact machine contract."
+      ],
+      "runtimeEvidence": [
+        "optimization-service currently exposes internal POST /v1/optimize with a solver input snapshot Request and returns a Plan synchronously with 201; it does not create the public asynchronous OptimizationRun resource."
+      ],
+      "blockingGaps": [
+        "The public CreateOptimizationRunRequest is not frozen: the current internal Request contains server/internal snapshot, checksum, policy, topology, forecast and resource state fields.",
+        "Idempotency requirement, 202 accepted payload, resource Location/ID semantics and domain validation/error mapping are not frozen."
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/optimization/runs/{runId}",
+      "classification": "C",
+      "sourceCoverage": [
+        "SE-API-001 V1.2 section 117 freezes the URI and generic async status guidance.",
+        "SE-AI-002 V1.0 CURRENT defines Optimization Run core fields/status and a proposed optimization_run table, but its API section remains recommendation-level.",
+        "SE-AI-002 contains multiple domain/storage projections (run_id vs id; started/finished fields vs created_at/objective_value/solve_time_ms), so an exact public Run projection is not implied."
+      ],
+      "runtimeEvidence": [
+        "optimization-service has no GET Run handler or public durable OptimizationRun read resource; its current HTTP surface is only internal POST /v1/optimize plus health."
+      ],
+      "blockingGaps": [
+        "The exact OptimizationRun public resource, state timestamps, result/error fields and output/Dispatch Plan references are not frozen.",
+        "A durable public Run read model and authorization path do not yet exist."
+      ]
+    }
+  ],
+  "manualVsMachineDrift": [
+    {
+      "route": "POST /api/v1/auth/login",
+      "manual": "SE-API-001 V1.2 section 31 shows username/password JSON login.",
+      "machineContract": "Current OpenAPI contracts OIDC Authorization Code Flow with PKCE through POST /api/v1/auth/login using returnTo query semantics.",
+      "adjudication": "KEEP_OPENAPI",
+      "reason": "SE-API-001 V1.2 explicitly ranks current OpenAPI above the handbook examples for endpoint-specific contract details."
+    },
+    {
+      "area": "ordinary list pagination",
+      "manual": "SE-API-001 V1.2 standard list shape uses page/pageSize with default 50 and maximum 200.",
+      "machineContract": "Current active Registry public lists use limit/cursor opaque cursor pagination.",
+      "adjudication": "KEEP_OPENAPI_UNTIL_FORMAL_CONTRACT_CHANGE",
+      "reason": "Changing an active pagination model is an endpoint contract change and cannot be inferred from the handbook without an explicit OpenAPI migration."
+    },
+    {
+      "area": "Registry relationship vocabulary",
+      "manual": "SE-DATA-001 V2.0 freezes Space and Asset as canonical while removing Organization/ThingsBoard legacy concerns.",
+      "machineContract": "Current Registry runtime emits ASSET -> SPACE and DEVICE -> ASSET relationships; platform OpenAPI and generated clients have been synchronized to ASSET/SPACE.",
+      "adjudication": "KEEP_CANONICAL_SPACE_ASSET",
+      "reason": "This is a machine-contract drift correction, not a compatibility alias; old AREA/EQUIPMENT relationship enums are not retained."
+    }
+  ],
+  "decision": {
+    "backendConformanceStatus": "PARTIAL",
+    "contractOnlyBehavior": "KEEP_FOR_10_UNRESOLVED_ROUTES",
+    "reason": "All 10 remaining routes were re-reviewed against SE-DATA-001 V2.0 CURRENT, SE-AI-001 V1.0 CURRENT, SE-AI-002 V1.0 CURRENT, current Registry/S2 machine contracts and actual Forecast/Optimization runtime. No additional operation satisfies A: Registry routes still lack endpoint-specific write/tree/list projections, Point-centric Telemetry routes differ materially from the current Device-centric S2 contracts, Forecast public route projections remain recommendation-level, and Optimization currently exposes only an internal synchronous solver endpoint rather than a durable public Run resource. The 10 routes therefore remain fail-closed until their exact public machine contracts are frozen."
+  }
+}

@@ -17,11 +17,13 @@ import (
 
 const (
 	InternalSiteAlarmsPrefix = "/internal/v1/sites/"
+	InternalAlarmScopePrefix = "/internal/v1/alarms/"
 	AlarmReadContextHeader   = "X-Alarm-Read-Context"
 	AlarmWriteContextHeader  = "X-Alarm-Write-Context"
-	AlarmListAction          = "alarm:list"
+	AlarmListAction          = "alarm:read"
 	AlarmReadAction          = "alarm:read"
-	AlarmAcknowledgeAction   = "alarm:acknowledge"
+	AlarmResolveAction       = "alarm:resolve"
+	AlarmAcknowledgeAction   = "alarm:ack"
 	AlarmAssignAction        = "alarm:assign"
 	AlarmUnassignAction      = "alarm:unassign"
 	AlarmSuppressAction      = "alarm:suppress"
@@ -69,6 +71,10 @@ type mutationRequest struct {
 	SuppressedUntil *string `json:"suppressedUntil,omitempty"`
 }
 
+type acknowledgeRequest struct {
+	Comment string `json:"comment,omitempty"`
+}
+
 type alarmRoute struct {
 	siteID    string
 	alarmID   string
@@ -88,8 +94,8 @@ func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 	if strings.TrimSpace(config.Audience) == "" {
 		config.Audience = DefaultAudience
 	}
-	if config.MaxListLimit <= 0 || config.MaxListLimit > 100 {
-		config.MaxListLimit = 100
+	if config.MaxListLimit <= 0 || config.MaxListLimit > 200 {
+		config.MaxListLimit = 200
 	}
 	return &httpHandler{
 		store: config.Store, gatewayPublicKey: config.GatewayPublicKey, now: config.Now,
@@ -104,6 +110,30 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 			handler.writeProblem(writer, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Caller-supplied identity headers are not accepted by Alarm Service.", false)
 			return
 		}
+	}
+	if alarmID, matches := matchAlarmScopePath(request.URL.Path); matches {
+		if request.Method != http.MethodGet {
+			writer.Header().Set("Allow", http.MethodGet)
+			handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Alarm scope resolution only supports GET.", false)
+			return
+		}
+		if !alarmmodel.IsUUIDv7(alarmID) {
+			handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Alarm resource is not visible.", false)
+			return
+		}
+		claims, authorized := handler.authorize(request, AlarmReadContextHeader, AlarmResolveAction, nil)
+		if !authorized {
+			handler.writeProblem(writer, http.StatusForbidden, "ALARM_ACCESS_DENIED", "Alarm access denied", "Alarm ownership resolution is not authorized.", false)
+			return
+		}
+		request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
+		scope, err := handler.store.ResolveScope(request.Context(), claims.TenantID, alarmID)
+		if err != nil {
+			handler.writeStoreFailure(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, scope)
+		return
 	}
 	route, ok := matchAlarmPath(request.URL.Path)
 	if !ok {
@@ -194,6 +224,63 @@ func (handler *httpHandler) get(writer http.ResponseWriter, request *http.Reques
 	writeJSON(writer, http.StatusOK, alarm)
 }
 
+func (handler *httpHandler) acknowledge(writer http.ResponseWriter, request *http.Request, route alarmRoute, claims identitycontext.DelegationClaims) {
+	mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0])
+	var input acknowledgeRequest
+	if request.Body != nil && request.ContentLength != 0 {
+		if mediaType != "application/json" {
+			handler.writeProblem(writer, http.StatusUnsupportedMediaType, "INVALID_ARGUMENT", "Invalid argument", "The Alarm acknowledgement request must use application/json when a body is supplied.", false)
+			return
+		}
+		request.Body = http.MaxBytesReader(writer, request.Body, maximumMutationBody)
+		decoder := json.NewDecoder(request.Body)
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil {
+			handler.writeProblem(writer, http.StatusBadRequest, "INVALID_ARGUMENT", "Invalid argument", "The Alarm acknowledgement request is invalid.", false)
+			return
+		}
+	}
+	input.Comment = strings.TrimSpace(input.Comment)
+	if len(input.Comment) > 1000 {
+		handler.writeProblem(writer, http.StatusBadRequest, "INVALID_ARGUMENT", "Invalid argument", "Alarm acknowledgement comment exceeds 1000 characters.", false)
+		return
+	}
+	idempotencyKey := strings.TrimSpace(request.Header.Get("Idempotency-Key"))
+	if idempotencyKey != "" && !idempotencyKeyPattern.MatchString(idempotencyKey) {
+		handler.writeProblem(writer, http.StatusBadRequest, "INVALID_ARGUMENT", "Invalid argument", "Idempotency-Key must be 8 to 128 safe characters when supplied.", false)
+		return
+	}
+	actorID := strings.TrimSpace(claims.PrincipalID)
+	if actorID == "" {
+		actorID = strings.TrimSpace(claims.SubjectIssuer) + "#" + strings.TrimSpace(claims.Subject)
+	}
+	correlationID := idempotencyKey
+	if correlationID == "" {
+		correlationID = strings.TrimSpace(request.Header.Get("X-Request-ID"))
+	}
+	if correlationID == "" {
+		correlationID = route.alarmID
+	}
+	result, err := handler.store.Apply(request.Context(), claims.TenantID, route.siteID, route.alarmID, Mutation{
+		Operation: alarmmodel.OperationAcknowledge, Reason: input.Comment,
+		ActorType: "PRINCIPAL", ActorID: actorID, PolicyRevision: claims.PolicyRevision,
+		CorrelationID: correlationID, IdempotencyKey: idempotencyKey,
+		OccurredAt: handler.now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		handler.writeMutationFailure(writer, err)
+		return
+	}
+	if !validAlarmResponse(result.Alarm, claims.TenantID, route.siteID, route.alarmID) {
+		handler.writeProblem(writer, http.StatusBadGateway, "ALARM_RESPONSE_INVALID", "Alarm response invalid", "Alarm Store returned a projection outside the requested scope.", true)
+		return
+	}
+	if result.Replayed {
+		writer.Header().Set("Idempotent-Replay", "true")
+	}
+	writeJSON(writer, http.StatusOK, result.Alarm)
+}
+
 func (handler *httpHandler) mutate(writer http.ResponseWriter, request *http.Request, route alarmRoute) {
 	action, ok := mutationAction(route.operation)
 	if !ok {
@@ -206,6 +293,10 @@ func (handler *httpHandler) mutate(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
+	if route.operation == alarmmodel.OperationAcknowledge {
+		handler.acknowledge(writer, request, route, claims)
+		return
+	}
 	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
 		handler.writeProblem(writer, http.StatusUnsupportedMediaType, "ALARM_REQUEST_INVALID", "Alarm request invalid", "The Alarm lifecycle request must use application/json.", false)
 		return
@@ -286,7 +377,7 @@ func (handler *httpHandler) parseFilter(request *http.Request) (Filter, bool) {
 		}
 		filter.Limit = value
 	}
-	if filter.Cursor != "" && !alarmmodel.IsUUIDv7(filter.Cursor) {
+	if len(filter.Cursor) > 4096 {
 		return Filter{}, false
 	}
 	if filter.Status != "" && !contains([]alarmmodel.Status{alarmmodel.StatusOpen, alarmmodel.StatusAcknowledged, alarmmodel.StatusSuppressed, alarmmodel.StatusClosed}, filter.Status) {
@@ -301,6 +392,10 @@ func (handler *httpHandler) parseFilter(request *http.Request) (Filter, bool) {
 func (handler *httpHandler) writeStoreFailure(writer http.ResponseWriter, err error) {
 	if errors.Is(err, ErrNotFound) {
 		handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Alarm resource is not visible.", false)
+		return
+	}
+	if errors.Is(err, ErrInvalidCursor) {
+		handler.writeProblem(writer, http.StatusBadRequest, "INVALID_CURSOR", "Invalid cursor", "The Alarm cursor is invalid for this query.", false)
 		return
 	}
 	handler.writeProblem(writer, http.StatusServiceUnavailable, "ALARM_UNAVAILABLE", "Alarm unavailable", "Alarm Service cannot read its authoritative store.", true)
@@ -331,6 +426,17 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
+}
+
+func matchAlarmScopePath(path string) (string, bool) {
+	if !strings.HasPrefix(path, InternalAlarmScopePrefix) || !strings.HasSuffix(path, "/scope") {
+		return "", false
+	}
+	value := strings.TrimSuffix(strings.TrimPrefix(path, InternalAlarmScopePrefix), "/scope")
+	if value == "" || strings.Contains(value, "/") {
+		return "", false
+	}
+	return value, true
 }
 
 func matchAlarmPath(path string) (alarmRoute, bool) {

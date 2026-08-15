@@ -100,7 +100,7 @@ Delivered P1/P2 baseline:
 
 P3 read activation delivered:
 
-- IAM owns `alarm:list` and `alarm:read` decisions with exact Organization/Site/Alarm scope, explicit-deny precedence, policy revision, request ID, trace ID, and durable allow/deny evidence.
+- IAM owns `alarm:read` and `alarm:ack` decisions with exact Tenant/Site/Alarm scope, explicit-deny precedence, policy revision, request ID, trace ID, and durable allow/deny evidence.
 - Platform Gateway derives scope from the authenticated Session, calls IAM, signs a short-lived Alarm read context, proxies bounded GET requests over mTLS, and revalidates response scope.
 - List and detail routes use a stable 1% internal cohort with no fallback owner; a non-selected Session receives no Alarm route instead of another source of truth.
 - Production Web renders only authorized list/detail reads. Local lifecycle mutations are isolated in a development-only lazy component and every public lifecycle POST remains at 0%.

@@ -16,6 +16,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_migration_operator') THEN CREATE ROLE s1_migration_operator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_core_service') THEN CREATE ROLE s1_core_service LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'metric_engine_runtime') THEN CREATE ROLE metric_engine_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'scheduler_runtime') THEN CREATE ROLE scheduler_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'settlement_runtime') THEN CREATE ROLE settlement_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'forecast_runtime') THEN CREATE ROLE forecast_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'optimization_runtime') THEN CREATE ROLE optimization_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
@@ -65,8 +66,9 @@ CREATE SCHEMA IF NOT EXISTS core_registry AUTHORIZATION s1_core_migrator;
 ALTER SCHEMA iam OWNER TO s1_iam_migrator;
 ALTER SCHEMA core_registry OWNER TO s1_core_migrator;
 REVOKE ALL ON SCHEMA iam, core_registry FROM PUBLIC;
-GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_reconciler, s1_core_service, metric_engine_runtime, s2_iam_grant_runtime;
-GRANT USAGE ON SCHEMA core_registry TO metric_engine_runtime, settlement_runtime, forecast_runtime, optimization_runtime;
+GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_reconciler, s1_core_service, metric_engine_runtime, scheduler_runtime, s2_iam_grant_runtime;
+GRANT USAGE ON SCHEMA iam TO s1_iam_runtime, s1_iam_reconciler;
+GRANT USAGE ON SCHEMA core_registry TO metric_engine_runtime, scheduler_runtime, settlement_runtime, forecast_runtime, optimization_runtime;
 GRANT s1_core_runtime TO s1_core_service;
 
 \connect hvac_s2
@@ -74,6 +76,7 @@ REVOKE CONNECT ON DATABASE hvac_s2 FROM PUBLIC;
 CREATE SCHEMA IF NOT EXISTS telemetry_runtime AUTHORIZATION s2_telemetry_migrator;
 ALTER SCHEMA telemetry_runtime OWNER TO s2_telemetry_migrator;
 REVOKE ALL ON SCHEMA telemetry_runtime FROM PUBLIC;
+GRANT USAGE ON SCHEMA telemetry_runtime TO s2_telemetry_runtime, s2_telemetry_relay, s2_telemetry_history;
 GRANT s2_telemetry_migrator TO s2_telemetry_migrator_service;
 GRANT s2_telemetry_runtime TO s2_telemetry_service;
 GRANT s2_telemetry_relay TO s2_telemetry_relay_service;

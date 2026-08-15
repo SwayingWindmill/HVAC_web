@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "Phase 1 production migration allowlist",
-  "sourceOfTruth": "架构规划/智慧能源系统部署与运维架构设计.md",
+  "sourceOfTruth": "SE-ARCH-DEPLOY-001 V1.0 CURRENT",
   "policy": {
     "fixturesAllowed": false,
     "testdataAllowed": false,
@@ -39,7 +39,8 @@
         "infra/s1-registry/postgres/init/009c-metric-model-v2.sql",
         "infra/s1-registry/postgres/init/009d-data-governance-v2.sql",
         "infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql",
-        "infra/s1-registry/postgres/init/009i-backend-integration-v2.sql"
+        "infra/s1-registry/postgres/init/009i-backend-integration-v2.sql",
+        "infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql"
       ]
     },
     {
@@ -51,6 +52,7 @@
         "infra/s2-telemetry/postgres/init/004-s2-telemetry-history-outbox.sql",
         "infra/s2-telemetry/postgres/init/004a-s2-tenant-scope.sql",
         "infra/s2-telemetry/postgres/init/004b-s2-point-identity.sql",
+        "infra/s2-telemetry/postgres/init/004d-s2-redis-latest.sql",
         "infra/s2-telemetry/postgres/init/005-s2-realtime-backend.sql"
       ]
     },
@@ -102,6 +104,7 @@
     "s1_iam_reconciler",
     "s1_core_service",
     "metric_engine_runtime",
+    "scheduler_runtime",
     "s2_iam_grant_runtime",
     "s2_telemetry_migrator_service",
     "s2_telemetry_service",

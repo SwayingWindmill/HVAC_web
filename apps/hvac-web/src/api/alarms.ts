@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   AlarmApiError,
+  alarmCursorSchema,
   alarmListResponseSchema,
   alarmOperationSchema,
   alarmSchema,
@@ -16,6 +17,7 @@ import {
   type AlarmStatus,
 } from './alarm-contract';
 import { API_MODE } from './config';
+import { alarmPaths } from './generated/platformGateway.gen';
 
 export {
   AlarmApiError,
@@ -64,6 +66,10 @@ export interface ScopedAlarmRequestOptions {
   baseUrl?: string;
 }
 
+export interface AlarmAcknowledgeInput {
+  comment?: string;
+}
+
 export interface AlarmLifecycleInput {
   expectedVersion: number;
   reason: string;
@@ -83,6 +89,30 @@ const problemSchema = z.object({
   code: z.string().optional(),
   retryable: z.boolean().optional(),
 }).passthrough();
+const publicErrorEnvelopeSchema = z.object({
+  error: z.object({
+    code: z.string().min(1),
+    message: z.string().min(1),
+    details: z.unknown(),
+  }).strict(),
+  meta: z.object({ requestId: z.string().min(1) }).passthrough(),
+}).strict();
+const publicAlarmEnvelopeSchema = z.object({
+  data: alarmSchema,
+  meta: z.object({ requestId: z.string().min(1) }).passthrough(),
+}).strict();
+const publicAlarmListEnvelopeSchema = z.object({
+  data: z.array(alarmSchema).max(200),
+  meta: z.object({
+    requestId: z.string().min(1),
+    limit: z.number().int().min(1).max(200),
+    nextCursor: alarmCursorSchema.nullable(),
+    hasMore: z.boolean(),
+  }).passthrough(),
+}).strict();
+const acknowledgeInputSchema = z.object({
+  comment: z.string().trim().max(1000).optional(),
+}).strict();
 
 const lifecycleInputSchema = z.object({
   expectedVersion: z.number().int().positive(),
@@ -102,8 +132,8 @@ const suppressInputSchema = lifecycleInputSchema.extend({
   }
 });
 
-function alarmPrefix(): string {
-  return ALARM_LOCAL_ROUTES_ENABLED ? '/api/v1/local/sites' : '/api/v1/sites';
+function localAlarmPrefix(): string {
+  return '/api/v1/local/sites';
 }
 
 async function alarmRequest<T>(
@@ -124,6 +154,15 @@ async function alarmRequest<T>(
   });
   const payload: unknown = await response.json().catch(() => ({}));
   if (!response.ok) {
+    const publicEnvelope = publicErrorEnvelopeSchema.safeParse(payload);
+    if (publicEnvelope.success) {
+      throw new AlarmApiError(
+        response.status,
+        publicEnvelope.data.error.code,
+        publicEnvelope.data.error.message,
+        Boolean((publicEnvelope.data.error.details as { retryable?: boolean } | null)?.retryable),
+      );
+    }
     const problem = problemSchema.parse(payload);
     throw new AlarmApiError(
       response.status,
@@ -151,21 +190,28 @@ export async function listScopedAlarms(
   }
   const { tenantId, siteId } = validatedScope(options);
   const parameters = new URLSearchParams();
+  parameters.set('siteId', siteId);
   if (filter.status) parameters.set('status', alarmStatusSchema.parse(filter.status));
   if (filter.severity) parameters.set('severity', alarmSeveritySchema.parse(filter.severity));
-  if (filter.cursor) parameters.set('cursor', alarmUUIDv7Schema.parse(filter.cursor));
+  if (filter.cursor) parameters.set('cursor', alarmCursorSchema.parse(filter.cursor));
   const limit = filter.limit ?? 50;
-  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-    throw new AlarmApiError(400, 'ALARM_FILTER_INVALID', 'Alarm 列表数量必须在 1 到 100 之间。');
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+    throw new AlarmApiError(400, 'INVALID_ARGUMENT', 'Alarm 列表数量必须在 1 到 200 之间。');
   }
   parameters.set('limit', String(limit));
   const payload = await alarmRequest(
-    `${alarmPrefix()}/${encodeURIComponent(siteId)}/alarms?${parameters.toString()}`,
-    alarmListResponseSchema,
+    `${alarmPaths.list}?${parameters.toString()}`,
+    publicAlarmListEnvelopeSchema,
     { method: 'GET' },
     options,
   );
-  return validateAlarmListScope(payload, { trustedTenantId: tenantId, trustedSiteId: siteId });
+  const response = alarmListResponseSchema.parse({
+    schemaVersion: 1,
+    items: payload.data,
+    nextCursor: payload.meta.nextCursor,
+    hasMore: payload.meta.hasMore,
+  });
+  return validateAlarmListScope(response, { trustedTenantId: tenantId, trustedSiteId: siteId });
 }
 
 export async function getScopedAlarm(
@@ -178,17 +224,17 @@ export async function getScopedAlarm(
   const { tenantId, siteId } = validatedScope(options);
   const validatedAlarmId = alarmUUIDv7Schema.parse(alarmId);
   const payload = await alarmRequest(
-    `${alarmPrefix()}/${encodeURIComponent(siteId)}/alarms/${encodeURIComponent(validatedAlarmId)}`,
-    alarmSchema,
+    alarmPaths.detail.replace('{alarmId}', encodeURIComponent(validatedAlarmId)),
+    publicAlarmEnvelopeSchema,
     { method: 'GET' },
     options,
   );
-  return validateAlarmScope(payload, { trustedTenantId: tenantId, trustedSiteId: siteId });
+  return validateAlarmScope(payload.data, { trustedTenantId: tenantId, trustedSiteId: siteId });
 }
 
 async function mutateScopedAlarm(
   alarmId: string,
-  operation: Exclude<AlarmOperation, 'PUBLISH'>,
+  operation: Exclude<AlarmOperation, 'PUBLISH' | 'ACKNOWLEDGE'>,
   input: AlarmLifecycleInput | AlarmAssignInput | AlarmSuppressInput,
   options: ScopedAlarmRequestOptions,
 ): Promise<Alarm> {
@@ -197,13 +243,13 @@ async function mutateScopedAlarm(
   }
   const { tenantId, siteId } = validatedScope(options);
   const validatedAlarmId = alarmUUIDV7(alarmId);
-  const validatedOperation = alarmOperationSchema.exclude(['PUBLISH']).parse(operation);
+  const validatedOperation = alarmOperationSchema.exclude(['PUBLISH', 'ACKNOWLEDGE']).parse(operation);
   if (!options.csrfToken) {
     throw new AlarmApiError(401, 'CSRF_REQUIRED', '认证会话没有提供 CSRF 能力。');
   }
   const idempotencyKey = options.idempotencyKey ?? `real-alarm-${crypto.randomUUID()}`;
   const payload = await alarmRequest(
-    `${alarmPrefix()}/${encodeURIComponent(siteId)}/alarms/${encodeURIComponent(validatedAlarmId)}:${validatedOperation.toLowerCase()}`,
+    `${localAlarmPrefix()}/${encodeURIComponent(siteId)}/alarms/${encodeURIComponent(validatedAlarmId)}:${validatedOperation.toLowerCase()}`,
     alarmSchema,
     {
       method: 'POST',
@@ -227,8 +273,23 @@ function alarmUUIDV7(value: string): string {
   }
 }
 
-export function acknowledgeScopedAlarm(alarmId: string, input: AlarmLifecycleInput, options: ScopedAlarmRequestOptions): Promise<Alarm> {
-  return mutateScopedAlarm(alarmId, 'ACKNOWLEDGE', lifecycleInputSchema.parse(input), options);
+export async function acknowledgeScopedAlarm(alarmId: string, input: AlarmAcknowledgeInput, options: ScopedAlarmRequestOptions): Promise<Alarm> {
+  if (!ALARM_PUBLIC_ROUTES_ENABLED) {
+    throw new AlarmApiError(503, 'ALARM_ROUTE_DISABLED', 'Alarm ACK 路由尚未启用。');
+  }
+  const { tenantId, siteId } = validatedScope(options);
+  const validatedAlarmId = alarmUUIDV7(alarmId);
+  const body = acknowledgeInputSchema.parse(input);
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  if (options.csrfToken) headers.set('X-CSRF-Token', options.csrfToken);
+  if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey);
+  const payload = await alarmRequest(
+    alarmPaths.acknowledge.replace('{alarmId}', encodeURIComponent(validatedAlarmId)),
+    publicAlarmEnvelopeSchema,
+    { method: 'POST', headers, body: JSON.stringify(body) },
+    options,
+  );
+  return validateAlarmScope(payload.data, { trustedTenantId: tenantId, trustedSiteId: siteId });
 }
 
 export function assignScopedAlarm(alarmId: string, input: AlarmAssignInput, options: ScopedAlarmRequestOptions): Promise<Alarm> {

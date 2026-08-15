@@ -32,7 +32,7 @@ const canonical = {
   alignment: await read('docs/operations/phase1-deployment-alignment.md'),
 };
 
-assert(canonical.readme.includes('Phase 1 canonical deployment 是 **Linux Server + Docker Compose**'), 'README must identify Linux Server + Docker Compose as the Phase 1 canonical deployment');
+assert(canonical.readme.includes('Phase 1 canonical deployment 是 **1 Linux Server + Docker Compose**'), 'README must identify 1 Linux Server + Docker Compose as the Phase 1 canonical deployment');
 assert(canonical.readme.includes('docs/architecture/phase1-overall-architecture.md'), 'README must link the Phase 1 overall architecture baseline');
 assert(canonical.architecture.includes('一级架构只表达职责'), 'overall architecture must keep implementation stage names out of L1');
 assert(canonical.architecture.includes('Phase 1 canonical deployment'), 'overall architecture must define the canonical Phase 1 deployment');
@@ -53,8 +53,6 @@ const scopedDocuments = {
   'docs/operations/s0-observability.md': ['Scope: CERTIFICATION_REFERENCE', 'Redpanda is not required by the canonical Phase 1 deployment'],
   'docs/security/s0-durable-session-audit.md': ['Scope: CERTIFICATION_REFERENCE', 'does not make Kafka/Redpanda a Phase 1 Production dependency'],
   'deploy/s3/target/README.md': ['Scope: CERTIFICATION_REFERENCE', 'not the canonical Phase 1 platform deployment'],
-  'deploy/s3/local/README.md': ['Scope: LOCAL_FIXTURE', 'not the canonical Phase 1 deployment'],
-  'deploy/s3/local-thingsboard/README.md': ['Scope: LOCAL_FIXTURE', 'not a Phase 1 Production topology'],
 };
 
 for (const [path, markers] of Object.entries(scopedDocuments)) {

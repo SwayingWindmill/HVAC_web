@@ -33,7 +33,7 @@ V2.1.2 定义 19 个逻辑领域：
 18. MLOps Metadata
 19. Audit
 
-逻辑领域不等于 Deployable Service，不允许按表拆服务。Phase 1 默认业务物理形态已收敛为 `energy-api + iot-service + telemetry-worker + metric-worker`；Forecast / Optimization 作为 selective intelligence services 按需部署，因此 `PHASE1_PHYSICAL_SERVICE_CONVERGENCE=PASS`。
+逻辑领域不等于 Deployable Service，不允许按表拆服务。Phase 1 默认业务物理形态已收敛为 `energy-api + iot-service + telemetry-worker + metric-worker`；Forecast / Optimization 作为 selective intelligence services 按需部署，因此 `PHASE1_PHYSICAL_SERVICE_CONVERGENCE=PASS`。Application `scheduler` 是跨领域 Job Coordination 进程，不拥有新的业务领域职责，因此不改变 V2.1.2 的四个默认业务 deployable 边界。
 
 ## 3. SE-API-001
 
@@ -47,7 +47,7 @@ V2.1.2 定义 19 个逻辑领域：
 - verified Telemetry workload 使用 Tenant 上下文，不再允许旧 `X-Organization-ID` compatibility exception。
 - Operations Agent Registry grant 使用 `X-Operations-Registry-Asset-Grant`；旧 Equipment grant 不再作为运行时输入。
 
-完整 SE-API-001 详细 request/query/domain shape 尚未提供的路由不得由仓库自行发明参数。当前 13 条 shape-pending canonical 路由由 Gateway 明确识别为 contract-only：正确 method 返回 `503 CONTRACT_NOT_ACTIVE`，错误 method 返回 405，二者都使用冻结的 V2.1.2 error envelope，不再依赖旧 Site-scoped handler 或偶然 route-missing 404。Alarm 仍因缺少无 Site path 下 exact Site 授权的冻结规则而不启用真实业务读取/ACK。因此 `SE_API_001_RUNTIME_CONVERGENCE` 仍为 PARTIAL。
+`SE-API-001 V1.2 CURRENT CANDIDATE` 已完成逐路由审查，结果固化在 `contracts/architecture/se-api-001-v1.2-runtime-convergence.json`。Alarm Domain 已由 `SE-DOMAIN-ALARM-001 V1.0` 补齐公开分页、BOLA-safe `alarmId -> Site` 解析以及 ACK 独立事实/幂等语义，因此 3 条 Alarm 路由已同步 OpenAPI 并正式激活；当前严格分类为 `A=3 / B=0 / C=10`。剩余 10 条又进一步对照 `SE-DATA-001 V2.0 CURRENT`、`SE-AI-001 V1.0 CURRENT`、`SE-AI-002 V1.0 CURRENT`、当前 Registry/S2 machine contract 以及 Forecast/Optimization 真实 runtime 重新审查：Registry 仍缺 Create Site、Space Tree、跨 Site Device List、Device Point List 的 endpoint-specific machine projection；Point-centric Latest/History 与现有 Device-centric S2 Snapshot/History contract 语义不同；Forecast 当前公开 API 在详细设计中仍为建议/示例，而 runtime 只有内部 `POST /v1/forecast`；Optimization 虽冻结 Run 核心字段和状态，但公开 Run API 仍是建议级，runtime 只有同步内部 `POST /v1/optimize`，没有 durable public Run resource。故只有这 10 条继续由 Gateway fail-closed：正确 method 返回 `503 CONTRACT_NOT_ACTIVE`，错误 method 返回 405。`SE_API_001_RUNTIME_CONVERGENCE` 保持 PARTIAL，且不通过伪造 public Schema 来清零。
 
 ## 4. Device / IoT / Telemetry / Control
 
@@ -92,7 +92,7 @@ stale `PERSISTING` 必须通过 ClickHouse evidence 进行 reconcile。
 
 ## 6. 当前两个 PARTIAL
 
-`PHASE1_PHYSICAL_SERVICE_CONVERGENCE` 已完成：默认业务部署已收敛为 `energy-api + iot-service + telemetry-worker + metric-worker`。`energy-api` 合并 Platform Gateway、IAM、Registry Core、Telemetry Query、Audit、Alarm、Work Order、Command，同时保留各逻辑 owner 的 mTLS listener / SPIFFE identity；Session Audit 使用 PostgreSQL Outbox 直投，不依赖 Kafka；`iot-service` 合并 MQTT 上行、Command dispatch/verification；`telemetry-worker` 合并 Telemetry Runtime、history projection、analytics projection；`metric-worker` 执行显式 Scheduled Binding Finalize 与 scoped reconcile。Forecast / Optimization 保持 selective intelligence services。
+`PHASE1_PHYSICAL_SERVICE_CONVERGENCE` 已完成：默认业务部署已收敛为 `energy-api + iot-service + telemetry-worker + metric-worker`。`energy-api` 合并 Platform Gateway、IAM、Registry Core、Telemetry Query、Audit、Alarm、Work Order、Command，同时保留各逻辑 owner 的 mTLS listener / SPIFFE identity；Session Audit 使用 PostgreSQL Outbox 直投，不依赖 Kafka；`iot-service` 合并 MQTT 上行、Command dispatch/verification；`telemetry-worker` 合并 Telemetry Runtime、history projection、analytics projection；`metric-worker` 只执行由 Application Scheduler 协调产生的 `METRIC_*` durable Job 与 scoped reconcile，不再拥有 Schedule scan authority。独立 `scheduler` 只负责跨领域 Job Coordination，因此不计作新的业务 deployable。Forecast / Optimization 保持 selective intelligence services。
 
 当前仅剩：
 

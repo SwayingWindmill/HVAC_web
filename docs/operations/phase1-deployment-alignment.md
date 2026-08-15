@@ -2,7 +2,7 @@
 
 ## Authority
 
-Phase 1 总体和部署架构以 `架构规划/智慧能源系统部署与运维架构设计.md` 为准。实现采用以下处理规则：
+Phase 1 总体和部署架构以 `SE-ARCH-DEPLOY-001 V1.0 CURRENT`《智慧能源系统总体部署架构设计 V1（单服务器基线）》为准。实现采用以下处理规则：
 
 ```text
 文档要求且缺失       -> MISSING，补齐
@@ -16,7 +16,7 @@ Phase 1 总体和部署架构以 `架构规划/智慧能源系统部署与运维
 
 ## Phase 1 canonical deployment
 
-第一阶段正式部署模型固定为 Linux Server + Docker Compose。Kubernetes manifests 可以继续用于历史认证和未来阶段实验，但不得成为 Phase 1 运行、Staging 或 Production Acceptance 的必需依赖。
+第一阶段正式部署模型固定为 1 Linux Server + Docker Compose。Application / IoT / Telemetry / Metric / Data / MQTT / Observability 在同一服务器内保持独立组件、网络和数据边界；多服务器与 Kubernetes 仅属于未来拆分/演进，不得成为当前 Phase 1 运行、Staging 或 Production Acceptance 的部署形态。
 
 目标目录：
 
@@ -57,15 +57,12 @@ Production Compose
 
 现有 SBOM、provenance、Cosign、immutable digest 等供应链安全能力继续保留。这些能力不会因为取消 Kubernetes 作为 Phase 1 前置而降低。
 
-## Known gaps that must remain visible
+## Recovery targets and production evidence
 
-以下能力当前仍是显式缺口，不能因为架构/部署 Gate 通过而宣称已完成：
+Phase 1 架构/部署矩阵当前不再保留 `MISSING`。`SE-OPS-009 V1.0 CURRENT CANDIDATE` 已正式给出分层恢复目标，并由 `deploy/platform/phase1/recovery/recovery-targets.v1.json` 机器化：PostgreSQL `RPO≤5min/RTO≤2h`、Control `RPO≤5min/RTO≤1h`、Telemetry Cloud `RTO≤4h`、Metric `RPO≤30min/RTO≤4h`、Whole Server Replacement `RTO≤4h`（带 Cold Standby / External Backup 等前提）。
 
-- Formal RPO/RTO drill
-- Optimization Service runtime
+Nginx + Real static image、`/realtime/ → energy-api` 公共 Realtime 边界、四环境 contract、Host metrics / 80%+90% disk alert、容器 CPU/Memory 边界、Docker log rotation、可配置宿主机数据目录、PostgreSQL WAL/base backup、Application Scheduler durable Job queue、RPO/RTO recovery contract 和 production-safe S0-S5 migration runner 已进入 canonical Phase 1 deployment。fixture/testdata/local bootstrap 不进入生产执行链。
 
-Nginx + Real static image、四环境 contract、单实例 Grafana/Loki/Tempo、OTel 聚合、PostgreSQL WAL/base backup 和 production-safe S0-S5 migration runner 已进入 canonical Phase 1 deployment。迁移器使用精确 allowlist、执行 SQL hash/drift tracking 和运行时 role credential file；fixture/testdata/local bootstrap 不进入生产执行链。RPO/RTO 必须以真实故障时间戳演练证明；Optimization 也必须有真实业务 runtime，不能用占位容器伪装完成。
+RPO/RTO **目标定义完成不等于生产达标证明完成**。每个生产部署仍必须使用真实 external backup 和实际恢复主机执行 timestamped Restore Drill；RTO 从“确认影响服务”开始，到关键业务验证完成结束，不能以 Container Running 作为结束点。Drill 必须记录 Actual RPO/RTO、Control reconciliation、Scheduler/Outbox backlog、Edge Replay（若声明 Telemetry effective RPO）及问题整改。未通过真实演练时，不得对现场声明目标已经达成。
 
-上传的部署文档对 RPO/RTO 给出的是概念和示例（例如 RPO ≤ 15 min、RTO ≤ 1 hour），没有指定本项目必须采用的最终目标值，因此不能把示例静默固化成生产 SLO；该项需要明确的业务/运维目标后再做带时间戳的正式演练。文档同样只规定 Optimization Service 应独立部署，并未提供足够的优化 API、算法或输入输出契约，所以不能通过一个空 Python 容器把它伪装成已完成能力。
-
-只有剩余 `MISSING` 项获得相应设计输入并完成实现，再通过 Simulator/Formal/Hardware 各自适用的验收后，才能形成完整 Phase 1 Production Deployment Acceptance。
+Scheduler HTTP 管理 URI 仍是 DESIGN_PROPOSED，不固化为正式 API；基础设施备份继续由 systemd timer / infrastructure scheduler 独立触发。Optimization 保持 DEFER，不作为基础部署缺口。

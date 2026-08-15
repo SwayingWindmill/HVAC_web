@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -57,24 +58,18 @@ func (store *PostgresStore) List(ctx context.Context, tenantID, siteID string, f
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	limit := filter.Limit
-	if limit <= 0 || limit > 100 {
+	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	var cursorOccurredAt *time.Time
+	var cursorTriggeredAt *time.Time
+	var cursorAlarmID any
 	if filter.Cursor != "" {
-		var instant time.Time
-		err := tx.QueryRow(ctx, `
-			SELECT last_occurred_at
-			FROM alarm_runtime.alarm_current
-			WHERE tenant_id = $1 AND site_id = $2 AND alarm_id = $3
-		`, tenantID, siteID, filter.Cursor).Scan(&instant)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return alarmmodel.ListResponse{}, ErrNotFound
-		}
+		triggeredAt, alarmID, err := decodeAlarmCursor(tenantID, siteID, filter)
 		if err != nil {
-			return alarmmodel.ListResponse{}, fmt.Errorf("read Alarm cursor: %w", err)
+			return alarmmodel.ListResponse{}, ErrInvalidCursor
 		}
-		cursorOccurredAt = &instant
+		cursorTriggeredAt = &triggeredAt
+		cursorAlarmID = alarmID
 	}
 	rows, err := tx.Query(ctx, `
 		SELECT alarm_id, tenant_id, site_id, device_id, source_type, source_reference,
@@ -85,10 +80,10 @@ func (store *PostgresStore) List(ctx context.Context, tenantID, siteID string, f
 		  AND site_id = $2
 		  AND ($3 = '' OR status = $3)
 		  AND ($4 = '' OR severity = $4)
-		  AND ($5::timestamptz IS NULL OR last_occurred_at < $5 OR (last_occurred_at = $5 AND alarm_id > $6::uuid))
-		ORDER BY last_occurred_at DESC, alarm_id ASC
+		  AND ($5::timestamptz IS NULL OR first_occurred_at < $5 OR (first_occurred_at = $5 AND alarm_id < $6::uuid))
+		ORDER BY first_occurred_at DESC, alarm_id DESC
 		LIMIT $7
-	`, tenantID, siteID, string(filter.Status), string(filter.Severity), cursorOccurredAt, nullableCursor(filter.Cursor), limit+1)
+	`, tenantID, siteID, string(filter.Status), string(filter.Severity), cursorTriggeredAt, cursorAlarmID, limit+1)
 	if err != nil {
 		return alarmmodel.ListResponse{}, fmt.Errorf("list Alarms: %w", err)
 	}
@@ -106,8 +101,11 @@ func (store *PostgresStore) List(ctx context.Context, tenantID, siteID string, f
 	}
 	response := alarmmodel.ListResponse{SchemaVersion: alarmmodel.SchemaVersion, Items: items}
 	if len(response.Items) > limit {
-		cursor := response.Items[limit-1].AlarmID
 		response.Items = response.Items[:limit]
+		cursor, err := encodeAlarmCursor(tenantID, siteID, filter, response.Items[len(response.Items)-1])
+		if err != nil {
+			return alarmmodel.ListResponse{}, fmt.Errorf("encode Alarm cursor: %w", err)
+		}
 		response.NextCursor = &cursor
 		response.HasMore = true
 	}
@@ -136,9 +134,40 @@ func (store *PostgresStore) Get(ctx context.Context, tenantID, siteID, alarmID s
 	return alarm, nil
 }
 
+func (store *PostgresStore) ResolveScope(ctx context.Context, tenantID, alarmID string) (AlarmScope, error) {
+	if store == nil || store.pool == nil {
+		return AlarmScope{}, ErrUnavailable
+	}
+	tx, err := store.beginTenantTransaction(ctx, tenantID, true)
+	if err != nil {
+		return AlarmScope{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var scope AlarmScope
+	err = tx.QueryRow(ctx, `
+		SELECT tenant_id::text, site_id::text
+		FROM alarm_runtime.alarm_current
+		WHERE tenant_id = $1 AND alarm_id = $2
+	`, tenantID, alarmID).Scan(&scope.TenantID, &scope.SiteID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AlarmScope{}, ErrNotFound
+	}
+	if err != nil {
+		return AlarmScope{}, fmt.Errorf("resolve Alarm scope: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return AlarmScope{}, fmt.Errorf("commit Alarm scope read: %w", err)
+	}
+	return scope, nil
+}
+
 func (store *PostgresStore) Apply(ctx context.Context, tenantID, siteID, alarmID string, mutation Mutation) (MutationResult, error) {
 	if store == nil || store.pool == nil {
 		return MutationResult{}, ErrUnavailable
+	}
+	key := strings.TrimSpace(mutation.IdempotencyKey)
+	if key == "" && mutation.Operation != alarmmodel.OperationAcknowledge {
+		return MutationResult{}, alarmmodel.ErrInvalidOperation
 	}
 	digest, err := mutationDigest(mutation)
 	if err != nil {
@@ -154,28 +183,30 @@ func (store *PostgresStore) Apply(ctx context.Context, tenantID, siteID, alarmID
 	if err != nil {
 		return MutationResult{}, err
 	}
-	var storedDigest string
 	var responseJSON []byte
-	err = tx.QueryRow(ctx, `
-		SELECT request_digest, response
-		FROM alarm_runtime.alarm_idempotency
-		WHERE tenant_id = $1 AND site_id = $2 AND alarm_id = $3 AND idempotency_key = $4
-	`, tenantID, siteID, alarmID, mutation.IdempotencyKey).Scan(&storedDigest, &responseJSON)
-	if err == nil {
-		if storedDigest != digest {
-			return MutationResult{}, ErrIdempotencyConflict
+	if key != "" {
+		var storedDigest string
+		err = tx.QueryRow(ctx, `
+			SELECT request_digest, response
+			FROM alarm_runtime.alarm_idempotency
+			WHERE tenant_id = $1 AND site_id = $2 AND alarm_id = $3 AND idempotency_key = $4
+		`, tenantID, siteID, alarmID, key).Scan(&storedDigest, &responseJSON)
+		if err == nil {
+			if storedDigest != digest {
+				return MutationResult{}, ErrIdempotencyConflict
+			}
+			var replay alarmmodel.Alarm
+			if json.Unmarshal(responseJSON, &replay) != nil || replay.Validate() != nil || replay.TenantID != tenantID || replay.SiteID != siteID || replay.AlarmID != alarmID {
+				return MutationResult{}, ErrUnavailable
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return MutationResult{}, fmt.Errorf("commit Alarm idempotency replay: %w", err)
+			}
+			return MutationResult{Alarm: replay, Replayed: true}, nil
 		}
-		var replay alarmmodel.Alarm
-		if json.Unmarshal(responseJSON, &replay) != nil || replay.Validate() != nil || replay.TenantID != tenantID || replay.SiteID != siteID || replay.AlarmID != alarmID {
-			return MutationResult{}, ErrUnavailable
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return MutationResult{}, fmt.Errorf("read Alarm idempotency record: %w", err)
 		}
-		if err := tx.Commit(ctx); err != nil {
-			return MutationResult{}, fmt.Errorf("commit Alarm idempotency replay: %w", err)
-		}
-		return MutationResult{Alarm: replay, Replayed: true}, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return MutationResult{}, fmt.Errorf("read Alarm idempotency record: %w", err)
 	}
 
 	updated, err := alarmmodel.ApplyOperation(current, mutation.operationInput())
@@ -207,18 +238,20 @@ func (store *PostgresStore) Apply(ctx context.Context, tenantID, siteID, alarmID
 	if err != nil {
 		return MutationResult{}, fmt.Errorf("encode Alarm mutation response: %w", err)
 	}
-	_, err = tx.Exec(ctx, `
-		INSERT INTO alarm_runtime.alarm_idempotency (
-			tenant_id, site_id, alarm_id, idempotency_key, request_digest, response, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, tenantID, siteID, alarmID, mutation.IdempotencyKey, digest, responseJSON, mutation.OccurredAt)
-	if err != nil {
-		return MutationResult{}, fmt.Errorf("write Alarm idempotency record: %w", err)
+	if key != "" {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO alarm_runtime.alarm_idempotency (
+				tenant_id, site_id, alarm_id, idempotency_key, request_digest, response, created_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`, tenantID, siteID, alarmID, key, digest, responseJSON, mutation.OccurredAt)
+		if err != nil {
+			return MutationResult{}, fmt.Errorf("write Alarm idempotency record: %w", err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return MutationResult{}, fmt.Errorf("commit Alarm mutation: %w", err)
 	}
-	return MutationResult{Alarm: updated}, nil
+	return MutationResult{Alarm: updated, Replayed: updated.Version == current.Version}, nil
 }
 
 func (store *PostgresStore) beginTenantTransaction(ctx context.Context, tenantID string, readOnly bool) (pgx.Tx, error) {

@@ -240,7 +240,7 @@ function ReadySiteSurface({
         <RealAssetsWorkspace
           site={decision.context.site}
           principal={snapshot.principal!}
-          requestedEquipmentId={decision.equipmentId}
+          requestedAssetId={decision.assetId}
           protectedGeneration={snapshot.protectedScope!.generation}
           protectedRequestToken={protectedRequestToken}
           registerProtectedResource={registerProtectedResource}

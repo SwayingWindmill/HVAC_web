@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,10 +32,11 @@ type request struct {
 	Limit       int       `json:"limit"`
 }
 
-type scheduledBinding struct {
-	TenantID  string `json:"tenantId"`
-	SiteID    string `json:"siteId"`
-	BindingID string `json:"bindingId"`
+type metricJobPayload struct {
+	BindingID               string    `json:"bindingId"`
+	PeriodStart             time.Time `json:"periodStart"`
+	PeriodEnd               time.Time `json:"periodEnd"`
+	FinalizationDelaySeconds int64     `json:"finalizationDelaySeconds"`
 }
 
 type runtime struct {
@@ -66,12 +68,11 @@ func main() {
 		return
 	}
 
-	bindings, err := parseScheduledBindings(requiredEnv("METRIC_WORKER_BINDINGS_JSON"))
-	if err != nil {
-		logger.Error("metric_worker_bindings_invalid", "error_code", "METRIC_WORKER_BINDINGS_INVALID")
-		os.Exit(1)
-	}
-	pollInterval := durationEnv("METRIC_WORKER_POLL_INTERVAL", 30*time.Second, time.Second, 10*time.Minute)
+	workerID := requiredEnv("METRIC_WORKER_ID")
+	claimInterval := durationEnv("METRIC_JOB_CLAIM_INTERVAL", 2*time.Second, time.Second, time.Minute)
+	claimBatch := integerEnv("METRIC_JOB_CLAIM_BATCH", 20, 1, 100)
+	leaseDuration := durationEnv("METRIC_JOB_LEASE_DURATION", 60*time.Second, 10*time.Second, 30*time.Minute)
+	leaseRenew := durationEnv("METRIC_JOB_LEASE_RENEW_INTERVAL", leaseDuration/3, time.Second, leaseDuration/2)
 	finalizationDelay := durationEnv("METRIC_WORKER_FINALIZATION_DELAY", 5*time.Minute, 0, 24*time.Hour)
 
 	diagnostics := &http.Server{
@@ -86,9 +87,10 @@ func main() {
 	}()
 
 	telemetry.MarkReady()
-	logger.Info("metric_worker_started", "binding_count", len(bindings), "poll_interval", pollInterval.String(), "finalization_delay", finalizationDelay.String())
-	runWorker(ctx, runtime, bindings, pollInterval, finalizationDelay, telemetry, logger)
+	logger.Info("metric_worker_started", "worker_id", workerID, "claim_interval", claimInterval.String(), "claim_batch", claimBatch, "lease_duration", leaseDuration.String(), "finalization_delay", finalizationDelay.String())
+	runWorker(ctx, runtime, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew, finalizationDelay, telemetry, logger)
 	telemetry.MarkNotReady()
+
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	_ = diagnostics.Shutdown(shutdownContext)
@@ -152,129 +154,240 @@ func (runtime *runtime) Close() {
 	}
 }
 
-func runWorker(ctx context.Context, runtime *runtime, bindings []scheduledBinding, pollInterval, finalizationDelay time.Duration, telemetry *observability.Runtime, logger *slog.Logger) {
-	runScheduledBindings(ctx, runtime, bindings, finalizationDelay, telemetry, logger)
-	ticker := time.NewTicker(pollInterval)
+func runWorker(ctx context.Context, runtime *runtime, workerID string, claimInterval time.Duration, claimBatch int, leaseDuration, leaseRenew, finalizationDelay time.Duration, telemetry *observability.Runtime, logger *slog.Logger) {
+	backfillSemaphore := make(chan struct{}, 1)
+	claimAndRun(ctx, runtime, workerID, claimBatch, leaseDuration, leaseRenew, finalizationDelay, backfillSemaphore, telemetry, logger)
+	ticker := time.NewTicker(claimInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			runScheduledBindings(ctx, runtime, bindings, finalizationDelay, telemetry, logger)
+			claimAndRun(ctx, runtime, workerID, claimBatch, leaseDuration, leaseRenew, finalizationDelay, backfillSemaphore, telemetry, logger)
 		}
 	}
 }
 
-func runScheduledBindings(ctx context.Context, runtime *runtime, bindings []scheduledBinding, finalizationDelay time.Duration, telemetry *observability.Runtime, logger *slog.Logger) {
-	now := time.Now().UTC()
-	runScopeReconciliation(ctx, runtime, bindings, now.Add(-5*time.Minute), telemetry, logger)
-	for _, binding := range bindings {
-		if ctx.Err() != nil {
-			return
+func claimAndRun(ctx context.Context, runtime *runtime, workerID string, claimBatch int, leaseDuration, leaseRenew, finalizationDelay time.Duration, backfillSemaphore chan struct{}, telemetry *observability.Runtime, logger *slog.Logger) {
+	claimContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+	jobs, err := runtime.store.ClaimMetricJobs(claimContext, workerID, claimBatch, leaseDuration, time.Now().UTC())
+	cancel()
+	if err != nil {
+		recordMetricWorkerResult(telemetry, "claim_error")
+		logger.Warn("metric_job_claim_failed", "error_code", "METRIC_JOB_CLAIM_FAILED")
+		return
+	}
+	if len(jobs) == 0 {
+		return
+	}
+	var wait sync.WaitGroup
+	for _, claimed := range jobs {
+		job := claimed
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			if job.JobType == "METRIC_BACKFILL" {
+				select {
+				case backfillSemaphore <- struct{}{}:
+					defer func() { <-backfillSemaphore }()
+				case <-ctx.Done():
+					return
+				}
+			}
+			executeMetricJob(ctx, runtime, job, leaseDuration, leaseRenew, finalizationDelay, telemetry, logger)
+		}()
+	}
+	wait.Wait()
+}
+
+func executeMetricJob(ctx context.Context, runtime *runtime, job metric.SchedulerJob, leaseDuration, leaseRenew, finalizationDelay time.Duration, telemetry *observability.Runtime, logger *slog.Logger) {
+	if err := metric.ValidateMetricSchedulerJob(job); err != nil {
+		recordMetricWorkerResult(telemetry, "invalid_job")
+		logger.Warn("metric_job_invalid", "job_id", job.JobID, "error_code", "METRIC_JOB_INVALID")
+		return
+	}
+	started, err := runtime.store.StartMetricJob(ctx, job, leaseDuration, time.Now().UTC())
+	if err != nil {
+		recordMetricWorkerResult(telemetry, "start_error")
+		logger.Warn("metric_job_start_failed", "job_id", job.JobID, "error_code", "METRIC_JOB_START_FAILED")
+		return
+	}
+	if !started {
+		recordMetricWorkerResult(telemetry, "cancelled_before_start")
+		return
+	}
+	logger.Info("metric_job_started",
+		"job_id", job.JobID, "job_type", job.JobType, "schedule_id", job.ScheduleID, "trigger_type", job.TriggerType,
+		"attempt_no", job.AttemptNo, "worker_id", job.WorkerID, "tenant_id", job.TenantID, "site_id", job.SiteID,
+		"scheduled_for", job.ScheduledFor, "trace_id", job.TraceID,
+	)
+
+	jobContext, cancelJob := context.WithTimeout(ctx, time.Duration(job.TimeoutSeconds)*time.Second)
+	defer cancelJob()
+	leaseStop := make(chan struct{})
+	leaseDone := make(chan struct{})
+	cancelRequested := make(chan struct{}, 1)
+	go func() {
+		defer close(leaseDone)
+		ticker := time.NewTicker(leaseRenew)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-leaseStop:
+				return
+			case <-jobContext.Done():
+				return
+			case <-ticker.C:
+				renewContext, renewCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				requested, renewErr := runtime.store.RenewMetricJobLease(renewContext, job, leaseDuration, time.Now().UTC())
+				renewCancel()
+				if renewErr != nil {
+					recordMetricWorkerResult(telemetry, "lease_error")
+					cancelJob()
+					return
+				}
+				if requested {
+					select {
+					case cancelRequested <- struct{}{}:
+					default:
+					}
+					cancelJob()
+					return
+				}
+			}
 		}
-		scheduleContext, cancel := context.WithTimeout(ctx, 10*time.Second)
-		schedule, err := runtime.store.LoadSchedule(scheduleContext, binding.TenantID, binding.SiteID, binding.BindingID, now)
+	}()
+
+	output, errorCode, retryable, executionErr := executeMetricBusiness(jobContext, runtime, job, finalizationDelay)
+	close(leaseStop)
+	<-leaseDone
+
+	select {
+	case <-cancelRequested:
+		cancelContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err = runtime.store.CancelRunningMetricJob(cancelContext, job, time.Now().UTC())
 		cancel()
 		if err != nil {
-			recordMetricWorkerResult(telemetry, "schedule_error")
-			logger.Warn("metric_schedule_load_failed", "binding_id", binding.BindingID, "error_code", "METRIC_SCHEDULE_LOAD_FAILED")
-			continue
+			logger.Warn("metric_job_cancel_finalize_failed", "job_id", job.JobID, "error_code", "METRIC_JOB_CANCEL_FINALIZE_FAILED")
 		}
-		period, err := metric.CompletedPeriod(schedule, now, finalizationDelay)
-		if err != nil {
-			if strings.EqualFold(strings.TrimSpace(schedule.Granularity), "REALTIME") {
-				recordMetricWorkerResult(telemetry, "realtime_skipped")
-				continue
-			}
-			recordMetricWorkerResult(telemetry, "period_error")
-			logger.Warn("metric_period_invalid", "binding_id", binding.BindingID, "granularity", schedule.Granularity, "error_code", "METRIC_PERIOD_INVALID")
-			continue
+		recordMetricWorkerResult(telemetry, "cancelled")
+		_ = telemetry.Metrics.AddCounter("job_cancelled_total", "Cancelled durable Jobs.", map[string]string{"job_type": job.JobType}, 1)
+		return
+	default:
+	}
+
+	if executionErr != nil {
+		if errors.Is(executionErr, context.DeadlineExceeded) {
+			errorCode, retryable = "TIMEOUT", true
 		}
-		checkContext, checkCancel := context.WithTimeout(ctx, 10*time.Second)
-		exists, err := runtime.store.HasActiveScheduledRun(checkContext, binding.TenantID, binding.SiteID, binding.BindingID, period)
-		checkCancel()
+		failureContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err = runtime.store.FailMetricJob(failureContext, job, errorCode, executionErr, retryable, time.Now().UTC())
+		cancel()
 		if err != nil {
-			recordMetricWorkerResult(telemetry, "dedupe_error")
-			logger.Warn("metric_scheduled_dedupe_failed", "binding_id", binding.BindingID, "error_code", "METRIC_SCHEDULE_DEDUPE_FAILED")
-			continue
+			logger.Warn("metric_job_failure_finalize_failed", "job_id", job.JobID, "error_code", "METRIC_JOB_FAILURE_FINALIZE_FAILED")
+		}
+		recordMetricWorkerResult(telemetry, "execute_error")
+		switch {
+		case retryable && job.AttemptNo < job.MaxAttempts:
+			_ = telemetry.Metrics.AddCounter("job_retry_total", "Durable Job retries.", map[string]string{"job_type": job.JobType}, 1)
+		case job.AttemptNo >= job.MaxAttempts:
+			_ = telemetry.Metrics.AddCounter("job_dead_total", "Durable Jobs with exhausted attempts.", map[string]string{"job_type": job.JobType}, 1)
+		default:
+			_ = telemetry.Metrics.AddCounter("job_failed_total", "Failed durable Jobs.", map[string]string{"job_type": job.JobType}, 1)
+		}
+		return
+	}
+
+	completeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err = runtime.store.CompleteMetricJob(completeContext, job, output, time.Now().UTC())
+	cancel()
+	if err != nil {
+		recordMetricWorkerResult(telemetry, "complete_error")
+		logger.Warn("metric_job_complete_failed", "job_id", job.JobID, "error_code", "METRIC_JOB_COMPLETE_FAILED")
+		return
+	}
+	recordMetricWorkerResult(telemetry, "succeeded")
+	_ = telemetry.Metrics.AddCounter("job_succeeded_total", "Succeeded durable Jobs.", map[string]string{"job_type": job.JobType}, 1)
+	logger.Info("metric_job_succeeded", "job_id", job.JobID, "job_type", job.JobType, "attempt_no", job.AttemptNo, "trace_id", job.TraceID)
+}
+
+func executeMetricBusiness(ctx context.Context, runtime *runtime, job metric.SchedulerJob, defaultFinalizationDelay time.Duration) (map[string]any, string, bool, error) {
+	var payload metricJobPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		return nil, "INVALID_PAYLOAD", false, err
+	}
+	payload.BindingID = strings.TrimSpace(payload.BindingID)
+	if payload.BindingID == "" {
+		return nil, "INVALID_PAYLOAD", false, errors.New("metric job bindingId is required")
+	}
+
+	period := metric.Period{Start: payload.PeriodStart.UTC(), End: payload.PeriodEnd.UTC()}
+	reason := "BACKFILL"
+	switch job.JobType {
+	case "METRIC_WINDOW_CALC":
+		schedule, err := runtime.store.LoadSchedule(ctx, job.TenantID, job.SiteID, payload.BindingID, job.ScheduledFor)
+		if err != nil {
+			return nil, "DEPENDENCY_UNAVAILABLE", true, err
+		}
+		finalizationDelay := defaultFinalizationDelay
+		if payload.FinalizationDelaySeconds < 0 || payload.FinalizationDelaySeconds > int64((24*time.Hour)/time.Second) {
+			return nil, "INVALID_PAYLOAD", false, errors.New("metric finalizationDelaySeconds is invalid")
+		}
+		if payload.FinalizationDelaySeconds > 0 {
+			finalizationDelay = time.Duration(payload.FinalizationDelaySeconds) * time.Second
+		}
+		period, err = metric.CompletedPeriod(schedule, job.ScheduledFor, finalizationDelay)
+		if err != nil {
+			return nil, "INVALID_METRIC_WINDOW", false, err
+		}
+		reconcileBefore := time.Now().UTC().Add(-5 * time.Minute)
+		if _, err = runtime.engine.ReconcileScope(ctx, job.TenantID, job.SiteID, reconcileBefore, 100); err != nil {
+			return nil, "DEPENDENCY_UNAVAILABLE", true, err
+		}
+		exists, err := runtime.store.HasActiveScheduledRun(ctx, job.TenantID, job.SiteID, payload.BindingID, period)
+		if err != nil {
+			return nil, "DEPENDENCY_UNAVAILABLE", true, err
 		}
 		if exists {
-			recordMetricWorkerResult(telemetry, "already_complete")
-			continue
+			return map[string]any{"bindingId": payload.BindingID, "periodStart": period.Start, "periodEnd": period.End, "deduplicated": true}, "", false, nil
 		}
-		runContext, runCancel := context.WithTimeout(ctx, 45*time.Second)
-		result, err := runtime.engine.Execute(runContext, metric.RunRequest{
-			TenantID: binding.TenantID, SiteID: binding.SiteID, BindingID: binding.BindingID,
-			PeriodStart: period.Start, PeriodEnd: period.End, Reason: "SCHEDULED",
-		})
-		runCancel()
-		if err != nil {
-			recordMetricWorkerResult(telemetry, "execute_error")
-			logger.Warn("metric_scheduled_execution_failed", "binding_id", binding.BindingID, "period_start", period.Start, "period_end", period.End, "error_code", "METRIC_SCHEDULED_EXECUTION_FAILED")
-			continue
+		reason = "SCHEDULED"
+	case "METRIC_RECALC":
+		reason = "LATE_DATA"
+		if !period.End.After(period.Start) {
+			return nil, "INVALID_PAYLOAD", false, errors.New("metric recalculation period is invalid")
 		}
-		recordMetricWorkerResult(telemetry, "persisted")
-		logger.Info("metric_scheduled_result_persisted", "binding_id", binding.BindingID, "run_id", result.RunID, "result_id", result.ResultID, "period_start", period.Start, "period_end", period.End)
+	case "METRIC_BACKFILL":
+		reason = "BACKFILL"
+		if !period.End.After(period.Start) {
+			return nil, "INVALID_PAYLOAD", false, errors.New("metric backfill period is invalid")
+		}
+	default:
+		return nil, "UNSUPPORTED_JOB_TYPE", false, errors.New("unsupported metric job type")
 	}
-}
 
-func runScopeReconciliation(ctx context.Context, runtime *runtime, bindings []scheduledBinding, staleBefore time.Time, telemetry *observability.Runtime, logger *slog.Logger) {
-	type scope struct{ tenantID, siteID string }
-	seen := make(map[scope]struct{}, len(bindings))
-	for _, binding := range bindings {
-		key := scope{tenantID: binding.TenantID, siteID: binding.SiteID}
-		if _, duplicate := seen[key]; duplicate {
-			continue
-		}
-		seen[key] = struct{}{}
-		reconcileContext, cancel := context.WithTimeout(ctx, 20*time.Second)
-		repaired, err := runtime.engine.ReconcileScope(reconcileContext, key.tenantID, key.siteID, staleBefore, 100)
-		cancel()
-		if err != nil {
-			recordMetricWorkerResult(telemetry, "reconcile_error")
-			logger.Warn("metric_publication_reconcile_failed", "site_id", key.siteID, "error_code", "METRIC_PUBLICATION_RECONCILE_FAILED")
-			continue
-		}
-		if repaired > 0 {
-			recordMetricWorkerResult(telemetry, "reconciled")
-			logger.Info("metric_publications_reconciled", "site_id", key.siteID, "repaired", repaired)
-		}
+	result, err := runtime.engine.Execute(ctx, metric.RunRequest{
+		TenantID: job.TenantID, SiteID: job.SiteID, BindingID: payload.BindingID,
+		PeriodStart: period.Start, PeriodEnd: period.End, Reason: reason,
+	})
+	if err != nil {
+		return nil, "METRIC_EXECUTION_FAILED", true, err
 	}
+	return map[string]any{
+		"bindingId": payload.BindingID,
+		"runId": result.RunID,
+		"resultId": result.ResultID,
+		"periodStart": period.Start,
+		"periodEnd": period.End,
+	}, "", false, nil
 }
 
 func recordMetricWorkerResult(telemetry *observability.Runtime, result string) {
 	if telemetry == nil {
 		return
 	}
-	_ = telemetry.Metrics.AddCounter("hvac_metric_worker_runs_total", "Metric worker schedule outcomes.", map[string]string{"result": result}, 1)
-}
-
-func parseScheduledBindings(raw string) ([]scheduledBinding, error) {
-	var bindings []scheduledBinding
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&bindings); err != nil {
-		return nil, err
-	}
-	if len(bindings) == 0 || len(bindings) > 4096 {
-		return nil, errors.New("metric worker binding allowlist must contain 1..4096 entries")
-	}
-	seen := make(map[string]struct{}, len(bindings))
-	for i := range bindings {
-		bindings[i].TenantID = strings.TrimSpace(bindings[i].TenantID)
-		bindings[i].SiteID = strings.TrimSpace(bindings[i].SiteID)
-		bindings[i].BindingID = strings.TrimSpace(bindings[i].BindingID)
-		if bindings[i].TenantID == "" || bindings[i].SiteID == "" || bindings[i].BindingID == "" {
-			return nil, errors.New("metric worker binding identity is incomplete")
-		}
-		key := bindings[i].TenantID + "\x00" + bindings[i].SiteID + "\x00" + bindings[i].BindingID
-		if _, duplicate := seen[key]; duplicate {
-			return nil, errors.New("metric worker binding allowlist contains a duplicate")
-		}
-		seen[key] = struct{}{}
-	}
-	return bindings, nil
+	_ = telemetry.Metrics.AddCounter("hvac_metric_worker_runs_total", "Metric worker Job outcomes.", map[string]string{"result": result}, 1)
 }
 
 func runOneShot(ctx context.Context, runtime *runtime, input *os.File, output *os.File) error {

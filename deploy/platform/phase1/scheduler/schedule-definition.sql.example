@@ -1,0 +1,46 @@
+-- Operator provisioning example for SE-PLATFORM-006 V1.
+-- Scheduler HTTP management URIs remain DESIGN_PROPOSED, so Phase 1 schedule creation
+-- is an explicit PostgreSQL operation until the OpenAPI contract is frozen.
+-- Replace every placeholder before execution as scheduler_runtime.
+
+INSERT INTO core_registry.schedule_definitions (
+  schedule_id,
+  schedule_code,
+  schedule_name,
+  tenant_id,
+  site_id,
+  job_type,
+  schedule_type,
+  cron_expression,
+  cron_format_version,
+  timezone,
+  misfire_policy,
+  catch_up_limit,
+  concurrency_policy,
+  timeout_seconds,
+  max_attempts,
+  retry_policy,
+  payload_template,
+  enabled,
+  next_fire_at
+) VALUES (
+  '[SCHEDULE_UUIDV7]'::uuid,
+  'metric.site_daily_energy',
+  'Site daily energy Metric',
+  '[TENANT_UUIDV7]'::uuid,
+  '[SITE_UUIDV7]'::uuid,
+  'METRIC_WINDOW_CALC',
+  'CRON',
+  '5 0 * * *',
+  '5-field-v1',
+  'Asia/Shanghai',
+  'CATCH_UP_LIMITED',
+  7,
+  'FORBID',
+  300,
+  5,
+  '{}'::jsonb,
+  '{"bindingId":"[METRIC_BINDING_UUIDV7]","finalizationDelaySeconds":300}'::jsonb,
+  true,
+  '[NEXT_FIRE_AT_UTC]'::timestamptz
+);

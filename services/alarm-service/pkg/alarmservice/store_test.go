@@ -14,11 +14,11 @@ func TestMemoryStoreAppliesAndReplaysIdempotentMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	mutation := validMutation(alarmmodel.OperationAcknowledge, 1, "alarm-idempotency-1", "2026-07-31T12:01:00Z")
-	first, err := store.Apply(context.Background(), testOrganizationID, testSiteID, testAlarmID, mutation)
+	first, err := store.Apply(context.Background(), testTenantID, testSiteID, testAlarmID, mutation)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.Apply(context.Background(), testOrganizationID, testSiteID, testAlarmID, mutation)
+	second, err := store.Apply(context.Background(), testTenantID, testSiteID, testAlarmID, mutation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,11 +33,11 @@ func TestMemoryStoreRejectsIdempotencyKeyReuseWithDifferentPayload(t *testing.T)
 		t.Fatal(err)
 	}
 	mutation := validMutation(alarmmodel.OperationAcknowledge, 1, "alarm-idempotency-2", "2026-07-31T12:01:00Z")
-	if _, err := store.Apply(context.Background(), testOrganizationID, testSiteID, testAlarmID, mutation); err != nil {
+	if _, err := store.Apply(context.Background(), testTenantID, testSiteID, testAlarmID, mutation); err != nil {
 		t.Fatal(err)
 	}
 	mutation.Reason = "different reason"
-	if _, err := store.Apply(context.Background(), testOrganizationID, testSiteID, testAlarmID, mutation); !errors.Is(err, ErrIdempotencyConflict) {
+	if _, err := store.Apply(context.Background(), testTenantID, testSiteID, testAlarmID, mutation); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("expected idempotency conflict, got %v", err)
 	}
 }
@@ -47,11 +47,11 @@ func TestMemoryStoreRejectsStaleExpectedVersionWithoutWriting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mutation := validMutation(alarmmodel.OperationAcknowledge, 9, "alarm-idempotency-3", "2026-07-31T12:01:00Z")
-	if _, err := store.Apply(context.Background(), testOrganizationID, testSiteID, testAlarmID, mutation); !errors.Is(err, alarmmodel.ErrVersionConflict) {
+	mutation := validMutation(alarmmodel.OperationClose, 9, "alarm-idempotency-3", "2026-07-31T12:01:00Z")
+	if _, err := store.Apply(context.Background(), testTenantID, testSiteID, testAlarmID, mutation); !errors.Is(err, alarmmodel.ErrVersionConflict) {
 		t.Fatalf("expected version conflict, got %v", err)
 	}
-	current, err := store.Get(context.Background(), testOrganizationID, testSiteID, testAlarmID)
+	current, err := store.Get(context.Background(), testTenantID, testSiteID, testAlarmID)
 	if err != nil {
 		t.Fatal(err)
 	}

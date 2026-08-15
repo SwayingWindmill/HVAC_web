@@ -1,24 +1,34 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "S4 Alarm Public API — SE-API-001 subordinate contract",
+    "title": "S4 Alarm Public API — SE-DOMAIN-ALARM-001 subordinate contract",
     "version": "2.1.2",
-    "description": "Alarm Domain subordinate public contract. Public URI authority is SE-API-001 in platform-gateway.openapi.yaml. Only V2.1.2 CONTRACTED Alarm routes are represented here; request/query/domain shapes remain TO_SYNC where the full SE-API-001 source has not been supplied."
+    "description": "Alarm Domain subordinate public contract. SE-DOMAIN-ALARM-001 V1.0 freezes public Site scope, cursor pagination, BOLA-safe resource resolution, ACK request shape, permission and idempotency semantics. Existing S4 Alarm remains the canonical Alarm resource."
   },
-  "x-authority": "SE-API-001",
+  "x-authority": "SE-DOMAIN-ALARM-001 V1.0 CURRENT CANDIDATE",
   "paths": {
     "/api/v1/alarms": {
       "get": {
         "operationId": "listAlarms",
         "x-owner": "alarm-service",
         "x-public-ingress": "platform-gateway",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteIdRequired" },
+          { "$ref": "#/components/parameters/Limit" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "$ref": "#/components/parameters/AlarmSeverity" },
+          { "$ref": "#/components/parameters/AlarmStatus" }
+        ],
         "responses": {
           "200": {
-            "description": "Alarm list in the SE-API-001 success envelope.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmListEnvelope" } } }
+            "description": "Site-scoped Alarm feed ordered by first trigger time DESC and alarmId DESC.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CursorAlarmListResponse" } } }
           },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
           "default": { "$ref": "#/components/responses/Error" }
         }
       }
@@ -28,14 +38,18 @@
         "operationId": "getAlarm",
         "x-owner": "alarm-service",
         "x-public-ingress": "platform-gateway",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "description": "Resolves alarmId to the authoritative Alarm record before Site authorization. Missing, cross-Tenant and out-of-Site-scope resources all return 404 ALARM_NOT_FOUND to prevent BOLA disclosure.",
         "parameters": [{ "$ref": "#/components/parameters/AlarmId" }],
         "responses": {
           "200": {
-            "description": "Alarm detail in the SE-API-001 success envelope.",
+            "description": "Canonical Alarm resource in the success envelope.",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmEnvelope" } } }
           },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
           "default": { "$ref": "#/components/responses/Error" }
         }
       }
@@ -45,19 +59,26 @@
         "operationId": "ackAlarm",
         "x-owner": "alarm-service",
         "x-public-ingress": "platform-gateway",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
-        "parameters": [{ "$ref": "#/components/parameters/AlarmId" }],
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "description": "Acknowledges that the Alarm is known. ACK does not resolve, close or otherwise change the Alarm lifecycle state. The operation is naturally idempotent; Idempotency-Key is optional.",
+        "parameters": [
+          { "$ref": "#/components/parameters/AlarmId" },
+          { "$ref": "#/components/parameters/OptionalIdempotencyKey" }
+        ],
         "requestBody": {
           "required": false,
-          "description": "Exact ACK body and idempotency semantics are owned by the full SE-API-001 contract and remain TO_SYNC in this repository mirror.",
-          "content": { "application/json": { "schema": {} } }
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AckAlarmRequest" } } }
         },
         "responses": {
           "200": {
-            "description": "Acknowledged Alarm in the SE-API-001 success envelope.",
+            "description": "Current canonical Alarm resource. Repeated ACK returns the current Alarm without replacing the first acknowledgement fact.",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmEnvelope" } } }
           },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
           "default": { "$ref": "#/components/responses/Error" }
         }
       }
@@ -70,6 +91,43 @@
         "in": "path",
         "required": true,
         "schema": { "$ref": "#/components/schemas/UUIDv7" }
+      },
+      "SiteIdRequired": {
+        "name": "siteId",
+        "in": "query",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/UUIDv7" }
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 }
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Opaque cursor bound to the original Site and Alarm filters.",
+        "schema": { "type": "string", "maxLength": 4096 }
+      },
+      "AlarmSeverity": {
+        "name": "severity",
+        "in": "query",
+        "required": false,
+        "schema": { "type": "string", "enum": ["INFO", "WARNING", "MAJOR", "CRITICAL"] }
+      },
+      "AlarmStatus": {
+        "name": "status",
+        "in": "query",
+        "required": false,
+        "schema": { "type": "string", "enum": ["OPEN", "ACKNOWLEDGED", "SUPPRESSED", "CLOSED"] }
+      },
+      "OptionalIdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": false,
+        "schema": { "type": "string", "minLength": 8, "maxLength": 128 }
       }
     },
     "responses": {
@@ -111,13 +169,34 @@
           "meta": { "$ref": "#/components/schemas/Meta" }
         }
       },
-      "AlarmListEnvelope": {
+      "AckAlarmRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "comment": { "type": "string", "maxLength": 1000 }
+        }
+      },
+      "CursorMeta": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Meta" },
+          {
+            "type": "object",
+            "required": ["limit", "hasMore"],
+            "properties": {
+              "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
+              "nextCursor": { "type": ["string", "null"] },
+              "hasMore": { "type": "boolean" }
+            }
+          }
+        ]
+      },
+      "CursorAlarmListResponse": {
         "type": "object",
         "additionalProperties": false,
         "required": ["data", "meta"],
         "properties": {
           "data": { "type": "array", "items": { "$ref": "#/components/schemas/Alarm" } },
-          "meta": { "$ref": "#/components/schemas/Meta" }
+          "meta": { "$ref": "#/components/schemas/CursorMeta" }
         }
       },
       "ErrorEnvelope": {

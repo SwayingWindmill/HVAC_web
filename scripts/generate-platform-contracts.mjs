@@ -74,7 +74,7 @@ const expectedOperations = {
   getHealth: ['get', '/api/v1/health'],
   getVersion: ['get', '/api/v1/version'],
   getPlatformStatus: ['get', '/api/v1/platform/status'],
-  beginLogin: ['get', '/api/v1/auth/login'],
+  beginLogin: ['post', '/api/v1/auth/login'],
   completeLogin: ['get', '/api/v1/auth/callback'],
   getCurrentPrincipal: ['get', '/api/v1/principal'],
   logout: ['post', '/api/v1/auth/logout'],
@@ -82,17 +82,20 @@ const expectedOperations = {
   getSessionAuditEvent: ['get', '/api/v1/audit/session-events/{messageId}'],
   listSites: ['get', '/api/v1/sites'],
   getSite: ['get', '/api/v1/sites/{siteId}'],
-  listSiteEquipment: ['get', '/api/v1/sites/{siteId}/equipment'],
-  getEquipment: ['get', '/api/v1/equipment/{equipmentId}'],
+  listSiteAsset: ['get', '/api/v1/sites/{siteId}/assets'],
+  getAsset: ['get', '/api/v1/assets/{assetId}'],
   listSiteDevices: ['get', '/api/v1/sites/{siteId}/devices'],
   listSiteDeviceBindings: ['get', '/api/v1/sites/{siteId}/device-bindings'],
   getSiteAssetModel: ['get', '/api/v1/sites/{siteId}/asset-model'],
   getDevice: ['get', '/api/v1/devices/{deviceId}'],
+  listAlarmsV212: ['get', '/api/v1/alarms'],
+  getAlarmV212: ['get', '/api/v1/alarms/{alarmId}'],
+  ackAlarmV212: ['post', '/api/v1/alarms/{alarmId}/ack'],
 };
 const operations = {};
 for (const [operationId, [method, path]] of Object.entries(expectedOperations)) {
   const value = operation(operationId);
-  invariant(value?.method === method && value?.path === path, `${operationId} method/path is unsupported by generator version 6`);
+  invariant(value?.method === method && value?.path === path, `${operationId} method/path is unsupported by generator version 7`);
   operations[operationId] = value;
 }
 
@@ -105,8 +108,8 @@ const expectedSuccessSchemas = {
   getSessionAuditEvent: 'AuditRecord',
   listSites: 'SiteCollection',
   getSite: 'Site',
-  listSiteEquipment: 'EquipmentCollection',
-  getEquipment: 'Equipment',
+  listSiteAsset: 'AssetCollection',
+  getAsset: 'Asset',
   listSiteDevices: 'DeviceCollection',
   listSiteDeviceBindings: 'DeviceBindingCollection',
   getSiteAssetModel: 'SiteAssetModel',
@@ -117,6 +120,14 @@ for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) 
 }
 invariant(operations.logout.operation.responses?.['204'], 'logout must return 204');
 invariant(operations.logout.operation.responses?.['204']?.headers?.Location?.schema?.format === 'uri', 'logout must publish the provider end-session Location header');
+for (const operationId of ['listAlarmsV212', 'getAlarmV212', 'ackAlarmV212']) {
+  invariant(operations[operationId].operation?.['x-architecture-status'] === 'ACTIVE' && operations[operationId].operation?.['x-shape-status'] === 'READY', `${operationId} must be active with a synchronized Alarm shape`);
+  invariant(operations[operationId].operation?.['x-shape-source'] === 'contracts/http/s4-alarm-public.openapi.json', `${operationId} must use the S4 Alarm subordinate contract`);
+}
+invariant(schemaRef(operations.listAlarmsV212.operation, '200') === './s4-alarm-public.openapi.json#/components/schemas/CursorAlarmListResponse', 'Alarm list success schema is unsupported');
+invariant(schemaRef(operations.getAlarmV212.operation, '200') === './s4-alarm-public.openapi.json#/components/schemas/AlarmEnvelope', 'Alarm detail success schema is unsupported');
+invariant(schemaRef(operations.ackAlarmV212.operation, '200') === './s4-alarm-public.openapi.json#/components/schemas/AlarmEnvelope', 'Alarm ACK success schema is unsupported');
+invariant(operations.ackAlarmV212.operation.requestBody?.content?.['application/json']?.schema?.$ref === './s4-alarm-public.openapi.json#/components/schemas/AckAlarmRequest', 'Alarm ACK request schema is unsupported');
 
 const schemas = spec.components?.schemas ?? {};
 const schemaRequirements = {
@@ -142,20 +153,20 @@ const schemaRequirements = {
     'recordHash', 'recordedAt',
   ]],
   Site: [['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt']],
-  Equipment: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'equipmentType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'equipmentType', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Asset: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt']],
   Device: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt']],
-  DeviceBinding: [['id', 'tenantId', 'siteId', 'deviceId', 'equipmentId', 'bindingRole', 'status', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'deviceId', 'equipmentId', 'bindingRole', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
+  DeviceBinding: [['id', 'tenantId', 'siteId', 'deviceId', 'assetId', 'bindingRole', 'status', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'deviceId', 'assetId', 'bindingRole', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
   ExternalBinding: [['id', 'tenantId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
   SiteCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
-  EquipmentCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
+  AssetCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   DeviceCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   DeviceBindingCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
-  Area: [['id', 'tenantId', 'siteId', 'parentAreaId', 'code', 'displayName', 'areaType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'parentAreaId', 'code', 'displayName', 'areaType', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Space: [['id', 'tenantId', 'siteId', 'parentSpaceId', 'code', 'displayName', 'spaceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'parentSpaceId', 'code', 'displayName', 'spaceType', 'status', 'revision', 'createdAt', 'updatedAt']],
   Sensor: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'sensorType', 'manufacturer', 'model', 'serialNumber', 'calibrationDueAt', 'metadata', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'sensorType', 'manufacturer', 'model', 'serialNumber', 'calibrationDueAt', 'metadata', 'status', 'revision', 'createdAt', 'updatedAt']],
   TelemetryPoint: [['id', 'tenantId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointCode', 'sourceKey', 'displayName', 'pointType', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointCode', 'sourceKey', 'displayName', 'pointType', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt']],
   AssetRelationship: [['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
-  AssetModelCounts: [['areas', 'equipment', 'deviceEndpoints', 'physicalSensors', 'points'], ['areas', 'equipment', 'deviceEndpoints', 'physicalSensors', 'points']],
-  SiteAssetModel: [['schemaVersion', 'tenantId', 'siteId', 'areas', 'equipment', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts'], ['schemaVersion', 'tenantId', 'siteId', 'areas', 'equipment', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts']],
+  AssetModelCounts: [['spaces', 'assets', 'deviceEndpoints', 'physicalSensors', 'points'], ['spaces', 'assets', 'deviceEndpoints', 'physicalSensors', 'points']],
+  SiteAssetModel: [['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts'], ['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts']],
   FieldError: [['field', 'message'], ['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'fieldErrors']],
 };
@@ -176,8 +187,8 @@ invariant(schemas.PrincipalContext.properties.audience.const === 'iam-service', 
 invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capability.enum, [
   'site.list',
   'site.read',
-  'equipment.list',
-  'equipment.read',
+  'asset.list',
+  'asset.read',
   'device.list',
   'device.read',
   'telemetry.snapshot.read',
@@ -203,6 +214,8 @@ invariant(schemas.UUIDv7?.pattern === '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89
 invariant(schemas.Revision?.minimum === 1, 'Revision minimum is unsupported');
 invariant(schemas.Instant?.pattern === '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$', 'Instant format must be RFC3339 UTC milliseconds');
 invariant(schemas.OpaqueCursor?.pattern === '^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$', 'OpaqueCursor format is unsupported');
+invariant(exactMembers(schemas.AssetRelationship.properties.fromType.enum, ['ASSET', 'DEVICE', 'SENSOR', 'POINT']), 'AssetRelationship.fromType vocabulary is stale');
+invariant(exactMembers(schemas.AssetRelationship.properties.toType.enum, ['SITE', 'SPACE', 'ASSET', 'DEVICE', 'SENSOR', 'POINT']), 'AssetRelationship.toType vocabulary is stale');
 invariant(exactMembers(schemas.ProblemDetails.properties.code['x-stable-codes'], [
   'RESOURCE_NOT_FOUND',
   'CURSOR_INVALID',
@@ -229,12 +242,15 @@ const replacements = {
   __AUDIT_PATH__: operations.getSessionAuditEvent.path,
   __SITES_PATH__: operations.listSites.path,
   __SITE_PATH__: operations.getSite.path,
-  __SITE_EQUIPMENT_PATH__: operations.listSiteEquipment.path,
-  __EQUIPMENT_PATH__: operations.getEquipment.path,
+  __SITE_ASSET_PATH__: operations.listSiteAsset.path,
+  __ASSET_PATH__: operations.getAsset.path,
   __SITE_DEVICES_PATH__: operations.listSiteDevices.path,
   __SITE_DEVICE_BINDINGS_PATH__: operations.listSiteDeviceBindings.path,
   __SITE_ASSET_MODEL_PATH__: operations.getSiteAssetModel.path,
   __DEVICE_PATH__: operations.getDevice.path,
+  __ALARMS_PATH__: operations.listAlarmsV212.path,
+  __ALARM_PATH__: operations.getAlarmV212.path,
+  __ALARM_ACK_PATH__: operations.ackAlarmV212.path,
 };
 
 function render(template) {

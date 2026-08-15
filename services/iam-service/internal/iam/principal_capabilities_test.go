@@ -209,7 +209,7 @@ func principalAlarmFacts() iam.AlarmAuthorizationFacts {
 		},
 		Memberships: []iam.OrganizationMembership{{TenantID: iam.S1FixtureTenantAID, OrganizationID: iam.S1FixtureOwnerAOrganizationID, Status: iam.FactStatusActive}},
 		Permissions: []iam.AlarmPermission{
-			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionList, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
+			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionRead, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
 			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionRead, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
 		},
 	}

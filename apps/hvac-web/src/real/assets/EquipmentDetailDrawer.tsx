@@ -18,17 +18,17 @@ import { getWorkOrder, transitionWorkOrder, type WorkOrderRequestOptions } from 
 import { formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
 import { commandStatusLabel, isTerminalCommandStatus } from '../real-commands-projection';
 import type { ProtectedScopeRequestToken } from '../protected-scope';
-import type { RealAssetsEquipmentRow, RealAssetsTelemetryPointRow } from './model';
+import type { RealAssetsAssetRow, RealAssetsTelemetryPointRow } from './model';
 
 const DeviceHistoryTrends = lazy(async () => {
   const module = await import('./DeviceHistoryTrends');
   return { default: module.DeviceHistoryTrends };
 });
 
-interface EquipmentDetailDrawerProps {
+interface AssetDetailDrawerProps {
   readonly site: Readonly<Site>;
   readonly principal: CurrentPrincipalResponse;
-  readonly row: RealAssetsEquipmentRow | null;
+  readonly row: RealAssetsAssetRow | null;
   readonly telemetryClient: S2TelemetryClient;
   readonly protectedGeneration: number;
   readonly protectedRequestToken: () => ProtectedScopeRequestToken;
@@ -116,27 +116,27 @@ function formatInstant(value: string, timeZone: string): string {
   return new Intl.DateTimeFormat('zh-CN', { timeZone, dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(value));
 }
 
-function feedbackValue(control: ControlDefinition, equipment: RealAssetsEquipmentRow): string {
-  const feedback = equipment.points.find((candidate) => candidate.point.pointCode === control.feedbackPointKey);
+function feedbackValue(control: ControlDefinition, asset: RealAssetsAssetRow): string {
+  const feedback = asset.points.find((candidate) => candidate.point.pointCode === control.feedbackPointKey);
   if (!feedback?.current) return '未登记反馈点';
   return `${feedback.current.displayValue}${feedback.point.unit ? ` ${formatTelemetryUnit(feedback.point.unit)}` : ''}`;
 }
 
-function EquipmentControlCard({ site, principal, equipment, control }: {
+function AssetControlCard({ site, principal, asset, control }: {
   site: Readonly<Site>;
   principal: CurrentPrincipalResponse;
-  equipment: RealAssetsEquipmentRow;
+  asset: RealAssetsAssetRow;
   control: ControlDefinition;
 }) {
   const queryClient = useQueryClient();
   const sourceWorkOrderId = sourceWorkOrderFromLocation();
   const sourceWorkOrderQuery = useQuery({
-    queryKey: ['equipment-control-source-work-order', site.id, sourceWorkOrderId],
+    queryKey: ['asset-control-source-work-order', site.id, sourceWorkOrderId],
     queryFn: ({ signal }) => getWorkOrder(sourceWorkOrderId, workOrderOptions(principal, site, signal)),
     enabled: Boolean(sourceWorkOrderId) && principal.authorization.capabilities.includes('work-order.read'),
     staleTime: 10_000,
   });
-  const feedback = equipment.points.find((candidate) => candidate.point.pointCode === control.feedbackPointKey);
+  const feedback = asset.points.find((candidate) => candidate.point.pointCode === control.feedbackPointKey);
   const feedbackNumber = feedback?.current?.state === 'PRESENT' ? Number(feedback.current.displayValue) : Number.NaN;
   const defaultValue = control.kind === 'NUMBER'
     ? (Number.isFinite(feedbackNumber) ? Math.min(control.maximum, Math.max(control.minimum, feedbackNumber)) : control.minimum)
@@ -152,7 +152,7 @@ function EquipmentControlCard({ site, principal, equipment, control }: {
   }, [control.point.id, defaultValue]);
 
   const commandQuery = useQuery({
-    queryKey: ['equipment-control-command', site.id, equipment.equipment.id, commandId],
+    queryKey: ['asset-control-command', site.id, asset.asset.id, commandId],
     queryFn: ({ signal }) => getScopedCommand(commandId, scopedOptions(principal, site, signal)),
     enabled: Boolean(commandId),
     refetchInterval: (query) => query.state.data && !isTerminalCommandStatus(query.state.data.status) ? 1_000 : false,
@@ -161,20 +161,20 @@ function EquipmentControlCard({ site, principal, equipment, control }: {
 
   const submitMutation = useMutation({
     mutationFn: () => createScopedCommand({
-      equipmentId: equipment.equipment.id,
+      equipmentId: asset.asset.id,
       commandPointId: control.point.id,
       parameters: control.kind === 'NUMBER' ? { [control.parameterKey]: value } : {},
     }, scopedOptions(principal, site, undefined, `asset-control-${idempotencyKeyRef.current}`)),
     onSuccess: (command) => {
       setCommandId(command.commandId);
-      queryClient.setQueryData(['equipment-control-command', site.id, equipment.equipment.id, command.commandId], command);
+      queryClient.setQueryData(['asset-control-command', site.id, asset.asset.id, command.commandId], command);
       idempotencyKeyRef.current = crypto.randomUUID();
     },
   });
 
   const approveMutation = useMutation({
     mutationFn: (command: Command) => approveScopedCommand(command.commandId, scopedOptions(principal, site)),
-    onSuccess: (command) => queryClient.setQueryData(['equipment-control-command', site.id, equipment.equipment.id, command.commandId], command),
+    onSuccess: (command) => queryClient.setQueryData(['asset-control-command', site.id, asset.asset.id, command.commandId], command),
   });
 
   const command = commandQuery.data;
@@ -189,7 +189,7 @@ function EquipmentControlCard({ site, principal, equipment, control }: {
       }, workOrderOptions(principal, site));
     },
     onSuccess: (workOrder) => {
-      queryClient.setQueryData(['equipment-control-source-work-order', site.id, sourceWorkOrderId], workOrder);
+      queryClient.setQueryData(['asset-control-source-work-order', site.id, sourceWorkOrderId], workOrder);
     },
   });
   const canCompleteSourceWorkOrder = command?.status === 'SUCCEEDED'
@@ -203,7 +203,7 @@ function EquipmentControlCard({ site, principal, equipment, control }: {
   const submitControl = () => {
     if (control.capability === 'STOP') {
       Modal.confirm({
-        title: `确认${actionLabel}${equipment.equipment.displayName}？`,
+        title: `确认${actionLabel}${asset.asset.displayName}？`,
         content: '系统将创建受治理的 Command，并以权威反馈状态验证执行结果。',
         okText: '确认停止',
         cancelText: '取消',
@@ -214,10 +214,10 @@ function EquipmentControlCard({ site, principal, equipment, control }: {
     submitMutation.mutate();
   };
   return (
-    <Card size="small" title={control.point.displayName} data-testid="equipment-control-capability">
+    <Card size="small" title={control.point.displayName} data-testid="asset-control-capability">
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <Descriptions size="small" column={1} bordered>
-          <Descriptions.Item label="当前反馈">{feedbackValue(control, equipment)}</Descriptions.Item>
+          <Descriptions.Item label="当前反馈">{feedbackValue(control, asset)}</Descriptions.Item>
           <Descriptions.Item label="能力">{control.capability}</Descriptions.Item>
           <Descriptions.Item label="控制约束">{control.kind === 'NUMBER' ? `${control.minimum}–${control.maximum}${unit ? ` ${unit}` : ''}` : '无参数动作'}</Descriptions.Item>
           <Descriptions.Item label="执行 Device Endpoint"><Typography.Text copyable>{control.point.reportingDeviceId}</Typography.Text></Descriptions.Item>
@@ -282,7 +282,7 @@ function EquipmentControlCard({ site, principal, equipment, control }: {
   );
 }
 
-export function EquipmentDetailDrawer({
+export function AssetDetailDrawer({
   site,
   principal,
   row,
@@ -293,13 +293,13 @@ export function EquipmentDetailDrawer({
   refreshing,
   onClose,
   onRefresh,
-}: EquipmentDetailDrawerProps) {
+}: AssetDetailDrawerProps) {
   const controls = useMemo(() => row?.controlPoints.map(controlDefinition).filter((item): item is ControlDefinition => Boolean(item)) ?? [], [row]);
   const defaultHistoryDeviceId = row?.devices[0]?.device.id ?? '';
   const [historyDeviceId, setHistoryDeviceId] = useState(() => defaultHistoryDeviceId);
   useEffect(() => {
     setHistoryDeviceId(defaultHistoryDeviceId);
-  }, [defaultHistoryDeviceId, row?.equipment.id]);
+  }, [defaultHistoryDeviceId, row?.asset.id]);
   const historyDevice = row?.devices.find((item) => item.device.id === historyDeviceId) ?? row?.devices[0] ?? null;
   const historyAllowed = principal.authorization.capabilities.includes('telemetry.history.read');
   const sessionCapability = Reflect.get(principal.session, ['csrf', 'Token'].join('')) as string;
@@ -309,22 +309,22 @@ export function EquipmentDetailDrawer({
       open={Boolean(row)}
       onClose={onClose}
       destroyOnHidden
-      title={row ? `${row.equipment.displayName} · ${row.equipment.equipmentType}` : 'Equipment'}
+      title={row ? `${row.asset.displayName} · ${row.asset.assetType}` : 'Asset'}
       extra={<Button icon={<ReloadOutlined />} loading={refreshing} onClick={onRefresh}>刷新</Button>}
     >
       {row ? (
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          <Alert type="info" showIcon message="Equipment 是运维与控制主对象" description="Sensor 与点位用于观测；只有 Registry 中绑定到本 Equipment 的 COMMAND / CONTROLS 点位会生成控制功能。" />
+          <Alert type="info" showIcon message="Asset 是运维与控制主对象" description="Sensor 与点位用于观测；只有 Registry 中绑定到本 Asset 的 COMMAND / CONTROLS 点位会生成控制功能。" />
           <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
-            <Descriptions.Item label="Equipment ID" span={2}><Typography.Text copyable>{row.equipment.id}</Typography.Text></Descriptions.Item>
-            <Descriptions.Item label="编码">{row.equipment.code}</Descriptions.Item>
-            <Descriptions.Item label="类型">{row.equipment.equipmentType}</Descriptions.Item>
-            <Descriptions.Item label="区域">{row.area.state === 'bound' ? row.area.area.displayName : '未绑定'}</Descriptions.Item>
+            <Descriptions.Item label="Asset ID" span={2}><Typography.Text copyable>{row.asset.id}</Typography.Text></Descriptions.Item>
+            <Descriptions.Item label="编码">{row.asset.code}</Descriptions.Item>
+            <Descriptions.Item label="类型">{row.asset.assetType}</Descriptions.Item>
+            <Descriptions.Item label="区域">{row.space.state === 'bound' ? row.space.space.displayName : '未绑定'}</Descriptions.Item>
             <Descriptions.Item label="状态"><Tag>{row.operatingState}</Tag></Descriptions.Item>
           </Descriptions>
 
           <Typography.Title level={5}>设备功能</Typography.Title>
-          {controls.length > 0 ? controls.map((control) => <EquipmentControlCard key={control.point.id} site={site} principal={principal} equipment={row} control={control} />) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该 Equipment 没有登记可控功能" />}
+          {controls.length > 0 ? controls.map((control) => <AssetControlCard key={control.point.id} site={site} principal={principal} asset={row} control={control} />) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该 Asset 没有登记可控功能" />}
 
           <Typography.Title level={5}>运行状态与反馈</Typography.Title>
           <Table<RealAssetsTelemetryPointRow>
@@ -393,7 +393,7 @@ export function EquipmentDetailDrawer({
                 />
               </Suspense>
             </Space>
-          ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该 Equipment 没有可查询历史的 Device Endpoint" />}
+          ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该 Asset 没有可查询历史的 Device Endpoint" />}
 
           <Typography.Title level={5}>观测与计算点</Typography.Title>
           <Table<RealAssetsTelemetryPointRow>

@@ -14,6 +14,10 @@ scrape_configs:
     static_configs:
       - targets: ["energy-api:19080"]
 
+  - job_name: scheduler
+    static_configs:
+      - targets: ["scheduler:19092"]
+
   - job_name: telemetry-worker
     static_configs:
       - targets: ["telemetry-worker:19086"]
@@ -25,6 +29,10 @@ scrape_configs:
   - job_name: iot-service
     static_configs:
       - targets: ["iot-service:19094"]
+
+  - job_name: host
+    static_configs:
+      - targets: ["node-exporter:9100"]
 
   - job_name: centrifugo
     metrics_path: /metrics

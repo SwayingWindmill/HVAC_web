@@ -172,7 +172,7 @@ var principalAlarmCapabilities = []struct {
 	capability identitycontext.Capability
 	action     alarmauth.Action
 }{
-	{identitycontext.CapabilityAlarmList, alarmauth.ActionList},
+	{identitycontext.CapabilityAlarmList, alarmauth.ActionRead},
 	{identitycontext.CapabilityAlarmRead, alarmauth.ActionRead},
 }
 

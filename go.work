@@ -32,6 +32,7 @@ use (
 	./services/legacy-migration-service
 	./services/mqtt-telemetry-adapter
 	./services/metric-engine-service
+	./services/scheduler-service
 	./services/settlement-service
 	./services/oidc-test-provider
 	./services/outbox-relay

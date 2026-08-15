@@ -11,8 +11,8 @@ import (
 type Action string
 
 const (
-	ActionList Action = "alarm:list"
 	ActionRead Action = "alarm:read"
+	ActionAck  Action = "alarm:ack"
 )
 
 type ReasonCode string
@@ -37,13 +37,13 @@ func (request DecisionRequest) Validate() error {
 		return errors.New("Alarm authorization scope is invalid")
 	}
 	switch request.Action {
-	case ActionList:
-		if strings.TrimSpace(request.AlarmID) != "" {
-			return errors.New("Alarm list authorization cannot include Alarm identity")
-		}
 	case ActionRead:
+		if strings.TrimSpace(request.AlarmID) != "" && !alarmmodel.IsUUIDv7(request.AlarmID) {
+			return errors.New("Alarm read authorization has an invalid Alarm identity")
+		}
+	case ActionAck:
 		if !alarmmodel.IsUUIDv7(request.AlarmID) {
-			return errors.New("Alarm read authorization requires Alarm identity")
+			return errors.New("Alarm acknowledgement authorization requires Alarm identity")
 		}
 	default:
 		return errors.New("Alarm authorization action is unsupported")

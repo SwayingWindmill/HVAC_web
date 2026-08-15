@@ -561,7 +561,7 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger) (*http.Ser
 	gatewaySPIFFE := envOr("ALARM_GATEWAY_SPIFFE", alarmservice.DefaultGatewaySPIFFEID)
 	handler, err := alarmservice.NewHTTPHandler(alarmservice.HTTPConfig{
 		Store: store, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
-		Audience: envOr("ALARM_READ_AUDIENCE", alarmservice.DefaultAudience), MaxListLimit: 100,
+		Audience: envOr("ALARM_READ_AUDIENCE", alarmservice.DefaultAudience), MaxListLimit: 200,
 	})
 	if err != nil {
 		store.Close()

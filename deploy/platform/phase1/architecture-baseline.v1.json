@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "name": "智慧能源系统 Phase 1 总体与部署架构基线",
-  "sourceOfTruth": "架构规划/智慧能源系统部署与运维架构设计.md",
+  "sourceOfTruth": "SE-ARCH-DEPLOY-001 V1.0 CURRENT",
   "phase": "phase1",
   "deploymentModel": {
-    "host": "linux-server",
+    "host": "single-linux-server",
     "orchestration": "docker-compose",
     "kubernetesRequired": false,
-    "singleServerAllowed": true,
-    "fewServersAllowed": true
+    "singleServerRequired": true,
+    "fewServersAllowed": false
   },
   "environments": [
     "development",
@@ -49,6 +49,7 @@
       "alarm",
       "control",
       "work-order",
+      "application-scheduler-coordination",
       "background-workers"
     ],
     "servicePrinciple": "stateless-where-possible"
@@ -83,9 +84,22 @@
     "backwardCompatibleMigrationPreferred": true
   },
   "recovery": {
+    "sourceOfTruth": "SE-OPS-009 V1.0 CURRENT CANDIDATE",
+    "targetContract": "deploy/platform/phase1/recovery/recovery-targets.v1.json",
     "backupRequired": true,
+    "offServerBackupCopyRequired": true,
     "restoreTestRequired": true,
-    "rpoRtoMustBeDefinedBeforeProductionAcceptance": true,
+    "timestampedProductionLikeDrillRequired": true,
+    "rpoRtoTargetsDefined": true,
+    "postgresRpoSeconds": 300,
+    "postgresRtoSeconds": 7200,
+    "controlRpoSeconds": 300,
+    "controlRtoSeconds": 3600,
+    "telemetryCloudRtoSeconds": 14400,
+    "metricRpoSeconds": 1800,
+    "metricRtoSeconds": 14400,
+    "wholeServerReplacementRtoSeconds": 14400,
+    "wholeServerFourHourTargetRequiresColdStandby": true,
     "edgeStoreAndForwardCountsTowardTelemetryRecovery": true
   },
   "phase1DeferredCapabilities": [

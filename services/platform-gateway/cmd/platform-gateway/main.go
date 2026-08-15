@@ -95,7 +95,7 @@ func main() {
 	defer routing.close()
 	go routing.watch(runContext)
 
-	handler := gateway.NewHandler(gateway.Config{
+	var handler http.Handler = gateway.NewHandler(gateway.Config{
 		Logger:        logger,
 		Identity:      identity,
 		RouteManager:  routing.manager,
@@ -115,6 +115,11 @@ func main() {
 			BuiltAt: builtAt,
 		},
 	})
+	handler, err = withRealtimeProxy(handler, logger)
+	if err != nil {
+		logger.Error("gateway_realtime_config_invalid", "error_code", "REALTIME_CONFIG_INVALID")
+		os.Exit(1)
+	}
 	server := &http.Server{
 		Addr:              address,
 		Handler:           handler,

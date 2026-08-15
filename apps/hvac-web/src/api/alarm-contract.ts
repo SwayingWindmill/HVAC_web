@@ -22,11 +22,13 @@ export const alarmEvidenceReferenceSchema = z.object({
   capturedAt: z.string().datetime({ offset: true }),
 }).strict();
 
+export const alarmCursorSchema = z.string().min(1).max(4096);
+
 export const alarmTransitionSchema = z.object({
   fromStatus: alarmStatusSchema.optional(),
   toStatus: alarmStatusSchema,
   operation: alarmOperationSchema.optional(),
-  reason: z.string().min(1).max(256),
+  reason: z.string().max(1000),
   actorType: z.string().min(1).max(64),
   actorId: z.string().min(1).max(256).optional(),
   assigneeId: z.string().min(1).max(256).optional(),
@@ -47,9 +49,12 @@ function validateOperationShape(
 ): void {
   if (!transition.fromStatus || !transition.operation) return;
   const sameStatus = transition.toStatus === transition.fromStatus;
+  if (transition.operation !== 'ACKNOWLEDGE' && (transition.reason.trim() === '' || transition.reason.length > 256)) {
+    addIssue(context, 'Alarm lifecycle reason is invalid');
+  }
   switch (transition.operation) {
     case 'ACKNOWLEDGE':
-      if (transition.fromStatus !== 'OPEN' || transition.toStatus !== 'ACKNOWLEDGED' || transition.assigneeId || transition.suppressedUntil) {
+      if (!sameStatus || transition.assigneeId || transition.suppressedUntil) {
         addIssue(context, 'Alarm acknowledgement transition is invalid');
       }
       break;
@@ -141,6 +146,7 @@ export const alarmSchema = z.object({
     if (index === 0) {
       if (transition.fromStatus !== undefined) addIssue(context, 'Alarm initial transition has a source status');
       if (transition.operation !== undefined && transition.operation !== 'PUBLISH') addIssue(context, 'Alarm initial operation is invalid');
+      if (transition.reason.trim() === '' || transition.reason.length > 256) addIssue(context, 'Alarm publish reason is invalid');
     } else {
       if (transition.fromStatus !== previousStatus) addIssue(context, 'Alarm transition chain is invalid');
       if (!transition.operation || transition.operation === 'PUBLISH') addIssue(context, 'Alarm lifecycle operation is missing');
@@ -184,8 +190,8 @@ export const alarmSchema = z.object({
 
 export const alarmListResponseSchema = z.object({
   schemaVersion: z.literal(1),
-  items: z.array(alarmSchema).max(100),
-  nextCursor: alarmUUIDv7Schema.optional().nullable(),
+  items: z.array(alarmSchema).max(200),
+  nextCursor: alarmCursorSchema.optional().nullable(),
   hasMore: z.boolean(),
 }).strict().superRefine((response, context) => {
   if (response.hasMore !== Boolean(response.nextCursor)) {

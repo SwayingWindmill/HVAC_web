@@ -1,11 +1,11 @@
 # Phase 1 canonical deployment
 
-`deploy/platform/phase1` is the canonical deployment entry for the first stage defined by `架构规划/智慧能源系统部署与运维架构设计.md`.
+`deploy/platform/phase1` is the canonical deployment entry for `SE-ARCH-DEPLOY-001 V1.0 CURRENT`《智慧能源系统总体部署架构设计 V1（单服务器基线）》.
 
 The Phase 1 runtime model is:
 
 ```text
-Linux Server(s)
+1 Linux Server
 +
 Docker Compose
 ```
@@ -17,7 +17,7 @@ Kubernetes/Kustomize assets elsewhere in the repository are future-stage or cert
 Only two host-facing ports are part of the canonical topology:
 
 ```text
-443   HTTPS / WSS -> Nginx -> React + Platform Gateway / Centrifugo
+443   HTTPS / WSS -> Nginx -> React + energy-api (/api + /realtime)
 8883  MQTT TLS    -> Mosquitto -> Edge Gateway
 ```
 
@@ -85,7 +85,7 @@ docker compose \
 
 The single PostgreSQL server creates the existing domain database boundaries `hvac_s0` through `hvac_s5` so current domain migrations do not need to be rewritten around new database names.
 
-The production-safe S0-S5 migration runner is implemented under `migrations/`. It uses an exact 34-file allowlist, reuses the canonical domain migration SQL, strips historical local-only credential lines and environment fixture seed blocks from the production execution stream, records the hash of the executed SQL in each database, and fails closed on migration drift.
+The production-safe S0-S5 migration runner is implemented under `migrations/`. It uses an exact 41-file allowlist, reuses the canonical domain migration SQL, strips historical local-only credential lines and environment fixture seed blocks from the production execution stream, records the hash of the executed SQL in each database, and fails closed on migration drift.
 
 Database roles are created without checked-in production credentials. Copy `migrations/role-credentials.sql.example` to the Git-ignored runtime path, replace every redacted value with deployment-provided credentials, then execute the migration profile before application rollout:
 
@@ -107,7 +107,15 @@ docker compose -f deploy/platform/phase1/compose.yaml --profile backup run --rm 
 docker compose -f deploy/platform/phase1/compose.yaml --profile backup run --rm clickhouse-backup
 ```
 
-Backup configuration does not itself prove RPO/RTO. A timestamped disaster-recovery drill remains a formal acceptance requirement.
+`SE-OPS-009 V1.0 CURRENT CANDIDATE` now defines the Phase 1 recovery objectives and `recovery/` contains the machine target contract, whole-server runbook and drill evidence format. Backup configuration does not itself prove attainment: each production deployment must still run a timestamped disaster-recovery drill with real backup artifacts.
+
+## Application Scheduler
+
+`SE-PLATFORM-006 V1.0 CURRENT CANDIDATE` is implemented as an independent `scheduler` process backed by PostgreSQL durable state. The authoritative chain is `schedule_definitions -> job_instances -> job_attempts`; Scheduler owns timing, deduplication, Misfire/Retry coordination and expired-Lease recovery, while Domain Workers own business execution.
+
+`metric-worker` no longer scans Metric bindings to decide when work should run. It claims `METRIC_WINDOW_CALC`, `METRIC_RECALC` and `METRIC_BACKFILL` jobs from PostgreSQL with `FOR UPDATE SKIP LOCKED`, records Attempts, renews Leases and uses the existing Metric Engine for calculation and persistence. Backfill claim execution is bounded to one concurrent job on the single-server baseline.
+
+Scheduler management HTTP routes remain `DESIGN_PROPOSED` in the source design. Until those URIs enter the OpenAPI contract, an operator can provision a reviewed schedule with `scheduler/schedule-definition.sql.example`; this does not make direct PostgreSQL access a public application API. PostgreSQL/ClickHouse backup scheduling remains outside the Application Scheduler and continues to use the infrastructure backup mechanism.
 
 ## Observability
 
@@ -124,21 +132,18 @@ OTel Collector
 
 This follows the document requirement without introducing a multi-node observability cluster in Phase 1.
 
-## Optional compatibility backbone
+## Single-server storage and resource boundary
 
-`redpanda-compat` and `outbox-relay-compat` are only enabled with:
+The canonical Compose keeps PostgreSQL, ClickHouse, Redis and MQTT data on configurable host paths (`POSTGRES_DATA_DIR`, `CLICKHOUSE_DATA_DIR`, `REDIS_DATA_DIR`, `MQTT_DATA_DIR`) instead of opaque Docker named volumes. Production should bind these paths to the planned server data disk, and should place PostgreSQL WAL/base backups plus ClickHouse backups on storage independent from the primary data directories.
 
-```bash
---profile compat-event-backbone
-```
+All long-running canonical containers have bounded CPU/memory settings and Docker JSON log rotation. `node-exporter` supplies host CPU/memory/disk/load/network metrics to Prometheus; disk usage alerts fire at the deployment baseline thresholds of 80% warning and 90% critical.
 
-Kafka/Redpanda is therefore not a Phase 1 platform prerequisite. It can be reevaluated in the later architecture phase described by the deployment design.
+Kafka/Redpanda is not present in the canonical Phase 1 Compose. Any historical Kafka compatibility assets elsewhere in the repository are non-canonical future/certification references.
 
-## Remaining explicit gaps
+## Remaining production evidence
 
-The alignment matrix intentionally keeps these as `MISSING`:
+The Phase 1 alignment matrix has no architecture item left in `MISSING`: Scheduler coordination and the RPO/RTO target definition are both represented by explicit machine contracts and runbooks.
 
-- formal measured RPO/RTO drill;
-- real Optimization Service runtime.
+This does not waive site evidence. A production deployment may claim the `SE-OPS-009` targets only after a real timestamped restore drill verifies the external backup, recovery hardware/path, actual PostgreSQL recovery point, component restoration times, Control reconciliation, Scheduler/Outbox recovery and final business validation. A local container-only test is insufficient.
 
-Do not close those items with placeholders or synthetic attestations.
+Optimization is optional in `SE-ARCH-DEPLOY-001 V1.0 CURRENT` and remains deferred until a deployment actually requires it.

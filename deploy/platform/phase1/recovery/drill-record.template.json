@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "sourceOfTruth": "SE-OPS-009 V1.0 CURRENT CANDIDATE",
+  "drillId": "[DRILL_ID]",
+  "environment": "[staging|production]",
+  "scenario": "[PROCESS_FAILURE|DATABASE_PROCESS_FAILURE|SERVER_OS_RECOVERY|WHOLE_SERVER_REPLACEMENT]",
+  "incidentConfirmedAt": "[RFC3339]",
+  "latestRecoverablePostgresAt": "[RFC3339]",
+  "postgresBusinessRestoredAt": "[RFC3339]",
+  "controlBusinessRestoredAt": "[RFC3339]",
+  "telemetryBusinessRestoredAt": "[RFC3339]",
+  "metricBusinessRestoredAt": "[RFC3339]",
+  "businessValidationCompletedAt": "[RFC3339]",
+  "actual": {
+    "postgresRpoSeconds": "[CALCULATED]",
+    "postgresRtoSeconds": "[CALCULATED]",
+    "controlRtoSeconds": "[CALCULATED]",
+    "telemetryRtoSeconds": "[CALCULATED]",
+    "metricRtoSeconds": "[CALCULATED]",
+    "wholeScenarioRtoSeconds": "[CALCULATED]"
+  },
+  "prerequisites": {
+    "externalBackupVerified": false,
+    "backupSurvivesProductionServerLoss": false,
+    "versionedConfigAvailable": false,
+    "protectedCredentialMaterialAvailable": false,
+    "coldStandbyOrReplacementAvailable": false,
+    "edgeStoreAndForwardAvailable": false,
+    "edgeRetentionHours": 0
+  },
+  "validation": {
+    "postgresqlIntegrity": false,
+    "clickhouseWrite": false,
+    "redisLatestRebuilding": false,
+    "mqttConnectivity": false,
+    "gatewayOnline": false,
+    "telemetryFlowing": false,
+    "metricCalculation": false,
+    "alarmReevaluated": false,
+    "commandReconciled": false,
+    "schedulerBacklogProgressing": false,
+    "outboxBacklogProgressing": false,
+    "diskCapacitySafe": false,
+    "clockSynchronized": false
+  },
+  "telemetryReplay": {
+    "oldestEdgeRetainedAt": "[RFC3339_OR_NA]",
+    "oldestCloudRestoredAt": "[RFC3339_OR_NA]",
+    "replayStartedAt": "[RFC3339_OR_NA]",
+    "rateLimited": false
+  },
+  "controlRecovery": {
+    "incompleteCommandsReviewed": 0,
+    "blindRetryUsed": false,
+    "verifiedCount": 0,
+    "failedCount": 0,
+    "unknownCount": 0
+  },
+  "evidence": {
+    "backupReference": "[NON_SECRET_REFERENCE]",
+    "walReference": "[NON_SECRET_REFERENCE]",
+    "recoveryHostReference": "[NON_SECRET_REFERENCE]",
+    "operator": "[OPERATOR]"
+  },
+  "problems": [],
+  "remediationActions": []
+}

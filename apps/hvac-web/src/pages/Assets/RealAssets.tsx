@@ -37,11 +37,11 @@ import {
   flattenRegistryPages,
   useRegistryAssetModel,
   useRegistryDeviceDetail,
-  useRegistryEquipmentDetail,
+  useRegistryAssetDetail,
   useRegistrySite,
   useRegistrySites,
 } from '@/api/registry';
-import type { Device, Equipment } from '@/api/generated/platformGateway.gen';
+import type { Device, Asset } from '@/api/generated/platformGateway.gen';
 import { buildRealAssetsHierarchy, type RealAssetsHierarchyNode } from '@/real/assets/model';
 import '@/real/assets/real-assets.css';
 import {
@@ -77,16 +77,16 @@ const lifecycleLabel: Record<string, string> = {
   RETIRED: '已退役',
 };
 
-type LedgerTab = 'equipment' | 'devices';
+type LedgerTab = 'asset' | 'devices';
 
-const isEquipmentKey = (key: Key): key is string => typeof key === 'string' && key.startsWith('equipment:');
+const isAssetKey = (key: Key): key is string => typeof key === 'string' && key.startsWith('asset:');
 const isDeviceKey = (key: Key): key is string => typeof key === 'string' && key.startsWith('device:');
 
 const hierarchyIcon = (kind: RealAssetsHierarchyNode['kind']) => {
   switch (kind) {
     case 'site': return <ApartmentOutlined style={{ color: STATUS.info }} />;
-    case 'area': return <ClusterOutlined style={{ color: STATUS.info }} />;
-    case 'equipment': return <BlockOutlined style={{ color: STATUS.warn }} />;
+    case 'space': return <ClusterOutlined style={{ color: STATUS.info }} />;
+    case 'asset': return <BlockOutlined style={{ color: STATUS.warn }} />;
     case 'device': return <TabletOutlined style={{ color: STATUS.info }} />;
     case 'sensor':
     case 'virtual-sensor': return <ApiOutlined style={{ color: STATUS.info }} />;
@@ -110,7 +110,7 @@ const defaultExpandedTreeKeys = (nodes: readonly DataNode[]): Key[] => {
   if (!root) return [];
   return [
     root.key,
-    ...(root.children ?? []).filter((node) => String(node.key).startsWith('area:')).map((node) => node.key),
+    ...(root.children ?? []).filter((node) => String(node.key).startsWith('space:')).map((node) => node.key),
   ];
 };
 
@@ -133,16 +133,16 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
   const siteQuery = useRegistrySite(siteId);
   const assetModelQuery = useRegistryAssetModel(siteId);
   const assetModel = assetModelQuery.data;
-  const equipment = assetModel?.equipment ?? [];
+  const assets = assetModel?.assets ?? [];
   const devices = assetModel?.devices ?? [];
 
-  const [activeTab, setActiveTab] = useState<LedgerTab>('equipment');
+  const [activeTab, setActiveTab] = useState<LedgerTab>('asset');
   const [keyword, setKeyword] = useState('');
   const [lifecycle, setLifecycle] = useState<string>('all');
 
-  const equipmentParam = searchParams.get('equipment');
+  const assetParam = searchParams.get('asset');
   const deviceParam = searchParams.get('device');
-  const equipmentDetail = useRegistryEquipmentDetail(equipmentParam);
+  const assetDetail = useRegistryAssetDetail(assetParam);
   const deviceDetail = useRegistryDeviceDetail(deviceParam);
 
   useEffect(() => {
@@ -154,7 +154,7 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
 
   const clearDetailParams = () => {
     const next = new URLSearchParams(searchParams);
-    next.delete('equipment');
+    next.delete('asset');
     next.delete('device');
     setSearchParams(next, { replace: true });
   };
@@ -167,10 +167,10 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
     setKeyword('');
   };
 
-  const openEquipment = (id: string, trigger?: HTMLElement) => {
+  const openAsset = (id: string, trigger?: HTMLElement) => {
     if (trigger) detailFocus.captureTrigger(trigger, id);
     const next = new URLSearchParams(searchParams);
-    next.set('equipment', id);
+    next.set('asset', id);
     next.delete('device');
     setSearchParams(next, { replace: true });
   };
@@ -179,26 +179,26 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
     if (trigger) detailFocus.captureTrigger(trigger, id);
     const next = new URLSearchParams(searchParams);
     next.set('device', id);
-    next.delete('equipment');
+    next.delete('asset');
     setSearchParams(next, { replace: true });
   };
 
   const closeDetail = () => {
     const next = new URLSearchParams(searchParams);
-    next.delete('equipment');
+    next.delete('asset');
     next.delete('device');
     setSearchParams(next, { replace: true });
     detailFocus.restoreFocus();
   };
 
-  const equipmentRows = useMemo(() => {
+  const assetRows = useMemo(() => {
     const query = keyword.trim().toLowerCase();
-    return equipment.filter((item) => {
+    return assets.filter((item) => {
       if (lifecycle !== 'all' && item.status !== lifecycle) return false;
       if (!query) return true;
-      return [item.id, item.code, item.displayName, item.equipmentType].some((value) => value.toLowerCase().includes(query));
+      return [item.id, item.code, item.displayName, item.assetType].some((value) => value.toLowerCase().includes(query));
     });
-  }, [equipment, keyword, lifecycle]);
+  }, [assets, keyword, lifecycle]);
 
   const deviceRows = useMemo(() => {
     const query = keyword.trim().toLowerCase();
@@ -218,12 +218,12 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
 
   useEffect(() => {
     if (assetModelQuery.isPending || assetModelQuery.isFetching) return;
-    const equipmentVisible = !equipmentParam || equipment.some((item) => item.id === equipmentParam);
+    const assetVisible = !assetParam || assets.some((item) => item.id === assetParam);
     const deviceVisible = !deviceParam || devices.some((item) => item.id === deviceParam);
-    if (equipmentVisible && deviceVisible) return;
+    if (assetVisible && deviceVisible) return;
     purgeTelemetryCurrentState(queryClient, telemetryRuntime);
     const next = new URLSearchParams(searchParams);
-    if (!equipmentVisible) next.delete('equipment');
+    if (!assetVisible) next.delete('asset');
     if (!deviceVisible) next.delete('device');
     setSearchParams(next, { replace: true });
   }, [
@@ -231,8 +231,8 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
     assetModelQuery.isPending,
     deviceParam,
     devices,
-    equipment,
-    equipmentParam,
+    assets,
+    assetParam,
     queryClient,
     searchParams,
     setSearchParams,
@@ -248,11 +248,11 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
   const selectTreeNode = (keys: Key[]) => {
     const key = keys[0];
     if (!key) return;
-    if (isEquipmentKey(key)) {
-      const equipmentId = key.slice('equipment:'.length);
-      if (equipment.some((item) => item.id === equipmentId)) {
-        setActiveTab('equipment');
-        openEquipment(equipmentId);
+    if (isAssetKey(key)) {
+      const assetId = key.slice('asset:'.length);
+      if (assets.some((item) => item.id === assetId)) {
+        setActiveTab('asset');
+        openAsset(assetId);
       }
     }
     if (isDeviceKey(key)) {
@@ -264,12 +264,12 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
     }
   };
 
-  const equipmentColumns: ColumnsType<Equipment> = [
+  const assetColumns: ColumnsType<Asset> = [
     {
-      title: 'Equipment', dataIndex: 'displayName', key: 'name', width: 240,
+      title: 'Asset', dataIndex: 'displayName', key: 'name', width: 240,
       render: (value: string, row) => (
         <Space direction="vertical" size={0}>
-          <Space size={6}><Typography.Text strong>{value}</Typography.Text><Tag>{row.equipmentType}</Tag></Space>
+          <Space size={6}><Typography.Text strong>{value}</Typography.Text><Tag>{row.assetType}</Tag></Space>
           <Typography.Text type="secondary" code copyable={{ text: row.id }}>{row.code} · {row.id}</Typography.Text>
         </Space>
       ),
@@ -286,7 +286,7 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
           ghost
           icon={<EyeOutlined />}
           data-ops-detail-trigger={row.id}
-          onClick={(event) => openEquipment(row.id, event.currentTarget)}
+          onClick={(event) => openAsset(row.id, event.currentTarget)}
         >详情</Button>
       ),
     },
@@ -336,16 +336,16 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
     return <PageScaffold title="设备与建筑"><RegistryEmptyState description="当前账号没有可见的 Site。" /></PageScaffold>;
   }
 
-  const attentionCount = [...equipment, ...devices].filter((item) => item.status !== 'ACTIVE').length;
+  const attentionCount = [...assets, ...devices].filter((item) => item.status !== 'ACTIVE').length;
   const visiblePresence = presenceQuery.data?.items ?? [];
   const onlineCount = visiblePresence.filter((item) => item.status === 'ok' && item.snapshot.displayState === 'ONLINE').length;
   const telemetryAttentionCount = visiblePresence.filter((item) => item.status === 'error'
     || (item.status === 'ok' && ['OFFLINE', 'STALE', 'UNKNOWN', 'UNAVAILABLE'].includes(item.snapshot.displayState ?? 'UNKNOWN'))).length;
-  const detailOpen = Boolean(equipmentParam || deviceParam);
-  const detailLoading = equipmentParam ? equipmentDetail.isPending : deviceDetail.isPending;
-  const detailError = equipmentParam ? equipmentDetail.error : deviceDetail.error;
-  const detailResource = equipmentParam ? equipmentDetail.data : deviceDetail.data;
-  const detailKind = equipmentParam ? 'Equipment' : 'Device';
+  const detailOpen = Boolean(assetParam || deviceParam);
+  const detailLoading = assetParam ? assetDetail.isPending : deviceDetail.isPending;
+  const detailError = assetParam ? assetDetail.error : deviceDetail.error;
+  const detailResource = assetParam ? assetDetail.data : deviceDetail.data;
+  const detailKind = assetParam ? 'Asset' : 'Device';
 
   return (
     <PageScaffold
@@ -356,8 +356,8 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
         <OperationsMetrics
           ariaLabel="Site 原子资产模型摘要"
           items={[
-            { label: 'Area', value: assetModel?.counts.areas ?? 0, icon: <ClusterOutlined />, detail: '空间层级' },
-            { label: 'Equipment', value: assetModel?.counts.equipment ?? 0, icon: <BlockOutlined />, detail: '物理设备' },
+            { label: 'Space', value: assetModel?.counts.spaces ?? 0, icon: <ClusterOutlined />, detail: '空间层级' },
+            { label: 'Asset', value: assetModel?.counts.assets ?? 0, icon: <BlockOutlined />, detail: '物理设备' },
             { label: 'Device Endpoint', value: assetModel?.counts.deviceEndpoints ?? 0, icon: <TabletOutlined />, detail: '通信端点' },
             { label: 'Sensor', value: assetModel?.counts.physicalSensors ?? 0, icon: <ApiOutlined />, detail: '测量单元' },
             { label: 'Point', value: assetModel?.counts.points ?? 0, icon: <DatabaseOutlined />, detail: '标准点位目录' },
@@ -490,22 +490,22 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
                     onChange={(key) => setActiveTab(key as LedgerTab)}
                     items={[
                       {
-                        key: 'equipment',
-                        label: `Equipment (${equipmentRows.length})`,
+                        key: 'asset',
+                        label: `Asset (${assetRows.length})`,
                         children: assetModelQuery.error ? (
                           <RegistryFailureState error={assetModelQuery.error} onRetry={() => void assetModelQuery.refetch()} />
                         ) : assetModelQuery.isPending ? (
-                          <LoadingState tip="正在读取 Equipment" minHeight={220} />
+                          <LoadingState tip="正在读取 Asset" minHeight={220} />
                         ) : (
                           <>
-                            <Table<Equipment>
+                            <Table<Asset>
                               rowKey="id"
                               size="middle"
-                              columns={compactTable ? equipmentColumns.filter((column) => ['name', 'status', 'action'].includes(String(column.key))) : equipmentColumns}
-                              dataSource={equipmentRows}
+                              columns={compactTable ? assetColumns.filter((column) => ['name', 'status', 'action'].includes(String(column.key))) : assetColumns}
+                              dataSource={assetRows}
                               pagination={false}
                               scroll={{ x: compactTable ? 620 : 980 }}
-                              locale={{ emptyText: <RegistryEmptyState description="没有符合条件的 Equipment。" /> }}
+                              locale={{ emptyText: <RegistryEmptyState description="没有符合条件的 Asset。" /> }}
                             />
 
                           </>
@@ -568,13 +568,13 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
         ) : detailError ? (
           <RegistryFailureState
             error={detailError}
-            onRetry={() => void (equipmentParam ? equipmentDetail.refetch() : deviceDetail.refetch())}
+            onRetry={() => void (assetParam ? assetDetail.refetch() : deviceDetail.refetch())}
           />
         ) : detailResource ? (
           <div className="ops-detail-stack">
             <OperationsDetailSection
               title="权威 Registry 身份"
-              icon={equipmentParam ? <BlockOutlined /> : <TabletOutlined />}
+              icon={assetParam ? <BlockOutlined /> : <TabletOutlined />}
               description="以下字段由 Platform Gateway 的生成契约校验。"
             >
               <Descriptions column={{ xs: 1, sm: 2 }} size="small" colon={false}>
@@ -582,13 +582,13 @@ export default function RealAssets({ telemetryRuntime }: RealAssetsProps = {}) {
                 <Descriptions.Item label="Code">{detailResource.code}</Descriptions.Item>
                 <Descriptions.Item label="Tenant ID"><Typography.Text code copyable>{detailResource.tenantId}</Typography.Text></Descriptions.Item>
                 <Descriptions.Item label="Site ID"><Typography.Text code copyable>{detailResource.siteId}</Typography.Text></Descriptions.Item>
-                <Descriptions.Item label="类型">{'equipmentType' in detailResource ? detailResource.equipmentType : detailResource.deviceType}</Descriptions.Item>
+                <Descriptions.Item label="类型">{'assetType' in detailResource ? detailResource.assetType : detailResource.deviceType}</Descriptions.Item>
                 <Descriptions.Item label="Lifecycle">{detailResource.status}</Descriptions.Item>
                 <Descriptions.Item label="Revision">{detailResource.revision}</Descriptions.Item>
                 <Descriptions.Item label="Updated At">{detailResource.updatedAt}</Descriptions.Item>
               </Descriptions>
             </OperationsDetailSection>
-            {!equipmentParam ? (
+            {!assetParam ? (
               <OperationsDetailSection
                 title="S2 Presence 与 latest telemetry"
                 icon={<DatabaseOutlined />}

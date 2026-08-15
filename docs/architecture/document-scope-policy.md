@@ -4,7 +4,7 @@
 
 ## 权威顺序
 
-1. `架构规划/智慧能源系统部署与运维架构设计.md`：Phase 1 总体与部署架构来源。
+1. `SE-ARCH-DEPLOY-001 V1.0 CURRENT`《智慧能源系统总体部署架构设计 V1（单服务器基线）》：Phase 1 当前总体部署架构来源。
 2. `docs/architecture/phase1-overall-architecture.md`：仓库内 L1/L2 总体架构基线。
 3. `deploy/platform/phase1/architecture-baseline.v1.json` 与 `deploy/platform/phase1/alignment-matrix.v1.json`：机器可读部署基线与对齐状态。
 4. 领域 ADR、operations/security 文档：只约束其声明的领域或认证范围，不得覆盖以上总体基线。
@@ -17,7 +17,7 @@
 
 ### CANONICAL_PHASE1_DEPLOYMENT
 
-描述当前 Phase 1 正式部署。基线是 Linux Server + Docker Compose；允许按 Application/Data/MQTT 职责拆到少量 Linux Server，但不要求 Kubernetes。
+描述当前 Phase 1 正式部署。基线是 1 Linux Server + Docker Compose；Application/Data/MQTT 等职责必须在同一服务器内保持组件、网络与数据边界。多服务器只属于 FUTURE_STAGE，不是当前 Phase 1 允许形态。
 
 ### CERTIFICATION_REFERENCE
 

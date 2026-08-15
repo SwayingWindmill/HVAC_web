@@ -24,7 +24,7 @@ func TestIAMAlarmDecisionPublishesExactAllowAndAuditEvidence(t *testing.T) {
 	input := alarmauth.DecisionRequest{
 		ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID,
 		SiteID:               iam.S1FixtureOwnerASite1ID,
-		Action:               alarmauth.ActionList,
+		Action:               alarmauth.ActionRead,
 	}
 	body, _ := json.Marshal(input)
 	request := harness.request(t, iam.AlarmDecisionPath, strings.NewReader(string(body)), claims, harness.gatewaySigner)
@@ -35,7 +35,7 @@ func TestIAMAlarmDecisionPublishesExactAllowAndAuditEvidence(t *testing.T) {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	var response alarmauth.DecisionResponse
-	if json.NewDecoder(recorder.Body).Decode(&response) != nil || !response.Decision.Allowed || response.Decision.Action != alarmauth.ActionList || response.Decision.SiteID != iam.S1FixtureOwnerASite1ID {
+	if json.NewDecoder(recorder.Body).Decode(&response) != nil || !response.Decision.Allowed || response.Decision.Action != alarmauth.ActionRead || response.Decision.SiteID != iam.S1FixtureOwnerASite1ID {
 		t.Fatalf("unexpected Alarm decision: %#v", response)
 	}
 	if len(sink.events) != 1 || !sink.events[0].Allowed || sink.events[0].RequestID != "alarm-decision-request-1" || sink.events[0].PolicyRevision != principalCapabilityAlarmPolicy {
@@ -54,7 +54,7 @@ func TestIAMAlarmDecisionDeniesCrossSiteWithoutGrantMaterial(t *testing.T) {
 	input := alarmauth.DecisionRequest{
 		ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID,
 		SiteID:               "01910000-0002-7000-8000-000000000001",
-		Action:               alarmauth.ActionList,
+		Action:               alarmauth.ActionRead,
 	}
 	body, _ := json.Marshal(input)
 	request := harness.request(t, iam.AlarmDecisionPath, strings.NewReader(string(body)), claims, harness.gatewaySigner)
@@ -84,7 +84,7 @@ func TestIAMAlarmDecisionRejectsExpandedBodyWrongActionAndAuditFailure(t *testin
 	assertIAMProblem(t, recorder, http.StatusBadRequest, "IAM_ALARM_DECISION_REQUEST_INVALID")
 
 	wrongAction := validIAMClaims(harness.now, "fixture-user", "principal:read")
-	body, _ := json.Marshal(alarmauth.DecisionRequest{ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionList})
+	body, _ := json.Marshal(alarmauth.DecisionRequest{ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionRead})
 	request = harness.request(t, iam.AlarmDecisionPath, strings.NewReader(string(body)), wrongAction, harness.gatewaySigner)
 	recorder = httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, request)

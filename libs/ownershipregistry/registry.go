@@ -41,6 +41,7 @@ const (
 	PhaseS4ContractOnly              = "S4-R0-contract-only"
 	PhaseS4InternalReadOnly          = "S4-R1-internal-read-only"
 	PhaseS4SiteCanary                = "S4-R2-site-canary"
+	PhaseS4OperationallyCertified    = "S4-R3-operationally-certified"
 	PhaseS5ContractOnly              = "S5-R0-contract-only"
 	PhaseS5InternalReadOnly          = "S5-R1-internal-read-only"
 	PhaseS5InternalCreateAssign      = "S5-R1-internal-create-assign"
@@ -384,6 +385,10 @@ func validateS4Phase(entry RouteEntry, seenScopes map[string]bool) error {
 				entry.Rollout.Percentage != 5 || entry.Rollout.FallbackOwner != "" || len(entry.Rollout.CohortSalt) < 8 || entry.CompatibilityMode != "native" {
 				return errors.New("S4 site canary policy is invalid")
 			}
+		case PhaseS4OperationallyCertified:
+			if entry.Owner != OwnerAlarm || entry.ActivationStatus != "primary" || entry.Rollout.Mode != "all" || entry.CompatibilityMode != "native" {
+				return errors.New("S4 certified read policy is invalid")
+			}
 		default:
 			return errors.New("S4 read migration phase is unsupported")
 		}
@@ -396,16 +401,33 @@ func validateS4Phase(entry RouteEntry, seenScopes map[string]bool) error {
 				return errors.New("S4 lifecycle scope dimensions are incomplete")
 			}
 		}
-		for _, required := range []string{"AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND", "VERSION_CONFLICT", "IDEMPOTENCY_CONFLICT"} {
+		requiredResults := []string{"AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND", "VERSION_CONFLICT", "IDEMPOTENCY_CONFLICT"}
+		if entry.Path == "/api/v1/alarms/{alarmId}/ack" {
+			requiredResults = []string{"AUTHORIZATION_DENIED", "RESOURCE_NOT_FOUND", "IDEMPOTENCY_CONFLICT"}
+		}
+		for _, required := range requiredResults {
 			if !containsString(entry.FallbackForbiddenResults, required) {
 				return errors.New("S4 lifecycle forbidden results are incomplete")
 			}
 		}
-		if entry.CohortGroup != "s4-alarm-lifecycle-v1" {
-			return errors.New("S4 lifecycle route requires the Alarm lifecycle cohort group")
+		requiredCohortGroup := "s4-alarm-lifecycle-v1"
+		if entry.Path == "/api/v1/alarms/{alarmId}/ack" && entry.MigrationPhase == PhaseS4OperationallyCertified {
+			requiredCohortGroup = "s4-alarm-ack-v1"
 		}
-		if entry.MigrationPhase != PhaseS4ContractOnly || entry.Owner != OwnerAlarm || entry.ActivationStatus != "expand-baseline" || entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" {
-			return errors.New("S4 lifecycle contract-only policy is invalid")
+		if entry.CohortGroup != requiredCohortGroup {
+			return errors.New("S4 lifecycle route requires the phase-appropriate Alarm cohort group")
+		}
+		switch entry.MigrationPhase {
+		case PhaseS4ContractOnly:
+			if entry.Owner != OwnerAlarm || entry.ActivationStatus != "expand-baseline" || entry.Rollout.Mode != "disabled" || entry.CompatibilityMode != "native" {
+				return errors.New("S4 lifecycle contract-only policy is invalid")
+			}
+		case PhaseS4OperationallyCertified:
+			if entry.Path != "/api/v1/alarms/{alarmId}/ack" || entry.Owner != OwnerAlarm || entry.ActivationStatus != "primary" || entry.Rollout.Mode != "all" || entry.CompatibilityMode != "native" {
+				return errors.New("S4 certified acknowledgement policy is invalid")
+			}
+		default:
+			return errors.New("S4 lifecycle migration phase is unsupported")
 		}
 	default:
 		return errors.New("S4 route method is unsupported")
@@ -764,6 +786,8 @@ func s4PhaseRank(phase string) (int, bool) {
 		return 1, true
 	case PhaseS4SiteCanary:
 		return 2, true
+	case PhaseS4OperationallyCertified:
+		return 3, true
 	default:
 		return 0, false
 	}

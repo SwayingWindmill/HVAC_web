@@ -28,13 +28,13 @@ import { presentRegistryError } from '../../api/registry';
 import { FocusHeading } from '../FocusHeading';
 import type { ProtectedScopeRequestToken, ProtectedScopeResource } from '../protected-scope';
 import { REAL_ASSETS_CATALOG_REVISION } from './catalog';
-import { EquipmentDetailDrawer } from './EquipmentDetailDrawer';
+import { AssetDetailDrawer } from './EquipmentDetailDrawer';
 import { RealAssetsLoadingSurface } from './RealAssetsLoadingSurface';
 import {
   REAL_ASSETS_DETAIL_HISTORY_MARKER,
   isRealAssetsDetailHistoryState,
   parseRealAssetsDetailPath,
-  realAssetsEquipmentPath,
+  realAssetsAssetPath,
   realAssetsListPath,
   resolveRealAssetsDetail,
 } from './detail';
@@ -46,7 +46,7 @@ import {
   realAssetsRegistryQueryKey,
 } from './data';
 import {
-  buildRealAssetsEquipmentRows,
+  buildRealAssetsAssetRows,
   buildRealAssetsHierarchy,
   buildRealAssetsPointRows,
   buildRealAssetsRows,
@@ -56,7 +56,7 @@ import {
   realAssetsSensorTypeLabel,
   realAssetsTelemetryPointMeta,
   type RealAssetsDeviceRow,
-  type RealAssetsEquipmentRow,
+  type RealAssetsAssetRow,
   type RealAssetsHierarchyNode,
   type RealAssetsOperatingState,
   type RealAssetsTelemetryPointRow,
@@ -70,7 +70,7 @@ import './real-assets.css';
 interface RealAssetsWorkspaceProps {
   site: Readonly<Site>;
   principal: CurrentPrincipalResponse;
-  requestedEquipmentId?: string;
+  requestedAssetId?: string;
   protectedGeneration: number;
   protectedRequestToken: () => ProtectedScopeRequestToken;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
@@ -79,7 +79,7 @@ interface RealAssetsWorkspaceProps {
 }
 
 type ListMode = 'attention' | 'all';
-type LedgerMode = 'equipment' | 'devices' | 'points';
+type LedgerMode = 'asset' | 'devices' | 'points';
 type HierarchySelection = string;
 
 const OPERATING_LABELS: Record<RealAssetsOperatingState, string> = {
@@ -101,39 +101,39 @@ function matchesHierarchy(row: RealAssetsDeviceRow, selectedDeviceIds: ReadonlyS
   return selectedDeviceIds === undefined || selectedDeviceIds.has(row.device.id);
 }
 
-function equipmentBindings(binding: RealAssetsDeviceRow['binding']) {
+function assetBindings(binding: RealAssetsDeviceRow['binding']) {
   if (binding.state === 'bound') return [binding];
   if (binding.state === 'multi-bound') return binding.bindings;
   return [];
 }
 
-function equipmentBindingLabel(binding: RealAssetsDeviceRow['binding']): string {
-  const bindings = equipmentBindings(binding);
-  if (bindings.length > 0) return bindings.map((item) => item.equipment.displayName).join('、');
-  return binding.state === 'ambiguous' ? '绑定关系冲突' : '未绑定 Equipment';
+function assetBindingLabel(binding: RealAssetsDeviceRow['binding']): string {
+  const bindings = assetBindings(binding);
+  if (bindings.length > 0) return bindings.map((item) => item.asset.displayName).join('、');
+  return binding.state === 'ambiguous' ? '绑定关系冲突' : '未绑定 Asset';
 }
 
 function matchesSearch(row: RealAssetsDeviceRow, value: string): boolean {
   const query = value.trim().toLocaleLowerCase('zh-CN');
   if (!query) return true;
-  const area = row.area.state === 'bound' ? row.area.area : undefined;
-  const equipment = equipmentBindings(row.binding).map((item) => item.equipment);
+  const space = row.space.state === 'bound' ? row.space.space : undefined;
+  const asset = assetBindings(row.binding).map((item) => item.asset);
   return [
     row.device.id,
     row.device.code,
     row.device.displayName,
     row.device.deviceType,
-    area?.code,
-    area?.displayName,
-    ...equipment.flatMap((item) => [item.code, item.displayName]),
+    space?.code,
+    space?.displayName,
+    ...asset.flatMap((item) => [item.code, item.displayName]),
   ].some((candidate) => candidate?.toLocaleLowerCase('zh-CN').includes(query));
 }
 
 function matchesPointSearch(row: RealAssetsTelemetryPointRow, value: string): boolean {
   const query = value.trim().toLocaleLowerCase('zh-CN');
   if (!query) return true;
-  const area = row.area.state === 'bound' ? row.area.area : undefined;
-  const equipment = equipmentBindings(row.binding).map((item) => item.equipment);
+  const space = row.space.state === 'bound' ? row.space.space : undefined;
+  const asset = assetBindings(row.binding).map((item) => item.asset);
   return [
     row.label,
     row.point.id,
@@ -143,15 +143,15 @@ function matchesPointSearch(row: RealAssetsTelemetryPointRow, value: string): bo
     row.device.displayName,
     row.sensor?.code,
     row.sensor?.displayName,
-    area?.displayName,
-    ...equipment.flatMap((item) => [item.code, item.displayName]),
+    space?.displayName,
+    ...asset.flatMap((item) => [item.code, item.displayName]),
   ].some((candidate) => candidate?.toLocaleLowerCase('zh-CN').includes(query));
 }
 
 const HIERARCHY_ICONS = {
   site: <ApartmentOutlined />,
-  area: <ClusterOutlined />,
-  equipment: <BlockOutlined />,
+  space: <ClusterOutlined />,
+  asset: <BlockOutlined />,
   device: <TabletOutlined />,
   sensor: <ApiOutlined />,
   point: <DatabaseOutlined />,
@@ -211,22 +211,22 @@ function pointEvidence(point: RealAssetsDeviceRow['points'][number], timeZone: s
 }
 
 function BindingLabel({ row }: { row: RealAssetsDeviceRow }) {
-  const areaLabel = row.area.state === 'bound'
-    ? row.area.area.displayName
-    : row.area.state === 'ambiguous'
-      ? 'Area 关系冲突'
-      : '未绑定 Area';
-  const equipmentLabel = equipmentBindingLabel(row.binding);
+  const spaceLabel = row.space.state === 'bound'
+    ? row.space.space.displayName
+    : row.space.state === 'ambiguous'
+      ? 'Space 关系冲突'
+      : '未绑定 Space';
+  const assetLabel = assetBindingLabel(row.binding);
   const bindingMeta = row.binding.state === 'bound'
     ? row.binding.relationship.role
     : row.binding.state === 'multi-bound'
-      ? `${row.binding.bindings.length} 个 Equipment`
+      ? `${row.binding.bindings.length} 个 Asset`
       : '';
-  const warning = row.area.state !== 'bound' || row.binding.state === 'unbound' || row.binding.state === 'ambiguous';
+  const warning = row.space.state !== 'bound' || row.binding.state === 'unbound' || row.binding.state === 'ambiguous';
   return (
     <span className={warning ? 'real-assets__binding-warning' : undefined}>
-      <strong>{areaLabel}</strong>
-      <small>{equipmentLabel}{bindingMeta ? ` · ${bindingMeta}` : ''}</small>
+      <strong>{spaceLabel}</strong>
+      <small>{assetLabel}{bindingMeta ? ` · ${bindingMeta}` : ''}</small>
     </span>
   );
 }
@@ -234,7 +234,7 @@ function BindingLabel({ row }: { row: RealAssetsDeviceRow }) {
 export function RealAssetsWorkspace({
   site,
   principal,
-  requestedEquipmentId,
+  requestedAssetId,
   protectedGeneration,
   protectedRequestToken,
   registerProtectedResource,
@@ -247,21 +247,21 @@ export function RealAssetsWorkspace({
   const platformClient = useMemo(() => providedPlatformClient ?? createPlatformGatewayClient(), [providedPlatformClient]);
   const telemetryRuntime = useMemo(() => providedTelemetryRuntime ?? createRealAssetsTelemetryRuntime(), [providedTelemetryRuntime]);
   const [listMode, setListMode] = useState<ListMode>('all');
-  const [ledgerMode, setLedgerMode] = useState<LedgerMode>('equipment');
+  const [ledgerMode, setLedgerMode] = useState<LedgerMode>('asset');
   const [search, setSearch] = useState('');
   const [hierarchySelection, setHierarchySelection] = useState<HierarchySelection>(`site:${site.id}`);
   const [telemetryPolicyRevision, setTelemetryPolicyRevision] = useState<string | null>(
     () => telemetryRuntime.currentRoutePolicyRevision(),
   );
   const [routePolicyEpoch, setRoutePolicyEpoch] = useState(0);
-  const [selectedEquipmentId, setSelectedEquipmentId] = useState<string | null>(() => requestedEquipmentId ?? null);
-  const selectedEquipmentIdRef = useRef<string | null>(selectedEquipmentId);
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(() => requestedAssetId ?? null);
+  const selectedAssetIdRef = useRef<string | null>(selectedAssetId);
   const pendingFocusDeviceIdRef = useRef<string | null>(null);
   const deviceTriggerRefs = useRef(new Map<string, HTMLElement>());
   const tenantId = site.tenantId;
   const sessionCapability = principal.session.csrfToken;
   const capabilities = principal.authorization.capabilities;
-  const registryAllowed = capabilities.includes('equipment.list') && capabilities.includes('device.list');
+  const registryAllowed = capabilities.includes('asset.list') && capabilities.includes('device.list');
   const telemetryAllowed = capabilities.includes('telemetry.batch.read');
   const queryRoot = useMemo(
     () => ['real-assets', protectedGeneration, tenantId, site.id] as const,
@@ -269,13 +269,13 @@ export function RealAssetsWorkspace({
   );
 
   useEffect(() => {
-    selectedEquipmentIdRef.current = requestedEquipmentId ?? null;
-    setSelectedEquipmentId(requestedEquipmentId ?? null);
-  }, [protectedGeneration, requestedEquipmentId, site.id]);
+    selectedAssetIdRef.current = requestedAssetId ?? null;
+    setSelectedAssetId(requestedAssetId ?? null);
+  }, [protectedGeneration, requestedAssetId, site.id]);
 
   useEffect(() => {
-    selectedEquipmentIdRef.current = selectedEquipmentId;
-  }, [selectedEquipmentId]);
+    selectedAssetIdRef.current = selectedAssetId;
+  }, [selectedAssetId]);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -284,15 +284,15 @@ export function RealAssetsWorkspace({
         window.location.reload();
         return;
       }
-      const previousDeviceId = selectedEquipmentIdRef.current;
+      const previousDeviceId = selectedAssetIdRef.current;
       if (parsed.state === 'list') {
         if (previousDeviceId) pendingFocusDeviceIdRef.current = previousDeviceId;
-        selectedEquipmentIdRef.current = null;
-        setSelectedEquipmentId(null);
+        selectedAssetIdRef.current = null;
+        setSelectedAssetId(null);
         return;
       }
-      selectedEquipmentIdRef.current = parsed.equipmentId;
-      setSelectedEquipmentId(parsed.equipmentId);
+      selectedAssetIdRef.current = parsed.assetId;
+      setSelectedAssetId(parsed.assetId);
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -319,11 +319,11 @@ export function RealAssetsWorkspace({
     kind: 'selection',
     purge: () => {
       setListMode('all');
-      setLedgerMode('equipment');
+      setLedgerMode('asset');
       setSearch('');
       setHierarchySelection(`site:${site.id}`);
-      selectedEquipmentIdRef.current = null;
-      setSelectedEquipmentId(null);
+      selectedAssetIdRef.current = null;
+      setSelectedAssetId(null);
       },
   }), [protectedGeneration, registerProtectedResource, site.id]);
 
@@ -396,7 +396,7 @@ export function RealAssetsWorkspace({
     assetModel,
     deviceRows: rows,
   }) : [], [assetModel, rows]);
-  const equipmentRows = useMemo(() => assetModel ? buildRealAssetsEquipmentRows({
+  const assetRows = useMemo(() => assetModel ? buildRealAssetsAssetRows({
     assetModel,
     deviceRows: rows,
     pointRows,
@@ -424,7 +424,7 @@ export function RealAssetsWorkspace({
   const hierarchyExpandedKeys = useMemo(() => hierarchyRoot
     ? [
       hierarchyRoot.key,
-      ...hierarchyRoot.children.filter((node) => node.kind === 'area').map((node) => node.key),
+      ...hierarchyRoot.children.filter((node) => node.kind === 'space').map((node) => node.key),
     ]
     : [], [hierarchyRoot]);
   const currentPending = telemetryAllowed && devices.length > 0 && current.isPending;
@@ -442,26 +442,26 @@ export function RealAssetsWorkspace({
     && (selectedPointIds === undefined || selectedPointIds.has(row.point.id))
     && (listMode === 'all' || currentPending || currentUnavailable || attentionDeviceIds.has(row.device.id))
   )), [attentionDeviceIds, currentPending, currentUnavailable, listMode, pointRows, search, selectedPointIds]);
-  const selectedEquipmentTreeId = selectedHierarchy?.kind === 'equipment'
-    ? selectedHierarchy.key.slice('equipment:'.length)
+  const selectedAssetTreeId = selectedHierarchy?.kind === 'asset'
+    ? selectedHierarchy.key.slice('asset:'.length)
     : null;
-  const filteredEquipmentRows = useMemo(() => equipmentRows.filter((row) => {
+  const filteredAssetRows = useMemo(() => assetRows.filter((row) => {
     const query = search.trim().toLocaleLowerCase('zh-CN');
     const matchesQuery = !query || [
-      row.equipment.id,
-      row.equipment.code,
-      row.equipment.displayName,
-      row.equipment.equipmentType,
-      row.area.state === 'bound' ? row.area.area.displayName : '',
+      row.asset.id,
+      row.asset.code,
+      row.asset.displayName,
+      row.asset.assetType,
+      row.space.state === 'bound' ? row.space.space.displayName : '',
       ...row.devices.flatMap((device) => [device.device.code, device.device.displayName]),
       ...row.sensors.flatMap((sensor) => [sensor.code, sensor.displayName]),
     ].some((value) => value.toLocaleLowerCase('zh-CN').includes(query));
     if (!matchesQuery) return false;
     if (listMode === 'attention' && !currentPending && !currentUnavailable && row.operatingState === 'NORMAL') return false;
-    if (selectedEquipmentTreeId) return row.equipment.id === selectedEquipmentTreeId;
+    if (selectedAssetTreeId) return row.asset.id === selectedAssetTreeId;
     if (!selectedHierarchy || selectedHierarchy.kind === 'site') return true;
     return row.devices.some((device) => selectedDeviceIds?.has(device.device.id));
-  }), [currentPending, currentUnavailable, equipmentRows, listMode, search, selectedDeviceIds, selectedEquipmentTreeId, selectedHierarchy]);
+  }), [currentPending, currentUnavailable, assetRows, listMode, search, selectedDeviceIds, selectedAssetTreeId, selectedHierarchy]);
 
   const counts = useMemo(() => ({
     total: rows.length,
@@ -469,7 +469,7 @@ export function RealAssetsWorkspace({
     offline: currentPending || currentUnavailable ? null : rows.filter((row) => row.operatingState === 'OFFLINE').length,
     normal: currentPending || currentUnavailable ? null : rows.filter((row) => row.operatingState === 'NORMAL').length,
   }), [currentPending, currentUnavailable, rows]);
-  const assetColumns = useMemo<ColumnsType<RealAssetsDeviceRow>>(() => {
+  const deviceColumns = useMemo<ColumnsType<RealAssetsDeviceRow>>(() => {
     const columns: ColumnsType<RealAssetsDeviceRow> = [
       {
         title: '通讯端点',
@@ -482,7 +482,7 @@ export function RealAssetsWorkspace({
             className="real-assets__device-link"
             data-testid="real-assets-open-device"
             aria-haspopup="dialog"
-            aria-expanded={selectedEquipmentId === row.device.id}
+            aria-expanded={selectedAssetId === row.device.id}
             ref={(node) => {
               if (node) deviceTriggerRefs.current.set(row.device.id, node);
               else deviceTriggerRefs.current.delete(row.device.id);
@@ -501,7 +501,7 @@ export function RealAssetsWorkspace({
       },
       {
         title: '区域 / 设备',
-        key: 'equipment',
+        key: 'asset',
         width: 210,
         render: (_, row) => <BindingLabel row={row} />,
       },
@@ -591,7 +591,7 @@ export function RealAssetsWorkspace({
             icon={<EyeOutlined />}
             data-testid="real-assets-open-device"
             aria-haspopup="dialog"
-            aria-expanded={selectedEquipmentId === row.device.id}
+            aria-expanded={selectedAssetId === row.device.id}
             onClick={() => openDeviceDetail(row.device.id)}
           >
             详情
@@ -600,9 +600,9 @@ export function RealAssetsWorkspace({
       },
     ];
     return compactTable
-      ? columns.filter((column) => ['device', 'equipment', 'state', 'points', 'action'].includes(String(column.key)))
+      ? columns.filter((column) => ['device', 'asset', 'state', 'points', 'action'].includes(String(column.key)))
       : columns;
-  }, [compactTable, currentPending, currentUnavailable, selectedEquipmentId, site.timezone]);
+  }, [compactTable, currentPending, currentUnavailable, selectedAssetId, site.timezone]);
   const pointColumns = useMemo<ColumnsType<RealAssetsTelemetryPointRow>>(() => {
     const columns: ColumnsType<RealAssetsTelemetryPointRow> = [
       {
@@ -663,8 +663,8 @@ export function RealAssetsWorkspace({
         width: 220,
         render: (_, row) => (
           <Space direction="vertical" size={0} align="start">
-            <Typography.Text>{row.area.state === 'bound' ? row.area.area.displayName : '区域未建立'}</Typography.Text>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{equipmentBindingLabel(row.binding)}</Typography.Text>
+            <Typography.Text>{row.space.state === 'bound' ? row.space.space.displayName : '区域未建立'}</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{assetBindingLabel(row.binding)}</Typography.Text>
           </Space>
         ),
       },
@@ -693,7 +693,7 @@ export function RealAssetsWorkspace({
             ghost
             icon={<EyeOutlined />}
             aria-haspopup="dialog"
-            aria-expanded={selectedEquipmentId === row.device.id}
+            aria-expanded={selectedAssetId === row.device.id}
             onClick={() => openDeviceDetail(row.device.id)}
           >
             设备详情
@@ -704,15 +704,15 @@ export function RealAssetsWorkspace({
     return compactTable
       ? columns.filter((column) => ['point', 'source', 'current', 'action'].includes(String(column.key)))
       : columns;
-  }, [compactTable, currentPending, currentUnavailable, selectedEquipmentId, site.timezone]);
+  }, [compactTable, currentPending, currentUnavailable, selectedAssetId, site.timezone]);
   const detailResolution = useMemo(
-    () => resolveRealAssetsDetail(equipmentRows, selectedEquipmentId),
-    [equipmentRows, selectedEquipmentId],
+    () => resolveRealAssetsDetail(assetRows, selectedAssetId),
+    [assetRows, selectedAssetId],
   );
   const detailRow = detailResolution.state === 'visible' ? detailResolution.row : null;
 
   useEffect(() => {
-    if (selectedEquipmentId !== null) return;
+    if (selectedAssetId !== null) return;
     const deviceId = pendingFocusDeviceIdRef.current;
     if (!deviceId) return;
     pendingFocusDeviceIdRef.current = null;
@@ -724,51 +724,51 @@ export function RealAssetsWorkspace({
       }
       document.getElementById('real-assets-title')?.focus({ preventScroll: true });
     });
-  }, [filteredRows, selectedEquipmentId]);
+  }, [filteredRows, selectedAssetId]);
 
-  const openEquipmentDetail = (equipmentId: string) => {
-    const target = realAssetsEquipmentPath(site.id, equipmentId);
-    const historyState = { marker: REAL_ASSETS_DETAIL_HISTORY_MARKER, siteId: site.id, equipmentId };
-    if (selectedEquipmentIdRef.current) window.history.replaceState(historyState, '', target);
+  const openAssetDetail = (assetId: string) => {
+    const target = realAssetsAssetPath(site.id, assetId);
+    const historyState = { marker: REAL_ASSETS_DETAIL_HISTORY_MARKER, siteId: site.id, assetId };
+    if (selectedAssetIdRef.current) window.history.replaceState(historyState, '', target);
     else window.history.pushState(historyState, '', target);
-    selectedEquipmentIdRef.current = equipmentId;
-    setSelectedEquipmentId(equipmentId);
+    selectedAssetIdRef.current = assetId;
+    setSelectedAssetId(assetId);
   };
 
   const openDeviceDetail = (deviceId: string) => {
     const row = rows.find((candidate) => candidate.device.id === deviceId);
-    const binding = row ? equipmentBindings(row.binding)[0] : undefined;
-    if (binding) openEquipmentDetail(binding.equipment.id);
+    const binding = row ? assetBindings(row.binding)[0] : undefined;
+    if (binding) openAssetDetail(binding.asset.id);
   };
 
-  const closeEquipmentDetail = () => {
-    const equipmentId = selectedEquipmentIdRef.current;
-    if (!equipmentId) return;
-    if (isRealAssetsDetailHistoryState(window.history.state, site.id, equipmentId)) {
+  const closeAssetDetail = () => {
+    const assetId = selectedAssetIdRef.current;
+    if (!assetId) return;
+    if (isRealAssetsDetailHistoryState(window.history.state, site.id, assetId)) {
       window.history.back();
       return;
     }
     window.history.pushState(null, '', realAssetsListPath(site.id));
-    selectedEquipmentIdRef.current = null;
-    setSelectedEquipmentId(null);
+    selectedAssetIdRef.current = null;
+    setSelectedAssetId(null);
   };
 
-  const equipmentColumns: ColumnsType<RealAssetsEquipmentRow> = [
+  const assetColumns: ColumnsType<RealAssetsAssetRow> = [
     {
-      title: 'Equipment',
-      key: 'equipment',
+      title: 'Asset',
+      key: 'asset',
       fixed: 'left',
       width: 250,
       render: (_, row) => (
-        <Button type="link" onClick={() => openEquipmentDetail(row.equipment.id)}>
+        <Button type="link" onClick={() => openAssetDetail(row.asset.id)}>
           <Space direction="vertical" size={0} align="start">
-            <Typography.Text strong>{row.equipment.displayName}</Typography.Text>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{row.equipment.code} · {row.equipment.equipmentType}</Typography.Text>
+            <Typography.Text strong>{row.asset.displayName}</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{row.asset.code} · {row.asset.assetType}</Typography.Text>
           </Space>
         </Button>
       ),
     },
-    { title: '区域', key: 'area', width: 160, render: (_, row) => row.area.state === 'bound' ? row.area.area.displayName : '未绑定 Area' },
+    { title: '区域', key: 'space', width: 160, render: (_, row) => row.space.state === 'bound' ? row.space.space.displayName : '未绑定 Space' },
     { title: '运行状态', key: 'state', width: 130, render: (_, row) => <Tag>{OPERATING_LABELS[row.operatingState]}</Tag> },
     {
       title: 'Device Endpoints',
@@ -781,7 +781,7 @@ export function RealAssetsWorkspace({
     { title: 'Sensors', key: 'sensors', width: 100, render: (_, row) => `${row.sensors.length} 个` },
     { title: '点位', key: 'points', width: 120, render: (_, row) => `${row.points.length} 个` },
     { title: '设备功能', key: 'controls', width: 120, render: (_, row) => <Tag color={row.controlPoints.length > 0 ? 'blue' : undefined}>{row.controlPoints.length} 项</Tag> },
-    { title: '操作', key: 'action', fixed: 'right', width: 100, render: (_, row) => <Button size="small" type="primary" ghost icon={<EyeOutlined />} onClick={() => openEquipmentDetail(row.equipment.id)}>详情</Button> },
+    { title: '操作', key: 'action', fixed: 'right', width: 100, render: (_, row) => <Button size="small" type="primary" ghost icon={<EyeOutlined />} onClick={() => openAssetDetail(row.asset.id)}>详情</Button> },
   ];
 
   const businessState = !registryAllowed || !telemetryAllowed
@@ -864,8 +864,8 @@ export function RealAssetsWorkspace({
       data-telemetry-policy-revision={current.data?.routePolicyRevision ?? telemetryPolicyRevision ?? 'unavailable'}
       data-current-request-count={String(current.data?.requestCount ?? 0)}
       data-detail-state={detailResolution.state}
-      data-area-count={String(assetModel?.counts.areas ?? 0)}
-      data-equipment-count={String(assetModel?.counts.equipment ?? 0)}
+      data-space-count={String(assetModel?.counts.spaces ?? 0)}
+      data-asset-count={String(assetModel?.counts.assets ?? 0)}
       data-device-endpoint-count={String(assetModel?.counts.deviceEndpoints ?? 0)}
       data-sensor-count={String(assetModel?.counts.physicalSensors ?? 0)}
       data-telemetry-point-count={String(assetModel?.counts.points ?? 0)}
@@ -903,8 +903,8 @@ export function RealAssetsWorkspace({
         <OperationsMetrics
           ariaLabel="Site 原子资产模型摘要"
           items={[
-            { key: 'areas', label: 'Area', value: assetModel?.counts.areas ?? 0, detail: '空间层级', tone: 'accent' },
-            { key: 'equipment', label: 'Equipment', value: assetModel?.counts.equipment ?? 0, detail: '物理设备', tone: 'default' },
+            { key: 'spaces', label: 'Space', value: assetModel?.counts.spaces ?? 0, detail: '空间层级', tone: 'accent' },
+            { key: 'asset', label: 'Asset', value: assetModel?.counts.assets ?? 0, detail: '物理设备', tone: 'default' },
             { key: 'device-endpoints', label: 'Device Endpoint', value: assetModel?.counts.deviceEndpoints ?? 0, detail: '通信端点', tone: 'default' },
             { key: 'sensors', label: 'Sensor', value: assetModel?.counts.physicalSensors ?? 0, detail: '物理测量单元', tone: 'default' },
             { key: 'points', label: 'Point', value: assetModel?.counts.points ?? 0, detail: '标准点位目录', tone: 'accent' },
@@ -922,7 +922,7 @@ export function RealAssetsWorkspace({
 
       {devices.length === 0 ? (
         <div className="real-assets__empty" role="status">
-          当前 Site 的原子 Asset Model 尚未登记 Device Endpoint；Area、Equipment、Sensor 与 Point 计数仍保持权威展示。
+          当前 Site 的原子 Asset Model 尚未登记 Device Endpoint；Space、Asset、Sensor 与 Point 计数仍保持权威展示。
         </div>
       ) : null}
       {currentPending ? (
@@ -968,7 +968,7 @@ export function RealAssetsWorkspace({
                     const node = hierarchyIndex.get(selected);
                     if (node?.kind === 'point' || node?.kind === 'sensor' || node?.kind === 'virtual-sensor') setLedgerMode('points');
                     else if (node?.kind === 'device') setLedgerMode('devices');
-                    else setLedgerMode('equipment');
+                    else setLedgerMode('asset');
                   }}
                 />
               </div>
@@ -981,14 +981,14 @@ export function RealAssetsWorkspace({
                   <OperationsPanelHeading
                     icon={<NodeIndexOutlined />}
                     title="资产台账"
-                    meta={ledgerMode === 'equipment' ? `${filteredEquipmentRows.length} 个 Equipment` : ledgerMode === 'points' ? `${filteredPointRows.length} 个点位` : `${filteredRows.length} 个通讯端点`}
+                    meta={ledgerMode === 'asset' ? `${filteredAssetRows.length} 个 Asset` : ledgerMode === 'points' ? `${filteredPointRows.length} 个点位` : `${filteredRows.length} 个通讯端点`}
                   />
                   <Space wrap>
                     <Segmented<LedgerMode>
                       value={ledgerMode}
                       onChange={setLedgerMode}
                       options={[
-                        { label: `Equipment ${equipmentRows.length}`, value: 'equipment' },
+                        { label: `Asset ${assetRows.length}`, value: 'asset' },
                         { label: `通讯端点 ${rows.length}`, value: 'devices' },
                         { label: `点位 ${pointRows.length}`, value: 'points' },
                       ]}
@@ -997,7 +997,7 @@ export function RealAssetsWorkspace({
                       allowClear
                       type="search"
                       data-testid="real-assets-search"
-                      placeholder={ledgerMode === 'equipment' ? '搜索 Equipment、区域或端点' : ledgerMode === 'points' ? '搜索点位、传感器或通讯端点' : '搜索通讯端点或 Equipment'}
+                      placeholder={ledgerMode === 'asset' ? '搜索 Asset、区域或端点' : ledgerMode === 'points' ? '搜索点位、传感器或通讯端点' : '搜索通讯端点或 Asset'}
                       value={search}
                       onChange={(event) => setSearch(event.currentTarget.value)}
                       style={{ width: 280 }}
@@ -1015,16 +1015,16 @@ export function RealAssetsWorkspace({
                 </div>
 
                 <div data-testid="real-assets-table-wrap" data-ledger-mode={ledgerMode}>
-                  {ledgerMode === 'equipment' ? (
-                    <Table<RealAssetsEquipmentRow>
-                      rowKey={(row) => row.equipment.id}
+                  {ledgerMode === 'asset' ? (
+                    <Table<RealAssetsAssetRow>
+                      rowKey={(row) => row.asset.id}
                       size="middle"
-                      columns={equipmentColumns}
-                      dataSource={filteredEquipmentRows}
-                      pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (total) => `共 ${total} 个 Equipment` }}
+                      columns={assetColumns}
+                      dataSource={filteredAssetRows}
+                      pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (total) => `共 ${total} 个 Asset` }}
                       scroll={{ x: 1150 }}
-                      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前层级或筛选条件没有匹配的 Equipment。" /> }}
-                      onRow={(row) => ({ 'data-equipment-id': row.equipment.id } as HTMLAttributes<HTMLTableRowElement>)}
+                      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前层级或筛选条件没有匹配的 Asset。" /> }}
+                      onRow={(row) => ({ 'data-asset-id': row.asset.id } as HTMLAttributes<HTMLTableRowElement>)}
                     />
                   ) : ledgerMode === 'points' ? (
                     <>
@@ -1068,7 +1068,7 @@ export function RealAssetsWorkspace({
                               data-operating-state={currentUnavailable ? 'UNAVAILABLE' : currentPending ? 'LOADING' : row.operatingState}
                             >
                               <td>{row.device.displayName} {row.device.code}</td>
-                              <td>{equipmentBindingLabel(row.binding)}</td>
+                              <td>{assetBindingLabel(row.binding)}</td>
                               <td>{currentUnavailable ? '状态不可用' : currentPending ? '读取中' : OPERATING_LABELS[row.operatingState]}</td>
                               <td>{row.registeredPointCount} 个点位</td>
                             </tr>
@@ -1078,7 +1078,7 @@ export function RealAssetsWorkspace({
                       <Table<RealAssetsDeviceRow>
                         rowKey={(row) => row.device.id}
                         size="middle"
-                        columns={assetColumns}
+                        columns={deviceColumns}
                         dataSource={filteredRows}
                         pagination={{ pageSize: 8, showSizeChanger: false }}
                         scroll={{ x: compactTable ? 820 : 1240 }}
@@ -1105,7 +1105,7 @@ export function RealAssetsWorkspace({
           </Col>
         </Row>
       ) : null}
-      <EquipmentDetailDrawer
+      <AssetDetailDrawer
         site={site}
         principal={principal}
         row={detailRow}
@@ -1114,7 +1114,7 @@ export function RealAssetsWorkspace({
         protectedRequestToken={protectedRequestToken}
         routePolicyRevision={telemetryPolicyRevision}
         refreshing={registry.isFetching || current.isFetching}
-        onClose={closeEquipmentDetail}
+        onClose={closeAssetDetail}
         onRefresh={() => {
           void registry.refetch();
           if (devices.length > 0) void current.refetch();

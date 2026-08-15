@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const baseline = JSON.parse(await readFile(resolve(root, 'contracts/architecture/backend-architecture.v2.json'), 'utf8'));
+const apiRuntimeConvergence = JSON.parse(await readFile(resolve(root, 'contracts/architecture/se-api-001-v1.2-runtime-convergence.json'), 'utf8'));
 
 function invariant(condition, message) {
   if (!condition) throw new Error(`Backend Architecture V2.1.2 check failed: ${message}`);
@@ -50,6 +51,7 @@ invariant(dataArchitecture.approvedRemovals?.includes('ThingsBoard'), 'Data Arch
 const publicOpenAPI = JSON.parse(await readFile(resolve(root, 'contracts/http/platform-gateway.openapi.yaml'), 'utf8'));
 invariant(publicOpenAPI.openapi === '3.1.0', 'SE-API-001 machine contract must use OpenAPI 3.1');
 invariant(publicOpenAPI['x-contract-id'] === 'SE-API-001' && publicOpenAPI.info?.version === '2.1.2', 'SE-API-001 machine contract identity/version drifted');
+invariant(publicOpenAPI['x-runtime-convergence-review'] === 'contracts/architecture/se-api-001-v1.2-runtime-convergence.json', 'SE-API-001 OpenAPI must link the V1.2 runtime convergence review');
 for (const contracted of baseline.api.contractedPaths) {
   const separator = contracted.indexOf(' ');
   const method = contracted.slice(0, separator).toLowerCase();
@@ -58,24 +60,24 @@ for (const contracted of baseline.api.contractedPaths) {
 }
 invariant(publicOpenAPI.components?.responses?.V212Success && publicOpenAPI.components?.responses?.V212Error, 'SE-API-001 V2.1.2 response envelopes are missing');
 invariant(publicOpenAPI.components?.schemas?.V212SuccessEnvelope && publicOpenAPI.components?.schemas?.V212ErrorEnvelope, 'SE-API-001 V2.1.2 envelope schemas are missing');
+invariant(apiRuntimeConvergence.authority?.documentId === 'SE-API-001' && apiRuntimeConvergence.authority?.version === '1.2', 'SE-API-001 V1.2 runtime convergence review is missing or stale');
+invariant(apiRuntimeConvergence.authority?.machineContract === 'contracts/http/platform-gateway.openapi.yaml', 'SE-API-001 review must keep OpenAPI as final machine authority');
+invariant(apiRuntimeConvergence.summary?.routesReviewed === 13 && apiRuntimeConvergence.routes?.length === 13, 'SE-API-001 V1.2 review must cover exactly 13 reviewed routes');
+invariant(apiRuntimeConvergence.summary?.classificationAReadyToActivate === 3 && apiRuntimeConvergence.summary?.classificationBReusableSubordinateShapeButRuntimeBlocked === 0 && apiRuntimeConvergence.summary?.classificationCSchemaOrSemanticDecisionStillRequired === 10, 'SE-API-001 V1.2 A/B/C adjudication drifted');
+invariant(apiRuntimeConvergence.summary?.runtimeContractOnlyRoutes === 10, 'Exactly 10 SE-API-001 routes must remain contract-only after Alarm activation');
 const contractOnlyGateway = await readFile(resolve(root, 'services/platform-gateway/internal/gateway/v212_contract_only.go'), 'utf8');
-for (const route of [
-  '/api/v1/sites',
-  '/api/v1/sites/{siteId}/spaces/tree',
-  '/api/v1/devices',
-  '/api/v1/devices/{deviceId}/points',
-  '/api/v1/telemetry/latest',
-  '/api/v1/telemetry/history',
-  '/api/v1/alarms',
-  '/api/v1/alarms/{alarmId}',
-  '/api/v1/alarms/{alarmId}/ack',
-  '/api/v1/sites/{siteId}/forecast/load',
-  '/api/v1/sites/{siteId}/forecast/pv',
-  '/api/v1/optimization/runs',
-  '/api/v1/optimization/runs/{runId}',
-]) {
-  invariant(contractOnlyGateway.includes(`template: "${route}"`), `SE-API-001 shape-pending route must be explicitly contract-only at runtime: ${route}`);
+for (const route of apiRuntimeConvergence.routes) {
+  const operation = publicOpenAPI.paths?.[route.path]?.[route.method.toLowerCase()];
+  if (route.classification === 'A') {
+    invariant(!contractOnlyGateway.includes(`template: "${route.path}"`), `A-class route must not remain contract-only at runtime: ${route.method} ${route.path}`);
+    invariant(operation?.['x-shape-status'] === 'READY' && operation?.['x-architecture-status'] === 'ACTIVE', `A-class route must be active with a synchronized machine shape: ${route.method} ${route.path}`);
+    continue;
+  }
+  invariant(route.classification === 'C', `Unsupported SE-API-001 runtime classification: ${route.classification}`);
+  invariant(contractOnlyGateway.includes(`template: "${route.path}"`), `C-class route must remain explicitly contract-only at runtime: ${route.method} ${route.path}`);
+  invariant(operation?.['x-shape-status'] === 'TO_SYNC_TO_SE_API_001', `C-class route must remain generator-skipped until its final machine schema is synchronized: ${route.method} ${route.path}`);
 }
+invariant(apiRuntimeConvergence.manualVsMachineDrift?.some((item) => item.route === 'POST /api/v1/auth/login' && item.adjudication === 'KEEP_OPENAPI'), 'Auth login handbook/OpenAPI drift must remain explicitly adjudicated in favor of OpenAPI');
 invariant(contractOnlyGateway.includes('CONTRACT_NOT_ACTIVE') && contractOnlyGateway.includes('writeV212Error'), 'SE-API-001 contract-only routes must return the frozen V2.1.2 error envelope');
 
 const commandPublic = JSON.parse(await readFile(resolve(root, 'contracts/http/s3-command-public.openapi.json'), 'utf8'));

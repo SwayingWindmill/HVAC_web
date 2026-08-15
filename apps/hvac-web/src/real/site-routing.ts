@@ -31,7 +31,7 @@ export type SiteRoutingDecision =
     state: 'READY';
     route: SiteRouteLeaf;
     context: SiteContext;
-    equipmentId?: string;
+    assetId?: string;
     energyPeriod?: EnergyRoutePeriod;
   }
   | { state: 'FORBIDDEN' }
@@ -120,7 +120,7 @@ export function resolveSiteRouting(
   }
 
   if (leaf === 'assets' && segments.length === 4) {
-    return { state: 'READY', route: leaf, context, equipmentId: segments[3] };
+    return { state: 'READY', route: leaf, context, assetId: segments[3] };
   }
 
   if (leaf === 'energy') {

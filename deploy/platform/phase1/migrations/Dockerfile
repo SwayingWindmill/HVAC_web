@@ -28,6 +28,7 @@ COPY infra/s1-registry/postgres/init/009c-metric-model-v2.sql /opt/hvac/repo/inf
 COPY infra/s1-registry/postgres/init/009d-data-governance-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009d-data-governance-v2.sql
 COPY infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql
 COPY infra/s1-registry/postgres/init/009i-backend-integration-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009i-backend-integration-v2.sql
+COPY infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql
 
 COPY infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
@@ -35,6 +36,7 @@ COPY infra/s2-telemetry/postgres/init/003-s2-telemetry-ingest.sql /opt/hvac/repo
 COPY infra/s2-telemetry/postgres/init/004-s2-telemetry-history-outbox.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/004-s2-telemetry-history-outbox.sql
 COPY infra/s2-telemetry/postgres/init/004a-s2-tenant-scope.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/004a-s2-tenant-scope.sql
 COPY infra/s2-telemetry/postgres/init/004b-s2-point-identity.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/004b-s2-point-identity.sql
+COPY infra/s2-telemetry/postgres/init/004d-s2-redis-latest.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/004d-s2-redis-latest.sql
 COPY infra/s2-telemetry/postgres/init/005-s2-realtime-backend.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/005-s2-realtime-backend.sql
 
 COPY services/command-service/migrations/001_s3_command_runtime.sql /opt/hvac/repo/services/command-service/migrations/001_s3_command_runtime.sql

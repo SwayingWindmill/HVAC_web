@@ -127,7 +127,7 @@ export default function LocalAlarmLifecycle({
       const baseInput = { expectedVersion: variables.expectedVersion, reason: variables.reason };
       switch (variables.operation) {
         case 'ACKNOWLEDGE':
-          return acknowledgeScopedAlarm(variables.alarmId, baseInput, options);
+          return acknowledgeScopedAlarm(variables.alarmId, { comment: variables.reason }, options);
         case 'ASSIGN':
           return assignScopedAlarm(variables.alarmId, { ...baseInput, assigneeId: variables.assigneeId ?? '' }, options);
         case 'UNASSIGN':

@@ -3,11 +3,13 @@ package alarmservice
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 )
@@ -15,6 +17,7 @@ import (
 var (
 	ErrNotFound            = errors.New("alarm not found")
 	ErrUnavailable         = errors.New("alarm store unavailable")
+	ErrInvalidCursor       = errors.New("alarm cursor invalid")
 	ErrIdempotencyConflict = errors.New("alarm idempotency conflict")
 )
 
@@ -44,9 +47,15 @@ type MutationResult struct {
 	Replayed bool
 }
 
+type AlarmScope struct {
+	TenantID string `json:"tenantId"`
+	SiteID   string `json:"siteId"`
+}
+
 type Store interface {
 	List(context.Context, string, string, Filter) (alarmmodel.ListResponse, error)
 	Get(context.Context, string, string, string) (alarmmodel.Alarm, error)
+	ResolveScope(context.Context, string, string) (AlarmScope, error)
 	Apply(context.Context, string, string, string, Mutation) (MutationResult, error)
 }
 
@@ -81,6 +90,19 @@ func NewMemoryStore(items []alarmmodel.Alarm) (*MemoryStore, error) {
 func (store *MemoryStore) List(_ context.Context, tenantID, siteID string, filter Filter) (alarmmodel.ListResponse, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
+	limit := filter.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	var cursorTime time.Time
+	var cursorAlarmID string
+	if filter.Cursor != "" {
+		var err error
+		cursorTime, cursorAlarmID, err = decodeAlarmCursor(tenantID, siteID, filter)
+		if err != nil {
+			return alarmmodel.ListResponse{}, ErrInvalidCursor
+		}
+	}
 	items := make([]alarmmodel.Alarm, 0, len(store.alarms))
 	for _, alarm := range store.alarms {
 		if alarm.TenantID != tenantID || alarm.SiteID != siteID {
@@ -92,25 +114,22 @@ func (store *MemoryStore) List(_ context.Context, tenantID, siteID string, filte
 		if filter.Severity != "" && alarm.Severity != filter.Severity {
 			continue
 		}
+		if filter.Cursor != "" {
+			triggeredAt, err := time.Parse(time.RFC3339Nano, alarm.FirstOccurredAt)
+			if err != nil || triggeredAt.After(cursorTime) || (triggeredAt.Equal(cursorTime) && alarm.AlarmID >= cursorAlarmID) {
+				continue
+			}
+		}
 		items = append(items, cloneStoredAlarm(alarm))
 	}
 	alarmmodel.SortNewestFirst(items)
-	if filter.Cursor != "" {
-		for index := range items {
-			if items[index].AlarmID == filter.Cursor {
-				items = items[index+1:]
-				break
-			}
-		}
-	}
-	limit := filter.Limit
-	if limit <= 0 || limit > 100 {
-		limit = 50
-	}
 	response := alarmmodel.ListResponse{SchemaVersion: alarmmodel.SchemaVersion, Items: items}
 	if len(response.Items) > limit {
-		cursor := response.Items[limit-1].AlarmID
 		response.Items = response.Items[:limit]
+		cursor, err := encodeAlarmCursor(tenantID, siteID, filter, response.Items[len(response.Items)-1])
+		if err != nil {
+			return alarmmodel.ListResponse{}, ErrUnavailable
+		}
 		response.NextCursor = &cursor
 		response.HasMore = true
 	}
@@ -127,6 +146,16 @@ func (store *MemoryStore) Get(_ context.Context, tenantID, siteID, alarmID strin
 	return cloneStoredAlarm(alarm), nil
 }
 
+func (store *MemoryStore) ResolveScope(_ context.Context, tenantID, alarmID string) (AlarmScope, error) {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	alarm, ok := store.alarms[alarmID]
+	if !ok || alarm.TenantID != tenantID {
+		return AlarmScope{}, ErrNotFound
+	}
+	return AlarmScope{TenantID: alarm.TenantID, SiteID: alarm.SiteID}, nil
+}
+
 func (store *MemoryStore) Apply(_ context.Context, tenantID, siteID, alarmID string, mutation Mutation) (MutationResult, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -134,24 +163,32 @@ func (store *MemoryStore) Apply(_ context.Context, tenantID, siteID, alarmID str
 	if !ok || current.TenantID != tenantID || current.SiteID != siteID {
 		return MutationResult{}, ErrNotFound
 	}
+	key := strings.TrimSpace(mutation.IdempotencyKey)
+	if key == "" && mutation.Operation != alarmmodel.OperationAcknowledge {
+		return MutationResult{}, alarmmodel.ErrInvalidOperation
+	}
 	digest, err := mutationDigest(mutation)
 	if err != nil {
 		return MutationResult{}, alarmmodel.ErrInvalidOperation
 	}
-	idempotencyKey := tenantID + "|" + siteID + "|" + alarmID + "|" + strings.TrimSpace(mutation.IdempotencyKey)
-	if record, exists := store.idempotency[idempotencyKey]; exists {
-		if record.digest != digest {
-			return MutationResult{}, ErrIdempotencyConflict
+	idempotencyKey := tenantID + "|" + siteID + "|" + alarmID + "|" + key
+	if key != "" {
+		if record, exists := store.idempotency[idempotencyKey]; exists {
+			if record.digest != digest {
+				return MutationResult{}, ErrIdempotencyConflict
+			}
+			return MutationResult{Alarm: cloneStoredAlarm(record.alarm), Replayed: true}, nil
 		}
-		return MutationResult{Alarm: cloneStoredAlarm(record.alarm), Replayed: true}, nil
 	}
 	updated, err := alarmmodel.ApplyOperation(current, mutation.operationInput())
 	if err != nil {
 		return MutationResult{}, err
 	}
 	store.alarms[alarmID] = cloneStoredAlarm(updated)
-	store.idempotency[idempotencyKey] = idempotencyRecord{digest: digest, alarm: cloneStoredAlarm(updated)}
-	return MutationResult{Alarm: cloneStoredAlarm(updated)}, nil
+	if key != "" {
+		store.idempotency[idempotencyKey] = idempotencyRecord{digest: digest, alarm: cloneStoredAlarm(updated)}
+	}
+	return MutationResult{Alarm: cloneStoredAlarm(updated), Replayed: updated.Version == current.Version}, nil
 }
 
 func (mutation Mutation) operationInput() alarmmodel.OperationInput {
@@ -193,6 +230,50 @@ func mutationDigest(mutation Mutation) (string, error) {
 	}
 	digest := sha256.Sum256(encoded)
 	return hex.EncodeToString(digest[:]), nil
+}
+
+type alarmCursor struct {
+	Version     int    `json:"v"`
+	TriggeredAt string `json:"t"`
+	AlarmID     string `json:"a"`
+	Fingerprint string `json:"f"`
+}
+
+func alarmFilterFingerprint(tenantID, siteID string, filter Filter) string {
+	payload := tenantID + "\x00" + siteID + "\x00" + string(filter.Status) + "\x00" + string(filter.Severity)
+	digest := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(digest[:])
+}
+
+func encodeAlarmCursor(tenantID, siteID string, filter Filter, alarm alarmmodel.Alarm) (string, error) {
+	cursor := alarmCursor{
+		Version: 1, TriggeredAt: alarm.FirstOccurredAt, AlarmID: alarm.AlarmID,
+		Fingerprint: alarmFilterFingerprint(tenantID, siteID, filter),
+	}
+	encoded, err := json.Marshal(cursor)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(encoded), nil
+}
+
+func decodeAlarmCursor(tenantID, siteID string, filter Filter) (time.Time, string, error) {
+	encoded, err := base64.RawURLEncoding.DecodeString(filter.Cursor)
+	if err != nil || len(encoded) > 2048 {
+		return time.Time{}, "", ErrInvalidCursor
+	}
+	var cursor alarmCursor
+	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&cursor) != nil || cursor.Version != 1 || !alarmmodel.IsUUIDv7(cursor.AlarmID) ||
+		cursor.Fingerprint != alarmFilterFingerprint(tenantID, siteID, filter) {
+		return time.Time{}, "", ErrInvalidCursor
+	}
+	triggeredAt, err := time.Parse(time.RFC3339Nano, cursor.TriggeredAt)
+	if err != nil {
+		return time.Time{}, "", ErrInvalidCursor
+	}
+	return triggeredAt, cursor.AlarmID, nil
 }
 
 func cloneStoredAlarm(alarm alarmmodel.Alarm) alarmmodel.Alarm {

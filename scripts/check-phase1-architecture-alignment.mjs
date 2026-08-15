@@ -9,14 +9,13 @@ const baselinePath = 'deploy/platform/phase1/architecture-baseline.v1.json';
 const matrixPath = 'deploy/platform/phase1/alignment-matrix.v1.json';
 const overallPath = 'docs/architecture/phase1-overall-architecture.md';
 const operationsPath = 'docs/operations/phase1-deployment-alignment.md';
-const authorityPath = '架构规划/智慧能源系统部署与运维架构设计.md';
+const authorityId = 'SE-ARCH-DEPLOY-001 V1.0 CURRENT';
 
-const [baseline, matrix, overall, operations, authority] = await Promise.all([
+const [baseline, matrix, overall, operations] = await Promise.all([
   readJSON(baselinePath),
   readJSON(matrixPath),
   readText(overallPath),
   readText(operationsPath),
-  readText(authorityPath),
 ]);
 
 const failures = [];
@@ -24,15 +23,12 @@ const assert = (condition, message) => {
   if (!condition) failures.push(message);
 };
 
-assert(authority.includes('第一阶段不建议直接 Kubernetes'), 'source deployment design no longer contains the Phase 1 Kubernetes boundary');
-assert(authority.includes('Development') && authority.includes('Testing') && authority.includes('Staging') && authority.includes('Production'), 'source deployment design no longer defines four environments');
-assert(authority.includes('Edge') && authority.includes('Central Platform') && authority.includes('Data Platform') && authority.includes('Monitoring Platform'), 'source deployment design no longer defines the four top-level deployment layers');
-
 assert(baseline.schemaVersion === 1, 'Phase 1 architecture baseline schemaVersion must be 1');
-assert(baseline.sourceOfTruth === authorityPath, 'Phase 1 architecture baseline must cite the deployment design as source of truth');
-assert(baseline.deploymentModel?.host === 'linux-server', 'Phase 1 deployment host must be Linux Server');
+assert(baseline.sourceOfTruth === authorityId, 'Phase 1 architecture baseline must cite SE-ARCH-DEPLOY-001 V1.0 CURRENT');
+assert(baseline.deploymentModel?.host === 'single-linux-server', 'Phase 1 deployment host must be one Linux Server');
 assert(baseline.deploymentModel?.orchestration === 'docker-compose', 'Phase 1 canonical orchestrator must be Docker Compose');
 assert(baseline.deploymentModel?.kubernetesRequired === false, 'Kubernetes must not be a Phase 1 requirement');
+assert(baseline.deploymentModel?.singleServerRequired === true && baseline.deploymentModel?.fewServersAllowed === false, 'Phase 1 must remain a single-server baseline');
 
 const expectedEnvironments = ['development', 'testing', 'staging', 'production'];
 assert(JSON.stringify(baseline.environments) === JSON.stringify(expectedEnvironments), 'Phase 1 environments must be Development/Testing/Staging/Production in order');
@@ -64,7 +60,7 @@ for (const deferred of [
 
 const allowedStatuses = new Set(matrix.statuses ?? []);
 assert(matrix.schemaVersion === 1, 'alignment matrix schemaVersion must be 1');
-assert(matrix.sourceOfTruth === authorityPath, 'alignment matrix must cite the deployment design as source of truth');
+assert(matrix.sourceOfTruth === authorityId, 'alignment matrix must cite SE-ARCH-DEPLOY-001 V1.0 CURRENT');
 assert(Array.isArray(matrix.items) && matrix.items.length >= 25, 'alignment matrix must cover at least 25 deployment concerns');
 assert(new Set(matrix.items.map((item) => item.id)).size === matrix.items.length, 'alignment matrix IDs must be unique');
 for (const item of matrix.items ?? []) {
@@ -74,17 +70,20 @@ for (const item of matrix.items ?? []) {
 }
 
 const byId = new Map((matrix.items ?? []).map((item) => [item.id, item]));
-assert(byId.get('DEPLOY-PHASE1-001')?.status === 'SIMPLIFY', 'Phase 1 orchestration must explicitly simplify to Docker Compose');
+assert(byId.get('DEPLOY-PHASE1-001')?.status === 'KEEP', 'single-server Docker Compose must remain the canonical Phase 1 deployment');
 assert(byId.get('DEPLOY-K8S-001')?.status === 'DEFER', 'Kubernetes must be explicitly deferred');
 assert(byId.get('MQTT-HA-001')?.status === 'DEFER', 'MQTT cluster must be explicitly deferred');
 assert(byId.get('POSTGRES-HA-001')?.status === 'DEFER', 'PostgreSQL HA must be explicitly deferred');
-assert(byId.get('KAFKA-001')?.status === 'SIMPLIFY', 'Kafka/Redpanda must not be a Phase 1 platform requirement');
+assert(byId.get('KAFKA-001')?.status === 'REMOVE', 'Kafka/Redpanda must stay out of the canonical Phase 1 deployment');
 assert(byId.get('DOC-CONSISTENCY-001')?.status === 'KEEP', 'document-scope consistency must remain a canonical architecture control');
-assert(byId.get('OPTIMIZATION-001')?.status === 'MISSING', 'Missing Optimization runtime must remain visible instead of being faked');
+assert(byId.get('OPTIMIZATION-001')?.status === 'DEFER', 'Optimization must remain optional until the deployment needs it');
+assert(byId.get('SCHEDULER-001')?.status === 'KEEP', 'unified Scheduler Coordination must remain implemented through the durable Job contract');
+assert(byId.get('RPO-RTO-001')?.status === 'KEEP', 'RPO/RTO objectives and the recovery evidence mechanism must remain implemented');
 
 for (const marker of [
-  'Linux Server(s)',
+  '1 Linux Server',
   'Docker Compose',
+  'Realtime Module',
   'Cloud 不直接访问 PLC',
   'PostgreSQL',
   'ClickHouse',

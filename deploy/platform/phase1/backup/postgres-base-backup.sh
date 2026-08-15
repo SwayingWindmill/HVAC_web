@@ -16,5 +16,8 @@ pg_basebackup \
   --checkpoint=fast \
   --progress
 
-sha256sum "${target}"/* > "${target}/SHA256SUMS"
+(
+  cd "${target}"
+  sha256sum ./* > SHA256SUMS
+)
 echo "PostgreSQL base backup completed: ${target}"

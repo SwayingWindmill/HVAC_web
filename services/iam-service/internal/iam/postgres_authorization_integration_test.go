@@ -226,7 +226,7 @@ func TestPostgresAlarmAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *testin
 	requestID := "alarm-postgres-decision-1"
 	if err := store.RecordAlarmDecision(ctx, iam.AlarmDecisionAudit{
 		PrincipalID: postgresOwnerAPrincipalID, ActingOrganizationID: postgresOwnerAOrganizationID,
-		SiteID: postgresOwnerASite1ID, Action: alarmauth.ActionList, Allowed: true,
+		SiteID: postgresOwnerASite1ID, Action: alarmauth.ActionRead, Allowed: true,
 		PolicyRevision: "alarm-access:1", ReasonCode: alarmauth.ReasonAllowExactScope,
 		RequestID: requestID, TraceID: "trace-alarm-postgres-1", OccurredAt: "2026-08-01T00:00:00Z",
 	}); err != nil {

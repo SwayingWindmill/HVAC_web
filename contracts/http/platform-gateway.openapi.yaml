@@ -7,6 +7,7 @@
   },
   "x-contract-id": "SE-API-001",
   "x-architecture-source": "SE-ARCH-004 V2.1.2",
+  "x-runtime-convergence-review": "contracts/architecture/se-api-001-v1.2-runtime-convergence.json",
   "servers": [
     {
       "url": "/"
@@ -936,27 +937,56 @@
     "/api/v1/alarms": {
       "get": {
         "operationId": "listAlarmsV212",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
-        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s4-alarm-public.openapi.json",
+        "parameters": [
+          { "name": "siteId", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } },
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string", "maxLength": 4096 } },
+          { "name": "severity", "in": "query", "required": false, "schema": { "type": "string", "enum": ["INFO", "WARNING", "MAJOR", "CRITICAL"] } },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string", "enum": ["OPEN", "ACKNOWLEDGED", "SUPPRESSED", "CLOSED"] } }
+        ],
+        "responses": {
+          "200": { "description": "Site-scoped Alarm feed.", "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/CursorAlarmListResponse" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" },
+          "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
       }
     },
     "/api/v1/alarms/{alarmId}": {
       "get": {
         "operationId": "getAlarmV212",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s4-alarm-public.openapi.json",
         "parameters": [{ "name": "alarmId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
-        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+        "responses": {
+          "200": { "description": "Canonical Alarm resource.", "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/AlarmEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" },
+          "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
       }
     },
     "/api/v1/alarms/{alarmId}/ack": {
       "post": {
         "operationId": "ackAlarmV212",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
-        "parameters": [{ "name": "alarmId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
-        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s4-alarm-public.openapi.json",
+        "parameters": [
+          { "name": "alarmId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "Idempotency-Key", "in": "header", "required": false, "schema": { "type": "string", "minLength": 8, "maxLength": 128 } }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/AckAlarmRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Current canonical Alarm after acknowledgement.", "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/AlarmEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" },
+          "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
       }
     },
     "/api/v1/commands": {
@@ -2172,9 +2202,9 @@
           "id": { "$ref": "#/components/schemas/UUIDv7" },
           "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
-          "fromType": { "type": "string", "enum": ["EQUIPMENT", "DEVICE", "SENSOR", "POINT"] },
+          "fromType": { "type": "string", "enum": ["ASSET", "DEVICE", "SENSOR", "POINT"] },
           "fromId": { "$ref": "#/components/schemas/UUIDv7" },
-          "toType": { "type": "string", "enum": ["SITE", "AREA", "EQUIPMENT", "DEVICE", "SENSOR", "POINT"] },
+          "toType": { "type": "string", "enum": ["SITE", "SPACE", "ASSET", "DEVICE", "SENSOR", "POINT"] },
           "toId": { "$ref": "#/components/schemas/UUIDv7" },
           "role": { "type": "string", "minLength": 1, "maxLength": 128 },
           "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] },
