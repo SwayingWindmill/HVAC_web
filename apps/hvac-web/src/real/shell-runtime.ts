@@ -598,7 +598,7 @@ class BrowserShellRuntime implements ShellRuntime {
     this.protectedPrincipal = undefined;
     const loginUrl = this.client.loginUrl({ returnTo: this.returnTo });
     this.publish({ state: 'LOGIN_REQUIRED', loginUrl, reason });
-    if (navigate) this.environment.navigate(loginUrl);
+    if (navigate) this.environment.postNavigate(loginUrl);
   }
 
   private completeLogout(reason: string): void {
