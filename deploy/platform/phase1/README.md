@@ -54,6 +54,15 @@ docker compose \
   config --quiet
 ```
 
+For the local WSL deployment, use the tracked `wsl.override.yaml` together with the launcher below. The launcher reads the Git-ignored `runtime/db-role-credentials/roles.sql`, builds the least-privilege Identity/IAM DSNs in memory, and passes them only to the Compose process; it does not copy database-role passwords into the runtime env file or print them.
+
+```bash
+npm run deployment:phase1:wsl -- config --quiet
+npm run deployment:phase1:wsl -- up -d
+```
+
+`PHASE1_ENV_FILE` and `PHASE1_DB_ROLE_CREDENTIALS_SQL` can override the default local runtime env and role-credential SQL paths when needed.
+
 ## Startup prerequisites
 
 Before `up -d`, the operator must provide:
