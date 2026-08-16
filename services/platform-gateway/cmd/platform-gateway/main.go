@@ -220,18 +220,36 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 		auditClient = &http.Client{Timeout: 5 * time.Second, Transport: workloadTransport(auditRoots, &certificate, envOr("AUDIT_SERVER_NAME", "localhost"))}
 	}
 
+	stateTTL := 10 * time.Minute
+	if raw := strings.TrimSpace(os.Getenv("OIDC_STATE_TTL")); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			return nil, nil, func() {}, errors.New("OIDC_STATE_TTL must be a positive duration")
+		}
+		stateTTL = parsed
+	}
+	loginStateStore, err := gateway.OpenRedisLoginStateStore(ctx, gateway.RedisLoginStateStoreConfig{URL: envOr("OIDC_STATE_REDIS_URL", "redis://redis:6379/1")})
+	if err != nil {
+		return nil, nil, func() {}, errors.New("shared OIDC state store is unavailable")
+	}
+
 	var store sessionstore.Store
-	closeStore := func() {}
+	closeStore := func() { _ = loginStateStore.Close() }
 	if dsn := os.Getenv("GATEWAY_DATABASE_URL"); dsn != "" {
 		postgresStore, err := sessionstore.OpenPostgres(ctx, dsn, sessionstore.PostgresConfig{})
 		if err != nil {
+			closeStore()
 			return nil, nil, func() {}, errors.New("durable Session store is unavailable")
 		}
 		store = postgresStore
-		closeStore = postgresStore.Close
+		closeStore = func() {
+			postgresStore.Close()
+			_ = loginStateStore.Close()
+		}
 	} else if os.Getenv("S0_ALLOW_MEMORY_SESSION_STORE") == "true" {
 		store = sessionstore.NewMemoryStore()
 	} else {
+		closeStore()
 		return nil, nil, func() {}, errors.New("GATEWAY_DATABASE_URL is required unless S0_ALLOW_MEMORY_SESSION_STORE=true")
 	}
 
@@ -242,6 +260,7 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 	}
 	return &gateway.IdentityConfig{
 		OIDCIssuer:              issuer,
+		OIDCBackchannelBaseURL:  strings.TrimSpace(os.Getenv("OIDC_BACKCHANNEL_BASE_URL")),
 		OIDCClientID:            required["OIDC_CLIENT_ID"],
 		OIDCRedirectURI:         required["OIDC_REDIRECT_URI"],
 		PublicOrigin:            required["PLATFORM_PUBLIC_ORIGIN"],
@@ -255,8 +274,9 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 		DelegationSigner:        signer,
 		TokenEncryptionKey:      key,
 		SessionStore:            store,
+		LoginStateStore:         loginStateStore,
 		SessionTTL:              30 * time.Minute,
-		StateTTL:                2 * time.Minute,
+		StateTTL:                stateTTL,
 		DelegationTTL:           30 * time.Second,
 		RevocationObjective:     time.Second,
 		IAMHTTPClient: &http.Client{

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,7 +31,14 @@ func main() {
 	})
 	cancel()
 	if err != nil {
-		logger.Error("identity_configuration_invalid", "error_code", "IDENTITY_CONFIG_INVALID", "error", err.Error())
+		component := "configuration"
+		switch {
+		case strings.Contains(err.Error(), "identity database"):
+			component = "database"
+		case strings.Contains(err.Error(), "signing key"):
+			component = "signing_key"
+		}
+		logger.Error("identity_configuration_invalid", "error_code", "IDENTITY_CONFIG_INVALID", "component", component, "error", err.Error())
 		os.Exit(1)
 	}
 	defer server.Close()

@@ -75,6 +75,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     expose: ["8080", "19080", "8444", "18445", "18447", "8446", "8447", "8448", "8449"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19080/health/ready"]

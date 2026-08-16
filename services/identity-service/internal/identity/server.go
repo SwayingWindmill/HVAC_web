@@ -138,14 +138,14 @@ func (server *Server) authorize(writer http.ResponseWriter, request *http.Reques
 	if err := server.store.CreateAuthorizationRequest(request.Context(), AuthorizationRequest{
 		ChallengeHash: hashOpaque(challenge), ClientID: server.clientID, RedirectURI: server.redirectURI,
 		State: query.Get("state"), Nonce: query.Get("nonce"), CodeChallenge: query.Get("code_challenge"),
-		Scope: query.Get("scope"), ExpiresAt: server.now().UTC().Add(5 * time.Minute),
+		Scope: query.Get("scope"), ExpiresAt: server.now().UTC().Add(10 * time.Minute),
 	}); err != nil {
 		writeOAuthError(writer, http.StatusServiceUnavailable, "temporarily_unavailable", "identity service is unavailable")
 		return
 	}
 	http.SetCookie(writer, &http.Cookie{
 		Name: loginCookieName, Value: challenge, Path: "/", HttpOnly: true, Secure: true,
-		SameSite: http.SameSiteLaxMode, MaxAge: 300,
+		SameSite: http.SameSiteLaxMode, MaxAge: 600,
 	})
 	server.renderLogin(writer, http.StatusOK, challenge, "", "")
 }
