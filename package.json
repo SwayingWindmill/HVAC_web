@@ -95,7 +95,7 @@
     "ownership:check": "node scripts/check-ownership-registries.mjs",
     "build:gateway": "node scripts/run-go.mjs build -o out/platform-gateway ./services/platform-gateway/cmd/platform-gateway",
     "build:iam": "node scripts/run-go.mjs build -o out/iam-service ./services/iam-service/cmd/iam-service",
-    "build:iam-reconciler": "node scripts/run-go.mjs build -o out/iam-reconciler ./services/iam-service/cmd/iam-reconciler",
+    "build:identity-reconciler": "node scripts/run-go.mjs build -o out/identity-reconciler ./services/iam-service/cmd/identity-reconciler",
     "build:core": "node scripts/run-go.mjs build -o out/platform-core-service ./services/platform-core-service/cmd/platform-core-service",
     "build:telemetry-runtime": "node scripts/run-go.mjs build -o out/telemetry-runtime-service ./services/telemetry-runtime-service/cmd/telemetry-runtime-service",
     "build:telemetry-history-projector": "node scripts/run-go.mjs build -o out/telemetry-history-projector ./services/telemetry-runtime-service/cmd/telemetry-history-projector",

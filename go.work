@@ -28,6 +28,7 @@ use (
 	./services/command-service
 	./services/forecast-service
 	./services/iam-service
+	./services/identity-service
 	./services/optimization-service
 	./services/legacy-migration-service
 	./services/mqtt-telemetry-adapter

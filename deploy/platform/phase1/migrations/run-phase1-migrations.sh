@@ -41,7 +41,7 @@ REVOKE ALL ON phase1_deployment.schema_migrations FROM PUBLIC;
 SQL
 }
 
-for database in hvac_s0 hvac_s1 hvac_s2 hvac_s3 hvac_s4 hvac_s5; do
+for database in hvac_identity hvac_s0 hvac_s1 hvac_s2 hvac_s3 hvac_s4 hvac_s5; do
   ensure_tracking_table "${database}"
 done
 

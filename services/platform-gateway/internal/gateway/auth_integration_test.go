@@ -123,19 +123,19 @@ func TestAuthenticatedPrincipalLoop(t *testing.T) {
 	assertProblemCode(t, afterLogout, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED")
 }
 
-func TestModernLogtoIDTokenIsAccepted(t *testing.T) {
+func TestMinimalStandardOIDCIDTokenIsAccepted(t *testing.T) {
 	harness := newAuthHarness(t)
 	client := harness.browserClient(t)
-	principal, _ := loginAndReadPrincipal(t, client, harness.gatewayURL, "logto-modern")
+	principal, _ := loginAndReadPrincipal(t, client, harness.gatewayURL, "minimal-oidc")
 
 	if principal.Principal.Subject != "fixture-user" {
-		t.Fatalf("modern Logto principal was not accepted: %#v", principal.Principal)
+		t.Fatalf("minimal standard OIDC principal was not accepted: %#v", principal.Principal)
 	}
 	if principal.Context.ActingOrganizationID != "org-fixture-01" {
 		t.Fatalf("deployment-owned Organization fallback was not applied: %#v", principal.Context)
 	}
 	if principal.Principal.Roles == nil || len(principal.Principal.Roles) != 0 {
-		t.Fatalf("role-free Logto principal must publish an empty roles array: %#v", principal.Principal.Roles)
+		t.Fatalf("role-free OIDC principal must publish an empty roles array: %#v", principal.Principal.Roles)
 	}
 }
 
@@ -238,7 +238,7 @@ func TestOIDCOutagePreservesCommittedSessionAndBlocksNewLogin(t *testing.T) {
 	}
 	defer current.Body.Close()
 	if current.StatusCode != http.StatusOK {
-		t.Fatalf("committed Session depended on Logto availability: status=%d", current.StatusCode)
+		t.Fatalf("committed Session depended on OIDC provider availability: status=%d", current.StatusCode)
 	}
 
 	newClient := harness.browserClient(t)

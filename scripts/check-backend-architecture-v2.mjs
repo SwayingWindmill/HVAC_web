@@ -30,6 +30,7 @@ invariant(baseline.document?.documentId === 'SE-ARCH-004', 'documentId must be S
 invariant(baseline.document?.version === '2.1.2', 'document version must be V2.1.2');
 invariant(baseline.document?.status === 'CURRENT / FROZEN CANDIDATE', 'document status drifted');
 invariant(baseline.authorityOverrides?.tenantModel?.includes('Organization') && baseline.authorityOverrides?.tenantModel?.includes('Tenant'), 'Organization -> Tenant adjudication is missing');
+invariant(baseline.authorityOverrides?.identityProvider?.includes('identity-service') && baseline.authorityOverrides?.identityProvider?.includes('IAM remains'), 'self-hosted Identity Provider / IAM boundary adjudication is missing');
 invariant(baseline.serviceModel?.logicalDomainEqualsDeployableService === false, 'Logical Domain must not equal Deployable Service');
 invariant(baseline.serviceModel?.servicePerTableAllowed === false, 'service-per-table must remain forbidden');
 invariant(baseline.serviceModel?.kafkaRequiredInPhase1 === false, 'Kafka must remain optional in Phase 1');
@@ -144,6 +145,7 @@ for (const token of ['mlops_artifacts', 'mlops_evaluations', 'mlops_approvals', 
 
 const phase1Migrations = JSON.parse(await readFile(resolve(root, 'deploy/platform/phase1/migrations/manifest.v1.json'), 'utf8'));
 const phase1MigrationPaths = phase1Migrations.databases.flatMap(({ migrations }) => migrations);
+invariant(phase1MigrationPaths.includes('infra/identity/postgres/init/001-identity-baseline.sql') && phase1MigrationPaths.includes('infra/identity/postgres/init/002-identity-runtime-grants.sql') && phase1MigrationPaths.includes('infra/identity/postgres/init/003-identity-directory-least-privilege.sql'), 'Phase1 must deploy the platform Identity database boundary');
 invariant(phase1MigrationPaths.includes('infra/s1-registry/postgres/init/009d-data-governance-v2.sql'), 'Phase1 must deploy Data Governance before Object Storage governance');
 invariant(phase1MigrationPaths.includes('infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql'), 'Phase1 must deploy Object Storage governance metadata');
 const objectStorageContract = JSON.parse(await readFile(resolve(root, 'deploy/platform/phase1/object-storage.external.v1.json'), 'utf8'));
@@ -168,6 +170,7 @@ invariant(!compose.includes('\n  mqtt-telemetry-adapter:'), 'Phase1 must not dep
 invariant(compose.includes('\n  iot-service:'), 'Phase1 must deploy the converged iot-service process');
 invariant(compose.includes('COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"'), 'Phase1 iot-service must own Command dispatch and verification in-process');
 invariant(compose.includes('\n  energy-api:'), 'Phase1 must deploy the converged energy-api process');
+invariant(compose.includes('\n  identity-service:'), 'Phase1 must deploy platform-owned Identity Infrastructure separately from business deployables');
 invariant(!compose.includes('\n  platform-gateway:'), 'Phase1 must not deploy platform-gateway as a standalone process');
 invariant(!compose.includes('\n  iam-service:'), 'Phase1 must not deploy iam-service as a standalone process');
 invariant(!compose.includes('\n  platform-core-service:'), 'Phase1 must not deploy platform-core-service as a standalone process');

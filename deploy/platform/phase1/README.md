@@ -17,11 +17,11 @@ Kubernetes/Kustomize assets elsewhere in the repository are future-stage or cert
 Only two host-facing ports are part of the canonical topology:
 
 ```text
-443   HTTPS / WSS -> Nginx -> React + energy-api (/api + /realtime)
+443   HTTPS / WSS -> Nginx -> React + energy-api (/api + /realtime) + identity-service (/identity)
 8883  MQTT TLS    -> Mosquitto -> Edge Gateway
 ```
 
-PostgreSQL, ClickHouse, Redis, Grafana, Loki, Tempo, Prometheus and all Go services stay on internal Compose networks. Operational access to monitoring/data services must use a controlled management path such as VPN/SSH tunneling rather than additional public ports.
+PostgreSQL, ClickHouse, Redis, Grafana, Loki, Tempo, Prometheus and all Go services stay on internal Compose networks. `identity-service` is Identity Infrastructure, not a business deployable; Nginx exposes only its `/identity` OIDC surface through the existing HTTPS boundary. Operational access to monitoring/data services must use a controlled management path such as VPN/SSH tunneling rather than additional public ports.
 
 ## Environment contract
 
@@ -83,9 +83,9 @@ docker compose \
 
 ## Database migration boundary
 
-The single PostgreSQL server creates the existing domain database boundaries `hvac_s0` through `hvac_s5` so current domain migrations do not need to be rewritten around new database names.
+The single PostgreSQL server creates the authentication database boundary `hvac_identity` plus the existing domain database boundaries `hvac_s0` through `hvac_s5`. Credential hashes and transient OIDC authorization state stay in `hvac_identity`; IAM authorization facts remain in `hvac_s1`.
 
-The production-safe S0-S5 migration runner is implemented under `migrations/`. It uses an exact 41-file allowlist, reuses the canonical domain migration SQL, strips historical local-only credential lines and environment fixture seed blocks from the production execution stream, records the hash of the executed SQL in each database, and fails closed on migration drift.
+The production-safe S0-S5 migration runner is implemented under `migrations/`. It uses an exact 44-file allowlist, reuses the canonical domain migration SQL, strips historical local-only credential lines and environment fixture seed blocks from the production execution stream, records the hash of the executed SQL in each database, and fails closed on migration drift.
 
 Database roles are created without checked-in production credentials. Copy `migrations/role-credentials.sql.example` to the Git-ignored runtime path, replace every redacted value with deployment-provided credentials, then execute the migration profile before application rollout:
 
@@ -97,6 +97,17 @@ docker compose \
 ```
 
 `testdata`, fixture bootstrap, legacy migration execution and local-only identity bootstrap are not in the production allowlist. `npm run deployment:phase1:migration:test` performs a fresh isolated PostgreSQL run, executes the migration set twice to prove idempotency, validates migration hashes, forced RLS and database CONNECT boundaries, and verifies that Command Dispatcher receives no database role.
+
+## Identity bootstrap
+
+Identity bootstrap is an explicit operator action after database migration. It is not an application startup side effect and it never seeds Tenant/Site/Role authorization into the IdP.
+
+1. Run the `identity-keygen` service from the `identity-bootstrap` profile once to create the non-versioned PKCS#8 RSA signing key under `IDENTITY_RUNTIME_DIR`. Existing key files are not overwritten.
+2. Run `identity-admin` with `IDENTITY_ADMIN_DATABASE_URL` bound to the dedicated `identity_admin` database role. `create` provisions a credential-bearing identity; `reset-password` and `reset-password-random` are explicit offline recovery operations.
+3. Run `identity-reconciler` with a reviewed input document to project that identity's immutable `issuer + subject` into IAM together with explicit Tenant membership and approved Role/Site facts.
+4. Start or restart `identity-service`. The service fails closed if its signing key file is missing or invalid.
+
+`identity_runtime` cannot insert users. The separate `identity_admin` role exists so credential administration does not expand the long-running IdP runtime privilege set. Signing private keys, bootstrap credentials and reconciliation input containing deployment-specific authorization facts remain outside Git.
 
 ## Backup
 

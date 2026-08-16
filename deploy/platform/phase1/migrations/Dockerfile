@@ -6,6 +6,9 @@ COPY deploy/platform/phase1/migrations/migration-list.tsv /opt/hvac/migrations/m
 COPY deploy/platform/phase1/migrations/run-phase1-migrations.sh /opt/hvac/migrations/run-phase1-migrations.sh
 COPY deploy/platform/phase1/postgres/init/001-create-phase1-databases.sql /opt/hvac/migrations/create-databases.sql
 
+COPY infra/identity/postgres/init/001-identity-baseline.sql /opt/hvac/repo/infra/identity/postgres/init/001-identity-baseline.sql
+COPY infra/identity/postgres/init/002-identity-runtime-grants.sql /opt/hvac/repo/infra/identity/postgres/init/002-identity-runtime-grants.sql
+COPY infra/identity/postgres/init/003-identity-directory-least-privilege.sql /opt/hvac/repo/infra/identity/postgres/init/003-identity-directory-least-privilege.sql
 COPY infra/s0-durable/postgres/init/001-s0-durable.sql /opt/hvac/repo/infra/s0-durable/postgres/init/001-s0-durable.sql
 COPY infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql /opt/hvac/repo/infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql
 COPY infra/s0-durable/postgres/init/003-operations-audit-ledger.sql /opt/hvac/repo/infra/s0-durable/postgres/init/003-operations-audit-ledger.sql

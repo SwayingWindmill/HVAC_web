@@ -1,6 +1,6 @@
 # iam-service
 
-`iam-service` is the private platform identity and authorization seam. Logto remains the external authentication authority for credentials, MFA/passkeys and external user lifecycle. This service owns the immutable external-identity mapping and the HVAC platform authorization projection; it is not browser-facing and does not implement passwords or authentication factors.
+`iam-service` is the private platform authorization seam. `identity-service` owns authentication credentials and exposes the platform OIDC identity boundary; IAM owns the immutable issuer/subject mapping and the HVAC authorization projection. IAM is not browser-facing and never validates or stores login credentials.
 
 ## Network contract
 
@@ -80,19 +80,15 @@ The runtime identity has no Core Schema access and no IAM mutation privilege. `I
 
 The reconciler role is RLS-bound, cannot access `core_registry`, cannot mutate policies and is the only runtime identity allowed to write the reconciliation ledger and quarantine tables. The normal `s1_iam_runtime` decision identity cannot read them.
 
-`LogtoManagementClient` is a server-only M2M adapter. It requires HTTPS, obtains a bounded, cached client-credentials token and reads both `/api/users/{userId}` and `/api/users/{userId}/organizations`. The provider user ID becomes the immutable subject under deployment-controlled `LOGTO_ISSUER`; primary email, display name and suspension state are read from Logto rather than accepted from the command input. Returned Logto Organizations and roles are candidate onboarding data only: `LogtoReconciler` applies an explicit Logto-Organization/role-to-platform mapping before constructing the complete `ReconciliationRequest`; unapproved provider values are ignored and never grant Registry scope. Approved platform SiteBindings and explicit denies are supplied separately in the same desired-state snapshot. The M2M credential must come from the deployment secret manager and must never be delivered to a browser, Gateway request or Core.
+`cmd/identity-reconciler` is the non-HTTP onboarding boundary for the platform-owned identity directory. It reads one bounded JSON command from stdin, loads only the selected user's immutable ID, display name, email and lifecycle status through the read-only `identity_directory_reader` database role, and constructs the complete `ReconciliationRequest` from explicitly approved platform Tenant, RoleBinding, SiteBinding and deny facts. No IdP role or organization claim can become authorization truth.
 
-`cmd/iam-reconciler` is the non-HTTP execution boundary. It reads one bounded JSON command from stdin containing `userId`, `seed.principalId`, source version, effective time and approved mappings/platform facts. It writes only the safe reconciliation result to stdout. Run it as a secured job with:
+Run it as a secured management job with:
 
+- `IDENTITY_DIRECTORY_DATABASE_URL`
 - `IAM_RECONCILER_DATABASE_URL`
-- `LOGTO_MANAGEMENT_ENDPOINT`
-- `LOGTO_MANAGEMENT_CLIENT_ID`
-- `LOGTO_MANAGEMENT_CLIENT_SECRET`
-- `LOGTO_MANAGEMENT_RESOURCE`
-- `LOGTO_MANAGEMENT_SCOPE`
-- `LOGTO_ISSUER`
+- `IDENTITY_ISSUER`
 
-Build it with `npm run build:iam-reconciler`.
+The identity directory connection is read-only and cannot read credential material. IAM reconciliation remains versioned, idempotent and fail-closed.
 
 ## Authorization fixtures
 
@@ -100,14 +96,14 @@ The default runtime store is deny-all. S1 deterministic facts are enabled only w
 
 ```text
 IAM_S1_AUTHORIZATION_FIXTURE=true
-IAM_EXTERNAL_SUBJECT_ISSUER=https://configured-logto-issuer.example
+IAM_EXTERNAL_SUBJECT_ISSUER=https://configured-identity-issuer.example
 ```
 
 The fixture covers direct Owner A membership plus role, a cross-Organization SiteBinding, explicit deny, membership-without-role, revoked membership and unmapped subjects. It exists for deterministic S1 integration and must not be enabled as an implicit production fallback.
 
 ## Header and claim boundary
 
-IAM rejects client-supplied Principal, Role, Organization, Site, admin or scope headers, including prefixed variants. Mutable email, display name, Logto organization, role and custom claims do not select or expand Registry authorization facts. Registry decisions use only the verified external issuer/subject plus platform-owned Membership/Binding/Policy data. A trusted Gateway caller may request a Registry grant for an explicitly allowlisted downstream presenter such as Operations Agent; IAM signs that presenter directly and rejects arbitrary presenter expansion.
+IAM rejects client-supplied Principal, Role, Tenant, Site, admin or scope headers, including prefixed variants. Mutable email, display name and identity-provider claims do not select or expand Registry authorization facts. Registry decisions use only the verified issuer/subject plus platform-owned Membership/Binding/Policy data. A trusted Gateway caller may request a Registry grant for an explicitly allowlisted downstream presenter such as Operations Agent; IAM signs that presenter directly and rejects arbitrary presenter expansion.
 
 Decision telemetry contains safe identifiers, action, reason, policy revision, scope counts and trace correlation. It does not contain provider tokens, cookies, raw delegations, email or display name.
 

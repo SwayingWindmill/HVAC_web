@@ -25,27 +25,27 @@ import (
 const sessionCookieName = "__Host-hvac_session"
 
 type IdentityConfig struct {
-	OIDCIssuer                  string
-	OIDCClientID                string
-	OIDCRedirectURI             string
-	PublicOrigin                string
-	DefaultTenantID string
-	IAMURL                      string
-	IAMAudience                 string
-	AuditURL                    string
-	AuditAudience               string
-	ExecutingWorkloadSPIFFE     string
-	PolicyRevision              string
-	OIDCHTTPClient              *http.Client
-	IAMHTTPClient               *http.Client
-	AuditHTTPClient             *http.Client
-	DelegationSigner            crypto.Signer
-	TokenEncryptionKey          []byte
-	SessionStore                sessionstore.Store
-	SessionTTL                  time.Duration
-	StateTTL                    time.Duration
-	DelegationTTL               time.Duration
-	RevocationObjective         time.Duration
+	OIDCIssuer              string
+	OIDCClientID            string
+	OIDCRedirectURI         string
+	PublicOrigin            string
+	DefaultTenantID         string
+	IAMURL                  string
+	IAMAudience             string
+	AuditURL                string
+	AuditAudience           string
+	ExecutingWorkloadSPIFFE string
+	PolicyRevision          string
+	OIDCHTTPClient          *http.Client
+	IAMHTTPClient           *http.Client
+	AuditHTTPClient         *http.Client
+	DelegationSigner        crypto.Signer
+	TokenEncryptionKey      []byte
+	SessionStore            sessionstore.Store
+	SessionTTL              time.Duration
+	StateTTL                time.Duration
+	DelegationTTL           time.Duration
+	RevocationObjective     time.Duration
 }
 
 type identityController struct {
@@ -89,18 +89,18 @@ type oidcTokenResponse struct {
 }
 
 type oidcClaims struct {
-	Issuer               string   `json:"iss"`
-	Audience             string   `json:"aud"`
-	Subject              string   `json:"sub"`
-	ExpiresAt            int64    `json:"exp"`
-	IssuedAt             int64    `json:"iat"`
-	NotBefore            int64    `json:"nbf"`
-	Nonce                string   `json:"nonce"`
-	Name                 string   `json:"name"`
-	Email                string   `json:"email"`
-	Roles                []string `json:"roles"`
-	TenantID             string   `json:"tenantId"`
-	TokenUse             string   `json:"token_use"`
+	Issuer    string   `json:"iss"`
+	Audience  string   `json:"aud"`
+	Subject   string   `json:"sub"`
+	ExpiresAt int64    `json:"exp"`
+	IssuedAt  int64    `json:"iat"`
+	NotBefore int64    `json:"nbf"`
+	Nonce     string   `json:"nonce"`
+	Name      string   `json:"name"`
+	Email     string   `json:"email"`
+	Roles     []string `json:"roles"`
+	TenantID  string   `json:"tenantId"`
+	TokenUse  string   `json:"token_use"`
 }
 
 type identityFailure struct {
@@ -165,7 +165,7 @@ func newIdentityController(config *IdentityConfig, now func() time.Time) *identi
 	if resolved.OIDCIssuer == "" || resolved.OIDCClientID == "" || resolved.OIDCRedirectURI == "" || resolved.PublicOrigin == "" || resolved.IAMURL == "" || resolved.ExecutingWorkloadSPIFFE == "" || resolved.DelegationSigner == nil {
 		panic("identity configuration is incomplete")
 	}
-	return &identityController{config: resolved, now: now, vault: vault, protocol: newLogtoOIDCProtocol(), states: map[string]loginState{}, store: resolved.SessionStore}
+	return &identityController{config: resolved, now: now, vault: vault, protocol: newStandardOIDCProtocol(), states: map[string]loginState{}, store: resolved.SessionStore}
 }
 
 func (h *handler) BeginLogin(writer http.ResponseWriter, request *http.Request, params platformapi.BeginLoginParams) {
@@ -251,8 +251,8 @@ func (h *handler) CompleteLogin(writer http.ResponseWriter, request *http.Reques
 	now := h.identity.now()
 	pending := bffSession{Session: sessionstore.Session{
 		ID:                       randomURLToken(32),
-		Principal:                identitycontext.UserPrincipal{Subject: claims.Subject, Issuer: claims.Issuer, DisplayName: claims.Name, Email: claims.Email, Roles: append([]string(nil), claims.Roles...)},
-		TenantID:     claims.TenantID,
+		Principal:                identitycontext.UserPrincipal{Subject: claims.Subject, Issuer: claims.Issuer, DisplayName: claims.Name, Email: claims.Email, Roles: []string{}},
+		TenantID:                 claims.TenantID,
 		CSRFTokenCiphertext:      encryptedCSRF,
 		ProviderTokensCiphertext: encryptedTokens,
 		ExpiresAt:                now.Add(h.identity.config.SessionTTL),

@@ -12,6 +12,14 @@
   },
   "databases": [
     {
+      "name": "hvac_identity",
+      "migrations": [
+        "infra/identity/postgres/init/001-identity-baseline.sql",
+        "infra/identity/postgres/init/002-identity-runtime-grants.sql",
+        "infra/identity/postgres/init/003-identity-directory-least-privilege.sql"
+      ]
+    },
+    {
       "name": "hvac_s0",
       "migrations": [
         "infra/s0-durable/postgres/init/001-s0-durable.sql",
@@ -99,6 +107,9 @@
     "gateway_relay_runtime",
     "audit_consumer_runtime",
     "audit_query_runtime",
+    "identity_runtime",
+    "identity_admin",
+    "identity_directory_reader",
     "s1_iam_migrator",
     "s1_iam_runtime",
     "s1_iam_reconciler",

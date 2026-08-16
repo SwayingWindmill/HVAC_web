@@ -12,7 +12,8 @@
     "tenantModel": "User adjudication over V2.1.2: every Organization concept in this project is Tenant; no Organization compatibility layer",
     "iotPlatform": "Data Architecture V2: ThingsBoard is removed",
     "pointModel": "Point is the canonical data point; Sensor exists only for independently identifiable/installable/replaceable/calibratable/traceable physical probes",
-    "storage": "PostgreSQL owns business master/metadata/state machines; ClickHouse owns historical Telemetry/analytics; Redis is rebuildable Latest/current cache; MQTT is transport only; Object Storage owns archive/backup/evidence/dataset/model artifacts"
+    "storage": "PostgreSQL owns business master/metadata/state machines; ClickHouse owns historical Telemetry/analytics; Redis is rebuildable Latest/current cache; MQTT is transport only; Object Storage owns archive/backup/evidence/dataset/model artifacts",
+    "identityProvider": "User adjudication: Phase 1 uses the platform-owned services/identity-service as Identity Infrastructure. It authenticates credentials and exposes standard OIDC; IAM remains the sole Tenant/Site/Role/Policy authorization authority."
   },
   "serviceModel": {
     "logical": "domain-oriented modular backend",
@@ -101,10 +102,10 @@
   },
   "physicalPhase1": {
     "recommended": ["energy-api", "iot-service", "telemetry-worker", "metric-worker", "forecast-service", "optimization-service"],
-    "infrastructure": ["PostgreSQL", "ClickHouse", "Redis", "Object Storage", "MQTT Broker"],
+    "infrastructure": ["PostgreSQL", "ClickHouse", "Redis", "Object Storage", "MQTT Broker", "Identity Provider (identity-service)"],
     "currentDeployment": "deploy/platform/phase1/compose.yaml",
     "convergence": "PASS",
-    "reason": "Phase1 default business deployables now converge to energy-api + iot-service + telemetry-worker + metric-worker. energy-api co-locates Platform Gateway, IAM, Registry Core, Telemetry Query, Audit, Alarm, Work Order and Command while preserving their mTLS listeners and workload identities; Session Audit uses PostgreSQL Outbox directly instead of a Kafka-dependent standalone consumer. iot-service combines MQTT telemetry/event/heartbeat ingestion with Command dispatch and verification while preserving separate workload credentials; telemetry-worker owns Telemetry Runtime, history projection and analytics projection; metric-worker owns explicit scheduled Metric finalization and scoped cross-store reconciliation. Forecast and Optimization remain selective intelligence services rather than mandatory default processes. Object Storage production capability remains tracked separately and does not change the physical service convergence result."
+    "reason": "Phase1 default business deployables remain energy-api + iot-service + telemetry-worker + metric-worker. identity-service is separate Identity Infrastructure: it authenticates platform credentials and exposes standard OIDC but owns no Tenant/Site/Role/Policy authorization state. energy-api co-locates Platform Gateway, IAM, Registry Core, Telemetry Query, Audit, Alarm, Work Order and Command while preserving their internal security boundaries; iot-service combines MQTT ingestion with Command dispatch/verification; telemetry-worker owns history and analytics projections; metric-worker owns scheduled Metric finalization and scoped cross-store reconciliation. Forecast and Optimization remain selective intelligence services. Object Storage production capability remains tracked separately."
   },
   "conformance": [
     { "id": "TENANT_ONLY", "status": "PASS" },
@@ -126,6 +127,7 @@
     { "id": "CONFIG_DOMAIN_BOUNDARY", "status": "PASS" },
     { "id": "NOTIFICATION_ACK_SEPARATION", "status": "PASS" },
     { "id": "PHASE1_PHYSICAL_SERVICE_CONVERGENCE", "status": "PASS", "reason": "Phase1 default business deployables converge to energy-api + iot-service + telemetry-worker + metric-worker. Logical owner TLS/SPIFFE boundaries remain intact inside energy-api, iot-service retains separate dispatch/verification credentials, telemetry-worker owns history and analytics projections, and metric-worker performs explicit scheduled finalization plus scoped cross-store reconciliation. Forecast and Optimization remain selective intelligence services." },
+    { "id": "IDENTITY_PROVIDER_BOUNDARY", "status": "PASS", "reason": "Phase1 deploys platform-owned identity-service as non-business Identity Infrastructure. It owns credentials and standard OIDC authentication only; platform IAM remains the authorization source of truth for Tenant, Site, Role and Policy." },
     { "id": "OBJECT_STORAGE_PRODUCTION_ROLE", "status": "PARTIAL", "reason": "Object Storage governance and a provider-neutral external Phase1 binding contract are now deployed without selecting a product. V2.1.2 does not freeze a vendor, so PASS still requires a real production endpoint, credential reference and governed bucket catalog to be provisioned by deployment." },
     { "id": "MLOPS_METADATA_COMPLETE", "status": "PASS" }
   ],

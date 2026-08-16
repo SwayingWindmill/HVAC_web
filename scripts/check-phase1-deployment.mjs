@@ -93,6 +93,7 @@ assert(baseline.recovery?.offServerBackupCopyRequired === true && baseline.recov
 const requiredServices = [
   'nginx',
   'energy-api',
+  'identity-service',
   'scheduler',
   'iot-service',
   'telemetry-worker',
@@ -144,7 +145,11 @@ for (const forbiddenService of ['redpanda-compat', 'outbox-relay-compat', 'platf
 assert(nginx.includes('listen 443 ssl;'), 'Nginx must terminate HTTPS on 443');
 assert(!nginx.includes('listen 80'), 'Phase 1 Nginx must not expose a plaintext HTTP listener');
 assert(nginx.includes('location /api/'), 'Nginx must proxy the API');
-assert(nginx.includes('proxy_pass http://energy-api:8080;'), 'Nginx API upstream must be energy-api');
+assert(nginx.includes('resolver 127.0.0.11'), 'Nginx must use Docker DNS for dynamic service discovery');
+assert(nginx.includes('server energy-api:8080 resolve;'), 'Nginx gateway upstream must dynamically resolve energy-api');
+assert(nginx.includes('proxy_pass http://gateway_backend;'), 'Nginx API upstream must use gateway_backend');
+assert(nginx.includes('server identity-service:19095 resolve;'), 'Nginx identity upstream must dynamically resolve identity-service');
+assert(nginx.includes('proxy_pass http://identity_backend/;'), 'Nginx /identity upstream must use identity_backend');
 assert(nginx.includes('location /realtime/'), 'Nginx must proxy realtime WebSocket traffic through energy-api');
 assert(!nginx.includes('location /connection/'), 'Nginx must not expose the internal Centrifugo connection path');
 assert(!nginx.includes('proxy_pass http://centrifugo:8000;'), 'Nginx must not proxy browsers directly to Centrifugo');
@@ -219,7 +224,7 @@ assert(recoveryDrillTemplate.prerequisites?.externalBackupVerified === false && 
 assert(gitignore.includes('deploy/platform/phase1/environments/*.runtime.env'), 'real Phase 1 runtime env files must be ignored by Git');
 assert(gitignore.includes('deploy/platform/phase1/runtime/'), 'Phase 1 runtime PKI/backup material must be ignored by Git');
 
-for (const database of ['hvac_s0', 'hvac_s1', 'hvac_s2', 'hvac_s3', 'hvac_s4', 'hvac_s5']) {
+for (const database of ['hvac_identity', 'hvac_s0', 'hvac_s1', 'hvac_s2', 'hvac_s3', 'hvac_s4', 'hvac_s5']) {
   assert(phase1Databases.includes(`CREATE DATABASE ${database}`), `Phase 1 PostgreSQL bootstrap must preserve existing database boundary ${database}`);
 }
 assert(compose.includes('POSTGRES_DB: ${POSTGRES_DB:-hvac_s0}'), 'Phase 1 PostgreSQL primary database must preserve the hvac_s0 boundary');
@@ -230,7 +235,7 @@ const listEntries = migrationList.split(/\r?\n/).map((line) => line.trim()).filt
 assert(migrationManifest.schemaVersion === 1, 'migration manifest schemaVersion must be 1');
 assert(migrationManifest.policy?.fixturesAllowed === false && migrationManifest.policy?.testdataAllowed === false, 'production migration policy must forbid fixture/testdata sources');
 assert(migrationManifest.policy?.localPasswordStatementsAllowed === false, 'production migration policy must forbid local password statements');
-assert(manifestEntries.length === 41, `production migration allowlist must contain exactly 41 migrations, got ${manifestEntries.length}`);
+assert(manifestEntries.length === 44, `production migration allowlist must contain exactly 44 migrations, got ${manifestEntries.length}`);
 assert(JSON.stringify(manifestEntries) === JSON.stringify(listEntries), 'migration-list.tsv must exactly match the JSON allowlist and order');
 for (const entry of manifestEntries) {
   const [, sourcePath] = entry.split('|');
@@ -249,7 +254,7 @@ for (const role of migrationManifest.loginRoles ?? []) {
 assert(!roleCredentialTemplate.includes('local-only') && !roleCredentialTemplate.includes('fixture-only'), 'role credential contract must not reuse historical local/test credentials');
 assert(packageJson.includes('"deployment:phase1:migration:test": "node scripts/run-phase1-migration-integration.mjs"'), 'production migration integration must have a stable package entrypoint');
 assert(packageJson.includes('"deployment:phase1:recovery:verify": "node scripts/verify-phase1-recovery-drill.mjs"'), 'recovery drill verifier must have a stable manual entrypoint');
-assert(phase1Readme.includes('exact 41-file allowlist'), 'Phase 1 README must document the production-safe migration allowlist');
+assert(phase1Readme.includes('exact 44-file allowlist'), 'Phase 1 README must document the production-safe migration allowlist');
 
 const byId = new Map((matrix.items ?? []).map((item) => [item.id, item]));
 for (const id of ['DEPLOY-K8S-001', 'MQTT-HA-001', 'POSTGRES-HA-001', 'CLICKHOUSE-HA-001']) {

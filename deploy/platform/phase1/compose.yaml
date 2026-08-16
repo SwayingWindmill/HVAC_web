@@ -31,6 +31,8 @@ services:
     depends_on:
       energy-api:
         condition: service_healthy
+      identity-service:
+        condition: service_healthy
     ports:
       - "${HTTPS_PORT:-443}:443"
     volumes:
@@ -87,6 +89,83 @@ services:
     cpus: ${ENERGY_API_CPUS:-1.50}
     mem_limit: ${ENERGY_API_MEMORY_LIMIT:-768m}
     mem_reservation: ${ENERGY_API_MEMORY_RESERVATION:-256m}
+
+  identity-service:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/identity-service/cmd/identity-service }
+    image: ${IDENTITY_SERVICE_IMAGE:-hvac/identity-service:0.1.0-dev}
+    environment:
+      IDENTITY_ADDR: :19095
+      IDENTITY_DIAGNOSTICS_ADDR: :19085
+      IDENTITY_SIGNING_KEY_FILE: /run/hvac/identity/signing-key.pem
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity:ro
+    expose: ["19095", "19085"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19085/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+    networks: [application, data]
+    cpus: ${IDENTITY_SERVICE_CPUS:-0.75}
+    mem_limit: ${IDENTITY_SERVICE_MEMORY_LIMIT:-512m}
+    mem_reservation: ${IDENTITY_SERVICE_MEMORY_RESERVATION:-128m}
+
+  identity-keygen:
+    <<: *go-service
+    profiles: ["identity-bootstrap"]
+    restart: "no"
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/identity-service/cmd/signing-keygen }
+    image: ${IDENTITY_KEYGEN_IMAGE:-hvac/identity-keygen:0.1.0-dev}
+    environment:
+      IDENTITY_SIGNING_KEY_OUT: /run/hvac/identity/signing-key.pem
+    volumes:
+      - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity
+
+  identity-admin:
+    <<: *go-service
+    profiles: ["identity-bootstrap"]
+    restart: "no"
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/identity-service/cmd/identity-admin }
+    image: ${IDENTITY_ADMIN_IMAGE:-hvac/identity-admin:0.1.0-dev}
+    environment:
+      IDENTITY_DATABASE_URL: ${IDENTITY_ADMIN_DATABASE_URL:-}
+      IDENTITY_ADMIN_OPERATION: ${IDENTITY_ADMIN_OPERATION:-create}
+      IDENTITY_ADMIN_USERNAME: ${IDENTITY_ADMIN_USERNAME:-}
+      IDENTITY_ADMIN_DISPLAY_NAME: ${IDENTITY_ADMIN_DISPLAY_NAME:-}
+      IDENTITY_ADMIN_EMAIL: ${IDENTITY_ADMIN_EMAIL:-}
+      IDENTITY_ADMIN_PASSWORD: ${IDENTITY_ADMIN_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [data]
+
+  identity-reconciler:
+    <<: *go-service
+    profiles: ["identity-bootstrap"]
+    restart: "no"
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/iam-service/cmd/identity-reconciler }
+    image: ${IDENTITY_RECONCILER_IMAGE:-hvac/identity-reconciler:0.1.0-dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [data]
 
   scheduler:
     <<: *go-service

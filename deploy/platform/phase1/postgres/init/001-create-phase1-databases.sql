@@ -1,3 +1,6 @@
+SELECT 'CREATE DATABASE hvac_identity'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'hvac_identity')\gexec
+
 SELECT 'CREATE DATABASE hvac_s0'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'hvac_s0')\gexec
 
