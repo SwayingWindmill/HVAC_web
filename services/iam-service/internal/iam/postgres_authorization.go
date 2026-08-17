@@ -227,7 +227,7 @@ ORDER BY tenant_id
 
 func loadRoleBindings(ctx context.Context, transaction pgx.Tx) ([]RoleBinding, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT tenant_id::text, actions, effect, valid_from, valid_to
+SELECT tenant_id::text, role_key, actions, effect, valid_from, valid_to
 FROM iam.role_bindings
 ORDER BY tenant_id, role_key
 `)
@@ -239,15 +239,12 @@ ORDER BY tenant_id, role_key
 	for rows.Next() {
 		var binding RoleBinding
 		var actions []string
-		if err := rows.Scan(&binding.TenantID, &actions, &binding.Effect, &binding.ValidFrom, &binding.ValidTo); err != nil {
+		if err := rows.Scan(&binding.TenantID, &binding.RoleKey, &actions, &binding.Effect, &binding.ValidFrom, &binding.ValidTo); err != nil {
 			return nil, fmt.Errorf("scan IAM role binding: %w", err)
 		}
 		binding.Actions, err = postgresRegistryActions(actions)
 		if err != nil {
 			return nil, fmt.Errorf("validate IAM role binding actions: %w", err)
-		}
-		if len(binding.Actions) == 0 {
-			continue
 		}
 		binding.Status = FactStatusActive
 		bindings = append(bindings, binding)

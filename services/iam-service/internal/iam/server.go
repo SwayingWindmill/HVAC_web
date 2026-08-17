@@ -416,13 +416,24 @@ func (h *handler) handleCurrentPrincipal(ctx context.Context, writer http.Respon
 		writeProblem(writer, http.StatusServiceUnavailable, "IAM_PRINCIPAL_CAPABILITIES_INVALID", "The effective capability decision is invalid.")
 		return http.StatusServiceUnavailable
 	}
+	roleFacts, err := h.authorizationStore.LookupRegistryAuthorization(ctx, AuthorizationLookup{
+		SubjectIssuer: claims.SubjectIssuer,
+		Subject:       claims.Subject,
+		TenantID:      claims.TenantID,
+		At:            h.now(),
+	})
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "IAM_PRINCIPAL_ROLES_UNAVAILABLE", "The effective role decision is unavailable.")
+		return http.StatusServiceUnavailable
+	}
+	roles := effectivePrincipalRoles(roleFacts, claims.TenantID, h.now())
 	response := identitycontext.InternalPrincipalResponse{
 		Principal: identitycontext.UserPrincipal{
 			Subject:     claims.Subject,
 			Issuer:      claims.SubjectIssuer,
 			DisplayName: claims.DisplayName,
 			Email:       claims.Email,
-			Roles:       append([]string(nil), claims.Roles...),
+			Roles:       append([]string(nil), roles...),
 		},
 		Context: identitycontext.PrincipalContext{
 			InitiatingPrincipal: identitycontext.UserPrincipal{
@@ -430,21 +441,51 @@ func (h *handler) handleCurrentPrincipal(ctx context.Context, writer http.Respon
 				Issuer:      claims.SubjectIssuer,
 				DisplayName: claims.DisplayName,
 				Email:       claims.Email,
-				Roles:       append([]string(nil), claims.Roles...),
+				Roles:       append([]string(nil), roles...),
 			},
 			ExecutingServicePrincipal: identitycontext.ServicePrincipal{
 				Service:  "platform-gateway",
 				SPIFFEID: spiffeID,
 			},
-			TenantID:             claims.TenantID,
-			Audience:             claims.Audience,
-			PolicyRevision:       claims.PolicyRevision,
-			DelegationExpiresAt:  time.Unix(claims.ExpiresAt, 0).UTC().Format(time.RFC3339),
+			TenantID:            claims.TenantID,
+			Audience:            claims.Audience,
+			PolicyRevision:      claims.PolicyRevision,
+			DelegationExpiresAt: time.Unix(claims.ExpiresAt, 0).UTC().Format(time.RFC3339),
 		},
 		Authorization: authorization,
 	}
 	writeJSON(writer, http.StatusOK, response)
 	return http.StatusOK
+}
+
+func effectivePrincipalRoles(facts AuthorizationFacts, tenantID string, now time.Time) []string {
+	denied := map[string]struct{}{}
+	for _, binding := range facts.RoleBindings {
+		roleKey := strings.TrimSpace(binding.RoleKey)
+		if roleKey == "" || binding.Status != FactStatusActive || binding.TenantID != tenantID || !factEffective(binding.ValidFrom, binding.ValidTo, now) {
+			continue
+		}
+		if binding.Effect == BindingEffectDeny {
+			denied[roleKey] = struct{}{}
+		}
+	}
+	roles := make([]string, 0, len(facts.RoleBindings))
+	seen := map[string]struct{}{}
+	for _, binding := range facts.RoleBindings {
+		roleKey := strings.TrimSpace(binding.RoleKey)
+		if roleKey == "" || binding.Status != FactStatusActive || binding.TenantID != tenantID || binding.Effect != BindingEffectAllow || !factEffective(binding.ValidFrom, binding.ValidTo, now) {
+			continue
+		}
+		if _, blocked := denied[roleKey]; blocked {
+			continue
+		}
+		if _, duplicate := seen[roleKey]; duplicate {
+			continue
+		}
+		seen[roleKey] = struct{}{}
+		roles = append(roles, roleKey)
+	}
+	return roles
 }
 
 func (h *handler) handleRegistryReadDecision(writer http.ResponseWriter, request *http.Request, inbound identitycontext.DelegationClaims, presenter string) int {
@@ -503,24 +544,24 @@ func (h *handler) handleRegistryReadDecision(writer http.ResponseWriter, request
 			return http.StatusServiceUnavailable
 		}
 		grant, err := registryauth.SignGrant(h.registryGrantSigner, registryauth.GrantClaims{
-			Issuer:                 h.registryGrantIssuer,
-			Presenter:              grantPresenter,
-			Audience:               h.registryGrantAudience,
-			PrincipalID:            decision.PrincipalID,
-			SubjectIssuer:          decision.SubjectIssuer,
-			Subject:                decision.Subject,
-			TenantID:        decision.TenantID,
-			AllowedSiteIDs:  append([]string(nil), decision.AllowedSiteIDs...),
-			DeniedSiteIDs:        append([]string(nil), decision.DeniedSiteIDs...),
-			Actions:                append([]registryauth.Action(nil), decision.Actions...),
-			PolicyRevision:         decision.PolicyRevision,
-			DecisionReason:         decision.ReasonCode,
-			SessionID:              inbound.SessionID,
-			ParentTokenID:          inbound.TokenID,
-			IssuedAt:               now.Unix(),
-			ExpiresAt:              now.Add(h.registryGrantLifetime).Unix(),
-			TokenID:                grantID,
-			Transitive:             false,
+			Issuer:         h.registryGrantIssuer,
+			Presenter:      grantPresenter,
+			Audience:       h.registryGrantAudience,
+			PrincipalID:    decision.PrincipalID,
+			SubjectIssuer:  decision.SubjectIssuer,
+			Subject:        decision.Subject,
+			TenantID:       decision.TenantID,
+			AllowedSiteIDs: append([]string(nil), decision.AllowedSiteIDs...),
+			DeniedSiteIDs:  append([]string(nil), decision.DeniedSiteIDs...),
+			Actions:        append([]registryauth.Action(nil), decision.Actions...),
+			PolicyRevision: decision.PolicyRevision,
+			DecisionReason: decision.ReasonCode,
+			SessionID:      inbound.SessionID,
+			ParentTokenID:  inbound.TokenID,
+			IssuedAt:       now.Unix(),
+			ExpiresAt:      now.Add(h.registryGrantLifetime).Unix(),
+			TokenID:        grantID,
+			Transitive:     false,
 		})
 		if err != nil {
 			deliveryCode = "GRANT_SIGNING_FAILED"
@@ -554,18 +595,18 @@ func (h *handler) recordRegistryDecision(request *http.Request, decision registr
 		action = decision.Actions[0]
 	}
 	err := h.registryAuditSink.RecordRegistryDecision(request.Context(), RegistryDecisionAudit{
-		PrincipalID:            decision.PrincipalID,
-		TenantID: decision.TenantID,
-		Action:                 action,
+		PrincipalID:    decision.PrincipalID,
+		TenantID:       decision.TenantID,
+		Action:         action,
 		Allowed:        decision.Allowed,
 		AllowedSiteIDs: append([]string(nil), decision.AllowedSiteIDs...),
 		DeniedSiteIDs:  append([]string(nil), decision.DeniedSiteIDs...),
-		PolicyRevision:         decision.PolicyRevision,
-		ReasonCode:             decision.ReasonCode,
-		GrantSigned:            grantSigned,
-		DeliveryCode:           deliveryCode,
-		TraceID:                observability.TraceID(request.Context()),
-		OccurredAt:             formatInstant(h.now()),
+		PolicyRevision: decision.PolicyRevision,
+		ReasonCode:     decision.ReasonCode,
+		GrantSigned:    grantSigned,
+		DeliveryCode:   deliveryCode,
+		TraceID:        observability.TraceID(request.Context()),
+		OccurredAt:     formatInstant(h.now()),
 	})
 	return err == nil
 }

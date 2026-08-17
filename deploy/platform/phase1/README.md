@@ -114,7 +114,8 @@ Identity bootstrap is an explicit operator action after database migration. It i
 1. Run the `identity-keygen` service from the `identity-bootstrap` profile once to create the non-versioned PKCS#8 RSA signing key under `IDENTITY_RUNTIME_DIR`. Existing key files are not overwritten.
 2. Run `identity-admin` with `IDENTITY_ADMIN_DATABASE_URL` bound to the dedicated `identity_admin` database role. `create` provisions a credential-bearing identity; `reset-password` and `reset-password-random` are explicit offline recovery operations.
 3. Run `identity-reconciler` with a reviewed input document to project that identity's immutable `issuer + subject` into IAM together with explicit Tenant membership and approved Role/Site facts.
-4. Start or restart `identity-service`. The service fails closed if its signing key file is missing or invalid.
+4. For the local WSL administrator account, run `npm run deployment:phase1:local-admin` after reconciliation. This idempotent local-only step uses `s1_iam_migrator` to apply the reviewed `platform-admin` Registry, Telemetry, Alarm and Work Order grants for the Tenant/Site declared in the Git-ignored reconciliation input. It does not grant authorization in the IdP.
+5. Start or restart `identity-service`. The service fails closed if its signing key file is missing or invalid.
 
 `identity_runtime` cannot insert users. The separate `identity_admin` role exists so credential administration does not expand the long-running IdP runtime privilege set. Signing private keys, bootstrap credentials and reconciliation input containing deployment-specific authorization facts remain outside Git.
 

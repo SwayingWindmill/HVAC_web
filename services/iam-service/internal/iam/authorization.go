@@ -37,6 +37,7 @@ type TenantMembership struct {
 type RoleBinding struct {
 	TenantID  string
 	SiteID    string
+	RoleKey   string
 	Actions   []registryauth.Action
 	Effect    BindingEffect
 	Status    FactStatus
