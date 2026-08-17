@@ -94,7 +94,7 @@ docker compose \
 
 The single PostgreSQL server creates the authentication database boundary `hvac_identity` plus the existing domain database boundaries `hvac_s0` through `hvac_s5`. Credential hashes and IdP authorization requests/codes stay in `hvac_identity`; Gateway OIDC correlation state is a one-time Redis entry with a 10-minute TTL so login can survive Gateway process restart or multi-instance routing. The browser-facing issuer stays on the public HTTPS origin while Gateway server-to-server discovery, token exchange and JWKS retrieval use `OIDC_BACKCHANNEL_BASE_URL` to reach `identity-service` directly on the internal application network. IAM authorization facts remain in `hvac_s1`.
 
-The production-safe S0-S5 migration runner is implemented under `migrations/`. It uses an exact 44-file allowlist, reuses the canonical domain migration SQL, strips historical local-only credential lines and environment fixture seed blocks from the production execution stream, records the hash of the executed SQL in each database, and fails closed on migration drift.
+The production-safe S0-S5 migration runner is implemented under `migrations/`. It uses an exact 45-file allowlist, reuses the canonical domain migration SQL, strips historical local-only credential lines and environment fixture seed blocks from the production execution stream, records the hash of the executed SQL in each database, and fails closed on migration drift.
 
 Database roles are created without checked-in production credentials. Copy `migrations/role-credentials.sql.example` to the Git-ignored runtime path, replace every redacted value with deployment-provided credentials, then execute the migration profile before application rollout:
 
@@ -118,6 +118,10 @@ Identity bootstrap is an explicit operator action after database migration. It i
 5. Start or restart `identity-service`. The service fails closed if its signing key file is missing or invalid.
 
 `identity_runtime` cannot insert users. The separate `identity_admin` role exists so credential administration does not expand the long-running IdP runtime privilege set. Signing private keys, bootstrap credentials and reconciliation input containing deployment-specific authorization facts remain outside Git.
+
+## Local central-plant simulator
+
+WSL development does not seed simulated equipment as an application startup side effect. After the normal Phase 1 stack is up, run `npm run deployment:phase1:simulator` to idempotently bootstrap the local central-plant Registry/S2 projection and IAM telemetry-key grants, then start the `local-simulator` EG8200 MQTT publisher profile. This local-only bootstrap uses the deployment PostgreSQL administrator for Registry fixture writes because forced RLS remains enabled and application/migrator roles are not granted a bypass; production deployments do not run this command.
 
 ## Backup
 

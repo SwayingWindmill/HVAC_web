@@ -39,6 +39,7 @@ COPY infra/s2-telemetry/postgres/init/003-s2-telemetry-ingest.sql /opt/hvac/repo
 COPY infra/s2-telemetry/postgres/init/004-s2-telemetry-history-outbox.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/004-s2-telemetry-history-outbox.sql
 COPY infra/s2-telemetry/postgres/init/004a-s2-tenant-scope.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/004a-s2-tenant-scope.sql
 COPY infra/s2-telemetry/postgres/init/004b-s2-point-identity.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/004b-s2-point-identity.sql
+COPY infra/s2-telemetry/postgres/init/004c-s2-counter-semantics.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/004c-s2-counter-semantics.sql
 COPY infra/s2-telemetry/postgres/init/004d-s2-redis-latest.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/004d-s2-redis-latest.sql
 COPY infra/s2-telemetry/postgres/init/005-s2-realtime-backend.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/005-s2-realtime-backend.sql
 

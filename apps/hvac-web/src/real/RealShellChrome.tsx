@@ -16,10 +16,9 @@ import {
   SettingOutlined,
   SunOutlined,
   ThunderboltOutlined,
-  UserOutlined,
 } from '@ant-design/icons';
 import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
-import { Avatar, Badge, Button, Divider, Grid, Popover, Select, Space, Tooltip } from 'antd';
+import { Badge, Button, Divider, Grid, Popover, Select, Space, Tooltip } from 'antd';
 import { FocusHeading } from './FocusHeading';
 import { createIdleRealtimeStatus, realtimeStatusLabel } from './realtime-status';
 import { RealRuntimeFacts } from './RealRuntimeFacts';
@@ -295,7 +294,7 @@ export function RealShellChrome({
   return (
     <div
       className="real-shell-layout"
-      style={{ minHeight: '100vh', height: '100vh', overflow: 'hidden' }}
+      style={{ minHeight: '100dvh', height: '100dvh', overflow: 'hidden' }}
       data-testid="real-protected-shell"
       data-protected-route-mounted="true"
       data-policy-revision={principal.authorization.policyRevision}
@@ -360,7 +359,7 @@ export function RealShellChrome({
             >
               <ApiOutlined style={{ color: realtimeColor }} />
               <Badge status={realtimeStatus} />
-              <span className={compact ? 'real-shell-sr-only' : undefined}>{realtimeLabel}</span>
+              <span className="real-shell-sr-only">{realtimeLabel}</span>
             </span>
           </Tooltip>,
           bigscreen ? (
@@ -381,11 +380,6 @@ export function RealShellChrome({
               onClick={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
             />
           </Tooltip>,
-          !narrow ? (
-            <Tooltip key="principal-avatar" title={`${principal.principal.displayName} · ${principal.principal.roles.join(', ') || '授权用户'}`}>
-              <Avatar style={{ background: '#0FB5AE' }} icon={<UserOutlined />} />
-            </Tooltip>
-          ) : null,
           <Tooltip key="logout" title="退出登录">
             <Button
               type="text"
@@ -404,17 +398,19 @@ export function RealShellChrome({
           <span key="site" className="real-shell-sr-only" data-testid="real-shell-site">{siteLabel}</span>,
           <span key="state" className="real-shell-sr-only" data-testid="real-shell-state">READY</span>,
         ]}
-        contentStyle={{ margin: 0, padding: 0, minHeight: 0, overflow: 'hidden' }}
+        contentStyle={{ margin: 0, padding: 0, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
       >
         <main
           className="app-content real-shell-content"
           style={{
             minWidth: 0,
             minHeight: 0,
-            height: '100%',
+            flex: '1 1 0',
             boxSizing: 'border-box',
             padding: '20px 20px 88px',
-            overflow: 'auto',
+            overflowX: 'hidden',
+            overflowY: 'auto',
+            overscrollBehavior: 'contain',
           }}
         >
           {snapshot.logout?.status === 'failed' ? (

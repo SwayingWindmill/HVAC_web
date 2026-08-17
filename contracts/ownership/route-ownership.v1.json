@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 20,
+  "registryRevision": 22,
   "routes": [
     {
       "method": "GET",
@@ -321,10 +321,10 @@
       "path": "/api/v1/devices/{deviceId}/observation-snapshot",
       "owner": "telemetry-runtime-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
+      "revision": 2,
+      "activationStatus": "primary",
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -353,7 +353,7 @@
         "REVISION_GAP",
         "RECOVERY_FAILED"
       ],
-      "migrationPhase": "R0-contract-only",
+      "migrationPhase": "R7-primary-100",
       "cohortGroup": "s2-current-state-v1"
     },
     {
@@ -361,10 +361,10 @@
       "path": "/api/v1/telemetry/observation-snapshots:batchGet",
       "owner": "telemetry-runtime-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
+      "revision": 2,
+      "activationStatus": "primary",
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -393,7 +393,7 @@
         "REVISION_GAP",
         "RECOVERY_FAILED"
       ],
-      "migrationPhase": "R0-contract-only",
+      "migrationPhase": "R7-primary-100",
       "cohortGroup": "s2-current-state-v1"
     },
     {
@@ -401,10 +401,10 @@
       "path": "/api/v1/telemetry/subscriptions:bootstrap",
       "owner": "telemetry-runtime-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
+      "revision": 2,
+      "activationStatus": "primary",
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -433,7 +433,7 @@
         "REVISION_GAP",
         "RECOVERY_FAILED"
       ],
-      "migrationPhase": "R0-contract-only",
+      "migrationPhase": "R7-primary-100",
       "cohortGroup": "s2-current-state-v1"
     },
     {
@@ -441,10 +441,10 @@
       "path": "/api/v1/telemetry/recovery-cursors:checkpoint",
       "owner": "telemetry-runtime-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
+      "revision": 2,
+      "activationStatus": "primary",
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -473,7 +473,7 @@
         "REVISION_GAP",
         "RECOVERY_FAILED"
       ],
-      "migrationPhase": "R0-contract-only",
+      "migrationPhase": "R7-primary-100",
       "cohortGroup": "s2-current-state-v1"
     },
     {

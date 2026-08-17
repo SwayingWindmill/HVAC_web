@@ -29,6 +29,7 @@ hvac_s2|infra/s2-telemetry/postgres/init/003-s2-telemetry-ingest.sql
 hvac_s2|infra/s2-telemetry/postgres/init/004-s2-telemetry-history-outbox.sql
 hvac_s2|infra/s2-telemetry/postgres/init/004a-s2-tenant-scope.sql
 hvac_s2|infra/s2-telemetry/postgres/init/004b-s2-point-identity.sql
+hvac_s2|infra/s2-telemetry/postgres/init/004c-s2-counter-semantics.sql
 hvac_s2|infra/s2-telemetry/postgres/init/004d-s2-redis-latest.sql
 hvac_s2|infra/s2-telemetry/postgres/init/005-s2-realtime-backend.sql
 hvac_s3|services/command-service/migrations/001_s3_command_runtime.sql
