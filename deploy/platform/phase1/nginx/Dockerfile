@@ -2,7 +2,7 @@
 FROM node:22.22.0-bookworm-slim AS web-build
 WORKDIR /src
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 COPY apps/hvac-web ./apps/hvac-web
 ARG HVAC_WEB_BUILD_ID=phase1-local
 ARG HVAC_WEB_GATEWAY_BASE_PATH=

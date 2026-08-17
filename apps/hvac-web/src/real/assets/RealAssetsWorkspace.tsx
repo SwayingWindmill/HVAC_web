@@ -261,7 +261,7 @@ export function RealAssetsWorkspace({
   const tenantId = site.tenantId;
   const sessionCapability = principal.session.csrfToken;
   const capabilities = principal.authorization.capabilities;
-  const registryAllowed = capabilities.includes('asset.list') && capabilities.includes('device.list');
+  const registryAllowed = capabilities.includes('equipment.list') && capabilities.includes('device.list');
   const telemetryAllowed = capabilities.includes('telemetry.batch.read');
   const queryRoot = useMemo(
     () => ['real-assets', protectedGeneration, tenantId, site.id] as const,

@@ -36,7 +36,7 @@ export const principalContextSchema = z.object({
 }).strict();
 export const capabilitySchema = z.enum([
   'site.list', 'site.read',
-  'asset.list', 'asset.read', 'device.list', 'device.read',
+  'equipment.list', 'equipment.read', 'device.list', 'device.read',
   'telemetry.snapshot.read', 'telemetry.batch.read', 'telemetry.subscribe', 'telemetry.history.read',
   'alarm.list', 'alarm.read', 'work-order.list', 'work-order.read', 'work-order.create', 'work-order.assign', 'work-order.lifecycle',
 ]);

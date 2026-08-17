@@ -1431,8 +1431,8 @@
         "enum": [
           "site.list",
           "site.read",
-          "asset.list",
-          "asset.read",
+          "equipment.list",
+          "equipment.read",
           "device.list",
           "device.read",
           "telemetry.snapshot.read",
