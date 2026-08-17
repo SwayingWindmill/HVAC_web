@@ -34,10 +34,11 @@ type IDGenerator func() string
 type Session struct {
 	ID                       string
 	Principal                identitycontext.UserPrincipal
-	TenantID     string
+	TenantID                 string
 	CSRFTokenCiphertext      []byte
 	ProviderTokensCiphertext []byte
 	ExpiresAt                time.Time
+	LastActivityAt           time.Time
 	RevokedAt                *time.Time
 	AggregateVersion         uint64
 	LastAuditMessageID       string
@@ -61,6 +62,7 @@ type MutationContext struct {
 type Store interface {
 	CreateSession(context.Context, Session, MutationContext) (Session, error)
 	GetSession(context.Context, string) (Session, error)
+	TouchSession(context.Context, string, time.Time) (Session, error)
 	RevokeSession(context.Context, string, MutationContext) (Session, error)
 }
 
@@ -92,6 +94,9 @@ func (store *MemoryStore) CreateSession(ctx context.Context, session Session, mu
 	session.LastAuditMessageID = messageID
 	session.CreatedAt = mutation.OccurredAt
 	session.UpdatedAt = mutation.OccurredAt
+	if session.LastActivityAt.IsZero() {
+		session.LastActivityAt = mutation.OccurredAt
+	}
 	event, _, err := buildEvent(session, mutation, messageID, "ACTIVE")
 	if err != nil {
 		return Session{}, err
@@ -110,6 +115,23 @@ func (store *MemoryStore) GetSession(ctx context.Context, sessionID string) (Ses
 	if !exists {
 		return Session{}, ErrSessionNotFound
 	}
+	return cloneSession(session), nil
+}
+
+func (store *MemoryStore) TouchSession(ctx context.Context, sessionID string, at time.Time) (Session, error) {
+	_, span := observability.Start(ctx, "sessionstore.memory.touch", observability.SpanKindInternal, map[string]any{"db.system": "memory", "db.operation": "session.touch"})
+	defer span.End()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	session, exists := store.sessions[sessionID]
+	if !exists {
+		return Session{}, ErrSessionNotFound
+	}
+	if session.RevokedAt != nil {
+		return Session{}, ErrSessionRevoked
+	}
+	session.LastActivityAt = at.UTC()
+	store.sessions[sessionID] = cloneSession(session)
 	return cloneSession(session), nil
 }
 
@@ -172,11 +194,11 @@ func buildEvent(session Session, mutation MutationContext, messageID, state stri
 		TraceID:           mutation.TraceID,
 		Traceparent:       mutation.Traceparent,
 		Actor: sessionevent.ActorChainV1{
-			InitiatingSubject:    session.Principal.Subject,
-			InitiatingIssuer:     session.Principal.Issuer,
-			ExecutingService:     mutation.ExecutingService,
-			ExecutingSPIFFEID:    mutation.ExecutingSPIFFEID,
-			TenantID: session.TenantID,
+			InitiatingSubject: session.Principal.Subject,
+			InitiatingIssuer:  session.Principal.Issuer,
+			ExecutingService:  mutation.ExecutingService,
+			ExecutingSPIFFEID: mutation.ExecutingSPIFFEID,
+			TenantID:          session.TenantID,
 		},
 		Action:         mutation.Action,
 		Result:         mutation.Result,

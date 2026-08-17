@@ -48,7 +48,7 @@ export const effectiveAuthorizationSchema = z.object({
   }),
 }).strict();
 export const sessionViewSchema = z.object({
-  id: z.string(), expiresAt: z.string().datetime(), csrfToken: z.string(), revocationObjectiveMs: z.number().int().nonnegative(), lastAuditMessageId: z.string(),
+  id: z.string(), expiresAt: z.string().datetime(), idleTimeoutMs: z.number().int().positive(), csrfToken: z.string(), revocationObjectiveMs: z.number().int().nonnegative(), lastAuditMessageId: z.string(),
 }).strict();
 export const currentPrincipalResponseSchema = z.object({
   principal: userPrincipalSchema, context: principalContextSchema, authorization: effectiveAuthorizationSchema, session: sessionViewSchema,

@@ -138,7 +138,7 @@ const schemaRequirements = {
   ServicePrincipal: [['service', 'spiffeId'], ['service', 'spiffeId']],
   PrincipalContext: [['initiatingPrincipal', 'executingServicePrincipal', 'tenantId', 'audience', 'policyRevision', 'delegationExpiresAt'], ['initiatingPrincipal', 'executingServicePrincipal', 'tenantId', 'audience', 'policyRevision', 'delegationExpiresAt']],
   EffectiveAuthorization: [['capabilitySetVersion', 'policyRevision', 'capabilities'], ['capabilitySetVersion', 'policyRevision', 'capabilities']],
-  SessionView: [['id', 'expiresAt', 'csrfToken', 'revocationObjectiveMs', 'lastAuditMessageId'], ['id', 'expiresAt', 'csrfToken', 'revocationObjectiveMs', 'lastAuditMessageId']],
+  SessionView: [['id', 'expiresAt', 'idleTimeoutMs', 'csrfToken', 'revocationObjectiveMs', 'lastAuditMessageId'], ['id', 'expiresAt', 'idleTimeoutMs', 'csrfToken', 'revocationObjectiveMs', 'lastAuditMessageId']],
   CurrentPrincipalResponse: [['principal', 'context', 'authorization', 'session'], ['principal', 'context', 'authorization', 'session']],
   SessionRevocationResponse: [['sessionId', 'revokedAt', 'objectiveMs', 'auditMessageId'], ['sessionId', 'revokedAt', 'objectiveMs', 'auditMessageId']],
   AuditRecord: [[

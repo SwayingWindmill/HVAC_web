@@ -113,6 +113,7 @@ export interface ShellRuntimeEnvironment {
   postNavigate(target: string): void;
   setTimer(handler: () => void, delayMs: number): unknown;
   clearTimer(handle: unknown): void;
+  listenForUserActivity?(handler: () => void): () => void;
 }
 
 type ShellRuntimeClient = Pick<
@@ -121,6 +122,8 @@ type ShellRuntimeClient = Pick<
 >;
 
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
+const USER_ACTIVITY_SYNC_INTERVAL_MS = 60_000;
+const IDLE_RETRY_DELAY_MS = 60_000;
 const SITE_PAGE_LIMIT = 100;
 const MAX_SITE_PAGES = 100;
 
@@ -181,6 +184,25 @@ function browserEnvironment(): ShellRuntimeEnvironment {
     },
     setTimer: (handler, delayMs) => window.setTimeout(handler, delayMs),
     clearTimer: (handle) => window.clearTimeout(handle as number),
+    listenForUserActivity: (handler) => {
+      let lastSignalAt = 0;
+      const listener = () => {
+        const now = Date.now();
+        if (now - lastSignalAt < 1_000) return;
+        lastSignalAt = now;
+        handler();
+      };
+      window.addEventListener('pointerdown', listener, { passive: true });
+      window.addEventListener('pointermove', listener, { passive: true });
+      window.addEventListener('keydown', listener);
+      window.addEventListener('wheel', listener, { passive: true });
+      return () => {
+        window.removeEventListener('pointerdown', listener);
+        window.removeEventListener('pointermove', listener);
+        window.removeEventListener('keydown', listener);
+        window.removeEventListener('wheel', listener);
+      };
+    },
   };
 }
 
@@ -219,6 +241,11 @@ class BrowserShellRuntime implements ShellRuntime {
   private returnTo = '/';
   private bootstrapController?: AbortController;
   private expiryTimer?: unknown;
+  private idleTimer?: unknown;
+  private stopUserActivity?: () => void;
+  private idleTimeoutMs = 0;
+  private lastActivitySyncAt = 0;
+  private activitySyncInFlight = false;
   private sequence = 0;
   private disposed = false;
 
@@ -252,7 +279,8 @@ class BrowserShellRuntime implements ShellRuntime {
       if (!this.isCurrent(sequence) || controller.signal.aborted) return;
 
       const expiresAt = Date.parse(response.data.session.expiresAt);
-      if (!Number.isFinite(expiresAt) || expiresAt <= this.environment.now()) {
+      const idleTimeoutMs = response.data.session.idleTimeoutMs;
+      if (!Number.isFinite(expiresAt) || expiresAt <= this.environment.now() || !Number.isFinite(idleTimeoutMs) || idleTimeoutMs <= 0) {
         this.enterLoginRequired('SESSION_INVALID', !signInLanding);
         return;
       }
@@ -267,6 +295,7 @@ class BrowserShellRuntime implements ShellRuntime {
         logout: { status: 'idle' },
       });
       this.scheduleExpiration(expiresAt);
+      this.configureIdleTracking(idleTimeoutMs);
       const bootstrapTasks = [this.loadPlatformAvailability(sequence, response.data, controller)];
       if (canListSites) bootstrapTasks.push(this.loadAuthorizedSites(sequence, response.data, controller));
       await Promise.all(bootstrapTasks);
@@ -496,6 +525,7 @@ class BrowserShellRuntime implements ShellRuntime {
     this.bootstrapController?.abort();
     this.bootstrapController = undefined;
     this.clearExpiration();
+    this.clearIdleTracking();
     this.protectedPrincipal = undefined;
     this.listeners.clear();
   }
@@ -569,6 +599,7 @@ class BrowserShellRuntime implements ShellRuntime {
     this.bootstrapController?.abort();
     this.bootstrapController = undefined;
     this.clearExpiration();
+    this.clearIdleTracking();
     this.protectedPrincipal = undefined;
     return this.sequence;
   }
@@ -595,6 +626,7 @@ class BrowserShellRuntime implements ShellRuntime {
     this.bootstrapController?.abort();
     this.bootstrapController = undefined;
     this.clearExpiration();
+    this.clearIdleTracking();
     this.protectedPrincipal = undefined;
     const loginUrl = this.client.loginUrl({ returnTo: this.returnTo });
     this.publish({ state: 'LOGIN_REQUIRED', loginUrl, reason });
@@ -740,6 +772,78 @@ class BrowserShellRuntime implements ShellRuntime {
         logout: this.snapshot.logout ?? { status: 'idle' },
       });
     }
+  }
+
+  private configureIdleTracking(idleTimeoutMs: number): void {
+    this.clearIdleTracking();
+    this.idleTimeoutMs = idleTimeoutMs;
+    this.lastActivitySyncAt = this.environment.now();
+    this.scheduleIdleCheck(idleTimeoutMs);
+    this.stopUserActivity = this.environment.listenForUserActivity?.(() => this.recordUserActivity());
+  }
+
+  private recordUserActivity(): void {
+    if (this.snapshot.state !== 'READY' || !this.protectedPrincipal || this.idleTimeoutMs <= 0) return;
+    this.scheduleIdleCheck(this.idleTimeoutMs);
+    const now = this.environment.now();
+    if (this.activitySyncInFlight || now - this.lastActivitySyncAt < USER_ACTIVITY_SYNC_INTERVAL_MS) return;
+    this.lastActivitySyncAt = now;
+    this.activitySyncInFlight = true;
+    const sequence = this.sequence;
+    void this.client.getCurrentPrincipal({ headers: { 'X-HVAC-User-Activity': '1' } })
+      .then((response) => {
+        if (!this.isCurrent(sequence) || this.snapshot.state !== 'READY') return;
+        this.protectedPrincipal = response.data;
+      })
+      .catch((error: unknown) => {
+        if (!this.isCurrent(sequence)) return;
+        const problem = problemFrom(error);
+        if (problem && classifyBootstrapProblem(problem) === 'LOGIN_REQUIRED') {
+          this.enterLoginRequired('SESSION_IDLE_EXPIRED', true);
+        }
+      })
+      .finally(() => {
+        if (this.isCurrent(sequence)) this.activitySyncInFlight = false;
+      });
+  }
+
+  private scheduleIdleCheck(delayMs: number): void {
+    if (this.idleTimer !== undefined) this.environment.clearTimer(this.idleTimer);
+    this.idleTimer = this.environment.setTimer(() => {
+      this.idleTimer = undefined;
+      void this.verifyIdleSession();
+    }, Math.min(delayMs, MAX_TIMER_DELAY_MS));
+  }
+
+  private async verifyIdleSession(): Promise<void> {
+    if (this.snapshot.state !== 'READY' || !this.protectedPrincipal || this.idleTimeoutMs <= 0) return;
+    const sequence = this.sequence;
+    try {
+      const response = await this.client.getCurrentPrincipal();
+      if (!this.isCurrent(sequence) || this.snapshot.state !== 'READY') return;
+      this.protectedPrincipal = response.data;
+      this.scheduleIdleCheck(Math.min(this.idleTimeoutMs, IDLE_RETRY_DELAY_MS));
+    } catch (error: unknown) {
+      if (!this.isCurrent(sequence)) return;
+      const problem = problemFrom(error);
+      if (problem && classifyBootstrapProblem(problem) === 'LOGIN_REQUIRED') {
+        this.enterLoginRequired('SESSION_IDLE_EXPIRED', true);
+        return;
+      }
+      this.scheduleIdleCheck(Math.min(this.idleTimeoutMs, IDLE_RETRY_DELAY_MS));
+    }
+  }
+
+  private clearIdleTracking(): void {
+    if (this.idleTimer !== undefined) {
+      this.environment.clearTimer(this.idleTimer);
+      this.idleTimer = undefined;
+    }
+    this.stopUserActivity?.();
+    this.stopUserActivity = undefined;
+    this.idleTimeoutMs = 0;
+    this.lastActivitySyncAt = 0;
+    this.activitySyncInFlight = false;
   }
 
   private scheduleExpiration(expiresAt: number): void {

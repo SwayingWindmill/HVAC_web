@@ -22,6 +22,7 @@ import (
 )
 
 const sessionCookieName = "__Host-hvac_session"
+const userActivityHeaderName = "X-HVAC-User-Activity"
 
 type IdentityConfig struct {
 	OIDCIssuer              string
@@ -44,6 +45,7 @@ type IdentityConfig struct {
 	SessionStore            sessionstore.Store
 	LoginStateStore         LoginStateStore
 	SessionTTL              time.Duration
+	IdleTTL                 time.Duration
 	StateTTL                time.Duration
 	DelegationTTL           time.Duration
 	RevocationObjective     time.Duration
@@ -125,7 +127,10 @@ func newIdentityController(config *IdentityConfig, now func() time.Time) *identi
 		resolved.IAMHTTPClient = &http.Client{Timeout: 5 * time.Second}
 	}
 	if resolved.SessionTTL <= 0 {
-		resolved.SessionTTL = 30 * time.Minute
+		resolved.SessionTTL = 8 * time.Hour
+	}
+	if resolved.IdleTTL <= 0 {
+		resolved.IdleTTL = time.Hour
 	}
 	if resolved.StateTTL <= 0 {
 		resolved.StateTTL = 10 * time.Minute
@@ -294,7 +299,7 @@ func (h *handler) GetCurrentPrincipal(writer http.ResponseWriter, request *http.
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
-	writeJSON(writer, http.StatusOK, platformapi.CurrentPrincipalResponse{Principal: toPublicUser(principal.Principal), Context: toPublicContext(principal.Context), Authorization: toPublicAuthorization(principal.Authorization), Session: platformapi.SessionView{ID: session.ID, ExpiresAt: session.ExpiresAt.UTC().Format(time.RFC3339), CSRFToken: session.CSRFToken, RevocationObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds()), LastAuditMessageID: session.LastAuditMessageID}})
+	writeJSON(writer, http.StatusOK, platformapi.CurrentPrincipalResponse{Principal: toPublicUser(principal.Principal), Context: toPublicContext(principal.Context), Authorization: toPublicAuthorization(principal.Authorization), Session: platformapi.SessionView{ID: session.ID, ExpiresAt: session.ExpiresAt.UTC().Format(time.RFC3339), IdleTimeoutMS: int(h.identity.config.IdleTTL.Milliseconds()), CSRFToken: session.CSRFToken, RevocationObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds()), LastAuditMessageID: session.LastAuditMessageID}})
 }
 
 func (h *handler) Logout(writer http.ResponseWriter, request *http.Request, params platformapi.LogoutParams) {
@@ -383,9 +388,22 @@ func (h *handler) identitySession(request *http.Request) (bffSession, *identityF
 		failure := identityFailure{503, "SESSION_STORE_UNAVAILABLE", "Session unavailable", "The durable Session store could not be read.", true}
 		return bffSession{}, &failure
 	}
-	if stored.RevokedAt != nil || !h.identity.now().Before(stored.ExpiresAt) {
-		failure := identityFailure{401, "SESSION_INVALID", "Session invalid", "The BFF Session is expired, revoked, or unknown.", false}
+	now := h.identity.now()
+	if stored.RevokedAt != nil || !now.Before(stored.ExpiresAt) || !now.Before(stored.LastActivityAt.Add(h.identity.config.IdleTTL)) {
+		failure := identityFailure{401, "SESSION_INVALID", "Session invalid", "The BFF Session is expired, revoked, idle, or unknown.", false}
 		return bffSession{}, &failure
+	}
+	if request.Header.Get(userActivityHeaderName) == "1" {
+		touched, err := h.identity.store.TouchSession(request.Context(), stored.ID, now)
+		if errors.Is(err, sessionstore.ErrSessionNotFound) || errors.Is(err, sessionstore.ErrSessionRevoked) {
+			failure := identityFailure{401, "SESSION_INVALID", "Session invalid", "The BFF Session is expired, revoked, idle, or unknown.", false}
+			return bffSession{}, &failure
+		}
+		if err != nil {
+			failure := identityFailure{503, "SESSION_STORE_UNAVAILABLE", "Session unavailable", "The durable Session store could not record user activity.", true}
+			return bffSession{}, &failure
+		}
+		stored = touched
 	}
 	csrfToken, err := h.identity.decryptBytes(stored.CSRFTokenCiphertext)
 	if err != nil {

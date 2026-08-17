@@ -23,6 +23,7 @@
       "name": "hvac_s0",
       "migrations": [
         "infra/s0-durable/postgres/init/001-s0-durable.sql",
+        "infra/s0-durable/postgres/init/002-s0-session-idle.sql",
         "infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql",
         "infra/s0-durable/postgres/init/003-operations-audit-ledger.sql",
         "infra/s0-durable/postgres/init/004-audit-postgres-outbox.sql"

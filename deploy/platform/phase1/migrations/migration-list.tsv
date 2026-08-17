@@ -2,6 +2,7 @@ hvac_identity|infra/identity/postgres/init/001-identity-baseline.sql
 hvac_identity|infra/identity/postgres/init/002-identity-runtime-grants.sql
 hvac_identity|infra/identity/postgres/init/003-identity-directory-least-privilege.sql
 hvac_s0|infra/s0-durable/postgres/init/001-s0-durable.sql
+hvac_s0|infra/s0-durable/postgres/init/002-s0-session-idle.sql
 hvac_s0|infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql
 hvac_s0|infra/s0-durable/postgres/init/003-operations-audit-ledger.sql
 hvac_s0|infra/s0-durable/postgres/init/004-audit-postgres-outbox.sql

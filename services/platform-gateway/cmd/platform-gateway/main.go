@@ -228,6 +228,25 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 		}
 		stateTTL = parsed
 	}
+	sessionTTL := 8 * time.Hour
+	if raw := strings.TrimSpace(os.Getenv("SESSION_ABSOLUTE_TTL")); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			return nil, nil, func() {}, errors.New("SESSION_ABSOLUTE_TTL must be a positive duration")
+		}
+		sessionTTL = parsed
+	}
+	idleTTL := time.Hour
+	if raw := strings.TrimSpace(os.Getenv("SESSION_IDLE_TTL")); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			return nil, nil, func() {}, errors.New("SESSION_IDLE_TTL must be a positive duration")
+		}
+		idleTTL = parsed
+	}
+	if idleTTL > sessionTTL {
+		return nil, nil, func() {}, errors.New("SESSION_IDLE_TTL must not exceed SESSION_ABSOLUTE_TTL")
+	}
 	loginStateStore, err := gateway.OpenRedisLoginStateStore(ctx, gateway.RedisLoginStateStoreConfig{URL: envOr("OIDC_STATE_REDIS_URL", "redis://redis:6379/1")})
 	if err != nil {
 		return nil, nil, func() {}, errors.New("shared OIDC state store is unavailable")
@@ -275,7 +294,8 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 		TokenEncryptionKey:      key,
 		SessionStore:            store,
 		LoginStateStore:         loginStateStore,
-		SessionTTL:              30 * time.Minute,
+		SessionTTL:              sessionTTL,
+		IdleTTL:                 idleTTL,
 		StateTTL:                stateTTL,
 		DelegationTTL:           30 * time.Second,
 		RevocationObjective:     time.Second,

@@ -67,6 +67,9 @@ func (store *PostgresStore) CreateSession(ctx context.Context, session Session, 
 	session.LastAuditMessageID = messageID
 	session.CreatedAt = mutation.OccurredAt.UTC()
 	session.UpdatedAt = mutation.OccurredAt.UTC()
+	if session.LastActivityAt.IsZero() {
+		session.LastActivityAt = mutation.OccurredAt.UTC()
+	}
 	event, payload, err := buildEvent(session, mutation, messageID, "ACTIVE")
 	if err != nil {
 		return Session{}, err
@@ -86,11 +89,11 @@ func (store *PostgresStore) CreateSession(ctx context.Context, session Session, 
 		INSERT INTO gateway.sessions (
 			session_id, principal_subject, principal_issuer, display_name, email, roles,
 			tenant_id, csrf_token_ciphertext, provider_tokens_ciphertext,
-			expires_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULL,$11,$12,$13,$13)
+			expires_at, last_activity_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NULL,$12,$13,$14,$14)
 	`, session.ID, session.Principal.Subject, session.Principal.Issuer, session.Principal.DisplayName,
 		session.Principal.Email, roles, session.TenantID, session.CSRFTokenCiphertext,
-		session.ProviderTokensCiphertext, session.ExpiresAt.UTC(), session.AggregateVersion,
+		session.ProviderTokensCiphertext, session.ExpiresAt.UTC(), session.LastActivityAt.UTC(), session.AggregateVersion,
 		session.LastAuditMessageID, session.CreatedAt)
 	if err != nil {
 		return Session{}, mapWriteError(err)
@@ -120,6 +123,23 @@ func (store *PostgresStore) GetSession(ctx context.Context, sessionID string) (S
 	ctx, span := observability.Start(ctx, "postgres.session.query", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.get"})
 	defer span.End()
 	return scanSession(store.pool.QueryRow(ctx, sessionSelect+` WHERE session_id = $1`, sessionID))
+}
+
+func (store *PostgresStore) TouchSession(ctx context.Context, sessionID string, at time.Time) (Session, error) {
+	ctx, span := observability.Start(ctx, "postgres.session.touch", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.touch"})
+	defer span.End()
+	command, err := store.pool.Exec(ctx, `
+		UPDATE gateway.sessions
+		SET last_activity_at = $2
+		WHERE session_id = $1 AND revoked_at IS NULL
+	`, sessionID, at.UTC())
+	if err != nil {
+		return Session{}, err
+	}
+	if command.RowsAffected() != 1 {
+		return Session{}, ErrSessionNotFound
+	}
+	return store.GetSession(ctx, sessionID)
 }
 
 func (store *PostgresStore) RevokeSession(ctx context.Context, sessionID string, mutation MutationContext) (Session, error) {
@@ -225,7 +245,7 @@ func insertOutbox(ctx context.Context, tx pgx.Tx, event sessionevent.SessionAudi
 const sessionSelect = `
 	SELECT session_id, principal_subject, principal_issuer, display_name, email, roles,
 	       tenant_id, csrf_token_ciphertext, provider_tokens_ciphertext,
-	       expires_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at
+	       expires_at, last_activity_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at
 	FROM gateway.sessions`
 
 type rowScanner interface {
@@ -240,7 +260,7 @@ func scanSession(row rowScanner) (Session, error) {
 		&session.ID, &session.Principal.Subject, &session.Principal.Issuer,
 		&session.Principal.DisplayName, &session.Principal.Email, &roles,
 		&session.TenantID, &session.CSRFTokenCiphertext,
-		&session.ProviderTokensCiphertext, &session.ExpiresAt, &revokedAt,
+		&session.ProviderTokensCiphertext, &session.ExpiresAt, &session.LastActivityAt, &revokedAt,
 		&session.AggregateVersion, &session.LastAuditMessageID, &session.CreatedAt,
 		&session.UpdatedAt,
 	)

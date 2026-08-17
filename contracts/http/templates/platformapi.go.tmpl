@@ -116,6 +116,7 @@ type EffectiveAuthorization struct {
 type SessionView struct {
 	ID                    string `json:"id"`
 	ExpiresAt             string `json:"expiresAt"`
+	IdleTimeoutMS         int    `json:"idleTimeoutMs"`
 	CSRFToken             string `json:"csrfToken"`
 	RevocationObjectiveMS int    `json:"revocationObjectiveMs"`
 	LastAuditMessageID    string `json:"lastAuditMessageId"`

@@ -1483,6 +1483,7 @@
         "required": [
           "id",
           "expiresAt",
+          "idleTimeoutMs",
           "csrfToken",
           "revocationObjectiveMs",
           "lastAuditMessageId"
@@ -1494,6 +1495,10 @@
           "expiresAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "idleTimeoutMs": {
+            "type": "integer",
+            "minimum": 1
           },
           "csrfToken": {
             "type": "string"
