@@ -83,7 +83,7 @@ for (const token of [
   'createScopedCommand',
   'getScopedCommand',
   'approveScopedCommand',
-  'trustedOrganizationId',
+  'trustedTenantId',
   'trustedSiteId',
   'commandPointId',
   'parameters',
@@ -91,7 +91,7 @@ for (const token of [
 ]) {
   assert(commandApi.includes(token), `HVAC Web Command API invariant is missing: ${token}`);
 }
-for (const token of ['organizationId', 'siteId', 'pointId', 'superRefine', 'Command timeline does not converge', 'validateCommandScope', 'RESOURCE_NOT_FOUND']) {
+for (const token of ['tenantId', 'siteId', 'pointId', 'superRefine', 'Command timeline does not converge', 'validateCommandScope', 'RESOURCE_NOT_FOUND']) {
   assert(commandContract.includes(token), `HVAC Web Command contract invariant is missing: ${token}`);
 }
 for (const forbidden of ['principalId', 'approverRole', 'providerMethod', 'providerParams']) {

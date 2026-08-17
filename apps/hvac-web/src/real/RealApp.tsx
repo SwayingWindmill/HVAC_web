@@ -223,6 +223,10 @@ export default function RealApp({ config }: RealAppProps) {
     [runtime],
   );
   const protectedRequestToken = useCallback(() => runtime.protectedRequestToken(), [runtime]);
+  const publishRealtimeStatus = useCallback(
+    (update: Parameters<typeof runtime.publishRealtimeStatus>[0]) => runtime.publishRealtimeStatus(update),
+    [runtime],
+  );
 
   const platformAvailability = snapshot.platform?.state ?? 'checking';
   const platformNavigation = snapshot.principal
@@ -309,6 +313,7 @@ export default function RealApp({ config }: RealAppProps) {
           registerProtectedResource={registerProtectedResource}
           protectedRequestToken={protectedRequestToken}
           registerUnsavedDraft={registerUnsavedDraft}
+          publishRealtimeStatus={publishRealtimeStatus}
         />
       ) : null}
       {snapshot.state === 'READY' && !showSignInPage && platformDecision ? (

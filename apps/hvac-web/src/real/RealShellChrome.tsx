@@ -20,7 +20,7 @@ import {
 import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
 import { Badge, Button, Divider, Grid, Popover, Select, Space, Tooltip } from 'antd';
 import { FocusHeading } from './FocusHeading';
-import { createIdleRealtimeStatus, realtimeStatusLabel } from './realtime-status';
+import { createIdleRealtimeStatus, realtimeStatusLabel, realtimeStatusPresentation } from './realtime-status';
 import { RealRuntimeFacts } from './RealRuntimeFacts';
 import { useRealTheme } from './RealTheme';
 import type { RealNavigationItem } from './route-policy';
@@ -37,12 +37,15 @@ const NAVIGATION_ICONS: Record<string, ReactNode> = {
   'site-assets': <ApartmentOutlined />,
 
   'site-energy': <FundOutlined />,
+  'site-forecast': <FundOutlined />,
+  'site-control': <ControlOutlined />,
   'site-optimize': <ThunderboltOutlined />,
   'site-fdd': <BugOutlined />,
   'site-alarms': <AlertOutlined />,
   'site-work-orders': <ControlOutlined />,
   'site-ai': <RobotOutlined />,
   'site-cost': <DollarOutlined />,
+  'site-settlement': <DollarOutlined />,
   'site-bigscreen': <DesktopOutlined />,
   system: <SettingOutlined />,
   alarms: <AlertOutlined />,
@@ -54,12 +57,12 @@ const NAVIGATION_GROUPS = [
   {
     key: 'operations',
     label: '运营管理',
-    ids: ['site-assets', 'site-fdd', 'site-alarms', 'site-work-orders', 'site-optimize', 'alarms', 'work-orders'],
+    ids: ['site-assets', 'site-fdd', 'site-alarms', 'site-work-orders', 'site-control', 'site-optimize', 'alarms', 'work-orders'],
   },
   {
     key: 'analytics',
     label: '分析中心',
-    ids: ['site-energy', 'site-cost', 'site-ai', 'ai-investigation'],
+    ids: ['site-energy', 'site-forecast', 'site-cost', 'site-settlement', 'site-ai', 'ai-investigation'],
   },
   {
     key: 'presentation',
@@ -235,8 +238,10 @@ export function RealShellChrome({
     : undefined;
   const realtime = snapshot.realtime ?? createIdleRealtimeStatus();
   const realtimeLabel = realtimeStatusLabel(realtime);
+  const realtimePresentation = realtimeStatusPresentation(realtime);
   const transitionBlocksContent = transition?.status === 'purging' || transition?.status === 'failed';
   const siteLabel = activeSite?.displayName ?? (transitionBlocksContent ? 'No active Site' : 'Platform scope');
+  const tenantId = principal.context.tenantId;
   const screens = useBreakpoint();
   const compact = !screens.xl;
   const narrow = !screens.xl;
@@ -272,6 +277,7 @@ export function RealShellChrome({
   );
   const siteControl = (
     <Space size={10}>
+      <span data-testid="real-shell-tenant" aria-label="当前 Tenant" className="real-shell-scope-tag">Tenant · {tenantId}</span>
       <span data-testid="real-shell-site-control">
         <Select
           aria-label="选择授权 Site"
@@ -347,7 +353,7 @@ export function RealShellChrome({
           ) : siteControl
         )}
         actionsRender={() => [
-          <Tooltip key="realtime" title={realtime.siteId ? `当前订阅：${siteLabel}` : '当前没有活动 Site 订阅'}>
+          <Tooltip key="realtime" title={`${realtimePresentation.code} · ${realtimePresentation.label}：${realtimePresentation.detail}${realtime.siteId ? ` 当前订阅：${siteLabel}` : ''}`}>
             <span
               className="real-shell-realtime"
               role="status"
@@ -359,6 +365,8 @@ export function RealShellChrome({
             >
               <ApiOutlined style={{ color: realtimeColor }} />
               <Badge status={realtimeStatus} />
+              <span data-testid="real-realtime-code">{realtimePresentation.code}</span>
+              <span>{realtimePresentation.label}</span>
               <span className="real-shell-sr-only">{realtimeLabel}</span>
             </span>
           </Tooltip>,

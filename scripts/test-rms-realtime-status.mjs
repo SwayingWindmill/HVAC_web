@@ -69,6 +69,13 @@ test('idle without an active subscription remains explicitly unscoped', () => {
   assert.equal(realtime.realtimeStatusLabel(status), 'Idle — not subscribed');
 });
 
+test('maps transport states to the four user-visible operational states', () => {
+  assert.equal(realtime.realtimeStatusPresentation(realtime.createRealtimeStatus({ state: 'live', siteId })).code, 'CONNECTED');
+  assert.equal(realtime.realtimeStatusPresentation(realtime.createRealtimeStatus({ state: 'connecting', siteId })).code, 'RECONNECTING');
+  assert.equal(realtime.realtimeStatusPresentation(realtime.createRealtimeStatus({ state: 'resync-required', siteId })).code, 'DEGRADED');
+  assert.equal(realtime.realtimeStatusPresentation(realtime.createRealtimeStatus({ state: 'unavailable', siteId })).code, 'DISCONNECTED');
+});
+
 test('rejects malformed and cross-Site realtime updates', () => {
   assert.throws(
     () => realtime.createRealtimeStatus({ state: 'live', siteId: 'not-a-site' }),

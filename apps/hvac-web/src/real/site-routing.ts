@@ -6,12 +6,15 @@ export type SiteRouteLeaf =
   | 'dashboard'
   | 'assets'
   | 'energy'
+  | 'forecast'
+  | 'control'
   | 'optimize'
   | 'fdd'
   | 'alarms'
   | 'work-orders'
   | 'ai'
   | 'cost'
+  | 'settlement'
   | 'bigscreen'
   | 'operations';
 
@@ -43,12 +46,15 @@ const SITE_ROUTE_LEAVES = new Set<SiteRouteLeaf>([
   'dashboard',
   'assets',
   'energy',
+  'forecast',
+  'control',
   'optimize',
   'fdd',
   'alarms',
   'work-orders',
   'ai',
   'cost',
+  'settlement',
   'bigscreen',
   'operations',
 ]);

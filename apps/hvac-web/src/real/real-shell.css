@@ -301,6 +301,15 @@
   color: var(--ant-color-text-secondary, #475467);
 }
 
+.real-shell-scope-tag {
+  max-width: 250px;
+  overflow: hidden;
+  color: var(--ant-color-text-secondary, #475467);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* The visible Site selector is the same Select used by the Demo header. These
    buttons remain focusable only for the certified keyboard transition path. */
 .real-site-switcher {

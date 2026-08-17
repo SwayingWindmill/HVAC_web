@@ -23,11 +23,15 @@ import {
   AlertOutlined,
   ApartmentOutlined,
   BugOutlined,
+  CalendarOutlined,
   CloudOutlined,
+  ControlOutlined,
   DollarOutlined,
   ExperimentOutlined,
   FieldTimeOutlined,
+  FileDoneOutlined,
   FundOutlined,
+  LineChartOutlined,
   NodeIndexOutlined,
   RobotOutlined,
   SafetyCertificateOutlined,
@@ -199,6 +203,86 @@ export function RealOptimizePage({ site }: RealProductPageProps) {
   );
 }
 
+export function RealForecastPage({ site }: RealProductPageProps) {
+  return (
+    <ProductBoundary site={site} testId="real-site-route-forecast">
+      <PageScaffold
+        title="预测与基线"
+        heading={<FocusHeading className="ops-page-title ant-typography"><Space><LineChartOutlined />预测与基线</Space></FocusHeading>}
+        extra={<Tag>真实预测服务待接入</Tag>}
+      >
+        <Alert
+          type="info"
+          showIcon
+          icon={<CalendarOutlined />}
+          message="Forecast Read Model 尚未接入"
+          description="Real Mode 不会用 Demo 预测替代权威结果。当前仅展示预测契约所需的事实边界，直到服务提供可追溯的版本与质量信息。"
+        />
+        <OperationsMetrics items={[
+          { label: '预测目标', value: '—', detail: '等待站点预测对象', icon: <LineChartOutlined />, tone: 'accent' },
+          { label: '预测起点', value: '—', detail: '等待 asOf 时间', icon: <CalendarOutlined /> },
+          { label: '预测窗口', value: '—', detail: '等待 forecastFor 与 horizon', icon: <FieldTimeOutlined /> },
+          { label: '模型版本', value: '—', detail: '等待 modelVersion / featureSetVersion', icon: <SafetyCertificateOutlined /> },
+        ]} />
+        <Card variant="borderless" title={<OperationsPanelHeading icon={<LineChartOutlined />} title="预测契约状态" meta="NOT_INTEGRATED" />}>
+          <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
+            <Descriptions.Item label="Target">—</Descriptions.Item>
+            <Descriptions.Item label="Origin / As Of">—</Descriptions.Item>
+            <Descriptions.Item label="Forecast For">—</Descriptions.Item>
+            <Descriptions.Item label="Horizon / Granularity">—</Descriptions.Item>
+            <Descriptions.Item label="Model Version">—</Descriptions.Item>
+            <Descriptions.Item label="Feature Set Version">—</Descriptions.Item>
+            <Descriptions.Item label="Quality / Fallback">—</Descriptions.Item>
+            <Descriptions.Item label="Site Timezone">{site.timezone}</Descriptions.Item>
+          </Descriptions>
+        </Card>
+        <Card variant="borderless" title={<OperationsPanelHeading icon={<FundOutlined />} title="预测序列" meta="0 条" />}>
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="权威 Forecast 序列尚未接入；不会显示示例预测曲线" />
+        </Card>
+      </PageScaffold>
+    </ProductBoundary>
+  );
+}
+
+export function RealControlPage({ site }: RealProductPageProps) {
+  return (
+    <ProductBoundary site={site} testId="real-site-route-control">
+      <PageScaffold
+        title="能源控制"
+        heading={<FocusHeading className="ops-page-title ant-typography"><Space><ControlOutlined />能源控制</Space></FocusHeading>}
+        extra={<Tag>受治理 Command</Tag>}
+      >
+        <Alert
+          type="info"
+          showIcon
+          message="所有控制动作先预览，再提交到 Command 治理流程"
+          description="页面不会直接调用设备或 Provider。提交前必须确认 Tenant、Site、Asset、Device Endpoint、当前反馈、请求值、允许范围、风险、安全校验和有效期；最终结果以权威反馈验证为准。"
+        />
+        <OperationsMetrics items={[
+          { label: '控制范围', value: site.displayName, detail: `Site · ${site.id}`, icon: <ApartmentOutlined />, tone: 'accent' },
+          { label: '授权主体', value: '当前 Principal', detail: '由 Session / IAM 派生' },
+          { label: '风险评估', value: '服务端计算', detail: '不由浏览器猜测', icon: <SafetyCertificateOutlined /> },
+          { label: '执行结果', value: '权威反馈验证', detail: 'SUCCEEDED 才能作为完成证据', icon: <ControlOutlined /> },
+        ]} />
+        <Card variant="borderless" title={<OperationsPanelHeading icon={<SafetyCertificateOutlined />} title="控制契约" meta="SITE SCOPED" />}>
+          <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
+            <Descriptions.Item label="Tenant">{site.tenantId}</Descriptions.Item>
+            <Descriptions.Item label="Site">{site.displayName} · {site.id}</Descriptions.Item>
+            <Descriptions.Item label="Authority">Platform Gateway / Command Service</Descriptions.Item>
+            <Descriptions.Item label="Mode">Preview → Submit → Validate → Dispatch → Verify</Descriptions.Item>
+            <Descriptions.Item label="Safety">S2 当前证据、授权、Capability、审批与服务端约束</Descriptions.Item>
+            <Descriptions.Item label="Unknown outcome">不可自动重发，先核对设备状态和审计证据</Descriptions.Item>
+          </Descriptions>
+        </Card>
+        <Card variant="borderless" title={<OperationsPanelHeading icon={<ApartmentOutlined />} title="选择受控 Asset" meta="从权威资产模型进入" />}>
+          <Typography.Paragraph type="secondary">真实设备功能和当前反馈只在 Asset 详情中展示。当前 Command 列表 Read Model 尚未接入，因此不会填充演示命令或虚构执行状态。</Typography.Paragraph>
+          <Button type="primary" href={siteRoute(site, 'assets')}>前往设备与建筑</Button>
+        </Card>
+      </PageScaffold>
+    </ProductBoundary>
+  );
+}
+
 export function RealCostPage({ site }: RealProductPageProps) {
   return (
     <ProductBoundary site={site} testId="real-site-route-cost">
@@ -267,6 +351,51 @@ export function RealCostPage({ site }: RealProductPageProps) {
         <Card variant="borderless" title={<OperationsPanelHeading icon={<ThunderboltOutlined />} title="已批准节能建议" meta="0 条" />}>
           <EmptyProductTable columns={COST_COLUMNS} scroll={900} description="没有可验证的已批准节能建议" />
         </Card>
+      </PageScaffold>
+    </ProductBoundary>
+  );
+}
+
+export function RealSettlementPage({ site }: RealProductPageProps) {
+  return (
+    <ProductBoundary site={site} testId="real-site-route-settlement">
+      <PageScaffold
+        title="结算与对账"
+        heading={<FocusHeading className="ops-page-title ant-typography"><Space><FileDoneOutlined />结算与对账</Space></FocusHeading>}
+        extra={<Tag>真实结算服务待接入</Tag>}
+      >
+        <Alert
+          type="info"
+          showIcon
+          message="Settlement Read Model 尚未接入"
+          description="结算周期、锁定状态、修订版本、来源读数、计费规则与对账差异必须由权威服务提供。当前不计算金额、不伪造锁定或修订结果。"
+        />
+        <OperationsMetrics items={[
+          { label: '结算周期', value: '—', detail: '等待周期与 Site 时区', icon: <CalendarOutlined />, tone: 'accent' },
+          { label: '锁定状态', value: '—', detail: 'OPEN / LOCKED / REVISED 尚未确认', icon: <SafetyCertificateOutlined /> },
+          { label: '修订版本', value: '—', detail: '等待 revision 与 lineage', icon: <FileDoneOutlined /> },
+          { label: '对账差异', value: '—', detail: '等待 reconciliation 结果', icon: <DollarOutlined /> },
+        ]} />
+        <Card variant="borderless" title={<OperationsPanelHeading icon={<FileDoneOutlined />} title="结算事实边界" meta="NOT_INTEGRATED" />}>
+          <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
+            <Descriptions.Item label="Period">—</Descriptions.Item>
+            <Descriptions.Item label="Status">—</Descriptions.Item>
+            <Descriptions.Item label="Revision">—</Descriptions.Item>
+            <Descriptions.Item label="Source Reading Lineage">—</Descriptions.Item>
+            <Descriptions.Item label="Tariff Version">—</Descriptions.Item>
+            <Descriptions.Item label="Reconciliation">—</Descriptions.Item>
+            <Descriptions.Item label="Correction History">—</Descriptions.Item>
+            <Descriptions.Item label="Site Timezone">{site.timezone}</Descriptions.Item>
+          </Descriptions>
+        </Card>
+        <OperationsInsightBand
+          title="当前不可计算"
+          icon={<SafetyCertificateOutlined />}
+          items={[
+            { text: '空值表示结算能力尚未接入，不表示费用为 0。', tone: 'info' },
+            { text: '只有已锁定周期才能作为成本、绩效和收益归因的稳定输入。', tone: 'positive' },
+          ]}
+        />
       </PageScaffold>
     </ProductBoundary>
   );

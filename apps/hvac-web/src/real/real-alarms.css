@@ -219,6 +219,58 @@
   gap: 8px;
 }
 
+.real-alarms__ack-dialog-backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.real-alarms__ack-dialog {
+  width: min(620px, 100%);
+  max-height: min(760px, calc(100dvh - 40px));
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid var(--ops-border, rgba(15, 23, 42, 0.12));
+  border-radius: 12px;
+  background: var(--ant-color-bg-container, #fff);
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.22);
+}
+
+.real-alarms__ack-dialog h4,
+.real-alarms__ack-dialog p {
+  margin: 0;
+}
+
+.real-alarms__ack-summary {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--ops-surface-subtle, rgba(15, 23, 42, 0.035));
+}
+
+.real-alarms__ack-summary div {
+  display: grid;
+  gap: 3px;
+}
+
+.real-alarms__ack-summary dt {
+  color: var(--ops-text-secondary, #64748b);
+  font-size: 12px;
+}
+
+.real-alarms__ack-summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 900px) {
   .real-alarms__facts {
     grid-template-columns: 1fr;

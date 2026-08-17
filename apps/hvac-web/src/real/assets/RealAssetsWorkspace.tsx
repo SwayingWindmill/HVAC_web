@@ -27,6 +27,7 @@ import { S2TelemetryClientError } from '../../api/generated/s2Telemetry.gen';
 import { presentRegistryError } from '../../api/registry';
 import { FocusHeading } from '../FocusHeading';
 import type { ProtectedScopeRequestToken, ProtectedScopeResource } from '../protected-scope';
+import type { RealtimeStatusUpdate } from '../realtime-status';
 import { REAL_ASSETS_CATALOG_REVISION } from './catalog';
 import { AssetDetailDrawer } from './EquipmentDetailDrawer';
 import { RealAssetsLoadingSurface } from './RealAssetsLoadingSurface';
@@ -74,6 +75,7 @@ interface RealAssetsWorkspaceProps {
   protectedGeneration: number;
   protectedRequestToken: () => ProtectedScopeRequestToken;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  publishRealtimeStatus: (update: RealtimeStatusUpdate) => void;
   platformClient?: Pick<PlatformGatewayClient, 'getSiteAssetModel'>;
   telemetryRuntime?: RealAssetsTelemetryRuntime;
 }
@@ -238,6 +240,7 @@ export function RealAssetsWorkspace({
   protectedGeneration,
   protectedRequestToken,
   registerProtectedResource,
+  publishRealtimeStatus,
   platformClient: providedPlatformClient,
   telemetryRuntime: providedTelemetryRuntime,
 }: RealAssetsWorkspaceProps) {
@@ -1112,6 +1115,9 @@ export function RealAssetsWorkspace({
         telemetryClient={telemetryRuntime.client}
         protectedGeneration={protectedGeneration}
         protectedRequestToken={protectedRequestToken}
+        registerProtectedResource={registerProtectedResource}
+        telemetryRuntime={telemetryRuntime}
+        publishRealtimeStatus={publishRealtimeStatus}
         routePolicyRevision={telemetryPolicyRevision}
         refreshing={registry.isFetching || current.isFetching}
         onClose={closeAssetDetail}

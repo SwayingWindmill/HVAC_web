@@ -34,6 +34,7 @@ interface LifecycleVariables {
 
 interface LifecycleDraft {
   reason: string;
+  ackComment: string;
   assigneeId: string;
   suppressionHours: number;
 }
@@ -74,17 +75,22 @@ export default function LocalAlarmLifecycle({
 }: LocalAlarmLifecycleProps) {
   const queryClient = useQueryClient();
   const [reason, setReason] = useState('');
+  const [ackComment, setAckComment] = useState('');
+  const [ackDialogOpen, setAckDialogOpen] = useState(false);
   const [assigneeId, setAssigneeId] = useState('');
   const [suppressionHours, setSuppressionHours] = useState(DEFAULT_SUPPRESSION_HOURS);
-  const draftRef = useRef<LifecycleDraft>({ reason: '', assigneeId: '', suppressionHours: DEFAULT_SUPPRESSION_HOURS });
+  const draftRef = useRef<LifecycleDraft>({ reason: '', ackComment: '', assigneeId: '', suppressionHours: DEFAULT_SUPPRESSION_HOURS });
   const idempotencyRef = useRef<{ fingerprint: string; key: string; suppressedUntil?: string } | null>(null);
   const mutationControllerRef = useRef<AbortController | undefined>(undefined);
+  const ackConfirmRef = useRef<HTMLButtonElement>(null);
 
   const resetDraft = useCallback(() => {
     setReason('');
+    setAckComment('');
+    setAckDialogOpen(false);
     setAssigneeId('');
     setSuppressionHours(DEFAULT_SUPPRESSION_HOURS);
-    draftRef.current = { reason: '', assigneeId: '', suppressionHours: DEFAULT_SUPPRESSION_HOURS };
+    draftRef.current = { reason: '', ackComment: '', assigneeId: '', suppressionHours: DEFAULT_SUPPRESSION_HOURS };
     idempotencyRef.current = null;
   }, []);
 
@@ -92,6 +98,7 @@ export default function LocalAlarmLifecycle({
     id: `real-alarm-lifecycle-draft:${site.id}`,
     label: `Alarm lifecycle draft for ${site.displayName}`,
     isDirty: () => draftRef.current.reason.trim().length > 0
+      || draftRef.current.ackComment.trim().length > 0
       || draftRef.current.assigneeId.trim().length > 0
       || draftRef.current.suppressionHours !== DEFAULT_SUPPRESSION_HOURS,
   }), [registerUnsavedDraft, site.displayName, site.id]);
@@ -101,6 +108,10 @@ export default function LocalAlarmLifecycle({
     mutationControllerRef.current = undefined;
     resetDraft();
   }, [alarm.alarmId, principal.authorization.policyRevision, principal.context.policyRevision, principal.session.id, resetDraft, site.id]);
+
+  useEffect(() => {
+    if (ackDialogOpen) ackConfirmRef.current?.focus({ preventScroll: true });
+  }, [ackDialogOpen]);
 
   const stableIdempotencyRequest = useCallback((
     fingerprint: string,
@@ -158,10 +169,10 @@ export default function LocalAlarmLifecycle({
     },
   });
 
-  const submitLifecycle = useCallback((operation: LifecycleOperation) => {
-    const normalizedReason = reason.trim();
+  const submitLifecycle = useCallback((operation: LifecycleOperation, reasonOverride = reason) => {
+    const normalizedReason = reasonOverride.trim();
     const normalizedAssignee = assigneeId.trim();
-    if (!normalizedReason) return;
+    if (operation !== 'ACKNOWLEDGE' && !normalizedReason) return;
     const fingerprint = JSON.stringify({
       operation,
       alarmId: alarm.alarmId,
@@ -203,6 +214,44 @@ export default function LocalAlarmLifecycle({
           }}
         />
       </label>
+      {ackDialogOpen ? (
+        <div className="real-alarms__ack-dialog-backdrop">
+          <section
+            className="real-alarms__ack-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="real-alarm-ack-title"
+            data-testid="real-alarm-ack-dialog"
+          >
+            <h4 id="real-alarm-ack-title">确认告警</h4>
+            <p>确认动作只改变 Alarm 生命周期，不代表故障已修复；当前状态、来源和触发摘要会一并保留在权威时间线。</p>
+            <dl className="real-alarms__ack-summary">
+              <div><dt>告警</dt><dd>{alarm.title}</dd></div>
+              <div><dt>当前状态</dt><dd>{alarm.status}</dd></div>
+              <div><dt>来源</dt><dd>{alarm.sourceType} · {alarm.sourceReference}</dd></div>
+              <div><dt>触发摘要</dt><dd>{alarm.summary}</dd></div>
+            </dl>
+            <label>
+              确认备注（可选）
+              <textarea
+                data-testid="real-alarm-ack-comment"
+                maxLength={1000}
+                value={ackComment}
+                onChange={(event) => {
+                  const value = event.currentTarget.value;
+                  setAckComment(value);
+                  draftRef.current = { ...draftRef.current, ackComment: value };
+                  idempotencyRef.current = null;
+                }}
+              />
+            </label>
+            <div className="real-alarms__actions">
+              <button type="button" onClick={() => setAckDialogOpen(false)} disabled={lifecycleMutation.isPending}>取消</button>
+              <button ref={ackConfirmRef} type="button" onClick={() => submitLifecycle('ACKNOWLEDGE', ackComment)} disabled={lifecycleMutation.isPending}>确认告警</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
       {alarm.status !== 'CLOSED' ? (
         <label>
           指派对象
@@ -241,7 +290,7 @@ export default function LocalAlarmLifecycle({
         </label>
       ) : null}
       <div className="real-alarms__actions">
-        {projection.canAcknowledge ? <button data-testid="real-alarm-acknowledge" type="button" disabled={mutationDisabled} onClick={() => submitLifecycle('ACKNOWLEDGE')}>确认</button> : null}
+        {projection.canAcknowledge ? <button data-testid="real-alarm-acknowledge" type="button" disabled={lifecycleMutation.isPending} onClick={() => { setAckComment(''); draftRef.current = { ...draftRef.current, ackComment: '' }; setAckDialogOpen(true); }}>确认告警</button> : null}
         {projection.canAssign ? <button data-testid="real-alarm-assign" type="button" disabled={mutationDisabled || !assigneeId.trim()} onClick={() => submitLifecycle('ASSIGN')}>指派</button> : null}
         {projection.canUnassign ? <button data-testid="real-alarm-unassign" type="button" disabled={mutationDisabled} onClick={() => submitLifecycle('UNASSIGN')}>取消指派</button> : null}
         {projection.canSuppress ? <button data-testid="real-alarm-suppress" type="button" disabled={mutationDisabled} onClick={() => submitLifecycle('SUPPRESS')}>抑制</button> : null}

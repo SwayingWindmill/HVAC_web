@@ -16,8 +16,14 @@ import type { CurrentPrincipalResponse, Site, TelemetryPoint } from '@/api/gener
 import type { S2TelemetryClient } from '@/api/generated/s2Telemetry.gen';
 import { getWorkOrder, transitionWorkOrder, type WorkOrderRequestOptions } from '@/api/work-orders';
 import { formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
-import { commandStatusLabel, isTerminalCommandStatus } from '../real-commands-projection';
+import { commandStatusLabel, isTerminalCommandStatus, projectRealCommand } from '../real-commands-projection';
 import type { ProtectedScopeRequestToken } from '../protected-scope';
+import type { ProtectedScopeResource } from '../protected-scope';
+import type { RealtimeStatusUpdate, RealtimeSubscriptionState } from '../realtime-status';
+import { DeviceRealtimeStatus } from './DeviceRealtimeStatus';
+import { projectRealAssetsRealtimeRow } from './realtime';
+import type { RealAssetsTelemetryRuntime } from './telemetry-runtime';
+import { useRealAssetsDeviceRealtime, type RealAssetsRealtimeResult } from './useDeviceRealtime';
 import type { RealAssetsAssetRow, RealAssetsTelemetryPointRow } from './model';
 
 const DeviceHistoryTrends = lazy(async () => {
@@ -32,6 +38,9 @@ interface AssetDetailDrawerProps {
   readonly telemetryClient: S2TelemetryClient;
   readonly protectedGeneration: number;
   readonly protectedRequestToken: () => ProtectedScopeRequestToken;
+  readonly registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
+  readonly telemetryRuntime: RealAssetsTelemetryRuntime;
+  readonly publishRealtimeStatus: (update: RealtimeStatusUpdate) => void;
   readonly routePolicyRevision: string | null;
   readonly refreshing: boolean;
   readonly onClose: () => void;
@@ -122,6 +131,17 @@ function feedbackValue(control: ControlDefinition, asset: RealAssetsAssetRow): s
   return `${feedback.current.displayValue}${feedback.point.unit ? ` ${formatTelemetryUnit(feedback.point.unit)}` : ''}`;
 }
 
+function shellRealtimeState(realtime: RealAssetsRealtimeResult): RealtimeSubscriptionState {
+  if (realtime.state?.status === 'live') return 'live';
+  if (realtime.state?.status === 'snapshot') {
+    return realtime.state.reason === 'reconnecting' ? 'reconnecting' : 'resync-required';
+  }
+  if (realtime.state?.status === 'unavailable') return 'unavailable';
+  if (realtime.phase === 'opening') return 'connecting';
+  if (realtime.phase === 'error') return 'unavailable';
+  return 'idle';
+}
+
 function AssetControlCard({ site, principal, asset, control }: {
   site: Readonly<Site>;
   principal: CurrentPrincipalResponse;
@@ -143,6 +163,7 @@ function AssetControlCard({ site, principal, asset, control }: {
     : 0;
   const [value, setValue] = useState(defaultValue);
   const [commandId, setCommandId] = useState('');
+  const [previewOpen, setPreviewOpen] = useState(false);
   const idempotencyKeyRef = useRef(crypto.randomUUID());
 
   useEffect(() => {
@@ -200,19 +221,16 @@ function AssetControlCard({ site, principal, asset, control }: {
     : control.capability === 'STOP' ? '停止'
       : control.capability === 'RESET_FAULT' ? '复位故障'
         : '执行设备功能';
-  const submitControl = () => {
-    if (control.capability === 'STOP') {
-      Modal.confirm({
-        title: `确认${actionLabel}${asset.asset.displayName}？`,
-        content: '系统将创建受治理的 Command，并以权威反馈状态验证执行结果。',
-        okText: '确认停止',
-        cancelText: '取消',
-        onOk: () => submitMutation.mutateAsync(),
-      });
-      return;
+  const submitControl = () => setPreviewOpen(true);
+  const submitFromPreview = async () => {
+    try {
+      await submitMutation.mutateAsync();
+      setPreviewOpen(false);
+    } catch {
+      // The mutation error is rendered in the card and the preview remains open for review.
     }
-    submitMutation.mutate();
   };
+  const commandProjection = command ? projectRealCommand(command) : null;
   return (
     <Card size="small" title={control.point.displayName} data-testid="asset-control-capability">
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -248,6 +266,35 @@ function AssetControlCard({ site, principal, asset, control }: {
             {control.kind === 'ACTION' ? actionLabel : '下发设定'}
           </Button>
         </Space>
+        <Modal
+          open={previewOpen}
+          title={`提交前预览 · ${actionLabel}${asset.asset.displayName}`}
+          okText="提交命令"
+          cancelText="取消"
+          confirmLoading={submitMutation.isPending}
+          onCancel={() => setPreviewOpen(false)}
+          onOk={() => { void submitFromPreview(); }}
+          destroyOnHidden
+        >
+          <Alert
+            type={control.capability === 'STOP' ? 'warning' : 'info'}
+            showIcon
+            message="提交后先进入 Command 治理流程"
+            description="提交成功只代表 Intent 已被接受；只有权威反馈完成验证后才显示已验证成功。"
+          />
+          <Descriptions size="small" column={1} bordered style={{ marginTop: 16 }}>
+            <Descriptions.Item label="Tenant">{principal.context.tenantId}</Descriptions.Item>
+            <Descriptions.Item label="Site">{site.displayName} · {site.id}</Descriptions.Item>
+            <Descriptions.Item label="Asset">{asset.asset.displayName} · {asset.asset.id}</Descriptions.Item>
+            <Descriptions.Item label="Device Endpoint"><Typography.Text copyable>{control.point.reportingDeviceId}</Typography.Text></Descriptions.Item>
+            <Descriptions.Item label="当前反馈">{feedbackValue(control, asset)}</Descriptions.Item>
+            <Descriptions.Item label="请求值">{control.kind === 'NUMBER' ? `${value}${unit ? ` ${unit}` : ''}` : actionLabel}</Descriptions.Item>
+            <Descriptions.Item label="允许范围">{control.kind === 'NUMBER' ? `${control.minimum}–${control.maximum}${unit ? ` ${unit}` : ''}` : '无参数动作'}</Descriptions.Item>
+            <Descriptions.Item label="风险">由服务端根据 Capability 与当前证据计算</Descriptions.Item>
+            <Descriptions.Item label="安全校验">由 Command Service 校验 Presence、Telemetry、授权、Capability 与审批条件</Descriptions.Item>
+            <Descriptions.Item label="有效期">由服务端 Command 生命周期确定</Descriptions.Item>
+          </Descriptions>
+        </Modal>
         {submitMutation.isError ? <Alert type="error" showIcon message="控制下发失败" description={commandErrorMessage(submitMutation.error)} /> : null}
         {commandQuery.isError ? <Alert type="error" showIcon message="控制状态不可用" description={commandErrorMessage(commandQuery.error)} /> : null}
         {command ? (
@@ -260,6 +307,8 @@ function AssetControlCard({ site, principal, asset, control }: {
                 <Button icon={<CheckCircleOutlined />} loading={approveMutation.isPending} onClick={() => approveMutation.mutate(command)}>批准</Button>
               ) : null}
             </Space>
+            {commandProjection?.outcomeWarning ? <Alert type="warning" showIcon message="UNKNOWN · 设备结果待确认" description={commandProjection.outcomeWarning} /> : null}
+            {command.status === 'SUCCEEDED' ? <Alert type="success" showIcon message="VERIFIED · 已验证成功" description="Command 已通过权威反馈状态验证；该结果可作为后续工单完成证据。" /> : null}
             <Timeline
               items={[...command.transitions].reverse().map((transition) => ({
                 children: <Space direction="vertical" size={0}><Typography.Text strong>{commandStatusLabel(transition.toStatus)}</Typography.Text><Typography.Text>{transition.reason}</Typography.Text><Typography.Text type="secondary">v{transition.version} · {formatInstant(transition.occurredAt, site.timezone)}</Typography.Text></Space>,
@@ -289,6 +338,9 @@ export function AssetDetailDrawer({
   telemetryClient,
   protectedGeneration,
   protectedRequestToken,
+  registerProtectedResource,
+  telemetryRuntime,
+  publishRealtimeStatus,
   routePolicyRevision,
   refreshing,
   onClose,
@@ -302,6 +354,24 @@ export function AssetDetailDrawer({
   }, [defaultHistoryDeviceId, row?.asset.id]);
   const historyDevice = row?.devices.find((item) => item.device.id === historyDeviceId) ?? row?.devices[0] ?? null;
   const historyAllowed = principal.authorization.capabilities.includes('telemetry.history.read');
+  const realtime = useRealAssetsDeviceRealtime({
+    row: historyDevice,
+    allowed: principal.authorization.capabilities.includes('telemetry.subscribe'),
+    protectedGeneration,
+    authorizationEpoch: principal.authorization.policyRevision,
+    runtime: telemetryRuntime,
+    protectedRequestToken,
+    registerProtectedResource,
+  });
+  const realtimeProjection = useMemo(
+    () => historyDevice ? projectRealAssetsRealtimeRow(historyDevice, realtime.state) : null,
+    [historyDevice, realtime.state],
+  );
+  const shellState = shellRealtimeState(realtime);
+  useEffect(() => {
+    publishRealtimeStatus({ state: shellState, siteId: site.id });
+    return () => publishRealtimeStatus({ state: 'idle', siteId: site.id });
+  }, [publishRealtimeStatus, shellState, site.id]);
   const sessionCapability = Reflect.get(principal.session, ['csrf', 'Token'].join('')) as string;
   return (
     <Drawer
@@ -322,6 +392,8 @@ export function AssetDetailDrawer({
             <Descriptions.Item label="区域">{row.space.state === 'bound' ? row.space.space.displayName : '未绑定'}</Descriptions.Item>
             <Descriptions.Item label="状态"><Tag>{row.operatingState}</Tag></Descriptions.Item>
           </Descriptions>
+
+          <DeviceRealtimeStatus realtime={realtime} projection={realtimeProjection} site={site} />
 
           <Typography.Title level={5}>设备功能</Typography.Title>
           {controls.length > 0 ? controls.map((control) => <AssetControlCard key={control.point.id} site={site} principal={principal} asset={row} control={control} />) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该 Asset 没有登记可控功能" />}
