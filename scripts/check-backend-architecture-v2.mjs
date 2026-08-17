@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 const root = resolve(process.cwd());
 const baseline = JSON.parse(await readFile(resolve(root, 'contracts/architecture/backend-architecture.v2.json'), 'utf8'));
 const apiRuntimeConvergence = JSON.parse(await readFile(resolve(root, 'contracts/architecture/se-api-001-v1.2-runtime-convergence.json'), 'utf8'));
+const edgeControlPlane = JSON.parse(await readFile(resolve(root, 'contracts/architecture/edge-control-plane.v1.json'), 'utf8'));
 
 function invariant(condition, message) {
   if (!condition) throw new Error(`Backend Architecture V2.1.2 check failed: ${message}`);
@@ -31,12 +32,21 @@ invariant(baseline.document?.version === '2.1.2', 'document version must be V2.1
 invariant(baseline.document?.status === 'CURRENT / FROZEN CANDIDATE', 'document status drifted');
 invariant(baseline.authorityOverrides?.tenantModel?.includes('Organization') && baseline.authorityOverrides?.tenantModel?.includes('Tenant'), 'Organization -> Tenant adjudication is missing');
 invariant(baseline.authorityOverrides?.identityProvider?.includes('identity-service') && baseline.authorityOverrides?.identityProvider?.includes('IAM remains'), 'self-hosted Identity Provider / IAM boundary adjudication is missing');
+invariant(baseline.authorityOverrides?.edgeControlPlane?.includes('edge-control-plane.v1.json') && baseline.authorityOverrides?.edgeControlPlane?.includes('Process Image'), 'HVAC Edge Control Plane adjudication is missing from V2.1.2 authority overrides');
+invariant(edgeControlPlane.schemaVersion === 1 && edgeControlPlane.status === 'CURRENT TARGET' && edgeControlPlane.decisions?.length === 50, 'Edge Control Plane machine contract is missing or stale');
+invariant(edgeControlPlane.targetEdgeRuntime?.canonicalCloudDataPoint === 'Point' && edgeControlPlane.targetEdgeRuntime?.canonicalEdgeRuntimeDataObject === 'Channel', 'Point/Channel authority boundary drifted');
+invariant(edgeControlPlane.targetEdgeRuntime?.cloudCommandSemantics?.includes('intent'), 'Cloud Command must be an Edge intent, not direct actuator authority');
+invariant(edgeControlPlane.conformance?.current === 'PARTIAL', 'Edge Control Plane must remain PARTIAL until the Edge foundation is implemented');
 invariant(baseline.serviceModel?.logicalDomainEqualsDeployableService === false, 'Logical Domain must not equal Deployable Service');
 invariant(baseline.serviceModel?.servicePerTableAllowed === false, 'service-per-table must remain forbidden');
 invariant(baseline.serviceModel?.kafkaRequiredInPhase1 === false, 'Kafka must remain optional in Phase 1');
 invariant(JSON.stringify(baseline.logicalDomains.map(({ domain }) => domain)) === JSON.stringify(expectedDomains), '19-domain inventory drifted');
 invariant(baseline.logicalDomains.every(({ alignment }) => alignment === 'ALIGNED' || alignment === 'PARTIAL'), 'logical domain alignment contains an invalid status');
+const domainByName = new Map(baseline.logicalDomains.map((domain) => [domain.domain, domain]));
+invariant(domainByName.get('IoT Runtime')?.alignment === 'PARTIAL', 'IoT Runtime must remain PARTIAL until the HVAC Edge Control Plane foundation is implemented');
+invariant(domainByName.get('Control')?.alignment === 'PARTIAL', 'Control must remain PARTIAL until leased intents and Edge arbitration are implemented');
 invariant(baseline.conformance.length > 0 && baseline.conformance.every(({ status }) => allowedStatuses.has(status)), 'conformance status must be PASS/PARTIAL/MISSING');
+invariant(baseline.conformance.some(({ id, status }) => id === 'EDGE_CONTROL_PLANE_TARGET' && status === 'PARTIAL'), 'EDGE_CONTROL_PLANE_TARGET conformance item is missing');
 invariant(baseline.acceptanceEligible === false, 'architecture checklist must not become a release/acceptance gate');
 
 for (const domain of baseline.logicalDomains) {

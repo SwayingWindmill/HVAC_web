@@ -121,7 +121,31 @@
       "requirement": "Cloud 故障时 Edge 继续 Collect/Store，恢复后 Replay",
       "status": "KEEP",
       "current": "Broker failure + process restart + queue replay + sequence persistence 已动态通过",
-      "action": "保持为 Phase 1 hard evidence"
+      "action": "保留现有 Store & Forward 基础，并纳入新的 Edge Timedata / resend priority 模型"
+    },
+    {
+      "id": "EDGE-CONTROL-PLANE-001",
+      "area": "edge",
+      "requirement": "生产可控 HVAC 必须具备独立 HVAC Edge Control Plane，而不是只提供 MQTT publisher/command executor",
+      "status": "MISSING",
+      "current": "EG8200 已具备采集、MQTT、持久队列、命令执行和部分安全边界，但缺少完整本地 EMS runtime",
+      "action": "按 contracts/architecture/edge-control-plane.v1.json P1 实现 Channel/Process Image/Cycle/Controller/Scheduler/Arbiter"
+    },
+    {
+      "id": "EDGE-CAPABILITY-001",
+      "area": "edge",
+      "requirement": "Controller 面向 Capability Profile，厂家/型号差异隔离在 Device Driver，协议连接隔离在 Protocol Bridge",
+      "status": "MISSING",
+      "current": "Point/COMMAND/FEEDBACK 已建模，但尚无正式 Capability Profile、Device Driver、Protocol Bridge runtime contract",
+      "action": "先冻结 VARIABLE_SPEED_PUMP/CHILLER/COOLING_TOWER/ELECTRICITY_METER/WEATHER_STATION 和 Modbus TCP/RTU/MQTT Bridge contract"
+    },
+    {
+      "id": "EDGE-TIMEDATA-001",
+      "area": "edge",
+      "requirement": "Edge 维护本地 latest/history、publication/aggregation/resend priority 与恢复 cursor",
+      "status": "MISSING",
+      "current": "当前只有 persistent publish queue 和 replay，尚未形成完整 Edge Timedata",
+      "action": "将现有 queue 升级为 Edge Timedata + priority resend，保留 MQTT TLS 为 Cloud transport"
     },
     {
       "id": "POSTGRES-001",

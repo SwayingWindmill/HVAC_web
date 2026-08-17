@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "name": "HVAC Edge Control Plane architecture adjudication",
+  "status": "CURRENT TARGET",
+  "authority": {
+    "project": "User adjudication over SE-ARCH-004 V2.1.2 and SE-ARCH-DEPLOY-001 V1.0 CURRENT",
+    "referenceImplementation": "OpenEMS/openems",
+    "principle": "No architecture wins by incumbency. For each concern, adopt the design that is simpler, safer, more predictable and more maintainable for commercial HVAC. OPENEMS means adopt the OpenEMS architectural semantics, not necessarily its Java/OSGi source code."
+  },
+  "sources": [
+    "https://openems.github.io/openems.io/openems/latest/edge/architecture.html",
+    "https://openems.github.io/openems.io/openems/latest/edge/configuration.html",
+    "https://openems.github.io/openems.io/openems/latest/edge/implement.html",
+    "https://openems.github.io/openems.io/openems/latest/edge/controller.d/io.openems.edge.controller.api.backend.html",
+    "https://openems.github.io/openems.io/openems/latest/simulation/realtime.html",
+    "https://openems.github.io/openems.io/openems/latest/backend/architecture.html",
+    "https://openems.github.io/openems.io/openems/latest/edge/controller.d/io.openems.edge.controller.evse.html",
+    "https://github.com/OpenEMS/openems"
+  ],
+  "verdictLegend": {
+    "OPENEMS": "OpenEMS design is superior for this concern; adopt its architectural semantics and replace conflicting HVAC design.",
+    "HVAC": "Current HVAC design is superior for this concern; retain it as the target.",
+    "MERGE": "Neither side is sufficient alone; combine the stronger parts into one target design.",
+    "REJECT": "Do not make this implementation choice part of the target architecture."
+  },
+  "targetEdgeRuntime": {
+    "name": "HVAC Edge Control Plane",
+    "hardRealtime": false,
+    "hardRealtimeOwner": "PLC/device protection/safety hardware",
+    "defaultControlCycle": "1s",
+    "cloudCommandSemantics": "durable governed intent, not direct actuator ownership",
+    "canonicalCloudDataPoint": "Point",
+    "canonicalEdgeRuntimeDataObject": "Channel",
+    "edgeCloudTransport": "MQTT over TLS",
+    "requiredModules": [
+      "Edge Component Registry",
+      "Capability Profile Registry",
+      "Channel Runtime",
+      "Process Image",
+      "Cycle",
+      "Controller Runtime",
+      "Scheduler / Control Arbiter",
+      "Local Safety / Interlock Controllers",
+      "Device Drivers",
+      "Protocol Bridges",
+      "Edge Manifest",
+      "Edge Timedata",
+      "Store and Forward / Replay"
+    ]
+  },
+  "decisions": [
+    {"id":"EDGE-001","concern":"On-site autonomous control ownership","verdict":"OPENEMS","target":"Edge owns fast local closed-loop control; Cloud owns policy, governance and long-horizon intent.","implementation":"MISSING","phase":"P1"},
+    {"id":"EDGE-002","concern":"Cloud failure isolation","verdict":"MERGE","target":"Keep current Cloud/Edge isolation and extend it so local controllers, schedules and safety continue without Cloud.","implementation":"PARTIAL","phase":"P1"},
+    {"id":"EDGE-003","concern":"Hard real-time safety boundary","verdict":"OPENEMS","target":"Explicitly prohibit soft-real-time Edge software from replacing PLC, fire, trip or equipment protection logic.","implementation":"MISSING","phase":"P1"},
+    {"id":"EDGE-004","concern":"Input-Process-Output control cycle","verdict":"OPENEMS","target":"Adopt an explicit Input -> Process -> Output Edge cycle.","implementation":"MISSING","phase":"P1"},
+    {"id":"EDGE-005","concern":"Immutable Process Image per cycle","verdict":"OPENEMS","target":"All controllers in one cycle read the same immutable process image.","implementation":"MISSING","phase":"P1"},
+    {"id":"EDGE-006","concern":"Channel value/nextValue double buffer","verdict":"OPENEMS","target":"Asynchronous device reads update nextValue; cycle boundary promotes nextValue to value.","implementation":"MISSING","phase":"P1"},
+    {"id":"EDGE-007","concern":"Asynchronous I/O synchronization with cycle","verdict":"OPENEMS","target":"Protocol I/O must not block controller execution and must synchronize through cycle events/boundaries.","implementation":"MISSING","phase":"P1"},
+    {"id":"EDGE-008","concern":"Controller contract","verdict":"OPENEMS","target":"Introduce a reusable Edge Controller interface executed every cycle with bounded runtime and explicit failure state.","implementation":"MISSING","phase":"P1"},
+    {"id":"EDGE-009","concern":"Controller scheduling and priority","verdict":"OPENEMS","target":"Introduce deterministic ordered controller execution.","implementation":"MISSING","phase":"P1"},
+    {"id":"EDGE-010","concern":"Constraint composition / control arbitration","verdict":"OPENEMS","target":"Higher-priority controllers constrain feasible outputs; later controllers cannot overwrite established limits.","implementation":"MISSING","phase":"P1"},
+    {"id":"EDGE-011","concern":"Cloud command semantics","verdict":"MERGE","target":"Keep durable Cloud Command lifecycle but treat dispatched commands as Edge intents that participate in local arbitration.","implementation":"PARTIAL","phase":"P1"},
+    {"id":"EDGE-012","concern":"Durable command lifecycle, approval and audit","verdict":"HVAC","target":"Retain SUBMITTED/VALIDATING/APPROVAL/DISPATCH/VERIFY terminal lifecycle, IAM authorization and audit as Cloud authority.","implementation":"IMPLEMENTED","phase":"P1"},
+    {"id":"EDGE-013","concern":"Command feedback verification","verdict":"MERGE","target":"Edge performs immediate local readback/constraint verification; Cloud retains durable authoritative command outcome verification.","implementation":"PARTIAL","phase":"P1"},
+    {"id":"EDGE-014","concern":"Remote control lease / timeout","verdict":"OPENEMS","target":"Remote setpoints/intents have an expiry or lease; stale Cloud control must relinquish to local control.","implementation":"MISSING","phase":"P1"},
+    {"id":"EDGE-015","concern":"Local safety and interlocks","verdict":"MERGE","target":"Move dynamic safety/interlock enforcement to reusable local controllers while retaining Cloud policy/audit evidence.","implementation":"PARTIAL","phase":"P1"},
+
+    {"id":"MODEL-001","concern":"Canonical long-lived data-point identity","verdict":"HVAC","target":"Point remains the canonical platform data-point identity.","implementation":"IMPLEMENTED","phase":"P1"},
+    {"id":"MODEL-002","concern":"Edge runtime Channel abstraction","verdict":"OPENEMS","target":"Introduce Channel as the live Edge runtime value object with type, unit, access, quality and priority metadata.","implementation":"MISSING","phase":"P1"},
+    {"id":"MODEL-003","concern":"Point-to-Channel mapping","verdict":"MERGE","target":"Every governed Edge Channel maps to a canonical Point; Channel addresses never replace Point identity.","implementation":"MISSING","phase":"P1"},
+    {"id":"MODEL-004","concern":"Equipment/Device/Sensor/Point identity and history","verdict":"HVAC","target":"Retain independent Equipment, Device Endpoint, optional physical Sensor, Point and versioned bindings.","implementation":"IMPLEMENTED","phase":"P1"},
+    {"id":"MODEL-005","concern":"Device-independent capability abstraction","verdict":"OPENEMS","target":"Introduce Capability Profile as HVAC equivalent of Nature; controllers depend on capabilities, not vendor drivers.","implementation":"MISSING","phase":"P1"},
+    {"id":"MODEL-006","concern":"Required/optional channels per capability","verdict":"OPENEMS","target":"Capability Profiles declare required and optional Channels/Points plus command limits.","implementation":"MISSING","phase":"P1"},
+    {"id":"MODEL-007","concern":"Edge component registry","verdict":"OPENEMS","target":"Introduce local component registry for drivers, bridges, controllers, channels and services.","implementation":"MISSING","phase":"P1"},
+    {"id":"MODEL-008","concern":"Self-describing Edge configuration","verdict":"MERGE","target":"Introduce Edge Manifest derived/reconciled with Cloud Registry; expose capabilities/channels/drivers/controllers without making Edge config the Cloud master-data authority.","implementation":"MISSING","phase":"P1"},
+
+    {"id":"DEVICE-001","concern":"Device Driver abstraction","verdict":"OPENEMS","target":"Vendor/product-specific logic lives in Device Drivers behind capability interfaces.","implementation":"MISSING","phase":"P1"},
+    {"id":"DEVICE-002","concern":"Protocol Bridge abstraction","verdict":"OPENEMS","target":"Connection lifecycle, retries, serialization and transport pooling belong to reusable Modbus/BACnet/OPC-UA/MQTT Bridges, not each driver.","implementation":"MISSING","phase":"P1"},
+    {"id":"DEVICE-003","concern":"Declarative protocol mapping","verdict":"OPENEMS","target":"Drivers primarily declare register/object mappings, conversion and write rules instead of hand-building transport loops.","implementation":"MISSING","phase":"P1"},
+    {"id":"DEVICE-004","concern":"Polling/task priority","verdict":"OPENEMS","target":"Protocol reads have explicit priority/frequency so critical state is polled more often than diagnostics.","implementation":"MISSING","phase":"P1"},
+    {"id":"DEVICE-005","concern":"Read/write access modes","verdict":"MERGE","target":"Channel access RO/RW/WO is derived from Point authority/writable semantics and driver capability.","implementation":"PARTIAL","phase":"P1"},
+    {"id":"DEVICE-006","concern":"Driver capability discovery","verdict":"MERGE","target":"Driver exposes implemented Capability Profiles and limits; Cloud Registry reconciles rather than infers from vendor name.","implementation":"MISSING","phase":"P1"},
+
+    {"id":"DATA-001","concern":"Edge-Cloud transport","verdict":"HVAC","target":"Keep MQTT over TLS as canonical Edge-Cloud transport; do not replace it with OpenEMS Backend WebSocket.","implementation":"IMPLEMENTED","phase":"P1"},
+    {"id":"DATA-002","concern":"Local Edge Timedata","verdict":"OPENEMS","target":"Introduce local latest/history service independent from a failed MQTT publish queue.","implementation":"PARTIAL","phase":"P1"},
+    {"id":"DATA-003","concern":"Store and Forward / replay","verdict":"MERGE","target":"Keep current persistent queue semantics and integrate them with Edge Timedata/resend cursors.","implementation":"IMPLEMENTED","phase":"P1"},
+    {"id":"DATA-004","concern":"Persistence priority","verdict":"OPENEMS","target":"Channels/Points carry persistence priority controlling regular Cloud transmission.","implementation":"MISSING","phase":"P1"},
+    {"id":"DATA-005","concern":"Edge aggregation","verdict":"OPENEMS","target":"Perform selected time aggregation on Edge to reduce Cloud/database load while preserving raw policy for required points.","implementation":"MISSING","phase":"P2"},
+    {"id":"DATA-006","concern":"Historic resend priority","verdict":"OPENEMS","target":"Replay prioritizes critical state/fault/control evidence over low-value diagnostics.","implementation":"MISSING","phase":"P1"},
+    {"id":"DATA-007","concern":"Change-based publication plus periodic full snapshot","verdict":"OPENEMS","target":"Publish changes promptly and periodically emit a complete snapshot for convergence/recovery.","implementation":"MISSING","phase":"P1"},
+    {"id":"DATA-008","concern":"Cloud historical telemetry and analytics authority","verdict":"HVAC","target":"Retain S2/ClickHouse/PostgreSQL split; OpenEMS Timedata does not replace Cloud analytical architecture.","implementation":"IMPLEMENTED","phase":"P1"},
+
+    {"id":"SIM-001","concern":"Simulator uses production controller/scheduler interfaces","verdict":"OPENEMS","target":"Simulated and real devices differ at Driver/Protocol boundary, not in Controller/Command/Telemetry business logic.","implementation":"PARTIAL","phase":"P1"},
+    {"id":"SIM-002","concern":"Acting/reacting simulation components","verdict":"OPENEMS","target":"Support both independent data-source devices and reacting physical models affected by control outputs.","implementation":"PARTIAL","phase":"P1"},
+    {"id":"SIM-003","concern":"Physical dynamics and failure injection","verdict":"MERGE","target":"Simulator models ramp, startup/shutdown delay, minimum run/stop, fault, timeout, stale data, noise, stuck actuator and rejected writes.","implementation":"PARTIAL","phase":"P1"},
+    {"id":"SIM-004","concern":"Protocol-level simulation","verdict":"OPENEMS","target":"Device-driver tests can run against simulated Modbus/BACnet/etc endpoints, not only direct in-memory device models.","implementation":"PARTIAL","phase":"P1"},
+
+    {"id":"CTRL-001","concern":"Per-equipment local control state machine","verdict":"OPENEMS","target":"Single-equipment controller owns local sequence/state transitions and device-specific control behavior.","implementation":"MISSING","phase":"P1"},
+    {"id":"CTRL-002","concern":"Cluster Controller","verdict":"OPENEMS","target":"Plant/cluster controller allocates load/modes across equipment; single controllers remain responsible for individual equipment state machines.","implementation":"MISSING","phase":"P2"},
+    {"id":"CTRL-003","concern":"Time-slot Energy Scheduler","verdict":"OPENEMS","target":"Adopt scheduler concept for future HVAC mode scheduling, adapted to thermal/plant constraints rather than ESS-specific equations.","implementation":"MISSING","phase":"P3"},
+    {"id":"CTRL-004","concern":"Forecast/optimization placement","verdict":"MERGE","target":"Heavy forecasting/global optimization may run in Cloud; Edge executes versioned schedules and preserves local fallback/safety when disconnected.","implementation":"PARTIAL","phase":"P3"},
+
+    {"id":"CLOUD-001","concern":"Tenant/IAM/RLS authorization model","verdict":"HVAC","target":"Retain Tenant/Site/Role/Policy IAM and database RLS as Cloud authorization authority.","implementation":"IMPLEMENTED","phase":"P1"},
+    {"id":"CLOUD-002","concern":"Asset/Registry lifecycle model","verdict":"HVAC","target":"Retain Area/Equipment/Device/Sensor/Point identity, binding history, calibration/provenance and product-facing Equipment model.","implementation":"IMPLEMENTED","phase":"P1"},
+    {"id":"CLOUD-003","concern":"Alarm/Work Order/Audit business domains","verdict":"HVAC","target":"Retain Cloud alarm lifecycle, work management and durable audit; Edge emits evidence/events but does not replace these domains.","implementation":"IMPLEMENTED","phase":"P1"},
+
+    {"id":"UI-001","concern":"Self-describing device/control UI","verdict":"MERGE","target":"Generate Asset controls from Registry + Capability Profile + Edge Manifest while retaining HVAC Equipment-centered UX.","implementation":"PARTIAL","phase":"P2"},
+
+    {"id":"TECH-001","concern":"Direct transplant of OpenEMS Java/OSGi Backend/UI runtime","verdict":"REJECT","target":"Adopt proven architectural mechanisms without making Java/OSGi/OpenEMS Backend/UI a target dependency. A bounded runtime PoC may still be used for evidence, but implementation technology must earn its place independently.","implementation":"N/A","phase":"P0"}
+  ],
+  "implementationPhases": {
+    "P0": "Architecture and contracts",
+    "P1": "Edge foundation required before claiming production-grade controllable HVAC Edge",
+    "P2": "Plant-level composition, aggregation and dynamic UI",
+    "P3": "Forecast-driven and optimization-driven scheduling"
+  },
+  "conformance": {
+    "current": "PARTIAL",
+    "reason": "Cloud domain governance and telemetry/control foundations exist, but the target Edge Control Plane still lacks Process Image, Cycle, Controller/Scheduler, Capability Profiles, Protocol Bridges, Edge Manifest and full Edge Timedata semantics."
+  }
+}

@@ -62,14 +62,36 @@
     "objectStorage": "deferred-until-report-export-ota-model-or-cold-archive-requires-it"
   },
   "edgeZone": {
+    "controlPlaneContract": "contracts/architecture/edge-control-plane.v1.json",
     "cloudDirectOTAccessAllowed": false,
-    "path": ["cloud", "edge-gateway", "ot-protocol", "device"],
+    "path": ["cloud-control-plane", "hvac-edge-control-plane", "protocol-bridge", "device-driver", "device"],
+    "hardRealtime": false,
+    "hardRealtimeOwner": "plc-device-protection-safety-hardware",
+    "defaultControlCycle": "1s",
+    "cloudCommandSemantics": "governed-leased-intent",
+    "canonicalCloudDataPoint": "point",
+    "canonicalEdgeRuntimeDataObject": "channel",
     "requiredProperties": [
       "local-collection",
       "store-and-forward",
       "cloud-failure-isolation",
-      "replay-after-recovery"
-    ]
+      "replay-after-recovery",
+      "edge-component-registry",
+      "capability-profile-registry",
+      "channel-runtime",
+      "process-image",
+      "input-process-output-cycle",
+      "controller-runtime",
+      "scheduler-control-arbiter",
+      "local-safety-interlock-controllers",
+      "device-driver-abstraction",
+      "protocol-bridge-abstraction",
+      "edge-manifest",
+      "edge-timedata",
+      "leased-cloud-command-intents",
+      "simulator-real-driver-parity"
+    ],
+    "currentConformance": "PARTIAL"
   },
   "observability": {
     "requiredSignals": ["metrics", "logs", "traces", "events", "audit"],

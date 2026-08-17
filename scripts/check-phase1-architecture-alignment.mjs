@@ -9,13 +9,15 @@ const baselinePath = 'deploy/platform/phase1/architecture-baseline.v1.json';
 const matrixPath = 'deploy/platform/phase1/alignment-matrix.v1.json';
 const overallPath = 'docs/architecture/phase1-overall-architecture.md';
 const operationsPath = 'docs/operations/phase1-deployment-alignment.md';
+const edgeControlPlanePath = 'contracts/architecture/edge-control-plane.v1.json';
 const authorityId = 'SE-ARCH-DEPLOY-001 V1.0 CURRENT';
 
-const [baseline, matrix, overall, operations] = await Promise.all([
+const [baseline, matrix, overall, operations, edgeControlPlane] = await Promise.all([
   readJSON(baselinePath),
   readJSON(matrixPath),
   readText(overallPath),
   readText(operationsPath),
+  readJSON(edgeControlPlanePath),
 ]);
 
 const failures = [];
@@ -46,6 +48,22 @@ assert(baseline.publicZone?.databasePublicExposureAllowed === false, 'Phase 1 mu
 assert(baseline.publicZone?.internalServicePublicExposureAllowed === false, 'Phase 1 must forbid public internal-service exposure');
 assert(baseline.dataZone?.redis === 'rebuildable-cache-and-realtime-transport', 'Redis must remain a rebuildable cache/transport, not an authority');
 assert(baseline.edgeZone?.cloudDirectOTAccessAllowed === false, 'Cloud direct OT access must remain forbidden');
+assert(baseline.edgeZone?.controlPlaneContract === edgeControlPlanePath, 'Phase 1 Edge zone must link the HVAC Edge Control Plane contract');
+assert(baseline.edgeZone?.hardRealtime === false && baseline.edgeZone?.hardRealtimeOwner === 'plc-device-protection-safety-hardware', 'Edge soft-real-time / PLC hard-real-time safety boundary drifted');
+assert(baseline.edgeZone?.cloudCommandSemantics === 'governed-leased-intent', 'Cloud commands must remain governed leased Edge intents');
+for (const required of ['channel-runtime', 'process-image', 'input-process-output-cycle', 'controller-runtime', 'scheduler-control-arbiter', 'capability-profile-registry', 'device-driver-abstraction', 'protocol-bridge-abstraction', 'edge-manifest', 'edge-timedata', 'leased-cloud-command-intents']) {
+  assert(baseline.edgeZone?.requiredProperties?.includes(required), `Phase 1 Edge foundation is missing ${required}`);
+}
+
+assert(edgeControlPlane.schemaVersion === 1 && edgeControlPlane.status === 'CURRENT TARGET', 'Edge Control Plane contract identity/status drifted');
+assert(edgeControlPlane.decisions?.length === 50, 'OpenEMS/HVAC adjudication must contain exactly 50 decisions');
+assert(new Set(edgeControlPlane.decisions.map(({ id }) => id)).size === 50, 'Edge Control Plane decision IDs must be unique');
+const edgeVerdicts = new Set(['OPENEMS', 'HVAC', 'MERGE', 'REJECT']);
+assert(edgeControlPlane.decisions.every(({ verdict }) => edgeVerdicts.has(verdict)), 'Edge Control Plane contains an unsupported verdict');
+assert(edgeControlPlane.decisions.filter(({ verdict }) => verdict === 'OPENEMS').length === 29, 'OpenEMS adjudication count drifted');
+assert(edgeControlPlane.decisions.filter(({ verdict }) => verdict === 'HVAC').length === 8, 'HVAC adjudication count drifted');
+assert(edgeControlPlane.decisions.filter(({ verdict }) => verdict === 'MERGE').length === 12, 'MERGE adjudication count drifted');
+assert(edgeControlPlane.decisions.filter(({ verdict }) => verdict === 'REJECT').length === 1, 'REJECT adjudication count drifted');
 
 for (const deferred of [
   'kubernetes-as-primary-orchestrator',
@@ -79,6 +97,9 @@ assert(byId.get('DOC-CONSISTENCY-001')?.status === 'KEEP', 'document-scope consi
 assert(byId.get('OPTIMIZATION-001')?.status === 'DEFER', 'Optimization must remain optional until the deployment needs it');
 assert(byId.get('SCHEDULER-001')?.status === 'KEEP', 'unified Scheduler Coordination must remain implemented through the durable Job contract');
 assert(byId.get('RPO-RTO-001')?.status === 'KEEP', 'RPO/RTO objectives and the recovery evidence mechanism must remain implemented');
+assert(byId.get('EDGE-CONTROL-PLANE-001')?.status === 'MISSING', 'HVAC Edge Control Plane must remain an explicit gap until Process Image/Cycle/Controller/Scheduler are implemented');
+assert(byId.get('EDGE-CAPABILITY-001')?.status === 'MISSING', 'Capability Profile / Driver / Bridge foundation must remain an explicit gap until implemented');
+assert(byId.get('EDGE-TIMEDATA-001')?.status === 'MISSING', 'Edge Timedata must remain an explicit gap until local latest/history and priority resend are implemented');
 
 for (const marker of [
   '1 Linux Server',
@@ -89,6 +110,10 @@ for (const marker of [
   'ClickHouse',
   'Redis',
   'MQTT',
+  'HVAC Edge Control Plane',
+  'Process Image',
+  'Capability Profile',
+  'Edge Timedata',
   'Development',
   'Testing',
   'Staging',

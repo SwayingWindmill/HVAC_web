@@ -13,7 +13,8 @@
     "iotPlatform": "Data Architecture V2: ThingsBoard is removed",
     "pointModel": "Point is the canonical data point; Sensor exists only for independently identifiable/installable/replaceable/calibratable/traceable physical probes",
     "storage": "PostgreSQL owns business master/metadata/state machines; ClickHouse owns historical Telemetry/analytics; Redis is rebuildable Latest/current cache; MQTT is transport only; Object Storage owns archive/backup/evidence/dataset/model artifacts",
-    "identityProvider": "User adjudication: Phase 1 uses the platform-owned services/identity-service as Identity Infrastructure. It authenticates credentials and exposes standard OIDC; IAM remains the sole Tenant/Site/Role/Policy authorization authority."
+    "identityProvider": "User adjudication: Phase 1 uses the platform-owned services/identity-service as Identity Infrastructure. It authenticates credentials and exposes standard OIDC; IAM remains the sole Tenant/Site/Role/Policy authorization authority.",
+    "edgeControlPlane": "User adjudication over V2.1.2 using OpenEMS as an external reference implementation: production controllable HVAC requires a first-class Edge Control Plane with Channel Runtime, Process Image, IPO Cycle, Controller/Scheduler/Arbiter, Capability Profiles, Device Drivers, Protocol Bridges, Edge Manifest, Edge Timedata and leased Cloud Command intents. Cloud retains durable command governance and business-domain authority. Machine contract: contracts/architecture/edge-control-plane.v1.json."
   },
   "serviceModel": {
     "logical": "domain-oriented modular backend",
@@ -27,7 +28,7 @@
     { "domain": "Tenant/Site", "implementation": ["services/platform-core-service", "services/platform-gateway"], "alignment": "ALIGNED" },
     { "domain": "Space/Asset", "implementation": ["services/platform-core-service", "infra/s1-registry/postgres/init/007-spatial-sensor-point-model.sql"], "alignment": "ALIGNED" },
     { "domain": "Device/Product/Point", "implementation": ["services/platform-core-service", "infra/s1-registry/postgres/init/009-energy-data-foundation.sql"], "alignment": "ALIGNED" },
-    { "domain": "IoT Runtime", "implementation": ["services/mqtt-telemetry-adapter", "services/telemetry-runtime-service", "services/command-dispatcher"], "alignment": "ALIGNED" },
+    { "domain": "IoT Runtime", "implementation": ["services/mqtt-telemetry-adapter", "services/telemetry-runtime-service", "services/command-dispatcher"], "alignment": "PARTIAL", "reason": "Cloud MQTT/S2 runtime is implemented, but the adjudicated target now also requires a first-class HVAC Edge Control Plane with Channel Runtime, Process Image, Cycle, Controller/Scheduler, Capability Profiles, Drivers/Bridges, Edge Manifest and Edge Timedata." },
     { "domain": "Telemetry", "implementation": ["services/telemetry-runtime-service", "services/telemetry-query-service", "services/analytics-read-model-projector"], "alignment": "ALIGNED" },
     { "domain": "Energy Topology", "implementation": ["infra/s1-registry/postgres/init/009-energy-data-foundation.sql"], "alignment": "ALIGNED" },
     { "domain": "Metric", "implementation": ["services/metric-engine-service"], "alignment": "ALIGNED" },
@@ -35,7 +36,7 @@
     { "domain": "Tariff", "implementation": ["infra/s1-registry/postgres/init/009b-settlement-foundation-v2.sql"], "alignment": "ALIGNED" },
     { "domain": "Settlement", "implementation": ["services/settlement-service"], "alignment": "ALIGNED" },
     { "domain": "Alarm", "implementation": ["services/alarm-service"], "alignment": "PARTIAL" },
-    { "domain": "Control", "implementation": ["services/command-service", "services/command-dispatcher"], "alignment": "ALIGNED" },
+    { "domain": "Control", "implementation": ["services/command-service", "services/command-dispatcher"], "alignment": "PARTIAL", "reason": "Cloud command governance, dispatch and verification exist, but target execution semantics now require leased Edge intents, local Controller/Scheduler arbitration, reusable safety/interlock controllers and requestedValue/effectiveValue constraint evidence." },
     { "domain": "Config", "implementation": ["infra/s1-registry/postgres/init/009j-operations-support-domains-v2.sql"], "alignment": "ALIGNED" },
     { "domain": "Notification", "implementation": ["infra/s1-registry/postgres/init/009j-operations-support-domains-v2.sql"], "alignment": "ALIGNED" },
     { "domain": "Forecast", "implementation": ["services/forecast-service"], "alignment": "ALIGNED" },
@@ -118,6 +119,7 @@
     { "id": "MQTT_V2_1_2_UPLINK_WIRE", "status": "PASS" },
     { "id": "CLOUD_PRESENCE_AUTHORITY", "status": "PASS" },
     { "id": "CONTROL_DYNAMIC_SAFETY", "status": "PASS" },
+    { "id": "EDGE_CONTROL_PLANE_TARGET", "status": "PARTIAL", "reason": "ADR 0012 and contracts/architecture/edge-control-plane.v1.json are now the target for controllable HVAC Edge. Existing EG8200/MQTT/store-forward and command safety are foundations only; Process Image, IPO Cycle, Controller/Scheduler/Arbiter, Capability Profiles, Device Drivers/Protocol Bridges, Edge Manifest, Edge Timedata and leased remote intents are not yet complete." },
     { "id": "EDGE_COMMAND_IDEMPOTENCY", "status": "PASS" },
     { "id": "METRIC_CROSS_STORE_PUBLICATION", "status": "PASS" },
     { "id": "FORECAST_CROSS_STORE_PUBLICATION", "status": "PASS" },
