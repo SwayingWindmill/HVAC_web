@@ -44,6 +44,10 @@ import {
   OperationsPanelHeading,
 } from '@/components/OperationsUI';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
+import { boundaryMeta } from '@/features/real-read-model-boundary';
+import { FORECAST_READ_MODEL_BOUNDARY } from '@/features/forecast/capability';
+import { OPTIMIZATION_READ_MODEL_BOUNDARY } from '@/features/optimization/capability';
+import { SETTLEMENT_READ_MODEL_BOUNDARY } from '@/features/settlement/capability';
 import { FocusHeading } from './FocusHeading';
 import { siteRoute } from './site-routing';
 import '@/styles/real-product-pages.css';
@@ -169,14 +173,14 @@ export function RealOptimizePage({ site }: RealProductPageProps) {
       <PageScaffold
         title="节能优化建议"
         heading={<FocusHeading className="ops-page-title ant-typography"><Space><ThunderboltOutlined />节能优化建议</Space></FocusHeading>}
-        extra={<Tag>真实优化服务待接入</Tag>}
+        extra={<Tag>{boundaryMeta(OPTIMIZATION_READ_MODEL_BOUNDARY)}</Tag>}
       >
         <Alert
           type="info"
           showIcon
           icon={<ExperimentOutlined />}
           message="人在回路：建议先评估收益、舒适度影响和回滚条件；审批通过后仍需二次确认，绝不直接静默下发设备。"
-          description="当前站点尚未提供权威 Optimization Read Model。页面指标、筛选、建议评估池和详情入口与 Demo 保持一致。"
+          description={`当前站点尚未提供权威 ${OPTIMIZATION_READ_MODEL_BOUNDARY.label}。只展示契约边界，不使用 Demo 或浏览器估算替代。`}
         />
         <OperationsMetrics items={[
           { label: '预计节电', value: '—', suffix: 'kWh/天', detail: '等待优化建议数据', icon: <ThunderboltOutlined />, tone: 'accent' },
@@ -209,14 +213,14 @@ export function RealForecastPage({ site }: RealProductPageProps) {
       <PageScaffold
         title="预测与基线"
         heading={<FocusHeading className="ops-page-title ant-typography"><Space><LineChartOutlined />预测与基线</Space></FocusHeading>}
-        extra={<Tag>真实预测服务待接入</Tag>}
+        extra={<Tag>{boundaryMeta(FORECAST_READ_MODEL_BOUNDARY)}</Tag>}
       >
         <Alert
           type="info"
           showIcon
           icon={<CalendarOutlined />}
-          message="Forecast Read Model 尚未接入"
-          description="Real Mode 不会用 Demo 预测替代权威结果。当前仅展示预测契约所需的事实边界，直到服务提供可追溯的版本与质量信息。"
+          message={`${FORECAST_READ_MODEL_BOUNDARY.label} 尚未接入`}
+          description={`Real Mode 不会用 Demo 预测替代权威结果。接入前必须提供：${FORECAST_READ_MODEL_BOUNDARY.requiredFields.join('、')}。`}
         />
         <OperationsMetrics items={[
           { label: '预测目标', value: '—', detail: '等待站点预测对象', icon: <LineChartOutlined />, tone: 'accent' },
@@ -224,7 +228,7 @@ export function RealForecastPage({ site }: RealProductPageProps) {
           { label: '预测窗口', value: '—', detail: '等待 forecastFor 与 horizon', icon: <FieldTimeOutlined /> },
           { label: '模型版本', value: '—', detail: '等待 modelVersion / featureSetVersion', icon: <SafetyCertificateOutlined /> },
         ]} />
-        <Card variant="borderless" title={<OperationsPanelHeading icon={<LineChartOutlined />} title="预测契约状态" meta="NOT_INTEGRATED" />}>
+        <Card variant="borderless" title={<OperationsPanelHeading icon={<LineChartOutlined />} title="预测契约状态" meta={boundaryMeta(FORECAST_READ_MODEL_BOUNDARY)} />}>
           <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
             <Descriptions.Item label="Target">—</Descriptions.Item>
             <Descriptions.Item label="Origin / As Of">—</Descriptions.Item>
@@ -362,13 +366,13 @@ export function RealSettlementPage({ site }: RealProductPageProps) {
       <PageScaffold
         title="结算与对账"
         heading={<FocusHeading className="ops-page-title ant-typography"><Space><FileDoneOutlined />结算与对账</Space></FocusHeading>}
-        extra={<Tag>真实结算服务待接入</Tag>}
+        extra={<Tag>{boundaryMeta(SETTLEMENT_READ_MODEL_BOUNDARY)}</Tag>}
       >
         <Alert
           type="info"
           showIcon
-          message="Settlement Read Model 尚未接入"
-          description="结算周期、锁定状态、修订版本、来源读数、计费规则与对账差异必须由权威服务提供。当前不计算金额、不伪造锁定或修订结果。"
+          message={`${SETTLEMENT_READ_MODEL_BOUNDARY.label} 尚未接入`}
+          description={`结算能力接入前必须提供：${SETTLEMENT_READ_MODEL_BOUNDARY.requiredFields.join('、')}。当前不计算金额、不伪造锁定或修订结果。`}
         />
         <OperationsMetrics items={[
           { label: '结算周期', value: '—', detail: '等待周期与 Site 时区', icon: <CalendarOutlined />, tone: 'accent' },
@@ -376,7 +380,7 @@ export function RealSettlementPage({ site }: RealProductPageProps) {
           { label: '修订版本', value: '—', detail: '等待 revision 与 lineage', icon: <FileDoneOutlined /> },
           { label: '对账差异', value: '—', detail: '等待 reconciliation 结果', icon: <DollarOutlined /> },
         ]} />
-        <Card variant="borderless" title={<OperationsPanelHeading icon={<FileDoneOutlined />} title="结算事实边界" meta="NOT_INTEGRATED" />}>
+        <Card variant="borderless" title={<OperationsPanelHeading icon={<FileDoneOutlined />} title="结算事实边界" meta={boundaryMeta(SETTLEMENT_READ_MODEL_BOUNDARY)} />}>
           <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }}>
             <Descriptions.Item label="Period">—</Descriptions.Item>
             <Descriptions.Item label="Status">—</Descriptions.Item>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type HTMLAttributes, type Key } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router';
 import { Alert, Badge, Button, Card, Col, Empty, Grid, Input, Row, Segmented, Select, Space, Table, Tag, Tree, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { DataNode } from 'antd/es/tree';
@@ -31,15 +32,9 @@ import type { RealtimeStatusUpdate } from '../realtime-status';
 import { REAL_ASSETS_CATALOG_REVISION } from './catalog';
 import { AssetDetailDrawer } from './EquipmentDetailDrawer';
 import { RealAssetsLoadingSurface } from './RealAssetsLoadingSurface';
-import {
-  REAL_ASSETS_DETAIL_HISTORY_MARKER,
-  isRealAssetsDetailHistoryState,
-  parseRealAssetsDetailPath,
-  realAssetsAssetPath,
-  realAssetsListPath,
-  resolveRealAssetsDetail,
-} from './detail';
+import { realAssetsAssetPath, realAssetsListPath, resolveRealAssetsDetail } from './detail';
 import { runRealAssetsProtectedRequest } from './protected-request';
+import { QualityBadge } from '@/shared/status/QualityBadge';
 import {
   loadRealAssetsCurrentState,
   loadRealAssetsRegistry,
@@ -244,6 +239,7 @@ export function RealAssetsWorkspace({
   platformClient: providedPlatformClient,
   telemetryRuntime: providedTelemetryRuntime,
 }: RealAssetsWorkspaceProps) {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const screens = Grid.useBreakpoint();
   const compactTable = !screens.xl;
@@ -279,27 +275,6 @@ export function RealAssetsWorkspace({
   useEffect(() => {
     selectedAssetIdRef.current = selectedAssetId;
   }, [selectedAssetId]);
-
-  useEffect(() => {
-    const handlePopState = () => {
-      const parsed = parseRealAssetsDetailPath(window.location.pathname, site.id);
-      if (parsed.state === 'outside') {
-        window.location.reload();
-        return;
-      }
-      const previousDeviceId = selectedAssetIdRef.current;
-      if (parsed.state === 'list') {
-        if (previousDeviceId) pendingFocusDeviceIdRef.current = previousDeviceId;
-        selectedAssetIdRef.current = null;
-        setSelectedAssetId(null);
-        return;
-      }
-      selectedAssetIdRef.current = parsed.assetId;
-      setSelectedAssetId(parsed.assetId);
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [site.id]);
 
   useEffect(() => {
     const purgeQueryCache = async () => {
@@ -653,9 +628,12 @@ export function RealAssetsWorkspace({
               <Typography.Text strong>
                 {row.current.displayValue}{row.current.unit ? ` ${row.current.unit}` : ''}
               </Typography.Text>
-              <Typography.Text type={(row.current.quality !== null && row.current.quality !== 'GOOD') || row.current.freshness === 'STALE' ? 'warning' : 'secondary'} style={{ fontSize: 12 }}>
-                {pointEvidence(row.current, site.timezone)}
-              </Typography.Text>
+              <Space size={4} wrap>
+                <QualityBadge quality={row.current.quality} />
+                <Typography.Text type={row.current.freshness === 'STALE' ? 'warning' : 'secondary'} style={{ fontSize: 12 }}>
+                  {pointEvidence(row.current, site.timezone)}
+                </Typography.Text>
+              </Space>
             </Space>
           );
         },
@@ -731,9 +709,7 @@ export function RealAssetsWorkspace({
 
   const openAssetDetail = (assetId: string) => {
     const target = realAssetsAssetPath(site.id, assetId);
-    const historyState = { marker: REAL_ASSETS_DETAIL_HISTORY_MARKER, siteId: site.id, assetId };
-    if (selectedAssetIdRef.current) window.history.replaceState(historyState, '', target);
-    else window.history.pushState(historyState, '', target);
+    navigate(target);
     selectedAssetIdRef.current = assetId;
     setSelectedAssetId(assetId);
   };
@@ -747,11 +723,7 @@ export function RealAssetsWorkspace({
   const closeAssetDetail = () => {
     const assetId = selectedAssetIdRef.current;
     if (!assetId) return;
-    if (isRealAssetsDetailHistoryState(window.history.state, site.id, assetId)) {
-      window.history.back();
-      return;
-    }
-    window.history.pushState(null, '', realAssetsListPath(site.id));
+    navigate(realAssetsListPath(site.id));
     selectedAssetIdRef.current = null;
     setSelectedAssetId(null);
   };

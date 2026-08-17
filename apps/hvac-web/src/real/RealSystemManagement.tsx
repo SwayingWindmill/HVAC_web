@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react';
+import { useEffect } from 'react';
+import { useLocation, useNavigate } from 'react-router';
 import {
   Alert,
   Badge,
@@ -72,10 +74,15 @@ function EmptyGovernanceTable({ description }: { description: string }) {
 }
 
 export function RealSystemManagement({ snapshot }: RealSystemManagementProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const principal = snapshot.principal!;
   const platform = snapshot.platform?.status;
   const sites = snapshot.sites?.items ?? [];
-  const [activeTab, setActiveTab] = useState(() => new URLSearchParams(globalThis.location.search).get('tab') ?? 'overview');
+  const [activeTab, setActiveTab] = useState(() => new URLSearchParams(location.search).get('tab') ?? 'overview');
+  useEffect(() => {
+    setActiveTab(new URLSearchParams(location.search).get('tab') ?? 'overview');
+  }, [location.search]);
   const principalRows = useMemo<PrincipalRow[]>(() => [{
     key: principal.principal.subject,
     subject: principal.principal.subject,
@@ -240,9 +247,9 @@ export function RealSystemManagement({ snapshot }: RealSystemManagementProps) {
           items={items}
           onChange={(key) => {
             setActiveTab(key);
-            const url = new URL(globalThis.location.href);
-            url.searchParams.set('tab', key);
-            globalThis.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+            const parameters = new URLSearchParams(location.search);
+            parameters.set('tab', key);
+            navigate(`${location.pathname}?${parameters.toString()}${location.hash}`, { replace: true });
           }}
         />
       </PageScaffold>

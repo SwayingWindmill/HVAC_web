@@ -169,8 +169,10 @@ function isSignInLanding(candidate: string, origin: string): boolean {
   }
 }
 
-function browserEnvironment(): ShellRuntimeEnvironment {
-  return {
+export function createBrowserShellEnvironment(
+  overrides: Partial<ShellRuntimeEnvironment> = {},
+): ShellRuntimeEnvironment {
+  const environment: ShellRuntimeEnvironment = {
     origin: window.location.origin,
     now: () => Date.now(),
     navigate: (target) => window.location.assign(target),
@@ -204,6 +206,7 @@ function browserEnvironment(): ShellRuntimeEnvironment {
       };
     },
   };
+  return { ...environment, ...overrides };
 }
 
 function normalizeSiteNavigationTarget(
@@ -388,6 +391,7 @@ class BrowserShellRuntime implements ShellRuntime {
 
     const activeSiteId = this.protectedScope.current().siteId;
     if (!activeSiteId || normalized.siteId === activeSiteId) {
+      this.currentUrl = normalized.target;
       this.environment.navigate(normalized.target);
       return 'navigated';
     }
@@ -574,6 +578,7 @@ class BrowserShellRuntime implements ShellRuntime {
       return 'failed';
     }
 
+    this.currentUrl = target;
     this.environment.navigate(target);
     return 'navigated';
   }
@@ -873,7 +878,7 @@ class BrowserShellRuntime implements ShellRuntime {
 
 export function createShellRuntime(
   client: ShellRuntimeClient,
-  environment: ShellRuntimeEnvironment = browserEnvironment(),
+  environment: ShellRuntimeEnvironment = createBrowserShellEnvironment(),
 ): ShellRuntime {
   return new BrowserShellRuntime(client, environment);
 }

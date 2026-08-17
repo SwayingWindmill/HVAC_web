@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import {
   AlertOutlined,
   ApartmentOutlined,
@@ -19,6 +19,8 @@ import {
 } from '@ant-design/icons';
 import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
 import { Badge, Button, Divider, Grid, Popover, Select, Space, Tooltip } from 'antd';
+import { useLocation } from 'react-router';
+import { useRealUiStore } from '@/stores/realUi';
 import { FocusHeading } from './FocusHeading';
 import { createIdleRealtimeStatus, realtimeStatusLabel, realtimeStatusPresentation } from './realtime-status';
 import { RealRuntimeFacts } from './RealRuntimeFacts';
@@ -193,6 +195,7 @@ function PurgingSurface() {
 
 function PurgeFailedSurface({ snapshot }: { snapshot: ShellSnapshot }) {
   const failure = snapshot.siteTransition?.failure;
+  const location = useLocation();
   return (
     <section className="real-route-surface" data-testid="real-site-purge-failed" data-route-state="UNAVAILABLE">
       <p className="real-shell-eyebrow">站点切换失败</p>
@@ -204,7 +207,7 @@ function PurgeFailedSurface({ snapshot }: { snapshot: ShellSnapshot }) {
           <span>{failure.detail}</span>
         </div>
       ) : null}
-      <a className="real-shell-link-action" href={window.location.href}>重新建立可信站点范围</a>
+      <a className="real-shell-link-action" href={`${location.pathname}${location.search}${location.hash}`}>重新建立可信站点范围</a>
     </section>
   );
 }
@@ -230,7 +233,7 @@ export function RealShellChrome({
 }) {
   const principal = snapshot.principal!;
   const submitting = snapshot.logout?.status === 'submitting';
-  const pathname = window.location.pathname;
+  const pathname = useLocation().pathname;
   const transition = snapshot.siteTransition;
   const protectedScope = snapshot.protectedScope;
   const activeSite = protectedScope?.siteId
@@ -245,7 +248,8 @@ export function RealShellChrome({
   const screens = useBreakpoint();
   const compact = !screens.xl;
   const narrow = !screens.xl;
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const sidebarCollapsed = useRealUiStore((state) => state.sidebarCollapsed);
+  const setSidebarCollapsed = useRealUiStore((state) => state.setSidebarCollapsed);
   const { resolvedMode: themeMode, setMode: setThemeMode } = useRealTheme();
 
   const navigate = (target: string) => onNavigate?.(target);

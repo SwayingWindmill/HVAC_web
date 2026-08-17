@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useLocation, useNavigate } from 'react-router';
 import { Alert, Button, Card, Descriptions, Input, Segmented, Select, Space, Tag, Typography } from 'antd';
 import { FundOutlined, LeftOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import PageScaffold from '@/components/PageScaffold';
@@ -46,16 +47,16 @@ const QUALITY_LABELS: Record<EnergyQualityPolicy, string> = {
   VALID_AND_SUSPECT: '包含可疑数据',
 };
 
-function energyPeriodPath(period: EnergyWorkspacePeriod): string {
-  const segments = globalThis.location.pathname.split('/').filter(Boolean);
+function energyPeriodPath(pathname: string, period: EnergyWorkspacePeriod): string {
+  const segments = pathname.split('/').filter(Boolean);
   const energyIndex = segments.indexOf('energy');
-  if (energyIndex < 0) return globalThis.location.pathname;
+  if (energyIndex < 0) return pathname;
   if (segments.length === energyIndex + 1) return `/${segments.join('/')}`;
   return `/${[...segments.slice(0, energyIndex + 1), period].join('/')}`;
 }
 
-function energyPeriodFromLocation(fallback: EnergyWorkspacePeriod): EnergyWorkspacePeriod {
-  const segments = globalThis.location.pathname.split('/').filter(Boolean);
+function energyPeriodFromLocation(pathname: string, fallback: EnergyWorkspacePeriod): EnergyWorkspacePeriod {
+  const segments = pathname.split('/').filter(Boolean);
   const energyIndex = segments.indexOf('energy');
   const candidate = segments[energyIndex + 1];
   return candidate && candidate in PERIOD_LABELS ? candidate as EnergyWorkspacePeriod : fallback;
@@ -111,9 +112,11 @@ function buildQuery(
 }
 
 export function EnergyAnalytics({ site, principal, initialPeriod }: EnergyAnalyticsProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [workspaceState, setWorkspaceState] = useState<EnergyWorkspaceState>(() => {
-    const parsed = parseEnergyWorkspaceSearch(globalThis.location.search, site.timezone);
+    const parsed = parseEnergyWorkspaceSearch(location.search, site.timezone);
     return initialPeriod ? { ...parsed, period: initialPeriod } : parsed;
   });
   const workspaceWindow = useMemo(
@@ -127,27 +130,23 @@ export function EnergyAnalytics({ site, principal, initialPeriod }: EnergyAnalyt
 
   const commitWorkspaceState = useCallback((next: EnergyWorkspaceState) => {
     const canonical = buildEnergyWorkspaceWindow(next, site.timezone).state;
-    const target = `${energyPeriodPath(canonical.period)}${energyWorkspaceSearch(canonical)}${globalThis.location.hash}`;
-    globalThis.history.pushState(null, '', target);
+    const target = `${energyPeriodPath(location.pathname, canonical.period)}${energyWorkspaceSearch(canonical)}${location.hash}`;
+    navigate(target);
     setWorkspaceState(canonical);
-  }, [site.timezone]);
+  }, [location.hash, location.pathname, navigate, site.timezone]);
 
   useEffect(() => {
     const canonicalSearch = energyWorkspaceSearch(workspaceWindow.state);
-    const canonicalPath = energyPeriodPath(workspaceWindow.state.period);
-    if (globalThis.location.search !== canonicalSearch || globalThis.location.pathname !== canonicalPath) {
-      globalThis.history.replaceState(null, '', `${canonicalPath}${canonicalSearch}${globalThis.location.hash}`);
+    const canonicalPath = energyPeriodPath(location.pathname, workspaceWindow.state.period);
+    if (location.search !== canonicalSearch || location.pathname !== canonicalPath) {
+      navigate(`${canonicalPath}${canonicalSearch}${location.hash}`, { replace: true });
     }
-  }, [workspaceWindow.state]);
+  }, [location.hash, location.pathname, location.search, navigate, workspaceWindow.state]);
 
   useEffect(() => {
-    const onPopState = () => {
-      const parsed = parseEnergyWorkspaceSearch(globalThis.location.search, site.timezone);
-      setWorkspaceState({ ...parsed, period: energyPeriodFromLocation(parsed.period) });
-    };
-    globalThis.addEventListener('popstate', onPopState);
-    return () => globalThis.removeEventListener('popstate', onPopState);
-  }, [site.timezone]);
+    const parsed = parseEnergyWorkspaceSearch(location.search, site.timezone);
+    setWorkspaceState({ ...parsed, period: energyPeriodFromLocation(location.pathname, parsed.period) });
+  }, [location.pathname, location.search, site.timezone]);
 
   const currentQuery = useMemo(() => buildQuery(site, {
     from: workspaceWindow.from,

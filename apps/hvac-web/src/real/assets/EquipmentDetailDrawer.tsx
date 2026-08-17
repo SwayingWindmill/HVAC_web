@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useLocation } from 'react-router';
 import { Alert, Button, Card, Descriptions, Divider, Drawer, Empty, InputNumber, Modal, Select, Space, Table, Tag, Timeline, Typography } from 'antd';
 import { CheckCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
@@ -21,6 +22,7 @@ import type { ProtectedScopeRequestToken } from '../protected-scope';
 import type { ProtectedScopeResource } from '../protected-scope';
 import type { RealtimeStatusUpdate, RealtimeSubscriptionState } from '../realtime-status';
 import { DeviceRealtimeStatus } from './DeviceRealtimeStatus';
+import { CommandStatusBadge } from '@/shared/status/CommandStatus';
 import { projectRealAssetsRealtimeRow } from './realtime';
 import type { RealAssetsTelemetryRuntime } from './telemetry-runtime';
 import { useRealAssetsDeviceRealtime, type RealAssetsRealtimeResult } from './useDeviceRealtime';
@@ -87,8 +89,8 @@ function workOrderOptions(principal: CurrentPrincipalResponse, site: Readonly<Si
   return options;
 }
 
-function sourceWorkOrderFromLocation(): string {
-  return new URLSearchParams(globalThis.location.search).get('sourceWorkOrder') ?? '';
+function sourceWorkOrderFromLocation(search: string): string {
+  return new URLSearchParams(search).get('sourceWorkOrder') ?? '';
 }
 
 function numericMetadata(metadata: Record<string, unknown>, key: string): number | null {
@@ -148,8 +150,9 @@ function AssetControlCard({ site, principal, asset, control }: {
   asset: RealAssetsAssetRow;
   control: ControlDefinition;
 }) {
+  const location = useLocation();
   const queryClient = useQueryClient();
-  const sourceWorkOrderId = sourceWorkOrderFromLocation();
+  const sourceWorkOrderId = sourceWorkOrderFromLocation(location.search);
   const sourceWorkOrderQuery = useQuery({
     queryKey: ['asset-control-source-work-order', site.id, sourceWorkOrderId],
     queryFn: ({ signal }) => getWorkOrder(sourceWorkOrderId, workOrderOptions(principal, site, signal)),
@@ -301,7 +304,8 @@ function AssetControlCard({ site, principal, asset, control }: {
           <>
             <Divider style={{ margin: '4px 0' }} />
             <Space wrap>
-              <Tag color={command.status === 'SUCCEEDED' ? 'green' : command.status === 'OUTCOME_UNKNOWN' ? 'orange' : 'blue'}>{commandStatusLabel(command.status)}</Tag>
+              <CommandStatusBadge command={command} />
+              <Tag>{commandStatusLabel(command.status)}</Tag>
               <Typography.Text copyable>{command.commandId}</Typography.Text>
               {command.status === 'AWAITING_APPROVAL' ? (
                 <Button icon={<CheckCircleOutlined />} loading={approveMutation.isPending} onClick={() => approveMutation.mutate(command)}>批准</Button>
