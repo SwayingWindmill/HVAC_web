@@ -108,9 +108,6 @@ func parseActiveRouteRegistry(raw []byte) (*ownershipregistry.Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("validate Route Ownership Registry: %w", err)
 	}
-	if snapshot.ContainsOwner(ownershipregistry.OwnerLegacy) {
-		return nil, errors.New("retired Legacy owner is not allowed in the active Route Ownership Registry")
-	}
 	return snapshot, nil
 }
 

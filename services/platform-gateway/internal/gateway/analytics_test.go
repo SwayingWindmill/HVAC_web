@@ -247,9 +247,9 @@ func newAnalyticsGatewayFixture(t *testing.T, options analyticsFixtureOptions) *
 	if options.routeOwnership {
 		snapshot, err := ownershipregistry.Parse([]byte(`{
 			"registryVersion":1,"registryRevision":1,"routes":[{
-				"method":"POST","path":"/api/v1/analytics/energy-series","owner":"telemetry-query-service","revision":1,
-				"activationStatus":"primary","rollout":{"mode":"all"},"compatibilityMode":"native",
-				"allowedScopeDimensions":["organization","site","principal"],"shadowSideEffectPolicy":"NONE","readOnlyFallback":false
+				"method":"POST","path":"/api/v1/analytics/energy-series","owner":"telemetry-query-service","publicIngress":"platform-gateway","revision":1,
+				"rollout":{"mode":"all"},"compatibilityMode":"native",
+				"allowedScopeDimensions":["tenant","site","principal"]
 			}]
 		}`))
 		if err != nil {

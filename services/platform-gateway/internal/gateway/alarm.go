@@ -371,12 +371,12 @@ func (h *handler) checkAlarmSiteVisibility(request *http.Request, session bffSes
 	outer := routeDecisionFromContext(request.Context())
 	decision := ownershipregistry.Decision{
 		RouteKey: http.MethodGet + " " + registryRoute.template, PathTemplate: registryRoute.template,
-		DeclaredOwner: ownershipregistry.OwnerCore, SelectedOwner: ownershipregistry.OwnerCore,
+		SelectedOwner: ownershipregistry.OwnerCore,
 		RegistryRevision: outer.RegistryRevision, RouteRevision: 1, CompatibilityMode: "native",
 	}
 	if h.routeManager != nil {
 		resolved, err := h.routeManager.Current().Resolve(http.MethodGet, publicPath, session.TenantID)
-		if err != nil || resolved.DeclaredOwner != ownershipregistry.OwnerCore || resolved.SelectedOwner != ownershipregistry.OwnerCore || resolved.ReadFallbackOwner != "" || resolved.ShadowOwner != "" {
+		if err != nil || resolved.SelectedOwner != ownershipregistry.OwnerCore {
 			value := alarmUnavailable("Authoritative Site route ownership is unavailable.")
 			return &value
 		}

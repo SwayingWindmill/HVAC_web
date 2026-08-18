@@ -634,7 +634,6 @@ func (h *handler) commandRegistryDecisionForPath(request *http.Request, session 
 	decision := ownershipregistry.Decision{
 		RouteKey:          http.MethodGet + " " + route.template,
 		PathTemplate:      route.template,
-		DeclaredOwner:     ownershipregistry.OwnerCore,
 		SelectedOwner:     ownershipregistry.OwnerCore,
 		RegistryRevision:  outer.RegistryRevision,
 		RouteRevision:     1,
@@ -644,7 +643,7 @@ func (h *handler) commandRegistryDecisionForPath(request *http.Request, session 
 		return decision, nil
 	}
 	resolved, err := h.routeManager.Current().Resolve(http.MethodGet, publicPath, session.TenantID)
-	if err != nil || resolved.DeclaredOwner != ownershipregistry.OwnerCore || resolved.SelectedOwner != ownershipregistry.OwnerCore || resolved.ReadFallbackOwner != "" || resolved.ShadowOwner != "" {
+	if err != nil || resolved.SelectedOwner != ownershipregistry.OwnerCore {
 		failure := commandUnavailable("Registry route ownership is unavailable for the Command " + purpose + ".")
 		return ownershipregistry.Decision{}, &failure
 	}

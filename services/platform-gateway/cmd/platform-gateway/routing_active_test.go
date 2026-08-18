@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -24,10 +23,9 @@ func TestParseActiveRouteRegistryAcceptsGoOnlyRegistry(t *testing.T) {
 	}
 }
 
-func TestParseActiveRouteRegistryRejectsHistoricalLegacyOwner(t *testing.T) {
+func TestParseActiveRouteRegistryRejectsHistoricalMigrationContract(t *testing.T) {
 	contents := readRepositoryFixture(t, "contracts/ownership/s1-registry-phases/01-legacy-primary-go-shadow.json")
-	_, err := parseActiveRouteRegistry(contents)
-	if err == nil || !strings.Contains(err.Error(), "retired Legacy owner") {
-		t.Fatalf("historical Legacy owner was not rejected: %v", err)
+	if _, err := parseActiveRouteRegistry(contents); err == nil {
+		t.Fatal("historical migration contract was accepted as active ownership")
 	}
 }

@@ -215,7 +215,7 @@ func (h *handler) serveRegistry(writer http.ResponseWriter, request *http.Reques
 	}
 
 	query := encodeRegistryQuery(params)
-	if decision.SelectedOwner != ownershipregistry.OwnerCore || decision.ReadFallbackOwner != "" || decision.ShadowOwner != "" {
+	if decision.SelectedOwner != ownershipregistry.OwnerCore {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Registry route decision is outside the V2 Core-only boundary.", true, nil)
 		return
 	}
@@ -663,7 +663,6 @@ func (h *handler) resolveAuthoritativeSiteForDomain(request *http.Request, sessi
 	decision := ownershipregistry.Decision{
 		RouteKey:          http.MethodGet + " " + route.template,
 		PathTemplate:      route.template,
-		DeclaredOwner:     ownershipregistry.OwnerCore,
 		SelectedOwner:     ownershipregistry.OwnerCore,
 		RegistryRevision:  outer.RegistryRevision,
 		RouteRevision:     1,
@@ -671,7 +670,7 @@ func (h *handler) resolveAuthoritativeSiteForDomain(request *http.Request, sessi
 	}
 	if h.routeManager != nil {
 		resolved, err := h.routeManager.Current().Resolve(http.MethodGet, publicPath, session.TenantID)
-		if err != nil || resolved.DeclaredOwner != ownershipregistry.OwnerCore || resolved.SelectedOwner != ownershipregistry.OwnerCore || resolved.ReadFallbackOwner != "" || resolved.ShadowOwner != "" {
+		if err != nil || resolved.SelectedOwner != ownershipregistry.OwnerCore {
 			return platformapi.Site{}, errors.New("Registry Site route ownership is unavailable")
 		}
 		decision = resolved

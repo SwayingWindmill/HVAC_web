@@ -192,14 +192,11 @@ func TestCommandRegistryDecisionUsesRegistryRouteOwnership(t *testing.T) {
 			"method":"GET",
 			"path":"/api/v1/devices/{deviceId}",
 			"owner":"platform-core-service",
+			"publicIngress":"platform-gateway",
 			"revision":9,
 			"rollout":{"mode":"all"},
 			"compatibilityMode":"native",
-			"allowedScopeDimensions":["organization","site","device","principal"],
-			"migrationPhase":"GO_PRIMARY",
-			"shadowSideEffectPolicy":"NONE",
-			"readOnlyFallback":false,
-			"fallbackForbiddenResults":["AUTHORIZATION_DENIED","RESOURCE_NOT_FOUND"]
+			"allowedScopeDimensions":["tenant","site","device","principal"]
 		}]
 	}`))
 	if err != nil {
@@ -217,9 +214,8 @@ func TestCommandRegistryDecisionUsesRegistryRouteOwnership(t *testing.T) {
 	if failure != nil {
 		t.Fatalf("failure=%+v", *failure)
 	}
-	if decision.DeclaredOwner != ownershipregistry.OwnerCore || decision.SelectedOwner != ownershipregistry.OwnerCore ||
-		decision.PathTemplate != platformapi.GetDevicePathTemplate || decision.RegistryRevision != 44 || decision.RouteRevision != 9 ||
-		decision.ReadFallbackOwner != "" || decision.ShadowOwner != "" {
+	if decision.SelectedOwner != ownershipregistry.OwnerCore ||
+		decision.PathTemplate != platformapi.GetDevicePathTemplate || decision.RegistryRevision != 44 || decision.RouteRevision != 9 {
 		t.Fatalf("unexpected Registry decision %+v", decision)
 	}
 }

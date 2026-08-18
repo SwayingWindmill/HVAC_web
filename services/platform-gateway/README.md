@@ -16,7 +16,7 @@ The checked-in authority is `contracts/http/platform-gateway.openapi.yaml`.
 | `GET` | `/api/v1/principal` | Read the authenticated principal and actor chain through IAM. |
 | `POST` | `/api/v1/auth/logout` | Revoke the current BFF Session with Origin and CSRF protection, then return the trusted OIDC end-session URL in `Location` so the browser can clear the provider SSO session. |
 | `POST` | `/api/v1/auth/sessions/{sessionId}/revoke` | Administratively revoke a session and commit its Audit message. |
-| `GET` | `/api/v1/audit/session-events/{messageId}` | Read one Organization-scoped append-only Session Audit record. |
+| `GET` | `/api/v1/audit/session-events/{messageId}` | Read one Tenant-scoped append-only Session Audit record. |
 
 Successful responses are typed resources without a global response envelope. Public failures use `application/problem+json` and include stable `code`, `traceId`, `retryable` and safe detail.
 
@@ -30,7 +30,7 @@ Gateway implements the standard OIDC Authorization Code flow with S256 PKCE, Dis
 
 The OIDC provider is deliberately not the BFF Session or authorization authority. Gateway retains one-time state with TTL and local `returnTo` binding, nonce generation and constant-time validation, strict JWT and token-type checks, `nbf` enforcement, bounded provider responses, encrypted durable Session storage, audit/outbox transactions and platform-owned Tenant authorization. Provider role or custom claims are never Registry authorization truth.
 
-Gateway calls private IAM through TLS 1.3 mutual authentication. It signs a short-lived delegation bound to the Gateway SPIFFE identity, IAM audience, one action, one session scope, acting Organization, policy revision and expiry. Public caller-supplied identity or delegation headers are rejected.
+Gateway calls private IAM through TLS 1.3 mutual authentication. It signs a short-lived delegation bound to the Gateway SPIFFE identity, IAM audience, one action, one session scope, acting Tenant, policy revision and expiry. Public caller-supplied identity or delegation headers are rejected.
 
 Detailed identity and threat-boundary documentation is in `docs/security/s0-authenticated-principal.md`.
 
@@ -38,17 +38,17 @@ Detailed identity and threat-boundary documentation is in `docs/security/s0-auth
 
 When identity is enabled, production configuration requires `GATEWAY_DATABASE_URL` and `AUDIT_URL`. In-memory Session storage or missing Audit Ledger is allowed only through explicit S0 test compatibility flags.
 
-Session creation, logout and administrative revocation use one PostgreSQL transaction for Session state, Audit Intent and Protobuf Outbox. A successful mutation exposes its stable `X-Audit-Message-ID`; cookie issuance occurs only after commit. Gateway queries private Audit Ledger with a separate mTLS delegation constrained to `audit:read` and the current Organization.
+Session creation, logout and administrative revocation use one PostgreSQL transaction for Session state, Audit Intent and Protobuf Outbox. A successful mutation exposes its stable `X-Audit-Message-ID`; cookie issuance occurs only after commit. Gateway queries private Audit Ledger with a separate mTLS delegation constrained to `audit:read` and the current Tenant.
 
 The complete transaction, Relay, Inbox, RLS and hash-chain model is documented in `docs/security/s0-durable-session-audit.md`.
 
 ## Route and Data Ownership boundary
 
-Gateway loads `contracts/ownership/route-ownership.v1.json` as an immutable validated snapshot. Every public request resolves exactly one method/path owner before handler execution. Stable percentage cohorts use only the authenticated acting Organization and initiating principal subject; client cookies and headers cannot choose an owner. The applied registry revision is emitted as `X-Route-Policy-Revision`.
+Gateway loads `contracts/ownership/route-ownership.v1.json` as an immutable validated snapshot. Every public request resolves exactly one deterministic method/path owner before handler execution; active ownership has no percentage cohort, shadow owner, Legacy owner or request fallback. The applied registry revision is emitted as `X-Route-Policy-Revision`.
 
 Accepted registry changes require monotonic registry and route revisions. Gateway persists an append-only route policy audit before atomically replacing the snapshot, so in-flight requests retain their original decision and only future requests observe the new policy.
 
-The frozen Legacy read adapter is limited to the existing NestJS health endpoint in `LEGACY_PRIVATE_MODE=true`. It requires TLS 1.3 mTLS, exact Gateway SPIFFE identity and a <=60 second delegation constrained to one Organization and `legacy:platform-status:read`. Gateway never forwards browser cookies, authorization or identity headers and normalizes the Legacy envelope into the generated public representation.
+Legacy routing adapters are not part of the active Gateway. Historical migration contracts remain evidence only and are rejected by the active ownership parser.
 
 See `docs/security/s0-route-data-ownership.md` for Registry, Data Ownership, rollback, anti-corruption, timeout and circuit-breaker details.
 

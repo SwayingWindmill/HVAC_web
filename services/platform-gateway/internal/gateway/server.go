@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +34,10 @@ var (
 	zeroSpanID         = strings.Repeat("0", 16)
 )
 
+func formatRevision(value int64) string {
+	return strconv.FormatInt(value, 10)
+}
+
 type contextKey string
 
 const (
@@ -52,7 +57,6 @@ type Config struct {
 	Identity      *IdentityConfig
 	RouteManager  *ownershipregistry.Manager
 	RouteAudit    ownershipregistry.AuditSink
-	Legacy        *LegacyConfig
 	Registry      *RegistryConfig
 	Telemetry     *TelemetryConfig
 	Command       *CommandConfig
@@ -70,7 +74,6 @@ type handler struct {
 	identity      *identityController
 	routeManager  *ownershipregistry.Manager
 	routeAudit    ownershipregistry.AuditSink
-	legacy        *legacyController
 	registry      *registryController
 	telemetry     *telemetryController
 	command       *commandController
@@ -111,7 +114,6 @@ func NewHandler(config Config) http.Handler {
 		identity:      newIdentityController(config.Identity, now),
 		routeManager:  config.RouteManager,
 		routeAudit:    routeAudit,
-		legacy:        newLegacyController(config.Legacy),
 		registry:      newRegistryController(config.Registry),
 		telemetry:     newTelemetryController(config.Telemetry),
 		command:       newCommandController(config.Command),
@@ -212,7 +214,7 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		}
 		if workOrderRoute, matches := matchPublicWorkOrderRoute(request.URL.Path); matches {
 			decision := routeDecisionFromContext(request.Context())
-			if decision.SelectedOwner != ownershipregistry.OwnerWorkOrder || decision.ReadFallbackOwner != "" || decision.ShadowOwner != "" {
+			if decision.SelectedOwner != ownershipregistry.OwnerWorkOrder {
 				writeProblem(writer, request, http.StatusServiceUnavailable, "WORK_ORDER_UNAVAILABLE", "Work Order unavailable", "The Work Order route is not active for this Session.", true, nil)
 				return
 			}
@@ -221,20 +223,11 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		}
 		if alarmRoute, matches := matchPublicAlarmRoute(request.URL.Path); matches {
 			decision := routeDecisionFromContext(request.Context())
-			if decision.SelectedOwner != ownershipregistry.OwnerAlarm || decision.ReadFallbackOwner != "" || decision.ShadowOwner != "" {
+			if decision.SelectedOwner != ownershipregistry.OwnerAlarm {
 				writeProblem(writer, request, http.StatusServiceUnavailable, "ALARM_UNAVAILABLE", "Alarm unavailable", "The Alarm route is not active for this Session.", true, nil)
 				return
 			}
 			dispatchAlarmRoute(h, writer, request, alarmRoute)
-			return
-		}
-		decision := routeDecisionFromContext(request.Context())
-		if decision.SelectedOwner == ownershipregistry.OwnerLegacy {
-			if request.URL.Path != platformapi.GetPlatformStatusPath || request.Method != http.MethodGet {
-				writeProblem(writer, request, http.StatusServiceUnavailable, "ROUTE_OWNER_UNSUPPORTED", "Route owner unsupported", "The selected route owner cannot serve this public resource.", true, nil)
-				return
-			}
-			h.GetPlatformStatus(writer, request)
 			return
 		}
 	}
@@ -351,27 +344,6 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 	decision, err := snapshot.Resolve(request.Method, request.URL.Path, "")
 	var session bffSession
 	var workloadCaller telemetryCaller
-	if errors.Is(err, ownershipregistry.ErrCohortKey) {
-		if isVerifiedTelemetryWorkloadRequest(request) {
-			resolved, failure := h.telemetryWorkloadCaller(request)
-			if failure != nil {
-				h.writeTelemetryFailure(writer, request, *failure)
-				return request, false
-			}
-			workloadCaller = resolved
-			businessKey := workloadCaller.tenantID + "\x00" + workloadCaller.principal.Subject
-			decision, err = snapshot.Resolve(request.Method, request.URL.Path, businessKey)
-		} else {
-			resolved, failure := h.identitySession(request)
-			if failure != nil {
-				writeIdentityFailure(writer, request, *failure)
-				return request, false
-			}
-			session = resolved
-			businessKey := session.TenantID + "\x00" + session.Principal.Subject
-			decision, err = snapshot.Resolve(request.Method, request.URL.Path, businessKey)
-		}
-	}
 	if errors.Is(err, ownershipregistry.ErrRouteMissing) {
 		methods := snapshot.AllowedMethods(request.URL.Path)
 		if len(methods) > 0 {
@@ -429,7 +401,6 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 		RegistryRevision:  decision.RegistryRevision,
 		RouteRevision:     decision.RouteRevision,
 		CompatibilityMode: decision.CompatibilityMode,
-		CohortBucket:      decision.CohortBucket,
 		ExecutingService:  serviceName,
 		CorrelationID:     requestIDFromContext(request.Context()),
 		TraceID:           traceIDFromContext(request.Context()),
@@ -497,32 +468,17 @@ func (h *handler) GetPlatformStatus(writer http.ResponseWriter, request *http.Re
 		decision = ownershipregistry.Decision{
 			RouteKey:          http.MethodGet + " " + platformapi.GetPlatformStatusPath,
 			PathTemplate:      platformapi.GetPlatformStatusPath,
-			DeclaredOwner:     ownershipregistry.OwnerGateway,
 			SelectedOwner:     ownershipregistry.OwnerGateway,
 			RegistryRevision:  1,
 			RouteRevision:     1,
 			CompatibilityMode: "native",
 		}
 	}
-	session, ok := routeSessionFromContext(request.Context())
-	if !ok {
-		resolved, failure := h.identitySession(request)
-		if failure != nil {
-			writeIdentityFailure(writer, request, *failure)
-			return
-		}
-		session = resolved
-	}
-	writer.Header().Set("X-Route-Policy-Revision", formatRevision(decision.RegistryRevision))
-	if decision.SelectedOwner == ownershipregistry.OwnerLegacy {
-		response, failure := h.legacy.callPlatformStatus(request.Context(), h.identity, session, decision, requestIDFromContext(request.Context()), traceparentFromContext(request.Context()))
-		if failure != nil {
-			writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
-			return
-		}
-		writeJSON(writer, http.StatusOK, response)
+	if _, failure := h.identitySession(request); failure != nil {
+		writeIdentityFailure(writer, request, *failure)
 		return
 	}
+	writer.Header().Set("X-Route-Policy-Revision", formatRevision(decision.RegistryRevision))
 	writeJSON(writer, http.StatusOK, platformapi.PlatformStatusResponse{
 		Status:              "ok",
 		Service:             "platform-status",
