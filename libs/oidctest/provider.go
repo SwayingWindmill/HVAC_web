@@ -47,6 +47,7 @@ type authorizationCode struct {
 	Nonce         string
 	CodeChallenge string
 	LoginHint     string
+	RequiredACR   string
 	CreatedAt     time.Time
 }
 
@@ -63,6 +64,9 @@ type tokenClaims struct {
 	Roles     []string `json:"roles"`
 	TenantID  string   `json:"tenantId"`
 	TokenUse  string   `json:"token_use"`
+	ACR       string   `json:"acr"`
+	AMR       []string `json:"amr"`
+	AuthTime  int64    `json:"auth_time"`
 }
 
 func New(config Config) (*Provider, error) {
@@ -199,6 +203,7 @@ func (provider *Provider) authorize(writer http.ResponseWriter, request *http.Re
 		Nonce:         query.Get("nonce"),
 		CodeChallenge: challenge,
 		LoginHint:     loginHint,
+		RequiredACR:   query.Get("acr_values"),
 		CreatedAt:     provider.now(),
 	}
 	provider.mu.Unlock()
@@ -260,6 +265,15 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 	name := "Fixture User"
 	email := "fixture.user@example.test"
 	tenantID := provider.defaultTenantID
+	acr := code.RequiredACR
+	if acr == "" {
+		acr = "urn:hvac:loa:1"
+	}
+	amr := []string{"pwd"}
+	if acr == "urn:hvac:loa:2" {
+		amr = []string{"pwd", "otp"}
+	}
+	authTime := now.Unix()
 
 	switch code.LoginHint {
 	case "s2-telemetry":
@@ -297,6 +311,9 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 		tokenUse = ""
 		tenantID = ""
 		roles = nil
+		acr = ""
+		amr = nil
+		authTime = 0
 	}
 	claims := tokenClaims{
 		Issuer:    issuer,
@@ -311,6 +328,9 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 		Roles:     roles,
 		TenantID:  tenantID,
 		TokenUse:  tokenUse,
+		ACR:       acr,
+		AMR:       amr,
+		AuthTime:  authTime,
 	}
 	idToken, err := provider.signJWT(claims, code.LoginHint == "invalid-signature", code.LoginHint == "unknown-signing-key", code.LoginHint == "minimal-oidc")
 	if err != nil {

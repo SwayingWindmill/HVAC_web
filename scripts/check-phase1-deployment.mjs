@@ -147,6 +147,12 @@ for (const network of ['application', 'data', 'mqtt', 'observability']) {
 assert(/^  public: \{\}/m.test(compose), 'compose must have an explicit public network');
 
 const serviceBlocks = [...compose.matchAll(/^  ([a-z0-9-]+):\n([\s\S]*?)(?=^  [a-z0-9-]+:\n|^networks:|^volumes:)/gm)];
+const identityServiceBlock = serviceBlocks.find(([, name]) => name === 'identity-service')?.[2] ?? '';
+const identityAdminBlock = serviceBlocks.find(([, name]) => name === 'identity-admin')?.[2] ?? '';
+const identityMFAKeygenBlock = serviceBlocks.find(([, name]) => name === 'identity-mfa-keygen')?.[2] ?? '';
+assert(identityServiceBlock.includes('IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/identity/mfa-encryption.key') && identityServiceBlock.includes('${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity:ro'), 'identity-service must use the dedicated MFA encryption key from a read-only runtime mount');
+assert(identityAdminBlock.includes('IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/identity/mfa-encryption.key') && identityAdminBlock.includes('${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity:ro'), 'identity-admin must use the dedicated MFA encryption key from a read-only runtime mount');
+assert(identityMFAKeygenBlock.includes('IDENTITY_MFA_KEY_OUT: /run/hvac/identity/mfa-encryption.key') && identityMFAKeygenBlock.includes('${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity'), 'Phase 1 must provide the explicit MFA key bootstrap tool');
 for (const service of ['energy-api', 'identity-service', 'scheduler', 'telemetry-worker', 'metric-worker', 'iot-service']) {
   const block = serviceBlocks.find(([, name]) => name === service)?.[2] ?? '';
   assert(block.includes('phase1-schema-preflight:') && block.includes('condition: service_completed_successfully'), `${service} must fail closed on Product/Schema preflight`);
@@ -276,7 +282,7 @@ const listEntries = migrationList.split(/\r?\n/).map((line) => line.trim()).filt
 assert(migrationManifest.schemaVersion === 1, 'migration manifest schemaVersion must be 1');
 assert(migrationManifest.policy?.fixturesAllowed === false && migrationManifest.policy?.testdataAllowed === false, 'production migration policy must forbid fixture/testdata sources');
 assert(migrationManifest.policy?.localPasswordStatementsAllowed === false, 'production migration policy must forbid local password statements');
-assert(manifestEntries.length === 46, `production migration allowlist must contain exactly 46 migrations, got ${manifestEntries.length}`);
+assert(manifestEntries.length === 48, `production migration allowlist must contain exactly 48 migrations, got ${manifestEntries.length}`);
 assert(JSON.stringify(manifestEntries) === JSON.stringify(listEntries), 'migration-list.tsv must exactly match the JSON allowlist and order');
 for (const entry of manifestEntries) {
   const [, sourcePath] = entry.split('|');
@@ -302,7 +308,7 @@ for (const role of migrationManifest.loginRoles ?? []) {
 assert(!roleCredentialTemplate.includes('local-only') && !roleCredentialTemplate.includes('fixture-only'), 'role credential contract must not reuse historical local/test credentials');
 assert(packageJson.includes('"deployment:phase1:migration:test": "node scripts/run-phase1-migration-integration.mjs"'), 'production migration integration must have a stable package entrypoint');
 assert(packageJson.includes('"deployment:phase1:recovery:verify": "node scripts/verify-phase1-recovery-drill.mjs"'), 'recovery drill verifier must have a stable manual entrypoint');
-assert(phase1Readme.includes('exact 46-file allowlist') && phase1Readme.includes('without runtime rewriting'), 'Phase 1 README must document the reviewed production-safe migration allowlist');
+assert(phase1Readme.includes('exact 48-file allowlist') && phase1Readme.includes('without runtime rewriting'), 'Phase 1 README must document the reviewed production-safe migration allowlist');
 
 const byId = new Map((matrix.items ?? []).map((item) => [item.id, item]));
 for (const id of ['DEPLOY-K8S-001', 'MQTT-HA-001', 'POSTGRES-HA-001', 'CLICKHOUSE-HA-001']) {

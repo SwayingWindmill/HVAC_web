@@ -183,6 +183,16 @@
             }
           },
           {
+            "name": "assurance",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["normal", "high"],
+              "default": "normal"
+            }
+          },
+          {
             "$ref": "#/components/parameters/RequestId"
           },
           {

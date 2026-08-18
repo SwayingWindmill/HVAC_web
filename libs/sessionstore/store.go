@@ -37,6 +37,9 @@ type Session struct {
 	TenantID                 string
 	CSRFTokenCiphertext      []byte
 	ProviderTokensCiphertext []byte
+	AuthenticationACR        string
+	AuthenticationAMR        []string
+	AuthenticationTime       time.Time
 	ExpiresAt                time.Time
 	LastActivityAt           time.Time
 	RevokedAt                *time.Time
@@ -214,6 +217,7 @@ func cloneSession(session Session) Session {
 	session.Principal.Roles = append([]string(nil), session.Principal.Roles...)
 	session.CSRFTokenCiphertext = append([]byte(nil), session.CSRFTokenCiphertext...)
 	session.ProviderTokensCiphertext = append([]byte(nil), session.ProviderTokensCiphertext...)
+	session.AuthenticationAMR = append([]string(nil), session.AuthenticationAMR...)
 	if session.RevokedAt != nil {
 		value := *session.RevokedAt
 		session.RevokedAt = &value

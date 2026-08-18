@@ -48,9 +48,38 @@ func main() {
 		}
 		fmt.Fprintln(os.Stdout, password)
 		return
+	case "totp-start":
+		protector, err := identity.LoadMFAProtectorFile(required("IDENTITY_MFA_ENCRYPTION_KEY_FILE"))
+		if err != nil {
+			fail(err)
+		}
+		enrollment, err := store.StartTOTPEnrollment(ctx, username, required("IDENTITY_ISSUER"), protector, time.Now().UTC())
+		if err != nil {
+			fail(err)
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(enrollment); err != nil {
+			fail(err)
+		}
+		return
+	case "totp-activate":
+		protector, err := identity.LoadMFAProtectorFile(required("IDENTITY_MFA_ENCRYPTION_KEY_FILE"))
+		if err != nil {
+			fail(err)
+		}
+		if err := store.ActivateTOTP(ctx, username, required("IDENTITY_ADMIN_TOTP_CODE"), protector, time.Now().UTC()); err != nil {
+			fail(err)
+		}
+		fmt.Fprintln(os.Stdout, "TOTP enabled")
+		return
+	case "totp-disable":
+		if err := store.DisableTOTP(ctx, username, time.Now().UTC()); err != nil {
+			fail(err)
+		}
+		fmt.Fprintln(os.Stdout, "TOTP disabled")
+		return
 	case "create":
 	default:
-		fmt.Fprintln(os.Stderr, "IDENTITY_ADMIN_OPERATION must be create, reset-password or reset-password-random")
+		fmt.Fprintln(os.Stderr, "IDENTITY_ADMIN_OPERATION must be create, reset-password, reset-password-random, totp-start, totp-activate or totp-disable")
 		os.Exit(2)
 	}
 

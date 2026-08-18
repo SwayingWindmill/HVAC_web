@@ -21,6 +21,7 @@ type Config struct {
 	PostLogoutRedirectURI string
 	DatabaseURL           string
 	SigningKeyFile        string
+	MFAEncryptionKeyFile  string
 	Now                   func() time.Time
 }
 
@@ -32,8 +33,10 @@ type Server struct {
 	store                 *Store
 	now                   func() time.Time
 	signingKey            SigningKey
+	mfaProtector          *MFAProtector
 	loginTemplate         *template.Template
 	loginAction           string
+	mfaAction             string
 }
 
 func NewServer(ctx context.Context, config Config) (*Server, error) {
@@ -41,8 +44,8 @@ func NewServer(ctx context.Context, config Config) (*Server, error) {
 	clientID := strings.TrimSpace(config.ClientID)
 	redirectURI := strings.TrimSpace(config.RedirectURI)
 	postLogout := strings.TrimSpace(config.PostLogoutRedirectURI)
-	if issuer == "" || clientID == "" || redirectURI == "" || postLogout == "" || strings.TrimSpace(config.DatabaseURL) == "" || strings.TrimSpace(config.SigningKeyFile) == "" {
-		return nil, errors.New("identity issuer, client, redirect, logout redirect, database URL and signing key file are required")
+	if issuer == "" || clientID == "" || redirectURI == "" || postLogout == "" || strings.TrimSpace(config.DatabaseURL) == "" || strings.TrimSpace(config.SigningKeyFile) == "" || strings.TrimSpace(config.MFAEncryptionKeyFile) == "" {
+		return nil, errors.New("identity issuer, client, redirect, logout redirect, database URL, signing key file and MFA encryption key file are required")
 	}
 	issuerURL, err := url.Parse(issuer)
 	if err != nil || issuerURL.Scheme != "https" || issuerURL.Host == "" {
@@ -69,18 +72,29 @@ func NewServer(ctx context.Context, config Config) (*Server, error) {
 		store.Close()
 		return nil, err
 	}
+	mfaProtector, err := LoadMFAProtectorFile(config.MFAEncryptionKeyFile)
+	if err != nil {
+		store.Close()
+		return nil, err
+	}
 	page, err := template.New("login").Parse(loginPageTemplate)
 	if err != nil {
 		store.Close()
 		return nil, fmt.Errorf("parse identity login page: %w", err)
 	}
-	loginAction := strings.TrimRight(issuerURL.EscapedPath(), "/") + "/login"
+	basePath := strings.TrimRight(issuerURL.EscapedPath(), "/")
+	loginAction := basePath + "/login"
+	mfaAction := basePath + "/mfa/totp"
 	if loginAction == "" {
 		loginAction = "/login"
 	}
+	if mfaAction == "" {
+		mfaAction = "/mfa/totp"
+	}
 	return &Server{
 		issuer: issuer, clientID: clientID, redirectURI: redirectURI, postLogoutRedirectURI: postLogout,
-		store: store, now: now, signingKey: signingKey, loginTemplate: page, loginAction: loginAction,
+		store: store, now: now, signingKey: signingKey, mfaProtector: mfaProtector,
+		loginTemplate: page, loginAction: loginAction, mfaAction: mfaAction,
 	}, nil
 }
 
@@ -94,6 +108,7 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /jwks", server.jwks)
 	mux.HandleFunc("GET /authorize", server.authorize)
 	mux.HandleFunc("POST /login", server.login)
+	mux.HandleFunc("POST /mfa/totp", server.completeTOTP)
 	mux.HandleFunc("POST /token", server.token)
 	mux.HandleFunc("GET /session/end", server.endSession)
 	return securityHeaders(mux)
@@ -113,7 +128,8 @@ func (server *Server) discovery(writer http.ResponseWriter, _ *http.Request) {
 		"token_endpoint_auth_methods_supported": []string{"none"},
 		"code_challenge_methods_supported":      []string{"S256"},
 		"scopes_supported":                      []string{"openid", "profile", "email"},
-		"claims_supported":                      []string{"iss", "aud", "sub", "exp", "iat", "nbf", "nonce", "name", "email"},
+		"acr_values_supported":                  []string{AssuranceBasic, AssuranceMFA},
+		"claims_supported":                      []string{"iss", "aud", "sub", "exp", "iat", "nbf", "nonce", "name", "email", "acr", "amr", "auth_time"},
 	})
 }
 
@@ -136,11 +152,19 @@ func (server *Server) authorize(writer http.ResponseWriter, request *http.Reques
 		writeOAuthError(writer, http.StatusBadRequest, "invalid_scope", "openid scope is required")
 		return
 	}
+	requiredACR := query.Get("acr_values")
+	if requiredACR == "" {
+		requiredACR = AssuranceBasic
+	}
+	if requiredACR != AssuranceBasic && requiredACR != AssuranceMFA {
+		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "requested authentication assurance is unsupported")
+		return
+	}
 	challenge := randomToken(32)
 	if err := server.store.CreateAuthorizationRequest(request.Context(), AuthorizationRequest{
 		ChallengeHash: hashOpaque(challenge), ClientID: server.clientID, RedirectURI: server.redirectURI,
 		State: query.Get("state"), Nonce: query.Get("nonce"), CodeChallenge: query.Get("code_challenge"),
-		Scope: query.Get("scope"), ExpiresAt: server.now().UTC().Add(10 * time.Minute),
+		Scope: query.Get("scope"), RequiredACR: requiredACR, ExpiresAt: server.now().UTC().Add(10 * time.Minute),
 	}); err != nil {
 		writeOAuthError(writer, http.StatusServiceUnavailable, "temporarily_unavailable", "identity service is unavailable")
 		return
@@ -165,9 +189,17 @@ func (server *Server) login(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	username := request.Form.Get("username")
-	grant, err := server.store.CompleteLogin(request.Context(), hashOpaque(challenge), username, request.Form.Get("password"), server.now().UTC())
+	result, err := server.store.CompleteLogin(request.Context(), hashOpaque(challenge), username, request.Form.Get("password"), server.now().UTC())
 	if errors.Is(err, ErrInvalidCredentials) {
 		server.renderLogin(writer, http.StatusUnauthorized, challenge, username, "用户名或密码错误。")
+		return
+	}
+	if errors.Is(err, ErrMFAEnrollmentRequired) {
+		server.renderLogin(writer, http.StatusForbidden, challenge, username, "该安全操作需要多因素认证，请先由身份管理员完成 TOTP 配置。")
+		return
+	}
+	if errors.Is(err, ErrMFARequired) && result.MFARequired {
+		server.renderTOTP(writer, http.StatusOK, challenge, "")
 		return
 	}
 	if errors.Is(err, ErrAuthorizationRequestExpired) {
@@ -179,6 +211,39 @@ func (server *Server) login(writer http.ResponseWriter, request *http.Request) {
 		server.renderLogin(writer, http.StatusServiceUnavailable, challenge, username, "身份服务暂时不可用。")
 		return
 	}
+	server.redirectAuthorizationGrant(writer, request, result.Grant)
+}
+
+func (server *Server) completeTOTP(writer http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(writer, request.Body, 4<<10)
+	if err := request.ParseForm(); err != nil {
+		server.renderTOTP(writer, http.StatusBadRequest, "", "安全确认请求无效，请重新开始。")
+		return
+	}
+	challenge := request.Form.Get("challenge")
+	cookie, err := request.Cookie(loginCookieName)
+	if err != nil || challenge == "" || !subtleStringCompare(challenge, cookie.Value) {
+		server.renderTOTP(writer, http.StatusBadRequest, "", "安全确认请求已过期，请重新开始。")
+		return
+	}
+	grant, err := server.store.CompleteTOTP(request.Context(), hashOpaque(challenge), request.Form.Get("code"), server.mfaProtector, server.now().UTC())
+	if errors.Is(err, ErrMFAInvalid) {
+		server.renderTOTP(writer, http.StatusUnauthorized, challenge, "验证码无效或已使用。")
+		return
+	}
+	if errors.Is(err, ErrAuthorizationRequestExpired) {
+		http.SetCookie(writer, &http.Cookie{Name: loginCookieName, Value: "", Path: "/", HttpOnly: true, Secure: true, MaxAge: -1})
+		server.renderTOTP(writer, http.StatusBadRequest, "", "安全确认请求已过期，请重新开始。")
+		return
+	}
+	if err != nil {
+		server.renderTOTP(writer, http.StatusServiceUnavailable, challenge, "身份服务暂时不可用。")
+		return
+	}
+	server.redirectAuthorizationGrant(writer, request, grant)
+}
+
+func (server *Server) redirectAuthorizationGrant(writer http.ResponseWriter, request *http.Request, grant LoginGrant) {
 	http.SetCookie(writer, &http.Cookie{Name: loginCookieName, Value: "", Path: "/", HttpOnly: true, Secure: true, MaxAge: -1})
 	callback, _ := url.Parse(grant.RedirectURI)
 	values := callback.Query()
@@ -214,6 +279,7 @@ func (server *Server) token(writer http.ResponseWriter, request *http.Request) {
 		Issuer: server.issuer, Audience: server.clientID, Subject: subject.UserID,
 		ExpiresAt: now.Add(5 * time.Minute).Unix(), IssuedAt: now.Unix(), NotBefore: now.Add(-time.Second).Unix(),
 		Nonce: subject.Nonce, Name: subject.DisplayName, Email: subject.Email,
+		ACR: subject.ACR, AMR: subject.AMR, AuthTime: subject.AuthTime.Unix(),
 	})
 	if err != nil {
 		writeOAuthError(writer, http.StatusServiceUnavailable, "temporarily_unavailable", "token signing failed")
@@ -238,10 +304,33 @@ func (server *Server) endSession(writer http.ResponseWriter, request *http.Reque
 	http.Redirect(writer, request, server.postLogoutRedirectURI, http.StatusFound)
 }
 
+type loginPageView struct {
+	Challenge   string
+	Username    string
+	Message     string
+	LoginAction string
+	MFAAction   string
+	MFA         bool
+}
+
 func (server *Server) renderLogin(writer http.ResponseWriter, status int, challenge, username, message string) {
+	server.renderAuthPage(writer, status, loginPageView{
+		Challenge: challenge, Username: username, Message: message,
+		LoginAction: server.loginAction, MFAAction: server.mfaAction,
+	})
+}
+
+func (server *Server) renderTOTP(writer http.ResponseWriter, status int, challenge, message string) {
+	server.renderAuthPage(writer, status, loginPageView{
+		Challenge: challenge, Message: message, LoginAction: server.loginAction,
+		MFAAction: server.mfaAction, MFA: true,
+	})
+}
+
+func (server *Server) renderAuthPage(writer http.ResponseWriter, status int, view loginPageView) {
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.WriteHeader(status)
-	_ = server.loginTemplate.Execute(writer, map[string]string{"Challenge": challenge, "Username": username, "Message": message, "LoginAction": server.loginAction})
+	_ = server.loginTemplate.Execute(writer, view)
 }
 
 func scopeContains(scope, expected string) bool {
@@ -298,18 +387,32 @@ const loginPageTemplate = `<!doctype html>
 <body>
   <main class="card">
     <div class="eyebrow">HVAC Energy Platform</div>
+    {{if .MFA}}
+    <h1>安全确认</h1>
+    <p class="subtitle">这是高保证身份确认，不是普通登录过期。请输入认证器中的一次性验证码。</p>
+    {{else}}
     <h1>登录智慧能源系统</h1>
     <p class="subtitle">使用平台账号完成身份认证。业务 Tenant、Site 与角色权限由平台 IAM 独立管理。</p>
+    {{end}}
     {{if .Message}}<div class="error">{{.Message}}</div>{{end}}
     {{if .Challenge}}
-    <form method="post" action="{{.LoginAction}}" autocomplete="on">
-      <input type="hidden" name="challenge" value="{{.Challenge}}" />
-      <label for="username">用户名</label>
-      <input id="username" name="username" value="{{.Username}}" autocomplete="username" required autofocus />
-      <label for="password">密码</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required />
-      <button type="submit">登录</button>
-    </form>
+      {{if .MFA}}
+      <form method="post" action="{{.MFAAction}}" autocomplete="off">
+        <input type="hidden" name="challenge" value="{{.Challenge}}" />
+        <label for="code">一次性验证码</label>
+        <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required autofocus />
+        <button type="submit">确认身份</button>
+      </form>
+      {{else}}
+      <form method="post" action="{{.LoginAction}}" autocomplete="on">
+        <input type="hidden" name="challenge" value="{{.Challenge}}" />
+        <label for="username">用户名</label>
+        <input id="username" name="username" value="{{.Username}}" autocomplete="username" required autofocus />
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required />
+        <button type="submit">登录</button>
+      </form>
+      {{end}}
     {{else}}
     <p class="expired">请返回智慧能源系统重新发起登录。</p>
     {{end}}

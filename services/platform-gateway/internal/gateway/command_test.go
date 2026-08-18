@@ -153,6 +153,27 @@ func TestGatewayApproveCommandDerivesIdentityRoleAndExactGrant(t *testing.T) {
 	}
 }
 
+func TestGatewayHighRiskApprovalRequiresStepUpBeforeAuthorizationUpstreams(t *testing.T) {
+	fixture := newCommandGatewayFixture(t)
+	fixture.approvalPending.Store(true)
+	fixture.highRiskApproval.Store(true)
+	request := httptest.NewRequest(http.MethodPost, publicCommandsPath+"/"+fixture.commandID+"/approve", strings.NewReader(`{}`))
+	fixture.authenticate(request, true)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusPreconditionRequired {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var problem platformapi.ProblemDetails
+	if err := json.NewDecoder(recorder.Body).Decode(&problem); err != nil || problem.Code != "STEP_UP_REQUIRED" {
+		t.Fatalf("unexpected step-up problem %#v err=%v", problem, err)
+	}
+	if fixture.commandCalls.Load() != 1 || fixture.iamCalls.Load()+fixture.registryCalls.Load()+fixture.telemetryCalls.Load() != 0 {
+		t.Fatalf("step-up boundary reached authorization upstreams: iam=%d registry=%d telemetry=%d command=%d", fixture.iamCalls.Load(), fixture.registryCalls.Load(), fixture.telemetryCalls.Load(), fixture.commandCalls.Load())
+	}
+}
+
 func TestGatewayApprovalRejectsBrowserAuthorityBeforeUpstreams(t *testing.T) {
 	fixture := newCommandGatewayFixture(t)
 	request := httptest.NewRequest(http.MethodPost, publicCommandsPath+"/"+fixture.commandID+"/approve", strings.NewReader(`{"principalId":"caller-supplied"}`))
@@ -242,6 +263,7 @@ type commandGatewayFixture struct {
 	unsafeState           atomic.Bool
 	crossOrganizationView atomic.Bool
 	approvalPending       atomic.Bool
+	highRiskApproval      atomic.Bool
 	approvalCompleted     atomic.Bool
 }
 
@@ -581,6 +603,9 @@ func (fixture *commandGatewayFixture) commandView(now time.Time) commandView {
 	}
 	if fixture.approvalPending.Load() || fixture.approvalCompleted.Load() {
 		risk = commandmodel.RiskMedium
+		if fixture.highRiskApproval.Load() {
+			risk = commandmodel.RiskHigh
+		}
 		policy = commandmodel.ApprovalSingleApprover
 		requiredCount = 1
 		thirdStatus = commandmodel.IntentAwaitingApproval

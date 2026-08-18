@@ -309,10 +309,11 @@ export function createPlatformGatewayClient(baseUrl = '') {
     getVersion: (init?: RequestInit) => request('__VERSION_PATH__', buildInfoSchema, { ...init, method: 'GET' }),
     getPlatformStatus: (init?: RequestInit) => request('__PLATFORM_STATUS_PATH__', platformStatusResponseSchema, { ...init, method: 'GET' }),
     getCurrentPrincipal: (init?: RequestInit) => request('__PRINCIPAL_PATH__', currentPrincipalResponseSchema, { ...init, method: 'GET' }),
-    loginUrl: (params: { returnTo?: string; loginHint?: string } = {}) => {
+    loginUrl: (params: { returnTo?: string; loginHint?: string; assurance?: 'normal' | 'high' } = {}) => {
       const query = new URLSearchParams();
       if (params.returnTo) query.set('returnTo', params.returnTo);
       if (params.loginHint) query.set('login_hint', params.loginHint);
+      if (params.assurance) query.set('assurance', params.assurance);
       return `__LOGIN_PATH__${query.size ? `?${query.toString()}` : ''}`;
     },
     logout: (csrfToken: string, init?: RequestInit) => request('__LOGOUT_PATH__', z.undefined(), {

@@ -109,6 +109,7 @@ services:
       IDENTITY_ADDR: :19095
       IDENTITY_DIAGNOSTICS_ADDR: :19085
       IDENTITY_SIGNING_KEY_FILE: /run/hvac/identity/signing-key.pem
+      IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/identity/mfa-encryption.key
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -142,6 +143,20 @@ services:
     volumes:
       - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity
 
+  identity-mfa-keygen:
+    <<: *go-service
+    profiles: ["identity-bootstrap"]
+    restart: "no"
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/identity-service/cmd/mfa-keygen }
+    image: ${IDENTITY_MFA_KEYGEN_IMAGE:-hvac/identity-mfa-keygen:0.1.0-dev}
+    environment:
+      IDENTITY_MFA_KEY_OUT: /run/hvac/identity/mfa-encryption.key
+    volumes:
+      - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity
+
   identity-admin:
     <<: *go-service
     profiles: ["identity-bootstrap"]
@@ -158,6 +173,11 @@ services:
       IDENTITY_ADMIN_DISPLAY_NAME: ${IDENTITY_ADMIN_DISPLAY_NAME:-}
       IDENTITY_ADMIN_EMAIL: ${IDENTITY_ADMIN_EMAIL:-}
       IDENTITY_ADMIN_PASSWORD: ${IDENTITY_ADMIN_PASSWORD:-}
+      IDENTITY_ADMIN_TOTP_CODE: ${IDENTITY_ADMIN_TOTP_CODE:-}
+      IDENTITY_ISSUER: ${IDENTITY_ISSUER:-https://localhost:8443/identity}
+      IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/identity/mfa-encryption.key
+    volumes:
+      - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity:ro
     depends_on:
       postgres:
         condition: service_healthy

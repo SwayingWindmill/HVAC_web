@@ -365,7 +365,7 @@ type ProblemDetails struct {
 }
 
 type GetHealthParams struct{ IncludeBuild *bool }
-type BeginLoginParams struct{ ReturnTo, LoginHint string }
+type BeginLoginParams struct{ ReturnTo, LoginHint, Assurance string }
 type CompleteLoginParams struct{ Code, State, Issuer string }
 type LogoutParams struct{ CSRFToken string }
 type RevokeSessionParams struct{ SessionID, CSRFToken string }

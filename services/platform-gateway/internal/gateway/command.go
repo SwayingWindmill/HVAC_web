@@ -353,6 +353,10 @@ func (h *handler) approveCommand(writer http.ResponseWriter, request *http.Reque
 		writeProblem(writer, request, http.StatusConflict, "COMMAND_APPROVAL_INVALID", "Command approval invalid", "The Command is not awaiting another approval.", false, nil)
 		return
 	}
+	if commandApprovalRequiresStepUp(current, session, h.now()) {
+		writeProblem(writer, request, http.StatusPreconditionRequired, "STEP_UP_REQUIRED", "Security confirmation required", "This high-risk Command approval requires recent multi-factor authentication. Start a high-assurance login and retry the approval.", false, nil)
+		return
+	}
 	device, failure := h.resolveCommandDevice(request, session, current.DeviceID)
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
@@ -382,6 +386,21 @@ func (h *handler) approveCommand(writer http.ResponseWriter, request *http.Reque
 	}
 	writer.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(writer, http.StatusOK, approved)
+}
+
+func commandApprovalRequiresStepUp(current commandView, session bffSession, now time.Time) bool {
+	if current.Risk != commandmodel.RiskHigh && current.Risk != commandmodel.RiskCritical {
+		return false
+	}
+	return !freshMFAAssurance(session, now)
+}
+
+func freshMFAAssurance(session bffSession, now time.Time) bool {
+	if session.AuthenticationACR != authenticationACRMFA || !containsString(session.AuthenticationAMR, "pwd") || !containsString(session.AuthenticationAMR, "otp") || session.AuthenticationTime.IsZero() {
+		return false
+	}
+	age := now.UTC().Sub(session.AuthenticationTime.UTC())
+	return age >= 0 && age <= 10*time.Minute
 }
 
 func trustedCommandApproverRole(roles []string) (string, bool) {

@@ -28,6 +28,7 @@ func main() {
 		PostLogoutRedirectURI: os.Getenv("IDENTITY_POST_LOGOUT_REDIRECT_URI"),
 		DatabaseURL:           os.Getenv("IDENTITY_DATABASE_URL"),
 		SigningKeyFile:        os.Getenv("IDENTITY_SIGNING_KEY_FILE"),
+		MFAEncryptionKeyFile:  os.Getenv("IDENTITY_MFA_ENCRYPTION_KEY_FILE"),
 	})
 	cancel()
 	if err != nil {

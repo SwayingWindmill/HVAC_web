@@ -16,7 +16,8 @@
       "migrations": [
         "infra/identity/postgres/init/001-identity-baseline.sql",
         "infra/identity/postgres/init/002-identity-runtime-grants.sql",
-        "infra/identity/postgres/init/003-identity-directory-least-privilege.sql"
+        "infra/identity/postgres/init/003-identity-directory-least-privilege.sql",
+        "infra/identity/postgres/init/004-identity-auth-assurance.sql"
       ]
     },
     {
@@ -26,7 +27,8 @@
         "infra/s0-durable/postgres/init/002-s0-session-idle.sql",
         "infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql",
         "infra/s0-durable/postgres/init/003-operations-audit-ledger.sql",
-        "infra/s0-durable/postgres/init/004-audit-postgres-outbox.sql"
+        "infra/s0-durable/postgres/init/004-audit-postgres-outbox.sql",
+        "infra/s0-durable/postgres/init/005-s0-session-assurance.sql"
       ]
     },
     {

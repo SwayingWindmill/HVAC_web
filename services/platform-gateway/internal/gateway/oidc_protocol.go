@@ -44,6 +44,7 @@ type oidcAuthorizationRequest struct {
 	State        string
 	Nonce        string
 	LoginHint    string
+	ACRValues    string
 }
 
 type oidcSignOutRequest struct {
@@ -102,6 +103,9 @@ func (standardOIDCProtocol) AuthorizationURL(discovery oidcDiscovery, request oi
 	query.Set("nonce", request.Nonce)
 	if request.LoginHint != "" {
 		query.Set("login_hint", request.LoginHint)
+	}
+	if request.ACRValues != "" {
+		query.Set("acr_values", request.ACRValues)
 	}
 	endpoint.RawQuery = query.Encode()
 	return endpoint.String(), nil

@@ -542,7 +542,7 @@ func parseBeginLoginParams(writer http.ResponseWriter, request *http.Request) (p
 		return platformapi.BeginLoginParams{}, false
 	}
 	for key := range query {
-		if key != "returnTo" && key != "login_hint" {
+		if key != "returnTo" && key != "login_hint" && key != "assurance" {
 			writeProblem(writer, request, http.StatusBadRequest, "INVALID_QUERY_PARAMETER", "Invalid query parameter", "One or more query parameters are not supported.", false, []platformapi.FieldError{{Field: key, Message: "unsupported query parameter"}})
 			return platformapi.BeginLoginParams{}, false
 		}
@@ -551,7 +551,15 @@ func parseBeginLoginParams(writer http.ResponseWriter, request *http.Request) (p
 	if returnTo == "" {
 		returnTo = "/system"
 	}
-	return platformapi.BeginLoginParams{ReturnTo: returnTo, LoginHint: query.Get("login_hint")}, true
+	assurance := query.Get("assurance")
+	if assurance == "" {
+		assurance = "normal"
+	}
+	if assurance != "normal" && assurance != "high" {
+		writeProblem(writer, request, http.StatusBadRequest, "INVALID_QUERY_PARAMETER", "Invalid query parameter", "The assurance query parameter must be normal or high.", false, []platformapi.FieldError{{Field: "assurance", Message: "must be normal or high"}})
+		return platformapi.BeginLoginParams{}, false
+	}
+	return platformapi.BeginLoginParams{ReturnTo: returnTo, LoginHint: query.Get("login_hint"), Assurance: assurance}, true
 }
 
 func parseCompleteLoginParams(writer http.ResponseWriter, request *http.Request) (platformapi.CompleteLoginParams, bool) {

@@ -23,6 +23,8 @@ import (
 
 const sessionCookieName = "__Host-hvac_session"
 const userActivityHeaderName = "X-HVAC-User-Activity"
+const authenticationACRBasic = "urn:hvac:loa:1"
+const authenticationACRMFA = "urn:hvac:loa:2"
 
 type IdentityConfig struct {
 	OIDCIssuer              string
@@ -62,10 +64,11 @@ type identityController struct {
 }
 
 type loginState struct {
-	Verifier  string
-	Nonce     string
-	ReturnTo  string
-	CreatedAt time.Time
+	Verifier    string
+	Nonce       string
+	ReturnTo    string
+	RequiredACR string
+	CreatedAt   time.Time
 }
 
 type bffSession struct {
@@ -104,6 +107,9 @@ type oidcClaims struct {
 	Roles     []string `json:"roles"`
 	TenantID  string   `json:"tenantId"`
 	TokenUse  string   `json:"token_use"`
+	ACR       string   `json:"acr"`
+	AMR       []string `json:"amr"`
+	AuthTime  int64    `json:"auth_time"`
 }
 
 type identityFailure struct {
@@ -187,6 +193,17 @@ func (h *handler) BeginLogin(writer http.ResponseWriter, request *http.Request, 
 		writeIdentityFailure(writer, request, identityFailure{400, "INVALID_RETURN_TO", "Invalid return target", "The returnTo value must be a local absolute path.", false})
 		return
 	}
+	assurance := params.Assurance
+	if assurance == "" {
+		assurance = "normal"
+	}
+	requiredACR := authenticationACRBasic
+	if assurance == "high" {
+		requiredACR = authenticationACRMFA
+	} else if assurance != "normal" {
+		writeIdentityFailure(writer, request, identityFailure{400, "AUTHENTICATION_ASSURANCE_INVALID", "Invalid authentication assurance", "The assurance value must be normal or high.", false})
+		return
+	}
 	discovery, failure := h.identity.discover(request.Context())
 	if failure != nil {
 		writeIdentityFailure(writer, request, *failure)
@@ -202,12 +219,13 @@ func (h *handler) BeginLogin(writer http.ResponseWriter, request *http.Request, 
 		State:        state,
 		Nonce:        nonce,
 		LoginHint:    params.LoginHint,
+		ACRValues:    requiredACR,
 	})
 	if err != nil {
 		writeIdentityFailure(writer, request, identityFailure{503, "OIDC_AUTHORIZATION_REQUEST_INVALID", "OIDC login unavailable", "The Gateway could not construct the provider authorization request.", true})
 		return
 	}
-	if err := h.identity.states.Put(request.Context(), state, loginState{Verifier: verifier, Nonce: nonce, ReturnTo: params.ReturnTo, CreatedAt: h.identity.now()}, h.identity.config.StateTTL); err != nil {
+	if err := h.identity.states.Put(request.Context(), state, loginState{Verifier: verifier, Nonce: nonce, ReturnTo: params.ReturnTo, RequiredACR: requiredACR, CreatedAt: h.identity.now()}, h.identity.config.StateTTL); err != nil {
 		writeIdentityFailure(writer, request, identityFailure{503, "OIDC_STATE_STORE_UNAVAILABLE", "OIDC login unavailable", "The Gateway could not persist the shared login state.", true})
 		return
 	}
@@ -250,6 +268,10 @@ func (h *handler) CompleteLogin(writer http.ResponseWriter, request *http.Reques
 		writeIdentityFailure(writer, request, identityFailure{401, "OIDC_TOKEN_TYPE_INVALID", "OIDC token type invalid", "The identity provider returned an unsupported token type.", false})
 		return
 	}
+	if !validAuthenticationAssurance(claims, state.RequiredACR, h.identity.now()) {
+		writeIdentityFailure(writer, request, identityFailure{401, "OIDC_ASSURANCE_INVALID", "Authentication assurance invalid", "The identity provider did not satisfy the requested authentication assurance.", false})
+		return
+	}
 	encryptedTokens, err := h.identity.encryptTokens(tokens)
 	if err != nil {
 		writeIdentityFailure(writer, request, identityFailure{503, "SESSION_TOKEN_STORE_FAILED", "Session unavailable", "The server could not protect the identity tokens.", true})
@@ -268,6 +290,9 @@ func (h *handler) CompleteLogin(writer http.ResponseWriter, request *http.Reques
 		TenantID:                 claims.TenantID,
 		CSRFTokenCiphertext:      encryptedCSRF,
 		ProviderTokensCiphertext: encryptedTokens,
+		AuthenticationACR:        claims.ACR,
+		AuthenticationAMR:        append([]string(nil), claims.AMR...),
+		AuthenticationTime:       time.Unix(claims.AuthTime, 0).UTC(),
 		ExpiresAt:                now.Add(h.identity.config.SessionTTL),
 	}, CSRFToken: csrfToken}
 	validated, validationFailure := h.identity.fetchPrincipal(request.Context(), pending)
@@ -753,6 +778,39 @@ func safeReturnTo(value string) bool {
 	}
 	return strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "//") && !strings.Contains(value, "\\")
 }
+func validAuthenticationAssurance(claims oidcClaims, requiredACR string, now time.Time) bool {
+	if requiredACR != authenticationACRBasic && requiredACR != authenticationACRMFA {
+		return false
+	}
+	if claims.AuthTime <= 0 {
+		return false
+	}
+	authenticatedAt := time.Unix(claims.AuthTime, 0).UTC()
+	now = now.UTC()
+	if authenticatedAt.After(now.Add(time.Minute)) {
+		return false
+	}
+	if claims.ACR == authenticationACRBasic {
+		return requiredACR != authenticationACRMFA && containsString(claims.AMR, "pwd")
+	}
+	if claims.ACR != authenticationACRMFA || !containsString(claims.AMR, "pwd") || !containsString(claims.AMR, "otp") {
+		return false
+	}
+	if requiredACR == authenticationACRMFA && now.Sub(authenticatedAt) > 10*time.Minute {
+		return false
+	}
+	return true
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func containsRole(roles []string, expected string) bool {
 	for _, role := range roles {
 		if role == expected {

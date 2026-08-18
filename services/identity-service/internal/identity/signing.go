@@ -92,15 +92,18 @@ func signingKeyFromPrivateKey(key *rsa.PrivateKey) (SigningKey, error) {
 }
 
 type idTokenClaims struct {
-	Issuer    string `json:"iss"`
-	Audience  string `json:"aud"`
-	Subject   string `json:"sub"`
-	ExpiresAt int64  `json:"exp"`
-	IssuedAt  int64  `json:"iat"`
-	NotBefore int64  `json:"nbf"`
-	Nonce     string `json:"nonce"`
-	Name      string `json:"name"`
-	Email     string `json:"email"`
+	Issuer    string   `json:"iss"`
+	Audience  string   `json:"aud"`
+	Subject   string   `json:"sub"`
+	ExpiresAt int64    `json:"exp"`
+	IssuedAt  int64    `json:"iat"`
+	NotBefore int64    `json:"nbf"`
+	Nonce     string   `json:"nonce"`
+	Name      string   `json:"name"`
+	Email     string   `json:"email"`
+	ACR       string   `json:"acr"`
+	AMR       []string `json:"amr"`
+	AuthTime  int64    `json:"auth_time"`
 }
 
 func signIDToken(key SigningKey, claims idTokenClaims) (string, error) {

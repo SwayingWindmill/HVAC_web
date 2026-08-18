@@ -89,15 +89,21 @@ func (store *PostgresStore) CreateSession(ctx context.Context, session Session, 
 	if err != nil {
 		return Session{}, err
 	}
+	authenticationAMR, err := json.Marshal(session.AuthenticationAMR)
+	if err != nil {
+		return Session{}, err
+	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO gateway.sessions (
 			session_id, principal_subject, principal_issuer, display_name, email, roles,
 			tenant_id, csrf_token_ciphertext, provider_tokens_ciphertext,
+			authentication_acr, authentication_amr, authentication_time,
 			expires_at, last_activity_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NULL,$12,$13,$14,$14)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NULL,$15,$16,$17,$17)
 	`, session.ID, session.Principal.Subject, session.Principal.Issuer, session.Principal.DisplayName,
 		session.Principal.Email, roles, session.TenantID, session.CSRFTokenCiphertext,
-		session.ProviderTokensCiphertext, session.ExpiresAt.UTC(), session.LastActivityAt.UTC(), session.AggregateVersion,
+		session.ProviderTokensCiphertext, session.AuthenticationACR, authenticationAMR, session.AuthenticationTime.UTC(),
+		session.ExpiresAt.UTC(), session.LastActivityAt.UTC(), session.AggregateVersion,
 		session.LastAuditMessageID, session.CreatedAt)
 	if err != nil {
 		return Session{}, mapWriteError(err)
@@ -249,6 +255,7 @@ func insertOutbox(ctx context.Context, tx pgx.Tx, event sessionevent.SessionAudi
 const sessionSelect = `
 	SELECT session_id, principal_subject, principal_issuer, display_name, email, roles,
 	       tenant_id, csrf_token_ciphertext, provider_tokens_ciphertext,
+	       authentication_acr, authentication_amr, authentication_time,
 	       expires_at, last_activity_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at
 	FROM gateway.sessions`
 
@@ -258,13 +265,14 @@ type rowScanner interface {
 
 func scanSession(row rowScanner) (Session, error) {
 	var session Session
-	var roles []byte
+	var roles, authenticationAMR []byte
 	var revokedAt sql.NullTime
 	err := row.Scan(
 		&session.ID, &session.Principal.Subject, &session.Principal.Issuer,
 		&session.Principal.DisplayName, &session.Principal.Email, &roles,
 		&session.TenantID, &session.CSRFTokenCiphertext,
-		&session.ProviderTokensCiphertext, &session.ExpiresAt, &session.LastActivityAt, &revokedAt,
+		&session.ProviderTokensCiphertext, &session.AuthenticationACR, &authenticationAMR, &session.AuthenticationTime,
+		&session.ExpiresAt, &session.LastActivityAt, &revokedAt,
 		&session.AggregateVersion, &session.LastAuditMessageID, &session.CreatedAt,
 		&session.UpdatedAt,
 	)
@@ -276,6 +284,9 @@ func scanSession(row rowScanner) (Session, error) {
 	}
 	if err := json.Unmarshal(roles, &session.Principal.Roles); err != nil {
 		return Session{}, fmt.Errorf("decode session roles: %w", err)
+	}
+	if err := json.Unmarshal(authenticationAMR, &session.AuthenticationAMR); err != nil {
+		return Session{}, fmt.Errorf("decode session authentication methods: %w", err)
 	}
 	if revokedAt.Valid {
 		value := revokedAt.Time.UTC()
