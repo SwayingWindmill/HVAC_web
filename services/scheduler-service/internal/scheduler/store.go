@@ -64,6 +64,10 @@ func (s *Store) Close() {
 	}
 }
 
+func (s *Store) Ping(ctx context.Context) error {
+	return s.pool.Ping(ctx)
+}
+
 func (s *Store) Cycle(ctx context.Context, now time.Time, batch int, normalFireTolerance time.Duration) (ScanResult, error) {
 	if batch <= 0 || batch > 1000 {
 		return ScanResult{}, errors.New("scheduler batch must be within 1..1000")

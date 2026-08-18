@@ -59,6 +59,10 @@ func (store *PostgresStore) Close() {
 	store.pool.Close()
 }
 
+func (store *PostgresStore) Ping(ctx context.Context) error {
+	return store.pool.Ping(ctx)
+}
+
 func (store *PostgresStore) CreateSession(ctx context.Context, session Session, mutation MutationContext) (Session, error) {
 	ctx, span := observability.Start(ctx, "postgres.session.transaction", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.create"})
 	defer span.End()

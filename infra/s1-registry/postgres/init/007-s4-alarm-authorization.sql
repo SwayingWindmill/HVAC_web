@@ -73,19 +73,4 @@ GRANT INSERT ON iam.alarm_authorization_decisions TO s1_iam_runtime;
 GRANT USAGE, SELECT ON SEQUENCE iam.alarm_authorization_decisions_sequence_seq TO s1_iam_runtime;
 REVOKE ALL ON iam.alarm_permissions, iam.alarm_authorization_decisions FROM PUBLIC;
 
-INSERT INTO iam.policies
-  (id, tenant_id, policy_key, policy_revision, status, document, created_at, updated_at)
-VALUES
-  ('018f1e00-1400-7000-8000-000000000021', '018f1d00-0000-7000-8000-000000000001', 'alarm-access', 1, 'ACTIVE',
-   '{"actions":["alarm:read","alarm:ack"],"scope":"site","denyWins":true}'::jsonb,
-   '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')
-ON CONFLICT DO NOTHING;
-
-INSERT INTO iam.alarm_permissions
-  (id, principal_id, tenant_id, site_id, action, effect, status, valid_from, valid_to, revision, created_at, updated_at)
-VALUES
-  ('018f1e00-2400-7000-8000-000000000022', '018f1e00-2000-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'alarm:read', 'ALLOW', 'ACTIVE', '2026-08-01T00:00:00Z', NULL, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'),
-  ('018f1e00-2400-7000-8000-000000000023', '018f1e00-2000-7000-8000-000000000001', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'alarm:ack', 'ALLOW', 'ACTIVE', '2026-08-01T00:00:00Z', NULL, 1, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')
-ON CONFLICT DO NOTHING;
-
 COMMIT;

@@ -19,6 +19,8 @@ func NewClickHouseStore(baseURL,user,password string, client *http.Client)(*Clic
 	u,err:=url.Parse(baseURL);if err!=nil||u.Host==""||(u.Scheme!="http"&&u.Scheme!="https"){return nil,errors.New("metric ClickHouse URL must be absolute http/https")};if client==nil{client=&http.Client{Timeout:15*time.Second}};return &ClickHouseStore{base:u,user:user,password:password,client:client},nil
 }
 
+func (s *ClickHouseStore) Ping(ctx context.Context) error { _, err := s.query(ctx, "SELECT 1"); return err }
+
 func (s *ClickHouseStore) query(ctx context.Context, sql string)([]byte,error){u:=*s.base;q:=u.Query();q.Set("query",sql);q.Set("date_time_output_format","iso");u.RawQuery=q.Encode();req,err:=http.NewRequestWithContext(ctx,http.MethodGet,u.String(),nil);if err!=nil{return nil,err};if s.user!=""{req.SetBasicAuth(s.user,s.password)};resp,err:=s.client.Do(req);if err!=nil{return nil,err};defer resp.Body.Close();body,err:=io.ReadAll(io.LimitReader(resp.Body,1<<20));if err!=nil{return nil,err};if resp.StatusCode/100!=2{return nil,fmt.Errorf("metric ClickHouse query returned %d: %s",resp.StatusCode,strings.TrimSpace(string(body)))};return body,nil}
 
 func quote(value string) string { return "'"+strings.ReplaceAll(value,"'","''")+"'" }

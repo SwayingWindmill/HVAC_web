@@ -103,7 +103,7 @@
     "mutableLatestOnlyAllowed": false,
     "gitCommitTraceabilityRequired": true,
     "migrationInReleaseFlowRequired": true,
-    "backwardCompatibleMigrationPreferred": true
+    "backwardCompatibleMigrationPreferred": false
   },
   "recovery": {
     "sourceOfTruth": "SE-OPS-009 V1.0 CURRENT CANDIDATE",

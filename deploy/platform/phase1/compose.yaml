@@ -72,11 +72,17 @@ services:
       AUDIT_URL: https://audit-ledger-service:8446
       AUDIT_SERVER_NAME: audit-ledger-service
       REALTIME_UPSTREAM_URL: ${REALTIME_UPSTREAM_URL:-http://centrifugo:8000}
+      PLATFORM_LIMIT_POLICY_FILE: /run/hvac/config/limit-policy.v1.json
+      LIMIT_POLICY_REDIS_URL: ${LIMIT_POLICY_REDIS_URL:-redis://redis:6379/2}
     depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      - ./limit-policy.v1.json:/run/hvac/config/limit-policy.v1.json:ro
     expose: ["8080", "19080", "8444", "18445", "18447", "8446", "8447", "8448", "8449"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19080/health/ready"]
@@ -104,6 +110,8 @@ services:
       IDENTITY_DIAGNOSTICS_ADDR: :19085
       IDENTITY_SIGNING_KEY_FILE: /run/hvac/identity/signing-key.pem
     depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     volumes:
@@ -179,6 +187,8 @@ services:
     environment:
       SCHEDULER_DIAGNOSTICS_ADDR: :19092
     depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     expose: ["19092"]
@@ -206,6 +216,8 @@ services:
       TELEMETRY_HISTORY_PROJECTION_ENABLED: "true"
       ANALYTICS_PROJECTION_ENABLED: "true"
     depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       clickhouse:
@@ -238,6 +250,8 @@ services:
       METRIC_DIAGNOSTICS_ADDR: :19090
       METRIC_WORKER_MODE: worker
     depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       clickhouse:
@@ -265,6 +279,9 @@ services:
     image: ${IOT_SERVICE_IMAGE:-hvac/iot-service:0.1.0-dev}
     environment:
       COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"
+    depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
     expose: ["19094"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19094/health/ready"]
@@ -357,6 +374,7 @@ services:
       PGPORT: "5432"
       PGUSER: ${POSTGRES_ADMIN_USER:-postgres}
       PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
+      PHASE1_PRODUCT_VERSION: ${PHASE1_PRODUCT_VERSION:-0.1.0}
       PHASE1_RELEASE_REVISION: ${PHASE1_RELEASE_REVISION:-unversioned-local-run}
       PHASE1_DB_ROLE_CREDENTIALS_FILE: /run/hvac/db-role-credentials/roles.sql
     volumes:
@@ -364,6 +382,27 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    security_opt:
+      - no-new-privileges:true
+    networks: [data]
+
+  phase1-schema-preflight:
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/migrations/Dockerfile
+    image: ${PHASE1_MIGRATOR_IMAGE:-hvac/phase1-migrator:0.1.0-dev}
+    restart: "no"
+    entrypoint: ["/opt/hvac/migrations/verify-phase1-schema.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_ADMIN_USER:-postgres}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
+      PHASE1_PRODUCT_VERSION: ${PHASE1_PRODUCT_VERSION:-0.1.0}
+    read_only: true
     security_opt:
       - no-new-privileges:true
     networks: [data]

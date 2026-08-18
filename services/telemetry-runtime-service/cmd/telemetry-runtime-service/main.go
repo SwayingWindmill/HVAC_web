@@ -60,6 +60,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	observabilityRuntime.SetReadinessCheck(store.Ping)
 
 	latestCache, latestRelay, latestContext, latestCancel, err := loadLatestCache(store)
 	if err != nil {
@@ -152,6 +153,7 @@ func main() {
 			CommandVerifierTenantID:        strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_TENANT_ID")),
 			CommandVerifierSiteID:          strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_SITE_ID")),
 			CommandVerifierDeviceID:        strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_DEVICE_ID")),
+			CommandVerifierDeviceIDs:       commaSeparated(os.Getenv("TELEMETRY_COMMAND_VERIFIER_DEVICE_IDS")),
 			Metrics:                        observabilityRuntime.Metrics,
 		}),
 		TLSConfig: &tls.Config{
@@ -519,6 +521,17 @@ func envOr(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func commaSeparated(raw string) []string {
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if value := strings.TrimSpace(part); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 func requiredEnv(name string) string {

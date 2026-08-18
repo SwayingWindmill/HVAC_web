@@ -35,49 +35,51 @@ var (
 )
 
 type ServerConfig struct {
-	Store                        SnapshotStore
-	Authorizer                   GrantAuthorizer
-	AllowedGatewaySPIFFE         string
-	RuntimeAudience              string
-	ObservationAcceptor          ObservationAcceptor
-	CoverageReporter             CoverageReporter
-	MQTTEvidenceAcceptor         MQTTEvidenceAcceptor
-	SourceAuthenticator          SourceAuthenticator
-	Realtime                     *RealtimeService
-	LatestCache                  LatestCache
-	AllowedCentrifugoSPIFFE      string
-	CentrifugoProxySecret        string
-	AllowedIAMSPIFFE             string
-	AllowedCommandVerifierSPIFFE string
+	Store                          SnapshotStore
+	Authorizer                     GrantAuthorizer
+	AllowedGatewaySPIFFE           string
+	RuntimeAudience                string
+	ObservationAcceptor            ObservationAcceptor
+	CoverageReporter               CoverageReporter
+	MQTTEvidenceAcceptor           MQTTEvidenceAcceptor
+	SourceAuthenticator            SourceAuthenticator
+	Realtime                       *RealtimeService
+	LatestCache                    LatestCache
+	AllowedCentrifugoSPIFFE        string
+	CentrifugoProxySecret          string
+	AllowedIAMSPIFFE               string
+	AllowedCommandVerifierSPIFFE   string
 	AllowedCommandDispatcherSPIFFE string
-	CommandVerifierTenantID      string
-	CommandVerifierSiteID        string
-	CommandVerifierDeviceID      string
-	Metrics                      *observability.Registry
-	Now                          func() time.Time
+	CommandVerifierTenantID        string
+	CommandVerifierSiteID          string
+	CommandVerifierDeviceID        string
+	CommandVerifierDeviceIDs       []string
+	Metrics                        *observability.Registry
+	Now                            func() time.Time
 }
 
 type handler struct {
-	store                        SnapshotStore
-	authorizer                   GrantAuthorizer
-	allowedGatewaySPIFFE         string
-	runtimeAudience              string
-	observationAcceptor          ObservationAcceptor
-	coverageReporter             CoverageReporter
-	mqttEvidenceAcceptor         MQTTEvidenceAcceptor
-	sourceAuthenticator          SourceAuthenticator
-	realtime                     *RealtimeService
-	latestCache                  LatestCache
-	allowedCentrifugoSPIFFE      string
-	centrifugoProxySecret        string
-	allowedIAMSPIFFE             string
+	store                          SnapshotStore
+	authorizer                     GrantAuthorizer
+	allowedGatewaySPIFFE           string
+	runtimeAudience                string
+	observationAcceptor            ObservationAcceptor
+	coverageReporter               CoverageReporter
+	mqttEvidenceAcceptor           MQTTEvidenceAcceptor
+	sourceAuthenticator            SourceAuthenticator
+	realtime                       *RealtimeService
+	latestCache                    LatestCache
+	allowedCentrifugoSPIFFE        string
+	centrifugoProxySecret          string
+	allowedIAMSPIFFE               string
 	allowedCommandVerifierSPIFFE   string
 	allowedCommandDispatcherSPIFFE string
 	commandVerifierTenantID        string
-	commandVerifierSiteID        string
-	commandVerifierDeviceID      string
-	metrics                      *s2Metrics
-	now                          func() time.Time
+	commandVerifierSiteID          string
+	commandVerifierDeviceID        string
+	commandVerifierDeviceIDs       map[string]struct{}
+	metrics                        *s2Metrics
+	now                            func() time.Time
 }
 
 func NewHandler(config ServerConfig) http.Handler {
@@ -85,25 +87,35 @@ func NewHandler(config ServerConfig) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
+	commandVerifierDeviceIDs := make(map[string]struct{}, len(config.CommandVerifierDeviceIDs)+1)
+	if deviceID := strings.TrimSpace(config.CommandVerifierDeviceID); deviceID != "" {
+		commandVerifierDeviceIDs[deviceID] = struct{}{}
+	}
+	for _, rawDeviceID := range config.CommandVerifierDeviceIDs {
+		if deviceID := strings.TrimSpace(rawDeviceID); deviceID != "" {
+			commandVerifierDeviceIDs[deviceID] = struct{}{}
+		}
+	}
 	return &handler{
 		store: config.Store, authorizer: config.Authorizer,
 		allowedGatewaySPIFFE: strings.TrimSpace(config.AllowedGatewaySPIFFE),
 		runtimeAudience:      strings.TrimSpace(config.RuntimeAudience),
 		observationAcceptor:  config.ObservationAcceptor, coverageReporter: config.CoverageReporter,
-		mqttEvidenceAcceptor: config.MQTTEvidenceAcceptor,
-		sourceAuthenticator:          config.SourceAuthenticator,
-		realtime:                     config.Realtime,
-		latestCache:                  config.LatestCache,
-		allowedCentrifugoSPIFFE:      strings.TrimSpace(config.AllowedCentrifugoSPIFFE),
-		centrifugoProxySecret:        strings.TrimSpace(config.CentrifugoProxySecret),
-		allowedIAMSPIFFE:             strings.TrimSpace(config.AllowedIAMSPIFFE),
+		mqttEvidenceAcceptor:           config.MQTTEvidenceAcceptor,
+		sourceAuthenticator:            config.SourceAuthenticator,
+		realtime:                       config.Realtime,
+		latestCache:                    config.LatestCache,
+		allowedCentrifugoSPIFFE:        strings.TrimSpace(config.AllowedCentrifugoSPIFFE),
+		centrifugoProxySecret:          strings.TrimSpace(config.CentrifugoProxySecret),
+		allowedIAMSPIFFE:               strings.TrimSpace(config.AllowedIAMSPIFFE),
 		allowedCommandVerifierSPIFFE:   strings.TrimSpace(config.AllowedCommandVerifierSPIFFE),
 		allowedCommandDispatcherSPIFFE: strings.TrimSpace(config.AllowedCommandDispatcherSPIFFE),
 		commandVerifierTenantID:        strings.TrimSpace(config.CommandVerifierTenantID),
-		commandVerifierSiteID:        strings.TrimSpace(config.CommandVerifierSiteID),
-		commandVerifierDeviceID:      strings.TrimSpace(config.CommandVerifierDeviceID),
-		metrics:                      newS2Metrics(config.Metrics, now),
-		now:                          now,
+		commandVerifierSiteID:          strings.TrimSpace(config.CommandVerifierSiteID),
+		commandVerifierDeviceID:        strings.TrimSpace(config.CommandVerifierDeviceID),
+		commandVerifierDeviceIDs:       commandVerifierDeviceIDs,
+		metrics:                        newS2Metrics(config.Metrics, now),
+		now:                            now,
 	}
 }
 

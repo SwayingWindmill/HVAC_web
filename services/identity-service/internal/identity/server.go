@@ -86,6 +86,8 @@ func NewServer(ctx context.Context, config Config) (*Server, error) {
 
 func (server *Server) Close() { server.store.Close() }
 
+func (server *Server) Ping(ctx context.Context) error { return server.store.Ping(ctx) }
+
 func (server *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /.well-known/openid-configuration", server.discovery)

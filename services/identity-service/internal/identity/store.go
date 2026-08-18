@@ -84,6 +84,10 @@ func (store *Store) Close() {
 	}
 }
 
+func (store *Store) Ping(ctx context.Context) error {
+	return store.pool.Ping(ctx)
+}
+
 func (store *Store) CreateUser(ctx context.Context, input CreateUserInput) (CreatedUser, error) {
 	username := strings.TrimSpace(input.Username)
 	displayName := strings.TrimSpace(input.DisplayName)

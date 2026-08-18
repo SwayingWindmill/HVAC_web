@@ -8,7 +8,6 @@ BEGIN
 END
 $$;
 
-ALTER ROLE s1_core_service PASSWORD 's1-core-service-local-only';
 GRANT CONNECT ON DATABASE hvac_s1 TO s1_core_service;
 GRANT s1_core_runtime TO s1_core_service;
 

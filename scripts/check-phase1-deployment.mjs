@@ -33,8 +33,19 @@ const paths = {
   migrationList: 'deploy/platform/phase1/migrations/migration-list.tsv',
   migrationDockerfile: 'deploy/platform/phase1/migrations/Dockerfile',
   migrationRunner: 'deploy/platform/phase1/migrations/run-phase1-migrations.sh',
+  schemaPreflight: 'deploy/platform/phase1/migrations/verify-phase1-schema.sh',
+  productRelease: 'deploy/platform/phase1/product-release.v1.json',
+  limitPolicy: 'deploy/platform/phase1/limit-policy.v1.json',
   roleCredentialTemplate: 'deploy/platform/phase1/migrations/role-credentials.sql.example',
   packageJson: 'package.json',
+  observabilityRuntime: 'libs/observability/runtime.go',
+  gatewayMain: 'services/platform-gateway/cmd/platform-gateway/main.go',
+  operationsGateway: 'services/platform-gateway/internal/gateway/operations_agent.go',
+  identityMain: 'services/identity-service/cmd/identity-service/main.go',
+  schedulerMain: 'services/scheduler-service/cmd/scheduler-service/main.go',
+  telemetryRuntimeMain: 'services/telemetry-runtime-service/cmd/telemetry-runtime-service/main.go',
+  metricMain: 'services/metric-engine-service/cmd/metric-engine-service/main.go',
+  iotRuntime: 'services/mqtt-telemetry-adapter/internal/adapter/runtime.go',
 };
 
 const environmentFiles = {
@@ -44,7 +55,7 @@ const environmentFiles = {
   production: 'deploy/platform/phase1/environments/production.runtime.env.example',
 };
 
-const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, otel, loki, tempo, grafanaDatasources, grafanaDashboards, postgresBackup, backupReadiness, clickhouseBackup, clickhouseBackupConfig, backupReadme, recoveryTargets, recoveryReadme, recoveryDrillTemplate, gitignore, phase1Databases, phase1Readme, migrationManifest, migrationList, migrationDockerfile, migrationRunner, roleCredentialTemplate, packageJson] = await Promise.all([
+const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, otel, loki, tempo, grafanaDatasources, grafanaDashboards, postgresBackup, backupReadiness, clickhouseBackup, clickhouseBackupConfig, backupReadme, recoveryTargets, recoveryReadme, recoveryDrillTemplate, gitignore, phase1Databases, phase1Readme, migrationManifest, migrationList, migrationDockerfile, migrationRunner, schemaPreflight, productRelease, limitPolicy, roleCredentialTemplate, packageJson] = await Promise.all([
   readJSON(paths.baseline),
   readJSON(paths.matrix),
   read(paths.compose),
@@ -72,10 +83,16 @@ const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, 
   read(paths.migrationList),
   read(paths.migrationDockerfile),
   read(paths.migrationRunner),
+  read(paths.schemaPreflight),
+  readJSON(paths.productRelease),
+  readJSON(paths.limitPolicy),
   read(paths.roleCredentialTemplate),
   read(paths.packageJson),
 ]);
 const envs = Object.fromEntries(await Promise.all(Object.entries(environmentFiles).map(async ([name, path]) => [name, await read(path)])));
+const runtimeSources = Object.fromEntries(await Promise.all([
+  'observabilityRuntime', 'gatewayMain', 'operationsGateway', 'identityMain', 'schedulerMain', 'telemetryRuntimeMain', 'metricMain', 'iotRuntime',
+].map(async (name) => [name, await read(paths[name])])));
 
 const failures = [];
 const assert = (condition, message) => {
@@ -86,6 +103,14 @@ assert(baseline.deploymentModel?.orchestration === 'docker-compose', 'canonical 
 assert(baseline.deploymentModel?.kubernetesRequired === false, 'Kubernetes must not become a Phase 1 requirement');
 assert(baseline.deploymentModel?.singleServerRequired === true, 'Phase 1 must require the single-server deployment baseline');
 assert(baseline.deploymentModel?.fewServersAllowed === false, 'multi-server deployment must remain outside the current Phase 1 baseline');
+assert(baseline.delivery?.backwardCompatibleMigrationPreferred === false, 'Phase 1 must not prefer backward-compatible migration or compatibility layers');
+assert(productRelease.schemaVersion === 1 && productRelease.product === 'hvac-web', 'Product Release contract must identify hvac-web');
+assert(productRelease.schemaContract?.compatibilityMode === 'exact-product-and-manifest' && productRelease.schemaContract?.skipAllowed === false, 'Product Release must require exact non-skippable product/schema compatibility');
+assert(productRelease.startup?.failureMode === 'fail-closed', 'Product Release startup preflight must fail closed');
+assert(productRelease.platformPolicy?.limitPolicy === paths.limitPolicy, 'Product Release must pin the Phase 1 LimitPolicy artifact');
+assert(limitPolicy.schemaVersion === 1 && limitPolicy.policyId === 'phase1-high-risk-limits' && Number.isInteger(limitPolicy.revision) && limitPolicy.revision > 0, 'LimitPolicy identity must be versioned');
+assert(limitPolicy.limits?.operationsAgent?.backend === 'redis' && limitPolicy.limits?.operationsAgent?.failureMode === 'fail-closed' && limitPolicy.limits?.operationsAgent?.scope === 'session', 'Operations Agent limit must use the shared Redis fail-closed policy');
+assert(limitPolicy.limits?.operationsAgent?.windowSeconds === 60 && limitPolicy.limits?.operationsAgent?.maxRequests === 30, 'Operations Agent limit bounds must match the Phase 1 policy');
 assert(baseline.recovery?.sourceOfTruth === 'SE-OPS-009 V1.0 CURRENT CANDIDATE' && baseline.recovery?.rpoRtoTargetsDefined === true, 'Phase 1 baseline must freeze SE-OPS-009 recovery targets');
 assert(baseline.recovery?.postgresRpoSeconds === 300 && baseline.recovery?.postgresRtoSeconds === 7200 && baseline.recovery?.controlRtoSeconds === 3600, 'Phase 1 baseline must preserve PostgreSQL/Control recovery objectives');
 assert(baseline.recovery?.offServerBackupCopyRequired === true && baseline.recovery?.wholeServerFourHourTargetRequiresColdStandby === true, 'whole-server recovery target must preserve off-server backup and cold-standby prerequisites');
@@ -111,6 +136,10 @@ const requiredServices = [
   'grafana',
 ];
 for (const service of requiredServices) assert(new RegExp(`^  ${service}:`, 'm').test(compose), `compose is missing required service ${service}`);
+assert(/^  phase1-schema-preflight:/m.test(compose), 'Compose must include the one-shot Product/Schema preflight');
+assert(compose.includes('PLATFORM_LIMIT_POLICY_FILE: /run/hvac/config/limit-policy.v1.json'), 'energy-api must receive the pinned LimitPolicy path');
+assert(compose.includes('./limit-policy.v1.json:/run/hvac/config/limit-policy.v1.json:ro'), 'energy-api must mount LimitPolicy read-only');
+assert(compose.includes('LIMIT_POLICY_REDIS_URL: ${LIMIT_POLICY_REDIS_URL:-redis://redis:6379/2}'), 'Operations limit authority must use shared Redis');
 
 for (const network of ['application', 'data', 'mqtt', 'observability']) {
   assert(new RegExp(`^  ${network}:\\n    internal: true`, 'm').test(compose), `compose network ${network} must be internal`);
@@ -118,6 +147,10 @@ for (const network of ['application', 'data', 'mqtt', 'observability']) {
 assert(/^  public: \{\}/m.test(compose), 'compose must have an explicit public network');
 
 const serviceBlocks = [...compose.matchAll(/^  ([a-z0-9-]+):\n([\s\S]*?)(?=^  [a-z0-9-]+:\n|^networks:|^volumes:)/gm)];
+for (const service of ['energy-api', 'identity-service', 'scheduler', 'telemetry-worker', 'metric-worker', 'iot-service']) {
+  const block = serviceBlocks.find(([, name]) => name === service)?.[2] ?? '';
+  assert(block.includes('phase1-schema-preflight:') && block.includes('condition: service_completed_successfully'), `${service} must fail closed on Product/Schema preflight`);
+}
 const published = serviceBlocks.filter(([, , block]) => /^    ports:/m.test(block)).map(([, name]) => name).sort();
 assert(JSON.stringify(published) === JSON.stringify(['mqtt-broker', 'nginx']), `only nginx and mqtt-broker may publish host ports, got: ${published.join(', ')}`);
 assert(compose.includes('"${HTTPS_PORT:-443}:443"'), 'Nginx must publish HTTPS 443 by default');
@@ -131,6 +164,14 @@ for (const [service, port] of [['energy-api', '19080'], ['scheduler', '19092'], 
   assert(block.includes(`/healthcheck", "http://127.0.0.1:${port}/health/ready`), `${service} must have a Compose readiness healthcheck`);
   assert(block.includes('cpus:') && block.includes('mem_limit:') && block.includes('mem_reservation:'), `${service} must have CPU/memory limits and reservations`);
 }
+assert(runtimeSources.observabilityRuntime.includes('SetReadinessCheck') && runtimeSources.observabilityRuntime.includes('readinessCheck'), 'shared readiness runtime must evaluate live dependency callbacks');
+assert(runtimeSources.gatewayMain.includes('telemetry.SetReadinessCheck(identity.ReadinessCheck)'), 'energy-api readiness must track Identity Redis and Session persistence');
+assert(runtimeSources.identityMain.includes('telemetry.SetReadinessCheck(server.Ping)'), 'identity-service readiness must track PostgreSQL');
+assert(runtimeSources.schedulerMain.includes('telemetry.SetReadinessCheck(store.Ping)'), 'scheduler readiness must track PostgreSQL');
+assert(runtimeSources.telemetryRuntimeMain.includes('observabilityRuntime.SetReadinessCheck(store.Ping)'), 'telemetry-worker readiness must track PostgreSQL');
+assert(runtimeSources.metricMain.includes('telemetry.SetReadinessCheck(runtime.Ping)'), 'metric-worker readiness must track its required stores');
+assert(runtimeSources.iotRuntime.includes('runtime.connected && runtime.subscribed && runtime.lastError == ""'), 'iot-service readiness must track live MQTT connection/subscription state');
+assert(!runtimeSources.operationsGateway.includes('rateWindows') && !runtimeSources.operationsGateway.includes('RateLimitPerMinute') && runtimeSources.operationsGateway.includes('rateLimiter.Allow'), 'Operations Agent high-risk limit must not use an in-process authoritative map');
 
 for (const dataService of ['postgres', 'clickhouse', 'redis']) {
   const block = serviceBlocks.find(([, name]) => name === dataService)?.[2] ?? '';
@@ -241,11 +282,18 @@ for (const entry of manifestEntries) {
   const [, sourcePath] = entry.split('|');
   assert(!/(fixture|testdata|bootstrap|legacy-migration)/i.test(sourcePath), `forbidden production migration source: ${sourcePath}`);
   assert(migrationDockerfile.includes(`COPY ${sourcePath} `), `migration image does not copy allowlisted source: ${sourcePath}`);
+  const source = await read(sourcePath);
+  assert(!/local-only|local-fixture-only|local-mutation-fixture-only/i.test(source), `production migration source contains local/test credential material: ${sourcePath}`);
 }
 assert(migrationDockerfile.includes("! grep -R -E 'local-only|fixture-only' /opt/hvac/repo"), 'migration image must fail if local/test credential markers survive the build');
-assert(migrationRunner.includes('phase1_deployment.schema_migrations'), 'migration runner must record applied migration hashes');
+assert(!migrationDockerfile.includes('sed -i'), 'migration image must not rewrite reviewed SQL bytes');
+assert(!migrationRunner.includes('sanitize_sql'), 'migration runner must execute reviewed SQL without runtime sanitization');
+assert(migrationRunner.includes('phase1_deployment.schema_migrations'), 'migration runner must record migration identity and status');
+assert(migrationRunner.includes("'APPLYING'") && migrationRunner.includes("'APPLIED'") && migrationRunner.includes("'FAILED'"), 'migration runner must preserve explicit incomplete/failure states');
+assert(migrationRunner.includes('phase1_deployment.product_schema'), 'migration runner must publish Product/Schema compatibility state only after migration completion');
 assert(migrationRunner.includes('migration drift detected'), 'migration runner must fail closed on migration drift');
-assert(migrationRunner.includes('006-s2-telemetry-authorization.sql') && migrationRunner.includes('007-s4-alarm-authorization.sql') && migrationRunner.includes('008-s5-work-order-authorization.sql'), 'migration runner must explicitly remove environment seed blocks from mixed authorization sources');
+assert(schemaPreflight.includes('phase1_deployment.product_schema') && schemaPreflight.includes('schema manifest mismatch'), 'schema preflight must verify exact persisted Product/Schema state');
+assert(!schemaPreflight.includes('SKIP_SCHEMA_VERSION_CHECK'), 'schema preflight must not expose a skip switch');
 assert(compose.includes('phase1-migrator:') && compose.includes('profiles: ["migration"]'), 'production-safe migrator must be an explicit non-default migration profile');
 assert(compose.includes('PHASE1_DB_ROLE_CREDENTIALS_FILE: /run/hvac/db-role-credentials/roles.sql'), 'migrator must consume runtime role credential material from a mounted file');
 for (const role of migrationManifest.loginRoles ?? []) {
@@ -254,7 +302,7 @@ for (const role of migrationManifest.loginRoles ?? []) {
 assert(!roleCredentialTemplate.includes('local-only') && !roleCredentialTemplate.includes('fixture-only'), 'role credential contract must not reuse historical local/test credentials');
 assert(packageJson.includes('"deployment:phase1:migration:test": "node scripts/run-phase1-migration-integration.mjs"'), 'production migration integration must have a stable package entrypoint');
 assert(packageJson.includes('"deployment:phase1:recovery:verify": "node scripts/verify-phase1-recovery-drill.mjs"'), 'recovery drill verifier must have a stable manual entrypoint');
-assert(phase1Readme.includes('exact 46-file allowlist'), 'Phase 1 README must document the production-safe migration allowlist');
+assert(phase1Readme.includes('exact 46-file allowlist') && phase1Readme.includes('without runtime rewriting'), 'Phase 1 README must document the reviewed production-safe migration allowlist');
 
 const byId = new Map((matrix.items ?? []).map((item) => [item.id, item]));
 for (const id of ['DEPLOY-K8S-001', 'MQTT-HA-001', 'POSTGRES-HA-001', 'CLICKHOUSE-HA-001']) {

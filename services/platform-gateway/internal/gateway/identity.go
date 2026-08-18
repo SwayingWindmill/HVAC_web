@@ -49,6 +49,7 @@ type IdentityConfig struct {
 	StateTTL                time.Duration
 	DelegationTTL           time.Duration
 	RevocationObjective     time.Duration
+	ReadinessCheck          func(context.Context) error
 }
 
 type identityController struct {

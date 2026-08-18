@@ -62,6 +62,13 @@ func (store *RedisLoginStateStore) Close() error {
 	return store.client.Close()
 }
 
+func (store *RedisLoginStateStore) Ping(ctx context.Context) error {
+	if store == nil || store.client == nil {
+		return errors.New("OIDC state Redis is unavailable")
+	}
+	return store.client.Ping(ctx).Err()
+}
+
 func (store *RedisLoginStateStore) Put(ctx context.Context, state string, value loginState, ttl time.Duration) error {
 	if store == nil || store.client == nil || strings.TrimSpace(state) == "" || ttl <= 0 {
 		return errors.New("OIDC login state store input is invalid")

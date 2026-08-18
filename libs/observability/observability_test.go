@@ -3,6 +3,7 @@ package observability
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -77,6 +78,35 @@ func TestLoggerRedactsCredentialFields(t *testing.T) {
 	output := buffer.String()
 	if strings.Contains(output, "seeded-secret") || !strings.Contains(output, "[REDACTED]") {
 		t.Fatalf("logger output was not redacted: %s", output)
+	}
+}
+
+func TestReadinessTracksRequiredDependencyFailureAndRecovery(t *testing.T) {
+	dependencyReady := false
+	runtime := NewRuntime(RuntimeConfig{
+		Service: "scheduler",
+		QueueSize: 1,
+		ReadinessCheck: func(context.Context) error {
+			if !dependencyReady {
+				return errors.New("database unavailable")
+			}
+			return nil
+		},
+	})
+	runtime.MarkReady()
+	handler := runtime.DiagnosticsHandler()
+
+	failed := httptest.NewRecorder()
+	handler.ServeHTTP(failed, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	if failed.Code != http.StatusServiceUnavailable {
+		t.Fatalf("dependency failure status = %d", failed.Code)
+	}
+
+	dependencyReady = true
+	recovered := httptest.NewRecorder()
+	handler.ServeHTTP(recovered, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	if recovered.Code != http.StatusOK {
+		t.Fatalf("dependency recovery status = %d", recovered.Code)
 	}
 }
 

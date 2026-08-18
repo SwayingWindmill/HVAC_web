@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "policyId": "phase1-high-risk-limits",
+  "revision": 1,
+  "limits": {
+    "operationsAgent": {
+      "backend": "redis",
+      "failureMode": "fail-closed",
+      "scope": "session",
+      "windowSeconds": 60,
+      "maxRequests": 30,
+      "keyPrefix": "hvac:v1:limit:operations-agent"
+    }
+  }
+}

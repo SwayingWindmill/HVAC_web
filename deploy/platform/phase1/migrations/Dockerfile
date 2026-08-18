@@ -4,6 +4,7 @@ WORKDIR /opt/hvac
 COPY deploy/platform/phase1/migrations/bootstrap-roles.sql /opt/hvac/migrations/bootstrap-roles.sql
 COPY deploy/platform/phase1/migrations/migration-list.tsv /opt/hvac/migrations/migration-list.tsv
 COPY deploy/platform/phase1/migrations/run-phase1-migrations.sh /opt/hvac/migrations/run-phase1-migrations.sh
+COPY deploy/platform/phase1/migrations/verify-phase1-schema.sh /opt/hvac/migrations/verify-phase1-schema.sh
 COPY deploy/platform/phase1/postgres/init/001-create-phase1-databases.sql /opt/hvac/migrations/create-databases.sql
 
 COPY infra/identity/postgres/init/001-identity-baseline.sql /opt/hvac/repo/infra/identity/postgres/init/001-identity-baseline.sql
@@ -56,7 +57,6 @@ COPY services/work-order-service/migrations/002_s5_work_order_create_assignment.
 COPY services/work-order-service/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/services/work-order-service/migrations/003_s5_work_order_lifecycle.sql
 COPY services/work-order-service/migrations/004_s5_tenant_scope.sql /opt/hvac/repo/services/work-order-service/migrations/004_s5_tenant_scope.sql
 
-RUN find /opt/hvac/repo -type f -name '*.sql' -exec sed -i "/ALTER ROLE.*local-only/d" {} + \
-    && ! grep -R -E 'local-only|fixture-only' /opt/hvac/repo \
-    && chmod 0555 /opt/hvac/migrations/run-phase1-migrations.sh
+RUN ! grep -R -E 'local-only|fixture-only' /opt/hvac/repo \
+    && chmod 0555 /opt/hvac/migrations/run-phase1-migrations.sh /opt/hvac/migrations/verify-phase1-schema.sh
 ENTRYPOINT ["/opt/hvac/migrations/run-phase1-migrations.sh"]

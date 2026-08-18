@@ -42,6 +42,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer server.Close()
+	telemetry.SetReadinessCheck(server.Ping)
 
 	httpServer := &http.Server{
 		Addr: envOr("IDENTITY_ADDR", ":19095"), Handler: server.Handler(),

@@ -51,6 +51,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeIdentity()
+	if identity != nil && identity.ReadinessCheck != nil {
+		telemetry.SetReadinessCheck(identity.ReadinessCheck)
+	}
 	telemetryConfig, err := loadTelemetryConfig(workloadCertificate)
 	if err != nil {
 		logger.Error("gateway_telemetry_config_invalid", "error_code", "TELEMETRY_CONFIG_INVALID")
@@ -76,11 +79,12 @@ func main() {
 		logger.Error("gateway_analytics_config_invalid", "error_code", "ANALYTICS_CONFIG_INVALID")
 		os.Exit(1)
 	}
-	operationsConfig, err := loadOperationsConfig(workloadCertificate)
+	operationsConfig, closeOperations, err := loadOperationsConfig(runContext, workloadCertificate)
 	if err != nil {
 		logger.Error("gateway_operations_config_invalid", "error_code", "OPERATIONS_CONFIG_INVALID")
 		os.Exit(1)
 	}
+	defer closeOperations()
 	serverTLSConfig, serverTLSEnabled, err := loadGatewayServerTLSConfig()
 	if err != nil {
 		logger.Error("gateway_server_tls_config_invalid", "error_code", "GATEWAY_SERVER_TLS_CONFIG_INVALID")
@@ -253,6 +257,7 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 	}
 
 	var store sessionstore.Store
+	var sessionStorePing func(context.Context) error
 	closeStore := func() { _ = loginStateStore.Close() }
 	if dsn := os.Getenv("GATEWAY_DATABASE_URL"); dsn != "" {
 		postgresStore, err := sessionstore.OpenPostgres(ctx, dsn, sessionstore.PostgresConfig{})
@@ -261,6 +266,7 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 			return nil, nil, func() {}, errors.New("durable Session store is unavailable")
 		}
 		store = postgresStore
+		sessionStorePing = postgresStore.Ping
 		closeStore = func() {
 			postgresStore.Close()
 			_ = loginStateStore.Close()
@@ -270,6 +276,15 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 	} else {
 		closeStore()
 		return nil, nil, func() {}, errors.New("GATEWAY_DATABASE_URL is required unless S0_ALLOW_MEMORY_SESSION_STORE=true")
+	}
+	readinessCheck := func(checkContext context.Context) error {
+		if err := loginStateStore.Ping(checkContext); err != nil {
+			return err
+		}
+		if sessionStorePing != nil {
+			return sessionStorePing(checkContext)
+		}
+		return nil
 	}
 
 	key, err := sessionEncryptionKey()
@@ -299,6 +314,7 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 		StateTTL:                stateTTL,
 		DelegationTTL:           30 * time.Second,
 		RevocationObjective:     time.Second,
+		ReadinessCheck:          readinessCheck,
 		IAMHTTPClient: &http.Client{
 			Timeout:   5 * time.Second,
 			Transport: workloadTransport(iamRoots, &certificate, envOr("IAM_SERVER_NAME", "localhost")),
@@ -491,27 +507,36 @@ func loadAnalyticsConfig(certificate *tls.Certificate) (*gateway.AnalyticsConfig
 	}, nil
 }
 
-func loadOperationsConfig(certificate *tls.Certificate) (*gateway.OperationsAgentConfig, error) {
+func loadOperationsConfig(ctx context.Context, certificate *tls.Certificate) (*gateway.OperationsAgentConfig, func(), error) {
 	operationsURL := strings.TrimSpace(os.Getenv("OPERATIONS_AGENT_URL"))
 	if operationsURL == "" {
-		return nil, nil
+		return nil, func() {}, nil
 	}
 	parsed, err := url.Parse(operationsURL)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
 		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return nil, errors.New("OPERATIONS_AGENT_URL must be an HTTPS origin without user info, path, query or fragment")
+		return nil, func() {}, errors.New("OPERATIONS_AGENT_URL must be an HTTPS origin without user info, path, query or fragment")
 	}
 	if certificate == nil {
-		return nil, errors.New("Operations Agent requires the authenticated Gateway workload certificate")
+		return nil, func() {}, errors.New("Operations Agent requires the authenticated Gateway workload certificate")
 	}
 	caPath := strings.TrimSpace(os.Getenv("OPERATIONS_AGENT_SERVER_CA"))
 	if caPath == "" {
-		return nil, errors.New("OPERATIONS_AGENT_SERVER_CA is required when OPERATIONS_AGENT_URL is configured")
+		return nil, func() {}, errors.New("OPERATIONS_AGENT_SERVER_CA is required when OPERATIONS_AGENT_URL is configured")
 	}
 	roots, err := loadCertPool(caPath, "Operations Agent server CA")
 	if err != nil {
-		return nil, err
+		return nil, func() {}, err
 	}
+	limiter, err := gateway.OpenRedisOperationsRateLimiter(
+		ctx,
+		strings.TrimSpace(os.Getenv("PLATFORM_LIMIT_POLICY_FILE")),
+		envOr("LIMIT_POLICY_REDIS_URL", "redis://redis:6379/2"),
+	)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	closeLimiter := func() { _ = limiter.Close() }
 	return &gateway.OperationsAgentConfig{
 		BaseURL:          strings.TrimRight(parsed.String(), "/"),
 		Audience:         envOr("OPERATIONS_AGENT_AUDIENCE", "operations-agent-service"),
@@ -519,12 +544,13 @@ func loadOperationsConfig(certificate *tls.Certificate) (*gateway.OperationsAgen
 		Timeout:          8 * time.Second,
 		MaxRequestBytes:  8 << 10,
 		MaxResponseBytes: 1 << 20,
+		RateLimiter:      limiter,
 		HTTPClient: &http.Client{Transport: workloadTransport(
 			roots,
 			certificate,
 			envOr("OPERATIONS_AGENT_SERVER_NAME", "localhost"),
 		)},
-	}, nil
+	}, closeLimiter, nil
 }
 
 func workloadTransport(roots *x509.CertPool, certificate *tls.Certificate, serverName string) *http.Transport {

@@ -41,6 +41,7 @@ type metricJobPayload struct {
 
 type runtime struct {
 	store  *metric.PostgresStore
+	series *metric.ClickHouseStore
 	engine *metric.Engine
 	latest *metric.RedisLatestStore
 }
@@ -59,6 +60,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer runtime.Close()
+	telemetry.SetReadinessCheck(runtime.Ping)
 
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("METRIC_WORKER_MODE")), "oneshot") {
 		if err := runOneShot(ctx, runtime, os.Stdin, os.Stdout); err != nil {
@@ -139,7 +141,17 @@ func openRuntime(ctx context.Context) (*runtime, error) {
 		store.Close()
 		return nil, err
 	}
-	return &runtime{store: store, engine: engine, latest: latest}, nil
+	return &runtime{store: store, series: series, engine: engine, latest: latest}, nil
+}
+
+func (runtime *runtime) Ping(ctx context.Context) error {
+	if err := runtime.store.Ping(ctx); err != nil {
+		return err
+	}
+	if err := runtime.series.Ping(ctx); err != nil {
+		return err
+	}
+	return runtime.latest.Ping(ctx)
 }
 
 func (runtime *runtime) Close() {

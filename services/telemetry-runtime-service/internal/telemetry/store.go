@@ -75,6 +75,10 @@ func (store *PostgresStore) Close() {
 	}
 }
 
+func (store *PostgresStore) Ping(ctx context.Context) error {
+	return store.pool.Ping(ctx)
+}
+
 func (store *PostgresStore) EvaluateAndRead(ctx context.Context, target telemetryauth.Target, evaluatedAt time.Time) (SnapshotCommit, error) {
 	if store == nil || store.pool == nil {
 		return SnapshotCommit{}, errors.New("telemetry runtime store is closed")

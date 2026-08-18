@@ -20,6 +20,19 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 )
 
+type fakeOperationsRateLimiter struct {
+	max   int32
+	count atomic.Int32
+	fail  atomic.Bool
+}
+
+func (limiter *fakeOperationsRateLimiter) Allow(context.Context, string) (bool, error) {
+	if limiter.fail.Load() {
+		return false, errors.New("limit backend unavailable")
+	}
+	return limiter.count.Add(1) <= limiter.max, nil
+}
+
 type operationsGatewayFixture struct {
 	handler          http.Handler
 	tenantID         string
@@ -27,6 +40,7 @@ type operationsGatewayFixture struct {
 	siteID           string
 	sessionID        string
 	gatewaySigner    *ecdsa.PrivateKey
+	limiter          *fakeOperationsRateLimiter
 	iamCalls         atomic.Int32
 	operationsCalls  atomic.Int32
 	denySite         atomic.Bool
@@ -45,6 +59,7 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 		organizationID: "018f3e00-1000-7000-8000-000000000001",
 		siteID:         "018f3e00-2000-7000-8000-000000000001",
 		gatewaySigner:  commandTestSigner(t),
+		limiter:        &fakeOperationsRateLimiter{max: int32(rateLimit)},
 	}
 	store := sessionstore.NewMemoryStore()
 	configured := NewHandler(Config{
@@ -64,7 +79,7 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 			BaseURL: "https://operations.example.test", Audience: "operations-agent-service",
 			WorkloadSPIFFEID: "spiffe://hvac.local/operations-agent-service",
 			HTTPClient:       fixture.operationsClient(t, now), Timeout: time.Second,
-			RateLimitPerMinute: rateLimit,
+			RateLimiter: fixture.limiter,
 		},
 	})
 	fixture.handler = configured
@@ -893,6 +908,22 @@ func TestOperationsGatewayDenialIsNondiscoverableAndRateLimited(t *testing.T) {
 	fixture.handler.ServeHTTP(rateRecorder, rateLimited)
 	if rateRecorder.Code != http.StatusTooManyRequests || fixture.operationsCalls.Load() != 0 {
 		t.Fatalf("expected rate limit before upstream, got %d", rateRecorder.Code)
+	}
+}
+
+func TestOperationsGatewayFailsClosedWhenLimitBackendUnavailable(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	fixture.limiter.fail.Store(true)
+	path := "/api/v1/sites/" + fixture.siteID + "/operations/investigations/investigation-001"
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	fixture.authenticate(request, false)
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusServiceUnavailable || fixture.iamCalls.Load() != 0 || fixture.operationsCalls.Load() != 0 {
+		t.Fatalf("limit backend failure did not fail closed: status=%d IAM=%d Operations=%d", recorder.Code, fixture.iamCalls.Load(), fixture.operationsCalls.Load())
+	}
+	if !strings.Contains(recorder.Body.String(), "OPERATIONS_LIMIT_UNAVAILABLE") {
+		t.Fatalf("unexpected limit failure body: %s", recorder.Body.String())
 	}
 }
 
