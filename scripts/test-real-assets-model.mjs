@@ -200,10 +200,10 @@ const goodValues = chillerKeys.map((key, index) => present(key, index === 1 ? 0 
 test('catalog resolves aliases but does not silently fallback unknown Device types', () => {
   assert.equal(chillerProfile.state, 'configured');
   assert.deepEqual(chillerKeys, [
-    'chiller_run_state',
-    'chiller_power',
-    'chiller_cop',
-    'chiller_cooling_capacity',
+    'chiller.run_state',
+    'chiller.power',
+    'chiller.cop',
+    'chiller.cooling_capacity',
   ]);
   const unknown = resolveRealAssetsProfile('vendor-special-controller');
   assert.equal(unknown.state, 'unconfigured');
@@ -213,9 +213,9 @@ test('catalog resolves aliases but does not silently fallback unknown Device typ
 test('operating projection preserves zero and follows UNKNOWN/OFFLINE/ATTENTION/NORMAL precedence', () => {
   const normal = projectRealAssetsOperatingState({ status: 'ok', snapshot: snapshot(goodValues) }, chillerProfile);
   assert.equal(normal.state, 'NORMAL');
-  assert.equal(normal.points.find((point) => point.key === 'chiller_power').displayValue, '0');
+  assert.equal(normal.points.find((point) => point.key === 'chiller.power').displayValue, '0');
 
-  const staleValues = goodValues.map((value) => value.key === 'chiller_power' ? { ...value, freshness: 'STALE' } : value);
+  const staleValues = goodValues.map((value) => value.key === 'chiller.power' ? { ...value, freshness: 'STALE' } : value);
   const stale = projectRealAssetsOperatingState({ status: 'ok', snapshot: snapshot(staleValues) }, chillerProfile);
   assert.equal(stale.state, 'ATTENTION');
   assert.ok(stale.reasons.includes('TELEMETRY_STALE'));
@@ -236,19 +236,19 @@ test('operating projection preserves zero and follows UNKNOWN/OFFLINE/ATTENTION/
 
 test('missing and degraded-quality critical points require attention without turning valid values into missing', () => {
   const missing = {
-    key: 'chiller_cop',
+    key: 'chiller.cop',
     state: 'MISSING',
     freshness: 'MISSING',
     missingReason: 'ONLY_REJECTED_CANDIDATES',
     policyRevision: 5,
   };
-  const values = goodValues.map((value) => value.key === 'chiller_cop' ? missing : value);
+  const values = goodValues.map((value) => value.key === 'chiller.cop' ? missing : value);
   values[0] = { ...values[0], quality: 'PARTIAL', qualityReasons: ['SOURCE_UNTRUSTED'] };
   const projection = projectRealAssetsOperatingState({ status: 'ok', snapshot: snapshot(values) }, chillerProfile);
   assert.equal(projection.state, 'ATTENTION');
   assert.ok(projection.reasons.includes('CRITICAL_POINT_MISSING'));
   assert.ok(projection.reasons.includes('TELEMETRY_QUALITY_DEGRADED'));
-  assert.equal(projection.points.find((point) => point.key === 'chiller_cop').displayValue, '当前值不可用');
+  assert.equal(projection.points.find((point) => point.key === 'chiller.cop').displayValue, '当前值不可用');
 });
 
 test('unknown configured profile absence remains visible and cannot be classified as normal', () => {
