@@ -77,14 +77,14 @@ function DisabledAlarmSurface({
           showIcon
           message={capabilityDenied ? '当前会话没有 Alarm 列表能力' : 'Alarm 读取路由未启用'}
           description={capabilityDenied
-            ? 'IAM 未向当前 Principal 与 acting Organization 发布 alarm.list。浏览器不会根据角色标签或 Site 访问权自行推导 Alarm 权限。'
+            ? 'IAM 未向当前 Principal 与 Tenant 发布 alarm.list。浏览器不会根据角色标签或 Site 访问权自行推导 Alarm 权限。'
             : 'S4 Alarm 读取尚未对当前构建开放。此页面不会从 Telemetry、Presence 或 Device 状态补造 Alarm。'}
         />
         <Card title="Alarm 权威边界" variant="borderless">
           <Descriptions column={{ xs: 1, sm: 2, xl: 3 }} bordered size="small">
             <Descriptions.Item label="Site">{site.displayName}</Descriptions.Item>
             <Descriptions.Item label="Registry Site ID"><Typography.Text copyable>{site.id}</Typography.Text></Descriptions.Item>
-            <Descriptions.Item label="Acting Organization"><Typography.Text copyable>{principal.context.tenantId}</Typography.Text></Descriptions.Item>
+            <Descriptions.Item label="Tenant"><Typography.Text copyable>{principal.context.tenantId}</Typography.Text></Descriptions.Item>
             <Descriptions.Item label="权威读取">Platform Gateway → IAM → Alarm Service</Descriptions.Item>
             <Descriptions.Item label="生命周期写入">生产禁用</Descriptions.Item>
           </Descriptions>

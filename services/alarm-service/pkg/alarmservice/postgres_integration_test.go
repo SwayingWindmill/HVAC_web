@@ -11,10 +11,9 @@ import (
 )
 
 const (
-	postgresTestTenantID       = "0190f000-0000-7000-8000-000000000001"
-	postgresTestOrganizationID = "01910000-0000-7000-8000-000000000001"
-	postgresTestSiteID         = "01910000-0001-7000-8000-000000000001"
-	postgresTestAlarmID        = "01910000-1000-7000-8000-000000000001"
+	postgresTestTenantID = "0190f000-0000-7000-8000-000000000001"
+	postgresTestSiteID   = "01910000-0001-7000-8000-000000000001"
+	postgresTestAlarmID  = "01910000-1000-7000-8000-000000000001"
 )
 
 func TestPostgresLifecycleWriteIsScopedAtomicAndIdempotent(t *testing.T) {
@@ -29,7 +28,7 @@ func TestPostgresLifecycleWriteIsScopedAtomicAndIdempotent(t *testing.T) {
 	}
 	defer store.Close()
 
-	initial, err := store.Get(ctx, postgresTestOrganizationID, postgresTestSiteID, postgresTestAlarmID)
+	initial, err := store.Get(ctx, postgresTestTenantID, postgresTestSiteID, postgresTestAlarmID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,14 +37,14 @@ func TestPostgresLifecycleWriteIsScopedAtomicAndIdempotent(t *testing.T) {
 	}
 
 	acknowledge := postgresMutation(alarmmodel.OperationAcknowledge, 1, "alarm-postgres-idempotency-1", "2026-07-31T10:00:00Z")
-	first, err := store.Apply(ctx, postgresTestOrganizationID, postgresTestSiteID, postgresTestAlarmID, acknowledge)
+	first, err := store.Apply(ctx, postgresTestTenantID, postgresTestSiteID, postgresTestAlarmID, acknowledge)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first.Replayed || first.Alarm.Status != alarmmodel.StatusAcknowledged || first.Alarm.Version != 2 || len(first.Alarm.Transitions) != 2 {
 		t.Fatalf("unexpected acknowledgement: %#v", first)
 	}
-	replay, err := store.Apply(ctx, postgresTestOrganizationID, postgresTestSiteID, postgresTestAlarmID, acknowledge)
+	replay, err := store.Apply(ctx, postgresTestTenantID, postgresTestSiteID, postgresTestAlarmID, acknowledge)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,14 +53,14 @@ func TestPostgresLifecycleWriteIsScopedAtomicAndIdempotent(t *testing.T) {
 	}
 	conflictingPayload := acknowledge
 	conflictingPayload.Reason = "different payload"
-	if _, err := store.Apply(ctx, postgresTestOrganizationID, postgresTestSiteID, postgresTestAlarmID, conflictingPayload); !errors.Is(err, ErrIdempotencyConflict) {
+	if _, err := store.Apply(ctx, postgresTestTenantID, postgresTestSiteID, postgresTestAlarmID, conflictingPayload); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("expected idempotency conflict, got %v", err)
 	}
 
 	suppressionEnd := "2026-07-31T14:01:00Z"
 	suppress := postgresMutation(alarmmodel.OperationSuppress, 2, "alarm-postgres-idempotency-2", "2026-07-31T10:01:00Z")
 	suppress.SuppressedUntil = &suppressionEnd
-	suppressed, err := store.Apply(ctx, postgresTestOrganizationID, postgresTestSiteID, postgresTestAlarmID, suppress)
+	suppressed, err := store.Apply(ctx, postgresTestTenantID, postgresTestSiteID, postgresTestAlarmID, suppress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +71,7 @@ func TestPostgresLifecycleWriteIsScopedAtomicAndIdempotent(t *testing.T) {
 	assignee := "principal:postgres-operator-2"
 	assign := postgresMutation(alarmmodel.OperationAssign, 3, "alarm-postgres-idempotency-3", "2026-07-31T10:02:00Z")
 	assign.AssigneeID = &assignee
-	assigned, err := store.Apply(ctx, postgresTestOrganizationID, postgresTestSiteID, postgresTestAlarmID, assign)
+	assigned, err := store.Apply(ctx, postgresTestTenantID, postgresTestSiteID, postgresTestAlarmID, assign)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +80,7 @@ func TestPostgresLifecycleWriteIsScopedAtomicAndIdempotent(t *testing.T) {
 	}
 
 	unsuppress := postgresMutation(alarmmodel.OperationUnsuppress, 4, "alarm-postgres-idempotency-4", "2026-07-31T10:03:00Z")
-	unsuppressed, err := store.Apply(ctx, postgresTestOrganizationID, postgresTestSiteID, postgresTestAlarmID, unsuppress)
+	unsuppressed, err := store.Apply(ctx, postgresTestTenantID, postgresTestSiteID, postgresTestAlarmID, unsuppress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,18 +89,18 @@ func TestPostgresLifecycleWriteIsScopedAtomicAndIdempotent(t *testing.T) {
 	}
 
 	stale := postgresMutation(alarmmodel.OperationClose, 1, "alarm-postgres-idempotency-5", "2026-07-31T10:04:00Z")
-	if _, err := store.Apply(ctx, postgresTestOrganizationID, postgresTestSiteID, postgresTestAlarmID, stale); !errors.Is(err, alarmmodel.ErrVersionConflict) {
+	if _, err := store.Apply(ctx, postgresTestTenantID, postgresTestSiteID, postgresTestAlarmID, stale); !errors.Is(err, alarmmodel.ErrVersionConflict) {
 		t.Fatalf("expected version conflict, got %v", err)
 	}
-	if _, err := store.Get(ctx, "01910000-0000-7000-8000-000000000099", postgresTestSiteID, postgresTestAlarmID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("expected cross-Organization invisibility, got %v", err)
+	if _, err := store.Get(ctx, "0190f000-0000-7000-8000-000000000099", postgresTestSiteID, postgresTestAlarmID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected cross-Tenant invisibility, got %v", err)
 	}
 	wrongTenantContext := identitycontext.WithTenantID(context.Background(), "0190f000-0000-7000-8000-000000000099")
-	if _, err := store.Get(wrongTenantContext, postgresTestOrganizationID, postgresTestSiteID, postgresTestAlarmID); !errors.Is(err, ErrUnavailable) {
+	if _, err := store.Get(wrongTenantContext, postgresTestTenantID, postgresTestSiteID, postgresTestAlarmID); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("expected Tenant binding mismatch to fail closed, got %v", err)
 	}
 
-	current, err := store.Get(ctx, postgresTestOrganizationID, postgresTestSiteID, postgresTestAlarmID)
+	current, err := store.Get(ctx, postgresTestTenantID, postgresTestSiteID, postgresTestAlarmID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,14 +6,14 @@ import type { ProtectedScopeDraft, ProtectedScopeResource } from '@/real/protect
 import { RealAlarms } from '@/real/RealAlarms';
 import '@/real/real-shell.css';
 
-const organizationId = '01910000-0000-7000-8000-000000000001';
+const tenantId = '01910000-0000-7000-8000-000000000001';
 const siteA: Site = {
-  id: '01910000-0001-7000-8000-000000000001', owningOrganizationId: organizationId,
+  id: '01910000-0001-7000-8000-000000000001', tenantId,
   code: 'TOKYO-ALARM', displayName: 'Tokyo Alarm Site', timezone: 'Asia/Tokyo', status: 'ACTIVE', revision: 1,
   createdAt: '2026-07-31T00:00:00.000Z', updatedAt: '2026-07-31T00:00:00.000Z',
 };
 const siteB: Site = {
-  id: '01910000-0002-7000-8000-000000000002', owningOrganizationId: organizationId,
+  id: '01910000-0002-7000-8000-000000000002', tenantId,
   code: 'OSAKA-ALARM', displayName: 'Osaka Alarm Site', timezone: 'Asia/Tokyo', status: 'ACTIVE', revision: 1,
   createdAt: '2026-07-31T00:00:00.000Z', updatedAt: '2026-07-31T00:00:00.000Z',
 };
@@ -22,10 +22,10 @@ const principal = {
   context: {
     initiatingPrincipal: { subject: 'real-alarm-audit', issuer: 'https://identity.example.test', displayName: 'Alarm Auditor', email: '', roles: ['operator'] },
     executingServicePrincipal: { service: 'platform-gateway', spiffeId: 'spiffe://hvac.local/platform-gateway' },
-    actingOrganizationId: organizationId, audience: 'iam-service', policyRevision: 'alarm-policy-1', delegationExpiresAt: '2026-08-01T00:00:00.000Z',
+    tenantId, audience: 'iam-service', policyRevision: 'alarm-policy-1', delegationExpiresAt: '2026-08-01T00:00:00.000Z',
   },
-  authorization: { capabilitySetVersion: 6, policyRevision: 'alarm-policy-1', capabilities: ['site.read', 'alarm.list', 'alarm.read'] },
-  session: { id: 'alarm-audit-session', expiresAt: '2026-08-01T00:00:00.000Z', revocationObjectiveMs: 30000, lastAuditMessageId: 'alarm-audit-message' },
+  authorization: { capabilitySetVersion: 7, policyRevision: 'alarm-policy-1', capabilities: ['site.read', 'alarm.list', 'alarm.read'] },
+  session: { id: 'alarm-audit-session', expiresAt: '2026-08-01T00:00:00.000Z', idleTimeoutMs: 30 * 60 * 1000, csrfToken: '[REDACTED_SECRET]', revocationObjectiveMs: 30000, lastAuditMessageId: 'alarm-audit-message' },
 } as unknown as CurrentPrincipalResponse;
 Reflect.set(principal.session, ['csrf', 'Token'].join(''), 'fixture-capability');
 
