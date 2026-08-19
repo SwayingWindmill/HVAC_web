@@ -87,6 +87,8 @@ const expectedOperations = {
   listSiteDevices: ['get', '/api/v1/sites/{siteId}/devices'],
   listSiteDeviceBindings: ['get', '/api/v1/sites/{siteId}/device-bindings'],
   getSiteAssetModel: ['get', '/api/v1/sites/{siteId}/asset-model'],
+  getSiteDashboardSummary: ['get', '/api/v1/sites/{siteId}/dashboard-summary'],
+  streamSiteDashboardSummary: ['get', '/api/v1/sites/{siteId}/dashboard-summary/events'],
   getDevice: ['get', '/api/v1/devices/{deviceId}'],
   listSiteSpaceChildren: ['get', '/api/v1/sites/{siteId}/spaces/tree'],
   listDevicePoints: ['get', '/api/v1/devices/{deviceId}/points'],
@@ -133,6 +135,7 @@ const expectedSuccessSchemas = {
   listSiteDevices: 'DeviceCollection',
   listSiteDeviceBindings: 'DeviceBindingCollection',
   getSiteAssetModel: 'SiteAssetModel',
+  getSiteDashboardSummary: 'SiteDashboardSummary',
   getDevice: 'Device',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
@@ -187,6 +190,13 @@ const schemaRequirements = {
   AssetRelationship: [['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
   AssetModelCounts: [['spaces', 'assets', 'deviceEndpoints', 'physicalSensors', 'points'], ['spaces', 'assets', 'deviceEndpoints', 'physicalSensors', 'points']],
   SiteAssetModel: [['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts'], ['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts']],
+  DashboardMetric: [['state', 'value', 'unit', 'source', 'dataWatermark', 'aggregateWatermark', 'reason'], ['state', 'value', 'unit', 'source', 'dataWatermark', 'aggregateWatermark', 'reason']],
+  DevicePopulationSummary: [['state', 'registered', 'applicable', 'observable', 'online', 'offline', 'stale', 'unknown', 'unavailable', 'denominatorPolicy', 'denominator', 'availabilityPercent', 'evaluatedAt'], ['state', 'registered', 'applicable', 'observable', 'online', 'offline', 'stale', 'unknown', 'unavailable', 'denominatorPolicy', 'denominator', 'availabilityPercent', 'evaluatedAt']],
+  OpenAlarmSummary: [['state', 'activeCount', 'highestSeverity', 'watermark', 'reason'], ['state', 'activeCount', 'highestSeverity', 'watermark', 'reason']],
+  SiteDashboardSlowMetrics: [['siteLocalDayEnergy', 'cost', 'baselineSavings', 'cop'], ['siteLocalDayEnergy', 'cost', 'baselineSavings', 'cop']],
+  SiteDashboardFastMetrics: [['currentPower', 'openAlarms'], ['currentPower', 'openAlarms']],
+  SiteDashboardSummary: [['schemaVersion', 'tenantId', 'siteId', 'siteTimezone', 'asOf', 'generatedAt', 'dataWatermark', 'aggregateWatermark', 'completeness', 'quality', 'reasons', 'devicePopulation', 'slowMetrics', 'fastMetrics'], ['schemaVersion', 'tenantId', 'siteId', 'siteTimezone', 'asOf', 'generatedAt', 'dataWatermark', 'aggregateWatermark', 'completeness', 'quality', 'reasons', 'devicePopulation', 'slowMetrics', 'fastMetrics']],
+  SiteDashboardSummaryDelta: [['schemaVersion', 'baseGeneratedAt', 'summary'], ['schemaVersion', 'baseGeneratedAt', 'summary']],
   FieldError: [['field', 'message'], ['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'fieldErrors']],
 };
@@ -261,6 +271,7 @@ invariant(exactMembers(schemas.ProblemDetails.properties.code['x-stable-codes'],
 invariant(schemas.ProblemDetails.properties.code.pattern === '^[A-Z][A-Z0-9_]+$', 'ProblemDetails.code pattern is unsupported');
 invariant(schemas.ProblemDetails.properties.traceId.pattern === '^[a-f0-9]{32}$', 'ProblemDetails.traceId pattern is unsupported');
 invariant(spec.components?.responses?.Problem?.content?.['application/problem+json']?.schema?.$ref === '#/components/schemas/ProblemDetails', 'public Problem response must use application/problem+json');
+invariant(operations.streamSiteDashboardSummary.operation.responses?.['200']?.content?.['text/event-stream']?.['x-event-data-schema']?.$ref === '#/components/schemas/SiteDashboardSummaryDelta', 'dashboard summary stream event schema is unsupported');
 
 const banner = `Generator: platform-contracts@${generatorVersion}; Contract SHA-256: ${digest}`;
 const replacements = {
@@ -281,6 +292,8 @@ const replacements = {
   __SITE_DEVICES_PATH__: operations.listSiteDevices.path,
   __SITE_DEVICE_BINDINGS_PATH__: operations.listSiteDeviceBindings.path,
   __SITE_ASSET_MODEL_PATH__: operations.getSiteAssetModel.path,
+  __SITE_DASHBOARD_SUMMARY_PATH__: operations.getSiteDashboardSummary.path,
+  __SITE_DASHBOARD_SUMMARY_EVENTS_PATH__: operations.streamSiteDashboardSummary.path,
   __DEVICE_PATH__: operations.getDevice.path,
   __SITE_SPACE_CHILDREN_PATH__: operations.listSiteSpaceChildren.path,
   __DEVICE_POINTS_PATH__: operations.listDevicePoints.path,

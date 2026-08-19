@@ -13,7 +13,7 @@ const errors = [];
 
 const allowedOwners = new Set([
   'platform-gateway', 'platform-core-service', 'telemetry-runtime-service', 'command-service',
-  'telemetry-query-service', 'operations-agent-service', 'alarm-service', 'work-order-service',
+  'telemetry-query-service', 'operations-agent-service', 'alarm-service', 'work-order-service', 'presentation-service',
   'forecast-service', 'optimization-service', 'metric-engine-service', 'settlement-service',
 ]);
 const allowedScopes = new Set(['tenant', 'principal', 'site', 'device', 'key', 'alarm', 'work-order', 'asset', 'space', 'point', 'command']);

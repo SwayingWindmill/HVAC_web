@@ -373,3 +373,38 @@ Both files were read from ThingsBoard CE `v4.3.1.1` at commit `c2a52e46c44e308dd
 ### S11 consequence
 
 Cloud Intent, approval, authorization, idempotency, lease and execution-fence facts remain immutable Cloud authority. Edge Scheduler/Arbiter/Interlock may constrain or reject the requested command without rewriting those facts. Connector and Connectivity persistence carry Edge execution evidence across restart, and the verifier reloads that durable evidence before independent S2 readback. A transport acknowledgement without governed Edge execution evidence cannot advance the Command, and ambiguous execution paths remain frozen as `OUTCOME_UNKNOWN` rather than being retried blindly.
+
+## S17 — SiteDashboardSummary and BigScreen truthfulness
+
+Date: 2026-08-19
+
+Local issue: #273
+
+### Upstream files reviewed
+
+The implementation read these files directly from the pinned ThingsBoard CE `v4.3.1.1` checkout at commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4` immediately before implementation:
+
+- `common/data/src/main/java/org/thingsboard/server/common/data/Dashboard.java`
+- `application/src/main/java/org/thingsboard/server/controller/DashboardController.java`
+- `ui-ngx/src/app/shared/models/dashboard.models.ts`
+- `ui-ngx/src/app/core/api/alias-controller.ts`
+- `ui-ngx/src/app/core/api/widget-subscription.ts`
+
+### Observed upstream semantics
+
+- ThingsBoard models Dashboard state, layout and time window explicitly, and resolves datasource aliases separately from the stored Dashboard definition.
+- Alias changes invalidate prior resolutions and re-resolve affected aliases; Dashboard state changes invalidate only state-bound aliases instead of silently retaining stale entity targets.
+- Widget subscriptions have an explicit start/update/unsubscribe lifecycle. Unsubscribe stops Entity/Alarm subscriptions, clears listener state and releases the subscribed state.
+- The generic `DashboardConfiguration` intentionally remains open-ended and can carry arbitrary widget/configuration fields. That flexibility is useful for a low-code platform but is broader than the fixed first-party HVAC operations product boundary.
+
+### Implementation decision
+
+- `ADOPT`: explicit presentation state/time context, bounded subscription lifecycle, deterministic cleanup on navigation/scope change, and re-resolution/reconciliation when the presentation target changes.
+- `ADAPT`: replace generic alias/widget datasource resolution with one versioned `SiteDashboardSummary` projection scoped by the authenticated Tenant and validated Site. Every meaningful value carries explicit source/quality/watermark semantics and Site local-calendar calculations use the Registry IANA timezone.
+- `REPLACE`: browser-side Site truth reconstructed from sampled Device lists, Presence batches and rolling 24-hour Energy queries with a server-side Presentation projection assembled only through authorized owner query ports. Dashboard and BigScreen consume the same summary contract/query identity.
+- `REPLACE`: an unconditional visual “Live/healthy” interpretation with explicit `READY/ATTENTION/NO_DATA/PARTIAL/STALE/SUSPECT/UNAVAILABLE/NOT_AUTHORIZED/NOT_INTEGRATED` states. `ATTENTION` means complete data with known operational concern; incomplete or unknown Device population never publishes a Site availability denominator or percentage.
+- `REJECT`: arbitrary Dashboard/Widget JavaScript/HTML/CSS/resources, Presentation-owned business facts or authorization, direct control actions, Demo/Mock fallback in Real mode, and fixed 24-hour arithmetic for a Site-local calendar day.
+
+### S17 consequence
+
+Presentation becomes a logical owner of derived presentation projections only; Registry, Telemetry, Metric/Analytics, Alarm, Command and authorization facts remain with their existing owners. Phase 1 may physically co-locate the projection with `energy-api/platform-gateway`, but the Summary implementation consumes owner query ports rather than write/read owner schemas directly. Live presentation uses a bounded `text/event-stream` replacement stream only after a REST `SiteDashboardSummary` handshake: the browser supplies that Snapshot's `generatedAt` as `baseGeneratedAt`, accepts an owner-issued replacement only when the base still matches its current Snapshot, and performs a fresh REST reconciliation before reopening the stream after disconnect, malformed data or base mismatch. The Gateway revalidates the durable BFF Session on the configured revocation objective independently of the lower-frequency Summary refresh, so stream lifetime cannot weaken Session revocation. The stream is recovery acceleration, not a new durable fact authority or a browser-side recomputation path.
