@@ -22,7 +22,7 @@ const investigationId = 'investigation-postgres-night-energy-001';
 const runId = 'run-postgres-night-energy-001';
 const leaseId = 'lease-postgres-night-energy-001';
 const checkpointId = 'checkpoint-postgres-night-energy-001';
-const scope = Object.freeze({ tenantId, siteId, equipmentId: null, deviceId: null });
+const scope = Object.freeze({ tenantId, siteId, assetId: null, deviceId: null });
 const currentTime = Date.parse('2026-07-31T00:00:00.000Z');
 
 const energySeries = (request, energyPerHour) => {
@@ -63,18 +63,18 @@ const ownerRead = async ({ request }) => {
       },
     };
   }
-  if (request.tool === 'registry.listSiteEquipment') {
+  if (request.tool === 'registry.listSiteAssets') {
     return {
       requestId: request.requestId,
       owner: 'registry',
       scope,
-      revision: 'registry-equipment:29',
+      revision: 'registry-asset:29',
       quality: 'GOOD',
-      provenance: 'platform-core-service:registry-site-equipment/v1',
+      provenance: 'platform-core-service:registry-site-asset/v1',
       payload: {
-        kind: 'SITE_EQUIPMENT',
+        kind: 'SITE_ASSETS',
         siteId,
-        equipment: [{ id: '0198f5c0-7c00-7000-8000-000000000110' }],
+        assets: [{ id: '0198f5c0-7c00-7000-8000-000000000110' }],
       },
     };
   }
@@ -103,8 +103,8 @@ const runtime = () => createLangGraphAgentExecutionRuntime({
           tool: 'registry.getSite',
           input: { siteId },
         }, {
-          requestId: `${investigationId}:registry-equipment`,
-          tool: 'registry.listSiteEquipment',
+          requestId: `${investigationId}:registry-assets`,
+          tool: 'registry.listSiteAssets',
           input: { siteId },
         }],
       }],
@@ -127,7 +127,7 @@ const createPorts = (persistence, identities) => ({
         policyRevision: 'operations-policy-1',
         toolDelegationGrants: {
           'registry.getSite': 'postgres-registry-site-grant',
-          'registry.listSiteEquipment': 'postgres-registry-equipment-grant',
+          'registry.listSiteAssets': 'postgres-registry-asset-grant',
           'analytics.getEnergySeries': 'postgres-energy-grant',
         },
       };

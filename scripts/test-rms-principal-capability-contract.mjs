@@ -50,20 +50,21 @@ function principalResponse(overrides = {}) {
         service: 'platform-gateway',
         spiffeId: 'spiffe://hvac.local/platform-gateway',
       },
-      actingOrganizationId: '01900000-0000-7000-8000-000000000001',
+      tenantId: '01900000-0000-7000-8000-000000000001',
       audience: 'iam-service',
       policyRevision: 'gateway-delegation:4',
       delegationExpiresAt: '2026-07-28T00:00:00Z',
     },
     authorization: {
-      capabilitySetVersion: 6,
+      capabilitySetVersion: 7,
       policyRevision: 'registry-read:7',
-      capabilities: ['organization.list', 'site.read', 'work-order.list', 'work-order.read'],
+      capabilities: ['site.list', 'site.read', 'work-order.list', 'work-order.read'],
     },
     session: {
       id: 'session-1',
       expiresAt: '2026-07-28T01:00:00Z',
       csrfToken: '[REDACTED_SECRET]',
+      idleTimeoutMs: 30 * 60 * 1000,
       revocationObjectiveMs: 5000,
       lastAuditMessageId: 'audit-1',
     },
@@ -74,7 +75,7 @@ function principalResponse(overrides = {}) {
 test('generated browser contract accepts IAM-authored effective capabilities', () => {
   const parsed = currentPrincipalResponseSchema.parse(principalResponse());
   assert.equal(parsed.authorization.policyRevision, 'registry-read:7');
-  assert.deepEqual(Array.from(parsed.authorization.capabilities), ['organization.list', 'site.read', 'work-order.list', 'work-order.read']);
+  assert.deepEqual(Array.from(parsed.authorization.capabilities), ['site.list', 'site.read', 'work-order.list', 'work-order.read']);
   assert.deepEqual(Array.from(parsed.principal.roles), ['descriptive-role-only']);
 });
 
@@ -85,7 +86,7 @@ test('generated browser contract rejects missing, duplicate, and unsupported cap
 
   assert.equal(currentPrincipalResponseSchema.safeParse(principalResponse({
     authorization: {
-      capabilitySetVersion: 6,
+      capabilitySetVersion: 7,
       policyRevision: 'registry-read:7',
       capabilities: ['site.read', 'site.read'],
     },
@@ -93,7 +94,7 @@ test('generated browser contract rejects missing, duplicate, and unsupported cap
 
   assert.equal(currentPrincipalResponseSchema.safeParse(principalResponse({
     authorization: {
-      capabilitySetVersion: 6,
+      capabilitySetVersion: 7,
       policyRevision: 'registry-read:7',
       capabilities: ['role.admin'],
     },

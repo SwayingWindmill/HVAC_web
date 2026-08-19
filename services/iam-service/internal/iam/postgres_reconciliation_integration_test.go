@@ -37,10 +37,10 @@ func TestPostgresReconciliationIsIdempotentVersionedAndQuarantinesConflicts(t *t
 			Email: "owner-a@example.test", Status: iam.PrincipalStatusActive,
 		},
 		Memberships: []iam.ReconciledMembership{{
-			OrganizationID: postgresActingOrganizationID, Status: iam.FactStatusActive, ValidFrom: validFrom,
+			TenantID: postgresTenantAID, Status: iam.FactStatusActive, ValidFrom: validFrom,
 		}},
 		RoleBindings: []iam.ReconciledRoleBinding{{
-			OrganizationID: postgresActingOrganizationID, RoleKey: "registry-reader",
+			TenantID: postgresTenantAID, RoleKey: "registry-reader",
 			Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectAllow, ValidFrom: validFrom,
 		}},
 	}

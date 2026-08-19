@@ -129,7 +129,7 @@ export function useRegistryAssets(siteId: string | null, enabled = true) {
     queryFn: async ({ pageParam, signal }) => {
       const params: RegistryListParams = { limit: DEFAULT_PAGE_SIZE };
       if (typeof pageParam === 'string') params.cursor = pageParam;
-      return (await client.listSiteAsset(registryId(siteId!), params, { signal })).data;
+      return (await client.listSiteAssets(registryId(siteId!), params, { signal })).data;
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: nextCursor,

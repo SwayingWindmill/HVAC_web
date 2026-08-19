@@ -96,7 +96,7 @@ test('PostgreSQL Run budget survives restart, ignores Checkpoint deletion, and s
     scope: {
       tenantId: 'organization-postgres-budget',
       siteId: 'site-postgres-budget',
-      equipmentId: null,
+      assetId: null,
       deviceId: null,
     },
   });

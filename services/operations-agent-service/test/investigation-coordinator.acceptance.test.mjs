@@ -7,7 +7,7 @@ import { createFakeOperationsAgentEnvironment } from './support/fake-operations-
 const scope = Object.freeze({
   tenantId: 'organization-acceptance',
   siteId: 'site-acceptance',
-  equipmentId: null,
+  assetId: null,
   deviceId: null,
 });
 
@@ -28,7 +28,7 @@ test('the Coordinator owns a complete framework-independent Investigation accept
           batchId: 'batch-site-context',
           requests: [
             {
-              requestId: 'read-equipment',
+              requestId: 'read-asset',
               tool: 'registry.getSite',
               input: { siteId: 'site-acceptance' },
             },

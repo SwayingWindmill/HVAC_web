@@ -789,7 +789,7 @@
     },
     "/api/v1/sites/{siteId}/assets": {
       "get": {
-        "operationId": "listSiteAsset",
+        "operationId": "listSiteAssets",
         "summary": "List visible Asset at a Site",
         "parameters": [
           {
@@ -1643,12 +1643,12 @@
       },
       "Capability": {
         "type": "string",
-        "description": "Version 8 IAM-authored browser capability identifier. Registry capabilities begin at Site; IAM administration is capability-authorized rather than Role-name-authorized.",
+        "description": "Version 9 IAM-authored browser capability identifier. Registry capabilities begin at Site; IAM administration is capability-authorized rather than Role-name-authorized.",
         "enum": [
           "site.list",
           "site.read",
-          "equipment.list",
-          "equipment.read",
+          "asset.list",
+          "asset.read",
           "device.list",
           "device.read",
           "telemetry.snapshot.read",
@@ -1680,7 +1680,7 @@
         "properties": {
           "capabilitySetVersion": {
             "type": "integer",
-            "const": 8
+            "const": 9
           },
           "policyRevision": {
             "type": "string",

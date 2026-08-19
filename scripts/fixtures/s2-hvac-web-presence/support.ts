@@ -122,7 +122,7 @@ function snapshot(deviceId: string, keys: readonly string[], updated: boolean): 
   return {
     schemaVersion: 1,
     deviceId,
-    owningOrganizationId: '018f6a00-1000-7000-8000-000000000001',
+    tenantId: '018f6a00-1000-7000-8000-000000000001',
     siteId: deviceId === siblingChillerDeviceId ? siblingChillerSiteId : '018f6a00-2000-7000-8000-000000000001',
     businessRevision: updated ? 42 : 41,
     evaluatedAt: updated ? '2026-07-25T05:31:02.000Z' : evaluatedAt,

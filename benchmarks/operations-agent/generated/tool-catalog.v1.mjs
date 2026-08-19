@@ -5,15 +5,15 @@ export const OPERATIONS_AGENT_TOOL_CATALOG_VERSION = "operations-agent-tool-cata
 export const OPERATIONS_AGENT_TOOL_CATALOG = Object.freeze({
   "authorization.checkScope": "iam-service",
   "registry.getSite": "platform-core-service",
-  "registry.getEquipment": "platform-core-service",
-  "registry.listSiteEquipment": "platform-core-service",
-  "registry.getEquipmentEnergyBindings": "platform-core-service",
-  "telemetry.current.getEquipmentState": "telemetry-runtime-service",
+  "registry.getAsset": "platform-core-service",
+  "registry.listSiteAssets": "platform-core-service",
+  "registry.getAssetEnergyBindings": "platform-core-service",
+  "telemetry.current.getAssetState": "telemetry-runtime-service",
   "telemetry.current.getDeviceObservationSnapshot": "telemetry-runtime-service",
   "telemetry.getCurrentSnapshot": "telemetry-runtime-service",
   "analytics.energy.getSiteSeries": "telemetry-query-service",
   "analytics.energy.compareSitePeriods": "telemetry-query-service",
-  "analytics.energy.getEquipmentSeries": "telemetry-query-service",
+  "analytics.energy.getAssetSeries": "telemetry-query-service",
   "analytics.getEnergySeries": "telemetry-query-service",
   "commands.getCapabilities": "command-service",
   "commands.createIntent": "command-service",
@@ -24,7 +24,7 @@ export const OPERATIONS_AGENT_TOOL_CATALOG = Object.freeze({
 
 export const OPERATIONS_AGENT_RUNTIME_READ_TOOLS = Object.freeze([
   "registry.getSite",
-  "registry.listSiteEquipment",
+  "registry.listSiteAssets",
   "telemetry.getCurrentSnapshot",
   "analytics.getEnergySeries",
   "commands.getCapabilities",
@@ -32,6 +32,6 @@ export const OPERATIONS_AGENT_RUNTIME_READ_TOOLS = Object.freeze([
 
 export const OPERATIONS_AGENT_TOOL_AUTHORIZATION_TOOLS = Object.freeze([
   "registry.getSite",
-  "registry.listSiteEquipment",
+  "registry.listSiteAssets",
   "analytics.getEnergySeries",
 ]);

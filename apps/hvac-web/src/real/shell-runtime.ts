@@ -712,6 +712,7 @@ class BrowserShellRuntime implements ShellRuntime {
           if (
             !isUUIDv7(site.id)
             || !isUUIDv7(site.tenantId)
+            || site.tenantId !== principal.context.tenantId
             || seenSiteIDs.has(site.id)
           ) {
             throw new SiteDiscoveryValidationError('Registry returned an invalid authorized Site collection.');
@@ -770,7 +771,7 @@ class BrowserShellRuntime implements ShellRuntime {
             invalid ? 'SITE_DISCOVERY_INVALID' : 'SITE_DISCOVERY_UNAVAILABLE',
             invalid
               ? 'Registry 返回了无效的授权 Site 集合。'
-              : '无法读取当前 Organization 的授权 Site。',
+              : '无法读取当前 Tenant 的授权 Site。',
           ),
         },
         siteTransition: this.snapshot.siteTransition,

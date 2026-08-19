@@ -321,9 +321,9 @@
       "path": "/api/v1/commands",
       "owner": "command-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
+      "revision": 5,
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -338,9 +338,9 @@
       "path": "/api/v1/commands/{commandId}",
       "owner": "command-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
+      "revision": 5,
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -355,9 +355,9 @@
       "path": "/api/v1/commands/{commandId}/approve",
       "owner": "command-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
+      "revision": 5,
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [

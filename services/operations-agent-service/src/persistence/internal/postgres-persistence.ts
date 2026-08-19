@@ -251,7 +251,7 @@ const validateImmutableFields = (
     || current.createdAt !== next.createdAt
     || current.scope.tenantId !== next.scope.tenantId
     || current.scope.siteId !== next.scope.siteId
-    || current.scope.equipmentId !== next.scope.equipmentId
+    || current.scope.assetId !== next.scope.assetId
     || current.scope.deviceId !== next.scope.deviceId) {
     throw new InvestigationRepositoryConflictError(
       'IDENTITY_CONFLICT',
@@ -301,7 +301,7 @@ const scopeContains = (
   candidate: OperationsInvestigationSnapshot['scope'],
 ): boolean => investigation.tenantId === candidate.tenantId
   && (investigation.siteId === null || investigation.siteId === candidate.siteId)
-  && (investigation.equipmentId === null || investigation.equipmentId === candidate.equipmentId)
+  && (investigation.assetId === null || investigation.assetId === candidate.assetId)
   && (investigation.deviceId === null || investigation.deviceId === candidate.deviceId);
 
 const validateBusinessRecord = (
@@ -342,7 +342,7 @@ const validateBusinessRecord = (
       || record.inputDigest !== appended.inputDigest
       || record.scope.tenantId !== current.scope.tenantId
       || record.scope.siteId !== current.scope.siteId
-      || record.scope.equipmentId !== current.scope.equipmentId
+      || record.scope.assetId !== current.scope.assetId
       || record.scope.deviceId !== current.scope.deviceId) {
       throw new InvestigationRepositoryConflictError(
         'RECORD_REFERENCE_CONFLICT',

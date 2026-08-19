@@ -24,7 +24,7 @@ Knowing the address is insufficient. Gateway routes require a trusted client cer
 - initiating issuer/subject, session, policy and delegation identifiers;
 - no forwarding or transitive expansion.
 
-The response exposes navigation context. Its acting Organization is not an authorization grant.
+The response exposes navigation context. Its Tenant context is not itself an authorization grant.
 
 ## Registry-read decision
 
@@ -32,21 +32,21 @@ The response exposes navigation context. Its acting Organization is not an autho
 
 ```json
 {
-  "actingOrganizationId": "018f1e00-0000-7000-8000-000000000001",
+  "tenantId": "018f1e00-0000-7000-8000-000000000001",
   "action": "site.read"
 }
 ```
 
-IAM resolves the configured issuer plus immutable subject into a platform Principal, verifies active OrganizationMembership, applies RoleBinding and SiteBinding scope, and then applies binding and explicit deny. Membership alone grants no Registry resources. Cross-Organization SiteBinding yields only the bound Site and permitted concrete actions. The acting Organization identifier must be a UUIDv7 and is rejected before the database boundary when malformed.
+IAM resolves the configured issuer plus immutable subject into a platform Principal, verifies active TenantMembership for the requested Tenant, applies RoleBinding and SiteBinding actions within that same Tenant, and then applies explicit deny. Membership alone grants no Registry resources. Bindings for another Tenant are ignored and cannot widen the requested Tenant scope. The Tenant identifier must be a UUIDv7 and is rejected before the database boundary when malformed.
 
-The typed response contains allow or deny, platform Principal, acting Organization, allowed and denied Organization/Site scope, one concrete action, policy revision, reason code and decision time. Deny is a successful authorization evaluation and therefore returns HTTP 200 without a downstream delegation.
+The typed response contains allow or deny, platform Principal, Tenant, allowed and denied Site scope, one concrete action, policy revision, reason code and decision time. Deny is a successful authorization evaluation and therefore returns HTTP 200 without a downstream delegation.
 
 For allow decisions IAM signs a maximum-30-second delegation for `platform-core-service`. It is bound to:
 
 - IAM issuer and Gateway presenter SPIFFE identities;
 - one audience and one concrete Registry action;
 - initiating platform Principal and external issuer/subject;
-- acting Organization and allowed/denied Organization/Site scope;
+- Tenant and allowed/denied Site scope;
 - policy revision and allow reason;
 - parent Gateway delegation, Session, issue/expiry time and unique identifier;
 - non-transitive semantics.
@@ -55,14 +55,14 @@ For allow decisions IAM signs a maximum-30-second delegation for `platform-core-
 
 ## Registry grant status
 
-`POST /internal/v1/registry-read/grant-status` accepts only the configured Core workload over verified mTLS. The bounded request contains the acting Organization ID and grant `jti`; it never contains the raw grant. IAM returns the current active Registry policy revision and whether the identifier has an unexpired revocation record. The status lookup uses the same read-only IAM runtime connection and acting-Organization RLS context, and any database or policy failure makes Core authorization unavailable.
+`POST /internal/v1/registry-read/grant-status` accepts only the configured Core workload over verified mTLS. The bounded request contains the Tenant ID and grant `jti`; it never contains the raw grant. IAM returns the current active Registry policy revision and whether the identifier has an unexpired revocation record. The status lookup uses the same read-only IAM runtime connection and Tenant RLS context, and any database or policy failure makes Core authorization unavailable.
 
 ## Production authorization store
 
 Set `IAM_DATABASE_URL` to use the frozen `iam` PostgreSQL Schema. The connection must authenticate exactly as `s1_iam_runtime`; postgres, migration and Core identities are rejected during pool creation. Each decision uses one repeatable-read, read-only transaction:
 
 1. `iam.resolve_principal_identity` resolves only exact external issuer plus subject and returns no mutable profile fields.
-2. IAM sets transaction-local Principal and acting Organization RLS context.
+2. IAM sets transaction-local Principal and Tenant RLS context.
 3. Membership, RoleBinding, SiteBinding, deny and active policy revision are read from the same snapshot.
 4. Unknown stored Registry actions, missing active policy or database/RLS failure make authorization unavailable rather than broadening access.
 
@@ -99,7 +99,7 @@ IAM_S1_AUTHORIZATION_FIXTURE=true
 IAM_EXTERNAL_SUBJECT_ISSUER=https://configured-identity-issuer.example
 ```
 
-The fixture covers direct Owner A membership plus role, a cross-Organization SiteBinding, explicit deny, membership-without-role, revoked membership and unmapped subjects. It exists for deterministic S1 integration and must not be enabled as an implicit production fallback.
+The fixture covers direct Tenant membership plus role/action bindings, SiteBinding, explicit deny, membership-without-action, revoked membership and unmapped subjects. It exists for deterministic S1 integration and must not be enabled as an implicit production fallback.
 
 ## Header and claim boundary
 

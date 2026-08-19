@@ -12,11 +12,11 @@
     "DIAGNOSTIC_ANALYSIS"
   ],
   "scope": {
-    "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+    "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
     "siteIds": [
       "0198f5c0-7c00-7000-8000-000000000031"
     ],
-    "equipmentIds": [],
+    "assetIds": [],
     "deviceIds": []
   },
   "inputFacts": [
@@ -26,11 +26,11 @@
       "ownerTool": "authorization.checkScope",
       "scopeBasis": "AUTHORIZED",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": [
           "0198f5c0-7c00-7000-8000-000000000031"
         ],
-        "equipmentIds": [],
+        "assetIds": [],
         "deviceIds": []
       },
       "metadata": {
@@ -67,11 +67,11 @@
       "status": "AVAILABLE",
       "scopeBasis": "AUTHORIZED",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": [
           "0198f5c0-7c00-7000-8000-000000000031"
         ],
-        "equipmentIds": [],
+        "assetIds": [],
         "deviceIds": []
       },
       "factIds": [
@@ -152,7 +152,7 @@
       "registry.getSite"
     ],
     "forbidden": [
-      "registry.listSiteEquipment",
+      "registry.listSiteAssets",
       "analytics.energy.getSiteSeries",
       "commands.createIntent"
     ],

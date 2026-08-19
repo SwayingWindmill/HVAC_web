@@ -947,8 +947,8 @@
 }
 
 .real-assets-tree-node[data-asset-kind='site'],
-.real-assets-tree-node[data-asset-kind='area'],
-.real-assets-tree-node[data-asset-kind='equipment'] {
+.real-assets-tree-node[data-asset-kind='space'],
+.real-assets-tree-node[data-asset-kind='asset'] {
   font-weight: 600;
 }
 

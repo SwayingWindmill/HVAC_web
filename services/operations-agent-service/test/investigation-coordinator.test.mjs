@@ -200,7 +200,7 @@ const createAndStart = async (harness) => {
     scope: {
       tenantId: 'organization-001',
       siteId: 'site-001',
-      equipmentId: null,
+      assetId: null,
       deviceId: null,
     },
   });
@@ -218,7 +218,7 @@ test('authorized callers create, start, and query an Investigation through the C
     scope: {
       tenantId: 'organization-001',
       siteId: 'site-001',
-      equipmentId: null,
+      assetId: null,
       deviceId: null,
     },
   });
@@ -252,7 +252,7 @@ test('authorization denial is a typed error and creates no Investigation', async
     scope: {
       tenantId: 'organization-001',
       siteId: 'site-denied',
-      equipmentId: null,
+      assetId: null,
       deviceId: null,
     },
   }), 'AUTHORIZATION_DENIED');
@@ -272,7 +272,7 @@ test('every query and mutation reauthorizes the authoritative Investigation Scop
     scope: {
       tenantId: 'organization-001',
       siteId: 'site-001',
-      equipmentId: null,
+      assetId: null,
       deviceId: null,
     },
   });
@@ -300,7 +300,7 @@ test('advance executes independent READ requests in parallel and saves only Runt
   const scope = {
     tenantId: 'organization-001',
     siteId: 'site-001',
-    equipmentId: null,
+    assetId: null,
     deviceId: null,
   };
   const read = (owner) => async (request, context) => {
@@ -333,7 +333,7 @@ test('advance executes independent READ requests in parallel and saves only Runt
             {
               requestId: 'read-current',
               tool: 'telemetry.getCurrentSnapshot',
-              input: { equipmentId: 'equipment-001' },
+              input: { assetId: 'asset-001' },
             },
           ],
         }],
@@ -415,7 +415,7 @@ test('advance resumes from a matching Checkpoint and rejects a mismatched Runtim
     scope: {
       tenantId: 'organization-001',
       siteId: 'site-001',
-      equipmentId: null,
+      assetId: null,
       deviceId: null,
     },
     revision: 'revision-001',
@@ -493,7 +493,7 @@ test('advance rejects Owner results whose identity, Owner, Scope, or provenance 
         scope: {
           tenantId: 'organization-other',
           siteId: 'site-other',
-          equipmentId: null,
+          assetId: null,
           deviceId: null,
         },
         revision: '',
@@ -588,8 +588,8 @@ test('advance reports budget exhaustion and inability to conclude as distinct ty
           tool: 'registry.getSite',
           input: { siteId: 'site-001' },
         }, {
-          requestId: 'read-equipment',
-          tool: 'registry.listSiteEquipment',
+          requestId: 'read-asset',
+          tool: 'registry.listSiteAssets',
           input: { siteId: 'site-001' },
         }],
       }],

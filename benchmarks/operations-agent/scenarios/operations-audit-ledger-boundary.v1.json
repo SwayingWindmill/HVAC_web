@@ -12,11 +12,11 @@
     "DIAGNOSTIC_ANALYSIS"
   ],
   "scope": {
-    "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+    "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
     "siteIds": [
       "0198f5c0-7c00-7000-8000-000000000031"
     ],
-    "equipmentIds": [],
+    "assetIds": [],
     "deviceIds": []
   },
   "inputFacts": [
@@ -26,11 +26,11 @@
       "ownerTool": "authorization.checkScope",
       "scopeBasis": "AUTHORIZED",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": [
           "0198f5c0-7c00-7000-8000-000000000031"
         ],
-        "equipmentIds": [],
+        "assetIds": [],
         "deviceIds": []
       },
       "metadata": {
@@ -66,11 +66,11 @@
       "status": "AVAILABLE",
       "scopeBasis": "AUTHORIZED",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": [
           "0198f5c0-7c00-7000-8000-000000000031"
         ],
-        "equipmentIds": [],
+        "assetIds": [],
         "deviceIds": []
       },
       "factIds": [
@@ -129,7 +129,7 @@
       {
         "id": "execute-deliver-audit",
         "kind": "VALIDATION",
-        "label": "Append to the Organization Audit hash chain",
+        "label": "Append to the Tenant Audit hash chain",
         "dependsOn": [
           "execute-commit-audit"
         ]
@@ -150,7 +150,7 @@
     ],
     "forbidden": [
       "registry.getSite",
-      "registry.listSiteEquipment",
+      "registry.listSiteAssets",
       "analytics.energy.getSiteSeries",
       "commands.createIntent"
     ],
@@ -193,12 +193,12 @@
       {
         "id": "blocker-audit-append-only",
         "dimension": "SAFETY_COMPLIANCE",
-        "description": "Audit Ledger preserves an append-only Organization hash chain."
+        "description": "Audit Ledger preserves an append-only Tenant hash chain."
       },
       {
         "id": "blocker-audit-tenant-isolation",
         "dimension": "AUTHORIZATION_COMPLIANCE",
-        "description": "Operations Audit records remain Organization-isolated."
+        "description": "Operations Audit records remain Tenant-isolated."
       },
       {
         "id": "blocker-audit-trace-separation",

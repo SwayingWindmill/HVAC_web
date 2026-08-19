@@ -18,7 +18,7 @@ This is explicit at-least-once delivery. The service does not claim exactly-once
 - topic: `control.security.session.v1`
 - key: `bff-session:<sha256 audit aggregate id>`; the browser Session cookie value is never published
 - value: deterministic `SessionAuditEventV1` Protobuf bytes
-- headers: message ID, schema version, aggregate version, Organization and content type
+- headers: message ID, schema version, aggregate version, Tenant and content type
 
 The Relay validates the stored Protobuf envelope hash before publishing.
 

@@ -57,7 +57,7 @@ function renderLegacyPresenceHarness() {
   );
 }
 
-const organizationId = '018f6a00-1000-7000-8000-000000000001';
+const tenantId = '018f6a00-1000-7000-8000-000000000001';
 const siteId = '018f6a00-2000-7000-8000-000000000001';
 const deviceIds = [
   '018f6a00-3000-7000-8000-000000000001',
@@ -66,7 +66,7 @@ const deviceIds = [
 const instant = '2026-07-31T04:00:00.000Z';
 const site: Site = {
   id: siteId,
-  owningOrganizationId: organizationId,
+  tenantId: tenantId,
   code: 'SITE-REALTIME',
   displayName: 'Realtime Certification Site',
   timezone: 'Asia/Tokyo',
@@ -77,7 +77,7 @@ const site: Site = {
 };
 const devices = deviceIds.map((id, index) => ({
   id,
-  owningOrganizationId: organizationId,
+  tenantId: tenantId,
   siteId,
   code: `CH-RT-${index + 1}`,
   displayName: `Realtime Chiller ${index + 1}`,
@@ -106,7 +106,7 @@ function currentSnapshot(deviceId: string): DeviceObservationSnapshot {
   return {
     schemaVersion: 1,
     deviceId,
-    owningOrganizationId: organizationId,
+    tenantId: tenantId,
     siteId,
     businessRevision: 40,
     evaluatedAt: '2026-07-31T04:05:02.000Z',
@@ -139,10 +139,10 @@ function renderRealAssetsRealtimeHarness() {
   queryClient.clear();
   const controlledLive = new ControlledTelemetryLiveClient();
   const platformClient = {
-    listSiteEquipment: () => platformResponse({ items: [], nextCursor: null, hasMore: false }),
+    listSiteAssets: () => platformResponse({ items: [], nextCursor: null, hasMore: false }),
     listSiteDevices: () => platformResponse({ items: devices, nextCursor: null, hasMore: false }),
     listSiteDeviceBindings: () => platformResponse({ items: [], nextCursor: null, hasMore: false }),
-  } as unknown as Pick<PlatformGatewayClient, 'listSiteEquipment' | 'listSiteDevices' | 'listSiteDeviceBindings'>;
+  } as unknown as Pick<PlatformGatewayClient, 'listSiteAssets' | 'listSiteDevices' | 'listSiteDeviceBindings'>;
   const telemetryClient = {
     batchGetDeviceObservationSnapshots: async (request: { requests: Array<{ requestId: string; deviceId: string; keys: string[] }> }) => ({
       schemaVersion: 1,
@@ -177,19 +177,20 @@ function renderRealAssetsRealtimeHarness() {
         roles: ['OPERATOR'],
       },
       executingServicePrincipal: { service: 'platform-gateway', spiffeId: 'spiffe://hvac.local/platform-gateway' },
-      actingOrganizationId: organizationId,
+      tenantId,
       audience: 'iam-service',
       policyRevision: 'gateway-delegation:1',
       delegationExpiresAt: '2026-07-31T06:00:00.000Z',
     },
     authorization: {
-      capabilitySetVersion: 6,
+      capabilitySetVersion: 7,
       policyRevision: 'real-assets-realtime:1',
-      capabilities: ['site.read', 'equipment.list', 'device.list', 'telemetry.batch.read', 'telemetry.subscribe'],
+      capabilities: ['site.read', 'asset.list', 'device.list', 'telemetry.batch.read', 'telemetry.subscribe'],
     },
     session: {
       id: 'real-assets-realtime-session',
       expiresAt: '2026-07-31T06:00:00.000Z',
+      idleTimeoutMs: 30 * 60 * 1000,
       ['csrf' + 'Token']: ['fixture', 'realtime', 'proof'].join('-'),
       revocationObjectiveMs: 1000,
       lastAuditMessageId: 'realtime-audit-1',

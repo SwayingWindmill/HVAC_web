@@ -205,13 +205,13 @@ class FakeOwnerReaders {
       if (this.resultFactory !== undefined) {
         return await this.resultFactory(request, this.scope);
       }
-      const equipmentId = 'equipmentId' in request.input ? request.input.equipmentId : null;
+      const assetId = 'assetId' in request.input ? request.input.assetId : null;
       return {
         requestId: request.requestId,
         owner: ownerForTool(request.tool),
         scope: {
           ...this.scope,
-          equipmentId,
+          assetId,
           deviceId: null,
         },
         revision: revisionForTool(request.tool),
@@ -282,7 +282,7 @@ export const createFakeOperationsAgentEnvironment = ({
           delegationGrant: 'fake-delegation-grant',
           toolDelegationGrants: {
             'registry.getSite': 'fake-registry-site-grant',
-            'registry.listSiteEquipment': 'fake-registry-equipment-grant',
+            'registry.listSiteAssets': 'fake-registry-asset-grant',
             'analytics.getEnergySeries': 'fake-energy-grant',
           },
           policyRevision: 'fake-policy-revision',

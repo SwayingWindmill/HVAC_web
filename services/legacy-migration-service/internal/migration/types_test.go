@@ -38,23 +38,10 @@ func TestBusinessReasonRequiresSiteOnlyForChildren(t *testing.T) {
 		t.Fatalf("site reason = %q", reason)
 	}
 
-	equipment := validRecord(KindEquipment)
-	equipment.SiteRef = nil
-	if reason := equipment.BusinessReason(); reason != "MISSING_SITE_PARENT" {
-		t.Fatalf("equipment reason = %q", reason)
-	}
-}
-
-func TestBusinessReasonQuarantinesAmbiguousAsset(t *testing.T) {
-	record := validRecord(KindEquipment)
-	record.SourceTable = "asset"
-	record.RelationEvidence = map[string]any{"verifiedEquipmentRelation": false}
-	if reason := record.BusinessReason(); reason != "AMBIGUOUS_ASSET_EQUIPMENT_RELATION" {
-		t.Fatalf("reason = %q", reason)
-	}
-	record.RelationEvidence["verifiedEquipmentRelation"] = true
-	if reason := record.BusinessReason(); reason != "" {
-		t.Fatalf("verified relation reason = %q", reason)
+	asset := validRecord(KindAsset)
+	asset.SiteRef = nil
+	if reason := asset.BusinessReason(); reason != "MISSING_SITE_PARENT" {
+		t.Fatalf("asset reason = %q", reason)
 	}
 }
 
@@ -88,7 +75,7 @@ func validRecord(kind string) Record {
 	switch kind {
 	case KindSite:
 		record.Timezone = "Asia/Tokyo"
-	case KindEquipment:
+	case KindAsset:
 		record.SiteRef = site
 		record.ResourceType = "AHU"
 	case KindDevice:

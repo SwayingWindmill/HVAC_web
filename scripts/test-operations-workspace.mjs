@@ -39,9 +39,9 @@ const investigation = {
   schemaVersion: 1,
   id: 'investigation-001',
   scope: {
-    organizationId: 'organization-001',
+    tenantId: 'tenant-001',
     siteId: 'site-001',
-    equipmentId: null,
+    assetId: null,
     deviceId: null,
   },
   status: 'COMPLETED',
@@ -152,7 +152,7 @@ test('Operations Workspace parser rejects internal state and arbitrary Tool payl
   assert.throws(() => parseOperationsAgUiEventStream(crossRevision), /identity is invalid/u);
 });
 
-test('scoped Operations API accepts the authorized stream and rejects a mismatched Organization', async () => {
+test('scoped Operations API accepts the authorized stream and rejects a mismatched Tenant', async () => {
   const { streamSiteNightEnergyInvestigationEvents } = await loadBundledModule('apps/hvac-web/src/api/operations.ts');
   const requests = [];
   const fetchImplementation = async (input, init) => {
@@ -166,7 +166,7 @@ test('scoped Operations API accepts the authorized stream and rejects a mismatch
     });
   };
   const batch = await streamSiteNightEnergyInvestigationEvents(investigation.id, {
-    trustedOrganizationId: investigation.scope.organizationId,
+    trustedTenantId: investigation.scope.tenantId,
     trustedSiteId: investigation.scope.siteId,
     fetchImplementation,
   });
@@ -178,7 +178,7 @@ test('scoped Operations API accepts the authorized stream and rejects a mismatch
   assert.equal(requests[0].init.headers.Accept, 'text/event-stream, application/problem+json');
 
   const resumed = await streamSiteNightEnergyInvestigationEvents(investigation.id, {
-    trustedOrganizationId: investigation.scope.organizationId,
+    trustedTenantId: investigation.scope.tenantId,
     trustedSiteId: investigation.scope.siteId,
     recoveryPosition: '9:2',
     fetchImplementation,
@@ -189,7 +189,7 @@ test('scoped Operations API accepts the authorized stream and rejects a mismatch
 
   await assert.rejects(
     streamSiteNightEnergyInvestigationEvents(investigation.id, {
-      trustedOrganizationId: 'organization-other',
+      trustedTenantId: 'tenant-other',
       trustedSiteId: investigation.scope.siteId,
       fetchImplementation,
     }),
@@ -223,7 +223,7 @@ test('scoped Operations API lists only exact authorized Site summaries', async (
     });
   };
   const listed = await listSiteNightEnergyInvestigations({
-    trustedOrganizationId: investigation.scope.organizationId,
+    trustedTenantId: investigation.scope.tenantId,
     trustedSiteId: investigation.scope.siteId,
     fetchImplementation,
   });
@@ -234,7 +234,7 @@ test('scoped Operations API lists only exact authorized Site summaries', async (
 
   await assert.rejects(
     listSiteNightEnergyInvestigations({
-      trustedOrganizationId: 'organization-other',
+      trustedTenantId: 'tenant-other',
       trustedSiteId: investigation.scope.siteId,
       fetchImplementation,
     }),
@@ -260,7 +260,7 @@ test('scoped Operations API cancels the selected Investigation through the autho
     });
   };
   const result = await cancelSiteNightEnergyInvestigation(investigation.id, {
-    trustedOrganizationId: investigation.scope.organizationId,
+    trustedTenantId: investigation.scope.tenantId,
     trustedSiteId: investigation.scope.siteId,
     csrfToken: '[REDACTED_SECRET]',
     fetchImplementation,
@@ -275,7 +275,7 @@ test('scoped Operations API cancels the selected Investigation through the autho
 
   await assert.rejects(
     cancelSiteNightEnergyInvestigation(investigation.id, {
-      trustedOrganizationId: 'organization-other',
+      trustedTenantId: 'tenant-other',
       trustedSiteId: investigation.scope.siteId,
       csrfToken: '[REDACTED_SECRET]',
       fetchImplementation,
@@ -411,7 +411,7 @@ test('scoped Operations API submits Operator Input and preserves exact-retry ide
     values: acceptedRecord.values,
   };
   const options = {
-    trustedOrganizationId: investigation.scope.organizationId,
+    trustedTenantId: investigation.scope.tenantId,
     trustedSiteId: investigation.scope.siteId,
     csrfToken: '[REDACTED_SECRET]',
     fetchImplementation,
@@ -472,7 +472,7 @@ test('Operations recovery positions persist only opaque scoped cursors in sessio
   };
   const store = createOperationsInvestigationRecoveryPositionStore(storage);
   const firstScope = {
-    organizationId: 'organization-001',
+    tenantId: 'tenant-001',
     siteId: 'site-001',
     investigationId: 'investigation-001',
   };
@@ -610,7 +610,7 @@ test('Headless Operations agent reconnects after interruption without duplicatin
     return next;
   };
   const agent = new OperationsInvestigationAgent({
-    organizationId: investigation.scope.organizationId,
+    tenantId: investigation.scope.tenantId,
     siteId: investigation.scope.siteId,
     investigationId: investigation.id,
     reconnectDelayMs: 25,
@@ -643,7 +643,7 @@ test('Headless Operations agent reconnects after interruption without duplicatin
     position === undefined ? operation : `${operation}:${position}`
   )), ['load', 'save:1:5', 'clear']);
   assert.deepEqual(recoveryOperations[0].scope, {
-    organizationId: investigation.scope.organizationId,
+    tenantId: investigation.scope.tenantId,
     siteId: investigation.scope.siteId,
     investigationId: investigation.id,
   });
@@ -669,7 +669,7 @@ test('Headless Operations agent restores a scoped cursor on the first request af
     },
   };
   const agent = new OperationsInvestigationAgent({
-    organizationId: investigation.scope.organizationId,
+    tenantId: investigation.scope.tenantId,
     siteId: investigation.scope.siteId,
     investigationId: investigation.id,
     recoveryPositionStore,
@@ -701,7 +701,7 @@ test('Headless Operations agent does not retry a nondiscoverable Investigation',
   );
   let requests = 0;
   const agent = new OperationsInvestigationAgent({
-    organizationId: investigation.scope.organizationId,
+    tenantId: investigation.scope.tenantId,
     siteId: investigation.scope.siteId,
     investigationId: 'hidden-investigation',
     reconnectDelayMs: 25,
@@ -737,7 +737,7 @@ test('Real Site shell resolves a URL Operations route backed by CopilotKit Headl
   const routingModule = await loadBundledModule('apps/hvac-web/src/real/site-routing.ts');
   const site = {
     id: '0198f5c0-7c00-7000-8000-000000000002',
-    owningOrganizationId: '0198f5c0-7c00-7000-8000-000000000001',
+    tenantId: '0198f5c0-7c00-7000-8000-000000000001',
     code: 'SITE-001',
     displayName: 'Authorized Site',
     timezone: 'Asia/Shanghai',
@@ -753,7 +753,7 @@ test('Real Site shell resolves a URL Operations route backed by CopilotKit Headl
     {
       state: 'READY',
       route: 'operations',
-      context: { site, actingOrganizationId: site.owningOrganizationId },
+      context: { site },
     },
   );
   assert.deepEqual(routingModule.resolveSiteRouting(path, [site], []), { state: 'FORBIDDEN' });

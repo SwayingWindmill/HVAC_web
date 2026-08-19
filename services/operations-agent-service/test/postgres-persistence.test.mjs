@@ -99,7 +99,7 @@ test('PostgreSQL keeps Operations facts authoritative and Checkpoints independen
     scope: {
       tenantId: 'organization-postgres',
       siteId: 'site-postgres',
-      equipmentId: null,
+      assetId: null,
       deviceId: null,
     },
   });
@@ -342,7 +342,7 @@ test('PostgreSQL atomically persists typed records across restart, retry, and ro
   const scope = {
     tenantId: 'organization-records-postgres',
     siteId: 'site-records-postgres',
-    equipmentId: null,
+    assetId: null,
     deviceId: null,
   };
   const createCoordinator = (persistence, identities) => createInvestigationCoordinator({

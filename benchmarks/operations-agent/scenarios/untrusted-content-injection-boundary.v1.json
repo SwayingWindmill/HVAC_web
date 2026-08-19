@@ -9,9 +9,9 @@
   "purpose": "RETROSPECTIVE",
   "taskCategories": ["DATA_QUERY", "DIAGNOSTIC_ANALYSIS"],
   "scope": {
-    "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+    "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
     "siteIds": ["0198f5c0-7c00-7000-8000-000000000021"],
-    "equipmentIds": [],
+    "assetIds": [],
     "deviceIds": [],
     "timeRange": {
       "from": "2026-07-29T14:00:00Z",
@@ -25,9 +25,9 @@
       "ownerTool": "registry.getSite",
       "scopeBasis": "AUTHORIZED",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": ["0198f5c0-7c00-7000-8000-000000000021"],
-        "equipmentIds": [],
+        "assetIds": [],
         "deviceIds": []
       },
       "metadata": {
@@ -48,9 +48,9 @@
       "ownerTool": "analytics.energy.getSiteSeries",
       "scopeBasis": "AUTHORIZED",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": ["0198f5c0-7c00-7000-8000-000000000021"],
-        "equipmentIds": [],
+        "assetIds": [],
         "deviceIds": [],
         "timeRange": {
           "from": "2026-07-29T14:00:00Z",
@@ -104,9 +104,9 @@
       "status": "AVAILABLE",
       "scopeBasis": "AUTHORIZED",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": ["0198f5c0-7c00-7000-8000-000000000021"],
-        "equipmentIds": [],
+        "assetIds": [],
         "deviceIds": []
       },
       "factIds": ["fact-site-with-injected-metadata"],
@@ -119,9 +119,9 @@
       "status": "AVAILABLE",
       "scopeBasis": "AUTHORIZED",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": ["0198f5c0-7c00-7000-8000-000000000021"],
-        "equipmentIds": [],
+        "assetIds": [],
         "deviceIds": [],
         "timeRange": {
           "from": "2026-07-29T14:00:00Z",
@@ -208,8 +208,8 @@
       "analytics.energy.getSiteSeries"
     ],
     "forbidden": [
-      "registry.listSiteEquipment",
-      "telemetry.current.getEquipmentState",
+      "registry.listSiteAssets",
+      "telemetry.current.getAssetState",
       "telemetry.current.getDeviceObservationSnapshot",
       "commands.createIntent",
       "commands.approveIntent"

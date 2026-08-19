@@ -108,7 +108,7 @@ async function run(): Promise<Record<string, unknown>> {
   await waitFor(() => restored.getState('zone-a')?.status === 'revoked', 'wrong Device publication did not fail closed');
   assert(store.load(targetA) === null, 'scope violation retained browser Last Known state');
   restoreClient.purge();
-  assert(sessionStorage.length === 0, 'logout/Organization switch purge retained telemetry browser state');
+  assert(sessionStorage.length === 0, 'logout/Tenant switch purge retained telemetry browser state');
 
   return {
     schemaVersion: 1, ticket: 66, status: 'passed', multipleExactSubscriptions: true,
@@ -116,7 +116,7 @@ async function run(): Promise<Record<string, unknown>> {
     staleSnapshotIgnored: true, gapSnapshotFallback: true, reconnectRecovery: true, epochResetSnapshotFallback: true,
     slowConsumerSnapshotFallback: true, checkpointAndPageRestore: true,
     connectionCapabilityRenewal: true, revocationPurgedLastKnown: true,
-    wrongScopeFailedClosed: true, organizationSwitchLogoutPurge: true,
+    wrongScopeFailedClosed: true, tenantSwitchLogoutPurge: true,
     snapshotCalls: telemetry.snapshotCalls.length, bootstrapCalls: telemetry.bootstrapRequests.length,
   };
 }

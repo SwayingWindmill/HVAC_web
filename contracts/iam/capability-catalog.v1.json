@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "catalogRevision": "s04-v1",
-  "effectiveAuthorizationVersion": 8,
+  "effectiveAuthorizationVersion": 9,
   "capabilities": [
     "registry.read",
     "site.list",
     "site.read",
-    "equipment.list",
-    "equipment.read",
+    "asset.list",
+    "asset.read",
     "device.list",
     "device.read",
     "device-binding.list",

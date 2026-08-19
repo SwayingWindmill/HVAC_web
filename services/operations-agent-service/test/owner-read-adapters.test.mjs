@@ -10,12 +10,12 @@ import {
 
 const tenantId = '0198a36e-4c9d-7b5a-8f2d-4c5e6f708192';
 const siteId = '0198a36e-4c9d-7b5a-8f2d-4c5e6f708193';
-const equipmentId = '0198a36e-4c9d-7b5a-8f2d-4c5e6f708194';
+const assetId = '0198a36e-4c9d-7b5a-8f2d-4c5e6f708194';
 
 const scope = Object.freeze({
   tenantId,
   siteId,
-  equipmentId: null,
+  assetId: null,
   deviceId: null,
 });
 
@@ -30,7 +30,7 @@ const context = Object.freeze({
     delegationGrant: 'fallback-delegation-grant-value',
     toolDelegationGrants: {
       'registry.getSite': 'registry-site-grant-value',
-      'registry.listSiteEquipment': 'registry-equipment-grant-value',
+      'registry.listSiteAssets': 'registry-asset-grant-value',
     },
     policyRevision: 'registry-policy-42',
     traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
@@ -62,13 +62,13 @@ const siteDto = Object.freeze({
   updatedAt: '2026-07-30T00:00:00.000Z',
 });
 
-const equipmentDto = Object.freeze({
-  id: equipmentId,
+const assetDto = Object.freeze({
+  id: assetId,
   tenantId: tenantId,
   siteId,
   code: 'CH-01',
   displayName: 'Chiller 01',
-  equipmentType: 'CHILLER',
+  assetType: 'CHILLER',
   status: 'ACTIVE',
   revision: 29,
   createdAt: '2026-07-01T00:00:00.000Z',
@@ -119,15 +119,15 @@ const expectOwnerError = async (run, code) => {
   ));
 };
 
-test('Registry reader exposes only Site and Site Equipment reads with authoritative metadata', async () => {
+test('Registry reader exposes only Site and Site Asset reads with authoritative metadata', async () => {
   const calls = [];
   const reader = createRegistryOwnerReader({
     baseUrl: 'https://platform-core.internal',
     fetchImplementation: async (url, init) => {
       calls.push({ url: String(url), init });
       if (String(url).endsWith(`/sites/${siteId}`)) return jsonResponse(siteDto);
-      if (String(url).includes(`/sites/${siteId}/equipment`)) {
-        return jsonResponse({ items: [equipmentDto], nextCursor: null, hasMore: false });
+      if (String(url).includes(`/sites/${siteId}/asset`)) {
+        return jsonResponse({ items: [assetDto], nextCursor: null, hasMore: false });
       }
       throw new Error('unexpected Registry route');
     },
@@ -137,10 +137,10 @@ test('Registry reader exposes only Site and Site Equipment reads with authoritat
     request: { requestId: 'read-site-001', tool: 'registry.getSite', input: { siteId } },
     context,
   });
-  const equipment = await reader.read({
+  const asset = await reader.read({
     request: {
-      requestId: 'read-site-equipment-001',
-      tool: 'registry.listSiteEquipment',
+      requestId: 'read-site-asset-001',
+      tool: 'registry.listSiteAssets',
       input: { siteId },
     },
     context,
@@ -151,16 +151,16 @@ test('Registry reader exposes only Site and Site Equipment reads with authoritat
   assert.equal(site.revision, 'registry-site:17');
   assert.equal(site.provenance, 'platform-core-service:registry-site/v1');
   assert.deepEqual(site.payload, { kind: 'SITE', site: siteDto });
-  assert.match(equipment.revision, /^registry-site-equipment:sha256:[0-9a-f]{64}$/);
-  assert.deepEqual(equipment.payload, {
-    kind: 'SITE_EQUIPMENT',
+  assert.match(asset.revision, /^registry-site-assets:sha256:[0-9a-f]{64}$/);
+  assert.deepEqual(asset.payload, {
+    kind: 'SITE_ASSETS',
     siteId,
-    equipment: [equipmentDto],
+    assets: [assetDto],
   });
 
   assert.equal(calls.length, 2);
   assert.equal(calls[0].init.headers['X-Delegation-Grant'], 'registry-site-grant-value');
-  assert.equal(calls[1].init.headers['X-Delegation-Grant'], 'registry-equipment-grant-value');
+  assert.equal(calls[1].init.headers['X-Delegation-Grant'], 'registry-asset-grant-value');
   for (const call of calls) {
     assert.equal(call.init.method, 'GET');
     assert.equal(call.init.headers['X-Route-Policy-Revision'], 'registry-policy-42');

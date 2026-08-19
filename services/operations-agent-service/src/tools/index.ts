@@ -16,7 +16,7 @@ export {
 } from './internal/gateway-tool-authorization-reader.js';
 export {
   createRegistryOwnerReader,
-  type RegistryEquipmentDto,
+  type RegistryAssetDto,
   type RegistryOwnerPayload,
   type RegistryOwnerReaderConfig,
   type RegistrySiteDto,

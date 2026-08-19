@@ -73,24 +73,24 @@ func TestPostgresStoreAppliesTenantAndExactSiteRLSWithStablePagination(t *testin
 		t.Fatalf("sibling Site error = %v", err)
 	}
 
-	equipmentClaims := exactSiteClaims
-	equipmentClaims.Actions = []registryauth.Action{registryauth.ActionEquipmentList}
-	equipment, err := store.ListEquipment(ctx, equipmentClaims, testSiteA1, PageRequest{Limit: 10})
+	assetClaims := exactSiteClaims
+	assetClaims.Actions = []registryauth.Action{registryauth.ActionAssetList}
+	assets, err := store.ListAssets(ctx, assetClaims, testSiteA1, PageRequest{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(equipment.Items) != 1 || equipment.Items[0].ID != testEquipmentA1 {
-		t.Fatalf("site-scoped equipment = %#v", equipment)
+	if len(assets.Items) != 1 || assets.Items[0].ID != testAssetA1 {
+		t.Fatalf("site-scoped assets = %#v", assets)
 	}
-	deniedEquipmentClaims := integrationClaims(registryauth.ActionEquipmentList)
-	deniedEquipmentClaims.AllowedSiteIDs = []string{testSiteA1}
-	deniedEquipmentClaims.DeniedSiteIDs = []string{testSiteA1}
-	deniedEquipment, err := store.ListEquipment(ctx, deniedEquipmentClaims, testSiteA1, PageRequest{Limit: 10})
+	deniedAssetClaims := integrationClaims(registryauth.ActionAssetList)
+	deniedAssetClaims.AllowedSiteIDs = []string{testSiteA1}
+	deniedAssetClaims.DeniedSiteIDs = []string{testSiteA1}
+	deniedAssets, err := store.ListAssets(ctx, deniedAssetClaims, testSiteA1, PageRequest{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(deniedEquipment.Items) != 0 {
-		t.Fatalf("denied equipment = %#v", deniedEquipment)
+	if len(deniedAssets.Items) != 0 {
+		t.Fatalf("denied assets = %#v", deniedAssets)
 	}
 
 	deviceClaims := exactSiteClaims
@@ -119,7 +119,7 @@ func TestPostgresStoreAppliesTenantAndExactSiteRLSWithStablePagination(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bindings.Items) != 1 || bindings.Items[0].ID != testBindingA1 || bindings.Items[0].DeviceID != testDeviceA1 || bindings.Items[0].EquipmentID != testEquipmentA1 {
+	if len(bindings.Items) != 1 || bindings.Items[0].ID != testBindingA1 || bindings.Items[0].DeviceID != testDeviceA1 || bindings.Items[0].AssetID != testAssetA1 {
 		t.Fatalf("site-scoped DeviceBindings = %#v", bindings)
 	}
 	deniedBindingClaims := integrationClaims(registryauth.ActionDeviceBindingList)

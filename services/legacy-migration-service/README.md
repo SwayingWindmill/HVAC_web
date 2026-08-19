@@ -4,17 +4,13 @@
 
 ## Input contract
 
-Input is newline-delimited JSON. Records are normalized before execution and sorted in dependency order: Organization, Site, Equipment, Device.
+Input is newline-delimited JSON. Tenant is an envelope field, not a migratable Registry entity. Accepted target kinds are sorted in dependency order: Site, Asset, Device.
 
 ```json
-{"kind":"ORGANIZATION","sourceSystem":"legacy-hvac-backend","sourceTable":"organization","sourceKey":"legacy-org-42","sourceWatermark":"2026-07-22T00:00:00Z","sourceRowHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","transformationVersion":"s1-v1","batchId":"registry-2026-07-22","code":"north-campus","displayName":"North Campus","status":"ACTIVE"}
+{"tenantId":"018f1d00-0000-7000-8000-000000000001","kind":"ASSET","sourceSystem":"legacy-hvac-backend","sourceTable":"asset","sourceKey":"ahu-42","sourceWatermark":"2026-07-22T00:00:00Z","sourceRowHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","transformationVersion":"s1-v1","batchId":"registry-2026-07-22","code":"ahu-42","displayName":"AHU 42","status":"ACTIVE","resourceType":"AHU","siteRef":{"sourceSystem":"legacy-hvac-backend","sourceTable":"site","sourceKey":"north-campus"}}
 ```
 
-Site records require `organizationRef`. Equipment and Device records require both `organizationRef` and `siteRef`. Equipment migrated from a Legacy `asset` table additionally requires:
-
-```json
-{"relationEvidence":{"verifiedEquipmentRelation":true}}
-```
+Asset and Device records require `siteRef`. `ORGANIZATION`, `AREA` and `EQUIPMENT` are not accepted target kinds; source-system names may remain in `sourceTable`/`sourceKey` only as provenance and never select the target Domain type.
 
 The input parser rejects unknown fields, oversized records, non-SHA-256 hashes, NUL bytes, excessive metadata nesting and metadata keys that could carry credentials.
 

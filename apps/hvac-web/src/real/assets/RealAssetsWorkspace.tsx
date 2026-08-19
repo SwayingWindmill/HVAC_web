@@ -30,7 +30,7 @@ import { FocusHeading } from '../FocusHeading';
 import type { ProtectedScopeRequestToken, ProtectedScopeResource } from '../protected-scope';
 import type { RealtimeStatusUpdate } from '../realtime-status';
 import { REAL_ASSETS_CATALOG_REVISION } from './catalog';
-import { AssetDetailDrawer } from './EquipmentDetailDrawer';
+import { AssetDetailDrawer } from './AssetDetailDrawer';
 import { RealAssetsLoadingSurface } from './RealAssetsLoadingSurface';
 import { realAssetsAssetPath, realAssetsListPath, resolveRealAssetsDetail } from './detail';
 import { runRealAssetsProtectedRequest } from './protected-request';
@@ -260,7 +260,7 @@ export function RealAssetsWorkspace({
   const tenantId = site.tenantId;
   const sessionCapability = principal.session.csrfToken;
   const capabilities = principal.authorization.capabilities;
-  const registryAllowed = capabilities.includes('equipment.list') && capabilities.includes('device.list');
+  const registryAllowed = capabilities.includes('asset.list') && capabilities.includes('device.list');
   const telemetryAllowed = capabilities.includes('telemetry.batch.read');
   const queryRoot = useMemo(
     () => ['real-assets', protectedGeneration, tenantId, site.id] as const,

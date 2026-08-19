@@ -82,7 +82,7 @@ const expectedOperations = {
   getSessionAuditEvent: ['get', '/api/v1/audit/session-events/{messageId}'],
   listSites: ['get', '/api/v1/sites'],
   getSite: ['get', '/api/v1/sites/{siteId}'],
-  listSiteAsset: ['get', '/api/v1/sites/{siteId}/assets'],
+  listSiteAssets: ['get', '/api/v1/sites/{siteId}/assets'],
   getAsset: ['get', '/api/v1/assets/{assetId}'],
   listSiteDevices: ['get', '/api/v1/sites/{siteId}/devices'],
   listSiteDeviceBindings: ['get', '/api/v1/sites/{siteId}/device-bindings'],
@@ -108,7 +108,7 @@ const expectedSuccessSchemas = {
   getSessionAuditEvent: 'AuditRecord',
   listSites: 'SiteCollection',
   getSite: 'Site',
-  listSiteAsset: 'AssetCollection',
+  listSiteAssets: 'AssetCollection',
   getAsset: 'Asset',
   listSiteDevices: 'DeviceCollection',
   listSiteDeviceBindings: 'DeviceBindingCollection',
@@ -187,8 +187,8 @@ invariant(schemas.PrincipalContext.properties.audience.const === 'iam-service', 
 invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capability.enum, [
   'site.list',
   'site.read',
-  'equipment.list',
-  'equipment.read',
+  'asset.list',
+  'asset.read',
   'device.list',
   'device.read',
   'telemetry.snapshot.read',
@@ -207,7 +207,7 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'iam.admin',
   'api-credential.manage',
 ]), 'Capability vocabulary is unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 8, 'EffectiveAuthorization capability set version must be 8');
+invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 9, 'EffectiveAuthorization capability set version must be 9');
 invariant(schemas.EffectiveAuthorization.properties.policyRevision.minLength === 1 && schemas.EffectiveAuthorization.properties.policyRevision.maxLength === 128, 'EffectiveAuthorization policy revision bounds are unsupported');
 invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 21, 'EffectiveAuthorization capabilities must be unique and bounded');
 invariant(schemas.EffectiveAuthorization.properties.capabilities.items?.$ref === '#/components/schemas/Capability', 'EffectiveAuthorization capabilities must use the public Capability vocabulary');
@@ -246,7 +246,7 @@ const replacements = {
   __AUDIT_PATH__: operations.getSessionAuditEvent.path,
   __SITES_PATH__: operations.listSites.path,
   __SITE_PATH__: operations.getSite.path,
-  __SITE_ASSET_PATH__: operations.listSiteAsset.path,
+  __SITE_ASSET_PATH__: operations.listSiteAssets.path,
   __ASSET_PATH__: operations.getAsset.path,
   __SITE_DEVICES_PATH__: operations.listSiteDevices.path,
   __SITE_DEVICE_BINDINGS_PATH__: operations.listSiteDeviceBindings.path,

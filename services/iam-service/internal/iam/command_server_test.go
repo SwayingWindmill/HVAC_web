@@ -22,7 +22,7 @@ func TestIAMCommandDecisionIssuesExactPurposeBoundGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	facts := commandFacts(now, []CommandPermission{{
-		OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+		TenantID: S1FixtureTenantAID, SiteID: "site-1", DeviceID: "device-1",
 		Capability:         commandmodel.CapabilitySetTemperatureSetpoint,
 		CapabilityRevision: "capability:set-temperature-setpoint:v1",
 		Purpose:            commandmodel.AuthorizationCommandSubmit, MaximumRisk: commandmodel.RiskMedium,
@@ -35,7 +35,7 @@ func TestIAMCommandDecisionIssuesExactPurposeBoundGrant(t *testing.T) {
 	}).(*handler)
 
 	input := commandauth.DecisionRequest{
-		ActingOrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+		TenantID: S1FixtureTenantAID, SiteID: "site-1", DeviceID: "device-1",
 		Capability:         commandmodel.CapabilitySetTemperatureSetpoint,
 		CapabilityRevision: "capability:set-temperature-setpoint:v1", Purpose: commandmodel.AuthorizationCommandSubmit,
 	}
@@ -43,7 +43,7 @@ func TestIAMCommandDecisionIssuesExactPurposeBoundGrant(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest("POST", CommandDecisionPath, bytes.NewReader(body))
 	status := h.handleCommandDecision(recorder, request, identitycontext.DelegationClaims{
-		SubjectIssuer: "https://issuer.example.test", Subject: "user-1", ActingOrganizationID: "org-1",
+		SubjectIssuer: "https://issuer.example.test", Subject: "user-1", TenantID: S1FixtureTenantAID,
 	}, "spiffe://hvac.local/platform-gateway")
 	if status != 200 {
 		t.Fatalf("status=%d body=%s", status, recorder.Body.String())
@@ -67,7 +67,7 @@ func TestIAMCommandDecisionIssuesExactPurposeBoundGrant(t *testing.T) {
 func TestIAMCommandDecisionDoesNotReuseSubmitPermissionForApproval(t *testing.T) {
 	now := time.Date(2026, 7, 26, 13, 0, 0, 0, time.UTC)
 	facts := commandFacts(now, []CommandPermission{{
-		OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+		TenantID: S1FixtureTenantAID, SiteID: "site-1", DeviceID: "device-1",
 		Capability:         commandmodel.CapabilitySetTemperatureSetpoint,
 		CapabilityRevision: "capability:set-temperature-setpoint:v1",
 		Purpose:            commandmodel.AuthorizationCommandSubmit, MaximumRisk: commandmodel.RiskHigh,
@@ -75,7 +75,7 @@ func TestIAMCommandDecisionDoesNotReuseSubmitPermissionForApproval(t *testing.T)
 	}})
 	decision, err := evaluateCommandAuthorization(t.Context(), newStaticCommandAuthorizationStore("command-policy-1", 0, []CommandAuthorizationFacts{facts}), now,
 		"https://issuer.example.test", "user-1", commandauth.DecisionRequest{
-			ActingOrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+			TenantID: S1FixtureTenantAID, SiteID: "site-1", DeviceID: "device-1",
 			Capability:         commandmodel.CapabilitySetTemperatureSetpoint,
 			CapabilityRevision: "capability:set-temperature-setpoint:v1", Purpose: commandmodel.AuthorizationCommandApprove,
 		})
@@ -90,7 +90,7 @@ func TestIAMCommandDecisionDoesNotReuseSubmitPermissionForApproval(t *testing.T)
 func TestIAMCommandExplicitDenyOverridesAllow(t *testing.T) {
 	now := time.Date(2026, 7, 26, 13, 0, 0, 0, time.UTC)
 	base := CommandPermission{
-		OrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+		TenantID: S1FixtureTenantAID, SiteID: "site-1", DeviceID: "device-1",
 		Capability:         commandmodel.CapabilitySetTemperatureSetpoint,
 		CapabilityRevision: "capability:set-temperature-setpoint:v1",
 		Purpose:            commandmodel.AuthorizationCommandSubmit, MaximumRisk: commandmodel.RiskHigh,
@@ -103,7 +103,7 @@ func TestIAMCommandExplicitDenyOverridesAllow(t *testing.T) {
 	facts := commandFacts(now, []CommandPermission{allow, deny})
 	decision, err := evaluateCommandAuthorization(t.Context(), newStaticCommandAuthorizationStore("command-policy-1", 0, []CommandAuthorizationFacts{facts}), now,
 		"https://issuer.example.test", "user-1", commandauth.DecisionRequest{
-			ActingOrganizationID: "org-1", SiteID: "site-1", DeviceID: "device-1",
+			TenantID: S1FixtureTenantAID, SiteID: "site-1", DeviceID: "device-1",
 			Capability:         commandmodel.CapabilitySetTemperatureSetpoint,
 			CapabilityRevision: "capability:set-temperature-setpoint:v1", Purpose: commandmodel.AuthorizationCommandSubmit,
 		})
@@ -118,7 +118,7 @@ func TestIAMCommandExplicitDenyOverridesAllow(t *testing.T) {
 func commandFacts(now time.Time, permissions []CommandPermission) CommandAuthorizationFacts {
 	return CommandAuthorizationFacts{
 		Principal:   PrincipalRecord{ID: "principal-1", SubjectIssuer: "https://issuer.example.test", Subject: "user-1", Status: FactStatusActive},
-		Memberships: []OrganizationMembership{{OrganizationID: "org-1", Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
+		Memberships: []TenantMembership{{TenantID: S1FixtureTenantAID, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
 		Permissions: permissions,
 	}
 }

@@ -16,9 +16,9 @@ const viteBinPath = resolve(vitePackagePath, '../bin/vite.js');
 const profileDir = join(tmpdir(), `rms-02-principal-browser-${process.pid}`);
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 const instant = '2099-07-28T03:00:00.000Z';
-const actingOrganizationId = '01900000-0000-7000-8000-000000000001';
+const tenantId = '01900000-0000-7000-8000-000000000001';
 const policyRevision = 'rms-policy:7';
-const capabilities = ['organization.list', 'site.read', 'device.read', 'telemetry.snapshot.read', 'telemetry.batch.read', 'telemetry.subscribe', 'telemetry.history.read'];
+const capabilities = ['site.read', 'device.read', 'telemetry.snapshot.read', 'telemetry.batch.read', 'telemetry.subscribe', 'telemetry.history.read'];
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -73,13 +73,13 @@ function principalResponse() {
         service: 'platform-gateway',
         spiffeId: 'spiffe://hvac.local/platform-gateway',
       },
-      actingOrganizationId,
+      tenantId,
       audience: 'iam-service',
       policyRevision: 'gateway-delegation:4',
       delegationExpiresAt: instant,
     },
     authorization: {
-      capabilitySetVersion: 6,
+      capabilitySetVersion: 7,
       policyRevision,
       capabilities,
     },
@@ -123,7 +123,7 @@ function createGatewayFixture() {
         ledgerSequence: 1,
         messageId: 'rms-02-audit',
         schemaVersion: 1,
-        organizationId: actingOrganizationId,
+        tenantId,
         aggregateType: 'bff-session',
         aggregateId: 'rms-02-session',
         aggregateVersion: 1,
@@ -132,7 +132,7 @@ function createGatewayFixture() {
         initiatingIssuer: 'https://identity.hvac.local',
         executingService: 'platform-gateway',
         executingSpiffeId: 'spiffe://hvac.local/platform-gateway',
-        actingOrganizationId,
+        tenantId,
         action: 'SESSION_CREATED',
         result: 'SUCCEEDED',
         policyRevision,
@@ -340,8 +340,8 @@ try {
   assert(diagnostic.capabilityCount === String(capabilities.length), `capability count was not rendered: ${JSON.stringify(diagnostic)}`);
   assert(diagnostic.principal.includes('RMS-02 Browser'), `Principal identity was not rendered: ${JSON.stringify(diagnostic)}`);
   assert(diagnostic.roles.includes('descriptive-role-only'), 'descriptive role context was not rendered');
-  assert(diagnostic.routeState === 'FORBIDDEN', `missing organization.read did not fail closed: ${JSON.stringify(diagnostic)}`);
-  assert(!diagnostic.text.includes('organization.read'), 'the UI invented a capability from the descriptive role');
+  assert(diagnostic.routeState === 'FORBIDDEN', `missing required capability did not fail closed: ${JSON.stringify(diagnostic)}`);
+  assert(!diagnostic.text.includes('descriptive-role-only.read'), 'the UI invented a capability from the descriptive role');
   assert(fixture.requests.some((entry) => entry.method === 'GET' && entry.path === '/api/v1/principal'), 'the browser did not read the current Principal resource');
 
   console.log('RMS-02 Principal capability browser audit passed.');

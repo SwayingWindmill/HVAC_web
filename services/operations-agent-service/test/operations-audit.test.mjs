@@ -14,7 +14,7 @@ import {
 const scope = Object.freeze({
   tenantId: 'organization-001',
   siteId: 'site-001',
-  equipmentId: null,
+  assetId: null,
   deviceId: null,
 });
 

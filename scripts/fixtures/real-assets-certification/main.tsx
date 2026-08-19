@@ -10,14 +10,14 @@ import type { RealAssetsRealtimeState, RealAssetsRealtimeTarget } from '@/real/a
 import { createRealAssetsTelemetryRuntime, type RealAssetsTelemetryLiveClient, type RealAssetsTelemetryLiveSession } from '@/real/assets/telemetry-runtime';
 import '@/real/real-shell.css';
 
-const organizationId = '01940000-0000-7000-8000-000000000001';
+const tenantId = '01940000-0000-7000-8000-000000000001';
 const siteA: Site = {
-  id: '01940000-0001-7000-8000-000000000001', owningOrganizationId: organizationId,
+  id: '01940000-0001-7000-8000-000000000001', tenantId,
   code: 'TOKYO-CERT', displayName: 'Tokyo 200 Device Certification Site', timezone: 'Asia/Tokyo', status: 'ACTIVE', revision: 20,
   createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
 };
 const siteB: Site = {
-  id: '01940000-0002-7000-8000-000000000002', owningOrganizationId: organizationId,
+  id: '01940000-0002-7000-8000-000000000002', tenantId,
   code: 'OSAKA-CERT', displayName: 'Osaka Scope Purge Site', timezone: 'Asia/Tokyo', status: 'ACTIVE', revision: 2,
   createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
 };
@@ -38,16 +38,16 @@ function principal(sessionId: string, policyRevision: string): CurrentPrincipalR
         displayName: 'Real Assets Certification Operator', email: '', roles: ['operator'],
       },
       executingServicePrincipal: { service: 'platform-gateway', spiffeId: 'spiffe://hvac.local/platform-gateway' },
-      actingOrganizationId: organizationId,
+      tenantId,
       audience: 'iam-service',
       policyRevision: `delegation:${policyRevision}`,
       delegationExpiresAt: '2026-08-01T12:00:00.000Z',
     },
     authorization: {
-      capabilitySetVersion: 2,
+      capabilitySetVersion: 7,
       policyRevision,
       capabilities: [
-        'equipment.list', 'device.list', 'device.read',
+        'asset.list', 'device.list', 'device.read',
         'telemetry.batch.read', 'telemetry.history.read', 'telemetry.subscribe',
       ],
     },
@@ -73,7 +73,7 @@ function liveSnapshot(target: RealAssetsRealtimeTarget, siteId: string, revision
   return {
     schemaVersion: 1,
     deviceId: target.deviceId,
-    owningOrganizationId: organizationId,
+    tenantId,
     siteId,
     businessRevision: revision,
     evaluatedAt: '2026-08-01T08:00:00.000Z',

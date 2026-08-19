@@ -18,7 +18,7 @@ import type {
 
 export const deviceA = '018f2e00-3000-7000-8000-000000000001';
 export const deviceB = '018f2e00-3000-7000-8000-000000000002';
-const org = '018f2e00-1000-7000-8000-000000000003';
+const tenant = '018f2e00-1000-7000-8000-000000000003';
 const site = '018f2e00-4000-7000-8000-000000000001';
 export const targetA = { clientSubscriptionId: 'zone-a', deviceId: deviceA, keys: ['temperature'] as TelemetryKey[] };
 export const targetB = { clientSubscriptionId: 'zone-b', deviceId: deviceB, keys: ['humidity'] as TelemetryKey[] };
@@ -37,7 +37,7 @@ export async function waitFor(check: () => boolean, message: string | (() => str
 
 export function snapshot(deviceId: string, key: string, revision: number, value: number): DeviceObservationSnapshot {
   return {
-    schemaVersion: 1, deviceId, owningOrganizationId: org, siteId: site, businessRevision: revision,
+    schemaVersion: 1, deviceId, tenantId: tenant, siteId: site, businessRevision: revision,
     evaluatedAt: `2026-07-25T00:00:${String(revision).padStart(2, '0')}.000Z`,
     evaluationAvailability: 'AVAILABLE', availabilityReasons: [],
     presence: { applicability: 'APPLICABLE', currentState: 'ONLINE', lastSeenAt: '2026-07-25T00:00:00.000Z', policyRevision: 1, lastKnown: null },

@@ -31,7 +31,7 @@ func TestIAMPublishesEffectiveCapabilitiesFromAuthorizationFacts(t *testing.T) {
 		config.WorkOrderAuthorizationStore = fixedWorkOrderStore{facts: principalWorkOrderFacts()}
 	})
 	claims := validIAMClaims(harness.now, "fixture-user", "principal:read")
-	claims.ActingOrganizationID = iam.S1FixtureOwnerAOrganizationID
+	claims.TenantID = iam.S1FixtureTenantAID
 	claims.Roles = []string{"descriptive-role-only"}
 	request := harness.request(t, iam.CurrentPrincipalPath, nil, claims, harness.gatewaySigner)
 	recorder := httptest.NewRecorder()
@@ -52,16 +52,15 @@ func TestIAMPublishesEffectiveCapabilitiesFromAuthorizationFacts(t *testing.T) {
 		t.Fatalf("policy revision = %q", response.Authorization.PolicyRevision)
 	}
 	assertCapabilitiesEqual(t, response.Authorization.Capabilities, identitycontext.SupportedCapabilities())
-	if len(response.Principal.Roles) != 1 || response.Principal.Roles[0] != "descriptive-role-only" {
-		t.Fatalf("roles were reinterpreted or rewritten: %#v", response.Principal.Roles)
+	if len(response.Principal.Roles) != 0 {
+		t.Fatalf("untrusted inbound role strings leaked into the IAM-authored principal: %#v", response.Principal.Roles)
 	}
 }
 
 func TestIAMTelemetryCapabilityProjectionPreservesExplicitDenyPrecedence(t *testing.T) {
 	denies := []iam.ExplicitDeny{{
-		ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID,
-		OrganizationID:       iam.S1FixtureOwnerAOrganizationID,
-		SiteID:               iam.S1FixtureOwnerASite1ID,
+		TenantID: iam.S1FixtureTenantAID,
+		SiteID:   iam.S1FixtureOwnerASite1ID,
 		Actions:              []registryauth.Action{registryauth.Action(telemetryauth.ActionSubscribe)},
 		Status:               iam.FactStatusActive,
 	}}
@@ -69,7 +68,7 @@ func TestIAMTelemetryCapabilityProjectionPreservesExplicitDenyPrecedence(t *test
 		config.TelemetryAuthorizationStore = fixedTelemetryStore{facts: principalTelemetryFacts(denies)}
 	})
 	claims := validIAMClaims(harness.now, "fixture-user", "principal:read")
-	claims.ActingOrganizationID = iam.S1FixtureOwnerAOrganizationID
+	claims.TenantID = iam.S1FixtureTenantAID
 	recorder := httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, harness.request(t, iam.CurrentPrincipalPath, nil, claims, harness.gatewaySigner))
 	if recorder.Code != http.StatusOK {
@@ -98,7 +97,7 @@ func TestIAMTelemetryCapabilityProjectionPreservesExplicitDenyPrecedence(t *test
 func TestIAMPublishesExplicitEmptyCapabilities(t *testing.T) {
 	harness := newIAMHarness(t)
 	claims := validIAMClaims(harness.now, "fixture-no-access-user", "principal:read")
-	claims.ActingOrganizationID = iam.S1FixtureActingOrganizationID
+	claims.TenantID = iam.S1FixtureTenantAID
 	request := harness.request(t, iam.CurrentPrincipalPath, nil, claims, harness.gatewaySigner)
 	recorder := httptest.NewRecorder()
 
@@ -177,19 +176,18 @@ func principalTelemetryFacts(denies []iam.ExplicitDeny) iam.TelemetryAuthorizati
 			Subject:       "fixture-user",
 			Status:        iam.FactStatusActive,
 		},
-		Memberships: []iam.OrganizationMembership{{TenantID: iam.S1FixtureTenantAID, OrganizationID: iam.S1FixtureOwnerAOrganizationID, Status: iam.FactStatusActive}},
+		Memberships: []iam.TenantMembership{{TenantID: iam.S1FixtureTenantAID, Status: iam.FactStatusActive}},
 		RoleBindings: []iam.RoleBinding{{
-			OrganizationID: iam.S1FixtureOwnerAOrganizationID,
-			Actions:        registryActions,
-			Effect:         iam.BindingEffectAllow,
-			Status:         iam.FactStatusActive,
+			TenantID: iam.S1FixtureTenantAID,
+			Actions:  registryActions,
+			Effect:   iam.BindingEffectAllow,
+			Status:   iam.FactStatusActive,
 		}},
 		ExplicitDenies: denies,
 		ScopeBindings: []iam.TelemetryScopeBinding{{
-			ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID,
-			OwningOrganizationID: iam.S1FixtureOwnerAOrganizationID,
-			SiteID:               iam.S1FixtureOwnerASite1ID,
-			DeviceID:             iam.S2FixtureDevice,
+			TenantID: iam.S1FixtureTenantAID,
+			SiteID:   iam.S1FixtureOwnerASite1ID,
+			DeviceID: iam.S2FixtureDevice,
 			Actions:              actions,
 			Effect:               iam.BindingEffectAllow,
 			Status:               iam.FactStatusActive,
@@ -207,10 +205,10 @@ func principalAlarmFacts() iam.AlarmAuthorizationFacts {
 			Subject:       "fixture-user",
 			Status:        iam.FactStatusActive,
 		},
-		Memberships: []iam.OrganizationMembership{{TenantID: iam.S1FixtureTenantAID, OrganizationID: iam.S1FixtureOwnerAOrganizationID, Status: iam.FactStatusActive}},
+		Memberships: []iam.TenantMembership{{TenantID: iam.S1FixtureTenantAID, Status: iam.FactStatusActive}},
 		Permissions: []iam.AlarmPermission{
-			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionRead, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
-			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionRead, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
+			{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionRead, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
+			{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionRead, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
 		},
 	}
 }
@@ -234,13 +232,13 @@ func principalWorkOrderFacts() iam.WorkOrderAuthorizationFacts {
 			Subject:       "fixture-user",
 			Status:        iam.FactStatusActive,
 		},
-		Memberships: []iam.OrganizationMembership{{TenantID: iam.S1FixtureTenantAID, OrganizationID: iam.S1FixtureOwnerAOrganizationID, Status: iam.FactStatusActive}},
+		Memberships: []iam.TenantMembership{{TenantID: iam.S1FixtureTenantAID, Status: iam.FactStatusActive}},
 		Permissions: []iam.WorkOrderPermission{
-			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionList, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
-			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionRead, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
-			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionCreate, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
-			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionAssign, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
-			{OrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionStart, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
+			{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionList, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
+			{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionRead, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
+			{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionCreate, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
+			{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionAssign, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
+			{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionStart, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive},
 		},
 	}
 }

@@ -1,0 +1,228 @@
+{
+  "schemaVersion": 1,
+  "status": "TARGET_DOMAIN_MODEL_FINAL",
+  "decisionIssue": 240,
+  "referenceBaseline": {
+    "thingsBoardVersion": "v4.3.1.1",
+    "thingsBoardCommit": "c2a52e46c44e308ddee430e7266b8e10eddde9c4",
+    "decisionAdr": "docs/adr/0013-thingsboard-informed-target-domain-model.md"
+  },
+  "canonicalLanguage": {
+    "hierarchy": ["Tenant", "Site", "Space", "Asset", "Device", "Point"],
+    "optionalEntities": ["PhysicalSensor"],
+    "derivedFactIdentity": "Metric",
+    "forbiddenCanonicalTerms": ["Organization", "Area", "Equipment"],
+    "pointIsCanonicalDataPoint": true,
+    "physicalSensorRequiredForPoint": false,
+    "calculatedResultIsPoint": false
+  },
+  "ownershipRules": {
+    "singleAuthoritativeOwner": true,
+    "physicalDeploymentDoesNotMergeOwnership": true,
+    "crossOwnerDirectDatabaseWritesForbidden": true,
+    "allowedCrossDomainMechanisms": [
+      "owner-command-port",
+      "owner-query-port",
+      "immutable-owner-event",
+      "rebuildable-projection",
+      "identity-and-revision-reference"
+    ],
+    "releasedArtifactImmutable": true,
+    "rollbackMutatesReleasedArtifact": false
+  },
+  "boundedContexts": [
+    {
+      "id": "identity-provider",
+      "owns": ["authentication-credential-lifecycle", "authentication-assurance"],
+      "mustNotOwn": ["platform-authorization", "tenant-site-capabilities"]
+    },
+    {
+      "id": "iam",
+      "owns": ["tenant", "principal", "membership", "capability-grant", "explicit-deny", "delegation", "authorization-policy"],
+      "mustNotOwn": ["registry-identity", "telemetry-truth", "command-outcome"]
+    },
+    {
+      "id": "registry",
+      "owns": ["site", "space", "asset", "device", "physical-sensor", "point", "typed-binding", "external-binding", "template-revision", "template-assignment"],
+      "mustNotOwn": ["credential-material", "transport-session", "rule-execution", "alarm-lifecycle", "edge-runtime-state"]
+    },
+    {
+      "id": "connectivity",
+      "owns": ["integration-instance", "transport-profile-revision", "credential-ref-lifecycle", "transport-session", "provisioning", "desired-configuration-revision", "reported-configuration", "ota-campaign-governance"],
+      "mustNotOwn": ["registry-identity", "command-business-success"]
+    },
+    {
+      "id": "telemetry-runtime",
+      "owns": ["ingest-acceptance", "ingest-quarantine", "current-device-observation-snapshot", "business-revision", "presence", "freshness"],
+      "mustNotOwn": ["registry-lifecycle", "metric-result"]
+    },
+    {
+      "id": "telemetry-query",
+      "owns": ["typed-history-query-contract", "history-cursor", "aggregation-contract"],
+      "mustNotOwn": ["raw-observation-fact", "current-device-truth"]
+    },
+    {
+      "id": "metric",
+      "owns": ["metric-definition-revision", "metric-run", "metric-result-fact", "current-metric-projection"],
+      "mustNotOwn": ["raw-telemetry", "alarm-lifecycle"]
+    },
+    {
+      "id": "command",
+      "owns": ["command-intent", "approval", "dispatch-attempt", "cloud-lease", "fence", "command-outcome", "verification-evidence"],
+      "mustNotOwn": ["edge-arbitration", "device-plc-safety"]
+    },
+    {
+      "id": "edge-control",
+      "owns": ["channel", "process-image", "controller", "scheduler", "arbiter", "local-lease", "interlock-decision", "observed-edge-state", "sync-evidence"],
+      "mustNotOwn": ["cloud-command-approval", "registry-master-data"]
+    },
+    {
+      "id": "rule-runtime",
+      "owns": ["node-definition", "rule-revision", "rule-binding", "rule-execution", "generic-rule-state", "continuation", "effect-intent", "trace-debug-evidence"],
+      "mustNotOwn": ["alarm-final-fact", "command-final-fact", "telemetry-final-fact", "metric-final-fact", "provider-delivery-receipt"]
+    },
+    {
+      "id": "alarm",
+      "owns": ["alarm-policy-revision", "alarm-evaluation-state", "alarm-incident", "acknowledgment", "suppression", "assignment", "alarm-timeline", "correlation-group"],
+      "mustNotOwn": ["provider-delivery-retry", "work-order-completion"]
+    },
+    {
+      "id": "notification",
+      "owns": ["audience-definition", "notification-template-revision", "notification-policy-revision", "escalation-stage", "inbox-item", "notification-disposition"],
+      "mustNotOwn": ["provider-credential", "provider-retry-state"]
+    },
+    {
+      "id": "outbound-delivery",
+      "owns": ["integration-definition", "delivery-intent", "delivery-attempt", "delivery-receipt", "dead-letter", "replay-approval"],
+      "mustNotOwn": ["originating-business-state"]
+    },
+    {
+      "id": "work-order",
+      "owns": ["work-order", "work-order-timeline", "alarm-work-order-link"],
+      "mustNotOwn": ["alarm-recovery-truth"]
+    },
+    {
+      "id": "intelligence",
+      "owns": ["operations-investigation", "investigation-evidence", "finding", "proposed-action", "forecast-result", "optimization-recommendation", "model-definition", "model-deployment-revision", "model-invocation"],
+      "mustNotOwn": ["direct-command-effect", "alarm-recovery-truth"]
+    },
+    {
+      "id": "presentation",
+      "owns": ["dashboard-view-definition", "presentation-layout", "typed-datasource-reference", "site-dashboard-summary-projection"],
+      "mustNotOwn": ["device-truth", "metric-truth", "alarm-truth", "command-truth", "authorization"]
+    },
+    {
+      "id": "platform-operations",
+      "owns": ["availability-tier", "limit-policy", "migration-execution", "product-release-manifest", "readiness-semantics", "durable-work-convention", "observability"],
+      "mustNotOwn": ["domain-business-facts"]
+    }
+  ],
+  "releaseFamilies": {
+    "commonLifecycle": ["DRAFT", "VALIDATED", "RELEASED", "RETIRED"],
+    "commonFields": ["identity", "revision", "schemaVersion", "digest", "dependencies", "createdBy", "releasedBy"],
+    "families": [
+      {"owner": "registry", "types": ["TemplateRevision", "TemplateAssignment"]},
+      {"owner": "connectivity", "types": ["TransportProfileRevision", "DesiredConfigurationRevision"]},
+      {"owner": "rule-runtime", "types": ["RuleRevision", "RuleBinding"]},
+      {"owner": "alarm", "types": ["AlarmPolicyRevision"]},
+      {"owner": "presentation", "types": ["DashboardViewDefinition"]},
+      {"owner": "edge-control", "types": ["EdgeRelease"]},
+      {"owner": "intelligence", "types": ["ModelDeploymentRevision"]},
+      {"owner": "platform-operations", "types": ["ProductReleaseManifest"]}
+    ],
+    "godProfileForbidden": true
+  },
+  "dataAuthority": {
+    "currentDeviceState": {
+      "owner": "telemetry-runtime",
+      "durableStore": "PostgreSQL",
+      "redisRole": "rebuildable-projection-only"
+    },
+    "rawHistory": {
+      "ownerFact": "telemetry-runtime-accepted-observation",
+      "store": "ClickHouse",
+      "appendOnly": true,
+      "validOutOfOrderQueryable": true
+    },
+    "metricResult": {
+      "owner": "metric",
+      "store": "ClickHouse-append-only",
+      "currentSelection": "explicit-monotonic-revision-projection"
+    },
+    "presentation": {
+      "role": "derived-read-model",
+      "mustExpose": ["revision", "watermark", "completeness", "quality"]
+    }
+  },
+  "alarmModel": {
+    "conditionStates": ["ACTIVE", "CLEARED"],
+    "orthogonalFacts": ["acknowledgment", "suppression", "assignment", "work-order-link", "notification-disposition"],
+    "oneActiveIncidentPerTenantSiteFingerprint": true,
+    "recurrenceCreatesNewIncident": true,
+    "ackClearsCondition": false,
+    "suppressionClearsCondition": false,
+    "workOrderCompletionClearsCondition": false
+  },
+  "commandSafetyChain": [
+    "iam-authorized-command-intent",
+    "approval",
+    "cloud-lease-and-fence",
+    "transport-delivery",
+    "edge-capability-and-local-lease",
+    "edge-scheduler-arbiter-interlock",
+    "device-plc-actuation",
+    "independent-readback",
+    "cloud-command-verification"
+  ],
+  "commandSuccessRules": {
+    "transportAckIsSuccess": false,
+    "edgeReceiptIsSuccess": false,
+    "deviceAckIsSuccess": false,
+    "independentReadbackRequired": true,
+    "cloudMayBypassEdgeArbiter": false
+  },
+  "outboundDelivery": {
+    "owner": "outbound-delivery",
+    "stateChain": ["DeliveryIntent", "DeliveryAttempt", "DeliveryReceipt"],
+    "sharedBy": ["notification", "external-integration", "durable-ai-provider-effect-when-applicable"],
+    "credentialMaterialInPayloadForbidden": true
+  },
+  "edgeAuthority": {
+    "cloudRegistryIsMaster": true,
+    "singleFieldSingleWriter": true,
+    "syncPattern": "immutable-bootstrap-plus-incremental-owner-revisions",
+    "requiredMechanisms": ["snapshot-revision", "chunk-resume", "digest", "tombstone", "contiguous-ack-cursor", "quarantine"],
+    "offlineUsesLastAcceptedSignedRelease": true
+  },
+  "phase1Deployment": {
+    "availabilityTier": "SINGLE_NODE_RECOVERABLE",
+    "logicalOwnershipSurvivesPhysicalMerge": true,
+    "crossSchemaWritesForbidden": true,
+    "haDeferredUntilEvidence": true
+  },
+  "forbiddenPaths": [
+    "organization-area-equipment-compatibility-api",
+    "free-form-relation-authoritative-topology",
+    "mutable-cross-domain-god-profile",
+    "cross-owner-direct-database-write",
+    "browser-authoritative-truth-reconstruction-from-partial-lists",
+    "redis-or-cache-as-business-authority",
+    "rule-direct-cross-domain-write",
+    "rule-direct-external-side-effect",
+    "alarm-ack-suppression-notification-workorder-as-recovery-truth",
+    "cloud-command-bypass-edge-safety",
+    "transport-ack-as-command-success",
+    "cloud-edge-dual-write-same-field",
+    "ai-optimization-direct-physical-effect",
+    "secret-in-domain-config-or-browser-payload",
+    "mutate-released-artifact",
+    "runtime-dual-write-fallback-compatibility-layer",
+    "real-mode-demo-mock-thingsboard-fallback"
+  ],
+  "supersession": {
+    "adr0001": ["Organization/Equipment public model", "legacy fallback route assumptions"],
+    "adr0011": ["Organization/Area/Equipment canonical language", "Sensor as generally required first-class measurement identity", "calculated point as canonical derived fact"],
+    "adr0012": ["Area/Equipment/Sensor terminology only"],
+    "preservedFromAdr0012": ["IPO cycle", "process image", "controller", "scheduler", "arbiter", "driver", "protocol bridge", "edge timedata", "source-first reference rule"]
+  }
+}

@@ -74,7 +74,7 @@ export {
   NightEnergyAnalysisError,
   analyzeSiteNightEnergy,
   planSiteNightEnergyPeriods,
-  type EquipmentAttributionRequiredNext,
+  type AssetAttributionRequiredNext,
   type NightEnergyAnalysisErrorCode,
   type NightEnergyEvidenceDraft,
   type NightEnergyGranularity,
@@ -96,7 +96,7 @@ export {
   type SiteNightEnergyWindow,
   type SupportedSiteNightEnergyAnalysis,
   type UnableSiteNightEnergyAnalysis,
-  type UnsupportedEquipmentAttribution,
+  type UnsupportedAssetAttribution,
 } from './internal/night-energy-analysis.js';
 
 export {

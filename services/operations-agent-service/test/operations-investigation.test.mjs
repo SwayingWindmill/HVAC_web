@@ -13,7 +13,7 @@ const createInvestigation = () => OperationsInvestigation.create({
   scope: {
     tenantId: 'organization-001',
     siteId: 'site-001',
-    equipmentId: null,
+    assetId: null,
     deviceId: null,
   },
   createdAt: 1_000,
@@ -71,7 +71,7 @@ test('an Investigation starts, pauses, and resumes the same Agent Run with a new
     scope: {
       tenantId: 'organization-001',
       siteId: 'site-001',
-      equipmentId: null,
+      assetId: null,
       deviceId: null,
     },
     status: 'CREATED',

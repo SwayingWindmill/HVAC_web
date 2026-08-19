@@ -279,7 +279,7 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 			return
 		}
 		siteID, registryAction = registryInput.SiteID, registryauth.ActionSiteRead
-	case "registry.listSiteAsset":
+	case "registry.listSiteAssets":
 		var registryInput struct {
 			SiteID string `json:"siteId"`
 		}
@@ -886,12 +886,12 @@ func validateOperationsRequiredNext(value any, tenantID, siteID string) error {
 	}
 	var expected []string
 	switch requirement["kind"] {
-	case "EQUIPMENT_ENERGY_BINDINGS":
+	case "ASSET_ENERGY_BINDINGS":
 		if requirement["owner"] != "registry" || requirement["capability"] != "registry.getAssetEnergyBindings" {
 			return errors.New("invalid Operations Registry required-next capability")
 		}
 		expected = []string{"BUSINESS_REVISION", "QUALITY", "CAPTURED_AT", "PAYLOAD_DIGEST"}
-	case "EQUIPMENT_ENERGY_PERIOD_COMPARISON":
+	case "ASSET_ENERGY_PERIOD_COMPARISON":
 		if requirement["owner"] != "telemetry-query-service" || requirement["capability"] != "analytics.energy.getAssetSeries" {
 			return errors.New("invalid Operations telemetry required-next capability")
 		}
@@ -943,7 +943,7 @@ func validateOperationsFindingRecord(value any, investigationID, tenantID, siteI
 	case "UNABLE_TO_CONCLUDE":
 		legacy := operationsExactKeys(conclusion, "status", "scope", "reasonCode", "detail")
 		withRequirements := operationsExactKeys(conclusion, "status", "scope", "reasonCode", "detail", "requiredNext")
-		if (!legacy && !withRequirements) || !operationsAllowedString(conclusion["scope"], "SITE", "EQUIPMENT") || record["findingKind"] != "UNABLE_TO_CONCLUDE" {
+		if (!legacy && !withRequirements) || !operationsAllowedString(conclusion["scope"], "SITE", "ASSET") || record["findingKind"] != "UNABLE_TO_CONCLUDE" {
 			return "", errors.New("invalid Operations unable-to-conclude Finding")
 		}
 		if _, ok := operationsBoundedString(conclusion["reasonCode"], 128); !ok {
@@ -1100,7 +1100,7 @@ func validateOperationsToolReceiptRecord(value any, investigationID string) (str
 	tool, toolOK := record["logicalTool"].(string)
 	owner, ownerOK := record["owner"].(string)
 	expectedOwner := map[string]string{
-		"registry.getSite": "registry", "registry.listSiteAsset": "registry",
+		"registry.getSite": "registry", "registry.listSiteAssets": "registry",
 		"telemetry.getCurrentSnapshot": "telemetry-query-service", "analytics.getEnergySeries": "telemetry-query-service",
 		"commands.getCapabilities": "command-service",
 	}[tool]
@@ -1529,7 +1529,7 @@ func validateOperationsToolActivity(activity map[string]any) error {
 		return errors.New("invalid Operations Tool activity shape")
 	}
 	if _, ok := operationsBoundedString(activity["recordId"], 256); !ok ||
-		!operationsAllowedString(activity["logicalTool"], "registry.getSite", "registry.listSiteAsset", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities") ||
+		!operationsAllowedString(activity["logicalTool"], "registry.getSite", "registry.listSiteAssets", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities") ||
 		!operationsAllowedString(activity["owner"], "registry", "telemetry-query-service", "command-service") ||
 		!operationsAllowedString(activity["resultCategory"], "SUCCEEDED", "REJECTED", "TIMED_OUT", "FAILED") {
 		return errors.New("invalid Operations Tool activity identity")
@@ -1697,7 +1697,7 @@ func validateOperationsEvent(name string, value map[string]any) error {
 			return errors.New("invalid Operations Tool start event")
 		}
 		if _, ok := operationsBoundedString(value["toolCallId"], 256); !ok ||
-			!operationsAllowedString(value["toolCallName"], "registry.getSite", "registry.listSiteAsset", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities") {
+			!operationsAllowedString(value["toolCallName"], "registry.getSite", "registry.listSiteAssets", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities") {
 			return errors.New("invalid Operations Tool start value")
 		}
 	case "TOOL_CALL_ARGS":

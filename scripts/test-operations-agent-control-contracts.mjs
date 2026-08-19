@@ -37,11 +37,11 @@ test('generated contract drift checks accept Windows checkout line endings', () 
 test('runtime and authorization tools match the versioned catalog', () => {
   assert.equal(OPERATIONS_AGENT_TOOL_CATALOG_VERSION, 'operations-agent-tool-catalog/v1');
   assert.deepEqual(OPERATIONS_AGENT_RUNTIME_READ_TOOLS, [
-    'registry.getSite', 'registry.listSiteEquipment', 'telemetry.getCurrentSnapshot',
+    'registry.getSite', 'registry.listSiteAssets', 'telemetry.getCurrentSnapshot',
     'analytics.getEnergySeries', 'commands.getCapabilities',
   ]);
   assert.deepEqual(OPERATIONS_AGENT_TOOL_AUTHORIZATION_TOOLS, [
-    'registry.getSite', 'registry.listSiteEquipment', 'analytics.getEnergySeries',
+    'registry.getSite', 'registry.listSiteAssets', 'analytics.getEnergySeries',
   ]);
   assert.deepEqual(
     catalog.tools.filter((tool) => tool.runtimeReadAllowed).map((tool) => tool.logicalTool),

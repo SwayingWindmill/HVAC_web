@@ -10,7 +10,7 @@ const input = Object.freeze({
   scope: {
     tenantId: 'organization-001',
     siteId: 'site-001',
-    equipmentId: null,
+    assetId: null,
     deviceId: null,
   },
   expectedClassification: 'INFERENCE',

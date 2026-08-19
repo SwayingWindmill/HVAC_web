@@ -12,7 +12,7 @@ import { createFakeOperationsAgentEnvironment } from './support/fake-operations-
 const tenantId = '0198f5c0-7c00-7000-8000-000000000001';
 const siteId = '0198f5c0-7c00-7000-8000-000000000002';
 const investigationId = 'investigation-001';
-const scope = Object.freeze({ tenantId, siteId, equipmentId: null, deviceId: null });
+const scope = Object.freeze({ tenantId, siteId, assetId: null, deviceId: null });
 const currentTime = Date.parse('2026-07-31T00:00:00.000Z');
 
 const energySeries = (request, energyPerHour) => {
@@ -53,18 +53,18 @@ const ownerResultFactory = async (request) => {
       },
     };
   }
-  if (request.tool === 'registry.listSiteEquipment') {
+  if (request.tool === 'registry.listSiteAssets') {
     return {
       requestId: request.requestId,
       owner: 'registry',
       scope,
-      revision: 'registry-equipment:29',
+      revision: 'registry-asset:29',
       quality: 'GOOD',
-      provenance: 'platform-core-service:registry-site-equipment/v1',
+      provenance: 'platform-core-service:registry-site-asset/v1',
       payload: {
-        kind: 'SITE_EQUIPMENT',
+        kind: 'SITE_ASSETS',
         siteId,
-        equipment: [{ id: '0198f5c0-7c00-7000-8000-000000000010' }],
+        assets: [{ id: '0198f5c0-7c00-7000-8000-000000000010' }],
       },
     };
   }
@@ -109,8 +109,8 @@ const createHarness = ({ deny = false, runtimeSteps, telemetry } = {}) => {
             tool: 'registry.getSite',
             input: { siteId },
           }, {
-            requestId: `${investigationId}:registry-equipment`,
-            tool: 'registry.listSiteEquipment',
+            requestId: `${investigationId}:registry-assets`,
+            tool: 'registry.listSiteAssets',
             input: { siteId },
           }],
         }],
@@ -134,7 +134,7 @@ const createHarness = ({ deny = false, runtimeSteps, telemetry } = {}) => {
           traceparent: input.traceparent,
           toolDelegationGrants: {
             'registry.getSite': input.registrySiteGrant,
-            'registry.listSiteEquipment': input.registryAssetGrant,
+            'registry.listSiteAssets': input.registryAssetGrant,
             'analytics.getEnergySeries': input.energyGrant,
           },
         };

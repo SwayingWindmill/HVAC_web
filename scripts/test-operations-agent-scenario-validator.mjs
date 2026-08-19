@@ -18,9 +18,9 @@ const buildValidScenario = () => ({
   purpose: 'RETROSPECTIVE',
   taskCategories: ['DATA_QUERY'],
   scope: {
-    organizationId: 'org-001',
+    tenantId: 'org-001',
     siteIds: ['site-001'],
-    equipmentIds: [],
+    assetIds: [],
     deviceIds: [],
     timeRange: {
       from: '2026-07-01T00:00:00Z',
@@ -32,7 +32,7 @@ const buildValidScenario = () => ({
       id: 'fact-authorized-scope',
       kind: 'AUTHORIZATION_DECISION',
       ownerTool: 'authorization.checkScope',
-      scope: { organizationId: 'org-001', siteIds: ['site-001'] },
+      scope: { tenantId: 'org-001', siteIds: ['site-001'] },
       metadata: {
         capturedAt: '2026-07-08T00:01:00Z',
         quality: 'GOOD',
@@ -58,9 +58,9 @@ const buildValidScenario = () => ({
       ownerTool: 'authorization.checkScope',
       status: 'AVAILABLE',
       scope: {
-        organizationId: 'org-001',
+        tenantId: 'org-001',
         siteIds: ['site-001'],
-        equipmentIds: [],
+        assetIds: [],
         deviceIds: [],
       },
       factIds: ['fact-authorized-scope'],
@@ -189,7 +189,7 @@ test('rejects dangling Ground Truth, Evidence, and data-quality references', () 
 
 test('rejects input facts and Evidence requirements outside authorized Scope', () => {
   const scenario = buildValidScenario();
-  scenario.inputFacts[0].scope.organizationId = 'org-unauthorized';
+  scenario.inputFacts[0].scope.tenantId = 'org-unauthorized';
   scenario.evidenceRequirements[0].scope.siteIds = ['site-unauthorized'];
 
   const result = validateOperationsAgentScenario(scenario);
@@ -201,9 +201,9 @@ test('rejects input facts and Evidence requirements outside authorized Scope', (
 test('rejects requested Scope without matching authorization ownership or Evidence basis', () => {
   const nonAuthorizationOwner = buildValidScenario();
   nonAuthorizationOwner.requestedScope = {
-    organizationId: 'org-001',
+    tenantId: 'org-001',
     siteIds: ['site-requested'],
-    equipmentIds: [],
+    assetIds: [],
     deviceIds: [],
   };
   nonAuthorizationOwner.inputFacts[0].ownerTool = 'registry.getSite';
@@ -216,9 +216,9 @@ test('rejects requested Scope without matching authorization ownership or Eviden
 
   const mismatchedEvidenceBasis = buildValidScenario();
   mismatchedEvidenceBasis.requestedScope = {
-    organizationId: 'org-001',
+    tenantId: 'org-001',
     siteIds: ['site-requested'],
-    equipmentIds: [],
+    assetIds: [],
     deviceIds: [],
   };
   mismatchedEvidenceBasis.inputFacts[0].scopeBasis = 'REQUESTED';
@@ -284,9 +284,9 @@ test('rejects required-next Evidence that depends on a forbidden logical tool', 
     ownerTool: 'commands.createIntent',
     status: 'REQUIRED_NEXT',
     scope: {
-      organizationId: 'org-001',
+      tenantId: 'org-001',
       siteIds: ['site-001'],
-      equipmentIds: [],
+      assetIds: [],
       deviceIds: [],
     },
     factIds: [],

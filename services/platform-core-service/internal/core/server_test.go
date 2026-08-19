@@ -30,12 +30,9 @@ const (
 	testPolicy              = "registry-read:1"
 	testPrincipal           = "018f1e00-2000-7000-8000-000000000002"
 	testTenantA             = "018f1d00-0000-7000-8000-000000000001"
-	testOrganizationA       = "018f1e00-0000-7000-8000-000000000001"
-	testOrganizationB       = "018f1e00-0000-7000-8000-000000000002"
-	testActingOrg           = "018f1e00-0000-7000-8000-000000000003"
 	testSiteA1              = "018f1e00-1000-7000-8000-000000000001"
 	testSiteA2              = "018f1e00-1000-7000-8000-000000000002"
-	testEquipmentA1         = "018f1e00-3000-7000-8000-000000000001"
+	testAssetA1         = "018f1e00-3000-7000-8000-000000000001"
 	testDeviceA1            = "018f1e00-4000-7000-8000-000000000001"
 	testBindingA1           = "018f1e00-5000-7000-8000-000000000001"
 )
@@ -53,8 +50,8 @@ func (provider *countingGrantStatusProvider) Lookup(_ context.Context, _ registr
 type fakeRegistryStore struct {
 	sites         PageResult[Site]
 	site          Site
-	equipment     PageResult[Equipment]
-	equipmentItem Equipment
+	assets        PageResult[Asset]
+	assetItem     Asset
 	devices       PageResult[Device]
 	device        Device
 	bindings      PageResult[DeviceBinding]
@@ -73,13 +70,13 @@ func (store *fakeRegistryStore) GetSite(_ context.Context, claims registryauth.G
 	store.lastClaims, store.lastID = claims, id
 	return store.site, store.err
 }
-func (store *fakeRegistryStore) ListEquipment(_ context.Context, claims registryauth.GrantClaims, id string, page PageRequest) (PageResult[Equipment], error) {
+func (store *fakeRegistryStore) ListAssets(_ context.Context, claims registryauth.GrantClaims, id string, page PageRequest) (PageResult[Asset], error) {
 	store.lastClaims, store.lastID, store.lastPage = claims, id, page
-	return store.equipment, store.err
+	return store.assets, store.err
 }
-func (store *fakeRegistryStore) GetEquipment(_ context.Context, claims registryauth.GrantClaims, id string) (Equipment, error) {
+func (store *fakeRegistryStore) GetAsset(_ context.Context, claims registryauth.GrantClaims, id string) (Asset, error) {
 	store.lastClaims, store.lastID = claims, id
-	return store.equipmentItem, store.err
+	return store.assetItem, store.err
 }
 func (store *fakeRegistryStore) ListDevices(_ context.Context, claims registryauth.GrantClaims, id string, page PageRequest) (PageResult[Device], error) {
 	store.lastClaims, store.lastID, store.lastPage = claims, id, page
@@ -152,8 +149,8 @@ func TestServerRoutesAllRegistryReadsThroughConcreteGrantActions(t *testing.T) {
 	store := &fakeRegistryStore{
 		sites:         PageResult[Site]{Items: []Site{}},
 		site:          Site{ID: testSiteA1},
-		equipment:     PageResult[Equipment]{Items: []Equipment{}},
-		equipmentItem: Equipment{ID: testEquipmentA1},
+		assets:        PageResult[Asset]{Items: []Asset{}},
+		assetItem:     Asset{ID: testAssetA1},
 		devices:       PageResult[Device]{Items: []Device{}},
 		device:        Device{ID: testDeviceA1},
 		bindings:      PageResult[DeviceBinding]{Items: []DeviceBinding{{ID: testBindingA1}}},
@@ -165,8 +162,8 @@ func TestServerRoutesAllRegistryReadsThroughConcreteGrantActions(t *testing.T) {
 	}{
 		{RegistryPathPrefix + "sites", registryauth.ActionSiteList},
 		{RegistryPathPrefix + "sites/" + testSiteA1, registryauth.ActionSiteRead},
-		{RegistryPathPrefix + "sites/" + testSiteA1 + "/equipment", registryauth.ActionEquipmentList},
-		{RegistryPathPrefix + "equipment/" + testEquipmentA1, registryauth.ActionEquipmentRead},
+		{RegistryPathPrefix + "sites/" + testSiteA1 + "/assets", registryauth.ActionAssetList},
+		{RegistryPathPrefix + "assets/" + testAssetA1, registryauth.ActionAssetRead},
 		{RegistryPathPrefix + "sites/" + testSiteA1 + "/devices", registryauth.ActionDeviceList},
 		{RegistryPathPrefix + "sites/" + testSiteA1 + "/device-bindings", registryauth.ActionDeviceBindingList},
 		{RegistryPathPrefix + "devices/" + testDeviceA1, registryauth.ActionDeviceRead},
@@ -353,10 +350,9 @@ func testGrantClaims(action registryauth.Action) registryauth.GrantClaims {
 		PrincipalID:            testPrincipal,
 		SubjectIssuer:          "https://identity.example.test/oidc",
 		Subject:                "delegated",
-		TenantID:             testTenantA,
-		ActingOrganizationID: testActingOrg,
-		AllowedSiteIDs:       []string{testSiteA1},
-		DeniedSiteIDs:        []string{},
+		TenantID:       testTenantA,
+		AllowedSiteIDs: []string{testSiteA1},
+		DeniedSiteIDs:  []string{},
 		Actions:                []registryauth.Action{action},
 		PolicyRevision:         testPolicy,
 		DecisionReason:         registryauth.ReasonAllowSiteBinding,

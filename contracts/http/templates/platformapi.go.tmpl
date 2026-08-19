@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	CapabilitySetVersion                 = 8
+	CapabilitySetVersion                 = 9
 	GetHealthPath                         = "__HEALTH_PATH__"
 	GetVersionPath                        = "__VERSION_PATH__"
 	GetPlatformStatusPath                 = "__PLATFORM_STATUS_PATH__"
@@ -27,7 +27,7 @@ const (
 	GetSessionAuditEventPathTemplate      = "__AUDIT_PATH__"
 	ListSitesPath                         = "__SITES_PATH__"
 	GetSitePathTemplate                   = "__SITE_PATH__"
-	ListSiteAssetPathTemplate         = "__SITE_ASSET_PATH__"
+	ListSiteAssetsPathTemplate         = "__SITE_ASSET_PATH__"
 	GetAssetPathTemplate              = "__ASSET_PATH__"
 	ListSiteDevicesPathTemplate           = "__SITE_DEVICES_PATH__"
 	ListSiteDeviceBindingsPathTemplate    = "__SITE_DEVICE_BINDINGS_PATH__"
@@ -90,8 +90,8 @@ type Capability string
 const (
 	CapabilitySiteList         Capability = "site.list"
 	CapabilitySiteRead         Capability = "site.read"
-	CapabilityEquipmentList Capability = "equipment.list"
-	CapabilityEquipmentRead Capability = "equipment.read"
+	CapabilityAssetList Capability = "asset.list"
+	CapabilityAssetRead Capability = "asset.read"
 	CapabilityDeviceList       Capability = "device.list"
 	CapabilityDeviceRead              Capability = "device.read"
 	CapabilityTelemetrySnapshotRead   Capability = "telemetry.snapshot.read"
@@ -396,7 +396,7 @@ type ServerInterface interface {
 type RegistryServerInterface interface {
 	ListSites(http.ResponseWriter, *http.Request, ListRegistryParams)
 	GetSite(http.ResponseWriter, *http.Request, string)
-	ListSiteAsset(http.ResponseWriter, *http.Request, string, ListRegistryParams)
+	ListSiteAssets(http.ResponseWriter, *http.Request, string, ListRegistryParams)
 	GetAsset(http.ResponseWriter, *http.Request, string)
 	ListSiteDevices(http.ResponseWriter, *http.Request, string, ListRegistryParams)
 	ListSiteDeviceBindings(http.ResponseWriter, *http.Request, string, ListRegistryParams)
@@ -484,8 +484,8 @@ func (c *Client) GetSite(ctx context.Context, siteID string) (*Response[Site], e
 	return doJSON[Site](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
 }
 
-func (c *Client) ListSiteAsset(ctx context.Context, siteID string, params *ListRegistryParams) (*Response[AssetCollection], error) {
-	path := strings.Replace(ListSiteAssetPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+func (c *Client) ListSiteAssets(ctx context.Context, siteID string, params *ListRegistryParams) (*Response[AssetCollection], error) {
+	path := strings.Replace(ListSiteAssetsPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
 	endpoint, err := withListQuery(c.baseURL+path, params)
 	if err != nil {
 		return nil, err

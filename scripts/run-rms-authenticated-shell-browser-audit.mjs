@@ -21,7 +21,7 @@ const fixtureCapability = ['rms', '03', String(process.pid)].join('-');
 const sessionCapabilityField = ['csrf', 'Token'].join('');
 const stateChangeHeader = ['x', 'csrf', 'token'].join('-');
 const routePolicyRevision = 'route-registry:12';
-const actingOrganizationId = '01900000-0000-7000-8000-000000000001';
+const tenantId = '01900000-0000-7000-8000-000000000001';
 const siteAId = '01900000-0001-7000-8000-000000000001';
 const siteBId = '01900000-0002-7000-8000-000000000002';
 const invisibleSiteId = '01900000-0003-7000-8000-000000000003';
@@ -86,7 +86,7 @@ function problem(status, code, detail, retryable) {
 function registrySite(id, code, displayName) {
   return {
     id,
-    owningOrganizationId: actingOrganizationId,
+    tenantId: tenantId,
     code,
     displayName,
     timezone: 'Asia/Tokyo',
@@ -99,22 +99,22 @@ function registrySite(id, code, displayName) {
 
 const siteA = registrySite(siteAId, 'TOKYO-1', 'Tokyo Plant');
 const siteB = registrySite(siteBId, 'OSAKA-1', 'Osaka Plant');
-const osakaEquipmentId = '01900000-0010-7000-8000-000000000010';
+const osakaAssetId = '01900000-0010-7000-8000-000000000010';
 const osakaDeviceId = '01900000-0011-7000-8000-000000000011';
 const osakaBindingId = '01900000-0012-7000-8000-000000000012';
-const osakaEquipment = {
-  id: osakaEquipmentId, owningOrganizationId: actingOrganizationId, siteId: siteBId,
-  code: 'CHILLER-01', displayName: 'Osaka Chiller 01', equipmentType: 'CHILLER', status: 'ACTIVE', revision: 2,
+const osakaAsset = {
+  id: osakaAssetId, tenantId: tenantId, siteId: siteBId,
+  code: 'CHILLER-01', displayName: 'Osaka Chiller 01', assetType: 'CHILLER', status: 'ACTIVE', revision: 2,
   createdAt: '2026-07-28T00:00:00.000Z', updatedAt: '2026-07-30T00:00:00.000Z',
 };
 const osakaDevice = {
-  id: osakaDeviceId, owningOrganizationId: actingOrganizationId, siteId: siteBId,
+  id: osakaDeviceId, tenantId: tenantId, siteId: siteBId,
   code: 'CHILLER-CTRL-01', displayName: 'Osaka Chiller Controller 01', deviceType: 'CHILLER', status: 'ACTIVE', revision: 5,
   createdAt: '2026-07-28T00:00:00.000Z', updatedAt: '2026-07-30T00:00:00.000Z',
 };
 const osakaBinding = {
-  id: osakaBindingId, owningOrganizationId: actingOrganizationId, siteId: siteBId,
-  deviceId: osakaDeviceId, equipmentId: osakaEquipmentId, bindingRole: 'PRIMARY_CONTROLLER', status: 'ACTIVE',
+  id: osakaBindingId, tenantId: tenantId, siteId: siteBId,
+  deviceId: osakaDeviceId, assetId: osakaAssetId, bindingRole: 'PRIMARY_CONTROLLER', status: 'ACTIVE',
   validFrom: '2026-07-28T00:00:00.000Z', validTo: null, revision: 1,
   createdAt: '2026-07-28T00:00:00.000Z', updatedAt: '2026-07-30T00:00:00.000Z',
 };
@@ -135,7 +135,7 @@ function commandProjection(approved = false) {
   return {
     schemaVersion: 1,
     commandId,
-    organizationId: actingOrganizationId,
+    tenantId: tenantId,
     siteId: siteBId,
     deviceId: commandDeviceId,
     capability: 'SET_TEMPERATURE_SETPOINT',
@@ -172,13 +172,13 @@ function principalResponse(state) {
         service: 'platform-gateway',
         spiffeId: 'spiffe://hvac.local/platform-gateway',
       },
-      actingOrganizationId,
+      tenantId,
       audience: 'iam-service',
       policyRevision: 'gateway-delegation:5',
       delegationExpiresAt: expiresAt,
     },
     authorization: {
-      capabilitySetVersion: 6,
+      capabilitySetVersion: 7,
       policyRevision: 'iam-effective:8',
       capabilities: [...state.capabilities],
     },
@@ -200,7 +200,7 @@ function createGatewayFixture() {
     sitesMode: 'available',
     sites: [siteA],
     roles: ['descriptive-role-only'],
-    capabilities: ['organization.list', 'organization.read', 'site.list', 'site.read', 'device.read'],
+    capabilities: ['site.list', 'site.read', 'device.read'],
     sessionLifetimeMs: 60 * 60 * 1000,
     loginMode: 'success',
     requests: [],
@@ -277,7 +277,7 @@ function createGatewayFixture() {
       return;
     }
 
-    if (request.method === 'GET' && url.pathname === `/api/v1/organizations/${actingOrganizationId}/sites`) {
+    if (request.method === 'GET' && url.pathname === '/api/v1/sites') {
       if (state.sitesMode === 'unavailable') {
         writeJson(response, 503, problem(
           503,
@@ -296,7 +296,7 @@ function createGatewayFixture() {
     }
 
 
-    const siteInventoryMatch = url.pathname.match(/^\/api\/v1\/sites\/([^/]+)\/(equipment|devices|device-bindings)$/);
+    const siteInventoryMatch = url.pathname.match(/^\/api\/v1\/sites\/([^/]+)\/(assets|devices|device-bindings)$/);
     if (request.method === 'GET' && siteInventoryMatch) {
       const [, requestedSiteId, collection] = siteInventoryMatch;
       if (requestedSiteId !== siteAId && requestedSiteId !== siteBId) {
@@ -304,8 +304,8 @@ function createGatewayFixture() {
         return;
       }
       const populated = requestedSiteId === siteBId;
-      const items = collection === 'equipment'
-        ? (populated ? [osakaEquipment] : [])
+      const items = collection === 'assets'
+        ? (populated ? [osakaAsset] : [])
         : collection === 'devices'
           ? (populated ? [osakaDevice] : [])
           : (populated ? [osakaBinding] : []);
@@ -354,7 +354,7 @@ function createGatewayFixture() {
             snapshot: {
               schemaVersion: 1,
               deviceId: osakaDeviceId,
-              owningOrganizationId: actingOrganizationId,
+              tenantId: tenantId,
               siteId: siteBId,
               businessRevision: 12,
               evaluatedAt: '2026-07-30T09:00:00.000Z',
@@ -404,7 +404,7 @@ function createGatewayFixture() {
           return;
         }
         const expectedKeys = ['chiller.power', 'chiller.cop', 'chiller.cooling_capacity'];
-        if (Object.hasOwn(query, 'organizationId') || Object.hasOwn(query, 'siteId')
+        if (Object.hasOwn(query, 'tenantId') || Object.hasOwn(query, 'siteId')
           || query.deviceId !== osakaDeviceId
           || !Array.isArray(query.keys)
           || query.keys.length !== expectedKeys.length
@@ -435,7 +435,7 @@ function createGatewayFixture() {
         });
         writeJson(response, 200, {
           schemaVersion: 1,
-          owningOrganizationId: osakaDevice.owningOrganizationId,
+          tenantId: osakaDevice.tenantId,
           siteId: siteBId,
           deviceId: osakaDeviceId,
           series: [
@@ -483,7 +483,7 @@ function createGatewayFixture() {
           return;
         }
         state.energyQueries.push(query);
-        if (query.organizationId !== actingOrganizationId || ![siteAId, siteBId].includes(query.siteId)) {
+        if (query.tenantId !== tenantId || ![siteAId, siteBId].includes(query.siteId)) {
           writeJson(response, 403, problem(403, 'ENERGY_SCOPE_FORBIDDEN', 'The requested energy scope was not authorized.', false));
           return;
         }
@@ -509,7 +509,7 @@ function createGatewayFixture() {
       writeJson(response, 200, {
         schemaVersion: 1,
         devices: [{
-          organizationId: actingOrganizationId,
+          tenantId: tenantId,
           siteId: siteBId,
           deviceId: commandDeviceId,
           name: 'Osaka AHU 01',
@@ -540,7 +540,7 @@ function createGatewayFixture() {
           return;
         }
         state.commandRequests.push({ kind: 'create', payload, idempotencyKey });
-        const forbiddenFields = ['organizationId', 'siteId', 'principalId', 'approverRole', 'providerMethod', 'providerParams'];
+        const forbiddenFields = ['tenantId', 'siteId', 'principalId', 'approverRole', 'providerMethod', 'providerParams'];
         if (forbiddenFields.some((field) => Object.hasOwn(payload, field))
           || payload.deviceId !== commandDeviceId
           || payload.capability !== 'SET_TEMPERATURE_SETPOINT'
@@ -885,11 +885,11 @@ try {
   assert(forbiddenRoute.systemNavigation === false, 'unauthorized implemented feature remained in navigation');
   assert(forbiddenRoute.text.includes('访问被拒绝'), 'direct unauthorized route did not show Access Denied');
   assert(!forbiddenRoute.text.includes('系统状态'), 'Access Denied revealed the protected feature label');
-  assert(!forbiddenRoute.text.includes('organization.read'), 'Access Denied revealed the missing capability');
+  assert(!forbiddenRoute.text.includes('site.list'), 'Access Denied revealed the missing capability');
   assert(forbiddenRoute.roleDisplayed === true, 'descriptive role was not visible for audit context');
   recordScenario('capability-denial');
 
-  fixture.state.capabilities = ['organization.read'];
+  fixture.state.capabilities = ['site.list'];
   await navigate(cdpClient, `${webURL}/system`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'READY' && Boolean(document.querySelector('[data-testid="real-route-system"]'))`, 'authorized implemented route');
   const authorizedSystem = await evaluate(cdpClient, `({
@@ -923,7 +923,7 @@ try {
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'NOT_FOUND'`, 'unknown route');
   assert(await evaluate(cdpClient, `Boolean(document.querySelector('[data-testid="real-route-not-found"]'))`), 'unknown route did not remain 404');
 
-  fixture.state.capabilities = ['organization.read'];
+  fixture.state.capabilities = ['site.list'];
   fixture.state.platformMode = 'degraded';
   await navigate(cdpClient, `${webURL}/system`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'DEGRADED'`, 'degraded implemented route');
@@ -956,7 +956,7 @@ try {
 
   fixture.state.platformMode = 'ok';
   fixture.state.roles = ['descriptive-role-only'];
-  fixture.state.capabilities = ['site.list', 'site.read', 'equipment.list', 'device.list', 'telemetry.batch.read', 'telemetry.history.read'];
+  fixture.state.capabilities = ['site.list', 'site.read', 'asset.list', 'device.list', 'telemetry.batch.read', 'telemetry.history.read'];
   fixture.state.sitesMode = 'unavailable';
   await navigate(cdpClient, `${webURL}/`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'UNAVAILABLE' && Boolean(document.querySelector('[data-testid="real-site-discovery-unavailable"]'))`, 'Site discovery unavailable');
@@ -1006,7 +1006,7 @@ try {
   const explicitSite = await evaluate(cdpClient, `({
     siteId: document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-site-id'),
     siteName: document.querySelector('[data-testid="real-site-route-assets"]')?.textContent?.includes('Osaka Plant') ?? false,
-    organization: document.querySelector('[data-testid="real-site-route-assets"]')?.textContent?.includes('${actingOrganizationId}') ?? false,
+    tenant: document.querySelector('[data-testid="real-site-route-assets"]')?.textContent?.includes('${tenantId}') ?? false,
     dashboard: document.querySelector('[data-feature-id="site-dashboard"]')?.getAttribute('href'),
     assets: document.querySelector('[data-feature-id="site-assets"]')?.getAttribute('href'),
     energy: document.querySelector('[data-feature-id="site-energy"]')?.getAttribute('href'),
@@ -1025,10 +1025,10 @@ try {
     registryPolicyRevision: document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-registry-policy-revision'),
     telemetryPolicyRevision: document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-telemetry-policy-revision'),
     rowState: document.querySelector('.real-assets__table tbody tr')?.getAttribute('data-operating-state'),
-    equipmentText: document.querySelector('.real-assets__table tbody tr')?.textContent ?? '',
+    assetText: document.querySelector('.real-assets__table tbody tr')?.textContent ?? '',
     powerZero: Array.from(document.querySelectorAll('.real-assets__points li')).some((item) => item.textContent?.includes('主机功率') && item.textContent?.includes('0 kW')),
   })`);
-  assert(explicitSite.siteId === siteBId && explicitSite.siteName && explicitSite.organization, 'validated SiteContext was not rendered from Registry route data');
+  assert(explicitSite.siteId === siteBId && explicitSite.siteName && explicitSite.tenant, 'validated SiteContext was not rendered from Registry route data');
   assert(explicitSite.dashboard === `/sites/${siteBId}/dashboard`, 'Dashboard navigation escaped validated Site scope');
   assert(explicitSite.assets === `/sites/${siteBId}/assets`, 'Assets navigation escaped validated Site scope');
   assert(explicitSite.energy === `/sites/${siteBId}/energy`, 'Energy navigation escaped validated Site scope');
@@ -1043,7 +1043,7 @@ try {
   assert(explicitSite.businessState === 'READY' && explicitSite.catalogRevision === 'real-assets-critical-points:v1', 'Assets route omitted the operating-list readiness or catalog revision');
   assert(explicitSite.registryPolicyRevision === routePolicyRevision, `Assets route discarded Registry route-policy revision evidence: actual=${explicitSite.registryPolicyRevision} expected=${routePolicyRevision}`);
   assert(explicitSite.telemetryPolicyRevision === routePolicyRevision, `Assets route discarded Telemetry route-policy revision evidence: actual=${explicitSite.telemetryPolicyRevision} expected=${routePolicyRevision}`);
-  assert(explicitSite.rowState === 'ATTENTION' && explicitSite.equipmentText.includes('Osaka Chiller 01'), 'Assets route omitted the bound Equipment attention row');
+  assert(explicitSite.rowState === 'ATTENTION' && explicitSite.assetText.includes('Osaka Chiller 01'), 'Assets route omitted the bound Asset attention row');
   assert(explicitSite.powerZero, 'Assets route did not preserve the valid zero-power observation');
   const snapshotQueriesBeforeDetailRefresh = fixture.state.assetSnapshotQueries.length;
   await clickTestId(cdpClient, 'real-assets-open-device');
@@ -1115,7 +1115,7 @@ try {
   const oneHourQuery = fixture.state.assetHistoryQueries.at(-1);
   assert(oneHourQuery.deviceId === osakaDeviceId
     && JSON.stringify(oneHourQuery.keys) === JSON.stringify(['chiller.power', 'chiller.cop', 'chiller.cooling_capacity'])
-    && !Object.hasOwn(oneHourQuery, 'organizationId')
+    && !Object.hasOwn(oneHourQuery, 'tenantId')
     && !Object.hasOwn(oneHourQuery, 'siteId')
     && oneHourQuery.maxPointsPerKey === 240
     && Date.parse(oneHourQuery.to) - Date.parse(oneHourQuery.from) === 60 * 60 * 1000, 'one-hour history request escaped the public exact Device/key boundary');
@@ -1496,7 +1496,7 @@ try {
   assert(!forbiddenSite.text.includes(siteAId) && !forbiddenSite.text.includes('Tokyo Plant') && !forbiddenSite.text.includes('site.read'), 'Site Access Denied leaked protected metadata');
 
   fixture.state.roles = ['descriptive-role-only'];
-  fixture.state.capabilities = ['site.list', 'site.read', 'equipment.list', 'device.list', 'telemetry.batch.read', 'telemetry.history.read'];
+  fixture.state.capabilities = ['site.list', 'site.read', 'asset.list', 'device.list', 'telemetry.batch.read', 'telemetry.history.read'];
   for (const invalidPath of [
     '/sites/b1/assets',
     '/sites/b2/commands',
@@ -1555,7 +1555,7 @@ try {
     mobile: true,
   });
   fixture.state.sites = [siteA, siteB];
-  fixture.state.capabilities = ['site.list', 'site.read', 'equipment.list', 'device.list', 'telemetry.batch.read', 'telemetry.history.read'];
+  fixture.state.capabilities = ['site.list', 'site.read', 'asset.list', 'device.list', 'telemetry.batch.read', 'telemetry.history.read'];
   await navigate(cdpClient, `${webURL}/`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'CHOOSE_SITE'`, 'mobile Site chooser');
   const mobileChooser = await evaluate(cdpClient, `({
@@ -1622,7 +1622,7 @@ try {
   })`);
   assert(!mobileNotIntegrated.overflow && mobileNotIntegrated.focusedHeading, 'mobile Not Integrated was unusable');
 
-  fixture.state.capabilities = ['site.list', 'site.read', 'equipment.list', 'device.list', 'telemetry.batch.read', 'telemetry.history.read'];
+  fixture.state.capabilities = ['site.list', 'site.read', 'asset.list', 'device.list', 'telemetry.batch.read', 'telemetry.history.read'];
   fixture.state.sites = [];
   await navigate(cdpClient, `${webURL}/`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-route-state') === 'NO_AUTHORIZED_SITE'`, 'mobile No Authorized Site');
@@ -1639,7 +1639,7 @@ try {
 
   fixture.state.platformMode = 'ok';
   fixture.state.roles = ['descriptive-role-only'];
-  fixture.state.capabilities = ['organization.list', 'organization.read', 'site.list', 'site.read', 'device.read'];
+  fixture.state.capabilities = ['site.list', 'site.read', 'device.read'];
   fixture.state.logoutMode = 'failure';
   await navigate(cdpClient, `${webURL}/logout-proof`);
   await waitForCondition(cdpClient, `document.querySelector('main')?.getAttribute('data-shell-state') === 'READY'`, 'authenticated shell before logout');
@@ -1697,7 +1697,7 @@ try {
     const duration = Date.parse(query.to) - Date.parse(query.from);
     return query.deviceId === osakaDeviceId
       && JSON.stringify(query.keys) === JSON.stringify(['chiller.power', 'chiller.cop', 'chiller.cooling_capacity'])
-      && !Object.hasOwn(query, 'organizationId')
+      && !Object.hasOwn(query, 'tenantId')
       && !Object.hasOwn(query, 'siteId')
       && duration > 0
       && duration <= 24 * 60 * 60 * 1000
@@ -1710,7 +1710,7 @@ try {
     assert(request.headers.origin === webURL, `Energy query Origin was not the Real application origin: ${request.headers.origin}`);
   }
   assert(fixture.state.energyQueries.length === energyRequests.length, 'not every Energy request was parsed by the fixture');
-  assert(fixture.state.energyQueries.every((query) => query.organizationId === actingOrganizationId), 'Energy query did not use the authenticated Organization');
+  assert(fixture.state.energyQueries.every((query) => query.tenantId === tenantId), 'Energy query did not use the authenticated Tenant');
   assert(fixture.state.energyQueries.every((query) => [siteAId, siteBId].includes(query.siteId)), 'Energy query escaped the authorized Site set');
   assert(fixture.state.energyQueries.every((query) => query.qualityPolicy === 'VALID_ONLY'), 'Energy queries did not preserve the URL quality policy');
   assert(fixture.state.energyQueries.some((query) => query.siteId === siteAId), 'Dashboard did not query the sole or switched authorized Site');
@@ -1734,7 +1734,7 @@ try {
   }
   const createdCommand = fixture.state.commandRequests.find((entry) => entry.kind === 'create');
   assert(createdCommand?.payload?.deviceId === commandDeviceId && createdCommand?.payload?.parameters?.setpointC === 26.5, 'Command creation omitted the selected Device or setpoint');
-  assert(!['organizationId', 'siteId', 'principalId', 'approverRole', 'providerMethod', 'providerParams'].some((field) => Object.hasOwn(createdCommand?.payload ?? {}, field)), 'Command creation sent browser-owned authority fields');
+  assert(!['tenantId', 'siteId', 'principalId', 'approverRole', 'providerMethod', 'providerParams'].some((field) => Object.hasOwn(createdCommand?.payload ?? {}, field)), 'Command creation sent browser-owned authority fields');
   assert(fixture.state.commandRequests.some((entry) => entry.kind === 'approve'), 'Real Commands did not submit the empty approval request');
   const forbiddenHeaders = fixture.state.requests.filter((entry) =>
     ['x-site-id', 'x-organization-id', 'x-role', 'x-admin', 'x-scope'].some((name) => name in entry.headers));
@@ -1769,14 +1769,14 @@ try {
   });
   assert(sensitiveLogEvents.length === 0, 'protected Shell values reached browser logs');
 
-  const organizationAuthorityRequests = fixture.state.requests.filter((entry) => 'x-organization-id' in entry.headers);
+  const legacyOrganizationHeaderRequests = fixture.state.requests.filter((entry) => 'x-organization-id' in entry.headers);
   const siteAuthorityRequests = fixture.state.requests.filter((entry) => 'x-site-id' in entry.headers);
   const otherAuthorityRequests = fixture.state.requests.filter((entry) =>
     ['x-role', 'x-admin', 'x-scope'].some((name) => name in entry.headers));
   browserEvidence.network = {
     requestCount: fixture.state.requests.length,
     browserAuthorizationHeaderCount: authorizationRequests.length,
-    browserOrganizationAuthorityHeaderCount: organizationAuthorityRequests.length,
+    forbiddenLegacyOrganizationHeaderCount: legacyOrganizationHeaderRequests.length,
     browserSiteAuthorityHeaderCount: siteAuthorityRequests.length,
     browserOtherAuthorityHeaderCount: otherAuthorityRequests.length,
   };

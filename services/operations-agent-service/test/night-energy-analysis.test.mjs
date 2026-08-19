@@ -17,7 +17,7 @@ const benchmarkComparison = benchmarkScenario.inputFacts.find(
 
 const tenantId = '0198f5c0-7c00-7000-8000-000000000001';
 const siteId = '0198f5c0-7c00-7000-8000-000000000002';
-const equipmentIds = [
+const assetIds = [
   '0198f5c0-7c00-7000-8000-000000000010',
   '0198f5c0-7c00-7000-8000-000000000011',
   '0198f5c0-7c00-7000-8000-000000000012',
@@ -50,7 +50,7 @@ const baseInput = {
     tenantId,
     siteId,
     timezone: 'Asia/Shanghai',
-    equipmentIds,
+    assetIds,
   },
   window: {
     startLocalTime: '22:00',
@@ -103,7 +103,7 @@ test('period planning uses the same DST-aware boundaries as deterministic analys
   });
 });
 
-test('complete benchmark data confirms a 24% Site increase without Equipment attribution', () => {
+test('complete benchmark data confirms a 24% Site increase without Asset attribution', () => {
   const result = analyzeSiteNightEnergy(baseInput);
 
   assert.equal(result.status, 'SUPPORTED_SITE_FINDING');
@@ -121,9 +121,9 @@ test('complete benchmark data confirms a 24% Site increase without Equipment att
     statement: 'Target night energy was 1240 kWh versus a 1000 kWh baseline, a 24% increase.',
     supportEvidenceKinds: ['FACT', 'ALGORITHM_RESULT'],
   });
-  assert.equal(result.equipmentAttribution.status, 'UNABLE_TO_CONCLUDE');
+  assert.equal(result.assetAttribution.status, 'UNABLE_TO_CONCLUDE');
   assert.deepEqual(
-    result.equipmentAttribution.requiredNext.map(({ status, kind, capability }) => ({
+    result.assetAttribution.requiredNext.map(({ status, kind, capability }) => ({
       status,
       kind,
       capability,
@@ -131,13 +131,13 @@ test('complete benchmark data confirms a 24% Site increase without Equipment att
     [
       {
         status: 'REQUIRED_NEXT',
-        kind: 'EQUIPMENT_ENERGY_BINDINGS',
-        capability: 'registry.getEquipmentEnergyBindings',
+        kind: 'ASSET_ENERGY_BINDINGS',
+        capability: 'registry.getAssetEnergyBindings',
       },
       {
         status: 'REQUIRED_NEXT',
-        kind: 'EQUIPMENT_ENERGY_PERIOD_COMPARISON',
-        capability: 'analytics.energy.getEquipmentSeries',
+        kind: 'ASSET_ENERGY_PERIOD_COMPARISON',
+        capability: 'analytics.energy.getAssetSeries',
       },
     ],
   );

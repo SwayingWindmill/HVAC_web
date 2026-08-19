@@ -68,20 +68,22 @@ FROM iam.resolve_principal_identity($1, $2)
 func loadAlarmPolicyRevision(ctx context.Context, transaction pgx.Tx) (string, error) {
 	var policyKey string
 	var policyRevision int64
+	var authorizationRevision int64
 	if err := transaction.QueryRow(ctx, `
-SELECT policy_key, policy_revision
-FROM iam.policies
-WHERE status = 'ACTIVE'
-  AND policy_key = 'alarm-access'
-ORDER BY policy_revision DESC
+SELECT policy.policy_key, policy.policy_revision, authorization.revision
+FROM iam.policies policy
+JOIN iam.authorization_revisions authorization ON authorization.tenant_id = policy.tenant_id
+WHERE policy.status = 'ACTIVE'
+  AND policy.policy_key = 'alarm-access'
+ORDER BY policy.policy_revision DESC
 LIMIT 1
-`).Scan(&policyKey, &policyRevision); err != nil {
+`).Scan(&policyKey, &policyRevision, &authorizationRevision); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "alarm-access:unconfigured", nil
 		}
 		return "", fmt.Errorf("read active IAM Alarm policy: %w", err)
 	}
-	return fmt.Sprintf("%s:%d", policyKey, policyRevision), nil
+	return fmt.Sprintf("%s:%d/iam:%d", policyKey, policyRevision, authorizationRevision), nil
 }
 
 func loadAlarmPermissions(ctx context.Context, transaction pgx.Tx) ([]AlarmPermission, error) {

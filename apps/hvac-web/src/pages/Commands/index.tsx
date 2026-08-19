@@ -27,7 +27,7 @@ import {
   commandErrorMessage,
   createCommand,
   getCommand,
-  MOCK_COMMAND_EQUIPMENT_ID,
+  MOCK_COMMAND_ASSET_ID,
   MOCK_COMMAND_POINT_ID,
   MOCK_PENDING_COMMAND_ID,
   type Command,
@@ -213,7 +213,7 @@ export default function Commands() {
 
   const createMutation = useMutation({
     mutationFn: (values: CreateFormValues) => createCommand({
-      equipmentId: MOCK_COMMAND_EQUIPMENT_ID,
+      assetId: MOCK_COMMAND_ASSET_ID,
       commandPointId: MOCK_COMMAND_POINT_ID,
       parameters: { setpointC: values.setpointC },
     }),

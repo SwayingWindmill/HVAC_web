@@ -61,7 +61,6 @@ const (
 	SourceManual        SourceDomain = "MANUAL"
 	SourceAlarm         SourceDomain = "ALARM"
 	SourceAsset         SourceDomain = "ASSET"
-	SourceEquipment     SourceDomain = "EQUIPMENT"
 	SourceInvestigation SourceDomain = "INVESTIGATION"
 	SourceExternal      SourceDomain = "EXTERNAL"
 )
@@ -745,7 +744,7 @@ func validOperation(value Operation) bool {
 
 func validSourceDomain(value SourceDomain) bool {
 	switch value {
-	case SourceManual, SourceAlarm, SourceAsset, SourceEquipment, SourceInvestigation, SourceExternal:
+	case SourceManual, SourceAlarm, SourceAsset, SourceInvestigation, SourceExternal:
 		return true
 	default:
 		return false

@@ -83,13 +83,13 @@ function principal(
         roles: ['descriptive-only'],
       },
       executingServicePrincipal: { service: 'platform-gateway', spiffeId: 'spiffe://hvac.local/platform-gateway' },
-      actingOrganizationId: '01900000-0000-7000-8000-000000000001',
+      tenantId: '01900000-0000-7000-8000-000000000001',
       audience: 'iam-service',
       policyRevision: 'gateway:1',
       delegationExpiresAt: expiresAt,
     },
     authorization: {
-      capabilitySetVersion: 6,
+      capabilitySetVersion: 7,
       policyRevision: 'iam:1',
       capabilities,
     },
@@ -97,6 +97,7 @@ function principal(
       id: 'session-1',
       expiresAt,
       csrfToken: '[REDACTED_SECRET]',
+      idleTimeoutMs: 30 * 60 * 1000,
       revocationObjectiveMs: 1000,
       lastAuditMessageId: 'audit-1',
     },
@@ -114,6 +115,7 @@ function environment() {
       origin: 'https://hvac.example',
       now: () => Date.parse('2026-07-28T05:00:00.000Z'),
       navigate: (target) => navigations.push(target),
+      postNavigate: (target) => navigations.push(target),
       setTimer: (handler, delay) => {
         const id = ++nextTimer;
         timers.set(id, { handler, delay });
@@ -139,11 +141,11 @@ function platformStatus(status = 'ok') {
 
 function registrySite(
   id = '01900000-0001-7000-8000-000000000001',
-  owningOrganizationId = '01900000-0000-7000-8000-000000000001',
+  tenantId = '01900000-0000-7000-8000-000000000001',
 ) {
   return {
     id,
-    owningOrganizationId,
+    tenantId,
     code: `SITE-${id.slice(-4)}`,
     displayName: `Site ${id.slice(-4)}`,
     timezone: 'Asia/Tokyo',
@@ -164,7 +166,7 @@ function client(overrides = {}) {
   return {
     getCurrentPrincipal: async () => ({ data: principal() }),
     getPlatformStatus: async () => ({ data: platformStatus() }),
-    listOrganizationSites: async () => ({ data: siteCollection() }),
+    listSites: async () => ({ data: siteCollection() }),
     loginUrl: ({ returnTo }) => `/api/v1/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
     logout: async () => ({ data: undefined, location: providerLogoutURL }),
     ...overrides,
@@ -267,10 +269,10 @@ test('session expiration purges protected memory and starts login again', async 
   const env = environment();
   const runtime = runtimeModule.createShellRuntime(client(), env.value);
   await runtime.bootstrap('/system');
-  assert.equal(env.timers.size, 1);
+  assert.equal(env.timers.size, 2);
 
-  const [{ handler }] = env.timers.values();
-  handler();
+  const expirationTimer = [...env.timers.values()].sort((left, right) => right.delay - left.delay)[0];
+  expirationTimer.handler();
   assert.equal(runtime.current().state, 'LOGIN_REQUIRED');
   assert.equal(runtime.current().principal, undefined);
   assert.deepEqual(env.navigations, ['/api/v1/auth/login?returnTo=%2Fsystem']);
@@ -293,7 +295,7 @@ test('disposing an unmounted shell clears timers and suppresses later navigation
   const env = environment();
   const runtime = runtimeModule.createShellRuntime(client(), env.value);
   await runtime.bootstrap('/system');
-  assert.equal(env.timers.size, 1);
+  assert.equal(env.timers.size, 2);
 
   runtime.dispose();
   runtime.purge('SESSION_EXPIRED', true);
@@ -383,7 +385,7 @@ test('does not request Registry Sites without the effective site.list capability
   const env = environment();
   const runtime = runtimeModule.createShellRuntime(client({
     getCurrentPrincipal: async () => ({ data: principal(undefined, ['site.read']) }),
-    listOrganizationSites: async () => {
+    listSites: async () => {
       listCalls += 1;
       return { data: siteCollection([registrySite()]) };
     },
@@ -405,7 +407,7 @@ test('completed Site discovery does not orphan a pending platform request', asyn
       platformSignal = signal;
       return pendingPlatform.promise;
     },
-    listOrganizationSites: async () => ({ data: siteCollection([registrySite()]) }),
+    listSites: async () => ({ data: siteCollection([registrySite()]) }),
   }), env.value);
 
   void runtime.bootstrap('/sites');
@@ -424,7 +426,7 @@ test('Site discovery is not blocked by a pending platform status request', async
   const env = environment();
   const runtime = runtimeModule.createShellRuntime(client({
     getPlatformStatus: () => pendingPlatform.promise,
-    listOrganizationSites: async () => ({ data: siteCollection([registrySite()]) }),
+    listSites: async () => ({ data: siteCollection([registrySite()]) }),
   }), env.value);
 
   const bootstrap = runtime.bootstrap('/sites');
@@ -441,14 +443,14 @@ test('Site discovery is not blocked by a pending platform status request', async
   assert.equal(runtime.current().sites.state, 'available');
 });
 
-test('discovers all authorized Sites only under the acting Organization', async () => {
+test('discovers all authorized Sites through bounded cursor pagination', async () => {
   const calls = [];
   const siteA = registrySite();
   const siteB = registrySite('01900000-0002-7000-8000-000000000002');
   const env = environment();
   const runtime = runtimeModule.createShellRuntime(client({
-    listOrganizationSites: async (organizationId, params) => {
-      calls.push({ organizationId, params });
+    listSites: async (params) => {
+      calls.push(params);
       if (!params.cursor) {
         return { data: siteCollection([siteA], 'cursor.page-two', true) };
       }
@@ -459,12 +461,10 @@ test('discovers all authorized Sites only under the acting Organization', async 
   await runtime.bootstrap('/sites');
 
   assert.equal(calls.length, 2);
-  assert.equal(calls[0].organizationId, '01900000-0000-7000-8000-000000000001');
-  assert.equal(calls[0].params.limit, 100);
-  assert.equal(calls[0].params.cursor, undefined);
-  assert.equal(calls[1].organizationId, '01900000-0000-7000-8000-000000000001');
-  assert.equal(calls[1].params.limit, 100);
-  assert.equal(calls[1].params.cursor, 'cursor.page-two');
+  assert.equal(calls[0].limit, 100);
+  assert.equal(calls[0].cursor, undefined);
+  assert.equal(calls[1].limit, 100);
+  assert.equal(calls[1].cursor, 'cursor.page-two');
   assert.equal(runtime.current().sites.state, 'available');
   assert.equal(runtime.current().sites.items.length, 2);
   assert.equal(runtime.current().sites.items[0].id, siteA.id);
@@ -481,8 +481,7 @@ test('an empty Registry collection becomes an explicit available zero-Site resul
   assert.equal(runtime.current().sites.items.length, 0);
 });
 
-test('rejects malformed, cross-Organization, and duplicate Site discovery responses', async () => {
-  const actingOrganizationId = '01900000-0000-7000-8000-000000000001';
+test('rejects malformed, cross-Tenant, and duplicate Site discovery responses', async () => {
   const invalidCollections = [
     [registrySite('b1')],
     [registrySite('01900000-0001-7000-8000-000000000001', '01900000-0009-7000-8000-000000000009')],
@@ -492,10 +491,7 @@ test('rejects malformed, cross-Organization, and duplicate Site discovery respon
   for (const items of invalidCollections) {
     const env = environment();
     const runtime = runtimeModule.createShellRuntime(client({
-      listOrganizationSites: async (organizationId) => {
-        assert.equal(organizationId, actingOrganizationId);
-        return { data: siteCollection(items) };
-      },
+      listSites: async () => ({ data: siteCollection(items) }),
     }), env.value);
 
     await runtime.bootstrap('/sites');
@@ -510,7 +506,7 @@ test('rejects malformed, cross-Organization, and duplicate Site discovery respon
 test('an authentication failure during Site discovery purges protected memory', async () => {
   const env = environment();
   const runtime = runtimeModule.createShellRuntime(client({
-    listOrganizationSites: async () => {
+    listSites: async () => {
       throw { problem: { status: 401, code: 'SESSION_INVALID', detail: 'session invalid', traceId: '5'.repeat(32), retryable: false } };
     },
   }), env.value);
@@ -527,7 +523,7 @@ test('late Site discovery cannot reset an in-flight logout', async () => {
   const pendingLogout = deferred();
   const env = environment();
   const runtime = runtimeModule.createShellRuntime(client({
-    listOrganizationSites: () => pendingSites.promise,
+    listSites: () => pendingSites.promise,
     logout: () => pendingLogout.promise,
   }), env.value);
 
@@ -554,7 +550,7 @@ test('same-Site route navigation does not invoke a Site-change purge', async () 
   const site = registrySite();
   const env = environment();
   const runtime = runtimeModule.createShellRuntime(client({
-    listOrganizationSites: async () => ({ data: siteCollection([site]) }),
+    listSites: async () => ({ data: siteCollection([site]) }),
   }), env.value);
   await runtime.bootstrap(`/sites/${site.id}/assets`);
   runtime.activateSiteScope(site.id);
@@ -576,7 +572,7 @@ test('cross-Site navigation warns for drafts and purges before navigation', asyn
   const events = [];
   const env = environment();
   const runtime = runtimeModule.createShellRuntime(client({
-    listOrganizationSites: async () => ({ data: siteCollection([siteA, siteB]) }),
+    listSites: async () => ({ data: siteCollection([siteA, siteB]) }),
   }), env.value);
   await runtime.bootstrap(`/sites/${siteA.id}/assets`);
   runtime.activateSiteScope(siteA.id);
@@ -611,7 +607,7 @@ test('failed Site purge blocks navigation and exposes a fail-closed transition',
   const siteB = registrySite('01900000-0002-7000-8000-000000000002');
   const env = environment();
   const runtime = runtimeModule.createShellRuntime(client({
-    listOrganizationSites: async () => ({ data: siteCollection([siteA, siteB]) }),
+    listSites: async () => ({ data: siteCollection([siteA, siteB]) }),
   }), env.value);
   await runtime.bootstrap(`/sites/${siteA.id}/assets`);
   runtime.activateSiteScope(siteA.id);
@@ -636,7 +632,7 @@ test('Session loss and logout completion invoke the same protected purge semanti
     const events = [];
     const env = environment();
     const runtime = runtimeModule.createShellRuntime(client({
-      listOrganizationSites: async () => ({ data: siteCollection([site]) }),
+      listSites: async () => ({ data: siteCollection([site]) }),
     }), env.value);
     await runtime.bootstrap(`/sites/${site.id}/assets`);
     runtime.activateSiteScope(site.id);
@@ -668,7 +664,7 @@ test('material policy revision changes purge scope and rebootstrap the Principal
       response.authorization.policyRevision = policyRevision;
       return { data: response };
     },
-    listOrganizationSites: async () => ({ data: siteCollection([site]) }),
+    listSites: async () => ({ data: siteCollection([site]) }),
   }), env.value);
   await runtime.bootstrap(`/sites/${site.id}/assets`);
   runtime.activateSiteScope(site.id);
@@ -692,7 +688,7 @@ test('Session loss interrupts a pending Site purge before target navigation', as
   const pendingPurge = deferred();
   const env = environment();
   const runtime = runtimeModule.createShellRuntime(client({
-    listOrganizationSites: async () => ({ data: siteCollection([siteA, siteB]) }),
+    listSites: async () => ({ data: siteCollection([siteA, siteB]) }),
   }), env.value);
   await runtime.bootstrap(`/sites/${siteA.id}/assets`);
   runtime.activateSiteScope(siteA.id);
@@ -719,7 +715,7 @@ test('realtime status is scoped to the active Site and clears before Site naviga
   const pendingPurge = deferred();
   const env = environment();
   const runtime = runtimeModule.createShellRuntime(client({
-    listOrganizationSites: async () => ({ data: siteCollection([siteA, siteB]) }),
+    listSites: async () => ({ data: siteCollection([siteA, siteB]) }),
   }), env.value);
   await runtime.bootstrap(`/sites/${siteA.id}/assets`);
   runtime.activateSiteScope(siteA.id);

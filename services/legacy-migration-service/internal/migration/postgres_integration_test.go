@@ -33,10 +33,10 @@ func TestPostgresMigrationUsesTenantSiteHierarchy(t *testing.T) {
 
 	system := fmt.Sprintf("v2-site-%d", time.Now().UnixNano())
 	site := integrationRecord(KindSite, system, "site-1", "b")
-	equipment := integrationRecord(KindEquipment, system, "equipment-1", "c")
+	asset := integrationRecord(KindAsset, system, "asset-1", "c")
 	device := integrationRecord(KindDevice, system, "device-1", "d")
 
-	summary, err := migrator.Apply(ctx, []Record{device, equipment, site})
+	summary, err := migrator.Apply(ctx, []Record{device, asset, site})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestPostgresMigrationUsesTenantSiteHierarchy(t *testing.T) {
 		t.Fatalf("initial summary = %#v", summary)
 	}
 
-	replay, err := migrator.Apply(ctx, []Record{site, equipment, device})
+	replay, err := migrator.Apply(ctx, []Record{site, asset, device})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestPostgresMigrationUsesTenantSiteHierarchy(t *testing.T) {
 		t.Fatalf("replay summary = %#v", replay)
 	}
 
-	missingParent := integrationRecord(KindEquipment, system, "missing-parent", "e")
+	missingParent := integrationRecord(KindAsset, system, "missing-parent", "e")
 	missingParent.SiteRef = &SourceRef{SourceSystem: system, SourceTable: "site", SourceKey: "absent-site"}
 	missing, err := migrator.ApplyRecord(ctx, missingParent)
 	if err != nil {

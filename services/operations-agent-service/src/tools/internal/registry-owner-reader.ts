@@ -30,13 +30,13 @@ export interface RegistrySiteDto {
   readonly updatedAt: string;
 }
 
-export interface RegistryEquipmentDto {
+export interface RegistryAssetDto {
   readonly id: string;
   readonly tenantId: string;
   readonly siteId: string;
   readonly code: string;
   readonly displayName: string;
-  readonly equipmentType: string;
+  readonly assetType: string;
   readonly status: string;
   readonly revision: number;
   readonly createdAt: string;
@@ -46,9 +46,9 @@ export interface RegistryEquipmentDto {
 export type RegistryOwnerPayload =
   | { readonly kind: 'SITE'; readonly site: RegistrySiteDto }
   | {
-    readonly kind: 'SITE_EQUIPMENT';
+    readonly kind: 'SITE_ASSETS';
     readonly siteId: string;
-    readonly equipment: readonly RegistryEquipmentDto[];
+    readonly assets: readonly RegistryAssetDto[];
   };
 
 export type RegistryOwnerReaderConfig = OwnerReaderHttpConfig;
@@ -65,13 +65,13 @@ const siteKeys = [
   'updatedAt',
 ] as const;
 
-const equipmentKeys = [
+const assetKeys = [
   'id',
   'tenantId',
   'siteId',
   'code',
   'displayName',
-  'equipmentType',
+  'assetType',
   'status',
   'revision',
   'createdAt',
@@ -122,15 +122,15 @@ const decodeSite = (value: unknown): RegistrySiteDto => {
   return value as unknown as RegistrySiteDto;
 };
 
-const decodeEquipment = (value: unknown): RegistryEquipmentDto => {
+const decodeAsset = (value: unknown): RegistryAssetDto => {
   if (!isRecord(value)
-    || !hasExactKeys(value, equipmentKeys)
+    || !hasExactKeys(value, assetKeys)
     || !isUuidV7(value.id)
     || !isUuidV7(value.tenantId)
     || !isUuidV7(value.siteId)
     || !isNonEmptyString(value.code)
     || !isNonEmptyString(value.displayName)
-    || !isNonEmptyString(value.equipmentType)
+    || !isNonEmptyString(value.assetType)
     || !isNonEmptyString(value.status)
     || !isRevision(value.revision)
     || !isInstant(value.createdAt)
@@ -138,10 +138,10 @@ const decodeEquipment = (value: unknown): RegistryEquipmentDto => {
     || Date.parse(value.createdAt) > Date.parse(value.updatedAt)) {
     throw new OwnerReadError(
       'OWNER_RESPONSE_INVALID',
-      'The Registry Owner returned an invalid Equipment representation.',
+      'The Registry Owner returned an invalid Asset representation.',
     );
   }
-  return value as unknown as RegistryEquipmentDto;
+  return value as unknown as RegistryAssetDto;
 };
 
 const assertSiteScope = (
@@ -152,7 +152,7 @@ const assertSiteScope = (
   if (!isNonEmptyString(scope.tenantId)
     || !isNonEmptyString(scope.siteId)
     || scope.siteId !== requestedSiteId
-    || scope.equipmentId !== null
+    || scope.assetId !== null
     || scope.deviceId !== null) {
     throw new OwnerReadError(
       'OWNER_REQUEST_INVALID',
@@ -224,12 +224,12 @@ const decodeCollection = (value: unknown): {
   };
 };
 
-const readSiteEquipment = async (
+const readSiteAssets = async (
   input: OwnerReadInput<RegistryReadRequest>,
   config: ReturnType<typeof normalizeOwnerReaderHttpConfig>,
 ): Promise<OwnerReadResult> => {
   const requestedScope = assertSiteScope(input);
-  const equipment: RegistryEquipmentDto[] = [];
+  const assets: RegistryAssetDto[] = [];
   const identities = new Set<string>();
   let cursor: string | null = null;
   let page = 0;
@@ -238,13 +238,13 @@ const readSiteEquipment = async (
     if (page > maximumPages) {
       throw new OwnerReadError(
         'OWNER_RESPONSE_TOO_LARGE',
-        'The Registry Equipment collection exceeded the accepted page budget.',
+        'The Registry Asset collection exceeded the accepted page budget.',
       );
     }
     const query = new URLSearchParams({ limit: String(pageLimit) });
     if (cursor !== null) query.set('cursor', cursor);
     const payload = await fetchOwnerJson(config, {
-      path: `/internal/v1/registry/sites/${encodeURIComponent(requestedScope.siteId)}/equipment?${query}`,
+      path: `/internal/v1/registry/sites/${encodeURIComponent(requestedScope.siteId)}/assets?${query}`,
       method: 'GET',
       headers: createOwnerHeaders(
         page === 1 ? input.request.requestId : `${input.request.requestId}:page:${page}`,
@@ -254,24 +254,24 @@ const readSiteEquipment = async (
     });
     const collection = decodeCollection(payload);
     for (const item of collection.items) {
-      const decoded = decodeEquipment(item);
+      const decoded = decodeAsset(item);
       if (decoded.tenantId !== requestedScope.tenantId
         || decoded.siteId !== requestedScope.siteId
         || identities.has(decoded.id)) {
         throw new OwnerReadError(
           'OWNER_RESPONSE_INVALID',
-          'The Registry Equipment identity does not match the authorized request.',
+          'The Registry Asset identity does not match the authorized request.',
         );
       }
       identities.add(decoded.id);
-      equipment.push(decoded);
+      assets.push(decoded);
     }
     cursor = collection.hasMore ? collection.nextCursor : null;
   } while (cursor !== null);
 
   const collectionRevision = createHash('sha256')
     .update(JSON.stringify(
-      [...equipment]
+      [...assets]
         .sort((left, right) => left.id.localeCompare(right.id))
         .map(({ id, revision }) => [id, revision]),
     ))
@@ -280,13 +280,13 @@ const readSiteEquipment = async (
     requestId: input.request.requestId,
     owner: 'registry',
     scope: { ...input.context.scope },
-    revision: `registry-site-equipment:sha256:${collectionRevision}`,
+    revision: `registry-site-assets:sha256:${collectionRevision}`,
     quality: 'GOOD',
-    provenance: 'platform-core-service:registry-site-equipment/v1',
+    provenance: 'platform-core-service:registry-site-assets/v1',
     payload: {
-      kind: 'SITE_EQUIPMENT',
+      kind: 'SITE_ASSETS',
       siteId: requestedScope.siteId,
-      equipment,
+      assets,
     } satisfies RegistryOwnerPayload,
   };
 };
@@ -302,7 +302,7 @@ export const createRegistryOwnerReader = (
       if (readInput.request.tool === 'registry.getSite') {
         return readSite(readInput, config);
       }
-      return readSiteEquipment(readInput, config);
+      return readSiteAssets(readInput, config);
     },
   };
   return Object.freeze(reader);

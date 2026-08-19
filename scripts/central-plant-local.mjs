@@ -93,7 +93,7 @@ SELECT
   min(period_start),
   max(period_end)
 FROM analytics.energy_interval_facts
-WHERE organization_id = '${centralPlantIdentity.organizationId}'
+WHERE tenant_id = '${centralPlantIdentity.tenantId}'
   AND site_id = '${centralPlantIdentity.siteId}'
   AND device_id = '${centralPlantDevices.find((device) => device.name === 'METER-HVAC-TOTAL').platformDeviceId}'
   AND telemetry_key = 'hvac_meter.energy'

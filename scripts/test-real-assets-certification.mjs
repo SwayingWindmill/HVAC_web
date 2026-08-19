@@ -7,7 +7,7 @@ import {
   validateRealAssetsCertificationEvidence,
 } from './real-assets-certification-lib.mjs';
 
-const organizationId = '01940000-0000-7000-8000-000000000001';
+const tenantId = '01940000-0000-7000-8000-000000000001';
 const siteId = '01940000-0001-7000-8000-000000000001';
 
 function validEvidence() {
@@ -44,9 +44,9 @@ function validEvidence() {
 }
 
 test('builds the frozen 200 Device certification inventory with all required states', () => {
-  const inventory = buildCertificationInventory({ organizationId, siteId });
+  const inventory = buildCertificationInventory({ tenantId, siteId });
   assert.equal(inventory.devices.length, 200);
-  assert.equal(inventory.equipment.length, 20);
+  assert.equal(inventory.assets.length, 20);
   assert.equal(inventory.bindings.length, 200);
   assert.equal(inventory.unboundDeviceIds.length, 5);
   assert.equal(inventory.ambiguousDeviceIds.length, 5);

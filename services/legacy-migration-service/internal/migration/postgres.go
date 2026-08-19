@@ -469,8 +469,8 @@ func businessTargetMatches(ctx context.Context, tx pgx.Tx, targetID, siteID stri
 	switch record.Kind {
 	case KindSite:
 		err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM core_registry.sites WHERE id=$1 AND tenant_id=$2::uuid AND code=$3 AND display_name=$4 AND timezone=$5 AND status=$6)`, targetID, record.TenantID, record.Code, record.DisplayName, record.Timezone, record.Status).Scan(&matches)
-	case KindEquipment:
-		err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM core_registry.equipment WHERE id=$1 AND tenant_id=$2::uuid AND site_id=$3 AND code=$4 AND display_name=$5 AND equipment_type=$6 AND status=$7)`, targetID, record.TenantID, siteID, record.Code, record.DisplayName, record.ResourceType, record.Status).Scan(&matches)
+	case KindAsset:
+		err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM core_registry.assets WHERE id=$1 AND tenant_id=$2::uuid AND site_id=$3 AND code=$4 AND display_name=$5 AND asset_type=$6 AND status=$7)`, targetID, record.TenantID, siteID, record.Code, record.DisplayName, record.ResourceType, record.Status).Scan(&matches)
 	case KindDevice:
 		err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM core_registry.devices WHERE id=$1 AND tenant_id=$2::uuid AND site_id=$3 AND code=$4 AND display_name=$5 AND device_type=$6 AND status=$7)`, targetID, record.TenantID, siteID, record.Code, record.DisplayName, record.ResourceType, record.Status).Scan(&matches)
 	default:
@@ -489,8 +489,8 @@ func retireBusinessTarget(ctx context.Context, tx pgx.Tx, now time.Time, targetI
 	case KindSite:
 		command = `UPDATE core_registry.sites SET status='RETIRED', revision=revision+1, updated_at=$2 WHERE id=$1`
 		arguments = []any{targetID, now}
-	case KindEquipment:
-		command = `UPDATE core_registry.equipment SET status='RETIRED', revision=revision+1, updated_at=$3 WHERE id=$1 AND site_id=$2`
+	case KindAsset:
+		command = `UPDATE core_registry.assets SET status='RETIRED', revision=revision+1, updated_at=$3 WHERE id=$1 AND site_id=$2`
 		arguments = []any{targetID, siteID, now}
 	case KindDevice:
 		command = `UPDATE core_registry.devices SET status='RETIRED', revision=revision+1, updated_at=$3 WHERE id=$1 AND site_id=$2`
@@ -516,8 +516,8 @@ func insertBusinessWithSavepoint(ctx context.Context, tx pgx.Tx, now time.Time, 
 	switch record.Kind {
 	case KindSite:
 		_, err = tx.Exec(ctx, `INSERT INTO core_registry.sites (id,tenant_id,code,display_name,timezone,status,revision,created_at,updated_at) VALUES ($1,$2::uuid,$3,$4,$5,$6,1,$7,$7)`, targetID, record.TenantID, strings.TrimSpace(record.Code), strings.TrimSpace(record.DisplayName), record.Timezone, record.Status, now)
-	case KindEquipment:
-		_, err = tx.Exec(ctx, `INSERT INTO core_registry.equipment (id,tenant_id,site_id,code,display_name,equipment_type,status,revision,created_at,updated_at) VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,1,$8,$8)`, targetID, record.TenantID, siteID, strings.TrimSpace(record.Code), strings.TrimSpace(record.DisplayName), record.ResourceType, record.Status, now)
+	case KindAsset:
+		_, err = tx.Exec(ctx, `INSERT INTO core_registry.assets (id,tenant_id,site_id,code,display_name,asset_type,status,revision,created_at,updated_at) VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,1,$8,$8)`, targetID, record.TenantID, siteID, strings.TrimSpace(record.Code), strings.TrimSpace(record.DisplayName), record.ResourceType, record.Status, now)
 	case KindDevice:
 		_, err = tx.Exec(ctx, `INSERT INTO core_registry.devices (id,tenant_id,site_id,code,display_name,device_type,status,revision,created_at,updated_at) VALUES ($1,$2::uuid,$3,$4,$5,$6,$7,1,$8,$8)`, targetID, record.TenantID, siteID, strings.TrimSpace(record.Code), strings.TrimSpace(record.DisplayName), record.ResourceType, record.Status, now)
 	default:

@@ -1,4 +1,8 @@
 {
+  "status": "SUPERSEDED",
+  "historicalEvidenceOnly": true,
+  "supersededBy": "contracts/ownership/route-ownership.v1.json",
+  "supersessionReason": "ADR-0013/S00 removed Organization/Equipment compatibility routes and rollout authority.",
   "routeRegistryRevision": 19,
   "routes": {
     "GET /api/v1/health": {

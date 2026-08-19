@@ -151,7 +151,7 @@ export const normalizeRuntimePlanningContext = (
     scope: Object.freeze({
       tenantId: value.scope.tenantId,
       siteId: requireNullableIdentity(value.scope.siteId, 'Site identity'),
-      equipmentId: requireNullableIdentity(value.scope.equipmentId, 'Equipment identity'),
+      assetId: requireNullableIdentity(value.scope.assetId, 'Asset identity'),
       deviceId: requireNullableIdentity(value.scope.deviceId, 'Device identity'),
     }),
     revision: value.revision as RuntimePlanningContext['revision'],

@@ -23,16 +23,15 @@ func TestPrepareReconciliationRequestProducesStableHashForEquivalentOrdering(t *
 			Status:        PrincipalStatusActive,
 		},
 		Memberships: []ReconciledMembership{
-			{OrganizationID: "018f1e00-0000-7000-8000-000000000003", Status: FactStatusActive, ValidFrom: validFrom},
-			{OrganizationID: "018f1e00-0000-7000-8000-000000000001", Status: FactStatusActive, ValidFrom: validFrom},
+			{TenantID: "018f1d00-0000-7000-8000-000000000001", Status: FactStatusActive, ValidFrom: validFrom},
 		},
 		RoleBindings: []ReconciledRoleBinding{
 			{
-				OrganizationID: "018f1e00-0000-7000-8000-000000000003",
-				RoleKey:        " registry-reader ",
-				Actions:        []registryauth.Action{registryauth.ActionSiteRead, registryauth.ActionEquipmentRead, registryauth.ActionSiteRead},
-				Effect:         BindingEffectAllow,
-				ValidFrom:      validFrom,
+				TenantID:  "018f1d00-0000-7000-8000-000000000001",
+				RoleKey:   " registry-reader ",
+				Actions:   []registryauth.Action{registryauth.ActionSiteRead, registryauth.ActionAssetRead, registryauth.ActionSiteRead},
+				Effect:    BindingEffectAllow,
+				ValidFrom: validFrom,
 			},
 		},
 	}
@@ -41,10 +40,9 @@ func TestPrepareReconciliationRequestProducesStableHashForEquivalentOrdering(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if base.Memberships[0].OrganizationID != "018f1e00-0000-7000-8000-000000000003" || len(base.RoleBindings[0].Actions) != 3 {
+	if base.Memberships[0].TenantID != base.TenantID || len(base.RoleBindings[0].Actions) != 3 {
 		t.Fatalf("request normalization mutated caller-owned slices: %#v", base)
 	}
-	base.Memberships[0], base.Memberships[1] = base.Memberships[1], base.Memberships[0]
 	base.RoleBindings[0].Actions[0], base.RoleBindings[0].Actions[1] = base.RoleBindings[0].Actions[1], base.RoleBindings[0].Actions[0]
 	second, secondHash, err := prepareReconciliationRequest(base)
 	if err != nil {
@@ -87,12 +85,11 @@ func TestPrepareReconciliationRequestRejectsMutableIdentityAsIdentifier(t *testi
 func TestPrepareReconciliationRequestRejectsDuplicateExplicitDeny(t *testing.T) {
 	validFrom := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	deny := ReconciledExplicitDeny{
-		ActingOrganizationID: "018f1e00-0000-7000-8000-000000000003",
-		OwningOrganizationID: "018f1e00-0000-7000-8000-000000000001",
-		SiteID:               "018f1e00-1000-7000-8000-000000000001",
-		Action:               registryauth.ActionSiteRead,
-		ReasonCode:           "blocked",
-		ValidFrom:            validFrom,
+		TenantID:   "018f1d00-0000-7000-8000-000000000001",
+		SiteID:     "018f1e00-1000-7000-8000-000000000001",
+		Action:     registryauth.ActionSiteRead,
+		ReasonCode: "blocked",
+		ValidFrom:  validFrom,
 	}
 	_, _, err := prepareReconciliationRequest(ReconciliationRequest{
 		TenantID:      "018f1d00-0000-7000-8000-000000000001",

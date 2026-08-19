@@ -36,7 +36,6 @@ func (limiter *fakeOperationsRateLimiter) Allow(context.Context, string) (bool, 
 type operationsGatewayFixture struct {
 	handler          http.Handler
 	tenantID         string
-	organizationID   string
 	siteID           string
 	sessionID        string
 	gatewaySigner    *ecdsa.PrivateKey
@@ -55,11 +54,10 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 	t.Helper()
 	now := time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC)
 	fixture := &operationsGatewayFixture{
-		tenantID:       "018f3d00-0000-7000-8000-000000000001",
-		organizationID: "018f3e00-1000-7000-8000-000000000001",
-		siteID:         "018f3e00-2000-7000-8000-000000000001",
-		gatewaySigner:  commandTestSigner(t),
-		limiter:        &fakeOperationsRateLimiter{max: int32(rateLimit)},
+		tenantID:      "018f3d00-0000-7000-8000-000000000001",
+		siteID:        "018f3e00-2000-7000-8000-000000000001",
+		gatewaySigner: commandTestSigner(t),
+		limiter:       &fakeOperationsRateLimiter{max: int32(rateLimit)},
 	}
 	store := sessionstore.NewMemoryStore()
 	configured := NewHandler(Config{
@@ -93,9 +91,9 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 		Principal: identitycontext.UserPrincipal{
 			Subject: "operations-user", Issuer: "https://issuer.example.test", Roles: []string{"operator"},
 		},
-		ActingOrganizationID: fixture.organizationID,
-		CSRFTokenCiphertext:  ciphertext,
-		ExpiresAt:            now.Add(time.Hour),
+		TenantID:            fixture.tenantID,
+		CSRFTokenCiphertext: ciphertext,
+		ExpiresAt:           now.Add(time.Hour),
 	}, sessionstore.MutationContext{
 		Action: "SESSION_CREATED", Result: "SUCCEEDED", PolicyRevision: "identity-policy-1",
 		CorrelationID: "operations-fixture", TraceID: strings.Repeat("a", 32),
@@ -133,7 +131,7 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 			}
 			var input registryauth.DecisionRequest
 			if err := json.NewDecoder(request.Body).Decode(&input); err != nil ||
-				(input.Action != registryauth.ActionSiteRead && input.Action != registryauth.ActionEquipmentList) {
+				(input.Action != registryauth.ActionSiteRead && input.Action != registryauth.ActionAssetList) {
 				t.Fatal("invalid Registry authorization request")
 			}
 			allowedSites := []string{fixture.siteID}
@@ -144,7 +142,7 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 			decision := registryauth.Decision{
 				Allowed: allowed, PrincipalID: "018f3e00-5000-7000-8000-000000000001",
 				SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
-				ActingOrganizationID: fixture.organizationID, AllowedSiteIDs: allowedSites,
+				TenantID: fixture.tenantID, AllowedSiteIDs: allowedSites,
 				Actions: []registryauth.Action{input.Action}, PolicyRevision: "identity-policy-1",
 				ReasonCode: registryauth.ReasonAllowSiteRole, DecidedAt: now.Format(time.RFC3339Nano),
 			}
@@ -152,7 +150,7 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 				Issuer: "spiffe://hvac.local/iam-service", Presenter: input.GrantPresenter,
 				Audience: "platform-core-service", PrincipalID: decision.PrincipalID,
 				SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
-				ActingOrganizationID: fixture.organizationID, AllowedSiteIDs: []string{fixture.siteID},
+				TenantID: fixture.tenantID, AllowedSiteIDs: []string{fixture.siteID},
 				Actions: []registryauth.Action{input.Action}, PolicyRevision: "identity-policy-1",
 				DecisionReason: registryauth.ReasonAllowSiteRole, SessionID: parent.SessionID,
 				ParentTokenID: parent.TokenID, IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(),
@@ -167,7 +165,7 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 			}
 			var input analyticsmodel.AuthorizationDecisionRequest
 			if err := json.NewDecoder(request.Body).Decode(&input); err != nil ||
-				input.ActingOrganizationID != fixture.organizationID || input.Action != analyticsmodel.EnergySeriesAction {
+				input.TenantID != fixture.tenantID || input.Action != analyticsmodel.EnergySeriesAction {
 				t.Fatal("invalid Analytics authorization request")
 			}
 			allowed := !fixture.denySite.Load() && input.SiteID == fixture.siteID
@@ -179,7 +177,7 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) 
 				Decision: analyticsmodel.AuthorizationDecision{
 					Allowed: allowed, PrincipalID: "018f3e00-5000-7000-8000-000000000001",
 					SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
-					ActingOrganizationID: fixture.organizationID, TenantID: fixture.tenantID, SiteID: input.SiteID, Action: input.Action,
+					TenantID: fixture.tenantID, SiteID: input.SiteID, Action: input.Action,
 					PolicyRevision: "analytics-policy-7", ReasonCode: reason, DecidedAt: now.Format(time.RFC3339Nano),
 				},
 			}), nil
@@ -204,12 +202,12 @@ func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, now time
 		if err != nil {
 			t.Fatalf("invalid Operations delegation: %v", err)
 		}
-		if claims.Audience != "operations-agent-service" || claims.ActingOrganizationID != fixture.organizationID ||
+		if claims.Audience != "operations-agent-service" || claims.TenantID != fixture.tenantID ||
 			!operationsContains(claims.Actions, "operations:investigate") || !operationsContains(claims.Scopes, "site:"+fixture.siteID) ||
 			claims.IssuedAt != now.Unix() {
 			t.Fatalf("unexpected Operations claims: %+v", claims)
 		}
-		if request.Header.Get("X-Acting-Organization-ID") != fixture.organizationID || request.Header.Get("X-Route-Policy-Revision") != "0" {
+		if request.Header.Get("X-Acting-Organization-ID") != fixture.tenantID || request.Header.Get("X-Route-Policy-Revision") != "0" {
 			t.Fatal("missing authoritative Operations headers")
 		}
 		if fixture.rejectUnsafe.Load() && strings.HasSuffix(request.URL.Path, ":advance") {
@@ -236,7 +234,7 @@ func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, now time
 				unsafe := "id: 9:0\nevent: RUN_STARTED\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"investigation-001\",\"runId\":\"run-001\",\"checkpoint\":{}}\n\n"
 				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(unsafe))}, nil
 			}
-			investigation := `{"schemaVersion":1,"id":"investigation-001","scope":{"tenantId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","resourceBudget":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[]}`
+			investigation := `{"schemaVersion":1,"id":"investigation-001","scope":{"tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","assetId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","resourceBudget":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[]}`
 			plan := `{"schemaVersion":1,"id":"site-night-energy-investigation","label":"Site night-energy investigation","completedSteps":4,"totalSteps":4,"progressPercent":100,"steps":[{"id":"READ_SITE_CONTEXT","label":"Read authoritative Site context","status":"COMPLETED"},{"id":"READ_ENERGY_SERIES","label":"Read authoritative night-energy periods","status":"COMPLETED"},{"id":"ANALYZE","label":"Run deterministic night-energy analysis","status":"COMPLETED"},{"id":"COMMIT_RESULT","label":"Commit Evidence, Analysis and Finding","status":"COMPLETED"}]}`
 			stream := "id: 9:0\nevent: RUN_STARTED\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"investigation-001\",\"runId\":\"run-001\"}\n\n" +
 				"id: 9:1\nevent: STATE_SNAPSHOT\ndata: {\"type\":\"STATE_SNAPSHOT\",\"snapshot\":{\"schemaVersion\":\"operations-investigation-ui/v1\",\"investigation\":" + investigation + ",\"plan\":" + plan + ",\"toolActivities\":[]}}\n\n" +
@@ -261,16 +259,16 @@ func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, now time
 			}
 			return &http.Response{StatusCode: http.StatusOK, Header: recoveryHeaders, Body: io.NopCloser(strings.NewReader(stream))}, nil
 		}
-		body := `{"schemaVersion":1,"id":"investigation-001","scope":{"tenantId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","resourceBudget":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[],"toolReceipts":[]}`
+		body := `{"schemaVersion":1,"id":"investigation-001","scope":{"tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","assetId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"activeRun":null,"outcome":"SUPPORTED_SITE_FINDING","resourceBudget":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[],"toolReceipts":[]}`
 		status := http.StatusOK
 		if strings.HasSuffix(request.URL.Path, "/operations/investigations") {
 			if request.Method == http.MethodGet {
-				body = `{"schemaVersion":1,"investigations":[{"schemaVersion":1,"id":"investigation-001","scope":{"tenantId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"outcome":"SUPPORTED_SITE_FINDING","resourceBudget":null,"evidenceCount":2,"analysisReferenceCount":1,"findingCount":1,"toolReceiptCount":4,"acceptedOperatorInputCount":0}]}`
+				body = `{"schemaVersion":1,"investigations":[{"schemaVersion":1,"id":"investigation-001","scope":{"tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","assetId":null,"deviceId":null},"status":"COMPLETED","revision":9,"createdAt":1,"outcome":"SUPPORTED_SITE_FINDING","resourceBudget":null,"evidenceCount":2,"analysisReferenceCount":1,"findingCount":1,"toolReceiptCount":4,"acceptedOperatorInputCount":0}]}`
 			} else {
 				status = http.StatusCreated
 			}
 		} else if strings.HasSuffix(request.URL.Path, ":submit-operator-input") {
-			body = `{"outcome":"COMMITTED","investigation":{"schemaVersion":1,"id":"investigation-001","scope":{"tenantId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"status":"RUNNING","revision":10,"createdAt":1,"activeRun":{"id":"run-001","status":"ACTIVE","startedAt":1},"outcome":null,"resourceBudget":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[{"schemaVersion":1,"recordType":"OPERATOR_INPUT_ACCEPTED","id":"operator-input-record-001","investigationId":"investigation-001","recordedAt":2,"requestId":"operator-input-request-001","runId":"run-001","idempotencyKey":"operator-input-idempotency-001","inputKind":"SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION","inputDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","scope":{"tenantId":"` + fixture.organizationID + `","siteId":"` + fixture.siteID + `","equipmentId":null,"deviceId":null},"values":{"analysisScope":"SITE_ONLY","operatorNote":"Proceed with Site-only authority."},"provenance":{"actorType":"OPERATOR","source":"PLATFORM_GATEWAY","authorizationDecisionId":"allow-site","policyRevision":"identity-policy-1","submittedAt":2}}],"toolReceipts":[]}}`
+			body = `{"outcome":"COMMITTED","investigation":{"schemaVersion":1,"id":"investigation-001","scope":{"tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","assetId":null,"deviceId":null},"status":"RUNNING","revision":10,"createdAt":1,"activeRun":{"id":"run-001","status":"ACTIVE","startedAt":1},"outcome":null,"resourceBudget":null,"evidence":[],"analysisReferences":[],"findings":[],"operatorInputRequest":null,"acceptedOperatorInputs":[{"schemaVersion":1,"recordType":"OPERATOR_INPUT_ACCEPTED","id":"operator-input-record-001","investigationId":"investigation-001","recordedAt":2,"requestId":"operator-input-request-001","runId":"run-001","idempotencyKey":"operator-input-idempotency-001","inputKind":"SITE_NIGHT_ENERGY_SCOPE_CONFIRMATION","inputDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","scope":{"tenantId":"` + fixture.tenantID + `","siteId":"` + fixture.siteID + `","assetId":null,"deviceId":null},"values":{"analysisScope":"SITE_ONLY","operatorNote":"Proceed with Site-only authority."},"provenance":{"actorType":"OPERATOR","source":"PLATFORM_GATEWAY","authorizationDecisionId":"allow-site","policyRevision":"identity-policy-1","submittedAt":2}}],"toolReceipts":[]}}`
 		}
 		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})}
@@ -617,14 +615,14 @@ func TestOperationsGatewayRejectsUnsafeOrUnauthorizedEventStreams(t *testing.T) 
 
 func TestOperationsGatewayTypedSnapshotValidatorRejectsForgedAuthority(t *testing.T) {
 	digest := "sha256:" + strings.Repeat("a", 64)
-	organizationID := "organization-001"
+	tenantID := "tenant-001"
 	siteID := "site-001"
 	investigationID := "investigation-001"
 	scope := map[string]any{
-		"tenantId": organizationID,
-		"siteId":         siteID,
-		"equipmentId":    nil,
-		"deviceId":       nil,
+		"tenantId": tenantID,
+		"siteId":   siteID,
+		"assetId":  nil,
+		"deviceId": nil,
 	}
 	period := map[string]any{
 		"localDate":       "2026-07-30",
@@ -700,22 +698,22 @@ func TestOperationsGatewayTypedSnapshotValidatorRejectsForgedAuthority(t *testin
 			"recordedAt":           4,
 			"findingKind":          "UNABLE_TO_CONCLUDE",
 			"classification":       "INFERENCE",
-			"statement":            "Equipment attribution is unsupported.",
+			"statement":            "Asset attribution is unsupported.",
 			"evidenceIds":          []any{"evidence-001"},
 			"analysisReferenceIds": []any{"analysis-001"},
 			"conclusion": map[string]any{
 				"status":     "UNABLE_TO_CONCLUDE",
-				"scope":      "EQUIPMENT",
-				"reasonCode": "EQUIPMENT_EVIDENCE_MISSING",
-				"detail":     "Canonical Equipment series are required.",
+				"scope":      "ASSET",
+				"reasonCode": "ASSET_EVIDENCE_MISSING",
+				"detail":     "Canonical Asset series are required.",
 				"requiredNext": []any{map[string]any{
 					"status":           "REQUIRED_NEXT",
-					"kind":             "EQUIPMENT_ENERGY_PERIOD_COMPARISON",
+					"kind":             "ASSET_ENERGY_PERIOD_COMPARISON",
 					"owner":            "telemetry-query-service",
-					"capability":       "analytics.energy.getEquipmentSeries",
-					"tenantId":   organizationID,
+					"capability":       "analytics.energy.getAssetSeries",
+					"tenantId":         tenantID,
 					"siteId":           siteID,
-					"equipmentIds":     []any{"equipment-001"},
+					"assetIds":         []any{"asset-001"},
 					"targetPeriod":     period,
 					"baselinePeriod":   period,
 					"requiredMetadata": []any{"DATASET_REVISION", "WATERMARK", "PARTIAL", "QUALITY", "CAPTURED_AT", "PAYLOAD_DIGEST"},
@@ -805,17 +803,17 @@ func TestOperationsGatewayTypedSnapshotValidatorRejectsForgedAuthority(t *testin
 		t.Fatal("dangling Analysis Evidence reference was accepted")
 	}
 
-	equipmentAuthority := clone(snapshot)
-	finding := equipmentAuthority["findings"].([]any)[0].(map[string]any)
+	assetAuthority := clone(snapshot)
+	finding := assetAuthority["findings"].([]any)[0].(map[string]any)
 	finding["findingKind"] = "SITE_NIGHT_ENERGY_INCREASE"
 	finding["conclusion"] = map[string]any{
-		"status":         "SUPPORTED",
-		"scope":          "EQUIPMENT",
-		"tenantId": organizationID,
-		"siteId":         siteID,
+		"status":   "SUPPORTED",
+		"scope":    "ASSET",
+		"tenantId": tenantID,
+		"siteId":   siteID,
 	}
-	if err := validateOperationsSnapshot(encode(equipmentAuthority)); err == nil {
-		t.Fatal("supported Equipment root-cause authority was accepted")
+	if err := validateOperationsSnapshot(encode(assetAuthority)); err == nil {
+		t.Fatal("supported Asset root-cause authority was accepted")
 	}
 
 	ownerMismatch := clone(snapshot)
@@ -930,7 +928,7 @@ func TestOperationsGatewayFailsClosedWhenLimitBackendUnavailable(t *testing.T) {
 func TestOperationsToolAuthorizationIssuesExactOwnerGrants(t *testing.T) {
 	fixture := newOperationsGatewayFixture(t, 30)
 	serviceGrant := fixture.serviceDelegation(t)
-	registryBody := `{"investigationId":"investigation-001","runId":"run-001","request":{"requestId":"registry-equipment-001","tool":"registry.listSiteEquipment","input":{"siteId":"` + fixture.siteID + `"}}}`
+	registryBody := `{"investigationId":"investigation-001","runId":"run-001","request":{"requestId":"registry-assets-001","tool":"registry.listSiteAssets","input":{"siteId":"` + fixture.siteID + `"}}}`
 	registryResponse := fixture.authorizeTool(t, registryBody, serviceGrant, "spiffe://hvac.local/operations-agent-service")
 	if registryResponse.Code != http.StatusOK {
 		t.Fatalf("expected Registry grant, got %d: %s", registryResponse.Code, registryResponse.Body.String())
@@ -941,14 +939,14 @@ func TestOperationsToolAuthorizationIssuesExactOwnerGrants(t *testing.T) {
 	}
 
 	query := analyticsmodel.EnergySeriesQuery{
-		TenantID:       fixture.tenantID,
-		SiteID:         fixture.siteID,
-		EnergyType:     analyticsmodel.EnergyTypeElectricity,
-		Granularity:    analyticsmodel.GranularityHour,
-		Timezone:       "Asia/Tokyo",
-		From:           time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC),
-		To:             time.Date(2026, 7, 29, 21, 0, 0, 0, time.UTC),
-		QualityPolicy:  analyticsmodel.QualityPolicyValidOnly,
+		TenantID:      fixture.tenantID,
+		SiteID:        fixture.siteID,
+		EnergyType:    analyticsmodel.EnergyTypeElectricity,
+		Granularity:   analyticsmodel.GranularityHour,
+		Timezone:      "Asia/Tokyo",
+		From:          time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC),
+		To:            time.Date(2026, 7, 29, 21, 0, 0, 0, time.UTC),
+		QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
 	}
 	energyBody, err := json.Marshal(map[string]any{
 		"investigationId": "investigation-001",
@@ -983,7 +981,7 @@ func TestOperationsToolAuthorizationIssuesExactOwnerGrants(t *testing.T) {
 	}
 	if claims.Issuer != "spiffe://hvac.local/platform-gateway" ||
 		claims.ExecutingService != "spiffe://hvac.local/operations-agent-service" ||
-		claims.Audience != "telemetry-query-service" || claims.ActingOrganizationID != fixture.organizationID || claims.TenantID != fixture.tenantID ||
+		claims.Audience != "telemetry-query-service" || claims.TenantID != fixture.tenantID ||
 		len(claims.Actions) != 1 || claims.Actions[0] != analyticsmodel.EnergySeriesAction ||
 		len(claims.Scopes) != 1 || claims.Scopes[0] != digest || claims.PolicyRevision != "analytics-policy-7" {
 		t.Fatalf("Energy grant is not exact: %+v digest=%s", claims, digest)

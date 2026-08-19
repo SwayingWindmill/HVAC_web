@@ -40,8 +40,8 @@ func TestRegistryGrantStatusRequiresCoreWorkloadAndReturnsCurrentState(t *testin
 		},
 	})
 	payload, err := json.Marshal(map[string]string{
-		"actingOrganizationId": "018f1e00-0000-7000-8000-000000000003",
-		"tokenId":              identifier,
+		"tenantId": iam.S1FixtureTenantAID,
+		"tokenId":  identifier,
 	})
 	if err != nil {
 		t.Fatal(err)

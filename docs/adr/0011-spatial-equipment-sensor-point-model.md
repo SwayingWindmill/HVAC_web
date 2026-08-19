@@ -1,8 +1,10 @@
 # ADR 0011 — Spatial asset, sensor and telemetry point model
 
-Status: accepted
+Status: accepted, superseded in part by ADR 0013
 
 Date: 2026-08-03
+
+ADR 0013 supersedes the Organization/Area/Equipment canonical terminology, the general first-class Sensor assumption and calculated Point ownership. The surviving decision is the separation of spatial placement, Asset, Device and Point identity, effective-dated bindings, independent observations and optional physical probe traceability.
 
 ## Context
 

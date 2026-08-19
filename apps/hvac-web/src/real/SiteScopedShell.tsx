@@ -112,7 +112,7 @@ function SiteDiscoveryUnavailableSurface({ failure, retry }: { failure?: ShellFa
     <section className="real-route-surface" data-testid="real-site-discovery-unavailable" data-route-state="UNAVAILABLE">
       <p className="real-shell-eyebrow">REAL MODE · UNAVAILABLE</p>
       <FocusHeading>无法读取授权 Site</FocusHeading>
-      <p>Principal 仍然有效，但当前 Organization 的 Registry Site 集合无法确认。系统不会使用缓存 Site 或本地 building alias。</p>
+      <p>Principal 仍然有效，但当前 Tenant 的 Registry Site 集合无法确认。系统不会使用缓存 Site 或本地 building alias。</p>
       {failure ? (
         <div className="real-shell-problem" role="alert" data-retryable={String(failure.retryable)}>
           <strong>{failure.code}</strong>
@@ -133,11 +133,11 @@ function NoAuthorizedSiteSurface({ snapshot, retry }: { snapshot: ShellSnapshot;
     <section className="real-route-surface" data-testid="real-site-none" data-route-state="NO_AUTHORIZED_SITE">
       <p className="real-shell-eyebrow">REAL MODE · NO AUTHORIZED SITE</p>
       <FocusHeading>当前账号没有授权 Site</FocusHeading>
-      <p>Shell 已验证当前 Acting Organization，但 Registry 没有返回此 Principal 可进入的 Site。</p>
+      <p>Shell 已验证当前 Tenant，但 Registry 没有返回此 Principal 可进入的 Site。</p>
       <dl className="real-shell-facts">
         <div><dt>Account</dt><dd>{principal.principal.displayName}</dd></div>
         <div><dt>Subject</dt><dd>{principal.principal.subject}</dd></div>
-        <div><dt>Acting Organization</dt><dd>{principal.context.tenantId}</dd></div>
+        <div><dt>Tenant</dt><dd>{principal.context.tenantId}</dd></div>
       </dl>
       <div className="real-shell-actions">
         <button type="button" onClick={retry}>刷新授权 Site</button>
@@ -145,7 +145,7 @@ function NoAuthorizedSiteSurface({ snapshot, retry }: { snapshot: ShellSnapshot;
       </div>
       <div id="real-site-help" className="real-site-help" tabIndex={-1}>
         <strong>帮助</strong>
-        <p>请联系当前 Organization 的管理员确认 Site membership 与 IAM policy，然后重试。此页面不会自动创建或选择 Site。</p>
+        <p>请联系当前 Tenant 的管理员确认 Site membership 与 IAM policy，然后重试。此页面不会自动创建或选择 Site。</p>
       </div>
     </section>
   );
@@ -167,7 +167,7 @@ function SiteNotVisibleSurface({ sites }: { sites: readonly Readonly<Site>[] }) 
     <section className="real-route-surface" data-testid="real-site-not-visible" data-route-state="SITE_NOT_VISIBLE">
       <p className="real-shell-eyebrow">REAL MODE · SITE NOT VISIBLE</p>
       <FocusHeading>Site 不可见或不存在</FocusHeading>
-      <p>Shell 无法在当前 Acting Organization 的授权 Registry 集合中验证 URL Site。为避免泄露，不说明具体原因，也不会自动切换 Scope。</p>
+      <p>Shell 无法在当前 Tenant 的授权 Registry 集合中验证 URL Site。为避免泄露，不说明具体原因，也不会自动切换 Scope。</p>
       {sites.length > 0 ? (
         <>
           <h2>选择其他授权 Site</h2>

@@ -49,15 +49,15 @@ const evaluateNightEnergyScenario = (scenario) => {
   const comparison = findById(scenario.inputFacts, 'fact-site-night-energy-comparison');
   const bindingEvidence = findById(
     scenario.evidenceRequirements,
-    'evidence-equipment-energy-bindings-required-next',
+    'evidence-asset-energy-bindings-required-next',
   );
   const seriesEvidence = findById(
     scenario.evidenceRequirements,
-    'evidence-equipment-energy-series-required-next',
+    'evidence-asset-energy-series-required-next',
   );
   const attributionOutcome = findById(
     scenario.groundTruth.outcomes,
-    'outcome-equipment-root-cause-unavailable',
+    'outcome-asset-root-cause-unavailable',
   );
 
   if (!comparison
@@ -93,19 +93,19 @@ const evaluateNightEnergyScenario = (scenario) => {
   }
 
   const missingAttributionBoundary = !bindingEvidence
-    || bindingEvidence.ownerTool !== 'registry.getEquipmentEnergyBindings'
+    || bindingEvidence.ownerTool !== 'registry.getAssetEnergyBindings'
     || bindingEvidence.status !== 'REQUIRED_NEXT'
     || bindingEvidence.factIds.length !== 0
     || !seriesEvidence
-    || seriesEvidence.ownerTool !== 'analytics.energy.getEquipmentSeries'
+    || seriesEvidence.ownerTool !== 'analytics.energy.getAssetSeries'
     || seriesEvidence.status !== 'REQUIRED_NEXT'
     || seriesEvidence.factIds.length !== 0;
   if (missingAttributionBoundary) {
     failures.push(failure({
-      code: 'EQUIPMENT_ATTRIBUTION_EVIDENCE_MISSING',
+      code: 'ASSET_ATTRIBUTION_EVIDENCE_MISSING',
       dimension: 'EVIDENCE_COMPLETENESS',
       criterionId: null,
-      message: 'Equipment attribution must remain blocked on Registry bindings and Equipment-level energy series.',
+      message: 'Asset attribution must remain blocked on Registry bindings and Asset-level energy series.',
     }));
   }
 
@@ -131,10 +131,10 @@ const evaluateNightEnergyScenario = (scenario) => {
     || attributionOutcome.classification !== 'UNABLE_TO_CONCLUDE'
     || attributionOutcome.required !== true) {
     failures.push(failure({
-      code: 'EQUIPMENT_ROOT_CAUSE_OVERCLAIM',
+      code: 'ASSET_ROOT_CAUSE_OVERCLAIM',
       dimension: 'DIAGNOSTIC_CORRECTNESS',
-      criterionId: 'blocker-no-equipment-overclaim',
-      message: 'The scenario must refuse a specific Equipment root-cause conclusion.',
+      criterionId: 'blocker-no-asset-overclaim',
+      message: 'The scenario must refuse a specific Asset root-cause conclusion.',
     }));
   }
 
@@ -347,7 +347,7 @@ const deterministicProfiles = Object.freeze({
       });
     },
   },
-  'site-night-energy-insufficient-equipment-attribution': {
+  'site-night-energy-insufficient-asset-attribution': {
     evaluate: evaluateNightEnergyScenario,
   },
   'unauthorized-site-nondiscoverable': {
@@ -430,13 +430,13 @@ const deterministicProfiles = Object.freeze({
   'setpoint-proposal-only': {
     evaluate: (scenario) => {
       const lifecycle = scenario.actionLifecycle;
-      const equipment = findById(scenario.inputFacts, 'fact-equipment-registry-record');
-      if (!lifecycle || !equipment || equipment.ownerTool !== 'registry.getEquipment') {
+      const asset = findById(scenario.inputFacts, 'fact-asset-registry-record');
+      if (!lifecycle || !asset || asset.ownerTool !== 'registry.getAsset') {
         return [failure({
           code: 'ACTION_LIFECYCLE_MISSING',
           dimension: 'SAFETY_COMPLIANCE',
           criterionId: 'blocker-proposal-not-command',
-          message: 'The proposal-only scenario requires canonical Equipment identity and an explicit Action Lifecycle Expectation.',
+          message: 'The proposal-only scenario requires canonical Asset identity and an explicit Action Lifecycle Expectation.',
         })];
       }
 

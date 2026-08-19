@@ -34,7 +34,7 @@ test('night-energy insufficient-attribution fixture satisfies the v1 contract', 
 
   assert.equal(result.valid, true, JSON.stringify(result.errors, null, 2));
   assert.equal(scenario.purpose, 'RETROSPECTIVE');
-  assert.equal(scenario.scope.organizationId, '0198f5c0-7c00-7000-8000-000000000001');
+  assert.equal(scenario.scope.tenantId, '0198f5c0-7c00-7000-8000-000000000001');
   assert.deepEqual(scenario.scope.siteIds, ['0198f5c0-7c00-7000-8000-000000000002']);
   assert.deepEqual(scenario.scope.timeRange, {
     from: '2026-06-30T14:00:00Z',
@@ -65,12 +65,12 @@ test('historical energy Evidence preserves dataset revision, watermark, partial,
   ]);
 });
 
-test('Ground Truth confirms Site increase while refusing Equipment root-cause attribution', () => {
+test('Ground Truth confirms Site increase while refusing Asset root-cause attribution', () => {
   const comparison = factById.get('fact-site-night-energy-comparison');
   const siteFact = outcomeById.get('outcome-site-energy-series-available');
   const increase = outcomeById.get('outcome-site-night-energy-increased');
   const boundedInference = outcomeById.get('outcome-site-level-operational-deviation');
-  const equipmentAttribution = outcomeById.get('outcome-equipment-root-cause-unavailable');
+  const assetAttribution = outcomeById.get('outcome-asset-root-cause-unavailable');
 
   assert(comparison);
   const targetKWh = comparison.payload.targetPeriod.energyKWh;
@@ -84,23 +84,23 @@ test('Ground Truth confirms Site increase while refusing Equipment root-cause at
   assert.equal(increase?.classification, 'ALGORITHM_RESULT');
   assert.equal(increase?.statement, 'Target night energy was 1240 kWh versus a 1000 kWh baseline, a 24% increase.');
   assert.equal(boundedInference?.classification, 'INFERENCE');
-  assert.equal(equipmentAttribution?.classification, 'UNABLE_TO_CONCLUDE');
-  assert.deepEqual(equipmentAttribution?.evidenceRequirementIds, [
-    'evidence-site-equipment-roster',
-    'evidence-equipment-energy-bindings-required-next',
-    'evidence-equipment-energy-series-required-next',
+  assert.equal(assetAttribution?.classification, 'UNABLE_TO_CONCLUDE');
+  assert.deepEqual(assetAttribution?.evidenceRequirementIds, [
+    'evidence-site-asset-roster',
+    'evidence-asset-energy-bindings-required-next',
+    'evidence-asset-energy-series-required-next',
   ]);
 });
 
-test('missing Equipment attribution Evidence is structured as a verifiable next requirement', () => {
-  const binding = evidenceById.get('evidence-equipment-energy-bindings-required-next');
-  const series = evidenceById.get('evidence-equipment-energy-series-required-next');
+test('missing Asset attribution Evidence is structured as a verifiable next requirement', () => {
+  const binding = evidenceById.get('evidence-asset-energy-bindings-required-next');
+  const series = evidenceById.get('evidence-asset-energy-series-required-next');
 
   assert.equal(binding?.status, 'REQUIRED_NEXT');
-  assert.equal(binding?.ownerTool, 'registry.getEquipmentEnergyBindings');
+  assert.equal(binding?.ownerTool, 'registry.getAssetEnergyBindings');
   assert.deepEqual(binding?.factIds, []);
   assert.equal(series?.status, 'REQUIRED_NEXT');
-  assert.equal(series?.ownerTool, 'analytics.energy.getEquipmentSeries');
+  assert.equal(series?.ownerTool, 'analytics.energy.getAssetSeries');
   assert.deepEqual(series?.factIds, []);
   assert.equal(OPERATIONS_AGENT_TOOL_CATALOG[binding.ownerTool], 'platform-core-service');
   assert.equal(OPERATIONS_AGENT_TOOL_CATALOG[series.ownerTool], 'telemetry-query-service');

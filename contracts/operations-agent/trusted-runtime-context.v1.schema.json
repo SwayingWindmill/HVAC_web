@@ -13,11 +13,11 @@
     "scope": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["tenantId", "siteId", "equipmentId", "deviceId"],
+      "required": ["tenantId", "siteId", "assetId", "deviceId"],
       "properties": {
         "tenantId": {"type": "string", "minLength": 1, "maxLength": 256},
         "siteId": {"type": ["string", "null"], "minLength": 1, "maxLength": 256},
-        "equipmentId": {"type": ["string", "null"], "minLength": 1, "maxLength": 256},
+        "assetId": {"type": ["string", "null"], "minLength": 1, "maxLength": 256},
         "deviceId": {"type": ["string", "null"], "minLength": 1, "maxLength": 256}
       }
     },
@@ -31,7 +31,7 @@
       "uniqueItems": true,
       "items": {
         "type": "string",
-        "enum": ["registry.getSite", "registry.listSiteEquipment", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities"]
+        "enum": ["registry.getSite", "registry.listSiteAssets", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities"]
       }
     },
     "effectPolicy": {"const": "READ_ONLY"},

@@ -20,7 +20,7 @@ if (!operationsConnectionString || !checkpointsConnectionString) {
 const scope = Object.freeze({
   tenantId: 'organization-audit-postgres',
   siteId: 'site-audit-postgres',
-  equipmentId: null,
+  assetId: null,
   deviceId: null,
 });
 

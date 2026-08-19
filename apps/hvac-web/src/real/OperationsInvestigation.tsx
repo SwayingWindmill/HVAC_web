@@ -246,7 +246,7 @@ function RequiredNextCard({ requirement }: { readonly requirement: OperationsReq
         <strong>{requirement.owner}</strong>
       </div>
       <p><strong>Capability:</strong> {requirement.capability}</p>
-      <p><strong>Equipment:</strong> {requirement.equipmentIds.length === 0 ? 'Site equipment set' : requirement.equipmentIds.join(', ')}</p>
+      <p><strong>Asset:</strong> {requirement.assetIds.length === 0 ? 'Site asset set' : requirement.assetIds.join(', ')}</p>
       <dl className="operations-provenance">
         <div><dt>Target period</dt><dd>{requirement.targetPeriod.from} → {requirement.targetPeriod.to} ({requirement.targetPeriod.expectedBuckets} buckets)</dd></div>
         <div><dt>Baseline period</dt><dd>{requirement.baselinePeriod.from} → {requirement.baselinePeriod.to} ({requirement.baselinePeriod.expectedBuckets} buckets)</dd></div>
@@ -280,7 +280,7 @@ function FindingCard({ record, timezone }: {
       {record.conclusion.status === 'SUPPORTED' ? (
         <div className="operations-site-boundary" role="note">
           <strong>Site-only conclusion</strong>
-          <span>该 Finding 的权威范围仅为 Site，不构成 Equipment root cause。</span>
+          <span>该 Finding 的权威范围仅为 Site，不构成 Asset root cause。</span>
         </div>
       ) : (
         <div className="operations-blocker" role="status">
@@ -397,7 +397,7 @@ function OperatorInputPanel({
                   <strong>{option === 'SITE_ONLY' ? 'Proceed with Site-only authority' : 'Defer the conclusion'}</strong>
                   <small>
                     {option === 'SITE_ONLY'
-                      ? '继续同一 Agent Run，但不会把 Site Evidence 提升为 Equipment root cause。'
+                      ? '继续同一 Agent Run，但不会把 Site Evidence 提升为 Asset root cause。'
                       : '保留当前已提交记录并推迟结论。'}
                   </small>
                 </span>

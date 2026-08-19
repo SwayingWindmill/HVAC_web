@@ -136,9 +136,9 @@ func (h *handler) GetSite(writer http.ResponseWriter, request *http.Request, sit
 	}, platformapi.ListRegistryParams{})
 }
 
-func (h *handler) ListSiteAsset(writer http.ResponseWriter, request *http.Request, siteID string, params platformapi.ListRegistryParams) {
+func (h *handler) ListSiteAssets(writer http.ResponseWriter, request *http.Request, siteID string, params platformapi.ListRegistryParams) {
 	h.serveRegistry(writer, request, publicRegistryRoute{
-		template:     platformapi.ListSiteAssetPathTemplate,
+		template:     platformapi.ListSiteAssetsPathTemplate,
 		internalPath: "/internal/v1/registry/sites/" + siteID + "/assets",
 		action:       registryauth.ActionAssetList,
 		list:         true,
@@ -247,22 +247,22 @@ func (h *handler) authorizeRegistryForPresenter(
 		expiresAt = session.ExpiresAt
 	}
 	claims := identitycontext.DelegationClaims{
-		Issuer:               h.identity.config.ExecutingWorkloadSPIFFE,
-		Subject:              session.Principal.Subject,
-		SubjectIssuer:        session.Principal.Issuer,
-		DisplayName:          session.Principal.DisplayName,
-		Email:                session.Principal.Email,
-		Roles:                append([]string(nil), session.Principal.Roles...),
-		ExecutingService:     h.identity.config.ExecutingWorkloadSPIFFE,
-		Audience:             h.identity.config.IAMAudience,
-		TenantID:             session.TenantID,
-		Actions:              []string{"registry:authorize"},
-		Scopes:               []string{"session:" + session.ID},
-		PolicyRevision:       h.identity.config.PolicyRevision,
-		SessionID:            session.ID,
-		IssuedAt:             now.Unix(),
-		ExpiresAt:            expiresAt.Unix(),
-		TokenID:              randomURLToken(16),
+		Issuer:           h.identity.config.ExecutingWorkloadSPIFFE,
+		Subject:          session.Principal.Subject,
+		SubjectIssuer:    session.Principal.Issuer,
+		DisplayName:      session.Principal.DisplayName,
+		Email:            session.Principal.Email,
+		Roles:            append([]string(nil), session.Principal.Roles...),
+		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
+		Audience:         h.identity.config.IAMAudience,
+		TenantID:         session.TenantID,
+		Actions:          []string{"registry:authorize"},
+		Scopes:           []string{"session:" + session.ID},
+		PolicyRevision:   h.identity.config.PolicyRevision,
+		SessionID:        session.ID,
+		IssuedAt:         now.Unix(),
+		ExpiresAt:        expiresAt.Unix(),
+		TokenID:          randomURLToken(16),
 	}
 	delegation, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
 	if err != nil {
@@ -271,7 +271,7 @@ func (h *handler) authorizeRegistryForPresenter(
 	body, err := json.Marshal(registryauth.DecisionRequest{
 		TenantID:       session.TenantID,
 		Action:         action,
-		GrantPresenter:       presenterSPIFFE,
+		GrantPresenter: presenterSPIFFE,
 	})
 	if err != nil {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Registry authorization request could not be encoded.", true}
@@ -505,7 +505,7 @@ func matchPublicRegistryRoute(path string) (publicRegistryRoute, string, bool) {
 		list     bool
 	}{
 		{platformapi.GetSitePathTemplate, "{siteId}", registryauth.ActionSiteRead, func(id string) string { return "/internal/v1/registry/sites/" + id }, false},
-		{platformapi.ListSiteAssetPathTemplate, "{siteId}", registryauth.ActionAssetList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/assets" }, true},
+		{platformapi.ListSiteAssetsPathTemplate, "{siteId}", registryauth.ActionAssetList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/assets" }, true},
 		{platformapi.GetAssetPathTemplate, "{assetId}", registryauth.ActionAssetRead, func(id string) string { return "/internal/v1/registry/assets/" + id }, false},
 		{platformapi.ListSiteDevicesPathTemplate, "{siteId}", registryauth.ActionDeviceList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/devices" }, true},
 		{platformapi.ListSiteDeviceBindingsPathTemplate, "{siteId}", registryauth.ActionDeviceBindingList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/device-bindings" }, true},
@@ -548,7 +548,7 @@ func dispatchRegistryRoute(h *handler, writer http.ResponseWriter, request *http
 	case registryauth.ActionSiteRead:
 		h.GetSite(writer, request, id)
 	case registryauth.ActionAssetList:
-		h.ListSiteAsset(writer, request, id, params)
+		h.ListSiteAssets(writer, request, id, params)
 	case registryauth.ActionAssetRead:
 		h.GetAsset(writer, request, id)
 	case registryauth.ActionDeviceList:

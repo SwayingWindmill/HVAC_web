@@ -4,7 +4,7 @@ export const OPERATIONS_AGENT_TOOL_CATALOG_VERSION = "operations-agent-tool-cata
 
 export const OPERATIONS_AGENT_RUNTIME_READ_TOOLS = [
   "registry.getSite",
-  "registry.listSiteEquipment",
+  "registry.listSiteAssets",
   "telemetry.getCurrentSnapshot",
   "analytics.getEnergySeries",
   "commands.getCapabilities",

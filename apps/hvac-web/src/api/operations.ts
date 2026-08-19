@@ -59,7 +59,7 @@ async function csrfCapability(options: ScopedOperationsRequestOptions): Promise<
   if (options.csrfToken) return options.csrfToken;
   const principal = await platformClient.getCurrentPrincipal();
   if (principal.data.context.tenantId !== options.trustedTenantId) {
-    throw new OperationsApiError(503, 'OPERATIONS_SCOPE_INVALID', 'Session Organization 已改变。');
+    throw new OperationsApiError(503, 'OPERATIONS_SCOPE_INVALID', 'Session Tenant 已改变。');
   }
   return principal.data.session.csrfToken;
 }

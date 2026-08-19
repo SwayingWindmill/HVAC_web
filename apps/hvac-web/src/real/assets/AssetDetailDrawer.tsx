@@ -185,7 +185,7 @@ function AssetControlCard({ site, principal, asset, control }: {
 
   const submitMutation = useMutation({
     mutationFn: () => createScopedCommand({
-      equipmentId: asset.asset.id,
+      assetId: asset.asset.id,
       commandPointId: control.point.id,
       parameters: control.kind === 'NUMBER' ? { [control.parameterKey]: value } : {},
     }, scopedOptions(principal, site, undefined, `asset-control-${idempotencyKeyRef.current}`)),

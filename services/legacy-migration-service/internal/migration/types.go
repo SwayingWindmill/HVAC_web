@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	KindSite      = "SITE"
-	KindEquipment = "EQUIPMENT"
-	KindDevice    = "DEVICE"
+	KindSite   = "SITE"
+	KindAsset  = "ASSET"
+	KindDevice = "DEVICE"
 
 	maxRecordBytes = 1 << 20
 	maxInputBytes  = 256 << 20
@@ -232,18 +232,12 @@ func (record Record) BusinessReason() string {
 		if !oneOf(record.Status, "ACTIVE", "INACTIVE", "RETIRED") {
 			return "INVALID_STATUS"
 		}
-	case KindEquipment:
+	case KindAsset:
 		if record.SiteRef == nil {
 			return "MISSING_SITE_PARENT"
 		}
 		if strings.TrimSpace(record.ResourceType) == "" || len(record.ResourceType) > 128 {
 			return "INVALID_RESOURCE_TYPE"
-		}
-		if strings.EqualFold(strings.TrimSpace(record.SourceTable), "asset") {
-			verified, _ := record.RelationEvidence["verifiedEquipmentRelation"].(bool)
-			if !verified {
-				return "AMBIGUOUS_ASSET_EQUIPMENT_RELATION"
-			}
 		}
 		if !oneOf(record.Status, "ACTIVE", "INACTIVE", "RETIRED") {
 			return "INVALID_STATUS"
@@ -335,7 +329,7 @@ func kindRank(kind string) int {
 	switch kind {
 	case KindSite:
 		return 0
-	case KindEquipment:
+	case KindAsset:
 		return 1
 	case KindDevice:
 		return 2
