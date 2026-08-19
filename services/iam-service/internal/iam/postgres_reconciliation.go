@@ -319,19 +319,55 @@ INSERT INTO iam.tenant_memberships (
 		}
 	}
 	for _, binding := range request.RoleBindings {
-		id, err := newUUIDv7(now)
-		if err != nil {
-			return err
-		}
 		actions := make([]string, len(binding.Actions))
 		for index, action := range binding.Actions {
 			actions[index] = string(action)
 		}
+		if binding.Effect == BindingEffectDeny {
+			for _, action := range actions {
+				id, err := newUUIDv7(now)
+				if err != nil {
+					return err
+				}
+				if _, err := transaction.Exec(ctx, `
+INSERT INTO iam.explicit_denies (
+  id, tenant_id, site_id, principal_id, action, reason_code,
+  valid_from, valid_to, revision, created_at, updated_at
+) VALUES ($1::uuid, $2::uuid, NULL, $3::uuid, $4, 'RECONCILED_ROLE_DENY', $5, $6, $7, $8, $8)
+`, id, binding.TenantID, principalID, action, binding.ValidFrom, binding.ValidTo, request.SourceVersion, now); err != nil {
+					return fmt.Errorf("insert reconciled IAM role deny: %w", err)
+				}
+			}
+			continue
+		}
+		templateID, err := newUUIDv7(now)
+		if err != nil {
+			return err
+		}
+		if _, err := transaction.Exec(ctx, `
+INSERT INTO iam.role_templates (
+  id, tenant_id, role_key, display_name, capabilities, status, revision, created_at, updated_at
+) VALUES ($1::uuid, $2::uuid, $3, $3, $4, 'ACTIVE', $5, $6, $6)
+ON CONFLICT (tenant_id, role_key) DO UPDATE SET
+  capabilities = EXCLUDED.capabilities,
+  status = 'ACTIVE',
+  revision = GREATEST(iam.role_templates.revision + 1, EXCLUDED.revision),
+  updated_at = EXCLUDED.updated_at
+`, templateID, binding.TenantID, binding.RoleKey, actions, request.SourceVersion, now); err != nil {
+			return fmt.Errorf("upsert reconciled IAM role template: %w", err)
+		}
+		bindingID, err := newUUIDv7(now)
+		if err != nil {
+			return err
+		}
 		if _, err := transaction.Exec(ctx, `
 INSERT INTO iam.role_bindings (
-  id, tenant_id, principal_id, role_key, actions, effect, valid_from, valid_to, revision, created_at, updated_at
-) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $10)
-`, id, binding.TenantID, principalID, binding.RoleKey, actions, binding.Effect, binding.ValidFrom, binding.ValidTo, request.SourceVersion, now); err != nil {
+  id, tenant_id, principal_id, role_template_id, status, valid_from, valid_to, revision, created_at, updated_at
+)
+SELECT $1::uuid, $2::uuid, $3::uuid, template.id, 'ACTIVE', $5, $6, $7, $8, $8
+FROM iam.role_templates template
+WHERE template.tenant_id = $2::uuid AND template.role_key = $4
+`, bindingID, binding.TenantID, principalID, binding.RoleKey, binding.ValidFrom, binding.ValidTo, request.SourceVersion, now); err != nil {
 			return fmt.Errorf("insert reconciled IAM role binding: %w", err)
 		}
 	}

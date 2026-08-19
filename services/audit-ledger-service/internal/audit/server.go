@@ -17,9 +17,14 @@ import (
 
 const SessionAuditPathPrefix = "/internal/v1/audit/session-events/"
 const OperationsAuditPath = "/internal/v1/audit/operations-events"
+const AuditSearchPath = "/internal/v1/audit/search"
 
 type RecordReader interface {
 	GetRecord(context.Context, string, string) (Record, error)
+}
+
+type RecordSearcher interface {
+	SearchRecords(context.Context, string, SearchFilter) ([]SearchRecord, error)
 }
 
 type OperationsEventWriter interface {
@@ -28,6 +33,7 @@ type OperationsEventWriter interface {
 
 type ServerConfig struct {
 	Store                           RecordReader
+	Searcher                        RecordSearcher
 	OperationsWriter                OperationsEventWriter
 	AllowedWorkloadSPIFFE           string
 	AllowedOperationsProducerSPIFFE string
@@ -40,6 +46,7 @@ type ServerConfig struct {
 
 type server struct {
 	store                           RecordReader
+	searcher                        RecordSearcher
 	operationsWriter                OperationsEventWriter
 	allowedWorkloadSPIFFE           string
 	allowedOperationsProducerSPIFFE string
@@ -70,6 +77,12 @@ func NewHandler(config ServerConfig) http.Handler {
 	if telemetry == nil {
 		telemetry = observability.NewRuntime(observability.RuntimeConfig{Service: "audit-ledger-service"})
 	}
+	searcher := config.Searcher
+	if searcher == nil {
+		if candidate, ok := config.Store.(RecordSearcher); ok {
+			searcher = candidate
+		}
+	}
 	maximumOperationsEventBytes := config.MaximumOperationsEventBytes
 	if maximumOperationsEventBytes == 0 {
 		maximumOperationsEventBytes = 64 * 1024
@@ -79,6 +92,7 @@ func NewHandler(config ServerConfig) http.Handler {
 	}
 	return &server{
 		store:                           config.Store,
+		searcher:                        searcher,
 		operationsWriter:                config.OperationsWriter,
 		allowedWorkloadSPIFFE:           config.AllowedWorkloadSPIFFE,
 		allowedOperationsProducerSPIFFE: config.AllowedOperationsProducerSPIFFE,
@@ -123,6 +137,10 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		status = server.serveOperationsIngest(writer, request)
 		return
 	}
+	if request.Method == http.MethodPost && request.URL.Path == AuditSearchPath {
+		status = server.serveAuditSearch(writer, request)
+		return
+	}
 	if request.Method != http.MethodGet || !strings.HasPrefix(request.URL.Path, SessionAuditPathPrefix) {
 		status = http.StatusNotFound
 		writeAuditProblem(writer, status, "AUDIT_ROUTE_NOT_FOUND", "Audit route not found")
@@ -160,11 +178,6 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		writeAuditProblem(writer, status, "AUDIT_DELEGATION_REJECTED", "Delegation grant is not authorized for this audit query")
 		return
 	}
-	if !containsAuditRole(claims.Roles) {
-		status = http.StatusForbidden
-		writeAuditProblem(writer, status, "AUDIT_QUERY_FORBIDDEN", "The initiating principal cannot read audit records")
-		return
-	}
 	record, err := server.store.GetRecord(request.Context(), claims.TenantID, messageID)
 	if errors.Is(err, ErrRecordNotFound) {
 		status = http.StatusNotFound
@@ -179,6 +192,58 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(writer).Encode(record)
+}
+
+func (server *server) serveAuditSearch(writer http.ResponseWriter, request *http.Request) int {
+	if server.searcher == nil {
+		writeAuditProblem(writer, http.StatusNotFound, "AUDIT_ROUTE_NOT_FOUND", "Audit route not found")
+		return http.StatusNotFound
+	}
+	for _, header := range []string{"X-Principal", "X-Roles", "X-Tenant-ID", "X-Site-ID", "X-Admin"} {
+		if request.Header.Get(header) != "" {
+			writeAuditProblem(writer, http.StatusBadRequest, "AUDIT_FORGED_IDENTITY_HEADER", "Caller identity headers are not accepted")
+			return http.StatusBadRequest
+		}
+	}
+	certificate, peerSPIFFE, ok := verifiedPeer(request)
+	if !ok || peerSPIFFE != server.allowedWorkloadSPIFFE {
+		writeAuditProblem(writer, http.StatusUnauthorized, "AUDIT_WORKLOAD_IDENTITY_INVALID", "Workload identity is invalid")
+		return http.StatusUnauthorized
+	}
+	claims, err := identitycontext.VerifyDelegation(certificate.PublicKey, request.Header.Get("X-Delegation-Grant"))
+	if err != nil {
+		writeAuditProblem(writer, http.StatusUnauthorized, "AUDIT_DELEGATION_INVALID", "Delegation grant is invalid")
+		return http.StatusUnauthorized
+	}
+	if err := identitycontext.ValidateDelegation(claims, server.now(), peerSPIFFE, server.audience, "audit:read", "tenant:"+claims.TenantID); err != nil {
+		writeAuditProblem(writer, http.StatusForbidden, "AUDIT_DELEGATION_REJECTED", "Delegation grant is not authorized for this audit query")
+		return http.StatusForbidden
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, 32<<10)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	var filter SearchFilter
+	if err := decoder.Decode(&filter); err != nil {
+		writeAuditProblem(writer, http.StatusBadRequest, "AUDIT_SEARCH_INVALID", "Audit search filter is invalid")
+		return http.StatusBadRequest
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		writeAuditProblem(writer, http.StatusBadRequest, "AUDIT_SEARCH_INVALID", "Audit search filter is invalid")
+		return http.StatusBadRequest
+	}
+	records, err := server.searcher.SearchRecords(request.Context(), claims.TenantID, filter)
+	if err != nil {
+		writeAuditProblem(writer, http.StatusBadRequest, "AUDIT_SEARCH_INVALID", "Audit search filter is invalid")
+		return http.StatusBadRequest
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(writer).Encode(struct {
+		Items []SearchRecord `json:"items"`
+	}{Items: records})
+	return http.StatusOK
 }
 
 func (server *server) serveOperationsIngest(writer http.ResponseWriter, request *http.Request) int {
@@ -250,18 +315,12 @@ type x509CertificateView struct {
 	PublicKey any
 }
 
-func containsAuditRole(roles []string) bool {
-	for _, role := range roles {
-		if role == "audit-reader" || role == "platform-admin" {
-			return true
-		}
-	}
-	return false
-}
-
 func safeAuditPath(path string) string {
 	if path == OperationsAuditPath {
 		return OperationsAuditPath
+	}
+	if path == AuditSearchPath {
+		return AuditSearchPath
 	}
 	if strings.HasPrefix(path, SessionAuditPathPrefix) {
 		return SessionAuditPathPrefix + "{messageId}"

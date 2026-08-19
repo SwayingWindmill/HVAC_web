@@ -25,6 +25,8 @@ const sessionCookieName = "__Host-hvac_session"
 const userActivityHeaderName = "X-HVAC-User-Activity"
 const authenticationACRBasic = "urn:hvac:loa:1"
 const authenticationACRMFA = "urn:hvac:loa:2"
+const publicTenantContextsPath = "/api/v1/auth/tenant-contexts"
+const publicTenantContextPath = "/api/v1/auth/tenant-context"
 
 type IdentityConfig struct {
 	OIDCIssuer              string
@@ -74,6 +76,28 @@ type loginState struct {
 type bffSession struct {
 	sessionstore.Session
 	CSRFToken string
+}
+
+type tenantContextItem struct {
+	TenantID    string `json:"tenantId"`
+	Code        string `json:"code,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+}
+
+type tenantContextsResponse struct {
+	CurrentTenantID string              `json:"currentTenantId"`
+	Items           []tenantContextItem `json:"items"`
+}
+
+type switchTenantContextRequest struct {
+	TenantID string `json:"tenantId"`
+}
+
+type switchTenantContextResponse struct {
+	TenantID           string `json:"tenantId"`
+	CSRFToken          string `json:"csrfToken"`
+	ContextRevision    uint64 `json:"contextRevision"`
+	SiteContextCleared bool   `json:"siteContextCleared"`
 }
 
 type oidcDiscovery struct {
@@ -328,6 +352,76 @@ func (h *handler) GetCurrentPrincipal(writer http.ResponseWriter, request *http.
 	writeJSON(writer, http.StatusOK, platformapi.CurrentPrincipalResponse{Principal: toPublicUser(principal.Principal), Context: toPublicContext(principal.Context), Authorization: toPublicAuthorization(principal.Authorization), Session: platformapi.SessionView{ID: session.ID, ExpiresAt: session.ExpiresAt.UTC().Format(time.RFC3339), IdleTimeoutMS: int(h.identity.config.IdleTTL.Milliseconds()), CSRFToken: session.CSRFToken, RevocationObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds()), LastAuditMessageID: session.LastAuditMessageID}})
 }
 
+func (h *handler) ListTenantContexts(writer http.ResponseWriter, request *http.Request) {
+	session, failure := h.identitySession(request)
+	if failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	contexts, failure := h.identity.fetchTenantContexts(request.Context(), session)
+	if failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	writeJSON(writer, http.StatusOK, tenantContextsResponse{CurrentTenantID: session.TenantID, Items: contexts})
+}
+
+func (h *handler) SwitchTenantContext(writer http.ResponseWriter, request *http.Request) {
+	session, failure := h.identitySession(request)
+	if failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	if failure := h.identity.validateStateChange(request, session, request.Header.Get("X-CSRF-Token")); failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, 16<<10)
+	var input switchTenantContextRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil {
+		writeIdentityFailure(writer, request, identityFailure{400, "TENANT_CONTEXT_REQUEST_INVALID", "Tenant context request invalid", "The Tenant context request is invalid.", false})
+		return
+	}
+	input.TenantID = strings.TrimSpace(input.TenantID)
+	contexts, failure := h.identity.fetchTenantContexts(request.Context(), session)
+	if failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	authorized := false
+	for _, contextItem := range contexts {
+		if contextItem.TenantID == input.TenantID {
+			authorized = true
+			break
+		}
+	}
+	if !authorized {
+		writeIdentityFailure(writer, request, identityFailure{404, "TENANT_CONTEXT_NOT_FOUND", "Tenant context not found", "The requested Tenant context is not available.", false})
+		return
+	}
+	csrfToken := randomURLToken(32)
+	encryptedCSRF, err := h.identity.encryptBytes([]byte(csrfToken))
+	if err != nil {
+		writeIdentityFailure(writer, request, identityFailure{503, "SESSION_PERSISTENCE_FAILED", "Session unavailable", "The Tenant context could not be committed.", true})
+		return
+	}
+	mutation := h.identity.mutationContext(request, "SESSION_TENANT_CONTEXT_SWITCHED")
+	updated, err := h.identity.store.SwitchTenantContext(request.Context(), session.ID, input.TenantID, encryptedCSRF, mutation)
+	if err != nil {
+		h.identity.writeSessionMutationError(writer, request, err)
+		return
+	}
+	writer.Header().Set("X-Audit-Message-ID", updated.LastAuditMessageID)
+	writeJSON(writer, http.StatusOK, switchTenantContextResponse{
+		TenantID:           updated.TenantID,
+		CSRFToken:          csrfToken,
+		ContextRevision:    updated.AggregateVersion,
+		SiteContextCleared: true,
+	})
+}
+
 func (h *handler) Logout(writer http.ResponseWriter, request *http.Request, params platformapi.LogoutParams) {
 	session, failure := h.identitySession(request)
 	if failure != nil {
@@ -369,7 +463,7 @@ func (h *handler) RevokeSession(writer http.ResponseWriter, request *http.Reques
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
-	if !containsRole(principal.Principal.Roles, "platform-admin") {
+	if !principal.Authorization.Has(identitycontext.CapabilitySessionRevoke) {
 		writeIdentityFailure(writer, request, identityFailure{403, "SESSION_REVOCATION_FORBIDDEN", "Session revocation forbidden", "The authenticated principal is not allowed to revoke sessions.", false})
 		return
 	}
@@ -738,6 +832,55 @@ func (controller *identityController) fetchPrincipal(ctx context.Context, sessio
 		return identitycontext.InternalPrincipalResponse{}, &failure
 	}
 	return principal, nil
+}
+
+func (controller *identityController) fetchTenantContexts(ctx context.Context, session bffSession) ([]tenantContextItem, *identityFailure) {
+	ctx, span := observability.Start(ctx, "http.iam.tenant_contexts", observability.SpanKindClient, map[string]any{
+		"http.request.method": http.MethodPost, "server.service": "iam-service", "rpc.operation": "principal.tenant_contexts",
+	})
+	defer span.End()
+	now := controller.now()
+	expiry := now.Add(controller.config.DelegationTTL)
+	if expiry.After(session.ExpiresAt) {
+		expiry = session.ExpiresAt
+	}
+	claims := identitycontext.DelegationClaims{
+		Issuer: controller.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject,
+		SubjectIssuer: session.Principal.Issuer, DisplayName: session.Principal.DisplayName, Email: session.Principal.Email,
+		Roles: append([]string(nil), session.Principal.Roles...), ExecutingService: controller.config.ExecutingWorkloadSPIFFE,
+		Audience: controller.config.IAMAudience, TenantID: session.TenantID, Actions: []string{"tenant-context:list"},
+		Scopes: []string{"session:" + session.ID}, PolicyRevision: controller.config.PolicyRevision, SessionID: session.ID,
+		IssuedAt: now.Unix(), ExpiresAt: expiry.Unix(), TokenID: randomURLToken(16),
+	}
+	grant, err := identitycontext.SignDelegation(controller.config.DelegationSigner, claims)
+	if err != nil {
+		failure := identityFailure{503, "DELEGATION_SIGNING_FAILED", "Tenant contexts unavailable", "The Gateway could not create a constrained Tenant context delegation.", true}
+		return nil, &failure
+	}
+	internalRequest, _ := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(controller.config.IAMURL, "/")+"/internal/v1/principal/tenant-contexts", nil)
+	internalRequest.Header.Set("X-Delegation-Grant", grant)
+	internalRequest.Header.Set("Accept", "application/json, application/problem+json")
+	observability.InjectHTTP(ctx, internalRequest.Header)
+	response, err := controller.config.IAMHTTPClient.Do(internalRequest)
+	if err != nil {
+		failure := identityFailure{503, "IAM_UNAVAILABLE", "IAM unavailable", "The private IAM service could not be reached.", true}
+		return nil, &failure
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		failure := identityFailure{403, "IAM_TENANT_CONTEXTS_REJECTED", "Tenant contexts rejected", "IAM rejected the Tenant context query.", false}
+		return nil, &failure
+	}
+	var payload struct {
+		Items []tenantContextItem `json:"items"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&payload) != nil || ensureJSONEOF(decoder) != nil {
+		failure := identityFailure{503, "IAM_RESPONSE_INVALID", "IAM response invalid", "IAM returned an invalid Tenant context response.", true}
+		return nil, &failure
+	}
+	return payload.Items, nil
 }
 
 func (controller *identityController) mutationContext(request *http.Request, action string) sessionstore.MutationContext {

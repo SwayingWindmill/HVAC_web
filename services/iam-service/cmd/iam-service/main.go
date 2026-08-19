@@ -63,6 +63,7 @@ func main() {
 	var workOrderAuthorizationStore iam.WorkOrderAuthorizationStore
 	var workOrderAuditSink iam.WorkOrderDecisionAuditSink
 	var telemetryGrantStore iam.TelemetryGrantStore
+	var adminStore iam.AdminStore
 	var grantStatusStore iam.RegistryGrantStatusStore = iam.StaticRegistryGrantStatusStore{PolicyRevision: policyRevision}
 	databaseURL := strings.TrimSpace(os.Getenv("IAM_DATABASE_URL"))
 	fixtureEnabled := envEnabled("IAM_S1_AUTHORIZATION_FIXTURE")
@@ -102,6 +103,25 @@ func main() {
 		logger.Warn("iam_s2_authorization_fixture_enabled", "policy_revision", iam.S2FixturePolicyRevision)
 	}
 
+	adminDatabaseURL := strings.TrimSpace(os.Getenv("IAM_ADMIN_DATABASE_URL"))
+	if adminDatabaseURL != "" {
+		pepper, err := os.ReadFile(requiredEnv("IAM_API_CREDENTIAL_PEPPER_FILE"))
+		if err != nil {
+			logger.Error("iam_api_credential_pepper_load_failed", "error_code", "IAM_API_CREDENTIAL_PEPPER_LOAD_FAILED")
+			os.Exit(1)
+		}
+		openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
+		postgresAdminStore, err := iam.OpenPostgresAdminStore(openContext, adminDatabaseURL, pepper)
+		cancelOpen()
+		if err != nil {
+			logger.Error("iam_admin_store_open_failed", "error_code", "IAM_ADMIN_STORE_OPEN_FAILED")
+			os.Exit(1)
+		}
+		defer postgresAdminStore.Close()
+		adminStore = postgresAdminStore
+		logger.Info("iam_postgres_admin_store_enabled")
+	}
+
 	telemetryGrantDatabaseURL := strings.TrimSpace(os.Getenv("IAM_TELEMETRY_GRANT_DATABASE_URL"))
 	if telemetryGrantDatabaseURL != "" {
 		openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
@@ -125,6 +145,7 @@ func main() {
 			Logger:                logger,
 			Observability:         telemetry,
 			AuthorizationStore:    authorizationStore,
+			AdminStore:            adminStore,
 			RegistryGrantSigner:   registryGrantSigner,
 			RegistryGrantIssuer:   iamSPIFFEID,
 			RegistryGrantAudience: envOr("IAM_REGISTRY_GRANT_AUDIENCE", "platform-core-service"),

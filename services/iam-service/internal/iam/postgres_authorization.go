@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 )
@@ -187,18 +188,20 @@ ORDER BY id
 func loadPolicyRevision(ctx context.Context, transaction pgx.Tx) (string, error) {
 	var policyKey string
 	var policyRevision int64
+	var authorizationRevision int64
 	if err := transaction.QueryRow(ctx, `
-SELECT policy_key, policy_revision
-FROM iam.policies
-WHERE status = 'ACTIVE'
-  AND policy_key = 'registry-read'
-`).Scan(&policyKey, &policyRevision); err != nil {
+SELECT policy.policy_key, policy.policy_revision, authorization.revision
+FROM iam.policies policy
+JOIN iam.authorization_revisions authorization ON authorization.tenant_id = policy.tenant_id
+WHERE policy.status = 'ACTIVE'
+  AND policy.policy_key = 'registry-read'
+`).Scan(&policyKey, &policyRevision, &authorizationRevision); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", errors.New("active IAM Registry policy is missing")
 		}
 		return "", fmt.Errorf("read active IAM Registry policy: %w", err)
 	}
-	return fmt.Sprintf("%s:%d", policyKey, policyRevision), nil
+	return fmt.Sprintf("%s:%d/iam:%d", policyKey, policyRevision, authorizationRevision), nil
 }
 
 func loadTenantMemberships(ctx context.Context, transaction pgx.Tx) ([]TenantMembership, error) {
@@ -227,9 +230,12 @@ ORDER BY tenant_id
 
 func loadRoleBindings(ctx context.Context, transaction pgx.Tx) ([]RoleBinding, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT tenant_id::text, role_key, actions, effect, valid_from, valid_to
-FROM iam.role_bindings
-ORDER BY tenant_id, role_key
+SELECT binding.tenant_id::text, template.role_key, template.capabilities,
+       binding.status, binding.valid_from, binding.valid_to
+FROM iam.role_bindings binding
+JOIN iam.role_templates template ON template.id = binding.role_template_id
+WHERE template.status = 'ACTIVE'
+ORDER BY binding.tenant_id, template.role_key
 `)
 	if err != nil {
 		return nil, fmt.Errorf("query IAM role bindings: %w", err)
@@ -238,15 +244,16 @@ ORDER BY tenant_id, role_key
 	bindings := []RoleBinding{}
 	for rows.Next() {
 		var binding RoleBinding
-		var actions []string
-		if err := rows.Scan(&binding.TenantID, &binding.RoleKey, &actions, &binding.Effect, &binding.ValidFrom, &binding.ValidTo); err != nil {
+		var capabilities []string
+		if err := rows.Scan(&binding.TenantID, &binding.RoleKey, &capabilities, &binding.Status, &binding.ValidFrom, &binding.ValidTo); err != nil {
 			return nil, fmt.Errorf("scan IAM role binding: %w", err)
 		}
-		binding.Actions, err = postgresRegistryActions(actions)
+		binding.Actions, err = postgresRegistryActions(capabilities)
 		if err != nil {
-			return nil, fmt.Errorf("validate IAM role binding actions: %w", err)
+			return nil, fmt.Errorf("validate IAM role binding capabilities: %w", err)
 		}
-		binding.Status = FactStatusActive
+		binding.Capabilities = postgresIdentityCapabilities(capabilities)
+		binding.Effect = BindingEffectAllow
 		bindings = append(bindings, binding)
 	}
 	if err := rows.Err(); err != nil {
@@ -257,7 +264,7 @@ ORDER BY tenant_id, role_key
 
 func loadSiteBindings(ctx context.Context, transaction pgx.Tx) ([]SiteBinding, error) {
 	rows, err := transaction.Query(ctx, `
-SELECT tenant_id::text, site_id::text, actions, effect, valid_from, valid_to
+SELECT tenant_id::text, site_id::text, actions, effect, status, valid_from, valid_to
 FROM iam.site_bindings
 ORDER BY tenant_id, site_id
 `)
@@ -274,6 +281,7 @@ ORDER BY tenant_id, site_id
 			&binding.SiteID,
 			&actions,
 			&binding.Effect,
+			&binding.Status,
 			&binding.ValidFrom,
 			&binding.ValidTo,
 		); err != nil {
@@ -283,7 +291,6 @@ ORDER BY tenant_id, site_id
 		if err != nil {
 			return nil, fmt.Errorf("validate IAM site binding actions: %w", err)
 		}
-		binding.Status = FactStatusActive
 		bindings = append(bindings, binding)
 	}
 	if err := rows.Err(); err != nil {
@@ -319,9 +326,17 @@ ORDER BY tenant_id, site_id, action
 		if siteID != nil {
 			deny.SiteID = *siteID
 		}
+		if capability := identitycontext.Capability(action); capability.Valid() {
+			deny.Capabilities = []identitycontext.Capability{capability}
+		}
 		parsedAction := registryauth.Action(action)
 		if !parsedAction.Valid() && action != analyticsmodel.EnergySeriesAction {
 			if telemetryauth.Action(action).Valid() {
+				continue
+			}
+			if len(deny.Capabilities) > 0 {
+				deny.Status = FactStatusActive
+				denies = append(denies, deny)
 				continue
 			}
 			return nil, fmt.Errorf("validate IAM explicit deny action: unsupported action %q", action)
@@ -344,12 +359,23 @@ func postgresRegistryActions(values []string) ([]registryauth.Action, error) {
 			actions = append(actions, action)
 			continue
 		}
-		if telemetryauth.Action(value).Valid() {
+		if catalogCapabilityValid(value) {
 			continue
 		}
 		return nil, fmt.Errorf("unsupported action %q", value)
 	}
 	return actions, nil
+}
+
+func postgresIdentityCapabilities(values []string) []identitycontext.Capability {
+	capabilities := make([]identitycontext.Capability, 0, len(values))
+	for _, value := range values {
+		capability := identitycontext.Capability(value)
+		if capability.Valid() {
+			capabilities = append(capabilities, capability)
+		}
+	}
+	return capabilities
 }
 
 func (store *PostgresAuthorizationStore) LookupRegistryGrantStatus(ctx context.Context, tenantID, tokenID string) (RegistryGrantStatus, error) {

@@ -152,6 +152,68 @@ func (store *PostgresStore) TouchSession(ctx context.Context, sessionID string, 
 	return store.GetSession(ctx, sessionID)
 }
 
+func (store *PostgresStore) SwitchTenantContext(ctx context.Context, sessionID, tenantID string, csrfTokenCiphertext []byte, mutation MutationContext) (Session, error) {
+	ctx, span := observability.Start(ctx, "postgres.session.transaction", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.switch_tenant"})
+	defer span.End()
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Session{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	session, err := scanSession(tx.QueryRow(ctx, sessionSelect+` WHERE session_id = $1 FOR UPDATE`, sessionID))
+	if err != nil {
+		return Session{}, err
+	}
+	if session.RevokedAt != nil {
+		return Session{}, ErrSessionRevoked
+	}
+	if mutation.CausationID == "" {
+		mutation.CausationID = session.LastAuditMessageID
+	}
+	messageID := store.ids()
+	session.TenantID = tenantID
+	session.CSRFTokenCiphertext = append([]byte(nil), csrfTokenCiphertext...)
+	session.AggregateVersion++
+	session.LastAuditMessageID = messageID
+	session.UpdatedAt = mutation.OccurredAt.UTC()
+	event, payload, err := buildEvent(session, mutation, messageID, "ACTIVE")
+	if err != nil {
+		return Session{}, err
+	}
+	command, err := tx.Exec(ctx, `
+		UPDATE gateway.sessions
+		SET tenant_id = $2, csrf_token_ciphertext = $3, aggregate_version = $4,
+		    last_audit_message_id = $5, updated_at = $6
+		WHERE session_id = $1 AND revoked_at IS NULL
+	`, session.ID, session.TenantID, session.CSRFTokenCiphertext, session.AggregateVersion, messageID, session.UpdatedAt)
+	if err != nil {
+		return Session{}, err
+	}
+	if command.RowsAffected() != 1 {
+		return Session{}, ErrSessionConflict
+	}
+	if err := store.inject(FailureAfterStateWrite); err != nil {
+		return Session{}, err
+	}
+	if err := insertAuditIntent(ctx, tx, session, mutation, event); err != nil {
+		return Session{}, err
+	}
+	if err := store.inject(FailureAfterAuditIntent); err != nil {
+		return Session{}, err
+	}
+	if err := insertOutbox(ctx, tx, event, payload); err != nil {
+		return Session{}, err
+	}
+	if err := store.inject(FailureBeforeCommit); err != nil {
+		return Session{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Session{}, err
+	}
+	return cloneSession(session), nil
+}
+
 func (store *PostgresStore) RevokeSession(ctx context.Context, sessionID string, mutation MutationContext) (Session, error) {
 	ctx, span := observability.Start(ctx, "postgres.session.transaction", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.revoke"})
 	defer span.End()

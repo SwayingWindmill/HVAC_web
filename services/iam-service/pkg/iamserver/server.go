@@ -19,6 +19,7 @@ type PrincipalCapabilityResolver = iam.PrincipalCapabilityResolver
 type PrincipalCapabilityLookup = iam.PrincipalCapabilityLookup
 type BindingEffect = iam.BindingEffect
 type PostgresAuthorizationStore = iam.PostgresAuthorizationStore
+type PostgresAdminStore = iam.PostgresAdminStore
 type PostgresTelemetryGrantStore = iam.PostgresTelemetryGrantStore
 type TelemetryGrantStore = iam.TelemetryGrantStore
 type StaticRegistryGrantStatusStore = iam.StaticRegistryGrantStatusStore
@@ -42,6 +43,10 @@ func NewDenyAllAuthorizationStore(policyRevision string) AuthorizationStore {
 
 func OpenPostgresAuthorizationStore(ctx context.Context, databaseURL string) (*PostgresAuthorizationStore, error) {
 	return iam.OpenPostgresAuthorizationStore(ctx, databaseURL)
+}
+
+func OpenPostgresAdminStore(ctx context.Context, databaseURL string, pepper []byte) (*PostgresAdminStore, error) {
+	return iam.OpenPostgresAdminStore(ctx, databaseURL, pepper)
 }
 
 func OpenPostgresTelemetryGrantStore(ctx context.Context, databaseURL string) (*PostgresTelemetryGrantStore, error) {

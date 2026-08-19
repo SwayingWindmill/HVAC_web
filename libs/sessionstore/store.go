@@ -66,6 +66,7 @@ type Store interface {
 	CreateSession(context.Context, Session, MutationContext) (Session, error)
 	GetSession(context.Context, string) (Session, error)
 	TouchSession(context.Context, string, time.Time) (Session, error)
+	SwitchTenantContext(context.Context, string, string, []byte, MutationContext) (Session, error)
 	RevokeSession(context.Context, string, MutationContext) (Session, error)
 }
 
@@ -135,6 +136,36 @@ func (store *MemoryStore) TouchSession(ctx context.Context, sessionID string, at
 	}
 	session.LastActivityAt = at.UTC()
 	store.sessions[sessionID] = cloneSession(session)
+	return cloneSession(session), nil
+}
+
+func (store *MemoryStore) SwitchTenantContext(ctx context.Context, sessionID, tenantID string, csrfTokenCiphertext []byte, mutation MutationContext) (Session, error) {
+	_, span := observability.Start(ctx, "sessionstore.memory.switch_tenant", observability.SpanKindInternal, map[string]any{"db.system": "memory", "db.operation": "session.switch_tenant"})
+	defer span.End()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	session, exists := store.sessions[sessionID]
+	if !exists {
+		return Session{}, ErrSessionNotFound
+	}
+	if session.RevokedAt != nil {
+		return Session{}, ErrSessionRevoked
+	}
+	if mutation.CausationID == "" {
+		mutation.CausationID = session.LastAuditMessageID
+	}
+	messageID := store.ids()
+	session.TenantID = tenantID
+	session.CSRFTokenCiphertext = append([]byte(nil), csrfTokenCiphertext...)
+	session.AggregateVersion++
+	session.LastAuditMessageID = messageID
+	session.UpdatedAt = mutation.OccurredAt.UTC()
+	event, _, err := buildEvent(session, mutation, messageID, "ACTIVE")
+	if err != nil {
+		return Session{}, err
+	}
+	store.sessions[sessionID] = cloneSession(session)
+	store.events[messageID] = event
 	return cloneSession(session), nil
 }
 

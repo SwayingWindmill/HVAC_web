@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const CapabilitySetVersion = 7
+const CapabilitySetVersion = 8
 
 type Capability string
 
@@ -28,6 +28,10 @@ const (
 	CapabilityWorkOrderCreate       Capability = "work-order.create"
 	CapabilityWorkOrderAssign       Capability = "work-order.assign"
 	CapabilityWorkOrderLifecycle    Capability = "work-order.lifecycle"
+	CapabilitySessionRevoke         Capability = "session.revoke"
+	CapabilityAuditRead             Capability = "audit.read"
+	CapabilityIAMAdmin              Capability = "iam.admin"
+	CapabilityAPICredentialManage   Capability = "api-credential.manage"
 )
 
 var supportedCapabilities = [...]Capability{
@@ -48,6 +52,10 @@ var supportedCapabilities = [...]Capability{
 	CapabilityWorkOrderCreate,
 	CapabilityWorkOrderAssign,
 	CapabilityWorkOrderLifecycle,
+	CapabilitySessionRevoke,
+	CapabilityAuditRead,
+	CapabilityIAMAdmin,
+	CapabilityAPICredentialManage,
 }
 
 func SupportedCapabilities() []Capability {
@@ -72,11 +80,24 @@ func (capability Capability) Valid() bool {
 		CapabilityWorkOrderRead,
 		CapabilityWorkOrderCreate,
 		CapabilityWorkOrderAssign,
-		CapabilityWorkOrderLifecycle:
+		CapabilityWorkOrderLifecycle,
+		CapabilitySessionRevoke,
+		CapabilityAuditRead,
+		CapabilityIAMAdmin,
+		CapabilityAPICredentialManage:
 		return true
 	default:
 		return false
 	}
+}
+
+func (authorization EffectiveAuthorization) Has(capability Capability) bool {
+	for _, granted := range authorization.Capabilities {
+		if granted == capability {
+			return true
+		}
+	}
+	return false
 }
 
 type EffectiveAuthorization struct {

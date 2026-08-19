@@ -30,29 +30,54 @@ type MessageMetadata struct {
 }
 
 type Record struct {
-	LedgerSequence       int64     `json:"ledgerSequence"`
-	MessageID            string    `json:"messageId"`
-	SchemaVersion        uint32    `json:"schemaVersion"`
-	TenantID              string    `json:"tenantId"`
-	AggregateType        string    `json:"aggregateType"`
-	AggregateID          string    `json:"aggregateId"`
-	AggregateVersion     uint64    `json:"aggregateVersion"`
-	OccurredAt           time.Time `json:"occurredAt"`
-	InitiatingSubject    string    `json:"initiatingSubject"`
-	InitiatingIssuer     string    `json:"initiatingIssuer"`
-	ExecutingService     string    `json:"executingService"`
-	ExecutingSPIFFEID    string    `json:"executingSpiffeId"`
-	Action               string    `json:"action"`
-	Result               string    `json:"result"`
-	PolicyRevision       string    `json:"policyRevision"`
-	CorrelationID        string    `json:"correlationId"`
-	CausationID          string    `json:"causationId"`
-	TraceID              string    `json:"traceId"`
-	Traceparent          string    `json:"-"`
-	PayloadSHA256        string    `json:"payloadSha256"`
-	PreviousRecordHash   string    `json:"previousRecordHash"`
-	RecordHash           string    `json:"recordHash"`
-	RecordedAt           time.Time `json:"recordedAt"`
+	LedgerSequence     int64     `json:"ledgerSequence"`
+	MessageID          string    `json:"messageId"`
+	SchemaVersion      uint32    `json:"schemaVersion"`
+	TenantID           string    `json:"tenantId"`
+	AggregateType      string    `json:"aggregateType"`
+	AggregateID        string    `json:"aggregateId"`
+	AggregateVersion   uint64    `json:"aggregateVersion"`
+	OccurredAt         time.Time `json:"occurredAt"`
+	InitiatingSubject  string    `json:"initiatingSubject"`
+	InitiatingIssuer   string    `json:"initiatingIssuer"`
+	ExecutingService   string    `json:"executingService"`
+	ExecutingSPIFFEID  string    `json:"executingSpiffeId"`
+	Action             string    `json:"action"`
+	Result             string    `json:"result"`
+	PolicyRevision     string    `json:"policyRevision"`
+	CorrelationID      string    `json:"correlationId"`
+	CausationID        string    `json:"causationId"`
+	TraceID            string    `json:"traceId"`
+	Traceparent        string    `json:"-"`
+	PayloadSHA256      string    `json:"payloadSha256"`
+	PreviousRecordHash string    `json:"previousRecordHash"`
+	RecordHash         string    `json:"recordHash"`
+	RecordedAt         time.Time `json:"recordedAt"`
+}
+
+type SearchFilter struct {
+	Actor        string     `json:"actor,omitempty"`
+	Action       string     `json:"action,omitempty"`
+	ResourceType string     `json:"resourceType,omitempty"`
+	ResourceID   string     `json:"resourceId,omitempty"`
+	Outcome      string     `json:"outcome,omitempty"`
+	From         *time.Time `json:"from,omitempty"`
+	To           *time.Time `json:"to,omitempty"`
+	Limit        int        `json:"limit,omitempty"`
+}
+
+type SearchRecord struct {
+	LedgerSequence int64     `json:"ledgerSequence"`
+	MessageID      string    `json:"messageId"`
+	TenantID       string    `json:"tenantId"`
+	Actor          string    `json:"actor"`
+	Action         string    `json:"action"`
+	ResourceType   string    `json:"resourceType"`
+	ResourceID     string    `json:"resourceId"`
+	Outcome        string    `json:"outcome"`
+	PolicyRevision string    `json:"policyRevision"`
+	CorrelationID  string    `json:"correlationId"`
+	OccurredAt     time.Time `json:"occurredAt"`
 }
 
 type Store struct {
@@ -287,6 +312,60 @@ func (store *Store) GetRecord(ctx context.Context, tenantID, messageID string) (
 		return Record{}, err
 	}
 	return record, nil
+}
+
+func (store *Store) SearchRecords(ctx context.Context, tenantID string, filter SearchFilter) ([]SearchRecord, error) {
+	limit := filter.Limit
+	if limit == 0 {
+		limit = 50
+	}
+	if limit < 1 || limit > 100 {
+		return nil, errors.New("audit search limit must be between 1 and 100")
+	}
+	if filter.From != nil && filter.To != nil && filter.To.Before(*filter.From) {
+		return nil, errors.New("audit search time range is invalid")
+	}
+	tx, err := store.query.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, tenantID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `
+SELECT ledger_sequence, message_id, tenant_id, initiating_subject, action,
+       aggregate_type, aggregate_id, result, policy_revision, correlation_id, occurred_at
+FROM audit_ledger.records
+WHERE ($1 = '' OR initiating_subject = $1)
+  AND ($2 = '' OR action = $2)
+  AND ($3 = '' OR aggregate_type = $3)
+  AND ($4 = '' OR aggregate_id = $4)
+  AND ($5 = '' OR result = $5)
+  AND ($6::timestamptz IS NULL OR occurred_at >= $6::timestamptz)
+  AND ($7::timestamptz IS NULL OR occurred_at <= $7::timestamptz)
+ORDER BY occurred_at DESC, ledger_sequence DESC
+LIMIT $8
+`, filter.Actor, filter.Action, filter.ResourceType, filter.ResourceID, filter.Outcome, filter.From, filter.To, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []SearchRecord{}
+	for rows.Next() {
+		var record SearchRecord
+		if err := rows.Scan(&record.LedgerSequence, &record.MessageID, &record.TenantID, &record.Actor, &record.Action, &record.ResourceType, &record.ResourceID, &record.Outcome, &record.PolicyRevision, &record.CorrelationID, &record.OccurredAt); err != nil {
+			return nil, err
+		}
+		result = append(result, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (store *Store) CountRecords(ctx context.Context, tenantID, messageID string) (int, error) {

@@ -276,6 +276,24 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 	closeFuncs := []func(){store.Close}
 	policyRevision = "database-managed"
 
+	var adminStore *iamserver.PostgresAdminStore
+	if adminDatabaseURL := strings.TrimSpace(os.Getenv("IAM_ADMIN_DATABASE_URL")); adminDatabaseURL != "" {
+		pepper, readErr := os.ReadFile(energyRequiredEnv("IAM_API_CREDENTIAL_PEPPER_FILE"))
+		if readErr != nil {
+			store.Close()
+			return nil, nil, func() {}, readErr
+		}
+		openContext, cancelOpen = context.WithTimeout(ctx, 5*time.Second)
+		postgresAdminStore, openErr := iamserver.OpenPostgresAdminStore(openContext, adminDatabaseURL, pepper)
+		cancelOpen()
+		if openErr != nil {
+			store.Close()
+			return nil, nil, func() {}, openErr
+		}
+		adminStore = postgresAdminStore
+		closeFuncs = append(closeFuncs, postgresAdminStore.Close)
+	}
+
 	var telemetryGrantStore iamserver.TelemetryGrantStore
 	if grantDatabaseURL := strings.TrimSpace(os.Getenv("IAM_TELEMETRY_GRANT_DATABASE_URL")); grantDatabaseURL != "" {
 		openContext, cancelOpen = context.WithTimeout(ctx, 5*time.Second)
@@ -299,6 +317,7 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 		Logger:                logger,
 		Observability:         telemetry,
 		AuthorizationStore:    store,
+		AdminStore:            adminStore,
 		RegistryGrantSigner:   signer,
 		RegistryGrantIssuer:   iamSPIFFEID,
 		RegistryGrantAudience: envOr("IAM_REGISTRY_GRANT_AUDIENCE", "platform-core-service"),

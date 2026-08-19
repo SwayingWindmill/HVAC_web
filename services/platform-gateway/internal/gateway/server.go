@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
@@ -180,7 +181,7 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		h.authorizeOperationsTool(writer, request)
 		return
 	}
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Work-Order-Read-Context", "X-Work-Order-Write-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Asset-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant"} {
+	for _, header := range []string{"X-Principal", "X-Roles", "X-Tenant-ID", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Work-Order-Read-Context", "X-Work-Order-Write-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Asset-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant"} {
 		if request.Header.Get(header) == "" {
 			continue
 		}
@@ -302,6 +303,48 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		h.GetCurrentPrincipal(writer, request)
+	case publicTenantContextsPath:
+		if request.Method != http.MethodGet {
+			writeMethodNotAllowedFor(writer, request, http.MethodGet)
+			return
+		}
+		h.ListTenantContexts(writer, request)
+	case publicTenantContextPath:
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
+			return
+		}
+		h.SwitchTenantContext(writer, request)
+	case publicAuditSearchPath:
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
+			return
+		}
+		h.SearchAudit(writer, request)
+	case publicIAMAdminMutationPath:
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
+			return
+		}
+		h.IAMAdmin(writer, request, iamAdminRoute{internalPath: internalIAMAdminMutationPath, action: "iam:admin", capability: identitycontext.CapabilityIAMAdmin})
+	case publicAPICredentialCreatePath:
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
+			return
+		}
+		h.IAMAdmin(writer, request, iamAdminRoute{internalPath: internalAPICredentialCreatePath, action: "api-credential:manage", capability: identitycontext.CapabilityAPICredentialManage})
+	case publicAPICredentialRotatePath:
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
+			return
+		}
+		h.IAMAdmin(writer, request, iamAdminRoute{internalPath: internalAPICredentialRotatePath, action: "api-credential:manage", capability: identitycontext.CapabilityAPICredentialManage})
+	case publicAPICredentialRevokePath:
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
+			return
+		}
+		h.IAMAdmin(writer, request, iamAdminRoute{internalPath: internalAPICredentialRevokePath, action: "api-credential:manage", capability: identitycontext.CapabilityAPICredentialManage})
 	case platformapi.LogoutPath:
 		if request.Method != http.MethodPost {
 			writeMethodNotAllowedFor(writer, request, http.MethodPost)

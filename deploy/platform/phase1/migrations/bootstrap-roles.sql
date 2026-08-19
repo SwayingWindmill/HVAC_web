@@ -15,6 +15,7 @@ BEGIN
 
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_iam_migrator') THEN CREATE ROLE s1_iam_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_iam_runtime') THEN CREATE ROLE s1_iam_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_iam_admin') THEN CREATE ROLE s1_iam_admin LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_iam_reconciler') THEN CREATE ROLE s1_iam_reconciler LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_core_migrator') THEN CREATE ROLE s1_core_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_core_runtime') THEN CREATE ROLE s1_core_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
@@ -79,8 +80,8 @@ CREATE SCHEMA IF NOT EXISTS core_registry AUTHORIZATION s1_core_migrator;
 ALTER SCHEMA iam OWNER TO s1_iam_migrator;
 ALTER SCHEMA core_registry OWNER TO s1_core_migrator;
 REVOKE ALL ON SCHEMA iam, core_registry FROM PUBLIC;
-GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_reconciler, s1_core_service, metric_engine_runtime, scheduler_runtime, s2_iam_grant_runtime;
-GRANT USAGE ON SCHEMA iam TO s1_iam_runtime, s1_iam_reconciler;
+GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_admin, s1_iam_reconciler, s1_core_service, metric_engine_runtime, scheduler_runtime, s2_iam_grant_runtime;
+GRANT USAGE ON SCHEMA iam TO s1_iam_runtime, s1_iam_admin, s1_iam_reconciler;
 GRANT USAGE ON SCHEMA core_registry TO s1_core_runtime, metric_engine_runtime, scheduler_runtime, settlement_runtime, forecast_runtime, optimization_runtime;
 GRANT s1_core_runtime TO s1_core_service;
 

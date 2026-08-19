@@ -21,6 +21,10 @@ import (
 
 const (
 	CurrentPrincipalPath       = "/internal/v1/principal/current"
+	AdminMutationPath          = "/internal/v1/admin/mutations"
+	APICredentialCreatePath    = "/internal/v1/admin/api-credentials/create"
+	APICredentialRotatePath    = "/internal/v1/admin/api-credentials/rotate"
+	APICredentialRevokePath    = "/internal/v1/admin/api-credentials/revoke"
 	RegistryReadDecisionPath   = "/internal/v1/registry-read/decision"
 	TelemetryDecisionPath      = "/internal/v1/telemetry/decision"
 	CommandDecisionPath        = "/internal/v1/command/decision"
@@ -46,6 +50,8 @@ type Config struct {
 	Now                            func() time.Time
 	AuthorizationStore             AuthorizationStore
 	PrincipalCapabilityResolver    PrincipalCapabilityResolver
+	TenantContextResolver          TenantContextResolver
+	AdminStore                     AdminStore
 	RegistryGrantSigner            crypto.Signer
 	RegistryGrantIssuer            string
 	RegistryGrantAudience          string
@@ -84,6 +90,8 @@ type handler struct {
 	now                            func() time.Time
 	authorizationStore             AuthorizationStore
 	principalCapabilityResolver    PrincipalCapabilityResolver
+	tenantContextResolver          TenantContextResolver
+	adminStore                     AdminStore
 	registryGrantSigner            crypto.Signer
 	registryGrantIssuer            string
 	registryGrantAudience          string
@@ -144,7 +152,17 @@ func NewHandler(config Config) http.Handler {
 	}
 	principalCapabilityResolver := config.PrincipalCapabilityResolver
 	if principalCapabilityResolver == nil {
-		principalCapabilityResolver = newPrincipalCapabilityResolver(store, telemetryStore, alarmStore, workOrderStore, now)
+		principalCapabilityResolver = withManagementCapabilities(
+			newPrincipalCapabilityResolver(store, telemetryStore, alarmStore, workOrderStore, now),
+			store,
+			now,
+		)
+	}
+	tenantContextResolver := config.TenantContextResolver
+	if tenantContextResolver == nil {
+		if resolver, ok := store.(TenantContextResolver); ok {
+			tenantContextResolver = resolver
+		}
 	}
 	grantIssuer := config.RegistryGrantIssuer
 	if grantIssuer == "" {
@@ -242,6 +260,8 @@ func NewHandler(config Config) http.Handler {
 		now:                            now,
 		authorizationStore:             store,
 		principalCapabilityResolver:    principalCapabilityResolver,
+		tenantContextResolver:          tenantContextResolver,
+		adminStore:                     config.AdminStore,
 		registryGrantSigner:            config.RegistryGrantSigner,
 		registryGrantIssuer:            grantIssuer,
 		registryGrantAudience:          grantAudience,
@@ -351,6 +371,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	switch request.URL.Path {
 	case CurrentPrincipalPath:
 		status = h.handleCurrentPrincipal(request.Context(), writer, claims, spiffeID)
+	case TenantContextsPath:
+		status = h.handleTenantContexts(request.Context(), writer, claims)
+	case AdminMutationPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath:
+		status = h.handleAdminRoute(writer, request, claims)
 	case RegistryReadDecisionPath:
 		status = h.handleRegistryReadDecision(writer, request, claims, spiffeID)
 	case TelemetryDecisionPath:
@@ -399,6 +423,22 @@ func (h *handler) handleRegistryGrantStatusRoute(writer http.ResponseWriter, req
 		return http.StatusServiceUnavailable
 	}
 	writeJSON(writer, http.StatusOK, status)
+	return http.StatusOK
+}
+
+func (h *handler) handleTenantContexts(ctx context.Context, writer http.ResponseWriter, claims identitycontext.DelegationClaims) int {
+	if h.tenantContextResolver == nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "IAM_TENANT_CONTEXTS_UNAVAILABLE", "Tenant contexts are unavailable.")
+		return http.StatusServiceUnavailable
+	}
+	contexts, err := h.tenantContextResolver.ListTenantContexts(ctx, claims.SubjectIssuer, claims.Subject, h.now())
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "IAM_TENANT_CONTEXTS_UNAVAILABLE", "Tenant contexts are unavailable.")
+		return http.StatusServiceUnavailable
+	}
+	writeJSON(writer, http.StatusOK, struct {
+		Items []TenantContext `json:"items"`
+	}{Items: contexts})
 	return http.StatusOK
 }
 
@@ -615,6 +655,12 @@ func expectedInboundAction(path string) (string, bool) {
 	switch path {
 	case CurrentPrincipalPath:
 		return "principal:read", true
+	case TenantContextsPath:
+		return "tenant-context:list", true
+	case AdminMutationPath:
+		return "iam:admin", true
+	case APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath:
+		return "api-credential:manage", true
 	case RegistryReadDecisionPath:
 		return registryAuthorizeAction, true
 	case TelemetryDecisionPath:
@@ -649,7 +695,7 @@ type x509CertificateView struct {
 
 func safePath(path string) string {
 	switch path {
-	case CurrentPrincipalPath, RegistryReadDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath:
+	case CurrentPrincipalPath, TenantContextsPath, AdminMutationPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath, RegistryReadDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath:
 		return path
 	default:
 		return "unmatched"

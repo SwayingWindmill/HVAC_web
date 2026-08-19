@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
@@ -35,14 +36,15 @@ type TenantMembership struct {
 }
 
 type RoleBinding struct {
-	TenantID  string
-	SiteID    string
-	RoleKey   string
-	Actions   []registryauth.Action
-	Effect    BindingEffect
-	Status    FactStatus
-	ValidFrom time.Time
-	ValidTo   *time.Time
+	TenantID     string
+	SiteID       string
+	RoleKey      string
+	Actions      []registryauth.Action
+	Capabilities []identitycontext.Capability
+	Effect       BindingEffect
+	Status       FactStatus
+	ValidFrom    time.Time
+	ValidTo      *time.Time
 }
 
 type SiteBinding struct {
@@ -56,12 +58,13 @@ type SiteBinding struct {
 }
 
 type ExplicitDeny struct {
-	TenantID  string
-	SiteID    string
-	Actions   []registryauth.Action
-	Status    FactStatus
-	ValidFrom time.Time
-	ValidTo   *time.Time
+	TenantID     string
+	SiteID       string
+	Actions      []registryauth.Action
+	Capabilities []identitycontext.Capability
+	Status       FactStatus
+	ValidFrom    time.Time
+	ValidTo      *time.Time
 }
 
 type AuthorizationFacts struct {
@@ -384,6 +387,7 @@ func cloneAuthorizationFacts(value AuthorizationFacts) AuthorizationFacts {
 	value.RoleBindings = append([]RoleBinding(nil), value.RoleBindings...)
 	for index := range value.RoleBindings {
 		value.RoleBindings[index].Actions = append([]registryauth.Action(nil), value.RoleBindings[index].Actions...)
+		value.RoleBindings[index].Capabilities = append([]identitycontext.Capability(nil), value.RoleBindings[index].Capabilities...)
 	}
 	value.SiteBindings = append([]SiteBinding(nil), value.SiteBindings...)
 	for index := range value.SiteBindings {
@@ -392,6 +396,7 @@ func cloneAuthorizationFacts(value AuthorizationFacts) AuthorizationFacts {
 	value.ExplicitDenies = append([]ExplicitDeny(nil), value.ExplicitDenies...)
 	for index := range value.ExplicitDenies {
 		value.ExplicitDenies[index].Actions = append([]registryauth.Action(nil), value.ExplicitDenies[index].Actions...)
+		value.ExplicitDenies[index].Capabilities = append([]identitycontext.Capability(nil), value.ExplicitDenies[index].Capabilities...)
 	}
 	return value
 }

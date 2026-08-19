@@ -17,6 +17,7 @@ COPY infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql /opt/hvac/
 COPY infra/s0-durable/postgres/init/003-operations-audit-ledger.sql /opt/hvac/repo/infra/s0-durable/postgres/init/003-operations-audit-ledger.sql
 COPY infra/s0-durable/postgres/init/004-audit-postgres-outbox.sql /opt/hvac/repo/infra/s0-durable/postgres/init/004-audit-postgres-outbox.sql
 COPY infra/s0-durable/postgres/init/005-s0-session-assurance.sql /opt/hvac/repo/infra/s0-durable/postgres/init/005-s0-session-assurance.sql
+COPY infra/s0-durable/postgres/init/006-s04-audit-search.sql /opt/hvac/repo/infra/s0-durable/postgres/init/006-s04-audit-search.sql
 
 COPY infra/s1-registry/postgres/init/001-s1-registry-baseline.sql /opt/hvac/repo/infra/s1-registry/postgres/init/001-s1-registry-baseline.sql
 COPY infra/s1-registry/postgres/init/001a-tenant-foundation.sql /opt/hvac/repo/infra/s1-registry/postgres/init/001a-tenant-foundation.sql
@@ -36,6 +37,7 @@ COPY infra/s1-registry/postgres/init/009d-data-governance-v2.sql /opt/hvac/repo/
 COPY infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql
 COPY infra/s1-registry/postgres/init/009i-backend-integration-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009i-backend-integration-v2.sql
 COPY infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql
+COPY infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql
 
 COPY infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql

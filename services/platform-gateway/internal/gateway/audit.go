@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
 )
+
+const publicAuditSearchPath = "/api/v1/audit/search"
 
 func (h *handler) GetSessionAuditEvent(writer http.ResponseWriter, request *http.Request, params platformapi.GetSessionAuditEventParams) {
 	session, failure := h.identitySession(request)
@@ -23,7 +26,7 @@ func (h *handler) GetSessionAuditEvent(writer http.ResponseWriter, request *http
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
-	if !containsAuditReaderRole(principal.Principal.Roles) {
+	if !principal.Authorization.Has(identitycontext.CapabilityAuditRead) {
 		writeIdentityFailure(writer, request, identityFailure{403, "AUDIT_QUERY_FORBIDDEN", "Audit query forbidden", "The authenticated principal cannot read Tenant audit records.", false})
 		return
 	}
@@ -37,22 +40,22 @@ func (h *handler) GetSessionAuditEvent(writer http.ResponseWriter, request *http
 		expiry = session.ExpiresAt
 	}
 	claims := identitycontext.DelegationClaims{
-		Issuer:               h.identity.config.ExecutingWorkloadSPIFFE,
-		Subject:              principal.Principal.Subject,
-		SubjectIssuer:        principal.Principal.Issuer,
-		DisplayName:          principal.Principal.DisplayName,
-		Email:                principal.Principal.Email,
-		Roles:                append([]string(nil), principal.Principal.Roles...),
-		ExecutingService:     h.identity.config.ExecutingWorkloadSPIFFE,
-		Audience:             h.identity.config.AuditAudience,
-		TenantID:             principal.Context.TenantID,
-		Actions:              []string{"audit:read"},
-		Scopes:               []string{"tenant:" + principal.Context.TenantID},
-		PolicyRevision:       principal.Context.PolicyRevision,
-		SessionID:            session.ID,
-		IssuedAt:             now.Unix(),
-		ExpiresAt:            expiry.Unix(),
-		TokenID:              randomURLToken(16),
+		Issuer:           h.identity.config.ExecutingWorkloadSPIFFE,
+		Subject:          principal.Principal.Subject,
+		SubjectIssuer:    principal.Principal.Issuer,
+		DisplayName:      principal.Principal.DisplayName,
+		Email:            principal.Principal.Email,
+		Roles:            append([]string(nil), principal.Principal.Roles...),
+		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
+		Audience:         h.identity.config.AuditAudience,
+		TenantID:         principal.Context.TenantID,
+		Actions:          []string{"audit:read"},
+		Scopes:           []string{"tenant:" + principal.Context.TenantID},
+		PolicyRevision:   principal.Context.PolicyRevision,
+		SessionID:        session.ID,
+		IssuedAt:         now.Unix(),
+		ExpiresAt:        expiry.Unix(),
+		TokenID:          randomURLToken(16),
 	}
 	grant, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
 	if err != nil {
@@ -98,11 +101,71 @@ func (h *handler) GetSessionAuditEvent(writer http.ResponseWriter, request *http
 	writeJSON(writer, http.StatusOK, record)
 }
 
-func containsAuditReaderRole(roles []string) bool {
-	for _, role := range roles {
-		if role == "audit-reader" || role == "platform-admin" {
-			return true
-		}
+func (h *handler) SearchAudit(writer http.ResponseWriter, request *http.Request) {
+	session, failure := h.identitySession(request)
+	if failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
 	}
-	return false
+	principal, failure := h.identity.fetchPrincipal(request.Context(), session)
+	if failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	if !principal.Authorization.Has(identitycontext.CapabilityAuditRead) {
+		writeIdentityFailure(writer, request, identityFailure{403, "AUDIT_QUERY_FORBIDDEN", "Audit query forbidden", "The authenticated principal cannot search Tenant audit records.", false})
+		return
+	}
+	if h.identity.config.AuditURL == "" || h.identity.config.AuditHTTPClient == nil {
+		writeIdentityFailure(writer, request, identityFailure{503, "AUDIT_LEDGER_UNAVAILABLE", "Audit Ledger unavailable", "The private Audit Ledger service is not configured.", true})
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, 32<<10)
+	payload, err := io.ReadAll(request.Body)
+	if err != nil {
+		writeIdentityFailure(writer, request, identityFailure{400, "AUDIT_SEARCH_INVALID", "Audit search invalid", "The audit search filter is invalid.", false})
+		return
+	}
+	now := h.identity.now()
+	expiry := now.Add(h.identity.config.DelegationTTL)
+	if expiry.After(session.ExpiresAt) {
+		expiry = session.ExpiresAt
+	}
+	claims := identitycontext.DelegationClaims{
+		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: principal.Principal.Subject,
+		SubjectIssuer: principal.Principal.Issuer, DisplayName: principal.Principal.DisplayName, Email: principal.Principal.Email,
+		Roles: append([]string(nil), principal.Principal.Roles...), ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
+		Audience: h.identity.config.AuditAudience, TenantID: principal.Context.TenantID, Actions: []string{"audit:read"},
+		Scopes: []string{"tenant:" + principal.Context.TenantID}, PolicyRevision: principal.Context.PolicyRevision,
+		SessionID: session.ID, IssuedAt: now.Unix(), ExpiresAt: expiry.Unix(), TokenID: randomURLToken(16),
+	}
+	grant, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
+	if err != nil {
+		writeIdentityFailure(writer, request, identityFailure{503, "AUDIT_DELEGATION_SIGNING_FAILED", "Audit query unavailable", "The Gateway could not create the constrained Audit delegation.", true})
+		return
+	}
+	ctx, span := observability.Start(request.Context(), "http.audit.search", observability.SpanKindClient, map[string]any{
+		"http.request.method": http.MethodPost, "server.service": "audit-ledger-service", "rpc.operation": "audit.search",
+	})
+	defer span.End()
+	internalRequest, _ := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(h.identity.config.AuditURL, "/")+"/internal/v1/audit/search", bytes.NewReader(payload))
+	internalRequest.Header.Set("Content-Type", "application/json")
+	internalRequest.Header.Set("Accept", "application/json, application/problem+json")
+	internalRequest.Header.Set("X-Delegation-Grant", grant)
+	observability.InjectHTTP(ctx, internalRequest.Header)
+	response, err := h.identity.config.AuditHTTPClient.Do(internalRequest)
+	if err != nil {
+		writeIdentityFailure(writer, request, identityFailure{503, "AUDIT_LEDGER_UNAVAILABLE", "Audit Ledger unavailable", "The private Audit Ledger service could not be reached.", true})
+		return
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		writeIdentityFailure(writer, request, identityFailure{503, "AUDIT_RESPONSE_INVALID", "Audit response invalid", "The private Audit Ledger returned an invalid response.", true})
+		return
+	}
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("Content-Type", response.Header.Get("Content-Type"))
+	writer.WriteHeader(response.StatusCode)
+	_, _ = writer.Write(responseBody)
 }

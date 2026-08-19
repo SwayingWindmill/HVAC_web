@@ -28,7 +28,8 @@
         "infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql",
         "infra/s0-durable/postgres/init/003-operations-audit-ledger.sql",
         "infra/s0-durable/postgres/init/004-audit-postgres-outbox.sql",
-        "infra/s0-durable/postgres/init/005-s0-session-assurance.sql"
+        "infra/s0-durable/postgres/init/005-s0-session-assurance.sql",
+        "infra/s0-durable/postgres/init/006-s04-audit-search.sql"
       ]
     },
     {
@@ -51,7 +52,8 @@
         "infra/s1-registry/postgres/init/009d-data-governance-v2.sql",
         "infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql",
         "infra/s1-registry/postgres/init/009i-backend-integration-v2.sql",
-        "infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql"
+        "infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql",
+        "infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql"
       ]
     },
     {
@@ -116,6 +118,7 @@
     "identity_directory_reader",
     "s1_iam_migrator",
     "s1_iam_runtime",
+    "s1_iam_admin",
     "s1_iam_reconciler",
     "s1_core_service",
     "metric_engine_runtime",
