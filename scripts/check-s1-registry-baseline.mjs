@@ -78,7 +78,7 @@ for (const [method, path, operationId] of expectedRoutes) {
   assert(openapi.paths?.[path]?.[method.toLowerCase()]?.operationId === operationId, `OpenAPI route missing: ${method} ${path}`);
   const owner = (routeRegistry.routes ?? []).find((route) => route.method === method && route.path === path);
   assert(owner?.owner === 'platform-core-service' && owner?.rollout?.mode === 'all', `Core route ownership missing: ${method} ${path}`);
-  assert(owner?.readOnlyFallback === false && owner?.shadowSideEffectPolicy === 'NONE', `runtime fallback/shadow remains: ${method} ${path}`);
+  assert(owner?.readOnlyFallback === undefined && owner?.readFallbackOwner === undefined && owner?.shadowSideEffectPolicy === undefined && owner?.rollout?.fallbackOwner === undefined, `legacy runtime fallback/shadow metadata remains: ${method} ${path}`);
   assert(!owner?.migrationPhases || JSON.stringify(owner.migrationPhases) === JSON.stringify(['GO_PRIMARY']), `legacy migration phases remain active: ${method} ${path}`);
   assert(!owner?.allowedScopeDimensions?.includes('organization'), `Organization scope remains on route: ${method} ${path}`);
 }
@@ -117,7 +117,7 @@ assert(!coreTypes.includes('OwningOrganizationID'), 'Core public models still ex
 assert(!corePostgres.includes('authorized_organization_ids'), 'Core database session still carries Organization authorization scope');
 assert(corePostgres.includes('ListSites(ctx context.Context, claims registryauth.GrantClaims, page PageRequest)'), 'Site is not the root Core collection');
 assert(!corePostgres.includes('ListOrganizations(') && !corePostgres.includes('GetOrganization('), 'Core Organization store methods remain');
-assert(coreServer.includes('case len(segments) == 1 && segments[0] == "sites"'), 'Core root Site route missing');
+assert(coreServer.includes('case method == http.MethodGet && len(segments) == 1 && segments[0] == "sites"'), 'Core root Site route missing');
 assert(!coreServer.includes('segments[0] == "organizations"'), 'Core Organization route remains');
 assert(!assetTypes.includes('OwningOrganizationID') && !assetTypes.includes('CalculatedPointInput') && !assetTypes.includes('SensorSubjectBinding'), 'Asset Model still carries retired Organization/Calculated/Sensor-subject concepts');
 assert(assetTypes.includes('PointCode') && assetTypes.includes('PointType'), 'Asset Model Point fields are not V2');

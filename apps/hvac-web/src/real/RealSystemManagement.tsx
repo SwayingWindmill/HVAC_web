@@ -35,10 +35,13 @@ import {
   OperationsSectionIntro,
 } from '@/components/OperationsUI';
 import { FocusHeading } from './FocusHeading';
+import type { ProtectedScopeDraft } from './protected-scope';
+import { RegistryAdministration } from './registry-admin/RegistryAdministration';
 import type { ShellSnapshot } from './shell-runtime';
 
 interface RealSystemManagementProps {
   snapshot: ShellSnapshot;
+  registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }
 
 type PrincipalRow = {
@@ -73,7 +76,7 @@ function EmptyGovernanceTable({ description }: { description: string }) {
   );
 }
 
-export function RealSystemManagement({ snapshot }: RealSystemManagementProps) {
+export function RealSystemManagement({ snapshot, registerUnsavedDraft }: RealSystemManagementProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const principal = snapshot.principal!;
@@ -230,6 +233,7 @@ export function RealSystemManagement({ snapshot }: RealSystemManagementProps) {
     { key: 'overview', label: '治理概览', children: overview },
     { key: 'users', label: '用户与角色', children: users },
     { key: 'site', label: '站点与租户', children: siteTab },
+    { key: 'registry', label: 'Registry 管理', children: <RegistryAdministration capabilities={principal.authorization.capabilities} registerUnsavedDraft={registerUnsavedDraft} /> },
     { key: 'integrations', label: '数据接入', children: integrations },
     { key: 'rules', label: '报警规则', children: rules },
     { key: 'audit', label: '审计日志', children: audit },

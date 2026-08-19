@@ -1,12 +1,13 @@
 import { FocusHeading } from './FocusHeading';
+import type { ProtectedScopeDraft } from './protected-scope';
 import { RealShellChrome } from './RealShellChrome';
 import { RealSystemManagement } from './RealSystemManagement';
 import type { RealNavigationItem, RouteDecision } from './route-policy';
 import type { RealRuntimeConfig } from './runtime-config';
 import type { ShellSnapshot } from './shell-runtime';
 
-function SystemSurface({ snapshot }: { snapshot: ShellSnapshot }) {
-  return <RealSystemManagement snapshot={snapshot} />;
+function SystemSurface({ snapshot, registerUnsavedDraft }: { snapshot: ShellSnapshot; registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void }) {
+  return <RealSystemManagement snapshot={snapshot} registerUnsavedDraft={registerUnsavedDraft} />;
 }
 
 function ForbiddenSurface() {
@@ -85,10 +86,10 @@ function NotFoundSurface() {
   );
 }
 
-function RouteSurface({ decision, snapshot, retry }: { decision: RouteDecision; snapshot: ShellSnapshot; retry: () => void }) {
+function RouteSurface({ decision, snapshot, retry, registerUnsavedDraft }: { decision: RouteDecision; snapshot: ShellSnapshot; retry: () => void; registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void }) {
   switch (decision.state) {
     case 'READY':
-      return <SystemSurface snapshot={snapshot} />;
+      return <SystemSurface snapshot={snapshot} registerUnsavedDraft={registerUnsavedDraft} />;
     case 'FORBIDDEN':
       return <ForbiddenSurface />;
     case 'NOT_INTEGRATED':
@@ -112,6 +113,7 @@ export function AuthenticatedShell({
   onNavigate,
   confirmSiteNavigation,
   cancelSiteNavigation,
+  registerUnsavedDraft,
 }: {
   config: RealRuntimeConfig;
   snapshot: ShellSnapshot;
@@ -122,6 +124,7 @@ export function AuthenticatedShell({
   onNavigate: (target: string) => void;
   confirmSiteNavigation: () => void;
   cancelSiteNavigation: () => void;
+  registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
 }) {
   return (
     <RealShellChrome
@@ -133,7 +136,7 @@ export function AuthenticatedShell({
       confirmSiteNavigation={confirmSiteNavigation}
       cancelSiteNavigation={cancelSiteNavigation}
     >
-      <RouteSurface decision={decision} snapshot={snapshot} retry={retry} />
+      <RouteSurface decision={decision} snapshot={snapshot} retry={retry} registerUnsavedDraft={registerUnsavedDraft} />
     </RealShellChrome>
   );
 }

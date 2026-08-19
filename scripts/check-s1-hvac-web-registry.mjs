@@ -11,105 +11,145 @@ const [
   generated,
   registryApi,
   realAssets,
-  assetsEntry,
   realSystem,
-  systemEntry,
-  systemPage,
-  header,
+  registryAdministration,
+  registryResources,
+  registryTemplates,
+  registryImportExport,
 ] = await Promise.all([
   read('apps/hvac-web/src/api/generated/platformGateway.gen.ts'),
   read('apps/hvac-web/src/api/registry.ts'),
-  read('apps/hvac-web/src/pages/Assets/RealAssets.tsx'),
-  read('apps/hvac-web/src/pages/Assets/index.tsx'),
-  read('apps/hvac-web/src/pages/System/RealRegistrySitePanel.tsx'),
-  read('apps/hvac-web/src/pages/System/RegistrySitePanel.tsx'),
-  read('apps/hvac-web/src/pages/System/index.tsx'),
-  read('apps/hvac-web/src/layout/Header.tsx'),
+  read('apps/hvac-web/src/real/assets/RealAssetsWorkspace.tsx'),
+  read('apps/hvac-web/src/real/RealSystemManagement.tsx'),
+  read('apps/hvac-web/src/real/registry-admin/RegistryAdministration.tsx'),
+  read('apps/hvac-web/src/real/registry-admin/RegistryResourceWorkbench.tsx'),
+  read('apps/hvac-web/src/real/registry-admin/RegistryTemplateWorkbench.tsx'),
+  read('apps/hvac-web/src/real/registry-admin/RegistryImportExportWorkbench.tsx'),
 ]);
 
 for (const method of [
-  'listOrganizations',
-  'getOrganization',
-  'listOrganizationSites',
+  'listSites',
   'getSite',
-  'listSiteEquipment',
-  'getEquipment',
+  'listSiteAssets',
+  'getAsset',
   'listSiteDevices',
   'listSiteDeviceBindings',
   'getSiteAssetModel',
   'getDevice',
+  'listSiteSpaceChildren',
+  'listDevicePoints',
+  'createSite',
+  'updateSite',
+  'createSiteSpace',
+  'updateSiteSpace',
+  'createSiteAsset',
+  'updateSiteAsset',
+  'createSiteDevice',
+  'updateSiteDevice',
+  'createSitePoint',
+  'updateSitePoint',
+  'rebindRegistryResource',
+  'releaseRegistryTemplateRevision',
+  'assignRegistryTemplateRevision',
+  'planRegistryImport',
+  'commitRegistryImport',
+  'beginRegistryRetirement',
 ]) {
   assert(generated.includes(`${method}:`), `generated Registry client is missing ${method}`);
 }
 
 for (const hook of [
-  'useRegistryOrganizations',
   'useRegistrySites',
   'useRegistrySite',
   'useRegistryAssetModel',
-  'useRegistryEquipment',
-  'useRegistryEquipmentDetail',
+  'useRegistryAssets',
+  'useRegistryAssetDetail',
   'useRegistryDevices',
   'useRegistryDeviceDetail',
   'useRegistryDeviceBindings',
   'useAuthorizedRegistrySites',
+  'useRegistrySpaceChildren',
+  'useRegistryDevicePoints',
 ]) {
   assert(registryApi.includes(`function ${hook}`), `Registry adapter is missing ${hook}`);
 }
 
-for (const forbidden of ["@/mock/", "./meta", 'mockSites', 'mockAssetTree', 'DEVICE_META', 'ASSET_TREE']) {
-  assert(!realAssets.includes(forbidden), `Real Assets view imports or references ${forbidden}`);
-  assert(!realSystem.includes(forbidden), `Real System Registry view imports or references ${forbidden}`);
+for (const forbidden of [
+  'listOrganizations',
+  'getOrganization',
+  'listOrganizationSites',
+  'useRegistryOrganizations',
+  'useRegistryEquipment',
+  'listSiteEquipment',
+  'getEquipment',
+]) {
+  assert(!generated.includes(`${forbidden}:`), `generated Registry client still exposes obsolete ${forbidden}`);
+  assert(!registryApi.includes(`function ${forbidden}`), `Registry adapter still exposes obsolete ${forbidden}`);
 }
-for (const forbidden of ['useRegistryEquipment(', 'useRegistryDevices(', 'useRegistryDeviceBindings(']) {
-  assert(!realAssets.includes(forbidden), `Real Assets view still reads the legacy ${forbidden} collection`);
-}
-assert(!systemPage.includes('mockSites'), 'System page still imports or uses mockSites directly');
-assert(!systemPage.includes('mockAssetTree'), 'System page still imports or uses mockAssetTree directly');
 
-assert(assetsEntry.includes("API_MODE === 'real'"), 'Assets entry does not choose the real Registry view by API mode');
-assert(assetsEntry.includes("lazy(() => import('./MockAssets'))"), 'Assets mock view is not isolated behind a lazy boundary');
-assert(systemEntry.includes("API_MODE === 'real'"), 'System Registry entry does not choose the real view by API mode');
-assert(systemEntry.includes("lazy(() => import('./MockRegistrySitePanel'))"), 'System mock Registry view is not isolated behind a lazy boundary');
+for (const forbidden of ['@/mock/', 'mockSites', 'mockAssetTree', 'localStorage', 'sessionStorage']) {
+  assert(!realAssets.includes(forbidden), `Real Assets workspace references ${forbidden}`);
+  assert(!realSystem.includes(forbidden), `Real System Management references ${forbidden}`);
+  assert(!registryAdministration.includes(forbidden), `Registry administration references ${forbidden}`);
+  assert(!registryResources.includes(forbidden), `Registry resource workbench references ${forbidden}`);
+  assert(!registryTemplates.includes(forbidden), `Registry template workbench references ${forbidden}`);
+  assert(!registryImportExport.includes(forbidden), `Registry import/export workbench references ${forbidden}`);
+}
+
+assert(realSystem.includes("label: 'Registry 管理'"), 'Real System Management does not expose the Registry administration tab');
+assert(realSystem.includes('<RegistryAdministration'), 'Real System Management does not mount RegistryAdministration');
 
 for (const marker of [
-  'selectedSite.timezone',
-  'Registry 生命周期',
-  'DeviceTelemetryPanel',
-  'RegistryLoadMore',
+  'registerUnsavedDraft',
+  'destroyOnHidden',
+  'useRegistrySites',
   'useRegistryAssetModel',
-  'buildRealAssetsHierarchy',
-  'Telemetry Point',
-  '独立 Sensor Device',
-  '计算点',
-  'useRegistryEquipmentDetail',
-  'useRegistryDeviceDetail',
-  'data-testid="real-registry-assets-page"',
+  "capabilities.has('site.write')",
 ]) {
-  assert(realAssets.includes(marker), `Real Assets view is missing marker ${marker}`);
-}
-for (const marker of [
-  'selectedSite?.timezone',
-  'Equipment',
-  'Device',
-  'RegistryLoadMore',
-  'disabled>新增节点',
-  'data-testid="real-registry-system-panel"',
-]) {
-  assert(realSystem.includes(marker), `Real System Registry view is missing marker ${marker}`);
+  assert(registryAdministration.includes(marker), `Registry administration is missing ${marker}`);
 }
 
-assert(header.includes('useAuthorizedRegistrySites'), 'Header does not source real Site options from authorized Registry results');
-assert(header.includes("API_MODE === 'real'"), 'Header does not separate real and mock Site navigation');
-assert(header.includes('真实模式不会显示本地演示站点'), 'Header does not expose a typed real-mode Site failure state');
+for (const marker of [
+  'getRegistrySpaceChildren',
+  'useRegistryDevicePoints',
+  'registryAdminApi.rebind',
+  'registryAdminApi.retire',
+  'Expected Revision',
+  'counterDecreaseMode',
+  'counterRolloverModulus',
+  'sourceMetadata: entity ?',
+]) {
+  assert(registryResources.includes(marker), `Registry resource workbench is missing ${marker}`);
+}
+
+for (const marker of [
+  'registryAdminApi.releaseTemplate',
+  'registryAdminApi.assignTemplate',
+  'TemplateRevision 发布后不可修改',
+  '再次 Assign',
+]) {
+  assert(registryTemplates.includes(marker), `Registry template workbench is missing ${marker}`);
+}
+
+for (const marker of [
+  'registryAdminApi.planImport',
+  'registryAdminApi.commitImport',
+  'canCommitImportPlan',
+  'buildRegistryExport',
+  'sourceMetadata',
+]) {
+  assert(registryImportExport.includes(marker), `Registry import/export workbench is missing ${marker}`);
+}
 
 for (const forbidden of ['X-Site-Id', 'localStorage', 'sessionStorage']) {
   assert(!registryApi.includes(forbidden), `Registry adapter uses forbidden navigation/authorization source ${forbidden}`);
 }
-assert(registryApi.includes('MAX_NAVIGATION_PAGES'), 'authorized navigation collection is not bounded');
+assert(registryApi.includes('MAX_NAVIGATION_PAGES'), 'authorized Site navigation collection is not bounded');
 assert(registryApi.includes('PlatformApiError'), 'Registry adapter does not preserve typed Problem Details');
 assert(registryApi.includes('uuidV7Schema.parse'), 'Registry adapter does not validate platform UUIDv7 path inputs');
 assert(registryApi.includes('ZodError'), 'Registry adapter does not expose typed invalid-link state');
-assert(registryApi.includes("API_MODE === 'real'"), 'Registry requests are not explicitly gated to real mode');
+assert(registryApi.includes("API_MODE === 'real'"), 'Registry requests are not explicitly gated to Real mode');
+assert(registryApi.includes('REGISTRY_REVISION_CONFLICT'), 'Registry adapter does not expose stale Revision conflicts');
+assert(registryApi.includes('REGISTRY_IMPORT_PLAN_INVALID'), 'Registry adapter does not expose invalidated import plans');
 
-console.log('S1 HVAC Web Registry static gate passed: generated clients, real/mock separation, typed states and authorized Site navigation verified.');
+console.log('S1 HVAC Web Registry static gate passed: canonical generated clients, Real Registry administration, conflict safety, dirty-draft protection and no mock fallback verified.');
