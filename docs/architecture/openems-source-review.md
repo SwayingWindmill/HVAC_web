@@ -26,21 +26,21 @@ All modules below existed locally before completing their pinned-source review a
 
 | Local module | Current source-validation state | Reference slice |
 |---|---|---|
-| Channel Runtime | REVIEWING | Channel / AbstractReadChannel / WriteChannel |
-| Process Image | REVIEWING | Channel.nextProcessImage / CycleWorker |
-| Cycle | REVIEWING | CycleWorker / Edge cycle events |
-| Controller Runtime | REVIEWING | Controller / CycleWorker |
-| Scheduler | REVIEWING | Scheduler.FixedOrder / CycleWorker |
-| Control Arbiter | UNVERIFIED | controller ordering + write-channel/control constraint implementations |
-| Capability Profile Registry | UNVERIFIED | Nature interfaces + ChannelId/Doc contracts |
-| Edge Component Registry | UNVERIFIED | OpenemsComponent / ComponentManager lifecycle |
-| Edge Manifest | UNVERIFIED | EdgeConfig / Component/Channel serialization |
-| Device Driver | UNVERIFIED | device implementations + protocol mapping patterns |
-| Protocol Bridge | UNVERIFIED | Bridge.Modbus task/worker implementation |
-| Remote Intent Lease | UNVERIFIED | external write timeout / controller API behavior |
-| Edge Timedata | UNVERIFIED | Timedata + Backend resend/persistence implementation |
-| Simulator Driver | UNVERIFIED | Simulator/DataSource acting/reacting implementations |
-| MQTT Command Edge Adapter | UNVERIFIED | project-specific MERGE boundary; must still be checked against Edge write lifecycle |
+| Channel Runtime | VERIFIED | Channel / AbstractReadChannel / WriteChannel |
+| Process Image | VERIFIED | Channel.nextProcessImage / CycleWorker |
+| Cycle | VERIFIED | CycleWorker / Edge cycle events |
+| Controller Runtime | VERIFIED | Controller / CycleWorker |
+| Scheduler | VERIFIED | Scheduler.FixedOrder / CycleWorker |
+| Control Arbiter | VERIFIED | controller ordering + write-channel/control constraint implementations |
+| Capability Profile Registry | VERIFIED | Nature interfaces + ChannelId/Doc contracts |
+| Edge Component Registry | VERIFIED | OpenemsComponent / ComponentManager lifecycle |
+| Edge Manifest | VERIFIED | EdgeConfig / Component/Channel serialization |
+| Device Driver | VERIFIED | common physical/simulated driver contract + protocol mapping boundary |
+| Protocol Bridge | REVIEWING | Bridge.Modbus task/worker implementation; no real protocol driver exists yet |
+| Remote Intent Lease | VERIFIED | external write timeout / controller API behavior |
+| Edge Timedata | VERIFIED | local latest/history/query authority; Cloud resend worker remains separate |
+| Simulator Driver | VERIFIED | Simulator/DataSource acting/reacting implementations |
+| MQTT Command Edge Adapter | UNVERIFIED | project-specific S11 boundary; must still be checked against governed Cloud command/readback lifecycle |
 
 A state may change to `VERIFIED` only when the reviewed source files, relevant upstream tests, material differences, local justification for every retained conflict, and focused behavior tests are all recorded below.
 
@@ -52,13 +52,16 @@ HVAC decisions: `EDGE-004` through `EDGE-010`, `MODEL-002`, `MODEL-003`
 ### Upstream source reviewed
 
 - `io.openems.edge.common/src/io/openems/edge/common/channel/Channel.java`
+- `io.openems.edge.common/src/io/openems/edge/common/channel/internal/AbstractReadChannel.java`
+- `io.openems.edge.common/src/io/openems/edge/common/channel/WriteChannel.java`
+- `io.openems.edge.common/src/io/openems/edge/common/channel/value/Value.java`
 - `io.openems.edge.common/src/io/openems/edge/common/event/Cycle.java`
 - `io.openems.edge.core/src/io/openems/edge/core/cycle/CycleWorker.java`
 - `io.openems.edge.common/src/io/openems/edge/common/component/Scheduler.java`
 - `io.openems.edge.scheduler.fixedorder/src/io/openems/edge/scheduler/fixedorder/SchedulerFixedOrderImpl.java`
 - official Edge Architecture documentation for Process Image / Controller execution
 
-Upstream release notes and repository test layout were also reviewed. The public web index did not expose a dedicated Channel/CycleWorker test class for this slice, so no upstream test behavior is being inferred from an unverified filename. The local implementation therefore treats the reviewed production source as the primary behavioral evidence and adds focused behavior tests for every adopted semantic. A future review must add exact upstream test paths here whenever such tests are identified at the pinned commit.
+The pinned production source is the authoritative evidence for Channel/Cycle lifecycle. The repository has no dedicated `CycleWorker` behavior test at this path; local focused tests therefore protect the adopted phase ordering, immutable image, undefined-value, per-cycle write reset, clock and failure semantics rather than inventing upstream test behavior.
 
 ### Source-level findings
 
@@ -112,9 +115,9 @@ The first source-informed refactor must therefore add:
 4. focused tests for event semantics and exact phase ordering;
 5. retention of the existing HVAC fail-closed critical-controller behavior.
 
-### Implementation evidence — REVIEWING
+### Implementation evidence — VERIFIED for S10
 
-The stricter source-first rule was applied retroactively on 2026-08-17. Passing local tests does not make this slice `VERIFIED`; the module remains under source review until the remaining Channel/Cycle surface is explicitly adjudicated.
+The stricter source-first rule was applied retroactively on 2026-08-17 and the remaining S10 Channel/Cycle surface was closed on 2026-08-19 against the pinned source above. `VERIFIED` here is limited to the S10 foundation contract; it does not imply S11 command outcome or S12 fleet/release completion.
 
 Material conflicts already found and corrected:
 
@@ -134,7 +137,13 @@ Focused verification after these corrections:
 - `go test ./libs/edgecontrol/...` — passed;
 - Phase 1 Edge Runtime / MQTT Command / generated central-plant targeted tests — passed.
 
-Still required before changing this slice to `VERIFIED`: typed/undefined Channel value semantics, write-channel consume/reset behavior, dynamic component/channel lifecycle, and remaining Cycle health/overrun behavior must be compared against the pinned source and tests.
+Closure evidence:
+
+- OpenEMS `Value` may be undefined at any time; HVAC represents the same state explicitly as `ChannelSnapshot.HasValue=false` rather than inventing a typed zero value;
+- OpenEMS consumes a `WriteChannel` next-write value after retrieval. HVAC adapts this through a fresh `ControlPlan` on every Cycle: per-cycle decisions disappear after write, while an unexpired governed `Intent` must explicitly reassert a persistent setpoint on the next Cycle;
+- `DeviceHost.UnregisterAdapter` removes the adapter, Component and owned Channels together, and Channel unregister clears Point mapping/subscriptions; failed driver registration rolls back Channels already registered during that attempt;
+- Cycle execution remains measured with Go's monotonic `time.Since`; a regressing logical cycle timestamp is rejected before Process Image promotion, and a rejected device write marks the Cycle halted while still allowing the `AFTER_WRITE` lifecycle hook to run;
+- focused tests cover immutable Process Image, configured scheduler order, critical-controller halt, clock regression and rejected-write halt. No generic overrun supervisor is introduced because S10 requires truthful completed-cycle evidence, not a speculative cadence framework.
 
 ## Review 002 — Modbus Bridge scheduling and failure isolation
 
@@ -212,7 +221,7 @@ Focused verification after the source-driven changes:
 - `go test ./libs/edgecontrol/...` — passed;
 - Phase 1 Edge Runtime / MQTT Command / generated central-plant targeted tests — passed.
 
-This slice remains `REVIEWING`, not `VERIFIED`. Remaining work includes enum/state Channel usage in actual HVAC profiles, full component activation/deactivation lifecycle, factory/property reconciliation and the first real protocol Driver proving the Nature/Capability boundary end-to-end.
+For S10, Capability Profile, Component Registry and Edge Manifest are now `VERIFIED`: physical and simulated drivers must expose the same profile/channel contract, and `DeviceHost` owns coherent adapter/component/channel registration and removal. A concrete real protocol Driver/Bridge is intentionally still `REVIEWING` under Review 002; protocol mapping is not being declared complete from metadata alone. Enum/state usage may grow with actual HVAC device profiles but is not required to prove the typed foundation.
 
 ## Review 004 — Timedata, live persistence and historic resend
 
@@ -264,7 +273,7 @@ Focused verification after the source-driven changes:
 - Phase 1 Edge Runtime / MQTT Command / generated central-plant targeted tests — passed;
 - EG8200 MQTT publisher build — passed.
 
-This slice remains `REVIEWING`. The existing live MQTT publication path still needs explicit changed-value/full-snapshot policy and historic range resend integration before `DATA-002..007` can be considered fully source-verified.
+The S10 local Timedata owner seam is `VERIFIED`: local latest/history/range query, local-persistence filtering and WRITE_ONLY exclusion are source-aligned. Live MQTT changed-value/full-snapshot publication and historic resend remain separate transport/recovery workers and are not claimed complete here; `DATA-006`/`DATA-007` therefore remain partial/missing in the machine architecture contract rather than blocking the Timedata module itself.
 
 ## Review 005 — Simulator acting/reacting lifecycle
 
@@ -307,7 +316,7 @@ Focused verification:
 
 - Phase 1 Edge Runtime / MQTT Command / generated central-plant targeted tests — passed after the Process Image telemetry correction.
 
-This slice remains `REVIEWING`. The exogenous weather/load datasource, explicit datasource `AFTER_WRITE` progression, protocol-level simulated Modbus endpoint and additional delay/fault/stuck-actuator behaviors still need source-informed implementation before the simulator can be marked `VERIFIED`.
+The S10 simulator/production-control boundary is now `VERIFIED`: simulator and physical drivers share `DeviceAdapter`, Capability Profile and Channel contracts, while Controller/Scheduler/Intent/Telemetry logic stays outside the simulated device model. Broader simulator capabilities remain incomplete: variable exogenous datasource progression, protocol-level Modbus simulation and additional delay/fault/stuck-actuator models stay `PARTIAL` and must be added only with a concrete device/test need.
 
 ## Review 006 — Remote override timeout / leased Cloud Intent
 
@@ -348,7 +357,51 @@ Focused verification:
 - `go test ./libs/edgecontrol/...` — passed;
 - Phase 1 Edge Runtime / MQTT Command / generated central-plant targeted tests including lease persistence — passed.
 
-This slice remains `REVIEWING`. Real DeviceDriver write-repeat behavior and Cloud lease-renewal semantics still need an end-to-end physical/protocol test before the module can be marked `VERIFIED`.
+The local S10 lease/timeout mechanism is `VERIFIED`: active numeric intents reassert through the ordinary Controller/Arbiter path each Cycle and disappear at `ExpiresAt`, returning authority to local control. Physical transport delivery, Cloud renewal and authoritative command readback remain S09/S11 concerns; they are not needed to prove that the Edge lease itself expires safely.
+
+## Review 007 — S10 closure: safety freshness, cycle evidence and driver parity
+
+Date: 2026-08-19
+HVAC roadmap slice: `S10 edge-control-foundation-source-alignment`
+
+### Upstream source/tests reviewed
+
+- `io.openems.edge.common/src/io/openems/edge/common/channel/Channel.java`;
+- `io.openems.edge.common/src/io/openems/edge/common/channel/internal/AbstractReadChannel.java`;
+- `io.openems.edge.common/src/io/openems/edge/common/channel/WriteChannel.java`;
+- `io.openems.edge.common/src/io/openems/edge/common/channel/value/Value.java`;
+- `io.openems.edge.core/src/io/openems/edge/core/cycle/CycleWorker.java`;
+- `io.openems.edge.common/test/io/openems/edge/common/component/AbstractOpenemsComponentTest.java`;
+- `io.openems.edge.bridge.modbus/test/io/openems/edge/bridge/modbus/BridgeModbusTcpImplTest.java`;
+- `io.openems.edge.simulator/test/io/openems/edge/simulator/ess/symmetric/reacting/SimulatorEssSymmetricReactingImplTest.java`.
+
+The pinned Modbus TCP test is `@Disabled` upstream. It is used here only as source evidence for the intended protocol-level integration shape; it is not represented as a passing upstream certification.
+
+### Source-level closure decisions
+
+- `ADOPT`: undefined device values are first-class state. HVAC keeps `ChannelSnapshot.HasValue`/Quality rather than allowing an absent safety input to become a typed zero/default.
+- `ADAPT`: OpenEMS `WriteChannel` consumes and resets the pending write value. HVAC achieves the same per-cycle non-stickiness with a new `ControlPlan` each Cycle; a persistent remote setpoint exists only because an unexpired `Intent` explicitly reasserts it through the normal Controller/Arbiter path.
+- `ADOPT`: Cycle phase order and actual completed-cycle duration remain explicit. `CycleResult.Duration` measures runtime duration; HVAC additionally rejects a regressing logical Cycle timestamp before Process Image promotion because leases and freshness checks depend on monotonic Edge time.
+- `ADAPT`: `DeviceAdapter` is the common production-facing contract for physical and simulated devices. Both expose the same Component, Capability Profiles, typed Channels, input polling and arbitrated output contract. A future physical driver may delegate protocol I/O to a Bridge without changing Controller/Scheduler code.
+- `ADOPT`: driver/component/channel lifecycle is coherent. Removing an adapter removes its Component and Channels, and failed registration cleans Channels already registered during that attempt.
+- `ADAPT`: safety freshness uses each existing canonical Point `staleAfter`; no new hard-coded timeout is introduced. A stale fault/interlock sample fails closed with `SAFETY_STATE_STALE`.
+- `ADAPT`: an output/device rejection is a failed control Cycle (`Halted=true`, `OutputError!=nil`) while `AFTER_WRITE` still runs for lifecycle/evidence cleanup.
+- `KEEP REVIEWING`: the real Protocol Bridge implementation. The repository has no concrete real Modbus/BACnet/OPC-UA driver dependency today. Adding an unused bridge scheduler or protocol package only to satisfy S10 would violate the project's no-speculative-infrastructure rule. Review 002 remains binding for the first real physical protocol driver.
+- `DEFER`: MQTT governed command outcome/readback to S11 and fleet/sync/signed release/config/OTA to S12.
+
+### Local implementation evidence
+
+- `libs/edgecontrol/driver.go`: common `DeviceAdapter`/`DeviceHost` for `DEVICE_DRIVER` and `SIMULATOR`, coherent unregister and failed-registration cleanup;
+- `libs/edgecontrol/component.go`: both physical and simulated device components require Capability Profiles;
+- `libs/edgecontrol/cycle.go`: serialized Cycle execution, logical clock regression rejection, truthful duration, failed output halt;
+- `tools/eg8200-simulator/internal/simulator/edge_runtime.go`: Point `staleAfter` is applied to fault/interlock evidence; production Controller/Scheduler/Intent/Telemetry path remains outside the simulated Plant;
+- focused tests: real/simulator adapter parity, driver lifecycle removal, clock regression, rejected write, stale interlock, existing immutable Process Image/interlock/lease tests.
+
+### Verification
+
+- `go test ./...` in `libs/edgecontrol` — PASS;
+- `go test ./...` in `tools/eg8200-simulator` — PASS;
+- `cmd.exe /c node scripts/check-s3-target-runtime.mjs` — PASS (`files=18`, native MQTT, OpenEMS-informed Edge, production traffic remains `0`).
 
 ## Review queue
 

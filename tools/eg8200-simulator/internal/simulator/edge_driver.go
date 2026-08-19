@@ -21,7 +21,7 @@ type simulatedDeviceAdapter struct {
 	sequences map[string]uint64
 }
 
-func newSimulatedDeviceAdapters(config Config, plant *Plant) ([]edgecontrol.DirectDeviceAdapter, error) {
+func newSimulatedDeviceAdapters(config Config, plant *Plant) ([]edgecontrol.DeviceAdapter, error) {
 	if plant == nil {
 		return nil, errors.New("plant is required")
 	}
@@ -29,7 +29,7 @@ func newSimulatedDeviceAdapters(config Config, plant *Plant) ([]edgecontrol.Dire
 	for _, point := range config.Points {
 		pointsByDevice[point.DeviceID] = append(pointsByDevice[point.DeviceID], point)
 	}
-	adapters := make([]edgecontrol.DirectDeviceAdapter, 0, len(config.Devices))
+	adapters := make([]edgecontrol.DeviceAdapter, 0, len(config.Devices))
 	for _, device := range config.Devices {
 		profile, ok := capabilityProfileForDevice(config.Plant, device.ID)
 		if !ok {

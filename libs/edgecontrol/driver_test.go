@@ -14,7 +14,7 @@ type fakePumpDriver struct {
 	applied   []Decision
 }
 
-func newFakePumpDriver() *fakePumpDriver {
+func newFakePumpDriver(kind ComponentKind) *fakePumpDriver {
 	componentID := "chwp01"
 	channels := []ChannelDescriptor{
 		pumpChannel(componentID, "RunState", "point-run-state", DataTypeString, "", AccessReadOnly),
@@ -28,7 +28,7 @@ func newFakePumpDriver() *fakePumpDriver {
 	return &fakePumpDriver{
 		component: ComponentDescriptor{
 			ID: componentID, Alias: "Fake Pump", Enabled: true,
-			Kind: ComponentSimulator, Type: "FAKE_VFD_PUMP", FactoryID: "FAKE_VFD_PUMP", Version: "v1",
+			Kind: kind, Type: "FAKE_VFD_PUMP", FactoryID: "FAKE_VFD_PUMP", Version: "v1",
 			Profiles: []CapabilityProfileID{ProfileVariableSpeedPump},
 			ChannelBindings: map[SemanticChannel]string{
 				SemanticRunState: channels[0].Address(), SemanticFaultCode: channels[1].Address(),
@@ -82,8 +82,8 @@ func TestDriverHostSeparatesAsyncInputFromProcessImage(t *testing.T) {
 	runtime := NewRuntime()
 	capabilities, _ := NewStandardCapabilityRegistry()
 	components, _ := NewComponentRegistry(runtime, capabilities)
-	host, _ := NewDirectDeviceHost(runtime, components)
-	driver := newFakePumpDriver()
+	host, _ := NewDeviceHost(runtime, components)
+	driver := newFakePumpDriver(ComponentSimulator)
 	if err := host.RegisterAdapter(driver); err != nil {
 		t.Fatal(err)
 	}
@@ -117,12 +117,12 @@ func TestDriverOutputUsesArbitratedEffectiveValue(t *testing.T) {
 	runtime := NewRuntime()
 	capabilities, _ := NewStandardCapabilityRegistry()
 	components, _ := NewComponentRegistry(runtime, capabilities)
-	host, _ := NewDirectDeviceHost(runtime, components)
-	driver := newFakePumpDriver()
+	host, _ := NewDeviceHost(runtime, components)
+	driver := newFakePumpDriver(ComponentSimulator)
 	if err := host.RegisterAdapter(driver); err != nil {
 		t.Fatal(err)
 	}
-	writer, _ := NewDirectDeviceOutputWriter(host)
+	writer, _ := NewDeviceOutputWriter(host)
 	store, _ := NewIntentStore(runtime)
 	issued := time.Unix(1400, 0).UTC()
 	_, _ = store.Put(ControlIntent{
@@ -152,5 +152,40 @@ func TestDriverOutputUsesArbitratedEffectiveValue(t *testing.T) {
 	}
 	if driver.frequency != 43 {
 		t.Fatalf("driver applied raw request instead of effective value: %v", driver.frequency)
+	}
+}
+
+func TestRealAndSimulatedDriversUseTheSameDeviceAdapterContract(t *testing.T) {
+	for _, kind := range []ComponentKind{ComponentDeviceDriver, ComponentSimulator} {
+		runtime := NewRuntime()
+		capabilities, _ := NewStandardCapabilityRegistry()
+		components, _ := NewComponentRegistry(runtime, capabilities)
+		host, _ := NewDeviceHost(runtime, components)
+		var adapter DeviceAdapter = newFakePumpDriver(kind)
+		if err := host.RegisterAdapter(adapter); err != nil {
+			t.Fatalf("%s driver did not satisfy the production DeviceAdapter contract: %v", kind, err)
+		}
+	}
+}
+
+func TestDeviceHostUnregisterRemovesDriverComponentAndChannels(t *testing.T) {
+	runtime := NewRuntime()
+	capabilities, _ := NewStandardCapabilityRegistry()
+	components, _ := NewComponentRegistry(runtime, capabilities)
+	host, _ := NewDeviceHost(runtime, components)
+	driver := newFakePumpDriver(ComponentSimulator)
+	if err := host.RegisterAdapter(driver); err != nil {
+		t.Fatal(err)
+	}
+	if !host.UnregisterAdapter(driver.Component().ID) {
+		t.Fatal("registered driver was not removed")
+	}
+	if _, ok := components.Get(driver.Component().ID); ok {
+		t.Fatal("driver component remained registered after driver removal")
+	}
+	for _, channel := range driver.Channels() {
+		if _, ok := runtime.Descriptor(channel.Address()); ok {
+			t.Fatalf("driver channel %s remained registered after driver removal", channel.Address())
+		}
 	}
 }

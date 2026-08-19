@@ -62,8 +62,8 @@ if (failures.length === 0) {
   requireText('libs/edgecontrol/cycle.go', 'CyclePhaseExecuteWrite');
   requireText('libs/edgecontrol/intent.go', 'ExpiresAt');
   requireText('libs/edgecontrol/intent.go', 'intent requires a positive lease interval');
-  requireText('libs/edgecontrol/driver.go', 'type DirectDeviceAdapter interface');
-  requireText('libs/edgecontrol/driver.go', 'Physical protocol devices must not use this contract');
+  requireText('libs/edgecontrol/driver.go', 'type DeviceAdapter interface');
+  requireText('libs/edgecontrol/driver.go', 'production-facing device contract shared by physical and simulated drivers');
 
   for (const token of ['SubmitCommand', 'STALE_FENCE', 'EXPIRED', 'COMMAND_MAPPING_INVALID', 'command/reply']) {
     requireText('tools/eg8200-simulator/internal/simulator/mqtt_command.go', token);

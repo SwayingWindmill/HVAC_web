@@ -45,8 +45,8 @@ func (descriptor ComponentDescriptor) validateBasics() error {
 	default:
 		return fmt.Errorf("unsupported component kind %q", descriptor.Kind)
 	}
-	if descriptor.Kind == ComponentDeviceDriver && len(descriptor.Profiles) == 0 {
-		return errors.New("device driver must implement at least one capability profile")
+	if (descriptor.Kind == ComponentDeviceDriver || descriptor.Kind == ComponentSimulator) && len(descriptor.Profiles) == 0 {
+		return errors.New("device driver or simulator must implement at least one capability profile")
 	}
 	return nil
 }

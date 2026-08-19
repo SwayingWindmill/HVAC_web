@@ -35,7 +35,7 @@ func TestGeneratedCentralPlantBuildsCapabilityDrivenEdgeDrivers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host, err := edgecontrol.NewDirectDeviceHost(runtime, components)
+	host, err := edgecontrol.NewDeviceHost(runtime, components)
 	if err != nil {
 		t.Fatal(err)
 	}

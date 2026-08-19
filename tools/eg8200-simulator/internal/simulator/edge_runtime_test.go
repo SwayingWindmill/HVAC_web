@@ -159,3 +159,28 @@ func TestEdgeControlRuntimeExpiresCommandBeforeExecution(t *testing.T) {
 		t.Fatalf("expired command changed equipment: %v", got)
 	}
 }
+
+func TestEdgeSafetyRejectsStartWhenInterlockEvidenceIsStale(t *testing.T) {
+	config := loadGeneratedCentralPlantConfig(t)
+	at := time.Unix(4500, 0).UTC()
+	plant := NewPlant(config.Plant, at)
+	runtime, err := NewEdgeControlRuntime(config, plant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cycle := runtime.RunCycle(context.Background(), at.Add(time.Second)); cycle.Cycle.Halted {
+		t.Fatalf("initial Edge cycle failed: %#v", cycle.Cycle)
+	}
+	outcomeCh, err := runtime.SubmitCommand(EdgeCommandIntentRequest{
+		CommandID: "stale-interlock-start", DeviceID: config.Plant.Chiller.ID, CommandCode: "START",
+		IssuedAt: at.Add(20 * time.Second), ExpiresAt: at.Add(30 * time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.RunCycle(context.Background(), at.Add(21*time.Second))
+	outcome := <-outcomeCh
+	if outcome.Accepted || outcome.Code != "SAFETY_STATE_STALE" {
+		t.Fatalf("stale safety evidence did not block start: %#v", outcome)
+	}
+}
