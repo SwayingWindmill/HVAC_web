@@ -156,6 +156,16 @@ var principalRegistryCapabilities = []struct {
 	{identitycontext.CapabilityAssetRead, registryauth.ActionAssetRead},
 	{identitycontext.CapabilityDeviceList, registryauth.ActionDeviceList},
 	{identitycontext.CapabilityDeviceRead, registryauth.ActionDeviceRead},
+	{identitycontext.CapabilitySiteWrite, registryauth.ActionSiteWrite},
+	{identitycontext.CapabilitySpaceWrite, registryauth.ActionSpaceWrite},
+	{identitycontext.CapabilityAssetWrite, registryauth.ActionAssetWrite},
+	{identitycontext.CapabilityDeviceWrite, registryauth.ActionDeviceWrite},
+	{identitycontext.CapabilitySensorWrite, registryauth.ActionSensorWrite},
+	{identitycontext.CapabilityPointWrite, registryauth.ActionPointWrite},
+	{identitycontext.CapabilityBindingWrite, registryauth.ActionBindingWrite},
+	{identitycontext.CapabilityTemplateManage, registryauth.ActionTemplateManage},
+	{identitycontext.CapabilityRegistryImport, registryauth.ActionRegistryImport},
+	{identitycontext.CapabilityRegistryRetire, registryauth.ActionRegistryRetire},
 }
 
 var principalTelemetryCapabilities = []struct {

@@ -182,7 +182,7 @@ func TestIAMIssuesRegistryGrantForAllowedDelegatedPresenter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := harness.request(t, iam.RegistryReadDecisionPath, strings.NewReader(string(payload)), claims, harness.gatewaySigner)
+	request := harness.request(t, iam.RegistryDecisionPath, strings.NewReader(string(payload)), claims, harness.gatewaySigner)
 	recorder := httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -219,7 +219,7 @@ func TestIAMIssuesRegistryGrantForAllowedDelegatedPresenter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request = harness.request(t, iam.RegistryReadDecisionPath, strings.NewReader(string(payload)), claims, harness.gatewaySigner)
+	request = harness.request(t, iam.RegistryDecisionPath, strings.NewReader(string(payload)), claims, harness.gatewaySigner)
 	recorder = httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, request)
 	assertIAMProblem(t, recorder, http.StatusForbidden, "IAM_REGISTRY_GRANT_PRESENTER_REJECTED")
@@ -258,16 +258,16 @@ func TestIAMDeviceBindingListRequiresBothConstituentReadActions(t *testing.T) {
 				Status:        iam.FactStatusActive,
 			},
 			Memberships: []iam.TenantMembership{{
-				TenantID:       iam.S1FixtureTenantAID,
-				Status:         iam.FactStatusActive,
-				ValidFrom:      validFrom,
+				TenantID:  iam.S1FixtureTenantAID,
+				Status:    iam.FactStatusActive,
+				ValidFrom: validFrom,
 			}},
 			RoleBindings: []iam.RoleBinding{{
-				TenantID:       iam.S1FixtureTenantAID,
-				Actions:        actions,
-				Effect:         iam.BindingEffectAllow,
-				Status:         iam.FactStatusActive,
-				ValidFrom:      validFrom,
+				TenantID:  iam.S1FixtureTenantAID,
+				Actions:   actions,
+				Effect:    iam.BindingEffectAllow,
+				Status:    iam.FactStatusActive,
+				ValidFrom: validFrom,
 			}},
 			ExplicitDenies: denies,
 		}
@@ -353,9 +353,9 @@ func TestIAMExplicitSiteDenyDoesNotExpandToSiblingSite(t *testing.T) {
 				Status:        iam.FactStatusActive,
 			},
 			Memberships: []iam.TenantMembership{{
-				TenantID:       iam.S1FixtureTenantAID,
-				Status:         iam.FactStatusActive,
-				ValidFrom:      validFrom,
+				TenantID:  iam.S1FixtureTenantAID,
+				Status:    iam.FactStatusActive,
+				ValidFrom: validFrom,
 			}},
 			SiteBindings: []iam.SiteBinding{
 				{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectAllow, Status: iam.FactStatusActive, ValidFrom: validFrom},
@@ -420,18 +420,18 @@ func TestIAMSiteBindingDenyOverridesAllow(t *testing.T) {
 func TestIAMRegistryDecisionRejectsBodyExpansionAndWrongInboundAction(t *testing.T) {
 	harness := newIAMHarness(t)
 	claims := validIAMClaims(harness.now, "fixture-user", registryAuthorize)
-	request := harness.request(t, iam.RegistryReadDecisionPath, strings.NewReader(`{"tenantId":"`+iam.S1FixtureTenantAID+`","action":"site.read","roles":["platform-admin"]}`), claims, harness.gatewaySigner)
+	request := harness.request(t, iam.RegistryDecisionPath, strings.NewReader(`{"tenantId":"`+iam.S1FixtureTenantAID+`","action":"site.read","roles":["platform-admin"]}`), claims, harness.gatewaySigner)
 	recorder := httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, request)
 	assertIAMProblem(t, recorder, http.StatusBadRequest, "IAM_REGISTRY_DECISION_REQUEST_INVALID")
 
-	request = harness.request(t, iam.RegistryReadDecisionPath, registryDecisionBody("not-a-uuid", registryauth.ActionSiteRead), claims, harness.gatewaySigner)
+	request = harness.request(t, iam.RegistryDecisionPath, registryDecisionBody("not-a-uuid", registryauth.ActionSiteRead), claims, harness.gatewaySigner)
 	recorder = httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, request)
 	assertIAMProblem(t, recorder, http.StatusBadRequest, "IAM_REGISTRY_DECISION_REQUEST_INVALID")
 
 	wrongAction := validIAMClaims(harness.now, "fixture-user", "principal:read")
-	request = harness.request(t, iam.RegistryReadDecisionPath, registryDecisionBody(iam.S1FixtureTenantAID, registryauth.ActionSiteRead), wrongAction, harness.gatewaySigner)
+	request = harness.request(t, iam.RegistryDecisionPath, registryDecisionBody(iam.S1FixtureTenantAID, registryauth.ActionSiteRead), wrongAction, harness.gatewaySigner)
 	recorder = httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, request)
 	assertIAMProblem(t, recorder, http.StatusForbidden, "IAM_DELEGATION_REJECTED")
@@ -444,7 +444,7 @@ func TestIAMAllowedDecisionRequiresSignerAndAuditEvidence(t *testing.T) {
 		config.RegistryAuditSink = sink
 	})
 	claims := validIAMClaims(harness.now, "fixture-user", registryAuthorize)
-	request := harness.request(t, iam.RegistryReadDecisionPath, registryDecisionBody(iam.S1FixtureTenantAID, registryauth.ActionSiteRead), claims, harness.gatewaySigner)
+	request := harness.request(t, iam.RegistryDecisionPath, registryDecisionBody(iam.S1FixtureTenantAID, registryauth.ActionSiteRead), claims, harness.gatewaySigner)
 	recorder := httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, request)
 	assertIAMProblem(t, recorder, http.StatusServiceUnavailable, "IAM_REGISTRY_GRANT_SIGNER_UNAVAILABLE")
@@ -459,7 +459,7 @@ func TestIAMAuditFailurePreventsGrantDelivery(t *testing.T) {
 		config.RegistryAuditSink = sink
 	})
 	claims := validIAMClaims(harness.now, "fixture-user", registryAuthorize)
-	request := harness.request(t, iam.RegistryReadDecisionPath, registryDecisionBody(iam.S1FixtureTenantAID, registryauth.ActionSiteRead), claims, harness.gatewaySigner)
+	request := harness.request(t, iam.RegistryDecisionPath, registryDecisionBody(iam.S1FixtureTenantAID, registryauth.ActionSiteRead), claims, harness.gatewaySigner)
 	recorder := httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, request)
 	assertIAMProblem(t, recorder, http.StatusServiceUnavailable, "IAM_AUTHORIZATION_AUDIT_UNAVAILABLE")
@@ -490,7 +490,7 @@ func TestIAMRegistryDecisionRejectsOversizedBody(t *testing.T) {
 	harness := newIAMHarness(t)
 	claims := validIAMClaims(harness.now, "fixture-user", registryAuthorize)
 	body := strings.NewReader(`{"tenantId":"` + strings.Repeat("a", maximumTestDecisionBodySize) + `","action":"site.read"}`)
-	request := harness.request(t, iam.RegistryReadDecisionPath, body, claims, harness.gatewaySigner)
+	request := harness.request(t, iam.RegistryDecisionPath, body, claims, harness.gatewaySigner)
 	recorder := httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, request)
 	assertIAMProblem(t, recorder, http.StatusBadRequest, "IAM_REGISTRY_DECISION_REQUEST_INVALID")
@@ -499,7 +499,7 @@ func TestIAMRegistryDecisionRejectsOversizedBody(t *testing.T) {
 func TestIAMAuthorizationLogsExcludeDelegationMaterial(t *testing.T) {
 	harness := newIAMHarness(t)
 	claims := validIAMClaims(harness.now, "fixture-user", registryAuthorize)
-	request := harness.request(t, iam.RegistryReadDecisionPath, registryDecisionBody(iam.S1FixtureTenantAID, registryauth.ActionSiteRead), claims, harness.gatewaySigner)
+	request := harness.request(t, iam.RegistryDecisionPath, registryDecisionBody(iam.S1FixtureTenantAID, registryauth.ActionSiteRead), claims, harness.gatewaySigner)
 	incoming := request.Header.Get("X-Delegation-Grant")
 	recorder := httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, request)
@@ -617,7 +617,7 @@ func (h iamHarness) request(t *testing.T, path string, body *strings.Reader, cla
 func (h iamHarness) registryDecision(t *testing.T, subject, tenantID string, action registryauth.Action) registryauth.DecisionResponse {
 	t.Helper()
 	claims := validIAMClaims(h.now, subject, registryAuthorize)
-	request := h.request(t, iam.RegistryReadDecisionPath, registryDecisionBody(tenantID, action), claims, h.gatewaySigner)
+	request := h.request(t, iam.RegistryDecisionPath, registryDecisionBody(tenantID, action), claims, h.gatewaySigner)
 	recorder := httptest.NewRecorder()
 	h.handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -660,22 +660,22 @@ func registryDecisionBody(tenantID string, action registryauth.Action) *strings.
 
 func validIAMClaims(now time.Time, subject, action string) identitycontext.DelegationClaims {
 	return identitycontext.DelegationClaims{
-		Issuer:               "spiffe://hvac.local/platform-gateway",
-		Subject:              subject,
-		SubjectIssuer:        fixtureSubjectIssuer,
-		DisplayName:          "Fixture User",
-		Email:                "fixture@example.test",
-		Roles:                []string{"operator", "platform-admin"},
-		ExecutingService:     "spiffe://hvac.local/platform-gateway",
+		Issuer:           "spiffe://hvac.local/platform-gateway",
+		Subject:          subject,
+		SubjectIssuer:    fixtureSubjectIssuer,
+		DisplayName:      "Fixture User",
+		Email:            "fixture@example.test",
+		Roles:            []string{"operator", "platform-admin"},
+		ExecutingService: "spiffe://hvac.local/platform-gateway",
 		Audience:         "iam-service",
 		TenantID:         iam.S1FixtureTenantAID,
 		Actions:          []string{action},
-		Scopes:               []string{"session:" + fixtureSessionID},
-		PolicyRevision:       "policy-v1",
-		SessionID:            fixtureSessionID,
-		IssuedAt:             now.Unix(),
-		ExpiresAt:            now.Add(30 * time.Second).Unix(),
-		TokenID:              fixtureInboundID,
+		Scopes:           []string{"session:" + fixtureSessionID},
+		PolicyRevision:   "policy-v1",
+		SessionID:        fixtureSessionID,
+		IssuedAt:         now.Unix(),
+		ExpiresAt:        now.Add(30 * time.Second).Unix(),
+		TokenID:          fixtureInboundID,
 	}
 }
 

@@ -30,6 +30,7 @@ COPY infra/s1-registry/postgres/init/007-s4-alarm-authorization.sql /opt/hvac/re
 COPY infra/s1-registry/postgres/init/007-spatial-sensor-point-model.sql /opt/hvac/repo/infra/s1-registry/postgres/init/007-spatial-sensor-point-model.sql
 COPY infra/s1-registry/postgres/init/007a-tenant-spatial-scope.sql /opt/hvac/repo/infra/s1-registry/postgres/init/007a-tenant-spatial-scope.sql
 COPY infra/s1-registry/postgres/init/007b-control-point-invariants.sql /opt/hvac/repo/infra/s1-registry/postgres/init/007b-control-point-invariants.sql
+COPY infra/s1-registry/postgres/init/007c-counter-semantics.sql /opt/hvac/repo/infra/s1-registry/postgres/init/007c-counter-semantics.sql
 COPY infra/s1-registry/postgres/init/008-s5-work-order-authorization.sql /opt/hvac/repo/infra/s1-registry/postgres/init/008-s5-work-order-authorization.sql
 COPY infra/s1-registry/postgres/init/009-energy-data-foundation.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009-energy-data-foundation.sql
 COPY infra/s1-registry/postgres/init/009c-metric-model-v2.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009c-metric-model-v2.sql
@@ -39,6 +40,7 @@ COPY infra/s1-registry/postgres/init/009i-backend-integration-v2.sql /opt/hvac/r
 COPY infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql
 COPY infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql /opt/hvac/repo/infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql
 COPY services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql /opt/hvac/repo/services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql
+COPY infra/s1-registry/postgres/init/010-s05-registry-writer.sql /opt/hvac/repo/infra/s1-registry/postgres/init/010-s05-registry-writer.sql
 
 COPY infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql

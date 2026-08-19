@@ -245,6 +245,206 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/api/v1/sites",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "principal"]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/sites/{siteId}",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/spaces/tree",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/spaces",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/sites/{siteId}/spaces/{spaceId}",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/assets",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/sites/{siteId}/assets/{assetId}",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/devices",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/sites/{siteId}/devices/{deviceId}",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/devices/{deviceId}/points",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/sensors",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/sites/{siteId}/sensors/{sensorId}",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/points",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/sites/{siteId}/points/{pointId}",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/bindings/rebind",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/templates/revisions",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/templates/assignments",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/imports/dry-run",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/imports/commit",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/sites/{siteId}/retire",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": { "mode": "all" },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": ["tenant", "site", "principal"]
+    },
+    {
       "method": "GET",
       "path": "/api/v1/devices/{deviceId}/observation-snapshot",
       "owner": "telemetry-runtime-service",

@@ -95,26 +95,28 @@ type SensorSpaceBinding struct {
 }
 
 type TelemetryPoint struct {
-	ID                string         `json:"id"`
-	TenantID          string         `json:"tenantId"`
-	SiteID            string         `json:"siteId"`
-	ReportingDeviceID string         `json:"reportingDeviceId"`
-	SensorID          *string        `json:"sensorId"`
-	PointCode         string         `json:"pointCode"`
-	SourceKey         string         `json:"sourceKey"`
-	DisplayName       string         `json:"displayName"`
-	PointType         string         `json:"pointType"`
-	ValueType         string         `json:"valueType"`
-	Unit              *string        `json:"unit"`
-	Writable          bool           `json:"writable"`
-	SampleIntervalMS  int            `json:"sampleIntervalMs"`
-	PublishIntervalMS int            `json:"publishIntervalMs"`
-	StaleAfterMS      int            `json:"staleAfterMs"`
-	SourceMetadata    map[string]any `json:"sourceMetadata"`
-	Status            string         `json:"status"`
-	Revision          int64          `json:"revision"`
-	CreatedAt         string         `json:"createdAt"`
-	UpdatedAt         string         `json:"updatedAt"`
+	ID                     string         `json:"id"`
+	TenantID               string         `json:"tenantId"`
+	SiteID                 string         `json:"siteId"`
+	ReportingDeviceID      string         `json:"reportingDeviceId"`
+	SensorID               *string        `json:"sensorId"`
+	PointCode              string         `json:"pointCode"`
+	SourceKey              string         `json:"sourceKey"`
+	DisplayName            string         `json:"displayName"`
+	PointType              string         `json:"pointType"`
+	ValueType              string         `json:"valueType"`
+	Unit                   *string        `json:"unit"`
+	Writable               bool           `json:"writable"`
+	SampleIntervalMS       int            `json:"sampleIntervalMs"`
+	PublishIntervalMS      int            `json:"publishIntervalMs"`
+	StaleAfterMS           int            `json:"staleAfterMs"`
+	CounterDecreaseMode    *string        `json:"counterDecreaseMode"`
+	CounterRolloverModulus *float64       `json:"counterRolloverModulus"`
+	SourceMetadata         map[string]any `json:"sourceMetadata"`
+	Status                 string         `json:"status"`
+	Revision               int64          `json:"revision"`
+	CreatedAt              string         `json:"createdAt"`
+	UpdatedAt              string         `json:"updatedAt"`
 }
 
 type PointSubjectBinding struct {
@@ -156,7 +158,7 @@ type AssetModelCounts struct {
 	Assets          int `json:"assets"`
 	DeviceEndpoints int `json:"deviceEndpoints"`
 	PhysicalSensors int `json:"physicalSensors"`
-	Points           int `json:"points"`
+	Points          int `json:"points"`
 }
 
 type SiteAssetModel struct {

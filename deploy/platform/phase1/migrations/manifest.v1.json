@@ -46,6 +46,7 @@
         "infra/s1-registry/postgres/init/007-spatial-sensor-point-model.sql",
         "infra/s1-registry/postgres/init/007a-tenant-spatial-scope.sql",
         "infra/s1-registry/postgres/init/007b-control-point-invariants.sql",
+        "infra/s1-registry/postgres/init/007c-counter-semantics.sql",
         "infra/s1-registry/postgres/init/008-s5-work-order-authorization.sql",
         "infra/s1-registry/postgres/init/009-energy-data-foundation.sql",
         "infra/s1-registry/postgres/init/009c-metric-model-v2.sql",
@@ -54,7 +55,8 @@
         "infra/s1-registry/postgres/init/009i-backend-integration-v2.sql",
         "infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql",
         "infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql",
-        "services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql"
+        "services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql",
+        "infra/s1-registry/postgres/init/010-s05-registry-writer.sql"
       ]
     },
     {

@@ -15,21 +15,21 @@ func (store *PostgresStore) GetSiteAssetModel(ctx context.Context, claims regist
 		return SiteAssetModel{}, ErrNotFound
 	}
 	result := SiteAssetModel{
-		SchemaVersion:         2,
-		TenantID:              claims.TenantID,
-		SiteID:                siteID,
-		Spaces:                 []Space{},
-		Assets:                []Asset{},
-		Devices:               []Device{},
-		DeviceBindings:        []DeviceBinding{},
-		AssetSpaceBindings: []AssetSpaceBinding{},
-		DeviceSpaceBindings:    []DeviceSpaceBinding{},
-		Sensors:               []Sensor{},
-		SensorDeviceBindings:  []SensorDeviceBinding{},
-		SensorSpaceBindings:    []SensorSpaceBinding{},
-		TelemetryPoints:       []TelemetryPoint{},
-		Relationships:         []AssetRelationship{},
-		PointSubjectBindings:  []PointSubjectBinding{},
+		SchemaVersion:        2,
+		TenantID:             claims.TenantID,
+		SiteID:               siteID,
+		Spaces:               []Space{},
+		Assets:               []Asset{},
+		Devices:              []Device{},
+		DeviceBindings:       []DeviceBinding{},
+		AssetSpaceBindings:   []AssetSpaceBinding{},
+		DeviceSpaceBindings:  []DeviceSpaceBinding{},
+		Sensors:              []Sensor{},
+		SensorDeviceBindings: []SensorDeviceBinding{},
+		SensorSpaceBindings:  []SensorSpaceBinding{},
+		TelemetryPoints:      []TelemetryPoint{},
+		Relationships:        []AssetRelationship{},
+		PointSubjectBindings: []PointSubjectBinding{},
 	}
 
 	err := store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
@@ -201,7 +201,7 @@ ORDER BY binding_role COLLATE "C", id
 SELECT id::text, tenant_id::text, site_id::text, reporting_device_id::text,
        sensor_id::text, point_code, source_key, display_name, point_type,
        value_type, unit, writable, sample_interval_ms, publish_interval_ms,
-       stale_after_ms, source_metadata, status, revision, created_at, updated_at
+       stale_after_ms, counter_decrease_mode, counter_rollover_modulus, source_metadata, status, revision, created_at, updated_at
 FROM core_registry.telemetry_points
 WHERE site_id = $1::uuid
 ORDER BY reporting_device_id, point_code COLLATE "C", id
@@ -239,7 +239,7 @@ ORDER BY binding_role COLLATE "C", id
 
 	result.Relationships = buildAssetRelationships(result)
 	result.Counts = AssetModelCounts{
-		Spaces:           len(result.Spaces),
+		Spaces:          len(result.Spaces),
 		Assets:          len(result.Assets),
 		DeviceEndpoints: len(result.Devices),
 		PhysicalSensors: len(result.Sensors),
@@ -473,7 +473,7 @@ func scanTelemetryPoint(row rowScanner) (TelemetryPoint, error) {
 		&item.ReportingDeviceID, &item.SensorID, &item.PointCode, &item.SourceKey,
 		&item.DisplayName, &item.PointType, &item.ValueType, &item.Unit,
 		&item.Writable, &item.SampleIntervalMS, &item.PublishIntervalMS,
-		&item.StaleAfterMS, &metadata, &item.Status, &item.Revision,
+		&item.StaleAfterMS, &item.CounterDecreaseMode, &item.CounterRolloverModulus, &metadata, &item.Status, &item.Revision,
 		&createdAt, &updatedAt,
 	); err != nil {
 		return TelemetryPoint{}, err

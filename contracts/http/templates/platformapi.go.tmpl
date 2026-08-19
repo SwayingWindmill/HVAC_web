@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	CapabilitySetVersion                 = 9
+	CapabilitySetVersion                 = 10
 	GetHealthPath                         = "__HEALTH_PATH__"
 	GetVersionPath                        = "__VERSION_PATH__"
 	GetPlatformStatusPath                 = "__PLATFORM_STATUS_PATH__"
@@ -88,27 +88,37 @@ type PrincipalContext struct {
 type Capability string
 
 const (
-	CapabilitySiteList         Capability = "site.list"
-	CapabilitySiteRead         Capability = "site.read"
-	CapabilityAssetList Capability = "asset.list"
-	CapabilityAssetRead Capability = "asset.read"
-	CapabilityDeviceList       Capability = "device.list"
-	CapabilityDeviceRead              Capability = "device.read"
-	CapabilityTelemetrySnapshotRead   Capability = "telemetry.snapshot.read"
-	CapabilityTelemetryBatchRead      Capability = "telemetry.batch.read"
-	CapabilityTelemetrySubscribe      Capability = "telemetry.subscribe"
-	CapabilityTelemetryHistoryRead    Capability = "telemetry.history.read"
-	CapabilityAlarmList               Capability = "alarm.list"
-	CapabilityAlarmRead               Capability = "alarm.read"
-	CapabilityWorkOrderList           Capability = "work-order.list"
-	CapabilityWorkOrderRead           Capability = "work-order.read"
-	CapabilityWorkOrderCreate         Capability = "work-order.create"
-	CapabilityWorkOrderAssign         Capability = "work-order.assign"
-	CapabilityWorkOrderLifecycle      Capability = "work-order.lifecycle"
-	CapabilitySessionRevoke           Capability = "session.revoke"
-	CapabilityAuditRead               Capability = "audit.read"
-	CapabilityIAMAdmin                Capability = "iam.admin"
-	CapabilityAPICredentialManage     Capability = "api-credential.manage"
+	CapabilitySiteList              Capability = "site.list"
+	CapabilitySiteRead              Capability = "site.read"
+	CapabilityAssetList             Capability = "asset.list"
+	CapabilityAssetRead             Capability = "asset.read"
+	CapabilityDeviceList            Capability = "device.list"
+	CapabilityDeviceRead            Capability = "device.read"
+	CapabilityTelemetrySnapshotRead Capability = "telemetry.snapshot.read"
+	CapabilityTelemetryBatchRead    Capability = "telemetry.batch.read"
+	CapabilityTelemetrySubscribe    Capability = "telemetry.subscribe"
+	CapabilityTelemetryHistoryRead  Capability = "telemetry.history.read"
+	CapabilityAlarmList             Capability = "alarm.list"
+	CapabilityAlarmRead             Capability = "alarm.read"
+	CapabilityWorkOrderList         Capability = "work-order.list"
+	CapabilityWorkOrderRead         Capability = "work-order.read"
+	CapabilityWorkOrderCreate       Capability = "work-order.create"
+	CapabilityWorkOrderAssign       Capability = "work-order.assign"
+	CapabilityWorkOrderLifecycle    Capability = "work-order.lifecycle"
+	CapabilitySessionRevoke         Capability = "session.revoke"
+	CapabilityAuditRead             Capability = "audit.read"
+	CapabilityIAMAdmin              Capability = "iam.admin"
+	CapabilityAPICredentialManage   Capability = "api-credential.manage"
+	CapabilitySiteWrite             Capability = "site.write"
+	CapabilitySpaceWrite            Capability = "space.write"
+	CapabilityAssetWrite            Capability = "asset.write"
+	CapabilityDeviceWrite           Capability = "device.write"
+	CapabilitySensorWrite           Capability = "sensor.write"
+	CapabilityPointWrite            Capability = "point.write"
+	CapabilityBindingWrite          Capability = "binding.write"
+	CapabilityTemplateManage        Capability = "template.manage"
+	CapabilityRegistryImport        Capability = "registry.import"
+	CapabilityRegistryRetire        Capability = "registry.retire"
 )
 
 type EffectiveAuthorization struct {

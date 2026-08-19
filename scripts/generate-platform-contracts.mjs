@@ -163,7 +163,7 @@ const schemaRequirements = {
   DeviceBindingCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
   Space: [['id', 'tenantId', 'siteId', 'parentSpaceId', 'code', 'displayName', 'spaceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'parentSpaceId', 'code', 'displayName', 'spaceType', 'status', 'revision', 'createdAt', 'updatedAt']],
   Sensor: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'sensorType', 'manufacturer', 'model', 'serialNumber', 'calibrationDueAt', 'metadata', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'sensorType', 'manufacturer', 'model', 'serialNumber', 'calibrationDueAt', 'metadata', 'status', 'revision', 'createdAt', 'updatedAt']],
-  TelemetryPoint: [['id', 'tenantId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointCode', 'sourceKey', 'displayName', 'pointType', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointCode', 'sourceKey', 'displayName', 'pointType', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt']],
+  TelemetryPoint: [['id', 'tenantId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointCode', 'sourceKey', 'displayName', 'pointType', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'counterDecreaseMode', 'counterRolloverModulus', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointCode', 'sourceKey', 'displayName', 'pointType', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'counterDecreaseMode', 'counterRolloverModulus', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt']],
   AssetRelationship: [['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
   AssetModelCounts: [['spaces', 'assets', 'deviceEndpoints', 'physicalSensors', 'points'], ['spaces', 'assets', 'deviceEndpoints', 'physicalSensors', 'points']],
   SiteAssetModel: [['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts'], ['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts']],
@@ -191,6 +191,16 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'asset.read',
   'device.list',
   'device.read',
+  'site.write',
+  'space.write',
+  'asset.write',
+  'device.write',
+  'sensor.write',
+  'point.write',
+  'binding.write',
+  'template.manage',
+  'registry.import',
+  'registry.retire',
   'telemetry.snapshot.read',
   'telemetry.batch.read',
   'telemetry.subscribe',
@@ -207,9 +217,9 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'iam.admin',
   'api-credential.manage',
 ]), 'Capability vocabulary is unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 9, 'EffectiveAuthorization capability set version must be 9');
+invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 10, 'EffectiveAuthorization capability set version must be 10');
 invariant(schemas.EffectiveAuthorization.properties.policyRevision.minLength === 1 && schemas.EffectiveAuthorization.properties.policyRevision.maxLength === 128, 'EffectiveAuthorization policy revision bounds are unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 21, 'EffectiveAuthorization capabilities must be unique and bounded');
+invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === 31, 'EffectiveAuthorization capabilities must be unique and bounded');
 invariant(schemas.EffectiveAuthorization.properties.capabilities.items?.$ref === '#/components/schemas/Capability', 'EffectiveAuthorization capabilities must use the public Capability vocabulary');
 invariant(schemas.AuditRecord.properties.schemaVersion.const === 1, 'AuditRecord.schemaVersion must be 1');
 invariant(schemas.AuditRecord.properties.aggregateType.const === 'bff-session', 'AuditRecord.aggregateType must be bff-session');

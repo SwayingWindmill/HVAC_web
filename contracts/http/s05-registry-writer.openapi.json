@@ -1,0 +1,224 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "S05 Registry Writer Shape Contract",
+    "version": "1.0.0",
+    "description": "Subordinate shape contract for SE-API-001 governed Registry writes. Public route ownership remains exclusively in platform-gateway.openapi.yaml."
+  },
+  "paths": {},
+  "components": {
+    "schemas": {
+      "UUIDv7": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+      },
+      "MutationMeta": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedRevision", "idempotencyKey", "reason"],
+        "properties": {
+          "expectedRevision": { "type": "integer", "minimum": 0 },
+          "idempotencyKey": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$" },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      },
+      "SiteMutation": {
+        "type": "object", "additionalProperties": false,
+        "required": ["code", "displayName", "timezone", "status", "meta"],
+        "properties": {
+          "code": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+          "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "timezone": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "status": { "$ref": "#/components/schemas/ResourceStatus" },
+          "meta": { "$ref": "#/components/schemas/MutationMeta" }
+        }
+      },
+      "SpaceMutation": {
+        "type": "object", "additionalProperties": false,
+        "required": ["code", "displayName", "spaceType", "status", "meta"],
+        "properties": {
+          "parentSpaceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "code": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+          "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "spaceType": { "type": "string", "enum": ["CAMPUS", "BUILDING", "FLOOR", "ZONE", "ROOM", "PLANT_ROOM", "ROOFTOP", "OUTDOOR", "TENANT_SPACE", "OTHER"] },
+          "status": { "$ref": "#/components/schemas/ResourceStatus" },
+          "meta": { "$ref": "#/components/schemas/MutationMeta" }
+        }
+      },
+      "AssetMutation": {
+        "type": "object", "additionalProperties": false,
+        "required": ["code", "displayName", "assetType", "status", "meta"],
+        "properties": {
+          "code": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+          "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "assetType": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "status": { "$ref": "#/components/schemas/ResourceStatus" },
+          "meta": { "$ref": "#/components/schemas/MutationMeta" }
+        }
+      },
+      "DeviceMutation": {
+        "type": "object", "additionalProperties": false,
+        "required": ["code", "displayName", "deviceType", "status", "meta"],
+        "properties": {
+          "code": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+          "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "deviceType": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "status": { "$ref": "#/components/schemas/ResourceStatus" },
+          "meta": { "$ref": "#/components/schemas/MutationMeta" }
+        }
+      },
+      "SensorMutation": {
+        "type": "object", "additionalProperties": false,
+        "required": ["code", "displayName", "sensorType", "metadata", "status", "meta"],
+        "properties": {
+          "code": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+          "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "sensorType": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "manufacturer": { "type": "string", "maxLength": 128 },
+          "model": { "type": "string", "maxLength": 128 },
+          "serialNumber": { "type": "string", "maxLength": 256 },
+          "calibrationDueAt": { "type": "string", "format": "date-time" },
+          "metadata": { "type": "object" },
+          "status": { "$ref": "#/components/schemas/ResourceStatus" },
+          "meta": { "$ref": "#/components/schemas/MutationMeta" }
+        }
+      },
+      "PointMutation": {
+        "type": "object", "additionalProperties": false,
+        "required": ["reportingDeviceId", "pointCode", "sourceKey", "displayName", "pointType", "valueType", "writable", "sampleIntervalMs", "publishIntervalMs", "staleAfterMs", "sourceMetadata", "status", "meta"],
+        "properties": {
+          "reportingDeviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "sensorId": { "$ref": "#/components/schemas/UUIDv7" },
+          "pointCode": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,127}$" },
+          "sourceKey": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$" },
+          "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "pointType": { "type": "string", "enum": ["TELEMETRY", "COUNTER", "STATE", "SETTING", "COMMAND"] },
+          "valueType": { "type": "string", "enum": ["BOOLEAN", "NUMBER", "STRING", "JSON"] },
+          "unit": { "type": "string", "maxLength": 64 },
+          "writable": { "type": "boolean" },
+          "sampleIntervalMs": { "type": "integer", "minimum": 100, "maximum": 86400000 },
+          "publishIntervalMs": { "type": "integer", "minimum": 100, "maximum": 86400000 },
+          "staleAfterMs": { "type": "integer", "minimum": 100, "maximum": 604800000 },
+          "counterDecreaseMode": { "type": "string", "enum": ["RESET_TO_ZERO", "ROLLOVER", "INVALID"] },
+          "counterRolloverModulus": { "type": "number", "exclusiveMinimum": 0 },
+          "sourceMetadata": { "type": "object" },
+          "status": { "$ref": "#/components/schemas/ResourceStatus" },
+          "meta": { "$ref": "#/components/schemas/MutationMeta" }
+        }
+      },
+      "ResourceStatus": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] },
+      "RebindRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["kind", "sourceId", "targetId", "role", "effectiveAt", "meta"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["DEVICE_ASSET", "ASSET_SPACE", "DEVICE_SPACE", "SENSOR_DEVICE", "SENSOR_SPACE", "POINT_SUBJECT"] },
+          "sourceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "targetId": { "$ref": "#/components/schemas/UUIDv7" },
+          "targetType": { "type": "string", "enum": ["SITE", "SPACE", "ASSET"] },
+          "role": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "effectiveAt": { "type": "string", "format": "date-time" },
+          "meta": { "$ref": "#/components/schemas/MutationMeta" }
+        }
+      },
+      "BindingMutationResult": {
+        "type": "object", "additionalProperties": false,
+        "required": ["bindingId", "siteId", "kind", "sourceId", "targetId", "role", "revision", "validFrom", "replayed"],
+        "properties": {
+          "bindingId": { "$ref": "#/components/schemas/UUIDv7" }, "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "kind": { "type": "string" }, "sourceId": { "$ref": "#/components/schemas/UUIDv7" }, "targetId": { "$ref": "#/components/schemas/UUIDv7" },
+          "role": { "type": "string" }, "revision": { "type": "integer", "minimum": 1 }, "validFrom": { "type": "string", "format": "date-time" }, "replayed": { "type": "boolean" }
+        }
+      },
+      "ReleaseTemplateRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["templateKey", "templateKind", "payload", "releaseReferences", "meta"],
+        "properties": {
+          "templateKey": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" },
+          "templateKind": { "$ref": "#/components/schemas/TemplateKind" },
+          "payload": { "type": "object" },
+          "releaseReferences": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 256 } },
+          "meta": { "$ref": "#/components/schemas/MutationMeta" }
+        }
+      },
+      "TemplateKind": { "type": "string", "enum": ["ASSET", "DEVICE", "POINT"] },
+      "TemplateRevision": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "tenantId", "templateId", "templateKey", "templateKind", "revisionNumber", "status", "payload", "releaseReferences", "releasedAt"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" }, "tenantId": { "$ref": "#/components/schemas/UUIDv7" }, "templateId": { "$ref": "#/components/schemas/UUIDv7" },
+          "templateKey": { "type": "string" }, "templateKind": { "$ref": "#/components/schemas/TemplateKind" }, "revisionNumber": { "type": "integer", "minimum": 1 },
+          "status": { "const": "RELEASED" }, "payload": { "type": "object" }, "releaseReferences": { "type": "object", "additionalProperties": { "type": "string" } }, "releasedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "AssignTemplateRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["siteId", "targetType", "targetId", "templateRevisionId", "effectiveAt", "meta"],
+        "properties": {
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" }, "targetType": { "$ref": "#/components/schemas/TemplateKind" }, "targetId": { "$ref": "#/components/schemas/UUIDv7" },
+          "templateRevisionId": { "$ref": "#/components/schemas/UUIDv7" }, "effectiveAt": { "type": "string", "format": "date-time" }, "meta": { "$ref": "#/components/schemas/MutationMeta" }
+        }
+      },
+      "TemplateAssignment": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "tenantId", "siteId", "targetType", "targetId", "templateRevisionId", "validFrom", "revision"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" }, "tenantId": { "$ref": "#/components/schemas/UUIDv7" }, "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "targetType": { "$ref": "#/components/schemas/TemplateKind" }, "targetId": { "$ref": "#/components/schemas/UUIDv7" }, "templateRevisionId": { "$ref": "#/components/schemas/UUIDv7" },
+          "validFrom": { "type": "string", "format": "date-time" }, "validTo": { "type": "string", "format": "date-time" }, "revision": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "ImportRow": {
+        "type": "object", "additionalProperties": false,
+        "required": ["rowNumber", "resourceType", "externalId", "payload"],
+        "properties": {
+          "rowNumber": { "type": "integer", "minimum": 1 }, "resourceType": { "type": "string", "enum": ["SPACE", "ASSET", "DEVICE", "SENSOR", "POINT"] },
+          "externalId": { "type": "string", "minLength": 1, "maxLength": 256 }, "targetId": { "$ref": "#/components/schemas/UUIDv7" },
+          "expectedRevision": { "type": "integer", "minimum": 0 }, "payload": { "type": "object" }
+        }
+      },
+      "ImportRowResult": {
+        "type": "object", "additionalProperties": false,
+        "required": ["rowNumber", "resourceType", "externalId", "expectedRevision", "status"],
+        "properties": {
+          "rowNumber": { "type": "integer", "minimum": 1 }, "resourceType": { "type": "string" }, "externalId": { "type": "string" }, "targetId": { "$ref": "#/components/schemas/UUIDv7" },
+          "expectedRevision": { "type": "integer", "minimum": 0 }, "status": { "type": "string", "enum": ["READY", "ERROR", "COMMITTED"] },
+          "errorCode": { "type": "string" }, "message": { "type": "string" }
+        }
+      },
+      "ImportPlanRequest": {
+        "type": "object", "additionalProperties": false, "required": ["namespace", "rows"],
+        "properties": { "namespace": { "type": "string", "minLength": 1, "maxLength": 128 }, "rows": { "type": "array", "minItems": 1, "maxItems": 1000, "items": { "$ref": "#/components/schemas/ImportRow" } } }
+      },
+      "ImportPlan": {
+        "type": "object", "additionalProperties": false,
+        "required": ["schemaVersion", "planId", "tenantId", "siteId", "namespace", "rows", "results", "digest"],
+        "properties": {
+          "schemaVersion": { "const": 1 }, "planId": { "$ref": "#/components/schemas/UUIDv7" }, "tenantId": { "$ref": "#/components/schemas/UUIDv7" }, "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "namespace": { "type": "string" }, "rows": { "type": "array", "items": { "$ref": "#/components/schemas/ImportRow" } }, "results": { "type": "array", "items": { "$ref": "#/components/schemas/ImportRowResult" } },
+          "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      },
+      "ImportCommitRequest": {
+        "type": "object", "additionalProperties": false, "required": ["plan", "meta"],
+        "properties": { "plan": { "$ref": "#/components/schemas/ImportPlan" }, "meta": { "$ref": "#/components/schemas/MutationMeta" } }
+      },
+      "ImportCommitResult": {
+        "type": "object", "additionalProperties": false, "required": ["planDigest", "results", "replayed"],
+        "properties": { "planDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "results": { "type": "array", "items": { "$ref": "#/components/schemas/ImportRowResult" } }, "replayed": { "type": "boolean" } }
+      },
+      "RetireRequest": {
+        "type": "object", "additionalProperties": false, "required": ["resourceType", "resourceId", "meta"],
+        "properties": {
+          "resourceType": { "type": "string", "enum": ["SITE", "SPACE", "ASSET", "DEVICE", "SENSOR", "POINT"] }, "resourceId": { "$ref": "#/components/schemas/UUIDv7" }, "meta": { "$ref": "#/components/schemas/MutationMeta" }
+        }
+      },
+      "RetirementResult": {
+        "type": "object", "additionalProperties": false, "required": ["sagaId", "resourceType", "resourceId", "status", "dependencyCount", "revision", "replayed"],
+        "properties": {
+          "sagaId": { "$ref": "#/components/schemas/UUIDv7" }, "resourceType": { "type": "string" }, "resourceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "status": { "type": "string", "enum": ["BLOCKED", "COMPLETED"] }, "dependencyCount": { "type": "integer", "minimum": 0 }, "revision": { "type": "integer", "minimum": 1 }, "replayed": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

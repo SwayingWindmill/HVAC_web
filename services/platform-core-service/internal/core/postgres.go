@@ -22,6 +22,8 @@ type RegistryStore interface {
 	ListDevices(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[Device], error)
 	GetDevice(context.Context, registryauth.GrantClaims, string) (Device, error)
 	ListDeviceBindings(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[DeviceBinding], error)
+	ListSpaceChildren(context.Context, registryauth.GrantClaims, string, string, PageRequest) (PageResult[Space], error)
+	ListDevicePoints(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[TelemetryPoint], error)
 	GetSiteAssetModel(context.Context, registryauth.GrantClaims, string) (SiteAssetModel, error)
 }
 
@@ -44,11 +46,11 @@ func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore,
 	config.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = "5s"
 	config.AfterConnect = func(ctx context.Context, connection *pgx.Conn) error {
 		var sessionUser string
-		var member bool
-		if err := connection.QueryRow(ctx, `SELECT session_user, pg_has_role(session_user, 's1_core_runtime', 'MEMBER')`).Scan(&sessionUser, &member); err != nil {
+		var runtimeMember, writerMember bool
+		if err := connection.QueryRow(ctx, `SELECT session_user, pg_has_role(session_user, 's1_core_runtime', 'MEMBER'), pg_has_role(session_user, 's1_core_writer', 'MEMBER')`).Scan(&sessionUser, &runtimeMember, &writerMember); err != nil {
 			return fmt.Errorf("read Core database identity: %w", err)
 		}
-		if sessionUser != coreServiceDatabaseRole || !member {
+		if sessionUser != coreServiceDatabaseRole || !runtimeMember || !writerMember {
 			return fmt.Errorf("Core database identity %q is not allowed", sessionUser)
 		}
 		return nil

@@ -59,9 +59,11 @@ type registryController struct {
 type publicRegistryRoute struct {
 	template     string
 	internalPath string
+	resource     string
 	action       registryauth.Action
 	scopeID      string
 	list         bool
+	write        bool
 }
 
 type registryBackendResult struct {
@@ -215,6 +217,14 @@ func (h *handler) serveRegistry(writer http.ResponseWriter, request *http.Reques
 	}
 
 	query := encodeRegistryQuery(params)
+	if route.resource == "space-children" {
+		parentSpaceID := request.URL.Query().Get("parentSpaceId")
+		if parentSpaceID != "" {
+			values, _ := url.ParseQuery(query)
+			values.Set("parentSpaceId", parentSpaceID)
+			query = values.Encode()
+		}
+	}
 	if decision.SelectedOwner != ownershipregistry.OwnerCore {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Registry route decision is outside the V2 Core-only boundary.", true, nil)
 		return
@@ -276,7 +286,7 @@ func (h *handler) authorizeRegistryForPresenter(
 	if err != nil {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Registry authorization request could not be encoded.", true}
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(h.identity.config.IAMURL, "/")+"/internal/v1/registry-read/decision", bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(h.identity.config.IAMURL, "/")+"/internal/v1/registry/decision", bytes.NewReader(body))
 	if err != nil {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Registry authorization request could not be constructed.", true}
 	}
@@ -317,14 +327,14 @@ func (h *handler) authorizeRegistryForPresenter(
 	if !structurallyValidRegistryGrant(decision.DelegationGrant) {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "IAM returned a malformed Registry grant.", true}
 	}
-	allowedSites, err := validateExactSiteRegistryScope(decision.Decision)
+	allowedSites, err := validateExactSiteRegistryScope(decision.Decision, action)
 	if err != nil {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "IAM returned an invalid exact-Site Registry scope.", true}
 	}
 	return registryAuthorization{coreGrant: decision.DelegationGrant, allowedSiteIDs: allowedSites, policyRevision: decision.Decision.PolicyRevision}, nil
 }
 
-func validateExactSiteRegistryScope(decision registryauth.Decision) (map[string]struct{}, error) {
+func validateExactSiteRegistryScope(decision registryauth.Decision, action registryauth.Action) (map[string]struct{}, error) {
 	allowedSites, err := validatedRegistryIDs(decision.AllowedSiteIDs)
 	if err != nil {
 		return nil, err
@@ -333,8 +343,11 @@ func validateExactSiteRegistryScope(decision registryauth.Decision) (map[string]
 	if err != nil {
 		return nil, err
 	}
-	if len(allowedSites) == 0 || len(allowedSites) > 256 {
+	if action.SiteScoped() && (len(allowedSites) == 0 || len(allowedSites) > 256) {
 		return nil, errors.New("Registry decision must contain an exact non-empty Site set")
+	}
+	if action.TenantScoped() && len(allowedSites) > 256 {
+		return nil, errors.New("Registry decision Site set exceeds the supported bound")
 	}
 	if setsOverlap(allowedSites, deniedSites) {
 		return nil, errors.New("Registry decision allowed and denied Site scopes overlap")
@@ -404,8 +417,14 @@ func (h *handler) decodeRegistryBackendResponse(owner string, response *http.Res
 		return unavailableRegistryResult(owner, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE")
 	}
 	result := registryBackendResult{owner: owner, status: response.StatusCode, bodySHA256: sha256Hex(raw)}
-	if response.StatusCode == http.StatusOK {
-		canonical, err := canonicalRegistrySuccess(route.action, route.scopeID, raw)
+	if response.StatusCode == http.StatusOK || response.StatusCode == http.StatusCreated {
+		var canonical []byte
+		var err error
+		if route.write || route.resource == "space-children" || route.resource == "device-points" {
+			canonical, err = canonicalRegistryDocument(raw)
+		} else {
+			canonical, err = canonicalRegistrySuccess(route.action, route.scopeID, raw)
+		}
 		if err != nil {
 			return invalidRegistryResult(owner, result.bodySHA256)
 		}
@@ -425,7 +444,7 @@ func (h *handler) decodeRegistryBackendResponse(owner string, response *http.Res
 	case response.StatusCode == http.StatusBadRequest && problem.Code == "CURSOR_INVALID":
 		result.status = http.StatusBadRequest
 		result.code = "CURSOR_INVALID"
-	case response.StatusCode == http.StatusConflict && (problem.Code == "MAPPING_INVALID" || problem.Code == "MAPPING_QUARANTINED"):
+	case response.StatusCode == http.StatusConflict && problem.Code != "":
 		result.status = http.StatusConflict
 		result.code = problem.Code
 	case response.StatusCode == http.StatusGatewayTimeout:
@@ -445,9 +464,9 @@ func (h *handler) decodeRegistryBackendResponse(owner string, response *http.Res
 }
 
 func (h *handler) writeRegistryBackendResult(writer http.ResponseWriter, request *http.Request, result registryBackendResult) {
-	if result.status == http.StatusOK {
+	if result.status == http.StatusOK || result.status == http.StatusCreated {
 		writer.Header().Set("Content-Type", "application/json")
-		writer.WriteHeader(http.StatusOK)
+		writer.WriteHeader(result.status)
 		_, _ = writer.Write(append(result.body, '\n'))
 		return
 	}
@@ -458,6 +477,8 @@ func (h *handler) writeRegistryBackendResult(writer http.ResponseWriter, request
 		writeProblem(writer, request, http.StatusBadRequest, result.code, "Cursor invalid", "The Registry page cursor or limit is invalid.", false, nil)
 	case "MAPPING_INVALID", "MAPPING_QUARANTINED":
 		writeProblem(writer, request, http.StatusConflict, result.code, "Registry mapping unavailable", "The Registry resource mapping is not available for public reads.", false, nil)
+	case "REGISTRY_REVISION_CONFLICT", "REGISTRY_IDEMPOTENCY_CONFLICT", "REGISTRY_BINDING_CONFLICT", "TEMPLATE_REVISION_IMMUTABLE", "REGISTRY_IMPORT_PLAN_INVALID":
+		writeProblem(writer, request, http.StatusConflict, result.code, "Registry mutation conflict", "The Registry mutation conflicts with the current authoritative state.", false, nil)
 	case "REGISTRY_TIMEOUT":
 		writeProblem(writer, request, http.StatusGatewayTimeout, result.code, "Registry timeout", "The Registry request did not complete before the Gateway deadline.", true, nil)
 	default:
@@ -493,75 +514,197 @@ func parseRegistryListParams(writer http.ResponseWriter, request *http.Request) 
 	return params, true
 }
 
-func matchPublicRegistryRoute(path string) (publicRegistryRoute, string, bool) {
-	if path == platformapi.ListSitesPath {
-		return publicRegistryRoute{template: platformapi.ListSitesPath, internalPath: "/internal/v1/registry/sites", action: registryauth.ActionSiteList, list: true}, "", true
-	}
-	patterns := []struct {
-		template string
-		marker   string
-		action   registryauth.Action
-		internal func(string) string
-		list     bool
-	}{
-		{platformapi.GetSitePathTemplate, "{siteId}", registryauth.ActionSiteRead, func(id string) string { return "/internal/v1/registry/sites/" + id }, false},
-		{platformapi.ListSiteAssetsPathTemplate, "{siteId}", registryauth.ActionAssetList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/assets" }, true},
-		{platformapi.GetAssetPathTemplate, "{assetId}", registryauth.ActionAssetRead, func(id string) string { return "/internal/v1/registry/assets/" + id }, false},
-		{platformapi.ListSiteDevicesPathTemplate, "{siteId}", registryauth.ActionDeviceList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/devices" }, true},
-		{platformapi.ListSiteDeviceBindingsPathTemplate, "{siteId}", registryauth.ActionDeviceBindingList, func(id string) string { return "/internal/v1/registry/sites/" + id + "/device-bindings" }, true},
-		{platformapi.GetSiteAssetModelPathTemplate, "{siteId}", registryauth.ActionAssetModelRead, func(id string) string { return "/internal/v1/registry/sites/" + id + "/asset-model" }, false},
-		{platformapi.GetDevicePathTemplate, "{deviceId}", registryauth.ActionDeviceRead, func(id string) string { return "/internal/v1/registry/devices/" + id }, false},
-	}
-	for _, pattern := range patterns {
-		id, ok := matchSinglePathParameter(path, pattern.template, pattern.marker)
-		if !ok {
-			continue
+func matchPublicRegistryRoute(method, path string) (publicRegistryRoute, string, bool) {
+	if path == "/api/v1/sites" {
+		if method == http.MethodGet {
+			return publicRegistryRoute{template: "/api/v1/sites", internalPath: "/internal/v1/registry/sites", resource: "sites", action: registryauth.ActionSiteList, list: true}, "", true
 		}
-		return publicRegistryRoute{template: pattern.template, internalPath: pattern.internal(id), action: pattern.action, scopeID: id, list: pattern.list}, id, true
+		if method == http.MethodPost {
+			return publicRegistryRoute{template: "/api/v1/sites", internalPath: "/internal/v1/registry/sites", resource: "site-write", action: registryauth.ActionSiteWrite, write: true}, "", true
+		}
+	}
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	if len(segments) < 3 || segments[0] != "api" || segments[1] != "v1" {
+		return publicRegistryRoute{}, "", false
+	}
+	segments = segments[2:]
+	switch {
+	case len(segments) == 2 && segments[0] == "sites":
+		siteID := segments[1]
+		if method == http.MethodGet {
+			return publicRegistryRoute{template: "/api/v1/sites/{siteId}", internalPath: "/internal/v1/registry/sites/" + siteID, resource: "sites", action: registryauth.ActionSiteRead, scopeID: siteID}, siteID, true
+		}
+		if method == http.MethodPatch {
+			return publicRegistryRoute{template: "/api/v1/sites/{siteId}", internalPath: "/internal/v1/registry/sites/" + siteID, resource: "site-write", action: registryauth.ActionSiteWrite, write: true}, siteID, true
+		}
+	case len(segments) == 2 && segments[0] == "assets" && method == http.MethodGet:
+		id := segments[1]
+		return publicRegistryRoute{template: "/api/v1/assets/{assetId}", internalPath: "/internal/v1/registry/assets/" + id, resource: "assets", action: registryauth.ActionAssetRead}, id, true
+	case len(segments) == 2 && segments[0] == "devices" && method == http.MethodGet:
+		id := segments[1]
+		return publicRegistryRoute{template: "/api/v1/devices/{deviceId}", internalPath: "/internal/v1/registry/devices/" + id, resource: "devices", action: registryauth.ActionDeviceRead}, id, true
+	case len(segments) == 3 && segments[0] == "devices" && segments[2] == "points" && method == http.MethodGet:
+		id := segments[1]
+		return publicRegistryRoute{template: "/api/v1/devices/{deviceId}/points", internalPath: "/internal/v1/registry/devices/" + id + "/points", resource: "device-points", action: registryauth.ActionDeviceRead, list: true}, id, true
+	case len(segments) == 3 && segments[0] == "sites":
+		siteID, collection := segments[1], segments[2]
+		switch collection {
+		case "assets":
+			if method == http.MethodGet {
+				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/assets", internalPath: "/internal/v1/registry/sites/" + siteID + "/assets", resource: "assets", action: registryauth.ActionAssetList, scopeID: siteID, list: true}, siteID, true
+			}
+			if method == http.MethodPost {
+				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/assets", internalPath: "/internal/v1/registry/sites/" + siteID + "/assets", resource: "asset-write", action: registryauth.ActionAssetWrite, scopeID: siteID, write: true}, siteID, true
+			}
+		case "devices":
+			if method == http.MethodGet {
+				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/devices", internalPath: "/internal/v1/registry/sites/" + siteID + "/devices", resource: "devices", action: registryauth.ActionDeviceList, scopeID: siteID, list: true}, siteID, true
+			}
+			if method == http.MethodPost {
+				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/devices", internalPath: "/internal/v1/registry/sites/" + siteID + "/devices", resource: "device-write", action: registryauth.ActionDeviceWrite, scopeID: siteID, write: true}, siteID, true
+			}
+		case "spaces":
+			if method == http.MethodPost {
+				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/spaces", internalPath: "/internal/v1/registry/sites/" + siteID + "/spaces", resource: "space-write", action: registryauth.ActionSpaceWrite, scopeID: siteID, write: true}, siteID, true
+			}
+		case "sensors":
+			if method == http.MethodPost {
+				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/sensors", internalPath: "/internal/v1/registry/sites/" + siteID + "/sensors", resource: "sensor-write", action: registryauth.ActionSensorWrite, scopeID: siteID, write: true}, siteID, true
+			}
+		case "points":
+			if method == http.MethodPost {
+				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/points", internalPath: "/internal/v1/registry/sites/" + siteID + "/points", resource: "point-write", action: registryauth.ActionPointWrite, scopeID: siteID, write: true}, siteID, true
+			}
+		case "device-bindings":
+			if method == http.MethodGet {
+				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/device-bindings", internalPath: "/internal/v1/registry/sites/" + siteID + "/device-bindings", resource: "device-bindings", action: registryauth.ActionDeviceBindingList, scopeID: siteID, list: true}, siteID, true
+			}
+		case "asset-model":
+			if method == http.MethodGet {
+				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/asset-model", internalPath: "/internal/v1/registry/sites/" + siteID + "/asset-model", resource: "asset-model", action: registryauth.ActionAssetModelRead, scopeID: siteID}, siteID, true
+			}
+		case "retire":
+			if method == http.MethodPost {
+				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/retire", internalPath: "/internal/v1/registry/sites/" + siteID + "/retire", resource: "retire", action: registryauth.ActionRegistryRetire, scopeID: siteID, write: true}, siteID, true
+			}
+		}
+	case len(segments) == 4 && segments[0] == "sites":
+		siteID := segments[1]
+		if segments[2] == "spaces" && segments[3] == "tree" && method == http.MethodGet {
+			return publicRegistryRoute{template: "/api/v1/sites/{siteId}/spaces/tree", internalPath: "/internal/v1/registry/sites/" + siteID + "/spaces/tree", resource: "space-children", action: registryauth.ActionAssetModelRead, scopeID: siteID, list: true}, siteID, true
+		}
+		if segments[2] == "bindings" && segments[3] == "rebind" && method == http.MethodPost {
+			return publicRegistryRoute{template: "/api/v1/sites/{siteId}/bindings/rebind", internalPath: "/internal/v1/registry/sites/" + siteID + "/bindings/rebind", resource: "binding-write", action: registryauth.ActionBindingWrite, scopeID: siteID, write: true}, siteID, true
+		}
+		if segments[2] == "imports" && segments[3] == "dry-run" && method == http.MethodPost {
+			return publicRegistryRoute{template: "/api/v1/sites/{siteId}/imports/dry-run", internalPath: "/internal/v1/registry/sites/" + siteID + "/imports/dry-run", resource: "import-plan", action: registryauth.ActionRegistryImport, scopeID: siteID, write: true}, siteID, true
+		}
+		if segments[2] == "imports" && segments[3] == "commit" && method == http.MethodPost {
+			return publicRegistryRoute{template: "/api/v1/sites/{siteId}/imports/commit", internalPath: "/internal/v1/registry/sites/" + siteID + "/imports/commit", resource: "import-commit", action: registryauth.ActionRegistryImport, scopeID: siteID, write: true}, siteID, true
+		}
+		if method == http.MethodPatch && (segments[2] == "assets" || segments[2] == "devices" || segments[2] == "spaces" || segments[2] == "sensors" || segments[2] == "points") {
+			id := segments[3]
+			if !isLowerUUIDv7(id) {
+				return publicRegistryRoute{}, "", false
+			}
+			action := map[string]registryauth.Action{"assets": registryauth.ActionAssetWrite, "devices": registryauth.ActionDeviceWrite, "spaces": registryauth.ActionSpaceWrite, "sensors": registryauth.ActionSensorWrite, "points": registryauth.ActionPointWrite}[segments[2]]
+			resource := strings.TrimSuffix(segments[2], "s") + "-write"
+			return publicRegistryRoute{template: "/api/v1/sites/{siteId}/" + segments[2] + "/{" + strings.TrimSuffix(segments[2], "s") + "Id}", internalPath: "/internal/v1/registry/sites/" + siteID + "/" + segments[2] + "/" + id, resource: resource, action: action, scopeID: siteID, write: true}, siteID, true
+		}
+	case len(segments) == 2 && segments[0] == "templates" && method == http.MethodPost:
+		if segments[1] == "revisions" {
+			return publicRegistryRoute{template: "/api/v1/templates/revisions", internalPath: "/internal/v1/registry/templates/revisions", resource: "template-release", action: registryauth.ActionTemplateManage, write: true}, "", true
+		}
+		if segments[1] == "assignments" {
+			return publicRegistryRoute{template: "/api/v1/templates/assignments", internalPath: "/internal/v1/registry/templates/assignments", resource: "template-assign", action: registryauth.ActionTemplateManage, write: true}, "", true
+		}
 	}
 	return publicRegistryRoute{}, "", false
 }
 
 func dispatchRegistryRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicRegistryRoute, id string) {
-	if request.Method != http.MethodGet {
-		writeMethodNotAllowedFor(writer, request, http.MethodGet)
-		return
-	}
 	if id != "" && !isLowerUUIDv7(id) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Registry resource was not found.", false, nil)
 		return
 	}
+	if route.write {
+		h.serveRegistryMutation(writer, request, route)
+		return
+	}
 	params := platformapi.ListRegistryParams{}
 	if route.list {
-		var ok bool
-		params, ok = parseRegistryListParams(writer, request)
-		if !ok {
-			return
+		if route.resource == "space-children" {
+			query := request.URL.Query()
+			parentSpaceID := query.Get("parentSpaceId")
+			if parentSpaceID != "" && !isLowerUUIDv7(parentSpaceID) {
+				writeProblem(writer, request, http.StatusBadRequest, "CURSOR_INVALID", "Registry query invalid", "parentSpaceId must be a UUIDv7.", false, nil)
+				return
+			}
+			for name, values := range query {
+				if (name != "limit" && name != "cursor" && name != "parentSpaceId") || len(values) != 1 {
+					writeProblem(writer, request, http.StatusBadRequest, "CURSOR_INVALID", "Registry query invalid", "Space tree accepts only limit, cursor, and parentSpaceId.", false, nil)
+					return
+				}
+			}
+			queryCopy := request.URL.Query()
+			queryCopy.Del("parentSpaceId")
+			original := request.URL.RawQuery
+			request.URL.RawQuery = queryCopy.Encode()
+			var ok bool
+			params, ok = parseRegistryListParams(writer, request)
+			request.URL.RawQuery = original
+			if !ok {
+				return
+			}
+		} else {
+			var ok bool
+			params, ok = parseRegistryListParams(writer, request)
+			if !ok {
+				return
+			}
 		}
 	} else if request.URL.RawQuery != "" {
 		writeProblem(writer, request, http.StatusBadRequest, "CURSOR_INVALID", "Registry query invalid", "Detail Registry routes do not accept query parameters.", false, nil)
 		return
 	}
-	switch route.action {
-	case registryauth.ActionSiteList:
-		h.ListSites(writer, request, params)
-	case registryauth.ActionSiteRead:
-		h.GetSite(writer, request, id)
-	case registryauth.ActionAssetList:
-		h.ListSiteAssets(writer, request, id, params)
-	case registryauth.ActionAssetRead:
-		h.GetAsset(writer, request, id)
-	case registryauth.ActionDeviceList:
-		h.ListSiteDevices(writer, request, id, params)
-	case registryauth.ActionDeviceBindingList:
+	switch route.resource {
+	case "sites":
+		if route.list {
+			h.ListSites(writer, request, params)
+		} else {
+			h.GetSite(writer, request, id)
+		}
+	case "assets":
+		if route.list {
+			h.ListSiteAssets(writer, request, id, params)
+		} else {
+			h.GetAsset(writer, request, id)
+		}
+	case "devices":
+		if route.list {
+			h.ListSiteDevices(writer, request, id, params)
+		} else {
+			h.GetDevice(writer, request, id)
+		}
+	case "device-bindings":
 		h.ListSiteDeviceBindings(writer, request, id, params)
-	case registryauth.ActionAssetModelRead:
+	case "asset-model":
 		h.GetSiteAssetModel(writer, request, id)
-	case registryauth.ActionDeviceRead:
-		h.GetDevice(writer, request, id)
+	case "space-children", "device-points":
+		h.serveRegistry(writer, request, route, params)
 	default:
 		writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested public API route does not exist.", false, nil)
 	}
+}
+
+func canonicalRegistryDocument(raw []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value map[string]any
+	if err := decoder.Decode(&value); err != nil || ensureRegistryJSONEOF(decoder) != nil || value == nil {
+		return nil, errors.New("Registry response is not a canonical JSON object")
+	}
+	return json.Marshal(value)
 }
 
 func canonicalRegistrySuccess(action registryauth.Action, scopeID string, raw []byte) ([]byte, error) {
@@ -655,7 +798,7 @@ func (h *handler) resolveAuthoritativeSiteForDomain(request *http.Request, sessi
 		return platformapi.Site{}, errors.New("Registry Site authorization failed")
 	}
 	publicPath := strings.Replace(platformapi.GetSitePathTemplate, "{siteId}", url.PathEscape(siteID), 1)
-	route, _, matches := matchPublicRegistryRoute(publicPath)
+	route, _, matches := matchPublicRegistryRoute(http.MethodGet, publicPath)
 	if !matches {
 		return platformapi.Site{}, errors.New("Registry Site route is unavailable")
 	}

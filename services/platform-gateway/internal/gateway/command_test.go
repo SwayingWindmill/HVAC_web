@@ -226,7 +226,7 @@ func TestCommandRegistryDecisionUsesRegistryRouteOwnership(t *testing.T) {
 	fixture.handler.routeManager = ownershipregistry.NewManager(snapshot, ownershipregistry.NewMemoryAuditSink(), func() time.Time {
 		return time.Date(2026, 7, 26, 15, 0, 0, 0, time.UTC)
 	})
-	route, _, ok := matchPublicRegistryRoute("/api/v1/devices/" + fixture.deviceID)
+	route, _, ok := matchPublicRegistryRoute(http.MethodGet, "/api/v1/devices/"+fixture.deviceID)
 	if !ok {
 		t.Fatal("device Registry route did not match")
 	}
@@ -344,7 +344,7 @@ func (fixture *commandGatewayFixture) commandIAMClient(t *testing.T, now time.Ti
 			t.Fatalf("invalid gateway delegation: %v", err)
 		}
 		switch request.URL.Path {
-		case "/internal/v1/registry-read/decision":
+		case "/internal/v1/registry/decision":
 			return fixture.registryDecisionResponse(t, request, parent, now), nil
 		case telemetryDecisionPath:
 			return fixture.telemetryDecisionResponse(t, request, parent, now), nil

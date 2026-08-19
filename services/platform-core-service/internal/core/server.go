@@ -21,6 +21,7 @@ const RegistryPathPrefix = "/internal/v1/registry/"
 
 type ServerConfig struct {
 	Store                             RegistryStore
+	Writer                            RegistryWriter
 	CursorCodec                       *CursorCodec
 	GrantPublicKey                    crypto.PublicKey
 	GrantIssuer                       string
@@ -35,6 +36,7 @@ type ServerConfig struct {
 
 type server struct {
 	store                   RegistryStore
+	writer                  RegistryWriter
 	cursorCodec             *CursorCodec
 	grantPublicKey          crypto.PublicKey
 	grantIssuer             string
@@ -53,6 +55,7 @@ type registryRoute struct {
 	id       string
 	action   registryauth.Action
 	list     bool
+	write    bool
 }
 
 func NewHandler(config ServerConfig) http.Handler {
@@ -82,6 +85,7 @@ func NewHandler(config ServerConfig) http.Handler {
 	}
 	return &server{
 		store:                   config.Store,
+		writer:                  config.Writer,
 		cursorCodec:             config.CursorCodec,
 		grantPublicKey:          config.GrantPublicKey,
 		grantIssuer:             config.GrantIssuer,
@@ -96,7 +100,7 @@ func NewHandler(config ServerConfig) http.Handler {
 
 func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	started := server.now()
-	route, routeOK := parseRegistryRoute(request.URL.Path)
+	route, routeOK := parseRegistryRoute(request.Method, request.URL.Path)
 	routeName := "unmatched"
 	if routeOK {
 		routeName = route.template
@@ -133,12 +137,6 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	if !routeOK {
 		statusCode = http.StatusNotFound
 		writeProblem(writer, request, statusCode, "CORE_ROUTE_NOT_FOUND", "The requested Core Registry route does not exist.", false)
-		return
-	}
-	if request.Method != http.MethodGet {
-		writer.Header().Set("Allow", http.MethodGet)
-		statusCode = http.StatusMethodNotAllowed
-		writeProblem(writer, request, statusCode, "CORE_METHOD_NOT_ALLOWED", "Core Registry routes only support GET.", false)
 		return
 	}
 	if hasForgedIdentityHeader(request.Header) {
@@ -202,6 +200,9 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 }
 
 func (server *server) handleAuthorized(writer http.ResponseWriter, request *http.Request, route registryRoute, claims registryauth.GrantClaims) int {
+	if route.write {
+		return server.handleAuthorizedWrite(writer, request, route, claims)
+	}
 	page, err := server.pageRequest(request, route, claims)
 	if err != nil {
 		writeProblem(writer, request, http.StatusBadRequest, "CURSOR_INVALID", "The Registry page cursor or limit is invalid.", false)
@@ -284,6 +285,29 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		}
 		writeJSON(writer, http.StatusOK, model)
 		return http.StatusOK
+	case "space-children":
+		parentSpaceID := request.URL.Query().Get("parentSpaceId")
+		result, err := server.store.ListSpaceChildren(request.Context(), claims, route.parentID, parentSpaceID, page)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		collection, err := server.spaceCollection(route, claims, parentSpaceID, result)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, collection)
+		return http.StatusOK
+	case "device-points":
+		result, err := server.store.ListDevicePoints(request.Context(), claims, route.parentID, page)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		collection, err := server.pointCollection(route, claims, result)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, collection)
+		return http.StatusOK
 	default:
 		writeProblem(writer, request, http.StatusNotFound, "CORE_ROUTE_NOT_FOUND", "The requested Core Registry route does not exist.", false)
 		return http.StatusNotFound
@@ -299,7 +323,14 @@ func (server *server) pageRequest(request *http.Request, route registryRoute, cl
 	}
 	query := request.URL.Query()
 	for name, values := range query {
-		if (name != "limit" && name != "cursor") || len(values) != 1 {
+		allowed := name == "limit" || name == "cursor" || (route.resource == "space-children" && name == "parentSpaceId")
+		if !allowed || len(values) != 1 {
+			return PageRequest{}, ErrInvalidPage
+		}
+	}
+	if route.resource == "space-children" {
+		parentSpaceID := query.Get("parentSpaceId")
+		if parentSpaceID != "" && !validUUIDv7(parentSpaceID) {
 			return PageRequest{}, ErrInvalidPage
 		}
 	}
@@ -315,7 +346,11 @@ func (server *server) pageRequest(request *http.Request, route registryRoute, cl
 	if err != nil {
 		return PageRequest{}, err
 	}
-	page, err := server.cursorCodec.Decode(query.Get("cursor"), route.resource, route.parentID, route.action, claims)
+	cursorParentID := route.parentID
+	if route.resource == "space-children" {
+		cursorParentID += "|" + query.Get("parentSpaceId")
+	}
+	page, err := server.cursorCodec.Decode(query.Get("cursor"), route.resource, cursorParentID, route.action, claims)
 	if err != nil {
 		return PageRequest{}, err
 	}
@@ -375,6 +410,32 @@ func (server *server) deviceBindingCollection(route registryRoute, claims regist
 	return collection, nil
 }
 
+func (server *server) spaceCollection(route registryRoute, claims registryauth.GrantClaims, parentSpaceID string, result PageResult[Space]) (Collection[Space], error) {
+	collection := Collection[Space]{Items: result.Items, HasMore: result.HasMore}
+	if result.HasMore && len(result.Items) > 0 {
+		last := result.Items[len(result.Items)-1]
+		cursor, err := server.cursorCodec.Encode(route.resource, route.parentID+"|"+parentSpaceID, route.action, claims, last.DisplayName, last.ID)
+		if err != nil {
+			return Collection[Space]{}, err
+		}
+		collection.NextCursor = &cursor
+	}
+	return collection, nil
+}
+
+func (server *server) pointCollection(route registryRoute, claims registryauth.GrantClaims, result PageResult[TelemetryPoint]) (Collection[TelemetryPoint], error) {
+	collection := Collection[TelemetryPoint]{Items: result.Items, HasMore: result.HasMore}
+	if result.HasMore && len(result.Items) > 0 {
+		last := result.Items[len(result.Items)-1]
+		cursor, err := server.cursorCodec.Encode(route.resource, route.parentID, route.action, claims, last.DisplayName, last.ID)
+		if err != nil {
+			return Collection[TelemetryPoint]{}, err
+		}
+		collection.NextCursor = &cursor
+	}
+	return collection, nil
+}
+
 func (server *server) writeStoreError(writer http.ResponseWriter, request *http.Request, err error) int {
 	if errors.Is(err, ErrNotFound) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested Registry resource was not found.", false)
@@ -393,7 +454,7 @@ func (server *server) writeStoreError(writer http.ResponseWriter, request *http.
 	return http.StatusServiceUnavailable
 }
 
-func parseRegistryRoute(path string) (registryRoute, bool) {
+func parseRegistryRoute(method, path string) (registryRoute, bool) {
 	if !strings.HasPrefix(path, RegistryPathPrefix) {
 		return registryRoute{}, false
 	}
@@ -404,22 +465,62 @@ func parseRegistryRoute(path string) (registryRoute, bool) {
 		}
 	}
 	switch {
-	case len(segments) == 1 && segments[0] == "sites":
+	case method == http.MethodGet && len(segments) == 1 && segments[0] == "sites":
 		return registryRoute{template: RegistryPathPrefix + "sites", resource: "sites", action: registryauth.ActionSiteList, list: true}, true
-	case len(segments) == 2 && segments[0] == "sites":
+	case method == http.MethodPost && len(segments) == 1 && segments[0] == "sites":
+		return registryRoute{template: RegistryPathPrefix + "sites", resource: "site-write", action: registryauth.ActionSiteWrite, write: true}, true
+	case method == http.MethodGet && len(segments) == 2 && segments[0] == "sites":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}", resource: "sites", id: segments[1], action: registryauth.ActionSiteRead}, true
-	case len(segments) == 3 && segments[0] == "sites" && segments[2] == "assets":
+	case method == http.MethodPatch && len(segments) == 2 && segments[0] == "sites":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}", resource: "site-write", id: segments[1], action: registryauth.ActionSiteWrite, write: true}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "assets":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/assets", resource: "assets", parentID: segments[1], action: registryauth.ActionAssetList, list: true}, true
-	case len(segments) == 2 && segments[0] == "assets":
+	case method == http.MethodPost && len(segments) == 3 && segments[0] == "sites" && segments[2] == "assets":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/assets", resource: "asset-write", parentID: segments[1], action: registryauth.ActionAssetWrite, write: true}, true
+	case method == http.MethodPatch && len(segments) == 4 && segments[0] == "sites" && segments[2] == "assets":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/assets/{assetId}", resource: "asset-write", parentID: segments[1], id: segments[3], action: registryauth.ActionAssetWrite, write: true}, true
+	case method == http.MethodGet && len(segments) == 2 && segments[0] == "assets":
 		return registryRoute{template: RegistryPathPrefix + "assets/{assetId}", resource: "assets", id: segments[1], action: registryauth.ActionAssetRead}, true
-	case len(segments) == 3 && segments[0] == "sites" && segments[2] == "devices":
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "devices":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices", resource: "devices", parentID: segments[1], action: registryauth.ActionDeviceList, list: true}, true
-	case len(segments) == 3 && segments[0] == "sites" && segments[2] == "device-bindings":
+	case method == http.MethodPost && len(segments) == 3 && segments[0] == "sites" && segments[2] == "devices":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices", resource: "device-write", parentID: segments[1], action: registryauth.ActionDeviceWrite, write: true}, true
+	case method == http.MethodPatch && len(segments) == 4 && segments[0] == "sites" && segments[2] == "devices":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices/{deviceId}", resource: "device-write", parentID: segments[1], id: segments[3], action: registryauth.ActionDeviceWrite, write: true}, true
+	case method == http.MethodPost && len(segments) == 3 && segments[0] == "sites" && segments[2] == "spaces":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/spaces", resource: "space-write", parentID: segments[1], action: registryauth.ActionSpaceWrite, write: true}, true
+	case method == http.MethodPatch && len(segments) == 4 && segments[0] == "sites" && segments[2] == "spaces":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/spaces/{spaceId}", resource: "space-write", parentID: segments[1], id: segments[3], action: registryauth.ActionSpaceWrite, write: true}, true
+	case method == http.MethodGet && len(segments) == 4 && segments[0] == "sites" && segments[2] == "spaces" && segments[3] == "tree":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/spaces/tree", resource: "space-children", parentID: segments[1], action: registryauth.ActionAssetModelRead, list: true}, true
+	case method == http.MethodPost && len(segments) == 3 && segments[0] == "sites" && segments[2] == "sensors":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/sensors", resource: "sensor-write", parentID: segments[1], action: registryauth.ActionSensorWrite, write: true}, true
+	case method == http.MethodPatch && len(segments) == 4 && segments[0] == "sites" && segments[2] == "sensors":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/sensors/{sensorId}", resource: "sensor-write", parentID: segments[1], id: segments[3], action: registryauth.ActionSensorWrite, write: true}, true
+	case method == http.MethodPost && len(segments) == 3 && segments[0] == "sites" && segments[2] == "points":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/points", resource: "point-write", parentID: segments[1], action: registryauth.ActionPointWrite, write: true}, true
+	case method == http.MethodPatch && len(segments) == 4 && segments[0] == "sites" && segments[2] == "points":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/points/{pointId}", resource: "point-write", parentID: segments[1], id: segments[3], action: registryauth.ActionPointWrite, write: true}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "device-bindings":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/device-bindings", resource: "device-bindings", parentID: segments[1], action: registryauth.ActionDeviceBindingList, list: true}, true
-	case len(segments) == 3 && segments[0] == "sites" && segments[2] == "asset-model":
+	case method == http.MethodPost && len(segments) == 4 && segments[0] == "sites" && segments[2] == "bindings" && segments[3] == "rebind":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/bindings/rebind", resource: "binding-write", parentID: segments[1], action: registryauth.ActionBindingWrite, write: true}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "asset-model":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/asset-model", resource: "asset-model", parentID: segments[1], action: registryauth.ActionAssetModelRead}, true
-	case len(segments) == 2 && segments[0] == "devices":
+	case method == http.MethodGet && len(segments) == 2 && segments[0] == "devices":
 		return registryRoute{template: RegistryPathPrefix + "devices/{deviceId}", resource: "devices", id: segments[1], action: registryauth.ActionDeviceRead}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "devices" && segments[2] == "points":
+		return registryRoute{template: RegistryPathPrefix + "devices/{deviceId}/points", resource: "device-points", parentID: segments[1], action: registryauth.ActionDeviceRead, list: true}, true
+	case method == http.MethodPost && len(segments) == 2 && segments[0] == "templates" && segments[1] == "revisions":
+		return registryRoute{template: RegistryPathPrefix + "templates/revisions", resource: "template-release", action: registryauth.ActionTemplateManage, write: true}, true
+	case method == http.MethodPost && len(segments) == 2 && segments[0] == "templates" && segments[1] == "assignments":
+		return registryRoute{template: RegistryPathPrefix + "templates/assignments", resource: "template-assign", action: registryauth.ActionTemplateManage, write: true}, true
+	case method == http.MethodPost && len(segments) == 4 && segments[0] == "sites" && segments[2] == "imports" && segments[3] == "dry-run":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/imports/dry-run", resource: "import-plan", parentID: segments[1], action: registryauth.ActionRegistryImport, write: true}, true
+	case method == http.MethodPost && len(segments) == 4 && segments[0] == "sites" && segments[2] == "imports" && segments[3] == "commit":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/imports/commit", resource: "import-commit", parentID: segments[1], action: registryauth.ActionRegistryImport, write: true}, true
+	case method == http.MethodPost && len(segments) == 3 && segments[0] == "sites" && segments[2] == "retire":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/retire", resource: "retire", parentID: segments[1], action: registryauth.ActionRegistryRetire, write: true}, true
 	default:
 		return registryRoute{}, false
 	}

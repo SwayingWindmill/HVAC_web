@@ -49,12 +49,22 @@ const (
 	ActionRegistryRead      Action = "registry.read"
 	ActionSiteList          Action = "site.list"
 	ActionSiteRead          Action = "site.read"
-	ActionAssetList     Action = "asset.list"
-	ActionAssetRead     Action = "asset.read"
+	ActionAssetList         Action = "asset.list"
+	ActionAssetRead         Action = "asset.read"
 	ActionDeviceList        Action = "device.list"
 	ActionDeviceRead        Action = "device.read"
 	ActionDeviceBindingList Action = "device-binding.list"
 	ActionAssetModelRead    Action = "asset-model.read"
+	ActionSiteWrite         Action = "site.write"
+	ActionSpaceWrite        Action = "space.write"
+	ActionAssetWrite        Action = "asset.write"
+	ActionDeviceWrite       Action = "device.write"
+	ActionSensorWrite       Action = "sensor.write"
+	ActionPointWrite        Action = "point.write"
+	ActionBindingWrite      Action = "binding.write"
+	ActionTemplateManage    Action = "template.manage"
+	ActionRegistryImport    Action = "registry.import"
+	ActionRegistryRetire    Action = "registry.retire"
 )
 
 func (action Action) Valid() bool {
@@ -67,7 +77,17 @@ func (action Action) Valid() bool {
 		ActionDeviceList,
 		ActionDeviceRead,
 		ActionDeviceBindingList,
-		ActionAssetModelRead:
+		ActionAssetModelRead,
+		ActionSiteWrite,
+		ActionSpaceWrite,
+		ActionAssetWrite,
+		ActionDeviceWrite,
+		ActionSensorWrite,
+		ActionPointWrite,
+		ActionBindingWrite,
+		ActionTemplateManage,
+		ActionRegistryImport,
+		ActionRegistryRetire:
 		return true
 	default:
 		return false
@@ -76,15 +96,25 @@ func (action Action) Valid() bool {
 
 func (action Action) SiteScoped() bool {
 	switch action {
-	case ActionSiteList, ActionSiteRead, ActionAssetList, ActionAssetRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList, ActionAssetModelRead:
+	case ActionSiteList, ActionSiteRead, ActionAssetList, ActionAssetRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList, ActionAssetModelRead,
+		ActionSpaceWrite, ActionAssetWrite, ActionDeviceWrite, ActionSensorWrite, ActionPointWrite,
+		ActionBindingWrite, ActionRegistryImport, ActionRegistryRetire:
 		return true
 	default:
 		return false
 	}
 }
 
+func (action Action) TenantScoped() bool {
+	return action == ActionSiteWrite || action == ActionTemplateManage
+}
+
 func ActionAllows(granted, requested Action) bool {
-	return granted == ActionRegistryRead || granted == requested
+	if granted == ActionRegistryRead {
+		return requested == ActionSiteList || requested == ActionSiteRead || requested == ActionAssetList || requested == ActionAssetRead ||
+			requested == ActionDeviceList || requested == ActionDeviceRead || requested == ActionDeviceBindingList || requested == ActionAssetModelRead
+	}
+	return granted == requested
 }
 
 type DecisionRequest struct {
@@ -98,7 +128,7 @@ func (request DecisionRequest) Validate() error {
 		return errors.New("tenant must be a UUIDv7")
 	}
 	if !request.Action.Valid() || request.Action == ActionRegistryRead {
-		return errors.New("a concrete registry read action is required")
+		return errors.New("a concrete registry action is required")
 	}
 	if request.GrantPresenter != "" && (len(request.GrantPresenter) > 512 || !strings.HasPrefix(request.GrantPresenter, "spiffe://")) {
 		return errors.New("registry grant presenter is invalid")
@@ -291,7 +321,7 @@ func ValidateGrant(claims GrantClaims, validation GrantValidation) error {
 	if !IsAllowReason(claims.DecisionReason) {
 		return errors.New("registry grant decision reason is invalid")
 	}
-	if err := validateScope(claims); err != nil {
+	if err := validateScope(claims, validation.Action); err != nil {
 		return err
 	}
 	if validation.IsRevoked == nil {
@@ -314,7 +344,7 @@ func ScopeAllows(claims GrantClaims, siteID string) bool {
 	return contains(claims.AllowedSiteIDs, siteID)
 }
 
-func validateScope(claims GrantClaims) error {
+func validateScope(claims GrantClaims, action Action) error {
 	for _, values := range [][]string{claims.AllowedSiteIDs, claims.DeniedSiteIDs} {
 		seen := make(map[string]struct{}, len(values))
 		for _, value := range values {
@@ -332,8 +362,11 @@ func validateScope(claims GrantClaims) error {
 			return errors.New("registry grant Site scope is contradictory")
 		}
 	}
-	if len(claims.AllowedSiteIDs) == 0 {
+	if action.SiteScoped() && len(claims.AllowedSiteIDs) == 0 {
 		return errors.New("registry grant contains no allowed Site scope")
+	}
+	if !action.SiteScoped() && !action.TenantScoped() {
+		return errors.New("registry grant action scope is invalid")
 	}
 	return nil
 }

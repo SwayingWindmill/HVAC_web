@@ -51,7 +51,29 @@ func TestIAMPublishesEffectiveCapabilitiesFromAuthorizationFacts(t *testing.T) {
 	if response.Authorization.PolicyRevision != capabilityPolicyRevision(iam.S1FixturePolicyRevision, principalCapabilityTelemetryPolicy, principalCapabilityAlarmPolicy, principalCapabilityWorkOrderPolicy) {
 		t.Fatalf("policy revision = %q", response.Authorization.PolicyRevision)
 	}
-	assertCapabilitiesEqual(t, response.Authorization.Capabilities, identitycontext.SupportedCapabilities())
+	assertCapabilitiesEqual(t, response.Authorization.Capabilities, []identitycontext.Capability{
+		identitycontext.CapabilitySiteList,
+		identitycontext.CapabilitySiteRead,
+		identitycontext.CapabilityAssetList,
+		identitycontext.CapabilityAssetRead,
+		identitycontext.CapabilityDeviceList,
+		identitycontext.CapabilityDeviceRead,
+		identitycontext.CapabilityTelemetrySnapshotRead,
+		identitycontext.CapabilityTelemetryBatchRead,
+		identitycontext.CapabilityTelemetrySubscribe,
+		identitycontext.CapabilityTelemetryHistoryRead,
+		identitycontext.CapabilityAlarmList,
+		identitycontext.CapabilityAlarmRead,
+		identitycontext.CapabilityWorkOrderList,
+		identitycontext.CapabilityWorkOrderRead,
+		identitycontext.CapabilityWorkOrderCreate,
+		identitycontext.CapabilityWorkOrderAssign,
+		identitycontext.CapabilityWorkOrderLifecycle,
+		identitycontext.CapabilitySessionRevoke,
+		identitycontext.CapabilityAuditRead,
+		identitycontext.CapabilityIAMAdmin,
+		identitycontext.CapabilityAPICredentialManage,
+	})
 	if len(response.Principal.Roles) != 0 {
 		t.Fatalf("untrusted inbound role strings leaked into the IAM-authored principal: %#v", response.Principal.Roles)
 	}
@@ -61,8 +83,8 @@ func TestIAMTelemetryCapabilityProjectionPreservesExplicitDenyPrecedence(t *test
 	denies := []iam.ExplicitDeny{{
 		TenantID: iam.S1FixtureTenantAID,
 		SiteID:   iam.S1FixtureOwnerASite1ID,
-		Actions:              []registryauth.Action{registryauth.Action(telemetryauth.ActionSubscribe)},
-		Status:               iam.FactStatusActive,
+		Actions:  []registryauth.Action{registryauth.Action(telemetryauth.ActionSubscribe)},
+		Status:   iam.FactStatusActive,
 	}}
 	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
 		config.TelemetryAuthorizationStore = fixedTelemetryStore{facts: principalTelemetryFacts(denies)}
@@ -188,9 +210,9 @@ func principalTelemetryFacts(denies []iam.ExplicitDeny) iam.TelemetryAuthorizati
 			TenantID: iam.S1FixtureTenantAID,
 			SiteID:   iam.S1FixtureOwnerASite1ID,
 			DeviceID: iam.S2FixtureDevice,
-			Actions:              actions,
-			Effect:               iam.BindingEffectAllow,
-			Status:               iam.FactStatusActive,
+			Actions:  actions,
+			Effect:   iam.BindingEffectAllow,
+			Status:   iam.FactStatusActive,
 		}},
 	}
 }

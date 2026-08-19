@@ -184,20 +184,23 @@ try {
   const roleState = psql(`
     SELECT string_agg(rolname || ':' || rolcanlogin::text || ':' || rolbypassrls::text, ',' ORDER BY rolname)
     FROM pg_roles
-    WHERE rolname IN ('s1_iam_runtime','s1_iam_reconciler','s1_core_runtime','s1_core_service','s1_iam_migrator','s1_core_migrator','s1_migration_operator','s1_legacy_migration_service')
+    WHERE rolname IN ('s1_iam_runtime','s1_iam_reconciler','s1_core_runtime','s1_core_writer','s1_core_service','s1_iam_migrator','s1_core_migrator','s1_migration_operator','s1_legacy_migration_service')
   `);
   for (const role of ['s1_iam_runtime', 's1_iam_reconciler', 's1_iam_migrator', 's1_core_service', 's1_legacy_migration_service']) {
     if (!roleState.includes(`${role}:true:false`)) throw new Error(`${role} must be LOGIN and NOBYPASSRLS`);
   }
-  for (const role of ['s1_core_runtime', 's1_core_migrator', 's1_migration_operator']) {
+  for (const role of ['s1_core_runtime', 's1_core_writer', 's1_core_migrator', 's1_migration_operator']) {
     if (!roleState.includes(`${role}:false:false`)) throw new Error(`${role} must remain NOLOGIN and NOBYPASSRLS`);
   }
   const coreServiceMembership = psql(`SELECT pg_has_role('s1_core_service', 's1_core_runtime', 'MEMBER')`);
+  const coreWriterMembership = psql(`SELECT pg_has_role('s1_core_service', 's1_core_writer', 'MEMBER')`);
   const migrationServiceMembership = psql(`SELECT pg_has_role('s1_legacy_migration_service', 's1_migration_operator', 'MEMBER')`);
   expectEqual(coreServiceMembership, 't', 'Core service runtime membership');
+  expectEqual(coreWriterMembership, 't', 'Core service writer membership');
   expectEqual(migrationServiceMembership, 't', 'Legacy migration operator membership');
   report.assertions.runtimeRoles = roleState;
   report.assertions.coreServiceMembership = coreServiceMembership;
+  report.assertions.coreWriterMembership = coreWriterMembership;
   report.assertions.migrationServiceMembership = migrationServiceMembership;
 
   const tenantA = scopedCounts('018f1d00-0000-7000-8000-000000000001', '{018f1e00-1000-7000-8000-000000000001,018f1e00-1000-7000-8000-000000000002}');
