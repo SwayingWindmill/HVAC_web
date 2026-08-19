@@ -61,9 +61,9 @@ STABLE
 SECURITY DEFINER
 SET search_path = pg_catalog, iam
 AS $policy$
-  SELECT policy.policy_key || ':' || policy.policy_revision::text || '/iam:' || authorization.revision::text
+  SELECT policy.policy_key || ':' || policy.policy_revision::text || '/iam:' || auth_revision.revision::text
   FROM iam.policies policy
-  JOIN iam.authorization_revisions authorization ON authorization.tenant_id = policy.tenant_id
+  JOIN iam.authorization_revisions auth_revision ON auth_revision.tenant_id = policy.tenant_id
   WHERE policy.tenant_id = tenant_value
     AND policy.policy_key = 'telemetry-access'
     AND policy.status = 'ACTIVE'
@@ -240,6 +240,8 @@ ALTER TABLE iam.api_credentials FORCE ROW LEVEL SECURITY;
 ALTER TABLE iam.admin_audit_intents FORCE ROW LEVEL SECURITY;
 ALTER TABLE iam.admin_outbox FORCE ROW LEVEL SECURITY;
 
+CREATE POLICY capability_catalog_migrator_all ON iam.capability_catalog_revisions
+  FOR ALL TO s1_iam_migrator USING (true) WITH CHECK (true);
 CREATE POLICY capability_catalog_runtime_read ON iam.capability_catalog_revisions
   FOR SELECT TO s1_iam_runtime USING (status = 'ACTIVE');
 CREATE POLICY capability_catalog_admin_read ON iam.capability_catalog_revisions
