@@ -83,8 +83,12 @@ while IFS='|' read -r database relative_path; do
   digest="$(sha256sum "${source}" | awk '{print $1}')"
 
   existing="$(psql --no-psqlrc --tuples-only --no-align --dbname="${database}" \
-    --set=path="${relative_path}" \
-    --command="SELECT sha256 || '|' || status FROM phase1_deployment.schema_migrations WHERE migration_path = :'path'" | tr -d '[:space:]')"
+    --set=path="${relative_path}" <<'SQL' | tr -d '[:space:]'
+SELECT sha256 || '|' || status
+FROM phase1_deployment.schema_migrations
+WHERE migration_path = :'path';
+SQL
+  )"
 
   if [[ -n "${existing}" ]]; then
     existing_digest="${existing%%|*}"

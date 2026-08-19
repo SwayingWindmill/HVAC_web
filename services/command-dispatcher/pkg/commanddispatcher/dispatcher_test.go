@@ -110,12 +110,12 @@ func completeSyntheticVerification(t *testing.T, store *commandservice.Service, 
 
 func testRequest() commandmodel.SubmitRequest {
 	return commandmodel.SubmitRequest{
-		TenantID:       "org-1",
-		SiteID:         "site-1",
-		DeviceID:       "device-1",
-		PointID:        "point-1",
-		PrincipalID:    "principal-1",
-		IdempotencyKey: "request-1",
+		TenantID:             "org-1",
+		SiteID:               "site-1",
+		DeviceID:             "device-1",
+		PointID:              "point-1",
+		PrincipalID:          "principal-1",
+		IdempotencyKey:       "request-1",
 		Capability:           commandmodel.CapabilitySetTemperatureSetpoint,
 		Parameters:           commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24},
 		VerificationPointKey: "zone.temperature_setpoint",
@@ -124,9 +124,9 @@ func testRequest() commandmodel.SubmitRequest {
 			Presence:               "ONLINE",
 			Readiness:              "CURRENT",
 			Quality:                "GOOD",
-			BusinessRevision: 12,
-			CurrentValue:     testNumberPointer(23),
-			ObservedAt:       time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC),
+			BusinessRevision:       12,
+			CurrentValue:           testNumberPointer(23),
+			ObservedAt:             time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC),
 		},
 		Authorization: commandmodel.AuthorizationSnapshot{
 			GrantID: "grant-dispatcher-test", PolicyRevision: "command-policy-1",
@@ -155,7 +155,11 @@ type syntheticConnector struct {
 func (connector syntheticConnector) Execute(_ context.Context, _ commandmodel.DispatchEnvelope) (commandmodel.ConnectorResult, error) {
 	switch connector.mode {
 	case syntheticVerifiedSuccess:
-		return commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "synthetic:provider-acknowledged"}, nil
+		requested := commandmodel.NumberScalar(24)
+		return commandmodel.ConnectorResult{
+			Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "synthetic:provider-acknowledged",
+			EdgeExecution: &commandmodel.EdgeExecutionEvidence{Requested: requested, Effective: &requested, Applied: &requested, WinnerControllerID: "cloud-command-intent", Cycle: 1},
+		}, nil
 	case syntheticPreSendRejected:
 		return commandmodel.ConnectorResult{Phase: commandmodel.ConnectorPreSendRejected, FailureCode: "SYNTHETIC_PRE_SEND_REJECTION", EvidenceID: "synthetic:pre-send-rejected"}, nil
 	case syntheticCommittedThenTimeout:

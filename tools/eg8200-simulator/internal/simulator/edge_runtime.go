@@ -22,15 +22,16 @@ type EdgeCommandIntentRequest struct {
 }
 
 type EdgeCommandOutcome struct {
-	CommandID         string
-	Address           string
-	Accepted          bool
-	Code              string
-	Requested         edgecontrol.Value
-	Effective         *edgecontrol.Value
-	AppliedValue      *edgecontrol.Value
-	ConstraintReasons []edgecontrol.ConstraintEvidence
-	Cycle             uint64
+	CommandID          string
+	Address            string
+	Accepted           bool
+	Code               string
+	Requested          edgecontrol.Value
+	Effective          *edgecontrol.Value
+	AppliedValue       *edgecontrol.Value
+	ConstraintReasons  []edgecontrol.ConstraintEvidence
+	WinnerControllerID string
+	Cycle              uint64
 }
 
 type edgeCommandBinding struct {
@@ -373,9 +374,14 @@ func (runtime *EdgeControlRuntime) resolvePending(at time.Time, result edgecontr
 			}
 			continue
 		}
+		winner := decision.ControllerID
+		if !decision.Accepted && len(decision.ConstraintReasons) > 0 && decision.ConstraintReasons[0].ControllerID != "" {
+			winner = decision.ConstraintReasons[0].ControllerID
+		}
 		outcome := EdgeCommandOutcome{
 			CommandID: pending.intentID, Address: address, Accepted: decision.Accepted, Requested: decision.Requested,
-			Effective: cloneEdgeValuePointer(decision.Effective), ConstraintReasons: append([]edgecontrol.ConstraintEvidence(nil), decision.ConstraintReasons...), Cycle: result.Image.Cycle(),
+			Effective: cloneEdgeValuePointer(decision.Effective), ConstraintReasons: append([]edgecontrol.ConstraintEvidence(nil), decision.ConstraintReasons...),
+			WinnerControllerID: winner, Cycle: result.Image.Cycle(),
 		}
 		if !decision.Accepted {
 			outcome.Code = "CONTROL_DENIED"

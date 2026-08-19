@@ -12,10 +12,11 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
-const mqttCommandSchemaVersion = "1.0"
+const mqttCommandSchemaVersion = "2.0"
 
 type mqttCommandPolicy struct {
 	RequiresReadback     bool  `json:"requiresReadback"`
@@ -38,20 +39,28 @@ type mqttCommandEnvelope struct {
 }
 
 type mqttCommandReply struct {
-	SchemaVersion  string             `json:"schemaVersion"`
-	MessageID      string             `json:"messageId"`
-	CommandID      string             `json:"commandId"`
-	TraceID        string             `json:"traceId,omitempty"`
-	EventTime      int64              `json:"eventTime"`
-	EdgeStatus     string             `json:"edgeStatus"`
-	Reported       map[string]float64 `json:"reported,omitempty"`
-	ReasonCode     *string            `json:"reasonCode"`
-	ExecutionFence uint64             `json:"executionFence"`
+	SchemaVersion     string                              `json:"schemaVersion"`
+	MessageID         string                              `json:"messageId"`
+	CommandID         string                              `json:"commandId"`
+	TraceID           string                              `json:"traceId,omitempty"`
+	EventTime         int64                               `json:"eventTime"`
+	EdgeStatus        string                              `json:"edgeStatus"`
+	ExecutionEvidence *commandmodel.EdgeExecutionEvidence `json:"executionEvidence,omitempty"`
+	ReasonCode        *string                             `json:"reasonCode"`
+	ExecutionFence    uint64                              `json:"executionFence"`
 }
 
+const (
+	edgeCommandMayExecute = "MAY_EXECUTE"
+	edgeCommandTerminal   = "TERMINAL"
+)
+
 type edgeCommandRecord struct {
-	PayloadHash string           `json:"payloadHash"`
-	Reply       mqttCommandReply `json:"reply"`
+	DeviceID       string            `json:"deviceId"`
+	PayloadHash    string            `json:"payloadHash"`
+	ExecutionFence uint64            `json:"executionFence"`
+	State          string            `json:"state"`
+	Reply          *mqttCommandReply `json:"reply,omitempty"`
 }
 
 type edgeCommandLedger struct {
@@ -92,12 +101,16 @@ func newEdgeCommandHandler(edgeRuntime *EdgeControlRuntime, config MQTTGatewayCo
 	}
 	maxFenceByDevice := make(map[string]uint64)
 	for _, record := range results {
-		if record.Reply.ExecutionFence == 0 {
-			continue
+		if strings.TrimSpace(record.DeviceID) == "" || record.ExecutionFence == 0 ||
+			(record.State != edgeCommandMayExecute && record.State != edgeCommandTerminal) {
+			return nil, errors.New("Edge command execution ledger contains an invalid record")
 		}
-		// The persisted reply does not expose the internal Plant id. Fence recovery
-		// remains conservative: commandId idempotency survives restart, while new
-		// physical commands receive a fresh Cloud execution fence.
+		if record.State == edgeCommandTerminal && record.Reply == nil {
+			return nil, errors.New("Edge command execution ledger terminal record has no reply")
+		}
+		if record.ExecutionFence > maxFenceByDevice[record.DeviceID] {
+			maxFenceByDevice[record.DeviceID] = record.ExecutionFence
+		}
 	}
 	return &edgeCommandHandler{
 		edgeRuntime:      edgeRuntime,
@@ -181,41 +194,49 @@ func (handler *edgeCommandHandler) evaluate(request mqttCommandEnvelope) mqttCom
 		request.ExecutionFence == 0 || request.IssuedAt <= 0 || request.ExpireAt <= request.IssuedAt {
 		return edgeRejected(base, "COMMAND_INVALID")
 	}
-
-	handler.mu.Lock()
-	if existing, ok := handler.results[base.CommandID]; ok {
-		if existing.PayloadHash != request.PayloadHash {
-			handler.mu.Unlock()
-			return edgeRejected(base, "PAYLOAD_MISMATCH")
-		}
-		reply := existing.Reply
-		handler.mu.Unlock()
-		return reply
-	}
 	deviceID := handler.deviceByWireID[strings.TrimSpace(request.DeviceID)]
 	if deviceID == "" {
-		handler.mu.Unlock()
 		return edgeRejected(base, "DEVICE_NOT_FOUND")
 	}
-	if request.ExecutionFence < handler.maxFenceByDevice[deviceID] {
-		handler.mu.Unlock()
-		return edgeRejected(base, "STALE_FENCE")
-	}
-	if request.ExecutionFence > handler.maxFenceByDevice[deviceID] {
-		handler.maxFenceByDevice[deviceID] = request.ExecutionFence
-	}
-	handler.mu.Unlock()
-
 	if request.ExpireAt <= now.UnixMilli() {
 		base.EdgeStatus = "EXPIRED"
 		reason := "EXPIRED"
 		base.ReasonCode = &reason
-		handler.remember(request.PayloadHash, base)
 		return base
 	}
 	if request.Policy.VerificationWindowMS < 0 || request.Policy.VerificationWindowMS > int64((10*time.Minute)/time.Millisecond) {
-		return edgeRejectedAndRemember(handler, request.PayloadHash, base, "POLICY_INVALID")
+		return edgeRejected(base, "POLICY_INVALID")
 	}
+
+	handler.mu.Lock()
+	if existing, ok := handler.results[base.CommandID]; ok {
+		if existing.PayloadHash != request.PayloadHash || existing.ExecutionFence != request.ExecutionFence || existing.DeviceID != deviceID {
+			handler.mu.Unlock()
+			return edgeRejected(base, "PAYLOAD_MISMATCH")
+		}
+		if existing.State == edgeCommandTerminal && existing.Reply != nil {
+			reply := *existing.Reply
+			handler.mu.Unlock()
+			return reply
+		}
+		handler.mu.Unlock()
+		return edgeFailed(base, "EDGE_OUTCOME_UNKNOWN")
+	}
+	if request.ExecutionFence <= handler.maxFenceByDevice[deviceID] {
+		handler.mu.Unlock()
+		return edgeRejected(base, "STALE_FENCE")
+	}
+	handler.results[base.CommandID] = edgeCommandRecord{
+		DeviceID: deviceID, PayloadHash: request.PayloadHash, ExecutionFence: request.ExecutionFence, State: edgeCommandMayExecute,
+	}
+	if err := persistEdgeCommandLedger(handler.ledgerPath, handler.results); err != nil {
+		delete(handler.results, base.CommandID)
+		handler.mu.Unlock()
+		return edgeRejected(base, "EDGE_LEDGER_UNAVAILABLE")
+	}
+	handler.maxFenceByDevice[deviceID] = request.ExecutionFence
+	handler.mu.Unlock()
+
 	outcomeCh, err := handler.edgeRuntime.SubmitCommand(EdgeCommandIntentRequest{
 		CommandID:   base.CommandID,
 		DeviceID:    deviceID,
@@ -231,7 +252,7 @@ func (handler *edgeCommandHandler) evaluate(request mqttCommandEnvelope) mqttCom
 		} else if strings.Contains(err.Error(), "in-flight") {
 			reason = "COMMAND_BUSY"
 		}
-		return edgeRejectedAndRemember(handler, request.PayloadHash, base, reason)
+		return handler.finish(deviceID, request.PayloadHash, edgeRejected(base, reason))
 	}
 
 	waitDuration := time.UnixMilli(request.ExpireAt).Sub(now)
@@ -243,43 +264,33 @@ func (handler *edgeCommandHandler) evaluate(request mqttCommandEnvelope) mqttCom
 		base.EdgeStatus = "EXPIRED"
 		reason := "EXPIRED"
 		base.ReasonCode = &reason
-		handler.remember(request.PayloadHash, base)
-		return base
+		return handler.finish(deviceID, request.PayloadHash, base)
 	}
 	timer := time.NewTimer(waitDuration)
 	defer timer.Stop()
 	select {
 	case outcome := <-outcomeCh:
+		base.ExecutionEvidence = edgeExecutionEvidence(outcome)
 		if !outcome.Accepted {
 			base.EdgeStatus = "REJECTED"
+			if strings.HasPrefix(outcome.Code, "DEVICE_WRITE_") {
+				base.EdgeStatus = "FAILED"
+			}
 			reason := strings.TrimSpace(outcome.Code)
 			if reason == "" {
 				reason = "CONTROL_DENIED"
 			}
 			base.ReasonCode = &reason
-			handler.remember(request.PayloadHash, base)
-			return base
+			return handler.finish(deviceID, request.PayloadHash, base)
 		}
 		base.EdgeStatus = "EXECUTED"
-		if request.Policy.RequiresReadback {
-			// Edge readback/execution evidence does not make Cloud Control VERIFIED;
-			// Cloud still performs its independent S2 authoritative verification.
-			base.EdgeStatus = "VERIFIED"
-		}
-		if outcome.AppliedValue != nil && outcome.AppliedValue.Type == edgecontrol.DataTypeDouble {
-			base.Reported = map[string]float64{"value": outcome.AppliedValue.Double}
-		} else if outcome.Effective != nil && outcome.Effective.Type == edgecontrol.DataTypeDouble {
-			base.Reported = map[string]float64{"value": outcome.Effective.Double}
-		}
-		handler.remember(request.PayloadHash, base)
-		return base
+		return handler.finish(deviceID, request.PayloadHash, base)
 	case <-timer.C:
 		handler.edgeRuntime.CancelCommand(base.CommandID, "TIMEOUT")
 		base.EdgeStatus = "TIMEOUT"
 		reason := "TIMEOUT"
 		base.ReasonCode = &reason
-		handler.remember(request.PayloadHash, base)
-		return base
+		return handler.finish(deviceID, request.PayloadHash, base)
 	}
 }
 
@@ -290,17 +301,62 @@ func edgeRejected(base mqttCommandReply, reasonCode string) mqttCommandReply {
 	return base
 }
 
-func edgeRejectedAndRemember(handler *edgeCommandHandler, payloadHash string, base mqttCommandReply, reasonCode string) mqttCommandReply {
-	reply := edgeRejected(base, reasonCode)
-	handler.remember(payloadHash, reply)
+func edgeFailed(base mqttCommandReply, reasonCode string) mqttCommandReply {
+	base.EdgeStatus = "FAILED"
+	reason := reasonCode
+	base.ReasonCode = &reason
+	return base
+}
+
+func (handler *edgeCommandHandler) finish(deviceID, payloadHash string, reply mqttCommandReply) mqttCommandReply {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	replyCopy := reply
+	handler.results[reply.CommandID] = edgeCommandRecord{
+		DeviceID: deviceID, PayloadHash: payloadHash, ExecutionFence: reply.ExecutionFence,
+		State: edgeCommandTerminal, Reply: &replyCopy,
+	}
+	_ = persistEdgeCommandLedger(handler.ledgerPath, handler.results)
 	return reply
 }
 
-func (handler *edgeCommandHandler) remember(payloadHash string, reply mqttCommandReply) {
-	handler.mu.Lock()
-	defer handler.mu.Unlock()
-	handler.results[reply.CommandID] = edgeCommandRecord{PayloadHash: payloadHash, Reply: reply}
-	_ = persistEdgeCommandLedger(handler.ledgerPath, handler.results)
+func edgeExecutionEvidence(outcome EdgeCommandOutcome) *commandmodel.EdgeExecutionEvidence {
+	evidence := &commandmodel.EdgeExecutionEvidence{
+		Requested:          commandScalar(outcome.Requested),
+		WinnerControllerID: strings.TrimSpace(outcome.WinnerControllerID),
+		Cycle:              outcome.Cycle,
+	}
+	if outcome.Effective != nil {
+		value := commandScalar(*outcome.Effective)
+		evidence.Effective = &value
+	}
+	if outcome.AppliedValue != nil {
+		value := commandScalar(*outcome.AppliedValue)
+		evidence.Applied = &value
+	}
+	for _, constraint := range outcome.ConstraintReasons {
+		evidence.Constraints = append(evidence.Constraints, commandmodel.EdgeConstraintEvidence{
+			ControllerID: constraint.ControllerID, Reason: constraint.Reason,
+		})
+	}
+	if !evidence.Valid() {
+		return nil
+	}
+	return evidence
+}
+
+func commandScalar(value edgecontrol.Value) commandmodel.ScalarValue {
+	if number, ok := value.NumericFloat64(); ok {
+		return commandmodel.NumberScalar(number)
+	}
+	switch value.Type {
+	case edgecontrol.DataTypeBoolean:
+		return commandmodel.BooleanScalar(value.Boolean)
+	case edgecontrol.DataTypeString:
+		return commandmodel.TextScalar(value.String)
+	default:
+		return commandmodel.ScalarValue{}
+	}
 }
 
 func nativeCommandMethod(commandCode string) (string, bool) {

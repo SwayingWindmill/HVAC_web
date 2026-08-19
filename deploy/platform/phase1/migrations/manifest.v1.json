@@ -61,7 +61,8 @@
         "infra/s1-registry/postgres/init/010-s05-registry-writer.sql",
         "infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql",
         "infra/s1-registry/postgres/init/012-s19-settlement-projections.sql",
-        "infra/connectivity/postgres/init/001-s09-connectivity.sql"
+        "infra/connectivity/postgres/init/001-s09-connectivity.sql",
+        "infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql"
       ]
     },
     {
@@ -82,8 +83,10 @@
       "name": "hvac_s3",
       "migrations": [
         "services/command-service/migrations/001_s3_command_runtime.sql",
+        "services/command-service/migrations/002_s3_target_runtime.sql",
         "services/command-service/migrations/003_s3_tenant_scope.sql",
-        "services/command-service/migrations/004_s3_command_point_identity.sql"
+        "services/command-service/migrations/004_s3_command_point_identity.sql",
+        "services/command-service/migrations/005_s11_edge_execution_evidence.sql"
       ]
     },
     {

@@ -625,7 +625,18 @@ WHERE c.tenant_id = $1::uuid AND c.attempt_id = $2::uuid AND c.execution_fence =
 	return tx.Commit(ctx)
 }
 
-func (store *Store) RecordCommandReply(ctx context.Context, integrationInstanceID, commandID string, executionFence uint64, replySHA256, replyStatus string, replyEventTime time.Time, replyReasonCode string, repliedAt time.Time) (mqttconnector.CommandCorrelation, error) {
+func (store *Store) RecordCommandReply(ctx context.Context, integrationInstanceID, commandID string, executionFence uint64, replySHA256, replyStatus string, replyEventTime time.Time, replyReasonCode string, edgeExecution *commandmodel.EdgeExecutionEvidence, repliedAt time.Time) (mqttconnector.CommandCorrelation, error) {
+	var edgeExecutionJSON []byte
+	if edgeExecution != nil {
+		if !edgeExecution.Valid() {
+			return mqttconnector.CommandCorrelation{}, ErrCorrelationMismatch
+		}
+		var err error
+		edgeExecutionJSON, err = json.Marshal(edgeExecution)
+		if err != nil {
+			return mqttconnector.CommandCorrelation{}, ErrCorrelationMismatch
+		}
+	}
 	tx, err := store.beginTenant(ctx)
 	if err != nil {
 		return mqttconnector.CommandCorrelation{}, err
@@ -635,10 +646,11 @@ func (store *Store) RecordCommandReply(ctx context.Context, integrationInstanceI
 UPDATE connectivity.command_reply_correlations
 SET state = 'REPLIED', reply_sha256 = $5, reply_status = $6,
     reply_event_time = $7,
-    reply_reason_code = NULLIF($8, ''), replied_at = $9, updated_at = $9
+    reply_reason_code = NULLIF($8, ''), reply_execution_evidence = $9::jsonb,
+    replied_at = $10, updated_at = $10
 WHERE tenant_id = $1::uuid AND integration_instance_id = $2::uuid
   AND command_id = $3::uuid AND execution_fence = $4 AND state = 'MAY_COMMIT'
-`, store.tenantID, integrationInstanceID, commandID, executionFence, replySHA256, strings.TrimSpace(replyStatus), nullableTime(replyEventTime), strings.TrimSpace(replyReasonCode), repliedAt.UTC())
+`, store.tenantID, integrationInstanceID, commandID, executionFence, replySHA256, strings.TrimSpace(replyStatus), nullableTime(replyEventTime), strings.TrimSpace(replyReasonCode), nullableJSON(edgeExecutionJSON), repliedAt.UTC())
 	if err != nil {
 		return mqttconnector.CommandCorrelation{}, fmt.Errorf("record durable command reply: %w", err)
 	}
@@ -649,7 +661,8 @@ WHERE tenant_id = $1::uuid AND integration_instance_id = $2::uuid
 	if tag.RowsAffected() == 0 && correlation.State != mqttconnector.CorrelationReplied && correlation.State != mqttconnector.CorrelationResolved {
 		return mqttconnector.CommandCorrelation{}, ErrCorrelationMismatch
 	}
-	if correlation.ReplySHA256 != replySHA256 || correlation.ReplyStatus != strings.TrimSpace(replyStatus) {
+	if correlation.ReplySHA256 != replySHA256 || correlation.ReplyStatus != strings.TrimSpace(replyStatus) ||
+		!sameEdgeExecution(correlation.EdgeExecution, edgeExecution) {
 		return mqttconnector.CommandCorrelation{}, ErrCorrelationMismatch
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -774,7 +787,7 @@ SELECT attempt_id::text, execution_fence, command_id::text, tenant_id::text, sit
        payload_hash, lease_owner, lease_until, owner_generation, mapping_revision, binding_revision,
        provider_endpoint, provider_method, request_sha256, prepared_at, state,
        COALESCE(reply_sha256, ''), COALESCE(reply_status, ''), reply_event_time,
-       COALESCE(reply_reason_code, ''), replied_at
+       COALESCE(reply_reason_code, ''), reply_execution_evidence, replied_at
 FROM connectivity.command_reply_correlations
 `
 
@@ -798,6 +811,7 @@ func scanCorrelation(row rowScanner) (mqttconnector.CommandCorrelation, error) {
 	var correlation mqttconnector.CommandCorrelation
 	var state, capability string
 	var replyEventTime, repliedAt *time.Time
+	var edgeExecutionJSON []byte
 	err := row.Scan(
 		&correlation.Envelope.AttemptID, &correlation.Envelope.ExecutionFence, &correlation.Envelope.CommandID,
 		&correlation.Envelope.TenantID, &correlation.Envelope.SiteID, &correlation.IntegrationInstanceID,
@@ -805,7 +819,7 @@ func scanCorrelation(row rowScanner) (mqttconnector.CommandCorrelation, error) {
 		&correlation.Envelope.PayloadHash, &correlation.Envelope.LeaseOwner, &correlation.Envelope.LeaseUntil,
 		&correlation.OwnerGeneration, &correlation.MappingRevision, &correlation.BindingRevision,
 		&correlation.ProviderEndpoint, &correlation.ProviderMethod, &correlation.RequestSHA256, &correlation.PreparedAt,
-		&state, &correlation.ReplySHA256, &correlation.ReplyStatus, &replyEventTime, &correlation.ReplyReasonCode, &repliedAt,
+		&state, &correlation.ReplySHA256, &correlation.ReplyStatus, &replyEventTime, &correlation.ReplyReasonCode, &edgeExecutionJSON, &repliedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return mqttconnector.CommandCorrelation{}, ErrNotFound
@@ -815,6 +829,13 @@ func scanCorrelation(row rowScanner) (mqttconnector.CommandCorrelation, error) {
 	}
 	correlation.Envelope.Capability = commandmodel.Capability(capability)
 	correlation.State = mqttconnector.CorrelationState(state)
+	if len(edgeExecutionJSON) > 0 {
+		var evidence commandmodel.EdgeExecutionEvidence
+		if err := json.Unmarshal(edgeExecutionJSON, &evidence); err != nil || !evidence.Valid() {
+			return mqttconnector.CommandCorrelation{}, ErrCorrelationMismatch
+		}
+		correlation.EdgeExecution = &evidence
+	}
 	if replyEventTime != nil {
 		correlation.ReplyEventTime = replyEventTime.UTC()
 	}
@@ -862,6 +883,22 @@ func nullableTime(value time.Time) any {
 		return nil
 	}
 	return value.UTC()
+}
+
+func nullableJSON(value []byte) any {
+	if len(value) == 0 {
+		return nil
+	}
+	return string(value)
+}
+
+func sameEdgeExecution(left, right *commandmodel.EdgeExecutionEvidence) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
 }
 
 func newUUIDv7(now time.Time) (string, error) {

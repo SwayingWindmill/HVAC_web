@@ -134,7 +134,7 @@ func TestAcknowledgedCommandRequiresReportedStateVerification(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := service.ResolveDispatch(dispatch, commandmodel.ConnectorResult{
-		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "provider-ack-1",
+		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "provider-ack-1", EdgeExecution: testEdgeExecution(24),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestReportedStateMismatchBecomesOutcomeUnknown(t *testing.T) {
 	submitted, _ := service.Submit(validRequest())
 	dispatch, _ := service.PrepareDispatch(submitted.Intent.ID, "dispatcher-a", clock().Add(time.Minute))
 	if err := service.ResolveDispatch(dispatch, commandmodel.ConnectorResult{
-		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "provider-ack-2",
+		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "provider-ack-2", EdgeExecution: testEdgeExecution(24),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -210,12 +210,12 @@ func TestConnectorCannotDeclareReportedStateVerified(t *testing.T) {
 
 func validRequest() commandmodel.SubmitRequest {
 	return commandmodel.SubmitRequest{
-		TenantID:       "tenant-1",
-		SiteID:         "site-1",
-		DeviceID:       "device-1",
-		PointID:        "point-1",
-		PrincipalID:    "principal-1",
-		IdempotencyKey: "request-1",
+		TenantID:             "tenant-1",
+		SiteID:               "site-1",
+		DeviceID:             "device-1",
+		PointID:              "point-1",
+		PrincipalID:          "principal-1",
+		IdempotencyKey:       "request-1",
 		Capability:           commandmodel.CapabilitySetTemperatureSetpoint,
 		Parameters:           commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24},
 		VerificationPointKey: "zone.temperature_setpoint",
@@ -224,14 +224,14 @@ func validRequest() commandmodel.SubmitRequest {
 			Presence:               "ONLINE",
 			Readiness:              "CURRENT",
 			Quality:                "GOOD",
-			BusinessRevision: 17,
-			CurrentValue:     testFloat64Pointer(23),
-			ObservedAt:       time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
+			BusinessRevision:       17,
+			CurrentValue:           testFloat64Pointer(23),
+			ObservedAt:             time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
 		},
 		Authorization: commandmodel.AuthorizationSnapshot{
 			GrantID: "grant-1", PolicyRevision: "command-policy-1", Purpose: commandmodel.AuthorizationCommandSubmit,
-			PrincipalID:    "principal-1",
-			TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
+			PrincipalID: "principal-1",
+			TenantID:    "tenant-1", SiteID: "site-1", DeviceID: "device-1",
 			Capability:  commandmodel.CapabilitySetTemperatureSetpoint,
 			MaximumRisk: commandmodel.RiskHigh, CapabilityRevision: setpointCapabilityRevision,
 			EmergencyRevocationRevision: 1,

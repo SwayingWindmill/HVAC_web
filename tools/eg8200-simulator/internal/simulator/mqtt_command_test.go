@@ -67,8 +67,10 @@ func TestEdgeMQTTCommandIsIdempotentAndFenced(t *testing.T) {
 		PayloadHash: "payload-a",
 	}
 	first := evaluateMQTTCommandWithEdgeCycle(t, handler, edgeRuntime, request, now)
-	if first.EdgeStatus != "VERIFIED" || first.ReasonCode != nil || first.Reported["value"] != 80 {
-		t.Fatalf("expected applied command through Edge runtime, got %+v", first)
+	if first.EdgeStatus != "EXECUTED" || first.ReasonCode != nil || first.ExecutionEvidence == nil ||
+		first.ExecutionEvidence.Applied == nil || first.ExecutionEvidence.Applied.Number == nil || *first.ExecutionEvidence.Applied.Number != 80 ||
+		first.ExecutionEvidence.WinnerControllerID != "cloud-command-intent" || first.ExecutionEvidence.Cycle == 0 {
+		t.Fatalf("expected governed Edge execution evidence, got %+v", first)
 	}
 	if got := plant.Snapshot().Devices[config.Plant.Chiller.ID]["loadLimitPct"]; got != 80.0 {
 		t.Fatalf("Edge runtime did not apply chiller load limit: %v", got)
@@ -77,6 +79,14 @@ func TestEdgeMQTTCommandIsIdempotentAndFenced(t *testing.T) {
 	second := handler.evaluate(request)
 	if !reflect.DeepEqual(second, first) {
 		t.Fatalf("duplicate command must return cached reply without re-execution: first=%+v second=%+v", first, second)
+	}
+	restarted, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, "EG8200-COMMERCIAL-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.now = handler.now
+	if replay := restarted.evaluate(request); !reflect.DeepEqual(replay, first) {
+		t.Fatalf("terminal Edge reply must survive restart: first=%+v replay=%+v", first, replay)
 	}
 	request.CommandID = "018f3e00-9000-7000-8000-000000000003"
 	request.MessageID = "018f3e00-9000-7000-8000-000000000004"
@@ -117,6 +127,7 @@ func TestEdgeMQTTCommandRejectsExpiredOrMismatchedMapping(t *testing.T) {
 		CommandCode:   "START", ExecutionFence: 1, PayloadHash: "payload-c",
 	}
 	expired := base
+	expired.ExecutionFence = 10
 	expired.ExpireAt = now.Add(-time.Second).UnixMilli()
 	if reply := handler.evaluate(expired); reply.EdgeStatus != "EXPIRED" || reply.ReasonCode == nil || *reply.ReasonCode != "EXPIRED" {
 		t.Fatalf("expected expired rejection, got %+v", reply)
