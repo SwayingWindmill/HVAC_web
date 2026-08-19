@@ -39,8 +39,8 @@
 - Tariff 使用 Site timezone 快照和有效期版本；released 版本不可时间重叠，Tariff Period 按 `SUPER_PEAK / PEAK / FLAT / VALLEY` 与本地时间片建模。
 - Settlement Period 使用 `OPEN / CALCULATING / REVIEW / LOCKED / REVISED / CANCELLED` 状态机；LOCKED 必须已有初始 Snapshot，Snapshot 永不可 UPDATE/DELETE，锁后变化通过 Change Candidate 与追加式 Settlement Revision 产生新 Snapshot。
 - Metric 使用稳定 Identity + 有效期 Metric Version；Dependency 仅允许 `POINT / METRIC / EXTERNAL` 并强制 DAG，released Version 与 Dependency 冻结；Metric Binding 固定 Subject、Version、binding version 与 granularity，Calculation Run 固定输入引用和运行状态。
-- Metric Result 落 ClickHouse `analytics.metric_series`，携带 metric/binding/calculation-run lineage 和 `revision`；历史重算追加更高 Revision，不静默覆盖旧结果。
-- Data Lifecycle Policy 在 PostgreSQL 按 Dataset/Data Class/有效期版本化，ClickHouse 不再以硬编码 TTL 充当治理权威；ACTIVE Legal Hold 会阻断删除批准/执行。
+- Metric Result 历史事实落 ClickHouse `analytics.metric_result_facts`，每次计算/重算保留独立 `result_id` 与单调 `revision`；PostgreSQL `metric_result_heads` 是逻辑窗口 Current authority，只在对应 ClickHouse Fact 已确认持久化后推进，Redis Latest 仅为可重建投影。
+- Data Lifecycle Policy 在 PostgreSQL 按 Dataset/Data Class/有效期版本化，ClickHouse 不再以硬编码 TTL 充当治理权威；第一版 Lifecycle Worker 已复用 durable Scheduler 的 claim/lease/retry 执行 Metric Result retention，ACTIVE Legal Hold 会在源删除前阻断，archive-required 数据没有匹配的 VERIFIED Archive Manifest 时 fail-closed。
 - Archive 与 Backup 使用独立 Object Storage Bucket Purpose 和独立 Manifest 账本：`archive_required` 删除必须绑定匹配 Dataset/Site 的 VERIFIED Archive Manifest，Restore 必须绑定 VERIFIED Backup Manifest；Backup 不能替代 Archive，Archive 也不能替代 Backup。
 - 删除以 Deletion Request + 不可变 Tombstone 记账；Restore Run 在全部 Tombstone 执行 `REDELETE / EXCLUDE` 前禁止完成，防止备份恢复让已删除数据复活。
 - Manual Correction 经过 DRAFT→REVIEW→APPROVED，再生成不可变 Correction Fact；Correction Fact 只作为下游 Metric/Settlement 合并输入，不覆盖 Raw Telemetry。
@@ -61,7 +61,7 @@
 - Settlement calculation/reconciliation execution 尚未完成。
 - Forecast advanced training/artifact/deployment orchestration 尚未完成。
 - Optimization cost/demand/carbon solver、审批与 Control execution handoff 尚未完成。
-- Object Storage 的实际归档执行、完整 Lineage 与生命周期编排尚未完成。
+- Object Storage provider 的实际归档写入与归档产物生成仍未完成；S08 Lifecycle Worker 已接管 Metric Result 的 hold/archive-evidence/delete/tombstone 编排，但不会在没有 VERIFIED Archive Evidence 时伪造归档完成。
 - Object Storage 的生产数据治理角色尚未完成。
 
 在这些阻塞项完成前，V2 `acceptanceEligible` 必须保持 `false`。

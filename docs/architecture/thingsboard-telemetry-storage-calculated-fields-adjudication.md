@@ -25,12 +25,12 @@ HVAC Web 不应恢复 ThingsBoard 运行时，也不应照搬它的通用 Entity
 4. **修复本地 History API 丢弃有效乱序事实。** ClickHouse 原始表和 Rollup 都接受 `ACCEPTED` 与 `OUT_OF_ORDER`，但公开历史查询只返回 `ACCEPTED`。这直接违反 S2 自己的“有效乱序进入历史、不得回退 Latest”契约，必须替换。
 5. **修复本地 History Query 的语义缺口。** 当前只支持数值、无游标、无聚合接口，把分区内 `source_offset` 暴露为跨 Key 的 `revision`，并用查询范围之外的最大事件时间推断 `partial`。这些都不能作为稳定公开契约。
 6. **保留 ClickHouse 固定历史权威，但重做 Rollup 质量边界。** 现有 1 分钟、15 分钟、小时 Rollup 没有把 `point_revision` 纳入分组，也把非 GOOD 值直接算入 AVG/MIN/MAX。HVAC 聚合必须显式携带版本、质量、完整度和 Counter 语义，不能只复制 ThingsBoard 的通用聚合函数。
-7. **本地 Metric Domain 方向优于 ThingsBoard Calculated Field，但当前实现不能判定为完成。** Metric/Version/Binding/Dependency、数据库拒绝依赖环、受限表达式、质量/完整度、Run、Cross-store Publication、Job Lease 与 Backfill 是正确的 Domain 边界；但 `metric_series` 每次写入都把 `revision` 固定为 `1`，与“重算追加更高 Revision”文档直接冲突，且 ReplacingMergeTree 会在相同逻辑窗口发生同版竞争。
+7. **本地 Metric Domain 继续优于 ThingsBoard Calculated Field，并已完成 S08 的 Result Revision 修复。** Metric/Version/Binding/Dependency、数据库拒绝依赖环、受限表达式、质量/完整度、Run、Cross-store Publication、Job Lease 与 Backfill 继续作为 Domain 边界；Metric Result 已改为 ClickHouse append-only `metric_result_facts`，PostgreSQL 原子分配单调 Result Revision 并维护 `metric_result_heads` Current authority，重算不再依赖 ReplacingMergeTree 选当前值。
 8. **吸收 ThingsBoard Calculated Field 的运行时模式，不吸收其业务边界。** Actor/Queue、RocksDB State、动态参数、Scheduled Reevaluation、Debug Event、租户限额、运行时链路去环值得参考；任意 Script、直接写 Attributes/Telemetry、跨实体 Propagation、Alarm 输出和 Rule Chain Side Effect 不得进入核心能源 Metric。
-9. **保留本地受治理生命周期模型，但承认它尚未执行。** Lifecycle Policy、Legal Hold、Archive Manifest、Deletion Request、Tombstone 的模型强于 ThingsBoard 的简单 TTL；当前仓库没有消费这些表并实际清理 PostgreSQL/ClickHouse/Object Storage 的执行器，因此只能标为 Schema/Foundation，不能宣称 Retention 已完成。
+9. **保留并执行本地受治理生命周期模型。** Lifecycle Policy、Legal Hold、Archive Manifest、Deletion Request、Tombstone 的模型强于 ThingsBoard 的简单 TTL；S08 第一版 Lifecycle Worker 复用 durable Scheduler 的 claim/lease/retry，对 Metric Result 执行 retention，Legal Hold 在删除前 fail-closed，`archive_required` 必须先有匹配的 VERIFIED Archive Manifest。Object Storage provider 的实际归档产物生成仍是后续能力，因此当前不会把“已有 Archive Evidence 的受控删除”夸大为完整归档平台。
 10. **本地实时订阅边界总体保留。** 耐久 Subscription、短时 Capability、精确 Tenant/Site/Device/Keys、可撤销 Recovery Cursor、Business Revision 和 Outbox 比 ThingsBoard 的进程内 Subscription Map 更强；但部分订阅发布成功后失败会整事件重试，客户端必须按 Event/Revision 去重，且需要清理和负载测试证据。
 
-因此 D04 的结论不是“本地胜出”，而是：**保留本地摄取、隔离和 Metric Domain 形状；立即替换 Current Authority、History Query、Metric Revision 和 Rollup Quality 的错误实现；选择性吸收 ThingsBoard 的查询产品能力、订阅限额、计算运行时和实际 TTL Worker。**
+因此 D04 的结论不是“本地胜出”，而是：**保留本地摄取、隔离和 Metric Domain 形状；S06-S08 已按裁决替换 Current/History/Metric Revision 的错误实现并落下第一版 Lifecycle Worker；后续继续完成 Rollup Quality、查询产品能力、订阅限额与 Object Storage 实际归档执行。**
 
 ## 2. 固定证据基线
 
@@ -62,7 +62,7 @@ HVAC Web 不应恢复 ThingsBoard 运行时，也不应照搬它的通用 Entity
 - `services/telemetry-runtime-service/internal/telemetry/ingest_store.go`、`ingest.go`、`latest_cache.go`、`server.go`、`history.go`、`history_clickhouse.go`、`realtime.go`、`realtime_postgres.go`；
 - `services/telemetry-query-service/internal/history/client.go`；
 - `services/metric-engine-service/internal/metric/engine.go`、`postgres.go`、`clickhouse.go`、`jobs.go`、`scheduler.go`；
-- `infra/s2-telemetry/clickhouse/init/001-telemetry-history.sql`、`003-telemetry-rollups.sql`、`004-counter-semantics.sql`、`005-metric-series.sql`；
+- `infra/s2-telemetry/clickhouse/init/001-telemetry-history.sql`、`003-telemetry-rollups.sql`、`004-counter-semantics.sql`、`005-metric-result-revisions.sql`；
 - `infra/s1-registry/postgres/init/009c-metric-model-v2.sql`、`009d-data-governance-v2.sql`、`009g-object-storage-governance-v2.sql`、`009l-scheduler-job-v1.sql`；
 - `contracts/ownership/s2-telemetry-ownership.v1.json` 与 `docs/architecture/data-architecture-v2-conformance.md`。
 

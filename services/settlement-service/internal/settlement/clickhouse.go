@@ -42,7 +42,7 @@ func (s *ClickHouseStore) ReadMetricFacts(ctx context.Context, period Period, bi
 		ids = append(ids, "toUUID("+sqlQuote(binding.MetricBindingID)+")")
 	}
 	sql := fmt.Sprintf(`SELECT result_id,metric_binding_id,metric_version_id,metric_code,period_start,period_end,value_number,quality,completeness
-FROM analytics.metric_series
+FROM analytics.metric_result_facts
 WHERE tenant_id=toUUID(%s) AND site_id=toUUID(%s)
   AND metric_binding_id IN (%s)
   AND period_start >= parseDateTime64BestEffort(%s)
