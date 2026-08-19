@@ -47,6 +47,7 @@ COPY infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql /opt/hvac/repo
 COPY infra/s1-registry/postgres/init/012-s19-settlement-projections.sql /opt/hvac/repo/infra/s1-registry/postgres/init/012-s19-settlement-projections.sql
 COPY infra/connectivity/postgres/init/001-s09-connectivity.sql /opt/hvac/repo/infra/connectivity/postgres/init/001-s09-connectivity.sql
 COPY infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql /opt/hvac/repo/infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql
+COPY services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql /opt/hvac/repo/services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql
 
 COPY infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/s2-telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql

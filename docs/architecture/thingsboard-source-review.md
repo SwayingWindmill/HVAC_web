@@ -408,3 +408,38 @@ The implementation read these files directly from the pinned ThingsBoard CE `v4.
 ### S17 consequence
 
 Presentation becomes a logical owner of derived presentation projections only; Registry, Telemetry, Metric/Analytics, Alarm, Command and authorization facts remain with their existing owners. Phase 1 may physically co-locate the projection with `energy-api/platform-gateway`, but the Summary implementation consumes owner query ports rather than write/read owner schemas directly. Live presentation uses a bounded `text/event-stream` replacement stream only after a REST `SiteDashboardSummary` handshake: the browser supplies that Snapshot's `generatedAt` as `baseGeneratedAt`, accepts an owner-issued replacement only when the base still matches its current Snapshot, and performs a fresh REST reconciliation before reopening the stream after disconnect, malformed data or base mismatch. The Gateway revalidates the durable BFF Session on the configured revocation objective independently of the lower-frequency Summary refresh, so stream lifetime cannot weaken Session revocation. The stream is recovery acceleration, not a new durable fact authority or a browser-side recomputation path.
+
+## S20 — Rule Runtime core
+
+Date: 2026-08-19
+
+Local issue: #280
+
+### Upstream files reviewed
+
+All implementation-time source was re-read from ThingsBoard CE `v4.3.1.1` at commit `c2a52e46c44e308ddee430e7266b8e10eddde9c4`:
+
+- `dao/src/main/java/org/thingsboard/server/dao/service/validator/RuleChainDataValidator.java`
+- `dao/src/test/java/org/thingsboard/server/dao/service/validator/RuleChainDataValidatorTest.java`
+- `application/src/main/java/org/thingsboard/server/actors/ruleChain/RuleNodeActorMessageProcessor.java`
+- `application/src/main/java/org/thingsboard/server/service/queue/ruleengine/TbRuleEngineQueueConsumerManager.java`
+- `application/src/test/java/org/thingsboard/server/service/queue/ruleengine/TbRuleEngineStrategyTest.java`
+
+### Observed upstream semantics
+
+- Rule Chain validation rejects invalid entity metadata and direct same-chain loops before execution; Rule Node construction/configuration is class/reflection based and node lifecycle is explicit through init/destroy/re-init.
+- Rule Node execution supports a per-message execution count guard, but an upstream value of zero means unlimited execution rather than a hard production bound.
+- Queue processing separates submit strategy from processing/ack strategy. Burst, Batch and sequential-by-originator execution are explicit behaviors, and the upstream tests exercise failure/timeout retry decisions for each strategy.
+- Queue commit happens only after the processing strategy decides the current pack may commit. A failed/timeout pack may be reprocessed according to queue policy.
+- Upstream Rule Engine message/node identities and mutable chain/configuration lifecycle are not sufficient evidence for deterministic replay, immutable release pinning or crash-safe exactly-identifiable HVAC owner effects.
+
+### Implementation decision
+
+- `ADOPT`: publish-time graph validation, explicit typed node lifecycle, separation of execution from acknowledgement, and an ordering seam equivalent to sequential-by-originator for the same business subject.
+- `ADAPT`: replace class/reflection nodes with a closed versioned `NodeDefinition` catalog; replace generic relation strings with typed input/output ports; replace mutable active Rule Chain configuration with immutable released `RuleRevision` plus append-only `RuleBinding` revisions.
+- `REPLACE`: random/ephemeral execution identity with deterministic `executionId`, `workItemId`, `effectId` and `continuationId`; pack-level retry with bounded per-work retry and terminal `DEAD`/`QUARANTINED`; in-memory delay with a durable continuation record; node-owned external/domain writes with persisted typed Effect Intent addressed to the owner domain.
+- `REJECT`: arbitrary JS/TBEL/class loading, credential reads, direct database/network/owner mutation from Rule nodes, zero-as-unlimited attempts, blind replay of ambiguous effects, and debug/replay paths that can call the real Effect Sink.
+
+### S20 consequence
+
+The S20 runtime compiles a released immutable plan before execution, pins each execution to the exact Rule Revision and Binding revision, and serializes the same Tenant/Site/subject ordering key under lease/fence. Authoritative Rule State is separate from any one Execution and is keyed by Tenant + Rule Revision + Node Instance + Scope Key; CAS updates and the corresponding Execution transition evidence commit in one storage transaction, so concurrent executions cannot overwrite each other. Node evaluation is pure with respect to business owners: owner reads go through exact snapshot ports and owner writes become stable Effect Intents. Work, continuation, state-transition, effect and trace evidence are durable at execution boundaries. Before an owner call, an Effect is durably marked `DISPATCHING`; if the process dies before the receipt is persisted, restart freezes that Effect as `AMBIGUOUS` instead of blindly replaying it. Replay accepts frozen snapshot facts only, cannot accept a live Effect Sink, and records simulated effects without invoking production owners.
