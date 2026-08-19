@@ -90,11 +90,11 @@ func TestTelemetryGatewaySingleAndBatchPreserveOrder(t *testing.T) {
 func TestTelemetryGatewayDeviceHistoryBindsExactScopeAndPreservesMetadata(t *testing.T) {
 	fixture := newTelemetryGatewayFixture(t, "")
 	input := s2telemetryapi.DeviceHistoryRequest{
-		DeviceId:        telemetryTestDeviceOne,
-		Keys:            []s2telemetryapi.TelemetryKey{"temperature"},
-		From:            s2telemetryapi.HistoryInstant("2026-07-24T06:00:00Z"),
-		To:              s2telemetryapi.HistoryInstant("2026-07-24T12:00:00Z"),
-		MaxPointsPerKey: 100,
+		DeviceId: telemetryTestDeviceOne,
+		Keys:     []s2telemetryapi.TelemetryKey{"temperature"},
+		From:     s2telemetryapi.HistoryInstant("2026-07-24T06:00:00Z"),
+		To:       s2telemetryapi.HistoryInstant("2026-07-24T12:00:00Z"),
+		PageSize: 100,
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
@@ -120,7 +120,7 @@ func TestTelemetryGatewayDeviceHistoryBindsExactScopeAndPreservesMetadata(t *tes
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-	if response.TenantId != telemetryTestTenant || response.SiteId != telemetryTestSite || response.DeviceId != telemetryTestDeviceOne || response.Metadata.DatasetRevision != "telemetry-history:v1:7" || response.Metadata.ReturnedPoints != 1 || len(response.Series) != 1 || len(response.Series[0].Points) != 1 {
+	if response.TenantId != telemetryTestTenant || response.SiteId != telemetryTestSite || response.DeviceId != telemetryTestDeviceOne || response.Metadata.ReturnedObservations != 1 || len(response.Observations) != 1 || response.Observations[0].PointRevision != 7 || response.Observations[0].SourcePosition.Offset != 42 {
 		t.Fatalf("history response drifted: %+v", response)
 	}
 	fixture.mu.Lock()
@@ -131,11 +131,44 @@ func TestTelemetryGatewayDeviceHistoryBindsExactScopeAndPreservesMetadata(t *tes
 	}
 }
 
+func TestTelemetryGatewayDeviceHistoryAggregateBindsCalendarPolicy(t *testing.T) {
+	fixture := newTelemetryGatewayFixture(t, "")
+	input := s2telemetryapi.DeviceHistoryAggregateRequest{
+		DeviceId: telemetryTestDeviceOne, Keys: []s2telemetryapi.TelemetryKey{"temperature"},
+		From: s2telemetryapi.HistoryInstant("2026-07-24T00:00:00Z"), To: s2telemetryapi.HistoryInstant("2026-07-25T00:00:00Z"),
+		Granularity: s2telemetryapi.DeviceHistoryAggregateGranularityDay, Timezone: "Asia/Singapore", QualityPolicy: s2telemetryapi.DeviceHistoryAggregateQualityPolicyValidOnly,
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, s2telemetryapi.QueryDeviceHistoryAggregatePath, bytes.NewReader(body))
+	fixture.authenticate(request)
+	request.Header.Set("Origin", "https://web.example.test")
+	request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
+	request = request.WithContext(context.WithValue(request.Context(), routeDecisionContextKey, ownershipregistry.Decision{RegistryRevision: 12, SelectedOwner: ownershipregistry.OwnerAnalyticsQuery}))
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("aggregate status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response s2telemetryapi.DeviceHistoryAggregateResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.TenantId != telemetryTestTenant || response.SiteId != telemetryTestSite || response.DeviceId != telemetryTestDeviceOne || len(response.Buckets) != 1 || response.Buckets[0].PointRevision != 7 || response.Metadata.Timezone != "Asia/Singapore" || response.Metadata.QualityPolicy != s2telemetryapi.DeviceHistoryAggregateQualityPolicyValidOnly {
+		t.Fatalf("aggregate response drifted: %+v", response)
+	}
+	if fixture.iamCalls.Load() != 1 || fixture.queryCalls.Load() != 1 || fixture.runtimeCalls.Load() != 0 {
+		t.Fatalf("aggregate upstream boundary drifted: IAM=%d query=%d runtime=%d", fixture.iamCalls.Load(), fixture.queryCalls.Load(), fixture.runtimeCalls.Load())
+	}
+}
+
 func TestTelemetryGatewayDeviceHistoryRejectsRuntimeRouteOwner(t *testing.T) {
 	fixture := newTelemetryGatewayFixture(t, "")
 	input := s2telemetryapi.DeviceHistoryRequest{
 		DeviceId: telemetryTestDeviceOne, Keys: []s2telemetryapi.TelemetryKey{"temperature"},
-		From: s2telemetryapi.HistoryInstant("2026-07-24T06:00:00Z"), To: s2telemetryapi.HistoryInstant("2026-07-24T12:00:00Z"), MaxPointsPerKey: 100,
+		From: s2telemetryapi.HistoryInstant("2026-07-24T06:00:00Z"), To: s2telemetryapi.HistoryInstant("2026-07-24T12:00:00Z"), PageSize: 100,
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
@@ -524,6 +557,31 @@ func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCod
 	fixture.iamHTTPClient = iamClient
 	fixture.queryHTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		fixture.queryCalls.Add(1)
+		if request.Method == http.MethodPost && request.URL.Path == internalDeviceHistoryAggregatePath {
+			var query telemetryhistorymodel.DeviceHistoryAggregateQuery
+			if err := json.NewDecoder(request.Body).Decode(&query); err != nil {
+				t.Fatal(err)
+			}
+			scope, err := query.ScopeDigest()
+			if err != nil {
+				t.Fatal(err)
+			}
+			claims, err := identitycontext.VerifyDelegation(&gatewaySigner.PublicKey, request.Header.Get("X-Delegation-Grant"))
+			if err != nil || claims.TenantID != telemetryTestTenant || identitycontext.ValidateDelegation(claims, now, telemetryTestSPIFFE, "telemetry-query-service", telemetryhistorymodel.DeviceHistoryAggregateAction, scope) != nil {
+				t.Fatalf("aggregate delegation invalid: claims=%+v err=%v", claims, err)
+			}
+			watermark := query.To.Add(-time.Minute)
+			response := telemetryhistorymodel.DeviceHistoryAggregateResponse{
+				SchemaVersion: 1, TenantID: query.TenantID, SiteID: query.SiteID, DeviceID: query.DeviceID,
+				Buckets: []telemetryhistorymodel.DeviceHistoryAggregateBucket{{
+					TelemetryKey: "temperature", PointID: "018f2e00-5000-7000-8000-000000000001", PointRevision: 7, PointType: telemetryhistorymodel.PointTypeTelemetry,
+					PeriodStart: query.From, PeriodEnd: query.To, Quality: telemetryhistorymodel.AggregateQualitySummary{Good: 4}, Completeness: 1,
+					Gauge: &telemetryhistorymodel.GaugeAggregate{Average: 22.5, Minimum: 21, Maximum: 24, First: 21, Last: 23, SampleCount: 4},
+				}},
+				Metadata: telemetryhistorymodel.DeviceHistoryAggregateMetadata{RequestedFrom: query.From, RequestedTo: query.To, Granularity: query.Granularity, Timezone: query.Timezone, QualityPolicy: query.QualityPolicy, ProjectionWatermark: &watermark, ReturnedBuckets: 1},
+			}
+			return telemetryJSONResponse(http.StatusOK, response), nil
+		}
 		if request.Method != http.MethodPost || request.URL.Path != internalDeviceHistoryPath {
 			t.Fatalf("unexpected query service request %s %s", request.Method, request.URL.Path)
 		}
@@ -544,16 +602,21 @@ func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCod
 		if err != nil || claims.PrincipalID != telemetryTestPrincipal || claims.PolicyRevision != telemetryTestPolicy || claims.TenantID != telemetryTestTenant || identitycontext.ValidateDelegation(claims, now, telemetryTestSPIFFE, "telemetry-query-service", telemetryhistorymodel.DeviceHistoryAction, scope) != nil {
 			t.Fatalf("query delegation invalid: claims=%+v err=%v", claims, err)
 		}
-		if query.TenantID != telemetryTestTenant || query.SiteID != telemetryTestSite || query.DeviceID != telemetryTestDeviceOne || len(query.Keys) != 1 || query.Keys[0] != "temperature" || query.MaxPointsPerKey != 100 {
+		if query.TenantID != telemetryTestTenant || query.SiteID != telemetryTestSite || query.DeviceID != telemetryTestDeviceOne || len(query.Keys) != 1 || query.Keys[0] != "temperature" || query.PageSize != 100 {
 			t.Fatalf("query scope drifted: %+v", query)
 		}
 		unit := "Cel"
 		sensorID := "018f2e00-6000-7000-8000-000000000001"
 		watermark := query.To
 		response := telemetryhistorymodel.DeviceHistoryResponse{
-			SchemaVersion: 1, TenantID: query.TenantID, SiteID: query.SiteID, DeviceID: query.DeviceID,
-			Series:   []telemetryhistorymodel.DeviceHistorySeries{{Key: "temperature", Points: []telemetryhistorymodel.DeviceHistoryPoint{{ObservationID: "018f2e00-8000-7000-8000-000000000001", PointID: "018f2e00-5000-7000-8000-000000000001", SensorID: &sensorID, SampledAt: query.From.Add(time.Hour), ReceivedAt: query.From.Add(time.Hour + time.Second), Value: 22.5, Unit: &unit, Quality: telemetryhistorymodel.QualityGood, QualityReasons: []string{}, Revision: 7}}}},
-			Metadata: telemetryhistorymodel.DeviceHistoryMetadata{RequestedFrom: query.From, RequestedTo: query.To, DataWatermark: &watermark, DatasetRevision: "telemetry-history:v1:7", Partial: false, MaxPointsPerKey: query.MaxPointsPerKey, ReturnedPoints: 1, TruncatedKeys: []string{}},
+			SchemaVersion: 2, TenantID: query.TenantID, SiteID: query.SiteID, DeviceID: query.DeviceID,
+			Observations: []telemetryhistorymodel.DeviceHistoryObservation{{
+				ObservationID: "018f2e00-8000-7000-8000-000000000001", TelemetryKey: "temperature", PointID: "018f2e00-5000-7000-8000-000000000001", SensorID: &sensorID,
+				PointType: telemetryhistorymodel.PointTypeTelemetry, PointRevision: 7, SampledAt: query.From.Add(time.Hour), ReceivedAt: query.From.Add(time.Hour + time.Second),
+				Acceptance: telemetryhistorymodel.AcceptanceAccepted, ValueType: telemetryhistorymodel.ValueTypeNumber, Value: json.RawMessage(`22.5`), Unit: &unit,
+				Quality: telemetryhistorymodel.QualityGood, QualityReasons: []string{}, SourcePosition: telemetryhistorymodel.SourcePosition{Partition: "mqtt:gateway:device:temperature", Offset: 42, EventID: "018f2e00-8000-7000-8000-000000000001"},
+			}},
+			Metadata: telemetryhistorymodel.DeviceHistoryMetadata{RequestedFrom: query.From, RequestedTo: query.To, ProjectionWatermark: &watermark, PageSize: query.PageSize, ReturnedObservations: 1},
 		}
 		return telemetryJSONResponse(http.StatusOK, response), nil
 	})}

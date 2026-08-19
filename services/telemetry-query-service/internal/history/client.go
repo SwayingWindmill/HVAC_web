@@ -3,6 +3,7 @@ package history
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +12,6 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -21,50 +21,67 @@ import (
 
 const maximumResponseBodySize = int64(8 << 20)
 
-var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+var (
+	identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+	uuidV7Pattern     = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+)
 
 type Engine interface {
 	QueryDeviceHistory(context.Context, telemetryhistorymodel.DeviceHistoryQuery) (telemetryhistorymodel.DeviceHistoryResponse, error)
+	QueryDeviceHistoryAggregate(context.Context, telemetryhistorymodel.DeviceHistoryAggregateQuery) (telemetryhistorymodel.DeviceHistoryAggregateResponse, error)
 }
 
 type Config struct {
-	BaseURL         string
-	Database        string
-	Table           string
-	Username        string
-	Password        string
-	DatasetRevision string
-	HTTPClient      *http.Client
+	BaseURL    string
+	Database   string
+	Table      string
+	Username   string
+	Password   string
+	HTTPClient *http.Client
 }
 
 type Client struct {
-	endpoint        *url.URL
-	database        string
-	table           string
-	username        string
-	password        string
-	datasetRevision string
-	httpClient      *http.Client
+	endpoint   *url.URL
+	database   string
+	table      string
+	username   string
+	password   string
+	httpClient *http.Client
 }
 
 type pointRow struct {
-	ObservationID  string   `json:"observation_id"`
-	PointID        string   `json:"point_id"`
-	SensorID       *string  `json:"sensor_id"`
-	TelemetryKey   string   `json:"telemetry_key"`
-	SampledAt      string   `json:"sampled_at"`
-	ReceivedAt     string   `json:"received_at"`
-	Value          float64  `json:"value"`
-	Unit           *string  `json:"unit"`
-	Quality        string   `json:"quality"`
-	QualityReasons []string `json:"quality_reasons"`
-	Revision       uint64   `json:"revision"`
-	TotalCount     uint64   `json:"total_count"`
+	ObservationID   string   `json:"observation_id"`
+	PointID         string   `json:"point_id"`
+	SensorID        *string  `json:"sensor_id"`
+	TelemetryKey    string   `json:"telemetry_key"`
+	PointType       string   `json:"point_type"`
+	PointRevision   uint64   `json:"point_revision"`
+	SampledAt       string   `json:"sampled_at"`
+	ReceivedAt      string   `json:"received_at"`
+	Acceptance      string   `json:"acceptance_status"`
+	ValueType       string   `json:"value_type"`
+	ValueJSON       string   `json:"value_json"`
+	Unit            *string  `json:"unit"`
+	Quality         string   `json:"quality"`
+	QualityReasons  []string `json:"quality_reasons"`
+	SourceEventID   string   `json:"source_event_id"`
+	SourcePartition string   `json:"source_partition"`
+	SourceOffset    int64    `json:"source_offset"`
 }
 
-type metadataRow struct {
-	DataWatermark   *string `json:"data_watermark"`
-	MaximumRevision uint64  `json:"maximum_revision"`
+type snapshotRow struct {
+	SnapshotAt          string  `json:"snapshot_at"`
+	ProjectionWatermark *string `json:"projection_watermark"`
+}
+
+type historyCursor struct {
+	Version             int     `json:"v"`
+	ScopeDigest         string  `json:"scope"`
+	SnapshotAt          string  `json:"snapshotAt"`
+	ProjectionWatermark *string `json:"projectionWatermark,omitempty"`
+	LastTelemetryKey    string  `json:"lastTelemetryKey"`
+	LastSampledAt       string  `json:"lastSampledAt"`
+	LastObservationID   string  `json:"lastObservationId"`
 }
 
 func NewClient(config Config) (*Client, error) {
@@ -75,17 +92,13 @@ func NewClient(config Config) (*Client, error) {
 	if !identifierPattern.MatchString(config.Database) || !identifierPattern.MatchString(config.Table) {
 		return nil, errors.New("ClickHouse history identifiers are invalid")
 	}
-	if strings.TrimSpace(config.DatasetRevision) == "" || len(config.DatasetRevision) > 96 {
-		return nil, errors.New("ClickHouse history dataset revision is invalid")
-	}
 	client := config.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 8 * time.Second}
 	}
 	return &Client{
 		endpoint: endpoint, database: config.Database, table: config.Table,
-		username: strings.TrimSpace(config.Username), password: config.Password,
-		datasetRevision: strings.TrimSpace(config.DatasetRevision), httpClient: client,
+		username: strings.TrimSpace(config.Username), password: config.Password, httpClient: client,
 	}, nil
 }
 
@@ -97,15 +110,59 @@ func (client *Client) QueryDeviceHistory(ctx context.Context, query telemetryhis
 	if err != nil {
 		return telemetryhistorymodel.DeviceHistoryResponse{}, err
 	}
-	pointPayload, err := client.execute(ctx, client.pointsQuery(canonical))
+	cursor, snapshotAt, watermark, err := client.resolveSnapshot(ctx, canonical)
 	if err != nil {
 		return telemetryhistorymodel.DeviceHistoryResponse{}, err
 	}
-	metadataPayload, err := client.execute(ctx, client.metadataQuery(canonical))
+	payload, err := client.execute(ctx, client.pointsQuery(canonical, snapshotAt, cursor))
 	if err != nil {
 		return telemetryhistorymodel.DeviceHistoryResponse{}, err
 	}
-	return client.buildResponse(canonical, pointPayload, metadataPayload)
+	return client.buildResponse(canonical, payload, snapshotAt, watermark)
+}
+
+func (client *Client) resolveSnapshot(ctx context.Context, query telemetryhistorymodel.DeviceHistoryQuery) (*historyCursor, time.Time, *time.Time, error) {
+	if query.Cursor != nil {
+		cursor, err := decodeCursor(*query.Cursor, query)
+		if err != nil {
+			return nil, time.Time{}, nil, err
+		}
+		snapshotAt, err := parseClickHouseTime(cursor.SnapshotAt)
+		if err != nil {
+			return nil, time.Time{}, nil, errors.New("history cursor snapshot is invalid")
+		}
+		var watermark *time.Time
+		if cursor.ProjectionWatermark != nil {
+			parsed, err := parseClickHouseTime(*cursor.ProjectionWatermark)
+			if err != nil {
+				return nil, time.Time{}, nil, errors.New("history cursor projection watermark is invalid")
+			}
+			watermark = &parsed
+		}
+		return cursor, snapshotAt, watermark, nil
+	}
+	payload, err := client.execute(ctx, client.snapshotQuery(query))
+	if err != nil {
+		return nil, time.Time{}, nil, err
+	}
+	var row snapshotRow
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	if err := decoder.Decode(&row); err != nil {
+		return nil, time.Time{}, nil, fmt.Errorf("decode ClickHouse history snapshot: %w", err)
+	}
+	snapshotAt, err := parseClickHouseTime(row.SnapshotAt)
+	if err != nil {
+		return nil, time.Time{}, nil, fmt.Errorf("decode ClickHouse history snapshot time: %w", err)
+	}
+	var watermark *time.Time
+	if row.ProjectionWatermark != nil && strings.TrimSpace(*row.ProjectionWatermark) != "" {
+		parsed, err := parseClickHouseTime(*row.ProjectionWatermark)
+		if err != nil {
+			return nil, time.Time{}, nil, fmt.Errorf("decode ClickHouse projection watermark: %w", err)
+		}
+		watermark = &parsed
+	}
+	return nil, snapshotAt, watermark, nil
 }
 
 func (client *Client) execute(ctx context.Context, query string) ([]byte, error) {
@@ -137,78 +194,45 @@ func (client *Client) execute(ctx context.Context, query string) ([]byte, error)
 	return payload, nil
 }
 
-func (client *Client) buildResponse(query telemetryhistorymodel.DeviceHistoryQuery, pointPayload, metadataPayload []byte) (telemetryhistorymodel.DeviceHistoryResponse, error) {
-	series := make(map[string][]telemetryhistorymodel.DeviceHistoryPoint, len(query.Keys))
-	totalCounts := make(map[string]uint64, len(query.Keys))
-	for _, key := range query.Keys {
-		series[key] = []telemetryhistorymodel.DeviceHistoryPoint{}
-	}
-	decoder := json.NewDecoder(bytes.NewReader(pointPayload))
-	returned := 0
+func (client *Client) buildResponse(query telemetryhistorymodel.DeviceHistoryQuery, payload []byte, snapshotAt time.Time, watermark *time.Time) (telemetryhistorymodel.DeviceHistoryResponse, error) {
+	rows := make([]pointRow, 0, query.PageSize+1)
+	decoder := json.NewDecoder(bytes.NewReader(payload))
 	for {
 		var row pointRow
 		if err := decoder.Decode(&row); errors.Is(err, io.EOF) {
 			break
 		} else if err != nil {
-			return telemetryhistorymodel.DeviceHistoryResponse{}, fmt.Errorf("decode ClickHouse history point: %w", err)
+			return telemetryhistorymodel.DeviceHistoryResponse{}, fmt.Errorf("decode ClickHouse history observation: %w", err)
 		}
-		if _, expected := series[row.TelemetryKey]; !expected {
-			return telemetryhistorymodel.DeviceHistoryResponse{}, errors.New("ClickHouse history returned an unrequested key")
-		}
-		sampledAt, err := parseClickHouseTime(row.SampledAt)
+		rows = append(rows, row)
+	}
+	hasNext := len(rows) > query.PageSize
+	if hasNext {
+		rows = rows[:query.PageSize]
+	}
+	observations := make([]telemetryhistorymodel.DeviceHistoryObservation, 0, len(rows))
+	for _, row := range rows {
+		observation, err := decodePointRow(row)
 		if err != nil {
-			return telemetryhistorymodel.DeviceHistoryResponse{}, fmt.Errorf("decode ClickHouse history sampled time: %w", err)
+			return telemetryhistorymodel.DeviceHistoryResponse{}, err
 		}
-		receivedAt, err := parseClickHouseTime(row.ReceivedAt)
+		observations = append(observations, observation)
+	}
+	var nextCursor *string
+	if hasNext && len(observations) > 0 {
+		last := observations[len(observations)-1]
+		encoded, err := encodeCursor(query, snapshotAt, watermark, last)
 		if err != nil {
-			return telemetryhistorymodel.DeviceHistoryResponse{}, fmt.Errorf("decode ClickHouse history received time: %w", err)
+			return telemetryhistorymodel.DeviceHistoryResponse{}, err
 		}
-		series[row.TelemetryKey] = append(series[row.TelemetryKey], telemetryhistorymodel.DeviceHistoryPoint{
-			ObservationID: row.ObservationID, PointID: row.PointID, SensorID: row.SensorID, SampledAt: sampledAt, ReceivedAt: receivedAt,
-			Value: row.Value, Unit: row.Unit, Quality: telemetryhistorymodel.Quality(row.Quality),
-			QualityReasons: append([]string{}, row.QualityReasons...), Revision: row.Revision,
-		})
-		totalCounts[row.TelemetryKey] = row.TotalCount
-		returned++
-	}
-	var metadata metadataRow
-	metadataDecoder := json.NewDecoder(bytes.NewReader(metadataPayload))
-	if err := metadataDecoder.Decode(&metadata); err != nil {
-		return telemetryhistorymodel.DeviceHistoryResponse{}, fmt.Errorf("decode ClickHouse history metadata: %w", err)
-	}
-	var watermark *time.Time
-	if metadata.DataWatermark != nil && strings.TrimSpace(*metadata.DataWatermark) != "" {
-		parsed, err := parseClickHouseTime(*metadata.DataWatermark)
-		if err != nil {
-			return telemetryhistorymodel.DeviceHistoryResponse{}, fmt.Errorf("decode ClickHouse history watermark: %w", err)
-		}
-		watermark = &parsed
-	}
-	truncated := make([]string, 0)
-	responseSeries := make([]telemetryhistorymodel.DeviceHistorySeries, 0, len(query.Keys))
-	partial := watermark == nil || watermark.Before(query.To)
-	for _, key := range query.Keys {
-		points := series[key]
-		if len(points) == 0 {
-			partial = true
-		}
-		if totalCounts[key] > uint64(query.MaxPointsPerKey) {
-			truncated = append(truncated, key)
-			partial = true
-		}
-		responseSeries = append(responseSeries, telemetryhistorymodel.DeviceHistorySeries{Key: key, Points: points})
-	}
-	revisionSuffix := "empty"
-	if metadata.MaximumRevision > 0 {
-		revisionSuffix = strconv.FormatUint(metadata.MaximumRevision, 10)
+		nextCursor = &encoded
 	}
 	response := telemetryhistorymodel.DeviceHistoryResponse{
-		SchemaVersion: 1, TenantID: query.TenantID, SiteID: query.SiteID, DeviceID: query.DeviceID,
-		Series: responseSeries,
+		SchemaVersion: 2, TenantID: query.TenantID, SiteID: query.SiteID, DeviceID: query.DeviceID,
+		Observations: observations,
 		Metadata: telemetryhistorymodel.DeviceHistoryMetadata{
-			RequestedFrom: query.From, RequestedTo: query.To, DataWatermark: watermark,
-			DatasetRevision: client.datasetRevision + ":" + revisionSuffix, Partial: partial,
-			MaxPointsPerKey: query.MaxPointsPerKey, ReturnedPoints: returned, TruncatedKeys: truncated,
+			RequestedFrom: query.From, RequestedTo: query.To, ProjectionWatermark: watermark,
+			PageSize: query.PageSize, ReturnedObservations: len(observations), NextCursor: nextCursor,
 		},
 	}
 	if err := response.ValidateFor(query); err != nil {
@@ -217,65 +241,173 @@ func (client *Client) buildResponse(query telemetryhistorymodel.DeviceHistoryQue
 	return response, nil
 }
 
-func (client *Client) pointsQuery(query telemetryhistorymodel.DeviceHistoryQuery) string {
-	return fmt.Sprintf(`WITH scoped AS (
-  SELECT
-    observation_id,
-    point_id,
-    sensor_id,
-    telemetry_key,
-    sampled_at,
-    received_at,
-    value_number,
-    unit,
-    quality,
-    quality_reasons,
-    source_offset,
-    row_number() OVER (PARTITION BY telemetry_key ORDER BY sampled_at DESC, source_offset DESC, observation_id DESC) AS row_number,
-    count() OVER (PARTITION BY telemetry_key) AS total_count
-  FROM %s.%s
-  WHERE tenant_id = toUUID('%s')
-    AND site_id = toUUID('%s')
-    AND device_id = toUUID('%s')
-    AND telemetry_key IN (%s)
-    AND sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC')
-    AND sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
-    AND acceptance_status = 'ACCEPTED'
-    AND value_number IS NOT NULL
-    AND isFinite(value_number)
-)
-SELECT
-  toString(observation_id) AS observation_id,
-  toString(point_id) AS point_id,
-  if(sensor_id IS NULL, CAST(NULL, 'Nullable(String)'), toString(sensor_id)) AS sensor_id,
-  telemetry_key,
-  formatDateTime(sampled_at, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS sampled_at,
-  formatDateTime(received_at, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS received_at,
-  assumeNotNull(value_number) AS value,
-  unit,
-  quality,
-  quality_reasons,
-  source_offset AS revision,
-  total_count
-FROM scoped
-WHERE row_number <= %d
-ORDER BY telemetry_key, sampled_at, source_offset, observation_id
-FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.From), formatClickHouseTime(query.To), query.MaxPointsPerKey)
+func decodePointRow(row pointRow) (telemetryhistorymodel.DeviceHistoryObservation, error) {
+	sampledAt, err := parseClickHouseTime(row.SampledAt)
+	if err != nil {
+		return telemetryhistorymodel.DeviceHistoryObservation{}, fmt.Errorf("decode ClickHouse history sampled time: %w", err)
+	}
+	receivedAt, err := parseClickHouseTime(row.ReceivedAt)
+	if err != nil {
+		return telemetryhistorymodel.DeviceHistoryObservation{}, fmt.Errorf("decode ClickHouse history received time: %w", err)
+	}
+	value := json.RawMessage(row.ValueJSON)
+	if len(value) == 0 || !json.Valid(value) {
+		return telemetryhistorymodel.DeviceHistoryObservation{}, errors.New("ClickHouse history returned invalid typed JSON value")
+	}
+	return telemetryhistorymodel.DeviceHistoryObservation{
+		ObservationID: row.ObservationID, TelemetryKey: row.TelemetryKey, PointID: row.PointID, SensorID: row.SensorID,
+		PointType: telemetryhistorymodel.PointType(row.PointType), PointRevision: row.PointRevision,
+		SampledAt: sampledAt, ReceivedAt: receivedAt, Acceptance: telemetryhistorymodel.Acceptance(row.Acceptance),
+		ValueType: telemetryhistorymodel.ValueType(row.ValueType), Value: append(json.RawMessage(nil), value...), Unit: row.Unit,
+		Quality: telemetryhistorymodel.Quality(row.Quality), QualityReasons: append([]string{}, row.QualityReasons...),
+		SourcePosition: telemetryhistorymodel.SourcePosition{Partition: row.SourcePartition, Offset: row.SourceOffset, EventID: row.SourceEventID},
+	}, nil
 }
 
-func (client *Client) metadataQuery(query telemetryhistorymodel.DeviceHistoryQuery) string {
-	return fmt.Sprintf(`SELECT
-  if(count() = 0, CAST(NULL, 'Nullable(String)'), formatDateTime(max(sampled_at), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC')) AS data_watermark,
-  maxOrDefault(source_offset) AS maximum_revision
+func (client *Client) snapshotQuery(query telemetryhistorymodel.DeviceHistoryQuery) string {
+	return fmt.Sprintf(`WITH now64(3) AS snapshot_at
+SELECT
+  formatDateTime(snapshot_at, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS snapshot_at,
+  if(count() = 0, CAST(NULL, 'Nullable(String)'), formatDateTime(max(projected_at), '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC')) AS projection_watermark
 FROM %s.%s
 WHERE tenant_id = toUUID('%s')
   AND site_id = toUUID('%s')
   AND device_id = toUUID('%s')
   AND telemetry_key IN (%s)
-  AND acceptance_status = 'ACCEPTED'
-  AND value_number IS NOT NULL
-  AND isFinite(value_number)
-FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys))
+  AND sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC')
+  AND sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
+  AND projected_at < snapshot_at
+  AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
+  AND point_id IS NOT NULL
+  AND point_revision IS NOT NULL
+  AND value_type IN ('NUMBER', 'STRING', 'BOOLEAN', 'JSON')
+  AND value_json IS NOT NULL
+FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.From), formatClickHouseTime(query.To))
+}
+
+func (client *Client) pointsQuery(query telemetryhistorymodel.DeviceHistoryQuery, snapshotAt time.Time, cursor *historyCursor) string {
+	cursorPredicate := ""
+	if cursor != nil {
+		cursorPredicate = fmt.Sprintf(`
+  AND (telemetry_key > '%s'
+    OR (telemetry_key = '%s' AND sampled_at > parseDateTime64BestEffort('%s', 3, 'UTC'))
+    OR (telemetry_key = '%s' AND sampled_at = parseDateTime64BestEffort('%s', 3, 'UTC') AND toString(observation_id) > '%s'))`,
+			cursor.LastTelemetryKey, cursor.LastTelemetryKey, cursor.LastSampledAt, cursor.LastTelemetryKey, cursor.LastSampledAt, cursor.LastObservationID)
+	}
+	return fmt.Sprintf(`SELECT
+  toString(observation_id) AS observation_id,
+  toString(assumeNotNull(point_id)) AS point_id,
+  if(sensor_id IS NULL, CAST(NULL, 'Nullable(String)'), toString(sensor_id)) AS sensor_id,
+  telemetry_key,
+  assumeNotNull(point_type) AS point_type,
+  assumeNotNull(point_revision) AS point_revision,
+  formatDateTime(sampled_at, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS sampled_at,
+  formatDateTime(received_at, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS received_at,
+  acceptance_status,
+  assumeNotNull(value_type) AS value_type,
+  assumeNotNull(value_json) AS value_json,
+  unit,
+  quality,
+  quality_reasons,
+  toString(source_event_id) AS source_event_id,
+  source_partition,
+  source_offset
+FROM %s.%s
+WHERE tenant_id = toUUID('%s')
+  AND site_id = toUUID('%s')
+  AND device_id = toUUID('%s')
+  AND telemetry_key IN (%s)
+  AND sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC')
+  AND sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
+  AND projected_at < parseDateTime64BestEffort('%s', 3, 'UTC')
+  AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
+  AND point_id IS NOT NULL
+  AND point_type IS NOT NULL
+  AND point_revision IS NOT NULL
+  AND value_type IN ('NUMBER', 'STRING', 'BOOLEAN', 'JSON')
+  AND value_json IS NOT NULL%s
+ORDER BY telemetry_key, sampled_at, toString(observation_id)
+LIMIT %d
+FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.From), formatClickHouseTime(query.To), formatClickHouseTime(snapshotAt), cursorPredicate, query.PageSize+1)
+}
+
+func encodeCursor(query telemetryhistorymodel.DeviceHistoryQuery, snapshotAt time.Time, watermark *time.Time, last telemetryhistorymodel.DeviceHistoryObservation) (string, error) {
+	scope, err := query.CursorScopeDigest()
+	if err != nil {
+		return "", err
+	}
+	cursor := historyCursor{
+		Version: 1, ScopeDigest: scope, SnapshotAt: formatClickHouseTime(snapshotAt),
+		LastTelemetryKey: last.TelemetryKey, LastSampledAt: formatClickHouseTime(last.SampledAt), LastObservationID: last.ObservationID,
+	}
+	if watermark != nil {
+		value := formatClickHouseTime(*watermark)
+		cursor.ProjectionWatermark = &value
+	}
+	payload, err := json.Marshal(cursor)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(payload), nil
+}
+
+func decodeCursor(encoded string, query telemetryhistorymodel.DeviceHistoryQuery) (*historyCursor, error) {
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(encoded))
+	if err != nil || len(payload) == 0 || len(payload) > telemetryhistorymodel.MaximumHistoryCursorBytes {
+		return nil, errors.New("history cursor is invalid")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var cursor historyCursor
+	if err := decoder.Decode(&cursor); err != nil || ensureJSONEOF(decoder) != nil {
+		return nil, errors.New("history cursor is invalid")
+	}
+	scope, err := query.CursorScopeDigest()
+	if err != nil || cursor.Version != 1 || cursor.ScopeDigest != scope || !telemetryKeyInQuery(cursor.LastTelemetryKey, query.Keys) {
+		return nil, errors.New("history cursor does not match the query")
+	}
+	snapshotAt, err := parseClickHouseTime(cursor.SnapshotAt)
+	if err != nil {
+		return nil, errors.New("history cursor snapshot is invalid")
+	}
+	lastSampledAt, err := parseClickHouseTime(cursor.LastSampledAt)
+	if err != nil || lastSampledAt.Before(query.From) || !lastSampledAt.Before(query.To) {
+		return nil, errors.New("history cursor position is invalid")
+	}
+	if !uuidV7Pattern.MatchString(cursor.LastObservationID) {
+		return nil, errors.New("history cursor observation identity is invalid")
+	}
+	cursor.SnapshotAt = formatClickHouseTime(snapshotAt)
+	cursor.LastSampledAt = formatClickHouseTime(lastSampledAt)
+	if cursor.ProjectionWatermark != nil {
+		watermark, err := parseClickHouseTime(*cursor.ProjectionWatermark)
+		if err != nil {
+			return nil, errors.New("history cursor projection watermark is invalid")
+		}
+		canonical := formatClickHouseTime(watermark)
+		cursor.ProjectionWatermark = &canonical
+	}
+	return &cursor, nil
+}
+
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("unexpected trailing JSON")
+		}
+		return err
+	}
+	return nil
+}
+
+func telemetryKeyInQuery(key string, keys []string) bool {
+	for _, candidate := range keys {
+		if key == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func quotedKeys(keys []string) string {

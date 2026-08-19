@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	EnergySeriesPath       = "/internal/v1/analytics/energy-series"
-	DeviceHistoryPath      = "/internal/v1/telemetry/device-history"
-	maximumRequestBodySize = int64(64 << 10)
+	EnergySeriesPath           = "/internal/v1/analytics/energy-series"
+	DeviceHistoryPath          = "/internal/v1/telemetry/device-history"
+	DeviceHistoryAggregatePath = "/internal/v1/telemetry/device-history:aggregate"
+	maximumRequestBodySize     = int64(64 << 10)
 )
 
 type ServerConfig struct {
@@ -95,7 +96,7 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 	started := server.now()
 	routeName := "unmatched"
 	switch request.URL.Path {
-	case EnergySeriesPath, DeviceHistoryPath:
+	case EnergySeriesPath, DeviceHistoryPath, DeviceHistoryAggregatePath:
 		routeName = request.URL.Path
 	}
 	ctx := server.observability.Tracer.ExtractHTTP(request.Context(), request.Header)
@@ -132,7 +133,7 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		)
 	}()
 
-	if request.URL.Path != EnergySeriesPath && request.URL.Path != DeviceHistoryPath {
+	if request.URL.Path != EnergySeriesPath && request.URL.Path != DeviceHistoryPath && request.URL.Path != DeviceHistoryAggregatePath {
 		writeProblem(writer, http.StatusNotFound, "ANALYTICS_ROUTE_NOT_FOUND", "The requested analytics route does not exist.", false)
 		return
 	}
@@ -154,6 +155,10 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 
 	if request.URL.Path == DeviceHistoryPath {
 		server.serveDeviceHistory(writer, request, peerSPIFFE)
+		return
+	}
+	if request.URL.Path == DeviceHistoryAggregatePath {
+		server.serveDeviceHistoryAggregate(writer, request, peerSPIFFE)
 		return
 	}
 
@@ -243,6 +248,54 @@ func (server *handler) serveDeviceHistory(writer http.ResponseWriter, request *h
 	}
 	if err := response.ValidateFor(canonical); err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "TELEMETRY_HISTORY_RESPONSE_INVALID", "The Device History engine returned an invalid response.", true)
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, response)
+}
+
+func (server *handler) serveDeviceHistoryAggregate(writer http.ResponseWriter, request *http.Request, peerSPIFFE string) {
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, maximumRequestBodySize))
+	decoder.DisallowUnknownFields()
+	var query telemetryhistorymodel.DeviceHistoryAggregateQuery
+	if err := decoder.Decode(&query); err != nil || ensureJSONEOF(decoder) != nil {
+		writeProblem(writer, http.StatusBadRequest, "TELEMETRY_HISTORY_AGGREGATE_REQUEST_INVALID", "The Device History aggregate request body is invalid.", false)
+		return
+	}
+	canonical, err := query.Canonical()
+	if err != nil {
+		writeProblem(writer, http.StatusBadRequest, "TELEMETRY_HISTORY_AGGREGATE_QUERY_INVALID", "The Device History aggregate query exceeds the supported product boundary.", false)
+		return
+	}
+	scope, err := canonical.ScopeDigest()
+	if err != nil {
+		writeProblem(writer, http.StatusBadRequest, "TELEMETRY_HISTORY_AGGREGATE_QUERY_INVALID", "The Device History aggregate query exceeds the supported product boundary.", false)
+		return
+	}
+	claims, err := identitycontext.VerifyDelegation(server.delegationPublicKey, request.Header.Get("X-Delegation-Grant"))
+	if err != nil {
+		writeProblem(writer, http.StatusUnauthorized, "TELEMETRY_HISTORY_AGGREGATE_DELEGATION_INVALID", "The Device History aggregate delegation grant is invalid.", false)
+		return
+	}
+	if claims.PrincipalID == "" || claims.TenantID != canonical.TenantID || identitycontext.ValidateDelegationFromIssuer(
+		claims,
+		server.now(),
+		server.delegationIssuerSPIFFE,
+		peerSPIFFE,
+		server.audience,
+		telemetryhistorymodel.DeviceHistoryAggregateAction,
+		scope,
+	) != nil {
+		writeProblem(writer, http.StatusForbidden, "TELEMETRY_HISTORY_AGGREGATE_DELEGATION_REJECTED", "The Device History aggregate delegation grant is not authorized for this query.", false)
+		return
+	}
+	response, err := server.historyEngine.QueryDeviceHistoryAggregate(request.Context(), canonical)
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "TELEMETRY_HISTORY_AGGREGATE_ENGINE_UNAVAILABLE", "The Device History aggregate engine could not complete the request.", true)
+		return
+	}
+	if err := response.ValidateFor(canonical); err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "TELEMETRY_HISTORY_AGGREGATE_RESPONSE_INVALID", "The Device History aggregate engine returned an invalid response.", true)
 		return
 	}
 	writer.Header().Set("Cache-Control", "private, no-store")

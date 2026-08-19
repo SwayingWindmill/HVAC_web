@@ -1,11 +1,11 @@
 openapi: 3.1.0
 info:
   title: HVAC Telemetry Query Internal API
-  version: 0.1.0
+  version: 0.2.0
   description: >-
-    Internal, mTLS-protected analytics API used by Platform Gateway and Operations
-    Agent. Delegation grants are Gateway-issued, bind the actual mTLS presenter as
-    executingService and never authorize arbitrary Cube members or SQL.
+    Internal, mTLS-protected analytics and telemetry-history API used by Platform Gateway
+    and Operations Agent. Delegation grants are Gateway-issued, bind the actual mTLS
+    presenter as executingService and never authorize arbitrary Cube members or SQL.
 servers:
   - url: https://telemetry-query-service:18447
 paths:
@@ -29,22 +29,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/EnergySeriesResponse'
-        '400':
-          $ref: '#/components/responses/Problem'
-        '401':
-          $ref: '#/components/responses/Problem'
-        '403':
-          $ref: '#/components/responses/Problem'
-        '404':
-          $ref: '#/components/responses/Problem'
-        '405':
-          $ref: '#/components/responses/Problem'
-        '503':
-          $ref: '#/components/responses/Problem'
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '405': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
   /internal/v1/telemetry/device-history:
     post:
       operationId: queryDeviceHistory
-      summary: Query bounded accepted numeric Device history with sampled-at Point/Sensor identity
+      summary: Query bounded typed Device observation history
       security:
         - workloadMTLS: []
           delegationGrant: []
@@ -56,21 +50,41 @@ paths:
               $ref: '#/components/schemas/DeviceHistoryQuery'
       responses:
         '200':
-          description: Device history whose samples preserve the frozen Registry Point/Sensor binding at sampledAt
+          description: Typed Device history preserving Observation, Point/Sensor, source position and Point revision
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/DeviceHistoryResponse'
-        '400':
-          $ref: '#/components/responses/Problem'
-        '401':
-          $ref: '#/components/responses/Problem'
-        '403':
-          $ref: '#/components/responses/Problem'
-        '405':
-          $ref: '#/components/responses/Problem'
-        '503':
-          $ref: '#/components/responses/Problem'
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '405': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
+  /internal/v1/telemetry/device-history:aggregate:
+    post:
+      operationId: queryDeviceHistoryAggregate
+      summary: Aggregate Device history with Point-type and Site-calendar semantics
+      security:
+        - workloadMTLS: []
+          delegationGrant: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceHistoryAggregateQuery'
+      responses:
+        '200':
+          description: Point-type-aware aggregate history with projection watermark and explicit quality policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceHistoryAggregateResponse'
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '405': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     workloadMTLS:
@@ -92,135 +106,69 @@ components:
     EnergySeriesQuery:
       type: object
       additionalProperties: false
-      required:
-        - tenantId
-        - siteId
-        - energyType
-        - granularity
-        - timezone
-        - from
-        - to
-        - qualityPolicy
+      required: [tenantId, siteId, energyType, granularity, timezone, from, to, qualityPolicy]
       properties:
-        tenantId:
-          type: string
-          format: uuid
-          description: UUIDv7 tenant identifier bound by the delegation grant.
-        siteId:
-          type: string
-          format: uuid
-          description: UUIDv7 site identifier bound by the delegation grant.
-        energyType:
-          type: string
-          enum: [electricity]
-        granularity:
-          type: string
-          enum: [hour, day, month]
+        tenantId: { type: string, format: uuid }
+        siteId: { type: string, format: uuid }
+        energyType: { type: string, enum: [electricity] }
+        granularity: { type: string, enum: [hour, day, month] }
         timezone:
           type: string
           description: Explicit IANA timezone used for business-period boundaries.
           example: Asia/Shanghai
-        from:
-          type: string
-          format: date-time
-          description: Inclusive range start.
+        from: { type: string, format: date-time }
         to:
           type: string
           format: date-time
-          description: Exclusive range end; minimum range is 1 millisecond and maximum supported range is 366 days.
-        qualityPolicy:
-          type: string
-          enum: [VALID_ONLY, VALID_AND_SUSPECT]
+          description: Exclusive range end; maximum supported range is 366 days.
+        qualityPolicy: { type: string, enum: [VALID_ONLY, VALID_AND_SUSPECT] }
     EnergySeriesPoint:
       type: object
       additionalProperties: false
       required: [periodStart, periodEnd, energyKWh]
       properties:
-        periodStart:
-          type: string
-          format: date-time
-        periodEnd:
-          type: string
-          format: date-time
-        energyKWh:
-          type: number
-          format: double
+        periodStart: { type: string, format: date-time }
+        periodEnd: { type: string, format: date-time }
+        energyKWh: { type: number, format: double }
     QualitySummary:
       type: object
       additionalProperties: false
       required: [valid, suspect, invalid]
       properties:
-        valid:
-          type: integer
-          format: int64
-          description: Count of returned additive interval facts classified VALID.
-        suspect:
-          type: integer
-          format: int64
-          description: Count of returned additive interval facts classified SUSPECT.
-        invalid:
-          type: integer
-          format: int64
-          description: Count of returned additive interval facts classified INVALID.
+        valid: { type: integer, format: int64 }
+        suspect: { type: integer, format: int64 }
+        invalid: { type: integer, format: int64 }
     EnergySeriesMetadata:
       type: object
       additionalProperties: false
-      required:
-        - requestedGranularity
-        - actualGranularity
-        - datasetRevision
-        - partial
-        - qualitySummary
+      required: [requestedGranularity, actualGranularity, datasetRevision, partial, qualitySummary]
       properties:
-        requestedGranularity:
-          type: string
-          enum: [hour, day, month]
-        actualGranularity:
-          type: string
-          enum: [hour, day, month]
-        dataWatermark:
-          type: string
-          format: date-time
-        aggregateWatermark:
-          type: string
-          format: date-time
-        datasetRevision:
-          type: string
-          minLength: 1
-        partial:
-          type: boolean
-        qualitySummary:
-          $ref: '#/components/schemas/QualitySummary'
+        requestedGranularity: { type: string, enum: [hour, day, month] }
+        actualGranularity: { type: string, enum: [hour, day, month] }
+        dataWatermark: { type: string, format: date-time }
+        aggregateWatermark: { type: string, format: date-time }
+        datasetRevision: { type: string, minLength: 1 }
+        partial: { type: boolean }
+        qualitySummary: { $ref: '#/components/schemas/QualitySummary' }
     EnergySeriesResponse:
       type: object
       additionalProperties: false
       required: [schemaVersion, points, metadata]
       properties:
-        schemaVersion:
-          type: integer
-          const: 1
+        schemaVersion: { type: integer, const: 1 }
         points:
           type: array
           maxItems: 10000
-          items:
-            $ref: '#/components/schemas/EnergySeriesPoint'
-        metadata:
-          $ref: '#/components/schemas/EnergySeriesMetadata'
+          items: { $ref: '#/components/schemas/EnergySeriesPoint' }
+        metadata: { $ref: '#/components/schemas/EnergySeriesMetadata' }
     DeviceHistoryQuery:
       type: object
       additionalProperties: false
-      required: [tenantId, siteId, deviceId, keys, from, to, maxPointsPerKey]
+      required: [tenantId, siteId, deviceId, keys, from, to, pageSize]
       properties:
-        tenantId:
-          type: string
-          format: uuid
-          description: IAM-authoritative Tenant that contains the Device Site and is bound by the delegation grant.
-        siteId:
-          type: string
-          format: uuid
-        deviceId:
-          type: string
-          format: uuid
+        tenantId: { type: string, format: uuid }
+        siteId: { type: string, format: uuid }
+        deviceId: { type: string, format: uuid }
         keys:
           type: array
           minItems: 1
@@ -228,152 +176,189 @@ components:
           uniqueItems: true
           items:
             type: string
-            pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        from:
-          type: string
-          format: date-time
-          description: Inclusive UTC range start.
-        to:
-          type: string
-          format: date-time
-          description: Exclusive UTC range end; maximum range is 24 hours.
-        maxPointsPerKey:
-          type: integer
-          minimum: 1
-          maximum: 500
-    DeviceHistoryPoint:
+            pattern: '^[A-Za-z][A-Za-z0-9._:-]{0,127}$'
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        pageSize: { type: integer, minimum: 1, maximum: 500 }
+        cursor: { type: string, minLength: 1, maxLength: 4096 }
+    DeviceHistoryObservation:
       type: object
       additionalProperties: false
-      required: [observationId, pointId, sensorId, sampledAt, receivedAt, value, unit, quality, qualityReasons, revision]
+      required: [observationId, telemetryKey, pointId, sensorId, pointType, pointRevision, sampledAt, receivedAt, acceptance, valueType, value, unit, quality, qualityReasons, sourcePosition]
       properties:
-        observationId:
+        observationId: { type: string, format: uuid }
+        telemetryKey:
           type: string
-          format: uuid
-        pointId:
-          type: string
-          format: uuid
-          description: Registry Telemetry Point identity frozen for this sample at sampledAt.
+          pattern: '^[A-Za-z][A-Za-z0-9._:-]{0,127}$'
+        pointId: { type: string, format: uuid }
         sensorId:
           oneOf:
-            - type: string
-              format: uuid
-            - type: 'null'
-          description: Registry Sensor identity frozen for this sample at sampledAt, or null for points without a Sensor.
-        sampledAt:
-          type: string
-          format: date-time
-        receivedAt:
-          type: string
-          format: date-time
-        value:
-          type: number
-          format: double
-        unit:
-          type: [string, 'null']
-          maxLength: 64
-        quality:
-          type: string
-          enum: [GOOD, SUSPECT]
+            - { type: string, format: uuid }
+            - { type: 'null' }
+        pointType: { type: string, enum: [TELEMETRY, COUNTER, STATE, SETTING, COMMAND] }
+        pointRevision: { type: integer, format: int64, minimum: 1 }
+        sampledAt: { type: string, format: date-time }
+        receivedAt: { type: string, format: date-time }
+        acceptance: { type: string, enum: [ACCEPTED, OUT_OF_ORDER] }
+        valueType: { type: string, enum: [NUMBER, STRING, BOOLEAN, JSON] }
+        value: {}
+        unit: { type: [string, 'null'], maxLength: 64 }
+        quality: { type: string, enum: [GOOD, PARTIAL, ESTIMATED, MANUAL, STALE, INVALID] }
         qualityReasons:
           type: array
           maxItems: 16
           uniqueItems: true
           items:
             type: string
-            pattern: '^[A-Z][A-Z0-9_]+$'
-        revision:
-          type: integer
-          format: int64
-          minimum: 0
-    DeviceHistorySeries:
-      type: object
-      additionalProperties: false
-      required: [key, points]
-      properties:
-        key:
-          type: string
-          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        points:
-          type: array
-          maxItems: 500
-          items:
-            $ref: '#/components/schemas/DeviceHistoryPoint'
+            pattern: '^[A-Z][A-Z0-9_]*$'
+        sourcePosition:
+          type: object
+          additionalProperties: false
+          required: [partition, offset, eventId]
+          properties:
+            partition: { type: string, minLength: 1, maxLength: 256 }
+            offset: { type: integer, format: int64, minimum: 0 }
+            eventId: { type: string, format: uuid }
     DeviceHistoryMetadata:
       type: object
       additionalProperties: false
-      required: [requestedFrom, requestedTo, dataWatermark, datasetRevision, partial, maxPointsPerKey, returnedPoints, truncatedKeys]
+      required: [requestedFrom, requestedTo, projectionWatermark, pageSize, returnedObservations, nextCursor]
       properties:
-        requestedFrom:
-          type: string
-          format: date-time
-        requestedTo:
-          type: string
-          format: date-time
-        dataWatermark:
+        requestedFrom: { type: string, format: date-time }
+        requestedTo: { type: string, format: date-time }
+        projectionWatermark:
           oneOf:
-            - type: string
-              format: date-time
-            - type: 'null'
-        datasetRevision:
-          type: string
-          minLength: 1
-          maxLength: 128
-        partial:
-          type: boolean
-        maxPointsPerKey:
-          type: integer
-          minimum: 1
-          maximum: 500
-        returnedPoints:
-          type: integer
-          minimum: 0
-          maximum: 4000
-        truncatedKeys:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+        pageSize: { type: integer, minimum: 1, maximum: 500 }
+        returnedObservations: { type: integer, minimum: 0, maximum: 500 }
+        nextCursor: { type: [string, 'null'], maxLength: 4096 }
+    DeviceHistoryResponse:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, tenantId, siteId, deviceId, observations, metadata]
+      properties:
+        schemaVersion: { type: integer, const: 2 }
+        tenantId: { type: string, format: uuid }
+        siteId: { type: string, format: uuid }
+        deviceId: { type: string, format: uuid }
+        observations:
           type: array
+          maxItems: 500
+          items: { $ref: '#/components/schemas/DeviceHistoryObservation' }
+        metadata: { $ref: '#/components/schemas/DeviceHistoryMetadata' }
+    DeviceHistoryAggregateQuery:
+      type: object
+      additionalProperties: false
+      required: [tenantId, siteId, deviceId, keys, from, to, granularity, timezone, qualityPolicy]
+      properties:
+        tenantId: { type: string, format: uuid }
+        siteId: { type: string, format: uuid }
+        deviceId: { type: string, format: uuid }
+        keys:
+          type: array
+          minItems: 1
           maxItems: 8
           uniqueItems: true
           items:
             type: string
-            pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-    DeviceHistoryResponse:
+            pattern: '^[A-Za-z][A-Za-z0-9._:-]{0,127}$'
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        granularity: { type: string, enum: [HOUR, DAY, WEEK, MONTH] }
+        timezone: { type: string, minLength: 1, maxLength: 128 }
+        qualityPolicy: { type: string, enum: [VALID_ONLY, USABLE] }
+    DeviceHistoryAggregateBucket:
       type: object
       additionalProperties: false
-      required: [schemaVersion, tenantId, siteId, deviceId, series, metadata]
+      required: [telemetryKey, pointId, pointRevision, pointType, unit, periodStart, periodEnd, quality, completeness]
       properties:
-        schemaVersion:
-          type: integer
-          const: 1
-        tenantId:
-          type: string
-          format: uuid
-        siteId:
-          type: string
-          format: uuid
-        deviceId:
-          type: string
-          format: uuid
-        series:
+        telemetryKey: { type: string }
+        pointId: { type: string, format: uuid }
+        pointRevision: { type: integer, format: int64, minimum: 1 }
+        pointType: { type: string, enum: [TELEMETRY, COUNTER, STATE] }
+        unit: { type: [string, 'null'], maxLength: 64 }
+        periodStart: { type: string, format: date-time }
+        periodEnd: { type: string, format: date-time }
+        quality:
+          type: object
+          additionalProperties: false
+          required: [good, partial, estimated, manual, stale, invalid]
+          properties:
+            good: { type: integer, format: int64, minimum: 0 }
+            partial: { type: integer, format: int64, minimum: 0 }
+            estimated: { type: integer, format: int64, minimum: 0 }
+            manual: { type: integer, format: int64, minimum: 0 }
+            stale: { type: integer, format: int64, minimum: 0 }
+            invalid: { type: integer, format: int64, minimum: 0 }
+        completeness: { type: number, minimum: 0, maximum: 1 }
+        gauge:
+          type: object
+          additionalProperties: false
+          required: [average, minimum, maximum, first, last, sampleCount]
+          properties:
+            average: { type: number }
+            minimum: { type: number }
+            maximum: { type: number }
+            first: { type: number }
+            last: { type: number }
+            sampleCount: { type: integer, format: int64, minimum: 1 }
+        counter:
+          type: object
+          additionalProperties: false
+          required: [deltaSum, deltaCount, resetCount, rolloverCount, excludedTransitionCount]
+          properties:
+            deltaSum: { type: number }
+            deltaCount: { type: integer, format: int64, minimum: 0 }
+            resetCount: { type: integer, format: int64, minimum: 0 }
+            rolloverCount: { type: integer, format: int64, minimum: 0 }
+            excludedTransitionCount: { type: integer, format: int64, minimum: 0 }
+        state:
+          type: object
+          additionalProperties: false
+          required: [valueType, lastValue, sampleCount, changeCount]
+          properties:
+            valueType: { type: string, enum: [NUMBER, STRING, BOOLEAN, JSON] }
+            lastValue: {}
+            sampleCount: { type: integer, format: int64, minimum: 1 }
+            changeCount: { type: integer, format: int64, minimum: 0 }
+    DeviceHistoryAggregateMetadata:
+      type: object
+      additionalProperties: false
+      required: [requestedFrom, requestedTo, granularity, timezone, qualityPolicy, projectionWatermark, returnedBuckets]
+      properties:
+        requestedFrom: { type: string, format: date-time }
+        requestedTo: { type: string, format: date-time }
+        granularity: { type: string, enum: [HOUR, DAY, WEEK, MONTH] }
+        timezone: { type: string }
+        qualityPolicy: { type: string, enum: [VALID_ONLY, USABLE] }
+        projectionWatermark:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+        returnedBuckets: { type: integer, minimum: 0, maximum: 1000 }
+    DeviceHistoryAggregateResponse:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, tenantId, siteId, deviceId, buckets, metadata]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        tenantId: { type: string, format: uuid }
+        siteId: { type: string, format: uuid }
+        deviceId: { type: string, format: uuid }
+        buckets:
           type: array
-          minItems: 1
-          maxItems: 8
-          items:
-            $ref: '#/components/schemas/DeviceHistorySeries'
-        metadata:
-          $ref: '#/components/schemas/DeviceHistoryMetadata'
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/DeviceHistoryAggregateBucket' }
+        metadata: { $ref: '#/components/schemas/DeviceHistoryAggregateMetadata' }
     ProblemDetails:
       type: object
       additionalProperties: false
       required: [type, title, status, code, detail, retryable]
       properties:
-        type:
-          type: string
-        title:
-          type: string
-        status:
-          type: integer
-        code:
-          type: string
-        detail:
-          type: string
-        retryable:
-          type: boolean
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        retryable: { type: boolean }

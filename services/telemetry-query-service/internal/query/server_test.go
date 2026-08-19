@@ -48,16 +48,25 @@ func (stub *engineStub) QueryEnergySeries(_ context.Context, caller analytics.Ca
 }
 
 type historyEngineStub struct {
-	response telemetryhistorymodel.DeviceHistoryResponse
-	err      error
-	query    telemetryhistorymodel.DeviceHistoryQuery
-	calls    int
+	response          telemetryhistorymodel.DeviceHistoryResponse
+	aggregateResponse telemetryhistorymodel.DeviceHistoryAggregateResponse
+	err               error
+	query             telemetryhistorymodel.DeviceHistoryQuery
+	aggregateQuery    telemetryhistorymodel.DeviceHistoryAggregateQuery
+	calls             int
+	aggregateCalls    int
 }
 
 func (stub *historyEngineStub) QueryDeviceHistory(_ context.Context, query telemetryhistorymodel.DeviceHistoryQuery) (telemetryhistorymodel.DeviceHistoryResponse, error) {
 	stub.calls++
 	stub.query = query
 	return stub.response, stub.err
+}
+
+func (stub *historyEngineStub) QueryDeviceHistoryAggregate(_ context.Context, query telemetryhistorymodel.DeviceHistoryAggregateQuery) (telemetryhistorymodel.DeviceHistoryAggregateResponse, error) {
+	stub.aggregateCalls++
+	stub.aggregateQuery = query
+	return stub.aggregateResponse, stub.err
 }
 
 func TestHandlerReturnsAuthorizedEnergySeries(t *testing.T) {
@@ -269,21 +278,20 @@ func (harness serverHarness) serveWithGrant(
 		t.Fatal(err)
 	}
 	grant, err := identitycontext.SignDelegation(harness.signer, identitycontext.DelegationClaims{
-		Issuer:               testPresenter,
-		Subject:              "user-1",
-		SubjectIssuer:        "issuer-test",
-		PrincipalID:          principalID,
-		ExecutingService:     presenterSPIFFE,
-		Audience:             testAudience,
-		ActingOrganizationID: testOrganizationID,
-		TenantID:             testTenantID,
-		Actions:              []string{action},
-		Scopes:               []string{scope},
-		PolicyRevision:       "analytics-policy:1",
-		SessionID:            "session-test",
-		IssuedAt:             issuedAt.Unix(),
-		ExpiresAt:            expiresAt.Unix(),
-		TokenID:              "token-test",
+		Issuer:           testPresenter,
+		Subject:          "user-1",
+		SubjectIssuer:    "issuer-test",
+		PrincipalID:      principalID,
+		ExecutingService: presenterSPIFFE,
+		Audience:         testAudience,
+		TenantID:         testTenantID,
+		Actions:          []string{action},
+		Scopes:           []string{scope},
+		PolicyRevision:   "analytics-policy:1",
+		SessionID:        "session-test",
+		IssuedAt:         issuedAt.Unix(),
+		ExpiresAt:        expiresAt.Unix(),
+		TokenID:          "token-test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -306,13 +314,13 @@ func (harness serverHarness) serveWithGrant(
 
 func validEnergyQuery() analyticsmodel.EnergySeriesQuery {
 	return analyticsmodel.EnergySeriesQuery{
-		TenantID:       testTenantID,
-		SiteID:         testSiteID,
-		EnergyType:     analyticsmodel.EnergyTypeElectricity,
-		Granularity:    analyticsmodel.GranularityDay,
-		Timezone:       "Asia/Shanghai",
-		From:           time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
-		To:             time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
-		QualityPolicy:  analyticsmodel.QualityPolicyValidOnly,
+		TenantID:      testTenantID,
+		SiteID:        testSiteID,
+		EnergyType:    analyticsmodel.EnergyTypeElectricity,
+		Granularity:   analyticsmodel.GranularityDay,
+		Timezone:      "Asia/Shanghai",
+		From:          time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		To:            time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
 	}
 }

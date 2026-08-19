@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { CurrentPrincipalResponse, Site } from '../../api/generated/platformGateway.gen.ts';
-import type { DeviceHistorySeries, S2TelemetryClient } from '../../api/generated/s2Telemetry.gen.ts';
+import type { DeviceHistoryObservation, S2TelemetryClient } from '../../api/generated/s2Telemetry.gen.ts';
 import type { ProtectedScopeRequestToken } from '../protected-scope.ts';
 import type { RealAssetsPointDefinition } from './catalog.ts';
 import {
@@ -13,6 +13,7 @@ import {
   historySeriesUnit,
   listRealAssetsTrendDefinitions,
   loadRealAssetsHistory,
+  numericHistoryObservations,
   realAssetsHistoryQueryKey,
   realAssetsHistoryRevisionKey,
   type RealAssetsHistoryQuery,
@@ -44,12 +45,12 @@ interface HistorySelection {
 
 function chartOption(
   definition: RealAssetsPointDefinition,
-  series: DeviceHistorySeries,
+  observations: readonly DeviceHistoryObservation[],
   query: RealAssetsHistoryQuery,
   timezone: string,
 ) {
-  const unit = historySeriesUnit(series.points, definition.defaultUnit);
-  const data = buildRealAssetsTrendData(series.points, query.range, query.maxPointsPerKey);
+  const unit = historySeriesUnit(observations, definition.defaultUnit);
+  const data = buildRealAssetsTrendData(observations, query.range, query.pageSize);
   const description = `${definition.label}，${REAL_ASSETS_HISTORY_RANGES[query.range].label}，Site 时区 ${timezone}。断点表示缺失或 Point/Sensor 历史身份切换，零值表示真实零，非 GOOD 质量点保持可见。`;
   return {
     animation: false,
@@ -112,38 +113,34 @@ function chartOption(
 
 function SeriesPanel({
   definition,
-  series,
+  observations,
   query,
   timezone,
   partial,
-  truncated,
-  datasetRevision,
-  dataWatermark,
+  projectionWatermark,
 }: {
   readonly definition: RealAssetsPointDefinition;
-  readonly series: DeviceHistorySeries;
+  readonly observations: readonly DeviceHistoryObservation[];
   readonly query: RealAssetsHistoryQuery;
   readonly timezone: string;
   readonly partial: boolean;
-  readonly truncated: boolean;
-  readonly datasetRevision: string;
-  readonly dataWatermark: string | null;
+  readonly projectionWatermark: string | null;
 }) {
-  const option = useMemo(() => chartOption(definition, series, query, timezone), [definition, query, series, timezone]);
-  const unit = historySeriesUnit(series.points, definition.defaultUnit);
-  const first = series.points.at(0);
-  const last = series.points.at(-1);
-  const degradedQualityCount = series.points.filter((point) => point.quality !== 'GOOD').length;
-  const zeroCount = series.points.filter((point) => point.value === 0).length;
+  const option = useMemo(() => chartOption(definition, observations, query, timezone), [definition, observations, query, timezone]);
+  const unit = historySeriesUnit(observations, definition.defaultUnit);
+  const first = observations.at(0);
+  const last = observations.at(-1);
+  const degradedQualityCount = observations.filter((observation) => observation.quality !== 'GOOD').length;
+  const zeroCount = observations.filter((observation) => observation.valueType === 'NUMBER' && observation.value === 0).length;
   let previousIdentity: string | null = null;
   let identitySegmentCount = 0;
-  for (const point of series.points) {
-    const identity = `${point.pointId}:${point.sensorId ?? 'no-sensor'}`;
+  for (const observation of observations) {
+    const identity = `${observation.pointId}:${observation.sensorId ?? 'no-sensor'}:${observation.pointRevision}`;
     if (identity !== previousIdentity) identitySegmentCount += 1;
     previousIdentity = identity;
   }
-  const latestIdentity = last ? `Point ${last.pointId}${last.sensorId ? ` · Sensor ${last.sensorId}` : ' · 无独立 Sensor'}` : '无历史身份';
-  const businessState = series.points.length === 0 ? 'EMPTY' : truncated || partial ? 'PARTIAL' : degradedQualityCount > 0 ? 'QUALITY_DEGRADED' : 'READY';
+  const latestIdentity = last ? `Point ${last.pointId} · rev ${last.pointRevision}${last.sensorId ? ` · Sensor ${last.sensorId}` : ' · 无独立 Sensor'}` : '无历史身份';
+  const businessState = observations.length === 0 ? 'EMPTY' : partial ? 'PARTIAL' : degradedQualityCount > 0 ? 'QUALITY_DEGRADED' : 'READY';
 
   return (
     <article className="real-assets-history__series" data-history-key={definition.key} data-business-state={businessState} data-unit={unit} data-history-identity-count={identitySegmentCount}>
@@ -152,20 +149,20 @@ function SeriesPanel({
         <span>{unit}</span>
       </header>
       <dl className="real-assets-history__series-facts">
-        <div><dt>返回点数</dt><dd>{series.points.length}</dd></div>
+        <div><dt>返回点数</dt><dd>{observations.length}</dd></div>
         <div><dt>非 GOOD 质量点</dt><dd>{degradedQualityCount}</dd></div>
         <div><dt>真实零值点</dt><dd>{zeroCount}{zeroCount > 0 ? ` · 0 ${unit}` : ''}</dd></div>
         <div><dt>历史身份段</dt><dd>{identitySegmentCount}</dd></div>
         <div><dt>最新历史身份</dt><dd><code>{latestIdentity}</code></dd></div>
-        <div><dt>可用范围</dt><dd>{first && last ? `${formatRealAssetsHistoryInstant(first.sampledAt, timezone)} — ${formatRealAssetsHistoryInstant(last.sampledAt, timezone)}` : '无已接受历史点'}</dd></div>
-        <div><dt>数据水位</dt><dd>{formatRealAssetsHistoryInstant(dataWatermark, timezone)}</dd></div>
+        <div><dt>可用范围</dt><dd>{first && last ? `${formatRealAssetsHistoryInstant(first.sampledAt, timezone)} — ${formatRealAssetsHistoryInstant(last.sampledAt, timezone)}` : '无数值历史点'}</dd></div>
+        <div><dt>投影水位</dt><dd>{formatRealAssetsHistoryInstant(projectionWatermark, timezone)}</dd></div>
       </dl>
-      {truncated ? <p className="real-assets-history__notice" role="status">该点位达到返回上限，结果为部分历史。</p> : null}
-      {series.points.length === 0 ? (
-        <div className="real-assets-history__empty" role="status">当前范围没有已接受历史点。此状态不代表零，也不会回填当前 Snapshot。</div>
+      {partial ? <p className="real-assets-history__notice" role="status">该页存在 nextCursor；图表仅显示当前固定快照页，不把截断结果冒充完整历史。</p> : null}
+      {observations.length === 0 ? (
+        <div className="real-assets-history__empty" role="status">当前范围没有 NUMBER 类型历史点。STRING/BOOLEAN/JSON 历史仍保留在统一 History API 中。</div>
       ) : (
         <TimeSeriesChart
-          key={`${definition.key}:${datasetRevision}:${dataWatermark ?? 'none'}`}
+          key={`${definition.key}:${projectionWatermark ?? 'none'}:${observations.at(-1)?.observationId ?? 'empty'}`}
           option={option}
           className="real-assets-history__chart"
           style={{ height: 230, width: '100%', minWidth: 0 }}
@@ -260,9 +257,9 @@ export function DeviceHistoryTrends({
     <div
       className="real-assets-history"
       data-testid="real-assets-device-history"
-      data-history-state={result.isPending ? 'LOADING' : result.isError ? 'ERROR' : result.data?.metadata.partial ? 'PARTIAL' : result.data?.metadata.returnedPoints === 0 ? 'EMPTY' : 'READY'}
+      data-history-state={result.isPending ? 'LOADING' : result.isError ? 'ERROR' : result.data?.metadata.nextCursor ? 'PARTIAL' : result.data?.metadata.returnedObservations === 0 ? 'EMPTY' : 'READY'}
       data-history-range={selection.range}
-      data-history-revision={result.data?.metadata.datasetRevision ?? 'unavailable'}
+      data-history-revision={result.data?.metadata.projectionWatermark ?? 'unavailable'}
     >
       <form className="real-assets-history__controls" aria-label="设备关键点位短趋势范围" onSubmit={(event) => event.preventDefault()}>
         <fieldset>
@@ -301,25 +298,23 @@ export function DeviceHistoryTrends({
       })() : null}
       {result.data && query ? (
         <>
-          {result.data.metadata.partial ? <p className="real-assets-history__notice real-assets-history__notice--warning" role="status">历史结果为部分数据；缺失时间保持断点，不插值、不补零。</p> : null}
-          <dl className="real-assets-history__metadata" aria-label="短历史数据范围与修订">
+          {result.data.metadata.nextCursor ? <p className="real-assets-history__notice real-assets-history__notice--warning" role="status">当前固定快照还有后续页；图表不会把本页冒充完整历史。</p> : null}
+          <dl className="real-assets-history__metadata" aria-label="短历史数据范围与投影水位">
             <div><dt>请求范围</dt><dd>{formatRealAssetsHistoryInstant(query.from, site.timezone)} — {formatRealAssetsHistoryInstant(query.to, site.timezone)}</dd></div>
-            <div><dt>数据水位</dt><dd>{formatRealAssetsHistoryInstant(result.data.metadata.dataWatermark, site.timezone)}</dd></div>
-            <div><dt>数据集修订</dt><dd><code>{result.data.metadata.datasetRevision}</code></dd></div>
-            <div><dt>返回点数</dt><dd>{result.data.metadata.returnedPoints}</dd></div>
+            <div><dt>投影水位</dt><dd>{formatRealAssetsHistoryInstant(result.data.metadata.projectionWatermark, site.timezone)}</dd></div>
+            <div><dt>返回 Observation</dt><dd>{result.data.metadata.returnedObservations}</dd></div>
+            <div><dt>分页状态</dt><dd>{result.data.metadata.nextCursor ? '还有后续页' : '当前快照已完整返回'}</dd></div>
           </dl>
           <div className="real-assets-history__series-grid">
-            {definitions.map((definition, index) => (
+            {definitions.map((definition) => (
               <SeriesPanel
                 key={definition.key}
                 definition={definition}
-                series={result.data.series[index]}
+                observations={numericHistoryObservations(result.data, definition.key)}
                 query={query}
                 timezone={site.timezone}
-                partial={result.data.metadata.partial}
-                truncated={result.data.metadata.truncatedKeys.includes(definition.key)}
-                datasetRevision={result.data.metadata.datasetRevision}
-                dataWatermark={result.data.metadata.dataWatermark}
+                partial={result.data.metadata.nextCursor !== null}
+                projectionWatermark={result.data.metadata.projectionWatermark}
               />
             ))}
           </div>

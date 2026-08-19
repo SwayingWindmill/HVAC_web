@@ -16,7 +16,10 @@ import (
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/s2telemetryapi"
 )
 
-const internalDeviceHistoryPath = "/internal/v1/telemetry/device-history"
+const (
+	internalDeviceHistoryPath          = "/internal/v1/telemetry/device-history"
+	internalDeviceHistoryAggregatePath = "/internal/v1/telemetry/device-history:aggregate"
+)
 
 func (h *handler) QueryDeviceHistory(writer http.ResponseWriter, request *http.Request, input s2telemetryapi.DeviceHistoryRequest) {
 	caller, ok := h.telemetryCaller(writer, request, true)
@@ -43,17 +46,12 @@ func (h *handler) QueryDeviceHistory(writer http.ResponseWriter, request *http.R
 		h.writeTelemetryFailure(writer, request, historyUnavailable("IAM returned an incomplete Device History resource scope."))
 		return
 	}
-	grant, failure := h.signDeviceHistoryQueryGrant(caller, authorization, canonical)
+	grant, failure := h.signHistoryQueryGrant(caller, authorization, canonical.TenantID, telemetryhistorymodel.DeviceHistoryAction, canonical.ScopeDigest)
 	if failure != nil {
 		h.writeTelemetryFailure(writer, request, *failure)
 		return
 	}
-	body, err := json.Marshal(canonical)
-	if err != nil {
-		h.writeTelemetryFailure(writer, request, historyUnavailable("The Gateway could not encode the Device History query."))
-		return
-	}
-	raw, failure := h.executeDeviceHistoryQuery(request.Context(), request, body, grant)
+	raw, failure := h.executeHistoryQuery(request.Context(), request, canonical, grant, internalDeviceHistoryPath)
 	if failure != nil {
 		h.writeTelemetryFailure(writer, request, *failure)
 		return
@@ -67,29 +65,62 @@ func (h *handler) QueryDeviceHistory(writer http.ResponseWriter, request *http.R
 	writeJSON(writer, http.StatusOK, response)
 }
 
+func (h *handler) QueryDeviceHistoryAggregate(writer http.ResponseWriter, request *http.Request, input s2telemetryapi.DeviceHistoryAggregateRequest) {
+	caller, ok := h.telemetryCaller(writer, request, true)
+	if !ok {
+		return
+	}
+	selection, failure := historyAggregateSelection(input)
+	if failure != nil {
+		h.writeTelemetryFailure(writer, request, *failure)
+		return
+	}
+	authorization, failure := h.authorizeTelemetry(request.Context(), request, caller, telemetryauth.ActionHistoryRead, []telemetryauth.Target{{DeviceID: selection.DeviceID, Keys: selection.Keys}})
+	if failure != nil {
+		h.writeTelemetryFailure(writer, request, *failure)
+		return
+	}
+	if len(authorization.targets) != 1 {
+		h.writeTelemetryFailure(writer, request, historyUnavailable("IAM returned an incomplete Device History aggregate resource scope."))
+		return
+	}
+	authorizedTarget := authorization.targets[0]
+	canonical, err := selection.Complete(authorizedTarget.TenantID, authorizedTarget.SiteID)
+	if err != nil {
+		h.writeTelemetryFailure(writer, request, historyUnavailable("IAM returned an incomplete Device History aggregate resource scope."))
+		return
+	}
+	grant, failure := h.signHistoryQueryGrant(caller, authorization, canonical.TenantID, telemetryhistorymodel.DeviceHistoryAggregateAction, canonical.ScopeDigest)
+	if failure != nil {
+		h.writeTelemetryFailure(writer, request, *failure)
+		return
+	}
+	raw, failure := h.executeHistoryQuery(request.Context(), request, canonical, grant, internalDeviceHistoryAggregatePath)
+	if failure != nil {
+		h.writeTelemetryFailure(writer, request, *failure)
+		return
+	}
+	var response telemetryhistorymodel.DeviceHistoryAggregateResponse
+	if decodeStrictTelemetryJSON(raw, &response) != nil || response.ValidateFor(canonical) != nil {
+		h.writeTelemetryFailure(writer, request, telemetryFailure{http.StatusBadGateway, "TELEMETRY_HISTORY_AGGREGATE_RESPONSE_INVALID", "Device History aggregate response invalid", "Telemetry Query Service returned an aggregate response outside the product contract.", true})
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, response)
+}
+
 func historySelection(input s2telemetryapi.DeviceHistoryRequest) (telemetryhistorymodel.DeviceHistoryRequest, *telemetryFailure) {
-	from, err := time.Parse(time.RFC3339Nano, string(input.From))
-	if err != nil {
-		failure := telemetryFailure{http.StatusUnprocessableEntity, "TELEMETRY_HISTORY_QUERY_INVALID", "Device History query invalid", "The Device History from timestamp is invalid.", false}
-		return telemetryhistorymodel.DeviceHistoryRequest{}, &failure
+	from, to, failure := parseHistoryRange(input.From, input.To)
+	if failure != nil {
+		return telemetryhistorymodel.DeviceHistoryRequest{}, failure
 	}
-	to, err := time.Parse(time.RFC3339Nano, string(input.To))
-	if err != nil {
-		failure := telemetryFailure{http.StatusUnprocessableEntity, "TELEMETRY_HISTORY_QUERY_INVALID", "Device History query invalid", "The Device History to timestamp is invalid.", false}
-		return telemetryhistorymodel.DeviceHistoryRequest{}, &failure
-	}
-	_, fromOffset := from.Zone()
-	_, toOffset := to.Zone()
-	if fromOffset != 0 || toOffset != 0 {
-		failure := telemetryFailure{http.StatusUnprocessableEntity, "TELEMETRY_HISTORY_QUERY_INVALID", "Device History query invalid", "Device History timestamps must use UTC.", false}
-		return telemetryhistorymodel.DeviceHistoryRequest{}, &failure
-	}
-	keys := make([]string, len(input.Keys))
-	for index, key := range input.Keys {
-		keys[index] = string(key)
-	}
+	keys := telemetryHistoryKeys(input.Keys)
 	selection := telemetryhistorymodel.DeviceHistoryRequest{
-		DeviceID: string(input.DeviceId), Keys: keys, From: from.UTC(), To: to.UTC(), MaxPointsPerKey: input.MaxPointsPerKey,
+		DeviceID: string(input.DeviceId), Keys: keys, From: from, To: to, PageSize: input.PageSize,
+	}
+	if input.Cursor != nil {
+		cursor := *input.Cursor
+		selection.Cursor = &cursor
 	}
 	if err := selection.Validate(); err != nil {
 		failure := telemetryFailure{http.StatusUnprocessableEntity, "TELEMETRY_HISTORY_QUERY_INVALID", "Device History query invalid", "The Device History query exceeds the supported product boundary.", false}
@@ -98,12 +129,59 @@ func historySelection(input s2telemetryapi.DeviceHistoryRequest) (telemetryhisto
 	return selection, nil
 }
 
-func (h *handler) signDeviceHistoryQueryGrant(caller telemetryCaller, authorization telemetryAuthorization, query telemetryhistorymodel.DeviceHistoryQuery) (string, *telemetryFailure) {
+func historyAggregateSelection(input s2telemetryapi.DeviceHistoryAggregateRequest) (telemetryhistorymodel.DeviceHistoryAggregateRequest, *telemetryFailure) {
+	from, to, failure := parseHistoryRange(input.From, input.To)
+	if failure != nil {
+		return telemetryhistorymodel.DeviceHistoryAggregateRequest{}, failure
+	}
+	selection := telemetryhistorymodel.DeviceHistoryAggregateRequest{
+		DeviceID: string(input.DeviceId), Keys: telemetryHistoryKeys(input.Keys), From: from, To: to,
+		Granularity: telemetryhistorymodel.AggregateGranularity(input.Granularity), Timezone: input.Timezone,
+		QualityPolicy: telemetryhistorymodel.AggregateQualityPolicy(input.QualityPolicy),
+	}
+	if err := selection.Validate(); err != nil {
+		failure := telemetryFailure{http.StatusUnprocessableEntity, "TELEMETRY_HISTORY_AGGREGATE_QUERY_INVALID", "Device History aggregate query invalid", "The Device History aggregate query exceeds the supported product boundary.", false}
+		return telemetryhistorymodel.DeviceHistoryAggregateRequest{}, &failure
+	}
+	return selection, nil
+}
+
+func parseHistoryRange(fromValue, toValue s2telemetryapi.HistoryInstant) (time.Time, time.Time, *telemetryFailure) {
+	from, err := time.Parse(time.RFC3339Nano, string(fromValue))
+	if err != nil {
+		failure := telemetryFailure{http.StatusUnprocessableEntity, "TELEMETRY_HISTORY_QUERY_INVALID", "Device History query invalid", "The Device History from timestamp is invalid.", false}
+		return time.Time{}, time.Time{}, &failure
+	}
+	to, err := time.Parse(time.RFC3339Nano, string(toValue))
+	if err != nil {
+		failure := telemetryFailure{http.StatusUnprocessableEntity, "TELEMETRY_HISTORY_QUERY_INVALID", "Device History query invalid", "The Device History to timestamp is invalid.", false}
+		return time.Time{}, time.Time{}, &failure
+	}
+	_, fromOffset := from.Zone()
+	_, toOffset := to.Zone()
+	if fromOffset != 0 || toOffset != 0 {
+		failure := telemetryFailure{http.StatusUnprocessableEntity, "TELEMETRY_HISTORY_QUERY_INVALID", "Device History query invalid", "Device History timestamps must use UTC.", false}
+		return time.Time{}, time.Time{}, &failure
+	}
+	return from.UTC(), to.UTC(), nil
+}
+
+func telemetryHistoryKeys(keys []s2telemetryapi.TelemetryKey) []string {
+	plain := make([]string, len(keys))
+	for index, key := range keys {
+		plain[index] = string(key)
+	}
+	return plain
+}
+
+type historyScopeDigest func() (string, error)
+
+func (h *handler) signHistoryQueryGrant(caller telemetryCaller, authorization telemetryAuthorization, tenantID, action string, scopeDigest historyScopeDigest) (string, *telemetryFailure) {
 	if h.identity == nil || h.analytics == nil || strings.TrimSpace(h.analytics.queryAudience) == "" || authorization.principalID == "" || authorization.policyRevision == "" {
 		failure := historyUnavailable("Device History query authorization is not configured.")
 		return "", &failure
 	}
-	scope, err := query.ScopeDigest()
+	scope, err := scopeDigest()
 	if err != nil {
 		failure := telemetryFailure{http.StatusUnprocessableEntity, "TELEMETRY_HISTORY_QUERY_INVALID", "Device History query invalid", "The Device History query exceeds the supported product boundary.", false}
 		return "", &failure
@@ -121,9 +199,8 @@ func (h *handler) signDeviceHistoryQueryGrant(caller telemetryCaller, authorizat
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: caller.principal.Subject, SubjectIssuer: caller.principal.Issuer,
 		PrincipalID: authorization.principalID, DisplayName: caller.principal.DisplayName, Email: caller.principal.Email,
 		Roles: append([]string(nil), caller.principal.Roles...), ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
-		Audience: h.analytics.queryAudience, TenantID: query.TenantID,
-		Actions: []string{telemetryhistorymodel.DeviceHistoryAction}, Scopes: []string{scope},
-		PolicyRevision: authorization.policyRevision, SessionID: caller.contextID,
+		Audience: h.analytics.queryAudience, TenantID: tenantID,
+		Actions: []string{action}, Scopes: []string{scope}, PolicyRevision: authorization.policyRevision, SessionID: caller.contextID,
 		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	}
 	grant, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
@@ -134,14 +211,19 @@ func (h *handler) signDeviceHistoryQueryGrant(caller telemetryCaller, authorizat
 	return grant, nil
 }
 
-func (h *handler) executeDeviceHistoryQuery(ctx context.Context, publicRequest *http.Request, body []byte, grant string) ([]byte, *telemetryFailure) {
+func (h *handler) executeHistoryQuery(ctx context.Context, publicRequest *http.Request, query any, grant, path string) ([]byte, *telemetryFailure) {
 	if h.analytics == nil || h.analytics.queryBaseURL == "" || h.analytics.queryHTTPClient == nil {
 		failure := historyUnavailable("Telemetry Query Service is not configured.")
 		return nil, &failure
 	}
+	body, err := json.Marshal(query)
+	if err != nil {
+		failure := historyUnavailable("The Gateway could not encode the Device History query.")
+		return nil, &failure
+	}
 	requestContext, cancel := context.WithTimeout(ctx, h.analytics.timeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(requestContext, http.MethodPost, h.analytics.queryBaseURL+internalDeviceHistoryPath, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(requestContext, http.MethodPost, h.analytics.queryBaseURL+path, bytes.NewReader(body))
 	if err != nil {
 		failure := historyUnavailable("The Gateway could not construct the Device History query request.")
 		return nil, &failure

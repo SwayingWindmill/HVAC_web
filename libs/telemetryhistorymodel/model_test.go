@@ -1,119 +1,119 @@
 package telemetryhistorymodel
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
 
 const (
-	testTenantID       = "018f1d00-0000-7000-8000-000000000001"
-	testSiteID         = "018f1e00-1000-7000-8000-000000000001"
-	testDeviceID       = "018f1e00-4000-7000-8000-000000000001"
-	testObservationID  = "018f1e00-8000-7000-8000-000000000001"
-	testPointID        = "018f1e00-5000-7000-8000-000000000001"
-	testSensorID       = "018f1e00-6000-7000-8000-000000000001"
+	testTenantID = "018f2e00-1000-7000-8000-000000000001"
+	testSiteID   = "018f2e00-2000-7000-8000-000000000001"
+	testDeviceID = "018f2e00-3000-7000-8000-000000000001"
+	testPointID  = "018f2e00-4000-7000-8000-000000000001"
 )
 
-func TestDeviceHistoryQueryCanonicalDigestIsOrderIndependent(t *testing.T) {
-	from := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
-	left := DeviceHistoryQuery{
-		TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
-		Keys: []string{"zone.humidity", "zone.temperature"}, From: from, To: from.Add(6 * time.Hour), MaxPointsPerKey: 200,
-	}
-	right := left
-	right.Keys = []string{"zone.temperature", "zone.humidity"}
-	leftDigest, err := left.ScopeDigest()
-	if err != nil {
-		t.Fatal(err)
-	}
-	rightDigest, err := right.ScopeDigest()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if leftDigest != rightDigest || len(leftDigest) != 64 {
-		t.Fatalf("digests = %q, %q", leftDigest, rightDigest)
-	}
-}
-
-func TestDeviceHistoryQueryRejectsUnsupportedProductBounds(t *testing.T) {
-	from := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
-	valid := DeviceHistoryQuery{
-		TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
-		Keys: []string{"zone.temperature"}, From: from, To: from.Add(time.Hour), MaxPointsPerKey: 100,
-	}
-	tests := []struct {
-		name   string
-		mutate func(*DeviceHistoryQuery)
-	}{
-		{"invalid tenant", func(query *DeviceHistoryQuery) { query.TenantID = "not-a-uuid" }},
-		{"no keys", func(query *DeviceHistoryQuery) { query.Keys = nil }},
-		{"duplicate key", func(query *DeviceHistoryQuery) { query.Keys = []string{"zone.temperature", "zone.temperature"} }},
-		{"invalid key", func(query *DeviceHistoryQuery) { query.Keys = []string{"zone temperature"} }},
-		{"range over 24 hours", func(query *DeviceHistoryQuery) { query.To = query.From.Add(24*time.Hour + time.Millisecond) }},
-		{"non UTC range", func(query *DeviceHistoryQuery) { query.From = query.From.In(time.FixedZone("JST", 9*60*60)) }},
-		{"too many points", func(query *DeviceHistoryQuery) { query.MaxPointsPerKey = MaximumPointsPerKey + 1 }},
-	}
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			query := valid
-			query.Keys = append([]string(nil), valid.Keys...)
-			testCase.mutate(&query)
-			if err := query.Validate(); err == nil {
-				t.Fatal("invalid query was accepted")
-			}
-		})
-	}
-}
-
-func TestDeviceHistoryResponseValidatesScopeOrderingAndMetadata(t *testing.T) {
-	from := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
+func TestHistoryQueryCanonicalCursorScopeAndValidation(t *testing.T) {
+	from := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+	cursor := "cursor-a"
 	query := DeviceHistoryQuery{
 		TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
-		Keys: []string{"zone.temperature"}, From: from, To: from.Add(time.Hour), MaxPointsPerKey: 100,
+		Keys: []string{"zone.temperature", "zone.mode"}, From: from, To: from.Add(time.Hour), PageSize: 200, Cursor: &cursor,
 	}
-	unit := "Cel"
-	watermark := from.Add(55 * time.Minute)
-	response := DeviceHistoryResponse{
-		SchemaVersion: 1, TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
-		Series: []DeviceHistorySeries{{Key: "zone.temperature", Points: []DeviceHistoryPoint{{
-			ObservationID: testObservationID, PointID: testPointID, SensorID: stringPointer(testSensorID), SampledAt: from.Add(5 * time.Minute), ReceivedAt: from.Add(5*time.Minute + time.Second),
-			Value: 22.5, Unit: &unit, Quality: QualityGood, QualityReasons: []string{}, Revision: 7,
-		}}}},
-		Metadata: DeviceHistoryMetadata{
-			RequestedFrom: from, RequestedTo: from.Add(time.Hour), DataWatermark: &watermark,
-			DatasetRevision: "telemetry-history:v1:7", Partial: true, MaxPointsPerKey: 100, ReturnedPoints: 1, TruncatedKeys: []string{},
-		},
+	canonical, err := query.Canonical()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := response.ValidateFor(query); err != nil {
-		t.Fatalf("valid response rejected: %v", err)
+	if strings.Join(canonical.Keys, ",") != "zone.mode,zone.temperature" || canonical.PageSize != 200 || canonical.Cursor == nil || *canonical.Cursor != cursor {
+		t.Fatalf("canonical=%#v", canonical)
 	}
-	response.Series[0].Points[0].PointID = "not-a-point"
-	if err := response.ValidateFor(query); err == nil {
-		t.Fatal("invalid point identity was accepted")
+	withCursor, err := canonical.ScopeDigest()
+	if err != nil {
+		t.Fatal(err)
 	}
-	response.Series[0].Points[0].PointID = testPointID
-	response.Series[0].Points[0].SensorID = stringPointer("not-a-sensor")
-	if err := response.ValidateFor(query); err == nil {
-		t.Fatal("invalid sensor identity was accepted")
+	withoutCursor, err := canonical.CursorScopeDigest()
+	if err != nil {
+		t.Fatal(err)
 	}
-	response.Series[0].Points[0].SensorID = stringPointer(testSensorID)
-	response.Series[0].Key = "unrequested.key"
-	if err := response.ValidateFor(query); err == nil {
-		t.Fatal("response scope drift was accepted")
+	canonical.Cursor = nil
+	secondWithoutCursor, err := canonical.CursorScopeDigest()
+	if err != nil {
+		t.Fatal(err)
 	}
-	response.Series[0].Key = "zone.temperature"
-	response.Series = nil
-	if err := response.ValidateFor(query); err == nil {
-		t.Fatal("missing requested series was accepted")
-	}
-	response.Series = []DeviceHistorySeries{{Key: "zone.temperature", Points: []DeviceHistoryPoint{}}}
-	response.Metadata.ReturnedPoints = 0
-	response.Metadata.Partial = false
-	if err := response.ValidateFor(query); err == nil {
-		t.Fatal("empty series without partial state was accepted")
+	if withCursor == withoutCursor || withoutCursor != secondWithoutCursor {
+		t.Fatalf("scope digests cursor=%s no-cursor=%s second=%s", withCursor, withoutCursor, secondWithoutCursor)
 	}
 }
 
-func stringPointer(value string) *string {
-	return &value
+func TestHistoryResponsePreservesTypedAndOutOfOrderSameTimestampObservations(t *testing.T) {
+	from := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+	query := DeviceHistoryQuery{TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID, Keys: []string{"zone.mode"}, From: from, To: from.Add(time.Hour), PageSize: 10}
+	watermark := from.Add(5 * time.Minute)
+	response := DeviceHistoryResponse{
+		SchemaVersion: 2, TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
+		Observations: []DeviceHistoryObservation{
+			testObservation("018f2e00-5000-7000-8000-000000000001", "zone.mode", from.Add(time.Minute), AcceptanceAccepted, ValueTypeString, `"COOL"`),
+			testObservation("018f2e00-5000-7000-8000-000000000002", "zone.mode", from.Add(time.Minute), AcceptanceOutOfOrder, ValueTypeJSON, `{"mode":"AUTO"}`),
+		},
+		Metadata: DeviceHistoryMetadata{RequestedFrom: from, RequestedTo: from.Add(time.Hour), ProjectionWatermark: &watermark, PageSize: 10, ReturnedObservations: 2},
+	}
+	if err := response.ValidateFor(query); err != nil {
+		t.Fatal(err)
+	}
+
+	boolean := testObservation("018f2e00-5000-7000-8000-000000000003", "zone.mode", from.Add(2*time.Minute), AcceptanceAccepted, ValueTypeBoolean, `true`)
+	if err := validateTypedValue(boolean.ValueType, boolean.Value); err != nil {
+		t.Fatal(err)
+	}
+	number := testObservation("018f2e00-5000-7000-8000-000000000004", "zone.mode", from.Add(3*time.Minute), AcceptanceAccepted, ValueTypeNumber, `21.5`)
+	if err := validateTypedValue(number.ValueType, number.Value); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHistoryJSONHasNoPseudoRevisionOrWatermarkFields(t *testing.T) {
+	from := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+	response := DeviceHistoryResponse{
+		SchemaVersion: 2, TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
+		Observations: []DeviceHistoryObservation{testObservation("018f2e00-5000-7000-8000-000000000005", "zone.temperature", from.Add(time.Minute), AcceptanceAccepted, ValueTypeNumber, `21.5`)},
+		Metadata:     DeviceHistoryMetadata{RequestedFrom: from, RequestedTo: from.Add(time.Hour), PageSize: 10, ReturnedObservations: 1},
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, forbidden := range []string{`"revision"`, `"datasetRevision"`, `"dataWatermark"`, `"partial"`, `"maxPointsPerKey"`, `"series"`} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("legacy field %s leaked: %s", forbidden, text)
+		}
+	}
+	for _, required := range []string{`"pointRevision"`, `"sourcePosition"`, `"observationId"`, `"acceptance"`, `"projectionWatermark"`} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("required field %s missing: %s", required, text)
+		}
+	}
+}
+
+func TestTypedJSONRejectsPrimitiveValues(t *testing.T) {
+	for _, raw := range []string{`1`, `"state"`, `true`, `null`} {
+		if err := validateTypedValue(ValueTypeJSON, json.RawMessage(raw)); err == nil {
+			t.Fatalf("primitive JSON value %s was accepted", raw)
+		}
+	}
+	for _, raw := range []string{`{"mode":"AUTO"}`, `[1,"AUTO"]`} {
+		if err := validateTypedValue(ValueTypeJSON, json.RawMessage(raw)); err != nil {
+			t.Fatalf("structured JSON value %s was rejected: %v", raw, err)
+		}
+	}
+}
+
+func testObservation(id, key string, sampledAt time.Time, acceptance Acceptance, valueType ValueType, value string) DeviceHistoryObservation {
+	return DeviceHistoryObservation{
+		ObservationID: id, TelemetryKey: key, PointID: testPointID, PointType: PointTypeTelemetry, PointRevision: 7,
+		SampledAt: sampledAt, ReceivedAt: sampledAt.Add(time.Second), Acceptance: acceptance,
+		ValueType: valueType, Value: json.RawMessage(value), Quality: QualityGood, QualityReasons: []string{},
+		SourcePosition: SourcePosition{Partition: "mqtt:gateway:device:" + key, Offset: 42, EventID: id},
+	}
 }

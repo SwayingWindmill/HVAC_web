@@ -1,5 +1,5 @@
 import { S2TelemetryClientError } from '../../api/generated/s2Telemetry.gen.ts';
-import type { DeviceHistoryPoint, DeviceHistoryQuality, S2TelemetryClient } from '../../api/generated/s2Telemetry.gen.ts';
+import type { DeviceHistoryObservation, DeviceHistoryQuality, S2TelemetryClient } from '../../api/generated/s2Telemetry.gen.ts';
 import type * as S2TelemetryContract from '../../api/generated/s2Telemetry.gen.ts';
 import {
   REAL_ASSETS_CATALOG_REVISION,
@@ -12,13 +12,13 @@ export type RealAssetsHistoryRange = '1h' | '6h' | '24h';
 export interface RealAssetsHistoryRangeDefinition {
   readonly label: string;
   readonly milliseconds: number;
-  readonly maxPointsPerKey: number;
+  readonly pageSize: number;
 }
 
 export const REAL_ASSETS_HISTORY_RANGES: Readonly<Record<RealAssetsHistoryRange, RealAssetsHistoryRangeDefinition>> = Object.freeze({
-  '1h': Object.freeze({ label: '最近 1 小时', milliseconds: 60 * 60 * 1000, maxPointsPerKey: 240 }),
-  '6h': Object.freeze({ label: '最近 6 小时', milliseconds: 6 * 60 * 60 * 1000, maxPointsPerKey: 360 }),
-  '24h': Object.freeze({ label: '最近 24 小时', milliseconds: 24 * 60 * 60 * 1000, maxPointsPerKey: 500 }),
+  '1h': Object.freeze({ label: '最近 1 小时', milliseconds: 60 * 60 * 1000, pageSize: 240 }),
+  '6h': Object.freeze({ label: '最近 6 小时', milliseconds: 6 * 60 * 60 * 1000, pageSize: 360 }),
+  '24h': Object.freeze({ label: '最近 24 小时', milliseconds: 24 * 60 * 60 * 1000, pageSize: 500 }),
 });
 
 export interface RealAssetsHistoryQuery {
@@ -35,7 +35,7 @@ export interface RealAssetsHistoryQuery {
   readonly routePolicyRevision: string;
   readonly from: string;
   readonly to: string;
-  readonly maxPointsPerKey: number;
+  readonly pageSize: number;
 }
 
 export interface LoadRealAssetsHistoryInput {
@@ -71,29 +71,45 @@ function assertUnique(values: readonly string[], field: string): void {
   if (new Set(values).size !== values.length) throw new Error(`Device history ${field} must be unique.`);
 }
 
-function assertExactStringArray(actual: readonly string[], expected: readonly string[], field: string): void {
-  if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
-    throw new Error(`Device history ${field} drifted from the requested order.`);
-  }
-}
-
 const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function validateHistoricalIdentity(point: DeviceHistoryPoint): void {
-  if (!UUID_V7_PATTERN.test(point.pointId)) throw new Error('Device history Point identity is invalid.');
-  if (point.sensorId !== null && !UUID_V7_PATTERN.test(point.sensorId)) throw new Error('Device history Sensor identity is invalid.');
+function validateHistoricalIdentity(observation: DeviceHistoryObservation): void {
+  if (!UUID_V7_PATTERN.test(observation.observationId)) throw new Error('Device history Observation identity is invalid.');
+  if (!UUID_V7_PATTERN.test(observation.pointId)) throw new Error('Device history Point identity is invalid.');
+  if (observation.sensorId !== null && !UUID_V7_PATTERN.test(observation.sensorId)) throw new Error('Device history Sensor identity is invalid.');
+  if (!UUID_V7_PATTERN.test(observation.sourcePosition.eventId)) throw new Error('Device history source Event identity is invalid.');
 }
 
-function validatePoint(point: DeviceHistoryPoint, fromMs: number, toMs: number, previousSampledAt: number | null): number {
-  validateHistoricalIdentity(point);
-  const sampledAt = parseInstant(point.sampledAt, 'sampledAt');
-  parseInstant(point.receivedAt, 'receivedAt');
-  if (sampledAt < fromMs || sampledAt >= toMs) throw new Error('Device history point escaped the requested range.');
-  if (previousSampledAt !== null && sampledAt < previousSampledAt) throw new Error('Device history points are not ordered.');
-  if (!Number.isFinite(point.value)) throw new Error('Device history point value must be finite.');
-  if (!Number.isInteger(point.revision) || point.revision <= 0) throw new Error('Device history point revision is invalid.');
-  if (!Array.isArray(point.qualityReasons)) throw new Error('Device history quality reasons are invalid.');
-  return sampledAt;
+function validateObservation(
+  observation: DeviceHistoryObservation,
+  query: RealAssetsHistoryQuery,
+  fromMs: number,
+  toMs: number,
+  previous: DeviceHistoryObservation | null,
+): void {
+  validateHistoricalIdentity(observation);
+  if (!query.keys.includes(observation.telemetryKey)) throw new Error('Device history observation escaped the requested keys.');
+  const sampledAt = parseInstant(observation.sampledAt, 'sampledAt');
+  parseInstant(observation.receivedAt, 'receivedAt');
+  if (sampledAt < fromMs || sampledAt >= toMs) throw new Error('Device history observation escaped the requested range.');
+  if (!Number.isInteger(observation.pointRevision) || observation.pointRevision <= 0) throw new Error('Device history Point revision is invalid.');
+  if (!Number.isInteger(observation.sourcePosition.offset) || observation.sourcePosition.offset < 0) throw new Error('Device history source offset is invalid.');
+  if (!Array.isArray(observation.qualityReasons)) throw new Error('Device history quality reasons are invalid.');
+  if (observation.valueType === 'NUMBER' && (typeof observation.value !== 'number' || !Number.isFinite(observation.value))) {
+    throw new Error('Device history numeric value must be finite.');
+  }
+  if (observation.valueType === 'STRING' && typeof observation.value !== 'string') throw new Error('Device history STRING value is invalid.');
+  if (observation.valueType === 'BOOLEAN' && typeof observation.value !== 'boolean') throw new Error('Device history BOOLEAN value is invalid.');
+  if (observation.valueType === 'JSON' && (typeof observation.value !== 'object' || observation.value === null)) {
+    throw new Error('Device history JSON value must be an object or array.');
+  }
+  if (previous !== null) {
+    const previousSampledAt = parseInstant(previous.sampledAt, 'previousSampledAt');
+    const order = previous.telemetryKey.localeCompare(observation.telemetryKey)
+      || previousSampledAt - sampledAt
+      || previous.observationId.localeCompare(observation.observationId);
+    if (order >= 0) throw new Error('Device history observations are not in stable order.');
+  }
 }
 
 export function listRealAssetsTrendDefinitions(profile: RealAssetsProfileResolution): readonly RealAssetsPointDefinition[] {
@@ -133,7 +149,7 @@ export function createRealAssetsHistoryQuery(input: {
     routePolicyRevision: input.routePolicyRevision ?? 'unavailable',
     from,
     to,
-    maxPointsPerKey: rangeDefinition.maxPointsPerKey,
+    pageSize: rangeDefinition.pageSize,
   });
 }
 
@@ -141,56 +157,39 @@ export function realAssetsHistoryQueryKey(query: RealAssetsHistoryQuery): readon
   return [
     'real-assets', query.protectedGeneration, query.tenantId, query.siteId, 'history',
     query.sessionId, query.deviceId, [...query.keys], query.range, query.aggregation, query.timezone,
-    query.catalogRevision, query.routePolicyRevision, query.from, query.to, query.maxPointsPerKey,
+    query.catalogRevision, query.routePolicyRevision, query.from, query.to, query.pageSize,
   ] as const;
 }
 
 export function realAssetsHistoryRevisionKey(query: RealAssetsHistoryQuery, response: S2TelemetryContract.DeviceHistoryResponse): readonly unknown[] {
   return [
     ...realAssetsHistoryQueryKey(query),
-    'revision', response.metadata.datasetRevision, response.metadata.dataWatermark ?? 'no-watermark',
+    'projection', response.metadata.projectionWatermark ?? 'no-watermark', response.metadata.nextCursor ?? 'complete',
   ] as const;
 }
 
 export function validateRealAssetsHistoryResponse(response: S2TelemetryContract.DeviceHistoryResponse, query: RealAssetsHistoryQuery): S2TelemetryContract.DeviceHistoryResponse {
-  if (response.schemaVersion !== 1) throw new Error('Device history schema version is unsupported.');
-  if (response.tenantId !== query.tenantId
-    || response.siteId !== query.siteId
-    || response.deviceId !== query.deviceId) {
+  if (response.schemaVersion !== 2) throw new Error('Device history schema version is unsupported.');
+  if (response.tenantId !== query.tenantId || response.siteId !== query.siteId || response.deviceId !== query.deviceId) {
     throw new Error('Device history response escaped the authorized resource scope.');
   }
-  assertExactStringArray(response.series.map((series) => series.key), query.keys, 'series');
   const fromMs = parseInstant(query.from, 'requestedFrom');
   const toMs = parseInstant(query.to, 'requestedTo');
   if (response.metadata.requestedFrom !== query.from || response.metadata.requestedTo !== query.to) {
     throw new Error('Device history response range drifted from the request.');
   }
-  if (response.metadata.maxPointsPerKey !== query.maxPointsPerKey) {
-    throw new Error('Device history point limit drifted from the request.');
+  if (response.metadata.pageSize !== query.pageSize) throw new Error('Device history page size drifted from the request.');
+  if (response.metadata.projectionWatermark !== null) parseInstant(response.metadata.projectionWatermark, 'projectionWatermark');
+  if (response.observations.length > query.pageSize || response.metadata.returnedObservations !== response.observations.length) {
+    throw new Error('Device history returned observation count is inconsistent.');
   }
-  if (!response.metadata.datasetRevision.trim()) throw new Error('Device history dataset revision is missing.');
-  if (response.metadata.dataWatermark !== null) parseInstant(response.metadata.dataWatermark, 'dataWatermark');
-  assertUnique(response.metadata.truncatedKeys, 'truncatedKeys');
-  if (response.metadata.truncatedKeys.some((key) => !query.keys.includes(key))) {
-    throw new Error('Device history response truncated an unrequested key.');
-  }
-
-  let returnedPoints = 0;
   const observationIds = new Set<string>();
-  for (const series of response.series) {
-    if (series.points.length > query.maxPointsPerKey) throw new Error('Device history series exceeded the requested point limit.');
-    let previousSampledAt: number | null = null;
-    for (const point of series.points) {
-      if (observationIds.has(point.observationId)) throw new Error('Device history observation IDs must be unique.');
-      observationIds.add(point.observationId);
-      previousSampledAt = validatePoint(point, fromMs, toMs, previousSampledAt);
-      returnedPoints += 1;
-    }
-  }
-  if (response.metadata.returnedPoints !== returnedPoints) throw new Error('Device history returned point count is inconsistent.');
-  if (returnedPoints > query.keys.length * query.maxPointsPerKey) throw new Error('Device history response exceeded the total point limit.');
-  if (response.metadata.truncatedKeys.length > 0 && !response.metadata.partial) {
-    throw new Error('Truncated Device history must be marked partial.');
+  let previous: DeviceHistoryObservation | null = null;
+  for (const observation of response.observations) {
+    if (observationIds.has(observation.observationId)) throw new Error('Device history observation IDs must be unique.');
+    observationIds.add(observation.observationId);
+    validateObservation(observation, query, fromMs, toMs, previous);
+    previous = observation;
   }
   return response;
 }
@@ -205,50 +204,46 @@ export async function loadRealAssetsHistory(input: LoadRealAssetsHistoryInput): 
     keys: [...input.query.keys],
     from: input.query.from,
     to: input.query.to,
-    maxPointsPerKey: input.query.maxPointsPerKey,
+    pageSize: input.query.pageSize,
   }, options);
   return validateRealAssetsHistoryResponse(response, input.query);
 }
 
+export function numericHistoryObservations(
+  response: S2TelemetryContract.DeviceHistoryResponse,
+  key: string,
+): readonly DeviceHistoryObservation[] {
+  return response.observations.filter((observation) => observation.telemetryKey === key && observation.valueType === 'NUMBER' && typeof observation.value === 'number');
+}
+
 export function buildRealAssetsTrendData(
-  points: readonly DeviceHistoryPoint[],
+  observations: readonly DeviceHistoryObservation[],
   range: RealAssetsHistoryRange,
-  maxPointsPerKey: number,
+  pageSize: number,
 ): readonly RealAssetsTrendDatum[] {
-  if (points.length === 0) return [];
+  if (observations.length === 0) return [];
   const rangeMs = REAL_ASSETS_HISTORY_RANGES[range].milliseconds;
-  const expectedSpacing = rangeMs / Math.max(1, maxPointsPerKey);
+  const expectedSpacing = rangeMs / Math.max(1, pageSize);
   const gapThreshold = Math.max(60_000, expectedSpacing * 3);
   const result: RealAssetsTrendDatum[] = [];
   let previousTimestamp: number | null = null;
   let previousIdentity: string | null = null;
-  for (const point of points) {
-    const timestamp = parseInstant(point.sampledAt, 'sampledAt');
-    const identity = `${point.pointId}:${point.sensorId ?? 'no-sensor'}`;
+  for (const observation of observations) {
+    if (observation.valueType !== 'NUMBER' || typeof observation.value !== 'number' || !Number.isFinite(observation.value)) continue;
+    const timestamp = parseInstant(observation.sampledAt, 'sampledAt');
+    const identity = `${observation.pointId}:${observation.sensorId ?? 'no-sensor'}:${observation.pointRevision}`;
     if (previousTimestamp !== null && (timestamp - previousTimestamp > gapThreshold || identity !== previousIdentity)) {
-      result.push(Object.freeze({
-        timestamp: previousTimestamp + Math.floor((timestamp - previousTimestamp) / 2),
-        value: null,
-        quality: null,
-        pointId: null,
-        sensorId: null,
-      }));
+      result.push(Object.freeze({ timestamp: previousTimestamp + Math.floor((timestamp - previousTimestamp) / 2), value: null, quality: null, pointId: null, sensorId: null }));
     }
-    result.push(Object.freeze({
-      timestamp,
-      value: point.value,
-      quality: point.quality,
-      pointId: point.pointId,
-      sensorId: point.sensorId,
-    }));
+    result.push(Object.freeze({ timestamp, value: observation.value, quality: observation.quality, pointId: observation.pointId, sensorId: observation.sensorId }));
     previousTimestamp = timestamp;
     previousIdentity = identity;
   }
   return Object.freeze(result);
 }
 
-export function historySeriesUnit(points: readonly DeviceHistoryPoint[], fallback?: string): string {
-  const units = [...new Set(points.map((point) => point.unit).filter((unit): unit is string => Boolean(unit)))];
+export function historySeriesUnit(observations: readonly DeviceHistoryObservation[], fallback?: string): string {
+  const units = [...new Set(observations.map((observation) => observation.unit).filter((unit): unit is string => Boolean(unit)))];
   if (units.length === 1) return units[0];
   if (units.length > 1) return 'mixed';
   return fallback ?? '无单位';

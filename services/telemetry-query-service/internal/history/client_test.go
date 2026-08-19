@@ -14,126 +14,108 @@ import (
 )
 
 const (
-	historyTenantID             = "018f1d00-0000-7000-8000-000000000001"
-	historyOrganizationID       = "018f1e00-0000-7000-8000-000000000001"
-	historySiteID               = "018f1e00-1000-7000-8000-000000000001"
-	historyDeviceID             = "018f1e00-4000-7000-8000-000000000001"
-	historyObservationID        = "018f1e00-8000-7000-8000-000000000001"
-	historyPointID              = "018f1e00-5000-7000-8000-000000000001"
-	historySensorID             = "018f1e00-6000-7000-8000-000000000001"
-	historyReplacementPointID   = "018f1e00-5000-7000-8000-000000000002"
-	historyReplacementSensorID  = "018f1e00-6000-7000-8000-000000000002"
+	historyTenantID = "018f2e00-1000-7000-8000-000000000001"
+	historySiteID   = "018f2e00-2000-7000-8000-000000000001"
+	historyDeviceID = "018f2e00-3000-7000-8000-000000000001"
+	historyPointID  = "018f2e00-4000-7000-8000-000000000001"
 )
 
-func TestClickHouseHistoryClientUsesFixedScopedQueriesAndBuildsMetadata(t *testing.T) {
+func TestClickHouseHistoryClientPreservesTypedSameTimestampFactsAndStableCursorSnapshot(t *testing.T) {
 	var mu sync.Mutex
-	queries := []string{}
+	queries := make([]string, 0, 3)
+	responses := []string{
+		`{"snapshot_at":"2026-08-19T01:10:00.000Z","projection_watermark":"2026-08-19T01:09:00.000Z"}
+`,
+		pointRowJSON("018f2e00-5000-7000-8000-000000000001", "ACCEPTED", "STRING", `\"COOL\"`, "2026-08-19T01:00:00.000Z") +
+			pointRowJSON("018f2e00-5000-7000-8000-000000000002", "OUT_OF_ORDER", "BOOLEAN", `true`, "2026-08-19T01:00:00.000Z") +
+			pointRowJSON("018f2e00-5000-7000-8000-000000000003", "ACCEPTED", "JSON", `{\"mode\":\"AUTO\"}`, "2026-08-19T01:01:00.000Z"),
+		pointRowJSON("018f2e00-5000-7000-8000-000000000003", "ACCEPTED", "JSON", `{\"mode\":\"AUTO\"}`, "2026-08-19T01:01:00.000Z"),
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		payload, err := io.ReadAll(request.Body)
 		if err != nil {
 			t.Fatal(err)
 		}
-		query := string(payload)
 		mu.Lock()
-		queries = append(queries, query)
-		index := len(queries)
+		queries = append(queries, string(payload))
+		index := len(queries) - 1
 		mu.Unlock()
-		writer.Header().Set("Content-Type", "application/x-ndjson")
-		if index == 1 {
-			_, _ = writer.Write([]byte(`{"observation_id":"018f1e00-8000-7000-8000-000000000001","point_id":"018f1e00-5000-7000-8000-000000000001","sensor_id":"018f1e00-6000-7000-8000-000000000001","telemetry_key":"zone.temperature","sampled_at":"2026-07-30T01:00:00.000Z","received_at":"2026-07-30T01:00:01.000Z","value":22.5,"unit":"Cel","quality":"GOOD","quality_reasons":[],"revision":7,"total_count":2}
-{"observation_id":"018f1e00-8000-7000-8000-000000000002","point_id":"018f1e00-5000-7000-8000-000000000002","sensor_id":"018f1e00-6000-7000-8000-000000000002","telemetry_key":"zone.temperature","sampled_at":"2026-07-30T02:00:00.000Z","received_at":"2026-07-30T02:00:01.000Z","value":23.0,"unit":"Cel","quality":"PARTIAL","quality_reasons":["SENSOR_DRIFT"],"revision":8,"total_count":2}
-`))
-			return
+		if index >= len(responses) {
+			t.Fatalf("unexpected ClickHouse request %d", index)
 		}
-		_, _ = writer.Write([]byte(`{"data_watermark":"2026-07-30T05:30:00.000Z","maximum_revision":9}
-`))
+		writer.Header().Set("Content-Type", "application/x-ndjson")
+		_, _ = writer.Write([]byte(responses[index]))
 	}))
 	defer server.Close()
 
-	client, err := NewClient(Config{
-		BaseURL: server.URL, Database: "telemetry_history", Table: "observations",
-		Username: "history_reader", Password: "secret", DatasetRevision: "telemetry-history:v1", HTTPClient: server.Client(),
-	})
+	client, err := NewClient(Config{BaseURL: server.URL, Database: "telemetry_history", Table: "observations", HTTPClient: server.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	from := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
+	from := time.Date(2026, 8, 19, 1, 0, 0, 0, time.UTC)
 	query := telemetryhistorymodel.DeviceHistoryQuery{
-		ActingOrganizationID: historyOrganizationID, TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
-		Keys: []string{"zone.temperature"}, From: from, To: from.Add(6 * time.Hour), MaxPointsPerKey: 2,
+		TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
+		Keys: []string{"zone.mode"}, From: from, To: from.Add(time.Hour), PageSize: 2,
 	}
-	response, err := client.QueryDeviceHistory(context.Background(), query)
+	first, err := client.QueryDeviceHistory(context.Background(), query)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Series) != 1 || len(response.Series[0].Points) != 2 || response.Metadata.ReturnedPoints != 2 || response.Metadata.DatasetRevision != "telemetry-history:v1:9" || !response.Metadata.Partial {
-		t.Fatalf("response = %#v", response)
+	if len(first.Observations) != 2 || first.Observations[0].ObservationID == first.Observations[1].ObservationID || first.Observations[1].Acceptance != telemetryhistorymodel.AcceptanceOutOfOrder || first.Metadata.NextCursor == nil {
+		t.Fatalf("first=%#v", first)
 	}
-	if len(response.Metadata.TruncatedKeys) != 0 {
-		t.Fatalf("truncated keys = %#v", response.Metadata.TruncatedKeys)
+	if first.Observations[0].ValueType != telemetryhistorymodel.ValueTypeString || first.Observations[1].ValueType != telemetryhistorymodel.ValueTypeBoolean {
+		t.Fatalf("typed observations=%#v", first.Observations)
 	}
-	if response.Series[0].Points[0].PointID != historyPointID || response.Series[0].Points[0].SensorID == nil || *response.Series[0].Points[0].SensorID != historySensorID {
-		t.Fatalf("first historical identity = %#v", response.Series[0].Points[0])
+	query.Cursor = first.Metadata.NextCursor
+	second, err := client.QueryDeviceHistory(context.Background(), query)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if response.Series[0].Points[1].PointID != historyReplacementPointID || response.Series[0].Points[1].SensorID == nil || *response.Series[0].Points[1].SensorID != historyReplacementSensorID {
-		t.Fatalf("replacement historical identity = %#v", response.Series[0].Points[1])
+	if len(second.Observations) != 1 || second.Observations[0].ObservationID != "018f2e00-5000-7000-8000-000000000003" || second.Metadata.NextCursor != nil {
+		t.Fatalf("second=%#v", second)
 	}
+
 	mu.Lock()
 	defer mu.Unlock()
-	if len(queries) != 2 {
-		t.Fatalf("queries = %d", len(queries))
+	if len(queries) != 3 {
+		t.Fatalf("queries=%d", len(queries))
 	}
-	for _, queryText := range queries {
-		for _, marker := range []string{
-			"tenant_id = toUUID('" + historyTenantID + "')",
-			"site_id = toUUID('" + historySiteID + "')",
-			"device_id = toUUID('" + historyDeviceID + "')",
-			"telemetry_key IN ('zone.temperature')",
-			"acceptance_status = 'ACCEPTED'",
-			"value_number IS NOT NULL",
-		} {
-			if !strings.Contains(queryText, marker) {
-				t.Fatalf("query missing %q:\n%s", marker, queryText)
-			}
-		}
-		if strings.Contains(queryText, "SELECT *") || strings.Contains(queryText, "system.") {
-			t.Fatalf("query escaped fixed boundary:\n%s", queryText)
+	if !strings.Contains(queries[0], "max(projected_at)") || strings.Contains(queries[0], "max(sampled_at)") {
+		t.Fatalf("snapshot query does not use projector watermark:\n%s", queries[0])
+	}
+	for _, marker := range []string{
+		"acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')",
+		"value_type IN ('NUMBER', 'STRING', 'BOOLEAN', 'JSON')",
+		"ORDER BY telemetry_key, sampled_at, toString(observation_id)",
+		"LIMIT 3",
+		"projected_at < parseDateTime64BestEffort('2026-08-19T01:10:00.000Z'",
+	} {
+		if !strings.Contains(queries[1], marker) {
+			t.Fatalf("first page query missing %q:\n%s", marker, queries[1])
 		}
 	}
-	if !strings.Contains(queries[0], "row_number() OVER (PARTITION BY telemetry_key") || !strings.Contains(queries[0], "WHERE row_number <= 2") {
-		t.Fatalf("point query is not independently bounded per key:\n%s", queries[0])
-	}
-	for _, marker := range []string{"toString(point_id) AS point_id", "AS sensor_id"} {
-		if !strings.Contains(queries[0], marker) {
-			t.Fatalf("point query omitted historical identity %q:\n%s", marker, queries[0])
-		}
+	if !strings.Contains(queries[2], "toString(observation_id) > '018f2e00-5000-7000-8000-000000000002'") || strings.Contains(queries[2], "now64(3)") {
+		t.Fatalf("cursor page did not reuse fixed snapshot/keyset:\n%s", queries[2])
 	}
 }
 
-func TestClickHouseHistoryClientMarksTruncationAndRejectsUnrequestedKeys(t *testing.T) {
-	responses := []string{
-		`{"observation_id":"018f1e00-8000-7000-8000-000000000001","point_id":"018f1e00-5000-7000-8000-000000000001","sensor_id":null,"telemetry_key":"zone.temperature","sampled_at":"2026-07-30T01:00:00.000Z","received_at":"2026-07-30T01:00:01.000Z","value":22.5,"unit":"Cel","quality":"GOOD","quality_reasons":[],"revision":7,"total_count":3}
-`,
-		`{"data_watermark":"2026-07-30T06:00:00.000Z","maximum_revision":7}
-`,
-	}
-	index := 0
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		_, _ = writer.Write([]byte(responses[index]))
-		index++
-	}))
-	defer server.Close()
-	client, err := NewClient(Config{BaseURL: server.URL, Database: "telemetry_history", Table: "observations", DatasetRevision: "telemetry-history:v1", HTTPClient: server.Client()})
+func TestHistoryCursorRejectsScopeDrift(t *testing.T) {
+	from := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+	query := telemetryhistorymodel.DeviceHistoryQuery{TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID, Keys: []string{"zone.mode"}, From: from, To: from.Add(time.Hour), PageSize: 10}
+	last := telemetryhistorymodel.DeviceHistoryObservation{ObservationID: "018f2e00-5000-7000-8000-000000000001", TelemetryKey: "zone.mode", SampledAt: from.Add(time.Minute)}
+	cursor, err := encodeCursor(query, from.Add(time.Hour), nil, last)
 	if err != nil {
 		t.Fatal(err)
 	}
-	from := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
-	query := telemetryhistorymodel.DeviceHistoryQuery{ActingOrganizationID: historyOrganizationID, TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID, Keys: []string{"zone.temperature"}, From: from, To: from.Add(6 * time.Hour), MaxPointsPerKey: 1}
-	response, err := client.QueryDeviceHistory(context.Background(), query)
-	if err != nil {
-		t.Fatal(err)
+	drifted := query
+	drifted.Keys = []string{"zone.temperature"}
+	if _, err := decodeCursor(cursor, drifted); err == nil {
+		t.Fatal("cursor scope drift was accepted")
 	}
-	if !response.Metadata.Partial || len(response.Metadata.TruncatedKeys) != 1 || response.Metadata.TruncatedKeys[0] != "zone.temperature" {
-		t.Fatalf("metadata = %#v", response.Metadata)
-	}
+}
+
+func pointRowJSON(observationID, acceptance, valueType, valueJSON, sampledAt string) string {
+	return `{"observation_id":"` + observationID + `","point_id":"` + historyPointID + `","sensor_id":null,"telemetry_key":"zone.mode","point_type":"STATE","point_revision":7,"sampled_at":"` + sampledAt + `","received_at":"2026-08-19T01:05:00.000Z","acceptance_status":"` + acceptance + `","value_type":"` + valueType + `","value_json":"` + valueJSON + `","unit":null,"quality":"GOOD","quality_reasons":[],"source_event_id":"` + observationID + `","source_partition":"mqtt:gateway:device:zone.mode","source_offset":42}
+`
 }
