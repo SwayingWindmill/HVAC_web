@@ -60,11 +60,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	observabilityRuntime.SetReadinessCheck(store.Ping)
 
 	latestCache, latestRelay, latestContext, latestCancel, err := loadLatestCache(store)
 	if err != nil {
-		logger.Error("telemetry_latest_cache_configuration_invalid", "error_code", "TELEMETRY_LATEST_CACHE_CONFIGURATION_INVALID")
-		os.Exit(1)
+		logger.Warn("telemetry_latest_cache_projection_unavailable", "error_code", "TELEMETRY_LATEST_CACHE_PROJECTION_UNAVAILABLE")
+		latestCache, latestRelay, latestContext, latestCancel = nil, nil, context.Background(), nil
 	}
 	if latestCache != nil {
 		defer func() { _ = latestCache.Close() }()
@@ -143,7 +144,6 @@ func main() {
 			RuntimeAudience:      envOr("TELEMETRY_GRANT_AUDIENCE", "telemetry-runtime-service"),
 			ObservationAcceptor:  store, CoverageReporter: store, MQTTEvidenceAcceptor: store, SourceAuthenticator: sourceAuthenticator,
 			Realtime:                       realtimeService,
-			LatestCache:                    latestCache,
 			AllowedCentrifugoSPIFFE:        envOr("TELEMETRY_ALLOWED_CENTRIFUGO_SPIFFE", "spiffe://hvac.local/centrifugo"),
 			CentrifugoProxySecret:          strings.TrimSpace(os.Getenv("TELEMETRY_CENTRIFUGO_PROXY_SECRET")),
 			AllowedIAMSPIFFE:               envOr("TELEMETRY_ALLOWED_IAM_SPIFFE", "spiffe://hvac.local/iam-service"),
@@ -152,6 +152,7 @@ func main() {
 			CommandVerifierTenantID:        strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_TENANT_ID")),
 			CommandVerifierSiteID:          strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_SITE_ID")),
 			CommandVerifierDeviceID:        strings.TrimSpace(os.Getenv("TELEMETRY_COMMAND_VERIFIER_DEVICE_ID")),
+			CommandVerifierDeviceIDs:       commaSeparated(os.Getenv("TELEMETRY_COMMAND_VERIFIER_DEVICE_IDS")),
 			Metrics:                        observabilityRuntime.Metrics,
 		}),
 		TLSConfig: &tls.Config{
@@ -199,9 +200,13 @@ func loadLatestCache(store *telemetry.PostgresStore) (telemetry.LatestCache, *te
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("TELEMETRY_LATEST_CACHE_ENABLED")), "true") {
 		return nil, nil, context.Background(), nil, nil
 	}
+	redisURL := strings.TrimSpace(os.Getenv("TELEMETRY_LATEST_CACHE_REDIS_URL"))
+	if redisURL == "" {
+		return nil, nil, nil, nil, errors.New("TELEMETRY_LATEST_CACHE_REDIS_URL is required when the rebuildable Latest projection is enabled")
+	}
 	openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
 	cache, err := telemetry.OpenRedisLatestCache(openContext, telemetry.RedisLatestCacheConfig{
-		URL:       requiredEnv("TELEMETRY_LATEST_CACHE_REDIS_URL"),
+		URL:       redisURL,
 		KeyPrefix: strings.TrimSpace(os.Getenv("TELEMETRY_LATEST_CACHE_KEY_PREFIX")),
 	})
 	cancelOpen()
@@ -519,6 +524,17 @@ func envOr(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func commaSeparated(raw string) []string {
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if value := strings.TrimSpace(part); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 func requiredEnv(name string) string {

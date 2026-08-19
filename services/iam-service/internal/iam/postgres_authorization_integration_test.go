@@ -17,8 +17,8 @@ import (
 
 const (
 	postgresFixtureIssuer        = "https://identity.example.test/oidc"
-	postgresOwnerAOrganizationID = "018f1e00-0000-7000-8000-000000000001"
-	postgresActingOrganizationID = "018f1e00-0000-7000-8000-000000000003"
+	postgresTenantAID            = "018f1d00-0000-7000-8000-000000000001"
+	postgresTenantBID            = "018f1d00-0000-7000-8000-000000000002"
 	postgresOwnerAPrincipalID    = "018f1e00-2000-7000-8000-000000000001"
 	postgresDelegatedPrincipalID = "018f1e00-2000-7000-8000-000000000002"
 	postgresOwnerASite1ID        = "018f1e00-1000-7000-8000-000000000001"
@@ -38,7 +38,7 @@ func TestPostgresAuthorizationStoreLoadsImmutableIdentityAndScopedFacts(t *testi
 	owner, err := store.LookupRegistryAuthorization(ctx, iam.AuthorizationLookup{
 		SubjectIssuer:        postgresFixtureIssuer,
 		Subject:              "owner-a",
-		ActingOrganizationID: postgresOwnerAOrganizationID,
+		TenantID: postgresTenantAID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -46,14 +46,13 @@ func TestPostgresAuthorizationStoreLoadsImmutableIdentityAndScopedFacts(t *testi
 	if !owner.Found || owner.Principal.ID != postgresOwnerAPrincipalID || owner.PolicyRevision != "registry-read:1" {
 		t.Fatalf("unexpected Owner A facts: %#v", owner)
 	}
-	if len(owner.Memberships) != 1 || owner.Memberships[0].OrganizationID != postgresOwnerAOrganizationID {
+	if len(owner.Memberships) != 1 || owner.Memberships[0].TenantID != postgresTenantAID {
 		t.Fatalf("unexpected Owner A memberships: %#v", owner.Memberships)
 	}
 	if len(owner.RoleBindings) != 1 || owner.RoleBindings[0].Effect != iam.BindingEffectAllow {
 		t.Fatalf("unexpected Owner A role bindings: %#v", owner.RoleBindings)
 	}
-	if len(owner.SiteBindings) != 1 || owner.SiteBindings[0].ActingOrganizationID != postgresOwnerAOrganizationID ||
-		owner.SiteBindings[0].OwningOrganizationID != postgresOwnerAOrganizationID || owner.SiteBindings[0].SiteID != postgresOwnerASite1ID {
+	if len(owner.SiteBindings) != 1 || owner.SiteBindings[0].TenantID != postgresTenantAID || owner.SiteBindings[0].SiteID != postgresOwnerASite1ID {
 		t.Fatalf("unexpected Owner A Analytics SiteBinding: %#v", owner.SiteBindings)
 	}
 	analyticsGranted := false
@@ -69,7 +68,7 @@ func TestPostgresAuthorizationStoreLoadsImmutableIdentityAndScopedFacts(t *testi
 	delegated, err := store.LookupRegistryAuthorization(ctx, iam.AuthorizationLookup{
 		SubjectIssuer:        postgresFixtureIssuer,
 		Subject:              "delegated",
-		ActingOrganizationID: postgresActingOrganizationID,
+		TenantID: postgresTenantAID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -78,14 +77,14 @@ func TestPostgresAuthorizationStoreLoadsImmutableIdentityAndScopedFacts(t *testi
 		t.Fatalf("unexpected delegated facts: %#v", delegated)
 	}
 	binding := delegated.SiteBindings[0]
-	if binding.OwningOrganizationID != postgresOwnerAOrganizationID || binding.SiteID != postgresOwnerASite1ID || binding.Effect != iam.BindingEffectAllow {
-		t.Fatalf("unexpected cross-Organization SiteBinding: %#v", binding)
+	if binding.TenantID != postgresTenantAID || binding.SiteID != postgresOwnerASite1ID || binding.Effect != iam.BindingEffectAllow {
+		t.Fatalf("unexpected cross-Tenant SiteBinding: %#v", binding)
 	}
 
 	wrongIssuer, err := store.LookupRegistryAuthorization(ctx, iam.AuthorizationLookup{
 		SubjectIssuer:        "https://other-issuer.example.test/oidc",
 		Subject:              "owner-a",
-		ActingOrganizationID: postgresOwnerAOrganizationID,
+		TenantID: postgresTenantAID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +94,7 @@ func TestPostgresAuthorizationStoreLoadsImmutableIdentityAndScopedFacts(t *testi
 	}
 }
 
-func TestPostgresRegistryGrantStatusIsPolicyCurrentAndOrganizationScoped(t *testing.T) {
+func TestPostgresRegistryGrantStatusIsPolicyCurrentAndTenantScoped(t *testing.T) {
 	runtimeURL := requiredIAMPostgresEnv(t, "S1_IAM_DATABASE_URL")
 	adminURL := requiredIAMPostgresEnv(t, "S1_ADMIN_DATABASE_URL")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -108,14 +107,14 @@ func TestPostgresRegistryGrantStatusIsPolicyCurrentAndOrganizationScoped(t *test
 	defer admin.Close()
 	identifier := "integration-id-1"
 	if _, err := admin.Exec(ctx, `
-INSERT INTO iam.registry_grant_revocations (token_id, acting_organization_id, revoked_at, expires_at, reason_code)
+INSERT INTO iam.registry_grant_revocations (token_id, tenant_id, revoked_at, expires_at, reason_code)
 VALUES ($1, $2::uuid, now(), now() + interval '5 minutes', 'TEST_REVOCATION')
 ON CONFLICT (token_id) DO UPDATE
-SET acting_organization_id = EXCLUDED.acting_organization_id,
+SET tenant_id = EXCLUDED.tenant_id,
     revoked_at = EXCLUDED.revoked_at,
     expires_at = EXCLUDED.expires_at,
     reason_code = EXCLUDED.reason_code
-`, identifier, postgresActingOrganizationID); err != nil {
+`, identifier, postgresTenantAID); err != nil {
 		t.Fatal(err)
 	}
 	defer admin.Exec(context.Background(), `DELETE FROM iam.registry_grant_revocations WHERE token_id = $1`, identifier)
@@ -125,19 +124,19 @@ SET acting_organization_id = EXCLUDED.acting_organization_id,
 		t.Fatal(err)
 	}
 	defer store.Close()
-	status, err := store.LookupRegistryGrantStatus(ctx, postgresActingOrganizationID, identifier)
+	status, err := store.LookupRegistryGrantStatus(ctx, postgresTenantAID, identifier)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if status.CurrentPolicyRevision != "registry-read:1" || !status.Revoked {
 		t.Fatalf("status = %#v", status)
 	}
-	other, err := store.LookupRegistryGrantStatus(ctx, postgresOwnerAOrganizationID, identifier)
+	other, err := store.LookupRegistryGrantStatus(ctx, postgresTenantBID, identifier)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if other.CurrentPolicyRevision != "registry-read:1" || other.Revoked {
-		t.Fatalf("cross-Organization status = %#v", other)
+		t.Fatalf("cross-Tenant status = %#v", other)
 	}
 }
 
@@ -153,7 +152,7 @@ func TestPostgresTelemetryAuthorizationLoadsExactDeviceAndKeyFacts(t *testing.T)
 	facts, err := store.LookupTelemetryAuthorization(ctx, iam.TelemetryAuthorizationLookup{
 		SubjectIssuer:        postgresFixtureIssuer,
 		Subject:              "delegated",
-		ActingOrganizationID: postgresActingOrganizationID,
+		TenantID: postgresTenantAID,
 		Targets:              []telemetryauth.Target{{DeviceID: "018f1e00-4000-7000-8000-000000000001", Keys: []string{"fan.speed", "zone.temperature"}}},
 	})
 	if err != nil {
@@ -174,7 +173,7 @@ func TestPostgresPrincipalTelemetryCapabilityLookupDoesNotEnumerateDevicesOrKeys
 	}
 	defer store.Close()
 	facts, err := store.LookupPrincipalTelemetryCapabilities(ctx, iam.PrincipalCapabilityLookup{
-		SubjectIssuer: postgresFixtureIssuer, Subject: "delegated", ActingOrganizationID: postgresActingOrganizationID,
+		SubjectIssuer: postgresFixtureIssuer, Subject: "delegated", TenantID: postgresTenantAID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +198,7 @@ func TestPostgresAlarmAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *testin
 	}
 	defer store.Close()
 	facts, err := store.LookupAlarmAuthorization(ctx, iam.AuthorizationLookup{
-		SubjectIssuer: postgresFixtureIssuer, Subject: "owner-a", ActingOrganizationID: postgresOwnerAOrganizationID,
+		SubjectIssuer: postgresFixtureIssuer, Subject: "owner-a", TenantID: postgresTenantAID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -208,25 +207,25 @@ func TestPostgresAlarmAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *testin
 		t.Fatalf("Alarm facts = %#v", facts)
 	}
 	for _, permission := range facts.Permissions {
-		if permission.OrganizationID != postgresOwnerAOrganizationID || permission.SiteID != postgresOwnerASite1ID || permission.Effect != iam.BindingEffectAllow || permission.Status != iam.FactStatusActive {
+		if permission.TenantID != postgresTenantAID || permission.SiteID != postgresOwnerASite1ID || permission.Effect != iam.BindingEffectAllow || permission.Status != iam.FactStatusActive {
 			t.Fatalf("unexpected Alarm permission: %#v", permission)
 		}
 	}
 
 	other, err := store.LookupAlarmAuthorization(ctx, iam.AuthorizationLookup{
-		SubjectIssuer: postgresFixtureIssuer, Subject: "owner-a", ActingOrganizationID: postgresActingOrganizationID,
+		SubjectIssuer: postgresFixtureIssuer, Subject: "owner-a", TenantID: postgresTenantBID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !other.Found || other.PolicyRevision != "alarm-access:unconfigured" || len(other.Permissions) != 0 {
-		t.Fatalf("cross-Organization Alarm facts were not fail-closed: %#v", other)
+		t.Fatalf("cross-Tenant Alarm facts were not fail-closed: %#v", other)
 	}
 
 	requestID := "alarm-postgres-decision-1"
 	if err := store.RecordAlarmDecision(ctx, iam.AlarmDecisionAudit{
-		PrincipalID: postgresOwnerAPrincipalID, ActingOrganizationID: postgresOwnerAOrganizationID,
-		SiteID: postgresOwnerASite1ID, Action: alarmauth.ActionList, Allowed: true,
+		PrincipalID: postgresOwnerAPrincipalID, TenantID: postgresTenantAID,
+		SiteID: postgresOwnerASite1ID, Action: alarmauth.ActionRead, Allowed: true,
 		PolicyRevision: "alarm-access:1", ReasonCode: alarmauth.ReasonAllowExactScope,
 		RequestID: requestID, TraceID: "trace-alarm-postgres-1", OccurredAt: "2026-08-01T00:00:00Z",
 	}); err != nil {
@@ -260,7 +259,7 @@ func TestPostgresWorkOrderAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *te
 	}
 	defer store.Close()
 	facts, err := store.LookupWorkOrderAuthorization(ctx, iam.AuthorizationLookup{
-		SubjectIssuer: postgresFixtureIssuer, Subject: "owner-a", ActingOrganizationID: postgresOwnerAOrganizationID,
+		SubjectIssuer: postgresFixtureIssuer, Subject: "owner-a", TenantID: postgresTenantAID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -274,7 +273,7 @@ func TestPostgresWorkOrderAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *te
 		workorderauth.ActionComplete: false, workorderauth.ActionCancel: false, workorderauth.ActionReopen: false,
 	}
 	for _, permission := range facts.Permissions {
-		if permission.OrganizationID != postgresOwnerAOrganizationID || permission.SiteID != postgresOwnerASite1ID || permission.Effect != iam.BindingEffectAllow || permission.Status != iam.FactStatusActive {
+		if permission.TenantID != postgresTenantAID || permission.SiteID != postgresOwnerASite1ID || permission.Effect != iam.BindingEffectAllow || permission.Status != iam.FactStatusActive {
 			t.Fatalf("unexpected Work Order permission: %#v", permission)
 		}
 		if seen, ok := expectedActions[permission.Action]; !ok || seen {
@@ -289,18 +288,18 @@ func TestPostgresWorkOrderAuthorizationLoadsExactSiteFactsAndPersistsAudit(t *te
 	}
 
 	other, err := store.LookupWorkOrderAuthorization(ctx, iam.AuthorizationLookup{
-		SubjectIssuer: postgresFixtureIssuer, Subject: "owner-a", ActingOrganizationID: postgresActingOrganizationID,
+		SubjectIssuer: postgresFixtureIssuer, Subject: "owner-a", TenantID: postgresTenantBID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !other.Found || other.PolicyRevision != "work-order-access:unconfigured" || len(other.Permissions) != 0 {
-		t.Fatalf("cross-Organization Work Order facts were not fail-closed: %#v", other)
+		t.Fatalf("cross-Tenant Work Order facts were not fail-closed: %#v", other)
 	}
 
 	requestID := "work-order-postgres-decision-1"
 	if err := store.RecordWorkOrderDecision(ctx, iam.WorkOrderDecisionAudit{
-		PrincipalID: postgresOwnerAPrincipalID, ActingOrganizationID: postgresOwnerAOrganizationID,
+		PrincipalID: postgresOwnerAPrincipalID, TenantID: postgresTenantAID,
 		SiteID: postgresOwnerASite1ID, WorkOrderID: "01910000-1000-7000-8000-000000000001",
 		Action: workorderauth.ActionRead, Allowed: true,
 		PolicyRevision: "work-order-access:1", ReasonCode: workorderauth.ReasonAllowExactScope,

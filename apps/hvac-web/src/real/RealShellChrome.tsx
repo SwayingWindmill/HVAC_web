@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import {
   AlertOutlined,
   ApartmentOutlined,
@@ -16,12 +16,13 @@ import {
   SettingOutlined,
   SunOutlined,
   ThunderboltOutlined,
-  UserOutlined,
 } from '@ant-design/icons';
 import { ProLayout, type MenuDataItem } from '@ant-design/pro-components';
-import { Avatar, Badge, Button, Divider, Grid, Popover, Select, Space, Tooltip } from 'antd';
+import { Badge, Button, Divider, Grid, Popover, Select, Space, Tooltip } from 'antd';
+import { useLocation } from 'react-router';
+import { useRealUiStore } from '@/stores/realUi';
 import { FocusHeading } from './FocusHeading';
-import { createIdleRealtimeStatus, realtimeStatusLabel } from './realtime-status';
+import { createIdleRealtimeStatus, realtimeStatusLabel, realtimeStatusPresentation } from './realtime-status';
 import { RealRuntimeFacts } from './RealRuntimeFacts';
 import { useRealTheme } from './RealTheme';
 import type { RealNavigationItem } from './route-policy';
@@ -38,12 +39,15 @@ const NAVIGATION_ICONS: Record<string, ReactNode> = {
   'site-assets': <ApartmentOutlined />,
 
   'site-energy': <FundOutlined />,
+  'site-forecast': <FundOutlined />,
+  'site-control': <ControlOutlined />,
   'site-optimize': <ThunderboltOutlined />,
   'site-fdd': <BugOutlined />,
   'site-alarms': <AlertOutlined />,
   'site-work-orders': <ControlOutlined />,
   'site-ai': <RobotOutlined />,
   'site-cost': <DollarOutlined />,
+  'site-settlement': <DollarOutlined />,
   'site-bigscreen': <DesktopOutlined />,
   system: <SettingOutlined />,
   alarms: <AlertOutlined />,
@@ -55,12 +59,12 @@ const NAVIGATION_GROUPS = [
   {
     key: 'operations',
     label: '运营管理',
-    ids: ['site-assets', 'site-fdd', 'site-alarms', 'site-work-orders', 'site-optimize', 'alarms', 'work-orders'],
+    ids: ['site-assets', 'site-fdd', 'site-alarms', 'site-work-orders', 'site-control', 'site-optimize', 'alarms', 'work-orders'],
   },
   {
     key: 'analytics',
     label: '分析中心',
-    ids: ['site-energy', 'site-cost', 'site-ai', 'ai-investigation'],
+    ids: ['site-energy', 'site-forecast', 'site-cost', 'site-settlement', 'site-ai', 'ai-investigation'],
   },
   {
     key: 'presentation',
@@ -191,6 +195,7 @@ function PurgingSurface() {
 
 function PurgeFailedSurface({ snapshot }: { snapshot: ShellSnapshot }) {
   const failure = snapshot.siteTransition?.failure;
+  const location = useLocation();
   return (
     <section className="real-route-surface" data-testid="real-site-purge-failed" data-route-state="UNAVAILABLE">
       <p className="real-shell-eyebrow">站点切换失败</p>
@@ -202,7 +207,7 @@ function PurgeFailedSurface({ snapshot }: { snapshot: ShellSnapshot }) {
           <span>{failure.detail}</span>
         </div>
       ) : null}
-      <a className="real-shell-link-action" href={window.location.href}>重新建立可信站点范围</a>
+      <a className="real-shell-link-action" href={`${location.pathname}${location.search}${location.hash}`}>重新建立可信站点范围</a>
     </section>
   );
 }
@@ -228,7 +233,7 @@ export function RealShellChrome({
 }) {
   const principal = snapshot.principal!;
   const submitting = snapshot.logout?.status === 'submitting';
-  const pathname = window.location.pathname;
+  const pathname = useLocation().pathname;
   const transition = snapshot.siteTransition;
   const protectedScope = snapshot.protectedScope;
   const activeSite = protectedScope?.siteId
@@ -236,12 +241,15 @@ export function RealShellChrome({
     : undefined;
   const realtime = snapshot.realtime ?? createIdleRealtimeStatus();
   const realtimeLabel = realtimeStatusLabel(realtime);
+  const realtimePresentation = realtimeStatusPresentation(realtime);
   const transitionBlocksContent = transition?.status === 'purging' || transition?.status === 'failed';
   const siteLabel = activeSite?.displayName ?? (transitionBlocksContent ? 'No active Site' : 'Platform scope');
+  const tenantId = principal.context.tenantId;
   const screens = useBreakpoint();
   const compact = !screens.xl;
   const narrow = !screens.xl;
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const sidebarCollapsed = useRealUiStore((state) => state.sidebarCollapsed);
+  const setSidebarCollapsed = useRealUiStore((state) => state.setSidebarCollapsed);
   const { resolvedMode: themeMode, setMode: setThemeMode } = useRealTheme();
 
   const navigate = (target: string) => onNavigate?.(target);
@@ -273,6 +281,7 @@ export function RealShellChrome({
   );
   const siteControl = (
     <Space size={10}>
+      <span data-testid="real-shell-tenant" aria-label="当前 Tenant" className="real-shell-scope-tag">Tenant · {tenantId}</span>
       <span data-testid="real-shell-site-control">
         <Select
           aria-label="选择授权 Site"
@@ -295,7 +304,7 @@ export function RealShellChrome({
   return (
     <div
       className="real-shell-layout"
-      style={{ minHeight: '100vh', height: '100vh', overflow: 'hidden' }}
+      style={{ minHeight: '100dvh', height: '100dvh', overflow: 'hidden' }}
       data-testid="real-protected-shell"
       data-protected-route-mounted="true"
       data-policy-revision={principal.authorization.policyRevision}
@@ -348,7 +357,7 @@ export function RealShellChrome({
           ) : siteControl
         )}
         actionsRender={() => [
-          <Tooltip key="realtime" title={realtime.siteId ? `当前订阅：${siteLabel}` : '当前没有活动 Site 订阅'}>
+          <Tooltip key="realtime" title={`${realtimePresentation.code} · ${realtimePresentation.label}：${realtimePresentation.detail}${realtime.siteId ? ` 当前订阅：${siteLabel}` : ''}`}>
             <span
               className="real-shell-realtime"
               role="status"
@@ -360,7 +369,9 @@ export function RealShellChrome({
             >
               <ApiOutlined style={{ color: realtimeColor }} />
               <Badge status={realtimeStatus} />
-              <span className={compact ? 'real-shell-sr-only' : undefined}>{realtimeLabel}</span>
+              <span data-testid="real-realtime-code">{realtimePresentation.code}</span>
+              <span>{realtimePresentation.label}</span>
+              <span className="real-shell-sr-only">{realtimeLabel}</span>
             </span>
           </Tooltip>,
           bigscreen ? (
@@ -381,11 +392,6 @@ export function RealShellChrome({
               onClick={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
             />
           </Tooltip>,
-          !narrow ? (
-            <Tooltip key="principal-avatar" title={`${principal.principal.displayName} · ${principal.principal.roles.join(', ') || '授权用户'}`}>
-              <Avatar style={{ background: '#0FB5AE' }} icon={<UserOutlined />} />
-            </Tooltip>
-          ) : null,
           <Tooltip key="logout" title="退出登录">
             <Button
               type="text"
@@ -404,17 +410,19 @@ export function RealShellChrome({
           <span key="site" className="real-shell-sr-only" data-testid="real-shell-site">{siteLabel}</span>,
           <span key="state" className="real-shell-sr-only" data-testid="real-shell-state">READY</span>,
         ]}
-        contentStyle={{ margin: 0, padding: 0, minHeight: 0, overflow: 'hidden' }}
+        contentStyle={{ margin: 0, padding: 0, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
       >
         <main
           className="app-content real-shell-content"
           style={{
             minWidth: 0,
             minHeight: 0,
-            height: '100%',
+            flex: '1 1 0',
             boxSizing: 'border-box',
             padding: '20px 20px 88px',
-            overflow: 'auto',
+            overflowX: 'hidden',
+            overflowY: 'auto',
+            overscrollBehavior: 'contain',
           }}
         >
           {snapshot.logout?.status === 'failed' ? (

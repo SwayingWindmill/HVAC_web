@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "name": "Phase 1 RPO/RTO recovery targets",
+  "sourceOfTruth": "SE-OPS-009 V1.0 CURRENT CANDIDATE",
+  "deploymentModel": "single-linux-server-docker-compose",
+  "rtoDefinition": {
+    "start": "incident-confirmed-impacting-service",
+    "end": "business-service-restored-and-validated",
+    "containerRunningIsNotCompletion": true
+  },
+  "targetsAreSlaGuarantees": false,
+  "targets": {
+    "edgeSafety": {"rpoSeconds": 0, "rto": "continuous"},
+    "postgresqlBusinessSoT": {"rpoSeconds": 300, "rtoSeconds": 7200},
+    "controlCommandAudit": {"rpoSeconds": 300, "rtoSeconds": 3600},
+    "settlement": {"rpoSeconds": 300, "rtoSeconds": 7200},
+    "config": {"rpoSeconds": 300, "rtoSeconds": 7200},
+    "devicePointTopology": {"rpoSeconds": 300, "rtoSeconds": 7200},
+    "telemetry": {"effectiveRpo": "approximately-zero-within-edge-retention-window", "cloudServiceRtoSeconds": 14400},
+    "metricSeries": {"rpoSeconds": 1800, "rtoSeconds": 14400},
+    "activeAlarm": {"rpoSeconds": 900, "rtoSeconds": 3600},
+    "alarmHistory": {"rpoSeconds": 900, "rtoSeconds": 7200},
+    "redis": {"rpo": "N/A", "rtoSeconds": 900, "rebuildable": true},
+    "mqttBroker": {"rpo": "N/A", "rtoSeconds": 1800, "businessSoT": false},
+    "forecastResult": {"rpoSeconds": 86400, "rtoSeconds": 7200, "recomputable": true},
+    "optimizationResult": {"rpoSeconds": 86400, "rtoSeconds": 7200, "recomputable": true},
+    "objectStorage": {"rpoSeconds": 86400, "rtoSeconds": 14400},
+    "reportExport": {"rpoSeconds": 86400, "rtoSeconds": 28800, "regenerable": true},
+    "credentialMaterial": {"rpoSeconds": 86400, "rtoSeconds": 3600, "independentEncryptedBackupRequired": true}
+  },
+  "failureScenarioRtoSeconds": {
+    "processOrContainerFailure": 300,
+    "databaseProcessFailure": 1800,
+    "serverOsRecoverableFailure": 3600,
+    "wholeServerReplacement": 14400
+  },
+  "wholeServerFourHourPrerequisites": [
+    "spare-or-cold-standby-hardware",
+    "external-backup",
+    "versioned-config",
+    "documented-recovery-procedure"
+  ],
+  "backupPolicy": {
+    "postgresBaseBackup": "daily",
+    "postgresWalArchive": "continuous",
+    "clickhouseImportantSnapshot": "daily",
+    "configurationAndCredentialMaterial": "daily-and-change-triggered",
+    "backupVerification": "daily",
+    "restoreDrill": "quarterly",
+    "offServerCopyRequired": true
+  },
+  "recoveryOrder": [
+    "prepare-linux-disk-network-time",
+    "install-docker-runtime",
+    "restore-config-and-credential-material",
+    "restore-postgresql",
+    "restore-mqtt",
+    "start-redis",
+    "restore-or-start-clickhouse",
+    "start-energy-api",
+    "start-iot-service",
+    "start-telemetry-worker",
+    "start-metric-worker",
+    "start-realtime-and-scheduler",
+    "start-optional-intelligence-services",
+    "reconcile-control-commands",
+    "start-rate-limited-edge-replay",
+    "validate-business"
+  ],
+  "recoveryValidation": [
+    "postgresql-integrity",
+    "clickhouse-write",
+    "redis-latest",
+    "mqtt-connectivity",
+    "gateway-online",
+    "telemetry-lag",
+    "metric-calculation",
+    "alarm-evaluation",
+    "command-reconciliation",
+    "scheduler-backlog",
+    "outbox-backlog",
+    "disk-capacity",
+    "clock-sync"
+  ],
+  "productionAttestation": {
+    "targetDefinitionComplete": true,
+    "timestampedRestoreDrillRequired": true,
+    "containerOnlyEvidenceSufficient": false,
+    "actualRpoRtoMustBeRecorded": true
+  }
+}

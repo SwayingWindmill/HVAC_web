@@ -8,17 +8,19 @@ const (
 	testAlarmID        = "01910000-1000-7000-8000-000000000001"
 )
 
-func TestDecisionRequestRequiresExactListAndReadShape(t *testing.T) {
-	if err := (DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, Action: ActionList}).Validate(); err != nil {
+func TestDecisionRequestRequiresReadAndAckShape(t *testing.T) {
+	if err := (DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, Action: ActionRead}).Validate(); err != nil {
 		t.Fatal(err)
 	}
 	if err := (DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, AlarmID: testAlarmID, Action: ActionRead}).Validate(); err != nil {
 		t.Fatal(err)
 	}
+	if err := (DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, AlarmID: testAlarmID, Action: ActionAck}).Validate(); err != nil {
+		t.Fatal(err)
+	}
 	for _, invalid := range []DecisionRequest{
-		{TenantID: testTenantID, SiteID: testSiteID, AlarmID: testAlarmID, Action: ActionList},
-		{TenantID: testTenantID, SiteID: testSiteID, Action: ActionRead},
-		{TenantID: testTenantID, SiteID: "site-1", Action: ActionList},
+		{TenantID: testTenantID, SiteID: testSiteID, Action: ActionAck},
+		{TenantID: testTenantID, SiteID: "site-1", Action: ActionRead},
 		{TenantID: testTenantID, SiteID: testSiteID, Action: "alarm:delete"},
 	} {
 		if err := invalid.Validate(); err == nil {

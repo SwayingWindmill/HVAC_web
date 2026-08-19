@@ -17,11 +17,15 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/oidctest"
+	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/testpki"
 	"github.com/quanlaihe/hvac-web/services/iam-service/pkg/iamserver"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/internal/gateway"
 	"github.com/quanlaihe/hvac-web/services/platform-gateway/pkg/platformapi"
 )
+
+const authFixtureTenantID = "018f3d00-0000-7000-8000-000000000001"
+const authFixtureMFAACR = "urn:hvac:loa:2"
 
 type authHarness struct {
 	gatewayServer *httptest.Server
@@ -30,6 +34,7 @@ type authHarness struct {
 	gatewayURL    string
 	logs          *bytes.Buffer
 	transport     http.RoundTripper
+	sessionStore  *sessionstore.MemoryStore
 }
 
 type fixedPrincipalCapabilityResolver struct {
@@ -48,7 +53,7 @@ func TestAuthenticatedPrincipalLoop(t *testing.T) {
 	if principal.Principal.Subject != "fixture-user" || principal.Context.ExecutingServicePrincipal.SPIFFEID != "spiffe://hvac.local/platform-gateway" {
 		t.Fatalf("unexpected principal chain: %#v", principal)
 	}
-	if principal.Context.ActingOrganizationID != "org-fixture-01" || principal.Context.Audience != "iam-service" || principal.Context.PolicyRevision != "policy-v1" {
+	if principal.Context.TenantID != authFixtureTenantID || principal.Context.Audience != "iam-service" || principal.Context.PolicyRevision != "policy-v1" {
 		t.Fatalf("identity context is incomplete: %#v", principal.Context)
 	}
 	if principal.Authorization.CapabilitySetVersion != identitycontext.CapabilitySetVersion || principal.Authorization.PolicyRevision != "registry-read:test" {
@@ -123,19 +128,52 @@ func TestAuthenticatedPrincipalLoop(t *testing.T) {
 	assertProblemCode(t, afterLogout, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED")
 }
 
-func TestModernLogtoIDTokenIsAccepted(t *testing.T) {
+func TestOIDCIDTokenWithoutAssuranceIsRejected(t *testing.T) {
 	harness := newAuthHarness(t)
 	client := harness.browserClient(t)
-	principal, _ := loginAndReadPrincipal(t, client, harness.gatewayURL, "logto-modern")
+	loginURL := harness.gatewayURL + platformapi.BeginLoginPath + "?returnTo=%2Fapi%2Fv1%2Fprincipal&login_hint=minimal-oidc"
+	request, err := http.NewRequest(http.MethodPost, loginURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	assertProblemCode(t, response, http.StatusUnauthorized, "OIDC_ASSURANCE_INVALID")
+}
 
-	if principal.Principal.Subject != "fixture-user" {
-		t.Fatalf("modern Logto principal was not accepted: %#v", principal.Principal)
+func TestHighAssuranceLoginPersistsMFASessionEvidence(t *testing.T) {
+	harness := newAuthHarness(t)
+	client := harness.browserClient(t)
+	loginURL := harness.gatewayURL + platformapi.BeginLoginPath + "?returnTo=%2Fapi%2Fv1%2Fprincipal&assurance=high"
+	request, err := http.NewRequest(http.MethodPost, loginURL, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if principal.Context.ActingOrganizationID != "org-fixture-01" {
-		t.Fatalf("deployment-owned Organization fallback was not applied: %#v", principal.Context)
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if principal.Principal.Roles == nil || len(principal.Principal.Roles) != 0 {
-		t.Fatalf("role-free Logto principal must publish an empty roles array: %#v", principal.Principal.Roles)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		var problem platformapi.ProblemDetails
+		if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+			t.Fatalf("high-assurance login status = %d; decode problem: %v", response.StatusCode, err)
+		}
+		t.Fatalf("high-assurance login status = %d; problem=%#v", response.StatusCode, problem)
+	}
+	var principal platformapi.CurrentPrincipalResponse
+	if err := json.NewDecoder(response.Body).Decode(&principal); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := harness.sessionStore.GetSession(context.Background(), principal.Session.ID)
+	if err != nil {
+		t.Fatalf("read high-assurance BFF session: %v", err)
+	}
+	if stored.AuthenticationACR != authFixtureMFAACR || !containsFixtureValue(stored.AuthenticationAMR, "pwd") || !containsFixtureValue(stored.AuthenticationAMR, "otp") || stored.AuthenticationTime.IsZero() {
+		t.Fatalf("high-assurance session evidence was not persisted: %#v", stored)
 	}
 }
 
@@ -158,7 +196,7 @@ func TestGatewayRejectsMalformedIAMCapabilityResponse(t *testing.T) {
 				Context: identitycontext.PrincipalContext{
 					InitiatingPrincipal:       principal,
 					ExecutingServicePrincipal: identitycontext.ServicePrincipal{Service: "platform-gateway", SPIFFEID: claims.ExecutingService},
-					ActingOrganizationID:      claims.ActingOrganizationID,
+					TenantID:                  claims.TenantID,
 					Audience:                  claims.Audience,
 					PolicyRevision:            claims.PolicyRevision,
 					DelegationExpiresAt:       time.Unix(claims.ExpiresAt, 0).UTC().Format(time.RFC3339),
@@ -172,10 +210,7 @@ func TestGatewayRejectsMalformedIAMCapabilityResponse(t *testing.T) {
 		})
 	})
 	client := harness.browserClient(t)
-	response, err := client.Get(harness.gatewayURL + platformapi.BeginLoginPath + "?returnTo=%2Fapi%2Fv1%2Fprincipal")
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := beginLogin(t, client, harness.gatewayURL, "?returnTo=%2Fapi%2Fv1%2Fprincipal")
 	defer response.Body.Close()
 	assertProblemCode(t, response, http.StatusServiceUnavailable, "IAM_RESPONSE_INVALID")
 	gatewayURL, _ := url.Parse(harness.gatewayURL)
@@ -202,10 +237,7 @@ func TestOIDCRejectedIdentityPaths(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.hint, func(t *testing.T) {
 			client := harness.browserClient(t)
-			response, err := client.Get(harness.gatewayURL + platformapi.BeginLoginPath + "?returnTo=%2Fapi%2Fv1%2Fprincipal&login_hint=" + url.QueryEscape(testCase.hint))
-			if err != nil {
-				t.Fatal(err)
-			}
+			response := beginLogin(t, client, harness.gatewayURL, "?returnTo=%2Fapi%2Fv1%2Fprincipal&login_hint="+url.QueryEscape(testCase.hint))
 			defer response.Body.Close()
 			assertProblemCode(t, response, http.StatusUnauthorized, testCase.code)
 			gatewayURL, _ := url.Parse(harness.gatewayURL)
@@ -238,14 +270,11 @@ func TestOIDCOutagePreservesCommittedSessionAndBlocksNewLogin(t *testing.T) {
 	}
 	defer current.Body.Close()
 	if current.StatusCode != http.StatusOK {
-		t.Fatalf("committed Session depended on Logto availability: status=%d", current.StatusCode)
+		t.Fatalf("committed Session depended on OIDC provider availability: status=%d", current.StatusCode)
 	}
 
 	newClient := harness.browserClient(t)
-	login, err := newClient.Get(harness.gatewayURL + platformapi.BeginLoginPath + "?returnTo=%2Fapi%2Fv1%2Fprincipal")
-	if err != nil {
-		t.Fatal(err)
-	}
+	login := beginLogin(t, newClient, harness.gatewayURL, "?returnTo=%2Fapi%2Fv1%2Fprincipal")
 	defer login.Body.Close()
 	assertProblemCode(t, login, http.StatusServiceUnavailable, "OIDC_PROVIDER_UNAVAILABLE")
 }
@@ -285,12 +314,12 @@ func TestAdministrativeSessionRevocation(t *testing.T) {
 	assertProblemCode(t, afterRevocation, http.StatusUnauthorized, "SESSION_INVALID")
 }
 
-func TestCrossOrganizationAdminCannotRevokeSession(t *testing.T) {
+func TestCrossTenantAdminCannotRevokeSession(t *testing.T) {
 	harness := newAuthHarness(t)
 	userClient := harness.browserClient(t)
 	userPrincipal, _ := loginAndReadPrincipal(t, userClient, harness.gatewayURL, "")
 	otherAdminClient := harness.browserClient(t)
-	otherAdminPrincipal, _ := loginAndReadPrincipal(t, otherAdminClient, harness.gatewayURL, "admin-other-organization")
+	otherAdminPrincipal, _ := loginAndReadPrincipal(t, otherAdminClient, harness.gatewayURL, "admin-other-tenant")
 
 	revokePath := strings.Replace(platformapi.RevokeSessionPathTemplate, "{sessionId}", url.PathEscape(userPrincipal.Session.ID), 1)
 	revoke, _ := http.NewRequest(http.MethodPost, harness.gatewayURL+revokePath, nil)
@@ -309,7 +338,7 @@ func TestCrossOrganizationAdminCannotRevokeSession(t *testing.T) {
 	}
 	defer stillActive.Body.Close()
 	if stillActive.StatusCode != http.StatusOK {
-		t.Fatalf("cross-Organization revocation changed target Session status to %d", stillActive.StatusCode)
+		t.Fatalf("cross-Tenant revocation changed target Session status to %d", stillActive.StatusCode)
 	}
 }
 
@@ -327,7 +356,7 @@ func TestDirectIAMAccessWithoutWorkloadIdentityFails(t *testing.T) {
 func TestAuthLogsExcludeQueryIdentityAndCredentials(t *testing.T) {
 	harness := newAuthHarness(t)
 	client := harness.browserClient(t)
-	request, _ := http.NewRequest(http.MethodGet, harness.gatewayURL+platformapi.BeginLoginPath+"?returnTo=%2Fapi%2Fv1%2Fprincipal&login_hint=seeded-sensitive-login-hint", nil)
+	request, _ := http.NewRequest(http.MethodPost, harness.gatewayURL+platformapi.BeginLoginPath+"?returnTo=%2Fapi%2Fv1%2Fprincipal&login_hint=seeded-sensitive-login-hint", nil)
 	request.Header.Set("Authorization", "Bearer seeded-sensitive-token")
 	request.Header.Set("Cookie", "seeded-sensitive-cookie=value")
 	response, err := client.Do(request)
@@ -380,7 +409,7 @@ func newAuthHarnessWithIAMFactory(t *testing.T, factory func(clientSPIFFEID stri
 	gatewayServer := httptest.NewUnstartedServer(nil)
 	gatewayURL := "https://" + gatewayServer.Listener.Addr().String()
 	redirectURI := gatewayURL + platformapi.CompleteLoginPath
-	provider, err := oidctest.New(oidctest.Config{Issuer: "http://placeholder.invalid", ClientID: "hvac-web-s0", RedirectURI: redirectURI})
+	provider, err := oidctest.New(oidctest.Config{Issuer: "http://placeholder.invalid", ClientID: "hvac-web-s0", RedirectURI: redirectURI, DefaultTenantID: authFixtureTenantID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,21 +430,22 @@ func newAuthHarnessWithIAMFactory(t *testing.T, factory func(clientSPIFFEID stri
 		t.Fatal("client key is not a signer")
 	}
 	var logs bytes.Buffer
+	sessionStore := sessionstore.NewMemoryStore()
 	handler := gateway.NewHandler(gateway.Config{
 		Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
 		Build:  platformapi.BuildInfo{Service: "platform-gateway", Version: "test", Commit: "test", BuiltAt: "test"},
 		Identity: &gateway.IdentityConfig{
 			OIDCIssuer: oidcServer.URL, OIDCClientID: "hvac-web-s0", OIDCRedirectURI: redirectURI, PublicOrigin: gatewayURL,
-			DefaultActingOrganizationID: "org-fixture-01",
-			IAMURL:                      iamServer.URL, IAMAudience: "iam-service", ExecutingWorkloadSPIFFE: bundle.ClientSPIFFEID, PolicyRevision: "policy-v1",
+			DefaultTenantID: authFixtureTenantID,
+			IAMURL:          iamServer.URL, IAMAudience: "iam-service", ExecutingWorkloadSPIFFE: bundle.ClientSPIFFEID, PolicyRevision: "policy-v1",
 			OIDCHTTPClient: oidcServer.Client(), IAMHTTPClient: &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: clientTLS}},
-			DelegationSigner: signer, TokenEncryptionKey: bytes.Repeat([]byte{0x42}, 32), SessionTTL: 10 * time.Minute, StateTTL: time.Minute, DelegationTTL: 30 * time.Second, RevocationObjective: time.Second,
+			DelegationSigner: signer, TokenEncryptionKey: bytes.Repeat([]byte{0x42}, 32), SessionStore: sessionStore, LoginStateStore: gateway.NewMemoryLoginStateStoreForTest(), SessionTTL: 10 * time.Minute, StateTTL: time.Minute, DelegationTTL: 30 * time.Second, RevocationObjective: time.Second,
 		},
 	})
 	gatewayServer.Config.Handler = handler
 	gatewayServer.StartTLS()
 	t.Cleanup(gatewayServer.Close)
-	return &authHarness{gatewayServer: gatewayServer, iamServer: iamServer, oidcServer: oidcServer, gatewayURL: gatewayURL, logs: &logs, transport: gatewayServer.Client().Transport}
+	return &authHarness{gatewayServer: gatewayServer, iamServer: iamServer, oidcServer: oidcServer, gatewayURL: gatewayURL, logs: &logs, transport: gatewayServer.Client().Transport, sessionStore: sessionStore}
 }
 
 func (h *authHarness) browserClient(t *testing.T) *http.Client {
@@ -429,14 +459,11 @@ func (h *authHarness) browserClient(t *testing.T) *http.Client {
 
 func loginAndReadPrincipal(t *testing.T, client *http.Client, gatewayURL, loginHint string) (platformapi.CurrentPrincipalResponse, *http.Response) {
 	t.Helper()
-	loginURL := gatewayURL + platformapi.BeginLoginPath + "?returnTo=%2Fapi%2Fv1%2Fprincipal"
+	query := "?returnTo=%2Fapi%2Fv1%2Fprincipal"
 	if loginHint != "" {
-		loginURL += "&login_hint=" + url.QueryEscape(loginHint)
+		query += "&login_hint=" + url.QueryEscape(loginHint)
 	}
-	response, err := client.Get(loginURL)
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := beginLogin(t, client, gatewayURL, query)
 	if response.StatusCode != http.StatusOK {
 		defer response.Body.Close()
 		assertProblemCode(t, response, http.StatusOK, "")
@@ -448,6 +475,28 @@ func loginAndReadPrincipal(t *testing.T, client *http.Client, gatewayURL, loginH
 	}
 	response.Body.Close()
 	return principal, response
+}
+
+func beginLogin(t *testing.T, client *http.Client, gatewayURL, query string) *http.Response {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPost, gatewayURL+platformapi.BeginLoginPath+query, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func containsFixtureValue(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func assertProblemCode(t *testing.T, response *http.Response, expectedStatus int, expectedCode string) {

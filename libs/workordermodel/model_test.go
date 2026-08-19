@@ -84,14 +84,13 @@ func TestWorkOrderValidateRejectsProjectionDrift(t *testing.T) {
 	}
 }
 
-func TestWorkOrderValidateAcceptsAssetAndEquipmentReferences(t *testing.T) {
+func TestWorkOrderValidateAcceptsAssetReferences(t *testing.T) {
 	item := validWorkOrder()
 	item.SourceReferences = append(item.SourceReferences,
 		workordermodel.SourceReference{Domain: workordermodel.SourceAsset, ResourceID: "01910000-0004-7000-8000-000000000001", Relationship: workordermodel.RelationshipRelated},
-		workordermodel.SourceReference{Domain: workordermodel.SourceEquipment, ResourceID: "01910000-0005-7000-8000-000000000001", Relationship: workordermodel.RelationshipRelated},
 	)
 	if err := item.Validate(); err != nil {
-		t.Fatalf("Asset and Equipment references were rejected: %v", err)
+		t.Fatalf("Asset reference was rejected: %v", err)
 	}
 }
 

@@ -394,6 +394,7 @@ ON CONFLICT (device_id, telemetry_key) DO UPDATE SET
   quality_reasons = EXCLUDED.quality_reasons,
   policy_revision = EXCLUDED.policy_revision,
   updated_at = EXCLUDED.updated_at
+WHERE telemetry_runtime.latest_accepted_telemetry.sampled_at <= EXCLUDED.sampled_at
 `, decision.DeviceID, candidate.TelemetryKey, []byte(candidate.Value), candidate.ValueType, candidate.Unit,
 		candidate.SampledAt, candidate.ReceivedAt, string(decision.Quality), qualityReasonStrings(decision.QualityReasons), decision.PolicyRevision)
 	if err != nil {

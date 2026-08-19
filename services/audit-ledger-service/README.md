@@ -6,11 +6,11 @@
 
 - consume `control.security.session.v1` from the Kafka API;
 - decode the versioned Protobuf envelope;
-- write Transactional Inbox, Organization hash head and Audit Record in one PostgreSQL transaction;
+- write Transactional Inbox, Tenant hash head and Audit Record in one PostgreSQL transaction;
 - commit broker offsets only after the database transaction commits;
 - suppress identical duplicate message IDs;
 - reject the same message ID with different Protobuf bytes;
-- enforce append-only records and Organization Row-Level Security;
+- enforce append-only records and Tenant Row-Level Security;
 - serve one private mTLS audit query route.
 
 ## Private route
@@ -25,10 +25,10 @@ The route requires:
 - a grant signed by that workload key;
 - audience `audit-ledger-service`;
 - action `audit:read`;
-- scope `organization:<acting organization>`;
-- an initiating role of `audit-reader` or `platform-admin`.
+- scope `tenant:<tenant id>`;
+- an IAM-authorized `audit.read` capability represented by the constrained `audit:read` delegation; the Ledger does not interpret Role names.
 
-Unknown and cross-Organization records are both returned as `AUDIT_RECORD_NOT_FOUND`.
+Unknown and cross-Tenant records are both returned as `AUDIT_RECORD_NOT_FOUND`.
 
 ## Runtime database identities
 

@@ -8,7 +8,7 @@ const readJSON = async (relativePath) => JSON.parse(await readFile(path.join(roo
 
 const routeRegistry = await readJSON('contracts/ownership/route-ownership.v1.json');
 const dataRegistry = await readJSON('contracts/ownership/data-ownership.v1.json');
-const backendArchitecture = await readJSON('contracts/architecture/backend-architecture.v2.json');
+const targetDomainModel = await readJSON('contracts/architecture/target-domain-model.v1.json');
 const errors = [];
 
 const allowedOwners = new Set([
@@ -18,18 +18,20 @@ const allowedOwners = new Set([
 ]);
 const allowedScopes = new Set(['tenant', 'principal', 'site', 'device', 'key', 'alarm', 'work-order', 'asset', 'space', 'point', 'command']);
 const allowedMethods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-const canonicalMustExist = new Set([
-  'POST /api/v1/auth/login',
-  'GET /api/v1/sites',
-  'GET /api/v1/sites/{siteId}',
-  'GET /api/v1/assets/{assetId}',
-  'GET /api/v1/devices/{deviceId}',
-  'POST /api/v1/commands',
-  'GET /api/v1/commands/{commandId}',
-  'POST /api/v1/commands/{commandId}/approve',
-  'GET /api/v1/alarms',
-  'GET /api/v1/alarms/{alarmId}',
-  'POST /api/v1/alarms/{alarmId}/ack',
+const allowedRouteFields = new Set(['method', 'path', 'owner', 'publicIngress', 'revision', 'rollout', 'compatibilityMode', 'allowedScopeDimensions']);
+const allowedRolloutFields = new Set(['mode']);
+const canonicalOwners = new Map([
+  ['POST /api/v1/auth/login', 'platform-gateway'],
+  ['GET /api/v1/sites', 'platform-core-service'],
+  ['GET /api/v1/sites/{siteId}', 'platform-core-service'],
+  ['GET /api/v1/assets/{assetId}', 'platform-core-service'],
+  ['GET /api/v1/devices/{deviceId}', 'platform-core-service'],
+  ['POST /api/v1/commands', 'command-service'],
+  ['GET /api/v1/commands/{commandId}', 'command-service'],
+  ['POST /api/v1/commands/{commandId}/approve', 'command-service'],
+  ['GET /api/v1/alarms', 'alarm-service'],
+  ['GET /api/v1/alarms/{alarmId}', 'alarm-service'],
+  ['POST /api/v1/alarms/{alarmId}/ack', 'alarm-service'],
 ]);
 
 if (routeRegistry.registryVersion !== 1) errors.push('route registry version must be 1');
@@ -38,16 +40,21 @@ if (!Number.isInteger(routeRegistry.registryRevision) || routeRegistry.registryR
 const routeKeys = new Set();
 for (const route of routeRegistry.routes ?? []) {
   const key = `${route.method} ${route.path}`;
+  for (const field of Object.keys(route)) {
+    if (!allowedRouteFields.has(field)) errors.push(`${key}: obsolete or unknown route field ${field}`);
+  }
   if (!allowedMethods.has(route.method)) errors.push(`${key}: unsupported method`);
   if (typeof route.path !== 'string' || !route.path.startsWith('/api/v1/')) errors.push(`${key}: public path must start with /api/v1/`);
   if (routeKeys.has(key)) errors.push(`${key}: duplicate route owner`);
   routeKeys.add(key);
   if (!allowedOwners.has(route.owner)) errors.push(`${key}: unknown current owner ${route.owner}`);
-  if (route.publicIngress !== undefined && route.publicIngress !== 'platform-gateway') errors.push(`${key}: public ingress must be platform-gateway`);
+  if (route.owner === 'platform-gateway') {
+    if (route.publicIngress !== undefined) errors.push(`${key}: Gateway-owned route must not declare a second ingress owner`);
+  } else if (route.publicIngress !== 'platform-gateway') {
+    errors.push(`${key}: non-Gateway public route must enter through platform-gateway`);
+  }
   if (!Number.isInteger(route.revision) || route.revision < 1) errors.push(`${key}: invalid revision`);
   if (route.compatibilityMode !== 'native') errors.push(`${key}: only native compatibility mode is allowed in the current registry`);
-  if (route.readOnlyFallback === true) errors.push(`${key}: request fallback is forbidden in the current registry`);
-  if (route.readFallbackOwner !== undefined) errors.push(`${key}: read fallback owner is forbidden`);
   for (const scope of route.allowedScopeDimensions ?? []) {
     if (!allowedScopes.has(scope)) errors.push(`${key}: invalid scope dimension ${scope}`);
   }
@@ -56,24 +63,18 @@ for (const route of routeRegistry.routes ?? []) {
     errors.push(`${key}: legacy Organization/Equipment public path is forbidden`);
   }
   if (route.path.includes(':approve') || route.path.includes(':acknowledge')) errors.push(`${key}: legacy colon Command/Alarm action path is forbidden`);
+  if (route.path.includes('/alarms/') && (route.path.endsWith(':close') || route.path.endsWith(':reopen'))) errors.push(`${key}: legacy single-status Alarm lifecycle path is forbidden`);
 
   const rollout = route.rollout ?? {};
-  if (!['all', 'disabled', 'percentage'].includes(rollout.mode)) errors.push(`${key}: rollout mode is invalid`);
-  if (rollout.fallbackOwner !== undefined) errors.push(`${key}: rollout fallback owner is forbidden`);
-  if (rollout.mode === 'percentage') {
-    if (!Number.isInteger(rollout.percentage) || rollout.percentage < 0 || rollout.percentage > 100) errors.push(`${key}: rollout percentage must be 0..100`);
-    if (typeof rollout.cohortSalt !== 'string' || rollout.cohortSalt.length < 8) errors.push(`${key}: percentage rollout requires a cohort salt`);
-    if (!(route.allowedScopeDimensions ?? []).includes('tenant') || !(route.allowedScopeDimensions ?? []).includes('principal')) {
-      errors.push(`${key}: percentage rollout requires Tenant + Principal scope`);
-    }
-  } else {
-    for (const field of ['percentage', 'fallbackOwner', 'cohortSalt']) {
-      if (rollout[field] !== undefined) errors.push(`${key}: ${rollout.mode} rollout cannot declare ${field}`);
-    }
+  for (const field of Object.keys(rollout)) {
+    if (!allowedRolloutFields.has(field)) errors.push(`${key}: obsolete or unknown rollout field ${field}`);
   }
+  if (!['all', 'disabled'].includes(rollout.mode)) errors.push(`${key}: only deterministic all-or-disabled activation is allowed`);
 }
-for (const key of canonicalMustExist) {
-  if (!routeKeys.has(key)) errors.push(`${key}: required current canonical route is missing`);
+for (const [key, expectedOwner] of canonicalOwners) {
+  const route = (routeRegistry.routes ?? []).find((entry) => `${entry.method} ${entry.path}` === key);
+  if (!route) errors.push(`${key}: required current canonical route is missing`);
+  else if (route.owner !== expectedOwner) errors.push(`${key}: owner must be ${expectedOwner}, got ${route.owner}`);
 }
 
 if (dataRegistry.registryVersion !== 1) errors.push('data registry version must be 1');
@@ -123,12 +124,26 @@ const dataText = JSON.stringify(dataRegistry);
 if (/organization/i.test(routeText)) errors.push('active route ownership registry still contains Organization vocabulary');
 if (/organization/i.test(dataText)) errors.push('active data ownership registry still contains Organization vocabulary');
 
-if (backendArchitecture.document?.version !== '2.1.2') errors.push('ownership registry checker requires SE-ARCH-004 V2.1.2 baseline');
-if (backendArchitecture.authorityOverrides?.tenantModel?.includes('Tenant') !== true) errors.push('Tenant authority override is missing');
+if (targetDomainModel.status !== 'TARGET_DOMAIN_MODEL_FINAL') errors.push('ownership checker requires the final ADR 0013 target Domain model');
+if (targetDomainModel.ownershipRules?.singleAuthoritativeOwner !== true) errors.push('target Domain model must require one authoritative owner');
+if (targetDomainModel.ownershipRules?.crossOwnerDirectDatabaseWritesForbidden !== true) errors.push('target Domain model must forbid cross-owner direct database writes');
+const requiredMechanisms = ['owner-command-port', 'owner-query-port', 'immutable-owner-event', 'rebuildable-projection', 'identity-and-revision-reference'];
+const declaredMechanisms = new Set(targetDomainModel.ownershipRules?.allowedCrossDomainMechanisms ?? []);
+for (const mechanism of requiredMechanisms) {
+  if (!declaredMechanisms.has(mechanism)) errors.push(`target Domain model is missing cross-domain mechanism ${mechanism}`);
+}
+const requiredContexts = ['iam', 'registry', 'telemetry-runtime', 'telemetry-query', 'metric', 'command', 'edge-control', 'rule-runtime', 'alarm', 'notification', 'outbound-delivery', 'work-order', 'intelligence', 'presentation', 'platform-operations'];
+const declaredContexts = new Set((targetDomainModel.boundedContexts ?? []).map((context) => context.id));
+for (const context of requiredContexts) {
+  if (!declaredContexts.has(context)) errors.push(`target Domain model is missing bounded context ${context}`);
+}
+if ((targetDomainModel.canonicalLanguage?.forbiddenCanonicalTerms ?? []).join('|') !== 'Organization|Area|Equipment') {
+  errors.push('target Domain model canonical vocabulary lock is missing');
+}
 
 if (errors.length > 0) {
   console.error(errors.map((error) => `- ${error}`).join('\n'));
   process.exit(1);
 }
 
-console.log(`Current ownership registries are V2.1.2-consistent: routes=${routeKeys.size}; resources=${resources.size}; compatibilityLocks=disabled; releaseGate=false`);
+console.log(`Current ownership registries are ADR-0013-consistent: routes=${routeKeys.size}; resources=${resources.size}; singleOwner=true; crossOwnerDirectWrites=forbidden; cohortFallback=disabled`);

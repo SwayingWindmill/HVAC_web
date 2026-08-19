@@ -7,6 +7,7 @@
   },
   "x-contract-id": "SE-API-001",
   "x-architecture-source": "SE-ARCH-004 V2.1.2",
+  "x-runtime-convergence-review": "contracts/architecture/se-api-001-v1.2-runtime-convergence.json",
   "servers": [
     {
       "url": "/"
@@ -179,6 +180,16 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "assurance",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["normal", "high"],
+              "default": "normal"
             }
           },
           {
@@ -396,6 +407,212 @@
         }
       }
     },
+    "/api/v1/auth/tenant-contexts": {
+      "get": {
+        "operationId": "listTenantContexts",
+        "summary": "List active Tenant contexts for the authenticated Principal",
+        "parameters": [
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized Tenant contexts only.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["currentTenantId", "items"],
+                  "properties": {
+                    "currentTenantId": { "$ref": "#/components/schemas/UUIDv7" },
+                    "items": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["tenantId"],
+                        "properties": {
+                          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+                          "code": { "type": "string", "maxLength": 128 },
+                          "displayName": { "type": "string", "maxLength": 256 }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/auth/tenant-context": {
+      "post": {
+        "operationId": "switchTenantContext",
+        "summary": "Switch the current BFF Session to an authorized Tenant",
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["tenantId"],
+                "properties": { "tenantId": { "$ref": "#/components/schemas/UUIDv7" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session Tenant and CSRF context rotated; prior Site/realtime context must be discarded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["tenantId", "csrfToken", "contextRevision", "siteContextCleared"],
+                  "properties": {
+                    "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+                    "csrfToken": { "type": "string", "minLength": 32, "maxLength": 256 },
+                    "contextRevision": { "type": "integer", "minimum": 1 },
+                    "siteContextCleared": { "type": "boolean", "const": true }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/audit/search": {
+      "post": {
+        "operationId": "searchAudit",
+        "summary": "Search the redacted Tenant audit projection",
+        "parameters": [
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "actor": { "type": "string", "maxLength": 512 },
+                  "action": { "type": "string", "maxLength": 128 },
+                  "resourceType": { "type": "string", "maxLength": 128 },
+                  "resourceId": { "type": "string", "maxLength": 256 },
+                  "outcome": { "type": "string", "maxLength": 64 },
+                  "from": { "type": "string", "format": "date-time" },
+                  "to": { "type": "string", "format": "date-time" },
+                  "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Redacted Tenant-scoped audit records." },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/iam/admin/mutations": {
+      "post": {
+        "operationId": "applyIamAdminMutation",
+        "summary": "Apply one revision-checked Tenant IAM administration mutation",
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IamAdminMutationRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Mutation and durable audit/outbox intent committed." },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "428": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/iam/api-credentials/create": {
+      "post": {
+        "operationId": "createApiCredential",
+        "summary": "Create a scoped Service Account and one-time API Credential secret",
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiCredentialCreateRequest" } } } },
+        "responses": {
+          "201": { "description": "Credential issued. The plaintext secret is returned in this response only and is never persisted." },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "428": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/iam/api-credentials/rotate": {
+      "post": {
+        "operationId": "rotateApiCredential",
+        "summary": "Rotate an API Credential and revoke the prior revision atomically",
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiCredentialRotateRequest" } } } },
+        "responses": {
+          "200": { "description": "New one-time secret returned; prior credential revoked." },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "428": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/iam/api-credentials/revoke": {
+      "post": {
+        "operationId": "revokeApiCredential",
+        "summary": "Revoke an API Credential",
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiCredentialRevokeRequest" } } } },
+        "responses": {
+          "200": { "description": "Credential revoked." },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "428": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/audit/session-events/{messageId}": {
       "get": {
         "operationId": "getSessionAuditEvent",
@@ -572,7 +789,7 @@
     },
     "/api/v1/sites/{siteId}/assets": {
       "get": {
-        "operationId": "listSiteAsset",
+        "operationId": "listSiteAssets",
         "summary": "List visible Asset at a Site",
         "parameters": [
           {
@@ -936,27 +1153,56 @@
     "/api/v1/alarms": {
       "get": {
         "operationId": "listAlarmsV212",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
-        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s4-alarm-public.openapi.json",
+        "parameters": [
+          { "name": "siteId", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } },
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string", "maxLength": 4096 } },
+          { "name": "severity", "in": "query", "required": false, "schema": { "type": "string", "enum": ["INFO", "WARNING", "MAJOR", "CRITICAL"] } },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string", "enum": ["OPEN", "ACKNOWLEDGED", "SUPPRESSED", "CLOSED"] } }
+        ],
+        "responses": {
+          "200": { "description": "Site-scoped Alarm feed.", "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/CursorAlarmListResponse" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" },
+          "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
       }
     },
     "/api/v1/alarms/{alarmId}": {
       "get": {
         "operationId": "getAlarmV212",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s4-alarm-public.openapi.json",
         "parameters": [{ "name": "alarmId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
-        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+        "responses": {
+          "200": { "description": "Canonical Alarm resource.", "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/AlarmEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" },
+          "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
       }
     },
     "/api/v1/alarms/{alarmId}/ack": {
       "post": {
         "operationId": "ackAlarmV212",
-        "x-architecture-status": "CONTRACTED",
-        "x-shape-status": "TO_SYNC_TO_SE_API_001",
-        "parameters": [{ "name": "alarmId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
-        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "x-shape-source": "contracts/http/s4-alarm-public.openapi.json",
+        "parameters": [
+          { "name": "alarmId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "Idempotency-Key", "in": "header", "required": false, "schema": { "type": "string", "minLength": 8, "maxLength": 128 } }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/AckAlarmRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Current canonical Alarm after acknowledgement.", "content": { "application/json": { "schema": { "$ref": "./s4-alarm-public.openapi.json#/components/schemas/AlarmEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" },
+          "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
       }
     },
     "/api/v1/commands": {
@@ -1397,7 +1643,7 @@
       },
       "Capability": {
         "type": "string",
-        "description": "Version 7 IAM-authored browser capability identifier. Registry capabilities begin at Site.",
+        "description": "Version 9 IAM-authored browser capability identifier. Registry capabilities begin at Site; IAM administration is capability-authorized rather than Role-name-authorized.",
         "enum": [
           "site.list",
           "site.read",
@@ -1415,7 +1661,11 @@
           "work-order.read",
           "work-order.create",
           "work-order.assign",
-          "work-order.lifecycle"
+          "work-order.lifecycle",
+          "session.revoke",
+          "audit.read",
+          "iam.admin",
+          "api-credential.manage"
         ]
       },
       "EffectiveAuthorization": {
@@ -1430,7 +1680,7 @@
         "properties": {
           "capabilitySetVersion": {
             "type": "integer",
-            "const": 7
+            "const": 9
           },
           "policyRevision": {
             "type": "string",
@@ -1439,7 +1689,7 @@
           },
           "capabilities": {
             "type": "array",
-            "maxItems": 17,
+            "maxItems": 21,
             "uniqueItems": true,
             "items": {
               "$ref": "#/components/schemas/Capability"
@@ -1453,6 +1703,7 @@
         "required": [
           "id",
           "expiresAt",
+          "idleTimeoutMs",
           "csrfToken",
           "revocationObjectiveMs",
           "lastAuditMessageId"
@@ -1464,6 +1715,10 @@
           "expiresAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "idleTimeoutMs": {
+            "type": "integer",
+            "minimum": 1
           },
           "csrfToken": {
             "type": "string"
@@ -1499,6 +1754,81 @@
           "session": {
             "$ref": "#/components/schemas/SessionView"
           }
+        }
+      },
+      "IamAdminMutationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation", "expectedRevision"],
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": ["tenant.update", "principal.update", "membership.upsert", "role-template.upsert", "role-binding.upsert", "site-binding.upsert", "explicit-deny.upsert", "service-account.status"]
+          },
+          "expectedRevision": { "type": "integer", "minimum": 0 },
+          "resourceId": { "type": "string", "maxLength": 256 },
+          "principalId": { "$ref": "#/components/schemas/UUIDv7" },
+          "roleTemplateId": { "$ref": "#/components/schemas/UUIDv7" },
+          "roleKey": { "type": "string", "maxLength": 128 },
+          "displayName": { "type": "string", "maxLength": 256 },
+          "email": { "type": "string", "format": "email", "maxLength": 320 },
+          "timezone": { "type": "string", "maxLength": 128 },
+          "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+          "country": { "type": "string", "pattern": "^[A-Z]{2}$" },
+          "status": { "type": "string", "maxLength": 32 },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "capabilities": {
+            "type": "array",
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+          },
+          "denyCapability": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "reasonCode": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "validFrom": { "type": "string", "format": "date-time" },
+          "validTo": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ApiCredentialCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["displayName", "purpose", "capabilities", "siteIds", "expiresAt"],
+        "properties": {
+          "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "purpose": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "capabilities": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+          },
+          "siteIds": {
+            "type": "array",
+            "maxItems": 256,
+            "uniqueItems": true,
+            "items": { "$ref": "#/components/schemas/UUIDv7" }
+          },
+          "expiresAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ApiCredentialRotateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["credentialId", "expectedRevision", "expiresAt"],
+        "properties": {
+          "credentialId": { "$ref": "#/components/schemas/UUIDv7" },
+          "expectedRevision": { "type": "integer", "minimum": 1 },
+          "expiresAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ApiCredentialRevokeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["credentialId", "expectedRevision"],
+        "properties": {
+          "credentialId": { "$ref": "#/components/schemas/UUIDv7" },
+          "expectedRevision": { "type": "integer", "minimum": 1 }
         }
       },
       "SessionRevocationResponse": {
@@ -2172,9 +2502,9 @@
           "id": { "$ref": "#/components/schemas/UUIDv7" },
           "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
-          "fromType": { "type": "string", "enum": ["EQUIPMENT", "DEVICE", "SENSOR", "POINT"] },
+          "fromType": { "type": "string", "enum": ["ASSET", "DEVICE", "SENSOR", "POINT"] },
           "fromId": { "$ref": "#/components/schemas/UUIDv7" },
-          "toType": { "type": "string", "enum": ["SITE", "AREA", "EQUIPMENT", "DEVICE", "SENSOR", "POINT"] },
+          "toType": { "type": "string", "enum": ["SITE", "SPACE", "ASSET", "DEVICE", "SENSOR", "POINT"] },
           "toId": { "$ref": "#/components/schemas/UUIDv7" },
           "role": { "type": "string", "minLength": 1, "maxLength": 128 },
           "status": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] },

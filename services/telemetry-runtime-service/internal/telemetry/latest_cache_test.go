@@ -144,30 +144,3 @@ func TestLatestCacheRelayBacksOffRedisFailure(t *testing.T) {
 	}
 }
 
-func TestReadLatestSnapshotWritesFullSnapshotAndProjectsFromCache(t *testing.T) {
-	now := time.Date(2026, 8, 13, 1, 0, 0, 0, time.UTC)
-	full := realtimeTestSnapshot(now, 9)
-	projectedTemperature := ProjectSnapshot(full, []string{"temperature"})
-	cache := &memoryLatestCache{}
-	handler := &handler{latestCache: cache}
-
-	result, err := handler.readLatestSnapshot(t.Context(), SnapshotCommit{Snapshot: projectedTemperature, FullSnapshot: full}, []string{"humidity"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cache.snapshot.Values) != 2 {
-		t.Fatalf("cache received partial snapshot: %#v", cache.snapshot.Values)
-	}
-	if len(result.Values) != 1 || result.Values[0].Present == nil || result.Values[0].Present.Key != "humidity" {
-		t.Fatalf("result=%#v", result.Values)
-	}
-}
-
-func TestReadLatestSnapshotFailsClosedWhenCacheIsUnavailable(t *testing.T) {
-	now := time.Date(2026, 8, 13, 1, 0, 0, 0, time.UTC)
-	full := realtimeTestSnapshot(now, 10)
-	handler := &handler{latestCache: &memoryLatestCache{putErr: errors.New("redis unavailable")}}
-	if _, err := handler.readLatestSnapshot(t.Context(), SnapshotCommit{Snapshot: full, FullSnapshot: full}, nil); err == nil {
-		t.Fatal("expected cache failure")
-	}
-}

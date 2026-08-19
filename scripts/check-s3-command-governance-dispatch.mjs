@@ -34,7 +34,7 @@ assert(plan.productionTrafficPercent === 0, 'S3 governance/dispatch baseline mus
 assert(ownership.businessOwner === 'command-service', 'Command Service must remain the single business owner');
 assert(ownership.restrictedWorkers?.every((worker) => worker.directDatabaseAccess === false), 'Dispatcher must not receive command_runtime credentials');
 const dispatcherOwnership = ownership.restrictedWorkers?.find((worker) => worker.service === 'command-dispatcher');
-assert(dispatcherOwnership?.activationStatus === 'active-S3-05-synthetic-only', 'Dispatcher activation must remain Synthetic-only');
+assert(dispatcherOwnership?.activationStatus === 'active-native-mqtt', 'Dispatcher activation must use the reviewed Native MQTT connector');
 assert(!(dataOwnership.databaseAccess ?? []).some((access) => access.service === 'command-dispatcher'), 'Data Ownership Registry grants Dispatcher direct database access');
 for (const name of ['command-authorization-snapshot', 'command-risk-snapshot', 'command-approval-snapshot']) {
   const resource = (dataOwnership.resources ?? []).find((item) => item.kind === 'projection' && item.name === name);
@@ -42,8 +42,8 @@ for (const name of ['command-authorization-snapshot', 'command-risk-snapshot', '
 }
 for (const route of routes.routes ?? []) {
   if (route.owner !== 'command-service') continue;
-  assert(route.rollout?.mode === 'disabled', `${route.method} ${route.path} enabled control traffic too early`);
-  assert(route.shadowSideEffectPolicy === 'SYNTHETIC_ONLY', `${route.method} ${route.path} is no longer Synthetic-only`);
+  assert(route.rollout?.mode === 'all', `${route.method} ${route.path} canonical ownership must be active`);
+  assert(route.compatibilityMode === 'native', `${route.method} ${route.path} must use native compatibility mode`);
 }
 
 for (const token of ['AuthorizationPurpose', 'AuthorizationCommandSubmit', 'AuthorizationCommandApprove', 'AuthorizationSnapshot', 'RiskSnapshot', 'ApprovalEvidence', 'IntentAwaitingApproval', 'IntentApproved', 'ApprovalTwoPerson']) {
@@ -52,7 +52,7 @@ for (const token of ['AuthorizationPurpose', 'AuthorizationCommandSubmit', 'Auth
 for (const token of ['MaximumGrantLifetime    = 30 * time.Second', 'Purpose', 'PolicyRevision', 'EmergencyRevocationRevision', 'risk ceiling', 'scope is invalid', 'revoked or replayed']) {
   assert(grant.includes(token), `Command Grant invariant is missing: ${token}`);
 }
-for (const token of ['command-risk:equipment-capability:v1', 'CapabilityProfileFor(request.Capability)', 'profile.LowRiskDelta', 'profile.MediumRiskDelta', 'profile.MaximumDelta', 'ApprovalSingleApprover', 'ApprovalTwoPerson', 'approval.ApproverID == intent.PrincipalID', 'AuthorizationCommandApprove', 'approval.ApproverID, intent.OrganizationID', 'validateAuthorizationScope(approval.Authorization']) {
+for (const token of ['command-risk:equipment-capability:v1', 'CapabilityProfileFor(request.Capability)', 'profile.LowRiskDelta', 'profile.MediumRiskDelta', 'profile.MaximumDelta', 'ApprovalSingleApprover', 'ApprovalTwoPerson', 'approval.ApproverID == intent.PrincipalID', 'AuthorizationCommandApprove', 'approval.ApproverID, intent.TenantID', 'validateAuthorizationScope(approval.Authorization']) {
   assert(governance.includes(token), `Governance invariant is missing: ${token}`);
 }
 for (const table of ['command_authorization_snapshots', 'command_risk_snapshots', 'command_approval_snapshots']) {

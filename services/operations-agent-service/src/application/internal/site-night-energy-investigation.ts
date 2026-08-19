@@ -186,10 +186,10 @@ interface RegistrySitePayload {
   };
 }
 
-interface RegistryEquipmentPayload {
-  readonly kind: 'SITE_EQUIPMENT';
+interface RegistryAssetPayload {
+  readonly kind: 'SITE_ASSETS';
   readonly siteId: string;
-  readonly equipment: readonly { readonly id: string }[];
+  readonly assets: readonly { readonly id: string }[];
 }
 
 const defaultPolicy: SiteNightEnergyInvestigationPolicy = Object.freeze({
@@ -254,7 +254,7 @@ const requireSiteScope = (scope: InvestigationScope): InvestigationScope => {
   if (scope.tenantId.trim().length === 0
     || scope.siteId === null
     || scope.siteId.trim().length === 0
-    || scope.equipmentId !== null
+    || scope.assetId !== null
     || scope.deviceId !== null) {
     throw new InvestigationCoordinatorError(
       'INVALID_INVESTIGATION_STATE',
@@ -284,7 +284,7 @@ const shiftLocalDate = (value: string, days: number): string => {
 };
 
 const ownerForTool = (tool: ParallelReadRequest['tool']): ToolExecutionReceiptRecord['owner'] => {
-  if (tool === 'registry.getSite' || tool === 'registry.listSiteEquipment') return 'registry';
+  if (tool === 'registry.getSite' || tool === 'registry.listSiteAssets') return 'registry';
   if (tool === 'commands.getCapabilities') return 'command-service';
   return 'telemetry-query-service';
 };
@@ -318,23 +318,23 @@ const decodeSite = (result: OwnerReadResult, scope: InvestigationScope): Registr
   return payload as unknown as RegistrySitePayload;
 };
 
-const decodeEquipment = (
+const decodeAssets = (
   result: OwnerReadResult,
   scope: InvestigationScope,
-): RegistryEquipmentPayload => {
+): RegistryAssetPayload => {
   const payload = result.payload;
   if (!isRecord(payload)
-    || payload.kind !== 'SITE_EQUIPMENT'
+    || payload.kind !== 'SITE_ASSETS'
     || payload.siteId !== scope.siteId
-    || !Array.isArray(payload.equipment)
-    || payload.equipment.length > 2_000
-    || payload.equipment.some((item) => !isRecord(item) || typeof item.id !== 'string')) {
+    || !Array.isArray(payload.assets)
+    || payload.assets.length > 2_000
+    || payload.assets.some((item) => !isRecord(item) || typeof item.id !== 'string')) {
     throw new InvestigationCoordinatorError(
       'OWNER_RESPONSE_INVALID',
-      'Registry returned Equipment data outside the Investigation Scope.',
+      'Registry returned Asset data outside the Investigation Scope.',
     );
   }
-  return payload as unknown as RegistryEquipmentPayload;
+  return payload as unknown as RegistryAssetPayload;
 };
 
 const decodeEnergy = (result: OwnerReadResult): NightEnergySeries => {
@@ -813,7 +813,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
           },
         };
         let result: OwnerReadResult;
-        if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteEquipment') {
+        if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteAssets') {
           result = await ports.ownerReaders.registry.read({ request, context: ownerContext });
         } else if (request.tool === 'analytics.getEnergySeries') {
           result = await ports.ownerReaders.energyAnalytics.read({ request, context: ownerContext });
@@ -1026,8 +1026,8 @@ export const createSiteNightEnergyInvestigationCoordinator = (
     tool: 'registry.getSite',
     input: { siteId },
   }, {
-    requestId: requestId(investigationId, 'registry-equipment'),
-    tool: 'registry.listSiteEquipment',
+    requestId: requestId(investigationId, 'registry-assets'),
+    tool: 'registry.listSiteAssets',
     input: { siteId },
   }];
 
@@ -1052,7 +1052,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
       const scope = requireSiteScope({
         tenantId: requireIdentity(command.tenantId, 'Tenant identity'),
         siteId: requireIdentity(command.siteId, 'Site identity'),
-        equipmentId: null,
+        assetId: null,
         deviceId: null,
       });
       const coordinator = genericFor(scope);
@@ -1069,7 +1069,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
       const scope = requireSiteScope({
         tenantId: requireIdentity(query.tenantId, 'Tenant identity'),
         siteId: requireIdentity(query.siteId, 'Site identity'),
-        equipmentId: null,
+        assetId: null,
         deviceId: null,
       });
       requireAllowed(await ports.authorizationDecisionReader.authorizeScope({
@@ -1236,17 +1236,17 @@ export const createSiteNightEnergyInvestigationCoordinator = (
         view = advanced.investigation;
       }
       const siteResult = registryResults.find(({ requestId: identity }) => identity === registry[0].requestId);
-      const equipmentResult = registryResults.find(
+      const assetsResult = registryResults.find(
         ({ requestId: identity }) => identity === registry[1].requestId,
       );
-      if (siteResult === undefined || equipmentResult === undefined) {
+      if (siteResult === undefined || assetsResult === undefined) {
         throw new InvestigationCoordinatorError(
           'OWNER_RESPONSE_INVALID',
           'The Runtime did not return complete Registry Site context.',
         );
       }
       const site = decodeSite(siteResult, scope);
-      const equipment = decodeEquipment(equipmentResult, scope);
+      const assets = decodeAssets(assetsResult, scope);
       for (const request of registry) {
         const result = registryResults.find(({ requestId: identity }) => identity === request.requestId);
         if (result === undefined) continue;
@@ -1325,7 +1325,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
           tenantId: scope.tenantId,
           siteId,
           timezone: site.site.timezone,
-          equipmentIds: equipment.equipment.map(({ id }) => id),
+          assetIds: assets.assets.map(({ id }) => id),
         },
         window: policy.window,
         targetLocalDate,
@@ -1335,7 +1335,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
         targetSeries: decodeEnergy(energyResults[0] as OwnerReadResult),
         baselineSeries: decodeEnergy(energyResults[1] as OwnerReadResult),
       });
-      const allResults = [siteResult, equipmentResult, ...energyResults];
+      const allResults = [siteResult, assetsResult, ...energyResults];
       const readinessIdentity = recordId(view.id, 'evidence:energy-readiness');
       const readiness = await ensureRecord(view.id, readinessIdentity, (recordedAt) => ({
         schemaVersion: 1,
@@ -1528,7 +1528,7 @@ export const createSiteNightEnergyInvestigationCoordinator = (
                 scope: 'SITE',
                 reasonCode: analysis.blockers[0]?.code ?? 'ENERGY_READINESS_FAILED',
                 detail: analysis.blockers.map(({ detail }) => detail).join(' '),
-                requiredNext: analysis.equipmentAttribution.requiredNext,
+                requiredNext: analysis.assetAttribution.requiredNext,
               },
             }
         ),

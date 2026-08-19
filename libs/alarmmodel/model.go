@@ -172,7 +172,7 @@ func (alarm Alarm) Validate() error {
 }
 
 func (response ListResponse) Validate(tenantID, siteID string, limit int) error {
-	if response.SchemaVersion != SchemaVersion || !IsUUIDv7(tenantID) || !IsUUIDv7(siteID) || limit < 1 || limit > 100 || len(response.Items) > limit {
+	if response.SchemaVersion != SchemaVersion || !IsUUIDv7(tenantID) || !IsUUIDv7(siteID) || limit < 1 || limit > 200 || len(response.Items) > limit {
 		return errors.New("alarm list envelope is invalid")
 	}
 	seen := map[string]struct{}{}
@@ -195,11 +195,18 @@ func ApplyOperation(alarm Alarm, input OperationInput) (Alarm, error) {
 	if err := alarm.Validate(); err != nil {
 		return Alarm{}, err
 	}
-	if input.ExpectedVersion != alarm.Version {
+	if input.Operation != OperationAcknowledge && input.ExpectedVersion != alarm.Version {
 		return Alarm{}, ErrVersionConflict
 	}
-	if !validMutationOperation(input.Operation) || !validBoundedText(input.Reason, 256) || !validBoundedText(input.ActorType, 64) ||
+	if !validMutationOperation(input.Operation) || !validBoundedText(input.ActorType, 64) ||
 		!validBoundedText(input.ActorID, 256) || !validBoundedText(input.PolicyRevision, 128) || !validBoundedText(input.CorrelationID, 256) {
+		return Alarm{}, ErrInvalidOperation
+	}
+	if input.Operation == OperationAcknowledge {
+		if len(strings.TrimSpace(input.Reason)) > 1000 {
+			return Alarm{}, ErrInvalidOperation
+		}
+	} else if !validBoundedText(input.Reason, 256) {
 		return Alarm{}, ErrInvalidOperation
 	}
 	occurredAt, err := time.Parse(time.RFC3339Nano, input.OccurredAt)
@@ -219,10 +226,13 @@ func ApplyOperation(alarm Alarm, input OperationInput) (Alarm, error) {
 
 	switch input.Operation {
 	case OperationAcknowledge:
-		if result.Status != StatusOpen || input.AssigneeID != nil || input.SuppressedUntil != nil {
+		if input.AssigneeID != nil || input.SuppressedUntil != nil {
 			return Alarm{}, ErrInvalidTransition
 		}
-		toStatus = StatusAcknowledged
+		if hasAcknowledgement(result.Transitions) {
+			return result, nil
+		}
+		toStatus = fromStatus
 	case OperationAssign:
 		if result.Status == StatusClosed || input.AssigneeID == nil || !validBoundedText(*input.AssigneeID, 256) || input.SuppressedUntil != nil {
 			return Alarm{}, ErrInvalidTransition
@@ -301,10 +311,10 @@ func ApplyOperation(alarm Alarm, input OperationInput) (Alarm, error) {
 
 func SortNewestFirst(items []Alarm) {
 	sort.SliceStable(items, func(left, right int) bool {
-		if items[left].LastOccurredAt == items[right].LastOccurredAt {
-			return items[left].AlarmID < items[right].AlarmID
+		if items[left].FirstOccurredAt == items[right].FirstOccurredAt {
+			return items[left].AlarmID > items[right].AlarmID
 		}
-		return items[left].LastOccurredAt > items[right].LastOccurredAt
+		return items[left].FirstOccurredAt > items[right].FirstOccurredAt
 	})
 }
 
@@ -353,6 +363,23 @@ func validBoundedText(value string, maximum int) bool {
 	return trimmed != "" && len(trimmed) <= maximum
 }
 
+func hasAcknowledgement(transitions []Transition) bool {
+	for _, transition := range transitions {
+		if transition.Operation == OperationAcknowledge {
+			return true
+		}
+	}
+	return false
+}
+
+func validTransitionReason(transition Transition) bool {
+	trimmed := strings.TrimSpace(transition.Reason)
+	if transition.Operation == OperationAcknowledge {
+		return len(trimmed) <= 1000
+	}
+	return trimmed != "" && len(trimmed) <= 256
+}
+
 func validateTransitions(transitions []Transition, status Status, version uint64, assigneeID, suppressedUntil *string) error {
 	if len(transitions) == 0 || transitions[len(transitions)-1].Version != version || transitions[len(transitions)-1].ToStatus != status {
 		return errors.New("alarm transition timeline is incomplete")
@@ -363,7 +390,7 @@ func validateTransitions(transitions []Transition, status Status, version uint64
 	var projectedSuppressedUntil *string
 	var projectedSuppressionReturnStatus *Status
 	for index, transition := range transitions {
-		if !validStatus(transition.ToStatus) || strings.TrimSpace(transition.Reason) == "" || strings.TrimSpace(transition.ActorType) == "" || transition.Version == 0 || transition.Version <= previousVersion {
+		if !validStatus(transition.ToStatus) || !validTransitionReason(transition) || strings.TrimSpace(transition.ActorType) == "" || transition.Version == 0 || transition.Version <= previousVersion {
 			return errors.New("alarm transition is invalid")
 		}
 		if _, err := time.Parse(time.RFC3339Nano, transition.OccurredAt); err != nil {
@@ -430,7 +457,7 @@ func validOperationShape(transition Transition) bool {
 	from := *transition.FromStatus
 	switch transition.Operation {
 	case OperationAcknowledge:
-		return from == StatusOpen && transition.ToStatus == StatusAcknowledged && transition.AssigneeID == nil && transition.SuppressedUntil == nil
+		return transition.ToStatus == from && transition.AssigneeID == nil && transition.SuppressedUntil == nil
 	case OperationAssign:
 		return from != StatusClosed && transition.ToStatus == from && transition.AssigneeID != nil && validBoundedText(*transition.AssigneeID, 256) && transition.SuppressedUntil == nil
 	case OperationUnassign:

@@ -14,9 +14,9 @@ const isoDateTime = z.string().datetime({ offset: true });
 const logicalTool = z.string().min(1);
 
 const canonicalScopeSchema = z.object({
-  organizationId: identifier,
+  tenantId: identifier,
   siteIds: z.array(identifier).min(1),
-  equipmentIds: z.array(identifier).default([]),
+  assetIds: z.array(identifier).default([]),
   deviceIds: z.array(identifier).default([]),
   timeRange: z.object({
     from: isoDateTime,
@@ -97,7 +97,7 @@ const dataQualityConditionSchema = z.object({
   condition: z.enum([
     'PARTIAL_DATASET',
     'INSUFFICIENT_COVERAGE',
-    'EQUIPMENT_NOT_OPERATING',
+    'ASSET_NOT_OPERATING',
     'STALE_CURRENT_STATE',
     'SUSPECT_QUALITY',
     'MISSING_REQUIRED_SENSOR',
@@ -478,7 +478,7 @@ const validateTimeRange = (timeRange, path, errors) => {
 const validateScopeContainment = (scenario, errors) => {
   const validateBoundary = (scope, basePath) => {
     pushDuplicateValues(scope.siteIds, `${basePath}.siteIds`, errors);
-    pushDuplicateValues(scope.equipmentIds, `${basePath}.equipmentIds`, errors);
+    pushDuplicateValues(scope.assetIds, `${basePath}.assetIds`, errors);
     pushDuplicateValues(scope.deviceIds, `${basePath}.deviceIds`, errors);
     validateTimeRange(scope.timeRange, `${basePath}.timeRange`, errors);
   };
@@ -496,15 +496,15 @@ const validateScopeContainment = (scenario, errors) => {
     }
 
 
-    if (scope.organizationId !== boundary.organizationId) {
+    if (scope.tenantId !== boundary.tenantId) {
       errors.push(error(
         'SCOPE_OUTSIDE_SCENARIO',
-        `${basePath}.organizationId`,
-        `Organization ${scope.organizationId} is outside the ${scopeBasis.toLowerCase()} scenario Scope.`,
+        `${basePath}.tenantId`,
+        `Tenant ${scope.tenantId} is outside the ${scopeBasis.toLowerCase()} scenario Scope.`,
       ));
     }
 
-    for (const field of ['siteIds', 'equipmentIds', 'deviceIds']) {
+    for (const field of ['siteIds', 'assetIds', 'deviceIds']) {
       const allowed = new Set(boundary[field]);
       scope[field].forEach((id, index) => {
         if (!allowed.has(id)) {
@@ -708,7 +708,7 @@ export const validateOperationsAgentScenario = (value) => {
 
   pushDuplicateValues(scenario.taskCategories, '$.taskCategories', errors);
   pushDuplicateValues(scenario.scope.siteIds, '$.scope.siteIds', errors);
-  pushDuplicateValues(scenario.scope.equipmentIds, '$.scope.equipmentIds', errors);
+  pushDuplicateValues(scenario.scope.assetIds, '$.scope.assetIds', errors);
   pushDuplicateValues(scenario.scope.deviceIds, '$.scope.deviceIds', errors);
   pushDuplicateErrors(scenario.inputFacts, '$.inputFacts', errors);
   pushDuplicateErrors(scenario.groundTruth.outcomes, '$.groundTruth.outcomes', errors);

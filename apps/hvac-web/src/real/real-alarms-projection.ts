@@ -56,18 +56,19 @@ const operationLabels: Record<AlarmOperation, string> = {
 };
 
 export function projectRealAlarm(alarm: Alarm): RealAlarmProjection {
+  const acknowledged = alarm.transitions.some((transition) => transition.operation === 'ACKNOWLEDGE');
   const businessState: AlarmBusinessState = alarm.status === 'OPEN'
-    ? 'ACTIVE'
+    ? (acknowledged ? 'ACKNOWLEDGED' : 'ACTIVE')
     : alarm.status;
   const active = alarm.status !== 'CLOSED';
   return Object.freeze({
     businessState,
-    statusLabel: statusLabels[alarm.status],
+    statusLabel: alarm.status === 'OPEN' && acknowledged ? '已确认' : statusLabels[alarm.status],
     severityLabel: severityLabels[alarm.severity],
     sourceLabel: sourceLabels[alarm.sourceType],
     occurrenceLabel: alarm.occurrenceCount === 1 ? '首次发生' : `累计 ${alarm.occurrenceCount} 次`,
     canMutate: true as const,
-    canAcknowledge: alarm.status === 'OPEN',
+    canAcknowledge: !acknowledged,
     canAssign: active,
     canUnassign: active && Boolean(alarm.assigneeId),
     canSuppress: alarm.status === 'OPEN' || alarm.status === 'ACKNOWLEDGED',

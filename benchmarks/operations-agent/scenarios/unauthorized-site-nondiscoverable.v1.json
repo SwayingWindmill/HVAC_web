@@ -9,15 +9,15 @@
   "purpose": "RETROSPECTIVE",
   "taskCategories": ["DATA_QUERY"],
   "scope": {
-    "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+    "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
     "siteIds": ["0198f5c0-7c00-7000-8000-000000000021"],
-    "equipmentIds": [],
+    "assetIds": [],
     "deviceIds": []
   },
   "requestedScope": {
-    "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+    "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
     "siteIds": ["0198f5c0-7c00-7000-8000-000000000099"],
-    "equipmentIds": [],
+    "assetIds": [],
     "deviceIds": []
   },
   "inputFacts": [
@@ -27,9 +27,9 @@
       "ownerTool": "authorization.checkScope",
       "scopeBasis": "REQUESTED",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": ["0198f5c0-7c00-7000-8000-000000000099"],
-        "equipmentIds": [],
+        "assetIds": [],
         "deviceIds": []
       },
       "metadata": {
@@ -72,9 +72,9 @@
       "status": "AVAILABLE",
       "scopeBasis": "REQUESTED",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": ["0198f5c0-7c00-7000-8000-000000000099"],
-        "equipmentIds": [],
+        "assetIds": [],
         "deviceIds": []
       },
       "factIds": ["fact-unauthorized-site-decision"],
@@ -99,7 +99,7 @@
     "allowed": ["authorization.checkScope"],
     "forbidden": [
       "registry.getSite",
-      "registry.listSiteEquipment",
+      "registry.listSiteAssets",
       "telemetry.current.getDeviceObservationSnapshot",
       "analytics.energy.getSiteSeries",
       "commands.createIntent"

@@ -1,6 +1,6 @@
 # S0 reproducible delivery and signed supply chain
 
-> **Scope: CERTIFICATION_REFERENCE.** This document's Kubernetes staging assets remain a production-shaped certification/reference path for S0. They are not the canonical Phase 1 deployment model. `架构规划/智慧能源系统部署与运维架构设计.md` defines Phase 1 as Linux Server + Docker Compose; the canonical repository entry is `deploy/platform/phase1/`. Kubernetes is deferred until the later scale/HA phase. Redpanda in the local/staging S0 path is a compatibility/test dependency, not a Phase 1 Production service selection.
+> **Scope: CERTIFICATION_REFERENCE.** This document's Kubernetes staging assets remain a production-shaped certification/reference path for S0. They are not the canonical Phase 1 deployment model. `SE-ARCH-DEPLOY-001 V1.0 CURRENT` defines Phase 1 as 1 Linux Server + Docker Compose; the canonical repository entry is `deploy/platform/phase1/`. Kubernetes is deferred until the later scale/HA phase. Redpanda in the local/staging S0 path is a compatibility/test dependency, not a Phase 1 Production service selection.
 
 ## Ownership
 

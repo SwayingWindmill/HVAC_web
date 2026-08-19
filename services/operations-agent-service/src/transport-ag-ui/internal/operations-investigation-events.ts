@@ -111,7 +111,7 @@ const completedPlanFlags = (
 ): readonly boolean[] => {
   const succeeded = receipts.filter((receipt) => receipt.resultCategory === 'SUCCEEDED');
   const siteContextReady = succeeded.some((receipt) => receipt.logicalTool === 'registry.getSite')
-    && succeeded.some((receipt) => receipt.logicalTool === 'registry.listSiteEquipment');
+    && succeeded.some((receipt) => receipt.logicalTool === 'registry.listSiteAssets');
   const energyReads = succeeded.filter((receipt) => receipt.logicalTool === 'analytics.getEnergySeries').length;
   const analysisReady = view.analysisReferences.length > 0;
   const resultCommitted = view.findings.length > 0;

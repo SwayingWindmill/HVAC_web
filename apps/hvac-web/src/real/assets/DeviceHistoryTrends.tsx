@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import ReactECharts from 'echarts-for-react';
 import type { CurrentPrincipalResponse, Site } from '../../api/generated/platformGateway.gen.ts';
 import type { DeviceHistorySeries, S2TelemetryClient } from '../../api/generated/s2Telemetry.gen.ts';
 import type { ProtectedScopeRequestToken } from '../protected-scope.ts';
@@ -21,6 +20,7 @@ import {
 } from './history.ts';
 import type { RealAssetsDeviceRow } from './model.ts';
 import { runRealAssetsProtectedRequest } from './protected-request.ts';
+import { TimeSeriesChart } from '@/shared/charts/TimeSeriesChart';
 
 interface DeviceHistoryTrendsProps {
   readonly site: Readonly<Site>;
@@ -164,14 +164,12 @@ function SeriesPanel({
       {series.points.length === 0 ? (
         <div className="real-assets-history__empty" role="status">当前范围没有已接受历史点。此状态不代表零，也不会回填当前 Snapshot。</div>
       ) : (
-        <ReactECharts
+        <TimeSeriesChart
           key={`${definition.key}:${datasetRevision}:${dataWatermark ?? 'none'}`}
           option={option}
           className="real-assets-history__chart"
           style={{ height: 230, width: '100%', minWidth: 0 }}
           opts={{ renderer: 'svg' }}
-          notMerge
-          lazyUpdate
         />
       )}
     </article>

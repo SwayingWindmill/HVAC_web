@@ -14,6 +14,8 @@ import (
 
 type PostgresStore struct{ pool *pgxpool.Pool }
 
+func (s *PostgresStore) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+
 func (s *PostgresStore) Close() {
 	if s != nil && s.pool != nil {
 		s.pool.Close()

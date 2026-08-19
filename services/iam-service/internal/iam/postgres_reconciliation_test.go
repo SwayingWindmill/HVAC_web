@@ -8,7 +8,7 @@ import (
 func TestReconciliationLockKeyIsPostgresTextSafeAndUnambiguous(t *testing.T) {
 	left := reconciliationLockKey("identity", "a", "bc")
 	right := reconciliationLockKey("identity", "ab", "c")
-	withNUL := reconciliationLockKey("source", "logto", "user\x00subject")
+	withNUL := reconciliationLockKey("source", "identity", "user\x00subject")
 
 	if left == right {
 		t.Fatal("different reconciliation identities produced the same advisory lock key")

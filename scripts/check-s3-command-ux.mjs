@@ -50,27 +50,26 @@ assert(plan.firstTracerBullet?.productionProviderEnabled === false, 'Production 
 
 const commandRoutes = (routes.routes ?? []).filter((route) => route.owner === 'command-service');
 for (const route of commandRoutes) {
-  assert(route.rollout?.mode === 'disabled', `${route.method} ${route.path} is not disabled`);
-  assert(route.shadowSideEffectPolicy === 'SYNTHETIC_ONLY', `${route.method} ${route.path} is not Synthetic-only`);
-  assert(route.readOnlyFallback === false, `${route.method} ${route.path} allows fallback`);
+  assert(route.rollout?.mode === 'all', `${route.method} ${route.path} canonical ownership is not active`);
+  assert(route.compatibilityMode === 'native', `${route.method} ${route.path} is not native`);
 }
 for (const [method, path] of [
   ['POST', '/api/v1/commands'],
   ['GET', '/api/v1/commands/{commandId}'],
-  ['POST', '/api/v1/commands/{commandId}:approve'],
+  ['POST', '/api/v1/commands/{commandId}/approve'],
 ]) {
   assert(commandRoutes.some((route) => route.method === method && route.path === path), `Command route is missing: ${method} ${path}`);
   assert(ownership.routes?.some((route) => route.method === method && route.path === path && route.rollout === 'disabled'), `Command ownership is missing: ${method} ${path}`);
 }
 
 assert(openapi.info?.version === '0.5.0-command-point-identity', 'Command OpenAPI version is not the canonical Point identity baseline');
-const approvalOperation = openapi.paths?.['/api/v1/commands/{commandId}:approve']?.post;
+const approvalOperation = openapi.paths?.['/api/v1/commands/{commandId}/approve']?.post;
 assert(approvalOperation?.['x-production-traffic-percent'] === 0, 'Approval OpenAPI enabled production traffic');
 assert(openapi.components?.schemas?.ApproveCommandRequest?.maxProperties === 0, 'Public approval request is not empty by contract');
-for (const forbidden of ['organizationId', 'siteId', 'deviceId', 'principalId', 'approverRole', 'payloadHash', 'risk', 'riskRuleRevision', 'providerMethod', 'providerParams']) {
+for (const forbidden of ['tenantId', 'siteId', 'deviceId', 'principalId', 'approverRole', 'payloadHash', 'risk', 'riskRuleRevision', 'providerMethod', 'providerParams']) {
   assert(approvalOperation?.['x-client-forbidden-fields']?.includes(forbidden), `Approval OpenAPI no longer forbids ${forbidden}`);
 }
-for (const field of ['organizationId', 'siteId', 'deviceId', 'pointId', 'requiredApprovalCount', 'parameters', 'transitions']) {
+for (const field of ['tenantId', 'siteId', 'deviceId', 'pointId', 'requiredApprovalCount', 'parameters', 'transitions']) {
   assert(openapi.components?.schemas?.Command?.required?.includes(field), `Command detail is missing required ${field}`);
 }
 assert(openapi.components?.schemas?.Command?.properties?.pointId?.format === 'uuid', 'Command detail pointId is not canonical UUID identity');
@@ -83,7 +82,7 @@ for (const token of [
   'createScopedCommand',
   'getScopedCommand',
   'approveScopedCommand',
-  'trustedOrganizationId',
+  'trustedTenantId',
   'trustedSiteId',
   'commandPointId',
   'parameters',
@@ -91,7 +90,7 @@ for (const token of [
 ]) {
   assert(commandApi.includes(token), `HVAC Web Command API invariant is missing: ${token}`);
 }
-for (const token of ['organizationId', 'siteId', 'pointId', 'superRefine', 'Command timeline does not converge', 'validateCommandScope', 'RESOURCE_NOT_FOUND']) {
+for (const token of ['tenantId', 'siteId', 'pointId', 'superRefine', 'Command timeline does not converge', 'validateCommandScope', 'RESOURCE_NOT_FOUND']) {
   assert(commandContract.includes(token), `HVAC Web Command contract invariant is missing: ${token}`);
 }
 for (const forbidden of ['principalId', 'approverRole', 'providerMethod', 'providerParams']) {
@@ -104,8 +103,8 @@ for (const token of [
   "can(role, 'create', 'command')",
   "can(role, 'approve', 'command')",
   'PRODUCTION DISABLED',
-  'Route Ownership Registry 仍为 disabled',
-  '生产流量为 0%',
+  'canonical native route',
+  '生产流量仍为 0%',
   'S3 本地集成环境',
   '不会访问生产设备',
   '不构成正式认证证据',

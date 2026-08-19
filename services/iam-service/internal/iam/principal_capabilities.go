@@ -14,9 +14,9 @@ import (
 )
 
 type PrincipalCapabilityLookup struct {
-	SubjectIssuer        string
-	Subject              string
-	TenantID string
+	SubjectIssuer string
+	Subject       string
+	TenantID      string
 }
 
 type PrincipalCapabilityResolver interface {
@@ -41,9 +41,9 @@ func newPrincipalCapabilityResolver(registryStore AuthorizationStore, telemetryS
 
 func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx context.Context, lookup PrincipalCapabilityLookup) (identitycontext.EffectiveAuthorization, error) {
 	registryFacts, err := resolver.registryStore.LookupRegistryAuthorization(ctx, AuthorizationLookup{
-		SubjectIssuer:        lookup.SubjectIssuer,
-		Subject:              lookup.Subject,
-		TenantID: lookup.TenantID,
+		SubjectIssuer: lookup.SubjectIssuer,
+		Subject:       lookup.Subject,
+		TenantID:      lookup.TenantID,
 	})
 	if err != nil {
 		return identitycontext.EffectiveAuthorization{}, err
@@ -53,17 +53,17 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 		return identitycontext.EffectiveAuthorization{}, err
 	}
 	alarmFacts, err := resolver.alarmStore.LookupAlarmAuthorization(ctx, AuthorizationLookup{
-		SubjectIssuer:        lookup.SubjectIssuer,
-		Subject:              lookup.Subject,
-		TenantID: lookup.TenantID,
+		SubjectIssuer: lookup.SubjectIssuer,
+		Subject:       lookup.Subject,
+		TenantID:      lookup.TenantID,
 	})
 	if err != nil {
 		return identitycontext.EffectiveAuthorization{}, err
 	}
 	workOrderFacts, err := resolver.workOrderStore.LookupWorkOrderAuthorization(ctx, AuthorizationLookup{
-		SubjectIssuer:        lookup.SubjectIssuer,
-		Subject:              lookup.Subject,
-		TenantID: lookup.TenantID,
+		SubjectIssuer: lookup.SubjectIssuer,
+		Subject:       lookup.Subject,
+		TenantID:      lookup.TenantID,
 	})
 	if err != nil {
 		return identitycontext.EffectiveAuthorization{}, err
@@ -75,7 +75,7 @@ func (resolver *principalCapabilityResolver) ResolvePrincipalCapabilities(ctx co
 	for _, candidate := range principalRegistryCapabilities {
 		decision, err := evaluateRegistryAuthorization(ctx, factStore, decidedAt, lookup.SubjectIssuer, lookup.Subject, registryauth.DecisionRequest{
 			TenantID: lookup.TenantID,
-			Action:               candidate.action,
+			Action:   candidate.action,
 		})
 		if err != nil {
 			return identitycontext.EffectiveAuthorization{}, err
@@ -152,8 +152,8 @@ var principalRegistryCapabilities = []struct {
 }{
 	{identitycontext.CapabilitySiteList, registryauth.ActionSiteList},
 	{identitycontext.CapabilitySiteRead, registryauth.ActionSiteRead},
-	{identitycontext.CapabilityEquipmentList, registryauth.ActionAssetList},
-	{identitycontext.CapabilityEquipmentRead, registryauth.ActionAssetRead},
+	{identitycontext.CapabilityAssetList, registryauth.ActionAssetList},
+	{identitycontext.CapabilityAssetRead, registryauth.ActionAssetRead},
 	{identitycontext.CapabilityDeviceList, registryauth.ActionDeviceList},
 	{identitycontext.CapabilityDeviceRead, registryauth.ActionDeviceRead},
 }
@@ -172,7 +172,7 @@ var principalAlarmCapabilities = []struct {
 	capability identitycontext.Capability
 	action     alarmauth.Action
 }{
-	{identitycontext.CapabilityAlarmList, alarmauth.ActionList},
+	{identitycontext.CapabilityAlarmList, alarmauth.ActionRead},
 	{identitycontext.CapabilityAlarmRead, alarmauth.ActionRead},
 }
 

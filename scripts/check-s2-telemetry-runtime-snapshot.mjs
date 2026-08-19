@@ -77,7 +77,8 @@ includesAll(evaluatorGo, [
   'AcceptedSignalTypes',
   'EvaluationAvailabilityUnavailable',
   'TelemetryFreshnessStale',
-  'TelemetryQualitySuspect',
+  'TelemetryQualityInvalid',
+  'TelemetryQualityStale',
   'contractTelemetryValue',
   'canonicalQualityReasons',
   'LastKnownPresence',
@@ -192,7 +193,7 @@ const publicRoutes = (routeRegistry.routes ?? []).filter((route) => route.owner 
 assert(publicRoutes.length === 4, 'public S2 route count drifted');
 for (const route of publicRoutes) {
   assert(route.publicIngress === 'platform-gateway', `${route.method} ${route.path} bypasses Gateway`);
-  assert(route.activationStatus === 'expand-baseline' && route.rollout?.mode === 'disabled' && route.migrationPhase === 'R0-contract-only', `${route.method} ${route.path} activated production traffic`);
+  assert(route.activationStatus === 'primary' && route.rollout?.mode === 'all' && route.migrationPhase === 'R7-primary-100', `${route.method} ${route.path} is not on the current S2 primary phase`);
   assert(route.readOnlyFallback === false && route.readFallbackOwner === undefined, `${route.method} ${route.path} gained request fallback`);
 }
 

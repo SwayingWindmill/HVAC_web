@@ -14,8 +14,7 @@ import (
 
 const (
 	commandTenantA    = "018f3d00-0000-7000-8000-000000000001"
-	commandOrgA       = "018f3e00-0000-7000-8000-000000000001"
-	commandOrgB       = "018f3e00-0000-7000-8000-000000000002"
+	commandTenantB    = "018f3d00-0000-7000-8000-000000000002"
 	commandSiteA      = "018f3e00-1000-7000-8000-000000000001"
 	commandDeviceA    = "018f3e00-3000-7000-8000-000000000001"
 	commandPointA     = "018f3e00-4000-7000-8000-000000000001"
@@ -51,7 +50,7 @@ func TestPostgresSubmissionIsAtomicIdempotentAndTenantScoped(t *testing.T) {
 		t.Fatalf("sequence/transitions=%d/%d", created.Intent.DeviceCommandSequence, len(created.Intent.Transitions))
 	}
 
-	evidence, err := store.SubmissionEvidence(ctx, commandOrgA, created.Intent.ID)
+	evidence, err := store.SubmissionEvidence(ctx, commandTenantA, created.Intent.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,10 +85,10 @@ func TestPostgresSubmissionIsAtomicIdempotentAndTenantScoped(t *testing.T) {
 		t.Fatalf("expected monotonic device sequence 2, got %d", second.Intent.DeviceCommandSequence)
 	}
 
-	if _, err := store.Get(ctx, commandOrgB, created.Intent.ID); !errors.Is(err, ErrCommandNotFound) {
+	if _, err := store.Get(ctx, commandTenantB, created.Intent.ID); !errors.Is(err, ErrCommandNotFound) {
 		t.Fatalf("cross-Organization read must be invisible, got %v", err)
 	}
-	readBack, err := store.Get(ctx, commandOrgA, created.Intent.ID)
+	readBack, err := store.Get(ctx, commandTenantA, created.Intent.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,8 +206,8 @@ SELECT
   (SELECT count(*) FROM command_runtime.command_transitions WHERE command_id = '018f3e00-7000-7000-8000-000000000001'::uuid),
   (SELECT count(*) FROM command_runtime.command_audit_intents WHERE command_id = '018f3e00-7000-7000-8000-000000000001'::uuid),
   (SELECT count(*) FROM command_runtime.command_dispatch_outbox WHERE command_id = '018f3e00-7000-7000-8000-000000000001'::uuid),
-  (SELECT count(*) FROM command_runtime.device_control_state WHERE organization_id = $1::uuid AND device_id = $2::uuid)
-`, commandOrgA, commandDeviceA).Scan(&intentCount, &idempotencyCount, &transitionCount, &auditCount, &outboxCount, &deviceStateCount); err != nil {
+  (SELECT count(*) FROM command_runtime.device_control_state WHERE tenant_id = $1::uuid AND device_id = $2::uuid)
+`, commandTenantA, commandDeviceA).Scan(&intentCount, &idempotencyCount, &transitionCount, &auditCount, &outboxCount, &deviceStateCount); err != nil {
 		t.Fatal(err)
 	}
 	if intentCount != 0 || idempotencyCount != 0 || transitionCount != 0 || auditCount != 0 || outboxCount != 0 || deviceStateCount != 0 {
@@ -240,12 +239,12 @@ func TestPostgresRuntimeIdentityRequiresActivation(t *testing.T) {
 func postgresCommandRequest(idempotencyKey string, setpoint float64) commandmodel.SubmitRequest {
 	currentValue := 23.0
 	return commandmodel.SubmitRequest{
-		TenantID:       commandTenantA,
-		SiteID:         commandSiteA,
-		DeviceID:       commandDeviceA,
-		PointID:        commandPointA,
-		PrincipalID:    commandPrincipalA,
-		IdempotencyKey: idempotencyKey,
+		TenantID:             commandTenantA,
+		SiteID:               commandSiteA,
+		DeviceID:             commandDeviceA,
+		PointID:              commandPointA,
+		PrincipalID:          commandPrincipalA,
+		IdempotencyKey:       idempotencyKey,
 		Capability:           commandmodel.CapabilitySetTemperatureSetpoint,
 		Parameters:           commandmodel.CommandParameters{commandmodel.ParameterSetpointC: setpoint},
 		VerificationPointKey: "zone.temperature_setpoint",
@@ -286,7 +285,6 @@ func resetCommandFixture(t *testing.T, admin *pgxpool.Pool) {
 		`DELETE FROM command_runtime.command_idempotency`,
 		`DELETE FROM command_runtime.command_intents`,
 		`DELETE FROM command_runtime.device_control_state`,
-		`DELETE FROM command_runtime.organization_tenant_scope`,
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

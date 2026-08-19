@@ -4,7 +4,7 @@ export const OPERATIONS_AGENT_TOOL_CATALOG_VERSION = "operations-agent-tool-cata
 
 export const OPERATIONS_AGENT_RUNTIME_READ_TOOLS = [
   "registry.getSite",
-  "registry.listSiteEquipment",
+  "registry.listSiteAssets",
   "telemetry.getCurrentSnapshot",
   "analytics.getEnergySeries",
   "commands.getCapabilities",
@@ -22,7 +22,7 @@ export type ToolOwner = typeof OPERATIONS_AGENT_TOOL_RECEIPT_OWNERS[number];
 
 export const OPERATIONS_AGENT_TOOL_RECEIPT_OWNER_BY_LOGICAL_TOOL = Object.freeze({
   "registry.getSite": "registry",
-  "registry.listSiteEquipment": "registry",
+  "registry.listSiteAssets": "registry",
   "telemetry.getCurrentSnapshot": "telemetry-query-service",
   "analytics.getEnergySeries": "telemetry-query-service",
   "commands.getCapabilities": "command-service",

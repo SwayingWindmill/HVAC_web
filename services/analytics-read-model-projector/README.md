@@ -47,7 +47,7 @@ The ClickHouse Reader executes a fixed query that:
 
 - filters to accepted `hvac_meter.energy` observations in `kWh`;
 - uses `lagInFrame` to pair adjacent cumulative readings;
-- excludes rows with missing Organization, Site or Device identity;
+- excludes rows with missing Tenant, Site or Device identity;
 - anti-joins `analytics.energy_interval_facts` on the current observation ID;
 - returns at most the configured batch size.
 

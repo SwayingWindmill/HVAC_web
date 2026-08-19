@@ -82,7 +82,7 @@ const assertEnergyRequest = (
     || !isUuidV7(query.siteId)
     || query.tenantId !== scope.tenantId
     || query.siteId !== scope.siteId
-    || scope.equipmentId !== null
+    || scope.assetId !== null
     || scope.deviceId !== null
     || query.energyType !== 'electricity'
     || !validGranularities.has(query.granularity)

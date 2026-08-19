@@ -10,8 +10,8 @@ import { createRealAssetsTelemetryRuntime } from '../apps/hvac-web/src/real/asse
 
 const tenantId = '01900000-0000-7000-8000-000000000001';
 const siteId = '01900000-0001-7000-8000-000000000001';
-const equipmentId = '01900000-0002-7000-8000-000000000001';
-const areaId = '01900000-0005-7000-8000-000000000001';
+const assetId = '01900000-0002-7000-8000-000000000001';
+const spaceId = '01900000-0005-7000-8000-000000000001';
 const sensorId = '01900000-0006-7000-8000-000000000001';
 const measuredPointId = '01900000-0007-7000-8000-000000000001';
 const calculatedPointId = '01900000-0007-7000-8000-000000000002';
@@ -32,19 +32,19 @@ function device(index, overrides = {}) {
   };
 }
 
-function equipment(overrides = {}) {
+function asset(overrides = {}) {
   return {
-    id: equipmentId, tenantId: tenantId, siteId,
-    code: 'CHILLER-A', displayName: 'Chiller A', equipmentType: 'CHILLER', status: 'ACTIVE', revision: 1,
+    id: assetId, tenantId: tenantId, siteId,
+    code: 'CHILLER-A', displayName: 'Chiller A', assetType: 'CHILLER', status: 'ACTIVE', revision: 1,
     createdAt: '2026-07-01T00:00:00.000Z', updatedAt: '2026-07-30T00:00:00.000Z',
     ...overrides,
   };
 }
 
-function area(overrides = {}) {
+function space(overrides = {}) {
   return {
-    id: areaId, tenantId: tenantId, siteId, parentAreaId: null,
-    code: 'CENTRAL-PLANT', displayName: 'Central Plant', areaType: 'PLANT_ROOM', status: 'ACTIVE', revision: 1,
+    id: spaceId, tenantId: tenantId, siteId, parentSpaceId: null,
+    code: 'CENTRAL-PLANT', displayName: 'Central Plant', spaceType: 'PLANT_ROOM', status: 'ACTIVE', revision: 1,
     createdAt: '2026-07-01T00:00:00.000Z', updatedAt: '2026-07-30T00:00:00.000Z',
     ...overrides,
   };
@@ -93,18 +93,18 @@ function assetModel(overrides = {}) {
     schemaVersion: 2,
     tenantId,
     siteId,
-    areas: [area()],
-    equipment: [equipment()],
+    spaces: [space()],
+    assets: [asset()],
     devices: [visibleDevice],
     sensors: [sensor()],
     telemetryPoints: [point(measuredPointId), point(calculatedPointId, 'STATE')],
     relationships: [
-      relationship(1, 'EQUIPMENT', equipmentId, 'AREA', areaId, 'INSTALLED_IN'),
-      relationship(2, 'DEVICE', visibleDevice.id, 'EQUIPMENT', equipmentId, 'PRIMARY_CONTROLLER'),
+      relationship(1, 'ASSET', assetId, 'SPACE', spaceId, 'INSTALLED_IN'),
+      relationship(2, 'DEVICE', visibleDevice.id, 'ASSET', assetId, 'PRIMARY_CONTROLLER'),
       relationship(3, 'SENSOR', sensorId, 'DEVICE', visibleDevice.id, 'INDEPENDENT_DEVICE'),
     ],
     counts: {
-      areas: 1, equipment: 1, deviceEndpoints: 1, physicalSensors: 1, points: 2,
+      spaces: 1, assets: 1, deviceEndpoints: 1, physicalSensors: 1, points: 2,
     },
   };
   return { ...model, ...overrides };
@@ -151,7 +151,7 @@ test('Registry loader reads one atomic Site Asset Model and preserves route-poli
 test('Registry loader rejects scope drift and invisible relationship targets', async () => {
   const client = {
     getSiteAssetModel: async () => platformResponse(assetModel({
-      relationships: [relationship(1, 'DEVICE', device(1).id, 'EQUIPMENT', id(2, 99), 'PRIMARY_CONTROLLER')],
+      relationships: [relationship(1, 'DEVICE', device(1).id, 'ASSET', id(2, 99), 'PRIMARY_CONTROLLER')],
     })),
   };
   await assert.rejects(

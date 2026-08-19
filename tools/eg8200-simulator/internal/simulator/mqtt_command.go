@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 const mqttCommandSchemaVersion = "1.0"
@@ -58,20 +59,20 @@ type edgeCommandLedger struct {
 }
 
 type edgeCommandHandler struct {
-	plant              *Plant
-	deviceByWireID     map[string]string
-	replyTopic         string
-	now                func() time.Time
-	ledgerPath         string
+	edgeRuntime    *EdgeControlRuntime
+	deviceByWireID map[string]string
+	replyTopic     string
+	now            func() time.Time
+	ledgerPath     string
 
 	mu               sync.Mutex
 	results          map[string]edgeCommandRecord
 	maxFenceByDevice map[string]uint64
 }
 
-func newEdgeCommandHandler(plant *Plant, config MQTTGatewayConfig, gatewayID string) (*edgeCommandHandler, error) {
-	if plant == nil {
-		return nil, errors.New("MQTT command handler requires Plant")
+func newEdgeCommandHandler(edgeRuntime *EdgeControlRuntime, config MQTTGatewayConfig, gatewayID string) (*edgeCommandHandler, error) {
+	if edgeRuntime == nil {
+		return nil, errors.New("MQTT command handler requires Edge Control Runtime")
 	}
 	deviceByWireID := make(map[string]string, len(config.DeviceExternalIDByDeviceID))
 	for deviceID, wireID := range config.DeviceExternalIDByDeviceID {
@@ -99,12 +100,12 @@ func newEdgeCommandHandler(plant *Plant, config MQTTGatewayConfig, gatewayID str
 		// physical commands receive a fresh Cloud execution fence.
 	}
 	return &edgeCommandHandler{
-		plant:              plant,
-		deviceByWireID:     deviceByWireID,
-		replyTopic:         "energy/v1/" + config.TenantID + "/" + config.SiteID + "/" + gatewayID + "/command/reply",
-		now:                time.Now,
-		ledgerPath:         ledgerPath,
-		results:            results,
+		edgeRuntime:      edgeRuntime,
+		deviceByWireID:   deviceByWireID,
+		replyTopic:       "energy/v1/" + config.TenantID + "/" + config.SiteID + "/" + gatewayID + "/command/reply",
+		now:              time.Now,
+		ledgerPath:       ledgerPath,
+		results:          results,
 		maxFenceByDevice: maxFenceByDevice,
 	}, nil
 }
@@ -215,34 +216,71 @@ func (handler *edgeCommandHandler) evaluate(request mqttCommandEnvelope) mqttCom
 	if request.Policy.VerificationWindowMS < 0 || request.Policy.VerificationWindowMS > int64((10*time.Minute)/time.Millisecond) {
 		return edgeRejectedAndRemember(handler, request.PayloadHash, base, "POLICY_INVALID")
 	}
-	method, ok := nativeCommandMethod(strings.TrimSpace(request.CommandCode))
-	if !ok {
-		return edgeRejectedAndRemember(handler, request.PayloadHash, base, "COMMAND_MAPPING_INVALID")
+	outcomeCh, err := handler.edgeRuntime.SubmitCommand(EdgeCommandIntentRequest{
+		CommandID:   base.CommandID,
+		DeviceID:    deviceID,
+		CommandCode: strings.TrimSpace(request.CommandCode),
+		Params:      request.Params,
+		IssuedAt:    time.UnixMilli(request.IssuedAt).UTC(),
+		ExpiresAt:   time.UnixMilli(request.ExpireAt).UTC(),
+	})
+	if err != nil {
+		reason := "COMMAND_INVALID"
+		if strings.Contains(err.Error(), "does not expose command capability") {
+			reason = "COMMAND_MAPPING_INVALID"
+		} else if strings.Contains(err.Error(), "in-flight") {
+			reason = "COMMAND_BUSY"
+		}
+		return edgeRejectedAndRemember(handler, request.PayloadHash, base, reason)
 	}
 
-	result := handler.plant.ApplyCommand(Command{DeviceID: deviceID, Method: method, Params: request.Params})
-	if !result.Success {
-		base.EdgeStatus = "FAILED"
-		reason := strings.TrimSpace(result.Code)
-		if reason == "" {
-			reason = "DEVICE_WRITE_FAILED"
-		}
+	waitDuration := time.UnixMilli(request.ExpireAt).Sub(now)
+	if waitDuration > 10*time.Second {
+		waitDuration = 10 * time.Second
+	}
+	if waitDuration <= 0 {
+		handler.edgeRuntime.CancelCommand(base.CommandID, "EXPIRED")
+		base.EdgeStatus = "EXPIRED"
+		reason := "EXPIRED"
 		base.ReasonCode = &reason
 		handler.remember(request.PayloadHash, base)
 		return base
 	}
-	base.EdgeStatus = "EXECUTED"
-	if request.Policy.RequiresReadback {
-		// The simulator applies the command synchronously and exposes the resulting
-		// local value as Edge-local readback evidence. This does not make Cloud
-		// Control VERIFIED; Cloud still performs its independent verification.
-		base.EdgeStatus = "VERIFIED"
+	timer := time.NewTimer(waitDuration)
+	defer timer.Stop()
+	select {
+	case outcome := <-outcomeCh:
+		if !outcome.Accepted {
+			base.EdgeStatus = "REJECTED"
+			reason := strings.TrimSpace(outcome.Code)
+			if reason == "" {
+				reason = "CONTROL_DENIED"
+			}
+			base.ReasonCode = &reason
+			handler.remember(request.PayloadHash, base)
+			return base
+		}
+		base.EdgeStatus = "EXECUTED"
+		if request.Policy.RequiresReadback {
+			// Edge readback/execution evidence does not make Cloud Control VERIFIED;
+			// Cloud still performs its independent S2 authoritative verification.
+			base.EdgeStatus = "VERIFIED"
+		}
+		if outcome.AppliedValue != nil && outcome.AppliedValue.Type == edgecontrol.DataTypeDouble {
+			base.Reported = map[string]float64{"value": outcome.AppliedValue.Double}
+		} else if outcome.Effective != nil && outcome.Effective.Type == edgecontrol.DataTypeDouble {
+			base.Reported = map[string]float64{"value": outcome.Effective.Double}
+		}
+		handler.remember(request.PayloadHash, base)
+		return base
+	case <-timer.C:
+		handler.edgeRuntime.CancelCommand(base.CommandID, "TIMEOUT")
+		base.EdgeStatus = "TIMEOUT"
+		reason := "TIMEOUT"
+		base.ReasonCode = &reason
+		handler.remember(request.PayloadHash, base)
+		return base
 	}
-	if result.AppliedValue != 0 {
-		base.Reported = map[string]float64{"value": result.AppliedValue}
-	}
-	handler.remember(request.PayloadHash, base)
-	return base
 }
 
 func edgeRejected(base mqttCommandReply, reasonCode string) mqttCommandReply {
@@ -267,15 +305,15 @@ func (handler *edgeCommandHandler) remember(payloadHash string, reply mqttComman
 
 func nativeCommandMethod(commandCode string) (string, bool) {
 	method := map[string]string{
-		"START":                                 "start",
-		"STOP":                                  "stop",
-		"RESET_FAULT":                           "resetFault",
-		"SET_TEMPERATURE_SETPOINT":              "setTemperatureSetpoint",
+		"START":                                  "start",
+		"STOP":                                   "stop",
+		"RESET_FAULT":                            "resetFault",
+		"SET_TEMPERATURE_SETPOINT":               "setTemperatureSetpoint",
 		"SET_CHILLED_WATER_TEMPERATURE_SETPOINT": "setChilledWaterTemperatureSetpoint",
-		"SET_FREQUENCY":                         "setFrequency",
-		"SET_FAN_SPEED":                         "setFanSpeed",
-		"SET_LOAD_LIMIT":                        "setLoadLimit",
-		"SET_OPENING":                           "setOpening",
+		"SET_FREQUENCY":                          "setFrequency",
+		"SET_FAN_SPEED":                          "setFanSpeed",
+		"SET_LOAD_LIMIT":                         "setLoadLimit",
+		"SET_OPENING":                            "setOpening",
 	}[commandCode]
 	return method, method != ""
 }

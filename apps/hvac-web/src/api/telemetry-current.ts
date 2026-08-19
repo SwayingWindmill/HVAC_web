@@ -146,6 +146,9 @@ async function csrf(
   if (!tenantId) {
     throw new Error('Trusted Tenant context is required for telemetry request');
   }
+  if (principal.data.context.tenantId !== tenantId) {
+    throw new Error('Authenticated Tenant changed during telemetry request');
+  }
   const value = principal.data.session.csrfToken;
   if (!value) throw new Error('Authenticated Session omitted CSRF capability');
   return value;

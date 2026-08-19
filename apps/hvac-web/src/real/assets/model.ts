@@ -1,8 +1,8 @@
 import type {
-  Area,
+  Space,
   AssetRelationship,
   Device,
-  Equipment,
+  Asset,
   Sensor,
   SiteAssetModel,
   TelemetryPoint,
@@ -54,13 +54,13 @@ export interface RealAssetsPointView {
 }
 
 export type RealAssetsBindingState =
-  | { readonly state: 'bound'; readonly relationship: AssetRelationship; readonly equipment: Equipment }
-  | { readonly state: 'multi-bound'; readonly bindings: readonly { readonly relationship: AssetRelationship; readonly equipment: Equipment }[] }
+  | { readonly state: 'bound'; readonly relationship: AssetRelationship; readonly asset: Asset }
+  | { readonly state: 'multi-bound'; readonly bindings: readonly { readonly relationship: AssetRelationship; readonly asset: Asset }[] }
   | { readonly state: 'unbound' }
   | { readonly state: 'ambiguous'; readonly relationshipIds: readonly string[] };
 
-export type RealAssetsAreaState =
-  | { readonly state: 'bound'; readonly relationship: AssetRelationship; readonly area: Area }
+export type RealAssetsSpaceState =
+  | { readonly state: 'bound'; readonly relationship: AssetRelationship; readonly space: Space }
   | { readonly state: 'unbound' }
   | { readonly state: 'ambiguous'; readonly relationshipIds: readonly string[] };
 
@@ -68,7 +68,7 @@ export interface RealAssetsDeviceRow {
   readonly device: Device;
   readonly profile: RealAssetsProfileResolution;
   readonly binding: RealAssetsBindingState;
-  readonly area: RealAssetsAreaState;
+  readonly space: RealAssetsSpaceState;
   readonly registeredPointCount: number;
   readonly snapshotResult?: RealAssetsSnapshotResult;
   readonly operatingState: RealAssetsOperatingState;
@@ -76,9 +76,9 @@ export interface RealAssetsDeviceRow {
   readonly points: readonly RealAssetsPointView[];
 }
 
-export interface RealAssetsEquipmentRow {
-  readonly equipment: Equipment;
-  readonly area: RealAssetsAreaState;
+export interface RealAssetsAssetRow {
+  readonly asset: Asset;
+  readonly space: RealAssetsSpaceState;
   readonly devices: readonly RealAssetsDeviceRow[];
   readonly sensors: readonly Sensor[];
   readonly points: readonly RealAssetsTelemetryPointRow[];
@@ -93,7 +93,7 @@ export interface BuildRealAssetsRowsInput {
   readonly now?: Date;
 }
 
-export type RealAssetsHierarchyKind = 'site' | 'area' | 'equipment' | 'device' | 'sensor' | 'point' | 'virtual-sensor';
+export type RealAssetsHierarchyKind = 'site' | 'space' | 'asset' | 'device' | 'sensor' | 'point' | 'virtual-sensor';
 
 export interface RealAssetsHierarchyNode {
   readonly key: string;
@@ -110,7 +110,7 @@ export interface RealAssetsTelemetryPointRow {
   readonly device: Device;
   readonly sensor: Sensor | null;
   readonly binding: RealAssetsBindingState;
-  readonly area: RealAssetsAreaState;
+  readonly space: RealAssetsSpaceState;
   readonly label: string;
   readonly current: RealAssetsPointView | null;
 }
@@ -120,7 +120,7 @@ export interface BuildRealAssetsPointRowsInput {
   readonly deviceRows: readonly RealAssetsDeviceRow[];
 }
 
-export interface BuildRealAssetsEquipmentRowsInput {
+export interface BuildRealAssetsAssetRowsInput {
   readonly assetModel: SiteAssetModel;
   readonly deviceRows: readonly RealAssetsDeviceRow[];
   readonly pointRows: readonly RealAssetsTelemetryPointRow[];
@@ -144,14 +144,14 @@ function compareRegistryIdentity(left: RegistryIdentity, right: RegistryIdentity
     || left.id.localeCompare(right.id);
 }
 
-const AREA_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
+const SPACE_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
   BUILDING: '建筑',
   PLANT_ROOM: '机房',
   ROOFTOP: '屋面',
   OUTDOOR: '室外',
 });
 
-const EQUIPMENT_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
+const ASSET_TYPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
   CHILLER: '冷水机组',
   CHILLED_WATER_PUMP: '冷冻水泵',
   COOLING_WATER_PUMP: '冷却水泵',
@@ -201,12 +201,12 @@ function localizedType(value: string, labels: Readonly<Record<string, string>>, 
   return labels[normalizedType(value)] ?? fallback;
 }
 
-export function realAssetsAreaTypeLabel(value: string): string {
-  return localizedType(value, AREA_TYPE_LABELS, '区域');
+export function realAssetsSpaceTypeLabel(value: string): string {
+  return localizedType(value, SPACE_TYPE_LABELS, '区域');
 }
 
-export function realAssetsEquipmentTypeLabel(value: string): string {
-  return localizedType(value, EQUIPMENT_TYPE_LABELS, getDeviceTelemetryProfile(value).title);
+export function realAssetsAssetTypeLabel(value: string): string {
+  return localizedType(value, ASSET_TYPE_LABELS, getDeviceTelemetryProfile(value).title);
 }
 
 export function realAssetsDeviceTypeLabel(value: string): string {
@@ -256,65 +256,65 @@ function currentRelationships(
 export function resolveDeviceBinding(
   device: Device,
   relationships: readonly AssetRelationship[],
-  equipmentById: ReadonlyMap<string, Equipment>,
+  assetById: ReadonlyMap<string, Asset>,
   now = new Date(),
 ): RealAssetsBindingState {
-  const candidates = currentRelationships(relationships, 'DEVICE', device.id, 'EQUIPMENT', now);
+  const candidates = currentRelationships(relationships, 'DEVICE', device.id, 'ASSET', now);
   if (candidates.length === 0) return { state: 'unbound' };
-  const bindings: { relationship: AssetRelationship; equipment: Equipment }[] = [];
-  const seenEquipmentIds = new Set<string>();
+  const bindings: { relationship: AssetRelationship; asset: Asset }[] = [];
+  const seenAssetIds = new Set<string>();
   for (const relationship of candidates) {
-    if (seenEquipmentIds.has(relationship.toId)) continue;
-    const equipment = equipmentById.get(relationship.toId);
-    if (!equipment) return { state: 'ambiguous', relationshipIds: candidates.map((candidate) => candidate.id) };
-    seenEquipmentIds.add(relationship.toId);
-    bindings.push({ relationship, equipment });
+    if (seenAssetIds.has(relationship.toId)) continue;
+    const asset = assetById.get(relationship.toId);
+    if (!asset) return { state: 'ambiguous', relationshipIds: candidates.map((candidate) => candidate.id) };
+    seenAssetIds.add(relationship.toId);
+    bindings.push({ relationship, asset });
   }
   if (bindings.length === 1) return { state: 'bound', ...bindings[0] };
   return { state: 'multi-bound', bindings };
 }
 
-function resolvedEquipmentBindings(binding: RealAssetsBindingState): readonly { readonly relationship: AssetRelationship; readonly equipment: Equipment }[] {
+function resolvedAssetBindings(binding: RealAssetsBindingState): readonly { readonly relationship: AssetRelationship; readonly asset: Asset }[] {
   if (binding.state === 'bound') return [binding];
   if (binding.state === 'multi-bound') return binding.bindings;
   return [];
 }
 
-export function resolveDeviceArea(
+export function resolveDeviceSpace(
   device: Device,
   binding: RealAssetsBindingState,
   relationships: readonly AssetRelationship[],
-  areaById: ReadonlyMap<string, Area>,
+  spaceById: ReadonlyMap<string, Space>,
   now = new Date(),
-): RealAssetsAreaState {
-  const direct = currentRelationships(relationships, 'DEVICE', device.id, 'AREA', now);
-  const inherited = resolvedEquipmentBindings(binding).flatMap((item) => (
-    currentRelationships(relationships, 'EQUIPMENT', item.equipment.id, 'AREA', now)
+): RealAssetsSpaceState {
+  const direct = currentRelationships(relationships, 'DEVICE', device.id, 'SPACE', now);
+  const inherited = resolvedAssetBindings(binding).flatMap((item) => (
+    currentRelationships(relationships, 'ASSET', item.asset.id, 'SPACE', now)
   ));
   const candidates = direct.length > 0 ? direct : inherited;
   if (candidates.length === 0) return { state: 'unbound' };
-  const areaIds = new Set(candidates.map((relationship) => relationship.toId));
-  if (areaIds.size !== 1) return { state: 'ambiguous', relationshipIds: candidates.map((relationship) => relationship.id) };
+  const spaceIds = new Set(candidates.map((relationship) => relationship.toId));
+  if (spaceIds.size !== 1) return { state: 'ambiguous', relationshipIds: candidates.map((relationship) => relationship.id) };
   const relationship = candidates[0];
-  const area = areaById.get(relationship.toId);
-  if (!area) return { state: 'ambiguous', relationshipIds: candidates.map((candidate) => candidate.id) };
-  return { state: 'bound', relationship, area };
+  const space = spaceById.get(relationship.toId);
+  if (!space) return { state: 'ambiguous', relationshipIds: candidates.map((candidate) => candidate.id) };
+  return { state: 'bound', relationship, space };
 }
 
-export function resolveEquipmentArea(
-  equipment: Equipment,
+export function resolveAssetSpace(
+  asset: Asset,
   relationships: readonly AssetRelationship[],
-  areaById: ReadonlyMap<string, Area>,
+  spaceById: ReadonlyMap<string, Space>,
   now = new Date(),
-): RealAssetsAreaState {
-  const candidates = currentRelationships(relationships, 'EQUIPMENT', equipment.id, 'AREA', now);
+): RealAssetsSpaceState {
+  const candidates = currentRelationships(relationships, 'ASSET', asset.id, 'SPACE', now);
   if (candidates.length === 0) return { state: 'unbound' };
-  const areaIds = new Set(candidates.map((relationship) => relationship.toId));
-  if (areaIds.size !== 1) return { state: 'ambiguous', relationshipIds: candidates.map((relationship) => relationship.id) };
+  const spaceIds = new Set(candidates.map((relationship) => relationship.toId));
+  if (spaceIds.size !== 1) return { state: 'ambiguous', relationshipIds: candidates.map((relationship) => relationship.id) };
   const relationship = candidates[0];
-  const area = areaById.get(relationship.toId);
-  if (!area) return { state: 'ambiguous', relationshipIds: candidates.map((candidate) => candidate.id) };
-  return { state: 'bound', relationship, area };
+  const space = spaceById.get(relationship.toId);
+  if (!space) return { state: 'ambiguous', relationshipIds: candidates.map((candidate) => candidate.id) };
+  return { state: 'bound', relationship, space };
 }
 
 interface PointDisplayDefinition {
@@ -411,8 +411,8 @@ export function projectRealAssetsOperatingState(
 
 export function buildRealAssetsRows(input: BuildRealAssetsRowsInput): RealAssetsDeviceRow[] {
   const now = input.now ?? new Date();
-  const equipmentById = new Map(input.assetModel.equipment.map((item) => [item.id, item]));
-  const areaById = new Map(input.assetModel.areas.map((item) => [item.id, item]));
+  const assetById = new Map(input.assetModel.assets.map((item) => [item.id, item]));
+  const spaceById = new Map(input.assetModel.spaces.map((item) => [item.id, item]));
   const pointCountByDevice = new Map<string, number>();
   for (const point of input.assetModel.telemetryPoints) {
     pointCountByDevice.set(point.reportingDeviceId, (pointCountByDevice.get(point.reportingDeviceId) ?? 0) + 1);
@@ -421,12 +421,12 @@ export function buildRealAssetsRows(input: BuildRealAssetsRowsInput): RealAssets
     const profile = resolveRealAssetsProfile(device.deviceType);
     const snapshotResult = input.snapshots?.get(device.id);
     const projection = projectRealAssetsOperatingState(snapshotResult, profile);
-    const binding = resolveDeviceBinding(device, input.assetModel.relationships, equipmentById, now);
+    const binding = resolveDeviceBinding(device, input.assetModel.relationships, assetById, now);
     return {
       device,
       profile,
       binding,
-      area: resolveDeviceArea(device, binding, input.assetModel.relationships, areaById, now),
+      space: resolveDeviceSpace(device, binding, input.assetModel.relationships, spaceById, now),
       registeredPointCount: pointCountByDevice.get(device.id) ?? 0,
       snapshotResult,
       operatingState: projection.state,
@@ -435,41 +435,41 @@ export function buildRealAssetsRows(input: BuildRealAssetsRowsInput): RealAssets
     };
   });
   return rows.sort((left, right) => {
-    const leftArea = left.area.state === 'bound' ? left.area.area : undefined;
-    const rightArea = right.area.state === 'bound' ? right.area.area : undefined;
-    if (leftArea && rightArea) {
-      const areaOrder = compareRegistryIdentity(leftArea, rightArea);
-      if (areaOrder) return areaOrder;
-    } else if (leftArea) return -1;
-    else if (rightArea) return 1;
-    const leftEquipment = [...resolvedEquipmentBindings(left.binding)].map((item) => item.equipment).sort(compareRegistryIdentity)[0];
-    const rightEquipment = [...resolvedEquipmentBindings(right.binding)].map((item) => item.equipment).sort(compareRegistryIdentity)[0];
-    if (leftEquipment && rightEquipment) return compareRegistryIdentity(leftEquipment, rightEquipment) || compareRegistryIdentity(left.device, right.device);
-    if (leftEquipment) return -1;
-    if (rightEquipment) return 1;
+    const leftSpace = left.space.state === 'bound' ? left.space.space : undefined;
+    const rightSpace = right.space.state === 'bound' ? right.space.space : undefined;
+    if (leftSpace && rightSpace) {
+      const spaceOrder = compareRegistryIdentity(leftSpace, rightSpace);
+      if (spaceOrder) return spaceOrder;
+    } else if (leftSpace) return -1;
+    else if (rightSpace) return 1;
+    const leftAsset = [...resolvedAssetBindings(left.binding)].map((item) => item.asset).sort(compareRegistryIdentity)[0];
+    const rightAsset = [...resolvedAssetBindings(right.binding)].map((item) => item.asset).sort(compareRegistryIdentity)[0];
+    if (leftAsset && rightAsset) return compareRegistryIdentity(leftAsset, rightAsset) || compareRegistryIdentity(left.device, right.device);
+    if (leftAsset) return -1;
+    if (rightAsset) return 1;
     return compareRegistryIdentity(left.device, right.device);
   });
 }
 
-export function buildRealAssetsEquipmentRows(input: BuildRealAssetsEquipmentRowsInput): RealAssetsEquipmentRow[] {
+export function buildRealAssetsAssetRows(input: BuildRealAssetsAssetRowsInput): RealAssetsAssetRow[] {
   const now = input.now ?? new Date();
-  const areaById = new Map(input.assetModel.areas.map((area) => [area.id, area]));
+  const spaceById = new Map(input.assetModel.spaces.map((space) => [space.id, space]));
   const sensorById = new Map(input.assetModel.sensors.map((sensor) => [sensor.id, sensor]));
-  const deviceRowsByEquipment = new Map<string, RealAssetsDeviceRow[]>();
+  const deviceRowsByAsset = new Map<string, RealAssetsDeviceRow[]>();
   for (const deviceRow of input.deviceRows) {
-    for (const binding of resolvedEquipmentBindings(deviceRow.binding)) {
-      const rows = deviceRowsByEquipment.get(binding.equipment.id) ?? [];
+    for (const binding of resolvedAssetBindings(deviceRow.binding)) {
+      const rows = deviceRowsByAsset.get(binding.asset.id) ?? [];
       rows.push(deviceRow);
-      deviceRowsByEquipment.set(binding.equipment.id, rows);
+      deviceRowsByAsset.set(binding.asset.id, rows);
     }
   }
 
-  return input.assetModel.equipment.map((equipment): RealAssetsEquipmentRow => {
-    const devices = [...(deviceRowsByEquipment.get(equipment.id) ?? [])].sort((left, right) => compareRegistryIdentity(left.device, right.device));
+  return input.assetModel.assets.map((asset): RealAssetsAssetRow => {
+    const devices = [...(deviceRowsByAsset.get(asset.id) ?? [])].sort((left, right) => compareRegistryIdentity(left.device, right.device));
     const sensorIds = new Set(input.assetModel.relationships
       .filter((relationship) => relationship.fromType === 'SENSOR'
-        && relationship.toType === 'EQUIPMENT'
-        && relationship.toId === equipment.id
+        && relationship.toType === 'ASSET'
+        && relationship.toId === asset.id
         && isCurrentRelationship(relationship, now))
       .map((relationship) => relationship.fromId));
     const sensors = [...sensorIds]
@@ -477,8 +477,8 @@ export function buildRealAssetsEquipmentRows(input: BuildRealAssetsEquipmentRows
       .filter((sensor): sensor is Sensor => Boolean(sensor))
       .sort(compareRegistryIdentity);
     const pointRelationships = input.assetModel.relationships.filter((relationship) => relationship.fromType === 'POINT'
-      && relationship.toType === 'EQUIPMENT'
-      && relationship.toId === equipment.id
+      && relationship.toType === 'ASSET'
+      && relationship.toId === asset.id
       && isCurrentRelationship(relationship, now));
     const pointRelationshipById = new Map(pointRelationships.map((relationship) => [relationship.fromId, relationship]));
     const points = input.pointRows
@@ -500,8 +500,8 @@ export function buildRealAssetsEquipmentRows(input: BuildRealAssetsEquipmentRows
           ? 'OFFLINE'
           : 'ATTENTION';
     return {
-      equipment,
-      area: resolveEquipmentArea(equipment, input.assetModel.relationships, areaById, now),
+      asset,
+      space: resolveAssetSpace(asset, input.assetModel.relationships, spaceById, now),
       devices,
       sensors,
       points,
@@ -510,12 +510,12 @@ export function buildRealAssetsEquipmentRows(input: BuildRealAssetsEquipmentRows
       attentionReasons,
     };
   }).sort((left, right) => {
-    const leftArea = left.area.state === 'bound' ? left.area.area : undefined;
-    const rightArea = right.area.state === 'bound' ? right.area.area : undefined;
-    if (leftArea && rightArea) return compareRegistryIdentity(leftArea, rightArea) || compareRegistryIdentity(left.equipment, right.equipment);
-    if (leftArea) return -1;
-    if (rightArea) return 1;
-    return compareRegistryIdentity(left.equipment, right.equipment);
+    const leftSpace = left.space.state === 'bound' ? left.space.space : undefined;
+    const rightSpace = right.space.state === 'bound' ? right.space.space : undefined;
+    if (leftSpace && rightSpace) return compareRegistryIdentity(leftSpace, rightSpace) || compareRegistryIdentity(left.asset, right.asset);
+    if (leftSpace) return -1;
+    if (rightSpace) return 1;
+    return compareRegistryIdentity(left.asset, right.asset);
   });
 }
 
@@ -534,7 +534,7 @@ export function buildRealAssetsPointRows(input: BuildRealAssetsPointRowsInput): 
       device: deviceRow.device,
       sensor: point.sensorId ? sensorById.get(point.sensorId) ?? null : null,
       binding: deviceRow.binding,
-      area: deviceRow.area,
+      space: deviceRow.space,
       label: realAssetsTelemetryPointLabel(point),
       current: snapshot ? pointView({
         key: point.pointCode,
@@ -594,17 +594,17 @@ function hierarchyNode(
 }
 
 export function buildRealAssetsHierarchy(model: SiteAssetModel, siteLabel: string, now = new Date()): RealAssetsHierarchyNode {
-  const equipmentArea = new Map(model.equipment.map((item) => [
+  const assetSpace = new Map(model.assets.map((item) => [
     item.id,
-    oneCurrentTargetId(model.relationships, 'EQUIPMENT', item.id, 'AREA', now),
+    oneCurrentTargetId(model.relationships, 'ASSET', item.id, 'SPACE', now),
   ]));
-  const deviceEquipment = new Map(model.devices.map((item) => [
+  const deviceAsset = new Map(model.devices.map((item) => [
     item.id,
-    currentTargetIds(model.relationships, 'DEVICE', item.id, 'EQUIPMENT', now),
+    currentTargetIds(model.relationships, 'DEVICE', item.id, 'ASSET', now),
   ]));
-  const deviceArea = new Map(model.devices.map((item) => [
+  const deviceSpace = new Map(model.devices.map((item) => [
     item.id,
-    oneCurrentTargetId(model.relationships, 'DEVICE', item.id, 'AREA', now),
+    oneCurrentTargetId(model.relationships, 'DEVICE', item.id, 'SPACE', now),
   ]));
   const sensorDevice = new Map(model.sensors.map((item) => [
     item.id,
@@ -674,68 +674,68 @@ export function buildRealAssetsHierarchy(model: SiteAssetModel, siteLabel: strin
     );
   };
 
-  const equipmentNode = (equipment: Equipment): RealAssetsHierarchyNode => {
+  const assetNode = (asset: Asset): RealAssetsHierarchyNode => {
     const boundDevices = model.devices
-      .filter((device) => deviceEquipment.get(device.id)?.includes(equipment.id))
+      .filter((device) => deviceAsset.get(device.id)?.includes(asset.id))
       .sort(compareRegistryIdentity);
-    const endpointNodes = boundDevices.map((device) => deviceNode(device, `equipment:${equipment.id}`));
+    const endpointNodes = boundDevices.map((device) => deviceNode(device, `asset:${asset.id}`));
     const collapseSingleEndpoint = boundDevices.length === 1
-      && deviceEquipment.get(boundDevices[0].id)?.length === 1;
+      && deviceAsset.get(boundDevices[0].id)?.length === 1;
     const children = collapseSingleEndpoint ? endpointNodes[0].children : endpointNodes;
     return hierarchyNode(
-      'equipment',
-      equipment.id,
-      realAssetsEquipmentTypeLabel(equipment.equipmentType),
-      `设备 · ${equipment.code || equipment.displayName}`,
+      'asset',
+      asset.id,
+      realAssetsAssetTypeLabel(asset.assetType),
+      `设备 · ${asset.code || asset.displayName}`,
       endpointNodes.flatMap((node) => node.deviceIds),
       children,
     );
   };
 
-  const areaChildren = new Map<string | null, Area[]>();
-  for (const area of model.areas) {
-    const siblings = areaChildren.get(area.parentAreaId) ?? [];
-    siblings.push(area);
-    areaChildren.set(area.parentAreaId, siblings);
+  const spaceChildren = new Map<string | null, Space[]>();
+  for (const space of model.spaces) {
+    const siblings = spaceChildren.get(space.parentSpaceId) ?? [];
+    siblings.push(space);
+    spaceChildren.set(space.parentSpaceId, siblings);
   }
-  const areaNode = (area: Area): RealAssetsHierarchyNode => {
-    const nestedAreas = (areaChildren.get(area.id) ?? []).sort(compareRegistryIdentity).map(areaNode);
-    const equipment = model.equipment
-      .filter((item) => equipmentArea.get(item.id) === area.id)
+  const spaceNode = (space: Space): RealAssetsHierarchyNode => {
+    const nestedSpaces = (spaceChildren.get(space.id) ?? []).sort(compareRegistryIdentity).map(spaceNode);
+    const asset = model.assets
+      .filter((item) => assetSpace.get(item.id) === space.id)
       .sort(compareRegistryIdentity)
-      .map(equipmentNode);
+      .map(assetNode);
     const directDevices = model.devices
-      .filter((device) => deviceEquipment.get(device.id)?.length === 0 && deviceArea.get(device.id) === area.id)
+      .filter((device) => deviceAsset.get(device.id)?.length === 0 && deviceSpace.get(device.id) === space.id)
       .sort(compareRegistryIdentity)
-      .map((device) => deviceNode(device, `area:${area.id}`));
+      .map((device) => deviceNode(device, `space:${space.id}`));
     const directDeviceGroup = directDevices.length > 0
-      ? [hierarchyNode('equipment', `unbound:${area.id}`, '未绑定设备', '关系待治理', directDevices.flatMap((node) => node.deviceIds), directDevices)]
+      ? [hierarchyNode('asset', `unbound:${space.id}`, '未绑定设备', '关系待治理', directDevices.flatMap((node) => node.deviceIds), directDevices)]
       : [];
-    const children = [...nestedAreas, ...equipment, ...directDeviceGroup];
+    const children = [...nestedSpaces, ...asset, ...directDeviceGroup];
     return hierarchyNode(
-      'area',
-      area.id,
-      area.displayName,
-      `区域 · ${realAssetsAreaTypeLabel(area.areaType)}`,
+      'space',
+      space.id,
+      space.displayName,
+      `区域 · ${realAssetsSpaceTypeLabel(space.spaceType)}`,
       children.flatMap((node) => node.deviceIds),
       children,
     );
   };
 
-  const roots = (areaChildren.get(null) ?? []).sort(compareRegistryIdentity).map(areaNode);
-  const unassignedEquipment = model.equipment.filter((item) => !equipmentArea.get(item.id)).sort(compareRegistryIdentity).map(equipmentNode);
+  const roots = (spaceChildren.get(null) ?? []).sort(compareRegistryIdentity).map(spaceNode);
+  const unassignedAsset = model.assets.filter((item) => !assetSpace.get(item.id)).sort(compareRegistryIdentity).map(assetNode);
   const unassignedDevices = model.devices
-    .filter((device) => deviceEquipment.get(device.id)?.length === 0 && !deviceArea.get(device.id))
+    .filter((device) => deviceAsset.get(device.id)?.length === 0 && !deviceSpace.get(device.id))
     .sort(compareRegistryIdentity)
     .map((device) => deviceNode(device, `site:${model.siteId}`));
   const orphanChildren = [
-    ...unassignedEquipment,
+    ...unassignedAsset,
     ...(unassignedDevices.length > 0
-      ? [hierarchyNode('equipment', 'unbound:site', '未绑定设备', '关系待治理', unassignedDevices.flatMap((node) => node.deviceIds), unassignedDevices)]
+      ? [hierarchyNode('asset', 'unbound:site', '未绑定设备', '关系待治理', unassignedDevices.flatMap((node) => node.deviceIds), unassignedDevices)]
       : []),
   ];
   const children = orphanChildren.length > 0
-    ? [...roots, hierarchyNode('area', 'unbound:site', '未分配区域', '关系待治理', orphanChildren.flatMap((node) => node.deviceIds), orphanChildren)]
+    ? [...roots, hierarchyNode('space', 'unbound:site', '未分配区域', '关系待治理', orphanChildren.flatMap((node) => node.deviceIds), orphanChildren)]
     : roots;
   return hierarchyNode('site', model.siteId, siteLabel, '站点资产', model.devices.map((device) => device.id), children);
 }

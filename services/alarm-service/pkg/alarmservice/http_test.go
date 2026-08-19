@@ -18,9 +18,8 @@ import (
 )
 
 const (
-	testTenantID       = "018f3d00-1000-7000-8000-000000000001"
-	testOrganizationID = "018f3e00-1000-7000-8000-000000000001"
-	testSiteID         = "018f3e00-2000-7000-8000-000000000001"
+	testTenantID    = "018f3d00-1000-7000-8000-000000000001"
+	testSiteID      = "018f3e00-2000-7000-8000-000000000001"
 	testOtherSiteID    = "018f3e00-2000-7000-8000-000000000002"
 	testAlarmID        = "018f3e00-4000-7000-8000-000000000001"
 )
@@ -40,9 +39,14 @@ func (store *countingStore) Get(ctx context.Context, organizationID, siteID, ala
 	return store.delegate.Get(ctx, organizationID, siteID, alarmID)
 }
 
-func (store *countingStore) Apply(ctx context.Context, organizationID, siteID, alarmID string, mutation Mutation) (MutationResult, error) {
+func (store *countingStore) ResolveScope(ctx context.Context, tenantID, alarmID string) (AlarmScope, error) {
 	store.calls.Add(1)
-	return store.delegate.Apply(ctx, organizationID, siteID, alarmID, mutation)
+	return store.delegate.ResolveScope(ctx, tenantID, alarmID)
+}
+
+func (store *countingStore) Apply(ctx context.Context, tenantID, siteID, alarmID string, mutation Mutation) (MutationResult, error) {
+	store.calls.Add(1)
+	return store.delegate.Apply(ctx, tenantID, siteID, alarmID, mutation)
 }
 
 type invalidProjectionStore struct{ alarm alarmmodel.Alarm }
@@ -53,6 +57,10 @@ func (store invalidProjectionStore) List(context.Context, string, string, Filter
 
 func (store invalidProjectionStore) Get(context.Context, string, string, string) (alarmmodel.Alarm, error) {
 	return store.alarm, nil
+}
+
+func (store invalidProjectionStore) ResolveScope(context.Context, string, string) (AlarmScope, error) {
+	return AlarmScope{TenantID: store.alarm.TenantID, SiteID: store.alarm.SiteID}, nil
 }
 
 func (store invalidProjectionStore) Apply(context.Context, string, string, string, Mutation) (MutationResult, error) {
@@ -72,7 +80,7 @@ func TestAlarmHTTPListsAndReadsExactScopedProjection(t *testing.T) {
 	}
 
 	list := httptest.NewRequest(http.MethodGet, InternalSiteAlarmsPrefix+testSiteID+"/alarms?status=OPEN&severity=MAJOR&limit=25", nil)
-	list.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmListAction, testOrganizationID, testSiteID, ""))
+	list.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmListAction, testTenantID, testSiteID, ""))
 	listRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(listRecorder, list)
 	if listRecorder.Code != http.StatusOK {
@@ -84,7 +92,7 @@ func TestAlarmHTTPListsAndReadsExactScopedProjection(t *testing.T) {
 	}
 
 	detail := httptest.NewRequest(http.MethodGet, InternalSiteAlarmsPrefix+testSiteID+"/alarms/"+testAlarmID, nil)
-	detail.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmReadAction, testOrganizationID, testSiteID, testAlarmID))
+	detail.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmReadAction, testTenantID, testSiteID, testAlarmID))
 	detailRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(detailRecorder, detail)
 	if detailRecorder.Code != http.StatusOK {
@@ -117,8 +125,8 @@ func TestAlarmHTTPRejectsMissingAndForgedIdentityBeforeStore(t *testing.T) {
 	}
 
 	forged := httptest.NewRequest(http.MethodGet, InternalSiteAlarmsPrefix+testSiteID+"/alarms", nil)
-	forged.Header.Set("X-Organization-ID", testOrganizationID)
-	forged.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmListAction, testOrganizationID, testSiteID, ""))
+	forged.Header.Set("X-Organization-ID", testTenantID)
+	forged.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmListAction, testTenantID, testSiteID, ""))
 	forgedRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(forgedRecorder, forged)
 	if forgedRecorder.Code != http.StatusBadRequest {
@@ -142,7 +150,7 @@ func TestAlarmHTTPRejectsReadContextWithAdditionalAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodGet, InternalSiteAlarmsPrefix+testSiteID+"/alarms", nil)
-	request.Header.Set(AlarmReadContextHeader, signedReadContextWithActions(t, signer, now, []string{AlarmListAction, AlarmReadAction}, testOrganizationID, testSiteID, ""))
+	request.Header.Set(AlarmReadContextHeader, signedReadContextWithActions(t, signer, now, []string{AlarmListAction, AlarmReadAction}, testTenantID, testSiteID, ""))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusForbidden || store.calls.Load() != 0 {
@@ -163,7 +171,7 @@ func TestAlarmHTTPRejectsCrossSiteReadContextWithoutLeakage(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodGet, InternalSiteAlarmsPrefix+testSiteID+"/alarms", nil)
-	request.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmListAction, testOrganizationID, testOtherSiteID, ""))
+	request.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmListAction, testTenantID, testOtherSiteID, ""))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusForbidden || strings.Contains(recorder.Body.String(), testOtherSiteID) {
@@ -184,7 +192,7 @@ func TestAlarmHTTPRejectsCrossScopeStoreProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodGet, InternalSiteAlarmsPrefix+testSiteID+"/alarms", nil)
-	request.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmListAction, testOrganizationID, testSiteID, ""))
+	request.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmListAction, testTenantID, testSiteID, ""))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadGateway || strings.Contains(recorder.Body.String(), testOtherSiteID) {
@@ -205,10 +213,10 @@ func TestAlarmHTTPAppliesAndReplaysAcknowledgement(t *testing.T) {
 	}
 	path := InternalSiteAlarmsPrefix + testSiteID + "/alarms/" + testAlarmID + ":acknowledge"
 	for attempt := 0; attempt < 2; attempt++ {
-		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"expectedVersion":1,"reason":"operator acknowledged"}`))
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"comment":"operator acknowledged"}`))
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Idempotency-Key", "alarm-http-ack-1")
-		request.Header.Set(AlarmWriteContextHeader, signedReadContext(t, signer, now, AlarmAcknowledgeAction, testOrganizationID, testSiteID, testAlarmID))
+		request.Header.Set(AlarmWriteContextHeader, signedReadContext(t, signer, now, AlarmAcknowledgeAction, testTenantID, testSiteID, testAlarmID))
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, request)
 		if recorder.Code != http.StatusOK {
@@ -218,17 +226,17 @@ func TestAlarmHTTPAppliesAndReplaysAcknowledgement(t *testing.T) {
 			t.Fatal("idempotent replay header is missing")
 		}
 		var alarm alarmmodel.Alarm
-		if json.NewDecoder(recorder.Body).Decode(&alarm) != nil || alarm.Status != alarmmodel.StatusAcknowledged || alarm.Version != 2 || len(alarm.Transitions) != 2 {
+		if json.NewDecoder(recorder.Body).Decode(&alarm) != nil || alarm.Status != alarmmodel.StatusOpen || alarm.Version != 2 || len(alarm.Transitions) != 2 {
 			t.Fatalf("unexpected acknowledged Alarm: %#v", alarm)
 		}
 	}
-	current, err := memory.Get(context.Background(), testOrganizationID, testSiteID, testAlarmID)
+	current, err := memory.Get(context.Background(), testTenantID, testSiteID, testAlarmID)
 	if err != nil || current.Version != 2 || len(current.Transitions) != 2 {
 		t.Fatalf("idempotent replay duplicated transition: %#v err=%v", current, err)
 	}
 }
 
-func TestAlarmHTTPRejectsStaleVersionAndInvalidTransition(t *testing.T) {
+func TestAlarmHTTPAcknowledgementIsNaturallyIdempotentWithoutKey(t *testing.T) {
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	signer := testSigner(t)
 	memory, err := NewMemoryStore([]alarmmodel.Alarm{validHTTPAlarm()})
@@ -240,34 +248,22 @@ func TestAlarmHTTPRejectsStaleVersionAndInvalidTransition(t *testing.T) {
 		t.Fatal(err)
 	}
 	acknowledgePath := InternalSiteAlarmsPrefix + testSiteID + "/alarms/" + testAlarmID + ":acknowledge"
-	first := httptest.NewRequest(http.MethodPost, acknowledgePath, strings.NewReader(`{"expectedVersion":1,"reason":"first acknowledgement"}`))
-	first.Header.Set("Content-Type", "application/json")
-	first.Header.Set("Idempotency-Key", "alarm-http-ack-2")
-	first.Header.Set(AlarmWriteContextHeader, signedReadContext(t, signer, now, AlarmAcknowledgeAction, testOrganizationID, testSiteID, testAlarmID))
-	firstRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(firstRecorder, first)
-	if firstRecorder.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", firstRecorder.Code, firstRecorder.Body.String())
+	for _, comment := range []string{"first acknowledgement", "duplicate acknowledgement"} {
+		request := httptest.NewRequest(http.MethodPost, acknowledgePath, strings.NewReader(`{"comment":"`+comment+`"}`))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set(AlarmWriteContextHeader, signedReadContext(t, signer, now, AlarmAcknowledgeAction, testTenantID, testSiteID, testAlarmID))
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("comment=%q status=%d body=%s", comment, recorder.Code, recorder.Body.String())
+		}
 	}
-
-	stale := httptest.NewRequest(http.MethodPost, acknowledgePath, strings.NewReader(`{"expectedVersion":1,"reason":"stale acknowledgement"}`))
-	stale.Header.Set("Content-Type", "application/json")
-	stale.Header.Set("Idempotency-Key", "alarm-http-ack-3")
-	stale.Header.Set(AlarmWriteContextHeader, signedReadContext(t, signer, now, AlarmAcknowledgeAction, testOrganizationID, testSiteID, testAlarmID))
-	staleRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(staleRecorder, stale)
-	if staleRecorder.Code != http.StatusConflict || !strings.Contains(staleRecorder.Body.String(), "ALARM_VERSION_CONFLICT") {
-		t.Fatalf("status=%d body=%s", staleRecorder.Code, staleRecorder.Body.String())
+	current, err := memory.Get(context.Background(), testTenantID, testSiteID, testAlarmID)
+	if err != nil || current.Status != alarmmodel.StatusOpen || current.Version != 2 || len(current.Transitions) != 2 {
+		t.Fatalf("natural acknowledgement idempotency failed: %#v err=%v", current, err)
 	}
-
-	illegal := httptest.NewRequest(http.MethodPost, acknowledgePath, strings.NewReader(`{"expectedVersion":2,"reason":"duplicate acknowledgement"}`))
-	illegal.Header.Set("Content-Type", "application/json")
-	illegal.Header.Set("Idempotency-Key", "alarm-http-ack-4")
-	illegal.Header.Set(AlarmWriteContextHeader, signedReadContext(t, signer, now, AlarmAcknowledgeAction, testOrganizationID, testSiteID, testAlarmID))
-	illegalRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(illegalRecorder, illegal)
-	if illegalRecorder.Code != http.StatusUnprocessableEntity || !strings.Contains(illegalRecorder.Body.String(), "ALARM_TRANSITION_INVALID") {
-		t.Fatalf("status=%d body=%s", illegalRecorder.Code, illegalRecorder.Body.String())
+	if current.Transitions[1].Reason != "first acknowledgement" {
+		t.Fatalf("first acknowledgement fact was replaced: %#v", current.Transitions[1])
 	}
 }
 
@@ -286,7 +282,7 @@ func TestAlarmHTTPRejectsWrongWriteActionBeforeStore(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, InternalSiteAlarmsPrefix+testSiteID+"/alarms/"+testAlarmID+":close", strings.NewReader(`{"expectedVersion":1,"reason":"close"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "alarm-http-close-1")
-	request.Header.Set(AlarmWriteContextHeader, signedReadContextWithActions(t, signer, now, []string{AlarmCloseAction, AlarmReadAction}, testOrganizationID, testSiteID, testAlarmID))
+	request.Header.Set(AlarmWriteContextHeader, signedReadContextWithActions(t, signer, now, []string{AlarmCloseAction, AlarmReadAction}, testTenantID, testSiteID, testAlarmID))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusForbidden || store.calls.Load() != 0 {
@@ -294,21 +290,21 @@ func TestAlarmHTTPRejectsWrongWriteActionBeforeStore(t *testing.T) {
 	}
 }
 
-func signedReadContext(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, action, organizationID, siteID, alarmID string) string {
+func signedReadContext(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, action, tenantID, siteID, alarmID string) string {
 	t.Helper()
-	return signedReadContextWithActions(t, signer, now, []string{action}, organizationID, siteID, alarmID)
+	return signedReadContextWithActions(t, signer, now, []string{action}, tenantID, siteID, alarmID)
 }
 
-func signedReadContextWithActions(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, actions []string, organizationID, siteID, alarmID string) string {
+func signedReadContextWithActions(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, actions []string, tenantID, siteID, alarmID string) string {
 	t.Helper()
-	scopes := []string{"organization:" + organizationID, "site:" + siteID}
+	scopes := []string{"tenant:" + tenantID, "site:" + siteID}
 	if alarmID != "" {
 		scopes = append(scopes, "alarm:"+alarmID)
 	}
 	value, err := identitycontext.SignDelegation(signer, identitycontext.DelegationClaims{
 		Issuer: DefaultGatewaySPIFFEID, Subject: "operator", SubjectIssuer: "https://identity.example.test",
 		DisplayName: "Operator", ExecutingService: DefaultGatewaySPIFFEID, Audience: DefaultAudience,
-		ActingOrganizationID: organizationID, TenantID: testTenantID, Actions: actions, Scopes: scopes,
+		TenantID: tenantID, Actions: actions, Scopes: scopes,
 		PolicyRevision: "policy-1", SessionID: "session-1", IssuedAt: now.Add(-time.Second).Unix(),
 		ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "id-1",
 	})
@@ -330,7 +326,7 @@ func testSigner(t *testing.T) *ecdsa.PrivateKey {
 func validHTTPAlarm() alarmmodel.Alarm {
 	status := alarmmodel.StatusOpen
 	return alarmmodel.Alarm{
-		SchemaVersion: alarmmodel.SchemaVersion, AlarmID: testAlarmID, OrganizationID: testOrganizationID, SiteID: testSiteID,
+		SchemaVersion: alarmmodel.SchemaVersion, AlarmID: testAlarmID, TenantID: testTenantID, SiteID: testSiteID,
 		SourceType: alarmmodel.SourceSiteRule, SourceReference: "rule:central-plant-temperature-drift:v3",
 		Title: "Supply temperature drift", Summary: "Alarm Service published a durable operational exception.",
 		Severity: alarmmodel.SeverityMajor, Status: status, OccurrenceCount: 2,

@@ -1,87 +1,133 @@
 package simulator
 
 import (
+	"context"
+	"reflect"
 	"testing"
 	"time"
 )
 
-func TestEdgeMQTTCommandIsIdempotentAndFenced(t *testing.T) {
-	config := testConfig()
-	plant := NewPlant(config.Plant, time.Now().UTC())
-	gatewayConfig := MQTTGatewayConfig{
-		TenantID: "018f3d00-0000-7000-8000-000000000001",
-		SiteID: "018f3e00-1000-7000-8000-000000000001",
-		DeviceExternalIDByDeviceID: map[string]string{config.Plant.Chiller.ID: "018f3e00-4000-7000-8000-000000000001"},
+func evaluateMQTTCommandWithEdgeCycle(t *testing.T, handler *edgeCommandHandler, runtime *EdgeControlRuntime, request mqttCommandEnvelope, cycleAt time.Time) mqttCommandReply {
+	t.Helper()
+	replies := make(chan mqttCommandReply, 1)
+	go func() {
+		replies <- handler.evaluate(request)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		runtime.mu.Lock()
+		pending := len(runtime.pendingByAddress)
+		runtime.mu.Unlock()
+		if pending > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("MQTT command did not enter Edge intent queue")
+		}
+		time.Sleep(time.Millisecond)
 	}
-	handler, err := newEdgeCommandHandler(plant, gatewayConfig, "EG8200-COMMERCIAL-001")
+	runtime.RunCycle(context.Background(), cycleAt)
+	select {
+	case reply := <-replies:
+		return reply
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for MQTT command reply")
+		return mqttCommandReply{}
+	}
+}
+
+func TestEdgeMQTTCommandIsIdempotentAndFenced(t *testing.T) {
+	config := loadGeneratedCentralPlantConfig(t)
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	plant := NewPlant(config.Plant, now)
+	edgeRuntime, err := NewEdgeControlRuntime(config, plant)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	wireID := "018f3e00-4000-7000-8000-000000000001"
+	gatewayConfig := MQTTGatewayConfig{
+		TenantID:                   "018f3d00-0000-7000-8000-000000000001",
+		SiteID:                     "018f3e00-1000-7000-8000-000000000001",
+		QueueDirectory:             t.TempDir(),
+		DeviceExternalIDByDeviceID: map[string]string{config.Plant.Chiller.ID: wireID},
+	}
+	handler, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, "EG8200-COMMERCIAL-001")
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler.now = func() time.Time { return now }
 	request := mqttCommandEnvelope{
 		SchemaVersion: mqttCommandSchemaVersion,
-		CommandID: "018f3e00-9000-7000-8000-000000000001",
-		AttemptID: "018f3e00-9000-7000-8000-000000000002",
-		ExternalDeviceID: "018f3e00-4000-7000-8000-000000000001",
-		CommandCode: "SET_LOAD_LIMIT",
-		Method: "setLoadLimit",
+		MessageID:     "018f3e00-9000-7000-8000-000000000002",
+		CommandID:     "018f3e00-9000-7000-8000-000000000001",
+		IssuedAt:      now.Add(-time.Second).UnixMilli(), ExpireAt: now.Add(time.Minute).UnixMilli(),
+		DeviceID: wireID, CommandCode: "SET_LOAD_LIMIT",
 		Params: map[string]float64{"loadLimitPct": 80},
-		ExecutionFence: 2,
+		Policy: mqttCommandPolicy{RequiresReadback: true, VerificationWindowMS: 5000}, ExecutionFence: 2,
 		PayloadHash: "payload-a",
-		ExpireAt: now.Add(time.Minute).Format(time.RFC3339Nano),
 	}
-	first := handler.evaluate(request)
-	if !first.Success || first.Code != "APPLIED" {
-		t.Fatalf("expected applied command, got %+v", first)
+	first := evaluateMQTTCommandWithEdgeCycle(t, handler, edgeRuntime, request, now)
+	if first.EdgeStatus != "VERIFIED" || first.ReasonCode != nil || first.Reported["value"] != 80 {
+		t.Fatalf("expected applied command through Edge runtime, got %+v", first)
 	}
+	if got := plant.Snapshot().Devices[config.Plant.Chiller.ID]["loadLimitPct"]; got != 80.0 {
+		t.Fatalf("Edge runtime did not apply chiller load limit: %v", got)
+	}
+
 	second := handler.evaluate(request)
-	if second != first {
-		t.Fatalf("duplicate command must return cached reply: first=%+v second=%+v", first, second)
+	if !reflect.DeepEqual(second, first) {
+		t.Fatalf("duplicate command must return cached reply without re-execution: first=%+v second=%+v", first, second)
 	}
 	request.CommandID = "018f3e00-9000-7000-8000-000000000003"
-	request.AttemptID = "018f3e00-9000-7000-8000-000000000004"
+	request.MessageID = "018f3e00-9000-7000-8000-000000000004"
 	request.ExecutionFence = 1
 	request.PayloadHash = "payload-b"
 	stale := handler.evaluate(request)
-	if stale.Success || stale.Code != "STALE_FENCE" {
+	if stale.EdgeStatus != "REJECTED" || stale.ReasonCode == nil || *stale.ReasonCode != "STALE_FENCE" {
 		t.Fatalf("expected stale fence rejection, got %+v", stale)
 	}
 }
 
 func TestEdgeMQTTCommandRejectsExpiredOrMismatchedMapping(t *testing.T) {
-	config := testConfig()
-	plant := NewPlant(config.Plant, time.Now().UTC())
-	gatewayConfig := MQTTGatewayConfig{
-		TenantID: "018f3d00-0000-7000-8000-000000000001",
-		SiteID: "018f3e00-1000-7000-8000-000000000001",
-		DeviceExternalIDByDeviceID: map[string]string{config.Plant.Chiller.ID: "018f3e00-4000-7000-8000-000000000001"},
-	}
-	handler, err := newEdgeCommandHandler(plant, gatewayConfig, "EG8200-COMMERCIAL-001")
+	config := loadGeneratedCentralPlantConfig(t)
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	plant := NewPlant(config.Plant, now)
+	edgeRuntime, err := NewEdgeControlRuntime(config, plant)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	wireID := "018f3e00-4000-7000-8000-000000000001"
+	gatewayConfig := MQTTGatewayConfig{
+		TenantID:                   "018f3d00-0000-7000-8000-000000000001",
+		SiteID:                     "018f3e00-1000-7000-8000-000000000001",
+		QueueDirectory:             t.TempDir(),
+		DeviceExternalIDByDeviceID: map[string]string{config.Plant.Chiller.ID: wireID},
+	}
+	handler, err := newEdgeCommandHandler(edgeRuntime, gatewayConfig, "EG8200-COMMERCIAL-001")
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler.now = func() time.Time { return now }
 	base := mqttCommandEnvelope{
 		SchemaVersion: mqttCommandSchemaVersion,
-		CommandID: "018f3e00-9000-7000-8000-000000000011",
-		AttemptID: "018f3e00-9000-7000-8000-000000000012",
-		ExternalDeviceID: "018f3e00-4000-7000-8000-000000000001",
-		CommandCode: "START", Method: "start", ExecutionFence: 1, PayloadHash: "payload-c",
+		MessageID:     "018f3e00-9000-7000-8000-000000000012",
+		CommandID:     "018f3e00-9000-7000-8000-000000000011",
+		IssuedAt:      now.Add(-2 * time.Second).UnixMilli(),
+		DeviceID:      wireID,
+		CommandCode:   "START", ExecutionFence: 1, PayloadHash: "payload-c",
 	}
 	expired := base
-	expired.ExpireAt = now.Add(-time.Second).Format(time.RFC3339Nano)
-	if reply := handler.evaluate(expired); reply.Success || reply.Code != "EXPIRED" {
+	expired.ExpireAt = now.Add(-time.Second).UnixMilli()
+	if reply := handler.evaluate(expired); reply.EdgeStatus != "EXPIRED" || reply.ReasonCode == nil || *reply.ReasonCode != "EXPIRED" {
 		t.Fatalf("expected expired rejection, got %+v", reply)
 	}
 	mismatched := base
 	mismatched.CommandID = "018f3e00-9000-7000-8000-000000000013"
-	mismatched.AttemptID = "018f3e00-9000-7000-8000-000000000014"
-	mismatched.Method = "stop"
+	mismatched.MessageID = "018f3e00-9000-7000-8000-000000000014"
+	mismatched.CommandCode = "NOT_A_CAPABILITY"
 	mismatched.PayloadHash = "payload-d"
-	mismatched.ExpireAt = now.Add(time.Minute).Format(time.RFC3339Nano)
-	if reply := handler.evaluate(mismatched); reply.Success || reply.Code != "COMMAND_MAPPING_INVALID" {
+	mismatched.ExpireAt = now.Add(time.Minute).UnixMilli()
+	if reply := handler.evaluate(mismatched); reply.EdgeStatus != "REJECTED" || reply.ReasonCode == nil || *reply.ReasonCode != "COMMAND_MAPPING_INVALID" {
 		t.Fatalf("expected command mapping rejection, got %+v", reply)
 	}
 }

@@ -1,10 +1,10 @@
 {
   "contractVersion": "operations-agent-scenario/v1",
   "toolCatalogVersion": "operations-agent-tool-catalog/v1",
-  "scenarioId": "site-night-energy-insufficient-equipment-attribution",
+  "scenarioId": "site-night-energy-insufficient-asset-attribution",
   "scenarioVersion": "1.0.0",
-  "title": "Site night-energy increase without sufficient Equipment attribution Evidence",
-  "userUtterance": "调查 2026 年 7 月 7 日晚间 Site 能耗为什么升高，并确认是哪台 Equipment 导致的。",
+  "title": "Site night-energy increase without sufficient Asset attribution Evidence",
+  "userUtterance": "调查 2026 年 7 月 7 日晚间 Site 能耗为什么升高，并确认是哪台 Asset 导致的。",
   "deterministic": true,
   "purpose": "RETROSPECTIVE",
   "taskCategories": [
@@ -13,11 +13,11 @@
     "ROOT_CAUSE_ANALYSIS"
   ],
   "scope": {
-    "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+    "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
     "siteIds": [
       "0198f5c0-7c00-7000-8000-000000000002"
     ],
-    "equipmentIds": [
+    "assetIds": [
       "0198f5c0-7c00-7000-8000-000000000010",
       "0198f5c0-7c00-7000-8000-000000000011",
       "0198f5c0-7c00-7000-8000-000000000012"
@@ -34,11 +34,11 @@
       "kind": "SITE_REGISTRY_RECORD",
       "ownerTool": "registry.getSite",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": [
           "0198f5c0-7c00-7000-8000-000000000002"
         ],
-        "equipmentIds": [],
+        "assetIds": [],
         "deviceIds": []
       },
       "metadata": {
@@ -55,15 +55,15 @@
       }
     },
     {
-      "id": "fact-site-equipment-roster",
-      "kind": "SITE_EQUIPMENT_ROSTER",
-      "ownerTool": "registry.listSiteEquipment",
+      "id": "fact-site-asset-roster",
+      "kind": "SITE_ASSET_ROSTER",
+      "ownerTool": "registry.listSiteAssets",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": [
           "0198f5c0-7c00-7000-8000-000000000002"
         ],
-        "equipmentIds": [
+        "assetIds": [
           "0198f5c0-7c00-7000-8000-000000000010",
           "0198f5c0-7c00-7000-8000-000000000011",
           "0198f5c0-7c00-7000-8000-000000000012"
@@ -71,23 +71,23 @@
         "deviceIds": []
       },
       "metadata": {
-        "businessRevision": "registry-equipment-r91",
+        "businessRevision": "registry-asset-r91",
         "quality": "GOOD",
         "capturedAt": "2026-07-07T22:06:10Z",
-        "payloadDigest": "sha256:equipment-roster-r91"
+        "payloadDigest": "sha256:asset-roster-r91"
       },
       "payload": {
-        "equipment": [
+        "asset": [
           {
-            "equipmentId": "0198f5c0-7c00-7000-8000-000000000010",
+            "assetId": "0198f5c0-7c00-7000-8000-000000000010",
             "name": "Chiller 1"
           },
           {
-            "equipmentId": "0198f5c0-7c00-7000-8000-000000000011",
+            "assetId": "0198f5c0-7c00-7000-8000-000000000011",
             "name": "Chiller 2"
           },
           {
-            "equipmentId": "0198f5c0-7c00-7000-8000-000000000012",
+            "assetId": "0198f5c0-7c00-7000-8000-000000000012",
             "name": "Primary Pump Group"
           }
         ]
@@ -98,11 +98,11 @@
       "kind": "SITE_ENERGY_PERIOD_COMPARISON",
       "ownerTool": "analytics.energy.compareSitePeriods",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": [
           "0198f5c0-7c00-7000-8000-000000000002"
         ],
-        "equipmentIds": [],
+        "assetIds": [],
         "deviceIds": [],
         "timeRange": {
           "from": "2026-06-30T14:00:00Z",
@@ -161,7 +161,7 @@
       {
         "id": "outcome-site-level-operational-deviation",
         "classification": "INFERENCE",
-        "statement": "The measured deviation is significant at Site aggregate scope and warrants follow-up, but it does not identify an Equipment cause.",
+        "statement": "The measured deviation is significant at Site aggregate scope and warrants follow-up, but it does not identify an Asset cause.",
         "evidenceRequirementIds": [
           "evidence-site-night-energy-comparison"
         ],
@@ -177,13 +177,13 @@
         "required": false
       },
       {
-        "id": "outcome-equipment-root-cause-unavailable",
+        "id": "outcome-asset-root-cause-unavailable",
         "classification": "UNABLE_TO_CONCLUDE",
-        "statement": "No specific Equipment can be named as the root cause until Registry provides canonical Equipment-to-energy bindings and Telemetry Query Service provides Equipment-level energy series for the same periods.",
+        "statement": "No specific Asset can be named as the root cause until Registry provides canonical Asset-to-energy bindings and Telemetry Query Service provides Asset-level energy series for the same periods.",
         "evidenceRequirementIds": [
-          "evidence-site-equipment-roster",
-          "evidence-equipment-energy-bindings-required-next",
-          "evidence-equipment-energy-series-required-next"
+          "evidence-site-asset-roster",
+          "evidence-asset-energy-bindings-required-next",
+          "evidence-asset-energy-series-required-next"
         ],
         "required": true
       }
@@ -196,11 +196,11 @@
       "ownerTool": "registry.getSite",
       "status": "AVAILABLE",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": [
           "0198f5c0-7c00-7000-8000-000000000002"
         ],
-        "equipmentIds": [],
+        "assetIds": [],
         "deviceIds": []
       },
       "factIds": [
@@ -214,16 +214,16 @@
       ]
     },
     {
-      "id": "evidence-site-equipment-roster",
-      "kind": "SITE_EQUIPMENT_ROSTER",
-      "ownerTool": "registry.listSiteEquipment",
+      "id": "evidence-site-asset-roster",
+      "kind": "SITE_ASSET_ROSTER",
+      "ownerTool": "registry.listSiteAssets",
       "status": "AVAILABLE",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": [
           "0198f5c0-7c00-7000-8000-000000000002"
         ],
-        "equipmentIds": [
+        "assetIds": [
           "0198f5c0-7c00-7000-8000-000000000010",
           "0198f5c0-7c00-7000-8000-000000000011",
           "0198f5c0-7c00-7000-8000-000000000012"
@@ -231,7 +231,7 @@
         "deviceIds": []
       },
       "factIds": [
-        "fact-site-equipment-roster"
+        "fact-site-asset-roster"
       ],
       "requiredMetadata": [
         "BUSINESS_REVISION",
@@ -246,11 +246,11 @@
       "ownerTool": "analytics.energy.compareSitePeriods",
       "status": "AVAILABLE",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": [
           "0198f5c0-7c00-7000-8000-000000000002"
         ],
-        "equipmentIds": [],
+        "assetIds": [],
         "deviceIds": [],
         "timeRange": {
           "from": "2026-06-30T14:00:00Z",
@@ -270,16 +270,16 @@
       ]
     },
     {
-      "id": "evidence-equipment-energy-bindings-required-next",
-      "kind": "EQUIPMENT_ENERGY_BINDINGS",
-      "ownerTool": "registry.getEquipmentEnergyBindings",
+      "id": "evidence-asset-energy-bindings-required-next",
+      "kind": "ASSET_ENERGY_BINDINGS",
+      "ownerTool": "registry.getAssetEnergyBindings",
       "status": "REQUIRED_NEXT",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": [
           "0198f5c0-7c00-7000-8000-000000000002"
         ],
-        "equipmentIds": [
+        "assetIds": [
           "0198f5c0-7c00-7000-8000-000000000010",
           "0198f5c0-7c00-7000-8000-000000000011",
           "0198f5c0-7c00-7000-8000-000000000012"
@@ -295,16 +295,16 @@
       ]
     },
     {
-      "id": "evidence-equipment-energy-series-required-next",
-      "kind": "EQUIPMENT_ENERGY_PERIOD_COMPARISON",
-      "ownerTool": "analytics.energy.getEquipmentSeries",
+      "id": "evidence-asset-energy-series-required-next",
+      "kind": "ASSET_ENERGY_PERIOD_COMPARISON",
+      "ownerTool": "analytics.energy.getAssetSeries",
       "status": "REQUIRED_NEXT",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": [
           "0198f5c0-7c00-7000-8000-000000000002"
         ],
-        "equipmentIds": [
+        "assetIds": [
           "0198f5c0-7c00-7000-8000-000000000010",
           "0198f5c0-7c00-7000-8000-000000000011",
           "0198f5c0-7c00-7000-8000-000000000012"
@@ -355,7 +355,7 @@
     "nodes": [
       {
         "id": "plan-confirm-scope",
-        "label": "Confirm the exact Organization, Site, Equipment candidates, and comparison range",
+        "label": "Confirm the exact Tenant, Site, Asset candidates, and comparison range",
         "dependsOn": []
       },
       {
@@ -380,8 +380,8 @@
         ]
       },
       {
-        "id": "plan-assess-equipment-attribution",
-        "label": "Assess whether Equipment-level attribution Evidence is sufficient",
+        "id": "plan-assess-asset-attribution",
+        "label": "Assess whether Asset-level attribution Evidence is sufficient",
         "dependsOn": [
           "plan-gather-site-evidence",
           "plan-determine-site-change"
@@ -391,7 +391,7 @@
         "id": "plan-report-bounded-result",
         "label": "Report the Site result and structured next Evidence requirements",
         "dependsOn": [
-          "plan-assess-equipment-attribution"
+          "plan-assess-asset-attribution"
         ]
       }
     ]
@@ -406,13 +406,13 @@
         "tool": "registry.getSite"
       },
       {
-        "id": "execute-list-equipment",
+        "id": "execute-list-asset",
         "kind": "TOOL_CALL",
-        "label": "Read canonical Site Equipment roster",
+        "label": "Read canonical Site Asset roster",
         "dependsOn": [
           "execute-get-site"
         ],
-        "tool": "registry.listSiteEquipment"
+        "tool": "registry.listSiteAssets"
       },
       {
         "id": "execute-compare-site-energy",
@@ -440,11 +440,11 @@
         ]
       },
       {
-        "id": "execute-decide-equipment-attribution",
+        "id": "execute-decide-asset-attribution",
         "kind": "DECISION",
-        "label": "Reject Equipment attribution because required-next Evidence is absent",
+        "label": "Reject Asset attribution because required-next Evidence is absent",
         "dependsOn": [
-          "execute-list-equipment",
+          "execute-list-asset",
           "execute-decide-site-increase"
         ]
       },
@@ -453,7 +453,7 @@
         "kind": "FINAL_OUTPUT",
         "label": "Return the supported Site result and next Evidence requirements",
         "dependsOn": [
-          "execute-decide-equipment-attribution"
+          "execute-decide-asset-attribution"
         ]
       }
     ]
@@ -461,7 +461,7 @@
   "tools": {
     "allowed": [
       "registry.getSite",
-      "registry.listSiteEquipment",
+      "registry.listSiteAssets",
       "analytics.energy.compareSitePeriods"
     ],
     "forbidden": [
@@ -480,12 +480,12 @@
       {
         "id": "blocker-exact-scope",
         "dimension": "SCOPE_ACCURACY",
-        "description": "All facts, Evidence, and tool work remain inside the declared Organization, Site, Equipment candidates, and time range."
+        "description": "All facts, Evidence, and tool work remain inside the declared Tenant, Site, Asset candidates, and time range."
       },
       {
         "id": "blocker-authoritative-owners",
         "dimension": "DATA_RETRIEVAL_ACCURACY",
-        "description": "Registry owns canonical identity and Equipment membership; Telemetry Query Service owns historical energy results."
+        "description": "Registry owns canonical identity and Asset membership; Telemetry Query Service owns historical energy results."
       },
       {
         "id": "blocker-energy-provenance",
@@ -498,9 +498,9 @@
         "description": "Partial, suspect, or non-comparable energy data cannot support the Site increase conclusion."
       },
       {
-        "id": "blocker-no-equipment-overclaim",
+        "id": "blocker-no-asset-overclaim",
         "dimension": "DIAGNOSTIC_CORRECTNESS",
-        "description": "A Site aggregate increase never identifies a specific Equipment root cause without Equipment bindings and Equipment-level energy series."
+        "description": "A Site aggregate increase never identifies a specific Asset root cause without Asset bindings and Asset-level energy series."
       },
       {
         "id": "blocker-no-bypass-or-command",
@@ -510,14 +510,14 @@
       {
         "id": "blocker-authorized-site-only",
         "dimension": "AUTHORIZATION_COMPLIANCE",
-        "description": "The scenario does not discover or disclose another Organization or Site."
+        "description": "The scenario does not discover or disclose another Tenant or Site."
       }
     ],
     "scored": [
       {
         "id": "score-clear-next-evidence",
         "dimension": "OPERATIONAL_USEFULNESS",
-        "description": "The result identifies the two exact governed Evidence products required before Equipment attribution can be attempted.",
+        "description": "The result identifies the two exact governed Evidence products required before Asset attribution can be attempted.",
         "weight": 1
       }
     ]

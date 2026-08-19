@@ -8,14 +8,21 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'audit_consumer_runtime') THEN CREATE ROLE audit_consumer_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'audit_query_runtime') THEN CREATE ROLE audit_query_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
 
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'identity_migrator') THEN CREATE ROLE identity_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'identity_runtime') THEN CREATE ROLE identity_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'identity_admin') THEN CREATE ROLE identity_admin LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'identity_directory_reader') THEN CREATE ROLE identity_directory_reader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_iam_migrator') THEN CREATE ROLE s1_iam_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_iam_runtime') THEN CREATE ROLE s1_iam_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_iam_admin') THEN CREATE ROLE s1_iam_admin LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_iam_reconciler') THEN CREATE ROLE s1_iam_reconciler LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_core_migrator') THEN CREATE ROLE s1_core_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_core_runtime') THEN CREATE ROLE s1_core_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_migration_operator') THEN CREATE ROLE s1_migration_operator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 's1_core_service') THEN CREATE ROLE s1_core_service LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'metric_engine_runtime') THEN CREATE ROLE metric_engine_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'scheduler_runtime') THEN CREATE ROLE scheduler_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'settlement_runtime') THEN CREATE ROLE settlement_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'forecast_runtime') THEN CREATE ROLE forecast_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'optimization_runtime') THEN CREATE ROLE optimization_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF;
@@ -49,6 +56,14 @@ BEGIN
 END
 $$;
 
+\connect hvac_identity
+REVOKE CONNECT ON DATABASE hvac_identity FROM PUBLIC;
+CREATE SCHEMA IF NOT EXISTS identity AUTHORIZATION identity_migrator;
+ALTER SCHEMA identity OWNER TO identity_migrator;
+REVOKE ALL ON SCHEMA identity FROM PUBLIC;
+GRANT CONNECT ON DATABASE hvac_identity TO identity_runtime, identity_admin, identity_directory_reader;
+GRANT USAGE ON SCHEMA identity TO identity_runtime, identity_admin, identity_directory_reader;
+
 \connect hvac_s0
 REVOKE CONNECT ON DATABASE hvac_s0 FROM PUBLIC;
 CREATE SCHEMA IF NOT EXISTS gateway AUTHORIZATION s0_migrator;
@@ -65,8 +80,9 @@ CREATE SCHEMA IF NOT EXISTS core_registry AUTHORIZATION s1_core_migrator;
 ALTER SCHEMA iam OWNER TO s1_iam_migrator;
 ALTER SCHEMA core_registry OWNER TO s1_core_migrator;
 REVOKE ALL ON SCHEMA iam, core_registry FROM PUBLIC;
-GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_reconciler, s1_core_service, metric_engine_runtime, s2_iam_grant_runtime;
-GRANT USAGE ON SCHEMA core_registry TO metric_engine_runtime, settlement_runtime, forecast_runtime, optimization_runtime;
+GRANT CONNECT ON DATABASE hvac_s1 TO s1_iam_migrator, s1_iam_runtime, s1_iam_admin, s1_iam_reconciler, s1_core_service, metric_engine_runtime, scheduler_runtime, s2_iam_grant_runtime;
+GRANT USAGE ON SCHEMA iam TO s1_iam_runtime, s1_iam_admin, s1_iam_reconciler;
+GRANT USAGE ON SCHEMA core_registry TO s1_core_runtime, metric_engine_runtime, scheduler_runtime, settlement_runtime, forecast_runtime, optimization_runtime;
 GRANT s1_core_runtime TO s1_core_service;
 
 \connect hvac_s2
@@ -74,6 +90,7 @@ REVOKE CONNECT ON DATABASE hvac_s2 FROM PUBLIC;
 CREATE SCHEMA IF NOT EXISTS telemetry_runtime AUTHORIZATION s2_telemetry_migrator;
 ALTER SCHEMA telemetry_runtime OWNER TO s2_telemetry_migrator;
 REVOKE ALL ON SCHEMA telemetry_runtime FROM PUBLIC;
+GRANT USAGE ON SCHEMA telemetry_runtime TO s2_telemetry_runtime, s2_telemetry_relay, s2_telemetry_history;
 GRANT s2_telemetry_migrator TO s2_telemetry_migrator_service;
 GRANT s2_telemetry_runtime TO s2_telemetry_service;
 GRANT s2_telemetry_relay TO s2_telemetry_relay_service;

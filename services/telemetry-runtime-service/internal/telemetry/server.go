@@ -1,7 +1,6 @@
 package telemetry
 
 import (
-	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -35,49 +34,49 @@ var (
 )
 
 type ServerConfig struct {
-	Store                        SnapshotStore
-	Authorizer                   GrantAuthorizer
-	AllowedGatewaySPIFFE         string
-	RuntimeAudience              string
-	ObservationAcceptor          ObservationAcceptor
-	CoverageReporter             CoverageReporter
-	MQTTEvidenceAcceptor         MQTTEvidenceAcceptor
-	SourceAuthenticator          SourceAuthenticator
-	Realtime                     *RealtimeService
-	LatestCache                  LatestCache
-	AllowedCentrifugoSPIFFE      string
-	CentrifugoProxySecret        string
-	AllowedIAMSPIFFE             string
-	AllowedCommandVerifierSPIFFE string
+	Store                          SnapshotStore
+	Authorizer                     GrantAuthorizer
+	AllowedGatewaySPIFFE           string
+	RuntimeAudience                string
+	ObservationAcceptor            ObservationAcceptor
+	CoverageReporter               CoverageReporter
+	MQTTEvidenceAcceptor           MQTTEvidenceAcceptor
+	SourceAuthenticator            SourceAuthenticator
+	Realtime                       *RealtimeService
+	AllowedCentrifugoSPIFFE        string
+	CentrifugoProxySecret          string
+	AllowedIAMSPIFFE               string
+	AllowedCommandVerifierSPIFFE   string
 	AllowedCommandDispatcherSPIFFE string
-	CommandVerifierTenantID      string
-	CommandVerifierSiteID        string
-	CommandVerifierDeviceID      string
-	Metrics                      *observability.Registry
-	Now                          func() time.Time
+	CommandVerifierTenantID        string
+	CommandVerifierSiteID          string
+	CommandVerifierDeviceID        string
+	CommandVerifierDeviceIDs       []string
+	Metrics                        *observability.Registry
+	Now                            func() time.Time
 }
 
 type handler struct {
-	store                        SnapshotStore
-	authorizer                   GrantAuthorizer
-	allowedGatewaySPIFFE         string
-	runtimeAudience              string
-	observationAcceptor          ObservationAcceptor
-	coverageReporter             CoverageReporter
-	mqttEvidenceAcceptor         MQTTEvidenceAcceptor
-	sourceAuthenticator          SourceAuthenticator
-	realtime                     *RealtimeService
-	latestCache                  LatestCache
-	allowedCentrifugoSPIFFE      string
-	centrifugoProxySecret        string
-	allowedIAMSPIFFE             string
+	store                          SnapshotStore
+	authorizer                     GrantAuthorizer
+	allowedGatewaySPIFFE           string
+	runtimeAudience                string
+	observationAcceptor            ObservationAcceptor
+	coverageReporter               CoverageReporter
+	mqttEvidenceAcceptor           MQTTEvidenceAcceptor
+	sourceAuthenticator            SourceAuthenticator
+	realtime                       *RealtimeService
+	allowedCentrifugoSPIFFE        string
+	centrifugoProxySecret          string
+	allowedIAMSPIFFE               string
 	allowedCommandVerifierSPIFFE   string
 	allowedCommandDispatcherSPIFFE string
 	commandVerifierTenantID        string
-	commandVerifierSiteID        string
-	commandVerifierDeviceID      string
-	metrics                      *s2Metrics
-	now                          func() time.Time
+	commandVerifierSiteID          string
+	commandVerifierDeviceID        string
+	commandVerifierDeviceIDs       map[string]struct{}
+	metrics                        *s2Metrics
+	now                            func() time.Time
 }
 
 func NewHandler(config ServerConfig) http.Handler {
@@ -85,25 +84,34 @@ func NewHandler(config ServerConfig) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
+	commandVerifierDeviceIDs := make(map[string]struct{}, len(config.CommandVerifierDeviceIDs)+1)
+	if deviceID := strings.TrimSpace(config.CommandVerifierDeviceID); deviceID != "" {
+		commandVerifierDeviceIDs[deviceID] = struct{}{}
+	}
+	for _, rawDeviceID := range config.CommandVerifierDeviceIDs {
+		if deviceID := strings.TrimSpace(rawDeviceID); deviceID != "" {
+			commandVerifierDeviceIDs[deviceID] = struct{}{}
+		}
+	}
 	return &handler{
 		store: config.Store, authorizer: config.Authorizer,
 		allowedGatewaySPIFFE: strings.TrimSpace(config.AllowedGatewaySPIFFE),
 		runtimeAudience:      strings.TrimSpace(config.RuntimeAudience),
 		observationAcceptor:  config.ObservationAcceptor, coverageReporter: config.CoverageReporter,
-		mqttEvidenceAcceptor: config.MQTTEvidenceAcceptor,
-		sourceAuthenticator:          config.SourceAuthenticator,
-		realtime:                     config.Realtime,
-		latestCache:                  config.LatestCache,
-		allowedCentrifugoSPIFFE:      strings.TrimSpace(config.AllowedCentrifugoSPIFFE),
-		centrifugoProxySecret:        strings.TrimSpace(config.CentrifugoProxySecret),
-		allowedIAMSPIFFE:             strings.TrimSpace(config.AllowedIAMSPIFFE),
+		mqttEvidenceAcceptor:           config.MQTTEvidenceAcceptor,
+		sourceAuthenticator:            config.SourceAuthenticator,
+		realtime:                       config.Realtime,
+		allowedCentrifugoSPIFFE:        strings.TrimSpace(config.AllowedCentrifugoSPIFFE),
+		centrifugoProxySecret:          strings.TrimSpace(config.CentrifugoProxySecret),
+		allowedIAMSPIFFE:               strings.TrimSpace(config.AllowedIAMSPIFFE),
 		allowedCommandVerifierSPIFFE:   strings.TrimSpace(config.AllowedCommandVerifierSPIFFE),
 		allowedCommandDispatcherSPIFFE: strings.TrimSpace(config.AllowedCommandDispatcherSPIFFE),
 		commandVerifierTenantID:        strings.TrimSpace(config.CommandVerifierTenantID),
-		commandVerifierSiteID:        strings.TrimSpace(config.CommandVerifierSiteID),
-		commandVerifierDeviceID:      strings.TrimSpace(config.CommandVerifierDeviceID),
-		metrics:                      newS2Metrics(config.Metrics, now),
-		now:                          now,
+		commandVerifierSiteID:          strings.TrimSpace(config.CommandVerifierSiteID),
+		commandVerifierDeviceID:        strings.TrimSpace(config.CommandVerifierDeviceID),
+		commandVerifierDeviceIDs:       commandVerifierDeviceIDs,
+		metrics:                        newS2Metrics(config.Metrics, now),
+		now:                            now,
 	}
 }
 
@@ -212,13 +220,8 @@ func (h *handler) handleSingle(writer http.ResponseWriter, request *http.Request
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
 		return
 	}
-	snapshot, err := h.readLatestSnapshot(request.Context(), commit, target.Keys)
-	if err != nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_LATEST_UNAVAILABLE", "The rebuildable telemetry Latest cache is temporarily unavailable.", true)
-		return
-	}
-	h.metrics.observeSnapshot(snapshot)
-	writeJSON(writer, http.StatusOK, snapshot)
+	h.metrics.observeSnapshot(commit.Snapshot)
+	writeJSON(writer, http.StatusOK, commit.Snapshot)
 }
 
 func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request) {
@@ -279,37 +282,12 @@ func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request)
 			writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_RUNTIME_UNAVAILABLE", "The authoritative telemetry runtime is temporarily unavailable.", true)
 			return
 		}
-		snapshot, err := h.readLatestSnapshot(request.Context(), commit, targets[index].Keys)
-		if err != nil {
-			writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_LATEST_UNAVAILABLE", "The rebuildable telemetry Latest cache is temporarily unavailable.", true)
-			return
-		}
-		h.metrics.observeSnapshot(snapshot)
+		h.metrics.observeSnapshot(commit.Snapshot)
 		response.Items = append(response.Items, telemetryapi.BatchObservationResult{Success: &telemetryapi.BatchObservationSuccess{
-			RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "OK", Snapshot: snapshot,
+			RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "OK", Snapshot: commit.Snapshot,
 		}})
 	}
 	writeJSON(writer, http.StatusOK, response)
-}
-
-func (h *handler) readLatestSnapshot(ctx context.Context, commit SnapshotCommit, requestedKeys []string) (telemetryapi.DeviceObservationSnapshot, error) {
-	if h.latestCache == nil {
-		return commit.Snapshot, nil
-	}
-	if err := validateLatestCacheSnapshot(commit.FullSnapshot); err != nil {
-		return telemetryapi.DeviceObservationSnapshot{}, err
-	}
-	if _, err := h.latestCache.PutIfNewer(ctx, commit.FullSnapshot); err != nil {
-		return telemetryapi.DeviceObservationSnapshot{}, err
-	}
-	cached, err := h.latestCache.Get(ctx, string(commit.FullSnapshot.TenantId), string(commit.FullSnapshot.SiteId), string(commit.FullSnapshot.DeviceId))
-	if err != nil {
-		return telemetryapi.DeviceObservationSnapshot{}, err
-	}
-	if cached.BusinessRevision < commit.FullSnapshot.BusinessRevision {
-		return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheUnavailable
-	}
-	return ProjectSnapshot(cached, requestedKeys), nil
 }
 
 func (h *handler) handleSubscriptionBootstrap(writer http.ResponseWriter, request *http.Request) {

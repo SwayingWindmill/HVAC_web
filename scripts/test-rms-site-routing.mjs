@@ -20,7 +20,7 @@ const module = { exports: {} };
 vm.runInNewContext(compiled, { module, exports: module.exports }, { filename: sourcePath });
 const routing = module.exports;
 
-const organizationId = '01900000-0000-7000-8000-000000000001';
+const tenantId = '01900000-0000-7000-8000-000000000001';
 const siteAId = '01900000-0001-7000-8000-000000000001';
 const siteBId = '01900000-0002-7000-8000-000000000002';
 const invisibleSiteId = '01900000-0003-7000-8000-000000000003';
@@ -28,7 +28,7 @@ const invisibleSiteId = '01900000-0003-7000-8000-000000000003';
 function site(id, code, displayName) {
   return {
     id,
-    owningOrganizationId: organizationId,
+    tenantId,
     code,
     displayName,
     timezone: 'Asia/Tokyo',
@@ -69,7 +69,7 @@ test('an explicit authorized UUIDv7 Site wins and creates a validated SiteContex
     assert.equal(decision.state, 'READY');
     assert.equal(decision.route, leaf);
     assert.equal(decision.context.site.id, siteBId);
-    assert.equal(decision.context.actingOrganizationId, organizationId);
+    assert.equal(decision.context.site.tenantId, tenantId);
   }
 });
 
@@ -112,17 +112,17 @@ test('an authorized Site without site.read remains generically forbidden', () =>
 });
 
 
-test('Assets accepts one opaque Equipment selector while other extra segments remain not found', () => {
-  const equipmentId = '01900000-0011-7000-8000-000000000011';
-  const detail = routing.resolveSiteRouting('/sites/' + siteAId + '/assets/' + equipmentId, [siteA], ['site.read']);
+test('Assets accepts one opaque Asset selector while other extra segments remain not found', () => {
+  const assetId = '01900000-0011-7000-8000-000000000011';
+  const detail = routing.resolveSiteRouting('/sites/' + siteAId + '/assets/' + assetId, [siteA], ['site.read']);
   assert.equal(detail.state, 'READY');
   assert.equal(detail.route, 'assets');
-  assert.equal(detail.equipmentId, equipmentId);
+  assert.equal(detail.assetId, assetId);
 
-  const invalid = routing.resolveSiteRouting('/sites/' + siteAId + '/assets/not-an-equipment', [siteA], ['site.read']);
+  const invalid = routing.resolveSiteRouting('/sites/' + siteAId + '/assets/not-an-asset', [siteA], ['site.read']);
   assert.equal(invalid.state, 'READY');
-  assert.equal(invalid.equipmentId, 'not-an-equipment');
+  assert.equal(invalid.assetId, 'not-an-asset');
 
-  assert.equal(routing.resolveSiteRouting('/sites/' + siteAId + '/assets/' + equipmentId + '/extra', [siteA], ['site.read']).state, 'SITE_ROUTE_NOT_FOUND');
-  assert.equal(routing.resolveSiteRouting('/sites/' + siteAId + '/energy/' + equipmentId, [siteA], ['site.read']).state, 'SITE_ROUTE_NOT_FOUND');
+  assert.equal(routing.resolveSiteRouting('/sites/' + siteAId + '/assets/' + assetId + '/extra', [siteA], ['site.read']).state, 'SITE_ROUTE_NOT_FOUND');
+  assert.equal(routing.resolveSiteRouting('/sites/' + siteAId + '/energy/' + assetId, [siteA], ['site.read']).state, 'SITE_ROUTE_NOT_FOUND');
 });

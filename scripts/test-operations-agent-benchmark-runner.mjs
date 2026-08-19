@@ -42,7 +42,7 @@ test('runner discovers and passes all repository Operations Agent scenarios', as
   assert.deepEqual(
     report.scenarios.map(({ scenarioId }) => scenarioId),
     [
-      'site-night-energy-insufficient-equipment-attribution',
+      'site-night-energy-insufficient-asset-attribution',
       'operations-audit-ledger-boundary',
       'operations-telemetry-boundary',
       'run-resource-payload-exhaustion',

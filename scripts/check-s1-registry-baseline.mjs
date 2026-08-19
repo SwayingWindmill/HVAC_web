@@ -50,7 +50,6 @@ assert(model.sourceOfTruth === 'SE-DATA-001 V2.0 CURRENT', 'V2 source of truth i
 assert(JSON.stringify(model.hierarchy) === JSON.stringify(['Tenant', 'Site', 'Space', 'Asset', 'Device', 'Point']), 'canonical hierarchy drifted');
 assert(model.scope?.tenantRequired === true, 'Tenant must be mandatory');
 assert(model.scope?.siteAuthorization === 'exact-site-set', 'Registry authorization must use exact Site sets');
-assert(model.scope?.organizationCanonical === false && model.scope?.organizationScopeMayExpandSite === false, 'Organization remains canonical or can expand Site scope');
 assert(!Object.hasOwn(model.resources, 'Organization'), 'Organization remains a Registry resource');
 assert(model.resources.Point?.canonicalDataPoint === true, 'Point is not canonical');
 assert(model.resources.Point?.pointCodePattern === '^[a-z][a-z0-9_]{0,127}$', 'Point Code is not lower_snake_case');
@@ -63,8 +62,8 @@ assert(model.resources.PhysicalSensor?.mustNotBeRequiredForPoint === true, 'Poin
 const expectedRoutes = [
   ['GET', '/api/v1/sites', 'listSites'],
   ['GET', '/api/v1/sites/{siteId}', 'getSite'],
-  ['GET', '/api/v1/sites/{siteId}/equipment', 'listSiteEquipment'],
-  ['GET', '/api/v1/equipment/{equipmentId}', 'getEquipment'],
+  ['GET', '/api/v1/sites/{siteId}/assets', 'listSiteAssets'],
+  ['GET', '/api/v1/assets/{assetId}', 'getAsset'],
   ['GET', '/api/v1/sites/{siteId}/devices', 'listSiteDevices'],
   ['GET', '/api/v1/sites/{siteId}/device-bindings', 'listSiteDeviceBindings'],
   ['GET', '/api/v1/sites/{siteId}/asset-model', 'getSiteAssetModel'],
@@ -85,7 +84,7 @@ for (const [method, path, operationId] of expectedRoutes) {
 }
 
 assert(openapi.components?.schemas?.Organization === undefined, 'Organization schema remains public');
-for (const schemaName of ['Site', 'Equipment', 'Device', 'DeviceBinding', 'ExternalBinding', 'Area', 'Sensor', 'TelemetryPoint', 'AssetRelationship']) {
+for (const schemaName of ['Site', 'Asset', 'Device', 'DeviceBinding', 'ExternalBinding', 'Space', 'Sensor', 'TelemetryPoint', 'AssetRelationship']) {
   const serialized = JSON.stringify(openapi.components?.schemas?.[schemaName] ?? {});
   assert(!serialized.includes('owningOrganizationId'), `${schemaName} still exposes owningOrganizationId`);
 }
@@ -99,12 +98,12 @@ assert(openapi.components?.schemas?.SiteAssetModel?.properties?.calculatedPointI
 for (const source of [spatialDDL, energyDDL]) {
   assert(!source.includes('organization_id'), 'Organization leaked into a V2 canonical data table');
 }
-for (const table of ['sites', 'equipment', 'devices', 'device_bindings', 'external_bindings']) {
+for (const table of ['sites', 'assets', 'devices', 'device_bindings', 'external_bindings']) {
   const match = baseDDL.match(new RegExp(`CREATE TABLE IF NOT EXISTS core_registry\\.${table} \\([\\s\\S]*?\\n\\);`));
   assert(match, `canonical Core table definition missing: ${table}`);
   assert(!match[0].includes('organization_id'), `canonical Core table still stores organization_id: ${table}`);
 }
-for (const table of ['areas', 'equipment_area_bindings', 'device_area_bindings', 'sensors', 'sensor_device_bindings', 'sensor_area_bindings', 'telemetry_points', 'point_subject_bindings']) {
+for (const table of ['spaces', 'asset_space_bindings', 'device_space_bindings', 'sensors', 'sensor_device_bindings', 'sensor_space_bindings', 'telemetry_points', 'point_subject_bindings']) {
   assert(spatialDDL.includes(`CREATE TABLE IF NOT EXISTS core_registry.${table}`), `V2 table missing: ${table}`);
 }
 assert(spatialDDL.includes("point_code text NOT NULL CHECK (point_code ~ '^[a-z][a-z0-9_]{0,127}$')"), 'database Point Code invariant drifted');

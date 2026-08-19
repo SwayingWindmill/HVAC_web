@@ -10,7 +10,7 @@ import {
 } from '../apps/hvac-web/src/api/alarm-contract.ts';
 import { projectRealAlarm } from '../apps/hvac-web/src/real/real-alarms-projection.ts';
 
-const organizationId = '018f3e00-1000-7000-8000-000000000001';
+const tenantId = '018f3e00-1000-7000-8000-000000000001';
 const siteId = '018f3e00-2000-7000-8000-000000000001';
 const alarmId = '018f3e00-4000-7000-8000-000000000001';
 
@@ -54,7 +54,7 @@ function alarm(overrides = {}) {
   return {
     schemaVersion: 1,
     alarmId,
-    organizationId,
+    tenantId,
     siteId,
     sourceType: 'SITE_RULE',
     sourceReference: 'rule:central-plant-temperature-drift:v3',
@@ -84,14 +84,14 @@ test('Alarm projection requires owner-published source, evidence, and convergent
 test('Real Alarm scope validation fails closed for a cross-Site projection', () => {
   const parsed = alarmSchema.parse(alarm());
   assert.throws(
-    () => validateAlarmScope(parsed, { trustedOrganizationId: organizationId, trustedSiteId: '018f3e00-2000-7000-8000-000000000002' }),
+    () => validateAlarmScope(parsed, { trustedTenantId: tenantId, trustedSiteId: '018f3e00-2000-7000-8000-000000000002' }),
     (error) => error instanceof AlarmApiError && error.status === 404 && error.code === 'RESOURCE_NOT_FOUND',
   );
 });
 
 test('Alarm list preserves empty and valid-zero collection semantics without fabrication', () => {
   const response = alarmListResponseSchema.parse({ schemaVersion: 1, items: [], nextCursor: null, hasMore: false });
-  assert.deepEqual(validateAlarmListScope(response, { trustedOrganizationId: organizationId, trustedSiteId: siteId }).items, []);
+  assert.deepEqual(validateAlarmListScope(response, { trustedTenantId: tenantId, trustedSiteId: siteId }).items, []);
 });
 
 test('Real Alarm projection exposes legal lifecycle operations for every authoritative state', () => {
@@ -106,10 +106,10 @@ test('Real Alarm projection exposes legal lifecycle operations for every authori
   assert.equal(active.canReopen, false);
 
   const acknowledged = projectRealAlarm(alarmSchema.parse(alarm({
-    status: 'ACKNOWLEDGED',
+    status: 'OPEN',
     transitions: [
       publishedTransition(),
-      lifecycleTransition({ fromStatus: 'OPEN', toStatus: 'ACKNOWLEDGED', operation: 'ACKNOWLEDGE', occurredAt: '2026-07-31T09:06:00Z', version: 2 }),
+      lifecycleTransition({ fromStatus: 'OPEN', toStatus: 'OPEN', operation: 'ACKNOWLEDGE', occurredAt: '2026-07-31T09:06:00Z', version: 2 }),
     ],
     version: 2,
     updatedAt: '2026-07-31T09:06:00Z',
@@ -182,26 +182,26 @@ test('Alarm contract restores the suppression origin after assignment while supp
   const suppressedUntil = '2026-07-31T13:07:00Z';
   const transitions = [
     publishedTransition(),
-    lifecycleTransition({ fromStatus: 'OPEN', toStatus: 'ACKNOWLEDGED', operation: 'ACKNOWLEDGE', occurredAt: '2026-07-31T09:06:00Z', version: 2 }),
-    lifecycleTransition({ fromStatus: 'ACKNOWLEDGED', toStatus: 'SUPPRESSED', operation: 'SUPPRESS', occurredAt: '2026-07-31T09:07:00Z', version: 3, suppressedUntil }),
+    lifecycleTransition({ fromStatus: 'OPEN', toStatus: 'OPEN', operation: 'ACKNOWLEDGE', occurredAt: '2026-07-31T09:06:00Z', version: 2 }),
+    lifecycleTransition({ fromStatus: 'OPEN', toStatus: 'SUPPRESSED', operation: 'SUPPRESS', occurredAt: '2026-07-31T09:07:00Z', version: 3, suppressedUntil }),
     lifecycleTransition({ fromStatus: 'SUPPRESSED', toStatus: 'SUPPRESSED', operation: 'ASSIGN', occurredAt: '2026-07-31T09:08:00Z', version: 4, assigneeId }),
-    lifecycleTransition({ fromStatus: 'SUPPRESSED', toStatus: 'ACKNOWLEDGED', operation: 'UNSUPPRESS', occurredAt: '2026-07-31T09:09:00Z', version: 5 }),
+    lifecycleTransition({ fromStatus: 'SUPPRESSED', toStatus: 'OPEN', operation: 'UNSUPPRESS', occurredAt: '2026-07-31T09:09:00Z', version: 5 }),
   ];
   const restored = alarmSchema.parse(alarm({
-    status: 'ACKNOWLEDGED',
+    status: 'OPEN',
     assigneeId,
     transitions,
     version: 5,
     updatedAt: '2026-07-31T09:09:00Z',
   }));
-  assert.equal(restored.status, 'ACKNOWLEDGED');
+  assert.equal(restored.status, 'OPEN');
   assert.equal(restored.assigneeId, assigneeId);
   assert.throws(() => alarmSchema.parse(alarm({
-    status: 'OPEN',
+    status: 'ACKNOWLEDGED',
     assigneeId,
     transitions: [
       ...transitions.slice(0, -1),
-      lifecycleTransition({ fromStatus: 'SUPPRESSED', toStatus: 'OPEN', operation: 'UNSUPPRESS', occurredAt: '2026-07-31T09:09:00Z', version: 5 }),
+      lifecycleTransition({ fromStatus: 'SUPPRESSED', toStatus: 'ACKNOWLEDGED', operation: 'UNSUPPRESS', occurredAt: '2026-07-31T09:09:00Z', version: 5 }),
     ],
     version: 5,
     updatedAt: '2026-07-31T09:09:00Z',
@@ -209,9 +209,9 @@ test('Alarm contract restores the suppression origin after assignment while supp
 });
 
 test('Alarm contract rejects unaudited, illegal, and non-convergent lifecycle transitions', () => {
-  const unaudited = lifecycleTransition({ fromStatus: 'OPEN', toStatus: 'ACKNOWLEDGED', operation: 'ACKNOWLEDGE', occurredAt: '2026-07-31T09:06:00Z', version: 2 });
+  const unaudited = lifecycleTransition({ fromStatus: 'OPEN', toStatus: 'OPEN', operation: 'ACKNOWLEDGE', occurredAt: '2026-07-31T09:06:00Z', version: 2 });
   delete unaudited.policyRevision;
-  assert.throws(() => alarmSchema.parse(alarm({ status: 'ACKNOWLEDGED', transitions: [publishedTransition(), unaudited], version: 2, updatedAt: '2026-07-31T09:06:00Z' })));
+  assert.throws(() => alarmSchema.parse(alarm({ status: 'OPEN', transitions: [publishedTransition(), unaudited], version: 2, updatedAt: '2026-07-31T09:06:00Z' })));
 
   assert.throws(() => alarmSchema.parse(alarm({
     status: 'CLOSED',

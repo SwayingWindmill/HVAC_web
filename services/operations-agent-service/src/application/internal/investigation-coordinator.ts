@@ -333,12 +333,12 @@ const scopeIsWithin = (
 ): boolean => (
   authorized.tenantId === returned.tenantId
   && (authorized.siteId === null || authorized.siteId === returned.siteId)
-  && (authorized.equipmentId === null || authorized.equipmentId === returned.equipmentId)
+  && (authorized.assetId === null || authorized.assetId === returned.assetId)
   && (authorized.deviceId === null || authorized.deviceId === returned.deviceId)
 );
 
 const expectedOwner = (tool: ParallelReadRequest['tool']): OwnerReadResult['owner'] => {
-  if (tool === 'registry.getSite' || tool === 'registry.listSiteEquipment') return 'registry';
+  if (tool === 'registry.getSite' || tool === 'registry.listSiteAssets') return 'registry';
   if (tool === 'telemetry.getCurrentSnapshot' || tool === 'analytics.getEnergySeries') {
     return 'telemetry-query-service';
   }
@@ -383,13 +383,13 @@ const isNonEmptyReadString = (value: unknown): value is string => (
 const hasValidReadInput = (request: ParallelReadRequest): boolean => {
   const input: unknown = request.input;
   if (!isReadInputRecord(input)) return false;
-  if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteEquipment') {
+  if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteAssets') {
     return hasExactReadInputKeys(input, ['siteId']) && isNonEmptyReadString(input.siteId);
   }
   if (request.tool === 'telemetry.getCurrentSnapshot') {
-    return (hasExactReadInputKeys(input, ['equipmentId'])
-      || hasExactReadInputKeys(input, ['equipmentId', 'pointKeys']))
-      && isNonEmptyReadString(input.equipmentId)
+    return (hasExactReadInputKeys(input, ['assetId'])
+      || hasExactReadInputKeys(input, ['assetId', 'pointKeys']))
+      && isNonEmptyReadString(input.assetId)
       && (input.pointKeys === undefined
         || (Array.isArray(input.pointKeys)
           && input.pointKeys.every(isNonEmptyReadString)));
@@ -417,8 +417,8 @@ const hasValidReadInput = (request: ParallelReadRequest): boolean => {
       && (input.qualityPolicy === 'VALID_ONLY'
         || input.qualityPolicy === 'VALID_AND_SUSPECT');
   }
-  return hasExactReadInputKeys(input, ['equipmentId'])
-    && isNonEmptyReadString(input.equipmentId);
+  return hasExactReadInputKeys(input, ['assetId'])
+    && isNonEmptyReadString(input.assetId);
 };
 
 const createRuntimePlanningContext = (
@@ -432,7 +432,7 @@ const createRuntimePlanningContext = (
   scope: Object.freeze({
     tenantId: investigation.scope.tenantId,
     siteId: investigation.scope.siteId,
-    equipmentId: investigation.scope.equipmentId,
+    assetId: investigation.scope.assetId,
     deviceId: investigation.scope.deviceId,
   }),
   revision: investigation.revision,
@@ -449,14 +449,14 @@ const requestIsWithinPlanningScope = (
   request: ParallelReadRequest,
   scope: InvestigationScope,
 ): boolean => {
-  if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteEquipment') {
+  if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteAssets') {
     return scope.siteId === null || request.input.siteId === scope.siteId;
   }
   if (request.tool === 'analytics.getEnergySeries') {
     return request.input.tenantId === scope.tenantId
       && (scope.siteId === null || request.input.siteId === scope.siteId);
   }
-  return scope.equipmentId === null || request.input.equipmentId === scope.equipmentId;
+  return scope.assetId === null || request.input.assetId === scope.assetId;
 };
 
 const validateRuntimePlanningResult = (value: unknown): RuntimePlanningResult => {
@@ -581,7 +581,7 @@ export const createInvestigationCoordinator = (
   });
 
   const telemetryOwnerFor = (request: ParallelReadRequest): OperationsTelemetryOwner => {
-    if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteEquipment') {
+    if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteAssets') {
       return 'registry';
     }
     if (request.tool === 'analytics.getEnergySeries') return 'telemetry-query-service';
@@ -1065,7 +1065,7 @@ export const createInvestigationCoordinator = (
           },
         };
         let result: OwnerReadResult;
-        if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteEquipment') {
+        if (request.tool === 'registry.getSite' || request.tool === 'registry.listSiteAssets') {
           result = await ports.ownerReaders.registry.read({ request, context: ownerContext });
         } else if (request.tool === 'telemetry.getCurrentSnapshot') {
           result = await ports.ownerReaders.currentTelemetry.read({ request, context: ownerContext });

@@ -10,7 +10,7 @@ import {
   projectRealCommand,
 } from '../apps/hvac-web/src/real/real-commands-projection.ts';
 
-const organizationId = '018f3e00-1000-7000-8000-000000000001';
+const tenantId = '018f3e00-1000-7000-8000-000000000001';
 const siteId = '018f3e00-2000-7000-8000-000000000001';
 const otherSiteId = '018f3e00-2000-7000-8000-000000000002';
 const deviceId = '018f3e00-3000-7000-8000-000000000001';
@@ -22,9 +22,10 @@ function command(overrides = {}) {
   return commandSchema.parse({
     schemaVersion: 1,
     commandId,
-    organizationId,
+    tenantId,
     siteId,
     deviceId,
+    pointId: '018f3e00-3500-7000-8000-000000000001',
     capability: 'SET_TEMPERATURE_SETPOINT',
     capabilityRevision: 'capability:set-temperature-setpoint:v1',
     status,
@@ -32,7 +33,7 @@ function command(overrides = {}) {
     approvalPolicy: overrides.approvalPolicy ?? 'NONE',
     approvalCount: overrides.approvalCount ?? 0,
     requiredApprovalCount: overrides.requiredApprovalCount ?? 0,
-    setpointC: 24,
+    parameters: { setpointC: 24 },
     deviceCommandSequence: 1,
     snapshotRevision: 17,
     version,
@@ -46,9 +47,9 @@ function command(overrides = {}) {
   });
 }
 
-test('Command projection requires authoritative Organization and Site identity', () => {
+test('Command projection requires authoritative Tenant and Site identity', () => {
   const parsed = command();
-  assert.equal(parsed.organizationId, organizationId);
+  assert.equal(parsed.tenantId, tenantId);
   assert.equal(parsed.siteId, siteId);
   assert.throws(
     () => commandSchema.parse({ ...parsed, siteId: undefined }),
@@ -59,13 +60,13 @@ test('Command projection requires authoritative Organization and Site identity',
 test('Real Command scope validation fails closed for a cross-Site projection', () => {
   const parsed = command();
   assert.equal(validateCommandScope(parsed, {
-    trustedOrganizationId: organizationId,
+    trustedTenantId: tenantId,
     trustedSiteId: siteId,
   }), parsed);
 
   assert.throws(
     () => validateCommandScope(parsed, {
-      trustedOrganizationId: organizationId,
+      trustedTenantId: tenantId,
       trustedSiteId: otherSiteId,
     }),
     (error) => error instanceof CommandApiError

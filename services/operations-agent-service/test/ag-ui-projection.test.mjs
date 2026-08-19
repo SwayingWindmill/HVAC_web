@@ -11,7 +11,7 @@ import {
 const tenantId = '0198f5c0-7c00-7000-8000-000000000001';
 const siteId = '0198f5c0-7c00-7000-8000-000000000002';
 const investigationId = 'investigation-ag-ui-001';
-const scope = Object.freeze({ tenantId, siteId, equipmentId: null, deviceId: null });
+const scope = Object.freeze({ tenantId, siteId, assetId: null, deviceId: null });
 
 const receipt = (overrides) => ({
   schemaVersion: 1,
@@ -95,9 +95,9 @@ const completedView = Object.freeze({
       owner: 'registry',
     }),
     receipt({
-      id: 'receipt-equipment',
+      id: 'receipt-asset',
       recordedAt: 1_700_000_000_020,
-      logicalTool: 'registry.listSiteEquipment',
+      logicalTool: 'registry.listSiteAssets',
       owner: 'registry',
     }),
     receipt({
@@ -131,7 +131,7 @@ test('committed Investigation state projects to a stable bounded AG-UI event bat
   ]);
   assert.deepEqual(state.toolActivities.map((activity) => activity.recordId), [
     'receipt-site',
-    'receipt-equipment',
+    'receipt-asset',
     'receipt-energy-target',
     'receipt-energy-baseline',
   ]);
@@ -207,7 +207,7 @@ test('valid recovery positions replay only the committed missing suffix after a 
   ]);
   assert.equal(batch.frames[1].event.type, 'STATE_SNAPSHOT');
   assert.equal(batch.frames[2].event.type, 'TOOL_CALL_START');
-  assert.equal(batch.frames[2].event.toolCallId, 'receipt-equipment');
+  assert.equal(batch.frames[2].event.toolCallId, 'receipt-asset');
 
   const response = createOperationsAgUiEventStreamResponse(completedView, '7:4');
   assert.equal(response.headers.get('X-Operations-Recovery-Mode'), 'RESUME');

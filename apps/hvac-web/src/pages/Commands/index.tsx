@@ -27,7 +27,7 @@ import {
   commandErrorMessage,
   createCommand,
   getCommand,
-  MOCK_COMMAND_EQUIPMENT_ID,
+  MOCK_COMMAND_ASSET_ID,
   MOCK_COMMAND_POINT_ID,
   MOCK_PENDING_COMMAND_ID,
   type Command,
@@ -213,7 +213,7 @@ export default function Commands() {
 
   const createMutation = useMutation({
     mutationFn: (values: CreateFormValues) => createCommand({
-      equipmentId: MOCK_COMMAND_EQUIPMENT_ID,
+      assetId: MOCK_COMMAND_ASSET_ID,
       commandPointId: MOCK_COMMAND_POINT_ID,
       parameters: { setpointC: values.setpointC },
     }),
@@ -260,7 +260,7 @@ export default function Commands() {
         type="warning"
         showIcon
         message="Command 控制路由尚未启用"
-        description="Command API 已登记并完成安全基线，但 Route Ownership Registry 仍为 disabled，生产流量为 0%。真实提交、查询和审批均保持阻断。"
+        description="Command API 已登记为 canonical native route，但 S3 生产流量仍为 0%，public route 与 production provider 在 S3-09 认证前保持关闭。"
       />
     );
   }, []);
@@ -303,8 +303,8 @@ export default function Commands() {
                 <Alert
                   type="info"
                   showIcon
-                  message="Mock Equipment Command Point"
-                  description="真实控制不在此处选择 Device；Real 模式从 Equipment 详情中的 Registry COMMAND Point 发起。"
+                  message="Mock Asset Command Point"
+                  description="真实控制不在此处选择 Device；Real 模式从 Asset 详情中的 Registry COMMAND Point 发起。"
                   style={{ marginBottom: 16 }}
                 />
                 <ProFormDigit

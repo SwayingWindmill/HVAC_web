@@ -1,5 +1,11 @@
 name: hvac-phase1
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: ${DOCKER_LOG_MAX_SIZE:-20m}
+    max-file: "${DOCKER_LOG_MAX_FILES:-5}"
+
 x-go-service: &go-service
   restart: unless-stopped
   env_file:
@@ -9,6 +15,7 @@ x-go-service: &go-service
   read_only: true
   tmpfs:
     - /tmp
+  logging: *default-logging
 
 services:
   nginx:
@@ -17,18 +24,24 @@ services:
       dockerfile: deploy/platform/phase1/nginx/Dockerfile
       args:
         HVAC_WEB_BUILD_ID: ${HVAC_WEB_BUILD_ID:-phase1-local}
-        HVAC_WEB_GATEWAY_BASE_PATH: ${HVAC_WEB_GATEWAY_BASE_PATH:-}
-        HVAC_WEB_REALTIME_PROTOCOL: ${HVAC_WEB_REALTIME_PROTOCOL:-centrifugo}
+        HVAC_WEB_GATEWAY_BASE_PATH: ${HVAC_WEB_GATEWAY_BASE_PATH:-/api/v1}
+        HVAC_WEB_REALTIME_PROTOCOL: ${HVAC_WEB_REALTIME_PROTOCOL:-centrifugo-v1}
     image: ${HVAC_WEB_IMAGE:-hvac/hvac-web-real:0.1.0-dev}
     restart: unless-stopped
     depends_on:
-      - energy-api
-      - centrifugo
+      energy-api:
+        condition: service_healthy
+      identity-service:
+        condition: service_healthy
     ports:
       - "${HTTPS_PORT:-443}:443"
     volumes:
       - ${PUBLIC_TLS_DIR:-./runtime/tls}:/run/hvac/tls:ro
     networks: [public, application]
+    cpus: ${NGINX_CPUS:-0.50}
+    mem_limit: ${NGINX_MEMORY_LIMIT:-256m}
+    mem_reservation: ${NGINX_MEMORY_RESERVATION:-64m}
+    logging: *default-logging
 
   energy-api:
     <<: *go-service
@@ -50,6 +63,8 @@ services:
       WORK_ORDER_SERVICE_ADDR: :8449
       IAM_URL: https://iam-service:8444
       IAM_SERVER_NAME: iam-service
+      IAM_ADMIN_DATABASE_URL: ${IAM_ADMIN_DATABASE_URL:-}
+      IAM_API_CREDENTIAL_PEPPER_FILE: /run/hvac/iam/api-credential.pepper
       CORE_URL: https://platform-core-service:18445
       CORE_SERVER_NAME: platform-core-service
       CORE_IAM_ENDPOINT: https://iam-service:8444
@@ -58,11 +73,172 @@ services:
       TELEMETRY_QUERY_SERVER_NAME: telemetry-query-service
       AUDIT_URL: https://audit-ledger-service:8446
       AUDIT_SERVER_NAME: audit-ledger-service
+      REALTIME_UPSTREAM_URL: ${REALTIME_UPSTREAM_URL:-http://centrifugo:8000}
+      PLATFORM_LIMIT_POLICY_FILE: /run/hvac/config/limit-policy.v1.json
+      LIMIT_POLICY_REDIS_URL: ${LIMIT_POLICY_REDIS_URL:-redis://redis:6379/2}
+    depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./limit-policy.v1.json:/run/hvac/config/limit-policy.v1.json:ro
+      - ${IAM_RUNTIME_DIR:-./runtime/iam}:/run/hvac/iam:ro
     expose: ["8080", "19080", "8444", "18445", "18447", "8446", "8447", "8448", "8449"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19080/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
     networks:
       application:
         aliases: [platform-gateway, iam-service, platform-core-service, telemetry-query-service, audit-ledger-service, command-service, alarm-service, work-order-service]
       data: {}
+    cpus: ${ENERGY_API_CPUS:-1.50}
+    mem_limit: ${ENERGY_API_MEMORY_LIMIT:-768m}
+    mem_reservation: ${ENERGY_API_MEMORY_RESERVATION:-256m}
+
+  identity-service:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/identity-service/cmd/identity-service }
+    image: ${IDENTITY_SERVICE_IMAGE:-hvac/identity-service:0.1.0-dev}
+    environment:
+      IDENTITY_ADDR: :19095
+      IDENTITY_DIAGNOSTICS_ADDR: :19085
+      IDENTITY_SIGNING_KEY_FILE: /run/hvac/identity/signing-key.pem
+      IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/identity/mfa-encryption.key
+    depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity:ro
+    expose: ["19095", "19085"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19085/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+    networks: [application, data]
+    cpus: ${IDENTITY_SERVICE_CPUS:-0.75}
+    mem_limit: ${IDENTITY_SERVICE_MEMORY_LIMIT:-512m}
+    mem_reservation: ${IDENTITY_SERVICE_MEMORY_RESERVATION:-128m}
+
+  identity-keygen:
+    <<: *go-service
+    profiles: ["identity-bootstrap"]
+    restart: "no"
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/identity-service/cmd/signing-keygen }
+    image: ${IDENTITY_KEYGEN_IMAGE:-hvac/identity-keygen:0.1.0-dev}
+    environment:
+      IDENTITY_SIGNING_KEY_OUT: /run/hvac/identity/signing-key.pem
+    volumes:
+      - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity
+
+  identity-mfa-keygen:
+    <<: *go-service
+    profiles: ["identity-bootstrap"]
+    restart: "no"
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/identity-service/cmd/mfa-keygen }
+    image: ${IDENTITY_MFA_KEYGEN_IMAGE:-hvac/identity-mfa-keygen:0.1.0-dev}
+    environment:
+      IDENTITY_MFA_KEY_OUT: /run/hvac/identity/mfa-encryption.key
+    volumes:
+      - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity
+
+  iam-api-credential-keygen:
+    <<: *go-service
+    profiles: ["iam-bootstrap"]
+    restart: "no"
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/iam-service/cmd/api-credential-keygen }
+    image: ${IAM_API_CREDENTIAL_KEYGEN_IMAGE:-hvac/iam-api-credential-keygen:0.1.0-dev}
+    environment:
+      IAM_API_CREDENTIAL_PEPPER_OUT: /run/hvac/iam/api-credential.pepper
+    volumes:
+      - ${IAM_RUNTIME_DIR:-./runtime/iam}:/run/hvac/iam
+
+  identity-admin:
+    <<: *go-service
+    profiles: ["identity-bootstrap"]
+    restart: "no"
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/identity-service/cmd/identity-admin }
+    image: ${IDENTITY_ADMIN_IMAGE:-hvac/identity-admin:0.1.0-dev}
+    environment:
+      IDENTITY_DATABASE_URL: ${IDENTITY_ADMIN_DATABASE_URL:-}
+      IDENTITY_ADMIN_OPERATION: ${IDENTITY_ADMIN_OPERATION:-create}
+      IDENTITY_ADMIN_USERNAME: ${IDENTITY_ADMIN_USERNAME:-}
+      IDENTITY_ADMIN_DISPLAY_NAME: ${IDENTITY_ADMIN_DISPLAY_NAME:-}
+      IDENTITY_ADMIN_EMAIL: ${IDENTITY_ADMIN_EMAIL:-}
+      IDENTITY_ADMIN_PASSWORD: ${IDENTITY_ADMIN_PASSWORD:-}
+      IDENTITY_ADMIN_TOTP_CODE: ${IDENTITY_ADMIN_TOTP_CODE:-}
+      IDENTITY_ISSUER: ${IDENTITY_ISSUER:-https://localhost:8443/identity}
+      IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/identity/mfa-encryption.key
+    volumes:
+      - ${IDENTITY_RUNTIME_DIR:-./runtime/identity}:/run/hvac/identity:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [data]
+
+  identity-reconciler:
+    <<: *go-service
+    profiles: ["identity-bootstrap"]
+    restart: "no"
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/iam-service/cmd/identity-reconciler }
+    image: ${IDENTITY_RECONCILER_IMAGE:-hvac/identity-reconciler:0.1.0-dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [data]
+
+  scheduler:
+    <<: *go-service
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./services/scheduler-service/cmd/scheduler-service }
+    image: ${SCHEDULER_IMAGE:-hvac/scheduler:0.1.0-dev}
+    environment:
+      SCHEDULER_DIAGNOSTICS_ADDR: :19092
+    depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    expose: ["19092"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19092/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+    networks: [application, data]
+    cpus: ${SCHEDULER_CPUS:-0.50}
+    mem_limit: ${SCHEDULER_MEMORY_LIMIT:-256m}
+    mem_reservation: ${SCHEDULER_MEMORY_RESERVATION:-64m}
 
   telemetry-worker:
     <<: *go-service
@@ -76,11 +252,29 @@ services:
       TELEMETRY_DIAGNOSTICS_ADDR: :19086
       TELEMETRY_HISTORY_PROJECTION_ENABLED: "true"
       ANALYTICS_PROJECTION_ENABLED: "true"
+    depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     expose: ["8446", "19086"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19086/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
     networks:
       application:
         aliases: [telemetry-runtime-service]
       data: {}
+    cpus: ${TELEMETRY_WORKER_CPUS:-2.00}
+    mem_limit: ${TELEMETRY_WORKER_MEMORY_LIMIT:-1024m}
+    mem_reservation: ${TELEMETRY_WORKER_MEMORY_RESERVATION:-384m}
 
   metric-worker:
     <<: *go-service
@@ -92,8 +286,26 @@ services:
     environment:
       METRIC_DIAGNOSTICS_ADDR: :19090
       METRIC_WORKER_MODE: worker
+    depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     expose: ["19090"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19090/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
     networks: [application, data]
+    cpus: ${METRIC_WORKER_CPUS:-1.00}
+    mem_limit: ${METRIC_WORKER_MEMORY_LIMIT:-512m}
+    mem_reservation: ${METRIC_WORKER_MEMORY_RESERVATION:-192m}
 
   iot-service:
     <<: *go-service
@@ -104,8 +316,54 @@ services:
     image: ${IOT_SERVICE_IMAGE:-hvac/iot-service:0.1.0-dev}
     environment:
       COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"
+    depends_on:
+      phase1-schema-preflight:
+        condition: service_completed_successfully
     expose: ["19094"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19094/health/ready"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
     networks: [application, mqtt]
+    cpus: ${IOT_SERVICE_CPUS:-1.50}
+    mem_limit: ${IOT_SERVICE_MEMORY_LIMIT:-512m}
+    mem_reservation: ${IOT_SERVICE_MEMORY_RESERVATION:-192m}
+
+  eg8200-simulator:
+    <<: *go-service
+    profiles: ["local-simulator"]
+    build:
+      context: ../../..
+      dockerfile: deploy/s0/images/go-service.Dockerfile
+      args: { SERVICE_PACKAGE: ./tools/eg8200-simulator/cmd/eg8200-mqtt-publisher }
+    image: ${EG8200_SIMULATOR_IMAGE:-hvac/eg8200-simulator:0.1.0-dev}
+    environment:
+      EG8200_SIMULATOR_CONFIG: /run/hvac/config/plant.json
+      EG8200_MQTT_CONFIG: /run/hvac/runtime-config/eg8200-mqtt.json
+      EG8200_MQTT_DIAGNOSTICS_ADDR: :19095
+    depends_on:
+      mqtt-broker:
+        condition: service_started
+      iot-service:
+        condition: service_healthy
+    volumes:
+      - ../../../tools/eg8200-simulator/configs/central-plant.local.json:/run/hvac/config/plant.json:ro
+      - ${PHASE1_RUNTIME_CONFIG_DIR:-./runtime/config}:/run/hvac/runtime-config:ro
+      - ${INTERNAL_PKI_DIR:-./runtime/internal-pki}:/run/hvac/pki:ro
+      - ${EG8200_QUEUE_DIR:-./runtime/data/eg8200}:/run/hvac/eg8200
+    expose: ["19095"]
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19095/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks: [mqtt]
+    cpus: ${EG8200_SIMULATOR_CPUS:-0.50}
+    mem_limit: ${EG8200_SIMULATOR_MEMORY_LIMIT:-256m}
+    mem_reservation: ${EG8200_SIMULATOR_MEMORY_RESERVATION:-64m}
 
   postgres:
     image: postgres:16.4-bookworm
@@ -125,7 +383,7 @@ services:
       POSTGRES_USER: ${POSTGRES_ADMIN_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - ${POSTGRES_DATA_DIR:-./runtime/data/postgres}:/var/lib/postgresql/data
       - ${POSTGRES_WAL_ARCHIVE_DIR:-./runtime/backups/postgres/wal}:/var/lib/postgresql/wal-archive
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
@@ -134,6 +392,10 @@ services:
       timeout: 3s
       retries: 20
     networks: [data]
+    cpus: ${POSTGRES_CPUS:-2.00}
+    mem_limit: ${POSTGRES_MEMORY_LIMIT:-2048m}
+    mem_reservation: ${POSTGRES_MEMORY_RESERVATION:-768m}
+    logging: *default-logging
 
   phase1-migrator:
     build:
@@ -149,6 +411,7 @@ services:
       PGPORT: "5432"
       PGUSER: ${POSTGRES_ADMIN_USER:-postgres}
       PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
+      PHASE1_PRODUCT_VERSION: ${PHASE1_PRODUCT_VERSION:-0.1.0}
       PHASE1_RELEASE_REVISION: ${PHASE1_RELEASE_REVISION:-unversioned-local-run}
       PHASE1_DB_ROLE_CREDENTIALS_FILE: /run/hvac/db-role-credentials/roles.sql
     volumes:
@@ -156,6 +419,27 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    security_opt:
+      - no-new-privileges:true
+    networks: [data]
+
+  phase1-schema-preflight:
+    build:
+      context: ../../..
+      dockerfile: deploy/platform/phase1/migrations/Dockerfile
+    image: ${PHASE1_MIGRATOR_IMAGE:-hvac/phase1-migrator:0.1.0-dev}
+    restart: "no"
+    entrypoint: ["/opt/hvac/migrations/verify-phase1-schema.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_ADMIN_USER:-postgres}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
+      PHASE1_PRODUCT_VERSION: ${PHASE1_PRODUCT_VERSION:-0.1.0}
+    read_only: true
     security_opt:
       - no-new-privileges:true
     networks: [data]
@@ -181,7 +465,7 @@ services:
     image: clickhouse/clickhouse-server:26.3.12.3
     restart: unless-stopped
     volumes:
-      - clickhouse-data:/var/lib/clickhouse
+      - ${CLICKHOUSE_DATA_DIR:-./runtime/data/clickhouse}:/var/lib/clickhouse
       - ${CLICKHOUSE_BACKUP_DIR:-./runtime/backups/clickhouse}:/var/lib/clickhouse/backups
       - ./backup/clickhouse-backup.xml:/etc/clickhouse-server/config.d/backup.xml:ro
       - ../../../infra/s2-telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
@@ -191,6 +475,10 @@ services:
       timeout: 3s
       retries: 30
     networks: [data]
+    cpus: ${CLICKHOUSE_CPUS:-3.00}
+    mem_limit: ${CLICKHOUSE_MEMORY_LIMIT:-4096m}
+    mem_reservation: ${CLICKHOUSE_MEMORY_RESERVATION:-1024m}
+    logging: *default-logging
 
   clickhouse-backup:
     image: clickhouse/clickhouse-server:26.3.12.3
@@ -208,13 +496,17 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory-policy", "noeviction"]
     volumes:
-      - redis-data:/data
+      - ${REDIS_DATA_DIR:-./runtime/data/redis}:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 2s
       retries: 20
     networks: [data]
+    cpus: ${REDIS_CPUS:-0.75}
+    mem_limit: ${REDIS_MEMORY_LIMIT:-512m}
+    mem_reservation: ${REDIS_MEMORY_RESERVATION:-128m}
+    logging: *default-logging
 
   mqtt-broker:
     image: eclipse-mosquitto:2.1.2-alpine
@@ -225,8 +517,12 @@ services:
       - ../../../infra/s2-telemetry/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ../../../infra/s2-telemetry/mqtt/acl:/mosquitto/config/acl:ro
       - ${MQTT_PKI_DIR:-./runtime/mqtt-pki}:/mosquitto/config/pki:ro
-      - mqtt-data:/mosquitto/data
+      - ${MQTT_DATA_DIR:-./runtime/data/mqtt}:/mosquitto/data
     networks: [public, mqtt]
+    cpus: ${MQTT_CPUS:-0.75}
+    mem_limit: ${MQTT_MEMORY_LIMIT:-256m}
+    mem_reservation: ${MQTT_MEMORY_RESERVATION:-64m}
+    logging: *default-logging
 
   centrifugo:
     image: centrifugo/centrifugo:v6.8.1
@@ -237,9 +533,17 @@ services:
     volumes:
       - ./realtime/centrifugo.json:/centrifugo/centrifugo.json:ro
       - ${INTERNAL_PKI_DIR:-./runtime/internal-pki}:/run/hvac/pki:ro
-    depends_on: [redis, telemetry-worker]
+    depends_on:
+      redis:
+        condition: service_healthy
+      telemetry-worker:
+        condition: service_healthy
     expose: ["8000"]
     networks: [application, data]
+    cpus: ${REALTIME_TRANSPORT_CPUS:-0.75}
+    mem_limit: ${REALTIME_TRANSPORT_MEMORY_LIMIT:-256m}
+    mem_reservation: ${REALTIME_TRANSPORT_MEMORY_RESERVATION:-64m}
+    logging: *default-logging
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.111.0
@@ -250,6 +554,10 @@ services:
       - ${HOST_DOCKER_LOG_DIR:-/var/lib/docker/containers}:/var/lib/docker/containers:ro
     expose: ["4317", "4318", "9464", "13133"]
     networks: [application, observability]
+    cpus: ${OTEL_COLLECTOR_CPUS:-0.50}
+    mem_limit: ${OTEL_COLLECTOR_MEMORY_LIMIT:-384m}
+    mem_reservation: ${OTEL_COLLECTOR_MEMORY_RESERVATION:-96m}
+    logging: *default-logging
 
   prometheus:
     image: prom/prometheus:v2.54.1
@@ -261,6 +569,28 @@ services:
       - prometheus-data:/prometheus
     expose: ["9090"]
     networks: [application, observability]
+    cpus: ${PROMETHEUS_CPUS:-0.75}
+    mem_limit: ${PROMETHEUS_MEMORY_LIMIT:-768m}
+    mem_reservation: ${PROMETHEUS_MEMORY_RESERVATION:-192m}
+    logging: *default-logging
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+    expose: ["9100"]
+    networks: [observability]
+    cpus: ${NODE_EXPORTER_CPUS:-0.20}
+    mem_limit: ${NODE_EXPORTER_MEMORY_LIMIT:-128m}
+    mem_reservation: ${NODE_EXPORTER_MEMORY_RESERVATION:-32m}
+    logging: *default-logging
 
   loki:
     image: ${LOKI_IMAGE:-grafana/loki:3.2.1}
@@ -271,6 +601,10 @@ services:
       - loki-data:/loki
     expose: ["3100"]
     networks: [observability]
+    cpus: ${LOKI_CPUS:-0.50}
+    mem_limit: ${LOKI_MEMORY_LIMIT:-512m}
+    mem_reservation: ${LOKI_MEMORY_RESERVATION:-128m}
+    logging: *default-logging
 
   tempo:
     image: ${TEMPO_IMAGE:-grafana/tempo:2.6.1}
@@ -281,6 +615,10 @@ services:
       - tempo-data:/var/tempo
     expose: ["3200", "4317"]
     networks: [observability]
+    cpus: ${TEMPO_CPUS:-0.50}
+    mem_limit: ${TEMPO_MEMORY_LIMIT:-512m}
+    mem_reservation: ${TEMPO_MEMORY_RESERVATION:-128m}
+    logging: *default-logging
 
   grafana:
     image: ${GRAFANA_IMAGE:-grafana/grafana:11.2.2}
@@ -295,23 +633,10 @@ services:
       - ../../../infra/s0-durable/observability/dashboards:/var/lib/grafana/dashboards:ro
     expose: ["3000"]
     networks: [observability]
-
-  redpanda-compat:
-    image: redpandadata/redpanda:v24.2.18
-    profiles: ["compat-event-backbone"]
-    command: ["redpanda", "start", "--overprovisioned", "--smp", "1", "--memory", "512M", "--reserve-memory", "0M", "--node-id", "0", "--check=false", "--kafka-addr", "0.0.0.0:9092"]
-    networks: [application]
-
-  outbox-relay-compat:
-    <<: *go-service
-    profiles: ["compat-event-backbone"]
-    build:
-      context: ../../..
-      dockerfile: deploy/s0/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./services/outbox-relay/cmd/outbox-relay }
-    image: ${OUTBOX_RELAY_IMAGE:-hvac/outbox-relay:0.1.0-dev}
-    depends_on: [redpanda-compat]
-    networks: [application, data]
+    cpus: ${GRAFANA_CPUS:-0.50}
+    mem_limit: ${GRAFANA_MEMORY_LIMIT:-384m}
+    mem_reservation: ${GRAFANA_MEMORY_RESERVATION:-96m}
+    logging: *default-logging
 
 networks:
   public: {}
@@ -325,10 +650,6 @@ networks:
     internal: true
 
 volumes:
-  postgres-data: {}
-  clickhouse-data: {}
-  redis-data: {}
-  mqtt-data: {}
   prometheus-data: {}
   loki-data: {}
   tempo-data: {}

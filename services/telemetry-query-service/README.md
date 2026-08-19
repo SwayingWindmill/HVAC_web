@@ -36,11 +36,11 @@ The service:
 
 - accepts only the fixed Energy Series product contract;
 - rejects arbitrary Cube members, SQL, dimensions and measures;
-- validates UUIDv7 Organization/Site scope, IANA timezone, granularity, quality
+- validates UUIDv7 Tenant/Site scope, IANA timezone, granularity, quality
   policy and a maximum 366-day query range;
 - requires an allowlisted Platform Gateway or Operations Agent mTLS SPIFFE identity;
 - verifies a Gateway-issued short-lived delegation grant whose trusted issuer and actual executing workload are both explicit and whose Scope is bound to the complete query digest;
-- generates a separate 30-second Cube JWT with Organization/Site security
+- generates a separate 30-second Cube JWT with Tenant/Site security
   context;
 - translates the product query to a fixed Cube `/load` query;
 - returns requested/actual granularity, data and aggregate watermarks, dataset
@@ -59,7 +59,7 @@ POST /internal/v1/telemetry/device-history
 
 The public Gateway route is `POST /api/v1/telemetry/device-series:query`. Public
 requests contain only Device ID, telemetry keys, inclusive `from`, exclusive
-`to` and `maxPointsPerKey`; Organization and Site are derived from the
+`to` and `maxPointsPerKey`; Tenant and Site are derived from the
 authenticated Session and IAM exact-scope decision. The contract allows at most
 8 keys, 500 points per key, 4,000 points total and a 24-hour range.
 
@@ -78,7 +78,7 @@ numeric revision for every additive interval fact.
 The adapter executes two fixed Cube queries under one 16-second budget:
 
 - a time-series query for the requested range;
-- a global metadata query with the same Organization, Site and energy-type
+- a global metadata query with the same Tenant, Site and energy-type
   filters but no time dimension.
 
 The product contract uses inclusive `from` and exclusive `to`. Cube date ranges
@@ -115,7 +115,7 @@ The service verifies:
 5. the SHA-256 digest of the complete normalized product query.
 
 It rejects caller-supplied identity or scope headers. Cube receives a second
-short-lived token and applies Organization/Site row-level access policy.
+short-lived token and applies Tenant/Site row-level access policy.
 
 ## Required environment
 

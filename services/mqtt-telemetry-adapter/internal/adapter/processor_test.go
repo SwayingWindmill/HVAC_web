@@ -19,6 +19,16 @@ func (client *fakeRuntimeClient) AcceptObservation(_ context.Context, observatio
 	return ObservationReceipt{Status: status}, nil
 }
 
+func (client *fakeRuntimeClient) AcceptGatewayEvidence(context.Context, GatewayEvidence) error {
+	return nil
+}
+func (client *fakeRuntimeClient) AcceptPresenceEvidence(context.Context, PresenceEvidence) (PresenceEvidenceReceipt, error) {
+	return PresenceEvidenceReceipt{}, nil
+}
+func (client *fakeRuntimeClient) AcceptRuntimeEvent(context.Context, RuntimeEventEvidence) error {
+	return nil
+}
+
 func TestProcessorMapsMQTTPointToStableS2SourcePosition(t *testing.T) {
 	client := &fakeRuntimeClient{statuses: []string{"ACCEPTED", "DUPLICATE"}}
 	processor, err := NewProcessor("018f3e00-0000-7000-8000-000000000101", []GatewayScopeConfig{{GatewayID: "EG8200-COMMERCIAL-001", TenantID: testTenantID, SiteID: testSiteID}}, client)
@@ -26,7 +36,7 @@ func TestProcessorMapsMQTTPointToStableS2SourcePosition(t *testing.T) {
 		t.Fatal(err)
 	}
 	topic := "energy/v1/" + testTenantID + "/" + testSiteID + "/EG8200-COMMERCIAL-001/telemetry"
-	payload := []byte(`{"schemaVersion":1,"messageId":"` + testMessageID + `","tenantId":"` + testTenantID + `","siteId":"` + testSiteID + `","gatewayId":"EG8200-COMMERCIAL-001","publishedAt":"2026-08-10T09:00:00Z","replay":true,"devices":[{"externalDeviceId":"METER-01","points":[{"telemetryKey":"active_power","value":126.4,"valueType":"NUMBER","unit":"kW","quality":"GOOD","sampledAt":"2026-08-10T08:59:59Z","sequence":42},{"telemetryKey":"hvac_meter.energy","value":1234.5,"valueType":"NUMBER","unit":"kWh","quality":"GOOD","sampledAt":"2026-08-10T08:59:59Z","sequence":7}]}]}`)
+	payload := []byte(`{"schemaVersion":"1.0","messageId":"` + testMessageID + `","gatewayId":"EG8200-COMMERCIAL-001","timestamp":1786352400000,"sequence":42,"replay":true,"payload":{"devices":[{"deviceId":"METER-01","deviceTimestamp":1786352399000,"points":[{"code":"active_power","value":126.4,"quality":0,"unit":"kW"},{"code":"energy_total","value":1234.5,"quality":0,"unit":"kWh"}]}]}}`)
 	result, err := processor.Process(context.Background(), topic, payload)
 	if err != nil {
 		t.Fatal(err)

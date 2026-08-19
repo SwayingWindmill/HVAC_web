@@ -1,0 +1,44 @@
+groups:
+  - name: phase1-scheduler-job
+    rules:
+      - alert: SchedulerNotRunning
+        expr: up{job="scheduler"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Application Scheduler is not running
+          description: Scheduler readiness/metrics have been unavailable for more than two minutes.
+
+      - alert: JobQueueAgeTooHigh
+        expr: job_oldest_ready_age_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Durable Job queue age is too high
+          description: The oldest READY Job has waited for more than five minutes.
+
+      - alert: DeadJobDetected
+        expr: increase(job_dead_total[15m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A durable Job exhausted all attempts
+          description: At least one Job entered DEAD state during the last fifteen minutes.
+
+      - alert: RepeatedJobFailure
+        expr: increase(job_failed_total[15m]) >= 3
+        labels:
+          severity: warning
+        annotations:
+          summary: Durable Jobs are repeatedly failing
+          description: Three or more non-retryable Job failures occurred during the last fifteen minutes.
+
+      - alert: LeaseExpirySpike
+        expr: increase(job_recovered_total[10m]) >= 5
+        labels:
+          severity: warning
+        annotations:
+          summary: Job lease expiry recovery is elevated
+          description: Five or more expired Job leases were recovered during the last ten minutes.

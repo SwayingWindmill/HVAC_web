@@ -957,7 +957,7 @@ func dispatchTelemetryRoute(h *handler, writer http.ResponseWriter, request *htt
 	if route.history {
 		expectedOwner = ownershipregistry.OwnerAnalyticsQuery
 	}
-	if decision.RegistryRevision != 0 && (decision.SelectedOwner != expectedOwner || decision.ReadFallbackOwner != "" || decision.ShadowOwner != "") {
+	if decision.RegistryRevision != 0 && decision.SelectedOwner != expectedOwner {
 		h.writeTelemetryFailure(writer, request, telemetryUnavailable("The selected telemetry route owner is unavailable."))
 		return
 	}

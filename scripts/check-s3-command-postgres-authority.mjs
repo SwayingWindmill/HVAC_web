@@ -63,14 +63,14 @@ assert(compose.includes('001_s3_command_runtime.sql'), 'S3 PostgreSQL compose mu
 for (const table of ['device_control_state', 'command_intents', 'command_idempotency', 'command_authorization_snapshots', 'command_risk_snapshots', 'command_approval_snapshots', 'command_attempts', 'command_transitions', 'command_dispatch_outbox', 'command_audit_intents']) {
   assert(migration.includes(`ALTER TABLE command_runtime.${table} ENABLE ROW LEVEL SECURITY`), `${table} does not enable RLS`);
   assert(migration.includes(`ALTER TABLE command_runtime.${table} FORCE ROW LEVEL SECURITY`), `${table} does not force RLS`);
-  assert(migration.includes(`${table}_runtime_org`), `${table} lacks an Organization-scoped runtime policy`);
+  assert(migration.includes(`${table}_runtime_org`), `${table} lacks a Tenant-scoped runtime policy`);
 }
-assert(migration.includes("current_setting('app.organization_id', true)"), 'RLS does not bind to Organization context');
+assert(migration.includes("current_setting('app.tenant_id', true)"), 'RLS does not bind to Tenant context');
 assert(migration.includes('command_dispatch_outbox_ready_idx'), 'Dispatch Outbox ready index is missing');
 assert(migration.includes("'DRAFT', 'CELSIUS', 16, 30, 3, 'LOW', 'NONE', 'PRE_SEND_ONLY', 'SYNTHETIC_ONLY'"), 'Synthetic Capability seed drifted');
 
 assert(store.includes('pgx.Serializable'), 'Command submission must use a serializable transaction');
-assert(store.includes("set_config('app.organization_id'"), 'Command store does not set the Organization RLS context');
+assert(store.includes("set_config('app.tenant_id'"), 'Command store does not set the Tenant RLS context');
 for (const token of ['command_intents', 'command_idempotency', 'command_transitions', 'command_audit_intents', 'command_dispatch_outbox', 'device_control_state']) {
   assert(store.includes(`command_runtime.${token}`), `PostgreSQL Command transaction does not reference ${token}`);
 }

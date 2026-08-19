@@ -37,13 +37,13 @@ func TestHTTPGrantAuthorizerVerifiesExactScopeBeforeSingleUseConsumption(t *test
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if input.DelegationGrant != grant || input.PrincipalID != claims.PrincipalID || input.SessionID != claims.SessionID || input.ActingOrganizationID != claims.ActingOrganizationID || input.Action != claims.Action {
+		if input.DelegationGrant != grant || input.PrincipalID != claims.PrincipalID || input.SessionID != claims.SessionID || input.TenantID != claims.TenantID || input.Action != claims.Action {
 			t.Errorf("consume request drifted: %#v", input)
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(grantAcceptance{
 			TokenID: claims.TokenID, PrincipalID: claims.PrincipalID, SessionID: claims.SessionID,
-			ActingOrganizationID: claims.ActingOrganizationID, Action: claims.Action,
+			TenantID: claims.TenantID, Action: claims.Action,
 			ScopeDigest: claims.ScopeDigest, PolicyRevision: claims.PolicyRevision, ExpiresAt: claims.ExpiresAt,
 		})
 	}))
@@ -58,7 +58,7 @@ func TestHTTPGrantAuthorizerVerifiesExactScopeBeforeSingleUseConsumption(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if access.TokenID != claims.TokenID || access.PrincipalID != claims.PrincipalID || access.SessionID != claims.SessionID || access.ActingOrganizationID != claims.ActingOrganizationID || access.PolicyRevision != claims.PolicyRevision {
+	if access.TokenID != claims.TokenID || access.PrincipalID != claims.PrincipalID || access.SessionID != claims.SessionID || access.TenantID != claims.TenantID || access.PolicyRevision != claims.PolicyRevision {
 		t.Fatalf("access=%#v", access)
 	}
 	if calls.Load() != 1 {
@@ -99,7 +99,7 @@ func TestHTTPGrantAuthorizerFailsClosedWhenIAMOrAcceptanceIsInvalid(t *testing.T
 			handle: func(writer http.ResponseWriter, _ *http.Request) {
 				_ = json.NewEncoder(writer).Encode(grantAcceptance{
 					TokenID: claims.TokenID, PrincipalID: claims.PrincipalID, SessionID: claims.SessionID,
-					ActingOrganizationID: claims.ActingOrganizationID, Action: claims.Action,
+					TenantID: claims.TenantID, Action: claims.Action,
 					ScopeDigest: "mismatched", PolicyRevision: claims.PolicyRevision, ExpiresAt: claims.ExpiresAt,
 				})
 			},
@@ -109,7 +109,7 @@ func TestHTTPGrantAuthorizerFailsClosedWhenIAMOrAcceptanceIsInvalid(t *testing.T
 			handle: func(writer http.ResponseWriter, _ *http.Request) {
 				_ = json.NewEncoder(writer).Encode(grantAcceptance{
 					TokenID: claims.TokenID, PrincipalID: claims.PrincipalID, SessionID: claims.SessionID,
-					ActingOrganizationID: claims.ActingOrganizationID, Action: claims.Action,
+					TenantID: claims.TenantID, Action: claims.Action,
 					ScopeDigest: claims.ScopeDigest, PolicyRevision: claims.PolicyRevision, ExpiresAt: claims.ExpiresAt,
 				})
 				_, _ = writer.Write([]byte(`{}`))
@@ -149,7 +149,7 @@ func signedGrant(t *testing.T, privateKey *rsa.PrivateKey, now time.Time, action
 	claims := telemetryauth.GrantClaims{
 		Issuer: "spiffe://hvac.local/iam-service", Presenter: gatewaySPIFFE, Audience: "telemetry-runtime-service",
 		PrincipalID: "018f2e00-2000-7000-8000-000000000001", SubjectIssuer: "https://identity.example", Subject: "subject-a",
-		ActingOrganizationID: orgA, ActorChain: []telemetryauth.Actor{{Service: "platform-gateway", SPIFFEID: gatewaySPIFFE}},
+		TenantID: orgA, ActorChain: []telemetryauth.Actor{{Service: "platform-gateway", SPIFFEID: gatewaySPIFFE}},
 		Action: action, ScopeDigest: digest, TargetCount: len(canonical), KeyCount: keyCount,
 		PolicyRevision: "telemetry-access:1", SessionID: "session-a", ParentTokenID: "parent-a",
 		RequestID: "request-a", TraceID: "0123456789abcdef0123456789abcdef", Route: "/api/v1/devices/{deviceId}/observation-snapshot",

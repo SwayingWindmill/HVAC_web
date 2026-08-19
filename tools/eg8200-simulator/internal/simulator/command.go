@@ -48,6 +48,14 @@ func (plant *Plant) applyChillerCommand(method string, params map[string]float64
 		if len(params) != 0 {
 			return invalidParameters(plant.chiller.revision)
 		}
+		if plant.chiller.faultCode != "" {
+			return CommandResult{Success: false, Code: "FAULT_ACTIVE", BusinessRevision: plant.chiller.revision}
+		}
+		if !plant.chilledWaterPump.running || plant.chilledWaterPump.faultCode != "" ||
+			!plant.coolingWaterPump.running || plant.coolingWaterPump.faultCode != "" ||
+			!plant.coolingTower.running || plant.coolingTower.faultCode != "" {
+			return CommandResult{Success: false, Code: "INTERLOCK_OPEN", BusinessRevision: plant.chiller.revision}
+		}
 		plant.chiller.running = true
 		plant.chiller.revision++
 		return CommandResult{Success: true, Code: "APPLIED", BusinessRevision: plant.chiller.revision}
@@ -98,6 +106,9 @@ func applyPumpCommand(state *pumpState, method string, params map[string]float64
 		if len(params) != 0 {
 			return invalidParameters(state.revision)
 		}
+		if state.faultCode != "" {
+			return CommandResult{Success: false, Code: "FAULT_ACTIVE", BusinessRevision: state.revision}
+		}
 		state.running = true
 		state.revision++
 		return CommandResult{Success: true, Code: "APPLIED", BusinessRevision: state.revision}
@@ -136,6 +147,9 @@ func (plant *Plant) applyCoolingTowerCommand(method string, params map[string]fl
 	case "start":
 		if len(params) != 0 {
 			return invalidParameters(plant.coolingTower.revision)
+		}
+		if plant.coolingTower.faultCode != "" {
+			return CommandResult{Success: false, Code: "FAULT_ACTIVE", BusinessRevision: plant.coolingTower.revision}
 		}
 		plant.coolingTower.running = true
 		plant.coolingTower.revision++

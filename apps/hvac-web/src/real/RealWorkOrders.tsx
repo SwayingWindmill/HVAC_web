@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useLocation, useNavigate } from 'react-router';
 import { Alert, Button, Card, Empty, Form, Modal, Select, Space, Tag, Timeline, Typography, message } from 'antd';
 import { PlusOutlined, ReloadOutlined, ToolOutlined, UserSwitchOutlined } from '@ant-design/icons';
 import { ProDescriptions, ProForm, ProFormSelect, ProFormText, ProFormTextArea, ProTable, type ProColumns } from '@ant-design/pro-components';
@@ -20,7 +21,7 @@ import {
 } from '@/api/work-orders';
 import type { ProtectedScopeResource } from './protected-scope';
 import { FocusHeading } from './FocusHeading';
-import { realAssetsEquipmentPath } from './assets/detail';
+import { realAssetsAssetPath } from './assets/detail';
 
 interface RealWorkOrdersProps {
   site: Readonly<Site>;
@@ -48,8 +49,8 @@ function formatInstant(value: string | undefined, timeZone: string): string {
   return new Intl.DateTimeFormat('zh-CN', { timeZone, dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 }
 
-function queryParam(name: string): string {
-  return new URLSearchParams(globalThis.location.search).get(name) ?? '';
+function queryParam(search: string, name: string): string {
+  return new URLSearchParams(search).get(name) ?? '';
 }
 
 function writeOptions(principal: CurrentPrincipalResponse, siteId: string): WorkOrderRequestOptions {
@@ -68,6 +69,8 @@ function lifecycleActions(status: WorkOrderStatus): readonly LifecycleAction[] {
 }
 
 export function RealWorkOrders({ site, principal, registerProtectedResource }: RealWorkOrdersProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const platformClient = useMemo(() => createPlatformGatewayClient(), []);
   const caps = principal.authorization.capabilities;
@@ -79,8 +82,8 @@ export function RealWorkOrders({ site, principal, registerProtectedResource }: R
   const prefix = useMemo(() => ['real-work-orders', principal.context.tenantId, site.id] as const, [principal.context.tenantId, site.id]);
   const [status, setStatus] = useState<WorkOrderStatus | ''>('');
   const [priority, setPriority] = useState<WorkOrderPriority | ''>('');
-  const [selectedId, setSelectedId] = useState(() => queryParam('workOrder'));
-  const sourceAlarm = queryParam('sourceAlarm');
+  const [selectedId, setSelectedId] = useState(() => queryParam(location.search, 'workOrder'));
+  const sourceAlarm = queryParam(location.search, 'sourceAlarm');
   const [createOpen, setCreateOpen] = useState(Boolean(sourceAlarm));
   const [assignOpen, setAssignOpen] = useState(false);
   const [createForm] = Form.useForm<CreateValues>();
@@ -92,6 +95,9 @@ export function RealWorkOrders({ site, principal, registerProtectedResource }: R
   }, [prefix, queryClient]);
 
   useEffect(() => registerProtectedResource({ id: `work-orders:${site.id}`, kind: 'query-cache', purge }), [purge, registerProtectedResource, site.id]);
+  useEffect(() => {
+    setSelectedId(queryParam(location.search, 'workOrder'));
+  }, [location.search]);
   useEffect(() => {
     if (!sourceAlarm) return;
     createForm.setFieldsValue({ title: `处理告警 ${sourceAlarm}`, description: '由 Alarm 工作台创建，请完成现场检查、处置并记录结果。', priority: 'HIGH' });
@@ -131,24 +137,24 @@ export function RealWorkOrders({ site, principal, registerProtectedResource }: R
     enabled: Boolean(commandDeviceId),
     staleTime: 60_000,
   });
-  const commandEquipmentId = useMemo(() => {
+  const commandAssetId = useMemo(() => {
     if (!commandDeviceId) return '';
     const relationships = assetModelQuery.data?.data.relationships ?? [];
     const now = Date.now();
     return relationships.find((relationship) => relationship.fromType === 'DEVICE'
       && relationship.fromId === commandDeviceId
-      && relationship.toType === 'EQUIPMENT'
+      && relationship.toType === 'ASSET'
       && Date.parse(relationship.validFrom) <= now
       && (!relationship.validTo || Date.parse(relationship.validTo) > now))?.toId ?? '';
   }, [assetModelQuery.data, commandDeviceId]);
 
   const selectWorkOrder = useCallback((id: string) => {
-    const params = new URLSearchParams(globalThis.location.search);
+    const params = new URLSearchParams(location.search);
     params.delete('sourceAlarm');
     params.set('workOrder', id);
-    globalThis.history.pushState(null, '', `${globalThis.location.pathname}?${params.toString()}`);
+    navigate(`${location.pathname}?${params.toString()}${location.hash}`);
     setSelectedId(id);
-  }, []);
+  }, [location.hash, location.pathname, location.search, navigate]);
 
   const commit = useCallback((workOrder: WorkOrder) => {
     queryClient.setQueryData([...prefix, 'detail', workOrder.workOrderId], workOrder);
@@ -243,9 +249,9 @@ export function RealWorkOrders({ site, principal, registerProtectedResource }: R
               ]} />
               <Space wrap>
                 {canAssign && !['COMPLETED', 'CANCELLED'].includes(detail.status) ? <Button icon={<UserSwitchOutlined />} onClick={() => { assignForm.setFieldsValue({ assigneeId: detail.assigneeId, teamId: detail.teamId, reason: 'OPERATOR_ASSIGNMENT' }); setAssignOpen(true); }}>指派</Button> : null}
-                {commandEquipmentId ? (
+                {commandAssetId ? (
                   <Button
-                    href={`${realAssetsEquipmentPath(site.id, commandEquipmentId)}?sourceWorkOrder=${encodeURIComponent(detail.workOrderId)}`}
+                    href={`${realAssetsAssetPath(site.id, commandAssetId)}?sourceWorkOrder=${encodeURIComponent(detail.workOrderId)}`}
                     disabled={detail.status !== 'IN_PROGRESS'}
                   >
                     处理设备功能

@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	CapabilitySetVersion                 = 7
+	CapabilitySetVersion                 = 9
 	GetHealthPath                         = "__HEALTH_PATH__"
 	GetVersionPath                        = "__VERSION_PATH__"
 	GetPlatformStatusPath                 = "__PLATFORM_STATUS_PATH__"
@@ -27,12 +27,15 @@ const (
 	GetSessionAuditEventPathTemplate      = "__AUDIT_PATH__"
 	ListSitesPath                         = "__SITES_PATH__"
 	GetSitePathTemplate                   = "__SITE_PATH__"
-	ListSiteEquipmentPathTemplate         = "__SITE_EQUIPMENT_PATH__"
-	GetEquipmentPathTemplate              = "__EQUIPMENT_PATH__"
+	ListSiteAssetsPathTemplate         = "__SITE_ASSET_PATH__"
+	GetAssetPathTemplate              = "__ASSET_PATH__"
 	ListSiteDevicesPathTemplate           = "__SITE_DEVICES_PATH__"
 	ListSiteDeviceBindingsPathTemplate    = "__SITE_DEVICE_BINDINGS_PATH__"
 	GetSiteAssetModelPathTemplate         = "__SITE_ASSET_MODEL_PATH__"
 	GetDevicePathTemplate                 = "__DEVICE_PATH__"
+	ListAlarmsPath                        = "__ALARMS_PATH__"
+	GetAlarmPathTemplate                  = "__ALARM_PATH__"
+	AckAlarmPathTemplate                  = "__ALARM_ACK_PATH__"
 )
 
 type BuildInfo struct {
@@ -87,8 +90,8 @@ type Capability string
 const (
 	CapabilitySiteList         Capability = "site.list"
 	CapabilitySiteRead         Capability = "site.read"
-	CapabilityEquipmentList    Capability = "equipment.list"
-	CapabilityEquipmentRead    Capability = "equipment.read"
+	CapabilityAssetList Capability = "asset.list"
+	CapabilityAssetRead Capability = "asset.read"
 	CapabilityDeviceList       Capability = "device.list"
 	CapabilityDeviceRead              Capability = "device.read"
 	CapabilityTelemetrySnapshotRead   Capability = "telemetry.snapshot.read"
@@ -102,6 +105,10 @@ const (
 	CapabilityWorkOrderCreate         Capability = "work-order.create"
 	CapabilityWorkOrderAssign         Capability = "work-order.assign"
 	CapabilityWorkOrderLifecycle      Capability = "work-order.lifecycle"
+	CapabilitySessionRevoke           Capability = "session.revoke"
+	CapabilityAuditRead               Capability = "audit.read"
+	CapabilityIAMAdmin                Capability = "iam.admin"
+	CapabilityAPICredentialManage     Capability = "api-credential.manage"
 )
 
 type EffectiveAuthorization struct {
@@ -113,6 +120,7 @@ type EffectiveAuthorization struct {
 type SessionView struct {
 	ID                    string `json:"id"`
 	ExpiresAt             string `json:"expiresAt"`
+	IdleTimeoutMS         int    `json:"idleTimeoutMs"`
 	CSRFToken             string `json:"csrfToken"`
 	RevocationObjectiveMS int    `json:"revocationObjectiveMs"`
 	LastAuditMessageID    string `json:"lastAuditMessageId"`
@@ -169,13 +177,13 @@ type Site struct {
 	UpdatedAt   string `json:"updatedAt"`
 }
 
-type Equipment struct {
+type Asset struct {
 	ID            string `json:"id"`
 	TenantID      string `json:"tenantId"`
 	SiteID        string `json:"siteId"`
 	Code          string `json:"code"`
 	DisplayName   string `json:"displayName"`
-	EquipmentType string `json:"equipmentType"`
+	AssetType string `json:"assetType"`
 	Status        string `json:"status"`
 	Revision      int64  `json:"revision"`
 	CreatedAt     string `json:"createdAt"`
@@ -200,7 +208,7 @@ type DeviceBinding struct {
 	TenantID    string  `json:"tenantId"`
 	SiteID      string  `json:"siteId"`
 	DeviceID    string  `json:"deviceId"`
-	EquipmentID string  `json:"equipmentId"`
+	AssetID string  `json:"assetId"`
 	BindingRole string  `json:"bindingRole"`
 	Status      string  `json:"status"`
 	ValidFrom   string  `json:"validFrom"`
@@ -232,8 +240,8 @@ type SiteCollection struct {
 	HasMore    bool    `json:"hasMore"`
 }
 
-type EquipmentCollection struct {
-	Items      []Equipment `json:"items"`
+type AssetCollection struct {
+	Items      []Asset `json:"items"`
 	NextCursor *string     `json:"nextCursor"`
 	HasMore    bool        `json:"hasMore"`
 }
@@ -250,14 +258,14 @@ type DeviceBindingCollection struct {
 	HasMore    bool            `json:"hasMore"`
 }
 
-type Area struct {
+type Space struct {
 	ID           string  `json:"id"`
 	TenantID     string  `json:"tenantId"`
 	SiteID       string  `json:"siteId"`
-	ParentAreaID *string `json:"parentAreaId"`
+	ParentSpaceID *string `json:"parentSpaceId"`
 	Code         string  `json:"code"`
 	DisplayName  string  `json:"displayName"`
-	AreaType     string  `json:"areaType"`
+	SpaceType     string  `json:"spaceType"`
 	Status       string  `json:"status"`
 	Revision     int64   `json:"revision"`
 	CreatedAt    string  `json:"createdAt"`
@@ -323,8 +331,8 @@ type AssetRelationship struct {
 }
 
 type AssetModelCounts struct {
-	Areas           int `json:"areas"`
-	Equipment       int `json:"equipment"`
+	Spaces           int `json:"spaces"`
+	Assets           int `json:"assets"`
 	DeviceEndpoints int `json:"deviceEndpoints"`
 	PhysicalSensors int `json:"physicalSensors"`
 	Points          int `json:"points"`
@@ -334,8 +342,8 @@ type SiteAssetModel struct {
 	SchemaVersion   int                 `json:"schemaVersion"`
 	TenantID        string              `json:"tenantId"`
 	SiteID          string              `json:"siteId"`
-	Areas           []Area              `json:"areas"`
-	Equipment       []Equipment         `json:"equipment"`
+	Spaces          []Space             `json:"spaces"`
+	Assets          []Asset             `json:"assets"`
 	Devices         []Device            `json:"devices"`
 	Sensors         []Sensor            `json:"sensors"`
 	TelemetryPoints []TelemetryPoint    `json:"telemetryPoints"`
@@ -361,7 +369,7 @@ type ProblemDetails struct {
 }
 
 type GetHealthParams struct{ IncludeBuild *bool }
-type BeginLoginParams struct{ ReturnTo, LoginHint string }
+type BeginLoginParams struct{ ReturnTo, LoginHint, Assurance string }
 type CompleteLoginParams struct{ Code, State, Issuer string }
 type LogoutParams struct{ CSRFToken string }
 type RevokeSessionParams struct{ SessionID, CSRFToken string }
@@ -388,8 +396,8 @@ type ServerInterface interface {
 type RegistryServerInterface interface {
 	ListSites(http.ResponseWriter, *http.Request, ListRegistryParams)
 	GetSite(http.ResponseWriter, *http.Request, string)
-	ListSiteEquipment(http.ResponseWriter, *http.Request, string, ListRegistryParams)
-	GetEquipment(http.ResponseWriter, *http.Request, string)
+	ListSiteAssets(http.ResponseWriter, *http.Request, string, ListRegistryParams)
+	GetAsset(http.ResponseWriter, *http.Request, string)
 	ListSiteDevices(http.ResponseWriter, *http.Request, string, ListRegistryParams)
 	ListSiteDeviceBindings(http.ResponseWriter, *http.Request, string, ListRegistryParams)
 	GetSiteAssetModel(http.ResponseWriter, *http.Request, string)
@@ -476,18 +484,18 @@ func (c *Client) GetSite(ctx context.Context, siteID string) (*Response[Site], e
 	return doJSON[Site](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
 }
 
-func (c *Client) ListSiteEquipment(ctx context.Context, siteID string, params *ListRegistryParams) (*Response[EquipmentCollection], error) {
-	path := strings.Replace(ListSiteEquipmentPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+func (c *Client) ListSiteAssets(ctx context.Context, siteID string, params *ListRegistryParams) (*Response[AssetCollection], error) {
+	path := strings.Replace(ListSiteAssetsPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
 	endpoint, err := withListQuery(c.baseURL+path, params)
 	if err != nil {
 		return nil, err
 	}
-	return doJSON[EquipmentCollection](ctx, c.httpClient, http.MethodGet, endpoint, "", nil)
+	return doJSON[AssetCollection](ctx, c.httpClient, http.MethodGet, endpoint, "", nil)
 }
 
-func (c *Client) GetEquipment(ctx context.Context, equipmentID string) (*Response[Equipment], error) {
-	path := strings.Replace(GetEquipmentPathTemplate, "{equipmentId}", url.PathEscape(equipmentID), 1)
-	return doJSON[Equipment](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
+func (c *Client) GetAsset(ctx context.Context, assetID string) (*Response[Asset], error) {
+	path := strings.Replace(GetAssetPathTemplate, "{assetId}", url.PathEscape(assetID), 1)
+	return doJSON[Asset](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
 }
 
 func (c *Client) ListSiteDevices(ctx context.Context, siteID string, params *ListRegistryParams) (*Response[DeviceCollection], error) {

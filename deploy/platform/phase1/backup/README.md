@@ -1,6 +1,6 @@
 # Phase 1 backup contract
 
-This directory implements the Phase 1 deployment-side backup contract from `架构规划/智慧能源系统部署与运维架构设计.md` without introducing a database HA cluster.
+This directory implements the Phase 1 deployment-side backup contract from `SE-ARCH-DEPLOY-001 V1.0 CURRENT` and the recovery objectives from `SE-OPS-009 V1.0 CURRENT CANDIDATE` without introducing a database HA cluster.
 
 ## PostgreSQL
 
@@ -33,8 +33,22 @@ A baseline policy is:
 - PostgreSQL base backup: daily.
 - PostgreSQL WAL archive: continuous, with archive timeout bounded by the deployment config.
 - ClickHouse backup: daily after the main ingestion window, or according to site data volume.
-- Restore test: periodic and mandatory; use the existing automated Destroy + Restore acceptance as the minimum software proof, then perform a staging restore with real backup artifacts.
+- Restore test: periodic and mandatory; the existing standalone Destroy + Restore test may be run explicitly as software proof, but it is not an automatic release gate and does not replace a staging/production-like restore with real backup artifacts.
 
-## RPO/RTO boundary
+## Recovery objectives and verification
 
-Backup configuration is not an RPO/RTO attestation. `RPO/RTO` remains a formal acceptance item until the recovery drill records failure time, latest recoverable transaction/telemetry time, service restoration time and business verification time.
+`SE-OPS-009 V1.0 CURRENT CANDIDATE` freezes the Phase 1 PostgreSQL objective at `RPO <= 5 min / RTO <= 2 h`; Control Command/Audit is `RPO <= 5 min / RTO <= 1 h`. Whole-server replacement is `RTO <= 4 h` only when spare/cold-standby hardware, an off-server backup, versioned configuration and a documented recovery procedure are all available.
+
+The current PostgreSQL baseline uses `archive_timeout=60s`. Production WAL/base-backup paths must therefore be backed by protected storage outside the failed production server/data disk if those objectives are claimed. A same-server backup copy is not whole-server disaster recovery.
+
+Run the host-side readiness check daily after the external backup mount is available:
+
+```bash
+POSTGRES_WAL_ARCHIVE_DIR=/mnt/smart-energy-backup/postgres/wal \
+POSTGRES_BASE_BACKUP_DIR=/mnt/smart-energy-backup/postgres/base \
+./deploy/platform/phase1/backup/verify-recovery-readiness.sh
+```
+
+It verifies that the newest archived WAL file is no older than the 5-minute readiness threshold and verifies the newest base-backup checksum manifest. This is backup-readiness evidence only.
+
+Backup configuration and readiness checks are not RPO/RTO attestation. Production attainment requires the timestamped drill defined in `../recovery/README.md`, recording the incident-confirmed time, latest recoverable PostgreSQL time, component/business restoration times and final business-validation time.

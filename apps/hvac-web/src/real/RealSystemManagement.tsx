@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react';
+import { useEffect } from 'react';
+import { useLocation, useNavigate } from 'react-router';
 import {
   Alert,
   Badge,
@@ -72,10 +74,15 @@ function EmptyGovernanceTable({ description }: { description: string }) {
 }
 
 export function RealSystemManagement({ snapshot }: RealSystemManagementProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const principal = snapshot.principal!;
   const platform = snapshot.platform?.status;
   const sites = snapshot.sites?.items ?? [];
-  const [activeTab, setActiveTab] = useState(() => new URLSearchParams(globalThis.location.search).get('tab') ?? 'overview');
+  const [activeTab, setActiveTab] = useState(() => new URLSearchParams(location.search).get('tab') ?? 'overview');
+  useEffect(() => {
+    setActiveTab(new URLSearchParams(location.search).get('tab') ?? 'overview');
+  }, [location.search]);
   const principalRows = useMemo<PrincipalRow[]>(() => [{
     key: principal.principal.subject,
     subject: principal.principal.subject,
@@ -105,7 +112,7 @@ export function RealSystemManagement({ snapshot }: RealSystemManagementProps) {
       ),
     },
     { title: '角色', dataIndex: 'roles', width: 180, render: (roles: readonly string[]) => <Space wrap>{roles.map((role) => <Tag key={role}>{role}</Tag>)}</Space> },
-    { title: 'Acting Organization', dataIndex: 'tenantId', render: (value: string) => <Typography.Text code copyable>{value}</Typography.Text> },
+    { title: 'Tenant', dataIndex: 'tenantId', render: (value: string) => <Typography.Text code copyable>{value}</Typography.Text> },
     { title: 'Policy Revision', dataIndex: 'policyRevision', width: 180, render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
     { title: '状态', width: 100, render: () => <Badge status="success" text="当前会话" /> },
   ];
@@ -144,7 +151,7 @@ export function RealSystemManagement({ snapshot }: RealSystemManagementProps) {
               <Descriptions.Item label="Display Name">{principal.principal.displayName}</Descriptions.Item>
               <Descriptions.Item label="Subject"><Typography.Text copyable>{principal.principal.subject}</Typography.Text></Descriptions.Item>
               <Descriptions.Item label="Roles">{principal.principal.roles.join('、') || '无'}</Descriptions.Item>
-              <Descriptions.Item label="Acting Organization"><Typography.Text copyable>{principal.context.tenantId}</Typography.Text></Descriptions.Item>
+              <Descriptions.Item label="Tenant"><Typography.Text copyable>{principal.context.tenantId}</Typography.Text></Descriptions.Item>
             </Descriptions>
           </Card>
         </Col>
@@ -171,8 +178,8 @@ export function RealSystemManagement({ snapshot }: RealSystemManagementProps) {
   const siteTab = (
     <Card variant="borderless" styles={{ body: { padding: 16 } }}>
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        <OperationsPanelHeading icon={<ApartmentOutlined />} title="站点与组织" meta={`${siteRows.length} 个授权站点`} />
-        <Table rowKey="key" columns={siteColumns} dataSource={siteRows} pagination={false} locale={{ emptyText: <Empty description="当前 Organization 没有授权站点" /> }} />
+        <OperationsPanelHeading icon={<ApartmentOutlined />} title="站点与租户" meta={`${siteRows.length} 个授权站点`} />
+        <Table rowKey="key" columns={siteColumns} dataSource={siteRows} pagination={false} locale={{ emptyText: <Empty description="当前 Tenant 没有授权站点" /> }} />
       </Space>
     </Card>
   );
@@ -222,7 +229,7 @@ export function RealSystemManagement({ snapshot }: RealSystemManagementProps) {
   const items = [
     { key: 'overview', label: '治理概览', children: overview },
     { key: 'users', label: '用户与角色', children: users },
-    { key: 'site', label: '站点与组织', children: siteTab },
+    { key: 'site', label: '站点与租户', children: siteTab },
     { key: 'integrations', label: '数据接入', children: integrations },
     { key: 'rules', label: '报警规则', children: rules },
     { key: 'audit', label: '审计日志', children: audit },
@@ -240,9 +247,9 @@ export function RealSystemManagement({ snapshot }: RealSystemManagementProps) {
           items={items}
           onChange={(key) => {
             setActiveTab(key);
-            const url = new URL(globalThis.location.href);
-            url.searchParams.set('tab', key);
-            globalThis.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+            const parameters = new URLSearchParams(location.search);
+            parameters.set('tab', key);
+            navigate(`${location.pathname}?${parameters.toString()}${location.hash}`, { replace: true });
           }}
         />
       </PageScaffold>

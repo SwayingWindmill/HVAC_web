@@ -1,13 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LoginFormPage } from '@ant-design/pro-components';
+import { useLocation, useNavigate } from 'react-router';
 import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';
+import { useRealUiStore } from '@/stores/realUi';
+import { useRealObservability } from '@/app/RealObservability';
 import { AuthenticatedShell } from './AuthenticatedShell';
 import { REAL_FEATURE_MANIFEST } from './feature-manifest';
 import { FocusHeading } from './FocusHeading';
 import { RealRouteLoading } from './RealRouteLoading';
 import { RealRuntimeFacts } from './RealRuntimeFacts';
 import { resolveNavigation, resolveRoute, type RouteDecision } from './route-policy';
-import { createShellRuntime, type ShellSnapshot } from './shell-runtime';
+import { createBrowserShellEnvironment, createShellRuntime, type ShellSnapshot } from './shell-runtime';
 import { buildSiteNavigation, SiteScopedShell, type SiteShellDecision } from './SiteScopedShell';
 import { resolveSiteRouting } from './site-routing';
 import type { RealRuntimeConfig, RealRuntimeConfigFailure } from './runtime-config';
@@ -161,51 +164,42 @@ function normalizedRouteState(decision: SiteShellDecision | RouteDecision | unde
 }
 
 export default function RealApp({ config }: RealAppProps) {
+  const location = useLocation();
+  const routerNavigate = useNavigate();
   const client = useMemo(() => createPlatformGatewayClient(), []);
-  const runtime = useMemo(() => createShellRuntime(client), [client]);
+  const setCurrentSiteId = useRealUiStore((state) => state.setCurrentSiteId);
+  const observability = useRealObservability();
+  const internalNavigationRef = useRef(false);
+  const currentPathRef = useRef(location.pathname);
+  currentPathRef.current = location.pathname;
+  const routeNavigate = useCallback((target: string) => {
+    const resolved = new URL(target, window.location.origin);
+    if (resolved.origin === window.location.origin && !resolved.search && !resolved.hash) {
+      if (resolved.pathname !== currentPathRef.current) internalNavigationRef.current = true;
+      routerNavigate(resolved.pathname);
+      return;
+    }
+    window.location.assign(target);
+  }, [routerNavigate]);
+  const runtime = useMemo(
+    () => createShellRuntime(client, createBrowserShellEnvironment({ navigate: routeNavigate })),
+    [client, routeNavigate],
+  );
   const [snapshot, setSnapshot] = useState<ShellSnapshot>(() => runtime.current());
-  const [pathname, setPathname] = useState(() => window.location.pathname);
+  const pathname = location.pathname;
+  const currentLocation = `${location.pathname}${location.search}${location.hash}`;
+  const previousLocationRef = useRef(currentLocation);
 
   useEffect(() => {
     const unsubscribe = runtime.subscribe(setSnapshot);
-    const handlePopState = () => {
-      const activeSiteId = runtime.current().protectedScope?.siteId;
-      const nextSiteId = siteIdFromPathname(window.location.pathname);
-      if (!activeSiteId || nextSiteId === activeSiteId) {
-        setPathname(window.location.pathname);
-        return;
-      }
-      window.location.reload();
-    };
-    window.addEventListener('popstate', handlePopState);
     void runtime.bootstrap(window.location.href);
     return () => {
-      window.removeEventListener('popstate', handlePopState);
       unsubscribe();
       runtime.dispose();
     };
   }, [runtime]);
 
   const navigate = useCallback((target: string) => {
-    try {
-      const resolved = new URL(target, window.location.origin);
-      const activeSiteId = runtime.current().protectedScope?.siteId;
-      if (
-        resolved.origin === window.location.origin
-        && !resolved.search
-        && !resolved.hash
-        && activeSiteId
-        && siteIdFromPathname(resolved.pathname) === activeSiteId
-      ) {
-        if (resolved.pathname !== window.location.pathname) {
-          window.history.pushState(null, '', resolved.pathname);
-          setPathname(resolved.pathname);
-        }
-        return;
-      }
-    } catch {
-      // The runtime owns validation and fail-closed handling for malformed targets.
-    }
     void runtime.requestSiteNavigation(target);
   }, [runtime]);
   const confirmSiteNavigation = useCallback(() => {
@@ -214,6 +208,22 @@ export default function RealApp({ config }: RealAppProps) {
   const cancelSiteNavigation = useCallback(() => {
     runtime.cancelSiteNavigation();
   }, [runtime]);
+
+  useEffect(() => {
+    const previousLocation = previousLocationRef.current;
+    previousLocationRef.current = currentLocation;
+    if (previousLocation === currentLocation || internalNavigationRef.current) {
+      internalNavigationRef.current = false;
+      return;
+    }
+
+    const previousSiteId = siteIdFromPathname(new URL(previousLocation, window.location.origin).pathname);
+    const nextSiteId = siteIdFromPathname(pathname);
+    const activeSiteId = runtime.current().protectedScope?.siteId;
+    if (previousSiteId && nextSiteId && previousSiteId !== nextSiteId && activeSiteId !== nextSiteId) {
+      void runtime.requestSiteNavigation(currentLocation);
+    }
+  }, [currentLocation, pathname, runtime]);
   const registerProtectedResource = useCallback(
     (resource: Parameters<typeof runtime.registerProtectedResource>[0]) => runtime.registerProtectedResource(resource),
     [runtime],
@@ -223,6 +233,16 @@ export default function RealApp({ config }: RealAppProps) {
     [runtime],
   );
   const protectedRequestToken = useCallback(() => runtime.protectedRequestToken(), [runtime]);
+  const publishRealtimeStatus = useCallback(
+    (update: Parameters<typeof runtime.publishRealtimeStatus>[0]) => {
+      runtime.publishRealtimeStatus(update);
+      observability.record({
+        name: 'realtime_state',
+        fields: { state: update.state, siteId: update.siteId },
+      });
+    },
+    [observability, runtime],
+  );
 
   const platformAvailability = snapshot.platform?.state ?? 'checking';
   const platformNavigation = snapshot.principal
@@ -266,6 +286,11 @@ export default function RealApp({ config }: RealAppProps) {
   const siteToActivate = selectedSite?.id;
 
   useEffect(() => {
+    setCurrentSiteId(selectedSite?.id ?? null);
+    return () => setCurrentSiteId(null);
+  }, [selectedSite?.id, setCurrentSiteId]);
+
+  useEffect(() => {
     if (
       siteToActivate
       && snapshot.state === 'READY'
@@ -278,8 +303,8 @@ export default function RealApp({ config }: RealAppProps) {
   }, [runtime, siteToActivate, snapshot.protectedScope, snapshot.siteTransition, snapshot.state]);
 
   useEffect(() => {
-    if (redirectTarget) window.location.replace(redirectTarget);
-  }, [redirectTarget]);
+    if (redirectTarget) void runtime.requestSiteNavigation(redirectTarget);
+  }, [redirectTarget, runtime]);
 
   return (
     <main
@@ -309,6 +334,7 @@ export default function RealApp({ config }: RealAppProps) {
           registerProtectedResource={registerProtectedResource}
           protectedRequestToken={protectedRequestToken}
           registerUnsavedDraft={registerUnsavedDraft}
+          publishRealtimeStatus={publishRealtimeStatus}
         />
       ) : null}
       {snapshot.state === 'READY' && !showSignInPage && platformDecision ? (

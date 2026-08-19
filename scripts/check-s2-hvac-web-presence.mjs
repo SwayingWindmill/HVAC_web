@@ -33,7 +33,7 @@ for (const marker of [
   'createS2TelemetryClient', "from '@/platform/telemetry-live'", 'batchGetDeviceObservationSnapshots',
   'keys: []', 'MAX_BATCH_DEVICES = 100', 'getDeviceTelemetryProfile', 'deviceDetailTelemetryKeys',
   'const selectedKeys = keys ?? deviceDetailTelemetryKeys(device?.deviceType)', 'keys: [...selectedKeys]',
-  'Authenticated Organization changed during telemetry request', 'snapshot.values.length !== 0',
+  'Authenticated Tenant changed during telemetry request', 'snapshot.values.length !== 0',
   'runtime.live.open', 'runtime.live.purge()', "queryClient?.removeQueries({ queryKey: ['s2-current'] })",
   'x-route-policy-revision', 'runtime.routePolicy.subscribe',
   "error.problem.code === 'RESOURCE_NOT_FOUND'", "API_MODE !== 'real'",

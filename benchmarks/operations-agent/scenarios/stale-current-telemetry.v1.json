@@ -3,15 +3,15 @@
   "toolCatalogVersion": "operations-agent-tool-catalog/v1",
   "scenarioId": "stale-current-telemetry",
   "scenarioVersion": "1.0.0",
-  "title": "Stale current telemetry cannot confirm a current Equipment fault",
+  "title": "Stale current telemetry cannot confirm a current Asset fault",
   "userUtterance": "确认冷机当前是否发生高冷凝压力故障。",
   "deterministic": true,
   "purpose": "RETROSPECTIVE",
   "taskCategories": ["DATA_QUERY", "DIAGNOSTIC_ANALYSIS"],
   "scope": {
-    "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+    "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
     "siteIds": ["0198f5c0-7c00-7000-8000-000000000021"],
-    "equipmentIds": ["0198f5c0-7c00-7000-8000-000000000031"],
+    "assetIds": ["0198f5c0-7c00-7000-8000-000000000031"],
     "deviceIds": ["0198f5c0-7c00-7000-8000-000000000041"]
   },
   "inputFacts": [
@@ -20,9 +20,9 @@
       "kind": "DEVICE_OBSERVATION_SNAPSHOT",
       "ownerTool": "telemetry.current.getDeviceObservationSnapshot",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": ["0198f5c0-7c00-7000-8000-000000000021"],
-        "equipmentIds": ["0198f5c0-7c00-7000-8000-000000000031"],
+        "assetIds": ["0198f5c0-7c00-7000-8000-000000000031"],
         "deviceIds": ["0198f5c0-7c00-7000-8000-000000000041"]
       },
       "metadata": {
@@ -58,7 +58,7 @@
       {
         "id": "outcome-current-fault-unavailable",
         "classification": "UNABLE_TO_CONCLUDE",
-        "statement": "The stale last-known value cannot confirm the Equipment current state or a current high-pressure fault.",
+        "statement": "The stale last-known value cannot confirm the Asset current state or a current high-pressure fault.",
         "evidenceRequirementIds": ["evidence-stale-device-observation-snapshot"],
         "required": true
       },
@@ -78,9 +78,9 @@
       "ownerTool": "telemetry.current.getDeviceObservationSnapshot",
       "status": "AVAILABLE",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": ["0198f5c0-7c00-7000-8000-000000000021"],
-        "equipmentIds": ["0198f5c0-7c00-7000-8000-000000000031"],
+        "assetIds": ["0198f5c0-7c00-7000-8000-000000000031"],
         "deviceIds": ["0198f5c0-7c00-7000-8000-000000000041"]
       },
       "factIds": ["fact-stale-device-observation-snapshot"],
@@ -92,9 +92,9 @@
       "ownerTool": "telemetry.current.getDeviceObservationSnapshot",
       "status": "REQUIRED_NEXT",
       "scope": {
-        "organizationId": "0198f5c0-7c00-7000-8000-000000000001",
+        "tenantId": "0198f5c0-7c00-7000-8000-000000000001",
         "siteIds": ["0198f5c0-7c00-7000-8000-000000000021"],
-        "equipmentIds": ["0198f5c0-7c00-7000-8000-000000000031"],
+        "assetIds": ["0198f5c0-7c00-7000-8000-000000000031"],
         "deviceIds": ["0198f5c0-7c00-7000-8000-000000000041"]
       },
       "factIds": [],
@@ -129,12 +129,12 @@
   },
   "tools": {
     "allowed": ["telemetry.current.getDeviceObservationSnapshot"],
-    "forbidden": ["analytics.energy.getSiteSeries", "analytics.energy.getEquipmentSeries", "commands.createIntent"],
+    "forbidden": ["analytics.energy.getSiteSeries", "analytics.energy.getAssetSeries", "commands.createIntent"],
     "forbiddenPaths": ["HISTORICAL_AS_CURRENT_STATE", "THINGSBOARD_READ_THROUGH", "PHYSICAL_COMMAND_EXECUTION"]
   },
   "acceptance": {
     "blockers": [
-      { "id": "blocker-stale-not-current", "dimension": "DATA_QUALITY_AWARENESS", "description": "STALE or MISSING telemetry cannot establish a current Equipment state or fault." },
+      { "id": "blocker-stale-not-current", "dimension": "DATA_QUALITY_AWARENESS", "description": "STALE or MISSING telemetry cannot establish a current Asset state or fault." },
       { "id": "blocker-no-history-substitution", "dimension": "DIAGNOSTIC_CORRECTNESS", "description": "Historical or last-known values cannot substitute for current control-state evidence." },
       { "id": "blocker-current-owner", "dimension": "DATA_RETRIEVAL_ACCURACY", "description": "Current state comes only from Telemetry Runtime Device Observation Snapshot." }
     ],

@@ -20,26 +20,26 @@ import (
 )
 
 type Config struct {
-	Issuer                      string
-	ClientID                    string
-	RedirectURI                 string
+	Issuer          string
+	ClientID        string
+	RedirectURI     string
 	DefaultTenantID string
-	Now                         func() time.Time
+	Now             func() time.Time
 }
 
 type Provider struct {
-	mu                          sync.Mutex
-	issuer                      string
-	clientID                    string
-	redirectURI                 string
+	mu              sync.Mutex
+	issuer          string
+	clientID        string
+	redirectURI     string
 	defaultTenantID string
-	now                         func() time.Time
-	activeKey                   *rsa.PrivateKey
-	activeKid                   string
-	rogueKey                    *rsa.PrivateKey
-	modernKey                   *ecdsa.PrivateKey
-	modernKid                   string
-	codes                       map[string]authorizationCode
+	now             func() time.Time
+	activeKey       *rsa.PrivateKey
+	activeKid       string
+	rogueKey        *rsa.PrivateKey
+	modernKey       *ecdsa.PrivateKey
+	modernKid       string
+	codes           map[string]authorizationCode
 }
 
 type authorizationCode struct {
@@ -47,22 +47,26 @@ type authorizationCode struct {
 	Nonce         string
 	CodeChallenge string
 	LoginHint     string
+	RequiredACR   string
 	CreatedAt     time.Time
 }
 
 type tokenClaims struct {
-	Issuer               string   `json:"iss"`
-	Audience             string   `json:"aud"`
-	Subject              string   `json:"sub"`
-	ExpiresAt            int64    `json:"exp"`
-	IssuedAt             int64    `json:"iat"`
-	NotBefore            int64    `json:"nbf"`
-	Nonce                string   `json:"nonce"`
-	Name                 string   `json:"name"`
-	Email                string   `json:"email"`
-	Roles                []string `json:"roles"`
-	TenantID string   `json:"tenantId"`
-	TokenUse             string   `json:"token_use"`
+	Issuer    string   `json:"iss"`
+	Audience  string   `json:"aud"`
+	Subject   string   `json:"sub"`
+	ExpiresAt int64    `json:"exp"`
+	IssuedAt  int64    `json:"iat"`
+	NotBefore int64    `json:"nbf"`
+	Nonce     string   `json:"nonce"`
+	Name      string   `json:"name"`
+	Email     string   `json:"email"`
+	Roles     []string `json:"roles"`
+	TenantID  string   `json:"tenantId"`
+	TokenUse  string   `json:"token_use"`
+	ACR       string   `json:"acr"`
+	AMR       []string `json:"amr"`
+	AuthTime  int64    `json:"auth_time"`
 }
 
 func New(config Config) (*Provider, error) {
@@ -90,17 +94,17 @@ func New(config Config) (*Provider, error) {
 		defaultTenantID = "018f3d00-0000-7000-8000-000000000001"
 	}
 	return &Provider{
-		issuer:                      strings.TrimRight(config.Issuer, "/"),
-		clientID:                    config.ClientID,
-		redirectURI:                 config.RedirectURI,
+		issuer:          strings.TrimRight(config.Issuer, "/"),
+		clientID:        config.ClientID,
+		redirectURI:     config.RedirectURI,
 		defaultTenantID: defaultTenantID,
-		now:                         now,
-		activeKey:                   active,
-		activeKid:                   randomToken(8),
-		rogueKey:                    rogue,
-		modernKey:                   modern,
-		modernKid:                   randomToken(8),
-		codes:                       map[string]authorizationCode{},
+		now:             now,
+		activeKey:       active,
+		activeKid:       randomToken(8),
+		rogueKey:        rogue,
+		modernKey:       modern,
+		modernKid:       randomToken(8),
+		codes:           map[string]authorizationCode{},
 	}, nil
 }
 
@@ -199,6 +203,7 @@ func (provider *Provider) authorize(writer http.ResponseWriter, request *http.Re
 		Nonce:         query.Get("nonce"),
 		CodeChallenge: challenge,
 		LoginHint:     loginHint,
+		RequiredACR:   query.Get("acr_values"),
 		CreatedAt:     provider.now(),
 	}
 	provider.mu.Unlock()
@@ -206,7 +211,7 @@ func (provider *Provider) authorize(writer http.ResponseWriter, request *http.Re
 	values := redirect.Query()
 	values.Set("code", code)
 	values.Set("state", query.Get("state"))
-	if loginHint == "logto-modern" {
+	if loginHint == "minimal-oidc" {
 		values.Set("iss", provider.issuer)
 	}
 	if loginHint == "callback-issuer-mismatch" {
@@ -260,6 +265,15 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 	name := "Fixture User"
 	email := "fixture.user@example.test"
 	tenantID := provider.defaultTenantID
+	acr := code.RequiredACR
+	if acr == "" {
+		acr = "urn:hvac:loa:1"
+	}
+	amr := []string{"pwd"}
+	if acr == "urn:hvac:loa:2" {
+		amr = []string{"pwd", "otp"}
+	}
+	authTime := now.Unix()
 
 	switch code.LoginHint {
 	case "s2-telemetry":
@@ -293,26 +307,32 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 		expiresAt = now.Add(-time.Minute)
 	case "not-before":
 		notBefore = now.Add(time.Hour)
-	case "logto-modern":
+	case "minimal-oidc":
 		tokenUse = ""
 		tenantID = ""
 		roles = nil
+		acr = ""
+		amr = nil
+		authTime = 0
 	}
 	claims := tokenClaims{
-		Issuer:               issuer,
-		Audience:             audience,
-		Subject:              subject,
-		ExpiresAt:            expiresAt.Unix(),
-		IssuedAt:             now.Unix(),
-		NotBefore:            notBefore.Unix(),
-		Nonce:                nonce,
-		Name:                 name,
-		Email:                email,
-		Roles:                roles,
-		TenantID: tenantID,
-		TokenUse:             tokenUse,
+		Issuer:    issuer,
+		Audience:  audience,
+		Subject:   subject,
+		ExpiresAt: expiresAt.Unix(),
+		IssuedAt:  now.Unix(),
+		NotBefore: notBefore.Unix(),
+		Nonce:     nonce,
+		Name:      name,
+		Email:     email,
+		Roles:     roles,
+		TenantID:  tenantID,
+		TokenUse:  tokenUse,
+		ACR:       acr,
+		AMR:       amr,
+		AuthTime:  authTime,
 	}
-	idToken, err := provider.signJWT(claims, code.LoginHint == "invalid-signature", code.LoginHint == "unknown-signing-key", code.LoginHint == "logto-modern")
+	idToken, err := provider.signJWT(claims, code.LoginHint == "invalid-signature", code.LoginHint == "unknown-signing-key", code.LoginHint == "minimal-oidc")
 	if err != nil {
 		writeOAuthError(writer, http.StatusInternalServerError, "server_error", "fixture signing failed")
 		return
@@ -323,7 +343,7 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 		"token_type":   tokenType,
 		"expires_in":   300,
 	}
-	if code.LoginHint != "logto-modern" {
+	if code.LoginHint != "minimal-oidc" {
 		response["refresh_token"] = randomToken(32)
 	}
 	writeJSON(writer, http.StatusOK, response)

@@ -1,5 +1,8 @@
 import ReactDOM from 'react-dom/client';
 import { QueryClient } from '@tanstack/react-query';
+import { RealRootErrorBoundary } from '@/app/RealRootErrorBoundary';
+import { RealRouter } from '@/app/RealRouter';
+import { RealObservabilityProvider } from '@/app/RealObservability';
 import RealApp, { RealConfigurationBlocked } from './RealApp';
 import { RealThemeGate } from './RealTheme';
 import { validateRealRuntimeConfig } from './runtime-config';
@@ -11,11 +14,17 @@ const queryClient = new QueryClient({
 });
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <RealThemeGate queryClient={queryClient}>
-    {runtimeConfig.ok ? (
-      <RealApp config={runtimeConfig.config} />
-    ) : (
-      <RealConfigurationBlocked failures={runtimeConfig.failures} />
-    )}
-  </RealThemeGate>,
+  <RealRouter>
+    <RealThemeGate queryClient={queryClient}>
+      <RealObservabilityProvider>
+        <RealRootErrorBoundary>
+          {runtimeConfig.ok ? (
+            <RealApp config={runtimeConfig.config} />
+          ) : (
+            <RealConfigurationBlocked failures={runtimeConfig.failures} />
+          )}
+        </RealRootErrorBoundary>
+      </RealObservabilityProvider>
+    </RealThemeGate>
+  </RealRouter>,
 );

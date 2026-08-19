@@ -57,7 +57,7 @@ columns; the immutable event payload and authority fields cannot be modified.
 Audit events contain bounded actor, Scope, authorization, operation, outcome, occurrence time and
 typed record references. Raw prompts, operator notes, model text, Owner payloads, credentials,
 Checkpoints, Leases, cursors and arbitrary attributes are rejected. The Audit owner hashes the
-Investigation aggregate identity and appends an Organization-scoped hash-chain record. Trace context
+Investigation aggregate identity and appends a Tenant-scoped hash-chain record. Trace context
 is intentionally excluded from committed Audit records.
 
 The LangGraph adapter compiles a project-owned `StateGraph` with explicit validation,
@@ -107,7 +107,7 @@ timeout policy fail during composition before any investigation or external requ
 The `tools` module implements two narrow authoritative READ boundaries:
 
 ```text
-registry.getSite / registry.listSiteEquipment
+registry.getSite / registry.listSiteAssets
   -> Platform Core Service Registry routes only
 
 analytics.getEnergySeries
@@ -116,7 +116,7 @@ analytics.getEnergySeries
 
 The Coordinator injects the current Investigation/Run identity, complete Scope, authorization
 decision, delegation grant and correlation information. Registry results are strictly decoded
-from the project Site and Equipment DTOs. Energy results retain Dataset Revision, data and
+from the project Site and Asset DTOs. Energy results retain Dataset Revision, data and
 aggregate watermarks, partial state, requested/actual granularity and Quality Summary. Both
 readers apply bounded response sizes and timeouts, map upstream failures to stable Application
 errors and keep unauthorized resources nondiscoverable. The boundary check rejects direct
@@ -145,8 +145,8 @@ Registry Site Scope. It deterministically resolves local target and baseline nig
 including daylight-saving elapsed durations, and requires contiguous hourly buckets. Dataset
 Revision, both Watermarks, Partial, Granularity, Quality Policy, missing buckets, non-finite
 energy and zero baseline all gate confirmation. Complete benchmark data produces FACT and
-ALGORITHM_RESULT drafts plus a Site-only Finding; Equipment attribution remains structured
-`UNABLE_TO_CONCLUDE` with REQUIRED_NEXT binding and Equipment-series requests. The result
+ALGORITHM_RESULT drafts plus a Site-only Finding; Asset attribution remains structured
+`UNABLE_TO_CONCLUDE` with REQUIRED_NEXT binding and Asset-series requests. The result
 contains a canonical SHA-256 Analysis reference and metadata summaries, not raw point arrays,
 and has no Proposed Action or Command path.
 

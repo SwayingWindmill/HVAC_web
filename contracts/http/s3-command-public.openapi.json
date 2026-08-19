@@ -159,9 +159,9 @@
       "CreateCommandRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["equipmentId", "commandPointId", "parameters"],
+        "required": ["assetId", "commandPointId", "parameters"],
         "properties": {
-          "equipmentId": { "type": "string", "format": "uuid" },
+          "assetId": { "type": "string", "format": "uuid" },
           "commandPointId": { "type": "string", "format": "uuid" },
           "parameters": {
             "type": "object",

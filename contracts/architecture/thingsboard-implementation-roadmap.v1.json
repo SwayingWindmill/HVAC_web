@@ -1,0 +1,369 @@
+{
+  "schemaVersion": 1,
+  "status": "IMPLEMENTATION_ROADMAP_FINAL",
+  "decisionIssue": 244,
+  "referenceBaseline": {
+    "thingsBoardVersion": "v4.3.1.1",
+    "thingsBoardCommit": "c2a52e46c44e308ddee430e7266b8e10eddde9c4",
+    "targetAdr": "docs/adr/0013-thingsboard-informed-target-domain-model.md",
+    "targetDomainContract": "contracts/architecture/target-domain-model.v1.json",
+    "roadmapDocument": "docs/architecture/thingsboard-implementation-roadmap.md"
+  },
+  "rules": {
+    "existingCodeHasIncumbencyPreference": false,
+    "authorityBeforeFeatures": true,
+    "ownerPortsBeforeGenericAutomation": true,
+    "sourceFirstReferenceReviewRequired": true,
+    "runtimeDualWriteForbidden": true,
+    "runtimeFallbackReadForbidden": true,
+    "permanentCompatibilityLayerForbidden": true,
+    "oneShotMigrationAllowed": true,
+    "readOnlyShadowEvidenceAllowed": true,
+    "testPolicy": "bounded-behavior-focused",
+    "phase1AvailabilityTier": "SINGLE_NODE_RECOVERABLE"
+  },
+  "waves": [
+    {
+      "id": "W0",
+      "name": "target-lock-and-authority-cleanup",
+      "slices": ["S00", "S01", "S02"]
+    },
+    {
+      "id": "W1",
+      "name": "identity-iam-registry",
+      "slices": ["S03", "S04", "S05"]
+    },
+    {
+      "id": "W2",
+      "name": "telemetry-and-metric-authority",
+      "slices": ["S06", "S07", "S08"]
+    },
+    {
+      "id": "W3",
+      "name": "connectivity-command-edge",
+      "slices": ["S09", "S10", "S11", "S12"]
+    },
+    {
+      "id": "W4",
+      "name": "alarm-delivery-notification",
+      "slices": ["S13", "S14", "S15", "S16"]
+    },
+    {
+      "id": "W5",
+      "name": "truthful-presentation-and-local-products",
+      "slices": ["S17", "S18", "S19"]
+    },
+    {
+      "id": "W6",
+      "name": "rule-and-intelligence",
+      "slices": ["S20", "S21", "S22"]
+    },
+    {
+      "id": "W7",
+      "name": "lifecycle-retirement-cutover",
+      "slices": ["S23", "S24", "S25"]
+    },
+    {
+      "id": "W8",
+      "name": "evidence-triggered-expansion",
+      "slices": ["S26"]
+    }
+  ],
+  "slices": [
+    {
+      "id": "S00",
+      "name": "canonical-vocabulary-contract-cleanup",
+      "owner": "cross-domain-governance",
+      "dependsOn": [],
+      "priority": "P0",
+      "replaces": ["OrganizationID", "ActingOrganizationID", "OrganizationMembership", "Area/Equipment machine contracts", "legacy ThingsBoard simulator stubs"],
+      "gateTypes": ["contract", "security", "truthfulness"],
+      "rollback": "whole-release restore; never restore compatibility routes"
+    },
+    {
+      "id": "S01",
+      "name": "ownership-registry-runtime-boundary-repair",
+      "owner": "platform-operations",
+      "dependsOn": ["S00"],
+      "priority": "P0",
+      "replaces": ["stale route ownership", "failing scope/migration ownership semantics", "cross-owner direct writes"],
+      "gateTypes": ["contract", "authority", "security"],
+      "rollback": "previous owner contract plus whole-release rollback"
+    },
+    {
+      "id": "S02",
+      "name": "schema-product-migrator-readiness-minimum-policy",
+      "owner": "platform-operations",
+      "dependsOn": ["S00", "S01"],
+      "priority": "P0",
+      "replaces": ["runtime SQL sanitization", "migration execution-record crash window", "manual readiness boolean", "process-local high-risk quota only"],
+      "gateTypes": ["contract", "durability", "restore", "security"],
+      "rollback": "schema backup/restore plus exact product-release manifest"
+    },
+    {
+      "id": "S03",
+      "name": "authentication-assurance-boundary",
+      "owner": "identity-provider",
+      "dependsOn": ["S02"],
+      "priority": "P0",
+      "replaces": ["unconstrained local general-purpose IdP expansion", "missing MFA/step-up security-event lifecycle"],
+      "gateTypes": ["security", "durability"],
+      "rollback": "IdP client/config revision and BFF session invalidation"
+    },
+    {
+      "id": "S04",
+      "name": "tenant-iam-admin-foundation",
+      "owner": "iam",
+      "dependsOn": ["S01", "S03"],
+      "priority": "P0",
+      "replaces": ["hard-coded role authorization", "missing tenant context switch", "missing scoped API credentials", "missing audit search"],
+      "gateTypes": ["security", "contract", "durability"],
+      "rollback": "policy/catalog revision and session revocation"
+    },
+    {
+      "id": "S05",
+      "name": "registry-writer-bindings-template-release",
+      "owner": "registry",
+      "dependsOn": ["S01", "S04"],
+      "priority": "P0",
+      "replaces": ["read-only Registry product", "generic binding cardinality", "mutable cross-domain profile concept", "browser full-list Registry authority"],
+      "gateTypes": ["contract", "authority", "security", "durability", "restore"],
+      "rollback": "registry snapshot plus new immutable assignment or restore"
+    },
+    {
+      "id": "S06",
+      "name": "telemetry-current-authority-ingest-reliability",
+      "owner": "telemetry-runtime",
+      "dependsOn": ["S00", "S01", "S02"],
+      "priority": "P0",
+      "replaces": ["Redis current authority", "PostgreSQL-read Redis-write Redis-read correctness path", "unbounded transient ingest retry"],
+      "gateTypes": ["authority", "durability", "contract"],
+      "rollback": "PostgreSQL authoritative snapshot plus Redis projection rebuild"
+    },
+    {
+      "id": "S07",
+      "name": "typed-history-query-aggregation",
+      "owner": "telemetry-query",
+      "dependsOn": ["S06"],
+      "priority": "P0",
+      "replaces": ["numeric-only history", "no-cursor query", "pseudo revision", "pseudo watermark", "hidden valid out-of-order history"],
+      "gateTypes": ["contract", "truthfulness", "durability"],
+      "rollback": "whole contract release; no fallback endpoint"
+    },
+    {
+      "id": "S08",
+      "name": "metric-revision-and-data-lifecycle",
+      "owner": "metric",
+      "dependsOn": ["S06", "S07"],
+      "priority": "P0",
+      "replaces": ["metric revision=1", "accidental ReplacingMergeTree current selection", "schema-only data lifecycle"],
+      "gateTypes": ["authority", "durability", "restore"],
+      "rollback": "immutable metric facts plus current projection rebuild"
+    },
+    {
+      "id": "S09",
+      "name": "transport-session-credential-provisioning",
+      "owner": "connectivity",
+      "dependsOn": ["S02", "S04", "S05", "S06"],
+      "priority": "P0",
+      "replaces": ["connector in-memory correlation authority", "static credential/binding lifecycle", "auto-create device patterns", "unbounded transport retry"],
+      "gateTypes": ["security", "durability", "safety"],
+      "rollback": "session/credential revision and ownership lease state"
+    },
+    {
+      "id": "S10",
+      "name": "edge-control-foundation-source-alignment",
+      "owner": "edge-control",
+      "dependsOn": ["S00", "S01"],
+      "priority": "P0",
+      "replaces": ["unverified pre-source-review Edge semantics", "cycle duration/clock failures", "simulator as production truth"],
+      "gateTypes": ["safety", "durability"],
+      "rollback": "known-good Edge runtime revision and simulator fixture"
+    },
+    {
+      "id": "S11",
+      "name": "governed-command-edge-readback-chain",
+      "owner": "command",
+      "dependsOn": ["S04", "S05", "S06", "S09", "S10"],
+      "priority": "P0",
+      "replaces": ["transport/device ACK success assumptions", "Cloud bypass of Edge arbiter", "non-recoverable command connector state"],
+      "gateTypes": ["security", "durability", "safety", "authority"],
+      "rollback": "immutable command evidence plus last-known-safe Edge policy"
+    },
+    {
+      "id": "S12",
+      "name": "edge-fleet-sync-release-config-ota",
+      "owner": "edge-control",
+      "dependsOn": ["S02", "S05", "S09", "S10", "S11"],
+      "priority": "P1",
+      "replaces": ["simulator-bound production runtime", "non-resumable sync", "dual-writer configuration", "unsigned/checksum-only OTA trust", "undefined offline capacity"],
+      "gateTypes": ["security", "durability", "safety", "restore"],
+      "rollback": "previous signed EdgeRelease plus observed active/staged/previous revisions"
+    },
+    {
+      "id": "S13",
+      "name": "alarm-orthogonal-aggregate",
+      "owner": "alarm",
+      "dependsOn": ["S04", "S05", "S06"],
+      "priority": "P0",
+      "replaces": ["OPEN/ACKNOWLEDGED/SUPPRESSED/CLOSED single status", "manual Close/Reopen recovery", "old incident reopen"],
+      "gateTypes": ["authority", "durability", "security", "restore"],
+      "rollback": "one-shot migration report and pre-migration backup; no dual alarm model"
+    },
+    {
+      "id": "S14",
+      "name": "alarm-stateful-evaluator",
+      "owner": "alarm",
+      "dependsOn": ["S06", "S08", "S13"],
+      "priority": "P0",
+      "replaces": ["simple-threshold-only alarm rules", "non-durable duration/repeat/schedule state"],
+      "gateTypes": ["durability", "truthfulness"],
+      "rollback": "previous released AlarmPolicy assignment"
+    },
+    {
+      "id": "S15",
+      "name": "shared-outbound-delivery-ledger",
+      "owner": "outbound-delivery",
+      "dependsOn": ["S02", "S04"],
+      "priority": "P0",
+      "replaces": ["direct external side effects", "force-ack durable effects", "provider retry owned by business domains", "secret-in-config delivery patterns"],
+      "gateTypes": ["security", "durability"],
+      "rollback": "disable adapter/release while retaining immutable intent/attempt/receipt evidence"
+    },
+    {
+      "id": "S16",
+      "name": "notification-minimum-loop",
+      "owner": "notification",
+      "dependsOn": ["S04", "S13", "S14", "S15"],
+      "priority": "P1",
+      "replaces": ["notification DDL-only completion claim", "notification state coupled to alarm ACK/recovery"],
+      "gateTypes": ["durability", "security", "truthfulness"],
+      "rollback": "previous immutable notification policy/template assignment"
+    },
+    {
+      "id": "S17",
+      "name": "site-dashboard-summary-bigscreen-truthfulness",
+      "owner": "presentation",
+      "dependsOn": ["S05", "S06", "S07", "S08", "S13"],
+      "priority": "P1",
+      "replaces": ["browser site truth from sampled devices", "rolling-24h today", "demo BigScreen identity", "fabricated healthy defaults"],
+      "gateTypes": ["truthfulness", "contract", "security"],
+      "rollback": "presentation revision only; owner facts unchanged"
+    },
+    {
+      "id": "S18",
+      "name": "registry-admin-ui-import-export",
+      "owner": "presentation",
+      "dependsOn": ["S04", "S05"],
+      "priority": "P1",
+      "replaces": ["browser topology authority", "missing Registry production management UI"],
+      "gateTypes": ["security", "contract", "truthfulness"],
+      "rollback": "owner revisions/import plan; never obsolete API fallback"
+    },
+    {
+      "id": "S19",
+      "name": "workorder-settlement-cost-projections",
+      "owner": "local-hvac-domains",
+      "dependsOn": ["S05", "S08", "S13"],
+      "priority": "P1",
+      "replaces": ["incomplete service-level regression", "missing authoritative cost/settlement read models"],
+      "gateTypes": ["durability", "truthfulness"],
+      "rollback": "revisioned source and rebuildable projections"
+    },
+    {
+      "id": "S20",
+      "name": "rule-runtime-core",
+      "owner": "rule-runtime",
+      "dependsOn": ["S05", "S06", "S08", "S11", "S13", "S15"],
+      "priority": "P1",
+      "replaces": ["missing generic Rule Runtime", "direct domain/network side-effect nodes", "unbounded retry", "debug-as-real-replay"],
+      "gateTypes": ["contract", "durability", "security", "safety"],
+      "rollback": "previous immutable RuleRevision assignment; active executions stay pinned"
+    },
+    {
+      "id": "S21",
+      "name": "rule-management-ui",
+      "owner": "presentation",
+      "dependsOn": ["S18", "S20"],
+      "priority": "P2",
+      "replaces": ["missing Rule UI", "arbitrary script/class/credential configuration patterns"],
+      "gateTypes": ["security", "truthfulness", "contract"],
+      "rollback": "previous released rule assignment"
+    },
+    {
+      "id": "S22",
+      "name": "model-registry-real-intelligence-products",
+      "owner": "intelligence",
+      "dependsOn": ["S02", "S04", "S07", "S08", "S15"],
+      "conditionalDependsOn": {"physicalOptimizationAction": ["S11"]},
+      "priority": "P2",
+      "replaces": ["forecast fallback presented as product", "ESS NO_DISPATCH presented as HVAC optimization", "missing model registry/deployment lifecycle", "direct AI physical-effect concept"],
+      "gateTypes": ["truthfulness", "security", "durability"],
+      "rollback": "previous immutable model deployment revision"
+    },
+    {
+      "id": "S23",
+      "name": "housekeeping-retention-tenant-retirement",
+      "owner": "platform-operations",
+      "dependsOn": ["S02", "S04", "S05", "S06", "S08", "S13", "S15"],
+      "priority": "P2",
+      "replaces": ["optional/best-effort lifecycle cleanup", "unbounded maintenance retry", "tenant retirement without owner proof"],
+      "gateTypes": ["durability", "restore", "security"],
+      "rollback": "work attempts/tombstones/archive proof/owner retirement ledger"
+    },
+    {
+      "id": "S24",
+      "name": "remove-legacy-shadow-simulator-production-wiring",
+      "owner": "platform-operations",
+      "dependsOn": ["S05", "S06", "S07", "S10", "S11", "S12", "S17"],
+      "priority": "P2",
+      "replaces": ["legacy-migration-service production wiring", "telemetry-shadow-comparator production wiring", "test IdP/PKI/simulator production wiring"],
+      "gateTypes": ["authority", "truthfulness", "contract"],
+      "rollback": "database backup and exact release manifest; no service fallback"
+    },
+    {
+      "id": "S25",
+      "name": "release-reconciliation-final-real-cutover",
+      "owner": "platform-operations",
+      "dependsOn": ["S12", "S16", "S17", "S18", "S19", "S20", "S22", "S23", "S24"],
+      "priority": "P2",
+      "replaces": ["target-forbidden path reachability", "inconsistent release revisions", "Real-mode placeholder/fallback truth"],
+      "gateTypes": ["contract", "authority", "security", "durability", "safety", "truthfulness", "restore"],
+      "rollback": "exact ProductReleaseManifest, DB restore proof, previous domain assignments and signed EdgeRelease"
+    },
+    {
+      "id": "S26",
+      "name": "evidence-triggered-capacity-protocol-provider-expansion",
+      "owner": "future-decision",
+      "dependsOn": ["S25"],
+      "priority": "DEFER",
+      "requiresTriggerEvidence": true,
+      "triggerEvidence": ["measured capacity/SLO failure", "stricter availability requirement", "real device protocol/BOM", "customer integration contract", "explicit mobile/plugin product requirement"],
+      "includes": ["multi-instance/HA", "Kafka/Pulsar/actor partition runtime", "additional IoT protocols", "additional notification/cloud providers", "native mobile", "generic widget/plugin/connector market"],
+      "gateTypes": ["new-adr-required"],
+      "rollback": "defined by future evidence-backed ADR"
+    }
+  ],
+  "cutoverSequence": [
+    "freeze-affected-write-admission",
+    "drain-and-stop-old-writer",
+    "backup-and-capture-source-revision",
+    "run-reviewed-one-shot-migration",
+    "validate-counts-digests-revisions-and-invariants",
+    "start-new-owner-on-exact-product-schema-revision",
+    "rebuild-disposable-projections",
+    "run-focused-smoke-and-negative-tests",
+    "promote-release",
+    "retire-old-writer-and-route"
+  ],
+  "firstImplementationBatch": ["S00", "S01", "S02"],
+  "nextParallelFrontierAfterW0": ["S03", "S06", "S10", "S15"],
+  "completion": {
+    "allReplaceMapped": true,
+    "allMissingMapped": true,
+    "allRemoveMapped": true,
+    "materialAdaptMapped": true,
+    "knownOwnershipCycle": false,
+    "runtimeImplementationPerformedByThisDecision": false
+  }
+}

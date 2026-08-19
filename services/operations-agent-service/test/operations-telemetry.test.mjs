@@ -232,7 +232,7 @@ test('Coordinator telemetry correlates Runtime, Tool, Owner, budget, commit and 
   const scope = Object.freeze({
     tenantId: 'organization-observability',
     siteId: 'site-observability',
-    equipmentId: null,
+    assetId: null,
     deviceId: null,
   });
   const environment = createFakeOperationsAgentEnvironment({

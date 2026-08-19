@@ -6,7 +6,7 @@ Date: 2026-07-21
 
 Issue: #32
 
-Superseded in part by ADR 0005: the public contract, domain model and Go ownership remain accepted; the Legacy production migration and fallback assumptions are historical only.
+Superseded in part by ADR 0005 and ADR 0013. UUIDv7, cursor/RLS and single-owner Registry principles remain accepted. Organization/Equipment public terminology and Legacy fallback assumptions are historical; the canonical model is Tenant/Site/Space/Asset/Device/Point.
 
 ## Context
 

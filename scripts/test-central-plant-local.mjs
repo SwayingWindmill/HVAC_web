@@ -6,7 +6,6 @@ import { centralPlantDevices } from './central-plant-local-contract.mjs';
 import { buildS1SeedSQL, buildS2SeedSQL } from './central-plant-local-seed.mjs';
 import { buildHistoricalEnergyBootstrap } from './central-plant-local-topology.mjs';
 import {
-  buildCentralPlantControlPoints,
   buildCentralPlantSimulatorConfig,
   buildCentralPlantSimulatorPoints,
 } from './central-plant-spatial-model.mjs';
@@ -32,8 +31,8 @@ test('central plant v2 point contract generates the MQTT simulator graph', () =>
   assert.equal(centralPlantDevices.length, 7);
   assert.equal(simulatorConfig.schemaVersion, 2);
   assert.equal(simulatorConfig.gatewayId, 'EG8200-COMMERCIAL-001');
-  assert.equal(simulatorConfig.points.length, 48);
   assert.equal(buildCentralPlantSimulatorPoints(pointContract).length, 48);
+  assert.equal(simulatorConfig.points.length, 65);
   assert.ok(simulatorConfig.points.every((point) => /^[a-z][a-z0-9_]*$/.test(point.pointCode)));
 });
 
@@ -52,7 +51,7 @@ test('central plant seeds cover every canonical telemetry Point', () => {
     oidcIssuer: 'https://127.0.0.1:18443/oidc',
     principalSubject: 'logto-central-plant-user',
     pointKeysByDevice,
-    spatialPoints: [...simulatorConfig.points, ...buildCentralPlantControlPoints()],
+    spatialPoints: simulatorConfig.points,
   });
   const s2 = buildS2SeedSQL({ pointsByDevice, spatialPoints: simulatorConfig.points });
   for (const device of centralPlantDevices) {

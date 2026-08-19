@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "tenantId": "018f3d00-0000-7000-8000-000000000001",
+  "siteId": "018f3e00-1000-7000-8000-000000000001",
+  "gatewayId": "EG8200-COMMERCIAL-001",
+  "devices": [
+    {
+      "deviceId": "018f3e00-4000-7000-8000-000000000001",
+      "externalDeviceId": "CHILLER-01",
+      "safetyStateKey": "run_state"
+    },
+    {
+      "deviceId": "018f3e00-4000-7000-8000-000000000002",
+      "externalDeviceId": "CHWP-01",
+      "safetyStateKey": "run_state"
+    },
+    {
+      "deviceId": "018f3e00-4000-7000-8000-000000000003",
+      "externalDeviceId": "CWP-01",
+      "safetyStateKey": "run_state"
+    },
+    {
+      "deviceId": "018f3e00-4000-7000-8000-000000000004",
+      "externalDeviceId": "CT-01",
+      "safetyStateKey": "run_state"
+    }
+  ]
+}

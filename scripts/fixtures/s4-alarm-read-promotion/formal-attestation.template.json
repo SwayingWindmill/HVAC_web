@@ -24,25 +24,25 @@
     "holdMinutes": 1440
   },
   "cohort": {
-    "organizations": [
-      "org-alarm-canary-a",
-      "org-alarm-canary-b"
+    "tenants": [
+      "tenant-alarm-canary-a",
+      "tenant-alarm-canary-b"
     ],
     "sites": [
       {
-        "organizationId": "org-alarm-canary-a",
+        "tenantId": "tenant-alarm-canary-a",
         "siteId": "site-alarm-canary-a1",
         "listRequests": 500,
         "detailRequests": 100
       },
       {
-        "organizationId": "org-alarm-canary-a",
+        "tenantId": "tenant-alarm-canary-a",
         "siteId": "site-alarm-canary-a2",
         "listRequests": 350,
         "detailRequests": 70
       },
       {
-        "organizationId": "org-alarm-canary-b",
+        "tenantId": "tenant-alarm-canary-b",
         "siteId": "site-alarm-canary-b1",
         "listRequests": 350,
         "detailRequests": 70
@@ -59,7 +59,7 @@
     "serverErrorRateFraction": 0.0004
   },
   "zeroCounters": {
-    "crossOrganizationResponses": 0,
+    "crossTenantResponses": 0,
     "crossSiteResponses": 0,
     "crossAlarmResponses": 0,
     "authorizationMismatches": 0,

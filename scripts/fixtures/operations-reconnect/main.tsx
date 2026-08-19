@@ -5,10 +5,10 @@ import type { ProtectedScopeResource } from '@/real/protected-scope';
 import { OperationsInvestigation } from '@/real/OperationsInvestigation';
 import '@/real/real-shell.css';
 
-const organizationId = '01910000-0000-7000-8000-000000000001';
+const tenantId = '01910000-0000-7000-8000-000000000001';
 const site: Site = {
   id: '01910000-0001-7000-8000-000000000001',
-  owningOrganizationId: organizationId,
+  tenantId,
   code: 'TOKYO-OPERATIONS',
   displayName: 'Tokyo Operations Site',
   timezone: 'Asia/Tokyo',
@@ -37,13 +37,13 @@ const principal = {
       service: 'platform-gateway',
       spiffeId: 'spiffe://hvac.local/platform-gateway',
     },
-    actingOrganizationId: organizationId,
+    tenantId,
     audience: 'iam-service',
     policyRevision: 'operations-policy-1',
     delegationExpiresAt: '2026-08-02T00:00:00.000Z',
   },
   authorization: {
-    capabilitySetVersion: 1,
+    capabilitySetVersion: 7,
     policyRevision: 'operations-policy-1',
     capabilities: ['site.read'],
   },

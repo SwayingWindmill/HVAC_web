@@ -12,7 +12,7 @@ const timestampSchema = z.number().int().nonnegative();
 export const operationsScopeSchema = z.object({
   tenantId: identitySchema,
   siteId: identitySchema,
-  equipmentId: identitySchema.nullable(),
+  assetId: identitySchema.nullable(),
   deviceId: identitySchema.nullable(),
 }).strict();
 
@@ -91,7 +91,7 @@ const requiredNextCommon = {
   status: z.literal('REQUIRED_NEXT'),
   tenantId: identitySchema,
   siteId: identitySchema,
-  equipmentIds: z.array(identitySchema).max(32),
+  assetIds: z.array(identitySchema).max(32),
   targetPeriod: requiredNextPeriodSchema,
   baselinePeriod: requiredNextPeriodSchema,
 } as const;
@@ -99,9 +99,9 @@ const requiredNextCommon = {
 export const operationsRequiredNextSchema = z.discriminatedUnion('kind', [
   z.object({
     ...requiredNextCommon,
-    kind: z.literal('EQUIPMENT_ENERGY_BINDINGS'),
+    kind: z.literal('ASSET_ENERGY_BINDINGS'),
     owner: z.literal('registry'),
-    capability: z.literal('registry.getEquipmentEnergyBindings'),
+    capability: z.literal('registry.getAssetEnergyBindings'),
     requiredMetadata: z.tuple([
       z.literal('BUSINESS_REVISION'),
       z.literal('QUALITY'),
@@ -111,9 +111,9 @@ export const operationsRequiredNextSchema = z.discriminatedUnion('kind', [
   }).strict(),
   z.object({
     ...requiredNextCommon,
-    kind: z.literal('EQUIPMENT_ENERGY_PERIOD_COMPARISON'),
+    kind: z.literal('ASSET_ENERGY_PERIOD_COMPARISON'),
     owner: z.literal('telemetry-query-service'),
-    capability: z.literal('analytics.energy.getEquipmentSeries'),
+    capability: z.literal('analytics.energy.getAssetSeries'),
     requiredMetadata: z.tuple([
       z.literal('DATASET_REVISION'),
       z.literal('WATERMARK'),
@@ -134,7 +134,7 @@ const findingConclusionSchema = z.discriminatedUnion('status', [
   }).strict(),
   z.object({
     status: z.literal('UNABLE_TO_CONCLUDE'),
-    scope: z.enum(['SITE', 'EQUIPMENT']),
+    scope: z.enum(['SITE', 'ASSET']),
     reasonCode: z.string().min(1).max(128),
     detail: z.string().min(1).max(4_000),
     requiredNext: z.array(operationsRequiredNextSchema).min(1).max(8).optional(),

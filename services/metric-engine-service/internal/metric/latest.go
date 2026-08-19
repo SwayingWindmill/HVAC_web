@@ -27,6 +27,10 @@ func (store *RedisLatestStore) Close() error {
 	return store.client.Close()
 }
 
+func (store *RedisLatestStore) Ping(ctx context.Context) error {
+	return store.client.Ping(ctx).Err()
+}
+
 func NewRedisLatestStore(address, password string, database int, ttl time.Duration) (*RedisLatestStore, error) {
 	if strings.TrimSpace(address) == "" {
 		return nil, errors.New("metric Redis address is required")

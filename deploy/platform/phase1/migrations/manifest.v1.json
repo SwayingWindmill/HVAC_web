@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "Phase 1 production migration allowlist",
-  "sourceOfTruth": "架构规划/智慧能源系统部署与运维架构设计.md",
+  "sourceOfTruth": "SE-ARCH-DEPLOY-001 V1.0 CURRENT",
   "policy": {
     "fixturesAllowed": false,
     "testdataAllowed": false,
@@ -12,12 +12,24 @@
   },
   "databases": [
     {
+      "name": "hvac_identity",
+      "migrations": [
+        "infra/identity/postgres/init/001-identity-baseline.sql",
+        "infra/identity/postgres/init/002-identity-runtime-grants.sql",
+        "infra/identity/postgres/init/003-identity-directory-least-privilege.sql",
+        "infra/identity/postgres/init/004-identity-auth-assurance.sql"
+      ]
+    },
+    {
       "name": "hvac_s0",
       "migrations": [
         "infra/s0-durable/postgres/init/001-s0-durable.sql",
+        "infra/s0-durable/postgres/init/002-s0-session-idle.sql",
         "infra/s0-durable/postgres/init/002-s1-registry-routing-audit.sql",
         "infra/s0-durable/postgres/init/003-operations-audit-ledger.sql",
-        "infra/s0-durable/postgres/init/004-audit-postgres-outbox.sql"
+        "infra/s0-durable/postgres/init/004-audit-postgres-outbox.sql",
+        "infra/s0-durable/postgres/init/005-s0-session-assurance.sql",
+        "infra/s0-durable/postgres/init/006-s04-audit-search.sql"
       ]
     },
     {
@@ -39,7 +51,9 @@
         "infra/s1-registry/postgres/init/009c-metric-model-v2.sql",
         "infra/s1-registry/postgres/init/009d-data-governance-v2.sql",
         "infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql",
-        "infra/s1-registry/postgres/init/009i-backend-integration-v2.sql"
+        "infra/s1-registry/postgres/init/009i-backend-integration-v2.sql",
+        "infra/s1-registry/postgres/init/009l-scheduler-job-v1.sql",
+        "infra/s1-registry/postgres/init/009-s04-tenant-iam-admin.sql"
       ]
     },
     {
@@ -51,6 +65,8 @@
         "infra/s2-telemetry/postgres/init/004-s2-telemetry-history-outbox.sql",
         "infra/s2-telemetry/postgres/init/004a-s2-tenant-scope.sql",
         "infra/s2-telemetry/postgres/init/004b-s2-point-identity.sql",
+        "infra/s2-telemetry/postgres/init/004c-s2-counter-semantics.sql",
+        "infra/s2-telemetry/postgres/init/004d-s2-redis-latest.sql",
         "infra/s2-telemetry/postgres/init/005-s2-realtime-backend.sql"
       ]
     },
@@ -97,11 +113,16 @@
     "gateway_relay_runtime",
     "audit_consumer_runtime",
     "audit_query_runtime",
+    "identity_runtime",
+    "identity_admin",
+    "identity_directory_reader",
     "s1_iam_migrator",
     "s1_iam_runtime",
+    "s1_iam_admin",
     "s1_iam_reconciler",
     "s1_core_service",
     "metric_engine_runtime",
+    "scheduler_runtime",
     "s2_iam_grant_runtime",
     "s2_telemetry_migrator_service",
     "s2_telemetry_service",

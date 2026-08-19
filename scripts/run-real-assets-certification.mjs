@@ -23,11 +23,11 @@ const outputRoot = resolve(root, 'out/real-assets-certification');
 const outputPath = join(outputRoot, 'browser-evidence.json');
 const profileDir = join(tmpdir(), `real-assets-certification-${process.pid}`);
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-const organizationId = '01940000-0000-7000-8000-000000000001';
+const tenantId = '01940000-0000-7000-8000-000000000001';
 const siteAId = '01940000-0001-7000-8000-000000000001';
 const siteBId = '01940000-0002-7000-8000-000000000002';
-const siteAInventory = buildCertificationInventory({ organizationId, siteId: siteAId, namespace: '01940000' });
-const siteBInventory = buildCertificationInventory({ organizationId, siteId: siteBId, namespace: '01950000' });
+const siteAInventory = buildCertificationInventory({ tenantId, siteId: siteAId, namespace: '01940000' });
+const siteBInventory = buildCertificationInventory({ tenantId, siteId: siteBId, namespace: '01950000' });
 const inventories = new Map([[siteAId, siteAInventory], [siteBId, siteBInventory]]);
 const scenarioByDevice = new Map(
   [...siteAInventory.devices, ...siteBInventory.devices].map((device) => [device.id, device.certificationScenario]),
@@ -121,7 +121,7 @@ function snapshotFor(target, device, index, scenario) {
   return {
     schemaVersion: 1,
     deviceId: device.id,
-    owningOrganizationId: organizationId,
+    tenantId: tenantId,
     siteId: device.siteId,
     businessRevision: 10000 + index,
     evaluatedAt: '2026-08-01T08:00:00.000Z',
@@ -169,7 +169,7 @@ function historyResponse(query) {
   const returnedPoints = series.reduce((total, item) => total + item.points.length, 0);
   return {
     schemaVersion: 1,
-    owningOrganizationId: organizationId,
+    tenantId: tenantId,
     siteId: query.__siteId,
     deviceId: query.deviceId,
     series,
@@ -204,7 +204,7 @@ function createGatewayFixture() {
     const requestEntry = { method: request.method ?? 'GET', path: url.pathname, query: url.search, status: 0 };
     state.requests.push(requestEntry);
     try {
-      const inventoryMatch = url.pathname.match(/^\/api\/v1\/sites\/([^/]+)\/(equipment|devices|device-bindings)$/);
+      const inventoryMatch = url.pathname.match(/^\/api\/v1\/sites\/([^/]+)\/(assets|devices|device-bindings)$/);
       if (request.method === 'GET' && inventoryMatch) {
         const [, siteId, collection] = inventoryMatch;
         state.registryRequests.push({ siteId, collection, limit: Number(url.searchParams.get('limit')), cursor: url.searchParams.get('cursor') });
@@ -219,8 +219,8 @@ function createGatewayFixture() {
           writeJson(response, 404, problem(404, 'RESOURCE_NOT_FOUND', 'The requested Site is not visible.'));
           return;
         }
-        const items = collection === 'equipment'
-          ? inventory.equipment
+        const items = collection === 'assets'
+          ? inventory.assets
           : collection === 'devices'
             ? inventory.devices.map((device) => publicDevice(device, siteId))
             : inventory.bindings;
@@ -524,10 +524,10 @@ try {
   await setInput(cdpClient, '[data-testid="real-assets-search"]', '');
   await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-filtered-device-count') === '200'`, 'search reset');
 
-  const firstEquipmentId = siteAInventory.equipment[0].id;
-  await click(cdpClient, `[data-testid="real-assets-hierarchy-equipment"][data-equipment-id="${firstEquipmentId}"]`);
-  const equipmentFiltered = await waitForCondition(cdpClient, `(() => { const value = Number(document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-filtered-device-count')); return value > 0 && value < 200 ? value : 0; })()`, 'Equipment hierarchy filter');
-  assert(equipmentFiltered === 10, `Equipment hierarchy count drifted: ${equipmentFiltered}`);
+  const firstAssetId = siteAInventory.assets[0].id;
+  await click(cdpClient, `[data-testid="real-assets-hierarchy-asset"][data-asset-id="${firstAssetId}"]`);
+  const assetFiltered = await waitForCondition(cdpClient, `(() => { const value = Number(document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-filtered-device-count')); return value > 0 && value < 200 ? value : 0; })()`, 'Asset hierarchy filter');
+  assert(assetFiltered === 10, `Asset hierarchy count drifted: ${assetFiltered}`);
   await click(cdpClient, '[data-testid="real-assets-hierarchy-unbound"]');
   await waitForCondition(cdpClient, `document.querySelector('[data-testid="real-site-route-assets"]')?.getAttribute('data-filtered-device-count') === '5'`, 'unbound hierarchy filter');
   await click(cdpClient, '[data-testid="real-assets-hierarchy-ambiguous"]');
@@ -700,7 +700,7 @@ try {
     fixture: {
       revision: REAL_ASSETS_CERTIFICATION_FIXTURE_REVISION,
       deviceCount: REAL_ASSETS_CERTIFICATION_DEVICE_COUNT,
-      equipmentCount: siteAInventory.equipment.length,
+      assetCount: siteAInventory.assets.length,
       bindingCount: siteAInventory.bindings.length,
       scenarioCounts: siteAInventory.scenarioCounts,
       unboundCount: siteAInventory.unboundDeviceIds.length,
@@ -740,7 +740,7 @@ try {
     ui: {
       defaultAttentionCount: initialState.filtered,
       allCount: 200,
-      equipmentCount: equipmentFiltered,
+      assetCount: assetFiltered,
       unboundCount: 5,
       ambiguousCount: 5,
       historyRanges: ['1h', '6h', '24h'],

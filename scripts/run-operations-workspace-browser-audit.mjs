@@ -14,7 +14,7 @@ const fixtureRoot = resolve(root, 'scripts/fixtures/operations-reconnect');
 const outputRoot = resolve(root, 'out/operations-reconnect-certification');
 const profileDir = join(tmpdir(), `operations-reconnect-browser-${process.pid}`);
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-const organizationId = '01910000-0000-7000-8000-000000000001';
+const tenantId = '01910000-0000-7000-8000-000000000001';
 const siteId = '01910000-0001-7000-8000-000000000001';
 const investigationId = 'investigation-browser-001';
 const unableInvestigationId = 'investigation-browser-unable';
@@ -88,7 +88,7 @@ const finalActivity = {
 };
 
 function scope() {
-  return { organizationId, siteId, equipmentId: null, deviceId: null };
+  return { tenantId, siteId, assetId: null, deviceId: null };
 }
 
 function evidenceSource({ owner, requestId, registryRevision = null, datasetRevision = null, partial = false, quality = 'GOOD' }) {
@@ -159,7 +159,7 @@ function supportedRecords(id) {
       conclusion: {
         status: 'SUPPORTED',
         scope: 'SITE',
-        organizationId,
+        tenantId,
         siteId,
       },
     }],
@@ -190,7 +190,7 @@ function unableRecords(id) {
       recordedAt: 10,
       evidenceKind: 'SITE_ENERGY_SERIES_READINESS_ASSESSED',
       classification: 'FACT',
-      statement: 'Site energy is available, but Equipment attribution evidence is absent.',
+      statement: 'Site energy is available, but Asset attribution evidence is absent.',
       analysisReferenceDigest: null,
       sources: [
         evidenceSource({ owner: 'telemetry-query-service', requestId: 'request-unable-energy', datasetRevision: 'dataset-r43', partial: true, quality: 'UNCERTAIN' }),
@@ -220,33 +220,33 @@ function unableRecords(id) {
       recordedAt: 12,
       findingKind: 'UNABLE_TO_CONCLUDE',
       classification: 'INFERENCE',
-      statement: 'The Site Investigation cannot produce an Equipment root-cause conclusion.',
+      statement: 'The Site Investigation cannot produce an Asset root-cause conclusion.',
       evidenceIds: [evidenceId],
       analysisReferenceIds: [analysisId],
       conclusion: {
         status: 'UNABLE_TO_CONCLUDE',
-        scope: 'EQUIPMENT',
-        reasonCode: 'EQUIPMENT_ATTRIBUTION_EVIDENCE_MISSING',
-        detail: 'Required Equipment binding and period comparison evidence is not available.',
+        scope: 'ASSET',
+        reasonCode: 'ASSET_ATTRIBUTION_EVIDENCE_MISSING',
+        detail: 'Required Asset binding and period comparison evidence is not available.',
         requiredNext: [{
           status: 'REQUIRED_NEXT',
-          kind: 'EQUIPMENT_ENERGY_BINDINGS',
+          kind: 'ASSET_ENERGY_BINDINGS',
           owner: 'registry',
-          capability: 'registry.getEquipmentEnergyBindings',
-          organizationId,
+          capability: 'registry.getAssetEnergyBindings',
+          tenantId,
           siteId,
-          equipmentIds: ['equipment-ahu-01'],
+          assetIds: ['asset-ahu-01'],
           targetPeriod,
           baselinePeriod,
           requiredMetadata: ['BUSINESS_REVISION', 'QUALITY', 'CAPTURED_AT', 'PAYLOAD_DIGEST'],
         }, {
           status: 'REQUIRED_NEXT',
-          kind: 'EQUIPMENT_ENERGY_PERIOD_COMPARISON',
+          kind: 'ASSET_ENERGY_PERIOD_COMPARISON',
           owner: 'telemetry-query-service',
-          capability: 'analytics.energy.getEquipmentSeries',
-          organizationId,
+          capability: 'analytics.energy.getAssetSeries',
+          tenantId,
           siteId,
-          equipmentIds: ['equipment-ahu-01'],
+          assetIds: ['asset-ahu-01'],
           targetPeriod,
           baselinePeriod,
           requiredMetadata: ['DATASET_REVISION', 'WATERMARK', 'PARTIAL', 'QUALITY', 'CAPTURED_AT', 'PAYLOAD_DIGEST'],
@@ -506,7 +506,7 @@ function createGatewayFixture() {
             service: 'platform-gateway',
             spiffeId: 'spiffe://hvac.local/platform-gateway',
           },
-          actingOrganizationId: organizationId,
+          tenantId,
           audience: 'iam-service',
           policyRevision: 'operations-policy-1',
           delegationExpiresAt: '2026-08-02T00:00:00.000Z',
@@ -947,7 +947,7 @@ try {
     'Partial',
     'DETERMINISTIC_ALGORITHM',
     'Site-only conclusion',
-    '不构成 Equipment root cause',
+    '不构成 Asset root cause',
   ]) {
     assert(supportedState.text.includes(requiredText), `supported Workspace omitted ${requiredText}`);
   }
@@ -1068,9 +1068,9 @@ try {
   assert(unableVisible, `unable-to-conclude Workspace did not stabilize: ${JSON.stringify(unableState)}`);
   for (const requiredText of [
     'UNABLE TO CONCLUDE',
-    'EQUIPMENT_ATTRIBUTION_EVIDENCE_MISSING',
-    'registry.getEquipmentEnergyBindings',
-    'analytics.energy.getEquipmentSeries',
+    'ASSET_ATTRIBUTION_EVIDENCE_MISSING',
+    'registry.getAssetEnergyBindings',
+    'analytics.energy.getAssetSeries',
     'BUSINESS_REVISION',
     'DATASET_REVISION',
     'WATERMARK',
@@ -1240,7 +1240,7 @@ try {
       businessWrites: 2,
       exactRetryBusinessWrites: 0,
       rawPointsRendered: false,
-      equipmentRootCauseClaimed: false,
+      assetRootCauseClaimed: false,
     },
   };
   await writeFile(join(outputRoot, 'browser-evidence.json'), JSON.stringify(evidence, null, 2));

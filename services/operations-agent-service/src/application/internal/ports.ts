@@ -95,7 +95,7 @@ export type RegistryReadRequest =
   }
   | {
     readonly requestId: string;
-    readonly tool: 'registry.listSiteEquipment';
+    readonly tool: 'registry.listSiteAssets';
     readonly input: {
       readonly siteId: string;
     };
@@ -105,7 +105,7 @@ export interface CurrentTelemetryReadRequest {
   readonly requestId: string;
   readonly tool: 'telemetry.getCurrentSnapshot';
   readonly input: {
-    readonly equipmentId: string;
+    readonly assetId: string;
     readonly pointKeys?: readonly string[];
   };
 }
@@ -129,7 +129,7 @@ export interface CommandCapabilityReadRequest {
   readonly requestId: string;
   readonly tool: 'commands.getCapabilities';
   readonly input: {
-    readonly equipmentId: string;
+    readonly assetId: string;
   };
 }
 

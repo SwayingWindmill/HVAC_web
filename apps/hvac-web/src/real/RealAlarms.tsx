@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useLocation, useNavigate } from 'react-router';
 import { Alert, Button, Card, Col, Descriptions, Row, Space, Tag, Typography } from 'antd';
 import { AlertOutlined } from '@ant-design/icons';
 import PageScaffold from '@/components/PageScaffold';
@@ -33,8 +34,8 @@ const LocalAlarmLifecycle = ALARM_LOCAL_ROUTES_ENABLED
   ? lazy(() => import('./LocalAlarmLifecycle'))
   : null;
 
-function alarmFromLocation(): string {
-  return new URLSearchParams(globalThis.location.search).get(ALARM_QUERY_PARAMETER) ?? '';
+function alarmFromLocation(search: string): string {
+  return new URLSearchParams(search).get(ALARM_QUERY_PARAMETER) ?? '';
 }
 
 function buildOptions(
@@ -76,14 +77,14 @@ function DisabledAlarmSurface({
           showIcon
           message={capabilityDenied ? '当前会话没有 Alarm 列表能力' : 'Alarm 读取路由未启用'}
           description={capabilityDenied
-            ? 'IAM 未向当前 Principal 与 acting Organization 发布 alarm.list。浏览器不会根据角色标签或 Site 访问权自行推导 Alarm 权限。'
+            ? 'IAM 未向当前 Principal 与 Tenant 发布 alarm.list。浏览器不会根据角色标签或 Site 访问权自行推导 Alarm 权限。'
             : 'S4 Alarm 读取尚未对当前构建开放。此页面不会从 Telemetry、Presence 或 Device 状态补造 Alarm。'}
         />
         <Card title="Alarm 权威边界" variant="borderless">
           <Descriptions column={{ xs: 1, sm: 2, xl: 3 }} bordered size="small">
             <Descriptions.Item label="Site">{site.displayName}</Descriptions.Item>
             <Descriptions.Item label="Registry Site ID"><Typography.Text copyable>{site.id}</Typography.Text></Descriptions.Item>
-            <Descriptions.Item label="Acting Organization"><Typography.Text copyable>{principal.context.tenantId}</Typography.Text></Descriptions.Item>
+            <Descriptions.Item label="Tenant"><Typography.Text copyable>{principal.context.tenantId}</Typography.Text></Descriptions.Item>
             <Descriptions.Item label="权威读取">Platform Gateway → IAM → Alarm Service</Descriptions.Item>
             <Descriptions.Item label="生命周期写入">生产禁用</Descriptions.Item>
           </Descriptions>
@@ -110,12 +111,14 @@ function AlarmWorkbench({
   registerUnsavedDraft,
   registerProtectedResource,
 }: RealAlarmsProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const tenantId = principal.context.tenantId;
   const queryPrefix = useMemo(() => ['real-alarms', tenantId, site.id] as const, [tenantId, site.id]);
   const [status, setStatus] = useState<AlarmStatus | ''>('');
   const [severity, setSeverity] = useState<AlarmSeverity | ''>('');
-  const [selectedAlarmId, setSelectedAlarmId] = useState(alarmFromLocation);
+  const [selectedAlarmId, setSelectedAlarmId] = useState(() => alarmFromLocation(location.search));
   const canReadDetail = principal.authorization.capabilities.includes('alarm.read');
 
   const purgeAlarmState = useCallback(async () => {
@@ -135,10 +138,8 @@ function AlarmWorkbench({
   }, [principal.authorization.policyRevision, principal.context.policyRevision, principal.session.id, purgeAlarmState]);
 
   useEffect(() => {
-    const handlePopState = () => setSelectedAlarmId(alarmFromLocation());
-    globalThis.addEventListener('popstate', handlePopState);
-    return () => globalThis.removeEventListener('popstate', handlePopState);
-  }, []);
+    setSelectedAlarmId(alarmFromLocation(location.search));
+  }, [location.search]);
 
   const listQuery = useInfiniteQuery({
     queryKey: [...queryPrefix, 'list', status || 'ALL', severity || 'ALL'],
@@ -171,11 +172,11 @@ function AlarmWorkbench({
 
   const publishAlarmId = useCallback((alarmId: string) => {
     if (!canReadDetail) return;
-    const parameters = new URLSearchParams(globalThis.location.search);
+    const parameters = new URLSearchParams(location.search);
     parameters.set(ALARM_QUERY_PARAMETER, alarmId);
-    globalThis.history.pushState(null, '', `${globalThis.location.pathname}?${parameters.toString()}${globalThis.location.hash}`);
+    navigate(`${location.pathname}?${parameters.toString()}${location.hash}`);
     setSelectedAlarmId(alarmId);
-  }, [canReadDetail]);
+  }, [canReadDetail, location.hash, location.pathname, location.search, navigate]);
 
   const businessState = listQuery.isPending
     ? 'LOADING'

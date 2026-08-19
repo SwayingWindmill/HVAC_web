@@ -7,14 +7,14 @@ import { createFakeOperationsAgentEnvironment } from './support/fake-operations-
 
 const tenantId = '0198f5c0-7c00-7000-8000-000000000001';
 const siteId = '0198f5c0-7c00-7000-8000-000000000002';
-const equipmentIds = [
+const assetIds = [
   '0198f5c0-7c00-7000-8000-000000000010',
   '0198f5c0-7c00-7000-8000-000000000011',
 ];
 const scope = Object.freeze({
   tenantId,
   siteId,
-  equipmentId: null,
+  assetId: null,
   deviceId: null,
 });
 const investigationId = 'investigation-001';
@@ -57,18 +57,18 @@ const createOwnerResultFactory = ({ partial = false } = {}) => async (request) =
       },
     };
   }
-  if (request.tool === 'registry.listSiteEquipment') {
+  if (request.tool === 'registry.listSiteAssets') {
     return {
       requestId: request.requestId,
       owner: 'registry',
       scope,
-      revision: 'registry-site-equipment:r29',
+      revision: 'registry-site-asset:r29',
       quality: 'GOOD',
-      provenance: 'platform-core-service:registry-site-equipment/v1',
+      provenance: 'platform-core-service:registry-site-asset/v1',
       payload: {
-        kind: 'SITE_EQUIPMENT',
+        kind: 'SITE_ASSETS',
         siteId,
-        equipment: equipmentIds.map((id) => ({ id })),
+        assets: assetIds.map((id) => ({ id })),
       },
     };
   }
@@ -100,8 +100,8 @@ const createEnvironment = (options = {}) => createFakeOperationsAgentEnvironment
           tool: 'registry.getSite',
           input: { siteId },
         }, {
-          requestId: `${investigationId}:registry-equipment`,
-          tool: 'registry.listSiteEquipment',
+          requestId: `${investigationId}:registry-assets`,
+          tool: 'registry.listSiteAssets',
           input: { siteId },
         }],
       }],
@@ -158,7 +158,7 @@ test('Site night-energy use case commits a supported Investigation and exact rep
   assert.equal(environment.owners.maxConcurrentReads, 2);
   assert.deepEqual([...toolAuthorizationCalls].sort(), [
     `${investigationId}:registry-site`,
-    `${investigationId}:registry-equipment`,
+    `${investigationId}:registry-assets`,
     `${investigationId}:energy-target`,
     `${investigationId}:energy-baseline`,
   ].sort());
@@ -190,9 +190,9 @@ test('model synthesis can refine Finding text without controlling outcome or rep
     output(input) {
       return {
         classification: input.expectedClassification,
-        statement: 'Model-assisted summary: Site night energy was 24% above baseline, without Equipment attribution.',
+        statement: 'Model-assisted summary: Site night energy was 24% above baseline, without Asset attribution.',
         evidenceIds: input.evidence.map(({ id }) => id),
-        limitations: ['Equipment attribution remains unavailable.'],
+        limitations: ['Asset attribution remains unavailable.'],
       };
     },
   });

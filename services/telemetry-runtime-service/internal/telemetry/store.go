@@ -20,7 +20,6 @@ var ErrDeviceNotFound = errors.New("telemetry device not found")
 
 type SnapshotCommit struct {
 	Snapshot         telemetryapi.DeviceObservationSnapshot
-	FullSnapshot     telemetryapi.DeviceObservationSnapshot
 	StateChanged     bool
 	PreviousRevision int64
 }
@@ -73,6 +72,10 @@ func (store *PostgresStore) Close() {
 	if store != nil && store.pool != nil {
 		store.pool.Close()
 	}
+}
+
+func (store *PostgresStore) Ping(ctx context.Context) error {
+	return store.pool.Ping(ctx)
 }
 
 func (store *PostgresStore) EvaluateAndRead(ctx context.Context, target telemetryauth.Target, evaluatedAt time.Time) (SnapshotCommit, error) {
@@ -143,7 +146,7 @@ func (store *PostgresStore) evaluateAndPersistDevice(ctx context.Context, tx pgx
 		}
 	}
 	return SnapshotCommit{
-		Snapshot: ProjectSnapshot(evaluation.Snapshot, requestedKeys), FullSnapshot: evaluation.Snapshot,
+		Snapshot:     ProjectSnapshot(evaluation.Snapshot, requestedKeys),
 		StateChanged: stateChanged, PreviousRevision: previousRevision,
 	}, nil
 }

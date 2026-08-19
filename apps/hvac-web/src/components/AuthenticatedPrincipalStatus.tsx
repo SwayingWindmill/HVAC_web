@@ -45,7 +45,14 @@ export default function AuthenticatedPrincipalStatus() {
     return () => controller.abort();
   }, [refreshKey]);
 
-  const login = () => window.location.assign(client.loginUrl({ returnTo: '/system' }));
+  const login = () => {
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = client.loginUrl({ returnTo: '/system' });
+    form.style.display = 'none';
+    document.body.appendChild(form);
+    form.submit();
+  };
   const logout = async () => {
     if (snapshot.state !== 'authenticated') return;
     setLoggingOut(true);

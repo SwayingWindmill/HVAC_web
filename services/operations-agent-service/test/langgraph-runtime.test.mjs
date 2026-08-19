@@ -14,7 +14,7 @@ const runtimeContext = ({ runtimeRevision = 'night-energy-runtime/v1', ...overri
   scope: {
     tenantId: 'organization-runtime-001',
     siteId: 'site-runtime-001',
-    equipmentId: null,
+    assetId: null,
     deviceId: null,
   },
   revision: 1,
@@ -23,7 +23,7 @@ const runtimeContext = ({ runtimeRevision = 'night-energy-runtime/v1', ...overri
   runtimeRevision,
   allowedReadTools: [
     'registry.getSite',
-    'registry.listSiteEquipment',
+    'registry.listSiteAssets',
     'telemetry.getCurrentSnapshot',
     'analytics.getEnergySeries',
     'commands.getCapabilities',
@@ -44,9 +44,9 @@ const program = {
         batches: [{
           batchId: 'registry-batch',
           requests: [{
-            requestId: 'registry-equipment-001',
+            requestId: 'registry-asset-001',
             tool: 'registry.getSite',
-            input: { siteId: 'equipment-runtime-001' },
+            input: { siteId: 'asset-runtime-001' },
           }],
         }],
       },
@@ -57,9 +57,9 @@ const program = {
         batches: [{
           batchId: 'registry-batch-002',
           requests: [{
-            requestId: 'registry-equipment-002',
+            requestId: 'registry-asset-002',
             tool: 'registry.getSite',
-            input: { siteId: 'equipment-runtime-002' },
+            input: { siteId: 'asset-runtime-002' },
           }],
         }],
       },
@@ -85,7 +85,7 @@ test('LangGraph runtime resumes the same Agent Run at the next logical Step', as
   });
 
   assert.equal(first.status, 'PLANNED');
-  assert.equal(first.plan.batches[0].requests[0].requestId, 'registry-equipment-001');
+  assert.equal(first.plan.batches[0].requests[0].requestId, 'registry-asset-001');
   assert.equal(first.checkpoint.position, 'before:read-second-registry-record');
   assert.deepEqual(
     Object.keys(JSON.parse(first.checkpoint.opaqueState)).sort(),
@@ -107,7 +107,7 @@ test('LangGraph runtime resumes the same Agent Run at the next logical Step', as
   });
 
   assert.equal(second.status, 'PLANNED');
-  assert.equal(second.plan.batches[0].requests[0].requestId, 'registry-equipment-002');
+  assert.equal(second.plan.batches[0].requests[0].requestId, 'registry-asset-002');
   assert.equal(second.checkpoint.position, 'complete');
 
   const repeatedRecovery = await createLangGraphAgentExecutionRuntime(program).planReads({

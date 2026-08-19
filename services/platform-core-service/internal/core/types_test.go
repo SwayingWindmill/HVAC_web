@@ -18,7 +18,7 @@ func TestFormatInstantUsesFrozenUTCMilliseconds(t *testing.T) {
 	}
 	for name, page := range map[string]PageRequest{
 		"name without id": {DisplayName: "Owner A"},
-		"id without name": {ID: testOrganizationA},
+		"id without name": {ID: testAssetA1},
 		"invalid id":      {DisplayName: "Owner A", ID: "not-a-uuid"},
 	} {
 		t.Run(name, func(t *testing.T) {

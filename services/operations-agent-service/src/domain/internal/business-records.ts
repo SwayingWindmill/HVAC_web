@@ -93,12 +93,12 @@ export interface FindingRequiredNextPeriod {
 export type FindingRequiredNext =
   | {
     readonly status: 'REQUIRED_NEXT';
-    readonly kind: 'EQUIPMENT_ENERGY_BINDINGS';
+    readonly kind: 'ASSET_ENERGY_BINDINGS';
     readonly owner: 'registry';
-    readonly capability: 'registry.getEquipmentEnergyBindings';
+    readonly capability: 'registry.getAssetEnergyBindings';
     readonly tenantId: string;
     readonly siteId: string;
-    readonly equipmentIds: readonly string[];
+    readonly assetIds: readonly string[];
     readonly targetPeriod: FindingRequiredNextPeriod;
     readonly baselinePeriod: FindingRequiredNextPeriod;
     readonly requiredMetadata: readonly [
@@ -110,12 +110,12 @@ export type FindingRequiredNext =
   }
   | {
     readonly status: 'REQUIRED_NEXT';
-    readonly kind: 'EQUIPMENT_ENERGY_PERIOD_COMPARISON';
+    readonly kind: 'ASSET_ENERGY_PERIOD_COMPARISON';
     readonly owner: 'telemetry-query-service';
-    readonly capability: 'analytics.energy.getEquipmentSeries';
+    readonly capability: 'analytics.energy.getAssetSeries';
     readonly tenantId: string;
     readonly siteId: string;
-    readonly equipmentIds: readonly string[];
+    readonly assetIds: readonly string[];
     readonly targetPeriod: FindingRequiredNextPeriod;
     readonly baselinePeriod: FindingRequiredNextPeriod;
     readonly requiredMetadata: readonly [
@@ -137,7 +137,7 @@ export type FindingConclusion =
   }
   | {
     readonly status: 'UNABLE_TO_CONCLUDE';
-    readonly scope: 'SITE' | 'EQUIPMENT';
+    readonly scope: 'SITE' | 'ASSET';
     readonly reasonCode: string;
     readonly detail: string;
     readonly requiredNext?: readonly FindingRequiredNext[];
@@ -318,13 +318,13 @@ const requireNullableDigest = (value: unknown, label: string): string | null => 
 
 const normalizeScope = (value: unknown, label: string): InvestigationScope => {
   const scope = requireRecord(value, label);
-  if (!hasExactKeys(scope, ['tenantId', 'siteId', 'equipmentId', 'deviceId'])) {
+  if (!hasExactKeys(scope, ['tenantId', 'siteId', 'assetId', 'deviceId'])) {
     fail(`${label} has unsupported fields.`);
   }
   return {
     tenantId: requireString(scope.tenantId, `${label}.tenantId`),
     siteId: requireNullableString(scope.siteId, `${label}.siteId`),
-    equipmentId: requireNullableString(scope.equipmentId, `${label}.equipmentId`),
+    assetId: requireNullableString(scope.assetId, `${label}.assetId`),
     deviceId: requireNullableString(scope.deviceId, `${label}.deviceId`),
   };
 };
@@ -575,7 +575,7 @@ const normalizeFindingRequiredNext = (value: unknown, index: number): FindingReq
     'capability',
     'tenantId',
     'siteId',
-    'equipmentIds',
+    'assetIds',
     'targetPeriod',
     'baselinePeriod',
     'requiredMetadata',
@@ -591,9 +591,9 @@ const normalizeFindingRequiredNext = (value: unknown, index: number): FindingReq
     'CAPTURED_AT',
     'PAYLOAD_DIGEST',
   ];
-  const expectedMetadata = required.kind === 'EQUIPMENT_ENERGY_BINDINGS'
+  const expectedMetadata = required.kind === 'ASSET_ENERGY_BINDINGS'
     ? bindingMetadata
-    : required.kind === 'EQUIPMENT_ENERGY_PERIOD_COMPARISON'
+    : required.kind === 'ASSET_ENERGY_PERIOD_COMPARISON'
       ? seriesMetadata
       : null;
   if (expectedMetadata === null
@@ -602,28 +602,28 @@ const normalizeFindingRequiredNext = (value: unknown, index: number): FindingReq
     || required.requiredMetadata.some((item, metadataIndex) => item !== expectedMetadata[metadataIndex])) {
     fail(`${label}.requiredMetadata is invalid.`);
   }
-  if ((required.kind === 'EQUIPMENT_ENERGY_BINDINGS'
+  if ((required.kind === 'ASSET_ENERGY_BINDINGS'
       && (required.owner !== 'registry'
-        || required.capability !== 'registry.getEquipmentEnergyBindings'))
-    || (required.kind === 'EQUIPMENT_ENERGY_PERIOD_COMPARISON'
+        || required.capability !== 'registry.getAssetEnergyBindings'))
+    || (required.kind === 'ASSET_ENERGY_PERIOD_COMPARISON'
       && (required.owner !== 'telemetry-query-service'
-        || required.capability !== 'analytics.energy.getEquipmentSeries'))) {
+        || required.capability !== 'analytics.energy.getAssetSeries'))) {
     fail(`${label} Owner and capability do not match its kind.`);
   }
   const common = {
     status: 'REQUIRED_NEXT' as const,
     tenantId: requireString(required.tenantId, `${label}.tenantId`),
     siteId: requireString(required.siteId, `${label}.siteId`),
-    equipmentIds: normalizeStringIds(required.equipmentIds, `${label}.equipmentIds`, 0),
+    assetIds: normalizeStringIds(required.assetIds, `${label}.assetIds`, 0),
     targetPeriod: normalizeFindingRequiredNextPeriod(required.targetPeriod, `${label}.targetPeriod`),
     baselinePeriod: normalizeFindingRequiredNextPeriod(required.baselinePeriod, `${label}.baselinePeriod`),
   };
-  if (required.kind === 'EQUIPMENT_ENERGY_BINDINGS') {
+  if (required.kind === 'ASSET_ENERGY_BINDINGS') {
     return {
       ...common,
-      kind: 'EQUIPMENT_ENERGY_BINDINGS',
+      kind: 'ASSET_ENERGY_BINDINGS',
       owner: 'registry',
-      capability: 'registry.getEquipmentEnergyBindings',
+      capability: 'registry.getAssetEnergyBindings',
       requiredMetadata: [
         'BUSINESS_REVISION',
         'QUALITY',
@@ -634,9 +634,9 @@ const normalizeFindingRequiredNext = (value: unknown, index: number): FindingReq
   }
   return {
     ...common,
-    kind: 'EQUIPMENT_ENERGY_PERIOD_COMPARISON',
+    kind: 'ASSET_ENERGY_PERIOD_COMPARISON',
     owner: 'telemetry-query-service',
-    capability: 'analytics.energy.getEquipmentSeries',
+    capability: 'analytics.energy.getAssetSeries',
     requiredMetadata: [
       'DATASET_REVISION',
       'WATERMARK',
@@ -669,7 +669,7 @@ const normalizeFindingConclusion = (value: unknown): FindingConclusion => {
   );
   if (conclusion.status !== 'UNABLE_TO_CONCLUDE'
     || (!hasLegacyShape && !hasRequiredNextShape)
-    || (conclusion.scope !== 'SITE' && conclusion.scope !== 'EQUIPMENT')) {
+    || (conclusion.scope !== 'SITE' && conclusion.scope !== 'ASSET')) {
     fail('Finding conclusion is unsupported.');
   }
   let requiredNext: readonly FindingRequiredNext[] | undefined;
@@ -880,7 +880,7 @@ const normalizeToolReceipt = (record: Record<string, unknown>): ToolExecutionRec
     'metadata',
   ])) fail('Tool Execution Receipt has unsupported fields.');
   if (record.logicalTool !== 'registry.getSite'
-    && record.logicalTool !== 'registry.listSiteEquipment'
+    && record.logicalTool !== 'registry.listSiteAssets'
     && record.logicalTool !== 'telemetry.getCurrentSnapshot'
     && record.logicalTool !== 'analytics.getEnergySeries'
     && record.logicalTool !== 'commands.getCapabilities') {

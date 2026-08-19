@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 19,
+  "registryRevision": 24,
   "routes": [
     {
       "method": "GET",
@@ -120,6 +120,7 @@
       "method": "GET",
       "path": "/api/v1/sites",
       "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
       "revision": 6,
       "rollout": {
         "mode": "all"
@@ -129,22 +130,13 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "migrationPhases": [
-        "GO_PRIMARY"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND"
-      ],
-      "migrationPhase": "GO_PRIMARY"
+      ]
     },
     {
       "method": "GET",
       "path": "/api/v1/sites/{siteId}",
       "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
       "revision": 5,
       "rollout": {
         "mode": "all"
@@ -154,22 +146,13 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "migrationPhases": [
-        "GO_PRIMARY"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND"
-      ],
-      "migrationPhase": "GO_PRIMARY"
+      ]
     },
     {
       "method": "GET",
       "path": "/api/v1/sites/{siteId}/assets",
       "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
       "revision": 5,
       "rollout": {
         "mode": "all"
@@ -179,22 +162,13 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "migrationPhases": [
-        "GO_PRIMARY"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND"
-      ],
-      "migrationPhase": "GO_PRIMARY"
+      ]
     },
     {
       "method": "GET",
       "path": "/api/v1/assets/{assetId}",
       "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
       "revision": 5,
       "rollout": {
         "mode": "all"
@@ -204,22 +178,13 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "migrationPhases": [
-        "GO_PRIMARY"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND"
-      ],
-      "migrationPhase": "GO_PRIMARY"
+      ]
     },
     {
       "method": "GET",
       "path": "/api/v1/sites/{siteId}/devices",
       "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
       "revision": 5,
       "rollout": {
         "mode": "all"
@@ -229,22 +194,13 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "migrationPhases": [
-        "GO_PRIMARY"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND"
-      ],
-      "migrationPhase": "GO_PRIMARY"
+      ]
     },
     {
       "method": "GET",
       "path": "/api/v1/sites/{siteId}/device-bindings",
       "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
       "revision": 1,
       "rollout": {
         "mode": "all"
@@ -254,22 +210,13 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "migrationPhases": [
-        "GO_PRIMARY"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND"
-      ],
-      "migrationPhase": "GO_PRIMARY"
+      ]
     },
     {
       "method": "GET",
       "path": "/api/v1/sites/{siteId}/asset-model",
       "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
       "revision": 1,
       "rollout": {
         "mode": "all"
@@ -279,22 +226,13 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "migrationPhases": [
-        "GO_PRIMARY"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND"
-      ],
-      "migrationPhase": "GO_PRIMARY"
+      ]
     },
     {
       "method": "GET",
       "path": "/api/v1/devices/{deviceId}",
       "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
       "revision": 5,
       "rollout": {
         "mode": "all"
@@ -304,27 +242,16 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "migrationPhases": [
-        "GO_PRIMARY"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND"
-      ],
-      "migrationPhase": "GO_PRIMARY"
+      ]
     },
     {
       "method": "GET",
       "path": "/api/v1/devices/{deviceId}/observation-snapshot",
       "owner": "telemetry-runtime-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
+      "revision": 2,
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -333,38 +260,16 @@
         "device",
         "principal",
         "key"
-      ],
-      "migrationPhases": [
-        "R0-contract-only",
-        "R1-dark-ingest",
-        "R2-shadow-compare",
-        "R3-internal-canary",
-        "R4-external-canary-5",
-        "R5-ramp-25",
-        "R6-ramp-50",
-        "R7-primary-100",
-        "R8-legacy-current-state-retired"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "REVISION_GAP",
-        "RECOVERY_FAILED"
-      ],
-      "migrationPhase": "R0-contract-only",
-      "cohortGroup": "s2-current-state-v1"
+      ]
     },
     {
       "method": "POST",
       "path": "/api/v1/telemetry/observation-snapshots:batchGet",
       "owner": "telemetry-runtime-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
+      "revision": 2,
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -373,38 +278,16 @@
         "device",
         "principal",
         "key"
-      ],
-      "migrationPhases": [
-        "R0-contract-only",
-        "R1-dark-ingest",
-        "R2-shadow-compare",
-        "R3-internal-canary",
-        "R4-external-canary-5",
-        "R5-ramp-25",
-        "R6-ramp-50",
-        "R7-primary-100",
-        "R8-legacy-current-state-retired"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "REVISION_GAP",
-        "RECOVERY_FAILED"
-      ],
-      "migrationPhase": "R0-contract-only",
-      "cohortGroup": "s2-current-state-v1"
+      ]
     },
     {
       "method": "POST",
       "path": "/api/v1/telemetry/subscriptions:bootstrap",
       "owner": "telemetry-runtime-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
+      "revision": 2,
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -413,38 +296,16 @@
         "device",
         "principal",
         "key"
-      ],
-      "migrationPhases": [
-        "R0-contract-only",
-        "R1-dark-ingest",
-        "R2-shadow-compare",
-        "R3-internal-canary",
-        "R4-external-canary-5",
-        "R5-ramp-25",
-        "R6-ramp-50",
-        "R7-primary-100",
-        "R8-legacy-current-state-retired"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "REVISION_GAP",
-        "RECOVERY_FAILED"
-      ],
-      "migrationPhase": "R0-contract-only",
-      "cohortGroup": "s2-current-state-v1"
+      ]
     },
     {
       "method": "POST",
       "path": "/api/v1/telemetry/recovery-cursors:checkpoint",
       "owner": "telemetry-runtime-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
+      "revision": 2,
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -453,38 +314,16 @@
         "device",
         "principal",
         "key"
-      ],
-      "migrationPhases": [
-        "R0-contract-only",
-        "R1-dark-ingest",
-        "R2-shadow-compare",
-        "R3-internal-canary",
-        "R4-external-canary-5",
-        "R5-ramp-25",
-        "R6-ramp-50",
-        "R7-primary-100",
-        "R8-legacy-current-state-retired"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "REVISION_GAP",
-        "RECOVERY_FAILED"
-      ],
-      "migrationPhase": "R0-contract-only",
-      "cohortGroup": "s2-current-state-v1"
+      ]
     },
     {
       "method": "POST",
       "path": "/api/v1/commands",
       "owner": "command-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
+      "revision": 5,
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -492,34 +331,16 @@
         "site",
         "device",
         "principal"
-      ],
-      "migrationPhases": [
-        "S3-R0-contract-only",
-        "S3-R1-synthetic-only",
-        "S3-R2-internal-low-risk",
-        "S3-R3-site-canary",
-        "S3-R4-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "SYNTHETIC_ONLY",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "CURRENT_STATE_UNSAFE",
-        "OUTCOME_UNKNOWN"
-      ],
-      "migrationPhase": "S3-R0-contract-only",
-      "cohortGroup": "s3-command-v1"
+      ]
     },
     {
       "method": "GET",
       "path": "/api/v1/commands/{commandId}",
       "owner": "command-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
+      "revision": 5,
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -527,34 +348,16 @@
         "site",
         "device",
         "principal"
-      ],
-      "migrationPhases": [
-        "S3-R0-contract-only",
-        "S3-R1-synthetic-only",
-        "S3-R2-internal-low-risk",
-        "S3-R3-site-canary",
-        "S3-R4-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "SYNTHETIC_ONLY",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "CURRENT_STATE_UNSAFE",
-        "OUTCOME_UNKNOWN"
-      ],
-      "migrationPhase": "S3-R0-contract-only",
-      "cohortGroup": "s3-command-v1"
+      ]
     },
     {
       "method": "POST",
       "path": "/api/v1/commands/{commandId}/approve",
       "owner": "command-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
+      "revision": 5,
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -562,65 +365,32 @@
         "site",
         "device",
         "principal"
-      ],
-      "migrationPhases": [
-        "S3-R0-contract-only",
-        "S3-R1-synthetic-only",
-        "S3-R2-internal-low-risk",
-        "S3-R3-site-canary",
-        "S3-R4-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "SYNTHETIC_ONLY",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "CURRENT_STATE_UNSAFE",
-        "OUTCOME_UNKNOWN"
-      ],
-      "migrationPhase": "S3-R0-contract-only",
-      "cohortGroup": "s3-command-v1"
+      ]
     },
     {
       "method": "GET",
       "path": "/api/v1/alarms",
       "owner": "alarm-service",
       "publicIngress": "platform-gateway",
-      "revision": 3,
-      "activationStatus": "expand-baseline",
+      "revision": 4,
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
         "tenant",
         "site",
         "principal"
-      ],
-      "migrationPhases": [
-        "S4-R0-contract-only",
-        "S4-R1-internal-read-only",
-        "S4-R2-site-canary",
-        "S4-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND"
-      ],
-      "migrationPhase": "S4-R0-contract-only",
-      "cohortGroup": "s4-alarm-read-v1"
+      ]
     },
     {
       "method": "GET",
       "path": "/api/v1/alarms/{alarmId}",
       "owner": "alarm-service",
       "publicIngress": "platform-gateway",
-      "revision": 3,
-      "activationStatus": "expand-baseline",
+      "revision": 4,
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -628,31 +398,16 @@
         "site",
         "principal",
         "alarm"
-      ],
-      "migrationPhases": [
-        "S4-R0-contract-only",
-        "S4-R1-internal-read-only",
-        "S4-R2-site-canary",
-        "S4-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND"
-      ],
-      "migrationPhase": "S4-R0-contract-only",
-      "cohortGroup": "s4-alarm-read-v1"
+      ]
     },
     {
       "method": "POST",
       "path": "/api/v1/alarms/{alarmId}/ack",
       "owner": "alarm-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
+      "revision": 2,
       "rollout": {
-        "mode": "disabled"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -661,23 +416,7 @@
         "alarm",
         "principal",
         "key"
-      ],
-      "migrationPhases": [
-        "S4-R0-contract-only",
-        "S4-R1-internal-lifecycle",
-        "S4-R2-site-canary",
-        "S4-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "SYNTHETIC_ONLY",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S4-R0-contract-only",
-      "cohortGroup": "s4-alarm-lifecycle-v1"
+      ]
     },
     {
       "method": "POST",
@@ -685,7 +424,6 @@
       "owner": "alarm-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "expand-baseline",
       "rollout": {
         "mode": "disabled"
       },
@@ -696,23 +434,7 @@
         "alarm",
         "principal",
         "key"
-      ],
-      "migrationPhases": [
-        "S4-R0-contract-only",
-        "S4-R1-internal-lifecycle",
-        "S4-R2-site-canary",
-        "S4-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "SYNTHETIC_ONLY",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S4-R0-contract-only",
-      "cohortGroup": "s4-alarm-lifecycle-v1"
+      ]
     },
     {
       "method": "POST",
@@ -720,7 +442,6 @@
       "owner": "alarm-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "expand-baseline",
       "rollout": {
         "mode": "disabled"
       },
@@ -731,23 +452,7 @@
         "alarm",
         "principal",
         "key"
-      ],
-      "migrationPhases": [
-        "S4-R0-contract-only",
-        "S4-R1-internal-lifecycle",
-        "S4-R2-site-canary",
-        "S4-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "SYNTHETIC_ONLY",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S4-R0-contract-only",
-      "cohortGroup": "s4-alarm-lifecycle-v1"
+      ]
     },
     {
       "method": "POST",
@@ -755,7 +460,6 @@
       "owner": "alarm-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "expand-baseline",
       "rollout": {
         "mode": "disabled"
       },
@@ -766,23 +470,7 @@
         "alarm",
         "principal",
         "key"
-      ],
-      "migrationPhases": [
-        "S4-R0-contract-only",
-        "S4-R1-internal-lifecycle",
-        "S4-R2-site-canary",
-        "S4-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "SYNTHETIC_ONLY",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S4-R0-contract-only",
-      "cohortGroup": "s4-alarm-lifecycle-v1"
+      ]
     },
     {
       "method": "POST",
@@ -790,7 +478,6 @@
       "owner": "alarm-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "expand-baseline",
       "rollout": {
         "mode": "disabled"
       },
@@ -801,93 +488,7 @@
         "alarm",
         "principal",
         "key"
-      ],
-      "migrationPhases": [
-        "S4-R0-contract-only",
-        "S4-R1-internal-lifecycle",
-        "S4-R2-site-canary",
-        "S4-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "SYNTHETIC_ONLY",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S4-R0-contract-only",
-      "cohortGroup": "s4-alarm-lifecycle-v1"
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/sites/{siteId}/alarms/{alarmId}:close",
-      "owner": "alarm-service",
-      "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
-      "rollout": {
-        "mode": "disabled"
-      },
-      "compatibilityMode": "native",
-      "allowedScopeDimensions": [
-        "tenant",
-        "site",
-        "alarm",
-        "principal",
-        "key"
-      ],
-      "migrationPhases": [
-        "S4-R0-contract-only",
-        "S4-R1-internal-lifecycle",
-        "S4-R2-site-canary",
-        "S4-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "SYNTHETIC_ONLY",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S4-R0-contract-only",
-      "cohortGroup": "s4-alarm-lifecycle-v1"
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/sites/{siteId}/alarms/{alarmId}:reopen",
-      "owner": "alarm-service",
-      "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "expand-baseline",
-      "rollout": {
-        "mode": "disabled"
-      },
-      "compatibilityMode": "native",
-      "allowedScopeDimensions": [
-        "tenant",
-        "site",
-        "alarm",
-        "principal",
-        "key"
-      ],
-      "migrationPhases": [
-        "S4-R0-contract-only",
-        "S4-R1-internal-lifecycle",
-        "S4-R2-site-canary",
-        "S4-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "SYNTHETIC_ONLY",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S4-R0-contract-only",
-      "cohortGroup": "s4-alarm-lifecycle-v1"
+      ]
     },
     {
       "method": "POST",
@@ -895,7 +496,6 @@
       "owner": "telemetry-query-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "primary",
       "rollout": {
         "mode": "all"
       },
@@ -906,9 +506,7 @@
         "device",
         "principal",
         "key"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false
+      ]
     },
     {
       "method": "POST",
@@ -916,7 +514,6 @@
       "owner": "telemetry-query-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "primary",
       "rollout": {
         "mode": "all"
       },
@@ -925,9 +522,7 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false
+      ]
     },
     {
       "method": "GET",
@@ -935,7 +530,6 @@
       "owner": "operations-agent-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "primary",
       "rollout": {
         "mode": "all"
       },
@@ -944,9 +538,7 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false
+      ]
     },
     {
       "method": "POST",
@@ -954,7 +546,6 @@
       "owner": "operations-agent-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "primary",
       "rollout": {
         "mode": "all"
       },
@@ -963,9 +554,7 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false
+      ]
     },
     {
       "method": "GET",
@@ -973,7 +562,6 @@
       "owner": "operations-agent-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "primary",
       "rollout": {
         "mode": "all"
       },
@@ -982,9 +570,7 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false
+      ]
     },
     {
       "method": "GET",
@@ -992,7 +578,6 @@
       "owner": "operations-agent-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "primary",
       "rollout": {
         "mode": "all"
       },
@@ -1001,9 +586,7 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false
+      ]
     },
     {
       "method": "POST",
@@ -1011,7 +594,6 @@
       "owner": "operations-agent-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "primary",
       "rollout": {
         "mode": "all"
       },
@@ -1020,9 +602,7 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false
+      ]
     },
     {
       "method": "POST",
@@ -1030,7 +610,6 @@
       "owner": "operations-agent-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "primary",
       "rollout": {
         "mode": "all"
       },
@@ -1039,9 +618,7 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false
+      ]
     },
     {
       "method": "POST",
@@ -1049,7 +626,6 @@
       "owner": "operations-agent-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "primary",
       "rollout": {
         "mode": "all"
       },
@@ -1058,9 +634,7 @@
         "tenant",
         "site",
         "principal"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false
+      ]
     },
     {
       "method": "GET",
@@ -1068,32 +642,15 @@
       "owner": "work-order-service",
       "publicIngress": "platform-gateway",
       "revision": 2,
-      "activationStatus": "internal-canary",
       "rollout": {
-        "mode": "percentage",
-        "percentage": 1,
-        "cohortSalt": "s5-work-order-read-canary-v1"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
         "tenant",
         "site",
         "principal"
-      ],
-      "migrationPhases": [
-        "S5-R0-contract-only",
-        "S5-R1-internal-read-only",
-        "S5-R2-site-canary",
-        "S5-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND"
-      ],
-      "migrationPhase": "S5-R1-internal-read-only",
-      "cohortGroup": "s5-work-order-read-v1"
+      ]
     },
     {
       "method": "GET",
@@ -1101,11 +658,8 @@
       "owner": "work-order-service",
       "publicIngress": "platform-gateway",
       "revision": 2,
-      "activationStatus": "internal-canary",
       "rollout": {
-        "mode": "percentage",
-        "percentage": 1,
-        "cohortSalt": "s5-work-order-read-canary-v1"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -1113,96 +667,42 @@
         "site",
         "principal",
         "work-order"
-      ],
-      "migrationPhases": [
-        "S5-R0-contract-only",
-        "S5-R1-internal-read-only",
-        "S5-R2-site-canary",
-        "S5-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND"
-      ],
-      "migrationPhase": "S5-R1-internal-read-only",
-      "cohortGroup": "s5-work-order-read-v1"
+      ]
     },
     {
       "method": "POST",
       "path": "/api/v1/sites/{siteId}/work-orders",
+      "owner": "work-order-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
       "allowedScopeDimensions": [
         "tenant",
         "site",
         "principal",
         "key"
-      ],
-      "owner": "work-order-service",
-      "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "internal-canary",
-      "rollout": {
-        "mode": "percentage",
-        "percentage": 1,
-        "cohortSalt": "s5-work-order-write-canary-v1"
-      },
-      "compatibilityMode": "native",
-      "migrationPhases": [
-        "S5-R0-contract-only",
-        "S5-R1-internal-read-only",
-        "S5-R1-internal-create-assign",
-        "S5-R2-site-canary",
-        "S5-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S5-R1-internal-create-assign",
-      "cohortGroup": "s5-work-order-write-v1"
+      ]
     },
     {
       "method": "POST",
       "path": "/api/v1/sites/{siteId}/work-orders/{workOrderId}:assign",
+      "owner": "work-order-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
       "allowedScopeDimensions": [
         "tenant",
         "site",
         "principal",
         "work-order",
         "key"
-      ],
-      "owner": "work-order-service",
-      "publicIngress": "platform-gateway",
-      "revision": 1,
-      "activationStatus": "internal-canary",
-      "rollout": {
-        "mode": "percentage",
-        "percentage": 1,
-        "cohortSalt": "s5-work-order-write-canary-v1"
-      },
-      "compatibilityMode": "native",
-      "migrationPhases": [
-        "S5-R0-contract-only",
-        "S5-R1-internal-read-only",
-        "S5-R1-internal-create-assign",
-        "S5-R2-site-canary",
-        "S5-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S5-R1-internal-create-assign",
-      "cohortGroup": "s5-work-order-write-v1"
+      ]
     },
     {
       "method": "POST",
@@ -1210,11 +710,8 @@
       "owner": "work-order-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "internal-canary",
       "rollout": {
-        "mode": "percentage",
-        "percentage": 1,
-        "cohortSalt": "s5-work-order-lifecycle-canary-v1"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -1223,25 +720,7 @@
         "principal",
         "work-order",
         "key"
-      ],
-      "migrationPhases": [
-        "S5-R0-contract-only",
-        "S5-R1-internal-read-only",
-        "S5-R1-internal-create-assign",
-        "S5-R1-internal-lifecycle",
-        "S5-R2-site-canary",
-        "S5-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S5-R1-internal-lifecycle",
-      "cohortGroup": "s5-work-order-lifecycle-v1"
+      ]
     },
     {
       "method": "POST",
@@ -1249,11 +728,8 @@
       "owner": "work-order-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "internal-canary",
       "rollout": {
-        "mode": "percentage",
-        "percentage": 1,
-        "cohortSalt": "s5-work-order-lifecycle-canary-v1"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -1262,25 +738,7 @@
         "principal",
         "work-order",
         "key"
-      ],
-      "migrationPhases": [
-        "S5-R0-contract-only",
-        "S5-R1-internal-read-only",
-        "S5-R1-internal-create-assign",
-        "S5-R1-internal-lifecycle",
-        "S5-R2-site-canary",
-        "S5-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S5-R1-internal-lifecycle",
-      "cohortGroup": "s5-work-order-lifecycle-v1"
+      ]
     },
     {
       "method": "POST",
@@ -1288,11 +746,8 @@
       "owner": "work-order-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "internal-canary",
       "rollout": {
-        "mode": "percentage",
-        "percentage": 1,
-        "cohortSalt": "s5-work-order-lifecycle-canary-v1"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -1301,25 +756,7 @@
         "principal",
         "work-order",
         "key"
-      ],
-      "migrationPhases": [
-        "S5-R0-contract-only",
-        "S5-R1-internal-read-only",
-        "S5-R1-internal-create-assign",
-        "S5-R1-internal-lifecycle",
-        "S5-R2-site-canary",
-        "S5-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S5-R1-internal-lifecycle",
-      "cohortGroup": "s5-work-order-lifecycle-v1"
+      ]
     },
     {
       "method": "POST",
@@ -1327,11 +764,8 @@
       "owner": "work-order-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "internal-canary",
       "rollout": {
-        "mode": "percentage",
-        "percentage": 1,
-        "cohortSalt": "s5-work-order-lifecycle-canary-v1"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -1340,25 +774,7 @@
         "principal",
         "work-order",
         "key"
-      ],
-      "migrationPhases": [
-        "S5-R0-contract-only",
-        "S5-R1-internal-read-only",
-        "S5-R1-internal-create-assign",
-        "S5-R1-internal-lifecycle",
-        "S5-R2-site-canary",
-        "S5-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S5-R1-internal-lifecycle",
-      "cohortGroup": "s5-work-order-lifecycle-v1"
+      ]
     },
     {
       "method": "POST",
@@ -1366,11 +782,8 @@
       "owner": "work-order-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "internal-canary",
       "rollout": {
-        "mode": "percentage",
-        "percentage": 1,
-        "cohortSalt": "s5-work-order-lifecycle-canary-v1"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -1379,25 +792,7 @@
         "principal",
         "work-order",
         "key"
-      ],
-      "migrationPhases": [
-        "S5-R0-contract-only",
-        "S5-R1-internal-read-only",
-        "S5-R1-internal-create-assign",
-        "S5-R1-internal-lifecycle",
-        "S5-R2-site-canary",
-        "S5-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S5-R1-internal-lifecycle",
-      "cohortGroup": "s5-work-order-lifecycle-v1"
+      ]
     },
     {
       "method": "POST",
@@ -1405,11 +800,8 @@
       "owner": "work-order-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "internal-canary",
       "rollout": {
-        "mode": "percentage",
-        "percentage": 1,
-        "cohortSalt": "s5-work-order-lifecycle-canary-v1"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -1418,25 +810,7 @@
         "principal",
         "work-order",
         "key"
-      ],
-      "migrationPhases": [
-        "S5-R0-contract-only",
-        "S5-R1-internal-read-only",
-        "S5-R1-internal-create-assign",
-        "S5-R1-internal-lifecycle",
-        "S5-R2-site-canary",
-        "S5-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S5-R1-internal-lifecycle",
-      "cohortGroup": "s5-work-order-lifecycle-v1"
+      ]
     },
     {
       "method": "POST",
@@ -1444,11 +818,8 @@
       "owner": "work-order-service",
       "publicIngress": "platform-gateway",
       "revision": 1,
-      "activationStatus": "internal-canary",
       "rollout": {
-        "mode": "percentage",
-        "percentage": 1,
-        "cohortSalt": "s5-work-order-lifecycle-canary-v1"
+        "mode": "all"
       },
       "compatibilityMode": "native",
       "allowedScopeDimensions": [
@@ -1457,25 +828,7 @@
         "principal",
         "work-order",
         "key"
-      ],
-      "migrationPhases": [
-        "S5-R0-contract-only",
-        "S5-R1-internal-read-only",
-        "S5-R1-internal-create-assign",
-        "S5-R1-internal-lifecycle",
-        "S5-R2-site-canary",
-        "S5-R3-operationally-certified"
-      ],
-      "shadowSideEffectPolicy": "NONE",
-      "readOnlyFallback": false,
-      "fallbackForbiddenResults": [
-        "AUTHORIZATION_DENIED",
-        "RESOURCE_NOT_FOUND",
-        "VERSION_CONFLICT",
-        "IDEMPOTENCY_CONFLICT"
-      ],
-      "migrationPhase": "S5-R1-internal-lifecycle",
-      "cohortGroup": "s5-work-order-lifecycle-v1"
+      ]
     }
   ]
 }

@@ -32,15 +32,15 @@ import (
 )
 
 const (
-	telemetryTestTenant       = "018f2d00-0000-7000-8000-000000000001"
-	telemetryTestOrganization = "018f2e00-1000-7000-8000-000000000001"
-	telemetryTestSite         = "018f2e00-2000-7000-8000-000000000001"
-	telemetryTestDeviceOne    = "018f2e00-3000-7000-8000-000000000001"
-	telemetryTestDeviceTwo    = "018f2e00-3000-7000-8000-000000000002"
-	telemetryTestPrincipal    = "018f2e00-6000-7000-8000-000000000001"
-	telemetryTestSPIFFE       = "spiffe://hvac.local/platform-gateway"
-	telemetryTestPolicy       = "telemetry-policy-7"
-	telemetryTestCSRF         = "csrf-fixture"
+	telemetryTestTenant             = "018f2d00-0000-7000-8000-000000000001"
+	telemetryTestLegacyOrganization = "018f2e00-1000-7000-8000-000000000001"
+	telemetryTestSite               = "018f2e00-2000-7000-8000-000000000001"
+	telemetryTestDeviceOne          = "018f2e00-3000-7000-8000-000000000001"
+	telemetryTestDeviceTwo          = "018f2e00-3000-7000-8000-000000000002"
+	telemetryTestPrincipal          = "018f2e00-6000-7000-8000-000000000001"
+	telemetryTestSPIFFE             = "spiffe://hvac.local/platform-gateway"
+	telemetryTestPolicy             = "telemetry-policy-7"
+	telemetryTestCSRF               = "csrf-fixture"
 )
 
 func TestTelemetryGatewaySingleAndBatchPreserveOrder(t *testing.T) {
@@ -267,14 +267,14 @@ func TestTelemetryGatewayWorkloadMTLSUsesExactIAMScopeWithoutCSRF(t *testing.T) 
 	legacyOrganization := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
 	legacyOrganization.TLS = verifiedWorkloadTLSState(t, "spiffe://hvac.local/automation-service")
 	legacyOrganization.Header.Set("X-Tenant-ID", telemetryTestTenant)
-	legacyOrganization.Header.Set("X-Organization-ID", telemetryTestOrganization)
+	legacyOrganization.Header.Set("X-Organization-ID", telemetryTestLegacyOrganization)
 	legacyOrganizationRecorder := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(legacyOrganizationRecorder, legacyOrganization)
 	assertTelemetryProblem(t, legacyOrganizationRecorder, http.StatusBadRequest, "FORGED_IDENTITY_HEADER")
 
 	unverified := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
 	unverified.TLS = &tls.ConnectionState{PeerCertificates: verifiedWorkloadTLSState(t, "spiffe://hvac.local/automation-service").VerifiedChains[0]}
-	unverified.Header.Set("X-Organization-ID", telemetryTestOrganization)
+	unverified.Header.Set("X-Organization-ID", telemetryTestLegacyOrganization)
 	unverifiedRecorder := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(unverifiedRecorder, unverified)
 	assertTelemetryProblem(t, unverifiedRecorder, http.StatusBadRequest, "FORGED_IDENTITY_HEADER")
@@ -505,20 +505,20 @@ func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCod
 		if err != nil {
 			t.Fatal(err)
 		}
-		decision := telemetryauth.Decision{PrincipalID: telemetryTestPrincipal, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, ActingOrganizationID: parent.ActingOrganizationID, Action: input.Action, PolicyRevision: telemetryTestPolicy, DecidedAt: now.Format(time.RFC3339Nano), Targets: []telemetryauth.AuthorizedTarget{}}
+		decision := telemetryauth.Decision{PrincipalID: telemetryTestPrincipal, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, TenantID: parent.TenantID, Action: input.Action, PolicyRevision: telemetryTestPolicy, DecidedAt: now.Format(time.RFC3339Nano), Targets: []telemetryauth.AuthorizedTarget{}}
 		if denyReason != "" {
 			decision.ReasonCode = denyReason
 			return telemetryJSONResponse(http.StatusOK, telemetryauth.DecisionResponse{Decision: decision}), nil
 		}
 		decision.Allowed = true
 		decision.ReasonCode = telemetryauth.ReasonAllowExactScope
-		decision.ScopeDigest, _ = telemetryauth.ScopeDigest(input.Action, input.ActingOrganizationID, canonical)
+		decision.ScopeDigest, _ = telemetryauth.ScopeDigest(input.Action, input.TenantID, canonical)
 		keyCount := 0
 		for _, target := range canonical {
 			keyCount += len(target.Keys)
 			decision.Targets = append(decision.Targets, telemetryauth.AuthorizedTarget{TenantID: telemetryTestTenant, SiteID: telemetryTestSite, DeviceID: target.DeviceID, Keys: target.Keys})
 		}
-		claims := telemetryauth.GrantClaims{Issuer: "spiffe://hvac.local/iam-service", Presenter: telemetryTestSPIFFE, Audience: "telemetry-runtime-service", PrincipalID: telemetryTestPrincipal, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, ActingOrganizationID: parent.ActingOrganizationID, ActorChain: []telemetryauth.Actor{{Service: "platform-gateway", SPIFFEID: telemetryTestSPIFFE}}, Action: input.Action, ScopeDigest: decision.ScopeDigest, TargetCount: len(canonical), KeyCount: keyCount, PolicyRevision: telemetryTestPolicy, SessionID: parent.SessionID, ParentTokenID: parent.TokenID, RequestID: request.Header.Get("X-Request-ID"), TraceID: traceIDFromTraceparent(request.Header.Get("Traceparent")), Route: telemetryPublicRoute(input.Action), IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "grant-id"}
+		claims := telemetryauth.GrantClaims{Issuer: "spiffe://hvac.local/iam-service", Presenter: telemetryTestSPIFFE, Audience: "telemetry-runtime-service", PrincipalID: telemetryTestPrincipal, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, TenantID: parent.TenantID, ActorChain: []telemetryauth.Actor{{Service: "platform-gateway", SPIFFEID: telemetryTestSPIFFE}}, Action: input.Action, ScopeDigest: decision.ScopeDigest, TargetCount: len(canonical), KeyCount: keyCount, PolicyRevision: telemetryTestPolicy, SessionID: parent.SessionID, ParentTokenID: parent.TokenID, RequestID: request.Header.Get("X-Request-ID"), TraceID: traceIDFromTraceparent(request.Header.Get("Traceparent")), Route: telemetryPublicRoute(input.Action), IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "grant-id"}
 		return telemetryJSONResponse(http.StatusOK, telemetryauth.DecisionResponse{Decision: decision, DelegationGrant: unsignedTelemetryGrant(claims)}), nil
 	})}
 	fixture.iamHTTPClient = iamClient
@@ -541,10 +541,10 @@ func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCod
 			t.Fatal(err)
 		}
 		claims, err := identitycontext.VerifyDelegation(&gatewaySigner.PublicKey, request.Header.Get("X-Delegation-Grant"))
-		if err != nil || claims.PrincipalID != telemetryTestPrincipal || claims.PolicyRevision != telemetryTestPolicy || claims.ActingOrganizationID != telemetryTestOrganization || claims.TenantID != telemetryTestTenant || identitycontext.ValidateDelegation(claims, now, telemetryTestSPIFFE, "telemetry-query-service", telemetryhistorymodel.DeviceHistoryAction, scope) != nil {
+		if err != nil || claims.PrincipalID != telemetryTestPrincipal || claims.PolicyRevision != telemetryTestPolicy || claims.TenantID != telemetryTestTenant || identitycontext.ValidateDelegation(claims, now, telemetryTestSPIFFE, "telemetry-query-service", telemetryhistorymodel.DeviceHistoryAction, scope) != nil {
 			t.Fatalf("query delegation invalid: claims=%+v err=%v", claims, err)
 		}
-		if query.ActingOrganizationID != telemetryTestOrganization || query.TenantID != telemetryTestTenant || query.SiteID != telemetryTestSite || query.DeviceID != telemetryTestDeviceOne || len(query.Keys) != 1 || query.Keys[0] != "temperature" || query.MaxPointsPerKey != 100 {
+		if query.TenantID != telemetryTestTenant || query.SiteID != telemetryTestSite || query.DeviceID != telemetryTestDeviceOne || len(query.Keys) != 1 || query.Keys[0] != "temperature" || query.MaxPointsPerKey != 100 {
 			t.Fatalf("query scope drifted: %+v", query)
 		}
 		unit := "Cel"
@@ -564,7 +564,7 @@ func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCod
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := store.CreateSession(context.Background(), sessionstore.Session{ID: "session-id", Principal: identitycontext.UserPrincipal{Subject: "fixture-user", Issuer: "https://issuer.example.test", Roles: []string{"operator"}}, ActingOrganizationID: telemetryTestOrganization, CSRFTokenCiphertext: csrfCiphertext, ExpiresAt: now.Add(time.Hour)}, sessionstore.MutationContext{Action: "SESSION_CREATED", Result: "SUCCEEDED", PolicyRevision: "identity-policy-1", CorrelationID: "fixture", TraceID: strings.Repeat("a", 32), Traceparent: "00-" + strings.Repeat("a", 32) + "-" + strings.Repeat("b", 16) + "-01", ExecutingService: "platform-gateway", ExecutingSPIFFEID: telemetryTestSPIFFE, OccurredAt: now})
+	created, err := store.CreateSession(context.Background(), sessionstore.Session{ID: "session-id", Principal: identitycontext.UserPrincipal{Subject: "fixture-user", Issuer: "https://issuer.example.test", Roles: []string{"operator"}}, TenantID: telemetryTestTenant, CSRFTokenCiphertext: csrfCiphertext, ExpiresAt: now.Add(time.Hour)}, sessionstore.MutationContext{Action: "SESSION_CREATED", Result: "SUCCEEDED", PolicyRevision: "identity-policy-1", CorrelationID: "fixture", TraceID: strings.Repeat("a", 32), Traceparent: "00-" + strings.Repeat("a", 32) + "-" + strings.Repeat("b", 16) + "-01", ExecutingService: "platform-gateway", ExecutingSPIFFEID: telemetryTestSPIFFE, OccurredAt: now})
 	if err != nil {
 		t.Fatal(err)
 	}

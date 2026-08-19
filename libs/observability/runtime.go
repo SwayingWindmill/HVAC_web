@@ -12,20 +12,22 @@ import (
 )
 
 type RuntimeConfig struct {
-	Service       string
-	OTLPEndpoint  string
-	QueueSize     int
-	ExportTimeout time.Duration
-	Exporter      Exporter
+	Service        string
+	OTLPEndpoint   string
+	QueueSize      int
+	ExportTimeout  time.Duration
+	Exporter       Exporter
+	ReadinessCheck func(context.Context) error
 }
 
 type Runtime struct {
-	Service string
-	Tracer  *Tracer
-	Metrics *Registry
-	async   *AsyncExporter
-	ready   atomic.Bool
-	started time.Time
+	Service        string
+	Tracer         *Tracer
+	Metrics        *Registry
+	async          *AsyncExporter
+	readinessCheck func(context.Context) error
+	ready          atomic.Bool
+	started        time.Time
 }
 
 func NewRuntime(config RuntimeConfig) *Runtime {
@@ -40,9 +42,16 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 	return &Runtime{
 		Service: config.Service,
 		Tracer:  NewTracer(config.Service, async),
-		Metrics: NewRegistry(),
-		async:   async,
-		started: time.Now().UTC(),
+		Metrics:        NewRegistry(),
+		async:          async,
+		readinessCheck: config.ReadinessCheck,
+		started:        time.Now().UTC(),
+	}
+}
+
+func (runtime *Runtime) SetReadinessCheck(check func(context.Context) error) {
+	if runtime != nil {
+		runtime.readinessCheck = check
 	}
 }
 
@@ -106,12 +115,21 @@ func (runtime *Runtime) DiagnosticsHandler() http.Handler {
 	mux.HandleFunc("/health/live", func(writer http.ResponseWriter, _ *http.Request) {
 		health(writer, "live", http.StatusOK)
 	})
-	mux.HandleFunc("/health/ready", func(writer http.ResponseWriter, _ *http.Request) {
-		if runtime.Ready() {
-			health(writer, "ready", http.StatusOK)
+	mux.HandleFunc("/health/ready", func(writer http.ResponseWriter, request *http.Request) {
+		if !runtime.Ready() {
+			health(writer, "not-ready", http.StatusServiceUnavailable)
 			return
 		}
-		health(writer, "not-ready", http.StatusServiceUnavailable)
+		if runtime.readinessCheck != nil {
+			ctx, cancel := context.WithTimeout(request.Context(), time.Second)
+			err := runtime.readinessCheck(ctx)
+			cancel()
+			if err != nil {
+				health(writer, "not-ready", http.StatusServiceUnavailable)
+				return
+			}
+		}
+		health(writer, "ready", http.StatusOK)
 	})
 	mux.HandleFunc("/diagnostics", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")

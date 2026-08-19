@@ -20,9 +20,9 @@ func TestIAMWorkOrderDecisionPublishesExactAllowAndAuditEvidence(t *testing.T) {
 		config.WorkOrderAuditSink = sink
 	})
 	claims := validIAMClaims(harness.now, "fixture-user", "work-order:authorize")
-	claims.ActingOrganizationID = iam.S1FixtureOwnerAOrganizationID
+	claims.TenantID = iam.S1FixtureTenantAID
 	input := workorderauth.DecisionRequest{
-		ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID,
+		TenantID: iam.S1FixtureTenantAID,
 		SiteID:               iam.S1FixtureOwnerASite1ID,
 		Action:               workorderauth.ActionList,
 	}
@@ -50,9 +50,9 @@ func TestIAMWorkOrderDecisionDeniesCrossSiteWithoutGrantMaterial(t *testing.T) {
 		config.WorkOrderAuditSink = sink
 	})
 	claims := validIAMClaims(harness.now, "fixture-user", "work-order:authorize")
-	claims.ActingOrganizationID = iam.S1FixtureOwnerAOrganizationID
+	claims.TenantID = iam.S1FixtureTenantAID
 	input := workorderauth.DecisionRequest{
-		ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID,
+		TenantID: iam.S1FixtureTenantAID,
 		SiteID:               "01910000-0002-7000-8000-000000000001",
 		Action:               workorderauth.ActionList,
 	}
@@ -77,9 +77,9 @@ func TestIAMWorkOrderDecisionRejectsExpandedBodyWrongActionAndAuditFailure(t *te
 		config.WorkOrderAuthorizationStore = fixedWorkOrderStore{facts: principalWorkOrderFacts()}
 	})
 	claims := validIAMClaims(harness.now, "fixture-user", "work-order:authorize")
-	claims.ActingOrganizationID = iam.S1FixtureOwnerAOrganizationID
+	claims.TenantID = iam.S1FixtureTenantAID
 	expandedBody := map[string]any{
-		"actingOrganizationId": iam.S1FixtureOwnerAOrganizationID,
+		"tenantId": iam.S1FixtureTenantAID,
 		"siteId":               iam.S1FixtureOwnerASite1ID,
 		"action":               "work-order:list",
 		"roles":                []string{"admin"},
@@ -91,7 +91,7 @@ func TestIAMWorkOrderDecisionRejectsExpandedBodyWrongActionAndAuditFailure(t *te
 	assertIAMProblem(t, recorder, http.StatusBadRequest, "IAM_WORK_ORDER_DECISION_REQUEST_INVALID")
 
 	wrongAction := validIAMClaims(harness.now, "fixture-user", "principal:read")
-	body, _ := json.Marshal(workorderauth.DecisionRequest{ActingOrganizationID: iam.S1FixtureOwnerAOrganizationID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionList})
+	body, _ := json.Marshal(workorderauth.DecisionRequest{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionList})
 	request = harness.request(t, iam.WorkOrderDecisionPath, strings.NewReader(string(body)), wrongAction, harness.gatewaySigner)
 	recorder = httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, request)

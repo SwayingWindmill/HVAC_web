@@ -24,6 +24,7 @@ type RuntimeClientConfig struct {
 	TenantID   string
 	SiteID     string
 	DeviceID   string
+	DeviceIDs  []string
 }
 
 type RuntimeClient struct {
@@ -31,7 +32,7 @@ type RuntimeClient struct {
 	httpClient *http.Client
 	tenantID   string
 	siteID     string
-	deviceID   string
+	deviceIDs  map[string]struct{}
 }
 
 type runtimeClaimRequest struct {
@@ -62,9 +63,23 @@ func NewRuntimeClient(config RuntimeClientConfig) (*RuntimeClient, error) {
 	}
 	tenantID := strings.TrimSpace(config.TenantID)
 	siteID := strings.TrimSpace(config.SiteID)
-	deviceID := strings.TrimSpace(config.DeviceID)
-	if !commandmodel.IsUUIDv7(tenantID) || !commandmodel.IsUUIDv7(siteID) || !commandmodel.IsUUIDv7(deviceID) {
+	deviceIDs := make(map[string]struct{}, len(config.DeviceIDs)+1)
+	if deviceID := strings.TrimSpace(config.DeviceID); deviceID != "" {
+		deviceIDs[deviceID] = struct{}{}
+	}
+	for _, rawDeviceID := range config.DeviceIDs {
+		deviceID := strings.TrimSpace(rawDeviceID)
+		if deviceID != "" {
+			deviceIDs[deviceID] = struct{}{}
+		}
+	}
+	if !commandmodel.IsUUIDv7(tenantID) || !commandmodel.IsUUIDv7(siteID) || len(deviceIDs) == 0 {
 		return nil, errors.New("command runtime approved cohort is incomplete")
+	}
+	for deviceID := range deviceIDs {
+		if !commandmodel.IsUUIDv7(deviceID) {
+			return nil, errors.New("command runtime approved cohort is incomplete")
+		}
 	}
 	client := config.HTTPClient
 	if client == nil {
@@ -72,7 +87,7 @@ func NewRuntimeClient(config RuntimeClientConfig) (*RuntimeClient, error) {
 	}
 	return &RuntimeClient{
 		baseURL: baseURL, httpClient: client,
-		tenantID: tenantID, siteID: siteID, deviceID: deviceID,
+		tenantID: tenantID, siteID: siteID, deviceIDs: deviceIDs,
 	}, nil
 }
 
@@ -87,10 +102,16 @@ func (client *RuntimeClient) ClaimDispatch(ctx context.Context, tenantID, leaseO
 	if status == http.StatusNoContent && err == nil {
 		return commandmodel.DispatchEnvelope{}, commandservice.ErrNoDispatchAvailable
 	}
+	if err == nil && !client.approvedScope(envelope.TenantID, envelope.SiteID, envelope.DeviceID) {
+		return commandmodel.DispatchEnvelope{}, commandservice.ErrInvalidRequest
+	}
 	return envelope, err
 }
 
 func (client *RuntimeClient) ResolveDispatch(ctx context.Context, envelope commandmodel.DispatchEnvelope, result commandmodel.ConnectorResult) error {
+	if client == nil || !client.approvedScope(envelope.TenantID, envelope.SiteID, envelope.DeviceID) {
+		return commandservice.ErrInvalidRequest
+	}
 	_, err := client.post(ctx, commandservice.InternalDispatchResolvePath, runtimeDispatchResolveRequest{Envelope: envelope, Result: result}, nil)
 	return err
 }
@@ -106,22 +127,42 @@ func (client *RuntimeClient) ClaimVerification(ctx context.Context, tenantID, le
 	if status == http.StatusNoContent && err == nil {
 		return commandmodel.VerificationEnvelope{}, commandservice.ErrVerificationNotAvailable
 	}
+	if err == nil && !client.approvedScope(envelope.TenantID, envelope.SiteID, envelope.DeviceID) {
+		return commandmodel.VerificationEnvelope{}, commandservice.ErrInvalidRequest
+	}
 	return envelope, err
 }
 
 func (client *RuntimeClient) ResolveVerification(ctx context.Context, envelope commandmodel.VerificationEnvelope, result commandmodel.VerificationResult) error {
+	if client == nil || !client.approvedScope(envelope.TenantID, envelope.SiteID, envelope.DeviceID) {
+		return commandservice.ErrInvalidRequest
+	}
 	_, err := client.post(ctx, commandservice.InternalVerificationResolvePath, runtimeVerificationResolveRequest{Envelope: envelope, Result: result}, nil)
 	return err
 }
 
 func (client *RuntimeClient) Prepare(ctx context.Context, evidence commandmodel.PreparedConnectorEvidence) error {
+	if client == nil || !client.approvedScope(evidence.TenantID, evidence.SiteID, evidence.DeviceID) {
+		return commandservice.ErrInvalidRequest
+	}
 	_, err := client.post(ctx, commandservice.InternalConnectorPreparePath, evidence, nil)
 	return err
 }
 
 func (client *RuntimeClient) Complete(ctx context.Context, evidence commandmodel.CompletedConnectorEvidence) error {
+	if client == nil || !client.approvedScope(evidence.TenantID, evidence.SiteID, evidence.DeviceID) {
+		return commandservice.ErrInvalidRequest
+	}
 	_, err := client.post(ctx, commandservice.InternalConnectorCompletePath, evidence, nil)
 	return err
+}
+
+func (client *RuntimeClient) approvedScope(tenantID, siteID, deviceID string) bool {
+	if client == nil || tenantID != client.tenantID || siteID != client.siteID {
+		return false
+	}
+	_, ok := client.deviceIDs[deviceID]
+	return ok
 }
 
 func (client *RuntimeClient) post(ctx context.Context, path string, input, output any) (int, error) {

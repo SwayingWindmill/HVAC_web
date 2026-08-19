@@ -12,7 +12,9 @@
     "tenantModel": "User adjudication over V2.1.2: every Organization concept in this project is Tenant; no Organization compatibility layer",
     "iotPlatform": "Data Architecture V2: ThingsBoard is removed",
     "pointModel": "Point is the canonical data point; Sensor exists only for independently identifiable/installable/replaceable/calibratable/traceable physical probes",
-    "storage": "PostgreSQL owns business master/metadata/state machines; ClickHouse owns historical Telemetry/analytics; Redis is rebuildable Latest/current cache; MQTT is transport only; Object Storage owns archive/backup/evidence/dataset/model artifacts"
+    "storage": "PostgreSQL owns business master/metadata/state machines; ClickHouse owns historical Telemetry/analytics; Redis is rebuildable Latest/current cache; MQTT is transport only; Object Storage owns archive/backup/evidence/dataset/model artifacts",
+    "identityProvider": "User adjudication: Phase 1 uses the platform-owned services/identity-service as Identity Infrastructure. It authenticates credentials and exposes standard OIDC; IAM remains the sole Tenant/Site/Role/Policy authorization authority.",
+    "edgeControlPlane": "User adjudication over V2.1.2 using OpenEMS as an external reference implementation: production controllable HVAC requires a first-class Edge Control Plane with Channel Runtime, Process Image, IPO Cycle, Controller/Scheduler/Arbiter, Capability Profiles, Device Drivers, Protocol Bridges, Edge Manifest, Edge Timedata and leased Cloud Command intents. Cloud retains durable command governance and business-domain authority. Machine contract: contracts/architecture/edge-control-plane.v1.json."
   },
   "serviceModel": {
     "logical": "domain-oriented modular backend",
@@ -26,7 +28,7 @@
     { "domain": "Tenant/Site", "implementation": ["services/platform-core-service", "services/platform-gateway"], "alignment": "ALIGNED" },
     { "domain": "Space/Asset", "implementation": ["services/platform-core-service", "infra/s1-registry/postgres/init/007-spatial-sensor-point-model.sql"], "alignment": "ALIGNED" },
     { "domain": "Device/Product/Point", "implementation": ["services/platform-core-service", "infra/s1-registry/postgres/init/009-energy-data-foundation.sql"], "alignment": "ALIGNED" },
-    { "domain": "IoT Runtime", "implementation": ["services/mqtt-telemetry-adapter", "services/telemetry-runtime-service", "services/command-dispatcher"], "alignment": "ALIGNED" },
+    { "domain": "IoT Runtime", "implementation": ["services/mqtt-telemetry-adapter", "services/telemetry-runtime-service", "services/command-dispatcher"], "alignment": "PARTIAL", "reason": "Cloud MQTT/S2 runtime is implemented, but the adjudicated target now also requires a first-class HVAC Edge Control Plane with Channel Runtime, Process Image, Cycle, Controller/Scheduler, Capability Profiles, Drivers/Bridges, Edge Manifest and Edge Timedata." },
     { "domain": "Telemetry", "implementation": ["services/telemetry-runtime-service", "services/telemetry-query-service", "services/analytics-read-model-projector"], "alignment": "ALIGNED" },
     { "domain": "Energy Topology", "implementation": ["infra/s1-registry/postgres/init/009-energy-data-foundation.sql"], "alignment": "ALIGNED" },
     { "domain": "Metric", "implementation": ["services/metric-engine-service"], "alignment": "ALIGNED" },
@@ -34,7 +36,7 @@
     { "domain": "Tariff", "implementation": ["infra/s1-registry/postgres/init/009b-settlement-foundation-v2.sql"], "alignment": "ALIGNED" },
     { "domain": "Settlement", "implementation": ["services/settlement-service"], "alignment": "ALIGNED" },
     { "domain": "Alarm", "implementation": ["services/alarm-service"], "alignment": "PARTIAL" },
-    { "domain": "Control", "implementation": ["services/command-service", "services/command-dispatcher"], "alignment": "ALIGNED" },
+    { "domain": "Control", "implementation": ["services/command-service", "services/command-dispatcher"], "alignment": "PARTIAL", "reason": "Cloud command governance, dispatch and verification exist, but target execution semantics now require leased Edge intents, local Controller/Scheduler arbitration, reusable safety/interlock controllers and requestedValue/effectiveValue constraint evidence." },
     { "domain": "Config", "implementation": ["infra/s1-registry/postgres/init/009j-operations-support-domains-v2.sql"], "alignment": "ALIGNED" },
     { "domain": "Notification", "implementation": ["infra/s1-registry/postgres/init/009j-operations-support-domains-v2.sql"], "alignment": "ALIGNED" },
     { "domain": "Forecast", "implementation": ["services/forecast-service"], "alignment": "ALIGNED" },
@@ -101,10 +103,10 @@
   },
   "physicalPhase1": {
     "recommended": ["energy-api", "iot-service", "telemetry-worker", "metric-worker", "forecast-service", "optimization-service"],
-    "infrastructure": ["PostgreSQL", "ClickHouse", "Redis", "Object Storage", "MQTT Broker"],
+    "infrastructure": ["PostgreSQL", "ClickHouse", "Redis", "Object Storage", "MQTT Broker", "Identity Provider (identity-service)"],
     "currentDeployment": "deploy/platform/phase1/compose.yaml",
     "convergence": "PASS",
-    "reason": "Phase1 default business deployables now converge to energy-api + iot-service + telemetry-worker + metric-worker. energy-api co-locates Platform Gateway, IAM, Registry Core, Telemetry Query, Audit, Alarm, Work Order and Command while preserving their mTLS listeners and workload identities; Session Audit uses PostgreSQL Outbox directly instead of a Kafka-dependent standalone consumer. iot-service combines MQTT telemetry/event/heartbeat ingestion with Command dispatch and verification while preserving separate workload credentials; telemetry-worker owns Telemetry Runtime, history projection and analytics projection; metric-worker owns explicit scheduled Metric finalization and scoped cross-store reconciliation. Forecast and Optimization remain selective intelligence services rather than mandatory default processes. Object Storage production capability remains tracked separately and does not change the physical service convergence result."
+    "reason": "Phase1 default business deployables remain energy-api + iot-service + telemetry-worker + metric-worker. identity-service is separate Identity Infrastructure: it authenticates platform credentials and exposes standard OIDC but owns no Tenant/Site/Role/Policy authorization state. energy-api co-locates Platform Gateway, IAM, Registry Core, Telemetry Query, Audit, Alarm, Work Order and Command while preserving their internal security boundaries; iot-service combines MQTT ingestion with Command dispatch/verification; telemetry-worker owns history and analytics projections; metric-worker owns scheduled Metric finalization and scoped cross-store reconciliation. Forecast and Optimization remain selective intelligence services. Object Storage production capability remains tracked separately."
   },
   "conformance": [
     { "id": "TENANT_ONLY", "status": "PASS" },
@@ -113,10 +115,11 @@
     { "id": "SPACE_ASSET_CANONICAL", "status": "PASS" },
     { "id": "PRODUCT_TEMPLATE_POINT_MODEL", "status": "PASS" },
     { "id": "SE_API_001_CONTRACT_AUTHORITY", "status": "PASS" },
-    { "id": "SE_API_001_RUNTIME_CONVERGENCE", "status": "PARTIAL", "reason": "All V2.1.2 CONTRACTED method/path entries and frozen envelopes are present. Existing converged routes keep their canonical runtime handlers; 13 routes whose operation-specific request/query/domain shape has not been supplied are now explicitly recognized as contract-only and return CONTRACT_NOT_ACTIVE in the frozen V2.1.2 error envelope instead of falling through to legacy semantics. PASS still requires the missing SE-API-001 operation shapes and their real success handlers." },
+    { "id": "SE_API_001_RUNTIME_CONVERGENCE", "status": "PARTIAL", "reason": "SE-API-001 V1.2 CURRENT CANDIDATE remains the common API authority and all 13 reviewed routes are tracked in contracts/architecture/se-api-001-v1.2-runtime-convergence.json. Alarm is fully synchronized and active (A=3). The remaining 10 routes were re-reviewed against SE-DATA-001 V2.0 CURRENT, SE-AI-001 V1.0 CURRENT, SE-AI-002 V1.0 CURRENT, current Registry/S2 machine contracts and actual Forecast/Optimization runtime. No additional route is safe to activate: Registry lacks endpoint-specific create/tree/list projections, Point-centric Telemetry materially differs from current Device-centric S2 contracts, Forecast public route shapes remain recommendation-level, and Optimization runtime is an internal synchronous solver rather than a durable public Run resource. Current adjudication remains A=3, B=0, C=10; those 10 routes stay CONTRACT_NOT_ACTIVE until exact public machine contracts are frozen." },
     { "id": "MQTT_V2_1_2_UPLINK_WIRE", "status": "PASS" },
     { "id": "CLOUD_PRESENCE_AUTHORITY", "status": "PASS" },
     { "id": "CONTROL_DYNAMIC_SAFETY", "status": "PASS" },
+    { "id": "EDGE_CONTROL_PLANE_TARGET", "status": "PARTIAL", "reason": "ADR 0012 and contracts/architecture/edge-control-plane.v1.json are now the target for controllable HVAC Edge. Existing EG8200/MQTT/store-forward and command safety are foundations only; Process Image, IPO Cycle, Controller/Scheduler/Arbiter, Capability Profiles, Device Drivers/Protocol Bridges, Edge Manifest, Edge Timedata and leased remote intents are not yet complete." },
     { "id": "EDGE_COMMAND_IDEMPOTENCY", "status": "PASS" },
     { "id": "METRIC_CROSS_STORE_PUBLICATION", "status": "PASS" },
     { "id": "FORECAST_CROSS_STORE_PUBLICATION", "status": "PASS" },
@@ -126,6 +129,7 @@
     { "id": "CONFIG_DOMAIN_BOUNDARY", "status": "PASS" },
     { "id": "NOTIFICATION_ACK_SEPARATION", "status": "PASS" },
     { "id": "PHASE1_PHYSICAL_SERVICE_CONVERGENCE", "status": "PASS", "reason": "Phase1 default business deployables converge to energy-api + iot-service + telemetry-worker + metric-worker. Logical owner TLS/SPIFFE boundaries remain intact inside energy-api, iot-service retains separate dispatch/verification credentials, telemetry-worker owns history and analytics projections, and metric-worker performs explicit scheduled finalization plus scoped cross-store reconciliation. Forecast and Optimization remain selective intelligence services." },
+    { "id": "IDENTITY_PROVIDER_BOUNDARY", "status": "PASS", "reason": "Phase1 deploys platform-owned identity-service as non-business Identity Infrastructure. It owns credentials and standard OIDC authentication only; platform IAM remains the authorization source of truth for Tenant, Site, Role and Policy." },
     { "id": "OBJECT_STORAGE_PRODUCTION_ROLE", "status": "PARTIAL", "reason": "Object Storage governance and a provider-neutral external Phase1 binding contract are now deployed without selecting a product. V2.1.2 does not freeze a vendor, so PASS still requires a real production endpoint, credential reference and governed bucket catalog to be provisioned by deployment." },
     { "id": "MLOPS_METADATA_COMPLETE", "status": "PASS" }
   ],

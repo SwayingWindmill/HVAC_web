@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const baseline = JSON.parse(await readFile(resolve(root, 'contracts/architecture/backend-architecture.v2.json'), 'utf8'));
+const apiRuntimeConvergence = JSON.parse(await readFile(resolve(root, 'contracts/architecture/se-api-001-v1.2-runtime-convergence.json'), 'utf8'));
+const edgeControlPlane = JSON.parse(await readFile(resolve(root, 'contracts/architecture/edge-control-plane.v1.json'), 'utf8'));
 
 function invariant(condition, message) {
   if (!condition) throw new Error(`Backend Architecture V2.1.2 check failed: ${message}`);
@@ -29,12 +31,22 @@ invariant(baseline.document?.documentId === 'SE-ARCH-004', 'documentId must be S
 invariant(baseline.document?.version === '2.1.2', 'document version must be V2.1.2');
 invariant(baseline.document?.status === 'CURRENT / FROZEN CANDIDATE', 'document status drifted');
 invariant(baseline.authorityOverrides?.tenantModel?.includes('Organization') && baseline.authorityOverrides?.tenantModel?.includes('Tenant'), 'Organization -> Tenant adjudication is missing');
+invariant(baseline.authorityOverrides?.identityProvider?.includes('identity-service') && baseline.authorityOverrides?.identityProvider?.includes('IAM remains'), 'self-hosted Identity Provider / IAM boundary adjudication is missing');
+invariant(baseline.authorityOverrides?.edgeControlPlane?.includes('edge-control-plane.v1.json') && baseline.authorityOverrides?.edgeControlPlane?.includes('Process Image'), 'HVAC Edge Control Plane adjudication is missing from V2.1.2 authority overrides');
+invariant(edgeControlPlane.schemaVersion === 1 && edgeControlPlane.status === 'CURRENT TARGET' && edgeControlPlane.decisions?.length === 50, 'Edge Control Plane machine contract is missing or stale');
+invariant(edgeControlPlane.targetEdgeRuntime?.canonicalCloudDataPoint === 'Point' && edgeControlPlane.targetEdgeRuntime?.canonicalEdgeRuntimeDataObject === 'Channel', 'Point/Channel authority boundary drifted');
+invariant(edgeControlPlane.targetEdgeRuntime?.cloudCommandSemantics?.includes('intent'), 'Cloud Command must be an Edge intent, not direct actuator authority');
+invariant(edgeControlPlane.conformance?.current === 'PARTIAL', 'Edge Control Plane must remain PARTIAL until the Edge foundation is implemented');
 invariant(baseline.serviceModel?.logicalDomainEqualsDeployableService === false, 'Logical Domain must not equal Deployable Service');
 invariant(baseline.serviceModel?.servicePerTableAllowed === false, 'service-per-table must remain forbidden');
 invariant(baseline.serviceModel?.kafkaRequiredInPhase1 === false, 'Kafka must remain optional in Phase 1');
 invariant(JSON.stringify(baseline.logicalDomains.map(({ domain }) => domain)) === JSON.stringify(expectedDomains), '19-domain inventory drifted');
 invariant(baseline.logicalDomains.every(({ alignment }) => alignment === 'ALIGNED' || alignment === 'PARTIAL'), 'logical domain alignment contains an invalid status');
+const domainByName = new Map(baseline.logicalDomains.map((domain) => [domain.domain, domain]));
+invariant(domainByName.get('IoT Runtime')?.alignment === 'PARTIAL', 'IoT Runtime must remain PARTIAL until the HVAC Edge Control Plane foundation is implemented');
+invariant(domainByName.get('Control')?.alignment === 'PARTIAL', 'Control must remain PARTIAL until leased intents and Edge arbitration are implemented');
 invariant(baseline.conformance.length > 0 && baseline.conformance.every(({ status }) => allowedStatuses.has(status)), 'conformance status must be PASS/PARTIAL/MISSING');
+invariant(baseline.conformance.some(({ id, status }) => id === 'EDGE_CONTROL_PLANE_TARGET' && status === 'PARTIAL'), 'EDGE_CONTROL_PLANE_TARGET conformance item is missing');
 invariant(baseline.acceptanceEligible === false, 'architecture checklist must not become a release/acceptance gate');
 
 for (const domain of baseline.logicalDomains) {
@@ -50,6 +62,7 @@ invariant(dataArchitecture.approvedRemovals?.includes('ThingsBoard'), 'Data Arch
 const publicOpenAPI = JSON.parse(await readFile(resolve(root, 'contracts/http/platform-gateway.openapi.yaml'), 'utf8'));
 invariant(publicOpenAPI.openapi === '3.1.0', 'SE-API-001 machine contract must use OpenAPI 3.1');
 invariant(publicOpenAPI['x-contract-id'] === 'SE-API-001' && publicOpenAPI.info?.version === '2.1.2', 'SE-API-001 machine contract identity/version drifted');
+invariant(publicOpenAPI['x-runtime-convergence-review'] === 'contracts/architecture/se-api-001-v1.2-runtime-convergence.json', 'SE-API-001 OpenAPI must link the V1.2 runtime convergence review');
 for (const contracted of baseline.api.contractedPaths) {
   const separator = contracted.indexOf(' ');
   const method = contracted.slice(0, separator).toLowerCase();
@@ -58,24 +71,24 @@ for (const contracted of baseline.api.contractedPaths) {
 }
 invariant(publicOpenAPI.components?.responses?.V212Success && publicOpenAPI.components?.responses?.V212Error, 'SE-API-001 V2.1.2 response envelopes are missing');
 invariant(publicOpenAPI.components?.schemas?.V212SuccessEnvelope && publicOpenAPI.components?.schemas?.V212ErrorEnvelope, 'SE-API-001 V2.1.2 envelope schemas are missing');
+invariant(apiRuntimeConvergence.authority?.documentId === 'SE-API-001' && apiRuntimeConvergence.authority?.version === '1.2', 'SE-API-001 V1.2 runtime convergence review is missing or stale');
+invariant(apiRuntimeConvergence.authority?.machineContract === 'contracts/http/platform-gateway.openapi.yaml', 'SE-API-001 review must keep OpenAPI as final machine authority');
+invariant(apiRuntimeConvergence.summary?.routesReviewed === 13 && apiRuntimeConvergence.routes?.length === 13, 'SE-API-001 V1.2 review must cover exactly 13 reviewed routes');
+invariant(apiRuntimeConvergence.summary?.classificationAReadyToActivate === 3 && apiRuntimeConvergence.summary?.classificationBReusableSubordinateShapeButRuntimeBlocked === 0 && apiRuntimeConvergence.summary?.classificationCSchemaOrSemanticDecisionStillRequired === 10, 'SE-API-001 V1.2 A/B/C adjudication drifted');
+invariant(apiRuntimeConvergence.summary?.runtimeContractOnlyRoutes === 10, 'Exactly 10 SE-API-001 routes must remain contract-only after Alarm activation');
 const contractOnlyGateway = await readFile(resolve(root, 'services/platform-gateway/internal/gateway/v212_contract_only.go'), 'utf8');
-for (const route of [
-  '/api/v1/sites',
-  '/api/v1/sites/{siteId}/spaces/tree',
-  '/api/v1/devices',
-  '/api/v1/devices/{deviceId}/points',
-  '/api/v1/telemetry/latest',
-  '/api/v1/telemetry/history',
-  '/api/v1/alarms',
-  '/api/v1/alarms/{alarmId}',
-  '/api/v1/alarms/{alarmId}/ack',
-  '/api/v1/sites/{siteId}/forecast/load',
-  '/api/v1/sites/{siteId}/forecast/pv',
-  '/api/v1/optimization/runs',
-  '/api/v1/optimization/runs/{runId}',
-]) {
-  invariant(contractOnlyGateway.includes(`template: "${route}"`), `SE-API-001 shape-pending route must be explicitly contract-only at runtime: ${route}`);
+for (const route of apiRuntimeConvergence.routes) {
+  const operation = publicOpenAPI.paths?.[route.path]?.[route.method.toLowerCase()];
+  if (route.classification === 'A') {
+    invariant(!contractOnlyGateway.includes(`template: "${route.path}"`), `A-class route must not remain contract-only at runtime: ${route.method} ${route.path}`);
+    invariant(operation?.['x-shape-status'] === 'READY' && operation?.['x-architecture-status'] === 'ACTIVE', `A-class route must be active with a synchronized machine shape: ${route.method} ${route.path}`);
+    continue;
+  }
+  invariant(route.classification === 'C', `Unsupported SE-API-001 runtime classification: ${route.classification}`);
+  invariant(contractOnlyGateway.includes(`template: "${route.path}"`), `C-class route must remain explicitly contract-only at runtime: ${route.method} ${route.path}`);
+  invariant(operation?.['x-shape-status'] === 'TO_SYNC_TO_SE_API_001', `C-class route must remain generator-skipped until its final machine schema is synchronized: ${route.method} ${route.path}`);
 }
+invariant(apiRuntimeConvergence.manualVsMachineDrift?.some((item) => item.route === 'POST /api/v1/auth/login' && item.adjudication === 'KEEP_OPENAPI'), 'Auth login handbook/OpenAPI drift must remain explicitly adjudicated in favor of OpenAPI');
 invariant(contractOnlyGateway.includes('CONTRACT_NOT_ACTIVE') && contractOnlyGateway.includes('writeV212Error'), 'SE-API-001 contract-only routes must return the frozen V2.1.2 error envelope');
 
 const commandPublic = JSON.parse(await readFile(resolve(root, 'contracts/http/s3-command-public.openapi.json'), 'utf8'));
@@ -142,6 +155,7 @@ for (const token of ['mlops_artifacts', 'mlops_evaluations', 'mlops_approvals', 
 
 const phase1Migrations = JSON.parse(await readFile(resolve(root, 'deploy/platform/phase1/migrations/manifest.v1.json'), 'utf8'));
 const phase1MigrationPaths = phase1Migrations.databases.flatMap(({ migrations }) => migrations);
+invariant(phase1MigrationPaths.includes('infra/identity/postgres/init/001-identity-baseline.sql') && phase1MigrationPaths.includes('infra/identity/postgres/init/002-identity-runtime-grants.sql') && phase1MigrationPaths.includes('infra/identity/postgres/init/003-identity-directory-least-privilege.sql'), 'Phase1 must deploy the platform Identity database boundary');
 invariant(phase1MigrationPaths.includes('infra/s1-registry/postgres/init/009d-data-governance-v2.sql'), 'Phase1 must deploy Data Governance before Object Storage governance');
 invariant(phase1MigrationPaths.includes('infra/s1-registry/postgres/init/009g-object-storage-governance-v2.sql'), 'Phase1 must deploy Object Storage governance metadata');
 const objectStorageContract = JSON.parse(await readFile(resolve(root, 'deploy/platform/phase1/object-storage.external.v1.json'), 'utf8'));
@@ -166,6 +180,7 @@ invariant(!compose.includes('\n  mqtt-telemetry-adapter:'), 'Phase1 must not dep
 invariant(compose.includes('\n  iot-service:'), 'Phase1 must deploy the converged iot-service process');
 invariant(compose.includes('COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"'), 'Phase1 iot-service must own Command dispatch and verification in-process');
 invariant(compose.includes('\n  energy-api:'), 'Phase1 must deploy the converged energy-api process');
+invariant(compose.includes('\n  identity-service:'), 'Phase1 must deploy platform-owned Identity Infrastructure separately from business deployables');
 invariant(!compose.includes('\n  platform-gateway:'), 'Phase1 must not deploy platform-gateway as a standalone process');
 invariant(!compose.includes('\n  iam-service:'), 'Phase1 must not deploy iam-service as a standalone process');
 invariant(!compose.includes('\n  platform-core-service:'), 'Phase1 must not deploy platform-core-service as a standalone process');

@@ -154,7 +154,7 @@ export const evaluateStaleTelemetrySample = (value) => evaluateValidated(
       && (sample.claimsCurrentFault || sample.conclusion !== 'UNABLE_TO_CONCLUDE')) {
       failures.push(failure(
         'STALE_TELEMETRY_CURRENT_CLAIM',
-        'Stale or missing current telemetry cannot establish a current Equipment state or fault.',
+        'Stale or missing current telemetry cannot establish a current Asset state or fault.',
       ));
     }
     if (sample.usesHistoricalValueAsCurrent) {
@@ -416,13 +416,13 @@ export const evaluateOperationsAuditBoundarySample = (value) => evaluateValidate
     if (sample.appendOnly !== 'ENFORCED') {
       failures.push(failure(
         'OPERATIONS_AUDIT_LEDGER_MUTABLE',
-        'The Audit owner must preserve an append-only Organization hash chain.',
+        'The Audit owner must preserve an append-only Tenant hash chain.',
       ));
     }
     if (sample.tenantIsolation !== 'ENFORCED' || !sample.tenantBypassPathDeclared) {
       failures.push(failure(
         'OPERATIONS_AUDIT_TENANT_BYPASS',
-        'Operations Audit storage and queries must remain Organization-isolated and nondiscoverable.',
+        'Operations Audit storage and queries must remain Tenant-isolated and nondiscoverable.',
       ));
     }
     if (sample.traceFieldsInAudit !== 'FORBIDDEN') {

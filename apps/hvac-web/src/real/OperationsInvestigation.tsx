@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CopilotKit, useAgent } from '@copilotkit/react-core/v2';
 import '@copilotkit/react-core/v2/styles.css';
+import { useLocation, useNavigate } from 'react-router';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import {
   advanceSiteNightEnergyInvestigation,
@@ -36,17 +37,8 @@ interface OperationsInvestigationProps {
   readonly embedded?: boolean;
 }
 
-function investigationFromLocation(): string {
-  return new URLSearchParams(window.location.search).get('investigation')?.trim() ?? '';
-}
-
-function setInvestigationLocation(investigationId: string): void {
-  const url = new URL(window.location.href);
-  if (investigationId) url.searchParams.set('investigation', investigationId);
-  else url.searchParams.delete('investigation');
-  const nextLocation = `${url.pathname}${url.search}${url.hash}`;
-  const currentLocation = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-  if (nextLocation !== currentLocation) window.history.pushState(null, '', nextLocation);
+function investigationFromLocation(search: string): string {
+  return new URLSearchParams(search).get('investigation')?.trim() ?? '';
 }
 
 function formatTimestamp(value: number, timezone: string): string {
@@ -254,7 +246,7 @@ function RequiredNextCard({ requirement }: { readonly requirement: OperationsReq
         <strong>{requirement.owner}</strong>
       </div>
       <p><strong>Capability:</strong> {requirement.capability}</p>
-      <p><strong>Equipment:</strong> {requirement.equipmentIds.length === 0 ? 'Site equipment set' : requirement.equipmentIds.join(', ')}</p>
+      <p><strong>Asset:</strong> {requirement.assetIds.length === 0 ? 'Site asset set' : requirement.assetIds.join(', ')}</p>
       <dl className="operations-provenance">
         <div><dt>Target period</dt><dd>{requirement.targetPeriod.from} → {requirement.targetPeriod.to} ({requirement.targetPeriod.expectedBuckets} buckets)</dd></div>
         <div><dt>Baseline period</dt><dd>{requirement.baselinePeriod.from} → {requirement.baselinePeriod.to} ({requirement.baselinePeriod.expectedBuckets} buckets)</dd></div>
@@ -288,7 +280,7 @@ function FindingCard({ record, timezone }: {
       {record.conclusion.status === 'SUPPORTED' ? (
         <div className="operations-site-boundary" role="note">
           <strong>Site-only conclusion</strong>
-          <span>该 Finding 的权威范围仅为 Site，不构成 Equipment root cause。</span>
+          <span>该 Finding 的权威范围仅为 Site，不构成 Asset root cause。</span>
         </div>
       ) : (
         <div className="operations-blocker" role="status">
@@ -405,7 +397,7 @@ function OperatorInputPanel({
                   <strong>{option === 'SITE_ONLY' ? 'Proceed with Site-only authority' : 'Defer the conclusion'}</strong>
                   <small>
                     {option === 'SITE_ONLY'
-                      ? '继续同一 Agent Run，但不会把 Site Evidence 提升为 Equipment root cause。'
+                      ? '继续同一 Agent Run，但不会把 Site Evidence 提升为 Asset root cause。'
                       : '保留当前已提交记录并推迟结论。'}
                   </small>
                 </span>
@@ -593,8 +585,10 @@ export function OperationsInvestigation({
   registerProtectedResource,
   embedded = false,
 }: OperationsInvestigationProps) {
-  const [investigationId, setInvestigationId] = useState(investigationFromLocation);
-  const [openValue, setOpenValue] = useState(investigationFromLocation);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [investigationId, setInvestigationId] = useState(() => investigationFromLocation(location.search));
+  const [openValue, setOpenValue] = useState(() => investigationFromLocation(location.search));
   const [snapshot, setSnapshot] = useState<OperationsInvestigationStateSnapshot | null>(null);
   const [toolReceipts, setToolReceipts] = useState<readonly OperationsToolReceipt[]>([]);
   const [investigations, setInvestigations] = useState<readonly OperationsInvestigationSummary[]>([]);
@@ -616,7 +610,9 @@ export function OperationsInvestigation({
   const openInvestigation = useCallback((nextId: string) => {
     const next = nextId.trim();
     if (!next) return;
-    setInvestigationLocation(next);
+    const parameters = new URLSearchParams(location.search);
+    parameters.set('investigation', next);
+    navigate(`${location.pathname}?${parameters.toString()}${location.hash}`);
     setInvestigationId(next);
     setOpenValue(next);
     setSnapshot(null);
@@ -625,23 +621,19 @@ export function OperationsInvestigation({
     setConnection(null);
     operatorInputIdempotencyKeys.current.clear();
     setRunRevision((value) => value + 1);
-  }, []);
+  }, [location.hash, location.pathname, location.search, navigate]);
 
   useEffect(() => {
-    const onPopState = () => {
-      const next = investigationFromLocation();
-      setInvestigationId(next);
-      setOpenValue(next);
-      setSnapshot(null);
-      setToolReceipts([]);
-      setFailure(null);
-      setConnection(null);
-      operatorInputIdempotencyKeys.current.clear();
-      setRunRevision((value) => value + 1);
-    };
-    window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
-  }, []);
+    const next = investigationFromLocation(location.search);
+    setInvestigationId(next);
+    setOpenValue(next);
+    setSnapshot(null);
+    setToolReceipts([]);
+    setFailure(null);
+    setConnection(null);
+    operatorInputIdempotencyKeys.current.clear();
+    setRunRevision((value) => value + 1);
+  }, [location.search]);
 
   useEffect(() => {
     const controller = new AbortController();

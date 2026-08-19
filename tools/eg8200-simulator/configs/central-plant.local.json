@@ -177,74 +177,74 @@
     {
       "id": "sensor-ch01-chws-temp",
       "deviceId": "CHILLER-01",
-      "mountedSpaceId": "plant-room",
       "name": "CH-01 冷冻水出水温度探头",
       "type": "TEMPERATURE",
       "serialNumber": "SIM-PT1000-CH01-CHWS",
-      "calibrationDueAt": "2027-08-01T00:00:00Z"
+      "calibrationDueAt": "2027-08-01T00:00:00Z",
+      "mountedSpaceId": "plant-room"
     },
     {
       "id": "sensor-ch01-chwr-temp",
       "deviceId": "CHILLER-01",
-      "mountedSpaceId": "plant-room",
       "name": "CH-01 冷冻水回水温度探头",
       "type": "TEMPERATURE",
       "serialNumber": "SIM-PT1000-CH01-CHWR",
-      "calibrationDueAt": "2027-08-01T00:00:00Z"
+      "calibrationDueAt": "2027-08-01T00:00:00Z",
+      "mountedSpaceId": "plant-room"
     },
     {
       "id": "sensor-ch01-cw-entering-temp",
       "deviceId": "CHILLER-01",
-      "mountedSpaceId": "plant-room",
       "name": "CH-01 冷却水进水温度探头",
       "type": "TEMPERATURE",
       "serialNumber": "SIM-PT1000-CH01-CWE",
-      "calibrationDueAt": "2027-08-01T00:00:00Z"
+      "calibrationDueAt": "2027-08-01T00:00:00Z",
+      "mountedSpaceId": "plant-room"
     },
     {
       "id": "sensor-chwp01-flow",
       "deviceId": "CHWP-01",
-      "mountedSpaceId": "plant-room",
       "name": "CHWP-01 流量探头",
       "type": "FLOW",
       "serialNumber": "SIM-FLOW-CHWP01",
-      "calibrationDueAt": "2027-08-01T00:00:00Z"
+      "calibrationDueAt": "2027-08-01T00:00:00Z",
+      "mountedSpaceId": "plant-room"
     },
     {
       "id": "sensor-cwp01-flow",
       "deviceId": "CWP-01",
-      "mountedSpaceId": "plant-room",
       "name": "CWP-01 流量探头",
       "type": "FLOW",
       "serialNumber": "SIM-FLOW-CWP01",
-      "calibrationDueAt": "2027-08-01T00:00:00Z"
+      "calibrationDueAt": "2027-08-01T00:00:00Z",
+      "mountedSpaceId": "plant-room"
     },
     {
       "id": "sensor-ct01-entering-temp",
       "deviceId": "CT-01",
-      "mountedSpaceId": "rooftop",
       "name": "CT-01 进水温度探头",
       "type": "TEMPERATURE",
       "serialNumber": "SIM-PT1000-CT01-E",
-      "calibrationDueAt": "2027-08-01T00:00:00Z"
+      "calibrationDueAt": "2027-08-01T00:00:00Z",
+      "mountedSpaceId": "rooftop"
     },
     {
       "id": "sensor-ct01-leaving-temp",
       "deviceId": "CT-01",
-      "mountedSpaceId": "rooftop",
       "name": "CT-01 出水温度探头",
       "type": "TEMPERATURE",
       "serialNumber": "SIM-PT1000-CT01-L",
-      "calibrationDueAt": "2027-08-01T00:00:00Z"
+      "calibrationDueAt": "2027-08-01T00:00:00Z",
+      "mountedSpaceId": "rooftop"
     },
     {
       "id": "sensor-ct01-wet-bulb",
       "deviceId": "CT-01",
-      "mountedSpaceId": "rooftop",
       "name": "CT-01 本地湿球温度探头",
       "type": "TEMPERATURE",
       "serialNumber": "SIM-WB-CT01",
-      "calibrationDueAt": "2027-08-01T00:00:00Z"
+      "calibrationDueAt": "2027-08-01T00:00:00Z",
+      "mountedSpaceId": "rooftop"
     }
   ],
   "points": [
@@ -264,7 +264,8 @@
       "publishInterval": "5s",
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHILLER-01:runState"
+      "sourceAddress": "CHILLER-01:runState",
+      "pointId": "01910000-0000-7000-8000-000000000014"
     },
     {
       "deviceId": "CHILLER-01",
@@ -283,7 +284,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHILLER-01:leavingChilledWaterTemperatureC"
+      "sourceAddress": "CHILLER-01:leavingChilledWaterTemperatureC",
+      "pointId": "01910000-0000-7000-8000-000000000015"
     },
     {
       "deviceId": "CHILLER-01",
@@ -302,7 +304,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHILLER-01:enteringChilledWaterTemperatureC"
+      "sourceAddress": "CHILLER-01:enteringChilledWaterTemperatureC",
+      "pointId": "01910000-0000-7000-8000-000000000016"
     },
     {
       "deviceId": "CHILLER-01",
@@ -321,7 +324,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHILLER-01:chilledWaterTemperatureSetpointC"
+      "sourceAddress": "CHILLER-01:chilledWaterTemperatureSetpointC",
+      "pointId": "01910000-0000-7000-8000-000000000017"
     },
     {
       "deviceId": "CHILLER-01",
@@ -340,7 +344,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHILLER-01:enteringCoolingWaterTemperatureC"
+      "sourceAddress": "CHILLER-01:enteringCoolingWaterTemperatureC",
+      "pointId": "01910000-0000-7000-8000-000000000018"
     },
     {
       "deviceId": "CHILLER-01",
@@ -359,7 +364,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHILLER-01:compressorLoadPct"
+      "sourceAddress": "CHILLER-01:compressorLoadPct",
+      "pointId": "01910000-0000-7000-8000-000000000019"
     },
     {
       "deviceId": "CHILLER-01",
@@ -378,7 +384,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHILLER-01:loadLimitPct"
+      "sourceAddress": "CHILLER-01:loadLimitPct",
+      "pointId": "01910000-0000-7000-8000-00000000001a"
     },
     {
       "deviceId": "CHILLER-01",
@@ -397,7 +404,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHILLER-01:coolingCapacityKw"
+      "sourceAddress": "CHILLER-01:coolingCapacityKw",
+      "pointId": "01910000-0000-7000-8000-00000000001b"
     },
     {
       "deviceId": "CHILLER-01",
@@ -416,7 +424,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHILLER-01:powerKw"
+      "sourceAddress": "CHILLER-01:powerKw",
+      "pointId": "01910000-0000-7000-8000-00000000001c"
     },
     {
       "deviceId": "CHILLER-01",
@@ -434,7 +443,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHILLER-01:cop"
+      "sourceAddress": "CHILLER-01:cop",
+      "pointId": "01910000-0000-7000-8000-00000000001d"
     },
     {
       "deviceId": "CHILLER-01",
@@ -452,7 +462,8 @@
       "publishInterval": "5s",
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHILLER-01:businessRevision"
+      "sourceAddress": "CHILLER-01:businessRevision",
+      "pointId": "01910000-0000-7000-8000-00000000001e"
     },
     {
       "deviceId": "CHILLER-01",
@@ -470,7 +481,8 @@
       "publishInterval": "5s",
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHILLER-01:faultCode"
+      "sourceAddress": "CHILLER-01:faultCode",
+      "pointId": "01910000-0000-7000-8000-00000000001f"
     },
     {
       "deviceId": "CHWP-01",
@@ -488,7 +500,8 @@
       "publishInterval": "5s",
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHWP-01:runState"
+      "sourceAddress": "CHWP-01:runState",
+      "pointId": "01910000-0000-7000-8000-000000000020"
     },
     {
       "deviceId": "CHWP-01",
@@ -507,7 +520,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHWP-01:frequencyHz"
+      "sourceAddress": "CHWP-01:frequencyHz",
+      "pointId": "01910000-0000-7000-8000-000000000021"
     },
     {
       "deviceId": "CHWP-01",
@@ -526,7 +540,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHWP-01:speedPct"
+      "sourceAddress": "CHWP-01:speedPct",
+      "pointId": "01910000-0000-7000-8000-000000000022"
     },
     {
       "deviceId": "CHWP-01",
@@ -545,7 +560,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHWP-01:flowRateM3h"
+      "sourceAddress": "CHWP-01:flowRateM3h",
+      "pointId": "01910000-0000-7000-8000-000000000023"
     },
     {
       "deviceId": "CHWP-01",
@@ -564,7 +580,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHWP-01:powerKw"
+      "sourceAddress": "CHWP-01:powerKw",
+      "pointId": "01910000-0000-7000-8000-000000000024"
     },
     {
       "deviceId": "CHWP-01",
@@ -582,7 +599,8 @@
       "publishInterval": "5s",
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHWP-01:businessRevision"
+      "sourceAddress": "CHWP-01:businessRevision",
+      "pointId": "01910000-0000-7000-8000-000000000025"
     },
     {
       "deviceId": "CHWP-01",
@@ -600,7 +618,8 @@
       "publishInterval": "5s",
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CHWP-01:faultCode"
+      "sourceAddress": "CHWP-01:faultCode",
+      "pointId": "01910000-0000-7000-8000-000000000026"
     },
     {
       "deviceId": "CWP-01",
@@ -618,7 +637,8 @@
       "publishInterval": "5s",
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CWP-01:runState"
+      "sourceAddress": "CWP-01:runState",
+      "pointId": "01910000-0000-7000-8000-000000000027"
     },
     {
       "deviceId": "CWP-01",
@@ -637,7 +657,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CWP-01:frequencyHz"
+      "sourceAddress": "CWP-01:frequencyHz",
+      "pointId": "01910000-0000-7000-8000-000000000028"
     },
     {
       "deviceId": "CWP-01",
@@ -656,7 +677,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CWP-01:speedPct"
+      "sourceAddress": "CWP-01:speedPct",
+      "pointId": "01910000-0000-7000-8000-000000000029"
     },
     {
       "deviceId": "CWP-01",
@@ -675,7 +697,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CWP-01:flowRateM3h"
+      "sourceAddress": "CWP-01:flowRateM3h",
+      "pointId": "01910000-0000-7000-8000-00000000002a"
     },
     {
       "deviceId": "CWP-01",
@@ -694,7 +717,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CWP-01:powerKw"
+      "sourceAddress": "CWP-01:powerKw",
+      "pointId": "01910000-0000-7000-8000-00000000002b"
     },
     {
       "deviceId": "CWP-01",
@@ -712,7 +736,8 @@
       "publishInterval": "5s",
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CWP-01:businessRevision"
+      "sourceAddress": "CWP-01:businessRevision",
+      "pointId": "01910000-0000-7000-8000-00000000002c"
     },
     {
       "deviceId": "CWP-01",
@@ -730,7 +755,8 @@
       "publishInterval": "5s",
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CWP-01:faultCode"
+      "sourceAddress": "CWP-01:faultCode",
+      "pointId": "01910000-0000-7000-8000-00000000002d"
     },
     {
       "deviceId": "CT-01",
@@ -748,7 +774,8 @@
       "publishInterval": "5s",
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CT-01:runState"
+      "sourceAddress": "CT-01:runState",
+      "pointId": "01910000-0000-7000-8000-00000000002e"
     },
     {
       "deviceId": "CT-01",
@@ -767,7 +794,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CT-01:fanSpeedPct"
+      "sourceAddress": "CT-01:fanSpeedPct",
+      "pointId": "01910000-0000-7000-8000-00000000002f"
     },
     {
       "deviceId": "CT-01",
@@ -786,7 +814,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CT-01:enteringWaterTemperatureC"
+      "sourceAddress": "CT-01:enteringWaterTemperatureC",
+      "pointId": "01910000-0000-7000-8000-000000000030"
     },
     {
       "deviceId": "CT-01",
@@ -805,7 +834,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CT-01:leavingWaterTemperatureC"
+      "sourceAddress": "CT-01:leavingWaterTemperatureC",
+      "pointId": "01910000-0000-7000-8000-000000000031"
     },
     {
       "deviceId": "CT-01",
@@ -824,7 +854,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CT-01:ambientWetBulbTemperatureC"
+      "sourceAddress": "CT-01:ambientWetBulbTemperatureC",
+      "pointId": "01910000-0000-7000-8000-000000000032"
     },
     {
       "deviceId": "CT-01",
@@ -843,7 +874,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CT-01:approachTemperatureC"
+      "sourceAddress": "CT-01:approachTemperatureC",
+      "pointId": "01910000-0000-7000-8000-000000000033"
     },
     {
       "deviceId": "CT-01",
@@ -862,7 +894,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CT-01:powerKw"
+      "sourceAddress": "CT-01:powerKw",
+      "pointId": "01910000-0000-7000-8000-000000000034"
     },
     {
       "deviceId": "CT-01",
@@ -880,7 +913,8 @@
       "publishInterval": "5s",
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CT-01:businessRevision"
+      "sourceAddress": "CT-01:businessRevision",
+      "pointId": "01910000-0000-7000-8000-000000000035"
     },
     {
       "deviceId": "CT-01",
@@ -898,7 +932,8 @@
       "publishInterval": "5s",
       "staleAfter": "15s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "CT-01:faultCode"
+      "sourceAddress": "CT-01:faultCode",
+      "pointId": "01910000-0000-7000-8000-000000000036"
     },
     {
       "deviceId": "METER-HVAC-TOTAL",
@@ -917,7 +952,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "METER-HVAC-TOTAL:activePowerKw"
+      "sourceAddress": "METER-HVAC-TOTAL:activePowerKw",
+      "pointId": "01910000-0000-7000-8000-000000000037"
     },
     {
       "deviceId": "METER-HVAC-TOTAL",
@@ -936,7 +972,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "METER-HVAC-TOTAL:energyKwh"
+      "sourceAddress": "METER-HVAC-TOTAL:energyKwh",
+      "pointId": "01910000-0000-7000-8000-000000000038"
     },
     {
       "deviceId": "METER-HVAC-TOTAL",
@@ -954,7 +991,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "METER-HVAC-TOTAL:powerFactor"
+      "sourceAddress": "METER-HVAC-TOTAL:powerFactor",
+      "pointId": "01910000-0000-7000-8000-000000000039"
     },
     {
       "deviceId": "METER-HVAC-TOTAL",
@@ -973,7 +1011,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "METER-HVAC-TOTAL:frequencyHz"
+      "sourceAddress": "METER-HVAC-TOTAL:frequencyHz",
+      "pointId": "01910000-0000-7000-8000-00000000003a"
     },
     {
       "deviceId": "BTU-METER-01",
@@ -992,7 +1031,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "BTU-METER-01:supplyWaterTemperatureC"
+      "sourceAddress": "BTU-METER-01:supplyWaterTemperatureC",
+      "pointId": "01910000-0000-7000-8000-00000000003b"
     },
     {
       "deviceId": "BTU-METER-01",
@@ -1011,7 +1051,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "BTU-METER-01:returnWaterTemperatureC"
+      "sourceAddress": "BTU-METER-01:returnWaterTemperatureC",
+      "pointId": "01910000-0000-7000-8000-00000000003c"
     },
     {
       "deviceId": "BTU-METER-01",
@@ -1030,7 +1071,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "BTU-METER-01:temperatureDifferenceC"
+      "sourceAddress": "BTU-METER-01:temperatureDifferenceC",
+      "pointId": "01910000-0000-7000-8000-00000000003d"
     },
     {
       "deviceId": "BTU-METER-01",
@@ -1049,7 +1091,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "BTU-METER-01:flowRateM3h"
+      "sourceAddress": "BTU-METER-01:flowRateM3h",
+      "pointId": "01910000-0000-7000-8000-00000000003e"
     },
     {
       "deviceId": "BTU-METER-01",
@@ -1068,7 +1111,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "BTU-METER-01:instantCoolingCapacityKw"
+      "sourceAddress": "BTU-METER-01:instantCoolingCapacityKw",
+      "pointId": "01910000-0000-7000-8000-00000000003f"
     },
     {
       "deviceId": "BTU-METER-01",
@@ -1087,7 +1131,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "BTU-METER-01:accumulatedCoolingEnergyKwh"
+      "sourceAddress": "BTU-METER-01:accumulatedCoolingEnergyKwh",
+      "pointId": "01910000-0000-7000-8000-000000000040"
     },
     {
       "deviceId": "WEATHER-STATION-01",
@@ -1106,7 +1151,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "WEATHER-STATION-01:ambientDryBulbTemperatureC"
+      "sourceAddress": "WEATHER-STATION-01:ambientDryBulbTemperatureC",
+      "pointId": "01910000-0000-7000-8000-000000000041"
     },
     {
       "deviceId": "WEATHER-STATION-01",
@@ -1125,7 +1171,8 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "WEATHER-STATION-01:ambientWetBulbTemperatureC"
+      "sourceAddress": "WEATHER-STATION-01:ambientWetBulbTemperatureC",
+      "pointId": "01910000-0000-7000-8000-000000000042"
     },
     {
       "deviceId": "WEATHER-STATION-01",
@@ -1144,7 +1191,441 @@
       "publishInterval": "2s",
       "staleAfter": "10s",
       "sourceProtocol": "SIMULATED",
-      "sourceAddress": "WEATHER-STATION-01:relativeHumidityPct"
+      "sourceAddress": "WEATHER-STATION-01:relativeHumidityPct",
+      "pointId": "01910000-0000-7000-8000-000000000043"
+    },
+    {
+      "deviceId": "CHILLER-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-chiller-01",
+      "sourceKey": "start",
+      "telemetryKey": "chiller.command.start",
+      "pointCode": "start",
+      "name": "启动冷水机",
+      "pointType": "COMMAND",
+      "valueType": "BOOLEAN",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "ACTION",
+        "capability": "START",
+        "capabilityRevision": "capability:start:v1",
+        "feedbackPointKey": "run_state",
+        "feedbackSourceKey": "runState"
+      },
+      "pointId": "01910000-0000-7000-8000-500000000001"
+    },
+    {
+      "deviceId": "CHILLER-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-chiller-01",
+      "sourceKey": "stop",
+      "telemetryKey": "chiller.command.stop",
+      "pointCode": "stop",
+      "name": "停止冷水机",
+      "pointType": "COMMAND",
+      "valueType": "BOOLEAN",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "ACTION",
+        "capability": "STOP",
+        "capabilityRevision": "capability:stop:v1",
+        "feedbackPointKey": "run_state",
+        "feedbackSourceKey": "runState"
+      },
+      "pointId": "01910000-0000-7000-8000-500000000002"
+    },
+    {
+      "deviceId": "CHILLER-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-chiller-01",
+      "sourceKey": "resetFault",
+      "telemetryKey": "chiller.command.reset_fault",
+      "pointCode": "reset_fault",
+      "name": "复位冷水机故障",
+      "pointType": "COMMAND",
+      "valueType": "BOOLEAN",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "ACTION",
+        "capability": "RESET_FAULT",
+        "capabilityRevision": "capability:reset-fault:v1",
+        "feedbackPointKey": "fault_code",
+        "feedbackSourceKey": "faultCode"
+      },
+      "pointId": "01910000-0000-7000-8000-500000000003"
+    },
+    {
+      "deviceId": "CHILLER-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-chiller-01",
+      "sourceKey": "setChilledWaterTemperatureSetpoint",
+      "telemetryKey": "chiller.command.chilled_water_temperature_setpoint",
+      "pointCode": "set_chilled_water_temperature_setpoint",
+      "name": "冷冻水出水设定温度",
+      "pointType": "COMMAND",
+      "valueType": "NUMBER",
+      "unit": "Cel",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "NUMBER",
+        "capability": "SET_CHILLED_WATER_TEMPERATURE_SETPOINT",
+        "capabilityRevision": "capability:set-chilled-water-temperature-setpoint:v1",
+        "parameterKey": "setpointC",
+        "minimum": 5,
+        "maximum": 12,
+        "step": 0.5,
+        "feedbackPointKey": "chilled_water_temperature_setpoint",
+        "feedbackSourceKey": "chilledWaterTemperatureSetpointC"
+      },
+      "pointId": "01910000-0000-7000-8000-500000000004"
+    },
+    {
+      "deviceId": "CHILLER-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-chiller-01",
+      "sourceKey": "setLoadLimit",
+      "telemetryKey": "chiller.command.load_limit",
+      "pointCode": "set_load_limit",
+      "name": "冷水机负荷上限",
+      "pointType": "COMMAND",
+      "valueType": "NUMBER",
+      "unit": "%",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "NUMBER",
+        "capability": "SET_LOAD_LIMIT",
+        "capabilityRevision": "capability:set-load-limit:v1",
+        "parameterKey": "loadLimitPct",
+        "minimum": 20,
+        "maximum": 100,
+        "step": 1,
+        "feedbackPointKey": "load_limit",
+        "feedbackSourceKey": "loadLimitPct"
+      },
+      "pointId": "01910000-0000-7000-8000-500000000005"
+    },
+    {
+      "deviceId": "CHWP-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-chwp-01",
+      "sourceKey": "start",
+      "telemetryKey": "chwp.command.start",
+      "pointCode": "start",
+      "name": "启动冷冻水泵",
+      "pointType": "COMMAND",
+      "valueType": "BOOLEAN",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "ACTION",
+        "capability": "START",
+        "capabilityRevision": "capability:start:v1",
+        "feedbackPointKey": "run_state",
+        "feedbackSourceKey": "runState"
+      },
+      "pointId": "01910000-0000-7000-8000-500000000006"
+    },
+    {
+      "deviceId": "CHWP-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-chwp-01",
+      "sourceKey": "stop",
+      "telemetryKey": "chwp.command.stop",
+      "pointCode": "stop",
+      "name": "停止冷冻水泵",
+      "pointType": "COMMAND",
+      "valueType": "BOOLEAN",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "ACTION",
+        "capability": "STOP",
+        "capabilityRevision": "capability:stop:v1",
+        "feedbackPointKey": "run_state",
+        "feedbackSourceKey": "runState"
+      },
+      "pointId": "01910000-0000-7000-8000-500000000007"
+    },
+    {
+      "deviceId": "CHWP-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-chwp-01",
+      "sourceKey": "resetFault",
+      "telemetryKey": "chwp.command.reset_fault",
+      "pointCode": "reset_fault",
+      "name": "复位冷冻水泵故障",
+      "pointType": "COMMAND",
+      "valueType": "BOOLEAN",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "ACTION",
+        "capability": "RESET_FAULT",
+        "capabilityRevision": "capability:reset-fault:v1",
+        "feedbackPointKey": "fault_code",
+        "feedbackSourceKey": "faultCode"
+      },
+      "pointId": "01910000-0000-7000-8000-500000000008"
+    },
+    {
+      "deviceId": "CHWP-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-chwp-01",
+      "sourceKey": "setFrequency",
+      "telemetryKey": "chwp.command.frequency",
+      "pointCode": "set_frequency",
+      "name": "冷冻水泵频率",
+      "pointType": "COMMAND",
+      "valueType": "NUMBER",
+      "unit": "Hz",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "NUMBER",
+        "capability": "SET_FREQUENCY",
+        "capabilityRevision": "capability:set-frequency:v1",
+        "parameterKey": "frequencyHz",
+        "minimum": 20,
+        "maximum": 50,
+        "step": 0.5,
+        "feedbackPointKey": "frequency",
+        "feedbackSourceKey": "frequencyHz"
+      },
+      "pointId": "01910000-0000-7000-8000-500000000009"
+    },
+    {
+      "deviceId": "CWP-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-cwp-01",
+      "sourceKey": "start",
+      "telemetryKey": "cwp.command.start",
+      "pointCode": "start",
+      "name": "启动冷却水泵",
+      "pointType": "COMMAND",
+      "valueType": "BOOLEAN",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "ACTION",
+        "capability": "START",
+        "capabilityRevision": "capability:start:v1",
+        "feedbackPointKey": "run_state",
+        "feedbackSourceKey": "runState"
+      },
+      "pointId": "01910000-0000-7000-8000-50000000000a"
+    },
+    {
+      "deviceId": "CWP-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-cwp-01",
+      "sourceKey": "stop",
+      "telemetryKey": "cwp.command.stop",
+      "pointCode": "stop",
+      "name": "停止冷却水泵",
+      "pointType": "COMMAND",
+      "valueType": "BOOLEAN",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "ACTION",
+        "capability": "STOP",
+        "capabilityRevision": "capability:stop:v1",
+        "feedbackPointKey": "run_state",
+        "feedbackSourceKey": "runState"
+      },
+      "pointId": "01910000-0000-7000-8000-50000000000b"
+    },
+    {
+      "deviceId": "CWP-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-cwp-01",
+      "sourceKey": "resetFault",
+      "telemetryKey": "cwp.command.reset_fault",
+      "pointCode": "reset_fault",
+      "name": "复位冷却水泵故障",
+      "pointType": "COMMAND",
+      "valueType": "BOOLEAN",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "ACTION",
+        "capability": "RESET_FAULT",
+        "capabilityRevision": "capability:reset-fault:v1",
+        "feedbackPointKey": "fault_code",
+        "feedbackSourceKey": "faultCode"
+      },
+      "pointId": "01910000-0000-7000-8000-50000000000c"
+    },
+    {
+      "deviceId": "CWP-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-cwp-01",
+      "sourceKey": "setFrequency",
+      "telemetryKey": "cwp.command.frequency",
+      "pointCode": "set_frequency",
+      "name": "冷却水泵频率",
+      "pointType": "COMMAND",
+      "valueType": "NUMBER",
+      "unit": "Hz",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "NUMBER",
+        "capability": "SET_FREQUENCY",
+        "capabilityRevision": "capability:set-frequency:v1",
+        "parameterKey": "frequencyHz",
+        "minimum": 20,
+        "maximum": 50,
+        "step": 0.5,
+        "feedbackPointKey": "frequency",
+        "feedbackSourceKey": "frequencyHz"
+      },
+      "pointId": "01910000-0000-7000-8000-50000000000d"
+    },
+    {
+      "deviceId": "CT-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-ct-01",
+      "sourceKey": "start",
+      "telemetryKey": "cooling_tower.command.start",
+      "pointCode": "start",
+      "name": "启动冷却塔",
+      "pointType": "COMMAND",
+      "valueType": "BOOLEAN",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "ACTION",
+        "capability": "START",
+        "capabilityRevision": "capability:start:v1",
+        "feedbackPointKey": "run_state",
+        "feedbackSourceKey": "runState"
+      },
+      "pointId": "01910000-0000-7000-8000-50000000000e"
+    },
+    {
+      "deviceId": "CT-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-ct-01",
+      "sourceKey": "stop",
+      "telemetryKey": "cooling_tower.command.stop",
+      "pointCode": "stop",
+      "name": "停止冷却塔",
+      "pointType": "COMMAND",
+      "valueType": "BOOLEAN",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "ACTION",
+        "capability": "STOP",
+        "capabilityRevision": "capability:stop:v1",
+        "feedbackPointKey": "run_state",
+        "feedbackSourceKey": "runState"
+      },
+      "pointId": "01910000-0000-7000-8000-50000000000f"
+    },
+    {
+      "deviceId": "CT-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-ct-01",
+      "sourceKey": "resetFault",
+      "telemetryKey": "cooling_tower.command.reset_fault",
+      "pointCode": "reset_fault",
+      "name": "复位冷却塔故障",
+      "pointType": "COMMAND",
+      "valueType": "BOOLEAN",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "ACTION",
+        "capability": "RESET_FAULT",
+        "capabilityRevision": "capability:reset-fault:v1",
+        "feedbackPointKey": "fault_code",
+        "feedbackSourceKey": "faultCode"
+      },
+      "pointId": "01910000-0000-7000-8000-500000000010"
+    },
+    {
+      "deviceId": "CT-01",
+      "sensorId": "",
+      "subjectType": "ASSET",
+      "subjectId": "equipment-ct-01",
+      "sourceKey": "setFanSpeed",
+      "telemetryKey": "cooling_tower.command.fan_speed",
+      "pointCode": "set_fan_speed",
+      "name": "冷却塔风机转速",
+      "pointType": "COMMAND",
+      "valueType": "NUMBER",
+      "unit": "%",
+      "writable": true,
+      "sampleInterval": "1s",
+      "publishInterval": "2s",
+      "staleAfter": "10s",
+      "sourceMetadata": {
+        "controlKind": "NUMBER",
+        "capability": "SET_FAN_SPEED",
+        "capabilityRevision": "capability:set-fan-speed:v1",
+        "parameterKey": "fanSpeedPct",
+        "minimum": 20,
+        "maximum": 100,
+        "step": 1,
+        "feedbackPointKey": "fan_speed",
+        "feedbackSourceKey": "fanSpeedPct"
+      },
+      "pointId": "01910000-0000-7000-8000-500000000011"
     }
   ]
 }

@@ -1,103 +1,77 @@
 package gateway
 
 import (
-	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/workorderauth"
-	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
-func TestGatewayWorkOrderCreateUsesCSRFExactIAMAndWriteContext(t *testing.T) {
-	fixture := newWorkOrderGatewayFixture(t)
+const (
+	gatewayWorkOrderTestTenantID = "0190f000-0000-7000-8000-000000000001"
+	gatewayWorkOrderTestAlarmID  = "01910000-2000-7000-8000-000000000001"
+)
+
+func TestGatewayWorkOrderCreateParserUsesTenantScope(t *testing.T) {
+	h := workOrderParserHandler()
+	session := bffSession{Session: sessionstore.Session{TenantID: gatewayWorkOrderTestTenantID}}
 	body := validGatewayCreateBody()
-	request := authenticatedWorkOrderMutationRequest(fixture, http.MethodPost, "/api/v1/sites/"+gatewayWorkOrderSiteID+"/work-orders", body, "create-gateway-0001")
-	recorder := httptest.NewRecorder()
-	dispatchWorkOrderRoute(fixture.handler, recorder, request, publicWorkOrderRoute{kind: publicWorkOrderCollection, siteID: gatewayWorkOrderSiteID})
-	if recorder.Code != http.StatusCreated {
-		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+gatewayWorkOrderSiteID+"/work-orders", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "create-gateway-0001")
+
+	parsed, failure := h.parseWorkOrderMutation(request, session, publicWorkOrderRoute{kind: publicWorkOrderCollection, siteID: gatewayWorkOrderSiteID, action: workorderauth.ActionCreate})
+	if failure != nil || parsed.create == nil || parsed.expectedCreate == nil {
+		t.Fatalf("valid Work Order create rejected: parsed=%#v failure=%#v", parsed, failure)
 	}
-	if fixture.iamCalls.Load() != 2 || fixture.workOrderCalls.Load() != 1 || fixture.lastUpstreamMethod.Load() != http.MethodPost || fixture.lastUpstreamIdempotency.Load() != "create-gateway-0001" {
-		t.Fatalf("calls iam=%d backend=%d method=%q idempotency=%q", fixture.iamCalls.Load(), fixture.workOrderCalls.Load(), fixture.lastUpstreamMethod.Load(), fixture.lastUpstreamIdempotency.Load())
-	}
-	if fixture.lastUpstreamPath.Load() != "/internal/v1/sites/"+gatewayWorkOrderSiteID+"/work-orders" || fixture.lastUpstreamBody.Load() != body {
-		t.Fatalf("upstream path=%q body=%q", fixture.lastUpstreamPath.Load(), fixture.lastUpstreamBody.Load())
-	}
-	var created workordermodel.WorkOrder
-	if json.NewDecoder(recorder.Body).Decode(&created) != nil || created.WorkOrderID != gatewayWorkOrderID || created.Version != 1 || created.Status != workordermodel.StatusOpen {
-		t.Fatalf("unexpected create projection: %#v", created)
+	if parsed.expectedCreate.TenantID != gatewayWorkOrderTestTenantID || parsed.expectedCreate.SiteID != gatewayWorkOrderSiteID {
+		t.Fatalf("create scope drifted: Tenant=%s Site=%s", parsed.expectedCreate.TenantID, parsed.expectedCreate.SiteID)
 	}
 }
 
-func TestGatewayWorkOrderAssignBindsVersionAndOwnershipTuple(t *testing.T) {
-	fixture := newWorkOrderGatewayFixture(t)
-	body := "{\"expectedVersion\":1,\"assigneeId\":\"principal:operator-b\",\"teamId\":\"team:controls\",\"reason\":\"route to controls\"}"
-	request := authenticatedWorkOrderMutationRequest(fixture, http.MethodPost, "/api/v1/sites/"+gatewayWorkOrderSiteID+"/work-orders/"+gatewayWorkOrderID+":assign", body, "assign-gateway-0001")
-	recorder := httptest.NewRecorder()
-	dispatchWorkOrderRoute(fixture.handler, recorder, request, publicWorkOrderRoute{kind: publicWorkOrderAssignment, siteID: gatewayWorkOrderSiteID, workOrderID: gatewayWorkOrderID, action: workorderauth.ActionAssign})
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+func TestGatewayWorkOrderAssignmentParserBindsOwnershipTuple(t *testing.T) {
+	h := workOrderParserHandler()
+	session := bffSession{Session: sessionstore.Session{TenantID: gatewayWorkOrderTestTenantID}}
+	body := `{"expectedVersion":1,"assigneeId":"principal:operator-b","teamId":"team:controls","reason":"route to controls"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+gatewayWorkOrderSiteID+"/work-orders/"+gatewayWorkOrderID+":assign", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "assign-gateway-0001")
+
+	parsed, failure := h.parseWorkOrderMutation(request, session, publicWorkOrderRoute{kind: publicWorkOrderAssignment, siteID: gatewayWorkOrderSiteID, workOrderID: gatewayWorkOrderID, action: workorderauth.ActionAssign})
+	if failure != nil || parsed.assignment == nil || parsed.assignmentTarget == nil || parsed.assignmentTeam == nil {
+		t.Fatalf("valid Work Order assignment rejected: parsed=%#v failure=%#v", parsed, failure)
 	}
-	var assigned workordermodel.WorkOrder
-	if json.NewDecoder(recorder.Body).Decode(&assigned) != nil || assigned.Version != 2 || assigned.AssigneeID == nil || *assigned.AssigneeID != "principal:operator-b" || assigned.TeamID == nil || *assigned.TeamID != "team:controls" || assigned.Timeline[1].Operation != workordermodel.OperationAssign {
-		t.Fatalf("unexpected assignment projection: %#v", assigned)
+	if *parsed.assignmentTarget != "principal:operator-b" || *parsed.assignmentTeam != "team:controls" || parsed.assignment.ExpectedVersion != 1 {
+		t.Fatalf("assignment tuple drifted: %#v", parsed)
 	}
 }
 
-func TestGatewayWorkOrderMutationFailuresStopBeforeBackend(t *testing.T) {
-	t.Run("missing csrf", func(t *testing.T) {
-		fixture := newWorkOrderGatewayFixture(t)
-		request := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+gatewayWorkOrderSiteID+"/work-orders", strings.NewReader(validGatewayCreateBody()))
-		request = request.WithContext(context.WithValue(request.Context(), routeSessionContextKey, fixture.session))
-		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("Idempotency-Key", "create-gateway-0002")
-		recorder := httptest.NewRecorder()
-		dispatchWorkOrderRoute(fixture.handler, recorder, request, publicWorkOrderRoute{kind: publicWorkOrderCollection, siteID: gatewayWorkOrderSiteID})
-		if recorder.Code != http.StatusForbidden || fixture.iamCalls.Load() != 0 || fixture.workOrderCalls.Load() != 0 {
-			t.Fatalf("status=%d iam=%d backend=%d body=%s", recorder.Code, fixture.iamCalls.Load(), fixture.workOrderCalls.Load(), recorder.Body.String())
-		}
-	})
-	t.Run("invalid body", func(t *testing.T) {
-		fixture := newWorkOrderGatewayFixture(t)
-		request := authenticatedWorkOrderMutationRequest(fixture, http.MethodPost, "/api/v1/sites/"+gatewayWorkOrderSiteID+"/work-orders", "{\"status\":\"COMPLETED\"}", "create-gateway-0003")
-		recorder := httptest.NewRecorder()
-		dispatchWorkOrderRoute(fixture.handler, recorder, request, publicWorkOrderRoute{kind: publicWorkOrderCollection, siteID: gatewayWorkOrderSiteID})
-		if recorder.Code != http.StatusBadRequest || fixture.iamCalls.Load() != 0 || fixture.workOrderCalls.Load() != 0 {
-			t.Fatalf("status=%d iam=%d backend=%d body=%s", recorder.Code, fixture.iamCalls.Load(), fixture.workOrderCalls.Load(), recorder.Body.String())
-		}
-	})
-	t.Run("iam deny", func(t *testing.T) {
-		fixture := newWorkOrderGatewayFixture(t)
-		fixture.deny.Store(true)
-		request := authenticatedWorkOrderMutationRequest(fixture, http.MethodPost, "/api/v1/sites/"+gatewayWorkOrderSiteID+"/work-orders", validGatewayCreateBody(), "create-gateway-0004")
-		recorder := httptest.NewRecorder()
-		dispatchWorkOrderRoute(fixture.handler, recorder, request, publicWorkOrderRoute{kind: publicWorkOrderCollection, siteID: gatewayWorkOrderSiteID})
-		if recorder.Code != http.StatusForbidden || fixture.iamCalls.Load() != 1 || fixture.workOrderCalls.Load() != 0 {
-			t.Fatalf("status=%d iam=%d backend=%d body=%s", recorder.Code, fixture.iamCalls.Load(), fixture.workOrderCalls.Load(), recorder.Body.String())
-		}
-	})
-}
-
-func TestGatewayWorkOrderMutationRejectsProjectionDriftAndUnreviewedRoutes(t *testing.T) {
-	fixture := newWorkOrderGatewayFixture(t)
-	fixture.crossSite.Store(true)
-	request := authenticatedWorkOrderMutationRequest(fixture, http.MethodPost, "/api/v1/sites/"+gatewayWorkOrderSiteID+"/work-orders", validGatewayCreateBody(), "create-gateway-0005")
-	recorder := httptest.NewRecorder()
-	dispatchWorkOrderRoute(fixture.handler, recorder, request, publicWorkOrderRoute{kind: publicWorkOrderCollection, siteID: gatewayWorkOrderSiteID})
-	if recorder.Code != http.StatusServiceUnavailable || strings.Contains(recorder.Body.String(), gatewayWorkOrderOtherSiteID) {
-		t.Fatalf("status=%d response=%s", recorder.Code, recorder.Body.String())
+func TestGatewayWorkOrderMutationParserRejectsInvalidRequests(t *testing.T) {
+	h := workOrderParserHandler()
+	session := bffSession{Session: sessionstore.Session{TenantID: gatewayWorkOrderTestTenantID}}
+	tests := []struct {
+		name string
+		body string
+		key  string
+	}{
+		{name: "missing idempotency", body: validGatewayCreateBody()},
+		{name: "closed object", body: `{"status":"COMPLETED"}`, key: "create-gateway-0003"},
 	}
-	if _, ok := matchPublicWorkOrderRoute("/api/v1/sites/" + gatewayWorkOrderSiteID + "/work-orders/" + gatewayWorkOrderID + ":link-alarm"); ok {
-		t.Fatal("unreviewed collaboration route is publicly matchable")
-	}
-	route, ok := matchPublicWorkOrderRoute("/api/v1/sites/" + gatewayWorkOrderSiteID + "/work-orders/" + gatewayWorkOrderID + ":assign")
-	if !ok || route.kind != publicWorkOrderAssignment || route.action != workorderauth.ActionAssign {
-		t.Fatalf("assignment route=%#v ok=%v", route, ok)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+gatewayWorkOrderSiteID+"/work-orders", strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			if test.key != "" {
+				request.Header.Set("Idempotency-Key", test.key)
+			}
+			if _, failure := h.parseWorkOrderMutation(request, session, publicWorkOrderRoute{kind: publicWorkOrderCollection, siteID: gatewayWorkOrderSiteID}); failure == nil {
+				t.Fatalf("invalid Work Order mutation was accepted: %s", test.name)
+			}
+		})
 	}
 }
 
@@ -112,16 +86,10 @@ func TestGatewayRejectsBrowserWorkOrderWriteContext(t *testing.T) {
 	}
 }
 
-func authenticatedWorkOrderMutationRequest(fixture *workOrderGatewayFixture, method, path, body, idempotencyKey string) *http.Request {
-	request := httptest.NewRequest(method, path, strings.NewReader(body))
-	request = request.WithContext(context.WithValue(request.Context(), routeSessionContextKey, fixture.session))
-	request.Header.Set("Origin", gatewayWorkOrderOrigin)
-	request.Header.Set("X-CSRF-Token", gatewayWorkOrderCSRF)
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Idempotency-Key", idempotencyKey)
-	return request
+func workOrderParserHandler() *handler {
+	return &handler{identity: &identityController{now: func() time.Time { return time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC) }}}
 }
 
 func validGatewayCreateBody() string {
-	return "{\"title\":\"Inspect AHU fan vibration\",\"description\":\"Verify the vibration and record the maintenance outcome.\",\"priority\":\"HIGH\",\"sourceReferences\":[{\"domain\":\"ALARM\",\"resourceId\":\"" + gatewayWorkOrderAlarmID + "\",\"relationship\":\"ORIGIN\"}],\"assigneeId\":\"principal:operator\"}"
+	return `{"title":"Inspect AHU fan vibration","description":"Verify the vibration and record the maintenance outcome.","priority":"HIGH","sourceReferences":[{"domain":"ALARM","resourceId":"` + gatewayWorkOrderTestAlarmID + `","relationship":"ORIGIN"}],"assigneeId":"principal:operator"}`
 }

@@ -3,15 +3,17 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 
 	jose "github.com/go-jose/go-jose/v4"
-	"github.com/logto-io/go/v2/core"
 )
 
 const maximumOIDCResponseSize = 1 << 20
@@ -42,6 +44,7 @@ type oidcAuthorizationRequest struct {
 	State        string
 	Nonce        string
 	LoginHint    string
+	ACRValues    string
 }
 
 type oidcSignOutRequest struct {
@@ -56,107 +59,135 @@ type oidcCodeExchangeRequest struct {
 	CodeVerifier string
 }
 
-type logtoOIDCProtocol struct{}
+type standardOIDCProtocol struct{}
 
-func newLogtoOIDCProtocol() oidcProtocol {
-	return logtoOIDCProtocol{}
-}
+func newStandardOIDCProtocol() oidcProtocol { return standardOIDCProtocol{} }
 
-func (logtoOIDCProtocol) Discover(ctx context.Context, client *http.Client, issuer string) (oidcDiscovery, error) {
+func (standardOIDCProtocol) Discover(ctx context.Context, client *http.Client, issuer string) (oidcDiscovery, error) {
 	capture := &oidcResponseCapture{}
-	document, err := core.FetchOidcConfig(oidcCallClient(ctx, client, capture), strings.TrimRight(issuer, "/")+"/.well-known/openid-configuration")
+	endpoint := strings.TrimRight(issuer, "/") + "/.well-known/openid-configuration"
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return oidcDiscovery{}, err
+	}
+	request.Header.Set("Accept", "application/json")
+	response, err := oidcCallClient(ctx, client, capture).Do(request)
 	if err != nil {
 		return oidcDiscovery{}, newOIDCProtocolError(err, capture)
 	}
-	return oidcDiscovery{document.Issuer, document.AuthorizationEndpoint, document.TokenEndpoint, document.JwksUri, document.EndSessionEndpoint}, nil
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return oidcDiscovery{}, newOIDCProtocolError(fmt.Errorf("OIDC discovery returned HTTP %d", response.StatusCode), capture)
+	}
+	var document oidcDiscovery
+	if err := json.NewDecoder(response.Body).Decode(&document); err != nil {
+		return oidcDiscovery{}, newOIDCProtocolError(fmt.Errorf("decode OIDC discovery: %w", err), capture)
+	}
+	return document, nil
 }
 
-func (logtoOIDCProtocol) AuthorizationURL(discovery oidcDiscovery, request oidcAuthorizationRequest) (string, error) {
-	options := core.SignInUriGenerationOptions{}
-	options.AuthorizationEndpoint = discovery.AuthorizationEndpoint
-	options.ClientId = request.ClientID
-	options.RedirectUri = request.RedirectURI
-	options.CodeChallenge = core.GenerateCodeChallenge(request.CodeVerifier)
-	options.State = request.State
-	options.Scopes = []string{core.UserScopeEmail}
-	options.LoginHint = request.LoginHint
-	options.ExtraParams = map[string]string{}
-	options.ExtraParams["nonce"] = request.Nonce
-	generated, err := core.GenerateSignInUri(&options)
-	if err != nil {
-		return "", err
+func (standardOIDCProtocol) AuthorizationURL(discovery oidcDiscovery, request oidcAuthorizationRequest) (string, error) {
+	endpoint, err := url.Parse(discovery.AuthorizationEndpoint)
+	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
+		return "", errors.New("OIDC authorization endpoint is invalid")
 	}
-	endpoint, err := url.Parse(generated)
-	if err != nil {
-		return "", err
-	}
+	verifierDigest := sha256.Sum256([]byte(request.CodeVerifier))
 	query := endpoint.Query()
-	query.Del(core.QueryKeyPrompt)
+	query.Set("response_type", "code")
+	query.Set("client_id", request.ClientID)
+	query.Set("redirect_uri", request.RedirectURI)
+	query.Set("scope", "openid profile email")
+	query.Set("code_challenge", base64.RawURLEncoding.EncodeToString(verifierDigest[:]))
+	query.Set("code_challenge_method", "S256")
+	query.Set("state", request.State)
+	query.Set("nonce", request.Nonce)
+	if request.LoginHint != "" {
+		query.Set("login_hint", request.LoginHint)
+	}
+	if request.ACRValues != "" {
+		query.Set("acr_values", request.ACRValues)
+	}
 	endpoint.RawQuery = query.Encode()
 	return endpoint.String(), nil
 }
 
-func (logtoOIDCProtocol) SignOutURL(discovery oidcDiscovery, request oidcSignOutRequest) (string, error) {
-	return core.GenerateSignOutUri(&core.SignOutUriGenerationOptions{
-		EndSessionEndpoint:    discovery.EndSessionEndpoint,
-		ClientId:              request.ClientID,
-		PostLogoutRedirectUri: request.PostLogoutRedirectURI,
-	})
+func (standardOIDCProtocol) SignOutURL(discovery oidcDiscovery, request oidcSignOutRequest) (string, error) {
+	endpoint, err := url.Parse(discovery.EndSessionEndpoint)
+	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
+		return "", errors.New("OIDC end-session endpoint is invalid")
+	}
+	query := endpoint.Query()
+	query.Set("client_id", request.ClientID)
+	query.Set("post_logout_redirect_uri", request.PostLogoutRedirectURI)
+	endpoint.RawQuery = query.Encode()
+	return endpoint.String(), nil
 }
 
-func (logtoOIDCProtocol) ExchangeCode(ctx context.Context, client *http.Client, discovery oidcDiscovery, request oidcCodeExchangeRequest) (oidcTokenResponse, error) {
+func (standardOIDCProtocol) ExchangeCode(ctx context.Context, client *http.Client, discovery oidcDiscovery, request oidcCodeExchangeRequest) (oidcTokenResponse, error) {
 	capture := &oidcResponseCapture{}
-	options := core.FetchTokenByAuthorizationCodeOptions{
-		TokenEndpoint: discovery.TokenEndpoint,
-		Code:          request.Code,
-		CodeVerifier:  request.CodeVerifier,
-		ClientId:      request.ClientID,
-		RedirectUri:   request.RedirectURI,
-	}
-	response, err := core.FetchTokenByAuthorizationCode(oidcCallClient(ctx, client, capture), &options)
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("client_id", request.ClientID)
+	form.Set("redirect_uri", request.RedirectURI)
+	form.Set("code", request.Code)
+	form.Set("code_verifier", request.CodeVerifier)
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, discovery.TokenEndpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return oidcTokenResponse{"", "", "", "", 0, "", capture.ErrorDescription}, newOIDCProtocolError(err, capture)
+		return oidcTokenResponse{}, err
 	}
-	return oidcTokenResponse{response.AccessToken, response.RefreshToken, response.IdToken, capture.TokenType, response.ExpireIn, "", ""}, nil
+	httpRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	httpRequest.Header.Set("Accept", "application/json")
+	response, err := oidcCallClient(ctx, client, capture).Do(httpRequest)
+	if err != nil {
+		return oidcTokenResponse{}, newOIDCProtocolError(err, capture)
+	}
+	defer response.Body.Close()
+	var payload oidcTokenResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return oidcTokenResponse{}, newOIDCProtocolError(fmt.Errorf("decode OIDC token response: %w", err), capture)
+	}
+	if response.StatusCode != http.StatusOK {
+		if payload.Description == "" {
+			payload.Description = capture.ErrorDescription
+		}
+		return payload, newOIDCProtocolError(fmt.Errorf("OIDC token endpoint returned HTTP %d", response.StatusCode), capture)
+	}
+	return payload, nil
 }
 
-func (logtoOIDCProtocol) VerifyIDToken(ctx context.Context, client *http.Client, discovery oidcDiscovery, clientID, keyID, token string) error {
+func (standardOIDCProtocol) VerifyIDToken(ctx context.Context, client *http.Client, discovery oidcDiscovery, _ string, keyID, token string) error {
 	capture := &oidcResponseCapture{}
-	response, err := core.FetchJwks(oidcCallClient(ctx, client, capture), discovery.JWKSURI)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, discovery.JWKSURI, nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Accept", "application/json")
+	response, err := oidcCallClient(ctx, client, capture).Do(request)
 	if err != nil {
 		return newOIDCProtocolError(err, capture)
 	}
-	encoded, err := json.Marshal(response)
-	if err != nil {
-		return errOIDCJWKSInvalid
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return newOIDCProtocolError(fmt.Errorf("OIDC JWKS endpoint returned HTTP %d", response.StatusCode), capture)
 	}
 	var keySet jose.JSONWebKeySet
-	if err := json.Unmarshal(encoded, &keySet); err != nil {
+	if err := json.NewDecoder(response.Body).Decode(&keySet); err != nil || len(keySet.Keys) == 0 {
 		return errOIDCJWKSInvalid
 	}
-	if len(keySet.Keys) == 0 {
-		return errOIDCJWKSInvalid
-	}
-	if len(keySet.Key(keyID)) == 0 {
+	keys := keySet.Key(keyID)
+	if len(keys) == 0 {
 		return errOIDCSignatureKeyUnknown
 	}
-	if err := core.VerifyIdToken(token, clientID, discovery.Issuer, &keySet); err != nil {
-		switch {
-		case errors.Is(err, core.ErrTokenIssuerNotMatch):
-			return errOIDCTokenIssuerInvalid
-		case errors.Is(err, core.ErrTokenAudienceNotMatch):
-			return errOIDCTokenAudienceInvalid
-		case errors.Is(err, core.ErrTokenExpired):
-			return errOIDCTokenExpired
-		case errors.Is(err, core.ErrTokenIssuedInTheFuture):
-			return errOIDCTokenIssuedFuture
-		case errors.Is(err, core.ErrTokenIssuedInThePast):
-			return errOIDCTokenIssuedPast
-		default:
-			return err
+	signed, err := jose.ParseSigned(token, []jose.SignatureAlgorithm{jose.RS256, jose.ES384})
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if _, err := signed.Verify(key.Key); err == nil {
+			return nil
 		}
 	}
-	return nil
+	return errors.New("OIDC signature verification failed")
 }
 
 type oidcProtocolError struct {
@@ -165,13 +196,8 @@ type oidcProtocolError struct {
 	cause       error
 }
 
-func (failure *oidcProtocolError) Error() string {
-	return failure.cause.Error()
-}
-
-func (failure *oidcProtocolError) Unwrap() error {
-	return failure.cause
-}
+func (failure *oidcProtocolError) Error() string { return failure.cause.Error() }
+func (failure *oidcProtocolError) Unwrap() error { return failure.cause }
 
 func newOIDCProtocolError(err error, capture *oidcResponseCapture) error {
 	if err == nil {

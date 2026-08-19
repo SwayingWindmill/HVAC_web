@@ -6,12 +6,15 @@ export type SiteRouteLeaf =
   | 'dashboard'
   | 'assets'
   | 'energy'
+  | 'forecast'
+  | 'control'
   | 'optimize'
   | 'fdd'
   | 'alarms'
   | 'work-orders'
   | 'ai'
   | 'cost'
+  | 'settlement'
   | 'bigscreen'
   | 'operations';
 
@@ -31,7 +34,7 @@ export type SiteRoutingDecision =
     state: 'READY';
     route: SiteRouteLeaf;
     context: SiteContext;
-    equipmentId?: string;
+    assetId?: string;
     energyPeriod?: EnergyRoutePeriod;
   }
   | { state: 'FORBIDDEN' }
@@ -43,12 +46,15 @@ const SITE_ROUTE_LEAVES = new Set<SiteRouteLeaf>([
   'dashboard',
   'assets',
   'energy',
+  'forecast',
+  'control',
   'optimize',
   'fdd',
   'alarms',
   'work-orders',
   'ai',
   'cost',
+  'settlement',
   'bigscreen',
   'operations',
 ]);
@@ -120,7 +126,7 @@ export function resolveSiteRouting(
   }
 
   if (leaf === 'assets' && segments.length === 4) {
-    return { state: 'READY', route: leaf, context, equipmentId: segments[3] };
+    return { state: 'READY', route: leaf, context, assetId: segments[3] };
   }
 
   if (leaf === 'energy') {

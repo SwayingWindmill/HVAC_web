@@ -105,7 +105,7 @@ try {
     SELECT count(*)::text || '|' || count(*) FILTER (WHERE relrowsecurity)::text || '|' || count(*) FILTER (WHERE relforcerowsecurity)::text
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'alarm_runtime' AND c.relkind = 'r'
-  `), '4|4|4', 'table/RLS baseline');
+  `), '3|3|3', 'table/RLS baseline');
   report.assertions.forceRls = true;
 
   const directLoginDenied = psql(`
@@ -115,32 +115,21 @@ try {
   if (!directLoginDenied.includes('permission denied')) throw new Error(`runtime login bypassed explicit role activation: ${directLoginDenied}`);
   report.assertions.explicitActivationRequired = true;
 
-  expectEqual(psql("SELECT tenant_id::text FROM alarm_runtime.organization_tenant_scope WHERE organization_id = '01910000-0000-7000-8000-000000000001'::uuid"), '0190f000-0000-7000-8000-000000000001', 'Organization Tenant binding');
   expectEqual(psql(`
     SET SESSION AUTHORIZATION s4_alarm_service;
     SET ROLE s4_alarm_runtime;
-    SELECT set_config('app.organization_id', '01910000-0000-7000-8000-000000000001', false);
     SELECT set_config('app.tenant_id', '0190f000-0000-7000-8000-000000000001', false);
     SELECT count(*) FROM alarm_runtime.alarm_current;
-  `).split('\n').at(-1), '1', 'authorized Tenant/Organization visibility');
+  `).split('\n').at(-1), '1', 'authorized Tenant visibility');
   expectEqual(psql(`
     SET SESSION AUTHORIZATION s4_alarm_service;
     SET ROLE s4_alarm_runtime;
-    SELECT set_config('app.organization_id', '01910000-0000-7000-8000-000000000001', false);
     SELECT set_config('app.tenant_id', '0190f000-0000-7000-8000-000000000099', false);
     SELECT count(*) FROM alarm_runtime.alarm_current;
   `).split('\n').at(-1), '0', 'cross-Tenant invisibility');
   expectEqual(psql(`
     SET SESSION AUTHORIZATION s4_alarm_service;
     SET ROLE s4_alarm_runtime;
-    SELECT set_config('app.organization_id', '01910000-0000-7000-8000-000000000099', false);
-    SELECT set_config('app.tenant_id', '0190f000-0000-7000-8000-000000000001', false);
-    SELECT count(*) FROM alarm_runtime.alarm_current;
-  `).split('\n').at(-1), '0', 'cross-Organization invisibility');
-  expectEqual(psql(`
-    SET SESSION AUTHORIZATION s4_alarm_service;
-    SET ROLE s4_alarm_runtime;
-    SELECT set_config('app.organization_id', '01910000-0000-7000-8000-000000000001', false);
     SELECT set_config('app.tenant_id', '0190f000-0000-7000-8000-000000000001', false);
     SELECT event_type || '|' || coalesce(point_id::text, '') || '|' || severity || '|' || status
     FROM alarm_runtime.events;
@@ -148,7 +137,6 @@ try {
   expectEqual(psql(`
     SET SESSION AUTHORIZATION s4_alarm_service;
     SET ROLE s4_alarm_runtime;
-    SELECT set_config('app.organization_id', '01910000-0000-7000-8000-000000000001', false);
     SELECT set_config('app.tenant_id', '0190f000-0000-7000-8000-000000000099', false);
     SELECT count(*) FROM alarm_runtime.events;
   `).split('\n').at(-1), '0', 'cross-Tenant Event invisibility');
@@ -157,17 +145,15 @@ try {
     FROM alarm_runtime.alarm_current a
     JOIN alarm_runtime.events e
       ON e.tenant_id = a.tenant_id
-     AND e.organization_id = a.organization_id
      AND e.site_id = a.site_id
      AND e.event_id = a.event_id;
   `), 'SUPPLY_TEMPERATURE_DRIFT|01910000-3000-7000-8000-000000000001|01910000-4000-7000-8000-000000000001|SUPPLY_TEMPERATURE_DRIFT', 'Event to Alarm provenance');
-  report.assertions.tenantOrganizationRls = true;
+  report.assertions.tenantRls = true;
   report.assertions.eventAlarmProvenance = true;
 
   const insertDenied = psql(`
     SET SESSION AUTHORIZATION s4_alarm_service;
     SET ROLE s4_alarm_runtime;
-    SELECT set_config('app.organization_id', '01910000-0000-7000-8000-000000000001', false);
     SELECT set_config('app.tenant_id', '0190f000-0000-7000-8000-000000000001', false);
     INSERT INTO alarm_runtime.alarm_current SELECT * FROM alarm_runtime.alarm_current;
   `, { expectFailure: true }).toLowerCase();
@@ -175,7 +161,6 @@ try {
   const titleUpdateDenied = psql(`
     SET SESSION AUTHORIZATION s4_alarm_service;
     SET ROLE s4_alarm_runtime;
-    SELECT set_config('app.organization_id', '01910000-0000-7000-8000-000000000001', false);
     SELECT set_config('app.tenant_id', '0190f000-0000-7000-8000-000000000001', false);
     UPDATE alarm_runtime.alarm_current SET title = 'forbidden';
   `, { expectFailure: true }).toLowerCase();
@@ -183,7 +168,6 @@ try {
   const deleteDenied = psql(`
     SET SESSION AUTHORIZATION s4_alarm_service;
     SET ROLE s4_alarm_runtime;
-    SELECT set_config('app.organization_id', '01910000-0000-7000-8000-000000000001', false);
     SELECT set_config('app.tenant_id', '0190f000-0000-7000-8000-000000000001', false);
     DELETE FROM alarm_runtime.alarm_current;
   `, { expectFailure: true }).toLowerCase();

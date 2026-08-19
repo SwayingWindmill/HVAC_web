@@ -15,7 +15,7 @@ const [plan, ownership, openapi, routeRegistry, dataRegistry, migration, service
   readJSON('contracts/ownership/data-ownership.v1.json'),
   readText('services/command-service/migrations/001_s3_command_runtime.sql'),
   readText('services/command-service/pkg/commandservice/service.go'),
-  readText('services/thingsboard-connector-control/pkg/controlconnector/synthetic.go'),
+  readText('services/command-dispatcher/pkg/mqttconnector/connector.go'),
   readText('services/command-dispatcher/pkg/commanddispatcher/dispatcher.go'),
   readText('docs/adr/0006-s3-command-intent-attempt-safety.md'),
 ]);
@@ -28,7 +28,7 @@ const requireCondition = (condition, message) => {
 requireCondition(plan.schemaVersion === 1 && plan.slice === 'S3', 'S3 implementation plan identity is invalid');
 requireCondition(plan.productionTrafficPercent === 0, 'S3 baseline must have zero production traffic');
 requireCondition(plan.firstTracerBullet?.capability === 'SET_TEMPERATURE_SETPOINT', 'first Capability must be SET_TEMPERATURE_SETPOINT');
-requireCondition(plan.firstTracerBullet?.connector === 'SYNTHETIC_ONLY', 'first Connector must be Synthetic-only');
+requireCondition(plan.firstTracerBullet?.connector === 'NATIVE_MQTT', 'first Connector must be Native MQTT');
 requireCondition(plan.firstTracerBullet?.publicRoutesEnabled === false, 'S3 public routes must remain disabled');
 requireCondition((plan.tickets ?? []).length === 9, 'S3 implementation plan must contain nine ordered tickets');
 requireCondition((plan.tickets ?? []).filter((ticket) => (ticket.blockedBy ?? []).length === 0).map((ticket) => ticket.id).join('|') === 'S3-01', 'S3-01 must be the only initial frontier');
@@ -47,7 +47,7 @@ requireCondition(createOperation?.['x-production-traffic-percent'] === 0, 'creat
 requireCondition(getOperation?.['x-production-traffic-percent'] === 0, 'get Command operation must carry zero traffic');
 requireCondition(createOperation?.responses?.['202'], 'create Command must return 202 Accepted');
 requireCondition(createOperation?.parameters?.some((parameter) => parameter.name === 'Idempotency-Key'), 'Idempotency-Key header is required');
-for (const forbidden of ['organizationId', 'siteId', 'principalId', 'providerMethod', 'providerParams', 'thingsBoardDeviceId', 'executionFence']) {
+for (const forbidden of ['tenantId', 'siteId', 'deviceId', 'pointId', 'capability', 'principalId', 'providerMethod', 'providerParams', 'executionFence']) {
   requireCondition(createOperation?.['x-client-forbidden-fields']?.includes(forbidden), `browser forbidden field is missing: ${forbidden}`);
 }
 
@@ -57,8 +57,8 @@ for (const route of routeRegistry.routes ?? []) {
   if (!commandRouteKeys.has(key)) continue;
   requireCondition(route.owner === 'command-service', `${key}: owner must be command-service`);
   requireCondition(route.publicIngress === 'platform-gateway', `${key}: public ingress must be Gateway`);
-  requireCondition(route.rollout?.mode === 'disabled', `${key}: route must remain disabled`);
-  requireCondition(route.shadowSideEffectPolicy === 'SYNTHETIC_ONLY', `${key}: only Synthetic execution is permitted`);
+  requireCondition(route.rollout?.mode === 'all', `${key}: canonical route ownership must be active`);
+  requireCondition(route.compatibilityMode === 'native', `${key}: canonical route must use native compatibility mode`);
 }
 for (const key of commandRouteKeys) {
   requireCondition((routeRegistry.routes ?? []).some((route) => `${route.method} ${route.path}` === key), `${key}: route ownership entry is missing`);
@@ -88,4 +88,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-console.log('S3 Command baseline passed: ownership, disabled routes, canonical Capability, Synthetic execution, idempotency, fence and OUTCOME_UNKNOWN invariants are present.');
+console.log('S3 Command baseline passed: canonical native route ownership, zero production traffic, canonical Capability, Native MQTT execution, idempotency, fence and OUTCOME_UNKNOWN invariants are present.');

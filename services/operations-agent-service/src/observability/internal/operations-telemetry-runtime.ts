@@ -188,7 +188,7 @@ const ownerValues = new Set([
   'operations-agent-service',
 ]);
 const logicalToolValues = new Set([
-  'registry.getSite', 'registry.listSiteEquipment', 'telemetry.getCurrentSnapshot',
+  'registry.getSite', 'registry.listSiteAssets', 'telemetry.getCurrentSnapshot',
   'analytics.getEnergySeries', 'commands.getCapabilities',
 ]);
 const recoveryModeValues = new Set(['FULL_SNAPSHOT', 'RESUME']);

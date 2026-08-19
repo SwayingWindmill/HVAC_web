@@ -75,7 +75,7 @@ WHERE device_id = $1::uuid AND telemetry_key = 'zone.temperature'
 	if err != nil {
 		t.Fatal(err)
 	}
-	if duplicate.Status != ObservationDuplicate || duplicate.EvidenceID == "" || duplicate.ObservationID != receipt.ObservationID || duplicate.PositionAdvanced {
+	if duplicate.Status != ObservationDuplicate || duplicate.EvidenceID == "" || duplicate.ObservationID != receipt.ObservationID || duplicate.PositionAdvanced || duplicate.BusinessRevision != 0 || duplicate.StateChanged {
 		t.Fatalf("duplicate=%#v", duplicate)
 	}
 	assertDeliveryEvidence(t, admin, duplicate.EvidenceID, "DUPLICATE", "DUPLICATE")
@@ -95,7 +95,7 @@ WHERE device_id = $1::uuid AND telemetry_key = 'zone.temperature'
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replayed.Status != ObservationDuplicate || len(replayed.QualityReasons) != 1 || replayed.QualityReasons[0] != QualityReasonReplayed || replayed.EvidenceID == "" {
+	if replayed.Status != ObservationDuplicate || len(replayed.QualityReasons) != 1 || replayed.QualityReasons[0] != QualityReasonReplayed || replayed.EvidenceID == "" || replayed.BusinessRevision != 0 || replayed.StateChanged {
 		t.Fatalf("replayed=%#v", replayed)
 	}
 	assertDeliveryEvidence(t, admin, replayed.EvidenceID, "DUPLICATE", "REPLAYED")
@@ -113,6 +113,32 @@ WHERE device_id = $1::uuid AND telemetry_key = 'zone.temperature'
 	}
 	assertDeliveryEvidence(t, admin, outOfOrder.EvidenceID, "OUT_OF_ORDER", "OUT_OF_ORDER")
 	assertIngestRevision(t, admin, deviceA, 2, 2)
+
+	lateSample := ingestCandidate(
+		ingestEvent(199), integrationA, ingestPartitionB, 1, SourcePathPush,
+		"tb-device-org-a-site-1", "zone.temperature", json.RawMessage(`23.5`), "NUMBER", "Cel",
+		accepted.SampledAt.Add(-time.Second), acceptedAt.Add(3*time.Second),
+	)
+	lateReceipt, err := store.AcceptObservation(ctx, lateSample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lateReceipt.Status != ObservationOutOfOrder || !lateReceipt.PositionAdvanced || lateReceipt.BusinessRevision != 0 || lateReceipt.StateChanged {
+		t.Fatalf("late sampled observation=%#v", lateReceipt)
+	}
+	assertObservationRow(t, admin, lateSample.Position.EventID, "OUT_OF_ORDER", "GOOD", "PUSH", true)
+	assertHistoryOutbox(t, admin, lateSample.Position.EventID, "OUT_OF_ORDER", orgA, siteA, deviceA, true)
+	assertIngestRevision(t, admin, deviceA, 2, 2)
+	if err := admin.QueryRow(ctx, `
+SELECT value::text, quality, business_revision
+FROM telemetry_runtime.latest_accepted_telemetry
+WHERE device_id = $1::uuid AND telemetry_key = 'zone.temperature'
+`, deviceA).Scan(&latestValue, &latestQuality, &latestRevision); err != nil {
+		t.Fatal(err)
+	}
+	if latestValue != "24.0" || latestQuality != "GOOD" || latestRevision != 2 {
+		t.Fatalf("late sampled observation regressed Current: %s/%s/%d", latestValue, latestQuality, latestRevision)
+	}
 
 	rejectedAt := acceptedAt.Add(10 * time.Second)
 	rejected := ingestCandidate(

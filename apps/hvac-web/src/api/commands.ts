@@ -34,7 +34,7 @@ export const COMMAND_LOCAL_ROUTES_ENABLED = API_MODE === 'real'
 export const COMMAND_ROUTES_AVAILABLE = COMMAND_PUBLIC_ROUTES_ENABLED || COMMAND_LOCAL_ROUTES_ENABLED;
 
 export interface CreateCommandInput {
-  equipmentId: string;
+  assetId: string;
   commandPointId: string;
   parameters: Record<string, number>;
 }
@@ -61,10 +61,10 @@ const mockCommands = new Map<string, Command>();
 let mockSequence = 2;
 const mockPendingCommandId = ['018f3e00', '4000', '7000', '8000', '000000000001'].join('-');
 const mockDeviceId = ['018f3e00', '3000', '7000', '8000', '000000000001'].join('-');
-const mockEquipmentId = ['018f3e00', '3100', '7000', '8000', '000000000001'].join('-');
+const mockAssetId = ['018f3e00', '3100', '7000', '8000', '000000000001'].join('-');
 const mockCommandPointId = ['018f3e00', '3200', '7000', '8000', '000000000001'].join('-');
 export const MOCK_PENDING_COMMAND_ID = mockPendingCommandId;
-export const MOCK_COMMAND_EQUIPMENT_ID = mockEquipmentId;
+export const MOCK_COMMAND_ASSET_ID = mockAssetId;
 export const MOCK_COMMAND_POINT_ID = mockCommandPointId;
 
 function iso(offsetSeconds = 0): string {
@@ -172,7 +172,7 @@ export async function createScopedCommand(
   input: CreateCommandInput,
   options: ScopedCommandRequestOptions,
 ): Promise<Command> {
-  const equipmentId = commandUUIDv7Schema.parse(input.equipmentId);
+  const assetId = commandUUIDv7Schema.parse(input.assetId);
   const commandPointId = commandUUIDv7Schema.parse(input.commandPointId);
   const parameters = z.record(z.string(), z.number().finite()).parse(input.parameters);
   if (!COMMAND_ROUTES_AVAILABLE) {
@@ -189,7 +189,7 @@ export async function createScopedCommand(
       'X-CSRF-Token': options.csrfToken,
       'Idempotency-Key': idempotencyKey,
     },
-    body: JSON.stringify({ equipmentId, commandPointId, parameters }),
+    body: JSON.stringify({ assetId, commandPointId, parameters }),
   }, options);
 }
 
@@ -206,7 +206,7 @@ export async function approveScopedCommand(
   if (!options.csrfToken) {
     throw new CommandApiError(401, 'CSRF_REQUIRED', '认证会话没有提供 CSRF 能力。');
   }
-  return commandRequest(`/api/v1/commands/${encodeURIComponent(commandId)}:approve`, {
+  return commandRequest(`/api/v1/commands/${encodeURIComponent(commandId)}/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': options.csrfToken },
     body: JSON.stringify({}),
@@ -225,11 +225,11 @@ export async function getCommand(commandId: string, signal?: AbortSignal): Promi
 }
 
 export async function createCommand(input: CreateCommandInput): Promise<Command> {
-  const equipmentId = commandUUIDv7Schema.parse(input.equipmentId);
+  const assetId = commandUUIDv7Schema.parse(input.assetId);
   const commandPointId = commandUUIDv7Schema.parse(input.commandPointId);
   const parameters = z.record(z.string(), z.number().finite()).parse(input.parameters);
   if (API_MODE === 'mock') {
-    if (equipmentId !== mockEquipmentId || commandPointId !== mockCommandPointId || !validateCommandParameters('SET_TEMPERATURE_SETPOINT', parameters)) {
+    if (assetId !== mockAssetId || commandPointId !== mockCommandPointId || !validateCommandParameters('SET_TEMPERATURE_SETPOINT', parameters)) {
       throw new CommandApiError(404, 'RESOURCE_NOT_FOUND', 'Mock Command Point 不存在。');
     }
     const capability: CommandCapability = 'SET_TEMPERATURE_SETPOINT';
@@ -280,7 +280,7 @@ export async function createCommand(input: CreateCommandInput): Promise<Command>
       'X-CSRF-Token': csrf,
       'Idempotency-Key': `hvac-web-${crypto.randomUUID()}`,
     },
-    body: JSON.stringify({ equipmentId, commandPointId, parameters }),
+    body: JSON.stringify({ assetId, commandPointId, parameters }),
   });
 }
 
@@ -312,7 +312,7 @@ export async function approveCommand(commandId: string): Promise<Command> {
     throw new CommandApiError(503, 'COMMAND_ROUTE_DISABLED', 'Command 控制路由已登记，但尚未启用生产流量。');
   }
   const csrf = await csrfCapability();
-  return commandRequest(`/api/v1/commands/${encodeURIComponent(commandId)}:approve`, {
+  return commandRequest(`/api/v1/commands/${encodeURIComponent(commandId)}/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
     body: JSON.stringify({}),

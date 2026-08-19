@@ -18,7 +18,7 @@ if (!operationsConnectionString || !checkpointsConnectionString) {
 const scope = {
   tenantId: 'organization-langgraph-postgres',
   siteId: 'site-langgraph-postgres',
-  equipmentId: null,
+  assetId: null,
   deviceId: null,
 };
 
@@ -79,7 +79,7 @@ const ownerReaders = {
         revision: `registry:${request.requestId}`,
         quality: 'GOOD',
         provenance: `platform-core-service:${request.requestId}`,
-        payload: { equipmentId: request.input.equipmentId },
+        payload: { assetId: request.input.assetId },
       };
     },
   },

@@ -1,4 +1,8 @@
 {
+  "status": "SUPERSEDED",
+  "historicalEvidenceOnly": true,
+  "supersededBy": "contracts/ownership/route-ownership.v1.json",
+  "supersessionReason": "ADR-0013/S00 forbids runtime Organization/Equipment compatibility and shadow rollout authority.",
   "registryVersion": 1,
   "registryRevision": 4,
   "routes": [

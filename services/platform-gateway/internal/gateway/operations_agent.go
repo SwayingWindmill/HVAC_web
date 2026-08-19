@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
@@ -30,38 +29,30 @@ const (
 	defaultOperationsTimeout                        = 8 * time.Second
 	defaultOperationsRequestBytes                   = int64(8 << 10)
 	defaultOperationsResponseBytes                  = int64(1 << 20)
-	defaultOperationsRatePerMinute                  = 30
 )
 
 var errOperationsBodyTooLarge = errors.New("Operations request or response body is too large")
 
 type OperationsAgentConfig struct {
-	BaseURL            string
-	Audience           string
-	WorkloadSPIFFEID   string
-	HTTPClient         *http.Client
-	Timeout            time.Duration
-	MaxRequestBytes    int64
-	MaxResponseBytes   int64
-	RateLimitPerMinute int
+	BaseURL          string
+	Audience         string
+	WorkloadSPIFFEID string
+	HTTPClient       *http.Client
+	Timeout          time.Duration
+	MaxRequestBytes  int64
+	MaxResponseBytes int64
+	RateLimiter      OperationsRateLimiter
 }
 
 type operationsAgentController struct {
-	baseURL            string
-	audience           string
-	workloadSPIFFEID   string
-	httpClient         *http.Client
-	timeout            time.Duration
-	maxRequestBytes    int64
-	maxResponseBytes   int64
-	rateLimitPerMinute int
-	mu                 sync.Mutex
-	rateWindows        map[string]operationsRateWindow
-}
-
-type operationsRateWindow struct {
-	startedAt time.Time
-	count     int
+	baseURL          string
+	audience         string
+	workloadSPIFFEID string
+	httpClient       *http.Client
+	timeout          time.Duration
+	maxRequestBytes  int64
+	maxResponseBytes int64
+	rateLimiter      OperationsRateLimiter
 }
 
 type publicOperationsRoute struct {
@@ -101,11 +92,9 @@ type operationsSubmitOperatorInputRequest struct {
 
 func newOperationsAgentController(config *OperationsAgentConfig) *operationsAgentController {
 	controller := &operationsAgentController{
-		timeout:            defaultOperationsTimeout,
-		maxRequestBytes:    defaultOperationsRequestBytes,
-		maxResponseBytes:   defaultOperationsResponseBytes,
-		rateLimitPerMinute: defaultOperationsRatePerMinute,
-		rateWindows:        map[string]operationsRateWindow{},
+		timeout:          defaultOperationsTimeout,
+		maxRequestBytes:  defaultOperationsRequestBytes,
+		maxResponseBytes: defaultOperationsResponseBytes,
 	}
 	if config == nil {
 		return controller
@@ -123,9 +112,7 @@ func newOperationsAgentController(config *OperationsAgentConfig) *operationsAgen
 	if config.MaxResponseBytes > 0 {
 		controller.maxResponseBytes = config.MaxResponseBytes
 	}
-	if config.RateLimitPerMinute > 0 {
-		controller.rateLimitPerMinute = config.RateLimitPerMinute
-	}
+	controller.rateLimiter = config.RateLimiter
 	return controller
 }
 
@@ -292,7 +279,7 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 			return
 		}
 		siteID, registryAction = registryInput.SiteID, registryauth.ActionSiteRead
-	case "registry.listSiteAsset":
+	case "registry.listSiteAssets":
 		var registryInput struct {
 			SiteID string `json:"siteId"`
 		}
@@ -425,7 +412,16 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 			return
 		}
 	}
-	if !h.operations.allow(session.ID, h.now()) {
+	if h.operations.rateLimiter == nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_LIMIT_UNAVAILABLE", "Operations limit unavailable", "The Operations Investigation limit policy could not be evaluated.", true, nil)
+		return
+	}
+	allowed, limitErr := h.operations.rateLimiter.Allow(request.Context(), session.ID)
+	if limitErr != nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_LIMIT_UNAVAILABLE", "Operations limit unavailable", "The Operations Investigation limit policy could not be evaluated.", true, nil)
+		return
+	}
+	if !allowed {
 		writeProblem(writer, request, http.StatusTooManyRequests, "OPERATIONS_RATE_LIMITED", "Operations rate limited", "The Operations Investigation request rate has been exceeded.", true, nil)
 		return
 	}
@@ -553,22 +549,6 @@ func (h *handler) proxyOperationsInvestigation(writer http.ResponseWriter, reque
 	}
 	upstreamTelemetry.setResult("invalid_response", http.StatusBadGateway)
 	writeProblem(writer, request, http.StatusBadGateway, "OPERATIONS_AGENT_BAD_GATEWAY", "Operations Agent gateway failed", "The Operations Agent returned an invalid upstream response.", true, nil)
-}
-
-func (c *operationsAgentController) allow(sessionID string, now time.Time) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	window := c.rateWindows[sessionID]
-	if window.startedAt.IsZero() || now.Sub(window.startedAt) >= time.Minute {
-		c.rateWindows[sessionID] = operationsRateWindow{startedAt: now, count: 1}
-		return true
-	}
-	if window.count >= c.rateLimitPerMinute {
-		return false
-	}
-	window.count++
-	c.rateWindows[sessionID] = window
-	return true
 }
 
 func registryAuthorizationAllowsSite(authorization registryAuthorization, siteID string) bool {
@@ -906,12 +886,12 @@ func validateOperationsRequiredNext(value any, tenantID, siteID string) error {
 	}
 	var expected []string
 	switch requirement["kind"] {
-	case "EQUIPMENT_ENERGY_BINDINGS":
+	case "ASSET_ENERGY_BINDINGS":
 		if requirement["owner"] != "registry" || requirement["capability"] != "registry.getAssetEnergyBindings" {
 			return errors.New("invalid Operations Registry required-next capability")
 		}
 		expected = []string{"BUSINESS_REVISION", "QUALITY", "CAPTURED_AT", "PAYLOAD_DIGEST"}
-	case "EQUIPMENT_ENERGY_PERIOD_COMPARISON":
+	case "ASSET_ENERGY_PERIOD_COMPARISON":
 		if requirement["owner"] != "telemetry-query-service" || requirement["capability"] != "analytics.energy.getAssetSeries" {
 			return errors.New("invalid Operations telemetry required-next capability")
 		}
@@ -963,7 +943,7 @@ func validateOperationsFindingRecord(value any, investigationID, tenantID, siteI
 	case "UNABLE_TO_CONCLUDE":
 		legacy := operationsExactKeys(conclusion, "status", "scope", "reasonCode", "detail")
 		withRequirements := operationsExactKeys(conclusion, "status", "scope", "reasonCode", "detail", "requiredNext")
-		if (!legacy && !withRequirements) || !operationsAllowedString(conclusion["scope"], "SITE", "EQUIPMENT") || record["findingKind"] != "UNABLE_TO_CONCLUDE" {
+		if (!legacy && !withRequirements) || !operationsAllowedString(conclusion["scope"], "SITE", "ASSET") || record["findingKind"] != "UNABLE_TO_CONCLUDE" {
 			return "", errors.New("invalid Operations unable-to-conclude Finding")
 		}
 		if _, ok := operationsBoundedString(conclusion["reasonCode"], 128); !ok {
@@ -1120,7 +1100,7 @@ func validateOperationsToolReceiptRecord(value any, investigationID string) (str
 	tool, toolOK := record["logicalTool"].(string)
 	owner, ownerOK := record["owner"].(string)
 	expectedOwner := map[string]string{
-		"registry.getSite": "registry", "registry.listSiteAsset": "registry",
+		"registry.getSite": "registry", "registry.listSiteAssets": "registry",
 		"telemetry.getCurrentSnapshot": "telemetry-query-service", "analytics.getEnergySeries": "telemetry-query-service",
 		"commands.getCapabilities": "command-service",
 	}[tool]
@@ -1549,7 +1529,7 @@ func validateOperationsToolActivity(activity map[string]any) error {
 		return errors.New("invalid Operations Tool activity shape")
 	}
 	if _, ok := operationsBoundedString(activity["recordId"], 256); !ok ||
-		!operationsAllowedString(activity["logicalTool"], "registry.getSite", "registry.listSiteAsset", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities") ||
+		!operationsAllowedString(activity["logicalTool"], "registry.getSite", "registry.listSiteAssets", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities") ||
 		!operationsAllowedString(activity["owner"], "registry", "telemetry-query-service", "command-service") ||
 		!operationsAllowedString(activity["resultCategory"], "SUCCEEDED", "REJECTED", "TIMED_OUT", "FAILED") {
 		return errors.New("invalid Operations Tool activity identity")
@@ -1717,7 +1697,7 @@ func validateOperationsEvent(name string, value map[string]any) error {
 			return errors.New("invalid Operations Tool start event")
 		}
 		if _, ok := operationsBoundedString(value["toolCallId"], 256); !ok ||
-			!operationsAllowedString(value["toolCallName"], "registry.getSite", "registry.listSiteAsset", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities") {
+			!operationsAllowedString(value["toolCallName"], "registry.getSite", "registry.listSiteAssets", "telemetry.getCurrentSnapshot", "analytics.getEnergySeries", "commands.getCapabilities") {
 			return errors.New("invalid Operations Tool start value")
 		}
 	case "TOOL_CALL_ARGS":

@@ -368,7 +368,7 @@ export default function System() {
         items={[
           { label: '启用用户', value: activeUsers, suffix: `/ ${users.length}`, detail: '当前可登录用户', icon: <UserOutlined />, tone: 'accent' },
           { label: '管理员', value: adminUsers, detail: '拥有系统治理权限', icon: <SafetyCertificateOutlined /> },
-          { label: 'Registry', value: 'S1', detail: 'Organization / Site / Equipment / Device', icon: <ApartmentOutlined /> },
+          { label: 'Registry', value: 'S1', detail: 'Tenant / Site / Space / Asset / Device', icon: <ApartmentOutlined /> },
           { label: '降级数据源', value: degradedSources, detail: degradedSources ? '需要检查集成状态' : '全部数据源在线', icon: <ApiOutlined />, tone: degradedSources ? 'warning' : 'positive' },
         ]}
       />

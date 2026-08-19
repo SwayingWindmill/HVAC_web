@@ -15,9 +15,7 @@
   },
   "scope": {
     "tenantRequired": true,
-    "siteAuthorization": "exact-site-set",
-    "organizationCanonical": false,
-    "organizationScopeMayExpandSite": false
+    "siteAuthorization": "exact-site-set"
   },
   "resources": {
     "Site": {
@@ -28,16 +26,14 @@
       "timezoneAuthority": "IANA"
     },
     "Space": {
-      "storageName": "Area",
       "owner": "platform-core-service",
       "scope": "tenant-site",
-      "requiredFields": ["id", "tenantId", "siteId", "parentAreaId", "code", "displayName", "areaType", "status", "revision", "createdAt", "updatedAt"]
+      "requiredFields": ["id", "tenantId", "siteId", "parentSpaceId", "code", "displayName", "spaceType", "status", "revision", "createdAt", "updatedAt"]
     },
     "Asset": {
-      "storageName": "Equipment",
       "owner": "platform-core-service",
       "scope": "tenant-site",
-      "requiredFields": ["id", "tenantId", "siteId", "code", "displayName", "equipmentType", "status", "revision", "createdAt", "updatedAt"],
+      "requiredFields": ["id", "tenantId", "siteId", "code", "displayName", "assetType", "status", "revision", "createdAt", "updatedAt"],
       "identityRule": "Asset is a maintainable business object and is not interchangeable with Device."
     },
     "Device": {
@@ -68,7 +64,7 @@
     "DeviceBinding": {
       "owner": "platform-core-service",
       "scope": "tenant-site",
-      "requiredFields": ["id", "tenantId", "siteId", "deviceId", "equipmentId", "bindingRole", "status", "validFrom", "revision", "createdAt", "updatedAt"],
+      "requiredFields": ["id", "tenantId", "siteId", "deviceId", "assetId", "bindingRole", "status", "validFrom", "revision", "createdAt", "updatedAt"],
       "optionalFields": ["validTo"]
     },
     "ExternalBinding": {
@@ -84,8 +80,8 @@
     "routes": [
       { "operationId": "listSites", "method": "GET", "path": "/api/v1/sites", "response": "SiteCollection", "scope": ["tenant", "site", "principal"] },
       { "operationId": "getSite", "method": "GET", "path": "/api/v1/sites/{siteId}", "response": "Site", "scope": ["tenant", "site", "principal"] },
-      { "operationId": "listSiteEquipment", "method": "GET", "path": "/api/v1/sites/{siteId}/equipment", "response": "EquipmentCollection", "scope": ["tenant", "site", "principal"] },
-      { "operationId": "getEquipment", "method": "GET", "path": "/api/v1/equipment/{equipmentId}", "response": "Equipment", "scope": ["tenant", "site", "principal"] },
+      { "operationId": "listSiteAssets", "method": "GET", "path": "/api/v1/sites/{siteId}/assets", "response": "AssetCollection", "scope": ["tenant", "site", "principal"] },
+      { "operationId": "getAsset", "method": "GET", "path": "/api/v1/assets/{assetId}", "response": "Asset", "scope": ["tenant", "site", "principal"] },
       { "operationId": "listSiteDevices", "method": "GET", "path": "/api/v1/sites/{siteId}/devices", "response": "DeviceCollection", "scope": ["tenant", "site", "principal"] },
       { "operationId": "listSiteDeviceBindings", "method": "GET", "path": "/api/v1/sites/{siteId}/device-bindings", "response": "DeviceBindingCollection", "scope": ["tenant", "site", "principal"] },
       { "operationId": "getSiteAssetModel", "method": "GET", "path": "/api/v1/sites/{siteId}/asset-model", "response": "SiteAssetModel", "scope": ["tenant", "site", "principal"] },

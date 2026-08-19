@@ -7,7 +7,7 @@ import { createFakeFindingSynthesizer } from '../dist/model/index.js';
 const scope = Object.freeze({
   tenantId: 'organization-001',
   siteId: 'site-001',
-  equipmentId: null,
+  assetId: null,
   deviceId: null,
 });
 
@@ -52,9 +52,9 @@ test('a valid model candidate can refine only bounded Finding text and Evidence 
     output(input) {
       return {
         classification: input.expectedClassification,
-        statement: 'Night energy was 24% above baseline; the available records do not attribute the increase to equipment.',
+        statement: 'Night energy was 24% above baseline; the available records do not attribute the increase to asset.',
         evidenceIds: ['evidence-comparison'],
-        limitations: ['Equipment attribution is not available.'],
+        limitations: ['Asset attribution is not available.'],
       };
     },
     metadata: {
@@ -69,7 +69,7 @@ test('a valid model candidate can refine only bounded Finding text and Evidence 
   assert.equal(decision.source, 'MODEL');
   assert.equal(decision.fallbackReason, null);
   assert.deepEqual(decision.evidenceIds, ['evidence-comparison']);
-  assert.deepEqual(decision.limitations, ['Equipment attribution is not available.']);
+  assert.deepEqual(decision.limitations, ['Asset attribution is not available.']);
   assert.equal(decision.invocation?.provider, 'fake-provider');
   assert.equal(decision.invocation?.model, 'fake-structured-model');
   assert.deepEqual(decision.invocation?.tokenUsage, { inputTokens: 80, outputTokens: 24 });

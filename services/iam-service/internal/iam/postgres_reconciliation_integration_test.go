@@ -27,8 +27,8 @@ func TestPostgresReconciliationIsIdempotentVersionedAndQuarantinesConflicts(t *t
 
 	validFrom := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	request := iam.ReconciliationRequest{
-		TenantID:     "018f1d00-0000-7000-8000-000000000001",
-		SourceSystem:  "logto",
+		TenantID:      "018f1d00-0000-7000-8000-000000000001",
+		SourceSystem:  "identity",
 		SourceKey:     "user-reconciliation-fixture",
 		SourceVersion: 1,
 		Principal: iam.ReconciledPrincipal{
@@ -37,10 +37,10 @@ func TestPostgresReconciliationIsIdempotentVersionedAndQuarantinesConflicts(t *t
 			Email: "owner-a@example.test", Status: iam.PrincipalStatusActive,
 		},
 		Memberships: []iam.ReconciledMembership{{
-			OrganizationID: postgresActingOrganizationID, Status: iam.FactStatusActive, ValidFrom: validFrom,
+			TenantID: postgresTenantAID, Status: iam.FactStatusActive, ValidFrom: validFrom,
 		}},
 		RoleBindings: []iam.ReconciledRoleBinding{{
-			OrganizationID: postgresActingOrganizationID, RoleKey: "registry-reader",
+			TenantID: postgresTenantAID, RoleKey: "registry-reader",
 			Actions: []registryauth.Action{registryauth.ActionSiteRead}, Effect: iam.BindingEffectAllow, ValidFrom: validFrom,
 		}},
 	}
@@ -105,7 +105,7 @@ func TestPostgresReconciliationIsIdempotentVersionedAndQuarantinesConflicts(t *t
 	if err := admin.QueryRow(ctx, `
 SELECT current_source_key
 FROM iam.reconciliation_quarantine
-WHERE source_system = 'logto'
+WHERE source_system = 'identity'
   AND source_key = 'other-source-for-same-principal'
   AND reason_code = 'SOURCE_PRINCIPAL_CONFLICT'
 `).Scan(&conflictingSourceKey); err != nil {

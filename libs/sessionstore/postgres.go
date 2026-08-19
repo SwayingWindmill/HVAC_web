@@ -59,6 +59,10 @@ func (store *PostgresStore) Close() {
 	store.pool.Close()
 }
 
+func (store *PostgresStore) Ping(ctx context.Context) error {
+	return store.pool.Ping(ctx)
+}
+
 func (store *PostgresStore) CreateSession(ctx context.Context, session Session, mutation MutationContext) (Session, error) {
 	ctx, span := observability.Start(ctx, "postgres.session.transaction", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.create"})
 	defer span.End()
@@ -67,6 +71,9 @@ func (store *PostgresStore) CreateSession(ctx context.Context, session Session, 
 	session.LastAuditMessageID = messageID
 	session.CreatedAt = mutation.OccurredAt.UTC()
 	session.UpdatedAt = mutation.OccurredAt.UTC()
+	if session.LastActivityAt.IsZero() {
+		session.LastActivityAt = mutation.OccurredAt.UTC()
+	}
 	event, payload, err := buildEvent(session, mutation, messageID, "ACTIVE")
 	if err != nil {
 		return Session{}, err
@@ -82,15 +89,21 @@ func (store *PostgresStore) CreateSession(ctx context.Context, session Session, 
 	if err != nil {
 		return Session{}, err
 	}
+	authenticationAMR, err := json.Marshal(session.AuthenticationAMR)
+	if err != nil {
+		return Session{}, err
+	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO gateway.sessions (
 			session_id, principal_subject, principal_issuer, display_name, email, roles,
 			tenant_id, csrf_token_ciphertext, provider_tokens_ciphertext,
-			expires_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULL,$11,$12,$13,$13)
+			authentication_acr, authentication_amr, authentication_time,
+			expires_at, last_activity_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NULL,$15,$16,$17,$17)
 	`, session.ID, session.Principal.Subject, session.Principal.Issuer, session.Principal.DisplayName,
 		session.Principal.Email, roles, session.TenantID, session.CSRFTokenCiphertext,
-		session.ProviderTokensCiphertext, session.ExpiresAt.UTC(), session.AggregateVersion,
+		session.ProviderTokensCiphertext, session.AuthenticationACR, authenticationAMR, session.AuthenticationTime.UTC(),
+		session.ExpiresAt.UTC(), session.LastActivityAt.UTC(), session.AggregateVersion,
 		session.LastAuditMessageID, session.CreatedAt)
 	if err != nil {
 		return Session{}, mapWriteError(err)
@@ -120,6 +133,85 @@ func (store *PostgresStore) GetSession(ctx context.Context, sessionID string) (S
 	ctx, span := observability.Start(ctx, "postgres.session.query", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.get"})
 	defer span.End()
 	return scanSession(store.pool.QueryRow(ctx, sessionSelect+` WHERE session_id = $1`, sessionID))
+}
+
+func (store *PostgresStore) TouchSession(ctx context.Context, sessionID string, at time.Time) (Session, error) {
+	ctx, span := observability.Start(ctx, "postgres.session.touch", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.touch"})
+	defer span.End()
+	command, err := store.pool.Exec(ctx, `
+		UPDATE gateway.sessions
+		SET last_activity_at = $2
+		WHERE session_id = $1 AND revoked_at IS NULL
+	`, sessionID, at.UTC())
+	if err != nil {
+		return Session{}, err
+	}
+	if command.RowsAffected() != 1 {
+		return Session{}, ErrSessionNotFound
+	}
+	return store.GetSession(ctx, sessionID)
+}
+
+func (store *PostgresStore) SwitchTenantContext(ctx context.Context, sessionID, tenantID string, csrfTokenCiphertext []byte, mutation MutationContext) (Session, error) {
+	ctx, span := observability.Start(ctx, "postgres.session.transaction", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.switch_tenant"})
+	defer span.End()
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return Session{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	session, err := scanSession(tx.QueryRow(ctx, sessionSelect+` WHERE session_id = $1 FOR UPDATE`, sessionID))
+	if err != nil {
+		return Session{}, err
+	}
+	if session.RevokedAt != nil {
+		return Session{}, ErrSessionRevoked
+	}
+	if mutation.CausationID == "" {
+		mutation.CausationID = session.LastAuditMessageID
+	}
+	messageID := store.ids()
+	session.TenantID = tenantID
+	session.CSRFTokenCiphertext = append([]byte(nil), csrfTokenCiphertext...)
+	session.AggregateVersion++
+	session.LastAuditMessageID = messageID
+	session.UpdatedAt = mutation.OccurredAt.UTC()
+	event, payload, err := buildEvent(session, mutation, messageID, "ACTIVE")
+	if err != nil {
+		return Session{}, err
+	}
+	command, err := tx.Exec(ctx, `
+		UPDATE gateway.sessions
+		SET tenant_id = $2, csrf_token_ciphertext = $3, aggregate_version = $4,
+		    last_audit_message_id = $5, updated_at = $6
+		WHERE session_id = $1 AND revoked_at IS NULL
+	`, session.ID, session.TenantID, session.CSRFTokenCiphertext, session.AggregateVersion, messageID, session.UpdatedAt)
+	if err != nil {
+		return Session{}, err
+	}
+	if command.RowsAffected() != 1 {
+		return Session{}, ErrSessionConflict
+	}
+	if err := store.inject(FailureAfterStateWrite); err != nil {
+		return Session{}, err
+	}
+	if err := insertAuditIntent(ctx, tx, session, mutation, event); err != nil {
+		return Session{}, err
+	}
+	if err := store.inject(FailureAfterAuditIntent); err != nil {
+		return Session{}, err
+	}
+	if err := insertOutbox(ctx, tx, event, payload); err != nil {
+		return Session{}, err
+	}
+	if err := store.inject(FailureBeforeCommit); err != nil {
+		return Session{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Session{}, err
+	}
+	return cloneSession(session), nil
 }
 
 func (store *PostgresStore) RevokeSession(ctx context.Context, sessionID string, mutation MutationContext) (Session, error) {
@@ -225,7 +317,8 @@ func insertOutbox(ctx context.Context, tx pgx.Tx, event sessionevent.SessionAudi
 const sessionSelect = `
 	SELECT session_id, principal_subject, principal_issuer, display_name, email, roles,
 	       tenant_id, csrf_token_ciphertext, provider_tokens_ciphertext,
-	       expires_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at
+	       authentication_acr, authentication_amr, authentication_time,
+	       expires_at, last_activity_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at
 	FROM gateway.sessions`
 
 type rowScanner interface {
@@ -234,13 +327,14 @@ type rowScanner interface {
 
 func scanSession(row rowScanner) (Session, error) {
 	var session Session
-	var roles []byte
+	var roles, authenticationAMR []byte
 	var revokedAt sql.NullTime
 	err := row.Scan(
 		&session.ID, &session.Principal.Subject, &session.Principal.Issuer,
 		&session.Principal.DisplayName, &session.Principal.Email, &roles,
 		&session.TenantID, &session.CSRFTokenCiphertext,
-		&session.ProviderTokensCiphertext, &session.ExpiresAt, &revokedAt,
+		&session.ProviderTokensCiphertext, &session.AuthenticationACR, &authenticationAMR, &session.AuthenticationTime,
+		&session.ExpiresAt, &session.LastActivityAt, &revokedAt,
 		&session.AggregateVersion, &session.LastAuditMessageID, &session.CreatedAt,
 		&session.UpdatedAt,
 	)
@@ -252,6 +346,9 @@ func scanSession(row rowScanner) (Session, error) {
 	}
 	if err := json.Unmarshal(roles, &session.Principal.Roles); err != nil {
 		return Session{}, fmt.Errorf("decode session roles: %w", err)
+	}
+	if err := json.Unmarshal(authenticationAMR, &session.AuthenticationAMR); err != nil {
+		return Session{}, fmt.Errorf("decode session authentication methods: %w", err)
 	}
 	if revokedAt.Valid {
 		value := revokedAt.Time.UTC()

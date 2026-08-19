@@ -4,12 +4,12 @@ import { API_MODE } from './config';
 import {
   PlatformApiError,
   createPlatformGatewayClient,
+  type Asset,
+  type AssetCollection,
   type Device,
   type DeviceBinding,
   type DeviceBindingCollection,
   type DeviceCollection,
-  type Equipment,
-  type EquipmentCollection,
   type RegistryListParams,
   type Site,
   type SiteAssetModel,
@@ -123,13 +123,13 @@ export function useRegistryAssetModel(siteId: string | null, enabled = true) {
   });
 }
 
-export function useRegistryEquipment(siteId: string | null, enabled = true) {
+export function useRegistryAssets(siteId: string | null, enabled = true) {
   return useInfiniteQuery({
-    queryKey: ['registry', 'sites', siteId, 'equipment'],
+    queryKey: ['registry', 'sites', siteId, 'assets'],
     queryFn: async ({ pageParam, signal }) => {
       const params: RegistryListParams = { limit: DEFAULT_PAGE_SIZE };
       if (typeof pageParam === 'string') params.cursor = pageParam;
-      return (await client.listSiteEquipment(registryId(siteId!), params, { signal })).data;
+      return (await client.listSiteAssets(registryId(siteId!), params, { signal })).data;
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: nextCursor,
@@ -138,11 +138,11 @@ export function useRegistryEquipment(siteId: string | null, enabled = true) {
   });
 }
 
-export function useRegistryEquipmentDetail(equipmentId: string | null, enabled = true) {
+export function useRegistryAssetDetail(assetId: string | null, enabled = true) {
   return useQuery({
-    queryKey: ['registry', 'equipment', equipmentId],
-    queryFn: async ({ signal }) => (await client.getEquipment(registryId(equipmentId!), { signal })).data,
-    enabled: registryQueryEnabled(enabled && Boolean(equipmentId)),
+    queryKey: ['registry', 'asset', assetId],
+    queryFn: async ({ signal }) => (await client.getAsset(registryId(assetId!), { signal })).data,
+    enabled: registryQueryEnabled(enabled && Boolean(assetId)),
     retry: retryRegistryQuery,
   });
 }
@@ -215,9 +215,9 @@ export function useAuthorizedRegistrySites(enabled = true) {
 
 export type RegistrySiteCollection = SiteCollection;
 export type RegistrySiteAssetModel = SiteAssetModel;
-export type RegistryEquipmentCollection = EquipmentCollection;
+export type RegistryAssetCollection = AssetCollection;
 export type RegistryDeviceCollection = DeviceCollection;
 export type RegistryDeviceBindingCollection = DeviceBindingCollection;
-export type RegistryEquipment = Equipment;
+export type RegistryAsset = Asset;
 export type RegistryDevice = Device;
 export type RegistryDeviceBinding = DeviceBinding;

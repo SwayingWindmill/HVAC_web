@@ -12,7 +12,7 @@ import {
 import {
   flattenRegistryPages,
   useRegistryDevices,
-  useRegistryEquipment,
+  useRegistryAssets,
   useRegistrySite,
   useRegistrySites,
 } from '@/api/registry';
@@ -42,9 +42,9 @@ export default function RealRegistrySitePanel() {
   const sites = flattenRegistryPages(sitesQuery.data);
   const [siteId, setSiteId] = useState<string | null>(null);
   const siteQuery = useRegistrySite(siteId);
-  const equipmentQuery = useRegistryEquipment(siteId);
+  const assetsQuery = useRegistryAssets(siteId);
   const devicesQuery = useRegistryDevices(siteId);
-  const equipment = flattenRegistryPages(equipmentQuery.data);
+  const assets = flattenRegistryPages(assetsQuery.data);
   const devices = flattenRegistryPages(devicesQuery.data);
 
   useEffect(() => {
@@ -62,12 +62,12 @@ export default function RealRegistrySitePanel() {
   const treeData = useMemo<DataNode[]>(() => {
     const site = siteQuery.data;
     if (!site) return [];
-    const equipmentNodes: DataNode[] = equipment.map((item) => ({
-      key: `equipment:${item.id}`,
+    const assetNodes: DataNode[] = assets.map((item) => ({
+      key: `asset:${item.id}`,
       title: (
         <Space size={6}>
           <span>{item.displayName}</span>
-          <Tag>{item.equipmentType}</Tag>
+          <Tag>{item.assetType}</Tag>
           <Tag color={lifecycleColor[item.status]}>{item.status}</Tag>
         </Space>
       ),
@@ -92,10 +92,10 @@ export default function RealRegistrySitePanel() {
       icon: <ApartmentOutlined style={{ color: BRAND.teal }} />,
       children: [
         {
-          key: `equipment-group:${site.id}`,
-          title: `Equipment · ${equipment.length}`,
+          key: `asset-group:${site.id}`,
+          title: `Asset · ${assets.length}`,
           icon: <ClusterOutlined style={{ color: STATUS.warn }} />,
-          children: equipmentNodes,
+          children: assetNodes,
         },
         {
           key: `device-group:${site.id}`,
@@ -105,7 +105,7 @@ export default function RealRegistrySitePanel() {
         },
       ],
     }];
-  }, [devices, equipment, siteQuery.data]);
+  }, [devices, assets, siteQuery.data]);
 
   if (sitesQuery.isPending) return <LoadingState tip="正在读取授权 Site" />;
   if (sitesQuery.error) {
@@ -116,14 +116,14 @@ export default function RealRegistrySitePanel() {
   }
 
   const selectedSite = siteQuery.data ?? sites.find((site) => site.id === siteId);
-  const childLoading = Boolean(siteId) && (siteQuery.isPending || equipmentQuery.isPending || devicesQuery.isPending);
+  const childLoading = Boolean(siteId) && (siteQuery.isPending || assetsQuery.isPending || devicesQuery.isPending);
 
   return (
     <div className="system-tab-stack" data-testid="real-registry-system-panel">
       <OperationsSectionIntro
         title="站点与 Registry 结构"
         icon={<ApartmentOutlined />}
-        meta={`${equipment.length} Equipment · ${devices.length} Device`}
+        meta={`${assets.length} Asset · ${devices.length} Device`}
         actions={(
           <Space wrap>
             <Select
@@ -148,7 +148,7 @@ export default function RealRegistrySitePanel() {
         icon={<ClusterOutlined />}
         items={[
           { text: 'Tenant 与 Site 身份来自当前授权的 Gateway Registry API；Site 直接携带 tenantId。', tone: 'positive' },
-          { text: 'Equipment 与 Device 保持独立身份；当前状态仅表示 Registry 生命周期。', tone: 'info' },
+          { text: 'Asset 与 Device 保持独立身份；当前状态仅表示 Registry 生命周期。', tone: 'info' },
           { text: '真实模式请求失败时会显式降级，不会替换成本地 Mock 资产。', tone: 'warning' },
         ]}
       />
@@ -164,22 +164,22 @@ export default function RealRegistrySitePanel() {
               variant="borderless"
               title={<OperationsPanelHeading title="Registry 结构" meta={selectedSite?.displayName} />}
             >
-              {equipmentQuery.error ? (
-                <RegistryFailureState error={equipmentQuery.error} compact onRetry={() => void equipmentQuery.refetch()} />
+              {assetsQuery.error ? (
+                <RegistryFailureState error={assetsQuery.error} compact onRetry={() => void assetsQuery.refetch()} />
               ) : devicesQuery.error ? (
                 <RegistryFailureState error={devicesQuery.error} compact onRetry={() => void devicesQuery.refetch()} />
               ) : treeData.length === 0 ? (
-                <RegistryEmptyState description="该 Site 暂无 Equipment 或 Device。" />
+                <RegistryEmptyState description="该 Site 暂无 Asset 或 Device。" />
               ) : (
                 <div className="system-tree-shell">
                   <Tree showIcon defaultExpandAll treeData={treeData} />
                 </div>
               )}
               <RegistryLoadMore
-                hasMore={Boolean(equipmentQuery.hasNextPage)}
-                loading={equipmentQuery.isFetchingNextPage}
-                onLoadMore={() => void equipmentQuery.fetchNextPage()}
-                label="加载更多 Equipment"
+                hasMore={Boolean(assetsQuery.hasNextPage)}
+                loading={assetsQuery.isFetchingNextPage}
+                onLoadMore={() => void assetsQuery.fetchNextPage()}
+                label="加载更多 Asset"
               />
               <RegistryLoadMore
                 hasMore={Boolean(devicesQuery.hasNextPage)}

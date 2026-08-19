@@ -38,11 +38,11 @@ func TestApplyOperationAcknowledgesWithAuditEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Status != StatusAcknowledged || updated.Version != 2 || len(updated.Transitions) != 2 {
+	if updated.Status != StatusOpen || updated.Version != 2 || len(updated.Transitions) != 2 {
 		t.Fatalf("unexpected acknowledged projection: %#v", updated)
 	}
 	transition := updated.Transitions[1]
-	if transition.Operation != OperationAcknowledge || transition.FromStatus == nil || *transition.FromStatus != StatusOpen || transition.ToStatus != StatusAcknowledged {
+	if transition.Operation != OperationAcknowledge || transition.FromStatus == nil || *transition.FromStatus != StatusOpen || transition.ToStatus != StatusOpen {
 		t.Fatalf("unexpected acknowledgement transition: %#v", transition)
 	}
 	if transition.ActorID == nil || transition.PolicyRevision == nil || transition.CorrelationID == nil {
@@ -71,7 +71,7 @@ func TestApplyOperationAssignsAndUnassignsWithoutChangingLifecycleStatus(t *test
 	}
 }
 
-func TestApplyOperationSuppressesAndRestoresPriorAcknowledgedState(t *testing.T) {
+func TestApplyOperationSuppressesAndRestoresPriorLifecycleState(t *testing.T) {
 	acknowledged, err := ApplyOperation(validAlarm(), operationInput(OperationAcknowledge, 1, "2026-07-31T10:00:00Z"))
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestApplyOperationSuppressesAndRestoresPriorAcknowledgedState(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if unsuppressed.Status != StatusAcknowledged || unsuppressed.SuppressedUntil != nil || unsuppressed.Version != 4 {
+	if unsuppressed.Status != StatusOpen || unsuppressed.SuppressedUntil != nil || unsuppressed.Version != 4 {
 		t.Fatalf("unexpected unsuppressed projection: %#v", unsuppressed)
 	}
 }
@@ -118,7 +118,7 @@ func TestApplyOperationRestoresSuppressionOriginAfterAssignmentWhileSuppressed(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if unsuppressed.Status != StatusAcknowledged || unsuppressed.SuppressedUntil != nil || unsuppressed.AssigneeID == nil || *unsuppressed.AssigneeID != assignee || unsuppressed.Version != 5 {
+	if unsuppressed.Status != StatusOpen || unsuppressed.SuppressedUntil != nil || unsuppressed.AssigneeID == nil || *unsuppressed.AssigneeID != assignee || unsuppressed.Version != 5 {
 		t.Fatalf("unexpected unsuppressed projection after assignment: %#v", unsuppressed)
 	}
 }
@@ -140,12 +140,12 @@ func TestAlarmValidationRejectsUnsuppressionToWrongOrigin(t *testing.T) {
 	policyRevision := "alarm-policy-9"
 	correlationID := "alarm-operation-forged"
 	forged := suppressed
-	forged.Status = StatusOpen
+	forged.Status = StatusAcknowledged
 	forged.SuppressedUntil = nil
 	forged.Version = 4
 	forged.UpdatedAt = "2026-07-31T10:02:00Z"
 	forged.Transitions = append(forged.Transitions, Transition{
-		FromStatus: &from, ToStatus: StatusOpen, Operation: OperationUnsuppress,
+		FromStatus: &from, ToStatus: StatusAcknowledged, Operation: OperationUnsuppress,
 		Reason: "forged unsuppression", ActorType: "PRINCIPAL", ActorID: &actorID,
 		PolicyRevision: &policyRevision, CorrelationID: &correlationID,
 		OccurredAt: forged.UpdatedAt, Version: forged.Version,
@@ -173,15 +173,16 @@ func TestApplyOperationClosesAndReopens(t *testing.T) {
 }
 
 func TestApplyOperationRejectsStaleVersionAndIllegalTransitions(t *testing.T) {
-	if _, err := ApplyOperation(validAlarm(), operationInput(OperationAcknowledge, 7, "2026-07-31T10:00:00Z")); !errors.Is(err, ErrVersionConflict) {
+	if _, err := ApplyOperation(validAlarm(), operationInput(OperationClose, 7, "2026-07-31T10:00:00Z")); !errors.Is(err, ErrVersionConflict) {
 		t.Fatalf("expected version conflict, got %v", err)
 	}
-	acknowledged, err := ApplyOperation(validAlarm(), operationInput(OperationAcknowledge, 1, "2026-07-31T10:00:00Z"))
+	acknowledged, err := ApplyOperation(validAlarm(), operationInput(OperationAcknowledge, 0, "2026-07-31T10:00:00Z"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ApplyOperation(acknowledged, operationInput(OperationAcknowledge, 2, "2026-07-31T10:01:00Z")); !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("expected invalid acknowledgement transition, got %v", err)
+	replayed, err := ApplyOperation(acknowledged, operationInput(OperationAcknowledge, 0, "2026-07-31T10:01:00Z"))
+	if err != nil || replayed.Version != acknowledged.Version || len(replayed.Transitions) != len(acknowledged.Transitions) {
+		t.Fatalf("expected naturally idempotent acknowledgement, got %#v / %v", replayed, err)
 	}
 	tooLong := "2026-09-15T10:01:00Z"
 	suppress := operationInput(OperationSuppress, 2, "2026-07-31T10:01:00Z")

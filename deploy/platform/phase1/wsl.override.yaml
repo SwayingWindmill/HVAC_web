@@ -1,0 +1,93 @@
+services:
+  energy-api:
+    environment:
+      OIDC_ISSUER: https://localhost:8443/identity
+      OIDC_BACKCHANNEL_BASE_URL: http://identity-service:19095
+      OIDC_CLIENT_ID: hvac-web-development
+      OIDC_REDIRECT_URI: https://localhost:8443/api/v1/auth/callback
+      IDENTITY_POLICY_REVISION: registry-read:1
+      COMMAND_RUNTIME_COHORTS_FILE: /run/hvac/phase1-config/command-runtime-cohorts.local.json
+    volumes:
+      - ./runtime/internal-pki:/run/hvac/pki:ro
+      - ./runtime/secrets:/run/hvac/secrets:ro
+      - ./runtime/tls:/run/hvac/public-tls:ro
+      - ./config/command-runtime-cohorts.local.json:/run/hvac/phase1-config/command-runtime-cohorts.local.json:ro
+      - ../../../contracts/ownership/route-ownership.v1.json:/run/hvac/config/route-ownership.v1.json:ro
+
+  identity-service:
+    environment:
+      IDENTITY_ISSUER: https://localhost:8443/identity
+      IDENTITY_CLIENT_ID: hvac-web-development
+      IDENTITY_REDIRECT_URI: https://localhost:8443/api/v1/auth/callback
+      IDENTITY_POST_LOGOUT_REDIRECT_URI: https://localhost:8443/?logged_out=1
+      IDENTITY_DATABASE_URL: ${IDENTITY_DATABASE_URL:-}
+
+  identity-admin:
+    environment:
+      IDENTITY_DATABASE_URL: ${IDENTITY_ADMIN_DATABASE_URL:-}
+
+  identity-reconciler:
+    environment:
+      IDENTITY_DIRECTORY_DATABASE_URL: ${IDENTITY_DIRECTORY_DATABASE_URL:-}
+      IAM_RECONCILER_DATABASE_URL: ${IAM_RECONCILER_DATABASE_URL:-}
+      IDENTITY_ISSUER: https://localhost:8443/identity
+
+  telemetry-worker:
+    environment:
+      TELEMETRY_COMMAND_VERIFIER_DEVICE_IDS: 018f3e00-4000-7000-8000-000000000001,018f3e00-4000-7000-8000-000000000002,018f3e00-4000-7000-8000-000000000003,018f3e00-4000-7000-8000-000000000004
+    volumes:
+      - ./runtime/internal-pki:/run/hvac/pki:ro
+
+  iot-service:
+    environment:
+      COMMAND_RUNTIME_BINDINGS_FILE: /run/hvac/phase1-config/command-edge-bindings.local.json
+    volumes:
+      - ./runtime/internal-pki:/run/hvac/pki:ro
+      - ./runtime/config:/run/hvac/config:ro
+      - ./config/command-edge-bindings.local.json:/run/hvac/phase1-config/command-edge-bindings.local.json:ro
+    depends_on:
+      energy-api:
+        condition: service_healthy
+      telemetry-worker:
+        condition: service_healthy
+      mqtt-broker:
+        condition: service_started
+
+  centrifugo:
+    volumes:
+      - ./runtime/config/centrifugo.json:/centrifugo/centrifugo.json:ro
+      - ./runtime/internal-pki:/run/hvac/pki:ro
+
+  postgres:
+    volumes:
+      - phase1_wsl_postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./runtime/backups/postgres/wal:/backups/wal
+      - ./runtime/backups/postgres/base:/backups/base
+
+  clickhouse:
+    volumes:
+      - phase1_wsl_clickhouse_data:/var/lib/clickhouse
+      - ../../../infra/s2-telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - ./runtime/backups/clickhouse:/backups
+
+  redis:
+    volumes:
+      - phase1_wsl_redis_data:/data
+
+  mqtt-broker:
+    volumes:
+      - ../../../infra/s2-telemetry/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../../../infra/s2-telemetry/mqtt/acl:/mosquitto/config/acl:ro
+      - ./runtime/mqtt-pki:/mosquitto/certs:ro
+      - phase1_wsl_mqtt_data:/mosquitto/data
+
+  node-exporter:
+    volumes:
+      - /:/host/root:ro
+
+volumes:
+  phase1_wsl_postgres_data:
+  phase1_wsl_clickhouse_data:
+  phase1_wsl_redis_data:
+  phase1_wsl_mqtt_data:

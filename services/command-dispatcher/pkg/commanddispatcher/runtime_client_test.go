@@ -127,7 +127,9 @@ func TestRuntimeClientMapsNoWorkAndStaleFence(t *testing.T) {
 	if _, err := client.ClaimDispatch(context.Background(), runtimeClientTestOrganization, "dispatcher-a", 30*time.Second); !errors.Is(err, commandservice.ErrNoDispatchAvailable) {
 		t.Fatalf("expected no work, got %v", err)
 	}
-	if err := client.ResolveDispatch(context.Background(), commandmodel.DispatchEnvelope{}, commandmodel.ConnectorResult{}); !errors.Is(err, commandservice.ErrStaleFence) {
+	if err := client.ResolveDispatch(context.Background(), commandmodel.DispatchEnvelope{
+		TenantID: runtimeClientTestOrganization, SiteID: runtimeClientTestSite, DeviceID: runtimeClientTestDevice,
+	}, commandmodel.ConnectorResult{}); !errors.Is(err, commandservice.ErrStaleFence) {
 		t.Fatalf("expected stale fence, got %v", err)
 	}
 }

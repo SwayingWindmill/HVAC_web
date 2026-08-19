@@ -1,6 +1,6 @@
 # platform-core-service
 
-`platform-core-service` is the private S1 Registry read boundary. It reads the platform-owned `core_registry` PostgreSQL Schema and returns frozen Tenant-scoped Site, Equipment and Device representations to `platform-gateway`. This service is not browser-facing and does not perform migration or business double writes.
+`platform-core-service` is the private S1 Registry read boundary. It reads the platform-owned `core_registry` PostgreSQL Schema and returns frozen Tenant-scoped Site, Asset and Device representations to `platform-gateway`. This service is not browser-facing and does not perform migration or business double writes.
 
 ## Internal routes
 
@@ -8,8 +8,8 @@ All routes are `GET` under `/internal/v1/registry`:
 
 - `/sites`
 - `/sites/{siteId}`
-- `/sites/{siteId}/equipment`
-- `/equipment/{equipmentId}`
+- `/sites/{siteId}/assets`
+- `/assets/{assetId}`
 - `/sites/{siteId}/devices`
 - `/devices/{deviceId}`
 

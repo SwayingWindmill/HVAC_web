@@ -9,6 +9,7 @@ use (
 	./libs/commandauth
 	./libs/commandmodel
 	./libs/domainoutbox
+	./libs/edgecontrol
 	./libs/identitycontext
 	./libs/observability
 	./libs/operationsauditevent
@@ -28,10 +29,12 @@ use (
 	./services/command-service
 	./services/forecast-service
 	./services/iam-service
+	./services/identity-service
 	./services/optimization-service
 	./services/legacy-migration-service
 	./services/mqtt-telemetry-adapter
 	./services/metric-engine-service
+	./services/scheduler-service
 	./services/settlement-service
 	./services/oidc-test-provider
 	./services/outbox-relay

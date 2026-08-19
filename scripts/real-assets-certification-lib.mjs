@@ -1,7 +1,7 @@
 export const REAL_ASSETS_CERTIFICATION_SCHEMA_VERSION = 1;
 export const REAL_ASSETS_CERTIFICATION_FIXTURE_REVISION = 'real-assets-200-devices:v1';
 export const REAL_ASSETS_CERTIFICATION_DEVICE_COUNT = 200;
-export const REAL_ASSETS_CERTIFICATION_EQUIPMENT_COUNT = 20;
+export const REAL_ASSETS_CERTIFICATION_ASSET_COUNT = 20;
 export const REAL_ASSETS_CERTIFICATION_SCENARIOS = Object.freeze([
   'normal',
   'offline',
@@ -24,18 +24,18 @@ export function scenarioForIndex(index) {
   return REAL_ASSETS_CERTIFICATION_SCENARIOS[(index - 1) % REAL_ASSETS_CERTIFICATION_SCENARIOS.length];
 }
 
-export function buildCertificationInventory({ organizationId, siteId, count = REAL_ASSETS_CERTIFICATION_DEVICE_COUNT, namespace = '01940000' }) {
+export function buildCertificationInventory({ tenantId, siteId, count = REAL_ASSETS_CERTIFICATION_DEVICE_COUNT, namespace = '01940000' }) {
   if (count !== REAL_ASSETS_CERTIFICATION_DEVICE_COUNT) throw new Error('Real Assets certification fixture is frozen at 200 Devices');
   const now = '2026-08-01T00:00:00.000Z';
-  const equipment = Array.from({ length: REAL_ASSETS_CERTIFICATION_EQUIPMENT_COUNT }, (_, offset) => {
+  const assets = Array.from({ length: REAL_ASSETS_CERTIFICATION_ASSET_COUNT }, (_, offset) => {
     const index = offset + 1;
     return {
       id: certificationId(0x10, index, namespace),
-      owningOrganizationId: organizationId,
+      tenantId: tenantId,
       siteId,
       code: `PLANT-EQ-${String(index).padStart(2, '0')}`,
-      displayName: `Plant Equipment ${String(index).padStart(2, '0')}`,
-      equipmentType: index % 2 === 0 ? 'CHILLER' : 'PUMP_GROUP',
+      displayName: `Plant Asset ${String(index).padStart(2, '0')}`,
+      assetType: index % 2 === 0 ? 'CHILLER' : 'PUMP_GROUP',
       status: 'ACTIVE',
       revision: index,
       createdAt: now,
@@ -47,7 +47,7 @@ export function buildCertificationInventory({ organizationId, siteId, count = RE
     const scenario = scenarioForIndex(index);
     return {
       id: certificationId(0x20, index, namespace),
-      owningOrganizationId: organizationId,
+      tenantId: tenantId,
       siteId,
       code: `CERT-DEVICE-${String(index).padStart(3, '0')}`,
       displayName: `Certification Device ${String(index).padStart(3, '0')} · ${scenario}`,
@@ -61,13 +61,13 @@ export function buildCertificationInventory({ organizationId, siteId, count = RE
   });
   const bindings = [];
   for (let index = 1; index <= 190; index += 1) {
-    const equipmentIndex = Math.floor((index - 1) / 10) + 1;
+    const assetIndex = Math.floor((index - 1) / 10) + 1;
     bindings.push({
       id: certificationId(0x30, index, namespace),
-      owningOrganizationId: organizationId,
+      tenantId: tenantId,
       siteId,
       deviceId: devices[index - 1].id,
-      equipmentId: equipment[equipmentIndex - 1].id,
+      assetId: assets[assetIndex - 1].id,
       bindingRole: 'PRIMARY_CONTROLLER',
       status: 'ACTIVE',
       validFrom: now,
@@ -82,10 +82,10 @@ export function buildCertificationInventory({ organizationId, siteId, count = RE
       const bindingIndex = 190 + ((index - 196) * 2) + target;
       bindings.push({
         id: certificationId(0x30, bindingIndex, namespace),
-        owningOrganizationId: organizationId,
+        tenantId: tenantId,
         siteId,
         deviceId: devices[index - 1].id,
-        equipmentId: equipment[target - 1].id,
+        assetId: assets[target - 1].id,
         bindingRole: target === 1 ? 'PRIMARY_CONTROLLER' : 'SECONDARY_CONTROLLER',
         status: 'ACTIVE',
         validFrom: now,
@@ -99,7 +99,7 @@ export function buildCertificationInventory({ organizationId, siteId, count = RE
   const scenarioCounts = Object.fromEntries(REAL_ASSETS_CERTIFICATION_SCENARIOS.map((scenario) => [scenario, 0]));
   for (const device of devices) scenarioCounts[device.certificationScenario] += 1;
   return Object.freeze({
-    equipment: Object.freeze(equipment),
+    assets: Object.freeze(assets),
     devices: Object.freeze(devices),
     bindings: Object.freeze(bindings),
     scenarioCounts: Object.freeze(scenarioCounts),

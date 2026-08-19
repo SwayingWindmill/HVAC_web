@@ -12,8 +12,11 @@ import {
   RealAiLanding,
   RealBigScreenPage,
   RealCostPage,
+  RealControlPage,
+  RealForecastPage,
   RealFddPage,
   RealOptimizePage,
+  RealSettlementPage,
 } from './RealProductPages';
 import { RealShellChrome } from './RealShellChrome';
 import { RealAssetsLoadingSurface } from './assets/RealAssetsLoadingSurface';
@@ -21,6 +24,7 @@ import { RealAssetsWorkspace } from './assets/RealAssetsWorkspace';
 import type { RealNavigationItem } from './route-policy';
 import type { ProtectedScopeDraft, ProtectedScopeRequestToken, ProtectedScopeResource } from './protected-scope';
 import type { RealRuntimeConfig } from './runtime-config';
+import type { RealtimeStatusUpdate } from './realtime-status';
 import type { ShellFailureView, ShellSnapshot } from './shell-runtime';
 import { siteRoute, type SiteContext, type SiteRoutingDecision } from './site-routing';
 
@@ -108,7 +112,7 @@ function SiteDiscoveryUnavailableSurface({ failure, retry }: { failure?: ShellFa
     <section className="real-route-surface" data-testid="real-site-discovery-unavailable" data-route-state="UNAVAILABLE">
       <p className="real-shell-eyebrow">REAL MODE · UNAVAILABLE</p>
       <FocusHeading>无法读取授权 Site</FocusHeading>
-      <p>Principal 仍然有效，但当前 Organization 的 Registry Site 集合无法确认。系统不会使用缓存 Site 或本地 building alias。</p>
+      <p>Principal 仍然有效，但当前 Tenant 的 Registry Site 集合无法确认。系统不会使用缓存 Site 或本地 building alias。</p>
       {failure ? (
         <div className="real-shell-problem" role="alert" data-retryable={String(failure.retryable)}>
           <strong>{failure.code}</strong>
@@ -129,11 +133,11 @@ function NoAuthorizedSiteSurface({ snapshot, retry }: { snapshot: ShellSnapshot;
     <section className="real-route-surface" data-testid="real-site-none" data-route-state="NO_AUTHORIZED_SITE">
       <p className="real-shell-eyebrow">REAL MODE · NO AUTHORIZED SITE</p>
       <FocusHeading>当前账号没有授权 Site</FocusHeading>
-      <p>Shell 已验证当前 Acting Organization，但 Registry 没有返回此 Principal 可进入的 Site。</p>
+      <p>Shell 已验证当前 Tenant，但 Registry 没有返回此 Principal 可进入的 Site。</p>
       <dl className="real-shell-facts">
         <div><dt>Account</dt><dd>{principal.principal.displayName}</dd></div>
         <div><dt>Subject</dt><dd>{principal.principal.subject}</dd></div>
-        <div><dt>Acting Organization</dt><dd>{principal.context.tenantId}</dd></div>
+        <div><dt>Tenant</dt><dd>{principal.context.tenantId}</dd></div>
       </dl>
       <div className="real-shell-actions">
         <button type="button" onClick={retry}>刷新授权 Site</button>
@@ -141,7 +145,7 @@ function NoAuthorizedSiteSurface({ snapshot, retry }: { snapshot: ShellSnapshot;
       </div>
       <div id="real-site-help" className="real-site-help" tabIndex={-1}>
         <strong>帮助</strong>
-        <p>请联系当前 Organization 的管理员确认 Site membership 与 IAM policy，然后重试。此页面不会自动创建或选择 Site。</p>
+        <p>请联系当前 Tenant 的管理员确认 Site membership 与 IAM policy，然后重试。此页面不会自动创建或选择 Site。</p>
       </div>
     </section>
   );
@@ -163,7 +167,7 @@ function SiteNotVisibleSurface({ sites }: { sites: readonly Readonly<Site>[] }) 
     <section className="real-route-surface" data-testid="real-site-not-visible" data-route-state="SITE_NOT_VISIBLE">
       <p className="real-shell-eyebrow">REAL MODE · SITE NOT VISIBLE</p>
       <FocusHeading>Site 不可见或不存在</FocusHeading>
-      <p>Shell 无法在当前 Acting Organization 的授权 Registry 集合中验证 URL Site。为避免泄露，不说明具体原因，也不会自动切换 Scope。</p>
+      <p>Shell 无法在当前 Tenant 的授权 Registry 集合中验证 URL Site。为避免泄露，不说明具体原因，也不会自动切换 Scope。</p>
       {sites.length > 0 ? (
         <>
           <h2>选择其他授权 Site</h2>
@@ -212,12 +216,14 @@ function ReadySiteSurface({
   registerProtectedResource,
   protectedRequestToken,
   registerUnsavedDraft,
+  publishRealtimeStatus,
 }: {
   decision: Extract<SiteRoutingDecision, { state: 'READY' }>;
   snapshot: ShellSnapshot;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
   protectedRequestToken: () => ProtectedScopeRequestToken;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
+  publishRealtimeStatus: (update: RealtimeStatusUpdate) => void;
 }) {
   if (decision.route === 'dashboard') {
     return (
@@ -240,10 +246,11 @@ function ReadySiteSurface({
         <RealAssetsWorkspace
           site={decision.context.site}
           principal={snapshot.principal!}
-          requestedEquipmentId={decision.equipmentId}
+          requestedAssetId={decision.assetId}
           protectedGeneration={snapshot.protectedScope!.generation}
           protectedRequestToken={protectedRequestToken}
           registerProtectedResource={registerProtectedResource}
+          publishRealtimeStatus={publishRealtimeStatus}
         />
       </Suspense>
     );
@@ -269,6 +276,22 @@ function ReadySiteSurface({
     );
   }
 
+  if (decision.route === 'forecast') {
+    return (
+      <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
+        <RealForecastPage site={decision.context.site} principal={snapshot.principal!} />
+      </Suspense>
+    );
+  }
+
+  if (decision.route === 'control') {
+    return (
+      <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
+        <RealControlPage site={decision.context.site} principal={snapshot.principal!} />
+      </Suspense>
+    );
+  }
+
   if (decision.route === 'optimize') {
     return (
       <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
@@ -281,6 +304,14 @@ function ReadySiteSurface({
     return (
       <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
         <RealCostPage site={decision.context.site} principal={snapshot.principal!} />
+      </Suspense>
+    );
+  }
+
+  if (decision.route === 'settlement') {
+    return (
+      <Suspense fallback={<RealRouteLoading label="正在加载工作台" />}>
+        <RealSettlementPage site={decision.context.site} principal={snapshot.principal!} />
       </Suspense>
     );
   }
@@ -394,12 +425,14 @@ function ProtectedSiteRouteFrame({
   registerProtectedResource,
   protectedRequestToken,
   registerUnsavedDraft,
+  publishRealtimeStatus,
 }: {
   decision: Extract<SiteRoutingDecision, { state: 'READY' }>;
   snapshot: ShellSnapshot;
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
   protectedRequestToken: () => ProtectedScopeRequestToken;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
+  publishRealtimeStatus: (update: RealtimeStatusUpdate) => void;
 }) {
   useEffect(() => registerProtectedResource({
     id: `site-route-frame:${decision.context.site.id}:${decision.route}`,
@@ -414,6 +447,7 @@ function ProtectedSiteRouteFrame({
       registerProtectedResource={registerProtectedResource}
       protectedRequestToken={protectedRequestToken}
       registerUnsavedDraft={registerUnsavedDraft}
+      publishRealtimeStatus={publishRealtimeStatus}
     />
   );
 }
@@ -425,6 +459,7 @@ function SiteSurface({
   registerProtectedResource,
   protectedRequestToken,
   registerUnsavedDraft,
+  publishRealtimeStatus,
 }: {
   decision: SiteShellDecision;
   snapshot: ShellSnapshot;
@@ -432,6 +467,7 @@ function SiteSurface({
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
   protectedRequestToken: () => ProtectedScopeRequestToken;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
+  publishRealtimeStatus: (update: RealtimeStatusUpdate) => void;
 }) {
   switch (decision.state) {
     case 'SITE_DISCOVERY_CHECKING':
@@ -460,6 +496,7 @@ function SiteSurface({
           registerProtectedResource={registerProtectedResource}
           protectedRequestToken={protectedRequestToken}
           registerUnsavedDraft={registerUnsavedDraft}
+          publishRealtimeStatus={publishRealtimeStatus}
         />
       );
   }
@@ -475,6 +512,8 @@ export function buildSiteNavigation(
     { id: 'site-assets', label: '设备与建筑', path: siteRoute(site, 'assets'), kind: 'link', degraded: false },
 
     { id: 'site-energy', label: '能耗分析', path: siteRoute(site, 'energy'), kind: 'link', degraded: false },
+    { id: 'site-forecast', label: '预测与基线', path: siteRoute(site, 'forecast'), kind: 'link', degraded: false },
+    { id: 'site-control', label: '能源控制', path: siteRoute(site, 'control'), kind: 'link', degraded: false },
     { id: 'site-optimize', label: '节能优化', path: siteRoute(site, 'optimize'), kind: 'link', degraded: false },
     { id: 'site-fdd', label: '故障检测', path: siteRoute(site, 'fdd'), kind: 'link', degraded: false },
   ];
@@ -487,6 +526,7 @@ export function buildSiteNavigation(
   navigation.push(
     { id: 'site-ai', label: 'AI 运维助手', path: siteRoute(site, 'ai'), kind: 'link', degraded: false, primary: true },
     { id: 'site-cost', label: '成本与绩效', path: siteRoute(site, 'cost'), kind: 'link', degraded: false },
+    { id: 'site-settlement', label: '结算与对账', path: siteRoute(site, 'settlement'), kind: 'link', degraded: false },
     { id: 'site-bigscreen', label: '演示大屏', path: siteRoute(site, 'bigscreen'), kind: 'link', degraded: false },
   );
   return navigation;
@@ -505,6 +545,7 @@ export function SiteScopedShell({
   registerProtectedResource,
   protectedRequestToken,
   registerUnsavedDraft,
+  publishRealtimeStatus,
 }: {
   config: RealRuntimeConfig;
   snapshot: ShellSnapshot;
@@ -518,6 +559,7 @@ export function SiteScopedShell({
   registerProtectedResource: (resource: ProtectedScopeResource) => () => void;
   protectedRequestToken: () => ProtectedScopeRequestToken;
   registerUnsavedDraft: (draft: ProtectedScopeDraft) => () => void;
+  publishRealtimeStatus: (update: RealtimeStatusUpdate) => void;
 }) {
   if (decision.state === 'READY' && decision.route === 'bigscreen') {
     return (
@@ -528,6 +570,7 @@ export function SiteScopedShell({
         registerProtectedResource={registerProtectedResource}
         protectedRequestToken={protectedRequestToken}
         registerUnsavedDraft={registerUnsavedDraft}
+        publishRealtimeStatus={publishRealtimeStatus}
       />
     );
   }
@@ -556,6 +599,7 @@ export function SiteScopedShell({
         registerProtectedResource={registerProtectedResource}
         protectedRequestToken={protectedRequestToken}
         registerUnsavedDraft={registerUnsavedDraft}
+        publishRealtimeStatus={publishRealtimeStatus}
       />
     </RealShellChrome>
   );

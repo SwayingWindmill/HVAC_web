@@ -1,5 +1,4 @@
 import { useMemo, type CSSProperties } from 'react';
-import ReactECharts from 'echarts-for-react';
 import { Alert, Button, Card, Space, Tag, Typography } from 'antd';
 import { CalendarOutlined, DownloadOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { EnergySeriesPoint, EnergySeriesResponse } from '@/api/energy-analytics';
@@ -13,6 +12,7 @@ import {
   sortEnergyPoints,
   summarizeEnergyPoints,
 } from './energy-presentation';
+import { EnergyTrendChart } from '@/shared/charts/TimeSeriesChart';
 
 interface RealEnergyWorkspacePanelsProps {
   readonly period: EnergyWorkspacePeriod;
@@ -344,7 +344,7 @@ export function RealEnergyWorkspacePanels({
         {currentPoints.length === 0 ? (
           <div className="real-energy__empty" role="status">当前授权范围内没有返回能源时段，此状态不代表 0 kWh。</div>
         ) : (
-          <ReactECharts option={chartOption} onEvents={chartEvents} style={{ height: 390 }} notMerge lazyUpdate />
+          <EnergyTrendChart option={chartOption} onEvents={chartEvents} style={{ height: 390 }} />
         )}
       </Card>
 

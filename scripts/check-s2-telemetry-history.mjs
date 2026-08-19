@@ -50,11 +50,12 @@ for (const marker of ['TELEMETRY_HISTORY_DATABASE_URL', 'TELEMETRY_CLICKHOUSE_HT
   assert(projector.includes(marker), `missing projector marker ${marker}`);
 }
 for (const marker of [
-  'telemetry_history.observations', 'PARTITION BY toYYYYMM(sampled_at)', 'TTL sampled_at + INTERVAL 36 MONTH DELETE',
+  'telemetry_history.observations', 'PARTITION BY toYYYYMM(sampled_at)',
   'non_replicated_deduplication_window', 'AggregatingMergeTree', 'observations_to_numeric_hourly', 'countState()', 'avgState', 'numeric_hourly',
 ]) {
   assert(clickHouseDDL.includes(marker), `missing ClickHouse DDL marker ${marker}`);
 }
+assert(!clickHouseDDL.includes('TTL '), 'ClickHouse history must not encode retention as a table TTL; retention is governed by the data lifecycle policy');
 assert.equal(
   clickHouseDDL.match(/non_replicated_deduplication_window/g)?.length,
   2,

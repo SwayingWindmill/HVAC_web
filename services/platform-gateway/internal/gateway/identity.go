@@ -13,7 +13,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
@@ -23,29 +22,38 @@ import (
 )
 
 const sessionCookieName = "__Host-hvac_session"
+const userActivityHeaderName = "X-HVAC-User-Activity"
+const authenticationACRBasic = "urn:hvac:loa:1"
+const authenticationACRMFA = "urn:hvac:loa:2"
+const publicTenantContextsPath = "/api/v1/auth/tenant-contexts"
+const publicTenantContextPath = "/api/v1/auth/tenant-context"
 
 type IdentityConfig struct {
-	OIDCIssuer                  string
-	OIDCClientID                string
-	OIDCRedirectURI             string
-	PublicOrigin                string
-	DefaultTenantID string
-	IAMURL                      string
-	IAMAudience                 string
-	AuditURL                    string
-	AuditAudience               string
-	ExecutingWorkloadSPIFFE     string
-	PolicyRevision              string
-	OIDCHTTPClient              *http.Client
-	IAMHTTPClient               *http.Client
-	AuditHTTPClient             *http.Client
-	DelegationSigner            crypto.Signer
-	TokenEncryptionKey          []byte
-	SessionStore                sessionstore.Store
-	SessionTTL                  time.Duration
-	StateTTL                    time.Duration
-	DelegationTTL               time.Duration
-	RevocationObjective         time.Duration
+	OIDCIssuer              string
+	OIDCBackchannelBaseURL  string
+	OIDCClientID            string
+	OIDCRedirectURI         string
+	PublicOrigin            string
+	DefaultTenantID         string
+	IAMURL                  string
+	IAMAudience             string
+	AuditURL                string
+	AuditAudience           string
+	ExecutingWorkloadSPIFFE string
+	PolicyRevision          string
+	OIDCHTTPClient          *http.Client
+	IAMHTTPClient           *http.Client
+	AuditHTTPClient         *http.Client
+	DelegationSigner        crypto.Signer
+	TokenEncryptionKey      []byte
+	SessionStore            sessionstore.Store
+	LoginStateStore         LoginStateStore
+	SessionTTL              time.Duration
+	IdleTTL                 time.Duration
+	StateTTL                time.Duration
+	DelegationTTL           time.Duration
+	RevocationObjective     time.Duration
+	ReadinessCheck          func(context.Context) error
 }
 
 type identityController struct {
@@ -53,21 +61,43 @@ type identityController struct {
 	now      func() time.Time
 	vault    cipher.AEAD
 	protocol oidcProtocol
-	mu       sync.RWMutex
-	states   map[string]loginState
+	states   LoginStateStore
 	store    sessionstore.Store
 }
 
 type loginState struct {
-	Verifier  string
-	Nonce     string
-	ReturnTo  string
-	CreatedAt time.Time
+	Verifier    string
+	Nonce       string
+	ReturnTo    string
+	RequiredACR string
+	CreatedAt   time.Time
 }
 
 type bffSession struct {
 	sessionstore.Session
 	CSRFToken string
+}
+
+type tenantContextItem struct {
+	TenantID    string `json:"tenantId"`
+	Code        string `json:"code,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+}
+
+type tenantContextsResponse struct {
+	CurrentTenantID string              `json:"currentTenantId"`
+	Items           []tenantContextItem `json:"items"`
+}
+
+type switchTenantContextRequest struct {
+	TenantID string `json:"tenantId"`
+}
+
+type switchTenantContextResponse struct {
+	TenantID           string `json:"tenantId"`
+	CSRFToken          string `json:"csrfToken"`
+	ContextRevision    uint64 `json:"contextRevision"`
+	SiteContextCleared bool   `json:"siteContextCleared"`
 }
 
 type oidcDiscovery struct {
@@ -89,18 +119,21 @@ type oidcTokenResponse struct {
 }
 
 type oidcClaims struct {
-	Issuer               string   `json:"iss"`
-	Audience             string   `json:"aud"`
-	Subject              string   `json:"sub"`
-	ExpiresAt            int64    `json:"exp"`
-	IssuedAt             int64    `json:"iat"`
-	NotBefore            int64    `json:"nbf"`
-	Nonce                string   `json:"nonce"`
-	Name                 string   `json:"name"`
-	Email                string   `json:"email"`
-	Roles                []string `json:"roles"`
-	TenantID             string   `json:"tenantId"`
-	TokenUse             string   `json:"token_use"`
+	Issuer    string   `json:"iss"`
+	Audience  string   `json:"aud"`
+	Subject   string   `json:"sub"`
+	ExpiresAt int64    `json:"exp"`
+	IssuedAt  int64    `json:"iat"`
+	NotBefore int64    `json:"nbf"`
+	Nonce     string   `json:"nonce"`
+	Name      string   `json:"name"`
+	Email     string   `json:"email"`
+	Roles     []string `json:"roles"`
+	TenantID  string   `json:"tenantId"`
+	TokenUse  string   `json:"token_use"`
+	ACR       string   `json:"acr"`
+	AMR       []string `json:"amr"`
+	AuthTime  int64    `json:"auth_time"`
 }
 
 type identityFailure struct {
@@ -125,10 +158,13 @@ func newIdentityController(config *IdentityConfig, now func() time.Time) *identi
 		resolved.IAMHTTPClient = &http.Client{Timeout: 5 * time.Second}
 	}
 	if resolved.SessionTTL <= 0 {
-		resolved.SessionTTL = 30 * time.Minute
+		resolved.SessionTTL = 8 * time.Hour
+	}
+	if resolved.IdleTTL <= 0 {
+		resolved.IdleTTL = time.Hour
 	}
 	if resolved.StateTTL <= 0 {
-		resolved.StateTTL = 2 * time.Minute
+		resolved.StateTTL = 10 * time.Minute
 	}
 	if resolved.DelegationTTL <= 0 || resolved.DelegationTTL > time.Minute {
 		resolved.DelegationTTL = 30 * time.Second
@@ -165,7 +201,7 @@ func newIdentityController(config *IdentityConfig, now func() time.Time) *identi
 	if resolved.OIDCIssuer == "" || resolved.OIDCClientID == "" || resolved.OIDCRedirectURI == "" || resolved.PublicOrigin == "" || resolved.IAMURL == "" || resolved.ExecutingWorkloadSPIFFE == "" || resolved.DelegationSigner == nil {
 		panic("identity configuration is incomplete")
 	}
-	return &identityController{config: resolved, now: now, vault: vault, protocol: newLogtoOIDCProtocol(), states: map[string]loginState{}, store: resolved.SessionStore}
+	return &identityController{config: resolved, now: now, vault: vault, protocol: newStandardOIDCProtocol(), states: resolved.LoginStateStore, store: resolved.SessionStore}
 }
 
 func (h *handler) BeginLogin(writer http.ResponseWriter, request *http.Request, params platformapi.BeginLoginParams) {
@@ -173,8 +209,23 @@ func (h *handler) BeginLogin(writer http.ResponseWriter, request *http.Request, 
 		writeIdentityFailure(writer, request, identityFailure{503, "IDENTITY_NOT_CONFIGURED", "Identity unavailable", "Identity is not configured for this Gateway.", true})
 		return
 	}
+	if h.identity.states == nil {
+		writeIdentityFailure(writer, request, identityFailure{503, "OIDC_STATE_STORE_UNAVAILABLE", "OIDC login unavailable", "The shared OIDC login state store is not configured.", true})
+		return
+	}
 	if !safeReturnTo(params.ReturnTo) {
 		writeIdentityFailure(writer, request, identityFailure{400, "INVALID_RETURN_TO", "Invalid return target", "The returnTo value must be a local absolute path.", false})
+		return
+	}
+	assurance := params.Assurance
+	if assurance == "" {
+		assurance = "normal"
+	}
+	requiredACR := authenticationACRBasic
+	if assurance == "high" {
+		requiredACR = authenticationACRMFA
+	} else if assurance != "normal" {
+		writeIdentityFailure(writer, request, identityFailure{400, "AUTHENTICATION_ASSURANCE_INVALID", "Invalid authentication assurance", "The assurance value must be normal or high.", false})
 		return
 	}
 	discovery, failure := h.identity.discover(request.Context())
@@ -192,15 +243,16 @@ func (h *handler) BeginLogin(writer http.ResponseWriter, request *http.Request, 
 		State:        state,
 		Nonce:        nonce,
 		LoginHint:    params.LoginHint,
+		ACRValues:    requiredACR,
 	})
 	if err != nil {
 		writeIdentityFailure(writer, request, identityFailure{503, "OIDC_AUTHORIZATION_REQUEST_INVALID", "OIDC login unavailable", "The Gateway could not construct the provider authorization request.", true})
 		return
 	}
-	h.identity.mu.Lock()
-	h.identity.states[state] = loginState{Verifier: verifier, Nonce: nonce, ReturnTo: params.ReturnTo, CreatedAt: h.identity.now()}
-	h.identity.cleanupLocked()
-	h.identity.mu.Unlock()
+	if err := h.identity.states.Put(request.Context(), state, loginState{Verifier: verifier, Nonce: nonce, ReturnTo: params.ReturnTo, RequiredACR: requiredACR, CreatedAt: h.identity.now()}, h.identity.config.StateTTL); err != nil {
+		writeIdentityFailure(writer, request, identityFailure{503, "OIDC_STATE_STORE_UNAVAILABLE", "OIDC login unavailable", "The Gateway could not persist the shared login state.", true})
+		return
+	}
 	http.Redirect(writer, request, authorizationURL, http.StatusFound)
 }
 
@@ -209,18 +261,21 @@ func (h *handler) CompleteLogin(writer http.ResponseWriter, request *http.Reques
 		writeIdentityFailure(writer, request, identityFailure{503, "IDENTITY_NOT_CONFIGURED", "Identity unavailable", "Identity is not configured for this Gateway.", true})
 		return
 	}
+	if h.identity.states == nil {
+		writeIdentityFailure(writer, request, identityFailure{503, "OIDC_STATE_STORE_UNAVAILABLE", "OIDC login unavailable", "The shared OIDC login state store is not configured.", true})
+		return
+	}
 	if params.Issuer != "" && params.Issuer != strings.TrimRight(h.identity.config.OIDCIssuer, "/") {
 		writeIdentityFailure(writer, request, identityFailure{401, "OIDC_ISSUER_INVALID", "OIDC issuer invalid", "The authorization response issuer is not trusted.", false})
 		return
 	}
-	h.identity.mu.Lock()
-	state, exists := h.identity.states[params.State]
-	if exists {
-		delete(h.identity.states, params.State)
-	}
-	h.identity.mu.Unlock()
-	if !exists || h.identity.now().Sub(state.CreatedAt) > h.identity.config.StateTTL {
+	state, err := h.identity.states.Consume(request.Context(), params.State)
+	if errors.Is(err, ErrLoginStateNotFound) || (err == nil && h.identity.now().Sub(state.CreatedAt) > h.identity.config.StateTTL) {
 		writeIdentityFailure(writer, request, identityFailure{400, "OIDC_STATE_INVALID", "OIDC state invalid", "The login state is missing, expired, or already used.", false})
+		return
+	}
+	if err != nil {
+		writeIdentityFailure(writer, request, identityFailure{503, "OIDC_STATE_STORE_UNAVAILABLE", "OIDC login unavailable", "The Gateway could not consume the shared login state.", true})
 		return
 	}
 	tokens, failure := h.identity.exchangeCode(request.Context(), params.Code, state.Verifier)
@@ -237,6 +292,10 @@ func (h *handler) CompleteLogin(writer http.ResponseWriter, request *http.Reques
 		writeIdentityFailure(writer, request, identityFailure{401, "OIDC_TOKEN_TYPE_INVALID", "OIDC token type invalid", "The identity provider returned an unsupported token type.", false})
 		return
 	}
+	if !validAuthenticationAssurance(claims, state.RequiredACR, h.identity.now()) {
+		writeIdentityFailure(writer, request, identityFailure{401, "OIDC_ASSURANCE_INVALID", "Authentication assurance invalid", "The identity provider did not satisfy the requested authentication assurance.", false})
+		return
+	}
 	encryptedTokens, err := h.identity.encryptTokens(tokens)
 	if err != nil {
 		writeIdentityFailure(writer, request, identityFailure{503, "SESSION_TOKEN_STORE_FAILED", "Session unavailable", "The server could not protect the identity tokens.", true})
@@ -251,10 +310,13 @@ func (h *handler) CompleteLogin(writer http.ResponseWriter, request *http.Reques
 	now := h.identity.now()
 	pending := bffSession{Session: sessionstore.Session{
 		ID:                       randomURLToken(32),
-		Principal:                identitycontext.UserPrincipal{Subject: claims.Subject, Issuer: claims.Issuer, DisplayName: claims.Name, Email: claims.Email, Roles: append([]string(nil), claims.Roles...)},
-		TenantID:     claims.TenantID,
+		Principal:                identitycontext.UserPrincipal{Subject: claims.Subject, Issuer: claims.Issuer, DisplayName: claims.Name, Email: claims.Email, Roles: []string{}},
+		TenantID:                 claims.TenantID,
 		CSRFTokenCiphertext:      encryptedCSRF,
 		ProviderTokensCiphertext: encryptedTokens,
+		AuthenticationACR:        claims.ACR,
+		AuthenticationAMR:        append([]string(nil), claims.AMR...),
+		AuthenticationTime:       time.Unix(claims.AuthTime, 0).UTC(),
 		ExpiresAt:                now.Add(h.identity.config.SessionTTL),
 	}, CSRFToken: csrfToken}
 	validated, validationFailure := h.identity.fetchPrincipal(request.Context(), pending)
@@ -287,7 +349,77 @@ func (h *handler) GetCurrentPrincipal(writer http.ResponseWriter, request *http.
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
-	writeJSON(writer, http.StatusOK, platformapi.CurrentPrincipalResponse{Principal: toPublicUser(principal.Principal), Context: toPublicContext(principal.Context), Authorization: toPublicAuthorization(principal.Authorization), Session: platformapi.SessionView{ID: session.ID, ExpiresAt: session.ExpiresAt.UTC().Format(time.RFC3339), CSRFToken: session.CSRFToken, RevocationObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds()), LastAuditMessageID: session.LastAuditMessageID}})
+	writeJSON(writer, http.StatusOK, platformapi.CurrentPrincipalResponse{Principal: toPublicUser(principal.Principal), Context: toPublicContext(principal.Context), Authorization: toPublicAuthorization(principal.Authorization), Session: platformapi.SessionView{ID: session.ID, ExpiresAt: session.ExpiresAt.UTC().Format(time.RFC3339), IdleTimeoutMS: int(h.identity.config.IdleTTL.Milliseconds()), CSRFToken: session.CSRFToken, RevocationObjectiveMS: int(h.identity.config.RevocationObjective.Milliseconds()), LastAuditMessageID: session.LastAuditMessageID}})
+}
+
+func (h *handler) ListTenantContexts(writer http.ResponseWriter, request *http.Request) {
+	session, failure := h.identitySession(request)
+	if failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	contexts, failure := h.identity.fetchTenantContexts(request.Context(), session)
+	if failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	writeJSON(writer, http.StatusOK, tenantContextsResponse{CurrentTenantID: session.TenantID, Items: contexts})
+}
+
+func (h *handler) SwitchTenantContext(writer http.ResponseWriter, request *http.Request) {
+	session, failure := h.identitySession(request)
+	if failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	if failure := h.identity.validateStateChange(request, session, request.Header.Get("X-CSRF-Token")); failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, 16<<10)
+	var input switchTenantContextRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil {
+		writeIdentityFailure(writer, request, identityFailure{400, "TENANT_CONTEXT_REQUEST_INVALID", "Tenant context request invalid", "The Tenant context request is invalid.", false})
+		return
+	}
+	input.TenantID = strings.TrimSpace(input.TenantID)
+	contexts, failure := h.identity.fetchTenantContexts(request.Context(), session)
+	if failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	authorized := false
+	for _, contextItem := range contexts {
+		if contextItem.TenantID == input.TenantID {
+			authorized = true
+			break
+		}
+	}
+	if !authorized {
+		writeIdentityFailure(writer, request, identityFailure{404, "TENANT_CONTEXT_NOT_FOUND", "Tenant context not found", "The requested Tenant context is not available.", false})
+		return
+	}
+	csrfToken := randomURLToken(32)
+	encryptedCSRF, err := h.identity.encryptBytes([]byte(csrfToken))
+	if err != nil {
+		writeIdentityFailure(writer, request, identityFailure{503, "SESSION_PERSISTENCE_FAILED", "Session unavailable", "The Tenant context could not be committed.", true})
+		return
+	}
+	mutation := h.identity.mutationContext(request, "SESSION_TENANT_CONTEXT_SWITCHED")
+	updated, err := h.identity.store.SwitchTenantContext(request.Context(), session.ID, input.TenantID, encryptedCSRF, mutation)
+	if err != nil {
+		h.identity.writeSessionMutationError(writer, request, err)
+		return
+	}
+	writer.Header().Set("X-Audit-Message-ID", updated.LastAuditMessageID)
+	writeJSON(writer, http.StatusOK, switchTenantContextResponse{
+		TenantID:           updated.TenantID,
+		CSRFToken:          csrfToken,
+		ContextRevision:    updated.AggregateVersion,
+		SiteContextCleared: true,
+	})
 }
 
 func (h *handler) Logout(writer http.ResponseWriter, request *http.Request, params platformapi.LogoutParams) {
@@ -331,7 +463,7 @@ func (h *handler) RevokeSession(writer http.ResponseWriter, request *http.Reques
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
-	if !containsRole(principal.Principal.Roles, "platform-admin") {
+	if !principal.Authorization.Has(identitycontext.CapabilitySessionRevoke) {
 		writeIdentityFailure(writer, request, identityFailure{403, "SESSION_REVOCATION_FORBIDDEN", "Session revocation forbidden", "The authenticated principal is not allowed to revoke sessions.", false})
 		return
 	}
@@ -376,9 +508,22 @@ func (h *handler) identitySession(request *http.Request) (bffSession, *identityF
 		failure := identityFailure{503, "SESSION_STORE_UNAVAILABLE", "Session unavailable", "The durable Session store could not be read.", true}
 		return bffSession{}, &failure
 	}
-	if stored.RevokedAt != nil || !h.identity.now().Before(stored.ExpiresAt) {
-		failure := identityFailure{401, "SESSION_INVALID", "Session invalid", "The BFF Session is expired, revoked, or unknown.", false}
+	now := h.identity.now()
+	if stored.RevokedAt != nil || !now.Before(stored.ExpiresAt) || !now.Before(stored.LastActivityAt.Add(h.identity.config.IdleTTL)) {
+		failure := identityFailure{401, "SESSION_INVALID", "Session invalid", "The BFF Session is expired, revoked, idle, or unknown.", false}
 		return bffSession{}, &failure
+	}
+	if request.Header.Get(userActivityHeaderName) == "1" {
+		touched, err := h.identity.store.TouchSession(request.Context(), stored.ID, now)
+		if errors.Is(err, sessionstore.ErrSessionNotFound) || errors.Is(err, sessionstore.ErrSessionRevoked) {
+			failure := identityFailure{401, "SESSION_INVALID", "Session invalid", "The BFF Session is expired, revoked, idle, or unknown.", false}
+			return bffSession{}, &failure
+		}
+		if err != nil {
+			failure := identityFailure{503, "SESSION_STORE_UNAVAILABLE", "Session unavailable", "The durable Session store could not record user activity.", true}
+			return bffSession{}, &failure
+		}
+		stored = touched
 	}
 	csrfToken, err := h.identity.decryptBytes(stored.CSRFTokenCiphertext)
 	if err != nil {
@@ -401,7 +546,11 @@ func (controller *identityController) validateStateChange(request *http.Request,
 }
 
 func (controller *identityController) discover(ctx context.Context) (oidcDiscovery, *identityFailure) {
-	discovery, err := controller.protocol.Discover(ctx, controller.config.OIDCHTTPClient, controller.config.OIDCIssuer)
+	discoveryBaseURL := controller.config.OIDCIssuer
+	if strings.TrimSpace(controller.config.OIDCBackchannelBaseURL) != "" {
+		discoveryBaseURL = controller.config.OIDCBackchannelBaseURL
+	}
+	discovery, err := controller.protocol.Discover(ctx, controller.config.OIDCHTTPClient, discoveryBaseURL)
 	if err != nil {
 		status, _ := oidcProtocolErrorDetails(err)
 		if status == 0 || status != http.StatusOK {
@@ -414,6 +563,37 @@ func (controller *identityController) discover(ctx context.Context) (oidcDiscove
 	if discovery.Issuer != strings.TrimRight(controller.config.OIDCIssuer, "/") || discovery.AuthorizationEndpoint == "" || discovery.TokenEndpoint == "" || discovery.JWKSURI == "" {
 		failure := identityFailure{503, "OIDC_DISCOVERY_INVALID", "OIDC discovery invalid", "The identity provider discovery document is invalid.", true}
 		return oidcDiscovery{}, &failure
+	}
+	return discovery, nil
+}
+
+func (controller *identityController) backchannelDiscovery(discovery oidcDiscovery) (oidcDiscovery, error) {
+	base := strings.TrimRight(strings.TrimSpace(controller.config.OIDCBackchannelBaseURL), "/")
+	if base == "" {
+		return discovery, nil
+	}
+	issuer := strings.TrimRight(controller.config.OIDCIssuer, "/")
+	rewrite := func(endpoint string) (string, error) {
+		if endpoint == "" {
+			return "", nil
+		}
+		if endpoint == issuer {
+			return base, nil
+		}
+		prefix := issuer + "/"
+		if !strings.HasPrefix(endpoint, prefix) {
+			return "", errors.New("OIDC endpoint is outside the configured issuer")
+		}
+		return base + "/" + strings.TrimPrefix(endpoint, prefix), nil
+	}
+	var err error
+	discovery.TokenEndpoint, err = rewrite(discovery.TokenEndpoint)
+	if err != nil {
+		return oidcDiscovery{}, err
+	}
+	discovery.JWKSURI, err = rewrite(discovery.JWKSURI)
+	if err != nil {
+		return oidcDiscovery{}, err
 	}
 	return discovery, nil
 }
@@ -443,6 +623,11 @@ func (controller *identityController) exchangeCode(ctx context.Context, code, ve
 	discovery, failure := controller.discover(ctx)
 	if failure != nil {
 		return oidcTokenResponse{}, failure
+	}
+	discovery, err := controller.backchannelDiscovery(discovery)
+	if err != nil {
+		failure := identityFailure{503, "OIDC_DISCOVERY_INVALID", "OIDC discovery invalid", "The identity provider backchannel endpoints are invalid.", true}
+		return oidcTokenResponse{}, &failure
 	}
 	tokens, err := controller.protocol.ExchangeCode(ctx, controller.config.OIDCHTTPClient, discovery, oidcCodeExchangeRequest{
 		ClientID:     controller.config.OIDCClientID,
@@ -509,6 +694,11 @@ func (controller *identityController) validateIDToken(ctx context.Context, token
 	discovery, failure := controller.discover(ctx)
 	if failure != nil {
 		return oidcClaims{}, failure
+	}
+	discovery, err = controller.backchannelDiscovery(discovery)
+	if err != nil {
+		failure := identityFailure{503, "OIDC_DISCOVERY_INVALID", "OIDC discovery invalid", "The identity provider backchannel endpoints are invalid.", true}
+		return oidcClaims{}, &failure
 	}
 	if err := controller.protocol.VerifyIDToken(ctx, controller.config.OIDCHTTPClient, discovery, controller.config.OIDCClientID, header.KeyID, token); err != nil {
 		switch {
@@ -644,6 +834,55 @@ func (controller *identityController) fetchPrincipal(ctx context.Context, sessio
 	return principal, nil
 }
 
+func (controller *identityController) fetchTenantContexts(ctx context.Context, session bffSession) ([]tenantContextItem, *identityFailure) {
+	ctx, span := observability.Start(ctx, "http.iam.tenant_contexts", observability.SpanKindClient, map[string]any{
+		"http.request.method": http.MethodPost, "server.service": "iam-service", "rpc.operation": "principal.tenant_contexts",
+	})
+	defer span.End()
+	now := controller.now()
+	expiry := now.Add(controller.config.DelegationTTL)
+	if expiry.After(session.ExpiresAt) {
+		expiry = session.ExpiresAt
+	}
+	claims := identitycontext.DelegationClaims{
+		Issuer: controller.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject,
+		SubjectIssuer: session.Principal.Issuer, DisplayName: session.Principal.DisplayName, Email: session.Principal.Email,
+		Roles: append([]string(nil), session.Principal.Roles...), ExecutingService: controller.config.ExecutingWorkloadSPIFFE,
+		Audience: controller.config.IAMAudience, TenantID: session.TenantID, Actions: []string{"tenant-context:list"},
+		Scopes: []string{"session:" + session.ID}, PolicyRevision: controller.config.PolicyRevision, SessionID: session.ID,
+		IssuedAt: now.Unix(), ExpiresAt: expiry.Unix(), TokenID: randomURLToken(16),
+	}
+	grant, err := identitycontext.SignDelegation(controller.config.DelegationSigner, claims)
+	if err != nil {
+		failure := identityFailure{503, "DELEGATION_SIGNING_FAILED", "Tenant contexts unavailable", "The Gateway could not create a constrained Tenant context delegation.", true}
+		return nil, &failure
+	}
+	internalRequest, _ := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(controller.config.IAMURL, "/")+"/internal/v1/principal/tenant-contexts", nil)
+	internalRequest.Header.Set("X-Delegation-Grant", grant)
+	internalRequest.Header.Set("Accept", "application/json, application/problem+json")
+	observability.InjectHTTP(ctx, internalRequest.Header)
+	response, err := controller.config.IAMHTTPClient.Do(internalRequest)
+	if err != nil {
+		failure := identityFailure{503, "IAM_UNAVAILABLE", "IAM unavailable", "The private IAM service could not be reached.", true}
+		return nil, &failure
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		failure := identityFailure{403, "IAM_TENANT_CONTEXTS_REJECTED", "Tenant contexts rejected", "IAM rejected the Tenant context query.", false}
+		return nil, &failure
+	}
+	var payload struct {
+		Items []tenantContextItem `json:"items"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&payload) != nil || ensureJSONEOF(decoder) != nil {
+		failure := identityFailure{503, "IAM_RESPONSE_INVALID", "IAM response invalid", "IAM returned an invalid Tenant context response.", true}
+		return nil, &failure
+	}
+	return payload.Items, nil
+}
+
 func (controller *identityController) mutationContext(request *http.Request, action string) sessionstore.MutationContext {
 	return sessionstore.MutationContext{
 		Action:            action,
@@ -666,15 +905,6 @@ func (controller *identityController) writeSessionMutationError(writer http.Resp
 	writeIdentityFailure(writer, request, identityFailure{503, "SESSION_PERSISTENCE_FAILED", "Session unavailable", "The Session state and audit intent could not be committed atomically.", true})
 }
 
-func (controller *identityController) cleanupLocked() {
-	now := controller.now()
-	for state, value := range controller.states {
-		if now.Sub(value.CreatedAt) > controller.config.StateTTL {
-			delete(controller.states, state)
-		}
-	}
-}
-
 func writeIdentityFailure(writer http.ResponseWriter, request *http.Request, failure identityFailure) {
 	writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
 }
@@ -691,6 +921,39 @@ func safeReturnTo(value string) bool {
 	}
 	return strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "//") && !strings.Contains(value, "\\")
 }
+func validAuthenticationAssurance(claims oidcClaims, requiredACR string, now time.Time) bool {
+	if requiredACR != authenticationACRBasic && requiredACR != authenticationACRMFA {
+		return false
+	}
+	if claims.AuthTime <= 0 {
+		return false
+	}
+	authenticatedAt := time.Unix(claims.AuthTime, 0).UTC()
+	now = now.UTC()
+	if authenticatedAt.After(now.Add(time.Minute)) {
+		return false
+	}
+	if claims.ACR == authenticationACRBasic {
+		return requiredACR != authenticationACRMFA && containsString(claims.AMR, "pwd")
+	}
+	if claims.ACR != authenticationACRMFA || !containsString(claims.AMR, "pwd") || !containsString(claims.AMR, "otp") {
+		return false
+	}
+	if requiredACR == authenticationACRMFA && now.Sub(authenticatedAt) > 10*time.Minute {
+		return false
+	}
+	return true
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func containsRole(roles []string, expected string) bool {
 	for _, role := range roles {
 		if role == expected {

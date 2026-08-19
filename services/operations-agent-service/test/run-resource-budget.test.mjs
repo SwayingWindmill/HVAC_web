@@ -59,8 +59,8 @@ test('exact retry reuses the original Tool budget while a new logical batch exha
   assert.equal(retry.snapshot.usage.toolRequests, 1);
 
   const secondBatch = [{
-    requestId: 'registry-equipment',
-    tool: 'registry.listSiteEquipment',
+    requestId: 'registry-asset',
+    tool: 'registry.listSiteAssets',
     input: { siteId: 'site-001' },
   }];
   const denied = await guard.check(baseInput(
@@ -152,7 +152,7 @@ test('parallel Owner results use one stable batch identity and aggregate every c
     scope: {
       tenantId: 'organization-001',
       siteId: 'site-001',
-      equipmentId: null,
+      assetId: null,
       deviceId: null,
     },
     revision: 'registry-r1',
@@ -171,7 +171,7 @@ test('parallel Owner results use one stable batch identity and aggregate every c
     input: { siteId: 'site-001' },
   }, {
     requestId: second.requestId,
-    tool: 'registry.listSiteEquipment',
+    tool: 'registry.listSiteAssets',
     input: { siteId: 'site-001' },
   }];
   assert.equal(
@@ -209,7 +209,7 @@ test('payload exhaustion after accepted Evidence is a bounded partial outcome', 
     scope: {
       tenantId: 'organization-001',
       siteId: 'site-001',
-      equipmentId: null,
+      assetId: null,
       deviceId: null,
     },
     revision: 'registry-r1',

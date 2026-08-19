@@ -22,14 +22,13 @@ import (
 )
 
 const (
-	analyticsGatewayTenant       = "018f1d00-0000-7000-8000-000000000001"
-	analyticsGatewayOtherTenant  = "018f1d00-0000-7000-8000-000000000002"
-	analyticsGatewayOrganization = "018f1e00-0000-7000-8000-000000000001"
-	analyticsGatewaySite         = "018f1e00-1000-7000-8000-000000000001"
-	analyticsGatewayOtherSite    = "018f1e00-1000-7000-8000-000000000002"
-	analyticsGatewayPrincipal    = "018f1e00-2000-7000-8000-000000000001"
-	analyticsGatewaySPIFFE       = "spiffe://hvac.local/platform-gateway"
-	analyticsGatewayCSRF         = "analytics-csrf-token"
+	analyticsGatewayTenant      = "018f1d00-0000-7000-8000-000000000001"
+	analyticsGatewayOtherTenant = "018f1d00-0000-7000-8000-000000000002"
+	analyticsGatewaySite        = "018f1e00-1000-7000-8000-000000000001"
+	analyticsGatewayOtherSite   = "018f1e00-1000-7000-8000-000000000002"
+	analyticsGatewayPrincipal   = "018f1e00-2000-7000-8000-000000000001"
+	analyticsGatewaySPIFFE      = "spiffe://hvac.local/platform-gateway"
+	analyticsGatewayCSRF        = "analytics-csrf-token"
 )
 
 type analyticsGatewayFixture struct {
@@ -170,7 +169,7 @@ func newAnalyticsGatewayFixture(t *testing.T, options analyticsFixtureOptions) *
 		if err != nil {
 			t.Fatalf("parent delegation: %v", err)
 		}
-		if len(parent.Actions) != 1 || parent.Actions[0] != analyticsAuthorizeAction || parent.ActingOrganizationID != analyticsGatewayOrganization || parent.Audience != "iam-service" {
+		if len(parent.Actions) != 1 || parent.Actions[0] != analyticsAuthorizeAction || parent.TenantID != analyticsGatewayTenant || parent.Audience != "iam-service" {
 			t.Fatalf("parent claims=%#v", parent)
 		}
 		if options.iamStatus != 0 {
@@ -187,7 +186,7 @@ func newAnalyticsGatewayFixture(t *testing.T, options analyticsFixtureOptions) *
 		}
 		return analyticsHTTPResponse(http.StatusOK, analyticsmodel.AuthorizationDecisionResponse{Decision: analyticsmodel.AuthorizationDecision{
 			Allowed: allowed, PrincipalID: analyticsGatewayPrincipal, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
-			ActingOrganizationID: parent.ActingOrganizationID, TenantID: analyticsGatewayTenant, SiteID: input.SiteID, Action: input.Action,
+			TenantID: analyticsGatewayTenant, SiteID: input.SiteID, Action: input.Action,
 			PolicyRevision: "analytics-policy-7", ReasonCode: reason, DecidedAt: now.Format(time.RFC3339Nano),
 		}}), nil
 	})}
@@ -216,7 +215,7 @@ func newAnalyticsGatewayFixture(t *testing.T, options analyticsFixtureOptions) *
 		if err != nil {
 			t.Fatal(err)
 		}
-		if grant.Audience != "telemetry-query-service" || grant.PrincipalID != analyticsGatewayPrincipal || len(grant.Actions) != 1 || grant.Actions[0] != analyticsmodel.EnergySeriesAction || len(grant.Scopes) != 1 || grant.Scopes[0] != digest || grant.ActingOrganizationID != analyticsGatewayOrganization || grant.TenantID != query.TenantID || grant.PolicyRevision != "analytics-policy-7" {
+		if grant.Audience != "telemetry-query-service" || grant.PrincipalID != analyticsGatewayPrincipal || len(grant.Actions) != 1 || grant.Actions[0] != analyticsmodel.EnergySeriesAction || len(grant.Scopes) != 1 || grant.Scopes[0] != digest || grant.TenantID != analyticsGatewayTenant || grant.TenantID != query.TenantID || grant.PolicyRevision != "analytics-policy-7" {
 			t.Fatalf("query grant=%#v digest=%s", grant, digest)
 		}
 		switch options.queryMode {
@@ -247,9 +246,9 @@ func newAnalyticsGatewayFixture(t *testing.T, options analyticsFixtureOptions) *
 	if options.routeOwnership {
 		snapshot, err := ownershipregistry.Parse([]byte(`{
 			"registryVersion":1,"registryRevision":1,"routes":[{
-				"method":"POST","path":"/api/v1/analytics/energy-series","owner":"telemetry-query-service","revision":1,
-				"activationStatus":"primary","rollout":{"mode":"all"},"compatibilityMode":"native",
-				"allowedScopeDimensions":["organization","site","principal"],"shadowSideEffectPolicy":"NONE","readOnlyFallback":false
+				"method":"POST","path":"/api/v1/analytics/energy-series","owner":"telemetry-query-service","publicIngress":"platform-gateway","revision":1,
+				"rollout":{"mode":"all"},"compatibilityMode":"native",
+				"allowedScopeDimensions":["tenant","site","principal"]
 			}]
 		}`))
 		if err != nil {
@@ -274,7 +273,7 @@ func newAnalyticsGatewayFixture(t *testing.T, options analyticsFixtureOptions) *
 	}
 	created, err := store.CreateSession(context.Background(), sessionstore.Session{
 		ID: "analytics-session", Principal: identitycontext.UserPrincipal{Subject: "energy-user", Issuer: "https://issuer.example.test", Roles: []string{"energy-analyst"}},
-		ActingOrganizationID: analyticsGatewayOrganization, CSRFTokenCiphertext: csrfCiphertext, ExpiresAt: now.Add(time.Hour),
+		TenantID: analyticsGatewayTenant, CSRFTokenCiphertext: csrfCiphertext, ExpiresAt: now.Add(time.Hour),
 	}, sessionstore.MutationContext{Action: "SESSION_CREATED", Result: "SUCCEEDED", PolicyRevision: "identity-policy-1", CorrelationID: "analytics-fixture", TraceID: strings.Repeat("a", 32), Traceparent: "00-" + strings.Repeat("a", 32) + "-" + strings.Repeat("b", 16) + "-01", ExecutingService: "platform-gateway", ExecutingSPIFFEID: analyticsGatewaySPIFFE, OccurredAt: now})
 	if err != nil {
 		t.Fatal(err)

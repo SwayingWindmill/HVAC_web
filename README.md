@@ -19,7 +19,7 @@ User
 
 旁路统一建设 Security、Monitoring、Logging、Tracing、Backup、Deployment 和 Audit。浏览器只访问 Nginx/Platform Gateway；服务间通过版本化 HTTP、事件和所有权契约协作，浏览器不直连模型提供方、数据库、ThingsBoard、MQTT 管理面或内部服务。PostgreSQL 保存平台权威业务/当前状态，ClickHouse 保存历史与分析数据，Redis 仅作为可重建缓存和实时传输层。
 
-Phase 1 canonical deployment 是 **Linux Server + Docker Compose**。现有 Kubernetes/Kustomize 资产保留用于后期演进、局部认证和生产形态实验，但不是 Phase 1 运行或验收的必需条件。机器可读基线见 `deploy/platform/phase1/architecture-baseline.v1.json` 和 `deploy/platform/phase1/alignment-matrix.v1.json`。
+Phase 1 canonical deployment 是 **1 Linux Server + Docker Compose**。Application / IoT / Telemetry / Metric / Data / MQTT / Observability 在同一服务器内保持组件、网络与数据边界；现有 Kubernetes/Kustomize 与多服务器资产仅用于后期演进、局部认证和生产形态实验，不属于当前 Phase 1 运行或验收形态。机器可读基线见 `deploy/platform/phase1/architecture-baseline.v1.json` 和 `deploy/platform/phase1/alignment-matrix.v1.json`。
 
 ## 目录
 

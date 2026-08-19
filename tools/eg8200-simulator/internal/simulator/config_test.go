@@ -21,11 +21,11 @@ func TestPlantConfigRejectsDuplicateDeviceIDs(t *testing.T) {
 	}
 }
 
-func TestConfigRejectsAreaCycles(t *testing.T) {
+func TestConfigRejectsSpaceCycles(t *testing.T) {
 	config := testConfig()
-	config.Areas[0].ParentID = "plant-room"
+	config.Spaces[0].ParentID = "plant-room"
 	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "cycle") {
-		t.Fatalf("expected Area cycle validation error, got %v", err)
+		t.Fatalf("expected Space cycle validation error, got %v", err)
 	}
 }
 
@@ -56,9 +56,22 @@ func TestConfigRejectsNonCanonicalPointCode(t *testing.T) {
 func TestConfigRejectsDuplicatePointKeyWithinDevice(t *testing.T) {
 	config := testConfig()
 	duplicate := config.Points[0]
+	duplicate.PointID = "01910000-0000-7000-8000-00000000ffff"
 	duplicate.SourceKey = "enteringChilledWaterTemperatureC"
 	config.Points = append(config.Points, duplicate)
 	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate point key") {
 		t.Fatalf("expected duplicate point key validation error, got %v", err)
+	}
+}
+
+func TestConfigRejectsDuplicateCanonicalPointID(t *testing.T) {
+	config := testConfig()
+	duplicate := config.Points[0]
+	duplicate.TelemetryKey = "chiller.duplicate_point"
+	duplicate.SourceKey = "powerKw"
+	duplicate.PointCode = "duplicate_point"
+	config.Points = append(config.Points, duplicate)
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate canonical pointId") {
+		t.Fatalf("expected duplicate canonical Point identity error, got %v", err)
 	}
 }

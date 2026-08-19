@@ -212,11 +212,11 @@ components:
     InvestigationScope:
       type: object
       additionalProperties: false
-      required: [tenantId, siteId, equipmentId, deviceId]
+      required: [tenantId, siteId, assetId, deviceId]
       properties:
         tenantId: { type: string, minLength: 1, maxLength: 256 }
         siteId: { type: string, minLength: 1, maxLength: 256 }
-        equipmentId: { type: string, nullable: true }
+        assetId: { type: string, nullable: true }
         deviceId: { type: string, nullable: true }
     ActiveRun:
       type: object
@@ -444,18 +444,18 @@ components:
         from: { type: string, minLength: 1, maxLength: 64 }
         to: { type: string, minLength: 1, maxLength: 64 }
         expectedBuckets: { type: integer, minimum: 1, maximum: 48 }
-    EquipmentEnergyBindingsRequiredNext:
+    AssetEnergyBindingsRequiredNext:
       type: object
       additionalProperties: false
-      required: [status, kind, owner, capability, tenantId, siteId, equipmentIds, targetPeriod, baselinePeriod, requiredMetadata]
+      required: [status, kind, owner, capability, tenantId, siteId, assetIds, targetPeriod, baselinePeriod, requiredMetadata]
       properties:
         status: { type: string, enum: [REQUIRED_NEXT] }
-        kind: { type: string, enum: [EQUIPMENT_ENERGY_BINDINGS] }
+        kind: { type: string, enum: [ASSET_ENERGY_BINDINGS] }
         owner: { type: string, enum: [registry] }
-        capability: { type: string, enum: [registry.getEquipmentEnergyBindings] }
+        capability: { type: string, enum: [registry.getAssetEnergyBindings] }
         tenantId: { type: string }
         siteId: { type: string }
-        equipmentIds:
+        assetIds:
           type: array
           maxItems: 32
           items: { type: string }
@@ -466,18 +466,18 @@ components:
           minItems: 4
           maxItems: 4
           items: { type: string, enum: [BUSINESS_REVISION, QUALITY, CAPTURED_AT, PAYLOAD_DIGEST] }
-    EquipmentEnergySeriesRequiredNext:
+    AssetEnergySeriesRequiredNext:
       type: object
       additionalProperties: false
-      required: [status, kind, owner, capability, tenantId, siteId, equipmentIds, targetPeriod, baselinePeriod, requiredMetadata]
+      required: [status, kind, owner, capability, tenantId, siteId, assetIds, targetPeriod, baselinePeriod, requiredMetadata]
       properties:
         status: { type: string, enum: [REQUIRED_NEXT] }
-        kind: { type: string, enum: [EQUIPMENT_ENERGY_PERIOD_COMPARISON] }
+        kind: { type: string, enum: [ASSET_ENERGY_PERIOD_COMPARISON] }
         owner: { type: string, enum: [telemetry-query-service] }
-        capability: { type: string, enum: [analytics.energy.getEquipmentSeries] }
+        capability: { type: string, enum: [analytics.energy.getAssetSeries] }
         tenantId: { type: string }
         siteId: { type: string }
-        equipmentIds:
+        assetIds:
           type: array
           maxItems: 32
           items: { type: string }
@@ -503,7 +503,7 @@ components:
       required: [status, scope, reasonCode, detail]
       properties:
         status: { type: string, enum: [UNABLE_TO_CONCLUDE] }
-        scope: { type: string, enum: [SITE, EQUIPMENT] }
+        scope: { type: string, enum: [SITE, ASSET] }
         reasonCode: { type: string, minLength: 1, maxLength: 128 }
         detail: { type: string, minLength: 1, maxLength: 4000 }
         requiredNext:
@@ -512,8 +512,8 @@ components:
           maxItems: 8
           items:
             oneOf:
-              - $ref: '#/components/schemas/EquipmentEnergyBindingsRequiredNext'
-              - $ref: '#/components/schemas/EquipmentEnergySeriesRequiredNext'
+              - $ref: '#/components/schemas/AssetEnergyBindingsRequiredNext'
+              - $ref: '#/components/schemas/AssetEnergySeriesRequiredNext'
     FindingRecord:
       type: object
       additionalProperties: false
@@ -555,7 +555,7 @@ components:
         id: { type: string }
         investigationId: { type: string }
         recordedAt: { type: integer, format: int64, minimum: 0 }
-        logicalTool: { type: string, enum: [registry.getSite, registry.listSiteEquipment, telemetry.getCurrentSnapshot, analytics.getEnergySeries, commands.getCapabilities] }
+        logicalTool: { type: string, enum: [registry.getSite, registry.listSiteAssets, telemetry.getCurrentSnapshot, analytics.getEnergySeries, commands.getCapabilities] }
         owner: { type: string, enum: [registry, telemetry-query-service, command-service] }
         requestId: { type: string }
         attemptId: { type: string }

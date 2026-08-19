@@ -2,6 +2,7 @@ package iam
 
 import (
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 )
@@ -39,7 +40,17 @@ func NewS1FixtureAuthorizationStore(subjectIssuer string) AuthorizationStore {
 			TenantSiteIDs: []string{S1FixtureOwnerASite1ID, S1FixtureOwnerASite2ID},
 			Memberships:   []TenantMembership{{TenantID: S1FixtureTenantAID, Status: FactStatusActive}},
 			RoleBindings: []RoleBinding{
-				{TenantID: S1FixtureTenantAID, Actions: []registryauth.Action{registryauth.ActionRegistryRead}, Status: FactStatusActive},
+				{
+					TenantID: S1FixtureTenantAID,
+					Actions:  []registryauth.Action{registryauth.ActionRegistryRead},
+					Capabilities: []identitycontext.Capability{
+						identitycontext.CapabilitySessionRevoke,
+						identitycontext.CapabilityAuditRead,
+						identitycontext.CapabilityIAMAdmin,
+						identitycontext.CapabilityAPICredentialManage,
+					},
+					Status: FactStatusActive,
+				},
 			},
 			SiteBindings: []SiteBinding{
 				{TenantID: S1FixtureTenantAID, SiteID: S1FixtureOwnerASite1ID, Actions: []registryauth.Action{registryauth.Action(analyticsmodel.EnergySeriesAction)}, Status: FactStatusActive},

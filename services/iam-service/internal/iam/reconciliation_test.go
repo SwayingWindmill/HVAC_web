@@ -10,8 +10,8 @@ import (
 func TestPrepareReconciliationRequestProducesStableHashForEquivalentOrdering(t *testing.T) {
 	validFrom := time.Date(2026, 7, 22, 3, 0, 0, 0, time.FixedZone("offset", 8*60*60))
 	base := ReconciliationRequest{
-		TenantID:     "018f1d00-0000-7000-8000-000000000001",
-		SourceSystem:  " logto ",
+		TenantID:      "018f1d00-0000-7000-8000-000000000001",
+		SourceSystem:  " identity ",
 		SourceKey:     " user-123 ",
 		SourceVersion: 3,
 		Principal: ReconciledPrincipal{
@@ -23,16 +23,15 @@ func TestPrepareReconciliationRequestProducesStableHashForEquivalentOrdering(t *
 			Status:        PrincipalStatusActive,
 		},
 		Memberships: []ReconciledMembership{
-			{OrganizationID: "018f1e00-0000-7000-8000-000000000003", Status: FactStatusActive, ValidFrom: validFrom},
-			{OrganizationID: "018f1e00-0000-7000-8000-000000000001", Status: FactStatusActive, ValidFrom: validFrom},
+			{TenantID: "018f1d00-0000-7000-8000-000000000001", Status: FactStatusActive, ValidFrom: validFrom},
 		},
 		RoleBindings: []ReconciledRoleBinding{
 			{
-				OrganizationID: "018f1e00-0000-7000-8000-000000000003",
-				RoleKey:        " registry-reader ",
-				Actions:        []registryauth.Action{registryauth.ActionSiteRead, registryauth.ActionEquipmentRead, registryauth.ActionSiteRead},
-				Effect:         BindingEffectAllow,
-				ValidFrom:      validFrom,
+				TenantID:  "018f1d00-0000-7000-8000-000000000001",
+				RoleKey:   " registry-reader ",
+				Actions:   []registryauth.Action{registryauth.ActionSiteRead, registryauth.ActionAssetRead, registryauth.ActionSiteRead},
+				Effect:    BindingEffectAllow,
+				ValidFrom: validFrom,
 			},
 		},
 	}
@@ -41,10 +40,9 @@ func TestPrepareReconciliationRequestProducesStableHashForEquivalentOrdering(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if base.Memberships[0].OrganizationID != "018f1e00-0000-7000-8000-000000000003" || len(base.RoleBindings[0].Actions) != 3 {
+	if base.Memberships[0].TenantID != base.TenantID || len(base.RoleBindings[0].Actions) != 3 {
 		t.Fatalf("request normalization mutated caller-owned slices: %#v", base)
 	}
-	base.Memberships[0], base.Memberships[1] = base.Memberships[1], base.Memberships[0]
 	base.RoleBindings[0].Actions[0], base.RoleBindings[0].Actions[1] = base.RoleBindings[0].Actions[1], base.RoleBindings[0].Actions[0]
 	second, secondHash, err := prepareReconciliationRequest(base)
 	if err != nil {
@@ -53,7 +51,7 @@ func TestPrepareReconciliationRequestProducesStableHashForEquivalentOrdering(t *
 	if firstHash != secondHash {
 		t.Fatalf("equivalent desired state produced different hashes: %s != %s", firstHash, secondHash)
 	}
-	if first.SourceSystem != "logto" || first.Principal.SubjectIssuer != "https://identity.example.test/oidc" {
+	if first.SourceSystem != "identity" || first.Principal.SubjectIssuer != "https://identity.example.test/oidc" {
 		t.Fatalf("input was not normalized: %#v", first)
 	}
 	if len(first.RoleBindings[0].Actions) != 2 || len(second.RoleBindings[0].Actions) != 2 {
@@ -66,8 +64,8 @@ func TestPrepareReconciliationRequestProducesStableHashForEquivalentOrdering(t *
 
 func TestPrepareReconciliationRequestRejectsMutableIdentityAsIdentifier(t *testing.T) {
 	_, _, err := prepareReconciliationRequest(ReconciliationRequest{
-		TenantID:     "018f1d00-0000-7000-8000-000000000001",
-		SourceSystem:  "logto",
+		TenantID:      "018f1d00-0000-7000-8000-000000000001",
+		SourceSystem:  "identity",
 		SourceKey:     "user@example.test",
 		SourceVersion: 1,
 		Principal: ReconciledPrincipal{
@@ -87,16 +85,15 @@ func TestPrepareReconciliationRequestRejectsMutableIdentityAsIdentifier(t *testi
 func TestPrepareReconciliationRequestRejectsDuplicateExplicitDeny(t *testing.T) {
 	validFrom := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	deny := ReconciledExplicitDeny{
-		ActingOrganizationID: "018f1e00-0000-7000-8000-000000000003",
-		OwningOrganizationID: "018f1e00-0000-7000-8000-000000000001",
-		SiteID:               "018f1e00-1000-7000-8000-000000000001",
-		Action:               registryauth.ActionSiteRead,
-		ReasonCode:           "blocked",
-		ValidFrom:            validFrom,
+		TenantID:   "018f1d00-0000-7000-8000-000000000001",
+		SiteID:     "018f1e00-1000-7000-8000-000000000001",
+		Action:     registryauth.ActionSiteRead,
+		ReasonCode: "blocked",
+		ValidFrom:  validFrom,
 	}
 	_, _, err := prepareReconciliationRequest(ReconciliationRequest{
-		TenantID:     "018f1d00-0000-7000-8000-000000000001",
-		SourceSystem:  "logto",
+		TenantID:      "018f1d00-0000-7000-8000-000000000001",
+		SourceSystem:  "identity",
 		SourceKey:     "user-123",
 		SourceVersion: 1,
 		Principal: ReconciledPrincipal{
@@ -116,8 +113,8 @@ func TestPrepareReconciliationRequestRejectsDuplicateExplicitDeny(t *testing.T) 
 
 func TestPrepareReconciliationRequestNormalizesNilAndEmptyCollections(t *testing.T) {
 	request := ReconciliationRequest{
-		TenantID:     "018f1d00-0000-7000-8000-000000000001",
-		SourceSystem:  "logto",
+		TenantID:      "018f1d00-0000-7000-8000-000000000001",
+		SourceSystem:  "identity",
 		SourceKey:     "user-123",
 		SourceVersion: 1,
 		Principal: ReconciledPrincipal{

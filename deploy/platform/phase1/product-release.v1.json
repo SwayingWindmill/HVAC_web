@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "product": "hvac-web",
+  "productVersion": "0.1.0",
+  "targetDomainModel": "target-domain-model/v1",
+  "schemaContract": {
+    "migrationManifest": "deploy/platform/phase1/migrations/migration-list.tsv",
+    "compatibilityMode": "exact-product-and-manifest",
+    "skipAllowed": false,
+    "requiredDatabases": [
+      "hvac_identity",
+      "hvac_s0",
+      "hvac_s1",
+      "hvac_s2",
+      "hvac_s3",
+      "hvac_s4",
+      "hvac_s5"
+    ]
+  },
+  "startup": {
+    "preflight": "deploy/platform/phase1/migrations/verify-phase1-schema.sh",
+    "failureMode": "fail-closed"
+  },
+  "platformPolicy": {
+    "limitPolicy": "deploy/platform/phase1/limit-policy.v1.json"
+  },
+  "migrationState": {
+    "states": ["APPLYING", "APPLIED", "FAILED"],
+    "incompleteRequiresOperatorRecovery": true
+  }
+}

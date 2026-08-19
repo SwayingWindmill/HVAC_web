@@ -44,7 +44,7 @@ export default function PlatformRouteStatus() {
   const detail = snapshot.state === 'ready'
     ? `${snapshot.data.implementation.toUpperCase()} · policy r${snapshot.data.routePolicyRevision} · route r${snapshot.data.routeRevision} · ${snapshot.data.compatibilityMode}`
     : snapshot.state === 'anonymous'
-      ? '登录后由服务端 Organization + Principal 计算稳定 cohort'
+      ? '登录后由服务端 Tenant + Principal 计算稳定 cohort'
       : snapshot.state === 'error'
         ? snapshot.detail
         : 'Route Ownership Registry 正在解析唯一 owner';

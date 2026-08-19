@@ -1,4 +1,4 @@
-import { centralPlantDevices } from './central-plant-local-contract.mjs';
+import { centralPlantDevices, localUUID } from './central-plant-local-contract.mjs';
 
 export const centralPlantAreas = Object.freeze([
   { id: 'building-main', parentId: null, code: 'main-building', name: '商业办公楼', type: 'BUILDING' },
@@ -115,7 +115,7 @@ const actionCommandPoint = (deviceId, equipmentSlug, sourceKey, telemetryKey, na
   sourceKey,
   telemetryKey,
   name,
-  'STRING',
+  'BOOLEAN',
   { controlKind: 'ACTION', capability, capabilityRevision: revision, feedbackPointKey },
 );
 
@@ -130,7 +130,19 @@ const numericCommandPoint = (deviceId, equipmentSlug, sourceKey, telemetryKey, n
   unit,
 );
 
-export function buildCentralPlantControlPoints() {
+export function assignCentralPlantPointIds(points) {
+  let observedSequence = centralPlantAreas.length + centralPlantEquipment.length + centralPlantSensors.length + 1;
+  let commandSequence = 1;
+  return (points ?? []).map((point) => Object.freeze({
+    ...point,
+    pointId: point.pointType === 'COMMAND'
+      ? localUUID(0x500000000000 + commandSequence++)
+      : localUUID(observedSequence++),
+  }));
+}
+
+export function buildCentralPlantControlPoints(observedPoints) {
+  const feedbackByRef = new Map((observedPoints ?? []).map((point) => [`${point.deviceId}/${point.telemetryKey}`, point]));
   return [
     actionCommandPoint('CHILLER-01', 'chiller-01', 'start', 'chiller.command.start', '启动冷水机', 'START', 'capability:start:v1', 'chiller.run_state'),
     actionCommandPoint('CHILLER-01', 'chiller-01', 'stop', 'chiller.command.stop', '停止冷水机', 'STOP', 'capability:stop:v1', 'chiller.run_state'),
@@ -152,7 +164,19 @@ export function buildCentralPlantControlPoints() {
     actionCommandPoint('CT-01', 'ct-01', 'stop', 'cooling_tower.command.stop', '停止冷却塔', 'STOP', 'capability:stop:v1', 'cooling_tower.run_state'),
     actionCommandPoint('CT-01', 'ct-01', 'resetFault', 'cooling_tower.command.reset_fault', '复位冷却塔故障', 'RESET_FAULT', 'capability:reset-fault:v1', 'cooling_tower.fault_code'),
     numericCommandPoint('CT-01', 'ct-01', 'setFanSpeed', 'cooling_tower.command.fan_speed', '冷却塔风机转速', 'SET_FAN_SPEED', 'capability:set-fan-speed:v1', 'fanSpeedPct', 20, 100, 1, 'cooling_tower.fan_speed', '%'),
-  ].map(Object.freeze);
+  ].map((point) => {
+    const declaredFeedbackKey = point.sourceMetadata.feedbackPointKey;
+    const feedback = feedbackByRef.get(`${point.deviceId}/${declaredFeedbackKey}`);
+    if (!feedback) throw new Error(`control point ${point.deviceId}/${point.pointCode} has no authoritative feedback point ${declaredFeedbackKey}`);
+    return Object.freeze({
+      ...point,
+      sourceMetadata: Object.freeze({
+        ...point.sourceMetadata,
+        feedbackPointKey: feedback.pointCode,
+        feedbackSourceKey: feedback.sourceKey,
+      }),
+    });
+  });
 }
 
 const humanize = (value) => value
@@ -203,6 +227,10 @@ export function buildCentralPlantSimulatorPoints(adapterTemplate) {
 }
 
 export function buildCentralPlantSimulatorConfig(adapterTemplate, overrides = {}) {
+  const observedPoints = buildCentralPlantSimulatorPoints(adapterTemplate);
+  const controlPoints = buildCentralPlantControlPoints(observedPoints);
+  const points = assignCentralPlantPointIds([...observedPoints, ...controlPoints]);
+  const simulatorSubjectType = (value) => ({ EQUIPMENT: 'ASSET', AREA: 'SPACE' })[value] ?? value;
   return {
     schemaVersion: 2,
     gatewayId: 'EG8200-COMMERCIAL-001',
@@ -220,10 +248,13 @@ export function buildCentralPlantSimulatorConfig(adapterTemplate, overrides = {}
       btuMeterId: 'BTU-METER-01',
       weatherStationId: 'WEATHER-STATION-01',
     },
-    areas: centralPlantAreas.map(({ id, parentId, name, type }) => ({ id, ...(parentId ? { parentId } : {}), name, type })),
-    equipment: centralPlantEquipment.map(({ id, areaId, name, type }) => ({ id, areaId, name, type })),
-    devices: centralPlantDeviceEndpoints.map(({ id, areaId, name, type, equipmentIds }) => ({ id, areaId, name, type, equipmentIds: [...equipmentIds] })),
-    sensors: centralPlantSensors.map((sensor) => ({ ...sensor })),
-    points: buildCentralPlantSimulatorPoints(adapterTemplate).map((point) => ({ ...point })),
+    spaces: centralPlantAreas.map(({ id, parentId, name, type }) => ({ id, ...(parentId ? { parentId } : {}), name, type })),
+    assets: centralPlantEquipment.map(({ id, areaId, name, type }) => ({ id, spaceId: areaId, name, type })),
+    devices: centralPlantDeviceEndpoints.map(({ id, areaId, name, type, equipmentIds }) => ({ id, spaceId: areaId, name, type, assetIds: [...equipmentIds] })),
+    sensors: centralPlantSensors.map(({ mountedAreaId, ...sensor }) => ({ ...sensor, mountedSpaceId: mountedAreaId })),
+    points: points.map((point) => ({
+      ...point,
+      subjectType: simulatorSubjectType(point.subjectType),
+    })),
   };
 }

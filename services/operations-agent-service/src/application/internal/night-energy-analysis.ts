@@ -35,7 +35,7 @@ export interface SiteNightEnergyScope {
   readonly tenantId: string;
   readonly siteId: string;
   readonly timezone: string;
-  readonly equipmentIds: readonly string[];
+  readonly assetIds: readonly string[];
 }
 
 export interface SiteNightEnergyWindow {
@@ -141,20 +141,20 @@ export interface SiteNightEnergyFindingDraft {
   readonly supportEvidenceKinds: readonly ['FACT', 'ALGORITHM_RESULT'];
 }
 
-interface EquipmentAttributionRequiredNextBase {
+interface AssetAttributionRequiredNextBase {
   readonly status: 'REQUIRED_NEXT';
   readonly tenantId: string;
   readonly siteId: string;
-  readonly equipmentIds: readonly string[];
+  readonly assetIds: readonly string[];
   readonly targetPeriod: SiteNightEnergyPeriodReference;
   readonly baselinePeriod: SiteNightEnergyPeriodReference;
 }
 
-export type EquipmentAttributionRequiredNext =
-  | EquipmentAttributionRequiredNextBase & {
-    readonly kind: 'EQUIPMENT_ENERGY_BINDINGS';
+export type AssetAttributionRequiredNext =
+  | AssetAttributionRequiredNextBase & {
+    readonly kind: 'ASSET_ENERGY_BINDINGS';
     readonly owner: 'registry';
-    readonly capability: 'registry.getEquipmentEnergyBindings';
+    readonly capability: 'registry.getAssetEnergyBindings';
     readonly requiredMetadata: readonly [
       'BUSINESS_REVISION',
       'QUALITY',
@@ -162,10 +162,10 @@ export type EquipmentAttributionRequiredNext =
       'PAYLOAD_DIGEST',
     ];
   }
-  | EquipmentAttributionRequiredNextBase & {
-    readonly kind: 'EQUIPMENT_ENERGY_PERIOD_COMPARISON';
+  | AssetAttributionRequiredNextBase & {
+    readonly kind: 'ASSET_ENERGY_PERIOD_COMPARISON';
     readonly owner: 'telemetry-query-service';
-    readonly capability: 'analytics.energy.getEquipmentSeries';
+    readonly capability: 'analytics.energy.getAssetSeries';
     readonly requiredMetadata: readonly [
       'DATASET_REVISION',
       'WATERMARK',
@@ -176,18 +176,18 @@ export type EquipmentAttributionRequiredNext =
     ];
   };
 
-export interface UnsupportedEquipmentAttribution {
+export interface UnsupportedAssetAttribution {
   readonly status: 'UNABLE_TO_CONCLUDE';
   readonly statement: string;
   readonly requiredNext: readonly [
-    EquipmentAttributionRequiredNext,
-    EquipmentAttributionRequiredNext,
+    AssetAttributionRequiredNext,
+    AssetAttributionRequiredNext,
   ];
 }
 
 interface SiteNightEnergyAnalysisCommon {
   readonly analysisReference: SiteNightEnergyAnalysisReference;
-  readonly equipmentAttribution: UnsupportedEquipmentAttribution;
+  readonly assetAttribution: UnsupportedAssetAttribution;
 }
 
 export interface SupportedSiteNightEnergyAnalysis extends SiteNightEnergyAnalysisCommon {
@@ -671,19 +671,19 @@ const canonicalSeries = (series: NightEnergySeries): object => ({
   },
 });
 
-const createEquipmentAttribution = (
+const createAssetAttribution = (
   input: SiteNightEnergyAnalysisInput,
   targetPeriod: SiteNightEnergyPeriodReference,
   baselinePeriod: SiteNightEnergyPeriodReference,
-): UnsupportedEquipmentAttribution => ({
+): UnsupportedAssetAttribution => ({
   status: 'UNABLE_TO_CONCLUDE',
-  statement: 'No specific Equipment can be named until canonical Equipment energy bindings and comparable Equipment-level energy series are available.',
+  statement: 'No specific Asset can be named until canonical Asset energy bindings and comparable Asset-level energy series are available.',
   requiredNext: [
     {
       status: 'REQUIRED_NEXT',
-      kind: 'EQUIPMENT_ENERGY_BINDINGS',
+      kind: 'ASSET_ENERGY_BINDINGS',
       owner: 'registry',
-      capability: 'registry.getEquipmentEnergyBindings',
+      capability: 'registry.getAssetEnergyBindings',
       requiredMetadata: [
         'BUSINESS_REVISION',
         'QUALITY',
@@ -692,15 +692,15 @@ const createEquipmentAttribution = (
       ],
       tenantId: input.site.tenantId,
       siteId: input.site.siteId,
-      equipmentIds: [...input.site.equipmentIds].sort(),
+      assetIds: [...input.site.assetIds].sort(),
       targetPeriod,
       baselinePeriod,
     },
     {
       status: 'REQUIRED_NEXT',
-      kind: 'EQUIPMENT_ENERGY_PERIOD_COMPARISON',
+      kind: 'ASSET_ENERGY_PERIOD_COMPARISON',
       owner: 'telemetry-query-service',
-      capability: 'analytics.energy.getEquipmentSeries',
+      capability: 'analytics.energy.getAssetSeries',
       requiredMetadata: [
         'DATASET_REVISION',
         'WATERMARK',
@@ -711,7 +711,7 @@ const createEquipmentAttribution = (
       ],
       tenantId: input.site.tenantId,
       siteId: input.site.siteId,
-      equipmentIds: [...input.site.equipmentIds].sort(),
+      assetIds: [...input.site.assetIds].sort(),
       targetPeriod,
       baselinePeriod,
     },
@@ -740,19 +740,19 @@ const validateInput = (value: unknown): SiteNightEnergyAnalysisInput => {
       'tenantId',
       'siteId',
       'timezone',
-      'equipmentIds',
+      'assetIds',
     ])
     || typeof input.site.tenantId !== 'string'
     || typeof input.site.siteId !== 'string'
     || typeof input.site.timezone !== 'string'
-    || !Array.isArray(input.site.equipmentIds)
-    || input.site.equipmentIds.some((identity) => typeof identity !== 'string')) {
+    || !Array.isArray(input.site.assetIds)
+    || input.site.assetIds.some((identity) => typeof identity !== 'string')) {
     throw new NightEnergyAnalysisError(
       'Night-energy analysis Site Scope does not match the project contract.',
     );
   }
   const site = input.site;
-  const equipmentIds = site.equipmentIds as string[];
+  const assetIds = site.assetIds as string[];
   if (!isRecord(input.window)
     || !hasExactKeys(input.window, ['startLocalTime', 'endLocalTime'])
     || typeof input.window.startLocalTime !== 'string'
@@ -772,7 +772,7 @@ const validateInput = (value: unknown): SiteNightEnergyAnalysisInput => {
       tenantId: site.tenantId,
       siteId: site.siteId,
       timezone: site.timezone,
-      equipmentIds: [...equipmentIds],
+      assetIds: [...assetIds],
     },
     window: {
       startLocalTime: input.window.startLocalTime,
@@ -787,11 +787,11 @@ const validateInput = (value: unknown): SiteNightEnergyAnalysisInput => {
   } as SiteNightEnergyAnalysisInput;
   if (!uuidV7Pattern.test(validated.site.tenantId)
     || !uuidV7Pattern.test(validated.site.siteId)
-    || validated.site.equipmentIds.some((identity) => !uuidV7Pattern.test(identity))) {
+    || validated.site.assetIds.some((identity) => !uuidV7Pattern.test(identity))) {
     failInput('Night-energy analysis Scope identities must be UUIDv7 values.');
   }
-  if (new Set(validated.site.equipmentIds).size !== validated.site.equipmentIds.length) {
-    failInput('Night-energy analysis Equipment identities must be unique.');
+  if (new Set(validated.site.assetIds).size !== validated.site.assetIds.length) {
+    failInput('Night-energy analysis Asset identities must be unique.');
   }
   if (validated.targetLocalDate === validated.baselineLocalDate) {
     failInput('Target and baseline local dates must be different.');
@@ -868,7 +868,7 @@ export const analyzeSiteNightEnergy = (
       tenantId: input.site.tenantId,
       siteId: input.site.siteId,
       timezone: input.site.timezone,
-      equipmentIds: [...input.site.equipmentIds].sort(),
+      assetIds: [...input.site.assetIds].sort(),
     },
     window: input.window,
     targetPeriod: targetReference,
@@ -903,7 +903,7 @@ export const analyzeSiteNightEnergy = (
       baseline: baselineAssessment.qualitySummary,
     },
   };
-  const equipmentAttribution = createEquipmentAttribution(
+  const assetAttribution = createAssetAttribution(
     input,
     targetReference,
     baselineReference,
@@ -914,7 +914,7 @@ export const analyzeSiteNightEnergy = (
       status: 'UNABLE_TO_CONCLUDE',
       blockers,
       analysisReference,
-      equipmentAttribution,
+      assetAttribution,
     };
   }
 
@@ -963,6 +963,6 @@ export const analyzeSiteNightEnergy = (
     evidence,
     siteFinding,
     analysisReference,
-    equipmentAttribution,
+    assetAttribution,
   };
 };

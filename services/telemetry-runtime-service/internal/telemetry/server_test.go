@@ -37,7 +37,7 @@ func (fake *fakeAuthorizer) Authorize(_ context.Context, peer, grant string, act
 	if fake.access.PrincipalID != "" {
 		return fake.access, nil
 	}
-	return AccessContext{PrincipalID: "018f2e00-2000-7000-8000-000000000001", Subject: "subject-a", SubjectIssuer: "https://issuer.example.test", SessionID: "session-a", ActingOrganizationID: orgA, TokenID: "grant-a", PolicyRevision: "telemetry-access:1"}, nil
+	return AccessContext{PrincipalID: "018f2e00-2000-7000-8000-000000000001", Subject: "subject-a", SubjectIssuer: "https://issuer.example.test", SessionID: "session-a", TenantID: orgA, TokenID: "grant-a", PolicyRevision: "telemetry-access:1"}, nil
 }
 
 type fakeSnapshotStore struct {

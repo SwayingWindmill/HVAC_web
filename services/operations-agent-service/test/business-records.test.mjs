@@ -10,7 +10,7 @@ const digest = `sha256:${'a'.repeat(64)}`;
 const scope = {
   tenantId: 'organization-001',
   siteId: 'site-001',
-  equipmentId: null,
+  assetId: null,
   deviceId: null,
 };
 
@@ -186,15 +186,15 @@ test('Analysis References reject model authority and unsupported input reference
   }));
 });
 
-test('Findings allow typed insufficiency but never supported Equipment attribution', () => {
+test('Findings allow typed insufficiency but never supported Asset attribution', () => {
   const requiredNext = [{
     status: 'REQUIRED_NEXT',
-    kind: 'EQUIPMENT_ENERGY_BINDINGS',
+    kind: 'ASSET_ENERGY_BINDINGS',
     owner: 'registry',
-    capability: 'registry.getEquipmentEnergyBindings',
+    capability: 'registry.getAssetEnergyBindings',
     tenantId: 'organization-001',
     siteId: 'site-001',
-    equipmentIds: ['equipment-001'],
+    assetIds: ['asset-001'],
     targetPeriod: {
       localDate: '2026-07-30',
       from: '2026-07-30T00:00:00Z',
@@ -210,12 +210,12 @@ test('Findings allow typed insufficiency but never supported Equipment attributi
     requiredMetadata: ['BUSINESS_REVISION', 'QUALITY', 'CAPTURED_AT', 'PAYLOAD_DIGEST'],
   }, {
     status: 'REQUIRED_NEXT',
-    kind: 'EQUIPMENT_ENERGY_PERIOD_COMPARISON',
+    kind: 'ASSET_ENERGY_PERIOD_COMPARISON',
     owner: 'telemetry-query-service',
-    capability: 'analytics.energy.getEquipmentSeries',
+    capability: 'analytics.energy.getAssetSeries',
     tenantId: 'organization-001',
     siteId: 'site-001',
-    equipmentIds: ['equipment-001'],
+    assetIds: ['asset-001'],
     targetPeriod: {
       localDate: '2026-07-30',
       from: '2026-07-30T00:00:00Z',
@@ -234,12 +234,12 @@ test('Findings allow typed insufficiency but never supported Equipment attributi
     ...finding,
     id: 'finding-unable-001',
     findingKind: 'UNABLE_TO_CONCLUDE',
-    statement: 'Equipment attribution is not supported by the available Evidence.',
+    statement: 'Asset attribution is not supported by the available Evidence.',
     conclusion: {
       status: 'UNABLE_TO_CONCLUDE',
-      scope: 'EQUIPMENT',
-      reasonCode: 'EQUIPMENT_ENERGY_BINDINGS_MISSING',
-      detail: 'Canonical Equipment energy bindings and comparable series are required.',
+      scope: 'ASSET',
+      reasonCode: 'ASSET_ENERGY_BINDINGS_MISSING',
+      detail: 'Canonical Asset energy bindings and comparable series are required.',
       requiredNext,
     },
   });
@@ -253,8 +253,8 @@ test('Findings allow typed insufficiency but never supported Equipment attributi
     findingKind: 'UNABLE_TO_CONCLUDE',
     conclusion: {
       status: 'UNABLE_TO_CONCLUDE',
-      scope: 'EQUIPMENT',
-      reasonCode: 'EQUIPMENT_ENERGY_BINDINGS_MISSING',
+      scope: 'ASSET',
+      reasonCode: 'ASSET_ENERGY_BINDINGS_MISSING',
       detail: 'Owner mismatch must fail closed.',
       requiredNext: [{ ...requiredNext[0], owner: 'telemetry-query-service' }],
     },
@@ -265,8 +265,8 @@ test('Findings allow typed insufficiency but never supported Equipment attributi
     findingKind: 'UNABLE_TO_CONCLUDE',
     conclusion: {
       status: 'UNABLE_TO_CONCLUDE',
-      scope: 'EQUIPMENT',
-      reasonCode: 'EQUIPMENT_ENERGY_BINDINGS_MISSING',
+      scope: 'ASSET',
+      reasonCode: 'ASSET_ENERGY_BINDINGS_MISSING',
       detail: 'Metadata mismatch must fail closed.',
       requiredNext: [{ ...requiredNext[1], requiredMetadata: ['QUALITY'] }],
     },
@@ -276,10 +276,10 @@ test('Findings allow typed insufficiency but never supported Equipment attributi
     ...finding,
     conclusion: {
       status: 'SUPPORTED',
-      scope: 'EQUIPMENT',
+      scope: 'ASSET',
       tenantId: 'organization-001',
       siteId: 'site-001',
-      equipmentId: 'equipment-001',
+      assetId: 'asset-001',
     },
   }));
 });

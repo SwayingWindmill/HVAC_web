@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 )
 
 type ReconciliationStatus string
@@ -259,7 +260,7 @@ func normalizeActions(actions *[]registryauth.Action) error {
 	seen := map[registryauth.Action]struct{}{}
 	result := make([]registryauth.Action, 0, len(*actions))
 	for _, action := range *actions {
-		if !action.Valid() {
+		if !action.Valid() && !telemetryauth.Action(action).Valid() {
 			return fmt.Errorf("unsupported action %q", action)
 		}
 		if _, ok := seen[action]; ok {
