@@ -62,7 +62,8 @@
         "infra/s1-registry/postgres/init/011-s08-metric-lifecycle.sql",
         "infra/s1-registry/postgres/init/012-s19-settlement-projections.sql",
         "infra/connectivity/postgres/init/001-s09-connectivity.sql",
-        "infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql"
+        "infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql",
+        "services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql"
       ]
     },
     {

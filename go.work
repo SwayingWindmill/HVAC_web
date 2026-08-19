@@ -33,6 +33,7 @@ use (
 	./services/identity-service
 	./services/optimization-service
 	./services/outbound-delivery-service
+	./services/rule-runtime-service
 	./services/legacy-migration-service
 	./services/mqtt-telemetry-adapter
 	./services/metric-engine-service

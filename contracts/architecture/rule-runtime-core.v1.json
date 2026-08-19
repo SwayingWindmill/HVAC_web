@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "name": "S20 Rule Runtime core",
+  "owner": "rule-runtime",
+  "issue": 280,
+  "catalogVersion": "core.v1",
+  "nodeDefinitions": [
+    {"id":"event_type_filter","version":1,"inputs":{"in":"EVENT"},"outputs":{"match":"EVENT","no_match":"EVENT"},"deterministic":true,"resourceCost":1},
+    {"id":"json_number","version":1,"inputs":{"in":"EVENT"},"outputs":{"value":"NUMBER"},"deterministic":true,"resourceCost":1},
+    {"id":"math_number","version":1,"inputs":{"in":"NUMBER"},"outputs":{"value":"NUMBER"},"deterministic":true,"resourceCost":1},
+    {"id":"owner_snapshot_read","version":1,"inputs":{"in":"EVENT"},"outputs":{"snapshot":"SNAPSHOT"},"requiredPermission":"owner.snapshot.read","deterministic":true,"resourceCost":2},
+    {"id":"alarm_intent","version":1,"inputs":{"in":"SNAPSHOT"},"outputs":{"intent":"INTENT"},"requiredPermission":"alarm.intent.publish","effectOwner":"ALARM","deterministic":true,"resourceCost":2},
+    {"id":"delay_event","version":1,"inputs":{"in":"EVENT"},"outputs":{"resume":"EVENT"},"deterministic":true,"resourceCost":1},
+    {"id":"terminal_event","version":1,"inputs":{"in":"EVENT"},"outputs":{},"deterministic":true,"resourceCost":1},
+    {"id":"terminal_number","version":1,"inputs":{"in":"NUMBER"},"outputs":{},"deterministic":true,"resourceCost":1},
+    {"id":"terminal_intent","version":1,"inputs":{"in":"INTENT"},"outputs":{},"deterministic":true,"resourceCost":1}
+  ],
+  "compileGates": [
+    "catalog-version",
+    "positive-budgets",
+    "known-node-definition",
+    "strict-node-config",
+    "permission",
+    "typed-port",
+    "fanout-budget",
+    "cycle",
+    "reachability",
+    "depth-budget",
+    "resource-budget",
+    "explicit-terminal",
+    "immutable-revision-digest"
+  ],
+  "identity": {
+    "executionId": "SHA256(execution, ruleRevisionId, bindingRevision, sourceEventId)",
+    "workItemId": "SHA256(work, executionId, path, nodeId, inputDigest)",
+    "effectId": "SHA256(effect, workItemId, outputPort, ordinal, payloadDigest)",
+    "continuationId": "SHA256(continuation, workItemId, wakeAtUnixNano, outputPort, payloadDigest)"
+  },
+  "executionStatuses": ["READY","RUNNING","WAITING","BLOCKED_EFFECT","SUCCEEDED","DEAD","QUARANTINED","FAILED"],
+  "failureClasses": ["VALIDATION","POLICY","SAFETY_DENIED","TRANSIENT_INFRASTRUCTURE","AMBIGUOUS_EFFECT","TIMEOUT","POISON_EVENT","SCHEMA_UNKNOWN","BUDGET_EXHAUSTED"],
+  "persistence": {
+    "database": "hvac_s1",
+    "schema": "rule_runtime",
+    "releasedRevisionImmutable": true,
+    "bindingRevisionAppendOnly": true,
+    "executionSnapshotContains": ["work","continuations","effects","stateTransitions","trace"],
+    "sharedRuleState": true,
+    "stateKey": "tenant/ruleRevision/nodeInstance/scopeKey",
+    "atomicStateCASWithExecutionEvidence": true,
+    "leaseFenceRequired": true,
+    "orderingKey": "tenant/site/subjectType/subjectId",
+    "forceTenantRls": true
+  },
+  "effectBoundary": {
+    "nodeMayPersistTypedIntentOnly": true,
+    "ownerReauthorizesFinalMutation": true,
+    "dispatchAttemptPersistedBeforeOwnerCall": true,
+    "restartWithDispatchingEffect": "AMBIGUOUS_EFFECT",
+    "ambiguousEffectAutomaticRetry": false,
+    "replayRequiresFrozenSnapshotFacts": true,
+    "replayMayAcceptLiveEffectSink": false
+  },
+  "forbiddenRuntimeCapabilities": [
+    "arbitrary-js",
+    "tbel",
+    "reflection-class-loading",
+    "credential-read",
+    "direct-database-write-outside-rule-runtime",
+    "direct-network-side-effect",
+    "direct-owner-domain-mutation",
+    "unbounded-retry",
+    "runtime-dual-write-fallback"
+  ]
+}
